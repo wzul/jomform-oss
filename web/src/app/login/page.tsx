@@ -45,7 +45,7 @@ export default function Login() {
   }
 
   return (
-    <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#08090a] px-6">
+    <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[var(--jf-bg)] px-6">
       {/* ambient glow */}
       <div
         aria-hidden
@@ -62,19 +62,19 @@ export default function Login() {
           <div className="mx-auto mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-[#5e6ad2] text-lg font-bold text-white shadow-[0_0_24px_rgba(94,106,210,0.45)]">
             JF
           </div>
-          <h1 className="text-xl font-semibold text-[#f7f8f8]" style={{ letterSpacing: "-0.02em" }}>
+          <h1 className="text-xl font-semibold text-[var(--jf-text)]" style={{ letterSpacing: "-0.02em" }}>
             {mode === "login" ? "Selamat kembali" : "Cipta akaun JomForm"}
           </h1>
-          <p className="mt-1.5 text-sm text-[#8a8f98]">
+          <p className="mt-1.5 text-sm text-[var(--jf-muted)]">
             {mode === "login"
               ? "Log masuk untuk urus borang dan jualan anda."
               : "Percuma selamanya — borang pertama siap dalam 5 minit."}
           </p>
         </div>
 
-        <div className="rounded-xl border border-white/[0.08] bg-[#0f1011] p-6 shadow-[0_0_0_1px_rgba(0,0,0,0.2),0_8px_24px_rgba(0,0,0,0.4)]">
+        <div className="rounded-xl border border-[var(--jf-border)] bg-white p-6 shadow-[0_0_0_1px_rgba(0,0,0,0.2),0_8px_24px_rgba(0,0,0,0.4)]">
           {/* tabs */}
-          <div className="mb-5 grid grid-cols-2 rounded-lg border border-white/[0.06] bg-black/30 p-0.5">
+          <div className="mb-5 grid grid-cols-2 rounded-lg border border-[var(--jf-border)] bg-slate-100 p-0.5">
             {(["login", "register"] as const).map((m) => (
               <button
                 key={m}
@@ -86,8 +86,8 @@ export default function Login() {
                 }}
                 className={`rounded-md py-1.5 text-[13px] font-medium transition-colors ${
                   mode === m
-                    ? "bg-[#5e6ad2]/20 text-[#c7c9ff] shadow-[inset_0_0_0_1px_rgba(113,112,255,0.35)]"
-                    : "text-[#8a8f98] hover:text-[#d0d6e0]"
+                    ? "bg-[#5e6ad2]/20 text-[var(--jf-primary)] shadow-[inset_0_0_0_1px_rgba(113,112,255,0.35)]"
+                    : "text-[var(--jf-muted)] hover:text-[#d0d6e0]"
                 }`}
               >
                 {m === "login" ? "Log Masuk" : "Daftar"}
@@ -103,18 +103,18 @@ export default function Login() {
 
           <form onSubmit={submit} className="space-y-3">
             <div>
-              <label className="mb-1 block text-xs font-medium text-[#8a8f98]">Emel</label>
+              <label className="mb-1 block text-xs font-medium text-[var(--jf-muted)]">Emel</label>
               <input
                 name="email"
                 type="email"
                 required
                 autoComplete="email"
                 placeholder="anda@kedai.my"
-                className="w-full rounded-md border border-white/[0.08] bg-white/[0.02] px-3 py-2 text-sm text-[#f7f8f8] placeholder-[#62666d] outline-none transition-colors focus:border-[#7170ff]/60 focus:bg-white/[0.04]"
+                className="w-full rounded-md border border-[var(--jf-border)] bg-white px-3 py-2 text-sm text-[var(--jf-text)] placeholder-slate-400 outline-none transition-colors focus:border-[#7170ff]/60 focus:bg-indigo-50"
               />
             </div>
             <div>
-              <label className="mb-1 block text-xs font-medium text-[#8a8f98]">
+              <label className="mb-1 block text-xs font-medium text-[var(--jf-muted)]">
                 {mode === "register" ? "Kata laluan (min. 10 aksara)" : "Kata laluan"}
               </label>
               <input
@@ -123,12 +123,12 @@ export default function Login() {
                 required
                 minLength={mode === "register" ? 10 : 1}
                 placeholder="••••••••••"
-                className="w-full rounded-md border border-white/[0.08] bg-white/[0.02] px-3 py-2 text-sm text-[#f7f8f8] placeholder-[#62666d] outline-none transition-colors focus:border-[#7170ff]/60 focus:bg-white/[0.04]"
+                className="w-full rounded-md border border-[var(--jf-border)] bg-white px-3 py-2 text-sm text-[var(--jf-text)] placeholder-slate-400 outline-none transition-colors focus:border-[#7170ff]/60 focus:bg-indigo-50"
               />
             </div>
             {needTotp && (
               <div>
-                <label className="mb-1 block text-xs font-medium text-[#8a8f98]">Kod 2FA</label>
+                <label className="mb-1 block text-xs font-medium text-[var(--jf-muted)]">Kod 2FA</label>
                 <input
                   name="totp_code"
                   inputMode="numeric"
@@ -136,7 +136,7 @@ export default function Login() {
                   maxLength={6}
                   required
                   placeholder="000000"
-                  className="w-full rounded-md border border-white/[0.08] bg-white/[0.02] px-3 py-2 font-mono text-sm tracking-[0.4em] text-[#f7f8f8] outline-none focus:border-[#7170ff]/60"
+                  className="w-full rounded-md border border-[var(--jf-border)] bg-white px-3 py-2 font-mono text-sm tracking-[0.4em] text-[var(--jf-text)] outline-none focus:border-[#7170ff]/60"
                 />
               </div>
             )}

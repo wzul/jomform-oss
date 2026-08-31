@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { Shell } from "../components/Shell";
 
 type Product = {
   id: string;
@@ -11,142 +12,102 @@ type Product = {
   active: boolean;
 };
 
-type FormRow = {
-  id: string;
-  slug: string;
-  title: string;
+type SaleRow = {
+  ref_code: string;
   status: string;
-  url: string;
-  updated_at: string;
+  total_sen: number;
+  payment_method: string;
+  buyer: string;
+  created_at: string;
 };
 
-type Summary = {
-  counts: Record<string, number>;
-  revenue_sen: number;
-};
+type Summary = { counts: Record<string, number>; revenue_sen: number };
 
 const money = (sen: number) =>
   `RM${(sen / 100).toLocaleString("ms-MY", { minimumFractionDigits: 2 })}`;
 
+const STATUS_BADGE: Record<string, string> = {
+  pending: "bg-amber-50 text-amber-700 border-amber-200",
+  paid: "bg-blue-50 text-blue-700 border-blue-200",
+  confirmed: "bg-emerald-50 text-emerald-700 border-emerald-200",
+  failed: "bg-red-50 text-red-700 border-red-200",
+  cancelled: "bg-slate-100 text-slate-500 border-slate-200",
+};
+
+const STATUS_MS: Record<string, string> = {
+  pending: "Menunggu",
+  paid: "Dibayar",
+  confirmed: "Disahkan",
+  failed: "Gagal",
+  cancelled: "Dibatalkan",
+};
+
 export default function Dashboard() {
   const [authed, setAuthed] = useState(false);
   const [checking, setChecking] = useState(true);
-  const [tab, setTab] = useState<"produk" | "borang" | "keys">("produk");
-
   const [products, setProducts] = useState<Product[]>([]);
-  const [forms, setForms] = useState<FormRow[]>([]);
+  const [sales, setSales] = useState<SaleRow[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
 
   const [pName, setPName] = useState("");
   const [pPrice, setPPrice] = useState("");
   const [pType, setPType] = useState("one_time");
   const [pPeriod, setPPeriod] = useState("month");
-
-  const [fSlug, setFSlug] = useState("");
-  const [fTitle, setFTitle] = useState("");
-
   const [error, setError] = useState("");
-  const [newKey, setNewKey] = useState("");
 
-  async function api<T>(path: string, init?: RequestInit): Promise<T> {
-    const isForm = init?.body instanceof FormData;
-    const r = await fetch(path, {
-      ...init,
-      headers: isForm
-        ? init?.headers
-        : { "Content-Type": "application/json", ...(init?.headers || {}) },
-    });
-    if (r.status === 401) {
-      setAuthed(false);
-      throw new Error("unauthorized");
-    }
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
-    return data;
-  }
-
-  async function loadAll() {
+  const load = useCallback(async () => {
     try {
-      const [p, f, s] = await Promise.all([
-        api<Product[]>("/api/rest/products"),
-        api<FormRow[]>("/api/rest/forms"),
-        api<Summary>("/api/rest/summary"),
+      const me = await fetch("/api/auth/me");
+      if (!me.ok) {
+        window.location.href = "/login";
+        return;
+      }
+      const [p, s, sum] = await Promise.all([
+        fetch("/api/rest/products").then((r) => r.json()),
+        fetch("/api/rest/sales").then((r) => r.json()),
+        fetch("/api/rest/summary").then((r) => r.json()),
       ]);
-      setProducts(p);
-      setForms(f);
-      setSummary(s);
+      setProducts(Array.isArray(p) ? p : []);
+      setSales(Array.isArray(s) ? s : []);
+      setSummary(sum);
       setAuthed(true);
     } catch {
-      setAuthed(false);
+      window.location.href = "/login";
     } finally {
       setChecking(false);
     }
-  }
+  }, []);
 
   useEffect(() => {
-    loadAll();
-  }, []);
+    load();
+  }, [load]);
 
   async function createProduct(e: React.FormEvent) {
     e.preventDefault();
     setError("");
-    try {
-      await api("/api/rest/products", {
-        method: "POST",
-        body: JSON.stringify({
-          name: pName,
-          price_sen: Math.round(parseFloat(pPrice) * 100),
-          type: pType,
-          billing_period: pType === "subscription" ? pPeriod : undefined,
-        }),
-      });
+    const r = await fetch("/api/rest/products", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: pName,
+        price_sen: Math.round(parseFloat(pPrice) * 100),
+        type: pType,
+        billing_period: pType === "subscription" ? pPeriod : undefined,
+      }),
+    });
+    if (r.ok) {
       setPName("");
       setPPrice("");
-      await loadAll();
-    } catch (err) {
-      setError(String(err));
+      load();
+    } else {
+      const d = await r.json().catch(() => ({}));
+      setError(d.error || "Gagal menambah produk");
     }
   }
 
-  async function createForm(e: React.FormEvent) {
-    e.preventDefault();
-    setError("");
-    try {
-      await api("/api/rest/forms", {
-        method: "POST",
-        body: JSON.stringify({
-          slug: fSlug.toLowerCase().replace(/[^a-z0-9-]/g, "-"),
-          title: fTitle,
-          config: { products: products.map((p) => ({ id: p.id, name: p.name, price_sen: p.price_sen })), description: fTitle },
-        }),
-      });
-      setFSlug("");
-      setFTitle("");
-      await loadAll();
-      setTab("borang");
-    } catch (err) {
-      setError(String(err));
-    }
-  }
-
-  async function publish(id: string) {
-    await api(`/api/rest/forms/${id}/publish`, { method: "POST" });
-    await loadAll();
-  }
-
-  async function createKey() {
-    setError("");
-    setNewKey("");
-    try {
-      const d = await api<{ key: string }>("/api/rest/keys", {
-        method: "POST",
-        body: JSON.stringify({ name: "AI Agent Key", scopes: ["readwrite"] }),
-      });
-      setNewKey(d.key);
-      await loadAll();
-    } catch (err) {
-      setError(String(err));
-    }
+  async function confirmSale(ref: string) {
+    await fetch(`/api/rest/sales/${ref}/confirm`, { method: "POST" });
+    load();
   }
 
   if (checking) {
@@ -156,139 +117,123 @@ export default function Dashboard() {
       </main>
     );
   }
-
-  if (!authed) {
-    window.location.href = "/login";
-    return null;
-  }
+  if (!authed) return null;
 
   return (
-    <main className="mx-auto min-h-screen max-w-4xl px-6 py-10">
-      <header className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-bold">
-            Jom<span className="text-indigo-400">Form</span>
-          </h1>
-          <a href="/settings" className="text-xs text-slate-500 hover:text-indigo-400">
-            Tetapan →
+    <Shell active="dashboard">
+      <div className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-xl font-semibold tracking-tight">Dashboard</h1>
+            <p className="text-sm text-[var(--jf-muted)]">Ringkasan jualan & borang anda</p>
+          </div>
+          <a href="/builder" className="jf-btn-primary px-4 py-2 text-sm">
+            + Borang Baru
           </a>
         </div>
+
+        {/* stat cards */}
         {summary && (
-          <div className="text-right text-sm text-slate-400">
-            Hasil: <strong className="text-emerald-400">{money(summary.revenue_sen)}</strong>
-            <span className="ml-3">Menunggu: {summary.counts.pending ?? 0}</span>
+          <div className="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <StatCard label="Hasil (disahkan)" value={money(summary.revenue_sen)} accent />
+            <StatCard label="Menunggu" value={String(summary.counts.pending ?? 0)} />
+            <StatCard label="Disahkan" value={String(summary.counts.confirmed ?? 0)} />
+            <StatCard label="Produk aktif" value={String(products.length)} />
           </div>
         )}
-      </header>
 
-      <nav className="mt-6 flex gap-2">
-        {(["produk", "borang", "keys"] as const).map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={`rounded-full px-4 py-1.5 text-sm font-medium ${
-              tab === t ? "bg-indigo-500 text-white" : "border border-slate-700 text-slate-300"
-            }`}
-          >
-            {t.toUpperCase()}
-          </button>
-        ))}
-      </nav>
+        {/* recent sales */}
+        <section className="jf-card mt-6 overflow-hidden">
+          <div className="flex items-center justify-between border-b border-[var(--jf-border)] px-5 py-3">
+            <h2 className="text-sm font-semibold">Jualan terkini</h2>
+            <span className="text-xs text-[var(--jf-muted)]">{sales.length} rekod</span>
+          </div>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-[var(--jf-border)] text-left text-xs uppercase tracking-wide text-[var(--jf-muted)]">
+                <th className="px-5 py-2.5 font-medium">Rujukan</th>
+                <th className="px-5 py-2.5 font-medium">Pembeli</th>
+                <th className="px-5 py-2.5 font-medium">Jumlah</th>
+                <th className="px-5 py-2.5 font-medium">Status</th>
+                <th className="px-5 py-2.5 font-medium"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {sales.map((s) => (
+                <tr key={s.ref_code} className="border-b border-[var(--jf-border)] last:border-0 hover:bg-slate-50/60">
+                  <td className="px-5 py-3 font-mono text-xs">{s.ref_code}</td>
+                  <td className="px-5 py-3">{s.buyer || "—"}</td>
+                  <td className="px-5 py-3 font-medium">{money(s.total_sen)}</td>
+                  <td className="px-5 py-3">
+                    <span className={`rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${STATUS_BADGE[s.status] || ""}`}>
+                      {STATUS_MS[s.status] || s.status}
+                    </span>
+                  </td>
+                  <td className="px-5 py-3 text-right">
+                    {s.status === "paid" && (
+                      <button onClick={() => confirmSale(s.ref_code)} className="text-xs font-medium text-[var(--jf-primary)] hover:underline">
+                        Sahkan
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {sales.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="px-5 py-10 text-center text-sm text-[var(--jf-muted)]">
+                    Belum ada jualan lagi.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </section>
 
-      {error && <p className="mt-4 rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-400">{error}</p>}
-
-      {tab === "produk" && (
-        <section className="mt-6 space-y-4">
-          <form onSubmit={createProduct} className="flex flex-wrap gap-2 rounded-2xl border border-slate-800 bg-[#12151f] p-4">
-            <input value={pName} onChange={(e) => setPName(e.target.value)} required placeholder="Nama produk" className="flex-1 rounded-xl border border-slate-700 bg-[#0e1119] px-3 py-2 text-sm" />
-            <input value={pPrice} onChange={(e) => setPPrice(e.target.value)} required type="number" step="0.01" min="0" placeholder="Harga RM" className="w-28 rounded-xl border border-slate-700 bg-[#0e1119] px-3 py-2 text-sm" />
-            <select value={pType} onChange={(e) => setPType(e.target.value)} className="rounded-xl border border-slate-700 bg-[#0e1119] px-3 py-2 text-sm">
+        {/* products quick add */}
+        <section className="jf-card mt-6 p-5">
+          <h2 className="text-sm font-semibold">Tambah produk</h2>
+          {error && <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">{error}</p>}
+          <form onSubmit={createProduct} className="mt-3 flex flex-wrap gap-2">
+            <input value={pName} onChange={(e) => setPName(e.target.value)} required placeholder="Nama produk" className="jf-input flex-1" />
+            <input value={pPrice} onChange={(e) => setPPrice(e.target.value)} required type="number" step="0.01" min="0" placeholder="Harga RM" className="jf-input w-28" />
+            <select value={pType} onChange={(e) => setPType(e.target.value)} className="jf-input w-32">
               <option value="one_time">One-time</option>
               <option value="subscription">Langganan</option>
             </select>
             {pType === "subscription" && (
-              <select value={pPeriod} onChange={(e) => setPPeriod(e.target.value)} className="rounded-xl border border-slate-700 bg-[#0e1119] px-3 py-2 text-sm">
+              <select value={pPeriod} onChange={(e) => setPPeriod(e.target.value)} className="jf-input w-28">
                 <option value="month">Bulanan</option>
                 <option value="year">Tahunan</option>
               </select>
             )}
-            <button className="rounded-xl bg-indigo-500 px-5 py-2 text-sm font-semibold">Tambah</button>
+            <button className="jf-btn-primary px-5 text-sm">Tambah</button>
           </form>
-          <ul className="space-y-2">
+          <div className="mt-4 grid gap-2 sm:grid-cols-2">
             {products.map((p) => (
-              <li key={p.id} className="flex items-center justify-between rounded-xl border border-slate-800 bg-[#12151f] px-4 py-3">
+              <div key={p.id} className="flex items-center justify-between rounded-lg border border-[var(--jf-border)] px-4 py-2.5">
                 <div>
-                  <p className="font-medium">{p.name}</p>
-                  <p className="text-xs text-slate-500">
+                  <p className="text-sm font-medium">{p.name}</p>
+                  <p className="text-[11px] text-[var(--jf-muted)]">
                     {p.type === "subscription" ? `Langganan ${p.billing_period === "year" ? "tahunan" : "bulanan"}` : "One-time"}
                   </p>
                 </div>
-                <span className="font-semibold text-indigo-300">{money(p.price_sen)}</span>
-              </li>
-            ))}
-            {products.length === 0 && <li className="text-sm text-slate-500">Belum ada produk. Tambah yang pertama di atas.</li>}
-          </ul>
-        </section>
-      )}
-
-      {tab === "borang" && (
-        <section className="mt-6 space-y-4">
-          <a href="/builder" className="inline-block rounded-xl bg-gradient-to-r from-indigo-500 to-violet-500 px-5 py-2.5 text-sm font-semibold">
-            Buka Drag-Drop Builder →
-          </a>
-          <form onSubmit={createForm} className="flex flex-wrap gap-2 rounded-2xl border border-slate-800 bg-[#12151f] p-4">
-            <input value={fTitle} onChange={(e) => setFTitle(e.target.value)} required placeholder="Tajuk borang (cth: Beli Biskut Raya)" className="flex-1 rounded-xl border border-slate-700 bg-[#0e1119] px-3 py-2 text-sm" />
-            <input value={fSlug} onChange={(e) => setFSlug(e.target.value)} required placeholder="slug-url" className="w-40 rounded-xl border border-slate-700 bg-[#0e1119] px-3 py-2 text-sm" />
-            <button className="rounded-xl bg-violet-500 px-5 py-2 text-sm font-semibold">Bina</button>
-          </form>
-          <ul className="space-y-2">
-            {forms.map((f) => (
-              <li key={f.id} className="flex items-center justify-between rounded-xl border border-slate-800 bg-[#12151f] px-4 py-3">
-                <div>
-                  <p className="font-medium">{f.title}</p>
-                  <a href={`https://jomform.com${f.url}`} className="text-xs text-indigo-400 underline" target="_blank">
-                    {f.url}
-                  </a>
-                </div>
-                {f.status === "published" ? (
-                  <span className="rounded-full bg-emerald-500/15 px-3 py-1 text-xs font-semibold text-emerald-400">LIVE</span>
-                ) : (
-                  <button onClick={() => publish(f.id)} className="rounded-full border border-slate-600 px-4 py-1 text-xs font-semibold">
-                    Publish
-                  </button>
-                )}
-              </li>
-            ))}
-            {forms.length === 0 && <li className="text-sm text-slate-500">Belum ada borang. Bina yang pertama.</li>}
-          </ul>
-        </section>
-      )}
-
-      {tab === "keys" && (
-        <section className="mt-6 space-y-4">
-          <div className="rounded-2xl border border-slate-800 bg-[#12151f] p-4">
-            <p className="text-sm text-slate-300">
-              Pengurusan kunci API telah berpindah ke{" "}
-              <a href="/settings" className="text-indigo-400 underline">
-                halaman Tetapan
-              </a>
-              .
-            </p>
-            <button
-              onClick={createKey}
-              className="mt-3 rounded-xl bg-emerald-500/90 px-5 py-2 text-sm font-semibold text-emerald-950"
-            >
-              Jana Key Baru
-            </button>
-            {newKey && (
-              <div className="mt-3 rounded-xl border border-emerald-600/40 bg-emerald-500/10 p-3">
-                <p className="text-xs text-emerald-300">Simpan sekarang — takkan dipapar lagi:</p>
-                <code className="mt-1 block break-all font-mono text-sm text-emerald-200">{newKey}</code>
+                <span className="text-sm font-semibold text-[var(--jf-primary)]">{money(p.price_sen)}</span>
               </div>
-            )}
+            ))}
           </div>
         </section>
-      )}
-    </main>
+      </div>
+    </Shell>
+  );
+}
+
+function StatCard({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+  return (
+    <div className="jf-card p-4">
+      <p className="text-xs text-[var(--jf-muted)]">{label}</p>
+      <p className={`mt-1 text-xl font-semibold tracking-tight ${accent ? "text-[var(--jf-primary)]" : ""}`}>
+        {value}
+      </p>
+    </div>
   );
 }

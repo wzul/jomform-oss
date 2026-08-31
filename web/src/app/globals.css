@@ -1,17 +1,71 @@
 @import "tailwindcss";
 
-/* JomForm theme tokens — indigo→violet identity, slate neutrals */
+/* JomForm light theme — clean, airy, indigo accent */
 :root {
-  --jf-bg: #0b0d14;
-  --jf-surface: #12151f;
-  --jf-primary: #6366f1;
-  --jf-primary-hover: #818cf8;
-  --jf-accent: #34d399;
+  --jf-bg: #f7f8f8;
+  --jf-surface: #ffffff;
+  --jf-border: #e6e8ec;
+  --jf-text: #17181c;
+  --jf-muted: #6b7280;
+  --jf-primary: #5e6ad2;
+  --jf-primary-hover: #828fff;
+  --jf-success: #10b981;
+  --jf-danger: #ef4444;
 }
 
 html,
 body {
   background: var(--jf-bg);
-  color: #e2e8f0;
-  font-family: var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif);
+  color: var(--jf-text);
+  font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: rgba(94, 106, 210, 0.18);
+}
+
+/* utility: card */
+.jf-card {
+  background: var(--jf-surface);
+  border: 1px solid var(--jf-border);
+  border-radius: 12px;
+}
+
+.jf-input {
+  width: 100%;
+  border: 1px solid var(--jf-border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 14px;
+  background: #fff;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.jf-input:focus {
+  border-color: var(--jf-primary);
+  box-shadow: 0 0 0 3px rgba(94, 106, 210, 0.12);
+}
+
+.jf-btn-primary {
+  background: var(--jf-primary);
+  color: #fff;
+  border-radius: 8px;
+  font-weight: 500;
+  transition: background 0.15s;
+}
+.jf-btn-primary:hover {
+  background: var(--jf-primary-hover);
+}
+.jf-btn-primary:disabled {
+  opacity: 0.55;
+}
+.jf-btn-ghost {
+  border: 1px solid var(--jf-border);
+  background: #fff;
+  border-radius: 8px;
+  transition: background 0.15s;
+}
+.jf-btn-ghost:hover {
+  background: #f3f4f6;
 }

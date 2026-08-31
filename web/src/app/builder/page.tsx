@@ -193,10 +193,10 @@ export default function Builder() {
   const selectedBlock = blocks.find((b) => b.id === selected);
 
   return (
-    <main className="min-h-screen bg-[#08090a] text-[#f7f8f8]">
+    <main className="min-h-screen bg-[var(--jf-bg)] text-[var(--jf-text)] text-[var(--jf-text)]">
       {/* top bar */}
-      <header className="sticky top-0 z-20 flex items-center gap-3 border-b border-white/[0.06] bg-[#0f1011]/95 px-4 py-2.5 backdrop-blur">
-        <a href="/" className="rounded-md px-2 py-1 text-sm text-[#8a8f98] hover:text-[#d0d6e0]">
+      <header className="sticky top-0 z-20 flex items-center gap-3 border-b border-[var(--jf-border)] bg-white/95 px-4 py-2.5 backdrop-blur">
+        <a href="/" className="rounded-md px-2 py-1 text-sm text-[var(--jf-muted)] hover:text-[#374151]">
           ←
         </a>
         <input
@@ -206,7 +206,7 @@ export default function Builder() {
             setDirty(true);
           }}
           placeholder="Tajuk borang"
-          className="w-56 rounded-md border border-transparent bg-transparent px-2 py-1 text-sm font-medium outline-none hover:border-white/[0.08] focus:border-[#7170ff]/60"
+          className="w-56 rounded-md border border-transparent bg-transparent px-2 py-1 text-sm font-medium outline-none hover:border-[var(--jf-border)] focus:border-[#7170ff]/60"
         />
         <input
           value={slug}
@@ -215,7 +215,7 @@ export default function Builder() {
             setDirty(true);
           }}
           placeholder="slug-url"
-          className="w-40 rounded-md border border-transparent bg-transparent px-2 py-1 font-mono text-xs text-[#8a8f98] outline-none hover:border-white/[0.08] focus:border-[#7170ff]/60"
+          className="w-40 rounded-md border border-transparent bg-transparent px-2 py-1 font-mono text-xs text-[var(--jf-muted)] outline-none hover:border-[var(--jf-border)] focus:border-[#7170ff]/60"
         />
         <div className="ml-auto flex items-center gap-2">
           {dirty && <span className="text-xs text-[#f59e0b]">• belum disimpan</span>}
@@ -223,7 +223,7 @@ export default function Builder() {
             <a
               href={pubUrl}
               target="_blank"
-              className="rounded-md border border-white/[0.08] bg-white/[0.02] px-3 py-1.5 text-xs text-[#d0d6e0] hover:bg-white/[0.05]"
+              className="rounded-md border border-[var(--jf-border)] bg-white px-3 py-1.5 text-xs text-[#374151] hover:bg-white/[0.05]"
             >
               Lihat ↗
             </a>
@@ -240,18 +240,18 @@ export default function Builder() {
 
       <div className="mx-auto grid max-w-7xl grid-cols-1 gap-0 md:grid-cols-[240px_1fr_260px]">
         {/* ── left: palette ── */}
-        <aside className="border-r border-white/[0.06] p-4">
-          <p className="mb-3 text-xs font-medium uppercase tracking-wider text-[#62666d]">Tambah blok</p>
+        <aside className="border-r border-[var(--jf-border)] p-4">
+          <p className="mb-3 text-xs font-medium uppercase tracking-wider text-[#9ca3af]">Tambah blok</p>
           <div className="grid grid-cols-2 gap-2">
             {PALETTE.map((p) => (
               <button
                 key={p.type}
                 onClick={() => addBlock(p.type)}
                 title={p.hint}
-                className="group rounded-lg border border-white/[0.06] bg-white/[0.02] px-2.5 py-2 text-left transition-colors hover:border-[#7170ff]/40 hover:bg-[#5e6ad2]/10"
+                className="group rounded-lg border border-[var(--jf-border)] bg-white px-2.5 py-2 text-left transition-colors hover:border-[#7170ff]/40 hover:bg-[#5e6ad2]/10"
               >
                 <span className="text-sm">{p.icon}</span>
-                <span className="mt-0.5 block text-[11px] font-medium text-[#d0d6e0]">{p.label}</span>
+                <span className="mt-0.5 block text-[11px] font-medium text-[#374151]">{p.label}</span>
               </button>
             ))}
           </div>
@@ -261,7 +261,7 @@ export default function Builder() {
         <section className="p-6">
           <div className="mx-auto max-w-lg space-y-2">
             {blocks.length === 0 && (
-              <div className="rounded-xl border border-dashed border-white/[0.12] px-6 py-16 text-center text-sm text-[#62666d]">
+              <div className="rounded-xl border border-dashed border-slate-300 px-6 py-16 text-center text-sm text-[#9ca3af]">
                 Klik blok di kiri untuk mula membina borang anda.
               </div>
             )}
@@ -273,13 +273,13 @@ export default function Builder() {
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={() => move(dragIndex.current ?? i, i)}
                 onClick={() => setSelected(b.id)}
-                className={`cursor-grab rounded-lg border bg-white/[0.02] p-3 transition-colors active:cursor-grabbing ${
+                className={`cursor-grab rounded-lg border bg-white p-3 transition-colors active:cursor-grabbing ${
                   selected === b.id
                     ? "border-[#7170ff]/60 shadow-[0_0_0_1px_rgba(113,112,255,0.4)]"
-                    : "border-white/[0.06] hover:border-white/[0.12]"
+                    : "border-[var(--jf-border)] hover:border-slate-300"
                 }`}
               >
-                <div className="mb-1.5 flex items-center justify-between text-[10px] uppercase tracking-wider text-[#62666d]">
+                <div className="mb-1.5 flex items-center justify-between text-[10px] uppercase tracking-wider text-[#9ca3af]">
                   <span>{PALETTE.find((p) => p.type === b.type)?.label}</span>
                   <span className="flex gap-1">
                     <button
@@ -287,7 +287,7 @@ export default function Builder() {
                         e.stopPropagation();
                         move(i, i - 1);
                       }}
-                      className="px-1 hover:text-[#d0d6e0]"
+                      className="px-1 hover:text-[#374151]"
                       title="Naik"
                     >
                       ↑
@@ -297,7 +297,7 @@ export default function Builder() {
                         e.stopPropagation();
                         move(i, i + 1);
                       }}
-                      className="px-1 hover:text-[#d0d6e0]"
+                      className="px-1 hover:text-[#374151]"
                       title="Turun"
                     >
                       ↓
@@ -322,38 +322,38 @@ export default function Builder() {
         </section>
 
         {/* ── right: inspector ── */}
-        <aside className="border-l border-white/[0.06] p-4">
-          <p className="mb-3 text-xs font-medium uppercase tracking-wider text-[#62666d]">Ciri blok</p>
-          {!selectedBlock && <p className="text-xs text-[#62666d]">Pilih satu blok untuk edit.</p>}
+        <aside className="border-l border-[var(--jf-border)] p-4">
+          <p className="mb-3 text-xs font-medium uppercase tracking-wider text-[#9ca3af]">Ciri blok</p>
+          {!selectedBlock && <p className="text-xs text-[#9ca3af]">Pilih satu blok untuk edit.</p>}
           {selectedBlock && (
             <div className="space-y-3">
               <div>
-                <label className="text-xs text-[#8a8f98]">Teks / Label</label>
+                <label className="text-xs text-[var(--jf-muted)]">Teks / Label</label>
                 <textarea
                   rows={2}
                   value={selectedBlock.value}
                   onChange={(e) => updateBlock(selectedBlock.id, { value: e.target.value })}
-                  className="mt-1 w-full rounded-md border border-white/[0.08] bg-white/[0.02] px-2.5 py-2 text-sm outline-none focus:border-[#7170ff]/60"
+                  className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-sm outline-none focus:border-[#7170ff]/60"
                 />
               </div>
               {selectedBlock.type === "image" && (
                 <div>
-                  <label className="text-xs text-[#8a8f98]">URL imej</label>
+                  <label className="text-xs text-[var(--jf-muted)]">URL imej</label>
                   <input
                     value={selectedBlock.src || ""}
                     onChange={(e) => updateBlock(selectedBlock.id, { src: e.target.value })}
                     placeholder="https://…"
-                    className="mt-1 w-full rounded-md border border-white/[0.08] bg-white/[0.02] px-2.5 py-2 text-sm outline-none focus:border-[#7170ff]/60"
+                    className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-sm outline-none focus:border-[#7170ff]/60"
                   />
                 </div>
               )}
               {selectedBlock.type === "product" && (
                 <div>
-                  <label className="text-xs text-[#8a8f98]">Produk</label>
+                  <label className="text-xs text-[var(--jf-muted)]">Produk</label>
                   <select
                     value={selectedBlock.productId || ""}
                     onChange={(e) => updateBlock(selectedBlock.id, { productId: e.target.value })}
-                    className="mt-1 w-full rounded-md border border-white/[0.08] bg-[#191a1b] px-2.5 py-2 text-sm outline-none"
+                    className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-[#191a1b] px-2.5 py-2 text-sm outline-none"
                   >
                     {products.map((p) => (
                       <option key={p.id} value={p.id}>
@@ -364,7 +364,7 @@ export default function Builder() {
                 </div>
               )}
               {fieldTypes.includes(selectedBlock.type) && (
-                <label className="flex items-center gap-2 text-sm text-[#d0d6e0]">
+                <label className="flex items-center gap-2 text-sm text-[#374151]">
                   <input
                     type="checkbox"
                     checked={!!selectedBlock.required}
@@ -377,7 +377,7 @@ export default function Builder() {
             </div>
           )}
 
-          <p className="mb-2 mt-8 text-xs font-medium uppercase tracking-wider text-[#62666d]">Borang sedia ada</p>
+          <p className="mb-2 mt-8 text-xs font-medium uppercase tracking-wider text-[#9ca3af]">Borang sedia ada</p>
           <div className="space-y-1.5">
             {forms.map((f) => (
               <button
@@ -385,12 +385,12 @@ export default function Builder() {
                 onClick={() => fetchForm(f.id)}
                 className={`w-full rounded-md border px-3 py-2 text-left text-[13px] transition-colors ${
                   currentId === f.id
-                    ? "border-[#7170ff]/50 bg-[#5e6ad2]/10 text-[#f7f8f8]"
-                    : "border-white/[0.06] bg-white/[0.02] text-[#d0d6e0] hover:bg-white/[0.04]"
+                    ? "border-[#7170ff]/50 bg-[#5e6ad2]/10 text-[var(--jf-text)]"
+                    : "border-[var(--jf-border)] bg-white text-[#374151] hover:bg-white/[0.04]"
                 }`}
               >
                 <span className="block truncate">{f.title}</span>
-                <span className="text-[10px] text-[#62666d]">
+                <span className="text-[10px] text-[#9ca3af]">
                   /f/{f.slug}
                   {f.status === "published" ? " · LIVE" : ""}
                 </span>
@@ -435,39 +435,39 @@ function BlockPreview({ block, products }: { block: Block; products: Product[] }
   const p = products.find((x) => x.id === block.productId);
   switch (block.type) {
     case "text":
-      return <p className="text-sm text-[#d0d6e0]">{block.value || "Teks…"}</p>;
+      return <p className="text-sm text-[#374151]">{block.value || "Teks…"}</p>;
     case "image":
       return block.src ? (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={block.src} alt="" className="max-h-40 rounded-md border border-white/[0.06] object-cover" />
+        <img src={block.src} alt="" className="max-h-40 rounded-md border border-[var(--jf-border)] object-cover" />
       ) : (
-        <div className="flex h-24 items-center justify-center rounded-md border border-dashed border-white/[0.12] text-xs text-[#62666d]">
+        <div className="flex h-24 items-center justify-center rounded-md border border-dashed border-slate-300 text-xs text-[#9ca3af]">
           URL imej →
         </div>
       );
     case "product":
       return (
-        <div className="flex items-center justify-between rounded-md border border-white/[0.08] bg-[#191a1b] px-3 py-2">
+        <div className="flex items-center justify-between rounded-md border border-[var(--jf-border)] bg-[#191a1b] px-3 py-2">
           <span className="text-sm">{block.value || p?.name || "Produk"}</span>
           <span className="text-sm font-medium text-[#a5b4fc]">{p ? money(p.price_sen) : "—"}</span>
         </div>
       );
     case "divider":
-      return <hr className="border-white/[0.08]" />;
+      return <hr className="border-[var(--jf-border)]" />;
     case "checkbox":
       return (
-        <label className="flex items-center gap-2 text-sm text-[#d0d6e0]">
+        <label className="flex items-center gap-2 text-sm text-[#374151]">
           <span className="inline-block h-4 w-4 rounded border border-white/20" /> {block.value}
         </label>
       );
     default:
       return (
         <div>
-          <p className="mb-1 text-xs text-[#8a8f98]">
+          <p className="mb-1 text-xs text-[var(--jf-muted)]">
             {block.value || "Medan"}
             {block.required && <span className="text-red-400"> *</span>}
           </p>
-          <div className="h-8 rounded-md border border-white/[0.08] bg-black/20" />
+          <div className="h-8 rounded-md border border-[var(--jf-border)] bg-black/20" />
         </div>
       );
   }

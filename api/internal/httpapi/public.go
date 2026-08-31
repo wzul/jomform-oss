@@ -177,30 +177,30 @@ var formTmpl = template.Must(template.New("form").Funcs(formFuncs).Parse(`<!doct
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.Title}}</title>
 <style>
-  :root { color-scheme: dark; }
+  :root { color-scheme: light; }
   * { box-sizing: border-box; }
   body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-         background:#0b0d14; color:#e2e8f0; min-height:100vh;
+         background:#f7f8f8; color:#17181c; min-height:100vh;
          display:flex; align-items:center; justify-content:center; padding:24px; }
-  .card { background:#12151f; border:1px solid #262c3f; border-radius:20px;
+  .card { background:#ffffff; border:1px solid #e6e8ec; border-radius:20px;
           max-width:460px; width:100%; padding:32px; }
   h1 { margin:0 0 6px; font-size:22px; }
-  .sub { color:#8b93a7; font-size:14px; margin-bottom:22px; }
+  .sub { color:#6b7280; font-size:14px; margin-bottom:22px; }
   .prod { display:flex; justify-content:space-between; gap:12px; padding:12px 14px;
           border:1px solid #262c3f; border-radius:12px; margin-bottom:10px; }
   .prod label { display:flex; gap:10px; align-items:center; flex:1; }
-  .price { color:#a5b4fc; font-weight:600; white-space:nowrap; }
+  .price { color:#5e6ad2; font-weight:600; white-space:nowrap; }
   input[type=text], input[type=email], input[type=tel] {
     width:100%; padding:11px 14px; margin:6px 0 14px; border-radius:10px;
-    border:1px solid #2b3247; background:#0e1119; color:#e2e8f0; font-size:14px; }
+    border:1px solid #e6e8ec; background:#ffffff; color:#17181c; font-size:14px; }
   label.top { font-size:12px; color:#8b93a7; }
   button { width:100%; padding:13px; border:0; border-radius:12px; font-size:15px;
            font-weight:600; color:white; cursor:pointer; margin-top:8px;
            background:linear-gradient(90deg,#6366f1,#8b5cf6); }
   button:hover { filter:brightness(1.1); }
   .total { display:flex; justify-content:space-between; padding-top:12px;
-           border-top:1px dashed #2b3247; margin-top:6px; font-weight:600; }
-  .brand { text-align:center; color:#5a637b; font-size:11px; margin-top:18px; }
+           border-top:1px dashed #e6e8ec; margin-top:6px; font-weight:600; }
+  .brand { text-align:center; color:#9ca3af; font-size:11px; margin-top:18px; }
 </style>
 </head>
 <body>
@@ -322,11 +322,11 @@ func (h *PublicHandlers) handleThankYou(w http.ResponseWriter, r *http.Request) 
 	}
 	fmt.Fprintf(w, `<!doctype html><html lang="ms"><head><meta charset="utf-8">%s
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Terima kasih</title>
-<style>body{background:#0b0d14;color:#e2e8f0;font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
-.c{background:#12151f;border:1px solid #262c3f;border-radius:16px;padding:40px;text-align:center;max-width:420px}
-h1{color:#34d399;font-size:24px}</style></head><body><div class="c">
+<style>body{background:#f7f8f8;color:#17181c;font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
+.c{background:#ffffff;border:1px solid #e6e8ec;border-radius:16px;padding:40px;text-align:center;max-width:420px}
+h1{color:#10b981;font-size:24px}</style></head><body><div class="c">
 <h1>✓ Terima kasih!</h1><p>Tempahan <strong>%s</strong> diterima.<br>Status: %s.</p>
-<p style="color:#5a637b;font-size:12px">Dikuasakan oleh JomForm</p></div></body></html>`,
+<p style="color:#9ca3af;font-size:12px">Dikuasakan oleh JomForm</p></div></body></html>`,
 		refresh, sale.RefCode, statusText)
 }
 

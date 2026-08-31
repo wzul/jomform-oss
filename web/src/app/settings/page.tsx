@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Shell } from "../../components/Shell";
 
 type ChipStatus = {
   configured: boolean;
@@ -72,7 +73,7 @@ export default function Settings() {
   }
 
   return (
-    <main className="mx-auto max-w-3xl px-6 py-10 min-h-screen">
+    <Shell active="settings"><main className="mx-auto max-w-3xl flex-1 px-6 py-8">
       <a href="/" className="text-sm text-indigo-400">
         ← Dashboard
       </a>
@@ -80,7 +81,7 @@ export default function Settings() {
         Tetapan <span className="text-indigo-400">JomForm</span>
       </h1>
 
-      <section className="mt-8 rounded-2xl border border-slate-800 bg-[#12151f] p-6">
+      <section className="mt-8 rounded-2xl border jf-card p-6">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold">CHIP Payment Gateway</h2>
           {status && (
@@ -116,7 +117,7 @@ export default function Settings() {
               value={brandId}
               onChange={(e) => setBrandId(e.target.value)}
               required
-              className="mt-1 w-full rounded-xl border border-slate-700 bg-[#0e1119] px-3 py-2 text-sm"
+              className="mt-1 w-full rounded-xl border jf-input px-3 py-2 text-sm"
               placeholder="cth. 5f2b...-uuid"
             />
           </div>
@@ -127,7 +128,7 @@ export default function Settings() {
               onChange={(e) => setSecretKey(e.target.value)}
               required
               type="password"
-              className="mt-1 w-full rounded-xl border border-slate-700 bg-[#0e1119] px-3 py-2 text-sm"
+              className="mt-1 w-full rounded-xl border jf-input px-3 py-2 text-sm"
               placeholder="sk_live_... / sk_test_..."
             />
           </div>
@@ -136,7 +137,7 @@ export default function Settings() {
             <select
               value={mode}
               onChange={(e) => setMode(e.target.value)}
-              className="mt-1 rounded-xl border border-slate-700 bg-[#0e1119] px-3 py-2 text-sm"
+              className="mt-1 rounded-xl border jf-input px-3 py-2 text-sm"
             >
               <option value="test">Test (kad ujian sahaja)</option>
               <option value="live">Live</option>
@@ -153,7 +154,7 @@ export default function Settings() {
         </form>
       </section>
 
-      <section className="mt-6 rounded-2xl border border-slate-800 bg-[#12151f] p-6">
+      <section className="mt-6 rounded-2xl border jf-card p-6">
         <h2 className="text-lg font-semibold">Kunci API (AI Agent / MCP)</h2>
         <p className="mt-1 text-sm text-slate-400">
           Untuk kawalan kedai melalui AI agent: endpoint{" "}
@@ -179,6 +180,6 @@ export default function Settings() {
             ))}
         </ul>
       </section>
-    </main>
+    </main></Shell>
   );
 }

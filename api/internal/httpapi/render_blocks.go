@@ -87,22 +87,22 @@ var blockTmpl = template.Must(template.New("blocks").
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
   body { margin:0; font-family: system-ui,-apple-system,"Segoe UI",sans-serif;
-         background:#08090a; color:#f7f8f8; min-height:100vh;
+         background:#f7f8f8; color:#17181c; min-height:100vh;
          display:flex; align-items:center; justify-content:center; padding:24px; }
-  .card { background:#0f1011; border:1px solid rgba(255,255,255,0.08); border-radius:16px;
+  .card { background:#ffffff; border:1px solid #e6e8ec; border-radius:16px;
           max-width:480px; width:100%; padding:32px; }
   h1 { margin:0 0 8px; font-size:24px; letter-spacing:-0.02em; }
-  .text { color:#8a8f98; font-size:14px; line-height:1.6; margin:0 0 16px; }
+  .text { color:#6b7280; font-size:14px; line-height:1.6; margin:0 0 16px; }
   .img { max-width:100%; border-radius:12px; border:1px solid rgba(255,255,255,0.08); margin-bottom:14px; }
   .prod { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:12px 14px;
           border:1px solid rgba(255,255,255,0.08); border-radius:10px; margin-bottom:10px; background:rgba(255,255,255,0.02); }
   .prod label { display:flex; gap:10px; align-items:center; flex:1; font-size:14px; }
-  .price { color:#a5b4fc; font-weight:600; font-size:14px; }
-  .lbl { display:block; font-size:12px; color:#8a8f98; margin:12px 0 4px; }
+  .price { color:#5e6ad2; font-weight:600; font-size:14px; }
+  .lbl { display:block; font-size:12px; color:#6b7280; margin:12px 0 4px; }
   .chk { display:flex; align-items:center; gap:8px; font-size:14px; margin:8px 0; color:#d0d6e0; }
   input[type=text],input[type=email],input[type=tel],textarea,.coupon {
-    width:100%; padding:10px 12px; border-radius:8px; border:1px solid rgba(255,255,255,0.08);
-    background:rgba(255,255,255,0.02); color:#f7f8f8; font-size:14px; margin-bottom:10px; }
+    width:100%; padding:10px 12px; border-radius:8px; border:1px solid #e6e8ec;
+    background:#ffffff; color:#17181c; font-size:14px; margin-bottom:10px; }
   hr { border:0; border-top:1px solid rgba(255,255,255,0.08); margin:16px 0; }
   .total { display:flex; justify-content:space-between; padding-top:12px; margin-top:8px;
            border-top:1px dashed rgba(255,255,255,0.12); font-weight:600; }
