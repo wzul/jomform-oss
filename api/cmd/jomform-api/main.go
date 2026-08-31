@@ -44,6 +44,9 @@ func main() {
 			osExit(1)
 		}
 		log.Warn("continuing without database (dev mode)")
+	} else if err := db.Migrate(ctx, pool, log); err != nil {
+		log.Error("migrations", "err", err)
+		osExit(1)
 	}
 
 	sessions, err := auth.NewSessions(cfg.ValkeyURL)
@@ -82,6 +85,7 @@ func main() {
 		deps.REST = &httpapi.RESTHandlers{
 			Accounts: accounts, Products: products, Forms: dbstore.NewFormStore(pool),
 			Keys: keys, Sales: sales, Sessions: sessions,
+			SecretsKey: decryptKey,
 		}
 
 		// MCP server — merchants' AI agents control their store here.

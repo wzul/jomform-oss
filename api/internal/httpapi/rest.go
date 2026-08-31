@@ -22,6 +22,9 @@ type RESTHandlers struct {
 	Keys     *dbstore.APIKeyStore
 	Sales    *dbstore.SaleStore
 	Sessions *auth.Sessions
+
+	// EncryptKey is the 32-byte AES-GCM key from ENCRYPTION_KEY env.
+	SecretsKey []byte
 }
 
 // RegisterRoutes wires REST endpoints.
@@ -37,6 +40,9 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /v1/rest/keys", h.authed(h.createKey))
 	mux.Handle("DELETE /v1/rest/keys/{id}", h.authed(h.revokeKey))
 	mux.Handle("GET /v1/rest/summary", h.authed(h.summary))
+	mux.Handle("PUT /v1/rest/settings/chip", h.authed(h.setChipCreds))
+	mux.Handle("GET /v1/rest/settings/chip", h.authed(h.chipStatus))
+	mux.Handle("DELETE /v1/rest/settings/chip", h.authed(h.deleteChipCreds))
 	mux.Handle("POST /v1/rest/sales/{ref}/confirm", h.authed(h.confirmSale))
 	mux.Handle("GET /v1/rest/sales", h.authed(h.listSales))
 }

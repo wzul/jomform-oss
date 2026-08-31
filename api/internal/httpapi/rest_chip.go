@@ -1,0 +1,64 @@
+// REST: CHIP credentials management (store encrypted, status-only readback).
+package httpapi
+
+import (
+	"net/http"
+	"strings"
+
+	"github.com/wzul/jomform/api/internal/cryptoutil"
+)
+
+// setChipCreds saves Brand ID + Secret Key (AES-256-GCM encrypted at rest).
+// Secret is write-only: never echoed back.
+func (h *RESTHandlers) setChipCreds(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	var in struct {
+		BrandID   string `json:"brand_id"`
+		SecretKey string `json:"secret_key"`
+		Mode      string `json:"mode"` // live | test
+	}
+	if err := decodeJSON(r, &in); err != nil || in.BrandID == "" || in.SecretKey == "" {
+		writeErr(w, http.StatusBadRequest, "brand_id dan secret_key wajib")
+		return
+	}
+	mode := strings.ToLower(strings.TrimSpace(in.Mode))
+	if mode == "" {
+		mode = "test"
+	}
+	if mode != "live" && mode != "test" {
+		writeErr(w, http.StatusBadRequest, "mode mesti live|test")
+		return
+	}
+
+	enc, err := cryptoutil.Encrypt(h.SecretsKey, []byte(in.SecretKey))
+	if err != nil {
+		respondErr(w, err)
+		return
+	}
+	if err := h.Accounts.SetChipCredentials(r.Context(), actx.Account.ID, in.BrandID, enc, mode); err != nil {
+		respondErr(w, err)
+		return
+	}
+	respond(w, http.StatusOK, map[string]string{"status": "configured", "mode": mode})
+}
+
+// chipStatus reports whether CHIP is configured (no secret material).
+func (h *RESTHandlers) chipStatus(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	acc, err := h.Accounts.ByID(r.Context(), actx.Account.ID)
+	if err != nil {
+		respondErr(w, err)
+		return
+	}
+	configured := acc.ChipBrandID != "" && acc.ChipSecretKeyEnc != ""
+	resp := map[string]any{"configured": configured, "mode": acc.ChipMode}
+	_ = configured
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// deleteChipCreds removes stored CHIP credentials.
+func (h *RESTHandlers) deleteChipCreds(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if err := h.Accounts.ClearChipCredentials(r.Context(), actx.Account.ID); err != nil {
+		respondErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "cleared"})
+}

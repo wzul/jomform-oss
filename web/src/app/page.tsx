@@ -228,9 +228,14 @@ export default function Dashboard() {
   return (
     <main className="mx-auto min-h-screen max-w-4xl px-6 py-10">
       <header className="flex items-center justify-between">
-        <h1 className="text-xl font-bold">
-          Jom<span className="text-indigo-400">Form</span>
-        </h1>
+        <div>
+          <h1 className="text-xl font-bold">
+            Jom<span className="text-indigo-400">Form</span>
+          </h1>
+          <a href="/settings" className="text-xs text-slate-500 hover:text-indigo-400">
+            Tetapan →
+          </a>
+        </div>
         {summary && (
           <div className="text-right text-sm text-slate-400">
             Hasil: <strong className="text-emerald-400">{money(summary.revenue_sen)}</strong>
@@ -323,8 +328,11 @@ export default function Dashboard() {
         <section className="mt-6 space-y-4">
           <div className="rounded-2xl border border-slate-800 bg-[#12151f] p-4">
             <p className="text-sm text-slate-300">
-              Kunci API membenarkan <strong>AI agent anda</strong> mengawal kedai melalui MCP (
-              <code className="rounded bg-slate-800 px-1">POST /mcp</code> — Bearer auth).
+              Pengurusan kunci API telah berpindah ke{" "}
+              <a href="/settings" className="text-indigo-400 underline">
+                halaman Tetapan
+              </a>
+              .
             </p>
             <button
               onClick={createKey}
