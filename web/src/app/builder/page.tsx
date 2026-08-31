@@ -94,6 +94,12 @@ export default function Builder() {
   const [pubUrl, setPubUrl] = useState("");
   const [loadErr, setLoadErr] = useState("");
 
+  // Per-form CHIP override (saved via dedicated endpoints).
+  const [ovBrand, setOvBrand] = useState("");
+  const [ovSecret, setOvSecret] = useState("");
+  const [ovFallback, setOvFallback] = useState("");
+  const [ovMsg, setOvMsg] = useState("");
+
   // Real drag state: which palette type or block index is being dragged, and
   // which index the insertion indicator currently points at.
   const dragType = useRef<BlockType | null>(null);
@@ -519,6 +525,78 @@ export default function Builder() {
               </button>
             ))}
           </div>
+
+          {/* ── per-form CHIP override ── */}
+          {currentId && (
+            <div className="mt-8 rounded-lg border border-[var(--jf-border)] bg-white p-3">
+              <p className="text-xs font-medium uppercase tracking-wider text-[#9ca3af]">
+                CHIP override (this form)
+              </p>
+              <p className="mt-1 text-[11px] text-[var(--jf-muted)]">
+                Empty = use account defaults.
+              </p>
+              <div className="mt-2 space-y-2">
+                <input
+                  value={ovBrand}
+                  onChange={(e) => setOvBrand(e.target.value)}
+                  placeholder="Brand ID"
+                  className="w-full rounded-md border border-[var(--jf-border)] px-2.5 py-1.5 text-xs outline-none focus:border-[#7170ff]/60"
+                />
+                <input
+                  value={ovSecret}
+                  onChange={(e) => setOvSecret(e.target.value)}
+                  type="password"
+                  placeholder="Secret Key (sk_live_… / sk_test_…)"
+                  className="w-full rounded-md border border-[var(--jf-border)] px-2.5 py-1.5 text-xs outline-none focus:border-[#7170ff]/60"
+                />
+                <input
+                  value={ovFallback}
+                  onChange={(e) => setOvFallback(e.target.value)}
+                  type="email"
+                  placeholder="Email fallback (one-time forms)"
+                  className="w-full rounded-md border border-[var(--jf-border)] px-2.5 py-1.5 text-xs outline-none focus:border-[#7170ff]/60"
+                />
+                <div className="flex gap-1.5">
+                  <button
+                    onClick={async () => {
+                      if (!currentId || !ovBrand || !ovSecret) return;
+                      setOvMsg("");
+                      const r = await fetch(`/api/rest/forms/${currentId}/chip-override`, {
+                        method: "PUT",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                          brand_id: ovBrand,
+                          secret_key: ovSecret,
+                          email_fallback: ovFallback,
+                        }),
+                      });
+                      setOvMsg(r.ok ? "Override saved ✓" : "Failed to save override");
+                      if (r.ok) setOvSecret("");
+                    }}
+                    disabled={!currentId || !ovBrand || !ovSecret}
+                    className="flex-1 rounded-md bg-[#5e6ad2] py-1.5 text-xs font-medium text-white hover:bg-[#828fff] disabled:opacity-50"
+                  >
+                    Save override
+                  </button>
+                  <button
+                    onClick={async () => {
+                      if (!currentId) return;
+                      const r = await fetch(`/api/rest/forms/${currentId}/chip-override`, { method: "DELETE" });
+                      setOvMsg(r.ok ? "Override cleared — account defaults apply" : "Failed");
+                      setOvBrand("");
+                      setOvSecret("");
+                      setOvFallback("");
+                    }}
+                    disabled={!currentId}
+                    className="rounded-md border border-[var(--jf-border)] px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    Clear
+                  </button>
+                </div>
+                {ovMsg && <p className="text-[11px] text-[var(--jf-primary)]">{ovMsg}</p>}
+              </div>
+            </div>
+          )}
         </aside>
       </div>
     </main>
