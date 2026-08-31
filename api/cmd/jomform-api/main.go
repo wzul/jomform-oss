@@ -85,7 +85,7 @@ func main() {
 		deps.REST = &httpapi.RESTHandlers{
 			Accounts: accounts, Products: products, Forms: dbstore.NewFormStore(pool),
 			Keys: keys, Sales: sales, Sessions: sessions,
-			SecretsKey: decryptKey,
+			SecretsKey: decryptKey, Pay: pay,
 		}
 
 		// MCP server — merchants' AI agents control their store here.

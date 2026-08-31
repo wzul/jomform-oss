@@ -49,7 +49,14 @@ type PurchaseRequest struct {
 	BrandID        string          `json:"brand_id"`
 	ClientID       *string         `json:"client_id,omitempty"`
 	ForceRecurring bool            `json:"force_recurring,omitempty"`
-	SendReceipt    bool            `json:"send_receipt,omitempty"`
+
+	// SkipCapture authorizes the card without charging (delayed capture).
+	// Capture via CapturePayment within 30 days, or void with ReleasePayment.
+	SkipCapture  bool   `json:"skip_capture,omitempty"`
+	Platform     string `json:"platform,omitempty"`
+	CreatorAgent string `json:"creator_agent,omitempty"`
+
+	SendReceipt bool `json:"send_receipt,omitempty"`
 }
 
 // Purchase is the response/callback Purchase object (subset).

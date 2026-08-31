@@ -56,6 +56,9 @@ func (s *Service) CreateChipPurchaseForSale(ctx context.Context, sale *dbstore.S
 	}
 
 	req := chip.PurchaseRequest{
+		SkipCapture:    sale.SkipCapture,
+		Platform:       "jomform",
+		CreatorAgent:   "JomForm",
 		BrandID:        acc.ChipBrandID,
 		Client:         &chip.ClientDetails{Email: sale.Client.Email, FullName: sale.Client.FullName, Phone: sale.Client.Phone},
 		ForceRecurring: sale.SaleType == dbstore.SaleTypeSubscription, // card must be saved for future charges
@@ -169,4 +172,48 @@ func (s *Service) processSubscriptionEvent(ctx context.Context, p *chip.Purchase
 		return s.Subs.MarkChargeFailed(ctx, p.ID)
 	}
 	return ErrNotFound
+}
+
+// CaptureSale captures an authorized (skip_capture) purchase. amountSen nil
+// means capture the full original amount.
+func (s *Service) CaptureSale(ctx context.Context, sale *dbstore.Sale, amountSen *int64) error {
+	if sale.ChipPurchaseID == "" || !sale.SkipCapture {
+		return errors.New("bukan jualan authorize (skip_capture)")
+	}
+	secret, err := s.decryptSecret(ctx, sale.AccountID)
+	if err != nil {
+		return err
+	}
+	if _, err := s.Chip.CapturePayment(ctx, secret, sale.ChipPurchaseID, amountSen); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ReleaseSale voids an authorization so the card is never charged.
+func (s *Service) ReleaseSale(ctx context.Context, sale *dbstore.Sale) error {
+	if sale.ChipPurchaseID == "" || !sale.SkipCapture {
+		return errors.New("bukan jualan authorize (skip_capture)")
+	}
+	secret, err := s.decryptSecret(ctx, sale.AccountID)
+	if err != nil {
+		return err
+	}
+	if _, err := s.Chip.ReleasePayment(ctx, secret, sale.ChipPurchaseID); err != nil {
+		return err
+	}
+	return nil
+}
+
+// decryptSecret fetches the account and decrypts its CHIP secret key.
+func (s *Service) decryptSecret(ctx context.Context, accountID string) (string, error) {
+	acc, err := s.Accounts.ByID(ctx, accountID)
+	if err != nil {
+		return "", err
+	}
+	dec, err := cryptoutil.Decrypt(s.DecryptKey, acc.ChipSecretKeyEnc)
+	if err != nil {
+		return "", err
+	}
+	return string(dec), nil
 }

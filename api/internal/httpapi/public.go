@@ -58,7 +58,8 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 			ProductID string `json:"product_id"`
 			Quantity  int64  `json:"quantity"`
 		} `json:"items"`
-		PaymentMethod string `json:"payment_method"` // chip | bank_direct
+		PaymentMethod string `json:"payment_method"`         // chip | bank_direct
+		SkipCapture   bool   `json:"skip_capture,omitempty"` // authorize now, capture later
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Client.Email == "" || len(in.Items) == 0 {
 		writeErr(w, http.StatusBadRequest, "butiran tidak lengkap")
@@ -84,6 +85,7 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		SaleType:      dbstore.SaleTypeOneTime,
 		PaymentMethod: method,
 		Status:        dbstore.SalePending,
+		SkipCapture:   in.SkipCapture && method == "chip",
 	}
 	var subtotal int64
 	for _, it := range in.Items {

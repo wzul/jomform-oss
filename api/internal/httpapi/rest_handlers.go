@@ -280,6 +280,54 @@ func (h *RESTHandlers) listSales(w http.ResponseWriter, r *http.Request, actx *A
 	respond(w, http.StatusOK, out)
 }
 
+func (h *RESTHandlers) captureSale(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if h.Pay == nil {
+		writeErr(w, http.StatusServiceUnavailable, "pembayaran tidak aktif")
+		return
+	}
+	ref := r.PathValue("ref")
+	sale, err := h.Sales.ByRefCode(r.Context(), ref)
+	if err != nil || sale.AccountID != actx.Account.ID {
+		writeErr(w, http.StatusNotFound, "jualan tidak dijumpai")
+		return
+	}
+	var in struct {
+		AmountSen *int64 `json:"amount_sen,omitempty"`
+	}
+	_ = decodeJSON(r, &in)
+	if err := h.Pay.CaptureSale(r.Context(), sale, in.AmountSen); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := h.Sales.MarkCaptured(r.Context(), sale.ID); err != nil {
+		respondErr(w, err)
+		return
+	}
+	respond(w, http.StatusOK, map[string]string{"status": "captured", "ref_code": ref})
+}
+
+func (h *RESTHandlers) releaseSale(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if h.Pay == nil {
+		writeErr(w, http.StatusServiceUnavailable, "pembayaran tidak aktif")
+		return
+	}
+	ref := r.PathValue("ref")
+	sale, err := h.Sales.ByRefCode(r.Context(), ref)
+	if err != nil || sale.AccountID != actx.Account.ID {
+		writeErr(w, http.StatusNotFound, "jualan tidak dijumpai")
+		return
+	}
+	if err := h.Pay.ReleaseSale(r.Context(), sale); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := h.Sales.SetStatus(r.Context(), sale.ID, dbstore.SaleCancelled); err != nil {
+		respondErr(w, err)
+		return
+	}
+	respond(w, http.StatusOK, map[string]string{"status": "released", "ref_code": ref})
+}
+
 func (h *RESTHandlers) confirmSale(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	ref := r.PathValue("ref")
 	sale, err := h.Sales.ByRefCode(r.Context(), ref)

@@ -59,3 +59,26 @@ func ParsePublicKey(pemStr string) (*rsa.PublicKey, error) {
 	}
 	return parsePKIX(block.Bytes)
 }
+
+// CapturePayment captures a previously authorized (skip_capture) purchase.
+// Optional params may override the final amount ({"amount": sen}).
+func (c *Client) CapturePayment(ctx context.Context, secretKey, purchaseID string, amountSen *int64) (*Purchase, error) {
+	var body any
+	if amountSen != nil {
+		body = map[string]int64{"amount": *amountSen}
+	}
+	var p Purchase
+	if err := c.do(ctx, secretKey, "POST", fmt.Sprintf("/purchases/%s/capture/", purchaseID), body, &p); err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+// ReleasePayment voids an authorization so the card is never charged.
+func (c *Client) ReleasePayment(ctx context.Context, secretKey, purchaseID string) (*Purchase, error) {
+	var p Purchase
+	if err := c.do(ctx, secretKey, "POST", fmt.Sprintf("/purchases/%s/release/", purchaseID), nil, &p); err != nil {
+		return nil, err
+	}
+	return &p, nil
+}

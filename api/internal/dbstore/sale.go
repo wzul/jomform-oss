@@ -53,8 +53,14 @@ type Sale struct {
 	ChipPurchaseID  string
 	ChipCheckoutURL string
 	InvoiceNo       string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+
+	// Delayed capture (skip_capture) flow.
+	SkipCapture bool
+	Authorized  bool
+	CapturedAt  *time.Time
+
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // SaleStore wraps pgx for sales.
@@ -65,14 +71,16 @@ func NewSaleStore(pool *pgxpool.Pool) *SaleStore { return &SaleStore{pool: pool}
 
 const saleSelect = `SELECT id, account_id, COALESCE(form_id::text,''), ref_code, client, items,
 	subtotal_sen, shipping_sen, discount_sen, total_sen, sale_type, payment_method, status,
-	COALESCE(chip_purchase_id,''), COALESCE(chip_checkout_url,''), COALESCE(invoice_no,''), created_at, updated_at
+	COALESCE(chip_purchase_id,''), COALESCE(chip_checkout_url,''), COALESCE(invoice_no,''),
+	skip_capture, authorized, captured_at, created_at, updated_at
 	FROM sales`
 
 func scanSale(row pgx.Row) (*Sale, error) {
 	s := &Sale{}
 	err := row.Scan(&s.ID, &s.AccountID, &s.FormID, &s.RefCode, &s.Client, &s.Items,
 		&s.SubtotalSen, &s.ShippingSen, &s.DiscountSen, &s.TotalSen, &s.SaleType, &s.PaymentMethod, &s.Status,
-		&s.ChipPurchaseID, &s.ChipCheckoutURL, &s.InvoiceNo, &s.CreatedAt, &s.UpdatedAt)
+		&s.ChipPurchaseID, &s.ChipCheckoutURL, &s.InvoiceNo,
+		&s.SkipCapture, &s.Authorized, &s.CapturedAt, &s.CreatedAt, &s.UpdatedAt)
 	return s, err
 }
 
@@ -80,12 +88,12 @@ func scanSale(row pgx.Row) (*Sale, error) {
 func (s *SaleStore) Create(ctx context.Context, sale *Sale) error {
 	return s.pool.QueryRow(ctx,
 		`INSERT INTO sales (account_id, form_id, ref_code, client, items, subtotal_sen, shipping_sen,
-		   discount_sen, total_sen, sale_type, payment_method, status)
-		 VALUES ($1, NULLIF($2,'')::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		   discount_sen, total_sen, sale_type, payment_method, status, skip_capture)
+		 VALUES ($1, NULLIF($2,'')::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		 RETURNING id, created_at, updated_at`,
 		sale.AccountID, sale.FormID, sale.RefCode, sale.Client, sale.Items,
 		sale.SubtotalSen, sale.ShippingSen, sale.DiscountSen, sale.TotalSen,
-		sale.SaleType, sale.PaymentMethod, sale.Status,
+		sale.SaleType, sale.PaymentMethod, sale.Status, sale.SkipCapture,
 	).Scan(&sale.ID, &sale.CreatedAt, &sale.UpdatedAt)
 }
 
@@ -109,6 +117,15 @@ func (s *SaleStore) AttachChipPurchase(ctx context.Context, saleID, purchaseID, 
 	_, err := s.pool.Exec(ctx,
 		`UPDATE sales SET chip_purchase_id=$2, chip_checkout_url=$3, updated_at=now() WHERE id=$1`,
 		saleID, purchaseID, checkoutURL)
+	return err
+}
+
+// MarkAuthorized flips an authorized (skip_capture) purchase to paid state
+// after the merchant captures; CapturedAt marks the moment.
+func (s *SaleStore) MarkCaptured(ctx context.Context, saleID string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE sales SET authorized=true, captured_at=now(), status=$2, updated_at=now() WHERE id=$1`,
+		saleID, SalePaid)
 	return err
 }
 

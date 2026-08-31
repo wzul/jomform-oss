@@ -12,6 +12,7 @@ import (
 
 	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/payments"
 )
 
 // RESTHandlers serves /v1/rest/* merchant resources.
@@ -22,6 +23,7 @@ type RESTHandlers struct {
 	Keys     *dbstore.APIKeyStore
 	Sales    *dbstore.SaleStore
 	Sessions *auth.Sessions
+	Pay      *payments.Service
 
 	// EncryptKey is the 32-byte AES-GCM key from ENCRYPTION_KEY env.
 	SecretsKey []byte
@@ -44,6 +46,8 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /v1/rest/settings/chip", h.authed(h.chipStatus))
 	mux.Handle("DELETE /v1/rest/settings/chip", h.authed(h.deleteChipCreds))
 	mux.Handle("POST /v1/rest/sales/{ref}/confirm", h.authed(h.confirmSale))
+	mux.Handle("POST /v1/rest/sales/{ref}/capture", h.authed(h.captureSale))
+	mux.Handle("POST /v1/rest/sales/{ref}/release", h.authed(h.releaseSale))
 	mux.Handle("GET /v1/rest/sales", h.authed(h.listSales))
 }
 
