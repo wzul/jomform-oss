@@ -14,7 +14,7 @@ func newTestServer() *Server {
 		DatabaseURL: "postgres://localhost/jomform_test",
 		AppBaseURL:  "http://localhost:8080",
 		Env:         "dev",
-	}, testLogger())
+	}, testLogger(), nil)
 }
 
 func TestHealthz(t *testing.T) {
@@ -48,14 +48,19 @@ func TestVersion(t *testing.T) {
 	}
 }
 
-func TestReadyz(t *testing.T) {
-	srv := newTestServer()
+func TestReadyzDegradedWhenDepsMissing(t *testing.T) {
+	srv := newTestServer() // deps == nil: database & valkey not wired
 	req := httptest.NewRequest("GET", "/readyz", nil)
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 during scaffold", rec.Code)
+	// Without wired deps the service is honest: 503 + degraded.
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 when deps missing", rec.Code)
+	}
+	body := rec.Body.String()
+	if !containsAll(body, `"database"`, `"valkey"`, `"degraded"`) {
+		t.Errorf("body missing expected fields: %s", body)
 	}
 }
 

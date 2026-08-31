@@ -12,7 +12,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/config"
+	"github.com/wzul/jomform/api/internal/db"
+	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/httpapi"
 	"github.com/wzul/jomform/api/internal/version"
 )
@@ -26,17 +29,43 @@ func main() {
 		osExit(1)
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	pool, err := db.Connect(ctx, cfg.DatabaseURL)
+	if err != nil {
+		log.Error("database", "err", err)
+		if !cfg.IsDev() {
+			osExit(1)
+		}
+		log.Warn("continuing without database (dev mode)")
+	}
+
+	sessions, err := auth.NewSessions(cfg.ValkeyURL)
+	if err != nil {
+		log.Error("valkey", "err", err)
+		if !cfg.IsDev() {
+			osExit(1)
+		}
+		log.Warn("continuing without valkey (dev mode)")
+	}
+
+	deps := &httpapi.Deps{}
+	if pool != nil {
+		deps.Users = dbstore.NewUserStore(pool)
+	}
+	if sessions != nil {
+		deps.Sessions = sessions
+	}
+
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           httpapi.NewServer(cfg, log).Handler(),
+		Handler:           httpapi.NewServer(cfg, log, deps).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 
 	go func() {
 		log.Info("jomform-api starting",
@@ -55,6 +84,12 @@ func main() {
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Error("shutdown", "err", err)
+	}
+	if sessions != nil {
+		_ = sessions.Close()
+	}
+	if pool != nil {
+		pool.Close()
 	}
 	log.Info("jomform-api stopped")
 }

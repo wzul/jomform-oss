@@ -10,7 +10,8 @@ CREATE TABLE users (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email         CITEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,              -- argon2id PHC string
-    totp_secret   TEXT,                        -- NULL until 2FA enabled
+    totp_secret   TEXT,                        -- NULL until 2FA setup
+    totp_enabled  BOOLEAN NOT NULL DEFAULT false,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
