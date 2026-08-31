@@ -38,8 +38,11 @@ func NewAccountStore(pool *pgxpool.Pool) *AccountStore { return &AccountStore{po
 func (s *AccountStore) ByID(ctx context.Context, id string) (*Account, error) {
 	a := &Account{}
 	err := s.pool.QueryRow(ctx, accountSelect+" WHERE id = $1", id).
-		Scan(&a.ID, &a.OwnerUserID, &a.Name, &a.Slug, &a.CustomDomain, &a.Timezone,
-			&a.Currency, &a.ChipBrandID, &a.ChipSecretKeyEnc, &a.ChipMode, &a.BNMRounding,
+		Scan(&a.ID, &a.OwnerUserID, &a.Name, &a.Slug,
+			&a.Timezone, &a.Currency,
+			&a.ChipBrandID, &a.ChipSecretKeyEnc, &a.ChipMode, &a.BNMRounding,
+			&a.ChipEmailFallback, &a.ChipMethodWhitelist,
+			&a.CustomDomain, &a.CustomDomainVerified, &a.CustomDomainVerifiedAt,
 			&a.CreatedAt, &a.UpdatedAt)
 	return a, err
 }
@@ -54,8 +57,9 @@ func (s *AccountStore) ByOwner(ctx context.Context, userID string) ([]*Account, 
 	var out []*Account
 	for rows.Next() {
 		a := &Account{}
-		if err := rows.Scan(&a.ID, &a.OwnerUserID, &a.Name, &a.Slug, &a.CustomDomain, &a.Timezone,
-			&a.Currency, &a.ChipBrandID, &a.ChipSecretKeyEnc, &a.ChipMode, &a.BNMRounding,
+		if err := rows.Scan(&a.ID, &a.OwnerUserID, &a.Name, &a.Slug,
+			&a.Timezone, &a.Currency,
+			&a.ChipBrandID, &a.ChipSecretKeyEnc, &a.ChipMode, &a.BNMRounding,
 			&a.ChipEmailFallback, &a.ChipMethodWhitelist,
 			&a.CustomDomain, &a.CustomDomainVerified, &a.CustomDomainVerifiedAt,
 			&a.CreatedAt, &a.UpdatedAt); err != nil {
@@ -84,7 +88,7 @@ func (s *AccountStore) ClearChipCredentials(ctx context.Context, accountID strin
 	return err
 }
 
-const accountSelect = `SELECT id, owner_user_id, name, slug, COALESCE(custom_domain,''), timezone, currency,
+const accountSelect = `SELECT id, owner_user_id, name, slug, timezone, currency,
 	COALESCE(chip_brand_id,''), COALESCE(chip_secret_key_enc,''), chip_mode, bnm_rounding,
 	COALESCE(chip_email_fallback::text,''), COALESCE(chip_method_whitelist, '{}'),
 	COALESCE(custom_domain,''), custom_domain_verified, custom_domain_verified_at,
