@@ -87,50 +87,6 @@ export default function Dashboard() {
     loadAll();
   }, []);
 
-  async function login(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    setError("");
-    const fd = new FormData(e.currentTarget);
-    const r = await fetch("/api/auth/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: fd.get("email"), password: fd.get("password") }),
-    });
-    if (r.ok || r.status === 401) {
-      const d = await r.json().catch(() => ({}));
-      if (d.next_step === "totp_required") {
-        setError("Masukkan kod 2FA sebagai medan totp_code.");
-        return;
-      }
-    }
-    if (r.ok) {
-      setAuthed(true);
-      setChecking(true);
-      await loadAll();
-    } else {
-      setError("Log masuk gagal. Semak emel & kata laluan.");
-    }
-  }
-
-  async function register(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    setError("");
-    const fd = new FormData(e.currentTarget);
-    const r = await fetch("/api/auth/register", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: fd.get("email"), password: fd.get("password") }),
-    });
-    if (r.status === 201) {
-      setAuthed(true);
-      setChecking(true);
-      await loadAll();
-    } else {
-      const d = await r.json().catch(() => ({}));
-      setError(d.error || "Pendaftaran gagal");
-    }
-  }
-
   async function createProduct(e: React.FormEvent) {
     e.preventDefault();
     setError("");
@@ -202,27 +158,8 @@ export default function Dashboard() {
   }
 
   if (!authed) {
-    return (
-      <main className="flex min-h-screen items-center justify-center px-6">
-        <div className="w-full max-w-md rounded-2xl border border-slate-800 bg-[#12151f] p-8">
-          <h1 className="text-2xl font-bold">
-            Jom<span className="text-indigo-400">Form</span>
-          </h1>
-          <p className="mt-1 text-sm text-slate-400">Log masuk atau daftar — borang jualan anda siap dalam 5 minit.</p>
-          {error && <p className="mt-3 rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-400">{error}</p>}
-          <form onSubmit={login} className="mt-6 space-y-3">
-            <input name="email" type="email" required placeholder="emel@anda.my" className="w-full rounded-xl border border-slate-700 bg-[#0e1119] px-4 py-2.5 text-sm outline-none focus:border-indigo-500" />
-            <input name="password" type="password" required placeholder="Kata laluan" className="w-full rounded-xl border border-slate-700 bg-[#0e1119] px-4 py-2.5 text-sm outline-none focus:border-indigo-500" />
-            <button className="w-full rounded-xl bg-gradient-to-r from-indigo-500 to-violet-500 py-2.5 font-semibold">Log Masuk</button>
-          </form>
-          <form onSubmit={register} className="mt-3 space-y-3">
-            <input name="email" type="email" required placeholder="Baharu? Emel untuk daftar" className="w-full rounded-xl border border-slate-700 bg-[#0e1119] px-4 py-2.5 text-sm outline-none focus:border-violet-500" />
-            <input name="password" type="password" required minLength={10} placeholder="Kata laluan (min. 10 aksara)" className="w-full rounded-xl border border-slate-700 bg-[#0e1119] px-4 py-2.5 text-sm outline-none focus:border-violet-500" />
-            <button className="w-full rounded-xl border border-slate-600 py-2.5 text-sm font-semibold text-slate-200">Daftar Pereka</button>
-          </form>
-        </div>
-      </main>
-    );
+    window.location.href = "/login";
+    return null;
   }
 
   return (
@@ -296,6 +233,9 @@ export default function Dashboard() {
 
       {tab === "borang" && (
         <section className="mt-6 space-y-4">
+          <a href="/builder" className="inline-block rounded-xl bg-gradient-to-r from-indigo-500 to-violet-500 px-5 py-2.5 text-sm font-semibold">
+            Buka Drag-Drop Builder →
+          </a>
           <form onSubmit={createForm} className="flex flex-wrap gap-2 rounded-2xl border border-slate-800 bg-[#12151f] p-4">
             <input value={fTitle} onChange={(e) => setFTitle(e.target.value)} required placeholder="Tajuk borang (cth: Beli Biskut Raya)" className="flex-1 rounded-xl border border-slate-700 bg-[#0e1119] px-3 py-2 text-sm" />
             <input value={fSlug} onChange={(e) => setFSlug(e.target.value)} required placeholder="slug-url" className="w-40 rounded-xl border border-slate-700 bg-[#0e1119] px-3 py-2 text-sm" />

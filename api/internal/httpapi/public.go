@@ -157,6 +157,7 @@ func (h *PublicHandlers) lookupProduct(form *dbstore.Form, productID string) (st
 
 // formFuncs provides template helpers.
 var formFuncs = template.FuncMap{
+	"divf": func(total, div int64) float64 { return float64(total) / float64(div) },
 	"div100": func(v any) string {
 		switch n := v.(type) {
 		case int64:
@@ -261,6 +262,10 @@ func (h *PublicHandlers) handleRender(w http.ResponseWriter, r *http.Request) {
 	f, err := h.Forms.PublishedBySlug(r.Context(), r.PathValue("slug"))
 	if err != nil {
 		http.Error(w, "Borang tidak dijumpai", http.StatusNotFound)
+		return
+	}
+	// Builder blocks take precedence when present.
+	if h.renderBlocks(w, r, f) {
 		return
 	}
 	var cfg struct {
