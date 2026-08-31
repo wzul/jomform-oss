@@ -113,7 +113,7 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	// CHIP flow: create purchase & return checkout URL.
 	if method == "chip" {
 		if err := h.Pay.CreateChipPurchaseForSale(r.Context(), sale); err != nil {
-			slog.Error("chip_create_for_sale", "err", err, "sale", sale.RefCode)
+			slog.Error("chip_create_for_sale", "err", fmt.Sprintf("%+v", err), "sale", sale.RefCode)
 			writeErr(w, http.StatusBadGateway, "gagal mencipta pembayaran")
 			return
 		}

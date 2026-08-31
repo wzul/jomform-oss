@@ -57,7 +57,6 @@ func (s *Service) CreateChipPurchaseForSale(ctx context.Context, sale *dbstore.S
 
 	req := chip.PurchaseRequest{
 		SkipCapture:    sale.SkipCapture,
-		Platform:       "jomform",
 		CreatorAgent:   "JomForm",
 		BrandID:        acc.ChipBrandID,
 		Client:         &chip.ClientDetails{Email: sale.Client.Email, FullName: sale.Client.FullName, Phone: sale.Client.Phone},

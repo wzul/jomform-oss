@@ -85,7 +85,7 @@ func (c *Client) do(ctx context.Context, secretKey, method, path string, body an
 	}
 
 	if resp.StatusCode >= 400 {
-		apiErr := &apiError{Message: fmt.Sprintf("http %d", resp.StatusCode)}
+		apiErr := &apiError{Message: fmt.Sprintf("http %d: %s", resp.StatusCode, truncateBytes(raw, 512))}
 		var parsed apiError
 		if json.Unmarshal(raw, &parsed) == nil && parsed.Message != "" {
 			apiErr = &parsed
@@ -99,4 +99,11 @@ func (c *Client) do(ctx context.Context, secretKey, method, path string, body an
 		}
 	}
 	return nil
+}
+
+func truncateBytes(b []byte, n int) string {
+	if len(b) > n {
+		return string(b[:n])
+	}
+	return string(b)
 }
