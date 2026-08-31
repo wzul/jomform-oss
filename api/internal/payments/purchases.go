@@ -55,12 +55,23 @@ func (s *Service) CreateChipPurchaseForSale(ctx context.Context, sale *dbstore.S
 		return fmt.Errorf("decrypt key: %w", err)
 	}
 
+	// Email fallback (CHIP requires a client email). Subscription sales MUST
+	// carry the real buyer email for future charges — fallback applies to
+	// one-time sales only, consistent with the CHIP WooCommerce plugin.
+	clientEmail := sale.Client.Email
+	if clientEmail == "" && sale.SaleType != dbstore.SaleTypeSubscription && acc.ChipEmailFallback != "" {
+		clientEmail = acc.ChipEmailFallback
+	}
+
+	whitelist := s.ResolveWhitelist(ctx, string(secret), acc.Currency, sale.TotalSen, acc.ChipMethodWhitelist)
+
 	req := chip.PurchaseRequest{
-		SkipCapture:    sale.SkipCapture,
-		CreatorAgent:   "JomForm",
-		BrandID:        acc.ChipBrandID,
-		Client:         &chip.ClientDetails{Email: sale.Client.Email, FullName: sale.Client.FullName, Phone: sale.Client.Phone},
-		ForceRecurring: sale.SaleType == dbstore.SaleTypeSubscription, // card must be saved for future charges
+		SkipCapture:            sale.SkipCapture,
+		CreatorAgent:           "JomForm",
+		BrandID:                acc.ChipBrandID,
+		PaymentMethodWhitelist: whitelist,
+		Client:                 &chip.ClientDetails{Email: clientEmail, FullName: sale.Client.FullName, Phone: sale.Client.Phone},
+		ForceRecurring:         sale.SaleType == dbstore.SaleTypeSubscription, // card must be saved for future charges
 		Purchase: chip.PurchaseDetails{
 			Products:        toCHIPProducts(sale.Items),
 			Currency:        acc.Currency,
@@ -215,4 +226,85 @@ func (s *Service) decryptSecret(ctx context.Context, accountID string) (string, 
 		return "", err
 	}
 	return string(dec), nil
+}
+
+var (
+	dnqrGroup   = []string{"duitnow_qr", "dnqr"}
+	shopeeGroup = []string{"razer_shopeepay", "shopee_pay"}
+)
+
+// ResolveWhitelist expands legacy alias pairs then intersects with the brand's
+// truly-available methods (CHIP /payment_methods/). Mirrors the WooCommerce
+// plugin resolver: dnqr preferred over duitnow_qr; shopee_pay over
+// razer_shopeepay.
+func (s *Service) ResolveWhitelist(ctx context.Context, secret string, currency string, amountSen int64, whitelist []string) []string {
+	if len(whitelist) == 0 {
+		return nil
+	}
+	groups := map[string][]string{}
+	in := func(list, want []string) bool {
+		for _, m := range list {
+			for _, w := range want {
+				if m == w {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	if in(whitelist, dnqrGroup) {
+		groups["dnqr"] = dnqrGroup
+	}
+	if in(whitelist, shopeeGroup) {
+		groups["shopee"] = shopeeGroup
+	}
+	if len(groups) == 0 {
+		return whitelist
+	}
+	expanded := append([]string{}, whitelist...)
+	for _, members := range groups {
+		expanded = append(expanded, members...)
+	}
+	avail, err := s.Chip.PaymentMethods(ctx, secret, currency, "", amountSen)
+	if err != nil || len(avail) == 0 {
+		return expanded
+	}
+	resolved := append([]string{}, whitelist...)
+	for key, members := range groups {
+		var ok []string
+		for _, m := range members {
+			for _, a := range avail {
+				if m == a {
+					ok = append(ok, m)
+				}
+			}
+		}
+		preferred := "shopee_pay"
+		dropped := "razer_shopeepay"
+		if key == "dnqr" {
+			preferred = "dnqr"
+			dropped = "duitnow_qr"
+		}
+		final := []string{}
+		hasPreferred := false
+		for _, m := range ok {
+			if m != dropped {
+				final = append(final, m)
+				if m == preferred {
+					hasPreferred = true
+				}
+			}
+		}
+		_ = hasPreferred
+		resolved = append(resolved, final...)
+	}
+	seen := map[string]bool{}
+	out := []string{}
+	for _, m := range resolved {
+		if !seen[m] {
+			seen[m] = true
+			out = append(out, m)
+		}
+	}
+	return out
 }

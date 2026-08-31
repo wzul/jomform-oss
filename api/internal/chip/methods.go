@@ -5,6 +5,10 @@ import (
 	"crypto/rsa"
 	"encoding/pem"
 	"fmt"
+	"net/url"
+	"sort"
+	"strconv"
+	"strings"
 )
 
 // CreatePurchase issues POST /purchases/ and returns the created Purchase
@@ -81,4 +85,24 @@ func (c *Client) ReleasePayment(ctx context.Context, secretKey, purchaseID strin
 		return nil, err
 	}
 	return &p, nil
+}
+
+// PaymentMethods lists available payment methods for a brand/currency/amount.
+func (c *Client) PaymentMethods(ctx context.Context, secretKey, currency, language string, amount int64) ([]string, error) {
+	req := map[string]string{"currency": currency, "amount": strconv.FormatInt(amount, 10)}
+	if language != "" {
+		req["language"] = language
+	}
+	q := make([]string, 0, 3)
+	for k, v := range req {
+		q = append(q, k+"="+url.QueryEscape(v))
+	}
+	sort.Strings(q)
+	var out struct {
+		Available []string `json:"available_payment_methods"`
+	}
+	if err := c.do(ctx, secretKey, "GET", "/payment_methods/?"+strings.Join(q, "&"), nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Available, nil
 }

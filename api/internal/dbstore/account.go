@@ -9,19 +9,21 @@ import (
 
 // Account models the accounts table.
 type Account struct {
-	ID               string
-	OwnerUserID      string
-	Name             string
-	Slug             string
-	CustomDomain     string
-	Timezone         string
-	Currency         string
-	ChipBrandID      string
-	ChipSecretKeyEnc string
-	ChipMode         string
-	BNMRounding      bool
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	ID                  string
+	OwnerUserID         string
+	Name                string
+	Slug                string
+	CustomDomain        string
+	Timezone            string
+	Currency            string
+	ChipEmailFallback   string
+	ChipMethodWhitelist []string
+	ChipBrandID         string
+	ChipSecretKeyEnc    string
+	ChipMode            string
+	BNMRounding         bool
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
 
 // AccountStore wraps pgx for account operations.
@@ -61,10 +63,12 @@ func (s *AccountStore) ByOwner(ctx context.Context, userID string) ([]*Account, 
 }
 
 // SetChipCredentials stores Brand ID and the AES-GCM encrypted secret key.
-func (s *AccountStore) SetChipCredentials(ctx context.Context, accountID, brandID, secretKeyEnc, mode string) error {
+func (s *AccountStore) SetChipCredentials(ctx context.Context, accountID, brandID, secretKeyEnc, mode string, emailFallback string, whitelist []string) error {
 	_, err := s.pool.Exec(ctx,
-		`UPDATE accounts SET chip_brand_id=$2, chip_secret_key_enc=$3, chip_mode=$4, updated_at=now() WHERE id=$1`,
-		accountID, brandID, secretKeyEnc, mode)
+		`UPDATE accounts SET chip_brand_id=$2, chip_secret_key_enc=$3, chip_mode=$4,
+		   chip_email_fallback=NULLIF($5,'')::citext, chip_method_whitelist=$6, updated_at=now()
+		 WHERE id=$1`,
+		accountID, brandID, secretKeyEnc, mode, emailFallback, whitelist)
 	return err
 }
 
@@ -77,5 +81,6 @@ func (s *AccountStore) ClearChipCredentials(ctx context.Context, accountID strin
 }
 
 const accountSelect = `SELECT id, owner_user_id, name, slug, COALESCE(custom_domain,''), timezone, currency,
-	COALESCE(chip_brand_id,''), COALESCE(chip_secret_key_enc,''), chip_mode, bnm_rounding, created_at, updated_at
+	COALESCE(chip_brand_id,''), COALESCE(chip_secret_key_enc,''), chip_mode, bnm_rounding,
+	COALESCE(chip_email_fallback::text,''), COALESCE(chip_method_whitelist, '{}'), created_at, updated_at
 	FROM accounts`

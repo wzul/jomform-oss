@@ -53,8 +53,9 @@ type PurchaseRequest struct {
 	// SkipCapture authorizes the card without charging (delayed capture).
 	// Capture via CapturePayment within 30 days, or void with ReleasePayment.
 	SkipCapture  bool   `json:"skip_capture,omitempty"`
-	Platform     string `json:"platform,omitempty"`
 	CreatorAgent string `json:"creator_agent,omitempty"`
+
+	PaymentMethodWhitelist []string `json:"payment_method_whitelist,omitempty"`
 
 	SendReceipt bool `json:"send_receipt,omitempty"`
 }

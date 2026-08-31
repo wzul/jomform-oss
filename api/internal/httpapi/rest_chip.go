@@ -12,9 +12,11 @@ import (
 // Secret is write-only: never echoed back.
 func (h *RESTHandlers) setChipCreds(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	var in struct {
-		BrandID   string `json:"brand_id"`
-		SecretKey string `json:"secret_key"`
-		Mode      string `json:"mode"` // live | test
+		BrandID         string   `json:"brand_id"`
+		SecretKey       string   `json:"secret_key"`
+		Mode            string   `json:"mode"` // live | test
+		EmailFallback   string   `json:"email_fallback"`
+		MethodWhitelist []string `json:"payment_method_whitelist"`
 	}
 	if err := decodeJSON(r, &in); err != nil || in.BrandID == "" || in.SecretKey == "" {
 		writeErr(w, http.StatusBadRequest, "brand_id dan secret_key wajib")
@@ -34,7 +36,7 @@ func (h *RESTHandlers) setChipCreds(w http.ResponseWriter, r *http.Request, actx
 		respondErr(w, err)
 		return
 	}
-	if err := h.Accounts.SetChipCredentials(r.Context(), actx.Account.ID, in.BrandID, enc, mode); err != nil {
+	if err := h.Accounts.SetChipCredentials(r.Context(), actx.Account.ID, in.BrandID, enc, mode, in.EmailFallback, in.MethodWhitelist); err != nil {
 		respondErr(w, err)
 		return
 	}
