@@ -20,6 +20,7 @@ const sessionCookie = "jf_session"
 type AuthHandlers struct {
 	Sessions *auth.Sessions
 	Users    *dbstore.UserStore
+	Accounts *dbstore.AccountStore
 }
 
 // RegisterRoutes wires auth endpoints onto the mux.
@@ -86,6 +87,22 @@ func (a *AuthHandlers) handleRegister(w http.ResponseWriter, r *http.Request) {
 		slog.Error("register_failed", "err", err, "email", req.Email)
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
+	}
+
+	// Auto-provision the default account so new users can build immediately.
+	if a.Accounts != nil {
+		acc := &dbstore.Account{
+			OwnerUserID: user.ID,
+			Name:        strings.Split(req.Email, "@")[0] + " Store",
+			Slug:        slugify(strings.Split(req.Email, "@")[0], user.ID),
+		}
+		if err := a.Accounts.Create(r.Context(), acc); err != nil {
+			// Slug collision: append random suffix and retry once.
+			acc.Slug = acc.Slug + "-" + shortRand()
+			if err2 := a.Accounts.Create(r.Context(), acc); err2 != nil {
+				slog.Error("default_account_create", "err", err2, "user", user.ID)
+			}
+		}
 	}
 
 	if err := a.startSession(w, r, user.ID, user.Email, user.TOTPSecret != ""); err != nil {

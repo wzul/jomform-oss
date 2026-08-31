@@ -57,7 +57,9 @@ func main() {
 
 	deps := &httpapi.Deps{}
 	if pool != nil {
+		accounts := dbstore.NewAccountStore(pool)
 		deps.Users = dbstore.NewUserStore(pool)
+		deps.Accounts = accounts
 	}
 	if sessions != nil {
 		deps.Sessions = sessions

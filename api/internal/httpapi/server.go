@@ -16,6 +16,7 @@ import (
 // Deps carries wired-in infrastructure (nil in bare-mode tests).
 type Deps struct {
 	Payments *PaymentsHandlers
+	Accounts *dbstore.AccountStore
 	REST     *RESTHandlers
 	Public   *PublicHandlers
 	MCP      *mcpsrv.Server
@@ -40,7 +41,7 @@ func NewServer(cfg *config.Config, log *slog.Logger, deps *Deps) *Server {
 	isDev = cfg.IsDev()
 
 	if deps.Users != nil && deps.Sessions != nil {
-		s.auth = &AuthHandlers{Sessions: deps.Sessions, Users: deps.Users}
+		s.auth = &AuthHandlers{Sessions: deps.Sessions, Users: deps.Users, Accounts: deps.Accounts}
 	}
 	return s
 }
