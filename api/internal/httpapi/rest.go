@@ -60,6 +60,8 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /v1/rest/sales/{ref}/capture", h.authed(h.captureSale))
 	mux.Handle("POST /v1/rest/sales/{ref}/release", h.authed(h.releaseSale))
 	mux.Handle("GET /v1/rest/sales", h.authed(h.listSales))
+	mux.Handle("GET /v1/rest/analytics/forms", h.authed(h.formAnalytics))
+	mux.Handle("GET /v1/rest/analytics/products", h.authed(h.productAnalytics))
 }
 
 // Resolve identifies the caller: Bearer API key (preferred) or session

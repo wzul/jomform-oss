@@ -22,6 +22,25 @@ type SaleRow = {
   buyer: string;
   created_at: string;
 };
+type FormStats = {
+  title: string;
+  slug: string;
+  submissions: number;
+  paid_count: number;
+  confirmed_count: number;
+  failed_count: number;
+  pending_count: number;
+  revenue_sen: number;
+};
+type ProductStats = {
+  product_id: string;
+  name: string;
+  units_sold: number;
+  paid_units: number;
+  revenue_sen: number;
+  paid_revenue_sen: number;
+};
+
 type Summary = { counts: Record<string, number>; revenue_sen: number };
 
 const money = (sen: number) =>
@@ -34,6 +53,8 @@ export default function Dashboard() {
   const [products, setProducts] = useState<Product[]>([]);
   const [sales, setSales] =useState<SaleRow[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
+  const [formStats, setFormStats] = useState<FormStats[]>([]);
+  const [prodStats, setProdStats] = useState<ProductStats[]>([]);
 
   const load = useCallback(async () => {
     const me = await fetch("/api/auth/me");
@@ -41,14 +62,18 @@ export default function Dashboard() {
       window.location.href = "/login";
       return;
     }
-    const [p, s, sum] = await Promise.all([
+    const [p, s, sum, fs, ps] = await Promise.all([
       fetch("/api/rest/products").then((r) => r.json()),
       fetch("/api/rest/sales").then((r) => r.json()),
       fetch("/api/rest/summary").then((r) => r.json()),
+      fetch("/api/rest/analytics/forms").then((r) => (r.ok ? r.json() : [])),
+      fetch("/api/rest/analytics/products").then((r) => (r.ok ? r.json() : [])),
     ]);
     setProducts(Array.isArray(p) ? p : []);
     setSales(Array.isArray(s) ? s : []);
     setSummary(sum);
+    setFormStats(Array.isArray(fs) ? fs : []);
+    setProdStats(Array.isArray(ps) ? ps : []);
     setAuthed(true);
     setChecking(false);
   }, []);
@@ -144,6 +169,51 @@ export default function Dashboard() {
               </AreaChart>
             </ResponsiveContainer>
           </div>
+        </section>
+
+        {/* Form analytics */}
+        <section className="jf-card mt-6 p-5">
+          <h2 className="text-sm font-semibold">Form analytics</h2>
+          <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {formStats.map((f) => (
+              <div key={f.slug} className="rounded-lg border border-[var(--jf-border)] p-3">
+                <p className="truncate text-sm font-medium" title={f.title}>{f.title}</p>
+                <p className="font-mono text-[11px] text-[var(--jf-muted)]">/f/{f.slug}</p>
+                <div className="mt-2 grid grid-cols-2 gap-x-2 gap-y-0.5 text-[11px] text-[var(--jf-muted)]">
+                  <span>Submissions: <b>{f.submissions}</b></span>
+                  <span>Paid+Confirmed: <b className="text-emerald-600">{f.paid_count + f.confirmed_count}</b></span>
+                  <span>Pending: <b>{f.pending_count}</b></span>
+                  <span>Failed: <b>{f.failed_count}</b></span>
+                </div>
+                <p className="mt-1.5 text-sm font-semibold text-[var(--jf-primary)]">{money(f.revenue_sen)}</p>
+              </div>
+            ))}
+            {formStats.length === 0 && <p className="text-xs text-[var(--jf-muted)]">No forms yet.</p>}
+          </div>
+        </section>
+
+        {/* Product analytics */}
+        <section className="jf-card mt-6 p-5">
+          <h2 className="text-sm font-semibold">Product performance</h2>
+          <ul className="mt-2 divide-y divide-[var(--jf-border)]">
+            {prodStats.map((pr) => (
+              <li key={pr.product_id} className="flex items-center justify-between gap-3 py-2.5">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium">{pr.name}</p>
+                  <p className="text-[11px] text-[var(--jf-muted)]">
+                    {pr.units_sold} sold · {pr.paid_units} paid
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-sm font-semibold">{money(pr.paid_revenue_sen)}</p>
+                  <p className="text-[10px] text-[var(--jf-muted)]">gross {money(pr.revenue_sen)}</p>
+                </div>
+              </li>
+            ))}
+            {prodStats.length === 0 && (
+              <li className="py-4 text-xs text-[var(--jf-muted)]">No product sales yet.</li>
+            )}
+          </ul>
         </section>
 
         {/* Recent sales */}
