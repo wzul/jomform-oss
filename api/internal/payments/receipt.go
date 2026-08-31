@@ -34,6 +34,8 @@ type SaleRef struct {
 	AmountSen    int64
 	ItemsSummary string
 	FormURL      string
+	TIN          string // LHDN e-invoicing (optional)
+	MSIC         string
 }
 
 // SendSaleReceipt emails the buyer a plain-text receipt. Failures are

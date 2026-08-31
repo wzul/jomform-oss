@@ -34,8 +34,14 @@ func (s *Service) ReceiptPDF(ref SaleRef) ([]byte, error) {
 		{"Tarikh / Date", time.Now().Format("02-01-2006 15:04 MYT")},
 		{"Item", ref.ItemsSummary},
 		{"Jumlah / Amount", fmt.Sprintf("RM %.2f", float64(ref.AmountSen)/100)},
-		{"Status", "PAID - Pembayaran diterima"},
 	}
+	if ref.TIN != "" {
+		rows = append(rows, [2]string{"e-Invoice TIN (LHDN)", ref.TIN})
+	}
+	if ref.MSIC != "" {
+		rows = append(rows, [2]string{"MSIC", ref.MSIC})
+	}
+	rows = append(rows, [2]string{"Status", "PAID - Pembayaran diterima"})
 	for _, r := range rows {
 		m.AddRow(9,
 			text.NewCol(4, r[0], props.Text{Size: 10, Style: fontstyle.Bold}),

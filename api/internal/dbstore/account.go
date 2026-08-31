@@ -20,6 +20,8 @@ type Account struct {
 	Currency               string
 	ChipEmailFallback      string
 	ChipMethodWhitelist    []string
+	EinvoiceTIN            string
+	EinvoiceMSIC           string
 	ChipBrandID            string
 	ChipSecretKeyEnc       string
 	ChipMode               string
@@ -92,6 +94,7 @@ const accountSelect = `SELECT id, owner_user_id, name, slug, timezone, currency,
 	COALESCE(chip_brand_id,''), COALESCE(chip_secret_key_enc,''), chip_mode, bnm_rounding,
 	COALESCE(chip_email_fallback::text,''), COALESCE(chip_method_whitelist, '{}'),
 	COALESCE(custom_domain,''), custom_domain_verified, custom_domain_verified_at,
+	COALESCE(einvoice_tin,''), COALESCE(einvoice_msic,''),
 	created_at, updated_at
 	FROM accounts`
 
@@ -125,4 +128,20 @@ func (s *AccountStore) ClearCustomDomain(ctx context.Context, accountID string) 
 		`UPDATE accounts SET custom_domain=NULL, custom_domain_verified=false,
 		   custom_domain_verified_at=NULL, updated_at=now() WHERE id=$1`, accountID)
 	return err
+}
+
+// SetEinvoice stores LHDN e-invoicing identifiers.
+func (s *AccountStore) SetEinvoice(ctx context.Context, accountID, tin, msic string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE accounts SET einvoice_tin=NULLIF($2,''), einvoice_msic=NULLIF($3,''), updated_at=now() WHERE id=$1`,
+		accountID, tin, msic)
+	return err
+}
+
+// Einvoice reads LHDN identifiers (may be empty strings).
+func (s *AccountStore) Einvoice(ctx context.Context, accountID string) (tin, msic string, err error) {
+	err = s.pool.QueryRow(ctx,
+		`SELECT COALESCE(einvoice_tin,''), COALESCE(einvoice_msic,'') FROM accounts WHERE id=$1`,
+		accountID).Scan(&tin, &msic)
+	return
 }

@@ -89,13 +89,23 @@ func main() {
 				Base: cfg.AppBaseURL,
 			}
 		}
+		if whStore := dbstore.NewWebhookStore(pool); whStore != nil {
+			pay.OnPaid = func(ctx context.Context, accountID, event string, payload map[string]any) {
+				httpapi.DispatchWebhooks(ctx, whStore, accountID, event, payload)
+			}
+			deps.REST.Webhooks = whStore
+		}
 		deps.Payments = &httpapi.PaymentsHandlers{Service: pay, Events: events}
 
 		// REST API for the web dashboard.
+		whStore := dbstore.NewWebhookStore(pool)
+		pay.OnPaid = func(ctx context.Context, accountID, event string, payload map[string]any) {
+			httpapi.DispatchWebhooks(ctx, whStore, accountID, event, payload)
+		}
 		deps.REST = &httpapi.RESTHandlers{
 			Accounts: accounts, Products: products, Forms: dbstore.NewFormStore(pool),
 			Keys: keys, Sales: sales, Sessions: sessions, ChipProbe: chip.New(""),
-			SecretsKey: decryptKey, Pay: pay,
+			SecretsKey: decryptKey, Pay: pay, Webhooks: whStore,
 		}
 
 		// MCP server — merchants' AI agents control their store here.

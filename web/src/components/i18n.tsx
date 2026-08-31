@@ -85,8 +85,11 @@ const DICT = {
   "land.login": { en: "Log in", ms: "Log masuk" },
   "land.f1": { en: "Order form in 5 minutes — drag-and-drop products, fields, images, coupons. No code.", ms: "Borang siap 5 minit — tarik produk, medan, imej, kupon. Tanpa kod." },
   "land.f2": { en: "Buyers pay online the moment they submit. Card, FPX, DuitNow QR, e-wallets.", ms: "Buyer bayar terus selepas submit. Kad, FPX, DuitNow QR, e-wallet." },
-  "land.f3": { en: "Merchants control their store with AI agents via MCP — no dashboard needed.", ms: "Merchant kawal kedai guna AI agent melalui MCP — tak wajib dashboard." },
+  "land.f3": { en: "AI-agent native: your ChatGPT/Claude agent controls the whole store via MCP — products, prices, sales, refunds. The most powerful order-form API in Malaysia.", ms: "AI-agent native: agent ChatGPT/Claude kau kawal seluruh kedai melalui MCP — produk, harga, jualan, refund. API borang paling power di Malaysia." },
   "land.f4": { en: "Sales analytics, CSV export, PDF receipts — free forever, no monthly fee.", ms: "Analitik jualan, eksport CSV, resit PDF — percuma selamanya, tiada yuran bulanan." },
+  "land.mcptitle": { en: "Control your store with plain language", ms: "Kawal kedai guna bahasa biasa" },
+  "land.mcpbody": { en: 'JomForm speaks MCP (Model Context Protocol). Connect your AI agent once, then: \"add product RM25\", \"how many sales today?\", \"refund order JF-xxxx\" — all without opening a dashboard.', ms: 'JomForm cakap MCP (Model Context Protocol). Sambung agent AI sekali, lepas tu: \"tambah produk RM20\", \"berapa sales hari ni?\", \"refund order JF-xxxx\" — semua tanpa buka dashboard.' },
+  "land.mcpsnippet": { en: "POST https://jomform.com/mcp  →  Bearer jfk_…  →  your agent, your store.", ms: "POST https://jomform.com/mcp  →  Bearer jfk_…  →  agent kau, kedai kau." },
   "land.footer": { en: "JomForm — open source (Apache-2.0). Made in Malaysia. Payments by", ms: "JomForm — open source (Apache-2.0). Buatan Malaysia. Bayaran oleh" },
 } as const;
 

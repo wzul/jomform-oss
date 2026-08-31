@@ -114,16 +114,28 @@ func (s *Service) ProcessCallback(ctx context.Context, p *chip.Purchase) error {
 		if err := s.Sales.SetStatus(ctx, sale.ID, dbstore.SalePaid); err != nil {
 			return err
 		}
+		if s.OnPaid != nil {
+			go s.OnPaid(ctx, sale.AccountID, "sale.paid", map[string]any{
+				"ref_code": sale.RefCode, "amount_sen": sale.TotalSen,
+				"buyer_email": sale.Client.Email, "purchase_id": p.ID,
+			})
+		}
 		// Receipt (one-time sales only; subscription receipts follow their
 		// own charge lifecycle). Never blocks the payment flow.
 		if sale.SaleType != dbstore.SaleTypeSubscription {
 			summary := itemsSummary(sale.Items)
+			tin, msic := "", ""
+			if acc2, aerr := s.Accounts.ByID(ctx, sale.AccountID); aerr == nil {
+				tin, msic = acc2.EinvoiceTIN, acc2.EinvoiceMSIC
+			}
 			go s.SendSaleReceipt(ctx, SaleRef{
 				RefCode:      sale.RefCode,
 				BuyerEmail:   sale.Client.Email,
 				AmountSen:    sale.TotalSen,
 				ItemsSummary: summary,
 				FormURL:      s.BaseURL + "/t/" + sale.RefCode,
+				TIN:          tin,
+				MSIC:         msic,
 			})
 		}
 		// Subscription first payment: token purchase completed → activate sub.

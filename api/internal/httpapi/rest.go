@@ -24,6 +24,7 @@ type RESTHandlers struct {
 	Sales    *dbstore.SaleStore
 	Sessions *auth.Sessions
 	Pay      *payments.Service
+	Webhooks *dbstore.WebhookStore
 	// ChipProbe validates credentials against CHIP at save time.
 	ChipProbe interface {
 		ValidateCredentials(ctx context.Context, secret string) error
@@ -54,8 +55,13 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("DELETE /v1/rest/settings/chip", h.authed(h.deleteChipCreds))
 	mux.Handle("PUT /v1/rest/settings/custom-domain", h.authed(h.setCustomDomain))
 	mux.Handle("GET /v1/rest/settings/custom-domain", h.authed(h.getCustomDomain))
+	mux.Handle("PUT /v1/rest/settings/einvoice", h.authed(h.putEinvoicing))
+	mux.Handle("GET /v1/rest/settings/einvoice", h.authed(h.getEinvoicing))
+	mux.Handle("GET /v1/rest/webhooks", h.authed(h.listWebhooks))
+	mux.Handle("POST /v1/rest/webhooks", h.authed(h.createWebhook))
+	mux.Handle("DELETE /v1/rest/webhooks/{id}", h.authed(h.deleteWebhook))
 	mux.Handle("POST /v1/rest/settings/custom-domain/verify", h.authed(h.verifyCustomDomain))
-	mux.Handle("POST /v1/rest/settings/custom-domain/connect", h.authed(h.connectCustomDomain))
+	mux.Handle("POST /v1/rest/settings/custom-domain/connect", h.authed(h.connectCFHosted))
 	mux.Handle("DELETE /v1/rest/settings/custom-domain", h.authed(h.deleteCustomDomain))
 	mux.Handle("POST /v1/rest/sales/{ref}/confirm", h.authed(h.confirmSale))
 	mux.Handle("POST /v1/rest/sales/{ref}/capture", h.authed(h.captureSale))

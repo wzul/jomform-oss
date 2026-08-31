@@ -44,13 +44,22 @@ export default function Settings() {
   const [cfToken, setCfToken] = useState("");
   const [cfAccount, setCfAccount] = useState("");
   const [runCmd, setRunCmd] = useState("");
+  const [tin, setTin] = useState("");
+  const [msic, setMsic] = useState("");
+  const [webhooks, setWebhooks] = useState<{ id: string; url: string }[]>([]);
+  const [whUrl, setWhUrl] = useState("");
+  const [whSecret, setWhSecret] = useState("");
 
   const load = useCallback(() => {
     return Promise.all([
       fetch("/api/rest/settings/chip").then((r) => (r.ok ? r.json() : null)),
       fetch("/api/rest/keys").then((r) => (r.ok ? r.json() : [])),
       fetch("/api/rest/settings/custom-domain").then((r) => (r.ok ? r.json() : null)),
-    ]).then(([s, k, d]) => {
+      fetch("/api/rest/webhooks").then((r) => (r.ok ? r.json() : [])),
+      fetch("/api/rest/settings/einvoice").then((r) => (r.ok ? r.json() : null)),
+    ]).then(([s, k, d, whs, ei]) => {
+      setWebhooks(Array.isArray(whs) ? whs : []);
+      if (ei) { setTin(ei.tin || ""); setMsic(ei.msic || ""); }
       if (s) {
         setStatus(s);
         if (s.brand_id) setBrandId(s.brand_id);
@@ -102,6 +111,15 @@ export default function Settings() {
     await fetch("/api/rest/settings/chip", { method: "DELETE" });
     setMsg("CHIP credentials cleared.");
     await load();
+  }
+
+  async function addWebhook(e: React.FormEvent) {
+    e.preventDefault();
+    const r = await fetch("/api/rest/webhooks", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: whUrl, secret: whSecret, events: ["sale.paid", "sale.failed", "subscription.charged"] }),
+    });
+    if (r.ok) { setWhUrl(""); setWhSecret(""); load(); }
   }
 
   async function genKey() {
@@ -159,8 +177,8 @@ export default function Settings() {
     });
     const d = await r.json().catch(() => ({}));
     if (r.ok) {
-      setRunCmd(d.run_command + "  # tunnel " + d.tunnel_id);
-      setDomainMsg("Tunnel created! Run the command below on any machine with internet, then Verify.");
+      setRunCmd("Connector hosted by JomForm ✓ — container " + d.connector + ". Tunggu 30-60s, kemudian Verify.");
+      setDomainMsg("Tunnel created in your Cloudflare account.");
       await load();
     } else {
       setDomainMsg(d.error || "Cloudflare connect failed");
@@ -353,8 +371,9 @@ export default function Settings() {
             </summary>
             <p className="mt-2 text-xs text-slate-500">
               Paste a Cloudflare API token (zone + tunnel scopes) and your Account ID.
-              We create the tunnel, wire the ingress to JomForm, and give you a one-line
-              run command. The token is never stored.
+              We create the tunnel <strong>in your Cloudflare account</strong>, wire it to
+              JomForm, and <strong>host the connector for you</strong> — nothing to install
+              on your side. The token is never stored.
             </p>
             <form onSubmit={connectCloudflare} className="mt-2 space-y-2">
               <input value={cfToken} onChange={(e) => setCfToken(e.target.value)} required type="password"
@@ -369,6 +388,57 @@ export default function Settings() {
               </p>
             )}
           </details>
+        </section>
+
+        {/* ── e-Invoice (LHDN) ── */}
+        <section className="jf-card mt-6 p-6">
+          <h2 className="text-lg font-semibold">e-Invoice (LHDN)</h2>
+          <p className="mt-1 text-sm text-slate-400">
+            Buyer details collected on forms; TIN/NRIC auto-collected for B2B receipts. Receipt PDFs attach LHDN-ready fields.
+          </p>
+          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <label className="text-xs text-slate-500">Company TIN</label>
+              <input value={tin} onChange={(e) => setTin(e.target.value)} className="jf-input mt-1" placeholder="e.g. C1234567890" />
+            </div>
+            <div>
+              <label className="text-xs text-slate-500">MSIC code</label>
+              <input value={msic} onChange={(e) => setMsic(e.target.value)} className="jf-input mt-1" placeholder="e.g. 62010" />
+            </div>
+          </div>
+          <button onClick={async () => {
+            const r = await fetch("/api/rest/settings/einvoice", {
+              method: "PUT", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ tin, msic }),
+            });
+            setMsg(r.ok ? "e-Invoice details saved ✓" : "Failed to save");
+          }} className="jf-btn-primary mt-3 px-4 text-sm">Save e-Invoice</button>
+        </section>
+
+        {/* ── Outbound webhooks ── */}
+        <section className="jf-card mt-6 p-6">
+          <h2 className="text-lg font-semibold">Outbound webhooks</h2>
+          <p className="mt-1 text-sm text-slate-400">
+            Events: <code className="rounded bg-slate-100 px-1">sale.paid</code>,{" "}
+            <code className="rounded bg-slate-100 px-1">sale.failed</code>,{" "}
+            <code className="rounded bg-slate-100 px-1">subscription.charged</code>. HMAC-SHA256 signed with your secret.
+          </p>
+          <form onSubmit={addWebhook} className="mt-3 flex flex-wrap gap-2">
+            <input value={whUrl} onChange={(e) => setWhUrl(e.target.value)} required type="url"
+              placeholder="https://yourapp.com/jomform-hook" className="jf-input min-w-56 flex-1" />
+            <input value={whSecret} onChange={(e) => setWhSecret(e.target.value)} required type="text"
+              placeholder="Signing secret" className="jf-input w-48" />
+            <button className="jf-btn-primary px-4 text-sm">Add</button>
+          </form>
+          <ul className="mt-3 space-y-2">
+            {webhooks.map((wh) => (
+              <li key={wh.id} className="flex items-center justify-between rounded-lg border border-[var(--jf-border)] px-4 py-2.5">
+                <span className="truncate font-mono text-xs">{wh.url}</span>
+                <button onClick={async () => { await fetch(`/api/rest/webhooks/${wh.id}`, { method: "DELETE" }); load(); }}
+                  className="text-xs text-slate-500 hover:text-red-500">✕</button>
+              </li>
+            ))}
+          </ul>
         </section>
 
         {/* ── API keys ── */}

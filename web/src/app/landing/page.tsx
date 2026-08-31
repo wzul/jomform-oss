@@ -79,6 +79,22 @@ export default function Landing() {
         </div>
       </section>
 
+      {/* MCP selling point — the headline differentiator */}
+      <section className="mx-auto max-w-4xl px-6 py-10">
+        <div className="rounded-2xl border border-indigo-100 bg-gradient-to-br from-indigo-50 via-white to-white p-8 text-center">
+          <p className="text-3xl">🤖</p>
+          <h2 className="mt-2 text-xl font-bold text-slate-900 sm:text-2xl">
+            {t("land.mcptitle")}
+          </h2>
+          <p className="mx-auto mt-3 max-w-xl text-sm leading-relaxed text-slate-600">
+            {t("land.mcpbody")}
+          </p>
+          <p className="mt-4 break-all rounded-xl bg-slate-900 p-4 font-mono text-[12px] text-emerald-300">
+            {t("land.mcpsnippet")}
+          </p>
+        </div>
+      </section>
+
       {/* features */}
       <section className="mx-auto max-w-4xl border-t border-slate-100 px-6 py-16">
         <div className="grid grid-cols-1 gap-8 sm:grid-cols-2">
