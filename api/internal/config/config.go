@@ -23,6 +23,14 @@ type Config struct {
 	EncryptionKey string
 	AppBaseURL    string
 	Env           string // dev | prod
+
+	// SES SMTP (transactional email). Empty host disables email sends
+	// (e.g. password-reset falls back to logged instructions).
+	SESSMTPHost string
+	SESSMTPPort string
+	SESSMTPUser string
+	SESSMTPPass string
+	SESFrom     string
 }
 
 // Load reads configuration from the environment and validates it.
@@ -40,6 +48,12 @@ func Load() (*Config, error) {
 		EncryptionKey: os.Getenv("ENCRYPTION_KEY"),
 		AppBaseURL:    getEnv("APP_BASE_URL", "http://localhost:8080"),
 		Env:           getEnv("APP_ENV", "dev"),
+
+		SESSMTPHost: os.Getenv("SES_SMTP_HOST"),
+		SESSMTPPort: getEnv("SES_SMTP_PORT", "587"),
+		SESSMTPUser: os.Getenv("SES_SMTP_USER"),
+		SESSMTPPass: os.Getenv("SES_SMTP_PASS"),
+		SESFrom:     os.Getenv("SES_FROM"),
 	}
 
 	if cfg.DatabaseURL == "" {
