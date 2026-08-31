@@ -75,8 +75,12 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 }
 
 // blockTmpl renders each builder block. Prices ride on data-price for the
-// client total; the server remains authoritative via lookupProduct on submit.
-var blockTmpl = template.Must(template.New("blocks").Parse(`<!doctype html>
+// client total; the server remains the price authority on submit.
+var blockTmpl = template.Must(template.New("blocks").
+	Funcs(template.FuncMap{
+		"divf": func(total, div int64) float64 { return float64(total) / float64(div) },
+	}).
+	Parse(`<!doctype html>
 <html lang="ms"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{{.Title}}</title>
 <style>
