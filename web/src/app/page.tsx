@@ -59,7 +59,7 @@ export default function Dashboard() {
   const load = useCallback(async () => {
     const me = await fetch("/api/auth/me");
     if (!me.ok) {
-      window.location.href = "/login";
+      window.location.href = "/landing";
       return;
     }
     const [p, s, sum, fs, ps] = await Promise.all([

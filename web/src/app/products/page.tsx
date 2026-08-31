@@ -29,7 +29,7 @@ export default function Products() {
   const load = useCallback(async () => {
     const me = await fetch("/api/auth/me");
     if (!me.ok) {
-      window.location.href = "/login";
+      window.location.href = "/landing";
       return;
     }
     const p = await fetch("/api/rest/products").then((r) => r.json());

@@ -25,7 +25,7 @@ export default function FormsPage() {
   const load = useCallback(async () => {
     const me = await fetch("/api/auth/me");
     if (!me.ok) {
-      window.location.href = "/login";
+      window.location.href = "/landing";
       return;
     }
     const f = await fetch("/api/rest/forms").then((r) => r.json());

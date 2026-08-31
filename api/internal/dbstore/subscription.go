@@ -151,3 +151,34 @@ func (s *SubscriptionStore) MarkChargeFailed(ctx context.Context, chipPurchaseID
 		`UPDATE subscription_charges SET status='failed', updated_at=now() WHERE chip_purchase_id=$1`, chipPurchaseID)
 	return err
 }
+
+// FailedAttempts counts failed charges for the current retry cycle.
+func (s *SubscriptionStore) FailedAttempts(ctx context.Context, subID string) int64 {
+	var n int64
+	_ = s.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM subscription_charges
+		 WHERE subscription_id=$1 AND status='failed'
+		   AND created_at > COALESCE((SELECT MAX(updated_at) FROM subscription_charges
+		                             WHERE subscription_id=$1 AND status='paid'), 'epoch')`,
+		subID).Scan(&n)
+	return n
+}
+
+// PastDueBefore lists past_due subscriptions since before the cutoff.
+func (s *SubscriptionStore) PastDueBefore(ctx context.Context, cutoff time.Time) ([]*Subscription, error) {
+	rows, err := s.pool.Query(ctx,
+		subSelect+" WHERE status=$1 AND next_charge_at < $2", SubPastDue, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Subscription
+	for rows.Next() {
+		sub, err := scanSub(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, sub)
+	}
+	return out, rows.Err()
+}

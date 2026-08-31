@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/wzul/jomform/api/internal/httpapi/middleware"
 	"html/template"
 	"log/slog"
 	"net/http"
@@ -29,7 +30,7 @@ type PublicHandlers struct {
 // RegisterRoutes wires public endpoints.
 func (h *PublicHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /f/{slug}", h.handleRender)
-	mux.HandleFunc("POST /f/{slug}/order", h.handleSubmit)
+	mux.Handle("POST /f/{slug}/order", middleware.RateLimit(http.HandlerFunc(h.handleSubmit)))
 	mux.HandleFunc("GET /t/{ref}", h.handleThankYou)
 }
 

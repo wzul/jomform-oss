@@ -111,6 +111,23 @@ func main() {
 			Forms: dbstore.NewFormStore(pool), Sales: sales, Accounts: accounts,
 			Pay: pay, BaseURL: cfg.AppBaseURL,
 		}
+
+		// Subscription charge runner: hourly sweep for due charges + overdue cancels.
+		go func() {
+			ticker := time.NewTicker(1 * time.Hour)
+			defer ticker.Stop()
+			for {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+				if err := pay.RunDueCharges(ctx); err != nil && err != dbstore.ErrNoDueSubs {
+					slog.Warn("due_charges_sweep", "err", err)
+				}
+				if err := pay.CancelOverdueSubs(ctx); err != nil {
+					slog.Warn("overdue_subs_sweep", "err", err)
+				}
+				cancel()
+				<-ticker.C
+			}
+		}()
 	}
 
 	srv := &http.Server{

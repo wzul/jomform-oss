@@ -44,8 +44,19 @@ func (s *Service) SendSaleReceipt(ctx context.Context, ref SaleRef) {
 	}
 	body := fmt.Sprintf(receiptTemplate,
 		ref.RefCode, float64(ref.AmountSen)/100, ref.ItemsSummary, ref.FormURL)
-	if err := s.Receipts.Sender.Send(ref.BuyerEmail,
-		"Resit pembayaran — "+ref.RefCode, body); err != nil {
+	subject := "Resit pembayaran — " + ref.RefCode
+
+	if pdf, err := s.ReceiptPDF(ref); err == nil && len(pdf) > 0 {
+		if err := s.Receipts.Sender.SendWithAttachment(ref.BuyerEmail, subject, body,
+			"resit-"+ref.RefCode+".pdf", pdf); err != nil {
+			slog.Warn("receipt_send_failed", "ref", ref.RefCode, "err", err)
+		} else {
+			slog.Info("receipt_sent_pdf", "ref", ref.RefCode, "to", ref.BuyerEmail)
+		}
+		return
+	}
+	// fallback: text-only
+	if err := s.Receipts.Sender.Send(ref.BuyerEmail, subject, body); err != nil {
 		slog.Warn("receipt_send_failed", "ref", ref.RefCode, "err", err)
 	} else {
 		slog.Info("receipt_sent", "ref", ref.RefCode, "to", ref.BuyerEmail)
