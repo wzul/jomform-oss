@@ -154,45 +154,74 @@ export default function Dashboard() {
               {sales.length} {t("dash.records")}
             </span>
           </div>
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-[var(--jf-border)] text-left text-xs uppercase tracking-wide text-[var(--jf-muted)]">
-                <th className="px-5 py-2.5 font-medium">{t("dash.ref")}</th>
-                <th className="px-5 py-2.5 font-medium">{t("dash.buyer")}</th>
-                <th className="px-5 py-2.5 font-medium">{t("dash.amount")}</th>
-                <th className="px-5 py-2.5 font-medium">{t("dash.status")}</th>
-                <th className="px-5 py-2.5" />
-              </tr>
-            </thead>
-            <tbody>
-              {sales.map((s) => (
-                <tr key={s.ref_code} className="border-b border-[var(--jf-border)] last:border-0 hover:bg-slate-50/60">
-                  <td className="px-5 py-3 font-mono text-xs">{s.ref_code}</td>
-                  <td className="px-5 py-3">{s.buyer || "—"}</td>
-                  <td className="px-5 py-3 font-medium">{money(s.total_sen)}</td>
-                  <td className="px-5 py-3">
-                    <span className={`rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${badge(s.status)}`}>
-                      {s.status}
-                    </span>
-                  </td>
-                  <td className="px-5 py-3 text-right">
-                    {s.status === "paid" && (
-                      <button onClick={() => confirmSale(s.ref_code)} className="text-xs font-medium text-[var(--jf-primary)] hover:underline">
-                        Confirm
-                      </button>
-                    )}
-                  </td>
+          {/* mobile: stacked cards (no table scroll needed) */}
+          <ul className="divide-y divide-[var(--jf-border)] md:hidden">
+            {sales.map((s) => (
+              <li key={s.ref_code} className="flex items-center justify-between gap-3 px-4 py-3">
+                <div className="min-w-0">
+                  <p className="truncate font-mono text-xs text-[var(--jf-muted)]">{s.ref_code}</p>
+                  <p className="mt-0.5 truncate text-sm font-medium">{s.buyer || "—"}</p>
+                  <span className={`mt-1 inline-block rounded-full border px-2 py-0.5 text-[10px] font-medium ${badge(s.status)}`}>
+                    {s.status}
+                  </span>
+                </div>
+                <div className="flex shrink-0 flex-col items-end gap-1.5">
+                  <span className="text-sm font-semibold">{money(s.total_sen)}</span>
+                  {s.status === "paid" && (
+                    <button onClick={() => confirmSale(s.ref_code)} className="text-xs font-medium text-[var(--jf-primary)] hover:underline">
+                      Confirm
+                    </button>
+                  )}
+                </div>
+              </li>
+            ))}
+            {sales.length === 0 && (
+              <li className="px-4 py-10 text-center text-sm text-[var(--jf-muted)]">{t("dash.emptySales")}</li>
+            )}
+          </ul>
+
+          {/* desktop: full table */}
+          <div className="hidden overflow-x-auto md:block">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-[var(--jf-border)] text-left text-xs uppercase tracking-wide text-[var(--jf-muted)]">
+                  <th className="px-5 py-2.5 font-medium">{t("dash.ref")}</th>
+                  <th className="px-5 py-2.5 font-medium">{t("dash.buyer")}</th>
+                  <th className="px-5 py-2.5 font-medium">{t("dash.amount")}</th>
+                  <th className="px-5 py-2.5 font-medium">{t("dash.status")}</th>
+                  <th className="px-5 py-2.5" />
                 </tr>
-              ))}
-              {sales.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="px-5 py-10 text-center text-sm text-[var(--jf-muted)]">
-                    {t("dash.emptySales")}
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {sales.map((s) => (
+                  <tr key={s.ref_code} className="border-b border-[var(--jf-border)] last:border-0 hover:bg-slate-50/60">
+                    <td className="whitespace-nowrap px-5 py-3 font-mono text-xs">{s.ref_code}</td>
+                    <td className="max-w-40 truncate px-3 py-3">{s.buyer || "—"}</td>
+                    <td className="whitespace-nowrap px-5 py-3 font-medium">{money(s.total_sen)}</td>
+                    <td className="px-5 py-3">
+                      <span className={`whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${badge(s.status)}`}>
+                        {s.status}
+                      </span>
+                    </td>
+                    <td className="px-5 py-3 text-right">
+                      {s.status === "paid" && (
+                        <button onClick={() => confirmSale(s.ref_code)} className="whitespace-nowrap text-xs font-medium text-[var(--jf-primary)] hover:underline">
+                          Confirm
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+                {sales.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="px-5 py-10 text-center text-sm text-[var(--jf-muted)]">
+                      {t("dash.emptySales")}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </section>
       </div>
     </Shell>

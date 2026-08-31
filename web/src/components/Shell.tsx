@@ -12,6 +12,7 @@ export function Shell({
   active: "dashboard" | "forms" | "products" | "settings";
 }) {
   const [user, setUser] = useState<{ email: string } | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
   const { t } = useI18n();
 
   useEffect(() => {
@@ -88,15 +89,71 @@ export function Shell({
       {/* main */}
       <div className="flex min-w-0 flex-1 flex-col">
         {/* mobile topbar */}
-        <header className="flex items-center justify-between border-b border-[var(--jf-border)] bg-white px-4 py-2.5 md:hidden">
+        <header className="sticky top-0 z-30 flex items-center justify-between border-b border-[var(--jf-border)] bg-white px-4 py-2.5 md:hidden">
+          <button
+            onClick={() => setMenuOpen(true)}
+            aria-label="Open menu"
+            className="-ml-1 rounded-md p-1.5 text-[var(--jf-text)] hover:bg-slate-50"
+          >
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+              <path d="M3 5h14M3 10h14M3 15h14" />
+            </svg>
+          </button>
           <span className="text-sm font-semibold">
             Jom<span className="text-[var(--jf-primary)]">Form</span>
           </span>
           <LangToggle />
-          <button onClick={signOut} className="text-xs text-[var(--jf-muted)]">
-            {t("nav.signout")}
-          </button>
         </header>
+
+        {/* mobile drawer */}
+        {menuOpen && (
+          <div className="fixed inset-0 z-40 md:hidden" onClick={() => setMenuOpen(false)}>
+            <div className="absolute inset-0 bg-black/30" />
+            <div
+              className="absolute left-0 top-0 h-full w-64 bg-white shadow-xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between border-b border-[var(--jf-border)] px-4 py-3">
+                <span className="text-sm font-semibold">
+                  Jom<span className="text-[var(--jf-primary)]">Form</span>
+                </span>
+                <button
+                  onClick={() => setMenuOpen(false)}
+                  aria-label="Close menu"
+                  className="rounded-md p-1 text-[var(--jf-muted)] hover:bg-slate-50"
+                >
+                  ✕
+                </button>
+              </div>
+              <nav className="space-y-0.5 p-3">
+                {nav.map((n) => (
+                  <a
+                    key={n.key}
+                    href={n.href}
+                    onClick={() => setMenuOpen(false)}
+                    className={`flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm ${
+                      active === n.key
+                        ? "bg-indigo-50 font-medium text-[var(--jf-primary)]"
+                        : "text-[var(--jf-muted)] hover:bg-slate-50"
+                    }`}
+                  >
+                    <span className="w-4 text-center text-xs opacity-70">{n.icon}</span>
+                    {n.label}
+                  </a>
+                ))}
+              </nav>
+              <div className="absolute bottom-4 left-0 right-0 px-4">
+                <p className="mb-2 truncate text-xs text-[var(--jf-muted)]" title={user?.email || ""}>
+                  {user?.email || "…"}
+                </p>
+                <button onClick={signOut} className="w-full rounded-lg border border-[var(--jf-border)] py-2 text-sm text-slate-600">
+                  {t("nav.signout")}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="flex flex-1 flex-col">{children}</div>
       </div>
     </div>
