@@ -1,12 +1,8 @@
 -- Migration 000002: skip_capture (delayed capture) support + authorized state
 ALTER TABLE sales
-    ADD COLUMN skip_capture BOOLEAN NOT NULL DEFAULT false,
-    ADD COLUMN chip_purchase_id TEXT,
-    ADD COLUMN authorized BOOLEAN NOT NULL DEFAULT false;
-
--- captured_at marks when an authorization was captured (timestamp null = not yet).
-ALTER TABLE sales
-    ADD COLUMN captured_at TIMESTAMPTZ;
+    ADD COLUMN IF NOT EXISTS skip_capture BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS authorized BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS captured_at TIMESTAMPTZ;
 
 ALTER TABLE sales
     DROP CONSTRAINT IF EXISTS sales_status_check;
