@@ -1,0 +1,12 @@
+DROP TABLE IF EXISTS audit_logs;
+DROP TABLE IF EXISTS outbound_webhooks;
+DROP TABLE IF EXISTS webhook_events;
+DROP TABLE IF EXISTS subscription_charges;
+DROP TABLE IF EXISTS subscriptions;
+DROP TABLE IF EXISTS bank_direct_proofs;
+DROP TABLE IF EXISTS sales;
+DROP TABLE IF EXISTS forms;
+DROP TABLE IF EXISTS products;
+DROP TABLE IF EXISTS api_keys;
+DROP TABLE IF EXISTS accounts;
+DROP TABLE IF EXISTS users;

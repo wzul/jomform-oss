@@ -1,0 +1,29 @@
+# Binaries
+/api/bin/
+/dist/
+
+# Go
+*.test
+*.out
+coverage.txt
+
+# Node
+node_modules/
+.next/
+out/
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Data (local dev volumes)
+deploy/data/
+*.sql.gz
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store

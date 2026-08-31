@@ -1,0 +1,94 @@
+# JomForm dev/prod compose (PG18 + Valkey + MinIO + api)
+# Pin image digests before production deploy.
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-jomform}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-jomform_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-jomform}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-jomform} -d ${POSTGRES_DB:-jomform}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  valkey:
+    image: valkey/valkey:9.1-alpine
+    restart: unless-stopped
+    command: ["valkey-server", "--appendonly", "yes"]
+    volumes:
+      - valkeydata:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest # TODO: pin digest at deploy (image archived on Docker Hub but still pullable)
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-jomform}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-jomform_dev_change_me}
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 $${MINIO_ROOT_USER:-jomform} $${MINIO_ROOT_PASSWORD:-jomform_dev_change_me} &&
+      mc mb --ignore-existing local/jomform-media &&
+      mc version enable local/jomform-media &&
+      echo 'buckets ready'"
+
+  api:
+    build:
+      context: ../api
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-jomform}:${POSTGRES_PASSWORD:-jomform_dev}@postgres:5432/${POSTGRES_DB:-jomform}?sslmode=disable
+      VALKEY_URL: valkey://valkey:6379/0
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-jomform}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-jomform_dev_change_me}
+      S3_BUCKET: jomform-media
+      S3_REGION: us-east-1
+      SESSION_SECRET: ${SESSION_SECRET:-dev_only_change_me}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-dev_only_32byte_key_change_me_pls}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:8080}
+      PORT: "8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:
+  valkeydata:
+  miniodata:

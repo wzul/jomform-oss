@@ -1,0 +1,17 @@
+@import "tailwindcss";
+
+/* JomForm theme tokens — indigo→violet identity, slate neutrals */
+:root {
+  --jf-bg: #0b0d14;
+  --jf-surface: #12151f;
+  --jf-primary: #6366f1;
+  --jf-primary-hover: #818cf8;
+  --jf-accent: #34d399;
+}
+
+html,
+body {
+  background: var(--jf-bg);
+  color: #e2e8f0;
+  font-family: var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif);
+}
