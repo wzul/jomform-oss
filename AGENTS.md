@@ -1,0 +1,36 @@
+# AGENTS.md — JomForm repo agent guidance
+
+## MCP FEATURE PARITY (RULE — jangan tertinggal/terlepas)
+
+**Every dashboard feature MUST have a matching MCP tool.** When adding any
+new feature to the web dashboard, you MUST:
+
+1. Add/upate the corresponding MCP tool in `api/internal/mcpsrv/`.
+2. Register it in `api/internal/mcpsrv/tools.go` (`registerTools`).
+3. Re-check the FULL parity list below — don't ship half.
+
+Parity checklist (dashboard → MCP):
+- Products: list/create/update/archive → `list_products`, `create_product`,
+  `update_product`, `archive_product`
+- Form builder: create/update/publish/unpublish/list/get → `upsert_form`,
+  `publish_form`, `unpublish_form`, `list_forms`, `get_form`
+- Sales: list/summary/confirm → `list_sales`, `get_sales_summary`,
+  `confirm_sale`
+- Skip-capture flow → `capture_sale`, `release_sale`
+- Subscriptions → `cancel_subscription` (no token revoke — Wan rule),
+  `run_due_charges`
+- Analytics → `get_form_analytics`, `get_product_analytics`
+- CHIP per-form override → `set_form_chip_override`, `clear_form_chip_override`
+- Still missing (backlog): e-Invoice settings tool, webhook CRUD tools,
+  API-key self-service tool — add before announce.
+
+## Conventions
+
+- Money = integer **sen** everywhere.
+- DB select/scan MUST stay column-aligned (every migration that adds
+  columns: update `accountSelect` + ALL Scan call sites — ByID, ByOwner,
+  ByEmail — or you get silent 401 storms).
+- CHIP create-purchase: `success_redirect`/`failure_redirect`/
+  `cancel_redirect`/`success_callback`/`reference` are **TOP-LEVEL** fields.
+- Never auto-revoke a card token on cancellation (Wan's rule).
+- Repo must stay free of any OnPay mention (open-source constraint).

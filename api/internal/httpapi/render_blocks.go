@@ -20,11 +20,12 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 	}
 	var cfg struct {
 		Blocks []struct {
-			Type      string `json:"type"`
-			Value     string `json:"value"`
-			Src       string `json:"src"`
-			ProductID string `json:"product_id"`
-			Required  bool   `json:"required"`
+			Type      string     `json:"type"`
+			Value     string     `json:"value"`
+			Src       string     `json:"src"`
+			ProductID string     `json:"product_id"`
+			Required  bool       `json:"required"`
+			Condition *Condition `json:"condition"`
 		} `json:"blocks"`
 		Products []struct {
 			ID       string `json:"id"`
@@ -49,10 +50,12 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 		PriceSen         int64
 		Required         bool
 		HasPrice         bool
+		CondJSON         string
 	}
 	blocks := make([]blockView, 0, len(cfg.Blocks))
 	for _, b := range cfg.Blocks {
 		vb := blockView{Type: b.Type, Value: b.Value, Src: b.Src, ProductID: b.ProductID, Required: b.Required}
+		vb.CondJSON = marshalCondition(b.Condition)
 		if b.ProductID != "" {
 			if price, ok := priceOf[b.ProductID]; ok {
 				vb.PriceSen = price
@@ -124,7 +127,7 @@ var blockTmpl = template.Must(template.New("blocks").
 {{else if eq .Type "textarea"}}  <label class="lbl">{{.Value}}</label><textarea name="notes" rows="2"></textarea>
 {{else if eq .Type "checkbox"}}  <label class="chk"><input type="checkbox" class="extra" value="{{.Value}}"> {{.Value}}</label>
 {{else if eq .Type "coupon"}}  <label class="lbl">Kod kupon</label><input type="text" name="coupon" class="coupon">
-{{end}}
+{{end}}</span>
 {{end}}
   <div class="total"><span>Jumlah</span><span id="total">RM0.00</span></div>
   <button type="submit" form="of">Teruskan ke Pembayaran</button>
@@ -148,6 +151,39 @@ var blockTmpl = template.Must(template.New("blocks").
       .then(function(r){return r.json()}).then(function(d){
         if(d.checkout_url){location.href=d.checkout_url;}else if(d.next){location.href=d.next;}
         else{alert(d.error||'Ralat');}});
+  // Conditional logic: show/hide blocks with data-condition based on earlier inputs.
+  (function(){
+    var conds=document.querySelectorAll('[data-condition]');
+    if(!conds.length)return;
+    function fieldVal(id){
+      var el=document.querySelector('[name="'+id+'"],#'+id);
+      if(!el)return '';
+      return (el.type==='checkbox')?(el.checked?el.value:''):el.value;
+    }
+    function evalCond(c){
+      var v=fieldVal(c.field_id);
+      switch(c.op){
+        case 'equals':return c.value===''?v.trim()!=='':v.toLowerCase()===String(c.value).toLowerCase();
+        case 'not_equals':return !(v.toLowerCase()===String(c.value).toLowerCase());
+        case 'contains':return v.toLowerCase().indexOf(String(c.value).toLowerCase())>=0;
+        case 'gt':return parseFloat(v)>parseFloat(c.value);
+        case 'lt':return parseFloat(v)<parseFloat(c.value);
+        case 'not_empty':return v.trim()!=='';
+      }
+      return true;
+    }
+    function refresh(){
+      conds.forEach(function(el){
+        try{
+          var c=JSON.parse(el.dataset.condition);
+          el.style.display=evalCond(c)?'':'none';
+        }catch(e){}
+      });
+    }
+    document.addEventListener('input',refresh);
+    document.addEventListener('change',refresh);
+    refresh();
+  })();
   });
 })();
 </script>

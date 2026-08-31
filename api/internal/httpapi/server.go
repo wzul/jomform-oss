@@ -68,6 +68,10 @@ func (s *Server) Handler() http.Handler {
 	}
 	if s.deps.MCP != nil {
 		mux.Handle("POST /mcp", s.deps.MCP.HTTPHandler())
+		// OAuth 2.1 discovery + dynamic client registration (RFC 8414/7591).
+		mux.HandleFunc("/.well-known/oauth-authorization-server", wellKnownOAuth)
+		mux.HandleFunc("/.well-known/oauth-authorization-server/mcp", wellKnownOAuth)
+		mux.HandleFunc("POST /oauth/register", oauthRegister)
 		mux.Handle("GET /mcp", s.deps.MCP.HTTPHandler())
 		mux.Handle("DELETE /mcp", s.deps.MCP.HTTPHandler())
 	}

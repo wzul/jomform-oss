@@ -124,3 +124,17 @@ func (s *ProductStore) DecrementStock(ctx context.Context, productID string, qty
 
 // ErrOutOfStock rejects submissions past available inventory.
 var ErrOutOfStock = errors.New("produk telah habis (out of stock)")
+
+// Update modifies a product's name/price/stock/activity (nil = unchanged).
+func (s *ProductStore) Update(ctx context.Context, accountID, productID string, name *string, priceSen *int64, stock *int, active *bool) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE products SET
+		   name = COALESCE($3, name),
+		   price_sen = COALESCE($4, price_sen),
+		   stock = CASE WHEN $5::boolean THEN $6 ELSE stock END,
+		   active = COALESCE($7, active),
+		   updated_at = now()
+		 WHERE id=$2 AND account_id=$1`,
+		accountID, productID, name, priceSen, stock != nil, stock, active)
+	return err
+}

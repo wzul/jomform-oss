@@ -24,6 +24,7 @@ type Block = {
   src?: string;
   productId?: string;
   required?: boolean;
+  condition?: { field_id: string; op: string; value: string } | null;
 };
 
 type Product = { id: string; name: string; price_sen: number; type: string };
@@ -149,13 +150,14 @@ export default function Builder() {
       const cfg = d.config || {};
       const hydrated: Block[] = [];
       (cfg.blocks || []).forEach(
-        (b: { type: BlockType; value?: string; product_id?: string; required?: boolean }) => {
+        (b: { type: BlockType; value?: string; product_id?: string; required?: boolean; condition?: { field_id: string; op: string; value: string } | null }) => {
           hydrated.push({
             id: uid(),
             type: b.type,
             value: b.value || "",
             productId: b.product_id,
             required: b.required,
+            condition: b.condition || null,
           });
         },
       );
@@ -227,7 +229,7 @@ export default function Builder() {
     const cfg = d.config || {};
     const hydrated: Block[] = [];
     (cfg.blocks || []).forEach(
-      (b: { type: BlockType; value?: string; product_id?: string; required?: boolean }) => {
+      (b: { type: BlockType; value?: string; product_id?: string; required?: boolean; condition?: { field_id: string; op: string; value: string } | null }) => {
         hydrated.push({
           id: uid(),
           type: b.type,
@@ -255,6 +257,7 @@ export default function Builder() {
         src: b.src,
         product_id: b.productId,
         required: b.required,
+        condition: b.condition || undefined,
       })),
       products: products.map((p) => ({ id: p.id, name: p.name, price_sen: p.price_sen })),
     };
@@ -518,6 +521,65 @@ export default function Builder() {
                   />
                   Required
                 </label>
+              )}
+
+              {/* conditional logic */}
+              {fieldTypes.includes(selectedBlock.type) && blocks.length > 1 && (
+                <div className="rounded-md border border-slate-200 p-2">
+                  <p className="text-[11px] font-medium text-slate-500">
+                    Conditional logic (optional)
+                  </p>
+                  <select
+                    value={selectedBlock.condition?.field_id || ""}
+                    onChange={(e) =>
+                      updateBlock(selectedBlock.id, {
+                        condition: e.target.value
+                          ? { ...(selectedBlock.condition || { op: "equals", value: "" }), field_id: e.target.value }
+                          : null,
+                      })
+                    }
+                    className="mt-1 w-full rounded border border-slate-200 px-2 py-1 text-xs"
+                  >
+                    <option value="">— Always show —</option>
+                    {blocks
+                      .filter((x) => x.id !== selectedBlock.id && fieldTypes.includes(x.type))
+                      .map((x) => (
+                        <option key={x.id} value={x.id}>
+                          {x.value || x.type} (#{blocks.indexOf(x) + 1})
+                        </option>
+                      ))}
+                  </select>
+                  {selectedBlock.condition && (
+                    <div className="mt-1 flex gap-1">
+                      <select
+                        value={selectedBlock.condition.op}
+                        onChange={(e) =>
+                          updateBlock(selectedBlock.id, {
+                            condition: { ...selectedBlock.condition!, op: e.target.value },
+                          })
+                        }
+                        className="w-28 rounded border border-slate-200 px-1 py-1 text-xs"
+                      >
+                        <option value="equals">equals</option>
+                        <option value="not_equals">not equals</option>
+                        <option value="contains">contains</option>
+                        <option value="gt">&gt;</option>
+                        <option value="lt">&lt;</option>
+                        <option value="not_empty">not empty</option>
+                      </select>
+                      <input
+                        value={selectedBlock.condition.value}
+                        onChange={(e) =>
+                          updateBlock(selectedBlock.id, {
+                            condition: { ...selectedBlock.condition!, value: e.target.value },
+                          })
+                        }
+                        placeholder="value"
+                        className="min-w-0 flex-1 rounded border border-slate-200 px-2 py-1 text-xs"
+                      />
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           )}
