@@ -1,0 +1,23 @@
+http:
+  routers:
+    jomform-wildcard-f:
+      rule: 'PathPrefix(`/f/`) && HostRegexp(`[a-z0-9-]+\.jomform\.com`)'
+      entryPoints:
+        - websecure
+      service: jomform-wildcard-api
+      tls:
+        certResolver: letsencrypt
+      priority: 100
+    jomform-wildcard-t:
+      rule: 'PathPrefix(`/t/`) && HostRegexp(`[a-z0-9-]+\.jomform\.com`)'
+      entryPoints:
+        - websecure
+      service: jomform-wildcard-api
+      tls:
+        certResolver: letsencrypt
+      priority: 100
+  services:
+    jomform-wildcard-api:
+      loadBalancer:
+        servers:
+          - url: 'http://jomform-prod-n1zmr4-api-1:8080'
