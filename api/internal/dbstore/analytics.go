@@ -66,7 +66,7 @@ func (s *SaleStore) ProductAnalytics(ctx context.Context, accountID string) ([]P
 		SELECT elem->>'product_id'                       AS pid,
 		       COALESCE(MIN(elem->>'name'), '')          AS name,
 		       SUM((elem->>'qty')::int)                  AS units,
-		       SUM((elem->>'qty')::int) FILTER (WHERE s.status IN `+paidSet+`) AS paid_units,
+		       COALESCE(SUM((elem->>'qty')::int) FILTER (WHERE s.status IN `+paidSet+`), 0) AS paid_units,
 		       COALESCE(SUM((elem->>'price_sen')::bigint * (elem->>'qty')::int), 0)                        AS gross,
 		       COALESCE(SUM((elem->>'price_sen')::bigint * (elem->>'qty')::int)
 		                  FILTER (WHERE s.status IN `+paidSet+`), 0)                                       AS paid_gross
