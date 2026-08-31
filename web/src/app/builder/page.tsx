@@ -115,6 +115,25 @@ export default function Builder() {
     setForms(f);
   }, []);
 
+  // per-form stats (submissions / paid / revenue) for the editor sidebar
+  const [formStat, setFormStat] = useState<{
+    submissions: number; paid_count: number; confirmed_count: number; revenue_sen: number;
+  } | null>(null);
+
+  const loadStats = useCallback(async (fid: string | null) => {
+    if (!fid) {
+      setFormStat(null);
+      return;
+    }
+    const all = await fetch("/api/rest/analytics/forms").then((r) => (r.ok ? r.json() : []));
+    const mine = (Array.isArray(all) ? all : []).find((x: { form_id: string }) => x.form_id === fid);
+    setFormStat(mine || null);
+  }, []);
+
+  useEffect(() => {
+    void loadStats(currentId);
+  }, [currentId, loadStats]);
+
   // hydrate from ?form=<id>
   useEffect(() => {
     load();
@@ -500,6 +519,22 @@ export default function Builder() {
                   Required
                 </label>
               )}
+            </div>
+          )}
+
+          {/* per-form analytics mini-card */}
+          {currentId && formStat && (
+            <div className="mt-8 rounded-lg border border-[var(--jf-border)] bg-white p-3">
+              <p className="text-xs font-medium uppercase tracking-wider text-[#9ca3af]">
+                This form so far
+              </p>
+              <div className="mt-2 grid grid-cols-2 gap-1.5 text-[11px] text-[var(--jf-muted)]">
+                <span>Submissions: <b>{formStat.submissions}</b></span>
+                <span>Paid+Confirmed: <b className="text-emerald-600">{formStat.paid_count + formStat.confirmed_count}</b></span>
+              </div>
+              <p className="mt-1 text-sm font-semibold text-[var(--jf-primary)]">
+                {`RM${(formStat.revenue_sen / 100).toFixed(2)}`} confirmed revenue
+              </p>
             </div>
           )}
 

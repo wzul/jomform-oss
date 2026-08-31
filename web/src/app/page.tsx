@@ -220,9 +220,17 @@ export default function Dashboard() {
         <section className="jf-card mt-6 overflow-hidden">
           <div className="flex items-center justify-between border-b border-[var(--jf-border)] px-5 py-3">
             <h2 className="text-sm font-semibold">{t("dash.recentSales")}</h2>
-            <span className="text-xs text-[var(--jf-muted)]">
-              {sales.length} {t("dash.records")}
-            </span>
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-[var(--jf-muted)]">
+                {sales.length} {t("dash.records")}
+              </span>
+              <a
+                href="/api/rest/sales/export.csv"
+                className="rounded-md border border-[var(--jf-border)] px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50"
+              >
+                Export CSV
+              </a>
+            </div>
           </div>
           {/* mobile: stacked cards (no table scroll needed) */}
           <ul className="divide-y divide-[var(--jf-border)] md:hidden">
