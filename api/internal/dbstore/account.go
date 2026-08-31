@@ -56,6 +56,8 @@ func (s *AccountStore) ByOwner(ctx context.Context, userID string) ([]*Account, 
 		a := &Account{}
 		if err := rows.Scan(&a.ID, &a.OwnerUserID, &a.Name, &a.Slug, &a.CustomDomain, &a.Timezone,
 			&a.Currency, &a.ChipBrandID, &a.ChipSecretKeyEnc, &a.ChipMode, &a.BNMRounding,
+			&a.ChipEmailFallback, &a.ChipMethodWhitelist,
+			&a.CustomDomain, &a.CustomDomainVerified, &a.CustomDomainVerifiedAt,
 			&a.CreatedAt, &a.UpdatedAt); err != nil {
 			return nil, err
 		}
