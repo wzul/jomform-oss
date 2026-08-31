@@ -100,6 +100,24 @@ func (s *Server) registerTools() {
 		Name:        "release_sale",
 		Description: "Release (void) authorisasi skip_capture — kad buyer TIDAK dicaj.",
 	}, s.releaseSaleMCP)
+
+	// ── Parity: forms/products (dashboard coverage) ────────────────────────
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "update_product",
+		Description: "Kemaskini produk: nama, harga (price_sen), stok, aktif/tidak. Omit medan tak berubah.",
+	}, s.updateProduct)
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "upsert_form",
+		Description: "Cipta/kemaskini borang (form_id kosong = baru). Config blocks ikut get_form.",
+	}, s.upsertForm)
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "publish_form",
+		Description: "Publish borang — live di /f/<slug> atau custom domain.",
+	}, s.publishFormMCP)
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "unpublish_form",
+		Description: "Tarik balik borang dari live (jadikan draft).",
+	}, s.deleteFormMCP)
 }
 
 // helper: require a write-capable key.
