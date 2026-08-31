@@ -45,6 +45,7 @@ func (s *AccountStore) ByID(ctx context.Context, id string) (*Account, error) {
 			&a.ChipBrandID, &a.ChipSecretKeyEnc, &a.ChipMode, &a.BNMRounding,
 			&a.ChipEmailFallback, &a.ChipMethodWhitelist,
 			&a.CustomDomain, &a.CustomDomainVerified, &a.CustomDomainVerifiedAt,
+			&a.EinvoiceTIN, &a.EinvoiceMSIC,
 			&a.CreatedAt, &a.UpdatedAt)
 	return a, err
 }
@@ -64,6 +65,7 @@ func (s *AccountStore) ByOwner(ctx context.Context, userID string) ([]*Account, 
 			&a.ChipBrandID, &a.ChipSecretKeyEnc, &a.ChipMode, &a.BNMRounding,
 			&a.ChipEmailFallback, &a.ChipMethodWhitelist,
 			&a.CustomDomain, &a.CustomDomainVerified, &a.CustomDomainVerifiedAt,
+			&a.EinvoiceTIN, &a.EinvoiceMSIC,
 			&a.CreatedAt, &a.UpdatedAt); err != nil {
 			return nil, err
 		}
