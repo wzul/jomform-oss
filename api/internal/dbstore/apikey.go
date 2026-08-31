@@ -58,6 +58,26 @@ func (s *APIKeyStore) Create(ctx context.Context, accountID, keyHash, name strin
 	return k, nil
 }
 
+// ListByAccount lists active (non-revoked) keys for the account.
+func (s *APIKeyStore) ListByAccount(ctx context.Context, accountID string) ([]*APIKey, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, account_id, key_hash, name, scopes, last_used_at, revoked_at, created_at
+		 FROM api_keys WHERE account_id=$1 AND revoked_at IS NULL ORDER BY created_at DESC`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*APIKey
+	for rows.Next() {
+		k := &APIKey{}
+		if err := rows.Scan(&k.ID, &k.AccountID, &k.KeyHash, &k.Name, &k.Scopes, &k.LastUsedAt, &k.RevokedAt, &k.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, k)
+	}
+	return out, rows.Err()
+}
+
 // Revoke marks a key revoked.
 func (s *APIKeyStore) Revoke(ctx context.Context, accountID, keyID string) error {
 	_, err := s.pool.Exec(ctx,

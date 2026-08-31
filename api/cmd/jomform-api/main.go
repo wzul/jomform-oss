@@ -76,12 +76,24 @@ func main() {
 		pay := payments.New(chip.New(""), accounts, sales, subs, decryptKey, cfg.AppBaseURL)
 		deps.Payments = &httpapi.PaymentsHandlers{Service: pay, Events: events}
 
+		// REST API for the web dashboard.
+		deps.REST = &httpapi.RESTHandlers{
+			Accounts: accounts, Products: products, Forms: dbstore.NewFormStore(pool),
+			Keys: keys, Sales: sales, Sessions: sessions,
+		}
+
 		// MCP server — merchants' AI agents control their store here.
 		mcpSrv := mcpsrv.New(&mcpsrv.Deps{
 			Accounts: accounts, Products: products, Sales: sales,
 			Subs: subs, Keys: keys,
 		}, chip.New(""), decryptKey)
 		deps.MCP = mcpSrv
+
+		// Public order-form renderer + submit.
+		deps.Public = &httpapi.PublicHandlers{
+			Forms: dbstore.NewFormStore(pool), Sales: sales, Accounts: accounts,
+			Pay: pay, BaseURL: cfg.AppBaseURL,
+		}
 	}
 
 	srv := &http.Server{

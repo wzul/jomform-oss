@@ -16,6 +16,8 @@ import (
 // Deps carries wired-in infrastructure (nil in bare-mode tests).
 type Deps struct {
 	Payments *PaymentsHandlers
+	REST     *RESTHandlers
+	Public   *PublicHandlers
 	MCP      *mcpsrv.Server
 	Users    *dbstore.UserStore
 	Sessions *auth.Sessions
@@ -53,6 +55,12 @@ func (s *Server) Handler() http.Handler {
 
 	if s.auth != nil {
 		s.auth.RegisterRoutes(mux)
+	}
+	if s.deps.REST != nil {
+		s.deps.REST.RegisterRoutes(mux)
+	}
+	if s.deps.Public != nil {
+		s.deps.Public.RegisterRoutes(mux)
 	}
 	if s.deps.Payments != nil {
 		s.deps.Payments.RegisterRoutes(mux)
