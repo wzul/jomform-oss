@@ -34,6 +34,8 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /v1/rest/products", h.authed(h.listProducts))
 	mux.Handle("POST /v1/rest/products", h.authed(h.createProduct))
 	mux.Handle("DELETE /v1/rest/products/{id}", h.authed(h.deleteProduct))
+	mux.Handle("PUT /v1/rest/forms/{id}/chip-override", h.authed(h.setFormChipOverride))
+	mux.Handle("DELETE /v1/rest/forms/{id}/chip-override", h.authed(h.clearFormChipOverride))
 	mux.Handle("GET /v1/rest/forms", h.authed(h.listForms))
 	mux.Handle("POST /v1/rest/forms", h.authed(h.createForm))
 	mux.Handle("GET /v1/rest/forms/{id}", h.authed(h.getForm))

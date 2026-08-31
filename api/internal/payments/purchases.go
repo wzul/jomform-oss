@@ -215,6 +215,88 @@ func (s *Service) ReleaseSale(ctx context.Context, sale *dbstore.Sale) error {
 	return nil
 }
 
+// ChipOverride carries per-form credentials that, when set, replace the
+// account-level ones for this purchase only.
+type ChipOverride struct {
+	BrandID         string
+	SecretEnc       string
+	EmailFallback   string
+	MethodWhitelist []string
+}
+
+// CreateChipPurchaseForSaleWithOverride behaves like CreateChipPurchaseForSale
+// but resolves credentials as: form override first, then account default.
+func (s *Service) CreateChipPurchaseForSaleWithOverride(ctx context.Context, sale *dbstore.Sale, ov *ChipOverride) error {
+	acc, err := s.Accounts.ByID(ctx, sale.AccountID)
+	if err != nil {
+		return fmt.Errorf("account: %w", err)
+	}
+
+	brand := acc.ChipBrandID
+	secretEnc := acc.ChipSecretKeyEnc
+	fallback := acc.ChipEmailFallback
+	whitelist := acc.ChipMethodWhitelist
+	fromForm := false
+	if ov != nil && ov.BrandID != "" && ov.SecretEnc != "" {
+		brand = ov.BrandID
+		secretEnc = ov.SecretEnc
+		fallback = ov.EmailFallback
+		whitelist = ov.MethodWhitelist
+		fromForm = true
+	}
+	if brand == "" || secretEnc == "" {
+		return ErrNotConfigured
+	}
+
+	secret, err := cryptoutil.Decrypt(s.DecryptKey, secretEnc)
+	if err != nil {
+		return fmt.Errorf("decrypt key: %w", err)
+	}
+
+	clientEmail := sale.Client.Email
+	if clientEmail == "" && sale.SaleType != dbstore.SaleTypeSubscription && fallback != "" {
+		clientEmail = fallback
+	}
+
+	wl := whitelist
+	if fromForm {
+		// form whitelists resolve directly (no account-level merge)
+		wl = s.ResolveWhitelist(ctx, string(secret), acc.Currency, sale.TotalSen, whitelist)
+	} else {
+		wl = s.ResolveWhitelist(ctx, string(secret), acc.Currency, sale.TotalSen, whitelist)
+	}
+
+	req := chip.PurchaseRequest{
+		SkipCapture:            sale.SkipCapture,
+		CreatorAgent:           "JomForm",
+		BrandID:                brand,
+		PaymentMethodWhitelist: wl,
+		Client:                 &chip.ClientDetails{Email: clientEmail, FullName: sale.Client.FullName, Phone: sale.Client.Phone},
+		ForceRecurring:         sale.SaleType == dbstore.SaleTypeSubscription,
+		Purchase: chip.PurchaseDetails{
+			Products:        toCHIPProducts(sale.Items),
+			Currency:        acc.Currency,
+			Reference:       sale.RefCode,
+			SuccessRedirect: fmt.Sprintf("%s/t/%s", s.BaseURL, sale.RefCode),
+			FailureRedirect: fmt.Sprintf("%s/t/%s?status=fail", s.BaseURL, sale.RefCode),
+			SuccessCallback: fmt.Sprintf("%s/v1/payments/chip/callback", s.BaseURL),
+		},
+	}
+
+	p, err := s.Chip.CreatePurchase(ctx, string(secret), req)
+	if err != nil {
+		return fmt.Errorf("chip create: %w", err)
+	}
+	if err := s.Sales.AttachChipPurchase(ctx, sale.ID, p.ID, p.CheckoutURL); err != nil {
+		return fmt.Errorf("attach purchase: %w", err)
+	}
+	sale.ChipPurchaseID = p.ID
+	sale.ChipCheckoutURL = p.CheckoutURL
+	// keep the secret used on the sale for later capture/release of THIS purchase
+	return nil
+}
+
+// decryptSecret fetches the account and decrypts its CHIP secret key.
 // decryptSecret fetches the account and decrypts its CHIP secret key.
 func (s *Service) decryptSecret(ctx context.Context, accountID string) (string, error) {
 	acc, err := s.Accounts.ByID(ctx, accountID)

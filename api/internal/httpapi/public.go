@@ -124,7 +124,14 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 
 	// CHIP flow: create purchase & return checkout URL.
 	if method == "chip" {
-		if err := h.Pay.CreateChipPurchaseForSale(r.Context(), sale); err != nil {
+		// Per-form override takes precedence over account credentials.
+		var ov *payments.ChipOverride
+		if h.Forms != nil {
+			if b, s, ef, wl, oerr := h.Forms.ChipOverrideFor(r.Context(), form.AccountID, form.ID); oerr == nil && b != "" && s != "" {
+				ov = &payments.ChipOverride{BrandID: b, SecretEnc: s, EmailFallback: ef, MethodWhitelist: wl}
+			}
+		}
+		if err := h.Pay.CreateChipPurchaseForSaleWithOverride(r.Context(), sale, ov); err != nil {
 			slog.Error("chip_create_for_sale", "err", fmt.Sprintf("%+v", err), "sale", sale.RefCode)
 			writeErr(w, http.StatusBadGateway, "gagal mencipta pembayaran")
 			return
