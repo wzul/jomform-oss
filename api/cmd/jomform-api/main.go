@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -11,6 +12,9 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/wzul/jomform/api/internal/chip"
+	"github.com/wzul/jomform/api/internal/payments"
 
 	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/config"
@@ -58,6 +62,18 @@ func main() {
 		deps.Sessions = sessions
 	}
 
+	// Payments wiring (CHIP): needs DB; decrypt key from config.
+	if pool != nil {
+		accounts := dbstore.NewAccountStore(pool)
+		sales := dbstore.NewSaleStore(pool)
+		subs := dbstore.NewSubscriptionStore(pool)
+		events := dbstore.NewWebhookEventStore(pool)
+		decryptKey := mustHexKey(cfg.EncryptionKey)
+
+		pay := payments.New(chip.New(""), accounts, sales, subs, decryptKey, cfg.AppBaseURL)
+		deps.Payments = &httpapi.PaymentsHandlers{Service: pay, Events: events}
+	}
+
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           httpapi.NewServer(cfg, log, deps).Handler(),
@@ -96,3 +112,12 @@ func main() {
 
 // osExit is swappable in tests.
 var osExit = os.Exit
+
+// mustHexKey decodes the 64-char hex ENCRYPTION_KEY into 32 bytes.
+func mustHexKey(hex64 string) []byte {
+	b, err := hex.DecodeString(hex64)
+	if err != nil || len(b) != 32 {
+		return nil
+	}
+	return b
+}
