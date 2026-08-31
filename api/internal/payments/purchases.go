@@ -314,6 +314,10 @@ func (s *Service) decryptSecret(ctx context.Context, accountID string) (string, 
 var (
 	dnqrGroup   = []string{"duitnow_qr", "dnqr"}
 	shopeeGroup = []string{"razer_shopeepay", "shopee_pay"}
+	// cardGroup: the admin-facing "Card" aggregator expands to the network
+	// identifiers CHIP's API expects; the 'card' key itself is never sent
+	// (Woo parity: resolve_payment_method_groups strips it before the call).
+	cardGroup = []string{"visa", "mastercard", "maestro"}
 )
 
 // ResolveWhitelist expands legacy alias pairs then intersects with the brand's
@@ -323,6 +327,22 @@ var (
 func (s *Service) ResolveWhitelist(ctx context.Context, secret string, currency string, amountSen int64, whitelist []string) []string {
 	if len(whitelist) == 0 {
 		return nil
+	}
+	// 'card' aggregator → network identifiers; never sent as 'card' itself.
+	hasCard := false
+	for _, m := range whitelist {
+		if m == "card" {
+			hasCard = true
+		}
+	}
+	if hasCard {
+		expanded := make([]string, 0, len(whitelist)+len(cardGroup))
+		for _, m := range whitelist {
+			if m != "card" {
+				expanded = append(expanded, m)
+			}
+		}
+		whitelist = append(expanded, cardGroup...)
 	}
 	groups := map[string][]string{}
 	in := func(list, want []string) bool {

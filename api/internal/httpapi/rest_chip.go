@@ -14,7 +14,7 @@ func (h *RESTHandlers) setChipCreds(w http.ResponseWriter, r *http.Request, actx
 	var in struct {
 		BrandID         string   `json:"brand_id"`
 		SecretKey       string   `json:"secret_key"`
-		Mode            string   `json:"mode"` // live | test
+		Mode            string   `json:"mode"` // optional label; auto-derived from secret prefix
 		EmailFallback   string   `json:"email_fallback"`
 		MethodWhitelist []string `json:"payment_method_whitelist"`
 	}
@@ -22,13 +22,18 @@ func (h *RESTHandlers) setChipCreds(w http.ResponseWriter, r *http.Request, actx
 		writeErr(w, http.StatusBadRequest, "brand_id dan secret_key wajib")
 		return
 	}
-	mode := strings.ToLower(strings.TrimSpace(in.Mode))
-	if mode == "" {
+
+	// Mode semantics follow CHIP WooCommerce: one API endpoint; test vs live is
+	// decided by WHICH secret key the merchant pastes (sk_test_… vs sk_live_…).
+	// Derive the label automatically; in.Mode is only a fallback.
+	mode := strings.ToLower(in.Mode)
+	if strings.HasPrefix(strings.ToLower(in.SecretKey), "sk_live") {
+		mode = "live"
+	} else if strings.HasPrefix(strings.ToLower(in.SecretKey), "sk_test") {
 		mode = "test"
 	}
 	if mode != "live" && mode != "test" {
-		writeErr(w, http.StatusBadRequest, "mode mesti live|test")
-		return
+		mode = "test"
 	}
 
 	enc, err := cryptoutil.Encrypt(h.SecretsKey, []byte(in.SecretKey))
@@ -43,7 +48,8 @@ func (h *RESTHandlers) setChipCreds(w http.ResponseWriter, r *http.Request, actx
 	respond(w, http.StatusOK, map[string]string{"status": "configured", "mode": mode})
 }
 
-// chipStatus reports whether CHIP is configured (no secret material).
+// chipStatus reports stored credentials. Secret never leaves the vault,
+// but Brand ID, mode and a masked tail ARE shown (like Woo's settings page).
 func (h *RESTHandlers) chipStatus(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	acc, err := h.Accounts.ByID(r.Context(), actx.Account.ID)
 	if err != nil {
@@ -51,8 +57,18 @@ func (h *RESTHandlers) chipStatus(w http.ResponseWriter, r *http.Request, actx *
 		return
 	}
 	configured := acc.ChipBrandID != "" && acc.ChipSecretKeyEnc != ""
-	resp := map[string]any{"configured": configured, "mode": acc.ChipMode}
-	_ = configured
+	resp := map[string]any{
+		"configured": configured,
+		"mode":       acc.ChipMode,
+		"brand_id":   acc.ChipBrandID,
+	}
+	if configured {
+		if secret, err := cryptoutil.Decrypt(h.SecretsKey, acc.ChipSecretKeyEnc); err == nil && len(secret) >= 14 {
+			resp["secret_key_masked"] = string(secret[:8]) + "…" + string(secret[len(secret)-6:])
+		}
+	}
+	resp["whitelist"] = acc.ChipMethodWhitelist
+	resp["email_fallback"] = acc.ChipEmailFallback
 	writeJSON(w, http.StatusOK, resp)
 }
 

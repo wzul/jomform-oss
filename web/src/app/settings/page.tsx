@@ -9,14 +9,18 @@ type KeyRow = { id: string; name: string; scopes: string[] };
 type DomainStatus = { domain: string; verified: boolean } | null;
 
 const METHODS = [
-  { id: "fpx", label: "FPX (Online Banking)" },
-  { id: "visa", label: "Visa" },
-  { id: "mastercard", label: "Mastercard" },
-  { id: "maestro", label: "Maestro" },
-  { id: "dnqr", label: "DuitNow QR" },
+  { id: "fpx", label: "FPX" },
+  { id: "fpx_b2b1", label: "FPX B2B1" },
+  { id: "card", label: "Card (Visa, Mastercard, Maestro)" },
+  { id: "mpgs_google_pay", label: "Google Pay" },
+  { id: "mpgs_apple_pay", label: "Apple Pay" },
+  { id: "razer_atome", label: "Atome" },
+  { id: "razer_grabpay", label: "GrabPay" },
+  { id: "razer_maybankqr", label: "Maybank QRPay" },
   { id: "shopee_pay", label: "ShopeePay" },
-  { id: "razer_ewallet", label: "Razer e-wallet" },
-  { id: "atome", label: "Atome (BNPL)" },
+  { id: "razer_tng", label: "Touch 'n Go eWallet" },
+  { id: "duitnow_qr", label: "DuitNow QR" },
+  { id: "crypto_coin", label: "Crypto Coin" },
 ];
 
 export default function Settings() {
@@ -31,6 +35,7 @@ export default function Settings() {
   const [err, setErr] = useState("");
   const [keys, setKeys] = useState<KeyRow[]>([]);
   const [newKey, setNewKey] = useState("");
+  const [secretMasked, setSecretMasked] = useState("");
 
   const [domain, setDomain] = useState("");
   const [domainInput, setDomainInput] = useState("");
@@ -43,7 +48,14 @@ export default function Settings() {
       fetch("/api/rest/keys").then((r) => (r.ok ? r.json() : [])),
       fetch("/api/rest/settings/custom-domain").then((r) => (r.ok ? r.json() : null)),
     ]).then(([s, k, d]) => {
-      if (s) setStatus(s);
+      if (s) {
+        setStatus(s);
+        if (s.brand_id) setBrandId(s.brand_id);
+        if (s.mode) setMode(s.mode);
+        if (s.email_fallback) setEmailFallback(s.email_fallback);
+        if (Array.isArray(s.whitelist) && s.whitelist.length) setWhitelist(s.whitelist);
+        setSecretMasked(s.secret_key_masked || "");
+      }
       setKeys(k || []);
       if (d && d.domain) {
         setDomain(d.domain);
@@ -194,7 +206,7 @@ export default function Settings() {
             </div>
             <div>
               <label className="text-xs text-slate-500">
-                Secret Key {status?.configured && "(re-enter to replace)"}
+                Secret Key {secretMasked ? `(stored: ${secretMasked} — re-enter to replace)` : ""}
               </label>
               <input
                 value={secretKey}
@@ -207,10 +219,14 @@ export default function Settings() {
             </div>
             <div>
               <label className="text-xs text-slate-500">Mode</label>
-              <select value={mode} onChange={(e) => setMode(e.target.value)} className="jf-input mt-1 w-56">
-                <option value="test">Test (test cards only)</option>
-                <option value="live">Live</option>
-              </select>
+              <p className="mt-1 text-sm">
+                {mode === "live"
+                  ? "Live — pasted key was sk_live_…"
+                  : "Test — pasted key was sk_test_… (or custom key)"}
+              </p>
+              <p className="mt-0.5 text-[11px] text-slate-400">
+                Mode follows the Secret Key you store (sk_test_… = test, sk_live_… = live), same as CHIP for WooCommerce.
+              </p>
             </div>
 
             <div>
