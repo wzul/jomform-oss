@@ -219,8 +219,8 @@ export default function Settings() {
                 value={secretKey}
                 onChange={(e) => setSecretKey(e.target.value)}
                 required
-                type="password"
-                className="jf-input mt-1"
+                type="text"
+                className="jf-input mt-1 font-mono"
                 placeholder="sk_live_… / sk_test_…"
               />
             </div>
@@ -230,9 +230,6 @@ export default function Settings() {
                 {mode === "live"
                   ? "Live — pasted key was sk_live_…"
                   : "Test — pasted key was sk_test_… (or custom key)"}
-              </p>
-              <p className="mt-0.5 text-[11px] text-slate-400">
-                Mode follows the Secret Key you store (sk_test_… = test, sk_live_… = live), same as CHIP for WooCommerce.
               </p>
             </div>
 

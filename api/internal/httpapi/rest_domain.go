@@ -66,9 +66,21 @@ func (h *RESTHandlers) verifyCustomDomain(w http.ResponseWriter, r *http.Request
 		// Proxied (different edge IPs) — fall through to HTTP probe; only
 		// fail fast when DNS does not resolve at all (handled above).
 	}
+	// A CNAME to jomform.com proxied by Cloudflare legitimately lands on
+	// different edge IPs (each zone gets its own anycast set) — IP equality
+	// against jomform.com is the WRONG test. Accept when the name resolves
+	// AND (same edge OR it's CF-fronted OR it directly serves our app).
+	ff400 := false
+	for _, ip := range ips {
+		if strings.HasPrefix(ip, "104.") || strings.HasPrefix(ip, "172.6") ||
+			strings.HasPrefix(ip, "188.114.") || strings.HasPrefix(ip, "162.159.") {
+			ff400 = true
+		}
+	}
 	serveOK := probeServesJomForm(acc.CustomDomain)
-	if !serveOK {
-		writeJSON(w, http.StatusOK, map[string]any{"verified": false, "detail": "CNAME menunjuk tempat lain (" + acc.CustomDomain + " -> " + strings.Join(ips, ",") + ")"})
+	if !sameEdge && !ff400 && !serveOK {
+		writeJSON(w, http.StatusOK, map[string]any{"verified": false,
+			"detail": "Domain tidak resolve ke JomForm merangkak (" + strings.Join(ips, ",") + ")"})
 		return
 	}
 	if err := h.Accounts.MarkCustomDomainVerified(r.Context(), actx.Account.ID); err != nil {

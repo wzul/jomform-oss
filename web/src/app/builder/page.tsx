@@ -580,7 +580,7 @@ export default function Builder() {
                 <input
                   value={ovSecret}
                   onChange={(e) => setOvSecret(e.target.value)}
-                  type="password"
+                  type="text"
                   placeholder="Secret Key (sk_live_… / sk_test_…)"
                   className="w-full rounded-md border border-[var(--jf-border)] px-2.5 py-1.5 text-xs outline-none focus:border-[#7170ff]/60"
                 />
