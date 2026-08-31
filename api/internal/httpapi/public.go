@@ -304,6 +304,11 @@ func (h *PublicHandlers) handleThankYou(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Tempahan tidak dijumpai", http.StatusNotFound)
 		return
 	}
+	// Refresh until payment settles so the redirect lands on a final state.
+	refresh := ""
+	if sale.Status == dbstore.SalePending {
+		refresh = `<meta http-equiv="refresh" content="4">`
+	}
 	statusText := "menunggu pengesahan"
 	switch sale.Status {
 	case dbstore.SalePaid:
@@ -315,14 +320,14 @@ func (h *PublicHandlers) handleThankYou(w http.ResponseWriter, r *http.Request) 
 	case dbstore.SaleCancelled:
 		statusText = "dibatalkan"
 	}
-	fmt.Fprintf(w, `<!doctype html><html lang="ms"><head><meta charset="utf-8">
+	fmt.Fprintf(w, `<!doctype html><html lang="ms"><head><meta charset="utf-8">%s
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Terima kasih</title>
 <style>body{background:#0b0d14;color:#e2e8f0;font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
 .c{background:#12151f;border:1px solid #262c3f;border-radius:16px;padding:40px;text-align:center;max-width:420px}
 h1{color:#34d399;font-size:24px}</style></head><body><div class="c">
 <h1>✓ Terima kasih!</h1><p>Tempahan <strong>%s</strong> diterima.<br>Status: %s.</p>
 <p style="color:#5a637b;font-size:12px">Dikuasakan oleh JomForm</p></div></body></html>`,
-		sale.RefCode, statusText)
+		refresh, sale.RefCode, statusText)
 }
 
 var _ = time.Now
