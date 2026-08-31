@@ -32,6 +32,7 @@ func (a *AuthHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/auth/2fa/setup", a.handle2FASetup)
 	mux.HandleFunc("POST /v1/auth/2fa/enable", a.handle2FAEnable)
 	mux.HandleFunc("POST /v1/auth/2fa/disable", a.handle2FADisable)
+	mux.HandleFunc("POST /v1/auth/change-password", a.handleChangePassword)
 }
 
 // ─── request/response DTOs ───────────────────────────────────────────────────
