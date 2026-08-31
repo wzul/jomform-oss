@@ -2,6 +2,7 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/wzul/jomform/api/internal/dbstore"
@@ -42,8 +44,18 @@ func genRef() string {
 // the checkout URL.
 func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("slug")
-	form, err := h.Forms.PublishedBySlug(r.Context(), slug)
-	if err != nil {
+
+	// Same lookup rules as render: subdomain scoping first.
+	var form *dbstore.Form
+	var err error
+	if sub := accountSubdomain(r.Host); sub != "" {
+		form, err = h.Forms.PublishedByAccountSlug(r.Context(), sub, slug)
+	} else if cd := customDomainOwner(r.Context(), h.Accounts, r.Host); cd != "" {
+		form, err = h.Forms.PublishedByAccountSlug(r.Context(), cd, slug)
+	} else {
+		form, err = h.Forms.PublishedBySlug(r.Context(), slug)
+	}
+	if err != nil || form == nil {
 		writeErr(w, http.StatusNotFound, "borang tidak dijumpai")
 		return
 	}
@@ -261,15 +273,37 @@ type tmplProduct struct {
 }
 
 func (h *PublicHandlers) handleRender(w http.ResponseWriter, r *http.Request) {
-	f, err := h.Forms.PublishedBySlug(r.Context(), r.PathValue("slug"))
+	slug := r.PathValue("slug")
+	// Subdomain routing: wanzulhosting.jomform.com/f/test resolves the form
+	// scoped to that account's slug. jomform.com/f/test keeps old behavior.
+	if sub := accountSubdomain(r.Host); sub != "" {
+		f, ferr := h.Forms.PublishedByAccountSlug(r.Context(), sub, slug)
+		if ferr != nil {
+			http.Error(w, "Borang tidak dijumpai untuk domain ini", http.StatusNotFound)
+			return
+		}
+		h.serveForm(w, r, f)
+		return
+	}
+	if cd := customDomainOwner(r.Context(), h.Accounts, r.Host); cd != "" {
+		f, ferr := h.Forms.PublishedByAccountSlug(r.Context(), cd, slug)
+		if ferr != nil {
+			http.Error(w, "Borang tidak dijumpai", http.StatusNotFound)
+			return
+		}
+		h.serveForm(w, r, f)
+		return
+	}
+	f, err := h.Forms.PublishedBySlug(r.Context(), slug)
 	if err != nil {
 		http.Error(w, "Borang tidak dijumpai", http.StatusNotFound)
 		return
 	}
-	// Builder blocks take precedence when present.
-	if h.renderBlocks(w, r, f) {
-		return
-	}
+	h.serveForm(w, r, f)
+}
+
+// renderLegacy renders the old product-checkbox layout.
+func (h *PublicHandlers) renderLegacy(w http.ResponseWriter, r *http.Request, f *dbstore.Form) {
 	var cfg struct {
 		Description string `json:"description"`
 		Products    []struct {
@@ -333,3 +367,46 @@ h1{color:#10b981;font-size:24px}</style></head><body><div class="c">
 }
 
 var _ = time.Now
+
+// accountSubdomain extracts the account slug from a wildcard host
+// (e.g. wanzulhosting from wanzulhosting.jomform.com). Empty for apex
+// (jomform.com) and custom domains (custom domains resolve the account via
+// the accounts.custom_domain column).
+func accountSubdomain(host string) string {
+	h := host
+	if i := strings.Index(h, ":"); i >= 0 {
+		h = h[:i]
+	}
+	base := ".jomform.com"
+	if !strings.HasSuffix(h, base) {
+		return ""
+	}
+	sub := strings.TrimSuffix(h, base)
+	if sub == "" || sub == "www" || sub == "app" || sub == "api" || sub == "mail" || sub == "s3" {
+		return ""
+	}
+	return strings.ToLower(sub)
+}
+
+// serveForm renders a resolved form (blocks or legacy) and logs unknown
+// template errors once.
+func (h *PublicHandlers) serveForm(w http.ResponseWriter, r *http.Request, f *dbstore.Form) {
+	if h.renderBlocks(w, r, f) {
+		return
+	}
+	h.renderLegacy(w, r, f)
+}
+
+// customDomainOwner returns the account slug that claimed this host via
+// custom_domain, or "" when the host is not a registered custom domain.
+func customDomainOwner(ctx context.Context, s *dbstore.AccountStore, host string) string {
+	h := host
+	if i := strings.Index(h, ":"); i >= 0 {
+		h = h[:i]
+	}
+	slug, err := s.SlugByCustomDomain(ctx, strings.ToLower(h))
+	if err != nil {
+		return ""
+	}
+	return slug
+}

@@ -9,21 +9,23 @@ import (
 
 // Account models the accounts table.
 type Account struct {
-	ID                  string
-	OwnerUserID         string
-	Name                string
-	Slug                string
-	CustomDomain        string
-	Timezone            string
-	Currency            string
-	ChipEmailFallback   string
-	ChipMethodWhitelist []string
-	ChipBrandID         string
-	ChipSecretKeyEnc    string
-	ChipMode            string
-	BNMRounding         bool
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
+	ID                     string
+	OwnerUserID            string
+	Name                   string
+	Slug                   string
+	CustomDomain           string
+	CustomDomainVerified   bool
+	CustomDomainVerifiedAt *time.Time
+	Timezone               string
+	Currency               string
+	ChipEmailFallback      string
+	ChipMethodWhitelist    []string
+	ChipBrandID            string
+	ChipSecretKeyEnc       string
+	ChipMode               string
+	BNMRounding            bool
+	CreatedAt              time.Time
+	UpdatedAt              time.Time
 }
 
 // AccountStore wraps pgx for account operations.
@@ -82,5 +84,39 @@ func (s *AccountStore) ClearChipCredentials(ctx context.Context, accountID strin
 
 const accountSelect = `SELECT id, owner_user_id, name, slug, COALESCE(custom_domain,''), timezone, currency,
 	COALESCE(chip_brand_id,''), COALESCE(chip_secret_key_enc,''), chip_mode, bnm_rounding,
-	COALESCE(chip_email_fallback::text,''), COALESCE(chip_method_whitelist, '{}'), created_at, updated_at
+	COALESCE(chip_email_fallback::text,''), COALESCE(chip_method_whitelist, '{}'),
+	COALESCE(custom_domain,''), custom_domain_verified, custom_domain_verified_at,
+	created_at, updated_at
 	FROM accounts`
+
+// SlugByCustomDomain maps a verified custom domain to its account slug.
+func (s *AccountStore) SlugByCustomDomain(ctx context.Context, domain string) (string, error) {
+	var slug string
+	err := s.pool.QueryRow(ctx,
+		`SELECT slug FROM accounts WHERE lower(custom_domain) = $1`, domain).Scan(&slug)
+	return slug, err
+}
+
+// SetCustomDomain claims a custom domain for this account.
+func (s *AccountStore) SetCustomDomain(ctx context.Context, accountID, domain string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE accounts SET custom_domain=$2, custom_domain_verified=false, updated_at=now() WHERE id=$1`,
+		accountID, domain)
+	return err
+}
+
+// MarkCustomDomainVerified stamps verification time.
+func (s *AccountStore) MarkCustomDomainVerified(ctx context.Context, accountID string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE accounts SET custom_domain_verified=true, custom_domain_verified_at=now() WHERE id=$1`,
+		accountID)
+	return err
+}
+
+// ClearCustomDomain removes the custom-domain claim.
+func (s *AccountStore) ClearCustomDomain(ctx context.Context, accountID string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE accounts SET custom_domain=NULL, custom_domain_verified=false,
+		   custom_domain_verified_at=NULL, updated_at=now() WHERE id=$1`, accountID)
+	return err
+}
