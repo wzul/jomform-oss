@@ -3,8 +3,12 @@ package payments
 
 import (
 	"context"
+	"crypto/rsa"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/wzul/jomform/api/internal/chip"
 	"github.com/wzul/jomform/api/internal/cryptoutil"
@@ -50,4 +54,40 @@ func (s *Service) accountSecrets(ctx context.Context, accountID string) (brandID
 		return "", "", fmt.Errorf("decrypt chip key: %w", err)
 	}
 	return acc.ChipBrandID, string(dec), nil
+}
+
+// publicKey cache: CHIP returns a company-wide key per secret; cache by key hash.
+var (
+	pubKeyCache   = map[string]*rsa.PublicKey{}
+	pubKeyCacheMu sync.Mutex
+)
+
+// CallbackPublicKey returns the CHIP verification public key for an account,
+// fetched via GET /public_key/ and cached.
+func (s *Service) CallbackPublicKey(ctx context.Context, accountID string) (*rsa.PublicKey, error) {
+	acc, err := s.Accounts.ByID(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	dec, err := cryptoutil.Decrypt(s.DecryptKey, acc.ChipSecretKeyEnc)
+	if err != nil {
+		return nil, err
+	}
+	sum := sha256.Sum256(dec)
+	cacheKey := hex.EncodeToString(sum[:])
+	pubKeyCacheMu.Lock()
+	defer pubKeyCacheMu.Unlock()
+	if k, ok := pubKeyCache[cacheKey]; ok {
+		return k, nil
+	}
+	pemStr, err := s.Chip.PublicKey(ctx, string(dec))
+	if err != nil {
+		return nil, err
+	}
+	k, err := chip.ParsePublicKey(pemStr)
+	if err != nil {
+		return nil, err
+	}
+	pubKeyCache[cacheKey] = k
+	return k, nil
 }

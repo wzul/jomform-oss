@@ -2,6 +2,7 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/rsa"
 	"encoding/json"
 	"io"
@@ -16,9 +17,12 @@ import (
 
 // PaymentsHandlers exposes payment-related HTTP endpoints.
 type PaymentsHandlers struct {
-	Service   *payments.Service
-	Events    *dbstore.WebhookEventStore
-	PublicKey *rsa.PublicKey // CHIP company-wide callback verification key
+	Service     *payments.Service
+	Events      *dbstore.WebhookEventStore
+	PublicKey   *rsa.PublicKey
+	EventLookup interface {
+		SaleByChipPurchaseID(ctx context.Context, id string) (*dbstore.Sale, error)
+	} // CHIP company-wide callback verification key
 }
 
 // RegisterRoutes wires payment endpoints.
@@ -34,7 +38,21 @@ func (h *PaymentsHandlers) handleChipCallback(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// 1. Verify RSA signature BEFORE trusting the payload.
+	// 1. Verify RSA signature BEFORE trusting the payload (fetch+cache per
+	// account secret when no static key configured).
+	if h.PublicKey == nil && h.Service != nil && h.EventLookup != nil {
+		// account_id lives in the payload; parse first for key resolution
+		var peek struct {
+			ID string `json:"id"`
+		}
+		if json.Unmarshal(raw, &peek) == nil {
+			if sale, err := h.EventLookup.SaleByChipPurchaseID(r.Context(), peek.ID); err == nil {
+				if k, kerr := h.Service.CallbackPublicKey(r.Context(), sale.AccountID); kerr == nil {
+					h.PublicKey = k
+				}
+			}
+		}
+	}
 	if h.PublicKey != nil {
 		sig := r.Header.Get("X-Signature")
 		if sig == "" {
