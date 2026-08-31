@@ -203,7 +203,6 @@ func (s *Server) cancelSubscription(ctx context.Context, _ *mcp.CallToolRequest,
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
 	// Best-effort: delete the card token at CHIP so the card is un-future-charged.
-	go s.cancelChipToken(sub)
 	return nil, map[string]string{"status": "cancelled", "email": in.Email}, nil
 }
 

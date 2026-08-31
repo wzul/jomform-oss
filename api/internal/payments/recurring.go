@@ -99,17 +99,12 @@ func (s *Service) CancelOverdueSubs(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// NOTE: per Wan — do NOT auto-revoke the card token on cancellation.
+	// The token stays valid in CHIP; merchants can re-activate or charge
+	// manually. Only the subscription row is cancelled locally.
 	for _, sub := range subs {
 		if err := s.Subs.Cancel(ctx, sub.ID); err != nil {
 			return err
-		}
-		acc, err := s.Accounts.ByID(ctx, sub.AccountID)
-		if err == nil && acc.ChipSecretKeyEnc != "" {
-			if secret, derr := cryptoutil.Decrypt(s.DecryptKey, acc.ChipSecretKeyEnc); derr == nil {
-				if terr := s.Chip.DeleteRecurringToken(ctx, string(secret), sub.ChipTokenPurchaseID); terr != nil {
-					slog.Warn("sub_token_delete_failed", "sub", sub.ID, "err", terr)
-				}
-			}
 		}
 		slog.Info("sub_cancelled_overdue", "sub", sub.ID)
 	}

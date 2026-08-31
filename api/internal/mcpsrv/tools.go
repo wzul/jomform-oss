@@ -70,7 +70,7 @@ func (s *Server) registerTools() {
 	// ── Subscriptions ───────────────────────────────────────────────────────
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "cancel_subscription",
-		Description: "Batalkan langganan pelanggan (token kad dipadam di CHIP).",
+		Description: "Batalkan langganan pelanggan. Kad token kekal pada merchant — boleh aktif semula.",
 	}, s.cancelSubscription)
 
 	// ── Account ─────────────────────────────────────────────────────────────
