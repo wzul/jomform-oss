@@ -23,6 +23,7 @@ type PublicHandlers struct {
 	Forms    *dbstore.FormStore
 	Sales    *dbstore.SaleStore
 	Accounts *dbstore.AccountStore
+	Products *dbstore.ProductStore
 	Pay      *payments.Service
 	BaseURL  string
 }
@@ -114,6 +115,17 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		}
 		sale.Items = append(sale.Items, dbstore.SaleItem{ProductID: it.ProductID, Name: name, PriceSen: price, Qty: qty})
 		subtotal += price * qty
+		// Inventory: limited-stock products decrement atomically; SOLD OUT rejects.
+		if h.Products != nil {
+			if err := h.Products.DecrementStock(r.Context(), it.ProductID, int(qty)); err != nil {
+				if err == dbstore.ErrOutOfStock {
+					writeErr(w, http.StatusConflict, "stok habis untuk "+name)
+					return
+				}
+				respondErr(w, err)
+				return
+			}
+		}
 	}
 	sale.SubtotalSen = subtotal
 	sale.TotalSen = subtotal

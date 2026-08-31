@@ -55,6 +55,7 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("PUT /v1/rest/settings/custom-domain", h.authed(h.setCustomDomain))
 	mux.Handle("GET /v1/rest/settings/custom-domain", h.authed(h.getCustomDomain))
 	mux.Handle("POST /v1/rest/settings/custom-domain/verify", h.authed(h.verifyCustomDomain))
+	mux.Handle("POST /v1/rest/settings/custom-domain/connect", h.authed(h.connectCustomDomain))
 	mux.Handle("DELETE /v1/rest/settings/custom-domain", h.authed(h.deleteCustomDomain))
 	mux.Handle("POST /v1/rest/sales/{ref}/confirm", h.authed(h.confirmSale))
 	mux.Handle("POST /v1/rest/sales/{ref}/capture", h.authed(h.captureSale))

@@ -10,6 +10,7 @@ type Product = {
   price_sen: number;
   type: string;
   billing_period?: string;
+  stock?: number | null;
   active: boolean;
 };
 
@@ -24,6 +25,7 @@ export default function Products() {
   const [price, setPrice] = useState("");
   const [type, setType] = useState("one_time");
   const [period, setPeriod] = useState("month");
+  const [stock, setStock] = useState("");
   const [error, setError] = useState("");
 
   const load = useCallback(async () => {
@@ -52,11 +54,13 @@ export default function Products() {
         price_sen: Math.round(parseFloat(price) * 100),
         type,
         billing_period: type === "subscription" ? period : undefined,
+        stock: stock === "" ? null : Math.max(0, parseInt(stock, 10)),
       }),
     });
     if (r.ok) {
       setName("");
       setPrice("");
+      setStock("");
       load();
     } else {
       const d = await r.json().catch(() => ({}));
@@ -85,6 +89,7 @@ export default function Products() {
         <form onSubmit={add} className="jf-card mt-6 flex flex-wrap gap-2 p-4">
           <input value={name} onChange={(e) => setName(e.target.value)} required placeholder={t("prod.name")} className="jf-input min-w-48 flex-1" />
           <input value={price} onChange={(e) => setPrice(e.target.value)} required type="number" step="0.01" min="0" placeholder={t("prod.price")} className="jf-input w-32" />
+          <input value={stock} onChange={(e) => setStock(e.target.value)} type="number" min="0" placeholder="Stock (blank = ∞)" className="jf-input w-40" />
           <select value={type} onChange={(e) => setType(e.target.value)} className="jf-input w-36">
             <option value="one_time">{t("prod.oneTime")}</option>
             <option value="subscription">{t("prod.subscription")}</option>
@@ -108,6 +113,11 @@ export default function Products() {
                   {p.type === "subscription"
                     ? `${t("prod.subscription")} · ${p.billing_period === "year" ? t("prod.yearly") : t("prod.monthly")}`
                     : t("prod.oneTime")}
+                  {typeof p.stock === "number"
+                    ? p.stock > 0
+                      ? ` · ${p.stock} in stock`
+                      : " · SOLD OUT"
+                    : ""}
                 </p>
               </div>
               <div className="flex items-center gap-3">

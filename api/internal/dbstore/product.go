@@ -98,3 +98,29 @@ func (s *ProductStore) Archive(ctx context.Context, accountID, productID string)
 		productID, accountID)
 	return err
 }
+
+// DecrementStock atomically reduces stock for a limited product.
+// Returns ErrOutOfStock when the product is sold out. Unlimited (NULL) always ok.
+func (s *ProductStore) DecrementStock(ctx context.Context, productID string, qty int) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE products SET stock = stock - $2
+		 WHERE id=$1 AND stock IS NOT NULL AND stock >= $2`, productID, qty)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		// either unlimited product (fine) or insufficient stock
+		var stock *int
+		if err := s.pool.QueryRow(ctx,
+			`SELECT stock FROM products WHERE id=$1`, productID).Scan(&stock); err != nil {
+			return err
+		}
+		if stock != nil && *stock < qty {
+			return ErrOutOfStock
+		}
+	}
+	return nil
+}
+
+// ErrOutOfStock rejects submissions past available inventory.
+var ErrOutOfStock = errors.New("produk telah habis (out of stock)")

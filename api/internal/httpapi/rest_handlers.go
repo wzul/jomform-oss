@@ -52,6 +52,7 @@ func (h *RESTHandlers) createProduct(w http.ResponseWriter, r *http.Request, act
 		Type          string `json:"type"`
 		BillingPeriod string `json:"billing_period"`
 		TrialDays     int    `json:"trial_days"`
+		Stock         *int   `json:"stock"` // nil = unlimited
 	}
 	if err := decodeJSON(r, &in); err != nil || in.Name == "" || in.PriceSen < 0 {
 		writeErr(w, http.StatusBadRequest, "nama dan price_sen wajib")
@@ -76,6 +77,7 @@ func (h *RESTHandlers) createProduct(w http.ResponseWriter, r *http.Request, act
 	p := &dbstore.Product{
 		AccountID: actx.Account.ID, Name: in.Name, PriceSen: in.PriceSen,
 		Type: pType, BillingPeriod: period, TrialDays: in.TrialDays, Active: true,
+		Stock: in.Stock,
 	}
 	if err := h.Products.Create(r.Context(), p); err != nil {
 		respondErr(w, err)

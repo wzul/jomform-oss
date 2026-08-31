@@ -67,6 +67,27 @@ const DICT = {
   "builder.unsaved": { en: "unsaved", ms: "belum disimpan" },
   // settings
   "set.title": { en: "Settings", ms: "Tetapan" },
+  // landing
+  "land.badge": { en: "100% free · open source · CHIP payments", ms: "100% percuma · open source · bayaran CHIP" },
+  "land.hero1": { en: "Sell online with", ms: "Jual secara online dengan" },
+  "land.hero2": { en: "beautiful order forms.", ms: "borang tempahan cantik." },
+  "land.hero3": { en: "", ms: "" },
+  "land.sub": { en: "Build a form, buyers pay online, you manage sales. For Malaysian social sellers — free forever.", ms: "Bina borang, buyer bayar secara online, anda urus jualan. Untuk penjual sosial Malaysia — percuma selamanya." },
+  "land.cta1": { en: "Start free →", ms: "Mula percuma →" },
+  "land.cta2": { en: "How it works", ms: "Macam mana ia berfungsi" },
+  "land.step1t": { en: "1. Build your form", ms: "1. Bina borang" },
+  "land.step1b": { en: "Drag products, name fields, WhatsApp — one-click publish.", ms: "Tarik produk, medan nama, WhatsApp — publish satu klik." },
+  "land.step2t": { en: "2. Buyer pays", ms: "2. Buyer bayar" },
+  "land.step2b": { en: "Secure checkout by CHIP — card / FPX / DuitNow QR / e-wallets.", ms: "Checkout selamat oleh CHIP — kad / FPX / DuitNow QR / e-wallet." },
+  "land.step3t": { en: "3. Auto-updated", ms: "3. Anda auto-update" },
+  "land.step3b": { en: "Sales status updates itself, receipts sent automatically.", ms: "Status jualan naik sendiri, resit hantar automatik." },
+  "land.buildForm": { en: "Build a form", ms: "Bina borang" },
+  "land.login": { en: "Log in", ms: "Log masuk" },
+  "land.f1": { en: "Order form in 5 minutes — drag-and-drop products, fields, images, coupons. No code.", ms: "Borang siap 5 minit — tarik produk, medan, imej, kupon. Tanpa kod." },
+  "land.f2": { en: "Buyers pay online the moment they submit. Card, FPX, DuitNow QR, e-wallets.", ms: "Buyer bayar terus selepas submit. Kad, FPX, DuitNow QR, e-wallet." },
+  "land.f3": { en: "Merchants control their store with AI agents via MCP — no dashboard needed.", ms: "Merchant kawal kedai guna AI agent melalui MCP — tak wajib dashboard." },
+  "land.f4": { en: "Sales analytics, CSV export, PDF receipts — free forever, no monthly fee.", ms: "Analitik jualan, eksport CSV, resit PDF — percuma selamanya, tiada yuran bulanan." },
+  "land.footer": { en: "JomForm — open source (Apache-2.0). Made in Malaysia. Payments by", ms: "JomForm — open source (Apache-2.0). Buatan Malaysia. Bayaran oleh" },
 } as const;
 
 export type Key = keyof typeof DICT;

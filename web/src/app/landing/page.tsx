@@ -1,15 +1,29 @@
 "use client";
 
-// Marketing landing page — what JomForm is, free forever, CHIP-powered.
+// Marketing landing page — i18n (EN default, BM toggle in-shell).
+import { useEffect } from "react";
+import { useI18n } from "../../components/i18n";
+
 const FEATURES = [
-  { icon: "✏️", body: "Order form in 5 minutes — drag-and-drop products, fields, images, coupons. No code." },
-  { icon: "💳", body: "Buyers pay online the moment they submit. Card, FPX, DuitNow QR, e-wallets." },
-  { icon: "🤖", body: "Merchants control their store with AI agents via MCP — no dashboard needed." },
-  { icon: "📊", body: "Sales analytics, CSV export, PDF receipts — free forever, no monthly fee." },
+  { icon: "✏️", key: "land.f1" as const },
+  { icon: "💳", key: "land.f2" as const },
+  { icon: "🤖", key: "land.f3" as const },
+  { icon: "📊", key: "land.f4" as const },
 ];
 
+const STEPS = [
+  { t: "land.step1t" as const, b: "land.step1b" as const },
+  { t: "land.step2t" as const, b: "land.step2b" as const },
+  { t: "land.step3t" as const, b: "land.step3b" as const },
+];
 
 export default function Landing() {
+  const { t, lang } = useI18n();
+
+  useEffect(() => {
+    document.documentElement.lang = lang;
+  }, [lang]);
+
   return (
     <main className="min-h-screen bg-white">
       {/* nav */}
@@ -22,33 +36,33 @@ export default function Landing() {
             Jom<span className="text-[var(--jf-primary)]">Form</span>
           </span>
         </div>
-        <a href="/builder" className="text-sm text-slate-500 hover:text-slate-800">
-          Build a form
-        </a>
+        <div className="flex items-center gap-4">
+          <a href="/builder" className="hidden text-sm text-slate-500 hover:text-slate-800 sm:block">
+            {t("land.buildForm")}
+          </a>
+          <LangButtons />
+        </div>
         <a href="/login" className="rounded-lg bg-[var(--jf-primary)] px-4 py-2 text-sm font-medium text-white hover:opacity-90">
-          Log in
+          {t("land.login")}
         </a>
       </nav>
 
       {/* hero */}
       <section className="mx-auto max-w-3xl px-6 pb-16 pt-20 text-center">
         <p className="mb-3 inline-block rounded-full border border-indigo-100 bg-indigo-50 px-3 py-1 text-xs font-medium text-[var(--jf-primary)]">
-          100% free · open source · CHIP payments
+          {t("land.badge")}
         </p>
         <h1 className="text-4xl font-bold tracking-tight text-slate-900 sm:text-5xl">
-          Jual secara online dengan{" "}
-          <span className="text-[var(--jf-primary)]">borang tempahan</span> cantik.
+          {t("land.hero1")}{" "}
+          <span className="text-[var(--jf-primary)]">{t("land.hero2")}</span>
         </h1>
-        <p className="mx-auto mt-5 max-w-xl text-lg text-slate-500">
-          Bina borang, buyer bayar secara online, anda urus jualan. Untuk penjual
-          sosial Malaysia — free forever.
-        </p>
+        <p className="mx-auto mt-5 max-w-xl text-lg text-slate-500">{t("land.sub")}</p>
         <div className="mt-8 flex items-center justify-center gap-3">
           <a href="/login" className="rounded-xl bg-[var(--jf-primary)] px-6 py-3 text-sm font-semibold text-white hover:opacity-90">
-            Mula percuma →
+            {t("land.cta1")}
           </a>
           <a href="#how" className="rounded-xl border border-slate-200 px-6 py-3 text-sm font-medium text-slate-600 hover:bg-slate-50">
-            Macam mana ia berfungsi
+            {t("land.cta2")}
           </a>
         </div>
       </section>
@@ -56,14 +70,10 @@ export default function Landing() {
       {/* how it flows */}
       <section id="how" className="mx-auto max-w-4xl border-t border-slate-100 px-6 py-16">
         <div className="grid grid-cols-1 gap-8 sm:grid-cols-3">
-          {[
-            ["1. Bina borang", "Tarik produk, medan nama, WhatsApp — publish satu klik."],
-            ["2. Buyer bayar", "Checkout selamat oleh CHIP — kad / FPX / DuitNow QR / e-wallet."],
-            ["3. Anda auto-update", "Status jualan naik sendiri, resit hantar automatik."],
-          ].map(([title, body], i) => (
-            <div key={title}>
-              <p className="text-sm font-semibold text-[var(--jf-primary)]">{title}</p>
-              <p className="mt-2 text-sm text-slate-500">{body}</p>
+          {STEPS.map((s) => (
+            <div key={s.t}>
+              <p className="text-sm font-semibold text-[var(--jf-primary)]">{t(s.t)}</p>
+              <p className="mt-2 text-sm text-slate-500">{t(s.b)}</p>
             </div>
           ))}
         </div>
@@ -73,9 +83,9 @@ export default function Landing() {
       <section className="mx-auto max-w-4xl border-t border-slate-100 px-6 py-16">
         <div className="grid grid-cols-1 gap-8 sm:grid-cols-2">
           {FEATURES.map((f) => (
-            <div key={f.body} className="flex gap-3">
+            <div key={f.key} className="flex gap-3">
               <span className="text-2xl">{f.icon}</span>
-              <p className="text-sm leading-relaxed text-slate-600">{f.body}</p>
+              <p className="text-sm leading-relaxed text-slate-600">{t(f.key)}</p>
             </div>
           ))}
         </div>
@@ -84,7 +94,7 @@ export default function Landing() {
       {/* footer */}
       <footer className="border-t border-slate-100 px-6 py-8 text-center text-xs text-slate-400">
         <p>
-          JomForm — open source (Apache-2.0). Made in Malaysia. Payments by{" "}
+          {t("land.footer")}{" "}
           <a href="https://chip-in.asia" className="underline hover:text-slate-600">
             CHIP
           </a>
@@ -92,5 +102,24 @@ export default function Landing() {
         </p>
       </footer>
     </main>
+  );
+}
+
+function LangButtons() {
+  const { lang, setLang } = useI18n();
+  return (
+    <div className="flex overflow-hidden rounded-md border border-slate-200 text-xs">
+      {(["en", "ms"] as const).map((l) => (
+        <button
+          key={l}
+          onClick={() => setLang(l)}
+          className={`px-2 py-1 font-medium transition-colors ${
+            lang === l ? "bg-[var(--jf-primary)] text-white" : "bg-white text-slate-500"
+          }`}
+        >
+          {l === "en" ? "EN" : "BM"}
+        </button>
+      ))}
+    </div>
   );
 }

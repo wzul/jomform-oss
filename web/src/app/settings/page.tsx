@@ -41,6 +41,9 @@ export default function Settings() {
   const [domainInput, setDomainInput] = useState("");
   const [domainVerified, setDomainVerified] = useState(false);
   const [domainMsg, setDomainMsg] = useState("");
+  const [cfToken, setCfToken] = useState("");
+  const [cfAccount, setCfAccount] = useState("");
+  const [runCmd, setRunCmd] = useState("");
 
   const load = useCallback(() => {
     return Promise.all([
@@ -144,6 +147,25 @@ export default function Settings() {
       setDomainMsg(d.detail || "Not verified yet — check the CNAME records.");
     }
     await load();
+  }
+
+  async function connectCloudflare(e: React.FormEvent) {
+    e.preventDefault();
+    setDomainMsg("");
+    const r = await fetch("/api/rest/settings/custom-domain/connect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ domain: domainInput, cf_api_token: cfToken, cf_account_id: cfAccount }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok) {
+      setRunCmd(d.run_command + "  # tunnel " + d.tunnel_id);
+      setDomainMsg("Tunnel created! Run the command below on any machine with internet, then Verify.");
+      await load();
+    } else {
+      setDomainMsg(d.error || "Cloudflare connect failed");
+    }
+    setCfToken("");
   }
 
   async function clearDomain() {
@@ -323,6 +345,30 @@ export default function Settings() {
               {domainVerified ? " — verified ✓" : " — pending DNS"}
             </p>
           )}
+
+          {/* Cloudflare auto-tunnel onboarding */}
+          <details className="mt-4 rounded-lg border border-slate-200 p-3">
+            <summary className="cursor-pointer text-sm font-medium text-slate-700">
+              Auto-setup with Cloudflare (recommended)
+            </summary>
+            <p className="mt-2 text-xs text-slate-500">
+              Paste a Cloudflare API token (zone + tunnel scopes) and your Account ID.
+              We create the tunnel, wire the ingress to JomForm, and give you a one-line
+              run command. The token is never stored.
+            </p>
+            <form onSubmit={connectCloudflare} className="mt-2 space-y-2">
+              <input value={cfToken} onChange={(e) => setCfToken(e.target.value)} required type="password"
+                placeholder="Cloudflare API Token" className="jf-input" />
+              <input value={cfAccount} onChange={(e) => setCfAccount(e.target.value)} required
+                placeholder="Cloudflare Account ID" className="jf-input" />
+              <button className="jf-btn-primary px-4 text-sm" type="submit">Create tunnel automatically</button>
+            </form>
+            {runCmd && (
+              <p className="mt-2 break-all rounded-lg bg-slate-900 p-3 font-mono text-[11px] text-emerald-300">
+                {runCmd}
+              </p>
+            )}
+          </details>
         </section>
 
         {/* ── API keys ── */}
