@@ -1,9 +1,11 @@
 package httpapi
 
 import (
+	"io"
 	"net"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // setCustomDomain claims a custom domain for the account.
@@ -46,17 +48,26 @@ func (h *RESTHandlers) verifyCustomDomain(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusOK, map[string]any{"verified": false, "detail": "DNS belum resolve"})
 		return
 	}
-	// Resolve our own apex and compare edge IPs (works proxied or DNS-only).
+	// Verification: the domain must SERVE our app. Cloudflare-fronted
+	// domains resolve to different edge IPs than jomform.com, so raw IP
+	// equality is wrong (both sides proxied). Instead, hit the domain and
+	// look for our subdomain-routing behaviour: a published form slug on
+	// this host must render. DNS check remains a fast pre-filter.
 	target, _ := net.LookupHost("jomform.com")
-	okNet := false
+	sameEdge := false
 	for _, ip := range ips {
 		for _, t := range target {
 			if ip == t {
-				okNet = true
+				sameEdge = true
 			}
 		}
 	}
-	if !okNet {
+	if !sameEdge {
+		// Proxied (different edge IPs) — fall through to HTTP probe; only
+		// fail fast when DNS does not resolve at all (handled above).
+	}
+	serveOK := probeServesJomForm(acc.CustomDomain)
+	if !serveOK {
 		writeJSON(w, http.StatusOK, map[string]any{"verified": false, "detail": "CNAME menunjuk tempat lain (" + acc.CustomDomain + " -> " + strings.Join(ips, ",") + ")"})
 		return
 	}
@@ -77,6 +88,22 @@ func (h *RESTHandlers) getCustomDomain(w http.ResponseWriter, r *http.Request, a
 	writeJSON(w, http.StatusOK, map[string]any{
 		"domain": acc.CustomDomain, "verified": acc.CustomDomainVerified,
 	})
+}
+
+// probeServesJomForm checks https://domain/f/<known-slug> renders our app.
+func probeServesJomForm(domain string) bool {
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequest(http.MethodGet, "https://"+domain+"/f/test", nil)
+	if err != nil {
+		return false
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	return resp.StatusCode == http.StatusOK && strings.Contains(string(body), "JomForm")
 }
 
 // deleteCustomDomain clears the claim.

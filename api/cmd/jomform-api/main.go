@@ -20,6 +20,7 @@ import (
 	"github.com/wzul/jomform/api/internal/config"
 	"github.com/wzul/jomform/api/internal/db"
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/email"
 	"github.com/wzul/jomform/api/internal/httpapi"
 	"github.com/wzul/jomform/api/internal/mcpsrv"
 	"github.com/wzul/jomform/api/internal/version"
@@ -79,6 +80,15 @@ func main() {
 		keys := dbstore.NewAPIKeyStore(pool)
 
 		pay := payments.New(chip.New(""), accounts, sales, subs, decryptKey, cfg.AppBaseURL)
+		if cfg.SESSMTPHost != "" {
+			pay.Receipts = &payments.Receipts{
+				Sender: email.New(email.SMTPConfig{
+					Host: cfg.SESSMTPHost, Port: cfg.SESSMTPPort,
+					Username: cfg.SESSMTPUser, Password: cfg.SESSMTPPass, From: cfg.SESFrom,
+				}),
+				Base: cfg.AppBaseURL,
+			}
+		}
 		deps.Payments = &httpapi.PaymentsHandlers{Service: pay, Events: events}
 
 		// REST API for the web dashboard.

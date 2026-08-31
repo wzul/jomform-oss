@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/wzul/jomform/api/internal/chip"
@@ -113,6 +114,18 @@ func (s *Service) ProcessCallback(ctx context.Context, p *chip.Purchase) error {
 		if err := s.Sales.SetStatus(ctx, sale.ID, dbstore.SalePaid); err != nil {
 			return err
 		}
+		// Receipt (one-time sales only; subscription receipts follow their
+		// own charge lifecycle). Never blocks the payment flow.
+		if sale.SaleType != dbstore.SaleTypeSubscription {
+			summary := itemsSummary(sale.Items)
+			go s.SendSaleReceipt(ctx, SaleRef{
+				RefCode:      sale.RefCode,
+				BuyerEmail:   sale.Client.Email,
+				AmountSen:    sale.TotalSen,
+				ItemsSummary: summary,
+				FormURL:      s.BaseURL + "/t/" + sale.RefCode,
+			})
+		}
 		// Subscription first payment: token purchase completed → activate sub.
 		if sale.SaleType == dbstore.SaleTypeSubscription {
 			return s.activateSubscription(ctx, sale)
@@ -155,6 +168,15 @@ func (s *Service) activateSubscription(ctx context.Context, sale *dbstore.Sale) 
 		return fmt.Errorf("create subscription: %w", err)
 	}
 	return s.Subs.AddCharge(ctx, newSub.ID, "", sale.TotalSen, dbstore.ChargePending, 0)
+}
+
+// itemsSummary renders "2× Tee RM45.00, 1× Cap RM25.00"-style text.
+func itemsSummary(items []dbstore.SaleItem) string {
+	parts := make([]string, 0, len(items))
+	for _, it := range items {
+		parts = append(parts, fmt.Sprintf("%d× %s", it.Qty, it.Name))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func nextChargeFrom(now time.Time, period string) time.Time {

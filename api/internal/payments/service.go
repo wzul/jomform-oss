@@ -23,6 +23,7 @@ type Service struct {
 	Subs       *dbstore.SubscriptionStore
 	DecryptKey []byte // ENCRYPTION_KEY — used to decrypt per-account CHIP keys
 	BaseURL    string // app public base URL for redirects/callbacks
+	Receipts   *Receipts
 }
 
 // New wires a payments Service.
