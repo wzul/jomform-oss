@@ -2,16 +2,18 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Shell } from "../components/Shell";
+import { useI18n } from "../components/i18n";
+import {
+  Area,
+  AreaChart,
+  CartesianGrid,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 
-type Product = {
-  id: string;
-  name: string;
-  price_sen: number;
-  type: string;
-  billing_period?: string;
-  active: boolean;
-};
-
+type Product = { id: string; name: string; price_sen: number; type: string; active: boolean };
 type SaleRow = {
   ref_code: string;
   status: string;
@@ -20,90 +22,59 @@ type SaleRow = {
   buyer: string;
   created_at: string;
 };
-
 type Summary = { counts: Record<string, number>; revenue_sen: number };
 
 const money = (sen: number) =>
-  `RM${(sen / 100).toLocaleString("ms-MY", { minimumFractionDigits: 2 })}`;
-
-const STATUS_BADGE: Record<string, string> = {
-  pending: "bg-amber-50 text-amber-700 border-amber-200",
-  paid: "bg-blue-50 text-blue-700 border-blue-200",
-  confirmed: "bg-emerald-50 text-emerald-700 border-emerald-200",
-  failed: "bg-red-50 text-red-700 border-red-200",
-  cancelled: "bg-slate-100 text-slate-500 border-slate-200",
-};
-
-const STATUS_MS: Record<string, string> = {
-  pending: "Menunggu",
-  paid: "Dibayar",
-  confirmed: "Disahkan",
-  failed: "Gagal",
-  cancelled: "Dibatalkan",
-};
+  `RM${(sen / 100).toLocaleString("en-MY", { minimumFractionDigits: 2 })}`;
 
 export default function Dashboard() {
+  const { t } = useI18n();
   const [authed, setAuthed] = useState(false);
   const [checking, setChecking] = useState(true);
   const [products, setProducts] = useState<Product[]>([]);
-  const [sales, setSales] = useState<SaleRow[]>([]);
+  const [sales, setSales] =useState<SaleRow[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
 
-  const [pName, setPName] = useState("");
-  const [pPrice, setPPrice] = useState("");
-  const [pType, setPType] = useState("one_time");
-  const [pPeriod, setPPeriod] = useState("month");
-  const [error, setError] = useState("");
-
   const load = useCallback(async () => {
-    try {
-      const me = await fetch("/api/auth/me");
-      if (!me.ok) {
-        window.location.href = "/login";
-        return;
-      }
-      const [p, s, sum] = await Promise.all([
-        fetch("/api/rest/products").then((r) => r.json()),
-        fetch("/api/rest/sales").then((r) => r.json()),
-        fetch("/api/rest/summary").then((r) => r.json()),
-      ]);
-      setProducts(Array.isArray(p) ? p : []);
-      setSales(Array.isArray(s) ? s : []);
-      setSummary(sum);
-      setAuthed(true);
-    } catch {
+    const me = await fetch("/api/auth/me");
+    if (!me.ok) {
       window.location.href = "/login";
-    } finally {
-      setChecking(false);
+      return;
     }
+    const [p, s, sum] = await Promise.all([
+      fetch("/api/rest/products").then((r) => r.json()),
+      fetch("/api/rest/sales").then((r) => r.json()),
+      fetch("/api/rest/summary").then((r) => r.json()),
+    ]);
+    setProducts(Array.isArray(p) ? p : []);
+    setSales(Array.isArray(s) ? s : []);
+    setSummary(sum);
+    setAuthed(true);
+    setChecking(false);
   }, []);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  async function createProduct(e: React.FormEvent) {
-    e.preventDefault();
-    setError("");
-    const r = await fetch("/api/rest/products", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: pName,
-        price_sen: Math.round(parseFloat(pPrice) * 100),
-        type: pType,
-        billing_period: pType === "subscription" ? pPeriod : undefined,
-      }),
-    });
-    if (r.ok) {
-      setPName("");
-      setPPrice("");
-      load();
-    } else {
-      const d = await r.json().catch(() => ({}));
-      setError(d.error || "Gagal menambah produk");
+  // 14-day revenue series
+  const series = (() => {
+    if (!sales.length) return [];
+    const days: { day: string; dayLabel: string; value: number }[] = [];
+    const byDay = new Map<string, number>();
+    for (const s of sales) {
+      if (s.status !== "paid" && s.status !== "confirmed") continue;
+      const day = s.created_at.slice(0, 10);
+      byDay.set(day, (byDay.get(day) || 0) + s.total_sen);
     }
-  }
+    for (let i = 13; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const key = d.toISOString().slice(0, 10);
+      days.push({ day: key, dayLabel: key.slice(5), value: Math.round(((byDay.get(key) || 0) / 100) * 100) / 100 });
+    }
+    return days;
+  })();
 
   async function confirmSale(ref: string) {
     await fetch(`/api/rest/sales/${ref}/confirm`, { method: "POST" });
@@ -111,51 +82,86 @@ export default function Dashboard() {
   }
 
   if (checking) {
-    return (
-      <main className="flex min-h-screen items-center justify-center text-slate-400">
-        Memuatkan…
-      </main>
-    );
+    return <main className="flex min-h-screen items-center justify-center text-slate-400">…</main>;
   }
   if (!authed) return null;
+
+  const badge = (s: string) =>
+    ({
+      pending: "bg-amber-50 text-amber-700 border-amber-200",
+      paid: "bg-blue-50 text-blue-700 border-blue-200",
+      confirmed: "bg-emerald-50 text-emerald-700 border-emerald-200",
+      failed: "bg-red-50 text-red-700 border-red-200",
+      cancelled: "bg-slate-100 text-slate-500 border-slate-200",
+    })[s] || "";
 
   return (
     <Shell active="dashboard">
       <div className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-xl font-semibold tracking-tight">Dashboard</h1>
-            <p className="text-sm text-[var(--jf-muted)]">Ringkasan jualan & borang anda</p>
+            <h1 className="text-xl font-semibold tracking-tight">{t("dash.title")}</h1>
+            <p className="text-sm text-[var(--jf-muted)]">{t("dash.subtitle")}</p>
           </div>
           <a href="/builder" className="jf-btn-primary px-4 py-2 text-sm">
-            + Borang Baru
+            {t("dash.newForm")}
           </a>
         </div>
 
-        {/* stat cards */}
         {summary && (
           <div className="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <StatCard label="Hasil (disahkan)" value={money(summary.revenue_sen)} accent />
-            <StatCard label="Menunggu" value={String(summary.counts.pending ?? 0)} />
-            <StatCard label="Disahkan" value={String(summary.counts.confirmed ?? 0)} />
-            <StatCard label="Produk aktif" value={String(products.length)} />
+            <Stat label={t("dash.revenue")} value={money(summary.revenue_sen)} accent />
+            <Stat label={t("dash.pending")} value={String(summary.counts.pending ?? 0)} />
+            <Stat label={t("dash.confirmed")} value={String(summary.counts.confirmed ?? 0)} />
+            <Stat label={t("dash.activeProducts")} value={String(products.length)} />
           </div>
         )}
 
-        {/* recent sales */}
+        {/* Revenue chart — last 14 days */}
+        <section className="jf-card mt-6 p-5">
+          <h2 className="text-sm font-semibold">
+            {t("dash.revenue")} · 14d
+          </h2>
+          <div className="mt-3 h-56">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={series} margin={{ left: -18, right: 8, top: 8 }}>
+                <defs>
+                  <linearGradient id="rev" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#5e6ad2" stopOpacity={0.25} />
+                    <stop offset="100%" stopColor="#5e6ad2" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#eceef2" vertical={false} />
+                <XAxis dataKey="dayLabel" tick={{ fontSize: 11, fill: "#9ca3af" }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 11, fill: "#9ca3af" }} axisLine={false} tickLine={false} width={48}
+                       tickFormatter={(v) => `RM${v}`} />
+                <Tooltip
+                  formatter={(v) => [money(Number(v)), t("dash.revenue")]}
+                  labelFormatter={(l) => String(l)}
+                  contentStyle={{ borderRadius: 8, borderColor: "#e6e8ec", fontSize: 12 }}
+                />
+                <Area type="monotone" dataKey="value" stroke="#5e6ad2" strokeWidth={2} fill="url(#rev)" />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </section>
+
+        {/* Recent sales */}
         <section className="jf-card mt-6 overflow-hidden">
           <div className="flex items-center justify-between border-b border-[var(--jf-border)] px-5 py-3">
-            <h2 className="text-sm font-semibold">Jualan terkini</h2>
-            <span className="text-xs text-[var(--jf-muted)]">{sales.length} rekod</span>
+            <h2 className="text-sm font-semibold">{t("dash.recentSales")}</h2>
+            <span className="text-xs text-[var(--jf-muted)]">
+              {sales.length} {t("dash.records")}
+            </span>
           </div>
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-[var(--jf-border)] text-left text-xs uppercase tracking-wide text-[var(--jf-muted)]">
-                <th className="px-5 py-2.5 font-medium">Rujukan</th>
-                <th className="px-5 py-2.5 font-medium">Pembeli</th>
-                <th className="px-5 py-2.5 font-medium">Jumlah</th>
-                <th className="px-5 py-2.5 font-medium">Status</th>
-                <th className="px-5 py-2.5 font-medium"></th>
+                <th className="px-5 py-2.5 font-medium">{t("dash.ref")}</th>
+                <th className="px-5 py-2.5 font-medium">{t("dash.buyer")}</th>
+                <th className="px-5 py-2.5 font-medium">{t("dash.amount")}</th>
+                <th className="px-5 py-2.5 font-medium">{t("dash.status")}</th>
+                <th className="px-5 py-2.5" />
               </tr>
             </thead>
             <tbody>
@@ -165,14 +171,14 @@ export default function Dashboard() {
                   <td className="px-5 py-3">{s.buyer || "—"}</td>
                   <td className="px-5 py-3 font-medium">{money(s.total_sen)}</td>
                   <td className="px-5 py-3">
-                    <span className={`rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${STATUS_BADGE[s.status] || ""}`}>
-                      {STATUS_MS[s.status] || s.status}
+                    <span className={`rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${badge(s.status)}`}>
+                      {s.status}
                     </span>
                   </td>
                   <td className="px-5 py-3 text-right">
                     {s.status === "paid" && (
                       <button onClick={() => confirmSale(s.ref_code)} className="text-xs font-medium text-[var(--jf-primary)] hover:underline">
-                        Sahkan
+                        Confirm
                       </button>
                     )}
                   </td>
@@ -181,53 +187,19 @@ export default function Dashboard() {
               {sales.length === 0 && (
                 <tr>
                   <td colSpan={5} className="px-5 py-10 text-center text-sm text-[var(--jf-muted)]">
-                    Belum ada jualan lagi.
+                    {t("dash.emptySales")}
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
         </section>
-
-        {/* products quick add */}
-        <section className="jf-card mt-6 p-5">
-          <h2 className="text-sm font-semibold">Tambah produk</h2>
-          {error && <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">{error}</p>}
-          <form onSubmit={createProduct} className="mt-3 flex flex-wrap gap-2">
-            <input value={pName} onChange={(e) => setPName(e.target.value)} required placeholder="Nama produk" className="jf-input flex-1" />
-            <input value={pPrice} onChange={(e) => setPPrice(e.target.value)} required type="number" step="0.01" min="0" placeholder="Harga RM" className="jf-input w-28" />
-            <select value={pType} onChange={(e) => setPType(e.target.value)} className="jf-input w-32">
-              <option value="one_time">One-time</option>
-              <option value="subscription">Langganan</option>
-            </select>
-            {pType === "subscription" && (
-              <select value={pPeriod} onChange={(e) => setPPeriod(e.target.value)} className="jf-input w-28">
-                <option value="month">Bulanan</option>
-                <option value="year">Tahunan</option>
-              </select>
-            )}
-            <button className="jf-btn-primary px-5 text-sm">Tambah</button>
-          </form>
-          <div className="mt-4 grid gap-2 sm:grid-cols-2">
-            {products.map((p) => (
-              <div key={p.id} className="flex items-center justify-between rounded-lg border border-[var(--jf-border)] px-4 py-2.5">
-                <div>
-                  <p className="text-sm font-medium">{p.name}</p>
-                  <p className="text-[11px] text-[var(--jf-muted)]">
-                    {p.type === "subscription" ? `Langganan ${p.billing_period === "year" ? "tahunan" : "bulanan"}` : "One-time"}
-                  </p>
-                </div>
-                <span className="text-sm font-semibold text-[var(--jf-primary)]">{money(p.price_sen)}</span>
-              </div>
-            ))}
-          </div>
-        </section>
       </div>
     </Shell>
   );
 }
 
-function StatCard({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+function Stat({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
   return (
     <div className="jf-card p-4">
       <p className="text-xs text-[var(--jf-muted)]">{label}</p>

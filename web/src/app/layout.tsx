@@ -1,18 +1,21 @@
 import type { Metadata } from "next";
+import { I18nProvider } from "../components/i18n";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "JomForm — Borang jualan & sistem ejen anda",
+  title: "JomForm — Order forms, agent payments & sales for everyone",
   description:
-    "Bina borang tempahan yang cantik dan pantas, terima bayaran CHIP, urus jualan. Open source.",
+    "Build beautiful order forms, accept CHIP payments, manage sales. Open source & free forever.",
 };
 
 export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="ms">
-      <body className="min-h-screen antialiased">{children}</body>
+    <html lang="en">
+      <body className="antialiased">
+        <I18nProvider>{children}</I18nProvider>
+      </body>
     </html>
   );
 }

@@ -37,6 +37,14 @@ func (h *RESTHandlers) listProducts(w http.ResponseWriter, r *http.Request, actx
 	respond(w, http.StatusOK, out)
 }
 
+func (h *RESTHandlers) deleteProduct(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if err := h.Products.Archive(r.Context(), actx.Account.ID, r.PathValue("id")); err != nil {
+		respondErr(w, err)
+		return
+	}
+	respond(w, http.StatusOK, map[string]string{"status": "archived"})
+}
+
 func (h *RESTHandlers) createProduct(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	var in struct {
 		Name          string `json:"name"`

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useI18n, LangToggle } from "./i18n";
 
 // AppShell: fixed left sidebar + topbar + content area. Light theme.
 export function Shell({
@@ -8,9 +9,10 @@ export function Shell({
   active,
 }: {
   children: React.ReactNode;
-  active: "dashboard" | "builder" | "settings";
+  active: "dashboard" | "forms" | "products" | "settings";
 }) {
   const [user, setUser] = useState<{ email: string } | null>(null);
+  const { t } = useI18n();
 
   useEffect(() => {
     fetch("/api/auth/me")
@@ -25,10 +27,11 @@ export function Shell({
   }
 
   const nav = [
-    { key: "dashboard", href: "/", label: "Dashboard", icon: "◧" },
-    { key: "builder", href: "/builder", label: "Borang", icon: "✎" },
-    { key: "settings", href: "/settings", label: "Tetapan", icon: "⚙" },
-  ] as const;
+    { key: "dashboard", href: "/", label: t("nav.dashboard"), icon: "◧" },
+    { key: "forms", href: "/forms", label: t("nav.forms"), icon: "✎" },
+    { key: "products", href: "/products", label: t("prod.title"), icon: "◧" },
+    { key: "settings", href: "/settings", label: t("nav.settings"), icon: "⚙" },
+  ];
 
   return (
     <div className="flex min-h-screen">
@@ -72,9 +75,12 @@ export function Shell({
                 onClick={signOut}
                 className="text-[11px] text-[var(--jf-muted)] hover:text-red-500"
               >
-                Log keluar
+                {t("nav.signout")}
               </button>
             </div>
+          </div>
+          <div className="mt-1 px-2">
+            <LangToggle />
           </div>
         </div>
       </aside>
@@ -86,8 +92,9 @@ export function Shell({
           <span className="text-sm font-semibold">
             Jom<span className="text-[var(--jf-primary)]">Form</span>
           </span>
+          <LangToggle />
           <button onClick={signOut} className="text-xs text-[var(--jf-muted)]">
-            Log keluar
+            {t("nav.signout")}
           </button>
         </header>
         <div className="flex flex-1 flex-col">{children}</div>

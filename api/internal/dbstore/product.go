@@ -90,3 +90,11 @@ func (s *ProductStore) Get(ctx context.Context, accountID, productID string) (*P
 }
 
 var _ = pgxpool.Pool{} // ensure pgxpool import remains for future stores in this package
+
+// Archive sets active=false on a product owned by the account.
+func (s *ProductStore) Archive(ctx context.Context, accountID, productID string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE products SET active=false, updated_at=now() WHERE id=$1 AND account_id=$2`,
+		productID, accountID)
+	return err
+}
