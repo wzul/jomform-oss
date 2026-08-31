@@ -9,12 +9,14 @@ import (
 	"github.com/wzul/jomform/api/internal/config"
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/httpapi/middleware"
+	"github.com/wzul/jomform/api/internal/mcpsrv"
 	"github.com/wzul/jomform/api/internal/version"
 )
 
 // Deps carries wired-in infrastructure (nil in bare-mode tests).
 type Deps struct {
 	Payments *PaymentsHandlers
+	MCP      *mcpsrv.Server
 	Users    *dbstore.UserStore
 	Sessions *auth.Sessions
 }
@@ -54,6 +56,11 @@ func (s *Server) Handler() http.Handler {
 	}
 	if s.deps.Payments != nil {
 		s.deps.Payments.RegisterRoutes(mux)
+	}
+	if s.deps.MCP != nil {
+		mux.Handle("POST /mcp", s.deps.MCP.HTTPHandler())
+		mux.Handle("GET /mcp", s.deps.MCP.HTTPHandler())
+		mux.Handle("DELETE /mcp", s.deps.MCP.HTTPHandler())
 	}
 
 	var h http.Handler = mux

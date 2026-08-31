@@ -78,6 +78,13 @@ func (s *SubscriptionStore) ByTokenPurchase(ctx context.Context, purchaseID stri
 	return scanSub(s.pool.QueryRow(ctx, subSelect+" WHERE chip_token_purchase_id = $1", purchaseID))
 }
 
+// ByEmail finds the (single) live subscription for a client email.
+func (s *SubscriptionStore) ByEmail(ctx context.Context, accountID, email string) (*Subscription, error) {
+	return scanSub(s.pool.QueryRow(ctx,
+		subSelect+" WHERE account_id=$1 AND client_email=$2 AND status IN ('active','past_due') ORDER BY created_at DESC LIMIT 1",
+		accountID, email))
+}
+
 // DueActive lists active subscriptions whose next_charge_at has passed.
 func (s *SubscriptionStore) DueActive(ctx context.Context, now time.Time, limit int) ([]*Subscription, error) {
 	if limit <= 0 {

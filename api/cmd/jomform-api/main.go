@@ -21,6 +21,7 @@ import (
 	"github.com/wzul/jomform/api/internal/db"
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/httpapi"
+	"github.com/wzul/jomform/api/internal/mcpsrv"
 	"github.com/wzul/jomform/api/internal/version"
 )
 
@@ -63,15 +64,24 @@ func main() {
 	}
 
 	// Payments wiring (CHIP): needs DB; decrypt key from config.
+	decryptKey := mustHexKey(cfg.EncryptionKey)
 	if pool != nil {
 		accounts := dbstore.NewAccountStore(pool)
 		sales := dbstore.NewSaleStore(pool)
 		subs := dbstore.NewSubscriptionStore(pool)
 		events := dbstore.NewWebhookEventStore(pool)
-		decryptKey := mustHexKey(cfg.EncryptionKey)
+		products := dbstore.NewProductStore(pool)
+		keys := dbstore.NewAPIKeyStore(pool)
 
 		pay := payments.New(chip.New(""), accounts, sales, subs, decryptKey, cfg.AppBaseURL)
 		deps.Payments = &httpapi.PaymentsHandlers{Service: pay, Events: events}
+
+		// MCP server — merchants' AI agents control their store here.
+		mcpSrv := mcpsrv.New(&mcpsrv.Deps{
+			Accounts: accounts, Products: products, Sales: sales,
+			Subs: subs, Keys: keys,
+		}, chip.New(""), decryptKey)
+		deps.MCP = mcpSrv
 	}
 
 	srv := &http.Server{
