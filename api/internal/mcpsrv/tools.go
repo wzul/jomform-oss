@@ -9,13 +9,14 @@ import (
 
 	"github.com/wzul/jomform/api/internal/chip"
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/payments"
 )
 
 // version reported in the MCP implementation info.
 const version = "0.1.0"
 
 // New builds the JomForm MCP server with all tools registered.
-func New(deps *Deps, chipClient *chip.Client, decryptKey []byte) *Server {
+func New(deps *Deps, chipClient *chip.Client, decryptKey []byte, pay *payments.Service) *Server {
 	s := &Server{
 		mcp: mcp.NewServer(&mcp.Implementation{
 			Name:    "jomform",
@@ -24,6 +25,7 @@ func New(deps *Deps, chipClient *chip.Client, decryptKey []byte) *Server {
 		deps:   deps,
 		chip:   chipClient,
 		decKey: decryptKey,
+		pay:    pay,
 	}
 	s.registerTools()
 	return s
@@ -76,6 +78,28 @@ func (s *Server) registerTools() {
 		Name:        "get_account",
 		Description: "Maklumat asas akaun (nama, slug, CHIP mode).",
 	}, s.getAccount)
+
+	// ── Per-form CHIP override ──────────────────────────────────────────────
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "set_form_chip_override",
+		Description: "Set kredensial CHIP khusus untuk SATU borang (brand_id + secret_key). Bila set, borang tersebut guna kredensial ini, bukan default akaun. Secret disimpan terenkripsi.",
+	}, s.setFormChipOverride)
+
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "clear_form_chip_override",
+		Description: "Kosongkan override sebuah borang — kembali guna kredensial default akaun.",
+	}, s.clearFormChipOverride)
+
+	// ── Capture flow ────────────────────────────────────────────────────────
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "capture_sale",
+		Description: "Capture authorisasi skip_capture (kad buyer dicaj sekarang). amount_sen optional untuk partial.",
+	}, s.captureSaleMCP)
+
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "release_sale",
+		Description: "Release (void) authorisasi skip_capture — kad buyer TIDAK dicaj.",
+	}, s.releaseSaleMCP)
 }
 
 // helper: require a write-capable key.

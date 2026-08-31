@@ -91,8 +91,9 @@ func main() {
 		// MCP server — merchants' AI agents control their store here.
 		mcpSrv := mcpsrv.New(&mcpsrv.Deps{
 			Accounts: accounts, Products: products, Sales: sales,
-			Subs: subs, Keys: keys,
-		}, chip.New(""), decryptKey)
+			Subs: subs, Keys: keys, Forms: dbstore.NewFormStore(pool),
+			DecryptKey: decryptKey,
+		}, chip.New(""), decryptKey, pay)
 		deps.MCP = mcpSrv
 
 		// Public order-form renderer + submit.

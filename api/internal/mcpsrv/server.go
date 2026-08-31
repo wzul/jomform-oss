@@ -10,6 +10,7 @@ import (
 	"github.com/wzul/jomform/api/internal/chip"
 	"github.com/wzul/jomform/api/internal/cryptoutil"
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/payments"
 )
 
 // Deps bundles the stores an MCP server acts on.
@@ -19,14 +20,18 @@ type Deps struct {
 	Sales    *dbstore.SaleStore
 	Subs     *dbstore.SubscriptionStore
 	Keys     *dbstore.APIKeyStore
+	Forms    *dbstore.FormStore
+	// DecryptKey (ENCRYPTION_KEY hex bytes) enables per-form CHIP override tools.
+	DecryptKey []byte
 }
 
 // Server wraps the MCP *Server with JomForm deps.
 type Server struct {
 	mcp    *mcp.Server
+	decKey []byte // ENCRYPTION_KEY bytes
+	pay    *payments.Service
 	deps   *Deps
 	chip   *chip.Client
-	decKey []byte // ENCRYPTION_KEY bytes
 }
 
 // decrypt opens an account's encrypted CHIP secret key.
