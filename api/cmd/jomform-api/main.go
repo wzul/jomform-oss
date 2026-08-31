@@ -109,7 +109,7 @@ func main() {
 		// Public order-form renderer + submit.
 		deps.Public = &httpapi.PublicHandlers{
 			Forms: dbstore.NewFormStore(pool), Sales: sales, Accounts: accounts,
-			Pay: pay, BaseURL: cfg.AppBaseURL,
+			Products: products, Pay: pay, BaseURL: cfg.AppBaseURL,
 		}
 
 		// Subscription charge runner: hourly sweep for due charges + overdue cancels.
