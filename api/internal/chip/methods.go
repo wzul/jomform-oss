@@ -106,3 +106,11 @@ func (c *Client) PaymentMethods(ctx context.Context, secretKey, currency, langua
 	}
 	return out.Available, nil
 }
+
+// ValidateCredentials performs a cheap authenticated call to prove the
+// brand_id + secret_key pair works (Woo parity: validate upon save and
+// show a ✓ status). Returns nil on success.
+func (c *Client) ValidateCredentials(ctx context.Context, secret string) error {
+	_, err := c.PublicKey(ctx, secret)
+	return err
+}

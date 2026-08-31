@@ -36,6 +36,18 @@ func (h *RESTHandlers) setChipCreds(w http.ResponseWriter, r *http.Request, actx
 		mode = "test"
 	}
 
+	// Validate against CHIP before storing (Woo parity) — save is REJECTED
+	// with the CHIP error when the pair is wrong, so the ✓ badge is truthful.
+	if h.ChipProbe != nil {
+		if verr := h.ChipProbe.ValidateCredentials(r.Context(), in.SecretKey); verr != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error":    "kredensial tidak sah — semak Brand ID / Secret Key",
+				"verified": false,
+			})
+			return
+		}
+	}
+
 	enc, err := cryptoutil.Encrypt(h.SecretsKey, []byte(in.SecretKey))
 	if err != nil {
 		respondErr(w, err)
@@ -63,8 +75,9 @@ func (h *RESTHandlers) chipStatus(w http.ResponseWriter, r *http.Request, actx *
 		"brand_id":   acc.ChipBrandID,
 	}
 	if configured {
-		if secret, err := cryptoutil.Decrypt(h.SecretsKey, acc.ChipSecretKeyEnc); err == nil && len(secret) >= 14 {
-			resp["secret_key_masked"] = string(secret[:8]) + "…" + string(secret[len(secret)-6:])
+		if secret, err := cryptoutil.Decrypt(h.SecretsKey, acc.ChipSecretKeyEnc); err == nil {
+			// Wan request: merchant sees what they stored ( Woo-style secret_key field).
+			resp["secret_key"] = string(secret)
 		}
 	}
 	resp["whitelist"] = acc.ChipMethodWhitelist

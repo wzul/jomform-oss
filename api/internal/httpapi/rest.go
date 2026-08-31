@@ -24,6 +24,10 @@ type RESTHandlers struct {
 	Sales    *dbstore.SaleStore
 	Sessions *auth.Sessions
 	Pay      *payments.Service
+	// ChipProbe validates credentials against CHIP at save time.
+	ChipProbe interface {
+		ValidateCredentials(ctx context.Context, secret string) error
+	}
 
 	// EncryptKey is the 32-byte AES-GCM key from ENCRYPTION_KEY env.
 	SecretsKey []byte

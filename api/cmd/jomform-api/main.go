@@ -94,7 +94,7 @@ func main() {
 		// REST API for the web dashboard.
 		deps.REST = &httpapi.RESTHandlers{
 			Accounts: accounts, Products: products, Forms: dbstore.NewFormStore(pool),
-			Keys: keys, Sales: sales, Sessions: sessions,
+			Keys: keys, Sales: sales, Sessions: sessions, ChipProbe: chip.New(""),
 			SecretsKey: decryptKey, Pay: pay,
 		}
 

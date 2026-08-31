@@ -35,7 +35,7 @@ export default function Settings() {
   const [err, setErr] = useState("");
   const [keys, setKeys] = useState<KeyRow[]>([]);
   const [newKey, setNewKey] = useState("");
-  const [secretMasked, setSecretMasked] = useState("");
+  const [verified, setVerified] = useState(false);
 
   const [domain, setDomain] = useState("");
   const [domainInput, setDomainInput] = useState("");
@@ -54,7 +54,8 @@ export default function Settings() {
         if (s.mode) setMode(s.mode);
         if (s.email_fallback) setEmailFallback(s.email_fallback);
         if (Array.isArray(s.whitelist) && s.whitelist.length) setWhitelist(s.whitelist);
-        setSecretMasked(s.secret_key_masked || "");
+        if (s.secret_key) setSecretKey(s.secret_key);
+        setVerified(s.configured && !!(s.secret_key || s.secret_key_masked));
       }
       setKeys(k || []);
       if (d && d.domain) {
@@ -84,11 +85,12 @@ export default function Settings() {
       }),
     });
     if (r.ok) {
-      setMsg("Saved. CHIP is active for your forms.");
-      setSecretKey("");
+      setMsg("Saved — credentials verified with CHIP. ✓");
+      setVerified(true);
       await load();
     } else {
       const d = await r.json().catch(() => ({}));
+      setVerified(false);
       setErr(d.error || "Failed to save");
     }
   }
@@ -205,8 +207,13 @@ export default function Settings() {
               />
             </div>
             <div>
-              <label className="text-xs text-slate-500">
-                Secret Key {secretMasked ? `(stored: ${secretMasked} — re-enter to replace)` : ""}
+              <label className="flex items-center gap-2 text-xs text-slate-500">
+                Secret Key
+                {verified && (
+                  <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                    ✓ API credentials verified
+                  </span>
+                )}
               </label>
               <input
                 value={secretKey}
