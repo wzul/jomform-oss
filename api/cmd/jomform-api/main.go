@@ -89,12 +89,6 @@ func main() {
 				Base: cfg.AppBaseURL,
 			}
 		}
-		if whStore := dbstore.NewWebhookStore(pool); whStore != nil {
-			pay.OnPaid = func(ctx context.Context, accountID, event string, payload map[string]any) {
-				httpapi.DispatchWebhooks(ctx, whStore, accountID, event, payload)
-			}
-			deps.REST.Webhooks = whStore
-		}
 		deps.Payments = &httpapi.PaymentsHandlers{Service: pay, Events: events}
 
 		// REST API for the web dashboard.
