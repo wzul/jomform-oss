@@ -58,6 +58,16 @@ type PurchaseRequest struct {
 	PaymentMethodWhitelist []string `json:"payment_method_whitelist,omitempty"`
 
 	SendReceipt bool `json:"send_receipt,omitempty"`
+
+	// Redirect/callback URLs live at the TOP LEVEL of the create-purchase
+	// request (CHIP ignores them when nested inside "purchase" — verified
+	// against the portal DB: Woo's top-level callback persisted, our nested
+	// ones were silently discarded to "").
+	SuccessRedirect string `json:"success_redirect,omitempty"`
+	FailureRedirect string `json:"failure_redirect,omitempty"`
+	CancelRedirect  string `json:"cancel_redirect,omitempty"`
+	SuccessCallback string `json:"success_callback,omitempty"`
+	Reference       string `json:"reference,omitempty"`
 }
 
 // Purchase is the response/callback Purchase object (subset).

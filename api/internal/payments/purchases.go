@@ -273,13 +273,14 @@ func (s *Service) CreateChipPurchaseForSaleWithOverride(ctx context.Context, sal
 		PaymentMethodWhitelist: wl,
 		Client:                 &chip.ClientDetails{Email: clientEmail, FullName: sale.Client.FullName, Phone: sale.Client.Phone},
 		ForceRecurring:         sale.SaleType == dbstore.SaleTypeSubscription,
+		// TOP-LEVEL — CHIP only honors these here (nested-in-purchase gets discarded):
+		SuccessRedirect: fmt.Sprintf("%s/t/%s", s.BaseURL, sale.RefCode),
+		FailureRedirect: fmt.Sprintf("%s/t/%s?status=fail", s.BaseURL, sale.RefCode),
+		SuccessCallback: fmt.Sprintf("%s/v1/payments/chip/callback", s.BaseURL),
+		Reference:       sale.RefCode,
 		Purchase: chip.PurchaseDetails{
-			Products:        toCHIPProducts(sale.Items),
-			Currency:        acc.Currency,
-			Reference:       sale.RefCode,
-			SuccessRedirect: fmt.Sprintf("%s/t/%s", s.BaseURL, sale.RefCode),
-			FailureRedirect: fmt.Sprintf("%s/t/%s?status=fail", s.BaseURL, sale.RefCode),
-			SuccessCallback: fmt.Sprintf("%s/v1/payments/chip/callback", s.BaseURL),
+			Products: toCHIPProducts(sale.Items),
+			Currency: acc.Currency,
 		},
 	}
 
