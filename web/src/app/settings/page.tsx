@@ -1,37 +1,60 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Shell } from "../../components/Shell";
+import { useI18n } from "../../components/i18n";
 
-type ChipStatus = {
-  configured: boolean;
-  mode: string;
-};
-
+type ChipStatus = { configured: boolean; mode: string };
 type KeyRow = { id: string; name: string; scopes: string[] };
+type DomainStatus = { domain: string; verified: boolean } | null;
+
+const METHODS = [
+  { id: "fpx", label: "FPX (Online Banking)" },
+  { id: "visa", label: "Visa" },
+  { id: "mastercard", label: "Mastercard" },
+  { id: "maestro", label: "Maestro" },
+  { id: "dnqr", label: "DuitNow QR" },
+  { id: "shopee_pay", label: "ShopeePay" },
+  { id: "razer_ewallet", label: "Razer e-wallet" },
+  { id: "atome", label: "Atome (BNPL)" },
+];
 
 export default function Settings() {
+  const { t } = useI18n();
   const [status, setStatus] = useState<ChipStatus | null>(null);
   const [brandId, setBrandId] = useState("");
   const [secretKey, setSecretKey] = useState("");
   const [mode, setMode] = useState("test");
+  const [emailFallback, setEmailFallback] = useState("");
+  const [whitelist, setWhitelist] = useState<string[]>([]);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   const [keys, setKeys] = useState<KeyRow[]>([]);
   const [newKey, setNewKey] = useState("");
 
-  async function load() {
-    const [s, k] = await Promise.all([
+  const [domain, setDomain] = useState("");
+  const [domainInput, setDomainInput] = useState("");
+  const [domainVerified, setDomainVerified] = useState(false);
+  const [domainMsg, setDomainMsg] = useState("");
+
+  const load = useCallback(() => {
+    return Promise.all([
       fetch("/api/rest/settings/chip").then((r) => (r.ok ? r.json() : null)),
       fetch("/api/rest/keys").then((r) => (r.ok ? r.json() : [])),
-    ]);
-    if (s) setStatus(s);
-    setKeys(k || []);
-  }
+      fetch("/api/rest/settings/custom-domain").then((r) => (r.ok ? r.json() : null)),
+    ]).then(([s, k, d]) => {
+      if (s) setStatus(s);
+      setKeys(k || []);
+      if (d && d.domain) {
+        setDomain(d.domain);
+        setDomainVerified(!!d.verified);
+      }
+    });
+  }, []);
 
   useEffect(() => {
     load();
-  }, []);
+  }, [load]);
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
@@ -40,21 +63,27 @@ export default function Settings() {
     const r = await fetch("/api/rest/settings/chip", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ brand_id: brandId, secret_key: secretKey, mode }),
+      body: JSON.stringify({
+        brand_id: brandId,
+        secret_key: secretKey,
+        mode,
+        email_fallback: emailFallback,
+        payment_method_whitelist: whitelist,
+      }),
     });
     if (r.ok) {
-      setMsg("Dikemaskini. Bayaran CHIP kini aktif untuk borang anda.");
+      setMsg("Saved. CHIP is active for your forms.");
       setSecretKey("");
       await load();
     } else {
       const d = await r.json().catch(() => ({}));
-      setErr(d.error || "Gagal menyimpan");
+      setErr(d.error || "Failed to save");
     }
   }
 
   async function clearCreds() {
     await fetch("/api/rest/settings/chip", { method: "DELETE" });
-    setMsg("Kredensial CHIP dipadam.");
+    setMsg("CHIP credentials cleared.");
     await load();
   }
 
@@ -72,114 +101,235 @@ export default function Settings() {
     }
   }
 
-  return (
-    <Shell active="settings"><main className="mx-auto max-w-3xl flex-1 px-6 py-8">
-      <a href="/" className="text-sm text-indigo-400">
-        ← Dashboard
-      </a>
-      <h1 className="mt-2 text-2xl font-bold">
-        Tetapan <span className="text-indigo-400">JomForm</span>
-      </h1>
+  async function setDomainClaim(e: React.FormEvent) {
+    e.preventDefault();
+    setDomainMsg("");
+    const r = await fetch("/api/rest/settings/custom-domain", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ domain: domainInput }),
+    });
+    if (r.ok) {
+      const d = await r.json();
+      setMsg(`Custom domain "${d.domain}" saved. Add a CNAME to jomform.com, then verify.`);
+      await load();
+    } else {
+      const d = await r.json().catch(() => ({}));
+      setDomainMsg(d.error || "Failed to save domain");
+    }
+  }
 
-      <section className="mt-8 rounded-2xl border jf-card p-6">
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold">CHIP Payment Gateway</h2>
-          {status && (
-            <span
-              className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                status.configured
-                  ? "bg-emerald-500/15 text-emerald-400"
-                  : "bg-slate-700/50 text-slate-400"
-              }`}
-            >
-              {status.configured ? `AKTIF · ${status.mode.toUpperCase()}` : "BELUM SET"}
-            </span>
-          )}
-        </div>
-        <p className="mt-2 text-sm text-slate-400">
-          Dapatkan <code className="rounded bg-slate-800 px-1">Brand ID</code> &{" "}
-          <code className="rounded bg-slate-800 px-1">Secret Key</code> dari{" "}
-          <a
-            href="https://portal.chip-in.asia/collect/developers/brands"
-            className="text-indigo-400 underline"
-            target="_blank"
-          >
-            CHIP Merchant Portal → Developers
-          </a>
-          . Kunci disimpan terenkripsi — tidak dipapar semula.
-        </p>
-        {msg && <p className="mt-3 rounded-lg bg-emerald-500/10 px-3 py-2 text-sm text-emerald-400">{msg}</p>}
-        {err && <p className="mt-3 rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-400">{err}</p>}
-        <form onSubmit={save} className="mt-4 space-y-3">
-          <div>
-            <label className="text-xs text-slate-500">Brand ID</label>
-            <input
-              value={brandId}
-              onChange={(e) => setBrandId(e.target.value)}
-              required
-              className="mt-1 w-full rounded-xl border jf-input px-3 py-2 text-sm"
-              placeholder="cth. 5f2b...-uuid"
-            />
-          </div>
-          <div>
-            <label className="text-xs text-slate-500">Secret Key {status?.configured && "(masukkan semula untuk tukar)"}</label>
-            <input
-              value={secretKey}
-              onChange={(e) => setSecretKey(e.target.value)}
-              required
-              type="password"
-              className="mt-1 w-full rounded-xl border jf-input px-3 py-2 text-sm"
-              placeholder="sk_live_... / sk_test_..."
-            />
-          </div>
-          <div>
-            <label className="text-xs text-slate-500">Mode</label>
-            <select
-              value={mode}
-              onChange={(e) => setMode(e.target.value)}
-              className="mt-1 rounded-xl border jf-input px-3 py-2 text-sm"
-            >
-              <option value="test">Test (kad ujian sahaja)</option>
-              <option value="live">Live</option>
-            </select>
-          </div>
-          <div className="flex gap-2">
-            <button className="rounded-xl bg-indigo-500 px-5 py-2 text-sm font-semibold">Simpan</button>
-            {status?.configured && (
-              <button type="button" onClick={clearCreds} className="rounded-xl border border-slate-600 px-4 py-2 text-sm text-slate-300">
-                Padam
-              </button>
+  async function verifyDomain() {
+    setDomainMsg("");
+    const r = await fetch("/api/rest/settings/custom-domain/verify", { method: "POST" });
+    const d = await r.json().catch(() => ({}));
+    if (d.verified) {
+      setDomainVerified(true);
+      setDomainMsg(`Verified! Your form links now work on https://${d.domain}/f/<slug>`);
+    } else {
+      setDomainMsg(d.detail || "Not verified yet — check the CNAME records.");
+    }
+    await load();
+  }
+
+  async function clearDomain() {
+    await fetch("/api/rest/settings/custom-domain", { method: "DELETE" });
+    setDomain("");
+    setDomainVerified(false);
+    setDomainMsg("Custom domain removed.");
+    await load();
+  }
+
+  function toggleMethod(id: string) {
+    setWhitelist((prev) => (prev.includes(id) ? prev.filter((m) => m !== id) : [...prev, id]));
+  }
+
+  return (
+    <Shell active="settings">
+      <main className="mx-auto max-w-3xl flex-1 px-6 py-8">
+        <h1 className="text-2xl font-bold">
+          Settings <span className="text-[var(--jf-primary)]">JomForm</span>
+        </h1>
+
+        {/* ── CHIP gateway ── */}
+        <section className="jf-card mt-8 p-6">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold">CHIP Payment Gateway</h2>
+            {status && (
+              <span
+                className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                  status.configured
+                    ? "border border-emerald-200 bg-emerald-50 text-emerald-700"
+                    : "border border-slate-200 bg-slate-50 text-slate-500"
+                }`}
+              >
+                {status.configured ? `ACTIVE · ${status.mode.toUpperCase()}` : "NOT SET"}
+              </span>
             )}
           </div>
-        </form>
-      </section>
+          <p className="mt-2 text-sm text-slate-400">
+            Get your <code className="rounded bg-slate-100 px-1">Brand ID</code> &{" "}
+            <code className="rounded bg-slate-100 px-1">Secret Key</code> from{" "}
+            <a
+              href="https://portal.chip-in.asia/collect/developers/brands"
+              className="text-[var(--jf-primary)] underline"
+              target="_blank"
+            >
+              CHIP Merchant Portal → Developers
+            </a>
+            . Keys are stored encrypted — never shown again.
+          </p>
+          {msg && <p className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-600">{msg}</p>}
+          {err && <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{err}</p>}
+          <form onSubmit={save} className="mt-4 space-y-3">
+            <div>
+              <label className="text-xs text-slate-500">Brand ID</label>
+              <input
+                value={brandId}
+                onChange={(e) => setBrandId(e.target.value)}
+                required
+                className="jf-input mt-1"
+                placeholder="e.g. 5f2b…-uuid"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-slate-500">
+                Secret Key {status?.configured && "(re-enter to replace)"}
+              </label>
+              <input
+                value={secretKey}
+                onChange={(e) => setSecretKey(e.target.value)}
+                required
+                type="password"
+                className="jf-input mt-1"
+                placeholder="sk_live_… / sk_test_…"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-slate-500">Mode</label>
+              <select value={mode} onChange={(e) => setMode(e.target.value)} className="jf-input mt-1 w-56">
+                <option value="test">Test (test cards only)</option>
+                <option value="live">Live</option>
+              </select>
+            </div>
 
-      <section className="mt-6 rounded-2xl border jf-card p-6">
-        <h2 className="text-lg font-semibold">Kunci API (AI Agent / MCP)</h2>
-        <p className="mt-1 text-sm text-slate-400">
-          Untuk kawalan kedai melalui AI agent: endpoint{" "}
-          <code className="rounded bg-slate-800 px-1">https://jomform.com/mcp</code>, Bearer authentication.
-        </p>
-        <button onClick={genKey} className="mt-3 rounded-xl bg-emerald-500/90 px-5 py-2 text-sm font-semibold text-emerald-950">
-          Jana Key
-        </button>
-        {newKey && (
-          <div className="mt-3 rounded-xl border border-emerald-600/40 bg-emerald-500/10 p-3">
-            <p className="text-xs text-emerald-300">Simpan sekarang — takkan dipapar lagi:</p>
-            <code className="mt-1 block break-all font-mono text-sm text-emerald-200">{newKey}</code>
+            <div>
+              <label className="text-xs text-slate-500">
+                Email fallback <span className="text-slate-400">(optional — used when buyer email missing; one-time forms only)</span>
+              </label>
+              <input
+                value={emailFallback}
+                onChange={(e) => setEmailFallback(e.target.value)}
+                type="email"
+                className="jf-input mt-1"
+                placeholder="store@yourshop.my"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs text-slate-500">
+                Payment methods <span className="text-slate-400">(blank = all available)</span>
+              </label>
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                {METHODS.map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => toggleMethod(m.id)}
+                    className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+                      whitelist.includes(m.id)
+                        ? "border-[var(--jf-primary)] bg-indigo-50 text-[var(--jf-primary)]"
+                        : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"
+                    }`}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex gap-2 pt-1">
+              <button className="jf-btn-primary px-5 text-sm">Save</button>
+              {status?.configured && (
+                <button type="button" onClick={clearCreds} className="jf-btn-ghost px-4 text-sm text-slate-600">
+                  Clear
+                </button>
+              )}
+            </div>
+          </form>
+        </section>
+
+        {/* ── custom domain ── */}
+        <section className="jf-card mt-6 p-6">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold">Custom domain</h2>
+            {domain && (
+              <span
+                className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                  domainVerified
+                    ? "border border-emerald-200 bg-emerald-50 text-emerald-700"
+                    : "border border-amber-200 bg-amber-50 text-amber-700"
+                }`}
+              >
+                {domainVerified ? "VERIFIED" : "PENDING DNS"}
+              </span>
+            )}
           </div>
-        )}
-        <ul className="mt-4 space-y-2">
-          {keys
-            .filter((k) => !k.id.startsWith("REVOKE")) // revoked keys omitted server-side
-            .map((k) => (
-              <li key={k.id} className="flex items-center justify-between rounded-xl border border-slate-800 px-4 py-2.5">
+          <p className="mt-2 text-sm text-slate-400">
+            Serve your forms on your own domain. Add a{" "}
+            <code className="rounded bg-slate-100 px-1">CNAME {domain || "<your-domain>"} → jomform.com</code>{" "}
+            (DNS only), then verify.
+          </p>
+          {domainMsg && <p className="mt-3 rounded-lg bg-indigo-50 px-3 py-2 text-sm text-indigo-700">{domainMsg}</p>}
+          <form onSubmit={setDomainClaim} className="mt-4 flex flex-wrap gap-2">
+            <input
+              value={domainInput}
+              onChange={(e) => setDomainInput(e.target.value)}
+              placeholder="shop.yourdomain.com"
+              className="jf-input min-w-56 flex-1"
+            />
+            <button className="jf-btn-primary px-5 text-sm" type="submit">
+              {domain ? "Replace" : "Add domain"}
+            </button>
+            {domain && !domainVerified && (
+              <button type="button" onClick={verifyDomain} className="jf-btn-ghost px-4 text-sm">
+                Verify now
+              </button>
+            )}
+          </form>
+          {domain && (
+            <p className="mt-2 text-xs text-slate-500">
+              Current claim: <strong>{domain}</strong>
+              {domainVerified ? " — verified ✓" : " — pending DNS"}
+            </p>
+          )}
+        </section>
+
+        {/* ── API keys ── */}
+        <section className="jf-card mt-6 p-6">
+          <h2 className="text-lg font-semibold">API keys (AI agent / MCP)</h2>
+          <p className="mt-1 text-sm text-slate-400">
+            Endpoint <code className="rounded bg-slate-100 px-1">https://jomform.com/mcp</code>, Bearer auth.
+          </p>
+          <button onClick={genKey} className="mt-3 rounded-lg bg-emerald-500 px-5 py-2 text-sm font-medium text-white hover:bg-emerald-600">
+            Generate key
+          </button>
+          {newKey && (
+            <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+              <p className="text-xs text-emerald-700">Save it now — never shown again:</p>
+              <code className="mt-1 block break-all font-mono text-sm text-emerald-800">{newKey}</code>
+            </div>
+          )}
+          <ul className="mt-4 space-y-2">
+            {keys.map((k) => (
+              <li key={k.id} className="flex items-center justify-between rounded-lg border border-[var(--jf-border)] px-4 py-2.5">
                 <span className="text-sm">{k.name}</span>
                 <span className="text-xs text-slate-500">{k.scopes.join(", ")}</span>
               </li>
             ))}
-        </ul>
-      </section>
-    </main></Shell>
+          </ul>
+        </section>
+      </main>
+    </Shell>
   );
 }
