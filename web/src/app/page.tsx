@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Shell } from "../components/Shell";
 import { useI18n } from "../components/i18n";
+import Landing from "./landing/page";
 import {
   Area,
   AreaChart,
@@ -55,11 +56,13 @@ export default function Dashboard() {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [formStats, setFormStats] = useState<FormStats[]>([]);
   const [prodStats, setProdStats] = useState<ProductStats[]>([]);
+  const [anon, setAnon] = useState(false);
 
   const load = useCallback(async () => {
     const me = await fetch("/api/auth/me");
     if (!me.ok) {
-      window.location.href = "/landing";
+      setAnon(true);
+      setChecking(false);
       return;
     }
     const [p, s, sum, fs, ps] = await Promise.all([
@@ -109,7 +112,7 @@ export default function Dashboard() {
   if (checking) {
     return <main className="flex min-h-screen items-center justify-center text-slate-400">…</main>;
   }
-  if (!authed) return null;
+  if (anon) return <LandingView />;
 
   const badge = (s: string) =>
     ({

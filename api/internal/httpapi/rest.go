@@ -17,15 +17,16 @@ import (
 
 // RESTHandlers serves /v1/rest/* merchant resources.
 type RESTHandlers struct {
-	Accounts *dbstore.AccountStore
-	Products *dbstore.ProductStore
-	Forms    *dbstore.FormStore
-	Keys     *dbstore.APIKeyStore
-	Sales    *dbstore.SaleStore
-	Sessions *auth.Sessions
-	Pay      *payments.Service
-	Webhooks *dbstore.WebhookStore
-	Domains  *dbstore.DomainStore
+	Accounts       *dbstore.AccountStore
+	Products       *dbstore.ProductStore
+	Forms          *dbstore.FormStore
+	Keys           *dbstore.APIKeyStore
+	Sales          *dbstore.SaleStore
+	Sessions       *auth.Sessions
+	Pay            *payments.Service
+	Webhooks       *dbstore.WebhookStore
+	SystemSettings *dbstore.SystemSettingStore
+	Domains        *dbstore.DomainStore
 	// ChipProbe validates credentials against CHIP at save time.
 	ChipProbe interface {
 		ValidateCredentials(ctx context.Context, secret string) error
@@ -62,6 +63,9 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("PUT /v1/rest/forms/{id}/tracking", h.authed(h.putFormTracking))
 	mux.Handle("PUT /v1/rest/forms/{id}/settings", h.authed(h.putFormSettings))
 	mux.HandleFunc("GET /v1/templates", h.listTemplates)
+	mux.HandleFunc("GET /v1/system-settings/public", h.publicSystemSettings)
+	mux.Handle("GET /v1/system-settings", h.authed(h.listSystemSettings))
+	mux.Handle("PUT /v1/system-settings", h.authed(h.setSystemSetting))
 	mux.Handle("POST /v1/templates/use", h.authed(h.useTemplate))
 	mux.Handle("GET /v1/cf/start", h.authed(h.cfStart))
 	mux.HandleFunc("GET /v1/cf/callback", h.cfCallback)

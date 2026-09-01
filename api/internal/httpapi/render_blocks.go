@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"strings"
 
 	"html/template"
 	"log/slog"
@@ -84,12 +85,19 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 			themeBg = template.HTMLEscapeString(v)
 		}
 	}
+	footerText := "Dikuasakan oleh <strong>JomForm</strong>"
+	if h.SystemSettings != nil {
+		if v, ferr := h.SystemSettings.Get(r.Context(), "site_footer_text"); ferr == nil && strings.TrimSpace(v) != "" {
+			footerText = template.HTMLEscapeString(v)
+		}
+	}
 	var cfgTracking string
 	_ = cfgTracking
 	if err := blockTmpl.Execute(w, map[string]any{
 		"Slug": f.Slug, "Title": f.Title, "Blocks": blocks,
 		"TrackHead":    headInjection(globalTr, formTrackingHead(f)),
 		"ThemePrimary": themePrimary, "ThemeBg": themeBg, "LogoURL": f.LogoURL,
+		"FooterText": footerText,
 	}); err != nil {
 		slog.Error("form_render_blocks", "err", err)
 	}
@@ -157,7 +165,7 @@ var blockTmpl = template.Must(template.New("blocks").
 {{end}}
   <div class="total"><span>Jumlah</span><span id="total">RM0.00</span></div>
   <button type="submit" form="of">Teruskan ke Pembayaran</button>
-  <p class="brand">Dikuasakan oleh <strong>JomForm</strong></p>
+  <p class="brand">{{.FooterText}}</p>
 </form>
 <script>
 (function(){

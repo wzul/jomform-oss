@@ -20,12 +20,13 @@ import (
 
 // PublicHandlers serves buyer-facing order forms.
 type PublicHandlers struct {
-	Forms    *dbstore.FormStore
-	Sales    *dbstore.SaleStore
-	Accounts *dbstore.AccountStore
-	Products *dbstore.ProductStore
-	Pay      *payments.Service
-	BaseURL  string
+	Forms          *dbstore.FormStore
+	Sales          *dbstore.SaleStore
+	Accounts       *dbstore.AccountStore
+	Products       *dbstore.ProductStore
+	Pay            *payments.Service
+	SystemSettings *dbstore.SystemSettingStore
+	BaseURL        string
 }
 
 // RegisterRoutes wires public endpoints.

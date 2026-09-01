@@ -99,6 +99,7 @@ func main() {
 			Accounts: accounts, Products: products, Forms: formsStore,
 			Keys: keys, Sales: sales, Sessions: sessions, ChipProbe: chip.New(""),
 			SecretsKey: decryptKey, Pay: pay, Webhooks: whStore, Domains: dbstore.NewDomainStore(pool),
+			SystemSettings: dbstore.NewSystemSettingStore(pool),
 		}
 		pay.OnPaid = func(ctx context.Context, accountID, event string, payload map[string]any) {
 			httpapi.DispatchWebhooks(ctx, rest, whStore, accountID, event, payload)
@@ -118,6 +119,7 @@ func main() {
 		deps.Public = &httpapi.PublicHandlers{
 			Forms: formsStore, Sales: sales, Accounts: accounts,
 			Products: products, Pay: pay, BaseURL: cfg.AppBaseURL,
+			SystemSettings: dbstore.NewSystemSettingStore(pool),
 		}
 
 		// Subscription charge runner: hourly sweep for due charges + overdue cancels.
