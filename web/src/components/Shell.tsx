@@ -53,7 +53,7 @@ export function Shell({
     { key: "forms", href: "/forms", label: t("nav.forms"), icon: "✎" },
     { key: "products", href: "/products", label: t("prod.title"), icon: "◧" },
     { key: "settings", href: "/settings", label: t("nav.settings"), icon: "⚙" },
-        { key: "profile", href: "/profile", label: "Profile", icon: "👤" },
+        { key: "profile", href: "/profile", label: t("prof.title"), icon: "👤" },
   ];
 
   return (
@@ -104,7 +104,7 @@ export function Shell({
           </div>
           {spaces.length > 0 && (
             <div className="mt-2 px-2">
-              <label className="text-[10px] uppercase tracking-wider text-[var(--jf-muted)]">Space</label>
+              <label className="text-[10px] uppercase tracking-wider text-[var(--jf-muted)]">{t("common.space")}</label>
               <select
                 value={space}
                 onChange={(e) => switchSpace(e.target.value)}

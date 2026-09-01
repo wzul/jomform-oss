@@ -16,11 +16,7 @@ type Profile = {
 
 type ProfileTab = "identity" | "security" | "passkeys";
 
-const TABS: { id: ProfileTab; label: string; short: string }[] = [
-  { id: "identity", label: "Identity", short: "Identity" },
-  { id: "security", label: "Security", short: "Keselamatan" },
-  { id: "passkeys", label: "Passkeys", short: "Passkey" },
-];
+const TAB_IDS: ProfileTab[] = ["identity", "security", "passkeys"];
 
 function loadStoredTab(): ProfileTab {
   if (typeof window === "undefined") return "identity";
@@ -34,6 +30,7 @@ function loadStoredTab(): ProfileTab {
 }
 
 export default function ProfilePage() {
+  const { t } = useI18n();
   const [tab, setTab] = useState<ProfileTab>(loadStoredTab);
   const [p, setP] = useState<Profile | null>(null);
   const [name, setName] = useState("");
@@ -78,9 +75,9 @@ export default function ProfilePage() {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    if (r.ok) { setMsg("Saved ✓"); load(); return true; }
+    if (r.ok) { setMsg(t("prof.saved")); load(); return true; }
     const d = await r.json().catch(() => ({}));
-    setErr(d.error || "Failed");
+    setErr(d.error || t("prof.failed"));
     return false;
   }
 
@@ -108,34 +105,34 @@ export default function ProfilePage() {
       const fin = await fetch("/api/auth/passkeys/register/finish", {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
       });
-      if (fin.ok) { setMsg("Passkey berdaftar ✓"); load(); }
-      else setErr((await fin.json().catch(() => ({}))).error || "Gagal daftar passkey");
+      if (fin.ok) { setMsg(t("prof.passkeyRegistered")); load(); }
+      else setErr((await fin.json().catch(() => ({}))).error || t("prof.passkeyRegFailed"));
     } catch {
-      setErr("Passkey dibatalkan atau tidak disokong pelayar.");
+      setErr(t("prof.passkeyUnsupported"));
     }
   }
 
   return (
     <Shell active="profile">
       <main className="mx-auto max-w-2xl flex-1 px-6 py-8">
-        <h1 className="text-2xl font-bold">Profile</h1>
+        <h1 className="text-2xl font-bold">{t("prof.title")}</h1>
 
         {/* Tab bar */}
         <div className="mt-4 flex gap-1 border-b border-slate-200">
-          {TABS.map((t) => (
+          {TAB_IDS.map((id) => (
             <button
-              key={t.id}
-              onClick={() => setTab(t.id)}
-              aria-selected={tab === t.id}
+              key={id}
+              onClick={() => setTab(id)}
+              aria-selected={tab === id}
               role="tab"
               className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium sm:px-4 ${
-                tab === t.id
+                tab === id
                   ? "border-slate-900 text-slate-900"
                   : "border-transparent text-slate-500 hover:text-slate-800"
               }`}
             >
-              <span className="sm:hidden">{t.short}</span>
-              <span className="hidden sm:inline">{t.label}</span>
+              <span className="sm:hidden">{t(`prof.${id}` as const)}</span>
+              <span className="hidden sm:inline">{t(`prof.${id}` as const)}</span>
             </button>
           ))}
         </div>
@@ -148,28 +145,28 @@ export default function ProfilePage() {
         {tab === "identity" && (
           <>
             <section className="jf-card mt-6 p-6">
-              <h2 className="text-lg font-semibold">Identity</h2>
-              <label className="mt-3 block text-xs text-slate-500">Display name</label>
-              <input value={name} onChange={(e) => setName(e.target.value)} className="jf-input mt-1" placeholder="Your name" />
+              <h2 className="text-lg font-semibold">{t("prof.identity")}</h2>
+              <label className="mt-3 block text-xs text-slate-500">{t("prof.displayName")}</label>
+              <input value={name} onChange={(e) => setName(e.target.value)} className="jf-input mt-1" placeholder={t("prof.yourName")} />
               <button
                 onClick={() => post("/api/auth/profile/name", { name })}
                 className="jf-btn-primary mt-3"
-              >Save name</button>
+              >{t("prof.saveName")}</button>
             </section>
 
             <section className="jf-card mt-6 p-6">
-              <h2 className="text-lg font-semibold">Email address</h2>
+              <h2 className="text-lg font-semibold">{t("prof.emailAddress")}</h2>
               <p className="mt-1 text-xs text-slate-400">
-                {"Current: "}
+                {t("prof.current")}{" "}
                 {p ? (
                   <strong>{p.email}</strong>
                 ) : (
                   <span aria-hidden="true" className="inline-block h-3 w-44 animate-pulse rounded bg-slate-200 align-middle" />
                 )}
               </p>
-              <label className="mt-3 block text-sm">New email</label>
+              <label className="mt-3 block text-sm">{t("prof.newEmail")}</label>
               <input value={email} onChange={(e) => setEmail(e.target.value)} className="jf-input mt-1" placeholder="new@email.com" />
-              <label className="mt-3 block text-sm">Current password (to confirm)</label>
+              <label className="mt-3 block text-sm">{t("prof.currentPwConfirm")}</label>
               <input type="password" value={pwCurrent} onChange={(e) => setPwCurrent(e.target.value)} className="jf-input mt-1" />
               <button
                 onClick={async () => {
@@ -178,7 +175,7 @@ export default function ProfilePage() {
                   }
                 }}
                 className="jf-btn-primary mt-3"
-              >Change email</button>
+              >{t("prof.changeEmail")}</button>
             </section>
           </>
         )}
@@ -187,42 +184,42 @@ export default function ProfilePage() {
         {tab === "security" && (
           <>
             <section className="jf-card mt-6 p-6">
-              <h2 className="text-lg font-semibold">Password</h2>
-              <label className="mt-3 block text-sm">Current password</label>
+              <h2 className="text-lg font-semibold">{t("prof.password")}</h2>
+              <label className="mt-3 block text-sm">{t("prof.currentPw")}</label>
               <input type="password" value={pwCurrent} onChange={(e) => setPwCurrent(e.target.value)} className="jf-input mt-1" />
-              <label className="mt-2 block text-sm">New password (min. 10 chars)</label>
+              <label className="mt-2 block text-sm">{t("prof.newPw")}</label>
               <input type="password" value={pwNew} onChange={(e) => setPwNew(e.target.value)} className="jf-input mt-1" />
-              <label className="mt-2 block text-sm">Confirm new password</label>
+              <label className="mt-2 block text-sm">{t("prof.confirmPw")}</label>
               <input type="password" value={pwConfirm} onChange={(e) => setPwConfirm(e.target.value)} className="jf-input mt-1" />
               <button
                 onClick={async () => {
-                  if (pwNew !== pwConfirm) { setErr("Passwords don't match"); return; }
+                  if (pwNew !== pwConfirm) { setErr(t("prof.pwMismatch")); return; }
                   await post("/api/auth/change-password", { password: pwCurrent, new_password: pwNew });
                   setPwCurrent(""); setPwNew(""); setPwConfirm("");
                 }}
                 className="jf-btn-primary mt-3"
-              >Change password</button>
+              >{t("prof.changePw")}</button>
             </section>
 
             <section className="jf-card mt-6 p-6">
-              <h2 className="text-lg font-semibold">Two-factor authentication (TOTP)</h2>
+              <h2 className="text-lg font-semibold">{t("prof.twoFa")}</h2>
               <p className="mt-1 text-sm text-slate-500">
-                Status: <strong>{p?.totp_enabled ? "Enabled ✓" : "Not enabled"}</strong>
+                {t("prof.status")} <strong>{p?.totp_enabled ? t("prof.enabled") : t("prof.notEnabled")}</strong>
               </p>
               <button
                 onClick={() => post("/api/auth/2fa/setup", {})}
                 className="jf-btn-ghost mt-3"
               >
-                {p?.totp_enabled ? "Re-setup 2FA" : "Set up 2FA"}
+                {p?.totp_enabled ? t("prof.resetup2fa") : t("prof.setup2fa")}
               </button>
               {p?.totp_enabled && (
                 <button
                   onClick={async () => {
-                    const code = window.prompt("Enter a current 2FA code to disable:");
+                    const code = window.prompt(t("prof.enter2faCode"));
                     if (code) await post("/api/auth/2fa/disable", { totp_code: code });
                   }}
                   className="ml-2 px-4 py-2 text-sm text-red-500 hover:underline"
-                >Disable 2FA</button>
+                >{t("prof.disable2fa")}</button>
               )}
             </section>
           </>
@@ -231,12 +228,12 @@ export default function ProfilePage() {
         {/* Passkeys tab */}
         {tab === "passkeys" && (
           <section className="jf-card mt-6 p-6">
-            <h2 className="text-lg font-semibold">Passkeys</h2>
+            <h2 className="text-lg font-semibold">{t("prof.passkeys")}</h2>
             <p className="mt-1 text-sm text-slate-500">
-              Log masuk dengan cap jari / wajah / PIN peranti — tanpa kata laluan.
+              {t("prof.passkeyDesc")}
             </p>
             <button onClick={registerPasskey} className="jf-btn-primary mt-3">
-              Daftar passkey
+              {t("prof.registerPasskey")}
             </button>
             {passkeys.length > 0 && (
               <ul className="mt-3 space-y-1.5">
@@ -245,12 +242,12 @@ export default function ProfilePage() {
                     <span className="font-mono text-slate-500">{k.id.slice(0, 20)}…</span>
                     <button
                       onClick={async () => {
-                        if (!window.confirm("Buang passkey ini?")) return;
+                        if (!window.confirm(t("prof.removePasskeyConfirm"))) return;
                         await fetch(`/api/auth/passkeys/${k.id}`, { method: "DELETE" });
                         load();
                       }}
                       className="text-red-500 hover:underline"
-                    >Buang</button>
+                    >{t("prof.remove")}</button>
                   </li>
                 ))}
               </ul>
