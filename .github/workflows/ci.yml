@@ -15,6 +15,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # setup-go resolves go-version-file (and cache-dependency-path)
+      # relative to $GITHUB_WORKSPACE, NOT to defaults.run.working-directory
+      # — defaults only apply to `run` steps. So the api/ prefix is correct
+      # here: setup runs at the workspace root, then the Vet/Test steps run
+      # inside api/.
       - uses: actions/setup-go@v7
         with:
           go-version-file: api/go.mod
@@ -29,11 +34,20 @@ jobs:
   web:
     name: Web — build check
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
     steps:
       - uses: actions/checkout@v7
+
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-      - name: Install & build
-        run: |
-          if [ -d web ]; then cd web && (npm ci || echo "web not scaffolded yet") && (npm run build || true); else echo "web not scaffolded yet"; fi
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build
