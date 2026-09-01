@@ -42,12 +42,13 @@ func (h *RESTHandlers) listWebhooks(w http.ResponseWriter, r *http.Request, actx
 		return
 	}
 	type row struct {
-		ID  string `json:"id"`
-		URL string `json:"url"`
+		ID     string   `json:"id"`
+		URL    string   `json:"url"`
+		Events []string `json:"events"`
 	}
 	out := make([]row, 0, len(hooks))
 	for _, wh := range hooks {
-		out = append(out, row{ID: wh.ID, URL: wh.URL})
+		out = append(out, row{ID: wh.ID, URL: wh.URL, Events: wh.Events})
 	}
 	writeJSON(w, http.StatusOK, out)
 }
