@@ -5,3 +5,4 @@ ALTER TABLE forms DROP COLUMN IF EXISTS redirect_failure;
 ALTER TABLE forms DROP COLUMN IF EXISTS allow_embed;
 ALTER TABLE forms DROP COLUMN IF EXISTS logo_url;
 ALTER TABLE forms DROP COLUMN IF EXISTS is_template;
+ALTER TABLE accounts DROP COLUMN IF EXISTS cf_token_enc;

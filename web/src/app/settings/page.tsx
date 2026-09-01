@@ -40,6 +40,7 @@ export default function Settings() {
   const [domain, setDomain] = useState("");
   const [domainInput, setDomainInput] = useState("");
   const [domainVerified, setDomainVerified] = useState(false);
+  const [domains, setDomains] = useState<{ id: string; domain: string; verified: boolean }[]>([]);
   const [domainMsg, setDomainMsg] = useState("");
   const [tin, setTin] = useState("");
   const [msic, setMsic] = useState("");
@@ -53,12 +54,12 @@ export default function Settings() {
     return Promise.all([
       fetch("/api/rest/settings/chip").then((r) => (r.ok ? r.json() : null)),
       fetch("/api/rest/keys").then((r) => (r.ok ? r.json() : [])),
-      fetch("/api/rest/settings/custom-domain").then((r) => (r.ok ? r.json() : null)),
+      fetch("/api/rest/domains").then((r) => (r.ok ? r.json() : [])),
       fetch("/api/rest/webhooks").then((r) => (r.ok ? r.json() : [])),
       fetch("/api/rest/settings/einvoice").then((r) => (r.ok ? r.json() : null)),
       fetch("/api/auth/social").then((r) => (r.ok ? r.json() : [])),
-    ]).then(([s, k, d, whs, ei, so]) => {
-      setSocial(Array.isArray(so) ? so : []);
+    ]).then(([s, k, dList, whs, ei, so]) => {
+      setDomains(Array.isArray(dList) ? dList : []);
       setWebhooks(Array.isArray(whs) ? whs : []);
       if (ei) { setTin(ei.tin || ""); setMsic(ei.msic || ""); }
       if (s) {
@@ -71,10 +72,6 @@ export default function Settings() {
         setVerified(s.configured && !!(s.secret_key || s.secret_key_masked));
       }
       setKeys(k || []);
-      if (d && d.domain) {
-        setDomain(d.domain);
-        setDomainVerified(!!d.verified);
-      }
     });
   }, []);
 
@@ -140,41 +137,20 @@ export default function Settings() {
   async function setDomainClaim(e: React.FormEvent) {
     e.preventDefault();
     setDomainMsg("");
-    const r = await fetch("/api/rest/settings/custom-domain", {
-      method: "PUT",
+    const r = await fetch("/api/rest/domains", {
+      method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ domain: domainInput }),
     });
     if (r.ok) {
       const d = await r.json();
-      setMsg(`Custom domain "${d.domain}" saved. Add a CNAME to jomform.com, then verify.`);
+      setDomainInput("");
+      setDomainMsg(`${d.domain} added. Add CNAME ${d.domain} → jomform.com, then Verify.`);
       await load();
     } else {
       const d = await r.json().catch(() => ({}));
-      setDomainMsg(d.error || "Failed to save domain");
+      setDomainMsg(d.error || "Failed to add domain");
     }
-  }
-
-  async function verifyDomain() {
-    setDomainMsg("");
-    const r = await fetch("/api/rest/settings/custom-domain/verify", { method: "POST" });
-    const d = await r.json().catch(() => ({}));
-    if (d.verified) {
-      setDomainVerified(true);
-      setDomainMsg(`Verified! Your form links now work on https://${d.domain}/f/<slug>`);
-    } else {
-      setDomainMsg(d.detail || "Not verified yet — check the CNAME records.");
-    }
-    await load();
-  }
-
-
-  async function clearDomain() {
-    await fetch("/api/rest/settings/custom-domain", { method: "DELETE" });
-    setDomain("");
-    setDomainVerified(false);
-    setDomainMsg("Custom domain removed.");
-    await load();
   }
 
   function toggleMethod(id: string) {
@@ -298,28 +274,30 @@ export default function Settings() {
           </form>
         </section>
 
-        {/* ── custom domain ── */}
+        {/* ── custom domains (multi) ── */}
         <section className="jf-card mt-6 p-6">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold">Custom domain</h2>
-            {domain && (
-              <span
-                className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                  domainVerified
-                    ? "border border-emerald-200 bg-emerald-50 text-emerald-700"
-                    : "border border-amber-200 bg-amber-50 text-amber-700"
-                }`}
-              >
-                {domainVerified ? "VERIFIED" : "PENDING DNS"}
-              </span>
-            )}
-          </div>
+          <h2 className="text-lg font-semibold">Custom domains</h2>
           <p className="mt-2 text-sm text-slate-400">
-            Serve your forms on your own domain. Add a{" "}
-            <code className="rounded bg-slate-100 px-1">CNAME {domain || "<your-domain>"} → jomform.com</code>{" "}
-            (DNS only), then verify.
+            Serve your forms on your own domains — as many as you like. For each: add a{" "}
+            <code className="rounded bg-slate-100 px-1">CNAME your-domain → jomform.com</code> (DNS only), then Verify.
+            Routing + TLS certificate are provisioned automatically.
           </p>
           {domainMsg && <p className="mt-3 rounded-lg bg-indigo-50 px-3 py-2 text-sm text-indigo-700">{domainMsg}</p>}
+          <div className="mt-4 rounded-lg border border-slate-200 p-3">
+            <p className="text-xs font-medium uppercase tracking-wider text-slate-500">
+              Auto-setup with Cloudflare
+            </p>
+            <p className="mt-1 text-xs text-slate-500">
+              One-click: approve Cloudflare scopes (DNS edit) and new domains get their CNAME + routing created automatically. Access token is stored encrypted so future domains provision themselves.
+            </p>
+            <div className="mt-2 flex gap-2">
+              <a href="/api/cf/start" className="jf-btn-ghost px-4 text-xs">Login with Cloudflare</a>
+              <button
+                onClick={async () => { await fetch("/api/cf/disconnect", { method: "POST" }); setDomainMsg("Cloudflare disconnected."); load(); }}
+                className="px-3 text-xs text-slate-500 hover:text-red-500"
+              >Disconnect</button>
+            </div>
+          </div>
           <form onSubmit={setDomainClaim} className="mt-4 flex flex-wrap gap-2">
             <input
               value={domainInput}
@@ -327,22 +305,36 @@ export default function Settings() {
               placeholder="shop.yourdomain.com"
               className="jf-input min-w-56 flex-1"
             />
-            <button className="jf-btn-primary px-5 text-sm" type="submit">
-              {domain ? "Replace" : "Add domain"}
-            </button>
-            {domain && !domainVerified && (
-              <button type="button" onClick={verifyDomain} className="jf-btn-ghost px-4 text-sm">
-                Verify now
-              </button>
-            )}
+            <button className="jf-btn-primary px-5 text-sm" type="submit">Add domain</button>
           </form>
-          {domain && (
-            <p className="mt-2 text-xs text-slate-500">
-              Current claim: <strong>{domain}</strong>
-              {domainVerified ? " — verified ✓" : " — pending DNS"}
-            </p>
-          )}
-
+          <ul className="mt-4 space-y-2">
+            {domains.map((d: { id: string; domain: string; verified: boolean }) => (
+              <li key={d.id} className="flex items-center justify-between gap-3 rounded-lg border border-[var(--jf-border)] px-4 py-2.5">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium">{d.domain}</p>
+                  <p className={`text-[11px] ${d.verified ? "text-emerald-600" : "text-amber-600"}`}>
+                    {d.verified ? "verified ✓" : "pending DNS — CNAME to jomform.com, then Verify"}
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  {!d.verified && (
+                    <button
+                      onClick={async () => {
+                        const r = await fetch(`/api/rest/domains/${d.id}/verify`, { method: "POST" });
+                        setDomainMsg(r.ok ? `${d.domain} verified ✓` : `${d.domain}: verify failed`);
+                        load();
+                      }}
+                      className="text-xs text-[#5e6ad2] hover:underline"
+                    >Verify</button>
+                  )}
+                  <button
+                    onClick={async () => { await fetch(`/api/rest/domains/${d.id}`, { method: "DELETE" }); load(); }}
+                    className="text-xs text-slate-500 hover:text-red-500"
+                  >Remove</button>
+                </div>
+              </li>
+            ))}
+          </ul>
         </section>
 
         {/* ── Tracking scripts ── */}
