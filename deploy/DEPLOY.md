@@ -1,0 +1,72 @@
+# Building and shipping JomForm images
+
+One guarded entry point for building the api (or web) image and shipping it to
+the VPS. It exists because during the v1.0.0 deploy two agents built images
+from the same working tree at the same time, and prod briefly ran a pre-release
+binary labelled as the release.
+
+## What the script guarantees
+
+| Guarantee | Mechanism |
+|---|---|
+| Never builds from a dirty tree | exits non-zero if `git status --porcelain` is non-empty |
+| Two builds can't interleave | `flock -n` on `/tmp/jomform-build.lock` — second invocation fails fast instead of racing |
+| Provenance | stamps `VERSION` (git describe) + `COMMIT` (rev-parse) as build args and OCI labels; `docker image inspect` ties any image to an exact commit |
+| Works with the scp pattern | `docker save | gzip` tarball, optional `scp` when `SSH_HOST` is set — no registry needed |
+
+The api binary logs `version=... commit=...` at startup
+(`api/internal/version`), so after deploy `docker compose logs api` proves
+exactly which commit is running.
+
+## Usage
+
+```bash
+./deploy/build-and-ship.sh            # builds jomform-api from api/Dockerfile
+./deploy/build-and-ship.sh v1.0.1     # explicit version stamp instead of git describe
+```
+
+Environment overrides:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `IMAGE` | `jomform-api` | image name (and tarball name) |
+| `CONTEXT` | `api` | build context directory |
+| `DOCKERFILE` | `api/Dockerfile` | Dockerfile path |
+| `OUT_DIR` | `/tmp` | tarball output (kept **outside** the repo on purpose — anything inside the repo would trip the dirty-tree guard) |
+| `SSH_HOST` | unset | set to scp the tarball (e.g. the prod VPS IP) |
+| `SSH_USER` / `SSH_PORT` / `SSH_PATH` | `root` / `22` / `/tmp` | scp destination details |
+| `LOCK_FILE` | `/tmp/jomform-build.lock` | single-writer lock path |
+
+Example — build the web image instead:
+
+```bash
+IMAGE=jomform-web CONTEXT=web DOCKERFILE=web/Dockerfile ./deploy/build-and-ship.sh
+```
+
+## Deploy order (the whole sequence, every time)
+
+1. **Tag + release first.** Merge all PRs, then
+   `git tag vX.Y.Z && git push origin vX.Y.Z && gh release create vX.Y.Z`.
+   Never build before the tag exists.
+2. `./deploy/build-and-ship.sh` on a clean tree (the script refuses otherwise).
+3. Ship the tarball (`SSH_HOST=... ./deploy/build-and-ship.sh` or scp manually).
+4. On the server: `docker load -i /tmp/jomform-api-vX.Y.Z.tar.gz`.
+5. On the server: `docker tag jomform-api:vX.Y.Z jomform-api:latest`.
+   Compose runs `:latest` — if you skip this, `restart`/`up` keeps the old
+   image and you deploy nothing.
+6. On the server: `docker compose up -d --force-recreate api`
+   (plain `restart` does **not** pick up the newly loaded image).
+7. Verify: `docker compose logs api | head` must show
+   `version=vX.Y.Z commit=<sha>` matching the tag; then curl the health route.
+
+Steps 4–7 are printed by the script at the end as a reminder; they are always
+run on the server manually.
+
+## Prerequisite
+
+The api image Dockerfile (`api/Dockerfile`) is being added by the Dockerfile
+issue. Until it lands, the script exits with a clear error pointing at it.
+When it lands it should declare `ARG VERSION`, `ARG COMMIT`, `ARG BUILD_DATE`
+and wire them into the `go build -ldflags "-X ...version.Version=$VERSION -X
+...version.Commit=$COMMIT"` line; the OCI labels set by this script already
+carry provenance regardless.
