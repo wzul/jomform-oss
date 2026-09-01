@@ -67,6 +67,7 @@ func (s *Server) upsertForm(
 			Slug:      in.Slug,
 			Title:     in.Title,
 			Config:    orEmptyMap(in.Config),
+			Theme:     orEmptyMap(nil), // never NULL: theme is NOT NULL
 			Status:    "draft",
 		}
 		if err := s.deps.Forms.Create(ctx, f); err != nil {
@@ -74,7 +75,9 @@ func (s *Server) upsertForm(
 		}
 		return nil, map[string]string{"status": "created", "form_id": f.ID, "slug": f.Slug}, nil
 	}
-	if err := s.deps.Forms.Update(ctx, acc, in.FormID, in.Title, orEmptyMap(in.Config), nil); err != nil {
+	// Update store treats nil maps as "leave unchanged", so an omitted
+	// config (and the nil theme below) keep the stored values intact.
+	if err := s.deps.Forms.Update(ctx, acc, in.FormID, in.Title, in.Config, nil); err != nil {
 		return nil, nil, err
 	}
 	return nil, map[string]string{"status": "updated", "form_id": in.FormID}, nil

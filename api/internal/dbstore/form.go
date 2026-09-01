@@ -43,8 +43,15 @@ func NewFormStore(pool *pgxpool.Pool) *FormStore { return &FormStore{pool: pool}
 const formSelect = `SELECT id, account_id, slug, title, config, theme, status, is_main, redirect_success, redirect_failure, allow_embed, logo_url, is_template, created_at, updated_at
 	FROM forms WHERE deleted_at IS NULL`
 
-// Create inserts a form.
+// Create inserts a form. Nil config/theme maps are coerced to {} so a
+// missing key can never violate the NOT NULL constraints (SQLSTATE 23502).
 func (s *FormStore) Create(ctx context.Context, f *Form) error {
+	if f.Config == nil {
+		f.Config = map[string]any{}
+	}
+	if f.Theme == nil {
+		f.Theme = map[string]any{}
+	}
 	return s.pool.QueryRow(ctx,
 		`INSERT INTO forms (account_id, slug, title, config, theme, status, redirect_success, redirect_failure, allow_embed, logo_url, is_template)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
@@ -85,9 +92,13 @@ func (s *FormStore) GetByID(ctx context.Context, accountID, id string) (*Form, e
 }
 
 // Update mutates title/config/theme (soft-deleted forms are immutable).
+// A nil map means "leave unchanged": the SQL COALESCEs nil config/theme over
+// the stored values, so partial payloads (e.g. PATCH without a theme key,
+// MCP upsert_form without config) can never write NULL into a NOT NULL
+// jsonb column (SQLSTATE 23502). Callers that want to clear a map send {}.
 func (s *FormStore) Update(ctx context.Context, accountID, id, title string, config, theme map[string]any) error {
 	tag, err := s.pool.Exec(ctx,
-		`UPDATE forms SET title=$3, config=$4, theme=$5, updated_at=now()
+		`UPDATE forms SET title=$3, config=COALESCE($4, config), theme=COALESCE($5, theme), updated_at=now()
 		 WHERE id=$2 AND account_id=$1 AND deleted_at IS NULL`,
 		accountID, id, title, config, theme)
 	if err != nil {
