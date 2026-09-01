@@ -115,7 +115,11 @@ func (s *Service) ProcessCallback(ctx context.Context, p *chip.Purchase) error {
 			return err
 		}
 		if s.OnPaid != nil {
-			go s.OnPaid(ctx, sale.AccountID, "sale.paid", map[string]any{
+			event := "sale.paid"
+			if sale.SaleType == dbstore.SaleTypeSubscription {
+				event = "subscription.charged"
+			}
+			go s.OnPaid(ctx, sale.AccountID, event, map[string]any{
 				"ref_code": sale.RefCode, "amount_sen": sale.TotalSen,
 				"buyer_email": sale.Client.Email, "purchase_id": p.ID,
 			})
@@ -143,6 +147,11 @@ func (s *Service) ProcessCallback(ctx context.Context, p *chip.Purchase) error {
 			return s.activateSubscription(ctx, sale)
 		}
 	case p.Status == chip.StatusError:
+		if s.OnPaid != nil {
+			go s.OnPaid(ctx, sale.AccountID, "sale.failed", map[string]any{
+				"ref_code": sale.RefCode, "buyer_email": sale.Client.Email,
+			})
+		}
 		if err := s.Sales.SetStatus(ctx, sale.ID, dbstore.SaleFailed); err != nil {
 			return err
 		}

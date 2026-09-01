@@ -106,6 +106,7 @@ func main() {
 		mcpSrv := mcpsrv.New(&mcpsrv.Deps{
 			Accounts: accounts, Products: products, Sales: sales,
 			Subs: subs, Keys: keys, Forms: dbstore.NewFormStore(pool),
+			Webhooks:   dbstore.NewWebhookStore(pool),
 			DecryptKey: decryptKey,
 		}, chip.New(""), decryptKey, pay)
 		deps.MCP = mcpSrv

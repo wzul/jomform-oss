@@ -43,10 +43,11 @@ export default function Settings() {
   const [domainMsg, setDomainMsg] = useState("");
   const [tin, setTin] = useState("");
   const [msic, setMsic] = useState("");
-  const [webhooks, setWebhooks] = useState<{ id: string; url: string }[]>([]);
+  const [webhooks, setWebhooks] = useState<{ id: string; url: string; events: string[] }[]>([]);
   const [whUrl, setWhUrl] = useState("");
   const [whSecret, setWhSecret] = useState("");
   const [trackingHead, setTrackingHead] = useState("");
+  const [social, setSocial] = useState<{ provider: string; email: string; linked_at: string }[]>([]);
 
   const load = useCallback(() => {
     return Promise.all([
@@ -55,7 +56,9 @@ export default function Settings() {
       fetch("/api/rest/settings/custom-domain").then((r) => (r.ok ? r.json() : null)),
       fetch("/api/rest/webhooks").then((r) => (r.ok ? r.json() : [])),
       fetch("/api/rest/settings/einvoice").then((r) => (r.ok ? r.json() : null)),
-    ]).then(([s, k, d, whs, ei]) => {
+      fetch("/api/auth/social").then((r) => (r.ok ? r.json() : [])),
+    ]).then(([s, k, d, whs, ei, so]) => {
+      setSocial(Array.isArray(so) ? so : []);
       setWebhooks(Array.isArray(whs) ? whs : []);
       if (ei) { setTin(ei.tin || ""); setMsic(ei.msic || ""); }
       if (s) {
@@ -246,11 +249,7 @@ export default function Settings() {
             </div>
             <div>
               <label className="text-xs text-slate-500">Mode</label>
-              <p className="mt-1 text-sm">
-                {mode === "live"
-                  ? "Live — pasted key was sk_live_…"
-                  : "Test — pasted key was sk_test_… (or custom key)"}
-              </p>
+              <p className="mt-1 text-sm">{mode === "live" ? "Live" : "Test"}</p>
             </div>
 
             <div>
@@ -406,38 +405,70 @@ export default function Settings() {
           </form>
           <ul className="mt-3 space-y-2">
             {webhooks.map((wh) => (
-              <li key={wh.id} className="flex items-center justify-between rounded-lg border border-[var(--jf-border)] px-4 py-2.5">
-                <span className="truncate font-mono text-xs">{wh.url}</span>
+              <li key={wh.id} className="flex items-center justify-between gap-3 rounded-lg border border-[var(--jf-border)] px-4 py-2.5">
+                <div className="min-w-0">
+                  <p className="truncate font-mono text-xs">{wh.url}</p>
+                  <p className="mt-0.5 text-[11px] text-slate-400">{(wh.events || []).join(", ")}</p>
+                </div>
                 <button onClick={async () => { await fetch(`/api/rest/webhooks/${wh.id}`, { method: "DELETE" }); load(); }}
-                  className="text-xs text-slate-500 hover:text-red-500">✕</button>
+                  className="shrink-0 text-xs text-slate-500 hover:text-red-500">✕</button>
               </li>
             ))}
           </ul>
         </section>
 
-        {/* ── API keys ── */}
+        {/* ── MCP / OAuth 2.1 connected agents ── */}
         <section className="jf-card mt-6 p-6">
-          <h2 className="text-lg font-semibold">API keys (AI agent / MCP)</h2>
+          <h2 className="text-lg font-semibold">Connected agents (MCP)</h2>
           <p className="mt-1 text-sm text-slate-400">
-            Endpoint <code className="rounded bg-slate-100 px-1">https://jomform.com/mcp</code>, Bearer auth.
+            Server URL <code className="rounded bg-slate-100 px-1">https://mcp.jomform.com/mcp</code> —
+            agents discover everything automatically via{" "}
+            <code className="rounded bg-slate-100 px-1">/.well-known/oauth-authorization-server</code>{" "}
+            (OAuth 2.1, dynamic client registration, PKCE). No API keys needed.
           </p>
-          <button onClick={genKey} className="mt-3 rounded-lg bg-emerald-500 px-5 py-2 text-sm font-medium text-white hover:bg-emerald-600">
-            Generate key
-          </button>
-          {newKey && (
-            <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3">
-              <p className="text-xs text-emerald-700">Save it now — never shown again:</p>
-              <code className="mt-1 block break-all font-mono text-sm text-emerald-800">{newKey}</code>
-            </div>
-          )}
           <ul className="mt-4 space-y-2">
             {keys.map((k) => (
               <li key={k.id} className="flex items-center justify-between rounded-lg border border-[var(--jf-border)] px-4 py-2.5">
-                <span className="text-sm">{k.name}</span>
-                <span className="text-xs text-slate-500">{k.scopes.join(", ")}</span>
+                <div>
+                  <p className="text-sm">{k.name}</p>
+                  <p className="text-[11px] text-slate-400">client id: {k.name === "AI Agent Key" ? "(oauth-managed)" : k.name}</p>
+                </div>
+                <button onClick={async () => { await fetch(`/api/rest/keys/${k.id}`, { method: "DELETE" }); load(); }}
+                  className="text-xs text-slate-500 hover:text-red-500">Revoke</button>
               </li>
             ))}
+            {!keys.length && (
+              <li className="rounded-lg border border-dashed border-[var(--jf-border)] px-4 py-3 text-sm text-slate-400">
+                No agents connected yet. Point any MCP client at the server URL — it registers itself.
+              </li>
+            )}
           </ul>
+        </section>
+
+        {/* ── Social login connectors ── */}
+        <section className="jf-card mt-6 p-6">
+          <h2 className="text-lg font-semibold">Connected accounts (login)</h2>
+          <p className="mt-1 text-sm text-slate-400">
+            Link a Google account, then sign in with one click. More providers (Microsoft/Azure, GitHub) can be enabled later — same connector system.
+          </p>
+          <ul className="mt-4 space-y-2">
+            {social.map((l) => (
+              <li key={l.provider} className="flex items-center justify-between rounded-lg border border-[var(--jf-border)] px-4 py-2.5">
+                <div>
+                  <p className="text-sm capitalize">{l.provider} — {l.email}</p>
+                  <p className="text-[11px] text-slate-400">linked {new Date(l.linked_at).toLocaleDateString()}</p>
+                </div>
+                <button onClick={async () => { await fetch(`/api/auth/social/${l.provider}`, { method: "DELETE" }); load(); }}
+                  className="text-xs text-slate-500 hover:text-red-500">Unlink</button>
+              </li>
+            ))}
+            {social.length === 0 && (
+              <li className="text-sm text-slate-400">No linked accounts yet.</li>
+            )}
+          </ul>
+          <a href="/api/oauth/start/google" className="jf-btn-ghost mt-3 inline-block px-4 text-sm">
+            Link Google account
+          </a>
         </section>
       </main>
     </Shell>

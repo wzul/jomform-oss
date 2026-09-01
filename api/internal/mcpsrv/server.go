@@ -21,6 +21,7 @@ type Deps struct {
 	Subs     *dbstore.SubscriptionStore
 	Keys     *dbstore.APIKeyStore
 	Forms    *dbstore.FormStore
+	Webhooks *dbstore.WebhookStore
 	// DecryptKey (ENCRYPTION_KEY hex bytes) enables per-form CHIP override tools.
 	DecryptKey []byte
 }

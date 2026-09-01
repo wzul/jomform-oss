@@ -21,6 +21,7 @@ type AuthHandlers struct {
 	Sessions *auth.Sessions
 	Users    *dbstore.UserStore
 	Accounts *dbstore.AccountStore
+	BaseURL  string
 }
 
 // RegisterRoutes wires auth endpoints onto the mux.
@@ -33,6 +34,12 @@ func (a *AuthHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/auth/2fa/enable", a.handle2FAEnable)
 	mux.HandleFunc("POST /v1/auth/2fa/disable", a.handle2FADisable)
 	mux.HandleFunc("POST /v1/auth/change-password", a.handleChangePassword)
+	// Social login (provider-generic OIDC).
+	mux.HandleFunc("GET /api/auth/oauth/{provider}", a.socialStart)
+	mux.HandleFunc("GET /api/auth/callback/{provider}", a.socialCallback)
+	mux.HandleFunc("GET /api/auth/social", a.listSocial)
+	mux.HandleFunc("DELETE /api/auth/social/{provider}", a.unlinkSocial)
+	mux.HandleFunc("DELETE /v1/auth/social/{provider}", a.unlinkSocial)
 }
 
 // ─── request/response DTOs ───────────────────────────────────────────────────

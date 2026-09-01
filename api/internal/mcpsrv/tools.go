@@ -118,6 +118,28 @@ func (s *Server) registerTools() {
 		Name:        "unpublish_form",
 		Description: "Tarik balik borang dari live (jadikan draft).",
 	}, s.deleteFormMCP)
+	// ── Parity: settings/webhooks ──────────────────────────────────────────
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "set_einvoice",
+		Description: "Set TIN + MSIC LHDN untuk resit e-Invoice (B2B).",
+	}, s.setEinvoice)
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "create_webhook",
+		Description: "Daftar endpoint webhook (events: sale.paid|sale.failed|subscription.charged|*). HMAC-signed.",
+	}, s.createWebhookMCP)
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "list_webhooks",
+		Description: "Senarai semua outbound webhooks akaun.",
+	}, s.listWebhooksMCP)
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "delete_webhook",
+		Description: "Padam satu webhook (id dari list_webhooks).",
+	}, s.deleteWebhookMCP)
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "webhook_deliveries",
+		Description: "Log penghantaran terkini webhook (status_code, attempt, error).",
+	}, s.webhookDeliveriesMCP)
+
 }
 
 // helper: require a write-capable key.

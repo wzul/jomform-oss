@@ -2,17 +2,8 @@
 package httpapi
 
 import (
-	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
-	"log/slog"
 	"net/http"
 	"strings"
-	"time"
-
-	"github.com/wzul/jomform/api/internal/dbstore"
 )
 
 // ─── e-Invoice settings ─────────────────────────────────────────────────────
@@ -91,39 +82,3 @@ func (h *RESTHandlers) deleteWebhook(w http.ResponseWriter, r *http.Request, act
 }
 
 // ─── Dispatcher: called on payment transitions ──────────────────────────────
-
-// DispatchWebhooks fans an event out to all active webhook endpoints of the
-// account, HMAC-signed with each endpoint's secret. Async + log-only failure.
-func DispatchWebhooks(ctx context.Context, store *dbstore.WebhookStore, accountID, event string, payload map[string]any) {
-	hooks, err := store.ActiveForEvent(ctx, accountID, event)
-	if err != nil || len(hooks) == 0 {
-		return
-	}
-	body, _ := json.Marshal(map[string]any{
-		"event":     event,
-		"timestamp": time.Now().UTC().Format(time.RFC3339),
-		"data":      payload,
-	})
-	for _, wh := range hooks {
-		go func(url, secret string) {
-			mac := hmac.New(sha256.New, []byte(secret))
-			mac.Write(body)
-			sig := hex.EncodeToString(mac.Sum(nil))
-			req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(string(body)))
-			if err != nil {
-				return
-			}
-			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("X-JomForm-Event", event)
-			req.Header.Set("X-JomForm-Signature", "sha256="+sig)
-			client := &http.Client{Timeout: 10 * time.Second}
-			resp, err := client.Do(req)
-			if err != nil {
-				slog.Warn("webhook_delivery_failed", "url", url, "err", err)
-				return
-			}
-			defer resp.Body.Close()
-			slog.Info("webhook_delivered", "url", url, "event", event, "status", resp.StatusCode)
-		}(wh.URL, wh.Secret)
-	}
-}

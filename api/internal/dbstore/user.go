@@ -4,6 +4,7 @@ package dbstore
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -21,6 +22,7 @@ type User struct {
 	PasswordHash string
 	TOTPSecret   string // empty = 2FA not configured
 	TOTPEnabled  bool
+	AvatarURL    string
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }
@@ -101,4 +103,82 @@ func (s *UserStore) scanOne(row pgx.Row) (*User, error) {
 		return nil, err
 	}
 	return u, nil
+}
+
+// SocialIdentity mirrors user_identities rows.
+type SocialIdentity struct {
+	Provider    string    `json:"provider"`
+	ProviderUID string    `json:"-"`
+	Email       string    `json:"email"`
+	DisplayName string    `json:"name"`
+	Picture     string    `json:"picture"`
+	CreatedAt   time.Time `json:"linked_at"`
+}
+
+// FindIdentity resolves a user id from a linked social identity.
+func (s *UserStore) FindIdentity(ctx context.Context, provider, providerUID string) (string, error) {
+	var userID string
+	err := s.pool.QueryRow(ctx,
+		`SELECT user_id FROM user_identities WHERE provider=$1 AND provider_uid=$2`,
+		provider, providerUID).Scan(&userID)
+	if err != nil {
+		return "", err
+	}
+	return userID, err
+}
+
+// LinkIdentity attaches a social identity to a user (upsert).
+func (s *UserStore) LinkIdentity(ctx context.Context, userID, provider, providerUID, email, name, picture string) error {
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO user_identities (user_id, provider, provider_uid, email, display_name, picture)
+		 VALUES ($1,$2,$3,$4,$5,$6)
+		 ON CONFLICT (provider, provider_uid) DO UPDATE SET user_id=EXCLUDED.user_id, email=EXCLUDED.email`,
+		userID, provider, providerUID, email, name, picture)
+	return err
+}
+
+// UnlinkIdentity removes a provider link (password login still required).
+func (s *UserStore) UnlinkIdentity(ctx context.Context, userID, provider string) error {
+	_, err := s.pool.Exec(ctx,
+		`DELETE FROM user_identities WHERE user_id=$1 AND provider=$2`, userID, provider)
+	return err
+}
+
+// ListIdentities shows linked providers for a user.
+func (s *UserStore) ListIdentities(ctx context.Context, userID string) ([]*SocialIdentity, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT provider, provider_uid, COALESCE(email,''), COALESCE(display_name,''), COALESCE(picture,''), created_at
+		 FROM user_identities WHERE user_id=$1 ORDER BY created_at`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*SocialIdentity
+	for rows.Next() {
+		si := &SocialIdentity{}
+		if err := rows.Scan(&si.Provider, &si.ProviderUID, &si.Email, &si.DisplayName, &si.Picture, &si.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, si)
+	}
+	return out, rows.Err()
+}
+
+// CreateFromSocial creates a user from a social profile (no password).
+func (s *UserStore) CreateFromSocial(ctx context.Context, email, name, provider, providerUID, picture string) (string, error) {
+	var id string
+	email = strings.ToLower(strings.TrimSpace(email))
+	err := s.pool.QueryRow(ctx,
+		`INSERT INTO users (email, password_hash) VALUES ($1,'') RETURNING id`, email).Scan(&id)
+	if err != nil {
+		// Existing user (unique email)? return its id instead.
+		var existing string
+		if qerr := s.pool.QueryRow(ctx,
+			`SELECT id FROM users WHERE email=$1`, email).Scan(&existing); qerr == nil {
+			return existing, nil
+		}
+		return "", err
+	}
+	_ = s.LinkIdentity(ctx, id, provider, providerUID, email, name, picture)
+	return id, nil
 }
