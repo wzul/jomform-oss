@@ -99,19 +99,19 @@ export default function Settings() {
       }),
     });
     if (r.ok) {
-      setMsg("Saved — credentials verified with CHIP. ✓");
+      setMsg(t("set.savedCreds"));
       setVerified(true);
       await load();
     } else {
       const d = await r.json().catch(() => ({}));
       setVerified(false);
-      setErr(d.error || "Failed to save");
+      setErr(d.error || t("set.failedSave"));
     }
   }
 
   async function clearCreds() {
     await fetch("/api/rest/settings/chip", { method: "DELETE" });
-    setMsg("CHIP credentials cleared.");
+    setMsg(t("set.credsCleared"));
     await load();
   }
 
@@ -149,11 +149,11 @@ export default function Settings() {
     if (r.ok) {
       const d = await r.json();
       setDomainInput("");
-      setDomainMsg(`${d.domain} added. Add CNAME ${d.domain} → jomform.com, then Verify.`);
+      setDomainMsg(t("set.domainAdded", { domain: d.domain }));
       await load();
     } else {
       const d = await r.json().catch(() => ({}));
-      setDomainMsg(d.error || "Failed to add domain");
+      setDomainMsg(d.error || t("set.failedAddDomain"));
     }
   }
 
@@ -163,15 +163,15 @@ export default function Settings() {
 
   return (
     <Shell active="settings">
-      <main className="mx-auto max-w-3xl flex-1 px-6 py-8">
-        <h1 className="text-2xl font-bold">
-          Settings <span className="text-[var(--jf-primary)]">JomForm</span>
+      <main className="w-full flex-1 px-6 py-8">
+        <h1 className="max-w-xl text-2xl font-bold">
+          {t("set.title")} <span className="text-[var(--jf-primary)]">JomForm</span>
         </h1>
 
         {/* ── CHIP gateway ── */}
         <section className="jf-card mt-8 p-6">
           <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold">CHIP Payment Gateway</h2>
+            <h2 className="text-lg font-semibold">{t("set.chipTitle")}</h2>
             {status && (
               <span
                 className={`rounded-full px-3 py-1 text-xs font-semibold ${
@@ -180,13 +180,13 @@ export default function Settings() {
                     : "border border-slate-200 bg-slate-50 text-slate-500"
                 }`}
               >
-                {status.configured ? `ACTIVE · ${status.mode.toUpperCase()}` : "NOT SET"}
+                {status.configured ? t("set.activeMode", { mode: status.mode.toUpperCase() }) : t("set.notSet")}
               </span>
             )}
           </div>
-          <p className="mt-2 text-sm text-slate-400">
-            Get your <code className="rounded bg-slate-100 px-1">Brand ID</code> &{" "}
-            <code className="rounded bg-slate-100 px-1">Secret Key</code> from{" "}
+          <p className="mt-2 max-w-xl text-sm text-slate-400">
+            {t("set.getYour")} <code className="rounded bg-slate-100 px-1">Brand ID</code> {t("set.and")}{" "}
+            <code className="rounded bg-slate-100 px-1">{t("set.secretKey")}</code> {t("set.from")}{" "}
             <a
               href="https://portal.chip-in.asia/collect/developers/brands"
               className="text-[var(--jf-primary)] underline"
@@ -194,7 +194,7 @@ export default function Settings() {
             >
               CHIP Merchant Portal → Developers
             </a>
-            . Keys are stored encrypted — never shown again.
+            . {t("set.keysEncrypted")}
           </p>
           {msg && <p className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-600">{msg}</p>}
           {err && <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{err}</p>}
@@ -205,16 +205,16 @@ export default function Settings() {
                 value={brandId}
                 onChange={(e) => setBrandId(e.target.value)}
                 required
-                className="jf-input mt-1"
+                className="jf-input mt-1 max-w-xl"
                 placeholder="e.g. 5f2b…-uuid"
               />
             </div>
             <div>
               <label className="flex items-center gap-2 text-xs text-slate-500">
-                Secret Key
+                {t("set.secretKey")}
                 {verified && (
                   <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
-                    ✓ API credentials verified
+                    {t("set.apiVerified")}
                   </span>
                 )}
               </label>
@@ -223,31 +223,31 @@ export default function Settings() {
                 onChange={(e) => setSecretKey(e.target.value)}
                 required
                 type="text"
-                className="jf-input mt-1 font-mono"
+                className="jf-input mt-1 max-w-xl font-mono"
                 placeholder="sk_live_… / sk_test_…"
               />
             </div>
             <div>
-              <label className="text-xs text-slate-500">Mode</label>
-              <p className="mt-1 text-sm">{mode === "live" ? "Live" : "Test"}</p>
+              <label className="text-xs text-slate-500">{t("set.mode")}</label>
+              <p className="mt-1 text-sm">{mode === "live" ? t("set.live") : t("set.test")}</p>
             </div>
 
             <div>
               <label className="text-xs text-slate-500">
-                Email fallback <span className="text-slate-400">(optional — used when buyer email missing; one-time forms only)</span>
+                {t("set.emailFallback")} <span className="text-slate-400">{t("set.emailFallbackHint")}</span>
               </label>
               <input
                 value={emailFallback}
                 onChange={(e) => setEmailFallback(e.target.value)}
                 type="email"
-                className="jf-input mt-1"
+                className="jf-input mt-1 max-w-xl"
                 placeholder="store@yourshop.my"
               />
             </div>
 
             <div>
               <label className="text-xs text-slate-500">
-                Payment methods <span className="text-slate-400">(blank = all available)</span>
+                {t("set.paymentMethods")} <span className="text-slate-400">{t("set.allMethods")}</span>
               </label>
               <div className="mt-1.5 flex flex-wrap gap-1.5">
                 {METHODS.map((m) => (
@@ -268,10 +268,10 @@ export default function Settings() {
             </div>
 
             <div className="flex gap-2 pt-1">
-              <button className="jf-btn-primary">Save</button>
+              <button className="jf-btn-primary">{t("set.save")}</button>
               {status?.configured && (
                 <button type="button" onClick={clearCreds} className="jf-btn-ghost text-slate-600">
-                  Clear
+                  {t("set.clear")}
                 </button>
               )}
             </div>
@@ -280,11 +280,9 @@ export default function Settings() {
 
         {/* ── custom domains (multi) ── */}
         <section className="jf-card mt-6 p-6">
-          <h2 className="text-lg font-semibold">Custom domains</h2>
-          <p className="mt-2 text-sm text-slate-400">
-            Serve your forms on your own domains — as many as you like. For each: add a{" "}
-            <code className="rounded bg-slate-100 px-1">CNAME your-domain → jomform.com</code> (DNS only), then Verify.
-            Once verified, routing + the TLS certificate are provisioned automatically — no Cloudflare account or auto-setup needed.
+          <h2 className="text-lg font-semibold">{t("set.domainsTitle")}</h2>
+          <p className="mt-2 max-w-xl text-sm text-slate-400">
+            {t("set.domainsHelp")}
           </p>
           {domainMsg && <p className="mt-3 rounded-lg bg-indigo-50 px-3 py-2 text-sm text-indigo-700">{domainMsg}</p>}
           <form onSubmit={setDomainClaim} className="mt-4 flex flex-wrap gap-2">
@@ -292,9 +290,9 @@ export default function Settings() {
               value={domainInput}
               onChange={(e) => setDomainInput(e.target.value)}
               placeholder="shop.yourdomain.com"
-              className="jf-input min-w-56 flex-1"
+              className="jf-input min-w-56 max-w-xl flex-1"
             />
-            <button className="jf-btn-primary" type="submit">Add domain</button>
+            <button className="jf-btn-primary" type="submit">{t("set.addDomain")}</button>
           </form>
           <ul className="mt-4 space-y-2">
             {domains.map((d: { id: string; domain: string; verified: boolean }) => (
@@ -302,7 +300,7 @@ export default function Settings() {
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium">{d.domain}</p>
                   <p className={`text-[11px] ${d.verified ? "text-emerald-600" : "text-amber-600"}`}>
-                    {d.verified ? "verified ✓" : "pending DNS — CNAME to jomform.com, then Verify"}
+                    {d.verified ? t("set.verified") : t("set.pendingDns")}
                   </p>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
@@ -310,16 +308,16 @@ export default function Settings() {
                     <button
                       onClick={async () => {
                         const r = await fetch(`/api/rest/domains/${d.id}/verify`, { method: "POST" });
-                        setDomainMsg(r.ok ? `${d.domain} verified ✓` : `${d.domain}: verify failed`);
+                        setDomainMsg(r.ok ? t("set.domainVerified", { domain: d.domain }) : t("set.verifyFailed", { domain: d.domain }));
                         load();
                       }}
                       className="text-xs text-[#5e6ad2] hover:underline"
-                    >Verify</button>
+                    >{t("set.verify")}</button>
                   )}
                   <button
                     onClick={async () => { await fetch(`/api/rest/domains/${d.id}`, { method: "DELETE" }); load(); }}
                     className="text-xs text-slate-500 hover:text-red-500"
-                  >Remove</button>
+                  >{t("set.remove")}</button>
                 </div>
               </li>
             ))}
@@ -328,36 +326,36 @@ export default function Settings() {
 
         {/* ── Tracking scripts ── */}
         <section className="jf-card mt-6 p-6">
-          <h2 className="text-lg font-semibold">Tracking scripts (global)</h2>
-          <p className="mt-1 text-sm text-slate-400">
-            Injected into every public form head. Allowed: <code className="rounded bg-slate-100 px-1">&lt;script src="https://…"&gt;</code>, <code className="rounded bg-slate-100 px-1">&lt;meta&gt;</code>, comments. Event handlers & cookie writes stripped.
+          <h2 className="text-lg font-semibold">{t("set.trackingTitle")}</h2>
+          <p className="mt-1 max-w-xl text-sm text-slate-400">
+            {t("set.trackingHelp")} <code className="rounded bg-slate-100 px-1">&lt;script src="https://…"&gt;</code>, <code className="rounded bg-slate-100 px-1">&lt;meta&gt;</code>, comments. Event handlers & cookie writes stripped.
           </p>
           <textarea value={trackingHead} onChange={(e) => setTrackingHead(e.target.value)} rows={4}
-            className="jf-input mt-3 font-mono text-xs"
+            className="jf-input mt-3 max-w-xl font-mono text-xs"
             placeholder={'<script src="https://www.googletagmanager.com/gtag/js?id=G-XXXX"></-script>'} />
           <button onClick={async () => {
             const r = await fetch("/api/rest/settings/tracking", {
               method: "PUT", headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ head: trackingHead }),
             });
-            setMsg(r.ok ? "Tracking saved ✓" : "Failed");
-          }} className="jf-btn-primary mt-3">Save tracking</button>
+            setMsg(r.ok ? t("set.trackingSaved") : t("prof.failed"));
+          }} className="jf-btn-primary mt-3">{t("set.saveTracking")}</button>
         </section>
 
         {/* ── e-Invoice (LHDN) ── */}
         <section className="jf-card mt-6 p-6">
-          <h2 className="text-lg font-semibold">e-Invoice (LHDN)</h2>
-          <p className="mt-1 text-sm text-slate-400">
-            Buyer details collected on forms; TIN/NRIC auto-collected for B2B receipts. Receipt PDFs attach LHDN-ready fields.
+          <h2 className="text-lg font-semibold">{t("set.einvoiceTitle")}</h2>
+          <p className="mt-1 max-w-xl text-sm text-slate-400">
+            {t("set.einvoiceHelp")}
           </p>
           <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div>
-              <label className="text-xs text-slate-500">Company TIN</label>
-              <input value={tin} onChange={(e) => setTin(e.target.value)} className="jf-input mt-1" placeholder="e.g. C1234567890" />
+              <label className="text-xs text-slate-500">{t("set.companyTin")}</label>
+              <input value={tin} onChange={(e) => setTin(e.target.value)} className="jf-input mt-1 max-w-xl" placeholder="e.g. C1234567890" />
             </div>
             <div>
-              <label className="text-xs text-slate-500">MSIC code</label>
-              <input value={msic} onChange={(e) => setMsic(e.target.value)} className="jf-input mt-1" placeholder="e.g. 62010" />
+              <label className="text-xs text-slate-500">{t("set.msicCode")}</label>
+              <input value={msic} onChange={(e) => setMsic(e.target.value)} className="jf-input mt-1 max-w-xl" placeholder="e.g. 62010" />
             </div>
           </div>
           <button onClick={async () => {
@@ -365,24 +363,24 @@ export default function Settings() {
               method: "PUT", headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ tin, msic }),
             });
-            setMsg(r.ok ? "e-Invoice details saved ✓" : "Failed to save");
-          }} className="jf-btn-primary mt-3">Save e-Invoice</button>
+            setMsg(r.ok ? t("set.einvoiceSaved") : t("set.failedSave"));
+          }} className="jf-btn-primary mt-3">{t("set.saveEinvoice")}</button>
         </section>
 
         {/* ── Outbound webhooks ── */}
         <section className="jf-card mt-6 p-6">
-          <h2 className="text-lg font-semibold">Outbound webhooks</h2>
-          <p className="mt-1 text-sm text-slate-400">
-            Events: <code className="rounded bg-slate-100 px-1">sale.paid</code>,{" "}
+          <h2 className="text-lg font-semibold">{t("set.webhooksTitle")}</h2>
+          <p className="mt-1 max-w-xl text-sm text-slate-400">
+            {t("set.eventsLabel")} <code className="rounded bg-slate-100 px-1">sale.paid</code>,{" "}
             <code className="rounded bg-slate-100 px-1">sale.failed</code>,{" "}
-            <code className="rounded bg-slate-100 px-1">subscription.charged</code>. HMAC-SHA256 signed with your secret.
+            <code className="rounded bg-slate-100 px-1">subscription.charged</code>. {t("set.hmacSigned")}
           </p>
           <form onSubmit={addWebhook} className="mt-3 flex flex-wrap gap-2">
             <input value={whUrl} onChange={(e) => setWhUrl(e.target.value)} required type="url"
-              placeholder="https://yourapp.com/jomform-hook" className="jf-input min-w-56 flex-1" />
+              placeholder="https://yourapp.com/jomform-hook" className="jf-input min-w-56 max-w-xl flex-1" />
             <input value={whSecret} onChange={(e) => setWhSecret(e.target.value)} required type="text"
-              placeholder="Signing secret" className="jf-input w-48" />
-            <button className="jf-btn-primary">Add</button>
+              placeholder={t("set.signingSecret")} className="jf-input w-48" />
+            <button className="jf-btn-primary">{t("set.add")}</button>
           </form>
           <ul className="mt-3 space-y-2">
             {webhooks.map((wh) => (
@@ -400,27 +398,27 @@ export default function Settings() {
 
         {/* ── MCP / OAuth 2.1 connected agents ── */}
         <section className="jf-card mt-6 p-6">
-          <h2 className="text-lg font-semibold">Connected agents (MCP)</h2>
-          <p className="mt-1 text-sm text-slate-400">
-            Server URL <code className="rounded bg-slate-100 px-1">https://mcp.jomform.com/mcp</code> —
-            agents discover everything automatically via{" "}
+          <h2 className="text-lg font-semibold">{t("set.mcpTitle")}</h2>
+          <p className="mt-1 max-w-xl text-sm text-slate-400">
+            {t("set.serverUrl")} <code className="rounded bg-slate-100 px-1">https://mcp.jomform.com/mcp</code> —
+            {t("set.mcpHelp")}{" "}
             <code className="rounded bg-slate-100 px-1">/.well-known/oauth-authorization-server</code>{" "}
-            (OAuth 2.1, dynamic client registration, PKCE). No API keys needed.
+            {t("set.mcpNoKeys")}
           </p>
           <ul className="mt-4 space-y-2">
             {keys.map((k) => (
               <li key={k.id} className="flex items-center justify-between rounded-lg border border-[var(--jf-border)] px-4 py-2.5">
                 <div>
                   <p className="text-sm">{k.name}</p>
-                  <p className="text-[11px] text-slate-400">client id: {k.name === "AI Agent Key" ? "(oauth-managed)" : k.name}</p>
+                  <p className="text-[11px] text-slate-400">{t("set.clientId")} {k.name === "AI Agent Key" ? "(oauth-managed)" : k.name}</p>
                 </div>
                 <button onClick={async () => { await fetch(`/api/rest/keys/${k.id}`, { method: "DELETE" }); load(); }}
-                  className="text-xs text-slate-500 hover:text-red-500">Revoke</button>
+                  className="text-xs text-slate-500 hover:text-red-500">{t("set.revoke")}</button>
               </li>
             ))}
             {!keys.length && (
               <li className="rounded-lg border border-dashed border-[var(--jf-border)] px-4 py-3 text-sm text-slate-400">
-                No agents connected yet. Point any MCP client at the server URL — it registers itself.
+                {t("set.noAgents")}
               </li>
             )}
           </ul>
@@ -428,27 +426,27 @@ export default function Settings() {
 
         {/* ── Social login connectors ── */}
         <section className="jf-card mt-6 p-6">
-          <h2 className="text-lg font-semibold">Connected accounts (login)</h2>
-          <p className="mt-1 text-sm text-slate-400">
-            Link a Google account, then sign in with one click. More providers (Microsoft/Azure, GitHub) can be enabled later — same connector system.
+          <h2 className="text-lg font-semibold">{t("set.socialTitle")}</h2>
+          <p className="mt-1 max-w-xl text-sm text-slate-400">
+            {t("set.socialHelp")}
           </p>
           <ul className="mt-4 space-y-2">
             {social.map((l) => (
               <li key={l.provider} className="flex items-center justify-between rounded-lg border border-[var(--jf-border)] px-4 py-2.5">
                 <div>
                   <p className="text-sm capitalize">{l.provider} — {l.email}</p>
-                  <p className="text-[11px] text-slate-400">linked {new Date(l.linked_at).toLocaleDateString()}</p>
+                  <p className="text-[11px] text-slate-400">{t("set.linked")} {new Date(l.linked_at).toLocaleDateString()}</p>
                 </div>
                 <button onClick={async () => { await fetch(`/api/auth/social/${l.provider}`, { method: "DELETE" }); load(); }}
-                  className="text-xs text-slate-500 hover:text-red-500">Unlink</button>
+                  className="text-xs text-slate-500 hover:text-red-500">{t("set.unlink")}</button>
               </li>
             ))}
             {social.length === 0 && (
-              <li className="text-sm text-slate-400">No linked accounts yet.</li>
+              <li className="text-sm text-slate-400">{t("set.noLinked")}</li>
             )}
           </ul>
           <a href="/api/auth/oauth/google" className="jf-btn-ghost mt-3 inline-block">
-            Link Google account
+            {t("set.linkGoogle")}
           </a>
         </section>
       </main>

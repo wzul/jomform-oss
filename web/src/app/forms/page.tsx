@@ -68,8 +68,7 @@ export default function FormsPage() {
     if (ids.length === 0 || busy) return;
     if (action === "delete") {
       const ok = window.confirm(
-        `Move ${ids.length} form${ids.length === 1 ? "" : "s"} to trash? ` +
-          "They will be soft-deleted (hidden from the dashboard and public pages) and can be restored later."
+        t("forms.bulkDeleteConfirm", { n: ids.length })
       );
       if (!ok) return;
     }
@@ -90,11 +89,11 @@ export default function FormsPage() {
 
   return (
     <Shell active="forms">
-      <div className="mx-auto w-full max-w-4xl flex-1 px-6 py-8">
+      <div className="w-full flex-1 px-6 py-8">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-xl font-semibold tracking-tight">{t("forms.title")}</h1>
-            <p className="text-sm text-[var(--jf-muted)]">{t("forms.subtitle")}</p>
+            <h1 className="max-w-xl text-xl font-semibold tracking-tight">{t("forms.title")}</h1>
+            <p className="max-w-xl text-sm text-[var(--jf-muted)]">{t("forms.subtitle")}</p>
           </div>
           <a href="/builder" className="jf-btn-primary">
             {t("forms.new")}
@@ -104,7 +103,7 @@ export default function FormsPage() {
         {ids.length > 0 && (
           <div className="jf-card mt-4 flex flex-wrap items-center gap-2 border-[var(--jf-border)] px-4 py-3">
             <span className="text-sm font-medium">
-              {ids.length} selected
+              {t("forms.nSelected", { n: ids.length })}
             </span>
             <div className="ml-auto flex flex-wrap items-center gap-2">
               <button
@@ -112,21 +111,21 @@ export default function FormsPage() {
                 disabled={busy}
                 className="jf-btn-ghost px-3 py-1.5 text-xs disabled:opacity-50"
               >
-                Publish
+                {t("builder.publish")}
               </button>
               <button
                 onClick={() => bulk("draft")}
                 disabled={busy}
                 className="jf-btn-ghost px-3 py-1.5 text-xs"
               >
-                Draft
+                {t("forms.draft")}
               </button>
               <button
                 onClick={() => bulk("delete")}
                 disabled={busy}
                 className="jf-btn-ghost px-3 py-1.5 text-xs text-rose-600 hover:bg-rose-50"
               >
-                Delete
+                {t("forms.delete")}
               </button>
             </div>
           </div>
@@ -142,7 +141,7 @@ export default function FormsPage() {
                 onChange={toggleAll}
                 className="h-4 w-4 accent-[var(--jf-primary)]"
               />
-              <span className="text-xs text-[var(--jf-muted)]">Select all</span>
+              <span className="text-xs text-[var(--jf-muted)]">{t("forms.selectAll")}</span>
             </li>
           )}
           {forms.map((f) => (
@@ -167,10 +166,10 @@ export default function FormsPage() {
                       {t("forms.live")}
                     </span>
                     <a href={`/builder?form=${f.id}`} className="jf-btn-ghost">
-                      Edit
+                      {t("forms.edit")}
                     </a>
                     <a href={`https://${spaceHost}/${f.slug}`} target="_blank" className="jf-btn-ghost">
-                      View ↗
+                      {t("bld.view")}
                     </a>
                   </>
                 ) : (
@@ -179,10 +178,10 @@ export default function FormsPage() {
                       {t("forms.draft")}
                     </span>
                     <a href={`/builder?form=${f.id}`} className="jf-btn-ghost">
-                      Edit
+                      {t("forms.edit")}
                     </a>
                     <button onClick={() => publish(f.id)} className="jf-btn-primary">
-                      Publish
+                      {t("builder.publish")}
                     </button>
                   </>
                 )}

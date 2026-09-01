@@ -171,11 +171,11 @@ export default function Dashboard() {
 
   return (
     <Shell active="dashboard">
-      <div className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
+      <div className="w-full flex-1 px-6 py-8">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-xl font-semibold tracking-tight">{t("dash.title")}</h1>
-            <p className="text-sm text-[var(--jf-muted)]">{t("dash.subtitle")}</p>
+            <h1 className="max-w-xl text-xl font-semibold tracking-tight">{t("dash.title")}</h1>
+            <p className="max-w-xl text-sm text-[var(--jf-muted)]">{t("dash.subtitle")}</p>
           </div>
           <a href="/builder" className="jf-btn-primary">
             {t("dash.newForm")}
@@ -222,45 +222,45 @@ export default function Dashboard() {
 
         {/* Form analytics */}
         <section className="jf-card mt-6 p-5">
-          <h2 className="text-sm font-semibold">Form analytics</h2>
+          <h2 className="text-sm font-semibold">{t("dash.formAnalytics")}</h2>
           <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
             {formStats.map((f) => (
               <div key={f.slug} className="rounded-lg border border-[var(--jf-border)] p-3">
                 <p className="truncate text-sm font-medium" title={f.title}>{f.title}</p>
                 <p className="font-mono text-[11px] text-[var(--jf-muted)]">/f/{f.slug}</p>
                 <div className="mt-2 grid grid-cols-2 gap-x-2 gap-y-0.5 text-[11px] text-[var(--jf-muted)]">
-                  <span>Submissions: <b>{f.submissions}</b></span>
-                  <span>Paid+Confirmed: <b className="text-emerald-600">{f.paid_count + f.confirmed_count}</b></span>
-                  <span>Pending: <b>{f.pending_count}</b></span>
-                  <span>Failed: <b>{f.failed_count}</b></span>
+                  <span>{t("dash.submissions")} <b>{f.submissions}</b></span>
+                  <span>{t("dash.paidConfirmed")} <b className="text-emerald-600">{f.paid_count + f.confirmed_count}</b></span>
+                  <span>{t("dash.pendingLabel")} <b>{f.pending_count}</b></span>
+                  <span>{t("dash.failedLabel")} <b>{f.failed_count}</b></span>
                 </div>
                 <p className="mt-1.5 text-sm font-semibold text-[var(--jf-primary)]">{money(f.revenue_sen)}</p>
               </div>
             ))}
-            {formStats.length === 0 && <p className="text-xs text-[var(--jf-muted)]">No forms yet.</p>}
+            {formStats.length === 0 && <p className="text-xs text-[var(--jf-muted)]">{t("dash.noForms")}</p>}
           </div>
         </section>
 
         {/* Product analytics */}
         <section className="jf-card mt-6 p-5">
-          <h2 className="text-sm font-semibold">Product performance</h2>
+          <h2 className="text-sm font-semibold">{t("dash.productPerf")}</h2>
           <ul className="mt-2 divide-y divide-[var(--jf-border)]">
             {prodStats.map((pr) => (
               <li key={pr.product_id} className="flex items-center justify-between gap-3 py-2.5">
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium">{pr.name}</p>
                   <p className="text-[11px] text-[var(--jf-muted)]">
-                    {pr.units_sold} sold · {pr.paid_units} paid
+                    {pr.units_sold} {t("dash.sold")} · {pr.paid_units} {t("dash.paid")}
                   </p>
                 </div>
                 <div className="text-right">
                   <p className="text-sm font-semibold">{money(pr.paid_revenue_sen)}</p>
-                  <p className="text-[10px] text-[var(--jf-muted)]">gross {money(pr.revenue_sen)}</p>
+                  <p className="text-[10px] text-[var(--jf-muted)]">{t("dash.gross")} {money(pr.revenue_sen)}</p>
                 </div>
               </li>
             ))}
             {prodStats.length === 0 && (
-              <li className="py-4 text-xs text-[var(--jf-muted)]">No product sales yet.</li>
+              <li className="py-4 text-xs text-[var(--jf-muted)]">{t("dash.noProdSales")}</li>
             )}
           </ul>
         </section>
@@ -277,7 +277,7 @@ export default function Dashboard() {
                 href="/api/rest/sales/export.csv"
                 className="rounded-md border border-[var(--jf-border)] px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50"
               >
-                Export CSV
+                {t("common.exportCsv")}
               </a>
             </div>
           </div>
@@ -296,7 +296,7 @@ export default function Dashboard() {
                   <span className="text-sm font-semibold">{money(s.total_sen)}</span>
                   {s.status === "paid" && (
                     <button onClick={() => confirmSale(s.ref_code)} className="text-xs font-medium text-[var(--jf-primary)] hover:underline">
-                      Confirm
+                      {t("common.confirm")}
                     </button>
                   )}
                 </div>
@@ -333,7 +333,7 @@ export default function Dashboard() {
                     <td className="px-5 py-3 text-right">
                       {s.status === "paid" && (
                         <button onClick={() => confirmSale(s.ref_code)} className="whitespace-nowrap text-xs font-medium text-[var(--jf-primary)] hover:underline">
-                          Confirm
+                          {t("common.confirm")}
                         </button>
                       )}
                     </td>
@@ -354,7 +354,7 @@ export default function Dashboard() {
           {salesTotal > 0 && (
             <div className="flex items-center justify-between gap-3 border-t border-[var(--jf-border)] px-5 py-3">
               <span className="text-xs text-[var(--jf-muted)]">
-                page {salesPage} of {salesTotalPages}
+                {t("dash.pageOf", { page: salesPage, total: salesTotalPages })}
               </span>
               <div className="flex items-center gap-2">
                 <button
@@ -363,7 +363,7 @@ export default function Dashboard() {
                   disabled={salesPage <= 1}
                   className="rounded-md border border-[var(--jf-border)] px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  Prev
+                  {t("common.prev")}
                 </button>
                 <button
                   type="button"
@@ -371,7 +371,7 @@ export default function Dashboard() {
                   disabled={salesPage >= salesTotalPages}
                   className="rounded-md border border-[var(--jf-border)] px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  Next
+                  {t("common.next")}
                 </button>
               </div>
             </div>

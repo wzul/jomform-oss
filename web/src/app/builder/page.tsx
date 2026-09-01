@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useI18n } from "../../components/i18n";
 
 /* ─── types ──────────────────────────────────────────────────────────────── */
 
@@ -51,17 +52,17 @@ const isCapturePending = (s: SaleRow) =>
   !s.captured_at &&
   (s.status === "pending" || s.status === "authorized" || s.authorized === true);
 
-const PALETTE: { type: BlockType; label: string; icon: string; hint: string }[] = [
-  { type: "text", label: "Text", icon: "T", hint: "Paragraph / description" },
-  { type: "image", label: "Image", icon: "🖼", hint: "Product photo / banner" },
-  { type: "product", label: "Product", icon: "🛒", hint: "Buyable item with price" },
-  { type: "name", label: "Name", icon: "🔤", hint: "Buyer name field" },
-  { type: "email", label: "Email", icon: "✉", hint: "Buyer email field" },
-  { type: "phone", label: "Phone", icon: "☎", hint: "Phone (WhatsApp) field" },
-  { type: "textarea", label: "Note", icon: "📝", hint: "Free-form message" },
-  { type: "checkbox", label: "Checkbox", icon: "☑", hint: "Extra option" },
-  { type: "coupon", label: "Coupon", icon: "🏷", hint: "Discount code" },
-  { type: "divider", label: "Divider", icon: "―", hint: "Separator line" },
+const PALETTE: { type: BlockType; icon: string }[] = [
+  { type: "text", icon: "T" },
+  { type: "image", icon: "🖼" },
+  { type: "product", icon: "🛒" },
+  { type: "name", icon: "🔤" },
+  { type: "email", icon: "✉" },
+  { type: "phone", icon: "☎" },
+  { type: "textarea", icon: "📝" },
+  { type: "checkbox", icon: "☑" },
+  { type: "coupon", icon: "🏷" },
+  { type: "divider", icon: "―" },
 ];
 
 const fieldTypes: BlockType[] = ["name", "email", "phone", "textarea", "checkbox", "coupon"];
@@ -85,20 +86,13 @@ const saleBadge = (s: string) =>
 
 const FORM_SALES_PAGE_SIZE = 10;
 
-function labelFor(t: BlockType) {
-  switch (t) {
-    case "name":
-      return "Full name";
-    case "email":
-      return "Email";
-    case "phone":
-      return "Phone number";
-    case "textarea":
-      return "Additional note";
-    default:
-      return "";
-  }
-}
+/* default field labels, keyed for i18n */
+const FIELD_LABEL_KEY: Partial<Record<BlockType, import("../../components/i18n").Key>> = {
+  name: "blk.fullName",
+  email: "blk.email",
+  phone: "blk.phoneNum",
+  textarea: "blk.addNote",
+};
 
 /* default blocks when hydrating legacy forms (products list) */
 function defaultBlocks(products: { id: string; name: string; price_sen: number }[]): Block[] {
@@ -115,6 +109,10 @@ function defaultBlocks(products: { id: string; name: string; price_sen: number }
 /* ─── builder page ───────────────────────────────────────────────────────── */
 
 export default function Builder() {
+  const { t } = useI18n();
+  /* translated palette/field labels; block type "textarea" displays as "Note" */
+  const typeLabel = (bt: BlockType) => t((bt === "textarea" ? "blk.note" : `blk.${bt}`) as import("../../components/i18n").Key);
+  const typeHint = (bt: BlockType) => t((bt === "textarea" ? "blk.noteHint" : `blk.${bt}Hint`) as import("../../components/i18n").Key);
   const [products, setProducts] = useState<Product[]>([]);
   const [forms, setForms] = useState<FormRow[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(null);
@@ -316,12 +314,13 @@ export default function Builder() {
     })();
   }, [load]);
 
-  function makeBlock(t: BlockType): Block {
-    const b: Block = { id: uid(), type: t, value: "" };
-    if (t === "product" && products[0]) b.productId = products[0].id;
-    if (fieldTypes.includes(t)) {
-      b.required = t === "name" || t === "email";
-      b.value = labelFor(t);
+  function makeBlock(bt: BlockType): Block {
+    const b: Block = { id: uid(), type: bt, value: "" };
+    if (bt === "product" && products[0]) b.productId = products[0].id;
+    if (fieldTypes.includes(bt)) {
+      b.required = bt === "name" || bt === "email";
+      const k = FIELD_LABEL_KEY[bt];
+      b.value = k ? t(k) : "";
     }
     return b;
   }
@@ -463,7 +462,7 @@ export default function Builder() {
             setTitle(e.target.value);
             setDirty(true);
           }}
-          placeholder="Form title"
+          placeholder={t("bld.formTitle")}
           className="w-56 rounded-md border border-transparent bg-transparent px-2 py-1 text-sm font-medium outline-none hover:border-[var(--jf-border)] focus:border-[#7170ff]/60"
         />
         <input
@@ -476,14 +475,14 @@ export default function Builder() {
           className="w-40 rounded-md border border-transparent bg-transparent px-2 py-1 font-mono text-xs text-[var(--jf-muted)] outline-none hover:border-[var(--jf-border)] focus:border-[#7170ff]/60"
         />
         <div className="ml-auto flex items-center gap-2">
-          {dirty && <span className="text-xs text-[#f59e0b]">• unsaved</span>}
+          {dirty && <span className="text-xs text-[#f59e0b]">• {t("builder.unsaved")}</span>}
           {pubUrl && (
             <a
               href={pubUrl}
               target="_blank"
               className="rounded-md border border-[var(--jf-border)] bg-white px-3 py-1.5 text-xs text-[#374151] hover:bg-slate-50"
             >
-              View ↗
+              {t("bld.view")}
             </a>
           )}
           <button
@@ -491,16 +490,16 @@ export default function Builder() {
             disabled={saving}
             className="jf-btn-primary"
           >
-            {saving ? "Saving…" : currentId ? "Publish" : "Save & publish"}
+            {saving ? t("builder.saving") : currentId ? t("builder.publish") : t("builder.savePub")}
           </button>
         </div>
       </header>
 
-      <div className="mx-auto grid max-w-7xl grid-cols-1 md:grid-cols-[240px_1fr_260px]">
+      <div className="grid w-full grid-cols-1 md:grid-cols-[240px_1fr_260px]">
         {/* ── left: palette (drag sources) ── */}
         <aside className="border-r border-[var(--jf-border)] p-4">
           <p className="mb-3 text-xs font-medium uppercase tracking-wider text-[#9ca3af]">
-            Drag to add
+            {t("bld.dragToAdd")}
           </p>
           <div className="grid grid-cols-2 gap-2">
             {PALETTE.map((p) => (
@@ -509,13 +508,13 @@ export default function Builder() {
                 draggable
                 onDragStart={(e) => paletteDragStart(e, p.type)}
                 onClick={() => addBlock(p.type)}
-                title={p.hint}
+                title={typeHint(p.type)}
                 className={`cursor-grab select-none rounded-lg border border-[var(--jf-border)] bg-white px-2.5 py-2 transition-colors hover:border-[#7170ff]/40 hover:bg-indigo-50 active:cursor-grabbing ${
                   dragging ? "opacity-60" : ""
                 }`}
               >
                 <span className="text-sm">{p.icon}</span>
-                <span className="mt-0.5 block text-[11px] font-medium text-[#374151]">{p.label}</span>
+                <span className="mt-0.5 block text-[11px] font-medium text-[#374151]">{typeLabel(p.type)}</span>
               </div>
             ))}
           </div>
@@ -534,7 +533,7 @@ export default function Builder() {
                     : "border-slate-300 text-[#9ca3af]"
                 }`}
               >
-                Drag blocks here — or click one on the left.
+                {t("bld.dragHere")}
               </div>
             )}
             {blocks.map((b, i) => (
@@ -567,7 +566,7 @@ export default function Builder() {
                   }`}
                 >
                   <div className="mb-1.5 flex items-center justify-between text-[10px] uppercase tracking-wider text-[#9ca3af]">
-                    <span>{PALETTE.find((p) => p.type === b.type)?.label}</span>
+                    <span>{typeLabel(b.type)}</span>
                     <span className="flex gap-1">
                       <button
                         onClick={(e) => {
@@ -575,7 +574,7 @@ export default function Builder() {
                           move(i, i - 1);
                         }}
                         className="px-1 hover:text-[#374151]"
-                        title="Move up"
+                        title={t("bld.moveUp")}
                       >
                         ↑
                       </button>
@@ -585,7 +584,7 @@ export default function Builder() {
                           move(i, i + 1);
                         }}
                         className="px-1 hover:text-[#374151]"
-                        title="Move down"
+                        title={t("bld.moveDown")}
                       >
                         ↓
                       </button>
@@ -595,7 +594,7 @@ export default function Builder() {
                           removeBlock(b.id);
                         }}
                         className="px-1 hover:text-red-400"
-                        title="Remove"
+                        title={t("bld.removeBlock")}
                       >
                         ✕
                       </button>
@@ -623,12 +622,12 @@ export default function Builder() {
 
         {/* ── right: inspector ── */}
         <aside className="border-l border-[var(--jf-border)] p-4">
-          <p className="mb-3 text-xs font-medium uppercase tracking-wider text-[#9ca3af]">Block settings</p>
-          {!selectedBlock && <p className="text-xs text-[#9ca3af]">Select a block to edit.</p>}
+          <p className="mb-3 text-xs font-medium uppercase tracking-wider text-[#9ca3af]">{t("bld.blockSettings")}</p>
+          {!selectedBlock && <p className="text-xs text-[#9ca3af]">{t("bld.selectBlock")}</p>}
           {selectedBlock && (
             <div className="space-y-3">
               <div>
-                <label className="text-xs text-[var(--jf-muted)]">Text / label</label>
+                <label className="text-xs text-[var(--jf-muted)]">{t("bld.textLabel")}</label>
                 <textarea
                   rows={2}
                   value={selectedBlock.value}
@@ -638,7 +637,7 @@ export default function Builder() {
               </div>
               {selectedBlock.type === "image" && (
                 <div>
-                  <label className="text-xs text-[var(--jf-muted)]">Image URL</label>
+                  <label className="text-xs text-[var(--jf-muted)]">{t("bld.imageUrl")}</label>
                   <input
                     value={selectedBlock.src || ""}
                     onChange={(e) => updateBlock(selectedBlock.id, { src: e.target.value })}
@@ -649,7 +648,7 @@ export default function Builder() {
               )}
               {selectedBlock.type === "product" && (
                 <div>
-                  <label className="text-xs text-[var(--jf-muted)]">Product</label>
+                  <label className="text-xs text-[var(--jf-muted)]">{t("bld.product")}</label>
                   <select
                     value={selectedBlock.productId || ""}
                     onChange={(e) => updateBlock(selectedBlock.id, { productId: e.target.value })}
@@ -671,7 +670,7 @@ export default function Builder() {
                     onChange={(e) => updateBlock(selectedBlock.id, { required: e.target.checked })}
                     className="accent-[#5e6ad2]"
                   />
-                  Required
+                  {t("bld.required")}
                 </label>
               )}
 
@@ -679,7 +678,7 @@ export default function Builder() {
               {fieldTypes.includes(selectedBlock.type) && blocks.length > 1 && (
                 <div className="rounded-md border border-slate-200 p-2">
                   <p className="text-[11px] font-medium text-slate-500">
-                    Conditional logic (optional)
+                    {t("bld.condLogic")}
                   </p>
                   <select
                     value={selectedBlock.condition?.field_id || ""}
@@ -692,7 +691,7 @@ export default function Builder() {
                     }
                     className="mt-1 w-full rounded border border-slate-200 px-2 py-1 text-xs"
                   >
-                    <option value="">— Always show —</option>
+                    <option value="">{t("bld.alwaysShow")}</option>
                     {blocks
                       .filter((x) => x.id !== selectedBlock.id && fieldTypes.includes(x.type))
                       .map((x) => (
@@ -741,30 +740,30 @@ export default function Builder() {
         {currentId && (
           <div className="mt-8 rounded-lg border border-[var(--jf-border)] bg-white p-3">
             <p className="text-xs font-medium uppercase tracking-wider text-[#9ca3af]">
-              Display settings
+              {t("bld.displaySettings")}
             </p>
-            <label className="mt-2 block text-[11px] text-slate-500">Theme color (primary)</label>
+            <label className="mt-2 block text-[11px] text-slate-500">{t("bld.themeColor")}</label>
             <input
               type="color"
               value={fsTheme}
               onChange={(e) => setFsTheme(e.target.value)}
               className="mt-1 h-8 w-full cursor-pointer rounded border border-[var(--jf-border)]"
             />
-            <label className="mt-2 block text-[11px] text-slate-500">Logo URL (https)</label>
+            <label className="mt-2 block text-[11px] text-slate-500">{t("bld.logoUrl")}</label>
             <input
               value={fsLogo}
               onChange={(e) => setFsLogo(e.target.value)}
               placeholder="https://cdn.example/logo.png"
               className="jf-input mt-1 text-xs"
             />
-            <label className="mt-2 block text-[11px] text-slate-500">Custom success redirect (optional)</label>
+            <label className="mt-2 block text-[11px] text-slate-500">{t("bld.redirSuccess")}</label>
             <input
               value={fsRedS}
               onChange={(e) => setFsRedS(e.target.value)}
               placeholder="https://yourapp.com/thanks"
               className="jf-input mt-1 text-xs"
             />
-            <label className="mt-2 block text-[11px] text-slate-500">Custom failure redirect (optional)</label>
+            <label className="mt-2 block text-[11px] text-slate-500">{t("bld.redirFailure")}</label>
             <input
               value={fsRedF}
               onChange={(e) => setFsRedF(e.target.value)}
@@ -773,7 +772,7 @@ export default function Builder() {
             />
             <label className="mt-2 flex items-center gap-2 text-xs text-slate-600">
               <input type="checkbox" checked={fsEmbed} onChange={(e) => setFsEmbed(e.target.checked)} className="accent-[#5e6ad2]" />
-              Allow embedding (iframe)
+              {t("bld.allowEmbed")}
             </label>
             <button
               onClick={async () => {
@@ -784,25 +783,25 @@ export default function Builder() {
                     allow_embed: fsEmbed, logo_url: fsLogo,
                   }),
                 });
-                setOvMsg(r.ok ? "Display settings saved ✓" : "Failed");
+                setOvMsg(r.ok ? t("bld.displaySaved") : t("prof.failed"));
               }}
               className="mt-2 w-full rounded-md bg-[var(--jf-primary)] py-1.5 text-xs font-medium text-white"
             >
-              Save display settings
+              {t("bld.saveDisplay")}
             </button>
 
-            <p className="mt-3 text-[11px] font-medium uppercase tracking-wider text-[#9ca3af]">Embed on your site</p>
+            <p className="mt-3 text-[11px] font-medium uppercase tracking-wider text-[#9ca3af]">{t("bld.embedOnSite")}</p>
             <pre className="mt-1 overflow-x-auto rounded-md bg-slate-900 p-2 text-[10px] text-emerald-300">{`<iframe src="${origin}/embed/f/wan/${slug}" style="width:100%;height:640px;border:0" title="${title}"></iframe>`}</pre>
             <button
               onClick={() => {
                 navigator.clipboard.writeText(
                   `<iframe src="${origin}/embed/f/wan/${slug}" style="width:100%;height:640px;border:0" title="${title}"></iframe>`,
                 );
-                setOvMsg("Embed code copied ✓");
+                setOvMsg(t("bld.embedCopied"));
               }}
               className="mt-1 w-full rounded-md border border-[var(--jf-border)] py-1.5 text-xs text-slate-600 hover:bg-slate-50"
             >
-              Copy embed code
+              {t("bld.copyEmbed")}
             </button>
           </div>
         )}
@@ -811,7 +810,7 @@ export default function Builder() {
           {currentId && (
             <div className="mt-8 rounded-lg border border-[var(--jf-border)] bg-white p-3">
               <p className="text-xs font-medium uppercase tracking-wider text-[#9ca3af]">
-                Tracking (this form)
+                {t("bld.trackingTitle")}
               </p>
               <textarea
                 value={formTrack}
@@ -826,11 +825,11 @@ export default function Builder() {
                     method: "PUT", headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ head: formTrack }),
                   });
-                  setOvMsg(r.ok ? "Form tracking saved ✓" : "Failed");
+                  setOvMsg(r.ok ? t("bld.formTrackingSaved") : t("prof.failed"));
                 }}
                 className="mt-1.5 w-full rounded-md border border-[var(--jf-border)] py-1.5 text-xs text-slate-600 hover:bg-slate-50"
               >
-                Save form tracking
+                {t("bld.saveFormTracking")}
               </button>
             </div>
           )}
@@ -839,14 +838,14 @@ export default function Builder() {
           {currentId && formStat && (
             <div className="mt-8 rounded-lg border border-[var(--jf-border)] bg-white p-3">
               <p className="text-xs font-medium uppercase tracking-wider text-[#9ca3af]">
-                This form so far
+                {t("bld.thisFormSoFar")}
               </p>
               <div className="mt-2 grid grid-cols-2 gap-1.5 text-[11px] text-[var(--jf-muted)]">
-                <span>Submissions: <b>{formStat.submissions}</b></span>
-                <span>Paid+Confirmed: <b className="text-emerald-600">{formStat.paid_count + formStat.confirmed_count}</b></span>
+                <span>{t("dash.submissions")} <b>{formStat.submissions}</b></span>
+                <span>{t("dash.paidConfirmed")} <b className="text-emerald-600">{formStat.paid_count + formStat.confirmed_count}</b></span>
               </div>
               <p className="mt-1 text-sm font-semibold text-[var(--jf-primary)]">
-                {`RM${(formStat.revenue_sen / 100).toFixed(2)}`} confirmed revenue
+                {`RM${(formStat.revenue_sen / 100).toFixed(2)}`} {t("bld.confirmedRevenue")}
               </p>
             </div>
           )}
@@ -856,25 +855,25 @@ export default function Builder() {
             <div className="mt-8 rounded-lg border border-[var(--jf-border)] bg-white p-3">
               <div className="flex items-center justify-between gap-2">
                 <p className="text-xs font-medium uppercase tracking-wider text-[#9ca3af]">
-                  Sales (this form)
+                  {t("bld.salesThisForm")}
                 </p>
                 <a
                   href={`/api/rest/sales/export.csv?form_id=${currentId}`}
                   className="whitespace-nowrap rounded-md border border-[var(--jf-border)] px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50"
                 >
-                  Export CSV
+                  {t("common.exportCsv")}
                 </a>
               </div>
               <div className="mt-2 overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-[var(--jf-border)] text-left text-[10px] uppercase tracking-wide text-[var(--jf-muted)]">
-                      <th className="px-2 py-1.5 font-medium">Reference</th>
-                      <th className="px-2 py-1.5 font-medium">Buyer</th>
-                      <th className="px-2 py-1.5 font-medium">Amount</th>
-                      <th className="px-2 py-1.5 font-medium">Status</th>
+                      <th className="px-2 py-1.5 font-medium">{t("dash.ref")}</th>
+                      <th className="px-2 py-1.5 font-medium">{t("dash.buyer")}</th>
+                      <th className="px-2 py-1.5 font-medium">{t("dash.amount")}</th>
+                      <th className="px-2 py-1.5 font-medium">{t("dash.status")}</th>
                       <th className="px-2 py-1.5" />
-                      <th className="px-2 py-1.5 font-medium">Actions</th>
+                      <th className="px-2 py-1.5 font-medium">{t("bld.actions")}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -900,7 +899,7 @@ export default function Builder() {
                                 disabled={saleActionBusy !== null}
                                 className="rounded-md bg-[#5e6ad2] px-2 py-1 text-[10px] font-medium text-white hover:bg-[#828fff] disabled:cursor-not-allowed disabled:opacity-40"
                               >
-                                {saleActionBusy === s.ref_code ? "…" : "Capture"}
+                                {saleActionBusy === s.ref_code ? "…" : t("bld.capture")}
                               </button>
                               <button
                                 type="button"
@@ -908,7 +907,7 @@ export default function Builder() {
                                 disabled={saleActionBusy !== null}
                                 className="rounded-md border border-[var(--jf-border)] px-2 py-1 text-[10px] text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
                               >
-                                Release
+                                {t("bld.release")}
                               </button>
                             </div>
                           ) : (
@@ -920,7 +919,7 @@ export default function Builder() {
                     {formSales.length === 0 && (
                       <tr>
                         <td colSpan={6} className="px-2 py-6 text-center text-xs text-[var(--jf-muted)]">
-                          {formSalesErr || "No sales yet for this form."}
+                          {formSalesErr || t("bld.noSalesForm")}
                         </td>
                       </tr>
                     )}
@@ -933,7 +932,7 @@ export default function Builder() {
               {formSalesTotal > 0 && (
                 <div className="mt-2 flex items-center justify-between gap-2 border-t border-[var(--jf-border)] pt-2">
                   <span className="text-[10px] text-[var(--jf-muted)]">
-                    {formSalesTotal} {formSalesTotal === 1 ? "record" : "records"} · page {formSalesPage} of {formSalesTotalPages}
+                    {formSalesTotal} {t("dash.records")} · {t("dash.pageOf", { page: formSalesPage, total: formSalesTotalPages })}
                   </span>
                   <div className="flex items-center gap-1.5">
                     <button
@@ -942,7 +941,7 @@ export default function Builder() {
                       disabled={formSalesPage <= 1}
                       className="rounded-md border border-[var(--jf-border)] px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
                     >
-                      Prev
+                      {t("common.prev")}
                     </button>
                     <button
                       type="button"
@@ -950,7 +949,7 @@ export default function Builder() {
                       disabled={formSalesPage >= formSalesTotalPages}
                       className="rounded-md border border-[var(--jf-border)] px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
                     >
-                      Next
+                      {t("common.next")}
                     </button>
                   </div>
                 </div>
@@ -959,7 +958,7 @@ export default function Builder() {
           )}
 
           <p className="mb-2 mt-8 text-xs font-medium uppercase tracking-wider text-[#9ca3af]">
-            Existing forms
+            {t("bld.existingForms")}
           </p>
           <div className="space-y-1.5">
             {forms.map((f) => (
@@ -985,10 +984,10 @@ export default function Builder() {
           {currentId && (
             <div className="mt-8 rounded-lg border border-[var(--jf-border)] bg-white p-3">
               <p className="text-xs font-medium uppercase tracking-wider text-[#9ca3af]">
-                CHIP override (this form)
+                {t("bld.chipOverride")}
               </p>
               <p className="mt-1 text-[11px] text-[var(--jf-muted)]">
-                Empty = use account defaults.
+                {t("bld.emptyDefaults")}
               </p>
               <div className="mt-2 space-y-2">
                 <input
@@ -1025,19 +1024,19 @@ export default function Builder() {
                           email_fallback: ovFallback,
                         }),
                       });
-                      setOvMsg(r.ok ? "Override saved ✓" : "Failed to save override");
+                      setOvMsg(r.ok ? t("bld.overrideSaved") : t("bld.failedOverride"));
                       if (r.ok) setOvSecret("");
                     }}
                     disabled={!currentId || !ovBrand || !ovSecret}
                     className="flex-1 rounded-md bg-[#5e6ad2] py-1.5 text-xs font-medium text-white hover:bg-[#828fff] disabled:opacity-50"
                   >
-                    Save override
+                    {t("bld.saveOverride")}
                   </button>
                   <button
                     onClick={async () => {
                       if (!currentId) return;
                       const r = await fetch(`/api/rest/forms/${currentId}/chip-override`, { method: "DELETE" });
-                      setOvMsg(r.ok ? "Override cleared — account defaults apply" : "Failed");
+                      setOvMsg(r.ok ? t("bld.overrideCleared") : t("prof.failed"));
                       setOvBrand("");
                       setOvSecret("");
                       setOvFallback("");
@@ -1045,7 +1044,7 @@ export default function Builder() {
                     disabled={!currentId}
                     className="rounded-md border border-[var(--jf-border)] px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50"
                   >
-                    Clear
+                    {t("set.clear")}
                   </button>
                 </div>
                 {ovMsg && <p className="text-[11px] text-[var(--jf-primary)]">{ovMsg}</p>}

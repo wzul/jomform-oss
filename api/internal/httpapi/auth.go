@@ -63,6 +63,7 @@ type loginRequest struct {
 type meResponse struct {
 	ID          string  `json:"id"`
 	Email       string  `json:"email"`
+	Name        string  `json:"name,omitempty"`
 	TOTPEnabled bool    `json:"totp_enabled"`
 	CreatedAt   string  `json:"created_at"`
 	NextStep    *string `json:"next_step,omitempty"` // set when 2FA code is required
@@ -183,7 +184,7 @@ func (a *AuthHandlers) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, meResponse{
-		ID: user.ID, Email: user.Email, TOTPEnabled: user.TOTPSecret != "", CreatedAt: user.CreatedAt.UTC().Format(time.RFC3339),
+		ID: user.ID, Email: user.Email, Name: user.Name, TOTPEnabled: user.TOTPSecret != "", CreatedAt: user.CreatedAt.UTC().Format(time.RFC3339),
 	})
 }
 
