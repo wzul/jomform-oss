@@ -49,6 +49,9 @@ export default function Settings() {
   const [whSecret, setWhSecret] = useState("");
   const [trackingHead, setTrackingHead] = useState("");
   const [social, setSocial] = useState<{ provider: string; email: string; linked_at: string }[]>([]);
+  // Cloudflare OAuth link state (issue #22): Login vs Disconnect+✓ per #9.
+  const [cfLinked, setCfLinked] = useState(false);
+  const [cfConfigured, setCfConfigured] = useState(false);
 
   // Issue #13: single aggregated fetch replaces the 6-request waterfall
   // (chip, keys, domains, webhooks, einvoice, social) on mount.
@@ -82,6 +85,22 @@ export default function Settings() {
   useEffect(() => {
     load();
   }, [load]);
+
+  const loadCfStatus = useCallback(() => {
+    return fetch("/api/cf/status")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d) {
+          setCfLinked(!!d.linked);
+          setCfConfigured(d.configured !== false);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    loadCfStatus();
+  }, [loadCfStatus]);
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
@@ -322,6 +341,42 @@ export default function Settings() {
               </li>
             ))}
           </ul>
+        </section>
+
+        {/* ── Cloudflare connect (auto CNAME) — issue #22 ── */}
+        <section className="jf-card mt-6 p-6">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold">{t("set.cfTitle")}</h2>
+            {cfLinked && (
+              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+                {t("set.cfConnected")}
+              </span>
+            )}
+          </div>
+          <p className="mt-2 text-sm text-slate-400">
+            {t("set.cfHelp")}
+          </p>
+          <div className="mt-3 flex gap-2">
+            {!cfLinked && (
+              <a href="/api/cf/start" className="jf-btn-primary inline-block">
+                {t("set.cfLogin")}
+              </a>
+            )}
+            {cfLinked && (
+              <button
+                onClick={async () => {
+                  await fetch("/api/cf/disconnect", { method: "POST" });
+                  setCfLinked(false);
+                }}
+                className="jf-btn-ghost text-slate-600"
+              >
+                {t("set.cfDisconnect")}
+              </button>
+            )}
+          </div>
+          {!cfConfigured && (
+            <p className="mt-2 text-xs text-slate-400">{t("set.cfNotConfigured")}</p>
+          )}
         </section>
 
         {/* ── Tracking scripts ── */}
