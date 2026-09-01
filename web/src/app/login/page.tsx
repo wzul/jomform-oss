@@ -32,6 +32,12 @@ export default function Login() {
 
     if (r.ok) {
       setDone(true);
+      try {
+        const sp = await fetch("/api/spaces").then((x) => (x.ok ? x.json() : []));
+        if (Array.isArray(sp) && sp.length) {
+          localStorage.setItem("jf_space", sp[0].slug);
+        }
+      } catch {}
       window.location.href = "/";
       return;
     }

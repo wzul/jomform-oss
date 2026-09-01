@@ -184,3 +184,56 @@ func (s *FormStore) TemplateBySlug(ctx context.Context, slug string) (*Form, err
 	}
 	return f, nil
 }
+
+// PublishedBySpaceSlug resolves a published form via space subdomain
+// (e.g. wanzulhosting.jomform.com/form-baru — no /f/ prefix).
+func (s *FormStore) PublishedBySpaceSlug(ctx context.Context, spaceSlug, formSlug string) (*Form, error) {
+	f, err := s.PublishedByAccountSlug(ctx, spaceSlug, formSlug)
+	if err == nil {
+		return f, nil
+	}
+	// space slug may differ from account slug — join spaces
+	f2 := &Form{}
+	err = s.pool.QueryRow(ctx,
+		`SELECT f.id, f.account_id, f.slug, f.title, f.config, f.theme, f.status, f.is_main,
+		        f.redirect_success, f.redirect_failure, f.allow_embed, f.logo_url, f.is_template,
+		        f.created_at, f.updated_at
+		 FROM forms f
+		 JOIN accounts a ON a.id = f.account_id
+		 JOIN spaces sp ON sp.id = a.space_id
+		 WHERE sp.slug = $1 AND f.slug = $2 AND f.status = 'published'`,
+		spaceSlug, formSlug).Scan(
+		&f2.ID, &f2.AccountID, &f2.Slug, &f2.Title, &f2.Config, &f2.Theme,
+		&f2.Status, &f2.IsMain, &f2.RedirectSuccess, &f2.RedirectFailure,
+		&f2.AllowEmbed, &f2.LogoURL, &f2.IsTemplate, &f2.CreatedAt, &f2.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return f2, nil
+}
+
+// ListPublishedBySpace lists published forms belonging to a space (by slug).
+func (s *FormStore) ListPublishedBySpace(ctx context.Context, spaceSlug string) ([]*Form, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT f.id, f.account_id, f.slug, f.title, f.config, f.theme, f.status, f.is_main,
+		        f.redirect_success, f.redirect_failure, f.allow_embed, f.logo_url, f.is_template,
+		        f.created_at, f.updated_at
+		 FROM forms f
+		 JOIN accounts a ON a.id = f.account_id
+		 JOIN spaces sp ON sp.id = a.space_id
+		 WHERE sp.slug = $1 AND f.status = 'published'
+		 ORDER BY f.created_at`, spaceSlug)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Form
+	for rows.Next() {
+		f, err := s.scanOne(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}

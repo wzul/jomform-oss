@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"github.com/wzul/jomform/api/internal/httpapi/middleware"
 	"html/template"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -26,6 +27,7 @@ type PublicHandlers struct {
 	Products       *dbstore.ProductStore
 	Pay            *payments.Service
 	SystemSettings *dbstore.SystemSettingStore
+	Spaces         *dbstore.SpaceStore
 	BaseURL        string
 }
 
@@ -35,6 +37,8 @@ func (h *PublicHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /embed/f/{accslug}/{slug}", h.embedForm)
 	mux.Handle("POST /f/{slug}/order", middleware.RateLimit(http.HandlerFunc(h.handleSubmit)))
 	mux.HandleFunc("GET /t/{ref}", h.handleThankYou)
+	mux.HandleFunc("GET /{$}", h.handleSpaceRoot)
+	mux.HandleFunc("GET /{slug}", h.handleSpaceRootForm)
 }
 
 // genRef produces a short opaque reference code.
@@ -53,7 +57,7 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	var form *dbstore.Form
 	var err error
 	if sub := accountSubdomain(r.Host); sub != "" {
-		form, err = h.Forms.PublishedByAccountSlug(r.Context(), sub, slug)
+		form, err = h.Forms.PublishedBySpaceSlug(r.Context(), sub, slug)
 	} else if cd := customDomainOwner(r.Context(), h.Accounts, r.Host); cd != "" {
 		form, err = h.Forms.PublishedByAccountSlug(r.Context(), cd, slug)
 	} else {
@@ -299,7 +303,7 @@ func (h *PublicHandlers) handleRender(w http.ResponseWriter, r *http.Request) {
 	// Subdomain routing: wanzulhosting.jomform.com/f/test resolves the form
 	// scoped to that account's slug. jomform.com/f/test keeps old behavior.
 	if sub := accountSubdomain(r.Host); sub != "" {
-		f, ferr := h.Forms.PublishedByAccountSlug(r.Context(), sub, slug)
+		f, ferr := h.Forms.PublishedBySpaceSlug(r.Context(), sub, slug)
 		if ferr != nil {
 			http.Error(w, "Borang tidak dijumpai untuk domain ini", http.StatusNotFound)
 			return
@@ -431,4 +435,55 @@ func customDomainOwner(ctx context.Context, s *dbstore.AccountStore, host string
 		return ""
 	}
 	return slug
+}
+
+// handleSpaceRootForm serves a form by slug on a SPACE subdomain
+// (e.g. wanzulhosting.jomform.com/form-baru). On jomform.com it 404s so
+// dashboard routes are unaffected.
+func (h *PublicHandlers) handleSpaceRootForm(w http.ResponseWriter, r *http.Request) {
+	sub := accountSubdomain(r.Host)
+	if sub == "" {
+		http.NotFound(w, r)
+		return
+	}
+	slug := r.PathValue("slug")
+	f, err := h.Forms.PublishedBySpaceSlug(r.Context(), sub, slug)
+	if err != nil {
+		http.Error(w, "Borang tidak dijumpai", http.StatusNotFound)
+		return
+	}
+	h.serveForm(w, r, f)
+}
+
+// handleSpaceRoot serves the space storefront (list of published forms).
+func (h *PublicHandlers) handleSpaceRoot(w http.ResponseWriter, r *http.Request) {
+	sub := accountSubdomain(r.Host)
+	if sub == "" {
+		http.NotFound(w, r)
+		return
+	}
+	forms, err := h.Forms.ListPublishedBySpace(r.Context(), sub)
+	if err != nil {
+		http.Error(w, "ralat", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	io.WriteString(w, "<!doctype html><html><head><meta charset='utf-8'><title>"+sub+"</title>")
+	io.WriteString(w, "<style>body{font-family:system-ui;background:#f7f8f8;margin:0;padding:40px}")
+	io.WriteString(w, ".g{max-width:640px;margin:0 auto;display:grid;gap:12px}")
+	io.WriteString(w, ".g a{background:#fff;border:1px solid #e6e8ec;border-radius:14px;padding:18px 20px;")
+	io.WriteString(w, "color:#17181c;text-decoration:none;font-weight:600;display:block}")
+	io.WriteString(w, "</style></head><body><div class='g'><h1 style='font-size:22px'>Kedai "+sub+"</h1>")
+	if len(forms) == 0 {
+		io.WriteString(w, "<p>Belum ada borang.</p>")
+	}
+	for _, f := range forms {
+		io.WriteString(w, "<a href='/"+f.Slug+"'>"+f.Title+"</a>")
+	}
+	if sid, iderr := h.Spaces.IDBySlug(r.Context(), sub); iderr == nil {
+		if st, serr := h.Spaces.Settings(r.Context(), sid); serr == nil && st.FooterText != "" {
+			io.WriteString(w, "<p style='color:#9ca3af;font-size:12px;margin-top:18px'>"+st.FooterText+"</p>")
+		}
+	}
+	io.WriteString(w, "</div></body></html>")
 }

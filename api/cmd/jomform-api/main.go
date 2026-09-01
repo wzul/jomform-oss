@@ -80,6 +80,7 @@ func main() {
 		keys := dbstore.NewAPIKeyStore(pool)
 
 		formsStore := dbstore.NewFormStore(pool)
+		spacesStore := dbstore.NewSpaceStore(pool)
 		pay := payments.New(chip.New(""), accounts, sales, subs, decryptKey, cfg.AppBaseURL)
 		pay.Forms = formsStore
 		if cfg.SESSMTPHost != "" {
@@ -100,7 +101,7 @@ func main() {
 			Keys: keys, Sales: sales, Sessions: sessions, ChipProbe: chip.New(""),
 			SecretsKey: decryptKey, Pay: pay, Webhooks: whStore, Domains: dbstore.NewDomainStore(pool),
 			SystemSettings: dbstore.NewSystemSettingStore(pool),
-			Spaces:         dbstore.NewSpaceStore(pool),
+			Spaces:         spacesStore,
 		}
 		pay.OnPaid = func(ctx context.Context, accountID, event string, payload map[string]any) {
 			httpapi.DispatchWebhooks(ctx, rest, whStore, accountID, event, payload)
@@ -121,6 +122,7 @@ func main() {
 			Forms: formsStore, Sales: sales, Accounts: accounts,
 			Products: products, Pay: pay, BaseURL: cfg.AppBaseURL,
 			SystemSettings: dbstore.NewSystemSettingStore(pool),
+			Spaces:         spacesStore,
 		}
 
 		// Subscription charge runner: hourly sweep for due charges + overdue cancels.

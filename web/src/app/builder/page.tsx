@@ -296,7 +296,7 @@ export default function Builder() {
     }
     if (publish && id) {
       await fetch(`/api/rest/forms/${id}/publish`, { method: "POST" });
-      setPubUrl(`/f/${payload.slug}`);
+      setPubUrl(`https://${localStorage.getItem("jf_space") || "app"}.jomform.com/${payload.slug}`);
       await load();
     }
     setSaving(false);

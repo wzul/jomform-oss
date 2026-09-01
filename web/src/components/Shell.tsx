@@ -12,6 +12,8 @@ export function Shell({
   active: "dashboard" | "forms" | "products" | "settings" | "profile";
 }) {
   const [user, setUser] = useState<{ email: string } | null>(null);
+  const [spaces, setSpaces] = useState<{ id: string; name: string; slug: string }[]>([]);
+  const [space, setSpace] = useState<string>("");
   const [menuOpen, setMenuOpen] = useState(false);
   const { t } = useI18n();
 
@@ -20,7 +22,26 @@ export function Shell({
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => setUser(d))
       .catch(() => setUser(null));
+    fetch("/api/spaces")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((sp) => {
+        setSpaces(Array.isArray(sp) ? sp : []);
+        const saved = localStorage.getItem("jf_space");
+        if (saved && Array.isArray(sp) && sp.some((s) => s.slug === saved)) {
+          setSpace(saved);
+        } else if (Array.isArray(sp) && sp[0]) {
+          setSpace(sp[0].slug);
+          localStorage.setItem("jf_space", sp[0].slug);
+        }
+      })
+      .catch(() => setSpaces([]));
   }, []);
+
+  function switchSpace(slug: string) {
+    setSpace(slug);
+    localStorage.setItem("jf_space", slug);
+    window.location.reload();
+  }
 
   async function signOut() {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -63,8 +84,8 @@ export function Shell({
             </a>
           ))}
         </nav>
-        {/* user card */}
-        <div className="border-t border-[var(--jf-border)] p-3">
+        {/* user card — sticky bottom */}
+        <div className="sticky top-[calc(100vh-9.5rem)] border-t border-[var(--jf-border)] p-3">
           <div className="flex items-center gap-2.5 rounded-lg px-2 py-2">
             <div className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-100 text-xs font-semibold text-[var(--jf-primary)]">
               {(user?.email || "?")[0].toUpperCase()}
@@ -81,6 +102,22 @@ export function Shell({
               </button>
             </div>
           </div>
+          {spaces.length > 0 && (
+            <div className="mt-2 px-2">
+              <label className="text-[10px] uppercase tracking-wider text-[var(--jf-muted)]">Space</label>
+              <select
+                value={space}
+                onChange={(e) => switchSpace(e.target.value)}
+                className="mt-0.5 w-full rounded-md border border-[var(--jf-border)] bg-white px-2 py-1 text-xs"
+              >
+                {spaces.map((s) => (
+                  <option key={s.id} value={s.slug}>
+                    {s.name} ({s.slug}.jomform.com)
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <div className="mt-1 px-2">
             <LangToggle />
           </div>

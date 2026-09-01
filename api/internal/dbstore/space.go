@@ -105,3 +105,13 @@ func (s *SpaceStore) SaveSettings(ctx context.Context, st *SpaceSettings) error 
 		st.SpaceID, st.FooterText, st.CompanyReg, st.PrivacyURL, st.TermsURL, st.MenuJSON)
 	return err
 }
+
+// IDBySlug resolves a space id from its slug ("" when unknown).
+func (s *SpaceStore) IDBySlug(ctx context.Context, slug string) (string, error) {
+	var id string
+	err := s.pool.QueryRow(ctx, `SELECT id FROM spaces WHERE slug=$1`, slug).Scan(&id)
+	if err != nil {
+		return "", err
+	}
+	return id, nil
+}

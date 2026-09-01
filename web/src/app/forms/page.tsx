@@ -17,6 +17,9 @@ const subdomainBase = () => {
   return "";
 };
 
+const spaceHost =
+  typeof window !== "undefined" ? `${localStorage.getItem("jf_space") || "app"}.jomform.com` : "app.jomform.com";
+
 export default function FormsPage() {
   const { t } = useI18n();
   const [forms, setForms] = useState<FormRow[]>([]);
@@ -62,7 +65,7 @@ export default function FormsPage() {
             <li key={f.id} className="jf-card flex items-center justify-between px-5 py-4">
               <div className="min-w-0">
                 <p className="truncate text-sm font-medium">{f.title}</p>
-                <p className="font-mono text-[11px] text-[var(--jf-muted)]">/f/{f.slug}</p>
+                <p className="font-mono text-[11px] text-[var(--jf-muted)]">{spaceHost}/{f.slug}</p>
               </div>
               <div className="flex items-center gap-2">
                 {f.status === "published" ? (
@@ -73,7 +76,7 @@ export default function FormsPage() {
                     <a href={`/builder?form=${f.id}`} className="jf-btn-ghost px-3 py-1.5 text-xs">
                       Edit
                     </a>
-                    <a href={`/f/${f.slug}`} target="_blank" className="jf-btn-ghost px-3 py-1.5 text-xs">
+                    <a href={`https://${spaceHost}/${f.slug}`} target="_blank" className="jf-btn-ghost px-3 py-1.5 text-xs">
                       View ↗
                     </a>
                   </>
