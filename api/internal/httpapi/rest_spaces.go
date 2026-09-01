@@ -93,6 +93,10 @@ func (h *RESTHandlers) getSpaceSettings(w http.ResponseWriter, r *http.Request, 
 		writeErr(w, http.StatusNotFound, "space tidak dijumpai")
 		return
 	}
+	if s.Owner != h.sessionOwnerID(r) {
+		writeErr(w, http.StatusForbidden, "bukan space anda")
+		return
+	}
 	set, err := h.Spaces.Settings(r.Context(), sID)
 	if err != nil {
 		respondErr(w, err)
@@ -123,6 +127,10 @@ func (h *RESTHandlers) saveSpaceSettings(w http.ResponseWriter, r *http.Request,
 	sID := r.PathValue("id")
 	if _, perr := uuid.Parse(sID); perr != nil {
 		writeErr(w, http.StatusBadRequest, "id tidak sah")
+		return
+	}
+	if s, serr := h.Spaces.ByID(r.Context(), sID); serr != nil || s == nil || s.Owner != h.sessionOwnerID(r) {
+		writeErr(w, http.StatusForbidden, "bukan space anda")
 		return
 	}
 	st := &dbstore.SpaceSettings{
