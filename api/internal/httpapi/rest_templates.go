@@ -48,12 +48,16 @@ func (h *RESTHandlers) useTemplate(w http.ResponseWriter, r *http.Request, actx 
 		title = tpl.Title
 	}
 	f := &dbstore.Form{
-		AccountID: actx.Account.ID,
-		Slug:      tpl.Slug + "-" + randTokenHex(3),
-		Title:     title,
-		Config:    tpl.Config,
-		Theme:     tpl.Theme,
-		Status:    "draft",
+		AccountID:       actx.Account.ID,
+		Slug:            tpl.Slug + "-" + randTokenHex(3),
+		Title:           title,
+		Config:          tpl.Config,
+		Theme:           tpl.Theme,
+		Status:          "draft",
+		AllowEmbed:      true,
+		LogoURL:         tpl.LogoURL,
+		RedirectSuccess: tpl.RedirectSuccess,
+		RedirectFailure: tpl.RedirectFailure,
 	}
 	if err := h.Forms.Create(r.Context(), f); err != nil {
 		respondErr(w, err)
