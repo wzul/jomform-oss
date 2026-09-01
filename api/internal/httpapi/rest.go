@@ -3,6 +3,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -27,6 +28,8 @@ type RESTHandlers struct {
 	Webhooks       *dbstore.WebhookStore
 	SystemSettings *dbstore.SystemSettingStore
 	Spaces         *dbstore.SpaceStore
+	Passkeys       *dbstore.PasskeyStore
+	Users          *dbstore.UserStore
 	Domains        *dbstore.DomainStore
 	// ChipProbe validates credentials against CHIP at save time.
 	ChipProbe interface {
@@ -196,4 +199,49 @@ func (h *RESTHandlers) sessionOwnerID(r *http.Request) string {
 		return ""
 	}
 	return uid
+}
+
+// profileUser loads the current session user (nil when anonymous).
+func (h *RESTHandlers) profileUser(r *http.Request) (*dbstore.User, error) {
+	uid := h.sessionOwnerID(r)
+	if uid == "" {
+		return nil, nil
+	}
+	return h.Users.ByID(r.Context(), uid)
+}
+
+// startSessionFor issues a new session cookie for a user id.
+func (h *RESTHandlers) startSessionFor(w http.ResponseWriter, r *http.Request, userID string) error {
+	token, err := h.Sessions.Create(r.Context(), userID)
+	if err != nil {
+		return err
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookie,
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   int(authSessionTTL.Seconds()),
+	})
+	return nil
+}
+
+func base64URL(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
+
+func base64URLDecode(s string) ([]byte, error) { return base64.RawURLEncoding.DecodeString(s) }
+
+func mustJSON(v any) []byte {
+	b, _ := json.Marshal(v)
+	return b
+}
+
+// passkeyLookupUser finds a user by id for discoverable login.
+func (h *RESTHandlers) passkeyLookupUser(ctx context.Context, userID string) (*dbstore.PasskeyUser, error) {
+	u, err := h.Users.ByID(ctx, userID)
+	if err != nil || u == nil {
+		return nil, err
+	}
+	return h.Passkeys.UserFor(ctx, userID, u.Email)
 }

@@ -50,6 +50,37 @@ export default function Login() {
     setError(d.error || "Gagal. Cuba semula.");
   }
 
+  async function passkeyLogin() {
+    setError(""); setBusy(true);
+    try {
+      const st = await fetch("/api/auth/passkeys/login/start", { method: "POST" }).then((r) => r.json());
+      const opts = st.options.publicKey || st.options;
+      opts.challenge = Uint8Array.from(atob(opts.challenge.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
+      const cred = await navigator.credentials.get({ publicKey: opts }) as PublicKeyCredential;
+      const resp = (cred as any).response;
+      const body = {
+        key: st.key,
+        id: btoa(String.fromCharCode(...new Uint8Array(cred.rawId))),
+        rawId: btoa(String.fromCharCode(...new Uint8Array(cred.rawId))),
+        type: cred.type,
+        response: {
+          authenticatorData: btoa(String.fromCharCode(...new Uint8Array(resp.authenticatorData))),
+          clientDataJSON: btoa(String.fromCharCode(...new Uint8Array(resp.clientDataJSON))),
+          signature: btoa(String.fromCharCode(...new Uint8Array(resp.signature))),
+          userHandle: resp.userHandle ? btoa(String.fromCharCode(...new Uint8Array(resp.userHandle))) : null,
+        },
+      };
+      const fin = await fetch("/api/auth/passkeys/login/finish", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      if (fin.ok) { setDone(true); window.location.href = "/"; return; }
+      setError((await fin.json().catch(() => ({}))).error || "Passkey tidak sah.");
+    } catch {
+      setError("Passkey dibatalkan atau tidak disokong pelayar.");
+    }
+    setBusy(false);
+  }
+
   return (
     <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[var(--jf-bg)] px-6">
       {/* ambient glow */}

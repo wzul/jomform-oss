@@ -81,6 +81,8 @@ func main() {
 
 		formsStore := dbstore.NewFormStore(pool)
 		spacesStore := dbstore.NewSpaceStore(pool)
+		usersStore := dbstore.NewUserStore(pool)
+		passkeysStore := dbstore.NewPasskeyStore(pool)
 		pay := payments.New(chip.New(""), accounts, sales, subs, decryptKey, cfg.AppBaseURL)
 		pay.Forms = formsStore
 		if cfg.SESSMTPHost != "" {
@@ -102,6 +104,8 @@ func main() {
 			SecretsKey: decryptKey, Pay: pay, Webhooks: whStore, Domains: dbstore.NewDomainStore(pool),
 			SystemSettings: dbstore.NewSystemSettingStore(pool),
 			Spaces:         spacesStore,
+			Passkeys:       passkeysStore,
+			Users:          usersStore,
 		}
 		pay.OnPaid = func(ctx context.Context, accountID, event string, payload map[string]any) {
 			httpapi.DispatchWebhooks(ctx, rest, whStore, accountID, event, payload)

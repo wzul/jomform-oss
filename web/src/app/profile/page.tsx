@@ -21,6 +21,7 @@ export default function ProfilePage() {
   const [pwNew, setPwNew] = useState("");
   const [pwConfirm, setPwConfirm] = useState("");
   const [msg, setMsg] = useState("");
+  const [passkeys, setPasskeys] = useState<{ id: string }[]>([]);
   const [err, setErr] = useState("");
 
   const load = useCallback(() => {
@@ -33,6 +34,10 @@ export default function ProfilePage() {
           setEmail(d.email || "");
         }
       });
+    fetch("/api/auth/passkeys")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((k) => setPasskeys(Array.isArray(k) ? k : []))
+      .catch(() => setPasskeys([]));
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -47,6 +52,37 @@ export default function ProfilePage() {
     const d = await r.json().catch(() => ({}));
     setErr(d.error || "Failed");
     return false;
+  }
+
+  async function registerPasskey() {
+    setMsg(""); setErr("");
+    try {
+      const st = await fetch("/api/auth/passkeys/register/start", { method: "POST" }).then((r) => r.json());
+      const opts = st.options.publicKey || st.options;
+      // decode base64url fields
+      opts.challenge = Uint8Array.from(atob(opts.challenge.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
+      if (opts.user?.id) opts.user.id = Uint8Array.from(atob(opts.user.id.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
+      const cred = await navigator.credentials.create({ publicKey: opts });
+      const c = cred as PublicKeyCredential;
+      const resp = c.response as AuthenticatorAttestationResponse;
+      const body = {
+        key: st.key,
+        id: btoa(String.fromCharCode(...new Uint8Array(c.rawId))),
+        rawId: btoa(String.fromCharCode(...new Uint8Array(c.rawId))),
+        type: c.type,
+        response: {
+          attestationObject: btoa(String.fromCharCode(...new Uint8Array(resp.attestationObject))),
+          clientDataJSON: btoa(String.fromCharCode(...new Uint8Array(resp.clientDataJSON))),
+        },
+      };
+      const fin = await fetch("/api/auth/passkeys/register/finish", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      if (fin.ok) { setMsg("Passkey berdaftar ✓"); load(); }
+      else setErr((await fin.json().catch(() => ({}))).error || "Gagal daftar passkey");
+    } catch (e) {
+      setErr("Passkey dibatalkan atau tidak disokong pelayar.");
+    }
   }
 
   return (
@@ -122,6 +158,34 @@ export default function ProfilePage() {
               }}
               className="ml-2 px-4 py-2 text-sm text-red-500 hover:underline"
             >Disable 2FA</button>
+          )}
+        </section>
+
+        {/* Passkeys */}
+        <section className="jf-card mt-6 p-6">
+          <h2 className="text-lg font-semibold">Passkeys</h2>
+          <p className="mt-1 text-sm text-slate-500">
+            Log masuk dengan cap jari / wajah / PIN peranti — tanpa kata laluan.
+          </p>
+          <button onClick={registerPasskey} className="jf-btn-primary mt-3 px-4 text-sm">
+            Daftar passkey
+          </button>
+          {passkeys.length > 0 && (
+            <ul className="mt-3 space-y-1.5">
+              {passkeys.map((k) => (
+                <li key={k.id} className="flex items-center justify-between rounded-md border border-slate-100 px-3 py-2 text-xs">
+                  <span className="font-mono text-slate-500">{k.id.slice(0, 20)}…</span>
+                  <button
+                    onClick={async () => {
+                      if (!window.confirm("Buang passkey ini?")) return;
+                      await fetch(`/api/auth/passkeys/${k.id}`, { method: "DELETE" });
+                      load();
+                    }}
+                    className="text-red-500 hover:underline"
+                  >Buang</button>
+                </li>
+              ))}
+            </ul>
           )}
         </section>
 

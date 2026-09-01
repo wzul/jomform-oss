@@ -3,6 +3,7 @@ module github.com/wzul/jomform/api
 go 1.27.0
 
 require (
+	github.com/go-webauthn/webauthn v0.18.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/johnfercher/maroto/v2 v2.4.1
 	github.com/modelcontextprotocol/go-sdk v1.7.0
@@ -16,6 +17,11 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/f-amaral/go-async v0.3.0 // indirect
+	github.com/fxamacker/cbor/v2 v2.9.3 // indirect
+	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
+	github.com/go-webauthn/x v0.3.0 // indirect
+	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
+	github.com/google/go-tpm v0.9.8 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/hhrutter/lzw v1.0.0 // indirect
@@ -28,11 +34,14 @@ require (
 	github.com/kr/text v0.2.0 // indirect
 	github.com/mattn/go-runewidth v0.0.21 // indirect
 	github.com/pdfcpu/pdfcpu v0.11.1 // indirect
+	github.com/philhofer/fwd v1.2.0 // indirect
 	github.com/phpdave11/gofpdf v1.4.3 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/rogpeppe/go-internal v1.16.0 // indirect
 	github.com/segmentio/asm v1.1.3 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect
+	github.com/tinylib/msgp v1.6.4 // indirect
+	github.com/x448/float16 v0.8.4 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	golang.org/x/image v0.41.0 // indirect
