@@ -10,9 +10,16 @@
  *
  * HTML must NOT be cached at the edge with a long TTL — it references the
  * content-hashed chunk names and changes on every deploy.
+ *
+ * `output: "standalone"` emits a self-contained .next/standalone/ server
+ * (server.js + pruned node_modules) consumed by the Dockerfile runtime
+ * stage, so the production image does not ship the full node_modules.
+ * headers() below still applies in standalone mode — the standalone
+ * server (server.js) serves /_next/static with these headers.
  * @type {import('next').NextConfig}
  */
 const nextConfig = {
+  output: "standalone",
   async headers() {
     return [
       {
