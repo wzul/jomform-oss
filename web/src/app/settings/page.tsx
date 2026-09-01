@@ -49,6 +49,7 @@ export default function Settings() {
   const [webhooks, setWebhooks] = useState<{ id: string; url: string }[]>([]);
   const [whUrl, setWhUrl] = useState("");
   const [whSecret, setWhSecret] = useState("");
+  const [trackingHead, setTrackingHead] = useState("");
 
   const load = useCallback(() => {
     return Promise.all([
@@ -388,6 +389,24 @@ export default function Settings() {
               </p>
             )}
           </details>
+        </section>
+
+        {/* ── Tracking scripts ── */}
+        <section className="jf-card mt-6 p-6">
+          <h2 className="text-lg font-semibold">Tracking scripts (global)</h2>
+          <p className="mt-1 text-sm text-slate-400">
+            Injected into every public form head. Allowed: <code className="rounded bg-slate-100 px-1">&lt;script src="https://…"&gt;</code>, <code className="rounded bg-slate-100 px-1">&lt;meta&gt;</code>, comments. Event handlers & cookie writes stripped.
+          </p>
+          <textarea value={trackingHead} onChange={(e) => setTrackingHead(e.target.value)} rows={4}
+            className="jf-input mt-3 font-mono text-xs"
+            placeholder={'<script src="https://www.googletagmanager.com/gtag/js?id=G-XXXX"></-script>'} />
+          <button onClick={async () => {
+            const r = await fetch("/api/rest/settings/tracking", {
+              method: "PUT", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ head: trackingHead }),
+            });
+            setMsg(r.ok ? "Tracking saved ✓" : "Failed");
+          }} className="jf-btn-primary mt-3 px-4 text-sm">Save tracking</button>
         </section>
 
         {/* ── e-Invoice (LHDN) ── */}

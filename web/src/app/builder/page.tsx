@@ -100,6 +100,7 @@ export default function Builder() {
   const [ovSecret, setOvSecret] = useState("");
   const [ovFallback, setOvFallback] = useState("");
   const [ovMsg, setOvMsg] = useState("");
+  const [formTrack, setFormTrack] = useState("");
 
   // Real drag state: which palette type or block index is being dragged, and
   // which index the insertion indicator currently points at.
@@ -581,6 +582,34 @@ export default function Builder() {
                   )}
                 </div>
               )}
+            </div>
+          )}
+
+          {/* per-form tracking */}
+          {currentId && (
+            <div className="mt-8 rounded-lg border border-[var(--jf-border)] bg-white p-3">
+              <p className="text-xs font-medium uppercase tracking-wider text-[#9ca3af]">
+                Tracking (this form)
+              </p>
+              <textarea
+                value={formTrack}
+                onChange={(e) => setFormTrack(e.target.value)}
+                rows={3}
+                placeholder={'<script src="https://…pixel/js"></script>'}
+                className="mt-2 w-full rounded-md border border-[var(--jf-border)] px-2.5 py-2 font-mono text-[11px]"
+              />
+              <button
+                onClick={async () => {
+                  const r = await fetch(`/api/rest/forms/${currentId}/tracking`, {
+                    method: "PUT", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ head: formTrack }),
+                  });
+                  setOvMsg(r.ok ? "Form tracking saved ✓" : "Failed");
+                }}
+                className="mt-1.5 w-full rounded-md border border-[var(--jf-border)] py-1.5 text-xs text-slate-600 hover:bg-slate-50"
+              >
+                Save form tracking
+              </button>
             </div>
           )}
 

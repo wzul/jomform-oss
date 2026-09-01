@@ -126,3 +126,11 @@ func (s *FormStore) PublishedByAccountSlug(ctx context.Context, accountSlug, for
 		accountSlug, formSlug).Scan(&f.ID, &f.AccountID, &f.Slug, &f.Title, &f.Config, &f.Theme)
 	return f, err
 }
+
+// SetTracking stores per-form head tracking (sanitised by caller).
+func (s *FormStore) SetTracking(ctx context.Context, accountID, formID, markup string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE forms SET tracking_head=$3, updated_at=now() WHERE id=$2 AND account_id=$1`,
+		accountID, formID, markup)
+	return err
+}

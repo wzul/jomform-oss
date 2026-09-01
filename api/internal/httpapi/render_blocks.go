@@ -86,6 +86,7 @@ var blockTmpl = template.Must(template.New("blocks").
 	Parse(`<!doctype html>
 <html lang="ms"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{{.Title}}</title>
+{{.TrackHead}}
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
