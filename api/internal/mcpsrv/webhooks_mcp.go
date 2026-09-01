@@ -28,6 +28,20 @@ func (s *Server) setEinvoice(
 	return nil, map[string]string{"status": "saved", "tin": in.TIN, "msic": in.MSIC}, nil
 }
 
+func (s *Server) getEinvoiceSettings(
+	ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn,
+) (*mcp.CallToolResult, map[string]string, error) {
+	acc, err := s.accountAndScope(ctx, false)
+	if err != nil {
+		return nil, nil, err
+	}
+	tin, msic, err := s.deps.Accounts.Einvoice(ctx, acc)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, map[string]string{"tin": tin, "msic": msic}, nil
+}
+
 // ── Webhooks CRUD ────────────────────────────────────────────────────────────
 
 type webhookIn struct {

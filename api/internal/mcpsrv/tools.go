@@ -136,6 +136,10 @@ func (s *Server) registerTools() {
 		Description: "Set TIN + MSIC LHDN untuk resit e-Invoice (B2B).",
 	}, s.setEinvoice)
 	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "get_einvoice_settings",
+		Description: "Baca TIN + MSIC LHDN semasa untuk resit e-Invoice.",
+	}, s.getEinvoiceSettings)
+	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "create_webhook",
 		Description: "Daftar endpoint webhook (events: sale.paid|sale.failed|subscription.charged|*). HMAC-signed.",
 	}, s.createWebhookMCP)
