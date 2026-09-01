@@ -100,6 +100,7 @@ func main() {
 			Keys: keys, Sales: sales, Sessions: sessions, ChipProbe: chip.New(""),
 			SecretsKey: decryptKey, Pay: pay, Webhooks: whStore, Domains: dbstore.NewDomainStore(pool),
 			SystemSettings: dbstore.NewSystemSettingStore(pool),
+			Spaces:         dbstore.NewSpaceStore(pool),
 		}
 		pay.OnPaid = func(ctx context.Context, accountID, event string, payload map[string]any) {
 			httpapi.DispatchWebhooks(ctx, rest, whStore, accountID, event, payload)

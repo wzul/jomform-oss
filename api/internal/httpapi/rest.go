@@ -26,6 +26,7 @@ type RESTHandlers struct {
 	Pay            *payments.Service
 	Webhooks       *dbstore.WebhookStore
 	SystemSettings *dbstore.SystemSettingStore
+	Spaces         *dbstore.SpaceStore
 	Domains        *dbstore.DomainStore
 	// ChipProbe validates credentials against CHIP at save time.
 	ChipProbe interface {
@@ -70,6 +71,10 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /v1/cf/start", h.authed(h.cfStart))
 	mux.HandleFunc("GET /v1/cf/callback", h.cfCallback)
 	mux.Handle("GET /v1/cf/status", h.authed(h.cfStatus))
+	mux.Handle("GET /v1/spaces", h.authed(h.listSpaces))
+	mux.Handle("POST /v1/spaces", h.authed(h.createSpace))
+	mux.Handle("GET /v1/spaces/{id}/settings", h.authed(h.getSpaceSettings))
+	mux.Handle("PUT /v1/spaces/{id}/settings", h.authed(h.saveSpaceSettings))
 	mux.Handle("POST /v1/cf/disconnect", h.authed(h.cfDisconnect))
 	mux.Handle("GET /v1/rest/settings/einvoice", h.authed(h.getEinvoicing))
 	mux.Handle("GET /v1/rest/webhooks", h.authed(h.listWebhooks))
@@ -178,4 +183,17 @@ func respondErr(w http.ResponseWriter, err error) {
 		slog.Error("rest_error", "err", err)
 		writeErr(w, http.StatusInternalServerError, "internal error")
 	}
+}
+
+// sessionOwnerID resolves the current session's user id ("" when anon).
+func (h *RESTHandlers) sessionOwnerID(r *http.Request) string {
+	c, err := r.Cookie(sessionCookie)
+	if err != nil || c.Value == "" || h.Sessions == nil {
+		return ""
+	}
+	uid, gerr := h.Sessions.Get(r.Context(), c.Value)
+	if gerr != nil {
+		return ""
+	}
+	return uid
 }
