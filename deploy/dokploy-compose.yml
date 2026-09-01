@@ -83,11 +83,11 @@ services:
       SESSION_SECRET: ${SESSION_SECRET}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       APP_BASE_URL: https://jomform.com
-      SES_SMTP_HOST: \${SES_SMTP_HOST}
-      SES_SMTP_PORT: \${SES_SMTP_PORT}
-      SES_SMTP_USER: \${SES_SMTP_USER}
-      SES_SMTP_PASS: \${SES_SMTP_PASS}
-      SES_FROM: \${SES_FROM}
+      SES_SMTP_HOST: ${SES_SMTP_HOST}
+      SES_SMTP_PORT: ${SES_SMTP_PORT}
+      SES_SMTP_USER: ${SES_SMTP_USER}
+      SES_SMTP_PASS: ${SES_SMTP_PASS}
+      SES_FROM: ${SES_FROM}
       APP_ENV: prod
       PORT: "8080"
     depends_on:

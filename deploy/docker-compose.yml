@@ -72,6 +72,12 @@ services:
       SESSION_SECRET: ${SESSION_SECRET:-dev_only_change_me}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-dev_only_32byte_key_change_me_pls}
       APP_BASE_URL: ${APP_BASE_URL:-http://localhost:8080}
+      # SES SMTP passthrough (transactional email; empty host disables email)
+      SES_SMTP_HOST: ${SES_SMTP_HOST:-}
+      SES_SMTP_PORT: ${SES_SMTP_PORT:-587}
+      SES_SMTP_USER: ${SES_SMTP_USER:-}
+      SES_SMTP_PASS: ${SES_SMTP_PASS:-}
+      SES_FROM: ${SES_FROM:-}
       PORT: "8080"
     depends_on:
       postgres:
