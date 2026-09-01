@@ -114,8 +114,8 @@ export default function ProfilePage() {
 
   return (
     <Shell active="profile">
-      <main className="mx-auto max-w-2xl flex-1 px-6 py-8">
-        <h1 className="text-2xl font-bold">{t("prof.title")}</h1>
+      <main className="w-full flex-1 px-6 py-8">
+        <h1 className="max-w-xl text-2xl font-bold">{t("prof.title")}</h1>
 
         {/* Tab bar */}
         <div className="mt-4 flex gap-1 border-b border-slate-200">
@@ -147,7 +147,7 @@ export default function ProfilePage() {
             <section className="jf-card mt-6 p-6">
               <h2 className="text-lg font-semibold">{t("prof.identity")}</h2>
               <label className="mt-3 block text-xs text-slate-500">{t("prof.displayName")}</label>
-              <input value={name} onChange={(e) => setName(e.target.value)} className="jf-input mt-1" placeholder={t("prof.yourName")} />
+              <input value={name} onChange={(e) => setName(e.target.value)} className="jf-input mt-1 max-w-xl" placeholder={t("prof.yourName")} />
               <button
                 onClick={() => post("/api/auth/profile/name", { name })}
                 className="jf-btn-primary mt-3"
@@ -165,9 +165,9 @@ export default function ProfilePage() {
                 )}
               </p>
               <label className="mt-3 block text-sm">{t("prof.newEmail")}</label>
-              <input value={email} onChange={(e) => setEmail(e.target.value)} className="jf-input mt-1" placeholder="new@email.com" />
+              <input value={email} onChange={(e) => setEmail(e.target.value)} className="jf-input mt-1 max-w-xl" placeholder="new@email.com" />
               <label className="mt-3 block text-sm">{t("prof.currentPwConfirm")}</label>
-              <input type="password" value={pwCurrent} onChange={(e) => setPwCurrent(e.target.value)} className="jf-input mt-1" />
+              <input type="password" value={pwCurrent} onChange={(e) => setPwCurrent(e.target.value)} className="jf-input mt-1 max-w-xl" />
               <button
                 onClick={async () => {
                   if (await post("/api/auth/profile/email", { email, password: pwCurrent })) {
@@ -186,11 +186,11 @@ export default function ProfilePage() {
             <section className="jf-card mt-6 p-6">
               <h2 className="text-lg font-semibold">{t("prof.password")}</h2>
               <label className="mt-3 block text-sm">{t("prof.currentPw")}</label>
-              <input type="password" value={pwCurrent} onChange={(e) => setPwCurrent(e.target.value)} className="jf-input mt-1" />
+              <input type="password" value={pwCurrent} onChange={(e) => setPwCurrent(e.target.value)} className="jf-input mt-1 max-w-xl" />
               <label className="mt-2 block text-sm">{t("prof.newPw")}</label>
-              <input type="password" value={pwNew} onChange={(e) => setPwNew(e.target.value)} className="jf-input mt-1" />
+              <input type="password" value={pwNew} onChange={(e) => setPwNew(e.target.value)} className="jf-input mt-1 max-w-xl" />
               <label className="mt-2 block text-sm">{t("prof.confirmPw")}</label>
-              <input type="password" value={pwConfirm} onChange={(e) => setPwConfirm(e.target.value)} className="jf-input mt-1" />
+              <input type="password" value={pwConfirm} onChange={(e) => setPwConfirm(e.target.value)} className="jf-input mt-1 max-w-xl" />
               <button
                 onClick={async () => {
                   if (pwNew !== pwConfirm) { setErr(t("prof.pwMismatch")); return; }

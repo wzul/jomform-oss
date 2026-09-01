@@ -82,9 +82,9 @@ export default function Products() {
 
   return (
     <Shell active="products">
-      <div className="mx-auto w-full max-w-4xl flex-1 px-6 py-8">
-        <h1 className="text-xl font-semibold tracking-tight">{t("prod.title")}</h1>
-        <p className="text-sm text-[var(--jf-muted)]">{t("prod.subtitle")}</p>
+      <div className="w-full flex-1 px-6 py-8">
+        <h1 className="max-w-xl text-xl font-semibold tracking-tight">{t("prod.title")}</h1>
+        <p className="max-w-xl text-sm text-[var(--jf-muted)]">{t("prod.subtitle")}</p>
 
         <form onSubmit={add} className="jf-card mt-6 flex flex-wrap gap-2 p-4">
           <input value={name} onChange={(e) => setName(e.target.value)} required placeholder={t("prod.name")} className="jf-input min-w-48 flex-1" />

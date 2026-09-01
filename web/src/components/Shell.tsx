@@ -11,7 +11,7 @@ export function Shell({
   children: React.ReactNode;
   active: "dashboard" | "forms" | "products" | "settings" | "profile";
 }) {
-  const [user, setUser] = useState<{ email: string } | null>(null);
+  const [user, setUser] = useState<{ email: string; name?: string } | null>(null);
   const [spaces, setSpaces] = useState<{ id: string; name: string; slug: string }[]>([]);
   const [space, setSpace] = useState<string>("");
   const [menuOpen, setMenuOpen] = useState(false);
@@ -88,12 +88,17 @@ export function Shell({
         <div className="shrink-0 border-t border-[var(--jf-border)] p-3">
           <div className="flex items-center gap-2.5 rounded-lg px-2 py-2">
             <div className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-100 text-xs font-semibold text-[var(--jf-primary)]">
-              {(user?.email || "?")[0].toUpperCase()}
+              {((user?.name || user?.email || "?")[0] || "?").toUpperCase()}
             </div>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-[13px] font-medium" title={user?.email || ""}>
-                {user?.email || "…"}
+              <p className="truncate text-[13px] font-medium" title={user?.name || user?.email || ""}>
+                {user?.name || user?.email || "…"}
               </p>
+              {user?.name && (
+                <p className="truncate text-[11px] text-[var(--jf-muted)]" title={user?.email || ""}>
+                  {user?.email || ""}
+                </p>
+              )}
               <button
                 onClick={signOut}
                 className="text-[11px] text-[var(--jf-muted)] hover:text-red-500"
@@ -181,8 +186,11 @@ export function Shell({
                 ))}
               </nav>
               <div className="absolute bottom-4 left-0 right-0 px-4">
-                <p className="mb-2 truncate text-xs text-[var(--jf-muted)]" title={user?.email || ""}>
-                  {user?.email || "…"}
+                <p
+                  className="mb-2 truncate text-xs text-[var(--jf-muted)]"
+                  title={user?.name ? `${user.name} (${user?.email || ""})` : user?.email || ""}
+                >
+                  {user?.name || user?.email || "…"}
                 </p>
                 <button onClick={signOut} className="w-full rounded-lg border border-[var(--jf-border)] py-2 text-sm text-slate-600">
                   {t("nav.signout")}

@@ -163,8 +163,8 @@ export default function Settings() {
 
   return (
     <Shell active="settings">
-      <main className="mx-auto max-w-3xl flex-1 px-6 py-8">
-        <h1 className="text-2xl font-bold">
+      <main className="w-full flex-1 px-6 py-8">
+        <h1 className="max-w-xl text-2xl font-bold">
           {t("set.title")} <span className="text-[var(--jf-primary)]">JomForm</span>
         </h1>
 
@@ -184,7 +184,7 @@ export default function Settings() {
               </span>
             )}
           </div>
-          <p className="mt-2 text-sm text-slate-400">
+          <p className="mt-2 max-w-xl text-sm text-slate-400">
             {t("set.getYour")} <code className="rounded bg-slate-100 px-1">Brand ID</code> {t("set.and")}{" "}
             <code className="rounded bg-slate-100 px-1">{t("set.secretKey")}</code> {t("set.from")}{" "}
             <a
@@ -205,7 +205,7 @@ export default function Settings() {
                 value={brandId}
                 onChange={(e) => setBrandId(e.target.value)}
                 required
-                className="jf-input mt-1"
+                className="jf-input mt-1 max-w-xl"
                 placeholder="e.g. 5f2b…-uuid"
               />
             </div>
@@ -223,7 +223,7 @@ export default function Settings() {
                 onChange={(e) => setSecretKey(e.target.value)}
                 required
                 type="text"
-                className="jf-input mt-1 font-mono"
+                className="jf-input mt-1 max-w-xl font-mono"
                 placeholder="sk_live_… / sk_test_…"
               />
             </div>
@@ -240,7 +240,7 @@ export default function Settings() {
                 value={emailFallback}
                 onChange={(e) => setEmailFallback(e.target.value)}
                 type="email"
-                className="jf-input mt-1"
+                className="jf-input mt-1 max-w-xl"
                 placeholder="store@yourshop.my"
               />
             </div>
@@ -281,7 +281,7 @@ export default function Settings() {
         {/* ── custom domains (multi) ── */}
         <section className="jf-card mt-6 p-6">
           <h2 className="text-lg font-semibold">{t("set.domainsTitle")}</h2>
-          <p className="mt-2 text-sm text-slate-400">
+          <p className="mt-2 max-w-xl text-sm text-slate-400">
             {t("set.domainsHelp")}
           </p>
           {domainMsg && <p className="mt-3 rounded-lg bg-indigo-50 px-3 py-2 text-sm text-indigo-700">{domainMsg}</p>}
@@ -290,7 +290,7 @@ export default function Settings() {
               value={domainInput}
               onChange={(e) => setDomainInput(e.target.value)}
               placeholder="shop.yourdomain.com"
-              className="jf-input min-w-56 flex-1"
+              className="jf-input min-w-56 max-w-xl flex-1"
             />
             <button className="jf-btn-primary" type="submit">{t("set.addDomain")}</button>
           </form>
@@ -327,11 +327,11 @@ export default function Settings() {
         {/* ── Tracking scripts ── */}
         <section className="jf-card mt-6 p-6">
           <h2 className="text-lg font-semibold">{t("set.trackingTitle")}</h2>
-          <p className="mt-1 text-sm text-slate-400">
+          <p className="mt-1 max-w-xl text-sm text-slate-400">
             {t("set.trackingHelp")} <code className="rounded bg-slate-100 px-1">&lt;script src="https://…"&gt;</code>, <code className="rounded bg-slate-100 px-1">&lt;meta&gt;</code>, comments. Event handlers & cookie writes stripped.
           </p>
           <textarea value={trackingHead} onChange={(e) => setTrackingHead(e.target.value)} rows={4}
-            className="jf-input mt-3 font-mono text-xs"
+            className="jf-input mt-3 max-w-xl font-mono text-xs"
             placeholder={'<script src="https://www.googletagmanager.com/gtag/js?id=G-XXXX"></-script>'} />
           <button onClick={async () => {
             const r = await fetch("/api/rest/settings/tracking", {
@@ -345,17 +345,17 @@ export default function Settings() {
         {/* ── e-Invoice (LHDN) ── */}
         <section className="jf-card mt-6 p-6">
           <h2 className="text-lg font-semibold">{t("set.einvoiceTitle")}</h2>
-          <p className="mt-1 text-sm text-slate-400">
+          <p className="mt-1 max-w-xl text-sm text-slate-400">
             {t("set.einvoiceHelp")}
           </p>
           <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div>
               <label className="text-xs text-slate-500">{t("set.companyTin")}</label>
-              <input value={tin} onChange={(e) => setTin(e.target.value)} className="jf-input mt-1" placeholder="e.g. C1234567890" />
+              <input value={tin} onChange={(e) => setTin(e.target.value)} className="jf-input mt-1 max-w-xl" placeholder="e.g. C1234567890" />
             </div>
             <div>
               <label className="text-xs text-slate-500">{t("set.msicCode")}</label>
-              <input value={msic} onChange={(e) => setMsic(e.target.value)} className="jf-input mt-1" placeholder="e.g. 62010" />
+              <input value={msic} onChange={(e) => setMsic(e.target.value)} className="jf-input mt-1 max-w-xl" placeholder="e.g. 62010" />
             </div>
           </div>
           <button onClick={async () => {
@@ -370,14 +370,14 @@ export default function Settings() {
         {/* ── Outbound webhooks ── */}
         <section className="jf-card mt-6 p-6">
           <h2 className="text-lg font-semibold">{t("set.webhooksTitle")}</h2>
-          <p className="mt-1 text-sm text-slate-400">
+          <p className="mt-1 max-w-xl text-sm text-slate-400">
             {t("set.eventsLabel")} <code className="rounded bg-slate-100 px-1">sale.paid</code>,{" "}
             <code className="rounded bg-slate-100 px-1">sale.failed</code>,{" "}
             <code className="rounded bg-slate-100 px-1">subscription.charged</code>. {t("set.hmacSigned")}
           </p>
           <form onSubmit={addWebhook} className="mt-3 flex flex-wrap gap-2">
             <input value={whUrl} onChange={(e) => setWhUrl(e.target.value)} required type="url"
-              placeholder="https://yourapp.com/jomform-hook" className="jf-input min-w-56 flex-1" />
+              placeholder="https://yourapp.com/jomform-hook" className="jf-input min-w-56 max-w-xl flex-1" />
             <input value={whSecret} onChange={(e) => setWhSecret(e.target.value)} required type="text"
               placeholder={t("set.signingSecret")} className="jf-input w-48" />
             <button className="jf-btn-primary">{t("set.add")}</button>
@@ -399,7 +399,7 @@ export default function Settings() {
         {/* ── MCP / OAuth 2.1 connected agents ── */}
         <section className="jf-card mt-6 p-6">
           <h2 className="text-lg font-semibold">{t("set.mcpTitle")}</h2>
-          <p className="mt-1 text-sm text-slate-400">
+          <p className="mt-1 max-w-xl text-sm text-slate-400">
             {t("set.serverUrl")} <code className="rounded bg-slate-100 px-1">https://mcp.jomform.com/mcp</code> —
             {t("set.mcpHelp")}{" "}
             <code className="rounded bg-slate-100 px-1">/.well-known/oauth-authorization-server</code>{" "}
@@ -427,7 +427,7 @@ export default function Settings() {
         {/* ── Social login connectors ── */}
         <section className="jf-card mt-6 p-6">
           <h2 className="text-lg font-semibold">{t("set.socialTitle")}</h2>
-          <p className="mt-1 text-sm text-slate-400">
+          <p className="mt-1 max-w-xl text-sm text-slate-400">
             {t("set.socialHelp")}
           </p>
           <ul className="mt-4 space-y-2">

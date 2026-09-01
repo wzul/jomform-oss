@@ -171,11 +171,11 @@ export default function Dashboard() {
 
   return (
     <Shell active="dashboard">
-      <div className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
+      <div className="w-full flex-1 px-6 py-8">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-xl font-semibold tracking-tight">{t("dash.title")}</h1>
-            <p className="text-sm text-[var(--jf-muted)]">{t("dash.subtitle")}</p>
+            <h1 className="max-w-xl text-xl font-semibold tracking-tight">{t("dash.title")}</h1>
+            <p className="max-w-xl text-sm text-[var(--jf-muted)]">{t("dash.subtitle")}</p>
           </div>
           <a href="/builder" className="jf-btn-primary">
             {t("dash.newForm")}

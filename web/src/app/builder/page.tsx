@@ -495,7 +495,7 @@ export default function Builder() {
         </div>
       </header>
 
-      <div className="mx-auto grid max-w-7xl grid-cols-1 md:grid-cols-[240px_1fr_260px]">
+      <div className="grid w-full grid-cols-1 md:grid-cols-[240px_1fr_260px]">
         {/* ── left: palette (drag sources) ── */}
         <aside className="border-r border-[var(--jf-border)] p-4">
           <p className="mb-3 text-xs font-medium uppercase tracking-wider text-[#9ca3af]">
