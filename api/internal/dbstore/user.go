@@ -22,6 +22,7 @@ type User struct {
 	PasswordHash string
 	TOTPSecret   string // empty = 2FA not configured
 	TOTPEnabled  bool
+	Name         string
 	AvatarURL    string
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
@@ -181,4 +182,16 @@ func (s *UserStore) CreateFromSocial(ctx context.Context, email, name, provider,
 	}
 	_ = s.LinkIdentity(ctx, id, provider, providerUID, email, name, picture)
 	return id, nil
+}
+
+// UpdateName sets the display name.
+func (s *UserStore) UpdateName(ctx context.Context, userID, name string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE users SET name=$2 WHERE id=$1`, userID, name)
+	return err
+}
+
+// UpdateEmail changes the login email (caller verifies uniqueness).
+func (s *UserStore) UpdateEmail(ctx context.Context, userID, email string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE users SET email=$2 WHERE id=$1`, userID, strings.ToLower(email))
+	return err
 }

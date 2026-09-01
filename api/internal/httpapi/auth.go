@@ -34,6 +34,9 @@ func (a *AuthHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/auth/2fa/enable", a.handle2FAEnable)
 	mux.HandleFunc("POST /v1/auth/2fa/disable", a.handle2FADisable)
 	mux.HandleFunc("POST /v1/auth/change-password", a.handleChangePassword)
+	mux.HandleFunc("GET /v1/auth/profile", a.handleProfile)
+	mux.HandleFunc("POST /v1/auth/profile/name", a.handleUpdateName)
+	mux.HandleFunc("POST /v1/auth/profile/email", a.handleUpdateEmail)
 	// Social login (provider-generic OIDC). UI links use /api/... which the
 	// Next proxy maps to /v1/... for same-origin cookies; direct /api/* also
 	// works when the Go server is the public entrypoint.

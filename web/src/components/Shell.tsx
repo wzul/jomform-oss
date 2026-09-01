@@ -9,7 +9,7 @@ export function Shell({
   active,
 }: {
   children: React.ReactNode;
-  active: "dashboard" | "forms" | "products" | "settings";
+  active: "dashboard" | "forms" | "products" | "settings" | "profile";
 }) {
   const [user, setUser] = useState<{ email: string } | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -32,6 +32,7 @@ export function Shell({
     { key: "forms", href: "/forms", label: t("nav.forms"), icon: "✎" },
     { key: "products", href: "/products", label: t("prod.title"), icon: "◧" },
     { key: "settings", href: "/settings", label: t("nav.settings"), icon: "⚙" },
+        { key: "profile", href: "/profile", label: "Profile", icon: "👤" },
   ];
 
   return (

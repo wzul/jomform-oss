@@ -112,7 +112,7 @@ export default function Dashboard() {
   if (checking) {
     return <main className="flex min-h-screen items-center justify-center text-slate-400">…</main>;
   }
-  if (anon) return <LandingView />;
+  if (anon) return <Landing />;
 
   const badge = (s: string) =>
     ({
