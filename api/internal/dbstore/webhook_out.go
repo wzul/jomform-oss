@@ -39,7 +39,7 @@ func (s *WebhookStore) Create(ctx context.Context, accountID, url, secret string
 // ListByAccount lists url+id (secrets never returned to the UI).
 func (s *WebhookStore) ListByAccount(ctx context.Context, accountID string) ([]*OutboundWebhook, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, url FROM outbound_webhooks WHERE account_id=$1 AND active ORDER BY created_at`, accountID)
+		`SELECT id, url, events FROM outbound_webhooks WHERE account_id=$1 AND active ORDER BY created_at`, accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -47,7 +47,7 @@ func (s *WebhookStore) ListByAccount(ctx context.Context, accountID string) ([]*
 	var out []*OutboundWebhook
 	for rows.Next() {
 		wh := &OutboundWebhook{}
-		if err := rows.Scan(&wh.ID, &wh.URL); err != nil {
+		if err := rows.Scan(&wh.ID, &wh.URL, &wh.Events); err != nil {
 			return nil, err
 		}
 		out = append(out, wh)
