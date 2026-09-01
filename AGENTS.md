@@ -21,8 +21,10 @@ Parity checklist (dashboard → MCP):
   `run_due_charges`
 - Analytics → `get_form_analytics`, `get_product_analytics`
 - CHIP per-form override → `set_form_chip_override`, `clear_form_chip_override`
-- Still missing (backlog): e-Invoice settings tool, webhook CRUD tools,
-  API-key self-service tool — add before announce.
+- e-Invoice settings → `set_einvoice_settings`, `get_einvoice_settings`
+- Webhooks → `create_webhook`, `list_webhooks`, `delete_webhook`,
+  `webhook_deliveries`
+- API keys → `list_api_keys`, `create_api_key`, `revoke_api_key`
 
 ## Conventions
 
