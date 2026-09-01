@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -26,10 +27,11 @@ type Deps struct {
 
 // Server wires dependencies into HTTP handlers.
 type Server struct {
-	cfg  *config.Config
-	log  *slog.Logger
-	deps *Deps
-	auth *AuthHandlers
+	cfg   *config.Config
+	log   *slog.Logger
+	deps  *Deps
+	auth  *AuthHandlers
+	proxy *middleware.TrustedProxy
 }
 
 // NewServer builds the HTTP API server. deps may be nil (health-only mode).
@@ -42,6 +44,8 @@ func NewServer(cfg *config.Config, log *slog.Logger, deps *Deps) *Server {
 
 	if deps.Users != nil && deps.Sessions != nil {
 		s.auth = &AuthHandlers{Sessions: deps.Sessions, Users: deps.Users, Accounts: deps.Accounts}
+		s.proxy = middleware.NewTrustedProxy()
+		_ = s.proxy.FetchCloudflare(context.Background())
 	}
 	return s
 }
@@ -77,6 +81,11 @@ func (s *Server) Handler() http.Handler {
 	}
 
 	var h http.Handler = mux
+	// Real client IP: strip trusted Cloudflare proxy hops first so logs,
+	// rate limiting and audit rows see the true buyer IP.
+	if s.proxy != nil {
+		h = s.proxy.RealIP(h)
+	}
 	h = recoverer(h)
 	h = middleware.Logger(s.log, h)
 	h = middleware.RequestID(h)

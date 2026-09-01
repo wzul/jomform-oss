@@ -25,6 +25,7 @@ type RESTHandlers struct {
 	Sessions *auth.Sessions
 	Pay      *payments.Service
 	Webhooks *dbstore.WebhookStore
+	Domains  *dbstore.DomainStore
 	// ChipProbe validates credentials against CHIP at save time.
 	ChipProbe interface {
 		ValidateCredentials(ctx context.Context, secret string) error
@@ -60,6 +61,11 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /v1/rest/webhooks", h.authed(h.listWebhooks))
 	mux.Handle("POST /v1/rest/webhooks", h.authed(h.createWebhook))
 	mux.Handle("DELETE /v1/rest/webhooks/{id}", h.authed(h.deleteWebhook))
+	mux.Handle("GET /v1/rest/domains", h.authed(h.listCustomDomains))
+	mux.Handle("POST /v1/rest/domains", h.authed(h.addCustomDomain))
+	mux.Handle("POST /v1/rest/domains/{id}/verify", h.authed(h.verifyCustomDomainByID))
+	mux.Handle("DELETE /v1/rest/domains/{id}", h.authed(h.deleteCustomDomainByID))
+	mux.Handle("POST /v1/rest/domains/connect", h.authed(h.connectCFHostedDomain))
 	mux.Handle("POST /v1/rest/settings/custom-domain/verify", h.authed(h.verifyCustomDomain))
 	mux.Handle("POST /v1/rest/settings/custom-domain/connect", h.authed(h.connectCFHosted))
 	mux.Handle("DELETE /v1/rest/settings/custom-domain", h.authed(h.deleteCustomDomain))
