@@ -173,7 +173,12 @@ func (h *RESTHandlers) updateForm(w http.ResponseWriter, r *http.Request, actx *
 		writeErr(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	if err := h.Forms.Update(r.Context(), actx.Account.ID, r.PathValue("id"), in.Title, in.Config, in.Theme); err != nil {
+	// Pass config/theme as-is: Forms.Update COALESCEs nil over the stored
+	// values, so a PATCH that omits either key keeps what's stored instead
+	// of writing NULL into a NOT NULL jsonb column (SQLSTATE 23502, issue
+	// #16). Callers that want to clear a map send {} explicitly.
+	if err := h.Forms.Update(r.Context(), actx.Account.ID, r.PathValue("id"),
+		in.Title, in.Config, in.Theme); err != nil {
 		respondErr(w, err)
 		return
 	}
