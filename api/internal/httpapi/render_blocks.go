@@ -129,11 +129,20 @@ var blockTmpl = template.Must(template.New("blocks").
           max-width:480px; width:100%; padding:32px; }
   h1 { margin:0 0 8px; font-size:24px; letter-spacing:-0.02em; }
   .text { color:#6b7280; font-size:14px; line-height:1.6; margin:0 0 16px; }
-  .img { max-width:100%; border-radius:12px; border:1px solid rgba(255,255,255,0.08); margin-bottom:14px; }
-  .prod { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:12px 14px;
-          border:1px solid rgba(255,255,255,0.08); border-radius:10px; margin-bottom:10px; background:rgba(255,255,255,0.02); }
-  .prod label { display:flex; gap:10px; align-items:center; flex:1; font-size:14px; }
-  .price { color:#5e6ad2; font-weight:600; font-size:14px; }
+  .img { max-width:100%; border-radius:12px; border:1px solid #e6e8ec; margin-bottom:14px; }
+  .prod { display:block; padding:0; border:1px solid #e6e8ec; border-radius:14px;
+          margin:0 0 12px; background:#ffffff; box-shadow:0 1px 2px rgba(23,24,28,0.04);
+          transition:border-color .15s ease, box-shadow .15s ease; }
+  .prod:hover { border-color:#4f46e5; box-shadow:0 2px 8px rgba(79,70,229,0.12); }
+  .prod:active { background:#eef2ff; }
+  .prod:has(input[type=checkbox]:checked) { border-color:#4f46e5; box-shadow:0 2px 8px rgba(79,70,229,0.12); background:#eef2ff; }
+  .prod label { display:flex; gap:12px; align-items:center; width:100%;
+                min-height:44px; padding:12px 14px; font-size:15px; color:#17181c;
+                cursor:pointer; -webkit-tap-highlight-color:transparent; }
+  .prod input[type=checkbox] { width:20px; height:20px; flex:0 0 auto; accent-color:#4f46e5; margin:0; }
+  .pname { flex:1; font-weight:500; }
+  .price { color:#4f46e5; font-weight:600; font-size:14px; white-space:nowrap;
+           margin-left:auto; text-align:right; }
   .lbl { display:block; font-size:12px; color:#6b7280; margin:12px 0 4px; }
   .chk { display:flex; align-items:center; gap:8px; font-size:14px; margin:8px 0; color:#d0d6e0; }
   input[type=text],input[type=email],input[type=tel],textarea,.coupon {
@@ -154,7 +163,7 @@ var blockTmpl = template.Must(template.New("blocks").
 {{if eq .Type "text"}}  <p class="text">{{.Value}}</p>
 {{else if eq .Type "image"}}{{if .Src}}  <img class="img" src="{{.Src}}" alt="">
 {{end}}{{else if eq .Type "divider"}}  <hr>
-{{else if eq .Type "product"}}  <div class="prod"><label><input type="checkbox" class="p" data-id="{{.ProductID}}" data-price="{{.PriceSen}}"> {{.Value}}</label><span class="price">{{if .HasPrice}}RM{{printf "%.2f" (divf .PriceSen 100)}}{{end}}</span></div>
+{{else if eq .Type "product"}}  <div class="prod"><label><input type="checkbox" class="p" data-id="{{.ProductID}}" data-price="{{.PriceSen}}"><span class="pname">{{.Value}}</span><span class="price">{{if .HasPrice}}RM{{printf "%.2f" (divf .PriceSen 100)}}{{end}}</span></label></div>
 {{else if eq .Type "name"}}  <label class="lbl">{{.Value}}{{if .Required}} *{{end}}</label><input type="text" name="full_name"{{if .Required}} required{{end}}>
 {{else if eq .Type "email"}}  <label class="lbl">Emel{{if .Required}} *{{end}}</label><input type="email" name="email" required>
 {{else if eq .Type "phone"}}  <label class="lbl">{{.Value}}</label><input type="tel" name="phone">

@@ -59,7 +59,7 @@ export function Shell({
   return (
     <div className="flex min-h-screen">
       {/* sidebar */}
-      <aside className="hidden w-56 shrink-0 flex-col border-r border-[var(--jf-border)] bg-white md:flex">
+      <aside className="sticky top-0 hidden h-screen w-56 shrink-0 self-start flex-col border-r border-[var(--jf-border)] bg-white md:flex">
         <div className="flex items-center gap-2 px-5 py-4">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--jf-primary)] text-sm font-bold text-white">
             JF
@@ -68,7 +68,7 @@ export function Shell({
             Jom<span className="text-[var(--jf-primary)]">Form</span>
           </span>
         </div>
-        <nav className="mt-2 flex-1 space-y-0.5 px-3">
+        <nav className="mt-2 min-h-0 flex-1 space-y-0.5 overflow-y-auto px-3">
           {nav.map((n) => (
             <a
               key={n.key}
@@ -84,8 +84,8 @@ export function Shell({
             </a>
           ))}
         </nav>
-        {/* user card — sticky bottom */}
-        <div className="sticky top-[calc(100vh-9.5rem)] border-t border-[var(--jf-border)] p-3">
+        {/* user card — flex-none at the bottom of the full-height aside (always visible) */}
+        <div className="shrink-0 border-t border-[var(--jf-border)] p-3">
           <div className="flex items-center gap-2.5 rounded-lg px-2 py-2">
             <div className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-100 text-xs font-semibold text-[var(--jf-primary)]">
               {(user?.email || "?")[0].toUpperCase()}

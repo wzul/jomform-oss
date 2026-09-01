@@ -36,6 +36,11 @@ func (h *PublicHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /f/{slug}", h.handleRender)
 	mux.HandleFunc("GET /embed/f/{accslug}/{slug}", h.embedForm)
 	mux.Handle("POST /f/{slug}/order", middleware.RateLimit(http.HandlerFunc(h.handleSubmit)))
+	// Space subdomains serve forms at /{slug} (GET /{slug} below), so the
+	// buyer-facing submit must resolve there too. handleSubmit scopes by
+	// accountSubdomain(host); on jomform.com it falls back to PublishedBySlug
+	// and 404s for unknown slugs, leaving dashboard routes (/api, /v1) intact.
+	mux.Handle("POST /{slug}/order", middleware.RateLimit(http.HandlerFunc(h.handleSubmit)))
 	mux.HandleFunc("GET /t/{ref}", h.handleThankYou)
 	mux.HandleFunc("GET /{$}", h.handleSpaceRoot)
 	mux.HandleFunc("GET /{slug}", h.handleSpaceRootForm)
@@ -226,10 +231,18 @@ var formTmpl = template.Must(template.New("form").Funcs(formFuncs).Parse(`<!doct
           max-width:460px; width:100%; padding:32px; }
   h1 { margin:0 0 6px; font-size:22px; }
   .sub { color:#6b7280; font-size:14px; margin-bottom:22px; }
-  .prod { display:flex; justify-content:space-between; gap:12px; padding:12px 14px;
-          border:1px solid #262c3f; border-radius:12px; margin-bottom:10px; }
-  .prod label { display:flex; gap:10px; align-items:center; flex:1; }
-  .price { color:#5e6ad2; font-weight:600; white-space:nowrap; }
+  .prod { display:block; padding:0; border:1px solid #e6e8ec; border-radius:14px;
+          margin:0 0 12px; background:#ffffff; box-shadow:0 1px 2px rgba(23,24,28,0.04);
+          transition:border-color .15s ease, box-shadow .15s ease; }
+  .prod:hover { border-color:#4f46e5; box-shadow:0 2px 8px rgba(79,70,229,0.12); }
+  .prod:active { background:#eef2ff; }
+  .prod:has(input[type=checkbox]:checked) { border-color:#4f46e5; box-shadow:0 2px 8px rgba(79,70,229,0.12); background:#eef2ff; }
+  .prod label { display:flex; gap:12px; align-items:center; width:100%;
+                min-height:44px; padding:12px 14px; font-size:15px; color:#17181c;
+                cursor:pointer; -webkit-tap-highlight-color:transparent; }
+  .prod input[type=checkbox] { width:20px; height:20px; flex:0 0 auto; accent-color:#4f46e5; margin:0; }
+  .pname { flex:1; font-weight:500; }
+  .price { color:#4f46e5; font-weight:600; white-space:nowrap; margin-left:auto; text-align:right; }
   input[type=text], input[type=email], input[type=tel] {
     width:100%; padding:11px 14px; margin:6px 0 14px; border-radius:10px;
     border:1px solid #e6e8ec; background:#ffffff; color:#17181c; font-size:14px; }
@@ -249,9 +262,7 @@ var formTmpl = template.Must(template.New("form").Funcs(formFuncs).Parse(`<!doct
     <p class="sub">{{.Description}}</p>
     {{range .Products}}
     <div class="prod">
-      <label><input type="checkbox" class="p" data-id="{{.ID}}" data-price="{{.PriceSen}}" data-name="{{.Name}}">
-        {{.Name}}</label>
-      <span class="price">RM{{div100 .PriceSen}}</span>
+      <label><input type="checkbox" class="p" data-id="{{.ID}}" data-price="{{.PriceSen}}" data-name="{{.Name}}"><span class="pname">{{.Name}}</span><span class="price">RM{{div100 .PriceSen}}</span></label>
     </div>
     {{end}}
     <label class="sub">Nama penuh</label>
