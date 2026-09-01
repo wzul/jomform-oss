@@ -41,9 +41,6 @@ export default function Settings() {
   const [domainInput, setDomainInput] = useState("");
   const [domainVerified, setDomainVerified] = useState(false);
   const [domainMsg, setDomainMsg] = useState("");
-  const [cfToken, setCfToken] = useState("");
-  const [cfAccount, setCfAccount] = useState("");
-  const [runCmd, setRunCmd] = useState("");
   const [tin, setTin] = useState("");
   const [msic, setMsic] = useState("");
   const [webhooks, setWebhooks] = useState<{ id: string; url: string }[]>([]);
@@ -168,24 +165,6 @@ export default function Settings() {
     await load();
   }
 
-  async function connectCloudflare(e: React.FormEvent) {
-    e.preventDefault();
-    setDomainMsg("");
-    const r = await fetch("/api/rest/settings/custom-domain/connect", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ domain: domainInput, cf_api_token: cfToken, cf_account_id: cfAccount }),
-    });
-    const d = await r.json().catch(() => ({}));
-    if (r.ok) {
-      setRunCmd("Connector hosted by JomForm ✓ — container " + d.connector + ". Tunggu 30-60s, kemudian Verify.");
-      setDomainMsg("Tunnel created in your Cloudflare account.");
-      await load();
-    } else {
-      setDomainMsg(d.error || "Cloudflare connect failed");
-    }
-    setCfToken("");
-  }
 
   async function clearDomain() {
     await fetch("/api/rest/settings/custom-domain", { method: "DELETE" });
@@ -365,30 +344,6 @@ export default function Settings() {
             </p>
           )}
 
-          {/* Cloudflare auto-tunnel onboarding */}
-          <details className="mt-4 rounded-lg border border-slate-200 p-3">
-            <summary className="cursor-pointer text-sm font-medium text-slate-700">
-              Auto-setup with Cloudflare (recommended)
-            </summary>
-            <p className="mt-2 text-xs text-slate-500">
-              Paste a Cloudflare API token (zone + tunnel scopes) and your Account ID.
-              We create the tunnel <strong>in your Cloudflare account</strong>, wire it to
-              JomForm, and <strong>host the connector for you</strong> — nothing to install
-              on your side. The token is never stored.
-            </p>
-            <form onSubmit={connectCloudflare} className="mt-2 space-y-2">
-              <input value={cfToken} onChange={(e) => setCfToken(e.target.value)} required type="password"
-                placeholder="Cloudflare API Token" className="jf-input" />
-              <input value={cfAccount} onChange={(e) => setCfAccount(e.target.value)} required
-                placeholder="Cloudflare Account ID" className="jf-input" />
-              <button className="jf-btn-primary px-4 text-sm" type="submit">Create tunnel automatically</button>
-            </form>
-            {runCmd && (
-              <p className="mt-2 break-all rounded-lg bg-slate-900 p-3 font-mono text-[11px] text-emerald-300">
-                {runCmd}
-              </p>
-            )}
-          </details>
         </section>
 
         {/* ── Tracking scripts ── */}

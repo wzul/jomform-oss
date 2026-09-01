@@ -3,9 +3,6 @@
 package httpapi
 
 import (
-	"crypto/rand"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -15,8 +12,6 @@ import (
 	"os/exec"
 	"strings"
 	"time"
-
-	"github.com/wzul/jomform/api/internal/cryptoutil"
 )
 
 // dokployBase/API key are env-provided (host may expose the Dokploy API).
@@ -178,80 +173,10 @@ func (h *RESTHandlers) deleteCustomDomainByID(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
 }
 
-// connectCFHostedDomain replaces the single-domain variant: token is ENCRYPTED
-// and stored with the domain row; tunnel provisioned in merchant account;
-// connector runs here via dokploy-hosted cloudflared (env opt-in).
-func (h *RESTHandlers) connectCFHostedDomain(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
-	var in struct {
-		Domain      string `json:"domain"`
-		CFApiToken  string `json:"cf_api_token"`
-		CFAccountID string `json:"cf_account_id"`
-	}
-	if err := decodeJSON(r, &in); err != nil || in.Domain == "" || in.CFApiToken == "" || in.CFAccountID == "" {
-		writeErr(w, http.StatusBadRequest, "domain, cf_api_token, cf_account_id wajib")
-		return
-	}
-	domain := normalizeDomain(in.Domain)
-	if domain == "" {
-		writeErr(w, http.StatusBadRequest, "domain tidak sah")
-		return
-	}
-	cf := newCF(in.CFApiToken)
-	ctx := r.Context()
+// (Cloudflare tunnel provisioner removed — Dokploy/traefik sync is the custom-domain path.)
 
-	res, err := cf.do(ctx, http.MethodPost, "/accounts/"+in.CFAccountID+"/cfd_tunnel",
-		map[string]any{"name": "jomform-" + strings.ReplaceAll(domain, ".", "-")})
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, "cloudflare: "+err.Error())
-		return
-	}
-	var tun struct {
-		ID string `json:"id"`
-	}
-	_ = json.Unmarshal(res, &tun)
-
-	_, err = cf.do(ctx, http.MethodPut,
-		"/accounts/"+in.CFAccountID+"/cfd_tunnel/"+tun.ID+"/configurations",
-		map[string]any{"config": map[string]any{
-			"ingress": []map[string]any{
-				{"hostname": domain, "service": "https://jomform.com",
-					"origin_request": map[string]any{"no_tls_verify": true, "http_host_header": domain}},
-				{"service": "http_status:404"},
-			},
-		}})
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, "ingress config gagal: "+err.Error())
-		return
-	}
-	rtRes, _ := cf.do(ctx, http.MethodGet, "/accounts/"+in.CFAccountID+"/cfd_tunnel/"+tun.ID+"/token", nil)
-	var rt struct {
-		Token string `json:"token"`
-	}
-	_ = json.Unmarshal(rtRes, &rt)
-
-	// Best-effort DNS record creation.
-	if zoneID := zoneIDFor(domain, cf); zoneID != "" {
-		_, _ = cf.do(ctx, http.MethodPost, "/zones/"+zoneID+"/dns_records",
-			map[string]any{"type": "CNAME", "name": domain, "content": tun.ID + ".cfargotunnel.com", "proxied": true})
-	}
-
-	enc, _ := cryptoutil.Encrypt(h.SecretsKey, []byte(rt.Token))
-	d, err := h.Domains.AddDomain(r.Context(), actx.Account.ID, domain, "cf_tunnel")
-	if err != nil {
-		respondErr(w, err)
-		return
-	}
-	if err := h.Domains.SaveTunnel(r.Context(), d.ID, enc, in.CFAccountID, tun.ID); err != nil {
-		respondErr(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"domain": domain, "tunnel_id": tun.ID,
-		"status": "provisioned",
-		"note":   "Connector dihoskan oleh JomForm bila cloudflared CLI tersedia pada host; semak Verify.",
-	})
-}
-
+// isCloudflareEdge reports whether any resolved IP looks like a CF edge
+// (CF-proxied CNAMEs resolve to edge IPs that differ per zone).
 func isCloudflareEdge(ips []string) bool {
 	for _, ip := range ips {
 		for _, prefix := range []string{"104.", "172.6", "188.114.", "162.159.", "198.41.", "131.0."} {
@@ -262,12 +187,3 @@ func isCloudflareEdge(ips []string) bool {
 	}
 	return false
 }
-
-func randHex(n int) string {
-	b := make([]byte, n)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
-}
-
-var _ = fmt.Sprintf
-var _ = exec.Command
