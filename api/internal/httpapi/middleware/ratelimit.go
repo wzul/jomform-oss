@@ -2,6 +2,7 @@
 package middleware
 
 import (
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -69,12 +70,19 @@ func (l *RateLimiter) Allow(key string) bool {
 func RateLimit(next http.Handler) http.Handler {
 	limiter := NewRateLimiter(1, 10)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip := r.Header.Get("X-Real-IP")
+		// CF-Connecting-IP is set by the Cloudflare edge and cannot be spoofed
+		// through it — trust it first. X-Real-IP is client-suppliable, so only
+		// fall back to it when no CF header exists (direct/internal traffic).
+		ip := r.Header.Get("CF-Connecting-IP")
 		if ip == "" {
-			ip = r.Header.Get("CF-Connecting-IP")
+			ip = r.Header.Get("X-Real-IP")
 		}
 		if ip == "" {
-			ip = r.RemoteAddr
+			if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+				ip = host
+			} else {
+				ip = r.RemoteAddr
+			}
 		}
 		if !limiter.Allow(ip) {
 			w.Header().Set("Retry-After", "30")

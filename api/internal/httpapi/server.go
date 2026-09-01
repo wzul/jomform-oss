@@ -86,6 +86,7 @@ func (s *Server) Handler() http.Handler {
 	if s.proxy != nil {
 		h = s.proxy.RealIP(h)
 	}
+	h = middleware.Secure(h)
 	h = recoverer(h)
 	h = middleware.Logger(s.log, h)
 	h = middleware.RequestID(h)

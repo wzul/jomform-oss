@@ -41,7 +41,7 @@ func (s *UserStore) Create(ctx context.Context, email, passwordHash string) (*Us
 	u := &User{}
 	err := s.pool.QueryRow(ctx,
 		`INSERT INTO users (email, password_hash) VALUES ($1, $2)
-		 RETURNING id, email, password_hash, COALESCE(totp_secret,''), totp_enabled, created_at, updated_at`,
+		 RETURNING id, email, password_hash, COALESCE(totp_secret,''), totp_enabled, COALESCE(name,''), COALESCE(avatar_url,''), created_at, updated_at`,
 		email, passwordHash,
 	).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.TOTPSecret, &u.TOTPEnabled, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
@@ -99,7 +99,7 @@ func (s *UserStore) DisableTOTP(ctx context.Context, userID string) error {
 
 func (s *UserStore) scanOne(row pgx.Row) (*User, error) {
 	u := &User{}
-	err := row.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.TOTPSecret, &u.TOTPEnabled, &u.CreatedAt, &u.UpdatedAt)
+	err := row.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.TOTPSecret, &u.TOTPEnabled, &u.Name, &u.AvatarURL, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +170,7 @@ func (s *UserStore) CreateFromSocial(ctx context.Context, email, name, provider,
 	var id string
 	email = strings.ToLower(strings.TrimSpace(email))
 	err := s.pool.QueryRow(ctx,
-		`INSERT INTO users (email, password_hash) VALUES ($1,'') RETURNING id`, email).Scan(&id)
+		`INSERT INTO users (email, password_hash, name, avatar_url) VALUES ($1,'',NULLIF($2,''),NULLIF($3,'')) RETURNING id`, email, name, picture).Scan(&id)
 	if err != nil {
 		// Existing user (unique email)? return its id instead.
 		var existing string

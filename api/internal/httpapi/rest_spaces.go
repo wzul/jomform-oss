@@ -2,8 +2,11 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"strings"
 )
@@ -64,6 +67,11 @@ func (h *RESTHandlers) createSpace(w http.ResponseWriter, r *http.Request, actx 
 	}
 	sp, err := h.Spaces.Create(r.Context(), userID, strings.TrimSpace(in.Name), slug)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			writeErr(w, http.StatusConflict, "slug sudah digunakan")
+			return
+		}
 		respondErr(w, err)
 		return
 	}
@@ -76,6 +84,10 @@ func (h *RESTHandlers) createSpace(w http.ResponseWriter, r *http.Request, actx 
 // spaceSettings GET/PUT for the storefront builder.
 func (h *RESTHandlers) getSpaceSettings(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	sID := r.PathValue("id")
+	if _, perr := uuid.Parse(sID); perr != nil {
+		writeErr(w, http.StatusBadRequest, "id tidak sah")
+		return
+	}
 	s, err := h.Spaces.ByID(r.Context(), sID)
 	if err != nil || s == nil {
 		writeErr(w, http.StatusNotFound, "space tidak dijumpai")
@@ -108,8 +120,13 @@ func (h *RESTHandlers) saveSpaceSettings(w http.ResponseWriter, r *http.Request,
 			return
 		}
 	}
+	sID := r.PathValue("id")
+	if _, perr := uuid.Parse(sID); perr != nil {
+		writeErr(w, http.StatusBadRequest, "id tidak sah")
+		return
+	}
 	st := &dbstore.SpaceSettings{
-		SpaceID:    r.PathValue("id"),
+		SpaceID:    sID,
 		FooterText: in.FooterText,
 		CompanyReg: in.CompanyReg,
 		PrivacyURL: in.PrivacyURL,

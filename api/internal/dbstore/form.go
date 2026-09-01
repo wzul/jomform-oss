@@ -67,10 +67,9 @@ func (s *FormStore) ListByAccount(ctx context.Context, accountID string) ([]*For
 	defer rows.Close()
 	var out []*Form
 	for rows.Next() {
-		f := &Form{}
-		if err := rows.Scan(&f.ID, &f.AccountID, &f.Slug, &f.Title, &f.Config, &f.Theme,
-			&f.Status, &f.IsMain, &f.CreatedAt, &f.UpdatedAt); err != nil {
-			return nil, err
+		f, serr := s.scanOne(rows)
+		if serr != nil {
+			return nil, serr
 		}
 		out = append(out, f)
 	}

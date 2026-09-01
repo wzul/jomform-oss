@@ -21,5 +21,8 @@ func (h *PublicHandlers) embedForm(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Security-Policy", "frame-ancestors *")
 	w.Header().Set("X-Frame-Options", "ALLOWALL")
-	h.renderBlocks(w, r, f)
+	if !h.renderBlocks(w, r, f) {
+		// Legacy form (no builder blocks): render the legacy layout.
+		h.serveForm(w, r, f)
+	}
 }
