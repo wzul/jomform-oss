@@ -145,7 +145,12 @@ func (a *AuthHandlers) unlinkSocial(w http.ResponseWriter, r *http.Request) {
 
 // listSocial shows linked providers (profile manage page).
 func (a *AuthHandlers) listSocial(w http.ResponseWriter, r *http.Request) {
-	links, err := a.Users.ListIdentities(r.Context(), a.currentUserID(r))
+	userID := a.currentUserID(r)
+	if userID == "" {
+		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		return
+	}
+	links, err := a.Users.ListIdentities(r.Context(), userID)
 	if err != nil {
 		respondErr(w, err)
 		return
