@@ -1,8 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
+import { useSession } from "../../components/session";
 
 type Product = {
   id: string;
@@ -19,6 +21,8 @@ const money = (sen: number) =>
 
 export default function Products() {
   const { t } = useI18n();
+  const { anon, bundle } = useSession();
+  const router = useRouter();
   const [products, setProducts] = useState<Product[]>([]);
   const [checking, setChecking] = useState(true);
   const [name, setName] = useState("");
@@ -29,19 +33,28 @@ export default function Products() {
   const [error, setError] = useState("");
 
   const load = useCallback(async () => {
-    const me = await fetch("/api/auth/me");
-    if (!me.ok) {
-      window.location.href = "/landing";
-      return;
-    }
-    const p = await fetch("/api/rest/products").then((r) => r.json());
+    // Issue #29: no serial `await me → fetch` gate — the list fetch runs
+    // immediately; a 401 flips `anon` and the auth bounce below handles it.
+    const p = await fetch("/api/rest/products").then((r) => (r.ok ? r.json() : []));
     setProducts(Array.isArray(p) ? p : []);
     setChecking(false);
   }, []);
 
   useEffect(() => {
+    // First paint from the shared bundle when it is already cached.
+    if (bundle && Array.isArray(bundle.products) && products.length === 0 && checking) {
+      setProducts(bundle.products as Product[]);
+      setChecking(false);
+      return;
+    }
     load();
-  }, [load]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bundle]);
+
+  // Auth bounce via router (client transition), not a full document reload.
+  useEffect(() => {
+    if (anon) router.replace("/landing");
+  }, [anon, router]);
 
   async function add(e: React.FormEvent) {
     e.preventDefault();

@@ -338,39 +338,51 @@ func (h *RESTHandlers) summary(w http.ResponseWriter, r *http.Request, actx *Acc
 	if !ok {
 		return
 	}
-	sales, err := h.Sales.ListByAccounts(r.Context(), scope.Accounts, 200)
+	sum, err := h.summaryData(r.Context(), scope.Accounts)
 	if err != nil {
 		respondErr(w, err)
 		return
 	}
-	sum := map[string]int64{"pending": 0, "paid": 0, "confirmed": 0, "failed": 0, "cancelled": 0}
-	var revenue int64
-	for _, s := range sales {
-		sum[s.Status]++
-		if s.Status == dbstore.SalePaid || s.Status == dbstore.SaleConfirmed {
-			revenue += s.TotalSen
-		}
-	}
-	respond(w, http.StatusOK, map[string]any{"counts": sum, "revenue_sen": revenue})
+	respond(w, http.StatusOK, sum)
 }
 
 // ─── Sales ───────────────────────────────────────────────────────────────────
+
+// restSaleRows maps sales to the dashboard JSON shape. Shared by
+// GET /v1/rest/sales and the dashboard bundle (issue #29).
+type saleRow struct {
+	RefCode     string `json:"ref_code"`
+	Status      string `json:"status"`
+	TotalSen    int64  `json:"total_sen"`
+	Method      string `json:"payment_method"`
+	Buyer       string `json:"buyer"`
+	Created     string `json:"created_at"`
+	SkipCapture bool   `json:"skip_capture"`
+	Authorized  bool   `json:"authorized"`
+	CapturedAt  string `json:"captured_at,omitempty"`
+}
+
+func restSaleRows(sales []*dbstore.Sale) []saleRow {
+	out := make([]saleRow, 0, len(sales))
+	for _, s := range sales {
+		row := saleRow{
+			RefCode: s.RefCode, Status: s.Status, TotalSen: s.TotalSen,
+			Method: s.PaymentMethod, Buyer: s.Client.FullName,
+			Created:     s.CreatedAt.UTC().Format(time.RFC3339),
+			SkipCapture: s.SkipCapture, Authorized: s.Authorized,
+		}
+		if s.CapturedAt != nil {
+			row.CapturedAt = s.CapturedAt.UTC().Format(time.RFC3339)
+		}
+		out = append(out, row)
+	}
+	return out
+}
 
 func (h *RESTHandlers) listSales(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	scope, ok := h.scopeOr403(w, r, actx)
 	if !ok {
 		return
-	}
-	type saleRow struct {
-		RefCode     string `json:"ref_code"`
-		Status      string `json:"status"`
-		TotalSen    int64  `json:"total_sen"`
-		Method      string `json:"payment_method"`
-		Buyer       string `json:"buyer"`
-		Created     string `json:"created_at"`
-		SkipCapture bool   `json:"skip_capture"`
-		Authorized  bool   `json:"authorized"`
-		CapturedAt  string `json:"captured_at,omitempty"`
 	}
 	capturedAt := func(s *dbstore.Sale) string {
 		if s.CapturedAt == nil {
@@ -423,15 +435,7 @@ func (h *RESTHandlers) listSales(w http.ResponseWriter, r *http.Request, actx *A
 		respondErr(w, err)
 		return
 	}
-	out := make([]saleRow, 0, len(sales))
-	for _, s := range sales {
-		out = append(out, saleRow{
-			RefCode: s.RefCode, Status: s.Status, TotalSen: s.TotalSen,
-			Method: s.PaymentMethod, Buyer: s.Client.FullName,
-			Created:     s.CreatedAt.UTC().Format(time.RFC3339),
-			SkipCapture: s.SkipCapture, Authorized: s.Authorized, CapturedAt: capturedAt(s),
-		})
-	}
+	out := restSaleRows(sales)
 	respond(w, http.StatusOK, map[string]any{
 		"items": out, "page": page, "limit": limit, "total": total,
 	})

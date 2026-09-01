@@ -1,9 +1,15 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useI18n, LangToggle } from "./i18n";
+import { useSession } from "./session";
 
 // AppShell: fixed left sidebar + topbar + content area. Light theme.
+// Issue #29: nav links are Next <Link> (client-side transitions + prefetch,
+// no full document reload) and me/spaces come from the shared session
+// context (one dashboard-bundle fetch per session), not per-mount fetches.
 export function Shell({
   children,
   active,
@@ -11,31 +17,23 @@ export function Shell({
   children: React.ReactNode;
   active: "dashboard" | "forms" | "products" | "settings" | "profile";
 }) {
-  const [user, setUser] = useState<{ email: string; name?: string } | null>(null);
-  const [spaces, setSpaces] = useState<{ id: string; name: string; slug: string }[]>([]);
+  const { user, spaces } = useSession();
   const [space, setSpace] = useState<string>("");
   const [menuOpen, setMenuOpen] = useState(false);
   const { t } = useI18n();
+  const router = useRouter();
 
   useEffect(() => {
-    fetch("/api/auth/me")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => setUser(d))
-      .catch(() => setUser(null));
-    fetch("/api/spaces")
-      .then((r) => (r.ok ? r.json() : []))
-      .then((sp) => {
-        setSpaces(Array.isArray(sp) ? sp : []);
-        const saved = localStorage.getItem("jf_space");
-        if (saved && Array.isArray(sp) && sp.some((s) => s.slug === saved)) {
-          setSpace(saved);
-        } else if (Array.isArray(sp) && sp[0]) {
-          setSpace(sp[0].slug);
-          localStorage.setItem("jf_space", sp[0].slug);
-        }
-      })
-      .catch(() => setSpaces([]));
-  }, []);
+    const sp = Array.isArray(spaces) ? spaces : [];
+    if (!sp.length) return;
+    const saved = localStorage.getItem("jf_space");
+    if (saved && sp.some((s) => s.slug === saved)) {
+      setSpace(saved);
+    } else {
+      setSpace(sp[0].slug);
+      localStorage.setItem("jf_space", sp[0].slug);
+    }
+  }, [spaces]);
 
   function switchSpace(slug: string) {
     setSpace(slug);
@@ -45,6 +43,7 @@ export function Shell({
 
   async function signOut() {
     await fetch("/api/auth/logout", { method: "POST" });
+    router.replace("/login");
     window.location.href = "/login";
   }
 
@@ -53,7 +52,7 @@ export function Shell({
     { key: "forms", href: "/forms", label: t("nav.forms"), icon: "✎" },
     { key: "products", href: "/products", label: t("prod.title"), icon: "◧" },
     { key: "settings", href: "/settings", label: t("nav.settings"), icon: "⚙" },
-        { key: "profile", href: "/profile", label: t("prof.title"), icon: "👤" },
+    { key: "profile", href: "/profile", label: t("prof.title"), icon: "👤" },
   ];
 
   return (
@@ -70,7 +69,7 @@ export function Shell({
         </div>
         <nav className="mt-2 min-h-0 flex-1 space-y-0.5 overflow-y-auto px-3">
           {nav.map((n) => (
-            <a
+            <Link
               key={n.key}
               href={n.href}
               className={`flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors ${
@@ -81,7 +80,7 @@ export function Shell({
             >
               <span className="w-4 text-center text-xs opacity-70">{n.icon}</span>
               {n.label}
-            </a>
+            </Link>
           ))}
         </nav>
         {/* user card — flex-none at the bottom of the full-height aside (always visible) */}
@@ -170,7 +169,7 @@ export function Shell({
               </div>
               <nav className="space-y-0.5 p-3">
                 {nav.map((n) => (
-                  <a
+                  <Link
                     key={n.key}
                     href={n.href}
                     onClick={() => setMenuOpen(false)}
@@ -182,7 +181,7 @@ export function Shell({
                   >
                     <span className="w-4 text-center text-xs opacity-70">{n.icon}</span>
                     {n.label}
-                  </a>
+                  </Link>
                 ))}
               </nav>
               <div className="absolute bottom-4 left-0 right-0 px-4">
