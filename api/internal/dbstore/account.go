@@ -151,7 +151,7 @@ func (s *AccountStore) Einvoice(ctx context.Context, accountID string) (tin, msi
 // SetTracking stores the global head tracking markup (sanitised by caller).
 func (s *AccountStore) SetTracking(ctx context.Context, accountID, head string) error {
 	_, err := s.pool.Exec(ctx,
-		`UPDATE accounts SET tracking_head=$2, updated_at=now() WHERE id=$1`, accountID)
+		`UPDATE accounts SET tracking_head=$2, updated_at=now() WHERE id=$1`, accountID, head)
 	return err
 }
 
