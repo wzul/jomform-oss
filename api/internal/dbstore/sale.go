@@ -129,6 +129,30 @@ func (s *SaleStore) MarkCaptured(ctx context.Context, saleID string) error {
 	return err
 }
 
+// ListAwaitingCapture returns the account's authorized-but-uncaptured
+// skip_capture sales (the "Capture all pending" queue), oldest first so the
+// oldest CHIP authorizations — the ones closest to expiry — are surfaced first.
+func (s *SaleStore) ListAwaitingCapture(ctx context.Context, accountID string) ([]*Sale, error) {
+	rows, err := s.pool.Query(ctx,
+		saleSelect+` WHERE account_id=$1 AND skip_capture=true
+		  AND captured_at IS NULL AND COALESCE(chip_purchase_id,'')<>''
+		  AND status IN ('pending','paid','authorized')
+		ORDER BY created_at ASC LIMIT 200`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Sale
+	for rows.Next() {
+		sale, err := scanSale(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, sale)
+	}
+	return out, rows.Err()
+}
+
 // SetStatus transitions the sale status.
 func (s *SaleStore) SetStatus(ctx context.Context, saleID, status string) error {
 	_, err := s.pool.Exec(ctx,

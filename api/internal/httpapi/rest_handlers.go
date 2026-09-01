@@ -2,6 +2,7 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
@@ -487,6 +488,76 @@ func (h *RESTHandlers) releaseSale(w http.ResponseWriter, r *http.Request, actx 
 		return
 	}
 	respond(w, http.StatusOK, map[string]string{"status": "released", "ref_code": ref})
+}
+
+// bulkCaptureSales captures awaiting skip_capture authorizations in batch
+// (issue #38, the #12 addendum): POST /v1/rest/sales/bulk-capture
+// {"refs":["JF-…", …]} or {} / {"refs":"all"} for everything awaiting.
+// Per-ref results — one CHIP rejection never aborts the batch.
+func (h *RESTHandlers) bulkCaptureSales(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if h.Pay == nil {
+		writeErr(w, http.StatusServiceUnavailable, "pembayaran tidak aktif")
+		return
+	}
+	var in struct {
+		Refs json.RawMessage `json:"refs,omitempty"`
+	}
+	_ = decodeJSON(r, &in)
+
+	var sales []*dbstore.Sale
+	if len(in.Refs) > 0 && string(in.Refs) != `"all"` {
+		var refs []string
+		if err := json.Unmarshal(in.Refs, &refs); err != nil {
+			writeErr(w, http.StatusBadRequest, "refs mesti array atau \"all\"")
+			return
+		}
+		if len(refs) > 200 {
+			writeErr(w, http.StatusBadRequest, "refs terlalu banyak (maks 200)")
+			return
+		}
+		for _, ref := range refs {
+			sale, err := h.Sales.ByRefCode(r.Context(), strings.TrimSpace(ref))
+			if err != nil || sale.AccountID != actx.Account.ID {
+				continue // unknown/foreign ref = per-ref failure, not fatal
+			}
+			sales = append(sales, sale)
+		}
+	} else {
+		var err error
+		sales, err = h.Sales.ListAwaitingCapture(r.Context(), actx.Account.ID)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+	}
+
+	type result struct {
+		RefCode string `json:"ref_code"`
+		OK      bool   `json:"ok"`
+		Error   string `json:"error,omitempty"`
+	}
+	results := make([]result, 0, len(sales))
+	ok, failed := 0, 0
+	for _, sale := range sales {
+		res := result{RefCode: sale.RefCode}
+		if !sale.SkipCapture || sale.CapturedAt != nil || sale.ChipPurchaseID == "" {
+			res.Error = "bukan authorisasi yang menunggu capture"
+		} else if err := h.Pay.CaptureSale(r.Context(), sale, nil); err != nil {
+			res.Error = err.Error()
+		} else if err := h.Sales.MarkCaptured(r.Context(), sale.ID); err != nil {
+			res.Error = err.Error()
+		} else {
+			res.OK = true
+			ok++
+		}
+		if !res.OK {
+			failed++
+		}
+		results = append(results, res)
+	}
+	respond(w, http.StatusOK, map[string]any{
+		"requested": len(sales), "captured": ok, "failed": failed, "results": results,
+	})
 }
 
 func (h *RESTHandlers) confirmSale(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {

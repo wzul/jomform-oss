@@ -283,6 +283,34 @@ export default function Builder() {
     }
   }
 
+  // Bulk capture (issue #38, #12 addendum): capture every awaiting
+  // authorization at once; per-ref results summarized in the status line.
+  async function captureAllPending() {
+    const awaiting = formSales.filter((s) => isCapturePending(s));
+    if (awaiting.length === 0) return;
+    const totalSen = awaiting.reduce((sum, s) => sum + s.total_sen, 0);
+    const rm = (totalSen / 100).toFixed(2);
+    if (!window.confirm(`Capture ALL ${awaiting.length} pending authorization(s) — total RM${rm}?`)) return;
+    setSaleActionBusy("__all__");
+    setSaleActionMsg("");
+    try {
+      const r = await fetch("/api/rest/sales/bulk-capture", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refs: awaiting.map((s) => s.ref_code) }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setSaleActionMsg(d.error || "Bulk capture gagal.");
+        return;
+      }
+      setSaleActionMsg(`Captured ${d.captured}/${d.requested} — ${d.failed} gagal.${d.failed ? " Semak status setiap satu." : " ✓"}`);
+      await loadFormSales(currentId, formSalesPage);
+    } finally {
+      setSaleActionBusy(null);
+    }
+  }
+
   // hydrate from ?form=<id>
   useEffect(() => {
     load();
@@ -857,12 +885,24 @@ export default function Builder() {
                 <p className="text-xs font-medium uppercase tracking-wider text-[#9ca3af]">
                   {t("bld.salesThisForm")}
                 </p>
-                <a
-                  href={`/api/rest/sales/export.csv?form_id=${currentId}`}
-                  className="whitespace-nowrap rounded-md border border-[var(--jf-border)] px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50"
-                >
-                  {t("common.exportCsv")}
-                </a>
+                <div className="flex items-center gap-1.5">
+                  {formSales.some((s) => isCapturePending(s)) && (
+                    <button
+                      type="button"
+                      onClick={() => void captureAllPending()}
+                      disabled={saleActionBusy !== null}
+                      className="whitespace-nowrap rounded-md bg-[#5e6ad2] px-2.5 py-1 text-xs font-medium text-white hover:bg-[#828fff] disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {saleActionBusy === "__all__" ? "…" : `${t("bld.captureAll")} (${formSales.filter((s) => isCapturePending(s)).length})`}
+                    </button>
+                  )}
+                  <a
+                    href={`/api/rest/sales/export.csv?form_id=${currentId}`}
+                    className="whitespace-nowrap rounded-md border border-[var(--jf-border)] px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50"
+                  >
+                    {t("common.exportCsv")}
+                  </a>
+                </div>
               </div>
               <div className="mt-2 overflow-x-auto">
                 <table className="w-full text-sm">

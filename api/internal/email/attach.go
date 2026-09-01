@@ -50,18 +50,7 @@ func (s *Sender) SendWithAttachment(to, subject, body string, filename string, d
 		return fmt.Errorf("ses client: %w", err)
 	}
 	defer c.Quit()
-	if err := c.Mail(s.cfg.From); err != nil {
-		return fmt.Errorf("mail from: %w", err)
-	}
-	if err := c.Rcpt(to); err != nil {
-		return fmt.Errorf("rcpt to: %w", err)
-	}
-	w, err := c.Data()
-	if err != nil {
-		return err
-	}
-	if _, err := w.Write([]byte(b.String())); err != nil {
-		return err
-	}
-	return w.Close()
+
+	// Same authenticated path as Send — see authAndSend in ses.go.
+	return s.authAndSend(c, to, []byte(b.String()))
 }

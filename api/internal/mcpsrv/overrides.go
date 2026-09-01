@@ -4,6 +4,7 @@ package mcpsrv
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -108,6 +109,51 @@ func (s *Server) releaseSaleMCP(
 		return nil, nil, err
 	}
 	return nil, map[string]string{"status": "released", "ref_code": in.RefCode}, nil
+}
+
+// captureAllPendingMCP captures every awaiting skip_capture authorization in
+// one call (issue #38, the #12 addendum). One CHIP rejection never aborts the
+// batch; every ref gets its own result.
+func (s *Server) captureAllPendingMCP(
+	ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn,
+) (*mcp.CallToolResult, any, error) {
+	pay := s.pay
+	if pay == nil {
+		return nil, nil, errors.New("payments tidak aktif")
+	}
+	acc, err := s.accountAndScope(ctx, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	sales, err := s.deps.Sales.ListAwaitingCapture(ctx, acc)
+	if err != nil {
+		return nil, nil, fmt.Errorf("db: %w", err)
+	}
+	type refResult struct {
+		RefCode string `json:"ref_code"`
+		OK      bool   `json:"ok"`
+		Error   string `json:"error,omitempty"`
+	}
+	results := make([]refResult, 0, len(sales))
+	ok, failed := 0, 0
+	for _, sale := range sales {
+		res := refResult{RefCode: sale.RefCode}
+		if err := pay.CaptureSale(ctx, sale, nil); err != nil {
+			res.Error = err.Error()
+		} else if err := s.deps.Sales.MarkCaptured(ctx, sale.ID); err != nil {
+			res.Error = err.Error()
+		} else {
+			res.OK = true
+			ok++
+		}
+		if !res.OK {
+			failed++
+		}
+		results = append(results, res)
+	}
+	return nil, map[string]any{
+		"requested": len(sales), "captured": ok, "failed": failed, "results": results,
+	}, nil
 }
 
 var _ = payments.ErrNotConfigured

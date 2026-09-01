@@ -100,6 +100,10 @@ func (s *Server) registerTools() {
 		Name:        "release_sale",
 		Description: "Release (void) authorisasi skip_capture — kad buyer TIDAK dicaj.",
 	}, s.releaseSaleMCP)
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "capture_all_pending_sales",
+		Description: "Capture SEMUA authorisasi skip_capture yang masih menunggu. Satu kegagalan tidak hentikan yang lain; balas per-ref.",
+	}, s.captureAllPendingMCP)
 
 	// ── Parity: forms/products (dashboard coverage) ────────────────────────
 	mcp.AddTool(s.mcp, &mcp.Tool{
@@ -118,6 +122,14 @@ func (s *Server) registerTools() {
 		Name:        "unpublish_form",
 		Description: "Tarik balik borang dari live (jadikan draft).",
 	}, s.deleteFormMCP)
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "delete_form",
+		Description: "Soft-delete borang (pergi ke trash dashboard; slug dilepaskan). Boleh dipulihkan.",
+	}, s.deleteFormMCPSoft)
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "bulk_forms",
+		Description: "Tindakan pukal atas banyak borang sekali gus: action=publish|draft|delete dengan ids[] (maks 500).",
+	}, s.bulkFormsMCP)
 	// ── Parity: settings/webhooks ──────────────────────────────────────────
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "set_einvoice",

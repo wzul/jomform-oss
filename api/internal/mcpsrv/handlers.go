@@ -109,12 +109,22 @@ type saleOut struct {
 	CreatedAt string `json:"created_at"`
 }
 
-func (s *Server) listSales(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, []saleOut, error) {
+type listSalesIn struct {
+	FormID string `json:"form_id,omitempty" jsonschema:"Optional — hadkan kepada jualan borang ini (id dari list_forms/get_form)"`
+}
+
+func (s *Server) listSales(ctx context.Context, _ *mcp.CallToolRequest, in listSalesIn) (*mcp.CallToolResult, []saleOut, error) {
 	accountID, err := s.accountAndScope(ctx, false)
 	if err != nil {
 		return nil, nil, err
 	}
-	sales, err := s.deps.Sales.ListByAccount(ctx, accountID, 50)
+	var sales []*dbstore.Sale
+	if in.FormID != "" {
+		// Scoped to one form; ownership enforced inside the store query.
+		sales, err = s.deps.Sales.ListByAccountForm(ctx, accountID, in.FormID, 50)
+	} else {
+		sales, err = s.deps.Sales.ListByAccount(ctx, accountID, 50)
+	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}

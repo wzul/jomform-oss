@@ -123,6 +123,73 @@ func (s *Server) deleteFormMCP(
 	return nil, map[string]string{"status": "unpublished", "form_id": in.FormID}, nil
 }
 
+// deleteFormMCPSoft soft-deletes a form (parity with REST DELETE
+// /v1/rest/forms/{id} and the dashboard trash). Registered as delete_form.
+func (s *Server) deleteFormMCPSoft(
+	ctx context.Context, _ *mcp.CallToolRequest, in formRefIn,
+) (*mcp.CallToolResult, map[string]string, error) {
+	acc, err := s.accountAndScope(ctx, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := s.deps.Forms.SoftDelete(ctx, acc, in.FormID); err != nil {
+		return nil, nil, err
+	}
+	return nil, map[string]string{"status": "deleted", "form_id": in.FormID}, nil
+}
+
+// bulkFormsMCP mirrors POST /v1/rest/forms/bulk: publish|draft|delete over
+// many ids in one call (dedup, ≤500), returning how many actually changed.
+type bulkFormsIn struct {
+	Action string   `json:"action" jsonschema:"publish | draft | delete"`
+	IDs    []string `json:"ids" jsonschema:"Senarai form id (maks 500)"`
+}
+
+func (s *Server) bulkFormsMCP(
+	ctx context.Context, _ *mcp.CallToolRequest, in bulkFormsIn,
+) (*mcp.CallToolResult, map[string]any, error) {
+	acc, err := s.accountAndScope(ctx, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	if in.Action != "publish" && in.Action != "draft" && in.Action != "delete" {
+		return nil, nil, errors.New("action mesti publish|draft|delete")
+	}
+	if len(in.IDs) == 0 {
+		return nil, nil, errors.New("ids wajib")
+	}
+	if len(in.IDs) > 500 {
+		return nil, nil, errors.New("ids terlalu banyak (maks 500)")
+	}
+	seen := make(map[string]struct{}, len(in.IDs))
+	ids := make([]string, 0, len(in.IDs))
+	for _, id := range in.IDs {
+		if _, dup := seen[id]; dup || id == "" {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return nil, nil, errors.New("ids mesti diisi")
+	}
+	var updated int64
+	switch in.Action {
+	case "publish", "draft":
+		status := "published"
+		if in.Action == "draft" {
+			status = "draft"
+		}
+		updated, err = s.deps.Forms.SetStatusMany(ctx, acc, ids, status)
+	default:
+		updated, err = s.deps.Forms.SoftDeleteMany(ctx, acc, ids)
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, map[string]any{"status": "ok", "action": in.Action, "updated": updated}, nil
+}
+
 // delete product alias to archive
 func (s *Server) archiveProductMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in struct {

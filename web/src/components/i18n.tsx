@@ -235,6 +235,7 @@ const DICT = {
   "bld.confirmedRevenue": { en: "confirmed revenue", ms: "hasil disahkan", zh: "已确认收入", ta: "உறுதிப்படுத்தப்பட்ட வருவாய்", ar: "الإيرادات المؤكدة" },
   "bld.salesThisForm": { en: "Sales (this form)", ms: "Jualan (borang ini)", zh: "销售（此表单）", ta: "விற்பனை (இந்த படிவம்)", ar: "المبيعات (هذا النموذج)" },
   "bld.actions": { en: "Actions", ms: "Tindakan", zh: "操作", ta: "செயல்கள்", ar: "إجراءات" },
+  "bld.captureAll": { en: "Capture all pending", ms: "Capture semua menunggu", zh: "捕获全部待处理", ta: "காத்திருப்பை அனைத்தையும் கேப்சர்", ar: "تحصيل الكل المعلق" },
   "bld.capture": { en: "Capture", ms: "Capture", zh: "捕获", ta: "கேப்சர்", ar: "تحصيل" },
   "bld.release": { en: "Release", ms: "Release", zh: "释放", ta: "விடுவி", ar: "إفراج" },
   "bld.noSalesForm": { en: "No sales yet for this form.", ms: "Belum ada jualan untuk borang ini.", zh: "此表单暂无销售。", ta: "இந்த படிவத்திற்கு இன்னும் விற்பனை இல்லை.", ar: "لا مبيعات لهذا النموذج بعد." },
