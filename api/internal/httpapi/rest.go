@@ -49,8 +49,10 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("DELETE /v1/rest/forms/{id}/chip-override", h.authed(h.clearFormChipOverride))
 	mux.Handle("GET /v1/rest/forms", h.authed(h.listForms))
 	mux.Handle("POST /v1/rest/forms", h.authed(h.createForm))
+	mux.Handle("POST /v1/rest/forms/bulk", h.authed(h.bulkForms))
 	mux.Handle("GET /v1/rest/forms/{id}", h.authed(h.getForm))
 	mux.Handle("PATCH /v1/rest/forms/{id}", h.authed(h.updateForm))
+	mux.Handle("DELETE /v1/rest/forms/{id}", h.authed(h.deleteForm))
 	mux.Handle("POST /v1/rest/forms/{id}/publish", h.authed(h.publishForm))
 	mux.Handle("GET /v1/rest/keys", h.authed(h.listKeys))
 	mux.Handle("POST /v1/rest/keys", h.authed(h.createKey))
@@ -101,6 +103,7 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /v1/rest/sales/{ref}/capture", h.authed(h.captureSale))
 	mux.Handle("POST /v1/rest/sales/{ref}/release", h.authed(h.releaseSale))
 	mux.Handle("GET /v1/rest/sales", h.authed(h.listSales))
+	mux.Handle("GET /v1/rest/dashboard-bundle", h.authed(h.dashboardBundle))
 	mux.Handle("GET /v1/rest/analytics/forms", h.authed(h.formAnalytics))
 	mux.Handle("GET /v1/rest/analytics/products", h.authed(h.productAnalytics))
 	mux.Handle("GET /v1/rest/sales/export.csv", h.authed(h.exportSalesCSV))
@@ -136,12 +139,38 @@ func (h *RESTHandlers) resolve(w http.ResponseWriter, r *http.Request) (*dbstore
 	if err != nil {
 		return nil, false
 	}
-	// First owned account (M5 adds multi-account switching).
-	accs, err := h.Accounts.ByOwner(r.Context(), userID)
-	if err != nil || len(accs) == 0 {
+	// First owned account (M5 adds multi-account switching). Account IDs are
+	// TTL-cached per token, so repeat requests skip the Accounts.ByOwner
+	// Postgres listing; a hit still re-fetches the account by primary key
+	// (one cheap query) so account/CHIP-credential changes are never stale.
+	var acc *dbstore.Account
+	if ids, ok := cachedSessionAcctIDs(c.Value); ok {
+		for _, id := range ids {
+			if a, err := h.Accounts.ByID(r.Context(), id); err == nil {
+				acc = a
+				break
+			}
+		}
+	} else {
+		accs, err := h.Accounts.ByOwner(r.Context(), userID)
+		if err != nil || len(accs) == 0 {
+			return nil, false
+		}
+		ids := make([]string, 0, len(accs))
+		for _, a := range accs {
+			ids = append(ids, a.ID)
+		}
+		storeSessionAcctIDs(c.Value, ids)
+		acc = accs[0]
+	}
+	if acc == nil {
+		// Cache held IDs but none fetched: stale mapping (account deleted or
+		// owner listing would be empty). Drop the entry so the next request
+		// re-resolves via ByOwner, then reject.
+		invalidateSessionAcctCache(c.Value)
 		return nil, false
 	}
-	return accs[0], true
+	return acc, true
 }
 
 // AccountCtx carries the resolved account through the request.

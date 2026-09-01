@@ -31,6 +31,26 @@ type Product = { id: string; name: string; price_sen: number; type: string };
 
 type FormRow = { id: string; slug: string; title: string; status: string };
 
+type SaleRow = {
+  ref_code: string;
+  status: string;
+  total_sen: number;
+  payment_method: string;
+  buyer: string;
+  created_at: string;
+  skip_capture?: boolean;
+  authorized?: boolean;
+  captured_at?: string;
+};
+type SalesPage = { items: SaleRow[]; page: number; limit: number; total: number };
+
+/* issue #12: an uncaptured skip_capture authorization — captured_at is only
+   set once the merchant captures (MarkCaptured); released sales go cancelled. */
+const isCapturePending = (s: SaleRow) =>
+  !!s.skip_capture &&
+  !s.captured_at &&
+  (s.status === "pending" || s.status === "authorized" || s.authorized === true);
+
 const PALETTE: { type: BlockType; label: string; icon: string; hint: string }[] = [
   { type: "text", label: "Text", icon: "T", hint: "Paragraph / description" },
   { type: "image", label: "Image", icon: "🖼", hint: "Product photo / banner" },
@@ -52,6 +72,18 @@ function uid() {
 
 const money = (sen: number) =>
   `RM${(sen / 100).toLocaleString("en-MY", { minimumFractionDigits: 2 })}`;
+
+/* same status badge colors as the dashboard Recent sales table */
+const saleBadge = (s: string) =>
+  ({
+    pending: "bg-amber-50 text-amber-700 border-amber-200",
+    paid: "bg-blue-50 text-blue-700 border-blue-200",
+    confirmed: "bg-emerald-50 text-emerald-700 border-emerald-200",
+    failed: "bg-red-50 text-red-700 border-red-200",
+    cancelled: "bg-slate-100 text-slate-500 border-slate-200",
+  })[s] || "";
+
+const FORM_SALES_PAGE_SIZE = 10;
 
 function labelFor(t: BlockType) {
   switch (t) {
@@ -140,6 +172,118 @@ export default function Builder() {
   useEffect(() => {
     void loadStats(currentId);
   }, [currentId, loadStats]);
+
+  // Per-form sales table (issue #11): same row shape as dashboard Recent sales,
+  // paginated 10/page via the /api/rest/sales?page&limit&form_id filter.
+  const [formSales, setFormSales] = useState<SaleRow[]>([]);
+  const [formSalesPage, setFormSalesPage] = useState(1);
+  const [formSalesTotal, setFormSalesTotal] = useState(0);
+  const [formSalesErr, setFormSalesErr] = useState("");
+
+  const loadFormSales = useCallback(async (fid: string | null, page: number) => {
+    if (!fid) {
+      setFormSales([]);
+      setFormSalesTotal(0);
+      setFormSalesErr("");
+      return;
+    }
+    try {
+      const q = new URLSearchParams({
+        page: String(page),
+        limit: String(FORM_SALES_PAGE_SIZE),
+        form_id: fid,
+      });
+      const r = await fetch(`/api/rest/sales?${q.toString()}`);
+      if (!r.ok) {
+        setFormSales([]);
+        setFormSalesTotal(0);
+        setFormSalesErr("Gagal memuatkan jualan.");
+        return;
+      }
+      const d = (await r.json()) as SalesPage;
+      setFormSales(Array.isArray(d.items) ? d.items : []);
+      setFormSalesPage(d.page || page);
+      setFormSalesTotal(d.total || 0);
+      setFormSalesErr("");
+    } catch {
+      setFormSales([]);
+      setFormSalesTotal(0);
+      setFormSalesErr("Gagal memuatkan jualan.");
+    }
+  }, []);
+
+  // Reload sales whenever the selected form changes; reset to page 1.
+  useEffect(() => {
+    setFormSalesPage(1);
+    void loadFormSales(currentId, 1);
+  }, [currentId, loadFormSales]);
+
+  const formSalesTotalPages = Math.max(1, Math.ceil(formSalesTotal / FORM_SALES_PAGE_SIZE));
+
+  function gotoFormSalesPage(p: number) {
+    const next = Math.min(Math.max(1, p), formSalesTotalPages);
+    setFormSalesPage(next);
+    void loadFormSales(currentId, next);
+  }
+
+  /* issue #12: capture/release of skip_capture authorizations */
+  const [saleActionMsg, setSaleActionMsg] = useState("");
+  const [saleActionBusy, setSaleActionBusy] = useState<string | null>(null);
+
+  async function captureSale(ref: string) {
+    const raw = window.prompt(
+      `Capture amount in RM for ${ref} (empty = full authorized amount):`,
+    );
+    if (raw === null) return; // cancelled
+    const rm = raw.trim();
+    let body = "";
+    if (rm !== "") {
+      const rmNum = Number(rm);
+      if (!Number.isFinite(rmNum) || rmNum <= 0) {
+        setSaleActionMsg("Jumlah capture tidak sah.");
+        return;
+      }
+      body = JSON.stringify({ amount_sen: Math.round(rmNum * 100) });
+    }
+    setSaleActionBusy(ref);
+    setSaleActionMsg("");
+    try {
+      const r = await fetch(`/api/rest/sales/${encodeURIComponent(ref)}/capture`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        ...(body ? { body } : {}),
+      });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        setSaleActionMsg(d.error || `Capture gagal untuk ${ref}.`);
+        return;
+      }
+      setSaleActionMsg(`Capture berjaya untuk ${ref}. ✓`);
+      await loadFormSales(currentId, formSalesPage);
+    } finally {
+      setSaleActionBusy(null);
+    }
+  }
+
+  async function releaseSale(ref: string) {
+    if (!window.confirm(`Release authorization ${ref}? The buyer's card will NOT be charged.`)) return;
+    setSaleActionBusy(ref);
+    setSaleActionMsg("");
+    try {
+      const r = await fetch(`/api/rest/sales/${encodeURIComponent(ref)}/release`, {
+        method: "POST",
+      });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        setSaleActionMsg(d.error || `Release gagal untuk ${ref}.`);
+        return;
+      }
+      setSaleActionMsg(`Authorization ${ref} released. ✓`);
+      await loadFormSales(currentId, formSalesPage);
+    } finally {
+      setSaleActionBusy(null);
+    }
+  }
 
   // hydrate from ?form=<id>
   useEffect(() => {
@@ -345,7 +489,7 @@ export default function Builder() {
           <button
             onClick={() => save(true)}
             disabled={saving}
-            className="jf-btn-primary px-4 py-1.5 text-sm"
+            className="jf-btn-primary"
           >
             {saving ? "Saving…" : currentId ? "Publish" : "Save & publish"}
           </button>
@@ -704,6 +848,113 @@ export default function Builder() {
               <p className="mt-1 text-sm font-semibold text-[var(--jf-primary)]">
                 {`RM${(formStat.revenue_sen / 100).toFixed(2)}`} confirmed revenue
               </p>
+            </div>
+          )}
+
+          {/* per-form sales table (issue #11) */}
+          {currentId && (
+            <div className="mt-8 rounded-lg border border-[var(--jf-border)] bg-white p-3">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-medium uppercase tracking-wider text-[#9ca3af]">
+                  Sales (this form)
+                </p>
+                <a
+                  href={`/api/rest/sales/export.csv?form_id=${currentId}`}
+                  className="whitespace-nowrap rounded-md border border-[var(--jf-border)] px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50"
+                >
+                  Export CSV
+                </a>
+              </div>
+              <div className="mt-2 overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-[var(--jf-border)] text-left text-[10px] uppercase tracking-wide text-[var(--jf-muted)]">
+                      <th className="px-2 py-1.5 font-medium">Reference</th>
+                      <th className="px-2 py-1.5 font-medium">Buyer</th>
+                      <th className="px-2 py-1.5 font-medium">Amount</th>
+                      <th className="px-2 py-1.5 font-medium">Status</th>
+                      <th className="px-2 py-1.5" />
+                      <th className="px-2 py-1.5 font-medium">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {formSales.map((s) => (
+                      <tr key={s.ref_code} className="border-b border-[var(--jf-border)] last:border-0 hover:bg-slate-50/60">
+                        <td className="whitespace-nowrap px-2 py-2 font-mono text-[11px]">{s.ref_code}</td>
+                        <td className="max-w-24 truncate px-2 py-2 text-xs">{s.buyer || "—"}</td>
+                        <td className="whitespace-nowrap px-2 py-2 text-xs font-medium">{money(s.total_sen)}</td>
+                        <td className="whitespace-nowrap px-2 py-2">
+                          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${saleBadge(s.status)}`}>
+                            {s.status}
+                          </span>
+                        </td>
+                        <td className="px-2 py-2 text-right text-[10px] text-[var(--jf-muted)]">
+                          {s.created_at.slice(0, 10)}
+                        </td>
+                        <td className="whitespace-nowrap px-2 py-2 text-right">
+                          {isCapturePending(s) ? (
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => void captureSale(s.ref_code)}
+                                disabled={saleActionBusy !== null}
+                                className="rounded-md bg-[#5e6ad2] px-2 py-1 text-[10px] font-medium text-white hover:bg-[#828fff] disabled:cursor-not-allowed disabled:opacity-40"
+                              >
+                                {saleActionBusy === s.ref_code ? "…" : "Capture"}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void releaseSale(s.ref_code)}
+                                disabled={saleActionBusy !== null}
+                                className="rounded-md border border-[var(--jf-border)] px-2 py-1 text-[10px] text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                              >
+                                Release
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="text-[10px] text-[var(--jf-muted)]">—</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                    {formSales.length === 0 && (
+                      <tr>
+                        <td colSpan={6} className="px-2 py-6 text-center text-xs text-[var(--jf-muted)]">
+                          {formSalesErr || "No sales yet for this form."}
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              {saleActionMsg && (
+                <p className="mt-1.5 text-[11px] text-[var(--jf-primary)]">{saleActionMsg}</p>
+              )}
+              {formSalesTotal > 0 && (
+                <div className="mt-2 flex items-center justify-between gap-2 border-t border-[var(--jf-border)] pt-2">
+                  <span className="text-[10px] text-[var(--jf-muted)]">
+                    {formSalesTotal} {formSalesTotal === 1 ? "record" : "records"} · page {formSalesPage} of {formSalesTotalPages}
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => gotoFormSalesPage(formSalesPage - 1)}
+                      disabled={formSalesPage <= 1}
+                      className="rounded-md border border-[var(--jf-border)] px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Prev
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => gotoFormSalesPage(formSalesPage + 1)}
+                      disabled={formSalesPage >= formSalesTotalPages}
+                      className="rounded-md border border-[var(--jf-border)] px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

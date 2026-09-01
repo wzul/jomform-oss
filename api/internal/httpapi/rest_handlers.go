@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/dbstore"
 )
@@ -190,6 +191,83 @@ func (h *RESTHandlers) publishForm(w http.ResponseWriter, r *http.Request, actx 
 	respond(w, http.StatusOK, map[string]string{"status": "published"})
 }
 
+// deleteForm soft-deletes a single form (owner-checked via account scope).
+func (h *RESTHandlers) deleteForm(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if err := h.Forms.SoftDelete(r.Context(), actx.Account.ID, r.PathValue("id")); err != nil {
+		respondErr(w, err)
+		return
+	}
+	respond(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// bulkForms applies an action to many forms at once:
+// POST /v1/rest/forms/bulk {"action":"publish|draft|delete","ids":["uuid",...]}
+// Returns {"updated": n} — how many forms the caller's account actually owns
+// and that were still eligible (not already soft-deleted).
+func (h *RESTHandlers) bulkForms(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	var in struct {
+		Action string   `json:"action"`
+		IDs    []string `json:"ids"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if in.Action != "publish" && in.Action != "draft" && in.Action != "delete" {
+		writeErr(w, http.StatusBadRequest, "action mesti publish|draft|delete")
+		return
+	}
+	if len(in.IDs) == 0 {
+		writeErr(w, http.StatusBadRequest, "ids wajib")
+		return
+	}
+	if len(in.IDs) > 500 {
+		writeErr(w, http.StatusBadRequest, "ids terlalu banyak (maks 500)")
+		return
+	}
+	// Dedupe + keep only valid UUIDs; malformed ids are ignored, not fatal.
+	seen := make(map[string]struct{}, len(in.IDs))
+	ids := make([]string, 0, len(in.IDs))
+	for _, raw := range in.IDs {
+		id := strings.TrimSpace(raw)
+		if _, err := uuid.Parse(id); err != nil {
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		writeErr(w, http.StatusBadRequest, "ids mesti uuid")
+		return
+	}
+
+	var updated int64
+	switch in.Action {
+	case "publish", "draft":
+		status := "published"
+		if in.Action == "draft" {
+			status = "draft"
+		}
+		tag, err := h.Forms.SetStatusMany(r.Context(), actx.Account.ID, ids, status)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		updated = tag
+	case "delete":
+		n, err := h.Forms.SoftDeleteMany(r.Context(), actx.Account.ID, ids)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		updated = n
+	}
+	respond(w, http.StatusOK, map[string]int64{"updated": updated})
+}
+
 // ─── API keys ────────────────────────────────────────────────────────────────
 
 type restKey struct {
@@ -279,12 +357,21 @@ func (h *RESTHandlers) listSales(w http.ResponseWriter, r *http.Request, actx *A
 		return
 	}
 	type saleRow struct {
-		RefCode  string `json:"ref_code"`
-		Status   string `json:"status"`
-		TotalSen int64  `json:"total_sen"`
-		Method   string `json:"payment_method"`
-		Buyer    string `json:"buyer"`
-		Created  string `json:"created_at"`
+		RefCode     string `json:"ref_code"`
+		Status      string `json:"status"`
+		TotalSen    int64  `json:"total_sen"`
+		Method      string `json:"payment_method"`
+		Buyer       string `json:"buyer"`
+		Created     string `json:"created_at"`
+		SkipCapture bool   `json:"skip_capture"`
+		Authorized  bool   `json:"authorized"`
+		CapturedAt  string `json:"captured_at,omitempty"`
+	}
+	capturedAt := func(s *dbstore.Sale) string {
+		if s.CapturedAt == nil {
+			return ""
+		}
+		return s.CapturedAt.UTC().Format(time.RFC3339)
 	}
 	writeRows := func(sales []*dbstore.Sale) {
 		out := make([]saleRow, 0, len(sales))
@@ -292,7 +379,8 @@ func (h *RESTHandlers) listSales(w http.ResponseWriter, r *http.Request, actx *A
 			out = append(out, saleRow{
 				RefCode: s.RefCode, Status: s.Status, TotalSen: s.TotalSen,
 				Method: s.PaymentMethod, Buyer: s.Client.FullName,
-				Created: s.CreatedAt.UTC().Format(time.RFC3339),
+				Created:     s.CreatedAt.UTC().Format(time.RFC3339),
+				SkipCapture: s.SkipCapture, Authorized: s.Authorized, CapturedAt: capturedAt(s),
 			})
 		}
 		respond(w, http.StatusOK, out)
@@ -300,7 +388,13 @@ func (h *RESTHandlers) listSales(w http.ResponseWriter, r *http.Request, actx *A
 
 	// Legacy shape: plain array when the caller does not ask for paging.
 	if r.URL.Query().Get("page") == "" {
-		sales, err := h.Sales.ListByAccount(r.Context(), actx.Account.ID, 100)
+		var sales []*dbstore.Sale
+		var err error
+		if formID := r.URL.Query().Get("form_id"); formID != "" {
+			sales, err = h.Sales.ListByAccountForm(r.Context(), actx.Account.ID, formID, 100)
+		} else {
+			sales, err = h.Sales.ListByAccount(r.Context(), actx.Account.ID, 100)
+		}
 		if err != nil {
 			respondErr(w, err)
 			return
@@ -311,7 +405,15 @@ func (h *RESTHandlers) listSales(w http.ResponseWriter, r *http.Request, actx *A
 
 	// Paginated shape: { items, page, limit, total }.
 	page, limit := parsePageLimit(r)
-	sales, total, err := h.Sales.ListByAccountsPage(r.Context(), scope.Accounts, page, limit)
+	formID := r.URL.Query().Get("form_id")
+	var sales []*dbstore.Sale
+	var total int64
+	var err error
+	if formID != "" {
+		sales, total, err = h.Sales.ListByAccountsFormPage(r.Context(), scope.Accounts, formID, page, limit)
+	} else {
+		sales, total, err = h.Sales.ListByAccountsPage(r.Context(), scope.Accounts, page, limit)
+	}
 	if err != nil {
 		respondErr(w, err)
 		return
@@ -321,7 +423,8 @@ func (h *RESTHandlers) listSales(w http.ResponseWriter, r *http.Request, actx *A
 		out = append(out, saleRow{
 			RefCode: s.RefCode, Status: s.Status, TotalSen: s.TotalSen,
 			Method: s.PaymentMethod, Buyer: s.Client.FullName,
-			Created: s.CreatedAt.UTC().Format(time.RFC3339),
+			Created:     s.CreatedAt.UTC().Format(time.RFC3339),
+			SkipCapture: s.SkipCapture, Authorized: s.Authorized, CapturedAt: capturedAt(s),
 		})
 	}
 	respond(w, http.StatusOK, map[string]any{

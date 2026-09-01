@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 type Mode = "login" | "register";
+type SocialProvider = { id: string; name: string };
 
 export default function Login() {
   const [mode, setMode] = useState<Mode>("login");
@@ -10,6 +11,16 @@ export default function Login() {
   const [error, setError] = useState("");
   const [needTotp, setNeedTotp] = useState(false);
   const [done, setDone] = useState(false);
+  // Issue #9: social buttons render only for providers configured on the
+  // backend (env-gated). null = list still loading → render none.
+  const [socialProviders, setSocialProviders] = useState<SocialProvider[] | null>(null);
+
+  useEffect(() => {
+    fetch("/api/auth/social/providers")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((d) => setSocialProviders(Array.isArray(d) ? d : []))
+      .catch(() => setSocialProviders([]));
+  }, []);
 
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -184,6 +195,25 @@ export default function Login() {
               {busy ? "…" : mode === "login" ? "Log Masuk" : "Cipta Akaun Percuma"}
             </button>
           </form>
+
+          {/* Issue #9: env-gated social login. Rendered only when the backend
+              reports the provider configured (GET /api/auth/social/providers);
+              Cloudflare appears only when JF_CF_OIDC_* env vars are set. */}
+          {socialProviders && socialProviders.length > 0 && (
+            <div className="mt-4 border-t border-[var(--jf-border)] pt-4">
+              <div className="space-y-2">
+                {socialProviders.map((p) => (
+                  <a
+                    key={p.id}
+                    href={`/api/auth/oauth/${p.id}`}
+                    className="flex w-full items-center justify-center gap-2 rounded-md border border-[var(--jf-border)] bg-white py-2 text-[13px] font-medium text-[var(--jf-text)] transition-colors hover:border-[#7170ff]/60 hover:bg-indigo-50"
+                  >
+                    Teruskan dengan {p.name}
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         <p className="mt-6 text-center text-xs text-[#62666d]">

@@ -51,6 +51,10 @@ body {
   background: var(--jf-primary);
   color: #fff;
   border-radius: 8px;
+  padding: 10px 18px;
+  font-size: 14px;
+  min-height: 40px;
+  line-height: 1.2;
   font-weight: 500;
   transition: background 0.15s;
 }
@@ -64,6 +68,10 @@ body {
   border: 1px solid var(--jf-border);
   background: #fff;
   border-radius: 8px;
+  padding: 10px 18px;
+  font-size: 14px;
+  min-height: 40px;
+  line-height: 1.2;
   transition: background 0.15s;
 }
 .jf-btn-ghost:hover {

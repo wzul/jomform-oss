@@ -38,8 +38,10 @@ type FormStore struct{ pool *pgxpool.Pool }
 // NewFormStore builds a FormStore.
 func NewFormStore(pool *pgxpool.Pool) *FormStore { return &FormStore{pool: pool} }
 
+// formSelect builds every non-trash form read: deleted forms are
+// invisible everywhere except the explicit trash query.
 const formSelect = `SELECT id, account_id, slug, title, config, theme, status, is_main, redirect_success, redirect_failure, allow_embed, logo_url, is_template, created_at, updated_at
-	FROM forms`
+	FROM forms WHERE deleted_at IS NULL`
 
 // Create inserts a form.
 func (s *FormStore) Create(ctx context.Context, f *Form) error {
@@ -52,15 +54,15 @@ func (s *FormStore) Create(ctx context.Context, f *Form) error {
 	).Scan(&f.ID, &f.CreatedAt, &f.UpdatedAt)
 }
 
-// BySlug fetches a published form by its public slug (any account).
+// PublishedBySlug fetches a published form by its public slug (any account).
 func (s *FormStore) PublishedBySlug(ctx context.Context, slug string) (*Form, error) {
 	return s.scanOne(s.pool.QueryRow(ctx,
-		formSelect+" WHERE slug=$1 AND status='published'", slug))
+		formSelect+" AND slug=$1 AND status='published'", slug))
 }
 
-// ListByAccount lists all forms for an account.
+// ListByAccount lists all non-deleted forms for an account.
 func (s *FormStore) ListByAccount(ctx context.Context, accountID string) ([]*Form, error) {
-	rows, err := s.pool.Query(ctx, formSelect+" WHERE account_id=$1 ORDER BY created_at DESC", accountID)
+	rows, err := s.pool.Query(ctx, formSelect+" AND account_id=$1 ORDER BY created_at DESC", accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -76,17 +78,17 @@ func (s *FormStore) ListByAccount(ctx context.Context, accountID string) ([]*For
 	return out, rows.Err()
 }
 
-// GetByID fetches one form scoped to account.
+// GetByID fetches one non-deleted form scoped to account.
 func (s *FormStore) GetByID(ctx context.Context, accountID, id string) (*Form, error) {
 	return s.scanOne(s.pool.QueryRow(ctx,
-		formSelect+" WHERE id=$2 AND account_id=$1", accountID, id))
+		formSelect+" AND id=$2 AND account_id=$1", accountID, id))
 }
 
-// Update mutates title/config/theme.
+// Update mutates title/config/theme (soft-deleted forms are immutable).
 func (s *FormStore) Update(ctx context.Context, accountID, id, title string, config, theme map[string]any) error {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE forms SET title=$3, config=$4, theme=$5, updated_at=now()
-		 WHERE id=$2 AND account_id=$1`,
+		 WHERE id=$2 AND account_id=$1 AND deleted_at IS NULL`,
 		accountID, id, title, config, theme)
 	if err != nil {
 		return err
@@ -97,10 +99,10 @@ func (s *FormStore) Update(ctx context.Context, accountID, id, title string, con
 	return nil
 }
 
-// SetStatus publishes/unpublishes.
+// SetStatus publishes/unpublishes (soft-deleted forms keep their status).
 func (s *FormStore) SetStatus(ctx context.Context, accountID, id, status string) error {
 	tag, err := s.pool.Exec(ctx,
-		`UPDATE forms SET status=$3, updated_at=now() WHERE id=$2 AND account_id=$1`,
+		`UPDATE forms SET status=$3, updated_at=now() WHERE id=$2 AND account_id=$1 AND deleted_at IS NULL`,
 		accountID, id, status)
 	if err != nil {
 		return err
@@ -125,14 +127,14 @@ func (s *FormStore) scanOne(row rowScanner) (*Form, error) {
 }
 
 // PublishedByAccountSlug resolves a published form via account subdomain +
-// form slug (account slug == subdomain).
+// form slug (account slug == subdomain). Soft-deleted forms are invisible.
 func (s *FormStore) PublishedByAccountSlug(ctx context.Context, accountSlug, formSlug string) (*Form, error) {
 	f := &Form{}
 	err := s.pool.QueryRow(ctx, "SELECT f.id, f.account_id, f.slug, f.title, f.config, f.theme, "+
 		"f.status, f.is_main, f.redirect_success, f.redirect_failure, f.allow_embed, f.logo_url, f.is_template, "+
 		"f.created_at, f.updated_at "+
 		"FROM forms f JOIN accounts a ON a.id = f.account_id "+
-		"WHERE a.slug = $1 AND f.slug = $2 AND f.status = 'published'",
+		"WHERE a.slug = $1 AND f.slug = $2 AND f.status = 'published' AND f.deleted_at IS NULL",
 		accountSlug, formSlug).Scan(&f.ID, &f.AccountID, &f.Slug, &f.Title, &f.Config, &f.Theme,
 		&f.Status, &f.IsMain, &f.RedirectSuccess, &f.RedirectFailure,
 		&f.AllowEmbed, &f.LogoURL, &f.IsTemplate, &f.CreatedAt, &f.UpdatedAt)
@@ -159,7 +161,7 @@ func (s *FormStore) UpdateSettings(ctx context.Context, accountID, id, redirectS
 // ListTemplates returns published template forms for the gallery.
 func (s *FormStore) ListTemplates(ctx context.Context) ([]*Form, error) {
 	rows, err := s.pool.Query(ctx,
-		formSelect+` WHERE is_template AND status='published' ORDER BY created_at`)
+		formSelect+` AND is_template AND status='published' ORDER BY created_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -175,9 +177,9 @@ func (s *FormStore) ListTemplates(ctx context.Context) ([]*Form, error) {
 	return out, rows.Err()
 }
 
-// TemplateBySlug fetches one template.
+// TemplateBySlug fetches one non-deleted template.
 func (s *FormStore) TemplateBySlug(ctx context.Context, slug string) (*Form, error) {
-	f, err := s.scanOne(s.pool.QueryRow(ctx, formSelect+` WHERE is_template AND slug=$1`, slug))
+	f, err := s.scanOne(s.pool.QueryRow(ctx, formSelect+` AND is_template AND slug=$1`, slug))
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +202,7 @@ func (s *FormStore) PublishedBySpaceSlug(ctx context.Context, spaceSlug, formSlu
 		 FROM forms f
 		 JOIN accounts a ON a.id = f.account_id
 		 JOIN spaces sp ON sp.id = a.space_id
-		 WHERE sp.slug = $1 AND f.slug = $2 AND f.status = 'published'`,
+		 WHERE sp.slug = $1 AND f.slug = $2 AND f.status = 'published' AND f.deleted_at IS NULL`,
 		spaceSlug, formSlug).Scan(
 		&f2.ID, &f2.AccountID, &f2.Slug, &f2.Title, &f2.Config, &f2.Theme,
 		&f2.Status, &f2.IsMain, &f2.RedirectSuccess, &f2.RedirectFailure,
@@ -220,7 +222,7 @@ func (s *FormStore) ListPublishedBySpace(ctx context.Context, spaceSlug string) 
 		 FROM forms f
 		 JOIN accounts a ON a.id = f.account_id
 		 JOIN spaces sp ON sp.id = a.space_id
-		 WHERE sp.slug = $1 AND f.status = 'published'
+		 WHERE sp.slug = $1 AND f.status = 'published' AND f.deleted_at IS NULL
 		 ORDER BY f.created_at`, spaceSlug)
 	if err != nil {
 		return nil, err
@@ -235,4 +237,81 @@ func (s *FormStore) ListPublishedBySpace(ctx context.Context, spaceSlug string) 
 		out = append(out, f)
 	}
 	return out, rows.Err()
+}
+
+// SoftDelete marks a form deleted (trash). Soft-deleted forms disappear
+// from every normal read; Restore brings them back.
+func (s *FormStore) SoftDelete(ctx context.Context, accountID, formID string) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE forms SET deleted_at=now(), updated_at=now()
+		 WHERE id=$2 AND account_id=$1 AND deleted_at IS NULL`,
+		accountID, formID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrFormNotFound
+	}
+	return nil
+}
+
+// Restore clears deleted_at on a trashed form.
+func (s *FormStore) Restore(ctx context.Context, accountID, formID string) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE forms SET deleted_at=NULL, updated_at=now()
+		 WHERE id=$2 AND account_id=$1 AND deleted_at IS NOT NULL`,
+		accountID, formID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrFormNotFound
+	}
+	return nil
+}
+
+// ListTrashed lists soft-deleted forms for an account (explicit trash read —
+// the only query in the store that may return deleted rows).
+func (s *FormStore) ListTrashed(ctx context.Context, accountID string) ([]*Form, error) {
+	rows, err := s.pool.Query(ctx,
+		formSelect+" AND deleted_at IS NOT NULL AND account_id=$1 ORDER BY deleted_at DESC", accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Form
+	for rows.Next() {
+		f, serr := s.scanOne(rows)
+		if serr != nil {
+			return nil, serr
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// SoftDeleteMany soft-deletes many forms at once; returns how many of the ids
+// belong to the account and were still live (deleted_at IS NULL).
+func (s *FormStore) SoftDeleteMany(ctx context.Context, accountID string, formIDs []string) (int64, error) {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE forms SET deleted_at=now(), updated_at=now()
+		 WHERE account_id=$1 AND deleted_at IS NULL AND id = ANY($2)`,
+		accountID, formIDs)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
+// SetStatusMany publishes/unpublishes many forms at once; returns how many
+// rows were updated (account-scoped, live forms only).
+func (s *FormStore) SetStatusMany(ctx context.Context, accountID string, formIDs []string, status string) (int64, error) {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE forms SET status=$3, updated_at=now()
+		 WHERE account_id=$1 AND deleted_at IS NULL AND id = ANY($2)`,
+		accountID, formIDs, status)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }

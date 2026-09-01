@@ -223,6 +223,76 @@ func (s *SaleStore) ListByAccountsPage(ctx context.Context, accountIDs []string,
 	return out, total, rows.Err()
 }
 
+// ListByAccountForm returns recent sales for a single form within an account,
+// newest first. Same limit clamp as ListByAccount.
+func (s *SaleStore) ListByAccountForm(ctx context.Context, accountID, formID string, limit int) ([]*Sale, error) {
+	if formID == "" {
+		return s.ListByAccount(ctx, accountID, limit)
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	rows, err := s.pool.Query(ctx,
+		saleSelect+" WHERE account_id=$1 AND form_id::text=$2 ORDER BY created_at DESC LIMIT $3",
+		accountID, formID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Sale
+	for rows.Next() {
+		var s *Sale
+		s, err = scanSale(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// ListByAccountsFormPage returns one page of sales for a single form across a
+// set of accounts, newest first, plus the total row count for the same filter
+// (for paging). formID is matched as text against the nullable form_id column,
+// so a non-uuid value simply yields an empty page instead of a SQL error.
+func (s *SaleStore) ListByAccountsFormPage(ctx context.Context, accountIDs []string, formID string, page, limit int) ([]*Sale, int64, error) {
+	if len(accountIDs) == 0 || formID == "" {
+		return []*Sale{}, 0, nil
+	}
+	if page < 1 {
+		page = 1
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	offset := (page - 1) * limit
+	var total int64
+	if err := s.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM sales WHERE account_id = ANY($1) AND form_id::text = $2`,
+		accountIDs, formID).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	rows, err := s.pool.Query(ctx,
+		saleSelect+" WHERE account_id = ANY($1) AND form_id::text = $2 ORDER BY created_at DESC LIMIT $3 OFFSET $4",
+		accountIDs, formID, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	out := []*Sale{}
+	for rows.Next() {
+		sale, err := scanSale(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		out = append(out, sale)
+	}
+	return out, total, rows.Err()
+}
+
 // CountByAccounts counts sales across a set of accounts.
 func (s *SaleStore) CountByAccounts(ctx context.Context, accountIDs []string) (int64, error) {
 	if len(accountIDs) == 0 {

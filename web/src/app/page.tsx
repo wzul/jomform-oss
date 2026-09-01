@@ -177,7 +177,7 @@ export default function Dashboard() {
             <h1 className="text-xl font-semibold tracking-tight">{t("dash.title")}</h1>
             <p className="text-sm text-[var(--jf-muted)]">{t("dash.subtitle")}</p>
           </div>
-          <a href="/builder" className="jf-btn-primary px-4 py-2 text-sm">
+          <a href="/builder" className="jf-btn-primary">
             {t("dash.newForm")}
           </a>
         </div>

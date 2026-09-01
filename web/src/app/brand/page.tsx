@@ -33,7 +33,7 @@ function CopyBtn({ text, label }: { text: string; label: string }) {
           setTimeout(() => setDone(false), 1500);
         });
       }}
-      className="jf-btn-ghost px-3 py-1.5 text-xs"
+      className="jf-btn-ghost"
     >
       {done ? "Copied ✓" : label}
     </button>
@@ -71,7 +71,7 @@ export default function BrandPage() {
             </div>
             <div className="flex shrink-0 items-center gap-2">
               <CopyBtn text={`${BASE}/brand/${a.file}`} label="Copy URL" />
-              <a href={`/brand/${a.file}`} download className="jf-btn-primary px-3 py-1.5 text-xs">Download</a>
+              <a href={`/brand/${a.file}`} download className="jf-btn-primary">Download</a>
             </div>
           </li>
         ))}

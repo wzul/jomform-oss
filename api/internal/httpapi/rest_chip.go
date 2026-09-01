@@ -63,25 +63,11 @@ func (h *RESTHandlers) setChipCreds(w http.ResponseWriter, r *http.Request, actx
 // chipStatus reports stored credentials. Secret never leaves the vault,
 // but Brand ID, mode and a masked tail ARE shown (like Woo's settings page).
 func (h *RESTHandlers) chipStatus(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
-	acc, err := h.Accounts.ByID(r.Context(), actx.Account.ID)
+	resp, err := h.chipStatusData(r.Context(), actx.Account.ID)
 	if err != nil {
 		respondErr(w, err)
 		return
 	}
-	configured := acc.ChipBrandID != "" && acc.ChipSecretKeyEnc != ""
-	resp := map[string]any{
-		"configured": configured,
-		"mode":       acc.ChipMode,
-		"brand_id":   acc.ChipBrandID,
-	}
-	if configured {
-		if secret, err := cryptoutil.Decrypt(h.SecretsKey, acc.ChipSecretKeyEnc); err == nil {
-			// Wan request: merchant sees what they stored ( Woo-style secret_key field).
-			resp["secret_key"] = string(secret)
-		}
-	}
-	resp["whitelist"] = acc.ChipMethodWhitelist
-	resp["email_fallback"] = acc.ChipEmailFallback
 	writeJSON(w, http.StatusOK, resp)
 }
 

@@ -100,7 +100,7 @@ export default function Products() {
               <option value="year">{t("prod.yearly")}</option>
             </select>
           )}
-          <button className="jf-btn-primary px-5 text-sm">{t("prod.add")}</button>
+          <button className="jf-btn-primary">{t("prod.add")}</button>
         </form>
         {error && <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">{error}</p>}
 

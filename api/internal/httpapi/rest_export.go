@@ -6,10 +6,20 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+
+	"github.com/wzul/jomform/api/internal/dbstore"
 )
 
 func (h *RESTHandlers) exportSalesCSV(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
-	sales, err := h.Sales.ListByAccount(r.Context(), actx.Account.ID, 5000)
+	// Optional per-form filter: /v1/rest/sales/export.csv?form_id=<uuid>.
+	// Account scoping is unchanged: sales must belong to actx.Account.ID.
+	var sales []*dbstore.Sale
+	var err error
+	if formID := r.URL.Query().Get("form_id"); formID != "" {
+		sales, err = h.Sales.ListByAccountForm(r.Context(), actx.Account.ID, formID, 5000)
+	} else {
+		sales, err = h.Sales.ListByAccount(r.Context(), actx.Account.ID, 5000)
+	}
 	if err != nil {
 		respondErr(w, err)
 		return

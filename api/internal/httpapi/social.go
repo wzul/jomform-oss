@@ -3,6 +3,14 @@
 //	JF_GOOGLE_CLIENT_ID / JF_GOOGLE_CLIENT_SECRET
 //	JF_GOOGLE_REDIRECT   (default https://jomform.com/api/auth/callback/google)
 //
+// Cloudflare Access (SaaS OIDC app, one per team):
+//
+//	JF_CF_OIDC_CLIENT_ID / JF_CF_OIDC_CLIENT_SECRET
+//	JF_CF_OIDC_ISSUER    (https://<TEAM>.cloudflareaccess.com)
+//
+// Access endpoints are derived from the issuer + client id (the app's AUD tag):
+// <issuer>/cdn-cgi/access/sso/oidc/<client-id>/{authorization,token,userinfo}.
+//
 // Adding a provider later = add metadata + env keys (azure_ad, github, …).
 package httpapi
 
@@ -13,6 +21,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -49,14 +58,94 @@ var oidcProviders = map[string]oidcProvider{
 		SecretEnv: "JF_GITHUB_CLIENT_SECRET",
 		Scope:     "read:user user:email",
 	},
+	// Cloudflare Access SaaS OIDC app: endpoints embed the client id (the
+	// app's AUD tag), so URLs are built at request time in resolveProvider.
+	"cloudflare": {
+		IDEnv:     "JF_CF_OIDC_CLIENT_ID",
+		SecretEnv: "JF_CF_OIDC_CLIENT_SECRET",
+		Scope:     "openid email profile",
+	},
+}
+
+// providerConfigured reports whether a provider's env config is present.
+// Cloudflare Access additionally needs the client secret + team issuer.
+func providerConfigured(provider string, p oidcProvider) bool {
+	if os.Getenv(p.IDEnv) == "" {
+		return false
+	}
+	if provider == "cloudflare" {
+		return cfOidcConfigured()
+	}
+	return true
+}
+
+// resolveProvider returns p with Cloudflare Access endpoints filled in —
+// its URLs embed the client id (the app's AUD tag), so they are built at
+// request time instead of living in the static registry.
+func resolveProvider(p oidcProvider) (oidcProvider, error) {
+	if p.AuthURL != "" && p.TokenURL != "" {
+		return p, nil
+	}
+	authURL, tokenURL, userURL, err := cfOidcEndpoints(os.Getenv(p.IDEnv))
+	if err != nil {
+		return p, err
+	}
+	p.AuthURL, p.TokenURL, p.UserURL = authURL, tokenURL, userURL
+	return p, nil
+}
+
+// cfOidcIssuer returns the Cloudflare Access team issuer ("" when unset).
+func cfOidcIssuer() string { return strings.TrimSpace(os.Getenv("JF_CF_OIDC_ISSUER")) }
+
+// cfOidcConfigured reports whether the Cloudflare Access provider is active:
+// client id, client secret and team issuer must all be set.
+func cfOidcConfigured() bool {
+	p := oidcProviders["cloudflare"]
+	return os.Getenv(p.IDEnv) != "" && os.Getenv(p.SecretEnv) != "" && cfOidcIssuer() != ""
+}
+
+// cfOidcEndpoints resolves the Cloudflare Access OIDC URLs for this client.
+// Per Cloudflare's SaaS app docs the paths embed the client id (AUD):
+// <issuer>/cdn-cgi/access/sso/oidc/<client-id>/{authorization,token,userinfo}
+func cfOidcEndpoints(clientID string) (auth, token, user string, err error) {
+	issuer := strings.TrimRight(cfOidcIssuer(), "/")
+	base := issuer + "/cdn-cgi/access/sso/oidc/" + clientID
+	if issuer == "" || clientID == "" {
+		return "", "", "", fmt.Errorf("JF_CF_OIDC_ISSUER/client id belum di set")
+	}
+	return base + "/authorization", base + "/token", base + "/userinfo", nil
+}
+
+// socialProvidersAvailable lists provider ids with their env config present —
+// the login UI uses this to decide which buttons to render.
+func socialProvidersAvailable() []string {
+	out := []string{}
+	for id, p := range oidcProviders {
+		if id == "cloudflare" {
+			if cfOidcConfigured() {
+				out = append(out, id)
+			}
+			continue
+		}
+		if os.Getenv(p.IDEnv) != "" {
+			out = append(out, id)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // socialStart redirects to the provider's OAuth authorize URL.
 func (a *AuthHandlers) socialStart(w http.ResponseWriter, r *http.Request) {
 	provider := r.PathValue("provider")
 	p, ok := oidcProviders[provider]
-	if !ok || os.Getenv(p.IDEnv) == "" {
+	if !ok || !providerConfigured(provider, p) {
 		writeErr(w, http.StatusNotFound, "provider tidak tersedia")
+		return
+	}
+	p, err := resolveProvider(p)
+	if err != nil {
+		writeErr(w, http.StatusNotImplemented, err.Error())
 		return
 	}
 	state := randTokenHex(16)
@@ -77,6 +166,11 @@ func (a *AuthHandlers) socialCallback(w http.ResponseWriter, r *http.Request) {
 	p, ok := oidcProviders[provider]
 	if !ok {
 		writeErr(w, http.StatusNotFound, "provider tidak dikenali")
+		return
+	}
+	p, rerr := resolveProvider(p)
+	if rerr != nil {
+		writeErr(w, http.StatusNotImplemented, rerr.Error())
 		return
 	}
 	cs, err := r.Cookie("oauth_state")
@@ -161,6 +255,23 @@ func (a *AuthHandlers) listSocial(w http.ResponseWriter, r *http.Request) {
 			"provider": l.Provider, "email": l.Email, "name": l.DisplayName,
 			"picture": l.Picture, "linked_at": l.CreatedAt,
 		})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// socialProviders is a public (pre-login) listing of which social providers
+// are configured via env, so the login page only renders live buttons.
+// Returns ids + display names; contains no secrets.
+func (a *AuthHandlers) socialProviders(w http.ResponseWriter, r *http.Request) {
+	names := map[string]string{
+		"google":     "Google",
+		"azure_ad":   "Microsoft",
+		"github":     "GitHub",
+		"cloudflare": "Cloudflare",
+	}
+	out := []map[string]string{}
+	for _, id := range socialProvidersAvailable() {
+		out = append(out, map[string]string{"id": id, "name": names[id]})
 	}
 	writeJSON(w, http.StatusOK, out)
 }

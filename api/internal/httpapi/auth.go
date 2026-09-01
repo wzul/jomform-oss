@@ -43,6 +43,7 @@ func (a *AuthHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/auth/oauth/{provider}", a.socialStart)
 	mux.HandleFunc("GET /v1/auth/callback/{provider}", a.socialCallback)
 	mux.HandleFunc("GET /v1/auth/social", a.listSocial)
+	mux.HandleFunc("GET /v1/auth/social/providers", a.socialProviders)
 	mux.HandleFunc("DELETE /v1/auth/social/{provider}", a.unlinkSocial)
 }
 
@@ -169,6 +170,7 @@ func (a *AuthHandlers) handleLogout(w http.ResponseWriter, r *http.Request) {
 	c, err := r.Cookie(sessionCookie)
 	if err == nil {
 		_ = a.Sessions.Destroy(r.Context(), c.Value)
+		invalidateSessionAcctCache(c.Value)
 	}
 	http.SetCookie(w, a.clearCookie())
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})

@@ -2,7 +2,9 @@
 package httpapi
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 
@@ -72,20 +74,29 @@ func (h *RESTHandlers) passkeyRegisterFinish(w http.ResponseWriter, r *http.Requ
 		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
 		return
 	}
+	// The WebAuthn parsers below re-read the body, so read it exactly once
+	// into memory: decode the session key from the buffer and hand the same
+	// bytes to the parser via a fresh reader. (decodeJSON consumes+closes
+	// r.Body, which would leave the parser an empty body.)
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "response tidak sah")
+		return
+	}
 	var in struct {
 		Key string `json:"key"`
 	}
-	if err := decodeJSON(r, &in); err != nil || in.Key == "" {
+	if err := json.Unmarshal(raw, &in); err != nil || in.Key == "" {
 		writeErr(w, http.StatusBadRequest, "key wajib")
 		return
 	}
-	raw, err := h.Passkeys.TakeChallenge(r.Context(), in.Key, "register")
+	sessRaw, err := h.Passkeys.TakeChallenge(r.Context(), in.Key, "register")
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "sesi luput — cuba lagi")
 		return
 	}
 	session := &webauthn.SessionData{}
-	if err := json.Unmarshal([]byte(raw), session); err != nil {
+	if err := json.Unmarshal([]byte(sessRaw), session); err != nil {
 		writeErr(w, http.StatusBadRequest, "sesi rosak")
 		return
 	}
@@ -98,7 +109,7 @@ func (h *RESTHandlers) passkeyRegisterFinish(w http.ResponseWriter, r *http.Requ
 		respondErr(w, err)
 		return
 	}
-	parsed, err := protocol.ParseCredentialCreationResponseBody(r.Body)
+	parsed, err := protocol.ParseCredentialCreationResponseBody(bytes.NewReader(raw))
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "response tidak sah")
 		return
@@ -143,24 +154,33 @@ func (h *RESTHandlers) passkeyLoginFinish(w http.ResponseWriter, r *http.Request
 		writeErr(w, http.StatusInternalServerError, "webauthn config error")
 		return
 	}
+	// The WebAuthn parser below re-reads the body, so read it exactly once
+	// into memory: decode the session key from the buffer and hand the same
+	// bytes to the parser via a fresh reader. (decodeJSON consumes+closes
+	// r.Body, which would leave the parser an empty body.)
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "response tidak sah")
+		return
+	}
 	var in struct {
 		Key string `json:"key"`
 	}
-	if err := decodeJSON(r, &in); err != nil || in.Key == "" {
+	if err := json.Unmarshal(raw, &in); err != nil || in.Key == "" {
 		writeErr(w, http.StatusBadRequest, "key wajib")
 		return
 	}
-	raw, err := h.Passkeys.TakeChallenge(r.Context(), in.Key, "login")
+	sessRaw, err := h.Passkeys.TakeChallenge(r.Context(), in.Key, "login")
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "sesi luput — cuba lagi")
 		return
 	}
 	session := &webauthn.SessionData{}
-	if err := json.Unmarshal([]byte(raw), session); err != nil {
+	if err := json.Unmarshal([]byte(sessRaw), session); err != nil {
 		writeErr(w, http.StatusBadRequest, "sesi rosak")
 		return
 	}
-	parsed, err := protocol.ParseCredentialRequestResponseBody(r.Body)
+	parsed, err := protocol.ParseCredentialRequestResponseBody(bytes.NewReader(raw))
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "response tidak sah")
 		return

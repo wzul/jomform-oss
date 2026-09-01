@@ -5,6 +5,7 @@ import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 
 type ChipStatus = { configured: boolean; mode: string };
+type CfStatus = { linked: boolean } | null;
 type KeyRow = { id: string; name: string; scopes: string[] };
 type DomainStatus = { domain: string; verified: boolean } | null;
 
@@ -49,34 +50,47 @@ export default function Settings() {
   const [whSecret, setWhSecret] = useState("");
   const [trackingHead, setTrackingHead] = useState("");
   const [social, setSocial] = useState<{ provider: string; email: string; linked_at: string }[]>([]);
+  // null = still loading (render neither button to avoid a wrong-state flash)
+  const [cfStatus, setCfStatus] = useState<CfStatus>(null);
 
+  // Issue #13: single aggregated fetch replaces the 6-request waterfall
+  // (chip, keys, domains, webhooks, einvoice, social) on mount.
   const load = useCallback(() => {
-    return Promise.all([
-      fetch("/api/rest/settings/chip").then((r) => (r.ok ? r.json() : null)),
-      fetch("/api/rest/keys").then((r) => (r.ok ? r.json() : [])),
-      fetch("/api/rest/domains").then((r) => (r.ok ? r.json() : [])),
-      fetch("/api/rest/webhooks").then((r) => (r.ok ? r.json() : [])),
-      fetch("/api/rest/settings/einvoice").then((r) => (r.ok ? r.json() : null)),
-      fetch("/api/auth/social").then((r) => (r.ok ? r.json() : [])),
-    ]).then(([s, k, dList, whs, ei, so]) => {
-      setDomains(Array.isArray(dList) ? dList : []);
-      setWebhooks(Array.isArray(whs) ? whs : []);
-      if (ei) { setTin(ei.tin || ""); setMsic(ei.msic || ""); }
-      if (s) {
-        setStatus(s);
-        if (s.brand_id) setBrandId(s.brand_id);
-        if (s.mode) setMode(s.mode);
-        if (s.email_fallback) setEmailFallback(s.email_fallback);
-        if (Array.isArray(s.whitelist) && s.whitelist.length) setWhitelist(s.whitelist);
-        if (s.secret_key) setSecretKey(s.secret_key);
-        setVerified(s.configured && !!(s.secret_key || s.secret_key_masked));
-      }
-      setKeys(k || []);
-    });
+    return fetch("/api/rest/dashboard-bundle")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((b) => {
+        if (!b) return;
+        const dList = b.domains ?? [];
+        const whs = b.webhooks ?? [];
+        const k = b.keys ?? [];
+        const ei = b.einvoice;
+        const s = b.chip_status;
+        setDomains(Array.isArray(dList) ? dList : []);
+        setWebhooks(Array.isArray(whs) ? whs : []);
+        setSocial(Array.isArray(b.social) ? b.social : []);
+        if (ei) { setTin(ei.tin || ""); setMsic(ei.msic || ""); }
+        if (s) {
+          setStatus(s);
+          if (s.brand_id) setBrandId(s.brand_id);
+          if (s.mode) setMode(s.mode);
+          if (s.email_fallback) setEmailFallback(s.email_fallback);
+          if (Array.isArray(s.whitelist) && s.whitelist.length) setWhitelist(s.whitelist);
+          if (s.secret_key) setSecretKey(s.secret_key);
+          setVerified(s.configured && !!(s.secret_key || s.secret_key_masked));
+        }
+        setKeys(Array.isArray(k) ? k : []);
+      });
   }, []);
 
   useEffect(() => {
     load();
+    // Cloudflare link state (issue #9): /api/cf/status is cf_oauth.go's own
+    // endpoint — kept out of the dashboard-bundle to avoid overlapping with
+    // the bundle refactor in issue #13.
+    fetch("/api/cf/status")
+      .then((r) => (r.ok ? r.json() : { linked: false }))
+      .then((d) => setCfStatus({ linked: !!d?.linked }))
+      .catch(() => setCfStatus({ linked: false }));
   }, [load]);
 
   async function save(e: React.FormEvent) {
@@ -264,9 +278,9 @@ export default function Settings() {
             </div>
 
             <div className="flex gap-2 pt-1">
-              <button className="jf-btn-primary px-5 text-sm">Save</button>
+              <button className="jf-btn-primary">Save</button>
               {status?.configured && (
-                <button type="button" onClick={clearCreds} className="jf-btn-ghost px-4 text-sm text-slate-600">
+                <button type="button" onClick={clearCreds} className="jf-btn-ghost text-slate-600">
                   Clear
                 </button>
               )}
@@ -290,12 +304,27 @@ export default function Settings() {
             <p className="mt-1 text-xs text-slate-500">
               One-click: approve Cloudflare scopes (DNS edit) and new domains get their CNAME + routing created automatically. Access token is stored encrypted so future domains provision themselves.
             </p>
-            <div className="mt-2 flex gap-2">
-              <a href="/api/cf/start" className="jf-btn-ghost px-4 text-xs">Login with Cloudflare</a>
-              <button
-                onClick={async () => { await fetch("/api/cf/disconnect", { method: "POST" }); setDomainMsg("Cloudflare disconnected."); load(); }}
-                className="px-3 text-xs text-slate-500 hover:text-red-500"
-              >Disconnect</button>
+            <div className="mt-2 flex items-center gap-2">
+              {/* Issue #9: buttons reflect the real link state from /api/cf/status.
+                  cfStatus === null → still loading, render neither (no wrong-state flash). */}
+              {cfStatus === null ? null : cfStatus.linked ? (
+                <>
+                  <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+                    Cloudflare connected ✓
+                  </span>
+                  <button
+                    onClick={async () => {
+                      await fetch("/api/cf/disconnect", { method: "POST" });
+                      setCfStatus({ linked: false });
+                      setDomainMsg("Cloudflare disconnected.");
+                      load();
+                    }}
+                    className="px-3 text-xs text-slate-500 hover:text-red-500"
+                  >Disconnect</button>
+                </>
+              ) : (
+                <a href="/api/cf/start" className="jf-btn-ghost">Login with Cloudflare</a>
+              )}
             </div>
           </div>
           <form onSubmit={setDomainClaim} className="mt-4 flex flex-wrap gap-2">
@@ -305,7 +334,7 @@ export default function Settings() {
               placeholder="shop.yourdomain.com"
               className="jf-input min-w-56 flex-1"
             />
-            <button className="jf-btn-primary px-5 text-sm" type="submit">Add domain</button>
+            <button className="jf-btn-primary" type="submit">Add domain</button>
           </form>
           <ul className="mt-4 space-y-2">
             {domains.map((d: { id: string; domain: string; verified: boolean }) => (
@@ -352,7 +381,7 @@ export default function Settings() {
               body: JSON.stringify({ head: trackingHead }),
             });
             setMsg(r.ok ? "Tracking saved ✓" : "Failed");
-          }} className="jf-btn-primary mt-3 px-4 text-sm">Save tracking</button>
+          }} className="jf-btn-primary mt-3">Save tracking</button>
         </section>
 
         {/* ── e-Invoice (LHDN) ── */}
@@ -377,7 +406,7 @@ export default function Settings() {
               body: JSON.stringify({ tin, msic }),
             });
             setMsg(r.ok ? "e-Invoice details saved ✓" : "Failed to save");
-          }} className="jf-btn-primary mt-3 px-4 text-sm">Save e-Invoice</button>
+          }} className="jf-btn-primary mt-3">Save e-Invoice</button>
         </section>
 
         {/* ── Outbound webhooks ── */}
@@ -393,7 +422,7 @@ export default function Settings() {
               placeholder="https://yourapp.com/jomform-hook" className="jf-input min-w-56 flex-1" />
             <input value={whSecret} onChange={(e) => setWhSecret(e.target.value)} required type="text"
               placeholder="Signing secret" className="jf-input w-48" />
-            <button className="jf-btn-primary px-4 text-sm">Add</button>
+            <button className="jf-btn-primary">Add</button>
           </form>
           <ul className="mt-3 space-y-2">
             {webhooks.map((wh) => (
@@ -458,7 +487,7 @@ export default function Settings() {
               <li className="text-sm text-slate-400">No linked accounts yet.</li>
             )}
           </ul>
-          <a href="/api/auth/oauth/google" className="jf-btn-ghost mt-3 inline-block px-4 text-sm">
+          <a href="/api/auth/oauth/google" className="jf-btn-ghost mt-3 inline-block">
             Link Google account
           </a>
         </section>
