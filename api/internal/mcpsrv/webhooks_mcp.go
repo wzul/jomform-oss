@@ -4,9 +4,70 @@ package mcpsrv
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net"
+	"net/url"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// validWebhookEvents is the dispatcher's known event set (see
+// api/internal/httpapi/dispatch2.go and purchases.go). "*" subscribes to all.
+var validWebhookEvents = map[string]bool{
+	"sale.paid":            true,
+	"sale.failed":          true,
+	"subscription.charged": true,
+	"*":                    true,
+}
+
+// validateWebhookURL is the SSRF guard for create_webhook. It requires an
+// https URL and rejects hosts that resolve to private, loopback, link-local or
+// unspecified addresses (RFC1918, ::1, 169.254.*, fe80::, CGNAT 100.64/10),
+// mirroring and exceeding the REST handler's convention of https-only webhook
+// endpoints.
+func validateWebhookURL(ctx context.Context, raw string) error {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || !u.IsAbs() {
+		return errors.New("url webhook tidak sah")
+	}
+	if !strings.EqualFold(u.Scheme, "https") {
+		return errors.New("url webhook mesti https")
+	}
+	host := u.Hostname()
+	if host == "" {
+		return errors.New("url webhook mesti ada host")
+	}
+	ips, err := net.DefaultResolver.LookupHost(ctx, host)
+	if err != nil {
+		return errors.New("url webhook tidak boleh resolve")
+	}
+	for _, ipStr := range ips {
+		ip := net.ParseIP(ipStr)
+		if ip == nil {
+			continue
+		}
+		if ip.IsLoopback() || ip.IsUnspecified() || ip.IsPrivate() ||
+			ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+			return errors.New("url webhook tidak boleh menunjuk ke host peribadi/loopback")
+		}
+		if ip4 := ip.To4(); ip4 != nil && ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127 {
+			// CGNAT 100.64.0.0/10
+			return errors.New("url webhook tidak boleh menunjuk ke host peribadi")
+		}
+	}
+	return nil
+}
+
+// validateWebhookEvents rejects event names outside the dispatcher's known set.
+func validateWebhookEvents(events []string) error {
+	for _, e := range events {
+		if !validWebhookEvents[e] {
+			return fmt.Errorf("event tidak sah: %q (sale.paid|sale.failed|subscription.charged|*)", e)
+		}
+	}
+	return nil
+}
 
 // ── e-Invoice settings ──────────────────────────────────────────────────────
 
@@ -64,11 +125,19 @@ func (s *Server) createWebhookMCP(
 	if len(events) == 0 {
 		events = []string{"sale.paid"}
 	}
+	if err := validateWebhookURL(ctx, in.URL); err != nil {
+		return nil, nil, err
+	}
+	if err := validateWebhookEvents(events); err != nil {
+		return nil, nil, err
+	}
 	wh, err := s.deps.Webhooks.Create(ctx, acc, in.URL, in.Secret, events)
 	if err != nil {
 		return nil, nil, err
 	}
-	return nil, map[string]string{"id": wh.ID, "status": "created"}, nil
+	// The signing secret is only surfaced once (at creation), matching the
+	// dashboard — it is never returned by list_webhooks.
+	return nil, map[string]string{"id": wh.ID, "status": "created", "secret": wh.Secret}, nil
 }
 
 type webhookListOut struct {
