@@ -100,7 +100,7 @@ export default function BrandPage() {
       </ul>
 
       <p className="mt-8 text-xs text-slate-400">
-        Questions or custom sizes? Email owner00@example.com.
+        Questions or custom sizes? Email contact@jomform.com.
       </p>
     </main>
   );

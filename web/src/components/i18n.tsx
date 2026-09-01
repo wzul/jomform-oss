@@ -89,7 +89,7 @@ const DICT = {
   "land.f4": { en: "Sales analytics, CSV export, PDF receipts — free forever, no monthly fee.", ms: "Analitik jualan, eksport CSV, resit PDF — percuma selamanya, tiada yuran bulanan." },
   "land.mcptitle": { en: "Control your store with plain language", ms: "Kawal kedai guna bahasa biasa" },
   "land.mcpbody": { en: 'JomForm speaks MCP (Model Context Protocol). Connect your AI agent once, then: \"add product RM25\", \"how many sales today?\", \"refund order JF-xxxx\" — all without opening a dashboard.', ms: 'JomForm cakap MCP (Model Context Protocol). Sambung agent AI sekali, lepas tu: \"tambah produk RM20\", \"berapa sales hari ni?\", \"refund order JF-xxxx\" — semua tanpa buka dashboard.' },
-  "land.mcpsnippet": { en: "POST https://jomform.com/mcp  →  Bearer jfk_…  →  your agent, your store.", ms: "POST https://jomform.com/mcp  →  Bearer jfk_…  →  agent kau, kedai kau." },
+  "land.mcpsnippet": { en: "Connect at mcp.jomform.com → OAuth 2.1 (one-click) → your agent, your store.", ms: "Sambung di mcp.jomform.com → OAuth 2.1 (satu klik) → agent kau, kedai kau." },
   "land.footer": { en: "JomForm — open source (Apache-2.0). Made in Malaysia. Payments by", ms: "JomForm — open source (Apache-2.0). Buatan Malaysia. Bayaran oleh" },
 } as const;
 

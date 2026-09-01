@@ -109,6 +109,11 @@ export default function Landing() {
 
       {/* footer */}
       <footer className="border-t border-slate-100 px-6 py-8 text-center text-xs text-slate-400">
+        <div className="flex justify-center gap-6 pb-4 text-xs text-slate-400">
+          <a href="/legal/privacy" className="hover:underline">Privacy Policy</a>
+          <a href="/legal/terms" className="hover:underline">Terms of Service</a>
+          <a href="/brand" className="hover:underline">Brand</a>
+        </div>
         <p>
           {t("land.footer")}{" "}
           <a href="https://chip-in.asia" className="underline hover:text-slate-600">
