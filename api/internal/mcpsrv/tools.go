@@ -155,6 +155,19 @@ func (s *Server) registerTools() {
 		Name:        "webhook_deliveries",
 		Description: "Log penghantaran terkini webhook (status_code, attempt, error).",
 	}, s.webhookDeliveriesMCP)
+	// ── Parity: API-key self-service ────────────────────────────────────────
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "list_api_keys",
+		Description: "Senarai semua API key akaun (id, nama, scopes, created_at, last_used). Key material tidak pernah dikembalikan.",
+	}, s.listAPIKeys)
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "create_api_key",
+		Description: "Cipta API key baharu (nama, scopes? readonly|readwrite, default readonly). Key penuh dipapar SEKALI sahaja — simpan segera; store simpan hash sahaja. SCOPES: baca untuk readonly, baca+tulis untuk readwrite.",
+	}, s.createAPIKey)
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "revoke_api_key",
+		Description: "Padam API key secara PERMANEN (id dari list_api_keys; tiada disable/enable semula — cipta key baru). AMARAN: jika id ialah key yang sedang mengesahkan sesi ini, ia akan memutuskan akses sendiri serta-merta — set confirm=true untuk sahkan; sebaliknya panggilan ditolak.",
+	}, s.revokeAPIKey)
 
 	// ── Spaces (multi-tenant storefronts) ───────────────────────────────────
 	mcp.AddTool(s.mcp, &mcp.Tool{
