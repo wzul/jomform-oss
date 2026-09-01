@@ -8,7 +8,12 @@ import (
 	"net/http"
 
 	"github.com/wzul/jomform/api/internal/cryptoutil"
+	"github.com/wzul/jomform/api/internal/dbstore"
 )
+
+// bundleSalesLimit caps the recent-sales page embedded in the bundle; the
+// web dashboard shows 10 rows per page and pages through /v1/rest/sales.
+const bundleSalesLimit = 10
 
 // chipStatusData builds the STORED CHIP credential status for an account
 // (no live CHIP probe — kept fast for aggregate reads). Extracted from
@@ -36,9 +41,30 @@ func (h *RESTHandlers) chipStatusData(ctx context.Context, accountID string) (ma
 	return resp, nil
 }
 
+// summaryData computes the sales rollup over a set of accounts. Shared by
+// GET /v1/rest/summary and the dashboard bundle (issue #29) so both stay
+// identical.
+func (h *RESTHandlers) summaryData(ctx context.Context, accountIDs []string) (map[string]any, error) {
+	sales, err := h.Sales.ListByAccounts(ctx, accountIDs, 200)
+	if err != nil {
+		return nil, err
+	}
+	sum := map[string]int64{"pending": 0, "paid": 0, "confirmed": 0, "failed": 0, "cancelled": 0}
+	var revenue int64
+	for _, s := range sales {
+		sum[s.Status]++
+		if s.Status == dbstore.SalePaid || s.Status == dbstore.SaleConfirmed {
+			revenue += s.TotalSen
+		}
+	}
+	return map[string]any{"counts": sum, "revenue_sen": revenue}, nil
+}
+
 // dashboardBundle: GET /v1/rest/dashboard-bundle — one authed round-trip
 // returning me, spaces, chip_status (stored only), keys, domains, webhooks,
-// social identities and e-invoice settings. Section errors → null.
+// social identities, e-invoice settings AND the dashboard landing data
+// (products, summary, recent sales, form/product analytics — issue #29).
+// Section errors → null; the bundle never fails.
 func (h *RESTHandlers) dashboardBundle(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	ctx := r.Context()
 	userID := h.sessionOwnerID(r)
@@ -47,20 +73,28 @@ func (h *RESTHandlers) dashboardBundle(w http.ResponseWriter, r *http.Request, a
 	}
 
 	bundle := struct {
-		Me         *map[string]any  `json:"me"`
-		Spaces     []map[string]any `json:"spaces"`
-		ChipStatus map[string]any   `json:"chip_status"`
-		Keys       []restKey        `json:"keys"`
-		Domains    []map[string]any `json:"domains"`
-		Webhooks   []map[string]any `json:"webhooks"`
-		Social     []map[string]any `json:"social"`
-		Einvoice   map[string]any   `json:"einvoice"`
+		Me               *map[string]any        `json:"me"`
+		Spaces           []map[string]any       `json:"spaces"`
+		ChipStatus       map[string]any         `json:"chip_status"`
+		Keys             []restKey              `json:"keys"`
+		Domains          []map[string]any       `json:"domains"`
+		Webhooks         []map[string]any       `json:"webhooks"`
+		Social           []map[string]any       `json:"social"`
+		Einvoice         map[string]any         `json:"einvoice"`
+		Products         []restProduct          `json:"products"`
+		Summary          map[string]any         `json:"summary"`
+		Sales            map[string]any         `json:"sales"`
+		FormAnalytics    []dbstore.FormStats    `json:"form_analytics"`
+		ProductAnalytics []dbstore.ProductStats `json:"product_analytics"`
 	}{}
 
-	// me — session user's email + name.
+	// me — session user's email + name (+ 2FA status for the profile page).
 	if h.Users != nil {
 		if u, err := h.Users.ByID(ctx, userID); err == nil && u != nil {
-			bundle.Me = &map[string]any{"id": u.ID, "email": u.Email, "name": u.Name}
+			bundle.Me = &map[string]any{
+				"id": u.ID, "email": u.Email, "name": u.Name,
+				"totp_enabled": u.TOTPSecret != "", "created_at": u.CreatedAt,
+			}
 		}
 	}
 
@@ -133,6 +167,44 @@ func (h *RESTHandlers) dashboardBundle(w http.ResponseWriter, r *http.Request, a
 	if h.Accounts != nil {
 		if tin, msic, err := h.Accounts.Einvoice(ctx, actx.Account.ID); err == nil {
 			bundle.Einvoice = map[string]any{"tin": tin, "msic": msic}
+		}
+	}
+
+	// Issue #29: dashboard landing data in the same round-trip, so the
+	// heaviest navigation (me → products+sales+summary+2×analytics waterfall)
+	// becomes ONE request. Honours ?space=<slug> like the standalone list
+	// endpoints; a scope error leaves these sections null.
+	if h.Products != nil || h.Sales != nil {
+		if scope, err := h.resolveAccountScope(r, actx); err == nil {
+			if h.Products != nil {
+				if products, err := h.Products.ListActiveByAccounts(ctx, scope.Accounts); err == nil {
+					out := make([]restProduct, 0, len(products))
+					for _, p := range products {
+						out = append(out, restProduct{
+							ID: p.ID, Name: p.Name, PriceSen: p.PriceSen,
+							Type: p.Type, BillingPeriod: p.BillingPeriod, Active: p.Active,
+						})
+					}
+					bundle.Products = out
+				}
+			}
+			if h.Sales != nil {
+				if sum, err := h.summaryData(ctx, scope.Accounts); err == nil {
+					bundle.Summary = sum
+				}
+				if sales, total, err := h.Sales.ListByAccountsPage(ctx, scope.Accounts, 1, bundleSalesLimit); err == nil {
+					bundle.Sales = map[string]any{
+						"items": restSaleRows(sales), "page": 1,
+						"limit": bundleSalesLimit, "total": total,
+					}
+				}
+				if fs, err := h.Sales.FormAnalyticsAccounts(ctx, scope.Accounts); err == nil {
+					bundle.FormAnalytics = fs
+				}
+				if ps, err := h.Sales.ProductAnalyticsAccounts(ctx, scope.Accounts); err == nil {
+					bundle.ProductAnalytics = ps
+				}
+			}
 		}
 	}
 

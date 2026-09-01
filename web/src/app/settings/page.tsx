@@ -3,10 +3,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
+import { useSession } from "../../components/session";
 
-type ChipStatus = { configured: boolean; mode: string };
+type ChipStatus = { configured: boolean; mode?: string };
 type KeyRow = { id: string; name: string; scopes: string[] };
 type DomainStatus = { domain: string; verified: boolean } | null;
+type SocialRow = { provider: string; email?: string; linked_at?: string };
 
 const METHODS = [
   { id: "fpx", label: "FPX" },
@@ -48,39 +50,50 @@ export default function Settings() {
   const [whUrl, setWhUrl] = useState("");
   const [whSecret, setWhSecret] = useState("");
   const [trackingHead, setTrackingHead] = useState("");
-  const [social, setSocial] = useState<{ provider: string; email: string; linked_at: string }[]>([]);
+  const [social, setSocial] = useState<SocialRow[]>([]);
   // Cloudflare OAuth link state (issue #22): Login vs Disconnect+✓ per #9.
   const [cfLinked, setCfLinked] = useState(false);
   const [cfConfigured, setCfConfigured] = useState(false);
 
   // Issue #13: single aggregated fetch replaces the 6-request waterfall
   // (chip, keys, domains, webhooks, einvoice, social) on mount.
+  // Issue #29: routed through the shared session cache — the first page of
+  // the session fetches the bundle once; later pages (dashboard, forms,
+  // products, profile) reuse it. Saves call reloadSession() to re-fetch.
+  const { bundle, reload: reloadSession } = useSession();
+  const reload = useCallback(() => {
+    // Saves mutate bundle-backed sections: drop the shared cache first so
+    // the next load() re-fetches fresh data (and other pages inherit it).
+    reloadSession();
+  }, [reloadSession]);
   const load = useCallback(() => {
+    const apply = (b: NonNullable<ReturnType<typeof useSession>["bundle"]>) => {
+      if (!b) return;
+      const dList = b.domains ?? [];
+      const whs = b.webhooks ?? [];
+      const k = b.keys ?? [];
+      const ei = b.einvoice;
+      const s = b.chip_status;
+      setDomains(Array.isArray(dList) ? dList : []);
+      setWebhooks(Array.isArray(whs) ? whs : []);
+      setSocial(Array.isArray(b.social) ? b.social : []);
+      if (ei) { setTin(ei.tin || ""); setMsic(ei.msic || ""); }
+      if (s) {
+        setStatus(s);
+        if (s.brand_id) setBrandId(s.brand_id);
+        if (s.mode) setMode(s.mode);
+        if (s.email_fallback) setEmailFallback(s.email_fallback);
+        if (Array.isArray(s.whitelist) && s.whitelist.length) setWhitelist(s.whitelist);
+        if (s.secret_key) setSecretKey(s.secret_key);
+        setVerified(s.configured && !!(s.secret_key || s.secret_key_masked));
+      }
+      setKeys(Array.isArray(k) ? k : []);
+    };
+    if (bundle) { apply(bundle); return Promise.resolve(); }
     return fetch("/api/rest/dashboard-bundle")
       .then((r) => (r.ok ? r.json() : null))
-      .then((b) => {
-        if (!b) return;
-        const dList = b.domains ?? [];
-        const whs = b.webhooks ?? [];
-        const k = b.keys ?? [];
-        const ei = b.einvoice;
-        const s = b.chip_status;
-        setDomains(Array.isArray(dList) ? dList : []);
-        setWebhooks(Array.isArray(whs) ? whs : []);
-        setSocial(Array.isArray(b.social) ? b.social : []);
-        if (ei) { setTin(ei.tin || ""); setMsic(ei.msic || ""); }
-        if (s) {
-          setStatus(s);
-          if (s.brand_id) setBrandId(s.brand_id);
-          if (s.mode) setMode(s.mode);
-          if (s.email_fallback) setEmailFallback(s.email_fallback);
-          if (Array.isArray(s.whitelist) && s.whitelist.length) setWhitelist(s.whitelist);
-          if (s.secret_key) setSecretKey(s.secret_key);
-          setVerified(s.configured && !!(s.secret_key || s.secret_key_masked));
-        }
-        setKeys(Array.isArray(k) ? k : []);
-      });
-  }, []);
+      .then(apply);
+  }, [bundle]);
 
   useEffect(() => {
     load();
@@ -199,7 +212,7 @@ export default function Settings() {
                     : "border border-slate-200 bg-slate-50 text-slate-500"
                 }`}
               >
-                {status.configured ? t("set.activeMode", { mode: status.mode.toUpperCase() }) : t("set.notSet")}
+                {status.configured ? t("set.activeMode", { mode: (status.mode || "test").toUpperCase() }) : t("set.notSet")}
               </span>
             )}
           </div>
@@ -490,7 +503,7 @@ export default function Settings() {
               <li key={l.provider} className="flex items-center justify-between rounded-lg border border-[var(--jf-border)] px-4 py-2.5">
                 <div>
                   <p className="text-sm capitalize">{l.provider} — {l.email}</p>
-                  <p className="text-[11px] text-slate-400">{t("set.linked")} {new Date(l.linked_at).toLocaleDateString()}</p>
+                  <p className="text-[11px] text-slate-400">{t("set.linked")} {l.linked_at ? new Date(l.linked_at).toLocaleDateString() : ""}</p>
                 </div>
                 <button onClick={async () => { await fetch(`/api/auth/social/${l.provider}`, { method: "DELETE" }); load(); }}
                   className="text-xs text-slate-500 hover:text-red-500">{t("set.unlink")}</button>

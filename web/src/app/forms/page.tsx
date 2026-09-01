@@ -1,8 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
+import { useSession } from "../../components/session";
 
 type FormRow = { id: string; slug: string; title: string; status: string; url: string };
 
@@ -22,18 +25,16 @@ const spaceHost =
 
 export default function FormsPage() {
   const { t } = useI18n();
+  const { anon } = useSession();
   const [forms, setForms] = useState<FormRow[]>([]);
   const [checking, setChecking] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
-    const me = await fetch("/api/auth/me");
-    if (!me.ok) {
-      window.location.href = "/landing";
-      return;
-    }
-    const f = await fetch("/api/rest/forms").then((r) => r.json());
+    // Issue #29: no serial `await me → fetch` gate — the list fetch runs
+    // immediately; a 401 flips `anon` and the auth bounce below handles it.
+    const f = await fetch("/api/rest/forms").then((r) => (r.ok ? r.json() : []));
     setForms(Array.isArray(f) ? f : []);
     setSelected(new Set());
     setChecking(false);
@@ -42,6 +43,12 @@ export default function FormsPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Auth bounce via router (client transition), not a full document reload.
+  const router = useRouter();
+  useEffect(() => {
+    if (anon) router.replace("/landing");
+  }, [anon, router]);
 
   async function publish(id: string) {
     await fetch(`/api/rest/forms/${id}/publish`, { method: "POST" });
@@ -95,9 +102,9 @@ export default function FormsPage() {
             <h1 className="max-w-xl text-xl font-semibold tracking-tight">{t("forms.title")}</h1>
             <p className="max-w-xl text-sm text-[var(--jf-muted)]">{t("forms.subtitle")}</p>
           </div>
-          <a href="/builder" className="jf-btn-primary">
+          <Link href="/builder" className="jf-btn-primary">
             {t("forms.new")}
-          </a>
+          </Link>
         </div>
 
         {ids.length > 0 && (
@@ -165,9 +172,9 @@ export default function FormsPage() {
                     <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-[11px] font-medium text-emerald-700">
                       {t("forms.live")}
                     </span>
-                    <a href={`/builder?form=${f.id}`} className="jf-btn-ghost">
+                    <Link href={`/builder?form=${f.id}`} className="jf-btn-ghost">
                       {t("forms.edit")}
-                    </a>
+                    </Link>
                     <a href={`https://${spaceHost}/${f.slug}`} target="_blank" className="jf-btn-ghost">
                       {t("bld.view")}
                     </a>
@@ -177,9 +184,9 @@ export default function FormsPage() {
                     <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-[11px] font-medium text-slate-500">
                       {t("forms.draft")}
                     </span>
-                    <a href={`/builder?form=${f.id}`} className="jf-btn-ghost">
+                    <Link href={`/builder?form=${f.id}`} className="jf-btn-ghost">
                       {t("forms.edit")}
-                    </a>
+                    </Link>
                     <button onClick={() => publish(f.id)} className="jf-btn-primary">
                       {t("builder.publish")}
                     </button>

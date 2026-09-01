@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
+import { useSession } from "../../components/session";
 
 type Profile = {
   id: string;
@@ -31,6 +32,7 @@ function loadStoredTab(): ProfileTab {
 
 export default function ProfilePage() {
   const { t } = useI18n();
+  const { user: sessionUser, reload: reloadSession } = useSession();
   const [tab, setTab] = useState<ProfileTab>(loadStoredTab);
   const [p, setP] = useState<Profile | null>(null);
   const [name, setName] = useState("");
@@ -52,20 +54,27 @@ export default function ProfilePage() {
   }, [tab]);
 
   const load = useCallback(() => {
-    fetch("/api/auth/profile")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (d) {
-          setP(d);
-          setName(d.name || "");
-          setEmail(d.email || "");
-        }
-      });
+    // Issue #29: identity fields hydrate from the shared session context
+    // (dashboard-bundle, fetched once per session) instead of a per-mount
+    // /api/auth/profile round-trip. Saves call reloadSession() below, which
+    // re-fetches the bundle so name/email/2FA state stay fresh. Passkeys
+    // still load here, in parallel.
+    if (sessionUser) {
+      setP((prev) => ({
+        id: sessionUser.id ?? prev?.id ?? "",
+        email: sessionUser.email ?? prev?.email ?? "",
+        name: sessionUser.name ?? prev?.name ?? "",
+        totp_enabled: sessionUser.totp_enabled ?? prev?.totp_enabled ?? false,
+        created_at: prev?.created_at ?? "",
+      }));
+      setName((cur) => cur || sessionUser.name || "");
+      setEmail((cur) => cur || sessionUser.email || "");
+    }
     fetch("/api/auth/passkeys")
       .then((r) => (r.ok ? r.json() : []))
       .then((k) => setPasskeys(Array.isArray(k) ? k : []))
       .catch(() => setPasskeys([]));
-  }, []);
+  }, [sessionUser]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -75,7 +84,7 @@ export default function ProfilePage() {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    if (r.ok) { setMsg(t("prof.saved")); load(); return true; }
+    if (r.ok) { setMsg(t("prof.saved")); load(); reloadSession(); return true; }
     const d = await r.json().catch(() => ({}));
     setErr(d.error || t("prof.failed"));
     return false;

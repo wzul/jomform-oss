@@ -1,8 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { Shell } from "../components/Shell";
 import { useI18n } from "../components/i18n";
+import { useSession } from "../components/session";
 import Landing from "./landing/page";
 import {
   Area,
@@ -63,8 +65,10 @@ const spaceScope = () => {
 
 export default function Dashboard() {
   const { t } = useI18n();
-  const [authed, setAuthed] = useState(false);
-  const [checking, setChecking] = useState(true);
+  // Issue #29: me + landing data (products, summary, sales, analytics) all
+  // come from the single dashboard-bundle round-trip fetched once per
+  // session — the 914ms me→5-fetch waterfall is gone.
+  const { bundle, anon } = useSession();
   const [products, setProducts] = useState<Product[]>([]);
   const [sales, setSales] = useState<SaleRow[]>([]);
   const [salesPage, setSalesPage] = useState(1);
@@ -72,7 +76,7 @@ export default function Dashboard() {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [formStats, setFormStats] = useState<FormStats[]>([]);
   const [prodStats, setProdStats] = useState<ProductStats[]>([]);
-  const [anon, setAnon] = useState(false);
+  const [ready, setReady] = useState(false);
 
   const loadSales = useCallback(
     async (p: number) => {
@@ -93,36 +97,25 @@ export default function Dashboard() {
     [],
   );
 
-  const load = useCallback(async () => {
-    const me = await fetch("/api/auth/me");
-    if (!me.ok) {
-      setAnon(true);
-      setChecking(false);
-      return;
-    }
-    const sp = spaceScope();
-    const withSpace = (path: string) => {
-      const sep = path.includes("?") ? "&" : "?";
-      return sp ? `${path}${sep}space=${encodeURIComponent(sp)}` : path;
-    };
-    const [p, , sum, fs, ps] = await Promise.all([
-      fetch(withSpace("/api/rest/products")).then((r) => r.json()),
-      loadSales(1),
-      fetch(withSpace("/api/rest/summary")).then((r) => r.json()),
-      fetch(withSpace("/api/rest/analytics/forms")).then((r) => (r.ok ? r.json() : [])),
-      fetch(withSpace("/api/rest/analytics/products")).then((r) => (r.ok ? r.json() : [])),
-    ]);
-    setProducts(Array.isArray(p) ? p : []);
-    setSummary(sum);
-    setFormStats(Array.isArray(fs) ? fs : []);
-    setProdStats(Array.isArray(ps) ? ps : []);
-    setAuthed(true);
-    setChecking(false);
-  }, [loadSales]);
-
+  // Adopt the bundle landing sections as soon as the session context has
+  // them (immediately on later navigations — cached).
   useEffect(() => {
-    load();
-  }, [load]);
+    if (bundle === undefined) return;
+    setProducts(Array.isArray(bundle.products) ? (bundle.products as Product[]) : []);
+    setSummary(bundle.summary ?? null);
+    setFormStats(Array.isArray(bundle.form_analytics) ? (bundle.form_analytics as FormStats[]) : []);
+    setProdStats(
+      Array.isArray(bundle.product_analytics) ? (bundle.product_analytics as ProductStats[]) : [],
+    );
+    if (bundle.sales) {
+      setSales((bundle.sales.items as SaleRow[]) ?? []);
+      setSalesPage(bundle.sales.page || 1);
+      setSalesTotal(bundle.sales.total || 0);
+    } else {
+      loadSales(1);
+    }
+    setReady(true);
+  }, [bundle, loadSales]);
 
   const salesTotalPages = Math.max(1, Math.ceil(salesTotal / PAGE_SIZE));
 
@@ -155,7 +148,7 @@ export default function Dashboard() {
     await loadSales(salesPage);
   }
 
-  if (checking) {
+  if (!ready) {
     return <main className="flex min-h-screen items-center justify-center text-slate-400">…</main>;
   }
   if (anon) return <Landing />;
@@ -177,9 +170,9 @@ export default function Dashboard() {
             <h1 className="max-w-xl text-xl font-semibold tracking-tight">{t("dash.title")}</h1>
             <p className="max-w-xl text-sm text-[var(--jf-muted)]">{t("dash.subtitle")}</p>
           </div>
-          <a href="/builder" className="jf-btn-primary">
+          <Link href="/builder" className="jf-btn-primary">
             {t("dash.newForm")}
-          </a>
+          </Link>
         </div>
 
         {summary && (
