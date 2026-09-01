@@ -75,3 +75,24 @@ func ValidEmail(email string) bool {
 	addr, err := mail.ParseAddress(email)
 	return err == nil && addr.Address == email && strings.Contains(email, "@")
 }
+
+// DummyPasswordHash is a fixed, valid argon2id hash with the same cost
+// parameters as real user hashes. Login verifies an unknown email against it
+// so the CPU cost — and therefore response timing — is indistinguishable from
+// a real (wrong-password) check, defeating user-enumeration via timing
+// (issue #42). It is constant time to derive, so it is safe to share.
+var DummyPasswordHash string
+
+func init() {
+	// Hash a throwaway string once at package init with the same parameters
+	// used for real registration hashes.
+	if h, err := HashPassword("not-a-real-password"); err == nil {
+		DummyPasswordHash = h
+	} else {
+		// Argon2 hashing is deterministic and self-contained — failure here is
+		// effectively impossible; fall back to an empty string and let
+		// VerifyPassword return an error (treated as failed login) rather than
+		// crash. Login still works for real users.
+		DummyPasswordHash = ""
+	}
+}

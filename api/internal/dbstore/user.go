@@ -24,6 +24,7 @@ type User struct {
 	TOTPEnabled  bool
 	Name         string
 	AvatarURL    string
+	Verified     bool // email confirmed; new accounts require this before login (issue #42)
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }
@@ -37,13 +38,15 @@ type UserStore struct {
 func NewUserStore(pool *pgxpool.Pool) *UserStore { return &UserStore{pool: pool} }
 
 // Create inserts a new user. Returns ErrEmailTaken on duplicate email.
+// New accounts are created unverified (verified=false) so they must confirm
+// their address before their first password login (issue #42).
 func (s *UserStore) Create(ctx context.Context, email, passwordHash string) (*User, error) {
 	u := &User{}
 	err := s.pool.QueryRow(ctx,
-		`INSERT INTO users (email, password_hash) VALUES ($1, $2)
-		 RETURNING id, email, password_hash, COALESCE(totp_secret,''), totp_enabled, COALESCE(name,''), COALESCE(avatar_url,''), created_at, updated_at`,
+		`INSERT INTO users (email, password_hash, verified) VALUES ($1, $2, false)
+		 RETURNING id, email, password_hash, COALESCE(totp_secret,''), totp_enabled, COALESCE(name,''), COALESCE(avatar_url,''), verified, created_at, updated_at`,
 		email, passwordHash,
-	).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.TOTPSecret, &u.TOTPEnabled, &u.Name, &u.AvatarURL, &u.CreatedAt, &u.UpdatedAt)
+	).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.TOTPSecret, &u.TOTPEnabled, &u.Name, &u.AvatarURL, &u.Verified, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -57,14 +60,14 @@ func (s *UserStore) Create(ctx context.Context, email, passwordHash string) (*Us
 // ByEmail fetches a user by email (case-insensitive column).
 func (s *UserStore) ByEmail(ctx context.Context, email string) (*User, error) {
 	return s.scanOne(s.pool.QueryRow(ctx,
-		`SELECT id, email, password_hash, COALESCE(totp_secret,''), totp_enabled, COALESCE(name,''), COALESCE(avatar_url,''), created_at, updated_at
+		`SELECT id, email, password_hash, COALESCE(totp_secret,''), totp_enabled, COALESCE(name,''), COALESCE(avatar_url,''), verified, created_at, updated_at
 		 FROM users WHERE email = $1`, email))
 }
 
 // ByID fetches a user by UUID string.
 func (s *UserStore) ByID(ctx context.Context, id string) (*User, error) {
 	return s.scanOne(s.pool.QueryRow(ctx,
-		`SELECT id, email, password_hash, COALESCE(totp_secret,''), totp_enabled, COALESCE(name,''), COALESCE(avatar_url,''), created_at, updated_at
+		`SELECT id, email, password_hash, COALESCE(totp_secret,''), totp_enabled, COALESCE(name,''), COALESCE(avatar_url,''), verified, created_at, updated_at
 		 FROM users WHERE id = $1`, id))
 }
 
@@ -103,11 +106,18 @@ func (s *UserStore) DisableTOTP(ctx context.Context, userID string) error {
 
 func (s *UserStore) scanOne(row pgx.Row) (*User, error) {
 	u := &User{}
-	err := row.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.TOTPSecret, &u.TOTPEnabled, &u.Name, &u.AvatarURL, &u.CreatedAt, &u.UpdatedAt)
+	err := row.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.TOTPSecret, &u.TOTPEnabled, &u.Name, &u.AvatarURL, &u.Verified, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
 	return u, nil
+}
+
+// SetVerified marks a user's email as confirmed (issue #42 verify link).
+func (s *UserStore) SetVerified(ctx context.Context, userID string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE users SET verified = true, updated_at = now() WHERE id = $1`, userID)
+	return err
 }
 
 // SocialIdentity mirrors user_identities rows.

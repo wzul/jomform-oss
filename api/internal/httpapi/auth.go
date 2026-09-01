@@ -12,6 +12,7 @@ import (
 
 	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/httpapi/middleware"
 )
 
 const sessionCookie = "jf_session"
@@ -22,12 +23,28 @@ type AuthHandlers struct {
 	Users    *dbstore.UserStore
 	Accounts *dbstore.AccountStore
 	BaseURL  string
+
+	// Issue #42 hardening.
+	//   LoginLimiter tracks failed logins per IP + email in Valkey (nil only in
+	//   bare-mode tests). VerifyKey signs the /verify email-confirmation link.
+	//   VerifyMailer delivers that email.
+	LoginLimiter *auth.LoginLimiter
+	VerifyKey    []byte
+	VerifyMailer VerifyMailer
 }
 
 // RegisterRoutes wires auth endpoints onto the mux.
+//
+// Every /v1/auth/* route is wrapped in the per-IP RateLimit middleware as the
+// coarse outer layer (issue #42): anonymous and sessionful auth routes alike
+// are throttled so a single IP cannot hammer the endpoints at network speed.
+// Registration additionally uses a much tighter bucket (RegistrationLimit)
+// since it is fully open; login brute-force is further gated by a Valkey
+// failed-attempt tracker inside handleLogin.
 func (a *AuthHandlers) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("POST /v1/auth/register", a.handleRegister)
-	mux.HandleFunc("POST /v1/auth/login", a.handleLogin)
+	// Public (open) auth entry points — tightened most.
+	mux.Handle("POST /v1/auth/register", middleware.RegistrationLimit(http.HandlerFunc(a.handleRegister)))
+	mux.Handle("POST /v1/auth/login", middleware.RateLimit(http.HandlerFunc(a.handleLogin)))
 	mux.HandleFunc("POST /v1/auth/logout", a.handleLogout)
 	mux.HandleFunc("GET /v1/auth/me", a.handleMe)
 	mux.HandleFunc("POST /v1/auth/2fa/setup", a.handle2FASetup)
@@ -37,6 +54,12 @@ func (a *AuthHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/auth/profile", a.handleProfile)
 	mux.HandleFunc("POST /v1/auth/profile/name", a.handleUpdateName)
 	mux.HandleFunc("POST /v1/auth/profile/email", a.handleUpdateEmail)
+	mux.HandleFunc("PUT /v1/auth/profile/email", a.handleUpdateEmail)
+	// Email confirmation (issue #42): verifies an account is real before its
+	// first password login. GET renders a small confirmation page; the same
+	// token also works via POST if an app ever wants JSON back.
+	mux.HandleFunc("GET /v1/auth/verify", a.handleVerify)
+	mux.HandleFunc("POST /v1/auth/verify", a.handleVerify)
 	// Social login (provider-generic OIDC). UI links use /api/... which the
 	// Next proxy maps to /v1/... for same-origin cookies; direct /api/* also
 	// works when the Go server is the public entrypoint.
@@ -52,6 +75,10 @@ func (a *AuthHandlers) RegisterRoutes(mux *http.ServeMux) {
 type registerRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
+	// Honeypot field (issue #42): a hidden form field bots fill, humans don't.
+	// When populated the server silently accepts the request but discards it
+	// (and logs the hit) instead of creating an account.
+	Website string `json:"website"`
 }
 
 type loginRequest struct {
@@ -72,12 +99,26 @@ type meResponse struct {
 // ─── handlers ────────────────────────────────────────────────────────────────
 
 func (a *AuthHandlers) handleRegister(w http.ResponseWriter, r *http.Request) {
+	ip := middleware.ClientIP(r)
 	var req registerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid json")
 		return
 	}
+
+	// Honeypot (issue #42): a filled hidden field marks a bot — accept the
+	// request silently (2xx so the bot thinks it worked) but create nothing.
+	if req.Website != "" {
+		slog.Warn("register_honeypot_caught", "ip", ip)
+		writeJSON(w, http.StatusCreated, map[string]string{"status": "created"})
+		return
+	}
+
 	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
+	// Per-IP registration rate observability (issue #42): every attempt is
+	// logged, anomalous volumes are surfaced by log aggregation.
+	slog.Info("register_attempt", "ip", ip, "email", obfuscateEmail(req.Email))
+
 	if !auth.ValidEmail(req.Email) {
 		writeErr(w, http.StatusBadRequest, "email tidak sah")
 		return
@@ -119,30 +160,71 @@ func (a *AuthHandlers) handleRegister(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := a.startSession(w, r, user.ID, user.Email, user.TOTPEnabled); err != nil {
-		writeErr(w, http.StatusInternalServerError, "internal error")
-		return
+	// Email verification (issue #42): new accounts are verified=false and may
+	// not log in until they confirm. Email a signed 24h verification link; a
+	// missing mailer is logged but doesn't block registration (a /verify link
+	// can always be requested again later).
+	if err := a.sendVerifyEmail(r.Context(), user.ID, user.Email); err != nil {
+		slog.Warn("verify_email_send_failed", "err", err, "user", user.ID)
 	}
-	writeJSON(w, http.StatusCreated, meResponse{
-		ID: user.ID, Email: user.Email, TOTPEnabled: user.TOTPEnabled, CreatedAt: user.CreatedAt.UTC().Format(time.RFC3339),
+
+	// No session is started: the account must be email-verified before first
+	// login, so the user is directed to check their inbox.
+	writeJSON(w, http.StatusCreated, map[string]string{
+		"status":             "created",
+		"email_verification": "required",
 	})
 }
 
 func (a *AuthHandlers) handleLogin(w http.ResponseWriter, r *http.Request) {
+	ip := middleware.ClientIP(r)
 	var req loginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	user, err := a.Users.ByEmail(r.Context(), strings.ToLower(strings.TrimSpace(req.Email)))
+	email := strings.ToLower(strings.TrimSpace(req.Email))
+
+	// Brute-force gate (issue #42): after FailLockoutThreshold failures from an
+	// IP within 15min the login is refused outright with 429 + Retry-After.
+	// When the Valkey limiter is unavailable we fail open (availability beats
+	// brute-force rate here); the per-IP RateLimit + argon2 cost remain.
+	if a.LoginLimiter != nil {
+		locked, _, _, err := a.LoginLimiter.Status(r.Context(), ip, email)
+		if err != nil {
+			// limiter backend down → log, don't block logins.
+			slog.Warn("loginfail_status_error", "err", err, "ip", ip)
+		} else if locked {
+			w.Header().Set("Retry-After", auth.LoginLockoutRetryAfter)
+			writeErr(w, http.StatusTooManyRequests, auth.LoginLockoutMessage)
+			return
+		}
+	}
+
+	user, err := a.Users.ByEmail(r.Context(), email)
 	if err != nil {
-		// Uniform response — no user enumeration.
-		writeErr(w, http.StatusUnauthorized, "maklumat log masuk tidak sah")
+		// Uniform 401 — no user enumeration. For an unknown email we still run
+		// argon2 against a fixed dummy hash so the CPU cost (and therefore the
+		// response timing) matches a real password check; a brute-forcer cannot
+		// distinguish "no such user" from "wrong password" by timing either.
+		_, _ = auth.VerifyPassword(req.Password, auth.DummyPasswordHash)
+		a.failLogin(w, r, ip, "", false)
 		return
 	}
-	ok, err := auth.VerifyPassword(req.Password, user.PasswordHash)
-	if err != nil || !ok {
-		writeErr(w, http.StatusUnauthorized, "maklumat log masuk tidak sah")
+
+	// Verify the password. Unknown-email attempts (above) already paid the same
+	// argon2 cost, so response timing stays uniform across known/unknown.
+	ok, verifyErr := auth.VerifyPassword(req.Password, user.PasswordHash)
+	if verifyErr != nil || !ok {
+		a.failLogin(w, r, ip, email, true)
+		return
+	}
+
+	// Email verification (issue #42): an unverified account may not log in.
+	if !user.Verified {
+		// Deliberately NOT recorded as a failed password attempt — the
+		// credential was correct; the user just hasn't confirmed their email.
+		writeErr(w, http.StatusForbidden, "sila sahkan email anda sebelum log masuk (semak peti masuk untuk pautan pengesahan)")
 		return
 	}
 
@@ -156,8 +238,16 @@ func (a *AuthHandlers) handleLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !auth.ValidateTOTPSecret(user.TOTPSecret, req.TOTPCode) {
-			writeErr(w, http.StatusUnauthorized, "kod 2FA tidak sah")
+			a.failLogin(w, r, ip, email, true)
 			return
+		}
+	}
+
+	// Success resets the failure counters so a legitimate owner who later
+	// mistypes can't be locked out by stale history.
+	if a.LoginLimiter != nil {
+		if err := a.LoginLimiter.Reset(r.Context(), ip, email); err != nil {
+			slog.Warn("loginfail_reset_error", "err", err, "ip", ip)
 		}
 	}
 
@@ -168,6 +258,27 @@ func (a *AuthHandlers) handleLogin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, meResponse{
 		ID: user.ID, Email: user.Email, TOTPEnabled: user.TOTPEnabled, CreatedAt: user.CreatedAt.UTC().Format(time.RFC3339),
 	})
+}
+
+// failLogin handles a rejected login attempt: record the failure in Valkey and
+// emit a uniform 401. A recorded (real) user takes an extra artificial delay so
+// a brute-forcer cannot distinguish "no such user" from "wrong password" by
+// timing alone — unknown-email attempts return immediately.
+func (a *AuthHandlers) failLogin(w http.ResponseWriter, r *http.Request, ip, email string, known bool) {
+	if a.LoginLimiter != nil {
+		rec := email
+		if !known {
+			// Unknown emails share the per-IP counter only — never key the
+			// per-account counter with a non-existent user.
+			rec = ""
+		}
+		if err := a.LoginLimiter.RecordFailure(r.Context(), ip, rec); err != nil {
+			slog.Warn("loginfail_record_error", "err", err, "ip", ip)
+		}
+	}
+	// Uniform 401, identical body for both cases → no enumeration either from
+	// the message or from the status code.
+	writeErr(w, http.StatusUnauthorized, "maklumat log masuk tidak sah")
 }
 
 func (a *AuthHandlers) handleLogout(w http.ResponseWriter, r *http.Request) {

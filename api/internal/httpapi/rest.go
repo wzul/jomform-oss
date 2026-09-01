@@ -13,6 +13,7 @@ import (
 
 	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/httpapi/middleware"
 	"github.com/wzul/jomform/api/internal/payments"
 )
 
@@ -79,8 +80,8 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /v1/cf/disconnect", h.authed(h.cfDisconnect))
 	mux.Handle("POST /v1/auth/passkeys/register/start", h.authed(h.passkeyRegisterStart))
 	mux.Handle("POST /v1/auth/passkeys/register/finish", h.authed(h.passkeyRegisterFinish))
-	mux.HandleFunc("POST /v1/auth/passkeys/login/start", h.passkeyLoginStart)
-	mux.HandleFunc("POST /v1/auth/passkeys/login/finish", h.passkeyLoginFinish)
+	mux.Handle("POST /v1/auth/passkeys/login/start", middleware.RateLimit(http.HandlerFunc(h.passkeyLoginStart)))
+	mux.Handle("POST /v1/auth/passkeys/login/finish", middleware.RateLimit(http.HandlerFunc(h.passkeyLoginFinish)))
 	mux.Handle("GET /v1/auth/passkeys", h.authed(h.passkeyList))
 	mux.Handle("DELETE /v1/auth/passkeys/{id}", h.authed(h.passkeyDelete))
 	mux.Handle("GET /v1/spaces", h.authed(h.listSpaces))

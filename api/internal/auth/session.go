@@ -67,6 +67,10 @@ func (s *Sessions) Ping(ctx context.Context) error {
 	return s.rdb.Ping(ctx).Err()
 }
 
+// Client exposes the underlying Valkey client so the login-failure limiter can
+// reuse the same connection pool (issue #42).
+func (s *Sessions) Client() *goredis.Client { return s.rdb }
+
 // Close releases the connection pool.
 func (s *Sessions) Close() error { return s.rdb.Close() }
 

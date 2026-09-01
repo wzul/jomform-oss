@@ -32,6 +32,10 @@ export default function Login() {
       email: String(fd.get("email") || ""),
       password: String(fd.get("password") || ""),
     };
+    // Honeypot (issue #42): a real browser never fills this hidden field, so
+    // the value stays empty; scripted bots that auto-fill every input trip it
+    // and their registration is silently discarded server-side.
+    body.website = String(fd.get("website") || "");
     if (needTotp) body.totp_code = String(fd.get("totp_code") || "");
 
     const r = await fetch(path, {
@@ -42,6 +46,15 @@ export default function Login() {
     setBusy(false);
 
     if (r.ok) {
+      // New registration now returns email_verification: "required" — the
+      // account is created but must confirm its address before first login
+      // (issue #42). Show that instead of redirecting into a dead session.
+      const okBody = await r.json().catch(() => ({}));
+      if (mode === "register" && (okBody as any).email_verification === "required") {
+        setDone(true);
+        setError("");
+        return;
+      }
       setDone(true);
       try {
         const sp = await fetch("/api/spaces").then((x) => (x.ok ? x.json() : []));
@@ -149,52 +162,90 @@ export default function Login() {
             </p>
           )}
 
-          <form onSubmit={submit} className="space-y-3">
-            <div>
-              <label className="mb-1 block text-xs font-medium text-[var(--jf-muted)]">Emel</label>
-              <input
-                name="email"
-                type="email"
-                required
-                autoComplete="email"
-                placeholder="anda@kedai.my"
-                className="w-full rounded-md border border-[var(--jf-border)] bg-white px-3 py-2 text-sm text-[var(--jf-text)] placeholder-slate-400 outline-none transition-colors focus:border-[#7170ff]/60 focus:bg-indigo-50"
-              />
+          {done ? (
+            <div className="space-y-3">
+              <div className="rounded-lg border border-green-500/20 bg-green-500/10 px-3 py-3 text-[13px] text-green-300">
+                {mode === "register"
+                  ? "Akaun anda telah dicipta! Sila sahkan alamat emel anda melalui pautan yang kami hantar untuk mengaktifkan log masuk."
+                  : "Berjaya log masuk."}
+              </div>
+              {mode === "register" && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode("login");
+                    setDone(false);
+                  }}
+                  className="mt-1 w-full rounded-md bg-[#5e6ad2] py-2 text-sm font-medium text-white transition-colors hover:bg-[#828fff]"
+                >
+                  Ke Log Masuk
+                </button>
+              )}
             </div>
-            <div>
-              <label className="mb-1 block text-xs font-medium text-[var(--jf-muted)]">
-                {mode === "register" ? "Kata laluan (min. 10 aksara)" : "Kata laluan"}
-              </label>
-              <input
-                name="password"
-                type="password"
-                required
-                minLength={mode === "register" ? 10 : 1}
-                placeholder="••••••••••"
-                className="w-full rounded-md border border-[var(--jf-border)] bg-white px-3 py-2 text-sm text-[var(--jf-text)] placeholder-slate-400 outline-none transition-colors focus:border-[#7170ff]/60 focus:bg-indigo-50"
-              />
-            </div>
-            {needTotp && (
-              <div>
-                <label className="mb-1 block text-xs font-medium text-[var(--jf-muted)]">Kod 2FA</label>
+          ) : (
+            <form onSubmit={submit} className="space-y-3">
+              {/* Honeypot (issue #42): sr-only hides it from humans &
+                  screen-readers (no focus, no layout) but it stays in the DOM,
+                  so naive bots that fill every field trip the server-side
+                  discard. */}
+              <div className="sr-only" aria-hidden="true">
+                <label htmlFor="website">Laman web</label>
                 <input
-                  name="totp_code"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  maxLength={6}
-                  required
-                  placeholder="000000"
-                  className="w-full rounded-md border border-[var(--jf-border)] bg-white px-3 py-2 font-mono text-sm tracking-[0.4em] text-[var(--jf-text)] outline-none focus:border-[#7170ff]/60"
+                  id="website"
+                  name="website"
+                  type="text"
+                  tabIndex={-1}
+                  autoComplete="off"
+                  placeholder="https://"
                 />
               </div>
-            )}
-            <button
-              disabled={busy}
-              className="mt-1 w-full rounded-md bg-[#5e6ad2] py-2 text-sm font-medium text-white transition-colors hover:bg-[#828fff] disabled:opacity-60"
-            >
-              {busy ? "…" : mode === "login" ? "Log Masuk" : "Cipta Akaun Percuma"}
-            </button>
-          </form>
+
+              <div>
+                <label className="mb-1 block text-xs font-medium text-[var(--jf-muted)]">Emel</label>
+                <input
+                  name="email"
+                  type="email"
+                  required
+                  autoComplete="email"
+                  placeholder="anda@kedai.my"
+                  className="w-full rounded-md border border-[var(--jf-border)] bg-white px-3 py-2 text-sm text-[var(--jf-text)] placeholder-slate-400 outline-none transition-colors focus:border-[#7170ff]/60 focus:bg-indigo-50"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-[var(--jf-muted)]">
+                  {mode === "register" ? "Kata laluan (min. 10 aksara)" : "Kata laluan"}
+                </label>
+                <input
+                  name="password"
+                  type="password"
+                  required
+                  minLength={mode === "register" ? 10 : 1}
+                  placeholder="••••••••••"
+                  className="w-full rounded-md border border-[var(--jf-border)] bg-white px-3 py-2 text-sm text-[var(--jf-text)] placeholder-slate-400 outline-none transition-colors focus:border-[#7170ff]/60 focus:bg-indigo-50"
+                />
+              </div>
+              {needTotp && (
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-[var(--jf-muted)]">Kod 2FA</label>
+                  <input
+                    name="totp_code"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    maxLength={6}
+                    required
+                    placeholder="000000"
+                    className="w-full rounded-md border border-[var(--jf-border)] bg-white px-3 py-2 font-mono text-sm tracking-[0.4em] text-[var(--jf-text)] outline-none focus:border-[#7170ff]/60"
+                  />
+                </div>
+              )}
+              <button
+                disabled={busy}
+                className="mt-1 w-full rounded-md bg-[#5e6ad2] py-2 text-sm font-medium text-white transition-colors hover:bg-[#828fff] disabled:opacity-60"
+              >
+                {busy ? "…" : mode === "login" ? "Log Masuk" : "Cipta Akaun Percuma"}
+              </button>
+            </form>
+          )}
 
           {/* Issue #9: env-gated social login. Rendered only when the backend
               reports the provider configured (GET /api/auth/social/providers);

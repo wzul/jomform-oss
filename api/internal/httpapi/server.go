@@ -23,6 +23,20 @@ type Deps struct {
 	MCP      *mcpsrv.Server
 	Users    *dbstore.UserStore
 	Sessions *auth.Sessions
+	// Issue #42: brute-force + registration hardening.
+	//   Sessions exposes the shared go-redis client used for the failed-login
+	//   counters. VerifyKey is the 32-byte AES-GCM key used to sign/verify the
+	//   email-confirmation links. VerifyMailer delivers the confirmation email
+	//   (nil in bare-mode tests where sends aren't exercised).
+	VerifyKey    []byte
+	VerifyMailer VerifyMailer
+}
+
+// VerifyMailer delivers an email-confirmation message. The concrete email.Sender
+// already satisfies this (Send(to, subject, body error)); it exists so tests can
+// inject a recorder without pulling in AWS credentials.
+type VerifyMailer interface {
+	Send(to, subject, body string) error
 }
 
 // Server wires dependencies into HTTP handlers.
@@ -43,7 +57,15 @@ func NewServer(cfg *config.Config, log *slog.Logger, deps *Deps) *Server {
 	isDev = cfg.IsDev()
 
 	if deps.Users != nil && deps.Sessions != nil {
-		s.auth = &AuthHandlers{Sessions: deps.Sessions, Users: deps.Users, Accounts: deps.Accounts}
+		s.auth = &AuthHandlers{
+			Sessions:     deps.Sessions,
+			Users:        deps.Users,
+			Accounts:     deps.Accounts,
+			BaseURL:      cfg.AppBaseURL,
+			VerifyKey:    deps.VerifyKey,
+			VerifyMailer: deps.VerifyMailer,
+			LoginLimiter: auth.NewLoginLimiter(deps.Sessions.Client()),
+		}
 		s.proxy = middleware.NewTrustedProxy()
 		_ = s.proxy.FetchCloudflare(context.Background())
 	}

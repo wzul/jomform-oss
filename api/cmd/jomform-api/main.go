@@ -59,6 +59,19 @@ func main() {
 		log.Warn("continuing without valkey (dev mode)")
 	}
 
+	// AES-GCM key for at-rest encryption AND email-verification link signing.
+	decryptKey := mustHexKey(cfg.EncryptionKey)
+	// Transactional sender (SESv2 API), nil when SMTP env is absent. Reused by
+	// payment receipts and the email-verification flow.
+	var mailer *email.Sender
+	if cfg.SESSMTPHost != "" {
+		mailer = email.New(email.SMTPConfig{
+			Host: cfg.SESSMTPHost, Port: cfg.SESSMTPPort,
+			Username: cfg.SESSMTPUser, Password: cfg.SESSMTPPass, From: cfg.SESFrom,
+			Region: cfg.SESRegion,
+		})
+	}
+
 	deps := &httpapi.Deps{}
 	if pool != nil {
 		accounts := dbstore.NewAccountStore(pool)
@@ -67,10 +80,14 @@ func main() {
 	}
 	if sessions != nil {
 		deps.Sessions = sessions
+		// Issue #42: the AES-GCM key signs email-verification links; the SES
+		// sender delivers them (nil when unconfigured — registration still
+		// completes, verification just can't be emailed).
+		deps.VerifyKey = decryptKey
+		deps.VerifyMailer = mailer
 	}
 
 	// Payments wiring (CHIP): needs DB; decrypt key from config.
-	decryptKey := mustHexKey(cfg.EncryptionKey)
 	if pool != nil {
 		accounts := dbstore.NewAccountStore(pool)
 		sales := dbstore.NewSaleStore(pool)

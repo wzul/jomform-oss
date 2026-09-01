@@ -37,10 +37,12 @@ func totpTestEnv(t *testing.T) (*AuthHandlers, *pgxpool.Pool, string) {
 		t.Skipf("valkey not available for TOTP test: %v", err)
 	}
 	a := &AuthHandlers{
-		Sessions: sessions,
-		Users:    dbstore.NewUserStore(pool),
-		Accounts: dbstore.NewAccountStore(pool),
-		BaseURL:  "http://localhost",
+		Sessions:     sessions,
+		Users:        dbstore.NewUserStore(pool),
+		Accounts:     dbstore.NewAccountStore(pool),
+		BaseURL:      "http://localhost",
+		VerifyKey:    testVerifyKey,
+		LoginLimiter: auth.NewLoginLimiter(sessions.Client()),
 	}
 	// Flush pending keys so tests start clean (only this project's keyspace).
 	return a, pool, ""
@@ -67,7 +69,10 @@ func totpServe(t *testing.T, a *AuthHandlers, method, path string, body any, coo
 	return rec
 }
 
-// totpRegister creates a fresh user and returns the session cookie.
+// totpRegister creates a fresh email-verified user and returns the user ID
+// plus a live session cookie. Since issue #42, registration no longer starts a
+// session: the account must be email-verified, then a login establishes the
+// session. This helper reproduces exactly that (register → /verify → login).
 func totpRegister(t *testing.T, a *AuthHandlers) (userID, sessionCookie string) {
 	t.Helper()
 	email := "totp-it-" + strings.ReplaceAll(randSuffix(), "-", "") + "@example.test"
@@ -76,6 +81,23 @@ func totpRegister(t *testing.T, a *AuthHandlers) (userID, sessionCookie string) 
 	}, "")
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("register status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Confirm the email via the signed /verify link (issue #42).
+	tok, err := auth.SignVerifyToken(a.VerifyKey, email)
+	if err != nil {
+		t.Fatalf("sign verify token: %v", err)
+	}
+	if rec := totpServe(t, a, "GET", "/v1/auth/verify?token="+tok, nil, ""); rec.Code != http.StatusOK {
+		t.Fatalf("verify status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Establish the session with a real login (this is what sets jf_session).
+	rec = totpServe(t, a, "POST", "/v1/auth/login", map[string]string{
+		"email": email, "password": "correct-horse-battery-staple",
+	}, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login after verify = %d body=%s", rec.Code, rec.Body.String())
 	}
 	var me meResponse
 	_ = json.Unmarshal(rec.Body.Bytes(), &me)
@@ -86,7 +108,7 @@ func totpRegister(t *testing.T, a *AuthHandlers) (userID, sessionCookie string) 
 		}
 	}
 	if cookie == "" {
-		t.Fatal("register did not set session cookie")
+		t.Fatal("login did not set session cookie")
 	}
 	return me.ID, cookie
 }
