@@ -5,7 +5,6 @@ import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 
 type ChipStatus = { configured: boolean; mode: string };
-type CfStatus = { linked: boolean } | null;
 type KeyRow = { id: string; name: string; scopes: string[] };
 type DomainStatus = { domain: string; verified: boolean } | null;
 
@@ -50,8 +49,6 @@ export default function Settings() {
   const [whSecret, setWhSecret] = useState("");
   const [trackingHead, setTrackingHead] = useState("");
   const [social, setSocial] = useState<{ provider: string; email: string; linked_at: string }[]>([]);
-  // null = still loading (render neither button to avoid a wrong-state flash)
-  const [cfStatus, setCfStatus] = useState<CfStatus>(null);
 
   // Issue #13: single aggregated fetch replaces the 6-request waterfall
   // (chip, keys, domains, webhooks, einvoice, social) on mount.
@@ -84,13 +81,6 @@ export default function Settings() {
 
   useEffect(() => {
     load();
-    // Cloudflare link state (issue #9): /api/cf/status is cf_oauth.go's own
-    // endpoint — kept out of the dashboard-bundle to avoid overlapping with
-    // the bundle refactor in issue #13.
-    fetch("/api/cf/status")
-      .then((r) => (r.ok ? r.json() : { linked: false }))
-      .then((d) => setCfStatus({ linked: !!d?.linked }))
-      .catch(() => setCfStatus({ linked: false }));
   }, [load]);
 
   async function save(e: React.FormEvent) {
@@ -294,39 +284,9 @@ export default function Settings() {
           <p className="mt-2 text-sm text-slate-400">
             Serve your forms on your own domains — as many as you like. For each: add a{" "}
             <code className="rounded bg-slate-100 px-1">CNAME your-domain → jomform.com</code> (DNS only), then Verify.
-            Routing + TLS certificate are provisioned automatically.
+            Once verified, routing + the TLS certificate are provisioned automatically — no Cloudflare account or auto-setup needed.
           </p>
           {domainMsg && <p className="mt-3 rounded-lg bg-indigo-50 px-3 py-2 text-sm text-indigo-700">{domainMsg}</p>}
-          <div className="mt-4 rounded-lg border border-slate-200 p-3">
-            <p className="text-xs font-medium uppercase tracking-wider text-slate-500">
-              Auto-setup with Cloudflare
-            </p>
-            <p className="mt-1 text-xs text-slate-500">
-              One-click: approve Cloudflare scopes (DNS edit) and new domains get their CNAME + routing created automatically. Access token is stored encrypted so future domains provision themselves.
-            </p>
-            <div className="mt-2 flex items-center gap-2">
-              {/* Issue #9: buttons reflect the real link state from /api/cf/status.
-                  cfStatus === null → still loading, render neither (no wrong-state flash). */}
-              {cfStatus === null ? null : cfStatus.linked ? (
-                <>
-                  <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
-                    Cloudflare connected ✓
-                  </span>
-                  <button
-                    onClick={async () => {
-                      await fetch("/api/cf/disconnect", { method: "POST" });
-                      setCfStatus({ linked: false });
-                      setDomainMsg("Cloudflare disconnected.");
-                      load();
-                    }}
-                    className="px-3 text-xs text-slate-500 hover:text-red-500"
-                  >Disconnect</button>
-                </>
-              ) : (
-                <a href="/api/cf/start" className="jf-btn-ghost">Login with Cloudflare</a>
-              )}
-            </div>
-          </div>
           <form onSubmit={setDomainClaim} className="mt-4 flex flex-wrap gap-2">
             <input
               value={domainInput}

@@ -179,19 +179,3 @@ func (s *AccountStore) SaveSigningKeys(ctx context.Context, accountID, pubB64, p
 		accountID, pubB64, privB64)
 	return err
 }
-
-// SaveCFToken stores the sealed Cloudflare OAuth token for the account.
-func (s *AccountStore) SaveCFToken(ctx context.Context, accountID, sealed string) error {
-	_, err := s.pool.Exec(ctx,
-		`UPDATE accounts SET cf_token_enc=NULLIF($2,''), updated_at=now() WHERE id=$1`,
-		accountID, sealed)
-	return err
-}
-
-// CFToken returns the sealed Cloudflare token ("" when not linked).
-func (s *AccountStore) CFToken(ctx context.Context, accountID string) (string, error) {
-	var sealed string
-	err := s.pool.QueryRow(ctx,
-		`SELECT COALESCE(cf_token_enc,'') FROM accounts WHERE id=$1`, accountID).Scan(&sealed)
-	return sealed, err
-}

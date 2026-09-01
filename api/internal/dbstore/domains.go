@@ -1,5 +1,5 @@
 // Multi-domain support (migration 000007): each account may claim many
-// custom domains; CF tunnel credentials are stored (sealed) per domain.
+// custom domains; routing is manual CNAME → Verify → auto Traefik route.
 package dbstore
 
 import (
@@ -12,16 +12,13 @@ import (
 
 // AccountDomain models the account_domains table.
 type AccountDomain struct {
-	ID          string
-	AccountID   string
-	Domain      string
-	Provider    string // cname | cf_tunnel
-	Verified    bool
-	VerifiedAt  *time.Time
-	CFTokenEnc  string
-	CFAccountID string
-	TunnelID    string
-	CreatedAt   time.Time
+	ID         string
+	AccountID  string
+	Domain     string
+	Provider   string // cname
+	Verified   bool
+	VerifiedAt *time.Time
+	CreatedAt  time.Time
 }
 
 // DomainStore wraps account_domains.
@@ -43,19 +40,16 @@ func (s *DomainStore) AddDomain(ctx context.Context, accountID, domain, provider
 func (s *DomainStore) GetDomain(ctx context.Context, accountID, id string) (*AccountDomain, error) {
 	d := &AccountDomain{}
 	err := s.pool.QueryRow(ctx,
-		`SELECT id, account_id, domain, provider, verified, verified_at,
-		        COALESCE(cf_token_enc,''), COALESCE(cf_account_id,''), COALESCE(tunnel_id,''), created_at
+		`SELECT id, account_id, domain, provider, verified, verified_at, created_at
 		 FROM account_domains WHERE id=$1 AND account_id=$2`, id, accountID).
-		Scan(&d.ID, &d.AccountID, &d.Domain, &d.Provider, &d.Verified, &d.VerifiedAt,
-			&d.CFTokenEnc, &d.CFAccountID, &d.TunnelID, &d.CreatedAt)
+		Scan(&d.ID, &d.AccountID, &d.Domain, &d.Provider, &d.Verified, &d.VerifiedAt, &d.CreatedAt)
 	return d, err
 }
 
 // ListDomains lists all domains claimed by an account.
 func (s *DomainStore) ListDomains(ctx context.Context, accountID string) ([]*AccountDomain, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, account_id, domain, provider, verified, verified_at,
-		        '', '', COALESCE(tunnel_id,''), created_at
+		`SELECT id, account_id, domain, provider, verified, verified_at, created_at
 		 FROM account_domains WHERE account_id=$1 ORDER BY created_at`, accountID)
 	if err != nil {
 		return nil, err
@@ -65,7 +59,7 @@ func (s *DomainStore) ListDomains(ctx context.Context, accountID string) ([]*Acc
 	for rows.Next() {
 		d := &AccountDomain{}
 		if err := rows.Scan(&d.ID, &d.AccountID, &d.Domain, &d.Provider, &d.Verified,
-			&d.VerifiedAt, &d.CFTokenEnc, &d.CFAccountID, &d.TunnelID, &d.CreatedAt); err != nil {
+			&d.VerifiedAt, &d.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, d)
@@ -89,14 +83,6 @@ func (s *DomainStore) MarkVerified(ctx context.Context, accountID, domain string
 	_, err := s.pool.Exec(ctx,
 		`UPDATE account_domains SET verified=true, verified_at=now() WHERE domain=$1 AND account_id=$2`,
 		domain, accountID)
-	return err
-}
-
-// SaveTunnel stores the sealed CF token + account/tunnel ids for a row.
-func (s *DomainStore) SaveTunnel(ctx context.Context, id, cfTokenEnc, cfAccountID, tunnelID string) error {
-	_, err := s.pool.Exec(ctx,
-		`UPDATE account_domains SET cf_token_enc=$2, cf_account_id=$3, tunnel_id=$4 WHERE id=$1`,
-		id, cfTokenEnc, cfAccountID, tunnelID)
 	return err
 }
 

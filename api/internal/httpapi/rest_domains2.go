@@ -1,5 +1,5 @@
 // REST: multiple custom domains per account (add/list/verify/delete) +
-// Dokploy API domain sync + hosted CF tunnel with STORED token.
+// Dokploy API domain sync. Manual CNAME → Verify → auto Traefik route.
 package httpapi
 
 import (
@@ -173,7 +173,17 @@ func (h *RESTHandlers) deleteCustomDomainByID(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
 }
 
-// (Cloudflare tunnel provisioner removed — Dokploy/traefik sync is the custom-domain path.)
+// normalizeDomain strips scheme/slash and lowercases.
+func normalizeDomain(d string) string {
+	d = strings.ToLower(strings.TrimSpace(d))
+	d = strings.TrimPrefix(d, "https://")
+	d = strings.TrimPrefix(d, "http://")
+	d = strings.TrimSuffix(d, "/")
+	if !strings.Contains(d, ".") {
+		return ""
+	}
+	return d
+}
 
 // isCloudflareEdge reports whether any resolved IP looks like a CF edge
 // (CF-proxied CNAMEs resolve to edge IPs that differ per zone).

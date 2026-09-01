@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"io"
-	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -36,59 +35,9 @@ func (h *RESTHandlers) setCustomDomain(w http.ResponseWriter, r *http.Request, a
 	})
 }
 
-// verifyCustomDomain checks DNS CNAME points to jomform.com and marks verified.
-func (h *RESTHandlers) verifyCustomDomain(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
-	acc, err := h.Accounts.ByID(r.Context(), actx.Account.ID)
-	if err != nil || acc.CustomDomain == "" {
-		writeErr(w, http.StatusBadRequest, "tiada custom domain dikonfigur")
-		return
-	}
-	ips, err := net.LookupHost(acc.CustomDomain)
-	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"verified": false, "detail": "DNS belum resolve"})
-		return
-	}
-	// Verification: the domain must SERVE our app. Cloudflare-fronted
-	// domains resolve to different edge IPs than jomform.com, so raw IP
-	// equality is wrong (both sides proxied). Instead, hit the domain and
-	// look for our subdomain-routing behaviour: a published form slug on
-	// this host must render. DNS check remains a fast pre-filter.
-	target, _ := net.LookupHost("jomform.com")
-	sameEdge := false
-	for _, ip := range ips {
-		for _, t := range target {
-			if ip == t {
-				sameEdge = true
-			}
-		}
-	}
-	if !sameEdge {
-		// Proxied (different edge IPs) — fall through to HTTP probe; only
-		// fail fast when DNS does not resolve at all (handled above).
-	}
-	// A CNAME to jomform.com proxied by Cloudflare legitimately lands on
-	// different edge IPs (each zone gets its own anycast set) — IP equality
-	// against jomform.com is the WRONG test. Accept when the name resolves
-	// AND (same edge OR it's CF-fronted OR it directly serves our app).
-	ff400 := false
-	for _, ip := range ips {
-		if strings.HasPrefix(ip, "104.") || strings.HasPrefix(ip, "172.6") ||
-			strings.HasPrefix(ip, "188.114.") || strings.HasPrefix(ip, "162.159.") {
-			ff400 = true
-		}
-	}
-	serveOK := probeServesJomForm(acc.CustomDomain)
-	if !sameEdge && !ff400 && !serveOK {
-		writeJSON(w, http.StatusOK, map[string]any{"verified": false,
-			"detail": "Domain tidak resolve ke JomForm merangkak (" + strings.Join(ips, ",") + ")"})
-		return
-	}
-	if err := h.Accounts.MarkCustomDomainVerified(r.Context(), actx.Account.ID); err != nil {
-		respondErr(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"verified": true, "domain": acc.CustomDomain})
-}
+// verifyCustomDomain (old single-domain verify) removed with the legacy
+// single-domain flow — the multi-domain path is verifyCustomDomainByID in
+// rest_domains2.go. probeServesJomForm below is shared by it.
 
 // getCustomDomain reports current claim + verification.
 func (h *RESTHandlers) getCustomDomain(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
