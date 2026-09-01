@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useI18n, LangToggle } from "./i18n";
 import { useSession } from "./session";
+import { SpaceSwitcher } from "./SpaceSwitcher";
 
 // AppShell: fixed left sidebar + topbar + content area. Light theme.
 // Issue #29: nav links are Next <Link> (client-side transitions + prefetch,
@@ -38,6 +39,12 @@ export function Shell({
   function switchSpace(slug: string) {
     setSpace(slug);
     localStorage.setItem("jf_space", slug);
+    // Hard reload is deliberate: the dashboard landing sections (products,
+    // summary, sales, analytics) arrive in the session <bundle> which is
+    // cached at module level WITHOUT a space scope key, so router.refresh()
+    // would re-render with the stale cached bundle. A reload recomputes
+    // ?space=<slug> for every downstream fetch so the UI is scoped to the
+    // newly selected space (issue #41).
     window.location.reload();
   }
 
@@ -106,22 +113,7 @@ export function Shell({
               </button>
             </div>
           </div>
-          {spaces.length > 0 && (
-            <div className="mt-2 px-2">
-              <label className="text-[10px] uppercase tracking-wider text-[var(--jf-muted)]">{t("common.space")}</label>
-              <select
-                value={space}
-                onChange={(e) => switchSpace(e.target.value)}
-                className="mt-0.5 w-full rounded-md border border-[var(--jf-border)] bg-white px-2 py-1 text-xs"
-              >
-                {spaces.map((s) => (
-                  <option key={s.id} value={s.slug}>
-                    {s.name} ({s.slug}.jomform.com)
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
+          <SpaceSwitcher spaces={spaces} value={space} onSwitch={switchSpace} className="mt-2 px-2" />
           <div className="mt-1 px-2">
             <LangToggle />
           </div>
@@ -184,6 +176,11 @@ export function Shell({
                   </Link>
                 ))}
               </nav>
+              {/* issue #41: space selector reachable from the mobile drawer —
+                  same shared component as the desktop sidebar */}
+              <div className="border-t border-[var(--jf-border)] px-4 py-3">
+                <SpaceSwitcher spaces={spaces} value={space} onSwitch={switchSpace} />
+              </div>
               <div className="absolute bottom-4 left-0 right-0 px-4">
                 <p
                   className="mb-2 truncate text-xs text-[var(--jf-muted)]"
