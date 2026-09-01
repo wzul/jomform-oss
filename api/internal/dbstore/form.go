@@ -129,10 +129,14 @@ func (s *FormStore) scanOne(row rowScanner) (*Form, error) {
 // form slug (account slug == subdomain).
 func (s *FormStore) PublishedByAccountSlug(ctx context.Context, accountSlug, formSlug string) (*Form, error) {
 	f := &Form{}
-	err := s.pool.QueryRow(ctx, "SELECT f.id, f.account_id, f.slug, f.title, f.config, f.theme "+
+	err := s.pool.QueryRow(ctx, "SELECT f.id, f.account_id, f.slug, f.title, f.config, f.theme, "+
+		"f.status, f.is_main, f.redirect_success, f.redirect_failure, f.allow_embed, f.logo_url, f.is_template, "+
+		"f.created_at, f.updated_at "+
 		"FROM forms f JOIN accounts a ON a.id = f.account_id "+
 		"WHERE a.slug = $1 AND f.slug = $2 AND f.status = 'published'",
-		accountSlug, formSlug).Scan(&f.ID, &f.AccountID, &f.Slug, &f.Title, &f.Config, &f.Theme)
+		accountSlug, formSlug).Scan(&f.ID, &f.AccountID, &f.Slug, &f.Title, &f.Config, &f.Theme,
+		&f.Status, &f.IsMain, &f.RedirectSuccess, &f.RedirectFailure,
+		&f.AllowEmbed, &f.LogoURL, &f.IsTemplate, &f.CreatedAt, &f.UpdatedAt)
 	return f, err
 }
 

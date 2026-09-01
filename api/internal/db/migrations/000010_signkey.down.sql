@@ -1,0 +1,7 @@
+ALTER TABLE accounts DROP COLUMN IF EXISTS wh_sign_pub;
+ALTER TABLE accounts DROP COLUMN IF EXISTS wh_sign_priv;
+ALTER TABLE forms DROP COLUMN IF EXISTS redirect_success;
+ALTER TABLE forms DROP COLUMN IF EXISTS redirect_failure;
+ALTER TABLE forms DROP COLUMN IF EXISTS allow_embed;
+ALTER TABLE forms DROP COLUMN IF EXISTS logo_url;
+ALTER TABLE forms DROP COLUMN IF EXISTS is_template;
