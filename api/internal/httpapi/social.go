@@ -63,7 +63,7 @@ func (a *AuthHandlers) socialStart(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{Name: "oauth_state", Value: state, Path: "/", HttpOnly: true, MaxAge: 600, Secure: true})
 	q := url.Values{}
 	q.Set("client_id", os.Getenv(p.IDEnv))
-	q.Set("redirect_uri", a.BaseURL+"/api/auth/callback/"+provider)
+	q.Set("redirect_uri", a.BaseURL+"/api/v1/auth/callback/"+provider)
 	q.Set("response_type", "code")
 	q.Set("scope", p.Scope)
 	q.Set("state", state)
@@ -86,7 +86,7 @@ func (a *AuthHandlers) socialCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	code := r.URL.Query().Get("code")
 
-	tok, err := exchangeCode(p, a.BaseURL+"/api/auth/callback/"+provider, code)
+	tok, err := exchangeCode(p, a.BaseURL+"/api/v1/auth/callback/"+provider, code)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "token exchange gagal: "+err.Error())
 		return

@@ -56,7 +56,7 @@ export default function Settings() {
       fetch("/api/rest/settings/custom-domain").then((r) => (r.ok ? r.json() : null)),
       fetch("/api/rest/webhooks").then((r) => (r.ok ? r.json() : [])),
       fetch("/api/rest/settings/einvoice").then((r) => (r.ok ? r.json() : null)),
-      fetch("/api/auth/social").then((r) => (r.ok ? r.json() : [])),
+      fetch("/api/v1/auth/social").then((r) => (r.ok ? r.json() : [])),
     ]).then(([s, k, d, whs, ei, so]) => {
       setSocial(Array.isArray(so) ? so : []);
       setWebhooks(Array.isArray(whs) ? whs : []);
@@ -466,7 +466,7 @@ export default function Settings() {
               <li className="text-sm text-slate-400">No linked accounts yet.</li>
             )}
           </ul>
-          <a href="/api/oauth/start/google" className="jf-btn-ghost mt-3 inline-block px-4 text-sm">
+          <a href="/api/v1/auth/oauth/google" className="jf-btn-ghost mt-3 inline-block px-4 text-sm">
             Link Google account
           </a>
         </section>
