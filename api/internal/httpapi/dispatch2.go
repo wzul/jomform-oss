@@ -5,8 +5,10 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -19,7 +21,7 @@ import (
 
 // DispatchWebhooks fires all matching active webhooks for an account.
 // Sync for simplicity under caller goroutine; per-webhook 10s timeout.
-func DispatchWebhooks(ctx context.Context, store *dbstore.WebhookStore, accountID, event string, payload map[string]any) {
+func DispatchWebhooks(ctx context.Context, h *RESTHandlers, store *dbstore.WebhookStore, accountID, event string, payload map[string]any) {
 	hooks, err := store.ListActiveByAccount(ctx, accountID)
 	if err != nil {
 		slog.Error("wh_list", "err", err)
@@ -30,11 +32,12 @@ func DispatchWebhooks(ctx context.Context, store *dbstore.WebhookStore, accountI
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 		"data":      payload,
 	})
+	signPub, signPriv := ensureSigningKey(ctx, h, accountID)
 	for _, wh := range hooks {
 		if !matchesEvent(wh.Events, event) {
 			continue
 		}
-		deliverWebhook(ctx, store, wh, event, body, 1)
+		deliverWebhook(ctx, h, store, signPub, signPriv, accountID, wh, event, body, 1)
 	}
 }
 
@@ -48,7 +51,8 @@ func matchesEvent(subscribed []string, event string) bool {
 }
 
 // deliverWebhook posts + records delivery; schedules retry on failure.
-func deliverWebhook(ctx context.Context, store *dbstore.WebhookStore, wh *dbstore.OutboundWebhook,
+func deliverWebhook(ctx context.Context, h *RESTHandlers, store *dbstore.WebhookStore,
+	signPub ed25519.PublicKey, signPriv ed25519.PrivateKey, accountID string, wh *dbstore.OutboundWebhook,
 	event string, body []byte, attempt int) {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, wh.URL, bytes.NewReader(body))
@@ -62,6 +66,11 @@ func deliverWebhook(ctx context.Context, store *dbstore.WebhookStore, wh *dbstor
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-JomForm-Event", event)
 	req.Header.Set("X-JomForm-Signature", "sha256="+sig)
+	if signPriv != nil {
+		edSig := ed25519.Sign(signPriv, body)
+		req.Header.Set("X-JomForm-Signature-Ed25519", base64.StdEncoding.EncodeToString(edSig))
+		req.Header.Set("X-JomForm-Key-Id", accountID)
+	}
 	req.Header.Set("X-JomForm-Delivery", fmt.Sprintf("%d-%d", time.Now().UTC().UnixNano(), attempt))
 	req.Header.Set("User-Agent", "JomForm-Webhook/2.0")
 
@@ -91,7 +100,7 @@ func deliverWebhook(ctx context.Context, store *dbstore.WebhookStore, wh *dbstor
 			time.Sleep(delay)
 			dctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			deliverWebhook(dctx, store, wh, event, body, at)
+			deliverWebhook(dctx, h, store, signPub, signPriv, accountID, wh, event, body, at)
 		}(attempt + 1)
 	}
 	if success {

@@ -23,6 +23,7 @@ type Service struct {
 	Subs       *dbstore.SubscriptionStore
 	DecryptKey []byte // ENCRYPTION_KEY — used to decrypt per-account CHIP keys
 	BaseURL    string // app public base URL for redirects/callbacks
+	Forms      FormGetter
 	Receipts   *Receipts
 	// OnPaid (optional) fans outbound webhooks after a sale is paid.
 	OnPaid func(ctx context.Context, accountID, event string, payload map[string]any)
@@ -93,4 +94,9 @@ func (s *Service) CallbackPublicKey(ctx context.Context, accountID string) (*rsa
 	}
 	pubKeyCache[cacheKey] = k
 	return k, nil
+}
+
+// FormGetter lets the payments service read per-form settings (redirects).
+type FormGetter interface {
+	GetByID(ctx context.Context, accountID, id string) (*dbstore.Form, error)
 }

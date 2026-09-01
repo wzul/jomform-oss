@@ -66,6 +66,13 @@ func (s *Service) CreateChipPurchaseForSale(ctx context.Context, sale *dbstore.S
 
 	whitelist := s.ResolveWhitelist(ctx, string(secret), acc.Currency, sale.TotalSen, acc.ChipMethodWhitelist)
 
+	sRedirect, fRedirect := s.formRedirects(ctx, acc.ID, sale.FormID)
+	if sRedirect == "" {
+		sRedirect = fmt.Sprintf("%s/t/%s", s.BaseURL, sale.RefCode)
+	}
+	if fRedirect == "" {
+		fRedirect = fmt.Sprintf("%s/t/%s?status=fail", s.BaseURL, sale.RefCode)
+	}
 	req := chip.PurchaseRequest{
 		SkipCapture:            sale.SkipCapture,
 		CreatorAgent:           "JomForm",
@@ -77,8 +84,8 @@ func (s *Service) CreateChipPurchaseForSale(ctx context.Context, sale *dbstore.S
 			Products:        toCHIPProducts(sale.Items),
 			Currency:        acc.Currency,
 			Reference:       sale.RefCode,
-			SuccessRedirect: fmt.Sprintf("%s/t/%s", s.BaseURL, sale.RefCode),
-			FailureRedirect: fmt.Sprintf("%s/t/%s?status=fail", s.BaseURL, sale.RefCode),
+			SuccessRedirect: sRedirect,
+			FailureRedirect: fRedirect,
 			SuccessCallback: fmt.Sprintf("%s/v1/payments/chip/callback", s.BaseURL),
 			CreatorAgent:    "JomForm",
 		},
@@ -453,4 +460,16 @@ func (s *Service) ResolveWhitelist(ctx context.Context, secret string, currency 
 		}
 	}
 	return out
+}
+
+// formRedirects returns per-form custom redirects when configured ("" = default).
+func (s *Service) formRedirects(ctx context.Context, accountID, formID string) (successURL, failureURL string) {
+	if s.Forms == nil || accountID == "" || formID == "" {
+		return "", ""
+	}
+	f, err := s.Forms.GetByID(ctx, accountID, formID)
+	if err != nil || f == nil {
+		return "", ""
+	}
+	return f.RedirectSuccess, f.RedirectFailure
 }

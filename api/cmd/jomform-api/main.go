@@ -79,7 +79,9 @@ func main() {
 		products := dbstore.NewProductStore(pool)
 		keys := dbstore.NewAPIKeyStore(pool)
 
+		formsStore := dbstore.NewFormStore(pool)
 		pay := payments.New(chip.New(""), accounts, sales, subs, decryptKey, cfg.AppBaseURL)
+		pay.Forms = formsStore
 		if cfg.SESSMTPHost != "" {
 			pay.Receipts = &payments.Receipts{
 				Sender: email.New(email.SMTPConfig{
@@ -93,19 +95,20 @@ func main() {
 
 		// REST API for the web dashboard.
 		whStore := dbstore.NewWebhookStore(pool)
-		pay.OnPaid = func(ctx context.Context, accountID, event string, payload map[string]any) {
-			httpapi.DispatchWebhooks(ctx, whStore, accountID, event, payload)
-		}
-		deps.REST = &httpapi.RESTHandlers{
-			Accounts: accounts, Products: products, Forms: dbstore.NewFormStore(pool),
+		rest := &httpapi.RESTHandlers{
+			Accounts: accounts, Products: products, Forms: formsStore,
 			Keys: keys, Sales: sales, Sessions: sessions, ChipProbe: chip.New(""),
 			SecretsKey: decryptKey, Pay: pay, Webhooks: whStore, Domains: dbstore.NewDomainStore(pool),
 		}
+		pay.OnPaid = func(ctx context.Context, accountID, event string, payload map[string]any) {
+			httpapi.DispatchWebhooks(ctx, rest, whStore, accountID, event, payload)
+		}
+		deps.REST = rest
 
 		// MCP server — merchants' AI agents control their store here.
 		mcpSrv := mcpsrv.New(&mcpsrv.Deps{
 			Accounts: accounts, Products: products, Sales: sales,
-			Subs: subs, Keys: keys, Forms: dbstore.NewFormStore(pool),
+			Subs: subs, Keys: keys, Forms: formsStore,
 			Webhooks:   dbstore.NewWebhookStore(pool),
 			DecryptKey: decryptKey,
 		}, chip.New(""), decryptKey, pay)
@@ -113,7 +116,7 @@ func main() {
 
 		// Public order-form renderer + submit.
 		deps.Public = &httpapi.PublicHandlers{
-			Forms: dbstore.NewFormStore(pool), Sales: sales, Accounts: accounts,
+			Forms: formsStore, Sales: sales, Accounts: accounts,
 			Products: products, Pay: pay, BaseURL: cfg.AppBaseURL,
 		}
 

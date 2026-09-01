@@ -162,3 +162,20 @@ func (s *AccountStore) Tracking(ctx context.Context, accountID string) (string, 
 		`SELECT COALESCE(tracking_head,'') FROM accounts WHERE id=$1`, accountID).Scan(&v)
 	return v, err
 }
+
+// SigningKeys returns the account's webhook Ed25519 keys (base64).
+func (s *AccountStore) SigningKeys(ctx context.Context, accountID string) (string, string, error) {
+	var pub, priv string
+	err := s.pool.QueryRow(ctx,
+		`SELECT COALESCE(wh_sign_pub,''), COALESCE(wh_sign_priv,'') FROM accounts WHERE id=$1`,
+		accountID).Scan(&pub, &priv)
+	return pub, priv, err
+}
+
+// SaveSigningKeys persists the generated keypair (priv stays server-side).
+func (s *AccountStore) SaveSigningKeys(ctx context.Context, accountID, pubB64, privB64 string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE accounts SET wh_sign_pub=$2, wh_sign_priv=$3, updated_at=now() WHERE id=$1`,
+		accountID, pubB64, privB64)
+	return err
+}

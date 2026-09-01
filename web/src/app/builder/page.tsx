@@ -101,6 +101,11 @@ export default function Builder() {
   const [ovFallback, setOvFallback] = useState("");
   const [ovMsg, setOvMsg] = useState("");
   const [formTrack, setFormTrack] = useState("");
+  const [fsTheme, setFsTheme] = useState("#5e6ad2");
+  const [fsLogo, setFsLogo] = useState("");
+  const [fsRedS, setFsRedS] = useState("");
+  const [fsRedF, setFsRedF] = useState("");
+  const [fsEmbed, setFsEmbed] = useState(true);
 
   // Real drag state: which palette type or block index is being dragged, and
   // which index the insertion indicator currently points at.
@@ -149,6 +154,7 @@ export default function Builder() {
       setTitle(d.title);
       setPubUrl(d.status === "published" ? d.url : "");
       const cfg = d.config || {};
+      if (d.theme?.primary) setFsTheme(d.theme.primary);
       const hydrated: Block[] = [];
       (cfg.blocks || []).forEach(
         (b: { type: BlockType; value?: string; product_id?: string; required?: boolean; condition?: { field_id: string; op: string; value: string } | null }) => {
@@ -252,6 +258,7 @@ export default function Builder() {
     setLoadErr("");
     const config = {
       description: (blocks.find((b) => b.type === "text")?.value || "").slice(0, 300),
+      theme: { primary: fsTheme },
       blocks: blocks.map((b) => ({
         type: b.type,
         value: b.value,
@@ -584,6 +591,77 @@ export default function Builder() {
               )}
             </div>
           )}
+
+
+        {/* ── Display settings ── */}
+        {currentId && (
+          <div className="mt-8 rounded-lg border border-[var(--jf-border)] bg-white p-3">
+            <p className="text-xs font-medium uppercase tracking-wider text-[#9ca3af]">
+              Display settings
+            </p>
+            <label className="mt-2 block text-[11px] text-slate-500">Theme color (primary)</label>
+            <input
+              type="color"
+              value={fsTheme}
+              onChange={(e) => setFsTheme(e.target.value)}
+              className="mt-1 h-8 w-full cursor-pointer rounded border border-[var(--jf-border)]"
+            />
+            <label className="mt-2 block text-[11px] text-slate-500">Logo URL (https)</label>
+            <input
+              value={fsLogo}
+              onChange={(e) => setFsLogo(e.target.value)}
+              placeholder="https://cdn.example/logo.png"
+              className="jf-input mt-1 text-xs"
+            />
+            <label className="mt-2 block text-[11px] text-slate-500">Custom success redirect (optional)</label>
+            <input
+              value={fsRedS}
+              onChange={(e) => setFsRedS(e.target.value)}
+              placeholder="https://yourapp.com/thanks"
+              className="jf-input mt-1 text-xs"
+            />
+            <label className="mt-2 block text-[11px] text-slate-500">Custom failure redirect (optional)</label>
+            <input
+              value={fsRedF}
+              onChange={(e) => setFsRedF(e.target.value)}
+              placeholder="https://yourapp.com/fail"
+              className="jf-input mt-1 text-xs"
+            />
+            <label className="mt-2 flex items-center gap-2 text-xs text-slate-600">
+              <input type="checkbox" checked={fsEmbed} onChange={(e) => setFsEmbed(e.target.checked)} className="accent-[#5e6ad2]" />
+              Allow embedding (iframe)
+            </label>
+            <button
+              onClick={async () => {
+                const r = await fetch(`/api/rest/forms/${currentId}/settings`, {
+                  method: "PUT", headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    redirect_success: fsRedS, redirect_failure: fsRedF,
+                    allow_embed: fsEmbed, logo_url: fsLogo,
+                  }),
+                });
+                setOvMsg(r.ok ? "Display settings saved ✓" : "Failed");
+              }}
+              className="mt-2 w-full rounded-md bg-[var(--jf-primary)] py-1.5 text-xs font-medium text-white"
+            >
+              Save display settings
+            </button>
+
+            <p className="mt-3 text-[11px] font-medium uppercase tracking-wider text-[#9ca3af]">Embed on your site</p>
+            <pre className="mt-1 overflow-x-auto rounded-md bg-slate-900 p-2 text-[10px] text-emerald-300">{`<iframe src="${origin}/embed/f/wan/${slug}" style="width:100%;height:640px;border:0" title="${title}"></iframe>`}</pre>
+            <button
+              onClick={() => {
+                navigator.clipboard.writeText(
+                  `<iframe src="${origin}/embed/f/wan/${slug}" style="width:100%;height:640px;border:0" title="${title}"></iframe>`,
+                );
+                setOvMsg("Embed code copied ✓");
+              }}
+              className="mt-1 w-full rounded-md border border-[var(--jf-border)] py-1.5 text-xs text-slate-600 hover:bg-slate-50"
+            >
+              Copy embed code
+            </button>
+          </div>
+        )}
 
           {/* per-form tracking */}
           {currentId && (

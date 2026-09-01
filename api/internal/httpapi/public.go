@@ -31,6 +31,7 @@ type PublicHandlers struct {
 // RegisterRoutes wires public endpoints.
 func (h *PublicHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /f/{slug}", h.handleRender)
+	mux.HandleFunc("GET /embed/f/{accslug}/{slug}", h.embedForm)
 	mux.Handle("POST /f/{slug}/order", middleware.RateLimit(http.HandlerFunc(h.handleSubmit)))
 	mux.HandleFunc("GET /t/{ref}", h.handleThankYou)
 }

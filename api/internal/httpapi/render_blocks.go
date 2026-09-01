@@ -69,8 +69,27 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	globalTr := ""
+	if h.Accounts != nil {
+		if v, terr := h.Accounts.Tracking(r.Context(), f.AccountID); terr == nil {
+			globalTr = v
+		}
+	}
+	themePrimary, themeBg := "", ""
+	if f.Theme != nil {
+		if v, ok := f.Theme["primary"].(string); ok {
+			themePrimary = template.HTMLEscapeString(v)
+		}
+		if v, ok := f.Theme["background"].(string); ok {
+			themeBg = template.HTMLEscapeString(v)
+		}
+	}
+	var cfgTracking string
+	_ = cfgTracking
 	if err := blockTmpl.Execute(w, map[string]any{
 		"Slug": f.Slug, "Title": f.Title, "Blocks": blocks,
+		"TrackHead":    headInjection(globalTr, formTrackingHead(f)),
+		"ThemePrimary": themePrimary, "ThemeBg": themeBg, "LogoURL": f.LogoURL,
 	}); err != nil {
 		slog.Error("form_render_blocks", "err", err)
 	}
@@ -88,11 +107,16 @@ var blockTmpl = template.Must(template.New("blocks").
 <title>{{.Title}}</title>
 {{.TrackHead}}
 <style>
+  {{if .ThemePrimary}}:root { --jf-primary: {{.ThemePrimary}}; }{{end}}
+  {{if .ThemeBg}}body { background: {{.ThemeBg}}; }{{end}}
+</style>
+<style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
   body { margin:0; font-family: system-ui,-apple-system,"Segoe UI",sans-serif;
          background:#f7f8f8; color:#17181c; min-height:100vh;
          display:flex; align-items:center; justify-content:center; padding:24px; }
+  .logo { max-height:56px; max-width:180px; object-fit:contain; margin:0 auto 12px; display:block; }
   .card { background:#ffffff; border:1px solid #e6e8ec; border-radius:16px;
           max-width:480px; width:100%; padding:32px; }
   h1 { margin:0 0 8px; font-size:24px; letter-spacing:-0.02em; }
@@ -117,6 +141,7 @@ var blockTmpl = template.Must(template.New("blocks").
 </style></head><body>
 <form class="card" id="of" data-slug="{{.Slug}}">
   <h1>{{.Title}}</h1>
+{{if .LogoURL}}<img class="logo" src="{{.LogoURL}}" alt="">{{end}}
 {{range .Blocks}}
 {{if eq .Type "text"}}  <p class="text">{{.Value}}</p>
 {{else if eq .Type "image"}}{{if .Src}}  <img class="img" src="{{.Src}}" alt="">
@@ -189,3 +214,16 @@ var blockTmpl = template.Must(template.New("blocks").
 })();
 </script>
 </body></html>`))
+
+// formTrackingHead extracts per-form tracking_head from config JSON.
+func formTrackingHead(f *dbstore.Form) string {
+	raw, err := json.Marshal(f.Config)
+	if err != nil {
+		return ""
+	}
+	var cfg struct {
+		TrackingHead string `json:"tracking_head"`
+	}
+	_ = json.Unmarshal(raw, &cfg)
+	return cfg.TrackingHead
+}

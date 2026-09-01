@@ -18,6 +18,13 @@ type Form struct {
 	Theme     map[string]any
 	Status    string // draft | published
 	IsMain    bool
+
+	RedirectSuccess string `json:"redirect_success,omitempty"`
+	RedirectFailure string `json:"redirect_failure,omitempty"`
+	AllowEmbed      bool   `json:"allow_embed"`
+	LogoURL         string `json:"logo_url,omitempty"`
+	IsTemplate      bool   `json:"is_template"`
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -31,16 +38,17 @@ type FormStore struct{ pool *pgxpool.Pool }
 // NewFormStore builds a FormStore.
 func NewFormStore(pool *pgxpool.Pool) *FormStore { return &FormStore{pool: pool} }
 
-const formSelect = `SELECT id, account_id, slug, title, config, theme, status, is_main, created_at, updated_at
+const formSelect = `SELECT id, account_id, slug, title, config, theme, status, is_main, redirect_success, redirect_failure, allow_embed, logo_url, is_template, created_at, updated_at
 	FROM forms`
 
 // Create inserts a form.
 func (s *FormStore) Create(ctx context.Context, f *Form) error {
 	return s.pool.QueryRow(ctx,
-		`INSERT INTO forms (account_id, slug, title, config, theme, status)
-		 VALUES ($1,$2,$3,$4,$5,$6)
+		`INSERT INTO forms (account_id, slug, title, config, theme, status, redirect_success, redirect_failure, allow_embed, logo_url, is_template)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 		 RETURNING id, created_at, updated_at`,
 		f.AccountID, f.Slug, f.Title, f.Config, f.Theme, f.Status,
+		f.RedirectSuccess, f.RedirectFailure, f.AllowEmbed, f.LogoURL, f.IsTemplate,
 	).Scan(&f.ID, &f.CreatedAt, &f.UpdatedAt)
 }
 
@@ -112,7 +120,8 @@ type rowScanner interface {
 func (s *FormStore) scanOne(row rowScanner) (*Form, error) {
 	f := &Form{}
 	err := row.Scan(&f.ID, &f.AccountID, &f.Slug, &f.Title, &f.Config, &f.Theme,
-		&f.Status, &f.IsMain, &f.CreatedAt, &f.UpdatedAt)
+		&f.Status, &f.IsMain, &f.RedirectSuccess, &f.RedirectFailure,
+		&f.AllowEmbed, &f.LogoURL, &f.IsTemplate, &f.CreatedAt, &f.UpdatedAt)
 	return f, err
 }
 
@@ -133,4 +142,41 @@ func (s *FormStore) SetTracking(ctx context.Context, accountID, formID, markup s
 		`UPDATE forms SET tracking_head=$3, updated_at=now() WHERE id=$2 AND account_id=$1`,
 		accountID, formID, markup)
 	return err
+}
+
+// UpdateSettings changes redirect/embed fields on a form.
+func (s *FormStore) UpdateSettings(ctx context.Context, accountID, id, redirectSuccess, redirectFailure string, allowEmbed bool, logoURL string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE forms SET redirect_success=$3, redirect_failure=$4, allow_embed=$5, logo_url=$6, updated_at=now()
+		 WHERE id=$2 AND account_id=$1`,
+		accountID, id, redirectSuccess, redirectFailure, allowEmbed, logoURL)
+	return err
+}
+
+// ListTemplates returns published template forms for the gallery.
+func (s *FormStore) ListTemplates(ctx context.Context) ([]*Form, error) {
+	rows, err := s.pool.Query(ctx,
+		formSelect+` WHERE is_template AND status='published' ORDER BY created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Form
+	for rows.Next() {
+		f, err := s.scanOne(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// TemplateBySlug fetches one template.
+func (s *FormStore) TemplateBySlug(ctx context.Context, slug string) (*Form, error) {
+	f, err := s.scanOne(s.pool.QueryRow(ctx, formSelect+` WHERE is_template AND slug=$1`, slug))
+	if err != nil {
+		return nil, err
+	}
+	return f, nil
 }
