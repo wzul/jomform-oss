@@ -68,7 +68,9 @@ func (s *UserStore) ByID(ctx context.Context, id string) (*User, error) {
 		 FROM users WHERE id = $1`, id))
 }
 
-// SetTOTPSecret stores a generated (not yet enabled) secret.
+// SetTOTPSecret stores a generated secret. Kept for explicit callers; note that
+// the 2FA setup flow stores pending secrets in Valkey instead, only promoting a
+// secret to this column at enable time.
 func (s *UserStore) SetTOTPSecret(ctx context.Context, userID, secret string) error {
 	_, err := s.pool.Exec(ctx,
 		`UPDATE users SET totp_secret = $2, updated_at = now() WHERE id = $1`, userID, secret)
@@ -83,10 +85,12 @@ func (s *UserStore) TOTPSecret(ctx context.Context, userID string) (string, erro
 	return secret, err
 }
 
-// EnableTOTP marks 2FA active.
-func (s *UserStore) EnableTOTP(ctx context.Context, userID string) error {
+// EnableTOTP atomically activates 2FA: writes the confirmed secret (which was
+// pending in Valkey) and sets totp_enabled=true in a single statement so the
+// two columns never disagree.
+func (s *UserStore) EnableTOTP(ctx context.Context, userID, secret string) error {
 	_, err := s.pool.Exec(ctx,
-		`UPDATE users SET totp_enabled = true, updated_at = now() WHERE id = $1`, userID)
+		`UPDATE users SET totp_secret = $2, totp_enabled = true, updated_at = now() WHERE id = $1`, userID, secret)
 	return err
 }
 

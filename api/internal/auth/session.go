@@ -69,3 +69,35 @@ func (s *Sessions) Ping(ctx context.Context) error {
 
 // Close releases the connection pool.
 func (s *Sessions) Close() error { return s.rdb.Close() }
+
+// PendingTOTP stores a generated-but-not-yet-enabled 2FA secret in Valkey.
+// The secret only becomes active (DB) after the user confirms a valid code,
+// so an abandoned setup never arms the login challenge.
+const (
+	PendingTOTPKeyPrefix = "jf:totp_pending:"
+	PendingTOTPTTL       = 10 * time.Minute
+)
+
+func pendingTOTPKey(userID string) string { return PendingTOTPKeyPrefix + userID }
+
+// PendingTOTP exposes a pending-2FA store sharing the session client.
+func (s *Sessions) PendingTOTP() *PendingTOTP { return &PendingTOTP{rdb: s.rdb} }
+
+type PendingTOTP struct {
+	rdb *goredis.Client
+}
+
+// Set stores the pending secret with a short TTL.
+func (p *PendingTOTP) Set(ctx context.Context, userID, secret string) error {
+	return p.rdb.Set(ctx, pendingTOTPKey(userID), secret, PendingTOTPTTL).Err()
+}
+
+// Get returns the pending secret (redis.Nil when none or expired).
+func (p *PendingTOTP) Get(ctx context.Context, userID string) (string, error) {
+	return p.rdb.Get(ctx, pendingTOTPKey(userID)).Result()
+}
+
+// Delete removes the pending secret (used after successful enable).
+func (p *PendingTOTP) Delete(ctx context.Context, userID string) error {
+	return p.rdb.Del(ctx, pendingTOTPKey(userID)).Err()
+}

@@ -3,6 +3,7 @@
 // Profile page — user identity & security (name, email, password, 2FA, passkeys),
 // organised into Identity / Security / Passkeys tabs.
 import { useCallback, useEffect, useState } from "react";
+import QRCode from "qrcode";
 import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
@@ -43,6 +44,12 @@ export default function ProfilePage() {
   const [msg, setMsg] = useState("");
   const [passkeys, setPasskeys] = useState<{ id: string }[]>([]);
   const [err, setErr] = useState("");
+  // 2FA setup modal state.
+  const [show2FA, setShow2FA] = useState(false);
+  const [qrDataUrl, setQrDataUrl] = useState("");
+  const [secretText, setSecretText] = useState("");
+  const [code, setCode] = useState("");
+  const [enabling, setEnabling] = useState(false);
 
   // Persist active tab.
   useEffect(() => {
@@ -118,6 +125,52 @@ export default function ProfilePage() {
       else setErr((await fin.json().catch(() => ({}))).error || t("prof.passkeyRegFailed"));
     } catch {
       setErr(t("prof.passkeyUnsupported"));
+    }
+  }
+
+  // Issue #39: 2FA setup must render the QR/secret client-side and hold the
+  // user at a code-confirmation step before the account is actually enabled.
+  async function start2FASetup() {
+    setMsg(""); setErr(""); setShow2FA(false);
+    try {
+      const r = await fetch("/api/auth/2fa/setup", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setErr(d.error || t("prof.twoFaSetupError")); return; }
+      setSecretText(d.secret || "");
+      const url = d.otpauth_url || "";
+      if (url) {
+        const dataUrl = await QRCode.toDataURL(url, { width: 220, margin: 1 });
+        setQrDataUrl(dataUrl);
+      }
+      setCode("");
+      setShow2FA(true);
+    } catch {
+      setErr(t("prof.twoFaSetupError"));
+    }
+  }
+
+  async function enable2FA() {
+    setMsg(""); setErr(""); setEnabling(true);
+    try {
+      const r = await fetch("/api/auth/2fa/enable", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code }),
+      });
+      if (r.ok) {
+        setShow2FA(false);
+        setMsg(t("prof.twoFaEnabled"));
+        setCode(""); setSecretText(""); setQrDataUrl("");
+        load(); reloadSession();
+      } else {
+        const d = await r.json().catch(() => ({}));
+        setErr(d.error || t("prof.failed"));
+      }
+    } catch {
+      setErr(t("prof.failed"));
+    } finally {
+      setEnabling(false);
     }
   }
 
@@ -216,7 +269,7 @@ export default function ProfilePage() {
                 {t("prof.status")} <strong>{p?.totp_enabled ? t("prof.enabled") : t("prof.notEnabled")}</strong>
               </p>
               <button
-                onClick={() => post("/api/auth/2fa/setup", {})}
+                onClick={start2FASetup}
                 className="jf-btn-ghost mt-3"
               >
                 {p?.totp_enabled ? t("prof.resetup2fa") : t("prof.setup2fa")}
@@ -262,6 +315,69 @@ export default function ProfilePage() {
               </ul>
             )}
           </section>
+        )}
+
+        {/* Issue #39: 2FA setup modal — QR rendered client-side from otpauth_url
+            (no external image service), raw secret shown as text, then a
+            code-confirmation step before the account is actually enabled. */}
+        {show2FA && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label={t("prof.twoFaSetupTitle")}
+            onClick={() => setShow2FA(false)}
+          >
+            <div
+              className="jf-card w-full max-w-md p-6"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h2 className="text-lg font-semibold">{t("prof.twoFaSetupTitle")}</h2>
+              <ol className="mt-3 space-y-2 text-sm text-slate-600">
+                <li>{t("prof.twoFaScan")}</li>
+                <li>
+                  {t("prof.twoFaManual")}
+                  <div className="mt-1 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs tracking-widest select-all">
+                    {secretText}
+                  </div>
+                </li>
+              </ol>
+              {qrDataUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={qrDataUrl}
+                  alt="QR code"
+                  width={220}
+                  height={220}
+                  className="mx-auto mt-3 rounded border border-slate-200"
+                />
+              ) : (
+                <div className="mx-auto mt-3 flex h-[220px] w-[220px] items-center justify-center rounded border border-slate-200 bg-slate-50 text-xs text-slate-400">…</div>
+              )}
+              <label className="mt-4 block text-sm">{t("prof.twoFaCodeLabel")}</label>
+              <input
+                value={code}
+                onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                inputMode="numeric"
+                pattern="[0-9]*"
+                autoComplete="one-time-code"
+                placeholder={t("prof.twoFaCodePlaceholder")}
+                className="jf-input mt-1 font-mono tracking-[0.4em]"
+              />
+              <div className="mt-4 flex justify-end gap-2">
+                <button onClick={() => setShow2FA(false)} className="jf-btn-ghost px-4 py-2 text-sm">
+                  {t("prof.twoFaClose")}
+                </button>
+                <button
+                  onClick={enable2FA}
+                  disabled={!code || code.length !== 6 || enabling}
+                  className={`${(!code || code.length !== 6) ? "opacity-50" : ""} jf-btn-primary`}
+                >
+                  {enabling ? "…" : t("prof.twoFaEnabling")}
+                </button>
+              </div>
+            </div>
+          </div>
         )}
       </main>
     </Shell>

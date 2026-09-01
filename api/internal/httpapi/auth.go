@@ -119,12 +119,12 @@ func (a *AuthHandlers) handleRegister(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := a.startSession(w, r, user.ID, user.Email, user.TOTPSecret != ""); err != nil {
+	if err := a.startSession(w, r, user.ID, user.Email, user.TOTPEnabled); err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	writeJSON(w, http.StatusCreated, meResponse{
-		ID: user.ID, Email: user.Email, TOTPEnabled: user.TOTPSecret != "", CreatedAt: user.CreatedAt.UTC().Format(time.RFC3339),
+		ID: user.ID, Email: user.Email, TOTPEnabled: user.TOTPEnabled, CreatedAt: user.CreatedAt.UTC().Format(time.RFC3339),
 	})
 }
 
@@ -146,7 +146,10 @@ func (a *AuthHandlers) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if user.TOTPSecret != "" {
+	// TOTP is only challenged for users who have *enabled* 2FA. Users with a
+	// stale secret but totp_enabled=false (abandoned setup) must NOT be held at
+	// the auth step — that would lock them out (see issue #39).
+	if user.TOTPEnabled {
 		if req.TOTPCode == "" {
 			step := "totp_required"
 			writeJSON(w, http.StatusUnauthorized, meResponse{NextStep: &step})
@@ -163,7 +166,7 @@ func (a *AuthHandlers) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, meResponse{
-		ID: user.ID, Email: user.Email, TOTPEnabled: user.TOTPSecret != "", CreatedAt: user.CreatedAt.UTC().Format(time.RFC3339),
+		ID: user.ID, Email: user.Email, TOTPEnabled: user.TOTPEnabled, CreatedAt: user.CreatedAt.UTC().Format(time.RFC3339),
 	})
 }
 
@@ -184,11 +187,13 @@ func (a *AuthHandlers) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, meResponse{
-		ID: user.ID, Email: user.Email, Name: user.Name, TOTPEnabled: user.TOTPSecret != "", CreatedAt: user.CreatedAt.UTC().Format(time.RFC3339),
+		ID: user.ID, Email: user.Email, Name: user.Name, TOTPEnabled: user.TOTPEnabled, CreatedAt: user.CreatedAt.UTC().Format(time.RFC3339),
 	})
 }
 
 // handle2FASetup generates a secret (not yet enabled) for the logged-in user.
+// The secret is stored as PENDING in Valkey with a short TTL and NOT written to
+// the users table, so an abandoned setup never arms the login TOTP challenge.
 func (a *AuthHandlers) handle2FASetup(w http.ResponseWriter, r *http.Request) {
 	user := a.currentUser(r)
 	if user == nil {
@@ -200,15 +205,17 @@ func (a *AuthHandlers) handle2FASetup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	if err := a.Users.SetTOTPSecret(r.Context(), user.ID, secret); err != nil {
+	if err := a.pendingTOTP().Set(r.Context(), user.ID, secret); err != nil {
+		slog.Error("totp_pending_set", "err", err, "user", user.ID)
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"secret": secret, "otpauth_url": url})
 }
 
-// handle2FAEnable confirms the code and marks the account 2FA-enabled,
-// issuing a fresh session.
+// handle2FAEnable validates the code against the PENDING secret, then
+// atomically moves it to the active column and enables 2FA, issuing a fresh
+// session. The pending key is consumed (deleted) on success.
 func (a *AuthHandlers) handle2FAEnable(w http.ResponseWriter, r *http.Request) {
 	user := a.currentUser(r)
 	if user == nil {
@@ -222,21 +229,36 @@ func (a *AuthHandlers) handle2FAEnable(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "kod diperlukan")
 		return
 	}
-	stored, err := a.Users.TOTPSecret(r.Context(), user.ID)
-	if err != nil || stored == "" {
-		writeErr(w, http.StatusBadRequest, "2fa belum di-setup")
+	pending, err := a.pendingTOTP().Get(r.Context(), user.ID)
+	if err != nil || pending == "" {
+		// No pending secret (never set up, expired, or already consumed).
+		writeErr(w, http.StatusBadRequest, "2fa belum di-setup atau ralat")
 		return
 	}
-	if !auth.ValidateTOTPSecret(stored, req.Code) {
+	if !auth.ValidateTOTPSecret(pending, req.Code) {
 		writeErr(w, http.StatusUnauthorized, "kod tidak sah")
 		return
 	}
-	if err := a.Users.EnableTOTP(r.Context(), user.ID); err != nil {
+	if err := a.Users.EnableTOTP(r.Context(), user.ID, pending); err != nil {
+		slog.Error("totp_enable", "err", err, "user", user.ID)
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	_ = a.startSession(w, r, user.ID, user.Email, true) // fresh session post-2FA
+	// Consume the pending secret so it can't be re-enabled.
+	_ = a.pendingTOTP().Delete(r.Context(), user.ID)
+	if err := a.startSession(w, r, user.ID, user.Email, true); err != nil { // fresh session post-2FA
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "enabled"})
+}
+
+// pendingTOTP returns the pending-2FA store, or nil when Valkey is absent.
+func (a *AuthHandlers) pendingTOTP() *auth.PendingTOTP {
+	if a.Sessions == nil {
+		return nil
+	}
+	return a.Sessions.PendingTOTP()
 }
 
 // handle2FADisable turns 2FA off after password confirmation.
@@ -286,7 +308,7 @@ func (a *AuthHandlers) startSession(w http.ResponseWriter, r *http.Request, user
 
 func (a *AuthHandlers) startSessionAndDefaultAccount(w http.ResponseWriter, r *http.Request, user *dbstore.User) error {
 	// Default account creation belongs to onboarding (M3); sessions only here.
-	return a.startSession(w, r, user.ID, user.Email, user.TOTPSecret != "")
+	return a.startSession(w, r, user.ID, user.Email, user.TOTPEnabled)
 }
 
 func (a *AuthHandlers) clearCookie() *http.Cookie {

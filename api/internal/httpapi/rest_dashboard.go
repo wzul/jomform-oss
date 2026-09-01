@@ -93,7 +93,7 @@ func (h *RESTHandlers) dashboardBundle(w http.ResponseWriter, r *http.Request, a
 		if u, err := h.Users.ByID(ctx, userID); err == nil && u != nil {
 			bundle.Me = &map[string]any{
 				"id": u.ID, "email": u.Email, "name": u.Name,
-				"totp_enabled": u.TOTPSecret != "", "created_at": u.CreatedAt,
+				"totp_enabled": u.TOTPEnabled, "created_at": u.CreatedAt,
 			}
 		}
 	}
