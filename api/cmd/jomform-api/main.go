@@ -90,6 +90,7 @@ func main() {
 				Sender: email.New(email.SMTPConfig{
 					Host: cfg.SESSMTPHost, Port: cfg.SESSMTPPort,
 					Username: cfg.SESSMTPUser, Password: cfg.SESSMTPPass, From: cfg.SESFrom,
+					Region: cfg.SESRegion,
 				}),
 				Base: cfg.AppBaseURL,
 			}

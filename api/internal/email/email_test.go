@@ -6,23 +6,31 @@ import (
 	"testing"
 )
 
-func TestBuildMessage(t *testing.T) {
-	msg := string(buildMessage(map[string]string{
-		"From": "noreply@jomform.com", "To": "a@b.c", "Subject": "Hai",
-		"MIME-Version": "1.0", "Content-Type": `text/plain; charset="utf-8"`,
-	}, "Badan emel"))
-	for _, want := range []string{"From: noreply@jomform.com", "Subject: Hai", "Badan emel"} {
+func TestBuildMultipart(t *testing.T) {
+	msg := string(buildMultipart(
+		"noreply@jomform.com", "a@b.c", "Hai", "Badan emel",
+		"resit.pdf", []byte("PDFDATA"),
+	))
+	for _, want := range []string{
+		"From: noreply@jomform.com",
+		"Subject: Hai",
+		"Badan emel",
+		"Content-Type: application/pdf; name=\"resit.pdf\"",
+		"Content-Transfer-Encoding: base64",
+		"UERGREFUQQ==", // base64("PDFDATA")
+	} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("mesti ada %q", want)
 		}
 	}
 }
 
-func TestHostOf(t *testing.T) {
-	if hostOf("email-smtp.ap-southeast-1.amazonaws.com") != "email-smtp.ap-southeast-1.amazonaws.com" {
-		t.Fatal("plain host rosak")
+func TestNewDefaultsRegion(t *testing.T) {
+	s := New(SMTPConfig{From: "noreply@jomform.com"})
+	if s.cfg.Region != "ap-southeast-1" {
+		t.Fatalf("region = %q, want ap-southeast-1", s.cfg.Region)
 	}
-	if hostOf("https://smtp.example.com") != "smtp.example.com" {
-		t.Fatal("scheme tidak dibuang")
+	if s.from != "noreply@jomform.com" {
+		t.Fatalf("from = %q", s.from)
 	}
 }

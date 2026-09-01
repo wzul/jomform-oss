@@ -1,108 +1,158 @@
-// Package email — SES SMTP email sender.
+// Package email — SESv2 API email sender.
+//
+// Switched from SES SMTP to the SESv2 SendEmail API (2026-09-01): the account's
+// SMTP endpoint rejects every derived credential with 535 (account-level issue,
+// only the SES console can mint working SMTP creds), while the SESv2 API send
+// works with plain IAM keys. So we authenticate via SigV4 with the IAM access
+// key/secret that were already in the env (SES_SMTP_USER = access key id,
+// SES_SMTP_PASS = secret access key) — no new credentials required.
 package email
 
 import (
-	"crypto/tls"
+	"context"
+	"encoding/base64"
 	"fmt"
-	"net/smtp"
 	"strings"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/sesv2"
+	"github.com/aws/aws-sdk-go-v2/service/sesv2/types"
 )
 
-// smtpNewClient wraps smtp.NewClient for testability.
-var smtpNewClient = smtp.NewClient
-
-// SMTPConfig holds SES SMTP relay settings.
+// SMTPConfig holds SES credentials. Despite the name (kept for compatibility),
+// these are now used for the SESv2 API, not SMTP:
+//   - Username = IAM access key id (AKIA…)
+//   - Password = IAM secret access key
+//   - Host     = unused (kept for config compatibility)
+//   - Port     = unused
+//   - From     = verified sender, e.g. noreply@jomform.com
 type SMTPConfig struct {
-	Host     string // e.g. email-smtp.ap-southeast-1.amazonaws.com
-	Port     string // 587 (STARTTLS) or 465 (implicit TLS)
-	Username string // SES SMTP access key (AKIA…)
-	Password string // SES SMTP secret key
-	From     string // verified sender, e.g. noreply@jomform.com
+	Host     string
+	Port     string
+	Username string
+	Password string
+	From     string
+	Region   string // AWS region for SESv2 (default ap-southeast-1)
 }
 
-// Sender delivers transactional email via SES SMTP with TLS.
+// Sender delivers transactional email via the SESv2 SendEmail API.
 type Sender struct {
-	cfg SMTPConfig
+	cfg  SMTPConfig
+	from string
+	cli  *sesv2.Client
 }
 
-// New builds a sender.
-func New(cfg SMTPConfig) *Sender { return &Sender{cfg: cfg} }
-
-// Send delivers a plain-text email.
-func (s *Sender) Send(to, subject, body string) error {
-	host := hostOf(s.cfg.Host)
-	addr := fmt.Sprintf("%s:%s", s.cfg.Host, s.cfg.Port)
-
-	headers := map[string]string{
-		"From":         s.cfg.From,
-		"To":           to,
-		"Subject":      subject,
-		"MIME-Version": "1.0",
-		"Content-Type": `text/plain; charset="utf-8"`,
+// New builds a sender. The client is created lazily on first send so a missing
+// region/credentials doesn't fail construction.
+func New(cfg SMTPConfig) *Sender {
+	if cfg.Region == "" {
+		cfg.Region = "ap-southeast-1"
 	}
-	msg := buildMessage(headers, body)
-
-	conn, err := tls.Dial("tcp", addr, &tls.Config{ServerName: host})
-	if err != nil {
-		return fmt.Errorf("ses dial: %w", err)
-	}
-	defer conn.Close()
-
-	c, err := smtpNewClient(conn, host)
-	if err != nil {
-		return fmt.Errorf("ses client: %w", err)
-	}
-	defer c.Quit()
-
-	return s.authAndSend(c, to, msg)
+	return &Sender{cfg: cfg, from: cfg.From}
 }
 
-// authAndSend performs SMTP AUTH then the MAIL/RCPT/DATA sequence. Both SES
-// entry points share it (Send and SendWithAttachment) — without AUTH, SES
-// rejects DATA with "530 Authentication Required", which previously surfaced
-// only as a receipt warning in the logs.
-func (s *Sender) authAndSend(c *smtp.Client, to string, msg []byte) error {
+// client returns a lazily-initialised SESv2 client using static IAM creds.
+func (s *Sender) client() (*sesv2.Client, error) {
+	if s.cli != nil {
+		return s.cli, nil
+	}
+	optFns := []func(*awsconfig.LoadOptions) error{
+		awsconfig.WithRegion(s.cfg.Region),
+	}
 	if s.cfg.Username != "" && s.cfg.Password != "" {
-		host := hostOf(s.cfg.Host)
-		if ok, _ := c.Extension("AUTH"); ok {
-			if err := c.Auth(smtp.PlainAuth("", s.cfg.Username, s.cfg.Password, host)); err != nil {
-				return fmt.Errorf("smtp auth: %w", err)
-			}
-		} else {
-			return fmt.Errorf("smtp server does not advertise AUTH (host %s)", host)
-		}
+		optFns = append(optFns, awsconfig.WithCredentialsProvider(
+			credentials.NewStaticCredentialsProvider(s.cfg.Username, s.cfg.Password, ""),
+		))
 	}
-	if err := c.Mail(s.cfg.From); err != nil {
-		return fmt.Errorf("mail from: %w", err)
+	cfg, err := awsconfig.LoadDefaultConfig(context.Background(), optFns...)
+	if err != nil {
+		return nil, fmt.Errorf("ses config: %w", err)
 	}
-	if err := c.Rcpt(to); err != nil {
-		return fmt.Errorf("rcpt to: %w", err)
-	}
-	w, err := c.Data()
+	s.cli = sesv2.NewFromConfig(cfg)
+	return s.cli, nil
+}
+
+// Send delivers a plain-text email via SESv2 SendEmail.
+func (s *Sender) Send(to, subject, body string) error {
+	cli, err := s.client()
 	if err != nil {
 		return err
 	}
-	if _, err := w.Write(msg); err != nil {
+	_, err = cli.SendEmail(context.Background(), &sesv2.SendEmailInput{
+		FromEmailAddress: aws.String(s.from),
+		Destination: &types.Destination{
+			ToAddresses: []string{to},
+		},
+		Content: &types.EmailContent{
+			Simple: &types.Message{
+				Subject: &types.Content{Data: aws.String(subject)},
+				Body: &types.Body{
+					Text: &types.Content{Data: aws.String(body)},
+				},
+			},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("ses send: %w", err)
+	}
+	return nil
+}
+
+// SendWithAttachment delivers a multipart/mixed email with a base64 attachment
+// (PDF receipts) via SESv2 SendEmail using a raw MIME message.
+func (s *Sender) SendWithAttachment(to, subject, body string, filename string, data []byte) error {
+	cli, err := s.client()
+	if err != nil {
 		return err
 	}
-	return w.Close()
+	raw := buildMultipart(s.from, to, subject, body, filename, data)
+	_, err = cli.SendEmail(context.Background(), &sesv2.SendEmailInput{
+		FromEmailAddress: aws.String(s.from),
+		Destination: &types.Destination{
+			ToAddresses: []string{to},
+		},
+		Content: &types.EmailContent{
+			Raw: &types.RawMessage{
+				Data: raw,
+			},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("ses send attachment: %w", err)
+	}
+	return nil
 }
 
-func buildMessage(headers map[string]string, body string) []byte {
+// buildMultipart assembles a multipart/mixed MIME message with a base64
+// attachment, matching the previous SMTP attachment format.
+func buildMultipart(from, to, subject, body, filename string, data []byte) []byte {
+	boundary := "jf-boundary-7f3a9c1b"
 	var b strings.Builder
-	for _, k := range []string{"From", "To", "Subject", "MIME-Version", "Content-Type"} {
-		if v := headers[k]; v != "" {
-			b.WriteString(k + ": " + v + "\r\n")
-		}
-	}
-	b.WriteString("\r\n")
-	return append([]byte(b.String()), []byte(body)...)
-}
+	b.WriteString("From: " + from + "\r\n")
+	b.WriteString("To: " + to + "\r\n")
+	b.WriteString("Subject: " + subject + "\r\n")
+	b.WriteString("MIME-Version: 1.0\r\n")
+	b.WriteString("Content-Type: multipart/mixed; boundary=\"" + boundary + "\"\r\n\r\n")
 
-func hostOf(endpoint string) string {
-	// strip optional scheme
-	if i := strings.Index(endpoint, "://"); i >= 0 {
-		return endpoint[i+3:]
+	b.WriteString("--" + boundary + "\r\n")
+	b.WriteString("Content-Type: text/plain; charset=\"utf-8\"\r\n\r\n")
+	b.WriteString(body + "\r\n")
+
+	b.WriteString("--" + boundary + "\r\n")
+	b.WriteString("Content-Type: application/pdf; name=\"" + filename + "\"\r\n")
+	b.WriteString("Content-Transfer-Encoding: base64\r\n")
+	b.WriteString("Content-Disposition: attachment; filename=\"" + filename + "\"\r\n\r\n")
+
+	enc := base64.StdEncoding.EncodeToString(data)
+	for i := 0; i < len(enc); i += 76 {
+		end := i + 76
+		if end > len(enc) {
+			end = len(enc)
+		}
+		b.WriteString(enc[i:end] + "\r\n")
 	}
-	return endpoint
+	b.WriteString("--" + boundary + "--\r\n")
+	return []byte(b.String())
 }

@@ -31,6 +31,7 @@ type Config struct {
 	SESSMTPUser string
 	SESSMTPPass string
 	SESFrom     string
+	SESRegion   string
 }
 
 // Load reads configuration from the environment and validates it.
@@ -54,6 +55,7 @@ func Load() (*Config, error) {
 		SESSMTPUser: os.Getenv("SES_SMTP_USER"),
 		SESSMTPPass: os.Getenv("SES_SMTP_PASS"),
 		SESFrom:     os.Getenv("SES_FROM"),
+		SESRegion:   getEnv("SES_REGION", "ap-southeast-1"),
 	}
 
 	if cfg.DatabaseURL == "" {
