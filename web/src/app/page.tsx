@@ -100,7 +100,7 @@ export default function Dashboard() {
   // Adopt the bundle landing sections as soon as the session context has
   // them (immediately on later navigations — cached).
   useEffect(() => {
-    if (bundle === undefined) return;
+    if (!bundle) return;
     setProducts(Array.isArray(bundle.products) ? (bundle.products as Product[]) : []);
     setSummary(bundle.summary ?? null);
     setFormStats(Array.isArray(bundle.form_analytics) ? (bundle.form_analytics as FormStats[]) : []);
@@ -148,10 +148,13 @@ export default function Dashboard() {
     await loadSales(salesPage);
   }
 
+  // Issue #48: resolve anon BEFORE the loading shell so an anonymous visitor
+  // (401 / session expired / wedge timeout) lands on the Landing page instead
+  // of hanging on the spinner. `bundle` stays undefined while loading.
+  if (anon) return <Landing />;
   if (!ready) {
     return <main className="flex min-h-screen items-center justify-center text-slate-400">…</main>;
   }
-  if (anon) return <Landing />;
 
   const badge = (s: string) =>
     ({

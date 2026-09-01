@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Shell } from "../../components/Shell";
+import { useRouter } from "next/navigation";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 
@@ -27,6 +28,7 @@ const METHODS = [
 
 export default function Settings() {
   const { t } = useI18n();
+  const router = useRouter();
   const [status, setStatus] = useState<ChipStatus | null>(null);
   const [brandId, setBrandId] = useState("");
   const [secretKey, setSecretKey] = useState("");
@@ -60,7 +62,7 @@ export default function Settings() {
   // Issue #29: routed through the shared session cache — the first page of
   // the session fetches the bundle once; later pages (dashboard, forms,
   // products, profile) reuse it. Saves call reloadSession() to re-fetch.
-  const { bundle, reload: reloadSession } = useSession();
+  const { bundle, anon, reload: reloadSession } = useSession();
   const reload = useCallback(() => {
     // Saves mutate bundle-backed sections: drop the shared cache first so
     // the next load() re-fetches fresh data (and other pages inherit it).
@@ -90,6 +92,9 @@ export default function Settings() {
       setKeys(Array.isArray(k) ? k : []);
     };
     if (bundle) { apply(bundle); return Promise.resolve(); }
+    // Issue #48: when the bundle resolved as null (anonymous) there is
+    // nothing to load here — the anon redirect below bounces to /landing.
+    if (bundle === null) return Promise.resolve();
     return fetch("/api/rest/dashboard-bundle")
       .then((r) => (r.ok ? r.json() : null))
       .then(apply);
@@ -98,6 +103,12 @@ export default function Settings() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Issue #48: anonymous visit (401 / session expired) bounces to Landing
+  // instead of hanging on a shell or flashing a logged-out settings form.
+  useEffect(() => {
+    if (anon) router.replace("/landing");
+  }, [anon, router]);
 
   const loadCfStatus = useCallback(() => {
     return fetch("/api/cf/status")

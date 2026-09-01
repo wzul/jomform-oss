@@ -61,8 +61,9 @@ export type BundleData = {
 type SessionCtx = {
   user: SessionUser | null;
   spaces: SpaceRow[];
-  // undefined = fetch still in flight (callers may show their own shell).
-  bundle: BundleData | undefined;
+  // undefined = fetch still in flight (callers may show their own shell);
+  // null = confirmed anonymous (401 / wedge timeout) — the auth gate.
+  bundle: BundleData | null | undefined;
   // true once the fetch settled with no session (401) — auth gate.
   anon: boolean;
   // reload() re-fetches the bundle (e.g. after a profile update).
@@ -102,22 +103,31 @@ async function fetchBundle(): Promise<BundleData | null> {
 }
 
 export function SessionProvider({ children }: { children: React.ReactNode }) {
-  const [bundle, setBundle] = useState<BundleData | undefined>(cachedBundle ?? undefined);
+  const [bundle, setBundle] = useState<BundleData | null | undefined>(cachedBundle ?? undefined);
   const [mounted, setMounted] = useState(false);
   const reloadNonce = useRef(0);
 
   useEffect(() => {
     setMounted(true);
-    if (!cachedBundle) {
-      fetchBundle().then((d) => setBundle(d ?? undefined));
-    }
+    if (cachedBundle) return;
+    // Issue #48 wedge guard: if the bundle hasn't resolved in ~5s, treat the
+    // visitor as anonymous so a hung request can never leave the app stuck on
+    // the loading screen. A late success below overrides this null.
+    const timer = window.setTimeout(() => {
+      setBundle((prev) => (prev === undefined ? null : prev));
+    }, 5000);
+    fetchBundle().then((d) => {
+      window.clearTimeout(timer);
+      setBundle(d ?? null);
+    });
+    return () => window.clearTimeout(timer);
   }, []);
 
   const reload = useCallback(() => {
     cachedBundle = null;
     inflight = null;
     reloadNonce.current += 1;
-    fetchBundle().then((d) => setBundle(d ?? undefined));
+    fetchBundle().then((d) => setBundle(d ?? null));
   }, []);
 
   const user = bundle?.me ?? null;
