@@ -22,7 +22,11 @@ type restProduct struct {
 }
 
 func (h *RESTHandlers) listProducts(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
-	products, err := h.Products.ListActiveByAccount(r.Context(), actx.Account.ID)
+	scope, ok := h.scopeOr403(w, r, actx)
+	if !ok {
+		return
+	}
+	products, err := h.Products.ListActiveByAccounts(r.Context(), scope.Accounts)
 	if err != nil {
 		respondErr(w, err)
 		return
@@ -247,7 +251,11 @@ func (h *RESTHandlers) revokeKey(w http.ResponseWriter, r *http.Request, actx *A
 // ─── Summary ─────────────────────────────────────────────────────────────────
 
 func (h *RESTHandlers) summary(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
-	sales, err := h.Sales.ListByAccount(r.Context(), actx.Account.ID, 200)
+	scope, ok := h.scopeOr403(w, r, actx)
+	if !ok {
+		return
+	}
+	sales, err := h.Sales.ListByAccounts(r.Context(), scope.Accounts, 200)
 	if err != nil {
 		respondErr(w, err)
 		return
@@ -266,9 +274,8 @@ func (h *RESTHandlers) summary(w http.ResponseWriter, r *http.Request, actx *Acc
 // ─── Sales ───────────────────────────────────────────────────────────────────
 
 func (h *RESTHandlers) listSales(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
-	sales, err := h.Sales.ListByAccount(r.Context(), actx.Account.ID, 100)
-	if err != nil {
-		respondErr(w, err)
+	scope, ok := h.scopeOr403(w, r, actx)
+	if !ok {
 		return
 	}
 	type saleRow struct {
@@ -279,6 +286,36 @@ func (h *RESTHandlers) listSales(w http.ResponseWriter, r *http.Request, actx *A
 		Buyer    string `json:"buyer"`
 		Created  string `json:"created_at"`
 	}
+	writeRows := func(sales []*dbstore.Sale) {
+		out := make([]saleRow, 0, len(sales))
+		for _, s := range sales {
+			out = append(out, saleRow{
+				RefCode: s.RefCode, Status: s.Status, TotalSen: s.TotalSen,
+				Method: s.PaymentMethod, Buyer: s.Client.FullName,
+				Created: s.CreatedAt.UTC().Format(time.RFC3339),
+			})
+		}
+		respond(w, http.StatusOK, out)
+	}
+
+	// Legacy shape: plain array when the caller does not ask for paging.
+	if r.URL.Query().Get("page") == "" {
+		sales, err := h.Sales.ListByAccount(r.Context(), actx.Account.ID, 100)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeRows(sales)
+		return
+	}
+
+	// Paginated shape: { items, page, limit, total }.
+	page, limit := parsePageLimit(r)
+	sales, total, err := h.Sales.ListByAccountsPage(r.Context(), scope.Accounts, page, limit)
+	if err != nil {
+		respondErr(w, err)
+		return
+	}
 	out := make([]saleRow, 0, len(sales))
 	for _, s := range sales {
 		out = append(out, saleRow{
@@ -287,7 +324,9 @@ func (h *RESTHandlers) listSales(w http.ResponseWriter, r *http.Request, actx *A
 			Created: s.CreatedAt.UTC().Format(time.RFC3339),
 		})
 	}
-	respond(w, http.StatusOK, out)
+	respond(w, http.StatusOK, map[string]any{
+		"items": out, "page": page, "limit": limit, "total": total,
+	})
 }
 
 func (h *RESTHandlers) captureSale(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {

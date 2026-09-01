@@ -157,3 +157,79 @@ func (s *SaleStore) ListByAccount(ctx context.Context, accountID string, limit i
 	}
 	return out, rows.Err()
 }
+
+// ListByAccounts returns recent sales across a set of accounts (dashboard
+// summary rollups). limit follows the same 1..200 clamp as ListByAccount.
+func (s *SaleStore) ListByAccounts(ctx context.Context, accountIDs []string, limit int) ([]*Sale, error) {
+	if len(accountIDs) == 0 {
+		return []*Sale{}, nil
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	rows, err := s.pool.Query(ctx,
+		saleSelect+" WHERE account_id = ANY($1) ORDER BY created_at DESC LIMIT $2", accountIDs, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []*Sale{}
+	for rows.Next() {
+		sale, err := scanSale(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, sale)
+	}
+	return out, rows.Err()
+}
+
+// ListByAccountsPage returns one page of sales across a set of accounts,
+// newest first, plus the total row count for the same filter (for paging).
+func (s *SaleStore) ListByAccountsPage(ctx context.Context, accountIDs []string, page, limit int) ([]*Sale, int64, error) {
+	if len(accountIDs) == 0 {
+		return []*Sale{}, 0, nil
+	}
+	if page < 1 {
+		page = 1
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	offset := (page - 1) * limit
+	var total int64
+	if err := s.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM sales WHERE account_id = ANY($1)`, accountIDs).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	rows, err := s.pool.Query(ctx,
+		saleSelect+" WHERE account_id = ANY($1) ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+		accountIDs, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	out := []*Sale{}
+	for rows.Next() {
+		sale, err := scanSale(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		out = append(out, sale)
+	}
+	return out, total, rows.Err()
+}
+
+// CountByAccounts counts sales across a set of accounts.
+func (s *SaleStore) CountByAccounts(ctx context.Context, accountIDs []string) (int64, error) {
+	if len(accountIDs) == 0 {
+		return 0, nil
+	}
+	var total int64
+	err := s.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM sales WHERE account_id = ANY($1)`, accountIDs).Scan(&total)
+	return total, err
+}

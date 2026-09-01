@@ -140,6 +140,24 @@ func (s *Server) registerTools() {
 		Description: "Log penghantaran terkini webhook (status_code, attempt, error).",
 	}, s.webhookDeliveriesMCP)
 
+	// ── Spaces (multi-tenant storefronts) ───────────────────────────────────
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "list_spaces",
+		Description: "Senarai semua space (storefront) anda — id, nama, slug dan URL.",
+	}, s.listSpaces)
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "create_space",
+		Description: "Cipta space baharu. Slug 3-40 aksara (a-z, 0-9, dash); URL jadi https://<slug>.jomform.com.",
+	}, s.createSpace)
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "get_space_settings",
+		Description: "Baca tetapan storefront satu space: footer, company_reg, privacy/terms URL, menu.",
+	}, s.getSpaceSettings)
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "set_space_settings",
+		Description: "Set tetapan storefront space: footer_text, company_reg, privacy_url/terms_url (mesti https://), menu_json. Omit medan = kekal.",
+	}, s.setSpaceSettings)
+
 }
 
 // helper: require a write-capable key.

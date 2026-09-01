@@ -115,3 +115,32 @@ func (s *SpaceStore) IDBySlug(ctx context.Context, slug string) (string, error) 
 	}
 	return id, nil
 }
+
+// AccountIDsBySlugForOwner returns the account ids linked to the space with
+// the given slug, but only when that space is owned by the given user.
+// owned is false when the slug is unknown or not owned by the user —
+// the caller must not fall back to unscoped data in that case. An owned
+// space with no linked accounts yields (true, nil).
+func (s *SpaceStore) AccountIDsBySlugForOwner(ctx context.Context, slug, ownerUserID string) (owned bool, accountIDs []string, err error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT a.id FROM spaces sp
+		 LEFT JOIN accounts a ON a.space_id = sp.id
+		 WHERE sp.slug = $1 AND sp.owner_user_id = $2`,
+		slug, ownerUserID)
+	if err != nil {
+		return false, nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id *string
+		if err := rows.Scan(&id); err != nil {
+			return false, nil, err
+		}
+		owned = true
+		if id != nil && *id != "" {
+			out = append(out, *id)
+		}
+	}
+	return owned, out, rows.Err()
+}

@@ -66,6 +66,30 @@ func (s *ProductStore) ListActiveByAccount(ctx context.Context, accountID string
 	return out, rows.Err()
 }
 
+// ListActiveByAccounts lists active products across a set of accounts
+// (e.g. every account in the space the dashboard user selected).
+func (s *ProductStore) ListActiveByAccounts(ctx context.Context, accountIDs []string) ([]*Product, error) {
+	if len(accountIDs) == 0 {
+		return []*Product{}, nil
+	}
+	rows, err := s.pool.Query(ctx,
+		productSelect+" WHERE account_id = ANY($1) AND active ORDER BY created_at DESC", accountIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []*Product{}
+	for rows.Next() {
+		q := &Product{}
+		if err := rows.Scan(&q.ID, &q.AccountID, &q.Name, &q.Description, &q.PriceSen,
+			&q.Images, &q.Stock, &q.Type, &q.BillingPeriod, &q.TrialDays, &q.Active, &q.CreatedAt, &q.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, q)
+	}
+	return out, rows.Err()
+}
+
 // SetActive archives/restores a product.
 func (s *ProductStore) SetActive(ctx context.Context, accountID, productID string, active bool) error {
 	tag, err := s.pool.Exec(ctx,

@@ -30,6 +30,14 @@ const paidSet = `('paid','confirmed')`
 
 // FormAnalytics returns per-form rollups for an account.
 func (s *SaleStore) FormAnalytics(ctx context.Context, accountID string) ([]FormStats, error) {
+	return s.FormAnalyticsAccounts(ctx, []string{accountID})
+}
+
+// FormAnalyticsAccounts returns per-form rollups across a set of accounts.
+func (s *SaleStore) FormAnalyticsAccounts(ctx context.Context, accountIDs []string) ([]FormStats, error) {
+	if len(accountIDs) == 0 {
+		return []FormStats{}, nil
+	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT f.id, f.slug, f.title,
 		       COUNT(s.id)                                  AS submissions,
@@ -40,9 +48,9 @@ func (s *SaleStore) FormAnalytics(ctx context.Context, accountID string) ([]Form
 		       COALESCE(SUM(s.total_sen) FILTER (WHERE s.status IN `+paidSet+`), 0) AS revenue
 		FROM forms f
 		LEFT JOIN sales s ON s.form_id = f.id
-		WHERE f.account_id = $1
+		WHERE f.account_id = ANY($1)
 		GROUP BY f.id, f.slug, f.title
-		ORDER BY submissions DESC`, accountID)
+		ORDER BY submissions DESC`, accountIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -62,6 +70,14 @@ func (s *SaleStore) FormAnalytics(ctx context.Context, accountID string) ([]Form
 
 // ProductAnalytics rolls items up per product for an account.
 func (s *SaleStore) ProductAnalytics(ctx context.Context, accountID string) ([]ProductStats, error) {
+	return s.ProductAnalyticsAccounts(ctx, []string{accountID})
+}
+
+// ProductAnalyticsAccounts rolls items up per product across a set of accounts.
+func (s *SaleStore) ProductAnalyticsAccounts(ctx context.Context, accountIDs []string) ([]ProductStats, error) {
+	if len(accountIDs) == 0 {
+		return []ProductStats{}, nil
+	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT elem->>'product_id'                       AS pid,
 		       COALESCE(MIN(elem->>'name'), '')          AS name,
@@ -71,10 +87,10 @@ func (s *SaleStore) ProductAnalytics(ctx context.Context, accountID string) ([]P
 		       COALESCE(SUM((elem->>'price_sen')::bigint * (elem->>'qty')::int)
 		                  FILTER (WHERE s.status IN `+paidSet+`), 0)                                       AS paid_gross
 		FROM sales s, jsonb_array_elements(s.items) AS elem
-		WHERE s.account_id = $1
+		WHERE s.account_id = ANY($1)
 		  AND elem->>'product_id' IS NOT NULL
 		GROUP BY pid
-		ORDER BY paid_gross DESC`, accountID)
+		ORDER BY paid_gross DESC`, accountIDs)
 	if err != nil {
 		return nil, err
 	}

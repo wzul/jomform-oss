@@ -23,6 +23,7 @@ type SaleRow = {
   buyer: string;
   created_at: string;
 };
+type SalesPage = { items: SaleRow[]; page: number; limit: number; total: number };
 type FormStats = {
   title: string;
   slug: string;
@@ -47,16 +48,50 @@ type Summary = { counts: Record<string, number>; revenue_sen: number };
 const money = (sen: number) =>
   `RM${(sen / 100).toLocaleString("en-MY", { minimumFractionDigits: 2 })}`;
 
+const PAGE_SIZE = 10;
+
+// The dashboard scopes every list fetch to the space selected in the sidebar
+// (Shell persists it in localStorage). Empty string = no space scope yet.
+const spaceScope = () => {
+  if (typeof window === "undefined") return "";
+  try {
+    return localStorage.getItem("jf_space") || "";
+  } catch {
+    return "";
+  }
+};
+
 export default function Dashboard() {
   const { t } = useI18n();
   const [authed, setAuthed] = useState(false);
   const [checking, setChecking] = useState(true);
   const [products, setProducts] = useState<Product[]>([]);
-  const [sales, setSales] =useState<SaleRow[]>([]);
+  const [sales, setSales] = useState<SaleRow[]>([]);
+  const [salesPage, setSalesPage] = useState(1);
+  const [salesTotal, setSalesTotal] = useState(0);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [formStats, setFormStats] = useState<FormStats[]>([]);
   const [prodStats, setProdStats] = useState<ProductStats[]>([]);
   const [anon, setAnon] = useState(false);
+
+  const loadSales = useCallback(
+    async (p: number) => {
+      const sp = spaceScope();
+      const q = new URLSearchParams({ page: String(p), limit: String(PAGE_SIZE) });
+      if (sp) q.set("space", sp);
+      const r = await fetch(`/api/rest/sales?${q.toString()}`);
+      if (!r.ok) {
+        setSales([]);
+        setSalesTotal(0);
+        return;
+      }
+      const d = (await r.json()) as SalesPage;
+      setSales(Array.isArray(d.items) ? d.items : []);
+      setSalesPage(d.page || p);
+      setSalesTotal(d.total || 0);
+    },
+    [],
+  );
 
   const load = useCallback(async () => {
     const me = await fetch("/api/auth/me");
@@ -65,25 +100,36 @@ export default function Dashboard() {
       setChecking(false);
       return;
     }
-    const [p, s, sum, fs, ps] = await Promise.all([
-      fetch("/api/rest/products").then((r) => r.json()),
-      fetch("/api/rest/sales").then((r) => r.json()),
-      fetch("/api/rest/summary").then((r) => r.json()),
-      fetch("/api/rest/analytics/forms").then((r) => (r.ok ? r.json() : [])),
-      fetch("/api/rest/analytics/products").then((r) => (r.ok ? r.json() : [])),
+    const sp = spaceScope();
+    const withSpace = (path: string) => {
+      const sep = path.includes("?") ? "&" : "?";
+      return sp ? `${path}${sep}space=${encodeURIComponent(sp)}` : path;
+    };
+    const [p, , sum, fs, ps] = await Promise.all([
+      fetch(withSpace("/api/rest/products")).then((r) => r.json()),
+      loadSales(1),
+      fetch(withSpace("/api/rest/summary")).then((r) => r.json()),
+      fetch(withSpace("/api/rest/analytics/forms")).then((r) => (r.ok ? r.json() : [])),
+      fetch(withSpace("/api/rest/analytics/products")).then((r) => (r.ok ? r.json() : [])),
     ]);
     setProducts(Array.isArray(p) ? p : []);
-    setSales(Array.isArray(s) ? s : []);
     setSummary(sum);
     setFormStats(Array.isArray(fs) ? fs : []);
     setProdStats(Array.isArray(ps) ? ps : []);
     setAuthed(true);
     setChecking(false);
-  }, []);
+  }, [loadSales]);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  const salesTotalPages = Math.max(1, Math.ceil(salesTotal / PAGE_SIZE));
+
+  async function gotoSalesPage(p: number) {
+    const next = Math.min(Math.max(1, p), salesTotalPages);
+    await loadSales(next);
+  }
 
   // 14-day revenue series
   const series = (() => {
@@ -106,7 +152,7 @@ export default function Dashboard() {
 
   async function confirmSale(ref: string) {
     await fetch(`/api/rest/sales/${ref}/confirm`, { method: "POST" });
-    load();
+    await loadSales(salesPage);
   }
 
   if (checking) {
@@ -225,7 +271,7 @@ export default function Dashboard() {
             <h2 className="text-sm font-semibold">{t("dash.recentSales")}</h2>
             <div className="flex items-center gap-3">
               <span className="text-xs text-[var(--jf-muted)]">
-                {sales.length} {t("dash.records")}
+                {salesTotal} {t("dash.records")}
               </span>
               <a
                 href="/api/rest/sales/export.csv"
@@ -303,6 +349,33 @@ export default function Dashboard() {
               </tbody>
             </table>
           </div>
+
+          {/* pagination */}
+          {salesTotal > 0 && (
+            <div className="flex items-center justify-between gap-3 border-t border-[var(--jf-border)] px-5 py-3">
+              <span className="text-xs text-[var(--jf-muted)]">
+                page {salesPage} of {salesTotalPages}
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => gotoSalesPage(salesPage - 1)}
+                  disabled={salesPage <= 1}
+                  className="rounded-md border border-[var(--jf-border)] px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Prev
+                </button>
+                <button
+                  type="button"
+                  onClick={() => gotoSalesPage(salesPage + 1)}
+                  disabled={salesPage >= salesTotalPages}
+                  className="rounded-md border border-[var(--jf-border)] px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
         </section>
       </div>
     </Shell>

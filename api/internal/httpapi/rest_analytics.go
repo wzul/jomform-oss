@@ -4,7 +4,11 @@ package httpapi
 import "net/http"
 
 func (h *RESTHandlers) formAnalytics(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
-	stats, err := h.Sales.FormAnalytics(r.Context(), actx.Account.ID)
+	scope, ok := h.scopeOr403(w, r, actx)
+	if !ok {
+		return
+	}
+	stats, err := h.Sales.FormAnalyticsAccounts(r.Context(), scope.Accounts)
 	if err != nil {
 		respondErr(w, err)
 		return
@@ -13,7 +17,11 @@ func (h *RESTHandlers) formAnalytics(w http.ResponseWriter, r *http.Request, act
 }
 
 func (h *RESTHandlers) productAnalytics(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
-	stats, err := h.Sales.ProductAnalytics(r.Context(), actx.Account.ID)
+	scope, ok := h.scopeOr403(w, r, actx)
+	if !ok {
+		return
+	}
+	stats, err := h.Sales.ProductAnalyticsAccounts(r.Context(), scope.Accounts)
 	if err != nil {
 		respondErr(w, err)
 		return

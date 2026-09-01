@@ -80,11 +80,18 @@ func (s *Server) upsertForm(
 	return nil, map[string]string{"status": "updated", "form_id": in.FormID}, nil
 }
 
+// orEmptyMap normalises a nil map to an empty one.
 func orEmptyMap(m map[string]any) map[string]any {
 	if m == nil {
 		return map[string]any{}
 	}
 	return m
+}
+
+// jsonValid reports whether s parses as JSON (used for space menu_json).
+func jsonValid(s string) bool {
+	var v any
+	return json.Unmarshal([]byte(s), &v) == nil
 }
 
 func (s *Server) publishFormMCP(

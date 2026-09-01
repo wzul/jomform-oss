@@ -117,6 +117,7 @@ func main() {
 			Accounts: accounts, Products: products, Sales: sales,
 			Subs: subs, Keys: keys, Forms: formsStore,
 			Webhooks:   dbstore.NewWebhookStore(pool),
+			Spaces:     spacesStore,
 			DecryptKey: decryptKey,
 		}, chip.New(""), decryptKey, pay)
 		deps.MCP = mcpSrv
