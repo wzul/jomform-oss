@@ -3,6 +3,7 @@
 package httpapi
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -98,10 +99,32 @@ func (h *RESTHandlers) addCustomDomain(w http.ResponseWriter, r *http.Request, a
 	}
 	// Traefik sync (dokploy-aware envs auto; others no-op)
 	_ = dokployAddDomain(domain)
+	// Auto-CNAME: when the merchant linked Cloudflare, create the proxied
+	// CNAME record in their zone (issue #22). Best-effort — the manual
+	// CNAME path below never blocks on CF failures.
+	cfNote := ""
+	if cfOAuthConfigured() {
+		if err := h.cfCreateCNAMEForDomain(r.Context(), actx.Account.ID, domain); err != nil {
+			slog.Info("cf_auto_cname_skipped", "domain", domain, "err", err)
+		} else {
+			cfNote = "CNAME record created automatically via Cloudflare."
+		}
+	}
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"id": d.ID, "domain": domain, "status": "pending_dns",
-		"hint": "CNAME " + domain + " → jomform.com (atau A ke origin), kemudian Verify",
+		"hint":       "CNAME " + domain + " → jomform.com (atau A ke origin), kemudian Verify",
+		"cloudflare": cfNote,
 	})
+}
+
+// cfCreateCNAMEForDomain resolves the merchant's CF zone for domain and
+// creates the proxied CNAME → jomform.com (the Traefik wildcard target).
+func (h *RESTHandlers) cfCreateCNAMEForDomain(ctx context.Context, accountID, domain string) error {
+	zoneID, err := h.cfResolveZone(ctx, accountID, domain)
+	if err != nil {
+		return err
+	}
+	return h.cfCreateCNAME(ctx, accountID, zoneID, domain, "jomform.com")
 }
 
 func (h *RESTHandlers) listCustomDomains(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {

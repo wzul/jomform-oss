@@ -28,8 +28,16 @@ async function proxy(req: NextRequest) {
   const respHeaders = new Headers();
   const ct = r.headers.get("content-type");
   if (ct) respHeaders.set("Content-Type", ct);
-  const setCookie = r.headers.get("set-cookie");
-  if (setCookie) respHeaders.set("Set-Cookie", setCookie);
+  // OAuth flows (e.g. Cloudflare, issue #22) set multiple cookies per
+  // response (state + PKCE verifier); forward ALL of them, not just the first.
+  const getCookies =
+    typeof r.headers.getSetCookie === "function" ? r.headers.getSetCookie() : [];
+  if (getCookies.length > 0) {
+    for (const c of getCookies) respHeaders.append("Set-Cookie", c);
+  } else {
+    const setCookie = r.headers.get("set-cookie");
+    if (setCookie) respHeaders.set("Set-Cookie", setCookie);
+  }
 
   return new NextResponse(r.body, { status: r.status, headers: respHeaders });
 }
