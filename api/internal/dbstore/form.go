@@ -276,10 +276,14 @@ func (s *FormStore) Restore(ctx context.Context, accountID, formID string) error
 }
 
 // ListTrashed lists soft-deleted forms for an account (explicit trash read —
-// the only query in the store that may return deleted rows).
+// the only query in the store that may return deleted rows). It must NOT reuse
+// formSelect, which already filters `deleted_at IS NULL`; appending
+// `deleted_at IS NOT NULL` to it would make the query self-contradictory and
+// the trash list would always be empty (issue #98 regression).
 func (s *FormStore) ListTrashed(ctx context.Context, accountID string) ([]*Form, error) {
 	rows, err := s.pool.Query(ctx,
-		formSelect+" AND deleted_at IS NOT NULL AND account_id=$1 ORDER BY deleted_at DESC", accountID)
+		`SELECT id, account_id, slug, title, config, theme, status, is_main, redirect_success, redirect_failure, allow_embed, logo_url, is_template, created_at, updated_at
+		 FROM forms WHERE deleted_at IS NOT NULL AND account_id=$1 ORDER BY deleted_at DESC`, accountID)
 	if err != nil {
 		return nil, err
 	}

@@ -162,6 +162,12 @@ func TestEventStoreSweep(t *testing.T) {
 
 // TestEmailDeliveryEventStoreRecordListSweep exercises the SES delivery-event
 // store: Record → List → Sweep.
+//
+// The email_delivery_events table is shared with the httpapi package's SES
+// tests (ses_issue93_test.go) which run in parallel against the same test DB,
+// so this test must scope every assertion to its OWN rows (unique emails)
+// rather than asserting a global row count — otherwise it flakes under
+// `go test ./...`.
 func TestEmailDeliveryEventStoreRecordListSweep(t *testing.T) {
 	ctx := context.Background()
 	p := testPool(t)
@@ -173,37 +179,59 @@ func TestEmailDeliveryEventStoreRecordListSweep(t *testing.T) {
 	if _, err := p.Exec(ctx, `DELETE FROM email_delivery_events`); err != nil {
 		t.Fatalf("clear email_delivery_events: %v", err)
 	}
+	// Unique emails so we never collide with rows written by other packages.
+	bounceEmail := "bounce-" + randSuffix() + "@example.com"
+	complaintEmail := "complaint-" + randSuffix() + "@example.com"
 
 	// System mail (no account) + account mail.
-	if err := es.Record(ctx, "", "bounce@example.com", "bounce", "Permanent", map[string]any{"bounceType": "Permanent"}); err != nil {
+	if err := es.Record(ctx, "", bounceEmail, "bounce", "Permanent", map[string]any{"bounceType": "Permanent"}); err != nil {
 		t.Fatalf("record bounce: %v", err)
 	}
 	acc := uniqueAccount(t, ctx, p)
-	if err := es.Record(ctx, acc, "complaint@example.com", "complaint", "", nil); err != nil {
+	if err := es.Record(ctx, acc, complaintEmail, "complaint", "", nil); err != nil {
 		t.Fatalf("record complaint: %v", err)
 	}
 
-	events, err := es.List(ctx, 10)
+	// Filter the global list down to just this test's rows.
+	events, err := es.List(ctx, 200)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if len(events) != 2 {
-		t.Fatalf("len(events) = %d, want 2", len(events))
+	var mine []EmailDeliveryEvent
+	for _, e := range events {
+		if e.Email == bounceEmail || e.Email == complaintEmail {
+			mine = append(mine, e)
+		}
+	}
+	if len(mine) != 2 {
+		t.Fatalf("own events = %d, want 2", len(mine))
 	}
 	// Newest first: complaint (recorded last) first.
-	if events[0].EventType != "complaint" || events[0].AccountID != acc {
-		t.Fatalf("events[0] = %+v, want complaint for account", events[0])
+	if mine[0].EventType != "complaint" || mine[0].AccountID != acc {
+		t.Fatalf("mine[0] = %+v, want complaint for account", mine[0])
 	}
-	if events[1].EventType != "bounce" || events[1].BounceType != "Permanent" || events[1].AccountID != "" {
-		t.Fatalf("events[1] = %+v, want bounce/Permanent/system", events[1])
+	if mine[1].EventType != "bounce" || mine[1].BounceType != "Permanent" || mine[1].AccountID != "" {
+		t.Fatalf("mine[1] = %+v, want bounce/Permanent/system", mine[1])
 	}
 
-	// Sweep with a tiny TTL deletes everything (all rows are older than 1ns).
+	// Sweep with a tiny TTL deletes everything older than 1ns — including this
+	// test's rows. Assert the sweep removed at least our two rows (the global
+	// count is not asserted because other packages may have written rows too).
 	deleted, err := es.Sweep(ctx, time.Nanosecond)
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
-	if deleted != 2 {
-		t.Fatalf("sweep deleted = %d, want 2", deleted)
+	if deleted < 2 {
+		t.Fatalf("sweep deleted = %d, want >= 2 (our rows)", deleted)
+	}
+	// Our rows are gone after the sweep.
+	after, err := es.List(ctx, 200)
+	if err != nil {
+		t.Fatalf("list after sweep: %v", err)
+	}
+	for _, e := range after {
+		if e.Email == bounceEmail || e.Email == complaintEmail {
+			t.Fatalf("row %s survived sweep", e.Email)
+		}
 	}
 }

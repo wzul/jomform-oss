@@ -4,7 +4,7 @@ export PATH := /usr/local/go/bin:$(PATH)
 GO      ?= go
 API_DIR := api
 
-.PHONY: help build test lint dev up down migrate-new migrate-up
+.PHONY: help build test test-integration lint dev up down migrate-new migrate-up
 
 help: ## Senarai target
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -12,8 +12,13 @@ help: ## Senarai target
 build: ## Build jomform-api binary
 	cd $(API_DIR) && $(GO) build -o bin/jomform-api ./cmd/jomform-api
 
-test: ## Run all Go tests
+test: ## Run all Go tests (unit + integration; integration skips without env)
 	cd $(API_DIR) && $(GO) test ./... -race
+
+test-integration: ## Run the full suite incl. integration tests against real PG+Valkey
+	cd $(API_DIR) && JOMFORM_TEST_DATABASE_URL="$${JOMFORM_TEST_DATABASE_URL:-postgres://jomform:jomform_dev@localhost:5432/jomform_test?sslmode=disable}" \
+		JOMFORM_TEST_VALKEY_URL="$${JOMFORM_TEST_VALKEY_URL:-valkey://localhost:6379/1}" \
+		$(GO) test ./... -race
 
 lint: ## go vet
 	cd $(API_DIR) && $(GO) vet ./...
