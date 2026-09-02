@@ -50,7 +50,7 @@ func (s *Service) ReceiptPDF(ref SaleRef) ([]byte, error) {
 	}
 
 	m.AddRow(12, text.NewCol(12,
-		fmt.Sprintf("Terima kasih! Simpan dokumen ini sebagai resit rasmi. %s", s.BaseURL),
+		fmt.Sprintf("Terima kasih! Simpan dokumen ini sebagai resit rasmi. %s", ref.FormURL),
 		props.Text{Size: 8, Align: align.Center, Top: 4}))
 
 	doc, err := m.Generate()

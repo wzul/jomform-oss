@@ -67,11 +67,18 @@ func (s *Service) CreateChipPurchaseForSale(ctx context.Context, sale *dbstore.S
 	whitelist := s.ResolveWhitelist(ctx, string(secret), acc.Currency, sale.TotalSen, acc.ChipMethodWhitelist)
 
 	sRedirect, fRedirect := s.formRedirects(ctx, acc.ID, sale.FormID)
+	// Issue #83: thank-you redirects must land on the space subdomain (or
+	// custom domain) the buyer came from, not the apex base. Fall back to the
+	// apex base only when no space/custom domain is resolvable.
+	tyBase := s.spaceBaseURL(ctx, acc.ID)
+	if tyBase == "" {
+		tyBase = s.BaseURL
+	}
 	if sRedirect == "" {
-		sRedirect = fmt.Sprintf("%s/t/%s", s.BaseURL, sale.RefCode)
+		sRedirect = fmt.Sprintf("%s/t/%s", tyBase, sale.RefCode)
 	}
 	if fRedirect == "" {
-		fRedirect = fmt.Sprintf("%s/t/%s?status=fail", s.BaseURL, sale.RefCode)
+		fRedirect = fmt.Sprintf("%s/t/%s?status=fail", tyBase, sale.RefCode)
 	}
 	req := chip.PurchaseRequest{
 		SkipCapture:            sale.SkipCapture,
@@ -139,12 +146,21 @@ func (s *Service) ProcessCallback(ctx context.Context, p *chip.Purchase) error {
 			if acc2, aerr := s.Accounts.ByID(ctx, sale.AccountID); aerr == nil {
 				tin, msic = acc2.EinvoiceTIN, acc2.EinvoiceMSIC
 			}
+			// Issue #83: 'Borang dibeli' must link to the purchased form's
+			// canonical space-scoped URL ({space}.jomform.com/{slug} or a
+			// verified custom domain), not the apex thank-you page. Fall back
+			// to the apex thank-you page only when no space/custom domain is
+			// resolvable.
+			formURL := s.formPublicURL(ctx, sale.AccountID, sale.FormID)
+			if formURL == "" {
+				formURL = s.BaseURL + "/t/" + sale.RefCode
+			}
 			go s.SendSaleReceipt(ctx, SaleRef{
 				RefCode:      sale.RefCode,
 				BuyerEmail:   sale.Client.Email,
 				AmountSen:    sale.TotalSen,
 				ItemsSummary: summary,
-				FormURL:      s.BaseURL + "/t/" + sale.RefCode,
+				FormURL:      formURL,
 				TIN:          tin,
 				MSIC:         msic,
 			})
@@ -316,6 +332,13 @@ func (s *Service) CreateChipPurchaseForSaleWithOverride(ctx context.Context, sal
 		wl = s.ResolveWhitelist(ctx, string(secret), acc.Currency, sale.TotalSen, whitelist)
 	}
 
+	// Issue #83: thank-you redirects must land on the space subdomain (or
+	// custom domain) the buyer came from, not the apex base. Fall back to the
+	// apex base only when no space/custom domain is resolvable.
+	tyBase := s.spaceBaseURL(ctx, acc.ID)
+	if tyBase == "" {
+		tyBase = s.BaseURL
+	}
 	req := chip.PurchaseRequest{
 		SkipCapture:            sale.SkipCapture,
 		CreatorAgent:           "JomForm",
@@ -324,8 +347,8 @@ func (s *Service) CreateChipPurchaseForSaleWithOverride(ctx context.Context, sal
 		Client:                 &chip.ClientDetails{Email: clientEmail, FullName: sale.Client.FullName, Phone: sale.Client.Phone},
 		ForceRecurring:         sale.SaleType == dbstore.SaleTypeSubscription,
 		// TOP-LEVEL — CHIP only honors these here (nested-in-purchase gets discarded):
-		SuccessRedirect: fmt.Sprintf("%s/t/%s", s.BaseURL, sale.RefCode),
-		FailureRedirect: fmt.Sprintf("%s/t/%s?status=fail", s.BaseURL, sale.RefCode),
+		SuccessRedirect: fmt.Sprintf("%s/t/%s", tyBase, sale.RefCode),
+		FailureRedirect: fmt.Sprintf("%s/t/%s?status=fail", tyBase, sale.RefCode),
 		SuccessCallback: fmt.Sprintf("%s/v1/payments/chip/callback", s.BaseURL),
 		Reference:       sale.RefCode,
 		Purchase: chip.PurchaseDetails{

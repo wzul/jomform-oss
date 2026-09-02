@@ -24,6 +24,7 @@ type Service struct {
 	DecryptKey []byte // ENCRYPTION_KEY — used to decrypt per-account CHIP keys
 	BaseURL    string // app public base URL for redirects/callbacks
 	Forms      FormGetter
+	Spaces     *dbstore.SpaceStore
 	Receipts   *Receipts
 	// OnPaid (optional) fans outbound webhooks after a sale is paid.
 	OnPaid func(ctx context.Context, accountID, event string, payload map[string]any)

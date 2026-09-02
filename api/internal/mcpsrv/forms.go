@@ -4,6 +4,7 @@ package mcpsrv
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -40,13 +41,13 @@ func (s *Server) listForms(
 		return nil, nil, err
 	}
 	// Issue #77: public links are space-scoped ({space}.jomform.com/{slug}),
-	// never the legacy /f/{slug} form.
-	spaceSlug := s.spaceSlugFor(ctx, acc)
+	// never the legacy /f/{slug} form. Issue #83: a verified custom domain
+	// takes precedence over the space subdomain.
 	out := make([]formOut, 0, len(forms))
 	for _, f := range forms {
 		u := ""
 		if f.Status == "published" {
-			u = formPublicURL(spaceSlug, f.Slug)
+			u = s.formPublicURLForAccount(ctx, acc, f.Slug)
 		}
 		out = append(out, formOut{
 			ID: f.ID, Slug: f.Slug, Title: f.Title, Status: f.Status, URL: u,
@@ -69,14 +70,13 @@ func (s *Server) getForm(
 	if err != nil {
 		return nil, formDetailOut{}, err
 	}
-	spaceSlug := s.spaceSlugFor(ctx, acc)
 	for _, f := range forms {
 		if f.ID == in.FormID {
 			out := formDetailOut{
 				ID: f.ID, Slug: f.Slug, Title: f.Title, Status: f.Status, Config: f.Config,
 			}
 			if f.Status == "published" {
-				out.URL = formPublicURL(spaceSlug, f.Slug)
+				out.URL = s.formPublicURLForAccount(ctx, acc, f.Slug)
 			}
 			return nil, out, nil
 		}
@@ -104,4 +104,16 @@ func formPublicURL(spaceSlug, slug string) string {
 		return ""
 	}
 	return "https://" + spaceSlug + ".jomform.com/" + slug
+}
+
+// formPublicURLForAccount builds the canonical public URL for a form,
+// preferring a verified custom domain over the space subdomain (issue #83).
+// Returns "" when neither is resolvable.
+func (s *Server) formPublicURLForAccount(ctx context.Context, accountID, slug string) string {
+	if s.deps.Accounts != nil {
+		if acc, aerr := s.deps.Accounts.ByID(ctx, accountID); aerr == nil && acc.CustomDomain != "" && acc.CustomDomainVerified {
+			return "https://" + strings.TrimRight(acc.CustomDomain, "/") + "/" + slug
+		}
+	}
+	return formPublicURL(s.spaceSlugFor(ctx, accountID), slug)
 }

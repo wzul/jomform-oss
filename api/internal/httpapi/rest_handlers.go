@@ -120,6 +120,19 @@ func formURL(spaceSlug, slug string) string {
 	return "https://" + spaceSlug + ".jomform.com/" + slug
 }
 
+// formURLForAccount builds the canonical public URL for a form, preferring a
+// verified custom domain over the space subdomain (issue #83). Returns ""
+// when neither is resolvable.
+func (h *RESTHandlers) formURLForAccount(ctx context.Context, acc *dbstore.Account, slug string) string {
+	if acc == nil {
+		return ""
+	}
+	if acc.CustomDomain != "" && acc.CustomDomainVerified {
+		return "https://" + strings.TrimRight(acc.CustomDomain, "/") + "/" + slug
+	}
+	return formURL(h.spaceSlugFor(ctx, acc.ID), slug)
+}
+
 // spaceSlugFor resolves the space slug an account's forms live under, for
 // building space-scoped public URLs. Returns "" when the account has no
 // linked space (no public URL).
@@ -141,11 +154,10 @@ func (h *RESTHandlers) listForms(w http.ResponseWriter, r *http.Request, actx *A
 		return
 	}
 	out := make([]restForm, 0, len(forms))
-	spaceSlug := h.spaceSlugFor(r.Context(), actx.Account.ID)
 	for _, f := range forms {
 		out = append(out, restForm{
 			ID: f.ID, Slug: f.Slug, Title: f.Title, Status: f.Status,
-			URL:       formURL(spaceSlug, f.Slug),
+			URL:       h.formURLForAccount(r.Context(), actx.Account, f.Slug),
 			UpdatedAt: f.UpdatedAt.UTC().Format(time.RFC3339),
 		})
 	}
@@ -160,7 +172,7 @@ func (h *RESTHandlers) getForm(w http.ResponseWriter, r *http.Request, actx *Acc
 	}
 	respond(w, http.StatusOK, restForm{
 		ID: f.ID, Slug: f.Slug, Title: f.Title, Status: f.Status,
-		URL: formURL(h.spaceSlugFor(r.Context(), actx.Account.ID), f.Slug), Config: f.Config, Theme: f.Theme,
+		URL: h.formURLForAccount(r.Context(), actx.Account, f.Slug), Config: f.Config, Theme: f.Theme,
 		UpdatedAt: f.UpdatedAt.UTC().Format(time.RFC3339),
 	})
 }
@@ -186,7 +198,7 @@ func (h *RESTHandlers) createForm(w http.ResponseWriter, r *http.Request, actx *
 	}
 	respond(w, http.StatusCreated, restForm{
 		ID: f.ID, Slug: f.Slug, Title: f.Title, Status: f.Status,
-		URL: formURL(h.spaceSlugFor(r.Context(), actx.Account.ID), f.Slug), UpdatedAt: f.UpdatedAt.UTC().Format(time.RFC3339),
+		URL: h.formURLForAccount(r.Context(), actx.Account, f.Slug), UpdatedAt: f.UpdatedAt.UTC().Format(time.RFC3339),
 	})
 }
 

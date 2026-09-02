@@ -110,6 +110,7 @@ func main() {
 		passkeysStore := dbstore.NewPasskeyStore(pool)
 		pay := payments.New(chip.New(""), accounts, sales, subs, decryptKey, cfg.AppBaseURL)
 		pay.Forms = formsStore
+		pay.Spaces = spacesStore
 		if cfg.SESSMTPHost != "" {
 			pay.Receipts = &payments.Receipts{
 				Sender: email.New(email.SMTPConfig{
