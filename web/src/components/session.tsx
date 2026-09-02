@@ -23,6 +23,7 @@ export type SessionUser = {
   id?: string;
   email: string;
   name?: string;
+  avatar_url?: string; // issue #133 profile picture (empty = initial-letter fallback)
   totp_enabled?: boolean;
 };
 

@@ -42,7 +42,7 @@ func (a *AuthHandlers) handleProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id": u.ID, "email": u.Email, "name": u.Name,
-		"totp_enabled": u.TOTPEnabled, "created_at": u.CreatedAt,
+		"avatar_url": u.AvatarURL, "totp_enabled": u.TOTPEnabled, "created_at": u.CreatedAt,
 	})
 }
 

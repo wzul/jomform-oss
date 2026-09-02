@@ -276,6 +276,129 @@ func (h *RESTHandlers) uploadImage(w http.ResponseWriter, r *http.Request, actx 
 	respond(w, http.StatusOK, map[string]string{"url": h.Store.PublicURL(key)})
 }
 
+// maxAvatarEdge caps the long edge of an optimised avatar (issue #133).
+// Avatars are small circles in the Shell/profile, so ~256px is plenty and
+// keeps storage tiny (~50-150KB).
+const maxAvatarEdge = 256
+
+// avatarLongEdge downscales the avatar long edge at fit time.
+const avatarLongEdge = 256
+
+// optimizeAvatar re-encodes data into a small avatar (≤maxAvatarEdge on the
+// long edge). Like optimizeImage it re-encodes to JPEG q~80 so EXIF/GPS/phone
+// metadata is stripped and the artifact is tiny. The 2MB cap from the generic
+// upload also applies so a pathological input can't blow up storage.
+func optimizeAvatar(data []byte, ext string) ([]byte, error) {
+	if len(data) == 0 {
+		return nil, errors.New("fail kosong")
+	}
+	img, err := decodeImage(data)
+	if err != nil {
+		return nil, errors.New("gagal decode imej")
+	}
+	// Fit to a 256×256 box preserving aspect, then re-encode to JPEG.
+	if b := img.Bounds(); b.Dx() > avatarLongEdge || b.Dy() > avatarLongEdge {
+		img = imaging.Fit(img, avatarLongEdge, avatarLongEdge, imaging.Lanczos)
+	}
+	out := encodeJPEG(img, jpegQuality)
+	// Shrink quality if somehow still over the 2MB cap (rare).
+	for _, q := range []int{70, 60} {
+		if len(out) <= maxStoredBytes {
+			break
+		}
+		out = encodeJPEG(img, q)
+	}
+	if len(out) > maxStoredBytes {
+		return nil, errors.New("imej avatar tidak dapat dimampatkan")
+	}
+	return out, nil
+}
+
+// uploadAvatar handles POST /v1/rest/uploads/avatar (multipart). It accepts a
+// profile image ≤20MB, downscales it to avatar size (~256px, EXIF stripped)
+// and stores it under the account-scoped key, returning the public URL. This
+// mirrors the generic image block upload (uploadImage) with an avatar-sized
+// output artifact (issue #133).
+//
+// Request: multipart/form-data with a single "file" part (≤20MB).
+// Response: {"url": "..."} 200, or 400 on validation errors.
+func (h *RESTHandlers) uploadAvatar(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if h.Store == nil {
+		recordUploadFailure("not_configured")
+		writeErr(w, http.StatusServiceUnavailable, "media storage tidak dikonfigurasi")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes+1<<20)
+
+	if err := r.ParseMultipartForm(maxUploadBytes); err != nil {
+		recordUploadFailure("bad_multipart")
+		writeErr(w, http.StatusBadRequest, "fail imej tidak sah atau melebihi 20MB")
+		return
+	}
+	defer func() { _ = r.MultipartForm.RemoveAll() }()
+
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		recordUploadFailure("missing_file")
+		writeErr(w, http.StatusBadRequest, "part 'file' diperlukan")
+		return
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(io.LimitReader(file, maxUploadBytes+1))
+	if err != nil {
+		recordUploadFailure("read_failed")
+		writeErr(w, http.StatusBadRequest, "gagal membaca fail")
+		return
+	}
+	if len(data) == 0 {
+		recordUploadFailure("empty")
+		writeErr(w, http.StatusBadRequest, "fail kosong")
+		return
+	}
+	if len(data) > maxUploadBytes {
+		recordUploadFailure("too_large")
+		writeErr(w, http.StatusRequestEntityTooLarge, "imej melebihi had 20MB")
+		return
+	}
+
+	ext, ok := sniffImageType(data)
+	if !ok {
+		recordUploadFailure("bad_type")
+		writeErr(w, http.StatusBadRequest, "jenis imej tidak disokong (png/jpeg/webp/gif sahaja)")
+		return
+	}
+	mime := imageUploadMIME[ext]
+
+	stored, err := optimizeAvatar(data, ext)
+	if err != nil {
+		recordUploadFailure("optimize_failed")
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(stored) > maxStoredBytes {
+		recordUploadFailure("compress_failed")
+		writeErr(w, http.StatusBadRequest, "imej avatar tidak dapat dimampatkan")
+		return
+	}
+
+	key := buildUploadKey(actx.Account.ID, ext)
+	if err := h.Store.PutObject(r.Context(), key, mime, stored); err != nil {
+		recordUploadFailure("store")
+		slog.Error("upload_avatar_put", "err", err, "account", actx.Account.ID)
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	slog.Info("upload_avatar_ok",
+		"account", actx.Account.ID, "key", key,
+		"in_bytes", len(data), "out_bytes", len(stored), "mime", mime)
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "upload.avatar", map[string]any{
+		"mime": mime, "in_bytes": len(data), "out_bytes": len(stored),
+	})
+	respond(w, http.StatusOK, map[string]string{"url": h.Store.PublicURL(key)})
+}
+
 // buildUploadKey composes the S3 object key. The client NEVER supplies any
 // part of it — account id and uuid are server-controlled, ext comes from the
 // sniffed allowlist. The account segment is still sanitised to a safe

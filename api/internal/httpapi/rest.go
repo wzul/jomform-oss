@@ -138,6 +138,13 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	// to curb abuse; auth is account-scoped via h.authed.
 	mux.Handle("POST /v1/rest/uploads/image",
 		middleware.RateLimitWith(2, 6)(h.authed(h.uploadImage)))
+	// Issue #133: avatar upload — downscales to a small profile image.
+	mux.Handle("POST /v1/rest/uploads/avatar",
+		middleware.RateLimitWith(2, 6)(h.authed(h.uploadAvatar)))
+	// Issue #133: set/clear the session user's avatar_url. Validated to be a
+	// JomForm-hosted media URL (from the upload bucket) to avoid storing
+	// arbitrary external URLs.
+	mux.Handle("PUT /v1/rest/profile/avatar", h.authed(h.updateProfileAvatar))
 }
 
 // Resolve identifies the caller: Bearer API key (preferred) or session

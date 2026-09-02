@@ -12,6 +12,7 @@ type Profile = {
   id: string;
   email: string;
   name: string;
+  avatar_url: string; // issue #133
   totp_enabled: boolean;
   created_at: string;
 };
@@ -38,6 +39,11 @@ export default function ProfilePage() {
   const [p, setP] = useState<Profile | null>(null);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  // Issue #133: profile picture state — current avatar URL, upload progress.
+  const [avatarUrl, setAvatarUrl] = useState("");
+  const [avatarPreview, setAvatarPreview] = useState("");
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [avatarFailed, setAvatarFailed] = useState(false);
   const [pwCurrent, setPwCurrent] = useState("");
   const [pwNew, setPwNew] = useState("");
   const [pwConfirm, setPwConfirm] = useState("");
@@ -73,11 +79,13 @@ export default function ProfilePage() {
         id: sessionUser.id ?? prev?.id ?? "",
         email: sessionUser.email ?? prev?.email ?? "",
         name: sessionUser.name ?? prev?.name ?? "",
+        avatar_url: sessionUser.avatar_url ?? prev?.avatar_url ?? "",
         totp_enabled: sessionUser.totp_enabled ?? prev?.totp_enabled ?? false,
         created_at: prev?.created_at ?? "",
       }));
       setName((cur) => cur || sessionUser.name || "");
       setEmail((cur) => cur || sessionUser.email || "");
+      setAvatarUrl((cur) => cur || sessionUser.avatar_url || "");
     }
     fetch("/api/auth/passkeys")
       .then((r) => (r.ok ? r.json() : []))
@@ -107,6 +115,59 @@ export default function ProfilePage() {
     const d = await r.json().catch(() => ({}));
     setErr(d.error || t("prof.failed"));
     return false;
+  }
+
+  // Issue #133: upload a profile picture → POST /api/rest/uploads/avatar
+  // (server downscales to ~256px) → save the returned URL.
+  async function uploadAvatar(file: File) {
+    setMsg(""); setErr("");
+    if (!["image/png", "image/jpeg", "image/webp", "image/gif"].includes(file.type)) {
+      setErr(t("prof.avatarTypeError"));
+      return;
+    }
+    if (file.size > 20 * 1024 * 1024) {
+      setErr(t("prof.avatarError"));
+      return;
+    }
+    setUploadingAvatar(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const r = await fetch("/api/rest/uploads/avatar", { method: "POST", body: fd });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.url) { setErr(t("prof.avatarError")); return; }
+      await saveAvatarUrl(d.url);
+    } finally {
+      setUploadingAvatar(false);
+    }
+  }
+
+  // Persist the avatar URL (or clear it when url is "") server-side.
+  async function saveAvatarUrl(url: string): Promise<boolean> {
+    const r = await fetch("/api/rest/profile/avatar", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ avatar_url: url }),
+    });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      setErr(d.error || t("prof.avatarError"));
+      return false;
+    }
+    setAvatarUrl(url);
+    setAvatarPreview("");
+    setAvatarFailed(false);
+    setMsg(t("prof.avatarSaved"));
+    load();
+    reloadSession();
+    return true;
+  }
+
+  // Issue #133: remove the profile picture (falls back to the initial letter).
+  async function removeAvatar() {
+    if (!window.confirm(t("prof.removeAvatar") + "?")) return;
+    setMsg(""); setErr("");
+    await saveAvatarUrl("");
   }
 
   async function registerPasskey() {
@@ -227,12 +288,54 @@ export default function ProfilePage() {
           <>
             <section className="jf-card mt-6 p-6">
               <h2 className="text-lg font-semibold">{t("prof.identity")}</h2>
+              {/* Issue #133: profile picture upload + preview, fallback to initial. */}
+              <div className="mt-4 flex items-center gap-4">
+                <div className="relative">
+                  {avatarPreview || (avatarUrl && !avatarFailed) ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={avatarPreview || avatarUrl}
+                      alt={name || email || ""}
+                      onError={() => setAvatarFailed(true)}
+                      className="h-20 w-20 rounded-full object-cover ring-1 ring-slate-200"
+                    />
+                  ) : (
+                    <div className="flex h-20 w-20 items-center justify-center rounded-full bg-indigo-100 text-2xl font-semibold text-[var(--jf-primary)] ring-1 ring-slate-200">
+                      {((name || email || "?")[0] || "?").toUpperCase()}
+                    </div>
+                  )}
+                </div>
+                <div className="flex flex-col gap-2">
+                  <label className="jf-btn-ghost cursor-pointer px-4 py-2 text-sm">
+                    {uploadingAvatar ? t("prof.uploadingAvatar") : t("prof.uploadAvatar")}
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp,image/gif"
+                      className="sr-only"
+                      disabled={uploadingAvatar}
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (!f) return;
+                        setAvatarPreview(URL.createObjectURL(f));
+                        uploadAvatar(f);
+                      }}
+                    />
+                  </label>
+                  {(avatarUrl || avatarPreview) && (
+                    <button onClick={removeAvatar} className="self-start px-2 text-sm text-red-500 hover:underline">
+                      {t("prof.removeAvatar")}
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div className="mt-4 border-t border-slate-100 pt-4">
               <label className="mt-3 block text-xs text-slate-500">{t("prof.displayName")}</label>
               <input value={name} onChange={(e) => setName(e.target.value)} className="jf-input mt-1 max-w-xl" placeholder={t("prof.yourName")} />
               <button
                 onClick={() => post("/api/auth/profile/name", { name })}
                 className="jf-btn-primary mt-3"
               >{t("prof.saveName")}</button>
+              </div>
             </section>
 
             <section className="jf-card mt-6 p-6">

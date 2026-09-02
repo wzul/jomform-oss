@@ -214,6 +214,14 @@ func (s *UserStore) CreateFromSocial(ctx context.Context, email, name, provider,
 	return id, nil
 }
 
+// UpdateAvatar sets the user's profile picture URL (issue #133). Empty string
+// clears it (falls back to the initial-letter avatar). The caller validates
+// the URL is JomForm-hosted media (our upload bucket).
+func (s *UserStore) UpdateAvatar(ctx context.Context, userID, avatarURL string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE users SET avatar_url=$2, updated_at=now() WHERE id=$1`, userID, avatarURL)
+	return err
+}
+
 // UpdateName sets the display name.
 func (s *UserStore) UpdateName(ctx context.Context, userID, name string) error {
 	_, err := s.pool.Exec(ctx, `UPDATE users SET name=$2 WHERE id=$1`, userID, name)

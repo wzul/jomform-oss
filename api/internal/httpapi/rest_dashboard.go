@@ -88,12 +88,12 @@ func (h *RESTHandlers) dashboardBundle(w http.ResponseWriter, r *http.Request, a
 		ProductAnalytics []dbstore.ProductStats `json:"product_analytics"`
 	}{}
 
-	// me — session user's email + name (+ 2FA status for the profile page).
+	// me — session user's email + name (+ 2FA status + avatar, issue #133).
 	if h.Users != nil {
 		if u, err := h.Users.ByID(ctx, userID); err == nil && u != nil {
 			bundle.Me = &map[string]any{
 				"id": u.ID, "email": u.Email, "name": u.Name,
-				"totp_enabled": u.TOTPEnabled, "created_at": u.CreatedAt,
+				"avatar_url": u.AvatarURL, "totp_enabled": u.TOTPEnabled, "created_at": u.CreatedAt,
 			}
 		}
 	}

@@ -146,6 +146,64 @@ func TestOptimizeWebpSmallPassthrough(t *testing.T) {
 	}
 }
 
+// TestOptimizeAvatarDownscalesSmall (issue #133): a large image fed to the
+// avatar optimiser must be downscaled to avatar size (≤maxAvatarEdge on the
+// long edge) and stay under the stored cap. Re-encoding to JPEG strips EXIF
+// by construction.
+func TestOptimizeAvatarDownscalesSmall(t *testing.T) {
+	big, err := optimizeAvatar(generateLargeImageFixture(), ".png")
+	if err != nil {
+		t.Fatalf("optimizeAvatar: %v", err)
+	}
+	if len(big) == 0 {
+		t.Fatal("optimizeAvatar returned empty artifact")
+	}
+	if len(big) > maxStoredBytes {
+		t.Fatalf("avatar = %d bytes > cap %d", len(big), maxStoredBytes)
+	}
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(big))
+	if err != nil {
+		t.Fatalf("decode stored avatar config: %v", err)
+	}
+	if cfg.Width > maxAvatarEdge || cfg.Height > maxAvatarEdge {
+		t.Fatalf("avatar %dx%d exceeds %dpx long edge", cfg.Width, cfg.Height, maxAvatarEdge)
+	}
+}
+
+// TestOptimizeAvatarRejectsEmpty (issue #133): empty input must not panic.
+func TestOptimizeAvatarRejectsEmpty(t *testing.T) {
+	if _, err := optimizeAvatar(nil, ".png"); err == nil {
+		t.Fatal("expected error for empty avatar input")
+	}
+}
+
+// TestJomformMediaURL (issue #133): only JomForm-hosted media URLs are
+// accepted for persist; arbitrary external URLs are rejected.
+func TestJomformMediaURL(t *testing.T) {
+	ok := []string{
+		"https://media.jomform.com/bucket/u/acct/uuid.png",
+		"http://localhost:9000/bucket/u/acct/uuid.jpg",
+		"/bucket/u/acct/uuid.webp",
+	}
+	for _, u := range ok {
+		if !jomformMediaURL(u) {
+			t.Errorf("jomformMediaURL(%q) = false, want true", u)
+		}
+	}
+	bad := []string{
+		"", "   ",
+		"https://evil.com/x.png",
+		"ftp://media.jomform.com/u/acct/x.png",
+		"/etc/passwd",
+		"javascript:alert(1)",
+	}
+	for _, u := range bad {
+		if jomformMediaURL(u) {
+			t.Errorf("jomformMediaURL(%q) = true, want false", u)
+		}
+	}
+}
+
 func generateLargeImageFixture() []byte {
 	img := image.NewRGBA(image.Rect(0, 0, 2000, 3000))
 	for x := 0; x < 2000; x += 3 {

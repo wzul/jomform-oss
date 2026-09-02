@@ -26,6 +26,38 @@ export function Shell({
   const drawerRef = useRef<HTMLDivElement>(null);
   const closeBtnRef = useRef<HTMLButtonElement>(null);
 
+  // Issue #133: the user's initial letter (or "?"), used as the avatar
+  // fallback when no profile picture (avatar_url) is set or it fails to load.
+  const initial = ((user?.name || user?.email || "?")[0] || "?").toUpperCase();
+  const [imgFailed, setImgFailed] = useState(false);
+
+  // Avatar can change after a profile edit; reset the failure flag when the
+  // URL changes so a new image isn't stuck hidden behind a stale onError.
+  useEffect(() => setImgFailed(false), [user?.avatar_url]);
+
+  // Renders the user's face: uploaded avatar when set and not failed, else the
+  // initial-letter circle.
+  function UserAvatar({ className }: { className: string }) {
+    const url = user?.avatar_url;
+    if (url && !imgFailed) {
+      // eslint-disable-next-line @next/next/no-img-element
+      return (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={url}
+          alt={user?.name || user?.email || ""}
+          onError={() => setImgFailed(true)}
+          className={`${className} object-cover`}
+        />
+      );
+    }
+    return (
+      <div className={`${className} flex items-center justify-center rounded-full bg-indigo-100 text-xs font-semibold text-[var(--jf-primary)]`}>
+        {initial}
+      </div>
+    );
+  }
+
   // Issue #104: mobile drawer keyboard + focus management. When the drawer
   // opens, move focus to the close button; trap Tab inside the drawer; close
   // on Escape. Prevents a focus trap and keeps keyboard users oriented.
@@ -136,9 +168,8 @@ export function Shell({
         {/* user card — flex-none at the bottom of the full-height aside (always visible) */}
         <div className="shrink-0 border-t border-[var(--jf-border)] p-3">
           <div className="flex items-center gap-2.5 rounded-lg px-2 py-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-100 text-xs font-semibold text-[var(--jf-primary)]">
-              {((user?.name || user?.email || "?")[0] || "?").toUpperCase()}
-            </div>
+            {/* Issue #133: uploaded profile picture, falling back to the initial letter. */}
+            <UserAvatar className="h-8 w-8 rounded-full" />
             <div className="min-w-0 flex-1">
               <p className="truncate text-[13px] font-medium" title={user?.name || user?.email || ""}>
                 {user?.name || user?.email || "…"}
@@ -230,12 +261,16 @@ export function Shell({
                 <SpaceSwitcher spaces={spaces} value={space} onSwitch={switchSpace} />
               </div>
               <div className="absolute bottom-4 left-0 right-0 px-4">
-                <p
-                  className="mb-2 truncate text-xs text-[var(--jf-muted)]"
-                  title={user?.name ? `${user.name} (${user?.email || ""})` : user?.email || ""}
-                >
-                  {user?.name || user?.email || "…"}
-                </p>
+                <div className="mb-2 flex items-center gap-2">
+                  {/* Issue #133: profile picture or initial-letter fallback. */}
+                  <UserAvatar className="h-8 w-8 rounded-full" />
+                  <p
+                    className="truncate text-xs text-[var(--jf-muted)]"
+                    title={user?.name ? `${user.name} (${user?.email || ""})` : user?.email || ""}
+                  >
+                    {user?.name || user?.email || "…"}
+                  </p>
+                </div>
                 <button onClick={signOut} className="w-full rounded-lg border border-[var(--jf-border)] py-2 text-sm text-slate-600">
                   {t("nav.signout")}
                 </button>
