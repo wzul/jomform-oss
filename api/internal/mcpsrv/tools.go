@@ -187,6 +187,16 @@ func (s *Server) registerTools() {
 		Description: "Set tetapan storefront space: footer_text, company_reg, privacy_url/terms_url (mesti https://), menu_json. Omit medan = kekal.",
 	}, s.setSpaceSettings)
 
+	// ── Parity: per-space email templates (issue #107) ────────────────────
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "get_email_settings",
+		Description: "Baca tetapan emel satu space: subjek/badan resit (placeholder), hantar resit, notifikasi merchant, HTML.",
+	}, s.getEmailSettings)
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "set_email_settings",
+		Description: "Set tetapan emel space: receipt_subject, receipt_body ({{ref_code}}, {{amount}}, {{items}}, {{form_url}}, {{buyer_name}}, {{date}}), receipt_enabled, notify_merchant, merchant_notify_email, html. Omit medan = kekal.",
+	}, s.setEmailSettings)
+
 	// ── Parity: event tracking (issue #92) ────────────────────────────────
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "list_events",

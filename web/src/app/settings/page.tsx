@@ -19,12 +19,13 @@ type SocialRow = { provider: string; email?: string; linked_at?: string };
 //   einvoice  -> e-Invoice TIN/MSIC
 //   webhooks  -> Outbound webhooks + MCP/API section
 //   social    -> Social login connectors
-type SettingsTab = "chip" | "domains" | "tracking" | "einvoice" | "webhooks" | "social";
+//   emel      -> Per-space receipt/notification email templates (issue #107)
+type SettingsTab = "chip" | "domains" | "tracking" | "einvoice" | "webhooks" | "social" | "emel";
 
-const TAB_IDS: SettingsTab[] = ["chip", "domains", "tracking", "einvoice", "webhooks", "social"];
+const TAB_IDS: SettingsTab[] = ["chip", "domains", "tracking", "einvoice", "webhooks", "social", "emel"];
 
 function isSettingsTab(v: string | null): v is SettingsTab {
-  return v === "chip" || v === "domains" || v === "tracking" || v === "einvoice" || v === "webhooks" || v === "social";
+  return v === "chip" || v === "domains" || v === "tracking" || v === "einvoice" || v === "webhooks" || v === "social" || v === "emel";
 }
 
 // Restore the last active tab. Falls back to "chip".
@@ -96,6 +97,15 @@ export default function Settings() {
   // Issue #68: transient banner shown after the Cloudflare OAuth callback
   // redirects back to /settings?cloudflare=linked|error.
   const [cfNotice, setCfNotice] = useState("");
+  // Issue #107: per-space email template + behaviour settings.
+  const [emelSubject, setEmelSubject] = useState("");
+  const [emelBody, setEmelBody] = useState("");
+  const [emelReceiptEnabled, setEmelReceiptEnabled] = useState(true);
+  const [emelNotifyMerchant, setEmelNotifyMerchant] = useState(false);
+  const [emelMerchantEmail, setEmelMerchantEmail] = useState("");
+  const [emelHtml, setEmelHtml] = useState(false);
+  const [emelSpaceId, setEmelSpaceId] = useState("");
+  const [emelPreview, setEmelPreview] = useState(false);
 
   // Persist the active tab (issue #68).
   useEffect(() => {
@@ -175,6 +185,35 @@ export default function Settings() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Issue #107: load the per-space email settings for the active space.
+  const { spaces } = useSession();
+  const loadEmailSettings = useCallback(() => {
+    const sp = Array.isArray(spaces) ? spaces : [];
+    if (!sp.length) return;
+    // Resolve the active space (same key the Shell uses).
+    let slug = "";
+    try { slug = window.localStorage.getItem("jf_space") || ""; } catch { /* ignore */ }
+    const active = sp.find((x) => x.slug === slug) || sp[0];
+    if (!active) return;
+    setEmelSpaceId(active.id);
+    fetch(`/api/rest/spaces/${active.id}/email-settings`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!d) return;
+        setEmelSubject(d.receipt_subject || "");
+        setEmelBody(d.receipt_body || "");
+        setEmelReceiptEnabled(d.receipt_enabled !== false);
+        setEmelNotifyMerchant(!!d.notify_merchant);
+        setEmelMerchantEmail(d.merchant_notify_email || "");
+        setEmelHtml(!!d.html);
+      })
+      .catch(() => {});
+  }, [spaces]);
+
+  useEffect(() => {
+    loadEmailSettings();
+  }, [loadEmailSettings]);
 
   // Issue #48: anonymous visit (401 / session expired) bounces to Landing
   // instead of hanging on a shell or flashing a logged-out settings form.
@@ -274,6 +313,46 @@ export default function Settings() {
 
   function toggleMethod(id: string) {
     setWhitelist((prev) => (prev.includes(id) ? prev.filter((m) => m !== id) : [...prev, id]));
+  }
+
+  // Issue #107: save the per-space email settings.
+  async function saveEmailSettings() {
+    if (!emelSpaceId) return;
+    setMsg("");
+    setErr("");
+    const r = await fetch(`/api/rest/spaces/${emelSpaceId}/email-settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        receipt_subject: emelSubject,
+        receipt_body: emelBody,
+        receipt_enabled: emelReceiptEnabled,
+        notify_merchant: emelNotifyMerchant,
+        merchant_notify_email: emelMerchantEmail,
+        html: emelHtml,
+      }),
+    });
+    if (r.ok) {
+      setMsg(t("set.emelSaved"));
+    } else {
+      const d = await r.json().catch(() => ({}));
+      setErr(d.error || t("set.failedSave"));
+    }
+  }
+
+  // Issue #107: render a client-side preview of the template with sample data.
+  function renderPreview(src: string): string {
+    const sample: Record<string, string> = {
+      "{{ref_code}}": "JF-ABC123",
+      "{{amount}}": "123.45",
+      "{{items}}": "1× Tee",
+      "{{form_url}}": "https://acme.jomform.com/tee",
+      "{{buyer_name}}": "Ali",
+      "{{date}}": new Date().toISOString().slice(0, 10),
+    };
+    let out = src;
+    for (const [k, v] of Object.entries(sample)) out = out.split(k).join(v);
+    return out;
   }
 
   return (
@@ -730,6 +809,76 @@ export default function Settings() {
             <a href="/api/auth/oauth/google" className="jf-btn-ghost mt-3 inline-block">
               {t("set.linkGoogle")}
             </a>
+          </section>
+        )}
+        {/* ── Emel tab: per-space receipt/notification email (issue #107) ── */}
+        {tab === "emel" && (
+          <section className="jf-card mt-6 p-6">
+            <h2 className="text-lg font-semibold">{t("set.emelTitle")}</h2>
+            <p className="mt-1 max-w-xl text-sm text-slate-400">
+              {t("set.emelHelp")}
+            </p>
+            <div className="mt-4 space-y-3">
+              <div>
+                <label className="text-xs text-slate-500">{t("set.emelSubject")}</label>
+                <input
+                  value={emelSubject}
+                  onChange={(e) => setEmelSubject(e.target.value)}
+                  className="jf-input mt-1 max-w-xl"
+                  placeholder="Resit pembayaran — {{ref_code}}"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500">
+                  {t("set.emelBody")} <span className="text-slate-400">{t("set.emelPlaceholders")} <code className="rounded bg-slate-100 px-1">{"{{ref_code}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{amount}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{items}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{form_url}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{buyer_name}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{date}}"}</code></span>
+                </label>
+                <textarea
+                  value={emelBody}
+                  onChange={(e) => setEmelBody(e.target.value)}
+                  rows={8}
+                  className="jf-input mt-1 max-w-xl font-mono text-xs"
+                />
+              </div>
+              <div className="flex flex-wrap items-center gap-4">
+                <label className="flex items-center gap-2 text-sm text-slate-700">
+                  <input type="checkbox" checked={emelReceiptEnabled} onChange={(e) => setEmelReceiptEnabled(e.target.checked)} />
+                  {t("set.emelReceiptEnabled")}
+                </label>
+                <label className="flex items-center gap-2 text-sm text-slate-700">
+                  <input type="checkbox" checked={emelNotifyMerchant} onChange={(e) => setEmelNotifyMerchant(e.target.checked)} />
+                  {t("set.emelNotifyMerchant")}
+                </label>
+                <label className="flex items-center gap-2 text-sm text-slate-700">
+                  <input type="checkbox" checked={emelHtml} onChange={(e) => setEmelHtml(e.target.checked)} />
+                  {t("set.emelHtml")}
+                </label>
+              </div>
+              {emelNotifyMerchant && (
+                <div>
+                  <label className="text-xs text-slate-500">{t("set.emelMerchantEmail")}</label>
+                  <input
+                    value={emelMerchantEmail}
+                    onChange={(e) => setEmelMerchantEmail(e.target.value)}
+                    type="email"
+                    className="jf-input mt-1 max-w-xl"
+                    placeholder="store@yourshop.my"
+                  />
+                </div>
+              )}
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                <button onClick={saveEmailSettings} className="jf-btn-primary">{t("set.emelSave")}</button>
+                <button type="button" onClick={() => setEmelPreview(!emelPreview)} className="jf-btn-ghost text-slate-600">
+                  {t("set.emelPreview")}
+                </button>
+              </div>
+              {emelPreview && (
+                <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-xs text-slate-400">{t("set.emelPreviewHint")}</p>
+                  <p className="mt-2 text-sm font-medium">{renderPreview(emelSubject)}</p>
+                  <pre className="mt-2 whitespace-pre-wrap rounded bg-white p-3 text-xs text-slate-700">{renderPreview(emelBody)}</pre>
+                </div>
+              )}
+            </div>
           </section>
         )}
       </main>

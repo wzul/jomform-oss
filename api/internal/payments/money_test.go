@@ -139,3 +139,43 @@ func TestChipPurchaseRequestTopLevelRedirects(t *testing.T) {
 		t.Fatal("redirect/reference must NOT be nested inside PurchaseDetails")
 	}
 }
+
+// TestRenderReceiptPlaceholders (issue #107) asserts the {{placeholders}} are
+// substituted server-side and the default template reproduces the previous
+// hardcoded output.
+func TestRenderReceiptPlaceholders(t *testing.T) {
+	ref := SaleRef{RefCode: "JF-ABC123", BuyerName: "Ali", AmountSen: 12345, ItemsSummary: "1× Tee", FormURL: "https://acme.jomform.com/tee"}
+	subj, body := renderReceipt(ref, "Resit {{ref_code}}", "Hai {{buyer_name}}, bayar {{amount}} untuk {{items}} — {{form_url}} pada {{date}}", false)
+	if subj != "Resit JF-ABC123" {
+		t.Errorf("subject = %q, want placeholder substituted", subj)
+	}
+	if !strings.Contains(body, "Hai Ali, bayar 123.45 untuk 1× Tee — https://acme.jomform.com/tee") {
+		t.Errorf("body missing substituted placeholders: %q", body)
+	}
+	if !strings.Contains(body, "pada ") {
+		t.Errorf("body missing date placeholder: %q", body)
+	}
+}
+
+// TestRenderReceiptHTMLAutoEscapes (issue #107) asserts html/template
+// auto-escaping prevents XSS via a merchant-supplied HTML body.
+func TestRenderReceiptHTMLAutoEscapes(t *testing.T) {
+	ref := SaleRef{RefCode: "JF-X", BuyerName: "<script>alert(1)</script>", AmountSen: 100, ItemsSummary: "x", FormURL: "https://acme.jomform.com/x"}
+	_, body := renderReceipt(ref, "s", "<p>Hi {{buyer_name}}</p>", true)
+	if strings.Contains(body, "<script>alert(1)</script>") {
+		t.Errorf("HTML body not escaped — XSS: %q", body)
+	}
+	if !strings.Contains(body, "&lt;script&gt;") {
+		t.Errorf("expected escaped buyer name in HTML body: %q", body)
+	}
+}
+
+// TestRenderReceiptBadTemplateFallsBack (issue #107) asserts a malformed
+// merchant template never blocks a receipt — it falls back to the raw string.
+func TestRenderReceiptBadTemplateFallsBack(t *testing.T) {
+	ref := SaleRef{RefCode: "JF-X", AmountSen: 100, ItemsSummary: "x", FormURL: "https://acme.jomform.com/x"}
+	_, body := renderReceipt(ref, "s", "{{unclosed", false)
+	if body != "{{unclosed" {
+		t.Errorf("bad template should fall back to raw string, got %q", body)
+	}
+}

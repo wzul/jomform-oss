@@ -152,3 +152,77 @@ func (h *RESTHandlers) saveSpaceSettings(w http.ResponseWriter, r *http.Request,
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
 }
+
+// ── Per-space email settings (issue #107) ────────────────────────────────────
+
+// getSpaceEmailSettings: GET /v1/spaces/{id}/email-settings
+func (h *RESTHandlers) getSpaceEmailSettings(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	sID := r.PathValue("id")
+	if _, perr := uuid.Parse(sID); perr != nil {
+		writeErr(w, http.StatusBadRequest, "id tidak sah")
+		return
+	}
+	s, err := h.Spaces.ByID(r.Context(), sID)
+	if err != nil || s == nil {
+		writeErr(w, http.StatusNotFound, "space tidak dijumpai")
+		return
+	}
+	if s.Owner != h.sessionOwnerID(r) {
+		writeErr(w, http.StatusForbidden, "bukan space anda")
+		return
+	}
+	set, err := h.Spaces.EmailSettings(r.Context(), sID)
+	if err != nil {
+		respondErr(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, set)
+}
+
+// saveSpaceEmailSettings: PUT /v1/spaces/{id}/email-settings
+func (h *RESTHandlers) saveSpaceEmailSettings(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	var in struct {
+		ReceiptSubject      string `json:"receipt_subject"`
+		ReceiptBody         string `json:"receipt_body"`
+		ReceiptEnabled      *bool  `json:"receipt_enabled"`
+		NotifyMerchant      *bool  `json:"notify_merchant"`
+		MerchantNotifyEmail string `json:"merchant_notify_email"`
+		HTML                *bool  `json:"html"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeErr(w, http.StatusBadRequest, "payload tidak sah")
+		return
+	}
+	sID := r.PathValue("id")
+	if _, perr := uuid.Parse(sID); perr != nil {
+		writeErr(w, http.StatusBadRequest, "id tidak sah")
+		return
+	}
+	if s, serr := h.Spaces.ByID(r.Context(), sID); serr != nil || s == nil || s.Owner != h.sessionOwnerID(r) {
+		writeErr(w, http.StatusForbidden, "bukan space anda")
+		return
+	}
+	// Read-modify-write: omitted fields keep their current value.
+	st, err := h.Spaces.EmailSettings(r.Context(), sID)
+	if err != nil {
+		respondErr(w, r, err)
+		return
+	}
+	st.ReceiptSubject = in.ReceiptSubject
+	st.ReceiptBody = in.ReceiptBody
+	st.MerchantNotifyEmail = in.MerchantNotifyEmail
+	if in.ReceiptEnabled != nil {
+		st.ReceiptEnabled = *in.ReceiptEnabled
+	}
+	if in.NotifyMerchant != nil {
+		st.NotifyMerchant = *in.NotifyMerchant
+	}
+	if in.HTML != nil {
+		st.HTML = *in.HTML
+	}
+	if err := h.Spaces.SaveEmailSettings(r.Context(), st); err != nil {
+		respondErr(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
+}

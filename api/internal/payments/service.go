@@ -25,6 +25,8 @@ type Service struct {
 	BaseURL    string // app public base URL for redirects/callbacks
 	Forms      FormGetter
 	Spaces     *dbstore.SpaceStore
+	// Users resolves the merchant's email for notify_merchant (issue #107).
+	Users      *dbstore.UserStore
 	Receipts   *Receipts
 	// OnPaid (optional) fans outbound webhooks after a sale is paid.
 	OnPaid func(ctx context.Context, accountID, event string, payload map[string]any)

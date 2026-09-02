@@ -155,12 +155,22 @@ func (s *Service) ProcessCallback(ctx context.Context, p *chip.Purchase) error {
 			if formURL == "" {
 				formURL = s.BaseURL + "/t/" + sale.RefCode
 			}
+			// Issue #107: resolve the space id so the receipt renders from the
+			// space's per-space email settings (defaults when none).
+			spaceID := ""
+			if s.Spaces != nil {
+				if sid, serr := s.Spaces.SpaceIDByAccount(ctx, sale.AccountID); serr == nil {
+					spaceID = sid
+				}
+			}
 			go s.SendSaleReceipt(ctx, SaleRef{
 				RefCode:      sale.RefCode,
 				BuyerEmail:   sale.Client.Email,
+				BuyerName:    sale.Client.FullName,
 				AmountSen:    sale.TotalSen,
 				ItemsSummary: summary,
 				FormURL:      formURL,
+				SpaceID:      spaceID,
 				TIN:          tin,
 				MSIC:         msic,
 			})

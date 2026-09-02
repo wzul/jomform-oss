@@ -114,6 +114,7 @@ func main() {
 		pay := payments.New(chip.New(cfg.ChipAPIBaseURL), accounts, sales, subs, decryptKey, cfg.AppBaseURL)
 		pay.Forms = formsStore
 		pay.Spaces = spacesStore
+		pay.Users = usersStore
 		if cfg.SESSMTPHost != "" {
 			pay.Receipts = &payments.Receipts{
 				Sender: email.New(email.SMTPConfig{

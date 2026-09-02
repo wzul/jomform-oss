@@ -96,6 +96,8 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /v1/spaces", h.authed(h.createSpace))
 	mux.Handle("GET /v1/spaces/{id}/settings", h.authed(h.getSpaceSettings))
 	mux.Handle("PUT /v1/spaces/{id}/settings", h.authed(h.saveSpaceSettings))
+	mux.Handle("GET /v1/spaces/{id}/email-settings", h.authed(h.getSpaceEmailSettings))
+	mux.Handle("PUT /v1/spaces/{id}/email-settings", h.authed(h.saveSpaceEmailSettings))
 	mux.Handle("GET /v1/rest/settings/einvoice", h.authed(h.getEinvoicing))
 	mux.Handle("GET /v1/rest/webhooks", h.authed(h.listWebhooks))
 	mux.Handle("GET /v1/rest/settings/webhook-key", h.authed(h.getWebhookKey))
