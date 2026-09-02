@@ -25,6 +25,7 @@ Parity checklist (dashboard → MCP):
 - Webhooks → `create_webhook`, `list_webhooks`, `delete_webhook`,
   `webhook_deliveries`
 - API keys → `list_api_keys`, `create_api_key`, `revoke_api_key`
+- Event tracking / audit log → `list_events` (account-scoped, read-only)
 
 ## Conventions
 
