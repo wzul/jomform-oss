@@ -309,6 +309,8 @@ const DICT = {
   "set.tab.tracking": { en: "Tracking", ms: "Penjejakan", zh: "跟踪", ta: "கண்காணிப்பு", ar: "التتبع" },
   "set.tab.einvoice": { en: "e-Invoice", ms: "e-Invois", zh: "电子发票", ta: "மின் இன்வாய்ஸ்", ar: "الفاتورة الإلكترونية" },
   "set.tab.webhooks": { en: "Webhooks", ms: "Webhook", zh: "Webhook", ta: "வெப்ஹூக்குகள்", ar: "خطافات الويب" },
+  // issue #129: MCP / connected agents get their own settings tab
+  "set.tab.mcp": { en: "MCP", ms: "MCP", zh: "MCP", ta: "MCP", ar: "MCP" },
   "set.tab.social": { en: "Social", ms: "Sosial", zh: "社交", ta: "சமூக", ar: "وسائل التواصل" },
   // issue #107: per-space email template + behaviour settings
   "set.tab.emel": { en: "Email", ms: "Emel", zh: "电子邮件", ta: "மின்னஞ்சல்", ar: "البريد الإلكتروني" },

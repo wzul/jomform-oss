@@ -17,15 +17,16 @@ type SocialRow = { provider: string; email?: string; linked_at?: string };
 //   domains   -> Custom domains + Cloudflare connect (one workflow)
 //   tracking  -> Tracking scripts (global GTM/analytics)
 //   einvoice  -> e-Invoice TIN/MSIC
-//   webhooks  -> Outbound webhooks + MCP/API section
+//   webhooks  -> Outbound webhooks
+//   mcp       -> MCP / connected agents (issue #129)
 //   social    -> Social login connectors
 //   emel      -> Per-space receipt/notification email templates (issue #107)
-type SettingsTab = "chip" | "domains" | "tracking" | "einvoice" | "webhooks" | "social" | "emel";
+type SettingsTab = "chip" | "domains" | "tracking" | "einvoice" | "webhooks" | "mcp" | "social" | "emel";
 
-const TAB_IDS: SettingsTab[] = ["chip", "domains", "tracking", "einvoice", "webhooks", "social", "emel"];
+const TAB_IDS: SettingsTab[] = ["chip", "domains", "tracking", "einvoice", "webhooks", "mcp", "social", "emel"];
 
 function isSettingsTab(v: string | null): v is SettingsTab {
-  return v === "chip" || v === "domains" || v === "tracking" || v === "einvoice" || v === "webhooks" || v === "social" || v === "emel";
+  return v === "chip" || v === "domains" || v === "tracking" || v === "einvoice" || v === "webhooks" || v === "mcp" || v === "social" || v === "emel";
 }
 
 // Restore the last active tab. Falls back to "chip".
@@ -811,10 +812,9 @@ export default function Settings() {
           </section>
         )}
 
-        {/* ── Webhooks tab: outbound webhooks + MCP/API section ── */}
+        {/* ── Webhooks tab: outbound webhooks ── */}
         {tab === "webhooks" && (
-          <>
-            <section className="jf-card mt-6 p-6">
+          <section className="jf-card mt-6 p-6">
               <h2 className="text-lg font-semibold">{t("set.webhooksTitle")}</h2>
               <p className="mt-1 max-w-xl text-sm text-slate-400">
                 {t("set.eventsLabel")} <code className="rounded bg-slate-100 px-1">sale.paid</code>,{" "}
@@ -979,35 +979,36 @@ export default function Settings() {
                 </form>
               )}
             </section>
+        )}
 
-            {/* MCP / OAuth 2.1 connected agents */}
-            <section className="jf-card mt-6 p-6">
-              <h2 className="text-lg font-semibold">{t("set.mcpTitle")}</h2>
-              <p className="mt-1 max-w-xl text-sm text-slate-400">
-                {t("set.serverUrl")} <code className="rounded bg-slate-100 px-1">https://mcp.jomform.com/mcp</code> —
-                {t("set.mcpHelp")}{" "}
-                <code className="rounded bg-slate-100 px-1">/.well-known/oauth-authorization-server</code>{" "}
-                {t("set.mcpNoKeys")}
-              </p>
-              <ul className="mt-4 space-y-2">
-                {keys.map((k) => (
-                  <li key={k.id} className="flex items-center justify-between rounded-lg border border-[var(--jf-border)] px-4 py-2.5">
-                    <div>
-                      <p className="text-sm">{k.name}</p>
-                      <p className="text-[11px] text-slate-400">{t("set.clientId")} {k.name === "AI Agent Key" ? "(oauth-managed)" : k.name}</p>
-                    </div>
-                    <button onClick={async () => { await fetch(`/api/rest/keys/${k.id}`, { method: "DELETE" }); load(); }}
-                      className="text-xs text-slate-500 hover:text-red-500">{t("set.revoke")}</button>
-                  </li>
-                ))}
-                {!keys.length && (
-                  <li className="rounded-lg border border-dashed border-[var(--jf-border)] px-4 py-3 text-sm text-slate-400">
-                    {t("set.noAgents")}
-                  </li>
-                )}
-              </ul>
-            </section>
-          </>
+        {/* ── MCP tab: OAuth 2.1 connected agents (issue #129) ── */}
+        {tab === "mcp" && (
+          <section className="jf-card mt-6 p-6">
+            <h2 className="text-lg font-semibold">{t("set.mcpTitle")}</h2>
+            <p className="mt-1 max-w-xl text-sm text-slate-400">
+              {t("set.serverUrl")} <code className="rounded bg-slate-100 px-1">https://mcp.jomform.com/mcp</code> —
+              {t("set.mcpHelp")}{" "}
+              <code className="rounded bg-slate-100 px-1">/.well-known/oauth-authorization-server</code>{" "}
+              {t("set.mcpNoKeys")}
+            </p>
+            <ul className="mt-4 space-y-2">
+              {keys.map((k) => (
+                <li key={k.id} className="flex items-center justify-between rounded-lg border border-[var(--jf-border)] px-4 py-2.5">
+                  <div>
+                    <p className="text-sm">{k.name}</p>
+                    <p className="text-[11px] text-slate-400">{t("set.clientId")} {k.name === "AI Agent Key" ? "(oauth-managed)" : k.name}</p>
+                  </div>
+                  <button onClick={async () => { await fetch(`/api/rest/keys/${k.id}`, { method: "DELETE" }); load(); }}
+                    className="text-xs text-slate-500 hover:text-red-500">{t("set.revoke")}</button>
+                </li>
+              ))}
+              {!keys.length && (
+                <li className="rounded-lg border border-dashed border-[var(--jf-border)] px-4 py-3 text-sm text-slate-400">
+                  {t("set.noAgents")}
+                </li>
+              )}
+            </ul>
+          </section>
         )}
 
         {/* ── Social tab: login connectors ── */}
