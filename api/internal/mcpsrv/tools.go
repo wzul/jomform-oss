@@ -187,6 +187,12 @@ func (s *Server) registerTools() {
 		Description: "Set tetapan storefront space: footer_text, company_reg, privacy_url/terms_url (mesti https://), menu_json. Omit medan = kekal.",
 	}, s.setSpaceSettings)
 
+	// ── Parity: event tracking (issue #92) ────────────────────────────────
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "list_events",
+		Description: "Log audit/tingkah-laku akaun (terbaru dahulu). Boleh tapis event_name, from/to (RFC3339), dan page/limit. Read-only.",
+	}, s.listEvents)
+
 }
 
 // helper: require a write-capable key.

@@ -259,6 +259,10 @@ func (h *RESTHandlers) uploadImage(w http.ResponseWriter, r *http.Request, actx 
 	slog.Info("upload_ok",
 		"account", actx.Account.ID, "key", key,
 		"in_bytes", len(data), "out_bytes", len(stored), "mime", mime)
+	// Issue #92: audit image upload.
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "upload.image", map[string]any{
+		"mime": mime, "in_bytes": len(data), "out_bytes": len(stored),
+	})
 	respond(w, http.StatusOK, map[string]string{"url": h.Store.PublicURL(key)})
 }
 

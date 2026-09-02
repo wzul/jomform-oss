@@ -48,6 +48,15 @@ type Config struct {
 	BreakerRatio    float64
 	SNSConfigSet    string
 	SNSNotifEnabled bool
+
+	// Event-tracking retention (issue #92). The periodic sweep deletes events
+	// older than their TTL. EventRetentionDays is the default for the `events`
+	// table; EventAuditRetentionDays overrides it for audit-trail event classes
+	// (auth.*, settings.*) which warrant longer retention. DeliveryRetentionDays
+	// applies to email_delivery_events. All default to 90 days.
+	EventRetentionDays       int
+	EventAuditRetentionDays  int
+	DeliveryRetentionDays    int
 }
 
 // Load reads configuration from the environment and validates it.
@@ -80,6 +89,12 @@ func Load() (*Config, error) {
 		BreakerRatio:    parseRatio(os.Getenv("SES_BREAKER_RATIO"), 0.05),
 		SNSConfigSet:    os.Getenv("SES_CONFIG_SET"),
 		SNSNotifEnabled: strings.EqualFold(os.Getenv("SES_SNS_NOTIF_ENABLED"), "true"),
+
+		// Event-tracking retention (issue #92). Defaults to 90 days; the
+		// audit-trail class (auth.*, settings.*) defaults to 180 days.
+		EventRetentionDays:      parsePositiveInt(os.Getenv("EVENT_RETENTION_DAYS"), 90),
+		EventAuditRetentionDays: parsePositiveInt(os.Getenv("EVENT_AUDIT_RETENTION_DAYS"), 180),
+		DeliveryRetentionDays:   parsePositiveInt(os.Getenv("DELIVERY_RETENTION_DAYS"), 90),
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -111,6 +126,15 @@ func getEnv(key, fallback string) string {
 // parsePositiveInt64 parses a positive integer, falling back on empty/invalid.
 func parsePositiveInt64(s string, fallback int64) int64 {
 	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil || n <= 0 {
+		return fallback
+	}
+	return n
+}
+
+// parsePositiveInt parses a positive int, falling back on empty/invalid.
+func parsePositiveInt(s string, fallback int) int {
+	n, err := strconv.Atoi(s)
 	if err != nil || n <= 0 {
 		return fallback
 	}

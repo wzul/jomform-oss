@@ -23,6 +23,9 @@ type Deps struct {
 	Forms    *dbstore.FormStore
 	Webhooks *dbstore.WebhookStore
 	Spaces   *dbstore.SpaceStore
+	// Issue #92: audit/behaviour log (list_events tool). Nil → tool returns
+	// an error rather than panicking.
+	Events *dbstore.EventStore
 	// DecryptKey (ENCRYPTION_KEY hex bytes) enables per-form CHIP override tools.
 	DecryptKey []byte
 }

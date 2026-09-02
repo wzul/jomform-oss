@@ -110,6 +110,8 @@ func (h *RESTHandlers) addCustomDomain(w http.ResponseWriter, r *http.Request, a
 			cfNote = "CNAME record created automatically via Cloudflare."
 		}
 	}
+	// Issue #92: audit custom-domain add.
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "settings.domain_added", map[string]any{"domain": domain})
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"id": d.ID, "domain": domain, "status": "pending_dns",
 		"hint":       "CNAME " + domain + " → jomform.com (atau A ke origin), kemudian Verify",
@@ -178,6 +180,8 @@ func (h *RESTHandlers) verifyCustomDomainByID(w http.ResponseWriter, r *http.Req
 		return
 	}
 	_ = dokployAddDomain(d.Domain)
+	// Issue #92: audit custom-domain verify.
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "settings.domain_verified", map[string]any{"domain": d.Domain})
 	writeJSON(w, http.StatusOK, map[string]any{"verified": true, "domain": d.Domain})
 }
 
@@ -193,6 +197,8 @@ func (h *RESTHandlers) deleteCustomDomainByID(w http.ResponseWriter, r *http.Req
 		return
 	}
 	dokployRemoveDomain(d.Domain)
+	// Issue #92: audit custom-domain removal.
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "settings.domain_removed", map[string]any{"domain": d.Domain})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
 }
 

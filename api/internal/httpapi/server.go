@@ -39,6 +39,14 @@ type Deps struct {
 	Suppressions *dbstore.SuppressionStore
 	Breaker      *email.Breaker
 	MXChecker    *email.MXChecker
+
+	// Issue #92: event-tracking audit/behaviour log. Nil in bare-mode tests;
+	// Record calls are no-ops when nil.
+	Events *dbstore.EventStore
+
+	// Issue #92: SES delivery-event log (bounce/complaint). Nil in bare-mode
+	// tests; the SNS endpoint skips the write when nil.
+	EmailDeliveryEvents *dbstore.EmailDeliveryEventStore
 }
 
 // VerifyMailer delivers an email-confirmation message. The concrete email.Sender
@@ -78,6 +86,8 @@ func NewServer(cfg *config.Config, log *slog.Logger, deps *Deps) *Server {
 			Suppressions: deps.Suppressions,
 			Breaker:      deps.Breaker,
 			MXChecker:    deps.MXChecker,
+			// Issue #92: audit/behaviour log for auth actions.
+			Events: deps.Events,
 		}
 		s.proxy = middleware.NewTrustedProxy()
 		_ = s.proxy.FetchCloudflare(context.Background())

@@ -28,6 +28,8 @@ func (h *RESTHandlers) setCustomDomain(w http.ResponseWriter, r *http.Request, a
 		respondErr(w, err)
 		return
 	}
+	// Issue #92: audit custom-domain claim.
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "settings.domain_claimed", map[string]any{"domain": domain})
 	respond(w, http.StatusOK, map[string]any{
 		"status": "pending_dns",
 		"domain": domain,
@@ -73,5 +75,7 @@ func (h *RESTHandlers) deleteCustomDomain(w http.ResponseWriter, r *http.Request
 		respondErr(w, err)
 		return
 	}
+	// Issue #92: audit custom-domain removal.
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "settings.domain_cleared", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "cleared"})
 }

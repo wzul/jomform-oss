@@ -71,6 +71,8 @@ func (h *RESTHandlers) createWebhook(w http.ResponseWriter, r *http.Request, act
 		respondErr(w, err)
 		return
 	}
+	// Issue #92: audit webhook creation.
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "settings.webhook_created", map[string]any{"webhook_id": wh.ID, "events": in.Events})
 	writeJSON(w, http.StatusCreated, map[string]string{"id": wh.ID, "url": wh.URL})
 }
 
@@ -79,6 +81,8 @@ func (h *RESTHandlers) deleteWebhook(w http.ResponseWriter, r *http.Request, act
 		respondErr(w, err)
 		return
 	}
+	// Issue #92: audit webhook deletion.
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "settings.webhook_deleted", map[string]any{"webhook_id": r.PathValue("id")})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 

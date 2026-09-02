@@ -57,6 +57,8 @@ func (h *RESTHandlers) setChipCreds(w http.ResponseWriter, r *http.Request, actx
 		respondErr(w, err)
 		return
 	}
+	// Issue #92: audit CHIP credential change.
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "settings.chip_updated", map[string]any{"mode": mode})
 	respond(w, http.StatusOK, map[string]string{"status": "configured", "mode": mode})
 }
 
@@ -77,5 +79,7 @@ func (h *RESTHandlers) deleteChipCreds(w http.ResponseWriter, r *http.Request, a
 		respondErr(w, err)
 		return
 	}
+	// Issue #92: audit CHIP credential removal.
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "settings.chip_cleared", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "cleared"})
 }

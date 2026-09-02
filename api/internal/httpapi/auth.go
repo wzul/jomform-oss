@@ -43,6 +43,10 @@ type AuthHandlers struct {
 	Suppressions *dbstore.SuppressionStore
 	Breaker      *email.Breaker
 	MXChecker    *email.MXChecker
+
+	// Issue #92: audit/behaviour log for auth actions (login/logout/2fa).
+	// Nil in bare-mode tests; Record calls are no-ops when nil.
+	Events *dbstore.EventStore
 }
 
 // RegisterRoutes wires auth endpoints onto the mux.
@@ -370,9 +374,25 @@ func (a *AuthHandlers) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
+	// Issue #92: audit login (with the user's first owned account).
+	a.recordAuthEvent(r, a.firstAccountID(r, user.ID), user.ID, "auth.login", map[string]any{
+		"method": "password", "totp": user.TOTPEnabled,
+	})
 	writeJSON(w, http.StatusOK, meResponse{
 		ID: user.ID, Email: user.Email, TOTPEnabled: user.TOTPEnabled, CreatedAt: user.CreatedAt.UTC().Format(time.RFC3339),
 	})
+}
+
+// firstAccountID resolves the user's first owned account id ("" when none).
+func (a *AuthHandlers) firstAccountID(r *http.Request, userID string) string {
+	if a.Accounts == nil {
+		return ""
+	}
+	accs, err := a.Accounts.ByOwner(r.Context(), userID)
+	if err != nil || len(accs) == 0 {
+		return ""
+	}
+	return accs[0].ID
 }
 
 // failLogin handles a rejected login attempt: record the failure in Valkey and
@@ -399,6 +419,10 @@ func (a *AuthHandlers) failLogin(w http.ResponseWriter, r *http.Request, ip, ema
 func (a *AuthHandlers) handleLogout(w http.ResponseWriter, r *http.Request) {
 	c, err := r.Cookie(sessionCookie)
 	if err == nil {
+		// Issue #92: audit logout before destroying the session.
+		if user := a.currentUser(r); user != nil {
+			a.recordAuthEvent(r, a.firstAccountID(r, user.ID), user.ID, "auth.logout", nil)
+		}
 		_ = a.Sessions.Destroy(r.Context(), c.Value)
 		invalidateSessionAcctCache(c.Value)
 	}
@@ -491,6 +515,8 @@ func (a *AuthHandlers) handle2FAEnable(w http.ResponseWriter, r *http.Request) {
 	if err := a.send2FAActiveEmail(r.Context(), user.Email); err != nil {
 		slog.Warn("2fa_active_email_failed", "err", err, "user", user.ID)
 	}
+	// Issue #92: audit 2FA enable.
+	a.recordAuthEvent(r, a.firstAccountID(r, user.ID), user.ID, "auth.2fa_enabled", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "enabled"})
 }
 
@@ -531,6 +557,8 @@ func (a *AuthHandlers) handle2FADisable(w http.ResponseWriter, r *http.Request) 
 		_ = a.Sessions.TrustedDevices().RevokeAll(r.Context(), user.ID)
 	}
 	clearTrustCookie(w)
+	// Issue #92: audit 2FA disable.
+	a.recordAuthEvent(r, a.firstAccountID(r, user.ID), user.ID, "auth.2fa_disabled", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "disabled"})
 }
 
@@ -595,6 +623,20 @@ func (a *AuthHandlers) currentUser(r *http.Request) *dbstore.User {
 	// Honors pw_reset_at: sessions issued before a password reset are dead
 	// (issue #62). Implemented in auth_ux.go.
 	return a.sessionUser(r)
+}
+
+// recordAuthEvent appends an audit/behaviour event for a user's account.
+// Best-effort: a nil Events store or a write error is logged, never fatal.
+// accountID may be empty (e.g. a failed login with no resolved account) — the
+// event is then skipped since events.account_id is NOT NULL.
+func (a *AuthHandlers) recordAuthEvent(r *http.Request, accountID, userID, eventName string, props map[string]any) {
+	if a.Events == nil || accountID == "" {
+		return
+	}
+	if err := a.Events.Record(r.Context(), accountID, userID, eventName, props,
+		middleware.ClientIP(r), r.UserAgent()); err != nil {
+		slog.Error("event_record", "err", err, "event", eventName, "account", accountID)
+	}
 }
 
 // isDev controls cookie Secure flag; set by Server at wiring time.

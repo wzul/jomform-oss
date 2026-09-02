@@ -43,6 +43,10 @@ type RESTHandlers struct {
 	// Store is the S3/MinIO object store for image-block uploads (issue #61).
 	// Nil when media storage is not configured (upload returns 503).
 	Store *ObjectStore
+
+	// Events is the audit/behaviour log (issue #92). Nil in bare-mode tests;
+	// Record calls are no-ops when nil.
+	Events *dbstore.EventStore
 }
 
 // RegisterRoutes wires REST endpoints.
@@ -112,6 +116,10 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /v1/rest/dashboard-bundle", h.authed(h.dashboardBundle))
 	mux.Handle("GET /v1/rest/analytics/forms", h.authed(h.formAnalytics))
 	mux.Handle("GET /v1/rest/analytics/products", h.authed(h.productAnalytics))
+	// Issue #92: event-tracking read endpoints (audit log + behaviour analytics).
+	mux.Handle("GET /v1/rest/events", h.authed(h.listEvents))
+	mux.Handle("GET /v1/rest/events/count", h.authed(h.countEvents))
+	mux.Handle("GET /v1/rest/events/breakdown", h.authed(h.breakdownEvents))
 	mux.Handle("GET /v1/rest/sales/export.csv", h.authed(h.exportSalesCSV))
 	// Issue #61: image-block direct upload. Rate-limited (owner decision)
 	// to curb abuse; auth is account-scoped via h.authed.

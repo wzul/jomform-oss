@@ -43,6 +43,20 @@ type suppressionWriter struct {
 	Suppressions *dbstore.SuppressionStore
 	Users        *dbstore.UserStore
 	Breaker      *email.Breaker
+	// Issue #92: SES delivery-event log (bounce/complaint). Nil → skip write.
+	EmailDeliveryEvents *dbstore.EmailDeliveryEventStore
+}
+
+// recordDeliveryEvent appends a bounce/complaint row to email_delivery_events
+// (issue #92), in addition to the suppression write. Best-effort: a nil store
+// or a write error is logged, never fatal to the suppression path.
+func (sw *suppressionWriter) recordDeliveryEvent(ctx context.Context, email, eventType, bounceType string, detail map[string]any) {
+	if sw.EmailDeliveryEvents == nil {
+		return
+	}
+	if err := sw.EmailDeliveryEvents.Record(ctx, "", email, eventType, bounceType, detail); err != nil {
+		slog.Error("ses_delivery_event_record", "err", err, "email", email, "event", eventType)
+	}
 }
 
 // suppress persists a suppression for one address and flips its user row
@@ -74,6 +88,7 @@ func (sw *suppressionWriter) suppress(ctx context.Context, addr string, reason s
 func (s *Server) handleSESNotification(w http.ResponseWriter, r *http.Request) {
 	sw := &suppressionWriter{
 		Suppressions: s.deps.Suppressions, Users: s.deps.Users, Breaker: s.deps.Breaker,
+		EmailDeliveryEvents: s.deps.EmailDeliveryEvents,
 	}
 	if sw.Suppressions == nil {
 		writeErr(w, http.StatusServiceUnavailable, "suppression store not configured")
@@ -138,6 +153,11 @@ func (s *Server) handleSESNotification(w http.ResponseWriter, r *http.Request) {
 		}
 		permanent := msg.Bounce.BounceType == "Permanent"
 		for _, rec := range msg.Bounce.BouncedRecipients {
+			// Issue #92: record the bounce into email_delivery_events (in
+			// addition to the suppression write below).
+			sw.recordDeliveryEvent(r.Context(), rec.EmailAddress, "bounce", msg.Bounce.BounceType, map[string]any{
+				"bounceType": msg.Bounce.BounceType,
+			})
 			if !permanent {
 				// Transient bounces are not suppressed, but still counted so the
 				// breaker can react to an anomalous transient-bounce storm.
@@ -154,6 +174,8 @@ func (s *Server) handleSESNotification(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for _, rec := range msg.Complaint.ComplainedRecipients {
+			// Issue #92: record the complaint into email_delivery_events.
+			sw.recordDeliveryEvent(r.Context(), rec.EmailAddress, "complaint", "", nil)
 			sw.suppress(r.Context(), rec.EmailAddress, "complaint", dbstore.SuppressionSourceComplaint, false)
 		}
 	default:

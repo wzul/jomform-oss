@@ -93,6 +93,9 @@ func main() {
 	}
 	if pool != nil {
 		deps.Suppressions = dbstore.NewSuppressionStore(pool)
+		// Issue #92: event-tracking stores (audit log + SES delivery events).
+		deps.Events = dbstore.NewEventStore(pool)
+		deps.EmailDeliveryEvents = dbstore.NewEmailDeliveryEventStore(pool)
 	}
 
 	// Payments wiring (CHIP): needs DB; decrypt key from config.
@@ -159,6 +162,8 @@ func main() {
 			Passkeys:       passkeysStore,
 			Users:          usersStore,
 			Store:          store,
+			// Issue #92: audit/behaviour log.
+			Events: deps.Events,
 		}
 		pay.OnPaid = func(ctx context.Context, accountID, event string, payload map[string]any) {
 			httpapi.DispatchWebhooks(ctx, rest, whStore, accountID, event, payload)
@@ -171,6 +176,7 @@ func main() {
 			Subs: subs, Keys: keys, Forms: formsStore,
 			Webhooks:   dbstore.NewWebhookStore(pool),
 			Spaces:     spacesStore,
+			Events:     deps.Events, // issue #92: list_events tool
 			DecryptKey: decryptKey,
 		}, chip.New(""), decryptKey, pay)
 		deps.MCP = mcpSrv
@@ -194,6 +200,27 @@ func main() {
 				}
 				if err := pay.CancelOverdueSubs(ctx); err != nil {
 					slog.Warn("overdue_subs_sweep", "err", err)
+				}
+				// Issue #92: event-tracking retention sweep. Per-class TTL: the
+				// audit-trail classes (auth.*, settings.*) keep longer than the
+				// default behaviour log; email_delivery_events has its own TTL.
+				if deps.Events != nil {
+					ttlByClass := map[string]time.Duration{
+						"auth.":     time.Duration(cfg.EventAuditRetentionDays) * 24 * time.Hour,
+						"settings.": time.Duration(cfg.EventAuditRetentionDays) * 24 * time.Hour,
+					}
+					if n, err := deps.Events.Sweep(ctx, ttlByClass, time.Duration(cfg.EventRetentionDays)*24*time.Hour); err != nil {
+						slog.Warn("event_retention_sweep", "err", err)
+					} else if n > 0 {
+						slog.Info("event_retention_sweep", "deleted", n)
+					}
+				}
+				if deps.EmailDeliveryEvents != nil {
+					if n, err := deps.EmailDeliveryEvents.Sweep(ctx, time.Duration(cfg.DeliveryRetentionDays)*24*time.Hour); err != nil {
+						slog.Warn("delivery_event_retention_sweep", "err", err)
+					} else if n > 0 {
+						slog.Info("delivery_event_retention_sweep", "deleted", n)
+					}
 				}
 				cancel()
 				<-ticker.C

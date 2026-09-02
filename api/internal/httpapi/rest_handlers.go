@@ -196,6 +196,8 @@ func (h *RESTHandlers) createForm(w http.ResponseWriter, r *http.Request, actx *
 		respondErr(w, err)
 		return
 	}
+	// Issue #92: audit form creation.
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "form.created", map[string]any{"form_id": f.ID, "slug": f.Slug})
 	respond(w, http.StatusCreated, restForm{
 		ID: f.ID, Slug: f.Slug, Title: f.Title, Status: f.Status,
 		URL: h.formURLForAccount(r.Context(), actx.Account, f.Slug), UpdatedAt: f.UpdatedAt.UTC().Format(time.RFC3339),
@@ -221,6 +223,8 @@ func (h *RESTHandlers) updateForm(w http.ResponseWriter, r *http.Request, actx *
 		respondErr(w, err)
 		return
 	}
+	// Issue #92: audit form update.
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "form.updated", map[string]any{"form_id": r.PathValue("id")})
 	respond(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
@@ -232,6 +236,8 @@ func (h *RESTHandlers) publishForm(w http.ResponseWriter, r *http.Request, actx 
 		respondErr(w, err)
 		return
 	}
+	// Issue #92: audit form publish.
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "form.published", map[string]any{"form_id": r.PathValue("id")})
 	respond(w, http.StatusOK, map[string]string{"status": "published"})
 }
 
@@ -241,6 +247,8 @@ func (h *RESTHandlers) deleteForm(w http.ResponseWriter, r *http.Request, actx *
 		respondErr(w, err)
 		return
 	}
+	// Issue #92: audit form delete.
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "form.deleted", map[string]any{"form_id": r.PathValue("id")})
 	respond(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
@@ -309,6 +317,10 @@ func (h *RESTHandlers) bulkForms(w http.ResponseWriter, r *http.Request, actx *A
 		}
 		updated = n
 	}
+	// Issue #92: audit bulk form action.
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "form.bulk_"+in.Action, map[string]any{
+		"action": in.Action, "ids": ids, "updated": updated,
+	})
 	respond(w, http.StatusOK, map[string]int64{"updated": updated})
 }
 
@@ -355,6 +367,8 @@ func (h *RESTHandlers) createKey(w http.ResponseWriter, r *http.Request, actx *A
 		respondErr(w, err)
 		return
 	}
+	// Issue #92: audit API-key creation.
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "settings.api_key_created", map[string]any{"key_id": k.ID, "name": in.Name, "scopes": in.Scopes})
 	// The raw key is shown exactly once.
 	respond(w, http.StatusCreated, map[string]any{
 		"id": k.ID, "name": k.Name, "scopes": k.Scopes, "key": raw,
@@ -367,6 +381,8 @@ func (h *RESTHandlers) revokeKey(w http.ResponseWriter, r *http.Request, actx *A
 		respondErr(w, err)
 		return
 	}
+	// Issue #92: audit API-key revocation.
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "settings.api_key_revoked", map[string]any{"key_id": r.PathValue("id")})
 	respond(w, http.StatusOK, map[string]string{"status": "revoked"})
 }
 
@@ -503,6 +519,8 @@ func (h *RESTHandlers) captureSale(w http.ResponseWriter, r *http.Request, actx 
 		respondErr(w, err)
 		return
 	}
+	// Issue #92: audit sale capture.
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "sale.captured", map[string]any{"ref_code": ref, "sale_id": sale.ID})
 	respond(w, http.StatusOK, map[string]string{"status": "captured", "ref_code": ref})
 }
 
@@ -525,6 +543,8 @@ func (h *RESTHandlers) releaseSale(w http.ResponseWriter, r *http.Request, actx 
 		respondErr(w, err)
 		return
 	}
+	// Issue #92: audit sale release.
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "sale.released", map[string]any{"ref_code": ref, "sale_id": sale.ID})
 	respond(w, http.StatusOK, map[string]string{"status": "released", "ref_code": ref})
 }
 
@@ -593,6 +613,10 @@ func (h *RESTHandlers) bulkCaptureSales(w http.ResponseWriter, r *http.Request, 
 		}
 		results = append(results, res)
 	}
+	// Issue #92: audit bulk capture.
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "sale.bulk_captured", map[string]any{
+		"requested": len(sales), "captured": ok, "failed": failed,
+	})
 	respond(w, http.StatusOK, map[string]any{
 		"requested": len(sales), "captured": ok, "failed": failed, "results": results,
 	})
@@ -609,6 +633,8 @@ func (h *RESTHandlers) confirmSale(w http.ResponseWriter, r *http.Request, actx 
 		respondErr(w, err)
 		return
 	}
+	// Issue #92: audit sale confirm.
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "sale.confirmed", map[string]any{"ref_code": ref, "sale_id": sale.ID})
 	respond(w, http.StatusOK, map[string]string{"status": "confirmed", "ref_code": ref})
 }
 
