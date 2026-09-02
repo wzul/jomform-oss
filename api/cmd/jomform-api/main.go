@@ -111,7 +111,7 @@ func main() {
 		spacesStore := dbstore.NewSpaceStore(pool)
 		usersStore := dbstore.NewUserStore(pool)
 		passkeysStore := dbstore.NewPasskeyStore(pool)
-		pay := payments.New(chip.New(""), accounts, sales, subs, decryptKey, cfg.AppBaseURL)
+		pay := payments.New(chip.New(cfg.ChipAPIBaseURL), accounts, sales, subs, decryptKey, cfg.AppBaseURL)
 		pay.Forms = formsStore
 		pay.Spaces = spacesStore
 		if cfg.SESSMTPHost != "" {
@@ -155,7 +155,7 @@ func main() {
 		}
 		rest := &httpapi.RESTHandlers{
 			Accounts: accounts, Products: products, Forms: formsStore,
-			Keys: keys, Sales: sales, Sessions: sessions, ChipProbe: chip.New(""),
+			Keys: keys, Sales: sales, Sessions: sessions, ChipProbe: chip.New(cfg.ChipAPIBaseURL),
 			SecretsKey: decryptKey, Pay: pay, Webhooks: whStore, Domains: dbstore.NewDomainStore(pool),
 			SystemSettings: dbstore.NewSystemSettingStore(pool),
 			Spaces:         spacesStore,
@@ -178,7 +178,7 @@ func main() {
 			Spaces:     spacesStore,
 			Events:     deps.Events, // issue #92: list_events tool
 			DecryptKey: decryptKey,
-		}, chip.New(""), decryptKey, pay)
+		}, chip.New(cfg.ChipAPIBaseURL), decryptKey, pay)
 		deps.MCP = mcpSrv
 
 		// Public order-form renderer + submit.

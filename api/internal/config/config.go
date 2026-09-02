@@ -25,6 +25,12 @@ type Config struct {
 	AppBaseURL    string
 	Env           string // dev | prod
 
+	// ChipAPIBaseURL overrides the CHIP Collect API root. Empty (default)
+	// uses the production endpoint. Load tests point this at a local mock
+	// so the payment create-purchase path can be exercised without hitting
+	// the live CHIP sandbox.
+	ChipAPIBaseURL string
+
 	// SES SMTP (transactional email). Empty host disables email sends
 	// (e.g. password-reset falls back to logged instructions).
 	SESSMTPHost string
@@ -54,26 +60,27 @@ type Config struct {
 	// table; EventAuditRetentionDays overrides it for audit-trail event classes
 	// (auth.*, settings.*) which warrant longer retention. DeliveryRetentionDays
 	// applies to email_delivery_events. All default to 90 days.
-	EventRetentionDays       int
-	EventAuditRetentionDays  int
-	DeliveryRetentionDays    int
+	EventRetentionDays      int
+	EventAuditRetentionDays int
+	DeliveryRetentionDays   int
 }
 
 // Load reads configuration from the environment and validates it.
 func Load() (*Config, error) {
 	cfg := &Config{
-		Port:          getEnv("PORT", "8080"),
-		DatabaseURL:   os.Getenv("DATABASE_URL"),
-		ValkeyURL:     getEnv("VALKEY_URL", "valkey://localhost:6379/0"),
-		S3Endpoint:    getEnv("S3_ENDPOINT", "http://localhost:9000"),
-		S3AccessKey:   os.Getenv("S3_ACCESS_KEY"),
-		S3SecretKey:   os.Getenv("S3_SECRET_KEY"),
-		S3Bucket:      getEnv("S3_BUCKET", "jomform-media"),
-		S3Region:      getEnv("S3_REGION", "us-east-1"),
-		SessionSecret: os.Getenv("SESSION_SECRET"),
-		EncryptionKey: os.Getenv("ENCRYPTION_KEY"),
-		AppBaseURL:    getEnv("APP_BASE_URL", "http://localhost:8080"),
-		Env:           getEnv("APP_ENV", "dev"),
+		Port:           getEnv("PORT", "8080"),
+		DatabaseURL:    os.Getenv("DATABASE_URL"),
+		ValkeyURL:      getEnv("VALKEY_URL", "valkey://localhost:6379/0"),
+		S3Endpoint:     getEnv("S3_ENDPOINT", "http://localhost:9000"),
+		S3AccessKey:    os.Getenv("S3_ACCESS_KEY"),
+		S3SecretKey:    os.Getenv("S3_SECRET_KEY"),
+		S3Bucket:       getEnv("S3_BUCKET", "jomform-media"),
+		S3Region:       getEnv("S3_REGION", "us-east-1"),
+		SessionSecret:  os.Getenv("SESSION_SECRET"),
+		EncryptionKey:  os.Getenv("ENCRYPTION_KEY"),
+		AppBaseURL:     getEnv("APP_BASE_URL", "http://localhost:8080"),
+		Env:            getEnv("APP_ENV", "dev"),
+		ChipAPIBaseURL: os.Getenv("CHIP_API_BASE_URL"),
 
 		SESSMTPHost: os.Getenv("SES_SMTP_HOST"),
 		SESSMTPPort: getEnv("SES_SMTP_PORT", "587"),

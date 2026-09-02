@@ -1,0 +1,60 @@
+name: Load Gate
+
+# On-demand load/performance regression gate (issue #103).
+#
+# Runs the public-form buyer path at a fixed concurrency and fails the job if
+# p95 latency or error rate exceeds the recorded baseline threshold. Trigger
+# it manually against a staging (prod-equivalent) URL:
+#
+#   gh workflow run load-gate.yml -f base_url=https://staging.example.com \
+#     -f vus=50 -f duration=30s -f thresh_p95=500 -f thresh_err=0.01
+#
+# It is intentionally a single cheap scenario so it can also be added to the
+# PR CI once a staging endpoint is available (see loadtest/BASELINE.md).
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: Target base URL (staging / prod-equivalent)
+        required: true
+        default: http://localhost:8080
+      vus:
+        description: Virtual users
+        required: false
+        default: "50"
+      duration:
+        description: Steady-state duration
+        required: false
+        default: "30s"
+      thresh_p95:
+        description: p95 latency threshold (ms)
+        required: false
+        default: "500"
+      thresh_err:
+        description: Error-rate threshold (fraction)
+        required: false
+        default: "0.01"
+
+jobs:
+  load-gate:
+    name: Load gate (public form)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install k6
+        run: |
+          curl -sL https://github.com/grafana/k6/releases/download/v0.54.0/k6-v0.54.0-linux-amd64.tar.gz -o /tmp/k6.tar.gz
+          tar -xzf /tmp/k6.tar.gz -C /tmp
+          echo "/tmp/k6-v0.54.0-linux-amd64" >> "$GITHUB_PATH"
+
+      - name: Run load gate
+        run: |
+          k6 run \
+            -e "BASE_URL=${{ inputs.base_url }}" \
+            -e "VUS=${{ inputs.vus }}" \
+            -e "DURATION=${{ inputs.duration }}" \
+            -e "THRESH_P95=${{ inputs.thresh_p95 }}" \
+            -e "THRESH_ERR=${{ inputs.thresh_err }}" \
+            loadtest/gate.js

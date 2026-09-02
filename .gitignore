@@ -23,6 +23,9 @@ out/
 deploy/data/
 *.sql.gz
 
+# Load-test baseline run artifacts
+loadtest/results/
+
 # IDE / OS
 .idea/
 .vscode/
