@@ -70,6 +70,7 @@ services:
       S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-jomform_dev_change_me}
       S3_BUCKET: jomform-media
       S3_REGION: us-east-1
+      S3_PUBLIC_BASE: ${S3_PUBLIC_BASE:-${APP_BASE_URL:-http://localhost:8080}/media}
       SESSION_SECRET: ${SESSION_SECRET:-dev_only_change_me}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-dev_only_32byte_key_change_me_pls}
       APP_BASE_URL: ${APP_BASE_URL:-http://localhost:8080}

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -48,6 +49,22 @@ func main() {
 	} else if err := db.Migrate(ctx, pool, log); err != nil {
 		log.Error("migrations", "err", err)
 		osExit(1)
+	} else if pool != nil {
+		// Issue #145: rewrite already-stored internal media URLs
+		// (http://minio:9000/jomform-media/...) to the browser-reachable
+		// public base. Idempotent — no-op once no stored URL has the old
+		// internal prefix.
+		oldPrefix := strings.TrimRight(cfg.S3Endpoint, "/") + "/" + cfg.S3Bucket
+		newBase := cfg.S3PublicBase
+		if newBase == "" {
+			newBase = strings.TrimRight(cfg.AppBaseURL, "/") + "/media"
+		}
+		if n, merr := dbstore.MigrateMediaURLs(ctx, pool, oldPrefix, newBase); merr != nil {
+			log.Error("media_url_migration", "err", merr)
+			osExit(1)
+		} else if n > 0 {
+			log.Info("media_url_migration", "rows", n)
+		}
 	}
 
 	sessions, err := auth.NewSessions(cfg.ValkeyURL)
@@ -142,8 +159,16 @@ func main() {
 		// S3 creds are absent (upload endpoint returns 503, app still boots).
 		var store *httpapi.ObjectStore
 		if cfg.S3AccessKey != "" && cfg.S3SecretKey != "" {
+			// Issue #145: publicBase is the browser-reachable media base
+			// (S3_PUBLIC_BASE, defaulting to {AppBaseURL}/media) so uploaded
+			// media URLs are loadable by browsers instead of pointing at the
+			// internal MinIO host.
+			publicBase := cfg.S3PublicBase
+			if publicBase == "" {
+				publicBase = strings.TrimRight(cfg.AppBaseURL, "/") + "/media"
+			}
 			store, err = httpapi.NewObjectStore(cfg.S3Endpoint, cfg.S3AccessKey,
-				cfg.S3SecretKey, cfg.S3Bucket, cfg.S3Region)
+				cfg.S3SecretKey, cfg.S3Bucket, cfg.S3Region, publicBase)
 			if err != nil {
 				log.Error("s3 object store", "err", err)
 				store = nil

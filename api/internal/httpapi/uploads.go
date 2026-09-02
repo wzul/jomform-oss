@@ -73,16 +73,18 @@ var imageUploadMIME = map[string]string{
 type ObjectStore struct {
 	client     *s3.Client
 	bucket     string
-	publicBase string // public URL prefix: {S3_ENDPOINT}/{bucket}
+	publicBase string // browser-reachable public URL prefix (issue #145)
 }
 
 // NewObjectStore builds an ObjectStore from config. endpoint empty uses AWS.
 //
-// Serving pattern (documented in AGENTS.md): public images are served from the
-// direct {S3_ENDPOINT}/{bucket}/{key} object URL. MinIO uses path-style
-// addressing (force UsePathStyle for localhost/MinIO); the bucket is expected
-// to be public-read so builder/form image blocks render without signed URLs.
-func NewObjectStore(endpoint, accessKey, secretKey, bucket, region string) (*ObjectStore, error) {
+// Serving pattern (issue #145): public images are served through the API's
+// public media route (GET /media/{key}), which streams the object from
+// MinIO/S3. publicBase is the browser-reachable base for that route (e.g.
+// https://jomform.com/media) — it must NOT be the internal {S3_ENDPOINT}/
+// {bucket} URL, which browsers cannot resolve. MinIO uses path-style
+// addressing (force UsePathStyle for localhost/MinIO).
+func NewObjectStore(endpoint, accessKey, secretKey, bucket, region, publicBase string) (*ObjectStore, error) {
 	if bucket == "" {
 		return nil, errors.New("S3_BUCKET empty")
 	}
@@ -109,8 +111,8 @@ func NewObjectStore(endpoint, accessKey, secretKey, bucket, region string) (*Obj
 			o.UsePathStyle = true
 		}
 	})
-	base := strings.TrimSuffix(endpoint, "/") + "/" + bucket
-	if base == "/"+bucket {
+	base := strings.TrimSuffix(publicBase, "/")
+	if base == "" {
 		base = bucket
 	}
 	return &ObjectStore{client: cli, bucket: bucket, publicBase: base}, nil
@@ -130,9 +132,90 @@ func (o *ObjectStore) PutObject(ctx context.Context, key, contentType string, bo
 	return nil
 }
 
-// PublicURL returns the canonical object URL for a key.
+// PublicURL returns the canonical browser-reachable URL for a key. It points
+// at the API's public media route (issue #145), never the internal
+// S3/MinIO endpoint, so browsers can actually load the object.
 func (o *ObjectStore) PublicURL(key string) string {
 	return o.publicBase + "/" + key
+}
+
+// GetObject streams an object's bytes and content-type from the bucket. It is
+// used by the public media route (GET /media/{key}) to serve uploaded media to
+// browsers without exposing the internal S3/MinIO endpoint.
+func (o *ObjectStore) GetObject(ctx context.Context, key string) ([]byte, string, error) {
+	out, err := o.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: &o.bucket,
+		Key:    &key,
+	})
+	if err != nil {
+		return nil, "", fmt.Errorf("s3 get %q: %w", key, err)
+	}
+	defer out.Body.Close()
+	body, err := io.ReadAll(out.Body)
+	if err != nil {
+		return nil, "", fmt.Errorf("s3 read %q: %w", key, err)
+	}
+	ct := "application/octet-stream"
+	if out.ContentType != nil && *out.ContentType != "" {
+		ct = *out.ContentType
+	}
+	return body, ct, nil
+}
+
+// mediaKeyFromPath validates and extracts the object key from a public media
+// route path. Uploaded keys are always exactly `u/{account}/{uuid}.{ext}`
+// (see buildUploadKey), so the key must be exactly three segments starting
+// with `u/`, with no traversal segments (".", ".."), no backslashes, no
+// percent-encoding, and no empty segments. Returns "" when the path is not a
+// safe key.
+func mediaKeyFromPath(p string) string {
+	p = strings.TrimPrefix(p, "/")
+	if p == "" || strings.Contains(p, "\\") || strings.Contains(p, "%") {
+		return ""
+	}
+	segs := strings.Split(p, "/")
+	if len(segs) != 3 || segs[0] != "u" {
+		return ""
+	}
+	for _, seg := range segs {
+		if seg == "" || seg == "." || seg == ".." {
+			return ""
+		}
+	}
+	return p
+}
+
+// handleMedia serves GET /media/{key} — a public, unauthenticated route that
+// streams an uploaded object from the media bucket (issue #145). The key is
+// validated to a safe `u/...` path (no traversal), the object's stored
+// content-type is preserved, and a short cache header is set so browsers and
+// the edge don't re-fetch on every render. 404 when the object is missing.
+func (h *RESTHandlers) handleMedia(w http.ResponseWriter, r *http.Request) {
+	if h.Store == nil {
+		writeErr(w, http.StatusServiceUnavailable, "media storage tidak dikonfigurasi")
+		return
+	}
+	key := mediaKeyFromPath(r.PathValue("key"))
+	if key == "" {
+		writeErr(w, http.StatusBadRequest, "kunci media tidak sah")
+		return
+	}
+	body, ct, err := h.Store.GetObject(r.Context(), key)
+	if err != nil {
+		// Distinguish a missing object (404) from a storage failure (500).
+		var nf *types.NoSuchKey
+		if errors.As(err, &nf) {
+			writeErr(w, http.StatusNotFound, "media tidak dijumpai")
+			return
+		}
+		slog.Error("media_get", "err", err, "key", key)
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	w.Header().Set("Content-Type", ct)
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
 }
 
 // EnsureBucket provisions the media bucket if it does not exist and makes it
@@ -142,10 +225,10 @@ func (o *ObjectStore) PublicURL(key string) string {
 // a rebuild/redeploy can never silently regress into the NoSuchBucket 500 that
 // broke builder image uploads.
 //
-// Serving pattern (see NewObjectStore): public images are served from the
-// direct {S3_ENDPOINT}/{bucket}/{key} object URL, so the bucket must allow
-// anonymous s3:GetObject — otherwise builder/form image blocks render as
-// broken without signed URLs.
+// Serving pattern (issue #145): public images are served through the API's
+// public media route (GET /media/{key}), which streams the object from the
+// bucket. The bucket is still made public-read so the route (and any direct
+// object URL) can serve without signed URLs.
 func (o *ObjectStore) EnsureBucket(ctx context.Context) error {
 	// HeadBucket first: if it exists (and we can access it) there is nothing
 	// to do. A missing bucket surfaces as a typed NotFound / NoSuchBucket.

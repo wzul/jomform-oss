@@ -150,6 +150,10 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	// JomForm-hosted media URL (from the upload bucket) to avoid storing
 	// arbitrary external URLs.
 	mux.Handle("PUT /v1/rest/profile/avatar", h.authed(h.updateProfileAvatar))
+	// Issue #145: public media route — streams uploaded objects from the
+	// media bucket to browsers. Unauthenticated (public media); the key is
+	// validated to a safe `u/...` path (no traversal).
+	mux.HandleFunc("GET /media/{key...}", h.handleMedia)
 }
 
 // Resolve identifies the caller: Bearer API key (preferred) or session

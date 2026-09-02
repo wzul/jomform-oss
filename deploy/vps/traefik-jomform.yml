@@ -19,7 +19,7 @@ http:
       tls: {certResolver: le}
       priority: 30
     jf-api-f:
-      rule: "PathPrefix(`/f/`) || PathPrefix(`/t/`) || PathPrefix(`/v1/`) || PathPrefix(`/mcp`) || PathPrefix(`/embed/`) || PathPrefix(`/.well-known/oauth`) || PathPrefix(`/oauth/`)"
+      rule: "PathPrefix(`/f/`) || PathPrefix(`/t/`) || PathPrefix(`/v1/`) || PathPrefix(`/mcp`) || PathPrefix(`/embed/`) || PathPrefix(`/.well-known/oauth`) || PathPrefix(`/oauth/`) || PathPrefix(`/media/`)"
       entryPoints: [websecure]
       service: jf-api
       tls: {certResolver: le}

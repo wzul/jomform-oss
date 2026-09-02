@@ -221,6 +221,45 @@ func generateLargeImageFixture() []byte {
 	return buf.Bytes()
 }
 
+// TestPublicURLBrowserReachable (issue #145): PublicURL must return a
+// browser-reachable URL based on the configured public base, never the
+// internal S3/MinIO endpoint.
+func TestPublicURLBrowserReachable(t *testing.T) {
+	store, err := NewObjectStore("http://minio:9000", "ak", "sk", "jomform-media", "us-east-1", "https://jomform.com/media")
+	if err != nil {
+		t.Fatalf("NewObjectStore: %v", err)
+	}
+	url := store.PublicURL("u/acct/uuid.jpg")
+	if url != "https://jomform.com/media/u/acct/uuid.jpg" {
+		t.Fatalf("PublicURL = %q, want browser-reachable https://jomform.com/media/...", url)
+	}
+	if strings.Contains(url, "minio") || strings.Contains(url, ":9000") {
+		t.Fatalf("PublicURL %q leaks the internal S3 endpoint", url)
+	}
+}
+
+// TestMediaKeyFromPathSafety (issue #145): the public media route must only
+// accept a safe `u/...` key — no traversal segments, no backslashes, no empty
+// segments.
+func TestMediaKeyFromPathSafety(t *testing.T) {
+	ok := []string{"u/acct/uuid.jpg", "u/acct/uuid.webp", "u/a-b_c/uuid.png"}
+	for _, k := range ok {
+		if got := mediaKeyFromPath(k); got != k {
+			t.Errorf("mediaKeyFromPath(%q) = %q, want %q", k, got, k)
+		}
+	}
+	bad := []string{
+		"", "/", "..", "../etc/passwd", "u/../x", "u/acct/../x",
+		"u/acct/uuid.jpg/", "u//x", "u/./x", "u/acct/uuid.jpg/extra",
+		"logo.png", "a/b", "a\\b", "u/acct/..%2f..%2fetc", "u/acct/uuid.jpg/..",
+	}
+	for _, k := range bad {
+		if got := mediaKeyFromPath(k); got != "" {
+			t.Errorf("mediaKeyFromPath(%q) = %q, want empty (rejected)", k, got)
+		}
+	}
+}
+
 // TestPublicReadPolicyGrantsAnonymousGet (issue #79): the bucket policy we
 // apply must grant anonymous s3:GetObject on every object so builder/form
 // image blocks render without signed URLs. It must be a valid JSON document
@@ -282,7 +321,7 @@ func TestEnsureBucketIntegration(t *testing.T) {
 	if bucket == "" {
 		bucket = "jomform-media-test"
 	}
-	store, err := NewObjectStore(endpoint, ak, sk, bucket, "us-east-1")
+	store, err := NewObjectStore(endpoint, ak, sk, bucket, "us-east-1", "http://localhost:9000/media")
 	if err != nil {
 		t.Fatalf("NewObjectStore: %v", err)
 	}

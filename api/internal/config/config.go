@@ -19,6 +19,11 @@ type Config struct {
 	S3SecretKey   string
 	S3Bucket      string
 	S3Region      string
+	// S3PublicBase is the browser-reachable base URL for uploaded media
+	// (issue #145). It must point at the public media route (e.g.
+	// https://jomform.com/media), NOT the internal S3/MinIO endpoint. When
+	// empty, the API derives it from AppBaseURL + "/media".
+	S3PublicBase string
 	SessionSecret string
 	// EncryptionKey must decode to exactly 32 bytes (hex) — used for AES-GCM
 	// encryption of per-account CHIP secret keys at rest.
@@ -88,6 +93,7 @@ func Load() (*Config, error) {
 		S3SecretKey:    os.Getenv("S3_SECRET_KEY"),
 		S3Bucket:       getEnv("S3_BUCKET", "jomform-media"),
 		S3Region:       getEnv("S3_REGION", "us-east-1"),
+		S3PublicBase:   os.Getenv("S3_PUBLIC_BASE"),
 		SessionSecret:  os.Getenv("SESSION_SECRET"),
 		EncryptionKey:  os.Getenv("ENCRYPTION_KEY"),
 		AppBaseURL:     getEnv("APP_BASE_URL", "http://localhost:8080"),
