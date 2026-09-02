@@ -47,8 +47,29 @@ func publicBase() string {
 // authorize URL and the token exchange, or CF rejects with invalid_redirect.
 func cfRedirectURI() string { return publicBase() + "/api/cf/callback" }
 
-// cfTokenPair is the persisted (after sealing) token set. Access tokens live
-// ~1h; the refresh token is what keeps the link alive.
+// cfCredKind distinguishes how the stored Cloudflare credential authenticates.
+type cfCredKind string
+
+const (
+	cfKindOAuth     cfCredKind = "oauth"     // OAuth access+refresh token pair
+	cfKindAPIToken  cfCredKind = "apitoken"  // manual API token (Bearer)
+	cfKindGlobalKey cfCredKind = "globalkey" // manual global API key (X-Auth-Email/Key)
+)
+
+// cfCred is the persisted (after sealing) Cloudflare credential blob. The
+// same accounts.cf_token_enc column stores all kinds; cfAPICall branches on
+// Kind to pick the right auth headers. Manual tokens/keys never auto-refresh
+// (they persist until the merchant revokes them) — only kind=oauth refreshes.
+type cfCred struct {
+	Kind         cfCredKind `json:"kind"`
+	Access       string     `json:"access,omitempty"`        // oauth access token OR api token OR global key
+	Refresh      string     `json:"refresh,omitempty"`       // oauth refresh token only
+	AccountEmail string     `json:"account_email,omitempty"`  // manual kinds: the CF account email
+	AccountName  string     `json:"account_name,omitempty"`   // optional label / zones hint
+}
+
+// cfTokenPair is the OAuth token set returned by the token endpoint. Access
+// tokens live ~1h; the refresh token is what keeps the link alive.
 type cfTokenPair struct {
 	Access  string `json:"access"`
 	Refresh string `json:"refresh"`
@@ -128,7 +149,7 @@ func (h *RESTHandlers) cfCallback(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, "tiada akaun vendor")
 		return
 	}
-	blob, _ := json.Marshal(tok)
+	blob, _ := json.Marshal(cfCred{Kind: cfKindOAuth, Access: tok.Access, Refresh: tok.Refresh})
 	sealed, err := cryptoutil.Encrypt(h.SecretsKey, blob)
 	if err != nil {
 		respondErr(w, err)
@@ -164,18 +185,147 @@ func (h *RESTHandlers) cfDisconnect(w http.ResponseWriter, r *http.Request, actx
 	writeJSON(w, http.StatusOK, map[string]string{"status": "disconnected"})
 }
 
+// cfConnectAPIToken links Cloudflare via a manual API token (issue #82). The
+// token is validated against CF at save time (GET /user/tokens/verify) so an
+// invalid/expired token is rejected immediately with a clear 400, never
+// discovered later when the auto-CNAME fails. The token is sealed and never
+// returned to the client.
+func (h *RESTHandlers) cfConnectAPIToken(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	var in struct {
+		AccountEmail string `json:"account_email"`
+		APIToken     string `json:"api_token"`
+		AccountName  string `json:"account_name"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeErr(w, http.StatusBadRequest, "payload tidak sah")
+		return
+	}
+	in.AccountEmail = strings.TrimSpace(in.AccountEmail)
+	in.APIToken = strings.TrimSpace(in.APIToken)
+	if in.AccountEmail == "" || in.APIToken == "" {
+		writeErr(w, http.StatusBadRequest, "account email dan API token wajib")
+		return
+	}
+	if err := cfVerifyAPIToken(r.Context(), in.APIToken); err != nil {
+		writeErr(w, http.StatusBadRequest, "API token tidak sah atau tamat tempoh: "+err.Error())
+		return
+	}
+	blob, _ := json.Marshal(cfCred{Kind: cfKindAPIToken, Access: in.APIToken, AccountEmail: in.AccountEmail, AccountName: in.AccountName})
+	sealed, err := cryptoutil.Encrypt(h.SecretsKey, blob)
+	if err != nil {
+		respondErr(w, err)
+		return
+	}
+	if err := h.Accounts.SaveCFToken(r.Context(), actx.Account.ID, sealed); err != nil {
+		respondErr(w, err)
+		return
+	}
+	slog.Info("cf_api_token_linked", "account", actx.Account.ID)
+	writeJSON(w, http.StatusOK, map[string]bool{"linked": true})
+}
+
+// cfConnectGlobalKey links Cloudflare via a manual global API key (issue #82).
+// Validated at save time via GET /user (X-Auth-Email/X-Auth-Key); the key is
+// sealed and never returned to the client.
+func (h *RESTHandlers) cfConnectGlobalKey(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	var in struct {
+		AccountEmail string `json:"account_email"`
+		APIKey       string `json:"api_key"`
+		AccountName  string `json:"account_name"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeErr(w, http.StatusBadRequest, "payload tidak sah")
+		return
+	}
+	in.AccountEmail = strings.TrimSpace(in.AccountEmail)
+	in.APIKey = strings.TrimSpace(in.APIKey)
+	if in.AccountEmail == "" || in.APIKey == "" {
+		writeErr(w, http.StatusBadRequest, "account email dan global API key wajib")
+		return
+	}
+	if err := cfVerifyGlobalKey(r.Context(), in.AccountEmail, in.APIKey); err != nil {
+		writeErr(w, http.StatusBadRequest, "global API key tidak sah: "+err.Error())
+		return
+	}
+	blob, _ := json.Marshal(cfCred{Kind: cfKindGlobalKey, Access: in.APIKey, AccountEmail: in.AccountEmail, AccountName: in.AccountName})
+	sealed, err := cryptoutil.Encrypt(h.SecretsKey, blob)
+	if err != nil {
+		respondErr(w, err)
+		return
+	}
+	if err := h.Accounts.SaveCFToken(r.Context(), actx.Account.ID, sealed); err != nil {
+		respondErr(w, err)
+		return
+	}
+	slog.Info("cf_global_key_linked", "account", actx.Account.ID)
+	writeJSON(w, http.StatusOK, map[string]bool{"linked": true})
+}
+
+// cfVerifyAPIToken confirms a manual API token works by calling CF's
+// /user/tokens/verify endpoint (Bearer auth).
+func cfVerifyAPIToken(ctx context.Context, token string) error {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, cfAPIBase+"/user/tokens/verify", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized {
+		return fmt.Errorf("token ditolak oleh Cloudflare")
+	}
+	var vr struct {
+		Success bool `json:"success"`
+	}
+	_ = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&vr)
+	if !vr.Success {
+		return fmt.Errorf("token tidak sah")
+	}
+	return nil
+}
+
+// cfVerifyGlobalKey confirms a global API key works by calling CF's /user
+// endpoint with X-Auth-Email/X-Auth-Key headers.
+func cfVerifyGlobalKey(ctx context.Context, email, key string) error {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, cfAPIBase+"/user", nil)
+	req.Header.Set("X-Auth-Email", email)
+	req.Header.Set("X-Auth-Key", key)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return fmt.Errorf("email atau key ditolak oleh Cloudflare")
+	}
+	var ur struct {
+		Success bool `json:"success"`
+	}
+	_ = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&ur)
+	if !ur.Success {
+		return fmt.Errorf("email atau key tidak sah")
+	}
+	return nil
+}
+
 // ─── CF API client helpers (shared with the domain auto-CNAME flow) ─────────
 
-func cfUnseal(key []byte, sealed string) (*cfTokenPair, error) {
+func cfUnseal(key []byte, sealed string) (*cfCred, error) {
 	plain, err := cryptoutil.Decrypt(key, sealed)
 	if err != nil {
 		return nil, err
 	}
-	var pair cfTokenPair
-	if err := json.Unmarshal(plain, &pair); err != nil {
+	var cred cfCred
+	if err := json.Unmarshal(plain, &cred); err != nil {
 		return nil, err
 	}
-	return &pair, nil
+	// Backward compat: blobs sealed before issue #82 have no "kind" field —
+	// they are OAuth token pairs. Default to oauth so existing links keep
+	// working unchanged.
+	if cred.Kind == "" {
+		cred.Kind = cfKindOAuth
+	}
+	return &cred, nil
 }
 
 // cfExchangeCode swaps the OAuth code for the access+refresh token pair.
@@ -249,25 +399,35 @@ func cfVerifyToken(ctx context.Context, accessToken string) error {
 	return nil
 }
 
-// cfAPICall performs an authenticated Cloudflare API request, transparently
-// refreshing the stored token once when CF rejects it as stale. Returns the
-// response body and the (possibly rotated) pair for re-sealing.
-func (h *RESTHandlers) cfAPICall(ctx context.Context, accountID, method, path string, body io.Reader) ([]byte, *cfTokenPair, error) {
+// cfAPICall performs an authenticated Cloudflare API request. It branches on
+// the stored credential kind: oauth sends `Authorization: Bearer <access>` and
+// transparently refreshes once on a stale token; apitoken sends
+// `Authorization: Bearer <token>`; globalkey sends `X-Auth-Email` +
+// `X-Auth-Key`. Manual kinds never auto-refresh (they persist until the
+// merchant revokes them). Returns the response body and the (possibly rotated)
+// credential for re-sealing.
+func (h *RESTHandlers) cfAPICall(ctx context.Context, accountID, method, path string, body io.Reader) ([]byte, *cfCred, error) {
 	sealed, err := h.Accounts.CFToken(ctx, accountID)
 	if err != nil || sealed == "" {
 		return nil, nil, fmt.Errorf("cloudflare not linked")
 	}
-	pair, err := cfUnseal(h.SecretsKey, sealed)
+	cred, err := cfUnseal(h.SecretsKey, sealed)
 	if err != nil {
 		return nil, nil, fmt.Errorf("unseal cf token: %w", err)
 	}
 
-	call := func(access string) (int, []byte, error) {
+	call := func(cred *cfCred) (int, []byte, error) {
 		req, err := http.NewRequestWithContext(ctx, method, cfAPIBase+path, body)
 		if err != nil {
 			return 0, nil, err
 		}
-		req.Header.Set("Authorization", "Bearer "+access)
+		switch cred.Kind {
+		case cfKindGlobalKey:
+			req.Header.Set("X-Auth-Email", cred.AccountEmail)
+			req.Header.Set("X-Auth-Key", cred.Access)
+		default: // oauth + apitoken both use Bearer
+			req.Header.Set("Authorization", "Bearer "+cred.Access)
+		}
 		req.Header.Set("Content-Type", "application/json")
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -278,31 +438,31 @@ func (h *RESTHandlers) cfAPICall(ctx context.Context, accountID, method, path st
 		return resp.StatusCode, b, err
 	}
 
-	status, out, err := call(pair.Access)
-	// Auth-class failure → refresh once, re-seal, retry once.
-	if err == nil && status == http.StatusUnauthorized && pair.Refresh != "" {
-		fresh, rerr := cfRefresh(ctx, pair.Refresh)
+	status, out, err := call(cred)
+	// Auth-class failure → refresh once (oauth only), re-seal, retry once.
+	if err == nil && status == http.StatusUnauthorized && cred.Kind == cfKindOAuth && cred.Refresh != "" {
+		fresh, rerr := cfRefresh(ctx, cred.Refresh)
 		if rerr != nil {
 			return nil, nil, fmt.Errorf("cf refresh: %w", rerr)
 		}
 		if fresh.Refresh == "" {
-			fresh.Refresh = pair.Refresh // CF sometimes omits rotation
+			fresh.Refresh = cred.Refresh // CF sometimes omits rotation
 		}
-		blob, _ := json.Marshal(fresh)
+		blob, _ := json.Marshal(cfCred{Kind: cfKindOAuth, Access: fresh.Access, Refresh: fresh.Refresh})
 		if ns, eerr := cryptoutil.Encrypt(h.SecretsKey, blob); eerr == nil {
 			if serr := h.Accounts.SaveCFToken(ctx, accountID, ns); serr == nil {
-				pair = fresh
+				cred = &cfCred{Kind: cfKindOAuth, Access: fresh.Access, Refresh: fresh.Refresh}
 			}
 		}
-		status, out, err = call(pair.Access)
+		status, out, err = call(cred)
 	}
 	if err != nil {
 		return nil, nil, err
 	}
 	if status >= 300 {
-		return nil, pair, fmt.Errorf("cf api %s: %s: %s", path, http.StatusText(status), strings.TrimSpace(string(out)))
+		return nil, cred, fmt.Errorf("cf api %s: %s: %s", path, http.StatusText(status), strings.TrimSpace(string(out)))
 	}
-	return out, pair, nil
+	return out, cred, nil
 }
 
 // cfResolveZone finds the zone id for a domain (exact, then closest suffix).

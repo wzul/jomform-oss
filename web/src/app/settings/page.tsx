@@ -56,6 +56,14 @@ export default function Settings() {
   // Cloudflare OAuth link state (issue #22): Login vs Disconnect+✓ per #9.
   const [cfLinked, setCfLinked] = useState(false);
   const [cfConfigured, setCfConfigured] = useState(false);
+  // Cloudflare manual connect (issue #82): API token / global key form.
+  const [cfManualOpen, setCfManualOpen] = useState(false);
+  const [cfKind, setCfKind] = useState<"apitoken" | "globalkey">("apitoken");
+  const [cfAccName, setCfAccName] = useState("");
+  const [cfAccEmail, setCfAccEmail] = useState("");
+  const [cfSecret, setCfSecret] = useState("");
+  const [cfManualBusy, setCfManualBusy] = useState(false);
+  const [cfManualErr, setCfManualErr] = useState("");
 
   // Issue #13: single aggregated fetch replaces the 6-request waterfall
   // (chip, keys, domains, webhooks, einvoice, social) on mount.
@@ -397,7 +405,98 @@ export default function Settings() {
                 {t("set.cfDisconnect")}
               </button>
             )}
+            {!cfLinked && (
+              <button
+                onClick={() => { setCfManualOpen(!cfManualOpen); setCfManualErr(""); }}
+                className="jf-btn-ghost text-slate-600"
+              >
+                {t("set.cfManualToggle")}
+              </button>
+            )}
           </div>
+          {!cfLinked && cfManualOpen && (
+            <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <p className="text-xs text-slate-500">
+                {t("set.cfManualHelp")}{" "}
+                <a
+                  href="https://dash.cloudflare.com/profile/api-tokens"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-sky-600 underline"
+                >
+                  {t("set.cfApiTokensLink")}
+                </a>
+              </p>
+              <div className="mt-3 flex gap-2">
+                {(["apitoken", "globalkey"] as const).map((k) => (
+                  <label key={k} className="flex items-center gap-1 text-sm text-slate-700">
+                    <input
+                      type="radio"
+                      name="cfKind"
+                      checked={cfKind === k}
+                      onChange={() => { setCfKind(k); setCfManualErr(""); }}
+                    />
+                    {k === "apitoken" ? t("set.cfKindToken") : t("set.cfKindGlobal")}
+                  </label>
+                ))}
+              </div>
+              <div className="mt-3 grid gap-2">
+                <input
+                  value={cfAccName}
+                  onChange={(e) => setCfAccName(e.target.value)}
+                  placeholder={t("set.cfAccountName")}
+                  className="jf-input text-sm"
+                />
+                <input
+                  value={cfAccEmail}
+                  onChange={(e) => setCfAccEmail(e.target.value)}
+                  placeholder={t("set.cfAccountEmail")}
+                  type="email"
+                  className="jf-input text-sm"
+                />
+                <input
+                  value={cfSecret}
+                  onChange={(e) => setCfSecret(e.target.value)}
+                  placeholder={cfKind === "apitoken" ? t("set.cfApiToken") : t("set.cfGlobalKey")}
+                  type="password"
+                  autoComplete="off"
+                  className="jf-input text-sm"
+                />
+              </div>
+              {cfManualErr && (
+                <p className="mt-2 text-xs text-red-600">{t("set.cfManualErr")}{cfManualErr}</p>
+              )}
+              <button
+                disabled={cfManualBusy}
+                onClick={async () => {
+                  setCfManualBusy(true);
+                  setCfManualErr("");
+                  try {
+                    const body = cfKind === "apitoken"
+                      ? { account_email: cfAccEmail, api_token: cfSecret, account_name: cfAccName }
+                      : { account_email: cfAccEmail, api_key: cfSecret, account_name: cfAccName };
+                    const r = await fetch(
+                      cfKind === "apitoken" ? "/api/cf/api-token" : "/api/cf/global-key",
+                      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
+                    );
+                    const d = await r.json().catch(() => ({}));
+                    if (!r.ok) {
+                      setCfManualErr(d.error || `HTTP ${r.status}`);
+                      return;
+                    }
+                    setCfLinked(true);
+                    setCfManualOpen(false);
+                    setCfAccName(""); setCfAccEmail(""); setCfSecret("");
+                  } finally {
+                    setCfManualBusy(false);
+                  }
+                }}
+                className="jf-btn-primary mt-3 inline-block"
+              >
+                {cfManualBusy ? t("set.cfConnecting") : t("set.cfConnect")}
+              </button>
+            </div>
+          )}
           {!cfConfigured && (
             <p className="mt-2 text-xs text-slate-400">{t("set.cfNotConfigured")}</p>
           )}

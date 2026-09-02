@@ -82,6 +82,8 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/cf/callback", h.cfCallback)
 	mux.Handle("GET /v1/cf/status", h.authed(h.cfStatus))
 	mux.Handle("POST /v1/cf/disconnect", h.authed(h.cfDisconnect))
+	mux.Handle("POST /v1/cf/api-token", middleware.RateLimit(h.authed(h.cfConnectAPIToken)))
+	mux.Handle("POST /v1/cf/global-key", middleware.RateLimit(h.authed(h.cfConnectGlobalKey)))
 	mux.Handle("POST /v1/auth/passkeys/register/start", h.authed(h.passkeyRegisterStart))
 	mux.Handle("POST /v1/auth/passkeys/register/finish", h.authed(h.passkeyRegisterFinish))
 	mux.Handle("POST /v1/auth/passkeys/login/start", middleware.RateLimit(http.HandlerFunc(h.passkeyLoginStart)))
