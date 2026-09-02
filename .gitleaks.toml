@@ -1,0 +1,14 @@
+# gitleaks config — allowlist for test fixtures and non-secret placeholders.
+# The only historical finding is a `SESSION_SECRET: "x"` test fixture in
+# config_test.go (initial commit) — a false positive, not a real secret.
+[allowlist]
+  description = "Test fixtures and non-secret placeholders"
+  paths = [
+    '''api/internal/config/config_test\.go''',
+    '''api/internal/.*_test\.go''',
+    '''web/.*\.test\.(ts|tsx|js|jsx)''',
+  ]
+  regexes = [
+    '''SESSION_SECRET["']?\s*[:=]\s*["']x["']''',
+    '''ENCRYPTION_KEY["']?\s*[:=]\s*["']short["']''',
+  ]
