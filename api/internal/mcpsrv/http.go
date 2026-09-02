@@ -1,4 +1,4 @@
-// MCP HTTP transport wiring: streamable HTTP + API-key auth.
+// MCP HTTP transport wiring: streamable HTTP + API-key / OAuth-token auth.
 package mcpsrv
 
 import (
@@ -13,13 +13,16 @@ import (
 )
 
 // HTTPHandler returns an http.Handler serving MCP over Streamable HTTP at
-// any mount point (typically /mcp). Auth: Authorization: Bearer <api key>;
-// the per-request server instance carries the authenticated key's identity.
+// any mount point (typically /mcp). Auth (issue #121): Authorization:
+// Bearer <value> is accepted as EITHER an API key (looked up in api_keys,
+// existing behaviour) OR an OAuth access token (looked up in oauth_tokens,
+// opaque + revocable), and both resolve to the same account. The per-request
+// server instance carries the authenticated account's identity.
 func (s *Server) HTTPHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		key, ok := s.authenticate(r)
+		accountID, scopes, apikey, ok := s.authenticate(r)
 		if !ok {
-			http.Error(w, `{"error":"api key tidak sah"}`, http.StatusUnauthorized)
+			http.Error(w, `{"error":"token tidak sah"}`, http.StatusUnauthorized)
 			return
 		}
 		// Per-request server bound to the authenticated account via context.
@@ -27,27 +30,47 @@ func (s *Server) HTTPHandler() http.Handler {
 			return s.mcp
 		}, &mcp.StreamableHTTPOptions{Stateless: true})
 
-		ctx := WithAPIKey(r.Context(), key)
+		ctx := WithAuthIdentity(r.Context(), &AuthIdentity{
+			AccountID: accountID,
+			Scopes:    scopes,
+			APIKey:    apikey,
+		})
 		handler.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
-// authenticate extracts and validates the Bearer API key.
-func (s *Server) authenticate(r *http.Request) (*dbstore.APIKey, bool) {
+// authenticate extracts and validates the Bearer credential. It returns the
+// resolved account identity. `apikey` is non-nil only for API-key auth (used
+// by the revoke_api_key tool); for OAuth-token auth it is nil and scopes are
+// readwrite (OAuth tokens mirror an admin key). ok=false on any failure.
+func (s *Server) authenticate(r *http.Request) (accountID string, scopes []string, apikey *dbstore.APIKey, ok bool) {
 	header := r.Header.Get("Authorization")
 	const prefix = "Bearer "
 	if !strings.HasPrefix(header, prefix) {
-		return nil, false
+		return "", nil, nil, false
 	}
 	raw := strings.TrimSpace(strings.TrimPrefix(header, prefix))
 	if raw == "" {
-		return nil, false
+		return "", nil, nil, false
 	}
+
+	// 1. OAuth access token (issue #121) — checked first so an opaque access
+	//    token (which is not a key hash) never collides with the API-key table.
+	//    OAuth tokens are opaque, stored hashed, and revocable.
+	if s.deps.OAuth != nil {
+		if t, err := s.deps.OAuth.AccessTokenByHash(r.Context(), auth.HashAPIKey(raw)); err == nil {
+			// Fire-and-forget usage stamp.
+			go s.deps.OAuth.Touch(context.Background(), auth.HashAPIKey(raw))
+			return t.AccountID, t.Scope, nil, true
+		}
+	}
+
+	// 2. API key (existing behaviour, unchanged).
 	key, err := s.deps.Keys.LookupByKeyHash(r.Context(), auth.HashAPIKey(raw))
 	if err != nil {
-		return nil, false
+		return "", nil, nil, false
 	}
 	// Fire-and-forget usage stamp.
 	go s.deps.Keys.Touch(context.Background(), key.ID)
-	return key, true
+	return key.AccountID, key.Scopes, key, true
 }

@@ -270,11 +270,11 @@ type accountOut struct {
 }
 
 func (s *Server) getAccount(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, accountOut, error) {
-	key := KeyFromContext(ctx)
-	if key == nil {
-		return nil, accountOut{}, fmt.Errorf("api key tidak sah")
+	id := IdentityFromContext(ctx)
+	if id == nil {
+		return nil, accountOut{}, fmt.Errorf("token tiada atau tidak sah")
 	}
-	acc, err := s.deps.Accounts.ByID(ctx, key.AccountID)
+	acc, err := s.deps.Accounts.ByID(ctx, id.AccountID)
 	if err != nil {
 		return nil, accountOut{}, fmt.Errorf("db: %w", err)
 	}

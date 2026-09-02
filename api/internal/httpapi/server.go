@@ -53,6 +53,10 @@ type Deps struct {
 	// correlate Open/Click/Delivered events to a specific sale. Nil in
 	// bare-mode tests; events are then recorded without a sale_ref.
 	Sales *dbstore.SaleStore
+
+	// Issue #121: OAuth 2.1 authorization-code + PKCE store for MCP clients.
+	// Nil in bare-mode tests; the OAuth endpoints are only registered when wired.
+	OAuth *dbstore.OAuthStore
 }
 
 // VerifyMailer delivers an email-confirmation message. The concrete email.Sender
@@ -68,6 +72,7 @@ type Server struct {
 	log     *slog.Logger
 	deps    *Deps
 	auth    *AuthHandlers
+	oauth   *OAuthHandlers
 	proxy   *middleware.TrustedProxy
 	metrics *metrics.Metrics
 }
@@ -97,6 +102,9 @@ func NewServer(cfg *config.Config, log *slog.Logger, deps *Deps) *Server {
 			// Issue #92: audit/behaviour log for auth actions.
 			Events: deps.Events,
 		}
+		// Issue #121: OAuth 2.1 flow needs the same session + user identity for
+		// the human authorize step, plus the store. Wired alongside auth.
+		s.oauth = newOAuthHandlers(deps.OAuth, deps.Sessions, deps.Users, deps.Accounts, cfg.AppBaseURL, cfg)
 		s.proxy = middleware.NewTrustedProxy()
 		_ = s.proxy.FetchCloudflare(context.Background())
 	}
@@ -135,10 +143,21 @@ func (s *Server) Handler() http.Handler {
 	}
 	if s.deps.MCP != nil {
 		mux.Handle("POST /mcp", s.deps.MCP.HTTPHandler())
-		// OAuth 2.1 discovery + dynamic client registration (RFC 8414/7591).
+		// OAuth 2.1 discovery + dynamic client registration (RFC 8414/7591) +
+		// authorization-code/PKCE flow (issue #121).
 		mux.HandleFunc("/.well-known/oauth-authorization-server", wellKnownOAuth)
 		mux.HandleFunc("/.well-known/oauth-authorization-server/mcp", wellKnownOAuth)
-		mux.HandleFunc("POST /oauth/register", oauthRegister)
+		if s.oauth != nil {
+			// Defaults when a bare config (tests) left rate/burst at 0.
+			rate, burst := s.cfg.OAuthDCRRate, s.cfg.OAuthDCRBurst
+			if rate <= 0 {
+				rate = 1.0 / 3600.0
+			}
+			if burst <= 0 {
+				burst = 5
+			}
+			s.oauth.RegisterRoutes(mux, rate, burst)
+		}
 		mux.Handle("GET /mcp", s.deps.MCP.HTTPHandler())
 		mux.Handle("DELETE /mcp", s.deps.MCP.HTTPHandler())
 	}

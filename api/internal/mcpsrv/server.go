@@ -29,6 +29,10 @@ type Deps struct {
 	// Issue #106: SES delivery-event log, for the per-sale email status tool.
 	// Nil → the tool returns an empty status.
 	EmailDeliveryEvents *dbstore.EmailDeliveryEventStore
+	// Issue #121: OAuth 2.1 store. When wired, /mcp accepts either a Bearer
+	// API key OR an OAuth access token (both resolve to an account). Nil →
+	// API-key auth only.
+	OAuth *dbstore.OAuthStore
 	// DecryptKey (ENCRYPTION_KEY hex bytes) enables per-form CHIP override tools.
 	DecryptKey []byte
 }
@@ -54,15 +58,54 @@ type ctxKey string
 
 const apiKeyCtxKey ctxKey = "jomform_api_key"
 
-// WithAPIKey stores the authenticated API key in ctx.
-func WithAPIKey(ctx context.Context, key *dbstore.APIKey) context.Context {
-	return context.WithValue(ctx, apiKeyCtxKey, key)
+// AuthIdentity is the authenticated principal carried on the request context.
+// It backs BOTH authentication paths (issue #121): a Bearer API key
+// (api_keys table) or an OAuth access token (oauth_tokens table). Either way
+// the account is resolved; scopes gate write tools.
+type AuthIdentity struct {
+	AccountID string
+	Scopes    []string
+	// APIKey is non-nil only when authenticated via a Bearer API key. It is
+	// needed by the revoke_api_key tool to refuse revoking the live key.
+	APIKey *dbstore.APIKey
 }
 
-// KeyFromContext returns the authenticated API key (may be nil).
-func KeyFromContext(ctx context.Context) *dbstore.APIKey {
-	if v, ok := ctx.Value(apiKeyCtxKey).(*dbstore.APIKey); ok {
+// WithAPIKey stores an authenticated API key's identity in ctx.
+func WithAPIKey(ctx context.Context, key *dbstore.APIKey) context.Context {
+	return WithAuthIdentity(ctx, &AuthIdentity{
+		AccountID: key.AccountID,
+		Scopes:    key.Scopes,
+		APIKey:    key,
+	})
+}
+
+// WithOAuthToken stores an OAuth access token's identity in ctx. OAuth tokens
+// grant read+write (readwrite) scope, mirroring an admin API key.
+func WithOAuthToken(ctx context.Context, accountID string) context.Context {
+	return WithAuthIdentity(ctx, &AuthIdentity{
+		AccountID: accountID,
+		Scopes:    []string{"readwrite"},
+	})
+}
+
+// WithAuthIdentity stores the resolved principal in ctx.
+func WithAuthIdentity(ctx context.Context, id *AuthIdentity) context.Context {
+	return context.WithValue(ctx, apiKeyCtxKey, id)
+}
+
+// IdentityFromContext returns the authenticated principal (may be nil).
+func IdentityFromContext(ctx context.Context) *AuthIdentity {
+	if v, ok := ctx.Value(apiKeyCtxKey).(*AuthIdentity); ok {
 		return v
+	}
+	return nil
+}
+
+// KeyFromContext returns the authenticated API key, or nil when the request
+// was authenticated via an OAuth access token (or not at all).
+func KeyFromContext(ctx context.Context) *dbstore.APIKey {
+	if id := IdentityFromContext(ctx); id != nil {
+		return id.APIKey
 	}
 	return nil
 }

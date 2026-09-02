@@ -212,12 +212,12 @@ func (s *Server) registerTools() {
 
 // helper: require a write-capable key.
 func (s *Server) accountAndScope(ctx context.Context, write bool) (accountID string, err error) {
-	key := KeyFromContext(ctx)
-	if key == nil {
-		return "", fmt.Errorf("api key tidak sah")
+	id := IdentityFromContext(ctx)
+	if id == nil {
+		return "", fmt.Errorf("token tiada atau tidak sah")
 	}
-	if write && !dbstore.ScopeHas(key.Scopes, "readwrite") {
+	if write && !dbstore.ScopeHas(id.Scopes, "readwrite") {
 		return "", fmt.Errorf("scope tidak mencukupi (perlu readwrite)")
 	}
-	return key.AccountID, nil
+	return id.AccountID, nil
 }

@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Config holds all runtime settings for jomform-api.
@@ -63,6 +64,17 @@ type Config struct {
 	EventRetentionDays      int
 	EventAuditRetentionDays int
 	DeliveryRetentionDays   int
+
+	// OAuth 2.1 (issue #121): authorization-code TTL and access/refresh-token
+	// lifetimes for MCP clients. Defaults match the issue (10-min code,
+	// 1-hour access, 30-day refresh).
+	OAuthCodeTTLSeconds         time.Duration
+	OAuthAccessTokenTTLSeconds  time.Duration
+	OAuthRefreshTokenTTLSeconds time.Duration
+	// OAuthDCRBurst caps how many dynamic clients one IP can register in a
+	// burst (RegistrationLimit-style guard, issue #42 pattern).
+	OAuthDCRRate  float64
+	OAuthDCRBurst float64
 }
 
 // Load reads configuration from the environment and validates it.
@@ -102,6 +114,13 @@ func Load() (*Config, error) {
 		EventRetentionDays:      parsePositiveInt(os.Getenv("EVENT_RETENTION_DAYS"), 90),
 		EventAuditRetentionDays: parsePositiveInt(os.Getenv("EVENT_AUDIT_RETENTION_DAYS"), 180),
 		DeliveryRetentionDays:   parsePositiveInt(os.Getenv("DELIVERY_RETENTION_DAYS"), 90),
+
+		// OAuth 2.1 (issue #121): sensible defaults, overridable per env.
+		OAuthCodeTTLSeconds:         time.Duration(parsePositiveInt64(os.Getenv("OAUTH_CODE_TTL_SECONDS"), 600)) * time.Second,
+		OAuthAccessTokenTTLSeconds:  time.Duration(parsePositiveInt64(os.Getenv("OAUTH_ACCESS_TOKEN_TTL_SECONDS"), 3600)) * time.Second,
+		OAuthRefreshTokenTTLSeconds: time.Duration(parsePositiveInt64(os.Getenv("OAUTH_REFRESH_TOKEN_TTL_SECONDS"), 2592000)) * time.Second,
+		OAuthDCRRate:                parseRatio(os.Getenv("OAUTH_DCR_RATE"), 1.0/3600.0),
+		OAuthDCRBurst:               parsePositiveFloat(os.Getenv("OAUTH_DCR_BURST"), 5.0),
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -152,6 +171,15 @@ func parsePositiveInt(s string, fallback int) int {
 func parseRatio(s string, fallback float64) float64 {
 	f, err := strconv.ParseFloat(s, 64)
 	if err != nil || f <= 0 || f > 1 {
+		return fallback
+	}
+	return f
+}
+
+// parsePositiveFloat parses a positive float, falling back on empty/invalid.
+func parsePositiveFloat(s string, fallback float64) float64 {
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil || f <= 0 {
 		return fallback
 	}
 	return f

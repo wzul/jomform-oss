@@ -109,6 +109,9 @@ func main() {
 		// Issue #106: SNS endpoint correlates Open/Click/Delivered to a sale
 		// via the receipt's SES MessageID.
 		deps.Sales = sales
+		// Issue #121: OAuth 2.1 store for MCP clients (DCR + auth codes +
+		// opaque access/refresh tokens). Wired whenever the DB is up.
+		deps.OAuth = dbstore.NewOAuthStore(pool)
 
 		formsStore := dbstore.NewFormStore(pool)
 		spacesStore := dbstore.NewSpaceStore(pool)
@@ -180,12 +183,14 @@ func main() {
 		mcpSrv := mcpsrv.New(&mcpsrv.Deps{
 			Accounts: accounts, Products: products, Sales: sales,
 			Subs: subs, Keys: keys, Forms: formsStore,
-			Webhooks:   dbstore.NewWebhookStore(pool),
-			Spaces:     spacesStore,
-			Events:     deps.Events, // issue #92: list_events tool
+			Webhooks: dbstore.NewWebhookStore(pool),
+			Spaces:   spacesStore,
+			Events:   deps.Events, // issue #92: list_events tool
 			// Issue #106: per-sale receipt email status tool.
 			EmailDeliveryEvents: deps.EmailDeliveryEvents,
-			DecryptKey:          decryptKey,
+			// Issue #121: allow OAuth access tokens to authenticate /mcp too.
+			OAuth:      deps.OAuth,
+			DecryptKey: decryptKey,
 		}, chip.New(cfg.ChipAPIBaseURL), decryptKey, pay)
 		deps.MCP = mcpSrv
 
