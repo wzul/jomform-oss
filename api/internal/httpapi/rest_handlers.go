@@ -22,6 +22,24 @@ type restProduct struct {
 	Type          string `json:"type"`
 	BillingPeriod string `json:"billing_period,omitempty"`
 	Active        bool   `json:"active"`
+	Stock         *int   `json:"stock,omitempty"` // nil = unlimited
+	CreatedAt     string `json:"created_at,omitempty"`
+	UpdatedAt     string `json:"updated_at,omitempty"`
+}
+
+// toRestProduct maps a store Product to the REST JSON shape (money stays
+// integer sen; stock nil = unlimited).
+func toRestProduct(p *dbstore.Product) restProduct {
+	out := restProduct{
+		ID: p.ID, Name: p.Name, PriceSen: p.PriceSen,
+		Type: p.Type, BillingPeriod: p.BillingPeriod, Active: p.Active,
+		Stock:     p.Stock,
+		CreatedAt: p.CreatedAt.UTC().Format(time.RFC3339),
+	}
+	if !p.UpdatedAt.IsZero() {
+		out.UpdatedAt = p.UpdatedAt.UTC().Format(time.RFC3339)
+	}
+	return out
 }
 
 func (h *RESTHandlers) listProducts(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
@@ -29,19 +47,76 @@ func (h *RESTHandlers) listProducts(w http.ResponseWriter, r *http.Request, actx
 	if !ok {
 		return
 	}
-	products, err := h.Products.ListActiveByAccounts(r.Context(), scope.Accounts)
+	includeArchived := r.URL.Query().Get("include_archived") == "1"
+	var products []*dbstore.Product
+	var err error
+	if includeArchived {
+		products, err = h.Products.ListAllByAccounts(r.Context(), scope.Accounts)
+	} else {
+		products, err = h.Products.ListActiveByAccounts(r.Context(), scope.Accounts)
+	}
 	if err != nil {
 		respondErr(w, r, err)
 		return
 	}
 	out := make([]restProduct, 0, len(products))
 	for _, p := range products {
-		out = append(out, restProduct{
-			ID: p.ID, Name: p.Name, PriceSen: p.PriceSen,
-			Type: p.Type, BillingPeriod: p.BillingPeriod, Active: p.Active,
-		})
+		out = append(out, toRestProduct(p))
 	}
 	respond(w, http.StatusOK, out)
+}
+
+// updateProduct handles PUT /v1/rest/products/{id} — partial update of name,
+// price_sen, type, billing_period, stock, active (money in integer sen).
+// Omitted fields are left unchanged.
+func (h *RESTHandlers) updateProduct(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	var in struct {
+		Name          *string `json:"name"`
+		PriceSen      *int64  `json:"price_sen"`
+		Type          *string `json:"type"`
+		BillingPeriod *string `json:"billing_period"`
+		Stock         *int    `json:"stock"` // nil = unlimited, keep-unset if omitted
+		Active        *bool   `json:"active"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if in.Name != nil && *in.Name == "" {
+		writeErr(w, http.StatusBadRequest, "nama tidak boleh kosong")
+		return
+	}
+	if in.PriceSen != nil && *in.PriceSen < 0 {
+		writeErr(w, http.StatusBadRequest, "price_sen mesti >= 0")
+		return
+	}
+	var typPtr, periodPtr *string
+	if in.Type != nil {
+		if *in.Type != dbstore.SaleTypeOneTime && *in.Type != dbstore.SaleTypeSubscription {
+			writeErr(w, http.StatusBadRequest, "type mesti one_time|subscription")
+			return
+		}
+		typPtr = in.Type
+	}
+	if in.BillingPeriod != nil && (typPtr == nil || *typPtr == dbstore.SaleTypeSubscription) {
+		if *in.BillingPeriod != "month" && *in.BillingPeriod != "year" {
+			writeErr(w, http.StatusBadRequest, "billing_period mesti month|year")
+			return
+		}
+		periodPtr = in.BillingPeriod
+	}
+	if in.Stock != nil && *in.Stock < 0 {
+		writeErr(w, http.StatusBadRequest, "stok mesti >= 0")
+		return
+	}
+	if err := h.Products.Update(r.Context(), actx.Account.ID, r.PathValue("id"),
+		in.Name, in.PriceSen, in.Stock, in.Active, typPtr, periodPtr); err != nil {
+		respondErr(w, r, err)
+		return
+	}
+	// Issue #92: audit product update.
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "product.updated", map[string]any{"product_id": r.PathValue("id")})
+	respond(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
 func (h *RESTHandlers) deleteProduct(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
@@ -49,7 +124,64 @@ func (h *RESTHandlers) deleteProduct(w http.ResponseWriter, r *http.Request, act
 		respondErr(w, r, err)
 		return
 	}
+	// Issue #92: audit product archive (delete).
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "product.deleted", map[string]any{"product_id": r.PathValue("id")})
 	respond(w, http.StatusOK, map[string]string{"status": "archived"})
+}
+
+// bulkProducts applies an action to many products at once:
+// POST /v1/rest/products/bulk {"action":"archive","ids":[uuid,...]}
+// Returns {"updated": n} — how many the account actually owns and archived.
+// Mirrors the forms bulk pattern (#10).
+func (h *RESTHandlers) bulkProducts(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	var in struct {
+		Action string   `json:"action"`
+		IDs    []string `json:"ids"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if in.Action != "archive" {
+		writeErr(w, http.StatusBadRequest, "action mesti archive")
+		return
+	}
+	if len(in.IDs) == 0 {
+		writeErr(w, http.StatusBadRequest, "ids wajib")
+		return
+	}
+	if len(in.IDs) > 500 {
+		writeErr(w, http.StatusBadRequest, "ids terlalu banyak (maks 500)")
+		return
+	}
+	// Dedupe + keep only valid UUIDs; malformed ids are ignored, not fatal.
+	seen := make(map[string]struct{}, len(in.IDs))
+	ids := make([]string, 0, len(in.IDs))
+	for _, raw := range in.IDs {
+		id := strings.TrimSpace(raw)
+		if _, err := uuid.Parse(id); err != nil {
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		writeErr(w, http.StatusBadRequest, "ids mesti uuid")
+		return
+	}
+	updated, err := h.Products.ArchiveMany(r.Context(), actx.Account.ID, ids)
+	if err != nil {
+		respondErr(w, r, err)
+		return
+	}
+	// Issue #92: audit bulk product action.
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "product.bulk_"+in.Action, map[string]any{
+		"action": in.Action, "ids": ids, "updated": updated,
+	})
+	respond(w, http.StatusOK, map[string]int64{"updated": updated})
 }
 
 func (h *RESTHandlers) createProduct(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {

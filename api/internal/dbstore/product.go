@@ -90,6 +90,31 @@ func (s *ProductStore) ListActiveByAccounts(ctx context.Context, accountIDs []st
 	return out, rows.Err()
 }
 
+// ListAllByAccounts lists ALL products (active + archived) across a set of
+// accounts — for the WooCommerce-style admin list that shows a status column
+// and lets the owner toggle products back to active. Sorted newest first.
+func (s *ProductStore) ListAllByAccounts(ctx context.Context, accountIDs []string) ([]*Product, error) {
+	if len(accountIDs) == 0 {
+		return []*Product{}, nil
+	}
+	rows, err := s.pool.Query(ctx,
+		productSelect+" WHERE account_id = ANY($1) ORDER BY created_at DESC", accountIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []*Product{}
+	for rows.Next() {
+		q := &Product{}
+		if err := rows.Scan(&q.ID, &q.AccountID, &q.Name, &q.Description, &q.PriceSen,
+			&q.Images, &q.Stock, &q.Type, &q.BillingPeriod, &q.TrialDays, &q.Active, &q.CreatedAt, &q.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, q)
+	}
+	return out, rows.Err()
+}
+
 // SetActive archives/restores a product.
 func (s *ProductStore) SetActive(ctx context.Context, accountID, productID string, active bool) error {
 	tag, err := s.pool.Exec(ctx,
@@ -123,6 +148,20 @@ func (s *ProductStore) Archive(ctx context.Context, accountID, productID string)
 	return err
 }
 
+// ArchiveMany soft-deletes (archives) many products at once; returns how many
+// ids actually updated (account-scoped). Mirrors FormStore.SoftDeleteMany for
+// the forms bulk pattern (#10).
+func (s *ProductStore) ArchiveMany(ctx context.Context, accountID string, productIDs []string) (int64, error) {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE products SET active=false, updated_at=now()
+		 WHERE account_id=$1 AND active AND id = ANY($2)`,
+		accountID, productIDs)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 // DecrementStock atomically reduces stock for a limited product.
 // Returns ErrOutOfStock when the product is sold out. Unlimited (NULL) always ok.
 func (s *ProductStore) DecrementStock(ctx context.Context, productID string, qty int) error {
@@ -149,16 +188,22 @@ func (s *ProductStore) DecrementStock(ctx context.Context, productID string, qty
 // ErrOutOfStock rejects submissions past available inventory.
 var ErrOutOfStock = errors.New("produk telah habis (out of stock)")
 
-// Update modifies a product's name/price/stock/activity (nil = unchanged).
-func (s *ProductStore) Update(ctx context.Context, accountID, productID string, name *string, priceSen *int64, stock *int, active *bool) error {
+// Update modifies a product's name/price/stock/type/billing_period/activity
+// (nil = unchanged). When type is set to one_time, billing_period is forced
+// NULL (a one-time product can't carry a period); when type is subscription a
+// caller-supplied billing_period is applied, otherwise the stored one is kept.
+// Money stays integer sen.
+func (s *ProductStore) Update(ctx context.Context, accountID, productID string, name *string, priceSen *int64, stock *int, active *bool, typ *string, billingPeriod *string) error {
 	_, err := s.pool.Exec(ctx,
 		`UPDATE products SET
 		   name = COALESCE($3, name),
 		   price_sen = COALESCE($4, price_sen),
 		   stock = CASE WHEN $5::boolean THEN $6 ELSE stock END,
-		   active = COALESCE($7, active),
+		   type = COALESCE($7, type),
+		   billing_period = CASE WHEN COALESCE($7, type) = 'one_time' THEN NULL ELSE COALESCE($8, billing_period) END,
+		   active = COALESCE($9, active),
 		   updated_at = now()
 		 WHERE id=$2 AND account_id=$1`,
-		accountID, productID, name, priceSen, stock != nil, stock, active)
+		accountID, productID, name, priceSen, stock != nil, stock, typ, billingPeriod, active)
 	return err
 }

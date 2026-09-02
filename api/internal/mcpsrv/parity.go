@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -14,11 +15,13 @@ import (
 // ── Products update ──────────────────────────────────────────────────────
 
 type updateProductIn struct {
-	ProductID string `json:"product_id" jsonschema:"ID produk"`
-	Name      string `json:"name,omitempty" jsonschema:"Nama baharu (optional)"`
-	PriceSen  *int64 `json:"price_sen,omitempty" jsonschema:"Harga baharu dalam sen (optional)"`
-	Stock     *int   `json:"stock,omitempty" jsonschema:"Stok baharu (optional); omit = tak berubah"`
-	Active    *bool  `json:"active,omitempty" jsonschema:"Aktifkan/Nyahaktif"`
+	ProductID     string `json:"product_id" jsonschema:"ID produk"`
+	Name          string `json:"name,omitempty" jsonschema:"Nama baharu (optional)"`
+	PriceSen      *int64 `json:"price_sen,omitempty" jsonschema:"Harga baharu dalam sen (optional)"`
+	Stock         *int   `json:"stock,omitempty" jsonschema:"Stok baharu (optional); omit = tak berubah"`
+	Active        *bool  `json:"active,omitempty" jsonschema:"Aktifkan/Nyahaktif"`
+	Type          string `json:"type,omitempty" jsonschema:"one_time atau subscription (optional)"`
+	BillingPeriod string `json:"billing_period,omitempty" jsonschema:"month atau year untuk subscription (optional)"`
 }
 
 func (s *Server) updateProduct(
@@ -36,7 +39,21 @@ func (s *Server) updateProduct(
 	if stockPtr != nil && *stockPtr < 0 {
 		*stockPtr = 0
 	}
-	if err := s.deps.Products.Update(ctx, acc, in.ProductID, namePtr, in.PriceSen, stockPtr, in.Active); err != nil {
+	var typPtr *string
+	if in.Type != "" {
+		if in.Type != dbstore.SaleTypeOneTime && in.Type != dbstore.SaleTypeSubscription {
+			return nil, nil, fmt.Errorf("type mesti one_time|subscription")
+		}
+		typPtr = &in.Type
+	}
+	var periodPtr *string
+	if in.BillingPeriod != "" {
+		if in.BillingPeriod != "month" && in.BillingPeriod != "year" {
+			return nil, nil, fmt.Errorf("billing_period mesti month|year")
+		}
+		periodPtr = &in.BillingPeriod
+	}
+	if err := s.deps.Products.Update(ctx, acc, in.ProductID, namePtr, in.PriceSen, stockPtr, in.Active, typPtr, periodPtr); err != nil {
 		return nil, nil, err
 	}
 	return nil, map[string]string{"status": "updated", "product_id": in.ProductID}, nil
@@ -204,6 +221,44 @@ func (s *Server) archiveProductMCP(
 		return nil, nil, err
 	}
 	return nil, map[string]string{"status": "archived", "product_id": in.ProductID}, nil
+}
+
+// bulkProductsMCP archives many products in one call (parity with
+// POST /v1/rest/products/bulk). Returns how many the account actually owned.
+type bulkProductsIn struct {
+	IDs []string `json:"ids" jsonschema:"Senarai produk id (maks 500)"`
+}
+
+func (s *Server) bulkProductsMCP(
+	ctx context.Context, _ *mcp.CallToolRequest, in bulkProductsIn,
+) (*mcp.CallToolResult, map[string]any, error) {
+	acc, err := s.accountAndScope(ctx, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(in.IDs) == 0 {
+		return nil, nil, errors.New("ids wajib")
+	}
+	if len(in.IDs) > 500 {
+		return nil, nil, errors.New("ids terlalu banyak (maks 500)")
+	}
+	seen := make(map[string]struct{}, len(in.IDs))
+	ids := make([]string, 0, len(in.IDs))
+	for _, id := range in.IDs {
+		if _, dup := seen[id]; dup || id == "" {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return nil, nil, errors.New("ids mesti diisi")
+	}
+	updated, err := s.deps.Products.ArchiveMany(ctx, acc, ids)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, map[string]any{"status": "ok", "action": "archive", "updated": updated}, nil
 }
 
 // ── Pass-through analytics aliases (agents get the same numbers as UI) ──

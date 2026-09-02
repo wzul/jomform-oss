@@ -113,8 +113,12 @@ func (s *Server) registerTools() {
 	// ── Parity: forms/products (dashboard coverage) ────────────────────────
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "update_product",
-		Description: "Kemaskini produk: nama, harga (price_sen), stok, aktif/tidak. Omit medan tak berubah.",
+		Description: "Kemaskini produk: nama, harga (price_sen), stok, jenis (type), billing_period (langganan), aktif/tidak. Omit medan tak berubah.",
 	}, s.updateProduct)
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "bulk_products",
+		Description: "Arkibkan banyak produk sekali gus (active=false). ids[] maks 500.",
+	}, s.bulkProductsMCP)
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "upsert_form",
 		Description: "Cipta/kemaskini borang (form_id kosong = baru). Config blocks ikut get_form.",
