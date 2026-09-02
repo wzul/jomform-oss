@@ -117,6 +117,16 @@ const DICT = {
   // common
   "common.exportCsv": { en: "Export CSV", ms: "Eksport CSV", zh: "导出 CSV", ta: "CSV ஏற்றுமதி", ar: "تصدير CSV" },
   "common.space": { en: "Space", ms: "Space", zh: "空间", ta: "இடம்", ar: "المساحة" },
+  // issue #144: create-space UI (always-visible switcher + inline form)
+  "space.new": { en: "New space", ms: "Space baharu", zh: "新建空间", ta: "புதிய இடம்", ar: "مساحة جديدة" },
+  "space.name": { en: "Space name", ms: "Nama space", zh: "空间名称", ta: "இடப் பெயர்", ar: "اسم المساحة" },
+  "space.slug": { en: "Slug (a-z, 0-9, dash)", ms: "Slug (a-z, 0-9, dash)", zh: "Slug（a-z、0-9、连字符）", ta: "Slug (a-z, 0-9, dash)", ar: "Slug (a-z، 0-9، شرطة)" },
+  "space.create": { en: "Create", ms: "Cipta", zh: "创建", ta: "உருவாக்கு", ar: "إنشاء" },
+  "space.cancel": { en: "Cancel", ms: "Batal", zh: "取消", ta: "ரத்து", ar: "إلغاء" },
+  "space.created": { en: "Space created ✓", ms: "Space dicipta ✓", zh: "空间已创建 ✓", ta: "இடம் உருவாக்கப்பட்டது ✓", ar: "تم إنشاء المساحة ✓" },
+  "space.createFail": { en: "Failed to create space.", ms: "Gagal cipta space.", zh: "创建空间失败。", ta: "இடம் உருவாக்க முடியவில்லை.", ar: "فشل إنشاء المساحة." },
+  "space.slugTaken": { en: "That slug is already taken.", ms: "Slug itu sudah digunakan.", zh: "该 Slug 已被占用。", ta: "அந்த slug ஏற்கனவே பயன்பாட்டில் உள்ளது.", ar: "هذا الـ slug مستخدم بالفعل." },
+  "space.slugInvalid": { en: "Slug must be 3-40 chars, a-z, 0-9, dash.", ms: "Slug mesti 3-40 aksara, a-z, 0-9, dash.", zh: "Slug 必须为 3-40 个字符，仅限 a-z、0-9、连字符。", ta: "Slug 3-40 எழுத்துகள், a-z, 0-9, dash ஆக இருக்க வேண்டும்.", ar: "يجب أن يكون الـ slug من 3-40 حرفاً، a-z، 0-9، شرطة." },
   "common.confirm": { en: "Confirm", ms: "Sahkan", zh: "确认", ta: "உறுதிப்படுத்து", ar: "تأكيد" },
   "common.prev": { en: "Prev", ms: "Sebelum", zh: "上一页", ta: "முந்தையது", ar: "السابق" },
   "common.next": { en: "Next", ms: "Seterusnya", zh: "下一页", ta: "அடுத்து", ar: "التالي" },
