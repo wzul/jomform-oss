@@ -110,6 +110,7 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /v1/rest/webhooks", h.authed(h.listWebhooks))
 	mux.Handle("GET /v1/rest/settings/webhook-key", h.authed(h.getWebhookKey))
 	mux.Handle("POST /v1/rest/webhooks", h.authed(h.createWebhook))
+	mux.Handle("PUT /v1/rest/webhooks/{id}", h.authed(h.updateWebhook))
 	mux.Handle("DELETE /v1/rest/webhooks/{id}", h.authed(h.deleteWebhook))
 	mux.Handle("GET /v1/rest/domains", h.authed(h.listCustomDomains))
 	mux.Handle("POST /v1/rest/domains", h.authed(h.addCustomDomain))

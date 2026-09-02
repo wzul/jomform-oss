@@ -86,4 +86,31 @@ func (h *RESTHandlers) deleteWebhook(w http.ResponseWriter, r *http.Request, act
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
-// ─── Dispatcher: called on payment transitions ──────────────────────────────
+func (h *RESTHandlers) updateWebhook(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	var in struct {
+		URL    string   `json:"url"`
+		Secret string   `json:"secret"`
+		Events []string `json:"events"`
+	}
+	if err := decodeJSON(r, &in); err != nil || !strings.HasPrefix(in.URL, "http") {
+		writeErr(w, http.StatusBadRequest, "url http(s) wajib")
+		return
+	}
+	// Secret is optional on update: a blank value keeps the existing secret;
+	// a supplied non-blank secret must meet the 8-char minimum.
+	if in.Secret != "" && len(in.Secret) < 8 {
+		writeErr(w, http.StatusBadRequest, "secret (min 8 char) wajib")
+		return
+	}
+	if len(in.Events) == 0 {
+		in.Events = []string{"sale.paid"}
+	}
+	if err := h.Webhooks.Update(r.Context(), actx.Account.ID, r.PathValue("id"), in.URL, in.Secret, in.Events); err != nil {
+		respondErr(w, r, err)
+		return
+	}
+	// Issue #92: audit webhook update.
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "settings.webhook_updated", map[string]any{"webhook_id": r.PathValue("id"), "events": in.Events})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+

@@ -165,6 +165,10 @@ func (s *Server) registerTools() {
 		Description: "Padam satu webhook (id dari list_webhooks).",
 	}, s.deleteWebhookMCP)
 	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "update_webhook",
+		Description: "Kemas kini webhook (url, events, secret pilihan — kosong = kekal sedia ada). events: sale.paid|sale.failed|subscription.charged|*.",
+	}, s.updateWebhookMCP)
+	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "webhook_deliveries",
 		Description: "Log penghantaran terkini webhook (status_code, attempt, error).",
 	}, s.webhookDeliveriesMCP)

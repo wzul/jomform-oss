@@ -182,6 +182,42 @@ func (s *Server) deleteWebhookMCP(
 	return nil, map[string]string{"status": "deleted"}, nil
 }
 
+type webhookUpdateIn struct {
+	ID     string   `json:"id" jsonschema:"ID webhook (dari list_webhooks)"`
+	URL    string   `json:"url" jsonschema:"URL endpoint baharu (https)"`
+	Secret string   `json:"secret,omitempty" jsonschema:"Rahsia baharu; kosong = kekal sedia ada (min 8 char jika diisi)"`
+	Events []string `json:"events,omitempty" jsonschema:"sale.paid|sale.failed|subscription.charged|*"`
+}
+
+func (s *Server) updateWebhookMCP(
+	ctx context.Context, _ *mcp.CallToolRequest, in webhookUpdateIn,
+) (*mcp.CallToolResult, map[string]string, error) {
+	acc, err := s.accountAndScope(ctx, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(in.URL) < 8 {
+		return nil, nil, errors.New("url wajib (min 8 char)")
+	}
+	if in.Secret != "" && len(in.Secret) < 8 {
+		return nil, nil, errors.New("secret (min 8 char) wajib bila diisi; kosong = kekal sedia ada")
+	}
+	if err := validateWebhookURL(ctx, in.URL); err != nil {
+		return nil, nil, err
+	}
+	events := in.Events
+	if len(events) == 0 {
+		events = []string{"sale.paid"}
+	}
+	if err := validateWebhookEvents(events); err != nil {
+		return nil, nil, err
+	}
+	if err := s.deps.Webhooks.Update(ctx, acc, in.ID, in.URL, in.Secret, events); err != nil {
+		return nil, nil, err
+	}
+	return nil, map[string]string{"id": in.ID, "status": "updated"}, nil
+}
+
 type webhookDeliveriesIn struct {
 	WebhookID string `json:"webhook_id"`
 	Limit     int    `json:"limit,omitempty"`

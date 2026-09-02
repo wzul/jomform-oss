@@ -63,6 +63,22 @@ func (s *WebhookStore) Delete(ctx context.Context, accountID, webhookID string) 
 	return err
 }
 
+// Update edits a webhook owned by the account. If secret is "" it is left
+// unchanged; url and events are always replaced with the provided values.
+// Returns pgx.ErrNoRows when the webhook does not exist or is not owned.
+func (s *WebhookStore) Update(ctx context.Context, accountID, webhookID, url, secret string, events []string) error {
+	var res string
+	err := s.pool.QueryRow(ctx,
+		`UPDATE outbound_webhooks
+		   SET url=$3,
+		       secret=CASE WHEN $4='' THEN secret ELSE $4 END,
+		       events=$5
+		 WHERE id=$2 AND account_id=$1
+		 RETURNING id`,
+		accountID, webhookID, url, secret, events).Scan(&res)
+	return err
+}
+
 // ActiveForEvent lists webhooks of the account subscribed to the event.
 func (s *WebhookStore) ActiveForEvent(ctx context.Context, accountID, event string) ([]*OutboundWebhook, error) {
 	rows, err := s.pool.Query(ctx,

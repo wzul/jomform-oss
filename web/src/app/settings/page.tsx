@@ -55,6 +55,10 @@ const METHODS = [
   { id: "crypto_coin", label: "Crypto Coin" },
 ];
 
+// Issue #128: dispatcher-supported webhook events (dispatch2.go + purchases.go).
+// An explicit "*" option subscribes to all events.
+const WEBHOOK_EVENTS = ["sale.paid", "sale.failed", "subscription.charged"] as const;
+
 export default function Settings() {
   const { t } = useI18n();
   const router = useRouter();
@@ -81,6 +85,12 @@ export default function Settings() {
   const [webhooks, setWebhooks] = useState<{ id: string; url: string; events: string[] }[]>([]);
   const [whUrl, setWhUrl] = useState("");
   const [whSecret, setWhSecret] = useState("");
+  // Issue #128: event selection (add form defaults to all) + inline edit drawer.
+  const [whEvents, setWhEvents] = useState<string[]>([...WEBHOOK_EVENTS]);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [editUrl, setEditUrl] = useState("");
+  const [editSecret, setEditSecret] = useState("");
+  const [editEvents, setEditEvents] = useState<string[]>([]);
   const [trackingHead, setTrackingHead] = useState("");
   const [social, setSocial] = useState<SocialRow[]>([]);
   // Cloudflare OAuth link state (issue #22): Login vs Disconnect+✓ per #9.
@@ -271,11 +281,54 @@ export default function Settings() {
 
   async function addWebhook(e: React.FormEvent) {
     e.preventDefault();
+    setErr("");
     const r = await fetch("/api/rest/webhooks", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url: whUrl, secret: whSecret, events: ["sale.paid", "sale.failed", "subscription.charged"] }),
+      body: JSON.stringify({ url: whUrl, secret: whSecret, events: whEvents }),
     });
-    if (r.ok) { setWhUrl(""); setWhSecret(""); load(); }
+    if (r.ok) {
+      setWhUrl(""); setWhSecret(""); setWhEvents([...WEBHOOK_EVENTS]);
+      load();
+    } else {
+      // Issue #128: show the backend's error inline instead of swallowing it.
+      const d = await r.json().catch(() => ({}));
+      setErr(t("set.whAddFail", { error: d.error || t("set.failedSave") }));
+    }
+  }
+
+  // Issue #128: persist edits via the new PUT /v1/rest/webhooks/{id} endpoint.
+  async function saveWebhook(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editId) return;
+    setErr("");
+    const r = await fetch(`/api/rest/webhooks/${editId}`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: editUrl, secret: editSecret, events: editEvents }),
+    });
+    if (r.ok) {
+      setMsg(t("set.whUpdated"));
+      setEditId(null); setEditUrl(""); setEditSecret(""); setEditEvents([]);
+      load();
+    } else {
+      const d = await r.json().catch(() => ({}));
+      setErr(t("set.whUpdateFail", { error: d.error || t("set.failedSave") }));
+    }
+  }
+
+  function toggleWhEvent(target: string[], setter: (v: string[]) => void, ev: string) {
+    setter(target.includes(ev) ? target.filter((x) => x !== ev) : [...target, ev]);
+  }
+
+  // Issue #128: open (or close) the inline edit drawer for a webhook row.
+  function openEdit(wh: { id: string; url: string; events: string[] }) {
+    setEditId(wh.id);
+    setEditUrl(wh.url);
+    setEditSecret("");
+    setEditEvents([...(wh.events && wh.events.length ? wh.events : ["sale.paid"])]);
+    setErr("");
+  }
+  function closeEdit() {
+    setEditId(null); setEditUrl(""); setEditSecret(""); setEditEvents([]);
   }
 
   async function genKey() {
@@ -733,12 +786,38 @@ export default function Settings() {
                 <code className="rounded bg-slate-100 px-1">sale.failed</code>,{" "}
                 <code className="rounded bg-slate-100 px-1">subscription.charged</code>. {t("set.hmacSigned")}
               </p>
-              <form onSubmit={addWebhook} className="mt-3 flex flex-wrap gap-2">
-                <input value={whUrl} onChange={(e) => setWhUrl(e.target.value)} required type="url"
-                  placeholder="https://yourapp.com/jomform-hook" className="jf-input min-w-56 max-w-xl flex-1" />
-                <input value={whSecret} onChange={(e) => setWhSecret(e.target.value)} required type="text"
-                  placeholder={t("set.signingSecret")} className="jf-input w-48" />
-                <button className="jf-btn-primary">{t("set.add")}</button>
+              <form onSubmit={addWebhook} className="mt-3">
+                <div className="flex flex-wrap gap-2">
+                  <input value={whUrl} onChange={(e) => setWhUrl(e.target.value)} required type="url"
+                    placeholder="https://yourapp.com/jomform-hook" className="jf-input min-w-56 max-w-xl flex-1" />
+                  <input value={whSecret} onChange={(e) => setWhSecret(e.target.value)} required type="text"
+                    placeholder={t("set.signingSecret")} className="jf-input w-48" />
+                  <button className="jf-btn-primary">{t("set.add")}</button>
+                </div>
+                {/* Issue #128: event selection checkboxes (default all). */}
+                <div className="mt-2">
+                  <p className="text-xs text-slate-500">{t("webhook.eventsTitle")}</p>
+                  <div className="mt-1 flex flex-wrap items-center gap-3">
+                    {WEBHOOK_EVENTS.map((ev) => (
+                      <label key={ev} className="flex items-center gap-1 text-sm text-slate-700">
+                        <input
+                          type="checkbox"
+                          checked={whEvents.includes(ev)}
+                          onChange={() => toggleWhEvent(whEvents, setWhEvents, ev)}
+                        />
+                        {ev}
+                      </label>
+                    ))}
+                    <label className="flex items-center gap-1 text-sm text-slate-400">
+                      <input
+                        type="checkbox"
+                        checked={whEvents.includes("*")}
+                        onChange={() => toggleWhEvent(whEvents, setWhEvents, "*")}
+                      />
+                      {t("webhook.event.all")}
+                    </label>
+                  </div>
+                </div>
               </form>
               <ul className="mt-3 space-y-2">
                 {webhooks.map((wh) => (
@@ -747,11 +826,54 @@ export default function Settings() {
                       <p className="truncate font-mono text-xs">{wh.url}</p>
                       <p className="mt-0.5 text-[11px] text-slate-400">{(wh.events || []).join(", ")}</p>
                     </div>
-                    <button onClick={async () => { await fetch(`/api/rest/webhooks/${wh.id}`, { method: "DELETE" }); load(); }}
-                      className="shrink-0 text-xs text-slate-500 hover:text-red-500">✕</button>
+                    <div className="flex shrink-0 items-center gap-3">
+                      <button onClick={() => openEdit(wh)}
+                        className="shrink-0 text-xs text-slate-500 hover:text-slate-800">{t("set.webhookEdit")}</button>
+                      <button onClick={async () => { await fetch(`/api/rest/webhooks/${wh.id}`, { method: "DELETE" }); load(); }}
+                        className="shrink-0 text-xs text-slate-500 hover:text-red-500">✕</button>
+                    </div>
                   </li>
                 ))}
               </ul>
+              {/* Issue #128: inline edit drawer for an existing webhook. */}
+              {editId !== null && (
+                <form onSubmit={saveWebhook} className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+                  <h3 className="text-sm font-semibold text-slate-700">{t("set.webhookEditTitle")}</h3>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <input value={editUrl} onChange={(e) => setEditUrl(e.target.value)} required type="url"
+                      placeholder="https://yourapp.com/jomform-hook" className="jf-input min-w-56 max-w-xl flex-1" />
+                    <input value={editSecret} onChange={(e) => setEditSecret(e.target.value)} type="text"
+                      placeholder={t("set.secretKeep")} className="jf-input w-48" />
+                  </div>
+                  <div className="mt-2">
+                    <p className="text-xs text-slate-500">{t("webhook.eventsTitle")}</p>
+                    <div className="mt-1 flex flex-wrap items-center gap-3">
+                      {WEBHOOK_EVENTS.map((ev) => (
+                        <label key={ev} className="flex items-center gap-1 text-sm text-slate-700">
+                          <input
+                            type="checkbox"
+                            checked={editEvents.includes(ev)}
+                            onChange={() => toggleWhEvent(editEvents, setEditEvents, ev)}
+                          />
+                          {ev}
+                        </label>
+                      ))}
+                      <label className="flex items-center gap-1 text-sm text-slate-400">
+                        <input
+                          type="checkbox"
+                          checked={editEvents.includes("*")}
+                          onChange={() => toggleWhEvent(editEvents, setEditEvents, "*")}
+                        />
+                        {t("webhook.event.all")}
+                      </label>
+                    </div>
+                  </div>
+                  <div className="mt-3 flex gap-2">
+                    <button className="jf-btn-primary">{t("set.whSave")}</button>
+                    <button type="button" onClick={closeEdit} className="jf-btn-ghost text-slate-600">{t("set.whCancel")}</button>
+                  </div>
+                </form>
+              )}
             </section>
 
             {/* MCP / OAuth 2.1 connected agents */}
