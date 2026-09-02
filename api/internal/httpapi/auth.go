@@ -435,7 +435,17 @@ func (a *AuthHandlers) handle2FAEnable(w http.ResponseWriter, r *http.Request) {
 	}
 	// Consume the pending secret so it can't be re-enabled.
 	_ = a.pendingTOTP().Delete(r.Context(), user.ID)
-	if err := a.startSession(w, r, user.ID, user.Email, true, false); err != nil { // fresh session post-2FA
+	// Issue #69: a fresh session is issued to upgrade the session's 2FA
+	// posture — but it MUST inherit the original login's remember flag, never
+	// hardcode false. A "remember me" (14d) login enabling 2FA keeps its 14d
+	// session; an unchecked (24h/browser-session) login stays short. Otherwise
+	// the rotation silently downgrades persistence (sidebar + stale 2FA status
+	// broke because the frontend raced this new cookie).
+	remember := false
+	if c, err := r.Cookie(sessionCookie); err == nil {
+		remember = a.Sessions.Remembered(r.Context(), c.Value)
+	}
+	if err := a.startSession(w, r, user.ID, user.Email, true, remember); err != nil { // fresh session post-2FA, inherit remember
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
@@ -494,17 +504,24 @@ const (
 )
 
 // startSession creates a session for userID, honoring the remember flag for
-// cookie MaxAge and server TTL. The email/totpEnabled args are accepted for
-// historical compatibility with call sites that threaded them through; they no
-// longer influence the session.
+// cookie MaxAge and server TTL, and persists remember so a later session
+// rotation (2FA enable, issue #69) can inherit the persistence choice. The
+// email/totpEnabled args are accepted for historical compatibility with call
+// sites that threaded them through; they no longer influence the session.
 func (a *AuthHandlers) startSession(w http.ResponseWriter, r *http.Request, userID, _ string, _ bool, remember bool) error {
 	ttl := rememberLongTTL
 	maxAge := int(rememberLongTTL.Seconds())
 	if !remember {
 		ttl = rememberShortTTL
-		maxAge = -1 // browser-session cookie (issue #62 default)
+		// Go net/http Cookie.MaxAge semantics (issue #70): MaxAge < 0 emits
+		// Max-Age=0 (RFC 6265 §4.1.2.2 → the browser discards the cookie on
+		// arrival). Only MaxAge == 0 OMITS the attribute, producing a true
+		// browser-session cookie. The 24h server TTL below remains the real
+		// security control; the cookie attribute only controls client
+		// persistence, so the unticked login must not emit Max-Age at all.
+		maxAge = 0
 	}
-	token, err := a.Sessions.CreateWithTTL(r.Context(), userID, ttl)
+	token, err := a.Sessions.CreateRememberedWithTTL(r.Context(), userID, ttl, remember)
 	if err != nil {
 		return err
 	}

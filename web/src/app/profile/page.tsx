@@ -174,7 +174,14 @@ export default function ProfilePage() {
         setShow2FA(false);
         setMsg(t("prof.twoFaEnabled"));
         setCode(""); setSecretText(""); setQrDataUrl("");
-        load(); reloadSession();
+        // Issue #69: flip totp_enabled OPTIMISTICALLY so the "Aktif ✓" status
+        // line and the success banner agree this frame — zero fetch dependency.
+        // reloadSession() then reconciles from the single source of truth (the
+        // re-fetched dashboard-bundle) once, and session.tsx keeps showing the
+        // previous user (never "…") until that rotation resolves.
+        setP((prev) => (prev ? { ...prev, totp_enabled: true } : prev));
+        load();
+        reloadSession();
       } else {
         const d = await r.json().catch(() => ({}));
         setErr(d.error || t("prof.failed"));
@@ -289,9 +296,17 @@ export default function ProfilePage() {
               {p?.totp_enabled && (
                 <button
                   onClick={async () => {
-                    const code = window.prompt(t("prof.enter2faCode"));
-                    if (code) {
-                      await post("/api/auth/2fa/disable", { totp_code: code });
+                    // Backend handle2FADisable verifies the account password
+                    // (not a TOTP code) before disabling.
+                    const password = window.prompt(t("prof.enter2faCode"));
+                    if (password) {
+                      const ok = await post("/api/auth/2fa/disable", { password });
+                      // #69: flip optimistically so the status line ("Belum
+                      // aktif") agrees with reality immediately; post() already
+                      // reloadSession()'d (keeps prev user until it resolves).
+                      if (ok) {
+                        setP((prev) => (prev ? { ...prev, totp_enabled: false } : prev));
+                      }
                       setTrustedUntil("");
                     }
                   }}

@@ -48,6 +48,11 @@ const DICT = {
   "reset.pwMismatch": { en: "Passwords don't match", ms: "Kata laluan tidak sepadan", zh: "两次输入的密码不一致", ta: "கடவுச்சொற்கள் பொருந்தவில்லை", ar: "كلمتا المرور غير متطابقتين" },
   // issue #63: trusted device
   "login.totpRemember": { en: "Don't ask for 2FA code on this device for 30 days", ms: "Jangan tanya kod 2FA pada peranti ini selama 30 hari", zh: "30 天内不在本设备请求 2FA 验证码", ta: "30 நாட்கள் இந்த சாதனத்தில் 2FA குறியீட்டைக் கேட்க வேண்டாம்", ar: "لا تطلب رمز التحقق الثنائي على هذا الجهاز لمدة 30 يوماً" },
+  // issue #71: two-step 2FA login (step 2 is code-only)
+  "login.totpTitle": { en: "Enter 2FA code", ms: "Masukkan kod 2FA", zh: "输入 2FA 验证码", ta: "2FA குறியீட்டை உள்ளிடவும்", ar: "أدخل رمز التحقق الثنائي" },
+  "login.totpDesc": { en: "Open your authenticator app and enter the 6-digit code for {email}.", ms: "Buka aplikasi pengesah anda dan masukkan kod 6 digit untuk {email}.", zh: "打开验证器应用，为 {email} 输入 6 位验证码。", ta: "உங்கள் அங்கீகாரப் பயன்பாட்டைத் திறந்து, {email} க்கான 6 இலக்க குறியீட்டை உள்ளிடவும்.", ar: "افتح تطبيق المصادقة وأدخل الرمز المكوّن من 6 أرقام لـ {email}." },
+  "login.totpSubmit": { en: "Verify & sign in", ms: "Sahkan & log masuk", zh: "验证并登录", ta: "சரிபார்த்து உள்நுழை", ar: "تحقق وسجّل الدخول" },
+  "login.totpBack": { en: "Change email / use another account", ms: "Ganti emel / Guna akaun lain", zh: "更换邮箱 / 使用其他账户", ta: "மின்னஞ்சலை மாற்று / மற்றொரு கணக்கைப் பயன்படுத்து", ar: "تغيير البريد الإلكتروني / استخدام حساب آخر" },
   "prof.trusted": { en: "2FA active · device trusted until {date}", ms: "2FA aktif · peranti dipercayai sehingga {date}", zh: "2FA 已启用 · 设备信任至 {date}", ta: "2FA செயலில் · சாதனம் {date} வரை நம்பப்படுகிறது", ar: "2FA نشط · الجهاز موثوق حتى {date}" },
   "prof.forgetDevice": { en: "Forget this device", ms: "Lupa peranti ini", zh: "忘记此设备", ta: "இந்த சாதனத்தை மற", ar: "نسيان هذا الجهاز" },
   // dashboard

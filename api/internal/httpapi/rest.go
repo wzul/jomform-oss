@@ -267,11 +267,14 @@ func (h *RESTHandlers) profileUser(r *http.Request) (*dbstore.User, error) {
 	return h.Users.ByID(r.Context(), uid)
 }
 
-// startSessionFor issues a new session cookie for a user id.
+// startSessionFor issues a new session cookie for a user id. Passkey/social
+// logins issue a 14-day persistent (remember) session, so the persisted
+// remember flag is set to true — a later 2FA-enable rotation (#69) will then
+// inherit the 14d persistence instead of silently downgrading to 24h.
 func (h *RESTHandlers) startSessionFor(w http.ResponseWriter, r *http.Request, userID string) error {
 	ttl := rememberLongTTL
 	maxAge := int(rememberLongTTL.Seconds())
-	token, err := h.Sessions.CreateWithTTL(r.Context(), userID, ttl)
+	token, err := h.Sessions.CreateRememberedWithTTL(r.Context(), userID, ttl, true)
 	if err != nil {
 		return err
 	}

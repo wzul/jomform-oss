@@ -1,23 +1,47 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useI18n } from "../../components/i18n";
 
 type Mode = "login" | "register" | "forgot";
 type SocialProvider = { id: string; name: string };
 
+// Issue #71: two-step login card (state machine in the same component, no
+// routing change). Step 1 = email + password (+ remember + forgot). When the
+// backend answers 401 next_step="totp_required", we transition to Step 2 which
+// shows ONLY the 6-digit 2FA code input (+ trust checkbox + back link) — not an
+// inline error-appended third field.
+type Step = 1 | 2;
+
+// Credentials captured on Step 1 and replayed on Step 2 so the browser is never
+// left holding a half-finished form state while the 2FA step is shown.
+type Cred = { email: string; password: string; remember: boolean };
+
+// maskEmail("wan@kedai.my") -> "wa••@kedai.my" — shows just enough for the user
+// to confirm which account they're authenticating into without leaking it.
+function maskEmail(email: string): string {
+  const at = email.indexOf("@");
+  if (at <= 1) return email;
+  return email.slice(0, 2) + "••" + email.slice(at);
+}
+
 export default function Login() {
   const { t } = useI18n();
   const [mode, setMode] = useState<Mode>("login");
+  const [step, setStep] = useState<Step>(1);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [needTotp, setNeedTotp] = useState(false);
   const [totpRemember, setTotpRemember] = useState(true);
   const [remember, setRemember] = useState(false);
   const [done, setDone] = useState(false);
+  // Issue #71: credentials captured at Step 1, replayed at Step 2.
+  const [cred, setCred] = useState<Cred>({ email: "", password: "", remember: false });
+  // Controlled 2FA code on Step 2 (autofocus + auto-submit on 6 digits).
+  const [code, setCode] = useState("");
   // Issue #9: social buttons render only for providers configured on the
   // backend (env-gated). null = list still loading → render none.
   const [socialProviders, setSocialProviders] = useState<SocialProvider[] | null>(null);
+  const codeRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     fetch("/api/auth/social/providers")
@@ -25,6 +49,23 @@ export default function Login() {
       .then((d) => setSocialProviders(Array.isArray(d) ? d : []))
       .catch(() => setSocialProviders([]));
   }, []);
+
+  // Issue #71: autofocus the (only visible) code input when entering Step 2.
+  useEffect(() => {
+    if (step === 2) {
+      // Slight delay so the input is mounted before focusing on mobile.
+      const id = window.setTimeout(() => codeRef.current?.focus(), 50);
+      return () => window.clearTimeout(id);
+    }
+  }, [step]);
+
+  // Issue #71: auto-submit the moment 6 digits are entered (paste-friendly).
+  useEffect(() => {
+    if (step === 2 && code.length === 6 && !busy) {
+      submitTotp(code);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [code]);
 
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -58,12 +99,6 @@ export default function Login() {
     // and their registration is silently discarded server-side.
     body.website = String(fd.get("website") || "");
     if (mode === "login") body.remember = remember;
-    if (needTotp) {
-      body.totp_code = String(fd.get("totp_code") || "");
-      // Issue #63: when the user opts into remembering this device, the
-      // server issues a jf_trust cookie on a COMPLETED 2FA login only.
-      body.totp_remember = totpRemember;
-    }
 
     const r = await fetch(path, {
       method: "POST",
@@ -79,23 +114,64 @@ export default function Login() {
         setError("");
         return;
       }
-      setDone(true);
-      try {
-        const sp = await fetch("/api/spaces").then((x) => (x.ok ? x.json() : []));
-        if (Array.isArray(sp) && sp.length) {
-          localStorage.setItem("jf_space", sp[0].slug);
-        }
-      } catch {}
+      if (mode === "register") {
+        setDone(true);
+        setError("");
+        return;
+      }
+      // #70 login: navigate immediately, no "Berjaya log masuk" flash. The
+      // dashboard-bundle (#29) already returns spaces, so no extra /
+      // api/spaces round-trip is needed before redirecting.
       window.location.href = "/";
       return;
     }
     const d = await r.json().catch(() => ({}));
     if (d.next_step === "totp_required") {
-      setNeedTotp(true);
-      setError("Masukkan kod 6-angka dari aplikasi pengesah anda.");
+      // #71: transition to the dedicated 2FA step. Remember the credentials so
+      // Step 2 can replay them and the back link can prefill. Neutral — not an
+      // error banner.
+      setCred({ email: String(fd.get("email") || ""), password: String(fd.get("password") || ""), remember });
+      setCode("");
+      setStep(2);
       return;
     }
     setError(d.error || "Gagal. Cuba semula.");
+  }
+
+  async function submitTotp(totpCode: string) {
+    setBusy(true);
+    setError("");
+    const r = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: cred.email,
+        password: cred.password,
+        totp_code: totpCode,
+        // Issue #63: trust this device opted in on the 2FA step.
+        totp_remember: totpRemember,
+        remember: cred.remember,
+      }),
+    });
+    setBusy(false);
+    if (r.ok) {
+      // #70 login: navigate immediately (no success banner flash).
+      window.location.href = "/";
+      return;
+    }
+    const d = await r.json().catch(() => ({}));
+    // Wrong code is a genuine error — inline, red, under the code input (#42
+    // login-limiter UX stays intact for repeated failures).
+    setError(d.error || "Gagal. Cuba semula.");
+    setCode("");
+    codeRef.current?.focus();
+  }
+
+  // Issue #71: "Ganti emel / Guna akaun lain" — back to Step 1, email prefilled.
+  function backToCredentials() {
+    setStep(1);
+    setCode("");
+    setError("");
   }
 
   async function passkeyLogin() {
@@ -121,7 +197,7 @@ export default function Login() {
       const fin = await fetch("/api/auth/passkeys/login/finish", {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
       });
-      if (fin.ok) { setDone(true); window.location.href = "/"; return; }
+      if (fin.ok) { window.location.href = "/"; return; }
       setError((await fin.json().catch(() => ({}))).error || "Passkey tidak sah.");
     } catch {
       setError("Passkey dibatalkan atau tidak disokong pelayar.");
@@ -148,20 +224,28 @@ export default function Login() {
             JF
           </div>
           <h1 className="text-xl font-semibold text-[var(--jf-text)]" style={{ letterSpacing: "-0.02em" }}>
-            {mode === "login" ? "Selamat kembali" : mode === "register" ? "Cipta akaun JomForm" : t("login.forgotTitle")}
+            {step === 2
+              ? t("login.totpTitle")
+              : mode === "login"
+                ? "Selamat kembali"
+                : mode === "register"
+                  ? "Cipta akaun JomForm"
+                  : t("login.forgotTitle")}
           </h1>
           <p className="mt-1.5 text-sm text-[var(--jf-muted)]">
-            {mode === "login"
-              ? "Log masuk untuk urus borang dan jualan anda."
-              : mode === "register"
-                ? "Percuma selamanya — borang pertama siap dalam 5 minit."
-                : t("login.forgotDesc")}
+            {step === 2
+              ? t("login.totpDesc", { email: maskEmail(cred.email) })
+              : mode === "login"
+                ? "Log masuk untuk urus borang dan jualan anda."
+                : mode === "register"
+                  ? "Percuma selamanya — borang pertama siap dalam 5 minit."
+                  : t("login.forgotDesc")}
           </p>
         </div>
 
         <div className="rounded-xl border border-[var(--jf-border)] bg-white p-6 shadow-[0_0_0_1px_rgba(0,0,0,0.2),0_8px_24px_rgba(0,0,0,0.4)]">
-          {/* tabs */}
-          {mode !== "forgot" && (
+          {/* tabs (hidden during the dedicated 2FA step) */}
+          {step === 1 && mode !== "forgot" && (
             <div className="mb-5 grid grid-cols-2 rounded-lg border border-[var(--jf-border)] bg-slate-100 p-0.5">
               {(["login", "register"] as const).map((m) => (
                 <button
@@ -170,7 +254,7 @@ export default function Login() {
                   onClick={() => {
                     setMode(m);
                     setError("");
-                    setNeedTotp(false);
+                    setStep(1);
                   }}
                   className={`rounded-md py-1.5 text-[13px] font-medium transition-colors ${
                     mode === m
@@ -184,6 +268,8 @@ export default function Login() {
             </div>
           )}
 
+          {/* Error banner — only ever a genuine failure (wrong code, wrong
+              credentials). NOT used as an instruction banner. */}
           {error && (
             <p className="mb-4 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-[13px] text-red-300">
               {error}
@@ -212,6 +298,59 @@ export default function Login() {
                 </button>
               )}
             </div>
+          ) : step === 2 ? (
+            /* #71: Step 2 — dedicated 2FA. ONLY the code input + trust
+               checkbox + back link. Email/password are NOT visible here. */
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (code.length === 6) submitTotp(code);
+              }}
+              className="space-y-3"
+            >
+              <div>
+                <input
+                  ref={codeRef}
+                  name="totp_code"
+                  value={code}
+                  onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  autoComplete="one-time-code"
+                  maxLength={6}
+                  disabled={busy}
+                  placeholder="000000"
+                  aria-label={t("login.totpTitle")}
+                  className="w-full rounded-md border border-[var(--jf-border)] bg-white px-3 py-3 text-center font-mono text-2xl tracking-[0.5em] text-[var(--jf-text)] outline-none transition-colors focus:border-[#7170ff]/60 focus:bg-indigo-50"
+                />
+              </div>
+              {/* Issue #63: trusted-device opt-in, default checked — server
+                  mints jf_trust on a successful code only. */}
+              <label className="flex cursor-pointer items-start gap-2 text-[13px] text-[var(--jf-muted)]">
+                <input
+                  type="checkbox"
+                  checked={totpRemember}
+                  disabled={busy}
+                  onChange={(e) => setTotpRemember(e.target.checked)}
+                  className="mt-0.5 accent-[#5e6ad2]"
+                />
+                <span>{t("login.totpRemember")}</span>
+              </label>
+              <button
+                disabled={busy || code.length !== 6}
+                className="mt-1 w-full rounded-md bg-[#5e6ad2] py-2 text-sm font-medium text-white transition-colors hover:bg-[#828fff] disabled:opacity-60"
+              >
+                {busy ? "…" : t("login.totpSubmit")}
+              </button>
+              <button
+                type="button"
+                onClick={backToCredentials}
+                disabled={busy}
+                className="mt-1 w-full text-[13px] font-medium text-[#5e6ad2] hover:underline"
+              >
+                {t("login.totpBack")}
+              </button>
+            </form>
           ) : (
             <form onSubmit={submit} className="space-y-3">
               {/* Honeypot (issue #42): sr-only hides it from humans &
@@ -238,6 +377,7 @@ export default function Login() {
                   name="email"
                   type="email"
                   required
+                  defaultValue={cred.email}
                   autoComplete="email"
                   placeholder="anda@kedai.my"
                   className="w-full rounded-md border border-[var(--jf-border)] bg-white px-3 py-2 text-sm text-[var(--jf-text)] placeholder-slate-400 outline-none transition-colors focus:border-[#7170ff]/60 focus:bg-indigo-50"
@@ -252,6 +392,7 @@ export default function Login() {
                     name="password"
                     type="password"
                     required
+                    defaultValue={cred.password}
                     minLength={mode === "register" ? 10 : 1}
                     placeholder="••••••••••"
                     className="w-full rounded-md border border-[var(--jf-border)] bg-white px-3 py-2 text-sm text-[var(--jf-text)] placeholder-slate-400 outline-none transition-colors focus:border-[#7170ff]/60 focus:bg-indigo-50"
@@ -259,36 +400,7 @@ export default function Login() {
                 </div>
               )}
 
-              {needTotp && (
-                <>
-                  <div>
-                    <label className="mb-1 block text-xs font-medium text-[var(--jf-muted)]">Kod 2FA</label>
-                    <input
-                      name="totp_code"
-                      inputMode="numeric"
-                      pattern="[0-9]*"
-                      maxLength={6}
-                      required
-                      placeholder="000000"
-                      className="w-full rounded-md border border-[var(--jf-border)] bg-white px-3 py-2 font-mono text-sm tracking-[0.4em] text-[var(--jf-text)] outline-none focus:border-[#7170ff]/60"
-                    />
-                  </div>
-                  {/* Issue #63: trusted-device opt-in, shown ONLY on the 2FA
-                      step. Default checked — reduce friction ("jangan susahkan
-                      saya"); server mints jf_trust on successful code only. */}
-                  <label className="flex cursor-pointer items-start gap-2 text-[13px] text-[var(--jf-muted)]">
-                    <input
-                      type="checkbox"
-                      checked={totpRemember}
-                      onChange={(e) => setTotpRemember(e.target.checked)}
-                      className="mt-0.5 accent-[#5e6ad2]"
-                    />
-                    <span>{t("login.totpRemember")}</span>
-                  </label>
-                </>
-              )}
-
-              {mode === "login" && !needTotp && (
+              {mode === "login" && (
                 <div className="flex items-center justify-between">
                   {/* Issue #62: remember me — unchecked (default) = browser
                       session cookie + 24h server TTL; checked = 14 days. */}
@@ -333,7 +445,7 @@ export default function Login() {
           {/* Issue #9: env-gated social login. Rendered only when the backend
               reports the provider configured (GET /api/auth/social/providers);
               Cloudflare appears only when JF_CF_OIDC_* env vars are set. */}
-          {mode !== "forgot" && socialProviders && socialProviders.length > 0 && (
+          {step === 1 && mode !== "forgot" && socialProviders && socialProviders.length > 0 && (
             <div className="mt-4 border-t border-[var(--jf-border)] pt-4">
               <div className="space-y-2">
                 {socialProviders.map((p) => (

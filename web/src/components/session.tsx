@@ -123,11 +123,23 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     return () => window.clearTimeout(timer);
   }, []);
 
+  // Issue #69: reload() (used after session-rotating actions like 2FA enable /
+  // disable / password change) must keep showing the PREVIOUS bundle until the
+  // fresh fetch resolves — never collapse the sidebar / identity to "…" in the
+  // interim. If the refetch fails or returns blank, we preserve the previous
+  // bundle instead of nulling the UI. A nonce guards against a slow, stale
+  // reload clobbering a newer one.
   const reload = useCallback(() => {
     cachedBundle = null;
     inflight = null;
     reloadNonce.current += 1;
-    fetchBundle().then((d) => setBundle(d ?? null));
+    const nonce = reloadNonce.current;
+    fetchBundle().then((d) => {
+      if (nonce !== reloadNonce.current) return; // superseded by a newer reload
+      if (d) setBundle(d);
+      // d == null (401 / wedge / failure) → keep the previous bundle rather
+      // than blanking the app shell during a session rotation.
+    });
   }, []);
 
   const user = bundle?.me ?? null;

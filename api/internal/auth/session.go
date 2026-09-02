@@ -39,42 +39,68 @@ func NewSessions(valkeyURL string) (*Sessions, error) {
 func sessionKey(token string) string { return "jf:session:" + token }
 
 // value encodes the stored userID together with the session's issued-at
-// timestamp (unix ns). Sessions created before this change stored a bare
-// userID (no separator); GetCreated parses both forms.
+// timestamp (unix ns) and the remember flag (issue #69). Formats over time:
+//   - legacy v1: bare userID (no separator)
+//   - v2:        userID:issuedNs
+//   - v3 (now):  userID:issuedNs:remember  (remember "1"/"0")
+//
+// The remember flag is persisted so a session-rotating action (2FA enable per
+// issue #69) can inherit the original session's persistence choice instead of
+// silently downgrading a "remember me" login to a 24h browser-session cookie.
 const valueSep = ":"
 
-func encodeValue(userID string, issued time.Time) string {
-	return userID + valueSep + strconv.FormatInt(issued.UnixNano(), 10)
+func encodeValue(userID string, issued time.Time, remember bool) string {
+	flag := "0"
+	if remember {
+		flag = "1"
+	}
+	return userID + valueSep + strconv.FormatInt(issued.UnixNano(), 10) + valueSep + flag
 }
 
-// parseValue returns the userID and issuance time. Bare (legacy) values have
-// a zero issued time. A value carrying the issued timestamp lets session
-// resolution reject sessions issued before a password reset (pw_reset_at).
-func parseValue(v string) (userID string, issued time.Time) {
-	if i := strings.LastIndex(v, valueSep); i > 0 {
-		if ns, err := strconv.ParseInt(v[i+1:], 10, 64); err == nil {
-			return v[:i], time.Unix(0, ns).UTC()
+// parseValue returns the userID, issuance time, and remember flag. It tolerates
+// every historical value format. A value carrying a zero issued time (bare or
+// malformed) means "issued unknown" and defaults remember to false (the safe,
+// short-session default).
+func parseValue(v string) (userID string, issued time.Time, remember bool) {
+	parts := strings.Split(v, valueSep)
+	if len(parts) > 0 {
+		userID = parts[0]
+	}
+	if len(parts) >= 2 {
+		if ns, err := strconv.ParseInt(parts[1], 10, 64); err == nil {
+			issued = time.Unix(0, ns).UTC()
 		}
 	}
-	return v, time.Time{}
+	if len(parts) >= 3 && parts[2] == "1" {
+		remember = true
+	}
+	return userID, issued, remember
 }
 
 // Create stores userID under a fresh opaque token with the default SessionTTL
-// and returns it.
+// (14d) and returns it.
 func (s *Sessions) Create(ctx context.Context, userID string) (string, error) {
 	return s.CreateWithTTL(ctx, userID, SessionTTL)
 }
 
 // CreateWithTTL stores userID under a fresh opaque token with the given TTL
 // and returns the token. TTL drives both the Valkey expiry and (caller-side)
-// the cookie MaxAge, so remember-me works end to end (issue #62).
+// the cookie MaxAge, so remember-me works end to end (issue #62). Remember is
+// stored into the session value so rotation can inherit it (issue #69).
 func (s *Sessions) CreateWithTTL(ctx context.Context, userID string, ttl time.Duration) (string, error) {
+	return s.CreateRememberedWithTTL(ctx, userID, ttl, false)
+}
+
+// CreateRememberedWithTTL stores userID under a fresh opaque token with the
+// given TTL and remember flag. Same contract as CreateWithTTL plus persisting
+// remember so a later session rotation can preserve the persistence choice.
+func (s *Sessions) CreateRememberedWithTTL(ctx context.Context, userID string, ttl time.Duration, remember bool) (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}
 	token := hex.EncodeToString(b)
-	if err := s.rdb.Set(ctx, sessionKey(token), encodeValue(userID, time.Now().UTC()), ttl).Err(); err != nil {
+	if err := s.rdb.Set(ctx, sessionKey(token), encodeValue(userID, time.Now().UTC(), remember), ttl).Err(); err != nil {
 		return "", fmt.Errorf("session create: %w", err)
 	}
 	return token, nil
@@ -86,7 +112,7 @@ func (s *Sessions) Get(ctx context.Context, token string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	uid, _ := parseValue(v)
+	uid, _, _ := parseValue(v)
 	return uid, nil
 }
 
@@ -97,8 +123,24 @@ func (s *Sessions) GetCreated(ctx context.Context, token string) (string, time.T
 	if err != nil {
 		return "", time.Time{}, err
 	}
-	uid, issued := parseValue(v)
+	uid, issued, _ := parseValue(v)
 	return uid, issued, nil
+}
+
+// Remembered resolves a session token to its persisted remember flag. A
+// missing/legacy session is treated as remember=false (24h/browser-session) —
+// the safe default. Used by session-rotating handlers (2FA enable, issue #69)
+// to inherit the original login's persistence choice.
+func (s *Sessions) Remembered(ctx context.Context, token string) bool {
+	if token == "" {
+		return false
+	}
+	v, err := s.rdb.Get(ctx, sessionKey(token)).Result()
+	if err != nil {
+		return false
+	}
+	_, _, remember := parseValue(v)
+	return remember
 }
 
 // ValidAfter reports whether the session's issuance time is not before cut —

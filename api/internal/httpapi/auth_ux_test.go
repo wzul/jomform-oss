@@ -100,8 +100,15 @@ func TestAuthRememberMeUncheckedShortSession(t *testing.T) {
 	if cookie == nil {
 		t.Fatal("no session cookie set")
 	}
-	if cookie.MaxAge != -1 {
-		t.Errorf("unchecked remember cookie MaxAge = %d, want -1 (browser session)", cookie.MaxAge)
+	// Issue #70: Go net/http emits Max-Age=0 for MaxAge<0 (expire immediately →
+	// browser discards the cookie → unticked login "succeeds" but the user is
+	// dropped back to the landing page). A true browser-session cookie must
+	// OMIT the Max-Age attribute, which Go does only for MaxAge == 0.
+	if cookie.MaxAge != 0 {
+		t.Errorf("unchecked remember cookie MaxAge = %d, want 0 (omits Max-Age → browser session)", cookie.MaxAge)
+	}
+	if hdr := rec.Header().Get("Set-Cookie"); strings.Contains(hdr, "Max-Age") {
+		t.Errorf("unchecked remember Set-Cookie must not contain Max-Age, got: %s", hdr)
 	}
 	// Server-side: the session key must not live long. Read its TTL.
 	ttl := requireSessionTTL(t, h, cookie.Value)
@@ -342,4 +349,107 @@ func _resetTrust(t *testing.T, h *AuthHandlers, email, uid string) {
 	if h.Sessions != nil {
 		_ = h.Sessions.TrustedDevices().RevokeAll(context.Background(), uid)
 	}
+}
+
+// TestAuth2FAEnableInheritsRememberLong: a "remember me" login that enables 2FA
+// must keep a 14-day persistent session post-rotation. Issue #69 hardcoded the
+// fresh post-2FA session to remember=false, silently downgrading persistence.
+func TestAuth2FAEnableInheritsRememberLong(t *testing.T) {
+	h, _ := requireIntegration(t)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	email := fmt.Sprintf("2fa-lng-%d@example.test", time.Now().UnixNano())
+	registerAndVerify(t, h, email, "password123", "10.24.1.1")
+
+	// Establish a 14-day (remember) session.
+	login := postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": "password123", "remember": true}, "10.24.1.1")
+	origCookie := cookieValueFrom(login, sessionCookie)
+	if origCookie == "" {
+		t.Fatal("no session cookie on remembered login")
+	}
+	if !h.Sessions.Remembered(context.Background(), origCookie) {
+		t.Fatal("expected original remembered session to report remember=true")
+	}
+
+	// Enable 2FA from that session.
+	secret := requirePendingSecret(t, h, mux, email, origCookie)
+	enable := postJSONCookies(mux, "/v1/auth/2fa/enable", map[string]any{"code": mustTOTP(secret)}, "10.24.1.1", origCookie)
+	if enable.Code != http.StatusOK {
+		t.Fatalf("enable 2FA status = %d body=%s", enable.Code, enable.Body.String())
+	}
+	rotated := cookieValueFrom(enable, sessionCookie)
+	if rotated == "" || rotated == origCookie {
+		t.Fatalf("expected a fresh session cookie post-2FA, got %q", rotated)
+	}
+	if !h.Sessions.Remembered(context.Background(), rotated) {
+		t.Error("post-2FA rotated session must INHERIT remember=true (14d), got remember=false")
+	}
+	var rc *http.Cookie
+	for _, c := range enable.Result().Cookies() {
+		if c.Name == sessionCookie {
+			rc = c
+		}
+	}
+	if rc == nil || rc.MaxAge != int(rememberLongTTL.Seconds()) {
+		t.Errorf("post-2FA rotated cookie MaxAge = %v, want %d (14d)", rc.MaxAge, int(rememberLongTTL.Seconds()))
+	}
+	ttl := requireSessionTTL(t, h, rotated)
+	if ttl < 13*24*time.Hour {
+		t.Errorf("post-2FA rotated TTL = %v, want ~14d", ttl)
+	}
+}
+
+// TestAuth2FAEnableInheritsRememberShort: an UNCHECKED login (24h browser
+// session) enabling 2FA must stay short — the rotation never upgrades
+// persistence, it only preserves it.
+func TestAuth2FAEnableInheritsRememberShort(t *testing.T) {
+	h, _ := requireIntegration(t)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	email := fmt.Sprintf("2fa-sht-%d@example.test", time.Now().UnixNano())
+	registerAndVerify(t, h, email, "password123", "10.24.2.1")
+
+	login := postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": "password123"}, "10.24.2.1")
+	origCookie := cookieValueFrom(login, sessionCookie)
+	if origCookie == "" || h.Sessions.Remembered(context.Background(), origCookie) {
+		t.Fatal("expected an unchecked session (remember=false)")
+	}
+
+	secret := requirePendingSecret(t, h, mux, email, origCookie)
+	enable := postJSONCookies(mux, "/v1/auth/2fa/enable", map[string]any{"code": mustTOTP(secret)}, "10.24.2.1", origCookie)
+	if enable.Code != http.StatusOK {
+		t.Fatalf("enable 2FA status = %d body=%s", enable.Code, enable.Body.String())
+	}
+	rotated := cookieValueFrom(enable, sessionCookie)
+	if h.Sessions.Remembered(context.Background(), rotated) {
+		t.Error("post-2FA rotated session must inherit remember=false (stay short), got remember=true")
+	}
+	var rc *http.Cookie
+	for _, c := range enable.Result().Cookies() {
+		if c.Name == sessionCookie {
+			rc = c
+		}
+	}
+	if rc == nil || rc.MaxAge != 0 {
+		t.Errorf("post-2FA short rotated cookie MaxAge = %v, want 0 (browser session)", rc.MaxAge)
+	}
+	ttl := requireSessionTTL(t, h, rotated)
+	if ttl > 25*time.Hour {
+		t.Errorf("post-2FA short rotated TTL = %v, want <= ~24h", ttl)
+	}
+}
+
+// requirePendingSecret drives 2FA setup for a logged-in session and returns the
+// pending secret so the test can generate a valid enable code.
+func requirePendingSecret(t *testing.T, h *AuthHandlers, mux *http.ServeMux, email, session string) string {
+	t.Helper()
+	setup := postJSONCookies(mux, "/v1/auth/2fa/setup", map[string]any{}, "10.24.9.1", session)
+	var s map[string]string
+	_ = json.Unmarshal(setup.Body.Bytes(), &s)
+	if s["secret"] == "" {
+		t.Fatalf("2FA setup no secret (status %d body %s)", setup.Code, setup.Body.String())
+	}
+	return s["secret"]
 }
