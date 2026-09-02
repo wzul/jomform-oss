@@ -261,6 +261,13 @@ const DICT = {
   "bld.phText": { en: "Text…", ms: "Teks…", zh: "文本…", ta: "உரை…", ar: "نص…" },
   "bld.phImage": { en: "Image URL →", ms: "URL imej →", zh: "图片链接 →", ta: "படம் URL →", ar: "رابط الصورة →" },
   "bld.phField": { en: "Field", ms: "Medan", zh: "字段", ta: "புலம்", ar: "حقل" },
+  // issue #59: mobile section switcher labels
+  "bld.addBlock": { en: "Add", ms: "Tambah", zh: "添加", ta: "சேர்", ar: "إضافة" },
+  "bld.canvas": { en: "Canvas", ms: "Canvas", zh: "画布", ta: "கேன்வாஸ்", ar: "اللوحة" },
+  "bld.settings": { en: "Settings", ms: "Tetapan", zh: "设置", ta: "அமைப்புகள்", ar: "الإعدادات" },
+  // issue #61: image upload labels
+  "bld.uploadImage": { en: "Upload image", ms: "Muat naik imej", zh: "上传图片", ta: "படத்தைப் பதிவேற்று", ar: "رفع صورة" },
+  "bld.uploading": { en: "Uploading…", ms: "Memuat naik…", zh: "上传中…", ta: "பதிவேற்றுகிறது…", ar: "جارٍ الرفع…" },
   // palette block labels
   "blk.text": { en: "Text", ms: "Teks", zh: "文本", ta: "உரை", ar: "نص" },
   "blk.textHint": { en: "Paragraph / description", ms: "Perenggan / penerangan", zh: "段落 / 描述", ta: "பத்தி / விளக்கம்", ar: "فقرة / وصف" },

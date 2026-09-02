@@ -116,6 +116,19 @@ func main() {
 
 		// REST API for the web dashboard.
 		whStore := dbstore.NewWebhookStore(pool)
+		// Issue #61: S3/MinIO media store for image-block uploads. Nil when
+		// S3 creds are absent (upload endpoint returns 503, app still boots).
+		var store *httpapi.ObjectStore
+		if cfg.S3AccessKey != "" && cfg.S3SecretKey != "" {
+			store, err = httpapi.NewObjectStore(cfg.S3Endpoint, cfg.S3AccessKey,
+				cfg.S3SecretKey, cfg.S3Bucket, cfg.S3Region)
+			if err != nil {
+				log.Error("s3 object store", "err", err)
+				store = nil
+			}
+		} else {
+			log.Warn("S3_ACCESS_KEY/S3_SECRET_KEY unset — image uploads disabled")
+		}
 		rest := &httpapi.RESTHandlers{
 			Accounts: accounts, Products: products, Forms: formsStore,
 			Keys: keys, Sales: sales, Sessions: sessions, ChipProbe: chip.New(""),
@@ -124,6 +137,7 @@ func main() {
 			Spaces:         spacesStore,
 			Passkeys:       passkeysStore,
 			Users:          usersStore,
+			Store:          store,
 		}
 		pay.OnPaid = func(ctx context.Context, accountID, event string, payload map[string]any) {
 			httpapi.DispatchWebhooks(ctx, rest, whStore, accountID, event, payload)

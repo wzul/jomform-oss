@@ -39,6 +39,10 @@ type RESTHandlers struct {
 
 	// EncryptKey is the 32-byte AES-GCM key from ENCRYPTION_KEY env.
 	SecretsKey []byte
+
+	// Store is the S3/MinIO object store for image-block uploads (issue #61).
+	// Nil when media storage is not configured (upload returns 503).
+	Store *ObjectStore
 }
 
 // RegisterRoutes wires REST endpoints.
@@ -107,6 +111,10 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /v1/rest/analytics/forms", h.authed(h.formAnalytics))
 	mux.Handle("GET /v1/rest/analytics/products", h.authed(h.productAnalytics))
 	mux.Handle("GET /v1/rest/sales/export.csv", h.authed(h.exportSalesCSV))
+	// Issue #61: image-block direct upload. Rate-limited (owner decision)
+	// to curb abuse; auth is account-scoped via h.authed.
+	mux.Handle("POST /v1/rest/uploads/image",
+		middleware.RateLimitWith(2, 6)(h.authed(h.uploadImage)))
 }
 
 // Resolve identifies the caller: Bearer API key (preferred) or session

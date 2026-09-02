@@ -125,6 +125,16 @@ export default function Builder() {
   const [pubUrl, setPubUrl] = useState("");
   const [loadErr, setLoadErr] = useState("");
 
+  // Issue #59: mobile (<md) shows ONE section at a time via a tab bar
+  // (Add | Canvas | Settings); canvas is the default and the palette is the
+  // least important thing on a phone. Desktop ≥768px ignores this and keeps
+  // the 3-col grid.
+  type MobileTab = "add" | "canvas" | "settings";
+  const [mobileTab, setMobileTab] = useState<MobileTab>("canvas");
+
+  // Issue #61: image upload progress flag for the inspector file picker.
+  const [uploading, setUploading] = useState(false);
+
   // Per-form CHIP override (saved via dedicated endpoints).
   const [ovBrand, setOvBrand] = useState("");
   const [ovSecret, setOvSecret] = useState("");
@@ -358,6 +368,9 @@ export default function Builder() {
     setBlocks((prev) => [...prev, b]);
     setSelected(b.id);
     setDirty(true);
+    // Issue #59: on mobile, after adding from the Add tab, drop the user onto
+    // the canvas so the new block is immediately visible/editable.
+    setMobileTab("canvas");
   }
 
   function updateBlock(id: string, patch: Partial<Block>) {
@@ -477,55 +490,121 @@ export default function Builder() {
   const selectedBlock = blocks.find((b) => b.id === selected);
   const dragging = dragType.current !== null || dragIdx.current !== null;
 
+  // Issue #61: upload an image for the selected block via the direct S3
+  // upload endpoint (presign superseded by the owner's server-side-optimise
+  // flow). Returns the public URL, stores it into the block's src.
+  async function handleImageUpload(file: File) {
+    if (!selectedBlock || selectedBlock.type !== "image") return;
+    if (!["image/png", "image/jpeg", "image/webp", "image/gif"].includes(file.type)) {
+      setLoadErr("Jenis imej tidak disokong (png/jpeg/webp/gif sahaja).");
+      return;
+    }
+    if (file.size > 20 * 1024 * 1024) {
+      setLoadErr("Imej melebihi had 20MB.");
+      return;
+    }
+    setUploading(true);
+    setLoadErr("");
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const r = await fetch("/api/rest/uploads/image", { method: "POST", body: fd });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.url) {
+        setLoadErr(d.error || "Muat naik imej gagal.");
+        return;
+      }
+      updateBlock(selectedBlock.id, { src: d.url });
+    } finally {
+      setUploading(false);
+    }
+  }
+
   return (
     <main className="min-h-screen bg-[var(--jf-bg)] text-[var(--jf-text)]">
-      {/* top bar */}
-      <header className="sticky top-0 z-20 flex items-center gap-3 border-b border-[var(--jf-border)] bg-white/95 px-4 py-2.5 backdrop-blur">
-        <a href="/forms" className="rounded-md px-2 py-1 text-sm text-[var(--jf-muted)] hover:text-[#374151]">
-          ←
-        </a>
-        <input
-          value={title}
-          onChange={(e) => {
-            setTitle(e.target.value);
-            setDirty(true);
-          }}
-          placeholder={t("bld.formTitle")}
-          className="w-56 rounded-md border border-transparent bg-transparent px-2 py-1 text-sm font-medium outline-none hover:border-[var(--jf-border)] focus:border-[#7170ff]/60"
-        />
-        <input
-          value={slug}
-          onChange={(e) => {
-            setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-"));
-            setDirty(true);
-          }}
-          placeholder="slug-url"
-          className="w-40 rounded-md border border-transparent bg-transparent px-2 py-1 font-mono text-xs text-[var(--jf-muted)] outline-none hover:border-[var(--jf-border)] focus:border-[#7170ff]/60"
-        />
-        <div className="ml-auto flex items-center gap-2">
-          {dirty && <span className="text-xs text-[#f59e0b]">• {t("builder.unsaved")}</span>}
+      {/* top bar — issue #59: stacks on mobile. Row1: back + title (flex-1,
+          min-w-0, truncate) + Publish. Row2: slug + View + unsaved. Desktop
+          (md+) keeps the single flat row; inputs shrink (w-56/w-40 →
+          flex-1 min-w-0 on mobile). */}
+      <header className="sticky top-0 z-20 flex flex-col gap-1.5 border-b border-[var(--jf-border)] bg-white/95 px-3 py-2 backdrop-blur md:flex-row md:items-center md:gap-3 md:px-4 md:py-2.5">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <a href="/forms" className="shrink-0 rounded-md px-2 py-1 text-sm text-[var(--jf-muted)] hover:text-[#374151]">
+            ←
+          </a>
+          <input
+            value={title}
+            onChange={(e) => {
+              setTitle(e.target.value);
+              setDirty(true);
+            }}
+            placeholder={t("bld.formTitle")}
+            className="min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-2 py-1 text-sm font-medium outline-none hover:border-[var(--jf-border)] focus:border-[#7170ff]/60 md:w-56 md:flex-none"
+          />
+          {/* Publish is row 1 on mobile; row 2 on desktop via ml-auto below.
+              On mobile the actions block moves to row 2 (hidden here). */}
+          <button
+            onClick={() => save(true)}
+            disabled={saving}
+            className="shrink-0 md:hidden jf-btn-primary"
+          >
+            {saving ? t("builder.saving") : currentId ? t("builder.publish") : t("builder.savePub")}
+          </button>
+        </div>
+        <div className="flex min-w-0 items-center gap-2 border-t border-[var(--jf-border)] pt-1.5 md:ml-auto md:border-0 md:pt-0">
+          <input
+            value={slug}
+            onChange={(e) => {
+              setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-"));
+              setDirty(true);
+            }}
+            placeholder="slug-url"
+            className="min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-2 py-1 font-mono text-xs text-[var(--jf-muted)] outline-none hover:border-[var(--jf-border)] focus:border-[#7170ff]/60 md:w-40 md:flex-none"
+          />
+          <span className="shrink-0">
+            {dirty && <span className="text-xs text-[#f59e0b]">• {t("builder.unsaved")}</span>}
+          </span>
           {pubUrl && (
             <a
               href={pubUrl}
               target="_blank"
-              className="rounded-md border border-[var(--jf-border)] bg-white px-3 py-1.5 text-xs text-[#374151] hover:bg-slate-50"
+              className="shrink-0 rounded-md border border-[var(--jf-border)] bg-white px-3 py-1.5 text-xs text-[#374151] hover:bg-slate-50"
             >
               {t("bld.view")}
             </a>
           )}
+          {/* desktop Publish — hidden on mobile (it's in row 1). */}
           <button
             onClick={() => save(true)}
             disabled={saving}
-            className="jf-btn-primary"
+            className="hidden md:inline-flex jf-btn-primary"
           >
             {saving ? t("builder.saving") : currentId ? t("builder.publish") : t("builder.savePub")}
           </button>
         </div>
       </header>
 
+      {/* mobile (<md) section switcher — issue #59: one tab at a time,
+          canvas is default. Desktop keeps the 3-col grid (md:grid). */}
+      <nav className="flex border-b border-[var(--jf-border)] bg-white md:hidden">
+        {(["add", "canvas", "settings"] as MobileTab[]).map((tab) => (
+          <button
+            key={tab}
+            onClick={() => setMobileTab(tab)}
+            className={`flex-1 py-2.5 text-sm font-medium capitalize ${
+              mobileTab === tab
+                ? "border-b-2 border-[#7170ff] text-[var(--jf-primary)]"
+                : "text-[var(--jf-muted)] hover:text-[#374151]"
+            }`}
+          >
+            {tab === "add" ? t("bld.addBlock") : tab === "canvas" ? t("bld.canvas") : t("bld.settings")}
+          </button>
+        ))}
+      </nav>
+
       <div className="grid w-full grid-cols-1 md:grid-cols-[240px_1fr_260px]">
-        {/* ── left: palette (drag sources) ── */}
-        <aside className="border-r border-[var(--jf-border)] p-4">
+        {/* ── left: palette (drag sources) − mobile: only on the Add tab,
+             desktop: always visible. Tap = add (already exists). */}
+        <aside className={`border-r border-[var(--jf-border)] p-4 ${mobileTab === "add" ? "block" : "hidden"} md:block`}>
           <p className="mb-3 text-xs font-medium uppercase tracking-wider text-[#9ca3af]">
             {t("bld.dragToAdd")}
           </p>
@@ -548,9 +627,10 @@ export default function Builder() {
           </div>
         </aside>
 
-        {/* ── center: canvas (drop zone) ── */}
-        <section className="p-6">
-          <div className="mx-auto max-w-lg">
+        {/* ── center: canvas (drop zone) − mobile: only on the Canvas tab;
+             desktop always visible. max-w-lg on desktop, max-w-full mobile. */}
+        <section className={`p-4 md:p-6 ${mobileTab === "canvas" ? "block" : "hidden"} md:block`}>
+          <div className="mx-auto max-w-full md:max-w-lg">
             {blocks.length === 0 && (
               <div
                 onDragOver={(e) => canvasDragOver(e, 0)}
@@ -601,8 +681,8 @@ export default function Builder() {
                           e.stopPropagation();
                           move(i, i - 1);
                         }}
-                        className="px-1 hover:text-[#374151]"
                         title={t("bld.moveUp")}
+                        className="flex h-11 w-11 items-center justify-center rounded-md text-base text-[#9ca3af] hover:text-[#374151] active:bg-slate-100 md:h-auto md:w-auto md:px-1 md:text-[10px]"
                       >
                         ↑
                       </button>
@@ -611,8 +691,8 @@ export default function Builder() {
                           e.stopPropagation();
                           move(i, i + 1);
                         }}
-                        className="px-1 hover:text-[#374151]"
                         title={t("bld.moveDown")}
+                        className="flex h-11 w-11 items-center justify-center rounded-md text-base text-[#9ca3af] hover:text-[#374151] active:bg-slate-100 md:h-auto md:w-auto md:px-1 md:text-[10px]"
                       >
                         ↓
                       </button>
@@ -621,8 +701,8 @@ export default function Builder() {
                           e.stopPropagation();
                           removeBlock(b.id);
                         }}
-                        className="px-1 hover:text-red-400"
                         title={t("bld.removeBlock")}
+                        className="flex h-11 w-11 items-center justify-center rounded-md text-base text-[#9ca3af] hover:text-red-400 active:bg-slate-100 md:h-auto md:w-auto md:px-1 md:text-[10px]"
                       >
                         ✕
                       </button>
@@ -648,8 +728,9 @@ export default function Builder() {
           {loadErr && <p className="mt-4 text-center text-xs text-red-400">{loadErr}</p>}
         </section>
 
-        {/* ── right: inspector ── */}
-        <aside className="border-l border-[var(--jf-border)] p-4">
+        {/* ── right: inspector − mobile: only on the Settings tab; hosts the
+             existing right-aside unchanged. */}
+        <aside className={`border-l border-[var(--jf-border)] p-4 ${mobileTab === "settings" ? "block" : "hidden"} md:block`}>
           <p className="mb-3 text-xs font-medium uppercase tracking-wider text-[#9ca3af]">{t("bld.blockSettings")}</p>
           {!selectedBlock && <p className="text-xs text-[#9ca3af]">{t("bld.selectBlock")}</p>}
           {selectedBlock && (
@@ -672,6 +753,23 @@ export default function Builder() {
                     placeholder="https://…"
                     className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-sm outline-none focus:border-[#7170ff]/60"
                   />
+                  {/* Issue #61: upload directly from a file picker. The server
+                      validates type/size, optimises and stores to S3/MinIO,
+                      then returns the public URL which becomes the block src. */}
+                  <label className="mt-2 inline-flex w-full cursor-pointer items-center justify-center rounded-md border border-[var(--jf-border)] py-2.5 text-xs font-medium text-[#374151] hover:bg-slate-50 disabled:opacity-50">
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp,image/gif"
+                      disabled={uploading}
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) void handleImageUpload(f);
+                        e.target.value = ""; // allow re-picking the same file
+                      }}
+                      className="hidden"
+                    />
+                    {uploading ? t("bld.uploading") : t("bld.uploadImage")}
+                  </label>
                 </div>
               )}
               {selectedBlock.type === "product" && (
