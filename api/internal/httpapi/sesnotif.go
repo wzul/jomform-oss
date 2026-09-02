@@ -99,8 +99,25 @@ func (s *Server) handleSESNotification(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "sns payload tidak sah")
 		return
 	}
-	// Ignore non-notification types (subscription confirmations are confirmed
-	// out-of-band; nothing to record).
+	// Auto-confirm SNS HTTPS subscriptions (issue #76): SNS POSTs a
+	// SubscriptionConfirmation with a SubscribeURL; hitting that URL confirms
+	// the subscription so Bounce/Complaint notifications start flowing. The
+	// signature was already verified above, so the SubscribeURL is trusted.
+	if env.Type == "SubscriptionConfirmation" {
+		if env.SubscribeURL != "" {
+			resp, err := http.Get(env.SubscribeURL)
+			if err != nil {
+				slog.Warn("ses_sns_subscribe_confirm_failed", "err", err)
+				writeErr(w, http.StatusBadGateway, "sns subscribe confirm gagal")
+				return
+			}
+			resp.Body.Close()
+			slog.Info("ses_sns_subscription_confirmed", "topic", env.TopicArn)
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "confirmed"})
+		return
+	}
+	// Ignore other non-notification types.
 	if env.Type != "Notification" {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ignored"})
 		return
