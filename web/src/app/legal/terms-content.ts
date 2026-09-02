@@ -54,8 +54,7 @@ export const TERMS_SECTIONS: { title: string; body: string[] }[] = [
   {
     title: "7. Intellectual property",
     body: [
-      "The Service (including code, design, and branding) is licensed under the Apache License 2.0 — see the public repository for the exact terms.",
-      "You keep ownership of your forms, content, and sales data.",
+      "The Service (including code, design, and branding) is owned by JomForm. You keep ownership of your forms, content, and sales data.",
       "You grant us a limited licence to host and display your content solely to operate the Service.",
     ],
   },

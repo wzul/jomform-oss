@@ -4,7 +4,7 @@
 
 ## 0. Prinsip
 
-1. **Open source, free** — semua pengguna guna percuma; code under Apache-2.0. Tiada billing engine dalam app; kalau hosted version mahu monetise nanti, itu lapisan berasingan.
+1. **Free hosted service** — semua pengguna guna percuma; bukan open source buat masa ini (repo private). Tiada billing engine dalam app; kalau hosted version mahu monetise nanti, itu lapisan berasingan.
 2. **Modern look** — UI baharu 2026; tiada warisan visual dari mana-mana produk sedia ada.
 3. **CHIP sahaja** — satu-satunya payment gateway. Pay-through model: setiap merchant guna akaun CHIP mereka sendiri (Brand ID + Secret Key, dienkripsi at-rest).
 4. **Identiti sendiri** — jenama, copy, navigation, data model semuanya original.

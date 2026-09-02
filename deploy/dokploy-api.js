@@ -26,7 +26,7 @@ async function main() {
   if (cmd === "create-project") {
     const r = await call("POST", "/project.create", {
       name: "JomForm",
-      description: "Open-source order-form builder — CHIP payments, MCP-native",
+      description: "Order-form builder — CHIP payments, MCP-native",
     });
     console.log("create-project:", JSON.stringify(r).slice(0, 500));
     return;
