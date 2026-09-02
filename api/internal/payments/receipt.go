@@ -43,6 +43,13 @@ type SaleRef struct {
 	MSIC         string
 }
 
+// renderReceiptBody builds the plain-text receipt body from a SaleRef. Kept
+// as a pure function so the money/URL formatting is unit-testable (issue #99).
+func renderReceiptBody(ref SaleRef) string {
+	return fmt.Sprintf(receiptTemplate,
+		ref.RefCode, float64(ref.AmountSen)/100, ref.ItemsSummary, ref.FormURL)
+}
+
 // SendSaleReceipt emails the buyer a plain-text receipt. Failures are
 // logged but NEVER fail the payment flow.
 func (s *Service) SendSaleReceipt(ctx context.Context, ref SaleRef) {
@@ -60,8 +67,7 @@ func (s *Service) SendSaleReceipt(ctx context.Context, ref SaleRef) {
 			return
 		}
 	}
-	body := fmt.Sprintf(receiptTemplate,
-		ref.RefCode, float64(ref.AmountSen)/100, ref.ItemsSummary, ref.FormURL)
+	body := renderReceiptBody(ref)
 	subject := "Resit pembayaran — " + ref.RefCode
 
 	if pdf, err := s.ReceiptPDF(ref); err == nil && len(pdf) > 0 {

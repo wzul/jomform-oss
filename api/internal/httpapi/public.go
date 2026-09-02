@@ -143,7 +143,11 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	sale.SubtotalSen = subtotal
-	sale.TotalSen = subtotal
+	// Issue #99 money invariant: total_sen = subtotal + shipping - discount.
+	// The submit path currently has no shipping/discount inputs, so total
+	// equals subtotal; the formula is centralized in payments.SumItems so the
+	// invariant is enforced and unit-tested in one place.
+	sale.TotalSen = payments.SumItems(subtotal, 0, 0)
 
 	if err := h.Sales.Create(r.Context(), sale); err != nil {
 		respondErr(w, err)

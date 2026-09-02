@@ -167,6 +167,13 @@ func TestEmailDeliveryEventStoreRecordListSweep(t *testing.T) {
 	p := testPool(t)
 	es := NewEmailDeliveryEventStore(p)
 
+	// Test isolation: the shared test DB accumulates rows across runs, and
+	// this test asserts on a global List. Clear the table first so the
+	// assertion is deterministic (issue #99 test hygiene).
+	if _, err := p.Exec(ctx, `DELETE FROM email_delivery_events`); err != nil {
+		t.Fatalf("clear email_delivery_events: %v", err)
+	}
+
 	// System mail (no account) + account mail.
 	if err := es.Record(ctx, "", "bounce@example.com", "bounce", "Permanent", map[string]any{"bounceType": "Permanent"}); err != nil {
 		t.Fatalf("record bounce: %v", err)
