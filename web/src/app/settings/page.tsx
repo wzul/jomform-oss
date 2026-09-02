@@ -91,6 +91,10 @@ export default function Settings() {
   const [editUrl, setEditUrl] = useState("");
   const [editSecret, setEditSecret] = useState("");
   const [editEvents, setEditEvents] = useState<string[]>([]);
+  // Issue #130: per-webhook delivery log — status indicator + expandable history.
+  type Delivery = { id: string; event: string; status_code?: number | null; success: boolean; attempt: number; error?: string; created_at?: string };
+  const [deliveries, setDeliveries] = useState<Record<string, Delivery[]>>({});
+  const [openWh, setOpenWh] = useState<string | null>(null);
   const [trackingHead, setTrackingHead] = useState("");
   const [social, setSocial] = useState<SocialRow[]>([]);
   // Cloudflare OAuth link state (issue #22): Login vs Disconnect+✓ per #9.
@@ -195,6 +199,13 @@ export default function Settings() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Issue #130: populate each webhook's delivery-status indicator from the
+  // REST delivery-log endpoint whenever the webhook list changes.
+  useEffect(() => {
+    webhooks.forEach((wh) => fetchDeliveries(wh.id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [webhooks]);
 
   // Issue #107: load the per-space email settings for the active space.
   const { spaces } = useSession();
@@ -329,6 +340,30 @@ export default function Settings() {
   }
   function closeEdit() {
     setEditId(null); setEditUrl(""); setEditSecret(""); setEditEvents([]);
+  }
+
+  // Issue #130: fetch the latest deliveries for one webhook via the REST
+  // endpoint (account-scoped server-side). Called when a row is expanded or
+  // on mount to populate the status indicator.
+  async function fetchDeliveries(webhookID: string) {
+    try {
+      const r = await fetch(`/api/rest/webhooks/${webhookID}/deliveries?limit=10`);
+      if (!r.ok) return;
+      const list = (await r.json().catch(() => ([]))) as Delivery[];
+      setDeliveries((prev) => ({ ...prev, [webhookID]: Array.isArray(list) ? list : [] }));
+    } catch {
+      // network blip — leave existing state untouched
+    }
+  }
+
+  // Derived per-webhook status for the indicator: pending (last failed, more
+  // retries remain), success (last attempt ok), failed (last attempt failed).
+  function deliveryStatus(list: Delivery[] | undefined) {
+    const latest = list && list.length ? list[0] : undefined;
+    if (!latest) return null; // no deliveries yet
+    if (latest.success) return "success";
+    if (latest.attempt < 3) return "pending"; // auto-retry is still scheduled
+    return "failed";
   }
 
   async function genKey() {
@@ -820,20 +855,89 @@ export default function Settings() {
                 </div>
               </form>
               <ul className="mt-3 space-y-2">
-                {webhooks.map((wh) => (
-                  <li key={wh.id} className="flex items-center justify-between gap-3 rounded-lg border border-[var(--jf-border)] px-4 py-2.5">
-                    <div className="min-w-0">
-                      <p className="truncate font-mono text-xs">{wh.url}</p>
-                      <p className="mt-0.5 text-[11px] text-slate-400">{(wh.events || []).join(", ")}</p>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-3">
-                      <button onClick={() => openEdit(wh)}
-                        className="shrink-0 text-xs text-slate-500 hover:text-slate-800">{t("set.webhookEdit")}</button>
-                      <button onClick={async () => { await fetch(`/api/rest/webhooks/${wh.id}`, { method: "DELETE" }); load(); }}
-                        className="shrink-0 text-xs text-slate-500 hover:text-red-500">✕</button>
-                    </div>
-                  </li>
-                ))}
+                {webhooks.map((wh) => {
+                  const deliv = deliveries[wh.id];
+                  const status = deliveryStatus(deliv);
+                  const open = openWh === wh.id;
+                  const last = deliv && deliv.length ? deliv[0] : undefined;
+                  return (
+                    <li key={wh.id} className="rounded-lg border border-[var(--jf-border)]">
+                      <div className="flex items-center justify-between gap-3 px-4 py-2.5">
+                        <div className="min-w-0">
+                          <p className="truncate font-mono text-xs">{wh.url}</p>
+                          <p className="mt-0.5 text-[11px] text-slate-400">{(wh.events || []).join(", ")}</p>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-3">
+                          {/* Issue #130: last-delivery status indicator. */}
+                          {last && (
+                            <span className="flex items-center gap-1.5 text-[11px] font-medium"
+                              title={t("wh.lastAttempt") + ": " + new Date(last.created_at || "").toLocaleString()}>
+                              <span className={`inline-block h-2 w-2 rounded-full ${
+                                status === "success" ? "bg-emerald-500"
+                                : status === "pending" ? "bg-amber-400"
+                                : "bg-red-500"
+                              }`} />
+                              {status === "success" && t("wh.success")}
+                              {status === "pending" && t("wh.pending")}
+                              {status === "failed" && t("wh.failed")}
+                              <span className="text-slate-400">· {t("wh.attemptCount", { n: last.attempt })}</span>
+                            </span>
+                          )}
+                          <button onClick={() => openEdit(wh)}
+                            className="shrink-0 text-xs text-slate-500 hover:text-slate-800">{t("set.webhookEdit")}</button>
+                          <button onClick={() => {
+                            const next = open ? null : wh.id;
+                            setOpenWh(next);
+                            if (next) fetchDeliveries(wh.id);
+                          }} className="shrink-0 text-xs text-slate-500 hover:text-slate-800">
+                            {open ? t("wh.hideHistory") : t("wh.showHistory")}
+                          </button>
+                          <button onClick={async () => { await fetch(`/api/rest/webhooks/${wh.id}`, { method: "DELETE" }); load(); }}
+                            className="shrink-0 text-xs text-slate-500 hover:text-red-500">✕</button>
+                        </div>
+                      </div>
+                      {/* Issue #130: expandable delivery history for this webhook. */}
+                      {open && (
+                        <div className="border-t border-[var(--jf-border)] px-4 py-3">
+                          <h4 className="mb-2 text-xs font-semibold text-slate-700">{t("wh.history")}</h4>
+                          {(!deliv || deliv.length === 0) ? (
+                            <p className="text-xs text-slate-400">{t("wh.noDeliveries")}</p>
+                          ) : (
+                            <div className="overflow-x-auto">
+                              <table className="w-full min-w-96 text-left text-xs">
+                                <thead>
+                                  <tr className="text-slate-400">
+                                    <th className="py-1 pr-3 font-medium">{t("wh.colTime")}</th>
+                                    <th className="py-1 pr-3 font-medium">{t("wh.colEvent")}</th>
+                                    <th className="py-1 pr-3 font-medium">{t("wh.colStatus")}</th>
+                                    <th className="py-1 pr-3 font-medium">HTTP</th>
+                                    <th className="py-1 font-medium">{t("wh.colError")}</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {deliv.map((d) => (
+                                    <tr key={d.id} className={`border-t border-[var(--jf-border)] ${!d.success ? "bg-red-50/60" : ""}`}>
+                                      <td className="py-1.5 pr-3 text-slate-500 whitespace-nowrap">
+                                        {d.created_at ? new Date(d.created_at).toLocaleString() : "—"}
+                                      </td>
+                                      <td className="py-1.5 pr-3 font-mono text-slate-700">{d.event}</td>
+                                      <td className={`py-1.5 pr-3 font-medium ${d.success ? "text-emerald-600" : "text-red-600"}`}>
+                                        {d.success ? t("wh.success") : t("wh.failed")}
+                                      </td>
+                                      <td className="py-1.5 pr-3 font-mono text-slate-500">{d.status_code ?? "—"}</td>
+                                      <td className="py-1.5 font-mono text-red-600">{d.error || "—"}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                          <p className="mt-2 text-[11px] text-slate-400">{t("wh.retryNote")}</p>
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
               {/* Issue #128: inline edit drawer for an existing webhook. */}
               {editId !== null && (

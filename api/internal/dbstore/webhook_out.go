@@ -128,10 +128,11 @@ func (s *WebhookStore) RecordDelivery(ctx context.Context, webhookID, event, pay
 	return err
 }
 
-// ListDeliveries latest N for a webhook (settings UI).
+// ListDeliveries latest N for a webhook (settings UI + REST + MCP parity).
+// Payload is truncated so the summary log stays light over the wire.
 func (s *WebhookStore) ListDeliveries(ctx context.Context, accountID, webhookID string, limit int) ([]map[string]any, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT d.status_code, d.success, d.attempt, COALESCE(d.error,''), d.created_at
+		`SELECT d.id, d.event, LEFT(d.payload, 500), d.status_code, d.success, d.attempt, COALESCE(d.error,''), d.created_at
 		 FROM outbound_webhook_deliveries d
 		 JOIN outbound_webhooks w ON w.id = d.webhook_id
 		 WHERE d.webhook_id=$2 AND w.account_id=$1 ORDER BY d.created_at DESC LIMIT $3`,
@@ -142,15 +143,22 @@ func (s *WebhookStore) ListDeliveries(ctx context.Context, accountID, webhookID 
 	defer rows.Close()
 	var out []map[string]any
 	for rows.Next() {
+		var id string
+		var event string
+		var payload string
 		var code *int
 		var ok bool
 		var attempt int
 		var errMsg string
 		var ts time.Time
-		if err := rows.Scan(&code, &ok, &attempt, &errMsg, &ts); err != nil {
+		if err := rows.Scan(&id, &event, &payload, &code, &ok, &attempt, &errMsg, &ts); err != nil {
 			return nil, err
 		}
-		out = append(out, map[string]any{"status_code": code, "success": ok, "attempt": attempt, "error": errMsg, "created_at": ts})
+		out = append(out, map[string]any{
+			"id": id, "event": event, "payload": payload,
+			"status_code": code, "success": ok, "attempt": attempt,
+			"error": errMsg, "created_at": ts,
+		})
 	}
 	return out, rows.Err()
 }

@@ -3,6 +3,7 @@ package httpapi
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -112,5 +113,30 @@ func (h *RESTHandlers) updateWebhook(w http.ResponseWriter, r *http.Request, act
 	// Issue #92: audit webhook update.
 	h.recordEvent(r, actx, h.sessionOwnerID(r), "settings.webhook_updated", map[string]any{"webhook_id": r.PathValue("id"), "events": in.Events})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+// webhookDeliveryLimitMax bounds the latest-N window surfaced to the UI.
+// Mirrors the MCP webhook_deliveries cap so both surfaces stay in step.
+const webhookDeliveryLimitMax = 100
+
+// listWebhookDeliveries returns the latest deliveries for one webhook
+// (account-scoped via the joined ownership check in ListDeliveries). The
+// optional limit query param defaults to 10 and is clamped to 1..100.
+func (h *RESTHandlers) listWebhookDeliveries(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	limit := 10
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	if limit > webhookDeliveryLimitMax {
+		limit = webhookDeliveryLimitMax
+	}
+	deliveries, err := h.Webhooks.ListDeliveries(r.Context(), actx.Account.ID, r.PathValue("id"), limit)
+	if err != nil {
+		respondErr(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, deliveries)
 }
 
