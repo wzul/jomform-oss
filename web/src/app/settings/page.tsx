@@ -15,15 +15,16 @@ type SocialRow = { provider: string; email?: string; linked_at?: string };
 // page tabs — #5) instead of one long scroll of 8 stacked sections.
 //   chip      -> CHIP gateway
 //   domains   -> Custom domains + Cloudflare connect (one workflow)
-//   einvoice  -> e-Invoice TIN/MSIC + Tracking scripts
+//   tracking  -> Tracking scripts (global GTM/analytics)
+//   einvoice  -> e-Invoice TIN/MSIC
 //   webhooks  -> Outbound webhooks + MCP/API section
 //   social    -> Social login connectors
-type SettingsTab = "chip" | "domains" | "einvoice" | "webhooks" | "social";
+type SettingsTab = "chip" | "domains" | "tracking" | "einvoice" | "webhooks" | "social";
 
-const TAB_IDS: SettingsTab[] = ["chip", "domains", "einvoice", "webhooks", "social"];
+const TAB_IDS: SettingsTab[] = ["chip", "domains", "tracking", "einvoice", "webhooks", "social"];
 
 function isSettingsTab(v: string | null): v is SettingsTab {
-  return v === "chip" || v === "domains" || v === "einvoice" || v === "webhooks" || v === "social";
+  return v === "chip" || v === "domains" || v === "tracking" || v === "einvoice" || v === "webhooks" || v === "social";
 }
 
 // Restore the last active tab. Falls back to "chip".
@@ -596,50 +597,51 @@ export default function Settings() {
           </>
         )}
 
-        {/* ── e-Invoice tab: tracking scripts + e-Invoice (LHDN) ── */}
-        {tab === "einvoice" && (
-          <>
-            <section className="jf-card mt-6 p-6">
-              <h2 className="text-lg font-semibold">{t("set.trackingTitle")}</h2>
-              <p className="mt-1 max-w-xl text-sm text-slate-400">
-                {t("set.trackingHelp")} <code className="rounded bg-slate-100 px-1">&lt;script src="https://…"&gt;</code>, <code className="rounded bg-slate-100 px-1">&lt;meta&gt;</code>, comments. Event handlers & cookie writes stripped.
-              </p>
-              <textarea value={trackingHead} onChange={(e) => setTrackingHead(e.target.value)} rows={4}
-                className="jf-input mt-3 max-w-xl font-mono text-xs"
-                placeholder={'<script src="https://www.googletagmanager.com/gtag/js?id=G-XXXX"></-script>'} />
-              <button onClick={async () => {
-                const r = await fetch("/api/rest/settings/tracking", {
-                  method: "PUT", headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ head: trackingHead }),
-                });
-                setMsg(r.ok ? t("set.trackingSaved") : t("prof.failed"));
-              }} className="jf-btn-primary mt-3">{t("set.saveTracking")}</button>
-            </section>
+        {/* ── Tracking tab: global tracking scripts (GTM/analytics) ── */}
+        {tab === "tracking" && (
+          <section className="jf-card mt-6 p-6">
+            <h2 className="text-lg font-semibold">{t("set.trackingTitle")}</h2>
+            <p className="mt-1 max-w-xl text-sm text-slate-400">
+              {t("set.trackingHelp")} <code className="rounded bg-slate-100 px-1">&lt;script src="https://…"&gt;</code>, <code className="rounded bg-slate-100 px-1">&lt;meta&gt;</code>, comments. Event handlers & cookie writes stripped.
+            </p>
+            <textarea value={trackingHead} onChange={(e) => setTrackingHead(e.target.value)} rows={4}
+              className="jf-input mt-3 max-w-xl font-mono text-xs"
+              placeholder={'<script src="https://www.googletagmanager.com/gtag/js?id=G-XXXX"></-script>'} />
+            <button onClick={async () => {
+              const r = await fetch("/api/rest/settings/tracking", {
+                method: "PUT", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ head: trackingHead }),
+              });
+              setMsg(r.ok ? t("set.trackingSaved") : t("prof.failed"));
+            }} className="jf-btn-primary mt-3">{t("set.saveTracking")}</button>
+          </section>
+        )}
 
-            <section className="jf-card mt-6 p-6">
-              <h2 className="text-lg font-semibold">{t("set.einvoiceTitle")}</h2>
-              <p className="mt-1 max-w-xl text-sm text-slate-400">
-                {t("set.einvoiceHelp")}
-              </p>
-              <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div>
-                  <label className="text-xs text-slate-500">{t("set.companyTin")}</label>
-                  <input value={tin} onChange={(e) => setTin(e.target.value)} className="jf-input mt-1 max-w-xl" placeholder="e.g. C1234567890" />
-                </div>
-                <div>
-                  <label className="text-xs text-slate-500">{t("set.msicCode")}</label>
-                  <input value={msic} onChange={(e) => setMsic(e.target.value)} className="jf-input mt-1 max-w-xl" placeholder="e.g. 62010" />
-                </div>
+        {/* ── e-Invoice tab: e-Invoice (LHDN) TIN/MSIC ── */}
+        {tab === "einvoice" && (
+          <section className="jf-card mt-6 p-6">
+            <h2 className="text-lg font-semibold">{t("set.einvoiceTitle")}</h2>
+            <p className="mt-1 max-w-xl text-sm text-slate-400">
+              {t("set.einvoiceHelp")}
+            </p>
+            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div>
+                <label className="text-xs text-slate-500">{t("set.companyTin")}</label>
+                <input value={tin} onChange={(e) => setTin(e.target.value)} className="jf-input mt-1 max-w-xl" placeholder="e.g. C1234567890" />
               </div>
-              <button onClick={async () => {
-                const r = await fetch("/api/rest/settings/einvoice", {
-                  method: "PUT", headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ tin, msic }),
-                });
-                setMsg(r.ok ? t("set.einvoiceSaved") : t("set.failedSave"));
-              }} className="jf-btn-primary mt-3">{t("set.saveEinvoice")}</button>
-            </section>
-          </>
+              <div>
+                <label className="text-xs text-slate-500">{t("set.msicCode")}</label>
+                <input value={msic} onChange={(e) => setMsic(e.target.value)} className="jf-input mt-1 max-w-xl" placeholder="e.g. 62010" />
+              </div>
+            </div>
+            <button onClick={async () => {
+              const r = await fetch("/api/rest/settings/einvoice", {
+                method: "PUT", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ tin, msic }),
+              });
+              setMsg(r.ok ? t("set.einvoiceSaved") : t("set.failedSave"));
+            }} className="jf-btn-primary mt-3">{t("set.saveEinvoice")}</button>
+          </section>
         )}
 
         {/* ── Webhooks tab: outbound webhooks + MCP/API section ── */}

@@ -217,6 +217,7 @@ const DICT = {
   // issue #68: settings page tab labels + cloudflare callback banner
   "set.tab.chip": { en: "CHIP", ms: "CHIP", zh: "CHIP", ta: "CHIP", ar: "CHIP" },
   "set.tab.domains": { en: "Domains", ms: "Domain", zh: "域名", ta: "டொமைன்கள்", ar: "النطاقات" },
+  "set.tab.tracking": { en: "Tracking", ms: "Penjejakan", zh: "跟踪", ta: "கண்காணிப்பு", ar: "التتبع" },
   "set.tab.einvoice": { en: "e-Invoice", ms: "e-Invois", zh: "电子发票", ta: "மின் இன்வாய்ஸ்", ar: "الفاتورة الإلكترونية" },
   "set.tab.webhooks": { en: "Webhooks", ms: "Webhook", zh: "Webhook", ta: "வெப்ஹூக்குகள்", ar: "خطافات الويب" },
   "set.tab.social": { en: "Social", ms: "Sosial", zh: "社交", ta: "சமூக", ar: "وسائل التواصل" },
