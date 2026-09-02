@@ -4,11 +4,10 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
-
-	"log/slog"
 
 	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/dbstore"
@@ -63,6 +62,16 @@ func (a *AuthHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/auth/2fa/setup", a.handle2FASetup)
 	mux.HandleFunc("POST /v1/auth/2fa/enable", a.handle2FAEnable)
 	mux.HandleFunc("POST /v1/auth/2fa/disable", a.handle2FADisable)
+	// 2FA email backup code (issue #72): a 6-digit one-time code emailed during
+	// login (gated on a 5-min pending flag armed only after a correct-password
+	// totp_required). Tight per-IP limit (3/hour) so it can't be weaponized
+	// into a mail-bomb, and always responds generically (no enumeration).
+	mux.Handle("POST /v1/auth/2fa/email-code", middleware.RateLimitWith(3.0/3600.0, 3)(http.HandlerFunc(a.handleEmail2FACode)))
+	// Passwordless magic link (issue #73): request mints a single-use 15-min
+	// hashed token and emails it. Tight per-IP limit (mail-bomb + enumeration
+	// are the same #56 reputation vector as registration/reset).
+	mux.Handle("POST /v1/auth/magic-link/request", middleware.RateLimitWith(1.0/3600.0, 2)(http.HandlerFunc(a.handleMagicLinkRequest)))
+	mux.HandleFunc("POST /v1/auth/magic-link/verify", a.handleMagicLinkVerify)
 	mux.HandleFunc("POST /v1/auth/change-password", a.handleChangePassword)
 	mux.HandleFunc("GET /v1/auth/profile", a.handleProfile)
 	mux.HandleFunc("POST /v1/auth/profile/name", a.handleUpdateName)
@@ -306,18 +315,46 @@ func (a *AuthHandlers) handleLogin(w http.ResponseWriter, r *http.Request) {
 		// password is still required every login.
 		trusted := a.trustMatchesUser(r, user.ID)
 		if req.TOTPCode == "" && !trusted {
+			// Issue #72: this correct-password 2FA challenge is the ONLY path
+			// that arms the email-backup-code pending flag. The 2FA email-code
+			// endpoint refuses to send without a live jf:2fa_pending flag, so a
+			// blind attacker who knows an email but not the password can never
+			// harvest backup codes.
+			if e2fa := a.email2FA(); e2fa != nil {
+				if err := e2fa.ArmPending(r.Context(), ip, email); err != nil {
+					slog.Warn("email2fa_arm_pending", "err", err, "ip", ip)
+				}
+			}
 			step := "totp_required"
 			writeJSON(w, http.StatusUnauthorized, meResponse{NextStep: &step})
 			return
 		}
-		if !trusted && !auth.ValidateTOTPSecret(user.TOTPSecret, req.TOTPCode) {
-			a.failLogin(w, r, ip, email, true)
-			return
-		}
-		// A correct code + "remember this device" opt-in mints the trust cookie
-		// on a COMPLETED 2FA login only (never on partial/failed attempts).
-		if !trusted && req.TOTPRemember {
-			a.issueTrustCookie(w, r, user.ID)
+		if !trusted {
+			// Accept EITHER the authenticator TOTP or an emailed backup code
+			// (issue #72). TOTP is tried first; on failure the code is checked
+			// against the emailed-code store (single-use, hashed, 10-min).
+			totpOK := auth.ValidateTOTPSecret(user.TOTPSecret, req.TOTPCode)
+			emailOK := false
+			if !totpOK {
+				if e2fa := a.email2FA(); e2fa != nil {
+					err := e2fa.Consume(r.Context(), user.ID, req.TOTPCode)
+					emailOK = err == nil
+					if err != nil && !errors.Is(err, auth.ErrEmail2FAInvalid) {
+						slog.Warn("email2fa_consume_error", "err", err, "user", user.ID)
+					}
+				}
+			}
+			if !totpOK && !emailOK {
+				a.failLogin(w, r, ip, email, true)
+				return
+			}
+			// Issue #72: trust-device (jf_trust) is NEVER issued for an
+			// email-code login — only a real authenticator TOTP proves the user
+			// holds the second factor. A backup code is a recovery path, not a
+			// basis for a 30-day trust waiver.
+			if totpOK && req.TOTPRemember {
+				a.issueTrustCookie(w, r, user.ID)
+			}
 		}
 	}
 
@@ -449,6 +486,11 @@ func (a *AuthHandlers) handle2FAEnable(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
+	// Issue #72: confirm 2FA is now active and explain the email-code fallback
+	// trade-off (a backup code is a recovery path that bypasses the authenticator).
+	if err := a.send2FAActiveEmail(r.Context(), user.Email); err != nil {
+		slog.Warn("2fa_active_email_failed", "err", err, "user", user.ID)
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "enabled"})
 }
 
@@ -499,8 +541,8 @@ func (a *AuthHandlers) handle2FADisable(w http.ResponseWriter, r *http.Request) 
 // 14d persistent cookie + server TTL. The server side always enforces the TTL
 // regardless of the cookie, so a replayed cookie can't outlive its server key.
 const (
-	rememberShortTTL  = 24 * time.Hour
-	rememberLongTTL   = 14 * 24 * time.Hour
+	rememberShortTTL = 24 * time.Hour
+	rememberLongTTL  = 14 * 24 * time.Hour
 )
 
 // startSession creates a session for userID, honoring the remember flag for

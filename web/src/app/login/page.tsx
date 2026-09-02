@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useI18n } from "../../components/i18n";
 
-type Mode = "login" | "register" | "forgot";
+type Mode = "login" | "register" | "forgot" | "magic";
 type SocialProvider = { id: string; name: string };
 
 // Issue #71: two-step login card (state machine in the same component, no
@@ -38,6 +38,9 @@ export default function Login() {
   const [cred, setCred] = useState<Cred>({ email: "", password: "", remember: false });
   // Controlled 2FA code on Step 2 (autofocus + auto-submit on 6 digits).
   const [code, setCode] = useState("");
+  // Issue #72: tracks whether the user clicked "send email code" on the 2FA
+  // step, and shows a hint that a 6-digit backup code was emailed.
+  const [emailCodeSent, setEmailCodeSent] = useState(false);
   // Issue #9: social buttons render only for providers configured on the
   // backend (env-gated). null = list still loading → render none.
   const [socialProviders, setSocialProviders] = useState<SocialProvider[] | null>(null);
@@ -72,9 +75,9 @@ export default function Login() {
     setBusy(true);
     setError("");
     const fd = new FormData(e.currentTarget);
-    const path = mode === "login" ? "/api/auth/login" : mode === "register" ? "/api/auth/register" : "/api/auth/forgot-password";
+    const path = mode === "login" ? "/api/auth/login" : mode === "register" ? "/api/auth/register" : mode === "magic" ? "/api/auth/magic-link/request" : "/api/auth/forgot-password";
 
-    if (mode === "forgot") {
+    if (mode === "forgot" || mode === "magic") {
       const r = await fetch(path, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -85,7 +88,8 @@ export default function Login() {
         setDone(true);
         setError("");
       } else {
-        setError((await r.json().catch(() => ({}))).error || t("login.forgotSent"));
+        // Both endpoints are enumeration-safe generic 200s; fall back gracefully.
+        setError((await r.json().catch(() => ({}))).error || t(mode === "magic" ? "login.passwordlessSent" : "login.forgotSent"));
       }
       return;
     }
@@ -174,6 +178,30 @@ export default function Login() {
     setError("");
   }
 
+  // Issue #72: on the 2FA step, request a one-time backup code via email. The
+  // endpoint is a generic 200; the backend only sends if the password was
+  // already proven on this IP. Uses the email captured in `cred` on Step 1.
+  async function requestEmailCode() {
+    setError("");
+    setBusy(true);
+    try {
+      const r = await fetch("/api/auth/2fa/email-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: cred.email }),
+      });
+      if (r.ok) {
+        setEmailCodeSent(true);
+      } else {
+        setError("Gagal. Cuba semula.");
+      }
+    } catch {
+      setError("Gagal. Cuba semula.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function passkeyLogin() {
     setError(""); setBusy(true);
     try {
@@ -230,7 +258,9 @@ export default function Login() {
                 ? "Selamat kembali"
                 : mode === "register"
                   ? "Cipta akaun JomForm"
-                  : t("login.forgotTitle")}
+                  : mode === "magic"
+                    ? t("login.passwordless")
+                    : t("login.forgotTitle")}
           </h1>
           <p className="mt-1.5 text-sm text-[var(--jf-muted)]">
             {step === 2
@@ -239,13 +269,15 @@ export default function Login() {
                 ? "Log masuk untuk urus borang dan jualan anda."
                 : mode === "register"
                   ? "Percuma selamanya — borang pertama siap dalam 5 minit."
-                  : t("login.forgotDesc")}
+                  : mode === "magic"
+                    ? t("login.passwordlessDesc")
+                    : t("login.forgotDesc")}
           </p>
         </div>
 
         <div className="rounded-xl border border-[var(--jf-border)] bg-white p-6 shadow-[0_0_0_1px_rgba(0,0,0,0.2),0_8px_24px_rgba(0,0,0,0.4)]">
-          {/* tabs (hidden during the dedicated 2FA step) */}
-          {step === 1 && mode !== "forgot" && (
+          {/* tabs (hidden during the dedicated 2FA step and in forgot/magic modes) */}
+          {step === 1 && mode !== "forgot" && mode !== "magic" && (
             <div className="mb-5 grid grid-cols-2 rounded-lg border border-[var(--jf-border)] bg-slate-100 p-0.5">
               {(["login", "register"] as const).map((m) => (
                 <button
@@ -283,7 +315,9 @@ export default function Login() {
                   ? "Akaun anda telah dicipta! Sila sahkan alamat emel anda melalui pautan yang kami hantar untuk mengaktifkan log masuk."
                   : mode === "forgot"
                     ? t("login.forgotSent")
-                    : "Berjaya log masuk."}
+                    : mode === "magic"
+                      ? t("login.passwordlessSent")
+                      : "Berjaya log masuk."}
               </div>
               {mode !== "login" && (
                 <button
@@ -294,7 +328,7 @@ export default function Login() {
                   }}
                   className="mt-1 w-full rounded-md bg-[#5e6ad2] py-2 text-sm font-medium text-white transition-colors hover:bg-[#828fff]"
                 >
-                  {mode === "forgot" ? t("login.forgotBack") : "Ke Log Masuk"}
+                  {mode === "forgot" || mode === "magic" ? t(mode === "magic" ? "login.passwordlessBack" : "login.forgotBack") : "Ke Log Masuk"}
                 </button>
               )}
             </div>
@@ -336,6 +370,23 @@ export default function Login() {
                 />
                 <span>{t("login.totpRemember")}</span>
               </label>
+              {/* Issue #72: emailed one-time backup-code alternative. Muted,
+                  added cleanly without disturbing the 2FA step. Uses the email
+                  captured in `cred` on Step 1. */}
+              <div className="pt-1">
+                {emailCodeSent ? (
+                  <p className="text-[12px] text-[var(--jf-muted)]">{t("login.emailCodeSent")}</p>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={busy || !cred.email}
+                    onClick={requestEmailCode}
+                    className="text-[12px] text-[var(--jf-muted)] hover:text-[#7170ff] hover:underline disabled:opacity-50"
+                  >
+                    {t("login.emailCodeLink")}
+                  </button>
+                )}
+              </div>
               <button
                 disabled={busy || code.length !== 6}
                 className="mt-1 w-full rounded-md bg-[#5e6ad2] py-2 text-sm font-medium text-white transition-colors hover:bg-[#828fff] disabled:opacity-60"
@@ -357,7 +408,7 @@ export default function Login() {
                   screen-readers (no focus, no layout) but it stays in the DOM,
                   so naive bots that fill every field trip the server-side
                   discard. */}
-              {mode !== "forgot" && (
+              {mode !== "forgot" && mode !== "magic" && (
                 <div className="sr-only" aria-hidden="true">
                   <label htmlFor="website">Laman web</label>
                   <input
@@ -383,7 +434,7 @@ export default function Login() {
                   className="w-full rounded-md border border-[var(--jf-border)] bg-white px-3 py-2 text-sm text-[var(--jf-text)] placeholder-slate-400 outline-none transition-colors focus:border-[#7170ff]/60 focus:bg-indigo-50"
                 />
               </div>
-              {mode !== "forgot" && (
+              {mode !== "forgot" && mode !== "magic" && (
                 <div>
                   <label className="mb-1 block text-xs font-medium text-[var(--jf-muted)]">
                     {mode === "register" ? "Kata laluan (min. 10 aksara)" : "Kata laluan"}
@@ -432,20 +483,41 @@ export default function Login() {
                   {t("login.forgotBack")}
                 </button>
               )}
+              {mode === "magic" && (
+                <button
+                  type="button"
+                  onClick={() => { setMode("login"); setError(""); setDone(false); }}
+                  className="text-[13px] font-medium text-[#5e6ad2] hover:underline"
+                >
+                  {t("login.passwordlessBack")}
+                </button>
+              )}
 
               <button
                 disabled={busy}
                 className="mt-1 w-full rounded-md bg-[#5e6ad2] py-2 text-sm font-medium text-white transition-colors hover:bg-[#828fff] disabled:opacity-60"
               >
-                {busy ? "…" : mode === "login" ? "Log Masuk" : mode === "register" ? "Cipta Akaun Percuma" : t("login.forgotSubmit")}
+                {busy ? "…" : mode === "login" ? "Log Masuk" : mode === "register" ? "Cipta Akaun Percuma" : mode === "magic" ? t("login.passwordlessSubmit") : t("login.forgotSubmit")}
               </button>
             </form>
+          )}
+
+          {/* Issue #73: passwordless magic-link entry point, in login mode only
+              (not at the 2FA step). Minimal additive link. */}
+          {mode === "login" && step === 1 && (
+            <button
+              type="button"
+              onClick={() => { setMode("magic"); setError(""); setDone(false); }}
+              className="mt-3 w-full text-center text-[13px] font-medium text-[#5e6ad2] hover:underline"
+            >
+              {t("login.passwordless")}
+            </button>
           )}
 
           {/* Issue #9: env-gated social login. Rendered only when the backend
               reports the provider configured (GET /api/auth/social/providers);
               Cloudflare appears only when JF_CF_OIDC_* env vars are set. */}
-          {step === 1 && mode !== "forgot" && socialProviders && socialProviders.length > 0 && (
+          {step === 1 && mode !== "forgot" && mode !== "magic" && socialProviders && socialProviders.length > 0 && (
             <div className="mt-4 border-t border-[var(--jf-border)] pt-4">
               <div className="space-y-2">
                 {socialProviders.map((p) => (
