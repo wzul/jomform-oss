@@ -139,7 +139,7 @@ export default function Login() {
       setStep(2);
       return;
     }
-    setError(d.error || "Gagal. Cuba semula.");
+    setError(d.error || t("login.genericError"));
   }
 
   async function submitTotp(totpCode: string) {
@@ -166,7 +166,7 @@ export default function Login() {
     const d = await r.json().catch(() => ({}));
     // Wrong code is a genuine error — inline, red, under the code input (#42
     // login-limiter UX stays intact for repeated failures).
-    setError(d.error || "Gagal. Cuba semula.");
+    setError(d.error || t("login.genericError"));
     setCode("");
     codeRef.current?.focus();
   }
@@ -193,10 +193,10 @@ export default function Login() {
       if (r.ok) {
         setEmailCodeSent(true);
       } else {
-        setError("Gagal. Cuba semula.");
+        setError(t("login.genericError"));
       }
     } catch {
-      setError("Gagal. Cuba semula.");
+      setError(t("login.genericError"));
     } finally {
       setBusy(false);
     }
@@ -226,9 +226,9 @@ export default function Login() {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
       });
       if (fin.ok) { window.location.href = "/"; return; }
-      setError((await fin.json().catch(() => ({}))).error || "Passkey tidak sah.");
+      setError((await fin.json().catch(() => ({}))).error || t("login.passkeyInvalid"));
     } catch {
-      setError("Passkey dibatalkan atau tidak disokong pelayar.");
+      setError(t("login.passkeyUnsupported"));
     }
     setBusy(false);
   }
@@ -255,9 +255,9 @@ export default function Login() {
             {step === 2
               ? t("login.totpTitle")
               : mode === "login"
-                ? "Selamat kembali"
+                ? t("login.welcome")
                 : mode === "register"
-                  ? "Cipta akaun JomForm"
+                  ? t("login.registerTitle")
                   : mode === "magic"
                     ? t("login.passwordless")
                     : t("login.forgotTitle")}
@@ -266,9 +266,9 @@ export default function Login() {
             {step === 2
               ? t("login.totpDesc", { email: maskEmail(cred.email) })
               : mode === "login"
-                ? "Log masuk untuk urus borang dan jualan anda."
+                ? t("login.loginNote")
                 : mode === "register"
-                  ? "Percuma selamanya — borang pertama siap dalam 5 minit."
+                  ? t("login.freeNote")
                   : mode === "magic"
                     ? t("login.passwordlessDesc")
                     : t("login.forgotDesc")}
@@ -294,7 +294,7 @@ export default function Login() {
                       : "text-slate-600 hover:text-slate-800"
                   }`}
                 >
-                  {m === "login" ? "Log Masuk" : "Daftar"}
+                  {m === "login" ? t("login.tabLogin") : t("login.tabRegister")}
                 </button>
               ))}
             </div>
@@ -312,12 +312,12 @@ export default function Login() {
             <div className="space-y-3">
               <div className="rounded-lg border border-green-500/20 bg-green-500/10 px-3 py-3 text-[13px] text-green-700">
                 {mode === "register"
-                  ? "Akaun anda telah dicipta! Sila sahkan alamat emel anda melalui pautan yang kami hantar untuk mengaktifkan log masuk."
+                  ? t("login.registerDone")
                   : mode === "forgot"
                     ? t("login.forgotSent")
                     : mode === "magic"
                       ? t("login.passwordlessSent")
-                      : "Berjaya log masuk."}
+                      : t("login.loginDone")}
               </div>
               {mode !== "login" && (
                 <button
@@ -328,7 +328,7 @@ export default function Login() {
                   }}
                   className="mt-1 w-full rounded-md bg-[#5e6ad2] py-2 text-sm font-medium text-white transition-colors hover:bg-[#828fff]"
                 >
-                  {mode === "forgot" || mode === "magic" ? t(mode === "magic" ? "login.passwordlessBack" : "login.forgotBack") : "Ke Log Masuk"}
+                  {mode === "forgot" || mode === "magic" ? t(mode === "magic" ? "login.passwordlessBack" : "login.forgotBack") : t("login.backToLogin")}
                 </button>
               )}
             </div>
@@ -410,7 +410,7 @@ export default function Login() {
                   discard. */}
               {mode !== "forgot" && mode !== "magic" && (
                 <div className="sr-only" aria-hidden="true">
-                  <label htmlFor="website">Laman web</label>
+                  <label htmlFor="website">{t("login.honeypot")}</label>
                   <input
                     id="website"
                     name="website"
@@ -423,7 +423,7 @@ export default function Login() {
               )}
 
               <div>
-                <label className="mb-1 block text-xs font-medium text-[var(--jf-muted)]">Emel</label>
+                <label className="mb-1 block text-xs font-medium text-[var(--jf-muted)]">{t("login.email")}</label>
                 <input
                   name="email"
                   type="email"
@@ -437,7 +437,7 @@ export default function Login() {
               {mode !== "forgot" && mode !== "magic" && (
                 <div>
                   <label className="mb-1 block text-xs font-medium text-[var(--jf-muted)]">
-                    {mode === "register" ? "Kata laluan (min. 10 aksara)" : "Kata laluan"}
+                    {mode === "register" ? t("login.pwRegister") : t("login.password")}
                   </label>
                   <input
                     name="password"
@@ -497,7 +497,7 @@ export default function Login() {
                 disabled={busy}
                 className="mt-1 w-full rounded-md bg-[#5e6ad2] py-2 text-sm font-medium text-white transition-colors hover:bg-[#828fff] disabled:opacity-60"
               >
-                {busy ? "…" : mode === "login" ? "Log Masuk" : mode === "register" ? "Cipta Akaun Percuma" : mode === "magic" ? t("login.passwordlessSubmit") : t("login.forgotSubmit")}
+                {busy ? "…" : mode === "login" ? t("login.submitLogin") : mode === "register" ? t("login.submitRegister") : mode === "magic" ? t("login.passwordlessSubmit") : t("login.forgotSubmit")}
               </button>
             </form>
           )}
@@ -526,7 +526,7 @@ export default function Login() {
                     href={`/api/auth/oauth/${p.id}`}
                     className="flex w-full items-center justify-center gap-2 rounded-md border border-[var(--jf-border)] bg-white py-2 text-[13px] font-medium text-[var(--jf-text)] transition-colors hover:border-[#7170ff]/60 hover:bg-indigo-50"
                   >
-                    Teruskan dengan {p.name}
+                    {t("login.continueWith", { provider: p.name })}
                   </a>
                 ))}
               </div>
@@ -535,7 +535,7 @@ export default function Login() {
         </div>
 
         <p className="mt-6 text-center text-xs text-[#62666d]">
-          Dengan meneruskan, anda bersetuju dengan Terma & Polisi Privasi JomForm.
+          {t("login.termsNote")}
         </p>
       </div>
     </main>

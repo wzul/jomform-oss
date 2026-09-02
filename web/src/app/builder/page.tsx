@@ -205,7 +205,7 @@ export default function Builder() {
       if (!r.ok) {
         setFormSales([]);
         setFormSalesTotal(0);
-        setFormSalesErr("Gagal memuatkan jualan.");
+        setFormSalesErr(t("bld.loadSalesErr"));
         return;
       }
       const d = (await r.json()) as SalesPage;
@@ -216,7 +216,7 @@ export default function Builder() {
     } catch {
       setFormSales([]);
       setFormSalesTotal(0);
-      setFormSalesErr("Gagal memuatkan jualan.");
+      setFormSalesErr(t("bld.loadSalesErr"));
     }
   }, []);
 
@@ -311,10 +311,10 @@ export default function Builder() {
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
-        setSaleActionMsg(d.error || "Bulk capture gagal.");
+        setSaleActionMsg(d.error || t("bld.bulkCaptureFail"));
         return;
       }
-      setSaleActionMsg(`Captured ${d.captured}/${d.requested} — ${d.failed} gagal.${d.failed ? " Semak status setiap satu." : " ✓"}`);
+      setSaleActionMsg(t("bld.bulkCaptureDone", { captured: String(d.captured), requested: String(d.requested), failed: String(d.failed) }) + (d.failed ? t("bld.bulkCaptureCheck") : " ✓"));
       await loadFormSales(currentId, formSalesPage);
     } finally {
       setSaleActionBusy(null);
@@ -511,7 +511,7 @@ export default function Builder() {
       const r = await fetch("/api/rest/uploads/image", { method: "POST", body: fd });
       const d = await r.json().catch(() => ({}));
       if (!r.ok || !d.url) {
-        setLoadErr(d.error || "Muat naik imej gagal.");
+        setLoadErr(d.error || t("bld.uploadImageFail"));
         return;
       }
       updateBlock(selectedBlock.id, { src: d.url });
