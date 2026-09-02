@@ -31,6 +31,10 @@ type RESTHandlers struct {
 	Passkeys       *dbstore.PasskeyStore
 	Users          *dbstore.UserStore
 	Domains        *dbstore.DomainStore
+	// CookieDomain is the shared Domain attribute for the session cookie
+	// (e.g. ".jomform.com") so passkey/social sessions remain valid on product
+	// subdomains such as mcp.jomform.com (issue #140). Empty → host-only.
+	CookieDomain string
 	// ChipProbe validates credentials against CHIP at save time.
 	ChipProbe interface {
 		ValidateCredentials(ctx context.Context, secret string) error
@@ -302,6 +306,7 @@ func (h *RESTHandlers) startSessionFor(w http.ResponseWriter, r *http.Request, u
 		Name:     sessionCookie,
 		Value:    token,
 		Path:     "/",
+		Domain:   h.CookieDomain,
 		HttpOnly: true,
 		Secure:   true,
 		SameSite: http.SameSiteLaxMode,

@@ -25,6 +25,34 @@ function maskEmail(email: string): string {
   return email.slice(0, 2) + "••" + email.slice(at);
 }
 
+// Issue #140: the OAuth authorize flow redirects to /login?next=<authorize URL>
+// (which lives on mcp.jomform.com). Read that value once at mount so standard
+// login AND the TOTP step-2 redirect back to it after a successful sign-in,
+// instead of dropping to "/". Validated against open-redirect attacks.
+function readNext(): string {
+  // Prerender/SSR has no window; only run the guard in the browser.
+  if (typeof window === "undefined") return "";
+  const raw = new URLSearchParams(window.location.search).get("next");
+  if (!raw) return "";
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return "";
+  }
+  // Reject protocol-relative ("//host") and non-http(s) schemes.
+  if (raw.startsWith("//")) return "";
+  if (u.protocol !== "https:" && u.protocol !== "http:") return "";
+  // Allow only the app origin (jomform.com) and the OAuth base host
+  // (mcp.jomform.com) — never foreign hosts.
+  const self = window.location.origin;
+  const oauthBase = (process.env.NEXT_PUBLIC_OAUTH_BASE as string) || "https://mcp.jomform.com";
+  const allowed = new Set<string>([self, oauthBase]);
+  if (!allowed.has(u.origin)) return "";
+  if (u.href.length > 700) return ""; // sanity cap on the authorize URL
+  return u.href;
+}
+
 export default function Login() {
   const { t } = useI18n();
   const [mode, setMode] = useState<Mode>("login");
@@ -44,9 +72,13 @@ export default function Login() {
   // Issue #9: social buttons render only for providers configured on the
   // backend (env-gated). null = list still loading → render none.
   const [socialProviders, setSocialProviders] = useState<SocialProvider[] | null>(null);
+  // Issue #140: post-login redirect target from ?next (validated at mount).
+  const [next, setNext] = useState<string>(readNext());
   const codeRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    // Issue #140: read ?next once after mount for the OAuth redirect path.
+    setNext(readNext());
     fetch("/api/auth/social/providers")
       .then((r) => (r.ok ? r.json() : []))
       .then((d) => setSocialProviders(Array.isArray(d) ? d : []))
@@ -126,7 +158,9 @@ export default function Login() {
       // #70 login: navigate immediately, no "Berjaya log masuk" flash. The
       // dashboard-bundle (#29) already returns spaces, so no extra /
       // api/spaces round-trip is needed before redirecting.
-      window.location.href = "/";
+      // Issue #140: honour the validated ?next (OAuth authorize) or fall back
+      // to the dashboard root.
+      window.location.href = next || "/";
       return;
     }
     const d = await r.json().catch(() => ({}));
@@ -160,7 +194,9 @@ export default function Login() {
     setBusy(false);
     if (r.ok) {
       // #70 login: navigate immediately (no success banner flash).
-      window.location.href = "/";
+      // Issue #140: honour the validated ?next (OAuth authorize) or fall back
+      // to the dashboard root.
+      window.location.href = next || "/";
       return;
     }
     const d = await r.json().catch(() => ({}));
@@ -225,7 +261,7 @@ export default function Login() {
       const fin = await fetch("/api/auth/passkeys/login/finish", {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
       });
-      if (fin.ok) { window.location.href = "/"; return; }
+      if (fin.ok) { window.location.href = next || "/"; return; }
       setError((await fin.json().catch(() => ({}))).error || t("login.passkeyInvalid"));
     } catch {
       setError(t("login.passkeyUnsupported"));

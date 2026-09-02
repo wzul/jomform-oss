@@ -169,6 +169,9 @@ func main() {
 			Passkeys:       passkeysStore,
 			Users:          usersStore,
 			Store:          store,
+			// Issue #140: shared Domain so passkey sessions stay valid on
+			// product subdomains (mcp.jomform.com).
+			CookieDomain: httpapi.SharedCookieDomain(cfg.AppBaseURL),
 			// Issue #92: audit/behaviour log.
 			Events: deps.Events,
 			// Issue #106: per-sale receipt email status (Sent/Delivered/Opened/Clicked).

@@ -27,6 +27,11 @@ type AuthHandlers struct {
 	Users    *dbstore.UserStore
 	Accounts *dbstore.AccountStore
 	BaseURL  string
+	// CookieDomain is the shared Domain attribute for the session cookie
+	// (e.g. ".jomform.com"), allowing the login session to be sent to product
+	// subdomains such as mcp.jomform.com (issue #140). Empty when the host is
+	// a dev/IP/localhost host → the cookie stays host-only.
+	CookieDomain string
 
 	// Issue #42 hardening.
 	//   LoginLimiter tracks failed logins per IP + email in Valkey (nil only in
@@ -602,6 +607,7 @@ func (a *AuthHandlers) startSession(w http.ResponseWriter, r *http.Request, user
 		Name:     sessionCookie,
 		Value:    token,
 		Path:     "/",
+		Domain:   a.CookieDomain,
 		HttpOnly: true,
 		Secure:   !isDev,
 		SameSite: http.SameSiteLaxMode,
@@ -615,6 +621,7 @@ func (a *AuthHandlers) clearCookie() *http.Cookie {
 		Name:     sessionCookie,
 		Value:    "",
 		Path:     "/",
+		Domain:   a.CookieDomain,
 		HttpOnly: true,
 		Secure:   !isDev,
 		SameSite: http.SameSiteLaxMode,

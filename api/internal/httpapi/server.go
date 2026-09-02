@@ -92,6 +92,7 @@ func NewServer(cfg *config.Config, log *slog.Logger, deps *Deps) *Server {
 			Users:        deps.Users,
 			Accounts:     deps.Accounts,
 			BaseURL:      cfg.AppBaseURL,
+			CookieDomain: SharedCookieDomain(cfg.AppBaseURL),
 			VerifyKey:    deps.VerifyKey,
 			VerifyMailer: deps.VerifyMailer,
 			LoginLimiter: auth.NewLoginLimiter(deps.Sessions.Client()),
