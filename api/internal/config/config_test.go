@@ -40,3 +40,64 @@ func TestLoadEncryptionKeyValidation(t *testing.T) {
 		t.Fatalf("unexpected error for valid key: %v", err)
 	}
 }
+
+func TestLoadSESReputationDefaults(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://localhost/jomform_test")
+	t.Setenv("APP_ENV", "dev")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.BreakerMinSends != 20 {
+		t.Errorf("BreakerMinSends = %d, want default 20", cfg.BreakerMinSends)
+	}
+	if cfg.BreakerRatio != 0.05 {
+		t.Errorf("BreakerRatio = %v, want default 0.05", cfg.BreakerRatio)
+	}
+	if cfg.SNSNotifEnabled {
+		t.Error("SNSNotifEnabled should default to false")
+	}
+}
+
+func TestLoadSESReputationEnvOverrides(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://localhost/jomform_test")
+	t.Setenv("APP_ENV", "dev")
+	t.Setenv("SES_BREAKER_MIN_SENDS", "10")
+	t.Setenv("SES_BREAKER_RATIO", "0.03")
+	t.Setenv("SES_SNS_NOTIF_ENABLED", "true")
+	t.Setenv("SES_CONFIG_SET", "jomform-prod")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.BreakerMinSends != 10 {
+		t.Errorf("BreakerMinSends = %d, want 10", cfg.BreakerMinSends)
+	}
+	if cfg.BreakerRatio != 0.03 {
+		t.Errorf("BreakerRatio = %v, want 0.03", cfg.BreakerRatio)
+	}
+	if !cfg.SNSNotifEnabled {
+		t.Error("SNSNotifEnabled should be true when env set")
+	}
+	if cfg.SNSConfigSet != "jomform-prod" {
+		t.Errorf("SNSConfigSet = %q, want jomform-prod", cfg.SNSConfigSet)
+	}
+}
+
+func TestLoadSESReputationIgnoresGarbageEnv(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://localhost/jomform_test")
+	t.Setenv("APP_ENV", "dev")
+	// Unparseable values must fall back to sane defaults, not crash.
+	t.Setenv("SES_BREAKER_MIN_SENDS", "abc")
+	t.Setenv("SES_BREAKER_RATIO", "not-a-ratio")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.BreakerMinSends != 20 {
+		t.Errorf("BreakerMinSends = %d, want fallback 20", cfg.BreakerMinSends)
+	}
+	if cfg.BreakerRatio != 0.05 {
+		t.Errorf("BreakerRatio = %v, want fallback 0.05", cfg.BreakerRatio)
+	}
+}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/email"
 	"github.com/wzul/jomform/api/internal/httpapi/middleware"
 )
 
@@ -35,6 +36,14 @@ type AuthHandlers struct {
 	LoginLimiter *auth.LoginLimiter
 	VerifyKey    []byte
 	VerifyMailer VerifyMailer
+
+	// Issue #56 SES reputation hardening: Suppressions (never resend to a
+	// bounced/complained address), Breaker (pause verification on high bounce
+	// ratio), MXChecker (reject no-MX domains pre-create). All nil in
+	// bare-mode tests; register/send verify handle nil defensively.
+	Suppressions *dbstore.SuppressionStore
+	Breaker      *email.Breaker
+	MXChecker    *email.MXChecker
 }
 
 // RegisterRoutes wires auth endpoints onto the mux.
@@ -147,6 +156,44 @@ func (a *AuthHandlers) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if len(req.Password) < 10 {
 		writeErr(w, http.StatusBadRequest, "kata laluan mesti sekurang-kurangnya 10 aksara")
 		return
+	}
+
+	// Issue #56: MX pre-check — reject domains that accept no mail BEFORE a
+	// user row is created, so a fake-address flood never reaches SES and never
+	// leaves orphan accounts. Only when an MX checker is wired.
+	if a.MXChecker != nil {
+		domain := auth.EmailDomain(req.Email)
+		if domain == "" {
+			writeErr(w, http.StatusBadRequest, "email tidak sah")
+			return
+		}
+		ok, err := a.MXChecker.Check(r.Context(), domain)
+		if err != nil {
+			// Conservative: fail closed — if we can't verify the domain accepts
+			// mail, reject rather than risk a reputation-harming bounce.
+			slog.Warn("register_mx_check_failed", "err", err, "email", obfuscateEmail(req.Email))
+			writeErr(w, http.StatusBadRequest, "domain emel tidak menerima emel")
+			return
+		}
+		if !ok {
+			writeErr(w, http.StatusBadRequest, "domain emel tidak menerima emel")
+			return
+		}
+	}
+
+	// Issue #56: verification circuit breaker — if the trailing-hour bounce
+	// ratio is above threshold, pause verification mail (503) instead of
+	// firing more bounces that could take down the SES identity.
+	if a.Breaker != nil {
+		tripped, err := a.Breaker.Tripped(r.Context())
+		if err != nil {
+			// fail open on cache error (availability), but surface in logs
+			slog.Warn("breaker_status_error", "err", err, "ip", ip)
+		} else if tripped {
+			slog.Warn("breaker_open_paused_verification", "ip", ip)
+			writeErr(w, http.StatusServiceUnavailable, email.BreakerOpenMessage)
+			return
+		}
 	}
 
 	hash, err := auth.HashPassword(req.Password)

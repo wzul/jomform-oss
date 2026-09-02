@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -32,6 +33,21 @@ type Config struct {
 	SESSMTPPass string
 	SESFrom     string
 	SESRegion   string
+
+	// SES reputation hardening (issue #56).
+	//   BreakerMinSends: minimum verification sends in the trailing hour
+	//     before the bounce-ratio breaker can trip (default 20).
+	//   BreakerRatio: bounce ratio above which verification mail is paused
+	//     (default 0.05 = 5%).
+	//   SNSConfigSet: the SES configuration-set name that emits Bounce and
+	//     Complaint notifications to the SNS topic → our notifications endpoint
+	//     (documentation only; the endpoint does not need it to verify).
+	//   SNSNotifEnabled: false (default) disables the /v1/internal/ses/notifications
+	//     endpoint entirely; set to "true" in the deployment that receives SNS.
+	BreakerMinSends int64
+	BreakerRatio    float64
+	SNSConfigSet    string
+	SNSNotifEnabled bool
 }
 
 // Load reads configuration from the environment and validates it.
@@ -56,6 +72,14 @@ func Load() (*Config, error) {
 		SESSMTPPass: os.Getenv("SES_SMTP_PASS"),
 		SESFrom:     os.Getenv("SES_FROM"),
 		SESRegion:   getEnv("SES_REGION", "ap-southeast-1"),
+
+		// SES reputation hardening (issue #56). Breaker ratio/min parse
+		// leniently: unparseable values fall back to the SES-recommended
+		// defaults rather than crash the server.
+		BreakerMinSends: parsePositiveInt64(os.Getenv("SES_BREAKER_MIN_SENDS"), 20),
+		BreakerRatio:    parseRatio(os.Getenv("SES_BREAKER_RATIO"), 0.05),
+		SNSConfigSet:    os.Getenv("SES_CONFIG_SET"),
+		SNSNotifEnabled: strings.EqualFold(os.Getenv("SES_SNS_NOTIF_ENABLED"), "true"),
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -82,4 +106,22 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// parsePositiveInt64 parses a positive integer, falling back on empty/invalid.
+func parsePositiveInt64(s string, fallback int64) int64 {
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil || n <= 0 {
+		return fallback
+	}
+	return n
+}
+
+// parseRatio parses a ratio in [0,1] (e.g. "0.05"), falling back on error.
+func parseRatio(s string, fallback float64) float64 {
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil || f <= 0 || f > 1 {
+		return fallback
+	}
+	return f
 }

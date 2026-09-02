@@ -12,6 +12,10 @@ Bina borang tempahan yang cantik dan pantas, terima bayaran melalui [CHIP](https
 
 > Status: planning → MVP development. See `docs/SPEC.md`.
 
+Additional reads: `docs/SES-REPUTATION.md` (issue #56: SES bounce/complaint
+suppression, verification circuit breaker, MX pre-check, SNS feedback
+endpoint) and `docs/PROXY-DECISION.md`.
+
 ## Repo layout (planned monorepo)
 
 ```

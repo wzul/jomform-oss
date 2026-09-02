@@ -9,6 +9,7 @@ import (
 	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/config"
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/email"
 	"github.com/wzul/jomform/api/internal/httpapi/middleware"
 	"github.com/wzul/jomform/api/internal/mcpsrv"
 	"github.com/wzul/jomform/api/internal/version"
@@ -30,6 +31,14 @@ type Deps struct {
 	//   (nil in bare-mode tests where sends aren't exercised).
 	VerifyKey    []byte
 	VerifyMailer VerifyMailer
+
+	// Issue #56: SES reputation hardening. Suppressions is the suppression
+	// store (bounce/complaint → never resend). Breaker gates verification
+	// sends on bounce ratio. MXChecker resolves recipient domains pre-email.
+	// All are nil in bare-mode tests; register/send handle nil defensively.
+	Suppressions *dbstore.SuppressionStore
+	Breaker      *email.Breaker
+	MXChecker    *email.MXChecker
 }
 
 // VerifyMailer delivers an email-confirmation message. The concrete email.Sender
@@ -65,6 +74,10 @@ func NewServer(cfg *config.Config, log *slog.Logger, deps *Deps) *Server {
 			VerifyKey:    deps.VerifyKey,
 			VerifyMailer: deps.VerifyMailer,
 			LoginLimiter: auth.NewLoginLimiter(deps.Sessions.Client()),
+			// Issue #56: SES reputation hardening.
+			Suppressions: deps.Suppressions,
+			Breaker:      deps.Breaker,
+			MXChecker:    deps.MXChecker,
 		}
 		s.proxy = middleware.NewTrustedProxy()
 		_ = s.proxy.FetchCloudflare(context.Background())
@@ -82,6 +95,13 @@ func (s *Server) Handler() http.Handler {
 
 	if s.auth != nil {
 		s.auth.RegisterRoutes(mux)
+	}
+	// Issue #56: SES bounce/complaint feedback endpoint. Registered whenever the
+	// suppression store is wired AND SNS notifications are enabled via env — it
+	// should not be exposed (even as a 401-trap) on deployments that don't
+	// subscribe an SNS topic to it.
+	if s.deps.Suppressions != nil && s.cfg.SNSNotifEnabled {
+		mux.HandleFunc("POST /v1/internal/ses/notifications", s.handleSESNotification)
 	}
 	if s.deps.REST != nil {
 		s.deps.REST.RegisterRoutes(mux)

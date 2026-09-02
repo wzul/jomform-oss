@@ -125,6 +125,17 @@ func (s *UserStore) SetVerified(ctx context.Context, userID string) error {
 	return err
 }
 
+// MarkUnverified flags a user row unverified (issue #56): when an address
+// hard-bounces or complains via SNS we flip the owning account (if any) back
+// to unverified so it cannot log in. Idempotent — a row with no matching user
+// (e.g. a fake address never validated) is not an error.
+func (s *UserStore) MarkUnverified(ctx context.Context, email string) error {
+	email = strings.ToLower(strings.TrimSpace(email))
+	_, err := s.pool.Exec(ctx,
+		`UPDATE users SET verified = false, updated_at = now() WHERE email = $1`, email)
+	return err
+}
+
 // SocialIdentity mirrors user_identities rows.
 type SocialIdentity struct {
 	Provider    string    `json:"provider"`

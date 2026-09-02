@@ -11,18 +11,33 @@ import (
 	"strings"
 
 	"github.com/wzul/jomform/api/internal/auth"
+	emailpkg "github.com/wzul/jomform/api/internal/email"
 	"github.com/wzul/jomform/api/internal/httpapi/middleware"
 )
 
 // sendVerifyEmail mints a signed 24h verification token and emails the link to
 // the just-registered user. The mailer being nil (bare-mode tests, or SES
 // unconfigured) yields a clear error so the caller can log but not crash.
+//
+// Issue #56: before emailing, the suppression list is consulted — a
+// suppressed address never receives another verification send. On a
+// successful send the verification breaker's send counter is bumped.
 func (a *AuthHandlers) sendVerifyEmail(ctx context.Context, userID, email string) error {
 	if a.VerifyMailer == nil {
 		return fmt.Errorf("verify mailer not configured")
 	}
 	if len(a.VerifyKey) != 32 {
 		return fmt.Errorf("verify key not configured")
+	}
+	if a.Suppressions != nil {
+		sup, err := emailpkg.ShouldSuppress(ctx, a.Suppressions, email)
+		if err != nil {
+			return fmt.Errorf("suppression check: %w", err)
+		}
+		if sup {
+			slog.Warn("verify_email_suppressed_skipped", "user", userID)
+			return nil // suppressed: don't resend, don't surface as a hard error
+		}
 	}
 	token, err := auth.SignVerifyToken(a.VerifyKey, email)
 	if err != nil {
@@ -33,7 +48,15 @@ func (a *AuthHandlers) sendVerifyEmail(ctx context.Context, userID, email string
 		"Tap pautan berikut (sah selama 24 jam):\n\n" +
 		link + "\n\n" +
 		"Jika anda tidak mendaftar akaun JomForm, anda boleh abaikan emel ini.\n"
-	return a.VerifyMailer.Send(email, "Sahkan emel JomForm anda", body)
+	if err := a.VerifyMailer.Send(email, "Sahkan emel JomForm anda", body); err != nil {
+		return err
+	}
+	if a.Breaker != nil {
+		if err := a.Breaker.RecordSend(ctx); err != nil {
+			slog.Warn("breaker_record_send", "err", err)
+		}
+	}
+	return nil
 }
 
 // handleVerify confirms a user's email from a signed token (?token=...).

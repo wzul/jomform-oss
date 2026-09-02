@@ -85,6 +85,14 @@ func main() {
 		// completes, verification just can't be emailed).
 		deps.VerifyKey = decryptKey
 		deps.VerifyMailer = mailer
+		// Issue #56: SES reputation hardening over the same Valkey client.
+		// Suppression store + user store come from the pool below; breaker and
+		// MX checker are Valkey-backed so they're wired when Valkey is up.
+		deps.Breaker = email.NewBreaker(sessions.Client(), cfg.BreakerMinSends, cfg.BreakerRatio)
+		deps.MXChecker = email.NewMXChecker(sessions.Client())
+	}
+	if pool != nil {
+		deps.Suppressions = dbstore.NewSuppressionStore(pool)
 	}
 
 	// Payments wiring (CHIP): needs DB; decrypt key from config.
@@ -110,6 +118,9 @@ func main() {
 					Region: cfg.SESRegion,
 				}),
 				Base: cfg.AppBaseURL,
+				// Issue #56: receipts (buyers) consult suppression but not the
+				// verification breaker.
+				Suppression: dbstore.NewSuppressionStore(pool),
 			}
 		}
 		deps.Payments = &httpapi.PaymentsHandlers{Service: pay, Events: events}

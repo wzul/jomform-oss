@@ -76,6 +76,16 @@ func ValidEmail(email string) bool {
 	return err == nil && addr.Address == email && strings.Contains(email, "@")
 }
 
+// EmailDomain extracts the domain from an email ("a@b.com" → "b.com").
+// Returns "" for malformed/empty input.
+func EmailDomain(email string) string {
+	at := strings.LastIndex(email, "@")
+	if at < 0 || at == len(email)-1 || at == 0 {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(email[at+1:]))
+}
+
 // DummyPasswordHash is a fixed, valid argon2id hash with the same cost
 // parameters as real user hashes. Login verifies an unknown email against it
 // so the CPU cost — and therefore response timing — is indistinguishable from
