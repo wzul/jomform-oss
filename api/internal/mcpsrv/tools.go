@@ -116,7 +116,7 @@ func (s *Server) registerTools() {
 	}, s.upsertForm)
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "publish_form",
-		Description: "Publish borang — live di /f/<slug> atau custom domain.",
+		Description: "Publish borang — live di <space>.jomform.com/<slug> atau custom domain.",
 	}, s.publishFormMCP)
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "unpublish_form",

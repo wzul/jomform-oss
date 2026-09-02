@@ -2,6 +2,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -107,7 +108,31 @@ type restForm struct {
 	UpdatedAt string         `json:"updated_at"`
 }
 
-func formURL(base, slug string) string { return base + "/f/" + slug }
+// formURL builds the canonical public URL for a form. Issue #77: a public
+// payment link is reachable only via its registered space subdomain
+// ({space}.jomform.com/{slug}) or a custom domain — the legacy /f/{slug} form
+// is gone. spaceSlug is the account's space slug ("" when unresolvable, in
+// which case no URL is emitted).
+func formURL(spaceSlug, slug string) string {
+	if spaceSlug == "" {
+		return ""
+	}
+	return "https://" + spaceSlug + ".jomform.com/" + slug
+}
+
+// spaceSlugFor resolves the space slug an account's forms live under, for
+// building space-scoped public URLs. Returns "" when the account has no
+// linked space (no public URL).
+func (h *RESTHandlers) spaceSlugFor(ctx context.Context, accountID string) string {
+	if h.Spaces == nil {
+		return ""
+	}
+	slug, err := h.Spaces.SpaceSlugByAccount(ctx, accountID)
+	if err != nil {
+		return ""
+	}
+	return slug
+}
 
 func (h *RESTHandlers) listForms(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	forms, err := h.Forms.ListByAccount(r.Context(), actx.Account.ID)
@@ -116,10 +141,11 @@ func (h *RESTHandlers) listForms(w http.ResponseWriter, r *http.Request, actx *A
 		return
 	}
 	out := make([]restForm, 0, len(forms))
+	spaceSlug := h.spaceSlugFor(r.Context(), actx.Account.ID)
 	for _, f := range forms {
 		out = append(out, restForm{
 			ID: f.ID, Slug: f.Slug, Title: f.Title, Status: f.Status,
-			URL:       formURL("", f.Slug),
+			URL:       formURL(spaceSlug, f.Slug),
 			UpdatedAt: f.UpdatedAt.UTC().Format(time.RFC3339),
 		})
 	}
@@ -134,7 +160,7 @@ func (h *RESTHandlers) getForm(w http.ResponseWriter, r *http.Request, actx *Acc
 	}
 	respond(w, http.StatusOK, restForm{
 		ID: f.ID, Slug: f.Slug, Title: f.Title, Status: f.Status,
-		URL: formURL("", f.Slug), Config: f.Config, Theme: f.Theme,
+		URL: formURL(h.spaceSlugFor(r.Context(), actx.Account.ID), f.Slug), Config: f.Config, Theme: f.Theme,
 		UpdatedAt: f.UpdatedAt.UTC().Format(time.RFC3339),
 	})
 }
@@ -160,7 +186,7 @@ func (h *RESTHandlers) createForm(w http.ResponseWriter, r *http.Request, actx *
 	}
 	respond(w, http.StatusCreated, restForm{
 		ID: f.ID, Slug: f.Slug, Title: f.Title, Status: f.Status,
-		URL: formURL("", f.Slug), UpdatedAt: f.UpdatedAt.UTC().Format(time.RFC3339),
+		URL: formURL(h.spaceSlugFor(r.Context(), actx.Account.ID), f.Slug), UpdatedAt: f.UpdatedAt.UTC().Format(time.RFC3339),
 	})
 }
 

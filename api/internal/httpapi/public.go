@@ -38,8 +38,9 @@ func (h *PublicHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /f/{slug}/order", middleware.RateLimit(http.HandlerFunc(h.handleSubmit)))
 	// Space subdomains serve forms at /{slug} (GET /{slug} below), so the
 	// buyer-facing submit must resolve there too. handleSubmit scopes by
-	// accountSubdomain(host); on jomform.com it falls back to PublishedBySlug
-	// and 404s for unknown slugs, leaving dashboard routes (/api, /v1) intact.
+	// accountSubdomain(host); on bare jomform.com it 404s (issue #77 — a
+	// public payment link is reachable only via its space subdomain or a
+	// custom domain), leaving dashboard routes (/api, /v1) intact.
 	mux.Handle("POST /{slug}/order", middleware.RateLimit(http.HandlerFunc(h.handleSubmit)))
 	mux.HandleFunc("GET /t/{ref}", h.handleThankYou)
 	mux.HandleFunc("GET /{$}", h.handleSpaceRoot)
@@ -58,7 +59,10 @@ func genRef() string {
 func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("slug")
 
-	// Same lookup rules as render: subdomain scoping first.
+	// Same lookup rules as render: subdomain scoping first. On bare
+	// jomform.com (no subdomain, no custom domain) a published form is NOT
+	// served — issue #77: a public payment link is reachable only via its
+	// registered space subdomain or a custom domain.
 	var form *dbstore.Form
 	var err error
 	if sub := accountSubdomain(r.Host); sub != "" {
@@ -66,7 +70,7 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	} else if cd := customDomainOwner(r.Context(), h.Accounts, r.Host); cd != "" {
 		form, err = h.Forms.PublishedByAccountSlug(r.Context(), cd, slug)
 	} else {
-		form, err = h.Forms.PublishedBySlug(r.Context(), slug)
+		form, err = nil, dbstore.ErrFormNotFound
 	}
 	if err != nil || form == nil {
 		writeErr(w, http.StatusNotFound, "borang tidak dijumpai")
@@ -310,7 +314,11 @@ type tmplProduct struct {
 func (h *PublicHandlers) handleRender(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("slug")
 	// Subdomain routing: wanzulhosting.jomform.com/f/test resolves the form
-	// scoped to that account's slug. jomform.com/f/test keeps old behavior.
+	// scoped to that account's slug. On bare jomform.com (no subdomain, no
+	// custom domain) a published form is NOT served — issue #77: a public
+	// payment link is reachable only via its registered space subdomain
+	// ({space}.jomform.com/{slug}) or a custom domain. The legacy global
+	// /f/{slug} lookup is gone.
 	if sub := accountSubdomain(r.Host); sub != "" {
 		f, ferr := h.Forms.PublishedBySpaceSlug(r.Context(), sub, slug)
 		if ferr != nil {
@@ -329,12 +337,8 @@ func (h *PublicHandlers) handleRender(w http.ResponseWriter, r *http.Request) {
 		h.serveForm(w, r, f)
 		return
 	}
-	f, err := h.Forms.PublishedBySlug(r.Context(), slug)
-	if err != nil {
-		http.Error(w, "Borang tidak dijumpai", http.StatusNotFound)
-		return
-	}
-	h.serveForm(w, r, f)
+	// Bare apex (jomform.com): no space subdomain, no custom domain — 404.
+	http.Error(w, "Borang tidak dijumpai", http.StatusNotFound)
 }
 
 // renderLegacy renders the old product-checkbox layout.

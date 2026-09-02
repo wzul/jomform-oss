@@ -39,11 +39,14 @@ func (s *Server) listForms(
 	if err != nil {
 		return nil, nil, err
 	}
+	// Issue #77: public links are space-scoped ({space}.jomform.com/{slug}),
+	// never the legacy /f/{slug} form.
+	spaceSlug := s.spaceSlugFor(ctx, acc)
 	out := make([]formOut, 0, len(forms))
 	for _, f := range forms {
 		u := ""
 		if f.Status == "published" {
-			u = "https://jomform.com/f/" + f.Slug
+			u = formPublicURL(spaceSlug, f.Slug)
 		}
 		out = append(out, formOut{
 			ID: f.ID, Slug: f.Slug, Title: f.Title, Status: f.Status, URL: u,
@@ -66,16 +69,39 @@ func (s *Server) getForm(
 	if err != nil {
 		return nil, formDetailOut{}, err
 	}
+	spaceSlug := s.spaceSlugFor(ctx, acc)
 	for _, f := range forms {
 		if f.ID == in.FormID {
 			out := formDetailOut{
 				ID: f.ID, Slug: f.Slug, Title: f.Title, Status: f.Status, Config: f.Config,
 			}
 			if f.Status == "published" {
-				out.URL = "https://jomform.com/f/" + f.Slug
+				out.URL = formPublicURL(spaceSlug, f.Slug)
 			}
 			return nil, out, nil
 		}
 	}
 	return nil, formDetailOut{}, errors.New("borang tidak dijumpai")
+}
+
+// spaceSlugFor resolves the space slug an account's forms live under, for
+// building space-scoped public URLs ("" when the account has no linked space).
+func (s *Server) spaceSlugFor(ctx context.Context, accountID string) string {
+	if s.deps.Spaces == nil {
+		return ""
+	}
+	slug, err := s.deps.Spaces.SpaceSlugByAccount(ctx, accountID)
+	if err != nil {
+		return ""
+	}
+	return slug
+}
+
+// formPublicURL builds the canonical space-scoped public URL for a form
+// (issue #77). Returns "" when the space slug is unknown.
+func formPublicURL(spaceSlug, slug string) string {
+	if spaceSlug == "" {
+		return ""
+	}
+	return "https://" + spaceSlug + ".jomform.com/" + slug
 }

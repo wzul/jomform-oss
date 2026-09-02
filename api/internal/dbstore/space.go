@@ -143,6 +143,20 @@ func (s *SpaceStore) SpaceIDByAccount(ctx context.Context, accountID string) (st
 	return id, nil
 }
 
+// SpaceSlugByAccount resolves the space slug a form's account belongs to
+// ("" when the account has no linked space). Used to build the canonical
+// space-scoped public URL {space}.jomform.com/{slug} (issue #77).
+func (s *SpaceStore) SpaceSlugByAccount(ctx context.Context, accountID string) (string, error) {
+	var slug string
+	err := s.pool.QueryRow(ctx,
+		`SELECT sp.slug FROM accounts a JOIN spaces sp ON sp.id = a.space_id
+		  WHERE a.id=$1`, accountID).Scan(&slug)
+	if err != nil {
+		return "", err
+	}
+	return slug, nil
+}
+
 // AccountIDsBySlugForOwner returns the account ids linked to the space with
 // the given slug, but only when that space is owned by the given user.
 // owned is false when the slug is unknown or not owned by the user —

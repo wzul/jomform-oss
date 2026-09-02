@@ -917,11 +917,11 @@ export default function Builder() {
             </button>
 
             <p className="mt-3 text-[11px] font-medium uppercase tracking-wider text-[#9ca3af]">{t("bld.embedOnSite")}</p>
-            <pre className="mt-1 overflow-x-auto rounded-md bg-slate-900 p-2 text-[10px] text-emerald-300">{`<iframe src="${origin}/embed/f/wan/${slug}" style="width:100%;height:640px;border:0" title="${title}"></iframe>`}</pre>
+            <pre className="mt-1 overflow-x-auto rounded-md bg-slate-900 p-2 text-[10px] text-emerald-300">{`<iframe src="${origin}/embed/f/${localStorage.getItem("jf_space") || "app"}/${slug}" style="width:100%;height:640px;border:0" title="${title}"></iframe>`}</pre>
             <button
               onClick={() => {
                 navigator.clipboard.writeText(
-                  `<iframe src="${origin}/embed/f/wan/${slug}" style="width:100%;height:640px;border:0" title="${title}"></iframe>`,
+                  `<iframe src="${origin}/embed/f/${localStorage.getItem("jf_space") || "app"}/${slug}" style="width:100%;height:640px;border:0" title="${title}"></iframe>`,
                 );
                 setOvMsg(t("bld.embedCopied"));
               }}
@@ -1111,7 +1111,7 @@ export default function Builder() {
               >
                 <span className="block truncate">{f.title}</span>
                 <span className="text-[10px] text-[#9ca3af]">
-                  /f/{f.slug}
+                  {(localStorage.getItem("jf_space") || "app")}.jomform.com/{f.slug}
                   {f.status === "published" ? " · LIVE" : ""}
                 </span>
               </button>

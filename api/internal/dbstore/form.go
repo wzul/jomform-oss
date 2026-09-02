@@ -61,12 +61,6 @@ func (s *FormStore) Create(ctx context.Context, f *Form) error {
 	).Scan(&f.ID, &f.CreatedAt, &f.UpdatedAt)
 }
 
-// PublishedBySlug fetches a published form by its public slug (any account).
-func (s *FormStore) PublishedBySlug(ctx context.Context, slug string) (*Form, error) {
-	return s.scanOne(s.pool.QueryRow(ctx,
-		formSelect+" AND slug=$1 AND status='published'", slug))
-}
-
 // ListByAccount lists all non-deleted forms for an account.
 func (s *FormStore) ListByAccount(ctx context.Context, accountID string) ([]*Form, error) {
 	rows, err := s.pool.Query(ctx, formSelect+" AND account_id=$1 ORDER BY created_at DESC", accountID)
