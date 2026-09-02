@@ -69,20 +69,34 @@ func (s *SpaceStore) Create(ctx context.Context, ownerUserID, name, slug string)
 
 // SpaceSettings is the storefront configuration for one space.
 type SpaceSettings struct {
-	SpaceID    string `json:"space_id"`
-	FooterText string `json:"footer_text"`
-	CompanyReg string `json:"company_reg"`
-	PrivacyURL string `json:"privacy_url"`
-	TermsURL   string `json:"terms_url"`
-	MenuJSON   string `json:"menu_json"`
+	SpaceID     string `json:"space_id"`
+	FooterText  string `json:"footer_text"`
+	CompanyReg  string `json:"company_reg"`
+	PrivacyURL  string `json:"privacy_url"`
+	TermsURL    string `json:"terms_url"`
+	MenuJSON    string `json:"menu_json"`
+	DefaultLang string `json:"default_lang"`
+}
+
+// SpaceLang returns the storefront default language code, or a fallback when
+// unset. Callers must use this so a not-yet-migrated or legacy row resolves
+// to 'en' (maintainer decision 2026-09-01), never "".
+func (st *SpaceSettings) SpaceLang() string {
+	switch st.DefaultLang {
+	case "en", "ms", "zh", "ta", "ar":
+		return st.DefaultLang
+	default:
+		return "en"
+	}
 }
 
 // Settings reads (creating default row when missing) the storefront config.
 func (s *SpaceStore) Settings(ctx context.Context, spaceID string) (*SpaceSettings, error) {
-	st := &SpaceSettings{SpaceID: spaceID, MenuJSON: "[]"}
+	st := &SpaceSettings{SpaceID: spaceID, MenuJSON: "[]", DefaultLang: "en"}
 	err := s.pool.QueryRow(ctx,
-		`SELECT footer_text, company_reg, privacy_url, terms_url, menu_json::text FROM space_settings WHERE space_id=$1`,
-		spaceID).Scan(&st.FooterText, &st.CompanyReg, &st.PrivacyURL, &st.TermsURL, &st.MenuJSON)
+		`SELECT footer_text, company_reg, privacy_url, terms_url, menu_json::text, default_lang
+		   FROM space_settings WHERE space_id=$1`,
+		spaceID).Scan(&st.FooterText, &st.CompanyReg, &st.PrivacyURL, &st.TermsURL, &st.MenuJSON, &st.DefaultLang)
 	if err != nil {
 		// default row
 		_, ierr := s.pool.Exec(ctx,
@@ -97,12 +111,13 @@ func (s *SpaceStore) Settings(ctx context.Context, spaceID string) (*SpaceSettin
 // SaveSettings upserts the storefront config.
 func (s *SpaceStore) SaveSettings(ctx context.Context, st *SpaceSettings) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO space_settings (space_id, footer_text, company_reg, privacy_url, terms_url, menu_json)
-		 VALUES ($1,$2,$3,$4,$5,$6::jsonb)
+		`INSERT INTO space_settings (space_id, footer_text, company_reg, privacy_url, terms_url, menu_json, default_lang)
+		 VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7)
 		 ON CONFLICT (space_id) DO UPDATE SET
 		   footer_text=EXCLUDED.footer_text, company_reg=EXCLUDED.company_reg,
-		   privacy_url=EXCLUDED.privacy_url, terms_url=EXCLUDED.terms_url, menu_json=EXCLUDED.menu_json`,
-		st.SpaceID, st.FooterText, st.CompanyReg, st.PrivacyURL, st.TermsURL, st.MenuJSON)
+		   privacy_url=EXCLUDED.privacy_url, terms_url=EXCLUDED.terms_url, menu_json=EXCLUDED.menu_json,
+		   default_lang=EXCLUDED.default_lang`,
+		st.SpaceID, st.FooterText, st.CompanyReg, st.PrivacyURL, st.TermsURL, st.MenuJSON, st.SpaceLang())
 	return err
 }
 
@@ -110,6 +125,18 @@ func (s *SpaceStore) SaveSettings(ctx context.Context, st *SpaceSettings) error 
 func (s *SpaceStore) IDBySlug(ctx context.Context, slug string) (string, error) {
 	var id string
 	err := s.pool.QueryRow(ctx, `SELECT id FROM spaces WHERE slug=$1`, slug).Scan(&id)
+	if err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// SpaceIDByAccount resolves the space id a form's account belongs to ("" when
+// the account has no linked space). Rendering falls back to 'en' in that case.
+func (s *SpaceStore) SpaceIDByAccount(ctx context.Context, accountID string) (string, error) {
+	var id string
+	err := s.pool.QueryRow(ctx,
+		`SELECT a.space_id FROM accounts a WHERE a.id=$1`, accountID).Scan(&id)
 	if err != nil {
 		return "", err
 	}

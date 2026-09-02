@@ -93,11 +93,14 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 	}
 	var cfgTracking string
 	_ = cfgTracking
+	ls := h.effectiveLangStrings(r.Context(), f)
 	if err := blockTmpl.Execute(w, map[string]any{
 		"Slug": f.Slug, "Title": f.Title, "Blocks": blocks,
 		"TrackHead":    headInjection(globalTr, formTrackingHead(f)),
 		"ThemePrimary": themePrimary, "ThemeBg": themeBg, "LogoURL": f.LogoURL,
 		"FooterText": footerText,
+		"Lang":       ls.Lang,
+		"Ls":         ls,
 	}); err != nil {
 		slog.Error("form_render_blocks", "err", err)
 	}
@@ -111,7 +114,7 @@ var blockTmpl = template.Must(template.New("blocks").
 		"divf": func(total, div int64) float64 { return float64(total) / float64(div) },
 	}).
 	Parse(`<!doctype html>
-<html lang="ms"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="{{.Lang}}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{{.Title}}</title>
 {{.TrackHead}}
 <style>
@@ -140,11 +143,24 @@ var blockTmpl = template.Must(template.New("blocks").
                 min-height:44px; padding:12px 14px; font-size:15px; color:#17181c;
                 cursor:pointer; -webkit-tap-highlight-color:transparent; }
   .prod input[type=checkbox] { width:20px; height:20px; flex:0 0 auto; accent-color:#4f46e5; margin:0; }
+  /* Issue #58: ALL checkboxes (product .p and custom .extra) share one bright
+     unchecked state + indigo accent. appearance:none + explicit border/background
+     overrides UA dark defaults so Android Chrome draws a white unchecked box. */
+  input[type=checkbox].extra, input[type=checkbox].p {
+    -webkit-appearance:none; -moz-appearance:none; appearance:none;
+    accent-color:#4f46e5; width:20px; height:20px; flex:0 0 auto;
+    border:2px solid #d1d5db; border-radius:5px; background:#fff;
+    cursor:pointer; margin:0;
+  }
+  input[type=checkbox].extra:checked, input[type=checkbox].p:checked {
+    border-color:#4f46e5; background:#4f46e5 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill='none' stroke='%23fff' stroke-width='3' stroke-linecap='round' stroke-linejoin='round' d='M5 10l3 3 6-6'/%3E%3C/svg%3E") center/14px no-repeat;
+  }
   .pname { flex:1; font-weight:500; }
   .price { color:#4f46e5; font-weight:600; font-size:14px; white-space:nowrap;
            margin-left:auto; text-align:right; }
   .lbl { display:block; font-size:12px; color:#6b7280; margin:12px 0 4px; }
-  .chk { display:flex; align-items:center; gap:8px; font-size:14px; margin:8px 0; color:#d0d6e0; }
+  .chk { display:flex; align-items:center; gap:8px; font-size:14px; margin:8px 0; color:#374151; }
+  .chk input[type=checkbox] { margin:0; }
   input[type=text],input[type=email],input[type=tel],textarea,.coupon {
     width:100%; padding:10px 12px; border-radius:8px; border:1px solid #e6e8ec;
     background:#ffffff; color:#17181c; font-size:14px; margin-bottom:10px; }
@@ -164,16 +180,16 @@ var blockTmpl = template.Must(template.New("blocks").
 {{else if eq .Type "image"}}{{if .Src}}  <img class="img" src="{{.Src}}" alt="">
 {{end}}{{else if eq .Type "divider"}}  <hr>
 {{else if eq .Type "product"}}  <div class="prod"><label><input type="checkbox" class="p" data-id="{{.ProductID}}" data-price="{{.PriceSen}}"><span class="pname">{{.Value}}</span><span class="price">{{if .HasPrice}}RM{{printf "%.2f" (divf .PriceSen 100)}}{{end}}</span></label></div>
-{{else if eq .Type "name"}}  <label class="lbl">{{.Value}}{{if .Required}} *{{end}}</label><input type="text" name="full_name"{{if .Required}} required{{end}}>
-{{else if eq .Type "email"}}  <label class="lbl">Emel{{if .Required}} *{{end}}</label><input type="email" name="email" required>
+{{else if eq .Type "name"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="text" name="full_name"{{if .Required}} required{{end}}>
+{{else if eq .Type "email"}}  <label class="lbl">{{$.Ls.EmailLabel}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="email" name="email" required>
 {{else if eq .Type "phone"}}  <label class="lbl">{{.Value}}</label><input type="tel" name="phone">
 {{else if eq .Type "textarea"}}  <label class="lbl">{{.Value}}</label><textarea name="notes" rows="2"></textarea>
 {{else if eq .Type "checkbox"}}  <label class="chk"><input type="checkbox" class="extra" value="{{.Value}}"> {{.Value}}</label>
-{{else if eq .Type "coupon"}}  <label class="lbl">Kod kupon</label><input type="text" name="coupon" class="coupon">
+{{else if eq .Type "coupon"}}  <label class="lbl">{{$.Ls.CouponLabel}}</label><input type="text" name="coupon" class="coupon">
 {{end}}</span>
 {{end}}
-  <div class="total"><span>Jumlah</span><span id="total">RM0.00</span></div>
-  <button type="submit" form="of">Teruskan ke Pembayaran</button>
+  <div class="total"><span>{{$.Ls.Total}}</span><span id="total">RM0.00</span></div>
+  <button type="submit" form="of">{{$.Ls.Submit}}</button>
   <p class="brand">{{.FooterText}}</p>
 </form>
 <script>
@@ -185,15 +201,23 @@ var blockTmpl = template.Must(template.New("blocks").
   document.getElementById('of').addEventListener('submit',function(e){
     e.preventDefault();
     var items=[];boxes.forEach(function(b){if(b.checked)items.push({product_id:b.dataset.id,quantity:1})});
-    if(!items.length){alert('Pilih sekurang-kurangnya satu produk');return;}
+    if(!items.length){alert('{{.Ls.NoProductAlert}}');return;}
     var body={client:{full_name:(e.target.full_name||{}).value||(document.querySelector('[name=full_name]')||{}).value||'',
       email:(document.querySelector('[name=email]')||{}).value||'',
       phone:(document.querySelector('[name=phone]')||{}).value||''},
       items:items,payment_method:'chip'};
     fetch(location.pathname+'/order',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
       .then(function(r){return r.json()}).then(function(d){
-        if(d.checkout_url){location.href=d.checkout_url;}else if(d.next){location.href=d.next;}
-        else{alert(d.error||'Ralat');}});
+        if(d.checkout_url||d.next){
+          var url=d.checkout_url||d.next;
+          // Issue #60: when embedded in a merchant site, CHIP checkout and the
+          // /t/ thank-you page refuse to frame (X-Frame-Options/anti-clickjacking).
+          // Escape to the TOP frame so the buyer completes payment in their own tab;
+          // direct visits keep today's same-frame navigation.
+          if(window.self!==window.top){window.top.location.href=url;}
+          else{location.href=url;}
+        }
+        else{alert('{{.Ls.ErrorAlert}}'+(d.error?': '+d.error:''));}});
   // Conditional logic: show/hide blocks with data-condition based on earlier inputs.
   (function(){
     var conds=document.querySelectorAll('[data-condition]');

@@ -108,11 +108,12 @@ func (h *RESTHandlers) getSpaceSettings(w http.ResponseWriter, r *http.Request, 
 // saveSpaceSettings: PUT /v1/spaces/{id}/settings
 func (h *RESTHandlers) saveSpaceSettings(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	var in struct {
-		FooterText string `json:"footer_text"`
-		CompanyReg string `json:"company_reg"`
-		PrivacyURL string `json:"privacy_url"`
-		TermsURL   string `json:"terms_url"`
-		MenuJSON   string `json:"menu_json"`
+		FooterText  string `json:"footer_text"`
+		CompanyReg  string `json:"company_reg"`
+		PrivacyURL  string `json:"privacy_url"`
+		TermsURL    string `json:"terms_url"`
+		MenuJSON    string `json:"menu_json"`
+		DefaultLang string `json:"default_lang"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
 		writeErr(w, http.StatusBadRequest, "payload tidak sah")
@@ -134,12 +135,13 @@ func (h *RESTHandlers) saveSpaceSettings(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	st := &dbstore.SpaceSettings{
-		SpaceID:    sID,
-		FooterText: in.FooterText,
-		CompanyReg: in.CompanyReg,
-		PrivacyURL: in.PrivacyURL,
-		TermsURL:   in.TermsURL,
-		MenuJSON:   in.MenuJSON,
+		SpaceID:     sID,
+		FooterText:  in.FooterText,
+		CompanyReg:  in.CompanyReg,
+		PrivacyURL:  in.PrivacyURL,
+		TermsURL:    in.TermsURL,
+		MenuJSON:    in.MenuJSON,
+		DefaultLang: in.DefaultLang,
 	}
 	if strings.TrimSpace(st.MenuJSON) == "" {
 		st.MenuJSON = "[]"
