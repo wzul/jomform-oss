@@ -25,6 +25,7 @@ type SNSNotification struct {
 	Type               string `json:"Type"` // Notification | SubscriptionConfirmation
 	Message            string `json:"Message"`
 	MessageID          string `json:"MessageId"`
+	Subject            string `json:"Subject,omitempty"`
 	Timestamp          string `json:"Timestamp"`
 	SignatureVersion   string `json:"SignatureVersion"`
 	Signature          string `json:"Signature"`
@@ -134,7 +135,12 @@ func snsCanonicalString(msg SNSNotification) string {
 	case "Notification":
 		fields["Message"] = msg.Message
 		fields["MessageId"] = msg.MessageID
-		fields["Subject"] = "" // Subject is not part of a Notification signature
+		// Subject is part of the signature ONLY when the message carries one
+		// (SES Bounce/Complaint notifications have no Subject, so AWS signs
+		// without that line — adding an empty Subject breaks verification).
+		if msg.Subject != "" {
+			fields["Subject"] = msg.Subject
+		}
 		fields["Timestamp"] = msg.Timestamp
 		fields["TopicArn"] = msg.TopicArn
 		fields["Type"] = msg.Type
@@ -157,9 +163,6 @@ func snsCanonicalString(msg SNSNotification) string {
 	var b strings.Builder
 	for _, k := range keys {
 		v := fields[k]
-		if k == "Subject" {
-			v = ""
-		}
 		b.WriteString(k)
 		b.WriteString("\n")
 		b.WriteString(v)

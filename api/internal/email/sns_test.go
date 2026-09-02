@@ -42,25 +42,27 @@ func fakeCertFetcher(pemBytes []byte) SNSCertFetcher {
 	return func(url string) ([]byte, error) { return pemBytes, nil }
 }
 
-func TestVerifySNSNotificationValidSignature(t *testing.T) {
+func makeTestCert(t *testing.T) ([]byte, *rsa.PrivateKey) {
+	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatalf("gen key: %v", err)
 	}
 	certDER, err := x509.CreateCertificate(rand.Reader,
-		&x509.Certificate{
-			SerialNumber: big.NewInt(1),
-			Subject:      pkix.Name{CommonName: "sns"},
-			NotBefore:    time.Now().Add(-time.Hour),
-			NotAfter:     time.Now().Add(time.Hour),
-		},
-		&x509.Certificate{},
-		&key.PublicKey, key)
+		&x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "sns"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)},
+		&x509.Certificate{}, &key.PublicKey, key)
 	if err != nil {
 		t.Fatalf("create cert: %v", err)
 	}
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	return certPEM, key
+}
 
+// A Notification WITHOUT a Subject (the SES Bounce/Complaint case): the
+// canonical string must NOT include an empty Subject line, or verification
+// fails (issue #76).
+func TestVerifySNSNotificationNoSubject(t *testing.T) {
+	certPEM, key := makeTestCert(t)
 	msg := SNSNotification{
 		Type:             "Notification",
 		MessageID:        "msg-1",
@@ -71,24 +73,29 @@ func TestVerifySNSNotificationValidSignature(t *testing.T) {
 		Message:          `{"eventType":"Bounce","bounce":{"bounceType":"Permanent","bouncedRecipients":[{"emailAddress":"x@example.com"}]},"mail":{"destination":["x@example.com"]}}`,
 	}
 	raw, _ := makeSNSSigner(t, key, certPEM, msg)
-
 	if err := VerifySNSNotification(raw, fakeCertFetcher(certPEM)); err != nil {
-		t.Fatalf("valid signature rejected: %v", err)
+		t.Fatalf("no-subject notification rejected: %v", err)
+	}
+}
+
+// A Notification WITH a Subject: the Subject line must be part of the
+// canonical string (issue #76 — only include it when present).
+func TestVerifySNSNotificationWithSubject(t *testing.T) {
+	certPEM, key := makeTestCert(t)
+	msg := SNSNotification{
+		Type: "Notification", MessageID: "m-subj", Subject: "hello",
+		Timestamp: time.Now().UTC().Format(time.RFC3339), SignatureVersion: "1",
+		SigningCertURL: "https://sns.us-east-1.amazonaws.com/SimpleNotificationService-subj.pem",
+		TopicArn:       "arn:aws:sns:us-east-1:1:t", Message: "x",
+	}
+	raw, _ := makeSNSSigner(t, key, certPEM, msg)
+	if err := VerifySNSNotification(raw, fakeCertFetcher(certPEM)); err != nil {
+		t.Fatalf("subject-bearing notification rejected: %v", err)
 	}
 }
 
 func TestVerifySNSNotificationRejectsBadSignature(t *testing.T) {
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatalf("gen key: %v", err)
-	}
-	certDER, err := x509.CreateCertificate(rand.Reader,
-		&x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "sns"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)},
-		&x509.Certificate{}, &key.PublicKey, key)
-	if err != nil {
-		t.Fatalf("cert: %v", err)
-	}
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	certPEM, key := makeTestCert(t)
 	msg := SNSNotification{
 		Type: "Notification", MessageID: "m2", Timestamp: "2026-01-01T00:00:00Z",
 		SignatureVersion: "1", SigningCertURL: "https://sns.us-east-1.amazonaws.com/SimpleNotificationService-x.pem",
