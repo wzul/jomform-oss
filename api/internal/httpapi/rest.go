@@ -22,6 +22,7 @@ type RESTHandlers struct {
 	Forms          *dbstore.FormStore
 	Keys           *dbstore.APIKeyStore
 	Sales          *dbstore.SaleStore
+	Subs           *dbstore.SubscriptionStore
 	Sessions       *auth.Sessions
 	Pay            *payments.Service
 	Webhooks       *dbstore.WebhookStore
@@ -121,6 +122,9 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /v1/rest/sales/bulk-capture", h.authed(h.bulkCaptureSales))
 	mux.Handle("GET /v1/rest/sales", h.authed(h.listSales))
 	mux.Handle("GET /v1/rest/sales/{ref}/email-status", h.authed(h.saleEmailStatus))
+	// Issue #131: subscription management for merchants.
+	mux.Handle("GET /v1/rest/subscriptions", h.authed(h.listSubscriptions))
+	mux.Handle("POST /v1/rest/subscriptions/{id}/cancel", h.authed(h.cancelSubscription))
 	mux.Handle("GET /v1/rest/dashboard-bundle", h.authed(h.dashboardBundle))
 	mux.Handle("GET /v1/rest/analytics/forms", h.authed(h.formAnalytics))
 	mux.Handle("GET /v1/rest/analytics/products", h.authed(h.productAnalytics))

@@ -162,7 +162,7 @@ func main() {
 		}
 		rest := &httpapi.RESTHandlers{
 			Accounts: accounts, Products: products, Forms: formsStore,
-			Keys: keys, Sales: sales, Sessions: sessions, ChipProbe: chip.New(cfg.ChipAPIBaseURL),
+			Keys: keys, Sales: sales, Subs: subs, Sessions: sessions, ChipProbe: chip.New(cfg.ChipAPIBaseURL),
 			SecretsKey: decryptKey, Pay: pay, Webhooks: whStore, Domains: dbstore.NewDomainStore(pool),
 			SystemSettings: dbstore.NewSystemSettingStore(pool),
 			Spaces:         spacesStore,

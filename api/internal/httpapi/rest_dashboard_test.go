@@ -82,6 +82,7 @@ func newBundleHandlers(pool *pgxpool.Pool) *RESTHandlers {
 		Forms:      dbstore.NewFormStore(pool),
 		Keys:       dbstore.NewAPIKeyStore(pool),
 		Sales:      dbstore.NewSaleStore(pool),
+		Subs:       dbstore.NewSubscriptionStore(pool),
 		Domains:    dbstore.NewDomainStore(pool),
 		Webhooks:   dbstore.NewWebhookStore(pool),
 		Spaces:     dbstore.NewSpaceStore(pool),

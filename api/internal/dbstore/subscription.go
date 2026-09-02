@@ -182,3 +182,97 @@ func (s *SubscriptionStore) PastDueBefore(ctx context.Context, cutoff time.Time)
 	}
 	return out, rows.Err()
 }
+
+// SubscriptionWithProduct is a subscription joined with its product's name,
+// for merchant-facing table/list views.
+type SubscriptionWithProduct struct {
+	Subscription
+	ProductName   string
+	RetryAttempts int64 // failed charges in the current retry cycle (0 when none)
+}
+
+// ListByAccountsPage returns one page of subscriptions across a set of
+// accounts, newest first, plus the total row count for the same filter.
+// status limits to a single lifecycle status when non-empty (active /
+// past_due / cancelled); otherwise all statuses are returned.
+func (s *SubscriptionStore) ListByAccountsPage(ctx context.Context, accountIDs []string, status string, page, limit int) ([]*SubscriptionWithProduct, int64, error) {
+	if len(accountIDs) == 0 {
+		return []*SubscriptionWithProduct{}, 0, nil
+	}
+	if page < 1 {
+		page = 1
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	offset := (page - 1) * limit
+	where := " WHERE s.account_id = ANY($1)"
+	args := []any{accountIDs}
+	if status != "" {
+		where += " AND s.status = $2"
+		args = append(args, status)
+	}
+	countQ := "SELECT COUNT(*) FROM subscriptions s" + where
+	var total int64
+	if err := s.pool.QueryRow(ctx, countQ, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	// The list must expose the product name next to each subscription, so a
+	// merchant can act on a row without joining the product table by hand.
+	// Placeholders: when filter=="" they are $1 account, $2 limit, $3 offset;
+	// when filter!="" they are $1 account, $2 status, $3 limit, $4 offset.
+	var q string
+	if status != "" {
+		q = `SELECT s.id, s.account_id, s.client_email, s.product_id, COALESCE(s.sale_id::text,''),
+			s.chip_token_purchase_id, s.status, s.period, s.amount_sen, s.next_charge_at,
+			COALESCE(s.cancelled_at, 'epoch'::timestamptz), s.created_at, s.updated_at,
+			COALESCE(p.name, ''),
+			COALESCE((SELECT COUNT(*) FROM subscription_charges sc
+			          WHERE sc.subscription_id = s.id AND sc.status = 'failed'
+			            AND sc.charged_at > COALESCE((SELECT MAX(sc2.charged_at) FROM subscription_charges sc2
+			                                        WHERE sc2.subscription_id = s.id AND sc2.status = 'paid'), 'epoch'::timestamptz)), 0)
+		FROM subscriptions s
+		LEFT JOIN products p ON p.id = s.product_id` + where + " ORDER BY s.created_at DESC LIMIT $3 OFFSET $4"
+		args = append(args, limit, offset)
+	} else {
+		q = `SELECT s.id, s.account_id, s.client_email, s.product_id, COALESCE(s.sale_id::text,''),
+			s.chip_token_purchase_id, s.status, s.period, s.amount_sen, s.next_charge_at,
+			COALESCE(s.cancelled_at, 'epoch'::timestamptz), s.created_at, s.updated_at,
+			COALESCE(p.name, ''),
+			COALESCE((SELECT COUNT(*) FROM subscription_charges sc
+			          WHERE sc.subscription_id = s.id AND sc.status = 'failed'
+			            AND sc.charged_at > COALESCE((SELECT MAX(sc2.charged_at) FROM subscription_charges sc2
+			                                        WHERE sc2.subscription_id = s.id AND sc2.status = 'paid'), 'epoch'::timestamptz)), 0)
+		FROM subscriptions s
+		LEFT JOIN products p ON p.id = s.product_id` + where + " ORDER BY s.created_at DESC LIMIT $2 OFFSET $3"
+		args = append(args, limit, offset)
+	}
+	rows, err := s.pool.Query(ctx, q, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	out := []*SubscriptionWithProduct{}
+	for rows.Next() {
+		sw := &SubscriptionWithProduct{}
+		var sub Subscription
+		if err := rows.Scan(&sub.ID, &sub.AccountID, &sub.ClientEmail, &sub.ProductID, &sub.SaleID,
+			&sub.ChipTokenPurchaseID, &sub.Status, &sub.Period, &sub.AmountSen, &sub.NextChargeAt,
+			&sub.CancelledAt, &sub.CreatedAt, &sub.UpdatedAt, &sw.ProductName, &sw.RetryAttempts); err != nil {
+			return nil, 0, err
+		}
+		sw.Subscription = sub
+		out = append(out, sw)
+	}
+	return out, total, rows.Err()
+}
+
+// ByIDForAccount returns a subscription by id, but only when it belongs to
+// the given account (used by per-subscription mutations to keep them
+// account-scoped). Returns pgx.ErrNoRows when not owned.
+func (s *SubscriptionStore) ByIDForAccount(ctx context.Context, accountID, subID string) (*Subscription, error) {
+	return scanSub(s.pool.QueryRow(ctx, subSelect+" WHERE id=$1 AND account_id=$2", subID, accountID))
+}

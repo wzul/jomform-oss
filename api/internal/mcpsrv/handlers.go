@@ -260,6 +260,65 @@ func (s *Server) saleEmailStatusMCP(ctx context.Context, _ *mcp.CallToolRequest,
 
 // ─── Subscriptions ───────────────────────────────────────────────────────────
 
+type subscriptionOut struct {
+	ID            string `json:"id"`
+	Customer      string `json:"customer"` // client email
+	ProductID     string `json:"product_id"`
+	ProductName   string `json:"product_name"`
+	AmountSen     int64  `json:"amount_sen"`
+	Period        string `json:"period"` // month | year
+	Status        string `json:"status"` // active | past_due | cancelled
+	NextChargeAt  string `json:"next_charge_at"`
+	RetryAttempts int64  `json:"retry_attempts"`
+	CreatedAt     string `json:"created_at"`
+}
+
+type listSubscriptionsIn struct {
+	Status string `json:"status,omitempty" jsonschema:"Optional — tapis mengikut status: active|past_due|cancelled"`
+	Page   int    `json:"page,omitempty" jsonschema:"Optional — muka surat (mulai 1)"`
+	Limit  int    `json:"limit,omitempty" jsonschema:"Optional — had setiap muka (1-100, lalai 20)"`
+}
+
+func (s *Server) listSubscriptions(ctx context.Context, _ *mcp.CallToolRequest, in listSubscriptionsIn) (*mcp.CallToolResult, []subscriptionOut, error) {
+	accountID, err := s.accountAndScope(ctx, false)
+	if err != nil {
+		return nil, nil, err
+	}
+	switch in.Status {
+	case "", dbstore.SubActive, dbstore.SubPastDue, dbstore.SubCanceled:
+	default:
+		return nil, nil, fmt.Errorf("status tidak sah")
+	}
+	page, limit := in.Page, in.Limit
+	if page < 1 {
+		page = 1
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	rows, _, err := s.deps.Subs.ListByAccountsPage(ctx, []string{accountID}, in.Status, page, limit)
+	if err != nil {
+		return nil, nil, fmt.Errorf("db: %w", err)
+	}
+	out := make([]subscriptionOut, 0, len(rows))
+	for _, sw := range rows {
+		o := subscriptionOut{
+			ID: sw.ID, Customer: sw.ClientEmail, ProductID: sw.ProductID,
+			ProductName: sw.ProductName, AmountSen: sw.AmountSen, Period: sw.Period,
+			Status: sw.Status, RetryAttempts: sw.RetryAttempts,
+			CreatedAt: sw.CreatedAt.UTC().Format(time.RFC3339),
+		}
+		if !sw.NextChargeAt.IsZero() {
+			o.NextChargeAt = sw.NextChargeAt.UTC().Format(time.RFC3339)
+		}
+		out = append(out, o)
+	}
+	return nil, out, nil
+}
+
 type cancelSubIn struct {
 	Email string `json:"email" jsonschema:"emel pelanggan yang ada langganan"`
 }

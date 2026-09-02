@@ -74,6 +74,10 @@ func (s *Server) registerTools() {
 
 	// ── Subscriptions ───────────────────────────────────────────────────────
 	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "list_subscriptions",
+		Description: "Senarai langganan akaun: pelanggan (emel), produk, jumlah/period, status (active/past_due/cancelled), tarikh caj seterusnya. Tapis ?status, page/limit.",
+	}, s.listSubscriptions)
+	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "cancel_subscription",
 		Description: "Batalkan langganan pelanggan. Kad token kekal pada merchant — boleh aktif semula.",
 	}, s.cancelSubscription)
