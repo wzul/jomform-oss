@@ -15,8 +15,14 @@ func (a *AuthHandlers) profileUserID(r *http.Request) string {
 	if err != nil || c.Value == "" || a.Sessions == nil {
 		return ""
 	}
-	uid, gerr := a.Sessions.Get(r.Context(), c.Value)
+	uid, issued, gerr := a.Sessions.GetCreated(r.Context(), c.Value)
 	if gerr != nil {
+		return ""
+	}
+	// Password reset invalidation (issue #62): a session issued before the
+	// user's last password reset is dead.
+	if u, e := a.Users.ByID(r.Context(), uid); e == nil && u != nil && u.PwResetAt != nil && !auth.ValidAfter(issued, *u.PwResetAt) {
+		_ = a.Sessions.Destroy(r.Context(), c.Value)
 		return ""
 	}
 	return uid

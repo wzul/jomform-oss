@@ -1,15 +1,19 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useI18n } from "../../components/i18n";
 
-type Mode = "login" | "register";
+type Mode = "login" | "register" | "forgot";
 type SocialProvider = { id: string; name: string };
 
 export default function Login() {
+  const { t } = useI18n();
   const [mode, setMode] = useState<Mode>("login");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [needTotp, setNeedTotp] = useState(false);
+  const [totpRemember, setTotpRemember] = useState(true);
+  const [remember, setRemember] = useState(false);
   const [done, setDone] = useState(false);
   // Issue #9: social buttons render only for providers configured on the
   // backend (env-gated). null = list still loading → render none.
@@ -27,8 +31,25 @@ export default function Login() {
     setBusy(true);
     setError("");
     const fd = new FormData(e.currentTarget);
-    const path = mode === "login" ? "/api/auth/login" : "/api/auth/register";
-    const body: Record<string, string> = {
+    const path = mode === "login" ? "/api/auth/login" : mode === "register" ? "/api/auth/register" : "/api/auth/forgot-password";
+
+    if (mode === "forgot") {
+      const r = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: String(fd.get("email") || "") }),
+      });
+      setBusy(false);
+      if (r.ok) {
+        setDone(true);
+        setError("");
+      } else {
+        setError((await r.json().catch(() => ({}))).error || t("login.forgotSent"));
+      }
+      return;
+    }
+
+    const body: Record<string, string | boolean> = {
       email: String(fd.get("email") || ""),
       password: String(fd.get("password") || ""),
     };
@@ -36,7 +57,13 @@ export default function Login() {
     // the value stays empty; scripted bots that auto-fill every input trip it
     // and their registration is silently discarded server-side.
     body.website = String(fd.get("website") || "");
-    if (needTotp) body.totp_code = String(fd.get("totp_code") || "");
+    if (mode === "login") body.remember = remember;
+    if (needTotp) {
+      body.totp_code = String(fd.get("totp_code") || "");
+      // Issue #63: when the user opts into remembering this device, the
+      // server issues a jf_trust cookie on a COMPLETED 2FA login only.
+      body.totp_remember = totpRemember;
+    }
 
     const r = await fetch(path, {
       method: "POST",
@@ -46,9 +73,6 @@ export default function Login() {
     setBusy(false);
 
     if (r.ok) {
-      // New registration now returns email_verification: "required" — the
-      // account is created but must confirm its address before first login
-      // (issue #42). Show that instead of redirecting into a dead session.
       const okBody = await r.json().catch(() => ({}));
       if (mode === "register" && (okBody as any).email_verification === "required") {
         setDone(true);
@@ -124,37 +148,41 @@ export default function Login() {
             JF
           </div>
           <h1 className="text-xl font-semibold text-[var(--jf-text)]" style={{ letterSpacing: "-0.02em" }}>
-            {mode === "login" ? "Selamat kembali" : "Cipta akaun JomForm"}
+            {mode === "login" ? "Selamat kembali" : mode === "register" ? "Cipta akaun JomForm" : t("login.forgotTitle")}
           </h1>
           <p className="mt-1.5 text-sm text-[var(--jf-muted)]">
             {mode === "login"
               ? "Log masuk untuk urus borang dan jualan anda."
-              : "Percuma selamanya — borang pertama siap dalam 5 minit."}
+              : mode === "register"
+                ? "Percuma selamanya — borang pertama siap dalam 5 minit."
+                : t("login.forgotDesc")}
           </p>
         </div>
 
         <div className="rounded-xl border border-[var(--jf-border)] bg-white p-6 shadow-[0_0_0_1px_rgba(0,0,0,0.2),0_8px_24px_rgba(0,0,0,0.4)]">
           {/* tabs */}
-          <div className="mb-5 grid grid-cols-2 rounded-lg border border-[var(--jf-border)] bg-slate-100 p-0.5">
-            {(["login", "register"] as const).map((m) => (
-              <button
-                key={m}
-                type="button"
-                onClick={() => {
-                  setMode(m);
-                  setError("");
-                  setNeedTotp(false);
-                }}
-                className={`rounded-md py-1.5 text-[13px] font-medium transition-colors ${
-                  mode === m
-                    ? "bg-[#5e6ad2]/20 text-[var(--jf-primary)] shadow-[inset_0_0_0_1px_rgba(113,112,255,0.35)]"
-                    : "text-[var(--jf-muted)] hover:text-[#d0d6e0]"
-                }`}
-              >
-                {m === "login" ? "Log Masuk" : "Daftar"}
-              </button>
-            ))}
-          </div>
+          {mode !== "forgot" && (
+            <div className="mb-5 grid grid-cols-2 rounded-lg border border-[var(--jf-border)] bg-slate-100 p-0.5">
+              {(["login", "register"] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => {
+                    setMode(m);
+                    setError("");
+                    setNeedTotp(false);
+                  }}
+                  className={`rounded-md py-1.5 text-[13px] font-medium transition-colors ${
+                    mode === m
+                      ? "bg-[#5e6ad2]/20 text-[var(--jf-primary)] shadow-[inset_0_0_0_1px_rgba(113,112,255,0.35)]"
+                      : "text-[var(--jf-muted)] hover:text-[#d0d6e0]"
+                  }`}
+                >
+                  {m === "login" ? "Log Masuk" : "Daftar"}
+                </button>
+              ))}
+            </div>
+          )}
 
           {error && (
             <p className="mb-4 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-[13px] text-red-300">
@@ -167,9 +195,11 @@ export default function Login() {
               <div className="rounded-lg border border-green-500/20 bg-green-500/10 px-3 py-3 text-[13px] text-green-300">
                 {mode === "register"
                   ? "Akaun anda telah dicipta! Sila sahkan alamat emel anda melalui pautan yang kami hantar untuk mengaktifkan log masuk."
-                  : "Berjaya log masuk."}
+                  : mode === "forgot"
+                    ? t("login.forgotSent")
+                    : "Berjaya log masuk."}
               </div>
-              {mode === "register" && (
+              {mode !== "login" && (
                 <button
                   type="button"
                   onClick={() => {
@@ -178,7 +208,7 @@ export default function Login() {
                   }}
                   className="mt-1 w-full rounded-md bg-[#5e6ad2] py-2 text-sm font-medium text-white transition-colors hover:bg-[#828fff]"
                 >
-                  Ke Log Masuk
+                  {mode === "forgot" ? t("login.forgotBack") : "Ke Log Masuk"}
                 </button>
               )}
             </div>
@@ -188,17 +218,19 @@ export default function Login() {
                   screen-readers (no focus, no layout) but it stays in the DOM,
                   so naive bots that fill every field trip the server-side
                   discard. */}
-              <div className="sr-only" aria-hidden="true">
-                <label htmlFor="website">Laman web</label>
-                <input
-                  id="website"
-                  name="website"
-                  type="text"
-                  tabIndex={-1}
-                  autoComplete="off"
-                  placeholder="https://"
-                />
-              </div>
+              {mode !== "forgot" && (
+                <div className="sr-only" aria-hidden="true">
+                  <label htmlFor="website">Laman web</label>
+                  <input
+                    id="website"
+                    name="website"
+                    type="text"
+                    tabIndex={-1}
+                    autoComplete="off"
+                    placeholder="https://"
+                  />
+                </div>
+              )}
 
               <div>
                 <label className="mb-1 block text-xs font-medium text-[var(--jf-muted)]">Emel</label>
@@ -211,38 +243,89 @@ export default function Login() {
                   className="w-full rounded-md border border-[var(--jf-border)] bg-white px-3 py-2 text-sm text-[var(--jf-text)] placeholder-slate-400 outline-none transition-colors focus:border-[#7170ff]/60 focus:bg-indigo-50"
                 />
               </div>
-              <div>
-                <label className="mb-1 block text-xs font-medium text-[var(--jf-muted)]">
-                  {mode === "register" ? "Kata laluan (min. 10 aksara)" : "Kata laluan"}
-                </label>
-                <input
-                  name="password"
-                  type="password"
-                  required
-                  minLength={mode === "register" ? 10 : 1}
-                  placeholder="••••••••••"
-                  className="w-full rounded-md border border-[var(--jf-border)] bg-white px-3 py-2 text-sm text-[var(--jf-text)] placeholder-slate-400 outline-none transition-colors focus:border-[#7170ff]/60 focus:bg-indigo-50"
-                />
-              </div>
-              {needTotp && (
+              {mode !== "forgot" && (
                 <div>
-                  <label className="mb-1 block text-xs font-medium text-[var(--jf-muted)]">Kod 2FA</label>
+                  <label className="mb-1 block text-xs font-medium text-[var(--jf-muted)]">
+                    {mode === "register" ? "Kata laluan (min. 10 aksara)" : "Kata laluan"}
+                  </label>
                   <input
-                    name="totp_code"
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    maxLength={6}
+                    name="password"
+                    type="password"
                     required
-                    placeholder="000000"
-                    className="w-full rounded-md border border-[var(--jf-border)] bg-white px-3 py-2 font-mono text-sm tracking-[0.4em] text-[var(--jf-text)] outline-none focus:border-[#7170ff]/60"
+                    minLength={mode === "register" ? 10 : 1}
+                    placeholder="••••••••••"
+                    className="w-full rounded-md border border-[var(--jf-border)] bg-white px-3 py-2 text-sm text-[var(--jf-text)] placeholder-slate-400 outline-none transition-colors focus:border-[#7170ff]/60 focus:bg-indigo-50"
                   />
                 </div>
               )}
+
+              {needTotp && (
+                <>
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-[var(--jf-muted)]">Kod 2FA</label>
+                    <input
+                      name="totp_code"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      maxLength={6}
+                      required
+                      placeholder="000000"
+                      className="w-full rounded-md border border-[var(--jf-border)] bg-white px-3 py-2 font-mono text-sm tracking-[0.4em] text-[var(--jf-text)] outline-none focus:border-[#7170ff]/60"
+                    />
+                  </div>
+                  {/* Issue #63: trusted-device opt-in, shown ONLY on the 2FA
+                      step. Default checked — reduce friction ("jangan susahkan
+                      saya"); server mints jf_trust on successful code only. */}
+                  <label className="flex cursor-pointer items-start gap-2 text-[13px] text-[var(--jf-muted)]">
+                    <input
+                      type="checkbox"
+                      checked={totpRemember}
+                      onChange={(e) => setTotpRemember(e.target.checked)}
+                      className="mt-0.5 accent-[#5e6ad2]"
+                    />
+                    <span>{t("login.totpRemember")}</span>
+                  </label>
+                </>
+              )}
+
+              {mode === "login" && !needTotp && (
+                <div className="flex items-center justify-between">
+                  {/* Issue #62: remember me — unchecked (default) = browser
+                      session cookie + 24h server TTL; checked = 14 days. */}
+                  <label className="flex cursor-pointer items-center gap-2 text-[13px] text-[var(--jf-muted)]">
+                    <input
+                      type="checkbox"
+                      checked={remember}
+                      onChange={(e) => setRemember(e.target.checked)}
+                      className="accent-[#5e6ad2]"
+                    />
+                    <span>{t("login.remember")}</span>
+                  </label>
+                  {/* Issue #62: forgot-password inline form link. */}
+                  <button
+                    type="button"
+                    onClick={() => { setMode("forgot"); setError(""); setDone(false); }}
+                    className="text-[13px] font-medium text-[#5e6ad2] hover:underline"
+                  >
+                    {t("login.forgot")}
+                  </button>
+                </div>
+              )}
+              {mode === "forgot" && (
+                <button
+                  type="button"
+                  onClick={() => { setMode("login"); setError(""); setDone(false); }}
+                  className="text-[13px] font-medium text-[#5e6ad2] hover:underline"
+                >
+                  {t("login.forgotBack")}
+                </button>
+              )}
+
               <button
                 disabled={busy}
                 className="mt-1 w-full rounded-md bg-[#5e6ad2] py-2 text-sm font-medium text-white transition-colors hover:bg-[#828fff] disabled:opacity-60"
               >
-                {busy ? "…" : mode === "login" ? "Log Masuk" : "Cipta Akaun Percuma"}
+                {busy ? "…" : mode === "login" ? "Log Masuk" : mode === "register" ? "Cipta Akaun Percuma" : t("login.forgotSubmit")}
               </button>
             </form>
           )}
@@ -250,7 +333,7 @@ export default function Login() {
           {/* Issue #9: env-gated social login. Rendered only when the backend
               reports the provider configured (GET /api/auth/social/providers);
               Cloudflare appears only when JF_CF_OIDC_* env vars are set. */}
-          {socialProviders && socialProviders.length > 0 && (
+          {mode !== "forgot" && socialProviders && socialProviders.length > 0 && (
             <div className="mt-4 border-t border-[var(--jf-border)] pt-4">
               <div className="space-y-2">
                 {socialProviders.map((p) => (

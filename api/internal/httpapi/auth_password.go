@@ -35,10 +35,16 @@ func (a *AuthHandlers) handleChangePassword(w http.ResponseWriter, r *http.Reque
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	if err := a.Users.SetPasswordHash(r.Context(), user.ID, hash); err != nil {
+	// Use reset semantics (stamp pw_reset_at) so a password change invalidates
+	// every prior session AND every trusted device (issues #62 + #63).
+	if err := a.Users.ResetPassword(r.Context(), user.ID, hash); err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
+	if a.Sessions != nil {
+		_ = a.Sessions.TrustedDevices().RevokeAll(r.Context(), user.ID)
+	}
+	clearTrustCookie(w)
 	// Invalidate all sessions except current? MVP: kill all, user re-logins.
 	writeJSON(w, http.StatusOK, map[string]string{"status": "password_changed"})
 }

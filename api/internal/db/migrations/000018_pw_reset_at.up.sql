@@ -1,0 +1,11 @@
+-- Migration 000018: password-reset timestamp (issues #62 + #63).
+--
+-- Added during the remember-me + forgot/reset + trusted-device work. Set to
+-- now() whenever a password is reset via the self-service flow; session
+-- resolution rejects any session issued BEFORE this timestamp, killing all
+-- prior sessions (stolen-session mitigation). It also invalidates trusted
+-- device (jf_trust) cookies for the user.
+--
+-- Existing users get NULL (no forced logout at deploy time) and are only
+-- affected the moment they actually reset their password.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS pw_reset_at TIMESTAMPTZ NULL;

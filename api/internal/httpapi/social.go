@@ -23,6 +23,8 @@ import (
 	"os"
 	"sort"
 	"strings"
+
+	"github.com/wzul/jomform/api/internal/auth"
 )
 
 type oidcProvider struct {
@@ -194,7 +196,7 @@ func (a *AuthHandlers) socialCallback(w http.ResponseWriter, r *http.Request) {
 	// 1) existing identity → log the user in
 	userID, err := a.Users.FindIdentity(r.Context(), provider, up.UID)
 	if err == nil && userID != "" {
-		_ = a.startSession(w, r, userID, "", false)
+		_ = a.startSession(w, r, userID, "", false, false)
 		http.Redirect(w, r, "/", http.StatusFound)
 		return
 	}
@@ -210,7 +212,7 @@ func (a *AuthHandlers) socialCallback(w http.ResponseWriter, r *http.Request) {
 	if up.Email != "" && up.EmailVerified {
 		if existing, e2 := a.Users.ByEmail(r.Context(), up.Email); e2 == nil && existing != nil {
 			_ = a.Users.LinkIdentity(r.Context(), existing.ID, provider, up.UID, up.Email, up.Name, up.Picture)
-			_ = a.startSession(w, r, existing.ID, "", false)
+			_ = a.startSession(w, r, existing.ID, "", false, false)
 			http.Redirect(w, r, "/", http.StatusFound)
 			return
 		}
@@ -223,7 +225,7 @@ func (a *AuthHandlers) socialCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Account row auto-created next login via ensureAccount path
-	_ = a.startSession(w, r, newID, "", false)
+	_ = a.startSession(w, r, newID, "", false, false)
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
@@ -289,8 +291,14 @@ func (a *AuthHandlers) currentUserID(r *http.Request) string {
 	if err != nil || c.Value == "" {
 		return ""
 	}
-	uid, err := a.Sessions.Get(r.Context(), c.Value)
+	uid, issued, err := a.Sessions.GetCreated(r.Context(), c.Value)
 	if err != nil {
+		return ""
+	}
+	// Password reset invalidation (issue #62): a session issued before the
+	// user's last password reset is dead.
+	if u, e := a.Users.ByID(r.Context(), uid); e == nil && u != nil && u.PwResetAt != nil && !auth.ValidAfter(issued, *u.PwResetAt) {
+		_ = a.Sessions.Destroy(r.Context(), c.Value)
 		return ""
 	}
 	return uid

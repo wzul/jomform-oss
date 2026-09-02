@@ -64,6 +64,7 @@ func authUsers(t *testing.T) *dbstore.UserStore {
 type recorderMailer struct {
 	mu     sync.Mutex
 	called bool
+	last   string // body of the most recent send (issue #62: captures reset token)
 	// no-op Send
 }
 
@@ -71,6 +72,7 @@ func (m *recorderMailer) Send(to, subject, body string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.called = true
+	m.last = body
 	return nil
 }
 
@@ -78,6 +80,12 @@ func (m *recorderMailer) wasCalled() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.called
+}
+
+func (m *recorderMailer) lastBody() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.last
 }
 
 var testVerifyKey = func() []byte {

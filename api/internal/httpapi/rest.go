@@ -143,8 +143,15 @@ func (h *RESTHandlers) resolve(w http.ResponseWriter, r *http.Request) (*dbstore
 	if err != nil || h.Sessions == nil {
 		return nil, false
 	}
-	userID, err := h.Sessions.Get(r.Context(), c.Value)
+	userID, issued, err := h.Sessions.GetCreated(r.Context(), c.Value)
 	if err != nil {
+		return nil, false
+	}
+	// Password reset invalidation (issue #62): if the owner reset their
+	// password after this session was issued, the session is dead.
+	if u, e := h.Users.ByID(r.Context(), userID); e == nil && u != nil && u.PwResetAt != nil && !auth.ValidAfter(issued, *u.PwResetAt) {
+		_ = h.Sessions.Destroy(r.Context(), c.Value)
+		invalidateSessionAcctCache(c.Value)
 		return nil, false
 	}
 	// First owned account (M5 adds multi-account switching). Account IDs are
@@ -237,8 +244,13 @@ func (h *RESTHandlers) sessionOwnerID(r *http.Request) string {
 	if err != nil || c.Value == "" || h.Sessions == nil {
 		return ""
 	}
-	uid, gerr := h.Sessions.Get(r.Context(), c.Value)
+	uid, issued, gerr := h.Sessions.GetCreated(r.Context(), c.Value)
 	if gerr != nil {
+		return ""
+	}
+	// Password reset invalidation (issue #62).
+	if u, e := h.Users.ByID(r.Context(), uid); e == nil && u != nil && u.PwResetAt != nil && !auth.ValidAfter(issued, *u.PwResetAt) {
+		_ = h.Sessions.Destroy(r.Context(), c.Value)
 		return ""
 	}
 	return uid
@@ -255,7 +267,9 @@ func (h *RESTHandlers) profileUser(r *http.Request) (*dbstore.User, error) {
 
 // startSessionFor issues a new session cookie for a user id.
 func (h *RESTHandlers) startSessionFor(w http.ResponseWriter, r *http.Request, userID string) error {
-	token, err := h.Sessions.Create(r.Context(), userID)
+	ttl := rememberLongTTL
+	maxAge := int(rememberLongTTL.Seconds())
+	token, err := h.Sessions.CreateWithTTL(r.Context(), userID, ttl)
 	if err != nil {
 		return err
 	}
@@ -266,7 +280,7 @@ func (h *RESTHandlers) startSessionFor(w http.ResponseWriter, r *http.Request, u
 		HttpOnly: true,
 		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
-		MaxAge:   int(authSessionTTL.Seconds()),
+		MaxAge:   maxAge,
 	})
 	return nil
 }

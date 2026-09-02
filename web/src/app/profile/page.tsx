@@ -50,6 +50,8 @@ export default function ProfilePage() {
   const [secretText, setSecretText] = useState("");
   const [code, setCode] = useState("");
   const [enabling, setEnabling] = useState(false);
+  // Issue #63: trusted-device state for the Profile → Security line.
+  const [trustedUntil, setTrustedUntil] = useState("");
 
   // Persist active tab.
   useEffect(() => {
@@ -84,6 +86,16 @@ export default function ProfilePage() {
   }, [sessionUser]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Issue #63: fetch trusted-device status for the Profile → Security line.
+  const loadTrust = useCallback(() => {
+    fetch("/api/auth/trust-status")
+      .then((r) => (r.ok ? r.json() : { trusted: false }))
+      .then((d) => setTrustedUntil(d.trusted ? d.until || "" : ""))
+      .catch(() => setTrustedUntil(""));
+  }, []);
+
+  useEffect(() => { loadTrust(); }, [loadTrust]);
 
   async function post(path: string, body: unknown) {
     setMsg(""); setErr("");
@@ -278,10 +290,28 @@ export default function ProfilePage() {
                 <button
                   onClick={async () => {
                     const code = window.prompt(t("prof.enter2faCode"));
-                    if (code) await post("/api/auth/2fa/disable", { totp_code: code });
+                    if (code) {
+                      await post("/api/auth/2fa/disable", { totp_code: code });
+                      setTrustedUntil("");
+                    }
                   }}
                   className="ml-2 px-4 py-2 text-sm text-red-500 hover:underline"
                 >{t("prof.disable2fa")}</button>
+              )}
+              {/* Issue #63: trust this device status + forget control. */}
+              {p?.totp_enabled && trustedUntil && (
+                <div className="mt-3 flex flex-wrap items-center gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
+                  <span className="text-emerald-700">
+                    {t("prof.trusted", { date: new Date(trustedUntil).toLocaleDateString() })}
+                  </span>
+                  <button
+                    onClick={async () => {
+                      const r = await fetch("/api/auth/trust/forget", { method: "POST" });
+                      if (r.ok) setTrustedUntil("");
+                    }}
+                    className="text-[13px] text-red-500 hover:underline"
+                  >{t("prof.forgetDevice")}</button>
+                </div>
               )}
             </section>
           </>

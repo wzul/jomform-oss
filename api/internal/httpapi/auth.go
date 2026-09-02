@@ -17,6 +17,10 @@ import (
 
 const sessionCookie = "jf_session"
 
+// Trust cookie (issue #63): single-purpose — waives the TOTP step on a
+// trusted device for 30 days. Never a session, password still required.
+const trustCookie = "jf_trust"
+
 // AuthHandlers bundles session store and DB for auth routes.
 type AuthHandlers struct {
 	Sessions *auth.Sessions
@@ -60,6 +64,17 @@ func (a *AuthHandlers) RegisterRoutes(mux *http.ServeMux) {
 	// token also works via POST if an app ever wants JSON back.
 	mux.HandleFunc("GET /v1/auth/verify", a.handleVerify)
 	mux.HandleFunc("POST /v1/auth/verify", a.handleVerify)
+	// Password recovery (issue #62): forgot-password mints a single-use reset
+	// link (always 200, no enumeration) and is tightly rate-limited per IP to
+	// match the #56 suppression/breaker concern — reset emails can't be
+	// weaponized into a mail-bomb.
+	mux.Handle("POST /v1/auth/forgot-password", middleware.RateLimitWith(2.0/3600.0, 2)(http.HandlerFunc(a.handleForgotPassword)))
+	mux.HandleFunc("POST /v1/auth/reset-password", a.handleResetPassword)
+	// Trusted-device status (issue #63): reported for the Profile → Security
+	// line; also lets the client forget the current device.
+	mux.HandleFunc("GET /v1/auth/trust-status", a.handleTrustStatus)
+	mux.HandleFunc("POST /v1/auth/trust/forget", a.handleTrustForget)
+	mux.HandleFunc("POST /v1/auth/trust/forget-all", a.handleTrustForgetAll)
 	// Social login (provider-generic OIDC). UI links use /api/... which the
 	// Next proxy maps to /v1/... for same-origin cookies; direct /api/* also
 	// works when the Go server is the public entrypoint.
@@ -85,6 +100,12 @@ type loginRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
 	TOTPCode string `json:"totp_code,omitempty"`
+	// Remember (issue #62): unchecked (default) = browser-session cookie +
+	// 24h server TTL; checked = 14-day persistent session.
+	Remember bool `json:"remember,omitempty"`
+	// TOTPRemember (issue #63): when true and the 2FA code is correct, issue
+	// a jf_trust cookie waiving TOTP on this device for 30 days.
+	TOTPRemember bool `json:"totp_remember,omitempty"`
 }
 
 type meResponse struct {
@@ -232,14 +253,24 @@ func (a *AuthHandlers) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// stale secret but totp_enabled=false (abandoned setup) must NOT be held at
 	// the auth step — that would lock them out (see issue #39).
 	if user.TOTPEnabled {
-		if req.TOTPCode == "" {
+		// Trusted device (issue #63): a valid jf_trust cookie bound to THIS
+		// user + the password just verified waives the TOTP challenge. The
+		// cookie is single-purpose — it never grants a session, and the
+		// password is still required every login.
+		trusted := a.trustMatchesUser(r, user.ID)
+		if req.TOTPCode == "" && !trusted {
 			step := "totp_required"
 			writeJSON(w, http.StatusUnauthorized, meResponse{NextStep: &step})
 			return
 		}
-		if !auth.ValidateTOTPSecret(user.TOTPSecret, req.TOTPCode) {
+		if !trusted && !auth.ValidateTOTPSecret(user.TOTPSecret, req.TOTPCode) {
 			a.failLogin(w, r, ip, email, true)
 			return
+		}
+		// A correct code + "remember this device" opt-in mints the trust cookie
+		// on a COMPLETED 2FA login only (never on partial/failed attempts).
+		if !trusted && req.TOTPRemember {
+			a.issueTrustCookie(w, r, user.ID)
 		}
 	}
 
@@ -251,7 +282,7 @@ func (a *AuthHandlers) handleLogin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := a.startSessionAndDefaultAccount(w, r, user); err != nil {
+	if err := a.startSession(w, r, user.ID, user.Email, user.TOTPEnabled, req.Remember); err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
@@ -357,7 +388,7 @@ func (a *AuthHandlers) handle2FAEnable(w http.ResponseWriter, r *http.Request) {
 	}
 	// Consume the pending secret so it can't be re-enabled.
 	_ = a.pendingTOTP().Delete(r.Context(), user.ID)
-	if err := a.startSession(w, r, user.ID, user.Email, true); err != nil { // fresh session post-2FA
+	if err := a.startSession(w, r, user.ID, user.Email, true, false); err != nil { // fresh session post-2FA
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
@@ -395,13 +426,38 @@ func (a *AuthHandlers) handle2FADisable(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
+	// Issue #63: disabling 2FA invalidates every trusted device — there must
+	// be no trust cookie lingering that would waive a (now-removed) 2FA step.
+	if a.Sessions != nil {
+		_ = a.Sessions.TrustedDevices().RevokeAll(r.Context(), user.ID)
+	}
+	clearTrustCookie(w)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "disabled"})
 }
 
 // ─── session plumbing ────────────────────────────────────────────────────────
+//
+// Session TTL (issue #62): unchecked remember-me = 24h server TTL + a
+// browser-session cookie (MaxAge -1, dies when the browser closes); checked =
+// 14d persistent cookie + server TTL. The server side always enforces the TTL
+// regardless of the cookie, so a replayed cookie can't outlive its server key.
+const (
+	rememberShortTTL  = 24 * time.Hour
+	rememberLongTTL   = 14 * 24 * time.Hour
+)
 
-func (a *AuthHandlers) startSession(w http.ResponseWriter, r *http.Request, userID, _ string, _ bool) error {
-	token, err := a.Sessions.Create(r.Context(), userID)
+// startSession creates a session for userID, honoring the remember flag for
+// cookie MaxAge and server TTL. The email/totpEnabled args are accepted for
+// historical compatibility with call sites that threaded them through; they no
+// longer influence the session.
+func (a *AuthHandlers) startSession(w http.ResponseWriter, r *http.Request, userID, _ string, _ bool, remember bool) error {
+	ttl := rememberLongTTL
+	maxAge := int(rememberLongTTL.Seconds())
+	if !remember {
+		ttl = rememberShortTTL
+		maxAge = -1 // browser-session cookie (issue #62 default)
+	}
+	token, err := a.Sessions.CreateWithTTL(r.Context(), userID, ttl)
 	if err != nil {
 		return err
 	}
@@ -412,14 +468,9 @@ func (a *AuthHandlers) startSession(w http.ResponseWriter, r *http.Request, user
 		HttpOnly: true,
 		Secure:   !isDev,
 		SameSite: http.SameSiteLaxMode,
-		MaxAge:   int(authSessionTTL / time.Second),
+		MaxAge:   maxAge,
 	})
 	return nil
-}
-
-func (a *AuthHandlers) startSessionAndDefaultAccount(w http.ResponseWriter, r *http.Request, user *dbstore.User) error {
-	// Default account creation belongs to onboarding (M3); sessions only here.
-	return a.startSession(w, r, user.ID, user.Email, user.TOTPEnabled)
 }
 
 func (a *AuthHandlers) clearCookie() *http.Cookie {
@@ -435,22 +486,10 @@ func (a *AuthHandlers) clearCookie() *http.Cookie {
 }
 
 func (a *AuthHandlers) currentUser(r *http.Request) *dbstore.User {
-	c, err := r.Cookie(sessionCookie)
-	if err != nil {
-		return nil
-	}
-	userID, err := a.Sessions.Get(r.Context(), c.Value)
-	if err != nil {
-		return nil
-	}
-	user, err := a.Users.ByID(r.Context(), userID)
-	if err != nil {
-		return nil
-	}
-	return user
+	// Honors pw_reset_at: sessions issued before a password reset are dead
+	// (issue #62). Implemented in auth_ux.go.
+	return a.sessionUser(r)
 }
 
 // isDev controls cookie Secure flag; set by Server at wiring time.
 var isDev bool
-
-var authSessionTTL = 14 * 24 * time.Hour
