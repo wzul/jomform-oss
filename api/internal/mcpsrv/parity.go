@@ -15,13 +15,16 @@ import (
 // ── Products update ──────────────────────────────────────────────────────
 
 type updateProductIn struct {
-	ProductID     string `json:"product_id" jsonschema:"ID produk"`
-	Name          string `json:"name,omitempty" jsonschema:"Nama baharu (optional)"`
-	PriceSen      *int64 `json:"price_sen,omitempty" jsonschema:"Harga baharu dalam sen (optional)"`
-	Stock         *int   `json:"stock,omitempty" jsonschema:"Stok baharu (optional); omit = tak berubah"`
-	Active        *bool  `json:"active,omitempty" jsonschema:"Aktifkan/Nyahaktif"`
-	Type          string `json:"type,omitempty" jsonschema:"one_time atau subscription (optional)"`
-	BillingPeriod string `json:"billing_period,omitempty" jsonschema:"month atau year untuk subscription (optional)"`
+	ProductID     string   `json:"product_id" jsonschema:"ID produk"`
+	Name          string   `json:"name,omitempty" jsonschema:"Nama baharu (optional)"`
+	Description   string   `json:"description,omitempty" jsonschema:"Penerangan baharu (optional)"`
+	PriceSen      *int64   `json:"price_sen,omitempty" jsonschema:"Harga baharu dalam sen (optional)"`
+	Images        []string `json:"images,omitempty" jsonschema:"Gambar (URL) — set penuh; kosong = kosongkan" `
+	Stock         *int     `json:"stock,omitempty" jsonschema:"Stok baharu (optional); omit = tak berubah" `
+	Active        *bool    `json:"active,omitempty" jsonschema:"Aktifkan/Nyahaktif"`
+	Type          string   `json:"type,omitempty" jsonschema:"one_time atau subscription (optional)"`
+	BillingPeriod string   `json:"billing_period,omitempty" jsonschema:"month atau year untuk subscription (optional)"`
+	TrialDays     *int     `json:"trial_days,omitempty" jsonschema:"Hari percubaan (subscription; optional)"`
 }
 
 func (s *Server) updateProduct(
@@ -34,6 +37,10 @@ func (s *Server) updateProduct(
 	var namePtr *string
 	if in.Name != "" {
 		namePtr = &in.Name
+	}
+	var descPtr *string
+	if in.Description != "" {
+		descPtr = &in.Description
 	}
 	stockPtr := in.Stock
 	if stockPtr != nil && *stockPtr < 0 {
@@ -53,7 +60,15 @@ func (s *Server) updateProduct(
 		}
 		periodPtr = &in.BillingPeriod
 	}
-	if err := s.deps.Products.Update(ctx, acc, in.ProductID, namePtr, in.PriceSen, stockPtr, in.Active, typPtr, periodPtr); err != nil {
+	if in.TrialDays != nil && *in.TrialDays < 0 {
+		return nil, nil, fmt.Errorf("trial_days mesti >= 0")
+	}
+	var imagesPtr *[]string
+	if in.Images != nil {
+		imagesPtr = &in.Images
+	}
+	if err := s.deps.Products.Update(ctx, acc, in.ProductID, namePtr, descPtr,
+		in.PriceSen, imagesPtr, stockPtr, in.Active, typPtr, periodPtr, in.TrialDays); err != nil {
 		return nil, nil, err
 	}
 	return nil, map[string]string{"status": "updated", "product_id": in.ProductID}, nil

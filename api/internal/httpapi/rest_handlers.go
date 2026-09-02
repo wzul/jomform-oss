@@ -16,23 +16,27 @@ import (
 // ─── Products ────────────────────────────────────────────────────────────────
 
 type restProduct struct {
-	ID            string `json:"id"`
-	Name          string `json:"name"`
-	PriceSen      int64  `json:"price_sen"`
-	Type          string `json:"type"`
-	BillingPeriod string `json:"billing_period,omitempty"`
-	Active        bool   `json:"active"`
-	Stock         *int   `json:"stock,omitempty"` // nil = unlimited
-	CreatedAt     string `json:"created_at,omitempty"`
-	UpdatedAt     string `json:"updated_at,omitempty"`
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	Description   string   `json:"description,omitempty"`
+	PriceSen      int64    `json:"price_sen"`
+	Images        []string `json:"images,omitempty"`
+	Type          string   `json:"type"`
+	BillingPeriod string   `json:"billing_period,omitempty"`
+	TrialDays     int      `json:"trial_days"`
+	Active        bool     `json:"active"`
+	Stock         *int     `json:"stock,omitempty"` // nil = unlimited
+	CreatedAt     string   `json:"created_at,omitempty"`
+	UpdatedAt     string   `json:"updated_at,omitempty"`
 }
 
 // toRestProduct maps a store Product to the REST JSON shape (money stays
 // integer sen; stock nil = unlimited).
 func toRestProduct(p *dbstore.Product) restProduct {
 	out := restProduct{
-		ID: p.ID, Name: p.Name, PriceSen: p.PriceSen,
-		Type: p.Type, BillingPeriod: p.BillingPeriod, Active: p.Active,
+		ID: p.ID, Name: p.Name, Description: p.Description, PriceSen: p.PriceSen,
+		Images: p.Images, Type: p.Type, BillingPeriod: p.BillingPeriod,
+		TrialDays: p.TrialDays, Active: p.Active,
 		Stock:     p.Stock,
 		CreatedAt: p.CreatedAt.UTC().Format(time.RFC3339),
 	}
@@ -66,17 +70,21 @@ func (h *RESTHandlers) listProducts(w http.ResponseWriter, r *http.Request, actx
 	respond(w, http.StatusOK, out)
 }
 
-// updateProduct handles PUT /v1/rest/products/{id} — partial update of name,
-// price_sen, type, billing_period, stock, active (money in integer sen).
-// Omitted fields are left unchanged.
+// updateProduct handles PUT /v1/rest/products/{id} — partial update of all
+// editable fields: name, description, price_sen, images[], trial_days, type,
+// billing_period, stock, active (money stays integer sen). Omitted fields are
+// left unchanged; an omitted images[] keeps the stored ones.
 func (h *RESTHandlers) updateProduct(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	var in struct {
-		Name          *string `json:"name"`
-		PriceSen      *int64  `json:"price_sen"`
-		Type          *string `json:"type"`
-		BillingPeriod *string `json:"billing_period"`
-		Stock         *int    `json:"stock"` // nil = unlimited, keep-unset if omitted
-		Active        *bool   `json:"active"`
+		Name           *string   `json:"name"`
+		Description    *string   `json:"description"`
+		PriceSen       *int64    `json:"price_sen"`
+		Images         *[]string `json:"images"` // nil = keep; [] = clear
+		TrialDays      *int      `json:"trial_days"`
+		Type           *string   `json:"type"`
+		BillingPeriod  *string   `json:"billing_period"`
+		Stock          *int      `json:"stock"` // nil = unlimited, keep-unset if omitted
+		Active         *bool     `json:"active"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid json")
@@ -88,6 +96,10 @@ func (h *RESTHandlers) updateProduct(w http.ResponseWriter, r *http.Request, act
 	}
 	if in.PriceSen != nil && *in.PriceSen < 0 {
 		writeErr(w, http.StatusBadRequest, "price_sen mesti >= 0")
+		return
+	}
+	if in.TrialDays != nil && *in.TrialDays < 0 {
+		writeErr(w, http.StatusBadRequest, "trial_days mesti >= 0")
 		return
 	}
 	var typPtr, periodPtr *string
@@ -109,14 +121,33 @@ func (h *RESTHandlers) updateProduct(w http.ResponseWriter, r *http.Request, act
 		writeErr(w, http.StatusBadRequest, "stok mesti >= 0")
 		return
 	}
-	if err := h.Products.Update(r.Context(), actx.Account.ID, r.PathValue("id"),
-		in.Name, in.PriceSen, in.Stock, in.Active, typPtr, periodPtr); err != nil {
+	err := h.Products.Update(r.Context(), actx.Account.ID, r.PathValue("id"),
+		in.Name, in.Description, in.PriceSen, in.Images, in.Stock, in.Active,
+		typPtr, periodPtr, in.TrialDays)
+	if err != nil {
 		respondErr(w, r, err)
 		return
 	}
 	// Issue #92: audit product update.
 	h.recordEvent(r, actx, h.sessionOwnerID(r), "product.updated", map[string]any{"product_id": r.PathValue("id")})
-	respond(w, http.StatusOK, map[string]string{"status": "updated"})
+	// Return the freshly-updated product (Issue #124: editor expects it).
+	prod, gerr := h.Products.Get(r.Context(), actx.Account.ID, r.PathValue("id"))
+	if gerr != nil {
+		respond(w, http.StatusOK, map[string]string{"status": "updated"})
+		return
+	}
+	respond(w, http.StatusOK, toRestProduct(prod))
+}
+
+// getProduct handles GET /v1/rest/products/{id} — single-product fetch for the
+// editor (account-scoped).
+func (h *RESTHandlers) getProduct(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	prod, err := h.Products.Get(r.Context(), actx.Account.ID, r.PathValue("id"))
+	if err != nil {
+		respondErr(w, r, err)
+		return
+	}
+	respond(w, http.StatusOK, toRestProduct(prod))
 }
 
 func (h *RESTHandlers) deleteProduct(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
@@ -186,15 +217,21 @@ func (h *RESTHandlers) bulkProducts(w http.ResponseWriter, r *http.Request, actx
 
 func (h *RESTHandlers) createProduct(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	var in struct {
-		Name          string `json:"name"`
-		PriceSen      int64  `json:"price_sen"`
-		Type          string `json:"type"`
-		BillingPeriod string `json:"billing_period"`
-		TrialDays     int    `json:"trial_days"`
-		Stock         *int   `json:"stock"` // nil = unlimited
+		Name          string   `json:"name"`
+		Description   string   `json:"description"`
+		PriceSen      int64    `json:"price_sen"`
+		Type          string   `json:"type"`
+		BillingPeriod string   `json:"billing_period"`
+		TrialDays     int      `json:"trial_days"`
+		Stock         *int     `json:"stock"` // nil = unlimited
+		Images        []string `json:"images"`
 	}
 	if err := decodeJSON(r, &in); err != nil || in.Name == "" || in.PriceSen < 0 {
 		writeErr(w, http.StatusBadRequest, "nama dan price_sen wajib")
+		return
+	}
+	if in.TrialDays < 0 {
+		writeErr(w, http.StatusBadRequest, "trial_days mesti >= 0")
 		return
 	}
 	pType := in.Type
@@ -214,17 +251,16 @@ func (h *RESTHandlers) createProduct(w http.ResponseWriter, r *http.Request, act
 		}
 	}
 	p := &dbstore.Product{
-		AccountID: actx.Account.ID, Name: in.Name, PriceSen: in.PriceSen,
-		Type: pType, BillingPeriod: period, TrialDays: in.TrialDays, Active: true,
+		AccountID: actx.Account.ID, Name: in.Name, Description: in.Description,
+		PriceSen: in.PriceSen, Images: in.Images, Type: pType,
+		BillingPeriod: period, TrialDays: in.TrialDays, Active: true,
 		Stock: in.Stock,
 	}
 	if err := h.Products.Create(r.Context(), p); err != nil {
 		respondErr(w, r, err)
 		return
 	}
-	respond(w, http.StatusCreated, restProduct{
-		ID: p.ID, Name: p.Name, PriceSen: p.PriceSen, Type: p.Type, BillingPeriod: p.BillingPeriod, Active: true,
-	})
+	respond(w, http.StatusCreated, toRestProduct(p))
 }
 
 // ─── Forms ───────────────────────────────────────────────────────────────────

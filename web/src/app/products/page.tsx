@@ -9,9 +9,12 @@ import { useSession } from "../../components/session";
 type Product = {
   id: string;
   name: string;
+  description?: string;
   price_sen: number;
+  images?: string[];
   type: string;
   billing_period?: string;
+  trial_days?: number;
   stock?: number | null;
   active: boolean;
   created_at?: string;
@@ -208,6 +211,7 @@ export default function Products() {
   const [price, setPrice] = useState("");
   const [type, setType] = useState("one_time");
   const [period, setPeriod] = useState("month");
+  const [trial, setTrial] = useState("0");
   const [stock, setStock] = useState("");
 
   async function add(e: React.FormEvent) {
@@ -221,6 +225,7 @@ export default function Products() {
         price_sen: Math.round(parseFloat(price) * 100),
         type,
         billing_period: type === "subscription" ? period : undefined,
+        trial_days: type === "subscription" ? Math.max(0, parseInt(trial || "0", 10)) : undefined,
         stock: stock === "" ? null : Math.max(0, parseInt(stock, 10)),
       }),
     });
@@ -228,6 +233,7 @@ export default function Products() {
       setName("");
       setPrice("");
       setStock("");
+      setTrial("0");
       load();
     } else {
       const d = await r.json().catch(() => ({}));
@@ -255,26 +261,100 @@ export default function Products() {
   // ── edit drawer save ─────────────────────────────────────────────────────
   const [editForm, setEditForm] = useState({
     name: "",
+    description: "",
     price: "",
     type: "one_time",
     period: "month",
+    trial: "0",
     stock: "",
     active: true,
+    images: [] as string[],
   });
+  const [editTab, setEditTab] = useState("general");
+  const [uploadingImg, setUploadingImg] = useState(false);
+  const [savedFlash, setSavedFlash] = useState("");
+
+  const isDirty = useMemo(() => {
+    if (!editing) return false;
+    return (
+      editForm.name !== editing.name ||
+      editForm.description !== (editing.description || "") ||
+      editForm.price !== (editing.price_sen / 100).toFixed(2) ||
+      editForm.type !== editing.type ||
+      (editForm.type === "subscription" &&
+        editForm.period !== (editing.billing_period || "month")) ||
+      editForm.trial !== String(editing.trial_days ?? 0) ||
+      editForm.stock !==
+        (typeof editing.stock === "number" ? String(editing.stock) : "") ||
+      editForm.active !== editing.active ||
+      JSON.stringify(editForm.images) !== JSON.stringify(editing.images || [])
+    );
+  }, [editForm, editing]);
+
+  function closeEditor() {
+    if (isDirty && !window.confirm(t("prod.unsaved"))) return;
+    setEditing(null);
+    setEditTab("general");
+    setSavedFlash("");
+  }
 
   useEffect(() => {
     if (editing) {
       setEditForm({
         name: editing.name,
+        description: editing.description || "",
         price: (editing.price_sen / 100).toFixed(2),
         type: editing.type,
         period: editing.billing_period || "month",
+        trial: String(editing.trial_days ?? 0),
         stock: typeof editing.stock === "number" ? String(editing.stock) : "",
         active: editing.active,
+        images: editing.images || [],
       });
+      setEditTab("general");
       setDrawerError("");
+      setSavedFlash("");
+      setUploadingImg(false);
     }
   }, [editing]);
+
+  async function uploadImage(file: File) {
+    if (!file) return;
+    if (!["image/png", "image/jpeg", "image/webp", "image/gif"].includes(file.type)) {
+      setDrawerError(t("prod.uploadFail"));
+      return;
+    }
+    if (file.size > 20 * 1024 * 1024) {
+      setDrawerError(t("prod.uploadFail"));
+      return;
+    }
+    setUploadingImg(true);
+    setDrawerError("");
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const r = await fetch("/api/rest/uploads/image", { method: "POST", body: fd });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.url) {
+        setDrawerError(t("prod.uploadFail"));
+        return;
+      }
+      setEditForm((f) => ({ ...f, images: [...f.images, d.url] }));
+      // Reordering/remove marks the form dirty (images changed).
+    } finally {
+      setUploadingImg(false);
+    }
+  }
+
+  function moveImage(i: number, dir: -1 | 1) {
+    setEditForm((f) => {
+      const imgs = [...f.images];
+      const j = i + dir;
+      if (j < 0 || j >= imgs.length) return f;
+      [imgs[i], imgs[j]] = [imgs[j], imgs[i]];
+      return { ...f, images: imgs };
+    });
+  }
 
   async function saveEdit(e: React.FormEvent) {
     e.preventDefault();
@@ -282,25 +362,30 @@ export default function Products() {
     setDrawerBusy(true);
     setDrawerError("");
     const stockVal = editForm.stock === "" ? null : Math.max(0, parseInt(editForm.stock, 10));
+    const trialVal = Math.max(0, parseInt(editForm.trial || "0", 10));
+    const body: Record<string, unknown> = {
+      name: editForm.name,
+      description: editForm.description,
+      price_sen: Math.round(parseFloat(editForm.price) * 100),
+      type: editForm.type,
+      billing_period: editForm.type === "subscription" ? editForm.period : undefined,
+      trial_days: editForm.type === "subscription" ? trialVal : undefined,
+      stock: stockVal,
+      active: editForm.active,
+      images: editForm.images,
+    };
     try {
       const r = await fetch(`/api/rest/products/${editing.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: editForm.name,
-          price_sen: Math.round(parseFloat(editForm.price) * 100),
-          type: editForm.type,
-          billing_period: editForm.type === "subscription" ? editForm.period : undefined,
-          stock: stockVal,
-          active: editForm.active,
-        }),
+        body: JSON.stringify(body),
       });
       if (!r.ok) {
         const d = await r.json().catch(() => ({}));
         setDrawerError(d.error || t("prod.failedUpdate"));
         return;
       }
-      setEditing(null);
+      setSavedFlash(t("prod.updated"));
       load();
     } finally {
       setDrawerBusy(false);
@@ -346,10 +431,22 @@ export default function Products() {
             <option value="subscription">{t("prod.subscription")}</option>
           </select>
           {type === "subscription" && (
-            <select value={period} onChange={(e) => setPeriod(e.target.value)} className="jf-input w-32">
-              <option value="month">{t("prod.monthly")}</option>
-              <option value="year">{t("prod.yearly")}</option>
-            </select>
+            <>
+              <select value={period} onChange={(e) => setPeriod(e.target.value)} className="jf-input w-32">
+                <option value="month">{t("prod.monthly")}</option>
+                <option value="year">{t("prod.yearly")}</option>
+              </select>
+              <input
+                value={trial}
+                onChange={(e) => setTrial(e.target.value)}
+                type="number"
+                min="0"
+                step="1"
+                placeholder={t("prod.trial")}
+                title={t("prod.trial")}
+                className="jf-input w-36"
+              />
+            </>
           )}
           <button className="jf-btn-primary">{t("prod.add")}</button>
         </form>
@@ -527,99 +624,266 @@ export default function Products() {
           </div>
         )}
 
-        {/* Edit drawer / view */}
+        {/* Edit drawer / view — WC-style product editor (#124) */}
         {editing && (
-          <div className="fixed inset-0 z-50 flex justify-end bg-black/30" onClick={() => setEditing(null)}>
+          <div className="fixed inset-0 z-50 flex justify-end bg-black/30" onClick={closeEditor}>
             <div
-              className="h-full w-full max-w-md overflow-y-auto bg-white p-6 shadow-xl"
+              className="h-full w-full max-w-xl overflow-y-auto bg-white p-6 shadow-xl"
               onClick={(e) => e.stopPropagation()}
               role="dialog"
               aria-label={t("prod.editTitle")}
             >
               <div className="flex items-center justify-between">
                 <h2 className="text-lg font-semibold">{t("prod.editTitle")}</h2>
-                <button onClick={() => setEditing(null)} className="text-lg text-[var(--jf-muted)]" aria-label={t("prof.twoFaClose")}>
+                <button onClick={closeEditor} className="text-lg text-[var(--jf-muted)]" aria-label={t("prof.twoFaClose")}>
                   ✕
                 </button>
               </div>
-              <form onSubmit={saveEdit} className="mt-5 space-y-4">
-                <label className="block text-sm font-medium">
-                  {t("prod.name")}
-                  <input
-                    value={editForm.name}
-                    onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))}
-                    required
-                    className="jf-input mt-1"
-                  />
-                </label>
-                <label className="block text-sm font-medium">
-                  {t("prod.price")}
-                  <input
-                    value={editForm.price}
-                    onChange={(e) => setEditForm((f) => ({ ...f, price: e.target.value }))}
-                    required
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    className="jf-input mt-1"
-                  />
-                </label>
-                <label className="block text-sm font-medium">
-                  {t("prod.stock")}
-                  <input
-                    value={editForm.stock}
-                    onChange={(e) => setEditForm((f) => ({ ...f, stock: e.target.value }))}
-                    type="number"
-                    min="0"
-                    className="jf-input mt-1"
-                  />
-                </label>
-                <label className="block text-sm font-medium">
-                  {t("prod.type")}
-                  <select
-                    value={editForm.type}
-                    onChange={(e) => setEditForm((f) => ({ ...f, type: e.target.value }))}
-                    className="jf-input mt-1"
+
+              {/* tabs */}
+              <div className="mt-4 flex flex-wrap gap-1 border-b border-[var(--jf-border)]">
+                {(
+                  [
+                    ["general", t("prod.general")],
+                    ["subscription", t("prod.subscriptionTab")],
+                    ["inventory", t("prod.inventory")],
+                    ["media", t("prod.media")],
+                  ] as const
+                ).map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setEditTab(key)}
+                    className={`rounded-t-lg px-4 py-2 text-sm font-medium ${
+                      editTab === key
+                        ? "border border-b-0 border-[var(--jf-border)] text-[var(--jf-primary)]"
+                        : "text-[var(--jf-muted)] hover:text-[var(--jf-primary)]"
+                    }`}
                   >
-                    <option value="one_time">{t("prod.oneTime")}</option>
-                    <option value="subscription">{t("prod.subscription")}</option>
-                  </select>
-                </label>
-                {editForm.type === "subscription" && (
-                  <label className="block text-sm font-medium">
-                    {t("prod.billingPeriod")}
-                    <select
-                      value={editForm.period}
-                      onChange={(e) => setEditForm((f) => ({ ...f, period: e.target.value }))}
-                      className="jf-input mt-1"
-                    >
-                      <option value="month">{t("prod.monthly")}</option>
-                      <option value="year">{t("prod.yearly")}</option>
-                    </select>
-                  </label>
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              {savedFlash && (
+                <p className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
+                  {savedFlash}
+                </p>
+              )}
+
+              <form onSubmit={saveEdit} className="mt-5 space-y-4">
+                {editTab === "general" && (
+                  <>
+                    <label className="block text-sm font-medium">
+                      {t("prod.name")}
+                      <input
+                        value={editForm.name}
+                        onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))}
+                        required
+                        className="jf-input mt-1"
+                      />
+                    </label>
+                    <label className="block text-sm font-medium">
+                      {t("prod.description")}
+                      <textarea
+                        value={editForm.description}
+                        onChange={(e) => setEditForm((f) => ({ ...f, description: e.target.value }))}
+                        rows={4}
+                        placeholder={t("prod.descriptionPh")}
+                        className="jf-input mt-1 resize-y"
+                      />
+                    </label>
+                    <label className="block text-sm font-medium">
+                      {t("prod.price")}
+                      <input
+                        value={editForm.price}
+                        onChange={(e) => setEditForm((f) => ({ ...f, price: e.target.value }))}
+                        required
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        className="jf-input mt-1"
+                      />
+                    </label>
+                    <label className="block text-sm font-medium">
+                      {t("prod.type")}
+                      <select
+                        value={editForm.type}
+                        onChange={(e) => setEditForm((f) => ({ ...f, type: e.target.value }))}
+                        className="jf-input mt-1"
+                      >
+                        <option value="one_time">{t("prod.oneTime")}</option>
+                        <option value="subscription">{t("prod.subscription")}</option>
+                      </select>
+                    </label>
+                  </>
                 )}
-                <label className="flex items-center gap-2 text-sm font-medium">
-                  <input
-                    type="checkbox"
-                    checked={editForm.active}
-                    onChange={(e) => setEditForm((f) => ({ ...f, active: e.target.checked }))}
-                    className="h-4 w-4 accent-[var(--jf-primary)]"
-                  />
-                  {t("prod.active")}
-                </label>
+
+                {editTab === "subscription" && (
+                  <>
+                    {editForm.type !== "subscription" ? (
+                      <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                        {t("prod.general")}:{" "}
+                        <button
+                          type="button"
+                          className="font-medium text-[var(--jf-primary)] underline"
+                          onClick={() => setEditTab("general")}
+                        >
+                          {t("prod.subscription")}
+                        </button>
+                      </p>
+                    ) : (
+                      <>
+                        <label className="block text-sm font-medium">
+                          {t("prod.billingPeriod")}
+                          <select
+                            value={editForm.period}
+                            onChange={(e) => setEditForm((f) => ({ ...f, period: e.target.value }))}
+                            className="jf-input mt-1"
+                          >
+                            <option value="month">{t("prod.monthly")}</option>
+                            <option value="year">{t("prod.yearly")}</option>
+                          </select>
+                        </label>
+                        <label className="block text-sm font-medium">
+                          {t("prod.trial")}
+                          <input
+                            value={editForm.trial}
+                            onChange={(e) => setEditForm((f) => ({ ...f, trial: e.target.value }))}
+                            type="number"
+                            min="0"
+                            step="1"
+                            className="jf-input mt-1"
+                          />
+                          <span className="mt-1 block text-xs text-[var(--jf-muted)]">
+                            {t("prod.trialHint")}
+                          </span>
+                        </label>
+                      </>
+                    )}
+                  </>
+                )}
+
+                {editTab === "inventory" && (
+                  <>
+                    <label className="block text-sm font-medium">
+                      {t("prod.stock")}
+                      <input
+                        value={editForm.stock}
+                        onChange={(e) => setEditForm((f) => ({ ...f, stock: e.target.value }))}
+                        type="number"
+                        min="0"
+                        className="jf-input mt-1"
+                      />
+                      <span className="mt-1 block text-xs text-[var(--jf-muted)]">
+                        {t("prod.noStockNote")}
+                      </span>
+                    </label>
+                    {typeof editing.stock === "number" && editing.stock === 0 && (
+                      <p className="rounded-lg bg-red-50 px-3 py-2 text-xs font-medium text-red-600">
+                        {t("prod.soldOut")} — set a stock above to reinstate it.
+                      </p>
+                    )}
+                  </>
+                )}
+
+                {editTab === "media" && (
+                  <>
+                    <div className="block text-sm font-medium">
+                      <div className="mb-2">{t("prod.images")}</div>
+                      <div className="flex flex-wrap gap-3">
+                        {editForm.images.map((url, i) => (
+                          <div key={`${i}-${url}`} className="group relative">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={url}
+                              alt={t("prod.images")}
+                              className="h-24 w-24 rounded-lg border border-[var(--jf-border)] object-cover"
+                            />
+                            <div className="absolute -top-2 -right-2 flex gap-1">
+                              <button
+                                type="button"
+                                onClick={() => moveImage(i, -1)}
+                                disabled={i === 0}
+                                className="rounded-full bg-white px-1.5 text-xs shadow ring-1 ring-slate-200 disabled:opacity-30"
+                                title={t("prod.moveUp")}
+                              >
+                                ↑
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => moveImage(i, 1)}
+                                disabled={i === editForm.images.length - 1}
+                                className="rounded-full bg-white px-1.5 text-xs shadow ring-1 ring-slate-200 disabled:opacity-30"
+                                title={t("prod.moveDown")}
+                              >
+                                ↓
+                              </button>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setEditForm((f) => ({
+                                  ...f,
+                                  images: f.images.filter((_, k) => k !== i),
+                                }))
+                              }
+                              className="absolute bottom-1 left-1/2 -translate-x-1/2 rounded bg-black/60 px-2 py-0.5 text-[10px] text-white opacity-0 transition group-hover:opacity-100"
+                            >
+                              {t("prod.removeImage")}
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                      <label className="mt-3 inline-flex cursor-pointer items-center gap-2 rounded-lg border border-dashed border-[var(--jf-border)] px-4 py-2 text-sm text-[var(--jf-muted)] hover:border-[var(--jf-primary)] hover:text-[var(--jf-primary)]">
+                        {uploadingImg ? t("prod.uploading") : t("prod.addImage")}
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp,image/gif"
+                          className="hidden"
+                          disabled={uploadingImg}
+                          onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            e.target.value = "";
+                            if (f) uploadImage(f);
+                          }}
+                        />
+                      </label>
+                      <span className="mt-2 block text-xs text-[var(--jf-muted)]">
+                        {t("prod.imagesNote")}
+                      </span>
+                    </div>
+                  </>
+                )}
+
                 {drawerError && (
                   <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">{drawerError}</p>
                 )}
+
+                {/* status / visibility */}
+                <div className="rounded-lg border border-[var(--jf-border)] p-3">
+                  <div className="mb-1 text-sm font-medium">{t("prod.status")}</div>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={editForm.active}
+                      onChange={(e) => setEditForm((f) => ({ ...f, active: e.target.checked }))}
+                      className="h-4 w-4 accent-[var(--jf-primary)]"
+                    />
+                    {t("prod.active")}
+                  </label>
+                  {!editForm.active && (
+                    <p className="mt-1 text-xs text-amber-600">{t("prod.inactiveNote")}</p>
+                  )}
+                  <p className="mt-2 text-xs text-[var(--jf-muted)]">{t("prod.activeHint")}</p>
+                </div>
+
                 <div className="flex items-center gap-2 pt-2">
                   <button type="submit" disabled={drawerBusy} className="jf-btn-primary disabled:opacity-50">
                     {drawerBusy ? t("builder.saving") : t("set.save")}
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => setEditing(null)}
-                    className="jf-btn-ghost"
-                  >
-                    {t("prof.twoFaClose")}
+                  <button type="button" onClick={closeEditor} className="jf-btn-ghost">
+                    {t("prod.cancel")}
                   </button>
                 </div>
               </form>

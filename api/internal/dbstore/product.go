@@ -40,10 +40,11 @@ const productSelect = `SELECT id, account_id, name, COALESCE(description,''), pr
 // Create inserts a product.
 func (s *ProductStore) Create(ctx context.Context, p *Product) error {
 	return s.pool.QueryRow(ctx,
-		`INSERT INTO products (account_id, name, description, price_sen, type, billing_period, trial_days)
-		 VALUES ($1,$2,$3,$4,$5,NULLIF($6,''),$7)
+		`INSERT INTO products (account_id, name, description, price_sen, type, billing_period, trial_days, stock, images)
+		 VALUES ($1,$2,$3,$4,$5,NULLIF($6,''),$7,$8,COALESCE($9::jsonb,'[]'::jsonb))
 		 RETURNING id, created_at, updated_at`,
-		p.AccountID, p.Name, p.Description, p.PriceSen, p.Type, p.BillingPeriod, p.TrialDays,
+		p.AccountID, p.Name, p.Description, p.PriceSen, p.Type, p.BillingPeriod,
+		p.TrialDays, p.Stock, p.Images,
 	).Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt)
 }
 
@@ -188,22 +189,36 @@ func (s *ProductStore) DecrementStock(ctx context.Context, productID string, qty
 // ErrOutOfStock rejects submissions past available inventory.
 var ErrOutOfStock = errors.New("produk telah habis (out of stock)")
 
-// Update modifies a product's name/price/stock/type/billing_period/activity
-// (nil = unchanged). When type is set to one_time, billing_period is forced
-// NULL (a one-time product can't carry a period); when type is subscription a
-// caller-supplied billing_period is applied, otherwise the stored one is kept.
-// Money stays integer sen.
-func (s *ProductStore) Update(ctx context.Context, accountID, productID string, name *string, priceSen *int64, stock *int, active *bool, typ *string, billingPeriod *string) error {
-	_, err := s.pool.Exec(ctx,
+// Update modifies a product's editable fields (nil = unchanged).
+// Fields covered: name, description, price_sen, images[], stock, active, type,
+// billing_period, trial_days. Money stays integer sen. When type is set to
+// one_time, billing_period is forced NULL (a one-time product can't carry a
+// period); when type is subscription a caller-supplied billing_period is
+// applied, otherwise the stored one is kept. images == nil leaves the stored
+// images untouched; a non-nil (possibly empty) slice replaces them wholesale.
+func (s *ProductStore) Update(ctx context.Context, accountID, productID string,
+	name, description *string, priceSen *int64, images *[]string, stock *int,
+	active *bool, typ, billingPeriod *string, trialDays *int) error {
+	tag, err := s.pool.Exec(ctx,
 		`UPDATE products SET
 		   name = COALESCE($3, name),
-		   price_sen = COALESCE($4, price_sen),
-		   stock = CASE WHEN $5::boolean THEN $6 ELSE stock END,
-		   type = COALESCE($7, type),
-		   billing_period = CASE WHEN COALESCE($7, type) = 'one_time' THEN NULL ELSE COALESCE($8, billing_period) END,
-		   active = COALESCE($9, active),
+		   description = COALESCE($4, description),
+		   price_sen = COALESCE($5, price_sen),
+		   images = CASE WHEN $6::boolean THEN $7::jsonb ELSE images END,
+		   stock = CASE WHEN $8::boolean THEN $9 ELSE stock END,
+		   type = COALESCE($10, type),
+		   billing_period = CASE WHEN COALESCE($10, type) = 'one_time' THEN NULL ELSE COALESCE($11, billing_period) END,
+		   trial_days = COALESCE($12, trial_days),
+		   active = COALESCE($13, active),
 		   updated_at = now()
 		 WHERE id=$2 AND account_id=$1`,
-		accountID, productID, name, priceSen, stock != nil, stock, typ, billingPeriod, active)
-	return err
+		accountID, productID, name, description, priceSen, images != nil, images,
+		stock != nil, stock, typ, billingPeriod, trialDays, active)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrProductNotFound
+	}
+	return nil
 }

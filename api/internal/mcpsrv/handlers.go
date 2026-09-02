@@ -14,12 +14,16 @@ import (
 // ─── Products ────────────────────────────────────────────────────────────────
 
 type productOut struct {
-	ID            string `json:"id"`
-	Name          string `json:"name"`
-	PriceSen      int64  `json:"price_sen"`
-	Type          string `json:"type"`
-	BillingPeriod string `json:"billing_period,omitempty"`
-	Active        bool   `json:"active"`
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	Description   string   `json:"description,omitempty"`
+	PriceSen      int64    `json:"price_sen"`
+	Images        []string `json:"images,omitempty"`
+	Type          string   `json:"type"`
+	BillingPeriod string   `json:"billing_period,omitempty"`
+	TrialDays     int      `json:"trial_days"`
+	Active        bool     `json:"active"`
+	Stock         *int     `json:"stock,omitempty"`
 }
 
 type emptyIn struct{}
@@ -36,19 +40,23 @@ func (s *Server) listProducts(ctx context.Context, _ *mcp.CallToolRequest, _ emp
 	out := make([]productOut, 0, len(products))
 	for _, p := range products {
 		out = append(out, productOut{
-			ID: p.ID, Name: p.Name, PriceSen: p.PriceSen,
-			Type: p.Type, BillingPeriod: p.BillingPeriod, Active: p.Active,
+			ID: p.ID, Name: p.Name, Description: p.Description, PriceSen: p.PriceSen,
+			Images: p.Images, Type: p.Type, BillingPeriod: p.BillingPeriod,
+			TrialDays: p.TrialDays, Active: p.Active, Stock: p.Stock,
 		})
 	}
 	return nil, out, nil
 }
 
 type createProductIn struct {
-	Name          string `json:"name" jsonschema:"nama produk"`
-	PriceSen      int64  `json:"price_sen" jsonschema:"harga dalam SEN (RM25.00 = 2500)"`
-	Type          string `json:"type" jsonschema:"one_time atau subscription"`
-	BillingPeriod string `json:"billing_period,omitempty" jsonschema:"month atau year (subscription sahaja)"`
-	TrialDays     int    `json:"trial_days,omitempty" jsonschema:"hari percubaan (subscription)"`
+	Name          string   `json:"name" jsonschema:"nama produk"`
+	Description   string   `json:"description,omitempty" jsonschema:"penerangan produk"`
+	PriceSen      int64    `json:"price_sen" jsonschema:"harga dalam SEN (RM25.00 = 2500)"`
+	Type          string   `json:"type" jsonschema:"one_time atau subscription"`
+	BillingPeriod string   `json:"billing_period,omitempty" jsonschema:"month atau year (subscription sahaja)"`
+	TrialDays     int      `json:"trial_days,omitempty" jsonschema:"hari percubaan (subscription)"`
+	Stock         *int     `json:"stock,omitempty" jsonschema:"stok (omit = unlimited)"`
+	Images        []string `json:"images,omitempty" jsonschema:"gambar (URL)"`
 }
 
 func (s *Server) createProduct(ctx context.Context, _ *mcp.CallToolRequest, in createProductIn) (*mcp.CallToolResult, productOut, error) {
@@ -74,13 +82,18 @@ func (s *Server) createProduct(ctx context.Context, _ *mcp.CallToolRequest, in c
 		}
 	}
 	p := &dbstore.Product{
-		AccountID: accountID, Name: in.Name, PriceSen: in.PriceSen,
-		Type: pType, BillingPeriod: period, TrialDays: in.TrialDays, Active: true,
+		AccountID: accountID, Name: in.Name, Description: in.Description,
+		PriceSen: in.PriceSen, Images: in.Images, Type: pType,
+		BillingPeriod: period, TrialDays: in.TrialDays, Active: true,
+		Stock: in.Stock,
 	}
 	if err := s.deps.Products.Create(ctx, p); err != nil {
 		return nil, productOut{}, fmt.Errorf("db: %w", err)
 	}
-	return nil, productOut{ID: p.ID, Name: p.Name, PriceSen: p.PriceSen, Type: p.Type, BillingPeriod: p.BillingPeriod, Active: true}, nil
+	return nil, productOut{ID: p.ID, Name: p.Name, Description: p.Description,
+		Images: p.Images, PriceSen: p.PriceSen, Type: p.Type,
+		BillingPeriod: p.BillingPeriod, TrialDays: p.TrialDays, Active: true,
+		Stock: p.Stock}, nil
 }
 
 type archiveProductIn struct {
