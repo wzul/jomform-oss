@@ -92,6 +92,12 @@ export default function Landing() {
           <p className="mt-4 break-all rounded-xl bg-slate-900 p-4 font-mono text-[12px] text-emerald-300">
             {t("land.mcpsnippet")}
           </p>
+          <a
+            href="/mcp"
+            className="mt-5 inline-block rounded-lg bg-[var(--jf-primary)] px-4 py-2 text-sm font-medium text-white hover:opacity-90"
+          >
+            {t("land.mcpguide")}
+          </a>
         </div>
       </section>
 
