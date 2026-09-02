@@ -119,6 +119,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 	mux.HandleFunc("GET /readyz", s.handleReady)
 	mux.HandleFunc("GET /version", s.handleVersion)
+	// Issue #142: serve the JomForm brand icon as the MCP host favicon so
+	// Claude Desktop shows a real icon for the connector.
+	mux.HandleFunc("GET /favicon.ico", s.handleFaviconICO)
+	mux.HandleFunc("GET /icon.svg", s.handleIconSVG)
+	mux.HandleFunc("GET /icon-192.png", s.handleIconPNG)
 	// Issue #100: Prometheus scrape endpoint. Exposed on the same listener;
 	// ops can restrict it at the edge (Cloudflare/nginx) if needed.
 	mux.Handle("GET /metrics", s.metrics.Handler())
