@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useI18n, LangToggle } from "./i18n";
@@ -23,6 +23,38 @@ export function Shell({
   const [menuOpen, setMenuOpen] = useState(false);
   const { t } = useI18n();
   const router = useRouter();
+  const drawerRef = useRef<HTMLDivElement>(null);
+  const closeBtnRef = useRef<HTMLButtonElement>(null);
+
+  // Issue #104: mobile drawer keyboard + focus management. When the drawer
+  // opens, move focus to the close button; trap Tab inside the drawer; close
+  // on Escape. Prevents a focus trap and keeps keyboard users oriented.
+  useEffect(() => {
+    if (!menuOpen) return;
+    closeBtnRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setMenuOpen(false);
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const focusables = drawerRef.current?.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), select, input, textarea, [tabindex]:not([tabindex="-1"])',
+      );
+      if (!focusables || focusables.length === 0) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [menuOpen]);
 
   useEffect(() => {
     const sp = Array.isArray(spaces) ? spaces : [];
@@ -64,6 +96,13 @@ export function Shell({
 
   return (
     <div className="flex min-h-screen">
+      {/* Issue #104: skip-to-content link for keyboard / screen-reader users. */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-[#5e6ad2] focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-white"
+      >
+        Skip to content
+      </a>
       {/* sidebar */}
       <aside className="sticky top-0 hidden h-screen w-56 shrink-0 self-start flex-col border-r border-[var(--jf-border)] bg-white md:flex">
         <div className="flex items-center gap-2 px-5 py-4">
@@ -79,6 +118,7 @@ export function Shell({
             <Link
               key={n.key}
               href={n.href}
+              aria-current={active === n.key ? "page" : undefined}
               className={`flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors ${
                 active === n.key
                   ? "bg-indigo-50 font-medium text-[var(--jf-primary)]"
@@ -144,6 +184,10 @@ export function Shell({
           <div className="fixed inset-0 z-40 md:hidden" onClick={() => setMenuOpen(false)}>
             <div className="absolute inset-0 bg-black/30" />
             <div
+              ref={drawerRef}
+              role="dialog"
+              aria-modal="true"
+              aria-label="Navigation menu"
               className="absolute left-0 top-0 h-full w-64 bg-white shadow-xl"
               onClick={(e) => e.stopPropagation()}
             >
@@ -152,6 +196,7 @@ export function Shell({
                   Jom<span className="text-[var(--jf-primary)]">Form</span>
                 </span>
                 <button
+                  ref={closeBtnRef}
                   onClick={() => setMenuOpen(false)}
                   aria-label="Close menu"
                   className="rounded-md p-1 text-[var(--jf-muted)] hover:bg-slate-50"
@@ -196,7 +241,7 @@ export function Shell({
           </div>
         )}
 
-        <div className="flex flex-1 flex-col">{children}</div>
+        <div id="main-content" className="flex flex-1 flex-col">{children}</div>
       </div>
     </div>
   );

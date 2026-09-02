@@ -290,8 +290,8 @@ export default function Login() {
                   }}
                   className={`rounded-md py-1.5 text-[13px] font-medium transition-colors ${
                     mode === m
-                      ? "bg-[#5e6ad2]/20 text-[var(--jf-primary)] shadow-[inset_0_0_0_1px_rgba(113,112,255,0.35)]"
-                      : "text-[var(--jf-muted)] hover:text-[#d0d6e0]"
+                      ? "bg-[#5e6ad2]/20 text-[#4338ca] shadow-[inset_0_0_0_1px_rgba(113,112,255,0.35)]"
+                      : "text-slate-600 hover:text-slate-800"
                   }`}
                 >
                   {m === "login" ? "Log Masuk" : "Daftar"}
@@ -303,14 +303,14 @@ export default function Login() {
           {/* Error banner — only ever a genuine failure (wrong code, wrong
               credentials). NOT used as an instruction banner. */}
           {error && (
-            <p className="mb-4 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-[13px] text-red-300">
+            <p role="alert" className="mb-4 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-[13px] text-red-700">
               {error}
             </p>
           )}
 
           {done ? (
             <div className="space-y-3">
-              <div className="rounded-lg border border-green-500/20 bg-green-500/10 px-3 py-3 text-[13px] text-green-300">
+              <div className="rounded-lg border border-green-500/20 bg-green-500/10 px-3 py-3 text-[13px] text-green-700">
                 {mode === "register"
                   ? "Akaun anda telah dicipta! Sila sahkan alamat emel anda melalui pautan yang kami hantar untuk mengaktifkan log masuk."
                   : mode === "forgot"

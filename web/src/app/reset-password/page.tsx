@@ -72,11 +72,11 @@ function ResetForm() {
             </Link>
           </div>
         ) : !token ? (
-          <p className="text-sm text-red-300">{t("reset.invalid")}</p>
+          <p className="text-sm text-red-600">{t("reset.invalid")}</p>
         ) : (
           <form onSubmit={submit} className="space-y-3">
             {error && (
-              <p className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-[13px] text-red-300">{error}</p>
+              <p className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-[13px] text-red-700">{error}</p>
             )}
             <div>
               <label className="mb-1 block text-xs font-medium text-[var(--jf-muted)]">{t("reset.newPw")}</label>

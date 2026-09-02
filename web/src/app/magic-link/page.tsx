@@ -59,7 +59,7 @@ function MagicLinkForm() {
       <div className="rounded-xl border border-[var(--jf-border)] bg-white p-6 shadow-[0_0_0_1px_rgba(0,0,0,0.2),0_8px_24px_rgba(0,0,0,0.4)]">
         {state === "invalid" ? (
           <div className="space-y-3">
-            <p className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-3 text-[13px] text-red-300">
+            <p className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-3 text-[13px] text-red-700">
               {t("magic.invalid")}
             </p>
             <Link

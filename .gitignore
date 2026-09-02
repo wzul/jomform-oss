@@ -16,6 +16,11 @@ out/
 e2e/test-results/
 e2e/playwright-report/
 e2e/blob-report/
+# Playwright (issue #104 a11y scan)
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
 
 # Env & secrets
 .env

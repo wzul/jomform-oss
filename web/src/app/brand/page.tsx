@@ -44,7 +44,7 @@ export default function BrandPage() {
   return (
     <main className="mx-auto max-w-3xl px-6 py-12">
       <h1 className="text-3xl font-bold">Brand assets</h1>
-      <p className="mt-2 text-sm text-slate-500">
+      <p className="mt-2 text-sm text-slate-600">
         Logos and colors for JomForm — free to use when referring to the product.
         Please don&apos;t modify the mark or use it as your own logo.
       </p>
@@ -56,7 +56,7 @@ export default function BrandPage() {
           <Image src="/brand/icon-512.png" alt="JomForm logo" width={160} height={160} className="rounded-2xl" />
           <div className="space-y-2 text-sm">
             <p><strong>JF</strong> monogram on a white form sheet, indigo→violet gradient tile.</p>
-            <p className="text-slate-400">Rounded-square, safe area = 12% of width.</p>
+            <p className="text-slate-500">Rounded-square, safe area = 12% of width.</p>
           </div>
         </div>
       </section>
@@ -67,7 +67,7 @@ export default function BrandPage() {
           <li key={a.file} className="flex items-center justify-between gap-3 rounded-lg border border-[var(--jf-border)] px-4 py-2.5">
             <div className="min-w-0">
               <p className="truncate text-sm font-medium">{a.label}</p>
-              <p className="text-[11px] text-slate-400">{a.note}</p>
+              <p className="text-[11px] text-slate-600">{a.note}</p>
             </div>
             <div className="flex shrink-0 items-center gap-2">
               <CopyBtn text={`${BASE}/brand/${a.file}`} label="Copy URL" />
@@ -83,7 +83,7 @@ export default function BrandPage() {
           <div key={c.hex} className="rounded-lg border border-[var(--jf-border)] p-3">
             <div className="h-12 w-full rounded-md" style={{ background: c.hex }} />
             <p className="mt-2 text-xs font-medium">{c.name}</p>
-            <p className="font-mono text-[11px] text-slate-400">{c.hex}</p>
+            <p className="font-mono text-[11px] text-slate-600">{c.hex}</p>
           </div>
         ))}
       </div>
@@ -99,7 +99,7 @@ export default function BrandPage() {
         <li>Don&apos;t rotate, recolor, add effects, or rearrange the monogram.</li>
       </ul>
 
-      <p className="mt-8 text-xs text-slate-400">
+      <p className="mt-8 text-xs text-slate-600">
         Questions or custom sizes? Email contact@jomform.com.
       </p>
     </main>
