@@ -24,6 +24,7 @@ type SaleRow = {
   payment_method: string;
   buyer: string;
   created_at: string;
+  email_status?: string;
 };
 type SalesPage = { items: SaleRow[]; page: number; limit: number; total: number };
 type FormStats = {
@@ -165,6 +166,24 @@ export default function Dashboard() {
       cancelled: "bg-slate-100 text-slate-500 border-slate-200",
     })[s] || "";
 
+  // issue #106: per-sale receipt email status label + badge colour.
+  const emailLabel = (s?: string) =>
+    ({
+      delivered: t("dash.emailDelivered"),
+      open: t("dash.emailOpened"),
+      click: t("dash.emailClicked"),
+      bounce: t("dash.emailBounced"),
+      complaint: t("dash.emailComplaint"),
+    })[s || ""] || (s ? s : t("dash.emailNotSent"));
+  const emailBadge = (s?: string) =>
+    ({
+      open: "bg-emerald-50 text-emerald-700 border-emerald-200",
+      click: "bg-emerald-50 text-emerald-700 border-emerald-200",
+      delivered: "bg-blue-50 text-blue-700 border-blue-200",
+      bounce: "bg-red-50 text-red-700 border-red-200",
+      complaint: "bg-red-50 text-red-700 border-red-200",
+    })[s || ""] || "bg-slate-100 text-slate-500 border-slate-200";
+
   return (
     <Shell active="dashboard">
       <div className="w-full flex-1 px-6 py-8">
@@ -277,6 +296,10 @@ export default function Dashboard() {
               </a>
             </div>
           </div>
+          {/* issue #106: honest privacy note about the open-tracking pixel. */}
+          <p className="border-b border-[var(--jf-border)] px-5 py-2 text-[11px] text-[var(--jf-muted)]">
+            {t("dash.emailStatusNote")}
+          </p>
           {/* mobile: stacked cards (no table scroll needed) */}
           <ul className="divide-y divide-[var(--jf-border)] md:hidden">
             {sales.map((s) => (
@@ -286,6 +309,9 @@ export default function Dashboard() {
                   <p className="mt-0.5 truncate text-sm font-medium">{s.buyer || "—"}</p>
                   <span className={`mt-1 inline-block rounded-full border px-2 py-0.5 text-[10px] font-medium ${badge(s.status)}`}>
                     {s.status}
+                  </span>
+                  <span className={`ml-1 inline-block rounded-full border px-2 py-0.5 text-[10px] font-medium ${emailBadge(s.email_status)}`}>
+                    {emailLabel(s.email_status)}
                   </span>
                 </div>
                 <div className="flex shrink-0 flex-col items-end gap-1.5">
@@ -312,6 +338,7 @@ export default function Dashboard() {
                   <th className="px-5 py-2.5 font-medium">{t("dash.buyer")}</th>
                   <th className="px-5 py-2.5 font-medium">{t("dash.amount")}</th>
                   <th className="px-5 py-2.5 font-medium">{t("dash.status")}</th>
+                  <th className="px-5 py-2.5 font-medium">{t("dash.email")}</th>
                   <th className="px-5 py-2.5" />
                 </tr>
               </thead>
@@ -326,6 +353,11 @@ export default function Dashboard() {
                         {s.status}
                       </span>
                     </td>
+                    <td className="px-5 py-3">
+                      <span className={`whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${emailBadge(s.email_status)}`}>
+                        {emailLabel(s.email_status)}
+                      </span>
+                    </td>
                     <td className="px-5 py-3 text-right">
                       {s.status === "paid" && (
                         <button onClick={() => confirmSale(s.ref_code)} className="whitespace-nowrap text-xs font-medium text-[var(--jf-primary)] hover:underline">
@@ -337,7 +369,7 @@ export default function Dashboard() {
                 ))}
                 {sales.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="px-5 py-10 text-center text-sm text-[var(--jf-muted)]">
+                    <td colSpan={6} className="px-5 py-10 text-center text-sm text-[var(--jf-muted)]">
                       {t("dash.emptySales")}
                     </td>
                   </tr>

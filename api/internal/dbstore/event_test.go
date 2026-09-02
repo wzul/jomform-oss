@@ -160,6 +160,97 @@ func TestEventStoreSweep(t *testing.T) {
 	}
 }
 
+// TestEmailDeliveryEventStoreSaleRefCorrelation (issue #106): Record with a
+// sale_ref, ListBySaleRef returns only that sale's events, and
+// LatestBySaleRefs returns the most recent event per ref.
+func TestEmailDeliveryEventStoreSaleRefCorrelation(t *testing.T) {
+	ctx := context.Background()
+	p := testPool(t)
+	es := NewEmailDeliveryEventStore(p)
+
+	refA := "JF-A-" + randSuffix()
+	refB := "JF-B-" + randSuffix()
+	email := "corr-" + randSuffix() + "@example.com"
+
+	if err := es.Record(ctx, "", email, "delivered", "", refA, nil); err != nil {
+		t.Fatalf("record delivered: %v", err)
+	}
+	if err := es.Record(ctx, "", email, "open", "", refA, map[string]any{"ipAddress": "203.0.113.1"}); err != nil {
+		t.Fatalf("record open: %v", err)
+	}
+	if err := es.Record(ctx, "", email, "delivered", "", refB, nil); err != nil {
+		t.Fatalf("record delivered B: %v", err)
+	}
+
+	// ListBySaleRef returns only refA's events, oldest first.
+	got, err := es.ListBySaleRef(ctx, refA)
+	if err != nil {
+		t.Fatalf("list by sale ref: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("refA events = %d, want 2", len(got))
+	}
+	if got[0].EventType != "delivered" || got[1].EventType != "open" {
+		t.Fatalf("refA order = %s,%s want delivered,open", got[0].EventType, got[1].EventType)
+	}
+	for _, e := range got {
+		if e.SaleRef != refA {
+			t.Fatalf("event sale_ref = %q, want %q", e.SaleRef, refA)
+		}
+	}
+
+	// LatestBySaleRefs returns the most recent event per ref.
+	latest, err := es.LatestBySaleRefs(ctx, []string{refA, refB})
+	if err != nil {
+		t.Fatalf("latest by refs: %v", err)
+	}
+	if latest[refA].EventType != "open" {
+		t.Fatalf("latest[refA] = %s, want open", latest[refA].EventType)
+	}
+	if latest[refB].EventType != "delivered" {
+		t.Fatalf("latest[refB] = %s, want delivered", latest[refB].EventType)
+	}
+}
+
+// TestSaleStoreReceiptMessageID (issue #106): SetReceiptMessageID persists the
+// SES MessageID and ByReceiptMessageID resolves it back to the sale.
+func TestSaleStoreReceiptMessageID(t *testing.T) {
+	ctx := context.Background()
+	p := testPool(t)
+	ss := NewSaleStore(p)
+
+	acc := uniqueAccount(t, ctx, p)
+	ref := "JF-R-" + randSuffix()
+	sale := &Sale{
+		AccountID: acc, RefCode: ref,
+		Client: SaleClient{FullName: "Buyer", Email: "r@example.test"},
+		Items:  []SaleItem{{ProductID: "p1", Name: "Tee", PriceSen: 1000, Qty: 1}},
+		TotalSen: 1000, SaleType: SaleTypeOneTime, PaymentMethod: "chip", Status: SalePaid,
+	}
+	if err := ss.Create(ctx, sale); err != nil {
+		t.Fatalf("create sale: %v", err)
+	}
+
+	messageID := "msg-" + randSuffix()
+	if err := ss.SetReceiptMessageID(ctx, sale.ID, messageID); err != nil {
+		t.Fatalf("set receipt message id: %v", err)
+	}
+	byID, err := ss.ByID(ctx, sale.ID)
+	if err != nil {
+		t.Fatalf("by id: %v", err)
+	}
+	if byID.ReceiptMessageID != messageID {
+		t.Fatalf("receipt_message_id = %q, want %q", byID.ReceiptMessageID, messageID)
+	}
+	byMsg, err := ss.ByReceiptMessageID(ctx, messageID)
+	if err != nil {
+		t.Fatalf("by receipt message id: %v", err)
+	}
+	if byMsg.RefCode != ref {
+		t.Fatalf("by message id ref = %q, want %q", byMsg.RefCode, ref)
+	}
+}
+
 // TestEmailDeliveryEventStoreRecordListSweep exercises the SES delivery-event
 // store: Record → List → Sweep.
 //
@@ -184,11 +275,11 @@ func TestEmailDeliveryEventStoreRecordListSweep(t *testing.T) {
 	complaintEmail := "complaint-" + randSuffix() + "@example.com"
 
 	// System mail (no account) + account mail.
-	if err := es.Record(ctx, "", bounceEmail, "bounce", "Permanent", map[string]any{"bounceType": "Permanent"}); err != nil {
+	if err := es.Record(ctx, "", bounceEmail, "bounce", "Permanent", "", map[string]any{"bounceType": "Permanent"}); err != nil {
 		t.Fatalf("record bounce: %v", err)
 	}
 	acc := uniqueAccount(t, ctx, p)
-	if err := es.Record(ctx, acc, complaintEmail, "complaint", "", nil); err != nil {
+	if err := es.Record(ctx, acc, complaintEmail, "complaint", "", "", nil); err != nil {
 		t.Fatalf("record complaint: %v", err)
 	}
 

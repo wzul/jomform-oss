@@ -164,6 +164,7 @@ func (s *Service) ProcessCallback(ctx context.Context, p *chip.Purchase) error {
 				}
 			}
 			go s.SendSaleReceipt(ctx, SaleRef{
+				SaleID:       sale.ID,
 				RefCode:      sale.RefCode,
 				BuyerEmail:   sale.Client.Email,
 				BuyerName:    sale.Client.FullName,

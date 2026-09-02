@@ -67,6 +67,11 @@ func (s *Server) registerTools() {
 		Description: "Sahkan jualan (contoh: selepas semak bukti bank transfer).",
 	}, s.confirmSale)
 
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "get_sale_email_status",
+		Description: "Status emel resit untuk satu jualan: Sent → Delivered → Opened → (Clicked) dengan masa. Guna ref_code dari list_sales.",
+	}, s.saleEmailStatusMCP)
+
 	// ── Subscriptions ───────────────────────────────────────────────────────
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "cancel_subscription",

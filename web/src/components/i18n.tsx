@@ -94,6 +94,16 @@ const DICT = {
   "dash.gross": { en: "gross", ms: "kasar", zh: "总额", ta: "மொத்தம்", ar: "إجمالي" },
   "dash.noProdSales": { en: "No product sales yet.", ms: "Belum ada jualan produk.", zh: "暂无商品销售。", ta: "இன்னும் பொருள் விற்பனை இல்லை.", ar: "لا مبيعات منتجات بعد." },
   "dash.pageOf": { en: "page {page} of {total}", ms: "halaman {page} daripada {total}", zh: "第 {page} 页，共 {total} 页", ta: "பக்கம் {page} / {total}", ar: "صفحة {page} من {total}" },
+  // issue #106: per-sale receipt email status (Sent/Delivered/Opened/Clicked)
+  "dash.email": { en: "Email", ms: "Emel", zh: "邮件", ta: "மின்னஞ்சல்", ar: "البريد" },
+  "dash.emailSent": { en: "Sent", ms: "Dihantar", zh: "已发送", ta: "அனுப்பப்பட்டது", ar: "أُرسل" },
+  "dash.emailDelivered": { en: "Delivered", ms: "Dihantar", zh: "已送达", ta: "வழங்கப்பட்டது", ar: "تم التسليم" },
+  "dash.emailOpened": { en: "Opened", ms: "Dibuka", zh: "已打开", ta: "திறக்கப்பட்டது", ar: "تم الفتح" },
+  "dash.emailClicked": { en: "Clicked", ms: "Diklik", zh: "已点击", ta: "கிளிக் செய்யப்பட்டது", ar: "تم النقر" },
+  "dash.emailBounced": { en: "Bounced", ms: "Bounce", zh: "已退回", ta: "திரும்பியது", ar: "ارتد" },
+  "dash.emailComplaint": { en: "Complaint", ms: "Aduan", zh: "投诉", ta: "புகார்", ar: "شكوى" },
+  "dash.emailNotSent": { en: "Not sent", ms: "Belum dihantar", zh: "未发送", ta: "அனுப்பப்படவில்லை", ar: "لم يُرسل" },
+  "dash.emailStatusNote": { en: "Open tracking uses a tracking pixel in the receipt email. Only the open time is recorded — no other personal data.", ms: "Penjejakan buka menggunakan piksel penjejakan dalam emel resit. Hanya masa dibuka direkod — tiada data peribadi lain.", zh: "打开追踪使用收据邮件中的追踪像素。仅记录打开时间——不记录其他个人数据。", ta: "திறப்பு கண்காணிப்பு ரசீது மின்னஞ்சலில் கண்காணிப்பு பிக்சலைப் பயன்படுத்துகிறது. திறந்த நேரம் மட்டுமே பதிவு செய்யப்படுகிறது — வேறு தனிப்பட்ட தரவு இல்லை.", ar: "يستخدم تتبع الفتح بكسل تتبع في بريد الإيصال. يُسجل وقت الفتح فقط — لا توجد بيانات شخصية أخرى." },
   // common
   "common.exportCsv": { en: "Export CSV", ms: "Eksport CSV", zh: "导出 CSV", ta: "CSV ஏற்றுமதி", ar: "تصدير CSV" },
   "common.space": { en: "Space", ms: "Space", zh: "空间", ta: "இடம்", ar: "المساحة" },

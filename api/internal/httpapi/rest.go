@@ -45,6 +45,10 @@ type RESTHandlers struct {
 	// Events is the audit/behaviour log (issue #92). Nil in bare-mode tests;
 	// Record calls are no-ops when nil.
 	Events *dbstore.EventStore
+
+	// EmailDeliveryEvents is the SES delivery-event log (issue #92/#106). Nil
+	// in bare-mode tests; the per-sale email status view returns empty.
+	EmailDeliveryEvents *dbstore.EmailDeliveryEventStore
 }
 
 // RegisterRoutes wires REST endpoints.
@@ -113,6 +117,7 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /v1/rest/sales/{ref}/release", h.authed(h.releaseSale))
 	mux.Handle("POST /v1/rest/sales/bulk-capture", h.authed(h.bulkCaptureSales))
 	mux.Handle("GET /v1/rest/sales", h.authed(h.listSales))
+	mux.Handle("GET /v1/rest/sales/{ref}/email-status", h.authed(h.saleEmailStatus))
 	mux.Handle("GET /v1/rest/dashboard-bundle", h.authed(h.dashboardBundle))
 	mux.Handle("GET /v1/rest/analytics/forms", h.authed(h.formAnalytics))
 	mux.Handle("GET /v1/rest/analytics/products", h.authed(h.productAnalytics))

@@ -106,6 +106,9 @@ func main() {
 		events := dbstore.NewWebhookEventStore(pool)
 		products := dbstore.NewProductStore(pool)
 		keys := dbstore.NewAPIKeyStore(pool)
+		// Issue #106: SNS endpoint correlates Open/Click/Delivered to a sale
+		// via the receipt's SES MessageID.
+		deps.Sales = sales
 
 		formsStore := dbstore.NewFormStore(pool)
 		spacesStore := dbstore.NewSpaceStore(pool)
@@ -165,6 +168,8 @@ func main() {
 			Store:          store,
 			// Issue #92: audit/behaviour log.
 			Events: deps.Events,
+			// Issue #106: per-sale receipt email status (Sent/Delivered/Opened/Clicked).
+			EmailDeliveryEvents: deps.EmailDeliveryEvents,
 		}
 		pay.OnPaid = func(ctx context.Context, accountID, event string, payload map[string]any) {
 			httpapi.DispatchWebhooks(ctx, rest, whStore, accountID, event, payload)
@@ -178,7 +183,9 @@ func main() {
 			Webhooks:   dbstore.NewWebhookStore(pool),
 			Spaces:     spacesStore,
 			Events:     deps.Events, // issue #92: list_events tool
-			DecryptKey: decryptKey,
+			// Issue #106: per-sale receipt email status tool.
+			EmailDeliveryEvents: deps.EmailDeliveryEvents,
+			DecryptKey:          decryptKey,
 		}, chip.New(cfg.ChipAPIBaseURL), decryptKey, pay)
 		deps.MCP = mcpSrv
 

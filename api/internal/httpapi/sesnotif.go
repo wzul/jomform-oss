@@ -41,6 +41,10 @@ type sesSNSMessage struct {
 	} `json:"click,omitempty"`
 	Mail struct {
 		Destination []string `json:"destination"`
+		// MessageID is the SES message id of the original email (issue #106).
+		// Open/Click/Delivered events carry it; we use it to correlate the
+		// event back to the sale that sent the receipt.
+		MessageID string `json:"messageId"`
 	} `json:"mail"`
 }
 
@@ -60,18 +64,39 @@ type suppressionWriter struct {
 	Breaker      *email.Breaker
 	// Issue #92: SES delivery-event log (bounce/complaint). Nil → skip write.
 	EmailDeliveryEvents *dbstore.EmailDeliveryEventStore
+	// Issue #106: sale lookup by receipt MessageID, to correlate Open/Click/
+	// Delivered events to a specific sale. Nil → events recorded without a
+	// sale_ref.
+	Sales *dbstore.SaleStore
 }
 
 // recordDeliveryEvent appends a bounce/complaint row to email_delivery_events
-// (issue #92), in addition to the suppression write. Best-effort: a nil store
-// or a write error is logged, never fatal to the suppression path.
-func (sw *suppressionWriter) recordDeliveryEvent(ctx context.Context, email, eventType, bounceType string, detail map[string]any) {
+// (issue #92), in addition to the suppression write. saleRef is the sale's
+// ref_code this event correlates to (issue #106); empty → NULL. Best-effort: a
+// nil store or a write error is logged, never fatal to the suppression path.
+func (sw *suppressionWriter) recordDeliveryEvent(ctx context.Context, email, eventType, bounceType, saleRef string, detail map[string]any) {
 	if sw.EmailDeliveryEvents == nil {
 		return
 	}
-	if err := sw.EmailDeliveryEvents.Record(ctx, "", email, eventType, bounceType, detail); err != nil {
+	if err := sw.EmailDeliveryEvents.Record(ctx, "", email, eventType, bounceType, saleRef, detail); err != nil {
 		slog.Error("ses_delivery_event_record", "err", err, "email", email, "event", eventType)
 	}
+}
+
+// correlateSaleRef resolves the sale_ref for an SES event (issue #106). SES
+// Open/Click/Delivered events carry the original message's MessageID in
+// mail.messageId; we look up the sale whose receipt produced that message and
+// return its ref_code. Returns "" when the message id is absent or no sale
+// matches (system mail, or a receipt sent before this feature shipped).
+func (sw *suppressionWriter) correlateSaleRef(ctx context.Context, messageID string) string {
+	if messageID == "" || sw.Sales == nil {
+		return ""
+	}
+	sale, err := sw.Sales.ByReceiptMessageID(ctx, messageID)
+	if err != nil {
+		return ""
+	}
+	return sale.RefCode
 }
 
 // suppress persists a suppression for one address and flips its user row
@@ -104,6 +129,8 @@ func (s *Server) handleSESNotification(w http.ResponseWriter, r *http.Request) {
 	sw := &suppressionWriter{
 		Suppressions: s.deps.Suppressions, Users: s.deps.Users, Breaker: s.deps.Breaker,
 		EmailDeliveryEvents: s.deps.EmailDeliveryEvents,
+		// Issue #106: correlate Open/Click/Delivered to a sale via MessageID.
+		Sales: s.deps.Sales,
 	}
 	if sw.Suppressions == nil {
 		writeErr(w, http.StatusServiceUnavailable, "suppression store not configured")
@@ -183,7 +210,7 @@ func (sw *suppressionWriter) handleEvent(ctx context.Context, msg *sesSNSMessage
 		for _, rec := range msg.Bounce.BouncedRecipients {
 			// Issue #92: record the bounce into email_delivery_events (in
 			// addition to the suppression write below).
-			sw.recordDeliveryEvent(ctx, rec.EmailAddress, "bounce", msg.Bounce.BounceType, map[string]any{
+			sw.recordDeliveryEvent(ctx, rec.EmailAddress, "bounce", msg.Bounce.BounceType, "", map[string]any{
 				"bounceType": msg.Bounce.BounceType,
 			})
 			if !permanent {
@@ -202,7 +229,7 @@ func (sw *suppressionWriter) handleEvent(ctx context.Context, msg *sesSNSMessage
 		}
 		for _, rec := range msg.Complaint.ComplainedRecipients {
 			// Issue #92: record the complaint into email_delivery_events.
-			sw.recordDeliveryEvent(ctx, rec.EmailAddress, "complaint", "", nil)
+			sw.recordDeliveryEvent(ctx, rec.EmailAddress, "complaint", "", "", nil)
 			sw.suppress(ctx, rec.EmailAddress, "complaint", dbstore.SuppressionSourceComplaint, false)
 		}
 	case "Delivered":
@@ -210,8 +237,10 @@ func (sw *suppressionWriter) handleEvent(ctx context.Context, msg *sesSNSMessage
 		if msg.Delivery == nil {
 			return false
 		}
+		// Issue #106: correlate to the sale via the receipt's MessageID.
+		saleRef := sw.correlateSaleRef(ctx, msg.Mail.MessageID)
 		for _, addr := range msg.Delivery.Recipients {
-			sw.recordDeliveryEvent(ctx, addr, "delivered", "", nil)
+			sw.recordDeliveryEvent(ctx, addr, "delivered", "", saleRef, nil)
 		}
 	case "Open":
 		// Issue #93: informational — record open (+ user agent / IP), no
@@ -232,8 +261,10 @@ func (sw *suppressionWriter) handleEvent(ctx context.Context, msg *sesSNSMessage
 		if len(recipients) == 0 {
 			recipients = msg.Mail.Destination
 		}
+		// Issue #106: correlate to the sale via the receipt's MessageID.
+		saleRef := sw.correlateSaleRef(ctx, msg.Mail.MessageID)
 		for _, addr := range recipients {
-			sw.recordDeliveryEvent(ctx, addr, "open", "", detail)
+			sw.recordDeliveryEvent(ctx, addr, "open", "", saleRef, detail)
 		}
 	case "Click":
 		// Issue #93: informational — record click (+ link), no suppression/breaker.
@@ -250,8 +281,10 @@ func (sw *suppressionWriter) handleEvent(ctx context.Context, msg *sesSNSMessage
 		if len(recipients) == 0 {
 			recipients = msg.Mail.Destination
 		}
+		// Issue #106: correlate to the sale via the receipt's MessageID.
+		saleRef := sw.correlateSaleRef(ctx, msg.Mail.MessageID)
 		for _, addr := range recipients {
-			sw.recordDeliveryEvent(ctx, addr, "click", "", detail)
+			sw.recordDeliveryEvent(ctx, addr, "click", "", saleRef, detail)
 		}
 	default:
 		return false

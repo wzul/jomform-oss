@@ -59,6 +59,11 @@ type Sale struct {
 	Authorized  bool
 	CapturedAt  *time.Time
 
+	// ReceiptMessageID is the SES MessageID returned when the receipt email
+	// was accepted for sending (issue #106). It is the correlation key the SNS
+	// endpoint uses to tie an Open/Click/Delivered event back to this sale.
+	ReceiptMessageID string
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -72,7 +77,7 @@ func NewSaleStore(pool *pgxpool.Pool) *SaleStore { return &SaleStore{pool: pool}
 const saleSelect = `SELECT id, account_id, COALESCE(form_id::text,''), ref_code, client, items,
 	subtotal_sen, shipping_sen, discount_sen, total_sen, sale_type, payment_method, status,
 	COALESCE(chip_purchase_id,''), COALESCE(chip_checkout_url,''), COALESCE(invoice_no,''),
-	skip_capture, authorized, captured_at, created_at, updated_at
+	skip_capture, authorized, captured_at, COALESCE(receipt_message_id,''), created_at, updated_at
 	FROM sales`
 
 func scanSale(row pgx.Row) (*Sale, error) {
@@ -80,7 +85,7 @@ func scanSale(row pgx.Row) (*Sale, error) {
 	err := row.Scan(&s.ID, &s.AccountID, &s.FormID, &s.RefCode, &s.Client, &s.Items,
 		&s.SubtotalSen, &s.ShippingSen, &s.DiscountSen, &s.TotalSen, &s.SaleType, &s.PaymentMethod, &s.Status,
 		&s.ChipPurchaseID, &s.ChipCheckoutURL, &s.InvoiceNo,
-		&s.SkipCapture, &s.Authorized, &s.CapturedAt, &s.CreatedAt, &s.UpdatedAt)
+		&s.SkipCapture, &s.Authorized, &s.CapturedAt, &s.ReceiptMessageID, &s.CreatedAt, &s.UpdatedAt)
 	return s, err
 }
 
@@ -110,6 +115,24 @@ func (s *SaleStore) ByChipPurchaseID(ctx context.Context, purchaseID string) (*S
 // ByID fetches by uuid string.
 func (s *SaleStore) ByID(ctx context.Context, id string) (*Sale, error) {
 	return scanSale(s.pool.QueryRow(ctx, saleSelect+" WHERE id = $1", id))
+}
+
+// ByReceiptMessageID fetches a sale by its receipt's SES MessageID (issue
+// #106). The SNS endpoint uses this to correlate an Open/Click/Delivered
+// event back to the sale that sent the receipt. Returns pgx.ErrNoRows when no
+// sale has that message id.
+func (s *SaleStore) ByReceiptMessageID(ctx context.Context, messageID string) (*Sale, error) {
+	return scanSale(s.pool.QueryRow(ctx, saleSelect+" WHERE receipt_message_id = $1", messageID))
+}
+
+// SetReceiptMessageID records the SES MessageID returned when the receipt
+// email was accepted for sending (issue #106). Best-effort: a failure is
+// logged by the caller and never fails the payment flow.
+func (s *SaleStore) SetReceiptMessageID(ctx context.Context, saleID, messageID string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE sales SET receipt_message_id=$2, updated_at=now() WHERE id=$1`,
+		saleID, messageID)
+	return err
 }
 
 // AttachChipPurchase links a CHIP purchase to the sale.

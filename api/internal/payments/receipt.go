@@ -45,6 +45,10 @@ Borang dibeli: {{form_url}}`
 
 // SaleRef carries the minimal receipt fields.
 type SaleRef struct {
+	// SaleID is the sale's uuid, used to persist the SES MessageID back onto
+	// the sale row for open/click correlation (issue #106). Empty when the
+	// caller has no sale id (e.g. a bare receipt test).
+	SaleID       string
 	RefCode      string
 	BuyerEmail   string
 	BuyerName    string
@@ -138,7 +142,10 @@ func renderTemplate(src string, data receiptData, html bool) string {
 
 // SendSaleReceipt emails the buyer a receipt rendered from the space's email
 // settings (issue #107). Respects receipt_enabled (off = no buyer email) and
-// suppression (#56). Failures are logged but NEVER fail the payment flow.
+// suppression (#56). Failures are logged but NEVER fail the payment flow. On a
+// successful send it captures the SES MessageID and persists it on the sale
+// (issue #106) so the SNS endpoint can correlate Open/Click/Delivered events
+// back to this sale.
 func (s *Service) SendSaleReceipt(ctx context.Context, ref SaleRef) {
 	if s.Receipts == nil || s.Receipts.Sender == nil || ref.BuyerEmail == "" {
 		return
@@ -171,9 +178,21 @@ func (s *Service) SendSaleReceipt(ctx context.Context, ref SaleRef) {
 
 	subj, rendered := renderReceipt(ref, subject, body, html)
 
+	// persistReceiptMessageID best-effort stores the SES MessageID on the sale
+	// so open/click events can be correlated (issue #106). A failure is logged,
+	// never fatal to the payment flow.
+	persistReceiptMessageID := func(messageID string) {
+		if messageID == "" || ref.SaleID == "" || s.Sales == nil {
+			return
+		}
+		if err := s.Sales.SetReceiptMessageID(ctx, ref.SaleID, messageID); err != nil {
+			slog.Warn("receipt_message_id_store_failed", "ref", ref.RefCode, "err", err)
+		}
+	}
+
 	// Send the buyer receipt only when enabled.
 	if receiptEnabled {
-		s.sendReceipt(ctx, ref, subj, rendered, html)
+		s.sendReceipt(ctx, ref, subj, rendered, html, persistReceiptMessageID)
 	}
 
 	// Also notify the merchant (copy or "new sale" notification).
@@ -183,21 +202,25 @@ func (s *Service) SendSaleReceipt(ctx context.Context, ref SaleRef) {
 }
 
 // sendReceipt delivers the buyer receipt (with PDF attachment when available).
-func (s *Service) sendReceipt(ctx context.Context, ref SaleRef, subject, body string, html bool) {
+func (s *Service) sendReceipt(ctx context.Context, ref SaleRef, subject, body string, html bool, persistReceiptMessageID func(string)) {
 	if pdf, err := s.ReceiptPDF(ref); err == nil && len(pdf) > 0 {
-		if err := s.Receipts.Sender.SendWithAttachment(ref.BuyerEmail, subject, body,
-			"resit-"+ref.RefCode+".pdf", pdf); err != nil {
+		messageID, err := s.Receipts.Sender.SendReceiptWithAttachment(ref.BuyerEmail, subject, body,
+			"resit-"+ref.RefCode+".pdf", pdf)
+		if err != nil {
 			slog.Warn("receipt_send_failed", "ref", ref.RefCode, "err", err)
 		} else {
 			slog.Info("receipt_sent_pdf", "ref", ref.RefCode, "to", ref.BuyerEmail)
+			persistReceiptMessageID(messageID)
 		}
 		return
 	}
 	// fallback: text-only
-	if err := s.Receipts.Sender.Send(ref.BuyerEmail, subject, body); err != nil {
+	messageID, err := s.Receipts.Sender.SendReceipt(ref.BuyerEmail, subject, body)
+	if err != nil {
 		slog.Warn("receipt_send_failed", "ref", ref.RefCode, "err", err)
 	} else {
 		slog.Info("receipt_sent", "ref", ref.RefCode, "to", ref.BuyerEmail)
+		persistReceiptMessageID(messageID)
 	}
 }
 

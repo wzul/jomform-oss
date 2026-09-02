@@ -415,6 +415,32 @@ type saleRow struct {
 	SkipCapture bool   `json:"skip_capture"`
 	Authorized  bool   `json:"authorized"`
 	CapturedAt  string `json:"captured_at,omitempty"`
+	// EmailStatus is the most recent receipt delivery event for this sale
+	// (issue #106): "" (no event yet) | delivered | open | click | bounce |
+	// complaint. Populated when the delivery-event store is wired.
+	EmailStatus string `json:"email_status,omitempty"`
+}
+
+// latestEmailStatuses returns, for each sale ref, the most recent delivery
+// event type (issue #106). Best-effort: a nil store or a query error yields an
+// empty map (the sales list simply shows no email status).
+func (h *RESTHandlers) latestEmailStatuses(ctx context.Context, sales []*dbstore.Sale) map[string]string {
+	out := map[string]string{}
+	if h.EmailDeliveryEvents == nil || len(sales) == 0 {
+		return out
+	}
+	refs := make([]string, 0, len(sales))
+	for _, s := range sales {
+		refs = append(refs, s.RefCode)
+	}
+	latest, err := h.EmailDeliveryEvents.LatestBySaleRefs(ctx, refs)
+	if err != nil {
+		return out
+	}
+	for ref, e := range latest {
+		out[ref] = e.EventType
+	}
+	return out
 }
 
 func restSaleRows(sales []*dbstore.Sale) []saleRow {
@@ -446,6 +472,8 @@ func (h *RESTHandlers) listSales(w http.ResponseWriter, r *http.Request, actx *A
 		return s.CapturedAt.UTC().Format(time.RFC3339)
 	}
 	writeRows := func(sales []*dbstore.Sale) {
+		// Issue #106: surface the most recent receipt delivery event per sale.
+		emailStatus := h.latestEmailStatuses(r.Context(), sales)
 		out := make([]saleRow, 0, len(sales))
 		for _, s := range sales {
 			out = append(out, saleRow{
@@ -453,6 +481,7 @@ func (h *RESTHandlers) listSales(w http.ResponseWriter, r *http.Request, actx *A
 				Method: s.PaymentMethod, Buyer: s.Client.FullName,
 				Created:     s.CreatedAt.UTC().Format(time.RFC3339),
 				SkipCapture: s.SkipCapture, Authorized: s.Authorized, CapturedAt: capturedAt(s),
+				EmailStatus: emailStatus[s.RefCode],
 			})
 		}
 		respond(w, http.StatusOK, out)
@@ -491,9 +520,53 @@ func (h *RESTHandlers) listSales(w http.ResponseWriter, r *http.Request, actx *A
 		return
 	}
 	out := restSaleRows(sales)
+	// Issue #106: surface the most recent receipt delivery event per sale.
+	emailStatus := h.latestEmailStatuses(r.Context(), sales)
+	for i := range out {
+		out[i].EmailStatus = emailStatus[out[i].RefCode]
+	}
 	respond(w, http.StatusOK, map[string]any{
 		"items": out, "page": page, "limit": limit, "total": total,
 	})
+}
+
+// saleEmailStatus returns the per-sale receipt email delivery timeline
+// (issue #106): Sent → Delivered → Opened → (Clicked), with timestamps,
+// sourced from email_delivery_events correlated to this sale's ref. The
+// "sent" step is implied by the sale having a receipt_message_id (the SES
+// MessageID captured at send time); the rest come from SES events.
+func (h *RESTHandlers) saleEmailStatus(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	ref := r.PathValue("ref")
+	sale, err := h.Sales.ByRefCode(r.Context(), ref)
+	if err != nil || sale.AccountID != actx.Account.ID {
+		writeErr(w, http.StatusNotFound, "jualan tidak dijumpai")
+		return
+	}
+	type eventOut struct {
+		EventType string `json:"event_type"`
+		At        string `json:"at"`
+	}
+	resp := map[string]any{
+		"ref_code": sale.RefCode,
+		"sent":     sale.ReceiptMessageID != "",
+		"events":   []eventOut{},
+	}
+	if h.EmailDeliveryEvents != nil {
+		events, err := h.EmailDeliveryEvents.ListBySaleRef(r.Context(), sale.RefCode)
+		if err != nil {
+			respondErr(w, r, err)
+			return
+		}
+		out := make([]eventOut, 0, len(events))
+		for _, e := range events {
+			out = append(out, eventOut{
+				EventType: e.EventType,
+				At:        e.CreatedAt.UTC().Format(time.RFC3339),
+			})
+		}
+		resp["events"] = out
+	}
+	respond(w, http.StatusOK, resp)
 }
 
 func (h *RESTHandlers) captureSale(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {

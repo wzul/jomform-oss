@@ -193,6 +193,52 @@ func (s *Server) confirmSale(ctx context.Context, _ *mcp.CallToolRequest, in con
 	return nil, map[string]string{"status": "confirmed", "ref_code": in.RefCode}, nil
 }
 
+// ─── Per-sale email status (issue #106) ────────────────────────────────────
+
+type saleEmailStatusIn struct {
+	RefCode string `json:"ref_code" jsonschema:"kod rujukan jualan (dari list_sales)"`
+}
+
+type saleEmailEventOut struct {
+	EventType string `json:"event_type"`
+	At        string `json:"at"`
+}
+
+type saleEmailStatusOut struct {
+	RefCode string              `json:"ref_code"`
+	Sent    bool                `json:"sent"`
+	Events  []saleEmailEventOut `json:"events"`
+}
+
+// saleEmailStatusMCP returns the per-sale receipt email delivery timeline
+// (issue #106): Sent → Delivered → Opened → (Clicked), with timestamps. The
+// "sent" step is implied by the sale having a receipt_message_id; the rest
+// come from SES delivery events correlated to the sale's ref.
+func (s *Server) saleEmailStatusMCP(ctx context.Context, _ *mcp.CallToolRequest, in saleEmailStatusIn) (*mcp.CallToolResult, saleEmailStatusOut, error) {
+	accountID, err := s.accountAndScope(ctx, true)
+	if err != nil {
+		return nil, saleEmailStatusOut{}, err
+	}
+	sale, err := s.deps.Sales.ByRefCode(ctx, in.RefCode)
+	if err != nil || sale.AccountID != accountID {
+		return nil, saleEmailStatusOut{}, fmt.Errorf("jualan tidak dijumpai")
+	}
+	out := saleEmailStatusOut{RefCode: sale.RefCode, Sent: sale.ReceiptMessageID != "", Events: []saleEmailEventOut{}}
+	if s.deps.EmailDeliveryEvents != nil {
+		events, err := s.deps.EmailDeliveryEvents.ListBySaleRef(ctx, sale.RefCode)
+		if err != nil {
+			return nil, saleEmailStatusOut{}, fmt.Errorf("db: %w", err)
+		}
+		for _, e := range events {
+			out.Events = append(out.Events, saleEmailEventOut{
+				EventType: e.EventType,
+				At:        e.CreatedAt.UTC().Format(time.RFC3339),
+			})
+		}
+	}
+	return nil, out, nil
+}
+
 // ─── Subscriptions ───────────────────────────────────────────────────────────
 
 type cancelSubIn struct {

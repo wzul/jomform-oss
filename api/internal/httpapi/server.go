@@ -48,6 +48,11 @@ type Deps struct {
 	// Issue #92: SES delivery-event log (bounce/complaint). Nil in bare-mode
 	// tests; the SNS endpoint skips the write when nil.
 	EmailDeliveryEvents *dbstore.EmailDeliveryEventStore
+
+	// Issue #106: sale lookup by receipt MessageID, so the SNS endpoint can
+	// correlate Open/Click/Delivered events to a specific sale. Nil in
+	// bare-mode tests; events are then recorded without a sale_ref.
+	Sales *dbstore.SaleStore
 }
 
 // VerifyMailer delivers an email-confirmation message. The concrete email.Sender

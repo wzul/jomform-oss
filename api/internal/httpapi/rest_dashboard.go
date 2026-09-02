@@ -193,8 +193,15 @@ func (h *RESTHandlers) dashboardBundle(w http.ResponseWriter, r *http.Request, a
 					bundle.Summary = sum
 				}
 				if sales, total, err := h.Sales.ListByAccountsPage(ctx, scope.Accounts, 1, bundleSalesLimit); err == nil {
+					rows := restSaleRows(sales)
+					// Issue #106: surface the most recent receipt delivery
+					// event per sale in the initial bundle too.
+					emailStatus := h.latestEmailStatuses(ctx, sales)
+					for i := range rows {
+						rows[i].EmailStatus = emailStatus[rows[i].RefCode]
+					}
 					bundle.Sales = map[string]any{
-						"items": restSaleRows(sales), "page": 1,
+						"items": rows, "page": 1,
 						"limit": bundleSalesLimit, "total": total,
 					}
 				}

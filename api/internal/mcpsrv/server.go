@@ -26,6 +26,9 @@ type Deps struct {
 	// Issue #92: audit/behaviour log (list_events tool). Nil → tool returns
 	// an error rather than panicking.
 	Events *dbstore.EventStore
+	// Issue #106: SES delivery-event log, for the per-sale email status tool.
+	// Nil → the tool returns an empty status.
+	EmailDeliveryEvents *dbstore.EmailDeliveryEventStore
 	// DecryptKey (ENCRYPTION_KEY hex bytes) enables per-form CHIP override tools.
 	DecryptKey []byte
 }

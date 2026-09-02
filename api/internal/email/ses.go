@@ -76,11 +76,21 @@ func (s *Sender) client() (*sesv2.Client, error) {
 
 // Send delivers a plain-text email via SESv2 SendEmail.
 func (s *Sender) Send(to, subject, body string) error {
+	_, err := s.SendReceipt(to, subject, body)
+	return err
+}
+
+// SendReceipt delivers a plain-text email via SESv2 SendEmail and returns the
+// SES MessageID (issue #106). The MessageID is the correlation key the SNS
+// endpoint uses to tie an Open/Click/Delivered event back to the sale that
+// sent the receipt. An empty MessageID (SES accepted without a message id) is
+// not an error.
+func (s *Sender) SendReceipt(to, subject, body string) (string, error) {
 	cli, err := s.client()
 	if err != nil {
-		return err
+		return "", err
 	}
-	_, err = cli.SendEmail(context.Background(), &sesv2.SendEmailInput{
+	out, err := cli.SendEmail(context.Background(), &sesv2.SendEmailInput{
 		FromEmailAddress: aws.String(s.from),
 		Destination: &types.Destination{
 			ToAddresses: []string{to},
@@ -95,20 +105,31 @@ func (s *Sender) Send(to, subject, body string) error {
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("ses send: %w", err)
+		return "", fmt.Errorf("ses send: %w", err)
 	}
-	return nil
+	if out.MessageId == nil {
+		return "", nil
+	}
+	return *out.MessageId, nil
 }
 
 // SendWithAttachment delivers a multipart/mixed email with a base64 attachment
 // (PDF receipts) via SESv2 SendEmail using a raw MIME message.
 func (s *Sender) SendWithAttachment(to, subject, body string, filename string, data []byte) error {
+	_, err := s.SendReceiptWithAttachment(to, subject, body, filename, data)
+	return err
+}
+
+// SendReceiptWithAttachment delivers a multipart/mixed email with a base64
+// attachment (PDF receipts) via SESv2 SendEmail using a raw MIME message, and
+// returns the SES MessageID (issue #106) for open/click correlation.
+func (s *Sender) SendReceiptWithAttachment(to, subject, body string, filename string, data []byte) (string, error) {
 	cli, err := s.client()
 	if err != nil {
-		return err
+		return "", err
 	}
 	raw := buildMultipart(s.from, to, subject, body, filename, data)
-	_, err = cli.SendEmail(context.Background(), &sesv2.SendEmailInput{
+	out, err := cli.SendEmail(context.Background(), &sesv2.SendEmailInput{
 		FromEmailAddress: aws.String(s.from),
 		Destination: &types.Destination{
 			ToAddresses: []string{to},
@@ -120,9 +141,12 @@ func (s *Sender) SendWithAttachment(to, subject, body string, filename string, d
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("ses send attachment: %w", err)
+		return "", fmt.Errorf("ses send attachment: %w", err)
 	}
-	return nil
+	if out.MessageId == nil {
+		return "", nil
+	}
+	return *out.MessageId, nil
 }
 
 // buildMultipart assembles a multipart/mixed MIME message with a base64
