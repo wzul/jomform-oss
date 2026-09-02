@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"encoding/json"
-	"strings"
 
 	"html/template"
 	"log/slog"
@@ -85,12 +84,6 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 			themeBg = template.HTMLEscapeString(v)
 		}
 	}
-	footerText := "Dikuasakan oleh <strong>JomForm</strong>"
-	if h.SystemSettings != nil {
-		if v, ferr := h.SystemSettings.Get(r.Context(), "site_footer_text"); ferr == nil && strings.TrimSpace(v) != "" {
-			footerText = template.HTMLEscapeString(v)
-		}
-	}
 	var cfgTracking string
 	_ = cfgTracking
 	ls := h.effectiveLangStrings(r.Context(), f)
@@ -98,9 +91,8 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 		"Slug": f.Slug, "Title": f.Title, "Blocks": blocks,
 		"TrackHead":    headInjection(globalTr, formTrackingHead(f)),
 		"ThemePrimary": themePrimary, "ThemeBg": themeBg, "LogoURL": f.LogoURL,
-		"FooterText": footerText,
-		"Lang":       ls.Lang,
-		"Ls":         ls,
+		"Lang": ls.Lang,
+		"Ls":   ls,
 	}); err != nil {
 		slog.Error("form_render_blocks", "err", err)
 	}
@@ -170,7 +162,6 @@ var blockTmpl = template.Must(template.New("blocks").
   button { width:100%; padding:12px; border:0; border-radius:10px; font-size:15px; font-weight:600;
            color:#fff; cursor:pointer; margin-top:12px; background:#5e6ad2; }
   button:hover { background:#828fff; }
-  .brand { text-align:center; color:#62666d; font-size:11px; margin-top:16px; }
 </style></head><body>
 <form class="card" id="of" data-slug="{{.Slug}}">
   <h1>{{.Title}}</h1>
@@ -190,7 +181,6 @@ var blockTmpl = template.Must(template.New("blocks").
 {{end}}
   <div class="total"><span>{{$.Ls.Total}}</span><span id="total">RM0.00</span></div>
   <button type="submit" form="of">{{$.Ls.Submit}}</button>
-  <p class="brand">{{.FooterText}}</p>
 </form>
 <script>
 (function(){

@@ -253,7 +253,6 @@ var formTmpl = template.Must(template.New("form").Funcs(formFuncs).Parse(`<!doct
   button:hover { filter:brightness(1.1); }
   .total { display:flex; justify-content:space-between; padding-top:12px;
            border-top:1px dashed #e6e8ec; margin-top:6px; font-weight:600; }
-  .brand { text-align:center; color:#9ca3af; font-size:11px; margin-top:18px; }
 </style>
 </head>
 <body>
@@ -273,7 +272,6 @@ var formTmpl = template.Must(template.New("form").Funcs(formFuncs).Parse(`<!doct
     <input type="tel" name="phone">
     <div class="total"><span>Jumlah</span><span id="total">RM0.00</span></div>
     <button type="submit">Teruskan ke Pembayaran</button>
-    <p class="brand">Dikuasakan oleh <strong>JomForm</strong></p>
   </form>
 <script>
 const boxes = document.querySelectorAll('.p');
@@ -490,11 +488,6 @@ func (h *PublicHandlers) handleSpaceRoot(w http.ResponseWriter, r *http.Request)
 	}
 	for _, f := range forms {
 		io.WriteString(w, "<a href='/"+f.Slug+"'>"+f.Title+"</a>")
-	}
-	if sid, iderr := h.Spaces.IDBySlug(r.Context(), sub); iderr == nil {
-		if st, serr := h.Spaces.Settings(r.Context(), sid); serr == nil && st.FooterText != "" {
-			io.WriteString(w, "<p style='color:#9ca3af;font-size:12px;margin-top:18px'>"+st.FooterText+"</p>")
-		}
 	}
 	io.WriteString(w, "</div></body></html>")
 }
