@@ -197,6 +197,13 @@ const DICT = {
   "set.cfGlobalKey": { en: "Global API key", ms: "Global API key", zh: "全局 API 密钥", ta: "உலகளாவிய API விசை", ar: "مفتاح API العام" },
   "set.cfKindToken": { en: "API token", ms: "API token", zh: "API 令牌", ta: "API டோக்கன்", ar: "رمز API" },
   "set.cfKindGlobal": { en: "Global API key", ms: "Global API key", zh: "全局 API 密钥", ta: "உலகளாவிய API விசை", ar: "مفتاح API العام" },
+  // issue #68: settings page tab labels + cloudflare callback banner
+  "set.tab.chip": { en: "CHIP", ms: "CHIP", zh: "CHIP", ta: "CHIP", ar: "CHIP" },
+  "set.tab.domains": { en: "Domains", ms: "Domain", zh: "域名", ta: "டொமைன்கள்", ar: "النطاقات" },
+  "set.tab.einvoice": { en: "e-Invoice", ms: "e-Invois", zh: "电子发票", ta: "மின் இன்வாய்ஸ்", ar: "الفاتورة الإلكترونية" },
+  "set.tab.webhooks": { en: "Webhooks", ms: "Webhook", zh: "Webhook", ta: "வெப்ஹூக்குகள்", ar: "خطافات الويب" },
+  "set.tab.social": { en: "Social", ms: "Sosial", zh: "社交", ta: "சமூக", ar: "وسائل التواصل" },
+  "set.cfLinkFailed": { en: "Cloudflare linking failed — please try again.", ms: "Pautan Cloudflare gagal — sila cuba lagi.", zh: "Cloudflare 关联失败 — 请重试。", ta: "Cloudflare இணைப்பு தோல்வி — மீண்டும் முயற்சிக்கவும்.", ar: "فشل ربط Cloudflare — يرجى المحاولة مرة أخرى." },
   "set.cfConnect": { en: "Connect", ms: "Sambung", zh: "连接", ta: "இணைக்க", ar: "اتصال" },
   "set.cfConnecting": { en: "Connecting…", ms: "Menyambung…", zh: "连接中…", ta: "இணைக்கிறது…", ar: "جارٍ الاتصال…" },
   "set.cfManualErr": { en: "Could not connect: ", ms: "Gagal menyambung: ", zh: "无法连接：", ta: "இணைக்க முடியவில்லை: ", ar: "تعذر الاتصال: " },

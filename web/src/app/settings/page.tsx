@@ -11,6 +11,33 @@ type KeyRow = { id: string; name: string; scopes: string[] };
 type DomainStatus = { domain: string; verified: boolean } | null;
 type SocialRow = { provider: string; email?: string; linked_at?: string };
 
+// Issue #68: Settings page is organised into tabs (same pattern as Profile
+// page tabs — #5) instead of one long scroll of 8 stacked sections.
+//   chip      -> CHIP gateway
+//   domains   -> Custom domains + Cloudflare connect (one workflow)
+//   einvoice  -> e-Invoice TIN/MSIC + Tracking scripts
+//   webhooks  -> Outbound webhooks + MCP/API section
+//   social    -> Social login connectors
+type SettingsTab = "chip" | "domains" | "einvoice" | "webhooks" | "social";
+
+const TAB_IDS: SettingsTab[] = ["chip", "domains", "einvoice", "webhooks", "social"];
+
+function isSettingsTab(v: string | null): v is SettingsTab {
+  return v === "chip" || v === "domains" || v === "einvoice" || v === "webhooks" || v === "social";
+}
+
+// Restore the last active tab. Falls back to "chip".
+function loadStoredTab(): SettingsTab {
+  if (typeof window === "undefined") return "chip";
+  try {
+    const v = window.localStorage.getItem("jf_settings_tab");
+    if (isSettingsTab(v)) return v;
+  } catch {
+    // storage unavailable — fall through
+  }
+  return "chip";
+}
+
 const METHODS = [
   { id: "fpx", label: "FPX" },
   { id: "fpx_b2b1", label: "FPX B2B1" },
@@ -29,6 +56,7 @@ const METHODS = [
 export default function Settings() {
   const { t } = useI18n();
   const router = useRouter();
+  const [tab, setTab] = useState<SettingsTab>(loadStoredTab);
   const [status, setStatus] = useState<ChipStatus | null>(null);
   const [brandId, setBrandId] = useState("");
   const [secretKey, setSecretKey] = useState("");
@@ -64,6 +92,41 @@ export default function Settings() {
   const [cfSecret, setCfSecret] = useState("");
   const [cfManualBusy, setCfManualBusy] = useState(false);
   const [cfManualErr, setCfManualErr] = useState("");
+  // Issue #68: transient banner shown after the Cloudflare OAuth callback
+  // redirects back to /settings?cloudflare=linked|error.
+  const [cfNotice, setCfNotice] = useState("");
+
+  // Persist the active tab (issue #68).
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("jf_settings_tab", tab);
+    } catch {
+      // storage unavailable — ignore
+    }
+  }, [tab]);
+
+  // Issue #68: auto-select the right tab from the URL on mount —
+  //  /settings#webhooks, /settings?tab=domains, and the Cloudflare OAuth
+  //  callback  /settings?cloudflare=linked|error. Anything not matched keeps
+  //  the persisted tab.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const hash = window.location.hash.replace("#", "");
+    const explicit = params.get("tab");
+    const cf = params.get("cloudflare");
+    if (cf === "linked") {
+      setTab("domains");
+      setCfNotice(t("set.cfConnected"));
+    } else if (cf === "error") {
+      setTab("domains");
+      setCfNotice(t("set.cfLinkFailed"));
+    } else if (isSettingsTab(explicit)) {
+      setTab(explicit);
+    } else if (isSettingsTab(hash)) {
+      setTab(hash);
+    }
+  }, [t]);
 
   // Issue #13: single aggregated fetch replaces the 6-request waterfall
   // (chip, keys, domains, webhooks, einvoice, social) on mount.
@@ -219,414 +282,454 @@ export default function Settings() {
           {t("set.title")} <span className="text-[var(--jf-primary)]">JomForm</span>
         </h1>
 
-        {/* ── CHIP gateway ── */}
-        <section className="jf-card mt-8 p-6">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold">{t("set.chipTitle")}</h2>
-            {status && (
-              <span
-                className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                  status.configured
-                    ? "border border-emerald-200 bg-emerald-50 text-emerald-700"
-                    : "border border-slate-200 bg-slate-50 text-slate-500"
-                }`}
-              >
-                {status.configured ? t("set.activeMode", { mode: (status.mode || "test").toUpperCase() }) : t("set.notSet")}
-              </span>
-            )}
-          </div>
-          <p className="mt-2 max-w-xl text-sm text-slate-400">
-            {t("set.getYour")} <code className="rounded bg-slate-100 px-1">Brand ID</code> {t("set.and")}{" "}
-            <code className="rounded bg-slate-100 px-1">{t("set.secretKey")}</code> {t("set.from")}{" "}
-            <a
-              href="https://portal.chip-in.asia/collect/developers/brands"
-              className="text-[var(--jf-primary)] underline"
-              target="_blank"
+        {/* Tab bar (issue #68) — same styling as Profile. */}
+        <div className="mt-4 flex gap-1 overflow-x-auto border-b border-slate-200">
+          {TAB_IDS.map((id) => (
+            <button
+              key={id}
+              onClick={() => setTab(id)}
+              aria-selected={tab === id}
+              role="tab"
+              className={`-mb-px whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium sm:px-4 ${
+                tab === id
+                  ? "border-slate-900 text-slate-900"
+                  : "border-transparent text-slate-500 hover:text-slate-800"
+              }`}
             >
-              CHIP Merchant Portal → Developers
-            </a>
-            . {t("set.keysEncrypted")}
-          </p>
-          {msg && <p className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-600">{msg}</p>}
-          {err && <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{err}</p>}
-          <form onSubmit={save} className="mt-4 space-y-3">
-            <div>
-              <label className="text-xs text-slate-500">Brand ID</label>
-              <input
-                value={brandId}
-                onChange={(e) => setBrandId(e.target.value)}
-                required
-                className="jf-input mt-1 max-w-xl"
-                placeholder="e.g. 5f2b…-uuid"
-              />
+              <span className="sm:hidden">{t(`set.tab.${id}` as const)}</span>
+              <span className="hidden sm:inline">{t(`set.tab.${id}` as const)}</span>
+            </button>
+          ))}
+        </div>
+
+        {/* Issue #68: transient Cloudflare OAuth callback banner + shared
+            status/error banners shown above tab content regardless of the
+            active tab (Profile-style). */}
+        {cfNotice && <p className="mt-4 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{cfNotice}</p>}
+        {msg && <p className="mt-4 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-600">{msg}</p>}
+        {err && <p className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{err}</p>}
+
+        {/* ── CHIP tab ── */}
+        {tab === "chip" && (
+          <section className="jf-card mt-6 p-6">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold">{t("set.chipTitle")}</h2>
+              {status && (
+                <span
+                  className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                    status.configured
+                      ? "border border-emerald-200 bg-emerald-50 text-emerald-700"
+                      : "border border-slate-200 bg-slate-50 text-slate-500"
+                  }`}
+                >
+                  {status.configured ? t("set.activeMode", { mode: (status.mode || "test").toUpperCase() }) : t("set.notSet")}
+                </span>
+              )}
             </div>
-            <div>
-              <label className="flex items-center gap-2 text-xs text-slate-500">
-                {t("set.secretKey")}
-                {verified && (
-                  <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
-                    {t("set.apiVerified")}
+            <p className="mt-2 max-w-xl text-sm text-slate-400">
+              {t("set.getYour")} <code className="rounded bg-slate-100 px-1">Brand ID</code> {t("set.and")}{" "}
+              <code className="rounded bg-slate-100 px-1">{t("set.secretKey")}</code> {t("set.from")}{" "}
+              <a
+                href="https://portal.chip-in.asia/collect/developers/brands"
+                className="text-[var(--jf-primary)] underline"
+                target="_blank"
+              >
+                CHIP Merchant Portal → Developers
+              </a>
+              . {t("set.keysEncrypted")}
+            </p>
+            <form onSubmit={save} className="mt-4 space-y-3">
+              <div>
+                <label className="text-xs text-slate-500">Brand ID</label>
+                <input
+                  value={brandId}
+                  onChange={(e) => setBrandId(e.target.value)}
+                  required
+                  className="jf-input mt-1 max-w-xl"
+                  placeholder="e.g. 5f2b…-uuid"
+                />
+              </div>
+              <div>
+                <label className="flex items-center gap-2 text-xs text-slate-500">
+                  {t("set.secretKey")}
+                  {verified && (
+                    <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                      {t("set.apiVerified")}
+                    </span>
+                  )}
+                </label>
+                <input
+                  value={secretKey}
+                  onChange={(e) => setSecretKey(e.target.value)}
+                  required
+                  type="text"
+                  className="jf-input mt-1 max-w-xl font-mono"
+                  placeholder="sk_live_… / sk_test_…"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500">{t("set.mode")}</label>
+                <p className="mt-1 text-sm">{mode === "live" ? t("set.live") : t("set.test")}</p>
+              </div>
+
+              <div>
+                <label className="text-xs text-slate-500">
+                  {t("set.emailFallback")} <span className="text-slate-400">{t("set.emailFallbackHint")}</span>
+                </label>
+                <input
+                  value={emailFallback}
+                  onChange={(e) => setEmailFallback(e.target.value)}
+                  type="email"
+                  className="jf-input mt-1 max-w-xl"
+                  placeholder="store@yourshop.my"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs text-slate-500">
+                  {t("set.paymentMethods")} <span className="text-slate-400">{t("set.allMethods")}</span>
+                </label>
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                  {METHODS.map((m) => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => toggleMethod(m.id)}
+                      className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+                        whitelist.includes(m.id)
+                          ? "border-[var(--jf-primary)] bg-indigo-50 text-[var(--jf-primary)]"
+                          : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"
+                      }`}
+                    >
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex gap-2 pt-1">
+                <button className="jf-btn-primary">{t("set.save")}</button>
+                {status?.configured && (
+                  <button type="button" onClick={clearCreds} className="jf-btn-ghost text-slate-600">
+                    {t("set.clear")}
+                  </button>
+                )}
+              </div>
+            </form>
+          </section>
+        )}
+
+        {/* ── Domains tab: custom domains + Cloudflare connect ── */}
+        {tab === "domains" && (
+          <>
+            <section className="jf-card mt-6 p-6">
+              <h2 className="text-lg font-semibold">{t("set.domainsTitle")}</h2>
+              <p className="mt-2 max-w-xl text-sm text-slate-400">
+                {t("set.domainsHelp")}
+              </p>
+              {domainMsg && <p className="mt-3 rounded-lg bg-indigo-50 px-3 py-2 text-sm text-indigo-700">{domainMsg}</p>}
+              <form onSubmit={setDomainClaim} className="mt-4 flex flex-wrap gap-2">
+                <input
+                  value={domainInput}
+                  onChange={(e) => setDomainInput(e.target.value)}
+                  placeholder="shop.yourdomain.com"
+                  className="jf-input min-w-56 max-w-xl flex-1"
+                />
+                <button className="jf-btn-primary" type="submit">{t("set.addDomain")}</button>
+              </form>
+              <ul className="mt-4 space-y-2">
+                {domains.map((d: { id: string; domain: string; verified: boolean }) => (
+                  <li key={d.id} className="flex items-center justify-between gap-3 rounded-lg border border-[var(--jf-border)] px-4 py-2.5">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium">{d.domain}</p>
+                      <p className={`text-[11px] ${d.verified ? "text-emerald-600" : "text-amber-600"}`}>
+                        {d.verified ? t("set.verified") : t("set.pendingDns")}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      {!d.verified && (
+                        <button
+                          onClick={async () => {
+                            const r = await fetch(`/api/rest/domains/${d.id}/verify`, { method: "POST" });
+                            setDomainMsg(r.ok ? t("set.domainVerified", { domain: d.domain }) : t("set.verifyFailed", { domain: d.domain }));
+                            load();
+                          }}
+                          className="text-xs text-[#5e6ad2] hover:underline"
+                        >{t("set.verify")}</button>
+                      )}
+                      <button
+                        onClick={async () => { await fetch(`/api/rest/domains/${d.id}`, { method: "DELETE" }); load(); }}
+                        className="text-xs text-slate-500 hover:text-red-500"
+                      >{t("set.remove")}</button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </section>
+
+            {/* Cloudflare connect (auto CNAME) — issue #22 + manual #82 */}
+            <section className="jf-card mt-6 p-6">
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-semibold">{t("set.cfTitle")}</h2>
+                {cfLinked && (
+                  <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+                    {t("set.cfConnected")}
                   </span>
                 )}
-              </label>
-              <input
-                value={secretKey}
-                onChange={(e) => setSecretKey(e.target.value)}
-                required
-                type="text"
-                className="jf-input mt-1 max-w-xl font-mono"
-                placeholder="sk_live_… / sk_test_…"
-              />
-            </div>
-            <div>
-              <label className="text-xs text-slate-500">{t("set.mode")}</label>
-              <p className="mt-1 text-sm">{mode === "live" ? t("set.live") : t("set.test")}</p>
-            </div>
-
-            <div>
-              <label className="text-xs text-slate-500">
-                {t("set.emailFallback")} <span className="text-slate-400">{t("set.emailFallbackHint")}</span>
-              </label>
-              <input
-                value={emailFallback}
-                onChange={(e) => setEmailFallback(e.target.value)}
-                type="email"
-                className="jf-input mt-1 max-w-xl"
-                placeholder="store@yourshop.my"
-              />
-            </div>
-
-            <div>
-              <label className="text-xs text-slate-500">
-                {t("set.paymentMethods")} <span className="text-slate-400">{t("set.allMethods")}</span>
-              </label>
-              <div className="mt-1.5 flex flex-wrap gap-1.5">
-                {METHODS.map((m) => (
-                  <button
-                    key={m.id}
-                    type="button"
-                    onClick={() => toggleMethod(m.id)}
-                    className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
-                      whitelist.includes(m.id)
-                        ? "border-[var(--jf-primary)] bg-indigo-50 text-[var(--jf-primary)]"
-                        : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"
-                    }`}
-                  >
-                    {m.label}
-                  </button>
-                ))}
               </div>
-            </div>
-
-            <div className="flex gap-2 pt-1">
-              <button className="jf-btn-primary">{t("set.save")}</button>
-              {status?.configured && (
-                <button type="button" onClick={clearCreds} className="jf-btn-ghost text-slate-600">
-                  {t("set.clear")}
-                </button>
-              )}
-            </div>
-          </form>
-        </section>
-
-        {/* ── custom domains (multi) ── */}
-        <section className="jf-card mt-6 p-6">
-          <h2 className="text-lg font-semibold">{t("set.domainsTitle")}</h2>
-          <p className="mt-2 max-w-xl text-sm text-slate-400">
-            {t("set.domainsHelp")}
-          </p>
-          {domainMsg && <p className="mt-3 rounded-lg bg-indigo-50 px-3 py-2 text-sm text-indigo-700">{domainMsg}</p>}
-          <form onSubmit={setDomainClaim} className="mt-4 flex flex-wrap gap-2">
-            <input
-              value={domainInput}
-              onChange={(e) => setDomainInput(e.target.value)}
-              placeholder="shop.yourdomain.com"
-              className="jf-input min-w-56 max-w-xl flex-1"
-            />
-            <button className="jf-btn-primary" type="submit">{t("set.addDomain")}</button>
-          </form>
-          <ul className="mt-4 space-y-2">
-            {domains.map((d: { id: string; domain: string; verified: boolean }) => (
-              <li key={d.id} className="flex items-center justify-between gap-3 rounded-lg border border-[var(--jf-border)] px-4 py-2.5">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium">{d.domain}</p>
-                  <p className={`text-[11px] ${d.verified ? "text-emerald-600" : "text-amber-600"}`}>
-                    {d.verified ? t("set.verified") : t("set.pendingDns")}
-                  </p>
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  {!d.verified && (
-                    <button
-                      onClick={async () => {
-                        const r = await fetch(`/api/rest/domains/${d.id}/verify`, { method: "POST" });
-                        setDomainMsg(r.ok ? t("set.domainVerified", { domain: d.domain }) : t("set.verifyFailed", { domain: d.domain }));
-                        load();
-                      }}
-                      className="text-xs text-[#5e6ad2] hover:underline"
-                    >{t("set.verify")}</button>
-                  )}
-                  <button
-                    onClick={async () => { await fetch(`/api/rest/domains/${d.id}`, { method: "DELETE" }); load(); }}
-                    className="text-xs text-slate-500 hover:text-red-500"
-                  >{t("set.remove")}</button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </section>
-
-        {/* ── Cloudflare connect (auto CNAME) — issue #22 ── */}
-        <section className="jf-card mt-6 p-6">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold">{t("set.cfTitle")}</h2>
-            {cfLinked && (
-              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
-                {t("set.cfConnected")}
-              </span>
-            )}
-          </div>
-          <p className="mt-2 text-sm text-slate-400">
-            {t("set.cfHelp")}
-          </p>
-          <div className="mt-3 flex gap-2">
-            {!cfLinked && (
-              <a href="/api/cf/start" className="jf-btn-primary inline-block">
-                {t("set.cfLogin")}
-              </a>
-            )}
-            {cfLinked && (
-              <button
-                onClick={async () => {
-                  await fetch("/api/cf/disconnect", { method: "POST" });
-                  setCfLinked(false);
-                }}
-                className="jf-btn-ghost text-slate-600"
-              >
-                {t("set.cfDisconnect")}
-              </button>
-            )}
-            {!cfLinked && (
-              <button
-                onClick={() => { setCfManualOpen(!cfManualOpen); setCfManualErr(""); }}
-                className="jf-btn-ghost text-slate-600"
-              >
-                {t("set.cfManualToggle")}
-              </button>
-            )}
-          </div>
-          {!cfLinked && cfManualOpen && (
-            <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
-              <p className="text-xs text-slate-500">
-                {t("set.cfManualHelp")}{" "}
-                <a
-                  href="https://dash.cloudflare.com/profile/api-tokens"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-sky-600 underline"
-                >
-                  {t("set.cfApiTokensLink")}
-                </a>
+              <p className="mt-2 text-sm text-slate-400">
+                {t("set.cfHelp")}
               </p>
               <div className="mt-3 flex gap-2">
-                {(["apitoken", "globalkey"] as const).map((k) => (
-                  <label key={k} className="flex items-center gap-1 text-sm text-slate-700">
+                {!cfLinked && (
+                  <a href="/api/cf/start" className="jf-btn-primary inline-block">
+                    {t("set.cfLogin")}
+                  </a>
+                )}
+                {cfLinked && (
+                  <button
+                    onClick={async () => {
+                      await fetch("/api/cf/disconnect", { method: "POST" });
+                      setCfLinked(false);
+                    }}
+                    className="jf-btn-ghost text-slate-600"
+                  >
+                    {t("set.cfDisconnect")}
+                  </button>
+                )}
+                {!cfLinked && (
+                  <button
+                    onClick={() => { setCfManualOpen(!cfManualOpen); setCfManualErr(""); }}
+                    className="jf-btn-ghost text-slate-600"
+                  >
+                    {t("set.cfManualToggle")}
+                  </button>
+                )}
+              </div>
+              {!cfLinked && cfManualOpen && (
+                <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-xs text-slate-500">
+                    {t("set.cfManualHelp")}{" "}
+                    <a
+                      href="https://dash.cloudflare.com/profile/api-tokens"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-sky-600 underline"
+                    >
+                      {t("set.cfApiTokensLink")}
+                    </a>
+                  </p>
+                  <div className="mt-3 flex gap-2">
+                    {(["apitoken", "globalkey"] as const).map((k) => (
+                      <label key={k} className="flex items-center gap-1 text-sm text-slate-700">
+                        <input
+                          type="radio"
+                          name="cfKind"
+                          checked={cfKind === k}
+                          onChange={() => { setCfKind(k); setCfManualErr(""); }}
+                        />
+                        {k === "apitoken" ? t("set.cfKindToken") : t("set.cfKindGlobal")}
+                      </label>
+                    ))}
+                  </div>
+                  <div className="mt-3 grid gap-2">
                     <input
-                      type="radio"
-                      name="cfKind"
-                      checked={cfKind === k}
-                      onChange={() => { setCfKind(k); setCfManualErr(""); }}
+                      value={cfAccName}
+                      onChange={(e) => setCfAccName(e.target.value)}
+                      placeholder={t("set.cfAccountName")}
+                      className="jf-input text-sm"
                     />
-                    {k === "apitoken" ? t("set.cfKindToken") : t("set.cfKindGlobal")}
-                  </label>
-                ))}
-              </div>
-              <div className="mt-3 grid gap-2">
-                <input
-                  value={cfAccName}
-                  onChange={(e) => setCfAccName(e.target.value)}
-                  placeholder={t("set.cfAccountName")}
-                  className="jf-input text-sm"
-                />
-                <input
-                  value={cfAccEmail}
-                  onChange={(e) => setCfAccEmail(e.target.value)}
-                  placeholder={t("set.cfAccountEmail")}
-                  type="email"
-                  className="jf-input text-sm"
-                />
-                <input
-                  value={cfSecret}
-                  onChange={(e) => setCfSecret(e.target.value)}
-                  placeholder={cfKind === "apitoken" ? t("set.cfApiToken") : t("set.cfGlobalKey")}
-                  type="password"
-                  autoComplete="off"
-                  className="jf-input text-sm"
-                />
-              </div>
-              {cfManualErr && (
-                <p className="mt-2 text-xs text-red-600">{t("set.cfManualErr")}{cfManualErr}</p>
+                    <input
+                      value={cfAccEmail}
+                      onChange={(e) => setCfAccEmail(e.target.value)}
+                      placeholder={t("set.cfAccountEmail")}
+                      type="email"
+                      className="jf-input text-sm"
+                    />
+                    <input
+                      value={cfSecret}
+                      onChange={(e) => setCfSecret(e.target.value)}
+                      placeholder={cfKind === "apitoken" ? t("set.cfApiToken") : t("set.cfGlobalKey")}
+                      type="password"
+                      autoComplete="off"
+                      className="jf-input text-sm"
+                    />
+                  </div>
+                  {cfManualErr && (
+                    <p className="mt-2 text-xs text-red-600">{t("set.cfManualErr")}{cfManualErr}</p>
+                  )}
+                  <button
+                    disabled={cfManualBusy}
+                    onClick={async () => {
+                      setCfManualBusy(true);
+                      setCfManualErr("");
+                      try {
+                        const body = cfKind === "apitoken"
+                          ? { account_email: cfAccEmail, api_token: cfSecret, account_name: cfAccName }
+                          : { account_email: cfAccEmail, api_key: cfSecret, account_name: cfAccName };
+                        const r = await fetch(
+                          cfKind === "apitoken" ? "/api/cf/api-token" : "/api/cf/global-key",
+                          { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
+                        );
+                        const d = await r.json().catch(() => ({}));
+                        if (!r.ok) {
+                          setCfManualErr(d.error || `HTTP ${r.status}`);
+                          return;
+                        }
+                        setCfLinked(true);
+                        setCfManualOpen(false);
+                        setCfAccName(""); setCfAccEmail(""); setCfSecret("");
+                      } finally {
+                        setCfManualBusy(false);
+                      }
+                    }}
+                    className="jf-btn-primary mt-3 inline-block"
+                  >
+                    {cfManualBusy ? t("set.cfConnecting") : t("set.cfConnect")}
+                  </button>
+                </div>
               )}
-              <button
-                disabled={cfManualBusy}
-                onClick={async () => {
-                  setCfManualBusy(true);
-                  setCfManualErr("");
-                  try {
-                    const body = cfKind === "apitoken"
-                      ? { account_email: cfAccEmail, api_token: cfSecret, account_name: cfAccName }
-                      : { account_email: cfAccEmail, api_key: cfSecret, account_name: cfAccName };
-                    const r = await fetch(
-                      cfKind === "apitoken" ? "/api/cf/api-token" : "/api/cf/global-key",
-                      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
-                    );
-                    const d = await r.json().catch(() => ({}));
-                    if (!r.ok) {
-                      setCfManualErr(d.error || `HTTP ${r.status}`);
-                      return;
-                    }
-                    setCfLinked(true);
-                    setCfManualOpen(false);
-                    setCfAccName(""); setCfAccEmail(""); setCfSecret("");
-                  } finally {
-                    setCfManualBusy(false);
-                  }
-                }}
-                className="jf-btn-primary mt-3 inline-block"
-              >
-                {cfManualBusy ? t("set.cfConnecting") : t("set.cfConnect")}
-              </button>
-            </div>
-          )}
-          {!cfConfigured && (
-            <p className="mt-2 text-xs text-slate-400">{t("set.cfNotConfigured")}</p>
-          )}
-        </section>
+              {!cfConfigured && (
+                <p className="mt-2 text-xs text-slate-400">{t("set.cfNotConfigured")}</p>
+              )}
+            </section>
+          </>
+        )}
 
-        {/* ── Tracking scripts ── */}
-        <section className="jf-card mt-6 p-6">
-          <h2 className="text-lg font-semibold">{t("set.trackingTitle")}</h2>
-          <p className="mt-1 max-w-xl text-sm text-slate-400">
-            {t("set.trackingHelp")} <code className="rounded bg-slate-100 px-1">&lt;script src="https://…"&gt;</code>, <code className="rounded bg-slate-100 px-1">&lt;meta&gt;</code>, comments. Event handlers & cookie writes stripped.
-          </p>
-          <textarea value={trackingHead} onChange={(e) => setTrackingHead(e.target.value)} rows={4}
-            className="jf-input mt-3 max-w-xl font-mono text-xs"
-            placeholder={'<script src="https://www.googletagmanager.com/gtag/js?id=G-XXXX"></-script>'} />
-          <button onClick={async () => {
-            const r = await fetch("/api/rest/settings/tracking", {
-              method: "PUT", headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ head: trackingHead }),
-            });
-            setMsg(r.ok ? t("set.trackingSaved") : t("prof.failed"));
-          }} className="jf-btn-primary mt-3">{t("set.saveTracking")}</button>
-        </section>
+        {/* ── e-Invoice tab: tracking scripts + e-Invoice (LHDN) ── */}
+        {tab === "einvoice" && (
+          <>
+            <section className="jf-card mt-6 p-6">
+              <h2 className="text-lg font-semibold">{t("set.trackingTitle")}</h2>
+              <p className="mt-1 max-w-xl text-sm text-slate-400">
+                {t("set.trackingHelp")} <code className="rounded bg-slate-100 px-1">&lt;script src="https://…"&gt;</code>, <code className="rounded bg-slate-100 px-1">&lt;meta&gt;</code>, comments. Event handlers & cookie writes stripped.
+              </p>
+              <textarea value={trackingHead} onChange={(e) => setTrackingHead(e.target.value)} rows={4}
+                className="jf-input mt-3 max-w-xl font-mono text-xs"
+                placeholder={'<script src="https://www.googletagmanager.com/gtag/js?id=G-XXXX"></-script>'} />
+              <button onClick={async () => {
+                const r = await fetch("/api/rest/settings/tracking", {
+                  method: "PUT", headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ head: trackingHead }),
+                });
+                setMsg(r.ok ? t("set.trackingSaved") : t("prof.failed"));
+              }} className="jf-btn-primary mt-3">{t("set.saveTracking")}</button>
+            </section>
 
-        {/* ── e-Invoice (LHDN) ── */}
-        <section className="jf-card mt-6 p-6">
-          <h2 className="text-lg font-semibold">{t("set.einvoiceTitle")}</h2>
-          <p className="mt-1 max-w-xl text-sm text-slate-400">
-            {t("set.einvoiceHelp")}
-          </p>
-          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div>
-              <label className="text-xs text-slate-500">{t("set.companyTin")}</label>
-              <input value={tin} onChange={(e) => setTin(e.target.value)} className="jf-input mt-1 max-w-xl" placeholder="e.g. C1234567890" />
-            </div>
-            <div>
-              <label className="text-xs text-slate-500">{t("set.msicCode")}</label>
-              <input value={msic} onChange={(e) => setMsic(e.target.value)} className="jf-input mt-1 max-w-xl" placeholder="e.g. 62010" />
-            </div>
-          </div>
-          <button onClick={async () => {
-            const r = await fetch("/api/rest/settings/einvoice", {
-              method: "PUT", headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ tin, msic }),
-            });
-            setMsg(r.ok ? t("set.einvoiceSaved") : t("set.failedSave"));
-          }} className="jf-btn-primary mt-3">{t("set.saveEinvoice")}</button>
-        </section>
-
-        {/* ── Outbound webhooks ── */}
-        <section className="jf-card mt-6 p-6">
-          <h2 className="text-lg font-semibold">{t("set.webhooksTitle")}</h2>
-          <p className="mt-1 max-w-xl text-sm text-slate-400">
-            {t("set.eventsLabel")} <code className="rounded bg-slate-100 px-1">sale.paid</code>,{" "}
-            <code className="rounded bg-slate-100 px-1">sale.failed</code>,{" "}
-            <code className="rounded bg-slate-100 px-1">subscription.charged</code>. {t("set.hmacSigned")}
-          </p>
-          <form onSubmit={addWebhook} className="mt-3 flex flex-wrap gap-2">
-            <input value={whUrl} onChange={(e) => setWhUrl(e.target.value)} required type="url"
-              placeholder="https://yourapp.com/jomform-hook" className="jf-input min-w-56 max-w-xl flex-1" />
-            <input value={whSecret} onChange={(e) => setWhSecret(e.target.value)} required type="text"
-              placeholder={t("set.signingSecret")} className="jf-input w-48" />
-            <button className="jf-btn-primary">{t("set.add")}</button>
-          </form>
-          <ul className="mt-3 space-y-2">
-            {webhooks.map((wh) => (
-              <li key={wh.id} className="flex items-center justify-between gap-3 rounded-lg border border-[var(--jf-border)] px-4 py-2.5">
-                <div className="min-w-0">
-                  <p className="truncate font-mono text-xs">{wh.url}</p>
-                  <p className="mt-0.5 text-[11px] text-slate-400">{(wh.events || []).join(", ")}</p>
-                </div>
-                <button onClick={async () => { await fetch(`/api/rest/webhooks/${wh.id}`, { method: "DELETE" }); load(); }}
-                  className="shrink-0 text-xs text-slate-500 hover:text-red-500">✕</button>
-              </li>
-            ))}
-          </ul>
-        </section>
-
-        {/* ── MCP / OAuth 2.1 connected agents ── */}
-        <section className="jf-card mt-6 p-6">
-          <h2 className="text-lg font-semibold">{t("set.mcpTitle")}</h2>
-          <p className="mt-1 max-w-xl text-sm text-slate-400">
-            {t("set.serverUrl")} <code className="rounded bg-slate-100 px-1">https://mcp.jomform.com/mcp</code> —
-            {t("set.mcpHelp")}{" "}
-            <code className="rounded bg-slate-100 px-1">/.well-known/oauth-authorization-server</code>{" "}
-            {t("set.mcpNoKeys")}
-          </p>
-          <ul className="mt-4 space-y-2">
-            {keys.map((k) => (
-              <li key={k.id} className="flex items-center justify-between rounded-lg border border-[var(--jf-border)] px-4 py-2.5">
+            <section className="jf-card mt-6 p-6">
+              <h2 className="text-lg font-semibold">{t("set.einvoiceTitle")}</h2>
+              <p className="mt-1 max-w-xl text-sm text-slate-400">
+                {t("set.einvoiceHelp")}
+              </p>
+              <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div>
-                  <p className="text-sm">{k.name}</p>
-                  <p className="text-[11px] text-slate-400">{t("set.clientId")} {k.name === "AI Agent Key" ? "(oauth-managed)" : k.name}</p>
+                  <label className="text-xs text-slate-500">{t("set.companyTin")}</label>
+                  <input value={tin} onChange={(e) => setTin(e.target.value)} className="jf-input mt-1 max-w-xl" placeholder="e.g. C1234567890" />
                 </div>
-                <button onClick={async () => { await fetch(`/api/rest/keys/${k.id}`, { method: "DELETE" }); load(); }}
-                  className="text-xs text-slate-500 hover:text-red-500">{t("set.revoke")}</button>
-              </li>
-            ))}
-            {!keys.length && (
-              <li className="rounded-lg border border-dashed border-[var(--jf-border)] px-4 py-3 text-sm text-slate-400">
-                {t("set.noAgents")}
-              </li>
-            )}
-          </ul>
-        </section>
-
-        {/* ── Social login connectors ── */}
-        <section className="jf-card mt-6 p-6">
-          <h2 className="text-lg font-semibold">{t("set.socialTitle")}</h2>
-          <p className="mt-1 max-w-xl text-sm text-slate-400">
-            {t("set.socialHelp")}
-          </p>
-          <ul className="mt-4 space-y-2">
-            {social.map((l) => (
-              <li key={l.provider} className="flex items-center justify-between rounded-lg border border-[var(--jf-border)] px-4 py-2.5">
                 <div>
-                  <p className="text-sm capitalize">{l.provider} — {l.email}</p>
-                  <p className="text-[11px] text-slate-400">{t("set.linked")} {l.linked_at ? new Date(l.linked_at).toLocaleDateString() : ""}</p>
+                  <label className="text-xs text-slate-500">{t("set.msicCode")}</label>
+                  <input value={msic} onChange={(e) => setMsic(e.target.value)} className="jf-input mt-1 max-w-xl" placeholder="e.g. 62010" />
                 </div>
-                <button onClick={async () => { await fetch(`/api/auth/social/${l.provider}`, { method: "DELETE" }); load(); }}
-                  className="text-xs text-slate-500 hover:text-red-500">{t("set.unlink")}</button>
-              </li>
-            ))}
-            {social.length === 0 && (
-              <li className="text-sm text-slate-400">{t("set.noLinked")}</li>
-            )}
-          </ul>
-          <a href="/api/auth/oauth/google" className="jf-btn-ghost mt-3 inline-block">
-            {t("set.linkGoogle")}
-          </a>
-        </section>
+              </div>
+              <button onClick={async () => {
+                const r = await fetch("/api/rest/settings/einvoice", {
+                  method: "PUT", headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ tin, msic }),
+                });
+                setMsg(r.ok ? t("set.einvoiceSaved") : t("set.failedSave"));
+              }} className="jf-btn-primary mt-3">{t("set.saveEinvoice")}</button>
+            </section>
+          </>
+        )}
+
+        {/* ── Webhooks tab: outbound webhooks + MCP/API section ── */}
+        {tab === "webhooks" && (
+          <>
+            <section className="jf-card mt-6 p-6">
+              <h2 className="text-lg font-semibold">{t("set.webhooksTitle")}</h2>
+              <p className="mt-1 max-w-xl text-sm text-slate-400">
+                {t("set.eventsLabel")} <code className="rounded bg-slate-100 px-1">sale.paid</code>,{" "}
+                <code className="rounded bg-slate-100 px-1">sale.failed</code>,{" "}
+                <code className="rounded bg-slate-100 px-1">subscription.charged</code>. {t("set.hmacSigned")}
+              </p>
+              <form onSubmit={addWebhook} className="mt-3 flex flex-wrap gap-2">
+                <input value={whUrl} onChange={(e) => setWhUrl(e.target.value)} required type="url"
+                  placeholder="https://yourapp.com/jomform-hook" className="jf-input min-w-56 max-w-xl flex-1" />
+                <input value={whSecret} onChange={(e) => setWhSecret(e.target.value)} required type="text"
+                  placeholder={t("set.signingSecret")} className="jf-input w-48" />
+                <button className="jf-btn-primary">{t("set.add")}</button>
+              </form>
+              <ul className="mt-3 space-y-2">
+                {webhooks.map((wh) => (
+                  <li key={wh.id} className="flex items-center justify-between gap-3 rounded-lg border border-[var(--jf-border)] px-4 py-2.5">
+                    <div className="min-w-0">
+                      <p className="truncate font-mono text-xs">{wh.url}</p>
+                      <p className="mt-0.5 text-[11px] text-slate-400">{(wh.events || []).join(", ")}</p>
+                    </div>
+                    <button onClick={async () => { await fetch(`/api/rest/webhooks/${wh.id}`, { method: "DELETE" }); load(); }}
+                      className="shrink-0 text-xs text-slate-500 hover:text-red-500">✕</button>
+                  </li>
+                ))}
+              </ul>
+            </section>
+
+            {/* MCP / OAuth 2.1 connected agents */}
+            <section className="jf-card mt-6 p-6">
+              <h2 className="text-lg font-semibold">{t("set.mcpTitle")}</h2>
+              <p className="mt-1 max-w-xl text-sm text-slate-400">
+                {t("set.serverUrl")} <code className="rounded bg-slate-100 px-1">https://mcp.jomform.com/mcp</code> —
+                {t("set.mcpHelp")}{" "}
+                <code className="rounded bg-slate-100 px-1">/.well-known/oauth-authorization-server</code>{" "}
+                {t("set.mcpNoKeys")}
+              </p>
+              <ul className="mt-4 space-y-2">
+                {keys.map((k) => (
+                  <li key={k.id} className="flex items-center justify-between rounded-lg border border-[var(--jf-border)] px-4 py-2.5">
+                    <div>
+                      <p className="text-sm">{k.name}</p>
+                      <p className="text-[11px] text-slate-400">{t("set.clientId")} {k.name === "AI Agent Key" ? "(oauth-managed)" : k.name}</p>
+                    </div>
+                    <button onClick={async () => { await fetch(`/api/rest/keys/${k.id}`, { method: "DELETE" }); load(); }}
+                      className="text-xs text-slate-500 hover:text-red-500">{t("set.revoke")}</button>
+                  </li>
+                ))}
+                {!keys.length && (
+                  <li className="rounded-lg border border-dashed border-[var(--jf-border)] px-4 py-3 text-sm text-slate-400">
+                    {t("set.noAgents")}
+                  </li>
+                )}
+              </ul>
+            </section>
+          </>
+        )}
+
+        {/* ── Social tab: login connectors ── */}
+        {tab === "social" && (
+          <section className="jf-card mt-6 p-6">
+            <h2 className="text-lg font-semibold">{t("set.socialTitle")}</h2>
+            <p className="mt-1 max-w-xl text-sm text-slate-400">
+              {t("set.socialHelp")}
+            </p>
+            <ul className="mt-4 space-y-2">
+              {social.map((l) => (
+                <li key={l.provider} className="flex items-center justify-between rounded-lg border border-[var(--jf-border)] px-4 py-2.5">
+                  <div>
+                    <p className="text-sm capitalize">{l.provider} — {l.email}</p>
+                    <p className="text-[11px] text-slate-400">{t("set.linked")} {l.linked_at ? new Date(l.linked_at).toLocaleDateString() : ""}</p>
+                  </div>
+                  <button onClick={async () => { await fetch(`/api/auth/social/${l.provider}`, { method: "DELETE" }); load(); }}
+                    className="text-xs text-slate-500 hover:text-red-500">{t("set.unlink")}</button>
+                </li>
+              ))}
+              {social.length === 0 && (
+                <li className="text-sm text-slate-400">{t("set.noLinked")}</li>
+              )}
+            </ul>
+            <a href="/api/auth/oauth/google" className="jf-btn-ghost mt-3 inline-block">
+              {t("set.linkGoogle")}
+            </a>
+          </section>
+        )}
       </main>
     </Shell>
   );
