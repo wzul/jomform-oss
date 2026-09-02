@@ -97,12 +97,12 @@ export default function FormsPage() {
   return (
     <Shell active="forms">
       <div className="w-full flex-1 px-6 py-8">
-        <div className="flex items-center justify-between">
-          <div>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
             <h1 className="max-w-xl text-xl font-semibold tracking-tight">{t("forms.title")}</h1>
             <p className="max-w-xl text-sm text-[var(--jf-muted)]">{t("forms.subtitle")}</p>
           </div>
-          <Link href="/builder" className="jf-btn-primary">
+          <Link href="/builder" className="jf-btn-primary shrink-0 self-start sm:self-auto">
             {t("forms.new")}
           </Link>
         </div>
@@ -152,7 +152,7 @@ export default function FormsPage() {
             </li>
           )}
           {forms.map((f) => (
-            <li key={f.id} className="jf-card flex items-center justify-between px-5 py-4">
+            <li key={f.id} className="jf-card flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex min-w-0 items-center gap-3">
                 <input
                   type="checkbox"
@@ -166,20 +166,20 @@ export default function FormsPage() {
                   <p className="font-mono text-[11px] text-[var(--jf-muted)]">{spaceHost}/{f.slug}</p>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2 sm:justify-end">
                 {f.status === "published" ? (
                   <>
                     <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-[11px] font-medium text-emerald-700">
                       {t("forms.live")}
                     </span>
-                    <Link href={`/builder?form=${f.id}`} className="jf-btn-ghost">
+                    <Link href={`/builder?form=${f.id}`} className="jf-btn-ghost min-h-[44px] sm:min-h-10">
                       {t("forms.edit")}
                     </Link>
                     {/* Issue #126: per-form Sales deep-link -> /sales?form=<id> */}
-                    <Link href={`/sales?form=${f.id}`} className="jf-btn-ghost">
+                    <Link href={`/sales?form=${f.id}`} className="jf-btn-ghost min-h-[44px] sm:min-h-10">
                       {t("nav.sales")}
                     </Link>
-                    <a href={`https://${spaceHost}/${f.slug}`} target="_blank" className="jf-btn-ghost">
+                    <a href={`https://${spaceHost}/${f.slug}`} target="_blank" className="jf-btn-ghost min-h-[44px] sm:min-h-10">
                       {t("bld.view")}
                     </a>
                   </>
@@ -188,14 +188,14 @@ export default function FormsPage() {
                     <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-[11px] font-medium text-slate-500">
                       {t("forms.draft")}
                     </span>
-                    <Link href={`/builder?form=${f.id}`} className="jf-btn-ghost">
+                    <Link href={`/builder?form=${f.id}`} className="jf-btn-ghost min-h-[44px] sm:min-h-10">
                       {t("forms.edit")}
                     </Link>
                     {/* Issue #126: per-form Sales deep-link (works for drafts too) */}
-                    <Link href={`/sales?form=${f.id}`} className="jf-btn-ghost">
+                    <Link href={`/sales?form=${f.id}`} className="jf-btn-ghost min-h-[44px] sm:min-h-10">
                       {t("nav.sales")}
                     </Link>
-                    <button onClick={() => publish(f.id)} className="jf-btn-primary">
+                    <button onClick={() => publish(f.id)} className="jf-btn-primary min-h-[44px] sm:min-h-10">
                       {t("builder.publish")}
                     </button>
                   </>
