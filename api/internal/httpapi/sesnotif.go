@@ -1,8 +1,10 @@
 // SES notification endpoint (issue #56): receives SNS Bounce/Complaint
 // notifications subscribed to the SES configuration set, verifies the SNS
 // signature, and records permanent bounces / complaints into the suppression
-// list, flagging the owning user unverified. No unauthenticated write: a
-// request without a valid SNS signature is rejected.
+// list, flagging the owning user unverified. Issue #93 extends it to also
+// record Delivered/Open/Click events into email_delivery_events (informational
+// only — no suppression/breaker action). No unauthenticated write: a request
+// without a valid SNS signature is rejected.
 package httpapi
 
 import (
@@ -24,6 +26,19 @@ type sesSNSMessage struct {
 	Complaint *struct {
 		ComplainedRecipients []sesRecipient `json:"complainedRecipients"`
 	} `json:"complaint,omitempty"`
+	// Issue #93: informational delivery events (no suppression/breaker action).
+	Delivery *struct {
+		Recipients []string `json:"recipients"`
+	} `json:"delivery,omitempty"`
+	Open *struct {
+		Recipients []string `json:"recipients"`
+		IPAddress  string   `json:"ipAddress"`
+		UserAgent  string   `json:"userAgent"`
+	} `json:"open,omitempty"`
+	Click *struct {
+		Recipients []string `json:"recipients"`
+		Link       string   `json:"link"`
+	} `json:"click,omitempty"`
 	Mail struct {
 		Destination []string `json:"destination"`
 	} `json:"mail"`
@@ -145,43 +160,101 @@ func (s *Server) handleSESNotification(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 3. Record actionable feedback. Permanent bounce or complaint → suppress.
+	//    Delivered/Open/Click are informational (issue #93) — recorded only.
+	if !sw.handleEvent(r.Context(), &msg) {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ignored"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleEvent applies one SES event. It returns false when the event type is
+// unknown or its payload is missing (caller responds "ignored"). Bounce and
+// Complaint suppress + record; Delivered/Open/Click (issue #93) are
+// informational and only record into email_delivery_events.
+func (sw *suppressionWriter) handleEvent(ctx context.Context, msg *sesSNSMessage) bool {
 	switch msg.EventType {
 	case "Bounce":
 		if msg.Bounce == nil {
-			writeJSON(w, http.StatusOK, map[string]string{"status": "ignored"})
-			return
+			return false
 		}
 		permanent := msg.Bounce.BounceType == "Permanent"
 		for _, rec := range msg.Bounce.BouncedRecipients {
 			// Issue #92: record the bounce into email_delivery_events (in
 			// addition to the suppression write below).
-			sw.recordDeliveryEvent(r.Context(), rec.EmailAddress, "bounce", msg.Bounce.BounceType, map[string]any{
+			sw.recordDeliveryEvent(ctx, rec.EmailAddress, "bounce", msg.Bounce.BounceType, map[string]any{
 				"bounceType": msg.Bounce.BounceType,
 			})
 			if !permanent {
 				// Transient bounces are not suppressed, but still counted so the
 				// breaker can react to an anomalous transient-bounce storm.
 				if sw.Breaker != nil {
-					_ = sw.Breaker.RecordBounceCount(r.Context(), 1)
+					_ = sw.Breaker.RecordBounceCount(ctx, 1)
 				}
 				continue
 			}
-			sw.suppress(r.Context(), rec.EmailAddress, "permanent bounce ("+msg.Bounce.BounceType+")", dbstore.SuppressionSourceBounce, true)
+			sw.suppress(ctx, rec.EmailAddress, "permanent bounce ("+msg.Bounce.BounceType+")", dbstore.SuppressionSourceBounce, true)
 		}
 	case "Complaint":
 		if msg.Complaint == nil {
-			writeJSON(w, http.StatusOK, map[string]string{"status": "ignored"})
-			return
+			return false
 		}
 		for _, rec := range msg.Complaint.ComplainedRecipients {
 			// Issue #92: record the complaint into email_delivery_events.
-			sw.recordDeliveryEvent(r.Context(), rec.EmailAddress, "complaint", "", nil)
-			sw.suppress(r.Context(), rec.EmailAddress, "complaint", dbstore.SuppressionSourceComplaint, false)
+			sw.recordDeliveryEvent(ctx, rec.EmailAddress, "complaint", "", nil)
+			sw.suppress(ctx, rec.EmailAddress, "complaint", dbstore.SuppressionSourceComplaint, false)
+		}
+	case "Delivered":
+		// Issue #93: informational — record delivery, no suppression/breaker.
+		if msg.Delivery == nil {
+			return false
+		}
+		for _, addr := range msg.Delivery.Recipients {
+			sw.recordDeliveryEvent(ctx, addr, "delivered", "", nil)
+		}
+	case "Open":
+		// Issue #93: informational — record open (+ user agent / IP), no
+		// suppression/breaker. SES Open events carry the recipient in
+		// mail.destination (the open object has no recipients array), so fall
+		// back to it when open.recipients is absent.
+		if msg.Open == nil {
+			return false
+		}
+		detail := map[string]any{}
+		if msg.Open.UserAgent != "" {
+			detail["userAgent"] = msg.Open.UserAgent
+		}
+		if msg.Open.IPAddress != "" {
+			detail["ipAddress"] = msg.Open.IPAddress
+		}
+		recipients := msg.Open.Recipients
+		if len(recipients) == 0 {
+			recipients = msg.Mail.Destination
+		}
+		for _, addr := range recipients {
+			sw.recordDeliveryEvent(ctx, addr, "open", "", detail)
+		}
+	case "Click":
+		// Issue #93: informational — record click (+ link), no suppression/breaker.
+		// As with Open, fall back to mail.destination when click.recipients is
+		// absent (the standard SES Click shape has no recipients array).
+		if msg.Click == nil {
+			return false
+		}
+		detail := map[string]any{}
+		if msg.Click.Link != "" {
+			detail["link"] = msg.Click.Link
+		}
+		recipients := msg.Click.Recipients
+		if len(recipients) == 0 {
+			recipients = msg.Mail.Destination
+		}
+		for _, addr := range recipients {
+			sw.recordDeliveryEvent(ctx, addr, "click", "", detail)
 		}
 	default:
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ignored"})
-		return
+		return false
 	}
-
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	return true
 }
