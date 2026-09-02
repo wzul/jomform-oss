@@ -124,6 +124,7 @@ type saleOut struct {
 
 type listSalesIn struct {
 	FormID string `json:"form_id,omitempty" jsonschema:"Optional — hadkan kepada jualan borang ini (id dari list_forms/get_form)"`
+	Status string `json:"status,omitempty" jsonschema:"Optional — hadkan kepada status: pending|paid|confirmed|failed|cancelled"`
 }
 
 func (s *Server) listSales(ctx context.Context, _ *mcp.CallToolRequest, in listSalesIn) (*mcp.CallToolResult, []saleOut, error) {
@@ -132,10 +133,15 @@ func (s *Server) listSales(ctx context.Context, _ *mcp.CallToolRequest, in listS
 		return nil, nil, err
 	}
 	var sales []*dbstore.Sale
-	if in.FormID != "" {
+	switch {
+	case in.Status != "":
+		// Parity with the /sales page filter (issue #126): status-only filter,
+		// account-scoped, newest first. Ownership is enforced inside the query.
+		sales, err = s.deps.Sales.ListByAccountStatus(ctx, accountID, in.Status, 50)
+	case in.FormID != "":
 		// Scoped to one form; ownership enforced inside the store query.
 		sales, err = s.deps.Sales.ListByAccountForm(ctx, accountID, in.FormID, 50)
-	} else {
+	default:
 		sales, err = s.deps.Sales.ListByAccount(ctx, accountID, 50)
 	}
 	if err != nil {

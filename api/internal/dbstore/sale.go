@@ -2,6 +2,8 @@ package dbstore
 
 import (
 	"context"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -183,6 +185,34 @@ func (s *SaleStore) SetStatus(ctx context.Context, saleID, status string) error 
 	return err
 }
 
+// ListByAccountStatus returns recent sales for one account filtered by status
+// (issue #126 MCP parity with the /sales page status dropdown), newest first.
+func (s *SaleStore) ListByAccountStatus(ctx context.Context, accountID, status string, limit int) ([]*Sale, error) {
+	if status == "" {
+		return s.ListByAccount(ctx, accountID, limit)
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	rows, err := s.pool.Query(ctx,
+		saleSelect+" WHERE account_id=$1 AND status=$2 ORDER BY created_at DESC LIMIT $3",
+		accountID, status, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Sale
+	for rows.Next() {
+		var s *Sale
+		s, err = scanSale(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
 // ListByAccount returns recent sales for a dashboard.
 func (s *SaleStore) ListByAccount(ctx context.Context, accountID string, limit int) ([]*Sale, error) {
 	if limit <= 0 || limit > 200 {
@@ -325,6 +355,90 @@ func (s *SaleStore) ListByAccountsFormPage(ctx context.Context, accountIDs []str
 	rows, err := s.pool.Query(ctx,
 		saleSelect+" WHERE account_id = ANY($1) AND form_id::text = $2 ORDER BY created_at DESC LIMIT $3 OFFSET $4",
 		accountIDs, formID, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	out := []*Sale{}
+	for rows.Next() {
+		sale, err := scanSale(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		out = append(out, sale)
+	}
+	return out, total, rows.Err()
+}
+
+// SaleFilter is the optional filter set for the dedicated /sales page (issue
+// #126): per-form, status, created-at date range and a free-text search over
+// the reference code and buyer name. Date fields are YYYY-MM-DD (timezone-agnostic
+// day bounds) — the from day starts at 00:00 and the to day runs through its
+// end so an inclusive day range is intuitive in the UI.
+type SaleFilter struct {
+	FormID   string
+	Status   string
+	DateFrom string // YYYY-MM-DD, inclusive
+	DateTo   string // YYYY-MM-DD, inclusive
+	Q        string // matches ref_code or buyer full name (case-insensitive)
+}
+
+// ListFilteredPage returns one page of sales across a set of accounts, newest
+// first, matching the optional filters, plus the total row count for the same
+// filter. Column-aligned with saleSelect/scanSale. Every clause targets sales
+// rows only (no joins), so the scan stays the single-column form.
+func (s *SaleStore) ListFilteredPage(ctx context.Context, accountIDs []string, f SaleFilter, page, limit int) ([]*Sale, int64, error) {
+	if len(accountIDs) == 0 {
+		return []*Sale{}, 0, nil
+	}
+	if page < 1 {
+		page = 1
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	where := []string{"account_id = ANY($1)"}
+	args := []any{accountIDs}
+	next := func() int { return len(args) + 1 }
+
+	if f.FormID != "" {
+		args = append(args, f.FormID)
+		where = append(where, "form_id::text = $"+strconv.Itoa(next()-1))
+	}
+	if f.Status != "" {
+		args = append(args, f.Status)
+		where = append(where, "status = $"+strconv.Itoa(next()-1))
+	}
+	if f.DateFrom != "" {
+		args = append(args, f.DateFrom+" 00:00:00")
+		where = append(where, "created_at >= $"+strconv.Itoa(next()-1))
+	}
+	if f.DateTo != "" {
+		args = append(args, f.DateTo+" 23:59:59")
+		where = append(where, "created_at <= $"+strconv.Itoa(next()-1))
+	}
+	if f.Q != "" {
+		args = append(args, "%"+f.Q+"%")
+		where = append(where, "(ref_code ILIKE $"+strconv.Itoa(next()-1)+" OR client->>'full_name' ILIKE $"+strconv.Itoa(next()-1)+")")
+	}
+
+	clause := strings.Join(where, " AND ")
+	offset := (page - 1) * limit
+
+	var total int64
+	if err := s.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM sales WHERE `+clause, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	fullArgs := append(append([]any{}, args...), limit, offset)
+	rows, err := s.pool.Query(ctx,
+		saleSelect+" WHERE "+clause+" ORDER BY created_at DESC LIMIT $"+strconv.Itoa(len(args)+1)+" OFFSET $"+strconv.Itoa(len(args)+2),
+		fullArgs...)
 	if err != nil {
 		return nil, 0, err
 	}

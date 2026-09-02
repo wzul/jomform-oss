@@ -572,7 +572,10 @@ func (h *RESTHandlers) summary(w http.ResponseWriter, r *http.Request, actx *Acc
 // ─── Sales ───────────────────────────────────────────────────────────────────
 
 // restSaleRows maps sales to the dashboard JSON shape. Shared by
-// GET /v1/rest/sales and the dashboard bundle (issue #29).
+// GET /v1/rest/sales and the dashboard bundle (issue #29). The rich fields
+// (items, amounts, buyer contact) are additive and drive the dedicated /sales
+// detail drawer (issue #126); the dashboard Recent-sales table reads only the
+// subset it renders, so extras are backward-compatible.
 type saleRow struct {
 	RefCode     string `json:"ref_code"`
 	Status      string `json:"status"`
@@ -587,6 +590,25 @@ type saleRow struct {
 	// (issue #106): "" (no event yet) | delivered | open | click | bounce |
 	// complaint. Populated when the delivery-event store is wired.
 	EmailStatus string `json:"email_status,omitempty"`
+
+	// Issue #126: detail-drawer fields (additive for the /sales page).
+	FormID      string    `json:"form_id,omitempty"`
+	SaleType    string    `json:"sale_type,omitempty"`
+	InvoiceNo   string    `json:"invoice_no,omitempty"`
+	BuyerEmail  string    `json:"buyer_email,omitempty"`
+	BuyerPhone  string    `json:"buyer_phone,omitempty"`
+	SubtotalSen int64     `json:"subtotal_sen,omitempty"`
+	ShippingSen int64     `json:"shipping_sen,omitempty"`
+	DiscountSen int64     `json:"discount_sen,omitempty"`
+	Items       []itemRow `json:"items,omitempty"`
+	Updated     string    `json:"updated_at,omitempty"`
+}
+
+type itemRow struct {
+	ProductID string `json:"product_id"`
+	PriceSen  int64  `json:"price_sen"`
+	Qty       int64  `json:"qty"`
+	Name      string `json:"name"`
 }
 
 // latestEmailStatuses returns, for each sale ref, the most recent delivery
@@ -614,18 +636,46 @@ func (h *RESTHandlers) latestEmailStatuses(ctx context.Context, sales []*dbstore
 func restSaleRows(sales []*dbstore.Sale) []saleRow {
 	out := make([]saleRow, 0, len(sales))
 	for _, s := range sales {
-		row := saleRow{
-			RefCode: s.RefCode, Status: s.Status, TotalSen: s.TotalSen,
-			Method: s.PaymentMethod, Buyer: s.Client.FullName,
-			Created:     s.CreatedAt.UTC().Format(time.RFC3339),
-			SkipCapture: s.SkipCapture, Authorized: s.Authorized,
-		}
-		if s.CapturedAt != nil {
-			row.CapturedAt = s.CapturedAt.UTC().Format(time.RFC3339)
-		}
-		out = append(out, row)
+		out = append(out, toSaleRow(s, ""))
 	}
 	return out
+}
+
+// toSaleRow converts a Sale into its JSON row. emailStatus is the receipt
+// delivery event type for this sale (issue #106), or "".
+func toSaleRow(s *dbstore.Sale, emailStatus string) saleRow {
+	row := saleRow{
+		RefCode: s.RefCode, Status: s.Status, TotalSen: s.TotalSen,
+		Method: s.PaymentMethod, Buyer: s.Client.FullName,
+		Created:     s.CreatedAt.UTC().Format(time.RFC3339),
+		SkipCapture: s.SkipCapture, Authorized: s.Authorized,
+		EmailStatus: emailStatus,
+		FormID:      s.FormID,
+		SaleType:    s.SaleType,
+		InvoiceNo:   s.InvoiceNo,
+		BuyerEmail:  s.Client.Email,
+		BuyerPhone:  s.Client.Phone,
+		SubtotalSen: s.SubtotalSen,
+		ShippingSen: s.ShippingSen,
+		DiscountSen: s.DiscountSen,
+		Updated:     s.UpdatedAt.UTC().Format(time.RFC3339),
+	}
+	if s.CapturedAt != nil {
+		row.CapturedAt = s.CapturedAt.UTC().Format(time.RFC3339)
+	}
+	if len(s.Items) > 0 {
+		items := make([]itemRow, 0, len(s.Items))
+		for _, it := range s.Items {
+			items = append(items, itemRow{
+				ProductID: it.ProductID,
+				PriceSen:  it.PriceSen,
+				Qty:       it.Qty,
+				Name:      it.Name,
+			})
+		}
+		row.Items = items
+	}
+	return row
 }
 
 func (h *RESTHandlers) listSales(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
@@ -678,7 +728,19 @@ func (h *RESTHandlers) listSales(w http.ResponseWriter, r *http.Request, actx *A
 	var sales []*dbstore.Sale
 	var total int64
 	var err error
-	if formID != "" {
+	f := dbstore.SaleFilter{
+		FormID:   formID,
+		Status:   r.URL.Query().Get("status"),
+		DateFrom: r.URL.Query().Get("date_from"),
+		DateTo:   r.URL.Query().Get("date_to"),
+		Q:        r.URL.Query().Get("q"),
+	}
+	// The dedicated /sales page (issue #126) always pages and uses the unified
+	// filtered query whenever any filter is present; a bare form_id keeps the
+	// existing per-account query path (cheap, already covered by tests).
+	if f.Status != "" || f.DateFrom != "" || f.DateTo != "" || f.Q != "" {
+		sales, total, err = h.Sales.ListFilteredPage(r.Context(), scope.Accounts, f, page, limit)
+	} else if formID != "" {
 		sales, total, err = h.Sales.ListByAccountsFormPage(r.Context(), scope.Accounts, formID, page, limit)
 	} else {
 		sales, total, err = h.Sales.ListByAccountsPage(r.Context(), scope.Accounts, page, limit)

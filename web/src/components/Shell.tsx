@@ -16,7 +16,7 @@ export function Shell({
   active,
 }: {
   children: React.ReactNode;
-  active: "dashboard" | "forms" | "products" | "settings" | "profile";
+  active: "dashboard" | "forms" | "products" | "sales" | "settings" | "profile";
 }) {
   const { user, spaces } = useSession();
   const [space, setSpace] = useState<string>("");
@@ -90,6 +90,8 @@ export function Shell({
     { key: "dashboard", href: "/", label: t("nav.dashboard"), icon: "◧" },
     { key: "forms", href: "/forms", label: t("nav.forms"), icon: "✎" },
     { key: "products", href: "/products", label: t("prod.title"), icon: "◧" },
+    // Issue #126: dedicated Sales page, between Products and Settings.
+    { key: "sales", href: "/sales", label: t("nav.sales"), icon: "💰" },
     { key: "settings", href: "/settings", label: t("nav.settings"), icon: "⚙" },
     { key: "profile", href: "/profile", label: t("prof.title"), icon: "👤" },
   ];

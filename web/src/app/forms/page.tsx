@@ -175,6 +175,10 @@ export default function FormsPage() {
                     <Link href={`/builder?form=${f.id}`} className="jf-btn-ghost">
                       {t("forms.edit")}
                     </Link>
+                    {/* Issue #126: per-form Sales deep-link -> /sales?form=<id> */}
+                    <Link href={`/sales?form=${f.id}`} className="jf-btn-ghost">
+                      {t("nav.sales")}
+                    </Link>
                     <a href={`https://${spaceHost}/${f.slug}`} target="_blank" className="jf-btn-ghost">
                       {t("bld.view")}
                     </a>
@@ -186,6 +190,10 @@ export default function FormsPage() {
                     </span>
                     <Link href={`/builder?form=${f.id}`} className="jf-btn-ghost">
                       {t("forms.edit")}
+                    </Link>
+                    {/* Issue #126: per-form Sales deep-link (works for drafts too) */}
+                    <Link href={`/sales?form=${f.id}`} className="jf-btn-ghost">
+                      {t("nav.sales")}
                     </Link>
                     <button onClick={() => publish(f.id)} className="jf-btn-primary">
                       {t("builder.publish")}

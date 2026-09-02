@@ -995,6 +995,12 @@ export default function Builder() {
                     </button>
                   )}
                   <a
+                    href={`/sales?form=${currentId}`}
+                    className="whitespace-nowrap rounded-md border border-[var(--jf-border)] px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50"
+                  >
+                    {t("nav.sales")}
+                  </a>
+                  <a
                     href={`/api/rest/sales/export.csv?form_id=${currentId}`}
                     className="whitespace-nowrap rounded-md border border-[var(--jf-border)] px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50"
                   >
