@@ -7,12 +7,18 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"image"
 	"image/color"
 	"image/jpeg"
 	"image/png"
+	"net/http"
+	"os"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 // tinyPNG returns a real 16x16 PNG so sniffImageType/optimizeImage have
@@ -155,4 +161,97 @@ func generateLargeImageFixture() []byte {
 	var buf bytes.Buffer
 	_ = png.Encode(&buf, img)
 	return buf.Bytes()
+}
+
+// TestPublicReadPolicyGrantsAnonymousGet (issue #79): the bucket policy we
+// apply must grant anonymous s3:GetObject on every object so builder/form
+// image blocks render without signed URLs. It must be a valid JSON document
+// scoped to the exact bucket and nothing else.
+func TestPublicReadPolicyGrantsAnonymousGet(t *testing.T) {
+	policy := publicReadPolicy("jomform-media")
+	var doc struct {
+		Version   string `json:"Version"`
+		Statement []struct {
+			Effect    string   `json:"Effect"`
+			Principal any      `json:"Principal"`
+			Action    []string `json:"Action"`
+			Resource  []string `json:"Resource"`
+		} `json:"Statement"`
+	}
+	if err := json.Unmarshal([]byte(policy), &doc); err != nil {
+		t.Fatalf("policy is not valid JSON: %v\n%s", err, policy)
+	}
+	if doc.Version != "2012-10-17" {
+		t.Fatalf("Version = %q, want 2012-10-17", doc.Version)
+	}
+	if len(doc.Statement) != 1 {
+		t.Fatalf("expected exactly 1 statement, got %d", len(doc.Statement))
+	}
+	st := doc.Statement[0]
+	if st.Effect != "Allow" {
+		t.Fatalf("Effect = %q, want Allow", st.Effect)
+	}
+	// Principal "*" (anonymous) — must be present, not a specific account.
+	if p, ok := st.Principal.(string); !ok || p != "*" {
+		t.Fatalf("Principal = %#v, want \"*\"", st.Principal)
+	}
+	if len(st.Action) != 1 || st.Action[0] != "s3:GetObject" {
+		t.Fatalf("Action = %v, want [s3:GetObject]", st.Action)
+	}
+	if len(st.Resource) != 1 || st.Resource[0] != "arn:aws:s3:::jomform-media/*" {
+		t.Fatalf("Resource = %v, want [arn:aws:s3:::jomform-media/*]", st.Resource)
+	}
+}
+
+// TestEnsureBucketIntegration (issue #79) is an opt-in integration test that
+// exercises the real S3/MinIO bootstrap path (HeadBucket → CreateBucket →
+// PutBucketPolicy) against a live endpoint. It is skipped unless
+// JOMFORM_S3_TEST_ENDPOINT is set, so the default `go test ./...` stays
+// hermetic (no network, no MinIO dependency). Set it to a throwaway MinIO
+// (e.g. `docker run -p 9000:9000 minio/minio server /data`) with the bucket
+// absent to prove the guard creates it and makes it public-read.
+func TestEnsureBucketIntegration(t *testing.T) {
+	endpoint := os.Getenv("JOMFORM_S3_TEST_ENDPOINT")
+	if endpoint == "" {
+		t.Skip("set JOMFORM_S3_TEST_ENDPOINT to run the S3 bootstrap integration test")
+	}
+	ak := os.Getenv("JOMFORM_S3_TEST_ACCESS_KEY")
+	sk := os.Getenv("JOMFORM_S3_TEST_SECRET_KEY")
+	if ak == "" || sk == "" {
+		t.Fatal("JOMFORM_S3_TEST_ACCESS_KEY and JOMFORM_S3_TEST_SECRET_KEY are required")
+	}
+	bucket := os.Getenv("JOMFORM_S3_TEST_BUCKET")
+	if bucket == "" {
+		bucket = "jomform-media-test"
+	}
+	store, err := NewObjectStore(endpoint, ak, sk, bucket, "us-east-1")
+	if err != nil {
+		t.Fatalf("NewObjectStore: %v", err)
+	}
+	ctx := context.Background()
+
+	// Idempotent: calling twice must not error (second run sees the bucket).
+	for i := 0; i < 2; i++ {
+		if err := store.EnsureBucket(ctx); err != nil {
+			t.Fatalf("EnsureBucket (run %d): %v", i+1, err)
+		}
+	}
+
+	// The bucket must now accept an anonymous GET (public-read). We PUT an
+	// object, then fetch it back over plain HTTP with no credentials and
+	// require a 200 — this is exactly how the builder/form canvas renders.
+	key := "u/test/" + uuid.NewString() + ".png"
+	body := tinyPNG(t)
+	if err := store.PutObject(ctx, key, "image/png", body); err != nil {
+		t.Fatalf("PutObject: %v", err)
+	}
+	url := store.PublicURL(key)
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatalf("anonymous GET %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("anonymous GET %s = %d, want 200 (bucket must be public-read)", url, resp.StatusCode)
+	}
 }

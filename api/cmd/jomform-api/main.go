@@ -136,6 +136,15 @@ func main() {
 			if err != nil {
 				log.Error("s3 object store", "err", err)
 				store = nil
+			} else {
+				// Issue #79: provision the media bucket (create + public-read)
+				// at startup so a fresh MinIO/S3 can't silently regress into the
+				// NoSuchBucket 500 that broke builder image uploads. Idempotent —
+				// no-op when the bucket already exists.
+				if err := store.EnsureBucket(ctx); err != nil {
+					log.Error("s3 bucket bootstrap", "err", err)
+					store = nil
+				}
 			}
 		} else {
 			log.Warn("S3_ACCESS_KEY/S3_SECRET_KEY unset — image uploads disabled")

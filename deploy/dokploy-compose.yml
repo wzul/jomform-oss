@@ -63,6 +63,7 @@ services:
       mc alias set local http://minio:9000 jomform $$MINIO_ROOT_PASSWORD &&
       mc mb --ignore-existing local/jomform-media &&
       mc version enable local/jomform-media &&
+      mc anonymous set download local/jomform-media &&
       echo 'buckets ready'"
     environment:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}

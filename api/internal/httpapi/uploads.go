@@ -39,6 +39,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/disintegration/imaging"
 	"github.com/google/uuid"
 )
@@ -132,6 +133,61 @@ func (o *ObjectStore) PutObject(ctx context.Context, key, contentType string, bo
 // PublicURL returns the canonical object URL for a key.
 func (o *ObjectStore) PublicURL(key string) string {
 	return o.publicBase + "/" + key
+}
+
+// EnsureBucket provisions the media bucket if it does not exist and makes it
+// public-read (issue #79). It is idempotent: on a fresh MinIO/S3 the bucket is
+// created and a public-read policy applied; on subsequent boots the bucket
+// already exists and the call is a no-op. This is the durable in-repo guard so
+// a rebuild/redeploy can never silently regress into the NoSuchBucket 500 that
+// broke builder image uploads.
+//
+// Serving pattern (see NewObjectStore): public images are served from the
+// direct {S3_ENDPOINT}/{bucket}/{key} object URL, so the bucket must allow
+// anonymous s3:GetObject — otherwise builder/form image blocks render as
+// broken without signed URLs.
+func (o *ObjectStore) EnsureBucket(ctx context.Context) error {
+	// HeadBucket first: if it exists (and we can access it) there is nothing
+	// to do. A missing bucket surfaces as a typed NotFound / NoSuchBucket.
+	_, err := o.client.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: &o.bucket})
+	if err == nil {
+		return nil
+	}
+	var notFound *types.NotFound
+	var noSuchBucket *types.NoSuchBucket
+	if !errors.As(err, &notFound) && !errors.As(err, &noSuchBucket) {
+		// Some other failure (auth, network, endpoint down) — do not mask it.
+		return fmt.Errorf("s3 head bucket %q: %w", o.bucket, err)
+	}
+
+	// Bucket absent: create it. MinIO/S3 use us-east-1 as the default region
+	// for path-style local endpoints; CreateBucketConfiguration is only needed
+	// for non-default regions and would break MinIO, so we omit it.
+	if _, err := o.client.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: &o.bucket}); err != nil {
+		// A concurrent bootstrap may have created it between our Head and
+		// Create — treat that as success.
+		var owned *types.BucketAlreadyOwnedByYou
+		var exists *types.BucketAlreadyExists
+		if !errors.As(err, &owned) && !errors.As(err, &exists) {
+			return fmt.Errorf("s3 create bucket %q: %w", o.bucket, err)
+		}
+	}
+
+	// Make the bucket public-read so objects render without signed URLs.
+	policy := publicReadPolicy(o.bucket)
+	if _, err := o.client.PutBucketPolicy(ctx, &s3.PutBucketPolicyInput{
+		Bucket: &o.bucket,
+		Policy: &policy,
+	}); err != nil {
+		return fmt.Errorf("s3 put bucket policy %q: %w", o.bucket, err)
+	}
+	return nil
+}
+
+// publicReadPolicy returns a bucket policy granting anonymous s3:GetObject on
+// every object in the bucket. Scoped to exactly the given bucket.
+func publicReadPolicy(bucket string) string {
+	return fmt.Sprintf(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*","Action":["s3:GetObject"],"Resource":["arn:aws:s3:::%s/*"]}]}`, bucket)
 }
 
 // uploadImage handles POST /v1/rest/uploads/image (multipart). It optimises
