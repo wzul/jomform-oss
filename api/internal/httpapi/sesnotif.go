@@ -232,8 +232,10 @@ func (sw *suppressionWriter) handleEvent(ctx context.Context, msg *sesSNSMessage
 			sw.recordDeliveryEvent(ctx, rec.EmailAddress, "complaint", "", "", nil)
 			sw.suppress(ctx, rec.EmailAddress, "complaint", dbstore.SuppressionSourceComplaint, false)
 		}
-	case "Delivered":
+	case "Delivery", "Delivered":
 		// Issue #93: informational — record delivery, no suppression/breaker.
+		// SES emits eventType "Delivery" (not "Delivered"); accept both so a
+		// Delivery event is never silently dropped to the default branch.
 		if msg.Delivery == nil {
 			return false
 		}
