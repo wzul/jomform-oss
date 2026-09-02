@@ -20,12 +20,12 @@ func (h *RESTHandlers) setFormChipOverride(w http.ResponseWriter, r *http.Reques
 	}
 	enc, err := cryptoutil.Encrypt(h.SecretsKey, []byte(in.SecretKey))
 	if err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	if err := h.Forms.SetChipOverride(r.Context(), actx.Account.ID, r.PathValue("id"),
 		in.BrandID, enc, in.EmailFallback, in.MethodWhitelist); err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	respond(w, http.StatusOK, map[string]string{"status": "override_set"})
@@ -33,7 +33,7 @@ func (h *RESTHandlers) setFormChipOverride(w http.ResponseWriter, r *http.Reques
 
 func (h *RESTHandlers) clearFormChipOverride(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	if err := h.Forms.ClearChipOverride(r.Context(), actx.Account.ID, r.PathValue("id")); err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	respond(w, http.StatusOK, map[string]string{"status": "override_cleared"})

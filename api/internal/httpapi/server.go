@@ -12,6 +12,7 @@ import (
 	"github.com/wzul/jomform/api/internal/email"
 	"github.com/wzul/jomform/api/internal/httpapi/middleware"
 	"github.com/wzul/jomform/api/internal/mcpsrv"
+	"github.com/wzul/jomform/api/internal/metrics"
 	"github.com/wzul/jomform/api/internal/version"
 )
 
@@ -58,11 +59,12 @@ type VerifyMailer interface {
 
 // Server wires dependencies into HTTP handlers.
 type Server struct {
-	cfg   *config.Config
-	log   *slog.Logger
-	deps  *Deps
-	auth  *AuthHandlers
-	proxy *middleware.TrustedProxy
+	cfg     *config.Config
+	log     *slog.Logger
+	deps    *Deps
+	auth    *AuthHandlers
+	proxy   *middleware.TrustedProxy
+	metrics *metrics.Metrics
 }
 
 // NewServer builds the HTTP API server. deps may be nil (health-only mode).
@@ -70,7 +72,8 @@ func NewServer(cfg *config.Config, log *slog.Logger, deps *Deps) *Server {
 	if deps == nil {
 		deps = &Deps{}
 	}
-	s := &Server{cfg: cfg, log: log, deps: deps}
+	s := &Server{cfg: cfg, log: log, deps: deps, metrics: metrics.New()}
+	setGlobalMetrics(s.metrics)
 	isDev = cfg.IsDev()
 
 	if deps.Users != nil && deps.Sessions != nil {
@@ -102,6 +105,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 	mux.HandleFunc("GET /readyz", s.handleReady)
 	mux.HandleFunc("GET /version", s.handleVersion)
+	// Issue #100: Prometheus scrape endpoint. Exposed on the same listener;
+	// ops can restrict it at the edge (Cloudflare/nginx) if needed.
+	mux.Handle("GET /metrics", s.metrics.Handler())
 
 	if s.auth != nil {
 		s.auth.RegisterRoutes(mux)
@@ -140,7 +146,7 @@ func (s *Server) Handler() http.Handler {
 	}
 	h = middleware.Secure(h)
 	h = recoverer(h)
-	h = middleware.Logger(s.log, h)
+	h = middleware.Logger(s.log, s.metrics, h)
 	h = middleware.RequestID(h)
 	return h
 }
@@ -189,7 +195,13 @@ func recoverer(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
-				slog.Error("panic_recovered", "err", rec, "path", r.URL.Path)
+				slog.Error("panic_recovered",
+					"err", rec,
+					"path", r.URL.Path,
+					"request_id", middleware.GetRequestID(r.Context()),
+					"account_id", middleware.GetAccountID(r.Context()),
+					"error_class", "panic",
+				)
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 			}
 		}()

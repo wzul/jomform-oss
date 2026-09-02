@@ -25,7 +25,7 @@ func (h *RESTHandlers) setCustomDomain(w http.ResponseWriter, r *http.Request, a
 		return
 	}
 	if err := h.Accounts.SetCustomDomain(r.Context(), actx.Account.ID, domain); err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	// Issue #92: audit custom-domain claim.
@@ -45,7 +45,7 @@ func (h *RESTHandlers) setCustomDomain(w http.ResponseWriter, r *http.Request, a
 func (h *RESTHandlers) getCustomDomain(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	acc, err := h.Accounts.ByID(r.Context(), actx.Account.ID)
 	if err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -72,7 +72,7 @@ func probeServesJomForm(domain string) bool {
 // deleteCustomDomain clears the claim.
 func (h *RESTHandlers) deleteCustomDomain(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	if err := h.Accounts.ClearCustomDomain(r.Context(), actx.Account.ID); err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	// Issue #92: audit custom-domain removal.

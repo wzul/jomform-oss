@@ -198,12 +198,14 @@ func publicReadPolicy(bucket string) string {
 // Response: {"url": "..."} 200, or 400 on validation errors.
 func (h *RESTHandlers) uploadImage(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	if h.Store == nil {
+		recordUploadFailure("not_configured")
 		writeErr(w, http.StatusServiceUnavailable, "media storage tidak dikonfigurasi")
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes+1<<20)
 
 	if err := r.ParseMultipartForm(maxUploadBytes); err != nil {
+		recordUploadFailure("bad_multipart")
 		writeErr(w, http.StatusBadRequest, "fail imej tidak sah atau melebihi 20MB")
 		return
 	}
@@ -211,6 +213,7 @@ func (h *RESTHandlers) uploadImage(w http.ResponseWriter, r *http.Request, actx 
 
 	file, _, err := r.FormFile("file")
 	if err != nil {
+		recordUploadFailure("missing_file")
 		writeErr(w, http.StatusBadRequest, "part 'file' diperlukan")
 		return
 	}
@@ -218,14 +221,17 @@ func (h *RESTHandlers) uploadImage(w http.ResponseWriter, r *http.Request, actx 
 
 	data, err := io.ReadAll(io.LimitReader(file, maxUploadBytes+1))
 	if err != nil {
+		recordUploadFailure("read_failed")
 		writeErr(w, http.StatusBadRequest, "gagal membaca fail")
 		return
 	}
 	if len(data) == 0 {
+		recordUploadFailure("empty")
 		writeErr(w, http.StatusBadRequest, "fail kosong")
 		return
 	}
 	if len(data) > maxUploadBytes {
+		recordUploadFailure("too_large")
 		writeErr(w, http.StatusRequestEntityTooLarge, "imej melebihi had 20MB")
 		return
 	}
@@ -234,6 +240,7 @@ func (h *RESTHandlers) uploadImage(w http.ResponseWriter, r *http.Request, actx 
 	// client's declared header or filename (both spoofable).
 	ext, ok := sniffImageType(data)
 	if !ok {
+		recordUploadFailure("bad_type")
 		writeErr(w, http.StatusBadRequest, "jenis imej tidak disokong (png/jpeg/webp/gif sahaja)")
 		return
 	}
@@ -241,16 +248,19 @@ func (h *RESTHandlers) uploadImage(w http.ResponseWriter, r *http.Request, actx 
 
 	stored, err := optimizeImage(data, ext)
 	if err != nil {
+		recordUploadFailure("optimize_failed")
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if len(stored) > maxStoredBytes {
+		recordUploadFailure("compress_failed")
 		writeErr(w, http.StatusBadRequest, "imej gagal dimampatkan bawah 2MB; cuba imej lain")
 		return
 	}
 
 	key := buildUploadKey(actx.Account.ID, ext)
 	if err := h.Store.PutObject(r.Context(), key, mime, stored); err != nil {
+		recordUploadFailure("store")
 		slog.Error("upload_put", "err", err, "account", actx.Account.ID)
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return

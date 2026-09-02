@@ -94,7 +94,7 @@ func (h *RESTHandlers) addCustomDomain(w http.ResponseWriter, r *http.Request, a
 	}
 	d, err := h.Domains.AddDomain(r.Context(), actx.Account.ID, domain, "cname")
 	if err != nil {
-		respondErr(w, err) // duplicate = user sees real error
+		respondErr(w, r, err) // duplicate = user sees real error
 		return
 	}
 	// Traefik sync (dokploy-aware envs auto; others no-op)
@@ -132,7 +132,7 @@ func (h *RESTHandlers) cfCreateCNAMEForDomain(ctx context.Context, accountID, do
 func (h *RESTHandlers) listCustomDomains(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	domains, err := h.Domains.ListDomains(r.Context(), actx.Account.ID)
 	if err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	type row struct {
@@ -176,7 +176,7 @@ func (h *RESTHandlers) verifyCustomDomainByID(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if err := h.Domains.MarkVerified(r.Context(), actx.Account.ID, d.Domain); err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	_ = dokployAddDomain(d.Domain)
@@ -193,7 +193,7 @@ func (h *RESTHandlers) deleteCustomDomainByID(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if err := h.Domains.RemoveDomain(r.Context(), actx.Account.ID, d.ID); err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	dokployRemoveDomain(d.Domain)

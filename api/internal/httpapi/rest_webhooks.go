@@ -18,7 +18,7 @@ func (h *RESTHandlers) putEinvoicing(w http.ResponseWriter, r *http.Request, act
 		return
 	}
 	if err := h.Accounts.SetEinvoice(r.Context(), actx.Account.ID, strings.TrimSpace(in.TIN), strings.TrimSpace(in.MSIC)); err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
@@ -27,7 +27,7 @@ func (h *RESTHandlers) putEinvoicing(w http.ResponseWriter, r *http.Request, act
 func (h *RESTHandlers) getEinvoicing(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	tin, msic, err := h.Accounts.Einvoice(r.Context(), actx.Account.ID)
 	if err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"tin": tin, "msic": msic})
@@ -38,7 +38,7 @@ func (h *RESTHandlers) getEinvoicing(w http.ResponseWriter, r *http.Request, act
 func (h *RESTHandlers) listWebhooks(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	hooks, err := h.Webhooks.ListByAccount(r.Context(), actx.Account.ID)
 	if err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	type row struct {
@@ -68,7 +68,7 @@ func (h *RESTHandlers) createWebhook(w http.ResponseWriter, r *http.Request, act
 	}
 	wh, err := h.Webhooks.Create(r.Context(), actx.Account.ID, in.URL, in.Secret, in.Events)
 	if err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	// Issue #92: audit webhook creation.
@@ -78,7 +78,7 @@ func (h *RESTHandlers) createWebhook(w http.ResponseWriter, r *http.Request, act
 
 func (h *RESTHandlers) deleteWebhook(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	if err := h.Webhooks.Delete(r.Context(), actx.Account.ID, r.PathValue("id")); err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	// Issue #92: audit webhook deletion.

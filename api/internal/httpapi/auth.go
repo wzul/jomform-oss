@@ -305,6 +305,7 @@ func (a *AuthHandlers) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if !user.Verified {
 		// Deliberately NOT recorded as a failed password attempt — the
 		// credential was correct; the user just hasn't confirmed their email.
+		recordAuthFailure("unverified")
 		writeErr(w, http.StatusForbidden, "sila sahkan email anda sebelum log masuk (semak peti masuk untuk pautan pengesahan)")
 		return
 	}
@@ -413,6 +414,7 @@ func (a *AuthHandlers) failLogin(w http.ResponseWriter, r *http.Request, ip, ema
 	}
 	// Uniform 401, identical body for both cases → no enumeration either from
 	// the message or from the status code.
+	recordAuthFailure("bad_credentials")
 	writeErr(w, http.StatusUnauthorized, "maklumat log masuk tidak sah")
 }
 

@@ -152,11 +152,11 @@ func (h *RESTHandlers) cfCallback(w http.ResponseWriter, r *http.Request) {
 	blob, _ := json.Marshal(cfCred{Kind: cfKindOAuth, Access: tok.Access, Refresh: tok.Refresh})
 	sealed, err := cryptoutil.Encrypt(h.SecretsKey, blob)
 	if err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	if err := h.Accounts.SaveCFToken(r.Context(), accs[0].ID, sealed); err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	slog.Info("cf_oauth_linked", "account", accs[0].ID)
@@ -179,7 +179,7 @@ func (h *RESTHandlers) cfStatus(w http.ResponseWriter, r *http.Request, actx *Ac
 // cfDisconnect removes the stored token.
 func (h *RESTHandlers) cfDisconnect(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	if err := h.Accounts.SaveCFToken(r.Context(), actx.Account.ID, ""); err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "disconnected"})
@@ -213,11 +213,11 @@ func (h *RESTHandlers) cfConnectAPIToken(w http.ResponseWriter, r *http.Request,
 	blob, _ := json.Marshal(cfCred{Kind: cfKindAPIToken, Access: in.APIToken, AccountEmail: in.AccountEmail, AccountName: in.AccountName})
 	sealed, err := cryptoutil.Encrypt(h.SecretsKey, blob)
 	if err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	if err := h.Accounts.SaveCFToken(r.Context(), actx.Account.ID, sealed); err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	slog.Info("cf_api_token_linked", "account", actx.Account.ID)
@@ -250,11 +250,11 @@ func (h *RESTHandlers) cfConnectGlobalKey(w http.ResponseWriter, r *http.Request
 	blob, _ := json.Marshal(cfCred{Kind: cfKindGlobalKey, Access: in.APIKey, AccountEmail: in.AccountEmail, AccountName: in.AccountName})
 	sealed, err := cryptoutil.Encrypt(h.SecretsKey, blob)
 	if err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	if err := h.Accounts.SaveCFToken(r.Context(), actx.Account.ID, sealed); err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	slog.Info("cf_global_key_linked", "account", actx.Account.ID)

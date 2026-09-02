@@ -23,7 +23,7 @@ func (h *RESTHandlers) publicSystemSettings(w http.ResponseWriter, r *http.Reque
 func (h *RESTHandlers) listSystemSettings(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	all, err := h.SystemSettings.All(r.Context())
 	if err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, all)
@@ -44,7 +44,7 @@ func (h *RESTHandlers) setSystemSetting(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	if err := h.SystemSettings.Set(r.Context(), in.Key, in.Value); err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})

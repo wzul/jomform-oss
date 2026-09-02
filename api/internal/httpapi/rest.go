@@ -5,9 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"io"
-	"log/slog"
 	"net/http"
 	"strings"
 
@@ -224,6 +222,7 @@ func (h *RESTHandlers) authed(next func(http.ResponseWriter, *http.Request, *Acc
 			return
 		}
 		ctx := context.WithValue(r.Context(), acctRequestKey{}, &AccountCtx{Account: acc})
+		ctx = middleware.WithAccountID(ctx, acc.ID)
 		next(w, r.WithContext(ctx), &AccountCtx{Account: acc})
 	})
 }
@@ -237,16 +236,6 @@ func decodeJSON(r *http.Request, v any) error {
 }
 
 func respond(w http.ResponseWriter, code int, v any) { writeJSON(w, code, v) }
-
-func respondErr(w http.ResponseWriter, err error) {
-	switch {
-	case errors.Is(err, dbstore.ErrFormNotFound), errors.Is(err, dbstore.ErrAPIKeyInvalid):
-		writeErr(w, http.StatusNotFound, "tidak dijumpai")
-	default:
-		slog.Error("rest_error", "err", err)
-		writeErr(w, http.StatusInternalServerError, "internal error")
-	}
-}
 
 // sessionOwnerID resolves the current session's user id ("" when anon).
 func (h *RESTHandlers) sessionOwnerID(r *http.Request) string {

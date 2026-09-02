@@ -50,11 +50,11 @@ func (h *RESTHandlers) setChipCreds(w http.ResponseWriter, r *http.Request, actx
 
 	enc, err := cryptoutil.Encrypt(h.SecretsKey, []byte(in.SecretKey))
 	if err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	if err := h.Accounts.SetChipCredentials(r.Context(), actx.Account.ID, in.BrandID, enc, mode, in.EmailFallback, in.MethodWhitelist); err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	// Issue #92: audit CHIP credential change.
@@ -67,7 +67,7 @@ func (h *RESTHandlers) setChipCreds(w http.ResponseWriter, r *http.Request, actx
 func (h *RESTHandlers) chipStatus(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	resp, err := h.chipStatusData(r.Context(), actx.Account.ID)
 	if err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -76,7 +76,7 @@ func (h *RESTHandlers) chipStatus(w http.ResponseWriter, r *http.Request, actx *
 // deleteChipCreds removes stored CHIP credentials.
 func (h *RESTHandlers) deleteChipCreds(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	if err := h.Accounts.ClearChipCredentials(r.Context(), actx.Account.ID); err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	// Issue #92: audit CHIP credential removal.

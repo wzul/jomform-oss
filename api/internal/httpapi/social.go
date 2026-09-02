@@ -233,7 +233,7 @@ func (a *AuthHandlers) socialCallback(w http.ResponseWriter, r *http.Request) {
 func (a *AuthHandlers) unlinkSocial(w http.ResponseWriter, r *http.Request) {
 	provider := r.PathValue("provider")
 	if err := a.Users.UnlinkIdentity(r.Context(), a.currentUserID(r), provider); err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "unlinked"})
@@ -248,7 +248,7 @@ func (a *AuthHandlers) listSocial(w http.ResponseWriter, r *http.Request) {
 	}
 	links, err := a.Users.ListIdentities(r.Context(), userID)
 	if err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	out := []map[string]any{}

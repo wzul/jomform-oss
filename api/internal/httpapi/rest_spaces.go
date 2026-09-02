@@ -20,7 +20,7 @@ func (h *RESTHandlers) listSpaces(w http.ResponseWriter, r *http.Request, actx *
 	}
 	spaces, err := h.Spaces.ByOwner(r.Context(), userID)
 	if err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	type row struct {
@@ -72,7 +72,7 @@ func (h *RESTHandlers) createSpace(w http.ResponseWriter, r *http.Request, actx 
 			writeErr(w, http.StatusConflict, "slug sudah digunakan")
 			return
 		}
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]string{
@@ -99,7 +99,7 @@ func (h *RESTHandlers) getSpaceSettings(w http.ResponseWriter, r *http.Request, 
 	}
 	set, err := h.Spaces.Settings(r.Context(), sID)
 	if err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, set)
@@ -147,7 +147,7 @@ func (h *RESTHandlers) saveSpaceSettings(w http.ResponseWriter, r *http.Request,
 		st.MenuJSON = "[]"
 	}
 	if err := h.Spaces.SaveSettings(r.Context(), st); err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})

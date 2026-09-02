@@ -29,7 +29,7 @@ func (h *RESTHandlers) putFormSettings(w http.ResponseWriter, r *http.Request, a
 	}
 	if err := h.Forms.UpdateSettings(r.Context(), actx.Account.ID, r.PathValue("id"),
 		in.RedirectSuccess, in.RedirectFailure, embed, in.LogoURL); err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})

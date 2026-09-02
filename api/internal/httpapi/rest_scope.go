@@ -60,7 +60,7 @@ func (h *RESTHandlers) scopeOr403(w http.ResponseWriter, r *http.Request, actx *
 			writeErr(w, http.StatusForbidden, "space tidak dijumpai")
 			return nil, false
 		}
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return nil, false
 	}
 	return scope, true

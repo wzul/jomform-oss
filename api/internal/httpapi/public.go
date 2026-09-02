@@ -102,7 +102,7 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 
 	// Validate totals against the account currency (MVP: MYR only).
 	if _, err := h.Accounts.ByID(r.Context(), form.AccountID); err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 
@@ -137,7 +137,7 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 					writeErr(w, http.StatusConflict, "stok habis untuk "+name)
 					return
 				}
-				respondErr(w, err)
+				respondErr(w, r, err)
 				return
 			}
 		}
@@ -150,7 +150,7 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	sale.TotalSen = payments.SumItems(subtotal, 0, 0)
 
 	if err := h.Sales.Create(r.Context(), sale); err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 

@@ -96,6 +96,7 @@ func (h *PaymentsHandlers) handleChipCallback(w http.ResponseWriter, r *http.Req
 
 	// 4. Process business logic (sale/subscription transitions).
 	if err := h.Service.ProcessCallback(r.Context(), &p); err != nil {
+		recordPaymentFailure("callback_process")
 		slog.Error("chip_callback_process", "err", err, "purchase", p.ID, "event", p.EventType)
 		writeErr(w, http.StatusInternalServerError, "process gagal")
 		return

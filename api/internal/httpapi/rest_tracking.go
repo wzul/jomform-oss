@@ -14,7 +14,7 @@ func (h *RESTHandlers) putTracking(w http.ResponseWriter, r *http.Request, actx 
 		return
 	}
 	if err := h.Accounts.SetTracking(r.Context(), actx.Account.ID, sanitizeTracking(in.Head)); err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
@@ -23,7 +23,7 @@ func (h *RESTHandlers) putTracking(w http.ResponseWriter, r *http.Request, actx 
 func (h *RESTHandlers) getTracking(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	v, err := h.Accounts.Tracking(r.Context(), actx.Account.ID)
 	if err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"head": v})
@@ -38,7 +38,7 @@ func (h *RESTHandlers) putFormTracking(w http.ResponseWriter, r *http.Request, a
 		return
 	}
 	if err := h.Forms.SetTracking(r.Context(), actx.Account.ID, r.PathValue("id"), sanitizeTracking(in.Head)); err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})

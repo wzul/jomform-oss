@@ -120,6 +120,7 @@ func (a *AuthHandlers) sendEmail2FACode(ctx context.Context, email, code string)
 			return err
 		} else if sup {
 			slog.Warn("email2fa_suppressed_skipped", "email", obfuscateEmail(email))
+			recordSESSuppression("email2fa")
 			return nil // suppressed: never resend, not a hard error
 		}
 	}
@@ -130,6 +131,7 @@ func (a *AuthHandlers) sendEmail2FACode(ctx context.Context, email, code string)
 	if err := a.VerifyMailer.Send(email, "Kod sandaran 2FA JomForm anda", body); err != nil {
 		return err
 	}
+	recordSESSend("email2fa")
 	if a.Breaker != nil {
 		if err := a.Breaker.RecordSend(ctx); err != nil {
 			slog.Warn("breaker_record_send_email2fa", "err", err)
@@ -151,6 +153,7 @@ func (a *AuthHandlers) send2FAActiveEmail(ctx context.Context, email string) err
 			return err
 		} else if sup {
 			slog.Warn("2fa_active_suppressed_skipped", "email", obfuscateEmail(email))
+			recordSESSuppression("2fa_active")
 			return nil
 		}
 	}
@@ -163,6 +166,7 @@ func (a *AuthHandlers) send2FAActiveEmail(ctx context.Context, email string) err
 	if err := a.VerifyMailer.Send(email, "2FA kini aktif pada akaun JomForm anda", body); err != nil {
 		return err
 	}
+	recordSESSend("2fa_active")
 	if a.Breaker != nil {
 		if err := a.Breaker.RecordSend(ctx); err != nil {
 			slog.Warn("breaker_record_send_2fa_active", "err", err)
@@ -233,6 +237,7 @@ func (a *AuthHandlers) sendMagicLinkEmail(ctx context.Context, email, token stri
 			return err
 		} else if sup {
 			slog.Warn("magiclink_suppressed_skipped", "email", obfuscateEmail(email))
+			recordSESSuppression("magic_link")
 			return nil
 		}
 	}
@@ -244,6 +249,7 @@ func (a *AuthHandlers) sendMagicLinkEmail(ctx context.Context, email, token stri
 	if err := a.VerifyMailer.Send(email, "Pautan log masuk JomForm anda", body); err != nil {
 		return err
 	}
+	recordSESSend("magic_link")
 	if a.Breaker != nil {
 		if err := a.Breaker.RecordSend(ctx); err != nil {
 			slog.Warn("breaker_record_send_magiclink", "err", err)

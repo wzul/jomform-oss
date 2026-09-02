@@ -12,7 +12,7 @@ import (
 func (h *RESTHandlers) listTemplates(w http.ResponseWriter, r *http.Request) {
 	forms, err := h.Forms.ListTemplates(r.Context())
 	if err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	type row struct {
@@ -60,7 +60,7 @@ func (h *RESTHandlers) useTemplate(w http.ResponseWriter, r *http.Request, actx 
 		RedirectFailure: tpl.RedirectFailure,
 	}
 	if err := h.Forms.Create(r.Context(), f); err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{

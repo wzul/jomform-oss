@@ -49,17 +49,17 @@ func (h *RESTHandlers) passkeyRegisterStart(w http.ResponseWriter, r *http.Reque
 	}
 	wu, err := h.Passkeys.UserFor(r.Context(), uid, prof.Email)
 	if err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	opts, session, err := wa.BeginRegistration(wu)
 	if err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	key := randTokenHex(16)
 	if err := h.Passkeys.PutChallenge(r.Context(), key, string(mustJSON(session)), "register"); err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"options": opts, "key": key})
@@ -102,11 +102,11 @@ func (h *RESTHandlers) passkeyRegisterFinish(w http.ResponseWriter, r *http.Requ
 	}
 	wu, err := h.Passkeys.UserFor(r.Context(), uid, prof.Email)
 	if err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	if err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	parsed, err := protocol.ParseCredentialCreationResponseBody(bytes.NewReader(raw))
@@ -120,7 +120,7 @@ func (h *RESTHandlers) passkeyRegisterFinish(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if err := h.Passkeys.Save(r.Context(), uid, *cred); err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "registered"})
@@ -136,12 +136,12 @@ func (h *RESTHandlers) passkeyLoginStart(w http.ResponseWriter, r *http.Request)
 	// discoverable-credential (resident key) login
 	opts, session, err := wa.BeginDiscoverableLogin()
 	if err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	key := randTokenHex(16)
 	if err := h.Passkeys.PutChallenge(r.Context(), key, string(mustJSON(session)), "login"); err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"options": opts, "key": key})
@@ -203,7 +203,7 @@ func (h *RESTHandlers) passkeyLoginFinish(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := h.startSessionFor(w, r, foundUID); err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "logged_in"})
@@ -218,7 +218,7 @@ func (h *RESTHandlers) passkeyList(w http.ResponseWriter, r *http.Request, actx 
 	}
 	creds, err := h.Passkeys.ByUser(r.Context(), uid)
 	if err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	type row struct {
@@ -246,7 +246,7 @@ func (h *RESTHandlers) passkeyDelete(w http.ResponseWriter, r *http.Request, act
 		return
 	}
 	if err := h.Passkeys.Delete(r.Context(), uid, raw); err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})

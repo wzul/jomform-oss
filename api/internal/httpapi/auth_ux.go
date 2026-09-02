@@ -80,7 +80,11 @@ func (a *AuthHandlers) sendPasswordResetEmail(ctx context.Context, email, token 
 		"Tap pautan berikut untuk menetapkan kata laluan baharu (sah selama 30 minit):\n\n" +
 		link + "\n\n" +
 		"Jika anda tidak meminta ini, anda boleh abaikan emel ini — kata laluan anda tidak berubah.\n"
-	return a.VerifyMailer.Send(email, "Set semula kata laluan JomForm anda", body)
+	if err := a.VerifyMailer.Send(email, "Set semula kata laluan JomForm anda", body); err != nil {
+		return err
+	}
+	recordSESSend("password_reset")
+	return nil
 }
 
 // handleResetPassword: POST /v1/auth/reset-password {token,new_password}

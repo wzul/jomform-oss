@@ -21,7 +21,7 @@ func (h *RESTHandlers) exportSalesCSV(w http.ResponseWriter, r *http.Request, ac
 		sales, err = h.Sales.ListByAccount(r.Context(), actx.Account.ID, 5000)
 	}
 	if err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")

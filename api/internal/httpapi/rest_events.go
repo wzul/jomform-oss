@@ -76,7 +76,7 @@ func (h *RESTHandlers) listEvents(w http.ResponseWriter, r *http.Request, actx *
 	f.Page, f.Limit = page, limit
 	events, total, err := h.Events.List(r.Context(), f)
 	if err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	out := make([]restEvent, 0, len(events))
@@ -105,7 +105,7 @@ func (h *RESTHandlers) countEvents(w http.ResponseWriter, r *http.Request, actx 
 	f := eventFilterFromRequest(r, scope.Accounts)
 	n, err := h.Events.Count(r.Context(), f)
 	if err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	respond(w, http.StatusOK, map[string]int64{"count": n})
@@ -124,7 +124,7 @@ func (h *RESTHandlers) breakdownEvents(w http.ResponseWriter, r *http.Request, a
 	f := eventFilterFromRequest(r, scope.Accounts)
 	rows, err := h.Events.Breakdown(r.Context(), f)
 	if err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	respond(w, http.StatusOK, rows)

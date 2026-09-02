@@ -31,7 +31,7 @@ func (h *RESTHandlers) listProducts(w http.ResponseWriter, r *http.Request, actx
 	}
 	products, err := h.Products.ListActiveByAccounts(r.Context(), scope.Accounts)
 	if err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	out := make([]restProduct, 0, len(products))
@@ -46,7 +46,7 @@ func (h *RESTHandlers) listProducts(w http.ResponseWriter, r *http.Request, actx
 
 func (h *RESTHandlers) deleteProduct(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	if err := h.Products.Archive(r.Context(), actx.Account.ID, r.PathValue("id")); err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	respond(w, http.StatusOK, map[string]string{"status": "archived"})
@@ -87,7 +87,7 @@ func (h *RESTHandlers) createProduct(w http.ResponseWriter, r *http.Request, act
 		Stock: in.Stock,
 	}
 	if err := h.Products.Create(r.Context(), p); err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	respond(w, http.StatusCreated, restProduct{
@@ -150,7 +150,7 @@ func (h *RESTHandlers) spaceSlugFor(ctx context.Context, accountID string) strin
 func (h *RESTHandlers) listForms(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	forms, err := h.Forms.ListByAccount(r.Context(), actx.Account.ID)
 	if err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	out := make([]restForm, 0, len(forms))
@@ -167,7 +167,7 @@ func (h *RESTHandlers) listForms(w http.ResponseWriter, r *http.Request, actx *A
 func (h *RESTHandlers) getForm(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	f, err := h.Forms.GetByID(r.Context(), actx.Account.ID, r.PathValue("id"))
 	if err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	respond(w, http.StatusOK, restForm{
@@ -193,7 +193,7 @@ func (h *RESTHandlers) createForm(w http.ResponseWriter, r *http.Request, actx *
 		Config: orEmptyMap(in.Config), Theme: orEmptyMap(in.Theme), Status: "draft",
 	}
 	if err := h.Forms.Create(r.Context(), f); err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	// Issue #92: audit form creation.
@@ -220,7 +220,7 @@ func (h *RESTHandlers) updateForm(w http.ResponseWriter, r *http.Request, actx *
 	// #16). Callers that want to clear a map send {} explicitly.
 	if err := h.Forms.Update(r.Context(), actx.Account.ID, r.PathValue("id"),
 		in.Title, in.Config, in.Theme); err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	// Issue #92: audit form update.
@@ -233,7 +233,7 @@ func (h *RESTHandlers) publishForm(w http.ResponseWriter, r *http.Request, actx 
 	// means a form without CHIP setup can still publish for bank-direct? Per spec:
 	// CHIP-only. Warn but allow (bank_direct exists).
 	if err := h.Forms.SetStatus(r.Context(), actx.Account.ID, r.PathValue("id"), "published"); err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	// Issue #92: audit form publish.
@@ -244,7 +244,7 @@ func (h *RESTHandlers) publishForm(w http.ResponseWriter, r *http.Request, actx 
 // deleteForm soft-deletes a single form (owner-checked via account scope).
 func (h *RESTHandlers) deleteForm(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	if err := h.Forms.SoftDelete(r.Context(), actx.Account.ID, r.PathValue("id")); err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	// Issue #92: audit form delete.
@@ -305,14 +305,14 @@ func (h *RESTHandlers) bulkForms(w http.ResponseWriter, r *http.Request, actx *A
 		}
 		tag, err := h.Forms.SetStatusMany(r.Context(), actx.Account.ID, ids, status)
 		if err != nil {
-			respondErr(w, err)
+			respondErr(w, r, err)
 			return
 		}
 		updated = tag
 	case "delete":
 		n, err := h.Forms.SoftDeleteMany(r.Context(), actx.Account.ID, ids)
 		if err != nil {
-			respondErr(w, err)
+			respondErr(w, r, err)
 			return
 		}
 		updated = n
@@ -335,7 +335,7 @@ type restKey struct {
 func (h *RESTHandlers) listKeys(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	keys, err := h.Keys.ListByAccount(r.Context(), actx.Account.ID)
 	if err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	out := make([]restKey, 0, len(keys))
@@ -359,12 +359,12 @@ func (h *RESTHandlers) createKey(w http.ResponseWriter, r *http.Request, actx *A
 	}
 	raw, hash, err := auth.GenerateAPIKey()
 	if err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	k, err := h.Keys.Create(r.Context(), actx.Account.ID, hash, in.Name, in.Scopes)
 	if err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	// Issue #92: audit API-key creation.
@@ -378,7 +378,7 @@ func (h *RESTHandlers) createKey(w http.ResponseWriter, r *http.Request, actx *A
 
 func (h *RESTHandlers) revokeKey(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	if err := h.Keys.Revoke(r.Context(), actx.Account.ID, r.PathValue("id")); err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	// Issue #92: audit API-key revocation.
@@ -395,7 +395,7 @@ func (h *RESTHandlers) summary(w http.ResponseWriter, r *http.Request, actx *Acc
 	}
 	sum, err := h.summaryData(r.Context(), scope.Accounts)
 	if err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	respond(w, http.StatusOK, sum)
@@ -468,7 +468,7 @@ func (h *RESTHandlers) listSales(w http.ResponseWriter, r *http.Request, actx *A
 			sales, err = h.Sales.ListByAccount(r.Context(), actx.Account.ID, 100)
 		}
 		if err != nil {
-			respondErr(w, err)
+			respondErr(w, r, err)
 			return
 		}
 		writeRows(sales)
@@ -487,7 +487,7 @@ func (h *RESTHandlers) listSales(w http.ResponseWriter, r *http.Request, actx *A
 		sales, total, err = h.Sales.ListByAccountsPage(r.Context(), scope.Accounts, page, limit)
 	}
 	if err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	out := restSaleRows(sales)
@@ -512,11 +512,12 @@ func (h *RESTHandlers) captureSale(w http.ResponseWriter, r *http.Request, actx 
 	}
 	_ = decodeJSON(r, &in)
 	if err := h.Pay.CaptureSale(r.Context(), sale, in.AmountSen); err != nil {
+		recordPaymentFailure("capture")
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if err := h.Sales.MarkCaptured(r.Context(), sale.ID); err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	// Issue #92: audit sale capture.
@@ -536,11 +537,12 @@ func (h *RESTHandlers) releaseSale(w http.ResponseWriter, r *http.Request, actx 
 		return
 	}
 	if err := h.Pay.ReleaseSale(r.Context(), sale); err != nil {
+		recordPaymentFailure("release")
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if err := h.Sales.SetStatus(r.Context(), sale.ID, dbstore.SaleCancelled); err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	// Issue #92: audit sale release.
@@ -584,7 +586,7 @@ func (h *RESTHandlers) bulkCaptureSales(w http.ResponseWriter, r *http.Request, 
 		var err error
 		sales, err = h.Sales.ListAwaitingCapture(r.Context(), actx.Account.ID)
 		if err != nil {
-			respondErr(w, err)
+			respondErr(w, r, err)
 			return
 		}
 	}
@@ -601,6 +603,7 @@ func (h *RESTHandlers) bulkCaptureSales(w http.ResponseWriter, r *http.Request, 
 		if !sale.SkipCapture || sale.CapturedAt != nil || sale.ChipPurchaseID == "" {
 			res.Error = "bukan authorisasi yang menunggu capture"
 		} else if err := h.Pay.CaptureSale(r.Context(), sale, nil); err != nil {
+			recordPaymentFailure("bulk_capture")
 			res.Error = err.Error()
 		} else if err := h.Sales.MarkCaptured(r.Context(), sale.ID); err != nil {
 			res.Error = err.Error()
@@ -630,7 +633,7 @@ func (h *RESTHandlers) confirmSale(w http.ResponseWriter, r *http.Request, actx 
 		return
 	}
 	if err := h.Sales.SetStatus(r.Context(), sale.ID, dbstore.SaleConfirmed); err != nil {
-		respondErr(w, err)
+		respondErr(w, r, err)
 		return
 	}
 	// Issue #92: audit sale confirm.

@@ -36,6 +36,7 @@ func (a *AuthHandlers) sendVerifyEmail(ctx context.Context, userID, email string
 		}
 		if sup {
 			slog.Warn("verify_email_suppressed_skipped", "user", userID)
+			recordSESSuppression("verify")
 			return nil // suppressed: don't resend, don't surface as a hard error
 		}
 	}
@@ -51,6 +52,7 @@ func (a *AuthHandlers) sendVerifyEmail(ctx context.Context, userID, email string
 	if err := a.VerifyMailer.Send(email, "Sahkan emel JomForm anda", body); err != nil {
 		return err
 	}
+	recordSESSend("verify")
 	if a.Breaker != nil {
 		if err := a.Breaker.RecordSend(ctx); err != nil {
 			slog.Warn("breaker_record_send", "err", err)
