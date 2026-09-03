@@ -110,3 +110,48 @@ func (a *AuthHandlers) handleUpdateEmail(w http.ResponseWriter, r *http.Request)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
 }
+
+// handleSetDefaultSpace: PUT /v1/auth/profile/default-space (issue #164).
+// Body: {"space_id": "<id>"} to set the default, or {"space_id": ""} to clear
+// it. The space must belong to the user (owner or member) — otherwise 403.
+func (a *AuthHandlers) handleSetDefaultSpace(w http.ResponseWriter, r *http.Request) {
+	uid := a.profileUserID(r)
+	if uid == "" {
+		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		return
+	}
+	var req struct {
+		SpaceID string `json:"space_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	spaceID := strings.TrimSpace(req.SpaceID)
+
+	// Clearing the default: no ownership check needed.
+	if spaceID == "" {
+		if err := a.Users.ClearDefaultSpace(r.Context(), uid); err != nil {
+			writeErr(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "cleared"})
+		return
+	}
+
+	// Setting the default: the space must belong to the user (owner or member).
+	if a.Spaces == nil {
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	sp, err := a.Spaces.ByID(r.Context(), spaceID)
+	if err != nil || sp == nil || sp.Owner != uid {
+		writeErr(w, http.StatusForbidden, "space bukan milik anda")
+		return
+	}
+	if err := a.Users.SetDefaultSpace(r.Context(), uid, spaceID); err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "saved", "space_id": spaceID})
+}

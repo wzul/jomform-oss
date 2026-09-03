@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useI18n } from "../../components/i18n";
+import { resolvePostLogin } from "../../lib/postLogin";
 
 type Mode = "login" | "register" | "forgot" | "magic";
 type SocialProvider = { id: string; name: string };
@@ -170,7 +171,9 @@ export default function Login() {
       // api/spaces round-trip is needed before redirecting.
       // Issue #140: honour the validated ?next (OAuth authorize) or fall back
       // to the dashboard root.
-      window.location.href = next || "/";
+      // Issue #164: multi-space users without a default are routed to the
+      // space-picker instead of the dashboard.
+      window.location.href = await resolvePostLogin(next);
       return;
     }
     const d = await r.json().catch(() => ({}));
@@ -206,7 +209,9 @@ export default function Login() {
       // #70 login: navigate immediately (no success banner flash).
       // Issue #140: honour the validated ?next (OAuth authorize) or fall back
       // to the dashboard root.
-      window.location.href = next || "/";
+      // Issue #164: multi-space users without a default are routed to the
+      // space-picker instead of the dashboard.
+      window.location.href = await resolvePostLogin(next);
       return;
     }
     const d = await r.json().catch(() => ({}));
@@ -271,7 +276,7 @@ export default function Login() {
       const fin = await fetch("/api/auth/passkeys/login/finish", {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
       });
-      if (fin.ok) { window.location.href = next || "/"; return; }
+      if (fin.ok) { window.location.href = await resolvePostLogin(next); return; }
       setError((await fin.json().catch(() => ({}))).error || t("login.passkeyInvalid"));
     } catch {
       setError(t("login.passkeyUnsupported"));

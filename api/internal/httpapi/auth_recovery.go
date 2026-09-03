@@ -294,7 +294,16 @@ func (a *AuthHandlers) handleMagicLinkVerify(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	slog.Info("magiclink_login", "user", user.ID)
+	// Issue #164: include the user's default space so the frontend can skip
+	// the space-picker when a default is set.
+	defSpace := ""
+	if a.Users != nil {
+		if ds, err := a.Users.DefaultSpace(r.Context(), user.ID); err == nil {
+			defSpace = ds
+		}
+	}
 	writeJSON(w, http.StatusOK, meResponse{
 		ID: user.ID, Email: user.Email, TOTPEnabled: user.TOTPEnabled, CreatedAt: user.CreatedAt.UTC().Format(time.RFC3339),
+		DefaultSpaceID: defSpace,
 	})
 }

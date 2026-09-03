@@ -32,6 +32,11 @@ type User struct {
 	// rejected by session resolution, killing every prior session. NULL until
 	// the first reset (issue #63 also keys trust-cookie invalidation on it).
 	PwResetAt *time.Time
+	// DefaultSpaceID is the user's chosen default space (issue #164). NULL =
+	// no default → multi-space users are prompted to pick a space after login.
+	// Read via the dedicated accessor (DefaultSpace) so it is NOT part of the
+	// main user scan; the column is intentionally unselected.
+	DefaultSpaceID *string
 }
 
 // UserStore wraps pgx for user operations.
@@ -231,5 +236,35 @@ func (s *UserStore) UpdateName(ctx context.Context, userID, name string) error {
 // UpdateEmail changes the login email (caller verifies uniqueness).
 func (s *UserStore) UpdateEmail(ctx context.Context, userID, email string) error {
 	_, err := s.pool.Exec(ctx, `UPDATE users SET email=$2 WHERE id=$1`, userID, strings.ToLower(email))
+	return err
+}
+
+// DefaultSpace returns the user's default space id ("" when none). Read via a
+// dedicated accessor so the column stays out of the main user scan (issue #164).
+func (s *UserStore) DefaultSpace(ctx context.Context, userID string) (string, error) {
+	var id *string
+	err := s.pool.QueryRow(ctx, `SELECT default_space_id FROM users WHERE id=$1`, userID).Scan(&id)
+	if err != nil {
+		return "", err
+	}
+	if id == nil {
+		return "", nil
+	}
+	return *id, nil
+}
+
+// SetDefaultSpace records the user's chosen default space (issue #164). The
+// caller validates the space belongs to the user (owner or member).
+func (s *UserStore) SetDefaultSpace(ctx context.Context, userID, spaceID string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE users SET default_space_id=$2, updated_at=now() WHERE id=$1`, userID, spaceID)
+	return err
+}
+
+// ClearDefaultSpace removes the user's default space (issue #164), so the
+// space-picker prompt returns on the next login.
+func (s *UserStore) ClearDefaultSpace(ctx context.Context, userID string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE users SET default_space_id=NULL, updated_at=now() WHERE id=$1`, userID)
 	return err
 }

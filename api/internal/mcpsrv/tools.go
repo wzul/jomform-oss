@@ -229,6 +229,11 @@ func (s *Server) registerTools() {
 		Name:        "remove_space_member",
 		Description: "Buang ahli dari space (admin sahaja). Pemilik tidak boleh dibuang.",
 	}, s.removeSpaceMember)
+	// Issue #164: default space (multi-space login picker) parity.
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "set_default_space",
+		Description: "Set space lalai anda (space yang anda masuk terus selepas log masuk, tanpa prompt). space_id kosong = buang default. Space mesti milik anda.",
+	}, s.setDefaultSpace)
 
 	// ── Parity: per-space email templates (issue #107) ────────────────────
 	mcp.AddTool(s.mcp, &mcp.Tool{

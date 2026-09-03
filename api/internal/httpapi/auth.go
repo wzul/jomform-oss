@@ -26,6 +26,9 @@ type AuthHandlers struct {
 	Sessions *auth.Sessions
 	Users    *dbstore.UserStore
 	Accounts *dbstore.AccountStore
+	// Issue #164: Spaces is used to validate a default-space choice belongs
+	// to the user (owner or member) and to resolve the default space's slug.
+	Spaces *dbstore.SpaceStore
 	BaseURL  string
 	// CookieDomain is the shared Domain attribute for the session cookie
 	// (e.g. ".jomform.com"), allowing the login session to be sent to product
@@ -89,6 +92,8 @@ func (a *AuthHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/auth/profile/name", a.handleUpdateName)
 	mux.HandleFunc("POST /v1/auth/profile/email", a.handleUpdateEmail)
 	mux.HandleFunc("PUT /v1/auth/profile/email", a.handleUpdateEmail)
+	// Issue #164: set/clear the user's default space (multi-space login picker).
+	mux.HandleFunc("PUT /v1/auth/profile/default-space", a.handleSetDefaultSpace)
 	// Email confirmation (issue #42): verifies an account is real before its
 	// first password login. GET renders a small confirmation page; the same
 	// token also works via POST if an app ever wants JSON back.
@@ -150,6 +155,9 @@ type meResponse struct {
 	TOTPEnabled bool    `json:"totp_enabled"`
 	CreatedAt   string  `json:"created_at"`
 	NextStep    *string `json:"next_step,omitempty"` // set when 2FA code is required
+	// Issue #164: the user's default space id ("" when none). Lets the
+	// frontend skip the space-picker after login when a default is set.
+	DefaultSpaceID string `json:"default_space_id,omitempty"`
 }
 
 // ─── handlers ────────────────────────────────────────────────────────────────
@@ -404,8 +412,17 @@ func (a *AuthHandlers) handleLogin(w http.ResponseWriter, r *http.Request) {
 	a.recordAuthEvent(r, a.firstAccountID(r, user.ID), user.ID, "auth.login", map[string]any{
 		"method": "password", "totp": user.TOTPEnabled,
 	})
+	// Issue #164: include the user's default space so the frontend can skip
+	// the space-picker when a default is set.
+	defSpace := ""
+	if a.Users != nil {
+		if ds, err := a.Users.DefaultSpace(r.Context(), user.ID); err == nil {
+			defSpace = ds
+		}
+	}
 	writeJSON(w, http.StatusOK, meResponse{
 		ID: user.ID, Email: user.Email, TOTPEnabled: user.TOTPEnabled, CreatedAt: user.CreatedAt.UTC().Format(time.RFC3339),
+		DefaultSpaceID: defSpace,
 	})
 }
 
@@ -463,8 +480,17 @@ func (a *AuthHandlers) handleMe(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnauthorized, "tidak log masuk")
 		return
 	}
+	// Issue #164: surface the user's default space so the frontend knows
+	// whether to show the space-picker after login.
+	defSpace := ""
+	if a.Users != nil {
+		if ds, err := a.Users.DefaultSpace(r.Context(), user.ID); err == nil {
+			defSpace = ds
+		}
+	}
 	writeJSON(w, http.StatusOK, meResponse{
 		ID: user.ID, Email: user.Email, Name: user.Name, AvatarURL: user.AvatarURL, TOTPEnabled: user.TOTPEnabled, CreatedAt: user.CreatedAt.UTC().Format(time.RFC3339),
+		DefaultSpaceID: defSpace,
 	})
 }
 

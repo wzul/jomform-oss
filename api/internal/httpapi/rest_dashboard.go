@@ -91,9 +91,16 @@ func (h *RESTHandlers) dashboardBundle(w http.ResponseWriter, r *http.Request, a
 	// me — session user's email + name (+ 2FA status + avatar, issue #133).
 	if h.Users != nil {
 		if u, err := h.Users.ByID(ctx, userID); err == nil && u != nil {
+			// Issue #164: surface the user's default space so the frontend
+			// knows whether to show the space-picker after login.
+			defSpace := ""
+			if ds, derr := h.Users.DefaultSpace(ctx, userID); derr == nil {
+				defSpace = ds
+			}
 			bundle.Me = &map[string]any{
 				"id": u.ID, "email": u.Email, "name": u.Name,
 				"avatar_url": u.AvatarURL, "totp_enabled": u.TOTPEnabled, "created_at": u.CreatedAt,
+				"default_space_id": defSpace,
 			}
 		}
 	}

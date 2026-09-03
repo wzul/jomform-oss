@@ -224,7 +224,7 @@ func main() {
 			Webhooks: dbstore.NewWebhookStore(pool),
 			Spaces:   spacesStore,
 			SpaceMembers: spaceMembersStore,
-			Users:    usersStore,
+			Users:    usersStore, // issue #164: set_default_space tool
 			Events:   deps.Events, // issue #92: list_events tool
 			// Issue #106: per-sale receipt email status tool.
 			EmailDeliveryEvents: deps.EmailDeliveryEvents,

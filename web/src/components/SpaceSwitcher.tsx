@@ -24,11 +24,18 @@ export function SpaceSwitcher({
   value,
   onSwitch,
   className,
+  defaultSpaceId,
+  onSetDefault,
 }: {
   spaces: SpaceRow[];
   value: string;
   onSwitch: (slug: string) => void;
   className?: string;
+  // Issue #164: optional default-space support. When provided, the switcher
+  // shows a "make this the default" action for the active space (and marks the
+  // current default). onSetDefault(spaceId) persists the choice server-side.
+  defaultSpaceId?: string;
+  onSetDefault?: (spaceId: string) => void;
 }) {
   const { t } = useI18n();
   const [creating, setCreating] = useState(false);
@@ -38,6 +45,7 @@ export function SpaceSwitcher({
   const [error, setError] = useState<string | null>(null);
 
   const active = spaces.find((s) => s.slug === value) || spaces[0];
+  const activeIsDefault = !!active && !!defaultSpaceId && active.id === defaultSpaceId;
 
   async function createSpace(e: React.FormEvent) {
     e.preventDefault();
@@ -106,6 +114,31 @@ export function SpaceSwitcher({
           {active.name} ({active.slug}.jomform.com)
         </div>
       ) : null}
+
+      {/* Issue #164: make the active space the default (or clear it). */}
+      {onSetDefault && active && (
+        <div className="mt-1">
+          {activeIsDefault ? (
+            <button
+              type="button"
+              onClick={() => onSetDefault("")}
+              title={t("space.clearDefault")}
+              className="w-full rounded-md border border-[var(--jf-border)] px-2 py-1 text-[11px] text-[var(--jf-muted)] hover:bg-slate-50 hover:text-red-500"
+            >
+              {t("space.clearDefault")}
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => onSetDefault(active.id)}
+              title={t("space.setDefault")}
+              className="w-full rounded-md border border-[var(--jf-border)] px-2 py-1 text-[11px] text-[var(--jf-muted)] hover:bg-slate-50 hover:text-[var(--jf-primary)]"
+            >
+              {t("space.setDefault")}
+            </button>
+          )}
+        </div>
+      )}
 
       {creating && (
         <form onSubmit={createSpace} className="mt-1.5 space-y-1.5 rounded-md border border-[var(--jf-border)] bg-slate-50 p-2">

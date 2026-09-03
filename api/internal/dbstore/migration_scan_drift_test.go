@@ -104,6 +104,9 @@ var intentionallyUnselected = map[string]map[string]bool{
 	"spaces": {
 		"created_at": true, // not scanned by spaceSelect
 	},
+	"users": {
+		"default_space_id": true, // UserStore.DefaultSpace (dedicated accessor, issue #164)
+	},
 }
 
 // packageDir returns the directory containing this test file.

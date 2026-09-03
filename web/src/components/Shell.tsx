@@ -112,6 +112,21 @@ export function Shell({
     reload();
   }
 
+  // Issue #164: set/clear the user's default space (server-side). Empty id
+  // clears it, so the space-picker prompt returns on the next login.
+  async function setDefaultSpace(spaceId: string) {
+    try {
+      await fetch("/api/auth/profile/default-space", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ space_id: spaceId }),
+      });
+    } catch {
+      // Best-effort; the picker/profile surfaces errors on its own path.
+    }
+    reload();
+  }
+
   async function signOut() {
     await fetch("/api/auth/logout", { method: "POST" });
     router.replace("/login");
@@ -187,7 +202,14 @@ export function Shell({
               </button>
             </div>
           </div>
-          <SpaceSwitcher spaces={spaces} value={space} onSwitch={switchSpace} className="mt-2 px-2" />
+          <SpaceSwitcher
+            spaces={spaces}
+            value={space}
+            onSwitch={switchSpace}
+            defaultSpaceId={user?.default_space_id}
+            onSetDefault={setDefaultSpace}
+            className="mt-2 px-2"
+          />
           <div className="mt-1 px-2">
             <LangToggle />
           </div>
@@ -258,7 +280,13 @@ export function Shell({
               {/* issue #41: space selector reachable from the mobile drawer —
                   same shared component as the desktop sidebar */}
               <div className="border-t border-[var(--jf-border)] px-4 py-3">
-                <SpaceSwitcher spaces={spaces} value={space} onSwitch={switchSpace} />
+                <SpaceSwitcher
+                  spaces={spaces}
+                  value={space}
+                  onSwitch={switchSpace}
+                  defaultSpaceId={user?.default_space_id}
+                  onSetDefault={setDefaultSpace}
+                />
               </div>
               <div className="absolute bottom-4 left-0 right-0 px-4">
                 <div className="mb-2 flex items-center gap-2">

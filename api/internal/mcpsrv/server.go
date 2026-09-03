@@ -28,6 +28,8 @@ type Deps struct {
 	// Issue #161: space membership + invites (MCP parity tools).
 	SpaceMembers *dbstore.SpaceMemberStore
 	// Issue #161: user lookup for invite-by-email (existing user → add directly).
+	// Issue #164: Users enables the set_default_space tool (user-level default
+	// space for the multi-space login picker). Nil → the tool errors.
 	Users *dbstore.UserStore
 	// Issue #92: audit/behaviour log (list_events tool). Nil → tool returns
 	// an error rather than panicking.

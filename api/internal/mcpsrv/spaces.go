@@ -148,6 +148,45 @@ func (s *Server) createSpace(
 	}, nil
 }
 
+// ── set_default_space (issue #164) ──────────────────────────────────────────
+
+type setDefaultSpaceIn struct {
+	SpaceID string `json:"space_id" jsonschema:"ID space (dari list_spaces). Kosong = buang default."`
+}
+
+// setDefaultSpace sets (or clears, when space_id is empty) the user's default
+// space — the space they land on after login, skipping the space-picker. The
+// space must belong to the user (owner or member).
+func (s *Server) setDefaultSpace(
+	ctx context.Context, _ *mcp.CallToolRequest, in setDefaultSpaceIn,
+) (*mcp.CallToolResult, map[string]string, error) {
+	if s.deps.Users == nil {
+		return nil, nil, errors.New("users tidak tersedia")
+	}
+	owner, err := s.spaceOwner(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if in.SpaceID == "" {
+		if err := s.deps.Users.ClearDefaultSpace(ctx, owner); err != nil {
+			return nil, nil, fmt.Errorf("db: %w", err)
+		}
+		return nil, map[string]string{"status": "cleared"}, nil
+	}
+	sp, err := s.spacesStore()
+	if err != nil {
+		return nil, nil, err
+	}
+	space, err := sp.ByID(ctx, in.SpaceID)
+	if err != nil || space == nil || space.Owner != owner {
+		return nil, nil, errors.New("space tidak dijumpai")
+	}
+	if err := s.deps.Users.SetDefaultSpace(ctx, owner, in.SpaceID); err != nil {
+		return nil, nil, fmt.Errorf("db: %w", err)
+	}
+	return nil, map[string]string{"status": "saved", "space_id": in.SpaceID}, nil
+}
+
 // ── get_space_settings ───────────────────────────────────────────────────────
 
 type spaceRefIn struct {

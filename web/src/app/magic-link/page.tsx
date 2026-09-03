@@ -6,6 +6,7 @@ import Link from "next/link";
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useI18n } from "../../components/i18n";
+import { resolvePostLogin } from "../../lib/postLogin";
 
 function MagicLinkForm() {
   const { t } = useI18n();
@@ -29,12 +30,9 @@ function MagicLinkForm() {
         });
         if (cancelled) return;
         if (r.ok) {
-          // Save the first space as the active one, mirroring login.
-          try {
-            const sp = await fetch("/api/spaces").then((x) => (x.ok ? x.json() : []));
-            if (Array.isArray(sp) && sp.length) localStorage.setItem("jf_space", sp[0].slug);
-          } catch {}
-          router.replace("/");
+          // Issue #164: route multi-space users without a default to the
+          // space-picker; otherwise go straight to the dashboard.
+          router.replace(await resolvePostLogin(""));
           return;
         }
         setState("invalid");
