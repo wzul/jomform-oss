@@ -274,6 +274,12 @@ func (s *Server) registerTools() {
 		Description: "Senarai respons (submission) untuk satu borang respons-sahaja (mode 'response', tanpa bayaran). Pulangkan data medan + masa. Tapis form_id, page/limit.",
 	}, s.listFormSubmissions)
 
+	// ── Parity: media library (issue #180) ───────────────────────────────
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "list_media",
+		Description: "Senarai media yang dimuat naik akaun (perpustakaan media): thumbnail/url, nama, tarikh, saiz. Boleh tapis form_id dan source (merchant|customer). Read-only.",
+	}, s.listMedia)
+
 	// ── Parity: form template gallery (issue #174) ────────────────────────
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "list_templates",

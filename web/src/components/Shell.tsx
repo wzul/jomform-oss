@@ -16,7 +16,7 @@ export function Shell({
   active,
 }: {
   children: React.ReactNode;
-  active: "dashboard" | "forms" | "products" | "sales" | "subscriptions" | "settings" | "profile";
+  active: "dashboard" | "forms" | "products" | "sales" | "subscriptions" | "settings" | "profile" | "media";
 }) {
   const { user, spaces, reload } = useSession();
   const [space, setSpace] = useState<string>("");
@@ -144,6 +144,8 @@ export function Shell({
     // Issue #126: dedicated Sales page, between Products and Settings.
     { key: "sales", href: "/sales", label: t("nav.sales"), icon: "💰" },
     { key: "subscriptions", href: "/subscriptions", label: t("sub.title"), icon: "⟳" },
+    // Issue #180: media library (WordPress-style).
+    { key: "media", href: "/media", label: t("media.title"), icon: "🖼" },
     { key: "settings", href: "/settings", label: t("nav.settings"), icon: "⚙" },
     { key: "profile", href: "/profile", label: t("prof.title"), icon: "👤" },
   ];

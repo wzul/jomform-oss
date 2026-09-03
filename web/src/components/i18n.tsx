@@ -810,6 +810,26 @@ const DICT = {
   "sales.exportNote": { en: "Exports all sales for the current filters.", ms: "Eksport semua jualan untuk tapisan semasa.", zh: "按当前筛选条件导出全部销售。", ta: "தற்போதைய வடிப்பான்களுக்கான அனைத்து விற்பனைகளையும் ஏற்றுமதி செய்கிறது.", ar: "يصدّر جميع المبيعات وفق عوامل التصفية الحالية." },
   "sales.clearFilters": { en: "Clear filters", ms: "Kosongkan tapisan", zh: "清除筛选", ta: "வடிப்பான்களை அழி", ar: "مسح عوامل التصفية" },
   "sales.notFound": { en: "Sale not found.", ms: "Jualan tidak dijumpai.", zh: "未找到销售。", ta: "விற்பனை கிடைக்கவில்லை.", ar: "لم يتم العثور على البيع." },
+  // issue #180: media library (WordPress-style)
+  "media.title": { en: "Media", ms: "Media", zh: "媒体", ta: "ஊடகம்", ar: "الوسائط" },
+  "media.subtitle": { en: "All images you've uploaded, in one place.", ms: "Semua gambar yang anda muat naik, di satu tempat.", zh: "您上传的所有图片，集中在一处。", ta: "நீங்கள் பதிவேற்றிய அனைத்து படங்களும், ஒரே இடத்தில்.", ar: "كل الصور التي رفعتها في مكان واحد." },
+  "media.empty": { en: "No media yet — upload an image in a form or product.", ms: "Belum ada media — muat naik gambar dalam borang atau produk.", zh: "暂无媒体 — 在表单或商品中上传图片。", ta: "இன்னும் ஊடகம் இல்லை — படிவம் அல்லது தயாரிப்பில் படத்தைப் பதிவேற்றவும்.", ar: "لا وسائط بعد — ارفع صورة في نموذج أو منتج." },
+  "media.countItems": { en: "{n} items", ms: "{n} item", zh: "{n} 项", ta: "{n} உருப்படிகள்", ar: "{n} عنصر" },
+  "media.filterForm": { en: "All forms", ms: "Semua borang", zh: "所有表单", ta: "அனைத்து படிவங்கள்", ar: "كل النماذج" },
+  "media.filterSource": { en: "All sources", ms: "Semua sumber", zh: "所有来源", ta: "அனைத்து ஆதாரங்கள்", ar: "كل المصادر" },
+  "media.sourceMerchant": { en: "Merchant", ms: "Pedagang", zh: "商家", ta: "வணிகர்", ar: "تاجر" },
+  "media.sourceCustomer": { en: "Customer", ms: "Pelanggan", zh: "客户", ta: "வாடிக்கையாளர்", ar: "عميل" },
+  "media.name": { en: "Name", ms: "Nama", zh: "名称", ta: "பெயர்", ar: "الاسم" },
+  "media.date": { en: "Date", ms: "Tarikh", zh: "日期", ta: "தேதி", ar: "التاريخ" },
+  "media.size": { en: "Size", ms: "Saiz", zh: "大小", ta: "அளவு", ar: "الحجم" },
+  "media.delete": { en: "Delete", ms: "Buang", zh: "删除", ta: "நீக்கு", ar: "حذف" },
+  "media.deleteConfirm": { en: "Delete this image? It will be removed from your media library and storage.", ms: "Buang gambar ini? Ia akan dikeluarkan dari perpustakaan media dan storan anda.", zh: "删除此图片？它将从您的媒体库和存储中移除。", ta: "இந்த படத்தை நீக்கவா? இது உங்கள் ஊடக நூலகம் மற்றும் சேமிப்பிலிருந்து அகற்றப்படும்.", ar: "حذف هذه الصورة؟ ستُزال من مكتبة الوسائط والتخزين." },
+  "media.deleted": { en: "Deleted ✓", ms: "Dibuang ✓", zh: "已删除 ✓", ta: "நீக்கப்பட்டது ✓", ar: "تم الحذف ✓" },
+  "media.deleteFail": { en: "Failed to delete media.", ms: "Gagal buang media.", zh: "删除媒体失败。", ta: "ஊடகத்தை நீக்க முடியவில்லை.", ar: "فشل حذف الوسائط." },
+  "media.view": { en: "View", ms: "Lihat", zh: "查看", ta: "பார்", ar: "عرض" },
+  "media.copyUrl": { en: "Copy URL", ms: "Salin URL", zh: "复制链接", ta: "URL நகலெடு", ar: "نسخ الرابط" },
+  "media.copied": { en: "URL copied ✓", ms: "URL disalin ✓", zh: "链接已复制 ✓", ta: "URL நகலெடுக்கப்பட்டது ✓", ar: "تم نسخ الرابط ✓" },
+  "media.pageOf": { en: "page {page} of {total}", ms: "halaman {page} daripada {total}", zh: "第 {page} 页，共 {total} 页", ta: "பக்கம் {page} / {total}", ar: "صفحة {page} من {total}" },
 } as const;
 
 export type Key = keyof typeof DICT;

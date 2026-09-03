@@ -136,6 +136,8 @@ func main() {
 		passkeysStore := dbstore.NewPasskeyStore(pool)
 		// Issue #171: response-only form submissions.
 		submissionsStore := dbstore.NewSubmissionStore(pool)
+		// Issue #180: media library metadata store.
+		mediaStore := dbstore.NewMediaStore(pool)
 		// Issue #161: space membership + invites.
 		spaceMembersStore := dbstore.NewSpaceMemberStore(pool)
 		deps.SpaceMembers = spaceMembersStore
@@ -214,6 +216,8 @@ func main() {
 			EmailDeliveryEvents: deps.EmailDeliveryEvents,
 			// Issue #171: response-only form submissions.
 			Submissions: submissionsStore,
+			// Issue #180: media library metadata store.
+			Media: mediaStore,
 		}
 		pay.OnPaid = func(ctx context.Context, accountID, event string, payload map[string]any) {
 			httpapi.DispatchWebhooks(ctx, rest, whStore, accountID, event, payload)
@@ -234,6 +238,8 @@ func main() {
 			EmailDeliveryEvents: deps.EmailDeliveryEvents,
 			// Issue #171: response-only form submissions tool.
 			Submissions: submissionsStore,
+			// Issue #180: media library tool.
+			Media: mediaStore,
 			// Issue #121: allow OAuth access tokens to authenticate /mcp too.
 			OAuth:      deps.OAuth,
 			DecryptKey: decryptKey,

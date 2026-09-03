@@ -42,6 +42,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/disintegration/imaging"
 	"github.com/google/uuid"
+
+	"github.com/wzul/jomform/api/internal/dbstore"
 )
 
 const (
@@ -160,6 +162,20 @@ func (o *ObjectStore) GetObject(ctx context.Context, key string) ([]byte, string
 		ct = *out.ContentType
 	}
 	return body, ct, nil
+}
+
+// DeleteObject removes an object from the bucket (issue #180). It is used by
+// the media delete endpoint after the row is soft-deleted. A missing object is
+// not an error (idempotent delete).
+func (o *ObjectStore) DeleteObject(ctx context.Context, key string) error {
+	_, err := o.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: &o.bucket,
+		Key:    &key,
+	})
+	if err != nil {
+		return fmt.Errorf("s3 delete %q: %w", key, err)
+	}
+	return nil
 }
 
 // mediaKeyFromPath validates and extracts the object key from a public media
@@ -359,6 +375,10 @@ func (h *RESTHandlers) uploadImage(w http.ResponseWriter, r *http.Request, actx 
 	h.recordEvent(r, actx, h.sessionOwnerID(r), "upload.image", map[string]any{
 		"mime": mime, "in_bytes": len(data), "out_bytes": len(stored),
 	})
+	// Issue #180: record the object in the media library so the dashboard can
+	// list it (metadata + filtering). Best-effort — a metadata write failure
+	// must not fail the upload itself.
+	h.recordMedia(r, actx, key, mime, int64(len(stored)), dbstore.MediaSourceMerchant, "")
 	respond(w, http.StatusOK, map[string]string{"url": h.Store.PublicURL(key)})
 }
 
@@ -485,6 +505,8 @@ func (h *RESTHandlers) uploadAvatar(w http.ResponseWriter, r *http.Request, actx
 	h.recordEvent(r, actx, h.sessionOwnerID(r), "upload.avatar", map[string]any{
 		"mime": mime, "in_bytes": len(data), "out_bytes": len(stored),
 	})
+	// Issue #180: record the avatar in the media library (best-effort).
+	h.recordMedia(r, actx, key, mime, int64(len(stored)), dbstore.MediaSourceMerchant, "")
 	respond(w, http.StatusOK, map[string]string{"url": h.Store.PublicURL(key)})
 }
 

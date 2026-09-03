@@ -64,6 +64,10 @@ type RESTHandlers struct {
 
 	// Issue #171: response-only form submissions (list + count endpoints).
 	Submissions *dbstore.SubmissionStore
+
+	// Issue #180: media library metadata store (list/filter/soft-delete).
+	// Nil in bare-mode tests; the media endpoints return empty/503.
+	Media *dbstore.MediaStore
 }
 
 // RegisterRoutes wires REST endpoints.
@@ -177,6 +181,11 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	// media bucket to browsers. Unauthenticated (public media); the key is
 	// validated to a safe `u/...` path (no traversal).
 	mux.HandleFunc("GET /media/{key...}", h.handleMedia)
+	// Issue #180: media library — list the merchant's uploaded media
+	// (account-scoped, paginated, filterable by form/source) and soft-delete
+	// one (also removes the object from MinIO).
+	mux.Handle("GET /v1/rest/media", h.authed(h.listMedia))
+	mux.Handle("DELETE /v1/rest/media/{id}", h.authed(h.deleteMedia))
 }
 
 // Resolve identifies the caller: Bearer API key (preferred) or session
