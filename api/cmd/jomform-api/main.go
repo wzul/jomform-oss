@@ -183,6 +183,9 @@ func main() {
 		pay.Forms = formsStore
 		pay.Spaces = spacesStore
 		pay.Users = usersStore
+		// Issue #193: per-form notification rules (evaluated on form events).
+		notificationsStore := dbstore.NewFormNotificationStore(pool)
+		pay.Notifications = notificationsStore
 		if cfg.SESSMTPHost != "" {
 			pay.Receipts = &payments.Receipts{
 				Sender: email.New(email.SMTPConfig{
@@ -258,6 +261,8 @@ func main() {
 			EmailDeliveryEvents: deps.EmailDeliveryEvents,
 			// Issue #171: response-only form submissions.
 			Submissions: submissionsStore,
+			// Issue #193: per-form notification rules.
+			Notifications: notificationsStore,
 			// Issue #180: media library metadata store.
 			Media: mediaStore,
 			// Issue #184: LLM client for auto-generating legal pages.
@@ -289,6 +294,8 @@ func main() {
 			EmailDeliveryEvents: deps.EmailDeliveryEvents,
 			// Issue #171: response-only form submissions tool.
 			Submissions: submissionsStore,
+			// Issue #193: per-form notification rules tool.
+			Notifications: notificationsStore,
 			// Issue #180: media library tool.
 			Media: mediaStore,
 			// Issue #185: BNM exchange-rate cache (get_currency_rates tool).

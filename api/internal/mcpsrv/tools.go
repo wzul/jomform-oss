@@ -314,6 +314,16 @@ func (s *Server) registerTools() {
 		Description: "Set tetapan emel notifikasi SATU borang (issue #177): receipt_subject, receipt_body, receipt_enabled, notify_merchant, merchant_notify_email, html. Kosong subjek/badan = guna lalai space. Omit medan = kekal.",
 	}, s.setFormEmailSettings)
 
+	// ── Parity: per-form notification rules (issue #193) ────────────────
+	addTool(s, &mcp.Tool{
+		Name:        "get_form_notifications",
+		Description: "Baca senarai peraturan notifikasi emel per-borang (issue #193): event, penerima, subjek/badan, logik bersyarat, aktif. Termasuk notifikasi lalai (notify merchant on sale.paid).",
+	}, s.getFormNotifications)
+	addTool(s, &mcp.Tool{
+		Name:        "set_form_notifications",
+		Description: "Ganti SEMUA peraturan notifikasi emel per-borang (issue #193). notifications[] penuh: {id?, name, event, to_email, subject, body, condition?, enabled?}. event: sale.paid|sale.failed|response.submitted|subscription.charged. to_email: emel, {admin_email}, atau {field_id}. condition: {field_id, op, value}|null (op: equals|not_equals|contains|gt|lt|not_empty). Senarai kosong = tiada emel dihantar.",
+	}, s.setFormNotifications)
+
 	// ── Parity: per-space hosted legal pages (issue #184) ────────────────
 	addTool(s, &mcp.Tool{
 		Name:        "generate_legal_page",

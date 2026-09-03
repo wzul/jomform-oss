@@ -38,6 +38,20 @@ type FormDetail = {
   chip_brand_id?: string;
 };
 
+// Issue #193: per-form notification rule (Gravity-Forms-style).
+type Notification = {
+  id: string;
+  form_id: string;
+  name: string;
+  event: string;
+  to_email: string;
+  subject: string;
+  body: string;
+  condition?: { field_id: string; op: string; value: string } | null;
+  enabled: boolean;
+  is_default: boolean;
+};
+
 type EmailSettings = {
   receipt_subject: string;
   receipt_body: string;
@@ -84,6 +98,15 @@ const FEED_OPS = ["equals", "not_equals", "contains", "gt", "lt", "not_empty"];
 function feedUid() {
   return "feed_" + Math.random().toString(36).slice(2, 9);
 }
+
+const NOTIF_EVENTS = [
+  "sale.paid",
+  "sale.failed",
+  "response.submitted",
+  "subscription.charged",
+] as const;
+
+const NOTIF_OPS = ["equals", "not_equals", "contains", "gt", "lt", "not_empty"] as const;
 
 const TABS: { key: Tab; label: string }[] = [
   { key: "general", label: "fs.general" },
@@ -153,13 +176,21 @@ function FormSettingsInner() {
   const [rsExpired, setRsExpired] = useState("");
   const [rsLimitMsg, setRsLimitMsg] = useState("");
 
-  // Notifications
-  const [emelSubject, setEmelSubject] = useState("");
-  const [emelBody, setEmelBody] = useState("");
-  const [emelReceiptEnabled, setEmelReceiptEnabled] = useState(true);
-  const [emelNotifyMerchant, setEmelNotifyMerchant] = useState(false);
-  const [emelMerchantEmail, setEmelMerchantEmail] = useState("");
-  const [emelHtml, setEmelHtml] = useState(false);
+  // Notifications (issue #193: per-form notification rules)
+  const [notifs, setNotifs] = useState<Notification[]>([]);
+  const [editing, setEditing] = useState<Notification | null>(null);
+  const [isNew, setIsNew] = useState(false);
+  // Editor fields
+  const [edName, setEdName] = useState("");
+  const [edEvent, setEdEvent] = useState<string>("sale.paid");
+  const [edTo, setEdTo] = useState("");
+  const [edSubject, setEdSubject] = useState("");
+  const [edBody, setEdBody] = useState("");
+  const [edEnabled, setEdEnabled] = useState(true);
+  const [edHasCond, setEdHasCond] = useState(false);
+  const [edCondField, setEdCondField] = useState("");
+  const [edCondOp, setEdCondOp] = useState("equals");
+  const [edCondValue, setEdCondValue] = useState("");
 
   // CHIP feed
   const [ovBrand, setOvBrand] = useState("");
@@ -175,6 +206,14 @@ function FormSettingsInner() {
   // Issue #208: multiple per-form CHIP feeds with conditional logic.
   const [feeds, setFeeds] = useState<ChipFeedDraft[]>([]);
   const [formBlocks, setFormBlocks] = useState<{ id: string; value: string; type: string }[]>([]);
+
+  // Per-form email settings (issue #177).
+  const [emelSubject, setEmelSubject] = useState("");
+  const [emelBody, setEmelBody] = useState("");
+  const [emelReceiptEnabled, setEmelReceiptEnabled] = useState(true);
+  const [emelNotifyMerchant, setEmelNotifyMerchant] = useState(false);
+  const [emelMerchantEmail, setEmelMerchantEmail] = useState("");
+  const [emelHtml, setEmelHtml] = useState(false);
 
   const load = useCallback(async () => {
     if (!formId) return;
@@ -233,6 +272,12 @@ function FormSettingsInner() {
         setEmelNotifyMerchant(!!es.notify_merchant);
         setEmelMerchantEmail(es.merchant_notify_email || "");
         setEmelHtml(!!es.html);
+      }
+      // Load per-form notification rules (issue #193).
+      const nr = await fetch(`/api/rest/forms/${formId}/notifications${spaceQuery()}`);
+      if (nr.ok) {
+        const list = (await nr.json()) as Notification[];
+        setNotifs(list);
       }
       // Issue #196: load this form's webhooks (form_id filter).
       const sp = spaceScope();
@@ -319,22 +364,81 @@ function FormSettingsInner() {
     setMsg(r.ok ? t("fs.saved") : t("prof.failed"));
   }
 
-  async function saveNotifications() {
+  function openNewNotification() {
+    setEditing(null);
+    setIsNew(true);
+    setEdName("");
+    setEdEvent("sale.paid");
+    setEdTo("{admin_email}");
+    setEdSubject("");
+    setEdBody("");
+    setEdEnabled(true);
+    setEdHasCond(false);
+    setEdCondField("");
+    setEdCondOp("equals");
+    setEdCondValue("");
+  }
+
+  function openEditNotification(n: Notification) {
+    setEditing(n);
+    setIsNew(false);
+    setEdName(n.name || "");
+    setEdEvent(n.event || "sale.paid");
+    setEdTo(n.to_email || "");
+    setEdSubject(n.subject || "");
+    setEdBody(n.body || "");
+    setEdEnabled(n.enabled !== false);
+    setEdHasCond(!!n.condition);
+    setEdCondField(n.condition?.field_id || "");
+    setEdCondOp(n.condition?.op || "equals");
+    setEdCondValue(n.condition?.value || "");
+  }
+
+  function closeEditor() {
+    setEditing(null);
+    setIsNew(false);
+  }
+
+  async function saveNotification() {
     setMsg("");
     if (!formId) return;
-    const r = await fetch(`/api/rest/forms/${formId}/email-settings${spaceQuery()}`, {
-      method: "PUT",
+    const payload = {
+      name: edName,
+      event: edEvent,
+      to_email: edTo,
+      subject: edSubject,
+      body: edBody,
+      enabled: edEnabled,
+      condition: edHasCond && edCondField ? { field_id: edCondField, op: edCondOp, value: edCondValue } : null,
+    };
+    const url = isNew
+      ? `/api/rest/forms/${formId}/notifications${spaceQuery()}`
+      : `/api/rest/forms/${formId}/notifications/${editing?.id}${spaceQuery()}`;
+    const r = await fetch(url, {
+      method: isNew ? "POST" : "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        receipt_subject: emelSubject,
-        receipt_body: emelBody,
-        receipt_enabled: emelReceiptEnabled,
-        notify_merchant: emelNotifyMerchant,
-        merchant_notify_email: emelMerchantEmail,
-        html: emelHtml,
-      }),
+      body: JSON.stringify(payload),
     });
-    setMsg(r.ok ? t("fs.saved") : t("prof.failed"));
+    if (!r.ok) {
+      setMsg(t("fs.notifFail"));
+      return;
+    }
+    setMsg(t("fs.notifSaved"));
+    closeEditor();
+    void load();
+  }
+
+  async function deleteNotification(n: Notification) {
+    setMsg("");
+    if (!formId) return;
+    const r = await fetch(`/api/rest/forms/${formId}/notifications/${n.id}${spaceQuery()}`, {
+      method: "DELETE",
+    });
+    setMsg(r.ok ? t("fs.notifDeleted") : t("fs.notifFail"));
+    if (r.ok) {
+      if (editing?.id === n.id) closeEditor();
+      void load();
+    }
   }
 
   async function saveChipOverride() {
@@ -645,50 +749,152 @@ function FormSettingsInner() {
                   </section>
                 )}
 
-                {/* ── Notifications ── */}
+                {/* ── Notifications (issue #193) ── */}
                 {tab === "notifications" && (
                   <section className="jf-card p-6">
-                    <h2 className="text-base font-semibold">{t("fs.notifications")}</h2>
-                    <p className="mt-1 text-sm text-[var(--jf-muted)]">{t("fs.notificationsHint")}</p>
-                    <div className="mt-4 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
                       <div>
-                        <label className={labelCls}>
-                          {t("set.emelSubject")} <span className="text-slate-400">{t("fs.blankUsesSpace")}</span>
-                        </label>
-                        <input value={emelSubject} onChange={(e) => setEmelSubject(e.target.value)} className={inputCls} placeholder="Resit pembayaran — {{ref_code}}" />
+                        <h2 className="text-base font-semibold">{t("fs.notifications")}</h2>
+                        <p className="mt-1 text-sm text-[var(--jf-muted)]">{t("fs.notifHint")}</p>
                       </div>
-                      <div>
-                        <label className={labelCls}>
-                          {t("set.emelBody")} <span className="text-slate-400">{t("set.emelPlaceholders")} <code className="rounded bg-slate-100 px-1">{"{{ref_code}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{amount}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{items}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{form_url}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{buyer_name}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{date}}"}</code></span>
-                        </label>
-                        <textarea value={emelBody} onChange={(e) => setEmelBody(e.target.value)} rows={8} className={`${inputCls} font-mono text-xs`} />
-                      </div>
-                      <div className="flex flex-wrap items-center gap-4">
-                        <label className="flex items-center gap-2 text-sm text-slate-700">
-                          <input type="checkbox" checked={emelReceiptEnabled} onChange={(e) => setEmelReceiptEnabled(e.target.checked)} />
-                          {t("set.emelReceiptEnabled")}
-                        </label>
-                        <label className="flex items-center gap-2 text-sm text-slate-700">
-                          <input type="checkbox" checked={emelNotifyMerchant} onChange={(e) => setEmelNotifyMerchant(e.target.checked)} />
-                          {t("set.emelNotifyMerchant")}
-                        </label>
-                        <label className="flex items-center gap-2 text-sm text-slate-700">
-                          <input type="checkbox" checked={emelHtml} onChange={(e) => setEmelHtml(e.target.checked)} />
-                          {t("set.emelHtml")}
-                        </label>
-                      </div>
-                      {emelNotifyMerchant && (
-                        <div>
-                          <label className={labelCls}>{t("set.emelMerchantEmail")}</label>
-                          <input value={emelMerchantEmail} onChange={(e) => setEmelMerchantEmail(e.target.value)} type="email" className={inputCls} placeholder="store@yourshop.my" />
-                        </div>
-                      )}
-                      <div className="pt-1">
-                        <button onClick={saveNotifications} disabled={!canWrite} className="jf-btn-primary">
-                          {t("fs.save")}
+                      {canWrite && (
+                        <button onClick={openNewNotification} className="jf-btn-primary px-3 py-1.5 text-xs">
+                          + {t("fs.notifAdd")}
                         </button>
-                      </div>
+                      )}
                     </div>
+
+                    <div className="mt-4 space-y-3">
+                      {notifs.length === 0 && (
+                        <p className="text-sm text-[var(--jf-muted)]">{t("fs.notifEmpty")}</p>
+                      )}
+                      {notifs.map((n) => (
+                        <div key={n.id} className="rounded-lg border border-[var(--jf-border)] p-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-sm font-medium">{n.name || t("fs.notifName")}</span>
+                              {n.is_default && (
+                                <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[10px] font-medium text-indigo-600">
+                                  {t("fs.notifDefault")}
+                                </span>
+                              )}
+                              <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] text-slate-500">
+                                {t(`fs.notifEvent${n.event[0].toUpperCase()}${n.event.slice(1).replace(/\./g, "")}` as import("../../components/i18n").Key)}
+                              </span>
+                              {!n.enabled && (
+                                <span className="text-[10px] text-slate-400">{t("fs.notifEnabled")}: off</span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <button onClick={() => openEditNotification(n)} disabled={!canWrite} className="jf-btn-ghost px-2 py-1 text-xs">
+                                {t("fs.notifEdit")}
+                              </button>
+                              <button onClick={() => deleteNotification(n)} disabled={!canWrite} className="jf-btn-ghost px-2 py-1 text-xs text-red-500">
+                                {t("fs.notifDelete")}
+                              </button>
+                            </div>
+                          </div>
+                          <div className="mt-1 text-xs text-[var(--jf-muted)]">
+                            {t("fs.notifTo")}: <span className="font-mono">{n.to_email || "—"}</span>
+                            {n.condition && (
+                              <span className="ml-2">
+                                · {n.condition.field_id} {t(`fs.notifOp${n.condition.op[0].toUpperCase()}${n.condition.op.slice(1)}` as import("../../components/i18n").Key)} {n.condition.value}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {(isNew || editing) && (
+                      <div className="mt-5 rounded-lg border border-[var(--jf-border)] p-4">
+                        <h3 className="text-sm font-semibold">
+                          {isNew ? t("fs.notifAdd") : t("fs.notifEdit")}
+                        </h3>
+                        <div className="mt-3 space-y-3">
+                          <div>
+                            <label className={labelCls}>{t("fs.notifName")}</label>
+                            <input value={edName} onChange={(e) => setEdName(e.target.value)} className={inputCls} placeholder="Admin Notification" />
+                          </div>
+                          <div>
+                            <label className={labelCls}>{t("fs.notifEvent")}</label>
+                            <select value={edEvent} onChange={(e) => setEdEvent(e.target.value)} className={inputCls}>
+                              {NOTIF_EVENTS.map((ev) => (
+                                <option key={ev} value={ev}>
+                                  {t(`fs.notifEvent${ev[0].toUpperCase()}${ev.slice(1).replace(/\./g, "")}` as import("../../components/i18n").Key)}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label className={labelCls}>
+                              {t("fs.notifTo")} <span className="text-slate-400">{t("fs.notifToHint")}</span>
+                            </label>
+                            <input value={edTo} onChange={(e) => setEdTo(e.target.value)} className={inputCls} placeholder="{admin_email}" />
+                          </div>
+                          <div>
+                            <label className={labelCls}>{t("fs.notifSubject")}</label>
+                            <input value={edSubject} onChange={(e) => setEdSubject(e.target.value)} className={inputCls} placeholder="Jualan baharu — {{ref_code}}" />
+                          </div>
+                          <div>
+                            <label className={labelCls}>
+                              {t("fs.notifBody")} <span className="text-slate-400">{t("fs.notifPlaceholders")}</span>
+                            </label>
+                            <textarea value={edBody} onChange={(e) => setEdBody(e.target.value)} rows={6} className={`${inputCls} font-mono text-xs`} />
+                          </div>
+                          <div>
+                            <label className="flex items-center gap-2 text-sm text-slate-700">
+                              <input type="checkbox" checked={edEnabled} onChange={(e) => setEdEnabled(e.target.checked)} />
+                              {t("fs.notifEnabled")}
+                            </label>
+                          </div>
+                          <div>
+                            <p className="text-[11px] font-medium uppercase tracking-wider text-[#9ca3af]">{t("fs.notifCondition")}</p>
+                            {!edHasCond ? (
+                              <button onClick={() => setEdHasCond(true)} className="jf-btn-ghost mt-1 px-2 py-1 text-xs">
+                                + {t("fs.notifCondAdd")}
+                              </button>
+                            ) : (
+                              <div className="mt-2 space-y-2">
+                                <div className="flex flex-wrap items-end gap-2">
+                                  <div>
+                                    <label className={labelCls}>{t("fs.notifCondField")}</label>
+                                    <input value={edCondField} onChange={(e) => setEdCondField(e.target.value)} className="jf-input mt-1 w-40" placeholder="field_id" />
+                                  </div>
+                                  <div>
+                                    <label className={labelCls}>{t("fs.notifCondOp")}</label>
+                                    <select value={edCondOp} onChange={(e) => setEdCondOp(e.target.value)} className="jf-input mt-1 w-40">
+                                      {NOTIF_OPS.map((op) => (
+                                        <option key={op} value={op}>
+                                          {t(`fs.notifOp${op[0].toUpperCase()}${op.slice(1)}` as import("../../components/i18n").Key)}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                  {edCondOp !== "not_empty" && (
+                                    <div>
+                                      <label className={labelCls}>{t("fs.notifCondValue")}</label>
+                                      <input value={edCondValue} onChange={(e) => setEdCondValue(e.target.value)} className="jf-input mt-1 w-40" />
+                                    </div>
+                                  )}
+                                  <button onClick={() => setEdHasCond(false)} className="jf-btn-ghost px-2 py-1 text-xs text-slate-500">
+                                    {t("fs.notifCondRemove")}
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 pt-1">
+                            <button onClick={saveNotification} disabled={!canWrite} className="jf-btn-primary">
+                              {t("fs.notifSave")}
+                            </button>
+                            <button onClick={closeEditor} className="jf-btn-ghost text-slate-600">
+                              {t("fs.notifCancel")}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </section>
                 )}
 

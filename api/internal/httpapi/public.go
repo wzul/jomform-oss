@@ -419,10 +419,60 @@ func (h *PublicHandlers) handleResponseSubmit(w http.ResponseWriter, r *http.Req
 		respondErr(w, r, err)
 		return
 	}
+	// Issue #193: fire per-form notifications on response.submitted. The
+	// submitted field values (block_id → value) drive conditional logic and
+	// {field_id} recipients. Best-effort — never blocks the submit response.
+	h.fireResponseNotifications(r.Context(), form, in.Fields)
 	respond(w, http.StatusCreated, map[string]string{
 		"status": "submitted",
 		"id":     sub.ID,
 	})
+}
+
+// fireResponseNotifications evaluates a response form's notification rules for
+// the response.submitted event and enqueues the matching emails.
+func (h *PublicHandlers) fireResponseNotifications(ctx context.Context, form *dbstore.Form, fields map[string]any) {
+	if h.Pay == nil || h.Pay.Notifications == nil {
+		return
+	}
+	// Flatten submitted values to strings for conditional logic + placeholders.
+	strFields := map[string]string{}
+	for k, v := range fields {
+		switch t := v.(type) {
+		case string:
+			strFields[k] = t
+		case float64:
+			strFields[k] = fmt.Sprintf("%.0f", t)
+		case bool:
+			strFields[k] = fmt.Sprintf("%v", t)
+		default:
+			if b, err := json.Marshal(v); err == nil {
+				strFields[k] = string(b)
+			}
+		}
+	}
+	spaceID := ""
+	if h.Spaces != nil {
+		if sid, serr := h.Spaces.SpaceIDByAccount(ctx, form.AccountID); serr == nil {
+			spaceID = sid
+		}
+	}
+	formURL := ""
+	if h.Spaces != nil {
+		if slug, serr := h.Spaces.SpaceSlugByAccount(ctx, form.AccountID); serr == nil && slug != "" {
+			formURL = "https://" + slug + ".jomform.com/" + form.Slug
+		}
+	}
+	if formURL == "" {
+		formURL = h.BaseURL + "/f/" + form.Slug
+	}
+	h.Pay.FireFormNotifications(ctx, payments.NotificationRef{
+		FormID:    form.ID,
+		SpaceID:   spaceID,
+		AccountID: form.AccountID,
+		FormURL:   formURL,
+		Fields:    strFields,
+	}, dbstore.NotifyEventResponseSubmitted)
 }
 
 // lookupProduct resolves product name/price from the form snapshot config.

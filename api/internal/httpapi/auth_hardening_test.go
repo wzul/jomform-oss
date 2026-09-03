@@ -194,33 +194,36 @@ func TestAuthLoginSuccessResetsCounter(t *testing.T) {
 	mux := loginMux(h)
 
 	email := fmt.Sprintf("reset-%d@example.test", time.Now().UnixNano())
-	registerAndVerify(t, h, email, "password123", "10.2.2.2")
+	// Unique IP per run so the Valkey login-breaker counter never collides
+	// with a previous run's state (test isolation).
+	ip := fmt.Sprintf("10.2.%d.%d", time.Now().UnixNano()%250+1, time.Now().UnixNano()%250+1)
+	registerAndVerify(t, h, email, "password123", ip)
 
 	// 9 failures (below lockout).
 	for i := 0; i < 9; i++ {
 		if rec := postJSON(mux, "/v1/auth/login", map[string]any{
 			"email": email, "password": "WRONG",
-		}, "10.2.2.2"); rec.Code != http.StatusUnauthorized {
+		}, ip); rec.Code != http.StatusUnauthorized {
 			t.Fatalf("failure %d status = %d", i+1, rec.Code)
 		}
 	}
 	// Correct password succeeds → resets.
 	if rec := postJSON(mux, "/v1/auth/login", map[string]any{
 		"email": email, "password": "password123",
-	}, "10.2.2.2"); rec.Code != http.StatusOK {
+	}, ip); rec.Code != http.StatusOK {
 		t.Fatalf("success login status = %d (body %s)", rec.Code, rec.Body.String())
 	}
 	// Another 10 failures are required to lock out again (proves reset to 0).
 	for i := 0; i < 10; i++ {
 		if rec := postJSON(mux, "/v1/auth/login", map[string]any{
 			"email": email, "password": "WRONG",
-		}, "10.2.2.2"); rec.Code != http.StatusUnauthorized {
+		}, ip); rec.Code != http.StatusUnauthorized {
 			t.Fatalf("post-reset failure %d status = %d", i+1, rec.Code)
 		}
 	}
 	if rec := postJSON(mux, "/v1/auth/login", map[string]any{
 		"email": email, "password": "WRONG",
-	}, "10.2.2.2"); rec.Code != http.StatusTooManyRequests {
+	}, ip); rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("post-reset 11th status = %d, want 429", rec.Code)
 	}
 }

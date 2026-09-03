@@ -275,6 +275,9 @@ type upsertFormIn struct {
 	// Issue #208: per-form CHIP feeds (multiple, with conditional logic).
 	// Omit to leave unchanged; pass an empty array to clear all feeds.
 	ChipFeeds []chipFeedIn `json:"chip_feeds,omitempty" jsonschema:"Senarai feed CHIP borang. Feed tanpa condition = lalai (sentiasa padan). Feed pertama yang padan dipakai."`
+	// Issue #193: per-form notification rules. Omit to leave unchanged; pass
+	// an explicit list to replace the form's notifications wholesale.
+	Notifications []notificationIn `json:"notifications,omitempty" jsonschema:"Peraturan notifikasi emel (ganti semua bila diisi)"`
 }
 
 func (s *Server) upsertForm(
@@ -311,6 +314,12 @@ func (s *Server) upsertForm(
 		if err := s.deps.Forms.Create(ctx, f); err != nil {
 			return nil, nil, err
 		}
+		// Issue #193: pre-create the default notification (notify merchant on
+		// sale.paid) so a new form sends the merchant a new-sale email with zero
+		// configuration. Best-effort.
+		if s.deps.Notifications != nil {
+			_ = s.deps.Notifications.EnsureDefault(ctx, f.ID)
+		}
 		// Apply restrictions on create when provided.
 		if in.StartAt != nil || in.EndAt != nil || in.EntryLimit != nil ||
 			in.PendingMessage != "" || in.ExpiredMessage != "" || in.LimitMessage != "" {
@@ -319,18 +328,24 @@ func (s *Server) upsertForm(
 				return nil, nil, err
 			}
 		}
-		// Issue #208: apply CHIP feeds on create when provided.
-		if in.ChipFeeds != nil {
-			feeds, err := s.toChipFeeds(ctx, acc, f.ID, in.ChipFeeds)
-			if err != nil {
-				return nil, nil, err
-			}
-			if err := s.deps.Forms.SetChipFeeds(ctx, acc, f.ID, feeds); err != nil {
-				return nil, nil, err
-			}
+	// Issue #208: apply CHIP feeds on create when provided.
+	if in.ChipFeeds != nil {
+		feeds, err := s.toChipFeeds(ctx, acc, f.ID, in.ChipFeeds)
+		if err != nil {
+			return nil, nil, err
 		}
-		return nil, map[string]string{"status": "created", "form_id": f.ID, "slug": f.Slug}, nil
+		if err := s.deps.Forms.SetChipFeeds(ctx, acc, f.ID, feeds); err != nil {
+			return nil, nil, err
+		}
 	}
+	// Issue #193: apply notifications when provided on create.
+	if len(in.Notifications) > 0 {
+		if err := s.applyFormNotifications(ctx, f.ID, in.Notifications); err != nil {
+			return nil, nil, err
+		}
+	}
+	return nil, map[string]string{"status": "created", "form_id": f.ID, "slug": f.Slug}, nil
+}
 	// Update store treats nil maps as "leave unchanged", so an omitted
 	// config (and the nil theme below) keep the stored values intact.
 	if err := s.deps.Forms.Update(ctx, acc, in.FormID, in.Title, in.Config, nil); err != nil {
@@ -354,7 +369,60 @@ func (s *Server) upsertForm(
 			return nil, nil, err
 		}
 	}
+	// Issue #193: apply notifications when provided on update.
+	if len(in.Notifications) > 0 {
+		if err := s.applyFormNotifications(ctx, in.FormID, in.Notifications); err != nil {
+			return nil, nil, err
+		}
+	}
 	return nil, map[string]string{"status": "updated", "form_id": in.FormID}, nil
+}
+
+// applyFormNotifications replaces a form's notification rules wholesale
+// (issue #193). Rules with an id are updated, rules without an id are created,
+// and existing rules not in the list are deleted.
+func (s *Server) applyFormNotifications(ctx context.Context, formID string, in []notificationIn) error {
+	if s.deps.Notifications == nil {
+		return errors.New("notifications tidak tersedia")
+	}
+	for _, n := range in {
+		if !validNotificationEvent(n.Event) {
+			return errors.New("event tidak sah: " + n.Event)
+		}
+	}
+	existing, err := s.deps.Notifications.ListByForm(ctx, formID)
+	if err != nil {
+		return err
+	}
+	keep := map[string]bool{}
+	for _, n := range in {
+		enabled := true
+		if n.Enabled != nil {
+			enabled = *n.Enabled
+		}
+		rec := &dbstore.FormNotification{
+			FormID: formID, Name: n.Name, Event: n.Event, ToEmail: n.ToEmail,
+			Subject: n.Subject, Body: n.Body, Condition: n.Condition, Enabled: enabled,
+		}
+		if n.ID == "" {
+			if err := s.deps.Notifications.Create(ctx, rec); err != nil {
+				return err
+			}
+		} else {
+			keep[n.ID] = true
+			if err := s.deps.Notifications.Update(ctx, formID, n.ID, rec); err != nil {
+				return err
+			}
+		}
+	}
+	for _, e := range existing {
+		if !keep[e.ID] {
+			if err := s.deps.Notifications.Delete(ctx, formID, e.ID); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // uniqueFormSlug generates a URL-safe, per-space-unique slug for a new form

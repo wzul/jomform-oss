@@ -603,6 +603,12 @@ func (h *RESTHandlers) createForm(w http.ResponseWriter, r *http.Request, actx *
 		respondErr(w, r, err)
 		return
 	}
+	// Issue #193: pre-create the default notification (notify merchant on
+	// sale.paid) so a new form sends the merchant a new-sale email with zero
+	// configuration. Best-effort.
+	if h.Notifications != nil {
+		_ = h.Notifications.EnsureDefault(r.Context(), f.ID)
+	}
 	// Issue #92: audit form creation.
 	h.recordEvent(r, actx, h.sessionOwnerID(r), "form.created", map[string]any{"form_id": f.ID, "slug": f.Slug})
 	respond(w, http.StatusCreated, restForm{

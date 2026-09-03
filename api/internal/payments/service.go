@@ -34,6 +34,11 @@ type Service struct {
 	// are enqueued and sent by a background worker instead of synchronously in
 	// the request handler. Nil (bare-mode tests) → synchronous send.
 	EmailQueue *emailqueue.Queue
+	// Notifications (issue #193): per-form notification rules. When non-nil,
+	// form events (sale.paid, sale.failed, response.submitted,
+	// subscription.charged) evaluate the form's rules and enqueue matching
+	// emails via EmailQueue. Nil → no per-form notifications fire.
+	Notifications FormNotificationLister
 	// OnPaid (optional) fans outbound webhooks after a sale is paid.
 	OnPaid func(ctx context.Context, accountID, event string, payload map[string]any)
 }
@@ -127,4 +132,11 @@ type FormGetter interface {
 	// FormEmailSettings reads a form's per-form notification email override
 	// (issue #177). Empty subject/body = fall back to space defaults.
 	FormEmailSettings(ctx context.Context, formID string) (*dbstore.FormEmailSettings, error)
+}
+
+// FormNotificationLister reads a form's enabled notification rules for one
+// event (issue #193). Implemented by *dbstore.FormNotificationStore; an
+// interface so the notification engine is unit-testable.
+type FormNotificationLister interface {
+	ListByFormEvent(ctx context.Context, formID, event string) ([]*dbstore.FormNotification, error)
 }

@@ -77,6 +77,9 @@ type RESTHandlers struct {
 	// Issue #171: response-only form submissions (list + count endpoints).
 	Submissions *dbstore.SubmissionStore
 
+	// Issue #193: per-form notification rules.
+	Notifications *dbstore.FormNotificationStore
+
 	// Issue #180: media library metadata store (list/filter/soft-delete).
 	// Nil in bare-mode tests; the media endpoints return empty/503.
 	Media *dbstore.MediaStore
@@ -133,6 +136,11 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	// Issue #177: per-form notification email settings (Gravity-Forms-style).
 	mux.Handle("GET /v1/rest/forms/{id}/email-settings", h.authed(h.getFormEmailSettings))
 	mux.Handle("PUT /v1/rest/forms/{id}/email-settings", h.authed(h.saveFormEmailSettings))
+	// Issue #193: per-form notification rules (list/create/update/delete).
+	mux.Handle("GET /v1/rest/forms/{id}/notifications", h.authed(h.listFormNotifications))
+	mux.Handle("POST /v1/rest/forms/{id}/notifications", h.authed(h.createFormNotification))
+	mux.Handle("PUT /v1/rest/forms/{id}/notifications/{nid}", h.authed(h.updateFormNotification))
+	mux.Handle("DELETE /v1/rest/forms/{id}/notifications/{nid}", h.authed(h.deleteFormNotification))
 	mux.HandleFunc("GET /v1/templates", h.listTemplates)
 	mux.HandleFunc("GET /v1/system-settings/public", h.publicSystemSettings)
 	mux.Handle("GET /v1/system-settings", h.authed(h.listSystemSettings))

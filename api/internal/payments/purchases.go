@@ -192,6 +192,12 @@ func (s *Service) ProcessCallback(ctx context.Context, p *chip.Purchase) error {
 					"form_id": cur.FormID,
 				})
 			}
+			// Issue #193: fire per-form notifications on the paid event.
+			event := "sale.paid"
+			if cur.SaleType == dbstore.SaleTypeSubscription {
+				event = "subscription.charged"
+			}
+			s.fireSaleNotifications(ctx, cur, event)
 			// Receipt (one-time sales only; subscription receipts follow their
 			// own charge lifecycle). Never blocks the payment flow.
 			if cur.SaleType != dbstore.SaleTypeSubscription {
@@ -219,6 +225,8 @@ func (s *Service) ProcessCallback(ctx context.Context, p *chip.Purchase) error {
 					"ref_code": cur.RefCode, "buyer_email": cur.Client.Email,
 				})
 			}
+			// Issue #193: fire per-form notifications on the failed event.
+			s.fireSaleNotifications(ctx, cur, "sale.failed")
 			if err := s.Sales.SetStatusTx(ctx, tx, cur.ID, dbstore.SaleFailed); err != nil {
 				return err
 			}

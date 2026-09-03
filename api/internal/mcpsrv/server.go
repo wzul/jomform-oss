@@ -42,6 +42,9 @@ type Deps struct {
 	// Issue #171: response-only form submissions (list_form_submissions tool).
 	// Nil → the tool errors.
 	Submissions *dbstore.SubmissionStore
+	// Issue #193: per-form notification rules (get/set_form_notifications).
+	// Nil → the tools error.
+	Notifications *dbstore.FormNotificationStore
 	// Issue #180: media library (list_media tool). Nil → the tool errors.
 	Media *dbstore.MediaStore
 	// Issue #121: OAuth 2.1 store. When wired, /mcp accepts either a Bearer
