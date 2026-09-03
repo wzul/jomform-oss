@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Shell } from "../components/Shell";
 import { useI18n } from "../components/i18n";
 import { useSession } from "../components/session";
+import { spaceQuery, spaceScope } from "../lib/space";
 import Landing from "./landing/page";
 import {
   Area,
@@ -52,17 +53,6 @@ const money = (sen: number) =>
   `RM${(sen / 100).toLocaleString("en-MY", { minimumFractionDigits: 2 })}`;
 
 const PAGE_SIZE = 10;
-
-// The dashboard scopes every list fetch to the space selected in the sidebar
-// (Shell persists it in localStorage). Empty string = no space scope yet.
-const spaceScope = () => {
-  if (typeof window === "undefined") return "";
-  try {
-    return localStorage.getItem("jf_space") || "";
-  } catch {
-    return "";
-  }
-};
 
 export default function Dashboard() {
   const { t } = useI18n();
@@ -289,7 +279,7 @@ export default function Dashboard() {
                 {salesTotal} {t("dash.records")}
               </span>
               <a
-                href="/api/rest/sales/export.csv"
+                href={`/api/rest/sales/export.csv${spaceQuery()}`}
                 className="rounded-md border border-[var(--jf-border)] px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50"
               >
                 {t("common.exportCsv")}

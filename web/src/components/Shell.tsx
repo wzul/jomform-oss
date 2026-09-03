@@ -18,7 +18,7 @@ export function Shell({
   children: React.ReactNode;
   active: "dashboard" | "forms" | "products" | "sales" | "subscriptions" | "settings" | "profile";
 }) {
-  const { user, spaces } = useSession();
+  const { user, spaces, reload } = useSession();
   const [space, setSpace] = useState<string>("");
   const [menuOpen, setMenuOpen] = useState(false);
   const { t } = useI18n();
@@ -103,13 +103,13 @@ export function Shell({
   function switchSpace(slug: string) {
     setSpace(slug);
     localStorage.setItem("jf_space", slug);
-    // Hard reload is deliberate: the dashboard landing sections (products,
-    // summary, sales, analytics) arrive in the session <bundle> which is
-    // cached at module level WITHOUT a space scope key, so router.refresh()
-    // would re-render with the stale cached bundle. A reload recomputes
-    // ?space=<slug> for every downstream fetch so the UI is scoped to the
-    // newly selected space (issue #41).
-    window.location.reload();
+    // Issue #158: the session bundle is now SPACE-KEYED (see session.tsx), so
+    // switching spaces re-fetches the bundle for the newly selected space —
+    // no hard reload needed. reload() drops the cached bundle for the new
+    // space and re-fetches it, so the dashboard landing sections (products,
+    // summary, sales, analytics) and the account-level settings (chip, keys,
+    // domains, webhooks, einvoice) all switch to the new space's account.
+    reload();
   }
 
   async function signOut() {

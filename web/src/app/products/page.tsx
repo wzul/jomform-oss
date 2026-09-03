@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
+import { spaceQuery } from "../../lib/space";
 
 type Product = {
   id: string;
@@ -64,7 +65,7 @@ export default function Products() {
     // immediately; a 401 flips `anon` and the auth bounce below handles it.
     // include_archived=1 so the WooCommerce-style admin list shows a status
     // column and lets owners toggle products back to active.
-    const p = await fetch("/api/rest/products?include_archived=1").then((r) =>
+    const p = await fetch(`/api/rest/products?include_archived=1${spaceQuery()}`).then((r) =>
       r.ok ? r.json() : []
     );
     setProducts(Array.isArray(p) ? p : []);
@@ -195,7 +196,7 @@ export default function Products() {
     if (!ok) return;
     setBusy(true);
     try {
-      await fetch("/api/rest/products/bulk", {
+      await fetch(`/api/rest/products/bulk${spaceQuery()}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "archive", ids }),
@@ -221,7 +222,7 @@ export default function Products() {
   async function add(e: React.FormEvent) {
     e.preventDefault();
     setError("");
-    const r = await fetch("/api/rest/products", {
+    const r = await fetch(`/api/rest/products${spaceQuery()}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -253,7 +254,7 @@ export default function Products() {
 
   // ── toggle status / delete (single row) ─────────────────────────────────
   async function toggleStatus(p: Product) {
-    await fetch(`/api/rest/products/${p.id}`, {
+    await fetch(`/api/rest/products/${p.id}${spaceQuery()}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ active: !p.active }),
@@ -264,7 +265,7 @@ export default function Products() {
   async function archiveOne(p: Product) {
     const ok = window.confirm(t("prod.archiveOneConfirm", { name: p.name }));
     if (!ok) return;
-    await fetch(`/api/rest/products/${p.id}`, { method: "DELETE" });
+    await fetch(`/api/rest/products/${p.id}${spaceQuery()}`, { method: "DELETE" });
     load();
   }
 
@@ -398,7 +399,7 @@ export default function Products() {
       images: editForm.images,
     };
     try {
-      const r = await fetch(`/api/rest/products/${editing.id}`, {
+      const r = await fetch(`/api/rest/products/${editing.id}${spaceQuery()}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),

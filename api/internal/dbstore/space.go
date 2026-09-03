@@ -57,14 +57,34 @@ func (s *SpaceStore) ByID(ctx context.Context, id string) (*Space, error) {
 	return scanSpace(s.pool.QueryRow(ctx, spaceSelect+" WHERE id=$1", id))
 }
 
-// Create makes a new space (slug unique).
+// Create makes a new space (slug unique) AND a fresh, empty account linked
+// to it (issue #158). Each space owns its own account so a new space starts
+// with a clean slate: no CHIP creds, no products, no sales, no domains, no
+// webhooks. CHIP credentials are never shared across spaces. The account
+// slug is derived from the space slug (unique-verified by the caller) plus a
+// short id suffix to avoid colliding with the space's own slug.
 func (s *SpaceStore) Create(ctx context.Context, ownerUserID, name, slug string) (*Space, error) {
 	sp := &Space{Owner: ownerUserID, Name: name, Slug: slug}
 	err := s.pool.QueryRow(ctx,
 		`INSERT INTO spaces (owner_user_id, name, slug) VALUES ($1,$2,$3)
 		 RETURNING id, owner_user_id, name, slug`,
 		ownerUserID, name, slug).Scan(&sp.ID, &sp.Owner, &sp.Name, &sp.Slug)
-	return sp, err
+	if err != nil {
+		return sp, err
+	}
+	// Fresh account owned by the space. Empty CHIP creds, no products/sales.
+	// The account slug is unique-verified by the caller (space slug) plus a
+	// short id suffix; a collision is extremely unlikely and the DB enforces
+	// uniqueness as a backstop.
+	accSlug := slug + "-" + sp.ID[:8]
+	_, aerr := s.pool.Exec(ctx,
+		`INSERT INTO accounts (owner_user_id, name, slug, space_id)
+		 VALUES ($1,$2,$3,$4)`,
+		ownerUserID, name, accSlug, sp.ID)
+	if aerr != nil {
+		return sp, aerr
+	}
+	return sp, nil
 }
 
 // SpaceSettings is the storefront configuration for one space.

@@ -196,30 +196,14 @@ func (h *RESTHandlers) resolve(w http.ResponseWriter, r *http.Request) (*dbstore
 		invalidateSessionAcctCache(c.Value)
 		return nil, false
 	}
-	// First owned account (M5 adds multi-account switching). Account IDs are
-	// TTL-cached per token, so repeat requests skip the Accounts.ByOwner
-	// Postgres listing; a hit still re-fetches the account by primary key
-	// (one cheap query) so account/CHIP-credential changes are never stale.
-	var acc *dbstore.Account
-	if ids, ok := cachedSessionAcctIDs(c.Value); ok {
-		for _, id := range ids {
-			if a, err := h.Accounts.ByID(r.Context(), id); err == nil {
-				acc = a
-				break
-			}
-		}
-	} else {
-		accs, err := h.Accounts.ByOwner(r.Context(), userID)
-		if err != nil || len(accs) == 0 {
-			return nil, false
-		}
-		ids := make([]string, 0, len(accs))
-		for _, a := range accs {
-			ids = append(ids, a.ID)
-		}
-		storeSessionAcctIDs(c.Value, ids)
-		acc = accs[0]
-	}
+	// Resolve the account. Issue #158: when a ?space=<slug> scope is present
+	// and belongs to the session user, resolve the account from that space
+	// (each space owns its own account) instead of the user's first account.
+	// This is what makes switching spaces actually switch the account context
+	// — CHIP keys, domains, webhooks, products, revenue all follow the space.
+	// Without a space scope we fall back to the first owned account (legacy
+	// unscoped callers / API-key path).
+	acc := h.resolveSessionAccount(r, userID, c.Value)
 	if acc == nil {
 		// Cache held IDs but none fetched: stale mapping (account deleted or
 		// owner listing would be empty). Drop the entry so the next request
@@ -228,6 +212,57 @@ func (h *RESTHandlers) resolve(w http.ResponseWriter, r *http.Request) (*dbstore
 		return nil, false
 	}
 	return acc, true
+}
+
+// resolveSessionAccount resolves the account for a session-authenticated
+// request. When the request carries a ?space=<slug> scope that belongs to the
+// session user, the account is resolved from that space (issue #158) so all
+// account-level data is space-scoped. Otherwise the user's first owned
+// account is used (legacy unscoped callers).
+func (h *RESTHandlers) resolveSessionAccount(r *http.Request, userID, token string) *dbstore.Account {
+	// Space-scoped resolution (issue #158): each space owns its own account.
+	if slug := r.URL.Query().Get("space"); slug != "" && h.Spaces != nil {
+		owned, ids, err := h.Spaces.AccountIDsBySlugForOwner(r.Context(), slug, userID)
+		if err == nil && owned {
+			for _, id := range ids {
+				if a, err := h.Accounts.ByID(r.Context(), id); err == nil {
+					return a
+				}
+			}
+			// Owned space with zero accounts (defensive; shouldn't happen
+			// after the migration): fall back to the first owned account.
+			// The space is empty so nothing leaks.
+			accs, err := h.Accounts.ByOwner(r.Context(), userID)
+			if err == nil && len(accs) > 0 {
+				return accs[0]
+			}
+			return nil
+		}
+		// Space not owned / unknown: reject (caller returns 401).
+		return nil
+	}
+	// Unscoped: first owned account (existing behaviour). Account IDs are
+	// TTL-cached per token, so repeat requests skip the Accounts.ByOwner
+	// Postgres listing; a hit still re-fetches the account by primary key
+	// (one cheap query) so account/CHIP-credential changes are never stale.
+	if ids, ok := cachedSessionAcctIDs(token); ok {
+		for _, id := range ids {
+			if a, err := h.Accounts.ByID(r.Context(), id); err == nil {
+				return a
+			}
+		}
+		return nil
+	}
+	accs, err := h.Accounts.ByOwner(r.Context(), userID)
+	if err != nil || len(accs) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(accs))
+	for _, a := range accs {
+		ids = append(ids, a.ID)
+	}
+	storeSessionAcctIDs(token, ids)
+	return accs[0]
 }
 
 // AccountCtx carries the resolved account through the request.

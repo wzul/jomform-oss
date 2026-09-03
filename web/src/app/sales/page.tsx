@@ -16,6 +16,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
+import { spaceQuery } from "../../lib/space";
 
 type Item = {
   product_id: string;
@@ -118,7 +119,7 @@ function SalesPageInner() {
   }, [forms]);
 
   const loadForms = useCallback(async () => {
-    const f = await fetch("/api/rest/forms").then((r) => (r.ok ? r.json() : []));
+    const f = await fetch(`/api/rest/forms${spaceQuery()}`).then((r) => (r.ok ? r.json() : []));
     setForms(Array.isArray(f) ? f : []);
   }, []);
 
@@ -143,8 +144,10 @@ function SalesPageInner() {
       if (dateFrom) qs.set("date_from", dateFrom);
       if (dateTo) qs.set("date_to", dateTo);
       if (q.trim()) qs.set("q", q.trim());
+      const sp = spaceQuery();
+      const sep = sp ? "&" : "";
       try {
-        const r = await fetch(`/api/rest/sales?${qs.toString()}`);
+        const r = await fetch(`/api/rest/sales?${qs.toString()}${sep}${sp.replace("?", "")}`);
         if (!r.ok) {
           setRows([]);
           setTotal(0);
@@ -188,7 +191,7 @@ function SalesPageInner() {
     setBusyRef(ref);
     setMsg("");
     try {
-      const r = await fetch(`/api/rest/sales/${encodeURIComponent(ref)}/confirm`, {
+      const r = await fetch(`/api/rest/sales/${encodeURIComponent(ref)}/confirm${spaceQuery()}`, {
         method: "POST",
       });
       setMsg(r.ok ? `${ref} ✓` : (await r.json().catch(() => ({}))).error || "Gagal");
@@ -216,7 +219,7 @@ function SalesPageInner() {
     setBusyRef(ref);
     setMsg("");
     try {
-      const r = await fetch(`/api/rest/sales/${encodeURIComponent(ref)}/capture`, {
+      const r = await fetch(`/api/rest/sales/${encodeURIComponent(ref)}/capture${spaceQuery()}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         ...(body ? { body } : {}),
@@ -235,7 +238,7 @@ function SalesPageInner() {
     setBusyRef(ref);
     setMsg("");
     try {
-      const r = await fetch(`/api/rest/sales/${encodeURIComponent(ref)}/release`, {
+      const r = await fetch(`/api/rest/sales/${encodeURIComponent(ref)}/release${spaceQuery()}`, {
         method: "POST",
       });
       const d = await r.json().catch(() => ({}));
@@ -255,7 +258,7 @@ function SalesPageInner() {
     setBusyRef("__all__");
     setMsg("");
     try {
-      const r = await fetch("/api/rest/sales/bulk-capture", {
+      const r = await fetch(`/api/rest/sales/bulk-capture${spaceQuery()}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ refs: awaiting.map((s) => s.ref_code) }),
@@ -291,7 +294,9 @@ function SalesPageInner() {
   const exportUrl = useMemo(() => {
     const qs = new URLSearchParams();
     if (formFilter) qs.set("form_id", formFilter);
-    return `/api/rest/sales/export.csv?${qs.toString()}`;
+    const sp = spaceQuery();
+    const sep = sp ? "&" : "";
+    return `/api/rest/sales/export.csv?${qs.toString()}${sep}${sp.replace("?", "")}`;
   }, [formFilter]);
 
   // drawer focus management (mirrors Shell #104: focus + Escape + Tab trap)

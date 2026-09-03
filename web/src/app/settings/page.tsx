@@ -5,6 +5,7 @@ import { Shell } from "../../components/Shell";
 import { useRouter } from "next/navigation";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
+import { spaceQuery, spaceScope } from "../../lib/space";
 
 type ChipStatus = { configured: boolean; mode?: string };
 type KeyRow = { id: string; name: string; scopes: string[] };
@@ -192,7 +193,7 @@ export default function Settings() {
     // Issue #48: when the bundle resolved as null (anonymous) there is
     // nothing to load here — the anon redirect below bounces to /landing.
     if (bundle === null) return Promise.resolve();
-    return fetch("/api/rest/dashboard-bundle")
+    return fetch(`/api/rest/dashboard-bundle${spaceQuery()}`)
       .then((r) => (r.ok ? r.json() : null))
       .then(apply);
   }, [bundle]);
@@ -263,7 +264,7 @@ export default function Settings() {
     e.preventDefault();
     setMsg("");
     setErr("");
-    const r = await fetch("/api/rest/settings/chip", {
+    const r = await fetch(`/api/rest/settings/chip${spaceQuery()}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -286,7 +287,7 @@ export default function Settings() {
   }
 
   async function clearCreds() {
-    await fetch("/api/rest/settings/chip", { method: "DELETE" });
+    await fetch(`/api/rest/settings/chip${spaceQuery()}`, { method: "DELETE" });
     setMsg(t("set.credsCleared"));
     await load();
   }
@@ -294,7 +295,7 @@ export default function Settings() {
   async function addWebhook(e: React.FormEvent) {
     e.preventDefault();
     setErr("");
-    const r = await fetch("/api/rest/webhooks", {
+    const r = await fetch(`/api/rest/webhooks${spaceQuery()}`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url: whUrl, secret: whSecret, events: whEvents }),
     });
@@ -313,7 +314,7 @@ export default function Settings() {
     e.preventDefault();
     if (!editId) return;
     setErr("");
-    const r = await fetch(`/api/rest/webhooks/${editId}`, {
+    const r = await fetch(`/api/rest/webhooks/${editId}${spaceQuery()}`, {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url: editUrl, secret: editSecret, events: editEvents }),
     });
@@ -348,7 +349,7 @@ export default function Settings() {
   // on mount to populate the status indicator.
   async function fetchDeliveries(webhookID: string) {
     try {
-      const r = await fetch(`/api/rest/webhooks/${webhookID}/deliveries?limit=10`);
+      const r = await fetch(`/api/rest/webhooks/${webhookID}/deliveries?limit=10&space=${encodeURIComponent(spaceScope())}`);
       if (!r.ok) return;
       const list = (await r.json().catch(() => ([]))) as Delivery[];
       setDeliveries((prev) => ({ ...prev, [webhookID]: Array.isArray(list) ? list : [] }));
@@ -369,7 +370,7 @@ export default function Settings() {
 
   async function genKey() {
     setErr("");
-    const r = await fetch("/api/rest/keys", {
+    const r = await fetch(`/api/rest/keys${spaceQuery()}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: "AI Agent Key", scopes: ["readwrite"] }),
@@ -384,7 +385,7 @@ export default function Settings() {
   async function setDomainClaim(e: React.FormEvent) {
     e.preventDefault();
     setDomainMsg("");
-    const r = await fetch("/api/rest/domains", {
+    const r = await fetch(`/api/rest/domains${spaceQuery()}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ domain: domainInput }),
@@ -619,7 +620,7 @@ export default function Settings() {
                       {!d.verified && (
                         <button
                           onClick={async () => {
-                            const r = await fetch(`/api/rest/domains/${d.id}/verify`, { method: "POST" });
+                            const r = await fetch(`/api/rest/domains/${d.id}/verify${spaceQuery()}`, { method: "POST" });
                             setDomainMsg(r.ok ? t("set.domainVerified", { domain: d.domain }) : t("set.verifyFailed", { domain: d.domain }));
                             load();
                           }}
@@ -627,7 +628,7 @@ export default function Settings() {
                         >{t("set.verify")}</button>
                       )}
                       <button
-                        onClick={async () => { await fetch(`/api/rest/domains/${d.id}`, { method: "DELETE" }); load(); }}
+                        onClick={async () => { await fetch(`/api/rest/domains/${d.id}${spaceQuery()}`, { method: "DELETE" }); load(); }}
                         className="text-xs text-slate-500 hover:text-red-500"
                       >{t("set.remove")}</button>
                     </div>
@@ -776,7 +777,7 @@ export default function Settings() {
               className="jf-input mt-3 max-w-xl font-mono text-xs"
               placeholder={'<script src="https://www.googletagmanager.com/gtag/js?id=G-XXXX"></-script>'} />
             <button onClick={async () => {
-              const r = await fetch("/api/rest/settings/tracking", {
+              const r = await fetch(`/api/rest/settings/tracking${spaceQuery()}`, {
                 method: "PUT", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ head: trackingHead }),
               });
@@ -803,7 +804,7 @@ export default function Settings() {
               </div>
             </div>
             <button onClick={async () => {
-              const r = await fetch("/api/rest/settings/einvoice", {
+              const r = await fetch(`/api/rest/settings/einvoice${spaceQuery()}`, {
                 method: "PUT", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ tin, msic }),
               });
@@ -892,7 +893,7 @@ export default function Settings() {
                           }} className="shrink-0 text-xs text-slate-500 hover:text-slate-800">
                             {open ? t("wh.hideHistory") : t("wh.showHistory")}
                           </button>
-                          <button onClick={async () => { await fetch(`/api/rest/webhooks/${wh.id}`, { method: "DELETE" }); load(); }}
+                          <button onClick={async () => { await fetch(`/api/rest/webhooks/${wh.id}${spaceQuery()}`, { method: "DELETE" }); load(); }}
                             className="shrink-0 text-xs text-slate-500 hover:text-red-500">✕</button>
                         </div>
                       </div>
@@ -998,7 +999,7 @@ export default function Settings() {
                     <p className="text-sm">{k.name}</p>
                     <p className="text-[11px] text-slate-400">{t("set.clientId")} {k.name === "AI Agent Key" ? "(oauth-managed)" : k.name}</p>
                   </div>
-                  <button onClick={async () => { await fetch(`/api/rest/keys/${k.id}`, { method: "DELETE" }); load(); }}
+                  <button onClick={async () => { await fetch(`/api/rest/keys/${k.id}${spaceQuery()}`, { method: "DELETE" }); load(); }}
                     className="text-xs text-slate-500 hover:text-red-500">{t("set.revoke")}</button>
                 </li>
               ))}

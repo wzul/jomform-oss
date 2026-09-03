@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "../../components/i18n";
+import { spaceQuery } from "../../lib/space";
 
 /* ─── types ──────────────────────────────────────────────────────────────── */
 
@@ -155,8 +156,8 @@ export default function Builder() {
 
   const load = useCallback(async () => {
     const [p, f] = await Promise.all([
-      fetch("/api/rest/products").then((r) => (r.ok ? r.json() : [])),
-      fetch("/api/rest/forms").then((r) => (r.ok ? r.json() : [])),
+      fetch(`/api/rest/products${spaceQuery()}`).then((r) => (r.ok ? r.json() : [])),
+      fetch(`/api/rest/forms${spaceQuery()}`).then((r) => (r.ok ? r.json() : [])),
     ]);
     setProducts(p);
     setForms(f);
@@ -172,7 +173,7 @@ export default function Builder() {
       setFormStat(null);
       return;
     }
-    const all = await fetch("/api/rest/analytics/forms").then((r) => (r.ok ? r.json() : []));
+    const all = await fetch(`/api/rest/analytics/forms${spaceQuery()}`).then((r) => (r.ok ? r.json() : []));
     const mine = (Array.isArray(all) ? all : []).find((x: { form_id: string }) => x.form_id === fid);
     setFormStat(mine || null);
   }, []);
@@ -201,7 +202,9 @@ export default function Builder() {
         limit: String(FORM_SALES_PAGE_SIZE),
         form_id: fid,
       });
-      const r = await fetch(`/api/rest/sales?${q.toString()}`);
+      const sp = spaceQuery();
+      const sep = sp ? "&" : "";
+      const r = await fetch(`/api/rest/sales?${q.toString()}${sep}${sp.replace("?", "")}`);
       if (!r.ok) {
         setFormSales([]);
         setFormSalesTotal(0);
@@ -256,7 +259,7 @@ export default function Builder() {
     setSaleActionBusy(ref);
     setSaleActionMsg("");
     try {
-      const r = await fetch(`/api/rest/sales/${encodeURIComponent(ref)}/capture`, {
+      const r = await fetch(`/api/rest/sales/${encodeURIComponent(ref)}/capture${spaceQuery()}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         ...(body ? { body } : {}),
@@ -278,7 +281,7 @@ export default function Builder() {
     setSaleActionBusy(ref);
     setSaleActionMsg("");
     try {
-      const r = await fetch(`/api/rest/sales/${encodeURIComponent(ref)}/release`, {
+      const r = await fetch(`/api/rest/sales/${encodeURIComponent(ref)}/release${spaceQuery()}`, {
         method: "POST",
       });
       if (!r.ok) {
@@ -304,7 +307,7 @@ export default function Builder() {
     setSaleActionBusy("__all__");
     setSaleActionMsg("");
     try {
-      const r = await fetch("/api/rest/sales/bulk-capture", {
+      const r = await fetch(`/api/rest/sales/bulk-capture${spaceQuery()}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ refs: awaiting.map((s) => s.ref_code) }),
@@ -326,7 +329,7 @@ export default function Builder() {
     load();
     const id = new URLSearchParams(window.location.search).get("form");
     if (id) void (async () => {
-      const r = await fetch(`/api/rest/forms/${id}`);
+      const r = await fetch(`/api/rest/forms/${id}${spaceQuery()}`);
       if (!r.ok) return;
       const d = await r.json();
       setCurrentId(d.id);
@@ -410,7 +413,7 @@ export default function Builder() {
 
 
   async function fetchForm(id: string) {
-    const r = await fetch(`/api/rest/forms/${id}`);
+    const r = await fetch(`/api/rest/forms/${id}${spaceQuery()}`);
     if (!r.ok) return;
     const d = await r.json();
     setCurrentId(d.id);
@@ -457,7 +460,7 @@ export default function Builder() {
 
     let id = currentId;
     if (!id) {
-      const r = await fetch("/api/rest/forms", {
+      const r = await fetch(`/api/rest/forms${spaceQuery()}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -472,14 +475,14 @@ export default function Builder() {
       setCurrentId(d.id);
       id = d.id;
     } else {
-      await fetch(`/api/rest/forms/${id}`, {
+      await fetch(`/api/rest/forms/${id}${spaceQuery()}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title, config }),
       });
     }
     if (publish && id) {
-      await fetch(`/api/rest/forms/${id}/publish`, { method: "POST" });
+      await fetch(`/api/rest/forms/${id}/publish${spaceQuery()}`, { method: "POST" });
       setPubUrl(`https://${localStorage.getItem("jf_space") || "app"}.jomform.com/${payload.slug}`);
       await load();
     }
@@ -902,7 +905,7 @@ export default function Builder() {
             </label>
             <button
               onClick={async () => {
-                const r = await fetch(`/api/rest/forms/${currentId}/settings`, {
+                const r = await fetch(`/api/rest/forms/${currentId}/settings${spaceQuery()}`, {
                   method: "PUT", headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({
                     redirect_success: fsRedS, redirect_failure: fsRedF,
@@ -947,7 +950,7 @@ export default function Builder() {
               />
               <button
                 onClick={async () => {
-                  const r = await fetch(`/api/rest/forms/${currentId}/tracking`, {
+                  const r = await fetch(`/api/rest/forms/${currentId}/tracking${spaceQuery()}`, {
                     method: "PUT", headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ head: formTrack }),
                   });
@@ -1159,7 +1162,7 @@ export default function Builder() {
                     onClick={async () => {
                       if (!currentId || !ovBrand || !ovSecret) return;
                       setOvMsg("");
-                      const r = await fetch(`/api/rest/forms/${currentId}/chip-override`, {
+                      const r = await fetch(`/api/rest/forms/${currentId}/chip-override${spaceQuery()}`, {
                         method: "PUT",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({
@@ -1179,7 +1182,7 @@ export default function Builder() {
                   <button
                     onClick={async () => {
                       if (!currentId) return;
-                      const r = await fetch(`/api/rest/forms/${currentId}/chip-override`, { method: "DELETE" });
+                      const r = await fetch(`/api/rest/forms/${currentId}/chip-override${spaceQuery()}`, { method: "DELETE" });
                       setOvMsg(r.ok ? t("bld.overrideCleared") : t("prof.failed"));
                       setOvBrand("");
                       setOvSecret("");

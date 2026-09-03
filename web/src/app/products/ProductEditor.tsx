@@ -10,6 +10,7 @@ import { useRouter } from "next/navigation";
 import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
+import { spaceQuery } from "../../lib/space";
 
 export type Variation = {
   id?: string;
@@ -80,7 +81,7 @@ export default function ProductEditor({ productId }: { productId?: string }) {
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch(`/api/rest/products/${productId}`);
+        const r = await fetch(`/api/rest/products/${productId}${spaceQuery()}`);
         if (!r.ok) {
           if (!cancelled) setError(t("prod.notFound"));
           return;
@@ -255,7 +256,7 @@ export default function ProductEditor({ productId }: { productId?: string }) {
       body.variations = [];
     }
     try {
-      const url = isNew ? "/api/rest/products" : `/api/rest/products/${productId}`;
+      const url = isNew ? `/api/rest/products${spaceQuery()}` : `/api/rest/products/${productId}${spaceQuery()}`;
       const r = await fetch(url, {
         method: isNew ? "POST" : "PUT",
         headers: { "Content-Type": "application/json" },
