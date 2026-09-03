@@ -80,6 +80,9 @@ func dokployRemoveDomain(domain string) {
 
 // addCustomDomain (list/add) replacing single-domain semantics.
 func (h *RESTHandlers) addCustomDomain(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
 	var in struct {
 		Domain string `json:"domain"`
 	}
@@ -149,6 +152,9 @@ func (h *RESTHandlers) listCustomDomains(w http.ResponseWriter, r *http.Request,
 }
 
 func (h *RESTHandlers) verifyCustomDomainByID(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
 	d, err := h.Domains.GetByID(r.Context(), actx.Account.ID, r.PathValue("id"))
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "domain tidak dijumpai")
@@ -187,6 +193,9 @@ func (h *RESTHandlers) verifyCustomDomainByID(w http.ResponseWriter, r *http.Req
 
 // deleteCustomDomainByID removes a claim + dokploy route (best effort).
 func (h *RESTHandlers) deleteCustomDomainByID(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
 	d, err := h.Domains.GetByID(r.Context(), actx.Account.ID, r.PathValue("id"))
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "tidak dijumpai")

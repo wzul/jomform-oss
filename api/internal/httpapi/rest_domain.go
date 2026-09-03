@@ -9,6 +9,9 @@ import (
 
 // setCustomDomain claims a custom domain for the account.
 func (h *RESTHandlers) setCustomDomain(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
 	var in struct {
 		Domain string `json:"domain"`
 	}
@@ -71,6 +74,9 @@ func probeServesJomForm(domain string) bool {
 
 // deleteCustomDomain clears the claim.
 func (h *RESTHandlers) deleteCustomDomain(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
 	if err := h.Accounts.ClearCustomDomain(r.Context(), actx.Account.ID); err != nil {
 		respondErr(w, r, err)
 		return

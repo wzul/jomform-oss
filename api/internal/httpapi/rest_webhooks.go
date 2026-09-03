@@ -10,6 +10,9 @@ import (
 // ─── e-Invoice settings ─────────────────────────────────────────────────────
 
 func (h *RESTHandlers) putEinvoicing(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
 	var in struct {
 		TIN  string `json:"tin"`
 		MSIC string `json:"msic"`
@@ -55,6 +58,9 @@ func (h *RESTHandlers) listWebhooks(w http.ResponseWriter, r *http.Request, actx
 }
 
 func (h *RESTHandlers) createWebhook(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
 	var in struct {
 		URL    string   `json:"url"`
 		Secret string   `json:"secret"`
@@ -78,6 +84,9 @@ func (h *RESTHandlers) createWebhook(w http.ResponseWriter, r *http.Request, act
 }
 
 func (h *RESTHandlers) deleteWebhook(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
 	if err := h.Webhooks.Delete(r.Context(), actx.Account.ID, r.PathValue("id")); err != nil {
 		respondErr(w, r, err)
 		return
@@ -88,6 +97,9 @@ func (h *RESTHandlers) deleteWebhook(w http.ResponseWriter, r *http.Request, act
 }
 
 func (h *RESTHandlers) updateWebhook(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
 	var in struct {
 		URL    string   `json:"url"`
 		Secret string   `json:"secret"`

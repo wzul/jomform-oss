@@ -229,20 +229,20 @@ func (h *RESTHandlers) resolve(w http.ResponseWriter, r *http.Request) (*dbstore
 
 // resolveSessionAccount resolves the account for a session-authenticated
 // request. When the request carries a ?space=<slug> scope that belongs to the
-// session user, the account is resolved from that space (issue #158) so all
-// account-level data is space-scoped. Otherwise the user's first owned
-// account is used (legacy unscoped callers).
+// session user (owner OR member, issue #162), the account is resolved from
+// that space (issue #158) so all account-level data is space-scoped.
+// Otherwise the user's first owned account is used (legacy unscoped callers).
 func (h *RESTHandlers) resolveSessionAccount(r *http.Request, userID, token string) *dbstore.Account {
 	// Space-scoped resolution (issue #158): each space owns its own account.
 	if slug := r.URL.Query().Get("space"); slug != "" && h.Spaces != nil {
-		owned, ids, err := h.Spaces.AccountIDsBySlugForOwner(r.Context(), slug, userID)
-		if err == nil && owned {
-			for _, id := range ids {
+		acc, ok, err := h.Spaces.AccessBySlug(r.Context(), slug, userID)
+		if err == nil && ok {
+			for _, id := range acc.Accounts {
 				if a, err := h.Accounts.ByID(r.Context(), id); err == nil {
 					return a
 				}
 			}
-			// Owned space with zero accounts (defensive; shouldn't happen
+			// Accessible space with zero accounts (defensive; shouldn't happen
 			// after the migration): fall back to the first owned account.
 			// The space is empty so nothing leaks.
 			accs, err := h.Accounts.ByOwner(r.Context(), userID)
@@ -251,7 +251,25 @@ func (h *RESTHandlers) resolveSessionAccount(r *http.Request, userID, token stri
 			}
 			return nil
 		}
-		// Space not owned / unknown: reject (caller returns 401).
+		// Space not accessible / unknown: fall back to the first account the
+		// user can access (owner OR member, issue #162) so authed() succeeds;
+		// the list/settings endpoint's scopeOr403 then returns 403 for the
+		// foreign space. Returning nil here would surface a 401 instead of the
+		// intended 403.
+		if accs, err := h.Accounts.ByOwner(r.Context(), userID); err == nil && len(accs) > 0 {
+			return accs[0]
+		}
+		if h.Spaces != nil {
+			if members, err := h.Spaces.ByMember(r.Context(), userID); err == nil {
+				for _, m := range members {
+					for _, id := range m.Accounts {
+						if a, err := h.Accounts.ByID(r.Context(), id); err == nil {
+							return a
+						}
+					}
+				}
+			}
+		}
 		return nil
 	}
 	// Unscoped: first owned account (existing behaviour). Account IDs are

@@ -8,6 +8,9 @@ import (
 )
 
 func (h *RESTHandlers) setFormChipOverride(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireAdminRole(w, r, actx); !ok {
+		return
+	}
 	var in struct {
 		BrandID         string   `json:"brand_id"`
 		SecretKey       string   `json:"secret_key"`
@@ -32,6 +35,9 @@ func (h *RESTHandlers) setFormChipOverride(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *RESTHandlers) clearFormChipOverride(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireAdminRole(w, r, actx); !ok {
+		return
+	}
 	if err := h.Forms.ClearChipOverride(r.Context(), actx.Account.ID, r.PathValue("id")); err != nil {
 		respondErr(w, r, err)
 		return

@@ -38,21 +38,26 @@ func (s *Server) spaceOwner(ctx context.Context) (string, error) {
 	return a.OwnerUserID, nil
 }
 
-// ownedSpace fetches a space by ID and verifies the caller owns it.
-func (s *Server) ownedSpace(ctx context.Context, spaceID string) (*dbstore.Space, error) {
+// accessibleSpace fetches a space by ID and verifies the caller is the owner
+// or a member (issue #162). Returns the space + the caller's role.
+func (s *Server) accessibleSpace(ctx context.Context, spaceID string) (*dbstore.Space, string, error) {
 	sp, err := s.spacesStore()
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	owner, err := s.spaceOwner(ctx)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	space, err := sp.ByID(ctx, spaceID)
-	if err != nil || space == nil || space.Owner != owner {
-		return nil, errors.New("space tidak dijumpai")
+	if err != nil || space == nil {
+		return nil, "", errors.New("space tidak dijumpai")
 	}
-	return space, nil
+	acc, ok, err := sp.AccessByID(ctx, spaceID, owner)
+	if err != nil || !ok {
+		return nil, "", errors.New("space tidak dijumpai")
+	}
+	return space, acc.Role, nil
 }
 
 // ── list_spaces ──────────────────────────────────────────────────────────────
@@ -62,6 +67,7 @@ type spaceOut struct {
 	Name string `json:"name"`
 	Slug string `json:"slug"`
 	URL  string `json:"url"`
+	Role string `json:"role,omitempty"`
 }
 
 func (s *Server) listSpaces(
@@ -75,15 +81,16 @@ func (s *Server) listSpaces(
 	if err != nil {
 		return nil, nil, err
 	}
-	spaces, err := sp.ByOwner(ctx, owner)
+	spaces, err := sp.ByMember(ctx, owner)
 	if err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
 	out := make([]spaceOut, 0, len(spaces))
 	for _, x := range spaces {
 		out = append(out, spaceOut{
-			ID: x.ID, Name: x.Name, Slug: x.Slug,
-			URL: "https://" + x.Slug + ".jomform.com",
+			ID: x.SpaceID, Name: x.Name, Slug: x.Slug,
+			URL:  "https://" + x.Slug + ".jomform.com",
+			Role: x.Role,
 		})
 	}
 	return nil, out, nil
@@ -178,7 +185,11 @@ func (s *Server) setDefaultSpace(
 		return nil, nil, err
 	}
 	space, err := sp.ByID(ctx, in.SpaceID)
-	if err != nil || space == nil || space.Owner != owner {
+	if err != nil || space == nil {
+		return nil, nil, errors.New("space tidak dijumpai")
+	}
+	// The space must belong to the user (owner or member, issue #162).
+	if _, ok, aerr := sp.AccessByID(ctx, in.SpaceID, owner); aerr != nil || !ok {
 		return nil, nil, errors.New("space tidak dijumpai")
 	}
 	if err := s.deps.Users.SetDefaultSpace(ctx, owner, in.SpaceID); err != nil {
@@ -196,7 +207,7 @@ type spaceRefIn struct {
 func (s *Server) getSpaceSettings(
 	ctx context.Context, _ *mcp.CallToolRequest, in spaceRefIn,
 ) (*mcp.CallToolResult, *dbstore.SpaceSettings, error) {
-	if _, err := s.ownedSpace(ctx, in.SpaceID); err != nil {
+	if _, _, err := s.accessibleSpace(ctx, in.SpaceID); err != nil {
 		return nil, nil, err
 	}
 	sp, err := s.spacesStore()
@@ -224,8 +235,12 @@ type setSpaceSettingsIn struct {
 func (s *Server) setSpaceSettings(
 	ctx context.Context, _ *mcp.CallToolRequest, in setSpaceSettingsIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	if _, err := s.ownedSpace(ctx, in.SpaceID); err != nil {
+	_, role, err := s.accessibleSpace(ctx, in.SpaceID)
+	if err != nil {
 		return nil, nil, err
+	}
+	if role != "" && role != dbstore.RoleManage && role != dbstore.RoleAdmin {
+		return nil, nil, errors.New("perlu peranan manage atau admin")
 	}
 	// URL fields must be https:// (same rule as the REST handler).
 	for _, u := range []*string{in.PrivacyURL, in.TermsURL} {

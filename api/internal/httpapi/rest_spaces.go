@@ -11,14 +11,16 @@ import (
 	"strings"
 )
 
-// listSpaces: GET /v1/spaces — spaces owned by the current user.
+// listSpaces: GET /v1/spaces — spaces owned by OR a member of the current
+// user (issue #162). Each row carries the caller's role so the frontend can
+// gate UI on it.
 func (h *RESTHandlers) listSpaces(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	userID := h.sessionOwnerID(r)
 	if userID == "" {
 		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
 		return
 	}
-	spaces, err := h.Spaces.ByOwner(r.Context(), userID)
+	spaces, err := h.Spaces.ByMember(r.Context(), userID)
 	if err != nil {
 		respondErr(w, r, err)
 		return
@@ -27,10 +29,11 @@ func (h *RESTHandlers) listSpaces(w http.ResponseWriter, r *http.Request, actx *
 		ID   string `json:"id"`
 		Name string `json:"name"`
 		Slug string `json:"slug"`
+		Role string `json:"role"`
 	}
 	out := make([]row, 0, len(spaces))
 	for _, s := range spaces {
-		out = append(out, row{ID: s.ID, Name: s.Name, Slug: s.Slug})
+		out = append(out, row{ID: s.SpaceID, Name: s.Name, Slug: s.Slug, Role: s.Role})
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -81,23 +84,39 @@ func (h *RESTHandlers) createSpace(w http.ResponseWriter, r *http.Request, actx 
 	})
 }
 
-// spaceSettings GET/PUT for the storefront builder.
-func (h *RESTHandlers) getSpaceSettings(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+// spaceAccessByID resolves a space by id and verifies the caller is the owner
+// or a member (issue #162). Returns the space + the caller's role.
+func (h *RESTHandlers) spaceAccessByID(w http.ResponseWriter, r *http.Request) (*dbstore.Space, string, bool) {
 	sID := r.PathValue("id")
 	if _, perr := uuid.Parse(sID); perr != nil {
 		writeErr(w, http.StatusBadRequest, "id tidak sah")
-		return
+		return nil, "", false
+	}
+	userID := h.sessionOwnerID(r)
+	if userID == "" {
+		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		return nil, "", false
 	}
 	s, err := h.Spaces.ByID(r.Context(), sID)
 	if err != nil || s == nil {
 		writeErr(w, http.StatusNotFound, "space tidak dijumpai")
-		return
+		return nil, "", false
 	}
-	if s.Owner != h.sessionOwnerID(r) {
+	acc, ok, err := h.Spaces.AccessByID(r.Context(), sID, userID)
+	if err != nil || !ok {
 		writeErr(w, http.StatusForbidden, "bukan space anda")
+		return nil, "", false
+	}
+	return s, acc.Role, true
+}
+
+// getSpaceSettings GET/PUT for the storefront builder.
+func (h *RESTHandlers) getSpaceSettings(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	s, _, ok := h.spaceAccessByID(w, r)
+	if !ok {
 		return
 	}
-	set, err := h.Spaces.Settings(r.Context(), sID)
+	set, err := h.Spaces.Settings(r.Context(), s.ID)
 	if err != nil {
 		respondErr(w, r, err)
 		return
@@ -125,17 +144,16 @@ func (h *RESTHandlers) saveSpaceSettings(w http.ResponseWriter, r *http.Request,
 			return
 		}
 	}
-	sID := r.PathValue("id")
-	if _, perr := uuid.Parse(sID); perr != nil {
-		writeErr(w, http.StatusBadRequest, "id tidak sah")
+	s, role, ok := h.spaceAccessByID(w, r)
+	if !ok {
 		return
 	}
-	if s, serr := h.Spaces.ByID(r.Context(), sID); serr != nil || s == nil || s.Owner != h.sessionOwnerID(r) {
-		writeErr(w, http.StatusForbidden, "bukan space anda")
+	if !roleAtLeast(role, dbstore.RoleManage) {
+		writeErr(w, http.StatusForbidden, "perlu peranan manage atau admin")
 		return
 	}
 	st := &dbstore.SpaceSettings{
-		SpaceID:     sID,
+		SpaceID:     s.ID,
 		FooterText:  in.FooterText,
 		CompanyReg:  in.CompanyReg,
 		PrivacyURL:  in.PrivacyURL,
@@ -157,21 +175,11 @@ func (h *RESTHandlers) saveSpaceSettings(w http.ResponseWriter, r *http.Request,
 
 // getSpaceEmailSettings: GET /v1/spaces/{id}/email-settings
 func (h *RESTHandlers) getSpaceEmailSettings(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
-	sID := r.PathValue("id")
-	if _, perr := uuid.Parse(sID); perr != nil {
-		writeErr(w, http.StatusBadRequest, "id tidak sah")
+	s, _, ok := h.spaceAccessByID(w, r)
+	if !ok {
 		return
 	}
-	s, err := h.Spaces.ByID(r.Context(), sID)
-	if err != nil || s == nil {
-		writeErr(w, http.StatusNotFound, "space tidak dijumpai")
-		return
-	}
-	if s.Owner != h.sessionOwnerID(r) {
-		writeErr(w, http.StatusForbidden, "bukan space anda")
-		return
-	}
-	set, err := h.Spaces.EmailSettings(r.Context(), sID)
+	set, err := h.Spaces.EmailSettings(r.Context(), s.ID)
 	if err != nil {
 		respondErr(w, r, err)
 		return
@@ -193,17 +201,16 @@ func (h *RESTHandlers) saveSpaceEmailSettings(w http.ResponseWriter, r *http.Req
 		writeErr(w, http.StatusBadRequest, "payload tidak sah")
 		return
 	}
-	sID := r.PathValue("id")
-	if _, perr := uuid.Parse(sID); perr != nil {
-		writeErr(w, http.StatusBadRequest, "id tidak sah")
+	s, role, ok := h.spaceAccessByID(w, r)
+	if !ok {
 		return
 	}
-	if s, serr := h.Spaces.ByID(r.Context(), sID); serr != nil || s == nil || s.Owner != h.sessionOwnerID(r) {
-		writeErr(w, http.StatusForbidden, "bukan space anda")
+	if !roleAtLeast(role, dbstore.RoleManage) {
+		writeErr(w, http.StatusForbidden, "perlu peranan manage atau admin")
 		return
 	}
 	// Read-modify-write: omitted fields keep their current value.
-	st, err := h.Spaces.EmailSettings(r.Context(), sID)
+	st, err := h.Spaces.EmailSettings(r.Context(), s.ID)
 	if err != nil {
 		respondErr(w, r, err)
 		return

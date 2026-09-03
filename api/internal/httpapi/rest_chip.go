@@ -11,6 +11,9 @@ import (
 // setChipCreds saves Brand ID + Secret Key (AES-256-GCM encrypted at rest).
 // Secret is write-only: never echoed back.
 func (h *RESTHandlers) setChipCreds(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireAdminRole(w, r, actx); !ok {
+		return
+	}
 	var in struct {
 		BrandID         string   `json:"brand_id"`
 		SecretKey       string   `json:"secret_key"`
@@ -75,6 +78,9 @@ func (h *RESTHandlers) chipStatus(w http.ResponseWriter, r *http.Request, actx *
 
 // deleteChipCreds removes stored CHIP credentials.
 func (h *RESTHandlers) deleteChipCreds(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireAdminRole(w, r, actx); !ok {
+		return
+	}
 	if err := h.Accounts.ClearChipCredentials(r.Context(), actx.Account.ID); err != nil {
 		respondErr(w, r, err)
 		return

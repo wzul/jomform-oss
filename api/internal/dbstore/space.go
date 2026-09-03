@@ -87,6 +87,113 @@ func (s *SpaceStore) Create(ctx context.Context, ownerUserID, name, slug string)
 	return sp, nil
 }
 
+// SpaceAccess carries the account set + the caller's role for a space the
+// user can access (owner or member). Role is one of RoleReadOnly/RoleManage/
+// RoleAdmin (issue #162). Accounts holds every account linked to the space.
+type SpaceAccess struct {
+	SpaceID  string
+	Name     string
+	Slug     string
+	Role     string
+	Accounts []string
+}
+
+// AccessBySlug resolves the space's account ids + the caller's role when the
+// user is the owner or a member of the space. ok=false when the space is
+// unknown or the user has no access (issue #162 — members, not just owners).
+func (s *SpaceStore) AccessBySlug(ctx context.Context, slug, userID string) (SpaceAccess, bool, error) {
+	return s.access(ctx, `WHERE sp.slug = $1`, slug, userID)
+}
+
+// AccessByID resolves the space's account ids + the caller's role when the
+// user is the owner or a member of the space.
+func (s *SpaceStore) AccessByID(ctx context.Context, spaceID, userID string) (SpaceAccess, bool, error) {
+	return s.access(ctx, `WHERE sp.id = $1`, spaceID, userID)
+}
+
+// access is the shared owner-or-member space resolution. The owner is always
+// treated as an admin (the migration backfills owners as admin members, and
+// new spaces add the owner as a member at creation), so a space created
+// before the backfill still resolves correctly.
+func (s *SpaceStore) access(ctx context.Context, where string, key, userID string) (SpaceAccess, bool, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT sp.id, sp.name, sp.slug, sp.owner_user_id, a.id, COALESCE(m.role, '')
+		FROM spaces sp
+		LEFT JOIN accounts a ON a.space_id = sp.id
+		LEFT JOIN space_members m ON m.space_id = sp.id AND m.user_id = $2
+		`+where, key, userID)
+	if err != nil {
+		return SpaceAccess{}, false, err
+	}
+	defer rows.Close()
+	var out SpaceAccess
+	found := false
+	for rows.Next() {
+		var owner, accID, role string
+		if err := rows.Scan(&out.SpaceID, &out.Name, &out.Slug, &owner, &accID, &role); err != nil {
+			return SpaceAccess{}, false, err
+		}
+		found = true
+		if owner == userID {
+			role = RoleAdmin
+		}
+		if role == "" {
+			// Space exists but the user is neither owner nor a member.
+			return SpaceAccess{}, false, nil
+		}
+		out.Role = role
+		if accID != "" {
+			out.Accounts = append(out.Accounts, accID)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return SpaceAccess{}, false, err
+	}
+	return out, found, nil
+}
+
+// ByMember lists spaces the user owns OR is a member of, with the caller's
+// role in each (issue #162). Used by the space switcher so members see the
+// spaces they belong to, not just the ones they own.
+func (s *SpaceStore) ByMember(ctx context.Context, userID string) ([]SpaceAccess, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT sp.id, sp.name, sp.slug, sp.owner_user_id, COALESCE(m.role, ''), a.id
+		FROM spaces sp
+		LEFT JOIN space_members m ON m.space_id = sp.id AND m.user_id = $1
+		LEFT JOIN accounts a ON a.space_id = sp.id
+		WHERE sp.owner_user_id = $1 OR m.user_id = $1
+		ORDER BY sp.created_at`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SpaceAccess
+	seen := map[string]int{}
+	for rows.Next() {
+		var a SpaceAccess
+		var owner, role, accID string
+		if err := rows.Scan(&a.SpaceID, &a.Name, &a.Slug, &owner, &role, &accID); err != nil {
+			return nil, err
+		}
+		if owner == userID {
+			role = RoleAdmin
+		}
+		a.Role = role
+		if i, ok := seen[a.SpaceID]; ok {
+			if accID != "" {
+				out[i].Accounts = append(out[i].Accounts, accID)
+			}
+			continue
+		}
+		seen[a.SpaceID] = len(out)
+		if accID != "" {
+			a.Accounts = append(a.Accounts, accID)
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
 // SpaceSettings is the storefront configuration for one space.
 type SpaceSettings struct {
 	SpaceID     string `json:"space_id"`
@@ -163,6 +270,25 @@ func (s *SpaceStore) SpaceIDByAccount(ctx context.Context, accountID string) (st
 	return id, nil
 }
 
+// RoleByAccount returns the role a user holds in the space that owns the given
+// account ("" when the account has no space or the user is not a member).
+// The account owner is always treated as an admin (issue #162).
+func (s *SpaceStore) RoleByAccount(ctx context.Context, accountID, userID string) (string, error) {
+	var owner, role string
+	err := s.pool.QueryRow(ctx, `
+		SELECT a.owner_user_id, COALESCE(m.role, '')
+		FROM accounts a
+		LEFT JOIN space_members m ON m.space_id = a.space_id AND m.user_id = $2
+		WHERE a.id = $1`, accountID, userID).Scan(&owner, &role)
+	if err != nil {
+		return "", err
+	}
+	if owner == userID {
+		return RoleAdmin, nil
+	}
+	return role, nil
+}
+
 // SpaceSlugByAccount resolves the space slug a form's account belongs to
 // ("" when the account has no linked space). Used to build the canonical
 // space-scoped public URL {space}.jomform.com/{slug} (issue #77).
@@ -175,33 +301,4 @@ func (s *SpaceStore) SpaceSlugByAccount(ctx context.Context, accountID string) (
 		return "", err
 	}
 	return slug, nil
-}
-
-// AccountIDsBySlugForOwner returns the account ids linked to the space with
-// the given slug, but only when that space is owned by the given user.
-// owned is false when the slug is unknown or not owned by the user —
-// the caller must not fall back to unscoped data in that case. An owned
-// space with no linked accounts yields (true, nil).
-func (s *SpaceStore) AccountIDsBySlugForOwner(ctx context.Context, slug, ownerUserID string) (owned bool, accountIDs []string, err error) {
-	rows, err := s.pool.Query(ctx,
-		`SELECT a.id FROM spaces sp
-		 LEFT JOIN accounts a ON a.space_id = sp.id
-		 WHERE sp.slug = $1 AND sp.owner_user_id = $2`,
-		slug, ownerUserID)
-	if err != nil {
-		return false, nil, err
-	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var id *string
-		if err := rows.Scan(&id); err != nil {
-			return false, nil, err
-		}
-		owned = true
-		if id != nil && *id != "" {
-			out = append(out, *id)
-		}
-	}
-	return owned, out, rows.Err()
 }

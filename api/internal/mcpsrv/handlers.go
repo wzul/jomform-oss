@@ -82,7 +82,7 @@ type variationIn struct {
 }
 
 func (s *Server) createProduct(ctx context.Context, _ *mcp.CallToolRequest, in createProductIn) (*mcp.CallToolResult, productOut, error) {
-	accountID, err := s.accountAndScope(ctx, true)
+	accountID, err := s.requireWriteRole(ctx)
 	if err != nil {
 		return nil, productOut{}, err
 	}
@@ -162,7 +162,7 @@ type archiveProductIn struct {
 }
 
 func (s *Server) archiveProduct(ctx context.Context, _ *mcp.CallToolRequest, in archiveProductIn) (*mcp.CallToolResult, map[string]string, error) {
-	accountID, err := s.accountAndScope(ctx, true)
+	accountID, err := s.requireWriteRole(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -282,7 +282,7 @@ type confirmSaleIn struct {
 }
 
 func (s *Server) confirmSale(ctx context.Context, _ *mcp.CallToolRequest, in confirmSaleIn) (*mcp.CallToolResult, map[string]string, error) {
-	accountID, err := s.accountAndScope(ctx, true)
+	accountID, err := s.requireWriteRole(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -408,7 +408,7 @@ type cancelSubIn struct {
 }
 
 func (s *Server) cancelSubscription(ctx context.Context, _ *mcp.CallToolRequest, in cancelSubIn) (*mcp.CallToolResult, map[string]string, error) {
-	accountID, err := s.accountAndScope(ctx, true)
+	accountID, err := s.requireWriteRole(ctx)
 	if err != nil {
 		return nil, nil, err
 	}

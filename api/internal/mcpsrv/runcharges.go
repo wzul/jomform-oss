@@ -15,7 +15,7 @@ type emptyOut struct{}
 func (s *Server) runDueCharges(
 	ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn,
 ) (*mcp.CallToolResult, emptyOut, error) {
-	if _, err := s.accountAndScope(ctx, true); err != nil {
+	if _, err := s.requireWriteRole(ctx); err != nil {
 		return nil, emptyOut{}, err
 	}
 	if s.pay == nil {
@@ -38,7 +38,7 @@ type updateSubCardIn struct {
 func (s *Server) updateSubscriptionCard(
 	ctx context.Context, _ *mcp.CallToolRequest, in updateSubCardIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	accountID, err := s.accountAndScope(ctx, true)
+	accountID, err := s.requireWriteRole(ctx)
 	if err != nil {
 		return nil, nil, err
 	}

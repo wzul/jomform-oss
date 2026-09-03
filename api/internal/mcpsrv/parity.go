@@ -32,7 +32,7 @@ type updateProductIn struct {
 func (s *Server) updateProduct(
 	ctx context.Context, _ *mcp.CallToolRequest, in updateProductIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	acc, err := s.accountAndScope(ctx, true)
+	acc, err := s.requireWriteRole(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -176,7 +176,7 @@ type upsertFormIn struct {
 func (s *Server) upsertForm(
 	ctx context.Context, _ *mcp.CallToolRequest, in upsertFormIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	acc, err := s.accountAndScope(ctx, true)
+	acc, err := s.requireWriteRole(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -222,7 +222,7 @@ func jsonValid(s string) bool {
 func (s *Server) publishFormMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in formRefIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	acc, err := s.accountAndScope(ctx, true)
+	acc, err := s.requireWriteRole(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -235,7 +235,7 @@ func (s *Server) publishFormMCP(
 func (s *Server) deleteFormMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in formRefIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	acc, err := s.accountAndScope(ctx, true)
+	acc, err := s.requireWriteRole(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -250,7 +250,7 @@ func (s *Server) deleteFormMCP(
 func (s *Server) deleteFormMCPSoft(
 	ctx context.Context, _ *mcp.CallToolRequest, in formRefIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	acc, err := s.accountAndScope(ctx, true)
+	acc, err := s.requireWriteRole(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -270,7 +270,7 @@ type bulkFormsIn struct {
 func (s *Server) bulkFormsMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in bulkFormsIn,
 ) (*mcp.CallToolResult, map[string]any, error) {
-	acc, err := s.accountAndScope(ctx, true)
+	acc, err := s.requireWriteRole(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -318,7 +318,7 @@ func (s *Server) archiveProductMCP(
 		ProductID string `json:"product_id" jsonschema:"ID produk"`
 	},
 ) (*mcp.CallToolResult, map[string]string, error) {
-	acc, err := s.accountAndScope(ctx, true)
+	acc, err := s.requireWriteRole(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -337,7 +337,7 @@ type bulkProductsIn struct {
 func (s *Server) bulkProductsMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in bulkProductsIn,
 ) (*mcp.CallToolResult, map[string]any, error) {
-	acc, err := s.accountAndScope(ctx, true)
+	acc, err := s.requireWriteRole(ctx)
 	if err != nil {
 		return nil, nil, err
 	}

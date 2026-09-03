@@ -7,6 +7,9 @@ import (
 )
 
 func (h *RESTHandlers) putFormSettings(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
 	var in struct {
 		RedirectSuccess string `json:"redirect_success"`
 		RedirectFailure string `json:"redirect_failure"`

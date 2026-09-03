@@ -105,12 +105,12 @@ func (h *RESTHandlers) dashboardBundle(w http.ResponseWriter, r *http.Request, a
 		}
 	}
 
-	// spaces owned by the session user.
+	// spaces owned by OR a member of the session user (issue #162).
 	if h.Spaces != nil {
-		if spaces, err := h.Spaces.ByOwner(ctx, userID); err == nil {
+		if spaces, err := h.Spaces.ByMember(ctx, userID); err == nil {
 			out := make([]map[string]any, 0, len(spaces))
 			for _, s := range spaces {
-				out = append(out, map[string]any{"id": s.ID, "name": s.Name, "slug": s.Slug})
+				out = append(out, map[string]any{"id": s.SpaceID, "name": s.Name, "slug": s.Slug, "role": s.Role})
 			}
 			bundle.Spaces = out
 		}

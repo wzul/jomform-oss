@@ -77,6 +77,9 @@ func (h *RESTHandlers) listSubscriptions(w http.ResponseWriter, r *http.Request,
 // account 404s. Mirrors MCP cancel_subscription (same store method), so the
 // card token is retained (Wan rule) and the subscription stays reactivatable.
 func (h *RESTHandlers) cancelSubscription(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
 	id := r.PathValue("id")
 	if id == "" {
 		writeErr(w, http.StatusBadRequest, "id diperlukan")
@@ -106,6 +109,9 @@ func (h *RESTHandlers) cancelSubscription(w http.ResponseWriter, r *http.Request
 // left in CHIP (Wan rule) but no longer used. Account-scoped: a subscription
 // id that does not belong to the resolved account 404s.
 func (h *RESTHandlers) updateSubscriptionCard(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
 	id := r.PathValue("id")
 	if id == "" {
 		writeErr(w, http.StatusBadRequest, "id diperlukan")

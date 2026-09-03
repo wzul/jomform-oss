@@ -264,3 +264,52 @@ func (s *Server) accountAndScope(ctx context.Context, write bool) (accountID str
 	}
 	return id.AccountID, nil
 }
+
+// accountAndRole resolves the account id + the caller's role in the space
+// that owns it (issue #162). The owner is always an admin; a member's role
+// comes from space_members. role is "" when the account has no linked space
+// (legacy single-account callers are treated as owners).
+func (s *Server) accountAndRole(ctx context.Context) (accountID, role string, err error) {
+	accountID, err = s.accountAndScope(ctx, false)
+	if err != nil {
+		return "", "", err
+	}
+	if s.deps.Spaces == nil || s.deps.SpaceMembers == nil {
+		return accountID, "", nil
+	}
+	owner, err := s.spaceOwner(ctx)
+	if err != nil {
+		return "", "", err
+	}
+	role, err = s.deps.Spaces.RoleByAccount(ctx, accountID, owner)
+	if err != nil {
+		return "", "", fmt.Errorf("db: %w", err)
+	}
+	return accountID, role, nil
+}
+
+// requireWriteRole enforces the manage-or-admin gate on a write tool. A
+// read_only member's agent cannot write (issue #162 MCP parity).
+func (s *Server) requireWriteRole(ctx context.Context) (accountID string, err error) {
+	accountID, role, err := s.accountAndRole(ctx)
+	if err != nil {
+		return "", err
+	}
+	if role != "" && role != dbstore.RoleManage && role != dbstore.RoleAdmin {
+		return "", fmt.Errorf("perlu peranan manage atau admin")
+	}
+	return accountID, nil
+}
+
+// requireAdminRole enforces the admin-only gate (CHIP credentials + member
+// management). A manage/read_only member's agent cannot manage these.
+func (s *Server) requireAdminRole(ctx context.Context) (accountID string, err error) {
+	accountID, role, err := s.accountAndRole(ctx)
+	if err != nil {
+		return "", err
+	}
+	if role != "" && role != dbstore.RoleAdmin {
+		return "", fmt.Errorf("perlu admin space")
+	}
+	return accountID, nil
+}

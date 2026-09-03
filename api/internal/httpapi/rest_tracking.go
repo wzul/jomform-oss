@@ -6,6 +6,9 @@ import (
 )
 
 func (h *RESTHandlers) putTracking(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
 	var in struct {
 		Head string `json:"head"`
 	}
@@ -30,6 +33,9 @@ func (h *RESTHandlers) getTracking(w http.ResponseWriter, r *http.Request, actx 
 }
 
 func (h *RESTHandlers) putFormTracking(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
 	var in struct {
 		Head string `json:"head"`
 	}

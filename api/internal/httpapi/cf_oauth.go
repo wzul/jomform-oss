@@ -178,6 +178,9 @@ func (h *RESTHandlers) cfStatus(w http.ResponseWriter, r *http.Request, actx *Ac
 
 // cfDisconnect removes the stored token.
 func (h *RESTHandlers) cfDisconnect(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
 	if err := h.Accounts.SaveCFToken(r.Context(), actx.Account.ID, ""); err != nil {
 		respondErr(w, r, err)
 		return
@@ -191,6 +194,9 @@ func (h *RESTHandlers) cfDisconnect(w http.ResponseWriter, r *http.Request, actx
 // discovered later when the auto-CNAME fails. The token is sealed and never
 // returned to the client.
 func (h *RESTHandlers) cfConnectAPIToken(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
 	var in struct {
 		AccountEmail string `json:"account_email"`
 		APIToken     string `json:"api_token"`
@@ -228,6 +234,9 @@ func (h *RESTHandlers) cfConnectAPIToken(w http.ResponseWriter, r *http.Request,
 // Validated at save time via GET /user (X-Auth-Email/X-Auth-Key); the key is
 // sealed and never returned to the client.
 func (h *RESTHandlers) cfConnectGlobalKey(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
 	var in struct {
 		AccountEmail string `json:"account_email"`
 		APIKey       string `json:"api_key"`

@@ -63,7 +63,7 @@ type createAPIKeyIn struct {
 func (s *Server) createAPIKey(
 	ctx context.Context, _ *mcp.CallToolRequest, in createAPIKeyIn,
 ) (*mcp.CallToolResult, map[string]any, error) {
-	acc, err := s.accountAndScope(ctx, true) // creating a key is a write
+	acc, err := s.requireWriteRole(ctx) // creating a key is a write
 	if err != nil {
 		return nil, nil, err
 	}
@@ -107,7 +107,7 @@ type revokeAPIKeyIn struct {
 func (s *Server) revokeAPIKey(
 	ctx context.Context, _ *mcp.CallToolRequest, in revokeAPIKeyIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	acc, err := s.accountAndScope(ctx, true) // revoking a key is a write
+	acc, err := s.requireWriteRole(ctx) // revoking a key is a write
 	if err != nil {
 		return nil, nil, err
 	}

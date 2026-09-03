@@ -33,7 +33,7 @@ type saleRefIn struct {
 func (s *Server) setFormChipOverride(
 	ctx context.Context, _ *mcp.CallToolRequest, in formOverrideIn,
 ) (*mcp.CallToolResult, any, error) {
-	acc, err := s.accountAndScope(ctx, true)
+	acc, err := s.requireAdminRole(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -53,7 +53,7 @@ func (s *Server) setFormChipOverride(
 func (s *Server) clearFormChipOverride(
 	ctx context.Context, _ *mcp.CallToolRequest, in formRefIn,
 ) (*mcp.CallToolResult, any, error) {
-	acc, err := s.accountAndScope(ctx, true)
+	acc, err := s.requireAdminRole(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -70,7 +70,7 @@ func (s *Server) captureSaleMCP(
 	if pay == nil {
 		return nil, nil, errors.New("payments tidak aktif")
 	}
-	acc, err := s.accountAndScope(ctx, true)
+	acc, err := s.requireWriteRole(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -94,7 +94,7 @@ func (s *Server) releaseSaleMCP(
 	if pay == nil {
 		return nil, nil, errors.New("payments tidak aktif")
 	}
-	acc, err := s.accountAndScope(ctx, true)
+	acc, err := s.requireWriteRole(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -121,7 +121,7 @@ func (s *Server) captureAllPendingMCP(
 	if pay == nil {
 		return nil, nil, errors.New("payments tidak aktif")
 	}
-	acc, err := s.accountAndScope(ctx, true)
+	acc, err := s.requireWriteRole(ctx)
 	if err != nil {
 		return nil, nil, err
 	}

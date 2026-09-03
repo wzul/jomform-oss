@@ -79,7 +79,7 @@ type setEinvoiceIn struct {
 func (s *Server) setEinvoice(
 	ctx context.Context, _ *mcp.CallToolRequest, in setEinvoiceIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	acc, err := s.accountAndScope(ctx, true)
+	acc, err := s.requireWriteRole(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -114,7 +114,7 @@ type webhookIn struct {
 func (s *Server) createWebhookMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in webhookIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	acc, err := s.accountAndScope(ctx, true)
+	acc, err := s.requireWriteRole(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -172,7 +172,7 @@ type webhookRef struct {
 func (s *Server) deleteWebhookMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in webhookRef,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	acc, err := s.accountAndScope(ctx, true)
+	acc, err := s.requireWriteRole(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -192,7 +192,7 @@ type webhookUpdateIn struct {
 func (s *Server) updateWebhookMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in webhookUpdateIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	acc, err := s.accountAndScope(ctx, true)
+	acc, err := s.requireWriteRole(ctx)
 	if err != nil {
 		return nil, nil, err
 	}

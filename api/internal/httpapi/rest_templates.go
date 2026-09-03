@@ -30,6 +30,9 @@ func (h *RESTHandlers) listTemplates(w http.ResponseWriter, r *http.Request) {
 
 // useTemplate clones a template config/theme into a new draft for the caller.
 func (h *RESTHandlers) useTemplate(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
 	var in struct {
 		Slug string `json:"slug"`
 		Name string `json:"name,omitempty"`

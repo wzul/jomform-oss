@@ -3,8 +3,11 @@ package mcpsrv
 
 import (
 	"context"
+	"errors"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/wzul/jomform/api/internal/dbstore"
 )
 
 // getEmailSettingsIn resolves the space whose email settings to read.
@@ -16,7 +19,7 @@ type getEmailSettingsIn struct {
 func (s *Server) getEmailSettings(
 	ctx context.Context, _ *mcp.CallToolRequest, in getEmailSettingsIn,
 ) (*mcp.CallToolResult, *dbstoreEmailSettingsOut, error) {
-	if _, err := s.ownedSpace(ctx, in.SpaceID); err != nil {
+	if _, _, err := s.accessibleSpace(ctx, in.SpaceID); err != nil {
 		return nil, nil, err
 	}
 	sp, err := s.spacesStore()
@@ -64,8 +67,12 @@ type setEmailSettingsIn struct {
 func (s *Server) setEmailSettings(
 	ctx context.Context, _ *mcp.CallToolRequest, in setEmailSettingsIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	if _, err := s.ownedSpace(ctx, in.SpaceID); err != nil {
+	_, role, err := s.accessibleSpace(ctx, in.SpaceID)
+	if err != nil {
 		return nil, nil, err
+	}
+	if role != "" && role != dbstore.RoleManage && role != dbstore.RoleAdmin {
+		return nil, nil, errors.New("perlu peranan manage atau admin")
 	}
 	sp, err := s.spacesStore()
 	if err != nil {

@@ -280,6 +280,9 @@ func publicReadPolicy(bucket string) string {
 // Request: multipart/form-data with a single "file" part (≤20MB).
 // Response: {"url": "..."} 200, or 400 on validation errors.
 func (h *RESTHandlers) uploadImage(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
 	if h.Store == nil {
 		recordUploadFailure("not_configured")
 		writeErr(w, http.StatusServiceUnavailable, "media storage tidak dikonfigurasi")
@@ -406,6 +409,9 @@ func optimizeAvatar(data []byte, ext string) ([]byte, error) {
 // Request: multipart/form-data with a single "file" part (≤20MB).
 // Response: {"url": "..."} 200, or 400 on validation errors.
 func (h *RESTHandlers) uploadAvatar(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
 	if h.Store == nil {
 		recordUploadFailure("not_configured")
 		writeErr(w, http.StatusServiceUnavailable, "media storage tidak dikonfigurasi")

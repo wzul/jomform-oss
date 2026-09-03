@@ -105,6 +105,9 @@ func (h *RESTHandlers) listProducts(w http.ResponseWriter, r *http.Request, actx
 // billing_period, stock, active (money stays integer sen). Omitted fields are
 // left unchanged; an omitted images[] keeps the stored ones.
 func (h *RESTHandlers) updateProduct(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
 	var in struct {
 		Name                *string          `json:"name"`
 		Description         *string          `json:"description"`
@@ -233,6 +236,9 @@ func (h *RESTHandlers) getProduct(w http.ResponseWriter, r *http.Request, actx *
 }
 
 func (h *RESTHandlers) deleteProduct(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
 	if err := h.Products.Archive(r.Context(), actx.Account.ID, r.PathValue("id")); err != nil {
 		respondErr(w, r, err)
 		return
@@ -247,6 +253,9 @@ func (h *RESTHandlers) deleteProduct(w http.ResponseWriter, r *http.Request, act
 // Returns {"updated": n} — how many the account actually owns and archived.
 // Mirrors the forms bulk pattern (#10).
 func (h *RESTHandlers) bulkProducts(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
 	var in struct {
 		Action string   `json:"action"`
 		IDs    []string `json:"ids"`
@@ -298,6 +307,9 @@ func (h *RESTHandlers) bulkProducts(w http.ResponseWriter, r *http.Request, actx
 }
 
 func (h *RESTHandlers) createProduct(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
 	var in struct {
 		Name                string          `json:"name"`
 		Description         string          `json:"description"`
@@ -473,6 +485,9 @@ func (h *RESTHandlers) getForm(w http.ResponseWriter, r *http.Request, actx *Acc
 }
 
 func (h *RESTHandlers) createForm(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
 	var in struct {
 		Slug   string         `json:"slug"`
 		Title  string         `json:"title"`
@@ -500,6 +515,9 @@ func (h *RESTHandlers) createForm(w http.ResponseWriter, r *http.Request, actx *
 }
 
 func (h *RESTHandlers) updateForm(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
 	var in struct {
 		Title  string         `json:"title"`
 		Config map[string]any `json:"config"`
@@ -524,6 +542,9 @@ func (h *RESTHandlers) updateForm(w http.ResponseWriter, r *http.Request, actx *
 }
 
 func (h *RESTHandlers) publishForm(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
 	// Publishing requires CHIP configured OR at least one product; CHIP-only store
 	// means a form without CHIP setup can still publish for bank-direct? Per spec:
 	// CHIP-only. Warn but allow (bank_direct exists).
@@ -538,6 +559,9 @@ func (h *RESTHandlers) publishForm(w http.ResponseWriter, r *http.Request, actx 
 
 // deleteForm soft-deletes a single form (owner-checked via account scope).
 func (h *RESTHandlers) deleteForm(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
 	if err := h.Forms.SoftDelete(r.Context(), actx.Account.ID, r.PathValue("id")); err != nil {
 		respondErr(w, r, err)
 		return
@@ -552,6 +576,9 @@ func (h *RESTHandlers) deleteForm(w http.ResponseWriter, r *http.Request, actx *
 // Returns {"updated": n} — how many forms the caller's account actually owns
 // and that were still eligible (not already soft-deleted).
 func (h *RESTHandlers) bulkForms(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
 	var in struct {
 		Action string   `json:"action"`
 		IDs    []string `json:"ids"`
@@ -641,6 +668,9 @@ func (h *RESTHandlers) listKeys(w http.ResponseWriter, r *http.Request, actx *Ac
 }
 
 func (h *RESTHandlers) createKey(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
 	var in struct {
 		Name   string   `json:"name"`
 		Scopes []string `json:"scopes"`
@@ -672,6 +702,9 @@ func (h *RESTHandlers) createKey(w http.ResponseWriter, r *http.Request, actx *A
 }
 
 func (h *RESTHandlers) revokeKey(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
 	if err := h.Keys.Revoke(r.Context(), actx.Account.ID, r.PathValue("id")); err != nil {
 		respondErr(w, r, err)
 		return
@@ -932,6 +965,9 @@ func (h *RESTHandlers) saleEmailStatus(w http.ResponseWriter, r *http.Request, a
 }
 
 func (h *RESTHandlers) captureSale(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
 	if h.Pay == nil {
 		writeErr(w, http.StatusServiceUnavailable, "pembayaran tidak aktif")
 		return
@@ -961,6 +997,9 @@ func (h *RESTHandlers) captureSale(w http.ResponseWriter, r *http.Request, actx 
 }
 
 func (h *RESTHandlers) releaseSale(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
 	if h.Pay == nil {
 		writeErr(w, http.StatusServiceUnavailable, "pembayaran tidak aktif")
 		return
@@ -990,6 +1029,9 @@ func (h *RESTHandlers) releaseSale(w http.ResponseWriter, r *http.Request, actx 
 // {"refs":["JF-…", …]} or {} / {"refs":"all"} for everything awaiting.
 // Per-ref results — one CHIP rejection never aborts the batch.
 func (h *RESTHandlers) bulkCaptureSales(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
 	if h.Pay == nil {
 		writeErr(w, http.StatusServiceUnavailable, "pembayaran tidak aktif")
 		return
@@ -1061,6 +1103,9 @@ func (h *RESTHandlers) bulkCaptureSales(w http.ResponseWriter, r *http.Request, 
 }
 
 func (h *RESTHandlers) confirmSale(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
 	ref := r.PathValue("ref")
 	sale, err := h.Sales.ByRefCode(r.Context(), ref)
 	if err != nil || sale.AccountID != actx.Account.ID {
