@@ -158,7 +158,11 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     setMounted(true);
-    if (!space) return;
+    // Issue #226: fetch the bundle even when `space` is empty (anonymous /
+    // incognito visitor with no jf_space in localStorage) so `anon` can flip
+    // and the dashboard falls through to the Landing page instead of hanging
+    // on the loading shell. fetchBundle already handles an empty space (no
+    // ?space= query) and keys the cache under "__default__".
     const key = space || "__default__";
     if (bundleCache.has(key)) {
       setBundle(bundleCache.get(key) ?? null);
