@@ -597,6 +597,8 @@ var responseTmpl = template.Must(template.New("response").
   .ok { text-align:center; padding:24px 0; }
   .ok h1 { color:#10b981; }
   .ok p { color:#6b7280; font-size:14px; }
+  .ok .msg { color:#17181c; font-size:14px; line-height:1.6; margin-top:8px; }
+  .ok .msg a { color:#4f46e5; }
 </style></head><body>
 <form class="card" id="of" data-slug="{{.Slug}}">
   <h1>{{.Title}}</h1>
@@ -660,7 +662,16 @@ var responseTmpl = template.Must(template.New("response").
       .then(function(r){return r.json()})
       .then(function(d){
         if(d.status==='submitted'){
-          form.innerHTML='<div class="ok"><h1>✓ {{$.Ls.ThankYou}}</h1><p>{{$.Ls.ResponseReceived}}</p></div>';
+          // Issue #179: render the resolved confirmation. A redirect sends the
+          // buyer to the configured URL; a message replaces the form with the
+          // (server-sanitized) confirmation text.
+          if(d.confirmation==='redirect'&&d.redirect_url){
+            if(window.self!==window.top){window.top.location.href=d.redirect_url;}
+            else{location.href=d.redirect_url;}
+            return;
+          }
+          var msg=d.message||'{{$.Ls.ResponseReceived}}';
+          form.innerHTML='<div class="ok"><h1>✓ {{$.Ls.ThankYou}}</h1><div class="msg">'+msg+'</div></div>';
         } else {
           alert('{{$.Ls.ErrorAlert}}'+(d.error?': '+d.error:''));
         }

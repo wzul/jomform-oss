@@ -101,6 +101,7 @@ var intentionallyUnselected = map[string]map[string]bool{
 	},
 	"sales": {
 		"space_id": true, // denormalised
+		"fields":   true, // FormStore.SaleFields (dedicated accessor, issue #179)
 	},
 	"spaces": {
 		"created_at": true, // not scanned by spaceSelect

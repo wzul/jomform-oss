@@ -323,6 +323,15 @@ func (s *Server) registerTools() {
 		Name:        "set_form_notifications",
 		Description: "Ganti SEMUA peraturan notifikasi emel per-borang (issue #193). notifications[] penuh: {id?, name, event, to_email, subject, body, condition?, enabled?}. event: sale.paid|sale.failed|response.submitted|subscription.charged. to_email: emel, {admin_email}, atau {field_id}. condition: {field_id, op, value}|null (op: equals|not_equals|contains|gt|lt|not_empty). Senarai kosong = tiada emel dihantar.",
 	}, s.setFormNotifications)
+	// ── Parity: per-form confirmations (issue #179) ─────────────────────
+	addTool(s, &mcp.Tool{
+		Name:        "get_form_confirmations",
+		Description: "Baca pengesahan borang (issue #179): senarai confirmation (message/redirect) + logik bersyarat. Pengesahan lalai sentiasa wujud.",
+	}, s.getFormConfirmations)
+	addTool(s, &mcp.Tool{
+		Name:        "set_form_confirmations",
+		Description: "Set pengesahan borang (issue #179): ganti semua confirmation (name, type message|redirect, message/redirect_url, condition). Pengesahan lalai sentiasa dikekalkan. Mesej HTML disanitasi (tiada XSS).",
+	}, s.setFormConfirmations)
 
 	// ── Parity: per-space hosted legal pages (issue #184) ────────────────
 	addTool(s, &mcp.Tool{

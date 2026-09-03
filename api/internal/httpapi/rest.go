@@ -141,6 +141,9 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /v1/rest/forms/{id}/notifications", h.authed(h.createFormNotification))
 	mux.Handle("PUT /v1/rest/forms/{id}/notifications/{nid}", h.authed(h.updateFormNotification))
 	mux.Handle("DELETE /v1/rest/forms/{id}/notifications/{nid}", h.authed(h.deleteFormNotification))
+	// Issue #179: per-form confirmations (Gravity-Forms-style).
+	mux.Handle("GET /v1/rest/forms/{id}/confirmations", h.authed(h.getFormConfirmations))
+	mux.Handle("PUT /v1/rest/forms/{id}/confirmations", h.authed(h.saveFormConfirmations))
 	mux.HandleFunc("GET /v1/templates", h.listTemplates)
 	mux.HandleFunc("GET /v1/system-settings/public", h.publicSystemSettings)
 	mux.Handle("GET /v1/system-settings", h.authed(h.listSystemSettings))

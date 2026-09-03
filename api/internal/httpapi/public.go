@@ -334,6 +334,15 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		respondErr(w, r, err)
 		return
 	}
+	// Issue #179: persist the submitted field values on the sale so the
+	// thank-you page can evaluate confirmation conditional logic against them.
+	if len(in.Fields) > 0 {
+		fm := make(map[string]any, len(in.Fields))
+		for k, v := range in.Fields {
+			fm[k] = v
+		}
+		_ = h.Sales.SetSaleFields(r.Context(), sale.ID, fm)
+	}
 
 	// CHIP flow: create purchase & return checkout URL.
 	if method == "chip" {
@@ -423,9 +432,24 @@ func (h *PublicHandlers) handleResponseSubmit(w http.ResponseWriter, r *http.Req
 	// submitted field values (block_id → value) drive conditional logic and
 	// {field_id} recipients. Best-effort — never blocks the submit response.
 	h.fireResponseNotifications(r.Context(), form, in.Fields)
+	// Issue #179: resolve the form's confirmation against the submitted field
+	// values and return it so the buyer-facing JS can render the message or
+	// redirect. The default confirmation always matches.
+	conf := h.resolveConfirmation(r.Context(), form, in.Fields)
+	if conf.Confirmation.Type == dbstore.ConfirmationTypeRedirect && conf.RedirectURL != "" {
+		respond(w, http.StatusCreated, map[string]string{
+			"status":       "submitted",
+			"id":           sub.ID,
+			"confirmation": "redirect",
+			"redirect_url": conf.RedirectURL,
+		})
+		return
+	}
 	respond(w, http.StatusCreated, map[string]string{
-		"status": "submitted",
-		"id":     sub.ID,
+		"status":       "submitted",
+		"id":           sub.ID,
+		"confirmation": "message",
+		"message":      conf.Message,
 	})
 }
 
@@ -710,6 +734,21 @@ func (h *PublicHandlers) handleThankYou(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Tempahan tidak dijumpai", http.StatusNotFound)
 		return
 	}
+	// Issue #179: resolve the form's confirmation against the submitted field
+	// values. A redirect confirmation sends the buyer to the configured URL; a
+	// message confirmation is rendered (HTML-sanitized) on this page. The
+	// default confirmation always matches, so there is always a fallback.
+	var conf *resolvedConfirmation
+	if h.Forms != nil {
+		if form, ferr := h.Forms.GetByID(r.Context(), sale.AccountID, sale.FormID); ferr == nil && form != nil {
+			fields, _ := h.Sales.SaleFields(r.Context(), sale.ID)
+			conf = h.resolveConfirmation(r.Context(), form, fields)
+		}
+	}
+	if conf != nil && conf.Confirmation.Type == dbstore.ConfirmationTypeRedirect && conf.RedirectURL != "" {
+		http.Redirect(w, r, conf.RedirectURL, http.StatusFound)
+		return
+	}
 	// Issue #202: bounded poll instead of an indefinite 4s meta-refresh. While
 	// the sale is still pending, the page polls a lightweight status endpoint
 	// every 4s and stops after a bounded window (default 60s) so a slow or
@@ -745,15 +784,25 @@ const iv = setInterval(async () => {
 	case dbstore.SaleCancelled:
 		statusText = "dibatalkan"
 	}
+	// The confirmation message (sanitized) replaces the hardcoded thank-you
+	// text. Fall back to the default message when none resolved.
+	message := dbstore.DefaultConfirmationMessage
+	if conf != nil && conf.Message != "" {
+		message = conf.Message
+	}
 	fmt.Fprintf(w, `<!doctype html><html lang="ms"><head><meta charset="utf-8">%s
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Terima kasih</title>
 <meta name="jf-ref" content="%s">
 <style>body{background:#f7f8f8;color:#17181c;font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
 .c{background:#ffffff;border:1px solid #e6e8ec;border-radius:16px;padding:40px;text-align:center;max-width:420px}
-h1{color:#10b981;font-size:24px}</style></head><body><div class="c">
-<h1>✓ Terima kasih!</h1><p>Tempahan <strong>%s</strong> diterima.<br>Status: %s.</p>
+h1{color:#10b981;font-size:24px}
+.msg{color:#17181c;font-size:15px;line-height:1.6;margin-top:8px}
+.msg a{color:#4f46e5}
+.ref{color:#9ca3af;font-size:12px;margin-top:12px}</style></head><body><div class="c">
+<h1>✓ Terima kasih!</h1><div class="msg">%s</div>
+<p class="ref">Tempahan <strong>%s</strong> · Status: %s.</p>
 <p style="color:#9ca3af;font-size:12px">Dikuasakan oleh JomForm</p></div></body></html>`,
-		refresh, sale.RefCode, sale.RefCode, statusText)
+		refresh, sale.RefCode, message, sale.RefCode, statusText)
 }
 
 // handleThankYouStatus is the read-only status endpoint the thank-you page

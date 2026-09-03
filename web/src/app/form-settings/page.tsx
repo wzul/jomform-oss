@@ -108,6 +108,19 @@ const NOTIF_EVENTS = [
 
 const NOTIF_OPS = ["equals", "not_equals", "contains", "gt", "lt", "not_empty"] as const;
 
+// Issue #179: a per-form confirmation (Gravity-Forms-style). The default
+// confirmation (is_default) always exists and can be edited but not deleted.
+type Confirmation = {
+  id: string;
+  name: string;
+  type: "message" | "redirect";
+  message: string;
+  redirect_url: string;
+  condition?: { field_id: string; op: string; value: string } | null;
+  is_default?: boolean;
+  position?: number;
+};
+
 const TABS: { key: Tab; label: string }[] = [
   { key: "general", label: "fs.general" },
   { key: "confirmation", label: "fs.confirmation" },
@@ -167,6 +180,8 @@ function FormSettingsInner() {
   // Confirmation
   const [fsRedS, setFsRedS] = useState("");
   const [fsRedF, setFsRedF] = useState("");
+  // Issue #179: per-form confirmations (Gravity-Forms-style).
+  const [confs, setConfs] = useState<Confirmation[]>([]);
 
   // Restrictions
   const [rsStart, setRsStart] = useState("");
@@ -286,6 +301,12 @@ function FormSettingsInner() {
         const whs = (await wr.json()) as { id: string; url: string; events: string[] }[];
         setFormWebhooks(Array.isArray(whs) ? whs : []);
       }
+      // Issue #179: load per-form confirmations (default always present).
+      const cr = await fetch(`/api/rest/forms/${formId}/confirmations${spaceQuery()}`);
+      if (cr.ok) {
+        const cd = (await cr.json()) as { confirmations: Confirmation[] };
+        setConfs(cd.confirmations || []);
+      }
     } catch {
       setErr(t("fs.loadErr"));
     } finally {
@@ -343,6 +364,35 @@ function FormSettingsInner() {
       }),
     });
     setMsg(r.ok ? t("fs.saved") : t("prof.failed"));
+  }
+
+  // Issue #179: save the form's confirmations. The default confirmation is
+  // always preserved server-side (cannot be deleted).
+  async function saveConfirmations() {
+    setMsg("");
+    if (!formId) return;
+    const r = await fetch(`/api/rest/forms/${formId}/confirmations${spaceQuery()}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirmations: confs }),
+    });
+    setMsg(r.ok ? t("fs.saved") : t("prof.failed"));
+    if (r.ok) void load();
+  }
+
+  function updateConf(i: number, patch: Partial<Confirmation>) {
+    setConfs((prev) => prev.map((c, idx) => (idx === i ? { ...c, ...patch } : c)));
+  }
+
+  function addConfirmation() {
+    setConfs((prev) => [
+      ...prev,
+      { id: "", name: "", type: "message", message: "", redirect_url: "", condition: null },
+    ]);
+  }
+
+  function removeConfirmation(i: number) {
+    setConfs((prev) => prev.filter((c, idx) => idx !== i || c.is_default));
   }
 
   async function saveRestrictions() {
@@ -702,6 +752,147 @@ function FormSettingsInner() {
                       </div>
                       <div className="pt-1">
                         <button onClick={saveConfirmation} disabled={!canWrite} className="jf-btn-primary">
+                          {t("fs.save")}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Issue #179: per-form confirmations (Gravity-Forms-style). */}
+                    <div className="mt-8 border-t border-[var(--jf-border)] pt-6">
+                      <h3 className="text-base font-semibold">{t("fs.confirmations")}</h3>
+                      <p className="mt-1 text-sm text-[var(--jf-muted)]">{t("fs.confirmationsHint")}</p>
+                      <div className="mt-4 space-y-4">
+                        {confs.map((c, i) => (
+                          <div key={i} className="rounded-lg border border-[var(--jf-border)] p-4">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div className="flex items-center gap-2">
+                                <input
+                                  value={c.name}
+                                  onChange={(e) => updateConf(i, { name: e.target.value })}
+                                  placeholder={t("fs.confName")}
+                                  className="jf-input w-56 text-sm"
+                                />
+                                {c.is_default && (
+                                  <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-600">
+                                    {t("fs.confDefault")}
+                                  </span>
+                                )}
+                              </div>
+                              {!c.is_default && (
+                                <button
+                                  onClick={() => removeConfirmation(i)}
+                                  disabled={!canWrite}
+                                  className="jf-btn-ghost px-2 py-1 text-xs text-red-500"
+                                >
+                                  {t("fs.confDelete")}
+                                </button>
+                              )}
+                            </div>
+                            <div className="mt-3 flex flex-wrap items-center gap-3">
+                              <label className="flex items-center gap-2 text-sm text-slate-700">
+                                <input
+                                  type="radio"
+                                  name={`conf-type-${i}`}
+                                  checked={c.type === "message"}
+                                  onChange={() => updateConf(i, { type: "message" })}
+                                  className="accent-[#5e6ad2]"
+                                />
+                                {t("fs.confMessage")}
+                              </label>
+                              <label className="flex items-center gap-2 text-sm text-slate-700">
+                                <input
+                                  type="radio"
+                                  name={`conf-type-${i}`}
+                                  checked={c.type === "redirect"}
+                                  onChange={() => updateConf(i, { type: "redirect" })}
+                                  className="accent-[#5e6ad2]"
+                                />
+                                {t("fs.confRedirect")}
+                              </label>
+                            </div>
+                            {c.type === "message" ? (
+                              <div className="mt-3">
+                                <label className={labelCls}>{t("fs.confMessageBody")}</label>
+                                <textarea
+                                  value={c.message}
+                                  onChange={(e) => updateConf(i, { message: e.target.value })}
+                                  rows={3}
+                                  className={`${inputCls} font-mono text-xs`}
+                                  placeholder="Terima kasih! Maklum balas anda telah diterima."
+                                />
+                              </div>
+                            ) : (
+                              <div className="mt-3">
+                                <label className={labelCls}>{t("fs.confRedirectUrl")}</label>
+                                <input
+                                  value={c.redirect_url}
+                                  onChange={(e) => updateConf(i, { redirect_url: e.target.value })}
+                                  placeholder="https://yourapp.com/thanks"
+                                  className={inputCls}
+                                />
+                              </div>
+                            )}
+                            <div className="mt-3">
+                              <label className="flex items-center gap-2 text-sm text-slate-700">
+                                <input
+                                  type="checkbox"
+                                  checked={!!c.condition}
+                                  onChange={(e) =>
+                                    updateConf(i, {
+                                      condition: e.target.checked
+                                        ? { field_id: "", op: "equals", value: "" }
+                                        : null,
+                                    })
+                                  }
+                                  className="accent-[#5e6ad2]"
+                                />
+                                {t("fs.confConditional")}
+                              </label>
+                              {c.condition && (
+                                <div className="mt-2 flex flex-wrap items-center gap-2">
+                                  <input
+                                    value={c.condition.field_id}
+                                    onChange={(e) =>
+                                      updateConf(i, { condition: { ...c.condition!, field_id: e.target.value } })
+                                    }
+                                    placeholder={t("fs.confFieldId")}
+                                    className="jf-input w-40 text-xs"
+                                  />
+                                  <select
+                                    value={c.condition.op}
+                                    onChange={(e) =>
+                                      updateConf(i, { condition: { ...c.condition!, op: e.target.value } })
+                                    }
+                                    className="jf-input w-32 text-xs"
+                                  >
+                                    <option value="equals">{t("fs.opEquals")}</option>
+                                    <option value="not_equals">{t("fs.opNotEquals")}</option>
+                                    <option value="contains">{t("fs.opContains")}</option>
+                                    <option value="gt">{t("fs.opGt")}</option>
+                                    <option value="lt">{t("fs.opLt")}</option>
+                                    <option value="not_empty">{t("fs.opNotEmpty")}</option>
+                                  </select>
+                                  {c.condition.op !== "not_empty" && (
+                                    <input
+                                      value={c.condition.value}
+                                      onChange={(e) =>
+                                        updateConf(i, { condition: { ...c.condition!, value: e.target.value } })
+                                      }
+                                      placeholder={t("fs.confValue")}
+                                      className="jf-input w-40 text-xs"
+                                    />
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="mt-4 flex flex-wrap items-center gap-2">
+                        <button onClick={addConfirmation} disabled={!canWrite} className="jf-btn-ghost px-3 py-1.5 text-xs">
+                          {t("fs.confAdd")}
+                        </button>
+                        <button onClick={saveConfirmations} disabled={!canWrite} className="jf-btn-primary">
                           {t("fs.save")}
                         </button>
                       </div>

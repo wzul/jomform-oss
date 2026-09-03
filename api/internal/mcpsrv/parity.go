@@ -278,6 +278,9 @@ type upsertFormIn struct {
 	// Issue #193: per-form notification rules. Omit to leave unchanged; pass
 	// an explicit list to replace the form's notifications wholesale.
 	Notifications []notificationIn `json:"notifications,omitempty" jsonschema:"Peraturan notifikasi emel (ganti semua bila diisi)"`
+	// Issue #179: form confirmations (Gravity-Forms-style). Omit to leave
+	// unchanged; pass an empty array to reset to just the default.
+	Confirmations []confirmationIn `json:"confirmations,omitempty" jsonschema:"Pengesahan borang (ganti semua; lalai sentiasa dikekalkan)"`
 }
 
 func (s *Server) upsertForm(
@@ -338,6 +341,12 @@ func (s *Server) upsertForm(
 			return nil, nil, err
 		}
 	}
+	// Issue #179: apply confirmations on create when provided.
+	if in.Confirmations != nil {
+		if err := s.applyConfirmations(ctx, f.ID, in.Confirmations); err != nil {
+			return nil, nil, err
+		}
+	}
 	// Issue #193: apply notifications when provided on create.
 	if len(in.Notifications) > 0 {
 		if err := s.applyFormNotifications(ctx, f.ID, in.Notifications); err != nil {
@@ -372,6 +381,12 @@ func (s *Server) upsertForm(
 	// Issue #193: apply notifications when provided on update.
 	if len(in.Notifications) > 0 {
 		if err := s.applyFormNotifications(ctx, in.FormID, in.Notifications); err != nil {
+			return nil, nil, err
+		}
+	}
+	// Issue #179: apply confirmations on update when provided.
+	if in.Confirmations != nil {
+		if err := s.applyConfirmations(ctx, in.FormID, in.Confirmations); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -423,6 +438,34 @@ func (s *Server) applyFormNotifications(ctx context.Context, formID string, in [
 		}
 	}
 	return nil
+}
+
+// applyConfirmations validates and saves a form's confirmations (issue #179).
+// The default confirmation is always preserved server-side.
+func (s *Server) applyConfirmations(ctx context.Context, formID string, in []confirmationIn) error {
+	confs := make([]*dbstore.Confirmation, 0, len(in))
+	for _, c := range in {
+		if strings.TrimSpace(c.Name) == "" {
+			return errors.New("nama pengesahan wajib")
+		}
+		if c.Type != dbstore.ConfirmationTypeMessage && c.Type != dbstore.ConfirmationTypeRedirect {
+			return errors.New("jenis pengesahan tidak sah")
+		}
+		if c.Type == dbstore.ConfirmationTypeRedirect && (c.RedirectURL == "" || !strings.HasPrefix(c.RedirectURL, "https://")) {
+			return errors.New("URL pengesahan mesti https://")
+		}
+		cc := &dbstore.Confirmation{
+			ID: c.ID, Name: c.Name, Type: c.Type, Message: c.Message,
+			RedirectURL: c.RedirectURL, IsDefault: c.IsDefault,
+		}
+		if c.Condition != nil {
+			cc.Condition = &dbstore.ConfirmationCondition{
+				FieldID: c.Condition.FieldID, Op: c.Condition.Op, Value: c.Condition.Value,
+			}
+		}
+		confs = append(confs, cc)
+	}
+	return s.deps.Forms.SaveConfirmations(ctx, formID, confs)
 }
 
 // uniqueFormSlug generates a URL-safe, per-space-unique slug for a new form
