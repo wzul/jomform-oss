@@ -19,7 +19,7 @@ Last updated: 1 Sep 2026 (MYT)
 - **Tracking scripts** — global + per-form head injection (sanitised:
   `<script src>`/`<meta>` only; event handlers & cookies stripped)
 - Multi-domain per account (`account_domains`), content-based verify,
-  **Dokploy API auto-sync** (Traefik routes + LE cert on verify; removed on delete)
+  **Traefik file-provider route** (auto route + LE cert on verify; removed on delete)
 - Real-IP chain (Cloudflare ranges fetched at startup, 12h refresh,
   CF-Connecting-IP / XFF rightmost-trusted rewrite)
 - Rate limiting (1 r/s, burst 10, per-IP, CF-aware) on public submit
@@ -45,7 +45,7 @@ Last updated: 1 Sep 2026 (MYT)
    - SSE/streaming tools for live sale feed to agents
 5. **Ops hardening**
    - select/scan column-count CI test (3rd 401-storm prevention)
-   - `/healthz` apex router into Dokploy compose (currently manual dynamic file)
+   - `/healthz` apex router into Traefik compose (currently manual dynamic file)
    - PG backups (wal-g to R2), restore drill
 6. **Growth**
    - Templates gallery (F&B, tuition, booking)
@@ -53,8 +53,8 @@ Last updated: 1 Sep 2026 (MYT)
 
 ## ❌ Scrapped / consciously dropped
 
-- **Cloudflared tunnel** (hosted or merchant-run) — replaced by Dokploy API
-  domain sync; merchant CF token storage no longer needed
+- **Cloudflared tunnel** (hosted or merchant-run) — replaced by Traefik
+  file-provider domain routing; merchant CF token storage no longer needed
 - Any OnPay identity (repo stays clean)
 
 ## Architecture notes (kept)

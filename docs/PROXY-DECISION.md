@@ -1,12 +1,11 @@
 # Proxy choice: Traefik vs Caddy (kept: Traefik)
 
-Decision date: 2026-09-01 (after VPS migration off Dokploy-hosted routing).
+Decision date: 2026-09-01 (after VPS migration to plain-server + Traefik routing).
 
 ## Context
 
 JomForm now runs on a dedicated VPS (docker compose: Postgres, Valkey, MinIO, api, web)
-fronted by Traefik v3 with a file provider. We will NOT migrate back to Dokploy
-any time soon (decided by Wan). Question raised: why not Caddy, since the Go API
+fronted by Traefik v3 with a file provider. Question raised: why not Caddy, since the Go API
 doesn't need a reverse proxy at all?
 
 ## Decision: keep Traefik
@@ -34,7 +33,8 @@ Reasons:
   "client version 1.24 is too old…", i.e. pin `DOCKER_API_VERSION`) or a
   custom ACME service inside the API.
 - If we ever re-introduce Dokploy, its bundled Traefik resumes that role
-  naturally.
+  naturally. (Not planned — plain-server + Traefik file provider is the
+  current deployment.)
 
 ## Gotchas recorded (for future edits)
 

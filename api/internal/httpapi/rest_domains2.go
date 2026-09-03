@@ -1,85 +1,14 @@
-// REST: multiple custom domains per account (add/list/verify/delete) +
-// Dokploy API domain sync. Manual CNAME → Verify → auto Traefik route.
+// REST: multiple custom domains per account (add/list/verify/delete).
+// Manual CNAME → Verify → auto Traefik file-provider route (issue #236).
 package httpapi
 
 import (
 	"context"
-	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"net/http"
-	"os"
-	"os/exec"
 	"strings"
-	"time"
 )
-
-// dokployBase/API key are env-provided (host may expose the Dokploy API).
-func dokployURL() string          { return os.Getenv("DOKPLOY_URL") }     // e.g. http://dokploy:3000
-func dokployKey() string          { return os.Getenv("DOKPLOY_API_KEY") } // x-api-key
-func dokployComposeID() string    { return os.Getenv("DOKPLOY_COMPOSE_ID") }
-func dokployAPIContainer() string { return os.Getenv("DOKPLOY_CONTAINER") } // exec target
-
-// dokployAddDomain registers a domain with Dokploy so Traefik routes it to
-// the api container on /f/, /t/ paths. No-op when not running under Dokploy,
-// but logs a warning (issue #236: fail loudly, not silently) so a
-// verified-but-not-routed domain is visible in logs.
-func dokployAddDomain(domain string) error {
-	if dokployURL() == "" || dokployKey() == "" {
-		slog.Warn("dokploy_add_domain_skipped",
-			"domain", domain,
-			"reason", "DOKPLOY_URL/DOKPLOY_API_KEY unset — domain not registered with Traefik")
-		return nil // not a dokploy env — no-op, don't error the request
-	}
-	if _, err := exec.LookPath("docker"); err != nil {
-		// in-container api has no docker binary — use the dokploy API directly
-		return dokployAddDomainViaAPI(domain)
-	}
-	return nil
-}
-
-// dokployAddDomainViaAPI calls Dokploy's domain.create through the HTTP API
-// (preferred when this api runs inside the swarm and has network access).
-func dokployAddDomainViaAPI(domain string) error {
-	if dokployURL() == "" || dokployKey() == "" {
-		return nil
-	}
-	body := fmt.Sprintf(`{"composeId":%q,"domainType":"compose","host":%q,"path":"/f/","serviceName":"api","port":8080,"https":true,"certificateType":"letsencrypt","domainId":""}`, dokployComposeID(), domain)
-	if err := dokployCall("/api/domain.create", body); err != nil {
-		return err
-	}
-	return dokployCall("/api/domain.create", fmt.Sprintf(`{"composeId":%q,"domainType":"compose","host":%q,"path":"/t/","serviceName":"api","port":8080,"https":true,"certificateType":"letsencrypt","domainId":""}`, dokployComposeID(), domain))
-}
-
-func dokployCall(path, body string) error {
-	req, err := http.NewRequest(http.MethodPost, dokployURL()+path, strings.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("x-api-key", dokployKey())
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
-		return fmt.Errorf("dokploy %s: %s: %s", path, resp.Status, strings.TrimSpace(string(b)))
-	}
-	slog.Info("dokploy_domain_added", "path", path)
-	return nil
-}
-
-func dokployRemoveDomain(domain string) {
-	if dokployURL() == "" || dokployKey() == "" {
-		return
-	}
-	// Dokploy lacks domain delete-by-host in older versions; list → delete by id.
-	var payload = fmt.Sprintf(`{"host":%q}`, domain)
-	_ = dokployCall("/api/domain.delete", payload)
-}
 
 // ─── handlers ────────────────────────────────────────────────────────────────
 
@@ -105,8 +34,7 @@ func (h *RESTHandlers) addCustomDomain(w http.ResponseWriter, r *http.Request, a
 		respondErr(w, r, err) // duplicate = user sees real error
 		return
 	}
-	// Traefik sync (dokploy-aware envs auto; others no-op)
-	_ = dokployAddDomain(domain)
+	// Traefik file-provider route is handled by the plain deployment (issue #236).
 	// Auto-CNAME: when the merchant linked Cloudflare, create the proxied
 	// CNAME record in their zone (issue #22). Best-effort — the manual
 	// CNAME path below never blocks on CF failures.
@@ -185,7 +113,6 @@ func (h *RESTHandlers) verifyCustomDomainByID(w http.ResponseWriter, r *http.Req
 		respondErr(w, r, err)
 		return
 	}
-	_ = dokployAddDomain(d.Domain)
 	// Issue #212: register the verified domain with the origin auto-TLS
 	// manager so it provisions + renews a Let's Encrypt cert (SNI-based).
 	// No-op when ACME is not configured (Cloudflare-proxied domains keep
@@ -198,7 +125,7 @@ func (h *RESTHandlers) verifyCustomDomainByID(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, map[string]any{"verified": true, "domain": d.Domain})
 }
 
-// deleteCustomDomainByID removes a claim + dokploy route (best effort).
+// deleteCustomDomainByID removes a claim (best effort).
 func (h *RESTHandlers) deleteCustomDomainByID(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	if _, ok := h.requireWriteRole(w, r, actx); !ok {
 		return
@@ -212,7 +139,6 @@ func (h *RESTHandlers) deleteCustomDomainByID(w http.ResponseWriter, r *http.Req
 		respondErr(w, r, err)
 		return
 	}
-	dokployRemoveDomain(d.Domain)
 	// Issue #212: stop provisioning the cert for a removed domain.
 	if h.TLS != nil {
 		h.TLS.RemoveVerified(d.Domain)

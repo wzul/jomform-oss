@@ -18,7 +18,7 @@
 | Backend | Go | 1.26.x |
 | DB | PostgreSQL | 18.x (18.6) |
 | Cache/queue | Valkey (bukan Redis) | 9.1.x (`valkey/valkey:9.1-alpine`) |
-| Storage | S3-compatible: MinIO (self-host/Dokploy) atau R2 | MinIO image `minio/minio` (pulled & verified Aug 2026) |
+| Storage | S3-compatible: MinIO (self-host) atau R2 | MinIO image `minio/minio` (pulled & verified Aug 2026) |
 | Dashboard + builder | Next.js | 16.3.3 (Active LTS, Aug 2026 security release) |
 | UI kit | Tailwind CSS + shadcn/ui | latest |
 | MCP SDK | `github.com/modelcontextprotocol/go-sdk` | v1.7.x (official) |
@@ -117,10 +117,10 @@ audit_logs(id, account_id FK, actor, action, entity, entity_id, diff jsonb, crea
 - Test cards: `4444 3333 2222 1111` (non-3DS), `5555 5555 5555 4444` (3DS), CVC 123
 - Test mode UI: badge "TEST MODE" jelas dalam borang & dashboard
 
-## 7. Deployment (Dokploy)
+## 7. Deployment (plain server + Traefik)
 
 - `deploy/docker-compose.yml`: api · web · render · postgres:18 · valkey:9.1-alpine · minio (+ createbuckets init container)
-- MinIO console internal sahaja; S3 endpoint expose via subpath/domain sendiri (cth. `s3.<domain>`); TLS via Dokploy/Traefik; volume persisten
+- MinIO console internal sahaja; S3 endpoint expose via subpath/domain sendiri (cth. `s3.<domain>`); TLS via Traefik; volume persisten
 - Production vars: `DATABASE_URL`, `VALKEY_URL`, `S3_ENDPOINT/KEY/SECRET/BUCKET`, `CHIP_*` tiada global (per-account), `SESSION_SECRET`, `ENCRYPTION_KEY` (AES-GCM untuk chip_secret_key_enc)
 - Health checks: `/healthz` api, `/readyz` DB+Valkey+S3
 - Backups: `pg_dump` nightly + S3 offsite; MinIO bucket versioning untuk media bucket
@@ -143,7 +143,7 @@ Nota: wildcard `*.jomform.com` → host borang per-merchant; api & s3 DNS-only s
 
 ## 9. Kejayaan MVP
 
-- Self-host dalam <30 minit (clone → dokploy up → borang pertama live)
+- Self-host dalam <30 minit (clone → docker compose up → borang pertama live)
 - 100% operasi asas boleh buat via MCP tanpa buka dashboard
 - Subscription charge berjalan automatik 3 bulan berturut tanpa manual intervention
 - Lighthouse borang awam ≥ 95 (mobile)

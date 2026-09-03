@@ -22,7 +22,7 @@ jomform/
 ├── api/            # Go backend (REST + MCP server + worker)
 ├── web/            # Next.js dashboard + form builder
 ├── render/         # Public order-form renderer (SSR, buyer-facing)
-├── deploy/         # docker-compose + Dokploy templates (incl. MinIO)
+├── deploy/         # docker-compose + Traefik templates (incl. MinIO)
 └── docs/
 ```
 
@@ -34,7 +34,7 @@ jomform/
 | MCP server | Official `modelcontextprotocol/go-sdk` (1.7+) — HTTP transport + OAuth, per-account API key scope |
 | DB | PostgreSQL 18.x |
 | Cache/queue | Valkey 9.1.x (`valkey/valkey:9.1-alpine`) |
-| Object storage | Any S3-compatible. Self-host: MinIO (Dokploy). Cloud: Cloudflare R2 |
+| Object storage | Any S3-compatible. Self-host: MinIO. Cloud: Cloudflare R2 |
 | Dashboard/builder | Next.js 16 (Active LTS), Tailwind, shadcn/ui |
 
 ## License
