@@ -58,8 +58,10 @@ export default function Login() {
   const { t, lang } = useI18n();
   // Issue #161: an invite link should land the user on the sign-up tab so
   // they can create the account that redeems the invite.
+  // Issue #271: passwordless (magic link) is the default login — the page
+  // opens on the email-only flow. Password is the secondary option.
   const [mode, setMode] = useState<Mode>(() =>
-    typeof window !== "undefined" && new URLSearchParams(window.location.search).get("invite") ? "register" : "login"
+    typeof window !== "undefined" && new URLSearchParams(window.location.search).get("invite") ? "register" : "magic"
   );
   const [step, setStep] = useState<Step>(1);
   const [busy, setBusy] = useState(false);
@@ -543,7 +545,7 @@ export default function Login() {
                   onClick={() => { setMode("login"); setError(""); setDone(false); }}
                   className="text-[13px] font-medium text-[#5e6ad2] hover:underline"
                 >
-                  {t("login.passwordlessBack")}
+                  {t("login.loginWithPassword")}
                 </button>
               )}
 
@@ -570,8 +572,10 @@ export default function Login() {
 
           {/* Issue #9: env-gated social login. Rendered only when the backend
               reports the provider configured (GET /api/auth/social/providers);
-              Cloudflare appears only when JF_CF_OIDC_* env vars are set. */}
-          {step === 1 && mode !== "forgot" && mode !== "magic" && socialProviders && socialProviders.length > 0 && (
+              Cloudflare appears only when JF_CF_OIDC_* env vars are set.
+              Issue #271: shown on the default magic-link view too, so social
+              stays prominent alongside passwordless. */}
+          {step === 1 && mode !== "forgot" && socialProviders && socialProviders.length > 0 && (
             <div className="mt-4 border-t border-[var(--jf-border)] pt-4">
               <div className="space-y-2">
                 {socialProviders.map((p) => (
