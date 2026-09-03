@@ -9,12 +9,13 @@ import (
 	"strings"
 )
 
-// verifyFailDetail is the message returned when a custom domain fails the
-// JomForm probe (issue #248). It guides the merchant to the correct DNS setup
-// (CNAME to custom.jomform.com, or Cloudflare proxy) instead of dumping the
-// domain's resolved IPs — those are Cloudflare edge IPs and dumping them
-// misleadingly implies an A Record, which is wrong.
-const verifyFailDetail = "Domain tidak menghala ke JomForm. Set CNAME dari domain anda ke custom.jomform.com (atau gunakan Cloudflare proxy), kemudian tunggu DNS propagate dan Verify semula."
+// verifyFailDetail is the stable error code returned when a custom domain
+// fails the JomForm probe (issue #248). It is intentionally NOT a human
+// message: the frontend maps this code to the merchant's selected UI
+// language via i18n (issue #261), so the guidance (CNAME to
+// custom.jomform.com, or Cloudflare proxy) is shown in en/ms/zh/ta/ar instead
+// of a hardcoded Malay string.
+const verifyFailDetail = "verify_failed"
 
 // ─── handlers ────────────────────────────────────────────────────────────────
 

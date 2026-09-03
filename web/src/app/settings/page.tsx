@@ -859,7 +859,16 @@ export default function Settings() {
                             if (body && body.verified === true) {
                               setDomainMsg(t("set.domainVerified", { domain: d.domain }));
                             } else {
-                              setDomainMsg(body?.detail || t("set.verifyFailed", { domain: d.domain }));
+                              // Issue #261: the backend returns a stable error
+                              // code (e.g. "verify_failed") in body.detail, not
+                              // a hardcoded Malay string. Map the code to the
+                              // selected UI language via t().
+                              const code = body?.detail;
+                              setDomainMsg(
+                                code === "verify_failed"
+                                  ? t("set.verifyFailDetail")
+                                  : code || t("set.verifyFailed", { domain: d.domain }),
+                              );
                             }
                             refreshDomains();
                           }}
