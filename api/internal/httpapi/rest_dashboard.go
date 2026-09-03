@@ -145,9 +145,10 @@ func (h *RESTHandlers) dashboardBundle(w http.ResponseWriter, r *http.Request, a
 		}
 	}
 
-	// outbound webhooks.
+	// outbound webhooks (space/account-wide only; per-form webhooks are
+	// managed in Form Settings, issue #196).
 	if h.Webhooks != nil {
-		if hooks, err := h.Webhooks.ListByAccount(ctx, actx.Account.ID); err == nil {
+		if hooks, err := h.Webhooks.ListByAccount(ctx, actx.Account.ID, ""); err == nil {
 			out := make([]map[string]any, 0, len(hooks))
 			for _, wh := range hooks {
 				out = append(out, map[string]any{"id": wh.ID, "url": wh.URL, "events": wh.Events})

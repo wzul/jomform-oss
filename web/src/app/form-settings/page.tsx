@@ -14,7 +14,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
-import { spaceQuery } from "../../lib/space";
+import { spaceQuery, spaceScope } from "../../lib/space";
 
 type FormDetail = {
   id: string;
@@ -47,7 +47,10 @@ type EmailSettings = {
   html: boolean;
 };
 
-type Tab = "general" | "confirmation" | "restrictions" | "notifications" | "chip";
+// Issue #196: dispatcher-supported webhook events (dispatch2.go + purchases.go).
+const WEBHOOK_EVENTS = ["sale.paid", "sale.failed", "subscription.charged"] as const;
+
+type Tab = "general" | "confirmation" | "restrictions" | "notifications" | "chip" | "webhooks";
 
 const TABS: { key: Tab; label: string }[] = [
   { key: "general", label: "fs.general" },
@@ -55,6 +58,7 @@ const TABS: { key: Tab; label: string }[] = [
   { key: "restrictions", label: "fs.restrictions" },
   { key: "notifications", label: "fs.notifications" },
   { key: "chip", label: "fs.chip" },
+  { key: "webhooks", label: "fs.webhooks" },
 ];
 
 function toLocalInput(iso?: string): string {
@@ -130,6 +134,12 @@ function FormSettingsInner() {
   const [ovFallback, setOvFallback] = useState("");
   const [chipConfigured, setChipConfigured] = useState(false);
 
+  // Issue #196: per-form webhooks
+  const [whUrl, setWhUrl] = useState("");
+  const [whSecret, setWhSecret] = useState("");
+  const [whEvents, setWhEvents] = useState<string[]>([...WEBHOOK_EVENTS]);
+  const [formWebhooks, setFormWebhooks] = useState<{ id: string; url: string; events: string[] }[]>([]);
+
   const load = useCallback(async () => {
     if (!formId) return;
     setLoading(true);
@@ -169,6 +179,13 @@ function FormSettingsInner() {
         setEmelNotifyMerchant(!!es.notify_merchant);
         setEmelMerchantEmail(es.merchant_notify_email || "");
         setEmelHtml(!!es.html);
+      }
+      // Issue #196: load this form's webhooks (form_id filter).
+      const sp = spaceScope();
+      const wr = await fetch(`/api/rest/webhooks?form_id=${encodeURIComponent(formId)}${sp ? `&space=${encodeURIComponent(sp)}` : ""}`);
+      if (wr.ok) {
+        const whs = (await wr.json()) as { id: string; url: string; events: string[] }[];
+        setFormWebhooks(Array.isArray(whs) ? whs : []);
       }
     } catch {
       setErr(t("fs.loadErr"));
@@ -296,6 +313,40 @@ function FormSettingsInner() {
       setOvFallback("");
       setChipConfigured(false);
     }
+  }
+
+  // Issue #196: per-form webhook add/delete.
+  function toggleWhEvent(ev: string) {
+    setWhEvents((prev) => (prev.includes(ev) ? prev.filter((x) => x !== ev) : [...prev, ev]));
+  }
+
+  async function addFormWebhook(e: React.FormEvent) {
+    e.preventDefault();
+    setMsg("");
+    if (!formId) return;
+    const sp = spaceScope();
+    const r = await fetch(`/api/rest/webhooks${sp ? `?space=${encodeURIComponent(sp)}` : ""}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: whUrl, secret: whSecret, events: whEvents, form_id: formId }),
+    });
+    if (r.ok) {
+      setWhUrl("");
+      setWhSecret("");
+      setWhEvents([...WEBHOOK_EVENTS]);
+      setMsg(t("fs.webhookAdded"));
+      void load();
+    } else {
+      setMsg(t("fs.webhookFail"));
+    }
+  }
+
+  async function deleteFormWebhook(id: string) {
+    setMsg("");
+    const sp = spaceScope();
+    const r = await fetch(`/api/rest/webhooks/${id}${sp ? `?space=${encodeURIComponent(sp)}` : ""}`, { method: "DELETE" });
+    setMsg(r.ok ? t("fs.webhookDeleted") : t("prof.failed"));
+    if (r.ok) void load();
   }
 
   const inputCls = "jf-input mt-1 w-full max-w-xl";
@@ -584,6 +635,54 @@ function FormSettingsInner() {
                         </button>
                       </div>
                     </div>
+                  </section>
+                )}
+
+                {/* ── Webhooks (per-form) ── */}
+                {tab === "webhooks" && (
+                  <section className="jf-card p-6">
+                    <h2 className="text-base font-semibold">{t("fs.webhooks")}</h2>
+                    <p className="mt-1 text-sm text-[var(--jf-muted)]">{t("fs.webhooksHint")}</p>
+                    <form onSubmit={addFormWebhook} className="mt-4">
+                      <div className="flex flex-wrap gap-2">
+                        <input value={whUrl} onChange={(e) => setWhUrl(e.target.value)} required type="url"
+                          placeholder="https://yourapp.com/jomform-hook" className="jf-input min-w-56 max-w-xl flex-1" />
+                        <input value={whSecret} onChange={(e) => setWhSecret(e.target.value)} required type="text"
+                          placeholder={t("set.signingSecret")} className="jf-input w-48" />
+                        <button className="jf-btn-primary" disabled={!canWrite}>{t("set.add")}</button>
+                      </div>
+                      <div className="mt-2">
+                        <p className="text-xs text-slate-500">{t("webhook.eventsTitle")}</p>
+                        <div className="mt-1 flex flex-wrap items-center gap-3">
+                          {WEBHOOK_EVENTS.map((ev) => (
+                            <label key={ev} className="flex items-center gap-1 text-sm text-slate-700">
+                              <input type="checkbox" checked={whEvents.includes(ev)} onChange={() => toggleWhEvent(ev)} />
+                              {ev}
+                            </label>
+                          ))}
+                          <label className="flex items-center gap-1 text-sm text-slate-400">
+                            <input type="checkbox" checked={whEvents.includes("*")} onChange={() => toggleWhEvent("*")} />
+                            {t("webhook.event.all")}
+                          </label>
+                        </div>
+                      </div>
+                    </form>
+                    {formWebhooks.length === 0 ? (
+                      <p className="mt-4 text-sm text-[var(--jf-muted)]">{t("fs.webhooksEmpty")}</p>
+                    ) : (
+                      <ul className="mt-4 space-y-2">
+                        {formWebhooks.map((wh) => (
+                          <li key={wh.id} className="flex items-center justify-between gap-3 rounded-lg border border-[var(--jf-border)] px-4 py-2.5">
+                            <div className="min-w-0">
+                              <p className="truncate font-mono text-xs">{wh.url}</p>
+                              <p className="mt-0.5 text-[11px] text-slate-400">{(wh.events || []).join(", ")}</p>
+                            </div>
+                            <button onClick={() => deleteFormWebhook(wh.id)} disabled={!canWrite}
+                              className="shrink-0 text-xs text-slate-500 hover:text-red-500">✕</button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                   </section>
                 )}
               </div>

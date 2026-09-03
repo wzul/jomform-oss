@@ -13,6 +13,10 @@ import (
 type OutboundWebhook struct {
 	ID        string
 	AccountID string
+	// FormID scopes the webhook to a single form (issue #196). Empty = NULL =
+	// space/account-wide (fires for all forms' events); set = fires only for
+	// that form's events.
+	FormID    string
 	URL       string
 	Secret    string
 	Events    []string
@@ -26,20 +30,25 @@ type WebhookStore struct{ pool *pgxpool.Pool }
 // NewWebhookStore builds one.
 func NewWebhookStore(pool *pgxpool.Pool) *WebhookStore { return &WebhookStore{pool: pool} }
 
-// Create registers a webhook, returning its id+url.
-func (s *WebhookStore) Create(ctx context.Context, accountID, url, secret string, events []string) (*OutboundWebhook, error) {
-	wh := &OutboundWebhook{AccountID: accountID, URL: url, Secret: secret, Events: events, Active: true}
+// Create registers a webhook, returning its id+url. A non-empty formID scopes
+// the webhook to that form (issue #196); empty formID = space/account-wide.
+func (s *WebhookStore) Create(ctx context.Context, accountID, formID, url, secret string, events []string) (*OutboundWebhook, error) {
+	wh := &OutboundWebhook{AccountID: accountID, FormID: formID, URL: url, Secret: secret, Events: events, Active: true}
 	err := s.pool.QueryRow(ctx,
-		`INSERT INTO outbound_webhooks (account_id, url, secret, events)
-		 VALUES ($1,$2,$3,$4) RETURNING id, created_at`,
-		accountID, url, secret, events).Scan(&wh.ID, &wh.CreatedAt)
+		`INSERT INTO outbound_webhooks (account_id, form_id, url, secret, events)
+		 VALUES ($1,NULLIF($2,'')::uuid,$3,$4,$5) RETURNING id, created_at`,
+		accountID, formID, url, secret, events).Scan(&wh.ID, &wh.CreatedAt)
 	return wh, err
 }
 
-// ListByAccount lists url+id (secrets never returned to the UI).
-func (s *WebhookStore) ListByAccount(ctx context.Context, accountID string) ([]*OutboundWebhook, error) {
+// ListByAccount lists url+id (secrets never returned to the UI). A non-empty
+// formID narrows to that form's webhooks; empty formID returns the
+// space/account-wide webhooks (form_id IS NULL).
+func (s *WebhookStore) ListByAccount(ctx context.Context, accountID, formID string) ([]*OutboundWebhook, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, url, events FROM outbound_webhooks WHERE account_id=$1 AND active ORDER BY created_at`, accountID)
+		`SELECT id, url, events FROM outbound_webhooks
+		 WHERE account_id=$1 AND active AND form_id IS NOT DISTINCT FROM NULLIF($2,'')::uuid
+		 ORDER BY created_at`, accountID, formID)
 	if err != nil {
 		return nil, err
 	}
@@ -99,11 +108,14 @@ func (s *WebhookStore) ActiveForEvent(ctx context.Context, accountID, event stri
 	return out, rows.Err()
 }
 
-// ListActiveByAccount returns active webhooks for dispatch.
-func (s *WebhookStore) ListActiveByAccount(ctx context.Context, accountID string) ([]*OutboundWebhook, error) {
+// ListActiveByAccount returns active webhooks for dispatch. A non-empty
+// formID narrows to that form's webhooks; empty formID returns the
+// space/account-wide webhooks (form_id IS NULL).
+func (s *WebhookStore) ListActiveByAccount(ctx context.Context, accountID, formID string) ([]*OutboundWebhook, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, account_id, url, secret, events FROM outbound_webhooks WHERE account_id=$1 AND active`,
-		accountID)
+		`SELECT id, account_id, COALESCE(form_id::text,''), url, secret, events FROM outbound_webhooks
+		 WHERE account_id=$1 AND active AND form_id IS NOT DISTINCT FROM NULLIF($2,'')::uuid`,
+		accountID, formID)
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +123,30 @@ func (s *WebhookStore) ListActiveByAccount(ctx context.Context, accountID string
 	var out []*OutboundWebhook
 	for rows.Next() {
 		w := &OutboundWebhook{}
-		if err := rows.Scan(&w.ID, &w.AccountID, &w.URL, &w.Secret, &w.Events); err != nil {
+		if err := rows.Scan(&w.ID, &w.AccountID, &w.FormID, &w.URL, &w.Secret, &w.Events); err != nil {
+			return nil, err
+		}
+		out = append(out, w)
+	}
+	return out, rows.Err()
+}
+
+// ListActiveForDispatch returns the webhooks to fire for one event on one
+// form: the form-scoped webhooks (form_id = formID) plus the account-wide ones
+// (form_id IS NULL). Both are account-scoped and active.
+func (s *WebhookStore) ListActiveForDispatch(ctx context.Context, accountID, formID string) ([]*OutboundWebhook, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, account_id, COALESCE(form_id::text,''), url, secret, events FROM outbound_webhooks
+		 WHERE account_id=$1 AND active AND (form_id IS NULL OR form_id::text=$2)`,
+		accountID, formID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*OutboundWebhook
+	for rows.Next() {
+		w := &OutboundWebhook{}
+		if err := rows.Scan(&w.ID, &w.AccountID, &w.FormID, &w.URL, &w.Secret, &w.Events); err != nil {
 			return nil, err
 		}
 		out = append(out, w)

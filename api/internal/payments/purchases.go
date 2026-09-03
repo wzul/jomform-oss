@@ -188,6 +188,8 @@ func (s *Service) ProcessCallback(ctx context.Context, p *chip.Purchase) error {
 				go s.OnPaid(ctx, cur.AccountID, event, map[string]any{
 					"ref_code": cur.RefCode, "amount_sen": cur.TotalSen,
 					"buyer_email": cur.Client.Email, "purchase_id": p.ID,
+					// Issue #196: form-scoped webhooks key off the sale's form.
+					"form_id": cur.FormID,
 				})
 			}
 			// Receipt (one-time sales only; subscription receipts follow their

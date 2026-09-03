@@ -40,7 +40,10 @@ func (h *RESTHandlers) getEinvoicing(w http.ResponseWriter, r *http.Request, act
 // ─── Outbound webhook CRUD ──────────────────────────────────────────────────
 
 func (h *RESTHandlers) listWebhooks(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
-	hooks, err := h.Webhooks.ListByAccount(r.Context(), actx.Account.ID)
+	// Issue #196: optional ?form_id= narrows to that form's webhooks; absent
+	// (or empty) returns the space/account-wide webhooks.
+	formID := r.URL.Query().Get("form_id")
+	hooks, err := h.Webhooks.ListByAccount(r.Context(), actx.Account.ID, formID)
 	if err != nil {
 		respondErr(w, r, err)
 		return
@@ -65,6 +68,8 @@ func (h *RESTHandlers) createWebhook(w http.ResponseWriter, r *http.Request, act
 		URL    string   `json:"url"`
 		Secret string   `json:"secret"`
 		Events []string `json:"events"`
+		// Issue #196: optional form_id scopes the webhook to one form.
+		FormID string `json:"form_id"`
 	}
 	if err := decodeJSON(r, &in); err != nil || !strings.HasPrefix(in.URL, "http") || len(in.Secret) < 8 {
 		writeErr(w, http.StatusBadRequest, "url http(s) dan secret (min 8 char) wajib")
@@ -73,13 +78,20 @@ func (h *RESTHandlers) createWebhook(w http.ResponseWriter, r *http.Request, act
 	if len(in.Events) == 0 {
 		in.Events = []string{"sale.paid"}
 	}
-	wh, err := h.Webhooks.Create(r.Context(), actx.Account.ID, in.URL, in.Secret, in.Events)
+	// Issue #196: a form-scoped webhook must reference a form the account owns.
+	if in.FormID != "" {
+		if _, err := h.Forms.GetByID(r.Context(), actx.Account.ID, in.FormID); err != nil {
+			writeErr(w, http.StatusBadRequest, "borang tidak dijumpai")
+			return
+		}
+	}
+	wh, err := h.Webhooks.Create(r.Context(), actx.Account.ID, in.FormID, in.URL, in.Secret, in.Events)
 	if err != nil {
 		respondErr(w, r, err)
 		return
 	}
 	// Issue #92: audit webhook creation.
-	h.recordEvent(r, actx, h.sessionOwnerID(r), "settings.webhook_created", map[string]any{"webhook_id": wh.ID, "events": in.Events})
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "settings.webhook_created", map[string]any{"webhook_id": wh.ID, "events": in.Events, "form_id": in.FormID})
 	writeJSON(w, http.StatusCreated, map[string]string{"id": wh.ID, "url": wh.URL})
 }
 

@@ -268,7 +268,10 @@ func main() {
 			TLS: tlsMgr,
 		}
 		pay.OnPaid = func(ctx context.Context, accountID, event string, payload map[string]any) {
-			httpapi.DispatchWebhooks(ctx, rest, whStore, accountID, event, payload)
+			// Issue #196: form-scoped webhooks fire for the sale's form; the
+			// account-wide ones always fire. form_id is carried in the payload.
+			formID, _ := payload["form_id"].(string)
+			httpapi.DispatchWebhooks(ctx, rest, whStore, accountID, formID, event, payload)
 		}
 		deps.REST = rest
 

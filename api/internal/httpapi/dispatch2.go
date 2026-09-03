@@ -19,10 +19,13 @@ import (
 	"github.com/wzul/jomform/api/internal/dbstore"
 )
 
-// DispatchWebhooks fires all matching active webhooks for an account.
+// DispatchWebhooks fires all matching active webhooks for an account and
+// form. formID scopes the dispatch: form-scoped webhooks (form_id = formID)
+// plus the account-wide ones (form_id IS NULL) both fire. An empty formID
+// fires only the account-wide webhooks.
 // Sync for simplicity under caller goroutine; per-webhook 10s timeout.
-func DispatchWebhooks(ctx context.Context, h *RESTHandlers, store *dbstore.WebhookStore, accountID, event string, payload map[string]any) {
-	hooks, err := store.ListActiveByAccount(ctx, accountID)
+func DispatchWebhooks(ctx context.Context, h *RESTHandlers, store *dbstore.WebhookStore, accountID, formID, event string, payload map[string]any) {
+	hooks, err := store.ListActiveForDispatch(ctx, accountID, formID)
 	if err != nil {
 		slog.Error("wh_list", "err", err)
 		return

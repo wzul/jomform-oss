@@ -19,7 +19,7 @@ func TestWebhookDeliveriesREST(t *testing.T) {
 	accountID, _ := bundleFixture(t, ctx, pool)
 
 	whs := dbstore.NewWebhookStore(pool)
-	wh, err := whs.Create(ctx, accountID, "https://example.test/hook", "secret1234", []string{"sale.paid"})
+	wh, err := whs.Create(ctx, accountID, "", "https://example.test/hook", "secret1234", []string{"sale.paid"})
 	if err != nil {
 		t.Fatalf("create webhook: %v", err)
 	}

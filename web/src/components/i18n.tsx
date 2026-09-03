@@ -830,6 +830,13 @@ const DICT = {
   "fs.chipSaved": { en: "CHIP feed saved ✓", ms: "Feed CHIP disimpan ✓", zh: "CHIP 配置已保存 ✓", ta: "CHIP ஃபீட் சேமிக்கப்பட்டது ✓", ar: "تم حفظ خلاصة CHIP ✓" },
   "fs.chipFail": { en: "Failed to save CHIP feed", ms: "Gagal simpan feed CHIP", zh: "保存 CHIP 配置失败", ta: "CHIP ஃபீட்டைச் சேமிக்க முடியவில்லை", ar: "فشل حفظ خلاصة CHIP" },
   "fs.chipCleared": { en: "CHIP feed cleared — account defaults apply", ms: "Feed CHIP dikosongkan — lalai akaun terpakai", zh: "CHIP 配置已清除 — 应用账户默认值", ta: "CHIP ஃபீட் அழிக்கப்பட்டது — கணக்கு இயல்புநிலைகள் பொருந்தும்", ar: "تم مسح خلاصة CHIP — تنطبق افتراضيات الحساب" },
+  // issue #196: per-form webhook overrides
+  "fs.webhooks": { en: "Webhooks", ms: "Webhook", zh: "Webhook", ta: "வெப்ஹூக்குகள்", ar: "خطافات الويب" },
+  "fs.webhooksHint": { en: "Per-form webhooks fire only for this form's events. Space-wide webhooks (in Settings → Webhooks) still fire for all forms.", ms: "Webhook per-borang hanya untuk peristiwa borang ini. Webhook seluruh space (dalam Tetapan → Webhook) tetap untuk semua borang.", zh: "每表单 Webhook 仅针对此表单的事件触发。空间级 Webhook（设置 → Webhook）仍会为所有表单触发。", ta: "ஒவ்வொரு படிவ வெப்ஹூக்குகள் இந்த படிவத்தின் நிகழ்வுகளுக்கு மட்டுமே. இடம்-அளவிலான வெப்ஹூக்குகள் (அமைப்புகள் → வெப்ஹூக்குகள்) அனைத்து படிவங்களுக்கும்.", ar: "خطافات الويب لكل نموذج تُطلق فقط لأحداث هذا النموذج. خطافات الويب على مستوى المساحة (الإعدادات ← خطافات الويب) ما زالت تُطلق لجميع النماذج." },
+  "fs.webhooksEmpty": { en: "No per-form webhooks yet. Add one to receive this form's events.", ms: "Belum ada webhook per-borang. Tambah satu untuk terima peristiwa borang ini.", zh: "暂无每表单 Webhook。添加一个以接收此表单的事件。", ta: "இன்னும் படிவ வெப்ஹூக்குகள் இல்லை. இந்த படிவத்தின் நிகழ்வுகளைப் பெற ஒன்றைச் சேர்க்கவும்.", ar: "لا توجد خطافات ويب لكل نموذج بعد. أضف واحداً لاستقبال أحداث هذا النموذج." },
+  "fs.webhookAdded": { en: "Webhook added ✓", ms: "Webhook ditambah ✓", zh: "Webhook 已添加 ✓", ta: "வெப்ஹூக் சேர்க்கப்பட்டது ✓", ar: "تمت إضافة خطاف الويب ✓" },
+  "fs.webhookDeleted": { en: "Webhook deleted", ms: "Webhook dipadam", zh: "Webhook 已删除", ta: "வெப்ஹூக் நீக்கப்பட்டது", ar: "تم حذف خطاف الويب" },
+  "fs.webhookFail": { en: "Failed to save webhook", ms: "Gagal simpan webhook", zh: "保存 Webhook 失败", ta: "வெப்ஹூக்கைச் சேமிக்க முடியவில்லை", ar: "فشل حفظ خطاف الويب" },
   // landing
   "land.badge": { en: "100% free · CHIP payments", ms: "100% percuma · bayaran CHIP", zh: "100% 免费 · 代理原生支付", ta: "100% இலவசம் · முகவர் சார்ந்த பணம்", ar: "مجاني 100% · مدفوعات ذكية" },
   "land.hero1": { en: "Sell online with", ms: "Jual secara online dengan", zh: "5 分钟建立订单表单", ta: "5 நிமிடங்களில் ஆர்டர் படிவம்", ar: "أنشئ نموذج طلب في 5 دقائق" },

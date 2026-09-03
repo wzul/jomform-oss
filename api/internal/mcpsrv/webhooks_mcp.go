@@ -109,6 +109,9 @@ type webhookIn struct {
 	URL    string   `json:"url"`
 	Secret string   `json:"secret"`
 	Events []string `json:"events,omitempty" jsonschema:"sale.paid|sale.failed|subscription.charged|*"`
+	// Issue #196: optional form_id scopes the webhook to one form (fires only
+	// for that form's events). Empty = space/account-wide.
+	FormID string `json:"form_id,omitempty" jsonschema:"ID borang (pilihan). Set = webhook hanya untuk borang ini; kosong = seluruh space/akaun."`
 }
 
 func (s *Server) createWebhookMCP(
@@ -131,7 +134,13 @@ func (s *Server) createWebhookMCP(
 	if err := validateWebhookEvents(events); err != nil {
 		return nil, nil, err
 	}
-	wh, err := s.deps.Webhooks.Create(ctx, acc, in.URL, in.Secret, events)
+	// Issue #196: a form-scoped webhook must reference a form the account owns.
+	if in.FormID != "" {
+		if _, err := s.deps.Forms.GetByID(ctx, acc, in.FormID); err != nil {
+			return nil, nil, errors.New("borang tidak dijumpai")
+		}
+	}
+	wh, err := s.deps.Webhooks.Create(ctx, acc, in.FormID, in.URL, in.Secret, events)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -145,22 +154,30 @@ type webhookListOut struct {
 	URL    string   `json:"url"`
 	Events []string `json:"events"`
 	Active bool     `json:"active"`
+	// Issue #196: form_id is non-empty for form-scoped webhooks.
+	FormID string `json:"form_id,omitempty"`
+}
+
+type webhookListIn struct {
+	// Issue #196: optional form_id narrows to that form's webhooks; empty =
+	// space/account-wide webhooks.
+	FormID string `json:"form_id,omitempty" jsonschema:"ID borang (pilihan). Set = senarai webhook borang ini sahaja; kosong = webhook seluruh space/akaun."`
 }
 
 func (s *Server) listWebhooksMCP(
-	ctx context.Context, _ *mcp.CallToolRequest, _ struct{},
+	ctx context.Context, _ *mcp.CallToolRequest, in webhookListIn,
 ) (*mcp.CallToolResult, []webhookListOut, error) {
 	acc, err := s.accountAndScope(ctx, true)
 	if err != nil {
 		return nil, nil, err
 	}
-	hooks, err := s.deps.Webhooks.ListByAccount(ctx, acc)
+	hooks, err := s.deps.Webhooks.ListByAccount(ctx, acc, in.FormID)
 	if err != nil {
 		return nil, nil, err
 	}
 	out := []webhookListOut{}
 	for _, w := range hooks {
-		out = append(out, webhookListOut{ID: w.ID, URL: w.URL, Events: w.Events, Active: w.Active})
+		out = append(out, webhookListOut{ID: w.ID, URL: w.URL, Events: w.Events, Active: w.Active, FormID: w.FormID})
 	}
 	return nil, out, nil
 }

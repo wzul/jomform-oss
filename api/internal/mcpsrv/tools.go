@@ -185,11 +185,11 @@ func (s *Server) registerTools() {
 	}, s.getEinvoiceSettings)
 	addTool(s, &mcp.Tool{
 		Name:        "create_webhook",
-		Description: "Daftar endpoint webhook (events: sale.paid|sale.failed|subscription.charged|*). HMAC-signed.",
+		Description: "Daftar endpoint webhook (events: sale.paid|sale.failed|subscription.charged|*). HMAC-signed. form_id pilihan: set = webhook hanya untuk borang itu; kosong = seluruh space/akaun.",
 	}, s.createWebhookMCP)
 	addTool(s, &mcp.Tool{
 		Name:        "list_webhooks",
-		Description: "Senarai semua outbound webhooks akaun.",
+		Description: "Senarai outbound webhooks akaun. form_id pilihan: set = webhook borang itu sahaja; kosong = webhook seluruh space/akaun.",
 	}, s.listWebhooksMCP)
 	addTool(s, &mcp.Tool{
 		Name:        "delete_webhook",
