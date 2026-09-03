@@ -57,9 +57,18 @@ func (h *RESTHandlers) getCustomDomain(w http.ResponseWriter, r *http.Request, a
 }
 
 // probeServesJomForm checks https://domain/f/<known-slug> renders our app.
+// This is the AUTHORITATIVE verification check (issue #237): a custom domain
+// is only verified when it actually serves a JomForm page, not merely because
+// its DNS points at Cloudflare edge IPs shared with jomform.com.
 func probeServesJomForm(domain string) bool {
+	return probeServesJomFormURL("https://" + domain + "/f/test")
+}
+
+// probeServesJomFormURL is the testable core of probeServesJomForm: it fetches
+// url and reports whether it returns 200 with a body containing "JomForm".
+func probeServesJomFormURL(url string) bool {
 	client := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequest(http.MethodGet, "https://"+domain+"/f/test", nil)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return false
 	}

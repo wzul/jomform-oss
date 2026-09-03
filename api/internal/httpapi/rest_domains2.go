@@ -170,18 +170,13 @@ func (h *RESTHandlers) verifyCustomDomainByID(w http.ResponseWriter, r *http.Req
 		writeJSON(w, http.StatusOK, map[string]any{"verified": false, "detail": "DNS belum resolve"})
 		return
 	}
-	target, _ := net.LookupHost("jomform.com")
-	sameEdge := false
-	for _, ip := range ips {
-		for _, t := range target {
-			if ip == t {
-				sameEdge = true
-			}
-		}
-	}
-	ff400 := isCloudflareEdge(ips)
+	// Issue #237: probeServesJomForm is the AUTHORITATIVE check. A domain is
+	// verified ONLY if it actually serves a JomForm page. sameEdge/ff400 are
+	// hints that DNS points at Cloudflare, but they are NOT sufficient on
+	// their own — a domain behind Cloudflare with the same edge IPs as
+	// jomform.com must still serve JomForm to be verified.
 	serveOK := probeServesJomForm(d.Domain)
-	if !sameEdge && !ff400 && !serveOK {
+	if !serveOK {
 		writeJSON(w, http.StatusOK, map[string]any{"verified": false,
 			"detail": "Domain tidak menghala ke JomForm (" + strings.Join(ips, ",") + ")"})
 		return
@@ -239,15 +234,6 @@ func normalizeDomain(d string) string {
 	return d
 }
 
-// isCloudflareEdge reports whether any resolved IP looks like a CF edge
-// (CF-proxied CNAMEs resolve to edge IPs that differ per zone).
-func isCloudflareEdge(ips []string) bool {
-	for _, ip := range ips {
-		for _, prefix := range []string{"104.", "172.6", "188.114.", "162.159.", "198.41.", "131.0."} {
-			if strings.HasPrefix(ip, prefix) {
-				return true
-			}
-		}
-	}
-	return false
-}
+// isCloudflareEdge was removed with issue #237: sharing Cloudflare edge IPs
+// with jomform.com is no longer sufficient to verify a custom domain — the
+// domain must actually serve a JomForm page (probeServesJomForm).
