@@ -96,6 +96,20 @@ type Config struct {
 	// milliseconds are logged as slow and counted in
 	// jomform_db_slow_queries_total. Defaults to 200ms.
 	DBSlowQueryMS time.Duration
+
+	// Auto-TLS at origin (issue #212): Let's Encrypt/ACME provisioning for
+	// DNS-only (grey-cloud) custom domains that point straight at the origin.
+	//   ACMEEmail: contact for Let's Encrypt expiry/revocation notices.
+	//     Empty disables the origin TLS listener (default: plain HTTP only).
+	//   ACMEDirectory: ACME directory URL. Empty uses the Let's Encrypt
+	//     production endpoint (autocert default).
+	//   ACMECertDir: directory where issued certs + account keys are cached
+	//     for renewal persistence (autocert.DirCache).
+	//   TLSPort: port for the origin TLS listener (SNI-based cert selection).
+	ACMEEmail     string
+	ACMEDirectory string
+	ACMECertDir   string
+	TLSPort       string
 }
 
 // Load reads configuration from the environment and validates it.
@@ -153,6 +167,12 @@ func Load() (*Config, error) {
 
 		// Issue #211: slow-query threshold (default 200ms).
 		DBSlowQueryMS: time.Duration(parsePositiveInt64(os.Getenv("DB_SLOW_QUERY_MS"), 200)) * time.Millisecond,
+
+		// Issue #212: auto-TLS at origin for DNS-only custom domains.
+		ACMEEmail:     os.Getenv("ACME_EMAIL"),
+		ACMEDirectory: os.Getenv("ACME_DIRECTORY"),
+		ACMECertDir:   getEnv("ACME_CERT_DIR", "/var/lib/jomform/acme"),
+		TLSPort:       getEnv("TLS_PORT", "8443"),
 	}
 
 	if cfg.DatabaseURL == "" {

@@ -15,6 +15,7 @@ import (
 	"github.com/wzul/jomform/api/internal/httpapi/middleware"
 	"github.com/wzul/jomform/api/internal/llm"
 	"github.com/wzul/jomform/api/internal/payments"
+	"github.com/wzul/jomform/api/internal/tlsmgr"
 )
 
 // RESTHandlers serves /v1/rest/* merchant resources.
@@ -40,6 +41,10 @@ type RESTHandlers struct {
 	BaseURL string
 	Users          *dbstore.UserStore
 	Domains        *dbstore.DomainStore
+	// Issue #212: auto-TLS at origin. Nil when ACME is not configured.
+	// Verified custom domains are registered here so the origin provisions
+	// + renews their Let's Encrypt certs (SNI-based cert selection).
+	TLS *tlsmgr.Manager
 	// CookieDomain is the shared Domain attribute for the session cookie
 	// (e.g. ".jomform.com") so passkey/social sessions remain valid on product
 	// subdomains such as mcp.jomform.com (issue #140). Empty → host-only.

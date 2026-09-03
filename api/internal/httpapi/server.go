@@ -13,6 +13,7 @@ import (
 	"github.com/wzul/jomform/api/internal/httpapi/middleware"
 	"github.com/wzul/jomform/api/internal/mcpsrv"
 	"github.com/wzul/jomform/api/internal/metrics"
+	"github.com/wzul/jomform/api/internal/tlsmgr"
 	"github.com/wzul/jomform/api/internal/version"
 )
 
@@ -64,6 +65,11 @@ type Deps struct {
 	// it (so the DB query tracer and the HTTP middleware record into the same
 	// registry); when nil, NewServer creates its own.
 	Metrics *metrics.Metrics
+
+	// Issue #212: auto-TLS at origin for DNS-only custom domains. Nil when
+	// ACME is not configured (plain HTTP only). Handlers register verified
+	// custom domains here so the origin provisions + renews their certs.
+	TLS *tlsmgr.Manager
 }
 
 // VerifyMailer delivers an email-confirmation message. The concrete email.Sender

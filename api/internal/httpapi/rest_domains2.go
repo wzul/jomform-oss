@@ -186,6 +186,13 @@ func (h *RESTHandlers) verifyCustomDomainByID(w http.ResponseWriter, r *http.Req
 		return
 	}
 	_ = dokployAddDomain(d.Domain)
+	// Issue #212: register the verified domain with the origin auto-TLS
+	// manager so it provisions + renews a Let's Encrypt cert (SNI-based).
+	// No-op when ACME is not configured (Cloudflare-proxied domains keep
+	// using Cloudflare's edge TLS).
+	if h.TLS != nil {
+		h.TLS.AddVerified(d.Domain)
+	}
 	// Issue #92: audit custom-domain verify.
 	h.recordEvent(r, actx, h.sessionOwnerID(r), "settings.domain_verified", map[string]any{"domain": d.Domain})
 	writeJSON(w, http.StatusOK, map[string]any{"verified": true, "domain": d.Domain})
@@ -206,6 +213,10 @@ func (h *RESTHandlers) deleteCustomDomainByID(w http.ResponseWriter, r *http.Req
 		return
 	}
 	dokployRemoveDomain(d.Domain)
+	// Issue #212: stop provisioning the cert for a removed domain.
+	if h.TLS != nil {
+		h.TLS.RemoveVerified(d.Domain)
+	}
 	// Issue #92: audit custom-domain removal.
 	h.recordEvent(r, actx, h.sessionOwnerID(r), "settings.domain_removed", map[string]any{"domain": d.Domain})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})

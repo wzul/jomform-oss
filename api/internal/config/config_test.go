@@ -143,3 +143,49 @@ func TestLoadDBSlowQueryIgnoresGarbage(t *testing.T) {
 		t.Errorf("DBSlowQueryMS = %v, want fallback 200ms", cfg.DBSlowQueryMS)
 	}
 }
+
+func TestLoadACMEDefaults(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://localhost/jomform_test")
+	t.Setenv("APP_ENV", "dev")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.ACMEEmail != "" {
+		t.Errorf("ACMEEmail = %q, want empty default", cfg.ACMEEmail)
+	}
+	if cfg.ACMEDirectory != "" {
+		t.Errorf("ACMEDirectory = %q, want empty default", cfg.ACMEDirectory)
+	}
+	if cfg.ACMECertDir != "/var/lib/jomform/acme" {
+		t.Errorf("ACMECertDir = %q, want default /var/lib/jomform/acme", cfg.ACMECertDir)
+	}
+	if cfg.TLSPort != "8443" {
+		t.Errorf("TLSPort = %q, want default 8443", cfg.TLSPort)
+	}
+}
+
+func TestLoadACMEEnvOverrides(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://localhost/jomform_test")
+	t.Setenv("APP_ENV", "dev")
+	t.Setenv("ACME_EMAIL", "ops@example.com")
+	t.Setenv("ACME_DIRECTORY", "https://acme-staging-v02.api.letsencrypt.org/directory")
+	t.Setenv("ACME_CERT_DIR", "/data/acme")
+	t.Setenv("TLS_PORT", "443")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.ACMEEmail != "ops@example.com" {
+		t.Errorf("ACMEEmail = %q, want ops@example.com", cfg.ACMEEmail)
+	}
+	if cfg.ACMEDirectory != "https://acme-staging-v02.api.letsencrypt.org/directory" {
+		t.Errorf("ACMEDirectory = %q, want staging URL", cfg.ACMEDirectory)
+	}
+	if cfg.ACMECertDir != "/data/acme" {
+		t.Errorf("ACMECertDir = %q, want /data/acme", cfg.ACMECertDir)
+	}
+	if cfg.TLSPort != "443" {
+		t.Errorf("TLSPort = %q, want 443", cfg.TLSPort)
+	}
+}

@@ -27,6 +27,7 @@ import (
 	"github.com/wzul/jomform/api/internal/httpapi"
 	"github.com/wzul/jomform/api/internal/mcpsrv"
 	"github.com/wzul/jomform/api/internal/metrics"
+	"github.com/wzul/jomform/api/internal/tlsmgr"
 	"github.com/wzul/jomform/api/internal/version"
 )
 
@@ -108,6 +109,20 @@ func main() {
 	// Issue #211: share the metrics instance with the HTTP server so the DB
 	// query tracer and HTTP middleware record into the same registry.
 	deps.Metrics = metricsInst
+	// Issue #212: auto-TLS at origin for DNS-only custom domains. Enabled
+	// when ACME_EMAIL is set; otherwise the origin serves plain HTTP and
+	// Cloudflare-proxied domains keep using Cloudflare's edge TLS.
+	var tlsMgr *tlsmgr.Manager
+	if cfg.ACMEEmail != "" {
+		tlsMgr = tlsmgr.New(tlsmgr.Options{
+			Email:     cfg.ACMEEmail,
+			Directory: cfg.ACMEDirectory,
+			CertDir:   cfg.ACMECertDir,
+			Primary:   primaryDomain(cfg.AppBaseURL),
+			Log:       log,
+		})
+		deps.TLS = tlsMgr
+	}
 	if pool != nil {
 		accounts := dbstore.NewAccountStore(pool)
 		deps.Users = dbstore.NewUserStore(pool)
@@ -240,6 +255,8 @@ func main() {
 			LLM: llm.New(cfg.LLMBaseURL, cfg.LLMModel),
 			// Issue #185: BNM exchange-rate cache.
 			Currency: curStore,
+			// Issue #212: auto-TLS at origin for DNS-only custom domains.
+			TLS: tlsMgr,
 		}
 		pay.OnPaid = func(ctx context.Context, accountID, event string, payload map[string]any) {
 			httpapi.DispatchWebhooks(ctx, rest, whStore, accountID, event, payload)
@@ -365,9 +382,25 @@ func main() {
 		}()
 	}
 
+	handler := httpapi.NewServer(cfg, log, deps).Handler()
+	// Issue #212: mount the ACME HTTP-01 challenge handler so the origin can
+	// answer Let's Encrypt challenges for DNS-only custom domains. No-op when
+	// auto-TLS is disabled (tlsMgr nil).
+	if tlsMgr != nil {
+		acmeHandler := tlsMgr.HTTPHandler()
+		base := handler
+		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, "/.well-known/acme-challenge/") {
+				acmeHandler.ServeHTTP(w, r)
+				return
+			}
+			base.ServeHTTP(w, r)
+		})
+	}
+
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           httpapi.NewServer(cfg, log, deps).Handler(),
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,
@@ -384,6 +417,32 @@ func main() {
 		}
 	}()
 
+	// Issue #212: origin TLS listener with SNI-based cert selection. Serves
+	// the same handler over TLS on TLSPort, using autocert to provision +
+	// renew Let's Encrypt certs for verified custom domains (and the primary
+	// domain). Only started when auto-TLS is configured.
+	var tlsSrv *http.Server
+	if tlsMgr != nil {
+		tlsSrv = &http.Server{
+			Addr:              ":" + cfg.TLSPort,
+			Handler:           handler,
+			TLSConfig:         tlsMgr.TLSConfig(),
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       30 * time.Second,
+			WriteTimeout:      60 * time.Second,
+			IdleTimeout:       120 * time.Second,
+		}
+		go func() {
+			log.Info("jomform-api tls starting", "port", cfg.TLSPort)
+			// ListenAndServeTLS with empty cert/key uses the TLSConfig's
+			// GetCertificate (autocert SNI-based selection).
+			if err := tlsSrv.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Error("tls_listen", "err", err)
+				stop()
+			}
+		}()
+	}
+
 	<-ctx.Done()
 	log.Info("shutdown signal received")
 
@@ -391,6 +450,11 @@ func main() {
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Error("shutdown", "err", err)
+	}
+	if tlsSrv != nil {
+		if err := tlsSrv.Shutdown(shutdownCtx); err != nil {
+			log.Error("tls_shutdown", "err", err)
+		}
 	}
 	if sessions != nil {
 		_ = sessions.Close()
@@ -403,6 +467,23 @@ func main() {
 
 // osExit is swappable in tests.
 var osExit = os.Exit
+
+// primaryDomain extracts the bare hostname from an app base URL
+// (e.g. "https://jomform.com" → "jomform.com"). Used as the fallback
+// cert target for the origin auto-TLS listener (issue #212).
+func primaryDomain(appBaseURL string) string {
+	u := strings.TrimSpace(appBaseURL)
+	u = strings.TrimPrefix(u, "https://")
+	u = strings.TrimPrefix(u, "http://")
+	u = strings.TrimSuffix(u, "/")
+	if i := strings.IndexByte(u, '/'); i >= 0 {
+		u = u[:i]
+	}
+	if i := strings.IndexByte(u, ':'); i >= 0 {
+		u = u[:i]
+	}
+	return u
+}
 
 // mustHexKey decodes the 64-char hex ENCRYPTION_KEY into 32 bytes.
 func mustHexKey(hex64 string) []byte {
