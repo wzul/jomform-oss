@@ -900,22 +900,6 @@ export default function Settings() {
               </p>
               <div className="mt-3 flex gap-2">
                 {!cfLinked && (
-                  <a href="/api/cf/start" className="jf-btn-primary inline-block">
-                    {t("set.cfLogin")}
-                  </a>
-                )}
-                {cfLinked && (
-                  <button
-                    onClick={async () => {
-                      await fetch("/api/cf/disconnect", { method: "POST" });
-                      setCfLinked(false);
-                    }}
-                    className="jf-btn-ghost text-slate-600"
-                  >
-                    {t("set.cfDisconnect")}
-                  </button>
-                )}
-                {!cfLinked && (
                   <button
                     onClick={() => { setCfManualOpen(!cfManualOpen); setCfManualErr(""); }}
                     className="jf-btn-ghost text-slate-600"
