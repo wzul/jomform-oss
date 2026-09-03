@@ -13,7 +13,7 @@ import (
 )
 
 type listEventsIn struct {
-	EventName string `json:"event_name,omitempty" jsonschema:"Optional — hadkan kepada satu jenis event (cth: form.created, sale.confirmed, auth.login)"`
+	EventName string `json:"event_name,omitempty" jsonschema:"Optional — hadkan kepada satu jenis event (cth: form.created, sale.confirmed, auth.login). Akhiran '*' = wildcard (cth: mcp.* untuk semua panggilan MCP)."`
 	From      string `json:"from,omitempty" jsonschema:"Optional — RFC3339 mula (cth: 2026-01-01T00:00:00Z)"`
 	To        string `json:"to,omitempty" jsonschema:"Optional — RFC3339 tamat"`
 	Page      int    `json:"page,omitempty" jsonschema:"Muka surat (1-based, default 1)"`

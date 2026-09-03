@@ -104,6 +104,56 @@ func TestEventStoreRecordListCountBreakdown(t *testing.T) {
 	}
 }
 
+// TestEventStoreWildcardFilter (issue #195): the EventName filter supports a
+// trailing "*" wildcard so the dashboard and list_events can query MCP request
+// history (event_name=mcp.*) without enumerating every mcp.* event name.
+func TestEventStoreWildcardFilter(t *testing.T) {
+	ctx := context.Background()
+	p := testPool(t)
+	es := NewEventStore(p)
+
+	acc := uniqueAccount(t, ctx, p)
+
+	// Record a mix of events: two mcp.tool_call rows and one unrelated row.
+	for _, name := range []string{"mcp.tool_call", "mcp.tool_call", "form.created"} {
+		if err := es.Record(ctx, acc, "", name, map[string]any{"tool": "list_products"}, "", ""); err != nil {
+			t.Fatalf("record %s: %v", name, err)
+		}
+	}
+
+	// Wildcard mcp.* matches only the two mcp.tool_call rows.
+	got, total, err := es.List(ctx, EventFilter{AccountIDs: []string{acc}, EventName: "mcp.*", Page: 1, Limit: 10})
+	if err != nil {
+		t.Fatalf("list mcp.*: %v", err)
+	}
+	if total != 2 || len(got) != 2 {
+		t.Fatalf("mcp.* total=%d len=%d, want 2/2", total, len(got))
+	}
+	for _, e := range got {
+		if e.EventName != "mcp.tool_call" {
+			t.Fatalf("wildcard matched %q, want only mcp.tool_call", e.EventName)
+		}
+	}
+
+	// Exact name still matches exactly (no wildcard expansion).
+	exact, total, err := es.List(ctx, EventFilter{AccountIDs: []string{acc}, EventName: "mcp.tool_call", Page: 1, Limit: 10})
+	if err != nil {
+		t.Fatalf("list exact: %v", err)
+	}
+	if total != 2 || len(exact) != 2 {
+		t.Fatalf("exact total=%d len=%d, want 2/2", total, len(exact))
+	}
+
+	// Count honours the wildcard too.
+	n, err := es.Count(ctx, EventFilter{AccountIDs: []string{acc}, EventName: "mcp.*"})
+	if err != nil {
+		t.Fatalf("count mcp.*: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("count mcp.* = %d, want 2", n)
+	}
+}
+
 // TestEventStoreSweep verifies the retention sweep deletes old rows and keeps
 // audit-class rows that fall under their longer per-class TTL.
 func TestEventStoreSweep(t *testing.T) {

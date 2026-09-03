@@ -91,6 +91,11 @@ type AuthIdentity struct {
 	// APIKey is non-nil only when authenticated via a Bearer API key. It is
 	// needed by the revoke_api_key tool to refuse revoking the live key.
 	APIKey *dbstore.APIKey
+	// Agent is the human-readable name of the connected MCP client (issue
+	// #195). For OAuth clients it is the registered client_name; for API-key
+	// auth it is the key's name. Empty when unknown. Recorded on every
+	// mcp.tool_call event so the dashboard can show which agent made a call.
+	Agent string
 }
 
 // WithAPIKey stores an authenticated API key's identity in ctx.
@@ -99,15 +104,18 @@ func WithAPIKey(ctx context.Context, key *dbstore.APIKey) context.Context {
 		AccountID: key.AccountID,
 		Scopes:    key.Scopes,
 		APIKey:    key,
+		Agent:     key.Name,
 	})
 }
 
 // WithOAuthToken stores an OAuth access token's identity in ctx. OAuth tokens
-// grant read+write (readwrite) scope, mirroring an admin API key.
-func WithOAuthToken(ctx context.Context, accountID string) context.Context {
+// grant read+write (readwrite) scope, mirroring an admin API key. agent is the
+// registered client_name of the connected MCP client (issue #195).
+func WithOAuthToken(ctx context.Context, accountID, agent string) context.Context {
 	return WithAuthIdentity(ctx, &AuthIdentity{
 		AccountID: accountID,
 		Scopes:    []string{"readwrite"},
+		Agent:     agent,
 	})
 }
 

@@ -10,6 +10,7 @@ package dbstore
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -61,12 +62,21 @@ func (s *EventStore) Record(ctx context.Context, accountID, userID, eventName st
 
 // eventWhere builds the WHERE clause + args for an account-scoped filter.
 // Returns the clause (with leading " WHERE ") and the bound args.
+//
+// EventName supports a trailing "*" wildcard (e.g. "mcp.*" matches every
+// mcp.tool_call row) so the dashboard and list_events can filter MCP request
+// history (issue #195). A plain name matches exactly.
 func eventWhere(f EventFilter) (string, []any) {
 	args := []any{f.AccountIDs}
 	clause := " WHERE account_id = ANY($1)"
 	if f.EventName != "" {
-		args = append(args, f.EventName)
-		clause += " AND event_name = $" + itoa(len(args))
+		if strings.HasSuffix(f.EventName, "*") {
+			args = append(args, strings.TrimSuffix(f.EventName, "*")+"%")
+			clause += " AND event_name LIKE $" + itoa(len(args))
+		} else {
+			args = append(args, f.EventName)
+			clause += " AND event_name = $" + itoa(len(args))
+		}
 	}
 	if f.From != nil {
 		args = append(args, *f.From)

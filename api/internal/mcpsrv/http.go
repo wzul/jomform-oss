@@ -20,7 +20,7 @@ import (
 // server instance carries the authenticated account's identity.
 func (s *Server) HTTPHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		accountID, scopes, apikey, ok := s.authenticate(r)
+		accountID, scopes, apikey, agent, ok := s.authenticate(r)
 		if !ok {
 			http.Error(w, `{"error":"token tidak sah"}`, http.StatusUnauthorized)
 			return
@@ -34,6 +34,7 @@ func (s *Server) HTTPHandler() http.Handler {
 			AccountID: accountID,
 			Scopes:    scopes,
 			APIKey:    apikey,
+			Agent:     agent,
 		})
 		handler.ServeHTTP(w, r.WithContext(ctx))
 	})
@@ -42,16 +43,18 @@ func (s *Server) HTTPHandler() http.Handler {
 // authenticate extracts and validates the Bearer credential. It returns the
 // resolved account identity. `apikey` is non-nil only for API-key auth (used
 // by the revoke_api_key tool); for OAuth-token auth it is nil and scopes are
-// readwrite (OAuth tokens mirror an admin key). ok=false on any failure.
-func (s *Server) authenticate(r *http.Request) (accountID string, scopes []string, apikey *dbstore.APIKey, ok bool) {
+// readwrite (OAuth tokens mirror an admin key). `agent` is the connected MCP
+// client's display name (issue #195): the API key's name, or the OAuth
+// client's registered client_name. ok=false on any failure.
+func (s *Server) authenticate(r *http.Request) (accountID string, scopes []string, apikey *dbstore.APIKey, agent string, ok bool) {
 	header := r.Header.Get("Authorization")
 	const prefix = "Bearer "
 	if !strings.HasPrefix(header, prefix) {
-		return "", nil, nil, false
+		return "", nil, nil, "", false
 	}
 	raw := strings.TrimSpace(strings.TrimPrefix(header, prefix))
 	if raw == "" {
-		return "", nil, nil, false
+		return "", nil, nil, "", false
 	}
 
 	// 1. OAuth access token (issue #121) — checked first so an opaque access
@@ -61,16 +64,22 @@ func (s *Server) authenticate(r *http.Request) (accountID string, scopes []strin
 		if t, err := s.deps.OAuth.AccessTokenByHash(r.Context(), auth.HashAPIKey(raw)); err == nil {
 			// Fire-and-forget usage stamp.
 			go s.deps.OAuth.Touch(context.Background(), auth.HashAPIKey(raw))
-			return t.AccountID, t.Scope, nil, true
+			// Resolve the registered client name so mcp.tool_call events can
+			// attribute the call to the connected agent (issue #195).
+			agent := ""
+			if c, cerr := s.deps.OAuth.ClientByID(r.Context(), t.ClientID); cerr == nil {
+				agent = c.Name
+			}
+			return t.AccountID, t.Scope, nil, agent, true
 		}
 	}
 
 	// 2. API key (existing behaviour, unchanged).
 	key, err := s.deps.Keys.LookupByKeyHash(r.Context(), auth.HashAPIKey(raw))
 	if err != nil {
-		return "", nil, nil, false
+		return "", nil, nil, "", false
 	}
 	// Fire-and-forget usage stamp.
 	go s.deps.Keys.Touch(context.Background(), key.ID)
-	return key.AccountID, key.Scopes, key, true
+	return key.AccountID, key.Scopes, key, key.Name, true
 }
