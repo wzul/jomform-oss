@@ -35,6 +35,11 @@ type SaleItem struct {
 	Name      string `json:"name"`
 	PriceSen  int64  `json:"price_sen"`
 	Qty       int64  `json:"qty"`
+	// VariationID and VariationName record which variation was bought (issue
+	// #153). Empty for simple products. Persisted on the sale so the receipt
+	// and merchant sales view show which variation was purchased.
+	VariationID   string `json:"variation_id,omitempty"`
+	VariationName string `json:"variation_name,omitempty"`
 }
 
 // Sale models the sales table.

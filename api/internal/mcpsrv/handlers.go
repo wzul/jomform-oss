@@ -14,17 +14,19 @@ import (
 // ─── Products ────────────────────────────────────────────────────────────────
 
 type productOut struct {
-	ID                  string   `json:"id"`
-	Name                string   `json:"name"`
-	Description         string   `json:"description,omitempty"`
-	PriceSen            int64    `json:"price_sen"`
-	Images              []string `json:"images,omitempty"`
-	Type                string   `json:"type"`
-	BillingPeriod       string   `json:"billing_period,omitempty"`
-	TrialDays           int      `json:"trial_days"`
-	SubscriptionCharges *int     `json:"subscription_charges,omitempty"` // nil = infinite
-	Active              bool     `json:"active"`
-	Stock               *int     `json:"stock,omitempty"`
+	ID                  string         `json:"id"`
+	Name                string         `json:"name"`
+	Description         string         `json:"description,omitempty"`
+	PriceSen            int64          `json:"price_sen"`
+	Images              []string       `json:"images,omitempty"`
+	Type                string         `json:"type"`
+	BillingPeriod       string         `json:"billing_period,omitempty"`
+	TrialDays           int            `json:"trial_days"`
+	SubscriptionCharges *int           `json:"subscription_charges,omitempty"` // nil = infinite
+	Active              bool           `json:"active"`
+	Stock               *int           `json:"stock,omitempty"`
+	// Issue #153: variations for variable products (empty for simple products).
+	Variations []variationOut `json:"variations,omitempty"`
 }
 
 type emptyIn struct{}
@@ -40,12 +42,19 @@ func (s *Server) listProducts(ctx context.Context, _ *mcp.CallToolRequest, _ emp
 	}
 	out := make([]productOut, 0, len(products))
 	for _, p := range products {
-		out = append(out, productOut{
+		o := productOut{
 			ID: p.ID, Name: p.Name, Description: p.Description, PriceSen: p.PriceSen,
 			Images: p.Images, Type: p.Type, BillingPeriod: p.BillingPeriod,
 			TrialDays: p.TrialDays, Active: p.Active, Stock: p.Stock,
 			SubscriptionCharges: p.SubscriptionCharges,
-		})
+		}
+		// Issue #153: include variations for variable products.
+		if s.deps.ProductVariations != nil {
+			if vs, verr := s.deps.ProductVariations.ListByProduct(ctx, p.ID); verr == nil {
+				o.Variations = toVariationOuts(vs)
+			}
+		}
+		out = append(out, o)
 	}
 	return nil, out, nil
 }
@@ -135,10 +144,17 @@ func (s *Server) createProduct(ctx context.Context, _ *mcp.CallToolRequest, in c
 			return nil, productOut{}, fmt.Errorf("db: %w", err)
 		}
 	}
-	return nil, productOut{ID: p.ID, Name: p.Name, Description: p.Description,
+	out := productOut{ID: p.ID, Name: p.Name, Description: p.Description,
 		Images: p.Images, PriceSen: p.PriceSen, Type: p.Type,
 		BillingPeriod: p.BillingPeriod, TrialDays: p.TrialDays, Active: true,
-		Stock: p.Stock, SubscriptionCharges: p.SubscriptionCharges}, nil
+		Stock: p.Stock, SubscriptionCharges: p.SubscriptionCharges}
+	// Issue #153: return the persisted variations so the caller sees them.
+	if s.deps.ProductVariations != nil {
+		if vs, verr := s.deps.ProductVariations.ListByProduct(ctx, p.ID); verr == nil {
+			out.Variations = toVariationOuts(vs)
+		}
+	}
+	return nil, out, nil
 }
 
 type archiveProductIn struct {
@@ -158,6 +174,16 @@ func (s *Server) archiveProduct(ctx context.Context, _ *mcp.CallToolRequest, in 
 
 // ─── Sales ───────────────────────────────────────────────────────────────────
 
+type saleItemOut struct {
+	ProductID string `json:"product_id"`
+	Name      string `json:"name"`
+	PriceSen  int64  `json:"price_sen"`
+	Qty       int64  `json:"qty"`
+	// Issue #153: which variation was bought (empty for simple products).
+	VariationID   string `json:"variation_id,omitempty"`
+	VariationName string `json:"variation_name,omitempty"`
+}
+
 type saleOut struct {
 	RefCode   string `json:"ref_code"`
 	Status    string `json:"status"`
@@ -165,6 +191,8 @@ type saleOut struct {
 	SaleType  string `json:"sale_type"`
 	Client    string `json:"client"`
 	CreatedAt string `json:"created_at"`
+	// Issue #153: line items (with variation) so agents see what was bought.
+	Items []saleItemOut `json:"items,omitempty"`
 }
 
 type listSalesIn struct {
@@ -194,11 +222,22 @@ func (s *Server) listSales(ctx context.Context, _ *mcp.CallToolRequest, in listS
 	}
 	out := make([]saleOut, 0, len(sales))
 	for _, sl := range sales {
-		out = append(out, saleOut{
+		o := saleOut{
 			RefCode: sl.RefCode, Status: sl.Status, TotalSen: sl.TotalSen,
 			SaleType: sl.SaleType, Client: sl.Client.FullName,
 			CreatedAt: sl.CreatedAt.UTC().Format(time.RFC3339),
-		})
+		}
+		// Issue #153: include line items (with variation) for parity.
+		if len(sl.Items) > 0 {
+			o.Items = make([]saleItemOut, 0, len(sl.Items))
+			for _, it := range sl.Items {
+				o.Items = append(o.Items, saleItemOut{
+					ProductID: it.ProductID, Name: it.Name, PriceSen: it.PriceSen, Qty: it.Qty,
+					VariationID: it.VariationID, VariationName: it.VariationName,
+				})
+			}
+		}
+		out = append(out, o)
 	}
 	return nil, out, nil
 }

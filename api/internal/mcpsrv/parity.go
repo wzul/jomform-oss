@@ -136,14 +136,7 @@ func (s *Server) listProductVariations(
 	if err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
-	out := make([]variationOut, 0, len(vs))
-	for _, v := range vs {
-		out = append(out, variationOut{
-			ID: v.ID, Name: v.Name, PriceSen: v.PriceSen, Stock: v.Stock,
-			Images: v.Images, SortOrder: v.SortOrder,
-		})
-	}
-	return nil, out, nil
+	return nil, toVariationOuts(vs), nil
 }
 
 // variationOut is the MCP output shape for one product variation.
@@ -154,6 +147,21 @@ type variationOut struct {
 	Stock     *int     `json:"stock,omitempty"`
 	Images    []string `json:"images,omitempty"`
 	SortOrder int      `json:"sort_order"`
+}
+
+// toVariationOuts maps store variations to the MCP output shape.
+func toVariationOuts(vs []*dbstore.ProductVariation) []variationOut {
+	if len(vs) == 0 {
+		return nil
+	}
+	out := make([]variationOut, 0, len(vs))
+	for _, v := range vs {
+		out = append(out, variationOut{
+			ID: v.ID, Name: v.Name, PriceSen: v.PriceSen, Stock: v.Stock,
+			Images: v.Images, SortOrder: v.SortOrder,
+		})
+	}
+	return out
 }
 
 // ── Forms upsert + publish + delete ─────────────────────────────────────

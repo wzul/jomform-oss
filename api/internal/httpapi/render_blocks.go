@@ -44,6 +44,15 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 		nameOf[p.ID] = p.Name
 	}
 
+	// variationView is the buyer-facing shape of one product variation.
+	type variationView struct {
+		ID       string
+		Name     string
+		PriceSen int64
+		Stock    *int
+		SoldOut  bool
+	}
+
 	type blockView struct {
 		Type, Value, Src string
 		ProductID        string
@@ -51,7 +60,12 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 		Required         bool
 		HasPrice         bool
 		CondJSON         string
+		// Variations (issue #153): when a product has >=1 variation, render a
+		// selector instead of a single price/stock. Each carries its own price
+		// and stock; sold-out variations are disabled.
+		Variations []variationView
 	}
+
 	blocks := make([]blockView, 0, len(cfg.Blocks))
 	for _, b := range cfg.Blocks {
 		vb := blockView{Type: b.Type, Value: b.Value, Src: b.Src, ProductID: b.ProductID, Required: b.Required}
@@ -63,6 +77,17 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 			}
 			if vb.Value == "" {
 				vb.Value = nameOf[b.ProductID]
+			}
+			// Issue #153: load the product's variations for the selector.
+			if h.ProductVariations != nil {
+				if vs, verr := h.ProductVariations.ListByProduct(r.Context(), b.ProductID); verr == nil && len(vs) > 0 {
+					for _, v := range vs {
+						vb.Variations = append(vb.Variations, variationView{
+							ID: v.ID, Name: v.Name, PriceSen: v.PriceSen, Stock: v.Stock,
+							SoldOut: v.Stock != nil && *v.Stock <= 0,
+						})
+					}
+				}
 			}
 		}
 		blocks = append(blocks, vb)
@@ -150,6 +175,11 @@ var blockTmpl = template.Must(template.New("blocks").
   .pname { flex:1; font-weight:500; }
   .price { color:#4f46e5; font-weight:600; font-size:14px; white-space:nowrap;
            margin-left:auto; text-align:right; }
+  /* Issue #153: variation selector inside a product block. */
+  .varwrap { padding:0 14px 12px; }
+  .varwrap select { width:100%; padding:9px 10px; border-radius:8px;
+           border:1px solid #e6e8ec; background:#ffffff; color:#17181c; font-size:14px; }
+  .varstock { font-size:12px; color:#6b7280; margin-top:6px; }
   .lbl { display:block; font-size:12px; color:#6b7280; margin:12px 0 4px; }
   .chk { display:flex; align-items:center; gap:8px; font-size:14px; margin:8px 0; color:#374151; }
   .chk input[type=checkbox] { margin:0; }
@@ -170,7 +200,7 @@ var blockTmpl = template.Must(template.New("blocks").
 {{if eq .Type "text"}}  <p class="text">{{.Value}}</p>
 {{else if eq .Type "image"}}{{if .Src}}  <img class="img" src="{{.Src}}" alt="">
 {{end}}{{else if eq .Type "divider"}}  <hr>
-{{else if eq .Type "product"}}  <div class="prod"><label><input type="checkbox" class="p" data-id="{{.ProductID}}" data-price="{{.PriceSen}}"><span class="pname">{{.Value}}</span><span class="price">{{if .HasPrice}}RM{{printf "%.2f" (divf .PriceSen 100)}}{{end}}</span></label></div>
+{{else if eq .Type "product"}}  <div class="prod"><label><input type="checkbox" class="p" data-id="{{.ProductID}}" data-price="{{.PriceSen}}"><span class="pname">{{.Value}}</span><span class="price">{{if .HasPrice}}RM{{printf "%.2f" (divf .PriceSen 100)}}{{end}}</span></label>{{if .Variations}}<div class="varwrap"><select class="v" data-id="{{.ProductID}}"><option value="" disabled selected>{{$.Ls.SelectVariation}}</option>{{range .Variations}}<option value="{{.ID}}" data-price="{{.PriceSen}}"{{if .SoldOut}} disabled{{end}}>{{.Name}} — RM{{printf "%.2f" (divf .PriceSen 100)}}{{if .Stock}} ({{.Stock}} {{$.Ls.InStock}}){{end}}</option>{{end}}</select><div class="varstock"></div></div>{{end}}</div>
 {{else if eq .Type "name"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="text" name="full_name"{{if .Required}} required{{end}}>
 {{else if eq .Type "email"}}  <label class="lbl">{{$.Ls.EmailLabel}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="email" name="email" required>
 {{else if eq .Type "phone"}}  <label class="lbl">{{.Value}}</label><input type="tel" name="phone">
@@ -185,13 +215,33 @@ var blockTmpl = template.Must(template.New("blocks").
 <script>
 (function(){
   var boxes=document.querySelectorAll('.p');
-  function upd(){var t=0;boxes.forEach(function(b){if(b.checked)t+=Number(b.dataset.price||0)});
+  // Issue #153: variation selectors. Each variable product has a <select class="v">
+  // whose options carry data-price; sold-out options are disabled server-side.
+  var sels=document.querySelectorAll('select.v');
+  function effPrice(b){
+    var sel=document.querySelector('select.v[data-id="'+b.dataset.id+'"]');
+    if(sel&&sel.value){var o=sel.options[sel.selectedIndex];if(o&&o.dataset.price)return Number(o.dataset.price);}
+    return Number(b.dataset.price||0);
+  }
+  function upd(){var t=0;boxes.forEach(function(b){if(b.checked)t+=effPrice(b)});
     document.getElementById('total').textContent='RM'+(t/100).toFixed(2);}
   boxes.forEach(function(b){b.addEventListener('change',upd)});
+  sels.forEach(function(s){s.addEventListener('change',upd)});
   document.getElementById('of').addEventListener('submit',function(e){
     e.preventDefault();
-    var items=[];boxes.forEach(function(b){if(b.checked)items.push({product_id:b.dataset.id,quantity:1})});
+    var items=[];var ok=true;
+    boxes.forEach(function(b){
+      if(!b.checked)return;
+      var sel=document.querySelector('select.v[data-id="'+b.dataset.id+'"]');
+      var item={product_id:b.dataset.id,quantity:1};
+      if(sel){
+        if(!sel.value){ok=false;return;}
+        item.variation_id=sel.value;
+      }
+      items.push(item);
+    });
     if(!items.length){alert('{{.Ls.NoProductAlert}}');return;}
+    if(!ok){alert('{{.Ls.SelectVariationAlert}}');return;}
     var body={client:{full_name:(e.target.full_name||{}).value||(document.querySelector('[name=full_name]')||{}).value||'',
       email:(document.querySelector('[name=email]')||{}).value||'',
       phone:(document.querySelector('[name=phone]')||{}).value||''},

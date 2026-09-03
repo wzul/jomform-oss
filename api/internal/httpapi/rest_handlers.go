@@ -736,6 +736,9 @@ type itemRow struct {
 	PriceSen  int64  `json:"price_sen"`
 	Qty       int64  `json:"qty"`
 	Name      string `json:"name"`
+	// Issue #153: which variation was bought (empty for simple products).
+	VariationID   string `json:"variation_id,omitempty"`
+	VariationName string `json:"variation_name,omitempty"`
 }
 
 // latestEmailStatuses returns, for each sale ref, the most recent delivery
@@ -798,6 +801,8 @@ func toSaleRow(s *dbstore.Sale, emailStatus string) saleRow {
 				PriceSen:  it.PriceSen,
 				Qty:       it.Qty,
 				Name:      it.Name,
+				VariationID:   it.VariationID,
+				VariationName: it.VariationName,
 			})
 		}
 		row.Items = items

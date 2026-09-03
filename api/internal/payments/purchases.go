@@ -226,11 +226,17 @@ func (s *Service) activateSubscription(ctx context.Context, sale *dbstore.Sale) 
 	return s.Subs.AddCharge(ctx, newSub.ID, "", sale.TotalSen, dbstore.ChargePending, 0)
 }
 
-// itemsSummary renders "2× Tee RM45.00, 1× Cap RM25.00"-style text.
+// itemsSummary renders "2× Tee RM45.00, 1× Cap RM25.00"-style text. When a
+// variation was bought (issue #153) the variation name is appended so the
+// receipt shows which variation was purchased, e.g. "1× Tee (Size M)".
 func itemsSummary(items []dbstore.SaleItem) string {
 	parts := make([]string, 0, len(items))
 	for _, it := range items {
-		parts = append(parts, fmt.Sprintf("%d× %s", it.Qty, it.Name))
+		label := it.Name
+		if it.VariationName != "" {
+			label = it.Name + " (" + it.VariationName + ")"
+		}
+		parts = append(parts, fmt.Sprintf("%d× %s", it.Qty, label))
 	}
 	return strings.Join(parts, ", ")
 }

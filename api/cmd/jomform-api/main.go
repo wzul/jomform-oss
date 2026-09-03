@@ -228,7 +228,8 @@ func main() {
 		// Public order-form renderer + submit.
 		deps.Public = &httpapi.PublicHandlers{
 			Forms: formsStore, Sales: sales, Accounts: accounts,
-			Products: products, Pay: pay, BaseURL: cfg.AppBaseURL,
+			Products: products, ProductVariations: dbstore.NewProductVariationStore(pool),
+			Pay: pay, BaseURL: cfg.AppBaseURL,
 			SystemSettings: dbstore.NewSystemSettingStore(pool),
 			Spaces:         spacesStore,
 		}

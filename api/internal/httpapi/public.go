@@ -21,14 +21,15 @@ import (
 
 // PublicHandlers serves buyer-facing order forms.
 type PublicHandlers struct {
-	Forms          *dbstore.FormStore
-	Sales          *dbstore.SaleStore
-	Accounts       *dbstore.AccountStore
-	Products       *dbstore.ProductStore
-	Pay            *payments.Service
-	SystemSettings *dbstore.SystemSettingStore
-	Spaces         *dbstore.SpaceStore
-	BaseURL        string
+	Forms              *dbstore.FormStore
+	Sales              *dbstore.SaleStore
+	Accounts           *dbstore.AccountStore
+	Products           *dbstore.ProductStore
+	ProductVariations  *dbstore.ProductVariationStore
+	Pay                *payments.Service
+	SystemSettings     *dbstore.SystemSettingStore
+	Spaces             *dbstore.SpaceStore
+	BaseURL            string
 }
 
 // RegisterRoutes wires public endpoints.
@@ -84,8 +85,9 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 			Phone    string `json:"phone"`
 		} `json:"client"`
 		Items []struct {
-			ProductID string `json:"product_id"`
-			Quantity  int64  `json:"quantity"`
+			ProductID   string `json:"product_id"`
+			VariationID string `json:"variation_id"`
+			Quantity    int64  `json:"quantity"`
 		} `json:"items"`
 		PaymentMethod string `json:"payment_method"`         // chip | bank_direct
 		SkipCapture   bool   `json:"skip_capture,omitempty"` // authorize now, capture later
@@ -128,10 +130,39 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		if qty < 1 {
 			qty = 1
 		}
-		sale.Items = append(sale.Items, dbstore.SaleItem{ProductID: it.ProductID, Name: name, PriceSen: price, Qty: qty})
-		subtotal += price * qty
-		// Inventory: limited-stock products decrement atomically; SOLD OUT rejects.
-		if h.Products != nil {
+		item := dbstore.SaleItem{ProductID: it.ProductID, Name: name, PriceSen: price, Qty: qty}
+		// Issue #153: when the buyer chose a variation, validate it belongs to
+		// the product, use the variation's price, and decrement the variation's
+		// stock (not the product-level stock). The variation is persisted on the
+		// sale so the receipt/merchant view shows which variation was bought.
+		if it.VariationID != "" {
+			if h.ProductVariations == nil {
+				writeErr(w, http.StatusBadRequest, "variasi tidak sah: "+it.VariationID)
+				return
+			}
+			v, verr := h.ProductVariations.GetByProduct(r.Context(), it.ProductID, it.VariationID)
+			if verr != nil {
+				if verr == dbstore.ErrVariationNotFound {
+					writeErr(w, http.StatusBadRequest, "variasi tidak sah: "+it.VariationID)
+					return
+				}
+				respondErr(w, r, verr)
+				return
+			}
+			item.PriceSen = v.PriceSen
+			item.VariationID = v.ID
+			item.VariationName = v.Name
+			// Inventory: limited-stock variations decrement atomically; SOLD OUT rejects.
+			if err := h.ProductVariations.DecrementStock(r.Context(), v.ID, int(qty)); err != nil {
+				if err == dbstore.ErrOutOfStock {
+					writeErr(w, http.StatusConflict, "stok habis untuk "+name+" ("+v.Name+")")
+					return
+				}
+				respondErr(w, r, err)
+				return
+			}
+		} else if h.Products != nil {
+			// Simple product: decrement product-level stock atomically.
 			if err := h.Products.DecrementStock(r.Context(), it.ProductID, int(qty)); err != nil {
 				if err == dbstore.ErrOutOfStock {
 					writeErr(w, http.StatusConflict, "stok habis untuk "+name)
@@ -141,6 +172,8 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		sale.Items = append(sale.Items, item)
+		subtotal += item.PriceSen * qty
 	}
 	sale.SubtotalSen = subtotal
 	// Issue #99 money invariant: total_sen = subtotal + shipping - discount.

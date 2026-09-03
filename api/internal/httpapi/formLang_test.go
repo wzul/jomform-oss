@@ -90,7 +90,7 @@ func TestValidFormLang(t *testing.T) {
 // Every dictionary carries all system strings (no empty translations that
 // could leak a blank label onto a buyer-facing form).
 func TestFormLangsCompleteness(t *testing.T) {
-	fields := []string{"EmailLabel", "CouponLabel", "Total", "Submit", "ErrorAlert", "NoProductAlert"}
+	fields := []string{"EmailLabel", "CouponLabel", "Total", "Submit", "ErrorAlert", "NoProductAlert", "SelectVariation", "SelectVariationAlert", "InStock"}
 	if len(formLangs) != 5 {
 		t.Fatalf("formLangs has %d entries, want 5", len(formLangs))
 	}
@@ -126,6 +126,18 @@ func TestFormLangsCompleteness(t *testing.T) {
 			case "NoProductAlert":
 				if ls.NoProductAlert == "" {
 					t.Errorf("lang %q has empty NoProductAlert", code)
+				}
+			case "SelectVariation":
+				if ls.SelectVariation == "" {
+					t.Errorf("lang %q has empty SelectVariation", code)
+				}
+			case "SelectVariationAlert":
+				if ls.SelectVariationAlert == "" {
+					t.Errorf("lang %q has empty SelectVariationAlert", code)
+				}
+			case "InStock":
+				if ls.InStock == "" {
+					t.Errorf("lang %q has empty InStock", code)
 				}
 			}
 		}

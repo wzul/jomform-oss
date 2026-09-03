@@ -2,8 +2,10 @@ package dbstore
 
 import (
 	"context"
+	"errors"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -85,4 +87,53 @@ func (s *ProductVariationStore) ReplaceAll(ctx context.Context, productID string
 func (s *ProductVariationStore) DeleteByProduct(ctx context.Context, productID string) error {
 	_, err := s.pool.Exec(ctx, `DELETE FROM product_variations WHERE product_id=$1`, productID)
 	return err
+}
+
+// GetByProduct fetches a single variation scoped to its product. Returns
+// ErrVariationNotFound when the variation does not exist or does not belong
+// to the given product. Used by the buyer submit path to validate that a
+// chosen variation_id really belongs to the product being bought.
+func (s *ProductVariationStore) GetByProduct(ctx context.Context, productID, variationID string) (*ProductVariation, error) {
+	v := &ProductVariation{}
+	err := s.pool.QueryRow(ctx,
+		`SELECT id, product_id, name, price_sen, stock, images, sort_order, created_at
+		 FROM product_variations WHERE id=$1 AND product_id=$2`, variationID, productID).
+		Scan(&v.ID, &v.ProductID, &v.Name, &v.PriceSen, &v.Stock,
+			&v.Images, &v.SortOrder, &v.CreatedAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrVariationNotFound
+		}
+		return nil, err
+	}
+	return v, nil
+}
+
+// ErrVariationNotFound rejects a submit that names a variation which does not
+// exist or does not belong to the product being bought.
+var ErrVariationNotFound = errors.New("variation not found")
+
+// DecrementStock atomically reduces a variation's stock for a limited
+// variation. Returns ErrOutOfStock when the variation is sold out. Unlimited
+// (NULL) always ok. The WHERE guard (stock >= $3) makes the decrement
+// race-safe: two concurrent buyers can never oversell a single unit.
+func (s *ProductVariationStore) DecrementStock(ctx context.Context, variationID string, qty int) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE product_variations SET stock = stock - $2
+		 WHERE id=$1 AND stock IS NOT NULL AND stock >= $2`, variationID, qty)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		// either unlimited variation (fine) or insufficient stock
+		var stock *int
+		if err := s.pool.QueryRow(ctx,
+			`SELECT stock FROM product_variations WHERE id=$1`, variationID).Scan(&stock); err != nil {
+			return err
+		}
+		if stock != nil && *stock < qty {
+			return ErrOutOfStock
+		}
+	}
+	return nil
 }

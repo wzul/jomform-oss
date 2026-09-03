@@ -22,6 +22,9 @@ type Item = {
   price_sen: number;
   qty: number;
   name: string;
+  // Issue #153: which variation was bought (empty for simple products).
+  variation_id?: string;
+  variation_name?: string;
 };
 
 type Sale = {
@@ -443,7 +446,7 @@ function SalesPageInner() {
                   </td>
                   <td className="max-w-40 truncate px-2 py-3 text-xs text-[var(--jf-muted)]">
                     {Array.isArray(s.items) && s.items.length
-                      ? s.items.map((i) => `${i.qty}× ${i.name}`).join(", ")
+                      ? s.items.map((i) => `${i.qty}× ${i.name}${i.variation_name ? ` (${i.variation_name})` : ""}`).join(", ")
                       : "—"}
                   </td>
                   <td className="whitespace-nowrap px-2 py-3 text-xs font-semibold">{money(s.total_sen)}</td>
@@ -619,7 +622,12 @@ function SalesPageInner() {
                     <tbody>
                       {detail.items.map((i, idx) => (
                         <tr key={idx} className="border-b border-[var(--jf-border)] last:border-0">
-                          <td className="py-1.5">{i.name}</td>
+                          <td className="py-1.5">
+                            {i.name}
+                            {i.variation_name ? (
+                              <span className="ml-1 text-xs text-[var(--jf-muted)]">({i.variation_name})</span>
+                            ) : null}
+                          </td>
                           <td className="py-1.5 text-right text-[var(--jf-muted)]">{i.qty}</td>
                           <td className="py-1.5 text-right font-medium">{money(i.price_sen * i.qty)}</td>
                         </tr>

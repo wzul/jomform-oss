@@ -23,6 +23,10 @@ type langStrings struct {
 	ErrorAlert     string
 	NoProductAlert string
 	Required       string
+	// Issue #153: variation selector strings.
+	SelectVariation      string
+	SelectVariationAlert string
+	InStock              string
 }
 
 // formLangs maps every supported language code to its buyer-facing strings.
@@ -33,26 +37,31 @@ var formLangs = map[string]langStrings{
 		Lang: "en", EmailLabel: "Email", CouponLabel: "Coupon",
 		Total: "Total", Submit: "Proceed to Payment", ErrorAlert: "Error",
 		NoProductAlert: "Please select at least one product",
+		SelectVariation: "Select an option", SelectVariationAlert: "Please choose a variation for each product", InStock: "in stock",
 	},
 	"ms": {
 		Lang: "ms", EmailLabel: "Emel", CouponLabel: "Kod kupon",
 		Total: "Jumlah", Submit: "Teruskan ke Pembayaran", ErrorAlert: "Ralat",
 		NoProductAlert: "Pilih sekurang-kurangnya satu produk",
+		SelectVariation: "Pilih variasi", SelectVariationAlert: "Sila pilih variasi untuk setiap produk", InStock: "stok",
 	},
 	"zh": {
 		Lang: "zh", EmailLabel: "电子邮件", CouponLabel: "优惠券",
 		Total: "总计", Submit: "前往付款", ErrorAlert: "错误",
 		NoProductAlert: "请至少选择一种商品",
+		SelectVariation: "请选择规格", SelectVariationAlert: "请为每件商品选择规格", InStock: "有货",
 	},
 	"ta": {
 		Lang: "ta", EmailLabel: "மின்னஞ்சல்", CouponLabel: "கூப்பன்",
 		Total: "மொத்தம்", Submit: "கட்டணத்திற்குச் செல்லவும்", ErrorAlert: "பிழை",
 		NoProductAlert: "குறைந்தது ஒரு பொருளையாவது தேர்ந்தெடுக்கவும்",
+		SelectVariation: "மாறுபாட்டைத் தேர்ந்தெடுக்கவும்", SelectVariationAlert: "ஒவ்வொரு பொருளுக்கும் மாறுபாட்டைத் தேர்ந்தெடுக்கவும்", InStock: "கையிருப்பு",
 	},
 	"ar": {
 		Lang: "ar", EmailLabel: "البريد الإلكتروني", CouponLabel: "قسيمة",
 		Total: "المجموع", Submit: "الانتقال إلى الدفع", ErrorAlert: "خطأ",
 		NoProductAlert: "يرجى اختيار منتج واحد على الأقل",
+		SelectVariation: "اختر خيارًا", SelectVariationAlert: "يرجى اختيار خيار لكل منتج", InStock: "متوفر",
 	},
 }
 
