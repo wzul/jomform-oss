@@ -226,6 +226,15 @@ func (s *Server) registerTools() {
 		Name:        "set_space_settings",
 		Description: "Set tetapan storefront space: footer_text, company_reg, privacy_url/terms_url/refund_url (mesti https://), contact_phone, contact_address, business_name, menu_json. Omit medan = kekal.",
 	}, s.setSpaceSettings)
+	// Issue #185: per-space currency + BNM rates (MCP parity).
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "get_currency_rates",
+		Description: "Kadar tukaran wang BNM (Ringgit per unit mata wang asing), dicache harian. Guna untuk paparan/penukaran amaun baharu.",
+	}, s.getCurrencyRates)
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "set_space_currency",
+		Description: "Set mata wang space (default MYR). Perubahan terpakai pada produk/jualan baharu; jualan lama kekal mata wang asal (tidak ditukar balik).",
+	}, s.setSpaceCurrency)
 	// Issue #161: space membership + invites (admin only).
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "invite_space_member",

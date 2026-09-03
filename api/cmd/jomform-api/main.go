@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/wzul/jomform/api/internal/chip"
+	"github.com/wzul/jomform/api/internal/currency"
 	"github.com/wzul/jomform/api/internal/llm"
 	"github.com/wzul/jomform/api/internal/payments"
 
@@ -75,6 +76,14 @@ func main() {
 			osExit(1)
 		}
 		log.Warn("continuing without valkey (dev mode)")
+	}
+
+	// Issue #185: BNM exchange-rate cache (Valkey). The daily job below
+	// refreshes it; the REST/MCP endpoints read from it. Nil when Valkey is
+	// absent (dev mode) — endpoints then return empty rates.
+	var curStore *currency.Store
+	if sessions != nil {
+		curStore = currency.New(sessions.Client(), log)
 	}
 
 	// AES-GCM key for at-rest encryption AND email-verification link signing.
@@ -221,6 +230,8 @@ func main() {
 			Media: mediaStore,
 			// Issue #184: LLM client for auto-generating legal pages.
 			LLM: llm.New(cfg.LLMBaseURL, cfg.LLMModel),
+			// Issue #185: BNM exchange-rate cache.
+			Currency: curStore,
 		}
 		pay.OnPaid = func(ctx context.Context, accountID, event string, payload map[string]any) {
 			httpapi.DispatchWebhooks(ctx, rest, whStore, accountID, event, payload)
@@ -243,6 +254,8 @@ func main() {
 			Submissions: submissionsStore,
 			// Issue #180: media library tool.
 			Media: mediaStore,
+			// Issue #185: BNM exchange-rate cache (get_currency_rates tool).
+			Currency: curStore,
 			// Issue #121: allow OAuth access tokens to authenticate /mcp too.
 			OAuth:      deps.OAuth,
 			DecryptKey: decryptKey,
@@ -264,7 +277,36 @@ func main() {
 			AccessKey: decryptKey,
 		}
 
-		// Subscription charge runner: hourly sweep for due charges + overdue cancels.
+		// Issue #185: daily BNM exchange-rate refresh (once daily, cached in
+	// Valkey with a 24h TTL). Runs at startup and then every 24h. Failures are
+	// logged and retried on the next tick — the cache keeps serving the last
+	// good rates meanwhile.
+	if curStore != nil {
+		go func() {
+			refresh := func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				if n, err := curStore.Refresh(ctx); err != nil {
+					slog.Warn("bnm_rates_refresh", "err", err)
+				} else {
+					slog.Info("bnm_rates_refresh", "rates", n)
+				}
+			}
+			refresh()
+			ticker := time.NewTicker(24 * time.Hour)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					refresh()
+				}
+			}
+		}()
+	}
+
+	// Subscription charge runner: hourly sweep for due charges + overdue cancels.
 		go func() {
 			ticker := time.NewTicker(1 * time.Hour)
 			defer ticker.Stop()

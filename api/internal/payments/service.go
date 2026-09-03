@@ -64,6 +64,22 @@ func (s *Service) accountSecrets(ctx context.Context, accountID string) (brandID
 	return acc.ChipBrandID, string(dec), nil
 }
 
+// spaceCurrency resolves the currency of the space that owns an account
+// (issue #185). Falls back to the account's own currency when the account has
+// no linked space or the lookup fails. Used by the recurring-charge and
+// update-card paths, which act on an account rather than a sale.
+func (s *Service) spaceCurrency(ctx context.Context, accountID string) string {
+	if s.Spaces != nil {
+		if cur, err := s.Spaces.SpaceCurrencyByAccount(ctx, accountID); err == nil && cur != "" {
+			return cur
+		}
+	}
+	if acc, err := s.Accounts.ByID(ctx, accountID); err == nil && acc.Currency != "" {
+		return acc.Currency
+	}
+	return "MYR"
+}
+
 // publicKey cache: CHIP returns a company-wide key per secret; cache by key hash.
 var (
 	pubKeyCache   = map[string]*rsa.PublicKey{}

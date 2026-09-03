@@ -208,6 +208,11 @@ type SpaceSettings struct {
 	BusinessName   string `json:"business_name"`
 	MenuJSON       string `json:"menu_json"`
 	DefaultLang    string `json:"default_lang"`
+	// Currency is the space's settlement/display currency (issue #185).
+	// Default MYR. The space's account(s) inherit it for CHIP purchases; new
+	// amounts are stored in this currency's minor units. Historical sales keep
+	// their original currency (never auto-converted).
+	Currency string `json:"currency"`
 }
 
 // SpaceLang returns the storefront default language code, or a fallback when
@@ -222,13 +227,23 @@ func (st *SpaceSettings) SpaceLang() string {
 	}
 }
 
+// SpaceCurrency returns the space's currency code, or MYR when unset/unknown.
+// Callers must use this so a not-yet-migrated or legacy row resolves to MYR
+// (issue #185), never "".
+func (st *SpaceSettings) SpaceCurrency() string {
+	if IsSupportedCurrency(st.Currency) {
+		return st.Currency
+	}
+	return "MYR"
+}
+
 // Settings reads (creating default row when missing) the storefront config.
 func (s *SpaceStore) Settings(ctx context.Context, spaceID string) (*SpaceSettings, error) {
-	st := &SpaceSettings{SpaceID: spaceID, MenuJSON: "[]", DefaultLang: "en"}
+	st := &SpaceSettings{SpaceID: spaceID, MenuJSON: "[]", DefaultLang: "en", Currency: "MYR"}
 	err := s.pool.QueryRow(ctx,
-		`SELECT footer_text, company_reg, privacy_url, terms_url, refund_url, contact_phone, contact_address, business_name, menu_json::text, default_lang
+		`SELECT footer_text, company_reg, privacy_url, terms_url, refund_url, contact_phone, contact_address, business_name, menu_json::text, default_lang, currency
 		   FROM space_settings WHERE space_id=$1`,
-		spaceID).Scan(&st.FooterText, &st.CompanyReg, &st.PrivacyURL, &st.TermsURL, &st.RefundURL, &st.ContactPhone, &st.ContactAddress, &st.BusinessName, &st.MenuJSON, &st.DefaultLang)
+		spaceID).Scan(&st.FooterText, &st.CompanyReg, &st.PrivacyURL, &st.TermsURL, &st.RefundURL, &st.ContactPhone, &st.ContactAddress, &st.BusinessName, &st.MenuJSON, &st.DefaultLang, &st.Currency)
 	if err != nil {
 		// default row
 		_, ierr := s.pool.Exec(ctx,
@@ -243,17 +258,34 @@ func (s *SpaceStore) Settings(ctx context.Context, spaceID string) (*SpaceSettin
 // SaveSettings upserts the storefront config.
 func (s *SpaceStore) SaveSettings(ctx context.Context, st *SpaceSettings) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO space_settings (space_id, footer_text, company_reg, privacy_url, terms_url, refund_url, contact_phone, contact_address, business_name, menu_json, default_lang)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11)
+		`INSERT INTO space_settings (space_id, footer_text, company_reg, privacy_url, terms_url, refund_url, contact_phone, contact_address, business_name, menu_json, default_lang, currency)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12)
 		 ON CONFLICT (space_id) DO UPDATE SET
 		   footer_text=EXCLUDED.footer_text, company_reg=EXCLUDED.company_reg,
 		   privacy_url=EXCLUDED.privacy_url, terms_url=EXCLUDED.terms_url,
 		   refund_url=EXCLUDED.refund_url, contact_phone=EXCLUDED.contact_phone,
 		   contact_address=EXCLUDED.contact_address, business_name=EXCLUDED.business_name,
 		   menu_json=EXCLUDED.menu_json,
-		   default_lang=EXCLUDED.default_lang`,
-		st.SpaceID, st.FooterText, st.CompanyReg, st.PrivacyURL, st.TermsURL, st.RefundURL, st.ContactPhone, st.ContactAddress, st.BusinessName, st.MenuJSON, st.SpaceLang())
+		   default_lang=EXCLUDED.default_lang, currency=EXCLUDED.currency`,
+		st.SpaceID, st.FooterText, st.CompanyReg, st.PrivacyURL, st.TermsURL, st.RefundURL, st.ContactPhone, st.ContactAddress, st.BusinessName, st.MenuJSON, st.SpaceLang(), st.SpaceCurrency())
 	return err
+}
+
+// SpaceCurrencyByAccount resolves the currency of the space that owns the
+// given account ("" when the account has no linked space). Used by the
+// payments path to pick the CHIP purchase currency from the space (issue
+// #185) instead of the account-level default.
+func (s *SpaceStore) SpaceCurrencyByAccount(ctx context.Context, accountID string) (string, error) {
+	var cur string
+	err := s.pool.QueryRow(ctx,
+		`SELECT COALESCE(ss.currency, 'MYR')
+		   FROM accounts a
+		   LEFT JOIN space_settings ss ON ss.space_id = a.space_id
+		  WHERE a.id=$1`, accountID).Scan(&cur)
+	if err != nil {
+		return "", err
+	}
+	return cur, nil
 }
 
 // IDBySlug resolves a space id from its slug ("" when unknown).

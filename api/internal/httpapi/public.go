@@ -244,6 +244,17 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		Status:        dbstore.SalePending,
 		SkipCapture:   in.SkipCapture && method == "chip",
 	}
+	// Issue #185: record the currency the sale is transacted in from the
+	// space that owns the form's account (default MYR). Historical sales keep
+	// this original currency — never auto-converted on a later change.
+	if h.Spaces != nil {
+		if cur, cerr := h.Spaces.SpaceCurrencyByAccount(r.Context(), form.AccountID); cerr == nil && cur != "" {
+			sale.Currency = cur
+		}
+	}
+	if sale.Currency == "" {
+		sale.Currency = "MYR"
+	}
 	var subtotal int64
 	for _, it := range in.Items {
 		// For MVP the form config carries product id + authoritative price.

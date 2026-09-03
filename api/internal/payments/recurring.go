@@ -70,7 +70,7 @@ func (s *Service) chargeSubscription(ctx context.Context, sub *dbstore.Subscript
 		SuccessCallback: s.BaseURL + "/v1/payments/chip/callback",
 		Reference:       "SUB-" + sub.ID[:8] + "-" + time.Now().UTC().Format("060102"),
 		Purchase: chip.PurchaseDetails{
-			Currency: acc.Currency,
+			Currency: s.spaceCurrency(ctx, sub.AccountID),
 			Products: []chip.Product{{
 				Name:     fmt.Sprintf("Langganan #%s", sub.ProductID),
 				Price:    sub.AmountSen,

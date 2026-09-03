@@ -28,12 +28,13 @@ type SocialRow = { provider: string; email?: string; linked_at?: string };
 //   members   -> Space members management (issue #163)
 //   storefront-> Per-space public-form footer (issue #183)
 //   legal     -> Per-space hosted legal pages (issue #184)
-type SettingsTab = "chip" | "domains" | "tracking" | "einvoice" | "webhooks" | "mcp" | "social" | "emel" | "members" | "storefront" | "legal";
+//   currency  -> Per-space currency + BNM rates (issue #185)
+type SettingsTab = "chip" | "domains" | "tracking" | "einvoice" | "webhooks" | "mcp" | "social" | "emel" | "members" | "storefront" | "legal" | "currency";
 
-const TAB_IDS: SettingsTab[] = ["chip", "domains", "tracking", "einvoice", "webhooks", "mcp", "social", "emel", "members", "storefront", "legal"];
+const TAB_IDS: SettingsTab[] = ["chip", "domains", "tracking", "einvoice", "webhooks", "mcp", "social", "emel", "members", "storefront", "legal", "currency"];
 
 function isSettingsTab(v: string | null): v is SettingsTab {
-  return v === "chip" || v === "domains" || v === "tracking" || v === "einvoice" || v === "webhooks" || v === "mcp" || v === "social" || v === "emel" || v === "members" || v === "storefront" || v === "legal";
+  return v === "chip" || v === "domains" || v === "tracking" || v === "einvoice" || v === "webhooks" || v === "mcp" || v === "social" || v === "emel" || v === "members" || v === "storefront" || v === "legal" || v === "currency";
 }
 
 // Restore the last active tab. Falls back to "chip".
@@ -61,6 +62,38 @@ const METHODS = [
   { id: "razer_tng", label: "Touch 'n Go eWallet" },
   { id: "duitnow_qr", label: "DuitNow QR" },
   { id: "crypto_coin", label: "Crypto Coin" },
+];
+
+// Issue #185: supported settlement currencies (default MYR). Mirrors the
+// backend CHECK constraint in migration 000029_space_currency.
+const CURRENCIES = [
+  { code: "MYR", name: "Malaysian Ringgit" },
+  { code: "USD", name: "US Dollar" },
+  { code: "SGD", name: "Singapore Dollar" },
+  { code: "EUR", name: "Euro" },
+  { code: "GBP", name: "British Pound" },
+  { code: "AUD", name: "Australian Dollar" },
+  { code: "CNY", name: "Chinese Yuan" },
+  { code: "JPY", name: "Japanese Yen" },
+  { code: "THB", name: "Thai Baht" },
+  { code: "IDR", name: "Indonesian Rupiah" },
+  { code: "PHP", name: "Philippine Peso" },
+  { code: "HKD", name: "Hong Kong Dollar" },
+  { code: "KRW", name: "South Korean Won" },
+  { code: "INR", name: "Indian Rupee" },
+  { code: "AED", name: "UAE Dirham" },
+  { code: "SAR", name: "Saudi Riyal" },
+  { code: "NZD", name: "New Zealand Dollar" },
+  { code: "CAD", name: "Canadian Dollar" },
+  { code: "CHF", name: "Swiss Franc" },
+  { code: "VND", name: "Vietnamese Dong" },
+  { code: "BND", name: "Brunei Dollar" },
+  { code: "TWD", name: "New Taiwan Dollar" },
+  { code: "MMK", name: "Myanmar Kyat" },
+  { code: "KHR", name: "Cambodian Riel" },
+  { code: "NPR", name: "Nepalese Rupee" },
+  { code: "PKR", name: "Pakistani Rupee" },
+  { code: "EGP", name: "Egyptian Pound" },
 ];
 
 // Issue #128: dispatcher-supported webhook events (dispatch2.go + purchases.go).
@@ -144,6 +177,11 @@ export default function Settings() {
   const [sfRefundUrl, setSfRefundUrl] = useState("");
   const [sfFooterText, setSfFooterText] = useState("");
   const [sfSpaceId, setSfSpaceId] = useState("");
+  // Issue #185: per-space currency + BNM rates.
+  const [currency, setCurrency] = useState("MYR");
+  const [currencySpaceId, setCurrencySpaceId] = useState("");
+  const [rates, setRates] = useState<{ currency_code: string; unit: number; rate: number }[]>([]);
+  const [ratesCached, setRatesCached] = useState(false);
 
   // Persist the active tab (issue #68).
   useEffect(() => {
@@ -272,6 +310,7 @@ export default function Settings() {
     const active = sp.find((x) => x.slug === slug) || sp[0];
     if (!active) return;
     setSfSpaceId(active.id);
+    setCurrencySpaceId(active.id);
     fetch(`/api/rest/spaces/${active.id}/settings`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
@@ -284,6 +323,16 @@ export default function Settings() {
         setSfTermsUrl(d.terms_url || "");
         setSfRefundUrl(d.refund_url || "");
         setSfFooterText(d.footer_text || "");
+        if (d.currency) setCurrency(d.currency);
+      })
+      .catch(() => {});
+    fetch(`/api/rest/currency/rates`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d) {
+          setRates(Array.isArray(d.rates) ? d.rates : []);
+          setRatesCached(!!d.cached);
+        }
       })
       .catch(() => {});
   }, [spaces]);
@@ -291,6 +340,24 @@ export default function Settings() {
   useEffect(() => {
     loadStorefrontSettings();
   }, [loadStorefrontSettings]);
+
+  // Issue #185: save the active space's currency.
+  async function saveCurrency() {
+    if (!currencySpaceId) return;
+    setMsg("");
+    setErr("");
+    const r = await fetch(`/api/rest/spaces/${currencySpaceId}/settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ currency }),
+    });
+    if (r.ok) {
+      setMsg(t("set.currencySaved"));
+    } else {
+      const d = await r.json().catch(() => ({}));
+      setErr(d.error || t("set.failedSave"));
+    }
+  }
 
   // Issue #48: anonymous visit (401 / session expired) bounces to Landing
   // instead of hanging on a shell or flashing a logged-out settings form.
@@ -1305,6 +1372,52 @@ export default function Settings() {
         {/* ── Legal tab: per-space hosted legal pages (issue #184) ── */}
         {tab === "legal" && (
           <LegalTab spaceId={emelSpaceId || activeSpaceId} spaceSlug={activeSpaceSlug} />
+        )}
+        {/* ── Currency tab: per-space currency + BNM rates (issue #185) ── */}
+        {tab === "currency" && (
+          <section className="jf-card mt-6 p-6">
+            <h2 className="text-lg font-semibold">{t("set.currencyTitle")}</h2>
+            <p className="mt-1 max-w-xl text-sm text-slate-400">
+              {t("set.currencyHelp")}
+            </p>
+            <div className="mt-4 max-w-xl space-y-3">
+              <div>
+                <label className="text-xs text-slate-500">{t("set.currencyLabel")}</label>
+                <select
+                  value={currency}
+                  onChange={(e) => setCurrency(e.target.value)}
+                  className="jf-input mt-1"
+                >
+                  {CURRENCIES.map((c) => (
+                    <option key={c.code} value={c.code}>
+                      {c.code} — {c.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex items-center gap-2 pt-1">
+                <button onClick={saveCurrency} className="jf-btn-primary">{t("set.save")}</button>
+              </div>
+            </div>
+            <div className="mt-6">
+              <h3 className="text-sm font-semibold text-slate-700">{t("set.currencyRates")}</h3>
+              <p className="mt-1 text-xs text-slate-400">
+                {t("set.currencyRatesHint")} <span className="text-slate-500">({ratesCached ? t("set.currencyCached") : t("set.currencyFresh")})</span>
+              </p>
+              {rates.length > 0 ? (
+                <div className="mt-2 grid max-h-64 grid-cols-2 gap-x-6 overflow-y-auto sm:grid-cols-3">
+                  {rates.map((r) => (
+                    <div key={r.currency_code} className="flex items-center justify-between border-b border-slate-100 py-1 text-sm">
+                      <span className="font-medium text-slate-700">{r.currency_code}</span>
+                      <span className="text-slate-500">{r.rate.toFixed(4)}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-2 text-sm text-slate-400">—</p>
+              )}
+            </div>
+          </section>
         )}
       </main>
     </Shell>

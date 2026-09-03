@@ -1,0 +1,71 @@
+// MCP parity tools: currency (issue #185). get_currency_rates exposes the
+// BNM daily-cached exchange rates; set_space_currency sets a space's
+// settlement currency (default MYR). Historical sales keep their original
+// currency — a change applies to new products/sales going forward.
+package mcpsrv
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/wzul/jomform/api/internal/dbstore"
+)
+
+// ── get_currency_rates ──────────────────────────────────────────────────────
+
+// getCurrencyRates returns the cached BNM exchange rates (Ringgit per unit of
+// foreign currency) plus whether they came from the Valkey cache. When the
+// currency store is not wired, returns an empty list.
+func (s *Server) getCurrencyRates(
+	ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn,
+) (*mcp.CallToolResult, map[string]any, error) {
+	if s.deps.Currency == nil {
+		return nil, map[string]any{"rates": []any{}, "cached": false}, nil
+	}
+	rates, cached, err := s.deps.Currency.Rates(ctx)
+	if err != nil {
+		return nil, map[string]any{"rates": []any{}, "cached": false}, nil
+	}
+	return nil, map[string]any{"rates": rates, "cached": cached}, nil
+}
+
+// ── set_space_currency ──────────────────────────────────────────────────────
+
+type setSpaceCurrencyIn struct {
+	SpaceID  string `json:"space_id" jsonschema:"ID space (dari list_spaces)"`
+	Currency string `json:"currency" jsonschema:"Kod mata wang, cth MYR, USD, SGD (default MYR)"`
+}
+
+// setSpaceCurrency sets a space's settlement currency. The change applies to
+// new products/sales going forward; historical sales keep their original
+// currency (never auto-converted — legal/accounting requirement).
+func (s *Server) setSpaceCurrency(
+	ctx context.Context, _ *mcp.CallToolRequest, in setSpaceCurrencyIn,
+) (*mcp.CallToolResult, map[string]string, error) {
+	_, role, err := s.accessibleSpace(ctx, in.SpaceID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if role != "" && role != dbstore.RoleManage && role != dbstore.RoleAdmin {
+		return nil, nil, errors.New("perlu peranan manage atau admin")
+	}
+	if !dbstore.IsSupportedCurrency(in.Currency) {
+		return nil, nil, errors.New("mata wang tidak disokong")
+	}
+	sp, err := s.spacesStore()
+	if err != nil {
+		return nil, nil, err
+	}
+	st, err := sp.Settings(ctx, in.SpaceID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("db: %w", err)
+	}
+	st.Currency = in.Currency
+	if err := sp.SaveSettings(ctx, st); err != nil {
+		return nil, nil, fmt.Errorf("db: %w", err)
+	}
+	return nil, map[string]string{"status": "saved", "space_id": in.SpaceID, "currency": in.Currency}, nil
+}

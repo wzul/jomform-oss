@@ -15,6 +15,11 @@ type Product struct {
 	Name               string
 	Description        string
 	PriceSen           int64
+	// Currency is the currency the product's price is denominated in (issue
+	// #185). Set from the space's currency at creation; a later space currency
+	// change applies to new products going forward (existing prices keep their
+	// original currency).
+	Currency           string
 	Images             []string
 	Stock              *int
 	Type               string // one_time | subscription
@@ -34,17 +39,17 @@ type ProductStore struct{ pool *pgxpool.Pool }
 // NewProductStore builds a ProductStore.
 func NewProductStore(pool *pgxpool.Pool) *ProductStore { return &ProductStore{pool: pool} }
 
-const productSelect = `SELECT id, account_id, name, COALESCE(description,''), price_sen,
+const productSelect = `SELECT id, account_id, name, COALESCE(description,''), price_sen, currency,
 	images, stock, type, COALESCE(billing_period,''), trial_days, subscription_charges, active, created_at, updated_at
 	FROM products`
 
 // Create inserts a product.
 func (s *ProductStore) Create(ctx context.Context, p *Product) error {
 	return s.pool.QueryRow(ctx,
-		`INSERT INTO products (account_id, name, description, price_sen, type, billing_period, trial_days, subscription_charges, stock, images)
-		 VALUES ($1,$2,$3,$4,$5,NULLIF($6,''),$7,$8,$9,COALESCE($10::jsonb,'[]'::jsonb))
+		`INSERT INTO products (account_id, name, description, price_sen, currency, type, billing_period, trial_days, subscription_charges, stock, images)
+		 VALUES ($1,$2,$3,$4,$5,$6,NULLIF($7,''),$8,$9,$10,COALESCE($11::jsonb,'[]'::jsonb))
 		 RETURNING id, created_at, updated_at`,
-		p.AccountID, p.Name, p.Description, p.PriceSen, p.Type, p.BillingPeriod,
+		p.AccountID, p.Name, p.Description, p.PriceSen, orDefault(p.Currency, "MYR"), p.Type, p.BillingPeriod,
 		p.TrialDays, p.SubscriptionCharges, p.Stock, p.Images,
 	).Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt)
 }
@@ -59,7 +64,7 @@ func (s *ProductStore) ListActiveByAccount(ctx context.Context, accountID string
 	var out []*Product
 	for rows.Next() {
 		q := &Product{}
-		if err := rows.Scan(&q.ID, &q.AccountID, &q.Name, &q.Description, &q.PriceSen,
+		if err := rows.Scan(&q.ID, &q.AccountID, &q.Name, &q.Description, &q.PriceSen, &q.Currency,
 			&q.Images, &q.Stock, &q.Type, &q.BillingPeriod, &q.TrialDays, &q.SubscriptionCharges, &q.Active, &q.CreatedAt, &q.UpdatedAt); err != nil {
 			return nil, err
 		}
@@ -83,7 +88,7 @@ func (s *ProductStore) ListActiveByAccounts(ctx context.Context, accountIDs []st
 	out := []*Product{}
 	for rows.Next() {
 		q := &Product{}
-		if err := rows.Scan(&q.ID, &q.AccountID, &q.Name, &q.Description, &q.PriceSen,
+		if err := rows.Scan(&q.ID, &q.AccountID, &q.Name, &q.Description, &q.PriceSen, &q.Currency,
 			&q.Images, &q.Stock, &q.Type, &q.BillingPeriod, &q.TrialDays, &q.SubscriptionCharges, &q.Active, &q.CreatedAt, &q.UpdatedAt); err != nil {
 			return nil, err
 		}
@@ -108,7 +113,7 @@ func (s *ProductStore) ListAllByAccounts(ctx context.Context, accountIDs []strin
 	out := []*Product{}
 	for rows.Next() {
 		q := &Product{}
-		if err := rows.Scan(&q.ID, &q.AccountID, &q.Name, &q.Description, &q.PriceSen,
+		if err := rows.Scan(&q.ID, &q.AccountID, &q.Name, &q.Description, &q.PriceSen, &q.Currency,
 			&q.Images, &q.Stock, &q.Type, &q.BillingPeriod, &q.TrialDays, &q.SubscriptionCharges, &q.Active, &q.CreatedAt, &q.UpdatedAt); err != nil {
 			return nil, err
 		}
@@ -135,7 +140,7 @@ func (s *ProductStore) SetActive(ctx context.Context, accountID, productID strin
 func (s *ProductStore) Get(ctx context.Context, accountID, productID string) (*Product, error) {
 	q := &Product{}
 	err := s.pool.QueryRow(ctx, productSelect+" WHERE id=$2 AND account_id=$1", accountID, productID).
-		Scan(&q.ID, &q.AccountID, &q.Name, &q.Description, &q.PriceSen,
+		Scan(&q.ID, &q.AccountID, &q.Name, &q.Description, &q.PriceSen, &q.Currency,
 			&q.Images, &q.Stock, &q.Type, &q.BillingPeriod, &q.TrialDays, &q.SubscriptionCharges, &q.Active, &q.CreatedAt, &q.UpdatedAt)
 	return q, err
 }

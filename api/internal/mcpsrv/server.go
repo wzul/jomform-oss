@@ -9,6 +9,7 @@ import (
 
 	"github.com/wzul/jomform/api/internal/chip"
 	"github.com/wzul/jomform/api/internal/cryptoutil"
+	"github.com/wzul/jomform/api/internal/currency"
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/llm"
 	"github.com/wzul/jomform/api/internal/payments"
@@ -47,6 +48,9 @@ type Deps struct {
 	// API key OR an OAuth access token (both resolve to an account). Nil →
 	// API-key auth only.
 	OAuth *dbstore.OAuthStore
+	// Issue #185: BNM exchange-rate cache (Valkey). Nil → the
+	// get_currency_rates tool returns an empty list.
+	Currency *currency.Store
 	// DecryptKey (ENCRYPTION_KEY hex bytes) enables per-form CHIP override tools.
 	DecryptKey []byte
 	// Issue #184: LLM client for auto-generating legal pages. Nil → the

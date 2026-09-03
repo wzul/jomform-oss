@@ -137,6 +137,7 @@ func (h *RESTHandlers) saveSpaceSettings(w http.ResponseWriter, r *http.Request,
 		BusinessName   string `json:"business_name"`
 		MenuJSON       string `json:"menu_json"`
 		DefaultLang    string `json:"default_lang"`
+		Currency       string `json:"currency"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
 		writeErr(w, http.StatusBadRequest, "payload tidak sah")
@@ -148,12 +149,26 @@ func (h *RESTHandlers) saveSpaceSettings(w http.ResponseWriter, r *http.Request,
 			return
 		}
 	}
+	// Issue #185: currency must be a supported code (default MYR). Empty is
+	// treated as "keep current" by the read-modify-write below.
+	if in.Currency != "" && !dbstore.IsSupportedCurrency(in.Currency) {
+		writeErr(w, http.StatusBadRequest, "mata wang tidak disokong")
+		return
+	}
 	s, role, ok := h.spaceAccessByID(w, r)
 	if !ok {
 		return
 	}
 	if !roleAtLeast(role, dbstore.RoleManage) {
 		writeErr(w, http.StatusForbidden, "perlu peranan manage atau admin")
+		return
+	}
+	// Read-modify-write: omitted fields keep their current value (issue #185
+	// currency change applies to new products/sales going forward; historical
+	// sales keep their original currency).
+	cur, err := h.Spaces.Settings(r.Context(), s.ID)
+	if err != nil {
+		respondErr(w, r, err)
 		return
 	}
 	st := &dbstore.SpaceSettings{
@@ -168,6 +183,10 @@ func (h *RESTHandlers) saveSpaceSettings(w http.ResponseWriter, r *http.Request,
 		BusinessName:   in.BusinessName,
 		MenuJSON:       in.MenuJSON,
 		DefaultLang:    in.DefaultLang,
+		Currency:       cur.Currency,
+	}
+	if in.Currency != "" {
+		st.Currency = in.Currency
 	}
 	if strings.TrimSpace(st.MenuJSON) == "" {
 		st.MenuJSON = "[]"

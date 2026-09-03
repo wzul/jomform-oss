@@ -86,7 +86,7 @@ func (s *Service) CreateChipPurchaseForSale(ctx context.Context, sale *dbstore.S
 		clientEmail = acc.ChipEmailFallback
 	}
 
-	whitelist := s.ResolveWhitelist(ctx, string(secret), acc.Currency, sale.TotalSen, acc.ChipMethodWhitelist)
+	whitelist := s.ResolveWhitelist(ctx, string(secret), sale.Currency, sale.TotalSen, acc.ChipMethodWhitelist)
 
 	sRedirect, fRedirect := s.formRedirects(ctx, acc.ID, sale.FormID)
 	// Issue #83: thank-you redirects must land on the space subdomain (or
@@ -111,7 +111,7 @@ func (s *Service) CreateChipPurchaseForSale(ctx context.Context, sale *dbstore.S
 		ForceRecurring:         sale.SaleType == dbstore.SaleTypeSubscription, // card must be saved for future charges
 		Purchase: chip.PurchaseDetails{
 			Products:        toCHIPProducts(sale.Items),
-			Currency:        acc.Currency,
+			Currency:        sale.Currency,
 			Reference:       sale.RefCode,
 			SuccessRedirect: sRedirect,
 			FailureRedirect: fRedirect,
@@ -410,9 +410,9 @@ func (s *Service) CreateChipPurchaseForSaleWithOverride(ctx context.Context, sal
 	wl := whitelist
 	if fromForm {
 		// form whitelists resolve directly (no account-level merge)
-		wl = s.ResolveWhitelist(ctx, string(secret), acc.Currency, sale.TotalSen, whitelist)
+		wl = s.ResolveWhitelist(ctx, string(secret), sale.Currency, sale.TotalSen, whitelist)
 	} else {
-		wl = s.ResolveWhitelist(ctx, string(secret), acc.Currency, sale.TotalSen, whitelist)
+		wl = s.ResolveWhitelist(ctx, string(secret), sale.Currency, sale.TotalSen, whitelist)
 	}
 
 	// Issue #83: thank-you redirects must land on the space subdomain (or
@@ -436,7 +436,7 @@ func (s *Service) CreateChipPurchaseForSaleWithOverride(ctx context.Context, sal
 		Reference:       sale.RefCode,
 		Purchase: chip.PurchaseDetails{
 			Products: toCHIPProducts(sale.Items),
-			Currency: acc.Currency,
+			Currency: sale.Currency,
 		},
 	}
 

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/wzul/jomform/api/internal/auth"
+	"github.com/wzul/jomform/api/internal/currency"
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/httpapi/middleware"
 	"github.com/wzul/jomform/api/internal/llm"
@@ -75,6 +76,9 @@ type RESTHandlers struct {
 	LLM interface {
 		GenerateLegalPage(ctx context.Context, pageType string, d llm.BusinessDetails) (string, error)
 	}
+	// Issue #185: BNM exchange-rate cache (Valkey). Nil in bare-mode tests;
+	// the currency-rates endpoint returns empty.
+	Currency *currency.Store
 }
 
 // RegisterRoutes wires REST endpoints.
@@ -147,6 +151,7 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("PATCH /v1/spaces/{id}/members/{userId}", h.authed(h.updateMemberRole))
 	mux.Handle("DELETE /v1/spaces/{id}/members/{userId}", h.authed(h.removeMember))
 	mux.Handle("GET /v1/rest/settings/einvoice", h.authed(h.getEinvoicing))
+	mux.Handle("GET /v1/rest/currency/rates", h.authed(h.getCurrencyRates))
 	mux.Handle("GET /v1/rest/webhooks", h.authed(h.listWebhooks))
 	mux.Handle("GET /v1/rest/settings/webhook-key", h.authed(h.getWebhookKey))
 	mux.Handle("POST /v1/rest/webhooks", h.authed(h.createWebhook))
