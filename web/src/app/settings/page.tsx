@@ -264,6 +264,18 @@ export default function Settings() {
       .then(apply);
   }, [bundle]);
 
+  // Issue #242: re-fetch the custom-domain list directly from the REST
+  // endpoint. load() reads bundle.domains from the closure's stale bundle
+  // value, so a freshly added domain wouldn't appear until reloadSession()
+  // re-renders. Fetching the list here makes new domains show immediately.
+  const refreshDomains = useCallback(() => {
+    return fetch(`/api/rest/domains${spaceQuery()}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((list) => {
+        if (Array.isArray(list)) setDomains(list);
+      });
+  }, []);
+
   useEffect(() => {
     load();
   }, [load]);
@@ -566,7 +578,7 @@ export default function Settings() {
       const d = await r.json();
       setDomainInput("");
       setDomainMsg(t("set.domainAdded", { domain: d.domain }));
-      await load();
+      await refreshDomains();
     } else {
       const d = await r.json().catch(() => ({}));
       setDomainMsg(d.error || t("set.failedAddDomain"));
@@ -838,8 +850,18 @@ export default function Settings() {
                         <button
                           onClick={async () => {
                             const r = await fetch(`/api/rest/domains/${d.id}/verify${spaceQuery()}`, { method: "POST" });
-                            setDomainMsg(r.ok ? t("set.domainVerified", { domain: d.domain }) : t("set.verifyFailed", { domain: d.domain }));
-                            load();
+                            // Issue #242: the backend returns HTTP 200 with
+                            // {verified:false, detail} on failure, so r.ok is
+                            // not enough — only show "verified ✓" when the
+                            // body says verified:true, otherwise surface the
+                            // failure detail.
+                            const body = await r.json().catch(() => ({}));
+                            if (body && body.verified === true) {
+                              setDomainMsg(t("set.domainVerified", { domain: d.domain }));
+                            } else {
+                              setDomainMsg(body?.detail || t("set.verifyFailed", { domain: d.domain }));
+                            }
+                            refreshDomains();
                           }}
                           className="text-xs text-[#5e6ad2] hover:underline"
                         >{t("set.verify")}</button>
