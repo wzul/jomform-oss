@@ -26,6 +26,7 @@ import (
 	"github.com/wzul/jomform/api/internal/email"
 	"github.com/wzul/jomform/api/internal/httpapi"
 	"github.com/wzul/jomform/api/internal/mcpsrv"
+	"github.com/wzul/jomform/api/internal/metrics"
 	"github.com/wzul/jomform/api/internal/version"
 )
 
@@ -41,7 +42,11 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	pool, err := db.Connect(ctx, cfg.DatabaseURL)
+	// Issue #211: one shared metrics instance so the DB query tracer and the
+	// HTTP middleware record into the same registry, exposed on /metrics.
+	metricsInst := metrics.New()
+
+	pool, err := db.ConnectWithTracer(ctx, cfg.DatabaseURL, metricsInst, log, cfg.DBSlowQueryMS)
 	if err != nil {
 		log.Error("database", "err", err)
 		if !cfg.IsDev() {
@@ -100,6 +105,9 @@ func main() {
 	}
 
 	deps := &httpapi.Deps{}
+	// Issue #211: share the metrics instance with the HTTP server so the DB
+	// query tracer and HTTP middleware record into the same registry.
+	deps.Metrics = metricsInst
 	if pool != nil {
 		accounts := dbstore.NewAccountStore(pool)
 		deps.Users = dbstore.NewUserStore(pool)

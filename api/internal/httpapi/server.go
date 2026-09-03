@@ -59,6 +59,11 @@ type Deps struct {
 	// Issue #121: OAuth 2.1 authorization-code + PKCE store for MCP clients.
 	// Nil in bare-mode tests; the OAuth endpoints are only registered when wired.
 	OAuth *dbstore.OAuthStore
+
+	// Issue #211: shared Prometheus metrics instance. When set, NewServer uses
+	// it (so the DB query tracer and the HTTP middleware record into the same
+	// registry); when nil, NewServer creates its own.
+	Metrics *metrics.Metrics
 }
 
 // VerifyMailer delivers an email-confirmation message. The concrete email.Sender
@@ -84,7 +89,10 @@ func NewServer(cfg *config.Config, log *slog.Logger, deps *Deps) *Server {
 	if deps == nil {
 		deps = &Deps{}
 	}
-	s := &Server{cfg: cfg, log: log, deps: deps, metrics: metrics.New()}
+	s := &Server{cfg: cfg, log: log, deps: deps, metrics: deps.Metrics}
+	if s.metrics == nil {
+		s.metrics = metrics.New()
+	}
 	setGlobalMetrics(s.metrics)
 	isDev = cfg.IsDev()
 

@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestLoadRequiresDatabaseURL(t *testing.T) {
 	t.Setenv("DATABASE_URL", "")
@@ -99,5 +102,44 @@ func TestLoadSESReputationIgnoresGarbageEnv(t *testing.T) {
 	}
 	if cfg.BreakerRatio != 0.05 {
 		t.Errorf("BreakerRatio = %v, want fallback 0.05", cfg.BreakerRatio)
+	}
+}
+
+func TestLoadDBSlowQueryDefault(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://localhost/jomform_test")
+	t.Setenv("APP_ENV", "dev")
+	t.Setenv("DB_SLOW_QUERY_MS", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.DBSlowQueryMS != 200*time.Millisecond {
+		t.Errorf("DBSlowQueryMS = %v, want default 200ms", cfg.DBSlowQueryMS)
+	}
+}
+
+func TestLoadDBSlowQueryEnvOverride(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://localhost/jomform_test")
+	t.Setenv("APP_ENV", "dev")
+	t.Setenv("DB_SLOW_QUERY_MS", "500")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.DBSlowQueryMS != 500*time.Millisecond {
+		t.Errorf("DBSlowQueryMS = %v, want 500ms", cfg.DBSlowQueryMS)
+	}
+}
+
+func TestLoadDBSlowQueryIgnoresGarbage(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://localhost/jomform_test")
+	t.Setenv("APP_ENV", "dev")
+	t.Setenv("DB_SLOW_QUERY_MS", "abc")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.DBSlowQueryMS != 200*time.Millisecond {
+		t.Errorf("DBSlowQueryMS = %v, want fallback 200ms", cfg.DBSlowQueryMS)
 	}
 }

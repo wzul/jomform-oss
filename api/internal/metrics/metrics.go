@@ -38,6 +38,11 @@ type Metrics struct {
 	// SES send + suppression counts.
 	sesSendsTotal      *prometheus.CounterVec
 	sesSuppressionsTotal *prometheus.CounterVec
+
+	// DB query timing (issue #211): per-query duration histogram + slow-query
+	// counter, labelled by query class (normalised SQL operation).
+	dbQueryDuration   *prometheus.HistogramVec
+	dbSlowQueriesTotal *prometheus.CounterVec
 }
 
 // New builds a Metrics with all collectors registered on a fresh registry.
@@ -86,10 +91,24 @@ func New() *Metrics {
 		Help: "SES sends skipped due to suppression by reason.",
 	}, []string{"reason"})
 
+	// Issue #211: DB query timing. The histogram uses a wider bucket set than
+	// the HTTP latency default so slow queries (100ms–10s) are well resolved.
+	m.dbQueryDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "jomform_db_query_duration_seconds",
+		Help:    "Database query duration in seconds by query class.",
+		Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.2, 0.5, 1, 2.5, 5, 10},
+	}, []string{"query_class"})
+
+	m.dbSlowQueriesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "jomform_db_slow_queries_total",
+		Help: "Database queries exceeding the slow-query threshold by query class.",
+	}, []string{"query_class"})
+
 	reg.MustRegister(
 		m.httpRequestsTotal, m.httpDuration, m.errorsTotal,
 		m.authFailuresTotal, m.paymentFailuresTotal, m.uploadFailuresTotal,
 		m.sesSendsTotal, m.sesSuppressionsTotal,
+		m.dbQueryDuration, m.dbSlowQueriesTotal,
 	)
 	return m
 }
@@ -175,6 +194,23 @@ func (m *Metrics) IncSESSuppression(reason string) {
 		return
 	}
 	m.sesSuppressionsTotal.WithLabelValues(reason).Inc()
+}
+
+// ObserveDBQuery records a completed database query's duration by query class.
+func (m *Metrics) ObserveDBQuery(queryClass string, seconds float64) {
+	if m == nil || m.dbQueryDuration == nil {
+		return
+	}
+	m.dbQueryDuration.WithLabelValues(queryClass).Observe(seconds)
+}
+
+// IncDBSlowQuery records a database query that exceeded the slow-query
+// threshold, by query class.
+func (m *Metrics) IncDBSlowQuery(queryClass string) {
+	if m == nil || m.dbSlowQueriesTotal == nil {
+		return
+	}
+	m.dbSlowQueriesTotal.WithLabelValues(queryClass).Inc()
 }
 
 func statusCodeLabel(code int) string {

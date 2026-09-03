@@ -91,6 +91,11 @@ type Config struct {
 	// (https://ollama.cloud/api, deepseek-v4-flash:0731).
 	LLMBaseURL string
 	LLMModel   string
+
+	// DBSlowQueryMS (issue #211): queries taking longer than this many
+	// milliseconds are logged as slow and counted in
+	// jomform_db_slow_queries_total. Defaults to 200ms.
+	DBSlowQueryMS time.Duration
 }
 
 // Load reads configuration from the environment and validates it.
@@ -145,6 +150,9 @@ func Load() (*Config, error) {
 		// Issue #184: LLM legal-page generation (Ollama Cloud).
 		LLMBaseURL: os.Getenv("LLM_BASE_URL"),
 		LLMModel:   os.Getenv("LLM_MODEL"),
+
+		// Issue #211: slow-query threshold (default 200ms).
+		DBSlowQueryMS: time.Duration(parsePositiveInt64(os.Getenv("DB_SLOW_QUERY_MS"), 200)) * time.Millisecond,
 	}
 
 	if cfg.DatabaseURL == "" {
