@@ -127,6 +127,9 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("PUT /v1/rest/forms/{id}/tracking", h.authed(h.putFormTracking))
 	mux.Handle("PUT /v1/rest/forms/{id}/settings", h.authed(h.putFormSettings))
 	mux.Handle("PUT /v1/rest/forms/{id}/restrictions", h.authed(h.putFormRestrictions))
+	// Issue #177: per-form notification email settings (Gravity-Forms-style).
+	mux.Handle("GET /v1/rest/forms/{id}/email-settings", h.authed(h.getFormEmailSettings))
+	mux.Handle("PUT /v1/rest/forms/{id}/email-settings", h.authed(h.saveFormEmailSettings))
 	mux.HandleFunc("GET /v1/templates", h.listTemplates)
 	mux.HandleFunc("GET /v1/system-settings/public", h.publicSystemSettings)
 	mux.Handle("GET /v1/system-settings", h.authed(h.listSystemSettings))

@@ -195,6 +195,10 @@ export default function FormsPage() {
                         {t("forms.edit")}
                       </Link>
                     )}
+                    {/* Issue #177: dedicated Form Settings view */}
+                    <Link href={`/form-settings?form=${f.id}`} className="jf-btn-ghost min-h-[44px] sm:min-h-10">
+                      {t("fs.title")}
+                    </Link>
                     {/* Issue #126: per-form Sales deep-link -> /sales?form=<id> */}
                     <Link href={`/sales?form=${f.id}`} className="jf-btn-ghost min-h-[44px] sm:min-h-10">
                       {t("nav.sales")}
@@ -213,6 +217,10 @@ export default function FormsPage() {
                         {t("forms.edit")}
                       </Link>
                     )}
+                    {/* Issue #177: dedicated Form Settings view */}
+                    <Link href={`/form-settings?form=${f.id}`} className="jf-btn-ghost min-h-[44px] sm:min-h-10">
+                      {t("fs.title")}
+                    </Link>
                     {/* Issue #126: per-form Sales deep-link (works for drafts too) */}
                     <Link href={`/sales?form=${f.id}`} className="jf-btn-ghost min-h-[44px] sm:min-h-10">
                       {t("nav.sales")}

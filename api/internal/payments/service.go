@@ -124,4 +124,7 @@ func (s *Service) CallbackPublicKey(ctx context.Context, accountID string) (*rsa
 // FormGetter lets the payments service read per-form settings (redirects).
 type FormGetter interface {
 	GetByID(ctx context.Context, accountID, id string) (*dbstore.Form, error)
+	// FormEmailSettings reads a form's per-form notification email override
+	// (issue #177). Empty subject/body = fall back to space defaults.
+	FormEmailSettings(ctx context.Context, formID string) (*dbstore.FormEmailSettings, error)
 }

@@ -76,26 +76,6 @@ type Product = { id: string; name: string; price_sen: number; type: string };
 
 type FormRow = { id: string; slug: string; title: string; status: string };
 
-type SaleRow = {
-  ref_code: string;
-  status: string;
-  total_sen: number;
-  payment_method: string;
-  buyer: string;
-  created_at: string;
-  skip_capture?: boolean;
-  authorized?: boolean;
-  captured_at?: string;
-};
-type SalesPage = { items: SaleRow[]; page: number; limit: number; total: number };
-
-/* issue #12: an uncaptured skip_capture authorization — captured_at is only
-   set once the merchant captures (MarkCaptured); released sales go cancelled. */
-const isCapturePending = (s: SaleRow) =>
-  !!s.skip_capture &&
-  !s.captured_at &&
-  (s.status === "pending" || s.status === "authorized" || s.authorized === true);
-
 /* Issue #173: categorized palette. Each group is a Gravity-Forms-style
    section. Items are draggable onto the canvas and click-to-add (mobile). */
 type PaletteGroup = { key: string; icon: string; items: { type: BlockType; icon: string }[] };
@@ -165,40 +145,12 @@ const pricingTypes: BlockType[] = ["product", "quantity", "option", "shipping", 
 /* Field types that use a choices editor. */
 const choiceTypes: BlockType[] = ["select", "radio", "image-choice", "option", "shipping"];
 
-/* Issue #186: the CHIP client fields a merchant can map to a form block.
-   Mirrors chip.ClientDetailsBody (full_name/email/phone + address/legal). */
-const CHIP_CLIENT_FIELDS = [
-  "full_name",
-  "email",
-  "phone",
-  "street_address",
-  "city",
-  "state",
-  "zip_code",
-  "country",
-  "legal_name",
-  "registration_number",
-  "tax_number",
-];
-
 function uid() {
   return Math.random().toString(36).slice(2, 9);
 }
 
 const money = (sen: number) =>
   `RM${(sen / 100).toLocaleString("en-MY", { minimumFractionDigits: 2 })}`;
-
-/* same status badge colors as the dashboard Recent sales table */
-const saleBadge = (s: string) =>
-  ({
-    pending: "bg-amber-50 text-amber-700 border-amber-200",
-    paid: "bg-blue-50 text-blue-700 border-blue-200",
-    confirmed: "bg-emerald-50 text-emerald-700 border-emerald-200",
-    failed: "bg-red-50 text-red-700 border-red-200",
-    cancelled: "bg-slate-100 text-slate-500 border-slate-200",
-  })[s] || "";
-
-const FORM_SALES_PAGE_SIZE = 10;
 
 /* default field labels, keyed for i18n */
 const FIELD_LABEL_KEY: Partial<Record<BlockType, import("../../components/i18n").Key>> = {
@@ -254,28 +206,10 @@ export default function Builder() {
   // Issue #61: image upload progress flag for the inspector file picker.
   const [uploading, setUploading] = useState(false);
 
-  // Per-form CHIP override (saved via dedicated endpoints).
-  const [ovBrand, setOvBrand] = useState("");
-  const [ovSecret, setOvSecret] = useState("");
-  const [ovFallback, setOvFallback] = useState("");
-  const [ovMsg, setOvMsg] = useState("");
   // Issue #186: per-form CHIP client field mapping (CHIP field → block id).
   // Saved inside the form config as `chip_mapping`. Empty = implicit default
   // (name→full_name, email→email, phone→phone).
   const [chipMapping, setChipMapping] = useState<Record<string, string>>({});
-  const [formTrack, setFormTrack] = useState("");
-  const [fsTheme, setFsTheme] = useState("#5e6ad2");
-  const [fsLogo, setFsLogo] = useState("");
-  const [fsRedS, setFsRedS] = useState("");
-  const [fsRedF, setFsRedF] = useState("");
-  const [fsEmbed, setFsEmbed] = useState(true);
-  // Issue #207: form restrictions (schedule + entry limit).
-  const [rsStart, setRsStart] = useState("");
-  const [rsEnd, setRsEnd] = useState("");
-  const [rsLimit, setRsLimit] = useState("");
-  const [rsPending, setRsPending] = useState("");
-  const [rsExpired, setRsExpired] = useState("");
-  const [rsLimitMsg, setRsLimitMsg] = useState("");
 
   // Issue #171: form collection mode — "payment" (default) or "response".
   const [mode, setMode] = useState<"payment" | "response">("payment");
@@ -294,219 +228,6 @@ export default function Builder() {
     setProducts(p);
     setForms(f);
   }, []);
-
-  // per-form stats (submissions / paid / revenue) for the editor sidebar
-  const [formStat, setFormStat] = useState<{
-    submissions: number; paid_count: number; confirmed_count: number; revenue_sen: number;
-  } | null>(null);
-
-  const loadStats = useCallback(async (fid: string | null) => {
-    if (!fid) {
-      setFormStat(null);
-      return;
-    }
-    const all = await fetch(`/api/rest/analytics/forms${spaceQuery()}`).then((r) => (r.ok ? r.json() : []));
-    const mine = (Array.isArray(all) ? all : []).find((x: { form_id: string }) => x.form_id === fid);
-    setFormStat(mine || null);
-  }, []);
-
-  useEffect(() => {
-    void loadStats(currentId);
-  }, [currentId, loadStats]);
-
-  // Per-form sales table (issue #11): same row shape as dashboard Recent sales,
-  // paginated 10/page via the /api/rest/sales?page&limit&form_id filter.
-  const [formSales, setFormSales] = useState<SaleRow[]>([]);
-  const [formSalesPage, setFormSalesPage] = useState(1);
-  const [formSalesTotal, setFormSalesTotal] = useState(0);
-  const [formSalesErr, setFormSalesErr] = useState("");
-
-  const loadFormSales = useCallback(async (fid: string | null, page: number) => {
-    if (!fid) {
-      setFormSales([]);
-      setFormSalesTotal(0);
-      setFormSalesErr("");
-      return;
-    }
-    try {
-      const q = new URLSearchParams({
-        page: String(page),
-        limit: String(FORM_SALES_PAGE_SIZE),
-        form_id: fid,
-      });
-      const sp = spaceQuery();
-      const sep = sp ? "&" : "";
-      const r = await fetch(`/api/rest/sales?${q.toString()}${sep}${sp.replace("?", "")}`);
-      if (!r.ok) {
-        setFormSales([]);
-        setFormSalesTotal(0);
-        setFormSalesErr(t("bld.loadSalesErr"));
-        return;
-      }
-      const d = (await r.json()) as SalesPage;
-      setFormSales(Array.isArray(d.items) ? d.items : []);
-      setFormSalesPage(d.page || page);
-      setFormSalesTotal(d.total || 0);
-      setFormSalesErr("");
-    } catch {
-      setFormSales([]);
-      setFormSalesTotal(0);
-      setFormSalesErr(t("bld.loadSalesErr"));
-    }
-  }, []);
-
-  // Reload sales whenever the selected form changes; reset to page 1.
-  useEffect(() => {
-    setFormSalesPage(1);
-    void loadFormSales(currentId, 1);
-  }, [currentId, loadFormSales]);
-
-  const formSalesTotalPages = Math.max(1, Math.ceil(formSalesTotal / FORM_SALES_PAGE_SIZE));
-
-  // Issue #171: response-only submissions for the selected form.
-  type SubmissionRow = { id: string; form_id: string; data: Record<string, unknown>; created_at: string };
-  type SubmissionsPage = { items: SubmissionRow[]; page: number; limit: number; total: number };
-  const [submissions, setSubmissions] = useState<SubmissionRow[]>([]);
-  const [submissionsPage, setSubmissionsPage] = useState(1);
-  const [submissionsTotal, setSubmissionsTotal] = useState(0);
-  const [submissionsErr, setSubmissionsErr] = useState("");
-  const SUBMISSIONS_PAGE_SIZE = 10;
-
-  const loadSubmissions = useCallback(async (fid: string | null, page: number) => {
-    if (!fid) {
-      setSubmissions([]);
-      setSubmissionsTotal(0);
-      setSubmissionsErr("");
-      return;
-    }
-    try {
-      const q = new URLSearchParams({ page: String(page), limit: String(SUBMISSIONS_PAGE_SIZE) });
-      const sp = spaceQuery();
-      const sep = sp ? "&" : "";
-      const r = await fetch(`/api/rest/forms/${fid}/submissions?${q.toString()}${sep}${sp.replace("?", "")}`);
-      if (!r.ok) {
-        setSubmissions([]);
-        setSubmissionsTotal(0);
-        setSubmissionsErr(t("bld.loadResponsesErr"));
-        return;
-      }
-      const d = (await r.json()) as SubmissionsPage;
-      setSubmissions(Array.isArray(d.items) ? d.items : []);
-      setSubmissionsPage(d.page || page);
-      setSubmissionsTotal(d.total || 0);
-      setSubmissionsErr("");
-    } catch {
-      setSubmissions([]);
-      setSubmissionsTotal(0);
-      setSubmissionsErr(t("bld.loadResponsesErr"));
-    }
-  }, [t]);
-
-  useEffect(() => {
-    setSubmissionsPage(1);
-    void loadSubmissions(currentId, 1);
-  }, [currentId, loadSubmissions]);
-
-  const submissionsTotalPages = Math.max(1, Math.ceil(submissionsTotal / SUBMISSIONS_PAGE_SIZE));
-
-  function gotoSubmissionsPage(p: number) {
-    const next = Math.min(Math.max(1, p), submissionsTotalPages);
-    setSubmissionsPage(next);
-    void loadSubmissions(currentId, next);
-  }
-
-  function gotoFormSalesPage(p: number) {
-    const next = Math.min(Math.max(1, p), formSalesTotalPages);
-    setFormSalesPage(next);
-    void loadFormSales(currentId, next);
-  }
-
-  /* issue #12: capture/release of skip_capture authorizations */
-  const [saleActionMsg, setSaleActionMsg] = useState("");
-  const [saleActionBusy, setSaleActionBusy] = useState<string | null>(null);
-
-  async function captureSale(ref: string) {
-    const raw = window.prompt(
-      `Capture amount in RM for ${ref} (empty = full authorized amount):`,
-    );
-    if (raw === null) return; // cancelled
-    const rm = raw.trim();
-    let body = "";
-    if (rm !== "") {
-      const rmNum = Number(rm);
-      if (!Number.isFinite(rmNum) || rmNum <= 0) {
-        setSaleActionMsg("Jumlah capture tidak sah.");
-        return;
-      }
-      body = JSON.stringify({ amount_sen: Math.round(rmNum * 100) });
-    }
-    setSaleActionBusy(ref);
-    setSaleActionMsg("");
-    try {
-      const r = await fetch(`/api/rest/sales/${encodeURIComponent(ref)}/capture${spaceQuery()}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        ...(body ? { body } : {}),
-      });
-      if (!r.ok) {
-        const d = await r.json().catch(() => ({}));
-        setSaleActionMsg(d.error || `Capture gagal untuk ${ref}.`);
-        return;
-      }
-      setSaleActionMsg(`Capture berjaya untuk ${ref}. ✓`);
-      await loadFormSales(currentId, formSalesPage);
-    } finally {
-      setSaleActionBusy(null);
-    }
-  }
-
-  async function releaseSale(ref: string) {
-    if (!window.confirm(`Release authorization ${ref}? The buyer's card will NOT be charged.`)) return;
-    setSaleActionBusy(ref);
-    setSaleActionMsg("");
-    try {
-      const r = await fetch(`/api/rest/sales/${encodeURIComponent(ref)}/release${spaceQuery()}`, {
-        method: "POST",
-      });
-      if (!r.ok) {
-        const d = await r.json().catch(() => ({}));
-        setSaleActionMsg(d.error || `Release gagal untuk ${ref}.`);
-        return;
-      }
-      setSaleActionMsg(`Authorization ${ref} released. ✓`);
-      await loadFormSales(currentId, formSalesPage);
-    } finally {
-      setSaleActionBusy(null);
-    }
-  }
-
-  // Bulk capture (issue #38, #12 addendum): capture every awaiting
-  // authorization at once; per-ref results summarized in the status line.
-  async function captureAllPending() {
-    const awaiting = formSales.filter((s) => isCapturePending(s));
-    if (awaiting.length === 0) return;
-    const totalSen = awaiting.reduce((sum, s) => sum + s.total_sen, 0);
-    const rm = (totalSen / 100).toFixed(2);
-    if (!window.confirm(`Capture ALL ${awaiting.length} pending authorization(s) — total RM${rm}?`)) return;
-    setSaleActionBusy("__all__");
-    setSaleActionMsg("");
-    try {
-      const r = await fetch(`/api/rest/sales/bulk-capture${spaceQuery()}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ refs: awaiting.map((s) => s.ref_code) }),
-      });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok) {
-        setSaleActionMsg(d.error || t("bld.bulkCaptureFail"));
-        return;
-      }
-      setSaleActionMsg(t("bld.bulkCaptureDone", { captured: String(d.captured), requested: String(d.requested), failed: String(d.failed) }) + (d.failed ? t("bld.bulkCaptureCheck") : " ✓"));
-      await loadFormSales(currentId, formSalesPage);
-    } finally {
-      setSaleActionBusy(null);
-    }
-  }
 
   // hydrate from ?form=<id>
   useEffect(() => {
@@ -529,14 +250,6 @@ export default function Builder() {
       const cfg = d.config || {};
       setMode(cfg.mode === "response" ? "response" : "payment");
       setChipMapping(cfg.chip_mapping || {});
-      if (d.theme?.primary) setFsTheme(d.theme.primary);
-      // Issue #207: hydrate restrictions.
-      setRsStart(toLocalInput(d.start_at));
-      setRsEnd(toLocalInput(d.end_at));
-      setRsLimit(d.entry_limit != null ? String(d.entry_limit) : "");
-      setRsPending(d.pending_message || "");
-      setRsExpired(d.expired_message || "");
-      setRsLimitMsg(d.limit_message || "");
       const hydrated: Block[] = [];
       (cfg.blocks || []).forEach(
         (b: Record<string, unknown>) => {
@@ -579,25 +292,6 @@ export default function Builder() {
       priceSen: b.price_sen as number | undefined,
       choices,
     };
-  }
-
-  /* Issue #207: convert an RFC3339 timestamp to a datetime-local input value
-     (local time, "YYYY-MM-DDTHH:mm"). Empty when unset/invalid. */
-  function toLocalInput(iso?: string): string {
-    if (!iso) return "";
-    const d = new Date(iso);
-    if (isNaN(d.getTime())) return "";
-    const pad = (n: number) => String(n).padStart(2, "0");
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  }
-
-  /* Issue #207: convert a datetime-local input value to an RFC3339 UTC
-     timestamp, or null when blank. */
-  function fromLocalInput(v: string): string | null {
-    if (!v) return null;
-    const d = new Date(v);
-    if (isNaN(d.getTime())) return null;
-    return d.toISOString();
   }
 
   function makeBlock(bt: BlockType): Block {
@@ -698,13 +392,6 @@ export default function Builder() {
     const cfg = d.config || {};
     setMode(cfg.mode === "response" ? "response" : "payment");
     setChipMapping(cfg.chip_mapping || {});
-    // Issue #207: hydrate restrictions.
-    setRsStart(toLocalInput(d.start_at));
-    setRsEnd(toLocalInput(d.end_at));
-    setRsLimit(d.entry_limit != null ? String(d.entry_limit) : "");
-    setRsPending(d.pending_message || "");
-    setRsExpired(d.expired_message || "");
-    setRsLimitMsg(d.limit_message || "");
     const hydrated: Block[] = [];
     (cfg.blocks || []).forEach(
       (b: Record<string, unknown>) => {
@@ -722,7 +409,6 @@ export default function Builder() {
     const config = {
       mode,
       description: (blocks.find((b) => b.type === "text")?.value || "").slice(0, 300),
-      theme: { primary: fsTheme },
       // Issue #186: merchant-configured CHIP client field mapping. Only
       // non-empty entries are persisted; empty = implicit default.
       chip_mapping: Object.fromEntries(
@@ -1399,455 +1085,25 @@ export default function Builder() {
           </p>
         </div>
 
-        {/* ── Form status (issue #176): draft | private | published ── */}
-        <div className="mt-8 rounded-lg border border-[var(--jf-border)] bg-white p-3">
-          <p className="text-xs font-medium uppercase tracking-wider text-[#9ca3af]">
-            {t("bld.status")}
-          </p>
-          <div className="mt-2 grid grid-cols-3 gap-1.5">
-            {(["draft", "private", "published"] as const).map((s) => (
-              <button
-                key={s}
-                type="button"
-                onClick={() => {
-                  setStatus(s);
-                  setDirty(true);
-                }}
-                className={`rounded-md border px-2 py-2 text-xs font-medium transition-colors ${
-                  status === s
-                    ? "border-[#7170ff]/60 bg-indigo-50 text-[var(--jf-primary)]"
-                    : "border-[var(--jf-border)] text-[#374151] hover:bg-slate-50"
-                }`}
-              >
-                {t(`bld.status${s[0].toUpperCase()}${s.slice(1)}` as import("../../components/i18n").Key)}
-              </button>
-            ))}
-          </div>
-          {status === "private" && (
-            <div className="mt-2">
-              <label className="block text-[11px] text-slate-500">{t("bld.accessPassword")}</label>
-              <input
-                type="password"
-                value={accessPw}
-                onChange={(e) => {
-                  setAccessPw(e.target.value);
-                  setDirty(true);
-                }}
-                placeholder={t("bld.accessPasswordPh")}
-                className="jf-input mt-1 text-xs"
-              />
-              <p className="mt-1 text-[11px] text-[var(--jf-muted)]">{t("bld.accessPasswordHint")}</p>
-            </div>
-          )}
-          <p className="mt-1.5 text-[11px] text-[var(--jf-muted)]">
-            {status === "private"
-              ? t("bld.statusPrivateHint")
-              : status === "published"
-                ? t("bld.statusPublishedHint")
-                : t("bld.statusDraftHint")}
-          </p>
-        </div>
-
-        {/* ── Display settings ── */}
+        {/* Issue #177: everything else about the form (status, display,
+            restrictions, notifications, CHIP feed, sales) lives in the
+            dedicated Form Settings view — the builder is fields-only. */}
         {currentId && (
           <div className="mt-8 rounded-lg border border-[var(--jf-border)] bg-white p-3">
             <p className="text-xs font-medium uppercase tracking-wider text-[#9ca3af]">
-              {t("bld.displaySettings")}
+              {t("fs.title")}
             </p>
-            <label className="mt-2 block text-[11px] text-slate-500">{t("bld.themeColor")}</label>
-            <input
-              type="color"
-              value={fsTheme}
-              onChange={(e) => setFsTheme(e.target.value)}
-              className="mt-1 h-8 w-full cursor-pointer rounded border border-[var(--jf-border)]"
-            />
-            <label className="mt-2 block text-[11px] text-slate-500">{t("bld.logoUrl")}</label>
-            <input
-              value={fsLogo}
-              onChange={(e) => setFsLogo(e.target.value)}
-              placeholder="https://cdn.example/logo.png"
-              className="jf-input mt-1 text-xs"
-            />
-            <label className="mt-2 block text-[11px] text-slate-500">{t("bld.redirSuccess")}</label>
-            <input
-              value={fsRedS}
-              onChange={(e) => setFsRedS(e.target.value)}
-              placeholder="https://yourapp.com/thanks"
-              className="jf-input mt-1 text-xs"
-            />
-            <label className="mt-2 block text-[11px] text-slate-500">{t("bld.redirFailure")}</label>
-            <input
-              value={fsRedF}
-              onChange={(e) => setFsRedF(e.target.value)}
-              placeholder="https://yourapp.com/fail"
-              className="jf-input mt-1 text-xs"
-            />
-            <label className="mt-2 flex items-center gap-2 text-xs text-slate-600">
-              <input type="checkbox" checked={fsEmbed} onChange={(e) => setFsEmbed(e.target.checked)} className="accent-[#5e6ad2]" />
-              {t("bld.allowEmbed")}
-            </label>
-            <button
-              onClick={async () => {
-                const r = await fetch(`/api/rest/forms/${currentId}/settings${spaceQuery()}`, {
-                  method: "PUT", headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    redirect_success: fsRedS, redirect_failure: fsRedF,
-                    allow_embed: fsEmbed, logo_url: fsLogo,
-                  }),
-                });
-                setOvMsg(r.ok ? t("bld.displaySaved") : t("prof.failed"));
-              }}
-              className="mt-2 w-full rounded-md bg-[var(--jf-primary)] py-1.5 text-xs font-medium text-white"
+            <p className="mt-1 text-[11px] text-[var(--jf-muted)]">
+              {t("fs.subtitle")}
+            </p>
+            <a
+              href={`/form-settings?form=${currentId}`}
+              className="mt-2 block w-full rounded-md bg-[var(--jf-primary)] py-1.5 text-center text-xs font-medium text-white"
             >
-              {t("bld.saveDisplay")}
-            </button>
-
-            <p className="mt-3 text-[11px] font-medium uppercase tracking-wider text-[#9ca3af]">{t("bld.embedOnSite")}</p>
-            <pre className="mt-1 overflow-x-auto rounded-md bg-slate-900 p-2 text-[10px] text-emerald-300">{`<iframe src="${origin}/embed/f/${localStorage.getItem("jf_space") || "app"}/${slug}" style="width:100%;height:640px;border:0" title="${title}"></iframe>`}</pre>
-            <button
-              onClick={() => {
-                navigator.clipboard.writeText(
-                  `<iframe src="${origin}/embed/f/${localStorage.getItem("jf_space") || "app"}/${slug}" style="width:100%;height:640px;border:0" title="${title}"></iframe>`,
-                );
-                setOvMsg(t("bld.embedCopied"));
-              }}
-              className="mt-1 w-full rounded-md border border-[var(--jf-border)] py-1.5 text-xs text-slate-600 hover:bg-slate-50"
-            >
-              {t("bld.copyEmbed")}
-            </button>
+              {t("fs.title")} →
+            </a>
           </div>
         )}
-
-        {/* ── Restrictions (issue #207): schedule + entry limit ── */}
-        {currentId && (
-          <div className="mt-8 rounded-lg border border-[var(--jf-border)] bg-white p-3">
-            <p className="text-xs font-medium uppercase tracking-wider text-[#9ca3af]">
-              {t("bld.restrictionsTitle")}
-            </p>
-
-            <p className="mt-2 text-[11px] font-medium uppercase tracking-wider text-[#9ca3af]">
-              {t("bld.scheduleTitle")}
-            </p>
-            <p className="mt-0.5 text-[11px] text-[var(--jf-muted)]">{t("bld.scheduleHint")}</p>
-            <label className="mt-2 block text-[11px] text-slate-500">{t("bld.startAt")}</label>
-            <input
-              type="datetime-local"
-              value={rsStart}
-              onChange={(e) => setRsStart(e.target.value)}
-              className="jf-input mt-1 text-xs"
-            />
-            <label className="mt-2 block text-[11px] text-slate-500">{t("bld.endAt")}</label>
-            <input
-              type="datetime-local"
-              value={rsEnd}
-              onChange={(e) => setRsEnd(e.target.value)}
-              className="jf-input mt-1 text-xs"
-            />
-            <label className="mt-2 block text-[11px] text-slate-500">{t("bld.pendingMessage")}</label>
-            <textarea
-              value={rsPending}
-              onChange={(e) => setRsPending(e.target.value)}
-              rows={2}
-              className="jf-input mt-1 text-xs"
-            />
-            <label className="mt-2 block text-[11px] text-slate-500">{t("bld.expiredMessage")}</label>
-            <textarea
-              value={rsExpired}
-              onChange={(e) => setRsExpired(e.target.value)}
-              rows={2}
-              className="jf-input mt-1 text-xs"
-            />
-
-            <p className="mt-4 text-[11px] font-medium uppercase tracking-wider text-[#9ca3af]">
-              {t("bld.entryLimitTitle")}
-            </p>
-            <p className="mt-0.5 text-[11px] text-[var(--jf-muted)]">{t("bld.entryLimitHint")}</p>
-            <label className="mt-2 block text-[11px] text-slate-500">{t("bld.entryLimit")}</label>
-            <input
-              type="number"
-              min={0}
-              value={rsLimit}
-              onChange={(e) => setRsLimit(e.target.value)}
-              placeholder="100"
-              className="jf-input mt-1 text-xs"
-            />
-            <label className="mt-2 block text-[11px] text-slate-500">{t("bld.limitMessage")}</label>
-            <textarea
-              value={rsLimitMsg}
-              onChange={(e) => setRsLimitMsg(e.target.value)}
-              rows={2}
-              className="jf-input mt-1 text-xs"
-            />
-
-            <button
-              onClick={async () => {
-                const limit = rsLimit.trim() === "" ? null : Math.max(0, parseInt(rsLimit, 10) || 0);
-                const r = await fetch(`/api/rest/forms/${currentId}/restrictions${spaceQuery()}`, {
-                  method: "PUT",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    start_at: fromLocalInput(rsStart),
-                    end_at: fromLocalInput(rsEnd),
-                    entry_limit: limit,
-                    pending_message: rsPending,
-                    expired_message: rsExpired,
-                    limit_message: rsLimitMsg,
-                  }),
-                });
-                setOvMsg(r.ok ? t("bld.restrictionsSaved") : t("prof.failed"));
-              }}
-              className="mt-2 w-full rounded-md bg-[var(--jf-primary)] py-1.5 text-xs font-medium text-white"
-            >
-              {t("bld.saveRestrictions")}
-            </button>
-          </div>
-        )}
-
-          {/* per-form tracking */}
-          {currentId && (
-            <div className="mt-8 rounded-lg border border-[var(--jf-border)] bg-white p-3">
-              <p className="text-xs font-medium uppercase tracking-wider text-[#9ca3af]">
-                {t("bld.trackingTitle")}
-              </p>
-              <textarea
-                value={formTrack}
-                onChange={(e) => setFormTrack(e.target.value)}
-                rows={3}
-                placeholder={'<script src="https://…pixel/js"></script>'}
-                className="mt-2 w-full rounded-md border border-[var(--jf-border)] px-2.5 py-2 font-mono text-[11px]"
-              />
-              <button
-                onClick={async () => {
-                  const r = await fetch(`/api/rest/forms/${currentId}/tracking${spaceQuery()}`, {
-                    method: "PUT", headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ head: formTrack }),
-                  });
-                  setOvMsg(r.ok ? t("bld.formTrackingSaved") : t("prof.failed"));
-                }}
-                className="mt-1.5 w-full rounded-md border border-[var(--jf-border)] py-1.5 text-xs text-slate-600 hover:bg-slate-50"
-              >
-                {t("bld.saveFormTracking")}
-              </button>
-            </div>
-          )}
-
-          {/* per-form analytics mini-card */}
-          {currentId && formStat && (
-            <div className="mt-8 rounded-lg border border-[var(--jf-border)] bg-white p-3">
-              <p className="text-xs font-medium uppercase tracking-wider text-[#9ca3af]">
-                {t("bld.thisFormSoFar")}
-              </p>
-              <div className="mt-2 grid grid-cols-2 gap-1.5 text-[11px] text-[var(--jf-muted)]">
-                <span>{t("dash.submissions")} <b>{formStat.submissions}</b></span>
-                <span>{t("dash.paidConfirmed")} <b className="text-emerald-600">{formStat.paid_count + formStat.confirmed_count}</b></span>
-              </div>
-              <p className="mt-1 text-sm font-semibold text-[var(--jf-primary)]">
-                {`RM${(formStat.revenue_sen / 100).toFixed(2)}`} {t("bld.confirmedRevenue")}
-              </p>
-            </div>
-          )}
-
-          {/* per-form sales table (issue #11) */}
-          {currentId && (
-            <div className="mt-8 rounded-lg border border-[var(--jf-border)] bg-white p-3">
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-xs font-medium uppercase tracking-wider text-[#9ca3af]">
-                  {t("bld.salesThisForm")}
-                </p>
-                <div className="flex items-center gap-1.5">
-                  {formSales.some((s) => isCapturePending(s)) && (
-                    <button
-                      type="button"
-                      onClick={() => void captureAllPending()}
-                      disabled={saleActionBusy !== null}
-                      className="whitespace-nowrap rounded-md bg-[#5e6ad2] px-2.5 py-1 text-xs font-medium text-white hover:bg-[#828fff] disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      {saleActionBusy === "__all__" ? "…" : `${t("bld.captureAll")} (${formSales.filter((s) => isCapturePending(s)).length})`}
-                    </button>
-                  )}
-                  <a
-                    href={`/sales?form=${currentId}`}
-                    className="whitespace-nowrap rounded-md border border-[var(--jf-border)] px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50"
-                  >
-                    {t("nav.sales")}
-                  </a>
-                  <a
-                    href={`/api/rest/sales/export.csv?form_id=${currentId}`}
-                    className="whitespace-nowrap rounded-md border border-[var(--jf-border)] px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50"
-                  >
-                    {t("common.exportCsv")}
-                  </a>
-                </div>
-              </div>
-              <div className="mt-2 overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-[var(--jf-border)] text-left text-[10px] uppercase tracking-wide text-[var(--jf-muted)]">
-                      <th className="px-2 py-1.5 font-medium">{t("dash.ref")}</th>
-                      <th className="px-2 py-1.5 font-medium">{t("dash.buyer")}</th>
-                      <th className="px-2 py-1.5 font-medium">{t("dash.amount")}</th>
-                      <th className="px-2 py-1.5 font-medium">{t("dash.status")}</th>
-                      <th className="px-2 py-1.5" />
-                      <th className="px-2 py-1.5 font-medium">{t("bld.actions")}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {formSales.map((s) => (
-                      <tr key={s.ref_code} className="border-b border-[var(--jf-border)] last:border-0 hover:bg-slate-50/60">
-                        <td className="whitespace-nowrap px-2 py-2 font-mono text-[11px]">{s.ref_code}</td>
-                        <td className="max-w-24 truncate px-2 py-2 text-xs">{s.buyer || "—"}</td>
-                        <td className="whitespace-nowrap px-2 py-2 text-xs font-medium">{money(s.total_sen)}</td>
-                        <td className="whitespace-nowrap px-2 py-2">
-                          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${saleBadge(s.status)}`}>
-                            {s.status}
-                          </span>
-                        </td>
-                        <td className="px-2 py-2 text-right text-[10px] text-[var(--jf-muted)]">
-                          {s.created_at.slice(0, 10)}
-                        </td>
-                        <td className="whitespace-nowrap px-2 py-2 text-right">
-                          {isCapturePending(s) ? (
-                            <div className="flex items-center justify-end gap-1.5">
-                              <button
-                                type="button"
-                                onClick={() => void captureSale(s.ref_code)}
-                                disabled={saleActionBusy !== null}
-                                className="rounded-md bg-[#5e6ad2] px-2 py-1 text-[10px] font-medium text-white hover:bg-[#828fff] disabled:cursor-not-allowed disabled:opacity-40"
-                              >
-                                {saleActionBusy === s.ref_code ? "…" : t("bld.capture")}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => void releaseSale(s.ref_code)}
-                                disabled={saleActionBusy !== null}
-                                className="rounded-md border border-[var(--jf-border)] px-2 py-1 text-[10px] text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-                              >
-                                {t("bld.release")}
-                              </button>
-                            </div>
-                          ) : (
-                            <span className="text-[10px] text-[var(--jf-muted)]">—</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                    {formSales.length === 0 && (
-                      <tr>
-                        <td colSpan={6} className="px-2 py-6 text-center text-xs text-[var(--jf-muted)]">
-                          {formSalesErr || t("bld.noSalesForm")}
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-              {saleActionMsg && (
-                <p className="mt-1.5 text-[11px] text-[var(--jf-primary)]">{saleActionMsg}</p>
-              )}
-              {formSalesTotal > 0 && (
-                <div className="mt-2 flex items-center justify-between gap-2 border-t border-[var(--jf-border)] pt-2">
-                  <span className="text-[10px] text-[var(--jf-muted)]">
-                    {formSalesTotal} {t("dash.records")} · {t("dash.pageOf", { page: formSalesPage, total: formSalesTotalPages })}
-                  </span>
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => gotoFormSalesPage(formSalesPage - 1)}
-                      disabled={formSalesPage <= 1}
-                      className="rounded-md border border-[var(--jf-border)] px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      {t("common.prev")}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => gotoFormSalesPage(formSalesPage + 1)}
-                      disabled={formSalesPage >= formSalesTotalPages}
-                      className="rounded-md border border-[var(--jf-border)] px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      {t("common.next")}
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* per-form responses view (issue #171) — shown for response-mode forms */}
-          {currentId && mode === "response" && (
-            <div className="mt-8 rounded-lg border border-[var(--jf-border)] bg-white p-3">
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-xs font-medium uppercase tracking-wider text-[#9ca3af]">
-                  {t("bld.responsesThisForm")}
-                </p>
-                <span className="text-[10px] text-[var(--jf-muted)]">
-                  {submissionsTotal} {t("dash.records")}
-                </span>
-              </div>
-              <div className="mt-2 overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-[var(--jf-border)] text-left text-[10px] uppercase tracking-wide text-[var(--jf-muted)]">
-                      <th className="px-2 py-1.5 font-medium">{t("bld.responseData")}</th>
-                      <th className="px-2 py-1.5 font-medium">{t("dash.status")}</th>
-                      <th className="px-2 py-1.5 font-medium">{t("dash.ref")}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {submissions.map((s) => (
-                      <tr key={s.id} className="border-b border-[var(--jf-border)] last:border-0 hover:bg-slate-50/60">
-                        <td className="max-w-56 truncate px-2 py-2 text-xs">
-                          {Object.entries(s.data || {})
-                            .filter(([k]) => !["full_name", "email", "phone"].includes(k))
-                            .map(([k, v]) => `${k}: ${String(v)}`)
-                            .join(" · ") || "—"}
-                        </td>
-                        <td className="whitespace-nowrap px-2 py-2">
-                          <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
-                            {t("dash.confirmed")}
-                          </span>
-                        </td>
-                        <td className="whitespace-nowrap px-2 py-2 text-right text-[10px] text-[var(--jf-muted)]">
-                          {s.created_at.slice(0, 10)}
-                        </td>
-                      </tr>
-                    ))}
-                    {submissions.length === 0 && (
-                      <tr>
-                        <td colSpan={3} className="px-2 py-6 text-center text-xs text-[var(--jf-muted)]">
-                          {submissionsErr || t("bld.noResponsesForm")}
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-              {submissionsTotal > 0 && (
-                <div className="mt-2 flex items-center justify-between gap-2 border-t border-[var(--jf-border)] pt-2">
-                  <span className="text-[10px] text-[var(--jf-muted)]">
-                    {t("dash.pageOf", { page: submissionsPage, total: submissionsTotalPages })}
-                  </span>
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => gotoSubmissionsPage(submissionsPage - 1)}
-                      disabled={submissionsPage <= 1}
-                      className="rounded-md border border-[var(--jf-border)] px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      {t("common.prev")}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => gotoSubmissionsPage(submissionsPage + 1)}
-                      disabled={submissionsPage >= submissionsTotalPages}
-                      className="rounded-md border border-[var(--jf-border)] px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      {t("common.next")}
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
 
           <p className="mb-2 mt-8 text-xs font-medium uppercase tracking-wider text-[#9ca3af]">
             {t("bld.existingForms")}
@@ -1871,121 +1127,6 @@ export default function Builder() {
               </button>
             ))}
           </div>
-
-          {/* ── per-form CHIP override ── */}
-          {currentId && (
-            <div className="mt-8 rounded-lg border border-[var(--jf-border)] bg-white p-3">
-              <p className="text-xs font-medium uppercase tracking-wider text-[#9ca3af]">
-                {t("bld.chipOverride")}
-              </p>
-              <p className="mt-1 text-[11px] text-[var(--jf-muted)]">
-                {t("bld.emptyDefaults")}
-              </p>
-              <div className="mt-2 space-y-2">
-                <input
-                  value={ovBrand}
-                  onChange={(e) => setOvBrand(e.target.value)}
-                  placeholder="Brand ID"
-                  className="w-full rounded-md border border-[var(--jf-border)] px-2.5 py-1.5 text-xs outline-none focus:border-[#7170ff]/60"
-                />
-                <input
-                  value={ovSecret}
-                  onChange={(e) => setOvSecret(e.target.value)}
-                  type="text"
-                  placeholder="Secret Key (sk_live_… / sk_test_…)"
-                  className="w-full rounded-md border border-[var(--jf-border)] px-2.5 py-1.5 text-xs outline-none focus:border-[#7170ff]/60"
-                />
-                <input
-                  value={ovFallback}
-                  onChange={(e) => setOvFallback(e.target.value)}
-                  type="email"
-                  placeholder="Email fallback (one-time forms)"
-                  className="w-full rounded-md border border-[var(--jf-border)] px-2.5 py-1.5 text-xs outline-none focus:border-[#7170ff]/60"
-                />
-                <div className="flex gap-1.5">
-                  <button
-                    onClick={async () => {
-                      if (!currentId || !ovBrand || !ovSecret) return;
-                      setOvMsg("");
-                      const r = await fetch(`/api/rest/forms/${currentId}/chip-override${spaceQuery()}`, {
-                        method: "PUT",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                          brand_id: ovBrand,
-                          secret_key: ovSecret,
-                          email_fallback: ovFallback,
-                        }),
-                      });
-                      setOvMsg(r.ok ? t("bld.overrideSaved") : t("bld.failedOverride"));
-                      if (r.ok) setOvSecret("");
-                    }}
-                    disabled={!currentId || !ovBrand || !ovSecret}
-                    className="flex-1 rounded-md bg-[#5e6ad2] py-1.5 text-xs font-medium text-white hover:bg-[#828fff] disabled:opacity-50"
-                  >
-                    {t("bld.saveOverride")}
-                  </button>
-                  <button
-                    onClick={async () => {
-                      if (!currentId) return;
-                      const r = await fetch(`/api/rest/forms/${currentId}/chip-override${spaceQuery()}`, { method: "DELETE" });
-                      setOvMsg(r.ok ? t("bld.overrideCleared") : t("prof.failed"));
-                      setOvBrand("");
-                      setOvSecret("");
-                      setOvFallback("");
-                    }}
-                    disabled={!currentId}
-                    className="rounded-md border border-[var(--jf-border)] px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50"
-                  >
-                    {t("set.clear")}
-                  </button>
-                </div>
-                {ovMsg && <p className="text-[11px] text-[var(--jf-primary)]">{ovMsg}</p>}
-              </div>
-            </div>
-          )}
-
-          {/* ── per-form CHIP client field mapping (issue #186) ── */}
-          {currentId && (
-            <div className="mt-8 rounded-lg border border-[var(--jf-border)] bg-white p-3">
-              <p className="text-xs font-medium uppercase tracking-wider text-[#9ca3af]">
-                {t("bld.chipMapping")}
-              </p>
-              <p className="mt-1 text-[11px] text-[var(--jf-muted)]">
-                {t("bld.chipMappingHint")}
-              </p>
-              <div className="mt-2 space-y-2">
-                {CHIP_CLIENT_FIELDS.map((field) => {
-                  const blockId = chipMapping[field] || "";
-                  return (
-                    <div key={field} className="flex items-center gap-2">
-                      <span className="w-36 shrink-0 text-[11px] text-slate-600">
-                        {field}
-                      </span>
-                      <select
-                        value={blockId}
-                        onChange={(e) =>
-                          setChipMapping((m) => ({ ...m, [field]: e.target.value }))
-                        }
-                        className="w-full rounded-md border border-[var(--jf-border)] px-2 py-1.5 text-xs outline-none focus:border-[#7170ff]/60"
-                      >
-                        <option value="">{t("bld.chipMappingDefault")}</option>
-                        {blocks
-                          .filter((b) => fieldTypes.includes(b.type))
-                          .map((b) => (
-                            <option key={b.id} value={b.id}>
-                              {b.value || b.type} ({b.id.slice(0, 6)})
-                            </option>
-                          ))}
-                      </select>
-                    </div>
-                  );
-                })}
-              </div>
-              <p className="mt-2 text-[10px] text-[#9ca3af]">
-                {t("bld.chipMappingSavedOnSave")}
-              </p>
-            </div>
-          )}
         </aside>
       </div>
     </main>

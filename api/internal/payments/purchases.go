@@ -262,6 +262,7 @@ func (s *Service) sendReceiptAsync(ctx context.Context, sale *dbstore.Sale) {
 		ItemsSummary: summary,
 		FormURL:      formURL,
 		SpaceID:      spaceID,
+		FormID:       sale.FormID,
 		TIN:          tin,
 		MSIC:         msic,
 	})

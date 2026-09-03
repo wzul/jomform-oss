@@ -418,6 +418,40 @@ type restForm struct {
 	Config    map[string]any `json:"config,omitempty"`
 	Theme     map[string]any `json:"theme,omitempty"`
 	UpdatedAt string         `json:"updated_at"`
+
+	// Issue #177: display settings + restrictions surfaced on the single-form
+	// GET so the dedicated Form Settings view hydrates in one round-trip.
+	RedirectSuccess string `json:"redirect_success,omitempty"`
+	RedirectFailure string `json:"redirect_failure,omitempty"`
+	AllowEmbed      bool   `json:"allow_embed"`
+	LogoURL         string `json:"logo_url,omitempty"`
+	StartAt         string `json:"start_at,omitempty"`
+	EndAt           string `json:"end_at,omitempty"`
+	EntryLimit      *int   `json:"entry_limit,omitempty"`
+	PendingMessage  string `json:"pending_message,omitempty"`
+	ExpiredMessage  string `json:"expired_message,omitempty"`
+	LimitMessage    string `json:"limit_message,omitempty"`
+
+	// Per-form CHIP feed status (issue #177): whether a per-form override is
+	// configured. The secret itself is never returned.
+	ChipConfigured bool   `json:"chip_configured"`
+	ChipBrandID    string `json:"chip_brand_id,omitempty"`
+}
+
+// fmtTime formats a *time.Time as RFC3339, or "" when nil (issue #177).
+func fmtTime(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
+// strOrEmpty dereferences a *string, or "" when nil (issue #177).
+func strOrEmpty(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 // formURL builds the canonical public URL for a form. Issue #77: a public
@@ -519,11 +553,24 @@ func (h *RESTHandlers) getForm(w http.ResponseWriter, r *http.Request, actx *Acc
 		respondErr(w, r, err)
 		return
 	}
+	// Issue #177: surface the per-form CHIP feed status (configured / not).
+	chipConfigured := false
+	chipBrandID := ""
+	if b, s, _, _, oerr := h.Forms.ChipOverrideFor(r.Context(), actx.Account.ID, f.ID); oerr == nil && b != "" && s != "" {
+		chipConfigured = true
+		chipBrandID = b
+	}
 	respond(w, http.StatusOK, restForm{
 		ID: f.ID, Slug: f.Slug, Title: f.Title, Status: f.Status,
 		IsPrivate: f.Status == dbstore.FormStatusPrivate,
 		URL: h.formURLForAccount(r.Context(), actx.Account, f.Slug), Config: f.Config, Theme: f.Theme,
 		UpdatedAt: f.UpdatedAt.UTC().Format(time.RFC3339),
+		RedirectSuccess: f.RedirectSuccess, RedirectFailure: f.RedirectFailure,
+		AllowEmbed: f.AllowEmbed, LogoURL: f.LogoURL,
+		StartAt: fmtTime(f.StartAt), EndAt: fmtTime(f.EndAt), EntryLimit: f.EntryLimit,
+		PendingMessage: strOrEmpty(f.PendingMessage), ExpiredMessage: strOrEmpty(f.ExpiredMessage),
+		LimitMessage: strOrEmpty(f.LimitMessage),
+		ChipConfigured: chipConfigured, ChipBrandID: chipBrandID,
 	})
 }
 

@@ -57,6 +57,7 @@ type SaleRef struct {
 	ItemsSummary string
 	FormURL      string
 	SpaceID      string // resolves per-space email settings (issue #107)
+	FormID       string // resolves per-form email settings override (issue #177)
 	TIN          string // LHDN e-invoicing (optional)
 	MSIC         string
 }
@@ -174,6 +175,17 @@ func (s *Service) SendSaleReceipt(ctx context.Context, ref SaleRef) {
 	merchantEmail := ""
 	if s.Spaces != nil && ref.SpaceID != "" {
 		if st, err := s.Spaces.EmailSettings(ctx, ref.SpaceID); err == nil {
+			subject, body, html = st.ReceiptSubject, st.ReceiptBody, st.HTML
+			receiptEnabled = st.ReceiptEnabled
+			notifyMerchant = st.NotifyMerchant
+			merchantEmail = st.MerchantNotifyEmail
+		}
+	}
+	// Issue #177: a per-form email override (non-empty subject or body) takes
+	// precedence over the space defaults for this form's receipts.
+	if s.Forms != nil && ref.FormID != "" {
+		if st, err := s.Forms.FormEmailSettings(ctx, ref.FormID); err == nil &&
+			(st.ReceiptSubject != "" || st.ReceiptBody != "") {
 			subject, body, html = st.ReceiptSubject, st.ReceiptBody, st.HTML
 			receiptEnabled = st.ReceiptEnabled
 			notifyMerchant = st.NotifyMerchant
