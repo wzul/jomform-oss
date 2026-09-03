@@ -94,6 +94,7 @@ var intentionallyUnselected = map[string]map[string]bool{
 		"chip_secret_key_enc":   true, // FormStore.ChipOverrideFor
 		"chip_email_fallback":   true, // FormStore.ChipOverrideFor
 		"chip_method_whitelist": true, // FormStore.ChipOverrideFor
+		"access_password":       true, // FormStore.AccessPassword (dedicated accessor, issue #176)
 	},
 	"products": {
 		"space_id": true, // denormalised

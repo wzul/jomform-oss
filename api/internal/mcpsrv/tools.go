@@ -138,12 +138,16 @@ func (s *Server) registerTools() {
 	}, s.upsertForm)
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "publish_form",
-		Description: "Publish borang — live di <space>.jomform.com/<slug> atau custom domain.",
+		Description: "Publish borang — live di <space>.jomform.com/<slug> atau custom domain. status=private (dengan password) menjadikannya borang ber-kata laluan; status=draft menarik balik.",
 	}, s.publishFormMCP)
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "unpublish_form",
 		Description: "Tarik balik borang dari live (jadikan draft).",
 	}, s.deleteFormMCP)
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "set_form_password",
+		Description: "Set/buang kata laluan akses borang private (argon2id-hashed; tidak pernah dipulangkan). Password kosong = buang kata laluan.",
+	}, s.setFormPassword)
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "delete_form",
 		Description: "Soft-delete borang (pergi ke trash dashboard; slug dilepaskan). Boleh dipulihkan.",

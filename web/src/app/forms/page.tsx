@@ -206,7 +206,7 @@ export default function FormsPage() {
                 ) : (
                   <>
                     <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-[11px] font-medium text-slate-500">
-                      {t("forms.draft")}
+                      {f.status === "private" ? t("forms.private") : t("forms.draft")}
                     </span>
                     {canWrite && (
                       <Link href={`/builder?form=${f.id}`} className="jf-btn-ghost min-h-[44px] sm:min-h-10">

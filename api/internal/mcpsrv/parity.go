@@ -3,14 +3,22 @@ package mcpsrv
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/dbstore"
 )
+
+// slugUnsafe matches any character that is not URL-safe for a form slug.
+var slugUnsafe = regexp.MustCompile(`[^a-z0-9-]+`)
 
 // ── Products update ──────────────────────────────────────────────────────
 
@@ -180,17 +188,23 @@ func (s *Server) upsertForm(
 	if err != nil {
 		return nil, nil, err
 	}
-	if in.Slug == "" || in.Title == "" {
-		return nil, nil, errors.New("slug dan title wajib")
+	if in.Title == "" {
+		return nil, nil, errors.New("title wajib")
 	}
 	if in.FormID == "" {
+		// Issue #176: auto-generate a unique slug when the merchant leaves it
+		// blank (slugified title + random suffix on collision).
+		slug := strings.ToLower(strings.TrimSpace(in.Slug))
+		if slug == "" {
+			slug = s.uniqueFormSlug(ctx, acc, in.Title)
+		}
 		f := &dbstore.Form{
 			AccountID: acc,
-			Slug:      in.Slug,
+			Slug:      slug,
 			Title:     in.Title,
 			Config:    orEmptyMap(in.Config),
 			Theme:     orEmptyMap(nil), // never NULL: theme is NOT NULL
-			Status:    "draft",
+			Status:    dbstore.FormStatusDraft,
 		}
 		if err := s.deps.Forms.Create(ctx, f); err != nil {
 			return nil, nil, err
@@ -203,6 +217,40 @@ func (s *Server) upsertForm(
 		return nil, nil, err
 	}
 	return nil, map[string]string{"status": "updated", "form_id": in.FormID}, nil
+}
+
+// uniqueFormSlug generates a URL-safe, per-space-unique slug for a new form
+// (issue #176). Prefers a slugified title, falls back to a random token, and
+// appends a random suffix until the slug is free.
+func (s *Server) uniqueFormSlug(ctx context.Context, accountID, title string) string {
+	base := strings.ToLower(strings.TrimSpace(title))
+	base = slugUnsafe.ReplaceAllString(base, "-")
+	base = strings.Trim(base, "-")
+	if base == "" {
+		base = "f-" + randHex(4)
+	}
+	if len(base) > 40 {
+		base = base[:40]
+	}
+	base = strings.Trim(base, "-")
+	if base == "" {
+		base = "f-" + randHex(4)
+	}
+	for i := 0; i < 5; i++ {
+		taken, err := s.deps.Forms.SlugExists(ctx, accountID, base)
+		if err != nil || !taken {
+			return base
+		}
+		base = base + "-" + randHex(2)
+	}
+	return base + "-" + randHex(4)
+}
+
+// randHex returns n random bytes hex-encoded (lowercase).
+func randHex(n int) string {
+	b := make([]byte, n)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 // orEmptyMap normalises a nil map to an empty one.
@@ -219,17 +267,77 @@ func jsonValid(s string) bool {
 	return json.Unmarshal([]byte(s), &v) == nil
 }
 
+// publishFormIn extends publish_form for the private status (issue #176):
+// status=private requires a password; status=published/draft clears it.
+type publishFormIn struct {
+	FormID   string `json:"form_id" jsonschema:"ID borang"`
+	Status   string `json:"status,omitempty" jsonschema:"published (lalai) | private | draft"`
+	Password string `json:"password,omitempty" jsonschema:"Kata laluan akses (wajib bila status=private)"`
+}
+
 func (s *Server) publishFormMCP(
-	ctx context.Context, _ *mcp.CallToolRequest, in formRefIn,
+	ctx context.Context, _ *mcp.CallToolRequest, in publishFormIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
 	acc, err := s.requireWriteRole(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := s.deps.Forms.SetStatus(ctx, acc, in.FormID, "published"); err != nil {
+	status := in.Status
+	if status == "" {
+		status = dbstore.FormStatusPublished
+	}
+	switch status {
+	case dbstore.FormStatusPublished, dbstore.FormStatusDraft:
+		// Leaving private clears the stored access password.
+		if err := s.deps.Forms.SetStatusWithPassword(ctx, acc, in.FormID, status, ""); err != nil {
+			return nil, nil, err
+		}
+	case dbstore.FormStatusPrivate:
+		if len(in.Password) < 4 {
+			return nil, nil, errors.New("password mesti sekurang-kurangnya 4 aksara")
+		}
+		hash, err := auth.HashPassword(in.Password)
+		if err != nil {
+			return nil, nil, err
+		}
+		if err := s.deps.Forms.SetStatusWithPassword(ctx, acc, in.FormID, status, hash); err != nil {
+			return nil, nil, err
+		}
+	default:
+		return nil, nil, errors.New("status mesti published|private|draft")
+	}
+	return nil, map[string]string{"status": status, "form_id": in.FormID}, nil
+}
+
+// setFormPasswordIn is the input for set_form_password (issue #176).
+type setFormPasswordIn struct {
+	FormID   string `json:"form_id" jsonschema:"ID borang"`
+	Password string `json:"password" jsonschema:"Kata laluan akses baharu (kosong = buang kata laluan)"`
+}
+
+// setFormPassword stores (or clears) a private form's access password without
+// changing its status. The password is hashed with argon2id before storage.
+func (s *Server) setFormPassword(
+	ctx context.Context, _ *mcp.CallToolRequest, in setFormPasswordIn,
+) (*mcp.CallToolResult, map[string]string, error) {
+	acc, err := s.requireWriteRole(ctx)
+	if err != nil {
 		return nil, nil, err
 	}
-	return nil, map[string]string{"status": "published", "form_id": in.FormID}, nil
+	hash := ""
+	if in.Password != "" {
+		if len(in.Password) < 4 {
+			return nil, nil, errors.New("password mesti sekurang-kurangnya 4 aksara")
+		}
+		hash, err = auth.HashPassword(in.Password)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	if err := s.deps.Forms.SetAccessPassword(ctx, acc, in.FormID, hash); err != nil {
+		return nil, nil, err
+	}
+	return nil, map[string]string{"status": "ok", "form_id": in.FormID}, nil
 }
 
 func (s *Server) deleteFormMCP(
@@ -239,7 +347,7 @@ func (s *Server) deleteFormMCP(
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := s.deps.Forms.SetStatus(ctx, acc, in.FormID, "draft"); err != nil {
+	if err := s.deps.Forms.SetStatus(ctx, acc, in.FormID, dbstore.FormStatusDraft); err != nil {
 		return nil, nil, err
 	}
 	return nil, map[string]string{"status": "unpublished", "form_id": in.FormID}, nil

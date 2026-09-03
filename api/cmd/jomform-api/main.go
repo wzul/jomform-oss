@@ -249,6 +249,8 @@ func main() {
 			Spaces:         spacesStore,
 			// Issue #171: response-only form submissions.
 			Submissions: submissionsStore,
+			// Issue #176: sign the private-form unlock cookie.
+			AccessKey: decryptKey,
 		}
 
 		// Subscription charge runner: hourly sweep for due charges + overdue cancels.

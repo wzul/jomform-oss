@@ -8,6 +8,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// Form statuses (issue #176): draft | private (password-protected) | published.
+const (
+	FormStatusDraft     = "draft"
+	FormStatusPrivate   = "private"
+	FormStatusPublished = "published"
+)
+
 // Form models the forms table.
 type Form struct {
 	ID        string
@@ -16,7 +23,7 @@ type Form struct {
 	Title     string
 	Config    map[string]any
 	Theme     map[string]any
-	Status    string // draft | published
+	Status    string // draft | private | published
 	IsMain    bool
 
 	RedirectSuccess string `json:"redirect_success,omitempty"`
@@ -104,8 +111,14 @@ func (s *FormStore) Update(ctx context.Context, accountID, id, title string, con
 	return nil
 }
 
-// SetStatus publishes/unpublishes (soft-deleted forms keep their status).
+// SetStatus sets a form's status (draft | private | published). Soft-deleted
+// forms keep their status. When moving to 'private' the caller must have set
+// an access password first (SetAccessPassword) — a private form with no
+// password would be permanently locked.
 func (s *FormStore) SetStatus(ctx context.Context, accountID, id, status string) error {
+	if status != FormStatusDraft && status != FormStatusPrivate && status != FormStatusPublished {
+		return errors.New("status mesti draft|private|published")
+	}
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE forms SET status=$3, updated_at=now() WHERE id=$2 AND account_id=$1 AND deleted_at IS NULL`,
 		accountID, id, status)
@@ -116,6 +129,73 @@ func (s *FormStore) SetStatus(ctx context.Context, accountID, id, status string)
 		return ErrFormNotFound
 	}
 	return nil
+}
+
+// SetStatusWithPassword sets a form's status AND its access password in one
+// statement (issue #176). Used when publishing a private form so the password
+// and status can never drift apart. passwordHash is an argon2id PHC string;
+// pass "" to clear the password (e.g. when leaving private status).
+func (s *FormStore) SetStatusWithPassword(ctx context.Context, accountID, id, status, passwordHash string) error {
+	if status != FormStatusDraft && status != FormStatusPrivate && status != FormStatusPublished {
+		return errors.New("status mesti draft|private|published")
+	}
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE forms SET status=$3, access_password=$4, updated_at=now()
+		 WHERE id=$2 AND account_id=$1 AND deleted_at IS NULL`,
+		accountID, id, status, passwordHash)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrFormNotFound
+	}
+	return nil
+}
+
+// SetAccessPassword stores (or clears, when hash is "") the argon2id PHC hash
+// of a private form's access password. The plaintext is never stored.
+func (s *FormStore) SetAccessPassword(ctx context.Context, accountID, id, passwordHash string) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE forms SET access_password=$3, updated_at=now()
+		 WHERE id=$2 AND account_id=$1 AND deleted_at IS NULL`,
+		accountID, id, passwordHash)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrFormNotFound
+	}
+	return nil
+}
+
+// AccessPassword returns the stored argon2id PHC hash of a form's access
+// password ("" when none is set). Read via a dedicated accessor so the hash
+// never leaks through the main formSelect / REST responses.
+func (s *FormStore) AccessPassword(ctx context.Context, accountID, id string) (string, error) {
+	var hash string
+	err := s.pool.QueryRow(ctx,
+		`SELECT COALESCE(access_password,'') FROM forms
+		 WHERE id=$2 AND account_id=$1 AND deleted_at IS NULL`,
+		accountID, id).Scan(&hash)
+	if err != nil {
+		return "", err
+	}
+	return hash, nil
+}
+
+// SlugExists reports whether a live (non-deleted) form in the account's space
+// already claims the given slug. Uniqueness is per-space (#77); the account
+// maps to exactly one space, so scoping by account is equivalent.
+func (s *FormStore) SlugExists(ctx context.Context, accountID, slug string) (bool, error) {
+	var n int
+	err := s.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM forms
+		 WHERE account_id=$1 AND slug=$2 AND deleted_at IS NULL`,
+		accountID, slug).Scan(&n)
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }
 
 // rowScanner matches pgx.Row for form scanning.
@@ -216,6 +296,48 @@ func (s *FormStore) PublishedBySpaceSlug(ctx context.Context, spaceSlug, formSlu
 		return nil, err
 	}
 	return f2, nil
+}
+
+// BySpaceSlug resolves a live (non-deleted) form by space subdomain + slug
+// regardless of status (issue #176). Used by the public renderer so a private
+// form can show its password gate; the caller enforces the status rules.
+func (s *FormStore) BySpaceSlug(ctx context.Context, spaceSlug, formSlug string) (*Form, error) {
+	f, err := s.ByAccountSlug(ctx, spaceSlug, formSlug)
+	if err == nil {
+		return f, nil
+	}
+	f2 := &Form{}
+	err = s.pool.QueryRow(ctx,
+		`SELECT f.id, f.account_id, f.slug, f.title, f.config, f.theme, f.status, f.is_main,
+		        f.redirect_success, f.redirect_failure, f.allow_embed, f.logo_url, f.is_template,
+		        f.created_at, f.updated_at
+		 FROM forms f
+		 JOIN accounts a ON a.id = f.account_id
+		 JOIN spaces sp ON sp.id = a.space_id
+		 WHERE sp.slug = $1 AND f.slug = $2 AND f.deleted_at IS NULL`,
+		spaceSlug, formSlug).Scan(
+		&f2.ID, &f2.AccountID, &f2.Slug, &f2.Title, &f2.Config, &f2.Theme,
+		&f2.Status, &f2.IsMain, &f2.RedirectSuccess, &f2.RedirectFailure,
+		&f2.AllowEmbed, &f2.LogoURL, &f2.IsTemplate, &f2.CreatedAt, &f2.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return f2, nil
+}
+
+// ByAccountSlug resolves a live (non-deleted) form by account slug + form slug
+// regardless of status (issue #176). See BySpaceSlug.
+func (s *FormStore) ByAccountSlug(ctx context.Context, accountSlug, formSlug string) (*Form, error) {
+	f := &Form{}
+	err := s.pool.QueryRow(ctx, "SELECT f.id, f.account_id, f.slug, f.title, f.config, f.theme, "+
+		"f.status, f.is_main, f.redirect_success, f.redirect_failure, f.allow_embed, f.logo_url, f.is_template, "+
+		"f.created_at, f.updated_at "+
+		"FROM forms f JOIN accounts a ON a.id = f.account_id "+
+		"WHERE a.slug = $1 AND f.slug = $2 AND f.deleted_at IS NULL",
+		accountSlug, formSlug).Scan(&f.ID, &f.AccountID, &f.Slug, &f.Title, &f.Config, &f.Theme,
+		&f.Status, &f.IsMain, &f.RedirectSuccess, &f.RedirectFailure,
+		&f.AllowEmbed, &f.LogoURL, &f.IsTemplate, &f.CreatedAt, &f.UpdatedAt)
+	return f, err
 }
 
 // ListPublishedBySpace lists published forms belonging to a space (by slug).

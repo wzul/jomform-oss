@@ -3,6 +3,8 @@ package httpapi
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -409,6 +411,9 @@ type restForm struct {
 	Slug      string         `json:"slug"`
 	Title     string         `json:"title"`
 	Status    string         `json:"status"`
+	// IsPrivate reports whether the form is password-protected (issue #176).
+	// The password itself is never returned.
+	IsPrivate bool           `json:"is_private"`
 	URL       string         `json:"url"`
 	Config    map[string]any `json:"config,omitempty"`
 	Theme     map[string]any `json:"theme,omitempty"`
@@ -454,6 +459,42 @@ func (h *RESTHandlers) spaceSlugFor(ctx context.Context, accountID string) strin
 	return slug
 }
 
+// uniqueFormSlug generates a URL-safe slug for a new form (issue #176). It
+// prefers a slugified form title, falling back to a random token when the
+// title yields nothing usable, and appends a random suffix until the slug is
+// free within the account's space (uniqueness is per-space, #77).
+func (h *RESTHandlers) uniqueFormSlug(ctx context.Context, accountID, title string) string {
+	base := strings.ToLower(strings.TrimSpace(title))
+	base = slugUnsafe.ReplaceAllString(base, "-")
+	base = strings.Trim(base, "-")
+	if base == "" {
+		base = "f-" + randHex(4)
+	}
+	if len(base) > 40 {
+		base = base[:40]
+	}
+	base = strings.Trim(base, "-")
+	if base == "" {
+		base = "f-" + randHex(4)
+	}
+	// Ensure uniqueness within the space; append a random suffix on collision.
+	for i := 0; i < 5; i++ {
+		taken, err := h.Forms.SlugExists(ctx, accountID, base)
+		if err != nil || !taken {
+			return base
+		}
+		base = base + "-" + randHex(2)
+	}
+	return base + "-" + randHex(4)
+}
+
+// randHex returns n random bytes hex-encoded (lowercase).
+func randHex(n int) string {
+	b := make([]byte, n)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
 func (h *RESTHandlers) listForms(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	forms, err := h.Forms.ListByAccount(r.Context(), actx.Account.ID)
 	if err != nil {
@@ -464,6 +505,7 @@ func (h *RESTHandlers) listForms(w http.ResponseWriter, r *http.Request, actx *A
 	for _, f := range forms {
 		out = append(out, restForm{
 			ID: f.ID, Slug: f.Slug, Title: f.Title, Status: f.Status,
+			IsPrivate: f.Status == dbstore.FormStatusPrivate,
 			URL:       h.formURLForAccount(r.Context(), actx.Account, f.Slug),
 			UpdatedAt: f.UpdatedAt.UTC().Format(time.RFC3339),
 		})
@@ -479,6 +521,7 @@ func (h *RESTHandlers) getForm(w http.ResponseWriter, r *http.Request, actx *Acc
 	}
 	respond(w, http.StatusOK, restForm{
 		ID: f.ID, Slug: f.Slug, Title: f.Title, Status: f.Status,
+		IsPrivate: f.Status == dbstore.FormStatusPrivate,
 		URL: h.formURLForAccount(r.Context(), actx.Account, f.Slug), Config: f.Config, Theme: f.Theme,
 		UpdatedAt: f.UpdatedAt.UTC().Format(time.RFC3339),
 	})
@@ -494,13 +537,20 @@ func (h *RESTHandlers) createForm(w http.ResponseWriter, r *http.Request, actx *
 		Config map[string]any `json:"config"`
 		Theme  map[string]any `json:"theme"`
 	}
-	if err := decodeJSON(r, &in); err != nil || in.Slug == "" || in.Title == "" {
-		writeErr(w, http.StatusBadRequest, "slug dan title wajib")
+	if err := decodeJSON(r, &in); err != nil || in.Title == "" {
+		writeErr(w, http.StatusBadRequest, "title wajib")
 		return
 	}
+	// Issue #176: auto-generate a unique slug when the merchant leaves it
+	// blank. The slug is unique per space (#77), so a generated slug that
+	// collides gets a random suffix appended until it is free.
+	slug := strings.ToLower(strings.TrimSpace(in.Slug))
+	if slug == "" {
+		slug = h.uniqueFormSlug(r.Context(), actx.Account.ID, in.Title)
+	}
 	f := &dbstore.Form{
-		AccountID: actx.Account.ID, Slug: strings.ToLower(in.Slug), Title: in.Title,
-		Config: orEmptyMap(in.Config), Theme: orEmptyMap(in.Theme), Status: "draft",
+		AccountID: actx.Account.ID, Slug: slug, Title: in.Title,
+		Config: orEmptyMap(in.Config), Theme: orEmptyMap(in.Theme), Status: dbstore.FormStatusDraft,
 	}
 	if err := h.Forms.Create(r.Context(), f); err != nil {
 		respondErr(w, r, err)
@@ -548,13 +598,59 @@ func (h *RESTHandlers) publishForm(w http.ResponseWriter, r *http.Request, actx 
 	// Publishing requires CHIP configured OR at least one product; CHIP-only store
 	// means a form without CHIP setup can still publish for bank-direct? Per spec:
 	// CHIP-only. Warn but allow (bank_direct exists).
-	if err := h.Forms.SetStatus(r.Context(), actx.Account.ID, r.PathValue("id"), "published"); err != nil {
+	if err := h.Forms.SetStatus(r.Context(), actx.Account.ID, r.PathValue("id"), dbstore.FormStatusPublished); err != nil {
 		respondErr(w, r, err)
 		return
 	}
 	// Issue #92: audit form publish.
 	h.recordEvent(r, actx, h.sessionOwnerID(r), "form.published", map[string]any{"form_id": r.PathValue("id")})
 	respond(w, http.StatusOK, map[string]string{"status": "published"})
+}
+
+// setFormStatus sets a form's status (draft | private | published) and, when
+// private, its access password (issue #176). The password is hashed with
+// argon2id before storage; it is never returned by any endpoint.
+// POST /v1/rest/forms/{id}/status {"status":"private","password":"..."}
+func (h *RESTHandlers) setFormStatus(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
+	var in struct {
+		Status   string `json:"status"`
+		Password string `json:"password"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	switch in.Status {
+	case dbstore.FormStatusDraft, dbstore.FormStatusPublished:
+		// Leaving private clears the stored access password.
+		if err := h.Forms.SetStatusWithPassword(r.Context(), actx.Account.ID, r.PathValue("id"), in.Status, ""); err != nil {
+			respondErr(w, r, err)
+			return
+		}
+	case dbstore.FormStatusPrivate:
+		if len(in.Password) < 4 {
+			writeErr(w, http.StatusBadRequest, "password mesti sekurang-kurangnya 4 aksara")
+			return
+		}
+		hash, err := auth.HashPassword(in.Password)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "gagal hash password")
+			return
+		}
+		if err := h.Forms.SetStatusWithPassword(r.Context(), actx.Account.ID, r.PathValue("id"), in.Status, hash); err != nil {
+			respondErr(w, r, err)
+			return
+		}
+	default:
+		writeErr(w, http.StatusBadRequest, "status mesti draft|private|published")
+		return
+	}
+	// Issue #92: audit form status change.
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "form.status_"+in.Status, map[string]any{"form_id": r.PathValue("id")})
+	respond(w, http.StatusOK, map[string]string{"status": in.Status})
 }
 
 // deleteForm soft-deletes a single form (owner-checked via account scope).

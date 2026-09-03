@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/wzul/jomform/api/internal/dbstore"
 )
 
 type formOut struct {
@@ -14,7 +16,10 @@ type formOut struct {
 	Slug   string `json:"slug"`
 	Title  string `json:"title"`
 	Status string `json:"status"`
-	URL    string `json:"url,omitempty"`
+	// IsPrivate reports whether the form is password-protected (issue #176).
+	// The password itself is never returned.
+	IsPrivate bool   `json:"is_private"`
+	URL       string `json:"url,omitempty"`
 }
 
 type formDetailOut struct {
@@ -22,8 +27,10 @@ type formDetailOut struct {
 	Slug   string         `json:"slug"`
 	Title  string         `json:"title"`
 	Status string         `json:"status"`
-	URL    string         `json:"url,omitempty"`
-	Config map[string]any `json:"config,omitempty"`
+	// IsPrivate reports whether the form is password-protected (issue #176).
+	IsPrivate bool           `json:"is_private"`
+	URL       string         `json:"url,omitempty"`
+	Config    map[string]any `json:"config,omitempty"`
 }
 
 func (s *Server) listForms(
@@ -46,11 +53,12 @@ func (s *Server) listForms(
 	out := make([]formOut, 0, len(forms))
 	for _, f := range forms {
 		u := ""
-		if f.Status == "published" {
+		if f.Status == dbstore.FormStatusPublished {
 			u = s.formPublicURLForAccount(ctx, acc, f.Slug)
 		}
 		out = append(out, formOut{
-			ID: f.ID, Slug: f.Slug, Title: f.Title, Status: f.Status, URL: u,
+			ID: f.ID, Slug: f.Slug, Title: f.Title, Status: f.Status,
+			IsPrivate: f.Status == dbstore.FormStatusPrivate, URL: u,
 		})
 	}
 	return nil, out, nil
@@ -73,9 +81,10 @@ func (s *Server) getForm(
 	for _, f := range forms {
 		if f.ID == in.FormID {
 			out := formDetailOut{
-				ID: f.ID, Slug: f.Slug, Title: f.Title, Status: f.Status, Config: f.Config,
+				ID: f.ID, Slug: f.Slug, Title: f.Title, Status: f.Status,
+				IsPrivate: f.Status == dbstore.FormStatusPrivate, Config: f.Config,
 			}
-			if f.Status == "published" {
+			if f.Status == dbstore.FormStatusPublished {
 				out.URL = s.formPublicURLForAccount(ctx, acc, f.Slug)
 			}
 			return nil, out, nil

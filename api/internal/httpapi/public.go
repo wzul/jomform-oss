@@ -3,18 +3,24 @@ package httpapi
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/wzul/jomform/api/internal/httpapi/middleware"
 	"html/template"
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/payments"
 )
@@ -32,6 +38,9 @@ type PublicHandlers struct {
 	// Issue #171: response-only form submissions.
 	Submissions *dbstore.SubmissionStore
 	BaseURL     string
+	// AccessKey (ENCRYPTION_KEY bytes) signs the private-form unlock cookie
+	// (issue #176). Nil disables private-form access (gate always shown).
+	AccessKey []byte
 }
 
 // RegisterRoutes wires public endpoints.
@@ -48,6 +57,8 @@ func (h *PublicHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /t/{ref}", h.handleThankYou)
 	mux.HandleFunc("GET /{$}", h.handleSpaceRoot)
 	mux.HandleFunc("GET /{slug}", h.handleSpaceRootForm)
+	// Issue #176: unlock a private form with its access password.
+	mux.HandleFunc("POST /{slug}/unlock", h.handleFormUnlock)
 }
 
 // genRef produces a short opaque reference code.
@@ -87,14 +98,24 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	var form *dbstore.Form
 	var err error
 	if sub := accountSubdomain(r.Host); sub != "" {
-		form, err = h.Forms.PublishedBySpaceSlug(r.Context(), sub, slug)
+		form, err = h.Forms.BySpaceSlug(r.Context(), sub, slug)
 	} else if cd := customDomainOwner(r.Context(), h.Accounts, r.Host); cd != "" {
-		form, err = h.Forms.PublishedByAccountSlug(r.Context(), cd, slug)
+		form, err = h.Forms.ByAccountSlug(r.Context(), cd, slug)
 	} else {
 		form, err = nil, dbstore.ErrFormNotFound
 	}
 	if err != nil || form == nil {
 		writeErr(w, http.StatusNotFound, "borang tidak dijumpai")
+		return
+	}
+	// Issue #176: draft forms are never submittable; private forms require a
+	// valid unlock cookie (the buyer must have passed the password gate).
+	if form.Status == dbstore.FormStatusDraft {
+		writeErr(w, http.StatusNotFound, "borang tidak dijumpai")
+		return
+	}
+	if form.Status == dbstore.FormStatusPrivate && !h.privateUnlocked(r, form) {
+		writeErr(w, http.StatusForbidden, "kata laluan diperlukan")
 		return
 	}
 
@@ -443,7 +464,7 @@ func (h *PublicHandlers) handleRender(w http.ResponseWriter, r *http.Request) {
 	// ({space}.jomform.com/{slug}) or a custom domain. The legacy global
 	// /f/{slug} lookup is gone.
 	if sub := accountSubdomain(r.Host); sub != "" {
-		f, ferr := h.Forms.PublishedBySpaceSlug(r.Context(), sub, slug)
+		f, ferr := h.Forms.BySpaceSlug(r.Context(), sub, slug)
 		if ferr != nil {
 			http.Error(w, "Borang tidak dijumpai untuk domain ini", http.StatusNotFound)
 			return
@@ -452,7 +473,7 @@ func (h *PublicHandlers) handleRender(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if cd := customDomainOwner(r.Context(), h.Accounts, r.Host); cd != "" {
-		f, ferr := h.Forms.PublishedByAccountSlug(r.Context(), cd, slug)
+		f, ferr := h.Forms.ByAccountSlug(r.Context(), cd, slug)
 		if ferr != nil {
 			http.Error(w, "Borang tidak dijumpai", http.StatusNotFound)
 			return
@@ -554,6 +575,20 @@ func accountSubdomain(host string) string {
 // template errors once. Response-only forms (issue #171) render a
 // collect-only layout with no product list and no payment step.
 func (h *PublicHandlers) serveForm(w http.ResponseWriter, r *http.Request, f *dbstore.Form) {
+	// Draft forms are never publicly served (issue #176). Only published and
+	// private forms are reachable; private forms show a password gate.
+	if f.Status == dbstore.FormStatusDraft {
+		http.Error(w, "Borang tidak dijumpai", http.StatusNotFound)
+		return
+	}
+	// Issue #176: a private form shows a password gate until the buyer
+	// supplies the correct access password (verified via a signed cookie).
+	if f.Status == dbstore.FormStatusPrivate {
+		if !h.privateUnlocked(r, f) {
+			h.renderPrivateGate(w, r, f)
+			return
+		}
+	}
 	if formMode(f) == "response" {
 		if h.renderResponseForm(w, r, f) {
 			return
@@ -563,6 +598,155 @@ func (h *PublicHandlers) serveForm(w http.ResponseWriter, r *http.Request, f *db
 		return
 	}
 	h.renderLegacy(w, r, f)
+}
+
+// privateUnlocked reports whether the request carries a valid signed cookie
+// proving the buyer entered the correct password for this private form.
+func (h *PublicHandlers) privateUnlocked(r *http.Request, f *dbstore.Form) bool {
+	if h.AccessKey == nil {
+		return false
+	}
+	c, err := r.Cookie(formAccessCookie)
+	if err != nil {
+		return false
+	}
+	formID, ok := verifyFormAccessToken(h.AccessKey, c.Value)
+	return ok && formID == f.ID
+}
+
+// handleFormUnlock verifies the submitted password against the form's stored
+// argon2id hash (constant-time) and, on success, sets a signed cookie that
+// unlocks the form for this browser. Wrong passwords are rejected.
+func (h *PublicHandlers) handleFormUnlock(w http.ResponseWriter, r *http.Request) {
+	slug := r.PathValue("slug")
+	var f *dbstore.Form
+	var err error
+	if sub := accountSubdomain(r.Host); sub != "" {
+		f, err = h.Forms.BySpaceSlug(r.Context(), sub, slug)
+	} else if cd := customDomainOwner(r.Context(), h.Accounts, r.Host); cd != "" {
+		f, err = h.Forms.ByAccountSlug(r.Context(), cd, slug)
+	} else {
+		f, err = nil, dbstore.ErrFormNotFound
+	}
+	if err != nil || f == nil || f.Status != dbstore.FormStatusPrivate {
+		writeErr(w, http.StatusNotFound, "borang tidak dijumpai")
+		return
+	}
+	if h.AccessKey == nil {
+		writeErr(w, http.StatusForbidden, "akses tidak tersedia")
+		return
+	}
+	var in struct {
+		Password string `json:"password"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	hash, err := h.Forms.AccessPassword(r.Context(), f.AccountID, f.ID)
+	if err != nil || hash == "" {
+		writeErr(w, http.StatusForbidden, "kata laluan salah")
+		return
+	}
+	ok, err := auth.VerifyPassword(in.Password, hash)
+	if err != nil || !ok {
+		writeErr(w, http.StatusForbidden, "kata laluan salah")
+		return
+	}
+	token, err := signFormAccessToken(h.AccessKey, f.ID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "gagal buka kunci")
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     formAccessCookie,
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   !isDev,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   60 * 60 * 24 * 7, // 7 days
+	})
+	respond(w, http.StatusOK, map[string]string{"status": "unlocked"})
+}
+
+// renderPrivateGate renders the password gate screen for a private form.
+func (h *PublicHandlers) renderPrivateGate(w http.ResponseWriter, r *http.Request, f *dbstore.Form) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprintf(w, `<!doctype html><html lang="ms"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>%s</title>
+<style>body{background:#f7f8f8;color:#17181c;font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
+.c{background:#ffffff;border:1px solid #e6e8ec;border-radius:16px;padding:40px;text-align:center;max-width:400px;width:100%%}
+h1{font-size:20px;margin:0 0 4px}.m{color:#6b7280;font-size:14px;margin:0 0 20px}
+input{width:100%%;box-sizing:border-box;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;margin-bottom:12px}
+button{width:100%%;background:#5e6ad2;color:#fff;border:0;border-radius:8px;padding:11px;font-size:14px;font-weight:600;cursor:pointer}
+.err{color:#dc2626;font-size:13px;margin:10px 0 0;min-height:18px}
+.f{color:#9ca3af;font-size:12px;margin-top:20px}</style></head><body><div class="c">
+<h1>🔒 %s</h1><p class="m">Borang ini dilindungi kata laluan.</p>
+<form id="g" onsubmit="return unlock(event)">
+<input type="password" id="pw" placeholder="Kata laluan" autocomplete="current-password" required>
+<button type="submit">Buka kunci</button>
+<p class="err" id="err"></p>
+</form><p class="f">Dikuasakan oleh JomForm</p></div>
+<script>
+async function unlock(e){e.preventDefault();var p=document.getElementById('pw').value;
+var r=await fetch('/%s/unlock',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:p})});
+if(r.ok){location.reload();}else{var d=await r.json().catch(function(){return{};});document.getElementById('err').textContent=d.error||'Kata laluan salah';}
+return false;}
+</script></body></html>`,
+		f.Title, f.Title, f.Slug)
+}
+
+// formAccessCookie names the signed cookie that unlocks a private form.
+const formAccessCookie = "jf_form_access"
+
+// signFormAccessToken mints a signed, expiring token binding a browser to a
+// private form. Payload: "<formID>|<expiryUnix>|<hmac>".
+func signFormAccessToken(key []byte, formID string) (string, error) {
+	if len(key) != 32 {
+		return "", errors.New("access key must be 32 bytes")
+	}
+	expiry := time.Now().Add(7 * 24 * time.Hour).Unix()
+	payload := formID + "|" + strconv.FormatInt(expiry, 10)
+	mac := hmacSHA256(key, payload)
+	raw := payload + "|" + mac
+	return base64.RawURLEncoding.EncodeToString([]byte(raw)), nil
+}
+
+// verifyFormAccessToken validates a signed private-form access token and
+// returns the form id it was minted for ("" when invalid/expired).
+func verifyFormAccessToken(key []byte, token string) (string, bool) {
+	if len(key) != 32 {
+		return "", false
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil {
+		return "", false
+	}
+	parts := strings.Split(string(raw), "|")
+	if len(parts) != 3 {
+		return "", false
+	}
+	formID, expiryStr, mac := parts[0], parts[1], parts[2]
+	if formID == "" {
+		return "", false
+	}
+	payload := formID + "|" + expiryStr
+	if !hmac.Equal([]byte(mac), []byte(hmacSHA256(key, payload))) {
+		return "", false
+	}
+	expiry, err := strconv.ParseInt(expiryStr, 10, 64)
+	if err != nil || time.Now().Unix() > expiry {
+		return "", false
+	}
+	return formID, true
+}
+
+// hmacSHA256 returns a base64url HMAC-SHA256 of data under key.
+func hmacSHA256(key []byte, data string) string {
+	h := hmac.New(sha256.New, key)
+	h.Write([]byte(data))
+	return base64.RawURLEncoding.EncodeToString(h.Sum(nil))
 }
 
 // customDomainOwner returns the account slug that claimed this host via
@@ -581,7 +765,8 @@ func customDomainOwner(ctx context.Context, s *dbstore.AccountStore, host string
 
 // handleSpaceRootForm serves a form by slug on a SPACE subdomain
 // (e.g. wanzulhosting.jomform.com/form-baru). On jomform.com it 404s so
-// dashboard routes are unaffected.
+// dashboard routes are unaffected. Private forms (issue #176) resolve here so
+// their password gate can render; serveForm enforces the status rules.
 func (h *PublicHandlers) handleSpaceRootForm(w http.ResponseWriter, r *http.Request) {
 	sub := accountSubdomain(r.Host)
 	if sub == "" {
@@ -589,7 +774,7 @@ func (h *PublicHandlers) handleSpaceRootForm(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	slug := r.PathValue("slug")
-	f, err := h.Forms.PublishedBySpaceSlug(r.Context(), sub, slug)
+	f, err := h.Forms.BySpaceSlug(r.Context(), sub, slug)
 	if err != nil {
 		http.Error(w, "Borang tidak dijumpai", http.StatusNotFound)
 		return

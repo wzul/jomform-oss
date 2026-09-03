@@ -86,6 +86,7 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /v1/rest/forms/{id}/submissions", h.authed(h.listSubmissions))
 	mux.Handle("GET /v1/rest/forms/{id}/submissions/count", h.authed(h.countSubmissions))
 	mux.Handle("POST /v1/rest/forms/{id}/publish", h.authed(h.publishForm))
+	mux.Handle("POST /v1/rest/forms/{id}/status", h.authed(h.setFormStatus))
 	mux.Handle("GET /v1/rest/keys", h.authed(h.listKeys))
 	mux.Handle("POST /v1/rest/keys", h.authed(h.createKey))
 	mux.Handle("DELETE /v1/rest/keys/{id}", h.authed(h.revokeKey))
