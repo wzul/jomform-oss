@@ -15,6 +15,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/wzul/jomform/api/internal/auth"
+	"github.com/wzul/jomform/api/internal/customform"
 	"github.com/wzul/jomform/api/internal/dbstore"
 )
 
@@ -284,6 +285,13 @@ type upsertFormIn struct {
 	// Issue #179: form confirmations (Gravity-Forms-style). Omit to leave
 	// unchanged; pass an empty array to reset to just the default.
 	Confirmations []confirmationIn `json:"confirmations,omitempty" jsonschema:"Pengesahan borang (ganti semua; lalai sentiasa dikekalkan)"`
+	// Issue #255: fully-custom HTML response-only form. When set, the form
+	// becomes a response-mode custom form: the agent-authored HTML body is
+	// rendered in a sandboxed iframe (CSP + sanitized) and only the
+	// registered custom_fields are recorded on submit. Omit to leave
+	// unchanged; pass an empty string to clear the custom form.
+	CustomHTML   string         `json:"custom_html,omitempty" jsonschema:"HTML badan borang tersuai (response-only, sandboxed iframe). Kosong = buang mod tersuai."`
+	CustomFields []customform.Field `json:"custom_fields,omitempty" jsonschema:"Kontrak pendaftaran medan: [{field_id, type, label, required, validation}]. Input HTML mesti bawa field_id sebagai name."`
 }
 
 func (s *Server) upsertForm(
@@ -356,13 +364,36 @@ func (s *Server) upsertForm(
 			return nil, nil, err
 		}
 	}
+	// Issue #255: apply the custom-HTML response form when provided.
+	if in.CustomHTML != "" || in.CustomFields != nil {
+		if err := applyCustomFormConfig(f.Config, in.CustomHTML, in.CustomFields); err != nil {
+			return nil, nil, err
+		}
+		if err := s.deps.Forms.Update(ctx, acc, f.ID, f.Title, f.Config, nil); err != nil {
+			return nil, nil, err
+		}
+	}
 	return nil, map[string]string{"status": "created", "form_id": f.ID, "slug": f.Slug}, nil
 }
-	// Update store treats nil maps as "leave unchanged", so an omitted
-	// config (and the nil theme below) keep the stored values intact.
-	if err := s.deps.Forms.Update(ctx, acc, in.FormID, in.Title, in.Config, in.Theme); err != nil {
+// Update store treats nil maps as "leave unchanged", so an omitted
+// config (and the nil theme below) keep the stored values intact.
+// Issue #255: when a custom form is provided on update, merge it into the
+// existing config (so blocks/other settings are preserved) and pass the
+// merged config to Update.
+if in.CustomHTML != "" || in.CustomFields != nil {
+	existing, gerr := s.deps.Forms.GetByID(ctx, acc, in.FormID)
+	if gerr != nil {
+		return nil, nil, errors.New("borang tidak dijumpai")
+	}
+	merged := orEmptyMap(existing.Config)
+	if err := applyCustomFormConfig(merged, in.CustomHTML, in.CustomFields); err != nil {
 		return nil, nil, err
 	}
+	in.Config = merged
+}
+if err := s.deps.Forms.Update(ctx, acc, in.FormID, in.Title, in.Config, in.Theme); err != nil {
+	return nil, nil, err
+}
 	// Apply restrictions on update when provided.
 	if in.StartAt != nil || in.EndAt != nil || in.EntryLimit != nil ||
 		in.PendingMessage != "" || in.ExpiredMessage != "" || in.LimitMessage != "" {
@@ -469,6 +500,28 @@ func (s *Server) applyConfirmations(ctx context.Context, formID string, in []con
 		confs = append(confs, cc)
 	}
 	return s.deps.Forms.SaveConfirmations(ctx, formID, confs)
+}
+
+// applyCustomFormConfig merges a custom-HTML response form (issue #255) into
+// a form's config map. It sets mode=response, stores the agent-authored HTML
+// body and the field-registration contract under the custom_html key, and
+// validates the contract. An empty html clears the custom form (falls back to
+// the block renderer).
+func applyCustomFormConfig(cfg map[string]any, html string, fields []customform.Field) error {
+	cc := &customform.Config{HTML: html, Fields: fields}
+	if err := customform.Validate(cc); err != nil {
+		return err
+	}
+	cfg["mode"] = "response"
+	if strings.TrimSpace(html) == "" {
+		delete(cfg, customform.ConfigKey)
+		return nil
+	}
+	cfg[customform.ConfigKey] = map[string]any{
+		"html":   html,
+		"fields": fields,
+	}
+	return nil
 }
 
 // uniqueFormSlug generates a URL-safe, per-space-unique slug for a new form

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/wzul/jomform/api/internal/auth"
+	"github.com/wzul/jomform/api/internal/customform"
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/email"
 	"github.com/wzul/jomform/api/internal/emailqueue"
@@ -705,6 +706,15 @@ func (h *PublicHandlers) handleResponseSubmit(w http.ResponseWriter, r *http.Req
 			}
 		}
 	}
+	// Issue #255: for a custom-HTML response form, only the registered fields
+	// are read from the submitted data. Arbitrary HTML inputs (unregistered
+	// field_ids) are dropped — the server never trusts the agent's HTML to
+	// define what gets recorded. The anti-spam fields (honeypot + timestamp)
+	// are consumed above and excluded from the stored submission.
+	if customform.Enabled(form.Config) {
+		cc := customform.FromConfig(form.Config)
+		in.Fields = customform.Collect(cc, in.Fields)
+	}
 	// Always capture the buyer identity alongside the field answers so the
 	// merchant can see who responded even when no name/email block exists.
 	if in.Client.FullName != "" {
@@ -1251,6 +1261,11 @@ func (h *PublicHandlers) serveForm(w http.ResponseWriter, r *http.Request, f *db
 		return
 	}
 	if formMode(f) == "response" {
+		// Issue #255: a custom-HTML response form (agent-authored body in a
+		// sandboxed iframe) takes precedence over the block renderer.
+		if h.renderCustomForm(w, r, f) {
+			return
+		}
 		if h.renderResponseForm(w, r, f) {
 			return
 		}
