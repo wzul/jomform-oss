@@ -20,8 +20,14 @@ func breakerTestClient(t *testing.T) *goredis.Client {
 	if valkeyURL == "" {
 		t.Skip("JOMFORM_TEST_VALKEY_URL not set; skipping breaker integration test")
 	}
+	// Test isolation: route to a dedicated DB (…/2) so this package's FlushDB
+	// never wipes keys that other packages (httpapi auth on …/1, emailqueue on
+	// …/3) create concurrently when `go test ./...` runs packages in parallel.
 	u := strings.TrimPrefix(valkeyURL, "valkey://")
-	opts, err := goredis.ParseURL("redis://" + u)
+	if i := strings.LastIndex(u, "/"); i >= 0 {
+		u = u[:i]
+	}
+	opts, err := goredis.ParseURL("redis://" + u + "/2")
 	if err != nil {
 		t.Fatalf("parse valkey url: %v", err)
 	}

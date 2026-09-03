@@ -9,6 +9,7 @@ package payments
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -50,11 +51,16 @@ func recurTestPool(t *testing.T) *pgxpool.Pool {
 		// Test isolation: the fixture reuses a fixed CHIP purchase id
 		// ("pur_charge_child") which is UNIQUE on subscription_charges, so a
 		// dirty DB from a prior run makes AddCharge fail silently and the
-		// charge count never advances. Truncate the tables this suite touches
-		// so the test is deterministic regardless of prior runs (CI uses a
-		// fresh Postgres; this keeps local runs green too).
+		// charge count never advances. Truncate ONLY subscription_charges (the
+		// actual collision source) so the test is deterministic regardless of
+		// prior runs. We deliberately do NOT truncate users/accounts/products/
+		// subscriptions: the fixture seeds those with unique random names, and
+		// truncating them would wipe rows that OTHER packages (e.g. httpapi's
+		// auth tests) create concurrently when `go test ./...` runs packages in
+		// parallel — a cross-package race that made TestAuthLoginSuccessResetsCounter
+		// flaky in CI.
 		if _, terr := pool.Exec(context.Background(),
-			`TRUNCATE subscription_charges, subscriptions, products, accounts, users RESTART IDENTITY CASCADE`); terr != nil {
+			`TRUNCATE subscription_charges RESTART IDENTITY CASCADE`); terr != nil {
 			recurErr = terr
 			return
 		}
@@ -114,16 +120,18 @@ func seedRecurringFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool,
 }
 
 // mockChipServer returns a CHIP client backed by a stub that always returns a
-// successful (pending_charge) purchase for /purchases/ + /charge/.
-func mockChipServer(t *testing.T) *chip.Client {
+// successful (pending_charge) purchase for /purchases/ + /charge/. The charge
+// id is unique per call so repeated runs (or `-count=N`) never collide on the
+// subscription_charges UNIQUE constraint — no shared-table truncation needed.
+func mockChipServer(t *testing.T, chargeID string) *chip.Client {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /purchases/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(map[string]any{"id": "pur_charge_child", "status": "created"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": chargeID, "status": "created"})
 	})
-	mux.HandleFunc("POST /purchases/pur_charge_child/charge/", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{"id": "pur_charge_child", "status": "pending_charge"})
+	mux.HandleFunc("POST /purchases/"+chargeID+"/charge/", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": chargeID, "status": "pending_charge"})
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -147,8 +155,11 @@ func TestRecurringEngineStopsAfterNCharges(t *testing.T) {
 	for i := range key {
 		key[i] = byte(i + 1)
 	}
+	// Unique charge id per run so repeated runs (or `-count=N`) never collide
+	// on the subscription_charges UNIQUE constraint.
+	chargeID := fmt.Sprintf("pur_charge_child_%d", time.Now().UnixNano())
 	svc := &Service{
-		Chip:       mockChipServer(t),
+		Chip:       mockChipServer(t, chargeID),
 		Accounts:   accounts,
 		Subs:       subs,
 		Products:   products,
@@ -174,7 +185,7 @@ func TestRecurringEngineStopsAfterNCharges(t *testing.T) {
 	}
 	// The charge was created as pending; simulate the CHIP callback marking it
 	// paid, then the engine must advance the count and complete the sub.
-	if err := subs.MarkChargePaid(ctx, "pur_charge_child"); err != nil {
+	if err := subs.MarkChargePaid(ctx, chargeID); err != nil {
 		t.Fatalf("mark charge paid: %v", err)
 	}
 	sub2, err := subs.ByIDForAccount(ctx, accountID, subID)
@@ -219,7 +230,7 @@ func TestRecurringEngineInfiniteKeepsCharging(t *testing.T) {
 		key[i] = byte(i + 1)
 	}
 	svc := &Service{
-		Chip:       mockChipServer(t),
+		Chip:       mockChipServer(t, fmt.Sprintf("pur_charge_child_%d", time.Now().UnixNano())),
 		Accounts:   accounts,
 		Subs:       subs,
 		Products:   products,

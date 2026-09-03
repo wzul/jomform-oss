@@ -24,8 +24,14 @@ func testClient(t *testing.T) *goredis.Client {
 	if valkeyURL == "" {
 		t.Skip("JOMFORM_TEST_VALKEY_URL not set; skipping email queue integration test")
 	}
+	// Test isolation: route to a dedicated DB (…/3) so this package's FlushDB
+	// never wipes keys that other packages (httpapi auth on …/1, email on …/2)
+	// create concurrently when `go test ./...` runs packages in parallel.
 	u := strings.TrimPrefix(valkeyURL, "valkey://")
-	opts, err := goredis.ParseURL("redis://" + u)
+	if i := strings.LastIndex(u, "/"); i >= 0 {
+		u = u[:i]
+	}
+	opts, err := goredis.ParseURL("redis://" + u + "/3")
 	if err != nil {
 		t.Fatalf("parse valkey url: %v", err)
 	}

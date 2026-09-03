@@ -29,7 +29,10 @@ func TestWebhookRetryQueue(t *testing.T) {
 		t.Fatalf("enqueue future retry: %v", err)
 	}
 
-	due, err := ws.DueRetries(ctx, 10)
+	// Use a large limit so this webhook's retry is always included even when
+	// other dbstore tests (running in parallel) have enqueued their own due
+	// retries with earlier next_retry_at timestamps.
+	due, err := ws.DueRetries(ctx, 1000)
 	if err != nil {
 		t.Fatalf("due retries: %v", err)
 	}
@@ -73,7 +76,7 @@ func TestWebhookRetryQueue(t *testing.T) {
 	if len(dead) != 0 {
 		t.Fatalf("dead-lettered after retry = %d, want 0", len(dead))
 	}
-	due, _ = ws.DueRetries(ctx, 10)
+	due, _ = ws.DueRetries(ctx, 1000)
 	mine = nil
 	for _, r := range due {
 		if r.WebhookID == wh.ID {
@@ -88,7 +91,7 @@ func TestWebhookRetryQueue(t *testing.T) {
 	if err := ws.DeleteRetry(ctx, mine[0].ID); err != nil {
 		t.Fatalf("delete retry: %v", err)
 	}
-	due, _ = ws.DueRetries(ctx, 10)
+	due, _ = ws.DueRetries(ctx, 1000)
 	mine = nil
 	for _, r := range due {
 		if r.WebhookID == wh.ID {
@@ -104,7 +107,7 @@ func TestWebhookRetryQueue(t *testing.T) {
 	if err := ws.EnqueueRetry(ctx, wh.ID, "sale.paid", `{"ok":3}`, 1, time.Now()); err != nil {
 		t.Fatalf("enqueue retry 3: %v", err)
 	}
-	due, _ = ws.DueRetries(ctx, 10)
+	due, _ = ws.DueRetries(ctx, 1000)
 	mine = nil
 	for _, r := range due {
 		if r.WebhookID == wh.ID {
