@@ -88,7 +88,7 @@ func (a *AuthHandlers) handleVerify(w http.ResponseWriter, r *http.Request) {
 	if user.Verified {
 		// Idempotent: already verified.
 		if r.Method == http.MethodGet {
-			writeVerifyPage(w, "Emel anda telah disahkan! Anda kini boleh log masuk.")
+			writeVerifyPage(w, "Emel anda telah disahkan! Anda kini boleh log masuk.", a.loginURL())
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "verified", "email": email})
@@ -100,23 +100,34 @@ func (a *AuthHandlers) handleVerify(w http.ResponseWriter, r *http.Request) {
 	}
 	slog.Info("email_verified", "user", user.ID)
 	if r.Method == http.MethodGet {
-		writeVerifyPage(w, "Emel anda telah disahkan! Anda kini boleh log masuk.")
+		writeVerifyPage(w, "Emel anda telah disahkan! Anda kini boleh log masuk.", a.loginURL())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "verified", "email": email})
 }
 
+// loginURL returns the web login page URL. The verify page is served from the
+// API host, so the "log in" link must point at the app's login route (issue
+// #189) rather than the POST-only /api/auth/login endpoint, which returns 405
+// on a browser GET. Falls back to a relative /login when no app base is set.
+func (a *AuthHandlers) loginURL() string {
+	if a.BaseURL == "" {
+		return "/login"
+	}
+	return strings.TrimRight(a.BaseURL, "/") + "/login"
+}
+
 // writeVerifyPage renders a minimal self-contained confirmation page for GET
 // (no JS, no assets) so a click straight from an email client works anywhere.
-func writeVerifyPage(w http.ResponseWriter, msg string) {
+func writeVerifyPage(w http.ResponseWriter, msg, loginURL string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintf(w, `<!doctype html><html><body style="font-family:system-ui,sans-serif;background:#0b1020;color:#e6e9ef;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
 <div style="text-align:center;max-width:480px;padding:32px">
 <h1 style="color:#5e6ad2">JomForm</h1>
 <p style="font-size:18px">%s</p>
-<p style="font-size:14px;color:#9aa3b2">Tekan <a href="/api/auth/login" style="color:#5e6ad2">here</a> untuk log masuk.</p>
-</div></body></html>`, htmlEsc(msg))
+<p style="font-size:14px;color:#9aa3b2">Click <a href="%s" style="color:#5e6ad2">here</a> to log in.</p>
+</div></body></html>`, htmlEsc(msg), htmlEsc(loginURL))
 }
 
 // htmlEsc escapes text for injection-safe HTML rendering.
