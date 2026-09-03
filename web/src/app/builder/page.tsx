@@ -7,18 +7,46 @@ import TemplatePicker from "../../components/TemplatePicker";
 
 /* ─── types ──────────────────────────────────────────────────────────────── */
 
+/* Issue #173: Gravity-Forms-style field palette. BlockType is the union of
+   every field the builder can place. Categories mirror Gravity Forms:
+   Standard / Advanced / Pricing. */
 type BlockType =
-  | "header"
+  // Standard
   | "text"
-  | "image"
-  | "product"
-  | "divider"
+  | "textarea"
+  | "number"
+  | "select"
+  | "radio"
+  | "checkbox"
   | "name"
   | "email"
   | "phone"
-  | "textarea"
-  | "checkbox"
+  | "date"
+  | "time"
+  | "website"
+  | "section"
+  | "html"
+  // Advanced
+  | "address"
+  | "file"
+  | "consent"
+  | "hidden"
+  | "list"
+  | "repeater"
+  | "image-choice"
+  | "captcha"
+  // Pricing
+  | "product"
+  | "quantity"
+  | "option"
+  | "shipping"
+  | "total"
+  // Legacy / decorative
+  | "image"
+  | "divider"
   | "coupon";
+
+type Choice = { label: string; value: string; price_sen?: number };
 
 type Block = {
   id: string;
@@ -28,6 +56,20 @@ type Block = {
   productId?: string;
   required?: boolean;
   condition?: { field_id: string; op: string; value: string } | null;
+  // Issue #173: per-field settings.
+  placeholder?: string;
+  description?: string;
+  cssClass?: string;
+  maxLength?: number;
+  defaultValue?: string;
+  min?: string;
+  max?: string;
+  step?: string;
+  format?: string;
+  pattern?: string;
+  requiredMessage?: string;
+  priceSen?: number;
+  choices?: Choice[];
 };
 
 type Product = { id: string; name: string; price_sen: number; type: string };
@@ -54,20 +96,74 @@ const isCapturePending = (s: SaleRow) =>
   !s.captured_at &&
   (s.status === "pending" || s.status === "authorized" || s.authorized === true);
 
-const PALETTE: { type: BlockType; icon: string }[] = [
-  { type: "text", icon: "T" },
-  { type: "image", icon: "🖼" },
-  { type: "product", icon: "🛒" },
-  { type: "name", icon: "🔤" },
-  { type: "email", icon: "✉" },
-  { type: "phone", icon: "☎" },
-  { type: "textarea", icon: "📝" },
-  { type: "checkbox", icon: "☑" },
-  { type: "coupon", icon: "🏷" },
-  { type: "divider", icon: "―" },
+/* Issue #173: categorized palette. Each group is a Gravity-Forms-style
+   section. Items are draggable onto the canvas and click-to-add (mobile). */
+type PaletteGroup = { key: string; icon: string; items: { type: BlockType; icon: string }[] };
+
+const PALETTE_GROUPS: PaletteGroup[] = [
+  {
+    key: "standard",
+    icon: "▤",
+    items: [
+      { type: "text", icon: "T" },
+      { type: "textarea", icon: "📝" },
+      { type: "number", icon: "#" },
+      { type: "select", icon: "▾" },
+      { type: "radio", icon: "◉" },
+      { type: "checkbox", icon: "☑" },
+      { type: "name", icon: "🔤" },
+      { type: "email", icon: "✉" },
+      { type: "phone", icon: "☎" },
+      { type: "date", icon: "📅" },
+      { type: "time", icon: "🕐" },
+      { type: "website", icon: "🔗" },
+      { type: "section", icon: "§" },
+      { type: "html", icon: "</>" },
+      { type: "image", icon: "🖼" },
+      { type: "divider", icon: "―" },
+    ],
+  },
+  {
+    key: "advanced",
+    icon: "⚙",
+    items: [
+      { type: "address", icon: "⌂" },
+      { type: "file", icon: "📎" },
+      { type: "consent", icon: "✓" },
+      { type: "hidden", icon: "👁" },
+      { type: "list", icon: "☰" },
+      { type: "repeater", icon: "⇅" },
+      { type: "image-choice", icon: "🖼" },
+      { type: "captcha", icon: "🛡" },
+    ],
+  },
+  {
+    key: "pricing",
+    icon: "₨",
+    items: [
+      { type: "product", icon: "🛒" },
+      { type: "quantity", icon: "×" },
+      { type: "option", icon: "＋" },
+      { type: "shipping", icon: "🚚" },
+      { type: "total", icon: "Σ" },
+      { type: "coupon", icon: "🏷" },
+    ],
+  },
 ];
 
-const fieldTypes: BlockType[] = ["name", "email", "phone", "textarea", "checkbox", "coupon"];
+/* Field types that collect a buyer answer (used for required + conditional
+   logic + response-mode collection). */
+const fieldTypes: BlockType[] = [
+  "name", "email", "phone", "textarea", "checkbox", "coupon",
+  "number", "select", "radio", "date", "time", "website",
+  "address", "consent", "hidden", "list", "repeater", "image-choice", "captcha",
+];
+
+/* Pricing fields that add to the order total (payment-mode only). */
+const pricingTypes: BlockType[] = ["product", "quantity", "option", "shipping", "total", "coupon"];
+
+/* Field types that use a choices editor. */
+const choiceTypes: BlockType[] = ["select", "radio", "image-choice", "option", "shipping"];
 
 function uid() {
   return Math.random().toString(36).slice(2, 9);
@@ -404,20 +500,47 @@ export default function Builder() {
       if (d.theme?.primary) setFsTheme(d.theme.primary);
       const hydrated: Block[] = [];
       (cfg.blocks || []).forEach(
-        (b: { type: BlockType; value?: string; product_id?: string; required?: boolean; condition?: { field_id: string; op: string; value: string } | null }) => {
-          hydrated.push({
-            id: uid(),
-            type: b.type,
-            value: b.value || "",
-            productId: b.product_id,
-            required: b.required,
-            condition: b.condition || null,
-          });
+        (b: Record<string, unknown>) => {
+          hydrated.push(hydrateBlock(b));
         },
       );
       setBlocks(hydrated.length ? hydrated : defaultBlocks(cfg.products || []));
     })();
   }, [load]);
+
+  /* Issue #173: map a stored block (snake_case) to the builder Block shape,
+     carrying the new per-field settings through. */
+  function hydrateBlock(b: Record<string, unknown>): Block {
+    const choices = Array.isArray(b.choices)
+      ? (b.choices as { label?: string; value?: string; price_sen?: number }[]).map((c) => ({
+          label: c.label || "",
+          value: c.value || c.label || "",
+          price_sen: c.price_sen,
+        }))
+      : undefined;
+    return {
+      id: uid(),
+      type: (b.type as BlockType) || "text",
+      value: (b.value as string) || "",
+      src: b.src as string | undefined,
+      productId: b.product_id as string | undefined,
+      required: b.required as boolean | undefined,
+      condition: (b.condition as Block["condition"]) || null,
+      placeholder: b.placeholder as string | undefined,
+      description: b.description as string | undefined,
+      cssClass: b.css_class as string | undefined,
+      maxLength: b.max_length as number | undefined,
+      defaultValue: b.default_value as string | undefined,
+      min: b.min as string | undefined,
+      max: b.max as string | undefined,
+      step: b.step as string | undefined,
+      format: b.format as string | undefined,
+      pattern: b.pattern as string | undefined,
+      requiredMessage: b.required_message as string | undefined,
+      priceSen: b.price_sen as number | undefined,
+      choices,
+    };
+  }
 
   function makeBlock(bt: BlockType): Block {
     const b: Block = { id: uid(), type: bt, value: "" };
@@ -427,6 +550,24 @@ export default function Builder() {
       const k = FIELD_LABEL_KEY[bt];
       b.value = k ? t(k) : "";
     }
+    // Issue #173: sensible defaults for the new field types.
+    if (bt === "select" || bt === "radio" || bt === "image-choice") {
+      b.choices = [
+        { label: t("bld.choiceOne"), value: "1" },
+        { label: t("bld.choiceTwo"), value: "2" },
+      ];
+    }
+    if (bt === "option" || bt === "shipping") {
+      b.choices = [{ label: t("bld.choiceOne"), value: "1", price_sen: 0 }];
+      // Pricing blocks submit with product_id = the block's own id; the
+      // server resolves the price from the block config (server authority).
+      b.productId = b.id;
+    }
+    if (bt === "quantity") b.defaultValue = "1";
+    if (bt === "consent") b.value = t("bld.consentDefault");
+    if (bt === "section") b.value = t("bld.sectionDefault");
+    if (bt === "total") b.value = t("bld.totalDefault");
+    if (bt === "captcha") b.value = t("bld.captchaDefault");
     return b;
   }
 
@@ -448,6 +589,20 @@ export default function Builder() {
   function removeBlock(id: string) {
     setBlocks((prev) => prev.filter((b) => b.id !== id));
     if (selected === id) setSelected(null);
+    setDirty(true);
+  }
+
+  /* Issue #173: duplicate a block (deep copy with a fresh id). */
+  function duplicateBlock(id: string) {
+    setBlocks((prev) => {
+      const idx = prev.findIndex((b) => b.id === id);
+      if (idx < 0) return prev;
+      const copy: Block = { ...prev[idx], id: uid() };
+      if (copy.choices) copy.choices = prev[idx].choices?.map((c) => ({ ...c }));
+      const next = [...prev];
+      next.splice(idx + 1, 0, copy);
+      return next;
+    });
     setDirty(true);
   }
 
@@ -473,9 +628,6 @@ export default function Builder() {
 
   /* drag wiring */
 
-
-
-
   async function fetchForm(id: string) {
     const r = await fetch(`/api/rest/forms/${id}${spaceQuery()}`);
     if (!r.ok) return;
@@ -488,14 +640,8 @@ export default function Builder() {
     setMode(cfg.mode === "response" ? "response" : "payment");
     const hydrated: Block[] = [];
     (cfg.blocks || []).forEach(
-      (b: { type: BlockType; value?: string; product_id?: string; required?: boolean; condition?: { field_id: string; op: string; value: string } | null }) => {
-        hydrated.push({
-          id: uid(),
-          type: b.type,
-          value: b.value || "",
-          productId: b.product_id,
-          required: b.required,
-        });
+      (b: Record<string, unknown>) => {
+        hydrated.push(hydrateBlock(b));
       },
     );
     setBlocks(hydrated.length ? hydrated : defaultBlocks(cfg.products || []));
@@ -513,12 +659,27 @@ export default function Builder() {
       description: (blocks.find((b) => b.type === "text")?.value || "").slice(0, 300),
       theme: { primary: fsTheme },
       blocks: blocks.map((b) => ({
+        id: b.id,
         type: b.type,
         value: b.value,
         src: b.src,
         product_id: b.productId,
         required: b.required,
         condition: b.condition || undefined,
+        // Issue #173: per-field settings.
+        placeholder: b.placeholder || undefined,
+        description: b.description || undefined,
+        css_class: b.cssClass || undefined,
+        max_length: b.maxLength,
+        default_value: b.defaultValue || undefined,
+        min: b.min || undefined,
+        max: b.max || undefined,
+        step: b.step || undefined,
+        format: b.format || undefined,
+        pattern: b.pattern || undefined,
+        required_message: b.requiredMessage || undefined,
+        price_sen: b.priceSen,
+        choices: b.choices?.map((c) => ({ label: c.label, value: c.value, price_sen: c.price_sen })),
       })),
       products: products.map((p) => ({ id: p.id, name: p.name, price_sen: p.price_sen })),
     };
@@ -587,6 +748,283 @@ export default function Builder() {
     } finally {
       setUploading(false);
     }
+  }
+
+  /* Issue #173: per-field settings panel. Renders the field-type-specific
+     controls for the selected block. */
+  function renderFieldSettings(b: Block) {
+    const upd = (patch: Partial<Block>) => updateBlock(b.id, patch);
+    const input = (key: keyof Block, label: string, ph?: string) => (
+      <div>
+        <label className="text-xs text-[var(--jf-muted)]">{label}</label>
+        <input
+          value={(b[key] as string) || ""}
+          onChange={(e) => upd({ [key]: e.target.value } as Partial<Block>)}
+          placeholder={ph}
+          className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-sm outline-none focus:border-[#7170ff]/60"
+        />
+      </div>
+    );
+
+    return (
+      <div className="space-y-3">
+        {/* Common: label / value */}
+        <div>
+          <label className="text-xs text-[var(--jf-muted)]">{t("bld.textLabel")}</label>
+          <textarea
+            rows={2}
+            value={b.value}
+            onChange={(e) => upd({ value: e.target.value })}
+            className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-sm outline-none focus:border-[#7170ff]/60"
+          />
+        </div>
+
+        {/* Common: description */}
+        {input("description", t("bld.description"), t("bld.descriptionPh"))}
+
+        {/* Common: placeholder (input fields) */}
+        {["text", "textarea", "number", "email", "phone", "date", "time", "website", "address", "captcha", "list", "repeater"].includes(b.type) &&
+          input("placeholder", t("bld.placeholder"), t("bld.placeholderPh"))}
+
+        {/* Common: CSS class */}
+        {input("cssClass", t("bld.cssClass"), t("bld.cssClassPh"))}
+
+        {/* Text/textarea: max length + default value */}
+        {(b.type === "text" || b.type === "textarea") && (
+          <>
+            <div>
+              <label className="text-xs text-[var(--jf-muted)]">{t("bld.maxLength")}</label>
+              <input
+                type="number"
+                min={0}
+                value={b.maxLength ?? ""}
+                onChange={(e) => upd({ maxLength: e.target.value === "" ? undefined : Number(e.target.value) })}
+                className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-sm outline-none focus:border-[#7170ff]/60"
+              />
+            </div>
+            {input("defaultValue", t("bld.defaultValue"), t("bld.defaultValuePh"))}
+          </>
+        )}
+
+        {/* Number: min/max/step */}
+        {b.type === "number" && (
+          <>
+            {input("min", t("bld.min"))}
+            {input("max", t("bld.max"))}
+            {input("step", t("bld.step"))}
+          </>
+        )}
+
+        {/* Name: format simple/full */}
+        {b.type === "name" && (
+          <div>
+            <label className="text-xs text-[var(--jf-muted)]">{t("bld.nameFormat")}</label>
+            <select
+              value={b.format || "full"}
+              onChange={(e) => upd({ format: e.target.value })}
+              className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-sm outline-none"
+            >
+              <option value="full">{t("bld.nameFull")}</option>
+              <option value="simple">{t("bld.nameSimple")}</option>
+            </select>
+          </div>
+        )}
+
+        {/* Date/time: format */}
+        {(b.type === "date" || b.type === "time") && (
+          <div>
+            <label className="text-xs text-[var(--jf-muted)]">{t("bld.dateFormat")}</label>
+            <select
+              value={b.format || (b.type === "date" ? "date" : "time")}
+              onChange={(e) => upd({ format: e.target.value })}
+              className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-sm outline-none"
+            >
+              <option value="date">{t("bld.fmtDate")}</option>
+              <option value="datetime">{t("bld.fmtDateTime")}</option>
+              <option value="time">{t("bld.fmtTime")}</option>
+            </select>
+          </div>
+        )}
+
+        {/* Choices editor: select/radio/image-choice/option/shipping */}
+        {choiceTypes.includes(b.type) && (
+          <div>
+            <label className="text-xs text-[var(--jf-muted)]">{t("bld.choices")}</label>
+            <div className="mt-1 space-y-1.5">
+              {(b.choices || []).map((c, ci) => (
+                <div key={ci} className="flex items-center gap-1.5">
+                  <input
+                    value={c.label}
+                    onChange={(e) => {
+                      const ch = [...(b.choices || [])];
+                      ch[ci] = { ...ch[ci], label: e.target.value, value: e.target.value || ch[ci].value };
+                      upd({ choices: ch });
+                    }}
+                    placeholder={t("bld.choiceLabel")}
+                    className="min-w-0 flex-1 rounded-md border border-[var(--jf-border)] bg-white px-2 py-1.5 text-xs outline-none focus:border-[#7170ff]/60"
+                  />
+                  {(b.type === "option" || b.type === "shipping") && (
+                    <input
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      value={c.price_sen ? (c.price_sen / 100).toFixed(2) : ""}
+                      onChange={(e) => {
+                        const ch = [...(b.choices || [])];
+                        const rm = Number(e.target.value);
+                        ch[ci] = { ...ch[ci], price_sen: Number.isFinite(rm) && rm > 0 ? Math.round(rm * 100) : 0 };
+                        upd({ choices: ch });
+                      }}
+                      placeholder="RM"
+                      title={t("bld.choicePrice")}
+                      className="w-20 rounded-md border border-[var(--jf-border)] bg-white px-2 py-1.5 text-xs outline-none focus:border-[#7170ff]/60"
+                    />
+                  )}
+                  <button
+                    onClick={() => upd({ choices: (b.choices || []).filter((_, i) => i !== ci) })}
+                    title={t("bld.removeChoice")}
+                    className="rounded-md px-1.5 text-xs text-[#9ca3af] hover:text-red-400"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+              <button
+                onClick={() => upd({ choices: [...(b.choices || []), { label: "", value: String((b.choices || []).length + 1) }] })}
+                className="w-full rounded-md border border-dashed border-[var(--jf-border)] py-1.5 text-xs text-[var(--jf-muted)] hover:border-[#7170ff]/40 hover:text-[var(--jf-primary)]"
+              >
+                + {t("bld.addChoice")}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Product: pick a product */}
+        {b.type === "product" && (
+          <div>
+            <label className="text-xs text-[var(--jf-muted)]">{t("bld.product")}</label>
+            <select
+              value={b.productId || ""}
+              onChange={(e) => upd({ productId: e.target.value })}
+              className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-sm outline-none"
+            >
+              {products.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name} — {money(p.price_sen)}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {/* Quantity: default value */}
+        {b.type === "quantity" && input("defaultValue", t("bld.defaultQty"), "1")}
+
+        {/* Image: URL + upload */}
+        {b.type === "image" && (
+          <div>
+            <label className="text-xs text-[var(--jf-muted)]">{t("bld.imageUrl")}</label>
+            <input
+              value={b.src || ""}
+              onChange={(e) => upd({ src: e.target.value })}
+              placeholder="https://…"
+              className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-sm outline-none focus:border-[#7170ff]/60"
+            />
+            <label className="mt-2 inline-flex w-full cursor-pointer items-center justify-center rounded-md border border-[var(--jf-border)] py-2.5 text-xs font-medium text-[#374151] hover:bg-slate-50 disabled:opacity-50">
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif"
+                disabled={uploading}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void handleImageUpload(f);
+                  e.target.value = "";
+                }}
+                className="hidden"
+              />
+              {uploading ? t("bld.uploading") : t("bld.uploadImage")}
+            </label>
+          </div>
+        )}
+
+        {/* Required */}
+        {fieldTypes.includes(b.type) && (
+          <label className="flex items-center gap-2 text-sm text-[#374151]">
+            <input
+              type="checkbox"
+              checked={!!b.required}
+              onChange={(e) => upd({ required: e.target.checked })}
+              className="accent-[#5e6ad2]"
+            />
+            {t("bld.required")}
+          </label>
+        )}
+
+        {/* Validation: required message + pattern */}
+        {fieldTypes.includes(b.type) && b.required && (
+          <>
+            {input("requiredMessage", t("bld.requiredMsg"), t("bld.requiredMsgPh"))}
+            {["text", "textarea", "number", "email", "phone", "website"].includes(b.type) &&
+              input("pattern", t("bld.pattern"), t("bld.patternPh"))}
+          </>
+        )}
+
+        {/* conditional logic */}
+        {fieldTypes.includes(b.type) && blocks.length > 1 && (
+          <div className="rounded-md border border-slate-200 p-2">
+            <p className="text-[11px] font-medium text-slate-500">
+              {t("bld.condLogic")}
+            </p>
+            <select
+              value={b.condition?.field_id || ""}
+              onChange={(e) =>
+                upd({
+                  condition: e.target.value
+                    ? { ...(b.condition || { op: "equals", value: "" }), field_id: e.target.value }
+                    : null,
+                })
+              }
+              className="mt-1 w-full rounded border border-slate-200 px-2 py-1 text-xs"
+            >
+              <option value="">{t("bld.alwaysShow")}</option>
+              {blocks
+                .filter((x) => x.id !== b.id && fieldTypes.includes(x.type))
+                .map((x) => (
+                  <option key={x.id} value={x.id}>
+                    {x.value || x.type} (#{blocks.indexOf(x) + 1})
+                  </option>
+                ))}
+            </select>
+            {b.condition && (
+              <div className="mt-1 flex gap-1">
+                <select
+                  value={b.condition.op}
+                  onChange={(e) =>
+                    upd({ condition: { ...b.condition!, op: e.target.value } })
+                  }
+                  className="w-28 rounded border border-slate-200 px-1 py-1 text-xs"
+                >
+                  <option value="equals">equals</option>
+                  <option value="not_equals">not equals</option>
+                  <option value="contains">contains</option>
+                  <option value="gt">&gt;</option>
+                  <option value="lt">&lt;</option>
+                  <option value="not_empty">not empty</option>
+                </select>
+                <input
+                  value={b.condition.value}
+                  onChange={(e) =>
+                    upd({ condition: { ...b.condition!, value: e.target.value } })
+                  }
+                  placeholder="value"
+                  className="min-w-0 flex-1 rounded border border-slate-200 px-2 py-1 text-xs"
+                />
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
   }
 
   return (
@@ -673,29 +1111,41 @@ export default function Builder() {
       </nav>
 
       <div className="grid w-full grid-cols-1 md:grid-cols-[240px_1fr_260px]">
-        {/* ── left: palette (drag sources) − mobile: only on the Add tab,
-             desktop: always visible. Tap = add (already exists). */}
+        {/* ── left: categorized palette (drag sources) − mobile: only on the
+             Add tab, desktop: always visible. Tap = add (already exists). */}
         <aside className={`border-r border-[var(--jf-border)] p-4 ${mobileTab === "add" ? "block" : "hidden"} md:block`}>
           <p className="mb-3 text-xs font-medium uppercase tracking-wider text-[#9ca3af]">
             {t("bld.dragToAdd")}
           </p>
-          <div className="grid grid-cols-2 gap-2">
-            {PALETTE.filter((p) => !(mode === "response" && p.type === "product")).map((p) => (
-              <div
-                key={p.type}
-                draggable
-                onDragStart={(e) => paletteDragStart(e, p.type)}
-                onClick={() => addBlock(p.type)}
-                title={typeHint(p.type)}
-                className={`cursor-grab select-none rounded-lg border border-[var(--jf-border)] bg-white px-2.5 py-2 transition-colors hover:border-[#7170ff]/40 hover:bg-indigo-50 active:cursor-grabbing ${
-                  dragging ? "opacity-60" : ""
-                }`}
-              >
-                <span className="text-sm">{p.icon}</span>
-                <span className="mt-0.5 block text-[11px] font-medium text-[#374151]">{typeLabel(p.type)}</span>
+          {PALETTE_GROUPS.map((group) => {
+            const items = group.items.filter((p) => !(mode === "response" && pricingTypes.includes(p.type)));
+            if (items.length === 0) return null;
+            return (
+              <div key={group.key} className="mb-4">
+                <p className="mb-1.5 flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wider text-[#9ca3af]">
+                  <span>{group.icon}</span>
+                  {t(`bld.palette.${group.key}` as import("../../components/i18n").Key)}
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  {items.map((p) => (
+                    <div
+                      key={p.type}
+                      draggable
+                      onDragStart={(e) => paletteDragStart(e, p.type)}
+                      onClick={() => addBlock(p.type)}
+                      title={typeHint(p.type)}
+                      className={`cursor-grab select-none rounded-lg border border-[var(--jf-border)] bg-white px-2.5 py-2 transition-colors hover:border-[#7170ff]/40 hover:bg-indigo-50 active:cursor-grabbing ${
+                        dragging ? "opacity-60" : ""
+                      }`}
+                    >
+                      <span className="text-sm">{p.icon}</span>
+                      <span className="mt-0.5 block text-[11px] font-medium text-[#374151]">{typeLabel(p.type)}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
-            ))}
-          </div>
+            );
+          })}
         </aside>
 
         {/* ── center: canvas (drop zone) − mobile: only on the Canvas tab;
@@ -767,6 +1217,17 @@ export default function Builder() {
                       >
                         ↓
                       </button>
+                      {/* Issue #173: duplicate */}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          duplicateBlock(b.id);
+                        }}
+                        title={t("bld.duplicate")}
+                        className="flex h-11 w-11 items-center justify-center rounded-md text-base text-[#9ca3af] hover:text-[#374151] active:bg-slate-100 md:h-auto md:w-auto md:px-1 md:text-[10px]"
+                      >
+                        ⧉
+                      </button>
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -804,133 +1265,7 @@ export default function Builder() {
         <aside className={`border-l border-[var(--jf-border)] p-4 ${mobileTab === "settings" ? "block" : "hidden"} md:block`}>
           <p className="mb-3 text-xs font-medium uppercase tracking-wider text-[#9ca3af]">{t("bld.blockSettings")}</p>
           {!selectedBlock && <p className="text-xs text-[#9ca3af]">{t("bld.selectBlock")}</p>}
-          {selectedBlock && (
-            <div className="space-y-3">
-              <div>
-                <label className="text-xs text-[var(--jf-muted)]">{t("bld.textLabel")}</label>
-                <textarea
-                  rows={2}
-                  value={selectedBlock.value}
-                  onChange={(e) => updateBlock(selectedBlock.id, { value: e.target.value })}
-                  className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-sm outline-none focus:border-[#7170ff]/60"
-                />
-              </div>
-              {selectedBlock.type === "image" && (
-                <div>
-                  <label className="text-xs text-[var(--jf-muted)]">{t("bld.imageUrl")}</label>
-                  <input
-                    value={selectedBlock.src || ""}
-                    onChange={(e) => updateBlock(selectedBlock.id, { src: e.target.value })}
-                    placeholder="https://…"
-                    className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-sm outline-none focus:border-[#7170ff]/60"
-                  />
-                  {/* Issue #61: upload directly from a file picker. The server
-                      validates type/size, optimises and stores to S3/MinIO,
-                      then returns the public URL which becomes the block src. */}
-                  <label className="mt-2 inline-flex w-full cursor-pointer items-center justify-center rounded-md border border-[var(--jf-border)] py-2.5 text-xs font-medium text-[#374151] hover:bg-slate-50 disabled:opacity-50">
-                    <input
-                      type="file"
-                      accept="image/png,image/jpeg,image/webp,image/gif"
-                      disabled={uploading}
-                      onChange={(e) => {
-                        const f = e.target.files?.[0];
-                        if (f) void handleImageUpload(f);
-                        e.target.value = ""; // allow re-picking the same file
-                      }}
-                      className="hidden"
-                    />
-                    {uploading ? t("bld.uploading") : t("bld.uploadImage")}
-                  </label>
-                </div>
-              )}
-              {selectedBlock.type === "product" && (
-                <div>
-                  <label className="text-xs text-[var(--jf-muted)]">{t("bld.product")}</label>
-                  <select
-                    value={selectedBlock.productId || ""}
-                    onChange={(e) => updateBlock(selectedBlock.id, { productId: e.target.value })}
-                    className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-sm outline-none"
-                  >
-                    {products.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name} — {money(p.price_sen)}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-              {fieldTypes.includes(selectedBlock.type) && (
-                <label className="flex items-center gap-2 text-sm text-[#374151]">
-                  <input
-                    type="checkbox"
-                    checked={!!selectedBlock.required}
-                    onChange={(e) => updateBlock(selectedBlock.id, { required: e.target.checked })}
-                    className="accent-[#5e6ad2]"
-                  />
-                  {t("bld.required")}
-                </label>
-              )}
-
-              {/* conditional logic */}
-              {fieldTypes.includes(selectedBlock.type) && blocks.length > 1 && (
-                <div className="rounded-md border border-slate-200 p-2">
-                  <p className="text-[11px] font-medium text-slate-500">
-                    {t("bld.condLogic")}
-                  </p>
-                  <select
-                    value={selectedBlock.condition?.field_id || ""}
-                    onChange={(e) =>
-                      updateBlock(selectedBlock.id, {
-                        condition: e.target.value
-                          ? { ...(selectedBlock.condition || { op: "equals", value: "" }), field_id: e.target.value }
-                          : null,
-                      })
-                    }
-                    className="mt-1 w-full rounded border border-slate-200 px-2 py-1 text-xs"
-                  >
-                    <option value="">{t("bld.alwaysShow")}</option>
-                    {blocks
-                      .filter((x) => x.id !== selectedBlock.id && fieldTypes.includes(x.type))
-                      .map((x) => (
-                        <option key={x.id} value={x.id}>
-                          {x.value || x.type} (#{blocks.indexOf(x) + 1})
-                        </option>
-                      ))}
-                  </select>
-                  {selectedBlock.condition && (
-                    <div className="mt-1 flex gap-1">
-                      <select
-                        value={selectedBlock.condition.op}
-                        onChange={(e) =>
-                          updateBlock(selectedBlock.id, {
-                            condition: { ...selectedBlock.condition!, op: e.target.value },
-                          })
-                        }
-                        className="w-28 rounded border border-slate-200 px-1 py-1 text-xs"
-                      >
-                        <option value="equals">equals</option>
-                        <option value="not_equals">not equals</option>
-                        <option value="contains">contains</option>
-                        <option value="gt">&gt;</option>
-                        <option value="lt">&lt;</option>
-                        <option value="not_empty">not empty</option>
-                      </select>
-                      <input
-                        value={selectedBlock.condition.value}
-                        onChange={(e) =>
-                          updateBlock(selectedBlock.id, {
-                            condition: { ...selectedBlock.condition!, value: e.target.value },
-                          })
-                        }
-                        placeholder="value"
-                        className="min-w-0 flex-1 rounded border border-slate-200 px-2 py-1 text-xs"
-                      />
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
+          {selectedBlock && renderFieldSettings(selectedBlock)}
 
 
         {/* ── Form mode (issue #171) ── */}
@@ -1428,6 +1763,10 @@ function BlockPreview({ block, products }: { block: Block; products: Product[] }
   switch (block.type) {
     case "text":
       return <p className="text-sm text-[#374151]">{block.value || "Text…"}</p>;
+    case "html":
+      return <p className="text-sm text-[#374151]">{block.value || "</>"}</p>;
+    case "section":
+      return <p className="text-base font-semibold text-[#17181c]">{block.value || "Section"}</p>;
     case "image":
       return block.src ? (
         // eslint-disable-next-line @next/next/no-img-element
@@ -1444,6 +1783,36 @@ function BlockPreview({ block, products }: { block: Block; products: Product[] }
           <span className="text-sm font-medium text-[var(--jf-primary)]">{p ? money(p.price_sen) : "—"}</span>
         </div>
       );
+    case "quantity":
+      return (
+        <div className="flex items-center gap-2 text-sm text-[#374151]">
+          <span>{block.value || "Quantity"}</span>
+          <span className="rounded-md border border-[var(--jf-border)] bg-slate-50 px-2 py-0.5 text-xs">
+            {block.defaultValue || "1"}
+          </span>
+        </div>
+      );
+    case "option":
+    case "shipping":
+      return (
+        <div className="rounded-md border border-[var(--jf-border)] bg-slate-50 px-3 py-2">
+          <p className="text-sm text-[#374151]">{block.value || (block.type === "option" ? "Option" : "Shipping")}</p>
+          <div className="mt-1 space-y-0.5">
+            {(block.choices || []).map((c, i) => (
+              <p key={i} className="text-xs text-[var(--jf-muted)]">
+                {c.label || "—"} {c.price_sen ? `+ ${money(c.price_sen)}` : ""}
+              </p>
+            ))}
+          </div>
+        </div>
+      );
+    case "total":
+      return (
+        <div className="flex items-center justify-between rounded-md border border-[var(--jf-border)] bg-slate-50 px-3 py-2">
+          <span className="text-sm">{block.value || "Total"}</span>
+          <span className="text-sm font-medium text-[var(--jf-primary)]">RM0.00</span>
+        </div>
+      );
     case "divider":
       return <hr className="border-[var(--jf-border)]" />;
     case "checkbox":
@@ -1451,6 +1820,56 @@ function BlockPreview({ block, products }: { block: Block; products: Product[] }
         <label className="flex items-center gap-2 text-sm text-[#374151]">
           <span className="inline-block h-4 w-4 rounded border border-slate-300" /> {block.value}
         </label>
+      );
+    case "consent":
+      return (
+        <label className="flex items-center gap-2 text-sm text-[#374151]">
+          <span className="inline-block h-4 w-4 rounded border border-slate-300" /> {block.value || "Consent"}
+        </label>
+      );
+    case "select":
+      return (
+        <div>
+          <p className="mb-1 text-xs text-[var(--jf-muted)]">
+            {block.value || "Field"}
+            {block.required && <span className="text-red-400"> *</span>}
+          </p>
+          <div className="flex h-8 items-center rounded-md border border-[var(--jf-border)] bg-slate-50 px-2 text-xs text-[#9ca3af]">
+            {(block.choices || []).map((c) => c.label).filter(Boolean).join(", ") || "Select…"}
+          </div>
+        </div>
+      );
+    case "radio":
+    case "image-choice":
+      return (
+        <div>
+          <p className="mb-1 text-xs text-[var(--jf-muted)]">
+            {block.value || "Field"}
+            {block.required && <span className="text-red-400"> *</span>}
+          </p>
+          <div className="space-y-1">
+            {(block.choices || []).map((c, i) => (
+              <label key={i} className="flex items-center gap-2 text-sm text-[#374151]">
+                <span className="inline-block h-4 w-4 rounded-full border border-slate-300" /> {c.label}
+              </label>
+            ))}
+          </div>
+        </div>
+      );
+    case "hidden":
+      return (
+        <p className="text-xs text-[#9ca3af]">
+          Hidden · {block.value || "field"} = {block.defaultValue || "…"}
+        </p>
+      );
+    case "captcha":
+      return (
+        <div>
+          <p className="mb-1 text-xs text-[var(--jf-muted)]">{block.value || "Captcha"}</p>
+          <div className="flex h-8 items-center rounded-md border border-[var(--jf-border)] bg-slate-50 px-2 text-xs text-[#9ca3af]">
+            🛡 Captcha
+          </div>
+        </div>
       );
     default:
       return (

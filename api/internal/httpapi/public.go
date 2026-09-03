@@ -300,11 +300,25 @@ func (h *PublicHandlers) lookupProduct(form *dbstore.Form, productID string) (st
 			Name     string `json:"name"`
 			PriceSen int64  `json:"price_sen"`
 		} `json:"products"`
+		// Issue #173: pricing blocks (option/shipping) carry their own price
+		// and submit with product_id = the block's own id. Resolve those here
+		// so the server stays the price authority for add-ons/shipping.
+		Blocks []struct {
+			ID       string `json:"id"`
+			Type     string `json:"type"`
+			Value    string `json:"value"`
+			PriceSen int64  `json:"price_sen"`
+		} `json:"blocks"`
 	}
 	if json.Unmarshal(raw, &cfg) == nil {
 		for _, p := range cfg.Products {
 			if p.ID == productID {
 				return p.Name, p.PriceSen
+			}
+		}
+		for _, b := range cfg.Blocks {
+			if b.ID == productID && (b.Type == "option" || b.Type == "shipping") {
+				return b.Value, b.PriceSen
 			}
 		}
 	}

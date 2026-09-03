@@ -31,6 +31,9 @@ type langStrings struct {
 	SubmitResponse   string
 	ThankYou         string
 	ResponseReceived string
+	// Issue #173: pricing/choice field strings.
+	SelectOption   string
+	SelectShipping string
 }
 
 // formLangs maps every supported language code to its buyer-facing strings.
@@ -43,6 +46,7 @@ var formLangs = map[string]langStrings{
 		NoProductAlert: "Please select at least one product",
 		SelectVariation: "Select an option", SelectVariationAlert: "Please choose a variation for each product", InStock: "in stock",
 		SubmitResponse: "Submit", ThankYou: "Thank you!", ResponseReceived: "Your response has been received.",
+		SelectOption: "Select an option", SelectShipping: "Select shipping",
 	},
 	"ms": {
 		Lang: "ms", EmailLabel: "Emel", CouponLabel: "Kod kupon",
@@ -50,6 +54,7 @@ var formLangs = map[string]langStrings{
 		NoProductAlert: "Pilih sekurang-kurangnya satu produk",
 		SelectVariation: "Pilih variasi", SelectVariationAlert: "Sila pilih variasi untuk setiap produk", InStock: "stok",
 		SubmitResponse: "Hantar", ThankYou: "Terima kasih!", ResponseReceived: "Respons anda telah diterima.",
+		SelectOption: "Pilih pilihan", SelectShipping: "Pilih penghantaran",
 	},
 	"zh": {
 		Lang: "zh", EmailLabel: "电子邮件", CouponLabel: "优惠券",
@@ -57,6 +62,7 @@ var formLangs = map[string]langStrings{
 		NoProductAlert: "请至少选择一种商品",
 		SelectVariation: "请选择规格", SelectVariationAlert: "请为每件商品选择规格", InStock: "有货",
 		SubmitResponse: "提交", ThankYou: "谢谢！", ResponseReceived: "您的回复已收到。",
+		SelectOption: "请选择", SelectShipping: "选择配送方式",
 	},
 	"ta": {
 		Lang: "ta", EmailLabel: "மின்னஞ்சல்", CouponLabel: "கூப்பன்",
@@ -64,6 +70,7 @@ var formLangs = map[string]langStrings{
 		NoProductAlert: "குறைந்தது ஒரு பொருளையாவது தேர்ந்தெடுக்கவும்",
 		SelectVariation: "மாறுபாட்டைத் தேர்ந்தெடுக்கவும்", SelectVariationAlert: "ஒவ்வொரு பொருளுக்கும் மாறுபாட்டைத் தேர்ந்தெடுக்கவும்", InStock: "கையிருப்பு",
 		SubmitResponse: "சமர்ப்பி", ThankYou: "நன்றி!", ResponseReceived: "உங்கள் பதில் பெறப்பட்டது.",
+		SelectOption: "ஒரு விருப்பத்தைத் தேர்ந்தெடுக்கவும்", SelectShipping: "ஷிப்பிங்கைத் தேர்ந்தெடுக்கவும்",
 	},
 	"ar": {
 		Lang: "ar", EmailLabel: "البريد الإلكتروني", CouponLabel: "قسيمة",
@@ -71,6 +78,7 @@ var formLangs = map[string]langStrings{
 		NoProductAlert: "يرجى اختيار منتج واحد على الأقل",
 		SelectVariation: "اختر خيارًا", SelectVariationAlert: "يرجى اختيار خيار لكل منتج", InStock: "متوفر",
 		SubmitResponse: "إرسال", ThankYou: "شكراً لك!", ResponseReceived: "تم استلام ردك.",
+		SelectOption: "اختر خيارًا", SelectShipping: "اختر الشحن",
 	},
 }
 
