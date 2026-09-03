@@ -77,9 +77,10 @@ func newBundleHandlers(pool *pgxpool.Pool) *RESTHandlers {
 		key[i] = byte(i + 1)
 	}
 	return &RESTHandlers{
-		Accounts:   dbstore.NewAccountStore(pool),
-		Products:   dbstore.NewProductStore(pool),
-		Forms:      dbstore.NewFormStore(pool),
+		Accounts:          dbstore.NewAccountStore(pool),
+		Products:          dbstore.NewProductStore(pool),
+		ProductVariations: dbstore.NewProductVariationStore(pool),
+		Forms:             dbstore.NewFormStore(pool),
 		Keys:       dbstore.NewAPIKeyStore(pool),
 		Sales:      dbstore.NewSaleStore(pool),
 		Subs:       dbstore.NewSubscriptionStore(pool),

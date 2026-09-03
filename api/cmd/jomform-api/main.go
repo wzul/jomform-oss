@@ -187,6 +187,7 @@ func main() {
 		}
 		rest := &httpapi.RESTHandlers{
 			Accounts: accounts, Products: products, Forms: formsStore,
+			ProductVariations: dbstore.NewProductVariationStore(pool),
 			Keys: keys, Sales: sales, Subs: subs, Sessions: sessions, ChipProbe: chip.New(cfg.ChipAPIBaseURL),
 			SecretsKey: decryptKey, Pay: pay, Webhooks: whStore, Domains: dbstore.NewDomainStore(pool),
 			SystemSettings: dbstore.NewSystemSettingStore(pool),
@@ -210,6 +211,7 @@ func main() {
 		// MCP server — merchants' AI agents control their store here.
 		mcpSrv := mcpsrv.New(&mcpsrv.Deps{
 			Accounts: accounts, Products: products, Sales: sales,
+			ProductVariations: dbstore.NewProductVariationStore(pool),
 			Subs: subs, Keys: keys, Forms: formsStore,
 			Webhooks: dbstore.NewWebhookStore(pool),
 			Spaces:   spacesStore,

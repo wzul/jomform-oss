@@ -17,6 +17,8 @@ import (
 type Deps struct {
 	Accounts *dbstore.AccountStore
 	Products *dbstore.ProductStore
+	// Issue #151: product variations (per-variation image/price/stock).
+	ProductVariations *dbstore.ProductVariationStore
 	Sales    *dbstore.SaleStore
 	Subs     *dbstore.SubscriptionStore
 	Keys     *dbstore.APIKeyStore

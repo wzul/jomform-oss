@@ -15,23 +15,35 @@ import (
 
 // ─── Products ────────────────────────────────────────────────────────────────
 
+// restVariation is the REST JSON shape of one product variation (money stays
+// integer sen; stock nil = unlimited).
+type restVariation struct {
+	ID        string   `json:"id,omitempty"`
+	Name      string   `json:"name"`
+	PriceSen  int64    `json:"price_sen"`
+	Stock     *int     `json:"stock,omitempty"` // nil = unlimited
+	Images    []string `json:"images,omitempty"`
+	SortOrder int      `json:"sort_order,omitempty"`
+}
+
 type restProduct struct {
-	ID            string   `json:"id"`
-	Name          string   `json:"name"`
-	Description   string   `json:"description,omitempty"`
-	PriceSen      int64    `json:"price_sen"`
-	Images        []string `json:"images,omitempty"`
-	Type          string   `json:"type"`
-	BillingPeriod string   `json:"billing_period,omitempty"`
-	TrialDays     int      `json:"trial_days"`
-	Active        bool     `json:"active"`
-	Stock         *int     `json:"stock,omitempty"` // nil = unlimited
-	CreatedAt     string   `json:"created_at,omitempty"`
-	UpdatedAt     string   `json:"updated_at,omitempty"`
+	ID            string           `json:"id"`
+	Name          string           `json:"name"`
+	Description   string           `json:"description,omitempty"`
+	PriceSen      int64            `json:"price_sen"`
+	Images        []string         `json:"images,omitempty"`
+	Type          string           `json:"type"`
+	BillingPeriod string           `json:"billing_period,omitempty"`
+	TrialDays     int              `json:"trial_days"`
+	Active        bool             `json:"active"`
+	Stock         *int             `json:"stock,omitempty"` // nil = unlimited
+	Variations    []restVariation  `json:"variations,omitempty"`
+	CreatedAt     string           `json:"created_at,omitempty"`
+	UpdatedAt     string           `json:"updated_at,omitempty"`
 }
 
 // toRestProduct maps a store Product to the REST JSON shape (money stays
-// integer sen; stock nil = unlimited).
+// integer sen; stock nil = unlimited). Variations are included when present.
 func toRestProduct(p *dbstore.Product) restProduct {
 	out := restProduct{
 		ID: p.ID, Name: p.Name, Description: p.Description, PriceSen: p.PriceSen,
@@ -42,6 +54,21 @@ func toRestProduct(p *dbstore.Product) restProduct {
 	}
 	if !p.UpdatedAt.IsZero() {
 		out.UpdatedAt = p.UpdatedAt.UTC().Format(time.RFC3339)
+	}
+	return out
+}
+
+// toRestVariations maps store variations to the REST JSON shape.
+func toRestVariations(vs []*dbstore.ProductVariation) []restVariation {
+	if len(vs) == 0 {
+		return nil
+	}
+	out := make([]restVariation, 0, len(vs))
+	for _, v := range vs {
+		out = append(out, restVariation{
+			ID: v.ID, Name: v.Name, PriceSen: v.PriceSen, Stock: v.Stock,
+			Images: v.Images, SortOrder: v.SortOrder,
+		})
 	}
 	return out
 }
@@ -76,15 +103,16 @@ func (h *RESTHandlers) listProducts(w http.ResponseWriter, r *http.Request, actx
 // left unchanged; an omitted images[] keeps the stored ones.
 func (h *RESTHandlers) updateProduct(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	var in struct {
-		Name           *string   `json:"name"`
-		Description    *string   `json:"description"`
-		PriceSen       *int64    `json:"price_sen"`
-		Images         *[]string `json:"images"` // nil = keep; [] = clear
-		TrialDays      *int      `json:"trial_days"`
-		Type           *string   `json:"type"`
-		BillingPeriod  *string   `json:"billing_period"`
-		Stock          *int      `json:"stock"` // nil = unlimited, keep-unset if omitted
-		Active         *bool     `json:"active"`
+		Name           *string          `json:"name"`
+		Description    *string          `json:"description"`
+		PriceSen       *int64           `json:"price_sen"`
+		Images         *[]string        `json:"images"` // nil = keep; [] = clear
+		TrialDays      *int             `json:"trial_days"`
+		Type           *string          `json:"type"`
+		BillingPeriod  *string          `json:"billing_period"`
+		Stock          *int             `json:"stock"` // nil = unlimited, keep-unset if omitted
+		Active         *bool            `json:"active"`
+		Variations     *[]restVariation `json:"variations"` // nil = keep; [] = clear (simple)
 	}
 	if err := decodeJSON(r, &in); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid json")
@@ -121,12 +149,46 @@ func (h *RESTHandlers) updateProduct(w http.ResponseWriter, r *http.Request, act
 		writeErr(w, http.StatusBadRequest, "stok mesti >= 0")
 		return
 	}
+	// Validate variations (money stays integer sen; stock nil = unlimited).
+	if in.Variations != nil {
+		for _, v := range *in.Variations {
+			if v.Name == "" {
+				writeErr(w, http.StatusBadRequest, "variation name wajib")
+				return
+			}
+			if v.PriceSen < 0 {
+				writeErr(w, http.StatusBadRequest, "variation price_sen mesti >= 0")
+				return
+			}
+			if v.Stock != nil && *v.Stock < 0 {
+				writeErr(w, http.StatusBadRequest, "variation stok mesti >= 0")
+				return
+			}
+		}
+	}
 	err := h.Products.Update(r.Context(), actx.Account.ID, r.PathValue("id"),
 		in.Name, in.Description, in.PriceSen, in.Images, in.Stock, in.Active,
 		typPtr, periodPtr, in.TrialDays)
 	if err != nil {
 		respondErr(w, r, err)
 		return
+	}
+	// Wholesale-replace variations when the editor sent them (nil = keep).
+	if in.Variations != nil && h.ProductVariations != nil {
+		vs := make([]*dbstore.ProductVariation, 0, len(*in.Variations))
+		for i, v := range *in.Variations {
+			vs = append(vs, &dbstore.ProductVariation{
+				Name: v.Name, PriceSen: v.PriceSen, Stock: v.Stock,
+				Images: v.Images, SortOrder: v.SortOrder,
+			})
+			if v.SortOrder == 0 {
+				vs[len(vs)-1].SortOrder = i
+			}
+		}
+		if err := h.ProductVariations.ReplaceAll(r.Context(), r.PathValue("id"), vs); err != nil {
+			respondErr(w, r, err)
+			return
+		}
 	}
 	// Issue #92: audit product update.
 	h.recordEvent(r, actx, h.sessionOwnerID(r), "product.updated", map[string]any{"product_id": r.PathValue("id")})
@@ -136,18 +198,30 @@ func (h *RESTHandlers) updateProduct(w http.ResponseWriter, r *http.Request, act
 		respond(w, http.StatusOK, map[string]string{"status": "updated"})
 		return
 	}
-	respond(w, http.StatusOK, toRestProduct(prod))
+	out := toRestProduct(prod)
+	if h.ProductVariations != nil {
+		if vs, verr := h.ProductVariations.ListByProduct(r.Context(), prod.ID); verr == nil {
+			out.Variations = toRestVariations(vs)
+		}
+	}
+	respond(w, http.StatusOK, out)
 }
 
 // getProduct handles GET /v1/rest/products/{id} — single-product fetch for the
-// editor (account-scoped).
+// editor (account-scoped). Returns the product's variations for the editor.
 func (h *RESTHandlers) getProduct(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	prod, err := h.Products.Get(r.Context(), actx.Account.ID, r.PathValue("id"))
 	if err != nil {
 		respondErr(w, r, err)
 		return
 	}
-	respond(w, http.StatusOK, toRestProduct(prod))
+	out := toRestProduct(prod)
+	if h.ProductVariations != nil {
+		if vs, verr := h.ProductVariations.ListByProduct(r.Context(), prod.ID); verr == nil {
+			out.Variations = toRestVariations(vs)
+		}
+	}
+	respond(w, http.StatusOK, out)
 }
 
 func (h *RESTHandlers) deleteProduct(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
@@ -217,14 +291,15 @@ func (h *RESTHandlers) bulkProducts(w http.ResponseWriter, r *http.Request, actx
 
 func (h *RESTHandlers) createProduct(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	var in struct {
-		Name          string   `json:"name"`
-		Description   string   `json:"description"`
-		PriceSen      int64    `json:"price_sen"`
-		Type          string   `json:"type"`
-		BillingPeriod string   `json:"billing_period"`
-		TrialDays     int      `json:"trial_days"`
-		Stock         *int     `json:"stock"` // nil = unlimited
-		Images        []string `json:"images"`
+		Name          string           `json:"name"`
+		Description   string           `json:"description"`
+		PriceSen      int64            `json:"price_sen"`
+		Type          string           `json:"type"`
+		BillingPeriod string           `json:"billing_period"`
+		TrialDays     int              `json:"trial_days"`
+		Stock         *int             `json:"stock"` // nil = unlimited
+		Images        []string         `json:"images"`
+		Variations    []restVariation  `json:"variations"`
 	}
 	if err := decodeJSON(r, &in); err != nil || in.Name == "" || in.PriceSen < 0 {
 		writeErr(w, http.StatusBadRequest, "nama dan price_sen wajib")
@@ -250,6 +325,21 @@ func (h *RESTHandlers) createProduct(w http.ResponseWriter, r *http.Request, act
 			return
 		}
 	}
+	// Validate variations (money stays integer sen; stock nil = unlimited).
+	for _, v := range in.Variations {
+		if v.Name == "" {
+			writeErr(w, http.StatusBadRequest, "variation name wajib")
+			return
+		}
+		if v.PriceSen < 0 {
+			writeErr(w, http.StatusBadRequest, "variation price_sen mesti >= 0")
+			return
+		}
+		if v.Stock != nil && *v.Stock < 0 {
+			writeErr(w, http.StatusBadRequest, "variation stok mesti >= 0")
+			return
+		}
+	}
 	p := &dbstore.Product{
 		AccountID: actx.Account.ID, Name: in.Name, Description: in.Description,
 		PriceSen: in.PriceSen, Images: in.Images, Type: pType,
@@ -260,7 +350,31 @@ func (h *RESTHandlers) createProduct(w http.ResponseWriter, r *http.Request, act
 		respondErr(w, r, err)
 		return
 	}
-	respond(w, http.StatusCreated, toRestProduct(p))
+	// Persist variations wholesale when the editor sent them.
+	if len(in.Variations) > 0 && h.ProductVariations != nil {
+		vs := make([]*dbstore.ProductVariation, 0, len(in.Variations))
+		for i, v := range in.Variations {
+			order := v.SortOrder
+			if order == 0 {
+				order = i
+			}
+			vs = append(vs, &dbstore.ProductVariation{
+				Name: v.Name, PriceSen: v.PriceSen, Stock: v.Stock,
+				Images: v.Images, SortOrder: order,
+			})
+		}
+		if err := h.ProductVariations.ReplaceAll(r.Context(), p.ID, vs); err != nil {
+			respondErr(w, r, err)
+			return
+		}
+	}
+	out := toRestProduct(p)
+	if h.ProductVariations != nil {
+		if vs, verr := h.ProductVariations.ListByProduct(r.Context(), p.ID); verr == nil {
+			out.Variations = toRestVariations(vs)
+		}
+	}
+	respond(w, http.StatusCreated, out)
 }
 
 // ─── Forms ───────────────────────────────────────────────────────────────────

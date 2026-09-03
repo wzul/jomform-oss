@@ -146,3 +146,87 @@ func intPtr5() *int {
 	v := 5
 	return &v
 }
+
+// Issue #151: POST/PUT /v1/rest/products persist variations wholesale and
+// GET /v1/rest/products/{id} returns them for the editor.
+func TestProductVariationsPersistAndReturn(t *testing.T) {
+	ctx := context.Background()
+	pool := bundleTestPool(t)
+	accountID, _ := bundleFixture(t, ctx, pool)
+
+	h := newBundleHandlers(pool)
+	raw := bundleAPIKey(t, ctx, pool, accountID)
+
+	// Use a direct POST for create.
+	postReq := httptest.NewRequest("POST", "/v1/rest/products", bytes.NewBufferString(`{
+		"name":"Tee","price_sen":1000,"type":"one_time",
+		"variations":[
+			{"name":"Size M","price_sen":1200,"stock":5,"images":["https://a/m.png"]},
+			{"name":"Size L","price_sen":1300,"stock":null,"images":["https://a/l.png"]}
+		]
+	}`))
+	postReq.Header.Set("Authorization", "Bearer "+raw)
+	postReq.Header.Set("Content-Type", "application/json")
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, postReq)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST status = %d, want 201 (body=%s)", rec.Code, rec.Body.String())
+	}
+	var created map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("parse create resp: %v", err)
+	}
+	pid, _ := created["id"].(string)
+	if pid == "" {
+		t.Fatalf("create resp missing id: %v", created)
+	}
+	if vs, ok := created["variations"].([]any); !ok || len(vs) != 2 {
+		t.Fatalf("create resp variations = %v, want 2", created["variations"])
+	}
+
+	// GET returns the variations for the editor.
+	code, got := bundleGet(t, h, raw, "/v1/rest/products/"+pid)
+	if code != http.StatusOK {
+		t.Fatalf("GET status = %d, want 200", code)
+	}
+	vs, ok := got["variations"].([]any)
+	if !ok || len(vs) != 2 {
+		t.Fatalf("GET variations = %v, want 2", got["variations"])
+	}
+	first := vs[0].(map[string]any)
+	if first["name"] != "Size M" || int64(first["price_sen"].(float64)) != 1200 {
+		t.Errorf("first variation = %v, want Size M @1200", first)
+	}
+
+	// PUT replaces variations wholesale (switch to a single variation).
+	putBody := `{"variations":[{"name":"One Size","price_sen":1500,"stock":2,"images":["https://a/one.png"]}]}`
+	code, resp := productPut(t, h, raw, "/v1/rest/products/"+pid, putBody)
+	if code != http.StatusOK {
+		t.Fatalf("PUT status = %d, want 200 (body=%v)", code, resp)
+	}
+	if vs, ok := resp["variations"].([]any); !ok || len(vs) != 1 {
+		t.Fatalf("PUT resp variations = %v, want 1", resp["variations"])
+	}
+
+	// Verify via GET.
+	_, got2 := bundleGet(t, h, raw, "/v1/rest/products/"+pid)
+	vs2, _ := got2["variations"].([]any)
+	if len(vs2) != 1 {
+		t.Fatalf("GET after PUT variations = %v, want 1", got2["variations"])
+	}
+	if v := vs2[0].(map[string]any); v["name"] != "One Size" || int64(v["price_sen"].(float64)) != 1500 {
+		t.Errorf("variation after PUT = %v, want One Size @1500", v)
+	}
+
+	// PUT with empty variations clears them (switch back to simple).
+	code, _ = productPut(t, h, raw, "/v1/rest/products/"+pid, `{"variations":[]}`)
+	if code != http.StatusOK {
+		t.Fatalf("PUT clear status = %d, want 200", code)
+	}
+	_, got3 := bundleGet(t, h, raw, "/v1/rest/products/"+pid)
+	if vs3, ok := got3["variations"].([]any); ok && len(vs3) != 0 {
+		t.Fatalf("GET after clear variations = %v, want empty", got3["variations"])
+	}
+}

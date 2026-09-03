@@ -25,6 +25,7 @@ type updateProductIn struct {
 	Type          string   `json:"type,omitempty" jsonschema:"one_time atau subscription (optional)"`
 	BillingPeriod string   `json:"billing_period,omitempty" jsonschema:"month atau year untuk subscription (optional)"`
 	TrialDays     *int     `json:"trial_days,omitempty" jsonschema:"Hari percubaan (subscription; optional)"`
+	Variations    []variationIn `json:"variations,omitempty" jsonschema:"Set penuh variasi (name, price_sen, stock, images, sort_order). Kosong = produk simple; omit = tak berubah."`
 }
 
 func (s *Server) updateProduct(
@@ -67,11 +68,88 @@ func (s *Server) updateProduct(
 	if in.Images != nil {
 		imagesPtr = &in.Images
 	}
+	// Validate variations (money stays integer sen; stock nil = unlimited).
+	for _, v := range in.Variations {
+		if v.Name == "" {
+			return nil, nil, fmt.Errorf("variation name wajib")
+		}
+		if v.PriceSen < 0 {
+			return nil, nil, fmt.Errorf("variation price_sen mesti >= 0")
+		}
+		if v.Stock != nil && *v.Stock < 0 {
+			return nil, nil, fmt.Errorf("variation stok mesti >= 0")
+		}
+	}
 	if err := s.deps.Products.Update(ctx, acc, in.ProductID, namePtr, descPtr,
 		in.PriceSen, imagesPtr, stockPtr, in.Active, typPtr, periodPtr, in.TrialDays); err != nil {
 		return nil, nil, err
 	}
+	// Wholesale-replace variations when the caller sent them (nil = keep).
+	if in.Variations != nil && s.deps.ProductVariations != nil {
+		vs := make([]*dbstore.ProductVariation, 0, len(in.Variations))
+		for i, v := range in.Variations {
+			order := v.SortOrder
+			if order == 0 {
+				order = i
+			}
+			vs = append(vs, &dbstore.ProductVariation{
+				Name: v.Name, PriceSen: v.PriceSen, Stock: v.Stock,
+				Images: v.Images, SortOrder: order,
+			})
+		}
+		if err := s.deps.ProductVariations.ReplaceAll(ctx, in.ProductID, vs); err != nil {
+			return nil, nil, err
+		}
+	}
 	return nil, map[string]string{"status": "updated", "product_id": in.ProductID}, nil
+}
+
+// listProductVariationsIn is the input for the list_product_variations tool.
+type listProductVariationsIn struct {
+	ProductID string `json:"product_id" jsonschema:"ID produk"`
+}
+
+// listProductVariations returns a product's variations (per-variation
+// image/price/stock) — MCP parity for the dashboard editor (issue #151).
+func (s *Server) listProductVariations(
+	ctx context.Context, _ *mcp.CallToolRequest, in listProductVariationsIn,
+) (*mcp.CallToolResult, []variationOut, error) {
+	acc, err := s.accountAndScope(ctx, false)
+	if err != nil {
+		return nil, nil, err
+	}
+	if in.ProductID == "" {
+		return nil, nil, fmt.Errorf("product_id wajib")
+	}
+	// Ownership check: the product must belong to the account.
+	if _, err := s.deps.Products.Get(ctx, acc, in.ProductID); err != nil {
+		return nil, nil, fmt.Errorf("produk tidak dijumpai")
+	}
+	if s.deps.ProductVariations == nil {
+		return nil, []variationOut{}, nil
+	}
+	vs, err := s.deps.ProductVariations.ListByProduct(ctx, in.ProductID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("db: %w", err)
+	}
+	out := make([]variationOut, 0, len(vs))
+	for _, v := range vs {
+		out = append(out, variationOut{
+			ID: v.ID, Name: v.Name, PriceSen: v.PriceSen, Stock: v.Stock,
+			Images: v.Images, SortOrder: v.SortOrder,
+		})
+	}
+	return nil, out, nil
+}
+
+// variationOut is the MCP output shape for one product variation.
+type variationOut struct {
+	ID        string   `json:"id"`
+	Name      string   `json:"name"`
+	PriceSen  int64    `json:"price_sen"`
+	Stock     *int     `json:"stock,omitempty"`
+	Images    []string `json:"images,omitempty"`
+	SortOrder int      `json:"sort_order"`
 }
 
 // ── Forms upsert + publish + delete ─────────────────────────────────────

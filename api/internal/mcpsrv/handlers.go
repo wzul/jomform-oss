@@ -57,6 +57,16 @@ type createProductIn struct {
 	TrialDays     int      `json:"trial_days,omitempty" jsonschema:"hari percubaan (subscription)"`
 	Stock         *int     `json:"stock,omitempty" jsonschema:"stok (omit = unlimited)"`
 	Images        []string `json:"images,omitempty" jsonschema:"gambar (URL)"`
+	Variations    []variationIn `json:"variations,omitempty" jsonschema:"variasi produk (name, price_sen, stock, images, sort_order) — kosong = produk simple"`
+}
+
+// variationIn is the MCP input shape for one product variation.
+type variationIn struct {
+	Name      string   `json:"name" jsonschema:"nama variasi (cth: Saiz M, Merah)"`
+	PriceSen  int64    `json:"price_sen" jsonschema:"harga variasi dalam SEN"`
+	Stock     *int     `json:"stock,omitempty" jsonschema:"stok variasi (omit = unlimited)"`
+	Images    []string `json:"images,omitempty" jsonschema:"gambar variasi (URL)"`
+	SortOrder int      `json:"sort_order,omitempty" jsonschema:"urutan (0 = ikut senarai)"`
 }
 
 func (s *Server) createProduct(ctx context.Context, _ *mcp.CallToolRequest, in createProductIn) (*mcp.CallToolResult, productOut, error) {
@@ -81,6 +91,18 @@ func (s *Server) createProduct(ctx context.Context, _ *mcp.CallToolRequest, in c
 			return nil, productOut{}, fmt.Errorf("subscription perlu billing_period month|year")
 		}
 	}
+	// Validate variations (money stays integer sen; stock nil = unlimited).
+	for _, v := range in.Variations {
+		if v.Name == "" {
+			return nil, productOut{}, fmt.Errorf("variation name wajib")
+		}
+		if v.PriceSen < 0 {
+			return nil, productOut{}, fmt.Errorf("variation price_sen mesti >= 0")
+		}
+		if v.Stock != nil && *v.Stock < 0 {
+			return nil, productOut{}, fmt.Errorf("variation stok mesti >= 0")
+		}
+	}
 	p := &dbstore.Product{
 		AccountID: accountID, Name: in.Name, Description: in.Description,
 		PriceSen: in.PriceSen, Images: in.Images, Type: pType,
@@ -89,6 +111,23 @@ func (s *Server) createProduct(ctx context.Context, _ *mcp.CallToolRequest, in c
 	}
 	if err := s.deps.Products.Create(ctx, p); err != nil {
 		return nil, productOut{}, fmt.Errorf("db: %w", err)
+	}
+	// Persist variations wholesale when provided.
+	if len(in.Variations) > 0 && s.deps.ProductVariations != nil {
+		vs := make([]*dbstore.ProductVariation, 0, len(in.Variations))
+		for i, v := range in.Variations {
+			order := v.SortOrder
+			if order == 0 {
+				order = i
+			}
+			vs = append(vs, &dbstore.ProductVariation{
+				Name: v.Name, PriceSen: v.PriceSen, Stock: v.Stock,
+				Images: v.Images, SortOrder: order,
+			})
+		}
+		if err := s.deps.ProductVariations.ReplaceAll(ctx, p.ID, vs); err != nil {
+			return nil, productOut{}, fmt.Errorf("db: %w", err)
+		}
 	}
 	return nil, productOut{ID: p.ID, Name: p.Name, Description: p.Description,
 		Images: p.Images, PriceSen: p.PriceSen, Type: p.Type,

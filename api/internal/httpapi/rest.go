@@ -17,9 +17,10 @@ import (
 
 // RESTHandlers serves /v1/rest/* merchant resources.
 type RESTHandlers struct {
-	Accounts       *dbstore.AccountStore
-	Products       *dbstore.ProductStore
-	Forms          *dbstore.FormStore
+	Accounts          *dbstore.AccountStore
+	Products          *dbstore.ProductStore
+	ProductVariations *dbstore.ProductVariationStore
+	Forms             *dbstore.FormStore
 	Keys           *dbstore.APIKeyStore
 	Sales          *dbstore.SaleStore
 	Subs           *dbstore.SubscriptionStore

@@ -51,6 +51,11 @@ func (s *Server) registerTools() {
 		Description: "Nyahaktifkan produk (dulang tanpa padam data).",
 	}, s.archiveProduct)
 
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "list_product_variations",
+		Description: "Senarai variasi produk (name, price_sen, stock, images, sort_order) untuk satu produk. Produk simple = senarai kosong.",
+	}, s.listProductVariations)
+
 	// ── Sales ───────────────────────────────────────────────────────────────
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "list_sales",
