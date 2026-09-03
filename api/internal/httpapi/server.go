@@ -25,6 +25,8 @@ type Deps struct {
 	MCP      *mcpsrv.Server
 	Users    *dbstore.UserStore
 	Sessions *auth.Sessions
+	// Issue #161: space membership + invites (redeemed on signup).
+	SpaceMembers *dbstore.SpaceMemberStore
 	// Issue #42: brute-force + registration hardening.
 	//   Sessions exposes the shared go-redis client used for the failed-login
 	//   counters. VerifyKey is the 32-byte AES-GCM key used to sign/verify the
@@ -100,6 +102,8 @@ func NewServer(cfg *config.Config, log *slog.Logger, deps *Deps) *Server {
 			Suppressions: deps.Suppressions,
 			Breaker:      deps.Breaker,
 			MXChecker:    deps.MXChecker,
+			// Issue #161: redeem pending invites on signup.
+			SpaceMembers: deps.SpaceMembers,
 			// Issue #92: audit/behaviour log for auth actions.
 			Events: deps.Events,
 		}

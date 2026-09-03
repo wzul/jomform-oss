@@ -25,6 +25,10 @@ type Deps struct {
 	Forms    *dbstore.FormStore
 	Webhooks *dbstore.WebhookStore
 	Spaces   *dbstore.SpaceStore
+	// Issue #161: space membership + invites (MCP parity tools).
+	SpaceMembers *dbstore.SpaceMemberStore
+	// Issue #161: user lookup for invite-by-email (existing user → add directly).
+	Users *dbstore.UserStore
 	// Issue #92: audit/behaviour log (list_events tool). Nil → tool returns
 	// an error rather than panicking.
 	Events *dbstore.EventStore

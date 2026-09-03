@@ -212,6 +212,23 @@ func (s *Server) registerTools() {
 		Name:        "set_space_settings",
 		Description: "Set tetapan storefront space: footer_text, company_reg, privacy_url/terms_url (mesti https://), menu_json. Omit medan = kekal.",
 	}, s.setSpaceSettings)
+	// Issue #161: space membership + invites (admin only).
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "invite_space_member",
+		Description: "Jemput ahli ke space (admin sahaja). Jika emel sudah berdaftar, tambah terus sebagai ahli; jika tidak, cipta jemputan menunggu. Role: read_only|manage|admin.",
+	}, s.inviteSpaceMember)
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "list_space_members",
+		Description: "Senarai ahli space + peranan (admin sahaja).",
+	}, s.listSpaceMembers)
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "update_space_member_role",
+		Description: "Tukar peranan ahli space (admin sahaja). Role: read_only|manage|admin.",
+	}, s.updateSpaceMemberRole)
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "remove_space_member",
+		Description: "Buang ahli dari space (admin sahaja). Pemilik tidak boleh dibuang.",
+	}, s.removeSpaceMember)
 
 	// ── Parity: per-space email templates (issue #107) ────────────────────
 	mcp.AddTool(s.mcp, &mcp.Tool{

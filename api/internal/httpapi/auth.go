@@ -48,6 +48,9 @@ type AuthHandlers struct {
 	Suppressions *dbstore.SuppressionStore
 	Breaker      *email.Breaker
 	MXChecker    *email.MXChecker
+	// Issue #161: space membership store, used to redeem a pending invite
+	// when a new user signs up via an invite link. Nil in bare-mode tests.
+	SpaceMembers *dbstore.SpaceMemberStore
 
 	// Issue #92: audit/behaviour log for auth actions (login/logout/2fa).
 	// Nil in bare-mode tests; Record calls are no-ops when nil.
@@ -121,6 +124,10 @@ type registerRequest struct {
 	// When populated the server silently accepts the request but discards it
 	// (and logs the hit) instead of creating an account.
 	Website string `json:"website"`
+	// Invite (issue #161): a space-invite redemption token from the signup
+	// link. When present and valid, the new user is added to the inviting
+	// space with the invited role after their account is created.
+	Invite string `json:"invite,omitempty"`
 }
 
 type loginRequest struct {
@@ -244,6 +251,18 @@ func (a *AuthHandlers) handleRegister(w http.ResponseWriter, r *http.Request) {
 			if err2 := a.Accounts.Create(r.Context(), acc); err2 != nil {
 				slog.Error("default_account_create", "err", err2, "user", user.ID)
 			}
+		}
+	}
+
+	// Issue #161: redeem a pending space invite, if the signup came from an
+	// invite link. Adds the new user to the inviting space with the invited
+	// role. A missing/invalid/expired token is non-fatal — the account is
+	// still created, the invite is simply not redeemed.
+	if req.Invite != "" && a.SpaceMembers != nil {
+		if err := a.SpaceMembers.RedeemInvite(r.Context(), req.Invite, user.ID); err != nil {
+			slog.Warn("invite_redeem_failed", "err", err, "user", user.ID)
+		} else {
+			slog.Info("invite_redeemed", "user", user.ID)
 		}
 	}
 

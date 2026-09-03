@@ -55,7 +55,11 @@ function readNext(): string {
 
 export default function Login() {
   const { t } = useI18n();
-  const [mode, setMode] = useState<Mode>("login");
+  // Issue #161: an invite link should land the user on the sign-up tab so
+  // they can create the account that redeems the invite.
+  const [mode, setMode] = useState<Mode>(() =>
+    typeof window !== "undefined" && new URLSearchParams(window.location.search).get("invite") ? "register" : "login"
+  );
   const [step, setStep] = useState<Step>(1);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -74,6 +78,10 @@ export default function Login() {
   const [socialProviders, setSocialProviders] = useState<SocialProvider[] | null>(null);
   // Issue #140: post-login redirect target from ?next (validated at mount).
   const [next, setNext] = useState<string>(readNext());
+  // Issue #161: space-invite redemption token from ?invite (signup link).
+  const [invite, setInvite] = useState<string>(() =>
+    typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get("invite") || ""
+  );
   const codeRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -135,6 +143,8 @@ export default function Login() {
     // and their registration is silently discarded server-side.
     body.website = String(fd.get("website") || "");
     if (mode === "login") body.remember = remember;
+    // Issue #161: pass the invite token so a signup redeems the space invite.
+    if (mode === "register" && invite) body.invite = invite;
 
     const r = await fetch(path, {
       method: "POST",

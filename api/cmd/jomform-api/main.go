@@ -134,6 +134,9 @@ func main() {
 		spacesStore := dbstore.NewSpaceStore(pool)
 		usersStore := dbstore.NewUserStore(pool)
 		passkeysStore := dbstore.NewPasskeyStore(pool)
+		// Issue #161: space membership + invites.
+		spaceMembersStore := dbstore.NewSpaceMemberStore(pool)
+		deps.SpaceMembers = spaceMembersStore
 		pay := payments.New(chip.New(cfg.ChipAPIBaseURL), accounts, sales, subs, decryptKey, cfg.AppBaseURL)
 		pay.Products = products
 		pay.Forms = formsStore
@@ -193,7 +196,11 @@ func main() {
 			SecretsKey: decryptKey, Pay: pay, Webhooks: whStore, Domains: dbstore.NewDomainStore(pool),
 			SystemSettings: dbstore.NewSystemSettingStore(pool),
 			Spaces:         spacesStore,
+			SpaceMembers:   spaceMembersStore,
 			Passkeys:       passkeysStore,
+			// Issue #161: invite email delivery + signup link base.
+			Mailer:   mailer,
+			BaseURL:  cfg.AppBaseURL,
 			Users:          usersStore,
 			Store:          store,
 			// Issue #140: shared Domain so passkey sessions stay valid on
@@ -216,6 +223,8 @@ func main() {
 			Subs: subs, Keys: keys, Forms: formsStore,
 			Webhooks: dbstore.NewWebhookStore(pool),
 			Spaces:   spacesStore,
+			SpaceMembers: spaceMembersStore,
+			Users:    usersStore,
 			Events:   deps.Events, // issue #92: list_events tool
 			// Issue #106: per-sale receipt email status tool.
 			EmailDeliveryEvents: deps.EmailDeliveryEvents,

@@ -29,7 +29,13 @@ type RESTHandlers struct {
 	Webhooks       *dbstore.WebhookStore
 	SystemSettings *dbstore.SystemSettingStore
 	Spaces         *dbstore.SpaceStore
+	// Issue #161: space membership + invites.
+	SpaceMembers   *dbstore.SpaceMemberStore
 	Passkeys       *dbstore.PasskeyStore
+	// Issue #161: Mailer delivers the invite email (nil in bare-mode tests).
+	Mailer VerifyMailer
+	// BaseURL is the app origin used to build invite signup links.
+	BaseURL string
 	Users          *dbstore.UserStore
 	Domains        *dbstore.DomainStore
 	// CookieDomain is the shared Domain attribute for the session cookie
@@ -111,6 +117,13 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("PUT /v1/spaces/{id}/settings", h.authed(h.saveSpaceSettings))
 	mux.Handle("GET /v1/spaces/{id}/email-settings", h.authed(h.getSpaceEmailSettings))
 	mux.Handle("PUT /v1/spaces/{id}/email-settings", h.authed(h.saveSpaceEmailSettings))
+	// Issue #161: space membership + invites (admin only).
+	mux.Handle("POST /v1/spaces/{id}/invites", h.authed(h.createInvite))
+	mux.Handle("GET /v1/spaces/{id}/invites", h.authed(h.listInvites))
+	mux.Handle("DELETE /v1/spaces/{id}/invites/{inviteId}", h.authed(h.deleteInvite))
+	mux.Handle("GET /v1/spaces/{id}/members", h.authed(h.listMembers))
+	mux.Handle("PATCH /v1/spaces/{id}/members/{userId}", h.authed(h.updateMemberRole))
+	mux.Handle("DELETE /v1/spaces/{id}/members/{userId}", h.authed(h.removeMember))
 	mux.Handle("GET /v1/rest/settings/einvoice", h.authed(h.getEinvoicing))
 	mux.Handle("GET /v1/rest/webhooks", h.authed(h.listWebhooks))
 	mux.Handle("GET /v1/rest/settings/webhook-key", h.authed(h.getWebhookKey))
