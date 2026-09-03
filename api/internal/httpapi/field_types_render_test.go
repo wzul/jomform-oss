@@ -18,24 +18,24 @@ func TestBlockFormRendersNewFieldTypes(t *testing.T) {
 		PriceSen int64
 	}
 	type block struct {
-		Type, Value, Src string
-		ProductID        string
-		PriceSen         int64
-		Required         bool
-		HasPrice         bool
-		CondJSON         string
-		Variations       []struct{}
-		Placeholder      string
-		Description      string
-		CSSClass         string
-		MaxLength        int
-		DefaultValue     string
-		Min, Max         string
-		Step             string
-		Format           string
-		Pattern          string
-		RequiredMsg      string
-		Choices          []choiceView
+		ID, Type, Value, Src string
+		ProductID           string
+		PriceSen            int64
+		Required            bool
+		HasPrice            bool
+		CondJSON            string
+		Variations          []struct{}
+		Placeholder         string
+		Description         string
+		CSSClass            string
+		MaxLength           int
+		DefaultValue        string
+		Min, Max            string
+		Step                string
+		Format              string
+		Pattern             string
+		RequiredMsg         string
+		Choices             []choiceView
 	}
 	var buf bytes.Buffer
 	err := blockTmpl.Execute(&buf, map[string]any{
@@ -70,14 +70,14 @@ func TestBlockFormRendersNewFieldTypes(t *testing.T) {
 
 	// Standard fields render their input types.
 	for _, want := range []string{
-		`<select name="notes" required>`, // select
+		`<select name="notes" data-id="" required>`, // select
 		`type="radio"`,                   // radio
-		`type="number" name="notes" min="1" max="10" step="1"`, // number
+		`type="number" name="notes" data-id="" min="1" max="10" step="1"`, // number
 		`type="date"`, `type="time"`, `type="url"`, // date/time/website
-		`<textarea name="notes" rows="2">`, // address
-		`type="checkbox" class="extra" value="1" required`, // consent
-		`type="hidden" name="notes" value="abc"`,           // hidden
-		`<textarea name="notes" rows="3">`,                 // list/repeater
+		`<textarea name="notes" data-id="" rows="2">`, // address
+		`type="checkbox" class="extra" data-id="" value="1" required`, // consent
+		`type="hidden" name="notes" data-id="" value="abc"`,           // hidden
+		`<textarea name="notes" data-id="" rows="3">`,                 // list/repeater
 		`class="section"`, // section
 		`<div class="text">`, // html
 	} {

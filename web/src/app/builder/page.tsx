@@ -165,6 +165,22 @@ const pricingTypes: BlockType[] = ["product", "quantity", "option", "shipping", 
 /* Field types that use a choices editor. */
 const choiceTypes: BlockType[] = ["select", "radio", "image-choice", "option", "shipping"];
 
+/* Issue #186: the CHIP client fields a merchant can map to a form block.
+   Mirrors chip.ClientDetailsBody (full_name/email/phone + address/legal). */
+const CHIP_CLIENT_FIELDS = [
+  "full_name",
+  "email",
+  "phone",
+  "street_address",
+  "city",
+  "state",
+  "zip_code",
+  "country",
+  "legal_name",
+  "registration_number",
+  "tax_number",
+];
+
 function uid() {
   return Math.random().toString(36).slice(2, 9);
 }
@@ -243,6 +259,10 @@ export default function Builder() {
   const [ovSecret, setOvSecret] = useState("");
   const [ovFallback, setOvFallback] = useState("");
   const [ovMsg, setOvMsg] = useState("");
+  // Issue #186: per-form CHIP client field mapping (CHIP field → block id).
+  // Saved inside the form config as `chip_mapping`. Empty = implicit default
+  // (name→full_name, email→email, phone→phone).
+  const [chipMapping, setChipMapping] = useState<Record<string, string>>({});
   const [formTrack, setFormTrack] = useState("");
   const [fsTheme, setFsTheme] = useState("#5e6ad2");
   const [fsLogo, setFsLogo] = useState("");
@@ -501,6 +521,7 @@ export default function Builder() {
       setPubUrl(d.status === "published" ? d.url : "");
       const cfg = d.config || {};
       setMode(cfg.mode === "response" ? "response" : "payment");
+      setChipMapping(cfg.chip_mapping || {});
       if (d.theme?.primary) setFsTheme(d.theme.primary);
       const hydrated: Block[] = [];
       (cfg.blocks || []).forEach(
@@ -643,6 +664,7 @@ export default function Builder() {
     setPubUrl(d.status === "published" ? d.url : "");
     const cfg = d.config || {};
     setMode(cfg.mode === "response" ? "response" : "payment");
+    setChipMapping(cfg.chip_mapping || {});
     const hydrated: Block[] = [];
     (cfg.blocks || []).forEach(
       (b: Record<string, unknown>) => {
@@ -661,6 +683,11 @@ export default function Builder() {
       mode,
       description: (blocks.find((b) => b.type === "text")?.value || "").slice(0, 300),
       theme: { primary: fsTheme },
+      // Issue #186: merchant-configured CHIP client field mapping. Only
+      // non-empty entries are persisted; empty = implicit default.
+      chip_mapping: Object.fromEntries(
+        Object.entries(chipMapping).filter(([, v]) => v !== ""),
+      ),
       blocks: blocks.map((b) => ({
         id: b.id,
         type: b.type,
@@ -1789,6 +1816,49 @@ export default function Builder() {
                 </div>
                 {ovMsg && <p className="text-[11px] text-[var(--jf-primary)]">{ovMsg}</p>}
               </div>
+            </div>
+          )}
+
+          {/* ── per-form CHIP client field mapping (issue #186) ── */}
+          {currentId && (
+            <div className="mt-8 rounded-lg border border-[var(--jf-border)] bg-white p-3">
+              <p className="text-xs font-medium uppercase tracking-wider text-[#9ca3af]">
+                {t("bld.chipMapping")}
+              </p>
+              <p className="mt-1 text-[11px] text-[var(--jf-muted)]">
+                {t("bld.chipMappingHint")}
+              </p>
+              <div className="mt-2 space-y-2">
+                {CHIP_CLIENT_FIELDS.map((field) => {
+                  const blockId = chipMapping[field] || "";
+                  return (
+                    <div key={field} className="flex items-center gap-2">
+                      <span className="w-36 shrink-0 text-[11px] text-slate-600">
+                        {field}
+                      </span>
+                      <select
+                        value={blockId}
+                        onChange={(e) =>
+                          setChipMapping((m) => ({ ...m, [field]: e.target.value }))
+                        }
+                        className="w-full rounded-md border border-[var(--jf-border)] px-2 py-1.5 text-xs outline-none focus:border-[#7170ff]/60"
+                      >
+                        <option value="">{t("bld.chipMappingDefault")}</option>
+                        {blocks
+                          .filter((b) => fieldTypes.includes(b.type))
+                          .map((b) => (
+                            <option key={b.id} value={b.id}>
+                              {b.value || b.type} ({b.id.slice(0, 6)})
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="mt-2 text-[10px] text-[#9ca3af]">
+                {t("bld.chipMappingSavedOnSave")}
+              </p>
             </div>
           )}
         </aside>

@@ -108,6 +108,16 @@ func (s *Server) registerTools() {
 		Description: "Kosongkan override sebuah borang — kembali guna kredensial default akaun.",
 	}, s.clearFormChipOverride)
 
+	// ── Per-form CHIP field mapping (issue #186) ─────────────────────────
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "get_form_chip_mapping",
+		Description: "Baca peta medan CHIP borang (medan CHIP → id blok borang). Kosong = guna lalai (name→full_name, email→email, phone→phone).",
+	}, s.getFormChipMapping)
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "set_form_chip_mapping",
+		Description: "Set peta medan CHIP borang (medan CHIP → id blok borang), cth {\"full_name\":\"block_abc\",\"email\":\"block_def\"}. Mapping kosong = guna lalai.",
+	}, s.setFormChipMapping)
+
 	// ── Capture flow ────────────────────────────────────────────────────────
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "capture_sale",

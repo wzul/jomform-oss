@@ -85,6 +85,61 @@ func formMode(f *dbstore.Form) string {
 	return "payment"
 }
 
+// chipMappingFromConfig reads the form's merchant-configured CHIP field
+// mapping (issue #186): a map of CHIP client field → form block id. When the
+// merchant hasn't configured one, the implicit default mapping is used
+// (name block → full_name, email block → email, phone block → phone), which
+// preserves the pre-#186 behaviour.
+func chipMappingFromConfig(f *dbstore.Form) map[string]string {
+	if f == nil || f.Config == nil {
+		return nil
+	}
+	raw, err := json.Marshal(f.Config)
+	if err != nil {
+		return nil
+	}
+	var cfg struct {
+		ChipMapping map[string]string `json:"chip_mapping"`
+	}
+	if json.Unmarshal(raw, &cfg) != nil {
+		return nil
+	}
+	return cfg.ChipMapping
+}
+
+// resolveChipClient builds the buyer's CHIP client details from the submitted
+// form field values (issue #186). For each CHIP client field the merchant
+// mapped to a form block, the value of that block (from the submitted
+// `fields` map) is used. Fields with no mapping fall back to the hardcoded
+// `client` object, so the default mapping preserves current behaviour.
+func resolveChipClient(f *dbstore.Form, fields map[string]string, fallback dbstore.SaleClient) dbstore.SaleClient {
+	out := fallback
+	mapping := chipMappingFromConfig(f)
+	if len(mapping) == 0 {
+		return out
+	}
+	// CHIP client field → SaleClient field setter.
+	set := func(chipField string, dst *string) {
+		if blockID, ok := mapping[chipField]; ok && blockID != "" {
+			if v, ok := fields[blockID]; ok && v != "" {
+				*dst = v
+			}
+		}
+	}
+	set("full_name", &out.FullName)
+	set("email", &out.Email)
+	set("phone", &out.Phone)
+	set("street_address", &out.StreetAddress)
+	set("city", &out.City)
+	set("state", &out.State)
+	set("zip_code", &out.ZipCode)
+	set("country", &out.Country)
+	set("legal_name", &out.LegalName)
+	set("registration_number", &out.RegistrationNum)
+	set("tax_number", &out.TaxNumber)
+	return out
+}
+
 // handleSubmit creates a pending sale, requests a CHIP purchase and returns
 // the checkout URL. In response mode (issue #171) it instead stores the
 // submitted field values as a submission — no sale, no payment, no checkout.
@@ -127,9 +182,17 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 
 	var in struct {
 		Client struct {
-			FullName string `json:"full_name"`
-			Email    string `json:"email"`
-			Phone    string `json:"phone"`
+			FullName        string `json:"full_name"`
+			Email           string `json:"email"`
+			Phone           string `json:"phone"`
+			StreetAddress   string `json:"street_address"`
+			City            string `json:"city"`
+			State           string `json:"state"`
+			ZipCode         string `json:"zip_code"`
+			Country         string `json:"country"`
+			LegalName       string `json:"legal_name"`
+			RegistrationNum string `json:"registration_number"`
+			TaxNumber       string `json:"tax_number"`
 		} `json:"client"`
 		Items []struct {
 			ProductID   string `json:"product_id"`
@@ -138,6 +201,10 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		} `json:"items"`
 		PaymentMethod string `json:"payment_method"`         // chip | bank_direct
 		SkipCapture   bool   `json:"skip_capture,omitempty"` // authorize now, capture later
+		// Issue #186: block_id → submitted value for every input block, so
+		// the merchant's chip_mapping can resolve CHIP client fields from the
+		// mapped form blocks (not just the hardcoded client object).
+		Fields map[string]string `json:"fields,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Client.Email == "" || len(in.Items) == 0 {
 		writeErr(w, http.StatusBadRequest, "butiran tidak lengkap")
@@ -159,7 +226,13 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		AccountID:     form.AccountID,
 		FormID:        form.ID,
 		RefCode:       genRef(),
-		Client:        dbstore.SaleClient{FullName: in.Client.FullName, Email: in.Client.Email, Phone: in.Client.Phone},
+		Client: resolveChipClient(form, in.Fields, dbstore.SaleClient{
+			FullName: in.Client.FullName, Email: in.Client.Email, Phone: in.Client.Phone,
+			StreetAddress: in.Client.StreetAddress, City: in.Client.City, State: in.Client.State,
+			ZipCode: in.Client.ZipCode, Country: in.Client.Country,
+			LegalName: in.Client.LegalName, RegistrationNum: in.Client.RegistrationNum,
+			TaxNumber: in.Client.TaxNumber,
+		}),
 		SaleType:      dbstore.SaleTypeOneTime,
 		PaymentMethod: method,
 		Status:        dbstore.SalePending,

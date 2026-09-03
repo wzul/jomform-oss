@@ -174,6 +174,90 @@ func toVariationOuts(vs []*dbstore.ProductVariation) []variationOut {
 
 // ── Forms upsert + publish + delete ─────────────────────────────────────
 
+// chipMappingFromConfig reads the form's merchant-configured CHIP field
+// mapping (issue #186): a map of CHIP client field → form block id. Returns
+// nil when the merchant hasn't configured one (implicit default applies).
+func chipMappingFromConfig(f *dbstore.Form) map[string]string {
+	if f == nil || f.Config == nil {
+		return nil
+	}
+	raw, err := json.Marshal(f.Config)
+	if err != nil {
+		return nil
+	}
+	var cfg struct {
+		ChipMapping map[string]string `json:"chip_mapping"`
+	}
+	if json.Unmarshal(raw, &cfg) != nil {
+		return nil
+	}
+	return cfg.ChipMapping
+}
+
+// getFormChipMappingIn is the input for get_form_chip_mapping (issue #186).
+type getFormChipMappingIn struct {
+	FormID string `json:"form_id" jsonschema:"ID borang"`
+}
+
+// getFormChipMapping returns the form's merchant-configured CHIP field
+// mapping (CHIP client field → form block id). When the merchant hasn't set
+// one, the implicit default mapping is returned (name→full_name, email→email,
+// phone→phone), matching the dashboard's default behaviour.
+func (s *Server) getFormChipMapping(
+	ctx context.Context, _ *mcp.CallToolRequest, in getFormChipMappingIn,
+) (*mcp.CallToolResult, map[string]string, error) {
+	acc, err := s.accountAndScope(ctx, false)
+	if err != nil {
+		return nil, nil, err
+	}
+	if in.FormID == "" {
+		return nil, nil, errors.New("form_id wajib")
+	}
+	f, err := s.deps.Forms.GetByID(ctx, acc, in.FormID)
+	if err != nil {
+		return nil, nil, errors.New("borang tidak dijumpai")
+	}
+	mapping := chipMappingFromConfig(f)
+	if mapping == nil {
+		mapping = map[string]string{}
+	}
+	return nil, mapping, nil
+}
+
+// setFormChipMappingIn is the input for set_form_chip_mapping (issue #186).
+type setFormChipMappingIn struct {
+	FormID string            `json:"form_id" jsonschema:"ID borang"`
+	Mapping map[string]string `json:"mapping" jsonschema:"Peta medan CHIP → id blok borang, cth {\"full_name\":\"block_abc\",\"email\":\"block_def\"}. Kosong = guna lalai (name→full_name, email→email, phone→phone)."`
+}
+
+// setFormChipMapping stores the form's CHIP field mapping in its config
+// (issue #186). An empty mapping clears it, reverting to the implicit default.
+func (s *Server) setFormChipMapping(
+	ctx context.Context, _ *mcp.CallToolRequest, in setFormChipMappingIn,
+) (*mcp.CallToolResult, map[string]string, error) {
+	acc, err := s.requireWriteRole(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if in.FormID == "" {
+		return nil, nil, errors.New("form_id wajib")
+	}
+	f, err := s.deps.Forms.GetByID(ctx, acc, in.FormID)
+	if err != nil {
+		return nil, nil, errors.New("borang tidak dijumpai")
+	}
+	cfg := orEmptyMap(f.Config)
+	if in.Mapping == nil || len(in.Mapping) == 0 {
+		delete(cfg, "chip_mapping")
+	} else {
+		cfg["chip_mapping"] = in.Mapping
+	}
+	if err := s.deps.Forms.Update(ctx, acc, in.FormID, f.Title, cfg, nil); err != nil {
+		return nil, nil, err
+	}
+	return nil, map[string]string{"status": "ok", "form_id": in.FormID}, nil
+}
+
 type upsertFormIn struct {
 	FormID string         `json:"form_id,omitempty" jsonschema:"Kosong = borang baru; isi = kemaskini"`
 	Slug   string         `json:"slug" jsonschema:"Slug URL unik"`

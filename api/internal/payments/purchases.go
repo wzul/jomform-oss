@@ -42,6 +42,27 @@ func toCHIPProducts(items []dbstore.SaleItem) []chip.Product {
 	return out
 }
 
+// saleClientDetails builds the CHIP client details from the sale's resolved
+// buyer record (issue #186). clientEmail is the effective email after the
+// account-level fallback is applied (CHIP requires a client email). All other
+// fields come straight from the sale's client blob, which handleSubmit has
+// already resolved from the merchant's chip_mapping.
+func saleClientDetails(sale *dbstore.Sale, clientEmail string) *chip.ClientDetails {
+	return &chip.ClientDetails{
+		Email:           clientEmail,
+		FullName:        sale.Client.FullName,
+		Phone:           sale.Client.Phone,
+		StreetAddress:   sale.Client.StreetAddress,
+		City:            sale.Client.City,
+		State:           sale.Client.State,
+		ZipCode:         sale.Client.ZipCode,
+		Country:         sale.Client.Country,
+		LegalName:       sale.Client.LegalName,
+		RegistrationNum: sale.Client.RegistrationNum,
+		TaxNumber:       sale.Client.TaxNumber,
+	}
+}
+
 // CreateChipPurchaseForSale creates the CHIP Purchase for an existing
 // pending sale and attaches the checkout URL + purchase id.
 func (s *Service) CreateChipPurchaseForSale(ctx context.Context, sale *dbstore.Sale) error {
@@ -86,7 +107,7 @@ func (s *Service) CreateChipPurchaseForSale(ctx context.Context, sale *dbstore.S
 		CreatorAgent:           "JomForm",
 		BrandID:                acc.ChipBrandID,
 		PaymentMethodWhitelist: whitelist,
-		Client:                 &chip.ClientDetails{Email: clientEmail, FullName: sale.Client.FullName, Phone: sale.Client.Phone},
+		Client:                 saleClientDetails(sale, clientEmail),
 		ForceRecurring:         sale.SaleType == dbstore.SaleTypeSubscription, // card must be saved for future charges
 		Purchase: chip.PurchaseDetails{
 			Products:        toCHIPProducts(sale.Items),
@@ -406,7 +427,7 @@ func (s *Service) CreateChipPurchaseForSaleWithOverride(ctx context.Context, sal
 		CreatorAgent:           "JomForm",
 		BrandID:                brand,
 		PaymentMethodWhitelist: wl,
-		Client:                 &chip.ClientDetails{Email: clientEmail, FullName: sale.Client.FullName, Phone: sale.Client.Phone},
+		Client:                 saleClientDetails(sale, clientEmail),
 		ForceRecurring:         sale.SaleType == dbstore.SaleTypeSubscription,
 		// TOP-LEVEL — CHIP only honors these here (nested-in-purchase gets discarded):
 		SuccessRedirect: fmt.Sprintf("%s/t/%s", tyBase, sale.RefCode),

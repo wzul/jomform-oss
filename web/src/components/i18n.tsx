@@ -598,6 +598,10 @@ const DICT = {
   "bld.overrideSaved": { en: "Override saved ✓", ms: "Override disimpan ✓", zh: "覆盖已保存 ✓", ta: "மேலெழுதல் சேமிக்கப்பட்டது ✓", ar: "تم حفظ التجاوز ✓" },
   "bld.overrideCleared": { en: "Override cleared — account defaults apply", ms: "Override dikosongkan — tetapan lalai akaun terpakai", zh: "覆盖已清除 — 应用账户默认设置", ta: "மேலெழுதல் அழிக்கப்பட்டது — கணக்கின் இயல்புநிலை பயன்படும்", ar: "تم مسح التجاوز — تنطبق الإعدادات الافتراضية للحساب" },
   "bld.failedOverride": { en: "Failed to save override", ms: "Gagal simpan override", zh: "保存覆盖失败", ta: "மேலெழுதலைச் சேமிக்க தோல்வி", ar: "فشل حفظ التجاوز" },
+  "bld.chipMapping": { en: "CHIP client field mapping", ms: "Peta medan pelanggan CHIP", zh: "CHIP 客户字段映射", ta: "CHIP வாடிக்கையாளர் புல வரைபடம்", ar: "تعيين حقول عميل CHIP" },
+  "bld.chipMappingHint": { en: "Pick which form block supplies each CHIP client field. Empty = default (name→full_name, email→email, phone→phone).", ms: "Pilih blok borang yang membekalkan setiap medan pelanggan CHIP. Kosong = lalai (name→full_name, email→email, phone→phone).", zh: "选择哪个表单块为每个 CHIP 客户字段提供值。留空 = 默认（name→full_name，email→email，phone→phone）。", ta: "ஒவ்வொரு CHIP வாடிக்கையாளர் புலத்திற்கும் எந்த படிவத் தொகுதி வழங்குகிறது என்பதைத் தேர்ந்தெடுக்கவும். காலியாக = இயல்புநிலை (name→full_name, email→email, phone→phone).", ar: "اختر كتلة النموذج التي تزود كل حقل عميل CHIP. فارغ = الافتراضي (name→full_name، email→email، phone→phone)." },
+  "bld.chipMappingDefault": { en: "Default", ms: "Lalai", zh: "默认", ta: "இயல்புநிலை", ar: "الافتراضي" },
+  "bld.chipMappingSavedOnSave": { en: "Saved when you save the form.", ms: "Disimpan apabila anda simpan borang.", zh: "保存表单时保存。", ta: "படிவத்தைச் சேமிக்கும்போது சேமிக்கப்படும்.", ar: "يُحفظ عند حفظ النموذج." },
   // issue #114: builder error/success fallbacks that were hardcoded BM
   "bld.loadSalesErr": { en: "Failed to load sales.", ms: "Gagal memuatkan jualan.", zh: "加载销售失败。", ta: "விற்பனையை ஏற்ற முடியவில்லை.", ar: "فشل تحميل المبيعات." },
   "bld.bulkCaptureFail": { en: "Bulk capture failed.", ms: "Bulk capture gagal.", zh: "批量捕获失败。", ta: "மொத்த கேப்சர் தோல்வி.", ar: "فشل التحصيل الجماعي." },

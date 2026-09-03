@@ -20,6 +20,7 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 	}
 	var cfg struct {
 		Blocks []struct {
+			ID        string     `json:"id"`
 			Type      string     `json:"type"`
 			Value     string     `json:"value"`
 			Src       string     `json:"src"`
@@ -77,12 +78,12 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 	}
 
 	type blockView struct {
-		Type, Value, Src string
-		ProductID        string
-		PriceSen         int64
-		Required         bool
-		HasPrice         bool
-		CondJSON         string
+		ID, Type, Value, Src string
+		ProductID            string
+		PriceSen             int64
+		Required             bool
+		HasPrice             bool
+		CondJSON             string
 		// Issue #153: variations selector.
 		Variations []variationView
 		// Issue #173: per-field settings surfaced to the template.
@@ -102,7 +103,7 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 	blocks := make([]blockView, 0, len(cfg.Blocks))
 	for _, b := range cfg.Blocks {
 		vb := blockView{
-			Type: b.Type, Value: b.Value, Src: b.Src, ProductID: b.ProductID, Required: b.Required,
+			ID: b.ID, Type: b.Type, Value: b.Value, Src: b.Src, ProductID: b.ProductID, Required: b.Required,
 			Placeholder: b.Placeholder, Description: b.Description, CSSClass: b.CSSClass,
 			MaxLength: b.MaxLength, DefaultValue: b.DefaultValue, Min: b.Min, Max: b.Max,
 			Step: b.Step, Format: b.Format, Pattern: b.Pattern, RequiredMsg: b.RequiredMsg,
@@ -266,26 +267,26 @@ var blockTmpl = template.Must(template.New("blocks").
 {{else if eq .Type "quantity"}}  <div class="qtyrow"><label class="lbl" style="margin:0">{{.Value}}</label><input type="number" class="qty" min="1" value="{{if .DefaultValue}}{{.DefaultValue}}{{else}}1{{end}}"></div>
 {{else if eq .Type "option"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><select class="opt" data-id="{{.ProductID}}"><option value="" selected>{{$.Ls.SelectOption}}</option>{{range .Choices}}<option value="{{.Value}}" data-price="{{.PriceSen}}">{{.Label}}{{if .PriceSen}} (+RM{{printf "%.2f" (divf .PriceSen 100)}}){{end}}</option>{{end}}</select>
 {{else if eq .Type "shipping"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><select class="ship" data-id="{{.ProductID}}"><option value="" selected>{{$.Ls.SelectShipping}}</option>{{range .Choices}}<option value="{{.Value}}" data-price="{{.PriceSen}}">{{.Label}}{{if .PriceSen}} (RM{{printf "%.2f" (divf .PriceSen 100)}}){{end}}</option>{{end}}</select>
-{{else if eq .Type "name"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="text" name="full_name"{{if .Required}} required{{end}}>
-{{else if eq .Type "email"}}  <label class="lbl">{{$.Ls.EmailLabel}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="email" name="email" required>
-{{else if eq .Type "phone"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="tel" name="phone"{{if .Required}} required{{end}}>
-{{else if eq .Type "textarea"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><textarea name="notes" rows="2"{{if .MaxLength}} maxlength="{{.MaxLength}}"{{end}}>{{.DefaultValue}}</textarea>
-{{else if eq .Type "number"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="number" name="notes"{{if .Min}} min="{{.Min}}"{{end}}{{if .Max}} max="{{.Max}}"{{end}}{{if .Step}} step="{{.Step}}"{{end}}{{if .Required}} required{{end}}>
-{{else if eq .Type "select"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><select name="notes"{{if .Required}} required{{end}}><option value="" disabled selected>{{$.Ls.SelectOption}}</option>{{range .Choices}}<option value="{{.Value}}">{{.Label}}</option>{{end}}</select>
-{{else if eq .Type "radio"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label>{{range .Choices}}<label class="rad"><input type="radio" name="notes" value="{{.Value}}"{{if $.Required}} required{{end}}> {{.Label}}</label>{{end}}
-{{else if eq .Type "checkbox"}}  <label class="chk"><input type="checkbox" class="extra" value="{{.Value}}"> {{.Value}}</label>
-{{else if eq .Type "date"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="date" name="notes"{{if .Required}} required{{end}}>
-{{else if eq .Type "time"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="time" name="notes"{{if .Required}} required{{end}}>
-{{else if eq .Type "website"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="url" name="notes"{{if .Required}} required{{end}}>
-{{else if eq .Type "address"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><textarea name="notes" rows="2"{{if .Required}} required{{end}}></textarea>
-{{else if eq .Type "file"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="file" name="notes">
-{{else if eq .Type "consent"}}  <label class="chk"><input type="checkbox" class="extra" value="1"{{if .Required}} required{{end}}> {{.Value}}</label>
-{{else if eq .Type "hidden"}}  <input type="hidden" name="notes" value="{{.DefaultValue}}">
-{{else if eq .Type "list"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><textarea name="notes" rows="3"{{if .Required}} required{{end}}></textarea>
-{{else if eq .Type "repeater"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><textarea name="notes" rows="3"{{if .Required}} required{{end}}></textarea>
-{{else if eq .Type "image-choice"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label>{{range .Choices}}<label class="rad"><input type="radio" name="notes" value="{{.Value}}"{{if $.Required}} required{{end}}> {{.Label}}</label>{{end}}
-{{else if eq .Type "captcha"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="text" name="notes"{{if .Required}} required{{end}}>
-{{else if eq .Type "coupon"}}  <label class="lbl">{{$.Ls.CouponLabel}}</label><input type="text" name="coupon" class="coupon">
+{{else if eq .Type "name"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="text" name="full_name" data-id="{{.ID}}"{{if .Required}} required{{end}}>
+{{else if eq .Type "email"}}  <label class="lbl">{{$.Ls.EmailLabel}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="email" name="email" data-id="{{.ID}}" required>
+{{else if eq .Type "phone"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="tel" name="phone" data-id="{{.ID}}"{{if .Required}} required{{end}}>
+{{else if eq .Type "textarea"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><textarea name="notes" data-id="{{.ID}}" rows="2"{{if .MaxLength}} maxlength="{{.MaxLength}}"{{end}}>{{.DefaultValue}}</textarea>
+{{else if eq .Type "number"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="number" name="notes" data-id="{{.ID}}"{{if .Min}} min="{{.Min}}"{{end}}{{if .Max}} max="{{.Max}}"{{end}}{{if .Step}} step="{{.Step}}"{{end}}{{if .Required}} required{{end}}>
+{{else if eq .Type "select"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><select name="notes" data-id="{{.ID}}"{{if .Required}} required{{end}}><option value="" disabled selected>{{$.Ls.SelectOption}}</option>{{range .Choices}}<option value="{{.Value}}">{{.Label}}</option>{{end}}</select>
+{{else if eq .Type "radio"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label>{{range .Choices}}<label class="rad"><input type="radio" name="notes" data-id="{{$.ID}}" value="{{.Value}}"{{if $.Required}} required{{end}}> {{.Label}}</label>{{end}}
+{{else if eq .Type "checkbox"}}  <label class="chk"><input type="checkbox" class="extra" data-id="{{.ID}}" value="{{.Value}}"> {{.Value}}</label>
+{{else if eq .Type "date"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="date" name="notes" data-id="{{.ID}}"{{if .Required}} required{{end}}>
+{{else if eq .Type "time"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="time" name="notes" data-id="{{.ID}}"{{if .Required}} required{{end}}>
+{{else if eq .Type "website"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="url" name="notes" data-id="{{.ID}}"{{if .Required}} required{{end}}>
+{{else if eq .Type "address"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><textarea name="notes" data-id="{{.ID}}" rows="2"{{if .Required}} required{{end}}></textarea>
+{{else if eq .Type "file"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="file" name="notes" data-id="{{.ID}}">
+{{else if eq .Type "consent"}}  <label class="chk"><input type="checkbox" class="extra" data-id="{{.ID}}" value="1"{{if .Required}} required{{end}}> {{.Value}}</label>
+{{else if eq .Type "hidden"}}  <input type="hidden" name="notes" data-id="{{.ID}}" value="{{.DefaultValue}}">
+{{else if eq .Type "list"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><textarea name="notes" data-id="{{.ID}}" rows="3"{{if .Required}} required{{end}}></textarea>
+{{else if eq .Type "repeater"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><textarea name="notes" data-id="{{.ID}}" rows="3"{{if .Required}} required{{end}}></textarea>
+{{else if eq .Type "image-choice"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label>{{range .Choices}}<label class="rad"><input type="radio" name="notes" data-id="{{$.ID}}" value="{{.Value}}"{{if $.Required}} required{{end}}> {{.Label}}</label>{{end}}
+{{else if eq .Type "captcha"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="text" name="notes" data-id="{{.ID}}"{{if .Required}} required{{end}}>
+{{else if eq .Type "coupon"}}  <label class="lbl">{{$.Ls.CouponLabel}}</label><input type="text" name="coupon" class="coupon" data-id="{{.ID}}">
 {{end}}</span>
 {{end}}
   <div class="total"><span>{{$.Ls.Total}}</span><span id="total">RM0.00</span></div>
@@ -344,10 +345,21 @@ var blockTmpl = template.Must(template.New("blocks").
     if(shipEl&&shipEl.value)items.push({product_id:shipEl.dataset.id,quantity:1});
     if(!items.length){alert('{{.Ls.NoProductAlert}}');return;}
     if(!ok){alert('{{.Ls.SelectVariationAlert}}');return;}
+    // Issue #186: collect every input block's value keyed by its block id so
+    // the server can resolve the merchant's chip_mapping (CHIP client field →
+    // form block). The client object stays for backward compatibility.
+    var fields={};
+    document.querySelectorAll('[data-id]').forEach(function(el){
+      if(!el.dataset.id)return;
+      if(el.type==='checkbox'){if(el.checked)fields[el.dataset.id]=el.value;}
+      else if(el.type==='radio'){if(el.checked)fields[el.dataset.id]=el.value;}
+      else if(el.type==='file'){/* files not sent as text */}
+      else{fields[el.dataset.id]=el.value;}
+    });
     var body={client:{full_name:(e.target.full_name||{}).value||(document.querySelector('[name=full_name]')||{}).value||'',
       email:(document.querySelector('[name=email]')||{}).value||'',
       phone:(document.querySelector('[name=phone]')||{}).value||''},
-      items:items,payment_method:'chip'};
+      fields:fields,items:items,payment_method:'chip'};
     fetch(location.pathname+'/order',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
       .then(function(r){return r.json()}).then(function(d){
         if(d.checkout_url||d.next){

@@ -22,11 +22,21 @@ const (
 	SaleFailed    = "failed"
 )
 
-// SaleClient is the buyer info JSON blob.
+// SaleClient is the buyer info JSON blob. It mirrors the CHIP client fields
+// (issue #186) so a merchant-mapped form can send full_name/email/phone plus
+// address/legal fields to CHIP, not just the hardcoded three.
 type SaleClient struct {
-	FullName string `json:"full_name"`
-	Email    string `json:"email"`
-	Phone    string `json:"phone,omitempty"`
+	FullName        string `json:"full_name"`
+	Email           string `json:"email"`
+	Phone           string `json:"phone,omitempty"`
+	StreetAddress   string `json:"street_address,omitempty"`
+	City            string `json:"city,omitempty"`
+	State           string `json:"state,omitempty"`
+	ZipCode         string `json:"zip_code,omitempty"`
+	Country         string `json:"country,omitempty"`
+	LegalName       string `json:"legal_name,omitempty"`
+	RegistrationNum string `json:"registration_number,omitempty"`
+	TaxNumber       string `json:"tax_number,omitempty"`
 }
 
 // SaleItem is one line item in the sale JSON.
