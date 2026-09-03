@@ -55,7 +55,7 @@ function readNext(): string {
 }
 
 export default function Login() {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   // Issue #161: an invite link should land the user on the sign-up tab so
   // they can create the account that redeems the invite.
   const [mode, setMode] = useState<Mode>(() =>
@@ -146,6 +146,9 @@ export default function Login() {
     if (mode === "login") body.remember = remember;
     // Issue #161: pass the invite token so a signup redeems the space invite.
     if (mode === "register" && invite) body.invite = invite;
+    // Issue #206: pass the chosen locale so the verification link carries
+    // ?lang= and the confirmation page renders in the user's language.
+    if (mode === "register") body.lang = lang;
 
     const r = await fetch(path, {
       method: "POST",

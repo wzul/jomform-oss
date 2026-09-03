@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/wzul/jomform/api/internal/auth"
@@ -22,7 +23,11 @@ import (
 // Issue #56: before emailing, the suppression list is consulted — a
 // suppressed address never receives another verification send. On a
 // successful send the verification breaker's send counter is bumped.
-func (a *AuthHandlers) sendVerifyEmail(ctx context.Context, userID, email string) error {
+//
+// Issue #206: the lang (the user's chosen locale from the signup form) is
+// carried on the verify link as a ?lang= param so the confirmation page can
+// render in the user's language.
+func (a *AuthHandlers) sendVerifyEmail(ctx context.Context, userID, email, lang string) error {
 	if a.VerifyMailer == nil {
 		return fmt.Errorf("verify mailer not configured")
 	}
@@ -45,6 +50,9 @@ func (a *AuthHandlers) sendVerifyEmail(ctx context.Context, userID, email string
 		return err
 	}
 	link := strings.TrimRight(a.BaseURL, "/") + "/v1/auth/verify?token=" + token
+	if lang != "" {
+		link += "&lang=" + url.QueryEscape(lang)
+	}
 	body := "Sila sahkan alamat emel anda untuk mengaktifkan akaun JomForm anda.\n\n" +
 		"Tap pautan berikut (sah selama 24 jam):\n\n" +
 		link + "\n\n" +
@@ -64,6 +72,10 @@ func (a *AuthHandlers) sendVerifyEmail(ctx context.Context, userID, email string
 // handleVerify confirms a user's email from a signed token (?token=...).
 // GET renders a small confirmation page; POST returns JSON. Both accept the
 // same token so an app can complete verification after a fetch.
+//
+// Issue #206: the confirmation page is language-aware. The locale is resolved
+// from the ?lang= param (carried from the signup form's language choice), then
+// the Accept-Language header, defaulting to English when unknown.
 func (a *AuthHandlers) handleVerify(w http.ResponseWriter, r *http.Request) {
 	token := r.URL.Query().Get("token")
 	if token == "" {
@@ -85,10 +97,11 @@ func (a *AuthHandlers) handleVerify(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "pautan pengesahan tidak sah")
 		return
 	}
+	lang := detectVerifyLang(r)
 	if user.Verified {
 		// Idempotent: already verified.
 		if r.Method == http.MethodGet {
-			writeVerifyPage(w, "Emel anda telah disahkan! Anda kini boleh log masuk.", a.loginURL())
+			writeVerifyPage(w, lang, a.loginURL())
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "verified", "email": email})
@@ -100,10 +113,42 @@ func (a *AuthHandlers) handleVerify(w http.ResponseWriter, r *http.Request) {
 	}
 	slog.Info("email_verified", "user", user.ID)
 	if r.Method == http.MethodGet {
-		writeVerifyPage(w, "Emel anda telah disahkan! Anda kini boleh log masuk.", a.loginURL())
+		writeVerifyPage(w, lang, a.loginURL())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "verified", "email": email})
+}
+
+// supportedVerifyLangs are the 5 locales the verify page can render in.
+var supportedVerifyLangs = map[string]bool{"en": true, "ms": true, "zh": true, "ta": true, "ar": true}
+
+// detectVerifyLang resolves the user's locale for the verify page. It prefers
+// the ?lang= param (carried from the signup form's language choice), then the
+// Accept-Language header, and defaults to English when neither yields a
+// supported locale (issue #206).
+func detectVerifyLang(r *http.Request) string {
+	if l := r.URL.Query().Get("lang"); supportedVerifyLangs[l] {
+		return l
+	}
+	for _, part := range strings.Split(r.Header.Get("Accept-Language"), ",") {
+		code := strings.TrimSpace(part)
+		if i := strings.IndexByte(code, ';'); i >= 0 {
+			code = code[:i]
+		}
+		code = strings.ToLower(strings.TrimSpace(code))
+		if code == "" {
+			continue
+		}
+		// Match the primary subtag (e.g. "zh-CN" → "zh", "ms-MY" → "ms").
+		base := code
+		if i := strings.IndexByte(code, '-'); i >= 0 {
+			base = code[:i]
+		}
+		if supportedVerifyLangs[base] {
+			return base
+		}
+	}
+	return "en"
 }
 
 // loginURL returns the web login page URL. The verify page is served from the
@@ -117,17 +162,35 @@ func (a *AuthHandlers) loginURL() string {
 	return strings.TrimRight(a.BaseURL, "/") + "/login"
 }
 
+// verifyPageText holds the localized message + login-link sentence for each of
+// the 5 supported locales (issue #206). The login link is split around the
+// anchor so the sentence reads naturally in each language.
+var verifyPageText = map[string]struct{ msg, before, link, after string }{
+	"en": {"Your email has been verified! You can now log in.", "Click ", "here", " to log in."},
+	"ms": {"Emel anda telah disahkan! Anda kini boleh log masuk.", "Klik ", "di sini", " untuk log masuk."},
+	"zh": {"您的邮箱已验证！您现在可以登录。", "点击", "此处", "登录。"},
+	"ta": {"உங்கள் மின்னஞ்சல் சரிபார்க்கப்பட்டது! இப்போது நீங்கள் உள்நுழையலாம்.", "உள்நுழைய ", "இங்கே", " கிளிக் செய்யவும்."},
+	"ar": {"تم التحقق من بريدك الإلكتروني! يمكنك الآن تسجيل الدخول.", "انقر ", "هنا", " لتسجيل الدخول."},
+}
+
 // writeVerifyPage renders a minimal self-contained confirmation page for GET
 // (no JS, no assets) so a click straight from an email client works anywhere.
-func writeVerifyPage(w http.ResponseWriter, msg, loginURL string) {
+// The message + login link render in the user's language (issue #206); an
+// unknown lang falls back to English.
+func writeVerifyPage(w http.ResponseWriter, lang, loginURL string) {
+	text, ok := verifyPageText[lang]
+	if !ok {
+		text = verifyPageText["en"]
+		lang = "en"
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, `<!doctype html><html><body style="font-family:system-ui,sans-serif;background:#0b1020;color:#e6e9ef;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
+	fmt.Fprintf(w, `<!doctype html><html lang="%s"><body style="font-family:system-ui,sans-serif;background:#0b1020;color:#e6e9ef;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
 <div style="text-align:center;max-width:480px;padding:32px">
 <h1 style="color:#5e6ad2">JomForm</h1>
 <p style="font-size:18px">%s</p>
-<p style="font-size:14px;color:#9aa3b2">Click <a href="%s" style="color:#5e6ad2">here</a> to log in.</p>
-</div></body></html>`, htmlEsc(msg), htmlEsc(loginURL))
+<p style="font-size:14px;color:#9aa3b2">%s<a href="%s" style="color:#5e6ad2">%s</a>%s</p>
+</div></body></html>`, htmlEsc(lang), htmlEsc(text.msg), htmlEsc(text.before), htmlEsc(loginURL), htmlEsc(text.link), htmlEsc(text.after))
 }
 
 // htmlEsc escapes text for injection-safe HTML rendering.

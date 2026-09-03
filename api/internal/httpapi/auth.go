@@ -135,6 +135,10 @@ type registerRequest struct {
 	// link. When present and valid, the new user is added to the inviting
 	// space with the invited role after their account is created.
 	Invite string `json:"invite,omitempty"`
+	// Lang (issue #206): the user's chosen locale from the signup form. It is
+	// carried on the verification link so the confirmation page renders in
+	// the user's language. Empty = unknown → English.
+	Lang string `json:"lang,omitempty"`
 }
 
 type loginRequest struct {
@@ -285,7 +289,7 @@ func (a *AuthHandlers) handleRegister(w http.ResponseWriter, r *http.Request) {
 	// not log in until they confirm. Email a signed 24h verification link; a
 	// missing mailer is logged but doesn't block registration (a /verify link
 	// can always be requested again later).
-	if err := a.sendVerifyEmail(r.Context(), user.ID, user.Email); err != nil {
+	if err := a.sendVerifyEmail(r.Context(), user.ID, user.Email, req.Lang); err != nil {
 		slog.Warn("verify_email_send_failed", "err", err, "user", user.ID)
 	}
 
