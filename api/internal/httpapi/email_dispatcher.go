@@ -22,6 +22,7 @@ import (
 	"github.com/wzul/jomform/api/internal/email"
 	"github.com/wzul/jomform/api/internal/emailqueue"
 	"github.com/wzul/jomform/api/internal/payments"
+	"github.com/wzul/jomform/api/internal/spamjudge"
 )
 
 // EmailDispatcher routes queued email jobs to the right sender. It implements
@@ -35,6 +36,9 @@ type EmailDispatcher struct {
 	// Pay is the payments Service whose Receipts.Sender delivers receipts and
 	// whose Sales store persists the SES MessageID (issue #106).
 	Pay *payments.Service
+	// SpamJudge (issue #245) classifies spam_judge jobs via the background AI
+	// judge. Nil → spam_judge jobs are dropped.
+	SpamJudge *spamjudge.Handler
 }
 
 // Send delivers one queued email job. A returned error triggers the worker's
@@ -47,6 +51,12 @@ func (d *EmailDispatcher) Send(ctx context.Context, job emailqueue.Job) error {
 		return d.sendMerchantNotify(ctx, job)
 	case "verify", "magic_link", "password_reset", "email2fa", "2fa_active", "invite":
 		return d.sendAuth(ctx, job)
+	case spamjudge.JobType:
+		if d.SpamJudge == nil {
+			slog.Warn("emailq_spam_judge_no_handler", "account", job.AccountID)
+			return nil
+		}
+		return d.SpamJudge.Send(ctx, job)
 	default:
 		slog.Warn("emailq_unknown_type", "type", job.Type, "to", job.To)
 		return nil

@@ -86,6 +86,36 @@ func (c *Client) GenerateLegalPage(ctx context.Context, pageType string, d Busin
 	if err != nil {
 		return "", err
 	}
+	return c.chat(ctx, body)
+}
+
+// ClassifySpam asks the model to judge whether a form submission is spam or
+// legit (issue #245). The prompt carries the submitted field values, email,
+// IP and form context. The model replies with a single word: SPAM or LEGIT.
+// The returned bool is true when the submission is spam. A non-SPAM/LEGIT
+// reply is treated as legit (fail-open: never block a real submission).
+func (c *Client) ClassifySpam(ctx context.Context, submission string) (bool, error) {
+	body, err := json.Marshal(chatRequest{
+		Model: c.model,
+		Messages: []chatMessage{
+			{Role: "system", Content: "You are a spam classifier for online form submissions. Classify the submission as SPAM or LEGIT. Reply with exactly one word: SPAM or LEGIT. Do not add any other text."},
+			{Role: "user", Content: submission},
+		},
+		Stream: false,
+	})
+	if err != nil {
+		return false, err
+	}
+	reply, err := c.chat(ctx, body)
+	if err != nil {
+		return false, err
+	}
+	upper := strings.ToUpper(strings.TrimSpace(reply))
+	return strings.HasPrefix(upper, "SPAM"), nil
+}
+
+// chat posts a chat-completion request body and returns the trimmed reply.
+func (c *Client) chat(ctx context.Context, body []byte) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat", bytes.NewReader(body))
 	if err != nil {
 		return "", err

@@ -29,6 +29,7 @@ import (
 	"github.com/wzul/jomform/api/internal/httpapi/middleware"
 	"github.com/wzul/jomform/api/internal/mcpsrv"
 	"github.com/wzul/jomform/api/internal/metrics"
+	"github.com/wzul/jomform/api/internal/spamjudge"
 	"github.com/wzul/jomform/api/internal/tlsmgr"
 	"github.com/wzul/jomform/api/internal/version"
 )
@@ -332,18 +333,33 @@ func main() {
 			SpaceMembers: deps.SpaceMembers,
 			MXChecker:    deps.MXChecker,
 			FormLimiter:  middleware.NewRateLimiter(15.0/3600.0, 15),
-		}
+			// Issue #245: background AI spam judge. SpamQueue is the same
+			// Valkey-backed queue as email (#199); the worker below routes
+			// spam_judge jobs to the AI judge. Nil when Valkey is absent (dev).
+			SpamQueue: deps.EmailQueue,
+			}
 
 		// Issue #199: start the background email worker. It polls the
 		// Valkey-backed email queue and sends via SES, so a slow SES call never
 		// blocks the payment/submit/auth response. The dispatcher routes each
 		// job type to the right sender (auth mailer / payments receipt sender).
-		// Only started when both the queue and a sender are wired.
-		if deps.EmailQueue != nil && (mailer != nil || pay.Receipts != nil) {
+		// Issue #245: the same worker also routes spam_judge jobs to the AI
+		// judge, so it starts whenever the queue is wired (even without SES).
+		if deps.EmailQueue != nil && (mailer != nil || pay.Receipts != nil || submissionsStore != nil) {
 			dispatcher := &httpapi.EmailDispatcher{
 				AuthMailer: mailer,
 				Breaker:    deps.Breaker,
 				Pay:        pay,
+				// Issue #245: the same background worker also routes
+				// spam_judge jobs to the AI judge (Ollama Cloud gemma4). The
+				// judge reads OLLAMA_API_KEY from the environment (never
+				// hardcoded). Nil-safe: when the LLM client is absent the
+				// spam_judge jobs are dropped.
+				SpamJudge: &spamjudge.Handler{
+					LLM:   llm.New(cfg.LLMBaseURL, cfg.LLMModel),
+					Subs:  submissionsStore,
+					Sales: sales,
+				},
 			}
 			deps.EmailWorker = emailqueue.NewWorker(deps.EmailQueue, dispatcher, log)
 			go deps.EmailWorker.Run(ctx)
@@ -429,6 +445,27 @@ func main() {
 						slog.Warn("unverified_purge_sweep", "err", err)
 					} else if n > 0 {
 						slog.Info("unverified_purge_sweep", "deleted", n)
+					}
+				}
+				// Issue #245: spam retention sweep. Spam-flagged submissions
+				// and sales older than SpamRetentionDays (default 30) are
+				// auto-deleted permanently. Un-spammed entries are never
+				// touched.
+				if submissionsStore != nil || sales != nil {
+					spamCutoff := time.Now().Add(-time.Duration(cfg.SpamRetentionDays) * 24 * time.Hour)
+					if submissionsStore != nil {
+						if n, err := submissionsStore.DeleteSpamOlderThan(ctx, spamCutoff); err != nil {
+							slog.Warn("spam_retention_sweep_submissions", "err", err)
+						} else if n > 0 {
+							slog.Info("spam_retention_sweep_submissions", "deleted", n)
+						}
+					}
+					if sales != nil {
+						if n, err := sales.DeleteSpamOlderThan(ctx, spamCutoff); err != nil {
+							slog.Warn("spam_retention_sweep_sales", "err", err)
+						} else if n > 0 {
+							slog.Info("spam_retention_sweep_sales", "deleted", n)
+						}
 					}
 				}
 				cancel()

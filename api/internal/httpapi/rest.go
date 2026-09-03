@@ -217,6 +217,13 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /v1/rest/events/count", h.authed(h.countEvents))
 	mux.Handle("GET /v1/rest/events/breakdown", h.authed(h.breakdownEvents))
 	mux.Handle("GET /v1/rest/sales/export.csv", h.authed(h.exportSalesCSV))
+	// Issue #245: AI spam review queue — spam-flagged submissions/sales the
+	// merchant can un-spam (false positive). A spam-flagged sale that gets a
+	// successful payment is auto-un-spammed by the payment callback.
+	mux.Handle("GET /v1/rest/spam/submissions", h.authed(h.listSpamSubmissions))
+	mux.Handle("POST /v1/rest/spam/submissions/{id}/unspam", h.authed(h.unspamSubmission))
+	mux.Handle("GET /v1/rest/spam/sales", h.authed(h.listSpamSales))
+	mux.Handle("POST /v1/rest/spam/sales/{ref}/unspam", h.authed(h.unspamSale))
 	// Issue #61: image-block direct upload. Rate-limited (owner decision)
 	// to curb abuse; auth is account-scoped via h.authed.
 	mux.Handle("POST /v1/rest/uploads/image",

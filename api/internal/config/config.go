@@ -75,6 +75,11 @@ type Config struct {
 	// sweep. Defaults to 7.
 	UnverifiedPurgeDays int
 
+	// SpamRetentionDays (issue #245): spam-flagged submissions/sales older
+	// than this many days are auto-deleted permanently by the hourly sweep.
+	// Defaults to 30. Un-spammed entries are never auto-deleted.
+	SpamRetentionDays int
+
 	// OAuth 2.1 (issue #121): authorization-code TTL and access/refresh-token
 	// lifetimes for MCP clients. Defaults match the issue (10-min code,
 	// 1-hour access, 30-day refresh).
@@ -153,6 +158,9 @@ func Load() (*Config, error) {
 
 		// Unverified-account purge (issue #190): default 7 days.
 		UnverifiedPurgeDays: parsePositiveInt(os.Getenv("UNVERIFIED_PURGE_DAYS"), 7),
+
+		// Spam retention (issue #245): default 30 days.
+		SpamRetentionDays: parsePositiveInt(os.Getenv("SPAM_RETENTION_DAYS"), 30),
 
 		// OAuth 2.1 (issue #121): sensible defaults, overridable per env.
 		OAuthCodeTTLSeconds:         time.Duration(parsePositiveInt64(os.Getenv("OAUTH_CODE_TTL_SECONDS"), 600)) * time.Second,

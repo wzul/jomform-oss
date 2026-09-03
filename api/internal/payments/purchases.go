@@ -180,6 +180,15 @@ func (s *Service) ProcessCallback(ctx context.Context, p *chip.Purchase) error {
 			if err := s.Sales.SetStatusTx(ctx, tx, cur.ID, dbstore.SalePaid); err != nil {
 				return err
 			}
+			// Issue #245: a successful payment means the entry is legit — a
+			// spam-flagged sale that gets paid is automatically un-spammed
+			// (atomic with the status transition under the sale lock).
+			if cur.IsSpam {
+				if err := s.Sales.UnSpamTx(ctx, tx, cur.ID); err != nil {
+					return err
+				}
+				slog.Info("sale_paid_auto_unspam", "sale", cur.ID, "ref", cur.RefCode)
+			}
 			if s.OnPaid != nil {
 				event := "sale.paid"
 				if cur.SaleType == dbstore.SaleTypeSubscription {

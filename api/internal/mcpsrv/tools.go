@@ -370,6 +370,27 @@ func (s *Server) registerTools() {
 		Description: "Senarai respons (submission) untuk satu borang respons-sahaja (mode 'response', tanpa bayaran). Pulangkan data medan + masa. Tapis form_id, page/limit.",
 	}, s.listFormSubmissions)
 
+	// ── Parity: AI spam review queue (issue #245) ─────────────────────────
+	// The merchant's agent can list spam-flagged submissions/sales and
+	// un-spam a false positive. A spam-flagged sale that receives a successful
+	// payment is auto-un-spammed by the payment callback (no agent action).
+	addTool(s, &mcp.Tool{
+		Name:        "list_spam_submissions",
+		Description: "Senarai submission yang ditanda spam oleh AI (issue #245): data medan, sebab spam, masa. Boleh tapis page/limit. Read-only.",
+	}, s.listSpamSubmissions)
+	addTool(s, &mcp.Tool{
+		Name:        "unspam_submission",
+		Description: "Nyah-tanda spam pada submission (false positive). Write tool (peranan manage/admin).",
+	}, s.unspamSubmission)
+	addTool(s, &mcp.Tool{
+		Name:        "list_spam_sales",
+		Description: "Senarai jualan yang ditanda spam oleh AI (issue #245): ref, status, jumlah, pembeli, sebab spam, masa. Boleh tapis page/limit. Read-only.",
+	}, s.listSpamSales)
+	addTool(s, &mcp.Tool{
+		Name:        "unspam_sale",
+		Description: "Nyah-tanda spam pada jualan (false positive). Write tool (peranan manage/admin).",
+	}, s.unspamSale)
+
 	// ── Parity: media library (issue #180) ───────────────────────────────
 	addTool(s, &mcp.Tool{
 		Name:        "list_media",

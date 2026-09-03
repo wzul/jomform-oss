@@ -24,7 +24,9 @@ import (
 	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/email"
+	"github.com/wzul/jomform/api/internal/emailqueue"
 	"github.com/wzul/jomform/api/internal/payments"
+	"github.com/wzul/jomform/api/internal/spamjudge"
 )
 
 // PublicHandlers serves buyer-facing order forms.
@@ -61,6 +63,13 @@ type PublicHandlers struct {
 	SpaceMembers *dbstore.SpaceMemberStore
 	MXChecker    *email.MXChecker
 	FormLimiter  *middleware.RateLimiter
+
+	// Issue #245: background AI spam judge. SpamQueue is the Valkey-backed
+	// background queue (#199) that spam-judge jobs are enqueued to; a worker
+	// sends each submission to Ollama Cloud gemma4 and flags it as spam in the
+	// background. Both nil in bare-mode tests → no judge runs (submissions are
+	// accepted immediately, never flagged).
+	SpamQueue *emailqueue.Queue
 }
 
 // RegisterRoutes wires public endpoints.
@@ -340,6 +349,29 @@ func (h *PublicHandlers) antiSpamCheckEmail(r *http.Request, emailAddr string) b
 	return !ok
 }
 
+// enqueueSpamJudge enqueues a background AI spam-judge job (issue #245) for a
+// submission or sale. Best-effort: a failure is logged and never fails the
+// submit response. The judge is skipped when the submitter is the space
+// owner/admin (testing their own form) or when no queue is wired.
+func (h *PublicHandlers) enqueueSpamJudge(r *http.Request, form *dbstore.Form, owner bool, subID, saleID, emailAddr string, data map[string]any) {
+	if owner || h.SpamQueue == nil {
+		return
+	}
+	job := spamjudge.Job{
+		SubmissionID: subID,
+		SaleID:       saleID,
+		AccountID:    form.AccountID,
+		FormID:       form.ID,
+		FormTitle:    form.Title,
+		Data:         data,
+		Email:        emailAddr,
+		IP:           middleware.ClientIP(r),
+	}
+	if err := spamjudge.Enqueue(r.Context(), h.SpamQueue, job); err != nil {
+		slog.Warn("spamjudge_enqueue_failed", "account", form.AccountID, "err", err)
+	}
+}
+
 // handleSubmit creates a pending sale, requests a CHIP purchase and returns
 // the checkout URL. In response mode (issue #171) it instead stores the
 // submitted field values as a submission — no sale, no payment, no checkout.
@@ -533,6 +565,15 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = h.Sales.SetSaleFields(r.Context(), sale.ID, fm)
 	}
+	// Issue #245: enqueue a background AI spam-judge job for this sale. The
+	// sale is accepted immediately; the judge flags it as spam in the
+	// background (skipped for the space owner/admin testing their own form).
+	// Never blocks the submit response.
+	judgeData := make(map[string]any, len(in.Fields))
+	for k, v := range in.Fields {
+		judgeData[k] = v
+	}
+	h.enqueueSpamJudge(r, form, owner, "", sale.ID, in.Client.Email, judgeData)
 
 	// CHIP flow: create purchase & return checkout URL.
 	if method == "chip" {
@@ -652,6 +693,11 @@ func (h *PublicHandlers) handleResponseSubmit(w http.ResponseWriter, r *http.Req
 		respondErr(w, r, err)
 		return
 	}
+	// Issue #245: enqueue a background AI spam-judge job for this submission.
+	// The submission is accepted immediately; the judge flags it as spam in
+	// the background (skipped for the space owner/admin testing their own
+	// form). Never blocks the submit response.
+	h.enqueueSpamJudge(r, form, owner, sub.ID, "", in.Client.Email, in.Fields)
 	// Issue #193: fire per-form notifications on response.submitted. The
 	// submitted field values (block_id → value) drive conditional logic and
 	// {field_id} recipients. Best-effort — never blocks the submit response.

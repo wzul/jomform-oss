@@ -85,6 +85,15 @@ type Sale struct {
 	// endpoint uses to tie an Open/Click/Delivered event back to this sale.
 	ReceiptMessageID string
 
+	// Issue #245: AI spam detection. IsSpam + SpamReason record the background
+	// AI spam-judge result. A sale is accepted immediately (is_spam=false),
+	// then judged in the background; a spam verdict flips IsSpam=true with a
+	// reason. A spam-flagged sale with a successful payment (paid/confirmed)
+	// is automatically un-spammed. Spam entries are auto-deleted after 30 days
+	// by a retention sweep; un-spammed entries are never auto-deleted.
+	IsSpam     bool
+	SpamReason *string
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -98,7 +107,8 @@ func NewSaleStore(pool *pgxpool.Pool) *SaleStore { return &SaleStore{pool: pool}
 const saleSelect = `SELECT id, account_id, COALESCE(form_id::text,''), ref_code, client, items,
 	subtotal_sen, shipping_sen, discount_sen, total_sen, currency, sale_type, payment_method, status,
 	COALESCE(chip_purchase_id,''), COALESCE(chip_checkout_url,''), COALESCE(invoice_no,''),
-	skip_capture, authorized, captured_at, COALESCE(receipt_message_id,''), created_at, updated_at
+	skip_capture, authorized, captured_at, COALESCE(receipt_message_id,''),
+	is_spam, spam_reason, created_at, updated_at
 	FROM sales`
 
 func scanSale(row pgx.Row) (*Sale, error) {
@@ -106,7 +116,8 @@ func scanSale(row pgx.Row) (*Sale, error) {
 	err := row.Scan(&s.ID, &s.AccountID, &s.FormID, &s.RefCode, &s.Client, &s.Items,
 		&s.SubtotalSen, &s.ShippingSen, &s.DiscountSen, &s.TotalSen, &s.Currency, &s.SaleType, &s.PaymentMethod, &s.Status,
 		&s.ChipPurchaseID, &s.ChipCheckoutURL, &s.InvoiceNo,
-		&s.SkipCapture, &s.Authorized, &s.CapturedAt, &s.ReceiptMessageID, &s.CreatedAt, &s.UpdatedAt)
+		&s.SkipCapture, &s.Authorized, &s.CapturedAt, &s.ReceiptMessageID,
+		&s.IsSpam, &s.SpamReason, &s.CreatedAt, &s.UpdatedAt)
 	return s, err
 }
 
@@ -536,4 +547,89 @@ func (s *SaleStore) CountByAccountsForm(ctx context.Context, accountIDs []string
 		`SELECT COUNT(*) FROM sales WHERE account_id = ANY($1) AND form_id::text = $2`,
 		accountIDs, formID).Scan(&total)
 	return total, err
+}
+
+// ─── Issue #245: AI spam detection ────────────────────────────────────────────
+
+// ListSpamByAccountsPage returns one page of spam-flagged sales across a set
+// of accounts, newest first, plus the total count (issue #245 spam review
+// queue). Ownership is enforced inside the query.
+func (s *SaleStore) ListSpamByAccountsPage(ctx context.Context, accountIDs []string, page, limit int) ([]*Sale, int64, error) {
+	if len(accountIDs) == 0 {
+		return []*Sale{}, 0, nil
+	}
+	if page < 1 {
+		page = 1
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	offset := (page - 1) * limit
+	var total int64
+	if err := s.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM sales WHERE account_id = ANY($1) AND is_spam = true`,
+		accountIDs).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	rows, err := s.pool.Query(ctx,
+		saleSelect+" WHERE account_id = ANY($1) AND is_spam = true ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+		accountIDs, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	out := []*Sale{}
+	for rows.Next() {
+		sale, err := scanSale(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		out = append(out, sale)
+	}
+	return out, total, rows.Err()
+}
+
+// MarkSpam flags a sale as spam with a reason (issue #245). The AI judge
+// calls this on a spam verdict.
+func (s *SaleStore) MarkSpam(ctx context.Context, id, reason string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE sales SET is_spam = true, spam_reason = $2, updated_at = now() WHERE id = $1`,
+		id, reason)
+	return err
+}
+
+// UnSpam clears the spam flag + reason on a sale (issue #245). Called by the
+// merchant review queue (false positive) or automatically when a spam-flagged
+// sale receives a successful payment (paid/confirmed). Un-spammed entries are
+// never auto-deleted.
+func (s *SaleStore) UnSpam(ctx context.Context, id string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE sales SET is_spam = false, spam_reason = NULL, updated_at = now() WHERE id = $1`,
+		id)
+	return err
+}
+
+// UnSpamTx clears the spam flag + reason on a sale within an open transaction
+// (issue #245). Used inside WithSaleLock so the auto-un-spam on a successful
+// payment is atomic with the status transition.
+func (s *SaleStore) UnSpamTx(ctx context.Context, tx pgx.Tx, id string) error {
+	_, err := tx.Exec(ctx,
+		`UPDATE sales SET is_spam = false, spam_reason = NULL, updated_at = now() WHERE id = $1`,
+		id)
+	return err
+}
+
+// DeleteSpamOlderThan permanently deletes spam-flagged sales older than
+// cutoff (issue #245 30-day retention sweep). Un-spammed entries are never
+// touched. Returns the number of rows deleted.
+func (s *SaleStore) DeleteSpamOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
+	tag, err := s.pool.Exec(ctx,
+		`DELETE FROM sales WHERE is_spam = true AND created_at < $1`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }

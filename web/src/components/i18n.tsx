@@ -969,6 +969,7 @@ const DICT = {
   "mcp.troubleConnect": { en: "If connection fails, ensure your client allows remote MCP servers and HTTP-based OAuth. The server advertises at /.well-known/oauth-authorization-server.", ms: "Kalau sambungan gagal, pastikan client kau benarkan pelayan MCP remote dan OAuth berasaskan HTTP. Pelayan iklankan di /.well-known/oauth-authorization-server.", zh: "如果连接失败，请确保客户端允许远程 MCP 服务器和基于 HTTP 的 OAuth。服务器在 /.well-known/oauth-authorization-server 发现。", ta: "இணைப்பு தோல்வியுற்றால், உங்கள் கிளையண்ட் ரிமோட் MCP சர்வர்களை அனுமதிக்கிறதா எனப் பார்க்கவும். /.well-known/oauth-authorization-server-இல் அறிவிக்கப்படுகிறது.", ar: "إذا فشل الاتصال فتأكد أن عميلك يسمح بخوادم MCP البعيدة وOAuth. الخادم يعلن عن نفسه في /.well-known/oauth-authorization-server." },
   // issue #126: dedicated Sales page (per-form filter + deep-link)
   "nav.sales": { en: "Sales", ms: "Jualan", zh: "销售", ta: "விற்பனைகள்", ar: "المبيعات" },
+  "nav.spam": { en: "Spam", ms: "Spam", zh: "垃圾邮件", ta: "ஸ்பேம்", ar: "رسائل مزعجة" },
   "sales.title": { en: "Sales", ms: "Jualan", zh: "销售", ta: "விற்பனைகள்", ar: "المبيعات" },
   "sales.subtitle": { en: "Every sale across your forms — filter, search, export.", ms: "Semua jualan merentas borang anda — tapis, cari, eksport.", zh: "所有表单的每笔销售 — 筛选、搜索、导出。", ta: "உங்கள் படிவங்களின் ஒவ்வொரு விற்பனையும் — வடிகட்டி, தேடு, ஏற்றுமதி.", ar: "كل مبيعاتك عبر النماذج — صفِّ، ابحث، صدّر." },
   "sales.search": { en: "Search ref or buyer…", ms: "Cari rujukan atau pembeli…", zh: "搜索参考号或买家…", ta: "குறிப்பு அல்லது வாங்குபவரைத் தேடு…", ar: "ابحث عن المرجع أو المشتري…" },
@@ -1032,6 +1033,18 @@ const DICT = {
   "del.transient": { en: "Transient", ms: "Sementara", zh: "暂时", ta: "தற்காலிகம்", ar: "مؤقت" },
   "sales.clearFilters": { en: "Clear filters", ms: "Kosongkan tapisan", zh: "清除筛选", ta: "வடிப்பான்களை அழி", ar: "مسح عوامل التصفية" },
   "sales.notFound": { en: "Sale not found.", ms: "Jualan tidak dijumpai.", zh: "未找到销售。", ta: "விற்பனை கிடைக்கவில்லை.", ar: "لم يتم العثور على البيع." },
+  // issue #245: AI spam review queue
+  "spam.title": { en: "Spam review", ms: "Semakan spam", zh: "垃圾邮件审核", ta: "ஸ்பேம் மதிப்பாய்வு", ar: "مراجعة الرسائل المزعجة" },
+  "spam.subtitle": { en: "Submissions and sales the AI judge flagged as spam. Un-spam a false positive; spam entries auto-delete after 30 days.", ms: "Submisi & jualan yang ditanda spam oleh AI. Nyah-spam jika salah; entri spam auto-padam selepas 30 hari.", zh: "AI 判定为垃圾邮件的提交和销售。误判可取消标记；垃圾邮件条目 30 天后自动删除。", ta: "AI நீதிபதி ஸ்பேம் எனக் குறித்த சமர்ப்பிப்புகள் & விற்பனைகள். தவறான நேர்மறையை நீக்கவும்; ஸ்பேம் உள்ளீடுகள் 30 நாட்களுக்குப் பிறகு தானாக நீக்கப்படும்.", ar: "الطلبات والمبيعات التي صنفها الذكاء الاصطناعي كرسائل مزعجة. ألغِ الإشارة للنتائج الإيجابية الخاطئة؛ تُحذف الرسائل المزعجة تلقائياً بعد 30 يوماً." },
+  "spam.submissions": { en: "Submissions", ms: "Submisi", zh: "提交", ta: "சமர்ப்பிப்புகள்", ar: "الطلبات" },
+  "spam.sales": { en: "Sales", ms: "Jualan", zh: "销售", ta: "விற்பனைகள்", ar: "المبيعات" },
+  "spam.empty": { en: "No spam-flagged entries.", ms: "Tiada entri ditanda spam.", zh: "没有垃圾邮件条目。", ta: "ஸ்பேம் குறிக்கப்பட்ட உள்ளீடுகள் இல்லை.", ar: "لا توجد عناصر مميزة كرسائل مزعجة." },
+  "spam.reason": { en: "Reason", ms: "Sebab", zh: "原因", ta: "காரணம்", ar: "السبب" },
+  "spam.unspam": { en: "Un-spam", ms: "Nyah-spam", zh: "取消标记", ta: "ஸ்பேம் நீக்கு", ar: "إلغاء الإشارة" },
+  "spam.unspammed": { en: "Un-spammed ✓", ms: "Nyah-spam ✓", zh: "已取消标记 ✓", ta: "ஸ்பேம் நீக்கப்பட்டது ✓", ar: "تم إلغاء الإشارة ✓" },
+  "spam.unspamFail": { en: "Failed to un-spam.", ms: "Gagal nyah-spam.", zh: "取消标记失败。", ta: "ஸ்பேம் நீக்க முடியவில்லை.", ar: "فشل إلغاء الإشارة." },
+  "spam.loading": { en: "Loading…", ms: "Memuat…", zh: "加载中…", ta: "ஏற்றுகிறது…", ar: "جارٍ التحميل…" },
+  "spam.autoUnspamNote": { en: "A spam-flagged sale that receives a successful payment is automatically un-spammed.", ms: "Jualan ditanda spam yang menerima bayaran berjaya auto-nyah-spam.", zh: "收到成功付款的垃圾邮件标记销售会自动取消标记。", ta: "வெற்றிகரமான கட்டணம் பெறும் ஸ்பேம்-குறிக்கப்பட்ட விற்பனை தானாக ஸ்பேம் நீக்கப்படும்.", ar: "تُلغى الإشارة تلقائياً عن أي بيع مميز كرسالة مزعجة يحصل على دفعة ناجحة." },
   // issue #180: media library (WordPress-style)
   "media.title": { en: "Media", ms: "Media", zh: "媒体", ta: "ஊடகம்", ar: "الوسائط" },
   "media.subtitle": { en: "All images you've uploaded, in one place.", ms: "Semua gambar yang anda muat naik, di satu tempat.", zh: "您上传的所有图片，集中在一处。", ta: "நீங்கள் பதிவேற்றிய அனைத்து படங்களும், ஒரே இடத்தில்.", ar: "كل الصور التي رفعتها في مكان واحد." },
