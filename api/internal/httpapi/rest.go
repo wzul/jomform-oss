@@ -12,6 +12,7 @@ import (
 	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/currency"
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/emailqueue"
 	"github.com/wzul/jomform/api/internal/httpapi/middleware"
 	"github.com/wzul/jomform/api/internal/llm"
 	"github.com/wzul/jomform/api/internal/payments"
@@ -37,6 +38,10 @@ type RESTHandlers struct {
 	Passkeys       *dbstore.PasskeyStore
 	// Issue #161: Mailer delivers the invite email (nil in bare-mode tests).
 	Mailer VerifyMailer
+	// Issue #199: when non-nil, the invite email is enqueued and sent by a
+	// background worker instead of synchronously in the request handler. Nil
+	// (bare-mode tests) → synchronous send via Mailer.
+	EmailQueue *emailqueue.Queue
 	// BaseURL is the app origin used to build invite signup links.
 	BaseURL string
 	Users          *dbstore.UserStore

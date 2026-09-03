@@ -12,6 +12,7 @@ import (
 	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/email"
+	"github.com/wzul/jomform/api/internal/emailqueue"
 	"github.com/wzul/jomform/api/internal/httpapi/middleware"
 )
 
@@ -51,6 +52,11 @@ type AuthHandlers struct {
 	Suppressions *dbstore.SuppressionStore
 	Breaker      *email.Breaker
 	MXChecker    *email.MXChecker
+	// Issue #199: when non-nil, auth emails (verify, magic link, password
+	// reset, 2FA codes) are enqueued and sent by a background worker instead of
+	// synchronously in the request handler. Nil (bare-mode tests) → synchronous
+	// send via VerifyMailer.
+	EmailQueue *emailqueue.Queue
 	// Issue #161: space membership store, used to redeem a pending invite
 	// when a new user signs up via an invite link. Nil in bare-mode tests.
 	SpaceMembers *dbstore.SpaceMemberStore

@@ -16,6 +16,7 @@ import (
 
 	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/emailqueue"
 )
 
 // ─── password recovery (issue #62) ───────────────────────────────────────────
@@ -71,6 +72,8 @@ func (a *AuthHandlers) replyForgotPasswordOK(w http.ResponseWriter) {
 }
 
 // sendPasswordResetEmail delivers the reset link (BASE_URL/reset-password?token=…).
+// Issue #199: when an EmailQueue is wired the email is enqueued and sent by a
+// background worker; otherwise it is sent synchronously.
 func (a *AuthHandlers) sendPasswordResetEmail(ctx context.Context, email, token string) error {
 	if a.VerifyMailer == nil {
 		return errors.New("reset mailer not configured")
@@ -80,6 +83,16 @@ func (a *AuthHandlers) sendPasswordResetEmail(ctx context.Context, email, token 
 		"Tap pautan berikut untuk menetapkan kata laluan baharu (sah selama 30 minit):\n\n" +
 		link + "\n\n" +
 		"Jika anda tidak meminta ini, anda boleh abaikan emel ini — kata laluan anda tidak berubah.\n"
+	// Issue #199: background path — enqueue and return immediately.
+	if a.EmailQueue != nil {
+		if err := a.EmailQueue.Enqueue(ctx, emailqueue.Job{
+			Type: "password_reset", To: email,
+			Subject: "Set semula kata laluan JomForm anda", Body: body,
+		}); err != nil {
+			return err
+		}
+		return nil
+	}
 	if err := a.VerifyMailer.Send(email, "Set semula kata laluan JomForm anda", body); err != nil {
 		return err
 	}

@@ -17,6 +17,7 @@ import (
 
 	"github.com/wzul/jomform/api/internal/auth"
 	emailpkg "github.com/wzul/jomform/api/internal/email"
+	"github.com/wzul/jomform/api/internal/emailqueue"
 	"github.com/wzul/jomform/api/internal/httpapi/middleware"
 )
 
@@ -110,7 +111,9 @@ func (a *AuthHandlers) replyEmail2FACodeOK(w http.ResponseWriter) {
 }
 
 // sendEmail2FACode delivers the 6-digit backup code via the reputaion-checked
-// SES sender (suppression-aware + breaker-gated, mirroring #56).
+// SES sender (suppression-aware + breaker-gated, mirroring #56). Issue #199:
+// when an EmailQueue is wired the email is enqueued and sent by a background
+// worker; otherwise it is sent synchronously.
 func (a *AuthHandlers) sendEmail2FACode(ctx context.Context, email, code string) error {
 	if a.VerifyMailer == nil {
 		return errors.New("email code mailer not configured")
@@ -128,6 +131,16 @@ func (a *AuthHandlers) sendEmail2FACode(ctx context.Context, email, code string)
 		"\t" + code + "\n\n" +
 		"Kod ini sah selama 10 minit dan hanya boleh digunakan sekali. Ia menggantikan kod dari aplikasi pengesah anda.\n\n" +
 		"Jika anda tidak cuba log masuk, anda boleh abaikan emel ini.\n"
+	// Issue #199: background path — enqueue and return immediately.
+	if a.EmailQueue != nil {
+		if err := a.EmailQueue.Enqueue(ctx, emailqueue.Job{
+			Type: "email2fa", To: email,
+			Subject: "Kod sandaran 2FA JomForm anda", Body: body,
+		}); err != nil {
+			return err
+		}
+		return nil
+	}
 	if err := a.VerifyMailer.Send(email, "Kod sandaran 2FA JomForm anda", body); err != nil {
 		return err
 	}
@@ -143,7 +156,7 @@ func (a *AuthHandlers) sendEmail2FACode(ctx context.Context, email, code string)
 // send2FAActiveEmail confirms on enable (issue #72) that 2FA is active and
 // explains the email-code fallback trade-off: a backup code is a convenience
 // recovery path that bypasses the authenticator, so it is more convenient but
-// marginally weaker than TOTP alone.
+// marginally weaker than TOTP alone. Issue #199: enqueued when a queue is wired.
 func (a *AuthHandlers) send2FAActiveEmail(ctx context.Context, email string) error {
 	if a.VerifyMailer == nil {
 		return errors.New("2fa active mailer not configured")
@@ -163,6 +176,16 @@ func (a *AuthHandlers) send2FAActiveEmail(ctx context.Context, email string) err
 		"dihantar ke emel ini melalui pautan \"Hantar kod melalui emel\" pada langkah 2FA. Nota: kod emel\n" +
 		"adalah laluan pemulihan yang lebih mudah tetapi lebih lemah sedikit berbanding TOTP sahaja — layan\n" +
 		"peti masuk emel anda dengan selamat.\n"
+	// Issue #199: background path — enqueue and return immediately.
+	if a.EmailQueue != nil {
+		if err := a.EmailQueue.Enqueue(ctx, emailqueue.Job{
+			Type: "2fa_active", To: email,
+			Subject: "2FA kini aktif pada akaun JomForm anda", Body: body,
+		}); err != nil {
+			return err
+		}
+		return nil
+	}
 	if err := a.VerifyMailer.Send(email, "2FA kini aktif pada akaun JomForm anda", body); err != nil {
 		return err
 	}
@@ -228,6 +251,7 @@ func (a *AuthHandlers) replyMagicLinkRequestOK(w http.ResponseWriter) {
 }
 
 // sendMagicLinkEmail delivers the sign-in link (BASE_URL/magic-link?token=…).
+// Issue #199: enqueued when a queue is wired; otherwise sent synchronously.
 func (a *AuthHandlers) sendMagicLinkEmail(ctx context.Context, email, token string) error {
 	if a.VerifyMailer == nil {
 		return errors.New("magic link mailer not configured")
@@ -246,6 +270,16 @@ func (a *AuthHandlers) sendMagicLinkEmail(ctx context.Context, email, token stri
 		link + "\n\n" +
 		"Pautan ini sah selama 15 minit dan hanya boleh digunakan sekali.\n\n" +
 		"Jika anda tidak meminta ini, anda boleh abaikan emel ini — akaun anda selamat.\n"
+	// Issue #199: background path — enqueue and return immediately.
+	if a.EmailQueue != nil {
+		if err := a.EmailQueue.Enqueue(ctx, emailqueue.Job{
+			Type: "magic_link", To: email,
+			Subject: "Pautan log masuk JomForm anda", Body: body,
+		}); err != nil {
+			return err
+		}
+		return nil
+	}
 	if err := a.VerifyMailer.Send(email, "Pautan log masuk JomForm anda", body); err != nil {
 		return err
 	}

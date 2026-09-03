@@ -13,6 +13,7 @@ import (
 	"github.com/wzul/jomform/api/internal/chip"
 	"github.com/wzul/jomform/api/internal/cryptoutil"
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/emailqueue"
 )
 
 // Service wires CHIP client + stores for payment operations.
@@ -29,6 +30,10 @@ type Service struct {
 	// Users resolves the merchant's email for notify_merchant (issue #107).
 	Users      *dbstore.UserStore
 	Receipts   *Receipts
+	// EmailQueue (issue #199): when non-nil, receipts + merchant notifications
+	// are enqueued and sent by a background worker instead of synchronously in
+	// the request handler. Nil (bare-mode tests) → synchronous send.
+	EmailQueue *emailqueue.Queue
 	// OnPaid (optional) fans outbound webhooks after a sale is paid.
 	OnPaid func(ctx context.Context, accountID, event string, payload map[string]any)
 }

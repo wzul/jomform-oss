@@ -13,6 +13,7 @@ import (
 
 	"github.com/wzul/jomform/api/internal/auth"
 	emailpkg "github.com/wzul/jomform/api/internal/email"
+	"github.com/wzul/jomform/api/internal/emailqueue"
 	"github.com/wzul/jomform/api/internal/httpapi/middleware"
 )
 
@@ -27,6 +28,9 @@ import (
 // Issue #206: the lang (the user's chosen locale from the signup form) is
 // carried on the verify link as a ?lang= param so the confirmation page can
 // render in the user's language.
+// Issue #199: when an EmailQueue is wired, the fully-rendered email is enqueued
+// and sent by a background worker — the register handler returns immediately.
+// When the queue is nil (bare-mode tests) the send happens synchronously.
 func (a *AuthHandlers) sendVerifyEmail(ctx context.Context, userID, email, lang string) error {
 	if a.VerifyMailer == nil {
 		return fmt.Errorf("verify mailer not configured")
@@ -57,6 +61,17 @@ func (a *AuthHandlers) sendVerifyEmail(ctx context.Context, userID, email, lang 
 		"Tap pautan berikut (sah selama 24 jam):\n\n" +
 		link + "\n\n" +
 		"Jika anda tidak mendaftar akaun JomForm, anda boleh abaikan emel ini.\n"
+	// Issue #199: background path — enqueue and return immediately.
+	if a.EmailQueue != nil {
+		if err := a.EmailQueue.Enqueue(ctx, emailqueue.Job{
+			Type: "verify", To: email,
+			Subject: "Sahkan emel JomForm anda", Body: body,
+			AccountID: userID,
+		}); err != nil {
+			return err
+		}
+		return nil
+	}
 	if err := a.VerifyMailer.Send(email, "Sahkan emel JomForm anda", body); err != nil {
 		return err
 	}

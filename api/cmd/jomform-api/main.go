@@ -24,6 +24,7 @@ import (
 	"github.com/wzul/jomform/api/internal/db"
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/email"
+	"github.com/wzul/jomform/api/internal/emailqueue"
 	"github.com/wzul/jomform/api/internal/httpapi"
 	"github.com/wzul/jomform/api/internal/mcpsrv"
 	"github.com/wzul/jomform/api/internal/metrics"
@@ -140,6 +141,9 @@ func main() {
 		// MX checker are Valkey-backed so they're wired when Valkey is up.
 		deps.Breaker = email.NewBreaker(sessions.Client(), cfg.BreakerMinSends, cfg.BreakerRatio)
 		deps.MXChecker = email.NewMXChecker(sessions.Client())
+		// Issue #199: persistent background email queue over the same Valkey
+		// client. The worker is started below once the dispatcher is wired.
+		deps.EmailQueue = emailqueue.NewQueue(sessions.Client())
 	}
 	if pool != nil {
 		deps.Suppressions = dbstore.NewSuppressionStore(pool)
@@ -192,6 +196,9 @@ func main() {
 				Suppression: dbstore.NewSuppressionStore(pool),
 			}
 		}
+		// Issue #199: receipts + merchant notifications go through the
+		// background email queue (nil when Valkey is absent → synchronous).
+		pay.EmailQueue = deps.EmailQueue
 		deps.Payments = &httpapi.PaymentsHandlers{Service: pay, Events: events}
 
 		// REST API for the web dashboard.
@@ -237,6 +244,8 @@ func main() {
 			Passkeys:       passkeysStore,
 			// Issue #161: invite email delivery + signup link base.
 			Mailer:   mailer,
+			// Issue #199: invite emails go through the background queue.
+			EmailQueue: deps.EmailQueue,
 			BaseURL:  cfg.AppBaseURL,
 			Users:          usersStore,
 			Store:          store,
@@ -300,6 +309,22 @@ func main() {
 			Submissions: submissionsStore,
 			// Issue #176: sign the private-form unlock cookie.
 			AccessKey: decryptKey,
+		}
+
+		// Issue #199: start the background email worker. It polls the
+		// Valkey-backed email queue and sends via SES, so a slow SES call never
+		// blocks the payment/submit/auth response. The dispatcher routes each
+		// job type to the right sender (auth mailer / payments receipt sender).
+		// Only started when both the queue and a sender are wired.
+		if deps.EmailQueue != nil && (mailer != nil || pay.Receipts != nil) {
+			dispatcher := &httpapi.EmailDispatcher{
+				AuthMailer: mailer,
+				Breaker:    deps.Breaker,
+				Pay:        pay,
+			}
+			deps.EmailWorker = emailqueue.NewWorker(deps.EmailQueue, dispatcher, log)
+			go deps.EmailWorker.Run(ctx)
+			log.Info("email_worker_started")
 		}
 
 		// Issue #185: daily BNM exchange-rate refresh (once daily, cached in

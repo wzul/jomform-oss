@@ -10,6 +10,7 @@ import (
 	"github.com/wzul/jomform/api/internal/config"
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/email"
+	"github.com/wzul/jomform/api/internal/emailqueue"
 	"github.com/wzul/jomform/api/internal/httpapi/middleware"
 	"github.com/wzul/jomform/api/internal/mcpsrv"
 	"github.com/wzul/jomform/api/internal/metrics"
@@ -70,6 +71,13 @@ type Deps struct {
 	// ACME is not configured (plain HTTP only). Handlers register verified
 	// custom domains here so the origin provisions + renews their certs.
 	TLS *tlsmgr.Manager
+
+	// Issue #199: persistent background email queue + worker. EmailQueue is the
+	// Valkey-backed queue that request handlers enqueue to; EmailWorker is the
+	// goroutine that polls it and sends via SES. Both nil in bare-mode tests
+	// (handlers then send synchronously).
+	EmailQueue  *emailqueue.Queue
+	EmailWorker *emailqueue.Worker
 }
 
 // VerifyMailer delivers an email-confirmation message. The concrete email.Sender
@@ -117,6 +125,8 @@ func NewServer(cfg *config.Config, log *slog.Logger, deps *Deps) *Server {
 			Suppressions: deps.Suppressions,
 			Breaker:      deps.Breaker,
 			MXChecker:    deps.MXChecker,
+			// Issue #199: background email queue (nil → synchronous sends).
+			EmailQueue: deps.EmailQueue,
 			// Issue #161: redeem pending invites on signup.
 			SpaceMembers: deps.SpaceMembers,
 			// Issue #92: audit/behaviour log for auth actions.

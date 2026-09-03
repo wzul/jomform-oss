@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/emailqueue"
 )
 
 // ── admin gate ──────────────────────────────────────────────────────────────
@@ -160,6 +161,25 @@ func (h *RESTHandlers) createInvite(w http.ResponseWriter, r *http.Request, actx
 		lang = st.SpaceLang()
 	}
 	link := strings.TrimRight(h.BaseURL, "/") + "/login?invite=" + token
+	// Issue #199: when an EmailQueue is wired, enqueue the invite email and
+	// return immediately — the worker sends it. Otherwise send synchronously.
+	if h.EmailQueue != nil {
+		if err := h.EmailQueue.Enqueue(r.Context(), emailqueue.Job{
+			Type: "invite", To: email,
+			Subject: inviteEmailSubject(lang), Body: inviteEmailBody(lang, link),
+		}); err != nil {
+			// The invite is recorded; a failed enqueue is surfaced but not fatal.
+			writeJSON(w, http.StatusCreated, map[string]string{
+				"status": "invited", "id": inv.ID, "email": email, "role": role,
+				"email_error": "failed to queue invite email",
+			})
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]string{
+			"status": "invited", "id": inv.ID, "email": email, "role": role,
+		})
+		return
+	}
 	if h.Mailer != nil {
 		if merr := h.Mailer.Send(email, inviteEmailSubject(lang), inviteEmailBody(lang, link)); merr != nil {
 			// The invite is recorded; a failed email is surfaced but not fatal.

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/wzul/jomform/api/internal/email"
+	"github.com/wzul/jomform/api/internal/emailqueue"
 )
 
 // Receipts bundles email config; nil disables receipts entirely.
@@ -142,10 +143,14 @@ func renderTemplate(src string, data receiptData, html bool) string {
 
 // SendSaleReceipt emails the buyer a receipt rendered from the space's email
 // settings (issue #107). Respects receipt_enabled (off = no buyer email) and
-// suppression (#56). Failures are logged but NEVER fail the payment flow. On a
-// successful send it captures the SES MessageID and persists it on the sale
-// (issue #106) so the SNS endpoint can correlate Open/Click/Delivered events
-// back to this sale.
+// suppression (#56). Failures are logged but NEVER fail the payment flow.
+//
+// Issue #199: when the Service has an EmailQueue wired, the receipt + merchant
+// notification are enqueued and sent by a background worker — the request
+// handler returns immediately and a slow SES call never blocks the payment
+// callback. Rendering (cheap local work) still happens here so the worker only
+// performs the SES network call. When EmailQueue is nil (bare-mode tests) the
+// send happens synchronously as before.
 func (s *Service) SendSaleReceipt(ctx context.Context, ref SaleRef) {
 	if s.Receipts == nil || s.Receipts.Sender == nil || ref.BuyerEmail == "" {
 		return
@@ -178,9 +183,40 @@ func (s *Service) SendSaleReceipt(ctx context.Context, ref SaleRef) {
 
 	subj, rendered := renderReceipt(ref, subject, body, html)
 
-	// persistReceiptMessageID best-effort stores the SES MessageID on the sale
-	// so open/click events can be correlated (issue #106). A failure is logged,
-	// never fatal to the payment flow.
+	// Issue #199: background path — enqueue the fully-rendered jobs and return.
+	if s.EmailQueue != nil {
+		if receiptEnabled {
+			// Generate the PDF here (cheap local work) so the worker only does
+			// the SES call. A PDF failure falls back to a text-only receipt.
+			var pdf []byte
+			if p, err := s.ReceiptPDF(ref); err == nil && len(p) > 0 {
+				pdf = p
+			}
+			if err := s.EmailQueue.Enqueue(ctx, emailqueue.Job{
+				Type: "receipt", To: ref.BuyerEmail,
+				Subject: subj, Body: rendered,
+				AccountID: ref.SpaceID, SaleRef: ref.RefCode, SaleID: ref.SaleID,
+				PDFFilename: "resit-" + ref.RefCode + ".pdf", PDFData: pdf,
+			}); err != nil {
+				slog.Warn("receipt_enqueue_failed", "ref", ref.RefCode, "err", err)
+			}
+		}
+		if notifyMerchant {
+			to := s.resolveMerchantEmail(ctx, ref, merchantEmail)
+			if to == "" {
+				slog.Warn("receipt_merchant_notify_no_recipient", "ref", ref.RefCode)
+			} else if err := s.EmailQueue.Enqueue(ctx, emailqueue.Job{
+				Type: "merchant_notify", To: to,
+				Subject: "Jualan baharu — " + subj, Body: rendered,
+				AccountID: ref.SpaceID, SaleRef: ref.RefCode,
+			}); err != nil {
+				slog.Warn("receipt_merchant_notify_enqueue_failed", "ref", ref.RefCode, "err", err)
+			}
+		}
+		return
+	}
+
+	// Synchronous path (bare-mode tests / no queue wired).
 	persistReceiptMessageID := func(messageID string) {
 		if messageID == "" || ref.SaleID == "" || s.Sales == nil {
 			return
@@ -199,6 +235,24 @@ func (s *Service) SendSaleReceipt(ctx context.Context, ref SaleRef) {
 	if notifyMerchant {
 		s.notifyMerchant(ctx, ref, subj, rendered, html, merchantEmail)
 	}
+}
+
+// resolveMerchantEmail returns the merchant notification recipient: the
+// configured merchant_notify_email, else the space owner's account email.
+func (s *Service) resolveMerchantEmail(ctx context.Context, ref SaleRef, merchantEmail string) string {
+	to := strings.TrimSpace(merchantEmail)
+	if to == "" {
+		if s.Spaces != nil && ref.SpaceID != "" {
+			if owner, err := s.Spaces.ByID(ctx, ref.SpaceID); err == nil && owner != nil {
+				if s.Users != nil {
+					if u, uerr := s.Users.ByID(ctx, owner.Owner); uerr == nil && u != nil {
+						to = u.Email
+					}
+				}
+			}
+		}
+	}
+	return to
 }
 
 // sendReceipt delivers the buyer receipt (with PDF attachment when available).
