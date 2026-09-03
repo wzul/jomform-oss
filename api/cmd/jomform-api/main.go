@@ -134,6 +134,8 @@ func main() {
 		spacesStore := dbstore.NewSpaceStore(pool)
 		usersStore := dbstore.NewUserStore(pool)
 		passkeysStore := dbstore.NewPasskeyStore(pool)
+		// Issue #171: response-only form submissions.
+		submissionsStore := dbstore.NewSubmissionStore(pool)
 		// Issue #161: space membership + invites.
 		spaceMembersStore := dbstore.NewSpaceMemberStore(pool)
 		deps.SpaceMembers = spaceMembersStore
@@ -210,6 +212,8 @@ func main() {
 			Events: deps.Events,
 			// Issue #106: per-sale receipt email status (Sent/Delivered/Opened/Clicked).
 			EmailDeliveryEvents: deps.EmailDeliveryEvents,
+			// Issue #171: response-only form submissions.
+			Submissions: submissionsStore,
 		}
 		pay.OnPaid = func(ctx context.Context, accountID, event string, payload map[string]any) {
 			httpapi.DispatchWebhooks(ctx, rest, whStore, accountID, event, payload)
@@ -228,6 +232,8 @@ func main() {
 			Events:   deps.Events, // issue #92: list_events tool
 			// Issue #106: per-sale receipt email status tool.
 			EmailDeliveryEvents: deps.EmailDeliveryEvents,
+			// Issue #171: response-only form submissions tool.
+			Submissions: submissionsStore,
 			// Issue #121: allow OAuth access tokens to authenticate /mcp too.
 			OAuth:      deps.OAuth,
 			DecryptKey: decryptKey,
@@ -241,6 +247,8 @@ func main() {
 			Pay: pay, BaseURL: cfg.AppBaseURL,
 			SystemSettings: dbstore.NewSystemSettingStore(pool),
 			Spaces:         spacesStore,
+			// Issue #171: response-only form submissions.
+			Submissions: submissionsStore,
 		}
 
 		// Subscription charge runner: hourly sweep for due charges + overdue cancels.

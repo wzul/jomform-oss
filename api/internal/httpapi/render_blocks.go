@@ -308,3 +308,155 @@ func formTrackingHead(f *dbstore.Form) string {
 	_ = json.Unmarshal(raw, &cfg)
 	return cfg.TrackingHead
 }
+
+// renderResponseForm renders a response-only form (issue #171): input blocks
+// only, a submit button, no product list and no payment step. On submit the
+// buyer's field values are POSTed to /order as {client, fields:{block_id:value}}
+// and the server stores a submission. Returns false when the form has no
+// blocks (caller falls back to the legacy layout).
+func (h *PublicHandlers) renderResponseForm(w http.ResponseWriter, r *http.Request, f *dbstore.Form) bool {
+	raw, err := json.Marshal(f.Config)
+	if err != nil {
+		return false
+	}
+	var cfg struct {
+		Blocks []struct {
+			ID       string     `json:"id"`
+			Type     string     `json:"type"`
+			Value    string     `json:"value"`
+			Required bool       `json:"required"`
+			Condition *Condition `json:"condition"`
+		} `json:"blocks"`
+	}
+	if json.Unmarshal(raw, &cfg) != nil || len(cfg.Blocks) == 0 {
+		return false
+	}
+
+	type fieldView struct {
+		ID, Type, Value string
+		Required        bool
+		CondJSON        string
+	}
+	fields := make([]fieldView, 0, len(cfg.Blocks))
+	for _, b := range cfg.Blocks {
+		// Only input blocks are collectable; text/image/divider/product are
+		// decorative and skipped in response mode.
+		switch b.Type {
+		case "name", "email", "phone", "textarea", "checkbox":
+			fields = append(fields, fieldView{
+				ID: b.ID, Type: b.Type, Value: b.Value, Required: b.Required,
+				CondJSON: marshalCondition(b.Condition),
+			})
+		}
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	globalTr := ""
+	if h.Accounts != nil {
+		if v, terr := h.Accounts.Tracking(r.Context(), f.AccountID); terr == nil {
+			globalTr = v
+		}
+	}
+	themePrimary, themeBg := "", ""
+	if f.Theme != nil {
+		if v, ok := f.Theme["primary"].(string); ok {
+			themePrimary = template.HTMLEscapeString(v)
+		}
+		if v, ok := f.Theme["background"].(string); ok {
+			themeBg = template.HTMLEscapeString(v)
+		}
+	}
+	ls := h.effectiveLangStrings(r.Context(), f)
+	if err := responseTmpl.Execute(w, map[string]any{
+		"Slug": f.Slug, "Title": f.Title, "Fields": fields,
+		"TrackHead":    headInjection(globalTr, formTrackingHead(f)),
+		"ThemePrimary": themePrimary, "ThemeBg": themeBg, "LogoURL": f.LogoURL,
+		"Lang": ls.Lang,
+		"Ls":   ls,
+	}); err != nil {
+		slog.Error("form_render_response", "err", err)
+	}
+	return true
+}
+
+// responseTmpl renders a response-only form. No product list, no total, no
+// payment — just the input blocks and a submit button. On success the form is
+// replaced with a thank-you message (no /t/{ref} payment status).
+var responseTmpl = template.Must(template.New("response").
+	Parse(`<!doctype html>
+<html lang="{{.Lang}}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{.Title}}</title>
+{{.TrackHead}}
+<style>
+  {{if .ThemePrimary}}:root { --jf-primary: {{.ThemePrimary}}; }{{end}}
+  {{if .ThemeBg}}body { background: {{.ThemeBg}}; }{{end}}
+</style>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui,-apple-system,"Segoe UI",sans-serif;
+         background:#f7f8f8; color:#17181c; min-height:100vh;
+         display:flex; align-items:center; justify-content:center; padding:24px; }
+  .logo { max-height:56px; max-width:180px; object-fit:contain; margin:0 auto 12px; display:block; }
+  .card { background:#ffffff; border:1px solid #e6e8ec; border-radius:16px;
+          max-width:480px; width:100%; padding:32px; }
+  h1 { margin:0 0 8px; font-size:24px; letter-spacing:-0.02em; }
+  .lbl { display:block; font-size:12px; color:#6b7280; margin:12px 0 4px; }
+  .chk { display:flex; align-items:center; gap:8px; font-size:14px; margin:8px 0; color:#374151; }
+  .chk input[type=checkbox] { width:18px; height:18px; accent-color:#4f46e5; margin:0; }
+  input[type=text],input[type=email],input[type=tel],textarea {
+    width:100%; padding:10px 12px; border-radius:8px; border:1px solid #e6e8ec;
+    background:#ffffff; color:#17181c; font-size:14px; margin-bottom:10px; }
+  button { width:100%; padding:12px; border:0; border-radius:10px; font-size:15px; font-weight:600;
+           color:#fff; cursor:pointer; margin-top:12px; background:#5e6ad2; }
+  button:hover { background:#828fff; }
+  .ok { text-align:center; padding:24px 0; }
+  .ok h1 { color:#10b981; }
+  .ok p { color:#6b7280; font-size:14px; }
+</style></head><body>
+<form class="card" id="of" data-slug="{{.Slug}}">
+  <h1>{{.Title}}</h1>
+{{if .LogoURL}}<img class="logo" src="{{.LogoURL}}" alt="">{{end}}
+{{range .Fields}}
+{{if eq .Type "name"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="text" name="{{.ID}}"{{if .Required}} required{{end}}>
+{{else if eq .Type "email"}}  <label class="lbl">{{$.Ls.EmailLabel}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="email" name="{{.ID}}"{{if .Required}} required{{end}}>
+{{else if eq .Type "phone"}}  <label class="lbl">{{.Value}}</label><input type="tel" name="{{.ID}}">
+{{else if eq .Type "textarea"}}  <label class="lbl">{{.Value}}</label><textarea name="{{.ID}}" rows="3"></textarea>
+{{else if eq .Type "checkbox"}}  <label class="chk"><input type="checkbox" name="{{.ID}}" value="1"> {{.Value}}</label>
+{{end}}
+{{end}}
+  <button type="submit">{{$.Ls.SubmitResponse}}</button>
+</form>
+<script>
+(function(){
+  var form=document.getElementById('of');
+  form.addEventListener('submit',function(e){
+    e.preventDefault();
+    var fields={};
+    var els=form.querySelectorAll('[name]');
+    els.forEach(function(el){
+      if(el.type==='checkbox'){fields[el.name]=el.checked?'1':'';}
+      else{fields[el.name]=el.value;}
+    });
+    var body={client:{
+      full_name:(document.querySelector('[name]')||{}).value||'',
+      email:'',phone:''
+    },fields:fields};
+    // Map the first name/email/phone blocks into the client object too.
+    var nm=form.querySelector('input[type=text]'); if(nm) body.client.full_name=nm.value;
+    var em=form.querySelector('input[type=email]'); if(em) body.client.email=em.value;
+    var ph=form.querySelector('input[type=tel]'); if(ph) body.client.phone=ph.value;
+    fetch(location.pathname+'/order',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+      .then(function(r){return r.json()})
+      .then(function(d){
+        if(d.status==='submitted'){
+          form.innerHTML='<div class="ok"><h1>✓ {{$.Ls.ThankYou}}</h1><p>{{$.Ls.ResponseReceived}}</p></div>';
+        } else {
+          alert('{{$.Ls.ErrorAlert}}'+(d.error?': '+d.error:''));
+        }
+      })
+      .catch(function(){alert('{{$.Ls.ErrorAlert}}');});
+  });
+})();
+</script>
+</body></html>`))

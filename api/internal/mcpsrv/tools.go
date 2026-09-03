@@ -259,6 +259,12 @@ func (s *Server) registerTools() {
 		Description: "Log audit/tingkah-laku akaun (terbaru dahulu). Boleh tapis event_name, from/to (RFC3339), dan page/limit. Read-only.",
 	}, s.listEvents)
 
+	// ── Parity: response-only form submissions (issue #171) ───────────────
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "list_form_submissions",
+		Description: "Senarai respons (submission) untuk satu borang respons-sahaja (mode 'response', tanpa bayaran). Pulangkan data medan + masa. Tapis form_id, page/limit.",
+	}, s.listFormSubmissions)
+
 }
 
 // helper: require a write-capable key.

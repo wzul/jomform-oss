@@ -61,6 +61,9 @@ type RESTHandlers struct {
 	// EmailDeliveryEvents is the SES delivery-event log (issue #92/#106). Nil
 	// in bare-mode tests; the per-sale email status view returns empty.
 	EmailDeliveryEvents *dbstore.EmailDeliveryEventStore
+
+	// Issue #171: response-only form submissions (list + count endpoints).
+	Submissions *dbstore.SubmissionStore
 }
 
 // RegisterRoutes wires REST endpoints.
@@ -79,6 +82,9 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /v1/rest/forms/{id}", h.authed(h.getForm))
 	mux.Handle("PATCH /v1/rest/forms/{id}", h.authed(h.updateForm))
 	mux.Handle("DELETE /v1/rest/forms/{id}", h.authed(h.deleteForm))
+	// Issue #171: response-only form submissions (list + count).
+	mux.Handle("GET /v1/rest/forms/{id}/submissions", h.authed(h.listSubmissions))
+	mux.Handle("GET /v1/rest/forms/{id}/submissions/count", h.authed(h.countSubmissions))
 	mux.Handle("POST /v1/rest/forms/{id}/publish", h.authed(h.publishForm))
 	mux.Handle("GET /v1/rest/keys", h.authed(h.listKeys))
 	mux.Handle("POST /v1/rest/keys", h.authed(h.createKey))

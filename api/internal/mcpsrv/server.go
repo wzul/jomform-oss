@@ -37,6 +37,9 @@ type Deps struct {
 	// Issue #106: SES delivery-event log, for the per-sale email status tool.
 	// Nil → the tool returns an empty status.
 	EmailDeliveryEvents *dbstore.EmailDeliveryEventStore
+	// Issue #171: response-only form submissions (list_form_submissions tool).
+	// Nil → the tool errors.
+	Submissions *dbstore.SubmissionStore
 	// Issue #121: OAuth 2.1 store. When wired, /mcp accepts either a Bearer
 	// API key OR an OAuth access token (both resolve to an account). Nil →
 	// API-key auth only.

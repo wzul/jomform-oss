@@ -148,6 +148,9 @@ export default function Builder() {
   const [fsRedF, setFsRedF] = useState("");
   const [fsEmbed, setFsEmbed] = useState(true);
 
+  // Issue #171: form collection mode — "payment" (default) or "response".
+  const [mode, setMode] = useState<"payment" | "response">("payment");
+
   // Real drag state: which palette type or block index is being dragged, and
   // which index the insertion indicator currently points at.
   const dragType = useRef<BlockType | null>(null);
@@ -230,6 +233,58 @@ export default function Builder() {
   }, [currentId, loadFormSales]);
 
   const formSalesTotalPages = Math.max(1, Math.ceil(formSalesTotal / FORM_SALES_PAGE_SIZE));
+
+  // Issue #171: response-only submissions for the selected form.
+  type SubmissionRow = { id: string; form_id: string; data: Record<string, unknown>; created_at: string };
+  type SubmissionsPage = { items: SubmissionRow[]; page: number; limit: number; total: number };
+  const [submissions, setSubmissions] = useState<SubmissionRow[]>([]);
+  const [submissionsPage, setSubmissionsPage] = useState(1);
+  const [submissionsTotal, setSubmissionsTotal] = useState(0);
+  const [submissionsErr, setSubmissionsErr] = useState("");
+  const SUBMISSIONS_PAGE_SIZE = 10;
+
+  const loadSubmissions = useCallback(async (fid: string | null, page: number) => {
+    if (!fid) {
+      setSubmissions([]);
+      setSubmissionsTotal(0);
+      setSubmissionsErr("");
+      return;
+    }
+    try {
+      const q = new URLSearchParams({ page: String(page), limit: String(SUBMISSIONS_PAGE_SIZE) });
+      const sp = spaceQuery();
+      const sep = sp ? "&" : "";
+      const r = await fetch(`/api/rest/forms/${fid}/submissions?${q.toString()}${sep}${sp.replace("?", "")}`);
+      if (!r.ok) {
+        setSubmissions([]);
+        setSubmissionsTotal(0);
+        setSubmissionsErr(t("bld.loadResponsesErr"));
+        return;
+      }
+      const d = (await r.json()) as SubmissionsPage;
+      setSubmissions(Array.isArray(d.items) ? d.items : []);
+      setSubmissionsPage(d.page || page);
+      setSubmissionsTotal(d.total || 0);
+      setSubmissionsErr("");
+    } catch {
+      setSubmissions([]);
+      setSubmissionsTotal(0);
+      setSubmissionsErr(t("bld.loadResponsesErr"));
+    }
+  }, [t]);
+
+  useEffect(() => {
+    setSubmissionsPage(1);
+    void loadSubmissions(currentId, 1);
+  }, [currentId, loadSubmissions]);
+
+  const submissionsTotalPages = Math.max(1, Math.ceil(submissionsTotal / SUBMISSIONS_PAGE_SIZE));
+
+  function gotoSubmissionsPage(p: number) {
+    const next = Math.min(Math.max(1, p), submissionsTotalPages);
+    setSubmissionsPage(next);
+    void loadSubmissions(currentId, next);
+  }
 
   function gotoFormSalesPage(p: number) {
     const next = Math.min(Math.max(1, p), formSalesTotalPages);
@@ -337,6 +392,7 @@ export default function Builder() {
       setTitle(d.title);
       setPubUrl(d.status === "published" ? d.url : "");
       const cfg = d.config || {};
+      setMode(cfg.mode === "response" ? "response" : "payment");
       if (d.theme?.primary) setFsTheme(d.theme.primary);
       const hydrated: Block[] = [];
       (cfg.blocks || []).forEach(
@@ -421,6 +477,7 @@ export default function Builder() {
     setTitle(d.title);
     setPubUrl(d.status === "published" ? d.url : "");
     const cfg = d.config || {};
+    setMode(cfg.mode === "response" ? "response" : "payment");
     const hydrated: Block[] = [];
     (cfg.blocks || []).forEach(
       (b: { type: BlockType; value?: string; product_id?: string; required?: boolean; condition?: { field_id: string; op: string; value: string } | null }) => {
@@ -444,6 +501,7 @@ export default function Builder() {
     setSaving(true);
     setLoadErr("");
     const config = {
+      mode,
       description: (blocks.find((b) => b.type === "text")?.value || "").slice(0, 300),
       theme: { primary: fsTheme },
       blocks: blocks.map((b) => ({
@@ -612,7 +670,7 @@ export default function Builder() {
             {t("bld.dragToAdd")}
           </p>
           <div className="grid grid-cols-2 gap-2">
-            {PALETTE.map((p) => (
+            {PALETTE.filter((p) => !(mode === "response" && p.type === "product")).map((p) => (
               <div
                 key={p.type}
                 draggable
@@ -865,6 +923,46 @@ export default function Builder() {
           )}
 
 
+        {/* ── Form mode (issue #171) ── */}
+        <div className="mt-8 rounded-lg border border-[var(--jf-border)] bg-white p-3">
+          <p className="text-xs font-medium uppercase tracking-wider text-[#9ca3af]">
+            {t("bld.mode")}
+          </p>
+          <div className="mt-2 grid grid-cols-2 gap-1.5">
+            <button
+              type="button"
+              onClick={() => {
+                setMode("payment");
+                setDirty(true);
+              }}
+              className={`rounded-md border px-2 py-2 text-xs font-medium transition-colors ${
+                mode === "payment"
+                  ? "border-[#7170ff]/60 bg-indigo-50 text-[var(--jf-primary)]"
+                  : "border-[var(--jf-border)] text-[#374151] hover:bg-slate-50"
+              }`}
+            >
+              {t("bld.modePayment")}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setMode("response");
+                setDirty(true);
+              }}
+              className={`rounded-md border px-2 py-2 text-xs font-medium transition-colors ${
+                mode === "response"
+                  ? "border-[#7170ff]/60 bg-indigo-50 text-[var(--jf-primary)]"
+                  : "border-[var(--jf-border)] text-[#374151] hover:bg-slate-50"
+              }`}
+            >
+              {t("bld.modeResponse")}
+            </button>
+          </div>
+          <p className="mt-1.5 text-[11px] text-[var(--jf-muted)]">
+            {mode === "response" ? t("bld.modeResponseHint") : t("bld.modePaymentHint")}
+          </p>
+        </div>
+
         {/* ── Display settings ── */}
         {currentId && (
           <div className="mt-8 rounded-lg border border-[var(--jf-border)] bg-white p-3">
@@ -1094,6 +1192,83 @@ export default function Builder() {
                       type="button"
                       onClick={() => gotoFormSalesPage(formSalesPage + 1)}
                       disabled={formSalesPage >= formSalesTotalPages}
+                      className="rounded-md border border-[var(--jf-border)] px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {t("common.next")}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* per-form responses view (issue #171) — shown for response-mode forms */}
+          {currentId && mode === "response" && (
+            <div className="mt-8 rounded-lg border border-[var(--jf-border)] bg-white p-3">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-medium uppercase tracking-wider text-[#9ca3af]">
+                  {t("bld.responsesThisForm")}
+                </p>
+                <span className="text-[10px] text-[var(--jf-muted)]">
+                  {submissionsTotal} {t("dash.records")}
+                </span>
+              </div>
+              <div className="mt-2 overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-[var(--jf-border)] text-left text-[10px] uppercase tracking-wide text-[var(--jf-muted)]">
+                      <th className="px-2 py-1.5 font-medium">{t("bld.responseData")}</th>
+                      <th className="px-2 py-1.5 font-medium">{t("dash.status")}</th>
+                      <th className="px-2 py-1.5 font-medium">{t("dash.ref")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {submissions.map((s) => (
+                      <tr key={s.id} className="border-b border-[var(--jf-border)] last:border-0 hover:bg-slate-50/60">
+                        <td className="max-w-56 truncate px-2 py-2 text-xs">
+                          {Object.entries(s.data || {})
+                            .filter(([k]) => !["full_name", "email", "phone"].includes(k))
+                            .map(([k, v]) => `${k}: ${String(v)}`)
+                            .join(" · ") || "—"}
+                        </td>
+                        <td className="whitespace-nowrap px-2 py-2">
+                          <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
+                            {t("dash.confirmed")}
+                          </span>
+                        </td>
+                        <td className="whitespace-nowrap px-2 py-2 text-right text-[10px] text-[var(--jf-muted)]">
+                          {s.created_at.slice(0, 10)}
+                        </td>
+                      </tr>
+                    ))}
+                    {submissions.length === 0 && (
+                      <tr>
+                        <td colSpan={3} className="px-2 py-6 text-center text-xs text-[var(--jf-muted)]">
+                          {submissionsErr || t("bld.noResponsesForm")}
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              {submissionsTotal > 0 && (
+                <div className="mt-2 flex items-center justify-between gap-2 border-t border-[var(--jf-border)] pt-2">
+                  <span className="text-[10px] text-[var(--jf-muted)]">
+                    {t("dash.pageOf", { page: submissionsPage, total: submissionsTotalPages })}
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => gotoSubmissionsPage(submissionsPage - 1)}
+                      disabled={submissionsPage <= 1}
+                      className="rounded-md border border-[var(--jf-border)] px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {t("common.prev")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => gotoSubmissionsPage(submissionsPage + 1)}
+                      disabled={submissionsPage >= submissionsTotalPages}
                       className="rounded-md border border-[var(--jf-border)] px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       {t("common.next")}

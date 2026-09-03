@@ -29,7 +29,9 @@ type PublicHandlers struct {
 	Pay                *payments.Service
 	SystemSettings     *dbstore.SystemSettingStore
 	Spaces             *dbstore.SpaceStore
-	BaseURL            string
+	// Issue #171: response-only form submissions.
+	Submissions *dbstore.SubmissionStore
+	BaseURL     string
 }
 
 // RegisterRoutes wires public endpoints.
@@ -55,8 +57,26 @@ func genRef() string {
 	return "JF-" + hex.EncodeToString(b)
 }
 
+// formMode returns the form's collection mode from its config: "payment"
+// (default, current behaviour) or "response" (collect-only, no payment).
+func formMode(f *dbstore.Form) string {
+	if f == nil || f.Config == nil {
+		return "payment"
+	}
+	if raw, err := json.Marshal(f.Config); err == nil {
+		var cfg struct {
+			Mode string `json:"mode"`
+		}
+		if json.Unmarshal(raw, &cfg) == nil && cfg.Mode == "response" {
+			return "response"
+		}
+	}
+	return "payment"
+}
+
 // handleSubmit creates a pending sale, requests a CHIP purchase and returns
-// the checkout URL.
+// the checkout URL. In response mode (issue #171) it instead stores the
+// submitted field values as a submission — no sale, no payment, no checkout.
 func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("slug")
 
@@ -75,6 +95,12 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil || form == nil {
 		writeErr(w, http.StatusNotFound, "borang tidak dijumpai")
+		return
+	}
+
+	// Issue #171: response-only forms collect field values, not orders.
+	if formMode(form) == "response" {
+		h.handleResponseSubmit(w, r, form)
 		return
 	}
 
@@ -214,6 +240,52 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		"ref_code": sale.RefCode,
 		"status":   "bank_direct",
 		"next":     "/t/" + sale.RefCode,
+	})
+}
+
+// handleResponseSubmit stores a response-only form's field values (issue
+// #171). The buyer submits {client, fields:{block_id:value}}; we persist a
+// submission row (no sale, no payment, no CHIP) and return a success/thank-you
+// with no checkout URL.
+func (h *PublicHandlers) handleResponseSubmit(w http.ResponseWriter, r *http.Request, form *dbstore.Form) {
+	var in struct {
+		Client struct {
+			FullName string `json:"full_name"`
+			Email    string `json:"email"`
+			Phone    string `json:"phone"`
+		} `json:"client"`
+		Fields map[string]any `json:"fields"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeErr(w, http.StatusBadRequest, "butiran tidak lengkap")
+		return
+	}
+	if in.Fields == nil {
+		in.Fields = map[string]any{}
+	}
+	// Always capture the buyer identity alongside the field answers so the
+	// merchant can see who responded even when no name/email block exists.
+	if in.Client.FullName != "" {
+		in.Fields["full_name"] = in.Client.FullName
+	}
+	if in.Client.Email != "" {
+		in.Fields["email"] = in.Client.Email
+	}
+	if in.Client.Phone != "" {
+		in.Fields["phone"] = in.Client.Phone
+	}
+	sub := &dbstore.Submission{
+		FormID:    form.ID,
+		AccountID: form.AccountID,
+		Data:      in.Fields,
+	}
+	if err := h.Submissions.Create(r.Context(), sub); err != nil {
+		respondErr(w, r, err)
+		return
+	}
+	respond(w, http.StatusCreated, map[string]string{
+		"status": "submitted",
+		"id":     sub.ID,
 	})
 }
 
@@ -465,8 +537,14 @@ func accountSubdomain(host string) string {
 }
 
 // serveForm renders a resolved form (blocks or legacy) and logs unknown
-// template errors once.
+// template errors once. Response-only forms (issue #171) render a
+// collect-only layout with no product list and no payment step.
 func (h *PublicHandlers) serveForm(w http.ResponseWriter, r *http.Request, f *dbstore.Form) {
+	if formMode(f) == "response" {
+		if h.renderResponseForm(w, r, f) {
+			return
+		}
+	}
 	if h.renderBlocks(w, r, f) {
 		return
 	}
