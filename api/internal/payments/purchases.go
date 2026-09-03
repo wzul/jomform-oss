@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -260,11 +261,49 @@ func (s *Service) processSubscriptionEvent(ctx context.Context, p *chip.Purchase
 		if err := s.CompleteCardUpdate(ctx, p); err == nil {
 			return nil
 		}
-		return s.Subs.MarkChargePaid(ctx, p.ID)
+		if err := s.Subs.MarkChargePaid(ctx, p.ID); err != nil {
+			return err
+		}
+		// Advance the next charge by the billing period and, for a fixed
+		// billing count, mark the subscription completed once the Nth charge
+		// has been reached (no further charges scheduled).
+		sub, err := s.Subs.ByChargePurchase(ctx, p.ID)
+		if err != nil {
+			return err
+		}
+		if err := s.Subs.ScheduleNextCharge(ctx, sub.ID, nextChargeFrom(time.Now(), sub.Period)); err != nil {
+			return err
+		}
+		return s.completeIfLimitReached(ctx, sub)
 	case chip.StatusError:
 		return s.Subs.MarkChargeFailed(ctx, p.ID)
 	}
 	return ErrNotFound
+}
+
+// completeIfLimitReached marks a subscription completed once it has reached its
+// fixed billing count (subscription_charges = N, NULL = infinite). The initial
+// token purchase is always charge #1, so the total consumed is 1 + paid
+// recurring charges. Returns nil when the limit is not (yet) reached.
+func (s *Service) completeIfLimitReached(ctx context.Context, sub *dbstore.Subscription) error {
+	if s.Products == nil {
+		return nil
+	}
+	prod, err := s.Products.Get(ctx, sub.AccountID, sub.ProductID)
+	if err != nil {
+		return err
+	}
+	if prod.SubscriptionCharges == nil {
+		return nil // infinite
+	}
+	total := 1 + s.Subs.ChargeCount(ctx, sub.ID)
+	if total >= int64(*prod.SubscriptionCharges) {
+		if err := s.Subs.SetStatus(ctx, sub.ID, dbstore.SubCompleted); err != nil {
+			return err
+		}
+		slog.Info("sub_completed_charge_limit", "sub", sub.ID, "charges", total)
+	}
+	return nil
 }
 
 // CaptureSale captures an authorized (skip_capture) purchase. amountSen nil

@@ -32,6 +32,8 @@ export type ProductForm = {
   stock?: number | null;
   active: boolean;
   variations: Variation[];
+  // Issue #152: subscription billing count — null = infinite, N = fixed charges.
+  subscription_charges?: number | null;
 };
 
 const emptyForm = (): ProductForm => ({
@@ -45,6 +47,7 @@ const emptyForm = (): ProductForm => ({
   stock: null,
   active: true,
   variations: [],
+  subscription_charges: null,
 });
 
 const money = (sen: number) =>
@@ -95,6 +98,7 @@ export default function ProductEditor({ productId }: { productId?: string }) {
           trial_days: p.trial_days || 0,
           stock: typeof p.stock === "number" ? p.stock : null,
           active: p.active !== false,
+          subscription_charges: typeof p.subscription_charges === "number" ? p.subscription_charges : null,
           variations: Array.isArray(p.variations)
             ? p.variations.map((v: Variation) => ({
                 id: v.id,
@@ -228,6 +232,10 @@ export default function ProductEditor({ productId }: { productId?: string }) {
       type: form.type,
       billing_period: form.type === "subscription" ? form.billing_period : undefined,
       trial_days: form.type === "subscription" ? Math.max(0, form.trial_days) : undefined,
+      subscription_charges:
+        form.type === "subscription" && typeof form.subscription_charges === "number"
+          ? Math.max(1, form.subscription_charges)
+          : null,
       active: form.active,
     };
     if (isVariable) {
@@ -421,6 +429,40 @@ export default function ProductEditor({ productId }: { productId?: string }) {
                   />
                   <span className="mt-1 block text-xs text-[var(--jf-muted)]">{t("prod.trialHint")}</span>
                 </label>
+                <label className="block text-sm font-medium">
+                  {t("prod.billingCount")}
+                  <select
+                    value={typeof form.subscription_charges === "number" ? "fixed" : "infinite"}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        subscription_charges: e.target.value === "fixed" ? 1 : null,
+                      }))
+                    }
+                    className="jf-input mt-1"
+                  >
+                    <option value="infinite">{t("prod.chargesInfinite")}</option>
+                    <option value="fixed">{t("prod.chargesFixed")}</option>
+                  </select>
+                </label>
+                {typeof form.subscription_charges === "number" && (
+                  <label className="block text-sm font-medium">
+                    {t("prod.chargesN")}
+                    <input
+                      value={String(form.subscription_charges)}
+                      onChange={(e) =>
+                        setForm((f) => ({
+                          ...f,
+                          subscription_charges: Math.max(1, parseInt(e.target.value || "1", 10)),
+                        }))
+                      }
+                      type="number"
+                      min="1"
+                      step="1"
+                      className="jf-input mt-1"
+                    />
+                  </label>
+                )}
               </>
             )}
           </div>

@@ -15,17 +15,18 @@ import (
 // ── Products update ──────────────────────────────────────────────────────
 
 type updateProductIn struct {
-	ProductID     string   `json:"product_id" jsonschema:"ID produk"`
-	Name          string   `json:"name,omitempty" jsonschema:"Nama baharu (optional)"`
-	Description   string   `json:"description,omitempty" jsonschema:"Penerangan baharu (optional)"`
-	PriceSen      *int64   `json:"price_sen,omitempty" jsonschema:"Harga baharu dalam sen (optional)"`
-	Images        []string `json:"images,omitempty" jsonschema:"Gambar (URL) — set penuh; kosong = kosongkan" `
-	Stock         *int     `json:"stock,omitempty" jsonschema:"Stok baharu (optional); omit = tak berubah" `
-	Active        *bool    `json:"active,omitempty" jsonschema:"Aktifkan/Nyahaktif"`
-	Type          string   `json:"type,omitempty" jsonschema:"one_time atau subscription (optional)"`
-	BillingPeriod string   `json:"billing_period,omitempty" jsonschema:"month atau year untuk subscription (optional)"`
-	TrialDays     *int     `json:"trial_days,omitempty" jsonschema:"Hari percubaan (subscription; optional)"`
-	Variations    []variationIn `json:"variations,omitempty" jsonschema:"Set penuh variasi (name, price_sen, stock, images, sort_order). Kosong = produk simple; omit = tak berubah."`
+	ProductID           string        `json:"product_id" jsonschema:"ID produk"`
+	Name                string        `json:"name,omitempty" jsonschema:"Nama baharu (optional)"`
+	Description         string        `json:"description,omitempty" jsonschema:"Penerangan baharu (optional)"`
+	PriceSen            *int64        `json:"price_sen,omitempty" jsonschema:"Harga baharu dalam sen (optional)"`
+	Images              []string      `json:"images,omitempty" jsonschema:"Gambar (URL) — set penuh; kosong = kosongkan" `
+	Stock               *int          `json:"stock,omitempty" jsonschema:"Stok baharu (optional); omit = tak berubah" `
+	Active              *bool         `json:"active,omitempty" jsonschema:"Aktifkan/Nyahaktif"`
+	Type                string        `json:"type,omitempty" jsonschema:"one_time atau subscription (optional)"`
+	BillingPeriod       string        `json:"billing_period,omitempty" jsonschema:"month atau year untuk subscription (optional)"`
+	TrialDays           *int          `json:"trial_days,omitempty" jsonschema:"Hari percubaan (subscription; optional)"`
+	Variations          []variationIn `json:"variations,omitempty" jsonschema:"Set penuh variasi (name, price_sen, stock, images, sort_order). Kosong = produk simple; omit = tak berubah."`
+	SubscriptionCharges **int         `json:"subscription_charges,omitempty" jsonschema:"Bilangan caj (subscription; omit = tak berubah, null = infinite, N = caj N kali)"`
 }
 
 func (s *Server) updateProduct(
@@ -64,6 +65,9 @@ func (s *Server) updateProduct(
 	if in.TrialDays != nil && *in.TrialDays < 0 {
 		return nil, nil, fmt.Errorf("trial_days mesti >= 0")
 	}
+	if in.SubscriptionCharges != nil && *in.SubscriptionCharges != nil && **in.SubscriptionCharges < 1 {
+		return nil, nil, fmt.Errorf("subscription_charges mesti >= 1 (atau null untuk infinite)")
+	}
 	var imagesPtr *[]string
 	if in.Images != nil {
 		imagesPtr = &in.Images
@@ -81,7 +85,7 @@ func (s *Server) updateProduct(
 		}
 	}
 	if err := s.deps.Products.Update(ctx, acc, in.ProductID, namePtr, descPtr,
-		in.PriceSen, imagesPtr, stockPtr, in.Active, typPtr, periodPtr, in.TrialDays); err != nil {
+		in.PriceSen, imagesPtr, stockPtr, in.Active, typPtr, periodPtr, in.TrialDays, in.SubscriptionCharges); err != nil {
 		return nil, nil, err
 	}
 	// Wholesale-replace variations when the caller sent them (nil = keep).

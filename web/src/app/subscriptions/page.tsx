@@ -84,14 +84,18 @@ export default function Subscriptions() {
       ? t("sub.active")
       : s === "past_due"
         ? t("sub.pastDue")
-        : t("sub.cancelled");
+        : s === "completed"
+          ? t("sub.completed")
+          : t("sub.cancelled");
 
   const statusBadge = (s: string) =>
     s === "active"
       ? "border border-emerald-200 bg-emerald-50 text-emerald-700"
       : s === "past_due"
         ? "border border-amber-200 bg-amber-50 text-amber-700"
-        : "border border-slate-200 bg-slate-50 text-slate-500";
+        : s === "completed"
+          ? "border border-sky-200 bg-sky-50 text-sky-700"
+          : "border border-slate-200 bg-slate-50 text-slate-500";
 
   async function cancelOne(sub: Subscription) {
     const ok = window.confirm(
@@ -178,6 +182,7 @@ export default function Subscriptions() {
             <option value="all">{t("sub.statusAll")}</option>
             <option value="active">{t("sub.active")}</option>
             <option value="past_due">{t("sub.pastDue")}</option>
+            <option value="completed">{t("sub.completed")}</option>
             <option value="cancelled">{t("sub.cancelled")}</option>
           </select>
           <span className="ml-auto whitespace-nowrap text-xs text-[var(--jf-muted)]">

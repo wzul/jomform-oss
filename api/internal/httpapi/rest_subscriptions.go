@@ -53,7 +53,7 @@ func (h *RESTHandlers) listSubscriptions(w http.ResponseWriter, r *http.Request,
 	page, limit := parsePageLimit(r)
 	status := r.URL.Query().Get("status")
 	switch status {
-	case "", dbstore.SubActive, dbstore.SubPastDue, dbstore.SubCanceled:
+	case "", dbstore.SubActive, dbstore.SubPastDue, dbstore.SubCanceled, dbstore.SubCompleted:
 	default:
 		writeErr(w, http.StatusBadRequest, "status tidak sah")
 		return

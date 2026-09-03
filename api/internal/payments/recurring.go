@@ -39,6 +39,17 @@ func (s *Service) RunDueCharges(ctx context.Context) error {
 }
 
 func (s *Service) chargeSubscription(ctx context.Context, sub *dbstore.Subscription) error {
+	// Issue #152: a fixed billing count (subscription_charges = N) stops the
+	// subscription after the Nth charge. The initial token purchase is always
+	// charge #1, so total charges consumed = 1 + paid recurring charges. When
+	// the limit is reached, mark the subscription completed (removes it from
+	// the due set — no further charges scheduled) and skip.
+	if done, err := s.maybeCompleteSubscription(ctx, sub); err != nil {
+		return err
+	} else if done {
+		return nil
+	}
+
 	acc, err := s.Accounts.ByID(ctx, sub.AccountID)
 	if err != nil || acc.ChipBrandID == "" || acc.ChipSecretKeyEnc == "" {
 		return fmt.Errorf("account/creds: %w", err)
@@ -77,6 +88,33 @@ func (s *Service) chargeSubscription(ctx context.Context, sub *dbstore.Subscript
 	_ = s.Subs.AddCharge(ctx, sub.ID, p.ID, sub.AmountSen, dbstore.ChargePending, int(attempt))
 	slog.Info("sub_charge_created", "sub", sub.ID, "purchase", p.ID, "attempt", attempt)
 	return nil
+}
+
+// maybeCompleteSubscription marks a subscription completed once it has reached
+// its fixed billing count (subscription_charges = N, NULL = infinite). The
+// initial token purchase is always charge #1, so the total consumed is
+// 1 + paid recurring charges. Returns true when the subscription was just
+// completed (and no further charge should be scheduled).
+func (s *Service) maybeCompleteSubscription(ctx context.Context, sub *dbstore.Subscription) (bool, error) {
+	if s.Products == nil {
+		return false, nil
+	}
+	prod, err := s.Products.Get(ctx, sub.AccountID, sub.ProductID)
+	if err != nil {
+		return false, err
+	}
+	if prod.SubscriptionCharges == nil {
+		return false, nil // infinite
+	}
+	total := 1 + s.Subs.ChargeCount(ctx, sub.ID)
+	if total >= int64(*prod.SubscriptionCharges) {
+		if err := s.Subs.SetStatus(ctx, sub.ID, dbstore.SubCompleted); err != nil {
+			return false, err
+		}
+		slog.Info("sub_completed_charge_limit", "sub", sub.ID, "charges", total)
+		return true, nil
+	}
+	return false, nil
 }
 
 // afterFailedCharge applies the retry ladder.

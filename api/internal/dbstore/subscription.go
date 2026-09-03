@@ -11,9 +11,10 @@ import (
 
 // Subscription lifecycle values.
 const (
-	SubActive   = "active"
-	SubPastDue  = "past_due"
-	SubCanceled = "cancelled"
+	SubActive    = "active"
+	SubPastDue   = "past_due"
+	SubCanceled  = "cancelled"
+	SubCompleted = "completed"
 
 	ChargePending = "pending"
 	ChargePaid    = "paid"
@@ -171,6 +172,27 @@ func (s *SubscriptionStore) FailedAttempts(ctx context.Context, subID string) in
 		                             WHERE subscription_id=$1 AND status='paid'), 'epoch')`,
 		subID).Scan(&n)
 	return n
+}
+
+// ChargeCount returns the number of paid charges recorded for a subscription.
+// This is the "charge count reached" used to enforce a fixed billing count
+// (subscription_charges = N stops after the Nth paid charge).
+func (s *SubscriptionStore) ChargeCount(ctx context.Context, subID string) int64 {
+	var n int64
+	_ = s.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM subscription_charges
+		 WHERE subscription_id=$1 AND status='paid'`, subID).Scan(&n)
+	return n
+}
+
+// ByChargePurchase finds the subscription owning a child charge purchase id
+// (a recurring charge, distinct from the token-creating purchase). Used by
+// the callback to advance the charge count / mark completion after a paid
+// recurring charge.
+func (s *SubscriptionStore) ByChargePurchase(ctx context.Context, purchaseID string) (*Subscription, error) {
+	return scanSub(s.pool.QueryRow(ctx,
+		subSelect+` WHERE id = (SELECT subscription_id FROM subscription_charges WHERE chip_purchase_id = $1)`,
+		purchaseID))
 }
 
 // PastDueBefore lists past_due subscriptions since before the cutoff.

@@ -14,16 +14,17 @@ import (
 // ─── Products ────────────────────────────────────────────────────────────────
 
 type productOut struct {
-	ID            string   `json:"id"`
-	Name          string   `json:"name"`
-	Description   string   `json:"description,omitempty"`
-	PriceSen      int64    `json:"price_sen"`
-	Images        []string `json:"images,omitempty"`
-	Type          string   `json:"type"`
-	BillingPeriod string   `json:"billing_period,omitempty"`
-	TrialDays     int      `json:"trial_days"`
-	Active        bool     `json:"active"`
-	Stock         *int     `json:"stock,omitempty"`
+	ID                  string   `json:"id"`
+	Name                string   `json:"name"`
+	Description         string   `json:"description,omitempty"`
+	PriceSen            int64    `json:"price_sen"`
+	Images              []string `json:"images,omitempty"`
+	Type                string   `json:"type"`
+	BillingPeriod       string   `json:"billing_period,omitempty"`
+	TrialDays           int      `json:"trial_days"`
+	SubscriptionCharges *int     `json:"subscription_charges,omitempty"` // nil = infinite
+	Active              bool     `json:"active"`
+	Stock               *int     `json:"stock,omitempty"`
 }
 
 type emptyIn struct{}
@@ -43,21 +44,23 @@ func (s *Server) listProducts(ctx context.Context, _ *mcp.CallToolRequest, _ emp
 			ID: p.ID, Name: p.Name, Description: p.Description, PriceSen: p.PriceSen,
 			Images: p.Images, Type: p.Type, BillingPeriod: p.BillingPeriod,
 			TrialDays: p.TrialDays, Active: p.Active, Stock: p.Stock,
+			SubscriptionCharges: p.SubscriptionCharges,
 		})
 	}
 	return nil, out, nil
 }
 
 type createProductIn struct {
-	Name          string   `json:"name" jsonschema:"nama produk"`
-	Description   string   `json:"description,omitempty" jsonschema:"penerangan produk"`
-	PriceSen      int64    `json:"price_sen" jsonschema:"harga dalam SEN (RM25.00 = 2500)"`
-	Type          string   `json:"type" jsonschema:"one_time atau subscription"`
-	BillingPeriod string   `json:"billing_period,omitempty" jsonschema:"month atau year (subscription sahaja)"`
-	TrialDays     int      `json:"trial_days,omitempty" jsonschema:"hari percubaan (subscription)"`
-	Stock         *int     `json:"stock,omitempty" jsonschema:"stok (omit = unlimited)"`
-	Images        []string `json:"images,omitempty" jsonschema:"gambar (URL)"`
-	Variations    []variationIn `json:"variations,omitempty" jsonschema:"variasi produk (name, price_sen, stock, images, sort_order) — kosong = produk simple"`
+	Name                string        `json:"name" jsonschema:"nama produk"`
+	Description         string        `json:"description,omitempty" jsonschema:"penerangan produk"`
+	PriceSen            int64         `json:"price_sen" jsonschema:"harga dalam SEN (RM25.00 = 2500)"`
+	Type                string        `json:"type" jsonschema:"one_time atau subscription"`
+	BillingPeriod       string        `json:"billing_period,omitempty" jsonschema:"month atau year (subscription sahaja)"`
+	TrialDays           int           `json:"trial_days,omitempty" jsonschema:"hari percubaan (subscription)"`
+	Stock               *int          `json:"stock,omitempty" jsonschema:"stok (omit = unlimited)"`
+	Images              []string      `json:"images,omitempty" jsonschema:"gambar (URL)"`
+	Variations          []variationIn `json:"variations,omitempty" jsonschema:"variasi produk (name, price_sen, stock, images, sort_order) — kosong = produk simple"`
+	SubscriptionCharges *int          `json:"subscription_charges,omitempty" jsonschema:"bilangan caj (subscription; omit/null = infinite, N = caj N kali)"`
 }
 
 // variationIn is the MCP input shape for one product variation.
@@ -76,6 +79,9 @@ func (s *Server) createProduct(ctx context.Context, _ *mcp.CallToolRequest, in c
 	}
 	if in.Name == "" || in.PriceSen < 0 {
 		return nil, productOut{}, fmt.Errorf("nama dan price_sen wajib")
+	}
+	if in.SubscriptionCharges != nil && *in.SubscriptionCharges < 1 {
+		return nil, productOut{}, fmt.Errorf("subscription_charges mesti >= 1 (atau null untuk infinite)")
 	}
 	pType := in.Type
 	if pType == "" {
@@ -107,7 +113,7 @@ func (s *Server) createProduct(ctx context.Context, _ *mcp.CallToolRequest, in c
 		AccountID: accountID, Name: in.Name, Description: in.Description,
 		PriceSen: in.PriceSen, Images: in.Images, Type: pType,
 		BillingPeriod: period, TrialDays: in.TrialDays, Active: true,
-		Stock: in.Stock,
+		Stock: in.Stock, SubscriptionCharges: in.SubscriptionCharges,
 	}
 	if err := s.deps.Products.Create(ctx, p); err != nil {
 		return nil, productOut{}, fmt.Errorf("db: %w", err)
@@ -132,7 +138,7 @@ func (s *Server) createProduct(ctx context.Context, _ *mcp.CallToolRequest, in c
 	return nil, productOut{ID: p.ID, Name: p.Name, Description: p.Description,
 		Images: p.Images, PriceSen: p.PriceSen, Type: p.Type,
 		BillingPeriod: p.BillingPeriod, TrialDays: p.TrialDays, Active: true,
-		Stock: p.Stock}, nil
+		Stock: p.Stock, SubscriptionCharges: p.SubscriptionCharges}, nil
 }
 
 type archiveProductIn struct {
@@ -324,7 +330,7 @@ func (s *Server) listSubscriptions(ctx context.Context, _ *mcp.CallToolRequest, 
 		return nil, nil, err
 	}
 	switch in.Status {
-	case "", dbstore.SubActive, dbstore.SubPastDue, dbstore.SubCanceled:
+	case "", dbstore.SubActive, dbstore.SubPastDue, dbstore.SubCanceled, dbstore.SubCompleted:
 	default:
 		return nil, nil, fmt.Errorf("status tidak sah")
 	}

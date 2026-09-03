@@ -135,6 +135,7 @@ func main() {
 		usersStore := dbstore.NewUserStore(pool)
 		passkeysStore := dbstore.NewPasskeyStore(pool)
 		pay := payments.New(chip.New(cfg.ChipAPIBaseURL), accounts, sales, subs, decryptKey, cfg.AppBaseURL)
+		pay.Products = products
 		pay.Forms = formsStore
 		pay.Spaces = spacesStore
 		pay.Users = usersStore

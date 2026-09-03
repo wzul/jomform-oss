@@ -21,6 +21,7 @@ type Service struct {
 	Accounts   *dbstore.AccountStore
 	Sales      *dbstore.SaleStore
 	Subs       *dbstore.SubscriptionStore
+	Products   *dbstore.ProductStore // reads subscription_charges for fixed billing counts
 	DecryptKey []byte // ENCRYPTION_KEY — used to decrypt per-account CHIP keys
 	BaseURL    string // app public base URL for redirects/callbacks
 	Forms      FormGetter

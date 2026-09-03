@@ -10,19 +10,20 @@ import (
 
 // Product models the products table.
 type Product struct {
-	ID            string
-	AccountID     string
-	Name          string
-	Description   string
-	PriceSen      int64
-	Images        []string
-	Stock         *int
-	Type          string // one_time | subscription
-	BillingPeriod string // month | year when subscription
-	TrialDays     int
-	Active        bool
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	ID                 string
+	AccountID          string
+	Name               string
+	Description        string
+	PriceSen           int64
+	Images             []string
+	Stock              *int
+	Type               string // one_time | subscription
+	BillingPeriod      string // month | year when subscription
+	TrialDays          int
+	SubscriptionCharges *int // NULL = infinite; N = stop after Nth charge
+	Active             bool
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 var ErrProductNotFound = errors.New("product not found")
@@ -34,17 +35,17 @@ type ProductStore struct{ pool *pgxpool.Pool }
 func NewProductStore(pool *pgxpool.Pool) *ProductStore { return &ProductStore{pool: pool} }
 
 const productSelect = `SELECT id, account_id, name, COALESCE(description,''), price_sen,
-	images, stock, type, COALESCE(billing_period,''), trial_days, active, created_at, updated_at
+	images, stock, type, COALESCE(billing_period,''), trial_days, subscription_charges, active, created_at, updated_at
 	FROM products`
 
 // Create inserts a product.
 func (s *ProductStore) Create(ctx context.Context, p *Product) error {
 	return s.pool.QueryRow(ctx,
-		`INSERT INTO products (account_id, name, description, price_sen, type, billing_period, trial_days, stock, images)
-		 VALUES ($1,$2,$3,$4,$5,NULLIF($6,''),$7,$8,COALESCE($9::jsonb,'[]'::jsonb))
+		`INSERT INTO products (account_id, name, description, price_sen, type, billing_period, trial_days, subscription_charges, stock, images)
+		 VALUES ($1,$2,$3,$4,$5,NULLIF($6,''),$7,$8,$9,COALESCE($10::jsonb,'[]'::jsonb))
 		 RETURNING id, created_at, updated_at`,
 		p.AccountID, p.Name, p.Description, p.PriceSen, p.Type, p.BillingPeriod,
-		p.TrialDays, p.Stock, p.Images,
+		p.TrialDays, p.SubscriptionCharges, p.Stock, p.Images,
 	).Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt)
 }
 
@@ -59,7 +60,7 @@ func (s *ProductStore) ListActiveByAccount(ctx context.Context, accountID string
 	for rows.Next() {
 		q := &Product{}
 		if err := rows.Scan(&q.ID, &q.AccountID, &q.Name, &q.Description, &q.PriceSen,
-			&q.Images, &q.Stock, &q.Type, &q.BillingPeriod, &q.TrialDays, &q.Active, &q.CreatedAt, &q.UpdatedAt); err != nil {
+			&q.Images, &q.Stock, &q.Type, &q.BillingPeriod, &q.TrialDays, &q.SubscriptionCharges, &q.Active, &q.CreatedAt, &q.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, q)
@@ -83,7 +84,7 @@ func (s *ProductStore) ListActiveByAccounts(ctx context.Context, accountIDs []st
 	for rows.Next() {
 		q := &Product{}
 		if err := rows.Scan(&q.ID, &q.AccountID, &q.Name, &q.Description, &q.PriceSen,
-			&q.Images, &q.Stock, &q.Type, &q.BillingPeriod, &q.TrialDays, &q.Active, &q.CreatedAt, &q.UpdatedAt); err != nil {
+			&q.Images, &q.Stock, &q.Type, &q.BillingPeriod, &q.TrialDays, &q.SubscriptionCharges, &q.Active, &q.CreatedAt, &q.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, q)
@@ -108,7 +109,7 @@ func (s *ProductStore) ListAllByAccounts(ctx context.Context, accountIDs []strin
 	for rows.Next() {
 		q := &Product{}
 		if err := rows.Scan(&q.ID, &q.AccountID, &q.Name, &q.Description, &q.PriceSen,
-			&q.Images, &q.Stock, &q.Type, &q.BillingPeriod, &q.TrialDays, &q.Active, &q.CreatedAt, &q.UpdatedAt); err != nil {
+			&q.Images, &q.Stock, &q.Type, &q.BillingPeriod, &q.TrialDays, &q.SubscriptionCharges, &q.Active, &q.CreatedAt, &q.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, q)
@@ -135,7 +136,7 @@ func (s *ProductStore) Get(ctx context.Context, accountID, productID string) (*P
 	q := &Product{}
 	err := s.pool.QueryRow(ctx, productSelect+" WHERE id=$2 AND account_id=$1", accountID, productID).
 		Scan(&q.ID, &q.AccountID, &q.Name, &q.Description, &q.PriceSen,
-			&q.Images, &q.Stock, &q.Type, &q.BillingPeriod, &q.TrialDays, &q.Active, &q.CreatedAt, &q.UpdatedAt)
+			&q.Images, &q.Stock, &q.Type, &q.BillingPeriod, &q.TrialDays, &q.SubscriptionCharges, &q.Active, &q.CreatedAt, &q.UpdatedAt)
 	return q, err
 }
 
@@ -191,14 +192,17 @@ var ErrOutOfStock = errors.New("produk telah habis (out of stock)")
 
 // Update modifies a product's editable fields (nil = unchanged).
 // Fields covered: name, description, price_sen, images[], stock, active, type,
-// billing_period, trial_days. Money stays integer sen. When type is set to
-// one_time, billing_period is forced NULL (a one-time product can't carry a
-// period); when type is subscription a caller-supplied billing_period is
-// applied, otherwise the stored one is kept. images == nil leaves the stored
-// images untouched; a non-nil (possibly empty) slice replaces them wholesale.
+// billing_period, trial_days, subscription_charges. Money stays integer sen.
+// When type is set to one_time, billing_period is forced NULL (a one-time
+// product can't carry a period); when type is subscription a caller-supplied
+// billing_period is applied, otherwise the stored one is kept. images == nil
+// leaves the stored images untouched; a non-nil (possibly empty) slice
+// replaces them wholesale. subscriptionCharges is a pointer-to-pointer: nil =
+// keep unchanged, non-nil pointing to nil = set NULL (infinite), non-nil
+// pointing to a value = set that fixed charge count.
 func (s *ProductStore) Update(ctx context.Context, accountID, productID string,
 	name, description *string, priceSen *int64, images *[]string, stock *int,
-	active *bool, typ, billingPeriod *string, trialDays *int) error {
+	active *bool, typ, billingPeriod *string, trialDays *int, subscriptionCharges **int) error {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE products SET
 		   name = COALESCE($3, name),
@@ -210,10 +214,12 @@ func (s *ProductStore) Update(ctx context.Context, accountID, productID string,
 		   billing_period = CASE WHEN COALESCE($10, type) = 'one_time' THEN NULL ELSE COALESCE($11, billing_period) END,
 		   trial_days = COALESCE($12, trial_days),
 		   active = COALESCE($13, active),
+		   subscription_charges = CASE WHEN $14::boolean THEN $15 ELSE subscription_charges END,
 		   updated_at = now()
 		 WHERE id=$2 AND account_id=$1`,
 		accountID, productID, name, description, priceSen, images != nil, images,
-		stock != nil, stock, typ, billingPeriod, trialDays, active)
+		stock != nil, stock, typ, billingPeriod, trialDays, active,
+		subscriptionCharges != nil, derefIntPtr(subscriptionCharges))
 	if err != nil {
 		return err
 	}
@@ -221,4 +227,14 @@ func (s *ProductStore) Update(ctx context.Context, accountID, productID string,
 		return ErrProductNotFound
 	}
 	return nil
+}
+
+// derefIntPtr unwraps a **int one level: nil → nil, non-nil → *p (which may
+// itself be nil, mapping to SQL NULL). Used to pass an optional nullable int
+// (e.g. subscription_charges) through a CASE WHEN guard.
+func derefIntPtr(p **int) *int {
+	if p == nil {
+		return nil
+	}
+	return *p
 }

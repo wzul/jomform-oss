@@ -42,7 +42,7 @@ func TestProductUpdateAllFields(t *testing.T) {
 	newTrial := 30
 	if err := store.Update(ctx, acc, prod.ID,
 		&newName, &newDesc, &newPrice, &newImages, &newStock, &newActive,
-		strPtr(SaleTypeOneTime), nil, &newTrial); err != nil {
+		strPtr(SaleTypeOneTime), nil, &newTrial, nil); err != nil {
 		t.Fatalf("update product: %v", err)
 	}
 
@@ -98,7 +98,7 @@ func TestProductUpdatePartialAndImagesNilKeeps(t *testing.T) {
 	// Partial update — only name. images == nil must keep stored images.
 	newName := "Renamed"
 	if err := store.Update(ctx, acc, prod.ID, &newName, nil, nil, nil, nil, nil,
-		nil, nil, nil); err != nil {
+		nil, nil, nil, nil); err != nil {
 		t.Fatalf("update product: %v", err)
 	}
 	got, err := store.Get(ctx, acc, prod.ID)
@@ -118,7 +118,7 @@ func TestProductUpdatePartialAndImagesNilKeeps(t *testing.T) {
 	// Non-nil empty images slice clears the images.
 	empty := []string{}
 	if err := store.Update(ctx, acc, prod.ID, nil, nil, nil, &empty, nil, nil,
-		nil, nil, nil); err != nil {
+		nil, nil, nil, nil); err != nil {
 		t.Fatalf("update images: %v", err)
 	}
 	got2, err := store.Get(ctx, acc, prod.ID)
@@ -143,7 +143,7 @@ func TestProductUpdateNotOwned(t *testing.T) {
 		t.Fatalf("create product: %v", err)
 	}
 	if err := NewProductStore(p).Update(ctx, acc2, prod.ID,
-		strPtr("x"), nil, nil, nil, nil, nil, nil, nil, nil); err != ErrProductNotFound {
+		strPtr("x"), nil, nil, nil, nil, nil, nil, nil, nil, nil); err != ErrProductNotFound {
 		t.Fatalf("update across account = %v, want ErrProductNotFound", err)
 	}
 }

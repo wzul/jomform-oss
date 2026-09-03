@@ -27,30 +27,33 @@ type restVariation struct {
 }
 
 type restProduct struct {
-	ID            string           `json:"id"`
-	Name          string           `json:"name"`
-	Description   string           `json:"description,omitempty"`
-	PriceSen      int64            `json:"price_sen"`
-	Images        []string         `json:"images,omitempty"`
-	Type          string           `json:"type"`
-	BillingPeriod string           `json:"billing_period,omitempty"`
-	TrialDays     int              `json:"trial_days"`
-	Active        bool             `json:"active"`
-	Stock         *int             `json:"stock,omitempty"` // nil = unlimited
-	Variations    []restVariation  `json:"variations,omitempty"`
-	CreatedAt     string           `json:"created_at,omitempty"`
-	UpdatedAt     string           `json:"updated_at,omitempty"`
+	ID                  string           `json:"id"`
+	Name                string           `json:"name"`
+	Description         string           `json:"description,omitempty"`
+	PriceSen            int64            `json:"price_sen"`
+	Images              []string         `json:"images,omitempty"`
+	Type                string           `json:"type"`
+	BillingPeriod       string           `json:"billing_period,omitempty"`
+	TrialDays           int              `json:"trial_days"`
+	SubscriptionCharges *int             `json:"subscription_charges,omitempty"` // nil = infinite
+	Active              bool             `json:"active"`
+	Stock               *int             `json:"stock,omitempty"` // nil = unlimited
+	Variations          []restVariation  `json:"variations,omitempty"`
+	CreatedAt           string           `json:"created_at,omitempty"`
+	UpdatedAt           string           `json:"updated_at,omitempty"`
 }
 
 // toRestProduct maps a store Product to the REST JSON shape (money stays
-// integer sen; stock nil = unlimited). Variations are included when present.
+// integer sen; stock nil = unlimited; subscription_charges nil = infinite).
+// Variations are included when present.
 func toRestProduct(p *dbstore.Product) restProduct {
 	out := restProduct{
 		ID: p.ID, Name: p.Name, Description: p.Description, PriceSen: p.PriceSen,
 		Images: p.Images, Type: p.Type, BillingPeriod: p.BillingPeriod,
 		TrialDays: p.TrialDays, Active: p.Active,
-		Stock:     p.Stock,
-		CreatedAt: p.CreatedAt.UTC().Format(time.RFC3339),
+		Stock:               p.Stock,
+		SubscriptionCharges: p.SubscriptionCharges,
+		CreatedAt:           p.CreatedAt.UTC().Format(time.RFC3339),
 	}
 	if !p.UpdatedAt.IsZero() {
 		out.UpdatedAt = p.UpdatedAt.UTC().Format(time.RFC3339)
@@ -103,16 +106,17 @@ func (h *RESTHandlers) listProducts(w http.ResponseWriter, r *http.Request, actx
 // left unchanged; an omitted images[] keeps the stored ones.
 func (h *RESTHandlers) updateProduct(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	var in struct {
-		Name           *string          `json:"name"`
-		Description    *string          `json:"description"`
-		PriceSen       *int64           `json:"price_sen"`
-		Images         *[]string        `json:"images"` // nil = keep; [] = clear
-		TrialDays      *int             `json:"trial_days"`
-		Type           *string          `json:"type"`
-		BillingPeriod  *string          `json:"billing_period"`
-		Stock          *int             `json:"stock"` // nil = unlimited, keep-unset if omitted
-		Active         *bool            `json:"active"`
-		Variations     *[]restVariation `json:"variations"` // nil = keep; [] = clear (simple)
+		Name                *string          `json:"name"`
+		Description         *string          `json:"description"`
+		PriceSen            *int64           `json:"price_sen"`
+		Images              *[]string        `json:"images"` // nil = keep; [] = clear
+		TrialDays           *int             `json:"trial_days"`
+		Type                *string          `json:"type"`
+		BillingPeriod       *string          `json:"billing_period"`
+		Stock               *int             `json:"stock"` // nil = unlimited, keep-unset if omitted
+		Active              *bool            `json:"active"`
+		Variations          *[]restVariation `json:"variations"` // nil = keep; [] = clear (simple)
+		SubscriptionCharges **int            `json:"subscription_charges"` // nil = keep; &nil = infinite; &N = fixed count
 	}
 	if err := decodeJSON(r, &in); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid json")
@@ -166,9 +170,13 @@ func (h *RESTHandlers) updateProduct(w http.ResponseWriter, r *http.Request, act
 			}
 		}
 	}
+	if in.SubscriptionCharges != nil && *in.SubscriptionCharges != nil && **in.SubscriptionCharges < 1 {
+		writeErr(w, http.StatusBadRequest, "subscription_charges mesti >= 1 (atau null untuk infinite)")
+		return
+	}
 	err := h.Products.Update(r.Context(), actx.Account.ID, r.PathValue("id"),
 		in.Name, in.Description, in.PriceSen, in.Images, in.Stock, in.Active,
-		typPtr, periodPtr, in.TrialDays)
+		typPtr, periodPtr, in.TrialDays, in.SubscriptionCharges)
 	if err != nil {
 		respondErr(w, r, err)
 		return
@@ -291,15 +299,16 @@ func (h *RESTHandlers) bulkProducts(w http.ResponseWriter, r *http.Request, actx
 
 func (h *RESTHandlers) createProduct(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	var in struct {
-		Name          string           `json:"name"`
-		Description   string           `json:"description"`
-		PriceSen      int64            `json:"price_sen"`
-		Type          string           `json:"type"`
-		BillingPeriod string           `json:"billing_period"`
-		TrialDays     int              `json:"trial_days"`
-		Stock         *int             `json:"stock"` // nil = unlimited
-		Images        []string         `json:"images"`
-		Variations    []restVariation  `json:"variations"`
+		Name                string          `json:"name"`
+		Description         string          `json:"description"`
+		PriceSen            int64           `json:"price_sen"`
+		Type                string          `json:"type"`
+		BillingPeriod       string          `json:"billing_period"`
+		TrialDays           int             `json:"trial_days"`
+		Stock               *int            `json:"stock"` // nil = unlimited
+		Images              []string        `json:"images"`
+		Variations          []restVariation `json:"variations"`
+		SubscriptionCharges *int            `json:"subscription_charges"` // nil = infinite
 	}
 	if err := decodeJSON(r, &in); err != nil || in.Name == "" || in.PriceSen < 0 {
 		writeErr(w, http.StatusBadRequest, "nama dan price_sen wajib")
@@ -307,6 +316,10 @@ func (h *RESTHandlers) createProduct(w http.ResponseWriter, r *http.Request, act
 	}
 	if in.TrialDays < 0 {
 		writeErr(w, http.StatusBadRequest, "trial_days mesti >= 0")
+		return
+	}
+	if in.SubscriptionCharges != nil && *in.SubscriptionCharges < 1 {
+		writeErr(w, http.StatusBadRequest, "subscription_charges mesti >= 1 (atau null untuk infinite)")
 		return
 	}
 	pType := in.Type
@@ -344,7 +357,7 @@ func (h *RESTHandlers) createProduct(w http.ResponseWriter, r *http.Request, act
 		AccountID: actx.Account.ID, Name: in.Name, Description: in.Description,
 		PriceSen: in.PriceSen, Images: in.Images, Type: pType,
 		BillingPeriod: period, TrialDays: in.TrialDays, Active: true,
-		Stock: in.Stock,
+		Stock: in.Stock, SubscriptionCharges: in.SubscriptionCharges,
 	}
 	if err := h.Products.Create(r.Context(), p); err != nil {
 		respondErr(w, r, err)
