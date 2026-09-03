@@ -121,6 +121,7 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /v1/rest/settings/tracking", h.authed(h.getTracking))
 	mux.Handle("PUT /v1/rest/forms/{id}/tracking", h.authed(h.putFormTracking))
 	mux.Handle("PUT /v1/rest/forms/{id}/settings", h.authed(h.putFormSettings))
+	mux.Handle("PUT /v1/rest/forms/{id}/restrictions", h.authed(h.putFormRestrictions))
 	mux.HandleFunc("GET /v1/templates", h.listTemplates)
 	mux.HandleFunc("GET /v1/system-settings/public", h.publicSystemSettings)
 	mux.Handle("GET /v1/system-settings", h.authed(h.listSystemSettings))

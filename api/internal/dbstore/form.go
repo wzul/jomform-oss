@@ -32,6 +32,15 @@ type Form struct {
 	LogoURL         string `json:"logo_url,omitempty"`
 	IsTemplate      bool   `json:"is_template"`
 
+	// Issue #207: form restrictions (Gravity-Forms-style). All nullable so an
+	// unconfigured form behaves exactly as before.
+	StartAt        *time.Time `json:"start_at,omitempty"` // schedule window opens
+	EndAt          *time.Time `json:"end_at,omitempty"`   // schedule window closes
+	EntryLimit     *int       `json:"entry_limit,omitempty"`
+	PendingMessage *string    `json:"pending_message,omitempty"` // before start_at
+	ExpiredMessage *string    `json:"expired_message,omitempty"` // after end_at
+	LimitMessage   *string    `json:"limit_message,omitempty"`   // entry limit reached
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -47,7 +56,7 @@ func NewFormStore(pool *pgxpool.Pool) *FormStore { return &FormStore{pool: pool}
 
 // formSelect builds every non-trash form read: deleted forms are
 // invisible everywhere except the explicit trash query.
-const formSelect = `SELECT id, account_id, slug, title, config, theme, status, is_main, redirect_success, redirect_failure, allow_embed, logo_url, is_template, created_at, updated_at
+const formSelect = `SELECT id, account_id, slug, title, config, theme, status, is_main, redirect_success, redirect_failure, allow_embed, logo_url, is_template, start_at, end_at, entry_limit, pending_message, expired_message, limit_message, created_at, updated_at
 	FROM forms WHERE deleted_at IS NULL`
 
 // Create inserts a form. Nil config/theme maps are coerced to {} so a
@@ -207,7 +216,9 @@ func (s *FormStore) scanOne(row rowScanner) (*Form, error) {
 	f := &Form{}
 	err := row.Scan(&f.ID, &f.AccountID, &f.Slug, &f.Title, &f.Config, &f.Theme,
 		&f.Status, &f.IsMain, &f.RedirectSuccess, &f.RedirectFailure,
-		&f.AllowEmbed, &f.LogoURL, &f.IsTemplate, &f.CreatedAt, &f.UpdatedAt)
+		&f.AllowEmbed, &f.LogoURL, &f.IsTemplate, &f.StartAt, &f.EndAt,
+		&f.EntryLimit, &f.PendingMessage, &f.ExpiredMessage, &f.LimitMessage,
+		&f.CreatedAt, &f.UpdatedAt)
 	return f, err
 }
 
@@ -217,12 +228,15 @@ func (s *FormStore) PublishedByAccountSlug(ctx context.Context, accountSlug, for
 	f := &Form{}
 	err := s.pool.QueryRow(ctx, "SELECT f.id, f.account_id, f.slug, f.title, f.config, f.theme, "+
 		"f.status, f.is_main, f.redirect_success, f.redirect_failure, f.allow_embed, f.logo_url, f.is_template, "+
+		"f.start_at, f.end_at, f.entry_limit, f.pending_message, f.expired_message, f.limit_message, "+
 		"f.created_at, f.updated_at "+
 		"FROM forms f JOIN accounts a ON a.id = f.account_id "+
 		"WHERE a.slug = $1 AND f.slug = $2 AND f.status = 'published' AND f.deleted_at IS NULL",
 		accountSlug, formSlug).Scan(&f.ID, &f.AccountID, &f.Slug, &f.Title, &f.Config, &f.Theme,
 		&f.Status, &f.IsMain, &f.RedirectSuccess, &f.RedirectFailure,
-		&f.AllowEmbed, &f.LogoURL, &f.IsTemplate, &f.CreatedAt, &f.UpdatedAt)
+		&f.AllowEmbed, &f.LogoURL, &f.IsTemplate, &f.StartAt, &f.EndAt,
+		&f.EntryLimit, &f.PendingMessage, &f.ExpiredMessage, &f.LimitMessage,
+		&f.CreatedAt, &f.UpdatedAt)
 	return f, err
 }
 
@@ -240,6 +254,19 @@ func (s *FormStore) UpdateSettings(ctx context.Context, accountID, id, redirectS
 		`UPDATE forms SET redirect_success=$3, redirect_failure=$4, allow_embed=$5, logo_url=$6, updated_at=now()
 		 WHERE id=$2 AND account_id=$1`,
 		accountID, id, redirectSuccess, redirectFailure, allowEmbed, logoURL)
+	return err
+}
+
+// UpdateRestrictions sets a form's schedule + entry limit (issue #207).
+// startAt/endAt are nil to clear the schedule window; entryLimit is nil to
+// clear the limit. Empty message strings clear the per-state override so the
+// renderer falls back to the buyer-facing default for the form's language.
+func (s *FormStore) UpdateRestrictions(ctx context.Context, accountID, id string, startAt, endAt *time.Time, entryLimit *int, pendingMessage, expiredMessage, limitMessage string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE forms SET start_at=$3, end_at=$4, entry_limit=$5,
+		        pending_message=$6, expired_message=$7, limit_message=$8, updated_at=now()
+		 WHERE id=$2 AND account_id=$1 AND deleted_at IS NULL`,
+		accountID, id, startAt, endAt, entryLimit, pendingMessage, expiredMessage, limitMessage)
 	return err
 }
 
@@ -283,6 +310,7 @@ func (s *FormStore) PublishedBySpaceSlug(ctx context.Context, spaceSlug, formSlu
 	err = s.pool.QueryRow(ctx,
 		`SELECT f.id, f.account_id, f.slug, f.title, f.config, f.theme, f.status, f.is_main,
 		        f.redirect_success, f.redirect_failure, f.allow_embed, f.logo_url, f.is_template,
+		        f.start_at, f.end_at, f.entry_limit, f.pending_message, f.expired_message, f.limit_message,
 		        f.created_at, f.updated_at
 		 FROM forms f
 		 JOIN accounts a ON a.id = f.account_id
@@ -291,7 +319,9 @@ func (s *FormStore) PublishedBySpaceSlug(ctx context.Context, spaceSlug, formSlu
 		spaceSlug, formSlug).Scan(
 		&f2.ID, &f2.AccountID, &f2.Slug, &f2.Title, &f2.Config, &f2.Theme,
 		&f2.Status, &f2.IsMain, &f2.RedirectSuccess, &f2.RedirectFailure,
-		&f2.AllowEmbed, &f2.LogoURL, &f2.IsTemplate, &f2.CreatedAt, &f2.UpdatedAt)
+		&f2.AllowEmbed, &f2.LogoURL, &f2.IsTemplate, &f2.StartAt, &f2.EndAt,
+		&f2.EntryLimit, &f2.PendingMessage, &f2.ExpiredMessage, &f2.LimitMessage,
+		&f2.CreatedAt, &f2.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -310,6 +340,7 @@ func (s *FormStore) BySpaceSlug(ctx context.Context, spaceSlug, formSlug string)
 	err = s.pool.QueryRow(ctx,
 		`SELECT f.id, f.account_id, f.slug, f.title, f.config, f.theme, f.status, f.is_main,
 		        f.redirect_success, f.redirect_failure, f.allow_embed, f.logo_url, f.is_template,
+		        f.start_at, f.end_at, f.entry_limit, f.pending_message, f.expired_message, f.limit_message,
 		        f.created_at, f.updated_at
 		 FROM forms f
 		 JOIN accounts a ON a.id = f.account_id
@@ -318,7 +349,9 @@ func (s *FormStore) BySpaceSlug(ctx context.Context, spaceSlug, formSlug string)
 		spaceSlug, formSlug).Scan(
 		&f2.ID, &f2.AccountID, &f2.Slug, &f2.Title, &f2.Config, &f2.Theme,
 		&f2.Status, &f2.IsMain, &f2.RedirectSuccess, &f2.RedirectFailure,
-		&f2.AllowEmbed, &f2.LogoURL, &f2.IsTemplate, &f2.CreatedAt, &f2.UpdatedAt)
+		&f2.AllowEmbed, &f2.LogoURL, &f2.IsTemplate, &f2.StartAt, &f2.EndAt,
+		&f2.EntryLimit, &f2.PendingMessage, &f2.ExpiredMessage, &f2.LimitMessage,
+		&f2.CreatedAt, &f2.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -331,12 +364,15 @@ func (s *FormStore) ByAccountSlug(ctx context.Context, accountSlug, formSlug str
 	f := &Form{}
 	err := s.pool.QueryRow(ctx, "SELECT f.id, f.account_id, f.slug, f.title, f.config, f.theme, "+
 		"f.status, f.is_main, f.redirect_success, f.redirect_failure, f.allow_embed, f.logo_url, f.is_template, "+
+		"f.start_at, f.end_at, f.entry_limit, f.pending_message, f.expired_message, f.limit_message, "+
 		"f.created_at, f.updated_at "+
 		"FROM forms f JOIN accounts a ON a.id = f.account_id "+
 		"WHERE a.slug = $1 AND f.slug = $2 AND f.deleted_at IS NULL",
 		accountSlug, formSlug).Scan(&f.ID, &f.AccountID, &f.Slug, &f.Title, &f.Config, &f.Theme,
 		&f.Status, &f.IsMain, &f.RedirectSuccess, &f.RedirectFailure,
-		&f.AllowEmbed, &f.LogoURL, &f.IsTemplate, &f.CreatedAt, &f.UpdatedAt)
+		&f.AllowEmbed, &f.LogoURL, &f.IsTemplate, &f.StartAt, &f.EndAt,
+		&f.EntryLimit, &f.PendingMessage, &f.ExpiredMessage, &f.LimitMessage,
+		&f.CreatedAt, &f.UpdatedAt)
 	return f, err
 }
 
@@ -345,6 +381,7 @@ func (s *FormStore) ListPublishedBySpace(ctx context.Context, spaceSlug string) 
 	rows, err := s.pool.Query(ctx,
 		`SELECT f.id, f.account_id, f.slug, f.title, f.config, f.theme, f.status, f.is_main,
 		        f.redirect_success, f.redirect_failure, f.allow_embed, f.logo_url, f.is_template,
+		        f.start_at, f.end_at, f.entry_limit, f.pending_message, f.expired_message, f.limit_message,
 		        f.created_at, f.updated_at
 		 FROM forms f
 		 JOIN accounts a ON a.id = f.account_id
@@ -404,7 +441,7 @@ func (s *FormStore) Restore(ctx context.Context, accountID, formID string) error
 // the trash list would always be empty (issue #98 regression).
 func (s *FormStore) ListTrashed(ctx context.Context, accountID string) ([]*Form, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, account_id, slug, title, config, theme, status, is_main, redirect_success, redirect_failure, allow_embed, logo_url, is_template, created_at, updated_at
+		`SELECT id, account_id, slug, title, config, theme, status, is_main, redirect_success, redirect_failure, allow_embed, logo_url, is_template, start_at, end_at, entry_limit, pending_message, expired_message, limit_message, created_at, updated_at
 		 FROM forms WHERE deleted_at IS NOT NULL AND account_id=$1 ORDER BY deleted_at DESC`, accountID)
 	if err != nil {
 		return nil, err

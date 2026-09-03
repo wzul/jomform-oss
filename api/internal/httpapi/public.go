@@ -183,6 +183,13 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, "kata laluan diperlukan")
 		return
 	}
+	// Issue #207: entry limit. Reject submissions once the form's entry count
+	// (sales for payment forms, submissions for response forms) reaches the
+	// configured limit.
+	if reached, rerr := h.entryLimitReached(r.Context(), form); rerr == nil && reached {
+		writeErr(w, http.StatusConflict, h.restrictionMessage(r, form, restrictionLimitReached))
+		return
+	}
 
 	// Issue #171: response-only forms collect field values, not orders.
 	if formMode(form) == "response" {
@@ -781,6 +788,13 @@ func (h *PublicHandlers) serveForm(w http.ResponseWriter, r *http.Request, f *db
 			h.renderPrivateGate(w, r, f)
 			return
 		}
+	}
+	// Issue #207: form restrictions. A scheduled form shows a pending/expired
+	// message outside its window; a form at its entry limit shows a
+	// limit-reached message. Either way the form itself is not rendered.
+	if st := h.checkRestrictionsRender(r, f); st != restrictionOpen {
+		h.renderRestriction(w, r, f, st)
+		return
 	}
 	if formMode(f) == "response" {
 		if h.renderResponseForm(w, r, f) {

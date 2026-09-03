@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -263,6 +264,14 @@ type upsertFormIn struct {
 	Slug   string         `json:"slug" jsonschema:"Slug URL unik"`
 	Title  string         `json:"title" jsonschema:"Tajuk borang"`
 	Config map[string]any `json:"config,omitempty" jsonschema:"Block config — ambil contoh dari get_form"`
+	// Issue #207: form restrictions (schedule + entry limit). Omit to leave
+	// unchanged; pass explicit nulls to clear.
+	StartAt        *time.Time `json:"start_at,omitempty" jsonschema:"Masa mula jadual (kosong = tiada)"`
+	EndAt          *time.Time `json:"end_at,omitempty" jsonschema:"Masa tamat jadual (kosong = tiada)"`
+	EntryLimit     *int       `json:"entry_limit,omitempty" jsonschema:"Had penyertaan (kosong = tiada)"`
+	PendingMessage string     `json:"pending_message,omitempty" jsonschema:"Mesej sebelum mula (kosong = lalai)"`
+	ExpiredMessage string     `json:"expired_message,omitempty" jsonschema:"Mesej selepas tamat (kosong = lalai)"`
+	LimitMessage   string     `json:"limit_message,omitempty" jsonschema:"Mesej had tercapai (kosong = lalai)"`
 }
 
 func (s *Server) upsertForm(
@@ -274,6 +283,12 @@ func (s *Server) upsertForm(
 	}
 	if in.Title == "" {
 		return nil, nil, errors.New("title wajib")
+	}
+	if in.StartAt != nil && in.EndAt != nil && in.EndAt.Before(*in.StartAt) {
+		return nil, nil, errors.New("tarikh tamat mesti selepas tarikh mula")
+	}
+	if in.EntryLimit != nil && *in.EntryLimit < 0 {
+		return nil, nil, errors.New("had penyertaan tidak sah")
 	}
 	if in.FormID == "" {
 		// Issue #176: auto-generate a unique slug when the merchant leaves it
@@ -293,12 +308,28 @@ func (s *Server) upsertForm(
 		if err := s.deps.Forms.Create(ctx, f); err != nil {
 			return nil, nil, err
 		}
+		// Apply restrictions on create when provided.
+		if in.StartAt != nil || in.EndAt != nil || in.EntryLimit != nil ||
+			in.PendingMessage != "" || in.ExpiredMessage != "" || in.LimitMessage != "" {
+			if err := s.deps.Forms.UpdateRestrictions(ctx, acc, f.ID,
+				in.StartAt, in.EndAt, in.EntryLimit, in.PendingMessage, in.ExpiredMessage, in.LimitMessage); err != nil {
+				return nil, nil, err
+			}
+		}
 		return nil, map[string]string{"status": "created", "form_id": f.ID, "slug": f.Slug}, nil
 	}
 	// Update store treats nil maps as "leave unchanged", so an omitted
 	// config (and the nil theme below) keep the stored values intact.
 	if err := s.deps.Forms.Update(ctx, acc, in.FormID, in.Title, in.Config, nil); err != nil {
 		return nil, nil, err
+	}
+	// Apply restrictions on update when provided.
+	if in.StartAt != nil || in.EndAt != nil || in.EntryLimit != nil ||
+		in.PendingMessage != "" || in.ExpiredMessage != "" || in.LimitMessage != "" {
+		if err := s.deps.Forms.UpdateRestrictions(ctx, acc, in.FormID,
+			in.StartAt, in.EndAt, in.EntryLimit, in.PendingMessage, in.ExpiredMessage, in.LimitMessage); err != nil {
+			return nil, nil, err
+		}
 	}
 	return nil, map[string]string{"status": "updated", "form_id": in.FormID}, nil
 }
@@ -570,6 +601,75 @@ func (s *Server) productAnalyticsAlias(
 	ctx context.Context, req *mcp.CallToolRequest, in emptyIn,
 ) (*mcp.CallToolResult, []productStatsOut, error) {
 	return s.productAnalytics(ctx, req, in)
+}
+
+// ── Form restrictions (issue #207): schedule + entry limit ────────────────
+
+// formRestrictionsOut is the read shape of a form's restrictions.
+type formRestrictionsOut struct {
+	FormID         string     `json:"form_id"`
+	StartAt        *time.Time `json:"start_at,omitempty"`
+	EndAt          *time.Time `json:"end_at,omitempty"`
+	EntryLimit     *int       `json:"entry_limit,omitempty"`
+	PendingMessage *string    `json:"pending_message,omitempty"`
+	ExpiredMessage *string    `json:"expired_message,omitempty"`
+	LimitMessage   *string    `json:"limit_message,omitempty"`
+}
+
+// getFormRestrictions reads a form's schedule + entry limit (issue #207).
+func (s *Server) getFormRestrictions(
+	ctx context.Context, _ *mcp.CallToolRequest, in formRefIn,
+) (*mcp.CallToolResult, formRestrictionsOut, error) {
+	acc, err := s.accountAndScope(ctx, false)
+	if err != nil {
+		return nil, formRestrictionsOut{}, err
+	}
+	if s.deps.Forms == nil {
+		return nil, formRestrictionsOut{}, errors.New("forms tidak tersedia")
+	}
+	f, err := s.deps.Forms.GetByID(ctx, acc, in.FormID)
+	if err != nil {
+		return nil, formRestrictionsOut{}, errors.New("borang tidak dijumpai")
+	}
+	return nil, formRestrictionsOut{
+		FormID: f.ID, StartAt: f.StartAt, EndAt: f.EndAt, EntryLimit: f.EntryLimit,
+		PendingMessage: f.PendingMessage, ExpiredMessage: f.ExpiredMessage, LimitMessage: f.LimitMessage,
+	}, nil
+}
+
+// setFormRestrictionsIn is the input for set_form_restrictions.
+type setFormRestrictionsIn struct {
+	FormID         string     `json:"form_id" jsonschema:"ID borang"`
+	StartAt        *time.Time `json:"start_at,omitempty" jsonschema:"Masa mula (kosong = tiada had mula)"`
+	EndAt          *time.Time `json:"end_at,omitempty" jsonschema:"Masa tamat (kosong = tiada had tamat)"`
+	EntryLimit     *int       `json:"entry_limit,omitempty" jsonschema:"Had penyertaan (kosong = tiada had)"`
+	PendingMessage string     `json:"pending_message,omitempty" jsonschema:"Mesej sebelum mula (kosong = lalai)"`
+	ExpiredMessage string     `json:"expired_message,omitempty" jsonschema:"Mesej selepas tamat (kosong = lalai)"`
+	LimitMessage   string     `json:"limit_message,omitempty" jsonschema:"Mesej had tercapai (kosong = lalai)"`
+}
+
+// setFormRestrictions saves a form's schedule + entry limit (issue #207).
+func (s *Server) setFormRestrictions(
+	ctx context.Context, _ *mcp.CallToolRequest, in setFormRestrictionsIn,
+) (*mcp.CallToolResult, map[string]string, error) {
+	acc, err := s.requireWriteRole(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if in.FormID == "" {
+		return nil, nil, errors.New("form_id wajib")
+	}
+	if in.StartAt != nil && in.EndAt != nil && in.EndAt.Before(*in.StartAt) {
+		return nil, nil, errors.New("tarikh tamat mesti selepas tarikh mula")
+	}
+	if in.EntryLimit != nil && *in.EntryLimit < 0 {
+		return nil, nil, errors.New("had penyertaan tidak sah")
+	}
+	if err := s.deps.Forms.UpdateRestrictions(ctx, acc, in.FormID,
+		in.StartAt, in.EndAt, in.EntryLimit, in.PendingMessage, in.ExpiredMessage, in.LimitMessage); err != nil {
+		return nil, nil, err
+	}
+	return nil, map[string]string{"status": "ok", "form_id": in.FormID}, nil
 }
 
 var _ = json.Marshal

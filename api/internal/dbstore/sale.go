@@ -524,3 +524,16 @@ func (s *SaleStore) CountByAccounts(ctx context.Context, accountIDs []string) (i
 		`SELECT COUNT(*) FROM sales WHERE account_id = ANY($1)`, accountIDs).Scan(&total)
 	return total, err
 }
+
+// CountByAccountsForm counts sales for a single form across a set of accounts
+// (account-scoped). Used by the entry-limit check (issue #207).
+func (s *SaleStore) CountByAccountsForm(ctx context.Context, accountIDs []string, formID string) (int64, error) {
+	if len(accountIDs) == 0 || formID == "" {
+		return 0, nil
+	}
+	var total int64
+	err := s.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM sales WHERE account_id = ANY($1) AND form_id::text = $2`,
+		accountIDs, formID).Scan(&total)
+	return total, err
+}

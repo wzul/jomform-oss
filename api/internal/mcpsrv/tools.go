@@ -158,6 +158,14 @@ func (s *Server) registerTools() {
 		Name:        "set_form_password",
 		Description: "Set/buang kata laluan akses borang private (argon2id-hashed; tidak pernah dipulangkan). Password kosong = buang kata laluan.",
 	}, s.setFormPassword)
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "get_form_restrictions",
+		Description: "Baca sekatan borang (issue #207): jadual mula/tamat (start_at/end_at) + had penyertaan (entry_limit) + mesej peringkat.",
+	}, s.getFormRestrictions)
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "set_form_restrictions",
+		Description: "Set sekatan borang (issue #207): jadual mula/tamat + had penyertaan + mesej. Kosong = buang sekatan.",
+	}, s.setFormRestrictions)
 	addTool(s, &mcp.Tool{
 		Name:        "delete_form",
 		Description: "Soft-delete borang (pergi ke trash dashboard; slug dilepaskan). Boleh dipulihkan.",

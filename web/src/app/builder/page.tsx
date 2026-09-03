@@ -269,6 +269,13 @@ export default function Builder() {
   const [fsRedS, setFsRedS] = useState("");
   const [fsRedF, setFsRedF] = useState("");
   const [fsEmbed, setFsEmbed] = useState(true);
+  // Issue #207: form restrictions (schedule + entry limit).
+  const [rsStart, setRsStart] = useState("");
+  const [rsEnd, setRsEnd] = useState("");
+  const [rsLimit, setRsLimit] = useState("");
+  const [rsPending, setRsPending] = useState("");
+  const [rsExpired, setRsExpired] = useState("");
+  const [rsLimitMsg, setRsLimitMsg] = useState("");
 
   // Issue #171: form collection mode — "payment" (default) or "response".
   const [mode, setMode] = useState<"payment" | "response">("payment");
@@ -523,6 +530,13 @@ export default function Builder() {
       setMode(cfg.mode === "response" ? "response" : "payment");
       setChipMapping(cfg.chip_mapping || {});
       if (d.theme?.primary) setFsTheme(d.theme.primary);
+      // Issue #207: hydrate restrictions.
+      setRsStart(toLocalInput(d.start_at));
+      setRsEnd(toLocalInput(d.end_at));
+      setRsLimit(d.entry_limit != null ? String(d.entry_limit) : "");
+      setRsPending(d.pending_message || "");
+      setRsExpired(d.expired_message || "");
+      setRsLimitMsg(d.limit_message || "");
       const hydrated: Block[] = [];
       (cfg.blocks || []).forEach(
         (b: Record<string, unknown>) => {
@@ -565,6 +579,25 @@ export default function Builder() {
       priceSen: b.price_sen as number | undefined,
       choices,
     };
+  }
+
+  /* Issue #207: convert an RFC3339 timestamp to a datetime-local input value
+     (local time, "YYYY-MM-DDTHH:mm"). Empty when unset/invalid. */
+  function toLocalInput(iso?: string): string {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return "";
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  /* Issue #207: convert a datetime-local input value to an RFC3339 UTC
+     timestamp, or null when blank. */
+  function fromLocalInput(v: string): string | null {
+    if (!v) return null;
+    const d = new Date(v);
+    if (isNaN(d.getTime())) return null;
+    return d.toISOString();
   }
 
   function makeBlock(bt: BlockType): Block {
@@ -665,6 +698,13 @@ export default function Builder() {
     const cfg = d.config || {};
     setMode(cfg.mode === "response" ? "response" : "payment");
     setChipMapping(cfg.chip_mapping || {});
+    // Issue #207: hydrate restrictions.
+    setRsStart(toLocalInput(d.start_at));
+    setRsEnd(toLocalInput(d.end_at));
+    setRsLimit(d.entry_limit != null ? String(d.entry_limit) : "");
+    setRsPending(d.pending_message || "");
+    setRsExpired(d.expired_message || "");
+    setRsLimitMsg(d.limit_message || "");
     const hydrated: Block[] = [];
     (cfg.blocks || []).forEach(
       (b: Record<string, unknown>) => {
@@ -1474,6 +1514,91 @@ export default function Builder() {
               className="mt-1 w-full rounded-md border border-[var(--jf-border)] py-1.5 text-xs text-slate-600 hover:bg-slate-50"
             >
               {t("bld.copyEmbed")}
+            </button>
+          </div>
+        )}
+
+        {/* ── Restrictions (issue #207): schedule + entry limit ── */}
+        {currentId && (
+          <div className="mt-8 rounded-lg border border-[var(--jf-border)] bg-white p-3">
+            <p className="text-xs font-medium uppercase tracking-wider text-[#9ca3af]">
+              {t("bld.restrictionsTitle")}
+            </p>
+
+            <p className="mt-2 text-[11px] font-medium uppercase tracking-wider text-[#9ca3af]">
+              {t("bld.scheduleTitle")}
+            </p>
+            <p className="mt-0.5 text-[11px] text-[var(--jf-muted)]">{t("bld.scheduleHint")}</p>
+            <label className="mt-2 block text-[11px] text-slate-500">{t("bld.startAt")}</label>
+            <input
+              type="datetime-local"
+              value={rsStart}
+              onChange={(e) => setRsStart(e.target.value)}
+              className="jf-input mt-1 text-xs"
+            />
+            <label className="mt-2 block text-[11px] text-slate-500">{t("bld.endAt")}</label>
+            <input
+              type="datetime-local"
+              value={rsEnd}
+              onChange={(e) => setRsEnd(e.target.value)}
+              className="jf-input mt-1 text-xs"
+            />
+            <label className="mt-2 block text-[11px] text-slate-500">{t("bld.pendingMessage")}</label>
+            <textarea
+              value={rsPending}
+              onChange={(e) => setRsPending(e.target.value)}
+              rows={2}
+              className="jf-input mt-1 text-xs"
+            />
+            <label className="mt-2 block text-[11px] text-slate-500">{t("bld.expiredMessage")}</label>
+            <textarea
+              value={rsExpired}
+              onChange={(e) => setRsExpired(e.target.value)}
+              rows={2}
+              className="jf-input mt-1 text-xs"
+            />
+
+            <p className="mt-4 text-[11px] font-medium uppercase tracking-wider text-[#9ca3af]">
+              {t("bld.entryLimitTitle")}
+            </p>
+            <p className="mt-0.5 text-[11px] text-[var(--jf-muted)]">{t("bld.entryLimitHint")}</p>
+            <label className="mt-2 block text-[11px] text-slate-500">{t("bld.entryLimit")}</label>
+            <input
+              type="number"
+              min={0}
+              value={rsLimit}
+              onChange={(e) => setRsLimit(e.target.value)}
+              placeholder="100"
+              className="jf-input mt-1 text-xs"
+            />
+            <label className="mt-2 block text-[11px] text-slate-500">{t("bld.limitMessage")}</label>
+            <textarea
+              value={rsLimitMsg}
+              onChange={(e) => setRsLimitMsg(e.target.value)}
+              rows={2}
+              className="jf-input mt-1 text-xs"
+            />
+
+            <button
+              onClick={async () => {
+                const limit = rsLimit.trim() === "" ? null : Math.max(0, parseInt(rsLimit, 10) || 0);
+                const r = await fetch(`/api/rest/forms/${currentId}/restrictions${spaceQuery()}`, {
+                  method: "PUT",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    start_at: fromLocalInput(rsStart),
+                    end_at: fromLocalInput(rsEnd),
+                    entry_limit: limit,
+                    pending_message: rsPending,
+                    expired_message: rsExpired,
+                    limit_message: rsLimitMsg,
+                  }),
+                });
+                setOvMsg(r.ok ? t("bld.restrictionsSaved") : t("prof.failed"));
+              }}
+              className="mt-2 w-full rounded-md bg-[var(--jf-primary)] py-1.5 text-xs font-medium text-white"
+            >
+              {t("bld.saveRestrictions")}
             </button>
           </div>
         )}

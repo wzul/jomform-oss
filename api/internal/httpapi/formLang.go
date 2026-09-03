@@ -38,6 +38,10 @@ type langStrings struct {
 	PrivacyLabel string
 	TermsLabel   string
 	RefundLabel  string
+	// Issue #207: form restriction messages (defaults; per-form overrides win).
+	PendingMessage string // before start_at
+	ExpiredMessage string // after end_at
+	LimitMessage   string // entry limit reached
 }
 
 // formLangs maps every supported language code to its buyer-facing strings.
@@ -52,6 +56,9 @@ var formLangs = map[string]langStrings{
 		SubmitResponse: "Submit", ThankYou: "Thank you!", ResponseReceived: "Your response has been received.",
 		SelectOption: "Select an option", SelectShipping: "Select shipping",
 		PrivacyLabel: "Privacy Policy", TermsLabel: "Terms of Service", RefundLabel: "Refund Policy",
+		PendingMessage: "This form is not open yet. Please check back later.",
+		ExpiredMessage: "This form has closed. Thank you for your interest.",
+		LimitMessage:   "Sorry, this form has reached its entry limit and is no longer accepting responses.",
 	},
 	"ms": {
 		Lang: "ms", EmailLabel: "Emel", CouponLabel: "Kod kupon",
@@ -61,6 +68,9 @@ var formLangs = map[string]langStrings{
 		SubmitResponse: "Hantar", ThankYou: "Terima kasih!", ResponseReceived: "Respons anda telah diterima.",
 		SelectOption: "Pilih pilihan", SelectShipping: "Pilih penghantaran",
 		PrivacyLabel: "Polisi Privasi", TermsLabel: "Terma & Syarat", RefundLabel: "Polisi Bayaran Balik",
+		PendingMessage: "Borang ini belum dibuka lagi. Sila kembali semula kemudian.",
+		ExpiredMessage: "Borang ini telah ditutup. Terima kasih atas minat anda.",
+		LimitMessage:   "Maaf, borang ini telah mencapai had penyertaan dan tidak lagi menerima respons.",
 	},
 	"zh": {
 		Lang: "zh", EmailLabel: "电子邮件", CouponLabel: "优惠券",
@@ -70,6 +80,9 @@ var formLangs = map[string]langStrings{
 		SubmitResponse: "提交", ThankYou: "谢谢！", ResponseReceived: "您的回复已收到。",
 		SelectOption: "请选择", SelectShipping: "选择配送方式",
 		PrivacyLabel: "隐私政策", TermsLabel: "服务条款", RefundLabel: "退款政策",
+		PendingMessage: "此表单尚未开放，请稍后再来。",
+		ExpiredMessage: "此表单已关闭，感谢您的关注。",
+		LimitMessage:   "抱歉，此表单已达到提交上限，不再接受提交。",
 	},
 	"ta": {
 		Lang: "ta", EmailLabel: "மின்னஞ்சல்", CouponLabel: "கூப்பன்",
@@ -79,6 +92,9 @@ var formLangs = map[string]langStrings{
 		SubmitResponse: "சமர்ப்பி", ThankYou: "நன்றி!", ResponseReceived: "உங்கள் பதில் பெறப்பட்டது.",
 		SelectOption: "ஒரு விருப்பத்தைத் தேர்ந்தெடுக்கவும்", SelectShipping: "ஷிப்பிங்கைத் தேர்ந்தெடுக்கவும்",
 		PrivacyLabel: "தனியுரிமைக் கொள்கை", TermsLabel: "சேவை விதிமுறைகள்", RefundLabel: "பணத்திருப்புக் கொள்கை",
+		PendingMessage: "இந்த படிவம் இன்னும் திறக்கப்படவில்லை. பின்னர் மீண்டும் வரவும்.",
+		ExpiredMessage: "இந்த படிவம் மூடப்பட்டது. உங்கள் ஆர்வத்திற்கு நன்றி.",
+		LimitMessage:   "மன்னிக்கவும், இந்த படிவம் அதன் பதிவு வரம்பை அடைந்துவிட்டது, இனி பதில்களை ஏற்காது.",
 	},
 	"ar": {
 		Lang: "ar", EmailLabel: "البريد الإلكتروني", CouponLabel: "قسيمة",
@@ -88,6 +104,9 @@ var formLangs = map[string]langStrings{
 		SubmitResponse: "إرسال", ThankYou: "شكراً لك!", ResponseReceived: "تم استلام ردك.",
 		SelectOption: "اختر خيارًا", SelectShipping: "اختر الشحن",
 		PrivacyLabel: "سياسة الخصوصية", TermsLabel: "شروط الخدمة", RefundLabel: "سياسة الاسترداد",
+		PendingMessage: "هذا النموذج غير مفتوح بعد. يرجى العودة لاحقاً.",
+		ExpiredMessage: "تم إغلاق هذا النموذج. شكراً لاهتمامك.",
+		LimitMessage:   "عذراً، بلغ هذا النموذج الحد الأقصى للردود ولم يعد يقبل الردود.",
 	},
 }
 
