@@ -22,10 +22,15 @@ func dokployComposeID() string    { return os.Getenv("DOKPLOY_COMPOSE_ID") }
 func dokployAPIContainer() string { return os.Getenv("DOKPLOY_CONTAINER") } // exec target
 
 // dokployAddDomain registers a domain with Dokploy so Traefik routes it to
-// the api container on /f/, /t/ paths. No-op when not running under Dokploy.
+// the api container on /f/, /t/ paths. No-op when not running under Dokploy,
+// but logs a warning (issue #236: fail loudly, not silently) so a
+// verified-but-not-routed domain is visible in logs.
 func dokployAddDomain(domain string) error {
 	if dokployURL() == "" || dokployKey() == "" {
-		return nil // not a dokploy env — silent no-op
+		slog.Warn("dokploy_add_domain_skipped",
+			"domain", domain,
+			"reason", "DOKPLOY_URL/DOKPLOY_API_KEY unset — domain not registered with Traefik")
+		return nil // not a dokploy env — no-op, don't error the request
 	}
 	if _, err := exec.LookPath("docker"); err != nil {
 		// in-container api has no docker binary — use the dokploy API directly

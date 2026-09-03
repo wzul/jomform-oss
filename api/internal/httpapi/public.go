@@ -31,6 +31,10 @@ type PublicHandlers struct {
 	Forms              *dbstore.FormStore
 	Sales              *dbstore.SaleStore
 	Accounts           *dbstore.AccountStore
+	// Issue #236: multi-domain resolution via the account_domains table.
+	// Nil in bare-mode tests; customDomainOwner then falls back to the
+	// legacy accounts.custom_domain column.
+	Domains            *dbstore.DomainStore
 	Products           *dbstore.ProductStore
 	ProductVariations  *dbstore.ProductVariationStore
 	Pay                *payments.Service
@@ -165,7 +169,7 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	var err error
 	if sub := accountSubdomain(r.Host); sub != "" {
 		form, err = h.Forms.BySpaceSlug(r.Context(), sub, slug)
-	} else if cd := customDomainOwner(r.Context(), h.Accounts, r.Host); cd != "" {
+	} else if cd := customDomainOwner(r.Context(), h.Accounts, h.Domains, r.Host); cd != "" {
 		form, err = h.Forms.ByAccountSlug(r.Context(), cd, slug)
 	} else {
 		form, err = nil, dbstore.ErrFormNotFound
@@ -681,7 +685,7 @@ func (h *PublicHandlers) handleRender(w http.ResponseWriter, r *http.Request) {
 		h.serveForm(w, r, f)
 		return
 	}
-	if cd := customDomainOwner(r.Context(), h.Accounts, r.Host); cd != "" {
+	if cd := customDomainOwner(r.Context(), h.Accounts, h.Domains, r.Host); cd != "" {
 		f, ferr := h.Forms.ByAccountSlug(r.Context(), cd, slug)
 		if ferr != nil {
 			http.Error(w, "Borang tidak dijumpai", http.StatusNotFound)
@@ -975,7 +979,7 @@ func (h *PublicHandlers) handleFormUnlock(w http.ResponseWriter, r *http.Request
 	var err error
 	if sub := accountSubdomain(r.Host); sub != "" {
 		f, err = h.Forms.BySpaceSlug(r.Context(), sub, slug)
-	} else if cd := customDomainOwner(r.Context(), h.Accounts, r.Host); cd != "" {
+	} else if cd := customDomainOwner(r.Context(), h.Accounts, h.Domains, r.Host); cd != "" {
 		f, err = h.Forms.ByAccountSlug(r.Context(), cd, slug)
 	} else {
 		f, err = nil, dbstore.ErrFormNotFound
@@ -1101,14 +1105,30 @@ func hmacSHA256(key []byte, data string) string {
 	return base64.RawURLEncoding.EncodeToString(h.Sum(nil))
 }
 
-// customDomainOwner returns the account slug that claimed this host via
-// custom_domain, or "" when the host is not a registered custom domain.
-func customDomainOwner(ctx context.Context, s *dbstore.AccountStore, host string) string {
+// customDomainOwner returns the account slug that claimed this host via a
+// verified custom domain, or "" when the host is not a registered custom
+// domain. Resolution order (issue #236):
+//  1. account_domains table (multi-domain, migration 000007) — the current
+//     storage for custom domains.
+//  2. Legacy accounts.custom_domain column — backward compat for accounts
+//     that claimed a single domain before multi-domain support.
+func customDomainOwner(ctx context.Context, s *dbstore.AccountStore, d *dbstore.DomainStore, host string) string {
 	h := host
 	if i := strings.Index(h, ":"); i >= 0 {
 		h = h[:i]
 	}
-	slug, err := s.SlugByCustomDomain(ctx, strings.ToLower(h))
+	h = strings.ToLower(h)
+	// Multi-domain: map the verified domain to its account, then to the slug.
+	if d != nil {
+		if dom, err := d.ByDomain(ctx, h); err == nil && dom != nil {
+			acc, err := s.ByID(ctx, dom.AccountID)
+			if err == nil && acc != nil {
+				return acc.Slug
+			}
+		}
+	}
+	// Legacy single-domain fallback.
+	slug, err := s.SlugByCustomDomain(ctx, h)
 	if err != nil {
 		return ""
 	}

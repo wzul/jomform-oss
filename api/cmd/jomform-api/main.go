@@ -311,6 +311,8 @@ func main() {
 		// Public order-form renderer + submit.
 		deps.Public = &httpapi.PublicHandlers{
 			Forms: formsStore, Sales: sales, Accounts: accounts,
+			// Issue #236: resolve custom domains via the account_domains table.
+			Domains: dbstore.NewDomainStore(pool),
 			Products: products, ProductVariations: dbstore.NewProductVariationStore(pool),
 			Pay: pay, BaseURL: cfg.AppBaseURL,
 			SystemSettings: dbstore.NewSystemSettingStore(pool),
