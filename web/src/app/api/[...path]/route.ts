@@ -24,10 +24,18 @@ async function proxy(req: NextRequest) {
     headers.set("Content-Type", req.headers.get("content-type") || "application/json");
   }
 
-  const r = await fetch(path, init);
+  // redirect: "manual" so the proxy does NOT follow 3xx responses (e.g. the
+  // 302 to Google from /v1/auth/oauth/google). We forward the status + Location
+  // header to the browser so it performs the redirect itself (issue #273).
+  const r = await fetch(path, { ...init, redirect: "manual" });
   const respHeaders = new Headers();
   const ct = r.headers.get("content-type");
   if (ct) respHeaders.set("Content-Type", ct);
+  // Forward the Location header on redirect responses so the browser follows
+  // the OAuth provider redirect (Google, etc.) instead of the proxy serving
+  // the provider's HTML from jomform.com.
+  const location = r.headers.get("location");
+  if (location) respHeaders.set("Location", location);
   // OAuth flows (e.g. Cloudflare, issue #22) set multiple cookies per
   // response (state + PKCE verifier); forward ALL of them, not just the first.
   const getCookies =
