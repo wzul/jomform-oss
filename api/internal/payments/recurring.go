@@ -84,6 +84,11 @@ func (s *Service) afterFailedCharge(ctx context.Context, sub *dbstore.Subscripti
 	if attempt >= maxChargeAttempts {
 		// past_due; CancelOverdueSubs cancels after the 7-day grace window.
 		_ = s.Subs.SetStatus(ctx, sub.ID, dbstore.SubPastDue)
+		// Issue #154: surface a "card needs update" state so the merchant /
+		// customer knows to re-tokenize with a new card before the 7-day
+		// cancel. While this flag is set, CancelOverdueSubs pauses the
+		// auto-cancel so the subscription is not doomed once the card dies.
+		_ = s.Subs.SetCardUpdatePending(ctx, sub.ID, "")
 		slog.Warn("sub_past_due", "sub", sub.ID, "attempts", attempt)
 		return nil
 	}
@@ -103,6 +108,13 @@ func (s *Service) CancelOverdueSubs(ctx context.Context) error {
 	// The token stays valid in CHIP; merchants can re-activate or charge
 	// manually. Only the subscription row is cancelled locally.
 	for _, sub := range subs {
+		// Issue #154: pause the auto-cancel while a card update is pending —
+		// the merchant has been asked to re-tokenize and should get the full
+		// grace window to do so before the subscription is cancelled.
+		if sub.CardUpdatePending {
+			slog.Info("sub_cancel_paused_card_update", "sub", sub.ID)
+			continue
+		}
 		if err := s.Subs.Cancel(ctx, sub.ID); err != nil {
 			return err
 		}

@@ -132,6 +132,8 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	// Issue #131: subscription management for merchants.
 	mux.Handle("GET /v1/rest/subscriptions", h.authed(h.listSubscriptions))
 	mux.Handle("POST /v1/rest/subscriptions/{id}/cancel", h.authed(h.cancelSubscription))
+	// Issue #154: update the card on an existing subscription (re-tokenize).
+	mux.Handle("POST /v1/rest/subscriptions/{id}/update-card", h.authed(h.updateSubscriptionCard))
 	mux.Handle("GET /v1/rest/dashboard-bundle", h.authed(h.dashboardBundle))
 	mux.Handle("GET /v1/rest/analytics/forms", h.authed(h.formAnalytics))
 	mux.Handle("GET /v1/rest/analytics/products", h.authed(h.productAnalytics))

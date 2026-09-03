@@ -249,6 +249,12 @@ const DICT = {
   "sub.pageOf": { en: "page {page} of {total}", ms: "halaman {page} daripada {total}", zh: "第 {page} 页，共 {total} 页", ta: "பக்கம் {page} / {total}", ar: "صفحة {page} من {total}" },
   "sub.month": { en: "monthly", ms: "bulanan", zh: "每月", ta: "மாதந்தோறும்", ar: "شهرياً" },
   "sub.year": { en: "yearly", ms: "tahunan", zh: "每年", ta: "ஆண்டுதோறும்", ar: "سنوياً" },
+  "sub.updateCard": { en: "Update card", ms: "Kemas kini kad", zh: "更新卡片", ta: "அட்டையைப் புதுப்பி", ar: "تحديث البطاقة" },
+  "sub.updateCardConfirm": { en: "Send {customer} a secure link to authorize a new card? The subscription keeps its schedule; the old card token is retained but no longer used.", ms: "Hantar pautan selamat kepada {customer} untuk sahkan kad baharu? Langganan kekal pada jadual; token kad lama kekal tetapi tidak lagi digunakan.", zh: "向 {customer} 发送安全链接以授权新卡？订阅保持原计划；旧卡令牌保留但不再使用。", ta: "{customer}-க்கு புதிய அட்டையை அங்கீகரிக்க பாதுகாப்பான இணைப்பை அனுப்பவா? சந்தா அட்டவணையைத் தக்கவைக்கும்; பழைய அட்டை டோக்கன் தக்கவைக்கப்படும் ஆனால் இனி பயன்படுத்தப்படாது.", ar: "إرسال رابط آمن إلى {customer} للسماح ببطاقة جديدة؟ يحتفظ الاشتراك بجدوله؛ يتم الاحتفاظ برمز البطاقة القديم لكنه لم يعد مستخدماً." },
+  "sub.updateCardErr": { en: "Failed to start card update.", ms: "Gagal mulakan kemas kini kad.", zh: "启动卡片更新失败。", ta: "அட்டை புதுப்பிப்பைத் தொடங்க முடியவில.", ar: "فشل بدء تحديث البطاقة." },
+  "sub.cardNeedsUpdate": { en: "Card failed — update payment method", ms: "Kad gagal — kemas kini kaedah pembayaran", zh: "卡片失败 — 更新支付方式", ta: "அட்டை தோல்வி — கட்டண முறையைப் புதுப்பி", ar: "فشلت البطاقة — حدّث طريقة الدفع" },
+  "sub.cardUpdatePaused": { en: "Auto-cancel paused while card update is pending", ms: "Auto-batal dijeda semasa kemas kini kad belum selesai", zh: "卡片更新待处理期间自动取消已暂停", ta: "அட்டை புதுப்பிப்பு நிலுவையில் இருக்கும்போது தானியங்கி ரத்து இடைநிறுத்தப்பட்டது", ar: "تم إيقاف الإلغاء التلقائي مؤقتاً أثناء انتظار تحديث البطاقة" },
+  "sub.updateCardSent": { en: "Card update link sent. Ask the customer to complete it.", ms: "Pautan kemas kini kad dihantar. Minta pelanggan lengkapkannya.", zh: "卡片更新链接已发送。请让客户完成。", ta: "அட்டை புதுப்பிப்பு இணைப்பு அனுப்பப்பட்டது. வாடிக்கையாளரை முடிக்கச் சொல்லுங்கள்.", ar: "تم إرسال رابط تحديث البطاقة. اطلب من العميل إكماله." },
   // forms page
   "forms.title": { en: "Forms", ms: "Borang", zh: "表单", ta: "படிவங்கள்", ar: "النماذج" },
   "forms.subtitle": { en: "Your published and draft forms", ms: "Borang live & draft anda", zh: "您发布的订单表单", ta: "வெளியிடப்பட்ட ஆர்டர் படிவங்கள்", ar: "نماذج الطلبات المنشورة" },

@@ -23,6 +23,9 @@ type subscriptionRow struct {
 	NextChargeAt  string `json:"next_charge_at"`
 	RetryAttempts int64  `json:"retry_attempts"`
 	CreatedAt     string `json:"created_at"`
+	// Issue #154: true when a charge failed and the card needs updating
+	// (re-tokenize). While set, the overdue auto-cancel is paused.
+	CardUpdatePending bool `json:"card_update_pending"`
 }
 
 func restSubRow(sw *dbstore.SubscriptionWithProduct) subscriptionRow {
@@ -31,6 +34,7 @@ func restSubRow(sw *dbstore.SubscriptionWithProduct) subscriptionRow {
 		ProductName: sw.ProductName, AmountSen: sw.AmountSen, Period: sw.Period,
 		Status: sw.Status, RetryAttempts: sw.RetryAttempts,
 		CreatedAt: sw.CreatedAt.UTC().Format(time.RFC3339),
+		CardUpdatePending: sw.CardUpdatePending,
 	}
 	if !sw.NextChargeAt.IsZero() {
 		r.NextChargeAt = sw.NextChargeAt.UTC().Format(time.RFC3339)
@@ -93,4 +97,44 @@ func (h *RESTHandlers) cancelSubscription(w http.ResponseWriter, r *http.Request
 		return
 	}
 	respond(w, http.StatusOK, map[string]any{"id": sub.ID, "status": dbstore.SubCanceled})
+}
+
+// POST /v1/rest/subscriptions/{id}/update-card — merchant-initiated card
+// update on an existing subscription (issue #154). Creates a new CHIP token
+// purchase so the customer can authorize a new card; on payment the
+// subscription's recurring token is atomically replaced. The old token is
+// left in CHIP (Wan rule) but no longer used. Account-scoped: a subscription
+// id that does not belong to the resolved account 404s.
+func (h *RESTHandlers) updateSubscriptionCard(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeErr(w, http.StatusBadRequest, "id diperlukan")
+		return
+	}
+	sub, err := h.Subs.ByIDForAccount(r.Context(), actx.Account.ID, id)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			writeErr(w, http.StatusNotFound, "langganan tidak dijumpai")
+			return
+		}
+		respondErr(w, r, err)
+		return
+	}
+	if sub.Status == dbstore.SubCanceled {
+		writeErr(w, http.StatusConflict, "langganan telah dibatalkan")
+		return
+	}
+	if h.Pay == nil {
+		writeErr(w, http.StatusServiceUnavailable, "pembayaran tidak aktif")
+		return
+	}
+	p, err := h.Pay.CreateUpdateCardPurchase(r.Context(), sub)
+	if err != nil {
+		respondErr(w, r, err)
+		return
+	}
+	respond(w, http.StatusOK, map[string]any{
+		"id": sub.ID, "status": sub.Status,
+		"checkout_url": p.CheckoutURL, "purchase_id": p.ID,
+	})
 }

@@ -20,6 +20,7 @@ type Subscription = {
   status: string; // active | past_due | cancelled
   next_charge_at?: string;
   retry_attempts: number;
+  card_update_pending?: boolean;
 };
 
 type ListResp = { items: Subscription[]; page: number; limit: number; total: number };
@@ -41,6 +42,7 @@ export default function Subscriptions() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [page, setPage] = useState(1);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [notice, setNotice] = useState("");
 
   const load = useCallback(async (status: string, pageNum: number) => {
     const q = new URLSearchParams({ page: String(pageNum), limit: String(PER_PAGE) });
@@ -113,6 +115,36 @@ export default function Subscriptions() {
     }
   }
 
+  // Issue #154: merchant-initiated card update — creates a new CHIP token
+  // purchase and opens the checkout so the customer can authorize a new card.
+  // The subscription keeps its schedule; the old token is retained (Wan rule).
+  async function updateCardOne(sub: Subscription) {
+    const ok = window.confirm(
+      t("sub.updateCardConfirm", { customer: sub.customer })
+    );
+    if (!ok) return;
+    setBusyId(sub.id);
+    setError("");
+    try {
+      const r = await fetch(`/api/rest/subscriptions/${sub.id}/update-card`, {
+        method: "POST",
+      });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        setError(d.error || t("sub.updateCardErr"));
+        return;
+      }
+      const d = await r.json();
+      if (d && d.checkout_url) {
+        window.open(d.checkout_url, "_blank", "noopener,noreferrer");
+      }
+      setNotice(t("sub.updateCardSent"));
+      await load(statusFilter, safePage);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   if (checking) {
     return (
       <main className="flex min-h-screen items-center justify-center text-slate-400">
@@ -155,6 +187,11 @@ export default function Subscriptions() {
         {error && (
           <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">
             {error}
+          </p>
+        )}
+        {notice && (
+          <p className="mt-2 rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
+            {notice}
           </p>
         )}
 
@@ -213,6 +250,16 @@ export default function Subscriptions() {
                     >
                       {statusLabel(sub.status)}
                     </span>
+                    {sub.card_update_pending && (
+                      <div className="mt-1">
+                        <span
+                          className="inline-flex rounded-full border border-rose-200 bg-rose-50 px-2.5 py-0.5 text-[11px] font-medium text-rose-700"
+                          title={t("sub.cardUpdatePaused")}
+                        >
+                          {t("sub.cardNeedsUpdate")}
+                        </span>
+                      </div>
+                    )}
                   </td>
                   <td className="px-2 py-3 text-[var(--jf-muted)]">
                     {sub.next_charge_at
@@ -225,14 +272,24 @@ export default function Subscriptions() {
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-end gap-1">
                       {sub.status !== "cancelled" && (
-                        <button
-                          onClick={() => cancelOne(sub)}
-                          disabled={busyId === sub.id}
-                          title={t("sub.tokenRetained")}
-                          className="jf-btn-ghost px-2.5 py-1 text-xs text-rose-600 hover:bg-rose-50 disabled:opacity-50"
-                        >
-                          {busyId === sub.id ? "…" : t("sub.cancel")}
-                        </button>
+                        <>
+                          <button
+                            onClick={() => updateCardOne(sub)}
+                            disabled={busyId === sub.id}
+                            title={t("sub.updateCard")}
+                            className="jf-btn-ghost px-2.5 py-1 text-xs text-sky-600 hover:bg-sky-50 disabled:opacity-50"
+                          >
+                            {busyId === sub.id ? "…" : t("sub.updateCard")}
+                          </button>
+                          <button
+                            onClick={() => cancelOne(sub)}
+                            disabled={busyId === sub.id}
+                            title={t("sub.tokenRetained")}
+                            className="jf-btn-ghost px-2.5 py-1 text-xs text-rose-600 hover:bg-rose-50 disabled:opacity-50"
+                          >
+                            {busyId === sub.id ? "…" : t("sub.cancel")}
+                          </button>
+                        </>
                       )}
                     </div>
                   </td>

@@ -156,3 +156,94 @@ func TestCancelSubscriptionNoTokenRevokeAndAccountScoped(t *testing.T) {
 	}
 	_ = otherSub
 }
+
+// TestUpdateTokenReplacesTokenAndKeepsSchedule (issue #154): the store method
+// atomically replaces the recurring token, clears the card-update-pending
+// flag, returns the subscription to active, and does NOT touch the billing
+// schedule (next_charge_at unchanged). The old token is retained (Wan rule).
+func TestUpdateTokenReplacesTokenAndKeepsSchedule(t *testing.T) {
+	ctx := context.Background()
+	pool := bundleTestPool(t)
+	accountID, _ := bundleFixture(t, ctx, pool)
+	_, sub := seedSubscriptionStores(t, ctx, pool, accountID)
+
+	subs := dbstore.NewSubscriptionStore(pool)
+	// Simulate a failed charge that flagged the subscription for a card update.
+	if err := subs.SetCardUpdatePending(ctx, sub.ID, "pending-purchase-9"); err != nil {
+		t.Fatalf("set pending: %v", err)
+	}
+	if err := subs.SetStatus(ctx, sub.ID, dbstore.SubPastDue); err != nil {
+		t.Fatalf("set past_due: %v", err)
+	}
+	before, err := subs.ByIDForAccount(ctx, accountID, sub.ID)
+	if err != nil {
+		t.Fatalf("read before: %v", err)
+	}
+	nextBefore := before.NextChargeAt
+
+	// Replace the token with a new one.
+	if err := subs.UpdateToken(ctx, accountID, sub.ID, "new-token-purchase-42"); err != nil {
+		t.Fatalf("update token: %v", err)
+	}
+
+	got, err := subs.ByIDForAccount(ctx, accountID, sub.ID)
+	if err != nil {
+		t.Fatalf("read after: %v", err)
+	}
+	if got.ChipTokenPurchaseID != "new-token-purchase-42" {
+		t.Errorf("chip_token_purchase_id = %q, want new-token-purchase-42", got.ChipTokenPurchaseID)
+	}
+	if got.CardUpdatePending {
+		t.Errorf("card_update_pending should be cleared after token replacement")
+	}
+	if got.CardUpdatePurchaseID != "" {
+		t.Errorf("card_update_purchase_id should be cleared, got %q", got.CardUpdatePurchaseID)
+	}
+	if got.Status != dbstore.SubActive {
+		t.Errorf("status = %q, want active (schedule continues)", got.Status)
+	}
+	if !got.NextChargeAt.Equal(nextBefore) {
+		t.Errorf("next_charge_at changed: %v -> %v (billing period must not restart)", nextBefore, got.NextChargeAt)
+	}
+
+	// Cross-account update must not touch the row (account-scoped).
+	otherID, _ := bundleFixture(t, ctx, pool)
+	if err := subs.UpdateToken(ctx, otherID, sub.ID, "evil-token"); err != nil {
+		t.Fatalf("cross-account update token: %v", err)
+	}
+	got2, err := subs.ByIDForAccount(ctx, accountID, sub.ID)
+	if err != nil {
+		t.Fatalf("read after cross-account: %v", err)
+	}
+	if got2.ChipTokenPurchaseID != "new-token-purchase-42" {
+		t.Errorf("cross-account update changed token to %q, want unchanged", got2.ChipTokenPurchaseID)
+	}
+}
+
+// TestUpdateCardEndpointAccountScoped (issue #154): the REST endpoint is
+// account-scoped and rejects cancelled subscriptions. It requires a live
+// payments service (CHIP), so we only verify the guard paths here; the
+// re-tokenize itself is covered by the store-level test above.
+func TestUpdateCardEndpointAccountScoped(t *testing.T) {
+	ctx := context.Background()
+	pool := bundleTestPool(t)
+	accountID, _ := bundleFixture(t, ctx, pool)
+	_, sub := seedSubscriptionStores(t, ctx, pool, accountID)
+
+	h := newBundleHandlers(pool) // Pay is nil → endpoint returns 503 before any CHIP call
+	raw := bundleAPIKey(t, ctx, pool, accountID)
+
+	// No payments service wired → 503 (guard path, no CHIP call made).
+	code, resp := subRequest(t, h, raw, "POST", "/v1/rest/subscriptions/"+sub.ID+"/update-card", "")
+	if code != http.StatusServiceUnavailable {
+		t.Fatalf("update-card without payments = %d, want 503 (body=%v)", code, resp)
+	}
+
+	// Cross-account update-card must 404 (account-scoped).
+	otherID, _ := bundleFixture(t, ctx, pool)
+	rawOther := bundleAPIKey(t, ctx, pool, otherID)
+	code2, _ := subRequest(t, h, rawOther, "POST", "/v1/rest/subscriptions/"+sub.ID+"/update-card", "")
+	if code2 != http.StatusNotFound {
+		t.Errorf("cross-account update-card = %d, want 404", code2)
+	}
+}

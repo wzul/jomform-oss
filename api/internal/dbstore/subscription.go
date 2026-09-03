@@ -38,6 +38,13 @@ type Subscription struct {
 	CancelledAt         time.Time
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
+	// Issue #154: update-card flow. CardUpdatePending is set when a charge
+	// fails so the merchant/customer knows to re-tokenize; while true the
+	// 7-day overdue auto-cancel is paused. CardUpdatePurchaseID holds the
+	// CHIP token purchase created by the update-card flow; on payment it
+	// atomically replaces ChipTokenPurchaseID.
+	CardUpdatePending     bool
+	CardUpdatePurchaseID  string
 }
 
 // SubscriptionStore wraps pgx for subscriptions.
@@ -50,14 +57,16 @@ func NewSubscriptionStore(pool *pgxpool.Pool) *SubscriptionStore {
 
 const subSelect = `SELECT id, account_id, client_email, product_id, COALESCE(sale_id::text,''),
 	chip_token_purchase_id, status, period, amount_sen, next_charge_at,
-	COALESCE(cancelled_at, 'epoch'::timestamptz), created_at, updated_at
+	COALESCE(cancelled_at, 'epoch'::timestamptz), created_at, updated_at,
+	card_update_pending, card_update_purchase_id
 	FROM subscriptions`
 
 func scanSub(row pgx.Row) (*Subscription, error) {
 	sub := &Subscription{}
 	err := row.Scan(&sub.ID, &sub.AccountID, &sub.ClientEmail, &sub.ProductID, &sub.SaleID,
 		&sub.ChipTokenPurchaseID, &sub.Status, &sub.Period, &sub.AmountSen, &sub.NextChargeAt,
-		&sub.CancelledAt, &sub.CreatedAt, &sub.UpdatedAt)
+		&sub.CancelledAt, &sub.CreatedAt, &sub.UpdatedAt,
+		&sub.CardUpdatePending, &sub.CardUpdatePurchaseID)
 	return sub, err
 }
 
@@ -229,6 +238,7 @@ func (s *SubscriptionStore) ListByAccountsPage(ctx context.Context, accountIDs [
 		q = `SELECT s.id, s.account_id, s.client_email, s.product_id, COALESCE(s.sale_id::text,''),
 			s.chip_token_purchase_id, s.status, s.period, s.amount_sen, s.next_charge_at,
 			COALESCE(s.cancelled_at, 'epoch'::timestamptz), s.created_at, s.updated_at,
+			s.card_update_pending, s.card_update_purchase_id,
 			COALESCE(p.name, ''),
 			COALESCE((SELECT COUNT(*) FROM subscription_charges sc
 			          WHERE sc.subscription_id = s.id AND sc.status = 'failed'
@@ -241,6 +251,7 @@ func (s *SubscriptionStore) ListByAccountsPage(ctx context.Context, accountIDs [
 		q = `SELECT s.id, s.account_id, s.client_email, s.product_id, COALESCE(s.sale_id::text,''),
 			s.chip_token_purchase_id, s.status, s.period, s.amount_sen, s.next_charge_at,
 			COALESCE(s.cancelled_at, 'epoch'::timestamptz), s.created_at, s.updated_at,
+			s.card_update_pending, s.card_update_purchase_id,
 			COALESCE(p.name, ''),
 			COALESCE((SELECT COUNT(*) FROM subscription_charges sc
 			          WHERE sc.subscription_id = s.id AND sc.status = 'failed'
@@ -261,7 +272,8 @@ func (s *SubscriptionStore) ListByAccountsPage(ctx context.Context, accountIDs [
 		var sub Subscription
 		if err := rows.Scan(&sub.ID, &sub.AccountID, &sub.ClientEmail, &sub.ProductID, &sub.SaleID,
 			&sub.ChipTokenPurchaseID, &sub.Status, &sub.Period, &sub.AmountSen, &sub.NextChargeAt,
-			&sub.CancelledAt, &sub.CreatedAt, &sub.UpdatedAt, &sw.ProductName, &sw.RetryAttempts); err != nil {
+			&sub.CancelledAt, &sub.CreatedAt, &sub.UpdatedAt,
+			&sub.CardUpdatePending, &sub.CardUpdatePurchaseID, &sw.ProductName, &sw.RetryAttempts); err != nil {
 			return nil, 0, err
 		}
 		sw.Subscription = sub
@@ -275,4 +287,70 @@ func (s *SubscriptionStore) ListByAccountsPage(ctx context.Context, accountIDs [
 // account-scoped). Returns pgx.ErrNoRows when not owned.
 func (s *SubscriptionStore) ByIDForAccount(ctx context.Context, accountID, subID string) (*Subscription, error) {
 	return scanSub(s.pool.QueryRow(ctx, subSelect+" WHERE id=$1 AND account_id=$2", subID, accountID))
+}
+
+// UpdateToken atomically replaces the recurring token on a subscription,
+// scoped to the owning account. The old token is left in CHIP (Wan rule —
+// never auto-revoke) but is no longer used for charges. Clears the
+// card-update-pending flag and the pending purchase id, and returns the
+// subscription to active so the schedule continues without restarting the
+// billing period. Returns pgx.ErrNoRows when the subscription is not owned.
+func (s *SubscriptionStore) UpdateToken(ctx context.Context, accountID, subID, newTokenPurchaseID string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE subscriptions
+		   SET chip_token_purchase_id=$3, card_update_pending=FALSE,
+		       card_update_purchase_id='', status='active', updated_at=now()
+		 WHERE id=$1 AND account_id=$2`,
+		subID, accountID, newTokenPurchaseID)
+	return err
+}
+
+// SetCardUpdatePending flags a subscription as needing a card update (set
+// when a charge fails) and records the pending re-tokenize purchase id.
+// While pending, the overdue auto-cancel is paused.
+func (s *SubscriptionStore) SetCardUpdatePending(ctx context.Context, subID, pendingPurchaseID string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE subscriptions
+		   SET card_update_pending=TRUE, card_update_purchase_id=$2, updated_at=now()
+		 WHERE id=$1`,
+		subID, pendingPurchaseID)
+	return err
+}
+
+// ClearCardUpdatePending clears the card-update-pending flag (e.g. after a
+// successful re-tokenize or when the merchant cancels the update).
+func (s *SubscriptionStore) ClearCardUpdatePending(ctx context.Context, subID string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE subscriptions
+		   SET card_update_pending=FALSE, card_update_purchase_id='', updated_at=now()
+		 WHERE id=$1`,
+		subID)
+	return err
+}
+
+// ByCardUpdatePurchase finds the subscription awaiting a card update for a
+// given pending token purchase id (used by the callback to complete the swap).
+func (s *SubscriptionStore) ByCardUpdatePurchase(ctx context.Context, purchaseID string) (*Subscription, error) {
+	return scanSub(s.pool.QueryRow(ctx,
+		subSelect+" WHERE card_update_purchase_id = $1 AND card_update_pending = TRUE", purchaseID))
+}
+
+// PendingCardUpdate lists subscriptions flagged as needing a card update
+// (used to surface the "update payment method" state and to pause the
+// overdue auto-cancel while an update is pending).
+func (s *SubscriptionStore) PendingCardUpdate(ctx context.Context) ([]*Subscription, error) {
+	rows, err := s.pool.Query(ctx, subSelect+" WHERE card_update_pending = TRUE ORDER BY updated_at")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Subscription
+	for rows.Next() {
+		sub, err := scanSub(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, sub)
+	}
+	return out, rows.Err()
 }

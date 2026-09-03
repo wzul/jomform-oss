@@ -254,6 +254,12 @@ func firstProductID(sale *dbstore.Sale) string {
 func (s *Service) processSubscriptionEvent(ctx context.Context, p *chip.Purchase) error {
 	switch p.Status {
 	case chip.StatusPaid:
+		// Issue #154: a paid purchase may be a completed card-update
+		// re-tokenize (the customer authorized a new card). If so, swap the
+		// subscription's token. Otherwise treat it as a subscription charge.
+		if err := s.CompleteCardUpdate(ctx, p); err == nil {
+			return nil
+		}
 		return s.Subs.MarkChargePaid(ctx, p.ID)
 	case chip.StatusError:
 		return s.Subs.MarkChargeFailed(ctx, p.ID)
