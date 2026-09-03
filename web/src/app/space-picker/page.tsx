@@ -110,10 +110,10 @@ export default function SpacePickerPage() {
                 return (
                   <li
                     key={s.id}
-                    className="flex items-center justify-between gap-3 rounded-lg border border-[var(--jf-border)] px-4 py-3"
+                    className="flex flex-col gap-3 rounded-lg border border-[var(--jf-border)] px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
                   >
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-medium text-[var(--jf-text)]">
+                      <p className="text-sm font-medium text-[var(--jf-text)]">
                         {s.name}
                         {isDefault && (
                           <span className="ml-2 rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-medium text-[var(--jf-primary)]">
@@ -127,19 +127,19 @@ export default function SpacePickerPage() {
                         )}
                       </p>
                       <p className="truncate text-[11px] text-[var(--jf-muted)]">{s.slug}.jomform.com</p>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-2">
                       {!isDefault && (
                         <button
                           type="button"
                           disabled={busy}
                           onClick={() => setDefault(s.id)}
                           title={t("space.setDefault")}
-                          className="rounded-md border border-[var(--jf-border)] px-2 py-1 text-[11px] text-[var(--jf-muted)] hover:bg-slate-50 hover:text-[var(--jf-primary)] disabled:opacity-50"
+                          className="mt-1.5 text-[11px] text-[var(--jf-muted)] underline decoration-dotted underline-offset-2 hover:text-[var(--jf-primary)] disabled:opacity-50"
                         >
                           {t("space.setDefault")}
                         </button>
                       )}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2 sm:justify-end">
                       <button
                         type="button"
                         onClick={() => enter(s.slug)}
