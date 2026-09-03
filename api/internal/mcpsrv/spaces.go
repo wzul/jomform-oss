@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -236,6 +237,37 @@ func (s *Server) updateProfilePhone(
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
 	return nil, map[string]string{"status": "saved", "phone": phone}, nil
+}
+
+// ── update_profile_timezone (issue #191) ───────────────────────────────────
+
+type updateProfileTimezoneIn struct {
+	Timezone string `json:"timezone" jsonschema:"Zona waktu IANA pilihan (kosong = Auto, ikut pelayar/PC). Contoh: Asia/Kuala_Lumpur, UTC."`
+}
+
+// updateProfileTimezone sets (or clears, when timezone is empty) the account
+// owner's preferred IANA timezone — MCP parity for the dashboard Profile →
+// Identity tab. Empty = Auto (follow the browser/PC default).
+func (s *Server) updateProfileTimezone(
+	ctx context.Context, _ *mcp.CallToolRequest, in updateProfileTimezoneIn,
+) (*mcp.CallToolResult, map[string]string, error) {
+	if s.deps.Users == nil {
+		return nil, nil, errors.New("users tidak tersedia")
+	}
+	owner, err := s.spaceOwner(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	tz := strings.TrimSpace(in.Timezone)
+	if tz != "" {
+		if _, lerr := time.LoadLocation(tz); lerr != nil {
+			return nil, nil, errors.New("zona waktu tidak sah")
+		}
+	}
+	if err := s.deps.Users.UpdateTimezone(ctx, owner, tz); err != nil {
+		return nil, nil, fmt.Errorf("db: %w", err)
+	}
+	return nil, map[string]string{"status": "saved", "timezone": tz}, nil
 }
 
 // ── get_space_settings ───────────────────────────────────────────────────────

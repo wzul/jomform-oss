@@ -431,6 +431,8 @@ type accountOut struct {
 	ChipMode string `json:"chip_mode"`
 	// Issue #181: the account owner's optional phone number ("" when not set).
 	Phone string `json:"phone,omitempty"`
+	// Issue #191: the account owner's preferred IANA timezone ("" = Auto).
+	Timezone string `json:"timezone,omitempty"`
 }
 
 func (s *Server) getAccount(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, accountOut, error) {
@@ -443,10 +445,12 @@ func (s *Server) getAccount(ctx context.Context, _ *mcp.CallToolRequest, _ empty
 		return nil, accountOut{}, fmt.Errorf("db: %w", err)
 	}
 	phone := ""
+	tz := ""
 	if s.deps.Users != nil {
 		if u, uerr := s.deps.Users.ByID(ctx, acc.OwnerUserID); uerr == nil && u != nil {
 			phone = u.Phone
+			tz = u.Timezone
 		}
 	}
-	return nil, accountOut{Name: acc.Name, Slug: acc.Slug, Currency: acc.Currency, ChipMode: acc.ChipMode, Phone: phone}, nil
+	return nil, accountOut{Name: acc.Name, Slug: acc.Slug, Currency: acc.Currency, ChipMode: acc.ChipMode, Phone: phone, Timezone: tz}, nil
 }

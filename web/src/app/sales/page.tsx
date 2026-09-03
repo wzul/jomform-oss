@@ -16,6 +16,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
+import { formatDate, formatDateTime } from "../../lib/formatDate";
 import { spaceQuery } from "../../lib/space";
 
 type Item = {
@@ -80,7 +81,7 @@ const saleBadge = (s: string) =>
 
 function SalesPageInner() {
   const { t } = useI18n();
-  const { anon, role, space } = useSession();
+  const { anon, role, space, user } = useSession();
   const router = useRouter();
   const search = useSearchParams();
   const deepForm = search.get("form") || "";
@@ -470,7 +471,7 @@ function SalesPageInner() {
                     {s.form_id ? formName.get(s.form_id) || "—" : "—"}
                   </td>
                   <td className="whitespace-nowrap px-2 py-3 text-[11px] text-[var(--jf-muted)]">
-                    {new Date(s.created_at).toLocaleDateString()}
+                    {formatDate(s.created_at, user?.timezone)}
                   </td>
                   <td className="whitespace-nowrap px-4 py-3">
                     <div className="flex items-center justify-end gap-1.5">
@@ -690,12 +691,12 @@ function SalesPageInner() {
                   </div>
                   <div className="flex justify-between gap-4">
                     <dt className="text-[var(--jf-muted)]">Created</dt>
-                    <dd>{new Date(detail.created_at).toLocaleString()}</dd>
+                    <dd>{formatDateTime(detail.created_at, user?.timezone)}</dd>
                   </div>
                   {detail.captured_at && (
                     <div className="flex justify-between gap-4">
                       <dt className="text-[var(--jf-muted)]">Captured</dt>
-                      <dd>{new Date(detail.captured_at).toLocaleString()}</dd>
+                      <dd>{formatDateTime(detail.captured_at, user?.timezone)}</dd>
                     </div>
                   )}
                 </div>

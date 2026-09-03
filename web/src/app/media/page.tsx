@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
+import { formatDate } from "../../lib/formatDate";
 import { spaceQuery } from "../../lib/space";
 
 // Issue #180: WordPress-media-library-style Media page. Grid of the
@@ -34,13 +35,6 @@ function fmtSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-// Short date (e.g. "3 Sep 2026").
-function fmtDate(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
-}
-
 // Filename from the object key (e.g. "u/<acct>/<uuid>.jpg" → "<uuid>.jpg").
 function nameFromKey(key: string): string {
   const parts = key.split("/");
@@ -49,7 +43,7 @@ function nameFromKey(key: string): string {
 
 export default function MediaPage() {
   const { t } = useI18n();
-  const { anon, role, space } = useSession();
+  const { anon, role, space, user } = useSession();
   const router = useRouter();
 
   // Issue #163: read_only members see no delete action.
@@ -227,7 +221,7 @@ export default function MediaPage() {
                     {nameFromKey(m.key)}
                   </p>
                   <p className="mt-0.5 text-xs text-[var(--jf-muted)]">
-                    {fmtDate(m.created_at)} · {fmtSize(m.size)}
+                    {formatDate(m.created_at, user?.timezone)} · {fmtSize(m.size)}
                   </p>
                   <p className="mt-0.5 text-[11px] text-[var(--jf-muted)]">
                     {m.source === "customer" ? t("media.sourceCustomer") : t("media.sourceMerchant")}
@@ -282,7 +276,7 @@ export default function MediaPage() {
                   {nameFromKey(detail.key)}
                 </p>
                 <p className="mt-1 text-xs text-[var(--jf-muted)]">
-                  {fmtDate(detail.created_at)} · {fmtSize(detail.size)} · {detail.mime}
+                  {formatDate(detail.created_at, user?.timezone)} · {fmtSize(detail.size)} · {detail.mime}
                 </p>
                 <p className="mt-0.5 text-xs text-[var(--jf-muted)]">
                   {detail.source === "customer" ? t("media.sourceCustomer") : t("media.sourceMerchant")}

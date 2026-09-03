@@ -9,6 +9,7 @@ import { useRouter } from "next/navigation";
 import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
+import { formatDate } from "../../lib/formatDate";
 import { spaceQuery } from "../../lib/space";
 
 type Subscription = {
@@ -32,7 +33,7 @@ const money = (sen: number) =>
 
 export default function Subscriptions() {
   const { t } = useI18n();
-  const { anon, role, space } = useSession();
+  const { anon, role, space, user } = useSession();
   const router = useRouter();
 
   // Issue #163: read_only members see no write actions (cancel/update card).
@@ -277,7 +278,7 @@ export default function Subscriptions() {
                   </td>
                   <td className="px-2 py-3 text-[var(--jf-muted)]">
                     {sub.next_charge_at
-                      ? new Date(sub.next_charge_at).toLocaleDateString()
+                      ? formatDate(sub.next_charge_at, user?.timezone)
                       : "—"}
                   </td>
                   <td className="px-2 py-3 text-[var(--jf-muted)]">

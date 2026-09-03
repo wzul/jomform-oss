@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/wzul/jomform/api/internal/auth"
 )
@@ -42,7 +43,7 @@ func (a *AuthHandlers) handleProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id": u.ID, "email": u.Email, "name": u.Name,
-		"avatar_url": u.AvatarURL, "phone": u.Phone, "totp_enabled": u.TOTPEnabled, "created_at": u.CreatedAt,
+		"avatar_url": u.AvatarURL, "phone": u.Phone, "timezone": u.Timezone, "totp_enabled": u.TOTPEnabled, "created_at": u.CreatedAt,
 	})
 }
 
@@ -108,6 +109,37 @@ func (a *AuthHandlers) handleUpdatePhone(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	if err := a.Users.UpdatePhone(r.Context(), uid, phone); err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
+}
+
+// handleUpdateTimezone: POST /v1/auth/profile/timezone (issue #191). Optional —
+// a user can hard-code an IANA timezone or leave it blank (Auto = follow the
+// browser/PC). Empty string clears it. The value is validated against the
+// IANA timezone database via time.LoadLocation.
+func (a *AuthHandlers) handleUpdateTimezone(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Timezone string `json:"timezone"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	uid := a.profileUserID(r)
+	if uid == "" {
+		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		return
+	}
+	tz := strings.TrimSpace(req.Timezone)
+	if tz != "" {
+		if _, err := time.LoadLocation(tz); err != nil {
+			writeErr(w, http.StatusBadRequest, "zona waktu tidak sah")
+			return
+		}
+	}
+	if err := a.Users.UpdateTimezone(r.Context(), uid, tz); err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}

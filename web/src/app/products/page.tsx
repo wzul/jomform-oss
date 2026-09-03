@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
+import { formatDate } from "../../lib/formatDate";
 import { spaceQuery } from "../../lib/space";
 
 type Product = {
@@ -32,7 +33,7 @@ const PER_PAGE = 10;
 
 export default function Products() {
   const { t } = useI18n();
-  const { anon, bundle, role, space } = useSession();
+  const { anon, bundle, role, space, user } = useSession();
   const router = useRouter();
 
   // Issue #163: read_only members see no write actions (add/edit/archive).
@@ -648,7 +649,7 @@ export default function Products() {
                     )}
                   </td>
                   <td className="px-2 py-3 text-[var(--jf-muted)]">
-                    {p.created_at ? new Date(p.created_at).toLocaleDateString() : "—"}
+                    {p.created_at ? formatDate(p.created_at, user?.timezone) : "—"}
                   </td>
                   <td className="px-4 py-3">
                     {canWrite && (

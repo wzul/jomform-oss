@@ -484,6 +484,10 @@ const DICT = {
   "prof.phone": { en: "Phone number (optional)", ms: "Nombor telefon (pilihan)", zh: "电话号码（可选）", ta: "தொலைபேசி எண் (விருப்பம்)", ar: "رقم الهاتف (اختياري)" },
   "prof.phonePlaceholder": { en: "+60 12 345 6789", ms: "+60 12 345 6789", zh: "+60 12 345 6789", ta: "+60 12 345 6789", ar: "+60 12 345 6789" },
   "prof.savePhone": { en: "Save phone", ms: "Simpan nombor", zh: "保存电话号码", ta: "எண்ணைச் சேமி", ar: "حفظ الرقم" },
+  // issue #191: preferred timezone
+  "prof.timezone": { en: "Timezone", ms: "Zona waktu", zh: "时区", ta: "நேர மண்டலம்", ar: "المنطقة الزمنية" },
+  "prof.timezoneAuto": { en: "Auto (follow browser/PC)", ms: "Auto (ikut pelayar/PC)", zh: "自动（跟随浏览器/电脑）", ta: "தானியங்கி (உலாவி/கணினியைப் பின்தொடர்)", ar: "تلقائي (اتبع المتصفح/الكمبيوتر)" },
+  "prof.saveTimezone": { en: "Save timezone", ms: "Simpan zona waktu", zh: "保存时区", ta: "நேர மண்டலத்தைச் சேமி", ar: "حفظ المنطقة الزمنية" },
   "prof.emailAddress": { en: "Email address", ms: "Alamat emel", zh: "电子邮件地址", ta: "மின்னஞ்சல் முகவரி", ar: "البريد الإلكتروني" },
   "prof.current": { en: "Current:", ms: "Semasa:", zh: "当前：", ta: "தற்போதைய:", ar: "الحالي:" },
   "prof.newEmail": { en: "New email", ms: "Emel baharu", zh: "新邮箱", ta: "புதிய மின்னஞ்சல்", ar: "بريد إلكتروني جديد" },

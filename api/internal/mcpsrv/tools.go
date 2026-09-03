@@ -251,6 +251,11 @@ func (s *Server) registerTools() {
 		Name:        "update_profile_phone",
 		Description: "Set nombor telefon pilihan pada profil anda (kosong = buang). Format longgar: digit, +, ruang, 8-15 digit.",
 	}, s.updateProfilePhone)
+	// Issue #191: optional profile timezone parity.
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "update_profile_timezone",
+		Description: "Set zona waktu IANA pilihan pada profil anda (kosong = Auto, ikut pelayar/PC). Contoh: Asia/Kuala_Lumpur, UTC.",
+	}, s.updateProfileTimezone)
 
 	// ── Parity: per-space email templates (issue #107) ────────────────────
 	mcp.AddTool(s.mcp, &mcp.Tool{

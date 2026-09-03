@@ -5,6 +5,7 @@ import { Shell } from "../../components/Shell";
 import { useRouter } from "next/navigation";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
+import { formatDate, formatDateTime } from "../../lib/formatDate";
 import { spaceQuery, spaceScope } from "../../lib/space";
 import { MembersTab } from "../../components/MembersTab";
 
@@ -165,7 +166,7 @@ export default function Settings() {
   // Issue #29: routed through the shared session cache — the first page of
   // the session fetches the bundle once; later pages (dashboard, forms,
   // products, profile) reuse it. Saves call reloadSession() to re-fetch.
-  const { bundle, anon, reload: reloadSession, role } = useSession();
+  const { bundle, anon, reload: reloadSession, role, user } = useSession();
   const reload = useCallback(() => {
     // Saves mutate bundle-backed sections: drop the shared cache first so
     // the next load() re-fetches fresh data (and other pages inherit it).
@@ -896,7 +897,7 @@ export default function Settings() {
                           {/* Issue #130: last-delivery status indicator. */}
                           {last && (
                             <span className="flex items-center gap-1.5 text-[11px] font-medium"
-                              title={t("wh.lastAttempt") + ": " + new Date(last.created_at || "").toLocaleString()}>
+                              title={t("wh.lastAttempt") + ": " + formatDateTime(last.created_at || "", user?.timezone)}>
                               <span className={`inline-block h-2 w-2 rounded-full ${
                                 status === "success" ? "bg-emerald-500"
                                 : status === "pending" ? "bg-amber-400"
@@ -943,7 +944,7 @@ export default function Settings() {
                                   {deliv.map((d) => (
                                     <tr key={d.id} className={`border-t border-[var(--jf-border)] ${!d.success ? "bg-red-50/60" : ""}`}>
                                       <td className="py-1.5 pr-3 text-slate-500 whitespace-nowrap">
-                                        {d.created_at ? new Date(d.created_at).toLocaleString() : "—"}
+                                        {d.created_at ? formatDateTime(d.created_at, user?.timezone) : "—"}
                                       </td>
                                       <td className="py-1.5 pr-3 font-mono text-slate-700">{d.event}</td>
                                       <td className={`py-1.5 pr-3 font-medium ${d.success ? "text-emerald-600" : "text-red-600"}`}>
@@ -1048,7 +1049,7 @@ export default function Settings() {
                 <li key={l.provider} className="flex items-center justify-between rounded-lg border border-[var(--jf-border)] px-4 py-2.5">
                   <div>
                     <p className="text-sm capitalize">{l.provider} — {l.email}</p>
-                    <p className="text-[11px] text-slate-400">{t("set.linked")} {l.linked_at ? new Date(l.linked_at).toLocaleDateString() : ""}</p>
+                    <p className="text-[11px] text-slate-400">{t("set.linked")} {l.linked_at ? formatDate(l.linked_at, user?.timezone) : ""}</p>
                   </div>
                   <button onClick={async () => { await fetch(`/api/auth/social/${l.provider}`, { method: "DELETE" }); load(); }}
                     className="text-xs text-slate-500 hover:text-red-500">{t("set.unlink")}</button>

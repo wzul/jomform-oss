@@ -7,6 +7,7 @@ import QRCode from "qrcode";
 import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
+import { formatDate } from "../../lib/formatDate";
 
 type Profile = {
   id: string;
@@ -14,6 +15,7 @@ type Profile = {
   name: string;
   avatar_url: string; // issue #133
   phone: string; // issue #181 optional phone number (empty = not set)
+  timezone: string; // issue #191 preferred IANA timezone (empty = Auto → browser default)
   totp_enabled: boolean;
   created_at: string;
 };
@@ -21,6 +23,40 @@ type Profile = {
 type ProfileTab = "identity" | "security" | "passkeys";
 
 const TAB_IDS: ProfileTab[] = ["identity", "security", "passkeys"];
+
+// Issue #191: common IANA timezones offered in the Profile → Identity tab.
+// The user can also pick Auto (empty) to follow the browser/PC default.
+const COMMON_TIMEZONES = [
+  "UTC",
+  "Asia/Kuala_Lumpur",
+  "Asia/Singapore",
+  "Asia/Jakarta",
+  "Asia/Manila",
+  "Asia/Bangkok",
+  "Asia/Ho_Chi_Minh",
+  "Asia/Shanghai",
+  "Asia/Hong_Kong",
+  "Asia/Taipei",
+  "Asia/Tokyo",
+  "Asia/Seoul",
+  "Asia/Kolkata",
+  "Asia/Dubai",
+  "Asia/Riyadh",
+  "Australia/Sydney",
+  "Australia/Perth",
+  "Pacific/Auckland",
+  "Europe/London",
+  "Europe/Paris",
+  "Europe/Berlin",
+  "Europe/Moscow",
+  "America/New_York",
+  "America/Chicago",
+  "America/Denver",
+  "America/Los_Angeles",
+  "America/Sao_Paulo",
+  "Africa/Lagos",
+  "Africa/Nairobi",
+];
 
 function loadStoredTab(): ProfileTab {
   if (typeof window === "undefined") return "identity";
@@ -42,6 +78,8 @@ export default function ProfilePage() {
   const [email, setEmail] = useState("");
   // Issue #181: optional phone number state.
   const [phone, setPhone] = useState("");
+  // Issue #191: preferred timezone state ("" = Auto → browser default).
+  const [timezone, setTimezone] = useState("");
   // Issue #133: profile picture state — current avatar URL, upload progress.
   const [avatarUrl, setAvatarUrl] = useState("");
   const [avatarPreview, setAvatarPreview] = useState("");
@@ -84,6 +122,7 @@ export default function ProfilePage() {
         name: sessionUser.name ?? prev?.name ?? "",
         avatar_url: sessionUser.avatar_url ?? prev?.avatar_url ?? "",
         phone: sessionUser.phone ?? prev?.phone ?? "",
+        timezone: sessionUser.timezone ?? prev?.timezone ?? "",
         totp_enabled: sessionUser.totp_enabled ?? prev?.totp_enabled ?? false,
         created_at: prev?.created_at ?? "",
       }));
@@ -91,6 +130,7 @@ export default function ProfilePage() {
       setEmail((cur) => cur || sessionUser.email || "");
       setAvatarUrl((cur) => cur || sessionUser.avatar_url || "");
       setPhone((cur) => cur || sessionUser.phone || "");
+      setTimezone((cur) => cur || sessionUser.timezone || "");
     }
     fetch("/api/auth/passkeys")
       .then((r) => (r.ok ? r.json() : []))
@@ -356,6 +396,24 @@ export default function ProfilePage() {
                   className="jf-btn-primary mt-3"
                 >{t("prof.savePhone")}</button>
               </div>
+              {/* Issue #191: preferred timezone — Auto (browser/PC) or a hard-coded IANA timezone. */}
+              <div className="mt-4 border-t border-slate-100 pt-4">
+                <label className="mt-3 block text-xs text-slate-500">{t("prof.timezone")}</label>
+                <select
+                  value={timezone}
+                  onChange={(e) => setTimezone(e.target.value)}
+                  className="jf-input mt-1 max-w-xl"
+                >
+                  <option value="">{t("prof.timezoneAuto")}</option>
+                  {COMMON_TIMEZONES.map((tz) => (
+                    <option key={tz} value={tz}>{tz}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => post("/api/auth/profile/timezone", { timezone })}
+                  className="jf-btn-primary mt-3"
+                >{t("prof.saveTimezone")}</button>
+              </div>
             </section>
 
             <section className="jf-card mt-6 p-6">
@@ -440,7 +498,7 @@ export default function ProfilePage() {
               {p?.totp_enabled && trustedUntil && (
                 <div className="mt-3 flex flex-wrap items-center gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
                   <span className="text-emerald-700">
-                    {t("prof.trusted", { date: new Date(trustedUntil).toLocaleDateString() })}
+                    {t("prof.trusted", { date: formatDate(trustedUntil, sessionUser?.timezone) })}
                   </span>
                   <button
                     onClick={async () => {
