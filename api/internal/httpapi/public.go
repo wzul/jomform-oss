@@ -16,6 +16,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -870,18 +871,49 @@ func (h *PublicHandlers) spaceFooter(ctx context.Context, f *dbstore.Form) foote
 	if err != nil {
 		return fi
 	}
+	// Issue #231: the merchant's stored PrivacyURL/TermsURL/RefundURL may
+	// point at a stale/wrong space subdomain (e.g. wanzulhosting.jomform.com
+	// when the space is actually "wan"). When a link targets one of the
+	// space's own hosted legal pages ({space}.jomform.com/privacy|terms|refund),
+	// rewrite it to the CURRENT space's subdomain so it always resolves.
+	slug, _ := h.Spaces.SpaceSlugByAccount(ctx, f.AccountID)
 	fi.BusinessName = st.BusinessName
 	fi.CompanyReg = st.CompanyReg
 	fi.ContactPhone = st.ContactPhone
 	fi.ContactAddress = st.ContactAddress
-	fi.PrivacyURL = st.PrivacyURL
-	fi.TermsURL = st.TermsURL
-	fi.RefundURL = st.RefundURL
+	fi.PrivacyURL = rewriteHostedLegalURL(st.PrivacyURL, slug)
+	fi.TermsURL = rewriteHostedLegalURL(st.TermsURL, slug)
+	fi.RefundURL = rewriteHostedLegalURL(st.RefundURL, slug)
 	fi.FooterText = st.FooterText
 	fi.HasFooter = fi.BusinessName != "" || fi.CompanyReg != "" || fi.ContactPhone != "" ||
 		fi.ContactAddress != "" || fi.PrivacyURL != "" || fi.TermsURL != "" || fi.RefundURL != "" ||
 		fi.FooterText != ""
 	return fi
+}
+
+// rewriteHostedLegalURL rewrites a stored legal-page URL that points at one of
+// the space's own hosted pages ({space}.jomform.com/privacy|terms|refund) to
+// the current space's subdomain. External URLs (any other host) are returned
+// unchanged. A stale slug in the stored URL (issue #231) is corrected so the
+// footer link always resolves to the current space.
+func rewriteHostedLegalURL(raw, spaceSlug string) string {
+	if raw == "" || spaceSlug == "" {
+		return raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	host := u.Hostname()
+	if !strings.HasSuffix(host, ".jomform.com") {
+		return raw
+	}
+	path := strings.TrimPrefix(u.Path, "/")
+	if path != dbstore.LegalPagePrivacy && path != dbstore.LegalPageTerms && path != dbstore.LegalPageRefund {
+		return raw
+	}
+	u.Host = spaceSlug + ".jomform.com"
+	return u.String()
 }
 
 // serveForm renders a resolved form (blocks or legacy) and logs unknown

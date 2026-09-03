@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/llm"
 )
@@ -156,12 +157,15 @@ func (h *PublicHandlers) handlePublicLegalPage(w http.ResponseWriter, r *http.Re
 	}
 	spaceID, err := h.Spaces.IDBySlug(r.Context(), sub)
 	if err != nil || spaceID == "" {
+		// Unknown space (or a lookup error) → 404, never 500.
 		http.NotFound(w, r)
 		return
 	}
 	page, err := h.Spaces.LegalPage(r.Context(), spaceID, pageType)
 	if err != nil {
-		if errors.Is(err, dbstore.ErrLegalPageNotFound) {
+		// No stored content for this page → 404, not 500. Only genuine
+		// internal errors (e.g. DB down) should surface as 500.
+		if errors.Is(err, dbstore.ErrLegalPageNotFound) || errors.Is(err, pgx.ErrNoRows) {
 			http.NotFound(w, r)
 			return
 		}
