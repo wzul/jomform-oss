@@ -606,6 +606,15 @@ const DICT = {
   "prof.passkeyUnsupported": { en: "Passkey cancelled or not supported by this browser.", ms: "Passkey dibatalkan atau tidak disokong pelayar ini.", zh: "通行密钥已取消或此浏览器不支持。", ta: "கடவுச்சாவி ரத்துசெய்யப்பட்டது அல்லது இந்த உலாவி ஆதரிக்கவில்லை.", ar: "تم إلغاء مفتاح المرور أو المتصفح لا يدعمه." },
   // builder
   "bld.formTitle": { en: "Form title", ms: "Tajuk borang", zh: "表单标题", ta: "படிவத் தலைப்பு", ar: "عنوان النموذج" },
+  // issue #256: AI form builder (prompt → generated form config)
+  "bld.aiTitle": { en: "AI build", ms: "Bina AI", zh: "AI 构建", ta: "AI உருவாக்கு", ar: "بناء بالذكاء الاصطناعي" },
+  "bld.aiHint": { en: "Describe the form you want and AI will draft it for you to review.", ms: "Terangkan borang yang anda mahu dan AI akan sediakan draf untuk anda semak.", zh: "描述您想要的表单，AI 将为您起草以供审阅。", ta: "நீங்கள் விரும்பும் படிவத்தை விவரிக்கவும், AI அதை மதிப்பாய்வு செய்ய வரைவு செய்யும்.", ar: "صف النموذج الذي تريده وسيقوم الذكاء الاصطناعي بإعداد مسودة لمراجعتها." },
+  "bld.aiPromptPh": { en: "e.g. a booking form for a hair salon with name, phone, date, service dropdown", ms: "cth: borang tempahan salon rambut dengan nama, telefon, tarikh, dropdown perkhidmatan", zh: "例如：美发沙龙预约表单，包含姓名、电话、日期、服务下拉框", ta: "எ.கா: பெயர், தொலைபேசி, தேதி, சேவை கீழ்தோன்றல் கொண்ட ஹேர் சலூன் பதிவு படிவம்", ar: "مثال: نموذج حجز لصالون شعر مع الاسم والهاتف والتاريخ وقائمة الخدمات" },
+  "bld.aiGenerate": { en: "Generate", ms: "Jana", zh: "生成", ta: "உருவாக்கு", ar: "توليد" },
+  "bld.aiGenerating": { en: "Generating…", ms: "Menjana…", zh: "生成中…", ta: "உருவாக்குகிறது…", ar: "جارٍ التوليد…" },
+  "bld.aiError": { en: "AI generation failed: {error}", ms: "Penjanaan AI gagal: {error}", zh: "AI 生成失败：{error}", ta: "AI உருவாக்கம் தோல்வி: {error}", ar: "فشل توليد الذكاء الاصطناعي: {error}" },
+  "bld.aiApplied": { en: "AI draft applied — review and edit before saving.", ms: "Draf AI digunakan — semak dan edit sebelum simpan.", zh: "AI 草稿已应用 — 保存前请审阅和编辑。", ta: "AI வரைவு பயன்படுத்தப்பட்டது — சேமிப்பதற்கு முன் மதிப்பாய்வு செய்து திருத்தவும்.", ar: "تم تطبيق مسودة الذكاء الاصطناعي — راجع وحرر قبل الحفظ." },
+  "bld.aiRateLimited": { en: "Too many requests. Please wait a moment and try again.", ms: "Terlalu banyak permintaan. Sila tunggu sebentar dan cuba lagi.", zh: "请求过多。请稍候再试。", ta: "அதிக கோரிக்கைகள். சிறிது காத்திருந்து மீண்டும் முயற்சிக்கவும்.", ar: "طلبات كثيرة جداً. يرجى الانتظار قليلاً والمحاولة مرة أخرى." },
   // issue #176: form status (draft | private | published) + access password
   "bld.status": { en: "Status", ms: "Status", zh: "状态", ta: "நிலை", ar: "الحالة" },
   "bld.statusDraft": { en: "Draft", ms: "Draft", zh: "草稿", ta: "வரைவு", ar: "مسودة" },

@@ -88,6 +88,8 @@ type RESTHandlers struct {
 	// Nil in bare-mode tests; the generate endpoint returns 503.
 	LLM interface {
 		GenerateLegalPage(ctx context.Context, pageType string, d llm.BusinessDetails) (string, error)
+		// Issue #256: AI form builder — draft a form config from a prompt.
+		GenerateFormConfig(ctx context.Context, prompt string) (string, error)
 	}
 	// Issue #185: BNM exchange-rate cache (Valkey). Nil in bare-mode tests;
 	// the currency-rates endpoint returns empty.
@@ -109,6 +111,9 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("PUT /v1/rest/forms/{id}/chip-feeds", h.authed(h.setFormChipFeeds))
 	mux.Handle("GET /v1/rest/forms", h.authed(h.listForms))
 	mux.Handle("POST /v1/rest/forms", h.authed(h.createForm))
+	// Issue #256: AI form builder — draft a form config from a prompt. Tight
+	// per-IP rate limit because LLM calls cost money (5/hour, burst 3).
+	mux.Handle("POST /v1/rest/forms/ai-generate", middleware.RateLimitWith(5.0/3600.0, 3)(h.authed(h.aiGenerateForm)))
 	mux.Handle("POST /v1/rest/forms/bulk", h.authed(h.bulkForms))
 	mux.Handle("GET /v1/rest/forms/{id}", h.authed(h.getForm))
 	mux.Handle("PATCH /v1/rest/forms/{id}", h.authed(h.updateForm))

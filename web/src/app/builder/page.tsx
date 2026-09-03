@@ -199,6 +199,11 @@ export default function Builder() {
   // Issue #174: template picker on the new-form path (no ?form= param).
   const [pickerOpen, setPickerOpen] = useState(false);
 
+  // Issue #256: AI form builder — prompt input + generation state.
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [aiGenerating, setAiGenerating] = useState(false);
+  const [aiMsg, setAiMsg] = useState("");
+
   // Issue #59: mobile (<md) shows ONE section at a time via a tab bar
   // (Add | Canvas | Settings); canvas is the default and the palette is the
   // least important thing on a phone. Desktop ≥768px ignores this and keeps
@@ -499,6 +504,75 @@ export default function Builder() {
     }
     setSaving(false);
     setDirty(false);
+  }
+
+  /* Issue #256: AI form builder — send the prompt to the backend, which calls
+     deepseek-v4-flash:0731 to draft a validated form config, then load the
+     generated blocks into the canvas for the user to review/edit before
+     saving. The backend validates the output (no bad fields, no price
+     tampering) and rate-limits the endpoint. */
+  async function aiGenerate() {
+    const prompt = aiPrompt.trim();
+    if (!prompt || aiGenerating) return;
+    setAiGenerating(true);
+    setAiMsg("");
+    setLoadErr("");
+    try {
+      const r = await fetch(`/api/rest/forms/ai-generate${spaceQuery()}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setAiMsg(r.status === 429 ? t("bld.aiRateLimited") : t("bld.aiError", { error: d.error || r.status }));
+        return;
+      }
+      // Apply the generated config: title + blocks (fresh ids so they are
+      // editable in the canvas). Product blocks keep their product_id; the
+      // server resolves prices from the product DB.
+      if (d.title) setTitle(d.title);
+      const generated: Block[] = (d.blocks || []).map((b: Record<string, unknown>) => ({
+        id: uid(),
+        type: (b.type as BlockType) || "text",
+        value: (b.value as string) || "",
+        src: b.src as string | undefined,
+        productId: b.product_id as string | undefined,
+        required: b.required as boolean | undefined,
+        placeholder: b.placeholder as string | undefined,
+        description: b.description as string | undefined,
+        cssClass: b.css_class as string | undefined,
+        maxLength: b.max_length as number | undefined,
+        defaultValue: b.default_value as string | undefined,
+        min: b.min as string | undefined,
+        max: b.max as string | undefined,
+        step: b.step as string | undefined,
+        format: b.format as string | undefined,
+        pattern: b.pattern as string | undefined,
+        requiredMessage: b.required_message as string | undefined,
+        priceSen: b.price_sen as number | undefined,
+        quantity: b.quantity as boolean | undefined,
+        choices: Array.isArray(b.choices)
+          ? (b.choices as { label?: string; value?: string; price_sen?: number }[]).map((c) => ({
+              label: c.label || "",
+              value: c.value || c.label || "",
+              price_sen: c.price_sen,
+            }))
+          : undefined,
+      }));
+      if (generated.length) {
+        setBlocks(generated);
+        setSelected(null);
+        setDirty(true);
+        setAiMsg(t("bld.aiApplied"));
+      } else {
+        setAiMsg(t("bld.aiError", { error: "no blocks" }));
+      }
+    } catch {
+      setAiMsg(t("bld.aiError", { error: "network" }));
+    } finally {
+      setAiGenerating(false);
+    }
   }
 
   const selectedBlock = blocks.find((b) => b.id === selected);
@@ -908,6 +982,30 @@ export default function Builder() {
         {/* ── left: categorized palette (drag sources) − mobile: only on the
              Add tab, desktop: always visible. Tap = add (already exists). */}
         <aside className={`border-r border-[var(--jf-border)] p-4 ${mobileTab === "add" ? "block" : "hidden"} md:block`}>
+          {/* Issue #256: AI form builder — prompt input. The backend calls
+              deepseek-v4-flash:0731 to draft a validated form config. */}
+          <div className="mb-4 rounded-lg border border-[var(--jf-border)] bg-white p-3">
+            <p className="mb-1 flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wider text-[#9ca3af]">
+              <span>✨</span>
+              {t("bld.aiTitle")}
+            </p>
+            <p className="mb-2 text-[11px] leading-snug text-[#9ca3af]">{t("bld.aiHint")}</p>
+            <textarea
+              value={aiPrompt}
+              onChange={(e) => setAiPrompt(e.target.value)}
+              placeholder={t("bld.aiPromptPh")}
+              rows={3}
+              className="w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-xs outline-none focus:border-[#7170ff]/60"
+            />
+            <button
+              onClick={() => void aiGenerate()}
+              disabled={aiGenerating || !aiPrompt.trim()}
+              className="mt-2 w-full rounded-md bg-[#5e6ad2] py-2 text-xs font-medium text-white hover:bg-[#4f46e5] disabled:opacity-50"
+            >
+              {aiGenerating ? t("bld.aiGenerating") : t("bld.aiGenerate")}
+            </button>
+            {aiMsg && <p className="mt-2 text-[11px] leading-snug text-[#374151]">{aiMsg}</p>}
+          </div>
           <p className="mb-3 text-xs font-medium uppercase tracking-wider text-[#9ca3af]">
             {t("bld.dragToAdd")}
           </p>

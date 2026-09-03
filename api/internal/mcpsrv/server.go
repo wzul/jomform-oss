@@ -60,6 +60,8 @@ type Deps struct {
 	// generate_legal_page tool errors.
 	LLM interface {
 		GenerateLegalPage(ctx context.Context, pageType string, d llm.BusinessDetails) (string, error)
+		// Issue #256: AI form builder — draft a form config from a prompt.
+		GenerateFormConfig(ctx context.Context, prompt string) (string, error)
 	}
 }
 

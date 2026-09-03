@@ -167,6 +167,12 @@ func (s *Server) registerTools() {
 		Name:        "register_form_fields",
 		Description: "Daftar medan input borang (issue #254) dengan kontrak ketat: {field_id, type, label, required, validation?, product_id?}. type mesti jenis input JomForm (name|email|phone|textarea|number|select|radio|checkbox|date|time|website|address|consent|hidden|list|repeater|image-choice|captcha). Ganti semua medan sedia ada. Harga kekal dari DB produk (server authority).",
 	}, s.registerFormFields)
+	// Issue #256: AI form builder — MCP parity. The agent types a prompt and
+	// gets a validated form config (blocks + styling) drafted by the LLM.
+	addTool(s, &mcp.Tool{
+		Name:        "generate_form",
+		Description: "Jana konfigurasi borang (blok + gaya) dari prompt semula jadi (issue #256) via deepseek-v4-flash. Output disahkan server-side terhadap jenis blok JomForm; harga produk kekal dari DB (server authority). Semak/edit dulu, kemudian simpan guna upsert_form.",
+	}, s.generateForm)
 	addTool(s, &mcp.Tool{
 		Name:        "publish_form",
 		Description: "Publish borang — live di <space>.jomform.com/<slug> atau custom domain. status=private (dengan password) menjadikannya borang ber-kata laluan; status=draft menarik balik.",

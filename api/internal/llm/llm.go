@@ -114,6 +114,26 @@ func (c *Client) ClassifySpam(ctx context.Context, submission string) (bool, err
 	return strings.HasPrefix(upper, "SPAM"), nil
 }
 
+// GenerateFormConfig asks the model to draft a JomForm form config (blocks +
+// styling) from a natural-language prompt (issue #256). The prompt constrains
+// the model to the known block types and the JSON shape the formgen package
+// parses. The returned text is a draft for the merchant to review/edit before
+// saving — it is validated server-side before it becomes a form.
+func (c *Client) GenerateFormConfig(ctx context.Context, prompt string) (string, error) {
+	body, err := json.Marshal(chatRequest{
+		Model: c.model,
+		Messages: []chatMessage{
+			{Role: "system", Content: "You are a structured JSON generator. Always reply with exactly one valid JSON object and nothing else."},
+			{Role: "user", Content: prompt},
+		},
+		Stream: false,
+	})
+	if err != nil {
+		return "", err
+	}
+	return c.chat(ctx, body)
+}
+
 // chat posts a chat-completion request body and returns the trimmed reply.
 func (c *Client) chat(ctx context.Context, body []byte) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat", bytes.NewReader(body))
