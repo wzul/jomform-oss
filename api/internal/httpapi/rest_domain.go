@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"crypto/tls"
 	"io"
 	"net/http"
 	"strings"
@@ -70,8 +71,20 @@ func probeServesJomForm(domain string) bool {
 // probeServesJomFormURL is the testable core of probeServesJomForm: it fetches
 // url and reports whether it returns 200 with a body containing the JomForm
 // marker (case-insensitive).
+//
+// Issue #268: the probe uses an insecure HTTP client (InsecureSkipVerify) so a
+// custom domain can verify even when its Let's Encrypt cert isn't yet
+// trusted/issued. This resolves the chicken-and-egg where the TLS handshake
+// failed ("unknown CA") before the probe could check the JomForm content. The
+// content check below remains the authoritative verification — skipping cert
+// verification only lets the probe reach the origin.
 func probeServesJomFormURL(url string) bool {
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // probe must reach origin before cert is trusted
+		},
+	}
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return false
