@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/wzul/jomform/api/internal/chip"
+	"github.com/wzul/jomform/api/internal/llm"
 	"github.com/wzul/jomform/api/internal/payments"
 
 	"github.com/wzul/jomform/api/internal/auth"
@@ -218,6 +219,8 @@ func main() {
 			Submissions: submissionsStore,
 			// Issue #180: media library metadata store.
 			Media: mediaStore,
+			// Issue #184: LLM client for auto-generating legal pages.
+			LLM: llm.New(cfg.LLMBaseURL, cfg.LLMModel),
 		}
 		pay.OnPaid = func(ctx context.Context, accountID, event string, payload map[string]any) {
 			httpapi.DispatchWebhooks(ctx, rest, whStore, accountID, event, payload)
@@ -243,6 +246,8 @@ func main() {
 			// Issue #121: allow OAuth access tokens to authenticate /mcp too.
 			OAuth:      deps.OAuth,
 			DecryptKey: decryptKey,
+			// Issue #184: LLM client for auto-generating legal pages.
+			LLM: llm.New(cfg.LLMBaseURL, cfg.LLMModel),
 		}, chip.New(cfg.ChipAPIBaseURL), decryptKey, pay)
 		deps.MCP = mcpSrv
 

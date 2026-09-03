@@ -56,6 +56,12 @@ func (h *PublicHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /{slug}/order", middleware.RateLimit(http.HandlerFunc(h.handleSubmit)))
 	mux.HandleFunc("GET /t/{ref}", h.handleThankYou)
 	mux.HandleFunc("GET /{$}", h.handleSpaceRoot)
+	// Issue #184: hosted legal pages on space subdomains
+	// ({space}.jomform.com/privacy, /terms, /refund). More specific than
+	// GET /{slug}, so they win over the form-slug route.
+	mux.HandleFunc("GET /privacy", h.handlePublicLegalPage)
+	mux.HandleFunc("GET /terms", h.handlePublicLegalPage)
+	mux.HandleFunc("GET /refund", h.handlePublicLegalPage)
 	mux.HandleFunc("GET /{slug}", h.handleSpaceRootForm)
 	// Issue #176: unlock a private form with its access password.
 	mux.HandleFunc("POST /{slug}/unlock", h.handleFormUnlock)

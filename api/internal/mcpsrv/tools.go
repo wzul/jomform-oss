@@ -277,6 +277,20 @@ func (s *Server) registerTools() {
 		Description: "Set tetapan emel space: receipt_subject, receipt_body ({{ref_code}}, {{amount}}, {{items}}, {{form_url}}, {{buyer_name}}, {{date}}), receipt_enabled, notify_merchant, merchant_notify_email, html. Omit medan = kekal.",
 	}, s.setEmailSettings)
 
+	// ── Parity: per-space hosted legal pages (issue #184) ────────────────
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "generate_legal_page",
+		Description: "Jana draf halaman undang-undang (privacy|terms|refund) untuk space melalui LLM (deepseek-v4-flash) dengan template yang diisi butiran perniagaan. Pulangkan draf untuk semakan — belum disimpan sehingga set_legal_page dipanggil.",
+	}, s.generateLegalPage)
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "get_legal_page",
+		Description: "Baca satu halaman undang-undang space (privacy|terms|refund): mode (auto/manual) + kandungan.",
+	}, s.getLegalPage)
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "set_legal_page",
+		Description: "Simpan kandungan halaman undang-undang space (privacy|terms|refund) dengan mode auto|manual. Kandungan dipaparkan di {space}.jomform.com/privacy|terms|refund.",
+	}, s.setLegalPage)
+
 	// ── Parity: event tracking (issue #92) ────────────────────────────────
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "list_events",

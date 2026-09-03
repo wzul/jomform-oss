@@ -8,6 +8,7 @@ import { useSession } from "../../components/session";
 import { formatDate, formatDateTime } from "../../lib/formatDate";
 import { spaceQuery, spaceScope } from "../../lib/space";
 import { MembersTab } from "../../components/MembersTab";
+import { LegalTab } from "../../components/LegalTab";
 
 type ChipStatus = { configured: boolean; mode?: string };
 type KeyRow = { id: string; name: string; scopes: string[] };
@@ -26,12 +27,13 @@ type SocialRow = { provider: string; email?: string; linked_at?: string };
 //   emel      -> Per-space receipt/notification email templates (issue #107)
 //   members   -> Space members management (issue #163)
 //   storefront-> Per-space public-form footer (issue #183)
-type SettingsTab = "chip" | "domains" | "tracking" | "einvoice" | "webhooks" | "mcp" | "social" | "emel" | "members" | "storefront";
+//   legal     -> Per-space hosted legal pages (issue #184)
+type SettingsTab = "chip" | "domains" | "tracking" | "einvoice" | "webhooks" | "mcp" | "social" | "emel" | "members" | "storefront" | "legal";
 
-const TAB_IDS: SettingsTab[] = ["chip", "domains", "tracking", "einvoice", "webhooks", "mcp", "social", "emel", "members", "storefront"];
+const TAB_IDS: SettingsTab[] = ["chip", "domains", "tracking", "einvoice", "webhooks", "mcp", "social", "emel", "members", "storefront", "legal"];
 
 function isSettingsTab(v: string | null): v is SettingsTab {
-  return v === "chip" || v === "domains" || v === "tracking" || v === "einvoice" || v === "webhooks" || v === "mcp" || v === "social" || v === "emel" || v === "members" || v === "storefront";
+  return v === "chip" || v === "domains" || v === "tracking" || v === "einvoice" || v === "webhooks" || v === "mcp" || v === "social" || v === "emel" || v === "members" || v === "storefront" || v === "legal";
 }
 
 // Restore the last active tab. Falls back to "chip".
@@ -128,6 +130,9 @@ export default function Settings() {
   // Issue #163: the active space's id, resolved from the session spaces list
   // + localStorage (same key the Shell uses). Used to scope the Members tab.
   const [activeSpaceId, setActiveSpaceId] = useState("");
+  // Issue #184: the active space's slug, used to build the public legal-page
+  // URLs ({space}.jomform.com/privacy, /terms, /refund).
+  const [activeSpaceSlug, setActiveSpaceSlug] = useState("");
   const [emelPreview, setEmelPreview] = useState(false);
   // Issue #183: per-space public-form footer (Storefront tab).
   const [sfBusinessName, setSfBusinessName] = useState("");
@@ -238,6 +243,7 @@ export default function Settings() {
     if (!active) return;
     setEmelSpaceId(active.id);
     setActiveSpaceId(active.id);
+    setActiveSpaceSlug(active.slug);
     fetch(`/api/rest/spaces/${active.id}/email-settings`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
@@ -1295,6 +1301,10 @@ export default function Settings() {
         {/* ── Members tab: space members management (issue #163) ── */}
         {tab === "members" && isAdmin && (
           <MembersTab spaceId={emelSpaceId || activeSpaceId} />
+        )}
+        {/* ── Legal tab: per-space hosted legal pages (issue #184) ── */}
+        {tab === "legal" && (
+          <LegalTab spaceId={emelSpaceId || activeSpaceId} spaceSlug={activeSpaceSlug} />
         )}
       </main>
     </Shell>

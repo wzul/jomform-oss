@@ -10,6 +10,7 @@ import (
 	"github.com/wzul/jomform/api/internal/chip"
 	"github.com/wzul/jomform/api/internal/cryptoutil"
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/llm"
 	"github.com/wzul/jomform/api/internal/payments"
 )
 
@@ -48,6 +49,11 @@ type Deps struct {
 	OAuth *dbstore.OAuthStore
 	// DecryptKey (ENCRYPTION_KEY hex bytes) enables per-form CHIP override tools.
 	DecryptKey []byte
+	// Issue #184: LLM client for auto-generating legal pages. Nil → the
+	// generate_legal_page tool errors.
+	LLM interface {
+		GenerateLegalPage(ctx context.Context, pageType string, d llm.BusinessDetails) (string, error)
+	}
 }
 
 // Server wraps the MCP *Server with JomForm deps.

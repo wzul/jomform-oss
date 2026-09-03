@@ -85,6 +85,12 @@ type Config struct {
 	// burst (RegistrationLimit-style guard, issue #42 pattern).
 	OAuthDCRRate  float64
 	OAuthDCRBurst float64
+
+	// LLM (issue #184): Ollama Cloud endpoint + model used to auto-generate
+	// per-space legal pages. Empty base URL/model use the defaults
+	// (https://ollama.cloud/api, deepseek-v4-flash:0731).
+	LLMBaseURL string
+	LLMModel   string
 }
 
 // Load reads configuration from the environment and validates it.
@@ -135,6 +141,10 @@ func Load() (*Config, error) {
 		OAuthRefreshTokenTTLSeconds: time.Duration(parsePositiveInt64(os.Getenv("OAUTH_REFRESH_TOKEN_TTL_SECONDS"), 2592000)) * time.Second,
 		OAuthDCRRate:                parseRatio(os.Getenv("OAUTH_DCR_RATE"), 1.0/3600.0),
 		OAuthDCRBurst:               parsePositiveFloat(os.Getenv("OAUTH_DCR_BURST"), 5.0),
+
+		// Issue #184: LLM legal-page generation (Ollama Cloud).
+		LLMBaseURL: os.Getenv("LLM_BASE_URL"),
+		LLMModel:   os.Getenv("LLM_MODEL"),
 	}
 
 	if cfg.DatabaseURL == "" {

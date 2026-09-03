@@ -12,6 +12,7 @@ import (
 	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/httpapi/middleware"
+	"github.com/wzul/jomform/api/internal/llm"
 	"github.com/wzul/jomform/api/internal/payments"
 )
 
@@ -68,6 +69,12 @@ type RESTHandlers struct {
 	// Issue #180: media library metadata store (list/filter/soft-delete).
 	// Nil in bare-mode tests; the media endpoints return empty/503.
 	Media *dbstore.MediaStore
+
+	// Issue #184: LLM client for auto-generating per-space legal pages.
+	// Nil in bare-mode tests; the generate endpoint returns 503.
+	LLM interface {
+		GenerateLegalPage(ctx context.Context, pageType string, d llm.BusinessDetails) (string, error)
+	}
 }
 
 // RegisterRoutes wires REST endpoints.
@@ -128,6 +135,10 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("PUT /v1/spaces/{id}/settings", h.authed(h.saveSpaceSettings))
 	mux.Handle("GET /v1/spaces/{id}/email-settings", h.authed(h.getSpaceEmailSettings))
 	mux.Handle("PUT /v1/spaces/{id}/email-settings", h.authed(h.saveSpaceEmailSettings))
+	// Issue #184: per-space hosted legal pages (privacy/terms/refund).
+	mux.Handle("GET /v1/spaces/{id}/legal", h.authed(h.getSpaceLegalPages))
+	mux.Handle("POST /v1/spaces/{id}/legal/generate", h.authed(h.generateSpaceLegalPage))
+	mux.Handle("PUT /v1/spaces/{id}/legal", h.authed(h.saveSpaceLegalPage))
 	// Issue #161: space membership + invites (admin only).
 	mux.Handle("POST /v1/spaces/{id}/invites", h.authed(h.createInvite))
 	mux.Handle("GET /v1/spaces/{id}/invites", h.authed(h.listInvites))
