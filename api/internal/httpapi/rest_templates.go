@@ -16,14 +16,35 @@ func (h *RESTHandlers) listTemplates(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type row struct {
-		ID    string         `json:"id"`
-		Slug  string         `json:"slug"`
-		Title string         `json:"title"`
-		Theme map[string]any `json:"theme"`
+		ID          string         `json:"id"`
+		Slug        string         `json:"slug"`
+		Title       string         `json:"title"`
+		Description string         `json:"description,omitempty"`
+		Category    string         `json:"category,omitempty"`
+		Mode        string         `json:"mode,omitempty"`
+		Theme       map[string]any `json:"theme"`
 	}
 	out := make([]row, 0, len(forms))
 	for _, f := range forms {
-		out = append(out, row{ID: f.ID, Slug: f.Slug, Title: f.Title, Theme: f.Theme})
+		desc, cat, mode := "", "", ""
+		if c, ok := f.Config["category"].(string); ok {
+			cat = c
+		}
+		if m, ok := f.Config["mode"].(string); ok {
+			mode = m
+		}
+		// Description = the first text block's value (a short intro line).
+		if blocks, ok := f.Config["blocks"].([]any); ok {
+			for _, b := range blocks {
+				if bm, ok := b.(map[string]any); ok && bm["type"] == "text" {
+					if s, ok := bm["value"].(string); ok {
+						desc = s
+						break
+					}
+				}
+			}
+		}
+		out = append(out, row{ID: f.ID, Slug: f.Slug, Title: f.Title, Description: desc, Category: cat, Mode: mode, Theme: f.Theme})
 	}
 	writeJSON(w, http.StatusOK, out)
 }

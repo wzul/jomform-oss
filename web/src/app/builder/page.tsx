@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "../../components/i18n";
 import { spaceQuery } from "../../lib/space";
+import TemplatePicker from "../../components/TemplatePicker";
 
 /* ─── types ──────────────────────────────────────────────────────────────── */
 
@@ -125,6 +126,8 @@ export default function Builder() {
   const [dirty, setDirty] = useState(false);
   const [pubUrl, setPubUrl] = useState("");
   const [loadErr, setLoadErr] = useState("");
+  // Issue #174: template picker on the new-form path (no ?form= param).
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   // Issue #59: mobile (<md) shows ONE section at a time via a tab bar
   // (Add | Canvas | Settings); canvas is the default and the palette is the
@@ -383,6 +386,11 @@ export default function Builder() {
   useEffect(() => {
     load();
     const id = new URLSearchParams(window.location.search).get("form");
+    if (!id) {
+      // Issue #174: new-form path (no ?form=) → show the template picker.
+      setPickerOpen(true);
+      return;
+    }
     if (id) void (async () => {
       const r = await fetch(`/api/rest/forms/${id}${spaceQuery()}`);
       if (!r.ok) return;
@@ -583,6 +591,8 @@ export default function Builder() {
 
   return (
     <main className="min-h-screen bg-[var(--jf-bg)] text-[var(--jf-text)]">
+      {/* Issue #174: template picker on the new-form path (no ?form= param). */}
+      <TemplatePicker open={pickerOpen} onClose={() => setPickerOpen(false)} />
       {/* top bar — issue #59: stacks on mobile. Row1: back + title (flex-1,
           min-w-0, truncate) + Publish. Row2: slug + View + unsaved. Desktop
           (md+) keeps the single flat row; inputs shrink (w-56/w-40 →

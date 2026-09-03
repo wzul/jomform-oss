@@ -7,6 +7,7 @@ import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { spaceQuery } from "../../lib/space";
+import TemplatePicker from "../../components/TemplatePicker";
 
 type FormRow = { id: string; slug: string; title: string; status: string; url: string };
 
@@ -31,6 +32,7 @@ export default function FormsPage() {
   const [checking, setChecking] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   // Issue #163: read_only members see no write actions (new/edit/publish/
   // delete). manage + admin keep full write access.
@@ -104,6 +106,7 @@ export default function FormsPage() {
 
   return (
     <Shell active="forms">
+      <TemplatePicker open={pickerOpen} onClose={() => setPickerOpen(false)} />
       <div className="w-full flex-1 px-6 py-8">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0">
@@ -111,9 +114,12 @@ export default function FormsPage() {
             <p className="max-w-xl text-sm text-[var(--jf-muted)]">{t("forms.subtitle")}</p>
           </div>
           {canWrite && (
-            <Link href="/builder" className="jf-btn-primary shrink-0 self-start sm:self-auto">
+            <button
+              onClick={() => setPickerOpen(true)}
+              className="jf-btn-primary shrink-0 self-start sm:self-auto"
+            >
               {t("forms.new")}
-            </Link>
+            </button>
           )}
         </div>
 

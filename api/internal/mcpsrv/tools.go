@@ -265,6 +265,16 @@ func (s *Server) registerTools() {
 		Description: "Senarai respons (submission) untuk satu borang respons-sahaja (mode 'response', tanpa bayaran). Pulangkan data medan + masa. Tapis form_id, page/limit.",
 	}, s.listFormSubmissions)
 
+	// ── Parity: form template gallery (issue #174) ────────────────────────
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "list_templates",
+		Description: "Senarai template borang sistem (gallery): slug, tajuk, kategori, mode (payment/response). Guna dengan use_template untuk quickstart.",
+	}, s.listTemplatesMCP)
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "use_template",
+		Description: "Clone template borang (slug dari list_templates) menjadi draft baharu dalam akaun anda. Pulangkan form_id + slug untuk dibuka dalam builder.",
+	}, s.useTemplateMCP)
+
 }
 
 // helper: require a write-capable key.

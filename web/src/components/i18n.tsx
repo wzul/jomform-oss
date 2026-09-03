@@ -320,6 +320,16 @@ const DICT = {
   "forms.selectAll": { en: "Select all", ms: "Pilih semua", zh: "全选", ta: "அனைத்தையும் தேர்ந்தெடு", ar: "تحديد الكل" },
   "forms.nSelected": { en: "{n} selected", ms: "{n} dipilih", zh: "已选 {n} 项", ta: "{n} தேர்ந்தெடுக்கப்பட்டது", ar: "تم اختيار {n}" },
   "forms.bulkDeleteConfirm": { en: "Move {n} form(s) to trash? They will be soft-deleted (hidden from the dashboard and public pages) and can be restored later.", ms: "Pindahkan {n} borang ke tong sampah? Ia akan dihapus lembut (tersembunyi dari dashboard & halaman awam) dan boleh dipulihkan kemudian.", zh: "将 {n} 个表单移入回收站？它们将被软删除（从仪表板和公开页面隐藏），之后可以恢复。", ta: "{n} படிவங்களை குப்பைக்கு நகர்த்தவா? அவை மென்-நீக்கம் செய்யப்படும் (டாஷ்போர்டு மற்றும் பொது பக்கங்களில் மறைக்கப்படும்), பின்னர் மீட்டெடுக்கலாம்.", ar: "نقل {n} نموذج (نماذج) إلى سلة المهملات؟ ستُحذف حذفاً ناعماً (تختفي من لوحة التحكم والصفحات العامة) ويمكن استعادتها لاحقاً." },
+  // issue #174: template picker modal
+  "tpl.title": { en: "Explore form templates", ms: "Terokai template borang", zh: "浏览表单模板", ta: "படிவ வார்ப்புருக்களை ஆராயுங்கள்", ar: "استكشف قوالب النماذج" },
+  "tpl.subtitle": { en: "Start from a template or a blank form.", ms: "Mula dari template atau borang kosong.", zh: "从模板或空白表单开始。", ta: "வார்ப்புரு அல்லது வெற்று படிவத்திலிருந்து தொடங்குங்கள்.", ar: "ابدأ من قالب أو نموذج فارغ." },
+  "tpl.blank": { en: "Blank form", ms: "Borang kosong", zh: "空白表单", ta: "வெற்று படிவம்", ar: "نموذج فارغ" },
+  "tpl.blankHint": { en: "Start from scratch", ms: "Mula dari kosong", zh: "从零开始", ta: "புதிதாகத் தொடங்கு", ar: "ابدأ من الصفر" },
+  "tpl.use": { en: "Use template", ms: "Guna template", zh: "使用模板", ta: "வார்ப்புருவைப் பயன்படுத்து", ar: "استخدم القالب" },
+  "tpl.using": { en: "Creating…", ms: "Mencipta…", zh: "创建中…", ta: "உருவாக்குகிறது…", ar: "جارٍ الإنشاء…" },
+  "tpl.useFail": { en: "Failed to use template.", ms: "Gagal guna template.", zh: "使用模板失败。", ta: "வார்ப்புருவைப் பயன்படுத்த முடியவில்லை.", ar: "فشل استخدام القالب." },
+  "tpl.empty": { en: "No templates available.", ms: "Tiada template tersedia.", zh: "暂无可用模板。", ta: "வார்ப்புருக்கள் இல்லை.", ar: "لا توجد قوالب متاحة." },
+  "tpl.close": { en: "Close", ms: "Tutup", zh: "关闭", ta: "மூடு", ar: "إغلاق" },
   // builder common
   "builder.publish": { en: "Publish", ms: "Publish", zh: "发布", ta: "வெளியிடு", ar: "نشر" },
   "builder.savePub": { en: "Save & publish", ms: "Simpan & Publish", zh: "保存并发布", ta: "சேமித்து வெளியிடு", ar: "حفظ ونشر" },
