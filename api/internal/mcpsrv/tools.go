@@ -220,11 +220,11 @@ func (s *Server) registerTools() {
 	}, s.createSpace)
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "get_space_settings",
-		Description: "Baca tetapan storefront satu space: footer, company_reg, privacy/terms URL, menu.",
+		Description: "Baca tetapan storefront satu space: footer, company_reg, privacy/terms/refund URL, contact, menu.",
 	}, s.getSpaceSettings)
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "set_space_settings",
-		Description: "Set tetapan storefront space: footer_text, company_reg, privacy_url/terms_url (mesti https://), menu_json. Omit medan = kekal.",
+		Description: "Set tetapan storefront space: footer_text, company_reg, privacy_url/terms_url/refund_url (mesti https://), contact_phone, contact_address, business_name, menu_json. Omit medan = kekal.",
 	}, s.setSpaceSettings)
 	// Issue #161: space membership + invites (admin only).
 	mcp.AddTool(s.mcp, &mcp.Tool{

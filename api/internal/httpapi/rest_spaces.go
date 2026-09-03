@@ -127,18 +127,22 @@ func (h *RESTHandlers) getSpaceSettings(w http.ResponseWriter, r *http.Request, 
 // saveSpaceSettings: PUT /v1/spaces/{id}/settings
 func (h *RESTHandlers) saveSpaceSettings(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	var in struct {
-		FooterText  string `json:"footer_text"`
-		CompanyReg  string `json:"company_reg"`
-		PrivacyURL  string `json:"privacy_url"`
-		TermsURL    string `json:"terms_url"`
-		MenuJSON    string `json:"menu_json"`
-		DefaultLang string `json:"default_lang"`
+		FooterText     string `json:"footer_text"`
+		CompanyReg     string `json:"company_reg"`
+		PrivacyURL     string `json:"privacy_url"`
+		TermsURL       string `json:"terms_url"`
+		RefundURL      string `json:"refund_url"`
+		ContactPhone   string `json:"contact_phone"`
+		ContactAddress string `json:"contact_address"`
+		BusinessName   string `json:"business_name"`
+		MenuJSON       string `json:"menu_json"`
+		DefaultLang    string `json:"default_lang"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
 		writeErr(w, http.StatusBadRequest, "payload tidak sah")
 		return
 	}
-	for _, u := range []string{in.PrivacyURL, in.TermsURL} {
+	for _, u := range []string{in.PrivacyURL, in.TermsURL, in.RefundURL} {
 		if u != "" && !strings.HasPrefix(u, "https://") {
 			writeErr(w, http.StatusBadRequest, "URL mesti https://")
 			return
@@ -153,13 +157,17 @@ func (h *RESTHandlers) saveSpaceSettings(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	st := &dbstore.SpaceSettings{
-		SpaceID:     s.ID,
-		FooterText:  in.FooterText,
-		CompanyReg:  in.CompanyReg,
-		PrivacyURL:  in.PrivacyURL,
-		TermsURL:    in.TermsURL,
-		MenuJSON:    in.MenuJSON,
-		DefaultLang: in.DefaultLang,
+		SpaceID:        s.ID,
+		FooterText:     in.FooterText,
+		CompanyReg:     in.CompanyReg,
+		PrivacyURL:     in.PrivacyURL,
+		TermsURL:       in.TermsURL,
+		RefundURL:      in.RefundURL,
+		ContactPhone:   in.ContactPhone,
+		ContactAddress: in.ContactAddress,
+		BusinessName:   in.BusinessName,
+		MenuJSON:       in.MenuJSON,
+		DefaultLang:    in.DefaultLang,
 	}
 	if strings.TrimSpace(st.MenuJSON) == "" {
 		st.MenuJSON = "[]"

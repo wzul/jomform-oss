@@ -296,12 +296,16 @@ func (s *Server) getSpaceSettings(
 // ── set_space_settings ───────────────────────────────────────────────────────
 
 type setSpaceSettingsIn struct {
-	SpaceID    string  `json:"space_id" jsonschema:"ID space (dari list_spaces)"`
-	FooterText *string `json:"footer_text,omitempty" jsonschema:"Teks footer storefront (omit = kekal, \"\" = kosongkan)"`
-	CompanyReg *string `json:"company_reg,omitempty" jsonschema:"Nombor pendaftaran syarikat (omit = kekal)"`
-	PrivacyURL *string `json:"privacy_url,omitempty" jsonschema:"URL polisi privasi — mesti https:// (omit = kekal)"`
-	TermsURL   *string `json:"terms_url,omitempty" jsonschema:"URL terma & syarat — mesti https:// (omit = kekal)"`
-	MenuJSON   *string `json:"menu_json,omitempty" jsonschema:"Menu navigasi JSON, cth [{\"label\":\"Home\",\"url\":\"/\"}] (omit = kekal)"`
+	SpaceID        string  `json:"space_id" jsonschema:"ID space (dari list_spaces)"`
+	FooterText     *string `json:"footer_text,omitempty" jsonschema:"Teks footer storefront (omit = kekal, \"\" = kosongkan)"`
+	CompanyReg     *string `json:"company_reg,omitempty" jsonschema:"Nombor pendaftaran syarikat (omit = kekal)"`
+	PrivacyURL     *string `json:"privacy_url,omitempty" jsonschema:"URL polisi privasi — mesti https:// (omit = kekal)"`
+	TermsURL       *string `json:"terms_url,omitempty" jsonschema:"URL terma & syarat — mesti https:// (omit = kekal)"`
+	RefundURL      *string `json:"refund_url,omitempty" jsonschema:"URL polisi bayaran balik — mesti https:// (omit = kekal)"`
+	ContactPhone   *string `json:"contact_phone,omitempty" jsonschema:"Nombor telefon perniagaan untuk footer (omit = kekal)"`
+	ContactAddress *string `json:"contact_address,omitempty" jsonschema:"Alamat perniagaan untuk footer (omit = kekal)"`
+	BusinessName   *string `json:"business_name,omitempty" jsonschema:"Nama perniagaan untuk footer (omit = kekal)"`
+	MenuJSON       *string `json:"menu_json,omitempty" jsonschema:"Menu navigasi JSON, cth [{\"label\":\"Home\",\"url\":\"/\"}] (omit = kekal)"`
 }
 
 func (s *Server) setSpaceSettings(
@@ -315,7 +319,7 @@ func (s *Server) setSpaceSettings(
 		return nil, nil, errors.New("perlu peranan manage atau admin")
 	}
 	// URL fields must be https:// (same rule as the REST handler).
-	for _, u := range []*string{in.PrivacyURL, in.TermsURL} {
+	for _, u := range []*string{in.PrivacyURL, in.TermsURL, in.RefundURL} {
 		if u != nil && *u != "" && !strings.HasPrefix(*u, "https://") {
 			return nil, nil, errors.New("URL mesti https://")
 		}
@@ -343,6 +347,18 @@ func (s *Server) setSpaceSettings(
 	}
 	if in.TermsURL != nil {
 		st.TermsURL = *in.TermsURL
+	}
+	if in.RefundURL != nil {
+		st.RefundURL = *in.RefundURL
+	}
+	if in.ContactPhone != nil {
+		st.ContactPhone = *in.ContactPhone
+	}
+	if in.ContactAddress != nil {
+		st.ContactAddress = *in.ContactAddress
+	}
+	if in.BusinessName != nil {
+		st.BusinessName = *in.BusinessName
 	}
 	if in.MenuJSON != nil {
 		st.MenuJSON = *in.MenuJSON

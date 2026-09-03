@@ -25,12 +25,13 @@ type SocialRow = { provider: string; email?: string; linked_at?: string };
 //   social    -> Social login connectors
 //   emel      -> Per-space receipt/notification email templates (issue #107)
 //   members   -> Space members management (issue #163)
-type SettingsTab = "chip" | "domains" | "tracking" | "einvoice" | "webhooks" | "mcp" | "social" | "emel" | "members";
+//   storefront-> Per-space public-form footer (issue #183)
+type SettingsTab = "chip" | "domains" | "tracking" | "einvoice" | "webhooks" | "mcp" | "social" | "emel" | "members" | "storefront";
 
-const TAB_IDS: SettingsTab[] = ["chip", "domains", "tracking", "einvoice", "webhooks", "mcp", "social", "emel", "members"];
+const TAB_IDS: SettingsTab[] = ["chip", "domains", "tracking", "einvoice", "webhooks", "mcp", "social", "emel", "members", "storefront"];
 
 function isSettingsTab(v: string | null): v is SettingsTab {
-  return v === "chip" || v === "domains" || v === "tracking" || v === "einvoice" || v === "webhooks" || v === "mcp" || v === "social" || v === "emel" || v === "members";
+  return v === "chip" || v === "domains" || v === "tracking" || v === "einvoice" || v === "webhooks" || v === "mcp" || v === "social" || v === "emel" || v === "members" || v === "storefront";
 }
 
 // Restore the last active tab. Falls back to "chip".
@@ -128,6 +129,16 @@ export default function Settings() {
   // + localStorage (same key the Shell uses). Used to scope the Members tab.
   const [activeSpaceId, setActiveSpaceId] = useState("");
   const [emelPreview, setEmelPreview] = useState(false);
+  // Issue #183: per-space public-form footer (Storefront tab).
+  const [sfBusinessName, setSfBusinessName] = useState("");
+  const [sfCompanyReg, setSfCompanyReg] = useState("");
+  const [sfContactPhone, setSfContactPhone] = useState("");
+  const [sfContactAddress, setSfContactAddress] = useState("");
+  const [sfPrivacyUrl, setSfPrivacyUrl] = useState("");
+  const [sfTermsUrl, setSfTermsUrl] = useState("");
+  const [sfRefundUrl, setSfRefundUrl] = useState("");
+  const [sfFooterText, setSfFooterText] = useState("");
+  const [sfSpaceId, setSfSpaceId] = useState("");
 
   // Persist the active tab (issue #68).
   useEffect(() => {
@@ -244,6 +255,36 @@ export default function Settings() {
   useEffect(() => {
     loadEmailSettings();
   }, [loadEmailSettings]);
+
+  // Issue #183: load the per-space storefront/footer settings for the active
+  // space (same resolution as the email settings above).
+  const loadStorefrontSettings = useCallback(() => {
+    const sp = Array.isArray(spaces) ? spaces : [];
+    if (!sp.length) return;
+    let slug = "";
+    try { slug = window.localStorage.getItem("jf_space") || ""; } catch { /* ignore */ }
+    const active = sp.find((x) => x.slug === slug) || sp[0];
+    if (!active) return;
+    setSfSpaceId(active.id);
+    fetch(`/api/rest/spaces/${active.id}/settings`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!d) return;
+        setSfBusinessName(d.business_name || "");
+        setSfCompanyReg(d.company_reg || "");
+        setSfContactPhone(d.contact_phone || "");
+        setSfContactAddress(d.contact_address || "");
+        setSfPrivacyUrl(d.privacy_url || "");
+        setSfTermsUrl(d.terms_url || "");
+        setSfRefundUrl(d.refund_url || "");
+        setSfFooterText(d.footer_text || "");
+      })
+      .catch(() => {});
+  }, [spaces]);
+
+  useEffect(() => {
+    loadStorefrontSettings();
+  }, [loadStorefrontSettings]);
 
   // Issue #48: anonymous visit (401 / session expired) bounces to Landing
   // instead of hanging on a shell or flashing a logged-out settings form.
@@ -431,6 +472,33 @@ export default function Settings() {
     });
     if (r.ok) {
       setMsg(t("set.emelSaved"));
+    } else {
+      const d = await r.json().catch(() => ({}));
+      setErr(d.error || t("set.failedSave"));
+    }
+  }
+
+  // Issue #183: save the per-space public-form footer (Storefront tab).
+  async function saveStorefrontSettings() {
+    if (!sfSpaceId) return;
+    setMsg("");
+    setErr("");
+    const r = await fetch(`/api/rest/spaces/${sfSpaceId}/settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        business_name: sfBusinessName,
+        company_reg: sfCompanyReg,
+        contact_phone: sfContactPhone,
+        contact_address: sfContactAddress,
+        privacy_url: sfPrivacyUrl,
+        terms_url: sfTermsUrl,
+        refund_url: sfRefundUrl,
+        footer_text: sfFooterText,
+      }),
+    });
+    if (r.ok) {
+      setMsg(t("set.sfSaved"));
     } else {
       const d = await r.json().catch(() => ({}));
       setErr(d.error || t("set.failedSave"));
@@ -1131,6 +1199,96 @@ export default function Settings() {
                   <pre className="mt-2 whitespace-pre-wrap rounded bg-white p-3 text-xs text-slate-700">{renderPreview(emelBody)}</pre>
                 </div>
               )}
+            </div>
+          </section>
+        )}
+        {/* ── Storefront tab: per-space public-form footer (issue #183) ── */}
+        {tab === "storefront" && (
+          <section className="jf-card mt-6 p-6">
+            <h2 className="text-lg font-semibold">{t("set.sfTitle")}</h2>
+            <p className="mt-1 max-w-xl text-sm text-slate-400">
+              {t("set.sfHelp")}
+            </p>
+            <div className="mt-4 space-y-3">
+              <div>
+                <label className="text-xs text-slate-500">{t("set.sfBusinessName")}</label>
+                <input
+                  value={sfBusinessName}
+                  onChange={(e) => setSfBusinessName(e.target.value)}
+                  className="jf-input mt-1 max-w-xl"
+                  placeholder="Acme Sdn Bhd"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500">{t("set.sfCompanyReg")}</label>
+                <input
+                  value={sfCompanyReg}
+                  onChange={(e) => setSfCompanyReg(e.target.value)}
+                  className="jf-input mt-1 max-w-xl"
+                  placeholder="202001012345"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500">{t("set.sfContactPhone")}</label>
+                <input
+                  value={sfContactPhone}
+                  onChange={(e) => setSfContactPhone(e.target.value)}
+                  className="jf-input mt-1 max-w-xl"
+                  placeholder="+60 12 345 6789"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500">{t("set.sfContactAddress")}</label>
+                <textarea
+                  value={sfContactAddress}
+                  onChange={(e) => setSfContactAddress(e.target.value)}
+                  rows={2}
+                  className="jf-input mt-1 max-w-xl"
+                  placeholder="1 Jalan Test, Kuala Lumpur"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500">{t("set.sfPrivacyUrl")}</label>
+                <input
+                  value={sfPrivacyUrl}
+                  onChange={(e) => setSfPrivacyUrl(e.target.value)}
+                  type="url"
+                  className="jf-input mt-1 max-w-xl"
+                  placeholder="https://…/privacy"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500">{t("set.sfTermsUrl")}</label>
+                <input
+                  value={sfTermsUrl}
+                  onChange={(e) => setSfTermsUrl(e.target.value)}
+                  type="url"
+                  className="jf-input mt-1 max-w-xl"
+                  placeholder="https://…/terms"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500">{t("set.sfRefundUrl")}</label>
+                <input
+                  value={sfRefundUrl}
+                  onChange={(e) => setSfRefundUrl(e.target.value)}
+                  type="url"
+                  className="jf-input mt-1 max-w-xl"
+                  placeholder="https://…/refund"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500">{t("set.sfFooterText")}</label>
+                <textarea
+                  value={sfFooterText}
+                  onChange={(e) => setSfFooterText(e.target.value)}
+                  rows={2}
+                  className="jf-input mt-1 max-w-xl"
+                />
+              </div>
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                <button onClick={saveStorefrontSettings} className="jf-btn-primary">{t("set.sfSave")}</button>
+              </div>
             </div>
           </section>
         )}

@@ -474,6 +474,14 @@ var formTmpl = template.Must(template.New("form").Funcs(formFuncs).Parse(`<!doct
   button:hover { filter:brightness(1.1); }
   .total { display:flex; justify-content:space-between; padding-top:12px;
            border-top:1px dashed #e6e8ec; margin-top:6px; font-weight:600; }
+  /* Issue #183: optional per-space footer. */
+  .jf-footer { max-width:460px; width:100%; margin:16px auto 0; padding:0 8px;
+               color:#6b7280; font-size:12px; line-height:1.6; text-align:center; }
+  .jf-fbiz { font-weight:600; color:#374151; }
+  .jf-ftext { margin-top:4px; }
+  .jf-flinks { display:flex; gap:14px; justify-content:center; flex-wrap:wrap; margin-top:6px; }
+  .jf-flinks a { color:#4f46e5; text-decoration:none; }
+  .jf-flinks a:hover { text-decoration:underline; }
 </style>
 </head>
 <body>
@@ -494,6 +502,17 @@ var formTmpl = template.Must(template.New("form").Funcs(formFuncs).Parse(`<!doct
     <div class="total"><span>Jumlah</span><span id="total">RM0.00</span></div>
     <button type="submit">Teruskan ke Pembayaran</button>
   </form>
+  {{if .Footer.HasFooter}}<footer class="jf-footer">
+    {{if .Footer.BusinessName}}<div class="jf-fbiz">{{.Footer.BusinessName}}{{if .Footer.CompanyReg}} · {{.Footer.CompanyReg}}{{end}}</div>{{end}}
+    {{if .Footer.ContactPhone}}<div class="jf-frow">{{.Footer.ContactPhone}}</div>{{end}}
+    {{if .Footer.ContactAddress}}<div class="jf-frow">{{.Footer.ContactAddress}}</div>{{end}}
+    {{if .Footer.FooterText}}<div class="jf-ftext">{{.Footer.FooterText}}</div>{{end}}
+    {{if or .Footer.PrivacyURL .Footer.TermsURL .Footer.RefundURL}}<div class="jf-flinks">
+      {{if .Footer.PrivacyURL}}<a href="{{.Footer.PrivacyURL}}" target="_blank" rel="noopener">Polisi Privasi</a>{{end}}
+      {{if .Footer.TermsURL}}<a href="{{.Footer.TermsURL}}" target="_blank" rel="noopener">Terma &amp; Syarat</a>{{end}}
+      {{if .Footer.RefundURL}}<a href="{{.Footer.RefundURL}}" target="_blank" rel="noopener">Polisi Bayaran Balik</a>{{end}}
+    </div>{{end}}
+  </footer>{{end}}
 <script>
 const boxes = document.querySelectorAll('.p');
 function update() {
@@ -581,10 +600,13 @@ func (h *PublicHandlers) renderLegacy(w http.ResponseWriter, r *http.Request, f 
 	type view struct {
 		Slug, Title, Description string
 		Products                 []tmplProduct
+		// Issue #183: optional per-space footer.
+		Footer footerInfo
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := formTmpl.Execute(w, view{
 		Slug: f.Slug, Title: f.Title, Description: cfg.Description, Products: prods,
+		Footer: h.spaceFooter(r.Context(), f),
 	}); err != nil {
 		slog.Error("form_render", "err", err)
 	}
@@ -642,6 +664,51 @@ func accountSubdomain(host string) string {
 		return ""
 	}
 	return strings.ToLower(sub)
+}
+
+// footerInfo is the optional per-space public-form footer (issue #183). Only
+// fields the merchant set are populated; HasFooter is false when nothing is
+// set, so the renderer emits no footer at all (preserving #80's clean default).
+type footerInfo struct {
+	HasFooter      bool
+	BusinessName   string
+	CompanyReg     string
+	ContactPhone   string
+	ContactAddress string
+	PrivacyURL     string
+	TermsURL       string
+	RefundURL      string
+	FooterText     string
+}
+
+// spaceFooter resolves the optional footer for a form's space. Returns a
+// footerInfo with HasFooter=false when the space is unresolvable or the
+// merchant set nothing.
+func (h *PublicHandlers) spaceFooter(ctx context.Context, f *dbstore.Form) footerInfo {
+	var fi footerInfo
+	if h.Spaces == nil {
+		return fi
+	}
+	spaceID, err := h.Spaces.SpaceIDByAccount(ctx, f.AccountID)
+	if err != nil || spaceID == "" {
+		return fi
+	}
+	st, err := h.Spaces.Settings(ctx, spaceID)
+	if err != nil {
+		return fi
+	}
+	fi.BusinessName = st.BusinessName
+	fi.CompanyReg = st.CompanyReg
+	fi.ContactPhone = st.ContactPhone
+	fi.ContactAddress = st.ContactAddress
+	fi.PrivacyURL = st.PrivacyURL
+	fi.TermsURL = st.TermsURL
+	fi.RefundURL = st.RefundURL
+	fi.FooterText = st.FooterText
+	fi.HasFooter = fi.BusinessName != "" || fi.CompanyReg != "" || fi.ContactPhone != "" ||
+		fi.ContactAddress != "" || fi.PrivacyURL != "" || fi.TermsURL != "" || fi.RefundURL != "" ||
+		fi.FooterText != ""
+	return fi
 }
 
 // serveForm renders a resolved form (blocks or legacy) and logs unknown

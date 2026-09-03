@@ -169,6 +169,8 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 		"ThemePrimary": themePrimary, "ThemeBg": themeBg, "LogoURL": f.LogoURL,
 		"Lang": ls.Lang,
 		"Ls":   ls,
+		// Issue #183: optional per-space footer.
+		"Footer": h.spaceFooter(r.Context(), f),
 	}); err != nil {
 		slog.Error("form_render_blocks", "err", err)
 	}
@@ -252,6 +254,14 @@ var blockTmpl = template.Must(template.New("blocks").
   button { width:100%; padding:12px; border:0; border-radius:10px; font-size:15px; font-weight:600;
            color:#fff; cursor:pointer; margin-top:12px; background:#5e6ad2; }
   button:hover { background:#828fff; }
+  /* Issue #183: optional per-space footer. */
+  .jf-footer { max-width:480px; width:100%; margin:16px auto 0; padding:0 8px;
+               color:#6b7280; font-size:12px; line-height:1.6; text-align:center; }
+  .jf-fbiz { font-weight:600; color:#374151; }
+  .jf-ftext { margin-top:4px; }
+  .jf-flinks { display:flex; gap:14px; justify-content:center; flex-wrap:wrap; margin-top:6px; }
+  .jf-flinks a { color:#4f46e5; text-decoration:none; }
+  .jf-flinks a:hover { text-decoration:underline; }
 </style></head><body>
 <form class="card" id="of" data-slug="{{.Slug}}">
   <h1>{{.Title}}</h1>
@@ -292,6 +302,17 @@ var blockTmpl = template.Must(template.New("blocks").
   <div class="total"><span>{{$.Ls.Total}}</span><span id="total">RM0.00</span></div>
   <button type="submit" form="of">{{$.Ls.Submit}}</button>
 </form>
+{{if .Footer.HasFooter}}<footer class="jf-footer">
+  {{if .Footer.BusinessName}}<div class="jf-fbiz">{{.Footer.BusinessName}}{{if .Footer.CompanyReg}} · {{.Footer.CompanyReg}}{{end}}</div>{{end}}
+  {{if .Footer.ContactPhone}}<div class="jf-frow">{{.Footer.ContactPhone}}</div>{{end}}
+  {{if .Footer.ContactAddress}}<div class="jf-frow">{{.Footer.ContactAddress}}</div>{{end}}
+  {{if .Footer.FooterText}}<div class="jf-ftext">{{.Footer.FooterText}}</div>{{end}}
+  {{if or .Footer.PrivacyURL .Footer.TermsURL .Footer.RefundURL}}<div class="jf-flinks">
+    {{if .Footer.PrivacyURL}}<a href="{{.Footer.PrivacyURL}}" target="_blank" rel="noopener">{{$.Ls.PrivacyLabel}}</a>{{end}}
+    {{if .Footer.TermsURL}}<a href="{{.Footer.TermsURL}}" target="_blank" rel="noopener">{{$.Ls.TermsLabel}}</a>{{end}}
+    {{if .Footer.RefundURL}}<a href="{{.Footer.RefundURL}}" target="_blank" rel="noopener">{{$.Ls.RefundLabel}}</a>{{end}}
+  </div>{{end}}
+</footer>{{end}}
 <script>
 (function(){
   var boxes=document.querySelectorAll('.p');
@@ -521,6 +542,8 @@ func (h *PublicHandlers) renderResponseForm(w http.ResponseWriter, r *http.Reque
 		"ThemePrimary": themePrimary, "ThemeBg": themeBg, "LogoURL": f.LogoURL,
 		"Lang": ls.Lang,
 		"Ls":   ls,
+		// Issue #183: optional per-space footer.
+		"Footer": h.spaceFooter(r.Context(), f),
 	}); err != nil {
 		slog.Error("form_render_response", "err", err)
 	}
@@ -563,6 +586,14 @@ var responseTmpl = template.Must(template.New("response").
   button { width:100%; padding:12px; border:0; border-radius:10px; font-size:15px; font-weight:600;
            color:#fff; cursor:pointer; margin-top:12px; background:#5e6ad2; }
   button:hover { background:#828fff; }
+  /* Issue #183: optional per-space footer. */
+  .jf-footer { max-width:480px; width:100%; margin:16px auto 0; padding:0 8px;
+               color:#6b7280; font-size:12px; line-height:1.6; text-align:center; }
+  .jf-fbiz { font-weight:600; color:#374151; }
+  .jf-ftext { margin-top:4px; }
+  .jf-flinks { display:flex; gap:14px; justify-content:center; flex-wrap:wrap; margin-top:6px; }
+  .jf-flinks a { color:#4f46e5; text-decoration:none; }
+  .jf-flinks a:hover { text-decoration:underline; }
   .ok { text-align:center; padding:24px 0; }
   .ok h1 { color:#10b981; }
   .ok p { color:#6b7280; font-size:14px; }
@@ -593,6 +624,17 @@ var responseTmpl = template.Must(template.New("response").
 {{end}}
   <button type="submit">{{$.Ls.SubmitResponse}}</button>
 </form>
+{{if .Footer.HasFooter}}<footer class="jf-footer">
+  {{if .Footer.BusinessName}}<div class="jf-fbiz">{{.Footer.BusinessName}}{{if .Footer.CompanyReg}} · {{.Footer.CompanyReg}}{{end}}</div>{{end}}
+  {{if .Footer.ContactPhone}}<div class="jf-frow">{{.Footer.ContactPhone}}</div>{{end}}
+  {{if .Footer.ContactAddress}}<div class="jf-frow">{{.Footer.ContactAddress}}</div>{{end}}
+  {{if .Footer.FooterText}}<div class="jf-ftext">{{.Footer.FooterText}}</div>{{end}}
+  {{if or .Footer.PrivacyURL .Footer.TermsURL .Footer.RefundURL}}<div class="jf-flinks">
+    {{if .Footer.PrivacyURL}}<a href="{{.Footer.PrivacyURL}}" target="_blank" rel="noopener">{{$.Ls.PrivacyLabel}}</a>{{end}}
+    {{if .Footer.TermsURL}}<a href="{{.Footer.TermsURL}}" target="_blank" rel="noopener">{{$.Ls.TermsLabel}}</a>{{end}}
+    {{if .Footer.RefundURL}}<a href="{{.Footer.RefundURL}}" target="_blank" rel="noopener">{{$.Ls.RefundLabel}}</a>{{end}}
+  </div>{{end}}
+</footer>{{end}}
 <script>
 (function(){
   var form=document.getElementById('of');

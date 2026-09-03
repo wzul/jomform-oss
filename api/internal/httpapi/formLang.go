@@ -34,6 +34,10 @@ type langStrings struct {
 	// Issue #173: pricing/choice field strings.
 	SelectOption   string
 	SelectShipping string
+	// Issue #183: optional public-form footer link labels.
+	PrivacyLabel string
+	TermsLabel   string
+	RefundLabel  string
 }
 
 // formLangs maps every supported language code to its buyer-facing strings.
@@ -47,6 +51,7 @@ var formLangs = map[string]langStrings{
 		SelectVariation: "Select an option", SelectVariationAlert: "Please choose a variation for each product", InStock: "in stock",
 		SubmitResponse: "Submit", ThankYou: "Thank you!", ResponseReceived: "Your response has been received.",
 		SelectOption: "Select an option", SelectShipping: "Select shipping",
+		PrivacyLabel: "Privacy Policy", TermsLabel: "Terms of Service", RefundLabel: "Refund Policy",
 	},
 	"ms": {
 		Lang: "ms", EmailLabel: "Emel", CouponLabel: "Kod kupon",
@@ -55,6 +60,7 @@ var formLangs = map[string]langStrings{
 		SelectVariation: "Pilih variasi", SelectVariationAlert: "Sila pilih variasi untuk setiap produk", InStock: "stok",
 		SubmitResponse: "Hantar", ThankYou: "Terima kasih!", ResponseReceived: "Respons anda telah diterima.",
 		SelectOption: "Pilih pilihan", SelectShipping: "Pilih penghantaran",
+		PrivacyLabel: "Polisi Privasi", TermsLabel: "Terma & Syarat", RefundLabel: "Polisi Bayaran Balik",
 	},
 	"zh": {
 		Lang: "zh", EmailLabel: "电子邮件", CouponLabel: "优惠券",
@@ -63,6 +69,7 @@ var formLangs = map[string]langStrings{
 		SelectVariation: "请选择规格", SelectVariationAlert: "请为每件商品选择规格", InStock: "有货",
 		SubmitResponse: "提交", ThankYou: "谢谢！", ResponseReceived: "您的回复已收到。",
 		SelectOption: "请选择", SelectShipping: "选择配送方式",
+		PrivacyLabel: "隐私政策", TermsLabel: "服务条款", RefundLabel: "退款政策",
 	},
 	"ta": {
 		Lang: "ta", EmailLabel: "மின்னஞ்சல்", CouponLabel: "கூப்பன்",
@@ -71,6 +78,7 @@ var formLangs = map[string]langStrings{
 		SelectVariation: "மாறுபாட்டைத் தேர்ந்தெடுக்கவும்", SelectVariationAlert: "ஒவ்வொரு பொருளுக்கும் மாறுபாட்டைத் தேர்ந்தெடுக்கவும்", InStock: "கையிருப்பு",
 		SubmitResponse: "சமர்ப்பி", ThankYou: "நன்றி!", ResponseReceived: "உங்கள் பதில் பெறப்பட்டது.",
 		SelectOption: "ஒரு விருப்பத்தைத் தேர்ந்தெடுக்கவும்", SelectShipping: "ஷிப்பிங்கைத் தேர்ந்தெடுக்கவும்",
+		PrivacyLabel: "தனியுரிமைக் கொள்கை", TermsLabel: "சேவை விதிமுறைகள்", RefundLabel: "பணத்திருப்புக் கொள்கை",
 	},
 	"ar": {
 		Lang: "ar", EmailLabel: "البريد الإلكتروني", CouponLabel: "قسيمة",
@@ -79,6 +87,7 @@ var formLangs = map[string]langStrings{
 		SelectVariation: "اختر خيارًا", SelectVariationAlert: "يرجى اختيار خيار لكل منتج", InStock: "متوفر",
 		SubmitResponse: "إرسال", ThankYou: "شكراً لك!", ResponseReceived: "تم استلام ردك.",
 		SelectOption: "اختر خيارًا", SelectShipping: "اختر الشحن",
+		PrivacyLabel: "سياسة الخصوصية", TermsLabel: "شروط الخدمة", RefundLabel: "سياسة الاسترداد",
 	},
 }
 
