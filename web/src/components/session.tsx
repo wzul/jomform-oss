@@ -139,6 +139,21 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     setSpace(spaceScope());
   }, []);
 
+  // Issue #170: keep the active space REACTIVE to switches. Shell.switchSpace
+  // persists `jf_space` and dispatches a "jf:space-changed" event; the
+  // `storage` event covers cross-tab changes. Updating `space` here re-runs
+  // the space-keyed bundle fetch and lets data pages key their load() on it,
+  // so switching spaces re-fetches each page's list for the new space.
+  useEffect(() => {
+    const sync = () => setSpace(spaceScope());
+    window.addEventListener("jf:space-changed", sync);
+    window.addEventListener("storage", sync);
+    return () => {
+      window.removeEventListener("jf:space-changed", sync);
+      window.removeEventListener("storage", sync);
+    };
+  }, []);
+
   useEffect(() => {
     setMounted(true);
     if (!space) return;

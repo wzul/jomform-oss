@@ -26,7 +26,7 @@ const spaceHost =
 
 export default function FormsPage() {
   const { t } = useI18n();
-  const { anon, role } = useSession();
+  const { anon, role, space } = useSession();
   const [forms, setForms] = useState<FormRow[]>([]);
   const [checking, setChecking] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -45,9 +45,12 @@ export default function FormsPage() {
     setChecking(false);
   }, []);
 
+  // Issue #170: re-fetch the list whenever the active space changes (keyed on
+  // useSession().space), so switching spaces shows the new space's forms
+  // without a manual refresh.
   useEffect(() => {
     load();
-  }, [load]);
+  }, [load, space]);
 
   // Auth bounce via router (client transition), not a full document reload.
   const router = useRouter();

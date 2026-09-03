@@ -32,7 +32,7 @@ const money = (sen: number) =>
 
 export default function Subscriptions() {
   const { t } = useI18n();
-  const { anon, role } = useSession();
+  const { anon, role, space } = useSession();
   const router = useRouter();
 
   // Issue #163: read_only members see no write actions (cancel/update card).
@@ -70,8 +70,10 @@ export default function Subscriptions() {
   useEffect(() => {
     setPage(1);
     load("all", 1);
+    // Issue #170: `space` re-runs load when the active space changes so the
+    // list re-fetches for the new space without a manual refresh.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [space]);
 
   useEffect(() => {
     load(statusFilter, page);

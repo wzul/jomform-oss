@@ -103,6 +103,10 @@ export function Shell({
   function switchSpace(slug: string) {
     setSpace(slug);
     localStorage.setItem("jf_space", slug);
+    // Issue #170: notify the session context (and any data page keyed on
+    // useSession().space) that the active space changed, so page lists
+    // re-fetch for the new space without a manual refresh.
+    window.dispatchEvent(new Event("jf:space-changed"));
     // Issue #158: the session bundle is now SPACE-KEYED (see session.tsx), so
     // switching spaces re-fetches the bundle for the newly selected space —
     // no hard reload needed. reload() drops the cached bundle for the new

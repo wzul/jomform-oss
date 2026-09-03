@@ -59,7 +59,7 @@ export default function Dashboard() {
   // Issue #29: me + landing data (products, summary, sales, analytics) all
   // come from the single dashboard-bundle round-trip fetched once per
   // session — the 914ms me→5-fetch waterfall is gone.
-  const { bundle, anon, role } = useSession();
+  const { bundle, anon, role, space } = useSession();
   // Issue #163: read_only members see no write actions (confirm sale).
   const canWrite = role !== "read_only";
   const [products, setProducts] = useState<Product[]>([]);
@@ -92,6 +92,9 @@ export default function Dashboard() {
 
   // Adopt the bundle landing sections as soon as the session context has
   // them (immediately on later navigations — cached).
+  // Issue #170: `space` re-runs this when the active space changes so the
+  // landing sections (products, summary, sales, analytics) re-fetch for the
+  // new space without a manual refresh.
   useEffect(() => {
     if (!bundle) return;
     setProducts(Array.isArray(bundle.products) ? (bundle.products as Product[]) : []);
@@ -108,7 +111,7 @@ export default function Dashboard() {
       loadSales(1);
     }
     setReady(true);
-  }, [bundle, loadSales]);
+  }, [bundle, loadSales, space]);
 
   const salesTotalPages = Math.max(1, Math.ceil(salesTotal / PAGE_SIZE));
 

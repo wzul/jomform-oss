@@ -80,7 +80,7 @@ const saleBadge = (s: string) =>
 
 function SalesPageInner() {
   const { t } = useI18n();
-  const { anon, role } = useSession();
+  const { anon, role, space } = useSession();
   const router = useRouter();
   const search = useSearchParams();
   const deepForm = search.get("form") || "";
@@ -127,11 +127,11 @@ function SalesPageInner() {
     setForms(Array.isArray(f) ? f : []);
   }, []);
 
-  // Load forms on mount.
+  // Load forms on mount (and re-fetch when the active space changes, #170).
   useEffect(() => {
     void loadForms();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [space]);
 
   // Reset pagination whenever filters change.
   useEffect(() => {
@@ -178,9 +178,11 @@ function SalesPageInner() {
   }, [deepForm]);
 
   // Fetch whenever filters/page change (server-side paging + filtering).
+  // Issue #170: `space` re-runs loadSales when the active space changes so the
+  // sales list re-fetches for the new space without a manual refresh.
   useEffect(() => {
     void loadSales(page);
-  }, [page, loadSales]);
+  }, [page, loadSales, space]);
 
   // Auth bounce via router (client transition), not a full reload.
   useEffect(() => {
