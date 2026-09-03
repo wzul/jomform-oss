@@ -264,6 +264,9 @@ type upsertFormIn struct {
 	Slug   string         `json:"slug" jsonschema:"Slug URL unik"`
 	Title  string         `json:"title" jsonschema:"Tajuk borang"`
 	Config map[string]any `json:"config,omitempty" jsonschema:"Block config — ambil contoh dari get_form"`
+	// Issue #254: optional custom styling/theme (colors, fonts, logo, layout,
+	// spacing, custom_css). Omit to leave unchanged; pass {} to clear.
+	Theme map[string]any `json:"theme,omitempty" jsonschema:"Gaya/branding tersuai (pilihan): primary, background, text, card_background, card_border_radius, font_family, logo_url, layout, spacing, custom_css"`
 	// Issue #207: form restrictions (schedule + entry limit). Omit to leave
 	// unchanged; pass explicit nulls to clear.
 	StartAt        *time.Time `json:"start_at,omitempty" jsonschema:"Masa mula jadual (kosong = tiada)"`
@@ -311,7 +314,7 @@ func (s *Server) upsertForm(
 			Slug:      slug,
 			Title:     in.Title,
 			Config:    orEmptyMap(in.Config),
-			Theme:     orEmptyMap(nil), // never NULL: theme is NOT NULL
+			Theme:     orEmptyMap(in.Theme), // never NULL: theme is NOT NULL
 			Status:    dbstore.FormStatusDraft,
 		}
 		if err := s.deps.Forms.Create(ctx, f); err != nil {
@@ -357,7 +360,7 @@ func (s *Server) upsertForm(
 }
 	// Update store treats nil maps as "leave unchanged", so an omitted
 	// config (and the nil theme below) keep the stored values intact.
-	if err := s.deps.Forms.Update(ctx, acc, in.FormID, in.Title, in.Config, nil); err != nil {
+	if err := s.deps.Forms.Update(ctx, acc, in.FormID, in.Title, in.Config, in.Theme); err != nil {
 		return nil, nil, err
 	}
 	// Apply restrictions on update when provided.

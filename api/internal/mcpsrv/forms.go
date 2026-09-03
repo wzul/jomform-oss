@@ -9,6 +9,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/formfields"
 )
 
 type formOut struct {
@@ -31,6 +32,9 @@ type formDetailOut struct {
 	IsPrivate bool           `json:"is_private"`
 	URL       string         `json:"url,omitempty"`
 	Config    map[string]any `json:"config,omitempty"`
+	// Issue #254: custom styling/theme + registered input fields (MCP parity).
+	Theme            map[string]any   `json:"theme,omitempty"`
+	RegisteredFields []formfields.Field `json:"registered_fields,omitempty"`
 }
 
 func (s *Server) listForms(
@@ -83,6 +87,7 @@ func (s *Server) getForm(
 			out := formDetailOut{
 				ID: f.ID, Slug: f.Slug, Title: f.Title, Status: f.Status,
 				IsPrivate: f.Status == dbstore.FormStatusPrivate, Config: f.Config,
+				Theme: f.Theme, RegisteredFields: formfields.FromConfig(f.Config),
 			}
 			if f.Status == dbstore.FormStatusPublished {
 				out.URL = s.formPublicURLForAccount(ctx, acc, f.Slug)

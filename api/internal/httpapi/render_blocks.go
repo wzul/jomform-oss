@@ -162,6 +162,7 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 		}
 	}
 	themePrimary, themeBg := "", ""
+	themeText, themeCardBg, themeRadius, themeFont, themeLayout, themeSpacing, themeCSS := "", "", "", "", "", "", ""
 	if f.Theme != nil {
 		if v, ok := f.Theme["primary"].(string); ok {
 			themePrimary = template.HTMLEscapeString(v)
@@ -169,12 +170,37 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 		if v, ok := f.Theme["background"].(string); ok {
 			themeBg = template.HTMLEscapeString(v)
 		}
+		if v, ok := f.Theme["text"].(string); ok {
+			themeText = template.HTMLEscapeString(v)
+		}
+		if v, ok := f.Theme["card_background"].(string); ok {
+			themeCardBg = template.HTMLEscapeString(v)
+		}
+		if v, ok := f.Theme["card_border_radius"].(string); ok {
+			themeRadius = template.HTMLEscapeString(v)
+		}
+		if v, ok := f.Theme["font_family"].(string); ok {
+			themeFont = template.HTMLEscapeString(v)
+		}
+		if v, ok := f.Theme["layout"].(string); ok {
+			themeLayout = template.HTMLEscapeString(v)
+		}
+		if v, ok := f.Theme["spacing"].(string); ok {
+			themeSpacing = template.HTMLEscapeString(v)
+		}
+		if v, ok := f.Theme["custom_css"].(string); ok {
+			// HTML-escape so a </style> cannot break out of the style block.
+			themeCSS = template.HTMLEscapeString(v)
+		}
 	}
 	ls := h.effectiveLangStrings(r.Context(), f)
 	if err := blockTmpl.Execute(w, map[string]any{
 		"Slug": f.Slug, "Title": f.Title, "Blocks": blocks,
 		"TrackHead":    headInjection(globalTr, formTrackingHead(f)),
 		"ThemePrimary": themePrimary, "ThemeBg": themeBg, "LogoURL": f.LogoURL,
+		"ThemeText": themeText, "ThemeCardBg": themeCardBg, "ThemeRadius": themeRadius,
+		"ThemeFont": themeFont, "ThemeLayout": themeLayout, "ThemeSpacing": themeSpacing,
+		"ThemeCSS": template.HTML(themeCSS),
 		"Lang": ls.Lang,
 		"Ls":   ls,
 		// Issue #183: optional per-space footer.
@@ -200,6 +226,15 @@ var blockTmpl = template.Must(template.New("blocks").
 <style>
   {{if .ThemePrimary}}:root { --jf-primary: {{.ThemePrimary}}; }{{end}}
   {{if .ThemeBg}}body { background: {{.ThemeBg}}; }{{end}}
+  {{if .ThemeText}}body { color: {{.ThemeText}}; }{{end}}
+  {{if .ThemeFont}}body { font-family: {{.ThemeFont}}; }{{end}}
+  {{if .ThemeCardBg}}.card { background: {{.ThemeCardBg}}; }{{end}}
+  {{if .ThemeRadius}}.card { border-radius: {{.ThemeRadius}}; }{{end}}
+  {{if .ThemeLayout}}body { justify-content: {{if eq .ThemeLayout "full_width"}}flex-start{{else}}center{{end}}; }{{end}}
+  {{if .ThemeLayout}}body { padding: {{if eq .ThemeLayout "full_width"}}0{{else}}24px{{end}}; }{{end}}
+  {{if .ThemeLayout}}.card { max-width: {{if eq .ThemeLayout "full_width"}}100%{{else}}480px{{end}}; }{{end}}
+  {{if .ThemeSpacing}}.card { padding: {{if eq .ThemeSpacing "compact"}}20px{{else if eq .ThemeSpacing "spacious"}}48px{{else}}32px{{end}}; }{{end}}
+  {{if .ThemeCSS}}{{.ThemeCSS}}{{end}}
 </style>
 <style>
   :root { color-scheme: dark; }
@@ -546,6 +581,7 @@ func (h *PublicHandlers) renderResponseForm(w http.ResponseWriter, r *http.Reque
 		}
 	}
 	themePrimary, themeBg := "", ""
+	themeText, themeCardBg, themeRadius, themeFont, themeLayout, themeSpacing, themeCSS := "", "", "", "", "", "", ""
 	if f.Theme != nil {
 		if v, ok := f.Theme["primary"].(string); ok {
 			themePrimary = template.HTMLEscapeString(v)
@@ -553,12 +589,37 @@ func (h *PublicHandlers) renderResponseForm(w http.ResponseWriter, r *http.Reque
 		if v, ok := f.Theme["background"].(string); ok {
 			themeBg = template.HTMLEscapeString(v)
 		}
+		if v, ok := f.Theme["text"].(string); ok {
+			themeText = template.HTMLEscapeString(v)
+		}
+		if v, ok := f.Theme["card_background"].(string); ok {
+			themeCardBg = template.HTMLEscapeString(v)
+		}
+		if v, ok := f.Theme["card_border_radius"].(string); ok {
+			themeRadius = template.HTMLEscapeString(v)
+		}
+		if v, ok := f.Theme["font_family"].(string); ok {
+			themeFont = template.HTMLEscapeString(v)
+		}
+		if v, ok := f.Theme["layout"].(string); ok {
+			themeLayout = template.HTMLEscapeString(v)
+		}
+		if v, ok := f.Theme["spacing"].(string); ok {
+			themeSpacing = template.HTMLEscapeString(v)
+		}
+		if v, ok := f.Theme["custom_css"].(string); ok {
+			// HTML-escape so a </style> cannot break out of the style block.
+			themeCSS = template.HTMLEscapeString(v)
+		}
 	}
 	ls := h.effectiveLangStrings(r.Context(), f)
 	if err := responseTmpl.Execute(w, map[string]any{
 		"Slug": f.Slug, "Title": f.Title, "Fields": fields,
 		"TrackHead":    headInjection(globalTr, formTrackingHead(f)),
 		"ThemePrimary": themePrimary, "ThemeBg": themeBg, "LogoURL": f.LogoURL,
+		"ThemeText": themeText, "ThemeCardBg": themeCardBg, "ThemeRadius": themeRadius,
+		"ThemeFont": themeFont, "ThemeLayout": themeLayout, "ThemeSpacing": themeSpacing,
+		"ThemeCSS": template.HTML(themeCSS),
 		"Lang": ls.Lang,
 		"Ls":   ls,
 		// Issue #183: optional per-space footer.
@@ -582,6 +643,15 @@ var responseTmpl = template.Must(template.New("response").
 <style>
   {{if .ThemePrimary}}:root { --jf-primary: {{.ThemePrimary}}; }{{end}}
   {{if .ThemeBg}}body { background: {{.ThemeBg}}; }{{end}}
+  {{if .ThemeText}}body { color: {{.ThemeText}}; }{{end}}
+  {{if .ThemeFont}}body { font-family: {{.ThemeFont}}; }{{end}}
+  {{if .ThemeCardBg}}.card { background: {{.ThemeCardBg}}; }{{end}}
+  {{if .ThemeRadius}}.card { border-radius: {{.ThemeRadius}}; }{{end}}
+  {{if .ThemeLayout}}body { justify-content: {{if eq .ThemeLayout "full_width"}}flex-start{{else}}center{{end}}; }{{end}}
+  {{if .ThemeLayout}}body { padding: {{if eq .ThemeLayout "full_width"}}0{{else}}24px{{end}}; }{{end}}
+  {{if .ThemeLayout}}.card { max-width: {{if eq .ThemeLayout "full_width"}}100%{{else}}480px{{end}}; }{{end}}
+  {{if .ThemeSpacing}}.card { padding: {{if eq .ThemeSpacing "compact"}}20px{{else if eq .ThemeSpacing "spacious"}}48px{{else}}32px{{end}}; }{{end}}
+  {{if .ThemeCSS}}{{.ThemeCSS}}{{end}}
 </style>
 <style>
   :root { color-scheme: dark; }

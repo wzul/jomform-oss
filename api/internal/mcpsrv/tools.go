@@ -154,8 +154,19 @@ func (s *Server) registerTools() {
 	}, s.bulkProductsMCP)
 	addTool(s, &mcp.Tool{
 		Name:        "upsert_form",
-		Description: "Cipta/kemaskini borang (form_id kosong = baru). Config blocks ikut get_form.",
+		Description: "Cipta/kemaskini borang (form_id kosong = baru). Config blocks ikut get_form. Theme (pilihan) = gaya/branding tersuai.",
 	}, s.upsertForm)
+	// Issue #254: MCP-driven form creation — styling freedom + field
+	// registration. JomForm keeps authority over field types, prices and the
+	// payment flow.
+	addTool(s, &mcp.Tool{
+		Name:        "set_form_theme",
+		Description: "Set gaya/branding tersuai borang (issue #254): primary, background, text, card_background, card_border_radius, font_family, logo_url, layout (centered|full_width|split), spacing (compact|comfortable|spacious), custom_css. Agent bebas set CSS; JomForm kekal kuasa ke atas harga & pembayaran.",
+	}, s.setFormTheme)
+	addTool(s, &mcp.Tool{
+		Name:        "register_form_fields",
+		Description: "Daftar medan input borang (issue #254) dengan kontrak ketat: {field_id, type, label, required, validation?, product_id?}. type mesti jenis input JomForm (name|email|phone|textarea|number|select|radio|checkbox|date|time|website|address|consent|hidden|list|repeater|image-choice|captcha). Ganti semua medan sedia ada. Harga kekal dari DB produk (server authority).",
+	}, s.registerFormFields)
 	addTool(s, &mcp.Tool{
 		Name:        "publish_form",
 		Description: "Publish borang — live di <space>.jomform.com/<slug> atau custom domain. status=private (dengan password) menjadikannya borang ber-kata laluan; status=draft menarik balik.",

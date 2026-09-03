@@ -25,6 +25,7 @@ import (
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/email"
 	"github.com/wzul/jomform/api/internal/emailqueue"
+	"github.com/wzul/jomform/api/internal/formfields"
 	"github.com/wzul/jomform/api/internal/payments"
 	"github.com/wzul/jomform/api/internal/spamjudge"
 )
@@ -424,6 +425,13 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "butiran tidak lengkap")
 		return
 	}
+	// Issue #254: server-side re-validation of registered fields. Agent JS is
+	// client-side only and bypassable, so the server re-validates every field
+	// against the form's registered contract before accepting the order.
+	if err := formfields.Validate(form.Config, in.Fields); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	// Issue #244: deterministic anti-spam layers. Each layer REJECTS the
 	// submission (returns an error) rather than flagging it. The per-form
 	// rate limit and time-based check are skipped for a logged-in owner/admin
@@ -638,6 +646,30 @@ func (h *PublicHandlers) handleResponseSubmit(w http.ResponseWriter, r *http.Req
 	}
 	if in.Fields == nil {
 		in.Fields = map[string]any{}
+	}
+	// Issue #254: server-side re-validation of registered fields. Agent JS is
+	// client-side only and bypassable, so the server re-validates every field
+	// against the form's registered contract before storing the submission.
+	{
+		strFields := make(map[string]string, len(in.Fields))
+		for k, v := range in.Fields {
+			switch t := v.(type) {
+			case string:
+				strFields[k] = t
+			case float64:
+				strFields[k] = fmt.Sprintf("%.0f", t)
+			case bool:
+				strFields[k] = fmt.Sprintf("%v", t)
+			default:
+				if b, err := json.Marshal(v); err == nil {
+					strFields[k] = string(b)
+				}
+			}
+		}
+		if err := formfields.Validate(form.Config, strFields); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 	// Issue #244: deterministic anti-spam layers on response-mode submits too.
 	// The honeypot + render timestamp ride on the fields map (the renderer
