@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/wzul/jomform/api/internal/chip"
 	"github.com/wzul/jomform/api/internal/cryptoutil"
 	"github.com/wzul/jomform/api/internal/dbstore"
@@ -134,6 +136,13 @@ func (s *Service) CreateChipPurchaseForSale(ctx context.Context, sale *dbstore.S
 
 // ProcessCallback handles a verified purchase.paid / payment_failure /
 // pending_charge event. idempotent on (chip_purchase_id, event_type).
+//
+// Issue #202: direct-sale events are serialized per sale via a Postgres
+// advisory lock (WithSaleLock). Only one callback processes a given sale at a
+// time; a second event for the same sale blocks until the first commits, then
+// re-reads the sale's current status and applies the transition guard. This
+// prevents a success_callback + success_redirect (or duplicate/different
+// events) from double-processing or flipping the status.
 func (s *Service) ProcessCallback(ctx context.Context, p *chip.Purchase) error {
 	if p.ID == "" {
 		return errors.New("callback missing purchase id")
@@ -145,76 +154,117 @@ func (s *Service) ProcessCallback(ctx context.Context, p *chip.Purchase) error {
 		return s.processSubscriptionEvent(ctx, p)
 	}
 
-	switch {
-	case p.Status == chip.StatusPaid:
-		if err := s.Sales.SetStatus(ctx, sale.ID, dbstore.SalePaid); err != nil {
+	// Serialize per sale: acquire the advisory lock, re-read the sale inside
+	// the transaction (so we see the locked, current status), apply the
+	// transition guard, and only run side effects on a real transition.
+	return s.Sales.WithSaleLock(ctx, sale.ID, func(tx pgx.Tx) error {
+		cur, err := s.Sales.SaleByChipPurchaseIDTx(ctx, tx, p.ID)
+		if err != nil {
 			return err
 		}
-		if s.OnPaid != nil {
-			event := "sale.paid"
-			if sale.SaleType == dbstore.SaleTypeSubscription {
-				event = "subscription.charged"
+
+		switch p.Status {
+		case chip.StatusPaid:
+			// Transition guard: only pending → paid is a real transition.
+			// A sale already paid (or confirmed/cancelled) must not re-fire
+			// webhooks or re-send the receipt.
+			if cur.Status == dbstore.SalePaid {
+				slog.Info("callback_paid_idempotent", "purchase", p.ID, "sale", cur.ID)
+				return nil
 			}
-			go s.OnPaid(ctx, sale.AccountID, event, map[string]any{
-				"ref_code": sale.RefCode, "amount_sen": sale.TotalSen,
-				"buyer_email": sale.Client.Email, "purchase_id": p.ID,
-			})
-		}
-		// Receipt (one-time sales only; subscription receipts follow their
-		// own charge lifecycle). Never blocks the payment flow.
-		if sale.SaleType != dbstore.SaleTypeSubscription {
-			summary := itemsSummary(sale.Items)
-			tin, msic := "", ""
-			if acc2, aerr := s.Accounts.ByID(ctx, sale.AccountID); aerr == nil {
-				tin, msic = acc2.EinvoiceTIN, acc2.EinvoiceMSIC
+			if cur.Status != dbstore.SalePending {
+				slog.Warn("callback_paid_conflicting_transition",
+					"purchase", p.ID, "sale", cur.ID, "from", cur.Status, "to", dbstore.SalePaid)
+				return nil
 			}
-			// Issue #83: 'Borang dibeli' must link to the purchased form's
-			// canonical space-scoped URL ({space}.jomform.com/{slug} or a
-			// verified custom domain), not the apex thank-you page. Fall back
-			// to the apex thank-you page only when no space/custom domain is
-			// resolvable.
-			formURL := s.formPublicURL(ctx, sale.AccountID, sale.FormID)
-			if formURL == "" {
-				formURL = s.BaseURL + "/t/" + sale.RefCode
+			if err := s.Sales.SetStatusTx(ctx, tx, cur.ID, dbstore.SalePaid); err != nil {
+				return err
 			}
-			// Issue #107: resolve the space id so the receipt renders from the
-			// space's per-space email settings (defaults when none).
-			spaceID := ""
-			if s.Spaces != nil {
-				if sid, serr := s.Spaces.SpaceIDByAccount(ctx, sale.AccountID); serr == nil {
-					spaceID = sid
+			if s.OnPaid != nil {
+				event := "sale.paid"
+				if cur.SaleType == dbstore.SaleTypeSubscription {
+					event = "subscription.charged"
 				}
+				go s.OnPaid(ctx, cur.AccountID, event, map[string]any{
+					"ref_code": cur.RefCode, "amount_sen": cur.TotalSen,
+					"buyer_email": cur.Client.Email, "purchase_id": p.ID,
+				})
 			}
-			go s.SendSaleReceipt(ctx, SaleRef{
-				SaleID:       sale.ID,
-				RefCode:      sale.RefCode,
-				BuyerEmail:   sale.Client.Email,
-				BuyerName:    sale.Client.FullName,
-				AmountSen:    sale.TotalSen,
-				ItemsSummary: summary,
-				FormURL:      formURL,
-				SpaceID:      spaceID,
-				TIN:          tin,
-				MSIC:         msic,
-			})
+			// Receipt (one-time sales only; subscription receipts follow their
+			// own charge lifecycle). Never blocks the payment flow.
+			if cur.SaleType != dbstore.SaleTypeSubscription {
+				s.sendReceiptAsync(ctx, cur)
+			}
+			// Subscription first payment: token purchase completed → activate sub.
+			if cur.SaleType == dbstore.SaleTypeSubscription {
+				return s.activateSubscription(ctx, cur)
+			}
+		case chip.StatusError:
+			// Transition guard: only pending → failed is a real transition.
+			// A late payment_failure after the sale is already paid must not
+			// flip it back to failed.
+			if cur.Status == dbstore.SaleFailed {
+				slog.Info("callback_failed_idempotent", "purchase", p.ID, "sale", cur.ID)
+				return nil
+			}
+			if cur.Status != dbstore.SalePending {
+				slog.Warn("callback_failed_conflicting_transition",
+					"purchase", p.ID, "sale", cur.ID, "from", cur.Status, "to", dbstore.SaleFailed)
+				return nil
+			}
+			if s.OnPaid != nil {
+				go s.OnPaid(ctx, cur.AccountID, "sale.failed", map[string]any{
+					"ref_code": cur.RefCode, "buyer_email": cur.Client.Email,
+				})
+			}
+			if err := s.Sales.SetStatusTx(ctx, tx, cur.ID, dbstore.SaleFailed); err != nil {
+				return err
+			}
+		case chip.StatusPendingCharge:
+			// transient; nothing to persist beyond event row (caller stores raw event)
 		}
-		// Subscription first payment: token purchase completed → activate sub.
-		if sale.SaleType == dbstore.SaleTypeSubscription {
-			return s.activateSubscription(ctx, sale)
-		}
-	case p.Status == chip.StatusError:
-		if s.OnPaid != nil {
-			go s.OnPaid(ctx, sale.AccountID, "sale.failed", map[string]any{
-				"ref_code": sale.RefCode, "buyer_email": sale.Client.Email,
-			})
-		}
-		if err := s.Sales.SetStatus(ctx, sale.ID, dbstore.SaleFailed); err != nil {
-			return err
-		}
-	case p.Status == chip.StatusPendingCharge:
-		// transient; nothing to persist beyond event row (caller stores raw event)
+		return nil
+	})
+}
+
+// sendReceiptAsync builds and fires the buyer receipt for a one-time sale in
+// the background (issue #202: only called on a real pending → paid transition,
+// so a sale already marked paid never re-sends the receipt).
+func (s *Service) sendReceiptAsync(ctx context.Context, sale *dbstore.Sale) {
+	summary := itemsSummary(sale.Items)
+	tin, msic := "", ""
+	if acc2, aerr := s.Accounts.ByID(ctx, sale.AccountID); aerr == nil {
+		tin, msic = acc2.EinvoiceTIN, acc2.EinvoiceMSIC
 	}
-	return nil
+	// Issue #83: 'Borang dibeli' must link to the purchased form's
+	// canonical space-scoped URL ({space}.jomform.com/{slug} or a
+	// verified custom domain), not the apex thank-you page. Fall back
+	// to the apex thank-you page only when no space/custom domain is
+	// resolvable.
+	formURL := s.formPublicURL(ctx, sale.AccountID, sale.FormID)
+	if formURL == "" {
+		formURL = s.BaseURL + "/t/" + sale.RefCode
+	}
+	// Issue #107: resolve the space id so the receipt renders from the
+	// space's per-space email settings (defaults when none).
+	spaceID := ""
+	if s.Spaces != nil {
+		if sid, serr := s.Spaces.SpaceIDByAccount(ctx, sale.AccountID); serr == nil {
+			spaceID = sid
+		}
+	}
+	go s.SendSaleReceipt(ctx, SaleRef{
+		SaleID:       sale.ID,
+		RefCode:      sale.RefCode,
+		BuyerEmail:   sale.Client.Email,
+		BuyerName:    sale.Client.FullName,
+		AmountSen:    sale.TotalSen,
+		ItemsSummary: summary,
+		FormURL:      formURL,
+		SpaceID:      spaceID,
+		TIN:          tin,
+		MSIC:         msic,
+	})
 }
 
 // activateSubscription records the token purchase and schedules the next charge.

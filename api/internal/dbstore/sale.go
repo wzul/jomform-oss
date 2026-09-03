@@ -205,6 +205,46 @@ func (s *SaleStore) SetStatus(ctx context.Context, saleID, status string) error 
 	return err
 }
 
+// WithSaleLock runs fn inside a transaction that holds a per-sale advisory
+// lock (pg_advisory_xact_lock keyed on a hash of the sale id). This serializes
+// concurrent ProcessCallback calls for the same sale: only one callback
+// processes a given sale at a time; the rest block until the first commits,
+// then re-read the sale's current status and apply the transition guard. fn
+// receives the tx-bound pool so reads/writes see the locked, current state.
+func (s *SaleStore) WithSaleLock(ctx context.Context, saleID string, fn func(tx pgx.Tx) error) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var key int64
+	if err := tx.QueryRow(ctx, `SELECT hashtext($1)::bigint`, saleID).Scan(&key); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, key); err != nil {
+		return err
+	}
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// SaleByChipPurchaseIDTx reads a sale by CHIP purchase id within an open
+// transaction (used inside WithSaleLock so the read sees the locked, current
+// status rather than a stale snapshot).
+func (s *SaleStore) SaleByChipPurchaseIDTx(ctx context.Context, tx pgx.Tx, purchaseID string) (*Sale, error) {
+	return scanSale(tx.QueryRow(ctx, saleSelect+" WHERE chip_purchase_id = $1", purchaseID))
+}
+
+// SetStatusTx updates the sale status within an open transaction (used inside
+// WithSaleLock so the status write is atomic with the advisory lock).
+func (s *SaleStore) SetStatusTx(ctx context.Context, tx pgx.Tx, saleID, status string) error {
+	_, err := tx.Exec(ctx,
+		`UPDATE sales SET status=$2, updated_at=now() WHERE id=$1`, saleID, status)
+	return err
+}
+
 // ListByAccountStatus returns recent sales for one account filtered by status
 // (issue #126 MCP parity with the /sales page status dropdown), newest first.
 func (s *SaleStore) ListByAccountStatus(ctx context.Context, accountID, status string, limit int) ([]*Sale, error) {

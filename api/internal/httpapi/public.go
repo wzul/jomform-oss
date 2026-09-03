@@ -55,6 +55,10 @@ func (h *PublicHandlers) RegisterRoutes(mux *http.ServeMux) {
 	// custom domain), leaving dashboard routes (/api, /v1) intact.
 	mux.Handle("POST /{slug}/order", middleware.RateLimit(http.HandlerFunc(h.handleSubmit)))
 	mux.HandleFunc("GET /t/{ref}", h.handleThankYou)
+	// Issue #202: lightweight read-only status endpoint the thank-you page
+	// polls while a sale is pending (bounded client-side poll). Returns the
+	// sale's current status; never mutates anything.
+	mux.HandleFunc("GET /t/{ref}/status", h.handleThankYouStatus)
 	mux.HandleFunc("GET /{$}", h.handleSpaceRoot)
 	// Issue #184: hosted legal pages on space subdomains
 	// ({space}.jomform.com/privacy, /terms, /refund). More specific than
@@ -635,10 +639,29 @@ func (h *PublicHandlers) handleThankYou(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Tempahan tidak dijumpai", http.StatusNotFound)
 		return
 	}
-	// Refresh until payment settles so the redirect lands on a final state.
+	// Issue #202: bounded poll instead of an indefinite 4s meta-refresh. While
+	// the sale is still pending, the page polls a lightweight status endpoint
+	// every 4s and stops after a bounded window (default 60s) so a slow or
+	// missing callback can't keep the buyer's tab refreshing forever. The
+	// redirect stays read-only — the callback (not this page) settles the sale.
 	refresh := ""
 	if sale.Status == dbstore.SalePending {
-		refresh = `<meta http-equiv="refresh" content="4">`
+		refresh = `<script>
+const ref = document.querySelector('meta[name="jf-ref"]').content;
+let polls = 0;
+const maxPolls = 15; // 15 × 4s = 60s bounded wait
+const iv = setInterval(async () => {
+  polls++;
+  try {
+    const res = await fetch('/t/' + ref + '/status');
+    if (res.ok) {
+      const data = await res.json();
+      if (data.status !== 'pending') { clearInterval(iv); location.reload(); return; }
+    }
+  } catch (e) {}
+  if (polls >= maxPolls) { clearInterval(iv); }
+}, 4000);
+</script>`
 	}
 	statusText := "menunggu pengesahan"
 	switch sale.Status {
@@ -653,12 +676,25 @@ func (h *PublicHandlers) handleThankYou(w http.ResponseWriter, r *http.Request) 
 	}
 	fmt.Fprintf(w, `<!doctype html><html lang="ms"><head><meta charset="utf-8">%s
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Terima kasih</title>
+<meta name="jf-ref" content="%s">
 <style>body{background:#f7f8f8;color:#17181c;font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
 .c{background:#ffffff;border:1px solid #e6e8ec;border-radius:16px;padding:40px;text-align:center;max-width:420px}
 h1{color:#10b981;font-size:24px}</style></head><body><div class="c">
 <h1>✓ Terima kasih!</h1><p>Tempahan <strong>%s</strong> diterima.<br>Status: %s.</p>
 <p style="color:#9ca3af;font-size:12px">Dikuasakan oleh JomForm</p></div></body></html>`,
-		refresh, sale.RefCode, statusText)
+		refresh, sale.RefCode, sale.RefCode, statusText)
+}
+
+// handleThankYouStatus is the read-only status endpoint the thank-you page
+// polls while a sale is pending (issue #202). It returns the sale's current
+// status as JSON and never mutates anything — the callback settles the sale.
+func (h *PublicHandlers) handleThankYouStatus(w http.ResponseWriter, r *http.Request) {
+	sale, err := h.Sales.ByRefCode(r.Context(), r.PathValue("ref"))
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"status": "not_found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": sale.Status})
 }
 
 var _ = time.Now
