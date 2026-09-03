@@ -59,7 +59,9 @@ export default function Dashboard() {
   // Issue #29: me + landing data (products, summary, sales, analytics) all
   // come from the single dashboard-bundle round-trip fetched once per
   // session — the 914ms me→5-fetch waterfall is gone.
-  const { bundle, anon } = useSession();
+  const { bundle, anon, role } = useSession();
+  // Issue #163: read_only members see no write actions (confirm sale).
+  const canWrite = role !== "read_only";
   const [products, setProducts] = useState<Product[]>([]);
   const [sales, setSales] = useState<SaleRow[]>([]);
   const [salesPage, setSalesPage] = useState(1);
@@ -306,7 +308,7 @@ export default function Dashboard() {
                 </div>
                 <div className="flex shrink-0 flex-col items-end gap-1.5">
                   <span className="text-sm font-semibold">{money(s.total_sen)}</span>
-                  {s.status === "paid" && (
+                  {s.status === "paid" && canWrite && (
                     <button onClick={() => confirmSale(s.ref_code)} className="text-xs font-medium text-[var(--jf-primary)] hover:underline">
                       {t("common.confirm")}
                     </button>
@@ -349,7 +351,7 @@ export default function Dashboard() {
                       </span>
                     </td>
                     <td className="px-5 py-3 text-right">
-                      {s.status === "paid" && (
+                      {s.status === "paid" && canWrite && (
                         <button onClick={() => confirmSale(s.ref_code)} className="whitespace-nowrap text-xs font-medium text-[var(--jf-primary)] hover:underline">
                           {t("common.confirm")}
                         </button>

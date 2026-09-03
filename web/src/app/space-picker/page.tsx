@@ -17,6 +17,13 @@ export default function SpacePickerPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
+  // Issue #163: short role label for the picker rows.
+  function roleLabel(role?: string): string {
+    if (!role) return "";
+    if (role === "owner") return t("role.owner");
+    return t(`role.${role}` as any) || role;
+  }
+
   useEffect(() => {
     (async () => {
       try {
@@ -111,6 +118,11 @@ export default function SpacePickerPage() {
                         {isDefault && (
                           <span className="ml-2 rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-medium text-[var(--jf-primary)]">
                             {t("space.defaultLabel")}
+                          </span>
+                        )}
+                        {s.role && (
+                          <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500">
+                            {roleLabel(s.role)}
                           </span>
                         )}
                       </p>

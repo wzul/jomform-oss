@@ -172,6 +172,66 @@ func (s *Server) updateSpaceMemberRole(
 	return nil, map[string]string{"status": "updated", "user_id": in.UserID, "role": in.Role}, nil
 }
 
+// ── cancel_space_invite ─────────────────────────────────────────────────────
+
+type cancelSpaceInviteIn struct {
+	SpaceID  string `json:"space_id" jsonschema:"ID space (dari list_spaces)"`
+	InviteID string `json:"invite_id" jsonschema:"ID jemputan (dari list_space_invites)"`
+}
+
+func (s *Server) cancelSpaceInvite(
+	ctx context.Context, _ *mcp.CallToolRequest, in cancelSpaceInviteIn,
+) (*mcp.CallToolResult, map[string]string, error) {
+	if _, err := s.requireSpaceAdmin(ctx, in.SpaceID); err != nil {
+		return nil, nil, err
+	}
+	sm, err := s.spaceMembersStore()
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := sm.DeleteInvite(ctx, in.SpaceID, in.InviteID); err != nil {
+		if errors.Is(err, dbstore.ErrNotSpaceMember) {
+			return nil, nil, errors.New("jemputan tidak dijumpai")
+		}
+		return nil, nil, fmt.Errorf("db: %w", err)
+	}
+	return nil, map[string]string{"status": "deleted", "invite_id": in.InviteID}, nil
+}
+
+// ── list_space_invites ──────────────────────────────────────────────────────
+
+type listSpaceInvitesIn struct {
+	SpaceID string `json:"space_id" jsonschema:"ID space (dari list_spaces)"`
+}
+
+type spaceInviteOut struct {
+	ID        string `json:"id"`
+	Email     string `json:"email"`
+	Role      string `json:"role"`
+	CreatedAt string `json:"created_at"`
+}
+
+func (s *Server) listSpaceInvites(
+	ctx context.Context, _ *mcp.CallToolRequest, in listSpaceInvitesIn,
+) (*mcp.CallToolResult, []spaceInviteOut, error) {
+	if _, err := s.requireSpaceAdmin(ctx, in.SpaceID); err != nil {
+		return nil, nil, err
+	}
+	sm, err := s.spaceMembersStore()
+	if err != nil {
+		return nil, nil, err
+	}
+	invites, err := sm.ListInvites(ctx, in.SpaceID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("db: %w", err)
+	}
+	out := make([]spaceInviteOut, 0, len(invites))
+	for _, inv := range invites {
+		out = append(out, spaceInviteOut{ID: inv.ID, Email: inv.Email, Role: inv.Role, CreatedAt: inv.CreatedAt})
+	}
+	return nil, out, nil
+}
+
 // ── remove_space_member ─────────────────────────────────────────────────────
 
 type removeSpaceMemberIn struct {

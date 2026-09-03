@@ -32,8 +32,12 @@ const money = (sen: number) =>
 
 export default function Subscriptions() {
   const { t } = useI18n();
-  const { anon } = useSession();
+  const { anon, role } = useSession();
   const router = useRouter();
+
+  // Issue #163: read_only members see no write actions (cancel/update card).
+  // manage + admin keep full write access.
+  const canWrite = role !== "read_only";
 
   const [rows, setRows] = useState<Subscription[]>([]);
   const [total, setTotal] = useState(0);
@@ -279,7 +283,7 @@ export default function Subscriptions() {
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-end gap-1">
-                      {sub.status !== "cancelled" && (
+                      {canWrite && sub.status !== "cancelled" && (
                         <>
                           <button
                             onClick={() => updateCardOne(sub)}

@@ -37,7 +37,7 @@ export type SessionUser = {
   default_space_id?: string; // issue #164 (empty = no default → space-picker on login)
 };
 
-export type SpaceRow = { id: string; name: string; slug: string };
+export type SpaceRow = { id: string; name: string; slug: string; role?: string };
 
 // Landing-data sections of the bundle, consumed by the dashboard page.
 export type BundleLanding = {
@@ -75,6 +75,10 @@ type SessionCtx = {
   // The active space slug (from localStorage "jf_space"), used to scope
   // every dashboard fetch (issue #158).
   space: string;
+  // The caller's role in the active space (issue #163): "admin" | "manage" |
+  // "read_only" | "" (unknown / not a member). Carried per-space in the
+  // bundle so the UI can gate actions by role.
+  role: string;
   // undefined = fetch still in flight (callers may show their own shell);
   // null = confirmed anonymous (401 / wedge timeout) — the auth gate.
   bundle: BundleData | null | undefined;
@@ -89,6 +93,7 @@ const SessionContext = createContext<SessionCtx>({
   user: null,
   spaces: [],
   space: "",
+  role: "",
   bundle: undefined,
   anon: false,
   reload: () => {},
@@ -177,9 +182,13 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
 
   const user = bundle?.me ?? null;
   const spaces = Array.isArray(bundle?.spaces) ? bundle!.spaces : [];
+  // Issue #163: the caller's role in the active space, carried per-space in
+  // the bundle. Used to gate write/member/CHIP actions in the UI.
+  const activeSpace = spaces.find((s) => s.slug === space);
+  const role = activeSpace?.role || "";
 
   return (
-    <SessionContext.Provider value={{ user, spaces, space, bundle, anon: mounted && bundle === null, reload }}>
+    <SessionContext.Provider value={{ user, spaces, space, role, bundle, anon: mounted && bundle === null, reload }}>
       {children}
     </SessionContext.Provider>
   );

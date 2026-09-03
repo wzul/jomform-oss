@@ -229,6 +229,14 @@ func (s *Server) registerTools() {
 		Name:        "remove_space_member",
 		Description: "Buang ahli dari space (admin sahaja). Pemilik tidak boleh dibuang.",
 	}, s.removeSpaceMember)
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "list_space_invites",
+		Description: "Senarai jemputan menunggu untuk space (admin sahaja).",
+	}, s.listSpaceInvites)
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "cancel_space_invite",
+		Description: "Batal jemputan menunggu untuk space (admin sahaja).",
+	}, s.cancelSpaceInvite)
 	// Issue #164: default space (multi-space login picker) parity.
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "set_default_space",

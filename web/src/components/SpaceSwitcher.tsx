@@ -44,6 +44,14 @@ export function SpaceSwitcher({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Issue #163: short role label for the switcher (owner/admin → Admin,
+  // manage → Manage, read_only → Read only).
+  function roleLabel(role?: string): string {
+    if (!role) return "";
+    if (role === "owner") return t("role.owner");
+    return t(`role.${role}` as any) || role;
+  }
+
   const active = spaces.find((s) => s.slug === value) || spaces[0];
   const activeIsDefault = !!active && !!defaultSpaceId && active.id === defaultSpaceId;
 
@@ -104,14 +112,14 @@ export function SpaceSwitcher({
         >
           {spaces.map((s) => (
             <option key={s.id} value={s.slug}>
-              {s.name} ({s.slug}.jomform.com)
+              {s.name} ({s.slug}.jomform.com){s.role ? ` · ${roleLabel(s.role)}` : ""}
             </option>
           ))}
         </select>
       ) : active ? (
         // Single-space indicator: read-only row so users know spaces exist.
         <div className="mt-0.5 w-full truncate rounded-md border border-[var(--jf-border)] bg-slate-50 px-2 py-1 text-xs text-[var(--jf-text)]">
-          {active.name} ({active.slug}.jomform.com)
+          {active.name} ({active.slug}.jomform.com){active.role ? ` · ${roleLabel(active.role)}` : ""}
         </div>
       ) : null}
 

@@ -26,11 +26,15 @@ const spaceHost =
 
 export default function FormsPage() {
   const { t } = useI18n();
-  const { anon } = useSession();
+  const { anon, role } = useSession();
   const [forms, setForms] = useState<FormRow[]>([]);
   const [checking, setChecking] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
+
+  // Issue #163: read_only members see no write actions (new/edit/publish/
+  // delete). manage + admin keep full write access.
+  const canWrite = role !== "read_only";
 
   const load = useCallback(async () => {
     // Issue #29: no serial `await me → fetch` gate — the list fetch runs
@@ -103,12 +107,14 @@ export default function FormsPage() {
             <h1 className="max-w-xl text-xl font-semibold tracking-tight">{t("forms.title")}</h1>
             <p className="max-w-xl text-sm text-[var(--jf-muted)]">{t("forms.subtitle")}</p>
           </div>
-          <Link href="/builder" className="jf-btn-primary shrink-0 self-start sm:self-auto">
-            {t("forms.new")}
-          </Link>
+          {canWrite && (
+            <Link href="/builder" className="jf-btn-primary shrink-0 self-start sm:self-auto">
+              {t("forms.new")}
+            </Link>
+          )}
         </div>
 
-        {ids.length > 0 && (
+        {canWrite && ids.length > 0 && (
           <div className="jf-card mt-4 flex flex-wrap items-center gap-2 border-[var(--jf-border)] px-4 py-3">
             <span className="text-sm font-medium">
               {t("forms.nSelected", { n: ids.length })}
@@ -155,13 +161,15 @@ export default function FormsPage() {
           {forms.map((f) => (
             <li key={f.id} className="jf-card flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex min-w-0 items-center gap-3">
-                <input
-                  type="checkbox"
-                  aria-label={`Select ${f.title}`}
-                  checked={selected.has(f.id)}
-                  onChange={() => toggle(f.id)}
-                  className="h-4 w-4 shrink-0 accent-[var(--jf-primary)]"
-                />
+                {canWrite && (
+                  <input
+                    type="checkbox"
+                    aria-label={`Select ${f.title}`}
+                    checked={selected.has(f.id)}
+                    onChange={() => toggle(f.id)}
+                    className="h-4 w-4 shrink-0 accent-[var(--jf-primary)]"
+                  />
+                )}
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium">{f.title}</p>
                   <p className="font-mono text-[11px] text-[var(--jf-muted)]">{spaceHost}/{f.slug}</p>
@@ -173,9 +181,11 @@ export default function FormsPage() {
                     <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-[11px] font-medium text-emerald-700">
                       {t("forms.live")}
                     </span>
-                    <Link href={`/builder?form=${f.id}`} className="jf-btn-ghost min-h-[44px] sm:min-h-10">
-                      {t("forms.edit")}
-                    </Link>
+                    {canWrite && (
+                      <Link href={`/builder?form=${f.id}`} className="jf-btn-ghost min-h-[44px] sm:min-h-10">
+                        {t("forms.edit")}
+                      </Link>
+                    )}
                     {/* Issue #126: per-form Sales deep-link -> /sales?form=<id> */}
                     <Link href={`/sales?form=${f.id}`} className="jf-btn-ghost min-h-[44px] sm:min-h-10">
                       {t("nav.sales")}
@@ -189,16 +199,20 @@ export default function FormsPage() {
                     <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-[11px] font-medium text-slate-500">
                       {t("forms.draft")}
                     </span>
-                    <Link href={`/builder?form=${f.id}`} className="jf-btn-ghost min-h-[44px] sm:min-h-10">
-                      {t("forms.edit")}
-                    </Link>
+                    {canWrite && (
+                      <Link href={`/builder?form=${f.id}`} className="jf-btn-ghost min-h-[44px] sm:min-h-10">
+                        {t("forms.edit")}
+                      </Link>
+                    )}
                     {/* Issue #126: per-form Sales deep-link (works for drafts too) */}
                     <Link href={`/sales?form=${f.id}`} className="jf-btn-ghost min-h-[44px] sm:min-h-10">
                       {t("nav.sales")}
                     </Link>
-                    <button onClick={() => publish(f.id)} className="jf-btn-primary min-h-[44px] sm:min-h-10">
-                      {t("builder.publish")}
-                    </button>
+                    {canWrite && (
+                      <button onClick={() => publish(f.id)} className="jf-btn-primary min-h-[44px] sm:min-h-10">
+                        {t("builder.publish")}
+                      </button>
+                    )}
                   </>
                 )}
               </div>

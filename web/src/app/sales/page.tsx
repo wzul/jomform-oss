@@ -80,10 +80,14 @@ const saleBadge = (s: string) =>
 
 function SalesPageInner() {
   const { t } = useI18n();
-  const { anon } = useSession();
+  const { anon, role } = useSession();
   const router = useRouter();
   const search = useSearchParams();
   const deepForm = search.get("form") || "";
+
+  // Issue #163: read_only members see no write actions (capture/confirm).
+  // manage + admin keep full write access.
+  const canWrite = role !== "read_only";
 
   // forms for the filter dropdown (fetched from /api/rest/forms)
   const [forms, setForms] = useState<FormRow[]>([]);
@@ -403,7 +407,7 @@ function SalesPageInner() {
                 {t("sales.clearFilters")}
               </button>
             )}
-            {rows.some(isCapturePending) && (
+            {canWrite && rows.some(isCapturePending) && (
               <button
                 onClick={captureAllPending}
                 disabled={busyRef !== null}
@@ -697,7 +701,7 @@ function SalesPageInner() {
 
               {/* Actions */}
               <div className="mt-6 flex justify-end gap-2 border-t border-[var(--jf-border)] pt-4">
-                {isCapturePending(detail) && (
+                {canWrite && isCapturePending(detail) && (
                   <>
                     <button
                       onClick={() => releaseSale(detail.ref_code)}
@@ -715,7 +719,7 @@ function SalesPageInner() {
                     </button>
                   </>
                 )}
-                {detail.status !== "confirmed" && (
+                {canWrite && detail.status !== "confirmed" && (
                   <button
                     onClick={() => confirmSale(detail.ref_code)}
                     disabled={busyRef !== null || isCapturePending(detail)}

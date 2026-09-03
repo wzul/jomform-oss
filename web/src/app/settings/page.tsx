@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { spaceQuery, spaceScope } from "../../lib/space";
+import { MembersTab } from "../../components/MembersTab";
 
 type ChipStatus = { configured: boolean; mode?: string };
 type KeyRow = { id: string; name: string; scopes: string[] };
@@ -22,12 +23,13 @@ type SocialRow = { provider: string; email?: string; linked_at?: string };
 //   mcp       -> MCP / connected agents (issue #129)
 //   social    -> Social login connectors
 //   emel      -> Per-space receipt/notification email templates (issue #107)
-type SettingsTab = "chip" | "domains" | "tracking" | "einvoice" | "webhooks" | "mcp" | "social" | "emel";
+//   members   -> Space members management (issue #163)
+type SettingsTab = "chip" | "domains" | "tracking" | "einvoice" | "webhooks" | "mcp" | "social" | "emel" | "members";
 
-const TAB_IDS: SettingsTab[] = ["chip", "domains", "tracking", "einvoice", "webhooks", "mcp", "social", "emel"];
+const TAB_IDS: SettingsTab[] = ["chip", "domains", "tracking", "einvoice", "webhooks", "mcp", "social", "emel", "members"];
 
 function isSettingsTab(v: string | null): v is SettingsTab {
-  return v === "chip" || v === "domains" || v === "tracking" || v === "einvoice" || v === "webhooks" || v === "mcp" || v === "social" || v === "emel";
+  return v === "chip" || v === "domains" || v === "tracking" || v === "einvoice" || v === "webhooks" || v === "mcp" || v === "social" || v === "emel" || v === "members";
 }
 
 // Restore the last active tab. Falls back to "chip".
@@ -121,6 +123,9 @@ export default function Settings() {
   const [emelMerchantEmail, setEmelMerchantEmail] = useState("");
   const [emelHtml, setEmelHtml] = useState(false);
   const [emelSpaceId, setEmelSpaceId] = useState("");
+  // Issue #163: the active space's id, resolved from the session spaces list
+  // + localStorage (same key the Shell uses). Used to scope the Members tab.
+  const [activeSpaceId, setActiveSpaceId] = useState("");
   const [emelPreview, setEmelPreview] = useState(false);
 
   // Persist the active tab (issue #68).
@@ -160,7 +165,7 @@ export default function Settings() {
   // Issue #29: routed through the shared session cache — the first page of
   // the session fetches the bundle once; later pages (dashboard, forms,
   // products, profile) reuse it. Saves call reloadSession() to re-fetch.
-  const { bundle, anon, reload: reloadSession } = useSession();
+  const { bundle, anon, reload: reloadSession, role } = useSession();
   const reload = useCallback(() => {
     // Saves mutate bundle-backed sections: drop the shared cache first so
     // the next load() re-fetches fresh data (and other pages inherit it).
@@ -220,6 +225,7 @@ export default function Settings() {
     const active = sp.find((x) => x.slug === slug) || sp[0];
     if (!active) return;
     setEmelSpaceId(active.id);
+    setActiveSpaceId(active.id);
     fetch(`/api/rest/spaces/${active.id}/email-settings`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
@@ -445,6 +451,14 @@ export default function Settings() {
     return out;
   }
 
+  // Issue #163: role-gate the settings tabs. CHIP credentials and member
+  // management are admin-only; read_only members see no write tabs at all.
+  const isAdmin = role === "admin" || role === "owner";
+  const isReadOnly = role === "read_only";
+  const visibleTabs: SettingsTab[] = isReadOnly
+    ? []
+    : TAB_IDS.filter((id) => (id === "chip" || id === "members") ? isAdmin : true);
+
   return (
     <Shell active="settings">
       <main className="w-full flex-1 px-6 py-8">
@@ -452,9 +466,18 @@ export default function Settings() {
           {t("set.title")} <span className="text-[var(--jf-primary)]">JomForm</span>
         </h1>
 
+        {/* Issue #163: read_only members get a read-only notice instead of the
+            write tabs. */}
+        {isReadOnly && (
+          <p className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">
+            {t("mem.readOnlyNote")}
+          </p>
+        )}
+
         {/* Tab bar (issue #68) — same styling as Profile. */}
+        {visibleTabs.length > 0 && (
         <div className="mt-4 flex gap-1 overflow-x-auto border-b border-slate-200">
-          {TAB_IDS.map((id) => (
+          {visibleTabs.map((id) => (
             <button
               key={id}
               onClick={() => setTab(id)}
@@ -471,6 +494,7 @@ export default function Settings() {
             </button>
           ))}
         </div>
+        )}
 
         {/* Issue #68: transient Cloudflare OAuth callback banner + shared
             status/error banners shown above tab content regardless of the
@@ -1108,6 +1132,10 @@ export default function Settings() {
               )}
             </div>
           </section>
+        )}
+        {/* ── Members tab: space members management (issue #163) ── */}
+        {tab === "members" && isAdmin && (
+          <MembersTab spaceId={emelSpaceId || activeSpaceId} />
         )}
       </main>
     </Shell>

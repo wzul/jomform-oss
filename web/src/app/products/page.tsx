@@ -32,8 +32,12 @@ const PER_PAGE = 10;
 
 export default function Products() {
   const { t } = useI18n();
-  const { anon, bundle } = useSession();
+  const { anon, bundle, role } = useSession();
   const router = useRouter();
+
+  // Issue #163: read_only members see no write actions (add/edit/archive).
+  // manage + admin keep full write access.
+  const canWrite = role !== "read_only";
 
   const [products, setProducts] = useState<Product[]>([]);
   const [checking, setChecking] = useState(true);
@@ -450,6 +454,7 @@ export default function Products() {
         </div>
 
         {/* Add form */}
+        {canWrite && (
         <form onSubmit={add} className="jf-card mt-6 flex flex-wrap gap-2 p-4">
           <input value={name} onChange={(e) => setName(e.target.value)} required placeholder={t("prod.name")} className="jf-input min-w-48 flex-1" />
           <input value={price} onChange={(e) => setPrice(e.target.value)} required type="number" step="0.01" min="0" placeholder={t("prod.price")} className="jf-input w-32" />
@@ -499,10 +504,11 @@ export default function Products() {
           )}
           <button className="jf-btn-primary">{t("prod.add")}</button>
         </form>
+        )}
         {error && <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">{error}</p>}
 
         {/* Bulk action bar */}
-        {ids.length > 0 && (
+        {canWrite && ids.length > 0 && (
           <div className="jf-card mt-4 flex flex-wrap items-center gap-2 px-4 py-3">
             <span className="text-sm font-medium">{t("forms.nSelected", { n: ids.length })}</span>
             <div className="ml-auto flex flex-wrap items-center gap-2">
@@ -545,13 +551,15 @@ export default function Products() {
             <thead>
               <tr className="border-b border-[var(--jf-border)] text-left">
                 <th className="w-10 px-4 py-3">
-                  <input
-                    type="checkbox"
-                    aria-label={t("forms.selectAll")}
-                    checked={allOnPageSelected}
-                    onChange={toggleAll}
-                    className="h-4 w-4 accent-[var(--jf-primary)]"
-                  />
+                  {canWrite && (
+                    <input
+                      type="checkbox"
+                      aria-label={t("forms.selectAll")}
+                      checked={allOnPageSelected}
+                      onChange={toggleAll}
+                      className="h-4 w-4 accent-[var(--jf-primary)]"
+                    />
+                  )}
                 </th>
                 <th className="px-2 py-3">
                   <SortHeader label={t("prod.name")} k="name" />
@@ -585,55 +593,76 @@ export default function Products() {
                   }`}
                 >
                   <td className="px-4 py-3">
-                    <input
-                      type="checkbox"
-                      aria-label={`Select ${p.name}`}
-                      checked={selected.has(p.id)}
-                      onChange={() => toggle(p.id)}
-                      className="h-4 w-4 accent-[var(--jf-primary)]"
-                    />
+                    {canWrite && (
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${p.name}`}
+                        checked={selected.has(p.id)}
+                        onChange={() => toggle(p.id)}
+                        className="h-4 w-4 accent-[var(--jf-primary)]"
+                      />
+                    )}
                   </td>
                   <td className="px-2 py-3">
-                    <button
-                      onClick={() => setEditing(p)}
-                      className="text-left font-medium text-[var(--jf-primary)] hover:underline"
-                    >
-                      {p.name}
-                    </button>
+                    {canWrite ? (
+                      <button
+                        onClick={() => setEditing(p)}
+                        className="text-left font-medium text-[var(--jf-primary)] hover:underline"
+                      >
+                        {p.name}
+                      </button>
+                    ) : (
+                      <span className="font-medium">{p.name}</span>
+                    )}
                   </td>
                   <td className="px-2 py-3 text-[var(--jf-muted)]">{typeLabel(p)}</td>
                   <td className="px-2 py-3">{stockLabel(p)}</td>
                   <td className="px-2 py-3 font-semibold">{money(p.price_sen)}</td>
                   <td className="px-2 py-3">
-                    <button
-                      onClick={() => toggleStatus(p)}
-                      className={[
-                        "rounded-full px-2.5 py-0.5 text-[11px] font-medium",
-                        p.active
-                          ? "border border-emerald-200 bg-emerald-50 text-emerald-700"
-                          : "border border-slate-200 bg-slate-50 text-slate-500",
-                      ].join(" ")}
-                      title={t("prod.toggleStatusTitle")}
-                    >
-                      {statusLabel(p)}
-                    </button>
+                    {canWrite ? (
+                      <button
+                        onClick={() => toggleStatus(p)}
+                        className={[
+                          "rounded-full px-2.5 py-0.5 text-[11px] font-medium",
+                          p.active
+                            ? "border border-emerald-200 bg-emerald-50 text-emerald-700"
+                            : "border border-slate-200 bg-slate-50 text-slate-500",
+                        ].join(" ")}
+                        title={t("prod.toggleStatusTitle")}
+                      >
+                        {statusLabel(p)}
+                      </button>
+                    ) : (
+                      <span
+                        className={[
+                          "inline-block rounded-full px-2.5 py-0.5 text-[11px] font-medium",
+                          p.active
+                            ? "border border-emerald-200 bg-emerald-50 text-emerald-700"
+                            : "border border-slate-200 bg-slate-50 text-slate-500",
+                        ].join(" ")}
+                      >
+                        {statusLabel(p)}
+                      </span>
+                    )}
                   </td>
                   <td className="px-2 py-3 text-[var(--jf-muted)]">
                     {p.created_at ? new Date(p.created_at).toLocaleDateString() : "—"}
                   </td>
                   <td className="px-4 py-3">
-                    <div className="flex items-center justify-end gap-1">
-                      <button onClick={() => setEditing(p)} className="jf-btn-ghost px-2.5 py-1 text-xs">
-                        {t("forms.edit")}
-                      </button>
-                      <button
-                        onClick={() => archiveOne(p)}
-                        className="jf-btn-ghost px-2.5 py-1 text-xs text-rose-600 hover:bg-rose-50"
-                        title={t("prod.archiveOneTitle")}
-                      >
-                        ✕
-                      </button>
-                    </div>
+                    {canWrite && (
+                      <div className="flex items-center justify-end gap-1">
+                        <button onClick={() => setEditing(p)} className="jf-btn-ghost px-2.5 py-1 text-xs">
+                          {t("forms.edit")}
+                        </button>
+                        <button
+                          onClick={() => archiveOne(p)}
+                          className="jf-btn-ghost px-2.5 py-1 text-xs text-rose-600 hover:bg-rose-50"
+                          title={t("prod.archiveOneTitle")}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    )}
                   </td>
                 </tr>
               ))}
