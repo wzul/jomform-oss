@@ -212,6 +212,134 @@ func TestEmailDeliveryEventStoreSaleRefCorrelation(t *testing.T) {
 	}
 }
 
+// TestEmailDeliveryEventStoreListByFilter (issue #194): the account-scoped,
+// paginated, filterable delivery-event query used by GET
+// /v1/rest/email-deliveries and the list_email_deliveries MCP tool. Verifies
+// account scoping, form filtering (via the sale's form_id join), sale_ref and
+// event_type filters, and pagination.
+func TestEmailDeliveryEventStoreListByFilter(t *testing.T) {
+	ctx := context.Background()
+	p := testPool(t)
+	es := NewEmailDeliveryEventStore(p)
+	fs := NewFormStore(p)
+	ss := NewSaleStore(p)
+
+	acc := uniqueAccount(t, ctx, p)
+	other := uniqueAccount(t, ctx, p)
+
+	// Two forms for the account; one sale per form.
+	f1 := &Form{AccountID: acc, Slug: "del-f1-" + acc[:8], Title: "F1", Status: "published"}
+	if err := fs.Create(ctx, f1); err != nil {
+		t.Fatalf("create form 1: %v", err)
+	}
+	f2 := &Form{AccountID: acc, Slug: "del-f2-" + acc[:8], Title: "F2", Status: "published"}
+	if err := fs.Create(ctx, f2); err != nil {
+		t.Fatalf("create form 2: %v", err)
+	}
+	ref1 := "JF-D1-" + acc[:8]
+	ref2 := "JF-D2-" + acc[:8]
+	for _, s := range []*Sale{
+		{AccountID: acc, FormID: f1.ID, RefCode: ref1, Client: SaleClient{FullName: "A", Email: "a@example.test"}, Items: []SaleItem{}, Status: SalePaid, PaymentMethod: "chip", SaleType: SaleTypeOneTime},
+		{AccountID: acc, FormID: f2.ID, RefCode: ref2, Client: SaleClient{FullName: "B", Email: "b@example.test"}, Items: []SaleItem{}, Status: SalePaid, PaymentMethod: "chip", SaleType: SaleTypeOneTime},
+	} {
+		if err := ss.Create(ctx, s); err != nil {
+			t.Fatalf("create sale: %v", err)
+		}
+	}
+
+	email := "del-" + acc[:8] + "@example.com"
+	// ref1: delivered + open. ref2: bounce.
+	if err := es.Record(ctx, acc, email, "delivered", "", ref1, nil); err != nil {
+		t.Fatalf("record delivered: %v", err)
+	}
+	if err := es.Record(ctx, acc, email, "open", "", ref1, map[string]any{"ipAddress": "203.0.113.1"}); err != nil {
+		t.Fatalf("record open: %v", err)
+	}
+	if err := es.Record(ctx, acc, email, "bounce", "Permanent", ref2, map[string]any{"bounceType": "Permanent"}); err != nil {
+		t.Fatalf("record bounce: %v", err)
+	}
+	// A system-mail event with no account (must never leak into account reads).
+	if err := es.Record(ctx, "", "sys@example.com", "delivered", "", "", nil); err != nil {
+		t.Fatalf("record system: %v", err)
+	}
+
+	// Account-scoped: only acc's events, newest first.
+	all, total, err := es.ListByFilter(ctx, DeliveryFilter{AccountIDs: []string{acc}, Page: 1, Limit: 10})
+	if err != nil {
+		t.Fatalf("list all: %v", err)
+	}
+	if total != 3 {
+		t.Fatalf("total = %d, want 3", total)
+	}
+	if len(all) != 3 {
+		t.Fatalf("len(all) = %d, want 3", len(all))
+	}
+	if all[0].EventType != "bounce" {
+		t.Fatalf("all[0] = %s, want bounce (newest first)", all[0].EventType)
+	}
+	// FormID resolved via the sale join.
+	if all[0].FormID != f2.ID {
+		t.Fatalf("bounce FormID = %q, want %q", all[0].FormID, f2.ID)
+	}
+
+	// Filter by form (f1) → only ref1's events.
+	byForm, total, err := es.ListByFilter(ctx, DeliveryFilter{AccountIDs: []string{acc}, FormID: f1.ID, Page: 1, Limit: 10})
+	if err != nil {
+		t.Fatalf("list by form: %v", err)
+	}
+	if total != 2 || len(byForm) != 2 {
+		t.Fatalf("by form total=%d len=%d, want 2,2", total, len(byForm))
+	}
+	for _, e := range byForm {
+		if e.SaleRef != ref1 {
+			t.Fatalf("by form event sale_ref = %q, want %q", e.SaleRef, ref1)
+		}
+	}
+
+	// Filter by sale_ref.
+	bySale, total, err := es.ListByFilter(ctx, DeliveryFilter{AccountIDs: []string{acc}, SaleRef: ref2, Page: 1, Limit: 10})
+	if err != nil {
+		t.Fatalf("list by sale: %v", err)
+	}
+	if total != 1 || len(bySale) != 1 || bySale[0].EventType != "bounce" {
+		t.Fatalf("by sale total=%d len=%d type=%s, want 1,1,bounce", total, len(bySale), bySale[0].EventType)
+	}
+
+	// Filter by event_type.
+	byType, total, err := es.ListByFilter(ctx, DeliveryFilter{AccountIDs: []string{acc}, EventType: "open", Page: 1, Limit: 10})
+	if err != nil {
+		t.Fatalf("list by type: %v", err)
+	}
+	if total != 1 || len(byType) != 1 || byType[0].EventType != "open" {
+		t.Fatalf("by type total=%d len=%d, want 1,1", total, len(byType))
+	}
+
+	// Pagination: limit 2 → page 1 has 2, page 2 has 1.
+	p1, total, err := es.ListByFilter(ctx, DeliveryFilter{AccountIDs: []string{acc}, Page: 1, Limit: 2})
+	if err != nil {
+		t.Fatalf("page 1: %v", err)
+	}
+	if len(p1) != 2 || total != 3 {
+		t.Fatalf("page1 len=%d total=%d, want 2,3", len(p1), total)
+	}
+	p2, _, err := es.ListByFilter(ctx, DeliveryFilter{AccountIDs: []string{acc}, Page: 2, Limit: 2})
+	if err != nil {
+		t.Fatalf("page 2: %v", err)
+	}
+	if len(p2) != 1 {
+		t.Fatalf("page2 len=%d, want 1", len(p2))
+	}
+
+	// A different account sees nothing.
+	otherEvents, total, err := es.ListByFilter(ctx, DeliveryFilter{AccountIDs: []string{other}, Page: 1, Limit: 10})
+	if err != nil {
+		t.Fatalf("other account: %v", err)
+	}
+	if total != 0 || len(otherEvents) != 0 {
+		t.Fatalf("other account total=%d len=%d, want 0,0", total, len(otherEvents))
+	}
+}
+
 // TestSaleStoreReceiptMessageID (issue #106): SetReceiptMessageID persists the
 // SES MessageID and ByReceiptMessageID resolves it back to the sale.
 func TestSaleStoreReceiptMessageID(t *testing.T) {

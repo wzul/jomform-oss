@@ -26,6 +26,9 @@ type EmailDeliveryEvent struct {
 	// "" when the event could not be tied to a sale (system mail, or the SES
 	// MessageID did not match a stored receipt).
 	SaleRef   string
+	// FormID is the sale's form_id this event correlates to (issue #194),
+	// resolved via the sale_ref join. "" when the event has no sale.
+	FormID    string
 	CreatedAt time.Time
 }
 
@@ -132,6 +135,93 @@ func (s *EmailDeliveryEventStore) LatestBySaleRefs(ctx context.Context, saleRefs
 		out[e.SaleRef] = e
 	}
 	return out, rows.Err()
+}
+
+// DeliveryFilter narrows an account-scoped delivery-event query (issue #194).
+// All fields are optional; empty values are ignored. AccountIDs is required
+// (account-scoped reads). FormID is matched against the sale's form_id via a
+// join on sale_ref, so a merchant can see every email delivery for a form's
+// sales. SaleRef filters to one sale's events; EventType to one event type
+// (delivered | bounce | complaint | open | click).
+type DeliveryFilter struct {
+	AccountIDs []string
+	FormID     string
+	SaleRef    string
+	EventType  string
+	Page       int
+	Limit      int
+}
+
+// deliveryWhere builds the WHERE clause + args for an account-scoped delivery
+// filter. Returns the clause (with leading " WHERE ") and the bound args.
+func deliveryWhere(f DeliveryFilter) (string, []any) {
+	args := []any{f.AccountIDs}
+	clause := " WHERE e.account_id = ANY($1)"
+	if f.SaleRef != "" {
+		args = append(args, f.SaleRef)
+		clause += " AND e.sale_ref = $" + itoa(len(args))
+	}
+	if f.EventType != "" {
+		args = append(args, f.EventType)
+		clause += " AND e.event_type = $" + itoa(len(args))
+	}
+	if f.FormID != "" {
+		args = append(args, f.FormID)
+		clause += " AND s.form_id::text = $" + itoa(len(args))
+	}
+	return clause, args
+}
+
+// ListByFilter returns one page of delivery events for the given accounts,
+// newest first, plus the total row count for the same filter (for paging).
+// Account-scoped; optionally narrowed by form (via the sale's form_id), sale
+// ref, and/or event type. Used by GET /v1/rest/email-deliveries and the
+// list_email_deliveries MCP tool (issue #194).
+func (s *EmailDeliveryEventStore) ListByFilter(ctx context.Context, f DeliveryFilter) ([]EmailDeliveryEvent, int64, error) {
+	if len(f.AccountIDs) == 0 {
+		return []EmailDeliveryEvent{}, 0, nil
+	}
+	if f.Page < 1 {
+		f.Page = 1
+	}
+	if f.Limit <= 0 {
+		f.Limit = 20
+	}
+	if f.Limit > 100 {
+		f.Limit = 100
+	}
+	offset := (f.Page - 1) * f.Limit
+
+	where, args := deliveryWhere(f)
+	var total int64
+	if err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM email_delivery_events e
+		LEFT JOIN sales s ON s.ref_code = e.sale_ref`+where, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT e.id, COALESCE(e.account_id::text,''), e.email, e.event_type,
+		       COALESCE(e.bounce_type,''), COALESCE(e.sale_ref,''), e.detail, e.created_at,
+		       COALESCE(s.form_id::text,'')
+		FROM email_delivery_events e
+		LEFT JOIN sales s ON s.ref_code = e.sale_ref`+where+`
+		ORDER BY e.created_at DESC, e.id DESC LIMIT $`+itoa(len(args)+1)+` OFFSET $`+itoa(len(args)+2),
+		append(args, f.Limit, offset)...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	out := []EmailDeliveryEvent{}
+	for rows.Next() {
+		var e EmailDeliveryEvent
+		if err := rows.Scan(&e.ID, &e.AccountID, &e.Email, &e.EventType,
+			&e.BounceType, &e.SaleRef, &e.Detail, &e.CreatedAt, &e.FormID); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, e)
+	}
+	return out, total, rows.Err()
 }
 
 // Sweep deletes delivery events older than ttl. Returns rows deleted. This is

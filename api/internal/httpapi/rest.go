@@ -153,6 +153,9 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /v1/rest/sales/bulk-capture", h.authed(h.bulkCaptureSales))
 	mux.Handle("GET /v1/rest/sales", h.authed(h.listSales))
 	mux.Handle("GET /v1/rest/sales/{ref}/email-status", h.authed(h.saleEmailStatus))
+	// Issue #194: email delivery status view — account-scoped, paginated,
+	// filterable by form/sale/status.
+	mux.Handle("GET /v1/rest/email-deliveries", h.authed(h.listEmailDeliveries))
 	// Issue #131: subscription management for merchants.
 	mux.Handle("GET /v1/rest/subscriptions", h.authed(h.listSubscriptions))
 	mux.Handle("POST /v1/rest/subscriptions/{id}/cancel", h.authed(h.cancelSubscription))

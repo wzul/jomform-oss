@@ -283,6 +283,12 @@ func (s *Server) registerTools() {
 		Description: "Log audit/tingkah-laku akaun (terbaru dahulu). Boleh tapis event_name, from/to (RFC3339), dan page/limit. Read-only.",
 	}, s.listEvents)
 
+	// ── Parity: email delivery status (issue #194) ────────────────────────
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "list_email_deliveries",
+		Description: "Status penghantaran emel akaun (terbaru dahulu): delivered/bounce/complaint/open/click dengan emel, masa, sale_ref dan detail. Boleh tapis form_id, sale_ref, event_type, dan page/limit. Read-only.",
+	}, s.listEmailDeliveries)
+
 	// ── Parity: response-only form submissions (issue #171) ───────────────
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "list_form_submissions",

@@ -14,7 +14,7 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Shell } from "../../components/Shell";
-import { useI18n } from "../../components/i18n";
+import { useI18n, type Key } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDate, formatDateTime } from "../../lib/formatDate";
 import { spaceQuery } from "../../lib/space";
@@ -78,6 +78,26 @@ const saleBadge = (s: string) =>
     failed: "bg-red-50 text-red-700 border-red-200",
     cancelled: "bg-slate-100 text-slate-500 border-slate-200",
   })[s] || "bg-slate-100 text-slate-500 border-slate-200";
+
+/* email delivery status badge colors (issue #194) */
+const emailStatusBadge = (e: string) =>
+  ({
+    delivered: "bg-emerald-50 text-emerald-700 border-emerald-200",
+    bounce: "bg-red-50 text-red-700 border-red-200",
+    complaint: "bg-orange-50 text-orange-700 border-orange-200",
+    open: "bg-blue-50 text-blue-700 border-blue-200",
+    click: "bg-violet-50 text-violet-700 border-violet-200",
+  })[e] || "bg-slate-100 text-slate-500 border-slate-200";
+
+/* localized label for an email delivery event type (issue #194) */
+const emailStatusLabel = (e: string, t: (k: Key) => string) =>
+  ({
+    delivered: t("dash.emailDelivered"),
+    bounce: t("dash.emailBounced"),
+    complaint: t("dash.emailComplaint"),
+    open: t("dash.emailOpened"),
+    click: t("dash.emailClicked"),
+  })[e] || e;
 
 function SalesPageInner() {
   const { t } = useI18n();
@@ -441,6 +461,7 @@ function SalesPageInner() {
                 <th className="px-2 py-3 font-medium">{t("sales.items")}</th>
                 <th className="px-2 py-3 font-medium">{t("dash.amount")}</th>
                 <th className="px-2 py-3 font-medium">{t("dash.status")}</th>
+                <th className="px-2 py-3 font-medium">{t("dash.email")}</th>
                 <th className="px-2 py-3 font-medium">{t("sales.form")}</th>
                 <th className="px-2 py-3 font-medium">{t("prod.date")}</th>
                 <th className="px-4 py-3 text-right font-medium">{t("sales.actions")}</th>
@@ -466,6 +487,15 @@ function SalesPageInner() {
                     <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${saleBadge(s.status)}`}>
                       {s.status}
                     </span>
+                  </td>
+                  <td className="whitespace-nowrap px-2 py-3">
+                    {s.email_status ? (
+                      <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${emailStatusBadge(s.email_status)}`}>
+                        {emailStatusLabel(s.email_status, t)}
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-[var(--jf-muted)]">{t("dash.emailNotSent")}</span>
+                    )}
                   </td>
                   <td className="max-w-32 truncate px-2 py-3 text-xs text-[var(--jf-muted)]">
                     {s.form_id ? formName.get(s.form_id) || "—" : "—"}
@@ -507,7 +537,7 @@ function SalesPageInner() {
               ))}
               {!checking && rows.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-4 py-10 text-center text-sm text-[var(--jf-muted)]">
+                  <td colSpan={9} className="px-4 py-10 text-center text-sm text-[var(--jf-muted)]">
                     {err || t("sales.empty")}
                   </td>
                 </tr>
@@ -700,6 +730,28 @@ function SalesPageInner() {
                     </div>
                   )}
                 </div>
+              </section>
+
+              {/* Email delivery timeline (issue #194) */}
+              <section className="mt-5">
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--jf-muted)]">
+                  {t("del.timeline")}
+                </h3>
+                {detail.email_status ? (
+                  <div className="mt-2 space-y-1 text-sm">
+                    <div className="flex justify-between gap-4">
+                      <dt className="text-[var(--jf-muted)]">{t("dash.email")}</dt>
+                      <dd>
+                        <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${emailStatusBadge(detail.email_status)}`}>
+                          {emailStatusLabel(detail.email_status, t)}
+                        </span>
+                      </dd>
+                    </div>
+                    <p className="text-xs text-[var(--jf-muted)]">{t("dash.emailStatusNote")}</p>
+                  </div>
+                ) : (
+                  <p className="mt-2 text-sm text-[var(--jf-muted)]">{t("dash.emailNotSent")}</p>
+                )}
               </section>
 
               {/* Actions */}
