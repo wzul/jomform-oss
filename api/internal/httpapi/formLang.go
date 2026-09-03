@@ -34,6 +34,8 @@ type langStrings struct {
 	// Issue #173: pricing/choice field strings.
 	SelectOption   string
 	SelectShipping string
+	// Issue #249: per-product quantity selector label.
+	Quantity string
 	// Issue #183: optional public-form footer link labels.
 	PrivacyLabel string
 	TermsLabel   string
@@ -55,6 +57,7 @@ var formLangs = map[string]langStrings{
 		SelectVariation: "Select an option", SelectVariationAlert: "Please choose a variation for each product", InStock: "in stock",
 		SubmitResponse: "Submit", ThankYou: "Thank you!", ResponseReceived: "Your response has been received.",
 		SelectOption: "Select an option", SelectShipping: "Select shipping",
+		Quantity: "Quantity",
 		PrivacyLabel: "Privacy Policy", TermsLabel: "Terms of Service", RefundLabel: "Refund Policy",
 		PendingMessage: "This form is not open yet. Please check back later.",
 		ExpiredMessage: "This form has closed. Thank you for your interest.",
@@ -67,6 +70,7 @@ var formLangs = map[string]langStrings{
 		SelectVariation: "Pilih variasi", SelectVariationAlert: "Sila pilih variasi untuk setiap produk", InStock: "stok",
 		SubmitResponse: "Hantar", ThankYou: "Terima kasih!", ResponseReceived: "Respons anda telah diterima.",
 		SelectOption: "Pilih pilihan", SelectShipping: "Pilih penghantaran",
+		Quantity: "Kuantiti",
 		PrivacyLabel: "Polisi Privasi", TermsLabel: "Terma & Syarat", RefundLabel: "Polisi Bayaran Balik",
 		PendingMessage: "Borang ini belum dibuka lagi. Sila kembali semula kemudian.",
 		ExpiredMessage: "Borang ini telah ditutup. Terima kasih atas minat anda.",
@@ -79,6 +83,7 @@ var formLangs = map[string]langStrings{
 		SelectVariation: "请选择规格", SelectVariationAlert: "请为每件商品选择规格", InStock: "有货",
 		SubmitResponse: "提交", ThankYou: "谢谢！", ResponseReceived: "您的回复已收到。",
 		SelectOption: "请选择", SelectShipping: "选择配送方式",
+		Quantity: "数量",
 		PrivacyLabel: "隐私政策", TermsLabel: "服务条款", RefundLabel: "退款政策",
 		PendingMessage: "此表单尚未开放，请稍后再来。",
 		ExpiredMessage: "此表单已关闭，感谢您的关注。",
@@ -91,6 +96,7 @@ var formLangs = map[string]langStrings{
 		SelectVariation: "மாறுபாட்டைத் தேர்ந்தெடுக்கவும்", SelectVariationAlert: "ஒவ்வொரு பொருளுக்கும் மாறுபாட்டைத் தேர்ந்தெடுக்கவும்", InStock: "கையிருப்பு",
 		SubmitResponse: "சமர்ப்பி", ThankYou: "நன்றி!", ResponseReceived: "உங்கள் பதில் பெறப்பட்டது.",
 		SelectOption: "ஒரு விருப்பத்தைத் தேர்ந்தெடுக்கவும்", SelectShipping: "ஷிப்பிங்கைத் தேர்ந்தெடுக்கவும்",
+		Quantity: "அளவு",
 		PrivacyLabel: "தனியுரிமைக் கொள்கை", TermsLabel: "சேவை விதிமுறைகள்", RefundLabel: "பணத்திருப்புக் கொள்கை",
 		PendingMessage: "இந்த படிவம் இன்னும் திறக்கப்படவில்லை. பின்னர் மீண்டும் வரவும்.",
 		ExpiredMessage: "இந்த படிவம் மூடப்பட்டது. உங்கள் ஆர்வத்திற்கு நன்றி.",
@@ -103,6 +109,7 @@ var formLangs = map[string]langStrings{
 		SelectVariation: "اختر خيارًا", SelectVariationAlert: "يرجى اختيار خيار لكل منتج", InStock: "متوفر",
 		SubmitResponse: "إرسال", ThankYou: "شكراً لك!", ResponseReceived: "تم استلام ردك.",
 		SelectOption: "اختر خيارًا", SelectShipping: "اختر الشحن",
+		Quantity: "الكمية",
 		PrivacyLabel: "سياسة الخصوصية", TermsLabel: "شروط الخدمة", RefundLabel: "سياسة الاسترداد",
 		PendingMessage: "هذا النموذج غير مفتوح بعد. يرجى العودة لاحقاً.",
 		ExpiredMessage: "تم إغلاق هذا النموذج. شكراً لاهتمامك.",

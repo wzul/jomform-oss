@@ -36,10 +36,12 @@ func TestBlockFormRendersNewFieldTypes(t *testing.T) {
 		Pattern             string
 		RequiredMsg         string
 		Choices             []choiceView
+		HasQuantity         bool
 	}
 	var buf bytes.Buffer
 	err := blockTmpl.Execute(&buf, map[string]any{
 		"Slug": "demo", "Title": "Demo", "Blocks": []block{
+			{Type: "product", Value: "Yuran", ProductID: "p1", PriceSen: 300, HasPrice: true, HasQuantity: true},
 			{Type: "select", Value: "Colour", Required: true, Choices: []choiceView{{Label: "Red", Value: "red"}, {Label: "Blue", Value: "blue"}}},
 			{Type: "radio", Value: "Size", Choices: []choiceView{{Label: "S", Value: "s"}, {Label: "M", Value: "m"}}},
 			{Type: "number", Value: "Qty", Min: "1", Max: "10", Step: "1"},
@@ -86,9 +88,9 @@ func TestBlockFormRendersNewFieldTypes(t *testing.T) {
 		}
 	}
 
-	// Pricing fields: quantity input, option + shipping selects with prices.
-	if !strings.Contains(body, `class="qty"`) {
-		t.Error("quantity input missing")
+	// Pricing fields: per-product quantity input, option + shipping selects with prices.
+	if !strings.Contains(body, `class="pq"`) {
+		t.Error("per-product quantity input missing")
 	}
 	if !strings.Contains(body, `class="opt"`) {
 		t.Error("option select missing")
@@ -103,8 +105,16 @@ func TestBlockFormRendersNewFieldTypes(t *testing.T) {
 		t.Error("shipping price not rendered")
 	}
 	// The total-update JS must reference the pricing elements.
-	if !strings.Contains(body, "select.opt") || !strings.Contains(body, "select.ship") || !strings.Contains(body, "input.qty") {
+	if !strings.Contains(body, "select.opt") || !strings.Contains(body, "select.ship") || !strings.Contains(body, "input.pq") {
 		t.Error("pricing JS wiring missing")
+	}
+	// Issue #249: the product block carries its own quantity selector scoped to
+	// that product (data-id), and the total JS multiplies per-product.
+	if !strings.Contains(body, `class="pq" data-id="p1"`) {
+		t.Error("per-product quantity not scoped to product id")
+	}
+	if !strings.Contains(body, "pqty(b)") {
+		t.Error("per-product quantity not used in total calc")
 	}
 }
 

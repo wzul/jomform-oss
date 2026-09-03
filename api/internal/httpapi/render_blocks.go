@@ -40,7 +40,10 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 			Pattern      string `json:"pattern"`
 			RequiredMsg  string `json:"required_message"`
 			PriceSen     int64  `json:"price_sen"`
-			Choices      []struct {
+			// Issue #249: per-product quantity selector flag. Pointer so we can
+			// distinguish "absent" (default on) from an explicit merchant "off".
+			Quantity *bool `json:"quantity"`
+			Choices  []struct {
 				Label string `json:"label"`
 				Value string `json:"value"`
 			} `json:"choices"`
@@ -98,6 +101,8 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 		Pattern      string
 		RequiredMsg  string
 		Choices      []choiceView
+		// Issue #249: per-product quantity selector (Gravity-Forms-style).
+		HasQuantity bool
 	}
 
 	blocks := make([]blockView, 0, len(cfg.Blocks))
@@ -122,6 +127,9 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 					vb.PriceSen = price
 					vb.HasPrice = true
 				}
+				// Issue #249: per-product quantity selector. Defaults to on
+				// (matches the builder default) unless the merchant disabled it.
+				vb.HasQuantity = b.Quantity == nil || *b.Quantity
 				if vb.Value == "" {
 					vb.Value = nameOf[b.ProductID]
 				}
@@ -249,6 +257,9 @@ var blockTmpl = template.Must(template.New("blocks").
   select { appearance:auto; }
   .qtyrow { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
   .qtyrow input[type=number] { width:80px; margin-bottom:0; }
+  /* Issue #249: per-product quantity selector inside each product block. */
+  .pqrow { display:flex; align-items:center; gap:10px; padding:0 14px 12px; }
+  .pqrow input[type=number] { width:80px; margin-bottom:0; }
   .section { font-size:18px; font-weight:600; margin:18px 0 6px; color:#17181c; }
   hr { border:0; border-top:1px solid rgba(255,255,255,0.08); margin:16px 0; }
   .total { display:flex; justify-content:space-between; padding-top:12px; margin-top:8px;
@@ -275,7 +286,7 @@ var blockTmpl = template.Must(template.New("blocks").
 {{else if eq .Type "section"}}  <div class="section">{{.Value}}</div>
 {{else if eq .Type "html"}}  <div class="text">{{.Value}}</div>
 {{else if eq .Type "total"}}  <div class="total"><span>{{.Value}}</span><span class="total-val">RM0.00</span></div>
-{{else if eq .Type "product"}}  <div class="prod"><label><input type="checkbox" class="p" data-id="{{.ProductID}}" data-price="{{.PriceSen}}"><span class="pname">{{.Value}}</span><span class="price">{{if .HasPrice}}RM{{printf "%.2f" (divf .PriceSen 100)}}{{end}}</span></label>{{if .Variations}}<div class="varwrap"><select class="v" data-id="{{.ProductID}}"><option value="" disabled selected>{{$.Ls.SelectVariation}}</option>{{range .Variations}}<option value="{{.ID}}" data-price="{{.PriceSen}}"{{if .SoldOut}} disabled{{end}}>{{.Name}} — RM{{printf "%.2f" (divf .PriceSen 100)}}{{if .Stock}} ({{.Stock}} {{$.Ls.InStock}}){{end}}</option>{{end}}</select><div class="varstock"></div></div>{{end}}</div>
+{{else if eq .Type "product"}}  <div class="prod"><label><input type="checkbox" class="p" data-id="{{.ProductID}}" data-price="{{.PriceSen}}"><span class="pname">{{.Value}}</span><span class="price">{{if .HasPrice}}RM{{printf "%.2f" (divf .PriceSen 100)}}{{end}}</span></label>{{if .Variations}}<div class="varwrap"><select class="v" data-id="{{.ProductID}}"><option value="" disabled selected>{{$.Ls.SelectVariation}}</option>{{range .Variations}}<option value="{{.ID}}" data-price="{{.PriceSen}}"{{if .SoldOut}} disabled{{end}}>{{.Name}} — RM{{printf "%.2f" (divf .PriceSen 100)}}{{if .Stock}} ({{.Stock}} {{$.Ls.InStock}}){{end}}</option>{{end}}</select><div class="varstock"></div></div>{{end}}{{if .HasQuantity}}<div class="pqrow"><label class="lbl" style="margin:0">{{$.Ls.Quantity}}</label><input type="number" class="pq" data-id="{{.ProductID}}" min="1" value="1"></div>{{end}}</div>
 {{else if eq .Type "quantity"}}  <div class="qtyrow"><label class="lbl" style="margin:0">{{.Value}}</label><input type="number" class="qty" min="1" value="{{if .DefaultValue}}{{.DefaultValue}}{{else}}1{{end}}"></div>
 {{else if eq .Type "option"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><select class="opt" data-id="{{.ProductID}}"><option value="" selected>{{$.Ls.SelectOption}}</option>{{range .Choices}}<option value="{{.Value}}" data-price="{{.PriceSen}}">{{.Label}}{{if .PriceSen}} (+RM{{printf "%.2f" (divf .PriceSen 100)}}){{end}}</option>{{end}}</select>
 {{else if eq .Type "shipping"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><select class="ship" data-id="{{.ProductID}}"><option value="" selected>{{$.Ls.SelectShipping}}</option>{{range .Choices}}<option value="{{.Value}}" data-price="{{.PriceSen}}">{{.Label}}{{if .PriceSen}} (RM{{printf "%.2f" (divf .PriceSen 100)}}){{end}}</option>{{end}}</select>
@@ -322,8 +333,9 @@ var blockTmpl = template.Must(template.New("blocks").
   // Issue #153: variation selectors. Each variable product has a <select class="v">
   // whose options carry data-price; sold-out options are disabled server-side.
   var sels=document.querySelectorAll('select.v');
-  // Issue #173: pricing fields — quantity, option add-ons, shipping.
-  var qtyEl=document.querySelector('input.qty');
+  // Issue #173: pricing fields — option add-ons, shipping.
+  // Issue #249: quantity is per-product. Each product block carries its own
+  // <input class="pq" data-id="..."> selector; there is no global quantity.
   var opts=document.querySelectorAll('select.opt');
   var shipEl=document.querySelector('select.ship');
   function effPrice(b){
@@ -331,20 +343,24 @@ var blockTmpl = template.Must(template.New("blocks").
     if(sel&&sel.value){var o=sel.options[sel.selectedIndex];if(o&&o.dataset.price)return Number(o.dataset.price);}
     return Number(b.dataset.price||0);
   }
-  function qty(){ if(qtyEl){var q=parseInt(qtyEl.value,10); return (q>0)?q:1;} return 1; }
+  function pqty(b){
+    var el=document.querySelector('input.pq[data-id="'+b.dataset.id+'"]');
+    if(el){var q=parseInt(el.value,10); return (q>0)?q:1;}
+    return 1;
+  }
   function addons(){
     var t=0;
     opts.forEach(function(s){var o=s.options[s.selectedIndex];if(o&&o.dataset.price)t+=Number(o.dataset.price);});
     if(shipEl){var so=shipEl.options[shipEl.selectedIndex];if(so&&so.dataset.price)t+=Number(so.dataset.price);}
     return t;
   }
-  function upd(){var t=0;boxes.forEach(function(b){if(b.checked)t+=effPrice(b)*qty()});t+=addons();
+  function upd(){var t=0;boxes.forEach(function(b){if(b.checked)t+=effPrice(b)*pqty(b)});t+=addons();
     var s='RM'+(t/100).toFixed(2);
     var tv=document.querySelectorAll('.total-val');tv.forEach(function(el){el.textContent=s});
     var t1=document.getElementById('total');if(t1)t1.textContent=s;}
   boxes.forEach(function(b){b.addEventListener('change',upd)});
   sels.forEach(function(s){s.addEventListener('change',upd)});
-  if(qtyEl)qtyEl.addEventListener('input',upd);
+  document.querySelectorAll('input.pq').forEach(function(el){el.addEventListener('input',upd)});
   opts.forEach(function(s){s.addEventListener('change',upd)});
   if(shipEl)shipEl.addEventListener('change',upd);
   document.getElementById('of').addEventListener('submit',function(e){
@@ -353,7 +369,7 @@ var blockTmpl = template.Must(template.New("blocks").
     boxes.forEach(function(b){
       if(!b.checked)return;
       var sel=document.querySelector('select.v[data-id="'+b.dataset.id+'"]');
-      var item={product_id:b.dataset.id,quantity:qty()};
+      var item={product_id:b.dataset.id,quantity:pqty(b)};
       if(sel){
         if(!sel.value){ok=false;return;}
         item.variation_id=sel.value;

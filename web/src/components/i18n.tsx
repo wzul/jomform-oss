@@ -807,6 +807,7 @@ const DICT = {
   "bld.pattern": { en: "Validation pattern", ms: "Corak pengesahan", zh: "验证模式", ta: "சரிபார்ப்பு வடிவம்", ar: "نمط التحقق" },
   "bld.patternPh": { en: "Regex, e.g. ^[0-9]{5}$", ms: "Regex, cth: ^[0-9]{5}$", zh: "正则，例如 ^[0-9]{5}$", ta: "Regex, எ.கா: ^[0-9]{5}$", ar: "تعبير نمطي، مثال: ^[0-9]{5}$" },
   "bld.defaultQty": { en: "Default quantity", ms: "Kuantiti lalai", zh: "默认数量", ta: "இயல்புநிலை அளவு", ar: "الكمية الافتراضية" },
+  "bld.perProductQty": { en: "Per-product quantity", ms: "Kuantiti setiap produk", zh: "每件商品数量", ta: "ஒவ்வொரு பொருளுக்கும் அளவு", ar: "الكمية لكل منتج" },
   "bld.duplicate": { en: "Duplicate", ms: "Duplikat", zh: "复制", ta: "நகலெடு", ar: "تكرار" },
   // form settings (issue #177)
   "fs.title": { en: "Form Settings", ms: "Tetapan Borang", zh: "表单设置", ta: "படிவ அமைப்புகள்", ar: "إعدادات النموذج" },

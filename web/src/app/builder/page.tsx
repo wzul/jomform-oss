@@ -70,6 +70,9 @@ type Block = {
   requiredMessage?: string;
   priceSen?: number;
   choices?: Choice[];
+  // Issue #249: per-product quantity selector (Gravity-Forms-style). When true,
+  // the product block renders its own quantity input scoped to that product.
+  quantity?: boolean;
 };
 
 type Product = { id: string; name: string; price_sen: number; type: string };
@@ -290,6 +293,7 @@ export default function Builder() {
       pattern: b.pattern as string | undefined,
       requiredMessage: b.required_message as string | undefined,
       priceSen: b.price_sen as number | undefined,
+      quantity: b.quantity as boolean | undefined,
       choices,
     };
   }
@@ -297,6 +301,8 @@ export default function Builder() {
   function makeBlock(bt: BlockType): Block {
     const b: Block = { id: uid(), type: bt, value: "" };
     if (bt === "product" && products[0]) b.productId = products[0].id;
+    // Issue #249: product blocks get a per-product quantity selector by default.
+    if (bt === "product") b.quantity = true;
     if (fieldTypes.includes(bt)) {
       b.required = bt === "name" || bt === "email";
       const k = FIELD_LABEL_KEY[bt];
@@ -435,6 +441,7 @@ export default function Builder() {
         pattern: b.pattern || undefined,
         required_message: b.requiredMessage || undefined,
         price_sen: b.priceSen,
+        quantity: b.quantity === undefined ? undefined : b.quantity,
         choices: b.choices?.map((c) => ({ label: c.label, value: c.value, price_sen: c.price_sen })),
       })),
       products: products.map((p) => ({ id: p.id, name: p.name, price_sen: p.price_sen })),
@@ -691,6 +698,16 @@ export default function Builder() {
                 </option>
               ))}
             </select>
+            {/* Issue #249: per-product quantity selector (Gravity-Forms-style). */}
+            <label className="mt-3 flex items-center gap-2 text-xs text-[var(--jf-muted)]">
+              <input
+                type="checkbox"
+                checked={b.quantity !== false}
+                onChange={(e) => upd({ quantity: e.target.checked })}
+                className="h-4 w-4 accent-[#7170ff]"
+              />
+              {t("bld.perProductQty")}
+            </label>
           </div>
         )}
 
@@ -1187,9 +1204,18 @@ function BlockPreview({ block, products }: { block: Block; products: Product[] }
       );
     case "product":
       return (
-        <div className="flex items-center justify-between rounded-md border border-[var(--jf-border)] bg-slate-50 px-3 py-2">
-          <span className="text-sm">{block.value || p?.name || "Product"}</span>
-          <span className="text-sm font-medium text-[var(--jf-primary)]">{p ? money(p.price_sen) : "—"}</span>
+        <div className="rounded-md border border-[var(--jf-border)] bg-slate-50 px-3 py-2">
+          <div className="flex items-center justify-between">
+            <span className="text-sm">{block.value || p?.name || "Product"}</span>
+            <span className="text-sm font-medium text-[var(--jf-primary)]">{p ? money(p.price_sen) : "—"}</span>
+          </div>
+          {/* Issue #249: per-product quantity selector preview. */}
+          {block.quantity !== false && (
+            <div className="mt-2 flex items-center gap-2 text-xs text-[var(--jf-muted)]">
+              <span>Qty</span>
+              <span className="rounded-md border border-[var(--jf-border)] bg-white px-2 py-0.5">1</span>
+            </div>
+          )}
         </div>
       );
     case "quantity":
