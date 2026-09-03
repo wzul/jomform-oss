@@ -70,6 +70,11 @@ type Config struct {
 	EventAuditRetentionDays int
 	DeliveryRetentionDays   int
 
+	// UnverifiedPurgeDays (issue #190): unverified accounts (never confirmed
+	// their email) older than this many days are auto-deleted by the hourly
+	// sweep. Defaults to 7.
+	UnverifiedPurgeDays int
+
 	// OAuth 2.1 (issue #121): authorization-code TTL and access/refresh-token
 	// lifetimes for MCP clients. Defaults match the issue (10-min code,
 	// 1-hour access, 30-day refresh).
@@ -120,6 +125,9 @@ func Load() (*Config, error) {
 		EventRetentionDays:      parsePositiveInt(os.Getenv("EVENT_RETENTION_DAYS"), 90),
 		EventAuditRetentionDays: parsePositiveInt(os.Getenv("EVENT_AUDIT_RETENTION_DAYS"), 180),
 		DeliveryRetentionDays:   parsePositiveInt(os.Getenv("DELIVERY_RETENTION_DAYS"), 90),
+
+		// Unverified-account purge (issue #190): default 7 days.
+		UnverifiedPurgeDays: parsePositiveInt(os.Getenv("UNVERIFIED_PURGE_DAYS"), 7),
 
 		// OAuth 2.1 (issue #121): sensible defaults, overridable per env.
 		OAuthCodeTTLSeconds:         time.Duration(parsePositiveInt64(os.Getenv("OAUTH_CODE_TTL_SECONDS"), 600)) * time.Second,

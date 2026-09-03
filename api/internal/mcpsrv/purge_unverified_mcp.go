@@ -1,0 +1,49 @@
+// MCP parity tool: purge_unverified_accounts — reports the number of
+// unverified accounts (never confirmed their email) older than the purge
+// cutoff (issue #190). The actual deletion runs automatically on the hourly
+// sweep; this tool surfaces the backlog count so an admin agent can observe
+// the purge without a dangerous cross-account delete.
+package mcpsrv
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+// purgeUnverifiedIn is the input for purge_unverified_accounts.
+type purgeUnverifiedIn struct {
+	// Days is the age threshold (default 7). Accounts created before
+	// now-Days that are still unverified are counted.
+	Days int `json:"days,omitempty" jsonschema:"Umur minimum (hari) akaun belum disahkan untuk dikira. Default 7."`
+}
+
+// purgeUnverifiedAccounts reports how many unverified accounts are older than
+// the purge cutoff and would be auto-deleted by the next sweep. Read-only and
+// admin-gated: it never deletes anything itself.
+func (s *Server) purgeUnverifiedAccounts(
+	ctx context.Context, _ *mcp.CallToolRequest, in purgeUnverifiedIn,
+) (*mcp.CallToolResult, map[string]any, error) {
+	if _, err := s.requireAdminRole(ctx); err != nil {
+		return nil, nil, err
+	}
+	if s.deps.Users == nil {
+		return nil, nil, errors.New("user store tidak dikonfigurasi")
+	}
+	days := in.Days
+	if days <= 0 {
+		days = 7
+	}
+	cutoff := time.Now().Add(-time.Duration(days) * 24 * time.Hour)
+	n, err := s.deps.Users.CountUnverifiedOlderThan(ctx, cutoff)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, map[string]any{
+		"unverified_older_than_days": days,
+		"count":                      n,
+		"note":                       "Akaun belum disahkan dipadam automatik oleh sweep; tool ini hanya melaporkan kiraan.",
+	}, nil
+}

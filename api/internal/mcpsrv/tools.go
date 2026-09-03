@@ -290,6 +290,14 @@ func (s *Server) registerTools() {
 		Description: "Clone template borang (slug dari list_templates) menjadi draft baharu dalam akaun anda. Pulangkan form_id + slug untuk dibuka dalam builder.",
 	}, s.useTemplateMCP)
 
+	// ── Parity: unverified-account purge (issue #190) ───────────────────
+	// The auto-deletion runs on the hourly sweep; this admin tool surfaces
+	// the backlog count (read-only) so agents can observe the purge.
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "purge_unverified_accounts",
+		Description: "Laporkan bilangan akaun belum disahkan (emel) yang lebih lama daripada ambang dan akan dipadam automatik oleh sweep. Admin sahaja; read-only — tidak memadam apa-apa.",
+	}, s.purgeUnverifiedAccounts)
+
 }
 
 // helper: require a write-capable key.

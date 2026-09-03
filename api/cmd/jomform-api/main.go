@@ -292,6 +292,18 @@ func main() {
 						slog.Info("delivery_event_retention_sweep", "deleted", n)
 					}
 				}
+				// Issue #190: purge unverified accounts (never confirmed their
+				// email) older than UnverifiedPurgeDays. Only verified=false
+				// rows are ever deleted; the store also cleans up the
+				// auto-provisioned account/space so no orphans remain.
+				if deps.Users != nil {
+					cutoff := time.Now().Add(-time.Duration(cfg.UnverifiedPurgeDays) * 24 * time.Hour)
+					if n, err := deps.Users.DeleteUnverifiedOlderThan(ctx, cutoff); err != nil {
+						slog.Warn("unverified_purge_sweep", "err", err)
+					} else if n > 0 {
+						slog.Info("unverified_purge_sweep", "deleted", n)
+					}
+				}
 				cancel()
 				<-ticker.C
 			}

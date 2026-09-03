@@ -277,3 +277,86 @@ func (s *UserStore) ClearDefaultSpace(ctx context.Context, userID string) error 
 		`UPDATE users SET default_space_id=NULL, updated_at=now() WHERE id=$1`, userID)
 	return err
 }
+
+// CountUnverifiedOlderThan returns how many users are still unverified
+// (verified=false) and were created before cutoff (issue #190). Used by the
+// MCP parity tool to surface the purge backlog without deleting anything.
+func (s *UserStore) CountUnverifiedOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
+	var n int64
+	err := s.pool.QueryRow(ctx,
+		`SELECT count(*) FROM users WHERE verified = false AND created_at < $1`, cutoff).Scan(&n)
+	return n, err
+}
+
+// DeleteUnverifiedOlderThan deletes users who never confirmed their email and
+// were created before cutoff (issue #190). It also cleans up their
+// auto-provisioned accounts (and any owned spaces) so no orphan rows remain.
+//
+// Safety: only rows with verified=false are ever deleted — the final DELETE
+// carries a verified=false guard as a hard backstop, so a verified account is
+// never removed even if it slipped into the scan. Accounts with sales or
+// subscriptions (RESTRICT FKs) are left untouched, and the user is only
+// deleted once their deletable accounts/spaces are gone.
+//
+// Returns the number of users actually deleted.
+func (s *UserStore) DeleteUnverifiedOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+
+	rows, err := tx.Query(ctx,
+		`SELECT id FROM users WHERE verified = false AND created_at < $1`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	var deleted int64
+	for _, id := range ids {
+		// Delete spaces owned by the user that have no linked accounts, so the
+		// user delete's CASCADE on spaces can't be blocked by accounts.space_id.
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM spaces
+			 WHERE owner_user_id = $1
+			   AND id NOT IN (SELECT space_id FROM accounts WHERE space_id IS NOT NULL)`,
+			id); err != nil {
+			return 0, err
+		}
+		// Delete the user's accounts (incl. the auto-provisioned one from
+		// handleRegister) that have no sales/subscriptions (RESTRICT guards).
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM accounts
+			 WHERE owner_user_id = $1
+			   AND id NOT IN (SELECT account_id FROM sales)
+			   AND id NOT IN (SELECT account_id FROM subscriptions)`,
+			id); err != nil {
+			return 0, err
+		}
+		// Delete the user. The verified=false guard is a hard safety net.
+		tag, err := tx.Exec(ctx,
+			`DELETE FROM users WHERE id = $1 AND verified = false`, id)
+		if err != nil {
+			return 0, err
+		}
+		deleted += tag.RowsAffected()
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return deleted, nil
+}
