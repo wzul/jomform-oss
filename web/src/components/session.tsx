@@ -33,6 +33,7 @@ export type SessionUser = {
   email: string;
   name?: string;
   avatar_url?: string; // issue #133 profile picture (empty = initial-letter fallback)
+  phone?: string; // issue #181 optional phone number (empty = not set)
   totp_enabled?: boolean;
   default_space_id?: string; // issue #164 (empty = no default → space-picker on login)
 };

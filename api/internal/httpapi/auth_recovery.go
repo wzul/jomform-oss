@@ -304,6 +304,6 @@ func (a *AuthHandlers) handleMagicLinkVerify(w http.ResponseWriter, r *http.Requ
 	}
 	writeJSON(w, http.StatusOK, meResponse{
 		ID: user.ID, Email: user.Email, TOTPEnabled: user.TOTPEnabled, CreatedAt: user.CreatedAt.UTC().Format(time.RFC3339),
-		DefaultSpaceID: defSpace,
+		Phone: user.Phone, DefaultSpaceID: defSpace,
 	})
 }

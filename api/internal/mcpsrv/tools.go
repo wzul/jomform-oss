@@ -242,6 +242,11 @@ func (s *Server) registerTools() {
 		Name:        "set_default_space",
 		Description: "Set space lalai anda (space yang anda masuk terus selepas log masuk, tanpa prompt). space_id kosong = buang default. Space mesti milik anda.",
 	}, s.setDefaultSpace)
+	// Issue #181: optional profile phone number parity.
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "update_profile_phone",
+		Description: "Set nombor telefon pilihan pada profil anda (kosong = buang). Format longgar: digit, +, ruang, 8-15 digit.",
+	}, s.updateProfilePhone)
 
 	// ── Parity: per-space email templates (issue #107) ────────────────────
 	mcp.AddTool(s.mcp, &mcp.Tool{

@@ -42,7 +42,7 @@ func (a *AuthHandlers) handleProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id": u.ID, "email": u.Email, "name": u.Name,
-		"avatar_url": u.AvatarURL, "totp_enabled": u.TOTPEnabled, "created_at": u.CreatedAt,
+		"avatar_url": u.AvatarURL, "phone": u.Phone, "totp_enabled": u.TOTPEnabled, "created_at": u.CreatedAt,
 	})
 }
 
@@ -65,6 +65,49 @@ func (a *AuthHandlers) handleUpdateName(w http.ResponseWriter, r *http.Request) 
 		name = name[:80]
 	}
 	if err := a.Users.UpdateName(r.Context(), uid, name); err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
+}
+
+// handleUpdatePhone: POST /v1/auth/profile/phone (issue #181). Optional — a
+// user can set a phone number or leave it blank. Empty string clears it.
+// Format is validated loosely (digits, +, spaces, 8-15 chars) but not
+// over-restricted, since the field is optional.
+func (a *AuthHandlers) handleUpdatePhone(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Phone string `json:"phone"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	uid := a.profileUserID(r)
+	if uid == "" {
+		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		return
+	}
+	phone := strings.TrimSpace(req.Phone)
+	if phone != "" {
+		digits := 0
+		for _, c := range phone {
+			switch {
+			case c >= '0' && c <= '9':
+				digits++
+			case c == '+' || c == ' ' || c == '-' || c == '(' || c == ')':
+				// allowed separators
+			default:
+				writeErr(w, http.StatusBadRequest, "nombor telefon tidak sah")
+				return
+			}
+		}
+		if digits < 8 || digits > 15 {
+			writeErr(w, http.StatusBadRequest, "nombor telefon tidak sah")
+			return
+		}
+	}
+	if err := a.Users.UpdatePhone(r.Context(), uid, phone); err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}

@@ -13,6 +13,7 @@ type Profile = {
   email: string;
   name: string;
   avatar_url: string; // issue #133
+  phone: string; // issue #181 optional phone number (empty = not set)
   totp_enabled: boolean;
   created_at: string;
 };
@@ -39,6 +40,8 @@ export default function ProfilePage() {
   const [p, setP] = useState<Profile | null>(null);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  // Issue #181: optional phone number state.
+  const [phone, setPhone] = useState("");
   // Issue #133: profile picture state — current avatar URL, upload progress.
   const [avatarUrl, setAvatarUrl] = useState("");
   const [avatarPreview, setAvatarPreview] = useState("");
@@ -80,12 +83,14 @@ export default function ProfilePage() {
         email: sessionUser.email ?? prev?.email ?? "",
         name: sessionUser.name ?? prev?.name ?? "",
         avatar_url: sessionUser.avatar_url ?? prev?.avatar_url ?? "",
+        phone: sessionUser.phone ?? prev?.phone ?? "",
         totp_enabled: sessionUser.totp_enabled ?? prev?.totp_enabled ?? false,
         created_at: prev?.created_at ?? "",
       }));
       setName((cur) => cur || sessionUser.name || "");
       setEmail((cur) => cur || sessionUser.email || "");
       setAvatarUrl((cur) => cur || sessionUser.avatar_url || "");
+      setPhone((cur) => cur || sessionUser.phone || "");
     }
     fetch("/api/auth/passkeys")
       .then((r) => (r.ok ? r.json() : []))
@@ -335,6 +340,21 @@ export default function ProfilePage() {
                 onClick={() => post("/api/auth/profile/name", { name })}
                 className="jf-btn-primary mt-3"
               >{t("prof.saveName")}</button>
+              </div>
+              {/* Issue #181: optional phone number — blank = not set. */}
+              <div className="mt-4 border-t border-slate-100 pt-4">
+                <label className="mt-3 block text-xs text-slate-500">{t("prof.phone")}</label>
+                <input
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  className="jf-input mt-1 max-w-xl"
+                  placeholder={t("prof.phonePlaceholder")}
+                  inputMode="tel"
+                />
+                <button
+                  onClick={() => post("/api/auth/profile/phone", { phone })}
+                  className="jf-btn-primary mt-3"
+                >{t("prof.savePhone")}</button>
               </div>
             </section>
 

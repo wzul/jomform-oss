@@ -99,7 +99,7 @@ func (h *RESTHandlers) dashboardBundle(w http.ResponseWriter, r *http.Request, a
 			}
 			bundle.Me = &map[string]any{
 				"id": u.ID, "email": u.Email, "name": u.Name,
-				"avatar_url": u.AvatarURL, "totp_enabled": u.TOTPEnabled, "created_at": u.CreatedAt,
+				"avatar_url": u.AvatarURL, "phone": u.Phone, "totp_enabled": u.TOTPEnabled, "created_at": u.CreatedAt,
 				"default_space_id": defSpace,
 			}
 		}

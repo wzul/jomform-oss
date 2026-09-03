@@ -198,6 +198,46 @@ func (s *Server) setDefaultSpace(
 	return nil, map[string]string{"status": "saved", "space_id": in.SpaceID}, nil
 }
 
+// ── update_profile_phone (issue #181) ───────────────────────────────────────
+
+type updateProfilePhoneIn struct {
+	Phone string `json:"phone" jsonschema:"Nombor telefon pilihan (kosong = buang). Format longgar: digit, +, ruang, 8-15 digit."`
+}
+
+// updateProfilePhone sets (or clears, when phone is empty) the account owner's
+// optional phone number — MCP parity for the dashboard Profile → Identity tab.
+func (s *Server) updateProfilePhone(
+	ctx context.Context, _ *mcp.CallToolRequest, in updateProfilePhoneIn,
+) (*mcp.CallToolResult, map[string]string, error) {
+	if s.deps.Users == nil {
+		return nil, nil, errors.New("users tidak tersedia")
+	}
+	owner, err := s.spaceOwner(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	phone := strings.TrimSpace(in.Phone)
+	if phone != "" {
+		digits := 0
+		for _, c := range phone {
+			switch {
+			case c >= '0' && c <= '9':
+				digits++
+			case c == '+' || c == ' ' || c == '-' || c == '(' || c == ')':
+			default:
+				return nil, nil, errors.New("nombor telefon tidak sah")
+			}
+		}
+		if digits < 8 || digits > 15 {
+			return nil, nil, errors.New("nombor telefon tidak sah")
+		}
+	}
+	if err := s.deps.Users.UpdatePhone(ctx, owner, phone); err != nil {
+		return nil, nil, fmt.Errorf("db: %w", err)
+	}
+	return nil, map[string]string{"status": "saved", "phone": phone}, nil
+}
+
 // ── get_space_settings ───────────────────────────────────────────────────────
 
 type spaceRefIn struct {

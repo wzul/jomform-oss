@@ -90,6 +90,7 @@ func (a *AuthHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/auth/change-password", a.handleChangePassword)
 	mux.HandleFunc("GET /v1/auth/profile", a.handleProfile)
 	mux.HandleFunc("POST /v1/auth/profile/name", a.handleUpdateName)
+	mux.HandleFunc("POST /v1/auth/profile/phone", a.handleUpdatePhone)
 	mux.HandleFunc("POST /v1/auth/profile/email", a.handleUpdateEmail)
 	mux.HandleFunc("PUT /v1/auth/profile/email", a.handleUpdateEmail)
 	// Issue #164: set/clear the user's default space (multi-space login picker).
@@ -152,6 +153,8 @@ type meResponse struct {
 	Email       string  `json:"email"`
 	Name        string  `json:"name,omitempty"`
 	AvatarURL   string  `json:"avatar_url,omitempty"` // issue #133
+	// Issue #181: the user's optional phone number ("" when not set).
+	Phone       string  `json:"phone,omitempty"`
 	TOTPEnabled bool    `json:"totp_enabled"`
 	CreatedAt   string  `json:"created_at"`
 	NextStep    *string `json:"next_step,omitempty"` // set when 2FA code is required
@@ -422,7 +425,7 @@ func (a *AuthHandlers) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, meResponse{
 		ID: user.ID, Email: user.Email, TOTPEnabled: user.TOTPEnabled, CreatedAt: user.CreatedAt.UTC().Format(time.RFC3339),
-		DefaultSpaceID: defSpace,
+		Phone: user.Phone, DefaultSpaceID: defSpace,
 	})
 }
 
@@ -490,7 +493,7 @@ func (a *AuthHandlers) handleMe(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, meResponse{
 		ID: user.ID, Email: user.Email, Name: user.Name, AvatarURL: user.AvatarURL, TOTPEnabled: user.TOTPEnabled, CreatedAt: user.CreatedAt.UTC().Format(time.RFC3339),
-		DefaultSpaceID: defSpace,
+		Phone: user.Phone, DefaultSpaceID: defSpace,
 	})
 }
 

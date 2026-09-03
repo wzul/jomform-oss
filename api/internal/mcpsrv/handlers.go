@@ -429,6 +429,8 @@ type accountOut struct {
 	Slug     string `json:"slug"`
 	Currency string `json:"currency"`
 	ChipMode string `json:"chip_mode"`
+	// Issue #181: the account owner's optional phone number ("" when not set).
+	Phone string `json:"phone,omitempty"`
 }
 
 func (s *Server) getAccount(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, accountOut, error) {
@@ -440,5 +442,11 @@ func (s *Server) getAccount(ctx context.Context, _ *mcp.CallToolRequest, _ empty
 	if err != nil {
 		return nil, accountOut{}, fmt.Errorf("db: %w", err)
 	}
-	return nil, accountOut{Name: acc.Name, Slug: acc.Slug, Currency: acc.Currency, ChipMode: acc.ChipMode}, nil
+	phone := ""
+	if s.deps.Users != nil {
+		if u, uerr := s.deps.Users.ByID(ctx, acc.OwnerUserID); uerr == nil && u != nil {
+			phone = u.Phone
+		}
+	}
+	return nil, accountOut{Name: acc.Name, Slug: acc.Slug, Currency: acc.Currency, ChipMode: acc.ChipMode, Phone: phone}, nil
 }
