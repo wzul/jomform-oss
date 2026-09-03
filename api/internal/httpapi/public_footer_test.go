@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"html/template"
 	"strings"
 	"testing"
 )
@@ -49,10 +50,12 @@ func TestLegacyFormRendersNoFooter(t *testing.T) {
 		Slug, Title, Description string
 		Products                 []tmplProduct
 		Footer                   footerInfo
+		AntiSpam                 template.HTML
 	}{
 		Slug: "demo", Title: "Demo", Description: "desc",
 		Products: []tmplProduct{{ID: "p1", Name: "Item", PriceSen: 100}},
 		Footer:   footerInfo{},
+		AntiSpam: template.HTML(antiSpamRenderFields()),
 	})
 	if err != nil {
 		t.Fatalf("formTmpl.Execute: %v", err)

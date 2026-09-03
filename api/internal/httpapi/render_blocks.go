@@ -171,6 +171,8 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 		"Ls":   ls,
 		// Issue #183: optional per-space footer.
 		"Footer": h.spaceFooter(r.Context(), f),
+		// Issue #244: hidden honeypot + render-timestamp fields.
+		"AntiSpam": template.HTML(antiSpamRenderFields()),
 	}); err != nil {
 		slog.Error("form_render_blocks", "err", err)
 	}
@@ -300,6 +302,7 @@ var blockTmpl = template.Must(template.New("blocks").
 {{end}}</span>
 {{end}}
   <div class="total"><span>{{$.Ls.Total}}</span><span id="total">RM0.00</span></div>
+  {{.AntiSpam}}
   <button type="submit" form="of">{{$.Ls.Submit}}</button>
 </form>
 {{if .Footer.HasFooter}}<footer class="jf-footer">
@@ -544,6 +547,8 @@ func (h *PublicHandlers) renderResponseForm(w http.ResponseWriter, r *http.Reque
 		"Ls":   ls,
 		// Issue #183: optional per-space footer.
 		"Footer": h.spaceFooter(r.Context(), f),
+		// Issue #244: hidden honeypot + render-timestamp fields.
+		"AntiSpam": template.HTML(antiSpamRenderFields()),
 	}); err != nil {
 		slog.Error("form_render_response", "err", err)
 	}
@@ -624,6 +629,7 @@ var responseTmpl = template.Must(template.New("response").
 {{else if eq .Type "hidden"}}  <input type="hidden" name="{{.ID}}" value="{{.DefaultValue}}">
 {{end}}
 {{end}}
+  {{.AntiSpam}}
   <button type="submit">{{$.Ls.SubmitResponse}}</button>
 </form>
 {{if .Footer.HasFooter}}<footer class="jf-footer">

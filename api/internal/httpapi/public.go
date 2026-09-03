@@ -23,6 +23,7 @@ import (
 
 	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/email"
 	"github.com/wzul/jomform/api/internal/payments"
 )
 
@@ -46,6 +47,20 @@ type PublicHandlers struct {
 	// AccessKey (ENCRYPTION_KEY bytes) signs the private-form unlock cookie
 	// (issue #176). Nil disables private-form access (gate always shown).
 	AccessKey []byte
+	// Issue #244: deterministic anti-spam layers on public form submissions.
+	//   - Sessions + Users + SpaceMembers resolve whether the submitter is a
+	//     logged-in owner/admin of the form's space, in which case the
+	//     per-form rate limit and time-based check are skipped (owner testing
+	//     the form shouldn't be throttled). All nil in bare-mode tests.
+	//   - MXChecker validates the submitted email's domain accepts mail
+	//     (issue #56 reuse). Nil disables the MX check (format still checked).
+	//   - FormLimiter is the per-form-per-IP token bucket (15/hour). Nil
+	//     disables the per-form rate limit (bare-mode tests).
+	Sessions     *auth.Sessions
+	Users        *dbstore.UserStore
+	SpaceMembers *dbstore.SpaceMemberStore
+	MXChecker    *email.MXChecker
+	FormLimiter  *middleware.RateLimiter
 }
 
 // RegisterRoutes wires public endpoints.
@@ -155,6 +170,176 @@ func resolveChipClient(f *dbstore.Form, fields map[string]string, fallback dbsto
 	return out
 }
 
+// ─── Issue #244: deterministic anti-spam layers ──────────────────────────────
+//
+// Four self-built, zero-token layers that catch dumb bots before any AI is
+// involved. Each layer REJECTS the submission (returns an error) rather than
+// flagging it — issue #245 (AI spam detection) is a separate follow-up that
+// adds is_spam/spam_reason fields + a background judge.
+
+// antiSpamHoneypotField is the hidden field name rendered into every public
+// form (CSS display:none). Bots auto-fill it; humans never see it. A filled
+// value marks a bot.
+const antiSpamHoneypotField = "website"
+
+// antiSpamMinRenderTime is the minimum time a human needs to fill a form.
+// Bots auto-submit immediately after the page loads, so a submit arriving
+// faster than this is rejected (issue #244, layer 3).
+const antiSpamMinRenderTime = 3 * time.Second
+
+// antiSpamFormLimitPerHour is the max submissions per form per IP per hour
+// (issue #244, layer 2). Wan suggested 15.
+const antiSpamFormLimitPerHour = 15
+
+// antiSpamRenderField is the hidden timestamp field name rendered into every
+// public form. Its value is the render time (Unix seconds); the submit must
+// arrive at least antiSpamMinRenderTime later.
+const antiSpamRenderField = "jf_ts"
+
+// submitInput is the JSON body of a public form submit (payment mode). Shared
+// by handleSubmit and the anti-spam checks so the field shape stays in sync.
+type submitInput struct {
+	Client struct {
+		FullName        string `json:"full_name"`
+		Email           string `json:"email"`
+		Phone           string `json:"phone"`
+		StreetAddress   string `json:"street_address"`
+		City            string `json:"city"`
+		State           string `json:"state"`
+		ZipCode         string `json:"zip_code"`
+		Country         string `json:"country"`
+		LegalName       string `json:"legal_name"`
+		RegistrationNum string `json:"registration_number"`
+		TaxNumber       string `json:"tax_number"`
+	} `json:"client"`
+	Items []struct {
+		ProductID   string `json:"product_id"`
+		VariationID string `json:"variation_id"`
+		Quantity    int64  `json:"quantity"`
+	} `json:"items"`
+	PaymentMethod string            `json:"payment_method"`         // chip | bank_direct
+	SkipCapture   bool              `json:"skip_capture,omitempty"` // authorize now, capture later
+	Fields        map[string]string `json:"fields,omitempty"`
+}
+
+// antiSpamRenderTime returns the current render timestamp (Unix seconds) to
+// embed in the hidden anti-spam field.
+func antiSpamRenderTime() int64 {
+	return time.Now().Unix()
+}
+
+// antiSpamRenderFields returns the hidden honeypot + timestamp fields to
+// inject into a rendered public form. The honeypot is a display:none text
+// input; the timestamp is a hidden input carrying the render time. Both carry
+// a name AND a data-id so the block renderer (which collects [data-id] keyed by
+// data-id) and the response renderer (which collects [name] keyed by name)
+// both submit them under the same field keys the server checks.
+func antiSpamRenderFields() string {
+	return `<div style="display:none" aria-hidden="true">
+  <label>Website<input type="text" name="` + antiSpamHoneypotField + `" data-id="` + antiSpamHoneypotField + `" tabindex="-1" autocomplete="off"></label>
+  <input type="hidden" name="` + antiSpamRenderField + `" data-id="` + antiSpamRenderField + `" value="` + strconv.FormatInt(antiSpamRenderTime(), 10) + `">
+</div>`
+}
+
+// antiSpamSubmitterIsOwner reports whether the request is from a logged-in
+// owner/admin of the form's space. When true, the per-form rate limit and
+// time-based check are skipped (owner testing the form shouldn't be
+// throttled). Returns false when any dependency is nil (bare-mode tests) or
+// the session/space cannot be resolved.
+func (h *PublicHandlers) antiSpamSubmitterIsOwner(r *http.Request, form *dbstore.Form) bool {
+	if h.Sessions == nil || h.Users == nil || h.SpaceMembers == nil || h.Spaces == nil {
+		return false
+	}
+	c, err := r.Cookie(sessionCookie)
+	if err != nil || c.Value == "" {
+		return false
+	}
+	uid, issued, err := h.Sessions.GetCreated(r.Context(), c.Value)
+	if err != nil || uid == "" {
+		return false
+	}
+	// Password-reset invalidation (issue #62): a session issued before the
+	// user's last password reset is dead.
+	if u, e := h.Users.ByID(r.Context(), uid); e == nil && u != nil && u.PwResetAt != nil && !auth.ValidAfter(issued, *u.PwResetAt) {
+		return false
+	}
+	spaceID, err := h.Spaces.SpaceIDByAccount(r.Context(), form.AccountID)
+	if err != nil || spaceID == "" {
+		return false
+	}
+	admin, err := h.SpaceMembers.IsAdmin(r.Context(), spaceID, uid)
+	return err == nil && admin
+}
+
+// antiSpamCheckHoneypot rejects a submit whose hidden honeypot field is
+// filled (issue #244, layer 1). Returns true when the submit is spam.
+func (h *PublicHandlers) antiSpamCheckHoneypot(r *http.Request, in *submitInput) bool {
+	// The honeypot rides on the top-level fields map (the renderer emits it
+	// as a named input, and the client JS collects every [data-id] element).
+	// A filled value marks a bot.
+	if v, ok := in.Fields[antiSpamHoneypotField]; ok && strings.TrimSpace(v) != "" {
+		slog.Warn("form_honeypot_caught", "ip", middleware.ClientIP(r))
+		return true
+	}
+	return false
+}
+
+// antiSpamCheckTime rejects a submit that arrives too fast after the form was
+// rendered (issue #244, layer 3). The renderer embeds a hidden timestamp; a
+// submit whose elapsed time is under antiSpamMinRenderTime is a bot. Returns
+// true when the submit is spam.
+func (h *PublicHandlers) antiSpamCheckTime(r *http.Request, in *submitInput) bool {
+	raw, ok := in.Fields[antiSpamRenderField]
+	if !ok {
+		// No render timestamp — nothing to measure. Skip the time check
+		// (a real renderer always embeds it, but API clients and legacy
+		// callers may not; they are not necessarily bots). The honeypot,
+		// rate limit, and email layers still apply.
+		return false
+	}
+	ts, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return false
+	}
+	elapsed := time.Since(time.Unix(ts, 0))
+	return elapsed < antiSpamMinRenderTime
+}
+
+// antiSpamCheckRateLimit enforces the per-form-per-IP rate limit (issue #244,
+// layer 2): max antiSpamFormLimitPerHour submissions per form per IP per hour.
+// Returns true when the submit is over the limit.
+func (h *PublicHandlers) antiSpamCheckRateLimit(r *http.Request, form *dbstore.Form) bool {
+	if h.FormLimiter == nil {
+		return false
+	}
+	key := form.ID + "|" + middleware.ClientIP(r)
+	return !h.FormLimiter.Allow(key)
+}
+
+// antiSpamCheckEmail validates the submitted email format + MX (issue #244,
+// layer 5). Returns true when the email is invalid (reject the submit).
+func (h *PublicHandlers) antiSpamCheckEmail(r *http.Request, emailAddr string) bool {
+	emailAddr = strings.TrimSpace(emailAddr)
+	if !auth.ValidEmail(emailAddr) {
+		return true
+	}
+	// MX check (issue #56 reuse): reject a domain that accepts no mail. Only
+	// when a checker is wired (nil in bare-mode tests → format-only).
+	if h.MXChecker == nil {
+		return false
+	}
+	domain := email.DomainOf(emailAddr)
+	if domain == "" {
+		return true
+	}
+	ok, err := h.MXChecker.Check(r.Context(), domain)
+	if err != nil {
+		// Fail closed (conservative): a domain we cannot verify is rejected.
+		return true
+	}
+	return !ok
+}
+
 // handleSubmit creates a pending sale, requests a CHIP purchase and returns
 // the checkout URL. In response mode (issue #171) it instead stores the
 // submitted field values as a submission — no sale, no payment, no checkout.
@@ -202,33 +387,33 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var in struct {
-		Client struct {
-			FullName        string `json:"full_name"`
-			Email           string `json:"email"`
-			Phone           string `json:"phone"`
-			StreetAddress   string `json:"street_address"`
-			City            string `json:"city"`
-			State           string `json:"state"`
-			ZipCode         string `json:"zip_code"`
-			Country         string `json:"country"`
-			LegalName       string `json:"legal_name"`
-			RegistrationNum string `json:"registration_number"`
-			TaxNumber       string `json:"tax_number"`
-		} `json:"client"`
-		Items []struct {
-			ProductID   string `json:"product_id"`
-			VariationID string `json:"variation_id"`
-			Quantity    int64  `json:"quantity"`
-		} `json:"items"`
-		PaymentMethod string `json:"payment_method"`         // chip | bank_direct
-		SkipCapture   bool   `json:"skip_capture,omitempty"` // authorize now, capture later
-		// Issue #186: block_id → submitted value for every input block, so
-		// the merchant's chip_mapping can resolve CHIP client fields from the
-		// mapped form blocks (not just the hardcoded client object).
-		Fields map[string]string `json:"fields,omitempty"`
-	}
+	var in submitInput
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Client.Email == "" || len(in.Items) == 0 {
+		writeErr(w, http.StatusBadRequest, "butiran tidak lengkap")
+		return
+	}
+	// Issue #244: deterministic anti-spam layers. Each layer REJECTS the
+	// submission (returns an error) rather than flagging it. The per-form
+	// rate limit and time-based check are skipped for a logged-in owner/admin
+	// of the form's space (owner testing the form shouldn't be throttled).
+	owner := h.antiSpamSubmitterIsOwner(r, form)
+	// Layer 1 — honeypot: a filled hidden field marks a bot.
+	if h.antiSpamCheckHoneypot(r, &in) {
+		writeErr(w, http.StatusBadRequest, "butiran tidak lengkap")
+		return
+	}
+	// Layer 5 — email/domain validation (format + MX).
+	if h.antiSpamCheckEmail(r, in.Client.Email) {
+		writeErr(w, http.StatusBadRequest, "emel tidak sah")
+		return
+	}
+	// Layer 2 — per-form rate limit (15/form/IP/hour), skipped for owner.
+	if !owner && h.antiSpamCheckRateLimit(r, form) {
+		writeErr(w, http.StatusTooManyRequests, "terlalu banyak cubaan. Cuba lagi kemudian.")
+		return
+	}
+	// Layer 3 — time-based check (reject too-fast submits), skipped for owner.
+	if !owner && h.antiSpamCheckTime(r, &in) {
 		writeErr(w, http.StatusBadRequest, "butiran tidak lengkap")
 		return
 	}
@@ -412,6 +597,40 @@ func (h *PublicHandlers) handleResponseSubmit(w http.ResponseWriter, r *http.Req
 	}
 	if in.Fields == nil {
 		in.Fields = map[string]any{}
+	}
+	// Issue #244: deterministic anti-spam layers on response-mode submits too.
+	// The honeypot + render timestamp ride on the fields map (the renderer
+	// emits them as named inputs). The per-form rate limit and time-based
+	// check are skipped for a logged-in owner/admin of the form's space.
+	owner := h.antiSpamSubmitterIsOwner(r, form)
+	// Layer 1 — honeypot: a filled hidden field marks a bot.
+	if v, ok := in.Fields[antiSpamHoneypotField]; ok {
+		if s, isStr := v.(string); isStr && strings.TrimSpace(s) != "" {
+			slog.Warn("form_honeypot_caught", "ip", middleware.ClientIP(r))
+			writeErr(w, http.StatusBadRequest, "butiran tidak lengkap")
+			return
+		}
+	}
+	// Layer 5 — email/domain validation (format + MX) when an email is given.
+	if in.Client.Email != "" && h.antiSpamCheckEmail(r, in.Client.Email) {
+		writeErr(w, http.StatusBadRequest, "emel tidak sah")
+		return
+	}
+	// Layer 2 — per-form rate limit (15/form/IP/hour), skipped for owner.
+	if !owner && h.antiSpamCheckRateLimit(r, form) {
+		writeErr(w, http.StatusTooManyRequests, "terlalu banyak cubaan. Cuba lagi kemudian.")
+		return
+	}
+	// Layer 3 — time-based check (reject too-fast submits), skipped for owner.
+	if !owner {
+		if raw, ok := in.Fields[antiSpamRenderField]; ok {
+			if s, isStr := raw.(string); isStr {
+				if ts, perr := strconv.ParseInt(s, 10, 64); perr == nil && time.Since(time.Unix(ts, 0)) < antiSpamMinRenderTime {
+					writeErr(w, http.StatusBadRequest, "butiran tidak lengkap")
+					return
+				}
+			}
+		}
 	}
 	// Always capture the buyer identity alongside the field answers so the
 	// merchant can see who responded even when no name/email block exists.
@@ -621,6 +840,7 @@ var formTmpl = template.Must(template.New("form").Funcs(formFuncs).Parse(`<!doct
     <label class="sub">No. telefon</label>
     <input type="tel" name="phone">
     <div class="total"><span>Jumlah</span><span id="total">RM0.00</span></div>
+    {{.AntiSpam}}
     <button type="submit">Teruskan ke Pembayaran</button>
   </form>
   {{if .Footer.HasFooter}}<footer class="jf-footer">
@@ -649,7 +869,11 @@ document.getElementById('of').addEventListener('submit', async (e) => {
   if (!items.length) { alert('Pilih sekurang-kurangnya satu produk'); return; }
   const body = {
     client: { full_name: e.target.full_name.value, email: e.target.email.value, phone: e.target.phone.value },
-    items, payment_method: 'chip'
+    items, payment_method: 'chip',
+    fields: {
+      website: (document.querySelector('[name=website]')||{}).value || '',
+      jf_ts: (document.querySelector('[name=jf_ts]')||{}).value || ''
+    }
   };
   const r = await fetch(location.pathname + '/order', {
     method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body)
@@ -723,11 +947,14 @@ func (h *PublicHandlers) renderLegacy(w http.ResponseWriter, r *http.Request, f 
 		Products                 []tmplProduct
 		// Issue #183: optional per-space footer.
 		Footer footerInfo
+		// Issue #244: hidden honeypot + render-timestamp fields.
+		AntiSpam template.HTML
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := formTmpl.Execute(w, view{
 		Slug: f.Slug, Title: f.Title, Description: cfg.Description, Products: prods,
-		Footer: h.spaceFooter(r.Context(), f),
+		Footer:   h.spaceFooter(r.Context(), f),
+		AntiSpam: template.HTML(antiSpamRenderFields()),
 	}); err != nil {
 		slog.Error("form_render", "err", err)
 	}

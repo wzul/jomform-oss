@@ -26,6 +26,7 @@ import (
 	"github.com/wzul/jomform/api/internal/email"
 	"github.com/wzul/jomform/api/internal/emailqueue"
 	"github.com/wzul/jomform/api/internal/httpapi"
+	"github.com/wzul/jomform/api/internal/httpapi/middleware"
 	"github.com/wzul/jomform/api/internal/mcpsrv"
 	"github.com/wzul/jomform/api/internal/metrics"
 	"github.com/wzul/jomform/api/internal/tlsmgr"
@@ -321,6 +322,16 @@ func main() {
 			Submissions: submissionsStore,
 			// Issue #176: sign the private-form unlock cookie.
 			AccessKey: decryptKey,
+			// Issue #244: deterministic anti-spam layers. Sessions/Users/
+			// SpaceMembers resolve whether the submitter is a logged-in owner/admin
+			// of the form's space (skips the per-form rate limit + time check).
+			// FormLimiter is the per-form-per-IP token bucket (15/hour). MXChecker
+			// validates the submitted email's domain accepts mail.
+			Sessions:     deps.Sessions,
+			Users:        deps.Users,
+			SpaceMembers: deps.SpaceMembers,
+			MXChecker:    deps.MXChecker,
+			FormLimiter:  middleware.NewRateLimiter(15.0/3600.0, 15),
 		}
 
 		// Issue #199: start the background email worker. It polls the
