@@ -196,7 +196,7 @@ var blockTmpl = template.Must(template.New("blocks").
   * { box-sizing: border-box; }
   body { margin:0; font-family: system-ui,-apple-system,"Segoe UI",sans-serif;
          background:#f7f8f8; color:#17181c; min-height:100vh;
-         display:flex; align-items:center; justify-content:center; padding:24px; }
+         display:flex; flex-direction:column; align-items:center; justify-content:center; padding:24px; }
   .logo { max-height:56px; max-width:180px; object-fit:contain; margin:0 auto 12px; display:block; }
   .card { background:#ffffff; border:1px solid #e6e8ec; border-radius:16px;
           max-width:480px; width:100%; padding:32px; }
@@ -567,7 +567,7 @@ var responseTmpl = template.Must(template.New("response").
   * { box-sizing: border-box; }
   body { margin:0; font-family: system-ui,-apple-system,"Segoe UI",sans-serif;
          background:#f7f8f8; color:#17181c; min-height:100vh;
-         display:flex; align-items:center; justify-content:center; padding:24px; }
+         display:flex; flex-direction:column; align-items:center; justify-content:center; padding:24px; }
   .logo { max-height:56px; max-width:180px; object-fit:contain; margin:0 auto 12px; display:block; }
   .card { background:#ffffff; border:1px solid #e6e8ec; border-radius:16px;
           max-width:480px; width:100%; padding:32px; }

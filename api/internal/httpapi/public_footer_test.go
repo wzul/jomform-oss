@@ -110,3 +110,57 @@ func TestBlockFormRendersOptionalFooter(t *testing.T) {
 		}
 	}
 }
+
+// Issue #232: the public form body is a flex container. It must be a COLUMN
+// flex so the form .card and the <footer class="jf-footer"> stack vertically
+// (footer below the card) instead of sitting side-by-side (footer to the right
+// of the card). Assert the body CSS is column and the footer is a sibling that
+// appears AFTER the closing </form> tag.
+func TestBlockFormFooterBelowCard(t *testing.T) {
+	type block struct {
+		Type, Value, Src string
+		ProductID        string
+		PriceSen         int64
+		Required         bool
+		HasPrice         bool
+		CondJSON         string
+	}
+	var buf bytes.Buffer
+	err := blockTmpl.Execute(&buf, map[string]any{
+		"Slug": "demo", "Title": "Demo", "Blocks": []block{
+			{Type: "text", Value: "Hello"},
+		},
+		"TrackHead": "", "ThemePrimary": "", "ThemeBg": "", "LogoURL": "",
+		"Lang": "ms",
+		"Ls":   formLangs["ms"],
+		"Footer": footerInfo{
+			HasFooter:    true,
+			BusinessName: "Acme Sdn Bhd",
+			PrivacyURL:   "https://acme.example/privacy",
+			TermsURL:     "https://acme.example/terms",
+		},
+	})
+	if err != nil {
+		t.Fatalf("blockTmpl.Execute: %v", err)
+	}
+	body := buf.String()
+
+	// Body must be a column flex so .card and .jf-footer stack vertically.
+	if !strings.Contains(body, "display:flex; flex-direction:column;") {
+		t.Errorf("body CSS is not a column flex; footer would sit to the right of the card")
+	}
+
+	// The footer must be a sibling rendered BELOW the card: it must appear
+	// after the closing </form> tag, not before it.
+	formEnd := strings.Index(body, "</form>")
+	footerIdx := strings.Index(body, `<footer class="jf-footer">`)
+	if formEnd < 0 {
+		t.Fatalf("rendered output missing </form>")
+	}
+	if footerIdx < 0 {
+		t.Fatalf("rendered output missing <footer class=\"jf-footer\">")
+	}
+	if footerIdx < formEnd {
+		t.Errorf("footer renders before the card closes (footerIdx=%d < formEnd=%d); it must be below the card", footerIdx, formEnd)
+	}
+}
