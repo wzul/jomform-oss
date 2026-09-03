@@ -213,7 +213,10 @@ func (s *Server) Handler() http.Handler {
 // ─── handlers ────────────────────────────────────────────────────────────────
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	// Issue #246: include a JomForm-specific marker so the custom-domain
+	// verification probe (/healthz) can authoritatively distinguish a
+	// JomForm-serving domain from a non-JomForm one.
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "service": "jomform"})
 }
 
 // handleReady checks real dependencies (DB + Valkey) with short timeouts.

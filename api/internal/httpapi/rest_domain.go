@@ -56,16 +56,20 @@ func (h *RESTHandlers) getCustomDomain(w http.ResponseWriter, r *http.Request, a
 	})
 }
 
-// probeServesJomForm checks https://domain/f/<known-slug> renders our app.
+// probeServesJomForm checks https://domain/healthz renders our app.
 // This is the AUTHORITATIVE verification check (issue #237): a custom domain
 // is only verified when it actually serves a JomForm page, not merely because
 // its DNS points at Cloudflare edge IPs shared with jomform.com.
+// Issue #246: probe a STABLE, always-present resource (/healthz) instead of
+// /f/test — a literal slug that 404s on correctly-serving domains that have
+// no form slugged "test".
 func probeServesJomForm(domain string) bool {
-	return probeServesJomFormURL("https://" + domain + "/f/test")
+	return probeServesJomFormURL("https://" + domain + "/healthz")
 }
 
 // probeServesJomFormURL is the testable core of probeServesJomForm: it fetches
-// url and reports whether it returns 200 with a body containing "JomForm".
+// url and reports whether it returns 200 with a body containing the JomForm
+// marker (case-insensitive).
 func probeServesJomFormURL(url string) bool {
 	client := &http.Client{Timeout: 10 * time.Second}
 	req, err := http.NewRequest(http.MethodGet, url, nil)
@@ -78,7 +82,7 @@ func probeServesJomFormURL(url string) bool {
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-	return resp.StatusCode == http.StatusOK && strings.Contains(string(body), "JomForm")
+	return resp.StatusCode == http.StatusOK && strings.Contains(strings.ToLower(string(body)), "jomform")
 }
 
 // deleteCustomDomain clears the claim.

@@ -34,6 +34,22 @@ func TestProbeServesJomForm(t *testing.T) {
 	}))
 	defer notFound.Close()
 
+	// Issue #246: a domain that correctly serves JomForm at the stable probe
+	// path (/healthz) but has NO form slugged "test" (so /f/test would 404)
+	// must still verify. This is the regression the fix targets.
+	noTestSlug := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/healthz":
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"status":"ok","service":"jomform"}`))
+		default:
+			// /f/test and any other path 404 — no form slugged "test".
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte("Borang tidak dijumpai"))
+		}
+	}))
+	defer noTestSlug.Close()
+
 	cases := []struct {
 		name string
 		url  string
@@ -42,7 +58,8 @@ func TestProbeServesJomForm(t *testing.T) {
 		{"serves JomForm page is verified", jomform.URL, true},
 		{"non-JomForm content is NOT verified", other.URL, false},
 		{"error status is NOT verified", notFound.URL, false},
-		{"unreachable is NOT verified", "http://127.0.0.1:1/f/test", false},
+		{"unreachable is NOT verified", "http://127.0.0.1:1/healthz", false},
+		{"JomForm-serving domain without a test slug IS verified", noTestSlug.URL + "/healthz", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
