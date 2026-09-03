@@ -485,6 +485,30 @@ export default function Settings() {
     }
   }
 
+  // Issue #197: manually retry a failed webhook delivery (or a dead-lettered
+  // retry) immediately. Re-enqueues it so the background sweep re-delivers.
+  // Dead-lettered rows (no `success` field) are retried via the retries
+  // endpoint; failed deliveries via the deliveries endpoint.
+  async function retryDelivery(webhookID: string, row: Delivery) {
+    setErr("");
+    try {
+      const isDeadLettered = typeof row.success !== "boolean";
+      const path = isDeadLettered
+        ? `/api/rest/webhooks/${webhookID}/retries/${row.id}/retry`
+        : `/api/rest/webhooks/${webhookID}/deliveries/${row.id}/retry`;
+      const r = await fetch(`${path}?space=${encodeURIComponent(spaceScope())}`, { method: "POST" });
+      if (r.ok) {
+        setMsg(t("wh.retryQueued"));
+        await fetchDeliveries(webhookID);
+      } else {
+        const d = await r.json().catch(() => ({}));
+        setErr(d.error || t("wh.retryFail"));
+      }
+    } catch {
+      setErr(t("wh.retryFail"));
+    }
+  }
+
   // Issue #195: fetch one page of MCP request history (mcp.tool_call events)
   // from the account-scoped events endpoint, newest first.
   async function fetchMCPHistory(page: number) {
@@ -512,7 +536,7 @@ export default function Settings() {
     const latest = list && list.length ? list[0] : undefined;
     if (!latest) return null; // no deliveries yet
     if (latest.success) return "success";
-    if (latest.attempt < 3) return "pending"; // auto-retry is still scheduled
+    if (latest.attempt < 6) return "pending"; // auto-retry is still scheduled
     return "failed";
   }
 
@@ -1105,7 +1129,8 @@ export default function Settings() {
                                     <th className="py-1 pr-3 font-medium">{t("wh.colEvent")}</th>
                                     <th className="py-1 pr-3 font-medium">{t("wh.colStatus")}</th>
                                     <th className="py-1 pr-3 font-medium">HTTP</th>
-                                    <th className="py-1 font-medium">{t("wh.colError")}</th>
+                                    <th className="py-1 pr-3 font-medium">{t("wh.colError")}</th>
+                                    <th className="py-1 font-medium">{t("wh.colAction")}</th>
                                   </tr>
                                 </thead>
                                 <tbody>
@@ -1119,7 +1144,16 @@ export default function Settings() {
                                         {d.success ? t("wh.success") : t("wh.failed")}
                                       </td>
                                       <td className="py-1.5 pr-3 font-mono text-slate-500">{d.status_code ?? "—"}</td>
-                                      <td className="py-1.5 font-mono text-red-600">{d.error || "—"}</td>
+                                      <td className="py-1.5 pr-3 font-mono text-red-600">{d.error || "—"}</td>
+                                      {/* Issue #197: manual retry of a failed delivery (or dead-lettered retry). */}
+                                      <td className="py-1.5">
+                                        {!d.success && (
+                                          <button onClick={() => retryDelivery(wh.id, d)}
+                                            className="shrink-0 text-xs font-medium text-indigo-600 hover:text-indigo-800">
+                                            {t("wh.retry")}
+                                          </button>
+                                        )}
+                                      </td>
                                     </tr>
                                   ))}
                                 </tbody>

@@ -2,9 +2,13 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // ─── e-Invoice settings ─────────────────────────────────────────────────────
@@ -161,6 +165,61 @@ func (h *RESTHandlers) listWebhookDeliveries(w http.ResponseWriter, r *http.Requ
 		respondErr(w, r, err)
 		return
 	}
+	// Issue #197: surface dead-lettered retries alongside the delivery log so
+	// merchants can see (and manually retry) deliveries that were dropped.
+	dead, err := h.Webhooks.ListDeadLettered(r.Context(), actx.Account.ID, r.PathValue("id"), limit)
+	if err == nil && len(dead) > 0 {
+		deliveries = append(deliveries, dead...)
+	}
 	writeJSON(w, http.StatusOK, deliveries)
+}
+
+// retryWebhookDelivery re-enqueues a failed delivery immediately (issue #197).
+// The delivery is looked up account-scoped; a new retry row is inserted with
+// next_retry_at = now so the sweep re-delivers it on the next tick. Returns
+// 404 when the delivery is not found or not owned.
+func (h *RESTHandlers) retryWebhookDelivery(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
+	delivery, err := h.Webhooks.GetDelivery(r.Context(), actx.Account.ID, r.PathValue("deliveryId"))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeErr(w, http.StatusNotFound, "penghantaran tidak dijumpai")
+			return
+		}
+		respondErr(w, r, err)
+		return
+	}
+	webhookID := r.PathValue("id")
+	event, _ := delivery["event"].(string)
+	payload, _ := delivery["payload"].(string)
+	if err := h.Webhooks.EnqueueRetry(r.Context(), webhookID, event, payload, 1, time.Now()); err != nil {
+		respondErr(w, r, err)
+		return
+	}
+	// Issue #92: audit the manual retry.
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "settings.webhook_retried", map[string]any{"webhook_id": webhookID, "delivery_id": r.PathValue("deliveryId")})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "queued"})
+}
+
+// retryDeadLettered un-dead-letters a dead-lettered retry so the sweep
+// re-delivers it on the next tick (issue #197). Returns 404 when the retry is
+// not found or not owned.
+func (h *RESTHandlers) retryDeadLettered(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
+	if err := h.Webhooks.RetryNow(r.Context(), actx.Account.ID, r.PathValue("retryId")); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeErr(w, http.StatusNotFound, "retry tidak dijumpai")
+			return
+		}
+		respondErr(w, r, err)
+		return
+	}
+	// Issue #92: audit the manual retry.
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "settings.webhook_retried", map[string]any{"webhook_id": r.PathValue("id"), "retry_id": r.PathValue("retryId")})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "queued"})
 }
 

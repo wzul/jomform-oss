@@ -8,7 +8,9 @@ import (
 	"net"
 	"net/url"
 	"strings"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -255,5 +257,43 @@ func (s *Server) webhookDeliveriesMCP(
 	if err != nil {
 		return nil, nil, err
 	}
+	// Issue #197: surface dead-lettered retries alongside the delivery log so
+	// merchants can see (and manually retry) dropped deliveries.
+	dead, err := s.deps.Webhooks.ListDeadLettered(ctx, acc, in.WebhookID, limit)
+	if err == nil && len(dead) > 0 {
+		deliveries = append(deliveries, dead...)
+	}
 	return nil, deliveries, nil
+}
+
+// retryWebhookDeliveryIn is the input for retry_webhook_delivery.
+type retryWebhookDeliveryIn struct {
+	WebhookID  string `json:"webhook_id" jsonschema:"ID webhook (dari list_webhooks)"`
+	DeliveryID string `json:"delivery_id" jsonschema:"ID penghantaran yang gagal (dari webhook_deliveries)"`
+}
+
+// retryWebhookDeliveryMCP re-enqueues a failed webhook delivery immediately
+// (issue #197, MCP parity with the dashboard Retry action). The delivery is
+// looked up account-scoped; a new retry row is inserted with next_retry_at =
+// now so the sweep re-delivers it on the next tick.
+func (s *Server) retryWebhookDeliveryMCP(
+	ctx context.Context, _ *mcp.CallToolRequest, in retryWebhookDeliveryIn,
+) (*mcp.CallToolResult, map[string]any, error) {
+	acc, err := s.accountAndScope(ctx, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	delivery, err := s.deps.Webhooks.GetDelivery(ctx, acc, in.DeliveryID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil, errors.New("penghantaran tidak dijumpai")
+		}
+		return nil, nil, err
+	}
+	event, _ := delivery["event"].(string)
+	payload, _ := delivery["payload"].(string)
+	if err := s.deps.Webhooks.EnqueueRetry(ctx, in.WebhookID, event, payload, 1, time.Now()); err != nil {
+		return nil, nil, err
+	}
+	return nil, map[string]any{"status": "queued", "webhook_id": in.WebhookID, "delivery_id": in.DeliveryID}, nil
 }

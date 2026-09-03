@@ -337,6 +337,13 @@ func main() {
 			log.Info("email_worker_started")
 		}
 
+		// Issue #197: start the webhook retry sweep. It polls the persistent
+		// webhook_retries table and re-delivers due retries with exponential
+		// backoff (1m/5m/30m/1h/6h). Retries survive an API restart because
+		// they live in Postgres. A short interval keeps manual retries snappy.
+		go httpapi.RunWebhookRetrySweep(ctx, rest, whStore, 30*time.Second)
+		log.Info("webhook_retry_sweep_started")
+
 		// Issue #185: daily BNM exchange-rate refresh (once daily, cached in
 	// Valkey with a 24h TTL). Runs at startup and then every 24h. Failures are
 	// logged and retried on the next tick — the cache keeps serving the last

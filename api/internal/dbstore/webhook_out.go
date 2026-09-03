@@ -197,3 +197,179 @@ func (s *WebhookStore) ListDeliveries(ctx context.Context, accountID, webhookID 
 	}
 	return out, rows.Err()
 }
+
+// ── Issue #197: persistent retry queue ──────────────────────────────────────
+
+// WebhookRetry is one queued retry for a webhook delivery. It is durable in
+// the webhook_retries table so retries survive an API restart.
+type WebhookRetry struct {
+	ID           string
+	WebhookID    string
+	Event        string
+	Payload      string
+	Attempt      int
+	NextRetryAt  time.Time
+	DeadLettered bool
+	CreatedAt    time.Time
+}
+
+// EnqueueRetry inserts a retry into the persistent queue. nextRetryAt is when
+// the sweep should re-deliver it. A manual retry passes time.Now() so it is
+// picked up on the next sweep tick.
+func (s *WebhookStore) EnqueueRetry(ctx context.Context, webhookID, event, payload string, attempt int, nextRetryAt time.Time) error {
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO webhook_retries (webhook_id, event, payload, attempt, next_retry_at)
+		 VALUES ($1,$2,$3,$4,$5)`,
+		webhookID, event, payload, attempt, nextRetryAt)
+	return err
+}
+
+// DueRetries returns the non-dead-lettered retries whose next_retry_at has
+// passed, oldest first. The sweep re-delivers these.
+func (s *WebhookStore) DueRetries(ctx context.Context, limit int) ([]*WebhookRetry, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, webhook_id, event, payload, attempt, next_retry_at, dead_lettered, created_at
+		 FROM webhook_retries
+		 WHERE NOT dead_lettered AND next_retry_at <= now()
+		 ORDER BY next_retry_at ASC LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*WebhookRetry
+	for rows.Next() {
+		r := &WebhookRetry{}
+		if err := rows.Scan(&r.ID, &r.WebhookID, &r.Event, &r.Payload, &r.Attempt, &r.NextRetryAt, &r.DeadLettered, &r.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// DeleteRetry removes a retry from the queue (called on success).
+func (s *WebhookStore) DeleteRetry(ctx context.Context, retryID string) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM webhook_retries WHERE id=$1`, retryID)
+	return err
+}
+
+// MarkDeadLetter flags a retry as dead-lettered after the final failed attempt
+// so it stays visible (not silently dropped) and can be manually retried.
+func (s *WebhookStore) MarkDeadLetter(ctx context.Context, retryID string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE webhook_retries SET dead_lettered=true WHERE id=$1`, retryID)
+	return err
+}
+
+// ScheduleRetry updates a retry's attempt count and next delivery time. Used by
+// the sweep to advance the backoff ladder.
+func (s *WebhookStore) ScheduleRetry(ctx context.Context, retryID string, attempt int, nextRetryAt time.Time) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE webhook_retries SET attempt=$2, next_retry_at=$3 WHERE id=$1`,
+		retryID, attempt, nextRetryAt)
+	return err
+}
+
+// RetryNow re-enqueues a dead-lettered (or any) retry immediately so the next
+// sweep tick re-delivers it. Returns pgx.ErrNoRows when the retry does not
+// exist or is not owned by the account (via the webhook join).
+func (s *WebhookStore) RetryNow(ctx context.Context, accountID, retryID string) error {
+	var res string
+	err := s.pool.QueryRow(ctx,
+		`UPDATE webhook_retries r
+		   SET dead_lettered=false, next_retry_at=now()
+		   FROM outbound_webhooks w
+		  WHERE r.id=$2 AND r.webhook_id=w.id AND w.account_id=$1
+		  RETURNING r.id`,
+		accountID, retryID).Scan(&res)
+	return err
+}
+
+// ListDeadLettered returns the dead-lettered retries for one webhook
+// (account-scoped via the webhook join), newest first. Surfaced in the
+// delivery log so merchants can see and manually retry dropped deliveries.
+func (s *WebhookStore) ListDeadLettered(ctx context.Context, accountID, webhookID string, limit int) ([]map[string]any, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT r.id, r.event, LEFT(r.payload, 500), r.attempt, r.next_retry_at, r.created_at
+		 FROM webhook_retries r
+		 JOIN outbound_webhooks w ON w.id = r.webhook_id
+		 WHERE r.webhook_id=$2 AND w.account_id=$1 AND r.dead_lettered
+		 ORDER BY r.created_at DESC LIMIT $3`,
+		accountID, webhookID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []map[string]any
+	for rows.Next() {
+		var id, event, payload string
+		var attempt int
+		var next, created time.Time
+		if err := rows.Scan(&id, &event, &payload, &attempt, &next, &created); err != nil {
+			return nil, err
+		}
+		out = append(out, map[string]any{
+			"id": id, "event": event, "payload": payload,
+			"attempt": attempt, "next_retry_at": next, "created_at": created,
+		})
+	}
+	return out, rows.Err()
+}
+
+// GetByID returns one webhook by id, account-scoped. Returns pgx.ErrNoRows
+// when not found or not owned.
+func (s *WebhookStore) GetByID(ctx context.Context, accountID, webhookID string) (*OutboundWebhook, error) {
+	wh := &OutboundWebhook{}
+	err := s.pool.QueryRow(ctx,
+		`SELECT id, account_id, COALESCE(form_id::text,''), url, secret, events, active, created_at
+		 FROM outbound_webhooks WHERE id=$2 AND account_id=$1`,
+		accountID, webhookID).Scan(&wh.ID, &wh.AccountID, &wh.FormID, &wh.URL, &wh.Secret, &wh.Events, &wh.Active, &wh.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return wh, nil
+}
+
+// GetByIDAny returns one webhook by id regardless of account. Used by the
+// retry sweep, which re-delivers queued retries across all accounts.
+func (s *WebhookStore) GetByIDAny(ctx context.Context, webhookID string) (*OutboundWebhook, error) {
+	wh := &OutboundWebhook{}
+	err := s.pool.QueryRow(ctx,
+		`SELECT id, account_id, COALESCE(form_id::text,''), url, secret, events, active, created_at
+		 FROM outbound_webhooks WHERE id=$1`,
+		webhookID).Scan(&wh.ID, &wh.AccountID, &wh.FormID, &wh.URL, &wh.Secret, &wh.Events, &wh.Active, &wh.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return wh, nil
+}
+
+// GetDelivery returns one delivery row by id, account-scoped via the webhook
+// join. Returns pgx.ErrNoRows when not found or not owned.
+func (s *WebhookStore) GetDelivery(ctx context.Context, accountID, deliveryID string) (map[string]any, error) {
+	var id, event, payload, errMsg string
+	var code *int
+	var ok bool
+	var attempt int
+	var ts time.Time
+	err := s.pool.QueryRow(ctx,
+		`SELECT d.id, d.event, d.payload, d.status_code, d.success, d.attempt, COALESCE(d.error,''), d.created_at
+		 FROM outbound_webhook_deliveries d
+		 JOIN outbound_webhooks w ON w.id = d.webhook_id
+		 WHERE d.id=$2 AND w.account_id=$1`,
+		accountID, deliveryID).Scan(&id, &event, &payload, &code, &ok, &attempt, &errMsg, &ts)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"id": id, "event": event, "payload": payload,
+		"status_code": code, "success": ok, "attempt": attempt,
+		"error": errMsg, "created_at": ts,
+	}, nil
+}

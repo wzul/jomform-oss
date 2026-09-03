@@ -185,6 +185,10 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /v1/rest/webhooks", h.authed(h.createWebhook))
 	mux.Handle("PUT /v1/rest/webhooks/{id}", h.authed(h.updateWebhook))
 	mux.Handle("GET /v1/rest/webhooks/{id}/deliveries", h.authed(h.listWebhookDeliveries))
+	// Issue #197: manual retry of a failed delivery (re-enqueues immediately).
+	mux.Handle("POST /v1/rest/webhooks/{id}/deliveries/{deliveryId}/retry", h.authed(h.retryWebhookDelivery))
+	// Issue #197: manual retry of a dead-lettered retry.
+	mux.Handle("POST /v1/rest/webhooks/{id}/retries/{retryId}/retry", h.authed(h.retryDeadLettered))
 	mux.Handle("DELETE /v1/rest/webhooks/{id}", h.authed(h.deleteWebhook))
 	mux.Handle("GET /v1/rest/domains", h.authed(h.listCustomDomains))
 	mux.Handle("POST /v1/rest/domains", h.authed(h.addCustomDomain))

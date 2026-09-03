@@ -213,6 +213,11 @@ func (s *Server) registerTools() {
 		Name:        "webhook_deliveries",
 		Description: "Log penghantaran terkini webhook (status_code, attempt, error).",
 	}, s.webhookDeliveriesMCP)
+	// Issue #197: manual retry of a failed webhook delivery (MCP parity).
+	addTool(s, &mcp.Tool{
+		Name:        "retry_webhook_delivery",
+		Description: "Cuba semula satu penghantaran webhook yang gagal dengan segera (id dari webhook_deliveries). Ia dienqueue semula dan dihantar semula pada sweep seterusnya.",
+	}, s.retryWebhookDeliveryMCP)
 	// ── Parity: API-key self-service ────────────────────────────────────────
 	addTool(s, &mcp.Tool{
 		Name:        "list_api_keys",

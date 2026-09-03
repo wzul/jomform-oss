@@ -538,7 +538,11 @@ const DICT = {
   "wh.colEvent": { en: "Event", ms: "Peristiwa", zh: "事件", ta: "நிகழ்வு", ar: "الحدث" },
   "wh.colStatus": { en: "Status", ms: "Status", zh: "状态", ta: "நிலை", ar: "الحالة" },
   "wh.colError": { en: "Error", ms: "Ralat", zh: "错误", ta: "பிழை", ar: "الخطأ" },
-  "wh.retryNote": { en: "Failed deliveries are retried automatically (backoff up to 3 attempts).", ms: "Penghantaran gagal akan dicuba semula automatik (backoff sehingga 3 cubaan).", zh: "失败的投递会自动重试（退避，最多 3 次）。", ta: "தோல்வியடைந்த விநியோகங்கள் தானாக மீண்டும் முயற்சிக்கப்படும் (அதிகபட்சம் 3 முயற்சிகள் வரை).", ar: "تتم إعادة محاولة عمليات التسليم الفاشلة تلقائياً (فترة انتظار تصل إلى 3 محاولات)." },
+  "wh.retryNote": { en: "Failed deliveries are retried automatically with exponential backoff (1m/5m/30m/1h/6h, up to 6 attempts). You can also retry any failed delivery manually.", ms: "Penghantaran gagal akan dicuba semula automatik dengan backoff eksponen (1m/5m/30m/1j/6j, sehingga 6 cubaan). Anda juga boleh cuba semula mana-mana penghantaran gagal secara manual.", zh: "失败的投递会自动以指数退避重试（1m/5m/30m/1h/6h，最多 6 次）。您也可以手动重试任何失败的投递。", ta: "தோல்வியடைந்த விநியோகங்கள் அதிவேக பின்னடைவுடன் தானாக மீண்டும் முயற்சிக்கப்படும் (1m/5m/30m/1h/6h, அதிகபட்சம் 6 முயற்சிகள்). தோல்வியடைந்த எந்த விநியோகத்தையும் கைமுறையாக மீண்டும் முயற்சிக்கலாம்.", ar: "تتم إعادة محاولة عمليات التسليم الفاشلة تلقائياً بفترة انتظار أسية (1د/5د/30د/1س/6س، حتى 6 محاولات). يمكنك أيضاً إعادة محاولة أي تسليم فاشل يدوياً." },
+  "wh.retry": { en: "Retry", ms: "Cuba semula", zh: "重试", ta: "மீண்டும் முயற்சி", ar: "إعادة المحاولة" },
+  "wh.colAction": { en: "Action", ms: "Tindakan", zh: "操作", ta: "செயல்", ar: "إجراء" },
+  "wh.retryQueued": { en: "Retry queued — will be re-delivered shortly.", ms: "Retry dienqueue — akan dihantar semula sebentar lagi.", zh: "重试已排队 — 将很快重新投递。", ta: "மறு முயற்சி வரிசையில் — விரைவில் மீண்டும் விநியோகிக்கப்படும்.", ar: "تمت جدولة إعادة المحاولة — ستتم إعادة التسليم قريباً." },
+  "wh.retryFail": { en: "Failed to queue retry.", ms: "Gagal enqueue retry.", zh: "重试排队失败。", ta: "மறு முயற்சியை வரிசைப்படுத்த முடியவில்லை.", ar: "فشل جدولة إعادة المحاولة." },
   // profile
   "prof.title": { en: "Profile", ms: "Profil", zh: "个人资料", ta: "சுயவிவரம்", ar: "الملف الشخصي" },
   "prof.identity": { en: "Identity", ms: "Identiti", zh: "身份", ta: "அடையாளம்", ar: "الهوية" },
