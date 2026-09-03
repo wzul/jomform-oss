@@ -52,6 +52,39 @@ const WEBHOOK_EVENTS = ["sale.paid", "sale.failed", "subscription.charged"] as c
 
 type Tab = "general" | "confirmation" | "restrictions" | "notifications" | "chip" | "webhooks";
 
+// Issue #208: a per-form CHIP feed (Gravity-Forms-style). A feed with no
+// condition is the default feed and always matches.
+type ChipFeed = {
+  id: string;
+  name: string;
+  brand_id: string;
+  email_fallback: string;
+  payment_method_whitelist?: string[];
+  configured: boolean;
+  condition?: { field_id: string; op: string; value: string } | null;
+};
+
+type ChipFeedDraft = {
+  id: string;
+  name: string;
+  brand_id: string;
+  secret_key: string;
+  email_fallback: string;
+  condition?: { field_id: string; op: string; value: string } | null;
+};
+
+// Field types that collect a buyer answer (used for the condition selector).
+const FEED_FIELD_TYPES = new Set([
+  "text", "textarea", "number", "email", "phone", "website", "select",
+  "radio", "image-choice", "option", "shipping", "date", "time", "hidden",
+]);
+
+const FEED_OPS = ["equals", "not_equals", "contains", "gt", "lt", "not_empty"];
+
+function feedUid() {
+  return "feed_" + Math.random().toString(36).slice(2, 9);
+}
+
 const TABS: { key: Tab; label: string }[] = [
   { key: "general", label: "fs.general" },
   { key: "confirmation", label: "fs.confirmation" },
@@ -139,6 +172,9 @@ function FormSettingsInner() {
   const [whSecret, setWhSecret] = useState("");
   const [whEvents, setWhEvents] = useState<string[]>([...WEBHOOK_EVENTS]);
   const [formWebhooks, setFormWebhooks] = useState<{ id: string; url: string; events: string[] }[]>([]);
+  // Issue #208: multiple per-form CHIP feeds with conditional logic.
+  const [feeds, setFeeds] = useState<ChipFeedDraft[]>([]);
+  const [formBlocks, setFormBlocks] = useState<{ id: string; value: string; type: string }[]>([]);
 
   const load = useCallback(async () => {
     if (!formId) return;
@@ -169,6 +205,24 @@ function FormSettingsInner() {
       setRsLimitMsg(d.limit_message || "");
       setChipConfigured(!!d.chip_configured);
       setOvBrand(d.chip_brand_id || "");
+      // Issue #208: hydrate the form's CHIP feeds + the field blocks used by
+      // the conditional-logic selector.
+      const blocks = (d.config?.blocks as { id: string; value: string; type: string }[] | undefined) || [];
+      setFormBlocks(blocks.filter((b) => FEED_FIELD_TYPES.has(b.type)));
+      const fr = await fetch(`/api/rest/forms/${formId}/chip-feeds${spaceQuery()}`);
+      if (fr.ok) {
+        const fd = (await fr.json()) as { feeds: ChipFeed[] };
+        setFeeds(
+          fd.feeds.map((f) => ({
+            id: f.id,
+            name: f.name,
+            brand_id: f.brand_id,
+            secret_key: "",
+            email_fallback: f.email_fallback,
+            condition: f.condition || null,
+          })),
+        );
+      }
       // Load per-form email settings.
       const er = await fetch(`/api/rest/forms/${formId}/email-settings${spaceQuery()}`);
       if (er.ok) {
@@ -347,6 +401,47 @@ function FormSettingsInner() {
     const r = await fetch(`/api/rest/webhooks/${id}${sp ? `?space=${encodeURIComponent(sp)}` : ""}`, { method: "DELETE" });
     setMsg(r.ok ? t("fs.webhookDeleted") : t("prof.failed"));
     if (r.ok) void load();
+  }
+
+  // Issue #208: save the form's CHIP feeds. A blank secret_key on an existing
+  // feed keeps the stored key server-side.
+  async function saveChipFeeds() {
+    setMsg("");
+    if (!formId) return;
+    const r = await fetch(`/api/rest/forms/${formId}/chip-feeds${spaceQuery()}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        feeds: feeds.map((f) => ({
+          id: f.id,
+          name: f.name,
+          brand_id: f.brand_id,
+          secret_key: f.secret_key,
+          email_fallback: f.email_fallback,
+          condition: f.condition || null,
+        })),
+      }),
+    });
+    setMsg(r.ok ? t("fs.chipFeedsSaved") : t("fs.chipFeedsFail"));
+    if (r.ok) {
+      // Clear the secret inputs so a re-save doesn't re-encrypt a stale key.
+      setFeeds((prev) => prev.map((f) => ({ ...f, secret_key: "" })));
+    }
+  }
+
+  function addChipFeed() {
+    setFeeds((prev) => [
+      ...prev,
+      { id: feedUid(), name: "", brand_id: "", secret_key: "", email_fallback: "", condition: null },
+    ]);
+  }
+
+  function updateChipFeed(id: string, patch: Partial<ChipFeedDraft>) {
+    setFeeds((prev) => prev.map((f) => (f.id === id ? { ...f, ...patch } : f)));
+  }
+
+  function removeChipFeed(id: string) {
+    setFeeds((prev) => prev.filter((f) => f.id !== id));
   }
 
   const inputCls = "jf-input mt-1 w-full max-w-xl";
@@ -632,6 +727,136 @@ function FormSettingsInner() {
                         </button>
                         <button onClick={clearChipOverride} disabled={!canWrite} className="jf-btn-ghost text-slate-600">
                           {t("set.clear")}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Issue #208: multiple per-form CHIP feeds with conditional logic. */}
+                    <div className="mt-8 border-t border-[var(--jf-border)] pt-6">
+                      <h3 className="text-base font-semibold">{t("fs.chipFeedsTitle")}</h3>
+                      <p className="mt-1 text-sm text-[var(--jf-muted)]">{t("fs.chipFeedsHint")}</p>
+
+                      <div className="mt-4 space-y-4">
+                        {feeds.length === 0 && (
+                          <p className="text-sm text-[var(--jf-muted)]">{t("fs.chipNotConfigured")}</p>
+                        )}
+                        {feeds.map((f, idx) => (
+                          <div key={f.id} className="rounded-md border border-[var(--jf-border)] p-3">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <span className="text-[11px] font-medium uppercase tracking-wider text-[#9ca3af]">
+                                {t("fs.chipFeedName")} #{idx + 1}
+                              </span>
+                              <button
+                                onClick={() => removeChipFeed(f.id)}
+                                disabled={!canWrite}
+                                className="text-[11px] text-red-400 hover:text-red-600"
+                              >
+                                {t("fs.chipFeedRemove")}
+                              </button>
+                            </div>
+                            <div className="mt-2 grid gap-3 sm:grid-cols-2">
+                              <div>
+                                <label className={labelCls}>{t("fs.chipFeedName")}</label>
+                                <input
+                                  value={f.name}
+                                  onChange={(e) => updateChipFeed(f.id, { name: e.target.value })}
+                                  placeholder={t("fs.chipFeedNamePh")}
+                                  className={inputCls}
+                                />
+                              </div>
+                              <div>
+                                <label className={labelCls}>{t("fs.chipBrandId")}</label>
+                                <input
+                                  value={f.brand_id}
+                                  onChange={(e) => updateChipFeed(f.id, { brand_id: e.target.value })}
+                                  placeholder="Brand ID"
+                                  className={inputCls}
+                                />
+                              </div>
+                              <div>
+                                <label className={labelCls}>
+                                  {t("set.secretKey")}{" "}
+                                  <span className="text-slate-400">{t("fs.chipSecretKeep")}</span>
+                                </label>
+                                <input
+                                  value={f.secret_key}
+                                  onChange={(e) => updateChipFeed(f.id, { secret_key: e.target.value })}
+                                  type="text"
+                                  placeholder="sk_live_… / sk_test_…"
+                                  className={inputCls}
+                                />
+                              </div>
+                              <div>
+                                <label className={labelCls}>{t("set.emailFallback")}</label>
+                                <input
+                                  value={f.email_fallback}
+                                  onChange={(e) => updateChipFeed(f.id, { email_fallback: e.target.value })}
+                                  type="email"
+                                  placeholder="Email fallback (one-time forms)"
+                                  className={inputCls}
+                                />
+                              </div>
+                            </div>
+
+                            {/* Conditional logic */}
+                            <div className="mt-3">
+                              <label className={labelCls}>{t("fs.chipFeedConditional")}</label>
+                              <div className="mt-1 flex flex-wrap items-center gap-1">
+                                <select
+                                  value={f.condition?.field_id || ""}
+                                  onChange={(e) =>
+                                    updateChipFeed(f.id, {
+                                      condition: e.target.value
+                                        ? { ...(f.condition || { op: "equals", value: "" }), field_id: e.target.value }
+                                        : null,
+                                    })
+                                  }
+                                  className="w-full rounded border border-slate-200 px-2 py-1 text-xs sm:w-44"
+                                >
+                                  <option value="">{t("fs.chipFeedNoCondition")}</option>
+                                  {formBlocks.map((b) => (
+                                    <option key={b.id} value={b.id}>
+                                      {b.value || b.type} (#{formBlocks.indexOf(b) + 1})
+                                    </option>
+                                  ))}
+                                </select>
+                                {f.condition && (
+                                  <>
+                                    <select
+                                      value={f.condition.op}
+                                      onChange={(e) =>
+                                        updateChipFeed(f.id, { condition: { ...f.condition!, op: e.target.value } })
+                                      }
+                                      className="w-28 rounded border border-slate-200 px-1 py-1 text-xs"
+                                    >
+                                      {FEED_OPS.map((op) => (
+                                        <option key={op} value={op}>
+                                          {op}
+                                        </option>
+                                      ))}
+                                    </select>
+                                    <input
+                                      value={f.condition.value}
+                                      onChange={(e) =>
+                                        updateChipFeed(f.id, { condition: { ...f.condition!, value: e.target.value } })
+                                      }
+                                      placeholder="value"
+                                      className="min-w-0 flex-1 rounded border border-slate-200 px-2 py-1 text-xs"
+                                    />
+                                  </>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="mt-4 flex flex-wrap items-center gap-2">
+                        <button onClick={addChipFeed} disabled={!canWrite} className="jf-btn-ghost px-3 py-1.5 text-xs">
+                          + {t("fs.chipFeedAdd")}
+                        </button>
+                        <button onClick={saveChipFeeds} disabled={!canWrite} className="jf-btn-primary">
+                          {t("fs.save")}
                         </button>
                       </div>
                     </div>

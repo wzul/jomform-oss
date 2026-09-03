@@ -108,6 +108,16 @@ func (s *Server) registerTools() {
 		Description: "Kosongkan override sebuah borang — kembali guna kredensial default akaun.",
 	}, s.clearFormChipOverride)
 
+	// ── Per-form CHIP feeds (issue #208) ────────────────────────────────
+	addTool(s, &mcp.Tool{
+		Name:        "get_form_chip_feeds",
+		Description: "Baca senarai feed CHIP borang (issue #208). Setiap feed ada brand_id + secret (tersembunyi) + logik bersyarat. Feed tanpa condition = lalai (sentiasa padan).",
+	}, s.getFormChipFeedsMCP)
+	addTool(s, &mcp.Tool{
+		Name:        "set_form_chip_feeds",
+		Description: "Set senarai feed CHIP borang (issue #208). Feed pertama yang padan (ikut nilai medan borang) dipakai untuk pembayaran; feed tanpa condition = lalai. Secret kosong pada feed sedia ada = kekalkan kunci lama.",
+	}, s.setFormChipFeedsMCP)
+
 	// ── Per-form CHIP field mapping (issue #186) ─────────────────────────
 	addTool(s, &mcp.Tool{
 		Name:        "get_form_chip_mapping",

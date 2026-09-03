@@ -337,11 +337,25 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 
 	// CHIP flow: create purchase & return checkout URL.
 	if method == "chip" {
-		// Per-form override takes precedence over account credentials.
+		// Issue #208: resolve the CHIP feed for this submission. A form's
+		// chip_feeds are evaluated in order against the submitted field
+		// values; the first matching feed (default feed = no condition
+		// always matches) supplies the brand/secret. When no feed matches,
+		// fall back to the legacy single per-form override, then account.
 		var ov *payments.ChipOverride
 		if h.Forms != nil {
-			if b, s, ef, wl, oerr := h.Forms.ChipOverrideFor(r.Context(), form.AccountID, form.ID); oerr == nil && b != "" && s != "" {
-				ov = &payments.ChipOverride{BrandID: b, SecretEnc: s, EmailFallback: ef, MethodWhitelist: wl}
+			if feeds, ferr := h.Forms.ChipFeedsFor(r.Context(), form.AccountID, form.ID); ferr == nil {
+				if feed := resolveChipFeed(feeds, in.Fields); feed != nil && feed.BrandID != "" && feed.SecretKeyEnc != "" {
+					ov = &payments.ChipOverride{
+						BrandID: feed.BrandID, SecretEnc: feed.SecretKeyEnc,
+						EmailFallback: feed.EmailFallback, MethodWhitelist: feed.MethodWhitelist,
+					}
+				}
+			}
+			if ov == nil {
+				if b, s, ef, wl, oerr := h.Forms.ChipOverrideFor(r.Context(), form.AccountID, form.ID); oerr == nil && b != "" && s != "" {
+					ov = &payments.ChipOverride{BrandID: b, SecretEnc: s, EmailFallback: ef, MethodWhitelist: wl}
+				}
 			}
 		}
 		if err := h.Pay.CreateChipPurchaseForSaleWithOverride(r.Context(), sale, ov); err != nil {

@@ -47,6 +47,17 @@ func recurTestPool(t *testing.T) *pgxpool.Pool {
 			recurErr = err
 			return
 		}
+		// Test isolation: the fixture reuses a fixed CHIP purchase id
+		// ("pur_charge_child") which is UNIQUE on subscription_charges, so a
+		// dirty DB from a prior run makes AddCharge fail silently and the
+		// charge count never advances. Truncate the tables this suite touches
+		// so the test is deterministic regardless of prior runs (CI uses a
+		// fresh Postgres; this keeps local runs green too).
+		if _, terr := pool.Exec(context.Background(),
+			`TRUNCATE subscription_charges, subscriptions, products, accounts, users RESTART IDENTITY CASCADE`); terr != nil {
+			recurErr = terr
+			return
+		}
 		recurPool = pool
 	})
 	if recurErr != nil {

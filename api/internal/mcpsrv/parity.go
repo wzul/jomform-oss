@@ -272,6 +272,9 @@ type upsertFormIn struct {
 	PendingMessage string     `json:"pending_message,omitempty" jsonschema:"Mesej sebelum mula (kosong = lalai)"`
 	ExpiredMessage string     `json:"expired_message,omitempty" jsonschema:"Mesej selepas tamat (kosong = lalai)"`
 	LimitMessage   string     `json:"limit_message,omitempty" jsonschema:"Mesej had tercapai (kosong = lalai)"`
+	// Issue #208: per-form CHIP feeds (multiple, with conditional logic).
+	// Omit to leave unchanged; pass an empty array to clear all feeds.
+	ChipFeeds []chipFeedIn `json:"chip_feeds,omitempty" jsonschema:"Senarai feed CHIP borang. Feed tanpa condition = lalai (sentiasa padan). Feed pertama yang padan dipakai."`
 }
 
 func (s *Server) upsertForm(
@@ -316,6 +319,16 @@ func (s *Server) upsertForm(
 				return nil, nil, err
 			}
 		}
+		// Issue #208: apply CHIP feeds on create when provided.
+		if in.ChipFeeds != nil {
+			feeds, err := s.toChipFeeds(ctx, acc, f.ID, in.ChipFeeds)
+			if err != nil {
+				return nil, nil, err
+			}
+			if err := s.deps.Forms.SetChipFeeds(ctx, acc, f.ID, feeds); err != nil {
+				return nil, nil, err
+			}
+		}
 		return nil, map[string]string{"status": "created", "form_id": f.ID, "slug": f.Slug}, nil
 	}
 	// Update store treats nil maps as "leave unchanged", so an omitted
@@ -328,6 +341,16 @@ func (s *Server) upsertForm(
 		in.PendingMessage != "" || in.ExpiredMessage != "" || in.LimitMessage != "" {
 		if err := s.deps.Forms.UpdateRestrictions(ctx, acc, in.FormID,
 			in.StartAt, in.EndAt, in.EntryLimit, in.PendingMessage, in.ExpiredMessage, in.LimitMessage); err != nil {
+			return nil, nil, err
+		}
+	}
+	// Issue #208: apply CHIP feeds on update when provided (nil = unchanged).
+	if in.ChipFeeds != nil {
+		feeds, err := s.toChipFeeds(ctx, acc, in.FormID, in.ChipFeeds)
+		if err != nil {
+			return nil, nil, err
+		}
+		if err := s.deps.Forms.SetChipFeeds(ctx, acc, in.FormID, feeds); err != nil {
 			return nil, nil, err
 		}
 	}
