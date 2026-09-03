@@ -5,10 +5,16 @@ package httpapi
 import (
 	"context"
 	"log/slog"
-	"net"
 	"net/http"
 	"strings"
 )
+
+// verifyFailDetail is the message returned when a custom domain fails the
+// JomForm probe (issue #248). It guides the merchant to the correct DNS setup
+// (CNAME to custom.jomform.com, or Cloudflare proxy) instead of dumping the
+// domain's resolved IPs — those are Cloudflare edge IPs and dumping them
+// misleadingly implies an A Record, which is wrong.
+const verifyFailDetail = "Domain tidak menghala ke JomForm. Set CNAME dari domain anda ke custom.jomform.com (atau gunakan Cloudflare proxy), kemudian tunggu DNS propagate dan Verify semula."
 
 // ─── handlers ────────────────────────────────────────────────────────────────
 
@@ -93,11 +99,6 @@ func (h *RESTHandlers) verifyCustomDomainByID(w http.ResponseWriter, r *http.Req
 		writeErr(w, http.StatusNotFound, "domain tidak dijumpai")
 		return
 	}
-	ips, err := net.LookupHost(d.Domain)
-	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"verified": false, "detail": "DNS belum resolve"})
-		return
-	}
 	// Issue #237: probeServesJomForm is the AUTHORITATIVE check. A domain is
 	// verified ONLY if it actually serves a JomForm page. sameEdge/ff400 are
 	// hints that DNS points at Cloudflare, but they are NOT sufficient on
@@ -105,8 +106,14 @@ func (h *RESTHandlers) verifyCustomDomainByID(w http.ResponseWriter, r *http.Req
 	// jomform.com must still serve JomForm to be verified.
 	serveOK := probeServesJomForm(d.Domain)
 	if !serveOK {
+		// Issue #248: guide the merchant to the correct DNS setup instead of
+		// dumping the domain's resolved IPs. Those are Cloudflare edge IPs
+		// (104.21.x, 172.67.x, 2606:4700:...) and dumping them misleadingly
+		// implies the merchant should set an A Record to them — which is wrong.
+		// The correct setup is a CNAME to custom.jomform.com (or Cloudflare
+		// proxy), so the message says exactly that.
 		writeJSON(w, http.StatusOK, map[string]any{"verified": false,
-			"detail": "Domain tidak menghala ke JomForm (" + strings.Join(ips, ",") + ")"})
+			"detail": verifyFailDetail})
 		return
 	}
 	if err := h.Domains.MarkVerified(r.Context(), actx.Account.ID, d.Domain); err != nil {
