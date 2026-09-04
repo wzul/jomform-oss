@@ -209,6 +209,14 @@ func (s *UserStore) ListIdentities(ctx context.Context, userID string) ([]*Socia
 func (s *UserStore) CreateFromSocial(ctx context.Context, email, name, provider, providerUID, picture string) (string, error) {
 	var id string
 	email = strings.ToLower(strings.TrimSpace(email))
+	// users.name is NOT NULL — never let an empty provider name become NULL.
+	// Fall back to the email's local part, then a generic label.
+	if strings.TrimSpace(name) == "" {
+		name = emailLocalPart(email)
+	}
+	if name == "" {
+		name = "User"
+	}
 	err := s.pool.QueryRow(ctx,
 		`INSERT INTO users (email, password_hash, name, avatar_url) VALUES ($1,'',NULLIF($2,''),NULLIF($3,'')) RETURNING id`, email, name, picture).Scan(&id)
 	if err != nil {
@@ -222,6 +230,15 @@ func (s *UserStore) CreateFromSocial(ctx context.Context, email, name, provider,
 	}
 	_ = s.LinkIdentity(ctx, id, provider, providerUID, email, name, picture)
 	return id, nil
+}
+
+// emailLocalPart returns the portion of an email before the '@' (trimmed),
+// or "" when the address has no local part.
+func emailLocalPart(email string) string {
+	if i := strings.IndexByte(email, '@'); i > 0 {
+		return strings.TrimSpace(email[:i])
+	}
+	return ""
 }
 
 // UpdateAvatar sets the user's profile picture URL (issue #133). Empty string
