@@ -23,8 +23,17 @@ type Profile = {
 // Issue #301: connected accounts (social login connectors) are user-level.
 type SocialRow = { provider: string; email?: string; linked_at?: string };
 
-type ProfileTab = "identity" | "security" | "passkeys" | "connected";
-const TAB_IDS: ProfileTab[] = ["identity", "security", "passkeys", "connected"];
+// Issue #307: connected MCP agents (OAuth clients) are user-level too — a
+// user binds one agent and it can operate across all their spaces.
+type MCPAgentRow = {
+  client_id: string;
+  name: string;
+  created_at?: string;
+  last_used_at?: string;
+};
+
+type ProfileTab = "identity" | "security" | "passkeys" | "connected" | "mcp";
+const TAB_IDS: ProfileTab[] = ["identity", "security", "passkeys", "connected", "mcp"];
 
 // Issue #191: common IANA timezones offered in the Profile → Identity tab.
 // The user can also pick Auto (empty) to follow the browser/PC default.
@@ -64,7 +73,7 @@ function loadStoredTab(): ProfileTab {
   if (typeof window === "undefined") return "identity";
   try {
     const v = window.localStorage.getItem("jf_profile_tab");
-    if (v === "identity" || v === "security" || v === "passkeys" || v === "connected") return v;
+    if (v === "identity" || v === "security" || v === "passkeys" || v === "connected" || v === "mcp") return v;
   } catch {
     // storage unavailable — fall through
   }
@@ -104,6 +113,9 @@ export default function ProfilePage() {
   // Issue #301: connected accounts (user-level, independent of the active
   // space) — loaded via GET /api/auth/social (currentUserID-scoped).
   const [social, setSocial] = useState<SocialRow[]>([]);
+  // Issue #307: connected MCP agents (user-level OAuth clients) — loaded via
+  // GET /api/auth/mcp-agents.
+  const [agents, setAgents] = useState<MCPAgentRow[]>([]);
 
   // Persist active tab.
   useEffect(() => {
@@ -148,6 +160,13 @@ export default function ProfilePage() {
       .then((r) => (r.ok ? r.json() : []))
       .then((s) => setSocial(Array.isArray(s) ? s : []))
       .catch(() => setSocial([]));
+    // Issue #307: connected MCP agents load straight from the user-level
+    // /api/auth/mcp-agents endpoint (no ?space=), so they're identical across
+    // all of the user's spaces.
+    fetch("/api/auth/mcp-agents")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((s) => setAgents(Array.isArray(s) ? s : []))
+      .catch(() => setAgents([]));
   }, [sessionUser]);
 
   useEffect(() => { load(); }, [load]);
@@ -584,6 +603,54 @@ export default function ProfilePage() {
             <a href="/api/auth/oauth/google" className="jf-btn-ghost mt-3 inline-block">
               {t("prof.linkGoogle")}
             </a>
+          </section>
+        )}
+
+        {/* Connected agents tab (issue #307): user-level MCP OAuth clients,
+            moved here from space-scoped Settings. A connected agent can
+            operate across every space the user owns, up to the user's role in
+            each — so the connection is user-level, not per-space. */}
+        {tab === "mcp" && (
+          <section className="jf-card mt-6 p-6">
+            <h2 className="text-lg font-semibold">{t("prof.mcpTitle")}</h2>
+            <p className="mt-1 max-w-xl text-sm text-slate-400">
+              {t("set.serverUrl")}{" "}
+              <code className="rounded bg-slate-100 px-1">https://mcp.jomform.com/mcp</code> —{" "}
+              {t("set.mcpHelp")}{" "}
+              <code className="rounded bg-slate-100 px-1">/.well-known/oauth-authorization-server</code>{" "}
+              {t("set.mcpNoKeys")}
+            </p>
+            <ul className="mt-4 space-y-2">
+              {agents.map((a) => (
+                <li key={a.client_id} className="flex items-center justify-between rounded-lg border border-[var(--jf-border)] px-4 py-2.5">
+                  <div>
+                    <p className="text-sm">{a.name || a.client_id}</p>
+                    <p className="text-[11px] text-slate-400">{t("set.clientId")} {a.client_id}</p>
+                  </div>
+                  <button
+                    onClick={async () => {
+                      if (!(window.confirm(t("prof.mcpDisconnectConfirm") + "?"))) return;
+                      await fetch(`/api/auth/mcp-agents/${encodeURIComponent(a.client_id)}`, { method: "DELETE" });
+                      load();
+                    }}
+                    className="text-xs text-slate-500 hover:text-red-500"
+                  >
+                    {t("set.revoke")}
+                  </button>
+                </li>
+              ))}
+              {agents.length === 0 && (
+                <li className="rounded-lg border border-dashed border-[var(--jf-border)] px-4 py-3 text-sm text-slate-400">
+                  {t("set.noAgents")}
+                </li>
+              )}
+            </ul>
+            <div className="mt-6 border-t border-[var(--jf-border)] pt-5">
+              <h3 className="text-sm font-semibold">{t("prof.mcpScopeTitle")}</h3>
+              <p className="mt-1 text-xs text-slate-400">
+                {t("prof.mcpScopeHelp")}
+              </p>
+            </div>
           </section>
         )}
 

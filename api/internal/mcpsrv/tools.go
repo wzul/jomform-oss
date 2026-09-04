@@ -434,7 +434,8 @@ func (s *Server) registerTools() {
 
 }
 
-// helper: require a write-capable key.
+// helper: require a write-capable key. Issue #307: the resolved account
+// honours the per-call scope (space_id/account_id or all the user's spaces).
 func (s *Server) accountAndScope(ctx context.Context, write bool) (accountID string, err error) {
 	id := IdentityFromContext(ctx)
 	if id == nil {
@@ -443,13 +444,26 @@ func (s *Server) accountAndScope(ctx context.Context, write bool) (accountID str
 	if write && !dbstore.ScopeHas(id.Scopes, "readwrite") {
 		return "", fmt.Errorf("scope tidak mencukupi (perlu readwrite)")
 	}
+	// Per-call scope: if an explicit single account is requested, use it;
+	// otherwise for account-and-write tools we resolve to the caller's first
+	// accessible account by default (a space_id is honoured too).
+	if cs := callScopeFrom(ctx); cs != nil {
+		if cs.ExplicitAccountID != "" {
+			return cs.ExplicitAccountID, nil
+		}
+		if len(cs.Accounts) > 0 {
+			return cs.Accounts[0], nil
+		}
+		return id.AccountID, nil
+	}
 	return id.AccountID, nil
 }
 
 // accountAndRole resolves the account id + the caller's role in the space
-// that owns it (issue #162). The owner is always an admin; a member's role
-// comes from space_members. role is "" when the account has no linked space
-// (legacy single-account callers are treated as owners).
+// that owns it (issue #162). It honours the per-call scope (issue #307): when
+// the call names a space/account, the role is that space's role; otherwise the
+// caller's first accessible account's role is used. role is "" when the caller
+// is the owner (admin) or has no linked space.
 func (s *Server) accountAndRole(ctx context.Context) (accountID, role string, err error) {
 	accountID, err = s.accountAndScope(ctx, false)
 	if err != nil {
@@ -458,11 +472,16 @@ func (s *Server) accountAndRole(ctx context.Context) (accountID, role string, er
 	if s.deps.Spaces == nil || s.deps.SpaceMembers == nil {
 		return accountID, "", nil
 	}
-	owner, err := s.spaceOwner(ctx)
-	if err != nil {
-		return "", "", err
+	userID := s.userIDFor(ctx)
+	if userID == "" {
+		return "", "", fmt.Errorf("token tiada atau tidak sah")
 	}
-	role, err = s.deps.Spaces.RoleByAccount(ctx, accountID, owner)
+	// If the call scoped to an explicit space, use that space's role (already
+	// resolved by resolveScope — issue #307).
+	if cs := callScopeFrom(ctx); cs != nil && cs.SpaceID != "" {
+		return accountID, cs.Role, nil
+	}
+	role, err = s.deps.Spaces.RoleByAccount(ctx, accountID, userID)
 	if err != nil {
 		return "", "", fmt.Errorf("db: %w", err)
 	}

@@ -21,20 +21,21 @@ type DomainStatus = { domain: string; verified: boolean } | null;
 //   tracking  -> Tracking scripts (global GTM/analytics)
 //   einvoice  -> e-Invoice TIN/MSIC
 //   webhooks  -> Outbound webhooks
-//   mcp       -> MCP / connected agents (issue #129)
 //   emel      -> Per-space receipt/notification email templates (issue #107)
 //   members   -> Space members management (issue #163)
 //   storefront-> Per-space public-form footer (issue #183)
 //   legal     -> Per-space hosted legal pages (issue #184)
 //   currency  -> Per-space currency + BNM rates (issue #185)
 // (Connected accounts — social login connectors — live on the Profile page,
-//  issue #301: they are user-level, not per-space.)
-type SettingsTab = "chip" | "domains" | "tracking" | "einvoice" | "webhooks" | "mcp" | "emel" | "members" | "storefront" | "legal" | "currency";
+//  issue #301: they are user-level, not per-space. The MCP / connected-agents
+//  tab moved to Profile too, issue #307: an OAuth agent is a user-level
+//  credential bound to the user, not to a single space.)
+type SettingsTab = "chip" | "domains" | "tracking" | "einvoice" | "webhooks" | "emel" | "members" | "storefront" | "legal" | "currency";
 
-const TAB_IDS: SettingsTab[] = ["chip", "domains", "tracking", "einvoice", "webhooks", "mcp", "emel", "members", "storefront", "legal", "currency"];
+const TAB_IDS: SettingsTab[] = ["chip", "domains", "tracking", "einvoice", "webhooks", "emel", "members", "storefront", "legal", "currency"];
 
 function isSettingsTab(v: string | null): v is SettingsTab {
-  return v === "chip" || v === "domains" || v === "tracking" || v === "einvoice" || v === "webhooks" || v === "mcp" || v === "emel" || v === "members" || v === "storefront" || v === "legal" || v === "currency";
+  return v === "chip" || v === "domains" || v === "tracking" || v === "einvoice" || v === "webhooks" || v === "emel" || v === "members" || v === "storefront" || v === "legal" || v === "currency";
 }
 
 // Restore the last active tab. Falls back to "chip".
@@ -113,7 +114,6 @@ export default function Settings() {
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   const [keys, setKeys] = useState<KeyRow[]>([]);
-  const [newKey, setNewKey] = useState("");
   const [verified, setVerified] = useState(false);
 
   const [domain, setDomain] = useState("");
@@ -183,12 +183,6 @@ export default function Settings() {
   const [currencySpaceId, setCurrencySpaceId] = useState("");
   const [rates, setRates] = useState<{ currency_code: string; unit: number; rate: number }[]>([]);
   const [ratesCached, setRatesCached] = useState(false);
-  // Issue #195: MCP request history (mcp.tool_call events) shown in the MCP tab.
-  type MCPCall = { id: number; event_name: string; properties: { tool?: string; agent?: string; success?: boolean; error?: string }; created_at?: string };
-  const [mcpCalls, setMcpCalls] = useState<MCPCall[]>([]);
-  const [mcpTotal, setMcpTotal] = useState(0);
-  const [mcpPage, setMcpPage] = useState(1);
-  const MCP_PER_PAGE = 20;
 
   // Persist the active tab (issue #68).
   useEffect(() => {
@@ -523,26 +517,8 @@ export default function Settings() {
     }
   }
 
-  // Issue #195: fetch one page of MCP request history (mcp.tool_call events)
-  // from the account-scoped events endpoint, newest first.
-  async function fetchMCPHistory(page: number) {
-    try {
-      const r = await fetch(`/api/rest/events?event_name=mcp.*&page=${page}&limit=${MCP_PER_PAGE}&space=${encodeURIComponent(spaceScope())}`);
-      if (!r.ok) return;
-      const d = await r.json().catch(() => ({}));
-      setMcpCalls(Array.isArray(d.items) ? d.items : []);
-      setMcpTotal(typeof d.total === "number" ? d.total : 0);
-      setMcpPage(page);
-    } catch {
-      // network blip — leave existing state untouched
-    }
-  }
-
-  // Issue #195: load the first page of MCP history when the MCP tab opens.
-  useEffect(() => {
-    if (tab === "mcp") fetchMCPHistory(1);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab]);
+  // Issue #195: MCP request history moved to Profile → Connected agents
+  // (issue #307); nothing to fetch here in space-scoped Settings.
 
   // Derived per-webhook status for the indicator: pending (last failed, more
   // retries remain), success (last attempt ok), failed (last attempt failed).
@@ -554,19 +530,8 @@ export default function Settings() {
     return "failed";
   }
 
-  async function genKey() {
-    setErr("");
-    const r = await fetch(`/api/rest/keys${spaceQuery()}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "AI Agent Key", scopes: ["readwrite"] }),
-    });
-    if (r.ok) {
-      const d = await r.json();
-      setNewKey(d.key);
-      await load();
-    }
-  }
+  // Issue #307: the MCP "AI Agent Key" generator moved to Profile → Connected
+  // agents (user-level), so there is no genKey here anymore.
 
   async function setDomainClaim(e: React.FormEvent) {
     e.preventDefault();
@@ -1244,99 +1209,10 @@ export default function Settings() {
             </section>
         )}
 
-        {/* ── MCP tab: OAuth 2.1 connected agents (issue #129) ── */}
-        {tab === "mcp" && (
-          <section className="jf-card mt-6 p-6">
-            <h2 className="text-lg font-semibold">{t("set.mcpTitle")}</h2>
-            <p className="mt-1 max-w-xl text-sm text-slate-400">
-              {t("set.serverUrl")} <code className="rounded bg-slate-100 px-1">https://mcp.jomform.com/mcp</code> —
-              {t("set.mcpHelp")}{" "}
-              <code className="rounded bg-slate-100 px-1">/.well-known/oauth-authorization-server</code>{" "}
-              {t("set.mcpNoKeys")}
-            </p>
-            <ul className="mt-4 space-y-2">
-              {keys.map((k) => (
-                <li key={k.id} className="flex items-center justify-between rounded-lg border border-[var(--jf-border)] px-4 py-2.5">
-                  <div>
-                    <p className="text-sm">{k.name}</p>
-                    <p className="text-[11px] text-slate-400">{t("set.clientId")} {k.name === "AI Agent Key" ? "(oauth-managed)" : k.name}</p>
-                  </div>
-                  <button onClick={async () => { await fetch(`/api/rest/keys/${k.id}${spaceQuery()}`, { method: "DELETE" }); load(); }}
-                    className="text-xs text-slate-500 hover:text-red-500">{t("set.revoke")}</button>
-                </li>
-              ))}
-              {!keys.length && (
-                <li className="rounded-lg border border-dashed border-[var(--jf-border)] px-4 py-3 text-sm text-slate-400">
-                  {t("set.noAgents")}
-                </li>
-              )}
-            </ul>
-
-            {/* Issue #195: MCP request history — recent mcp.tool_call events. */}
-            <div className="mt-6 border-t border-[var(--jf-border)] pt-5">
-              <h3 className="text-sm font-semibold">{t("set.mcpHistoryTitle")}</h3>
-              <p className="mt-1 text-xs text-slate-400">{t("set.mcpHistoryHelp")}</p>
-              {mcpCalls.length === 0 ? (
-                <p className="mt-3 text-sm text-slate-400">{t("set.mcpNoHistory")}</p>
-              ) : (
-                <div className="mt-3 overflow-x-auto">
-                  <table className="w-full min-w-96 text-left text-xs">
-                    <thead>
-                      <tr className="text-slate-400">
-                        <th className="py-1 pr-3 font-medium">{t("set.mcpColTime")}</th>
-                        <th className="py-1 pr-3 font-medium">{t("set.mcpColTool")}</th>
-                        <th className="py-1 pr-3 font-medium">{t("set.mcpColAgent")}</th>
-                        <th className="py-1 font-medium">{t("set.mcpColResult")}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {mcpCalls.map((c) => {
-                        const ok = c.properties?.success !== false;
-                        return (
-                          <tr key={c.id} className={`border-t border-[var(--jf-border)] ${!ok ? "bg-red-50/60" : ""}`}>
-                            <td className="py-1.5 pr-3 text-slate-500 whitespace-nowrap">
-                              {c.created_at ? formatDateTime(c.created_at, user?.timezone) : "—"}
-                            </td>
-                            <td className="py-1.5 pr-3 font-mono">{c.properties?.tool || c.event_name}</td>
-                            <td className="py-1.5 pr-3">{c.properties?.agent || "—"}</td>
-                            <td className="py-1.5">
-                              {ok ? (
-                                <span className="font-medium text-emerald-600">{t("set.mcpSuccess")}</span>
-                              ) : (
-                                <span className="font-medium text-red-600">{t("set.mcpFailed")}</span>
-                              )}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-              {mcpTotal > MCP_PER_PAGE && (
-                <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--jf-muted)]">
-                  <span>{t("set.mcpPageOf", { page: mcpPage, total: Math.max(1, Math.ceil(mcpTotal / MCP_PER_PAGE)) })}</span>
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => fetchMCPHistory(Math.max(1, mcpPage - 1))}
-                      disabled={mcpPage <= 1}
-                      className="jf-btn-ghost px-3 py-1.5 disabled:opacity-40"
-                    >
-                      {t("common.prev")}
-                    </button>
-                    <button
-                      onClick={() => fetchMCPHistory(mcpPage + 1)}
-                      disabled={mcpPage >= Math.ceil(mcpTotal / MCP_PER_PAGE)}
-                      className="jf-btn-ghost px-3 py-1.5 disabled:opacity-40"
-                    >
-                      {t("common.next")}
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          </section>
-        )}
+        {/* ── MCP tab removed (issue #307): connected agents are user-level
+               and moved to Profile → Connected agents. OAuth agents bind to
+               the user and can operate across all of the user's spaces, not a
+               single space. */}
 
         {/* ── Emel tab: per-space receipt/notification email (issue #107) ── */}
         {tab === "emel" && (

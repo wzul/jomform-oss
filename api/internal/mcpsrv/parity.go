@@ -42,7 +42,7 @@ type updateProductIn struct {
 func (s *Server) updateProduct(
 	ctx context.Context, _ *mcp.CallToolRequest, in updateProductIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	acc, err := s.requireWriteRole(ctx)
+	acc, err := s.requireProductWrite(ctx, in.ProductID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -208,12 +208,15 @@ type getFormChipMappingIn struct {
 func (s *Server) getFormChipMapping(
 	ctx context.Context, _ *mcp.CallToolRequest, in getFormChipMappingIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	acc, err := s.accountAndScope(ctx, false)
-	if err != nil {
-		return nil, nil, err
+	if s.deps.Forms == nil {
+		return nil, nil, errors.New("forms tidak tersedia")
 	}
 	if in.FormID == "" {
 		return nil, nil, errors.New("form_id wajib")
+	}
+	acc, err := s.resolveFormAccount(ctx, in.FormID)
+	if err != nil {
+		return nil, nil, err
 	}
 	f, err := s.deps.Forms.GetByID(ctx, acc, in.FormID)
 	if err != nil {
@@ -237,12 +240,12 @@ type setFormChipMappingIn struct {
 func (s *Server) setFormChipMapping(
 	ctx context.Context, _ *mcp.CallToolRequest, in setFormChipMappingIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	acc, err := s.requireWriteRole(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
 	if in.FormID == "" {
 		return nil, nil, errors.New("form_id wajib")
+	}
+	acc, err := s.requireFormWrite(ctx, in.FormID)
+	if err != nil {
+		return nil, nil, err
 	}
 	f, err := s.deps.Forms.GetByID(ctx, acc, in.FormID)
 	if err != nil {
@@ -297,9 +300,21 @@ type upsertFormIn struct {
 func (s *Server) upsertForm(
 	ctx context.Context, _ *mcp.CallToolRequest, in upsertFormIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	acc, err := s.requireWriteRole(ctx)
-	if err != nil {
-		return nil, nil, err
+	// Issue #307: creating a new form lands in the caller's currently-scoped
+	// account (space_id/account_id or the default/first of the user's spaces);
+	// updating resolves + RBAC-gates the owning account.
+	acc := ""
+	var err error
+	if in.FormID == "" {
+		acc, err = s.requireWriteRole(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+	} else {
+		acc, err = s.requireFormWrite(ctx, in.FormID)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 	if in.Title == "" {
 		return nil, nil, errors.New("title wajib")
@@ -583,7 +598,8 @@ type publishFormIn struct {
 func (s *Server) publishFormMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in publishFormIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	acc, err := s.requireWriteRole(ctx)
+	// Issue #307: resolve + RBAC-gate the owning account across the user's spaces.
+	acc, err := s.requireFormWrite(ctx, in.FormID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -625,7 +641,8 @@ type setFormPasswordIn struct {
 func (s *Server) setFormPassword(
 	ctx context.Context, _ *mcp.CallToolRequest, in setFormPasswordIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	acc, err := s.requireWriteRole(ctx)
+	// Issue #307: resolve + RBAC-gate the owning account across the user's spaces.
+	acc, err := s.requireFormWrite(ctx, in.FormID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -648,7 +665,7 @@ func (s *Server) setFormPassword(
 func (s *Server) deleteFormMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in formRefIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	acc, err := s.requireWriteRole(ctx)
+	acc, err := s.requireFormWrite(ctx, in.FormID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -663,7 +680,7 @@ func (s *Server) deleteFormMCP(
 func (s *Server) deleteFormMCPSoft(
 	ctx context.Context, _ *mcp.CallToolRequest, in formRefIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	acc, err := s.requireWriteRole(ctx)
+	acc, err := s.requireFormWrite(ctx, in.FormID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -683,13 +700,85 @@ type bulkFormsIn struct {
 func (s *Server) bulkFormsMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in bulkFormsIn,
 ) (*mcp.CallToolResult, map[string]any, error) {
-	acc, err := s.requireWriteRole(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
 	if in.Action != "publish" && in.Action != "draft" && in.Action != "delete" {
 		return nil, nil, errors.New("action mesti publish|draft|delete")
 	}
+	if len(in.IDs) == 0 {
+		return nil, nil, errors.New("ids wajib")
+	}
+	if len(in.IDs) > 500 {
+		return nil, nil, errors.New("ids terlalu banyak (maks 500)")
+	}
+	// Issue #307: a user-level agent may bulk-operate across all of their
+	// spaces, but only up to their role in each. So we resolve each form's
+	// owning account and apply the action per space when the caller has the
+	// manage/admin role there.
+	seen := make(map[string]struct{}, len(in.IDs))
+	ids := make([]string, 0, len(in.IDs))
+	for _, id := range in.IDs {
+		if _, dup := seen[id]; dup || id == "" {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return nil, nil, errors.New("ids mesti diisi")
+	}
+	var updated int64
+	for _, id := range ids {
+		acc, err := s.resolveFormAccount(ctx, id)
+		if err != nil {
+			continue // form not owned by an accessible account — skip
+		}
+		if err := s.requireWriteRoleIn(ctx, acc); err != nil {
+			continue // read_only member here — skip
+		}
+		var e error
+		switch in.Action {
+		case "publish", "draft":
+			status := "published"
+			if in.Action == "draft" {
+				status = "draft"
+			}
+			_, e = s.deps.Forms.SetStatusMany(ctx, acc, []string{id}, status)
+		default:
+			_, e = s.deps.Forms.SoftDeleteMany(ctx, acc, []string{id})
+		}
+		if e == nil {
+			updated++
+		}
+	}
+	return nil, map[string]any{"status": "ok", "action": in.Action, "updated": updated}, nil
+}
+
+// delete product alias to archive
+func (s *Server) archiveProductMCP(
+	ctx context.Context, _ *mcp.CallToolRequest, in struct {
+		ProductID string `json:"product_id" jsonschema:"ID produk"`
+	},
+) (*mcp.CallToolResult, map[string]string, error) {
+	// Issue #307: resolve + RBAC-gate the owning account across the user's spaces.
+	acc, err := s.requireProductWrite(ctx, in.ProductID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := s.deps.Products.Archive(ctx, acc, in.ProductID); err != nil {
+		return nil, nil, err
+	}
+	return nil, map[string]string{"status": "archived", "product_id": in.ProductID}, nil
+}
+
+// bulkProductsMCP archives many products in one call (parity with
+// POST /v1/rest/products/bulk). Issue #307: spans the user's spaces (up to the
+// caller's role per space).
+type bulkProductsIn struct {
+	IDs []string `json:"ids" jsonschema:"Senarai produk id (maks 500)"`
+}
+
+func (s *Server) bulkProductsMCP(
+	ctx context.Context, _ *mcp.CallToolRequest, in bulkProductsIn,
+) (*mcp.CallToolResult, map[string]any, error) {
 	if len(in.IDs) == 0 {
 		return nil, nil, errors.New("ids wajib")
 	}
@@ -709,72 +798,17 @@ func (s *Server) bulkFormsMCP(
 		return nil, nil, errors.New("ids mesti diisi")
 	}
 	var updated int64
-	switch in.Action {
-	case "publish", "draft":
-		status := "published"
-		if in.Action == "draft" {
-			status = "draft"
-		}
-		updated, err = s.deps.Forms.SetStatusMany(ctx, acc, ids, status)
-	default:
-		updated, err = s.deps.Forms.SoftDeleteMany(ctx, acc, ids)
-	}
-	if err != nil {
-		return nil, nil, err
-	}
-	return nil, map[string]any{"status": "ok", "action": in.Action, "updated": updated}, nil
-}
-
-// delete product alias to archive
-func (s *Server) archiveProductMCP(
-	ctx context.Context, _ *mcp.CallToolRequest, in struct {
-		ProductID string `json:"product_id" jsonschema:"ID produk"`
-	},
-) (*mcp.CallToolResult, map[string]string, error) {
-	acc, err := s.requireWriteRole(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-	if err := s.deps.Products.Archive(ctx, acc, in.ProductID); err != nil {
-		return nil, nil, err
-	}
-	return nil, map[string]string{"status": "archived", "product_id": in.ProductID}, nil
-}
-
-// bulkProductsMCP archives many products in one call (parity with
-// POST /v1/rest/products/bulk). Returns how many the account actually owned.
-type bulkProductsIn struct {
-	IDs []string `json:"ids" jsonschema:"Senarai produk id (maks 500)"`
-}
-
-func (s *Server) bulkProductsMCP(
-	ctx context.Context, _ *mcp.CallToolRequest, in bulkProductsIn,
-) (*mcp.CallToolResult, map[string]any, error) {
-	acc, err := s.requireWriteRole(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-	if len(in.IDs) == 0 {
-		return nil, nil, errors.New("ids wajib")
-	}
-	if len(in.IDs) > 500 {
-		return nil, nil, errors.New("ids terlalu banyak (maks 500)")
-	}
-	seen := make(map[string]struct{}, len(in.IDs))
-	ids := make([]string, 0, len(in.IDs))
-	for _, id := range in.IDs {
-		if _, dup := seen[id]; dup || id == "" {
+	for _, id := range ids {
+		acc, err := s.resolveProductAccount(ctx, id)
+		if err != nil {
 			continue
 		}
-		seen[id] = struct{}{}
-		ids = append(ids, id)
-	}
-	if len(ids) == 0 {
-		return nil, nil, errors.New("ids mesti diisi")
-	}
-	updated, err := s.deps.Products.ArchiveMany(ctx, acc, ids)
-	if err != nil {
-		return nil, nil, err
+		if err := s.requireWriteRoleIn(ctx, acc); err != nil {
+			continue
+		}
+		if n, e := s.deps.Products.ArchiveMany(ctx, acc, []string{id}); e == nil {
+			updated += n
+		}
 	}
 	return nil, map[string]any{"status": "ok", "action": "archive", "updated": updated}, nil
 }
@@ -810,12 +844,12 @@ type formRestrictionsOut struct {
 func (s *Server) getFormRestrictions(
 	ctx context.Context, _ *mcp.CallToolRequest, in formRefIn,
 ) (*mcp.CallToolResult, formRestrictionsOut, error) {
-	acc, err := s.accountAndScope(ctx, false)
-	if err != nil {
-		return nil, formRestrictionsOut{}, err
-	}
 	if s.deps.Forms == nil {
 		return nil, formRestrictionsOut{}, errors.New("forms tidak tersedia")
+	}
+	acc, err := s.resolveFormAccount(ctx, in.FormID)
+	if err != nil {
+		return nil, formRestrictionsOut{}, err
 	}
 	f, err := s.deps.Forms.GetByID(ctx, acc, in.FormID)
 	if err != nil {
@@ -842,12 +876,12 @@ type setFormRestrictionsIn struct {
 func (s *Server) setFormRestrictions(
 	ctx context.Context, _ *mcp.CallToolRequest, in setFormRestrictionsIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	acc, err := s.requireWriteRole(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
 	if in.FormID == "" {
 		return nil, nil, errors.New("form_id wajib")
+	}
+	acc, err := s.requireFormWrite(ctx, in.FormID)
+	if err != nil {
+		return nil, nil, err
 	}
 	if in.StartAt != nil && in.EndAt != nil && in.EndAt.Before(*in.StartAt) {
 		return nil, nil, errors.New("tarikh tamat mesti selepas tarikh mula")

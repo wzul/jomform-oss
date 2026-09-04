@@ -28,12 +28,12 @@ type formEmailSettingsOut struct {
 func (s *Server) getFormEmailSettings(
 	ctx context.Context, _ *mcp.CallToolRequest, in getFormEmailSettingsIn,
 ) (*mcp.CallToolResult, formEmailSettingsOut, error) {
-	acc, err := s.accountAndScope(ctx, false)
-	if err != nil {
-		return nil, formEmailSettingsOut{}, err
-	}
 	if s.deps.Forms == nil {
 		return nil, formEmailSettingsOut{}, errors.New("forms tidak tersedia")
+	}
+	acc, err := s.resolveFormAccount(ctx, in.FormID)
+	if err != nil {
+		return nil, formEmailSettingsOut{}, err
 	}
 	if _, err := s.deps.Forms.GetByID(ctx, acc, in.FormID); err != nil {
 		return nil, formEmailSettingsOut{}, errors.New("borang tidak dijumpai")
@@ -64,15 +64,15 @@ type setFormEmailSettingsIn struct {
 func (s *Server) setFormEmailSettings(
 	ctx context.Context, _ *mcp.CallToolRequest, in setFormEmailSettingsIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	acc, err := s.requireWriteRole(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
 	if s.deps.Forms == nil {
 		return nil, nil, errors.New("forms tidak tersedia")
 	}
 	if in.FormID == "" {
 		return nil, nil, errors.New("form_id wajib")
+	}
+	acc, err := s.requireFormWrite(ctx, in.FormID)
+	if err != nil {
+		return nil, nil, err
 	}
 	if _, err := s.deps.Forms.GetByID(ctx, acc, in.FormID); err != nil {
 		return nil, nil, errors.New("borang tidak dijumpai")

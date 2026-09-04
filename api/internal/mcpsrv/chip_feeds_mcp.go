@@ -49,12 +49,13 @@ type chipFeedOut struct {
 func (s *Server) getFormChipFeedsMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in formRefIn,
 ) (*mcp.CallToolResult, []chipFeedOut, error) {
-	acc, err := s.accountAndScope(ctx, false)
-	if err != nil {
-		return nil, nil, err
-	}
 	if s.deps.Forms == nil {
 		return nil, nil, errors.New("forms tidak tersedia")
+	}
+	// Issue #307: the form may live in any of the user's spaces.
+	acc, err := s.resolveFormAccount(ctx, in.FormID)
+	if err != nil {
+		return nil, nil, err
 	}
 	feeds, err := s.deps.Forms.ChipFeedsFor(ctx, acc, in.FormID)
 	if err != nil {
@@ -118,12 +119,13 @@ func (s *Server) toChipFeeds(ctx context.Context, acc, formID string, in []chipF
 func (s *Server) setFormChipFeedsMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in chipFeedsIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	acc, err := s.requireWriteRole(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
 	if s.deps.Forms == nil || s.decKey == nil {
 		return nil, nil, errors.New("feeds tidak tersedia")
+	}
+	// Issue #307: resolve + RBAC-gate the owning account across the user's spaces.
+	acc, err := s.requireFormWrite(ctx, in.FormID)
+	if err != nil {
+		return nil, nil, err
 	}
 	feeds, err := s.toChipFeeds(ctx, acc, in.FormID, in.Feeds)
 	if err != nil {

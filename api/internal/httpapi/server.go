@@ -131,6 +131,8 @@ func NewServer(cfg *config.Config, log *slog.Logger, deps *Deps) *Server {
 			SpaceMembers: deps.SpaceMembers,
 			// Issue #92: audit/behaviour log for auth actions.
 			Events: deps.Events,
+			// Issue #307: the user-level connected-agents (MCP) store.
+			OAuth: deps.OAuth,
 		}
 		// Issue #121: OAuth 2.1 flow needs the same session + user identity for
 		// the human authorize step, plus the store. Wired alongside auth.

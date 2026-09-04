@@ -41,12 +41,12 @@ type getFormNotificationsIn struct {
 func (s *Server) getFormNotifications(
 	ctx context.Context, _ *mcp.CallToolRequest, in getFormNotificationsIn,
 ) (*mcp.CallToolResult, []notificationOut, error) {
-	acc, err := s.accountAndScope(ctx, false)
-	if err != nil {
-		return nil, nil, err
-	}
 	if s.deps.Forms == nil || s.deps.Notifications == nil {
 		return nil, nil, errors.New("notifications tidak tersedia")
+	}
+	acc, err := s.resolveFormAccount(ctx, in.FormID)
+	if err != nil {
+		return nil, nil, err
 	}
 	if _, err := s.deps.Forms.GetByID(ctx, acc, in.FormID); err != nil {
 		return nil, nil, errors.New("borang tidak dijumpai")
@@ -87,15 +87,15 @@ type setFormNotificationsIn struct {
 func (s *Server) setFormNotifications(
 	ctx context.Context, _ *mcp.CallToolRequest, in setFormNotificationsIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	acc, err := s.requireWriteRole(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
 	if s.deps.Forms == nil || s.deps.Notifications == nil {
 		return nil, nil, errors.New("notifications tidak tersedia")
 	}
 	if in.FormID == "" {
 		return nil, nil, errors.New("form_id wajib")
+	}
+	acc, err := s.requireFormWrite(ctx, in.FormID)
+	if err != nil {
+		return nil, nil, err
 	}
 	if _, err := s.deps.Forms.GetByID(ctx, acc, in.FormID); err != nil {
 		return nil, nil, errors.New("borang tidak dijumpai")

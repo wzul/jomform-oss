@@ -27,11 +27,11 @@ type listMediaIn struct {
 	Limit  int    `json:"limit,omitempty" jsonschema:"Optional — had setiap muka (1-100, lalai 20)"`
 }
 
-// listMedia returns one page of the account's uploaded media, newest first,
-// optionally filtered by form and source. Account-scoped (ownership enforced
-// inside the store query). Read-only.
+// listMedia returns one page of the user's uploaded media, newest first,
+// optionally filtered by form and source. Issue #307: spans all of the user's
+// spaces (ownership enforced inside the store queries). Read-only.
 func (s *Server) listMedia(ctx context.Context, _ *mcp.CallToolRequest, in listMediaIn) (*mcp.CallToolResult, map[string]any, error) {
-	accountID, err := s.accountAndScope(ctx, false)
+	accs, err := s.accountScopes(ctx, false)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -51,17 +51,21 @@ func (s *Server) listMedia(ctx context.Context, _ *mcp.CallToolRequest, in listM
 	if limit > 100 {
 		limit = 100
 	}
-	items, total, err := s.deps.Media.ListPage(ctx, accountID, in.FormID, in.Source, page, limit)
-	if err != nil {
-		return nil, nil, fmt.Errorf("db: %w", err)
-	}
-	out := make([]mediaOut, 0, len(items))
-	for _, m := range items {
-		out = append(out, mediaOut{
-			ID: m.ID, FormID: m.FormID, Key: m.Key, URL: m.URL,
-			Mime: m.Mime, Size: m.Size, Source: m.Source,
-			CreatedAt: m.CreatedAt.UTC().Format(time.RFC3339),
-		})
+	out := make([]mediaOut, 0)
+	var total int64
+	for _, accountID := range accs {
+		items, tot, err := s.deps.Media.ListPage(ctx, accountID, in.FormID, in.Source, page, limit)
+		if err != nil {
+			return nil, nil, fmt.Errorf("db: %w", err)
+		}
+		total += tot
+		for _, m := range items {
+			out = append(out, mediaOut{
+				ID: m.ID, FormID: m.FormID, Key: m.Key, URL: m.URL,
+				Mime: m.Mime, Size: m.Size, Source: m.Source,
+				CreatedAt: m.CreatedAt.UTC().Format(time.RFC3339),
+			})
+		}
 	}
 	return nil, map[string]any{
 		"items": out, "page": page, "limit": limit, "total": total,

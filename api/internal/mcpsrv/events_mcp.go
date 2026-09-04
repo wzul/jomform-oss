@@ -30,19 +30,20 @@ type eventOut struct {
 	CreatedAt  string         `json:"created_at"`
 }
 
-// listEvents returns the account's audit/behaviour log, newest first,
-// paginated and filterable. Read-only (read scope is enough).
+// listEvents returns the user's audit/behaviour log, newest first,
+// paginated and filterable. Read-only (read scope is enough). Issue #307:
+// spans all of the user's spaces.
 func (s *Server) listEvents(
 	ctx context.Context, _ *mcp.CallToolRequest, in listEventsIn,
 ) (*mcp.CallToolResult, map[string]any, error) {
-	acc, err := s.accountAndScope(ctx, false)
+	accs, err := s.accountScopes(ctx, false)
 	if err != nil {
 		return nil, nil, err
 	}
 	if s.deps.Events == nil {
 		return nil, nil, errors.New("event store tidak dikonfigurasi")
 	}
-	f := dbstore.EventFilter{AccountIDs: []string{acc}, EventName: in.EventName}
+	f := dbstore.EventFilter{AccountIDs: accs, EventName: in.EventName}
 	if in.From != "" {
 		if t, err := time.Parse(time.RFC3339, in.From); err == nil {
 			f.From = &t

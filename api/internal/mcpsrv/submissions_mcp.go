@@ -23,18 +23,18 @@ type listFormSubmissionsIn struct {
 }
 
 // listFormSubmissions returns one page of response-only submissions for a
-// form, newest first, plus the total count. Account-scoped (ownership is
-// enforced inside the store query). Read-only.
+// form, newest first, plus the total count. Issue #307: the form may live in
+// any of the user's spaces (ownership enforced per store query). Read-only.
 func (s *Server) listFormSubmissions(ctx context.Context, _ *mcp.CallToolRequest, in listFormSubmissionsIn) (*mcp.CallToolResult, map[string]any, error) {
-	accountID, err := s.accountAndScope(ctx, false)
-	if err != nil {
-		return nil, nil, err
-	}
 	if s.deps.Submissions == nil {
 		return nil, nil, fmt.Errorf("submissions tidak tersedia")
 	}
 	if in.FormID == "" {
 		return nil, nil, fmt.Errorf("form_id wajib")
+	}
+	acc, err := s.resolveFormAccount(ctx, in.FormID)
+	if err != nil {
+		return nil, nil, err
 	}
 	page, limit := in.Page, in.Limit
 	if page < 1 {
@@ -46,7 +46,7 @@ func (s *Server) listFormSubmissions(ctx context.Context, _ *mcp.CallToolRequest
 	if limit > 100 {
 		limit = 100
 	}
-	subs, total, err := s.deps.Submissions.ListByAccountsFormPage(ctx, []string{accountID}, in.FormID, page, limit)
+	subs, total, err := s.deps.Submissions.ListByAccountsFormPage(ctx, []string{acc}, in.FormID, page, limit)
 	if err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}

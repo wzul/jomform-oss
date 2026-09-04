@@ -29,22 +29,25 @@ type productStatsOut struct {
 func (s *Server) formAnalytics(
 	ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn,
 ) (*mcp.CallToolResult, []formStatsOut, error) {
-	acc, err := s.accountAndScope(ctx, false)
+	accs, err := s.accountScopes(ctx, false)
 	if err != nil {
 		return nil, nil, err
 	}
-	stats, err := s.deps.Sales.FormAnalytics(ctx, acc)
-	if err != nil {
-		return nil, nil, err
-	}
-	out := make([]formStatsOut, 0, len(stats))
-	for _, f := range stats {
-		out = append(out, formStatsOut{
-			Title: f.Title, Slug: f.Slug,
-			Submissions: f.Submissions, PaidCount: f.PaidCount,
-			ConfirmedCount: f.ConfirmedCnt, FailedCount: f.FailedCount,
-			PendingCount: f.PendingCount, RevenueRM: float64(f.RevenueSen) / 100,
-		})
+	// Issue #307: analytics span all of the user's spaces.
+	out := make([]formStatsOut, 0)
+	for _, acc := range accs {
+		stats, err := s.deps.Sales.FormAnalytics(ctx, acc)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, f := range stats {
+			out = append(out, formStatsOut{
+				Title: f.Title, Slug: f.Slug,
+				Submissions: f.Submissions, PaidCount: f.PaidCount,
+				ConfirmedCount: f.ConfirmedCnt, FailedCount: f.FailedCount,
+				PendingCount: f.PendingCount, RevenueRM: float64(f.RevenueSen) / 100,
+			})
+		}
 	}
 	return nil, out, nil
 }
@@ -52,20 +55,23 @@ func (s *Server) formAnalytics(
 func (s *Server) productAnalytics(
 	ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn,
 ) (*mcp.CallToolResult, []productStatsOut, error) {
-	acc, err := s.accountAndScope(ctx, false)
+	accs, err := s.accountScopes(ctx, false)
 	if err != nil {
 		return nil, nil, err
 	}
-	stats, err := s.deps.Sales.ProductAnalytics(ctx, acc)
-	if err != nil {
-		return nil, nil, err
-	}
-	out := make([]productStatsOut, 0, len(stats))
-	for _, p := range stats {
-		out = append(out, productStatsOut{
-			Name: p.Name, UnitsSold: p.UnitsSold, PaidUnits: p.PaidUnits,
-			RevenueRM: float64(p.RevenueSen) / 100, PaidRevenueRM: float64(p.PaidRevenue) / 100,
-		})
+	// Issue #307: analytics span all of the user's spaces.
+	out := make([]productStatsOut, 0)
+	for _, acc := range accs {
+		stats, err := s.deps.Sales.ProductAnalytics(ctx, acc)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, p := range stats {
+			out = append(out, productStatsOut{
+				Name: p.Name, UnitsSold: p.UnitsSold, PaidUnits: p.PaidUnits,
+				RevenueRM: float64(p.RevenueSen) / 100, PaidRevenueRM: float64(p.PaidRevenue) / 100,
+			})
+		}
 	}
 	return nil, out, nil
 }

@@ -98,7 +98,7 @@ func (s *OAuthStore) StoreAuthCode(ctx context.Context, codeHash string, c *OAut
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO oauth_auth_codes
 		 (code_hash, client_id, user_id, account_id, redirect_uri, code_challenge, scope, expires_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+		 VALUES ($1,$2,$3,NULLIF($4,''),$5,$6,$7,$8)`,
 		codeHash, c.ClientID, c.UserID, c.AccountID, c.RedirectURI, c.CodeChallenge, c.Scope, c.ExpiresAt)
 	return err
 }
@@ -112,7 +112,7 @@ func (s *OAuthStore) ConsumeAuthCode(ctx context.Context, codeHash string) (*OAu
 	err := s.pool.QueryRow(ctx,
 		`UPDATE oauth_auth_codes SET consumed_at = now()
 		 WHERE code_hash = $1 AND consumed_at IS NULL AND expires_at > now()
-		 RETURNING client_id, user_id, account_id, redirect_uri, code_challenge, scope, expires_at`,
+		 RETURNING client_id, user_id, COALESCE(account_id::text,''), redirect_uri, code_challenge, scope, expires_at`,
 		codeHash,
 	).Scan(&c.ClientID, &c.UserID, &c.AccountID, &c.RedirectURI, &c.CodeChallenge, &c.Scope, &c.ExpiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -125,12 +125,13 @@ func (s *OAuthStore) ConsumeAuthCode(ctx context.Context, codeHash string) (*OAu
 }
 
 // CreateToken inserts a new opaque access(+refresh) token pair. Only hashes
-// are stored. A nil RefreshHash means a non-rotatable access token.
+// are stored. A nil RefreshHash means a non-rotatable access token. account_id
+// may be "" (NULL) — issue #307 binds the token to the user, not an account.
 func (s *OAuthStore) CreateToken(ctx context.Context, t *OAuthToken) error {
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO oauth_tokens (token_hash, refresh_hash, client_id, user_id, account_id, scope,
 		                       access_expires_at, refresh_expires_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+		 VALUES ($1,$2,$3,$4,NULLIF($5,''),$6,$7,$8)`,
 		t.TokenHash, t.RefreshHash, t.ClientID, t.UserID, t.AccountID, t.Scope,
 		t.AccessExpiresAt, t.RefreshExpiresAt)
 	return err
@@ -141,7 +142,7 @@ func (s *OAuthStore) CreateToken(ctx context.Context, t *OAuthToken) error {
 func (s *OAuthStore) AccessTokenByHash(ctx context.Context, tokenHash string) (*OAuthToken, error) {
 	t := &OAuthToken{TokenHash: tokenHash}
 	err := s.pool.QueryRow(ctx,
-		`SELECT id, client_id, user_id, account_id, scope, access_expires_at, refresh_expires_at, revoked_at
+		`SELECT id, client_id, user_id, COALESCE(account_id::text,''), scope, access_expires_at, refresh_expires_at, revoked_at
 		 FROM oauth_tokens
 		 WHERE token_hash = $1 AND revoked_at IS NULL AND access_expires_at > now()`,
 		tokenHash,
@@ -167,7 +168,7 @@ func (s *OAuthStore) RefreshGrant(ctx context.Context, refreshHash, newAccessHas
 
 	old := &OAuthToken{}
 	err = tx.QueryRow(ctx,
-		`SELECT id, client_id, user_id, account_id, scope
+		`SELECT id, client_id, user_id, COALESCE(account_id::text,''), scope
 		 FROM oauth_tokens
 		 WHERE refresh_hash = $1 AND revoked_at IS NULL
 		   AND (refresh_expires_at IS NULL OR refresh_expires_at > now())
@@ -191,7 +192,7 @@ func (s *OAuthStore) RefreshGrant(ctx context.Context, refreshHash, newAccessHas
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO oauth_tokens (token_hash, refresh_hash, client_id, user_id, account_id, scope,
 		                      access_expires_at, refresh_expires_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+		 VALUES ($1,$2,$3,$4,NULLIF($5,''),$6,$7,$8)`,
 		nt.TokenHash, newRefreshHash, nt.ClientID, nt.UserID, nt.AccountID, nt.Scope,
 		nt.AccessExpiresAt, nt.RefreshExpiresAt); err != nil {
 		return nil, err
@@ -224,5 +225,51 @@ func (s *OAuthStore) RevokeByRefreshHash(ctx context.Context, refreshHash string
 func (s *OAuthStore) RevokeAllByAccount(ctx context.Context, accountID string) error {
 	_, err := s.pool.Exec(ctx,
 		`UPDATE oauth_tokens SET revoked_at = now() WHERE account_id = $1 AND revoked_at IS NULL`, accountID)
+	return err
+}
+
+// UserToken is one connected-agent (OAuth client) the user has an active
+// token for, surfaced in the user-level Profile → MCP tab (issue #307).
+type UserToken struct {
+	ClientID string
+	ClientName string
+	CreatedAt time.Time
+	LastUsedAt *time.Time
+}
+
+// ConnectedAgentsByUser lists the distinct OAuth clients the user has an
+// active (non-revoked, unexpired) access token for — the "connected agents"
+// shown in the Profile page (issue #307, user-level).
+func (s *OAuthStore) ConnectedAgentsByUser(ctx context.Context, userID string) ([]UserToken, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT t.client_id, COALESCE(c.client_name, t.client_id),
+		       MAX(t.created_at), MAX(t.last_used_at)
+		FROM oauth_tokens t
+		LEFT JOIN oauth_clients c ON c.client_id = t.client_id
+		WHERE t.user_id = $1 AND t.revoked_at IS NULL AND t.access_expires_at > now()
+		GROUP BY t.client_id, COALESCE(c.client_name, t.client_id)
+		ORDER BY MAX(t.created_at) DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []UserToken
+	for rows.Next() {
+		var ut UserToken
+		if err := rows.Scan(&ut.ClientID, &ut.ClientName, &ut.CreatedAt, &ut.LastUsedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, ut)
+	}
+	return out, rows.Err()
+}
+
+// RevokeAllByUserClient revokes every active token for a given client_id +
+// user — the "Disconnect" action on a connected agent in the Profile MCP tab
+// (issue #307).
+func (s *OAuthStore) RevokeAllByUserClient(ctx context.Context, userID, clientID string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE oauth_tokens SET revoked_at = now()
+		 WHERE user_id = $1 AND client_id = $2 AND revoked_at IS NULL`, userID, clientID)
 	return err
 }

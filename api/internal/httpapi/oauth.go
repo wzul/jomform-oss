@@ -218,8 +218,10 @@ func (o *OAuthHandlers) authorize(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, loc, http.StatusFound)
 		return
 	}
-	// Resolve the account being authorized: the user's first owned account
-	// (same resolution the dashboard uses for the default account).
+	// Resolve the account being authorized. Issue #307: an OAuth connection is
+	// USER-level — the agent can operate across all of the user's spaces — so
+	// the account is optional metadata (used only for display/legacy tools).
+	// The token itself is bound to the user id below.
 	accountID := ""
 	if o.Accounts != nil {
 		accs, err := o.Accounts.ByOwner(r.Context(), user.ID)
@@ -227,19 +229,9 @@ func (o *OAuthHandlers) authorize(w http.ResponseWriter, r *http.Request) {
 			accountID = accs[0].ID
 		}
 	}
-	if accountID == "" {
-		qe := url.Values{}
-		qe.Set("error", "access_denied")
-		qe.Set("error_description", "no+account")
-		if state != "" {
-			qe.Set("state", state)
-		}
-		http.Redirect(w, r, redirectURI+"?"+qe.Encode(), http.StatusFound)
-		return
-	}
 
 	// Consent granted → mint a single-use auth code (stored hashed, 10-min TTL,
-	// bound to client + code_challenge + user + account).
+	// bound to client + code_challenge + user; account is optional issue #307).
 	code := newOAuthToken()
 	ac := &dbstore.OAuthAuthCode{
 		ClientID: clientID, UserID: user.ID, AccountID: accountID,

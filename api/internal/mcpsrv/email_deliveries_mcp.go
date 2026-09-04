@@ -34,13 +34,13 @@ type emailDeliveryOut struct {
 	CreatedAt  string         `json:"created_at"`
 }
 
-// listEmailDeliveries returns the account's email delivery events, newest
+// listEmailDeliveries returns the user's email delivery events, newest
 // first, paginated and filterable by form/sale/status. Read-only (read scope
-// is enough).
+// is enough). Issue #307: spans all of the user's spaces.
 func (s *Server) listEmailDeliveries(
 	ctx context.Context, _ *mcp.CallToolRequest, in listEmailDeliveriesIn,
 ) (*mcp.CallToolResult, map[string]any, error) {
-	acc, err := s.accountAndScope(ctx, false)
+	accs, err := s.accountScopes(ctx, false)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -48,7 +48,7 @@ func (s *Server) listEmailDeliveries(
 		return nil, nil, errors.New("store penghantaran emel tidak dikonfigurasi")
 	}
 	f := dbstore.DeliveryFilter{
-		AccountIDs: []string{acc},
+		AccountIDs: accs,
 		FormID:     in.FormID,
 		SaleRef:    in.SaleRef,
 		EventType:  in.EventType,

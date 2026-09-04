@@ -1,0 +1,5 @@
+-- Issue #307: revert the oauth account_id NOT NULL change (no-op; kept for
+-- symmetry). The auth-code/token tables originally bound to a single account;
+-- issue #307 re-binds them to the user. There is no data to roll back.
+-- Recreating a NOT NULL constraint here would break existing user-bound rows,
+-- so the down migration intentionally does nothing structural.

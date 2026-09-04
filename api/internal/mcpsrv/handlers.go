@@ -32,11 +32,13 @@ type productOut struct {
 type emptyIn struct{}
 
 func (s *Server) listProducts(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, []productOut, error) {
-	accountID, err := s.accountAndScope(ctx, false)
+	accs, err := s.accountScopes(ctx, false)
 	if err != nil {
 		return nil, nil, err
 	}
-	products, err := s.deps.Products.ListActiveByAccount(ctx, accountID)
+	// Issue #307: a user-level agent lists active products across all of the
+	// user's accessible spaces (aggregated; ownership enforced per store).
+	products, err := s.deps.Products.ListActiveByAccounts(ctx, accs)
 	if err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
@@ -162,11 +164,13 @@ type archiveProductIn struct {
 }
 
 func (s *Server) archiveProduct(ctx context.Context, _ *mcp.CallToolRequest, in archiveProductIn) (*mcp.CallToolResult, map[string]string, error) {
-	accountID, err := s.requireWriteRole(ctx)
+	// Issue #307: the product may live in any of the user's spaces; resolve +
+	// RBAC-gate the owning account.
+	acc, err := s.requireProductWrite(ctx, in.ProductID)
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := s.deps.Products.SetActive(ctx, accountID, in.ProductID, false); err != nil {
+	if err := s.deps.Products.SetActive(ctx, acc, in.ProductID, false); err != nil {
 		return nil, nil, fmt.Errorf("%w", err)
 	}
 	return nil, map[string]string{"status": "archived", "product_id": in.ProductID}, nil
@@ -201,21 +205,32 @@ type listSalesIn struct {
 }
 
 func (s *Server) listSales(ctx context.Context, _ *mcp.CallToolRequest, in listSalesIn) (*mcp.CallToolResult, []saleOut, error) {
-	accountID, err := s.accountAndScope(ctx, false)
+	accs, err := s.accountScopes(ctx, false)
 	if err != nil {
 		return nil, nil, err
 	}
 	var sales []*dbstore.Sale
 	switch {
 	case in.Status != "":
-		// Parity with the /sales page filter (issue #126): status-only filter,
-		// account-scoped, newest first. Ownership is enforced inside the query.
-		sales, err = s.deps.Sales.ListByAccountStatus(ctx, accountID, in.Status, 50)
+		// Issue #307: aggregate status-filtered sales across the user's spaces.
+		// (No multi-account status method; iterate the account set.)
+		for _, a := range accs {
+			one, err := s.deps.Sales.ListByAccountStatus(ctx, a, in.Status, 50)
+			if err != nil {
+				return nil, nil, fmt.Errorf("db: %w", err)
+			}
+			sales = append(sales, one...)
+		}
 	case in.FormID != "":
-		// Scoped to one form; ownership enforced inside the store query.
-		sales, err = s.deps.Sales.ListByAccountForm(ctx, accountID, in.FormID, 50)
+		// Scoped to one form across the user's spaces (ownership enforced per
+		// store query).
+		rows, _, err := s.deps.Sales.ListByAccountsFormPage(ctx, accs, in.FormID, 1, 50)
+		if err != nil {
+			return nil, nil, fmt.Errorf("db: %w", err)
+		}
+		sales = rows
 	default:
-		sales, err = s.deps.Sales.ListByAccount(ctx, accountID, 50)
+		sales, err = s.deps.Sales.ListByAccounts(ctx, accs, 50)
 	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
@@ -251,11 +266,12 @@ type summaryOut struct {
 }
 
 func (s *Server) salesSummary(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, summaryOut, error) {
-	accountID, err := s.accountAndScope(ctx, false)
+	accs, err := s.accountScopes(ctx, false)
 	if err != nil {
 		return nil, summaryOut{}, err
 	}
-	sales, err := s.deps.Sales.ListByAccount(ctx, accountID, 200)
+	// Issue #307: summary spans all of the user's spaces.
+	sales, err := s.deps.Sales.ListByAccounts(ctx, accs, 200)
 	if err != nil {
 		return nil, summaryOut{}, fmt.Errorf("db: %w", err)
 	}
@@ -282,12 +298,12 @@ type confirmSaleIn struct {
 }
 
 func (s *Server) confirmSale(ctx context.Context, _ *mcp.CallToolRequest, in confirmSaleIn) (*mcp.CallToolResult, map[string]string, error) {
-	accountID, err := s.requireWriteRole(ctx)
+	acc, err := s.requireSaleWrite(ctx, in.RefCode)
 	if err != nil {
 		return nil, nil, err
 	}
 	sale, err := s.deps.Sales.ByRefCode(ctx, in.RefCode)
-	if err != nil || sale.AccountID != accountID {
+	if err != nil || sale.AccountID != acc {
 		return nil, nil, fmt.Errorf("jualan tidak dijumpai")
 	}
 	if err := s.deps.Sales.SetStatus(ctx, sale.ID, dbstore.SaleConfirmed); err != nil {
@@ -364,7 +380,7 @@ type listSubscriptionsIn struct {
 }
 
 func (s *Server) listSubscriptions(ctx context.Context, _ *mcp.CallToolRequest, in listSubscriptionsIn) (*mcp.CallToolResult, []subscriptionOut, error) {
-	accountID, err := s.accountAndScope(ctx, false)
+	accs, err := s.accountScopes(ctx, false)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -383,7 +399,8 @@ func (s *Server) listSubscriptions(ctx context.Context, _ *mcp.CallToolRequest, 
 	if limit > 100 {
 		limit = 100
 	}
-	rows, _, err := s.deps.Subs.ListByAccountsPage(ctx, []string{accountID}, in.Status, page, limit)
+	// Issue #307: subscriptions span all of the user's spaces.
+	rows, _, err := s.deps.Subs.ListByAccountsPage(ctx, accs, in.Status, page, limit)
 	if err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
@@ -408,14 +425,14 @@ type cancelSubIn struct {
 }
 
 func (s *Server) cancelSubscription(ctx context.Context, _ *mcp.CallToolRequest, in cancelSubIn) (*mcp.CallToolResult, map[string]string, error) {
-	accountID, err := s.requireWriteRole(ctx)
+	// Issue #307: the subscription may be in any of the user's spaces. Find the
+	// owning account within scope, then RBAC-gate it.
+	sub, accountID, err := s.subscriptionByEmail(ctx, in.Email)
 	if err != nil {
 		return nil, nil, err
 	}
-	// find active subs by email — list via DueActive would be wrong; use a direct lookup by email
-	sub, err := s.deps.Subs.ByEmail(ctx, accountID, in.Email)
-	if err != nil {
-		return nil, nil, fmt.Errorf("langganan tidak dijumpai")
+	if err := s.requireWriteRoleIn(ctx, accountID); err != nil {
+		return nil, nil, err
 	}
 	if err := s.deps.Subs.Cancel(ctx, sub.ID); err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
@@ -440,7 +457,20 @@ func (s *Server) getAccount(ctx context.Context, _ *mcp.CallToolRequest, _ empty
 	if id == nil {
 		return nil, accountOut{}, fmt.Errorf("token tiada atau tidak sah")
 	}
-	acc, err := s.deps.Accounts.ByID(ctx, id.AccountID)
+	// Issue #307: for a user-level OAuth token the account is scoped per call
+	// (space_id/account_id or the user's first accessible account).
+	accountID := id.AccountID
+	if cs := callScopeFrom(ctx); cs != nil {
+		if cs.ExplicitAccountID != "" {
+			accountID = cs.ExplicitAccountID
+		} else if len(cs.Accounts) > 0 {
+			accountID = cs.Accounts[0]
+		}
+	}
+	if accountID == "" {
+		return nil, accountOut{}, fmt.Errorf("tiada akaun dalam skop")
+	}
+	acc, err := s.deps.Accounts.ByID(ctx, accountID)
 	if err != nil {
 		return nil, accountOut{}, fmt.Errorf("db: %w", err)
 	}

@@ -94,6 +94,8 @@ func (s *Server) setEinvoice(
 func (s *Server) getEinvoiceSettings(
 	ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
+	// Issue #307: e-invoice settings are scoped to the call's target account
+	// (explicit space_id/account_id or the user's first accessible account).
 	acc, err := s.accountAndScope(ctx, false)
 	if err != nil {
 		return nil, nil, err
@@ -119,6 +121,8 @@ type webhookIn struct {
 func (s *Server) createWebhookMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in webhookIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
+	// Issue #307: the target account is the scoped one (space_id/account_id or
+	// the caller's first accessible account); RBAC-gate it.
 	acc, err := s.requireWriteRole(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -169,17 +173,20 @@ type webhookListIn struct {
 func (s *Server) listWebhooksMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in webhookListIn,
 ) (*mcp.CallToolResult, []webhookListOut, error) {
-	acc, err := s.accountAndScope(ctx, true)
+	accs, err := s.accountScopes(ctx, true)
 	if err != nil {
 		return nil, nil, err
 	}
-	hooks, err := s.deps.Webhooks.ListByAccount(ctx, acc, in.FormID)
-	if err != nil {
-		return nil, nil, err
-	}
+	// Issue #307: list webhooks across all of the user's spaces.
 	out := []webhookListOut{}
-	for _, w := range hooks {
-		out = append(out, webhookListOut{ID: w.ID, URL: w.URL, Events: w.Events, Active: w.Active, FormID: w.FormID})
+	for _, acc := range accs {
+		hooks, err := s.deps.Webhooks.ListByAccount(ctx, acc, in.FormID)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, w := range hooks {
+			out = append(out, webhookListOut{ID: w.ID, URL: w.URL, Events: w.Events, Active: w.Active, FormID: w.FormID})
+		}
 	}
 	return nil, out, nil
 }
@@ -191,8 +198,13 @@ type webhookRef struct {
 func (s *Server) deleteWebhookMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in webhookRef,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	acc, err := s.requireWriteRole(ctx)
+	// Issue #307: the webhook may live in any of the user's spaces; resolve the
+	// owning account and RBAC-gate it.
+	acc, err := s.resolveWebhookAccount(ctx, in.ID)
 	if err != nil {
+		return nil, nil, err
+	}
+	if err := s.requireWriteRoleIn(ctx, acc); err != nil {
 		return nil, nil, err
 	}
 	if err := s.deps.Webhooks.Delete(ctx, acc, in.ID); err != nil {
@@ -211,8 +223,11 @@ type webhookUpdateIn struct {
 func (s *Server) updateWebhookMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in webhookUpdateIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	acc, err := s.requireWriteRole(ctx)
+	acc, err := s.resolveWebhookAccount(ctx, in.ID)
 	if err != nil {
+		return nil, nil, err
+	}
+	if err := s.requireWriteRoleIn(ctx, acc); err != nil {
 		return nil, nil, err
 	}
 	if len(in.URL) < 8 {
@@ -245,7 +260,7 @@ type webhookDeliveriesIn struct {
 func (s *Server) webhookDeliveriesMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in webhookDeliveriesIn,
 ) (*mcp.CallToolResult, []map[string]any, error) {
-	acc, err := s.accountAndScope(ctx, true)
+	acc, err := s.resolveWebhookAccount(ctx, in.WebhookID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -279,8 +294,11 @@ type retryWebhookDeliveryIn struct {
 func (s *Server) retryWebhookDeliveryMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in retryWebhookDeliveryIn,
 ) (*mcp.CallToolResult, map[string]any, error) {
-	acc, err := s.accountAndScope(ctx, true)
+	acc, err := s.resolveWebhookAccount(ctx, in.WebhookID)
 	if err != nil {
+		return nil, nil, err
+	}
+	if err := s.requireWriteRoleIn(ctx, acc); err != nil {
 		return nil, nil, err
 	}
 	delivery, err := s.deps.Webhooks.GetDelivery(ctx, acc, in.DeliveryID)

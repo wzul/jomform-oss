@@ -92,7 +92,12 @@ const apiKeyCtxKey ctxKey = "jomform_api_key"
 // the account is resolved; scopes gate write tools.
 type AuthIdentity struct {
 	AccountID string
-	Scopes    []string
+	// UserID is the authenticated user's id (issue #307). It is set for OAuth
+	// access tokens (the token is bound to the user) and empty for API-key
+	// auth, where the principal is the account and its owner is resolved from
+	// the account row when needed.
+	UserID string
+	Scopes []string
 	// APIKey is non-nil only when authenticated via a Bearer API key. It is
 	// needed by the revoke_api_key tool to refuse revoking the live key.
 	APIKey *dbstore.APIKey

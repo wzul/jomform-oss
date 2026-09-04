@@ -40,30 +40,34 @@ type formDetailOut struct {
 func (s *Server) listForms(
 	ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn,
 ) (*mcp.CallToolResult, []formOut, error) {
-	acc, err := s.accountAndScope(ctx, false)
+	accs, err := s.accountScopes(ctx, false)
 	if err != nil {
 		return nil, nil, err
 	}
 	if s.deps.Forms == nil {
 		return nil, nil, errors.New("forms tidak tersedia")
 	}
-	forms, err := s.deps.Forms.ListByAccount(ctx, acc)
-	if err != nil {
-		return nil, nil, err
-	}
-	// Issue #77: public links are space-scoped ({space}.jomform.com/{slug}),
-	// never the legacy /f/{slug} form. Issue #83: a verified custom domain
-	// takes precedence over the space subdomain.
-	out := make([]formOut, 0, len(forms))
-	for _, f := range forms {
-		u := ""
-		if f.Status == dbstore.FormStatusPublished {
-			u = s.formPublicURLForAccount(ctx, acc, f.Slug)
+	// Issue #307: a user-level agent lists forms across all of the user's
+	// accessible spaces (ownership enforced per store query).
+	out := make([]formOut, 0)
+	for _, acc := range accs {
+		forms, err := s.deps.Forms.ListByAccount(ctx, acc)
+		if err != nil {
+			return nil, nil, err
 		}
-		out = append(out, formOut{
-			ID: f.ID, Slug: f.Slug, Title: f.Title, Status: f.Status,
-			IsPrivate: f.Status == dbstore.FormStatusPrivate, URL: u,
-		})
+		// Issue #77: public links are space-scoped ({space}.jomform.com/{slug}),
+		// never the legacy /f/{slug} form. Issue #83: a verified custom domain
+		// takes precedence over the space subdomain.
+		for _, f := range forms {
+			u := ""
+			if f.Status == dbstore.FormStatusPublished {
+				u = s.formPublicURLForAccount(ctx, acc, f.Slug)
+			}
+			out = append(out, formOut{
+				ID: f.ID, Slug: f.Slug, Title: f.Title, Status: f.Status,
+				IsPrivate: f.Status == dbstore.FormStatusPrivate, URL: u,
+			})
+		}
 	}
 	return nil, out, nil
 }
@@ -71,12 +75,14 @@ func (s *Server) listForms(
 func (s *Server) getForm(
 	ctx context.Context, _ *mcp.CallToolRequest, in formRefIn,
 ) (*mcp.CallToolResult, formDetailOut, error) {
-	acc, err := s.accountAndScope(ctx, false)
-	if err != nil {
-		return nil, formDetailOut{}, err
-	}
 	if s.deps.Forms == nil {
 		return nil, formDetailOut{}, errors.New("forms tidak tersedia")
+	}
+	// Issue #307: the form may live in any of the user's spaces; resolve the
+	// owning account (RBAC via resolveFormAccount scope).
+	acc, err := s.resolveFormAccount(ctx, in.FormID)
+	if err != nil {
+		return nil, formDetailOut{}, err
 	}
 	forms, err := s.deps.Forms.ListByAccount(ctx, acc)
 	if err != nil {

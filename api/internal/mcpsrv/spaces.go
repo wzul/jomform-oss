@@ -24,13 +24,16 @@ func (s *Server) spacesStore() (*dbstore.SpaceStore, error) {
 	return s.deps.Spaces, nil
 }
 
-// spaceOwner resolves the user (spaces.owner_user_id) behind the MCP caller's
-// account — the same identity the dashboard's sessionOwnerID resolves. Works
-// for both API-key and OAuth-token authenticated requests.
+// spaceOwner resolves the user behind the MCP caller — the same identity the
+// dashboard's sessionOwnerID resolves. Issue #307: OAuth tokens are bound to
+// the user directly; API-key auth resolves the account's owner.
 func (s *Server) spaceOwner(ctx context.Context) (string, error) {
 	id := IdentityFromContext(ctx)
 	if id == nil {
 		return "", fmt.Errorf("token tiada atau tidak sah")
+	}
+	if id.UserID != "" {
+		return id.UserID, nil
 	}
 	a, err := s.deps.Accounts.ByID(ctx, id.AccountID)
 	if err != nil {

@@ -38,9 +38,10 @@ type listSpamIn struct {
 }
 
 // listSpamSubmissions returns one page of spam-flagged response submissions,
-// newest first, plus the total count. Account-scoped. Read-only.
+// newest first, plus the total count. Issue #307: spans all the user's spaces.
+// Read-only.
 func (s *Server) listSpamSubmissions(ctx context.Context, _ *mcp.CallToolRequest, in listSpamIn) (*mcp.CallToolResult, map[string]any, error) {
-	accountID, err := s.accountAndScope(ctx, false)
+	accs, err := s.accountScopes(ctx, false)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -57,7 +58,7 @@ func (s *Server) listSpamSubmissions(ctx context.Context, _ *mcp.CallToolRequest
 	if limit > 100 {
 		limit = 100
 	}
-	subs, total, err := s.deps.Submissions.ListSpamByAccountsPage(ctx, []string{accountID}, page, limit)
+	subs, total, err := s.deps.Submissions.ListSpamByAccountsPage(ctx, accs, page, limit)
 	if err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
@@ -82,21 +83,30 @@ type unspamSubmissionIn struct {
 }
 
 // unspamSubmission clears the spam flag on a false-positive submission.
-// Write tool (manage/admin role).
+// Write tool (manage/admin role). Issue #307: the submission may live in any
+// of the user's spaces (up to the caller's role per space).
 func (s *Server) unspamSubmission(ctx context.Context, _ *mcp.CallToolRequest, in unspamSubmissionIn) (*mcp.CallToolResult, map[string]any, error) {
-	accountID, err := s.requireWriteRole(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
 	if s.deps.Submissions == nil {
 		return nil, nil, fmt.Errorf("submissions tidak tersedia")
 	}
 	if in.ID == "" {
 		return nil, nil, fmt.Errorf("id wajib")
 	}
-	sub, err := s.deps.Submissions.ByID(ctx, in.ID)
-	if err != nil || sub.AccountID != accountID {
-		return nil, nil, fmt.Errorf("submission tidak dijumpai")
+	acc, err := s.resolveEntityAccount(ctx, func(acc string) error {
+		sub, err := s.deps.Submissions.ByID(ctx, in.ID)
+		if err != nil || sub == nil {
+			return errNotOwned
+		}
+		if sub.AccountID != acc {
+			return errNotOwned
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := s.requireWriteRoleIn(ctx, acc); err != nil {
+		return nil, nil, err
 	}
 	if err := s.deps.Submissions.UnSpam(ctx, in.ID); err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
@@ -105,9 +115,9 @@ func (s *Server) unspamSubmission(ctx context.Context, _ *mcp.CallToolRequest, i
 }
 
 // listSpamSales returns one page of spam-flagged sales, newest first, plus
-// the total count. Account-scoped. Read-only.
+// the total count. Issue #307: spans all the user's spaces. Read-only.
 func (s *Server) listSpamSales(ctx context.Context, _ *mcp.CallToolRequest, in listSpamIn) (*mcp.CallToolResult, map[string]any, error) {
-	accountID, err := s.accountAndScope(ctx, false)
+	accs, err := s.accountScopes(ctx, false)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -124,7 +134,7 @@ func (s *Server) listSpamSales(ctx context.Context, _ *mcp.CallToolRequest, in l
 	if limit > 100 {
 		limit = 100
 	}
-	sales, total, err := s.deps.Sales.ListSpamByAccountsPage(ctx, []string{accountID}, page, limit)
+	sales, total, err := s.deps.Sales.ListSpamByAccountsPage(ctx, accs, page, limit)
 	if err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
@@ -150,20 +160,20 @@ type unspamSaleIn struct {
 }
 
 // unspamSale clears the spam flag on a false-positive sale. Write tool
-// (manage/admin role).
+// (manage/admin role). Issue #307: the sale may live in any of the user's spaces.
 func (s *Server) unspamSale(ctx context.Context, _ *mcp.CallToolRequest, in unspamSaleIn) (*mcp.CallToolResult, map[string]any, error) {
-	accountID, err := s.requireWriteRole(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
 	if s.deps.Sales == nil {
 		return nil, nil, fmt.Errorf("sales tidak tersedia")
 	}
 	if in.RefCode == "" {
 		return nil, nil, fmt.Errorf("ref_code wajib")
 	}
+	acc, err := s.requireSaleWrite(ctx, in.RefCode)
+	if err != nil {
+		return nil, nil, err
+	}
 	sale, err := s.deps.Sales.ByRefCode(ctx, in.RefCode)
-	if err != nil || sale.AccountID != accountID {
+	if err != nil || sale.AccountID != acc {
 		return nil, nil, fmt.Errorf("jualan tidak dijumpai")
 	}
 	if err := s.deps.Sales.UnSpam(ctx, sale.ID); err != nil {

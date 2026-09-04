@@ -49,12 +49,13 @@ type setFormThemeIn struct {
 func (s *Server) setFormTheme(
 	ctx context.Context, _ *mcp.CallToolRequest, in setFormThemeIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	acc, err := s.requireWriteRole(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
 	if in.FormID == "" {
 		return nil, nil, errors.New("form_id wajib")
+	}
+	// Issue #307: resolve + RBAC-gate the owning account across the user's spaces.
+	acc, err := s.requireFormWrite(ctx, in.FormID)
+	if err != nil {
+		return nil, nil, err
 	}
 	f, err := s.deps.Forms.GetByID(ctx, acc, in.FormID)
 	if err != nil {
@@ -117,12 +118,13 @@ type registerFormFieldsIn struct {
 func (s *Server) registerFormFields(
 	ctx context.Context, _ *mcp.CallToolRequest, in registerFormFieldsIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	acc, err := s.requireWriteRole(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
 	if in.FormID == "" {
 		return nil, nil, errors.New("form_id wajib")
+	}
+	// Issue #307: resolve + RBAC-gate the owning account across the user's spaces.
+	acc, err := s.requireFormWrite(ctx, in.FormID)
+	if err != nil {
+		return nil, nil, err
 	}
 	f, err := s.deps.Forms.GetByID(ctx, acc, in.FormID)
 	if err != nil {

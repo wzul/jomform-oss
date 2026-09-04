@@ -33,12 +33,13 @@ type saleRefIn struct {
 func (s *Server) setFormChipOverride(
 	ctx context.Context, _ *mcp.CallToolRequest, in formOverrideIn,
 ) (*mcp.CallToolResult, any, error) {
-	acc, err := s.requireAdminRole(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
 	if s.deps.Forms == nil || s.decKey == nil {
 		return nil, nil, errors.New("override tidak tersedia")
+	}
+	// Issue #307: resolve + RBAC-gate the owning account (CHIP creds are admin-only).
+	acc, err := s.formForAdmin(ctx, in.FormID)
+	if err != nil {
+		return nil, nil, err
 	}
 	enc, err := cryptoutil.Encrypt(s.decKey, []byte(in.SecretKey))
 	if err != nil {
@@ -53,7 +54,7 @@ func (s *Server) setFormChipOverride(
 func (s *Server) clearFormChipOverride(
 	ctx context.Context, _ *mcp.CallToolRequest, in formRefIn,
 ) (*mcp.CallToolResult, any, error) {
-	acc, err := s.requireAdminRole(ctx)
+	acc, err := s.formForAdmin(ctx, in.FormID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -63,6 +64,19 @@ func (s *Server) clearFormChipOverride(
 	return nil, map[string]string{"status": "override_cleared", "form_id": in.FormID}, nil
 }
 
+// formForAdmin resolves the account owning a form and enforces the admin gate
+// for that form's space (CHIP credentials - admin only, issue #162).
+func (s *Server) formForAdmin(ctx context.Context, formID string) (string, error) {
+	acc, err := s.resolveFormAccount(ctx, formID)
+	if err != nil {
+		return "", err
+	}
+	if err := s.requireAdminRoleIn(ctx, acc); err != nil {
+		return "", err
+	}
+	return acc, nil
+}
+
 func (s *Server) captureSaleMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in saleRefIn,
 ) (*mcp.CallToolResult, any, error) {
@@ -70,7 +84,7 @@ func (s *Server) captureSaleMCP(
 	if pay == nil {
 		return nil, nil, errors.New("payments tidak aktif")
 	}
-	acc, err := s.requireWriteRole(ctx)
+	acc, err := s.requireSaleWrite(ctx, in.RefCode)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -94,7 +108,7 @@ func (s *Server) releaseSaleMCP(
 	if pay == nil {
 		return nil, nil, errors.New("payments tidak aktif")
 	}
-	acc, err := s.requireWriteRole(ctx)
+	acc, err := s.requireSaleWrite(ctx, in.RefCode)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -113,7 +127,7 @@ func (s *Server) releaseSaleMCP(
 
 // captureAllPendingMCP captures every awaiting skip_capture authorization in
 // one call (issue #38, the #12 addendum). One CHIP rejection never aborts the
-// batch; every ref gets its own result.
+// batch; every ref gets its own result. Issue #307: spans all the user's spaces.
 func (s *Server) captureAllPendingMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn,
 ) (*mcp.CallToolResult, any, error) {
@@ -121,13 +135,20 @@ func (s *Server) captureAllPendingMCP(
 	if pay == nil {
 		return nil, nil, errors.New("payments tidak aktif")
 	}
-	acc, err := s.requireWriteRole(ctx)
+	accs, err := s.accountScopes(ctx, false)
 	if err != nil {
 		return nil, nil, err
 	}
-	sales, err := s.deps.Sales.ListAwaitingCapture(ctx, acc)
-	if err != nil {
-		return nil, nil, fmt.Errorf("db: %w", err)
+	var sales []*dbstore.Sale
+	for _, acc := range accs {
+		if err := s.requireWriteRoleIn(ctx, acc); err != nil {
+			return nil, nil, err
+		}
+		one, err := s.deps.Sales.ListAwaitingCapture(ctx, acc)
+		if err != nil {
+			return nil, nil, fmt.Errorf("db: %w", err)
+		}
+		sales = append(sales, one...)
 	}
 	type refResult struct {
 		RefCode string `json:"ref_code"`
