@@ -1506,25 +1506,42 @@ func (h *PublicHandlers) handleSpaceRootForm(w http.ResponseWriter, r *http.Requ
 	h.serveForm(w, r, f)
 }
 
-// handleSpaceRoot serves the space storefront (list of published forms).
+// handleSpaceRoot serves the space storefront (list of published forms). It
+// handles both a space subdomain ({space}.jomform.com — issue #77) and a
+// verified custom domain mapped to a space's account (issue #286). Bare
+// jomform.com (no subdomain, no custom domain) 404s so dashboard routes are
+// unaffected. The listing looks up by space slug for the subdomain and by
+// account slug for a custom domain (they are different namespaces).
 func (h *PublicHandlers) handleSpaceRoot(w http.ResponseWriter, r *http.Request) {
-	sub := accountSubdomain(r.Host)
-	if sub == "" {
+	var slug string
+	var byAccount bool
+	if sub := accountSubdomain(r.Host); sub != "" {
+		slug = sub
+	} else if cd := customDomainOwner(r.Context(), h.Accounts, h.Domains, r.Host); cd != "" {
+		slug = cd
+		byAccount = true
+	} else {
 		http.NotFound(w, r)
 		return
 	}
-	forms, err := h.Forms.ListPublishedBySpace(r.Context(), sub)
+	var forms []*dbstore.Form
+	var err error
+	if byAccount {
+		forms, err = h.Forms.ListPublishedByAccountSlug(r.Context(), slug)
+	} else {
+		forms, err = h.Forms.ListPublishedBySpace(r.Context(), slug)
+	}
 	if err != nil {
 		http.Error(w, "ralat", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	io.WriteString(w, "<!doctype html><html><head><meta charset='utf-8'><title>"+sub+"</title>")
+	io.WriteString(w, "<!doctype html><html><head><meta charset='utf-8'><title>"+slug+"</title>")
 	io.WriteString(w, "<style>body{font-family:system-ui;background:#f7f8f8;margin:0;padding:40px}")
 	io.WriteString(w, ".g{max-width:640px;margin:0 auto;display:grid;gap:12px}")
 	io.WriteString(w, ".g a{background:#fff;border:1px solid #e6e8ec;border-radius:14px;padding:18px 20px;")
 	io.WriteString(w, "color:#17181c;text-decoration:none;font-weight:600;display:block}")
-	io.WriteString(w, "</style></head><body><div class='g'><h1 style='font-size:22px'>Kedai "+sub+"</h1>")
+	io.WriteString(w, "</style></head><body><div class='g'><h1 style='font-size:22px'>Kedai "+slug+"</h1>")
 	if len(forms) == 0 {
 		io.WriteString(w, "<p>Belum ada borang.</p>")
 	}

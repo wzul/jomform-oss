@@ -10,6 +10,7 @@ package httpapi
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/wzul/jomform/api/internal/dbstore"
@@ -129,5 +130,58 @@ func TestCustomDomainOwnerUnknownHost(t *testing.T) {
 	ctx := context.Background()
 	if got := customDomainOwner(ctx, h.Accounts, h.Domains, "nope.example.test"); got != "" {
 		t.Fatalf("customDomainOwner(unknown) = %q, want \"\"", got)
+	}
+}
+
+// TestCustomDomainRootServesStorefront: a verified custom domain's root "/"
+// must serve the space storefront (list of published forms) instead of 404
+// (issue #286). This mirrors how a space subdomain serves its root.
+func TestCustomDomainRootServesStorefront(t *testing.T) {
+	h, accountSlug, formSlug := customDomainFixture(t)
+	ctx := context.Background()
+	pool := bundleTestPool(t)
+
+	var accountID string
+	if err := pool.QueryRow(ctx,
+		`SELECT id FROM accounts WHERE slug = $1`, accountSlug).Scan(&accountID); err != nil {
+		t.Fatalf("lookup account id: %v", err)
+	}
+	var spaceSlug string
+	if err := pool.QueryRow(ctx,
+		`SELECT sp.slug FROM spaces sp JOIN accounts a ON a.space_id = sp.id WHERE a.id = $1`,
+		accountID).Scan(&spaceSlug); err != nil {
+		t.Fatalf("lookup space slug: %v", err)
+	}
+
+	domain := "root-" + accountSlug + ".example.test"
+	if _, err := h.Domains.AddDomain(ctx, accountID, domain, "cname"); err != nil {
+		t.Fatalf("add domain: %v", err)
+	}
+	if err := h.Domains.MarkVerified(ctx, accountID, domain); err != nil {
+		t.Fatalf("mark verified: %v", err)
+	}
+
+	// Custom-domain root serves the storefront (200 + form slug in body).
+	rec := publicServe(t, h, domain, "/")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET / on custom domain status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), formSlug) {
+		t.Fatalf("GET / on custom domain body missing form slug %q (body %s)", formSlug, rec.Body.String())
+	}
+
+	// Space subdomain root still serves its storefront (unchanged).
+	rec = publicServe(t, h, spaceSlug+".jomform.com", "/")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET / on space subdomain status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), formSlug) {
+		t.Fatalf("GET / on space subdomain body missing form slug %q (body %s)", formSlug, rec.Body.String())
+	}
+
+	// Bare apex (no subdomain, no custom domain) still 404s (issue #77).
+	rec = publicServe(t, h, "jomform.com", "/")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("GET / on bare apex status = %d, want 404", rec.Code)
 	}
 }
