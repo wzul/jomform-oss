@@ -126,6 +126,12 @@ func (a *AuthHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/auth/social", a.listSocial)
 	mux.HandleFunc("GET /v1/auth/social/providers", a.socialProviders)
 	mux.HandleFunc("DELETE /v1/auth/social/{provider}", a.unlinkSocial)
+	// Issue #302: explicit social account connect — a first social login whose
+	// email matches an existing account is NOT auto-linked; the user proves
+	// ownership of the email via a signed connect link, then socialConnect
+	// binds the identity. connectResend re-emits that emailed link.
+	mux.HandleFunc("POST /v1/auth/social/connect", a.socialConnect)
+	mux.HandleFunc("POST /v1/auth/social/connect/resend", a.connectResend)
 }
 
 // ─── request/response DTOs ───────────────────────────────────────────────────

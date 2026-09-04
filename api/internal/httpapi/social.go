@@ -15,7 +15,9 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -27,6 +29,8 @@ import (
 
 	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/dbstore"
+	emailpkg "github.com/wzul/jomform/api/internal/email"
+	"github.com/wzul/jomform/api/internal/emailqueue"
 )
 
 type oidcProvider struct {
@@ -215,13 +219,31 @@ func (a *AuthHandlers) socialCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3) unauthenticated + email matches an existing user → auto-link (verify email claim)
-	if up.Email != "" && up.EmailVerified {
+	// 3) unauthenticated + email matches an existing user → require an
+	//    EXPLICIT owner-confirmed connect, never a silent auto-link (issue
+	//    #302). Auto-linking on email-match alone would let an attacker's
+	//    OAuth silently attach to someone else's account. We email an
+	//    ownership-verification link to the claimed address; only that emailed
+	//    link carries the capability token. The user lands on /connect with a
+	//    "check your email" step (no usable token in the URL).
+	if up.Email != "" {
 		if existing, e2 := a.Users.ByEmail(r.Context(), up.Email); e2 == nil && existing != nil {
-			_ = a.Users.LinkIdentity(r.Context(), existing.ID, provider, up.UID, up.Email, up.Name, up.Picture)
-			a.ensureAccountFor(r, existing.ID, up.Email)
-			_ = a.startSession(w, r, existing.ID, "", false, false)
-			http.Redirect(w, r, "/post-login", http.StatusFound)
+			if len(a.VerifyKey) != 32 {
+				writeErr(w, http.StatusInternalServerError, "internal error")
+				return
+			}
+			ct, cerr := auth.SignConnectToken(a.VerifyKey, provider, up.UID, up.Email)
+			if cerr != nil {
+				writeErr(w, http.StatusInternalServerError, "internal error")
+				return
+			}
+			link := strings.TrimRight(a.BaseURL, "/") + "/connect?token=" + url.QueryEscape(ct)
+			if serr := a.sendConnectEmail(r.Context(), up.Email, link); serr != nil {
+				slog.Warn("social_connect_email_send_failed", "err", serr, "email", obfuscateEmail(up.Email))
+			}
+			// Never place the capability token directly in the URL — only the
+			// emailed link can complete the connect.
+			http.Redirect(w, r, "/connect?email="+url.QueryEscape(up.Email)+"&provider="+provider+"&uid="+url.QueryEscape(up.UID), http.StatusFound)
 			return
 		}
 	}
@@ -323,6 +345,124 @@ func (a *AuthHandlers) socialProviders(w http.ResponseWriter, r *http.Request) {
 		out = append(out, map[string]string{"id": id, "name": names[id]})
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// socialConnect confirms an explicit account connect (issue #302). The user is
+// redirected here from the web /connect page after proving ownership of the
+// email via the emailed connect link. The signed token binds provider+uid+email
+// to the existing account — never a silent email-match auto-link.
+func (a *AuthHandlers) socialConnect(w http.ResponseWriter, r *http.Request) {
+	if len(a.VerifyKey) != 32 {
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	var req struct {
+		Token string `json:"token"`
+	}
+	if err := decodeJSON(r, &req); err != nil || req.Token == "" {
+		writeErr(w, http.StatusBadRequest, "token diperlukan")
+		return
+	}
+	provider, uid, email, err := auth.VerifyConnectToken(a.VerifyKey, req.Token)
+	if err != nil {
+		if errors.Is(err, auth.ErrConnectTokenExpired) {
+			writeErr(w, http.StatusBadRequest, "pautan penghubung telah tamat tempoh")
+			return
+		}
+		writeErr(w, http.StatusBadRequest, "pautan penghubung tidak sah")
+		return
+	}
+	// The email must still belong to an existing account, and the provider+
+	// uid from the token must not already be linked to a different user.
+	existing, eerr := a.Users.ByEmail(r.Context(), email)
+	if eerr != nil || existing == nil {
+		writeErr(w, http.StatusBadRequest, "akaun tidak dijumpai")
+		return
+	}
+	if linkedTo, ferr := a.Users.FindIdentity(r.Context(), provider, uid); ferr == nil && linkedTo != "" && linkedTo != existing.ID {
+		writeErr(w, http.StatusConflict, "identiti sudah dipautkan ke akaun lain")
+		return
+	}
+	if err := a.Users.LinkIdentity(r.Context(), existing.ID, provider, uid, email, "", ""); err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	a.ensureAccountFor(r, existing.ID, email)
+	if err := a.startSession(w, r, existing.ID, "", false, false); err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "connected"})
+}
+
+// connectResend re-emits the ownership-verification email for a pending social
+// connect (issue #302). The email's signed ConnectToken is regenerated. Always
+// replies generically so we never disclose anything about the address or
+// whether a link was delivered.
+func (a *AuthHandlers) connectResend(w http.ResponseWriter, r *http.Request) {
+	defer writeJSON(w, http.StatusOK, map[string]string{"status": "sent"})
+	if len(a.VerifyKey) != 32 {
+		return
+	}
+	var req struct {
+		Email    string `json:"email"`
+		Provider string `json:"provider"`
+		UID      string `json:"uid"`
+	}
+	if err := decodeJSON(r, &req); err != nil || req.Email == "" || req.Provider == "" || req.UID == "" {
+		return
+	}
+	if !auth.ValidEmail(req.Email) {
+		return
+	}
+	ct, cerr := auth.SignConnectToken(a.VerifyKey, req.Provider, req.UID, req.Email)
+	if cerr != nil {
+		return
+	}
+	link := strings.TrimRight(a.BaseURL, "/") + "/connect?token=" + url.QueryEscape(ct)
+	// The capability token only travels by email — never echoed in the response.
+	if err := a.sendConnectEmail(r.Context(), req.Email, link); err != nil {
+		slog.Warn("social_connect_resend_email_failed", "err", err, "email", obfuscateEmail(req.Email))
+	}
+}
+
+// sendConnectEmail delivers the "link your account" verification link (issue
+// #302). Issue #199: enqueued when a queue is wired; otherwise sent
+// synchronously via VerifyMailer.
+func (a *AuthHandlers) sendConnectEmail(ctx context.Context, email, link string) error {
+	if a.VerifyMailer == nil {
+		return errors.New("connect mailer not configured")
+	}
+	if a.Suppressions != nil {
+		if sup, serr := emailpkg.ShouldSuppress(ctx, a.Suppressions, email); serr != nil || sup {
+			// Suppressed address never receives a connect email.
+			return errors.New("connect email suppressed")
+		}
+	}
+	subject := "Pautan penghubung akaun JomForm anda"
+	body := "Sila sahkan alamat emel anda untuk menghubungkan akaun log masuk sosial anda ke akaun JomForm anda.\n\n" +
+		"Tap pautan berikut (sah selama 24 jam):\n\n" +
+		link + "\n\n" +
+		"Jika anda tidak meminta ini, anda boleh abaikan emel ini.\n"
+	if a.EmailQueue != nil {
+		if err := a.EmailQueue.Enqueue(ctx, emailqueue.Job{
+			Type: "connect", To: email, Subject: subject, Body: body,
+		}); err != nil {
+			return err
+		}
+		return nil
+	}
+	if err := a.VerifyMailer.Send(email, subject, body); err != nil {
+		return err
+	}
+	recordSESSend("connect")
+	if a.Breaker != nil {
+		if err := a.Breaker.RecordSend(ctx); err != nil {
+			slog.Warn("breaker_record_send_connect", "err", err)
+		}
+	}
+	return nil
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
