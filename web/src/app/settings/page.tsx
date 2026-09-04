@@ -5,7 +5,7 @@ import { Shell } from "../../components/Shell";
 import { useRouter } from "next/navigation";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
-import { formatDate, formatDateTime } from "../../lib/formatDate";
+import { formatDateTime } from "../../lib/formatDate";
 import { spaceQuery, spaceScope } from "../../lib/space";
 import { MembersTab } from "../../components/MembersTab";
 import { LegalTab } from "../../components/LegalTab";
@@ -13,7 +13,6 @@ import { LegalTab } from "../../components/LegalTab";
 type ChipStatus = { configured: boolean; mode?: string };
 type KeyRow = { id: string; name: string; scopes: string[] };
 type DomainStatus = { domain: string; verified: boolean } | null;
-type SocialRow = { provider: string; email?: string; linked_at?: string };
 
 // Issue #68: Settings page is organised into tabs (same pattern as Profile
 // page tabs — #5) instead of one long scroll of 8 stacked sections.
@@ -23,18 +22,19 @@ type SocialRow = { provider: string; email?: string; linked_at?: string };
 //   einvoice  -> e-Invoice TIN/MSIC
 //   webhooks  -> Outbound webhooks
 //   mcp       -> MCP / connected agents (issue #129)
-//   social    -> Social login connectors
 //   emel      -> Per-space receipt/notification email templates (issue #107)
 //   members   -> Space members management (issue #163)
 //   storefront-> Per-space public-form footer (issue #183)
 //   legal     -> Per-space hosted legal pages (issue #184)
 //   currency  -> Per-space currency + BNM rates (issue #185)
-type SettingsTab = "chip" | "domains" | "tracking" | "einvoice" | "webhooks" | "mcp" | "social" | "emel" | "members" | "storefront" | "legal" | "currency";
+// (Connected accounts — social login connectors — live on the Profile page,
+//  issue #301: they are user-level, not per-space.)
+type SettingsTab = "chip" | "domains" | "tracking" | "einvoice" | "webhooks" | "mcp" | "emel" | "members" | "storefront" | "legal" | "currency";
 
-const TAB_IDS: SettingsTab[] = ["chip", "domains", "tracking", "einvoice", "webhooks", "mcp", "social", "emel", "members", "storefront", "legal", "currency"];
+const TAB_IDS: SettingsTab[] = ["chip", "domains", "tracking", "einvoice", "webhooks", "mcp", "emel", "members", "storefront", "legal", "currency"];
 
 function isSettingsTab(v: string | null): v is SettingsTab {
-  return v === "chip" || v === "domains" || v === "tracking" || v === "einvoice" || v === "webhooks" || v === "mcp" || v === "social" || v === "emel" || v === "members" || v === "storefront" || v === "legal" || v === "currency";
+  return v === "chip" || v === "domains" || v === "tracking" || v === "einvoice" || v === "webhooks" || v === "mcp" || v === "emel" || v === "members" || v === "storefront" || v === "legal" || v === "currency";
 }
 
 // Restore the last active tab. Falls back to "chip".
@@ -137,7 +137,6 @@ export default function Settings() {
   const [deliveries, setDeliveries] = useState<Record<string, Delivery[]>>({});
   const [openWh, setOpenWh] = useState<string | null>(null);
   const [trackingHead, setTrackingHead] = useState("");
-  const [social, setSocial] = useState<SocialRow[]>([]);
   // Cloudflare OAuth link state (issue #22): Login vs Disconnect+✓ per #9.
   const [cfLinked, setCfLinked] = useState(false);
   const [cfConfigured, setCfConfigured] = useState(false);
@@ -224,7 +223,7 @@ export default function Settings() {
   }, [t]);
 
   // Issue #13: single aggregated fetch replaces the 6-request waterfall
-  // (chip, keys, domains, webhooks, einvoice, social) on mount.
+  // (chip, keys, domains, webhooks, einvoice) on mount.
   // Issue #29: routed through the shared session cache — the first page of
   // the session fetches the bundle once; later pages (dashboard, forms,
   // products, profile) reuse it. Saves call reloadSession() to re-fetch.
@@ -244,7 +243,6 @@ export default function Settings() {
       const s = b.chip_status;
       setDomains(Array.isArray(dList) ? dList : []);
       setWebhooks(Array.isArray(whs) ? whs : []);
-      setSocial(Array.isArray(b.social) ? b.social : []);
       if (ei) { setTin(ei.tin || ""); setMsic(ei.msic || ""); }
       if (s) {
         setStatus(s);
@@ -1340,33 +1338,6 @@ export default function Settings() {
           </section>
         )}
 
-        {/* ── Social tab: login connectors ── */}
-        {tab === "social" && (
-          <section className="jf-card mt-6 p-6">
-            <h2 className="text-lg font-semibold">{t("set.socialTitle")}</h2>
-            <p className="mt-1 max-w-xl text-sm text-slate-400">
-              {t("set.socialHelp")}
-            </p>
-            <ul className="mt-4 space-y-2">
-              {social.map((l) => (
-                <li key={l.provider} className="flex items-center justify-between rounded-lg border border-[var(--jf-border)] px-4 py-2.5">
-                  <div>
-                    <p className="text-sm capitalize">{l.provider} — {l.email}</p>
-                    <p className="text-[11px] text-slate-400">{t("set.linked")} {l.linked_at ? formatDate(l.linked_at, user?.timezone) : ""}</p>
-                  </div>
-                  <button onClick={async () => { await fetch(`/api/auth/social/${l.provider}`, { method: "DELETE" }); load(); }}
-                    className="text-xs text-slate-500 hover:text-red-500">{t("set.unlink")}</button>
-                </li>
-              ))}
-              {social.length === 0 && (
-                <li className="text-sm text-slate-400">{t("set.noLinked")}</li>
-              )}
-            </ul>
-            <a href="/api/auth/oauth/google" className="jf-btn-ghost mt-3 inline-block">
-              {t("set.linkGoogle")}
-            </a>
-          </section>
-        )}
         {/* ── Emel tab: per-space receipt/notification email (issue #107) ── */}
         {tab === "emel" && (
           <section className="jf-card mt-6 p-6">

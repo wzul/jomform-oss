@@ -20,9 +20,11 @@ type Profile = {
   created_at: string;
 };
 
-type ProfileTab = "identity" | "security" | "passkeys";
+// Issue #301: connected accounts (social login connectors) are user-level.
+type SocialRow = { provider: string; email?: string; linked_at?: string };
 
-const TAB_IDS: ProfileTab[] = ["identity", "security", "passkeys"];
+type ProfileTab = "identity" | "security" | "passkeys" | "connected";
+const TAB_IDS: ProfileTab[] = ["identity", "security", "passkeys", "connected"];
 
 // Issue #191: common IANA timezones offered in the Profile → Identity tab.
 // The user can also pick Auto (empty) to follow the browser/PC default.
@@ -62,7 +64,7 @@ function loadStoredTab(): ProfileTab {
   if (typeof window === "undefined") return "identity";
   try {
     const v = window.localStorage.getItem("jf_profile_tab");
-    if (v === "identity" || v === "security" || v === "passkeys") return v;
+    if (v === "identity" || v === "security" || v === "passkeys" || v === "connected") return v;
   } catch {
     // storage unavailable — fall through
   }
@@ -99,6 +101,9 @@ export default function ProfilePage() {
   const [enabling, setEnabling] = useState(false);
   // Issue #63: trusted-device state for the Profile → Security line.
   const [trustedUntil, setTrustedUntil] = useState("");
+  // Issue #301: connected accounts (user-level, independent of the active
+  // space) — loaded via GET /api/auth/social (currentUserID-scoped).
+  const [social, setSocial] = useState<SocialRow[]>([]);
 
   // Persist active tab.
   useEffect(() => {
@@ -136,6 +141,13 @@ export default function ProfilePage() {
       .then((r) => (r.ok ? r.json() : []))
       .then((k) => setPasskeys(Array.isArray(k) ? k : []))
       .catch(() => setPasskeys([]));
+    // Issue #301: connected accounts load straight from the user-level
+    // /api/auth/social endpoint (no ?space=), so they're identical across all
+    // of the user's spaces.
+    fetch("/api/auth/social")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((s) => setSocial(Array.isArray(s) ? s : []))
+      .catch(() => setSocial([]));
   }, [sessionUser]);
 
   useEffect(() => { load(); }, [load]);
@@ -540,6 +552,38 @@ export default function ProfilePage() {
                 ))}
               </ul>
             )}
+          </section>
+        )}
+
+        {/* Connected accounts tab (issue #301): user-level social login
+            connectors, moved here from space-scoped Settings. Fetched from
+            the user-level /api/auth/social endpoint — not tied to the active
+            space. The space-level Cloudflare auto-CNAME connect stays in
+            Settings → Domains. */}
+        {tab === "connected" && (
+          <section className="jf-card mt-6 p-6">
+            <h2 className="text-lg font-semibold">{t("prof.connectedTitle")}</h2>
+            <p className="mt-1 max-w-xl text-sm text-slate-400">
+              {t("prof.connectedHelp")}
+            </p>
+            <ul className="mt-4 space-y-2">
+              {social.map((l) => (
+                <li key={l.provider} className="flex items-center justify-between rounded-lg border border-[var(--jf-border)] px-4 py-2.5">
+                  <div>
+                    <p className="text-sm capitalize">{l.provider} — {l.email}</p>
+                    <p className="text-[11px] text-slate-400">{t("prof.linked")} {l.linked_at ? formatDate(l.linked_at, sessionUser?.timezone) : ""}</p>
+                  </div>
+                  <button onClick={async () => { await fetch(`/api/auth/social/${l.provider}`, { method: "DELETE" }); load(); }}
+                    className="text-xs text-slate-500 hover:text-red-500">{t("prof.unlink")}</button>
+                </li>
+              ))}
+              {social.length === 0 && (
+                <li className="text-sm text-slate-400">{t("prof.noLinked")}</li>
+              )}
+            </ul>
+            <a href="/api/auth/oauth/google" className="jf-btn-ghost mt-3 inline-block">
+              {t("prof.linkGoogle")}
+            </a>
           </section>
         )}
 
