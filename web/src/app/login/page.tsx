@@ -555,15 +555,21 @@ export default function Login() {
                   <label className="mb-1 block text-xs font-medium text-[var(--jf-muted)]">
                     {mode === "register" ? t("login.pwRegister") : t("login.password")}
                   </label>
+                  {/* Issue #303: password is OPTIONAL on signup. Leaving it
+                      blank assigns a random UUID server-side; the user can set
+                      a real password later. It stays required only for login. */}
                   <input
                     name="password"
                     type="password"
-                    required
+                    required={mode !== "register"}
                     defaultValue={cred.password}
-                    minLength={mode === "register" ? 10 : 1}
-                    placeholder="••••••••••"
+                    minLength={mode === "register" ? 0 : 1}
+                    placeholder={mode === "register" ? t("login.pwRegisterPh") : "••••••••••"}
                     className="w-full rounded-md border border-[var(--jf-border)] bg-white px-3 py-2 text-sm text-[var(--jf-text)] placeholder-slate-400 outline-none transition-colors focus:border-[#7170ff]/60 focus:bg-indigo-50"
                   />
+                  {mode === "register" && (
+                    <p className="mt-1 text-[11px] text-[var(--jf-muted)]">{t("login.pwOptional")}</p>
+                  )}
                 </div>
               )}
 

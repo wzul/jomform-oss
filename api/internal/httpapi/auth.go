@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/email"
@@ -210,9 +212,19 @@ func (a *AuthHandlers) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "email tidak sah")
 		return
 	}
-	if len(req.Password) < 10 {
+	if req.Password != "" && len(req.Password) < 10 {
 		writeErr(w, http.StatusBadRequest, "kata laluan mesti sekurang-kurangnya 10 aksara")
 		return
+	}
+	if req.Password == "" {
+		// Issue #303: password is optional at signup. A blank password leaves
+		// the account with no usable credential, so assign a cryptographically
+		// random UUID as the password. It flows through the same argon2id
+		// hashing path as a user-chosen password (hash computed below), so the
+		// random value is never stored in plaintext. The user can set a real
+		// password later via forgot-password / profile settings, and can
+		// always log in via magic link or social.
+		req.Password = uuid.NewString()
 	}
 
 	// Issue #56: MX pre-check — reject domains that accept no mail BEFORE a

@@ -18,7 +18,9 @@ const DICT = {
   "login.tabRegister": { en: "Sign up", ms: "Daftar", zh: "注册", ta: "பதிவு", ar: "إنشاء حساب" },
   "login.email": { en: "Email", ms: "Emel", zh: "电子邮件", ta: "மின்னஞ்சல்", ar: "البريد الإلكتروني" },
   "login.password": { en: "Password", ms: "Kata laluan", zh: "密码", ta: "கடவுச்சொல்", ar: "كلمة المرور" },
-  "login.pwRegister": { en: "Password (min. 10 chars)", ms: "Kata laluan (min. 10 aksara)", zh: "密码（至少 10 个字符）", ta: "கடவுச்சொல் (குறைந்தது 10 எழுத்துகள்)", ar: "كلمة المرور (10 أحرف على الأقل)" },
+  "login.pwRegister": { en: "Password (optional)", ms: "Kata laluan (pilihan)", zh: "密码（可选）", ta: "கடவுச்சொல் (விருப்பம்)", ar: "كلمة المرور (اختياري)" },
+  "login.pwRegisterPh": { en: "Leave blank for now", ms: "Biarkan kosong buat masa ini", zh: "可暂时留空", ta: "இப்போதைக்கு காலியாக விடவும்", ar: "اتركه فارغاً الآن" },
+  "login.pwOptional": { en: "Optional — leave blank to sign up without a password (you can set one later).", ms: "Pilihan — biarkan kosong untuk mendaftar tanpa kata laluan (anda boleh menetapkannya kemudian).", zh: "可选 — 留空可无需密码注册（之后可设置）。", ta: "விருப்பம் — கடவுச்சொல் இல்லாமல் பதிவு செய்ய காலியாக விடவும் (பின்னர் அமைக்கலாம்).", ar: "اختياري — اتركه فارغاً للتسجيل بدون كلمة مرور (يمكنك تعيينها لاحقاً)." },
   "login.submitLogin": { en: "Log in", ms: "Log Masuk", zh: "登录", ta: "உள்நுழை", ar: "تسجيل الدخول" },
   "login.submitRegister": { en: "Create free account", ms: "Cipta Akaun Percuma", zh: "免费创建账户", ta: "இலவச கணக்கை உருவாக்கு", ar: "أنشئ حساباً مجانياً" },
   "login.freeNote": {
