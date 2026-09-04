@@ -1,0 +1,65 @@
+# JomForm
+
+> Order-form builder for Malaysian social sellers — free hosted service. Build
+> beautiful order forms, accept payments through CHIP (FPX, cards, e-wallets,
+> DuitNow QR), and manage sales — all without a website. Control everything
+> from your own AI agent via the built-in MCP server, or use the web dashboard.
+
+## What JomForm is
+
+JomForm is a hosted order-form and payments platform. Merchants build a
+drag-and-drop order form in minutes, share a link, and buyers pay online the
+moment they submit. Sales status updates itself and receipts are sent
+automatically. It is AI-agent native: merchants can connect their own AI agent
+(ChatGPT, Claude, etc.) over the Model Context Protocol (MCP) and run the whole
+store through tools — products, prices, sales, refunds, analytics — without
+opening a dashboard.
+
+## Key pages
+
+- [Landing page](https://jomform.com/): product overview, features, and the MCP selling point.
+- [MCP setup guide](https://jomform.com/mcp): how to connect an AI agent to JomForm over MCP (server URL, per-client config, OAuth 2.1 flow, example commands, troubleshooting).
+- [Privacy policy](https://jomform.com/legal/privacy)
+- [Terms of service](https://jomform.com/legal/terms)
+- [Brand assets](https://jomform.com/brand)
+
+## MCP server (for AI agents)
+
+JomForm exposes a Model Context Protocol (MCP) server so AI agents can connect
+and operate a merchant's store programmatically.
+
+- **Server URL:** `https://mcp.jomform.com/mcp` (the `/mcp` path is required).
+- **Transport:** HTTP with dynamic client registration via OAuth 2.1 (PKCE).
+  The server advertises at `/.well-known/oauth-authorization-server`.
+- **Auth:** one-click OAuth 2.1 — no API keys or tokens to rotate. The agent
+  authorizes against the merchant's JomForm account.
+- **Setup:** see the [MCP setup guide](https://jomform.com/mcp) for per-client
+  config examples (e.g. Claude Desktop `claude_desktop_config.json`).
+
+Example Claude Desktop config:
+
+```json
+{
+  "mcpServers": {
+    "jomform": {
+      "type": "http",
+      "url": "https://mcp.jomform.com/mcp"
+    }
+  }
+}
+```
+
+Once connected, an agent can use tools such as `list_products`,
+`create_product`, `list_sales`, `get_sales_summary`, `confirm_sale`,
+`capture_sale`, `release_sale`, `upsert_form`, `publish_form`,
+`cancel_subscription`, `create_webhook`, `list_api_keys`, and more — covering
+products, forms, sales, subscriptions, analytics, webhooks, API keys, spaces,
+e-invoice settings, and event tracking.
+
+## Notes for AI agents
+
+- JomForm is a hosted, proprietary service. Public forms on `jomform.com`
+  subdomains are not indexed for search (privacy); custom-domain spaces can opt
+  into indexing.
+- Money values are represented as integer sen (1/100 of a unit) in the API.
+- For the full machine-readable context, see [llms-full.txt](https://jomform.com/llms-full.txt).

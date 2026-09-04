@@ -6,4 +6,6 @@
 User-agent: *
 Allow: /
 
+# AI-agent discovery (issue #277): machine-readable descriptions of JomForm.
+# llms.txt is the concise spec; llms-full.txt is the fuller version.
 Sitemap: https://jomform.com/sitemap.xml

@@ -1,0 +1,119 @@
+# JomForm — Full Context for AI Agents
+
+> Order-form builder for Malaysian social sellers — free hosted service. Build
+> beautiful order forms, accept payments through CHIP (FPX, cards, e-wallets,
+> DuitNow QR), and manage sales — all without a website. Control everything
+> from your own AI agent via the built-in MCP server, or use the web dashboard.
+
+This is the full version of `llms.txt` for agents that want more detail. The
+concise version is at [llms.txt](https://jomform.com/llms.txt).
+
+## 1. What JomForm is
+
+JomForm is a hosted order-form and payments platform for Malaysian social
+sellers. Merchants build a drag-and-drop order form in about five minutes,
+share a link, and buyers pay online the moment they submit. Sales status
+updates itself and receipts are sent automatically. It is AI-agent native:
+merchants can connect their own AI agent (ChatGPT, Claude, etc.) over the Model
+Context Protocol (MCP) and run the whole store through tools — products,
+prices, sales, refunds, analytics — without opening a dashboard.
+
+### Core capabilities
+
+- **Order forms in minutes** — drag-and-drop products, fields, images, coupons. No code.
+- **Payments** — secure checkout by CHIP: cards, FPX, DuitNow QR, e-wallets. One-time and subscription/recurring via CHIP card tokenization.
+- **Auto-updated sales** — sales status updates itself, receipts sent automatically.
+- **Analytics** — sales analytics, CSV export, PDF receipts. Free forever, no monthly fee.
+- **AI-agent native** — MCP server built in; merchants connect their own AI agent and run the whole store through tools.
+
+### Tech stack
+
+- Go 1.26 backend (REST + MCP server + worker)
+- PostgreSQL 18
+- Valkey 9 (cache/queue)
+- MinIO / S3-compatible object storage (Cloudflare R2 supported)
+- Next.js 16 dashboard + form builder
+
+## 2. Key pages
+
+- [Landing page](https://jomform.com/) — product overview, features, MCP selling point.
+- [MCP setup guide](https://jomform.com/mcp) — how to connect an AI agent over MCP.
+- [Privacy policy](https://jomform.com/legal/privacy)
+- [Terms of service](https://jomform.com/legal/terms)
+- [Brand assets](https://jomform.com/brand)
+
+## 3. MCP server (for AI agents)
+
+JomForm exposes a Model Context Protocol (MCP) server so AI agents can connect
+and operate a merchant's store programmatically.
+
+### Connection details
+
+- **Server URL:** `https://mcp.jomform.com/mcp` (the `/mcp` path is required).
+- **Transport:** HTTP with dynamic client registration via OAuth 2.1 (PKCE).
+  The server advertises at `/.well-known/oauth-authorization-server`.
+- **Auth:** one-click OAuth 2.1 — no API keys or tokens to rotate. The agent
+  authorizes against the merchant's JomForm account.
+
+### Claude Desktop config example
+
+Claude Desktop reads its MCP servers from `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "jomform": {
+      "type": "http",
+      "url": "https://mcp.jomform.com/mcp"
+    }
+  }
+}
+```
+
+### Connection flow
+
+1. Add the server URL to your MCP client config.
+2. The client fetches the server and shows a JomForm login/authorize page.
+3. Log in and grant access. The agent is now connected and can act on the store.
+4. No API keys, no tokens to rotate — just start talking.
+
+### Example commands once connected
+
+- "add product RM25"
+- "how many sales today?"
+- "refund order JF-xxxx"
+- "show my product inventory"
+
+### Available MCP tools
+
+The MCP server exposes tools covering the full dashboard feature set:
+
+- **Products:** `list_products`, `create_product`, `update_product`, `archive_product`, `list_product_variations`, `bulk_products`
+- **Forms:** `upsert_form`, `set_form_theme`, `register_form_fields`, `generate_form`, `publish_form`, `unpublish_form`, `set_form_password`, `get_form_restrictions`, `set_form_restrictions`, `delete_form`, `bulk_forms`
+- **Sales:** `list_sales`, `get_sales_summary`, `confirm_sale`, `get_sale_email_status`, `capture_sale`, `release_sale`, `capture_all_pending_sales`
+- **Subscriptions:** `list_subscriptions`, `cancel_subscription`, `update_subscription_card`
+- **CHIP per-form:** `set_form_chip_override`, `clear_form_chip_override`, `get_form_chip_feeds`, `set_form_chip_feeds`, `get_form_chip_mapping`, `set_form_chip_mapping`
+- **e-Invoice:** `set_einvoice`, `get_einvoice_settings`
+- **Webhooks:** `create_webhook`, `list_webhooks`, `update_webhook`, `delete_webhook`, `webhook_deliveries`, `retry_webhook_delivery`
+- **API keys:** `list_api_keys`, `create_api_key`, `revoke_api_key`
+- **Spaces:** `list_spaces`, `create_space`, `get_space_settings`, `set_space_settings`, `get_currency_rates`, `set_space_currency`, `invite_space_member`, `list_space_members`, `update_space_member_role`, `remove_space_member`, `list_space_invites`, `cancel_space_invite`, `set_default_space`
+- **Account:** `get_account`, `update_profile_phone`, `update_profile_timezone`
+- **Email:** `get_email_settings`, `set_email_settings`, `get_form_email_settings`, `set_form_email_settings`, `get_form_notifications`, `set_form_notifications`, `get_form_confirmations`, `set_form_confirmations`
+- **Legal pages:** `generate_legal_page`, `get_legal_page`, `set_legal_page`
+- **Events / audit:** `list_events` (account-scoped, read-only), `list_email_deliveries`, `list_form_submissions`, `list_spam_submissions`, `unspam_submission`, `list_spam_sales`, `unspam_sale`
+- **Media / templates:** `list_media`, `list_templates`, `use_template`
+- **Admin:** `purge_unverified_accounts`
+
+### Troubleshooting
+
+- Pasting just `mcp.jomform.com` (no scheme/path) fails. You MUST include `https://` and the `/mcp` path.
+- If connection fails, ensure your client allows remote MCP servers and HTTP-based OAuth. The server advertises at `/.well-known/oauth-authorization-server`.
+
+## 4. Notes for AI agents
+
+- JomForm is a hosted, proprietary service. Public forms on `jomform.com`
+  subdomains are not indexed for search (privacy); custom-domain spaces can opt
+  into indexing.
+- Money values are represented as integer sen (1/100 of a unit) in the API.
+- The web dashboard and the MCP server expose the same feature set (feature
+  parity is a project rule).
