@@ -122,6 +122,10 @@ export default function Login() {
     typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get("invite") || ""
   );
   const codeRef = useRef<HTMLInputElement>(null);
+  // Issue #304: the default (passwordless) login page doubles as the signup
+  // entry. See goSignup below.
+  const emailRef = useRef<HTMLInputElement>(null);
+  const [signupHint, setSignupHint] = useState(false);
 
   useEffect(() => {
     // Issue #140: read ?next once after mount for the OAuth redirect path.
@@ -272,7 +276,16 @@ export default function Login() {
     codeRef.current?.focus();
   }
 
-  // Issue #71: "Ganti emel / Guna akaun lain" — back to Step 1, email prefilled.
+  // Issue #304: the default (passwordless) login page doubles as the signup
+  // entry. goSignup focuses the single email input so a new user can type
+  // their address and sign up through the existing hybrid magic-link flow
+  // (#278) — no need to first open the password form.
+  function goSignup() {
+    setSignupHint(true);
+    window.setTimeout(() => emailRef.current?.focus(), 50);
+  }
+
+  // Issue #71: back to Step 1, email prefilled.
   function backToCredentials() {
     setStep(1);
     setCode("");
@@ -527,6 +540,7 @@ export default function Login() {
               <div>
                 <label className="mb-1 block text-xs font-medium text-[var(--jf-muted)]">{t("login.email")}</label>
                 <input
+                  ref={emailRef}
                   name="email"
                   type="email"
                   required
@@ -586,13 +600,32 @@ export default function Login() {
                 </button>
               )}
               {mode === "magic" && (
-                <button
-                  type="button"
-                  onClick={() => { setMode("login"); setError(""); setDone(false); }}
-                  className="text-[13px] font-medium text-[#5e6ad2] hover:underline"
-                >
-                  {t("login.loginWithPassword")}
-                </button>
+                <div className="space-y-3">
+                  {/* Issue #304: the passwordless page is the signup entry too.
+                      A clear "New here?" call to action keeps signup discoverable
+                      without opening the password form — the hybrid magic-link
+                      flow (#278) creates + signs in a new account on click. */}
+                  <button
+                    type="button"
+                    onClick={goSignup}
+                    disabled={busy}
+                    className="text-[13px] font-medium text-[#5e6ad2] hover:underline"
+                  >
+                    {signupHint ? t("login.signupHere") : t("login.newHereSignup")}
+                  </button>
+                  {signupHint && (
+                    <p className="text-[12px] leading-snug text-[var(--jf-muted)]">
+                      {t("login.signupHint")}
+                    </p>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => { setMode("login"); setError(""); setDone(false); }}
+                    className="text-[13px] font-medium text-[#5e6ad2] hover:underline"
+                  >
+                    {t("login.loginWithPassword")} {t("login.orSignupWithPassword")}
+                  </button>
+                </div>
               )}
 
               <button
