@@ -1,5 +1,20 @@
 # AGENTS.md — JomForm repo agent guidance
 
+## LOCAL BUILD/TEST BEFORE MERGE (RULE — jangan guna CI sebagai gate)
+
+**GitHub Actions CI is NOT a merge gate for this repo.** Before merging ANY
+PR (or any agent change), the agent MUST run the full build + test suite
+**locally** and confirm it is green:
+
+1. `cd api && go build ./...` — must pass.
+2. `cd api && go test ./...` — must pass (against the local test Postgres +
+   Valkey; see the test DB setup in the pipeline notes).
+3. `cd web && npm run build` — must pass (Next.js build, 0 errors).
+
+Only merge after all three are green locally. Do NOT rely on (or wait for)
+GitHub Actions checks — they may be unavailable (e.g. billing) or flaky
+(npm audit network timeouts). Local green is the source of truth.
+
 ## MCP FEATURE PARITY (RULE — jangan tertinggal/terlepas)
 
 **Every dashboard feature MUST have a matching MCP tool.** When adding any
