@@ -26,6 +26,13 @@ const (
 	cfAuthURL  = "https://dash.cloudflare.com/oauth2/auth"
 	cfTokenURL = "https://dash.cloudflare.com/oauth2/token"
 	cfAPIBase  = "https://api.cloudflare.com/client/v4"
+	// cfOAuthScope is the Cloudflare OAuth scope set requested on the consent
+	// screen. Without a scope param Cloudflare shows "0 total permissions" and
+	// disables the Authorize button (issue #288). For auto-CNAME (#22) we need:
+	//   zone:read     — find the merchant's zone (resolve CNAME target)
+	//   dns:edit      — create/edit the CNAME record
+	//   account:read  — resolve the account owning the token
+	cfOAuthScope = "zone:read dns:edit account:read"
 )
 
 func cfClientID() string     { return os.Getenv("JF_CF_OAUTH_CLIENT_ID") }
@@ -97,6 +104,7 @@ func (h *RESTHandlers) cfStart(w http.ResponseWriter, r *http.Request, actx *Acc
 	q.Set("state", state)
 	q.Set("code_challenge", challenge)
 	q.Set("code_challenge_method", "S256")
+	q.Set("scope", cfOAuthScope)
 	http.Redirect(w, r, cfAuthURL+"?"+q.Encode(), http.StatusFound)
 }
 
