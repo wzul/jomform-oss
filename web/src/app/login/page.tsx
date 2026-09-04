@@ -26,6 +26,42 @@ function maskEmail(email: string): string {
   return email.slice(0, 2) + "••" + email.slice(at);
 }
 
+// Issue #292: provider logos for the social login buttons. Each is a small,
+// decorative inline SVG (aria-hidden) rendered to the LEFT of the button text,
+// so screen readers announce the text content (e.g. "Continue with Google").
+// Provider id keys match the ids returned by /api/auth/social/providers
+// (google, cloudflare, azure_ad, github). Unknown ids fall back to the generic
+// provider mark rather than breaking the button.
+function ProviderLogo({ id }: { id: string }) {
+  switch (id) {
+    case "google":
+      return (
+        <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" className="h-4 w-4 shrink-0" data-testid="logo-google">
+          <path fill="#EA4335" d="M12 5.04c1.62 0 3.06.56 4.2 1.65l3.14-3.14C17.45 1.8 14.97.75 12 .75 7.7.75 3.99 3.29 2.18 6.9l3.66 2.84C6.75 7.12 9.18 5.04 12 5.04z" />
+          <path fill="#4285F4" d="M23.25 12.27c0-.89-.08-1.75-.23-2.58H12v4.88h6.3a5.8 5.8 0 0 1-2.52 3.81l3.57 2.77c2.1-1.94 3.9-4.8 3.9-8.88z" />
+          <path fill="#FBBC05" d="M5.84 14.26a6.95 6.95 0 0 1 0-4.52L2.18 6.9a11.16 11.16 0 0 0 0 10.2l3.66-2.84z" />
+          <path fill="#34A853" d="M12 23.25c3.02 0 5.55-1 7.4-2.69l-3.57-2.77c-1 .66-2.27 1.05-3.83 1.05-2.82 0-5.25-2.08-5.83-4.85L2.18 17.1C3.99 20.71 7.7 23.25 12 23.25z" />
+        </svg>
+      );
+    case "cloudflare":
+      return (
+        <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" className="h-4 w-4 shrink-0" data-testid="logo-cloudflare">
+          <path fill="#F48120" d="M13.6 6.1a6.7 6.7 0 0 0-.5 0l.2-.5C14.3 3.5 13.4 2 11.7 2c-1.9 0-3.4 1.5-3.4 3.4 0 .2 0 .3.1.5C7 6 5.5 7.6 5.5 9.7c0 .2 0 .4.1.6H4c-.2 0-.4.2-.4.4s.2.4.4.4h9.5a.5.5 0 0 0 0-1H8.2c-.4 0-.8-.4-.7-.9 0-.4.4-.8.9-.8h10.5c1.4 0 2.5-1.1 2.5-2.5s-1.1-2.5-2.5-2.5c-.3 0-.6 0-.8.1-.6-.9-1.6-1.4-2.6-1.4z" />
+          <path fill="#FAAA3F" d="M5.4 20.2c-.1 0-.2-.2-.1-.3 0-.2.2-.4.4-.4h10.1c.7 0 1.3-.6 1.3-1.3v-.1h3.4c.7 0 1.3-.5 1.3-1.2 0-.1 0-.2 0-.3-1.2.3-2.5.3-3.8 0 0 .6-.5 1-1 1H9.5c-1.4 0-2.6-1.1-2.6-2.5 0-.1 0-.2 0-.3.3-1.5 1.4-2.4 2.9-2.4.1 0 .2 0 .3.1l1.1-.6c-.5-.3-1-.5-1.5-.5-1.7-.1-3.4.5-4.3 2.2-.6.4-1.4.7-2.3.7-1.2.1-2.3.9-2.5 2.1-.3 1.3.6 2.4 1.8 2.4h.3z" />
+        </svg>
+      );
+    // GitHub (octocat mark) and Microsoft/Azure AD share a simple, neutral
+    // fallback mark so future providers keep working without a dedicated logo.
+    default:
+      return (
+        <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" className="h-4 w-4 shrink-0" data-testid="logo-generic">
+          <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="1.8" />
+          <circle cx="12" cy="12" r="2.2" fill="currentColor" />
+        </svg>
+      );
+  }
+}
+
 // Issue #140: the OAuth authorize flow redirects to /login?next=<authorize URL>
 // (which lives on mcp.jomform.com). Read that value once at mount so standard
 // login AND the TOTP step-2 redirect back to it after a successful sign-in,
@@ -594,6 +630,8 @@ export default function Login() {
                     href={`/api/auth/oauth/${p.id}`}
                     className="flex w-full items-center justify-center gap-2 rounded-md border border-[var(--jf-border)] bg-white py-2 text-[13px] font-medium text-[var(--jf-text)] transition-colors hover:border-[#7170ff]/60 hover:bg-indigo-50"
                   >
+                    {/* Issue #292: provider logo (decorative) rendered left of the text */}
+                    <ProviderLogo id={p.id} />
                     {t("login.continueWith", { provider: p.name })}
                   </a>
                 ))}
