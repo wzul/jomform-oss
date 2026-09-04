@@ -256,6 +256,83 @@ func TestMagicLinkTTL(t *testing.T) {
 	}
 }
 
+// TestMagicLinkHybridSignup: a NEW email gets a signup magic link that, on
+// click, creates the account (verified) + issues a session cookie (issue #278).
+func TestMagicLinkHybridSignup(t *testing.T) {
+	h, users, mailer := authTestFixture(t)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	email := "hybrid-" + randSuffix() + "@example.test"
+	// The email must not exist yet.
+	if u, _ := users.ByEmail(context.Background(), email); u != nil {
+		t.Fatalf("email %s already exists", email)
+	}
+
+	// Request a magic link for the new email → a link must be emailed.
+	rec := postJSON(mux, "/v1/auth/magic-link/request", map[string]any{"email": email}, "10.13.13.13")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("magic-link request status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	last := mailer.lastBody()
+	mt := linkRe.FindStringSubmatch(last)
+	if len(mt) < 2 {
+		t.Fatalf("no magic link token in email body: %q", last)
+	}
+	token := mt[1]
+
+	// Verify → account is created (verified) + a session cookie is issued.
+	rec = postJSON(mux, "/v1/auth/magic-link/verify", map[string]any{"token": token}, "10.13.13.13")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("magic-link verify status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	gotCookie := false
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "jf_session" && c.Value != "" {
+			gotCookie = true
+		}
+	}
+	if !gotCookie {
+		t.Fatal("magic-link signup verify did not issue a session cookie")
+	}
+	user, err := users.ByEmail(context.Background(), email)
+	if err != nil || user == nil {
+		t.Fatalf("account not created after signup magic link: err=%v", err)
+	}
+	if !user.Verified {
+		t.Fatal("signup magic-link account should be verified (email confirmed by click)")
+	}
+
+	// The token is single-use — a second verify must fail.
+	rec = postJSON(mux, "/v1/auth/magic-link/verify", map[string]any{"token": token}, "10.13.13.13")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("reused signup magic-link token status = %d, want 400 (single-use violated)", rec.Code)
+	}
+}
+
+// TestMagicLinkHybridSignupHoneypot: a bot that fills the hidden honeypot
+// field on the magic-link request is silently discarded — no link is emailed
+// and no account is created (issue #278 anti-spam).
+func TestMagicLinkHybridSignupHoneypot(t *testing.T) {
+	h, users, mailer := authTestFixture(t)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	email := "honey-" + randSuffix() + "@example.test"
+	rec := postJSON(mux, "/v1/auth/magic-link/request", map[string]any{
+		"email": email, "website": "https://spam.example",
+	}, "10.14.14.14")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("magic-link request status = %d body=%s (want generic 200)", rec.Code, rec.Body.String())
+	}
+	if linkRe.MatchString(mailer.lastBody()) {
+		t.Fatal("honeypot magic-link request still emailed a link (anti-spam bypass)")
+	}
+	if u, _ := users.ByEmail(context.Background(), email); u != nil {
+		t.Fatal("honeypot magic-link request created an account (anti-spam bypass)")
+	}
+}
+
 // TestEmail2FAStoreUnit exercises the store's consume semantics directly over
 // Valkey (single-use, correct-mismatch behaviour).
 func TestEmail2FAStoreUnit(t *testing.T) {

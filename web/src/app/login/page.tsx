@@ -121,10 +121,19 @@ export default function Login() {
     const path = mode === "login" ? "/api/auth/login" : mode === "register" ? "/api/auth/register" : mode === "magic" ? "/api/auth/magic-link/request" : "/api/auth/forgot-password";
 
     if (mode === "forgot" || mode === "magic") {
+      const body: Record<string, string> = { email: String(fd.get("email") || "") };
+      // Issue #278: the magic-link path is hybrid (login + signup). Send the
+      // honeypot so a bot that fills the hidden field is silently discarded
+      // server-side, and the locale so the signup email renders in the user's
+      // language (issue #206).
+      if (mode === "magic") {
+        body.website = String(fd.get("website") || "");
+        body.lang = lang;
+      }
       const r = await fetch(path, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: String(fd.get("email") || "") }),
+        body: JSON.stringify(body),
       });
       setBusy(false);
       if (r.ok) {
@@ -463,8 +472,9 @@ export default function Login() {
               {/* Honeypot (issue #42): sr-only hides it from humans &
                   screen-readers (no focus, no layout) but it stays in the DOM,
                   so naive bots that fill every field trip the server-side
-                  discard. */}
-              {mode !== "forgot" && mode !== "magic" && (
+                  discard. Issue #278: also rendered on the hybrid magic-link
+                  form so signup-via-magic-link gets the same anti-spam. */}
+              {mode !== "forgot" && (
                 <div className="sr-only" aria-hidden="true">
                   <label htmlFor="website">{t("login.honeypot")}</label>
                   <input

@@ -158,6 +158,45 @@ func (m *MagicLink) Generate(ctx context.Context, userID string) (string, error)
 // consumed.
 var ErrMagicLinkInvalid = errors.New("magic link token invalid")
 
+// GenerateForEmail mints a signup magic link bound to an email that does not
+// yet have an account (issue #278 hybrid passwordless). The stored value is
+// the email itself (prefixed) rather than a userID, so on click the verify
+// handler can create the account. Same single-use 15-min token as login.
+func (m *MagicLink) GenerateForEmail(ctx context.Context, email string) (string, error) {
+	token, err := randomToken()
+	if err != nil {
+		return "", err
+	}
+	if err := m.rdb.Set(ctx, magicLinkKey(hashOf(token)), "email:"+strings.ToLower(email), MagicLinkTTL).Err(); err != nil {
+		return "", fmt.Errorf("magiclink signup set: %w", err)
+	}
+	return token, nil
+}
+
+// ConsumeEmail atomically invalidates a signup magic-link token and returns
+// the email it was issued to. Returns ErrMagicLinkInvalid when the token is
+// absent, expired, already consumed, or was a login (userID) token.
+func (m *MagicLink) ConsumeEmail(ctx context.Context, token string) (string, error) {
+	if token == "" {
+		return "", ErrMagicLinkInvalid
+	}
+	val, err := m.rdb.GetDel(ctx, magicLinkKey(hashOf(token))).Result()
+	if err != nil {
+		if errors.Is(err, goredis.Nil) {
+			return "", ErrMagicLinkInvalid
+		}
+		return "", err
+	}
+	if !strings.HasPrefix(val, "email:") {
+		return "", ErrMagicLinkInvalid
+	}
+	email := strings.TrimPrefix(val, "email:")
+	if email == "" {
+		return "", ErrMagicLinkInvalid
+	}
+	return email, nil
+}
+
 // Consume atomically invalidates the token (GetDel) and returns the userID it
 // was issued to. A single-use token can never be replayed.
 func (m *MagicLink) Consume(ctx context.Context, token string) (string, error) {
@@ -175,4 +214,42 @@ func (m *MagicLink) Consume(ctx context.Context, token string) (string, error) {
 		return "", ErrMagicLinkInvalid
 	}
 	return userID, nil
+}
+
+// MagicLinkKind discriminates a consumed magic-link token.
+type MagicLinkKind int
+
+const (
+	// MagicLinkUser is a login token bound to an existing userID.
+	MagicLinkUser MagicLinkKind = iota
+	// MagicLinkEmail is a signup token bound to an email (issue #278).
+	MagicLinkEmail
+)
+
+// ConsumeAny atomically invalidates the token (single GetDel) and reports
+// whether it was a login token (kind=MagicLinkUser, value=userID) or a signup
+// token (kind=MagicLinkEmail, value=email). Single-use is preserved: the token
+// is consumed exactly once regardless of kind.
+func (m *MagicLink) ConsumeAny(ctx context.Context, token string) (MagicLinkKind, string, error) {
+	if token == "" {
+		return 0, "", ErrMagicLinkInvalid
+	}
+	val, err := m.rdb.GetDel(ctx, magicLinkKey(hashOf(token))).Result()
+	if err != nil {
+		if errors.Is(err, goredis.Nil) {
+			return 0, "", ErrMagicLinkInvalid
+		}
+		return 0, "", err
+	}
+	if val == "" {
+		return 0, "", ErrMagicLinkInvalid
+	}
+	if strings.HasPrefix(val, "email:") {
+		email := strings.TrimPrefix(val, "email:")
+		if email == "" {
+			return 0, "", ErrMagicLinkInvalid
+		}
+		return MagicLinkEmail, email, nil
+	}
+	return MagicLinkUser, val, nil
 }
