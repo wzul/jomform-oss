@@ -1488,18 +1488,28 @@ func customDomainOwner(ctx context.Context, s *dbstore.AccountStore, d *dbstore.
 }
 
 // handleSpaceRootForm serves a form by slug on a SPACE subdomain
-// (e.g. wanzulhosting.jomform.com/form-baru). On jomform.com it 404s so
-// dashboard routes are unaffected. Private forms (issue #176) resolve here so
-// their password gate can render; serveForm enforces the status rules.
+// (e.g. wanzulhosting.jomform.com/form-baru) or a verified custom domain
+// (issue #297). On jomform.com it 404s so dashboard routes are unaffected.
+// Private forms (issue #176) resolve here so their password gate can render;
+// serveForm enforces the status rules.
 func (h *PublicHandlers) handleSpaceRootForm(w http.ResponseWriter, r *http.Request) {
-	sub := accountSubdomain(r.Host)
-	if sub == "" {
-		http.NotFound(w, r)
-		return
-	}
 	slug := r.PathValue("slug")
-	f, err := h.Forms.BySpaceSlug(r.Context(), sub, slug)
-	if err != nil {
+
+	// Same lookup rules as render/submit (#77): subdomain scoping first,
+	// then a verified custom domain's owning account. On bare jomform.com
+	// (no subdomain, no custom domain) a published form is NOT served —
+	// a public payment link is reachable only via its registered space
+	// subdomain or a custom domain (issue #297).
+	var f *dbstore.Form
+	var err error
+	if sub := accountSubdomain(r.Host); sub != "" {
+		f, err = h.Forms.BySpaceSlug(r.Context(), sub, slug)
+	} else if cd := customDomainOwner(r.Context(), h.Accounts, h.Domains, r.Host); cd != "" {
+		f, err = h.Forms.ByAccountSlug(r.Context(), cd, slug)
+	} else {
+		f, err = nil, dbstore.ErrFormNotFound
+	}
+	if err != nil || f == nil {
 		http.Error(w, "Borang tidak dijumpai", http.StatusNotFound)
 		return
 	}
