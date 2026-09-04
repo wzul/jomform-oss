@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -25,6 +26,7 @@ import (
 	"strings"
 
 	"github.com/wzul/jomform/api/internal/auth"
+	"github.com/wzul/jomform/api/internal/dbstore"
 )
 
 type oidcProvider struct {
@@ -197,6 +199,7 @@ func (a *AuthHandlers) socialCallback(w http.ResponseWriter, r *http.Request) {
 	// 1) existing identity → log the user in
 	userID, err := a.Users.FindIdentity(r.Context(), provider, up.UID)
 	if err == nil && userID != "" {
+		a.ensureAccountFor(r, userID, up.Email)
 		_ = a.startSession(w, r, userID, "", false, false)
 		// Issue #285: route through the frontend post-login resolution
 		// (resolvePostLogin syncs jf_space and sends multi-space users to the
@@ -216,6 +219,7 @@ func (a *AuthHandlers) socialCallback(w http.ResponseWriter, r *http.Request) {
 	if up.Email != "" && up.EmailVerified {
 		if existing, e2 := a.Users.ByEmail(r.Context(), up.Email); e2 == nil && existing != nil {
 			_ = a.Users.LinkIdentity(r.Context(), existing.ID, provider, up.UID, up.Email, up.Name, up.Picture)
+			a.ensureAccountFor(r, existing.ID, up.Email)
 			_ = a.startSession(w, r, existing.ID, "", false, false)
 			http.Redirect(w, r, "/post-login", http.StatusFound)
 			return
@@ -228,9 +232,48 @@ func (a *AuthHandlers) socialCallback(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "tidak boleh cipta akaun: "+err.Error())
 		return
 	}
-	// Account row auto-created next login via ensureAccount path
+	// Auto-provision the default account so a brand-new social user can reach
+	// the dashboard immediately. Without it the session cookie validates
+	// (/auth/me returns the user) but every authed() dashboard route
+	// (/spaces, /rest/dashboard-bundle) 401s because resolveSessionAccount
+	// finds no account (issue #298). Idempotent for existing users.
+	a.ensureAccountFor(r, newID, up.Email)
 	_ = a.startSession(w, r, newID, "", false, false)
 	http.Redirect(w, r, "/post-login", http.StatusFound)
+}
+
+// ensureAccountFor guarantees the user owns at least one account. Mirror of
+// the default-account auto-provision in handleRegister + createMagicLinkUser
+// (issue #278): brand-new social signups only insert a users row, so without
+// this the dashboard's authed() routes 401 after Google login even though the
+// session cookie is valid. Idempotent — skips when an account already exists.
+func (a *AuthHandlers) ensureAccountFor(r *http.Request, userID, email string) {
+	if a.Accounts == nil {
+		return
+	}
+	accs, err := a.Accounts.ByOwner(r.Context(), userID)
+	if err != nil || len(accs) > 0 {
+		return
+	}
+	name := "Store"
+	if email != "" {
+		name = strings.Split(strings.ToLower(strings.TrimSpace(email)), "@")[0]
+		if name == "" {
+			name = "Store"
+		}
+	}
+	acc := &dbstore.Account{
+		OwnerUserID: userID,
+		Name:        name + " Store",
+		Slug:        slugify(strings.ToLower(strings.TrimSpace(email)), userID),
+	}
+	if err := a.Accounts.Create(r.Context(), acc); err != nil {
+		// Slug collision: append random suffix and retry once.
+		acc.Slug = acc.Slug + "-" + shortRand()
+		if err2 := a.Accounts.Create(r.Context(), acc); err2 != nil {
+			slog.Error("social_default_account_create", "err", err2, "user", userID)
+		}
+	}
 }
 
 // unlink detaches a social identity from the profile.
