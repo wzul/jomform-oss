@@ -198,7 +198,10 @@ func (a *AuthHandlers) socialCallback(w http.ResponseWriter, r *http.Request) {
 	userID, err := a.Users.FindIdentity(r.Context(), provider, up.UID)
 	if err == nil && userID != "" {
 		_ = a.startSession(w, r, userID, "", false, false)
-		http.Redirect(w, r, "/", http.StatusFound)
+		// Issue #285: route through the frontend post-login resolution
+		// (resolvePostLogin syncs jf_space and sends multi-space users to the
+		// space-picker) instead of dropping the user on the Landing page.
+		http.Redirect(w, r, "/post-login", http.StatusFound)
 		return
 	}
 
@@ -214,7 +217,7 @@ func (a *AuthHandlers) socialCallback(w http.ResponseWriter, r *http.Request) {
 		if existing, e2 := a.Users.ByEmail(r.Context(), up.Email); e2 == nil && existing != nil {
 			_ = a.Users.LinkIdentity(r.Context(), existing.ID, provider, up.UID, up.Email, up.Name, up.Picture)
 			_ = a.startSession(w, r, existing.ID, "", false, false)
-			http.Redirect(w, r, "/", http.StatusFound)
+			http.Redirect(w, r, "/post-login", http.StatusFound)
 			return
 		}
 	}
@@ -227,7 +230,7 @@ func (a *AuthHandlers) socialCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	// Account row auto-created next login via ensureAccount path
 	_ = a.startSession(w, r, newID, "", false, false)
-	http.Redirect(w, r, "/", http.StatusFound)
+	http.Redirect(w, r, "/post-login", http.StatusFound)
 }
 
 // unlink detaches a social identity from the profile.
