@@ -50,6 +50,21 @@ func (s *AccountStore) ByID(ctx context.Context, id string) (*Account, error) {
 	return a, err
 }
 
+// BySlug fetches one account by its URL slug (issue #276 — used by the
+// sitemap handler to resolve a custom-domain account's id).
+func (s *AccountStore) BySlug(ctx context.Context, slug string) (*Account, error) {
+	a := &Account{}
+	err := s.pool.QueryRow(ctx, accountSelect+" WHERE slug = $1", slug).
+		Scan(&a.ID, &a.OwnerUserID, &a.Name, &a.Slug,
+			&a.Timezone, &a.Currency,
+			&a.ChipBrandID, &a.ChipSecretKeyEnc, &a.ChipMode, &a.BNMRounding,
+			&a.ChipEmailFallback, &a.ChipMethodWhitelist,
+			&a.CustomDomain, &a.CustomDomainVerified, &a.CustomDomainVerifiedAt,
+			&a.EinvoiceTIN, &a.EinvoiceMSIC,
+			&a.CreatedAt, &a.UpdatedAt)
+	return a, err
+}
+
 // ByOwner lists accounts owned by a user.
 func (s *AccountStore) ByOwner(ctx context.Context, userID string) ([]*Account, error) {
 	rows, err := s.pool.Query(ctx, accountSelect+" WHERE owner_user_id = $1 ORDER BY created_at", userID)

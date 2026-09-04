@@ -1,8 +1,17 @@
+import type { Metadata } from "next";
 import { TERMS_SECTIONS, TERMS_LAST_UPDATED } from "../terms-content";
 
-export const metadata = {
+export const metadata: Metadata = {
   title: "Terms of Service — JomForm",
   description: "Terms governing the use of JomForm.",
+  alternates: { canonical: "https://jomform.com/legal/terms" },
+  openGraph: {
+    title: "Terms of Service — JomForm",
+    description: "Terms governing the use of JomForm.",
+    url: "https://jomform.com/legal/terms",
+    siteName: "JomForm",
+    type: "website",
+  },
 };
 
 export default function TermsPage() {

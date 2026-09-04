@@ -138,6 +138,9 @@ func (h *RESTHandlers) saveSpaceSettings(w http.ResponseWriter, r *http.Request,
 		MenuJSON       string `json:"menu_json"`
 		DefaultLang    string `json:"default_lang"`
 		Currency       string `json:"currency"`
+		// Issue #276: per-space SEO indexing toggle. Omitted (nil) = keep
+		// current value; explicit true/false sets it.
+		Indexing *bool `json:"indexing"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
 		writeErr(w, http.StatusBadRequest, "payload tidak sah")
@@ -184,9 +187,13 @@ func (h *RESTHandlers) saveSpaceSettings(w http.ResponseWriter, r *http.Request,
 		MenuJSON:       in.MenuJSON,
 		DefaultLang:    in.DefaultLang,
 		Currency:       cur.Currency,
+		Indexing:       cur.Indexing,
 	}
 	if in.Currency != "" {
 		st.Currency = in.Currency
+	}
+	if in.Indexing != nil {
+		st.Indexing = *in.Indexing
 	}
 	if strings.TrimSpace(st.MenuJSON) == "" {
 		st.MenuJSON = "[]"

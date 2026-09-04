@@ -62,6 +62,9 @@ func (h *PublicHandlers) renderCustomForm(w http.ResponseWriter, r *http.Request
 		// Issue #244: hidden honeypot + render-timestamp fields ride on the
 		// fields map so the deterministic anti-spam layers still apply.
 		"AntiSpam": template.HTML(antiSpamRenderFields()),
+		// Issue #276: noindex on jomform.com subdomains / when the space opts
+		// out of indexing.
+		"NoIndex": h.formNoIndex(r, f),
 	}); err != nil {
 		slog.Error("form_render_custom", "err", err)
 	}
@@ -74,6 +77,7 @@ func (h *PublicHandlers) renderCustomForm(w http.ResponseWriter, r *http.Request
 // postMessage to the parent, which POSTs {client, fields} to /order.
 var customFormTmpl = template.Must(template.New("custom").Parse(`<!doctype html>
 <html lang="{{.Lang}}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+{{if .NoIndex}}<meta name="robots" content="noindex, nofollow">{{end}}
 <title>{{.Title}}</title>
 <style>
   {{if .ThemePrimary}}:root { --jf-primary: {{.ThemePrimary}}; }{{end}}

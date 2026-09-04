@@ -177,6 +177,8 @@ export default function Settings() {
   const [sfRefundUrl, setSfRefundUrl] = useState("");
   const [sfFooterText, setSfFooterText] = useState("");
   const [sfSpaceId, setSfSpaceId] = useState("");
+  // Issue #276: per-space SEO indexing toggle (Storefront tab).
+  const [sfIndexing, setSfIndexing] = useState(true);
   // Issue #185: per-space currency + BNM rates.
   const [currency, setCurrency] = useState("MYR");
   const [currencySpaceId, setCurrencySpaceId] = useState("");
@@ -341,6 +343,8 @@ export default function Settings() {
         setSfTermsUrl(d.terms_url || "");
         setSfRefundUrl(d.refund_url || "");
         setSfFooterText(d.footer_text || "");
+        // Issue #276: per-space SEO indexing toggle (default true).
+        setSfIndexing(d.indexing !== false);
         if (d.currency) setCurrency(d.currency);
       })
       .catch(() => {});
@@ -631,6 +635,8 @@ export default function Settings() {
         terms_url: sfTermsUrl,
         refund_url: sfRefundUrl,
         footer_text: sfFooterText,
+        // Issue #276: per-space SEO indexing toggle.
+        indexing: sfIndexing,
       }),
     });
     if (r.ok) {
@@ -1514,6 +1520,28 @@ export default function Settings() {
                   rows={2}
                   className="jf-input mt-1 max-w-xl"
                 />
+              </div>
+              {/* Issue #276: per-space SEO indexing toggle. */}
+              <div className="flex items-start justify-between gap-4 rounded-lg border border-[var(--jf-border)] p-3">
+                <div>
+                  <p className="text-sm font-medium">{t("set.sfIndexingTitle")}</p>
+                  <p className="mt-0.5 max-w-md text-xs text-slate-500">{t("set.sfIndexingHelp")}</p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={sfIndexing}
+                  onClick={() => setSfIndexing((v) => !v)}
+                  className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+                    sfIndexing ? "bg-[var(--jf-primary)]" : "bg-slate-300"
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${
+                      sfIndexing ? "left-[22px]" : "left-0.5"
+                    }`}
+                  />
+                </button>
               </div>
               <div className="flex flex-wrap items-center gap-2 pt-1">
                 <button onClick={saveStorefrontSettings} className="jf-btn-primary">{t("set.sfSave")}</button>

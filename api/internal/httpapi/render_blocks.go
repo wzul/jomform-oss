@@ -207,6 +207,9 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 		"Footer": h.spaceFooter(r.Context(), f),
 		// Issue #244: hidden honeypot + render-timestamp fields.
 		"AntiSpam": template.HTML(antiSpamRenderFields()),
+		// Issue #276: noindex on jomform.com subdomains / when the space opts
+		// out of indexing.
+		"NoIndex": h.formNoIndex(r, f),
 	}); err != nil {
 		slog.Error("form_render_blocks", "err", err)
 	}
@@ -221,6 +224,7 @@ var blockTmpl = template.Must(template.New("blocks").
 	}).
 	Parse(`<!doctype html>
 <html lang="{{.Lang}}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+{{if .NoIndex}}<meta name="robots" content="noindex, nofollow">{{end}}
 <title>{{.Title}}</title>
 {{.TrackHead}}
 <style>
@@ -626,6 +630,9 @@ func (h *PublicHandlers) renderResponseForm(w http.ResponseWriter, r *http.Reque
 		"Footer": h.spaceFooter(r.Context(), f),
 		// Issue #244: hidden honeypot + render-timestamp fields.
 		"AntiSpam": template.HTML(antiSpamRenderFields()),
+		// Issue #276: noindex on jomform.com subdomains / when the space opts
+		// out of indexing.
+		"NoIndex": h.formNoIndex(r, f),
 	}); err != nil {
 		slog.Error("form_render_response", "err", err)
 	}
@@ -638,6 +645,7 @@ func (h *PublicHandlers) renderResponseForm(w http.ResponseWriter, r *http.Reque
 var responseTmpl = template.Must(template.New("response").
 	Parse(`<!doctype html>
 <html lang="{{.Lang}}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+{{if .NoIndex}}<meta name="robots" content="noindex, nofollow">{{end}}
 <title>{{.Title}}</title>
 {{.TrackHead}}
 <style>

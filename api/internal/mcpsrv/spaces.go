@@ -306,6 +306,8 @@ type setSpaceSettingsIn struct {
 	ContactAddress *string `json:"contact_address,omitempty" jsonschema:"Alamat perniagaan untuk footer (omit = kekal)"`
 	BusinessName   *string `json:"business_name,omitempty" jsonschema:"Nama perniagaan untuk footer (omit = kekal)"`
 	MenuJSON       *string `json:"menu_json,omitempty" jsonschema:"Menu navigasi JSON, cth [{\"label\":\"Home\",\"url\":\"/\"}] (omit = kekal)"`
+	// Issue #276: per-space SEO indexing toggle. Omitted (nil) = keep current.
+	Indexing *bool `json:"indexing,omitempty" jsonschema:"Benarkan enjin carian/AI mengindeks storefront space ini (omit = kekal)"`
 }
 
 func (s *Server) setSpaceSettings(
@@ -362,6 +364,9 @@ func (s *Server) setSpaceSettings(
 	}
 	if in.MenuJSON != nil {
 		st.MenuJSON = *in.MenuJSON
+	}
+	if in.Indexing != nil {
+		st.Indexing = *in.Indexing
 	}
 	if strings.TrimSpace(st.MenuJSON) == "" {
 		st.MenuJSON = "[]"

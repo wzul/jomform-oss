@@ -51,11 +51,13 @@ func TestLegacyFormRendersNoFooter(t *testing.T) {
 		Products                 []tmplProduct
 		Footer                   footerInfo
 		AntiSpam                 template.HTML
+		NoIndex                  bool
 	}{
 		Slug: "demo", Title: "Demo", Description: "desc",
 		Products: []tmplProduct{{ID: "p1", Name: "Item", PriceSen: 100}},
 		Footer:   footerInfo{},
 		AntiSpam: template.HTML(antiSpamRenderFields()),
+		NoIndex:  true,
 	})
 	if err != nil {
 		t.Fatalf("formTmpl.Execute: %v", err)

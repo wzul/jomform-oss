@@ -1,0 +1,9 @@
+# JomForm robots.txt — allow all search engines + AI (issue #276).
+# Full AI access: both ai-input and ai-train are allowed (no content-signal
+# restrictions). Public forms on jomform.com subdomains are noindexed at the
+# page level (privacy); custom-domain spaces opt in/out via their per-space
+# indexing toggle.
+User-agent: *
+Allow: /
+
+Sitemap: https://jomform.com/sitemap.xml

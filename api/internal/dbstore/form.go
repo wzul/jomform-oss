@@ -376,7 +376,7 @@ func (s *FormStore) ByAccountSlug(ctx context.Context, accountSlug, formSlug str
 	return f, err
 }
 
-// ListPublishedBySpace lists published forms belonging to a space (by slug).
+// ListPublishedBySpace lists published forms for a space (by its URL slug).
 func (s *FormStore) ListPublishedBySpace(ctx context.Context, spaceSlug string) ([]*Form, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT f.id, f.account_id, f.slug, f.title, f.config, f.theme, f.status, f.is_main,
@@ -388,6 +388,34 @@ func (s *FormStore) ListPublishedBySpace(ctx context.Context, spaceSlug string) 
 		 JOIN spaces sp ON sp.id = a.space_id
 		 WHERE sp.slug = $1 AND f.status = 'published' AND f.deleted_at IS NULL
 		 ORDER BY f.created_at`, spaceSlug)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Form
+	for rows.Next() {
+		f, err := s.scanOne(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// ListPublishedByAccountSlug lists published forms for an account (by its URL
+// slug). Used by the sitemap handler (issue #276) to list a custom-domain
+// space's indexable forms.
+func (s *FormStore) ListPublishedByAccountSlug(ctx context.Context, accountSlug string) ([]*Form, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT f.id, f.account_id, f.slug, f.title, f.config, f.theme, f.status, f.is_main,
+		        f.redirect_success, f.redirect_failure, f.allow_embed, f.logo_url, f.is_template,
+		        f.start_at, f.end_at, f.entry_limit, f.pending_message, f.expired_message, f.limit_message,
+		        f.created_at, f.updated_at
+		 FROM forms f
+		 JOIN accounts a ON a.id = f.account_id
+		 WHERE a.slug = $1 AND f.status = 'published' AND f.deleted_at IS NULL
+		 ORDER BY f.created_at`, accountSlug)
 	if err != nil {
 		return nil, err
 	}

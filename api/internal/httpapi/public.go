@@ -78,6 +78,10 @@ type PublicHandlers struct {
 func (h *PublicHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /f/{slug}", h.handleRender)
 	mux.HandleFunc("GET /embed/f/{accslug}/{slug}", h.embedForm)
+	// Issue #276: sitemap.xml for custom-domain spaces (indexed spaces only).
+	mux.HandleFunc("GET /sitemap.xml", h.handleSitemap)
+	// Issue #276: indexed custom-domain space URLs for the web sitemap.
+	mux.HandleFunc("GET /sitemap-spaces.json", h.handleSitemapSpaces)
 	mux.Handle("POST /f/{slug}/order", middleware.RateLimit(http.HandlerFunc(h.handleSubmit)))
 	// Space subdomains serve forms at /{slug} (GET /{slug} below), so the
 	// buyer-facing submit must resolve there too. handleSubmit scopes by
@@ -869,6 +873,7 @@ var formTmpl = template.Must(template.New("form").Funcs(formFuncs).Parse(`<!doct
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+{{if .NoIndex}}<meta name="robots" content="noindex, nofollow">{{end}}
 <title>{{.Title}}</title>
 <style>
   :root { color-scheme: light; }
@@ -1037,12 +1042,16 @@ func (h *PublicHandlers) renderLegacy(w http.ResponseWriter, r *http.Request, f 
 		Footer footerInfo
 		// Issue #244: hidden honeypot + render-timestamp fields.
 		AntiSpam template.HTML
+		// Issue #276: noindex on jomform.com subdomains / when the space opts
+		// out of indexing.
+		NoIndex bool
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := formTmpl.Execute(w, view{
 		Slug: f.Slug, Title: f.Title, Description: cfg.Description, Products: prods,
 		Footer:   h.spaceFooter(r.Context(), f),
 		AntiSpam: template.HTML(antiSpamRenderFields()),
+		NoIndex:  h.formNoIndex(r, f),
 	}); err != nil {
 		slog.Error("form_render", "err", err)
 	}
@@ -1233,6 +1242,29 @@ func rewriteHostedLegalURL(raw, spaceSlug string) string {
 	}
 	u.Host = spaceSlug + ".jomform.com"
 	return u.String()
+}
+
+// formNoIndex reports whether a public form must be noindexed (issue #276).
+// Policy:
+//   - jomform.com subdomains ({space}.jomform.com) are ALWAYS noindex —
+//     privacy: payment links shouldn't appear on Google.
+//   - custom domains are indexed only when the space's indexing toggle is on.
+//   - bare jomform.com apex never serves forms (issue #77), so it's moot.
+func (h *PublicHandlers) formNoIndex(r *http.Request, f *dbstore.Form) bool {
+	if accountSubdomain(r.Host) != "" {
+		return true
+	}
+	if customDomainOwner(r.Context(), h.Accounts, h.Domains, r.Host) != "" {
+		if h.Spaces == nil {
+			return false
+		}
+		idx, err := h.Spaces.IndexingByAccount(r.Context(), f.AccountID)
+		if err != nil {
+			return false
+		}
+		return !idx
+	}
+	return true
 }
 
 // serveForm renders a resolved form (blocks or legacy) and logs unknown

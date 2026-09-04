@@ -1,8 +1,17 @@
+import type { Metadata } from "next";
 import { PRIVACY_SECTIONS, PRIVACY_POLICY } from "../privacy-content";
 
-export const metadata = {
+export const metadata: Metadata = {
   title: "Privacy Policy — JomForm",
   description: "How JomForm collects, uses, and protects your data.",
+  alternates: { canonical: "https://jomform.com/legal/privacy" },
+  openGraph: {
+    title: "Privacy Policy — JomForm",
+    description: "How JomForm collects, uses, and protects your data.",
+    url: "https://jomform.com/legal/privacy",
+    siteName: "JomForm",
+    type: "website",
+  },
 };
 
 export default function PrivacyPage() {

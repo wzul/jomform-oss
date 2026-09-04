@@ -213,6 +213,12 @@ type SpaceSettings struct {
 	// amounts are stored in this currency's minor units. Historical sales keep
 	// their original currency (never auto-converted).
 	Currency string `json:"currency"`
+	// Indexing is the per-space SEO toggle (issue #276). When true (default)
+	// the space's public storefront + forms are eligible for search-engine /
+	// AI indexing on the jomform.com apex and on custom domains. When false
+	// the space opts out of indexing entirely. Public forms on jomform.com
+	// subdomains are always noindex regardless of this flag (privacy).
+	Indexing bool `json:"indexing"`
 }
 
 // SpaceLang returns the storefront default language code, or a fallback when
@@ -239,11 +245,11 @@ func (st *SpaceSettings) SpaceCurrency() string {
 
 // Settings reads (creating default row when missing) the storefront config.
 func (s *SpaceStore) Settings(ctx context.Context, spaceID string) (*SpaceSettings, error) {
-	st := &SpaceSettings{SpaceID: spaceID, MenuJSON: "[]", DefaultLang: "en", Currency: "MYR"}
+	st := &SpaceSettings{SpaceID: spaceID, MenuJSON: "[]", DefaultLang: "en", Currency: "MYR", Indexing: true}
 	err := s.pool.QueryRow(ctx,
-		`SELECT footer_text, company_reg, privacy_url, terms_url, refund_url, contact_phone, contact_address, business_name, menu_json::text, default_lang, currency
+		`SELECT footer_text, company_reg, privacy_url, terms_url, refund_url, contact_phone, contact_address, business_name, menu_json::text, default_lang, currency, indexing
 		   FROM space_settings WHERE space_id=$1`,
-		spaceID).Scan(&st.FooterText, &st.CompanyReg, &st.PrivacyURL, &st.TermsURL, &st.RefundURL, &st.ContactPhone, &st.ContactAddress, &st.BusinessName, &st.MenuJSON, &st.DefaultLang, &st.Currency)
+		spaceID).Scan(&st.FooterText, &st.CompanyReg, &st.PrivacyURL, &st.TermsURL, &st.RefundURL, &st.ContactPhone, &st.ContactAddress, &st.BusinessName, &st.MenuJSON, &st.DefaultLang, &st.Currency, &st.Indexing)
 	if err != nil {
 		// default row
 		_, ierr := s.pool.Exec(ctx,
@@ -258,16 +264,17 @@ func (s *SpaceStore) Settings(ctx context.Context, spaceID string) (*SpaceSettin
 // SaveSettings upserts the storefront config.
 func (s *SpaceStore) SaveSettings(ctx context.Context, st *SpaceSettings) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO space_settings (space_id, footer_text, company_reg, privacy_url, terms_url, refund_url, contact_phone, contact_address, business_name, menu_json, default_lang, currency)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12)
+		`INSERT INTO space_settings (space_id, footer_text, company_reg, privacy_url, terms_url, refund_url, contact_phone, contact_address, business_name, menu_json, default_lang, currency, indexing)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13)
 		 ON CONFLICT (space_id) DO UPDATE SET
 		   footer_text=EXCLUDED.footer_text, company_reg=EXCLUDED.company_reg,
 		   privacy_url=EXCLUDED.privacy_url, terms_url=EXCLUDED.terms_url,
 		   refund_url=EXCLUDED.refund_url, contact_phone=EXCLUDED.contact_phone,
 		   contact_address=EXCLUDED.contact_address, business_name=EXCLUDED.business_name,
 		   menu_json=EXCLUDED.menu_json,
-		   default_lang=EXCLUDED.default_lang, currency=EXCLUDED.currency`,
-		st.SpaceID, st.FooterText, st.CompanyReg, st.PrivacyURL, st.TermsURL, st.RefundURL, st.ContactPhone, st.ContactAddress, st.BusinessName, st.MenuJSON, st.SpaceLang(), st.SpaceCurrency())
+		   default_lang=EXCLUDED.default_lang, currency=EXCLUDED.currency,
+		   indexing=EXCLUDED.indexing`,
+		st.SpaceID, st.FooterText, st.CompanyReg, st.PrivacyURL, st.TermsURL, st.RefundURL, st.ContactPhone, st.ContactAddress, st.BusinessName, st.MenuJSON, st.SpaceLang(), st.SpaceCurrency(), st.Indexing)
 	return err
 }
 
@@ -286,6 +293,49 @@ func (s *SpaceStore) SpaceCurrencyByAccount(ctx context.Context, accountID strin
 		return "", err
 	}
 	return cur, nil
+}
+
+// IndexingByAccount resolves whether the space owning the given account has
+// indexing enabled (issue #276). Defaults to true when the account has no
+// linked space (legacy) or the setting is unset. Used by the public form
+// renderer to decide whether a custom-domain form may be indexed.
+func (s *SpaceStore) IndexingByAccount(ctx context.Context, accountID string) (bool, error) {
+	var idx bool
+	err := s.pool.QueryRow(ctx,
+		`SELECT COALESCE(ss.indexing, TRUE)
+		   FROM accounts a
+		   LEFT JOIN space_settings ss ON ss.space_id = a.space_id
+		  WHERE a.id=$1`, accountID).Scan(&idx)
+	if err != nil {
+		return true, err
+	}
+	return idx, nil
+}
+
+// IndexedSpaceURLs returns the custom-domain URLs of spaces that have indexing
+// enabled (issue #276). Only verified custom domains count; the jomform.com
+// apex is handled by the web app. Used to build sitemap.xml.
+func (s *SpaceStore) IndexedSpaceURLs(ctx context.Context) ([]string, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT DISTINCT ad.domain
+		   FROM space_settings ss
+		   JOIN accounts a ON a.space_id = ss.space_id
+		   JOIN account_domains ad ON ad.account_id = a.id
+		  WHERE ss.indexing = TRUE AND ad.verified = TRUE
+		  ORDER BY ad.domain`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var d string
+		if err := rows.Scan(&d); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
 }
 
 // IDBySlug resolves a space id from its slug ("" when unknown).
