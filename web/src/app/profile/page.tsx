@@ -71,6 +71,12 @@ const COMMON_TIMEZONES = [
 
 function loadStoredTab(): ProfileTab {
   if (typeof window === "undefined") return "identity";
+  // Issue #310: when arriving via a social-connect callback (?linked=) or an
+  // explicit ?tab=connected, open the Social accounts tab so the user sees
+  // their freshly-linked account.
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("linked") !== null) return "connected";
+  if (params.get("tab") === "connected") return "connected";
   try {
     const v = window.localStorage.getItem("jf_profile_tab");
     if (v === "identity" || v === "security" || v === "passkeys" || v === "connected" || v === "mcp") return v;

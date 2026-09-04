@@ -215,7 +215,10 @@ func (a *AuthHandlers) socialCallback(w http.ResponseWriter, r *http.Request) {
 	// 2) logged-in session → LINK this provider to current user
 	if uid := a.currentUserID(r); uid != "" {
 		_ = a.Users.LinkIdentity(r.Context(), uid, provider, up.UID, up.Email, up.Name, up.Picture)
-		http.Redirect(w, r, "/settings?linked="+provider, http.StatusFound)
+		// Issue #310: connected accounts live on the Profile page (moved there
+		// in #301), so the social link callback must return the user to
+		// /profile instead of the old /settings redirect.
+		http.Redirect(w, r, "/profile?linked="+provider, http.StatusFound)
 		return
 	}
 

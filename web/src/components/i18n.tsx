@@ -563,7 +563,9 @@ const DICT = {
   "prof.identity": { en: "Identity", ms: "Identiti", zh: "身份", ta: "அடையாளம்", ar: "الهوية" },
   "prof.security": { en: "Security", ms: "Keselamatan", zh: "安全", ta: "பாதுகாப்பு", ar: "الأمان" },
   "prof.passkeys": { en: "Passkeys", ms: "Passkey", zh: "通行密钥", ta: "கடவுச்சாவிகள்", ar: "مفاتيح المرور" },
-  "prof.connected": { en: "Connected", ms: "Bersambung", zh: "已连接", ta: "இணைக்கப்பட்டது", ar: "متصل" },
+  // Issue #310: clearer tab label describing the content (social login
+  // connectors), not just the vague "Connected".
+  "prof.connected": { en: "Social accounts", ms: "Akaun sosial", zh: "社交账户", ta: "சமூக கணக்குகள்", ar: "الحسابات الاجتماعية" },
   // Issue #307: user-level MCP connected agents (OAuth clients bound to the
   // user — a connected agent can act across all the user's spaces).
   "prof.mcp": { en: "MCP agents", ms: "Agent MCP", zh: "MCP 代理", ta: "MCP முகவர்கள்", ar: "وكلاء MCP" },
