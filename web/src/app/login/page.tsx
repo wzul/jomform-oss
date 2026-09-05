@@ -122,10 +122,9 @@ export default function Login() {
     typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get("invite") || ""
   );
   const codeRef = useRef<HTMLInputElement>(null);
-  // Issue #304: the default (passwordless) login page doubles as the signup
-  // entry. See goSignup below.
+  // Issue #313: the default (email-first) view doubles as the signup entry.
+  // See the magic-mode hint below.
   const emailRef = useRef<HTMLInputElement>(null);
-  const [signupHint, setSignupHint] = useState(false);
 
   useEffect(() => {
     // Issue #140: read ?next once after mount for the OAuth redirect path.
@@ -276,15 +275,6 @@ export default function Login() {
     codeRef.current?.focus();
   }
 
-  // Issue #304: the default (passwordless) login page doubles as the signup
-  // entry. goSignup focuses the single email input so a new user can type
-  // their address and sign up through the existing hybrid magic-link flow
-  // (#278) — no need to first open the password form.
-  function goSignup() {
-    setSignupHint(true);
-    window.setTimeout(() => emailRef.current?.focus(), 50);
-  }
-
   // Issue #71: back to Step 1, email prefilled.
   function backToCredentials() {
     setStep(1);
@@ -373,7 +363,7 @@ export default function Login() {
                 : mode === "register"
                   ? t("login.registerTitle")
                   : mode === "magic"
-                    ? t("login.passwordless")
+                    ? t("login.emailFirstTitle")
                     : t("login.forgotTitle")}
           </h1>
           <p className="mt-1.5 text-sm text-[var(--jf-muted)]">
@@ -384,13 +374,17 @@ export default function Login() {
                 : mode === "register"
                   ? t("login.freeNote")
                   : mode === "magic"
-                    ? t("login.passwordlessDesc")
+                    ? t("login.emailFirstDesc")
                     : t("login.forgotDesc")}
           </p>
         </div>
 
         <div className="rounded-xl border border-[var(--jf-border)] bg-white p-6 shadow-[0_0_0_1px_rgba(0,0,0,0.2),0_8px_24px_rgba(0,0,0,0.4)]">
-          {/* tabs (hidden during the dedicated 2FA step and in forgot/magic modes) */}
+          {/* issue #313: the default (magic) view is the single email-first
+              screen — it handles BOTH login and signup, so no login/register
+              tabs. The login/register tab semantics only matter once the user
+              opens the password form (mode login/register). Hidden during the
+              dedicated 2FA step and in forgot mode. */}
           {step === 1 && mode !== "forgot" && mode !== "magic" && (
             <div className="mb-5 grid grid-cols-2 rounded-lg border border-[var(--jf-border)] bg-slate-100 p-0.5">
               {(["login", "register"] as const).map((m) => (
@@ -607,26 +601,20 @@ export default function Login() {
               )}
               {mode === "magic" && (
                 <div className="space-y-3">
-                  {/* Issue #304: the passwordless page is the signup entry too.
-                      A clear "New here?" call to action keeps signup discoverable
-                      without opening the password form — the hybrid magic-link
-                      flow (#278) creates + signs in a new account on click. */}
-                  <button
-                    type="button"
-                    onClick={goSignup}
-                    disabled={busy}
-                    className="text-[13px] font-medium text-[#5e6ad2] hover:underline"
-                  >
-                    {signupHint ? t("login.signupHere") : t("login.newHereSignup")}
-                  </button>
-                  {signupHint && (
-                    <p className="text-[12px] leading-snug text-[var(--jf-muted)]">
-                      {t("login.signupHint")}
-                    </p>
-                  )}
+                  {/* Issue #313: the single email field already handles BOTH
+                      login and signup (hybrid magic-link, #278). The hint below
+                      is a quiet reassurance for new users — no separate
+                      signup tab needed. */}
+                  <p className="text-[12px] leading-snug text-[var(--jf-muted)]">
+                    {t("login.newToJomform")}
+                  </p>
+                  {/* Password is the secondary option — a small link that opens
+                      the login/register password form. Only then do the
+                      login/register tab semantics matter. */}
                   <button
                     type="button"
                     onClick={() => { setMode("login"); setError(""); setDone(false); }}
+                    disabled={busy}
                     className="text-[13px] font-medium text-[#5e6ad2] hover:underline"
                   >
                     {t("login.loginWithPassword")} {t("login.orSignupWithPassword")}
@@ -638,7 +626,7 @@ export default function Login() {
                 disabled={busy}
                 className="mt-1 w-full rounded-md bg-[#5e6ad2] py-2 text-sm font-medium text-white transition-colors hover:bg-[#828fff] disabled:opacity-60"
               >
-                {busy ? "…" : mode === "login" ? t("login.submitLogin") : mode === "register" ? t("login.submitRegister") : mode === "magic" ? t("login.passwordlessSubmit") : t("login.forgotSubmit")}
+                {busy ? "…" : mode === "login" ? t("login.submitLogin") : mode === "register" ? t("login.submitRegister") : mode === "magic" ? t("login.continue") : t("login.forgotSubmit")}
               </button>
             </form>
           )}
