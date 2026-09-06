@@ -727,7 +727,14 @@ export default function Settings() {
             </p>
             <form onSubmit={save} className="mt-4 space-y-3">
               <div>
-                <label className="text-xs text-slate-500">Brand ID</label>
+                <label className="flex items-center gap-2 text-xs text-slate-500">
+                  Brand ID
+                  {verified && (
+                    <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                      {t("set.apiVerified")}
+                    </span>
+                  )}
+                </label>
                 <input
                   value={brandId}
                   onChange={(e) => setBrandId(e.target.value)}
@@ -750,9 +757,9 @@ export default function Settings() {
                   onChange={(e) => setSecretKey(e.target.value)}
                   type="text"
                   className="jf-input mt-1 max-w-xl font-mono"
-                  placeholder={secretMasked ? t("set.secretMaskedPlaceholder") : "sk_live_… / sk_test_…"}
+                  placeholder={verified && secretMasked ? t("set.secretMaskedPlaceholder") : "sk_live_… / sk_test_…"}
                 />
-                {secretMasked && (
+                {verified && secretMasked && (
                   <p className="mt-1 text-xs text-slate-400">
                     {t("set.secretMasked", { masked: secretMasked })}
                   </p>
