@@ -57,7 +57,7 @@ func (h *RESTHandlers) addCustomDomain(w http.ResponseWriter, r *http.Request, a
 	h.recordEvent(r, actx, h.sessionOwnerID(r), "settings.domain_added", map[string]any{"domain": domain})
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"id": d.ID, "domain": domain, "status": "pending_dns",
-		"hint":       "CNAME " + domain + " → jomform.com (atau A ke origin), kemudian Verify",
+		"hint":       "CNAME " + domain + " → custom.jomform.com (atau A ke origin), kemudian Verify",
 		"cloudflare": cfNote,
 	})
 }
