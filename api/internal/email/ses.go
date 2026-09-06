@@ -80,11 +80,14 @@ func (s *Sender) Send(to, subject, body string) error {
 	return err
 }
 
-// SendReceipt delivers a plain-text email via SESv2 SendEmail and returns the
-// SES MessageID (issue #106). The MessageID is the correlation key the SNS
-// endpoint uses to tie an Open/Click/Delivered event back to the sale that
-// sent the receipt. An empty MessageID (SES accepted without a message id) is
-// not an error.
+// SendReceipt delivers a branded multipart email via SESv2 SendEmail and
+// returns the SES MessageID (issue #106). The MessageID is the correlation key
+// the SNS endpoint uses to tie an Open/Click/Delivered event back to the sale
+// that sent the receipt. An empty MessageID (SES accepted without a message id)
+// is not an error.
+//
+// Issue #339: the email is sent as multipart — a plain-text part (fallback for
+// clients without HTML) plus a branded HTML part (JomForm logo, colors, layout).
 func (s *Sender) SendReceipt(to, subject, body string) (string, error) {
 	cli, err := s.client()
 	if err != nil {
@@ -100,6 +103,7 @@ func (s *Sender) SendReceipt(to, subject, body string) (string, error) {
 				Subject: &types.Content{Data: aws.String(subject)},
 				Body: &types.Body{
 					Text: &types.Content{Data: aws.String(body)},
+					Html: &types.Content{Data: aws.String(BrandedHTML(subject, body))},
 				},
 			},
 		},
@@ -150,9 +154,12 @@ func (s *Sender) SendReceiptWithAttachment(to, subject, body string, filename st
 }
 
 // buildMultipart assembles a multipart/mixed MIME message with a base64
-// attachment, matching the previous SMTP attachment format.
+// attachment, matching the previous SMTP attachment format. The body is a
+// nested multipart/alternative carrying both the plain-text fallback and the
+// branded HTML part (issue #339).
 func buildMultipart(from, to, subject, body, filename string, data []byte) []byte {
 	boundary := "jf-boundary-7f3a9c1b"
+	altBoundary := "jf-alt-4d2e8f0a"
 	var b strings.Builder
 	b.WriteString("From: " + from + "\r\n")
 	b.WriteString("To: " + to + "\r\n")
@@ -161,8 +168,18 @@ func buildMultipart(from, to, subject, body, filename string, data []byte) []byt
 	b.WriteString("Content-Type: multipart/mixed; boundary=\"" + boundary + "\"\r\n\r\n")
 
 	b.WriteString("--" + boundary + "\r\n")
+	b.WriteString("Content-Type: multipart/alternative; boundary=\"" + altBoundary + "\"\r\n\r\n")
+
+	b.WriteString("--" + altBoundary + "\r\n")
 	b.WriteString("Content-Type: text/plain; charset=\"utf-8\"\r\n\r\n")
 	b.WriteString(body + "\r\n")
+
+	b.WriteString("--" + altBoundary + "\r\n")
+	b.WriteString("Content-Type: text/html; charset=\"utf-8\"\r\n")
+	b.WriteString("Content-Transfer-Encoding: quoted-printable\r\n\r\n")
+	b.WriteString(quotedPrintable(BrandedHTML(subject, body)) + "\r\n")
+
+	b.WriteString("--" + altBoundary + "--\r\n")
 
 	b.WriteString("--" + boundary + "\r\n")
 	b.WriteString("Content-Type: application/pdf; name=\"" + filename + "\"\r\n")
@@ -179,4 +196,30 @@ func buildMultipart(from, to, subject, body, filename string, data []byte) []byt
 	}
 	b.WriteString("--" + boundary + "--\r\n")
 	return []byte(b.String())
+}
+
+// quotedPrintable encodes a string for the quoted-printable transfer encoding
+// so long HTML lines (which email clients choke on) are soft-wrapped at 76
+// chars. Non-ASCII bytes are encoded as =XX so the HTML stays 7-bit safe.
+func quotedPrintable(s string) string {
+	var b strings.Builder
+	line := 0
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		var enc string
+		if c == '=' {
+			enc = "=3D"
+		} else if c >= 33 && c <= 126 && c != '=' {
+			enc = string(c)
+		} else {
+			enc = "=" + strings.ToUpper(fmt.Sprintf("%02X", c))
+		}
+		if line+len(enc) > 75 {
+			b.WriteString("=\r\n")
+			line = 0
+		}
+		b.WriteString(enc)
+		line += len(enc)
+	}
+	return b.String()
 }
