@@ -363,7 +363,7 @@ const DICT = {
   "builder.unsaved": { en: "unsaved", ms: "belum disimpan", zh: "未保存", ta: "சேமிக்கப்படவில்லை", ar: "غير محفوظ" },
   // settings
   "set.title": { en: "Settings", ms: "Tetapan", zh: "设置", ta: "அமைப்புகள்", ar: "الإعدادات" },
-  "set.chipTitle": { en: "CHIP Payment Gateway", ms: "Gerbang Bayaran CHIP", zh: "CHIP 支付网关", ta: "CHIP பணம் செலுத்தும் நுழைவாயில்", ar: "بوابة الدفع CHIP" },
+  "set.chipTitle": { en: "CHIP Collect", ms: "CHIP Collect", zh: "CHIP Collect", ta: "CHIP Collect", ar: "CHIP Collect" },
   "set.getYour": { en: "Get your", ms: "Dapatkan", zh: "获取您的", ta: "பெறுங்கள்", ar: "احصل على" },
   "set.and": { en: "&", ms: "&", zh: "和", ta: "&", ar: "&" },
   "set.from": { en: "from", ms: "dari", zh: "来自", ta: "இருந்து", ar: "من" },
