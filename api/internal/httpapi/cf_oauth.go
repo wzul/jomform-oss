@@ -414,13 +414,20 @@ func cfTokenRequest(ctx context.Context, form url.Values) (*cfTokenPair, error) 
 }
 
 func cfVerifyToken(ctx context.Context, accessToken string) error {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, cfAPIBase+"/user/tokens/verify", nil)
+	// GET /user with a Bearer OAuth access token confirms the token is valid
+	// and active. Do NOT use /user/tokens/verify — that endpoint only accepts
+	// Cloudflare API tokens (not OAuth access tokens) and returns success=false
+	// ("inactive") for an otherwise-valid OAuth token.
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, cfAPIBase+"/user", nil)
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return fmt.Errorf("token ditolak oleh Cloudflare")
+	}
 	var vr struct {
 		Success bool `json:"success"`
 	}
