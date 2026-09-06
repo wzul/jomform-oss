@@ -10,6 +10,9 @@ import { spaceQuery, spaceScope } from "../../lib/space";
 import { MembersTab } from "../../components/MembersTab";
 import { LegalTab } from "../../components/LegalTab";
 
+// Issue #323: the CNAME target is consistent across all custom-domain copy.
+const CNAME_TARGET = "custom.jomform.com";
+
 type ChipStatus = { configured: boolean; verified?: boolean; mode?: string; secret_key_masked?: string };
 
 // Issue #326: CHIP mode is NOT user-set — it is auto-derived from the secret
@@ -131,6 +134,8 @@ export default function Settings() {
   const [domainVerified, setDomainVerified] = useState(false);
   const [domains, setDomains] = useState<{ id: string; domain: string; verified: boolean }[]>([]);
   const [domainMsg, setDomainMsg] = useState("");
+  // Issue #324: domains currently being auto-polled for DNS propagation.
+  const [polling, setPolling] = useState<Record<string, boolean>>({});
   const [tin, setTin] = useState("");
   const [msic, setMsic] = useState("");
   const [webhooks, setWebhooks] = useState<{ id: string; url: string; events: string[] }[]>([]);
@@ -284,6 +289,52 @@ export default function Settings() {
         if (Array.isArray(list)) setDomains(list);
       });
   }, []);
+
+  // Issue #324: verify a single domain and surface the result. Returns true
+  // when the domain is now verified (so callers can stop polling).
+  const verifyDomain = useCallback(
+    async (d: { id: string; domain: string }): Promise<boolean> => {
+      const r = await fetch(`/api/rest/domains/${d.id}/verify${spaceQuery()}`, { method: "POST" });
+      // Issue #242: the backend returns HTTP 200 with {verified:false, detail}
+      // on failure, so r.ok is not enough — only treat it as verified when the
+      // body says verified:true.
+      const body = await r.json().catch(() => ({}));
+      if (body && body.verified === true) {
+        setDomainMsg(t("set.domainVerified", { domain: d.domain }));
+        return true;
+      }
+      return false;
+    },
+    [t],
+  );
+
+  // Issue #324: auto-poll a pending domain every ~20s (up to ~3 minutes) so the
+  // merchant doesn't have to keep clicking Verify while DNS propagates. Stops
+  // as soon as the domain flips to verified.
+  const startPolling = useCallback(
+    (d: { id: string; domain: string }) => {
+      setPolling((prev) => ({ ...prev, [d.id]: true }));
+      let attempts = 0;
+      const maxAttempts = 9; // 9 × 20s ≈ 3 minutes
+      const tick = async () => {
+        attempts += 1;
+        const ok = await verifyDomain(d);
+        if (ok) {
+          setPolling((prev) => ({ ...prev, [d.id]: false }));
+          await refreshDomains();
+          return;
+        }
+        if (attempts >= maxAttempts) {
+          setPolling((prev) => ({ ...prev, [d.id]: false }));
+          setDomainMsg(t("set.verifyFailDetail"));
+          return;
+        }
+        setTimeout(tick, 20000);
+      };
+      tick();
+    },
+    [verifyDomain, refreshDomains, t],
+  );
 
   useEffect(() => {
     load();
@@ -565,6 +616,9 @@ export default function Settings() {
       setDomainInput("");
       setDomainMsg(t("set.domainAdded", { domain: d.domain }));
       await refreshDomains();
+      // Issue #324: auto-poll the freshly added domain so the merchant doesn't
+      // have to keep clicking Verify while DNS propagates.
+      if (d && d.id) startPolling({ id: d.id, domain: d.domain });
     } else {
       const d = await r.json().catch(() => ({}));
       setDomainMsg(d.error || t("set.failedAddDomain"));
@@ -840,56 +894,81 @@ export default function Settings() {
               </form>
               <ul className="mt-4 space-y-2">
                 {domains.map((d: { id: string; domain: string; verified: boolean }) => (
-                  <li key={d.id} className="flex items-center justify-between gap-3 rounded-lg border border-[var(--jf-border)] px-4 py-2.5">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium">{d.domain}</p>
-                      <p className={`text-[11px] ${d.verified ? "text-emerald-600" : "text-amber-600"}`}>
-                        {d.verified ? t("set.verified") : t("set.pendingDns")}
-                      </p>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-2">
-                      {!d.verified && (
+                  <li key={d.id} className="rounded-lg border border-[var(--jf-border)] px-4 py-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium">{d.domain}</p>
+                        {d.verified ? (
+                          <p className="text-[11px] text-emerald-600">{t("set.verified")}</p>
+                        ) : (
+                          <p className="flex items-center gap-1.5 text-[11px] text-amber-600">
+                            {polling[d.id] && (
+                              <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-amber-500 border-t-transparent" />
+                            )}
+                            {polling[d.id] ? t("set.checkingDns") : t("set.pendingDns")}
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        {!d.verified && (
+                          <button
+                            onClick={() => startPolling(d)}
+                            disabled={!!polling[d.id]}
+                            className="rounded-md bg-[var(--jf-primary)] px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {polling[d.id] ? t("set.checkingDns") : t("set.verifyCta")}
+                          </button>
+                        )}
                         <button
                           onClick={async () => {
-                            const r = await fetch(`/api/rest/domains/${d.id}/verify${spaceQuery()}`, { method: "POST" });
-                            // Issue #242: the backend returns HTTP 200 with
-                            // {verified:false, detail} on failure, so r.ok is
-                            // not enough — only show "verified ✓" when the
-                            // body says verified:true, otherwise surface the
-                            // failure detail.
-                            const body = await r.json().catch(() => ({}));
-                            if (body && body.verified === true) {
-                              setDomainMsg(t("set.domainVerified", { domain: d.domain }));
-                            } else {
-                              // Issue #261: the backend returns a stable error
-                              // code (e.g. "verify_failed") in body.detail, not
-                              // a hardcoded Malay string. Map the code to the
-                              // selected UI language via t().
-                              const code = body?.detail;
-                              setDomainMsg(
-                                code === "verify_failed"
-                                  ? t("set.verifyFailDetail")
-                                  : code || t("set.verifyFailed", { domain: d.domain }),
-                              );
-                            }
-                            refreshDomains();
+                            await fetch(`/api/rest/domains/${d.id}${spaceQuery()}`, { method: "DELETE" });
+                            // Issue #321: load() reads bundle.domains from the closure's stale
+                            // bundle, so the removed domain would linger until reloadSession()
+                            // re-renders. refreshDomains() refetches the list directly so the
+                            // domain disappears immediately (same as the verify flow).
+                            setDomains((prev) => prev.filter((x) => x.id !== d.id));
+                            await refreshDomains();
                           }}
-                          className="text-xs text-[#5e6ad2] hover:underline"
-                        >{t("set.verify")}</button>
-                      )}
-                      <button
-                        onClick={async () => {
-                          await fetch(`/api/rest/domains/${d.id}${spaceQuery()}`, { method: "DELETE" });
-                          // Issue #321: load() reads bundle.domains from the closure's stale
-                          // bundle, so the removed domain would linger until reloadSession()
-                          // re-renders. refreshDomains() refetches the list directly so the
-                          // domain disappears immediately (same as the verify flow).
-                          setDomains((prev) => prev.filter((x) => x.id !== d.id));
-                          await refreshDomains();
-                        }}
-                        className="text-xs text-slate-500 hover:text-red-500"
-                      >{t("set.remove")}</button>
+                          className="text-xs text-slate-500 hover:text-red-500"
+                        >{t("set.remove")}</button>
+                      </div>
                     </div>
+                    {!d.verified && (
+                      <div className="mt-2 rounded-md bg-slate-50 px-3 py-2">
+                        <p className="text-[11px] font-medium text-slate-500">{t("set.cnameRow")}</p>
+                        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-xs text-slate-700">
+                          <span className="rounded bg-white px-1.5 py-0.5 ring-1 ring-slate-200">CNAME</span>
+                          <span className="rounded bg-white px-1.5 py-0.5 ring-1 ring-slate-200">{d.domain}</span>
+                          <span className="text-slate-400">→</span>
+                          <span className="rounded bg-white px-1.5 py-0.5 ring-1 ring-slate-200">{CNAME_TARGET}</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard?.writeText(`CNAME ${d.domain} → ${CNAME_TARGET}`);
+                              setDomainMsg(t("set.copy"));
+                            }}
+                            className="ml-1 text-[11px] text-[#5e6ad2] hover:underline"
+                          >
+                            {t("set.copy")}
+                          </button>
+                        </div>
+                        {polling[d.id] && (
+                          <p className="mt-1.5 text-[11px] text-slate-400">{t("set.pollingHint")}</p>
+                        )}
+                      </div>
+                    )}
+                    {d.verified && (
+                      <div className="mt-2">
+                        <a
+                          href={`https://${d.domain}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-xs font-semibold text-emerald-600 hover:underline"
+                        >
+                          {t("set.liveLink", { domain: d.domain })}
+                        </a>
+                      </div>
+                    )}
                   </li>
                 ))}
               </ul>
