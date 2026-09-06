@@ -29,10 +29,14 @@ const (
 	// cfOAuthScope is the Cloudflare OAuth scope set requested on the consent
 	// screen. Without a scope param Cloudflare shows "0 total permissions" and
 	// disables the Authorize button (issue #288). For auto-CNAME (#22) we need:
-	//   zone:read     — find the merchant's zone (resolve CNAME target)
-	//   dns:edit      — create/edit the CNAME record
-	//   account:read  — resolve the account owning the token
-	cfOAuthScope = "zone:read dns:edit account:read"
+	//   zone.read  — list zones (resolve the CNAME target zone)
+	//   dns.write  — create/edit the CNAME record
+	// NOTE: Cloudflare OAuth scope IDs use dot-notation (zone.read, dns.write,
+	// account.read). The old colon form (zone:read dns:edit) was invalid and
+	// Cloudflare rejected every flow with "OAuth 2.0 Client is not allowed to
+	// request scope 'zone:read'". account.read is not required for the zone/DNS
+	// calls below, so it is omitted.
+	cfOAuthScope = "zone.read dns.write"
 )
 
 func cfClientID() string     { return os.Getenv("JF_CF_OAUTH_CLIENT_ID") }
