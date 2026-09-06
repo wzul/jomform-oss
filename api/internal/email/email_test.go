@@ -48,7 +48,6 @@ func TestBrandedHTML(t *testing.T) {
 		"Resit pembayaran", // title
 		"Rujukan : ABC123", // body content
 		"Made in Malaysia",
-		"Payments by CHIP",
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("mesti ada %q", want)

@@ -74,7 +74,7 @@ func BrandedHTML(title, body string) string {
           <!-- Footer -->
           <tr>
             <td align="center" style="padding:24px 0 0 0;font-size:12px;line-height:1.5;color:#6b7280;">
-              <div>JomForm — Made in Malaysia. Payments by CHIP.</div>
+              <div>JomForm — Made in Malaysia.</div>
               <div style="padding-top:4px;">Jika anda tidak meminta emel ini, anda boleh abaikan sahaja.</div>
               <div style="padding-top:4px;">&copy; JomForm. Hak cipta terpelihara.</div>
             </td>

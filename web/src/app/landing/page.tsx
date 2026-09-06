@@ -121,11 +121,7 @@ export default function Landing() {
           <a href="/brand" className="hover:underline">Brand</a>
         </div>
         <p>
-          {t("land.footer")}{" "}
-          <a href="https://chip-in.asia" className="underline hover:text-slate-700">
-            CHIP
-          </a>
-          .
+          {t("land.footer")}
         </p>
       </footer>
     </main>
