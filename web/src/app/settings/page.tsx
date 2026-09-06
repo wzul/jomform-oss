@@ -132,8 +132,11 @@ export default function Settings() {
   const [domain, setDomain] = useState("");
   const [domainInput, setDomainInput] = useState("");
   const [domainVerified, setDomainVerified] = useState(false);
-  const [domains, setDomains] = useState<{ id: string; domain: string; verified: boolean }[]>([]);
+  // Issue #322: per-domain auto-CNAME status ("created" | "failed" | "").
+  const [domains, setDomains] = useState<{ id: string; domain: string; verified: boolean; auto_cname?: string }[]>([]);
   const [domainMsg, setDomainMsg] = useState("");
+  // Issue #322: domains currently running a one-click auto-CNAME request.
+  const [autoCnameBusy, setAutoCnameBusy] = useState<Record<string, boolean>>({});
   // Issue #324: domains currently being auto-polled for DNS propagation.
   const [polling, setPolling] = useState<Record<string, boolean>>({});
   const [tin, setTin] = useState("");
@@ -614,7 +617,14 @@ export default function Settings() {
     if (r.ok) {
       const d = await r.json();
       setDomainInput("");
-      setDomainMsg(t("set.domainAdded", { domain: d.domain }));
+      // Issue #322: surface the auto-CNAME result instead of silent best-effort.
+      if (d.auto_cname === "created") {
+        setDomainMsg(t("set.autoCnameCreated"));
+      } else if (d.auto_cname === "failed") {
+        setDomainMsg(t("set.autoCnameFailed", { error: d.cloudflare || "" }));
+      } else {
+        setDomainMsg(t("set.domainAdded", { domain: d.domain }));
+      }
       await refreshDomains();
       // Issue #324: auto-poll the freshly added domain so the merchant doesn't
       // have to keep clicking Verify while DNS propagates.
@@ -622,6 +632,27 @@ export default function Settings() {
     } else {
       const d = await r.json().catch(() => ({}));
       setDomainMsg(d.error || t("set.failedAddDomain"));
+    }
+  }
+
+  // Issue #322: one-click auto-CNAME for a domain via the linked Cloudflare
+  // account. Surfaces success/failure instead of silently falling back.
+  async function autoCreateCname(d: { id: string; domain: string }) {
+    setAutoCnameBusy((prev) => ({ ...prev, [d.id]: true }));
+    setDomainMsg("");
+    try {
+      const r = await fetch(`/api/rest/domains/${d.id}/auto-cname${spaceQuery()}`, { method: "POST" });
+      const res = await r.json().catch(() => ({}));
+      if (res.auto_cname === "created") {
+        setDomainMsg(t("set.autoCnameCreated"));
+      } else if (res.auto_cname === "failed") {
+        setDomainMsg(t("set.autoCnameFailed", { error: res.error || "" }));
+      } else {
+        setDomainMsg(t("set.autoCnameNotLinked"));
+      }
+      await refreshDomains();
+    } finally {
+      setAutoCnameBusy((prev) => ({ ...prev, [d.id]: false }));
     }
   }
 
@@ -892,8 +923,12 @@ export default function Settings() {
                 />
                 <button className="jf-btn-primary" type="submit">{t("set.addDomain")}</button>
               </form>
+              {/* Issue #322: when Cloudflare is linked, offer one-click auto-CNAME. */}
+              {cfLinked && (
+                <p className="mt-2 text-xs text-emerald-600">{t("set.autoCnameHint")}</p>
+              )}
               <ul className="mt-4 space-y-2">
-                {domains.map((d: { id: string; domain: string; verified: boolean }) => (
+                {domains.map((d: { id: string; domain: string; verified: boolean; auto_cname?: string }) => (
                   <li key={d.id} className="rounded-lg border border-[var(--jf-border)] px-4 py-3">
                     <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
@@ -908,6 +943,13 @@ export default function Settings() {
                             {polling[d.id] ? t("set.checkingDns") : t("set.pendingDns")}
                           </p>
                         )}
+                        {/* Issue #322: per-domain auto-CNAME status. */}
+                        {d.auto_cname === "created" && (
+                          <p className="text-[11px] text-emerald-600">{t("set.autoCnameStatusCreated")}</p>
+                        )}
+                        {d.auto_cname === "failed" && (
+                          <p className="text-[11px] text-red-600">{t("set.autoCnameStatusFailed")}</p>
+                        )}
                       </div>
                       <div className="flex shrink-0 items-center gap-2">
                         {!d.verified && (
@@ -917,6 +959,16 @@ export default function Settings() {
                             className="rounded-md bg-[var(--jf-primary)] px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
                           >
                             {polling[d.id] ? t("set.checkingDns") : t("set.verifyCta")}
+                          </button>
+                        )}
+                        {/* Issue #322: one-click auto-CNAME for a pending domain. */}
+                        {!d.verified && cfLinked && d.auto_cname !== "created" && (
+                          <button
+                            onClick={() => autoCreateCname(d)}
+                            disabled={!!autoCnameBusy[d.id]}
+                            className="rounded-md border border-[var(--jf-primary)] px-3 py-1.5 text-xs font-semibold text-[var(--jf-primary)] transition-colors hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {autoCnameBusy[d.id] ? t("set.autoCnameBusy") : t("set.autoCnameCta")}
                           </button>
                         )}
                         <button

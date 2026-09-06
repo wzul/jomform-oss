@@ -198,6 +198,7 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /v1/rest/domains", h.authed(h.listCustomDomains))
 	mux.Handle("POST /v1/rest/domains", h.authed(h.addCustomDomain))
 	mux.Handle("POST /v1/rest/domains/{id}/verify", h.authed(h.verifyCustomDomainByID))
+	mux.Handle("POST /v1/rest/domains/{id}/auto-cname", h.authed(h.autoCreateCNAMEForDomain))
 	mux.Handle("DELETE /v1/rest/domains/{id}", h.authed(h.deleteCustomDomainByID))
 	mux.Handle("DELETE /v1/rest/settings/custom-domain", h.authed(h.deleteCustomDomain))
 	mux.Handle("POST /v1/rest/sales/{ref}/confirm", h.authed(h.confirmSale))

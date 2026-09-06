@@ -18,7 +18,10 @@ type AccountDomain struct {
 	Provider   string // cname
 	Verified   bool
 	VerifiedAt *time.Time
-	CreatedAt  time.Time
+	// AutoCNAME records whether the CNAME was auto-created via the linked
+	// Cloudflare account (issue #322): "created" | "failed" | "" (manual).
+	AutoCNAME string
+	CreatedAt time.Time
 }
 
 // DomainStore wraps account_domains.
@@ -36,20 +39,28 @@ func (s *DomainStore) AddDomain(ctx context.Context, accountID, domain, provider
 	return d, err
 }
 
+// SetAutoCNAME records the auto-CNAME attempt result for a domain (issue #322).
+func (s *DomainStore) SetAutoCNAME(ctx context.Context, accountID, domain, status string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE account_domains SET auto_cname=$3 WHERE domain=$1 AND account_id=$2`,
+		domain, accountID, status)
+	return err
+}
+
 // GetDomain fetches a claim by uuid + account.
 func (s *DomainStore) GetDomain(ctx context.Context, accountID, id string) (*AccountDomain, error) {
 	d := &AccountDomain{}
 	err := s.pool.QueryRow(ctx,
-		`SELECT id, account_id, domain, provider, verified, verified_at, created_at
+		`SELECT id, account_id, domain, provider, verified, verified_at, auto_cname, created_at
 		 FROM account_domains WHERE id=$1 AND account_id=$2`, id, accountID).
-		Scan(&d.ID, &d.AccountID, &d.Domain, &d.Provider, &d.Verified, &d.VerifiedAt, &d.CreatedAt)
+		Scan(&d.ID, &d.AccountID, &d.Domain, &d.Provider, &d.Verified, &d.VerifiedAt, &d.AutoCNAME, &d.CreatedAt)
 	return d, err
 }
 
 // ListDomains lists all domains claimed by an account.
 func (s *DomainStore) ListDomains(ctx context.Context, accountID string) ([]*AccountDomain, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, account_id, domain, provider, verified, verified_at, created_at
+		`SELECT id, account_id, domain, provider, verified, verified_at, auto_cname, created_at
 		 FROM account_domains WHERE account_id=$1 ORDER BY created_at`, accountID)
 	if err != nil {
 		return nil, err
@@ -59,7 +70,7 @@ func (s *DomainStore) ListDomains(ctx context.Context, accountID string) ([]*Acc
 	for rows.Next() {
 		d := &AccountDomain{}
 		if err := rows.Scan(&d.ID, &d.AccountID, &d.Domain, &d.Provider, &d.Verified,
-			&d.VerifiedAt, &d.CreatedAt); err != nil {
+			&d.VerifiedAt, &d.AutoCNAME, &d.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, d)

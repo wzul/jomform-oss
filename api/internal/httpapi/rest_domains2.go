@@ -43,14 +43,19 @@ func (h *RESTHandlers) addCustomDomain(w http.ResponseWriter, r *http.Request, a
 	}
 	// Traefik file-provider route is handled by the plain deployment (issue #236).
 	// Auto-CNAME: when the merchant linked Cloudflare, create the proxied
-	// CNAME record in their zone (issue #22). Best-effort — the manual
-	// CNAME path below never blocks on CF failures.
-	cfNote := ""
+	// CNAME record in their zone (issue #22). The result is surfaced to the
+	// UI (issue #322) instead of being silent best-effort: on success the
+	// merchant sees "CNAME created automatically"; on failure they see the
+	// real reason and can fall back to the manual path.
+	autoCNAME := "not_cloudflare"
 	if cfOAuthConfigured() {
 		if err := h.cfCreateCNAMEForDomain(r.Context(), actx.Account.ID, domain); err != nil {
-			slog.Info("cf_auto_cname_skipped", "domain", domain, "err", err)
+			slog.Info("cf_auto_cname_failed", "domain", domain, "err", err)
+			autoCNAME = "failed"
+			_ = h.Domains.SetAutoCNAME(r.Context(), actx.Account.ID, domain, "failed")
 		} else {
-			cfNote = "CNAME record created automatically via Cloudflare."
+			autoCNAME = "created"
+			_ = h.Domains.SetAutoCNAME(r.Context(), actx.Account.ID, domain, "created")
 		}
 	}
 	// Issue #92: audit custom-domain add.
@@ -58,8 +63,21 @@ func (h *RESTHandlers) addCustomDomain(w http.ResponseWriter, r *http.Request, a
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"id": d.ID, "domain": domain, "status": "pending_dns",
 		"hint":       "CNAME " + domain + " → custom.jomform.com (atau A ke origin), kemudian Verify",
-		"cloudflare": cfNote,
+		"cloudflare": cfNote(autoCNAME),
+		"auto_cname": autoCNAME,
 	})
+}
+
+// cfNote returns a short human note for the auto-CNAME result (issue #322).
+func cfNote(status string) string {
+	switch status {
+	case "created":
+		return "CNAME record created automatically via Cloudflare."
+	case "failed":
+		return "Couldn't auto-create the CNAME via Cloudflare — set it manually."
+	default:
+		return ""
+	}
 }
 
 // cfCreateCNAMEForDomain resolves the merchant's CF zone for domain and
@@ -79,16 +97,43 @@ func (h *RESTHandlers) listCustomDomains(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	type row struct {
-		ID       string `json:"id"`
-		Domain   string `json:"domain"`
-		Provider string `json:"provider"`
-		Verified bool   `json:"verified"`
+		ID        string `json:"id"`
+		Domain    string `json:"domain"`
+		Provider  string `json:"provider"`
+		Verified  bool   `json:"verified"`
+		AutoCNAME string `json:"auto_cname"`
 	}
 	out := make([]row, 0, len(domains))
 	for _, d := range domains {
-		out = append(out, row{ID: d.ID, Domain: d.Domain, Provider: d.Provider, Verified: d.Verified})
+		out = append(out, row{ID: d.ID, Domain: d.Domain, Provider: d.Provider, Verified: d.Verified, AutoCNAME: d.AutoCNAME})
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// autoCreateCNAMEForDomain (issue #322): one-click action for a domain that
+// was added without Cloudflare linked (or whose auto-CNAME failed). It
+// creates the proxied CNAME via the linked Cloudflare account and returns
+// the result so the UI can show success/failure instead of silent fallback.
+func (h *RESTHandlers) autoCreateCNAMEForDomain(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
+	d, err := h.Domains.GetByID(r.Context(), actx.Account.ID, r.PathValue("id"))
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "domain tidak dijumpai")
+		return
+	}
+	if !cfOAuthConfigured() {
+		writeJSON(w, http.StatusOK, map[string]any{"auto_cname": "not_cloudflare", "error": "Cloudflare not linked"})
+		return
+	}
+	if err := h.cfCreateCNAMEForDomain(r.Context(), actx.Account.ID, d.Domain); err != nil {
+		_ = h.Domains.SetAutoCNAME(r.Context(), actx.Account.ID, d.Domain, "failed")
+		writeJSON(w, http.StatusOK, map[string]any{"auto_cname": "failed", "error": err.Error()})
+		return
+	}
+	_ = h.Domains.SetAutoCNAME(r.Context(), actx.Account.ID, d.Domain, "created")
+	writeJSON(w, http.StatusOK, map[string]any{"auto_cname": "created"})
 }
 
 func (h *RESTHandlers) verifyCustomDomainByID(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
