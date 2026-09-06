@@ -369,6 +369,8 @@ const DICT = {
   "set.from": { en: "from", ms: "dari", zh: "来自", ta: "இருந்து", ar: "من" },
   "set.chipPortal": { en: "CHIP Merchant Portal → Developers", ms: "Portal Pedagang CHIP → Developers", zh: "CHIP 商户门户 → 开发者", ta: "CHIP வணிகர் தளம் → Developers", ar: "بوابة تجار CHIP → المطورين" },
   "set.keysEncrypted": { en: "Keys are stored encrypted — never shown again.", ms: "Kunci disimpan terenkrip — tidak dipaparkan lagi.", zh: "密钥加密存储 — 不会再次显示。", ta: "விசைகள் என்க்ரிப்ட் செய்யப்பட்டு சேமிக்கப்படும் — மீண்டும் காட்டப்படாது.", ar: "تُخزَّن المفاتيح مشفرة — لا تُعرض مرة أخرى." },
+  "set.secretMasked": { en: "Stored key: {masked} (masked — leave blank to keep)", ms: "Kunci tersimpan: {masked} (disamarkan — biarkan kosong untuk kekal)", zh: "已存密钥：{masked}（已掩码 — 留空以保留）", ta: "சேமித்த விசை: {masked} (மறைக்கப்பட்டது — வைக்க காலியாக விடவும்)", ar: "المفتاح المخزن: {masked} (مخفي — اتركه فارغاً للإبقاء عليه)" },
+  "set.secretMaskedPlaceholder": { en: "•••••• (masked — leave blank to keep)", ms: "•••••• (disamarkan — biarkan kosong untuk kekal)", zh: "••••••（已掩码 — 留空以保留）", ta: "•••••• (மறைக்கப்பட்டது — வைக்க காலியாக விடவும்)", ar: "•••••• (مخفي — اتركه فارغاً للإبقاء عليه)" },
   "set.secretKey": { en: "Secret Key", ms: "Kunci Rahsia", zh: "密钥", ta: "ரகசிய விசை", ar: "المفتاح السري" },
   "set.apiVerified": { en: "✓ API credentials verified", ms: "✓ Kredensial API disahkan", zh: "✓ API 凭证已验证", ta: "✓ API சான்றுகள் சரிபார்க்கப்பட்டன", ar: "✓ تم التحقق من بيانات API" },
   "set.mode": { en: "Mode (auto-detected)", ms: "Mod (auto-dikesan)", zh: "模式（自动检测）", ta: "முறை (தானாகக் கண்டறியப்பட்டது)", ar: "الوضع (مكتشف تلقائياً)" },

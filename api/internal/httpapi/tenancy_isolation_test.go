@@ -146,7 +146,7 @@ func TestTenancySpaceScopedChipIsolation(t *testing.T) {
 	if cs, ok := b2["configured"].(bool); !ok || cs {
 		t.Fatalf("space2 chip must be unconfigured (no cross-space leakage), got %v", b2)
 	}
-	if sk, _ := b2["secret_key"].(string); sk != "" {
+	if sk, _ := b2["secret_key_masked"].(string); sk != "" {
 		t.Fatalf("space2 must not expose space1's secret key, got %q", sk)
 	}
 }

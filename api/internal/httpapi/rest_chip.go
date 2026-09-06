@@ -21,18 +21,50 @@ func (h *RESTHandlers) setChipCreds(w http.ResponseWriter, r *http.Request, actx
 		EmailFallback   string   `json:"email_fallback"`
 		MethodWhitelist []string `json:"payment_method_whitelist"`
 	}
-	if err := decodeJSON(r, &in); err != nil || in.BrandID == "" || in.SecretKey == "" {
-		writeErr(w, http.StatusBadRequest, "brand_id dan secret_key wajib")
+	if err := decodeJSON(r, &in); err != nil || in.BrandID == "" {
+		writeErr(w, http.StatusBadRequest, "brand_id wajib")
+		return
+	}
+
+	// Issue #327: the secret is write-only and never echoed back. A blank
+	// secret_key keeps the existing stored key (so the merchant can edit
+	// other fields without re-entering the secret); a non-empty value
+	// replaces it. Brand ID is always required.
+	secretKey := in.SecretKey
+	secretEnc := ""
+	existingMode := ""
+	existingVerified := false
+	if secretKey == "" {
+		// Preserve the existing encrypted secret (and its mode + verified
+		// state) when none was provided.
+		if acc, err := h.Accounts.ByID(r.Context(), actx.Account.ID); err == nil {
+			secretEnc = acc.ChipSecretKeyEnc
+			existingMode = acc.ChipMode
+			existingVerified = acc.ChipVerified
+		}
+	} else {
+		enc, err := cryptoutil.Encrypt(h.SecretsKey, []byte(secretKey))
+		if err != nil {
+			respondErr(w, r, err)
+			return
+		}
+		secretEnc = enc
+	}
+	if secretEnc == "" {
+		writeErr(w, http.StatusBadRequest, "secret_key wajib")
 		return
 	}
 
 	// Mode semantics follow CHIP WooCommerce: one API endpoint; test vs live is
 	// decided by WHICH secret key the merchant pastes (sk_test_… vs sk_live_…).
-	// Derive the label automatically; in.Mode is only a fallback.
+	// Derive the label automatically; in.Mode is only a fallback. When the
+	// secret is unchanged (blank), keep the existing mode.
 	mode := strings.ToLower(in.Mode)
-	if strings.HasPrefix(strings.ToLower(in.SecretKey), "sk_live") {
+	if secretKey == "" && existingMode != "" {
+		mode = existingMode
+	} else if strings.HasPrefix(strings.ToLower(secretKey), "sk_live") {
 		mode = "live"
-	} else if strings.HasPrefix(strings.ToLower(in.SecretKey), "sk_test") {
+	} else if strings.HasPrefix(strings.ToLower(secretKey), "sk_test") {
 		mode = "test"
 	}
 	if mode != "live" && mode != "test" {
@@ -42,9 +74,11 @@ func (h *RESTHandlers) setChipCreds(w http.ResponseWriter, r *http.Request, actx
 	// Validate against CHIP before storing (Woo parity) — save is REJECTED
 	// with the CHIP error when the pair is wrong, so the ✓ badge is truthful.
 	// verified records whether a live CHIP API check passed (issue #325).
+	// When the secret is unchanged (blank), skip re-validation — the stored
+	// key already passed at save time.
 	verified := false
-	if h.ChipProbe != nil {
-		if verr := h.ChipProbe.ValidateCredentials(r.Context(), in.SecretKey); verr != nil {
+	if h.ChipProbe != nil && secretKey != "" {
+		if verr := h.ChipProbe.ValidateCredentials(r.Context(), secretKey); verr != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{
 				"error":    "kredensial tidak sah — semak Brand ID / Secret Key",
 				"verified": false,
@@ -52,14 +86,12 @@ func (h *RESTHandlers) setChipCreds(w http.ResponseWriter, r *http.Request, actx
 			return
 		}
 		verified = true
+	} else if secretKey == "" {
+		// Secret unchanged — keep the previously recorded verified state.
+		verified = existingVerified
 	}
 
-	enc, err := cryptoutil.Encrypt(h.SecretsKey, []byte(in.SecretKey))
-	if err != nil {
-		respondErr(w, r, err)
-		return
-	}
-	if err := h.Accounts.SetChipCredentials(r.Context(), actx.Account.ID, in.BrandID, enc, mode, in.EmailFallback, in.MethodWhitelist, verified); err != nil {
+	if err := h.Accounts.SetChipCredentials(r.Context(), actx.Account.ID, in.BrandID, secretEnc, mode, in.EmailFallback, in.MethodWhitelist, verified); err != nil {
 		respondErr(w, r, err)
 		return
 	}

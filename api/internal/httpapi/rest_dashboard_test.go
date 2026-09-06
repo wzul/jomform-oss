@@ -263,7 +263,7 @@ func TestDashboardBundleSpaceScopeHonoured(t *testing.T) {
 	}
 }
 
-func TestDashboardBundleChipSecretDecrypts(t *testing.T) {
+func TestDashboardBundleChipSecretMasked(t *testing.T) {
 	ctx := context.Background()
 	pool := bundleTestPool(t)
 	accountID, _ := bundleFixture(t, ctx, pool)
@@ -272,7 +272,7 @@ func TestDashboardBundleChipSecretDecrypts(t *testing.T) {
 	for i := range key {
 		key[i] = byte(i + 1)
 	}
-	sealed, err := cryptoutil.Encrypt(key, []byte("sk_test_bundle"))
+	sealed, err := cryptoutil.Encrypt(key, []byte("sk_test_abcdefghijklmnopqrstuvwxyz1234"))
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
@@ -288,7 +288,18 @@ func TestDashboardBundleChipSecretDecrypts(t *testing.T) {
 	if !ok {
 		t.Fatalf("chip_status missing: %v", body["chip_status"])
 	}
-	if cs["secret_key"] != "sk_test_bundle" {
-		t.Errorf("chip secret = %v, want sk_test_bundle", cs["secret_key"])
+	// Issue #327: the full secret must NEVER be returned in the bundle.
+	if _, leaked := cs["secret_key"]; leaked {
+		t.Errorf("full secret_key must not be returned in the bundle, got %v", cs["secret_key"])
+	}
+	masked, _ := cs["secret_key_masked"].(string)
+	if masked == "" {
+		t.Fatalf("secret_key_masked missing: %v", cs)
+	}
+	if strings.Contains(masked, "sk_test_abcdefghijklmnopqrstuvwxyz1234") {
+		t.Errorf("masked value must not contain the full secret, got %q", masked)
+	}
+	if !strings.HasSuffix(masked, "1234") {
+		t.Errorf("masked value should keep the last 4 chars, got %q", masked)
 	}
 }

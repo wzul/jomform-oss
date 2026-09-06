@@ -10,7 +10,7 @@ import { spaceQuery, spaceScope } from "../../lib/space";
 import { MembersTab } from "../../components/MembersTab";
 import { LegalTab } from "../../components/LegalTab";
 
-type ChipStatus = { configured: boolean; verified?: boolean; mode?: string };
+type ChipStatus = { configured: boolean; verified?: boolean; mode?: string; secret_key_masked?: string };
 
 // Issue #326: CHIP mode is NOT user-set — it is auto-derived from the secret
 // key prefix (sk_live_ → live, sk_test_ → test, else test). One API endpoint;
@@ -118,6 +118,7 @@ export default function Settings() {
   const [status, setStatus] = useState<ChipStatus | null>(null);
   const [brandId, setBrandId] = useState("");
   const [secretKey, setSecretKey] = useState("");
+  const [secretMasked, setSecretMasked] = useState("");
   const [emailFallback, setEmailFallback] = useState("");
   const [whitelist, setWhitelist] = useState<string[]>([]);
   const [msg, setMsg] = useState("");
@@ -252,7 +253,11 @@ export default function Settings() {
         if (s.brand_id) setBrandId(s.brand_id);
         if (s.email_fallback) setEmailFallback(s.email_fallback);
         if (Array.isArray(s.whitelist) && s.whitelist.length) setWhitelist(s.whitelist);
-        if (s.secret_key) setSecretKey(s.secret_key);
+        // Issue #327: the full secret is never returned — only a masked tail.
+        // Never populate the editable field with a real secret; the merchant
+        // can only enter a NEW key to replace the stored one (blank keeps it).
+        setSecretKey("");
+        setSecretMasked(s.secret_key_masked || "");
         // Issue #325: "verified" is TRUE only after a live CHIP API check
         // passed at save time — never merely because credentials are stored.
         setVerified(!!s.verified);
@@ -743,16 +748,20 @@ export default function Settings() {
                 <input
                   value={secretKey}
                   onChange={(e) => setSecretKey(e.target.value)}
-                  required
                   type="text"
                   className="jf-input mt-1 max-w-xl font-mono"
-                  placeholder="sk_live_… / sk_test_…"
+                  placeholder={secretMasked ? t("set.secretMaskedPlaceholder") : "sk_live_… / sk_test_…"}
                 />
+                {secretMasked && (
+                  <p className="mt-1 text-xs text-slate-400">
+                    {t("set.secretMasked", { masked: secretMasked })}
+                  </p>
+                )}
               </div>
               <div>
                 <label className="text-xs text-slate-500">{t("set.mode")}</label>
                 <p className="mt-1 text-sm">
-                  {t("set.autoDetected", { mode: detectMode(secretKey) === "live" ? t("set.live") : t("set.test") })}
+                  {t("set.autoDetected", { mode: (secretKey ? detectMode(secretKey) : (status?.mode || "test")) === "live" ? t("set.live") : t("set.test") })}
                 </p>
                 <p className="mt-1 text-xs text-slate-400">{t("set.modeHint")}</p>
               </div>

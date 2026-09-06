@@ -6,6 +6,7 @@ package httpapi
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"github.com/wzul/jomform/api/internal/cryptoutil"
 	"github.com/wzul/jomform/api/internal/dbstore"
@@ -35,9 +36,13 @@ func (h *RESTHandlers) chipStatusData(ctx context.Context, accountID string) (ma
 		"brand_id": acc.ChipBrandID,
 	}
 	if configured {
+		// Issue #327: NEVER return the full decrypted secret in the bundle.
+		// The secret is write-only — the merchant only ever sees a masked
+		// tail (like Woo's settings page) so it can't leak via page source,
+		// network, or screen share. A new non-empty value replaces it on
+		// save; a blank value keeps the stored key.
 		if secret, err := cryptoutil.Decrypt(h.SecretsKey, acc.ChipSecretKeyEnc); err == nil {
-			// Wan request: merchant sees what they stored (Woo-style secret_key field).
-			resp["secret_key"] = string(secret)
+			resp["secret_key_masked"] = maskSecret(string(secret))
 		}
 	}
 	resp["whitelist"] = acc.ChipMethodWhitelist
@@ -228,4 +233,19 @@ func (h *RESTHandlers) dashboardBundle(w http.ResponseWriter, r *http.Request, a
 	}
 
 	writeJSON(w, http.StatusOK, bundle)
+}
+
+// maskSecret renders a CHIP secret key as a masked tail (e.g. sk_live_••••abcd)
+// so the full value is never exposed to the client. Only the last 4 characters
+// are shown; the prefix is kept so the merchant can still tell live vs test.
+func maskSecret(secret string) string {
+	s := strings.TrimSpace(secret)
+	if s == "" {
+		return ""
+	}
+	const tailLen = 4
+	if len(s) <= tailLen {
+		return "••••"
+	}
+	return s[:len(s)-tailLen] + "••••" + s[len(s)-tailLen:]
 }
