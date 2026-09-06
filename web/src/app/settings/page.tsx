@@ -11,6 +11,16 @@ import { MembersTab } from "../../components/MembersTab";
 import { LegalTab } from "../../components/LegalTab";
 
 type ChipStatus = { configured: boolean; verified?: boolean; mode?: string };
+
+// Issue #326: CHIP mode is NOT user-set — it is auto-derived from the secret
+// key prefix (sk_live_ → live, sk_test_ → test, else test). One API endpoint;
+// test-vs-live is decided by which secret the merchant pastes.
+function detectMode(secret: string): "live" | "test" {
+  const s = (secret || "").toLowerCase();
+  if (s.startsWith("sk_live")) return "live";
+  if (s.startsWith("sk_test")) return "test";
+  return "test";
+}
 type KeyRow = { id: string; name: string; scopes: string[] };
 type DomainStatus = { domain: string; verified: boolean } | null;
 
@@ -108,7 +118,6 @@ export default function Settings() {
   const [status, setStatus] = useState<ChipStatus | null>(null);
   const [brandId, setBrandId] = useState("");
   const [secretKey, setSecretKey] = useState("");
-  const [mode, setMode] = useState("test");
   const [emailFallback, setEmailFallback] = useState("");
   const [whitelist, setWhitelist] = useState<string[]>([]);
   const [msg, setMsg] = useState("");
@@ -241,7 +250,6 @@ export default function Settings() {
       if (s) {
         setStatus(s);
         if (s.brand_id) setBrandId(s.brand_id);
-        if (s.mode) setMode(s.mode);
         if (s.email_fallback) setEmailFallback(s.email_fallback);
         if (Array.isArray(s.whitelist) && s.whitelist.length) setWhitelist(s.whitelist);
         if (s.secret_key) setSecretKey(s.secret_key);
@@ -407,7 +415,8 @@ export default function Settings() {
       body: JSON.stringify({
         brand_id: brandId,
         secret_key: secretKey,
-        mode,
+        // Issue #326: no mode field — the backend auto-derives live/test from
+        // the secret key prefix (sk_live_ / sk_test_).
         email_fallback: emailFallback,
         payment_method_whitelist: whitelist,
       }),
@@ -742,7 +751,10 @@ export default function Settings() {
               </div>
               <div>
                 <label className="text-xs text-slate-500">{t("set.mode")}</label>
-                <p className="mt-1 text-sm">{mode === "live" ? t("set.live") : t("set.test")}</p>
+                <p className="mt-1 text-sm">
+                  {t("set.autoDetected", { mode: detectMode(secretKey) === "live" ? t("set.live") : t("set.test") })}
+                </p>
+                <p className="mt-1 text-xs text-slate-400">{t("set.modeHint")}</p>
               </div>
 
               <div>
