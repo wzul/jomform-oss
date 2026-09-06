@@ -31,6 +31,7 @@ import (
 	"github.com/wzul/jomform/api/internal/dbstore"
 	emailpkg "github.com/wzul/jomform/api/internal/email"
 	"github.com/wzul/jomform/api/internal/emailqueue"
+	"github.com/wzul/jomform/api/internal/httpapi/middleware"
 )
 
 type oidcProvider struct {
@@ -205,6 +206,14 @@ func (a *AuthHandlers) socialCallback(w http.ResponseWriter, r *http.Request) {
 	if err == nil && userID != "" {
 		a.ensureAccountFor(r, userID, up.Email)
 		_ = a.startSession(w, r, userID, "", false, false)
+		// Successful social login resets the failure counters (issue #345) so
+		// a user locked out on the password path isn't re-locked by stale
+		// history after signing in via OAuth. Fail-open (log only, never block).
+		if a.LoginLimiter != nil {
+			if lerr := a.LoginLimiter.Reset(r.Context(), middleware.ClientIP(r), up.Email); lerr != nil {
+				slog.Warn("loginfail_reset_error_social", "err", lerr, "ip", middleware.ClientIP(r))
+			}
+		}
 		// Issue #285: route through the frontend post-login resolution
 		// (resolvePostLogin syncs jf_space and sends multi-space users to the
 		// space-picker) instead of dropping the user on the Landing page.
@@ -264,6 +273,13 @@ func (a *AuthHandlers) socialCallback(w http.ResponseWriter, r *http.Request) {
 	// finds no account (issue #298). Idempotent for existing users.
 	a.ensureAccountFor(r, newID, up.Email)
 	_ = a.startSession(w, r, newID, "", false, false)
+	// Reset failure counters on a successful social signup-login too (issue
+	// #345). Fail-open (log only, never block).
+	if a.LoginLimiter != nil {
+		if lerr := a.LoginLimiter.Reset(r.Context(), middleware.ClientIP(r), up.Email); lerr != nil {
+			slog.Warn("loginfail_reset_error_social_new", "err", lerr, "ip", middleware.ClientIP(r))
+		}
+	}
 	http.Redirect(w, r, "/post-login", http.StatusFound)
 }
 
