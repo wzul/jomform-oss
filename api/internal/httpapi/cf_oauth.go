@@ -125,6 +125,17 @@ func (h *RESTHandlers) cfCallback(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "pkce verifier hilang")
 		return
 	}
+	// On a failed OAuth flow Cloudflare redirects back with error /
+	// error_description instead of code (e.g. invalid_scope). Surface the real
+	// cause rather than the misleading "code hilang" (issue #315).
+	if oauthErr := r.URL.Query().Get("error"); oauthErr != "" {
+		desc := r.URL.Query().Get("error_description")
+		if desc == "" {
+			desc = oauthErr
+		}
+		writeErr(w, http.StatusBadRequest, "Cloudflare OAuth ditolak: "+desc)
+		return
+	}
 	code := r.URL.Query().Get("code")
 	if code == "" {
 		writeErr(w, http.StatusBadRequest, "code hilang")

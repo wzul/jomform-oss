@@ -5,6 +5,10 @@ package httpapi
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/wzul/jomform/api/internal/cryptoutil"
@@ -69,5 +73,56 @@ func TestCFUnsealLegacyBlobDefaultsToOAuth(t *testing.T) {
 	}
 	if got.Access != "acc" || got.Refresh != "ref" {
 		t.Errorf("legacy blob material lost: got %+v", got)
+	}
+}
+
+// TestCFCallbackSurfacesOAuthError verifies issue #315: when Cloudflare
+// redirects back with error/error_description (e.g. invalid_scope), cfCallback
+// surfaces the real cause instead of the misleading "code hilang".
+func TestCFCallbackSurfacesOAuthError(t *testing.T) {
+	os.Setenv("JF_CF_OAUTH_CLIENT_ID", "test-client-id")
+	t.Cleanup(func() { os.Unsetenv("JF_CF_OAUTH_CLIENT_ID") })
+
+	h := &RESTHandlers{}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET",
+		"/v1/rest/cf/callback?error=invalid_scope&error_description=The+requested+scope+zone%3Aread+is+invalid&state=st",
+		nil)
+	req.AddCookie(&http.Cookie{Name: "cf_oauth_state", Value: "st", Path: "/"})
+	req.AddCookie(&http.Cookie{Name: "cf_pkce_v", Value: "verifier", Path: "/"})
+
+	h.cfCallback(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d want 400", rec.Code)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "code hilang") {
+		t.Errorf("response still shows misleading 'code hilang': %s", body)
+	}
+	if !strings.Contains(body, "Cloudflare OAuth ditolak") || !strings.Contains(body, "invalid") {
+		t.Errorf("response does not surface the OAuth error: %s", body)
+	}
+}
+
+// TestCFCallbackMissingCodeStill400 verifies the fallback stays intact: with
+// neither code nor error params, cfCallback still returns 400 "code hilang".
+func TestCFCallbackMissingCodeStill400(t *testing.T) {
+	os.Setenv("JF_CF_OAUTH_CLIENT_ID", "test-client-id")
+	t.Cleanup(func() { os.Unsetenv("JF_CF_OAUTH_CLIENT_ID") })
+
+	h := &RESTHandlers{}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/v1/rest/cf/callback?state=st", nil)
+	req.AddCookie(&http.Cookie{Name: "cf_oauth_state", Value: "st", Path: "/"})
+	req.AddCookie(&http.Cookie{Name: "cf_pkce_v", Value: "verifier", Path: "/"})
+
+	h.cfCallback(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d want 400", rec.Code)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "code hilang") {
+		t.Errorf("expected 'code hilang' fallback, got: %s", body)
 	}
 }
