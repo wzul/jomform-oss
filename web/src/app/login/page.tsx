@@ -179,8 +179,12 @@ export default function Login() {
         setDone(true);
         setError("");
       } else {
-        // Both endpoints are enumeration-safe generic 200s; fall back gracefully.
-        setError((await r.json().catch(() => ({}))).error || t(mode === "magic" ? "login.passwordlessSent" : "login.forgotSent"));
+        // Both endpoints are enumeration-safe generic 200s; a non-200 here is a
+        // genuine failure (e.g. the 429 rate-limit, which comes back as plain
+        // text, not JSON). Parse JSON when we can, otherwise surface a generic
+        // error — never fall back to the success copy (issue #343).
+        const errBody = await r.json().catch(() => ({}));
+        setError((errBody as { error?: string }).error || t("login.genericError"));
       }
       return;
     }
