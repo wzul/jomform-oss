@@ -414,11 +414,12 @@ func cfTokenRequest(ctx context.Context, form url.Values) (*cfTokenPair, error) 
 }
 
 func cfVerifyToken(ctx context.Context, accessToken string) error {
-	// GET /user with a Bearer OAuth access token confirms the token is valid
-	// and active. Do NOT use /user/tokens/verify — that endpoint only accepts
-	// Cloudflare API tokens (not OAuth access tokens) and returns success=false
-	// ("inactive") for an otherwise-valid OAuth token.
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, cfAPIBase+"/user", nil)
+	// Verify an OAuth access token by the SAME call auto-CNAME actually needs:
+	// GET /zones with Bearer auth. This uses the granted zone.read scope, so it
+	// succeeds for a valid token without any extra /user scope. (Do NOT use
+	// /user/tokens/verify — API-token-only — or /user — needs user:read — both
+	// fail with success=false / 403 for an OAuth token granted only zone/dns.)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, cfAPIBase+"/zones?per_page=1", nil)
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
