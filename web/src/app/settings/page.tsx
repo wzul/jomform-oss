@@ -878,7 +878,15 @@ export default function Settings() {
                         >{t("set.verify")}</button>
                       )}
                       <button
-                        onClick={async () => { await fetch(`/api/rest/domains/${d.id}${spaceQuery()}`, { method: "DELETE" }); load(); }}
+                        onClick={async () => {
+                          await fetch(`/api/rest/domains/${d.id}${spaceQuery()}`, { method: "DELETE" });
+                          // Issue #321: load() reads bundle.domains from the closure's stale
+                          // bundle, so the removed domain would linger until reloadSession()
+                          // re-renders. refreshDomains() refetches the list directly so the
+                          // domain disappears immediately (same as the verify flow).
+                          setDomains((prev) => prev.filter((x) => x.id !== d.id));
+                          await refreshDomains();
+                        }}
                         className="text-xs text-slate-500 hover:text-red-500"
                       >{t("set.remove")}</button>
                     </div>
