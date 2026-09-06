@@ -52,6 +52,7 @@ export type BundleLanding = {
 
 export type ChipStatusShape = {
   configured: boolean;
+  verified?: boolean;
   mode?: string;
   brand_id?: string;
   secret_key?: string;

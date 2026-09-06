@@ -74,7 +74,7 @@ func tenancyFixture(t *testing.T) (*RESTHandlers, *pgxpool.Pool, string, string,
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
-	if err := dbstore.NewAccountStore(pool).SetChipCredentials(ctx, acc1, "br_ten_one", sealed, "test", "", nil); err != nil {
+	if err := dbstore.NewAccountStore(pool).SetChipCredentials(ctx, acc1, "br_ten_one", sealed, "test", "", nil, true); err != nil {
 		t.Fatalf("set chip creds on space1: %v", err)
 	}
 

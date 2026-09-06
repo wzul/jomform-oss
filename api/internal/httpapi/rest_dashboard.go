@@ -27,8 +27,12 @@ func (h *RESTHandlers) chipStatusData(ctx context.Context, accountID string) (ma
 	configured := acc.ChipBrandID != "" && acc.ChipSecretKeyEnc != ""
 	resp := map[string]any{
 		"configured": configured,
-		"mode":       acc.ChipMode,
-		"brand_id":   acc.ChipBrandID,
+		// Issue #325: "verified" is TRUE only when the stored credentials
+		// passed a live CHIP API check at save time — never merely because
+		// they are stored. The dashboard shows "✓ verified" off this flag.
+		"verified": configured && acc.ChipVerified,
+		"mode":     acc.ChipMode,
+		"brand_id": acc.ChipBrandID,
 	}
 	if configured {
 		if secret, err := cryptoutil.Decrypt(h.SecretsKey, acc.ChipSecretKeyEnc); err == nil {

@@ -381,6 +381,7 @@ const DICT = {
   "set.save": { en: "Save", ms: "Simpan", zh: "保存", ta: "சேமி", ar: "حفظ" },
   "set.clear": { en: "Clear", ms: "Kosongkan", zh: "清除", ta: "அழி", ar: "مسح" },
   "set.savedCreds": { en: "Saved — credentials verified with CHIP. ✓", ms: "Disimpan — kredensial disahkan dengan CHIP. ✓", zh: "已保存 — 凭证已通过 CHIP 验证 ✓", ta: "சேமிக்கப்பட்டது — CHIP உடன் சான்றுகள் சரிபார்க்கப்பட்டன ✓", ar: "تم الحفظ — تم التحقق من البيانات مع CHIP ✓" },
+  "set.savedCredsUnverified": { en: "Saved — credentials stored, but the CHIP check could not be confirmed.", ms: "Disimpan — kredensial disimpan, tetapi semakan CHIP tidak dapat disahkan.", zh: "已保存 — 凭证已存储，但无法确认 CHIP 验证。", ta: "சேமிக்கப்பட்டது — சான்றுகள் சேமிக்கப்பட்டன, ஆனால் CHIP சரிபார்ப்பை உறுதிப்படுத்த முடியவில்லை.", ar: "تم الحفظ — تم تخزين البيانات، لكن تعذر تأكيد التحقق من CHIP." },
   "set.failedSave": { en: "Failed to save", ms: "Gagal simpan", zh: "保存失败", ta: "சேமிப்பதில் தோல்வி", ar: "فشل الحفظ" },
   "set.credsCleared": { en: "CHIP credentials cleared.", ms: "Kredensial CHIP dikosongkan.", zh: "已清除 CHIP 凭证。", ta: "CHIP சான்றுகள் அழிக்கப்பட்டன.", ar: "تم مسح بيانات CHIP." },
   "set.domainsTitle": { en: "Custom domains", ms: "Domain tersuai", zh: "自定义域名", ta: "தனிப்பயன் டொமைன்கள்", ar: "النطاقات المخصصة" },

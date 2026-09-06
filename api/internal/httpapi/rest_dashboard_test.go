@@ -276,7 +276,7 @@ func TestDashboardBundleChipSecretDecrypts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
-	if err := dbstore.NewAccountStore(pool).SetChipCredentials(ctx, accountID, "br_bundle", sealed, "test", "", nil); err != nil {
+	if err := dbstore.NewAccountStore(pool).SetChipCredentials(ctx, accountID, "br_bundle", sealed, "test", "", nil, true); err != nil {
 		t.Fatalf("set chip creds: %v", err)
 	}
 

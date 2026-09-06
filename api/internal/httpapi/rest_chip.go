@@ -41,6 +41,8 @@ func (h *RESTHandlers) setChipCreds(w http.ResponseWriter, r *http.Request, actx
 
 	// Validate against CHIP before storing (Woo parity) — save is REJECTED
 	// with the CHIP error when the pair is wrong, so the ✓ badge is truthful.
+	// verified records whether a live CHIP API check passed (issue #325).
+	verified := false
 	if h.ChipProbe != nil {
 		if verr := h.ChipProbe.ValidateCredentials(r.Context(), in.SecretKey); verr != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{
@@ -49,6 +51,7 @@ func (h *RESTHandlers) setChipCreds(w http.ResponseWriter, r *http.Request, actx
 			})
 			return
 		}
+		verified = true
 	}
 
 	enc, err := cryptoutil.Encrypt(h.SecretsKey, []byte(in.SecretKey))
@@ -56,13 +59,13 @@ func (h *RESTHandlers) setChipCreds(w http.ResponseWriter, r *http.Request, actx
 		respondErr(w, r, err)
 		return
 	}
-	if err := h.Accounts.SetChipCredentials(r.Context(), actx.Account.ID, in.BrandID, enc, mode, in.EmailFallback, in.MethodWhitelist); err != nil {
+	if err := h.Accounts.SetChipCredentials(r.Context(), actx.Account.ID, in.BrandID, enc, mode, in.EmailFallback, in.MethodWhitelist, verified); err != nil {
 		respondErr(w, r, err)
 		return
 	}
 	// Issue #92: audit CHIP credential change.
-	h.recordEvent(r, actx, h.sessionOwnerID(r), "settings.chip_updated", map[string]any{"mode": mode})
-	respond(w, http.StatusOK, map[string]string{"status": "configured", "mode": mode})
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "settings.chip_updated", map[string]any{"mode": mode, "verified": verified})
+	respond(w, http.StatusOK, map[string]any{"status": "configured", "mode": mode, "verified": verified})
 }
 
 // chipStatus reports stored credentials. Secret never leaves the vault,

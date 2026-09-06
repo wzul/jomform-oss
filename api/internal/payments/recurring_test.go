@@ -97,7 +97,7 @@ func seedRecurringFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool,
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
-	if err := dbstore.NewAccountStore(pool).SetChipCredentials(ctx, accountID, "br_recur", sealed, "test", "", nil); err != nil {
+	if err := dbstore.NewAccountStore(pool).SetChipCredentials(ctx, accountID, "br_recur", sealed, "test", "", nil, true); err != nil {
 		t.Fatalf("set chip creds: %v", err)
 	}
 	prod := &dbstore.Product{

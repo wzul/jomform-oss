@@ -10,7 +10,7 @@ import { spaceQuery, spaceScope } from "../../lib/space";
 import { MembersTab } from "../../components/MembersTab";
 import { LegalTab } from "../../components/LegalTab";
 
-type ChipStatus = { configured: boolean; mode?: string };
+type ChipStatus = { configured: boolean; verified?: boolean; mode?: string };
 type KeyRow = { id: string; name: string; scopes: string[] };
 type DomainStatus = { domain: string; verified: boolean } | null;
 
@@ -245,7 +245,9 @@ export default function Settings() {
         if (s.email_fallback) setEmailFallback(s.email_fallback);
         if (Array.isArray(s.whitelist) && s.whitelist.length) setWhitelist(s.whitelist);
         if (s.secret_key) setSecretKey(s.secret_key);
-        setVerified(s.configured && !!(s.secret_key || s.secret_key_masked));
+        // Issue #325: "verified" is TRUE only after a live CHIP API check
+        // passed at save time — never merely because credentials are stored.
+        setVerified(!!s.verified);
       }
       setKeys(Array.isArray(k) ? k : []);
     };
@@ -411,8 +413,11 @@ export default function Settings() {
       }),
     });
     if (r.ok) {
-      setMsg(t("set.savedCreds"));
-      setVerified(true);
+      // Issue #325: the backend only reports verified:true after a live CHIP
+      // API check passed. Trust that value — never assume success.
+      const d = await r.json().catch(() => ({}));
+      setVerified(d.verified === true);
+      setMsg(d.verified === true ? t("set.savedCreds") : t("set.savedCredsUnverified"));
       await load();
     } else {
       const d = await r.json().catch(() => ({}));

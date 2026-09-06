@@ -25,6 +25,7 @@ type Account struct {
 	ChipBrandID            string
 	ChipSecretKeyEnc       string
 	ChipMode               string
+	ChipVerified           bool
 	BNMRounding            bool
 	CreatedAt              time.Time
 	UpdatedAt              time.Time
@@ -42,7 +43,7 @@ func (s *AccountStore) ByID(ctx context.Context, id string) (*Account, error) {
 	err := s.pool.QueryRow(ctx, accountSelect+" WHERE id = $1", id).
 		Scan(&a.ID, &a.OwnerUserID, &a.Name, &a.Slug,
 			&a.Timezone, &a.Currency,
-			&a.ChipBrandID, &a.ChipSecretKeyEnc, &a.ChipMode, &a.BNMRounding,
+			&a.ChipBrandID, &a.ChipSecretKeyEnc, &a.ChipMode, &a.ChipVerified, &a.BNMRounding,
 			&a.ChipEmailFallback, &a.ChipMethodWhitelist,
 			&a.CustomDomain, &a.CustomDomainVerified, &a.CustomDomainVerifiedAt,
 			&a.EinvoiceTIN, &a.EinvoiceMSIC,
@@ -57,7 +58,7 @@ func (s *AccountStore) BySlug(ctx context.Context, slug string) (*Account, error
 	err := s.pool.QueryRow(ctx, accountSelect+" WHERE slug = $1", slug).
 		Scan(&a.ID, &a.OwnerUserID, &a.Name, &a.Slug,
 			&a.Timezone, &a.Currency,
-			&a.ChipBrandID, &a.ChipSecretKeyEnc, &a.ChipMode, &a.BNMRounding,
+			&a.ChipBrandID, &a.ChipSecretKeyEnc, &a.ChipMode, &a.ChipVerified, &a.BNMRounding,
 			&a.ChipEmailFallback, &a.ChipMethodWhitelist,
 			&a.CustomDomain, &a.CustomDomainVerified, &a.CustomDomainVerifiedAt,
 			&a.EinvoiceTIN, &a.EinvoiceMSIC,
@@ -77,7 +78,7 @@ func (s *AccountStore) ByOwner(ctx context.Context, userID string) ([]*Account, 
 		a := &Account{}
 		if err := rows.Scan(&a.ID, &a.OwnerUserID, &a.Name, &a.Slug,
 			&a.Timezone, &a.Currency,
-			&a.ChipBrandID, &a.ChipSecretKeyEnc, &a.ChipMode, &a.BNMRounding,
+			&a.ChipBrandID, &a.ChipSecretKeyEnc, &a.ChipMode, &a.ChipVerified, &a.BNMRounding,
 			&a.ChipEmailFallback, &a.ChipMethodWhitelist,
 			&a.CustomDomain, &a.CustomDomainVerified, &a.CustomDomainVerifiedAt,
 			&a.EinvoiceTIN, &a.EinvoiceMSIC,
@@ -90,25 +91,27 @@ func (s *AccountStore) ByOwner(ctx context.Context, userID string) ([]*Account, 
 }
 
 // SetChipCredentials stores Brand ID and the AES-GCM encrypted secret key.
-func (s *AccountStore) SetChipCredentials(ctx context.Context, accountID, brandID, secretKeyEnc, mode string, emailFallback string, whitelist []string) error {
+// verified records whether the pair passed a live CHIP API check at save time
+// (issue #325) — the dashboard shows "verified ✓" only when this is true.
+func (s *AccountStore) SetChipCredentials(ctx context.Context, accountID, brandID, secretKeyEnc, mode string, emailFallback string, whitelist []string, verified bool) error {
 	_, err := s.pool.Exec(ctx,
 		`UPDATE accounts SET chip_brand_id=$2, chip_secret_key_enc=$3, chip_mode=$4,
-		   chip_email_fallback=NULLIF($5,'')::citext, chip_method_whitelist=$6, updated_at=now()
+		   chip_verified=$7, chip_email_fallback=NULLIF($5,'')::citext, chip_method_whitelist=$6, updated_at=now()
 		 WHERE id=$1`,
-		accountID, brandID, secretKeyEnc, mode, emailFallback, whitelist)
+		accountID, brandID, secretKeyEnc, mode, emailFallback, whitelist, verified)
 	return err
 }
 
 // ChipCredentials clears stored CHIP credentials.
 func (s *AccountStore) ClearChipCredentials(ctx context.Context, accountID string) error {
 	_, err := s.pool.Exec(ctx,
-		`UPDATE accounts SET chip_brand_id=NULL, chip_secret_key_enc=NULL, chip_mode='test', updated_at=now() WHERE id=$1`,
+		`UPDATE accounts SET chip_brand_id=NULL, chip_secret_key_enc=NULL, chip_mode='test', chip_verified=false, updated_at=now() WHERE id=$1`,
 		accountID)
 	return err
 }
 
 const accountSelect = `SELECT id, owner_user_id, name, slug, timezone, currency,
-	COALESCE(chip_brand_id,''), COALESCE(chip_secret_key_enc,''), chip_mode, bnm_rounding,
+	COALESCE(chip_brand_id,''), COALESCE(chip_secret_key_enc,''), chip_mode, chip_verified, bnm_rounding,
 	COALESCE(chip_email_fallback::text,''), COALESCE(chip_method_whitelist, '{}'),
 	COALESCE(custom_domain,''), custom_domain_verified, custom_domain_verified_at,
 	COALESCE(einvoice_tin,''), COALESCE(einvoice_msic,''),
