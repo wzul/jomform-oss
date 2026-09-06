@@ -4,13 +4,12 @@
 // POST /v1/auth/magic-link/verify, redirects to dashboard on success.
 import Link from "next/link";
 import { Suspense, useEffect, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { useI18n } from "../../components/i18n";
 import { resolvePostLogin } from "../../lib/postLogin";
 
 function MagicLinkForm() {
   const { t } = useI18n();
-  const router = useRouter();
   const search = useSearchParams();
   const token = search.get("token") || "";
   const [state, setState] = useState<"loading" | "invalid">("loading");
@@ -32,7 +31,17 @@ function MagicLinkForm() {
         if (r.ok) {
           // Issue #164: route multi-space users without a default to the
           // space-picker; otherwise go straight to the dashboard.
-          router.replace(await resolvePostLogin(""));
+          // Issue #349: navigate with a FULL PAGE LOAD (window.location.href),
+          // NOT router.replace. The magic-link page is wrapped in the root
+          // SessionProvider, which on this (still-anonymous) page load already
+          // fetched the dashboard bundle and cached a null under the space key
+          // (401 → anon). router.replace is a client-side navigation that keeps
+          // that stale null bundle in memory, so the dashboard renders
+          // anon=true → Landing even though the session cookie from this verify
+          // response is valid. A full-page load remounts SessionProvider after
+          // jf_session is committed and re-fetches the bundle authenticated —
+          // the same pattern the password/passkey logins use.
+          window.location.href = await resolvePostLogin("");
           return;
         }
         setState("invalid");
@@ -43,7 +52,7 @@ function MagicLinkForm() {
     return () => {
       cancelled = true;
     };
-  }, [token, router]);
+  }, [token]);
 
   return (
     <div className="relative w-full max-w-sm">
