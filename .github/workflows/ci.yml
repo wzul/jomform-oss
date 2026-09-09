@@ -73,9 +73,14 @@ jobs:
 
       # Issue #101: dependency vulnerability scan — fail on any known vuln
       # in the module graph. Required gate; never skip with `|| true`.
+      # Issue #368: govulncheck@latest declares go 1.26, so the go command
+      # auto-switches DOWN to go1.26.8 to build the scanner, and a go1.26-built
+      # scanner cannot parse this module's go1.27 code ("package requires newer
+      # Go version go1.27"). Pin GOTOOLCHAIN to the repo's resolved Go version
+      # so the scanner is built with the same toolchain the module targets.
       - name: govulncheck
         run: |
-          go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+          GOTOOLCHAIN=$(go env GOVERSION) go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
   web:
     name: Web — build check + npm audit

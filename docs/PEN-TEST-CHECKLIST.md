@@ -62,8 +62,10 @@ Automated gates (govulncheck, npm audit, gitleaks) run in CI — see
 ## How to run
 
 ```bash
-# Go vuln scan (fails on known vulns)
-cd api && go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+# Go vuln scan (fails on known vulns).
+# GOTOOLCHAIN pin (issue #368): govulncheck@latest declares go 1.26, so the go
+# command would build the scanner with go1.26.8 and fail on this go1.27 module.
+cd api && GOTOOLCHAIN=$(go env GOVERSION) go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
 # Web vuln scan (fails on high/critical)
 cd web && npm audit --audit-level=high
