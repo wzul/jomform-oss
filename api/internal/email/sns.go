@@ -22,18 +22,18 @@ import (
 
 // SNSNotification is the envelope every SNS HTTPS message carries.
 type SNSNotification struct {
-	Type               string `json:"Type"` // Notification | SubscriptionConfirmation
-	Message            string `json:"Message"`
-	MessageID          string `json:"MessageId"`
-	Subject            string `json:"Subject,omitempty"`
-	Timestamp          string `json:"Timestamp"`
-	SignatureVersion   string `json:"SignatureVersion"`
-	Signature          string `json:"Signature"`
-	SigningCertURL     string `json:"SigningCertURL"`
-	SubscribeURL       string `json:"SubscribeURL"`
-	Token              string `json:"Token"`
-	TopicArn           string `json:"TopicArn"`
-	UnsubscribeURL     string `json:"UnsubscribeURL"`
+	Type             string `json:"Type"` // Notification | SubscriptionConfirmation
+	Message          string `json:"Message"`
+	MessageID        string `json:"MessageId"`
+	Subject          string `json:"Subject,omitempty"`
+	Timestamp        string `json:"Timestamp"`
+	SignatureVersion string `json:"SignatureVersion"`
+	Signature        string `json:"Signature"`
+	SigningCertURL   string `json:"SigningCertURL"`
+	SubscribeURL     string `json:"SubscribeURL"`
+	Token            string `json:"Token"`
+	TopicArn         string `json:"TopicArn"`
+	UnsubscribeURL   string `json:"UnsubscribeURL"`
 }
 
 // SNSCertFetcher fetches the PEM-encoded signing certificate at a URL. It is a
@@ -41,15 +41,34 @@ type SNSNotification struct {
 type SNSCertFetcher func(url string) ([]byte, error)
 
 // SNSCertURLRe matches AWS SNS signing-certificate URLs. Amazon signs messages
-// only with certificates hosted on AWS S3; restricting the URL prevents SSRF
-// via a malicious SigningCertURL pointing at an internal host.
+// only with certificates hosted on the SNS HTTPS endpoint; restricting the URL
+// to sns.<region>.amazonaws.com prevents SSRF via a malicious SigningCertURL
+// pointing at an internal host, and HTTPS enforces verification against the
+// system root pool (no plaintext fetch).
 var SNSCertURLRe = regexp.MustCompile(`^https://sns\.[a-z0-9-]+\.amazonaws\.com/.*\.pem$`)
 
+// snsTopicRegionRe matches the region segment of an SNS topic ARN
+// (arn:aws:sns:<region>:<account>:<topic>).
+var snsTopicRegionRe = regexp.MustCompile(`^arn:aws:sns:([a-z0-9-]+):\d+:.+$`)
+
+// snsRegion returns the AWS region embedded in the SNS message's TopicArn.
+func snsRegion(msg SNSNotification) (string, error) {
+	m := snsTopicRegionRe.FindStringSubmatch(msg.TopicArn)
+	if m == nil {
+		return "", fmt.Errorf("sns topic arn has no parseable region: %q", msg.TopicArn)
+	}
+	return m[1], nil
+}
+
 // VerifySNSNotification verifies the SNS signature on the raw notification body
-// using the certificate fetched from SigningCertURL. certFetch defaults to an
-// HTTP GET when nil. It returns an error when the signature is absent, the cert
-// URL is not a valid AWS SNS URL, the cert cannot be fetched/parsed, or the
-// signature does not validate.
+// using the certificate fetched for the message. The cert is never fetched from
+// an arbitrary URL: the SigningCertURL is allowlisted to AWS's HTTPS
+// sns.<region>.amazonaws.com endpoint, its region must match the (signed)
+// TopicArn, and the fetched cert must be anchored to AWS's SNS signing chain
+// (subject CN "Amazon SNS"). certFetch defaults to an HTTP GET when nil. It
+// returns an error when the signature is absent, the cert URL is not a valid
+// AWS SNS URL for the message's region, the cert cannot be fetched/trusted, or
+// the signature does not validate.
 func VerifySNSNotification(raw []byte, certFetch SNSCertFetcher) error {
 	if certFetch == nil {
 		certFetch = func(url string) ([]byte, error) {
@@ -89,15 +108,24 @@ func VerifySNSNotification(raw []byte, certFetch SNSCertFetcher) error {
 	if msg.SignatureVersion != "1" {
 		return fmt.Errorf("unsupported sns signature version %q", msg.SignatureVersion)
 	}
-	// Restrict cert URLs to AWS-hosted SNS certs (SSRF guard).
-	if !SNSCertURLRe.MatchString(msg.SigningCertURL) {
-		return fmt.Errorf("sns signing cert url not allowed: %q", msg.SigningCertURL)
+	// Derive the cert source from the message's own region (the signed
+	// TopicArn), and require SigningCertURL to point at that same AWS HTTPS
+	// SNS endpoint. We never accept a URL that doesn't match — an attacker who
+	// alters SigningCertURL is rejected before any fetch.
+	region, err := snsRegion(msg)
+	if err != nil {
+		return err
+	}
+	allowed := fmt.Sprintf("https://sns.%s.amazonaws.com/", region)
+	if !SNSCertURLRe.MatchString(msg.SigningCertURL) ||
+		!strings.HasPrefix(msg.SigningCertURL, allowed) {
+		return fmt.Errorf("sns signing cert url not allowed for region %q: %q", region, msg.SigningCertURL)
 	}
 	certPEM, err := certFetch(msg.SigningCertURL)
 	if err != nil {
 		return fmt.Errorf("sns cert fetch: %w", err)
 	}
-	pub, err := parseSNSPublicKey(certPEM)
+	pub, err := parseSNSPublicKey(certPEM, SNSCertSubjects)
 	if err != nil {
 		return fmt.Errorf("sns cert parse: %w", err)
 	}
@@ -113,8 +141,21 @@ func VerifySNSNotification(raw []byte, certFetch SNSCertFetcher) error {
 	return nil
 }
 
-// parseSNSPublicKey extracts the RSA public key from an SNS signing cert PEM.
-func parseSNSPublicKey(pemBytes []byte) (any, error) {
+// SNSCertSubjects are the subject common names AWS uses for its SNS message
+// signing certificates. The cert fetched for signature verification must be
+// issued under one of these — otherwise a (hypothetically) successful fetch of
+// an arbitrary cert from an allowlisted host is rejected. This anchors trust to
+// AWS's SNS signing chain even if the allowlisted fetch were ever tampered with.
+var SNSCertSubjects = map[string]bool{
+	"Amazon SNS":        true,
+	"sns.amazonaws.com": true,
+}
+
+// parseSNSPublicKey extracts the RSA public key from an SNS signing cert PEM,
+// but only when the certificate's subject common name is one of the pinned AWS
+// SNS signer names given in allowedSubjects. This prevents verification from
+// trusting a cert that AWS did not issue for SNS message signing.
+func parseSNSPublicKey(pemBytes []byte, allowedSubjects map[string]bool) (any, error) {
 	block, _ := pem.Decode(pemBytes)
 	if block == nil {
 		return nil, fmt.Errorf("no pem block")
@@ -122,6 +163,10 @@ func parseSNSPublicKey(pemBytes []byte) (any, error) {
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
 		return nil, fmt.Errorf("parse certificate: %w", err)
+	}
+	if !allowedSubjects[cert.Subject.CommonName] {
+		return nil, fmt.Errorf(
+			"certificate subject %q is not a pinned AWS SNS signer", cert.Subject.CommonName)
 	}
 	return cert.PublicKey, nil
 }

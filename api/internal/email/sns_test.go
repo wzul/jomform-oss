@@ -49,7 +49,25 @@ func makeTestCert(t *testing.T) ([]byte, *rsa.PrivateKey) {
 		t.Fatalf("gen key: %v", err)
 	}
 	certDER, err := x509.CreateCertificate(rand.Reader,
-		&x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "sns"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)},
+		&x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "Amazon SNS"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)},
+		&x509.Certificate{}, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create cert: %v", err)
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	return certPEM, key
+}
+
+// makeTestCertWithCN is like makeTestCert but with a caller-chosen subject
+// common name, so tests can exercise subject pinning.
+func makeTestCertWithCN(t *testing.T, cn string) ([]byte, *rsa.PrivateKey) {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("gen key: %v", err)
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader,
+		&x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: cn}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)},
 		&x509.Certificate{}, &key.PublicKey, key)
 	if err != nil {
 		t.Fatalf("create cert: %v", err)
@@ -123,6 +141,42 @@ func TestVerifySNSNotificationRejectsUntrustedCertURL(t *testing.T) {
 	raw, _ := json.Marshal(msg)
 	if err := VerifySNSNotification(raw, fakeCertFetcher([]byte("PEM"))); err == nil {
 		t.Fatal("untrusted cert URL accepted — SSRF guard must reject it")
+	}
+}
+
+// The SigningCertURL is allowlisted but points at a different region than the
+// (signed) TopicArn — attacker switched regions to point at another AWS SNS
+// endpoint. Verification must reject it; the cert source is pinned to the
+// message's own region.
+func TestVerifySNSNotificationRejectsRegionMismatch(t *testing.T) {
+	certPEM, key := makeTestCert(t)
+	msg := SNSNotification{
+		Type: "Notification", MessageID: "m-reg", Timestamp: "2026-01-01T00:00:00Z",
+		SignatureVersion: "1",
+		SigningCertURL:   "https://sns.eu-west-1.amazonaws.com/SimpleNotificationService-x.pem", // wrong region
+		TopicArn:         "arn:aws:sns:us-east-1:1:t",
+		Message:          "x",
+	}
+	raw, _ := makeSNSSigner(t, key, certPEM, msg)
+	if err := VerifySNSNotification(raw, fakeCertFetcher(certPEM)); err == nil {
+		t.Fatal("region-mismatched cert URL accepted — must reject")
+	}
+}
+
+// The fetched certificate is a valid RSA cert but its subject is not an AWS SNS
+// signer — even though the URL is allowlisted, the cert must be rejected.
+func TestVerifySNSNotificationRejectsUntrustedCertSubject(t *testing.T) {
+	certPEM, key := makeTestCertWithCN(t, "evil.corp.local")
+	msg := SNSNotification{
+		Type: "Notification", MessageID: "m-subj-reject", Timestamp: "2026-01-01T00:00:00Z",
+		SignatureVersion: "1",
+		SigningCertURL:   "https://sns.us-east-1.amazonaws.com/SimpleNotificationService-evil.pem",
+		TopicArn:         "arn:aws:sns:us-east-1:1:t",
+		Message:          "x",
+	}
+	raw, _ := makeSNSSigner(t, key, certPEM, msg)
+	if err := VerifySNSNotification(raw, fakeCertFetcher(certPEM)); err == nil {
+		t.Fatal("non-AWS subject cert accepted — subject pinning must reject it")
 	}
 }
 
