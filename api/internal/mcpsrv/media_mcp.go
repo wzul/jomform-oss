@@ -18,6 +18,7 @@ type mediaOut struct {
 	Size       int64  `json:"size"`
 	Source     string `json:"source"`
 	ScanStatus string `json:"scan_status,omitempty"`
+	ScanReason string `json:"scan_reason,omitempty"`
 	CreatedAt  string `json:"created_at"`
 }
 
@@ -64,8 +65,8 @@ func (s *Server) listMedia(ctx context.Context, _ *mcp.CallToolRequest, in listM
 			out = append(out, mediaOut{
 				ID: m.ID, FormID: m.FormID, Key: m.Key, URL: m.URL,
 				Mime: m.Mime, Size: m.Size, Source: m.Source,
-				ScanStatus: m.ScanStatus,
-				CreatedAt:  m.CreatedAt.UTC().Format(time.RFC3339),
+				ScanStatus: m.ScanStatus, ScanReason: m.ScanReason,
+				CreatedAt: m.CreatedAt.UTC().Format(time.RFC3339),
 			})
 		}
 	}

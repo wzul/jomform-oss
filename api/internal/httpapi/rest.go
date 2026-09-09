@@ -84,6 +84,12 @@ type RESTHandlers struct {
 	// Nil in bare-mode tests; the media endpoints return empty/503.
 	Media *dbstore.MediaStore
 
+	// Issue #364: background asset-scan queue. Same Valkey-backed queue as
+	// email (#199) / spam judge (#245). Code-asset uploads enqueue an
+	// asset_scan job here; a nil queue (dev, no Valkey) means the asset stays
+	// 'pending' and is not served until a scan flips it (fail-closed).
+	AssetQueue *emailqueue.Queue
+
 	// Issue #184: LLM client for auto-generating per-space legal pages.
 	// Nil in bare-mode tests; the generate endpoint returns 503.
 	LLM interface {

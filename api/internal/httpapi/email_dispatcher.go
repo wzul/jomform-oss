@@ -19,6 +19,7 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/wzul/jomform/api/internal/assetgate"
 	"github.com/wzul/jomform/api/internal/email"
 	"github.com/wzul/jomform/api/internal/emailqueue"
 	"github.com/wzul/jomform/api/internal/payments"
@@ -39,6 +40,10 @@ type EmailDispatcher struct {
 	// SpamJudge (issue #245) classifies spam_judge jobs via the background AI
 	// judge. Nil → spam_judge jobs are dropped.
 	SpamJudge *spamjudge.Handler
+	// AssetScan (issue #364) classifies asset_scan jobs via the deterministic
+	// + LLM scan gate. Nil → asset_scan jobs are dropped (leaves assets in
+	// 'pending' — never served).
+	AssetScan *assetgate.Handler
 }
 
 // Send delivers one queued email job. A returned error triggers the worker's
@@ -57,6 +62,12 @@ func (d *EmailDispatcher) Send(ctx context.Context, job emailqueue.Job) error {
 			return nil
 		}
 		return d.SpamJudge.Send(ctx, job)
+	case assetgate.JobType:
+		if d.AssetScan == nil {
+			slog.Warn("emailq_asset_scan_no_handler", "account", job.AccountID)
+			return nil
+		}
+		return d.AssetScan.Send(ctx, job)
 	default:
 		slog.Warn("emailq_unknown_type", "type", job.Type, "to", job.To)
 		return nil

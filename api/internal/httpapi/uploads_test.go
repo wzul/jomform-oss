@@ -466,3 +466,19 @@ func TestBuildUploadKeyAssetExt(t *testing.T) {
 		t.Fatalf("key %q must be u/<acct>/<uuid>.css", key)
 	}
 }
+
+// Issue #364: accountIDFromKey extracts the owning account from a canonical
+// upload key, so serving gates can look up scan status without trusting the
+// client-supplied host.
+func TestAccountIDFromKey(t *testing.T) {
+	for _, k := range []string{"u/acct-1/x.css", "u/a_b_c/x.js", "u/A-9/x.html"} {
+		if got := accountIDFromKey(k); got != strings.Split(k, "/")[1] {
+			t.Fatalf("accountIDFromKey(%q) = %q, want %q", k, got, strings.Split(k, "/")[1])
+		}
+	}
+	for _, k := range []string{"/media/u/a/x.png", "", "logo.png", "a/b/c", "u/a/x/y.css", "u/a/x.css/"} {
+		if got := accountIDFromKey(k); got != "" {
+			t.Fatalf("accountIDFromKey(%q) = %q, want empty (non-canonical)", k, got)
+		}
+	}
+}

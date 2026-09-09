@@ -119,6 +119,37 @@ func (c *Client) ClassifySpam(ctx context.Context, submission string) (bool, err
 	return strings.HasPrefix(upper, "SPAM"), nil
 }
 
+// ClassifyAsset asks the model to classify an uploaded code asset
+// (CSS/JS/HTML/SVG) as MALICIOUS / BENIGN / NEEDS REVIEW (issue #364). The
+// prompt carries the asset's content and a trimmed code sample so the model
+// can judge whether the code is meant to harm visitors (data theft, phishing,
+// script injection, obfuscated malware) vs. a legitimate custom landing page.
+// The reply is one of the three words. The scan worker (internal/assetgate)
+// persists the verdict on the media row's scan_status, and the asset is NOT
+// served until it classifies as benign.
+func (c *Client) ClassifyAsset(ctx context.Context, code string) (string, error) {
+	// Trim to a bounded slice so a huge file doesn't blow the prompt / cost.
+	if len(code) > 12000 {
+		code = code[:12000]
+	}
+	body, err := json.Marshal(chatRequest{
+		Model: c.model,
+		Messages: []chatMessage{
+			{Role: "system", Content: "You are a security classifier for static website assets uploaded to a form builder. Users upload CSS/JS/HTML/SVG to style a landing page. Classify the asset as MALICIOUS if it is meant to harm visitors (script injection, data theft, phishing, keylogging, malvertising, obfuscated malware) or to abuse the platform as a malicious-script host. Classify as BENIGN if it is ordinary, safe website styling/behaviour (layout, fonts, form validation, analytics that the owner opted into). Classify as NEEDS REVIEW if it is an unusual pattern that a human should inspect before serving (external script loads, unusual obfuscation, suspicious data exfiltration). Reply with exactly one word: MALICIOUS, BENIGN, or NEEDS REVIEW. Do not add any other text."},
+			{Role: "user", Content: "Asset content:\n" + code},
+		},
+		Stream: false,
+	})
+	if err != nil {
+		return "", err
+	}
+	reply, err := c.chat(ctx, body)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(reply), nil
+}
+
 // GenerateFormConfig asks the model to draft a JomForm form config (blocks +
 // styling) from a natural-language prompt (issue #256). The prompt constrains
 // the model to the known block types and the JSON shape the formgen package

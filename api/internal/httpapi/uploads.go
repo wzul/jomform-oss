@@ -43,6 +43,7 @@ import (
 	"github.com/disintegration/imaging"
 	"github.com/google/uuid"
 
+	"github.com/wzul/jomform/api/internal/assetgate"
 	"github.com/wzul/jomform/api/internal/dbstore"
 )
 
@@ -191,6 +192,15 @@ func (o *ObjectStore) GetObject(ctx context.Context, key string) ([]byte, string
 	return body, ct, nil
 }
 
+// GetBytes is the object-store accessor the asset-scan worker
+// (internal/assetgate.Handler) uses to re-fetch an asset's bytes for the
+// deterministic + AI scan. It is a thin alias over GetObject, kept as its own
+// method so the worker's ObjectFetcher interface (a narrower contract than
+// the full object store) is satisfied without an import cycle.
+func (o *ObjectStore) GetBytes(ctx context.Context, key string) ([]byte, string, error) {
+	return o.GetObject(ctx, key)
+}
+
 // DeleteObject removes an object from the bucket (issue #180). It is used by
 // the media delete endpoint after the row is soft-deleted. A missing object is
 // not an error (idempotent delete).
@@ -246,6 +256,48 @@ func isCodeAsset(ct string) bool {
 	return strings.HasPrefix(ct, "text/") || ct == "font/woff2"
 }
 
+// accountIDFromKey extracts the account segment from an object key
+// (`u/{accountID}/{uuid}.{ext}`). Returns "" when the key isn't the canonical
+// upload shape. Serving gates use it to look up the owning account's scan
+// status without trusting the client host.
+func accountIDFromKey(key string) string {
+	p := strings.TrimPrefix(key, "/")
+	segs := strings.Split(p, "/")
+	if len(segs) != 3 || segs[0] != "u" {
+		return ""
+	}
+	return segs[1]
+}
+
+// scanGateAllowed allows an asset to be served. Images are always allowed
+// (customer/merchant image blocks must keep rendering cross-origin). Merchant
+// code assets (CSS/JS/HTML/SVG) are gated: only an 'ok' scan status serves.
+// Every other status is fail-closed (404), so an unscanned ('pending' /
+// 'scanning'), needs-review, or quarantined asset is never publicly
+// executable. A nil media store (bare-mode tests) or an object with no media
+// row is treated as allowed for images only; a code asset with no row is a
+// server-side gap and is blocked rather than silently served.
+func scanGateAllowed(ctx context.Context, media *dbstore.MediaStore, key, ct string) bool {
+	if media == nil {
+		// No metadata store (bare-mode/unit tests) — serve. Production always
+		// wires Media, so the gate is enforced in the deployed service.
+		return true
+	}
+	if !isCodeAsset(ct) {
+		return true // images are unaffected by the code-asset gate
+	}
+	acct := accountIDFromKey(key)
+	if acct == "" {
+		return false
+	}
+	m, err := media.ByKey(ctx, acct, key)
+	if err != nil || m == nil {
+		// No media row for a code asset → cannot prove it was scanned → block.
+		return false
+	}
+	return m.ScanStatus == "ok"
+}
+
 // handleMedia serves GET /media/{key} — a public, unauthenticated route that
 // streams an uploaded object from the media bucket (issue #145). The key is
 // validated to a safe `u/...` path (no traversal), the object's stored
@@ -279,6 +331,12 @@ func (h *RESTHandlers) handleMedia(w http.ResponseWriter, r *http.Request) {
 		}
 		slog.Error("media_get", "err", err, "key", key)
 		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	// Issue #364: code-asset scan gate. A not-yet-scanned, needs-review, or
+	// quarantined code asset is never served (404). Images are unaffected.
+	if !scanGateAllowed(r.Context(), h.Media, key, ct) {
+		writeErr(w, http.StatusNotFound, "media tidak tersedia")
 		return
 	}
 	w.Header().Set("Content-Type", ct)
@@ -663,7 +721,42 @@ func (h *RESTHandlers) uploadAsset(w http.ResponseWriter, r *http.Request, actx 
 	})
 	// Issue #180: record the object in the media library so the dashboard can
 	// list it (metadata + filtering). Best-effort.
-	h.recordMedia(r, actx, key, mime, int64(len(data)), dbstore.MediaSourceMerchant, "")
+	rec := h.recordMedia(r, actx, key, mime, int64(len(data)), dbstore.MediaSourceMerchant, "")
+
+	// Issue #364: code-asset scan gate. Run the cheap deterministic heuristics
+	// inline; if they flag the file we persist 'quarantined' immediately so it
+	// is never served. Otherwise we set 'scanning' and enqueue a background
+	// asset_scan job for the LLM review; the asset stays unserved until that
+	// worker flips it to 'ok'. Fail-closed: any gap (no queue, no store) leaves
+	// the row 'pending'/'scanning', which never serves.
+	det := assetgate.DeterministicScan(data, mime)
+	var scanStatus, scanReason string
+	switch {
+	case det.Status == assetgate.StatusQuarantined:
+		scanStatus = assetgate.StatusQuarantined
+		scanReason = strings.Join(det.Reasons, "; ")
+	case h.AssetQueue != nil && rec != nil && h.Media != nil:
+		scanStatus = assetgate.StatusScanning
+		scanReason = "queued for AI review"
+		_ = h.Media.MarkScanning(r.Context(), actx.Account.ID, rec.ID, scanReason) // best-effort
+		if err := assetgate.Enqueue(r.Context(), h.AssetQueue, assetgate.ScanJob{
+			MediaID: rec.ID, Key: key, AccountID: actx.Account.ID, Mime: mime,
+		}); err != nil {
+			slog.Warn("asset_scan_enqueue_failed", "media", rec.ID, "err", err)
+			// Leave 'scanning' — the asset is not served until a successful
+			// scan, so this is safe fail-closed behaviour.
+		} else {
+			slog.Info("asset_scan_enqueued", "media", rec.ID, "key", key)
+		}
+	case rec != nil && h.Media != nil:
+		// No background queue wired (dev / bare-mode): the asset cannot be
+		// verified, keep it 'pending' so it is never served.
+		scanStatus = assetgate.StatusPending
+	}
+	if scanStatus != "" && rec != nil && h.Media != nil {
+		_ = h.Media.SetScanStatus(r.Context(), actx.Account.ID, rec.ID, scanStatus, scanReason) // best-effort
+	}
+
 	respond(w, http.StatusOK, map[string]string{"url": h.Store.PublicURL(key)})
 }
 

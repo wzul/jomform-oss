@@ -19,6 +19,7 @@ import (
 	"github.com/wzul/jomform/api/internal/llm"
 	"github.com/wzul/jomform/api/internal/payments"
 
+	"github.com/wzul/jomform/api/internal/assetgate"
 	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/config"
 	"github.com/wzul/jomform/api/internal/db"
@@ -267,6 +268,11 @@ func main() {
 			Notifications: notificationsStore,
 			// Issue #180: media library metadata store.
 			Media: mediaStore,
+			// Issue #364: background asset-scan queue. Code-asset uploads
+			// enqueue an asset_scan job here; the worker classifies them
+			// (deterministic + LLM) and flips scan_status before the asset
+			// is served. Nil (no Valkey) keeps assets unserved (fail-closed).
+			AssetQueue: deps.EmailQueue,
 			// Issue #184: LLM client for auto-generating legal pages.
 			LLM: llm.New(cfg.LLMBaseURL, cfg.LLMModel),
 			// Issue #185: BNM exchange-rate cache.
@@ -340,6 +346,9 @@ func main() {
 			// Issue #361: same media bucket serves merchant code assets on the
 			// space/custom domain via /assets/{key}. Nil disables the route.
 			Store: store,
+			// Issue #364: media metadata store gates code-asset serving on the
+			// background scan status (only 'ok' is served).
+			Media: mediaStore,
 			}
 
 		// Issue #199: start the background email worker. It polls the
@@ -362,6 +371,16 @@ func main() {
 					LLM:   llm.New(cfg.LLMBaseURL, cfg.LLMModel),
 					Subs:  submissionsStore,
 					Sales: sales,
+				},
+				// Issue #364: the same worker also routes asset_scan jobs to
+				// the deterministic + LLM code-asset gate (Ollama Cloud). The
+				// handler flips scan_status on the media row; only 'ok' assets
+				// are served. Nil-safe: without a store or LLM the handler
+				// leaves the asset unserved (fail-closed).
+				AssetScan: &assetgate.Handler{
+					Media: mediaStore,
+					Store: store,
+					LLM:   llm.New(cfg.LLMBaseURL, cfg.LLMModel),
 				},
 			}
 			deps.EmailWorker = emailqueue.NewWorker(deps.EmailQueue, dispatcher, log)

@@ -76,6 +76,9 @@ type PublicHandlers struct {
 	// Issue #361: S3/MinIO store serving the space/custom-domain code-asset
 	// route GET /assets/{key}. Nil when media storage isn't configured.
 	Store *ObjectStore
+	// Issue #364: media metadata store used to gate code-asset serving on the
+	// background scan status. Only assets scanned as 'ok' are served. Nil-safe.
+	Media *dbstore.MediaStore
 }
 
 // RegisterRoutes wires public endpoints.
@@ -1709,6 +1712,12 @@ func (h *PublicHandlers) handleAsset(w http.ResponseWriter, r *http.Request) {
 		}
 		slog.Error("asset_get", "err", err, "key", key)
 		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	// Issue #364: code-asset scan gate. A not-yet-scanned, needs-review, or
+	// quarantined code asset is never served (404). Images are unaffected.
+	if !scanGateAllowed(r.Context(), h.Media, key, ct) {
+		http.NotFound(w, r)
 		return
 	}
 	w.Header().Set("Content-Type", ct)

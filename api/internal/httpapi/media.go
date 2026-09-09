@@ -24,9 +24,11 @@ type restMedia struct {
 	Size      int64  `json:"size"`
 	Source    string `json:"source"`
 	// ScanStatus is the #364 scan status ('pending' until the scan engine
-	// lands). Exposed for a future media UI to mark unscanned/quarantined
-	// code assets; it has no effect on serving yet (issue #361).
+	// lands). Exposed for the media UI + ops to see unscanned/quarantined
+	// code assets; only 'ok' is served (issue #364).
 	ScanStatus string `json:"scan_status"`
+	// ScanReason is why a code asset was flagged/quarantined (issue #364).
+	ScanReason string `json:"scan_reason,omitempty"`
 	CreatedAt  string `json:"created_at"`
 }
 
@@ -57,7 +59,7 @@ func (h *RESTHandlers) listMedia(w http.ResponseWriter, r *http.Request, actx *A
 		out = append(out, restMedia{
 			ID: m.ID, FormID: m.FormID, Key: m.Key, URL: m.URL,
 			Mime: m.Mime, Size: m.Size, Source: m.Source,
-			ScanStatus: m.ScanStatus,
+			ScanStatus: m.ScanStatus, ScanReason: m.ScanReason,
 			CreatedAt:  m.CreatedAt.UTC().Format(time.RFC3339),
 		})
 	}
@@ -99,11 +101,13 @@ func (h *RESTHandlers) deleteMedia(w http.ResponseWriter, r *http.Request, actx 
 
 // recordMedia records an uploaded object in the media library (issue #180).
 // It is best-effort: a metadata write failure is logged but never fails the
-// upload. formID is "" for merchant uploads not tied to a form; customer
-// uploads (a dependency) will pass the form id + customer source.
-func (h *RESTHandlers) recordMedia(r *http.Request, actx *AccountCtx, key, mime string, size int64, source, formID string) {
+// upload. It returns the created media row (with its id) on success, nil on
+// failure, so the caller can queue a background scan against it (issue #364).
+// formID is "" for merchant uploads not tied to a form; customer uploads (a
+// dependency) will pass the form id + customer source.
+func (h *RESTHandlers) recordMedia(r *http.Request, actx *AccountCtx, key, mime string, size int64, source, formID string) *dbstore.Media {
 	if h.Media == nil {
-		return
+		return nil
 	}
 	m := &dbstore.Media{
 		AccountID: actx.Account.ID, FormID: formID, Key: key,
@@ -111,5 +115,7 @@ func (h *RESTHandlers) recordMedia(r *http.Request, actx *AccountCtx, key, mime 
 	}
 	if err := h.Media.Create(r.Context(), m); err != nil {
 		slog.Warn("media_record", "err", err, "key", key, "account", actx.Account.ID)
+		return nil
 	}
+	return m
 }
