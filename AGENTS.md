@@ -46,6 +46,22 @@ Parity checklist (dashboard → MCP):
 - Media library / asset upload (image + code, tenant-scoped, scan-gated,
   #361/#364) → `list_media`, `upload_media`
 
+## DOCUMENTATION PARITY (RULE — jangan tertinggal/terlepas)
+
+**Every feature MUST be documented** — not just have MCP parity. When adding any
+new feature (dashboard, MCP tool, placeholder, setting, or behavior), you MUST
+add/update the corresponding docs page in the knowledge base (`docs.jomform.com`,
+issue #395) so users know what JomForm offers and how to use it:
+
+1. Document the feature in the docs site (how it works, how to use it).
+2. Document any new **MCP tool** (name, purpose, inputs, outputs) — keep it in
+   sync with the tool registry in `api/internal/mcpsrv/`.
+3. Document any new **dynamic placeholder** (e.g. `{admin_email}`, `{{ref_code}}`)
+   in the placeholders reference.
+4. Add an **inline "?" doc link** in the UI next to the feature/field where
+   relevant (e.g. next to the `{admin_email}` field → placeholders doc).
+5. Re-check the FULL docs coverage — don't ship a feature with no docs.
+
 ## Conventions
 
 - Money = integer **sen** everywhere.
