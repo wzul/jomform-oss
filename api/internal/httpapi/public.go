@@ -34,18 +34,18 @@ import (
 
 // PublicHandlers serves buyer-facing order forms.
 type PublicHandlers struct {
-	Forms              *dbstore.FormStore
-	Sales              *dbstore.SaleStore
-	Accounts           *dbstore.AccountStore
+	Forms    *dbstore.FormStore
+	Sales    *dbstore.SaleStore
+	Accounts *dbstore.AccountStore
 	// Issue #236: multi-domain resolution via the account_domains table.
 	// Nil in bare-mode tests; customDomainOwner then falls back to the
 	// legacy accounts.custom_domain column.
-	Domains            *dbstore.DomainStore
-	Products           *dbstore.ProductStore
-	ProductVariations  *dbstore.ProductVariationStore
-	Pay                *payments.Service
-	SystemSettings     *dbstore.SystemSettingStore
-	Spaces             *dbstore.SpaceStore
+	Domains           *dbstore.DomainStore
+	Products          *dbstore.ProductStore
+	ProductVariations *dbstore.ProductVariationStore
+	Pay               *payments.Service
+	SystemSettings    *dbstore.SystemSettingStore
+	Spaces            *dbstore.SpaceStore
 	// Issue #171: response-only form submissions.
 	Submissions *dbstore.SubmissionStore
 	BaseURL     string
@@ -487,9 +487,9 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sale := &dbstore.Sale{
-		AccountID:     form.AccountID,
-		FormID:        form.ID,
-		RefCode:       genRef(),
+		AccountID: form.AccountID,
+		FormID:    form.ID,
+		RefCode:   genRef(),
 		Client: resolveChipClient(form, in.Fields, dbstore.SaleClient{
 			FullName: in.Client.FullName, Email: in.Client.Email, Phone: in.Client.Phone,
 			StreetAddress: in.Client.StreetAddress, City: in.Client.City, State: in.Client.State,
@@ -1606,6 +1606,19 @@ type spaceLandingData struct {
 	// HasForms reports whether at least one published form exists (used to
 	// decide the "no forms yet" hint behind the hero).
 	HasForms bool
+	// Embeds are the published forms configured to render inline (issue #362).
+	// Only slugs that resolve to a published form in the space are included;
+	// unknown/draft/private slugs are dropped server-side so they never render.
+	Embeds []landingEmbedView
+}
+
+// landingEmbedView is one inline-embedded form on the landing page (issue
+// #362). The form is framed same-origin at /{slug} so it reuses the full
+// render + validation + submit path of a direct visit (fields render, anti
+// spam applies, submissions land in the same form's submissions/sales).
+type landingEmbedView struct {
+	Label    string
+	FormSlug string
 }
 
 // landingPageTmpl renders the customizable space landing page (issue #360).
@@ -1640,6 +1653,12 @@ var landingPageTmpl = template.Must(template.New("space-landing").Parse(`<!docty
          display:inline-block; transition:opacity .15s ease, transform .15s ease; }
   .cta:hover { opacity:.9; transform:translateY(-1px); }
   .hint { margin-top:16px; color:#9ca3af; font-size:14px; }
+  /* Issue #362: inline-embedded published forms (e.g. RSVP). */
+  .embeds { margin-top:36px; display:flex; flex-direction:column; gap:36px; }
+  .embed { display:block; }
+  .embed h2 { margin:0 0 12px; font-size:20px; color:{{if .Lp.PrimaryColor}}{{.Lp.PrimaryColor}}{{else}}#17181c{{end}}; }
+  .embed iframe { width:100%; height:720px; border:0; border-radius:16px;
+                  background:#ffffff; box-shadow:0 1px 3px rgba(23,24,28,0.08); }
 </style>
 </head>
 <body>
@@ -1655,21 +1674,52 @@ var landingPageTmpl = template.Must(template.New("space-landing").Parse(`<!docty
       {{range .Lp.CTAs}}<a class="cta" href="/{{.FormSlug}}">{{.Label}}</a>{{end}}
     </div>
     {{if not .HasForms}}<p class="hint">Belum ada borang.</p>{{end}}
+    {{if .Embeds}}<div class="embeds">
+      {{range .Embeds}}<div class="embed">
+        <h2>{{.Label}}</h2>
+        <iframe src="/{{.FormSlug}}" title="{{.Label}}" loading="lazy"
+                allow="payment" referrerpolicy="no-referrer-when-downgrade"></iframe>
+      </div>{{end}}
+    </div>{{end}}
   </div>
 </body>
 </html>`))
 
 // renderSpaceLanding writes the customized landing page (issue #360).
 func (h *PublicHandlers) renderSpaceLanding(w http.ResponseWriter, r *http.Request, slug string, forms []*dbstore.Form, lp *dbstore.LandingPage) {
+	// Issue #362: resolve the embedded-form blocks against the space's
+	// published forms. Only slugs that match a published form are rendered;
+	// draft/private/unknown slugs are dropped server-side. Embeds are
+	// framed same-origin at /{slug} so they reuse the full form render +
+	// validation + submit path, keeping server authority on form semantics.
 	data := spaceLandingData{
 		Slug:     slug,
 		Lp:       lp,
 		HasForms: len(forms) > 0,
+		Embeds:   resolveLandingEmbeds(lp.Forms, forms),
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := landingPageTmpl.Execute(w, data); err != nil {
 		http.Error(w, "ralat", http.StatusInternalServerError)
 	}
+}
+
+// resolveLandingEmbeds filters the landing page's configured embedded-form
+// blocks down to the slugs that resolve to a published form in the space
+// (issue #362). Slugs that don't match a published form are dropped so they
+// never render on the public page.
+func resolveLandingEmbeds(configured []dbstore.LandingEmbed, published []*dbstore.Form) []landingEmbedView {
+	bySlug := map[string]bool{}
+	for _, f := range published {
+		bySlug[f.Slug] = true
+	}
+	var embeds []landingEmbedView
+	for _, em := range configured {
+		if bySlug[em.FormSlug] {
+			embeds = append(embeds, landingEmbedView{Label: em.Label, FormSlug: em.FormSlug})
+		}
+	}
+	return embeds
 }
 
 // handleAsset serves GET /assets/{key...} on a space/custom domain — merchant

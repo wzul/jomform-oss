@@ -217,6 +217,12 @@ type LandingPage struct {
 	LogoURL string `json:"logo_url"`
 	// CTAs are buttons linking to published forms (label + form slug).
 	CTAs []LandingCTA `json:"ctas"`
+	// Forms are published forms embedded inline on the landing page (issue
+	// #362). Each embed renders the full JomForm form (fields + validation +
+	// submission) same-origin via an iframe to /{slug}, so RSVP-style forms
+	// submit straight into the form's submissions/sales exactly as a direct
+	// visit would. Stored in the landing_page_json blob.
+	Forms []LandingEmbed `json:"forms"`
 }
 
 // LandingCTA is a landing-page call-to-action button linking to a public form.
@@ -227,13 +233,24 @@ type LandingCTA struct {
 	FormSlug string `json:"form_slug"`
 }
 
+// LandingEmbed is a published form rendered inline on the landing page (issue
+// #362). FormSlug must resolve to a published form in the same space; the
+// server only renders embed blocks whose slug matches a published form, so a
+// draft/private/unknown slug is never shown.
+type LandingEmbed struct {
+	// Label is an optional heading shown above the embedded form.
+	Label string `json:"label"`
+	// FormSlug is the published form to embed (e.g. "rsvp").
+	FormSlug string `json:"form_slug"`
+}
+
 // SpaceSettings is the storefront configuration for one space.
 type SpaceSettings struct {
-	SpaceID        string `json:"space_id"`
-	FooterText     string `json:"footer_text"`
-	CompanyReg     string `json:"company_reg"`
-	PrivacyURL     string `json:"privacy_url"`
-	TermsURL       string `json:"terms_url"`
+	SpaceID    string `json:"space_id"`
+	FooterText string `json:"footer_text"`
+	CompanyReg string `json:"company_reg"`
+	PrivacyURL string `json:"privacy_url"`
+	TermsURL   string `json:"terms_url"`
 	// Issue #183: optional public-form footer fields.
 	RefundURL      string `json:"refund_url"`
 	ContactPhone   string `json:"contact_phone"`

@@ -94,3 +94,88 @@ func TestSpaceLandingPageTemplateEscapesBody(t *testing.T) {
 		t.Errorf("hero not HTML-escaped")
 	}
 }
+
+// Issue #362: a landing page configured with embedded published forms renders
+// each as a same-origin iframe to /{slug}; unknown/draft/private slugs are
+// dropped server-side.
+func TestSpaceLandingPageEmbedsPublishedForms(t *testing.T) {
+	lp := &dbstore.LandingPage{
+		Enabled: true,
+		Hero:    "Ali & Siti wedding",
+		Forms: []dbstore.LandingEmbed{
+			{Label: "Reply to the RSVP", FormSlug: "rsvp"},
+			{Label: "Dinner choice", FormSlug: "dinner"},
+		},
+	}
+	published := []*dbstore.Form{
+		{Slug: "rsvp"},
+		{Slug: "dinner"},
+		{Slug: "hotel"},
+	}
+	embeds := resolveLandingEmbeds(lp.Forms, published)
+	if len(embeds) != 2 {
+		t.Fatalf("expected 2 embeds (rsvp + dinner), got %d", len(embeds))
+	}
+	data := spaceLandingData{Slug: "ali-siti", Lp: lp, HasForms: true, Embeds: embeds}
+	var buf bytes.Buffer
+	if err := landingPageTmpl.Execute(&buf, data); err != nil {
+		t.Fatalf("landingPageTmpl.Execute: %v", err)
+	}
+	body := buf.String()
+	for _, want := range []string{
+		`<iframe src="/rsvp"`, `title="Reply to the RSVP"`,
+		`<iframe src="/dinner"`, `title="Dinner choice"`, `Reply to the RSVP`, `Dinner choice`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("landing page embed output missing %q\nbody:\n%s", want, body)
+		}
+	}
+	// The non-embedded published form must NOT appear as an embed.
+	if strings.Contains(body, `<iframe src="/hotel"`) {
+		t.Errorf("landing page embedded a form that was not configured (/hotel)")
+	}
+}
+
+// Issue #362: embedded-form blocks whose slug is not in the published set are
+// filtered out by resolveLandingEmbeds so nothing renders for a draft/private/
+// unknown slug.
+func TestResolveLandingEmbedsDropsUnknownSlugs(t *testing.T) {
+	lp := &dbstore.LandingPage{
+		Enabled: true,
+		Forms: []dbstore.LandingEmbed{
+			{Label: "draft", FormSlug: "not-published"},
+			{Label: "ok", FormSlug: "rsvp"},
+		},
+	}
+	published := []*dbstore.Form{{Slug: "rsvp"}}
+	embeds := resolveLandingEmbeds(lp.Forms, published)
+	if len(embeds) != 1 || embeds[0].FormSlug != "rsvp" {
+		t.Fatalf("expected only the published 'rsvp' embed, got %+v", embeds)
+	}
+	// Rendering must not include the dropped block.
+	data := spaceLandingData{Slug: "s", Lp: lp, HasForms: true, Embeds: embeds}
+	var buf bytes.Buffer
+	if err := landingPageTmpl.Execute(&buf, data); err != nil {
+		t.Fatalf("landingPageTmpl.Execute: %v", err)
+	}
+	if strings.Contains(buf.String(), "not-published") || strings.Contains(buf.String(), "draft") {
+		t.Errorf("landing page rendered a form slug that is not published")
+	}
+}
+
+// Issue #362: with no embedded forms configured, no embed section is rendered.
+func TestSpaceLandingPageNoEmbedSectionWhenNoneConfigured(t *testing.T) {
+	lp := &dbstore.LandingPage{Enabled: true, Hero: "Only hero"}
+	data := spaceLandingData{Slug: "s", Lp: lp, HasForms: true}
+	var buf bytes.Buffer
+	if err := landingPageTmpl.Execute(&buf, data); err != nil {
+		t.Fatalf("landingPageTmpl.Execute: %v", err)
+	}
+	body := buf.String()
+	if strings.Contains(body, "class=\"embeds\"") {
+		t.Errorf("landing page rendered an embeds section with no embedded forms configured")
+	}
+	if strings.Contains(body, "<iframe") {
+		t.Errorf("landing page rendered an <iframe> with no embedded forms configured")
+	}
+}

@@ -407,16 +407,17 @@ func (s *Server) getSpaceLandingPage(
 }
 
 type setSpaceLandingPageIn struct {
-	SpaceID         string                `json:"space_id" jsonschema:"ID space (dari list_spaces)"`
-	Enabled         bool                  `json:"enabled" jsonschema:"true = papar landing page; false = jatuh ke senarai borang"`
-	Hero            string                `json:"hero,omitempty" jsonschema:"Tajuk utama (hero)"`
-	Subtitle        string                `json:"subtitle,omitempty" jsonschema:"Sub-tajuk di bawah hero"`
-	Body            string                `json:"body,omitempty" jsonschema:"Teks badan landing page"`
-	ImageURL        string                `json:"image_url,omitempty" jsonschema:"URL imej banner (mesti https://)"`
-	PrimaryColor    string                `json:"primary_color,omitempty" jsonschema:"Warna aksen tema, cth #7c3aed"`
-	BackgroundColor string                `json:"background_color,omitempty" jsonschema:"Warna latar, cth #ffffff"`
-	LogoURL         string                `json:"logo_url,omitempty" jsonschema:"URL logo jenama (mesti https://)"`
-	CTAs            []dbstore.LandingCTA `json:"ctas,omitempty" jsonschema:"Butang CTA menghubung ke borang diterbitkan, cth [{\"label\":\"RSVP\",\"form_slug\":\"rsvp\"}]"`
+	SpaceID         string                 `json:"space_id" jsonschema:"ID space (dari list_spaces)"`
+	Enabled         bool                   `json:"enabled" jsonschema:"true = papar landing page; false = jatuh ke senarai borang"`
+	Hero            string                 `json:"hero,omitempty" jsonschema:"Tajuk utama (hero)"`
+	Subtitle        string                 `json:"subtitle,omitempty" jsonschema:"Sub-tajuk di bawah hero"`
+	Body            string                 `json:"body,omitempty" jsonschema:"Teks badan landing page"`
+	ImageURL        string                 `json:"image_url,omitempty" jsonschema:"URL imej banner (mesti https://)"`
+	PrimaryColor    string                 `json:"primary_color,omitempty" jsonschema:"Warna aksen tema, cth #7c3aed"`
+	BackgroundColor string                 `json:"background_color,omitempty" jsonschema:"Warna latar, cth #ffffff"`
+	LogoURL         string                 `json:"logo_url,omitempty" jsonschema:"URL logo jenama (mesti https://)"`
+	CTAs            []dbstore.LandingCTA   `json:"ctas,omitempty" jsonschema:"Butang CTA menghubung ke borang diterbitkan, cth [{\"label\":\"RSVP\",\"form_slug\":\"rsvp\"}]"`
+	Forms           []dbstore.LandingEmbed `json:"forms,omitempty" jsonschema:"Borang diterbitkan dipapar inline dalam landing page, cth [{\"label\":\"RSVP\",\"form_slug\":\"rsvp\"}]"`
 }
 
 func (s *Server) setSpaceLandingPage(
@@ -453,9 +454,13 @@ func (s *Server) setSpaceLandingPage(
 		BackgroundColor: in.BackgroundColor,
 		LogoURL:         in.LogoURL,
 		CTAs:            in.CTAs,
+		Forms:           in.Forms,
 	}
 	if lp.CTAs == nil {
 		lp.CTAs = []dbstore.LandingCTA{}
+	}
+	if lp.Forms == nil {
+		lp.Forms = []dbstore.LandingEmbed{}
 	}
 	st.LandingPage = lp
 	if err := sp.SaveSettings(ctx, st); err != nil {

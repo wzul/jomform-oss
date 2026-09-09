@@ -206,6 +206,8 @@ export default function Settings() {
   const [lpBackgroundColor, setLpBackgroundColor] = useState("#ffffff");
   const [lpLogoUrl, setLpLogoUrl] = useState("");
   const [lpCtas, setLpCtas] = useState<{ label: string; form_slug: string }[]>([]);
+  // Issue #362: published forms embedded inline on the landing page.
+  const [lpForms, setLpForms] = useState<{ label: string; form_slug: string }[]>([]);
   const [lpSpaceId, setLpSpaceId] = useState("");
   // Issue #185: per-space currency + BNM rates.
   const [currency, setCurrency] = useState("MYR");
@@ -430,6 +432,7 @@ export default function Settings() {
         setLpBackgroundColor(lp.background_color || "#ffffff");
         setLpLogoUrl(lp.logo_url || "");
         setLpCtas(Array.isArray(lp.ctas) ? lp.ctas : []);
+        setLpForms(Array.isArray(lp.forms) ? lp.forms : []);
       })
       .catch(() => {});
     fetch(`/api/rest/currency/rates`)
@@ -756,6 +759,7 @@ export default function Settings() {
           background_color: lpBackgroundColor,
           logo_url: lpLogoUrl,
           ctas: lpCtas,
+          forms: lpForms,
         },
       }),
     });
@@ -1771,6 +1775,46 @@ export default function Settings() {
                         className="jf-btn-outline"
                       >
                         + {t("set.lpCtaAdd")}
+                      </button>
+                    </div>
+                  </div>
+                  {/* Issue #362: published forms embedded inline on the landing page. */}
+                  <div>
+                    <label className="text-xs text-slate-500">{t("set.lpForms")}</label>
+                    <div className="mt-1 space-y-2">
+                      {lpForms.map((c, i) => (
+                        <div key={i} className="flex max-w-xl items-center gap-2">
+                          <input
+                            value={c.label}
+                            onChange={(e) =>
+                              setLpForms((arr) => arr.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)))
+                            }
+                            className="jf-input flex-1"
+                            placeholder={t("set.lpFormLabel")}
+                          />
+                          <input
+                            value={c.form_slug}
+                            onChange={(e) =>
+                              setLpForms((arr) => arr.map((x, j) => (j === i ? { ...x, form_slug: e.target.value } : x)))
+                            }
+                            className="jf-input flex-1"
+                            placeholder={t("set.lpFormSlug")}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setLpForms((arr) => arr.filter((_, j) => j !== i))}
+                            className="jf-btn-outline shrink-0"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={() => setLpForms((arr) => [...arr, { label: "", form_slug: "" }])}
+                        className="jf-btn-outline"
+                      >
+                        + {t("set.lpFormAdd")}
                       </button>
                     </div>
                   </div>
