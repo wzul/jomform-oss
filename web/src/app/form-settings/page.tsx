@@ -318,9 +318,11 @@ function FormSettingsInner() {
       setFormBlocks(blocks.filter((b) => FEED_FIELD_TYPES.has(b.type)));
       const fr = await fetch(`/api/rest/forms/${formId}/chip-feeds${spaceQuery()}`);
       if (fr.ok) {
-        const fd = (await fr.json()) as { feeds: ChipFeed[] };
+        const fd = (await fr.json()) as { feeds: ChipFeed[] | null };
+        // Issue: chip-feeds returns {"feeds":null} when none configured —
+        // guard so a null list doesn't throw and trip the loadErr catch.
         setFeeds(
-          fd.feeds.map((f) => ({
+          (fd.feeds || []).map((f) => ({
             id: f.id,
             name: f.name,
             brand_id: f.brand_id,
