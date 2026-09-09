@@ -961,6 +961,9 @@ const DICT = {
   "fs.opGt": { en: "greater than", ms: "lebih besar", zh: "大于", ta: "அதிகம்", ar: "أكبر من" },
   "fs.opLt": { en: "less than", ms: "kurang", zh: "小于", ta: "குறைவு", ar: "أقل من" },
   "fs.opNotEmpty": { en: "is not empty", ms: "tidak kosong", zh: "不为空", ta: "காலியாக இல்லை", ar: "غير فارغ" },
+  // Issue #392: conditional-logic picker (field dropdown + context-aware value + summary).
+  "fs.condIf": { en: "If", ms: "Jika", zh: "如果", ta: "என்றால்", ar: "إذا" },
+  "fs.condSelectField": { en: "Select a field…", ms: "Pilih medan…", zh: "选择字段…", ta: "புலத்தைத் தேர்ந்தெடுக்கவும்…", ar: "اختر حقلاً…" },
   "fs.notificationsHint": { en: "Per-form receipt email. Leave subject and body blank to use the space defaults.", ms: "Emel resit per-borang. Kosongkan subjek dan badan untuk guna lalai space.", zh: "每表单收据邮件。主题和正文留空则使用空间默认值。", ta: "ஒவ்வொரு படிவ ரசீது மின்னஞ்சல். இடத்தின் இயல்புநிலைகளைப் பயன்படுத்த தலைப்பு மற்றும் உடலை காலியாக விடவும்.", ar: "بريد إيصال لكل نموذج. اترك الموضوع والمحتوى فارغين لاستخدام افتراضيات المساحة." },
   "fs.blankUsesSpace": { en: "(blank = use space default)", ms: "(kosong = guna lalai space)", zh: "（留空 = 使用空间默认值）", ta: "(காலியாக = இடத்தின் இயல்புநிலையைப் பயன்படுத்து)", ar: "(فارغ = استخدم افتراضي المساحة)" },
   // Issue #193: per-form notification rules (Gravity-Forms-style).

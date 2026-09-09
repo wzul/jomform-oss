@@ -101,6 +101,127 @@ function feedUid() {
   return "feed_" + Math.random().toString(36).slice(2, 9);
 }
 
+// Issue #392: field types whose value should be picked from the field's
+// choices (a dropdown) rather than typed as free text.
+const CHOICE_FIELD_TYPES = new Set(["select", "radio", "image-choice", "option"]);
+
+// Issue #392: a form block as used by the conditional-logic picker.
+type CondBlock = { id: string; value: string; type: string; choices?: { label?: string; value?: string }[] };
+
+// Issue #392: resolve a field's user-friendly label (falling back to its type).
+function condFieldLabel(b: CondBlock | undefined): string {
+  if (!b) return "";
+  return b.value || b.type;
+}
+
+// Issue #392: the choices available for a field (used for the value dropdown).
+function condFieldChoices(b: CondBlock | undefined): { label: string; value: string }[] {
+  if (!b || !Array.isArray(b.choices)) return [];
+  return b.choices
+    .map((c) => ({ label: c.label || c.value || "", value: c.value || c.label || "" }))
+    .filter((c) => c.value);
+}
+
+// Issue #392: human-readable summary of a condition, e.g. "If Package equals Premium".
+function condSummary(
+  t: (k: import("../../components/i18n").Key) => string,
+  field: CondBlock | undefined,
+  op: string,
+  value: string,
+): string {
+  const f = condFieldLabel(field);
+  const opKey = `fs.op${op[0].toUpperCase()}${op.slice(1)}` as import("../../components/i18n").Key;
+  const opLabel = t(opKey);
+  if (op === "not_empty") return `${t("fs.condIf")} ${f} ${opLabel}`;
+  return `${t("fs.condIf")} ${f} ${opLabel} ${value}`;
+}
+
+// Issue #392: reusable "If [field] [operator] [value]" builder. Shows a field
+// dropdown (label + type), an operator dropdown, and a context-aware value
+// input (choices dropdown for select/radio/image-choice fields, text otherwise).
+function ConditionPicker({
+  fieldId,
+  op,
+  value,
+  fields,
+  onField,
+  onOp,
+  onValue,
+  t,
+  compact,
+}: {
+  fieldId: string;
+  op: string;
+  value: string;
+  fields: CondBlock[];
+  onField: (id: string) => void;
+  onOp: (o: string) => void;
+  onValue: (v: string) => void;
+  t: (k: import("../../components/i18n").Key) => string;
+  compact?: boolean;
+}) {
+  const field = fields.find((b) => b.id === fieldId);
+  const isChoice = !!field && CHOICE_FIELD_TYPES.has(field.type);
+  const choices = condFieldChoices(field);
+  const w = compact ? "w-40" : "w-44";
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <select
+          value={fieldId}
+          onChange={(e) => onField(e.target.value)}
+          className={`jf-input ${w} text-xs`}
+        >
+          <option value="">{t("fs.condSelectField")}</option>
+          {fields.map((b) => (
+            <option key={b.id} value={b.id}>
+              {condFieldLabel(b)} ({b.type})
+            </option>
+          ))}
+        </select>
+        <select
+          value={op}
+          onChange={(e) => onOp(e.target.value)}
+          className="jf-input w-32 text-xs"
+        >
+          {FEED_OPS.map((o) => (
+            <option key={o} value={o}>
+              {t(`fs.op${o[0].toUpperCase()}${o.slice(1)}` as import("../../components/i18n").Key)}
+            </option>
+          ))}
+        </select>
+        {op !== "not_empty" &&
+          (isChoice && choices.length > 0 ? (
+            <select
+              value={value}
+              onChange={(e) => onValue(e.target.value)}
+              className={`jf-input ${w} text-xs`}
+            >
+              <option value="">{t("fs.condSelectField")}</option>
+              {choices.map((c) => (
+                <option key={c.value} value={c.value}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              value={value}
+              onChange={(e) => onValue(e.target.value)}
+              placeholder={t("fs.confValue")}
+              className={`jf-input ${w} text-xs`}
+            />
+          ))}
+      </div>
+      {fieldId && (
+        <p className="text-xs text-[var(--jf-muted)]">
+          {condSummary(t, field, op, value)}
+        </p>
+      )}
+    </div>
+  );
+}
+
 const NOTIF_EVENTS = [
   "sale.paid",
   "sale.failed",
@@ -121,8 +242,6 @@ const NOTIF_EVENT_KEYS: Record<string, import("../../components/i18n").Key> = {
 function notifEventKey(ev: string): import("../../components/i18n").Key {
   return NOTIF_EVENT_KEYS[ev] ?? ("fs.notifEvent" + ev) as import("../../components/i18n").Key;
 }
-
-const NOTIF_OPS = ["equals", "not_equals", "contains", "gt", "lt", "not_empty"] as const;
 
 // Issue #179: a per-form confirmation (Gravity-Forms-style). The default
 // confirmation (is_default) always exists and can be edited but not deleted.
@@ -289,7 +408,7 @@ function FormSettingsInner() {
   const [formWebhooks, setFormWebhooks] = useState<{ id: string; url: string; events: string[] }[]>([]);
   // Issue #208: multiple per-form CHIP feeds with conditional logic.
   const [feeds, setFeeds] = useState<ChipFeedDraft[]>([]);
-  const [formBlocks, setFormBlocks] = useState<{ id: string; value: string; type: string }[]>([]);
+  const [formBlocks, setFormBlocks] = useState<CondBlock[]>([]);
 
   // Per-form email settings (issue #177).
   const [emelSubject, setEmelSubject] = useState("");
@@ -339,7 +458,7 @@ function FormSettingsInner() {
       setOvBrand(d.chip_brand_id || "");
       // Issue #208: hydrate the form's CHIP feeds + the field blocks used by
       // the conditional-logic selector.
-      const blocks = (d.config?.blocks as { id: string; value: string; type: string }[] | undefined) || [];
+      const blocks = (d.config?.blocks as CondBlock[] | undefined) || [];
       setFormBlocks(blocks.filter((b) => FEED_FIELD_TYPES.has(b.type)));
       const fr = await fetch(`/api/rest/forms/${formId}/chip-feeds${spaceQuery()}`);
       if (fr.ok) {
@@ -997,39 +1116,18 @@ function FormSettingsInner() {
                                 {t("fs.confConditional")}
                               </label>
                               {c.condition && (
-                                <div className="mt-2 flex flex-wrap items-center gap-2">
-                                  <input
-                                    value={c.condition.field_id}
-                                    onChange={(e) =>
-                                      updateConf(i, { condition: { ...c.condition!, field_id: e.target.value } })
-                                    }
-                                    placeholder={t("fs.confFieldId")}
-                                    className="jf-input w-40 text-xs"
+                                <div className="mt-2">
+                                  <ConditionPicker
+                                    fieldId={c.condition.field_id}
+                                    op={c.condition.op}
+                                    value={c.condition.value}
+                                    fields={formBlocks}
+                                    onField={(id) => updateConf(i, { condition: { ...c.condition!, field_id: id } })}
+                                    onOp={(o) => updateConf(i, { condition: { ...c.condition!, op: o } })}
+                                    onValue={(v) => updateConf(i, { condition: { ...c.condition!, value: v } })}
+                                    t={t}
+                                    compact
                                   />
-                                  <select
-                                    value={c.condition.op}
-                                    onChange={(e) =>
-                                      updateConf(i, { condition: { ...c.condition!, op: e.target.value } })
-                                    }
-                                    className="jf-input w-32 text-xs"
-                                  >
-                                    <option value="equals">{t("fs.opEquals")}</option>
-                                    <option value="not_equals">{t("fs.opNotEquals")}</option>
-                                    <option value="contains">{t("fs.opContains")}</option>
-                                    <option value="gt">{t("fs.opGt")}</option>
-                                    <option value="lt">{t("fs.opLt")}</option>
-                                    <option value="not_empty">{t("fs.opNotEmpty")}</option>
-                                  </select>
-                                  {c.condition.op !== "not_empty" && (
-                                    <input
-                                      value={c.condition.value}
-                                      onChange={(e) =>
-                                        updateConf(i, { condition: { ...c.condition!, value: e.target.value } })
-                                      }
-                                      placeholder={t("fs.confValue")}
-                                      className="jf-input w-40 text-xs"
-                                    />
-                                  )}
                                 </div>
                               )}
                             </div>
@@ -1137,7 +1235,7 @@ function FormSettingsInner() {
                             {t("fs.notifTo")}: <span className="font-mono">{n.to_email || "—"}</span>
                             {n.condition && (
                               <span className="ml-2">
-                                · {n.condition.field_id} {t(`fs.notifOp${n.condition.op[0].toUpperCase()}${n.condition.op.slice(1)}` as import("../../components/i18n").Key)} {n.condition.value}
+                                · {condSummary(t, formBlocks.find((b) => b.id === n.condition!.field_id), n.condition.op, n.condition.value)}
                               </span>
                             )}
                           </div>
@@ -1195,31 +1293,20 @@ function FormSettingsInner() {
                               </button>
                             ) : (
                               <div className="mt-2 space-y-2">
-                                <div className="flex flex-wrap items-end gap-2">
-                                  <div>
-                                    <label className={labelCls}>{t("fs.notifCondField")}</label>
-                                    <input value={edCondField} onChange={(e) => setEdCondField(e.target.value)} className="jf-input mt-1 w-40" placeholder="field_id" />
-                                  </div>
-                                  <div>
-                                    <label className={labelCls}>{t("fs.notifCondOp")}</label>
-                                    <select value={edCondOp} onChange={(e) => setEdCondOp(e.target.value)} className="jf-input mt-1 w-40">
-                                      {NOTIF_OPS.map((op) => (
-                                        <option key={op} value={op}>
-                                          {t(`fs.notifOp${op[0].toUpperCase()}${op.slice(1)}` as import("../../components/i18n").Key)}
-                                        </option>
-                                      ))}
-                                    </select>
-                                  </div>
-                                  {edCondOp !== "not_empty" && (
-                                    <div>
-                                      <label className={labelCls}>{t("fs.notifCondValue")}</label>
-                                      <input value={edCondValue} onChange={(e) => setEdCondValue(e.target.value)} className="jf-input mt-1 w-40" />
-                                    </div>
-                                  )}
-                                  <button onClick={() => setEdHasCond(false)} className="jf-btn-ghost px-2 py-1 text-xs text-slate-500">
-                                    {t("fs.notifCondRemove")}
-                                  </button>
-                                </div>
+                                <ConditionPicker
+                                  fieldId={edCondField}
+                                  op={edCondOp}
+                                  value={edCondValue}
+                                  fields={formBlocks}
+                                  onField={setEdCondField}
+                                  onOp={setEdCondOp}
+                                  onValue={setEdCondValue}
+                                  t={t}
+                                  compact
+                                />
+                                <button onClick={() => setEdHasCond(false)} className="jf-btn-ghost px-2 py-1 text-xs text-slate-500">
+                                  {t("fs.notifCondRemove")}
+                                </button>
                               </div>
                             )}
                           </div>
@@ -1346,7 +1433,7 @@ function FormSettingsInner() {
                             {/* Conditional logic */}
                             <div className="mt-3">
                               <label className={labelCls}>{t("fs.chipFeedConditional")}</label>
-                              <div className="mt-1 flex flex-wrap items-center gap-1">
+                              <div className="mt-1">
                                 <select
                                   value={f.condition?.field_id || ""}
                                   onChange={(e) =>
@@ -1361,34 +1448,25 @@ function FormSettingsInner() {
                                   <option value="">{t("fs.chipFeedNoCondition")}</option>
                                   {formBlocks.map((b) => (
                                     <option key={b.id} value={b.id}>
-                                      {b.value || b.type} (#{formBlocks.indexOf(b) + 1})
+                                      {condFieldLabel(b)} ({b.type})
                                     </option>
                                   ))}
                                 </select>
                                 {f.condition && (
-                                  <>
-                                    <select
-                                      value={f.condition.op}
-                                      onChange={(e) =>
-                                        updateChipFeed(f.id, { condition: { ...f.condition!, op: e.target.value } })
-                                      }
-                                      className="w-28 rounded border border-slate-200 px-1 py-1 text-xs"
-                                    >
-                                      {FEED_OPS.map((op) => (
-                                        <option key={op} value={op}>
-                                          {op}
-                                        </option>
-                                      ))}
-                                    </select>
-                                    <input
+                                  <div className="mt-2">
+                                    <ConditionPicker
+                                      fieldId={f.condition.field_id}
+                                      op={f.condition.op}
                                       value={f.condition.value}
-                                      onChange={(e) =>
-                                        updateChipFeed(f.id, { condition: { ...f.condition!, value: e.target.value } })
+                                      fields={formBlocks}
+                                      onField={(id) =>
+                                        updateChipFeed(f.id, { condition: { ...f.condition!, field_id: id } })
                                       }
-                                      placeholder="value"
-                                      className="min-w-0 flex-1 rounded border border-slate-200 px-2 py-1 text-xs"
+                                      onOp={(o) => updateChipFeed(f.id, { condition: { ...f.condition!, op: o } })}
+                                      onValue={(v) => updateChipFeed(f.id, { condition: { ...f.condition!, value: v } })}
+                                      t={t}
                                     />
-                                  </>
+                                  </div>
                                 )}
                               </div>
                             </div>
