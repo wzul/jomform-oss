@@ -53,19 +53,25 @@ func (h *PaymentsHandlers) handleChipCallback(w http.ResponseWriter, r *http.Req
 			}
 		}
 	}
-	if h.PublicKey != nil {
-		sig := r.Header.Get("X-Signature")
-		if sig == "" {
-			writeErr(w, http.StatusUnauthorized, "signature hilang")
-			return
-		}
-		if err := chip.VerifySignature(h.PublicKey, raw, sig); err != nil {
-			slog.Warn("chip_callback_bad_signature", "err", err)
-			writeErr(w, http.StatusUnauthorized, "signature tidak sah")
-			return
-		}
-	} else {
+	// FAIL-CLOSED (issue #365): CHIP signature verification is MANDATORY and
+	// unconditional. Without a resolvable public key there is no way to verify
+	// the signature, so the callback MUST be rejected (503) rather than
+	// processed. Never fall through to ProcessCallback with an unverified
+	// signature.
+	if h.PublicKey == nil {
 		slog.Warn("chip_callback_no_public_key_configured")
+		writeErr(w, http.StatusServiceUnavailable, "verification key unavailable")
+		return
+	}
+	sig := r.Header.Get("X-Signature")
+	if sig == "" {
+		writeErr(w, http.StatusUnauthorized, "signature hilang")
+		return
+	}
+	if err := chip.VerifySignature(h.PublicKey, raw, sig); err != nil {
+		slog.Warn("chip_callback_bad_signature", "err", err)
+		writeErr(w, http.StatusUnauthorized, "signature tidak sah")
+		return
 	}
 
 	// 2. Parse the Purchase payload.
