@@ -363,6 +363,15 @@ func (s *Server) registerTools() {
 		Name:        "set_form_confirmations",
 		Description: "Set pengesahan borang (issue #179): ganti semua confirmation (name, type message|redirect, message/redirect_url, condition). Pengesahan lalai sentiasa dikekalkan. Mesej HTML disanitasi (tiada XSS).",
 	}, s.setFormConfirmations)
+	// ── Parity: per-form payment-failed message (issue #393) ────────────
+	addTool(s, &mcp.Tool{
+		Name:        "get_form_failure_message",
+		Description: "Baca mesej pembayaran-gagal borang (issue #393): apa yang pembeli lihat bila pembayaran gagal. Kosong = guna mesej lalai.",
+	}, s.getFormFailureMessage)
+	addTool(s, &mcp.Tool{
+		Name:        "set_form_failure_message",
+		Description: "Set mesej pembayaran-gagal borang (issue #393): HTML yang pembeli lihat bila pembayaran gagal (disanitasi, tiada XSS). Kosong = guna mesej lalai.",
+	}, s.setFormFailureMessage)
 
 	// ── Parity: per-space hosted legal pages (issue #184) ────────────────
 	addTool(s, &mcp.Tool{

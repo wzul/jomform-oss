@@ -112,6 +112,7 @@ func (s *Server) useTemplateMCP(
 		LogoURL:         tpl.LogoURL,
 		RedirectSuccess: tpl.RedirectSuccess,
 		RedirectFailure: tpl.RedirectFailure,
+		FailureMessage:  tpl.FailureMessage,
 	}
 	if err := s.deps.Forms.Create(ctx, f); err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)

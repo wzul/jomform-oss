@@ -41,6 +41,11 @@ const DefaultConfirmationName = "Default Confirmation"
 // merchant has not customised anything.
 const DefaultConfirmationMessage = "Terima kasih! Maklum balas anda telah diterima."
 
+// DefaultFailureMessage is the sensible default shown to a buyer when a
+// payment fails and the merchant has not set a per-form failure message
+// (issue #393).
+const DefaultFailureMessage = "Pembayaran gagal. Sila cuba lagi."
+
 // DefaultConfirmation returns the always-present default confirmation. It has
 // no condition (matches always) and is the fallback when no other
 // confirmation matches.

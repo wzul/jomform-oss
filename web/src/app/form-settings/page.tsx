@@ -28,6 +28,7 @@ type FormDetail = {
   redirect_failure?: string;
   allow_embed?: boolean;
   logo_url?: string;
+  failure_message?: string;
   start_at?: string;
   end_at?: string;
   entry_limit?: number | null;
@@ -241,6 +242,8 @@ function FormSettingsInner() {
   // Confirmation
   const [fsRedS, setFsRedS] = useState("");
   const [fsRedF, setFsRedF] = useState("");
+  // Issue #393: per-form payment-failed message (HTML, sanitized on render).
+  const [fsFailMsg, setFsFailMsg] = useState("");
   // Issue #179: per-form confirmations (Gravity-Forms-style).
   const [confs, setConfs] = useState<Confirmation[]>([]);
 
@@ -318,6 +321,7 @@ function FormSettingsInner() {
       setFsEmbed(d.allow_embed !== false);
       setFsRedS(d.redirect_success || "");
       setFsRedF(d.redirect_failure || "");
+      setFsFailMsg(d.failure_message || "");
       setRsStart(toLocalInput(d.start_at));
       setRsEnd(toLocalInput(d.end_at));
       setRsLimit(d.entry_limit != null ? String(d.entry_limit) : "");
@@ -429,7 +433,7 @@ function FormSettingsInner() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         redirect_success: fsRedS, redirect_failure: fsRedF,
-        allow_embed: fsEmbed, logo_url: fsLogo,
+        allow_embed: fsEmbed, logo_url: fsLogo, failure_message: fsFailMsg,
       }),
     });
     setMsg(r.ok ? t("fs.saved") : t("prof.failed"));
@@ -818,6 +822,18 @@ function FormSettingsInner() {
                       <div>
                         <label className={labelCls}>{t("bld.redirFailure")}</label>
                         <input value={fsRedF} onChange={(e) => setFsRedF(e.target.value)} placeholder="https://yourapp.com/fail" className={inputCls} />
+                      </div>
+                      {/* Issue #393: per-form payment-failed message. */}
+                      <div>
+                        <label className={labelCls}>{t("fs.failureMessage")}</label>
+                        <textarea
+                          value={fsFailMsg}
+                          onChange={(e) => setFsFailMsg(e.target.value)}
+                          rows={3}
+                          className={`${inputCls} font-mono text-xs`}
+                          placeholder="Pembayaran gagal. Sila cuba lagi."
+                        />
+                        <p className="mt-1 text-xs text-[var(--jf-muted)]">{t("fs.failureMessageHint")}</p>
                       </div>
                       <div className="pt-1">
                         <button onClick={saveConfirmation} disabled={!canWrite} className="jf-btn-primary">

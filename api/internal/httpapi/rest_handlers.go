@@ -425,6 +425,8 @@ type restForm struct {
 	RedirectFailure string `json:"redirect_failure,omitempty"`
 	AllowEmbed      bool   `json:"allow_embed"`
 	LogoURL         string `json:"logo_url,omitempty"`
+	// Issue #393: per-form payment-failed message (HTML, sanitized on render).
+	FailureMessage string `json:"failure_message,omitempty"`
 	StartAt         string `json:"start_at,omitempty"`
 	EndAt           string `json:"end_at,omitempty"`
 	EntryLimit      *int   `json:"entry_limit,omitempty"`
@@ -566,7 +568,7 @@ func (h *RESTHandlers) getForm(w http.ResponseWriter, r *http.Request, actx *Acc
 		URL: h.formURLForAccount(r.Context(), actx.Account, f.Slug), Config: f.Config, Theme: f.Theme,
 		UpdatedAt: f.UpdatedAt.UTC().Format(time.RFC3339),
 		RedirectSuccess: f.RedirectSuccess, RedirectFailure: f.RedirectFailure,
-		AllowEmbed: f.AllowEmbed, LogoURL: f.LogoURL,
+		AllowEmbed: f.AllowEmbed, LogoURL: f.LogoURL, FailureMessage: f.FailureMessage,
 		StartAt: fmtTime(f.StartAt), EndAt: fmtTime(f.EndAt), EntryLimit: f.EntryLimit,
 		PendingMessage: strOrEmpty(f.PendingMessage), ExpiredMessage: strOrEmpty(f.ExpiredMessage),
 		LimitMessage: strOrEmpty(f.LimitMessage),

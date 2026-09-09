@@ -1082,8 +1082,10 @@ func (h *PublicHandlers) handleThankYou(w http.ResponseWriter, r *http.Request) 
 	// message confirmation is rendered (HTML-sanitized) on this page. The
 	// default confirmation always matches, so there is always a fallback.
 	var conf *resolvedConfirmation
+	var form *dbstore.Form
 	if h.Forms != nil {
-		if form, ferr := h.Forms.GetByID(r.Context(), sale.AccountID, sale.FormID); ferr == nil && form != nil {
+		if f, ferr := h.Forms.GetByID(r.Context(), sale.AccountID, sale.FormID); ferr == nil && f != nil {
+			form = f
 			fields, _ := h.Sales.SaleFields(r.Context(), sale.ID)
 			conf = h.resolveConfirmation(r.Context(), form, fields)
 		}
@@ -1129,8 +1131,16 @@ const iv = setInterval(async () => {
 	}
 	// The confirmation message (sanitized) replaces the hardcoded thank-you
 	// text. Fall back to the default message when none resolved.
+	// Issue #393: on a failed payment, show the merchant's per-form failure
+	// message (HTML-sanitized) instead of the success confirmation. When the
+	// merchant has not set one, fall back to the buyer-facing default.
 	message := dbstore.DefaultConfirmationMessage
-	if conf != nil && conf.Message != "" {
+	if sale.Status == dbstore.SaleFailed {
+		message = dbstore.DefaultFailureMessage
+		if form != nil && form.FailureMessage != "" {
+			message = confirmationSanitizer.Sanitize(form.FailureMessage)
+		}
+	} else if conf != nil && conf.Message != "" {
 		message = conf.Message
 	}
 	fmt.Fprintf(w, `<!doctype html><html lang="ms"><head><meta charset="utf-8">%s
