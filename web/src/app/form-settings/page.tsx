@@ -238,6 +238,8 @@ function FormSettingsInner() {
   const [fsTheme, setFsTheme] = useState("#5e6ad2");
   const [fsLogo, setFsLogo] = useState("");
   const [fsEmbed, setFsEmbed] = useState(true);
+  // Issue #388: power-user custom JS (owner-gated + scanned server-side).
+  const [fsCustomJS, setFsCustomJS] = useState("");
 
   // Confirmation
   const [fsRedS, setFsRedS] = useState("");
@@ -319,6 +321,8 @@ function FormSettingsInner() {
       setFsTheme((d.theme?.primary as string) || "#5e6ad2");
       setFsLogo(d.logo_url || "");
       setFsEmbed(d.allow_embed !== false);
+      // Issue #388: hydrate the power-user custom JS from the theme.
+      setFsCustomJS((d.theme?.custom_js as string) || "");
       setFsRedS(d.redirect_success || "");
       setFsRedF(d.redirect_failure || "");
       setFsFailMsg(d.failure_message || "");
@@ -397,7 +401,12 @@ function FormSettingsInner() {
 
   async function saveGeneral() {
     setMsg("");
-    const payload = { slug: slug.toLowerCase().replace(/[^a-z0-9-]/g, "-"), title, theme: { primary: fsTheme } };
+    // Issue #388: include the power-user custom JS in the theme. The server
+    // scans it (deterministic code-asset scan) and rejects obviously
+    // malicious JS before it is ever served on the buyer's page.
+    const theme: Record<string, unknown> = { primary: fsTheme };
+    if (fsCustomJS.trim() !== "") theme.custom_js = fsCustomJS;
+    const payload = { slug: slug.toLowerCase().replace(/[^a-z0-9-]/g, "-"), title, theme };
     let id = formId;
     if (!id) return;
     const r = await fetch(`/api/rest/forms/${id}${spaceQuery()}`, {
@@ -796,6 +805,26 @@ function FormSettingsInner() {
                           className={inputCls}
                         />
                       </div>
+                      {/* Issue #388: power-user custom JS. Owner-gated (write
+                          role) + scanned server-side; runs on the buyer's page. */}
+                      <details className="rounded-md border border-[var(--jf-border)] p-3">
+                        <summary className="cursor-pointer text-sm font-medium text-slate-700">
+                          {t("bld.customJs")}
+                        </summary>
+                        <div className="mt-2 space-y-2">
+                          <textarea
+                            value={fsCustomJS}
+                            onChange={(e) => setFsCustomJS(e.target.value)}
+                            rows={5}
+                            spellCheck={false}
+                            placeholder="// e.g. document.querySelector('#of').addEventListener('submit', ...)"
+                            className={`${inputCls} font-mono text-xs`}
+                          />
+                          <p className="text-[11px] leading-relaxed text-amber-600">
+                            {t("bld.customJsWarning")}
+                          </p>
+                        </div>
+                      </details>
                       <label className="flex items-center gap-2 text-sm text-slate-700">
                         <input type="checkbox" checked={fsEmbed} onChange={(e) => setFsEmbed(e.target.checked)} className="accent-[#5e6ad2]" />
                         {t("bld.allowEmbed")}

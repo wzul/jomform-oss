@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/wzul/jomform/api/internal/auth"
+	"github.com/wzul/jomform/api/internal/customform"
 	"github.com/wzul/jomform/api/internal/dbstore"
 )
 
@@ -631,6 +632,17 @@ func (h *RESTHandlers) updateForm(w http.ResponseWriter, r *http.Request, actx *
 	if err := decodeJSON(r, &in); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid json")
 		return
+	}
+	// Issue #388: power-user custom JS is owner-gated (write role above) and
+	// scanned with the deterministic code-asset scan (#364) so obviously
+	// malicious JS is never served on the buyer's page.
+	if in.Theme != nil {
+		if js, ok := in.Theme["custom_js"].(string); ok {
+			if reason := customform.ScanCustomJS(js); reason != "" {
+				writeErr(w, http.StatusBadRequest, "custom_js ditolak: "+reason)
+				return
+			}
+		}
 	}
 	// Pass config/theme as-is: Forms.Update COALESCEs nil over the stored
 	// values, so a PATCH that omits either key keeps what's stored instead

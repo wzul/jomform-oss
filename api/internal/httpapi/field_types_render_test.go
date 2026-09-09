@@ -28,6 +28,7 @@ func TestBlockFormRendersNewFieldTypes(t *testing.T) {
 		Placeholder         string
 		Description         string
 		CSSClass            string
+		Style               string
 		MaxLength           int
 		DefaultValue        string
 		Min, Max            string

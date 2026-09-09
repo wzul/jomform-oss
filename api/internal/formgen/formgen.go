@@ -89,6 +89,8 @@ type Theme struct {
 	Layout           string `json:"layout,omitempty"`
 	Spacing          string `json:"spacing,omitempty"`
 	CustomCSS        string `json:"custom_css,omitempty"`
+	// Issue #388: power-user custom JS (owner-gated + scanned at save).
+	CustomJS string `json:"custom_js,omitempty"`
 }
 
 // Config is the generated form config returned to the builder for review.

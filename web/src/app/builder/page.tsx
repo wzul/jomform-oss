@@ -60,6 +60,8 @@ type Block = {
   placeholder?: string;
   description?: string;
   cssClass?: string;
+  // Issue #388: per-field inline style (safe CSS only, sanitized server-side).
+  style?: string;
   maxLength?: number;
   defaultValue?: string;
   min?: string;
@@ -284,6 +286,7 @@ export default function Builder() {
       placeholder: b.placeholder as string | undefined,
       description: b.description as string | undefined,
       cssClass: b.css_class as string | undefined,
+      style: b.style as string | undefined,
       maxLength: b.max_length as number | undefined,
       defaultValue: b.default_value as string | undefined,
       min: b.min as string | undefined,
@@ -411,6 +414,7 @@ export default function Builder() {
         placeholder: b.placeholder || undefined,
         description: b.description || undefined,
         css_class: b.cssClass || undefined,
+        style: b.style || undefined,
         max_length: b.maxLength,
         default_value: b.defaultValue || undefined,
         min: b.min || undefined,
@@ -516,6 +520,7 @@ export default function Builder() {
         placeholder: b.placeholder as string | undefined,
         description: b.description as string | undefined,
         cssClass: b.css_class as string | undefined,
+        style: b.style as string | undefined,
         maxLength: b.max_length as number | undefined,
         defaultValue: b.default_value as string | undefined,
         min: b.min as string | undefined,
@@ -620,6 +625,19 @@ export default function Builder() {
 
         {/* Common: CSS class */}
         {input("cssClass", t("bld.cssClass"), t("bld.cssClassPh"))}
+
+        {/* Issue #388: per-field inline style — collapsed "advanced" so the
+            default builder stays Google-Forms-simple. Safe CSS only; the
+            server sanitizes it (no url()/background-image). */}
+        <details className="rounded-md border border-[var(--jf-border)] px-2.5 py-2">
+          <summary className="cursor-pointer text-xs font-medium text-[var(--jf-muted)]">
+            {t("bld.advanced")}
+          </summary>
+          <div className="mt-2 space-y-2">
+            {input("style", t("bld.inlineStyle"), t("bld.inlineStylePh"))}
+            <p className="text-[11px] leading-relaxed text-[#9ca3af]">{t("bld.inlineStyleHint")}</p>
+          </div>
+        </details>
 
         {/* Text/textarea: max length + default value */}
         {(b.type === "text" || b.type === "textarea") && (

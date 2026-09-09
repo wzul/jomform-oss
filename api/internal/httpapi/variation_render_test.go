@@ -27,6 +27,7 @@ func TestBlockFormRendersVariationSelector(t *testing.T) {
 		HasQuantity      bool
 		CondJSON         string
 		Variations       []variationView
+		Style            string
 	}
 	stockZero := 0
 	stockFive := 5

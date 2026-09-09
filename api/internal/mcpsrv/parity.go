@@ -269,8 +269,8 @@ type upsertFormIn struct {
 	Title  string         `json:"title" jsonschema:"Tajuk borang"`
 	Config map[string]any `json:"config,omitempty" jsonschema:"Block config — ambil contoh dari get_form"`
 	// Issue #254: optional custom styling/theme (colors, fonts, logo, layout,
-	// spacing, custom_css). Omit to leave unchanged; pass {} to clear.
-	Theme map[string]any `json:"theme,omitempty" jsonschema:"Gaya/branding tersuai (pilihan): primary, background, text, card_background, card_border_radius, font_family, logo_url, layout, spacing, custom_css"`
+	// spacing, custom_css, custom_js). Omit to leave unchanged; pass {} to clear.
+	Theme map[string]any `json:"theme,omitempty" jsonschema:"Gaya/branding tersuai (pilihan): primary, background, text, card_background, card_border_radius, font_family, logo_url, layout, spacing, custom_css, custom_js (JS tersuai — dikawal pemilik + diimbas)"`
 	// Issue #207: form restrictions (schedule + entry limit). Omit to leave
 	// unchanged; pass explicit nulls to clear.
 	StartAt        *time.Time `json:"start_at,omitempty" jsonschema:"Masa mula jadual (kosong = tiada)"`
@@ -405,6 +405,16 @@ if in.CustomHTML != "" || in.CustomFields != nil {
 		return nil, nil, err
 	}
 	in.Config = merged
+}
+// Issue #388: power-user custom JS in the theme is owner-gated (requireFormWrite
+// above) and scanned with the deterministic code-asset scan (#364) so obviously
+// malicious JS is never served on the buyer's page.
+if in.Theme != nil {
+	if js, ok := in.Theme["custom_js"].(string); ok {
+		if reason := customform.ScanCustomJS(js); reason != "" {
+			return nil, nil, errors.New("custom_js ditolak: " + reason)
+		}
+	}
 }
 if err := s.deps.Forms.Update(ctx, acc, in.FormID, in.Title, in.Config, in.Theme); err != nil {
 	return nil, nil, err

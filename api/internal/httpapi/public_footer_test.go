@@ -21,6 +21,7 @@ func TestBlockFormRendersNoFooter(t *testing.T) {
 		Required         bool
 		HasPrice         bool
 		CondJSON         string
+		Style            string
 	}
 	var buf bytes.Buffer
 	err := blockTmpl.Execute(&buf, map[string]any{
@@ -80,6 +81,7 @@ func TestBlockFormRendersOptionalFooter(t *testing.T) {
 		Required         bool
 		HasPrice         bool
 		CondJSON         string
+		Style            string
 	}
 	var buf bytes.Buffer
 	err := blockTmpl.Execute(&buf, map[string]any{
@@ -129,6 +131,7 @@ func TestBlockFormFooterBelowCard(t *testing.T) {
 		Required         bool
 		HasPrice         bool
 		CondJSON         string
+		Style            string
 	}
 	var buf bytes.Buffer
 	err := blockTmpl.Execute(&buf, map[string]any{

@@ -13,6 +13,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/wzul/jomform/api/internal/customform"
 	"github.com/wzul/jomform/api/internal/formfields"
 )
 
@@ -41,6 +42,10 @@ type setFormThemeIn struct {
 	// HTML-escaped so a </style> cannot break out of the style block. The
 	// agent controls look-and-feel only — never prices or payment logic.
 	CustomCSS string `json:"custom_css,omitempty" jsonschema:"CSS tersuai (bebas) — guna untuk gaya/branding/layout"`
+	// CustomJS is arbitrary JS injected into the rendered page (issue #388).
+	// Owner-gated and scanned with the deterministic code-asset scan (#364) so
+	// obviously malicious JS is never served on the buyer's page.
+	CustomJS string `json:"custom_js,omitempty" jsonschema:"JS tersuai (kuasa pengguna) — guna untuk tingkah laku borang. Dikawal pemilik + diimbas."`
 }
 
 // setFormTheme stores a form's custom styling/theme (issue #254). The theme
@@ -84,6 +89,15 @@ func (s *Server) setFormTheme(
 	setThemeStr(theme, "font_family", in.FontFamily)
 	setThemeStr(theme, "logo_url", in.LogoURL)
 	setThemeStr(theme, "custom_css", in.CustomCSS)
+	// Issue #388: power-user custom JS. Owner-gated (requireFormWrite above)
+	// and scanned with the deterministic code-asset scan (#364) so obviously
+	// malicious JS is never served on the buyer's page.
+	if in.CustomJS != "" {
+		if reason := customform.ScanCustomJS(in.CustomJS); reason != "" {
+			return nil, nil, errors.New("custom_js ditolak: " + reason)
+		}
+	}
+	setThemeStr(theme, "custom_js", in.CustomJS)
 	if err := s.deps.Forms.Update(ctx, acc, in.FormID, f.Title, nil, theme); err != nil {
 		return nil, nil, err
 	}

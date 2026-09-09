@@ -199,3 +199,104 @@ func buildSanitizer() *bluemonday.Policy {
 func SanitizeHTML(html string) string {
 	return sanitizer.Sanitize(html)
 }
+
+// styleSanitizer is a bluemonday policy used to sanitize a per-field inline
+// style attribute (issue #388). It allows only the same safe CSS properties
+// as the customform sanitizer (no url()/background-image, which could trigger
+// a remote request), so a power user can style a field without introducing an
+// XSS or data-exfiltration vector.
+var styleSanitizer = buildStyleSanitizer()
+
+func buildStyleSanitizer() *bluemonday.Policy {
+	p := bluemonday.NewPolicy()
+	// Allow the wrapper element + the style attribute so bluemonday can parse
+	// and sanitize the inline style value.
+	p.AllowElements("div")
+	p.AllowAttrs("style").Globally()
+	// Same safe CSS allowlist as the customform sanitizer (customform.go).
+	p.AllowStyles(
+		"color", "background-color", "font-size", "font-family", "font-weight",
+		"font-style", "text-align", "text-decoration", "line-height", "letter-spacing",
+		"margin", "margin-top", "margin-bottom", "margin-left", "margin-right",
+		"padding", "padding-top", "padding-bottom", "padding-left", "padding-right",
+		"border", "border-radius", "width", "height", "max-width", "max-height",
+		"min-width", "min-height", "display", "flex", "flex-direction", "gap",
+		"align-items", "justify-content", "position", "top", "right", "bottom", "left",
+		"float", "opacity", "cursor", "box-shadow", "overflow", "white-space",
+		"vertical-align", "z-index",
+	).Globally()
+	return p
+}
+
+// SanitizeStyle sanitizes a per-field inline style attribute value (issue
+// #388). Only safe CSS properties are kept; url()/background-image and any
+// other property that could trigger a remote request or script execution are
+// stripped. The result is safe to emit as an element's style attribute.
+func SanitizeStyle(style string) string {
+	if strings.TrimSpace(style) == "" {
+		return ""
+	}
+	// Wrap in a div so bluemonday can parse the style attribute, then extract
+	// the sanitized value back out.
+	out := styleSanitizer.Sanitize(`<div style="` + style + `"></div>`)
+	// Extract style="..." from the sanitized wrapper.
+	start := strings.Index(out, `style="`)
+	if start < 0 {
+		return ""
+	}
+	start += len(`style="`)
+	end := strings.Index(out[start:], `"`)
+	if end < 0 {
+		return ""
+	}
+	return out[start : start+end]
+}
+
+// ScanCustomJS runs a focused deterministic scan over a power user's custom
+// form JS (issue #388). It returns a non-empty reason when the JS contains an
+// active code-execution / obfuscation / data-exfiltration marker that should
+// block it from being served on the buyer's page.
+//
+// Unlike the full assetgate scan (#364) — which is tuned for standalone
+// uploaded JS assets and hard-blocks the ubiquitous `function(` token — this
+// scan is tuned for form-behaviour JS, where `function(e){...}` event handlers
+// are the norm. It blocks only the genuinely dangerous patterns: dynamic code
+// execution, document.write, javascript: URIs, obfuscation and external
+// script/beacon loads. Legitimate form validation / analytics the owner opted
+// into pass.
+func ScanCustomJS(js string) string {
+	lower := strings.ToLower(js)
+	reasons := []string{}
+	// Hard block: active code execution the browser would run.
+	for _, m := range []string{
+		"eval(", "eval (", "new function(", "new function (",
+		"document.write(", "document.writeln(", "constructor.constructor",
+		"constructor[\"constructor\"]", "constructor['constructor']",
+		"javascript:", "expression(", "-moz-binding", "behavior:url",
+	} {
+		if strings.Contains(lower, m) {
+			reasons = append(reasons, "active code execution marker: "+m)
+		}
+	}
+	// Suspicious: obfuscation / data-exfiltration / external script loads.
+	for _, m := range []string{
+		"atob(", "btoa(", "sendbeacon(", "navigator.sendbeacon(", "xmlhttprequest",
+		"data:text/html", "data:text/javascript", "data:text/js",
+		"<script src=\"http", "<script src='http", "<script src=\"//",
+		"__proto__",
+	} {
+		if strings.Contains(lower, m) {
+			reasons = append(reasons, "obfuscation/beacon marker: "+m)
+		}
+	}
+	// External http(s) URL in custom JS is the data-exfiltration / script-load
+	// vector. A form's custom JS should not need to reach an external host
+	// (that is what tracking_head is for), so block it.
+	if strings.Contains(lower, "http://") || strings.Contains(lower, "https://") {
+		reasons = append(reasons, "reference to external URL from custom JS")
+	}
+	if len(reasons) == 0 {
+		return ""
+	}
+	return strings.Join(reasons, "; ")
+}

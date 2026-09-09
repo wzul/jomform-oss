@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/wzul/jomform/api/internal/customform"
 	"github.com/wzul/jomform/api/internal/dbstore"
 )
 
@@ -31,7 +32,9 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 			Placeholder  string `json:"placeholder"`
 			Description  string `json:"description"`
 			CSSClass     string `json:"css_class"`
-			MaxLength    int    `json:"max_length"`
+			// Issue #388: per-field inline style (sanitized server-side).
+			Style       string `json:"style"`
+			MaxLength   int    `json:"max_length"`
 			DefaultValue string `json:"default_value"`
 			Min          string `json:"min"`
 			Max          string `json:"max"`
@@ -93,7 +96,9 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 		Placeholder  string
 		Description  string
 		CSSClass     string
-		MaxLength    int
+		// Issue #388: per-field inline style, sanitized to safe CSS only.
+		Style       string
+		MaxLength   int
 		DefaultValue string
 		Min, Max     string
 		Step         string
@@ -110,6 +115,7 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 		vb := blockView{
 			ID: b.ID, Type: b.Type, Value: b.Value, Src: b.Src, ProductID: b.ProductID, Required: b.Required,
 			Placeholder: b.Placeholder, Description: b.Description, CSSClass: b.CSSClass,
+			Style: customform.SanitizeStyle(b.Style),
 			MaxLength: b.MaxLength, DefaultValue: b.DefaultValue, Min: b.Min, Max: b.Max,
 			Step: b.Step, Format: b.Format, Pattern: b.Pattern, RequiredMsg: b.RequiredMsg,
 		}
@@ -163,6 +169,7 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 	}
 	themePrimary, themeBg := "", ""
 	themeText, themeCardBg, themeRadius, themeFont, themeLayout, themeSpacing, themeCSS := "", "", "", "", "", "", ""
+	themeJS := ""
 	if f.Theme != nil {
 		if v, ok := f.Theme["primary"].(string); ok {
 			themePrimary = template.HTMLEscapeString(v)
@@ -192,6 +199,12 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 			// HTML-escape so a </style> cannot break out of the style block.
 			themeCSS = template.HTMLEscapeString(v)
 		}
+		// Issue #388: power-user custom JS. Owner-gated at save time (only the
+		// form owner can set it) and HTML-escaped here so a </script> cannot
+		// break out of the script block. Runs on the buyer's page.
+		if v, ok := f.Theme["custom_js"].(string); ok {
+			themeJS = template.HTMLEscapeString(v)
+		}
 	}
 	ls := h.effectiveLangStrings(r.Context(), f)
 	if err := blockTmpl.Execute(w, map[string]any{
@@ -201,6 +214,7 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 		"ThemeText": themeText, "ThemeCardBg": themeCardBg, "ThemeRadius": themeRadius,
 		"ThemeFont": themeFont, "ThemeLayout": themeLayout, "ThemeSpacing": themeSpacing,
 		"ThemeCSS": template.HTML(themeCSS),
+		"ThemeJS": template.HTML(themeJS),
 		"Lang": ls.Lang,
 		"Ls":   ls,
 		// Issue #183: optional per-space footer.
@@ -221,6 +235,17 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 var blockTmpl = template.Must(template.New("blocks").
 	Funcs(template.FuncMap{
 		"divf": func(total, div int64) float64 { return float64(total) / float64(div) },
+		// Issue #388: render a sanitized per-field inline style attribute.
+		// Returns template.HTMLAttr (a trusted attribute) so html/template does
+		// not run the value through its CSS-context filter (which would emit
+		// ZgotmplZ for valid CSS). The value is already sanitized server-side
+		// (customform.SanitizeStyle) and HTML-escaped here.
+		"styleAttr": func(s string) template.HTMLAttr {
+			if s == "" {
+				return ""
+			}
+			return template.HTMLAttr(` style="` + template.HTMLEscapeString(s) + `"`)
+		},
 	}).
 	Parse(`<!doctype html>
 <html lang="{{.Lang}}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -321,34 +346,34 @@ var blockTmpl = template.Must(template.New("blocks").
   <h1>{{.Title}}</h1>
 {{if .LogoURL}}<img class="logo" src="{{.LogoURL}}" alt="">{{end}}
 {{range .Blocks}}
-{{if eq .Type "text"}}  <p class="text">{{.Value}}</p>
-{{else if eq .Type "image"}}{{if .Src}}  <img class="img" src="{{.Src}}" alt="">
-{{end}}{{else if eq .Type "divider"}}  <hr>
-{{else if eq .Type "section"}}  <div class="section">{{.Value}}</div>
-{{else if eq .Type "html"}}  <div class="text">{{.Value}}</div>
-{{else if eq .Type "total"}}  <div class="total"><span>{{.Value}}</span><span class="total-val">RM0.00</span></div>
-{{else if eq .Type "product"}}  <div class="prod"><label><input type="checkbox" class="p" data-id="{{.ProductID}}" data-price="{{.PriceSen}}"><span class="pname">{{.Value}}</span><span class="price">{{if .HasPrice}}RM{{printf "%.2f" (divf .PriceSen 100)}}{{end}}</span></label>{{if .Variations}}<div class="varwrap"><select class="v" data-id="{{.ProductID}}"><option value="" disabled selected>{{$.Ls.SelectVariation}}</option>{{range .Variations}}<option value="{{.ID}}" data-price="{{.PriceSen}}"{{if .SoldOut}} disabled{{end}}>{{.Name}} — RM{{printf "%.2f" (divf .PriceSen 100)}}{{if .Stock}} ({{.Stock}} {{$.Ls.InStock}}){{end}}</option>{{end}}</select><div class="varstock"></div></div>{{end}}{{if .HasQuantity}}<div class="pqrow"><label class="lbl" style="margin:0">{{$.Ls.Quantity}}</label><input type="number" class="pq" data-id="{{.ProductID}}" min="1" value="1"></div>{{end}}</div>
-{{else if eq .Type "quantity"}}  <div class="qtyrow"><label class="lbl" style="margin:0">{{.Value}}</label><input type="number" class="qty" min="1" value="{{if .DefaultValue}}{{.DefaultValue}}{{else}}1{{end}}"></div>
-{{else if eq .Type "option"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><select class="opt" data-id="{{.ProductID}}"><option value="" selected>{{$.Ls.SelectOption}}</option>{{range .Choices}}<option value="{{.Value}}" data-price="{{.PriceSen}}">{{.Label}}{{if .PriceSen}} (+RM{{printf "%.2f" (divf .PriceSen 100)}}){{end}}</option>{{end}}</select>
-{{else if eq .Type "shipping"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><select class="ship" data-id="{{.ProductID}}"><option value="" selected>{{$.Ls.SelectShipping}}</option>{{range .Choices}}<option value="{{.Value}}" data-price="{{.PriceSen}}">{{.Label}}{{if .PriceSen}} (RM{{printf "%.2f" (divf .PriceSen 100)}}){{end}}</option>{{end}}</select>
-{{else if eq .Type "name"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="text" name="full_name" data-id="{{.ID}}"{{if .Required}} required{{end}}>
-{{else if eq .Type "email"}}  <label class="lbl">{{$.Ls.EmailLabel}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="email" name="email" data-id="{{.ID}}" required>
-{{else if eq .Type "phone"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="tel" name="phone" data-id="{{.ID}}"{{if .Required}} required{{end}}>
-{{else if eq .Type "textarea"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><textarea name="notes" data-id="{{.ID}}" rows="2"{{if .MaxLength}} maxlength="{{.MaxLength}}"{{end}}>{{.DefaultValue}}</textarea>
-{{else if eq .Type "number"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="number" name="notes" data-id="{{.ID}}"{{if .Min}} min="{{.Min}}"{{end}}{{if .Max}} max="{{.Max}}"{{end}}{{if .Step}} step="{{.Step}}"{{end}}{{if .Required}} required{{end}}>
-{{else if eq .Type "select"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><select name="notes" data-id="{{.ID}}"{{if .Required}} required{{end}}><option value="" disabled selected>{{$.Ls.SelectOption}}</option>{{range .Choices}}<option value="{{.Value}}">{{.Label}}</option>{{end}}</select>
-{{else if eq .Type "radio"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label>{{range .Choices}}<label class="rad"><input type="radio" name="notes" data-id="{{$.ID}}" value="{{.Value}}"{{if $.Required}} required{{end}}> {{.Label}}</label>{{end}}
-{{else if eq .Type "checkbox"}}  <label class="chk"><input type="checkbox" class="extra" data-id="{{.ID}}" value="{{.Value}}"> {{.Value}}</label>
-{{else if eq .Type "date"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="date" name="notes" data-id="{{.ID}}"{{if .Required}} required{{end}}>
-{{else if eq .Type "time"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="time" name="notes" data-id="{{.ID}}"{{if .Required}} required{{end}}>
-{{else if eq .Type "website"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="url" name="notes" data-id="{{.ID}}"{{if .Required}} required{{end}}>
-{{else if eq .Type "address"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><textarea name="notes" data-id="{{.ID}}" rows="2"{{if .Required}} required{{end}}></textarea>
-{{else if eq .Type "file"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="file" name="notes" data-id="{{.ID}}">
-{{else if eq .Type "consent"}}  <label class="chk"><input type="checkbox" class="extra" data-id="{{.ID}}" value="1"{{if .Required}} required{{end}}> {{.Value}}</label>
-{{else if eq .Type "hidden"}}  <input type="hidden" name="notes" data-id="{{.ID}}" value="{{.DefaultValue}}">
-{{else if eq .Type "list"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><textarea name="notes" data-id="{{.ID}}" rows="3"{{if .Required}} required{{end}}></textarea>
-{{else if eq .Type "repeater"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><textarea name="notes" data-id="{{.ID}}" rows="3"{{if .Required}} required{{end}}></textarea>
-{{else if eq .Type "image-choice"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label>{{range .Choices}}<label class="rad"><input type="radio" name="notes" data-id="{{$.ID}}" value="{{.Value}}"{{if $.Required}} required{{end}}> {{.Label}}</label>{{end}}
+{{if eq .Type "text"}}  <p class="text"{{styleAttr .Style}}>{{.Value}}</p>
+{{else if eq .Type "image"}}{{if .Src}}  <img class="img" src="{{.Src}}" alt=""{{styleAttr .Style}}>
+{{end}}{{else if eq .Type "divider"}}  <hr{{styleAttr .Style}}>
+{{else if eq .Type "section"}}  <div class="section"{{styleAttr .Style}}>{{.Value}}</div>
+{{else if eq .Type "html"}}  <div class="text"{{styleAttr .Style}}>{{.Value}}</div>
+{{else if eq .Type "total"}}  <div class="total"{{styleAttr .Style}}><span>{{.Value}}</span><span class="total-val">RM0.00</span></div>
+{{else if eq .Type "product"}}  <div class="prod"{{styleAttr .Style}}><label><input type="checkbox" class="p" data-id="{{.ProductID}}" data-price="{{.PriceSen}}"><span class="pname">{{.Value}}</span><span class="price">{{if .HasPrice}}RM{{printf "%.2f" (divf .PriceSen 100)}}{{end}}</span></label>{{if .Variations}}<div class="varwrap"><select class="v" data-id="{{.ProductID}}"><option value="" disabled selected>{{$.Ls.SelectVariation}}</option>{{range .Variations}}<option value="{{.ID}}" data-price="{{.PriceSen}}"{{if .SoldOut}} disabled{{end}}>{{.Name}} — RM{{printf "%.2f" (divf .PriceSen 100)}}{{if .Stock}} ({{.Stock}} {{$.Ls.InStock}}){{end}}</option>{{end}}</select><div class="varstock"></div></div>{{end}}{{if .HasQuantity}}<div class="pqrow"><label class="lbl" style="margin:0">{{$.Ls.Quantity}}</label><input type="number" class="pq" data-id="{{.ProductID}}" min="1" value="1"></div>{{end}}</div>
+{{else if eq .Type "quantity"}}  <div class="qtyrow"{{styleAttr .Style}}><label class="lbl" style="margin:0">{{.Value}}</label><input type="number" class="qty" min="1" value="{{if .DefaultValue}}{{.DefaultValue}}{{else}}1{{end}}"></div>
+{{else if eq .Type "option"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><select class="opt" data-id="{{.ProductID}}"><option value="" selected>{{$.Ls.SelectOption}}</option>{{range .Choices}}<option value="{{.Value}}" data-price="{{.PriceSen}}">{{.Label}}{{if .PriceSen}} (+RM{{printf "%.2f" (divf .PriceSen 100)}}){{end}}</option>{{end}}</select>
+{{else if eq .Type "shipping"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><select class="ship" data-id="{{.ProductID}}"><option value="" selected>{{$.Ls.SelectShipping}}</option>{{range .Choices}}<option value="{{.Value}}" data-price="{{.PriceSen}}">{{.Label}}{{if .PriceSen}} (RM{{printf "%.2f" (divf .PriceSen 100)}}){{end}}</option>{{end}}</select>
+{{else if eq .Type "name"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="text" name="full_name" data-id="{{.ID}}"{{if .Required}} required{{end}}>
+{{else if eq .Type "email"}}  <label class="lbl"{{styleAttr .Style}}>{{$.Ls.EmailLabel}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="email" name="email" data-id="{{.ID}}" required>
+{{else if eq .Type "phone"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="tel" name="phone" data-id="{{.ID}}"{{if .Required}} required{{end}}>
+{{else if eq .Type "textarea"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><textarea name="notes" data-id="{{.ID}}" rows="2"{{if .MaxLength}} maxlength="{{.MaxLength}}"{{end}}>{{.DefaultValue}}</textarea>
+{{else if eq .Type "number"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="number" name="notes" data-id="{{.ID}}"{{if .Min}} min="{{.Min}}"{{end}}{{if .Max}} max="{{.Max}}"{{end}}{{if .Step}} step="{{.Step}}"{{end}}{{if .Required}} required{{end}}>
+{{else if eq .Type "select"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><select name="notes" data-id="{{.ID}}"{{if .Required}} required{{end}}><option value="" disabled selected>{{$.Ls.SelectOption}}</option>{{range .Choices}}<option value="{{.Value}}">{{.Label}}</option>{{end}}</select>
+{{else if eq .Type "radio"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label>{{range .Choices}}<label class="rad"><input type="radio" name="notes" data-id="{{$.ID}}" value="{{.Value}}"{{if $.Required}} required{{end}}> {{.Label}}</label>{{end}}
+{{else if eq .Type "checkbox"}}  <label class="chk"{{styleAttr .Style}}><input type="checkbox" class="extra" data-id="{{.ID}}" value="{{.Value}}"> {{.Value}}</label>
+{{else if eq .Type "date"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="date" name="notes" data-id="{{.ID}}"{{if .Required}} required{{end}}>
+{{else if eq .Type "time"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="time" name="notes" data-id="{{.ID}}"{{if .Required}} required{{end}}>
+{{else if eq .Type "website"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="url" name="notes" data-id="{{.ID}}"{{if .Required}} required{{end}}>
+{{else if eq .Type "address"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><textarea name="notes" data-id="{{.ID}}" rows="2"{{if .Required}} required{{end}}></textarea>
+{{else if eq .Type "file"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="file" name="notes" data-id="{{.ID}}">
+{{else if eq .Type "consent"}}  <label class="chk"{{styleAttr .Style}}><input type="checkbox" class="extra" data-id="{{.ID}}" value="1"{{if .Required}} required{{end}}> {{.Value}}</label>
+{{else if eq .Type "hidden"}}  <input type="hidden" name="notes" data-id="{{.ID}}" value="{{.DefaultValue}}"{{styleAttr .Style}}>
+{{else if eq .Type "list"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><textarea name="notes" data-id="{{.ID}}" rows="3"{{if .Required}} required{{end}}></textarea>
+{{else if eq .Type "repeater"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><textarea name="notes" data-id="{{.ID}}" rows="3"{{if .Required}} required{{end}}></textarea>
+{{else if eq .Type "image-choice"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label>{{range .Choices}}<label class="rad"><input type="radio" name="notes" data-id="{{$.ID}}" value="{{.Value}}"{{if $.Required}} required{{end}}> {{.Label}}</label>{{end}}
 {{else if eq .Type "captcha"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="text" name="notes" data-id="{{.ID}}"{{if .Required}} required{{end}}>
 {{else if eq .Type "coupon"}}  <label class="lbl">{{$.Ls.CouponLabel}}</label><input type="text" name="coupon" class="coupon" data-id="{{.ID}}">
 {{end}}</span>
@@ -489,6 +514,10 @@ var blockTmpl = template.Must(template.New("blocks").
   });
 })();
 </script>
+{{if .ThemeJS}}<script>
+{{.ThemeJS}}
+</script>
+{{end}}
 </body></html>`))
 
 // formTrackingHead extracts per-form tracking_head from config JSON.
@@ -588,6 +617,7 @@ func (h *PublicHandlers) renderResponseForm(w http.ResponseWriter, r *http.Reque
 	}
 	themePrimary, themeBg := "", ""
 	themeText, themeCardBg, themeRadius, themeFont, themeLayout, themeSpacing, themeCSS := "", "", "", "", "", "", ""
+	themeJS := ""
 	if f.Theme != nil {
 		if v, ok := f.Theme["primary"].(string); ok {
 			themePrimary = template.HTMLEscapeString(v)
@@ -617,6 +647,12 @@ func (h *PublicHandlers) renderResponseForm(w http.ResponseWriter, r *http.Reque
 			// HTML-escape so a </style> cannot break out of the style block.
 			themeCSS = template.HTMLEscapeString(v)
 		}
+		// Issue #388: power-user custom JS. Owner-gated at save time (only the
+		// form owner can set it) and HTML-escaped here so a </script> cannot
+		// break out of the script block. Runs on the buyer's page.
+		if v, ok := f.Theme["custom_js"].(string); ok {
+			themeJS = template.HTMLEscapeString(v)
+		}
 	}
 	ls := h.effectiveLangStrings(r.Context(), f)
 	if err := responseTmpl.Execute(w, map[string]any{
@@ -626,6 +662,7 @@ func (h *PublicHandlers) renderResponseForm(w http.ResponseWriter, r *http.Reque
 		"ThemeText": themeText, "ThemeCardBg": themeCardBg, "ThemeRadius": themeRadius,
 		"ThemeFont": themeFont, "ThemeLayout": themeLayout, "ThemeSpacing": themeSpacing,
 		"ThemeCSS": template.HTML(themeCSS),
+		"ThemeJS": template.HTML(themeJS),
 		"Lang": ls.Lang,
 		"Ls":   ls,
 		// Issue #183: optional per-space footer.
@@ -784,4 +821,8 @@ var responseTmpl = template.Must(template.New("response").
   });
 })();
 </script>
+{{if .ThemeJS}}<script>
+{{.ThemeJS}}
+</script>
+{{end}}
 </body></html>`))
