@@ -14,6 +14,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
+import MediaPicker from "../../components/MediaPicker";
 import { spaceQuery, spaceScope } from "../../lib/space";
 
 type FormDetail = {
@@ -237,6 +238,8 @@ function FormSettingsInner() {
   const [accessPw, setAccessPw] = useState("");
   const [fsTheme, setFsTheme] = useState("#5e6ad2");
   const [fsLogo, setFsLogo] = useState("");
+  // Issue #391: WordPress-style media picker for the logo field.
+  const [logoPickerOpen, setLogoPickerOpen] = useState(false);
   const [fsEmbed, setFsEmbed] = useState(true);
   // Issue #388: power-user custom JS (owner-gated + scanned server-side).
   const [fsCustomJS, setFsCustomJS] = useState("");
@@ -798,12 +801,43 @@ function FormSettingsInner() {
                       </div>
                       <div>
                         <label className={labelCls}>{t("bld.logoUrl")}</label>
-                        <input
-                          value={fsLogo}
-                          onChange={(e) => setFsLogo(e.target.value)}
-                          placeholder="https://cdn.example/logo.png"
-                          className={inputCls}
-                        />
+                        {/* Issue #391: WordPress-style media picker — choose
+                            from the media library or upload a new image, with
+                            a preview of the current logo. A paste-URL
+                            fallback is available inside the picker for power
+                            users who want an external image. */}
+                        <div className="mt-1 flex items-center gap-3">
+                          {fsLogo ? (
+                            /* eslint-disable-next-line @next/next/no-img-element */
+                            <img
+                              src={fsLogo}
+                              alt={t("mediaPicker.title")}
+                              className="h-12 w-12 rounded-lg border border-[var(--jf-border)] object-contain"
+                            />
+                          ) : (
+                            <div className="flex h-12 w-12 items-center justify-center rounded-lg border border-dashed border-[var(--jf-border)] text-[10px] text-[var(--jf-muted)]">
+                              {t("mediaPicker.noLogo")}
+                            </div>
+                          )}
+                          <div className="flex flex-col gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setLogoPickerOpen(true)}
+                              className="jf-btn px-3 py-1.5 text-xs"
+                            >
+                              {t("mediaPicker.choose")}
+                            </button>
+                            {fsLogo && (
+                              <button
+                                type="button"
+                                onClick={() => setFsLogo("")}
+                                className="jf-btn-ghost px-3 py-1 text-[11px] text-red-600"
+                              >
+                                {t("mediaPicker.remove")}
+                              </button>
+                            )}
+                          </div>
+                        </div>
                       </div>
                       {/* Issue #388: power-user custom JS. Owner-gated (write
                           role) + scanned server-side; runs on the buyer's page. */}
@@ -1426,6 +1460,16 @@ function FormSettingsInner() {
           </>
         )}
       </div>
+      {/* Issue #391: WordPress-style media picker for the logo field. */}
+      <MediaPicker
+        open={logoPickerOpen}
+        onClose={() => setLogoPickerOpen(false)}
+        onSelect={(url) => {
+          setFsLogo(url);
+          setLogoPickerOpen(false);
+        }}
+        current={fsLogo}
+      />
     </Shell>
   );
 }
