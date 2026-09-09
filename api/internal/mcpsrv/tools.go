@@ -4,6 +4,7 @@ package mcpsrv
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -26,6 +27,8 @@ func New(deps *Deps, chipClient *chip.Client, decryptKey []byte, pay *payments.S
 		chip:   chipClient,
 		decKey: decryptKey,
 		pay:    pay,
+		// Issue #386: uptime baseline for admin_system_health.
+		startedAt: time.Now(),
 	}
 	s.registerTools()
 	return s
@@ -458,6 +461,36 @@ func (s *Server) registerTools() {
 		Name:        "purge_unverified_accounts",
 		Description: "Laporkan bilangan akaun belum disahkan (emel) yang lebih lama daripada ambang dan akan dipadam automatik oleh sweep. Admin sahaja; read-only — tidak memadam apa-apa.",
 	}, s.purgeUnverifiedAccounts)
+
+	// ── Super-admin: platform-wide monitoring (issue #386) ─────────────
+	// These tools are gated on the super-admin role (#385) and are read-only
+	// by default. They let the platform owner's AI agent monitor usage across
+	// ALL spaces once JomForm is public. Destructive admin writes are separate
+	// and explicit (none exist yet). Every call is audited.
+	addTool(s, &mcp.Tool{
+		Name:        "admin_list_spaces",
+		Description: "Senarai SEMUA space (storefront) platform: id, nama, slug, emel pemilik, tarikh cipta, bilangan borang + produk. Super-admin sahaja; read-only; diaudit.",
+	}, s.adminListSpaces)
+	addTool(s, &mcp.Tool{
+		Name:        "admin_media_usage",
+		Description: "Penggunaan storan media per space (bait) berbanding kuota 1GB setiap space. Super-admin sahaja; read-only; diaudit.",
+	}, s.adminMediaUsage)
+	addTool(s, &mcp.Tool{
+		Name:        "admin_list_sales",
+		Description: "Senarai jualan merentas SEMUA space, boleh tapis (date_from/date_to, space_id, status). Super-admin sahaja; read-only; diaudit.",
+	}, s.adminListSales)
+	addTool(s, &mcp.Tool{
+		Name:        "admin_spam_queue",
+		Description: "Senarai semua item spam (submission + jualan) merentas semua space. Super-admin sahaja; read-only; diaudit.",
+	}, s.adminSpamQueue)
+	addTool(s, &mcp.Tool{
+		Name:        "admin_email_deliveries",
+		Description: "Status penghantaran emel merentas SEMUA space (delivered/bounce/complaint/open/click), boleh tapis sale_ref/event_type/form_id. Super-admin sahaja; read-only; diaudit.",
+	}, s.adminEmailDeliveries)
+	addTool(s, &mcp.Tool{
+		Name:        "admin_system_health",
+		Description: "Kesihatan sistem: uptime, bilangan ralat MCP terkini (24j), kedalaman queue emel. Super-admin sahaja; read-only; diaudit.",
+	}, s.adminSystemHealth)
 
 }
 

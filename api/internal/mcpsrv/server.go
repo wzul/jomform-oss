@@ -4,6 +4,7 @@ package mcpsrv
 
 import (
 	"context"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -88,6 +89,9 @@ type Server struct {
 	pay    *payments.Service
 	deps   *Deps
 	chip   *chip.Client
+	// startedAt records when the server was built, for the admin_system_health
+	// uptime metric (issue #386).
+	startedAt time.Time
 }
 
 // decrypt opens an account's encrypted CHIP secret key.
