@@ -212,22 +212,22 @@ export function Shell({
               </button>
             </div>
           </div>
+        </div>
+      </aside>
+
+      {/* main */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        {/* desktop topbar — space switcher + lang toggle (issue #380) */}
+        <header className="sticky top-0 z-30 hidden items-center justify-end gap-3 border-b border-[var(--jf-border)] bg-white px-4 py-2.5 md:flex">
           <SpaceSwitcher
             spaces={spaces}
             value={space}
             onSwitch={switchSpace}
             defaultSpaceId={user?.default_space_id}
             onSetDefault={setDefaultSpace}
-            className="mt-2 px-2"
           />
-          <div className="mt-1 px-2">
-            <LangToggle />
-          </div>
-        </div>
-      </aside>
-
-      {/* main */}
-      <div className="flex min-w-0 flex-1 flex-col">
+          <LangToggle />
+        </header>
         {/* mobile topbar */}
         <header className="sticky top-0 z-30 flex items-center justify-between border-b border-[var(--jf-border)] bg-white px-4 py-2.5 md:hidden">
           <button
@@ -288,7 +288,7 @@ export function Shell({
                 ))}
               </nav>
               {/* issue #41: space selector reachable from the mobile drawer —
-                  same shared component as the desktop sidebar */}
+                  same shared component as the desktop topbar (issue #380) */}
               <div className="border-t border-[var(--jf-border)] px-4 py-3">
                 <SpaceSwitcher
                   spaces={spaces}
