@@ -143,6 +143,23 @@ func (s *MediaStore) SoftDelete(ctx context.Context, accountID, id string) (stri
 	return key, true, nil
 }
 
+// TotalBytes returns the total stored bytes for an account across all
+// non-deleted media rows (issue #384). This is the per-space storage usage the
+// 1GB quota is enforced against. Soft-deleted rows are excluded, so deleting a
+// media object releases its bytes back into the quota.
+func (s *MediaStore) TotalBytes(ctx context.Context, accountID string) (int64, error) {
+	if accountID == "" {
+		return 0, nil
+	}
+	var total int64
+	if err := s.pool.QueryRow(ctx,
+		`SELECT COALESCE(SUM(size), 0) FROM media WHERE account_id = $1 AND deleted_at IS NULL`,
+		accountID).Scan(&total); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
 // MarkScanning sets a media row's scan_status to 'scanning' (issue #364) so
 // ops can see a scan is in flight. idempotent; no-op when the row is gone.
 func (s *MediaStore) MarkScanning(ctx context.Context, accountID, id, reason string) error {

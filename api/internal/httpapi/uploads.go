@@ -90,6 +90,27 @@ func scanGateAllowed(ctx context.Context, media *dbstore.MediaStore, key, ct str
 	return objstore.ScanGateAllowed(ctx, media, key, ct)
 }
 
+// spaceQuotaExceeded reports whether adding `additional` stored bytes to the
+// account would push the space over the 1GB per-space storage quota (issue
+// #384). It sums the account's current non-deleted media bytes and applies the
+// shared objstore cap. Returns the human-readable rejection message when the
+// upload would exceed the quota, or "" when it is allowed. A nil media store
+// (bare-mode tests) is treated as no quota pressure.
+func (h *RESTHandlers) spaceQuotaExceeded(ctx context.Context, accountID string, additional int64) string {
+	if h.Media == nil {
+		return ""
+	}
+	current, err := h.Media.TotalBytes(ctx, accountID)
+	if err != nil {
+		slog.Error("media_quota_total", "err", err, "account", accountID)
+		return ""
+	}
+	if objstore.ExceedsSpaceQuota(current, additional) {
+		return "had storan space dicapai (1GB)"
+	}
+	return ""
+}
+
 func publicReadPolicy(bucket string) string { return objstore.PublicReadPolicy(bucket) }
 func sniffImageType(data []byte) (string, bool) { return objstore.SniffImageType(data) }
 func sniffAssetType(data []byte) (string, bool) { return objstore.SniffAssetType(data) }
@@ -264,6 +285,13 @@ func (h *RESTHandlers) uploadImage(w http.ResponseWriter, r *http.Request, actx 
 			writeErr(w, http.StatusRequestEntityTooLarge, "fail melebihi had 2MB")
 			return
 		}
+		// Issue #384: reject an upload that would push the space over the 1GB
+		// per-space storage quota.
+		if msg := h.spaceQuotaExceeded(r.Context(), actx.Account.ID, int64(len(data))); msg != "" {
+			recordUploadFailure("space_quota")
+			writeErr(w, http.StatusRequestEntityTooLarge, msg)
+			return
+		}
 		key := buildUploadKey(actx.Account.ID, ext)
 		if err := h.Store.PutObject(r.Context(), key, mime, data); err != nil {
 			recordUploadFailure("store")
@@ -320,6 +348,13 @@ func (h *RESTHandlers) uploadImage(w http.ResponseWriter, r *http.Request, actx 
 	if len(stored) > maxStoredBytes {
 		recordUploadFailure("compress_failed")
 		writeErr(w, http.StatusBadRequest, "imej gagal dimampatkan bawah 2MB; cuba imej lain")
+		return
+	}
+	// Issue #384: reject an upload that would push the space over the 1GB
+	// per-space storage quota (counted against the stored artifact size).
+	if msg := h.spaceQuotaExceeded(r.Context(), actx.Account.ID, int64(len(stored))); msg != "" {
+		recordUploadFailure("space_quota")
+		writeErr(w, http.StatusRequestEntityTooLarge, msg)
 		return
 	}
 

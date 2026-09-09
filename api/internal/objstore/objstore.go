@@ -87,7 +87,21 @@ const (
 	// PDFPreviewTimeout bounds how long a single Ghostscript render may run so a
 	// malicious or pathological PDF cannot exhaust CPU (issue #383).
 	PDFPreviewTimeout = 15 * time.Second
+
+	// MaxSpaceBytes is the per-space storage quota for all uploaded media/files
+	// (issue #384). A single space cannot store more than this across every
+	// media row (images, code assets, PDFs). Soft-deleting a media object
+	// releases its bytes back into the quota.
+	MaxSpaceBytes = 1 << 30 // 1GB
 )
+
+// ExceedsSpaceQuota reports whether adding `additional` bytes to an account
+// that already stores `current` bytes would push the space over the per-space
+// 1GB storage quota (issue #384). Both the REST upload handlers and the MCP
+// upload_media tool share this so a space can never exceed the cap.
+func ExceedsSpaceQuota(current, additional int64) bool {
+	return current+additional > MaxSpaceBytes
+}
 
 // ImageUploadMIME maps an allowed canonical extension to its MIME type.
 // Anything else is rejected before touching the bytes.

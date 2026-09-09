@@ -1203,6 +1203,8 @@ const DICT = {
   "media.uploadTooLarge": { en: "File exceeds the 20MB limit.", ms: "Fail melebihi had 20MB.", zh: "文件超过 20MB 限制。", ta: "கோப்பு 20MB வரம்பை மீறுகிறது.", ar: "الملف يتجاوز حد 20MB." },
   "media.uploadType": { en: "File type not supported (images, code files and PDFs only).", ms: "Jenis fail tidak disokong (gambar, fail kod dan PDF sahaja).", zh: "不支持的文件类型（仅限图片、代码文件和 PDF）。", ta: "கோப்பு வகை ஆதரிக்கப்படவில்லை (படங்கள், குறியீடு கோப்புகள் மற்றும் PDF மட்டும்).", ar: "نوع الملف غير مدعوم (الصور وملفات الأكواد وPDF فقط)." },
   "media.uploadEmpty": { en: "No file selected.", ms: "Tiada fail dipilih.", zh: "未选择文件。", ta: "கோப்பு தேர்ந்தெடுக்கப்படவில்லை.", ar: "لم يتم تحديد ملف." },
+  // issue #384: per-space storage quota
+  "media.usageLabel": { en: "Storage used", ms: "Storan digunakan", zh: "已用存储", ta: "பயன்படுத்திய சேமிப்பு", ar: "التخزين المستخدم" },
 } as const;
 
 export type Key = keyof typeof DICT;

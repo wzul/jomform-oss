@@ -156,6 +156,11 @@ func (s *Server) uploadMediaImage(ctx context.Context, acc string, raw []byte) (
 	if len(stored) > objstore.MaxStoredBytes {
 		return nil, mediaOut{}, errors.New("imej gagal dimampatkan bawah 2MB; cuba imej lain")
 	}
+	// Issue #384: reject an upload that would push the space over the 1GB
+	// per-space storage quota (counted against the stored artifact size).
+	if err := s.spaceQuotaExceeded(ctx, acc, int64(len(stored))); err != nil {
+		return nil, mediaOut{}, err
+	}
 	key := objstore.BuildUploadKey(acc, ext)
 	if err := s.deps.Store.PutObject(ctx, key, mime, stored); err != nil {
 		return nil, mediaOut{}, fmt.Errorf("store: %w", err)
@@ -205,6 +210,11 @@ func (s *Server) uploadMediaAsset(ctx context.Context, acc string, raw []byte) (
 	}
 	if len(raw) > objstore.MaxAssetBytes {
 		return nil, mediaOut{}, fmt.Errorf("fail melebihi had %dMB", objstore.MaxAssetBytes>>20)
+	}
+	// Issue #384: reject an upload that would push the space over the 1GB
+	// per-space storage quota.
+	if err := s.spaceQuotaExceeded(ctx, acc, int64(len(raw))); err != nil {
+		return nil, mediaOut{}, err
 	}
 	ext, ok := objstore.SniffAssetType(raw)
 	if !ok {
@@ -269,6 +279,11 @@ func (s *Server) uploadMediaPDF(ctx context.Context, acc string, raw []byte) (*m
 	}
 	if len(raw) > objstore.MaxPDFBytes {
 		return nil, mediaOut{}, fmt.Errorf("fail melebihi had %dMB", objstore.MaxPDFBytes>>20)
+	}
+	// Issue #384: reject an upload that would push the space over the 1GB
+	// per-space storage quota.
+	if err := s.spaceQuotaExceeded(ctx, acc, int64(len(raw))); err != nil {
+		return nil, mediaOut{}, err
 	}
 	ext, ok := objstore.SniffPDFType(raw)
 	if !ok {
@@ -373,4 +388,24 @@ func (s *Server) recordMCPMediaEvent(ctx context.Context, accountID, event strin
 		// best-effort — a failed event write must not fail the upload
 		return
 	}
+}
+
+// spaceQuotaExceeded reports whether adding `additional` stored bytes to the
+// account would push the space over the 1GB per-space storage quota (issue
+// #384). It sums the account's current non-deleted media bytes and applies the
+// shared objstore cap. Returns the rejection error when the upload would
+// exceed the quota, or nil when allowed. A nil media store is treated as no
+// quota pressure.
+func (s *Server) spaceQuotaExceeded(ctx context.Context, accountID string, additional int64) error {
+	if s.deps.Media == nil {
+		return nil
+	}
+	current, err := s.deps.Media.TotalBytes(ctx, accountID)
+	if err != nil {
+		return nil // best-effort — a usage read failure must not block uploads
+	}
+	if objstore.ExceedsSpaceQuota(current, additional) {
+		return errors.New("had storan space dicapai (1GB)")
+	}
+	return nil
 }

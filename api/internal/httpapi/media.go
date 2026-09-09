@@ -97,7 +97,16 @@ func (h *RESTHandlers) listMedia(w http.ResponseWriter, r *http.Request, actx *A
 		}
 		out = append(out, rm)
 	}
-	respond(w, http.StatusOK, map[string]any{"items": out, "page": page, "limit": limit, "total": total})
+	// Issue #384: surface the per-space storage usage so the merchant knows
+	// their remaining quota. Best-effort — a usage read failure never fails
+	// the list.
+	usage := map[string]any{"limit": objstore.MaxSpaceBytes}
+	if h.Media != nil {
+		if used, err := h.Media.TotalBytes(r.Context(), actx.Account.ID); err == nil {
+			usage["used"] = used
+		}
+	}
+	respond(w, http.StatusOK, map[string]any{"items": out, "page": page, "limit": limit, "total": total, "usage": usage})
 }
 
 // deleteMedia handles DELETE /v1/rest/media/{id} — soft-deletes the media row

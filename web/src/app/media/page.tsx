@@ -31,6 +31,12 @@ type MediaItem = {
   created_at: string;
 };
 
+// Issue #384: per-space storage usage returned by the media list endpoint.
+type MediaUsage = {
+  used?: number;
+  limit?: number;
+};
+
 type FormRow = { id: string; slug: string; title: string; status: string; url: string };
 
 const PER_PAGE = 24;
@@ -40,6 +46,14 @@ function fmtSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// Issue #384: human-readable size for the storage usage bar (handles GB).
+function fmtBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
 // Filename from the object key (e.g. "u/<acct>/<uuid>.jpg" → "<uuid>.jpg").
@@ -79,6 +93,9 @@ export default function MediaPage() {
   const [total, setTotal] = useState(0);
   const [checking, setChecking] = useState(true);
   const [error, setError] = useState("");
+
+  // Issue #384: per-space storage usage (used / limit) for the quota bar.
+  const [usage, setUsage] = useState<MediaUsage>({});
 
   // filters
   const [formFilter, setFormFilter] = useState("");
@@ -165,6 +182,10 @@ export default function MediaPage() {
       const d = await r.json();
       setItems(Array.isArray(d.items) ? d.items : []);
       setTotal(typeof d.total === "number" ? d.total : 0);
+      // Issue #384: capture the per-space storage usage for the quota bar.
+      if (d.usage && typeof d.usage === "object") {
+        setUsage(d.usage);
+      }
     } else {
       setItems([]);
       setTotal(0);
@@ -255,6 +276,33 @@ export default function MediaPage() {
             </button>
           )}
         </div>
+
+        {/* Issue #384: per-space storage usage bar so the merchant knows their
+            remaining quota. Rendered when the API reports a limit. */}
+        {typeof usage.limit === "number" && usage.limit > 0 && (
+          <div className="mt-4">
+            <div className="flex items-center justify-between text-xs text-[var(--jf-muted)]">
+              <span>{t("media.usageLabel")}</span>
+              <span>
+                {fmtBytes(usage.used ?? 0)} / {fmtBytes(usage.limit)}
+              </span>
+            </div>
+            <div className="mt-1.5 h-2 w-full overflow-hidden rounded-full bg-slate-200">
+              <div
+                className={`h-full rounded-full ${
+                  (usage.used ?? 0) >= usage.limit
+                    ? "bg-red-500"
+                    : (usage.used ?? 0) / usage.limit > 0.8
+                      ? "bg-amber-500"
+                      : "bg-[#7170ff]"
+                }`}
+                style={{
+                  width: `${Math.min(100, ((usage.used ?? 0) / usage.limit) * 100)}%`,
+                }}
+              />
+            </div>
+          </div>
+        )}
 
         {/* Issue #382: drag-and-drop upload zone (hidden file input). */}
         {canWrite && (
