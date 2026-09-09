@@ -1,11 +1,15 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/tls"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/wzul/jomform/api/internal/ssrfguard"
 )
 
 // setCustomDomain claims a custom domain for the account.
@@ -64,13 +68,27 @@ func (h *RESTHandlers) getCustomDomain(w http.ResponseWriter, r *http.Request, a
 // Issue #246: probe a STABLE, always-present resource (/healthz) instead of
 // /f/test — a literal slug that 404s on correctly-serving domains that have
 // no form slugged "test".
+//
+// Issue #366 (SSRF): the domain is merchant-supplied, so before dialing we
+// resolve it once, reject loopback/link-local/private/cloud-metadata
+// addresses (failing closed), and pin the connection to a single validated IP
+// so a rebinding domain cannot reach a private/metadata address. A disallowed
+// or unresolvable domain simply fails the probe.
 func probeServesJomForm(domain string) bool {
-	return probeServesJomFormURL("https://" + domain + "/healthz")
+	rawURL := "https://" + domain + "/healthz"
+	pin, err := ssrfguard.Pin(nil, domain)
+	if err != nil {
+		return false
+	}
+	defer pin.Close()
+	return probeServesJomFormURL(rawURL, pin.DialContext)
 }
 
 // probeServesJomFormURL is the testable core of probeServesJomForm: it fetches
 // url and reports whether it returns 200 with a body containing the JomForm
-// marker (case-insensitive).
+// marker (case-insensitive). dial, when non-nil, is supplied to the client's
+// transport; the caller (probeServesJomForm) passes a SSRF-pinned dial, while
+// tests pass nil to reach the loopback httptest server.
 //
 // Issue #268: the probe uses an insecure HTTP client (InsecureSkipVerify) so a
 // custom domain can verify even when its Let's Encrypt cert isn't yet
@@ -78,10 +96,11 @@ func probeServesJomForm(domain string) bool {
 // failed ("unknown CA") before the probe could check the JomForm content. The
 // content check below remains the authoritative verification — skipping cert
 // verification only lets the probe reach the origin.
-func probeServesJomFormURL(url string) bool {
+func probeServesJomFormURL(url string, dial func(ctx context.Context, network, addr string) (net.Conn, error)) bool {
 	client := &http.Client{
 		Timeout: 10 * time.Second,
 		Transport: &http.Transport{
+			DialContext:    dial,
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // probe must reach origin before cert is trusted
 		},
 	}

@@ -5,13 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/wzul/jomform/api/internal/ssrfguard"
 )
 
 // validWebhookEvents is the dispatcher's known event set (see
@@ -23,40 +24,19 @@ var validWebhookEvents = map[string]bool{
 	"*":                    true,
 }
 
-// validateWebhookURL is the SSRF guard for create_webhook. It requires an
-// https URL and rejects hosts that resolve to private, loopback, link-local or
-// unspecified addresses (RFC1918, ::1, 169.254.*, fe80::, CGNAT 100.64/10),
-// mirroring and exceeding the REST handler's convention of https-only webhook
-// endpoints.
+// validateWebhookURL is the SSRF guard for create_webhook/update_webhook. It
+// requires an http(s) URL and rejects hosts that resolve to private, loopback,
+// link-local or unspecified addresses (RFC1918, ::1, 169.254.*, fe80::, CGNAT
+// 100.64/10), mirroring and exceeding the REST handler's convention of
+// https-only webhook endpoints. The shared ssrfguard is also enforced at
+// delivery time in the dispatcher (issue #366).
 func validateWebhookURL(ctx context.Context, raw string) error {
 	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || !u.IsAbs() {
-		return errors.New("url webhook tidak sah")
-	}
-	if !strings.EqualFold(u.Scheme, "https") {
+	if err != nil || !strings.EqualFold(u.Scheme, "https") {
 		return errors.New("url webhook mesti https")
 	}
-	host := u.Hostname()
-	if host == "" {
-		return errors.New("url webhook mesti ada host")
-	}
-	ips, err := net.DefaultResolver.LookupHost(ctx, host)
-	if err != nil {
-		return errors.New("url webhook tidak boleh resolve")
-	}
-	for _, ipStr := range ips {
-		ip := net.ParseIP(ipStr)
-		if ip == nil {
-			continue
-		}
-		if ip.IsLoopback() || ip.IsUnspecified() || ip.IsPrivate() ||
-			ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
-			return errors.New("url webhook tidak boleh menunjuk ke host peribadi/loopback")
-		}
-		if ip4 := ip.To4(); ip4 != nil && ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127 {
-			// CGNAT 100.64.0.0/10
-			return errors.New("url webhook tidak boleh menunjuk ke host peribadi")
-		}
+	if _, err := ssrfguard.ValidateURL(ctx, raw); err != nil {
+		return errors.New("url webhook tidak sah (bukan host peribadi/loopback)")
 	}
 	return nil
 }

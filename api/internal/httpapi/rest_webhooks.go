@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/wzul/jomform/api/internal/ssrfguard"
 )
 
 // ─── e-Invoice settings ─────────────────────────────────────────────────────
@@ -79,6 +81,14 @@ func (h *RESTHandlers) createWebhook(w http.ResponseWriter, r *http.Request, act
 		writeErr(w, http.StatusBadRequest, "url http(s) dan secret (min 8 char) wajib")
 		return
 	}
+	// Issue #366 (SSRF): reject webhook URLs that resolve to private,
+	// link-local, loopback or cloud-metadata addresses at create time, so a
+	// merchant cannot register an endpoint that makes the server reach into
+	// its own network. (Delivery-time is guarded again in the dispatcher.)
+	if _, err := ssrfguard.ValidateURL(r.Context(), in.URL); err != nil {
+		writeErr(w, http.StatusBadRequest, "url webhook tidak sah (menunjuk ke host peribadi/loopback)")
+		return
+	}
 	if len(in.Events) == 0 {
 		in.Events = []string{"sale.paid"}
 	}
@@ -123,6 +133,12 @@ func (h *RESTHandlers) updateWebhook(w http.ResponseWriter, r *http.Request, act
 	}
 	if err := decodeJSON(r, &in); err != nil || !strings.HasPrefix(in.URL, "http") {
 		writeErr(w, http.StatusBadRequest, "url http(s) wajib")
+		return
+	}
+	// Issue #366 (SSRF): same create-time guard on update so an endpoint
+	// cannot be re-pointed at a private/loopback/metadata address.
+	if _, err := ssrfguard.ValidateURL(r.Context(), in.URL); err != nil {
+		writeErr(w, http.StatusBadRequest, "url webhook tidak sah (menunjuk ke host peribadi/loopback)")
 		return
 	}
 	// Secret is optional on update: a blank value keeps the existing secret;

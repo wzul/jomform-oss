@@ -63,7 +63,9 @@ func TestProbeServesJomForm(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := probeServesJomFormURL(c.url); got != c.want {
+			// SSRF dial is nil here (loopback httptest server); the guard lives
+			// in the production entrypoint probeServesJomForm.
+			if got := probeServesJomFormURL(c.url, nil); got != c.want {
 				t.Fatalf("probeServesJomFormURL(%q) = %v, want %v", c.url, got, c.want)
 			}
 		})

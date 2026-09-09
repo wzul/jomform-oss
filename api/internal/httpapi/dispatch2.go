@@ -26,11 +26,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/ssrfguard"
 )
 
 // webhookBackoff is the exponential backoff ladder between retries (issue
@@ -88,13 +90,46 @@ func matchesEvent(subscribed []string, event string) bool {
 // deliverWebhook posts + records one delivery attempt. It returns whether the
 // delivery succeeded, the HTTP status code, and the error message (for the
 // delivery log). Retry scheduling is handled by the sweep worker, not here.
+//
+// Issue #366 (SSRF): the webhook URL is merchant-supplied, so before any
+// request we resolve it once, reject loopback/link-local/private/metadata
+// addresses (failing closed, logging the delivery as failed and NOT retrying
+// into the internal network), and pin the connection to the single validated
+// IP so a rebinding host cannot reach a private/meta address post-check.
+// Errors.Is(err, ssrfguard.ErrBlocked) marks a delivery as permanently
+// disallowed so the sweep dead-letters it instead of retrying.
 func deliverWebhook(ctx context.Context, h *RESTHandlers, store *dbstore.WebhookStore,
 	signPub ed25519.PublicKey, signPriv ed25519.PrivateKey, accountID string, wh *dbstore.OutboundWebhook,
-	event string, body []byte, attempt int) (success bool, code int, errMsg string) {
+	event string, body []byte, attempt int) (success bool, blocked bool, code int, errMsg string) {
+
+	url, err := url.Parse(wh.URL)
+	if err != nil || url.Scheme != "http" && url.Scheme != "https" {
+		errMsg = "invalid or non-http(s) webhook url"
+		_ = store.RecordDelivery(ctx, wh.ID, event, string(body), 0, false, attempt, errMsg)
+		return false, false, 0, errMsg
+	}
+	// Resolve + validate the host once and pin the socket to the allowed IPs.
+	// Fail closed: a disallowed/resolution error blocks delivery without
+	// touching the internal network. blocked=true tells the retry sweep to
+	// dead-letter immediately rather than keep retrying into a forbidden
+	// address.
+	pin, err := ssrfguard.Pin(nil, url.Hostname())
+	if err != nil {
+		errMsg = "webhook url blocked: " + err.Error()
+		_ = store.RecordDelivery(ctx, wh.ID, event, string(body), 0, false, attempt, errMsg)
+		// Only a genuinely disallowed address is a permanent block that
+		// dead-letters immediately; a transient DNS failure stays retryable.
+		blocked := errors.Is(err, ssrfguard.ErrBlocked)
+		if blocked {
+			slog.Warn("wh_ssrf_blocked", "event", event, "webhook", wh.ID, "attempt", attempt, "err", errMsg)
+		}
+		return false, blocked, 0, errMsg
+	}
+	defer pin.Close()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, wh.URL, bytes.NewReader(body))
 	if err != nil {
-		return false, 0, err.Error()
+		return false, false, 0, err.Error()
 	}
 	mac := hmac.New(sha256.New, []byte(wh.Secret))
 	mac.Write(body)
@@ -111,7 +146,10 @@ func deliverWebhook(ctx context.Context, h *RESTHandlers, store *dbstore.Webhook
 	req.Header.Set("X-JomForm-Delivery", fmt.Sprintf("%d-%d", time.Now().UTC().UnixNano(), attempt))
 	req.Header.Set("User-Agent", "JomForm-Webhook/2.0")
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{
+		Timeout:   10 * time.Second,
+		Transport: pin.Transport(),
+	}
 	resp, err := client.Do(req)
 
 	if err != nil {
@@ -129,7 +167,7 @@ func deliverWebhook(ctx context.Context, h *RESTHandlers, store *dbstore.Webhook
 	} else {
 		slog.Warn("wh_failed", "event", event, "webhook", wh.ID, "attempt", attempt, "err", errMsg)
 	}
-	return success, code, errMsg
+	return success, false, code, errMsg
 }
 
 // RunWebhookRetrySweep polls the persistent retry queue and re-delivers due
@@ -182,9 +220,18 @@ func sweepDueRetries(ctx context.Context, h *RESTHandlers, store *dbstore.Webhoo
 			continue
 		}
 		signPub, signPriv := ensureSigningKey(ctx, h, wh.AccountID)
-		success, _, _ := deliverWebhook(ctx, h, store, signPub, signPriv, wh.AccountID, wh, r.Event, []byte(r.Payload), r.Attempt)
+		success, blocked, _, _ := deliverWebhook(ctx, h, store, signPub, signPriv, wh.AccountID, wh, r.Event, []byte(r.Payload), r.Attempt)
 		if success {
 			_ = store.DeleteRetry(ctx, r.ID)
+			continue
+		}
+		// Issue #366: an SSRF-blocked delivery is treated as permanently
+		// failed — dead-letter it immediately instead of re-dispatching into
+		// a private/metadata address over and over with backoff.
+		if blocked {
+			if err := store.MarkDeadLetter(ctx, r.ID); err != nil {
+				slog.Warn("wh_dead_letter", "err", err, "retry", r.ID)
+			}
 			continue
 		}
 		if r.Attempt >= webhookMaxAttempts {
