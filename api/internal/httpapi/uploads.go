@@ -40,6 +40,19 @@ import (
 // ObjectStore is the S3/MinIO client for the media bucket.
 type ObjectStore = objstore.ObjectStore
 
+// ObjectStoreIface is the subset of the object store the HTTP handlers use.
+// It lets tests inject a fake store without a live S3/MinIO (issue #379
+// regression tests exercise the tenant-ownership gate on asset serving).
+type ObjectStoreIface interface {
+	GetObject(ctx context.Context, key string) ([]byte, string, error)
+	PutObject(ctx context.Context, key, contentType string, body []byte) error
+	PublicURL(key string) string
+	DeleteObject(ctx context.Context, key string) error
+}
+
+// Compile-time check: the concrete store satisfies the handler interface.
+var _ ObjectStoreIface = (*ObjectStore)(nil)
+
 // Allowlists + constants.
 var (
 	imageUploadMIME = objstore.ImageUploadMIME
@@ -94,6 +107,11 @@ func optimizeAvatar(data []byte, ext string) ([]byte, error) { return objstore.O
 // DENY, frame-ancestors 'none' CSP and Cross-Origin-Resource-Policy:
 // same-origin so another site cannot frame or embed them. Images keep lenient
 // embedding (forms/products render them from any origin).
+//
+// Issue #379: code assets are tenant-scoped even on /media. The requesting
+// space/domain's account must match the asset key's account, so a merchant
+// cannot serve another account's uploaded code via /media. Images remain
+// intentionally public (forms/products render them from any origin).
 func (h *RESTHandlers) handleMedia(w http.ResponseWriter, r *http.Request) {
 	if h.Store == nil {
 		writeErr(w, http.StatusServiceUnavailable, "media storage tidak dikonfigurasi")
@@ -115,6 +133,16 @@ func (h *RESTHandlers) handleMedia(w http.ResponseWriter, r *http.Request) {
 		slog.Error("media_get", "err", err, "key", key)
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
+	}
+	// Issue #379: code assets are tenant-scoped even on /media. Resolve the
+	// requesting space/domain's account and require the asset key's account to
+	// match it. Images are intentionally public and unaffected.
+	if isCodeAsset(ct) {
+		requestingAccount := requestingAccountID(r.Context(), h.Accounts, h.Domains, h.Spaces, r.Host)
+		if !assetOwnedByRequestingTenant(key, requestingAccount) {
+			writeErr(w, http.StatusNotFound, "media tidak tersedia")
+			return
+		}
 	}
 	// Issue #364: code-asset scan gate. A not-yet-scanned, needs-review, or
 	// quarantined code asset is never served (404). Images are unaffected.

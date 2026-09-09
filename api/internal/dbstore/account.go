@@ -66,6 +66,22 @@ func (s *AccountStore) BySlug(ctx context.Context, slug string) (*Account, error
 	return a, err
 }
 
+// BySpaceID fetches the account linked to a space (issue #379 — used to
+// resolve the requesting tenant's account from a space subdomain so asset
+// serving can be scoped to the account that owns the space).
+func (s *AccountStore) BySpaceID(ctx context.Context, spaceID string) (*Account, error) {
+	a := &Account{}
+	err := s.pool.QueryRow(ctx, accountSelect+" WHERE space_id = $1", spaceID).
+		Scan(&a.ID, &a.OwnerUserID, &a.Name, &a.Slug,
+			&a.Timezone, &a.Currency,
+			&a.ChipBrandID, &a.ChipSecretKeyEnc, &a.ChipMode, &a.ChipVerified, &a.BNMRounding,
+			&a.ChipEmailFallback, &a.ChipMethodWhitelist,
+			&a.CustomDomain, &a.CustomDomainVerified, &a.CustomDomainVerifiedAt,
+			&a.EinvoiceTIN, &a.EinvoiceMSIC,
+			&a.CreatedAt, &a.UpdatedAt)
+	return a, err
+}
+
 // ByOwner lists accounts owned by a user.
 func (s *AccountStore) ByOwner(ctx context.Context, userID string) ([]*Account, error) {
 	rows, err := s.pool.Query(ctx, accountSelect+" WHERE owner_user_id = $1 ORDER BY created_at", userID)

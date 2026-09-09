@@ -75,7 +75,7 @@ type PublicHandlers struct {
 	SpamQueue *emailqueue.Queue
 	// Issue #361: S3/MinIO store serving the space/custom-domain code-asset
 	// route GET /assets/{key}. Nil when media storage isn't configured.
-	Store *ObjectStore
+	Store ObjectStoreIface
 	// Issue #364: media metadata store used to gate code-asset serving on the
 	// background scan status. Only assets scanned as 'ok' are served. Nil-safe.
 	Media *dbstore.MediaStore
@@ -1724,6 +1724,49 @@ func resolveLandingEmbeds(configured []dbstore.LandingEmbed, published []*dbstor
 	return embeds
 }
 
+// requestingAccountID resolves the account that owns the requesting space
+// subdomain or verified custom domain (issue #379). It returns "" when the
+// host is not a space/custom domain or the owning account cannot be resolved.
+// The subdomain namespace is the space slug (issue #158: each space owns its
+// own account), so the account is resolved via the space; the custom-domain
+// namespace is the account slug directly.
+func requestingAccountID(ctx context.Context, accounts *dbstore.AccountStore, domains *dbstore.DomainStore, spaces *dbstore.SpaceStore, host string) string {
+	if sub := accountSubdomain(host); sub != "" {
+		if spaces == nil {
+			return ""
+		}
+		spaceID, err := spaces.IDBySlug(ctx, sub)
+		if err != nil || spaceID == "" {
+			return ""
+		}
+		acc, err := accounts.BySpaceID(ctx, spaceID)
+		if err != nil || acc == nil {
+			return ""
+		}
+		return acc.ID
+	}
+	if cd := customDomainOwner(ctx, accounts, domains, host); cd != "" {
+		acc, err := accounts.BySlug(ctx, cd)
+		if err != nil || acc == nil {
+			return ""
+		}
+		return acc.ID
+	}
+	return ""
+}
+
+// assetOwnedByRequestingTenant reports whether the object key's account
+// matches the account that owns the requesting space/domain (issue #379).
+// A key whose account segment is missing or differs from the requesting
+// tenant is rejected so a merchant can never serve another account's asset
+// on their own domain.
+func assetOwnedByRequestingTenant(key, requestingAccountID string) bool {
+	if requestingAccountID == "" {
+		return false
+	}
+	return accountIDFromKey(key) == requestingAccountID
+}
+
 // handleAsset serves GET /assets/{key...} on a space/custom domain — merchant
 // code assets (CSS/JS/HTML/fonts) referenced same-origin by a customised
 // landing/space page (issue #361). The route only resolves on a space
@@ -1736,6 +1779,11 @@ func resolveLandingEmbeds(configured []dbstore.LandingEmbed, published []*dbstor
 // can never resolve to an object outside the uploading account's space. The
 // stored content-type is preserved and restrictive headers (nosniff, no
 // framing/embedding) are applied exactly as on /media.
+//
+// Issue #379: the requesting space/domain's account is resolved and the
+// asset key's account must match it — a cross-tenant key (another account's
+// uploaded code) is rejected with 404 even if the requesting tenant is a
+// valid space/custom domain.
 func (h *PublicHandlers) handleAsset(w http.ResponseWriter, r *http.Request) {
 	if h.Store == nil {
 		writeErr(w, http.StatusServiceUnavailable, "media storage tidak dikonfigurasi")
@@ -1744,15 +1792,21 @@ func (h *PublicHandlers) handleAsset(w http.ResponseWriter, r *http.Request) {
 	// Tenant-scope check: only a space subdomain or a custom domain mapped to
 	// a space serves assets. Bare jomform.com (no subdomain) 404s so dashboard
 	// routes are unaffected.
-	if sub := accountSubdomain(r.Host); sub == "" {
-		if customDomainOwner(r.Context(), h.Accounts, h.Domains, r.Host) == "" {
-			http.NotFound(w, r)
-			return
-		}
+	requestingAccount := requestingAccountID(r.Context(), h.Accounts, h.Domains, h.Spaces, r.Host)
+	if requestingAccount == "" {
+		http.NotFound(w, r)
+		return
 	}
 	key := mediaKeyFromPath(r.PathValue("key"))
 	if key == "" {
 		writeErr(w, http.StatusBadRequest, "kunci media tidak sah")
+		return
+	}
+	// Issue #379: the asset must belong to the requesting tenant. A key whose
+	// account differs from the requesting space/domain's account is rejected
+	// (404) so a merchant cannot serve another account's code asset.
+	if !assetOwnedByRequestingTenant(key, requestingAccount) {
+		http.NotFound(w, r)
 		return
 	}
 	body, ct, err := h.Store.GetObject(r.Context(), key)

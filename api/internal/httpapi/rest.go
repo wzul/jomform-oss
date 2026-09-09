@@ -64,7 +64,7 @@ type RESTHandlers struct {
 
 	// Store is the S3/MinIO object store for image-block uploads (issue #61).
 	// Nil when media storage is not configured (upload returns 503).
-	Store *ObjectStore
+	Store ObjectStoreIface
 
 	// Events is the audit/behaviour log (issue #92). Nil in bare-mode tests;
 	// Record calls are no-ops when nil.
