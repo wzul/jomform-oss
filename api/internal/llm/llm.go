@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -27,10 +28,13 @@ const DefaultBaseURL = "https://ollama.com/v1"
 type Client struct {
 	baseURL string
 	model   string
+	apiKey  string
 	http    *http.Client
 }
 
 // New builds an Ollama Cloud client. Empty baseURL/model use the defaults.
+// The API key is read from the OLLAMA_API_KEY env var (Bearer auth on the
+// OpenAI-compatible endpoint). Without it Ollama returns 401 Unauthorized.
 func New(baseURL, model string) *Client {
 	if baseURL == "" {
 		baseURL = DefaultBaseURL
@@ -41,6 +45,7 @@ func New(baseURL, model string) *Client {
 	return &Client{
 		baseURL: baseURL,
 		model:   model,
+		apiKey:  os.Getenv("OLLAMA_API_KEY"),
 		http:    &http.Client{Timeout: 60 * time.Second},
 	}
 }
@@ -141,6 +146,9 @@ func (c *Client) chat(ctx context.Context, body []byte) (string, error) {
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("llm: %w", err)
