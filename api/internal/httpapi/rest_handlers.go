@@ -677,7 +677,7 @@ func (h *RESTHandlers) setFormStatus(w http.ResponseWriter, r *http.Request, act
 		return
 	}
 	switch in.Status {
-	case dbstore.FormStatusDraft, dbstore.FormStatusPublished:
+	case dbstore.FormStatusDraft, dbstore.FormStatusPublished, dbstore.FormStatusUnlisted:
 		// Leaving private clears the stored access password.
 		if err := h.Forms.SetStatusWithPassword(r.Context(), actx.Account.ID, r.PathValue("id"), in.Status, ""); err != nil {
 			respondErr(w, r, err)

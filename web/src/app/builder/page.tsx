@@ -184,8 +184,8 @@ export default function Builder() {
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [slug, setSlug] = useState("");
   const [title, setTitle] = useState("New form");
-  // Issue #176: form status (draft | private | published) + access password.
-  const [status, setStatus] = useState<"draft" | "private" | "published">("draft");
+  // Issue #176: form status (draft | private | published | unlisted) + access password.
+  const [status, setStatus] = useState<"draft" | "private" | "published" | "unlisted">("draft");
   const [accessPw, setAccessPw] = useState("");
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
@@ -248,8 +248,8 @@ export default function Builder() {
       setCurrentId(d.id);
       setSlug(d.slug);
       setTitle(d.title);
-      setStatus(d.status === "private" ? "private" : d.status === "published" ? "published" : "draft");
-      setPubUrl(d.status === "published" ? d.url : "");
+      setStatus(d.status === "private" ? "private" : d.status === "published" ? "published" : d.status === "unlisted" ? "unlisted" : "draft");
+      setPubUrl(d.status === "published" || d.status === "unlisted" ? d.url : "");
       const cfg = d.config || {};
       setMode(cfg.mode === "response" ? "response" : "payment");
       setChipMapping(cfg.chip_mapping || {});
@@ -469,7 +469,7 @@ export default function Builder() {
         setSaving(false);
         return;
       }
-      setStatus(targetStatus as "draft" | "private" | "published");
+      setStatus(targetStatus as "draft" | "private" | "published" | "unlisted");
     }
     if (publish && id) {
       await fetch(`/api/rest/forms/${id}/publish${spaceQuery()}`, { method: "POST" });

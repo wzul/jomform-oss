@@ -232,7 +232,7 @@ function FormSettingsInner() {
   // General
   const [title, setTitle] = useState("");
   const [slug, setSlug] = useState("");
-  const [status, setStatus] = useState<"draft" | "private" | "published">("draft");
+  const [status, setStatus] = useState<"draft" | "private" | "published" | "unlisted">("draft");
   const [accessPw, setAccessPw] = useState("");
   const [fsTheme, setFsTheme] = useState("#5e6ad2");
   const [fsLogo, setFsLogo] = useState("");
@@ -312,7 +312,7 @@ function FormSettingsInner() {
       setForm(d);
       setTitle(d.title || "");
       setSlug(d.slug || "");
-      setStatus(d.status === "private" ? "private" : d.status === "published" ? "published" : "draft");
+      setStatus(d.status === "private" ? "private" : d.status === "published" ? "published" : d.status === "unlisted" ? "unlisted" : "draft");
       setFsTheme((d.theme?.primary as string) || "#5e6ad2");
       setFsLogo(d.logo_url || "");
       setFsEmbed(d.allow_embed !== false);
@@ -745,8 +745,8 @@ function FormSettingsInner() {
                       </div>
                       <div>
                         <label className={labelCls}>{t("bld.status")}</label>
-                        <div className="mt-1 grid max-w-xl grid-cols-3 gap-1.5">
-                          {(["draft", "private", "published"] as const).map((s) => (
+                        <div className="mt-1 grid max-w-xl grid-cols-4 gap-1.5">
+                          {(["draft", "private", "published", "unlisted"] as const).map((s) => (
                             <button
                               key={s}
                               type="button"

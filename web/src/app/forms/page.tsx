@@ -185,10 +185,10 @@ export default function FormsPage() {
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2 sm:justify-end">
-                {f.status === "published" ? (
+                {f.status === "published" || f.status === "unlisted" ? (
                   <>
                     <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-[11px] font-medium text-emerald-700">
-                      {t("forms.live")}
+                      {f.status === "unlisted" ? t("forms.unlisted") : t("forms.live")}
                     </span>
                     {canWrite && (
                       <Link href={`/builder?form=${f.id}`} className="jf-btn-ghost min-h-[44px] sm:min-h-10">

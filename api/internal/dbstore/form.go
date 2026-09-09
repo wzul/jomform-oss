@@ -8,11 +8,14 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Form statuses (issue #176): draft | private (password-protected) | published.
+// Form statuses (issue #176): draft | private (password-protected) |
+// published | unlisted. An unlisted form is live (served at its direct
+// /{slug} URL, submissions work) but excluded from the storefront listing.
 const (
 	FormStatusDraft     = "draft"
 	FormStatusPrivate   = "private"
 	FormStatusPublished = "published"
+	FormStatusUnlisted  = "unlisted"
 )
 
 // Form models the forms table.
@@ -47,6 +50,16 @@ type Form struct {
 
 // ErrFormNotFound indicates a missing form.
 var ErrFormNotFound = errors.New("form not found")
+
+// validFormStatus reports whether status is one of the accepted form statuses
+// (draft | private | published | unlisted).
+func validFormStatus(status string) bool {
+	switch status {
+	case FormStatusDraft, FormStatusPrivate, FormStatusPublished, FormStatusUnlisted:
+		return true
+	}
+	return false
+}
 
 // FormStore wraps pgx for forms.
 type FormStore struct{ pool *pgxpool.Pool }
@@ -120,13 +133,13 @@ func (s *FormStore) Update(ctx context.Context, accountID, id, title string, con
 	return nil
 }
 
-// SetStatus sets a form's status (draft | private | published). Soft-deleted
-// forms keep their status. When moving to 'private' the caller must have set
-// an access password first (SetAccessPassword) — a private form with no
-// password would be permanently locked.
+// SetStatus sets a form's status (draft | private | published | unlisted).
+// Soft-deleted forms keep their status. When moving to 'private' the caller
+// must have set an access password first (SetAccessPassword) — a private form
+// with no password would be permanently locked.
 func (s *FormStore) SetStatus(ctx context.Context, accountID, id, status string) error {
-	if status != FormStatusDraft && status != FormStatusPrivate && status != FormStatusPublished {
-		return errors.New("status mesti draft|private|published")
+	if !validFormStatus(status) {
+		return errors.New("status mesti draft|private|published|unlisted")
 	}
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE forms SET status=$3, updated_at=now() WHERE id=$2 AND account_id=$1 AND deleted_at IS NULL`,
@@ -145,8 +158,8 @@ func (s *FormStore) SetStatus(ctx context.Context, accountID, id, status string)
 // and status can never drift apart. passwordHash is an argon2id PHC string;
 // pass "" to clear the password (e.g. when leaving private status).
 func (s *FormStore) SetStatusWithPassword(ctx context.Context, accountID, id, status, passwordHash string) error {
-	if status != FormStatusDraft && status != FormStatusPrivate && status != FormStatusPublished {
-		return errors.New("status mesti draft|private|published")
+	if !validFormStatus(status) {
+		return errors.New("status mesti draft|private|published|unlisted")
 	}
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE forms SET status=$3, access_password=$4, updated_at=now()

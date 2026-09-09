@@ -60,7 +60,7 @@ func (s *Server) listForms(
 		// takes precedence over the space subdomain.
 		for _, f := range forms {
 			u := ""
-			if f.Status == dbstore.FormStatusPublished {
+			if f.Status == dbstore.FormStatusPublished || f.Status == dbstore.FormStatusUnlisted {
 				u = s.formPublicURLForAccount(ctx, acc, f.Slug)
 			}
 			out = append(out, formOut{
@@ -95,7 +95,7 @@ func (s *Server) getForm(
 				IsPrivate: f.Status == dbstore.FormStatusPrivate, Config: f.Config,
 				Theme: f.Theme, RegisteredFields: formfields.FromConfig(f.Config),
 			}
-			if f.Status == dbstore.FormStatusPublished {
+			if f.Status == dbstore.FormStatusPublished || f.Status == dbstore.FormStatusUnlisted {
 				out.URL = s.formPublicURLForAccount(ctx, acc, f.Slug)
 			}
 			return nil, out, nil

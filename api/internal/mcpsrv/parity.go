@@ -588,10 +588,10 @@ func jsonValid(s string) bool {
 }
 
 // publishFormIn extends publish_form for the private status (issue #176):
-// status=private requires a password; status=published/draft clears it.
+// status=private requires a password; status=published/draft/unlisted clears it.
 type publishFormIn struct {
 	FormID   string `json:"form_id" jsonschema:"ID borang"`
-	Status   string `json:"status,omitempty" jsonschema:"published (lalai) | private | draft"`
+	Status   string `json:"status,omitempty" jsonschema:"published (lalai) | private | draft | unlisted"`
 	Password string `json:"password,omitempty" jsonschema:"Kata laluan akses (wajib bila status=private)"`
 }
 
@@ -608,7 +608,7 @@ func (s *Server) publishFormMCP(
 		status = dbstore.FormStatusPublished
 	}
 	switch status {
-	case dbstore.FormStatusPublished, dbstore.FormStatusDraft:
+	case dbstore.FormStatusPublished, dbstore.FormStatusDraft, dbstore.FormStatusUnlisted:
 		// Leaving private clears the stored access password.
 		if err := s.deps.Forms.SetStatusWithPassword(ctx, acc, in.FormID, status, ""); err != nil {
 			return nil, nil, err
