@@ -3,10 +3,17 @@ package mcpsrv
 
 import (
 	"context"
+	"encoding/base64"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/wzul/jomform/api/internal/assetgate"
+	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/objstore"
 )
 
 type mediaOut struct {
@@ -73,4 +80,185 @@ func (s *Server) listMedia(ctx context.Context, _ *mcp.CallToolRequest, in listM
 	return nil, map[string]any{
 		"items": out, "page": page, "limit": limit, "total": total,
 	}, nil
+}
+
+// ── upload_media (issue #363) ───────────────────────────────────────────────
+// MCP parity for the dashboard media upload (image #61 + code asset #361). The
+// agent sends the raw bytes base64-encoded and the asset kind (image|asset),
+// and the tool runs the EXACT same tenant-scoped pipeline as the REST upload:
+// allowlisted sniffing (magic bytes), size caps, image optimisation (EXIF
+// strip / downscale), account-scoped S3 key, media row, and the #364 code-asset
+// scan gate (fail-closed). Images are served immediately; code assets wait for
+// the background scan to flip them to 'ok' before they render.
+
+type uploadMediaIn struct {
+	Kind string `json:"kind" jsonschema:"Jenis fail: 'image' (png/jpeg/webp/gif — dioptimumkan, strip EXIF) atau 'asset' (css/js/html/svg/woff2 — disimpan asli, scan-gated)"`
+	Data string `json:"data" jsonschema:"Fail content base64-encoded. Imej ≤20MB input / ≤2MB stored; asset ≤20MB input / ≤2MB stored."`
+}
+
+func (s *Server) uploadMedia(
+	ctx context.Context, _ *mcp.CallToolRequest, in uploadMediaIn,
+) (*mcp.CallToolResult, mediaOut, error) {
+	// Issue #307: resolve the owning account within the per-call scope.
+	acc, err := s.accountAndScope(ctx, true)
+	if err != nil {
+		return nil, mediaOut{}, err
+	}
+	// Write gate: manage-or-admin role in the space owning the account.
+	if err := s.requireWriteRoleIn(ctx, acc); err != nil {
+		return nil, mediaOut{}, err
+	}
+	if s.deps.Store == nil {
+		return nil, mediaOut{}, errors.New("media storage tidak dikonfigurasi")
+	}
+	if in.Data == "" {
+		return nil, mediaOut{}, errors.New("data wajib diisi (base64)")
+	}
+	raw, err := base64.StdEncoding.DecodeString(in.Data)
+	if err != nil {
+		return nil, mediaOut{}, errors.New("data bukan base64 yang sah")
+	}
+
+	switch in.Kind {
+	case "image":
+		return s.uploadMediaImage(ctx, acc, raw)
+	case "asset":
+		return s.uploadMediaAsset(ctx, acc, raw)
+	default:
+		return nil, mediaOut{}, errors.New("kind mesti 'image' atau 'asset'")
+	}
+}
+
+// uploadMediaImage mirrors the dashboard POST /v1/rest/uploads/image: sniffed
+// image allowlist, optimise (downscale + EXIF strip), store account-scoped,
+// record a merchant media row. Images are never scan-gated, so they serve
+// immediately.
+func (s *Server) uploadMediaImage(ctx context.Context, acc string, raw []byte) (*mcp.CallToolResult, mediaOut, error) {
+	if len(raw) == 0 {
+		return nil, mediaOut{}, errors.New("fail kosong")
+	}
+	if len(raw) > objstore.MaxUploadBytes {
+		return nil, mediaOut{}, fmt.Errorf("imej melebihi had %dMB", objstore.MaxUploadBytes>>20)
+	}
+	ext, ok := objstore.SniffImageType(raw)
+	if !ok {
+		return nil, mediaOut{}, errors.New("jenis imej tidak disokong (png/jpeg/webp/gif sahaja)")
+	}
+	mime := objstore.ImageUploadMIME[ext]
+	stored, err := objstore.OptimizeImage(raw, ext)
+	if err != nil {
+		return nil, mediaOut{}, err
+	}
+	if len(stored) > objstore.MaxStoredBytes {
+		return nil, mediaOut{}, errors.New("imej gagal dimampatkan bawah 2MB; cuba imej lain")
+	}
+	key := objstore.BuildUploadKey(acc, ext)
+	if err := s.deps.Store.PutObject(ctx, key, mime, stored); err != nil {
+		return nil, mediaOut{}, fmt.Errorf("store: %w", err)
+	}
+	// Issue #92: audit upload.image (best-effort).
+	s.recordMCPMediaEvent(ctx, acc, "upload.image", map[string]any{
+		"mime": mime, "out_bytes": len(stored),
+	})
+	return nil, s.mediaOutFrom(ctx, acc, key, mime, int64(len(stored))), nil
+}
+
+// uploadMediaAsset mirrors the dashboard POST /v1/rest/uploads/asset: sniffed
+// code-asset allowlist, stored byte-for-byte, merchant media row, then the
+// #364 deterministic scan + 'scanning' enqueue. Code assets only serve once
+// the background scan flips them to 'ok'; otherwise fail-closed.
+func (s *Server) uploadMediaAsset(ctx context.Context, acc string, raw []byte) (*mcp.CallToolResult, mediaOut, error) {
+	if s.deps.Media == nil {
+		return nil, mediaOut{}, errors.New("media metadata tidak tersedia")
+	}
+	if len(raw) == 0 {
+		return nil, mediaOut{}, errors.New("fail kosong")
+	}
+	if len(raw) > objstore.MaxAssetUploadBytes {
+		return nil, mediaOut{}, fmt.Errorf("fail melebihi had %dMB", objstore.MaxAssetUploadBytes>>20)
+	}
+	if len(raw) > objstore.MaxAssetBytes {
+		return nil, mediaOut{}, fmt.Errorf("fail melebihi had %dMB", objstore.MaxAssetBytes>>20)
+	}
+	ext, ok := objstore.SniffAssetType(raw)
+	if !ok {
+		return nil, mediaOut{}, errors.New("jenis fail tidak disokong (css/js/html/svg/woff2 sahaja)")
+	}
+	mime := objstore.UploadAssetMIME[ext]
+	key := objstore.BuildUploadKey(acc, ext)
+	if err := s.deps.Store.PutObject(ctx, key, mime, raw); err != nil {
+		return nil, mediaOut{}, fmt.Errorf("store: %w", err)
+	}
+	// Issue #180: record the media row so list_media + the serving gate work.
+	rec := &dbstore.Media{
+		AccountID: acc, Key: key, URL: s.deps.Store.PublicURL(key),
+		Mime: mime, Size: int64(len(raw)), Source: dbstore.MediaSourceMerchant,
+	}
+	if err := s.deps.Media.Create(ctx, rec); err != nil {
+		return nil, mediaOut{}, fmt.Errorf("media: %w", err)
+	}
+	// Issue #92: audit upload.asset (best-effort).
+	s.recordMCPMediaEvent(ctx, acc, "upload.asset", map[string]any{
+		"mime": mime, "bytes": len(raw),
+	})
+	// Issue #364: code-asset scan gate (same logic as the REST asset handler).
+	det := assetgate.DeterministicScan(raw, mime)
+	var scanStatus, scanReason string
+	switch {
+	case det.Status == assetgate.StatusQuarantined:
+		scanStatus = assetgate.StatusQuarantined
+		scanReason = strings.Join(det.Reasons, "; ")
+	case s.deps.AssetQueue != nil:
+		scanStatus = assetgate.StatusScanning
+		scanReason = "queued for AI review"
+		_ = s.deps.Media.MarkScanning(ctx, acc, rec.ID, scanReason)
+		if err := assetgate.Enqueue(ctx, s.deps.AssetQueue, assetgate.ScanJob{
+			MediaID: rec.ID, Key: key, AccountID: acc, Mime: mime,
+		}); err != nil {
+			// Leave 'scanning' — the asset is not served until a successful
+			// scan, so this is safe fail-closed behaviour.
+		}
+	default:
+		scanStatus = assetgate.StatusPending
+	}
+	if scanStatus != "" {
+		_ = s.deps.Media.SetScanStatus(ctx, acc, rec.ID, scanStatus, scanReason)
+	}
+	return nil, s.mediaOutFrom(ctx, acc, key, mime, int64(len(raw))), nil
+}
+
+// mediaOutFrom builds a mediaOut for a freshly stored object, best-effort
+// reading its scan status from the media row.
+func (s *Server) mediaOutFrom(ctx context.Context, acc, key, mime string, size int64) mediaOut {
+	out := mediaOut{
+		Key: key, URL: s.deps.Store.PublicURL(key), Mime: mime, Size: size,
+		Source: dbstore.MediaSourceMerchant,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	if s.deps.Media != nil {
+		if m, err := s.deps.Media.ByKey(ctx, acc, key); err == nil && m != nil {
+			out.ID = m.ID
+			out.ScanStatus = m.ScanStatus
+			out.ScanReason = m.ScanReason
+		} else if objstore.IsCodeAsset(mime) {
+			// A code asset with no row is not proven scanned → never served.
+			out.ScanStatus = assetgate.StatusPending
+		}
+	}
+	return out
+}
+
+// recordMCPMediaEvent appends an upload audit event (issue #92, best-effort).
+func (s *Server) recordMCPMediaEvent(ctx context.Context, accountID, event string, props map[string]any) {
+	if s.deps.Events == nil {
+		return
+	}
+	id := IdentityFromContext(ctx)
+	if id == nil {
+		return
+	}
+	if err := s.deps.Events.Record(ctx, accountID, id.UserID, event, props, "", ""); err != nil {
+		// best-effort — a failed event write must not fail the upload
+		return
+	}
 }

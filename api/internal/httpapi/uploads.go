@@ -12,305 +12,88 @@
 // Content-type allowlist, 20MB input cap (owner decision), ≤2MB stored cap.
 // No GC yet.
 //
-// Format choice (deviation from the owner note's "PNG→WebP", documented):
-// pure-Go WebP encoding requires CGO (chai2010/webp wraps libwebp). We picked
-// github.com/disintegration/imaging for simple pure-Go deployment at this
-// volume, so PNG/JPEG are re-encoded to JPEG q80 (still strips EXIF, small
-// output) and small/clean WebP inputs pass through untouched. GIFs are decoded
-// to a still (first frame) so they can always be shrunk under 2MB — the
-// owner's allowed fallback for animated GIFs that won't compress.
+// The object store, allowlists, size caps, image optimisation and key building
+// live in internal/objstore so the dashboard (REST) and the MCP upload_media
+// tool share exactly the same pipeline (issue #363 MCP parity). This file
+// keeps the HTTP handlers + the small re-exports the other httpapi files and
+// tests rely on.
 package httpapi
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"fmt"
-	"image"
-	"image/jpeg"
-	_ "image/gif"  // sniff GIF headers
-	_ "image/jpeg" // sniff JPEG headers
-	_ "image/png"  // sniff PNG headers
 	"io"
 	"log/slog"
 	"net/http"
 	"strings"
 
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
-	"github.com/disintegration/imaging"
-	"github.com/google/uuid"
 
 	"github.com/wzul/jomform/api/internal/assetgate"
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/objstore"
 )
 
+// ── Re-exported objstore symbols (kept so existing call sites + tests read
+// ── identically; implementations live in internal/objstore). ────────────────
+
+// ObjectStore is the S3/MinIO client for the media bucket.
+type ObjectStore = objstore.ObjectStore
+
+// Allowlists + constants.
+var (
+	imageUploadMIME = objstore.ImageUploadMIME
+	uploadAssetMIME = objstore.UploadAssetMIME
+)
+
+// Constant aliases (objstore exports untyped consts so callers can use them
+// in untyped-constant contexts like http.MaxBytesReader's int64).
 const (
-	// maxUploadBytes is the largest image a client may send (owner decision).
-	maxUploadBytes = 20 << 20 // 20MB
-
-	// maxStoredBytes is the ceiling for the optimised artifact we store.
-	maxStoredBytes = 2 << 20 // 2MB
-
-	// maxLongEdge downscales images wider than this on the long edge.
-	maxLongEdge = 1920
-
-	// maxStoredLongEdge is used when shrinking further to hit the 2MB cap.
-	maxStoredLongEdge = 1280
-
-	jpegQuality = 80
+	maxUploadBytes      = objstore.MaxUploadBytes
+	maxStoredBytes      = objstore.MaxStoredBytes
+	maxLongEdge         = objstore.MaxLongEdge
+	maxStoredLongEdge   = objstore.MaxStoredLongEdge
+	jpegQuality         = objstore.JPEGQuality
+	maxAvatarEdge       = objstore.MaxAvatarEdge
+	avatarLongEdge      = objstore.AvatarLongEdge
+	maxAssetBytes       = objstore.MaxAssetBytes
+	maxAssetUploadBytes = objstore.MaxAssetUploadBytes
 )
 
-// imageUploadMIME maps an allowed canonical extension to its MIME type.
-// Anything else is rejected before touching the bytes.
-var imageUploadMIME = map[string]string{
-	".png":  "image/png",
-	".jpg":  "image/jpeg",
-	".webp": "image/webp",
-	".gif":  "image/gif",
-}
-
-// uploadAssetMIME maps an allowed canonical extension to its MIME type for
-// *code assets* — CSS/JS/HTML/fonts a merchant uploads to customise their
-// landing/space page (issue #361). Unlike images these are stored and served
-// byte-for-byte (no re-encode) under the merchant's account-scoped key, so the
-// page can reference them as <link href> / <script src> / fonts. They are
-// tenant-scoped and served as hardened static content (see
-// serveAsset/handleMedia), never executed server-side. .svg and .woff2 are
-// included so a fully customised landing page can ship its own graphics + web
-// font without a second image-only upload path.
-var uploadAssetMIME = map[string]string{
-	".css":   "text/css; charset=utf-8",
-	".js":    "text/javascript; charset=utf-8",
-	".html":  "text/html; charset=utf-8",
-	".svg":   "image/svg+xml",
-	".woff2": "font/woff2",
-}
-
-// maxAssetBytes caps the stored size of a merchant code asset (issue #361).
-// Images keep their 20MB input / 2MB stored optimization caps; code assets are
-// stored as-is, so a generous-but-bounded ceiling prevents a single giant file
-// from blowing up storage while still accommodating real-world custom CSS/JS.
-const maxAssetBytes = 2 << 20 // 2MB stored cap for merchant code assets
-
-// maxAssetUploadBytes caps the raw multipart body a code-asset upload may send
-// (issue #361). Kept in line with the image input cap.
-const maxAssetUploadBytes = 20 << 20 // 20MB input cap
-
-// ObjectStore is a minimal S3/MinIO client for the media bucket.
-type ObjectStore struct {
-	client     *s3.Client
-	bucket     string
-	publicBase string // browser-reachable public URL prefix (issue #145)
-}
-
-// NewObjectStore builds an ObjectStore from config. endpoint empty uses AWS.
-//
-// Serving pattern (issue #145): public images are served through the API's
-// public media route (GET /media/{key}), which streams the object from
-// MinIO/S3. publicBase is the browser-reachable base for that route (e.g.
-// https://jomform.com/media) — it must NOT be the internal {S3_ENDPOINT}/
-// {bucket} URL, which browsers cannot resolve. MinIO uses path-style
-// addressing (force UsePathStyle for localhost/MinIO).
 func NewObjectStore(endpoint, accessKey, secretKey, bucket, region, publicBase string) (*ObjectStore, error) {
-	if bucket == "" {
-		return nil, errors.New("S3_BUCKET empty")
-	}
-	if region == "" {
-		region = "us-east-1"
-	}
-	optFns := []func(*awsconfig.LoadOptions) error{
-		awsconfig.WithRegion(region),
-	}
-	if accessKey != "" && secretKey != "" {
-		optFns = append(optFns,
-			awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")),
-		)
-	}
-	if endpoint != "" {
-		optFns = append(optFns, awsconfig.WithBaseEndpoint(endpoint))
-	}
-	cfg, err := awsconfig.LoadDefaultConfig(context.Background(), optFns...)
-	if err != nil {
-		return nil, fmt.Errorf("s3 config: %w", err)
-	}
-	cli := s3.NewFromConfig(cfg, func(o *s3.Options) {
-		if endpoint != "" && (strings.Contains(endpoint, "localhost") || strings.Contains(endpoint, "minio") || strings.Contains(endpoint, ":9000")) {
-			o.UsePathStyle = true
-		}
-	})
-	base := strings.TrimSuffix(publicBase, "/")
-	if base == "" {
-		base = bucket
-	}
-	return &ObjectStore{client: cli, bucket: bucket, publicBase: base}, nil
+	return objstore.NewObjectStore(endpoint, accessKey, secretKey, bucket, region, publicBase)
 }
+func mediaKeyFromPath(p string) string   { return objstore.MediaKeyFromPath(p) }
+func isCodeAsset(ct string) bool         { return objstore.IsCodeAsset(ct) }
+func accountIDFromKey(key string) string { return objstore.AccountIDFromKey(key) }
 
-// PutObject stores body under key with the given content-type.
-func (o *ObjectStore) PutObject(ctx context.Context, key, contentType string, body []byte) error {
-	_, err := o.client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket:      &o.bucket,
-		Key:         &key,
-		Body:        bytes.NewReader(body),
-		ContentType: &contentType,
-	})
-	if err != nil {
-		return fmt.Errorf("s3 put: %w", err)
-	}
-	return nil
-}
-
-// PublicURL returns the canonical browser-reachable URL for a key. It points
-// at the API's public media route (issue #145), never the internal
-// S3/MinIO endpoint, so browsers can actually load the object.
-func (o *ObjectStore) PublicURL(key string) string {
-	return o.publicBase + "/" + key
-}
-
-// GetObject streams an object's bytes and content-type from the bucket. It is
-// used by the public media route (GET /media/{key}) to serve uploaded media to
-// browsers without exposing the internal S3/MinIO endpoint.
-func (o *ObjectStore) GetObject(ctx context.Context, key string) ([]byte, string, error) {
-	out, err := o.client.GetObject(ctx, &s3.GetObjectInput{
-		Bucket: &o.bucket,
-		Key:    &key,
-	})
-	if err != nil {
-		return nil, "", fmt.Errorf("s3 get %q: %w", key, err)
-	}
-	defer out.Body.Close()
-	body, err := io.ReadAll(out.Body)
-	if err != nil {
-		return nil, "", fmt.Errorf("s3 read %q: %w", key, err)
-	}
-	ct := "application/octet-stream"
-	if out.ContentType != nil && *out.ContentType != "" {
-		ct = *out.ContentType
-	}
-	return body, ct, nil
-}
-
-// GetBytes is the object-store accessor the asset-scan worker
-// (internal/assetgate.Handler) uses to re-fetch an asset's bytes for the
-// deterministic + AI scan. It is a thin alias over GetObject, kept as its own
-// method so the worker's ObjectFetcher interface (a narrower contract than
-// the full object store) is satisfied without an import cycle.
-func (o *ObjectStore) GetBytes(ctx context.Context, key string) ([]byte, string, error) {
-	return o.GetObject(ctx, key)
-}
-
-// DeleteObject removes an object from the bucket (issue #180). It is used by
-// the media delete endpoint after the row is soft-deleted. A missing object is
-// not an error (idempotent delete).
-func (o *ObjectStore) DeleteObject(ctx context.Context, key string) error {
-	_, err := o.client.DeleteObject(ctx, &s3.DeleteObjectInput{
-		Bucket: &o.bucket,
-		Key:    &key,
-	})
-	if err != nil {
-		return fmt.Errorf("s3 delete %q: %w", key, err)
-	}
-	return nil
-}
-
-// mediaKeyFromPath validates and extracts the object key from a public media
-// route path. Uploaded keys are always exactly `u/{account}/{uuid}.{ext}`
-// (see buildUploadKey), so the key must be exactly three segments starting
-// with `u/`, with no traversal segments (".", ".."), no backslashes, no
-// percent-encoding, and no empty segments. Returns "" when the path is not a
-// safe key.
-func mediaKeyFromPath(p string) string {
-	p = strings.TrimPrefix(p, "/")
-	if p == "" || strings.Contains(p, "\\") || strings.Contains(p, "%") {
-		return ""
-	}
-	segs := strings.Split(p, "/")
-	if len(segs) != 3 || segs[0] != "u" {
-		return ""
-	}
-	for _, seg := range segs {
-		if seg == "" || seg == "." || seg == ".." {
-			return ""
-		}
-	}
-	return p
-}
-
-// isCodeAsset reports whether a stored content-type is a merchant code asset
-// (issue #361) rather than an image. Code assets are served with stricter
-// headers (no cross-origin framing/embedding); images keep lenient embedding
-// so forms/products can render them cross-origin.
-func isCodeAsset(ct string) bool {
-	switch ct {
-	case "text/css; charset=utf-8",
-		"text/javascript; charset=utf-8",
-		"text/html; charset=utf-8",
-		"image/svg+xml",
-		"font/woff2",
-		"application/javascript; charset=utf-8":
-		return true
-	}
-	// Be defensive about any future text/binary asset we add.
-	return strings.HasPrefix(ct, "text/") || ct == "font/woff2"
-}
-
-// accountIDFromKey extracts the account segment from an object key
-// (`u/{accountID}/{uuid}.{ext}`). Returns "" when the key isn't the canonical
-// upload shape. Serving gates use it to look up the owning account's scan
-// status without trusting the client host.
-func accountIDFromKey(key string) string {
-	p := strings.TrimPrefix(key, "/")
-	segs := strings.Split(p, "/")
-	if len(segs) != 3 || segs[0] != "u" {
-		return ""
-	}
-	return segs[1]
-}
-
-// scanGateAllowed allows an asset to be served. Images are always allowed
-// (customer/merchant image blocks must keep rendering cross-origin). Merchant
-// code assets (CSS/JS/HTML/SVG) are gated: only an 'ok' scan status serves.
-// Every other status is fail-closed (404), so an unscanned ('pending' /
-// 'scanning'), needs-review, or quarantined asset is never publicly
-// executable. A nil media store (bare-mode tests) or an object with no media
-// row is treated as allowed for images only; a code asset with no row is a
-// server-side gap and is blocked rather than silently served.
+// scanGateAllowed wraps the objstore scan gate with the httpapi signature
+// (context.Context + *dbstore.MediaStore).
 func scanGateAllowed(ctx context.Context, media *dbstore.MediaStore, key, ct string) bool {
-	if media == nil {
-		// No metadata store (bare-mode/unit tests) — serve. Production always
-		// wires Media, so the gate is enforced in the deployed service.
-		return true
-	}
-	if !isCodeAsset(ct) {
-		return true // images are unaffected by the code-asset gate
-	}
-	acct := accountIDFromKey(key)
-	if acct == "" {
-		return false
-	}
-	m, err := media.ByKey(ctx, acct, key)
-	if err != nil || m == nil {
-		// No media row for a code asset → cannot prove it was scanned → block.
-		return false
-	}
-	return m.ScanStatus == "ok"
+	return objstore.ScanGateAllowed(ctx, media, key, ct)
 }
+
+func publicReadPolicy(bucket string) string { return objstore.PublicReadPolicy(bucket) }
+func sniffImageType(data []byte) (string, bool) { return objstore.SniffImageType(data) }
+func sniffAssetType(data []byte) (string, bool) { return objstore.SniffAssetType(data) }
+func buildUploadKey(accountID, ext string) string { return objstore.BuildUploadKey(accountID, ext) }
+func optimizeImage(data []byte, ext string) ([]byte, error) { return objstore.OptimizeImage(data, ext) }
+func optimizeAvatar(data []byte, ext string) ([]byte, error) { return objstore.OptimizeAvatar(data, ext) }
+
+// ── HTTP handlers ────────────────────────────────────────────────────────────
 
 // handleMedia serves GET /media/{key} — a public, unauthenticated route that
 // streams an uploaded object from the media bucket (issue #145). The key is
 // validated to a safe `u/...` path (no traversal), the object's stored
-// content-type is preserved, and a short cache header is set so browsers and
-// the edge don't re-fetch on every render. 404 when the object is missing.
+// content-type is preserved, and a short cache header is set. 404 when the
+// object is missing.
 //
-// Issue #361 serving hardening: every response carries
-// X-Content-Type-Options: nosniff so a spoofed/ambiguous asset is never
-// MIME-sniffed into an executable type. Merchant code assets (CSS/JS/HTML/SVG)
-// additionally get X-Frame-Options: DENY, a frame-ancestors 'none' CSP and
-// Cross-Origin-Resource-Policy: same-origin so a landing page can reference
-// them same-origin but another site cannot frame or embed them. Images keep
-// lenient embedding (forms/products render them from any origin).
+// Issue #361 serving hardening: every response carries X-Content-Type-Options:
+// nosniff so a spoofed/ambiguous asset is never MIME-sniffed into an
+// executable type. Merchant code assets additionally get X-Frame-Options:
+// DENY, frame-ancestors 'none' CSP and Cross-Origin-Resource-Policy:
+// same-origin so another site cannot frame or embed them. Images keep lenient
+// embedding (forms/products render them from any origin).
 func (h *RESTHandlers) handleMedia(w http.ResponseWriter, r *http.Request) {
 	if h.Store == nil {
 		writeErr(w, http.StatusServiceUnavailable, "media storage tidak dikonfigurasi")
@@ -343,69 +126,13 @@ func (h *RESTHandlers) handleMedia(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	if isCodeAsset(ct) {
-		// Code assets: never framed, never embedded cross-origin. A landing
-		// page references them same-origin on its space/custom domain.
+		// Code assets: never framed, never embedded cross-origin.
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
 		w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)
-}
-
-// EnsureBucket provisions the media bucket if it does not exist and makes it
-// public-read (issue #79). It is idempotent: on a fresh MinIO/S3 the bucket is
-// created and a public-read policy applied; on subsequent boots the bucket
-// already exists and the call is a no-op. This is the durable in-repo guard so
-// a rebuild/redeploy can never silently regress into the NoSuchBucket 500 that
-// broke builder image uploads.
-//
-// Serving pattern (issue #145): public images are served through the API's
-// public media route (GET /media/{key}), which streams the object from the
-// bucket. The bucket is still made public-read so the route (and any direct
-// object URL) can serve without signed URLs.
-func (o *ObjectStore) EnsureBucket(ctx context.Context) error {
-	// HeadBucket first: if it exists (and we can access it) there is nothing
-	// to do. A missing bucket surfaces as a typed NotFound / NoSuchBucket.
-	_, err := o.client.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: &o.bucket})
-	if err == nil {
-		return nil
-	}
-	var notFound *types.NotFound
-	var noSuchBucket *types.NoSuchBucket
-	if !errors.As(err, &notFound) && !errors.As(err, &noSuchBucket) {
-		// Some other failure (auth, network, endpoint down) — do not mask it.
-		return fmt.Errorf("s3 head bucket %q: %w", o.bucket, err)
-	}
-
-	// Bucket absent: create it. MinIO/S3 use us-east-1 as the default region
-	// for path-style local endpoints; CreateBucketConfiguration is only needed
-	// for non-default regions and would break MinIO, so we omit it.
-	if _, err := o.client.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: &o.bucket}); err != nil {
-		// A concurrent bootstrap may have created it between our Head and
-		// Create — treat that as success.
-		var owned *types.BucketAlreadyOwnedByYou
-		var exists *types.BucketAlreadyExists
-		if !errors.As(err, &owned) && !errors.As(err, &exists) {
-			return fmt.Errorf("s3 create bucket %q: %w", o.bucket, err)
-		}
-	}
-
-	// Make the bucket public-read so objects render without signed URLs.
-	policy := publicReadPolicy(o.bucket)
-	if _, err := o.client.PutBucketPolicy(ctx, &s3.PutBucketPolicyInput{
-		Bucket: &o.bucket,
-		Policy: &policy,
-	}); err != nil {
-		return fmt.Errorf("s3 put bucket policy %q: %w", o.bucket, err)
-	}
-	return nil
-}
-
-// publicReadPolicy returns a bucket policy granting anonymous s3:GetObject on
-// every object in the bucket. Scoped to exactly the given bucket.
-func publicReadPolicy(bucket string) string {
-	return fmt.Sprintf(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*","Action":["s3:GetObject"],"Resource":["arn:aws:s3:::%s/*"]}]}`, bucket)
 }
 
 // uploadImage handles POST /v1/rest/uploads/image (multipart). It optimises
@@ -494,59 +221,14 @@ func (h *RESTHandlers) uploadImage(w http.ResponseWriter, r *http.Request, actx 
 	h.recordEvent(r, actx, h.sessionOwnerID(r), "upload.image", map[string]any{
 		"mime": mime, "in_bytes": len(data), "out_bytes": len(stored),
 	})
-	// Issue #180: record the object in the media library so the dashboard can
-	// list it (metadata + filtering). Best-effort — a metadata write failure
-	// must not fail the upload itself.
+	// Issue #180: record the object in the media library (best-effort).
 	h.recordMedia(r, actx, key, mime, int64(len(stored)), dbstore.MediaSourceMerchant, "")
 	respond(w, http.StatusOK, map[string]string{"url": h.Store.PublicURL(key)})
 }
 
-// maxAvatarEdge caps the long edge of an optimised avatar (issue #133).
-// Avatars are small circles in the Shell/profile, so ~256px is plenty and
-// keeps storage tiny (~50-150KB).
-const maxAvatarEdge = 256
-
-// avatarLongEdge downscales the avatar long edge at fit time.
-const avatarLongEdge = 256
-
-// optimizeAvatar re-encodes data into a small avatar (≤maxAvatarEdge on the
-// long edge). Like optimizeImage it re-encodes to JPEG q~80 so EXIF/GPS/phone
-// metadata is stripped and the artifact is tiny. The 2MB cap from the generic
-// upload also applies so a pathological input can't blow up storage.
-func optimizeAvatar(data []byte, ext string) ([]byte, error) {
-	if len(data) == 0 {
-		return nil, errors.New("fail kosong")
-	}
-	img, err := decodeImage(data)
-	if err != nil {
-		return nil, errors.New("gagal decode imej")
-	}
-	// Fit to a 256×256 box preserving aspect, then re-encode to JPEG.
-	if b := img.Bounds(); b.Dx() > avatarLongEdge || b.Dy() > avatarLongEdge {
-		img = imaging.Fit(img, avatarLongEdge, avatarLongEdge, imaging.Lanczos)
-	}
-	out := encodeJPEG(img, jpegQuality)
-	// Shrink quality if somehow still over the 2MB cap (rare).
-	for _, q := range []int{70, 60} {
-		if len(out) <= maxStoredBytes {
-			break
-		}
-		out = encodeJPEG(img, q)
-	}
-	if len(out) > maxStoredBytes {
-		return nil, errors.New("imej avatar tidak dapat dimampatkan")
-	}
-	return out, nil
-}
-
 // uploadAvatar handles POST /v1/rest/uploads/avatar (multipart). It accepts a
 // profile image ≤20MB, downscales it to avatar size (~256px, EXIF stripped)
-// and stores it under the account-scoped key, returning the public URL. This
-// mirrors the generic image block upload (uploadImage) with an avatar-sized
-// output artifact (issue #133).
-//
-// Request: multipart/form-data with a single "file" part (≤20MB).
-// Response: {"url": "..."} 200, or 400 on validation errors.
+// and stores it under the account-scoped key, returning the public URL.
 func (h *RESTHandlers) uploadAvatar(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	if _, ok := h.requireWriteRole(w, r, actx); !ok {
 		return
@@ -631,19 +313,14 @@ func (h *RESTHandlers) uploadAvatar(w http.ResponseWriter, r *http.Request, actx
 
 // uploadAsset handles POST /v1/rest/uploads/asset (multipart). It accepts a
 // merchant code asset — CSS/JS/HTML/font/SVG — for customising a landing/space
-// page (issue #361). Unlike images the bytes are stored as-is (no re-encode)
-// under the same account-scoped `u/<acct>/<uuid>.<ext>` key, so the landing
-// page can reference them as <link href> / <script src> / fonts. Customer
-// (form-attachment) uploads stay images-only; code assets are merchant-only.
+// page (issue #361). Bytes are stored as-is (no re-encode) under the same
+// account-scoped `u/<acct>/<uuid>.<ext>` key. Customer (form-attachment)
+// uploads stay images-only; code assets are merchant-only.
 //
-// Serving hardening (folded in from #364 without the scan engine): the asset
-// is stored tenant-scoped, capped in size, never executed server-side, and
-// streamed by the public media route with restrictive headers (nosniff +
-// no cross-origin framing/embedding). The media row carries a scan_status
-// column the #364 background scan can later flip to gate serving.
-//
-// Request: multipart/form-data with a single "file" part (≤20MB).
-// Response: {"url": "..."} 200, or 400/413 on validation errors.
+// Serving hardening (folded in from #364): the asset is stored tenant-scoped,
+// capped in size, never executed server-side, and streamed by the public media
+// route with restrictive headers. The media row carries a scan_status column
+// the #364 background scan flips to gate serving.
 func (h *RESTHandlers) uploadAsset(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	if _, ok := h.requireWriteRole(w, r, actx); !ok {
 		return
@@ -719,16 +396,13 @@ func (h *RESTHandlers) uploadAsset(w http.ResponseWriter, r *http.Request, actx 
 	h.recordEvent(r, actx, h.sessionOwnerID(r), "upload.asset", map[string]any{
 		"mime": mime, "bytes": len(data),
 	})
-	// Issue #180: record the object in the media library so the dashboard can
-	// list it (metadata + filtering). Best-effort.
+	// Issue #180: record the object in the media library (best-effort).
 	rec := h.recordMedia(r, actx, key, mime, int64(len(data)), dbstore.MediaSourceMerchant, "")
 
-	// Issue #364: code-asset scan gate. Run the cheap deterministic heuristics
-	// inline; if they flag the file we persist 'quarantined' immediately so it
-	// is never served. Otherwise we set 'scanning' and enqueue a background
-	// asset_scan job for the LLM review; the asset stays unserved until that
-	// worker flips it to 'ok'. Fail-closed: any gap (no queue, no store) leaves
-	// the row 'pending'/'scanning', which never serves.
+	// Issue #364: code-asset scan gate. Deterministic heuristics first; if
+	// they flag the file we persist 'quarantined' immediately. Otherwise set
+	// 'scanning' and enqueue a background asset_scan job. Fail-closed: any
+	// gap leaves the row 'pending'/'scanning', which never serves.
 	det := assetgate.DeterministicScan(data, mime)
 	var scanStatus, scanReason string
 	switch {
@@ -738,224 +412,20 @@ func (h *RESTHandlers) uploadAsset(w http.ResponseWriter, r *http.Request, actx 
 	case h.AssetQueue != nil && rec != nil && h.Media != nil:
 		scanStatus = assetgate.StatusScanning
 		scanReason = "queued for AI review"
-		_ = h.Media.MarkScanning(r.Context(), actx.Account.ID, rec.ID, scanReason) // best-effort
+		_ = h.Media.MarkScanning(r.Context(), actx.Account.ID, rec.ID, scanReason)
 		if err := assetgate.Enqueue(r.Context(), h.AssetQueue, assetgate.ScanJob{
 			MediaID: rec.ID, Key: key, AccountID: actx.Account.ID, Mime: mime,
 		}); err != nil {
 			slog.Warn("asset_scan_enqueue_failed", "media", rec.ID, "err", err)
-			// Leave 'scanning' — the asset is not served until a successful
-			// scan, so this is safe fail-closed behaviour.
 		} else {
 			slog.Info("asset_scan_enqueued", "media", rec.ID, "key", key)
 		}
 	case rec != nil && h.Media != nil:
-		// No background queue wired (dev / bare-mode): the asset cannot be
-		// verified, keep it 'pending' so it is never served.
 		scanStatus = assetgate.StatusPending
 	}
 	if scanStatus != "" && rec != nil && h.Media != nil {
-		_ = h.Media.SetScanStatus(r.Context(), actx.Account.ID, rec.ID, scanStatus, scanReason) // best-effort
+		_ = h.Media.SetScanStatus(r.Context(), actx.Account.ID, rec.ID, scanStatus, scanReason)
 	}
 
 	respond(w, http.StatusOK, map[string]string{"url": h.Store.PublicURL(key)})
-}
-
-// buildUploadKey composes the S3 object key. The client NEVER supplies any
-// part of it — account id and uuid are server-controlled, ext comes from the
-// sniffed allowlist. The account segment is still sanitised to a safe
-// character set (defence-in-depth in case an account id is ever derived from
-// user input at some future call site), so "../" traversal is structurally
-// impossible and the key is always exactly u/<acct>/<uuid>.<ext>.
-func buildUploadKey(accountID, ext string) string {
-	safeID := uploadSafeSegment(accountID)
-	if safeID == "" {
-		safeID = "unknown"
-	}
-	return fmt.Sprintf("u/%s/%s%s", safeID, uuid.NewString(), ext)
-}
-
-// uploadSafeSegment keeps only [A-Za-z0-9_-], dropping everything else so no
-// path separators, dots, or traversal sequences can reach the object key.
-func uploadSafeSegment(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
-}
-
-// sniffImageType inspects the leading magic bytes — NOT the client-supplied
-// content type — and returns the canonical storage extension if the image is
-// one of png/jpeg/webp/gif. WebP has no stdlib decoder, so detect it first.
-func sniffImageType(data []byte) (string, bool) {
-	if len(data) < 16 {
-		return "", false
-	}
-	// WebP: "RIFF" .... "WEBP"
-	if bytes.HasPrefix(data, []byte("RIFF")) && bytes.Contains(data[:12], []byte("WEBP")) {
-		return ".webp", true
-	}
-	// GIF: header magic (GIF87a / GIF89a), checked before DecodeConfig which
-	// needs a readable full header.
-	if bytes.HasPrefix(data, []byte("GIF87a")) || bytes.HasPrefix(data, []byte("GIF89a")) {
-		return ".gif", true
-	}
-	switch format := headerFormat(data); format {
-	case "png":
-		return ".png", true
-	case "jpeg":
-		return ".jpg", true
-	case "gif":
-		return ".gif", true
-	}
-	return "", false
-}
-
-// sniffAssetType inspects the leading bytes — NOT the client-supplied extension
-// or content-type — and returns the canonical storage extension if the blob is
-// a merchant code asset on the allowlist (issue #361): css/js/html/svg/woff2.
-// Detection uses the actual file signature so a renamed/spoofed file (e.g. a
-// .js blob renamed to .css, or raw executable bytes with a .css name) is
-// caught. An SVN-style `<svg`, a `<!doctype html` / `<html` doc, or a binary
-// WOFF2 `wOFF` signature map to their canonical extension; plain text, shell
-// scripts, images and unknown binaries are rejected. An `.svg` payload carrying
-// <script> is still a text SVG, not an allowlisted script — it is served with
-// image/svg+xml + nosniff, which the browser does not execute as JS.
-func sniffAssetType(data []byte) (string, bool) {
-	if len(data) == 0 {
-		return "", false
-	}
-	t := strings.TrimLeftFunc(string(data), func(r rune) bool {
-		return r <= ' ' // skip leading whitespace/newlines
-	})
-	lower := strings.ToLower(t)
-	// HTML document — a merchant's standalone landing/RSVP page snippet.
-	if strings.HasPrefix(lower, "<!doctype html") || strings.HasPrefix(lower, "<html") {
-		return ".html", true
-	}
-	// SVG: must open with the <svg root element.
-	if strings.HasPrefix(lower, "<svg") {
-		return ".svg", true
-	}
-	// WOFF2 font: the "wOFF" magic header.
-	if len(data) >= 4 && bytes.Equal(data[:4], []byte{'w', 'O', 'F', 'F'}) {
-		return ".woff2", true
-	}
-	// JS: the first non-whitespace token is a statement/keyword/comment. We
-	// accept a small allowlist of JS statement openers — never a bare `{` or
-	// `(`, which would let JSON/expressions in as JS. An IIFE must open with a
-	// real keyword prefix so an object literal or a JSON document is rejected.
-	// Checked before CSS so a script that opens with "const {" isn't
-	// misclassified as CSS.
-	for _, p := range []string{
-		"/*", "//", `"`, "'", "`", // comment / string opener
-		"const ", "let ", "var ", "function ", "class ", "async ", "await ", "return ",
-		"if ", "else ", "for ", "while ", "do ", "switch ", "case ", "try ", "catch ",
-		"throw ", "new ", "typeof ", "instanceof ", "in ", "of ", "yield ", "this",
-		"document.", "window.", "alert(", "fetch(",
-		"import ", "export ", "function", // IIFE/keyword prefixes
-		"(function", "(async", "(()", "((",
-	} {
-		if strings.HasPrefix(lower, p) {
-			return ".js", true
-		}
-	}
-	// CSS: a style rule or an at-rule (@charset/@import/@media/@keyframes/@font-face).
-	// The generic `{` rule requires a selector prefix — a document that *starts*
-	// with `{` or `(` (JSON, an object literal, a parenthesised expression) is
-	// rejected rather than misread as CSS.
-	first := string(t[0])
-	hasBrace := strings.Contains(lower, "{") && first != "{" && first != "("
-	if strings.HasPrefix(lower, "@charset") ||
-		strings.HasPrefix(lower, "@import") ||
-		strings.HasPrefix(lower, "@media") ||
-		strings.HasPrefix(lower, "@supports") ||
-		strings.HasPrefix(lower, "@font-face") ||
-		strings.HasPrefix(lower, "@keyframes") ||
-		strings.HasPrefix(lower, "@layer") ||
-		strings.HasPrefix(lower, "@container") ||
-		hasBrace {
-		return ".css", true
-	}
-	// CSS selectors that don't start with a JS opener (e.g. "body {") are
-	// caught by the "{" check above; a JS file that starts with an identifier
-	// only (e.g. `foo.bar()`) is the one gap — but that's indistinguishable
-	// from a CSS selector and is still static text, so rejecting it is the
-	// safe default.
-	return "", false
-}
-
-func headerFormat(data []byte) string {
-	_, format, err := image.DecodeConfig(bytes.NewReader(data))
-	if err != nil {
-		return ""
-	}
-	return format
-}
-
-// optimizeImage re-encodes data so the stored artifact is ≤maxStoredBytes.
-// Returns the encoded bytes or an error explaining why the image can't be
-// brought under the cap.
-func optimizeImage(data []byte, ext string) ([]byte, error) {
-	// Fast pass: small/clean WebP already ≤2MB stores as-is (minimal
-	// reprocessing, owner's "small & well-formed" pass-through).
-	if len(data) <= maxStoredBytes && ext == ".webp" {
-		return data, nil
-	}
-	// Fast pass: GIFs always decoded to a still so they can be shrunk.
-	isGIF := ext == ".gif"
-
-	img, err := decodeImage(data)
-	if err != nil {
-		return nil, errors.New("gagal decode imej")
-	}
-
-	// Downscale to the max long edge, preserving aspect.
-	b := img.Bounds()
-	long := b.Dx()
-	if b.Dy() > long {
-		long = b.Dy()
-	}
-	if long > maxLongEdge {
-		img = imaging.Fit(img, maxLongEdge, maxLongEdge, imaging.Lanczos)
-	}
-
-	// Output: JPEG for PNG/JPEG/GIF (pure-Go; strips EXIF on re-encode).
-	// WebP >2MB is re-encoded to JPEG too (can shrink an oversized WebP).
-	out := encodeJPEG(img, jpegQuality)
-
-	// Shrink stepwise (quality, then resolution) to the 2MB cap.
-	for _, q := range []int{70, 60, 50} {
-		if len(out) <= maxStoredBytes || isGIF {
-			break // GIF already first-frame; a still at q80 that still exceeds
-			// 2MB means a pathological image — give it lower quality too.
-		}
-		if len(out) > maxStoredBytes {
-			out = encodeJPEG(img, q)
-		}
-	}
-	if len(out) > maxStoredBytes {
-		img = imaging.Fit(img, maxStoredLongEdge, maxStoredLongEdge, imaging.Lanczos)
-		out = encodeJPEG(img, jpegQuality)
-	}
-	if len(out) > maxStoredBytes {
-		return nil, errors.New("imej tidak dapat dimampatkan bawah 2MB")
-	}
-	return out, nil
-}
-
-func decodeImage(data []byte) (image.Image, error) {
-	return imaging.Decode(bytes.NewReader(data), imaging.AutoOrientation(true))
-}
-
-// encodeJPEG re-encodes to JPEG at the given quality. Re-encoding is what
-// strips EXIF/GPS/phone metadata (privacy).
-func encodeJPEG(img image.Image, quality int) []byte {
-	var buf bytes.Buffer
-	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: quality}); err != nil {
-		return nil
-	}
-	return buf.Bytes()
 }

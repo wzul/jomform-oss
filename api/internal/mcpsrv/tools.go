@@ -422,6 +422,13 @@ func (s *Server) registerTools() {
 		Name:        "list_media",
 		Description: "Senarai media yang dimuat naik akaun (perpustakaan media): thumbnail/url, nama, tarikh, saiz. Boleh tapis form_id dan source (merchant|customer). Read-only.",
 	}, s.listMedia)
+	// Issue #363: media upload parity — the agent pushes image + code assets
+	// over MCP, mirroring the dashboard upload. Images serve immediately;
+	// code assets (css/js/html/svg/woff2) wait for the #364 scan gate.
+	addTool(s, &mcp.Tool{
+		Name:        "upload_media",
+		Description: "Muat naik media/aset ke space anda (issue #363): kind='image' (png/jpeg/webp/gif — dioptimumkan, strip EXIF, terus boleh guna) atau kind='asset' (css/js/html/svg/woff2 — disimpan asli, dikaji sebelum dipapar). hantar content fail sebagai base64 di 'data'. Pulangkan URL untuk diguna sebagai image_url/logo_url landing atau <link>/<script> landing page.",
+	}, s.uploadMedia)
 
 	// ── Parity: form template gallery (issue #174) ────────────────────────
 	addTool(s, &mcp.Tool{

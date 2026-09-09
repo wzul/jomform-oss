@@ -306,6 +306,12 @@ func main() {
 			Notifications: notificationsStore,
 			// Issue #180: media library tool.
 			Media: mediaStore,
+			// Issue #361/#363: object store backing media upload (upload_media
+			// tool). Shared with the dashboard REST upload; nil when S3 unset.
+			Store: store,
+			// Issue #364/#363: background asset-scan queue (upload_media code
+			// assets enqueue an asset_scan job).
+			AssetQueue: deps.EmailQueue,
 			// Issue #185: BNM exchange-rate cache (get_currency_rates tool).
 			Currency: curStore,
 			// Issue #121: allow OAuth access tokens to authenticate /mcp too.

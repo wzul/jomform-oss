@@ -11,7 +11,9 @@ import (
 	"github.com/wzul/jomform/api/internal/cryptoutil"
 	"github.com/wzul/jomform/api/internal/currency"
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/emailqueue"
 	"github.com/wzul/jomform/api/internal/llm"
+	"github.com/wzul/jomform/api/internal/objstore"
 	"github.com/wzul/jomform/api/internal/payments"
 )
 
@@ -47,6 +49,15 @@ type Deps struct {
 	Notifications *dbstore.FormNotificationStore
 	// Issue #180: media library (list_media tool). Nil → the tool errors.
 	Media *dbstore.MediaStore
+	// Issue #361/#363: the S3/MinIO object store backing the media bucket,
+	// shared with the dashboard (internal/objstore). Wire it so upload_media
+	// can push image + code assets tenant-scoped. Nil → the tool errors.
+	Store *objstore.ObjectStore
+	// Issue #364/#363: background asset-scan queue (same Valkey queue as email
+	// #199 / spam judge #245). Code-asset uploads enqueue an asset_scan job
+	// here; a nil queue (dev, no Valkey) keeps the asset 'pending'/unserved
+	// (fail-closed).
+	AssetQueue *emailqueue.Queue
 	// Issue #121: OAuth 2.1 store. When wired, /mcp accepts either a Bearer
 	// API key OR an OAuth access token (both resolve to an account). Nil →
 	// API-key auth only.
