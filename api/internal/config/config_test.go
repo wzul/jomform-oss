@@ -189,3 +189,43 @@ func TestLoadACMEEnvOverrides(t *testing.T) {
 		t.Errorf("TLSPort = %q, want 443", cfg.TLSPort)
 	}
 }
+
+func TestLoadSuperAdminEmails(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://localhost/jomform_test")
+	t.Setenv("APP_ENV", "dev")
+
+	// Unset → no super-admins.
+	t.Setenv("SUPER_ADMIN_EMAILS", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.SuperAdminEmails) != 0 {
+		t.Errorf("SuperAdminEmails = %v, want empty when unset", cfg.SuperAdminEmails)
+	}
+	if cfg.IsSuperAdmin("owner@example.com") {
+		t.Error("IsSuperAdmin should be false with empty allowlist")
+	}
+
+	// Comma-separated allowlist, trimmed + lowercased.
+	t.Setenv("SUPER_ADMIN_EMAILS", " Owner@Example.com , ops@example.com , ")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.SuperAdminEmails) != 2 {
+		t.Fatalf("SuperAdminEmails = %v, want 2 entries", cfg.SuperAdminEmails)
+	}
+	if !cfg.IsSuperAdmin("owner@example.com") {
+		t.Error("IsSuperAdmin should match allowlisted email (case-insensitive)")
+	}
+	if !cfg.IsSuperAdmin("OPS@EXAMPLE.COM") {
+		t.Error("IsSuperAdmin should match allowlisted email regardless of case")
+	}
+	if cfg.IsSuperAdmin("someone@example.com") {
+		t.Error("IsSuperAdmin should be false for a non-allowlisted email")
+	}
+	if cfg.IsSuperAdmin("") {
+		t.Error("IsSuperAdmin should be false for an empty email")
+	}
+}

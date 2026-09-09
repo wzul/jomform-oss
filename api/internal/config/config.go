@@ -115,6 +115,13 @@ type Config struct {
 	ACMEDirectory string
 	ACMECertDir   string
 	TLSPort       string
+
+	// SuperAdminEmails (issue #385): comma-separated email allowlist of site
+	// super-admins. A user whose email matches is a super-admin, unlocking
+	// platform-wide monitoring across all spaces — but ONLY on explicitly
+	// gated admin tools/pages (MCP admin tools #386, admin dashboard #387),
+	// never implicitly on normal tools. Empty = no super-admins.
+	SuperAdminEmails []string
 }
 
 // Load reads configuration from the environment and validates it.
@@ -181,6 +188,10 @@ func Load() (*Config, error) {
 		ACMEDirectory: os.Getenv("ACME_DIRECTORY"),
 		ACMECertDir:   getEnv("ACME_CERT_DIR", "/var/lib/jomform/acme"),
 		TLSPort:       getEnv("TLS_PORT", "8443"),
+
+		// Issue #385: site super-admin email allowlist (comma-separated).
+		// Trimmed + lowercased so matching is robust to whitespace/case.
+		SuperAdminEmails: parseEmailList(os.Getenv("SUPER_ADMIN_EMAILS")),
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -201,6 +212,37 @@ func Load() (*Config, error) {
 
 // IsDev reports whether the app runs in development mode.
 func (c *Config) IsDev() bool { return strings.EqualFold(c.Env, "dev") }
+
+// IsSuperAdmin reports whether the given email is on the site super-admin
+// allowlist (issue #385). Matching is case-insensitive and trims whitespace.
+// An empty allowlist (or empty email) is never a super-admin.
+func (c *Config) IsSuperAdmin(email string) bool {
+	if email == "" || len(c.SuperAdminEmails) == 0 {
+		return false
+	}
+	want := strings.ToLower(strings.TrimSpace(email))
+	for _, e := range c.SuperAdminEmails {
+		if e == want {
+			return true
+		}
+	}
+	return false
+}
+
+// parseEmailList splits a comma-separated email allowlist into trimmed,
+// lowercased entries, dropping empties. Returns nil for an empty/unset value.
+func parseEmailList(s string) []string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		if e := strings.ToLower(strings.TrimSpace(part)); e != "" {
+			out = append(out, e)
+		}
+	}
+	return out
+}
 
 func getEnv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {

@@ -74,6 +74,11 @@ type Deps struct {
 		// Issue #256: AI form builder — draft a form config from a prompt.
 		GenerateFormConfig(ctx context.Context, prompt string) (string, error)
 	}
+	// SuperAdmin (issue #385): reports whether an email is on the site
+	// super-admin allowlist (SUPER_ADMIN_EMAILS). Nil → no super-admins.
+	// Super-admin unlocks platform-wide monitoring ONLY on explicitly gated
+	// admin tools/pages (#386/#387), never implicitly on normal tools.
+	SuperAdmin func(email string) bool
 }
 
 // Server wraps the MCP *Server with JomForm deps.

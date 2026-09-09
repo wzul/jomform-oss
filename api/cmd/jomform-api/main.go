@@ -319,6 +319,9 @@ func main() {
 			DecryptKey: decryptKey,
 			// Issue #184: LLM client for auto-generating legal pages.
 			LLM: llm.New(cfg.LLMBaseURL, cfg.LLMModel),
+			// Issue #385: site super-admin allowlist (SUPER_ADMIN_EMAILS). Gates
+			// platform-wide monitoring on explicit admin tools/pages only.
+			SuperAdmin: cfg.IsSuperAdmin,
 		}, chip.New(cfg.ChipAPIBaseURL), decryptKey, pay)
 		deps.MCP = mcpSrv
 
