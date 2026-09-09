@@ -141,6 +141,10 @@ func (h *RESTHandlers) saveSpaceSettings(w http.ResponseWriter, r *http.Request,
 		// Issue #276: per-space SEO indexing toggle. Omitted (nil) = keep
 		// current value; explicit true/false sets it.
 		Indexing *bool `json:"indexing"`
+		// Issue #360: customizable landing-page config. Omitted (nil) = keep
+		// current value; provided = replace. Enabled=false (or empty) falls
+		// back to the auto-generated bare listing.
+		LandingPage *dbstore.LandingPage `json:"landing_page"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
 		writeErr(w, http.StatusBadRequest, "payload tidak sah")
@@ -188,12 +192,17 @@ func (h *RESTHandlers) saveSpaceSettings(w http.ResponseWriter, r *http.Request,
 		DefaultLang:    in.DefaultLang,
 		Currency:       cur.Currency,
 		Indexing:       cur.Indexing,
+		// Issue #360: preserve the current landing page unless one is supplied.
+		LandingPage: cur.LandingPage,
 	}
 	if in.Currency != "" {
 		st.Currency = in.Currency
 	}
 	if in.Indexing != nil {
 		st.Indexing = *in.Indexing
+	}
+	if in.LandingPage != nil {
+		st.LandingPage = in.LandingPage
 	}
 	if strings.TrimSpace(st.MenuJSON) == "" {
 		st.MenuJSON = "[]"

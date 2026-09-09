@@ -1516,12 +1516,13 @@ func (h *PublicHandlers) handleSpaceRootForm(w http.ResponseWriter, r *http.Requ
 	h.serveForm(w, r, f)
 }
 
-// handleSpaceRoot serves the space storefront (list of published forms). It
-// handles both a space subdomain ({space}.jomform.com — issue #77) and a
-// verified custom domain mapped to a space's account (issue #286). Bare
+// handleSpaceRoot serves the space storefront root: a customized landing page
+// when the merchant has configured one (issue #360), otherwise the auto
+// listing. It handles both a space subdomain ({space}.jomform.com — issue #77)
+// and a verified custom domain mapped to a space's account (issue #286). Bare
 // jomform.com (no subdomain, no custom domain) 404s so dashboard routes are
-// unaffected. The listing looks up by space slug for the subdomain and by
-// account slug for a custom domain (they are different namespaces).
+// unaffected. The lookup is by space slug for the subdomain and by account
+// slug for a custom domain (they are different namespaces).
 func (h *PublicHandlers) handleSpaceRoot(w http.ResponseWriter, r *http.Request) {
 	var slug string
 	var byAccount bool
@@ -1545,6 +1546,30 @@ func (h *PublicHandlers) handleSpaceRoot(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "ralat", http.StatusInternalServerError)
 		return
 	}
+
+	// Issue #360: when the space has a landing page configured, render it
+	// instead of the bare listing. Resolution differs by namespace: the
+	// subdomain lookup uses the space slug, the custom-domain lookup uses the
+	// account slug -> resolve the owning space, read its settings.
+	if h.Spaces != nil {
+		var spaceID string
+		if byAccount {
+			if acc, aerr := h.Accounts.BySlug(r.Context(), slug); aerr == nil && acc != nil {
+				spaceID, _ = h.Spaces.SpaceIDByAccount(r.Context(), acc.ID)
+			}
+		} else {
+			spaceID, _ = h.Spaces.IDBySlug(r.Context(), slug)
+		}
+		if spaceID != "" {
+			if st, serr := h.Spaces.Settings(r.Context(), spaceID); serr == nil &&
+				st.LandingPage != nil && st.LandingPage.Enabled {
+				h.renderSpaceLanding(w, r, slug, forms, st.LandingPage)
+				return
+			}
+		}
+	}
+
+	// Fallback: the auto-generated bare listing (existing behavior).
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	io.WriteString(w, "<!doctype html><html><head><meta charset='utf-8'><title>"+slug+"</title>")
 	io.WriteString(w, "<style>body{font-family:system-ui;background:#f7f8f8;margin:0;padding:40px}")
@@ -1559,4 +1584,78 @@ func (h *PublicHandlers) handleSpaceRoot(w http.ResponseWriter, r *http.Request)
 		io.WriteString(w, "<a href='/"+f.Slug+"'>"+f.Title+"</a>")
 	}
 	io.WriteString(w, "</div></body></html>")
+}
+
+// spaceLandingData is the template payload for the customizable storefront
+// root (issue #360).
+type spaceLandingData struct {
+	Slug string
+	Lp   *dbstore.LandingPage
+	// HasForms reports whether at least one published form exists (used to
+	// decide the "no forms yet" hint behind the hero).
+	HasForms bool
+}
+
+// landingPageTmpl renders the customizable space landing page (issue #360).
+// It is SEO-friendly server-side HTML and reuses the same layout language as
+// the public form renderer. All dynamic text is HTML-escaped by template
+// autoescaping.
+var landingPageTmpl = template.Must(template.New("space-landing").Parse(`<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Lp.Hero}}</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+         background:{{.Lp.BackgroundColor}}; color:#17181c; min-height:100vh; }
+  .wrap { max-width:860px; margin:0 auto; padding:48px 24px 72px; }
+  .hero { padding:24px 0 8px; }
+  .hero h1 { margin:0 0 10px; font-size:40px; line-height:1.15; letter-spacing:-.02em;
+             color:{{if .Lp.PrimaryColor}}{{.Lp.PrimaryColor}}{{else}}#17181c{{end}}; }
+  .hero .sub { margin:0; font-size:18px; color:#6b7280; }
+  .logo { max-width:120px; max-height:80px; object-fit:contain; margin-bottom:16px;
+          display:{{if .Lp.LogoURL}}block{{else}}none{{end}}; }
+  .banner { width:100%; max-height:420px; object-fit:cover; border-radius:20px;
+            margin:28px 0 0; display:{{if .Lp.ImageURL}}block{{else}}none{{end}}; }
+  .body { margin-top:28px; font-size:17px; line-height:1.7; color:#3f434a;
+          white-space:pre-wrap; }
+  .ctas { display:flex; flex-wrap:wrap; gap:12px; margin-top:28px; }
+  .cta { background:{{if .Lp.PrimaryColor}}{{.Lp.PrimaryColor}}{{else}}#4f46e5{{end}}; color:#fff;
+         font-weight:600; text-decoration:none; padding:14px 26px; border-radius:12px;
+         display:inline-block; transition:opacity .15s ease, transform .15s ease; }
+  .cta:hover { opacity:.9; transform:translateY(-1px); }
+  .hint { margin-top:16px; color:#9ca3af; font-size:14px; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="hero">
+      <img class="logo" src="{{.Lp.LogoURL}}" alt="">
+      <h1>{{.Lp.Hero}}</h1>
+      <p class="sub">{{.Lp.Subtitle}}</p>
+    </div>
+    <img class="banner" src="{{.Lp.ImageURL}}" alt="{{.Lp.Hero}}">
+    {{if .Lp.Body}}<div class="body">{{.Lp.Body}}</div>{{end}}
+    <div class="ctas">
+      {{range .Lp.CTAs}}<a class="cta" href="/{{.FormSlug}}">{{.Label}}</a>{{end}}
+    </div>
+    {{if not .HasForms}}<p class="hint">Belum ada borang.</p>{{end}}
+  </div>
+</body>
+</html>`))
+
+// renderSpaceLanding writes the customized landing page (issue #360).
+func (h *PublicHandlers) renderSpaceLanding(w http.ResponseWriter, r *http.Request, slug string, forms []*dbstore.Form, lp *dbstore.LandingPage) {
+	data := spaceLandingData{
+		Slug:     slug,
+		Lp:       lp,
+		HasForms: len(forms) > 0,
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := landingPageTmpl.Execute(w, data); err != nil {
+		http.Error(w, "ralat", http.StatusInternalServerError)
+	}
 }

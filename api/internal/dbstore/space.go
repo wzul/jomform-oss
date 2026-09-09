@@ -4,6 +4,7 @@ package dbstore
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -194,6 +195,38 @@ func (s *SpaceStore) ByMember(ctx context.Context, userID string) ([]SpaceAccess
 	return out, rows.Err()
 }
 
+// LandingPage is the customizable space landing-page design (issue #360). The
+// storefront root ({space}.jomform.com and custom domains) renders a styled
+// landing page from this config when Enabled. When no config is set (or
+// Enabled=false) handleSpaceRoot falls back to the auto-generated bare listing.
+type LandingPage struct {
+	Enabled bool `json:"enabled"`
+	// Hero is the main heading / hero title.
+	Hero string `json:"hero"`
+	// Subtitle is the hero subheading.
+	Subtitle string `json:"subtitle"`
+	// Body is the landing-page body text (plain paragraphs).
+	Body string `json:"body"`
+	// ImageURL is an optional banner/hero image.
+	ImageURL string `json:"image_url"`
+	// PrimaryColor is the theme accent color (hex, e.g. "#7c3aed").
+	PrimaryColor string `json:"primary_color"`
+	// BackgroundColor is the page background (hex). Empty = default.
+	BackgroundColor string `json:"background_color"`
+	// LogoURL is an optional brand logo image.
+	LogoURL string `json:"logo_url"`
+	// CTAs are buttons linking to published forms (label + form slug).
+	CTAs []LandingCTA `json:"ctas"`
+}
+
+// LandingCTA is a landing-page call-to-action button linking to a public form.
+type LandingCTA struct {
+	Label string `json:"label"`
+	// FormSlug is the published form's slug within the space; rendered as a
+	// relative link that resolves on the space subdomain / custom domain.
+	FormSlug string `json:"form_slug"`
+}
+
 // SpaceSettings is the storefront configuration for one space.
 type SpaceSettings struct {
 	SpaceID        string `json:"space_id"`
@@ -219,6 +252,10 @@ type SpaceSettings struct {
 	// the space opts out of indexing entirely. Public forms on jomform.com
 	// subdomains are always noindex regardless of this flag (privacy).
 	Indexing bool `json:"indexing"`
+	// LandingPage is the customizable landing-page config (issue #360).
+	// Stored as landing_page_json on space_settings. When nil/empty the
+	// storefront root falls back to the auto-generated bare listing.
+	LandingPage *LandingPage `json:"landing_page,omitempty"`
 }
 
 // SpaceLang returns the storefront default language code, or a fallback when
@@ -245,11 +282,12 @@ func (st *SpaceSettings) SpaceCurrency() string {
 
 // Settings reads (creating default row when missing) the storefront config.
 func (s *SpaceStore) Settings(ctx context.Context, spaceID string) (*SpaceSettings, error) {
+	var lpJSON string
 	st := &SpaceSettings{SpaceID: spaceID, MenuJSON: "[]", DefaultLang: "en", Currency: "MYR", Indexing: true}
 	err := s.pool.QueryRow(ctx,
-		`SELECT footer_text, company_reg, privacy_url, terms_url, refund_url, contact_phone, contact_address, business_name, menu_json::text, default_lang, currency, indexing
+		`SELECT footer_text, company_reg, privacy_url, terms_url, refund_url, contact_phone, contact_address, business_name, menu_json::text, default_lang, currency, indexing, COALESCE(landing_page_json::text, '{}')
 		   FROM space_settings WHERE space_id=$1`,
-		spaceID).Scan(&st.FooterText, &st.CompanyReg, &st.PrivacyURL, &st.TermsURL, &st.RefundURL, &st.ContactPhone, &st.ContactAddress, &st.BusinessName, &st.MenuJSON, &st.DefaultLang, &st.Currency, &st.Indexing)
+		spaceID).Scan(&st.FooterText, &st.CompanyReg, &st.PrivacyURL, &st.TermsURL, &st.RefundURL, &st.ContactPhone, &st.ContactAddress, &st.BusinessName, &st.MenuJSON, &st.DefaultLang, &st.Currency, &st.Indexing, &lpJSON)
 	if err != nil {
 		// default row
 		_, ierr := s.pool.Exec(ctx,
@@ -257,15 +295,37 @@ func (s *SpaceStore) Settings(ctx context.Context, spaceID string) (*SpaceSettin
 		if ierr != nil {
 			return nil, ierr
 		}
+		lpJSON = "{}"
+	}
+	// Parse the landing-page config; a missing/bad payload is treated as "no
+	// landing page" so the storefront keeps falling back to the bare listing.
+	if lpJSON != "" && lpJSON != "{}" {
+		var lp LandingPage
+		if jerr := json.Unmarshal([]byte(lpJSON), &lp); jerr == nil {
+			st.LandingPage = &lp
+		}
 	}
 	return st, nil
 }
 
 // SaveSettings upserts the storefront config.
 func (s *SpaceStore) SaveSettings(ctx context.Context, st *SpaceSettings) error {
+	var lpJSON string
+	if st.LandingPage != nil {
+		b, err := json.Marshal(st.LandingPage)
+		if err != nil {
+			return err
+		}
+		lpJSON = string(b)
+	} else {
+		lpJSON = "{}"
+	}
+	if lpJSON == "" || lpJSON == "null" {
+		lpJSON = "{}"
+	}
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO space_settings (space_id, footer_text, company_reg, privacy_url, terms_url, refund_url, contact_phone, contact_address, business_name, menu_json, default_lang, currency, indexing)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13)
+		`INSERT INTO space_settings (space_id, footer_text, company_reg, privacy_url, terms_url, refund_url, contact_phone, contact_address, business_name, menu_json, default_lang, currency, indexing, landing_page_json)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13,$14::jsonb)
 		 ON CONFLICT (space_id) DO UPDATE SET
 		   footer_text=EXCLUDED.footer_text, company_reg=EXCLUDED.company_reg,
 		   privacy_url=EXCLUDED.privacy_url, terms_url=EXCLUDED.terms_url,
@@ -273,8 +333,9 @@ func (s *SpaceStore) SaveSettings(ctx context.Context, st *SpaceSettings) error 
 		   contact_address=EXCLUDED.contact_address, business_name=EXCLUDED.business_name,
 		   menu_json=EXCLUDED.menu_json,
 		   default_lang=EXCLUDED.default_lang, currency=EXCLUDED.currency,
-		   indexing=EXCLUDED.indexing`,
-		st.SpaceID, st.FooterText, st.CompanyReg, st.PrivacyURL, st.TermsURL, st.RefundURL, st.ContactPhone, st.ContactAddress, st.BusinessName, st.MenuJSON, st.SpaceLang(), st.SpaceCurrency(), st.Indexing)
+		   indexing=EXCLUDED.indexing,
+		   landing_page_json=EXCLUDED.landing_page_json`,
+		st.SpaceID, st.FooterText, st.CompanyReg, st.PrivacyURL, st.TermsURL, st.RefundURL, st.ContactPhone, st.ContactAddress, st.BusinessName, st.MenuJSON, st.SpaceLang(), st.SpaceCurrency(), st.Indexing, lpJSON)
 	return err
 }
 

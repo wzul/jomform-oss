@@ -379,3 +379,87 @@ func (s *Server) setSpaceSettings(
 	}
 	return nil, map[string]string{"status": "saved", "space_id": in.SpaceID}, nil
 }
+
+// ── get_space_landing_page / set_space_landing_page (issue #360) ─────────────
+
+type spaceLandingRefIn struct {
+	SpaceID string `json:"space_id" jsonschema:"ID space (dari list_spaces)"`
+}
+
+func (s *Server) getSpaceLandingPage(
+	ctx context.Context, _ *mcp.CallToolRequest, in spaceLandingRefIn,
+) (*mcp.CallToolResult, *dbstore.LandingPage, error) {
+	if _, _, err := s.accessibleSpace(ctx, in.SpaceID); err != nil {
+		return nil, nil, err
+	}
+	sp, err := s.spacesStore()
+	if err != nil {
+		return nil, nil, err
+	}
+	st, err := sp.Settings(ctx, in.SpaceID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("db: %w", err)
+	}
+	if st.LandingPage == nil {
+		st.LandingPage = &dbstore.LandingPage{}
+	}
+	return nil, st.LandingPage, nil
+}
+
+type setSpaceLandingPageIn struct {
+	SpaceID         string                `json:"space_id" jsonschema:"ID space (dari list_spaces)"`
+	Enabled         bool                  `json:"enabled" jsonschema:"true = papar landing page; false = jatuh ke senarai borang"`
+	Hero            string                `json:"hero,omitempty" jsonschema:"Tajuk utama (hero)"`
+	Subtitle        string                `json:"subtitle,omitempty" jsonschema:"Sub-tajuk di bawah hero"`
+	Body            string                `json:"body,omitempty" jsonschema:"Teks badan landing page"`
+	ImageURL        string                `json:"image_url,omitempty" jsonschema:"URL imej banner (mesti https://)"`
+	PrimaryColor    string                `json:"primary_color,omitempty" jsonschema:"Warna aksen tema, cth #7c3aed"`
+	BackgroundColor string                `json:"background_color,omitempty" jsonschema:"Warna latar, cth #ffffff"`
+	LogoURL         string                `json:"logo_url,omitempty" jsonschema:"URL logo jenama (mesti https://)"`
+	CTAs            []dbstore.LandingCTA `json:"ctas,omitempty" jsonschema:"Butang CTA menghubung ke borang diterbitkan, cth [{\"label\":\"RSVP\",\"form_slug\":\"rsvp\"}]"`
+}
+
+func (s *Server) setSpaceLandingPage(
+	ctx context.Context, _ *mcp.CallToolRequest, in setSpaceLandingPageIn,
+) (*mcp.CallToolResult, map[string]string, error) {
+	_, role, err := s.accessibleSpace(ctx, in.SpaceID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if role != "" && role != dbstore.RoleManage && role != dbstore.RoleAdmin {
+		return nil, nil, errors.New("perlu peranan manage atau admin")
+	}
+	// Media URLs must be https:// (same rule as other URL fields).
+	for _, u := range []string{in.ImageURL, in.LogoURL} {
+		if u != "" && !strings.HasPrefix(u, "https://") {
+			return nil, nil, errors.New("image_url/logo_url mesti https://")
+		}
+	}
+	sp, err := s.spacesStore()
+	if err != nil {
+		return nil, nil, err
+	}
+	st, err := sp.Settings(ctx, in.SpaceID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("db: %w", err)
+	}
+	lp := &dbstore.LandingPage{
+		Enabled:         in.Enabled,
+		Hero:            in.Hero,
+		Subtitle:        in.Subtitle,
+		Body:            in.Body,
+		ImageURL:        in.ImageURL,
+		PrimaryColor:    in.PrimaryColor,
+		BackgroundColor: in.BackgroundColor,
+		LogoURL:         in.LogoURL,
+		CTAs:            in.CTAs,
+	}
+	if lp.CTAs == nil {
+		lp.CTAs = []dbstore.LandingCTA{}
+	}
+	st.LandingPage = lp
+	if err := sp.SaveSettings(ctx, st); err != nil {
+		return nil, nil, fmt.Errorf("db: %w", err)
+	}
+	return nil, map[string]string{"status": "saved", "space_id": in.SpaceID}, nil
+}

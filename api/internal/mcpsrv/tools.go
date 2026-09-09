@@ -266,6 +266,15 @@ func (s *Server) registerTools() {
 		Name:        "set_space_settings",
 		Description: "Set tetapan storefront space: footer_text, company_reg, privacy_url/terms_url/refund_url (mesti https://), contact_phone, contact_address, business_name, menu_json. Omit medan = kekal.",
 	}, s.setSpaceSettings)
+	// Issue #360: customizable landing page (MCP parity).
+	addTool(s, &mcp.Tool{
+		Name:        "get_space_landing_page",
+		Description: "Baca konfigurasi 'landing page' space (issue #360): hero, subtitle, body, image_url, theme colors, logo, CTA (label + form_slug). Kosong jika tiada landing page ditetapkan.",
+	}, s.getSpaceLandingPage)
+	addTool(s, &mcp.Tool{
+		Name:        "set_space_landing_page",
+		Description: "Set 'landing page' storefront space (issue #360): enabled (true = tunjuk, false/kosong = jatuh ke senarai borang), hero, subtitle, body, image_url, primary_color, background_color, logo_url, ctas ([{label, form_slug}]). Hantar enabled:false untuk pulang ke senarai borang.",
+	}, s.setSpaceLandingPage)
 	// Issue #185: per-space currency + BNM rates (MCP parity).
 	addTool(s, &mcp.Tool{
 		Name:        "get_currency_rates",

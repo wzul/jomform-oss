@@ -196,6 +196,17 @@ export default function Settings() {
   const [sfSpaceId, setSfSpaceId] = useState("");
   // Issue #276: per-space SEO indexing toggle (Storefront tab).
   const [sfIndexing, setSfIndexing] = useState(true);
+  // Issue #360: per-space customizable landing page (Storefront tab).
+  const [lpEnabled, setLpEnabled] = useState(false);
+  const [lpHero, setLpHero] = useState("");
+  const [lpSubtitle, setLpSubtitle] = useState("");
+  const [lpBody, setLpBody] = useState("");
+  const [lpImageUrl, setLpImageUrl] = useState("");
+  const [lpPrimaryColor, setLpPrimaryColor] = useState("#7c3aed");
+  const [lpBackgroundColor, setLpBackgroundColor] = useState("#ffffff");
+  const [lpLogoUrl, setLpLogoUrl] = useState("");
+  const [lpCtas, setLpCtas] = useState<{ label: string; form_slug: string }[]>([]);
+  const [lpSpaceId, setLpSpaceId] = useState("");
   // Issue #185: per-space currency + BNM rates.
   const [currency, setCurrency] = useState("MYR");
   const [currencySpaceId, setCurrencySpaceId] = useState("");
@@ -392,6 +403,7 @@ export default function Settings() {
     if (!active) return;
     setSfSpaceId(active.id);
     setCurrencySpaceId(active.id);
+    setLpSpaceId(active.id);
     fetch(`/api/rest/spaces/${active.id}/settings`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
@@ -407,6 +419,17 @@ export default function Settings() {
         // Issue #276: per-space SEO indexing toggle (default true).
         setSfIndexing(d.indexing !== false);
         if (d.currency) setCurrency(d.currency);
+        // Issue #360: per-space customizable landing page.
+        const lp = d.landing_page || {};
+        setLpEnabled(!!lp.enabled);
+        setLpHero(lp.hero || "");
+        setLpSubtitle(lp.subtitle || "");
+        setLpBody(lp.body || "");
+        setLpImageUrl(lp.image_url || "");
+        setLpPrimaryColor(lp.primary_color || "#7c3aed");
+        setLpBackgroundColor(lp.background_color || "#ffffff");
+        setLpLogoUrl(lp.logo_url || "");
+        setLpCtas(Array.isArray(lp.ctas) ? lp.ctas : []);
       })
       .catch(() => {});
     fetch(`/api/rest/currency/rates`)
@@ -708,6 +731,36 @@ export default function Settings() {
     });
     if (r.ok) {
       setMsg(t("set.sfSaved"));
+    } else {
+      const d = await r.json().catch(() => ({}));
+      setErr(d.error || t("set.failedSave"));
+    }
+  }
+
+  // Issue #360: save the per-space customizable landing page (Storefront tab).
+  async function saveLandingPage() {
+    if (!lpSpaceId) return;
+    setMsg("");
+    setErr("");
+    const r = await fetch(`/api/rest/spaces/${lpSpaceId}/settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        landing_page: {
+          enabled: lpEnabled,
+          hero: lpHero,
+          subtitle: lpSubtitle,
+          body: lpBody,
+          image_url: lpImageUrl,
+          primary_color: lpPrimaryColor,
+          background_color: lpBackgroundColor,
+          logo_url: lpLogoUrl,
+          ctas: lpCtas,
+        },
+      }),
+    });
+    if (r.ok) {
+      setMsg(t("set.lpSaved"));
     } else {
       const d = await r.json().catch(() => ({}));
       setErr(d.error || t("set.failedSave"));
@@ -1458,6 +1511,7 @@ export default function Settings() {
         )}
         {/* ── Storefront tab: per-space public-form footer (issue #183) ── */}
         {tab === "storefront" && (
+          <>
           <section className="jf-card mt-6 p-6">
             <h2 className="text-lg font-semibold">{t("set.sfTitle")}</h2>
             <p className="mt-1 max-w-xl text-sm text-slate-400">
@@ -1567,6 +1621,175 @@ export default function Settings() {
               </div>
             </div>
           </section>
+
+          {/* Issue #360: per-space customizable landing page (Storefront tab). */}
+          <section className="jf-card mt-6 p-6">
+            <h2 className="text-lg font-semibold">{t("set.lpTitle")}</h2>
+            <p className="mt-1 max-w-xl text-sm text-slate-400">
+              {t("set.lpHelp")}
+            </p>
+            <div className="mt-4 space-y-3">
+              {/* Landing page enable toggle. */}
+              <div className="flex items-start justify-between gap-4 rounded-lg border border-[var(--jf-border)] p-3">
+                <div>
+                  <p className="text-sm font-medium">{t("set.lpEnabledTitle")}</p>
+                  <p className="mt-0.5 max-w-md text-xs text-slate-500">{t("set.lpEnabledHelp")}</p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={lpEnabled}
+                  onClick={() => setLpEnabled((v) => !v)}
+                  className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+                    lpEnabled ? "bg-[var(--jf-primary)]" : "bg-slate-300"
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${
+                      lpEnabled ? "left-[22px]" : "left-0.5"
+                    }`}
+                  />
+                </button>
+              </div>
+              {lpEnabled && (
+                <>
+                  <div>
+                    <label className="text-xs text-slate-500">{t("set.lpHero")}</label>
+                    <input
+                      value={lpHero}
+                      onChange={(e) => setLpHero(e.target.value)}
+                      className="jf-input mt-1 max-w-xl"
+                      placeholder="Selamat datang ke kedai kami"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-500">{t("set.lpSubtitle")}</label>
+                    <input
+                      value={lpSubtitle}
+                      onChange={(e) => setLpSubtitle(e.target.value)}
+                      className="jf-input mt-1 max-w-xl"
+                      placeholder="Barang-barang istimewa untuk anda"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-500">{t("set.lpBody")}</label>
+                    <textarea
+                      value={lpBody}
+                      onChange={(e) => setLpBody(e.target.value)}
+                      rows={3}
+                      className="jf-input mt-1 max-w-xl"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-500">{t("set.lpImageUrl")}</label>
+                    <input
+                      value={lpImageUrl}
+                      onChange={(e) => setLpImageUrl(e.target.value)}
+                      type="url"
+                      className="jf-input mt-1 max-w-xl"
+                      placeholder="https://…/banner.jpg"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-500">{t("set.lpLogoUrl")}</label>
+                    <input
+                      value={lpLogoUrl}
+                      onChange={(e) => setLpLogoUrl(e.target.value)}
+                      type="url"
+                      className="jf-input mt-1 max-w-xl"
+                      placeholder="https://…/logo.png"
+                    />
+                  </div>
+                  <div className="flex max-w-xl gap-4">
+                    <div className="flex-1">
+                      <label className="text-xs text-slate-500">{t("set.lpPrimaryColor")}</label>
+                      <div className="mt-1 flex items-center gap-2">
+                        <input
+                          type="color"
+                          value={/^#[0-9a-fA-F]{6}$/.test(lpPrimaryColor) ? lpPrimaryColor : "#7c3aed"}
+                          onChange={(e) => setLpPrimaryColor(e.target.value)}
+                          className="h-9 w-12 rounded border border-[var(--jf-border)] bg-transparent"
+                        />
+                        <input
+                          value={lpPrimaryColor}
+                          onChange={(e) => setLpPrimaryColor(e.target.value)}
+                          className="jf-input flex-1"
+                        />
+                      </div>
+                    </div>
+                    <div className="flex-1">
+                      <label className="text-xs text-slate-500">{t("set.lpBackgroundColor")}</label>
+                      <div className="mt-1 flex items-center gap-2">
+                        <input
+                          type="color"
+                          value={/^#[0-9a-fA-F]{6}$/.test(lpBackgroundColor) ? lpBackgroundColor : "#ffffff"}
+                          onChange={(e) => setLpBackgroundColor(e.target.value)}
+                          className="h-9 w-12 rounded border border-[var(--jf-border)] bg-transparent"
+                        />
+                        <input
+                          value={lpBackgroundColor}
+                          onChange={(e) => setLpBackgroundColor(e.target.value)}
+                          className="jf-input flex-1"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                  {/* CTA buttons linking to published forms (or external). */}
+                  <div>
+                    <label className="text-xs text-slate-500">{t("set.lpCtas")}</label>
+                    <div className="mt-1 space-y-2">
+                      {lpCtas.map((c, i) => (
+                        <div key={i} className="flex max-w-xl items-center gap-2">
+                          <input
+                            value={c.label}
+                            onChange={(e) =>
+                              setLpCtas((arr) => arr.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)))
+                            }
+                            className="jf-input flex-1"
+                            placeholder={t("set.lpCtaLabel")}
+                          />
+                          <input
+                            value={c.form_slug}
+                            onChange={(e) =>
+                              setLpCtas((arr) => arr.map((x, j) => (j === i ? { ...x, form_slug: e.target.value } : x)))
+                            }
+                            className="jf-input flex-1"
+                            placeholder={t("set.lpCtaSlug")}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setLpCtas((arr) => arr.filter((_, j) => j !== i))}
+                            className="jf-btn-outline shrink-0"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={() => setLpCtas((arr) => [...arr, { label: "", form_slug: "" }])}
+                        className="jf-btn-outline"
+                      >
+                        + {t("set.lpCtaAdd")}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                    <button onClick={saveLandingPage} className="jf-btn-primary">{t("set.lpSave")}</button>
+                    <a
+                      href={`https://${activeSpaceSlug || "space"}.jomform.com`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="jf-btn-outline"
+                    >
+                      {t("set.lpPreview")}
+                    </a>
+                  </div>
+                </>
+              )}
+            </div>
+          </section>
+          </>
         )}
         {/* ── Members tab: space members management (issue #163) ── */}
         {tab === "members" && isAdmin && (
