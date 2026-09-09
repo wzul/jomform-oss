@@ -106,6 +106,20 @@ const NOTIF_EVENTS = [
   "subscription.charged",
 ] as const;
 
+// Issue #394: map each notification event value to its i18n key explicitly
+// (avoids fragile string manipulation that produced keys like
+// `fs.notifEventSalepaid` which don't exist in the dictionary).
+const NOTIF_EVENT_KEYS: Record<string, import("../../components/i18n").Key> = {
+  "sale.paid": "fs.notifEventSalePaid",
+  "sale.failed": "fs.notifEventSaleFailed",
+  "response.submitted": "fs.notifEventResponseSubmitted",
+  "subscription.charged": "fs.notifEventSubscriptionCharged",
+};
+
+function notifEventKey(ev: string): import("../../components/i18n").Key {
+  return NOTIF_EVENT_KEYS[ev] ?? ("fs.notifEvent" + ev) as import("../../components/i18n").Key;
+}
+
 const NOTIF_OPS = ["equals", "not_equals", "contains", "gt", "lt", "not_empty"] as const;
 
 // Issue #179: a per-form confirmation (Gravity-Forms-style). The default
@@ -1025,7 +1039,7 @@ function FormSettingsInner() {
                                 </span>
                               )}
                               <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] text-slate-500">
-                                {t(`fs.notifEvent${n.event[0].toUpperCase()}${n.event.slice(1).replace(/\./g, "")}` as import("../../components/i18n").Key)}
+                                {t(notifEventKey(n.event))}
                               </span>
                               {!n.enabled && (
                                 <span className="text-[10px] text-slate-400">{t("fs.notifEnabled")}: off</span>
@@ -1067,7 +1081,7 @@ function FormSettingsInner() {
                             <select value={edEvent} onChange={(e) => setEdEvent(e.target.value)} className={inputCls}>
                               {NOTIF_EVENTS.map((ev) => (
                                 <option key={ev} value={ev}>
-                                  {t(`fs.notifEvent${ev[0].toUpperCase()}${ev.slice(1).replace(/\./g, "")}` as import("../../components/i18n").Key)}
+                                  {t(notifEventKey(ev))}
                                 </option>
                               ))}
                             </select>
