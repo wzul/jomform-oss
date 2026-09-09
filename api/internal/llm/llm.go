@@ -20,10 +20,10 @@ import (
 // (same model family as the chatwoot-ai decision).
 const DefaultModel = "deepseek-v4-flash:0731"
 
-// DefaultBaseURL is the Ollama Cloud API root.
-const DefaultBaseURL = "https://ollama.cloud/api"
+// DefaultBaseURL is the Ollama Cloud OpenAI-compatible API root.
+const DefaultBaseURL = "https://ollama.com/v1"
 
-// Client talks to Ollama Cloud's OpenAI-compatible /api/chat endpoint.
+// Client talks to Ollama Cloud's OpenAI-compatible /chat/completions endpoint.
 type Client struct {
 	baseURL string
 	model   string
@@ -136,7 +136,7 @@ func (c *Client) GenerateFormConfig(ctx context.Context, prompt string) (string,
 
 // chat posts a chat-completion request body and returns the trimmed reply.
 func (c *Client) chat(ctx context.Context, body []byte) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}
@@ -153,9 +153,16 @@ func (c *Client) chat(ctx context.Context, body []byte) (string, error) {
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("llm: status %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
+	// Guard against non-JSON responses (e.g. an HTML landing page served by a
+	// misconfigured endpoint). json.Unmarshal would otherwise fail with a
+	// confusing "invalid character '<'" error.
+	ct := resp.Header.Get("Content-Type")
+	if !strings.Contains(ct, "application/json") {
+		return "", fmt.Errorf("llm: unexpected response Content-Type %q (expected application/json); body: %s", ct, strings.TrimSpace(string(raw)))
+	}
 	var out chatResponse
 	if err := json.Unmarshal(raw, &out); err != nil {
-		return "", err
+		return "", fmt.Errorf("llm: response is not valid JSON: %w", err)
 	}
 	if out.Error != nil && out.Error.Message != "" {
 		return "", fmt.Errorf("llm: %s", out.Error.Message)

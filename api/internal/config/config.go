@@ -91,9 +91,9 @@ type Config struct {
 	OAuthDCRRate  float64
 	OAuthDCRBurst float64
 
-	// LLM (issue #184): Ollama Cloud endpoint + model used to auto-generate
-	// per-space legal pages. Empty base URL/model use the defaults
-	// (https://ollama.cloud/api, deepseek-v4-flash:0731).
+	// LLM (issue #184): Ollama Cloud OpenAI-compatible endpoint + model used
+	// to auto-generate per-space legal pages. Empty base URL/model use the
+	// defaults (https://ollama.com/v1, deepseek-v4-flash:0731).
 	LLMBaseURL string
 	LLMModel   string
 
