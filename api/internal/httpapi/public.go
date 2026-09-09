@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/customform"
 	"github.com/wzul/jomform/api/internal/dbstore"
@@ -72,11 +73,19 @@ type PublicHandlers struct {
 	// background. Both nil in bare-mode tests → no judge runs (submissions are
 	// accepted immediately, never flagged).
 	SpamQueue *emailqueue.Queue
+	// Issue #361: S3/MinIO store serving the space/custom-domain code-asset
+	// route GET /assets/{key}. Nil when media storage isn't configured.
+	Store *ObjectStore
 }
 
 // RegisterRoutes wires public endpoints.
 func (h *PublicHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /f/{slug}", h.handleRender)
+	// Issue #361: merchant code assets (CSS/JS/HTML/fonts) served on the
+	// space/custom domain at /assets/{key}, so a landing page can reference
+	// them same-origin (/styles/app.css). Registered before /{slug} so assets
+	// win over a form slug.
+	mux.HandleFunc("GET /assets/{key...}", h.handleAsset)
 	mux.HandleFunc("GET /embed/f/{accslug}/{slug}", h.embedForm)
 	// Issue #276: sitemap.xml for custom-domain spaces (indexed spaces only).
 	mux.HandleFunc("GET /sitemap.xml", h.handleSitemap)
@@ -1658,4 +1667,56 @@ func (h *PublicHandlers) renderSpaceLanding(w http.ResponseWriter, r *http.Reque
 	if err := landingPageTmpl.Execute(w, data); err != nil {
 		http.Error(w, "ralat", http.StatusInternalServerError)
 	}
+}
+
+// handleAsset serves GET /assets/{key...} on a space/custom domain — merchant
+// code assets (CSS/JS/HTML/fonts) referenced same-origin by a customised
+// landing/space page (issue #361). The route only resolves on a space
+// subdomain ({space}.jomform.com) or a verified custom domain mapped to a
+// space's account, so uploaded code is tenant-scoped: it is never exposed on
+// the bare app origin and never executable server-side (served as static
+// bytes with the restrictive hardening in handleMedia).
+//
+// The key is the same account-scoped `u/...` key generated at upload, so it
+// can never resolve to an object outside the uploading account's space. The
+// stored content-type is preserved and restrictive headers (nosniff, no
+// framing/embedding) are applied exactly as on /media.
+func (h *PublicHandlers) handleAsset(w http.ResponseWriter, r *http.Request) {
+	if h.Store == nil {
+		writeErr(w, http.StatusServiceUnavailable, "media storage tidak dikonfigurasi")
+		return
+	}
+	// Tenant-scope check: only a space subdomain or a custom domain mapped to
+	// a space serves assets. Bare jomform.com (no subdomain) 404s so dashboard
+	// routes are unaffected.
+	if sub := accountSubdomain(r.Host); sub == "" {
+		if customDomainOwner(r.Context(), h.Accounts, h.Domains, r.Host) == "" {
+			http.NotFound(w, r)
+			return
+		}
+	}
+	key := mediaKeyFromPath(r.PathValue("key"))
+	if key == "" {
+		writeErr(w, http.StatusBadRequest, "kunci media tidak sah")
+		return
+	}
+	body, ct, err := h.Store.GetObject(r.Context(), key)
+	if err != nil {
+		var nf *types.NoSuchKey
+		if errors.As(err, &nf) {
+			writeErr(w, http.StatusNotFound, "media tidak dijumpai")
+			return
+		}
+		slog.Error("asset_get", "err", err, "key", key)
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	w.Header().Set("Content-Type", ct)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
+	w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
 }

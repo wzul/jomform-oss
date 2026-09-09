@@ -41,6 +41,23 @@ function nameFromKey(key: string): string {
   return parts[parts.length - 1] || key;
 }
 
+// Issue #361: media items now include merchant code files (CSS/JS/HTML/SVG/
+// woff2) alongside images. isImage decides whether to render a real thumbnail
+// or a code-file tile (extension badge) for the media library grid.
+function isImage(mime: string): boolean {
+  return mime.startsWith("image/");
+}
+
+// Extension badge label for a code file (e.g. "CSS", "JS", "HTML").
+function extBadge(mime: string): string {
+  if (mime === "text/css; charset=utf-8") return "CSS";
+  if (mime === "text/javascript; charset=utf-8" || mime === "application/javascript; charset=utf-8") return "JS";
+  if (mime === "text/html; charset=utf-8") return "HTML";
+  if (mime === "image/svg+xml") return "SVG";
+  if (mime === "font/woff2") return "WOFF2";
+  return mime.slice(0, 4).toUpperCase();
+}
+
 export default function MediaPage() {
   const { t } = useI18n();
   const { anon, role, space, user } = useSession();
@@ -208,13 +225,19 @@ export default function MediaPage() {
                 className="jf-card group overflow-hidden text-left"
               >
                 <div className="flex h-32 items-center justify-center overflow-hidden bg-slate-100">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={m.url}
-                    alt={nameFromKey(m.key)}
-                    className="h-full w-full object-cover"
-                    loading="lazy"
-                  />
+                  {isImage(m.mime) ? (
+                    /* eslint-disable-next-line @next/next/no-img-element */
+                    <img
+                      src={m.url}
+                      alt={nameFromKey(m.key)}
+                      className="h-full w-full object-cover"
+                      loading="lazy"
+                    />
+                  ) : (
+                    <div className="flex h-16 w-16 items-center justify-center rounded-xl border bg-white text-center text-xs font-bold text-[#4f46e5]">
+                      {extBadge(m.mime)}
+                    </div>
+                  )}
                 </div>
                 <div className="p-3">
                   <p className="truncate text-sm font-medium" title={nameFromKey(m.key)}>
@@ -268,8 +291,14 @@ export default function MediaPage() {
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex h-56 items-center justify-center overflow-hidden bg-slate-100">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={detail.url} alt={nameFromKey(detail.key)} className="h-full w-full object-contain" />
+                {isImage(detail.mime) ? (
+                  /* eslint-disable-next-line @next/next/no-img-element */
+                  <img src={detail.url} alt={nameFromKey(detail.key)} className="h-full w-full object-contain" />
+                ) : (
+                  <div className="flex h-24 w-24 items-center justify-center rounded-2xl border bg-white text-sm font-bold text-[#4f46e5]">
+                    {extBadge(detail.mime)}
+                  </div>
+                )}
               </div>
               <div className="p-4">
                 <p className="truncate text-sm font-semibold" title={nameFromKey(detail.key)}>

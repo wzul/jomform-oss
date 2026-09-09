@@ -23,7 +23,11 @@ type restMedia struct {
 	Mime      string `json:"mime"`
 	Size      int64  `json:"size"`
 	Source    string `json:"source"`
-	CreatedAt string `json:"created_at"`
+	// ScanStatus is the #364 scan status ('pending' until the scan engine
+	// lands). Exposed for a future media UI to mark unscanned/quarantined
+	// code assets; it has no effect on serving yet (issue #361).
+	ScanStatus string `json:"scan_status"`
+	CreatedAt  string `json:"created_at"`
 }
 
 // listMedia handles GET /v1/rest/media — account-scoped, paginated list of
@@ -53,7 +57,8 @@ func (h *RESTHandlers) listMedia(w http.ResponseWriter, r *http.Request, actx *A
 		out = append(out, restMedia{
 			ID: m.ID, FormID: m.FormID, Key: m.Key, URL: m.URL,
 			Mime: m.Mime, Size: m.Size, Source: m.Source,
-			CreatedAt: m.CreatedAt.UTC().Format(time.RFC3339),
+			ScanStatus: m.ScanStatus,
+			CreatedAt:  m.CreatedAt.UTC().Format(time.RFC3339),
 		})
 	}
 	respond(w, http.StatusOK, map[string]any{"items": out, "page": page, "limit": limit, "total": total})

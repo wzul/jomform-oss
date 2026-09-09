@@ -352,3 +352,117 @@ func TestEnsureBucketIntegration(t *testing.T) {
 		t.Fatalf("anonymous GET %s = %d, want 200 (bucket must be public-read)", url, resp.StatusCode)
 	}
 }
+
+// Issue #361: asset allowlist sniffing — CSS/JS/HTML/SVG/WOFF2 are accepted
+// (by their actual bytes, not the filename), and non-allowlisted text/binaries
+// (shell scripts, plain prose, random binaries) are rejected.
+func TestSniffAssetTypeAllowlist(t *testing.T) {
+	cases := []struct {
+		name   string
+		data   string
+		want   string
+		wantOK bool
+	}{
+		{"css-rule", "body { color: red; }", ".css", true},
+		{"css-at-import", "@import url(\"x.css\");", ".css", true},
+		{"css-media", "@media (max-width: 600px) { .a { display: block } }", ".css", true},
+		{"css-charset", "@charset \"UTF-8\";\n.a {}", ".css", true},
+		{"js-const", "const x = 1;", ".js", true},
+		{"js-let", "let x = 1;", ".js", true},
+		{"js-var", "var x = 1;", ".js", true},
+		{"js-function", "function hi() { return 1; }", ".js", true},
+		{"js-doc", "document.getElementById('x');", ".js", true},
+		{"js-arrow", "(function(){ var a = 1; })();", ".js", true},
+		{"js-iife", "(() => {})();", ".js", true},
+		{"js-object-literal", "{ a: 1 }", "", false}, // bare object literal is ambiguous → rejected
+		{"js-comment", "// hi\nconst x = 1;", ".js", true},
+		{"html-doctype", "<!doctype html><html><head></head><body></body></html>", ".html", true},
+		{"html-tag", "<html lang=\"en\"><body></body></html>", ".html", true},
+		{"svg", "<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>", ".svg", true},
+		{"woff2-magic", "wOFF\x00\x01\x00\x00", ".woff2", true},
+		{"empty", "", "", false},
+		{"shell-script", "#!/bin/sh\necho pwned", "", false},
+		{"plain-prose", "The quick brown fox jumps over the lazy dog", "", false},
+		{"html-fragment-tag", "<div>not a document</div>", "", false}, // not a root document
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ext, ok := sniffAssetType([]byte(c.data))
+			if ok != c.wantOK || ext != c.want {
+				t.Fatalf("sniff(%q) = (%q, %v), want (%q, %v)", c.data, ext, ok, c.want, c.wantOK)
+			}
+		})
+	}
+}
+
+// Issue #361: an SVG that smuggles a <script> is still classified as text SVG
+// (served as image/svg+xml + nosniff — never executed as JS), not as a JS asset.
+func TestSniffAssetRejectsSvgWithScriptAsJs(t *testing.T) {
+	ext, ok := sniffAssetType([]byte("<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>"))
+	if !ok || ext != ".svg" {
+		t.Fatalf("svg-with-script = (%q,%v), want (.svg,true)", ext, ok)
+	}
+}
+
+// Issue #361: the allowlist rejects code assets that are not on the list —
+// a .txt / .json / .exe must not sneak in as a code asset.
+func TestSniffAssetRejectsNonAllowlisted(t *testing.T) {
+	for _, bad := range []string{
+		"{\n  \"key\": \"value\"\n}",
+		"#!/bin/sh\nrm -rf /",
+		"MZ\x90\x00\x03\x00\x00\x00\x04\x00\x00\x00",
+		"hello",
+		"SELECT * FROM users;",
+		"<body>body-only</body>",
+	} {
+		ext, ok := sniffAssetType([]byte(bad))
+		if ok {
+			t.Errorf("sniffAssetType(%q) = (%q, true), want rejected", bad, ext)
+		}
+	}
+}
+
+// Issue #361: the asset allowlist extension is server-controlled (sniffed from
+// bytes), so a renamed script (executable bytes with a .css name) can't slip in
+// as CSS.
+func TestSniffAssetIgnoresClientExt(t *testing.T) {
+	// A PNG named "app.css" is still an image and must NOT pass the asset sniffer.
+	png := tinyPNG(t)
+	if ext, ok := sniffAssetType(png); ok {
+		t.Fatalf("png bytes sniffed as %q, want rejected by asset allowlist", ext)
+	}
+}
+
+// Issue #361: code assets are served with nosniff + no framing/embedding;
+// images keep lenient embedding so forms/products can render them cross-origin.
+func TestIsCodeAsset(t *testing.T) {
+	for _, ct := range []string{
+		"text/css; charset=utf-8",
+		"text/javascript; charset=utf-8",
+		"application/javascript; charset=utf-8",
+		"text/html; charset=utf-8",
+		"image/svg+xml",
+		"font/woff2",
+	} {
+		if !isCodeAsset(ct) {
+			t.Errorf("isCodeAsset(%q) = false, want true", ct)
+		}
+	}
+	for _, ct := range []string{
+		"image/png", "image/jpeg", "image/webp", "image/gif",
+		"application/pdf", "application/octet-stream",
+	} {
+		if isCodeAsset(ct) {
+			t.Errorf("isCodeAsset(%q) = true, want false", ct)
+		}
+	}
+}
+
+// Issue #361: key building for code assets is identical to images — account-
+// scoped u/<acct>/<uuid>.<ext> with the sniffed extension only.
+func TestBuildUploadKeyAssetExt(t *testing.T) {
+	key := buildUploadKey("acct-361", ".css")
+	if !strings.HasPrefix(key, "u/acct-361/") || !strings.HasSuffix(key, ".css") {
+		t.Fatalf("key %q must be u/<acct>/<uuid>.css", key)
+	}
+}

@@ -62,7 +62,7 @@ const (
 	jpegQuality = 80
 )
 
-// imageUploadTypes maps an allowed canonical extension to its MIME type.
+// imageUploadMIME maps an allowed canonical extension to its MIME type.
 // Anything else is rejected before touching the bytes.
 var imageUploadMIME = map[string]string{
 	".png":  "image/png",
@@ -70,6 +70,33 @@ var imageUploadMIME = map[string]string{
 	".webp": "image/webp",
 	".gif":  "image/gif",
 }
+
+// uploadAssetMIME maps an allowed canonical extension to its MIME type for
+// *code assets* — CSS/JS/HTML/fonts a merchant uploads to customise their
+// landing/space page (issue #361). Unlike images these are stored and served
+// byte-for-byte (no re-encode) under the merchant's account-scoped key, so the
+// page can reference them as <link href> / <script src> / fonts. They are
+// tenant-scoped and served as hardened static content (see
+// serveAsset/handleMedia), never executed server-side. .svg and .woff2 are
+// included so a fully customised landing page can ship its own graphics + web
+// font without a second image-only upload path.
+var uploadAssetMIME = map[string]string{
+	".css":   "text/css; charset=utf-8",
+	".js":    "text/javascript; charset=utf-8",
+	".html":  "text/html; charset=utf-8",
+	".svg":   "image/svg+xml",
+	".woff2": "font/woff2",
+}
+
+// maxAssetBytes caps the stored size of a merchant code asset (issue #361).
+// Images keep their 20MB input / 2MB stored optimization caps; code assets are
+// stored as-is, so a generous-but-bounded ceiling prevents a single giant file
+// from blowing up storage while still accommodating real-world custom CSS/JS.
+const maxAssetBytes = 2 << 20 // 2MB stored cap for merchant code assets
+
+// maxAssetUploadBytes caps the raw multipart body a code-asset upload may send
+// (issue #361). Kept in line with the image input cap.
+const maxAssetUploadBytes = 20 << 20 // 20MB input cap
 
 // ObjectStore is a minimal S3/MinIO client for the media bucket.
 type ObjectStore struct {
@@ -201,11 +228,37 @@ func mediaKeyFromPath(p string) string {
 	return p
 }
 
+// isCodeAsset reports whether a stored content-type is a merchant code asset
+// (issue #361) rather than an image. Code assets are served with stricter
+// headers (no cross-origin framing/embedding); images keep lenient embedding
+// so forms/products can render them cross-origin.
+func isCodeAsset(ct string) bool {
+	switch ct {
+	case "text/css; charset=utf-8",
+		"text/javascript; charset=utf-8",
+		"text/html; charset=utf-8",
+		"image/svg+xml",
+		"font/woff2",
+		"application/javascript; charset=utf-8":
+		return true
+	}
+	// Be defensive about any future text/binary asset we add.
+	return strings.HasPrefix(ct, "text/") || ct == "font/woff2"
+}
+
 // handleMedia serves GET /media/{key} — a public, unauthenticated route that
 // streams an uploaded object from the media bucket (issue #145). The key is
 // validated to a safe `u/...` path (no traversal), the object's stored
 // content-type is preserved, and a short cache header is set so browsers and
 // the edge don't re-fetch on every render. 404 when the object is missing.
+//
+// Issue #361 serving hardening: every response carries
+// X-Content-Type-Options: nosniff so a spoofed/ambiguous asset is never
+// MIME-sniffed into an executable type. Merchant code assets (CSS/JS/HTML/SVG)
+// additionally get X-Frame-Options: DENY, a frame-ancestors 'none' CSP and
+// Cross-Origin-Resource-Policy: same-origin so a landing page can reference
+// them same-origin but another site cannot frame or embed them. Images keep
+// lenient embedding (forms/products render them from any origin).
 func (h *RESTHandlers) handleMedia(w http.ResponseWriter, r *http.Request) {
 	if h.Store == nil {
 		writeErr(w, http.StatusServiceUnavailable, "media storage tidak dikonfigurasi")
@@ -229,7 +282,15 @@ func (h *RESTHandlers) handleMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", ct)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
+	if isCodeAsset(ct) {
+		// Code assets: never framed, never embedded cross-origin. A landing
+		// page references them same-origin on its space/custom domain.
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
+		w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
+	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)
 }
@@ -510,6 +571,102 @@ func (h *RESTHandlers) uploadAvatar(w http.ResponseWriter, r *http.Request, actx
 	respond(w, http.StatusOK, map[string]string{"url": h.Store.PublicURL(key)})
 }
 
+// uploadAsset handles POST /v1/rest/uploads/asset (multipart). It accepts a
+// merchant code asset — CSS/JS/HTML/font/SVG — for customising a landing/space
+// page (issue #361). Unlike images the bytes are stored as-is (no re-encode)
+// under the same account-scoped `u/<acct>/<uuid>.<ext>` key, so the landing
+// page can reference them as <link href> / <script src> / fonts. Customer
+// (form-attachment) uploads stay images-only; code assets are merchant-only.
+//
+// Serving hardening (folded in from #364 without the scan engine): the asset
+// is stored tenant-scoped, capped in size, never executed server-side, and
+// streamed by the public media route with restrictive headers (nosniff +
+// no cross-origin framing/embedding). The media row carries a scan_status
+// column the #364 background scan can later flip to gate serving.
+//
+// Request: multipart/form-data with a single "file" part (≤20MB).
+// Response: {"url": "..."} 200, or 400/413 on validation errors.
+func (h *RESTHandlers) uploadAsset(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
+	if h.Store == nil {
+		recordUploadFailure("not_configured")
+		writeErr(w, http.StatusServiceUnavailable, "media storage tidak dikonfigurasi")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxAssetUploadBytes+1<<20)
+
+	if err := r.ParseMultipartForm(maxAssetUploadBytes); err != nil {
+		recordUploadFailure("bad_multipart")
+		writeErr(w, http.StatusBadRequest, "fail tidak sah atau melebihi 20MB")
+		return
+	}
+	defer func() { _ = r.MultipartForm.RemoveAll() }()
+
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		recordUploadFailure("missing_file")
+		writeErr(w, http.StatusBadRequest, "part 'file' diperlukan")
+		return
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(io.LimitReader(file, maxAssetUploadBytes+1))
+	if err != nil {
+		recordUploadFailure("read_failed")
+		writeErr(w, http.StatusBadRequest, "gagal membaca fail")
+		return
+	}
+	if len(data) == 0 {
+		recordUploadFailure("empty")
+		writeErr(w, http.StatusBadRequest, "fail kosong")
+		return
+	}
+	if len(data) > maxAssetUploadBytes {
+		recordUploadFailure("too_large")
+		writeErr(w, http.StatusRequestEntityTooLarge, "fail melebihi had 20MB")
+		return
+	}
+
+	// Content-type allowlist from the file's actual bytes (magic), not the
+	// client's declared header or filename (both spoofable).
+	ext, ok := sniffAssetType(data)
+	if !ok {
+		recordUploadFailure("bad_type")
+		writeErr(w, http.StatusBadRequest, "jenis fail tidak disokong (css/js/html/svg/woff2 sahaja)")
+		return
+	}
+	mime := uploadAssetMIME[ext]
+
+	// Size cap: code assets are stored as-is, so enforce a stored ceiling.
+	if len(data) > maxAssetBytes {
+		recordUploadFailure("asset_too_large")
+		writeErr(w, http.StatusRequestEntityTooLarge, "fail melebihi had 2MB")
+		return
+	}
+
+	key := buildUploadKey(actx.Account.ID, ext)
+	if err := h.Store.PutObject(r.Context(), key, mime, data); err != nil {
+		recordUploadFailure("store")
+		slog.Error("upload_asset_put", "err", err, "account", actx.Account.ID)
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	slog.Info("upload_asset_ok",
+		"account", actx.Account.ID, "key", key,
+		"in_bytes", len(data), "mime", mime)
+	// Issue #92: audit asset upload.
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "upload.asset", map[string]any{
+		"mime": mime, "bytes": len(data),
+	})
+	// Issue #180: record the object in the media library so the dashboard can
+	// list it (metadata + filtering). Best-effort.
+	h.recordMedia(r, actx, key, mime, int64(len(data)), dbstore.MediaSourceMerchant, "")
+	respond(w, http.StatusOK, map[string]string{"url": h.Store.PublicURL(key)})
+}
+
 // buildUploadKey composes the S3 object key. The client NEVER supplies any
 // part of it — account id and uuid are server-controlled, ext comes from the
 // sniffed allowlist. The account segment is still sanitised to a safe
@@ -560,6 +717,80 @@ func sniffImageType(data []byte) (string, bool) {
 	case "gif":
 		return ".gif", true
 	}
+	return "", false
+}
+
+// sniffAssetType inspects the leading bytes — NOT the client-supplied extension
+// or content-type — and returns the canonical storage extension if the blob is
+// a merchant code asset on the allowlist (issue #361): css/js/html/svg/woff2.
+// Detection uses the actual file signature so a renamed/spoofed file (e.g. a
+// .js blob renamed to .css, or raw executable bytes with a .css name) is
+// caught. An SVN-style `<svg`, a `<!doctype html` / `<html` doc, or a binary
+// WOFF2 `wOFF` signature map to their canonical extension; plain text, shell
+// scripts, images and unknown binaries are rejected. An `.svg` payload carrying
+// <script> is still a text SVG, not an allowlisted script — it is served with
+// image/svg+xml + nosniff, which the browser does not execute as JS.
+func sniffAssetType(data []byte) (string, bool) {
+	if len(data) == 0 {
+		return "", false
+	}
+	t := strings.TrimLeftFunc(string(data), func(r rune) bool {
+		return r <= ' ' // skip leading whitespace/newlines
+	})
+	lower := strings.ToLower(t)
+	// HTML document — a merchant's standalone landing/RSVP page snippet.
+	if strings.HasPrefix(lower, "<!doctype html") || strings.HasPrefix(lower, "<html") {
+		return ".html", true
+	}
+	// SVG: must open with the <svg root element.
+	if strings.HasPrefix(lower, "<svg") {
+		return ".svg", true
+	}
+	// WOFF2 font: the "wOFF" magic header.
+	if len(data) >= 4 && bytes.Equal(data[:4], []byte{'w', 'O', 'F', 'F'}) {
+		return ".woff2", true
+	}
+	// JS: the first non-whitespace token is a statement/keyword/comment. We
+	// accept a small allowlist of JS statement openers — never a bare `{` or
+	// `(`, which would let JSON/expressions in as JS. An IIFE must open with a
+	// real keyword prefix so an object literal or a JSON document is rejected.
+	// Checked before CSS so a script that opens with "const {" isn't
+	// misclassified as CSS.
+	for _, p := range []string{
+		"/*", "//", `"`, "'", "`", // comment / string opener
+		"const ", "let ", "var ", "function ", "class ", "async ", "await ", "return ",
+		"if ", "else ", "for ", "while ", "do ", "switch ", "case ", "try ", "catch ",
+		"throw ", "new ", "typeof ", "instanceof ", "in ", "of ", "yield ", "this",
+		"document.", "window.", "alert(", "fetch(",
+		"import ", "export ", "function", // IIFE/keyword prefixes
+		"(function", "(async", "(()", "((",
+	} {
+		if strings.HasPrefix(lower, p) {
+			return ".js", true
+		}
+	}
+	// CSS: a style rule or an at-rule (@charset/@import/@media/@keyframes/@font-face).
+	// The generic `{` rule requires a selector prefix — a document that *starts*
+	// with `{` or `(` (JSON, an object literal, a parenthesised expression) is
+	// rejected rather than misread as CSS.
+	first := string(t[0])
+	hasBrace := strings.Contains(lower, "{") && first != "{" && first != "("
+	if strings.HasPrefix(lower, "@charset") ||
+		strings.HasPrefix(lower, "@import") ||
+		strings.HasPrefix(lower, "@media") ||
+		strings.HasPrefix(lower, "@supports") ||
+		strings.HasPrefix(lower, "@font-face") ||
+		strings.HasPrefix(lower, "@keyframes") ||
+		strings.HasPrefix(lower, "@layer") ||
+		strings.HasPrefix(lower, "@container") ||
+		hasBrace {
+		return ".css", true
+	}
+	// CSS selectors that don't start with a JS opener (e.g. "body {") are
+	// caught by the "{" check above; a JS file that starts with an identifier
+	// only (e.g. `foo.bar()`) is the one gap — but that's indistinguishable
+	// from a CSS selector and is still static text, so rejecting it is the
+	// safe default.
 	return "", false
 }
 

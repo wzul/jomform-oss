@@ -28,8 +28,13 @@ type Media struct {
 	Mime      string
 	Size      int64
 	Source    string
-	CreatedAt time.Time
-	DeletedAt *time.Time
+	// ScanStatus gates whether a code asset may be served (issue #361).
+	// Until the LLM scan engine lands (#364) it stays 'pending' and has no
+	// effect on serving. 'ok' = scanned & allowed; 'flagged'/'quarantined'
+	// = the scan worker (#364) found a problem and serving should block.
+	ScanStatus string
+	CreatedAt  time.Time
+	DeletedAt  *time.Time
 }
 
 // MediaStore wraps pgx for the media table.
@@ -44,8 +49,8 @@ func (s *MediaStore) Create(ctx context.Context, m *Media) error {
 		m.Source = MediaSourceMerchant
 	}
 	return s.pool.QueryRow(ctx,
-		`INSERT INTO media (account_id, form_id, key, url, mime, size, source)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)
+		`INSERT INTO media (account_id, form_id, key, url, mime, size, source, scan_status)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
 		 RETURNING id, created_at`,
 		m.AccountID, nullString(m.FormID), m.Key, m.URL, m.Mime, m.Size, m.Source,
 	).Scan(&m.ID, &m.CreatedAt)
@@ -86,7 +91,7 @@ func (s *MediaStore) ListPage(ctx context.Context, accountID, formID, source str
 	}
 
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, account_id, form_id, key, url, mime, size, source, created_at, deleted_at
+		`SELECT id, account_id, form_id, key, url, mime, size, source, scan_status, created_at, deleted_at
 		 FROM media WHERE `+where+` ORDER BY created_at DESC LIMIT $`+itoa(len(args)+1)+` OFFSET $`+itoa(len(args)+2),
 		append(args, limit, offset)...)
 	if err != nil {
@@ -108,7 +113,7 @@ func (s *MediaStore) ListPage(ctx context.Context, accountID, formID, source str
 // Returns nil when not found or soft-deleted.
 func (s *MediaStore) ByIDAccount(ctx context.Context, accountID, id string) (*Media, error) {
 	m, err := scanMedia(s.pool.QueryRow(ctx,
-		`SELECT id, account_id, form_id, key, url, mime, size, source, created_at, deleted_at
+		`SELECT id, account_id, form_id, key, url, mime, size, source, scan_status, created_at, deleted_at
 		 FROM media WHERE id = $1 AND account_id = $2 AND deleted_at IS NULL`, id, accountID))
 	if err == pgx.ErrNoRows {
 		return nil, nil
@@ -138,7 +143,7 @@ func scanMedia(row pgx.Row) (*Media, error) {
 	m := &Media{}
 	var formID *string
 	var deletedAt *time.Time
-	err := row.Scan(&m.ID, &m.AccountID, &formID, &m.Key, &m.URL, &m.Mime, &m.Size, &m.Source, &m.CreatedAt, &deletedAt)
+	err := row.Scan(&m.ID, &m.AccountID, &formID, &m.Key, &m.URL, &m.Mime, &m.Size, &m.Source, &m.ScanStatus, &m.CreatedAt, &deletedAt)
 	if formID != nil {
 		m.FormID = *formID
 	}

@@ -237,6 +237,12 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	// Issue #133: avatar upload — downscales to a small profile image.
 	mux.Handle("POST /v1/rest/uploads/avatar",
 		middleware.RateLimitWith(2, 6)(h.authed(h.uploadAvatar)))
+	// Issue #361: merchant code-asset upload (CSS/JS/HTML/SVG/woff2) for
+	// customising a landing/space page. Stored tenant-scoped and served as
+	// hardened static content on the space/custom domain. Customer uploads
+	// stay images-only; these are merchant-only.
+	mux.Handle("POST /v1/rest/uploads/asset",
+		middleware.RateLimitWith(2, 6)(h.authed(h.uploadAsset)))
 	// Issue #133: set/clear the session user's avatar_url. Validated to be a
 	// JomForm-hosted media URL (from the upload bucket) to avoid storing
 	// arbitrary external URLs.

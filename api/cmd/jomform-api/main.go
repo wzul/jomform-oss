@@ -337,6 +337,9 @@ func main() {
 			// Valkey-backed queue as email (#199); the worker below routes
 			// spam_judge jobs to the AI judge. Nil when Valkey is absent (dev).
 			SpamQueue: deps.EmailQueue,
+			// Issue #361: same media bucket serves merchant code assets on the
+			// space/custom domain via /assets/{key}. Nil disables the route.
+			Store: store,
 			}
 
 		// Issue #199: start the background email worker. It polls the
