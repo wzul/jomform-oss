@@ -308,10 +308,12 @@ var blockTmpl = template.Must(template.New("blocks").
   button:hover { background:#828fff; }
   /* Issue #183: optional per-space footer. */
   .jf-footer { max-width:480px; width:100%; margin:16px auto 0; padding:0 8px;
-               color:#6b7280; font-size:12px; line-height:1.6; text-align:center; }
+               color:#6b7280; font-size:12px; line-height:1.6; text-align:center;
+               align-self:center; }
   .jf-fbiz { font-weight:600; color:#374151; }
   .jf-ftext { margin-top:4px; }
-  .jf-flinks { display:flex; gap:14px; justify-content:center; flex-wrap:wrap; margin-top:6px; }
+  .jf-flinks { display:flex; width:100%; gap:14px; justify-content:center;
+               flex-wrap:wrap; margin-top:6px; text-align:center; }
   .jf-flinks a { color:#4f46e5; text-decoration:none; }
   .jf-flinks a:hover { text-decoration:underline; }
 </style></head><body>
@@ -687,10 +689,12 @@ var responseTmpl = template.Must(template.New("response").
   button:hover { background:#828fff; }
   /* Issue #183: optional per-space footer. */
   .jf-footer { max-width:480px; width:100%; margin:16px auto 0; padding:0 8px;
-               color:#6b7280; font-size:12px; line-height:1.6; text-align:center; }
+               color:#6b7280; font-size:12px; line-height:1.6; text-align:center;
+               align-self:center; }
   .jf-fbiz { font-weight:600; color:#374151; }
   .jf-ftext { margin-top:4px; }
-  .jf-flinks { display:flex; gap:14px; justify-content:center; flex-wrap:wrap; margin-top:6px; }
+  .jf-flinks { display:flex; width:100%; gap:14px; justify-content:center;
+               flex-wrap:wrap; margin-top:6px; text-align:center; }
   .jf-flinks a { color:#4f46e5; text-decoration:none; }
   .jf-flinks a:hover { text-decoration:underline; }
   .ok { text-align:center; padding:24px 0; }
