@@ -25,6 +25,9 @@ type MediaItem = {
   // raster images. The grid renders the thumbnail; the detail modal offers
   // all sizes.
   sizes?: Record<string, string>;
+  // Issue #383: auto-generated first-page preview thumbnail URL for a PDF.
+  // The grid renders this instead of the generic PDF tile when present.
+  preview?: string;
   created_at: string;
 };
 
@@ -335,10 +338,10 @@ export default function MediaPage() {
                 className="jf-card group overflow-hidden text-left"
               >
                 <div className="flex h-32 items-center justify-center overflow-hidden bg-slate-100">
-                  {isImage(m.mime) ? (
+                  {isImage(m.mime) || m.preview ? (
                     /* eslint-disable-next-line @next/next/no-img-element */
                     <img
-                      src={m.sizes?.thumbnail || m.url}
+                      src={m.preview || m.sizes?.thumbnail || m.url}
                       alt={nameFromKey(m.key)}
                       className="h-full w-full object-cover"
                       loading="lazy"
@@ -401,9 +404,13 @@ export default function MediaPage() {
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex h-56 items-center justify-center overflow-hidden bg-slate-100">
-                {isImage(detail.mime) ? (
+                {isImage(detail.mime) || detail.preview ? (
                   /* eslint-disable-next-line @next/next/no-img-element */
-                  <img src={detail.url} alt={nameFromKey(detail.key)} className="h-full w-full object-contain" />
+                  <img
+                    src={detail.preview || detail.url}
+                    alt={nameFromKey(detail.key)}
+                    className="h-full w-full object-contain"
+                  />
                 ) : (
                   <div className="flex h-24 w-24 items-center justify-center rounded-2xl border bg-white text-sm font-bold text-[#4f46e5]">
                     {extBadge(detail.mime)}
@@ -457,8 +464,20 @@ export default function MediaPage() {
                     rel="noreferrer"
                     className="jf-btn-ghost px-3 py-1.5 text-sm"
                   >
-                    {t("media.view")}
+                    {detail.mime === "application/pdf" ? t("media.viewPdf") : t("media.view")}
                   </a>
+                  {/* Issue #383: for PDFs with an auto-generated preview,
+                      offer the preview image alongside the original. */}
+                  {detail.mime === "application/pdf" && detail.preview && (
+                    <a
+                      href={detail.preview}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="jf-btn-ghost px-3 py-1.5 text-sm"
+                    >
+                      {t("media.preview")}
+                    </a>
+                  )}
                   <button
                     onClick={() => copyUrl(detail.url)}
                     className="jf-btn-ghost px-3 py-1.5 text-sm"

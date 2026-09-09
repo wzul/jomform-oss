@@ -1181,6 +1181,9 @@ const DICT = {
   "media.deleted": { en: "Deleted ✓", ms: "Dibuang ✓", zh: "已删除 ✓", ta: "நீக்கப்பட்டது ✓", ar: "تم الحذف ✓" },
   "media.deleteFail": { en: "Failed to delete media.", ms: "Gagal buang media.", zh: "删除媒体失败。", ta: "ஊடகத்தை நீக்க முடியவில்லை.", ar: "فشل حذف الوسائط." },
   "media.view": { en: "View", ms: "Lihat", zh: "查看", ta: "பார்", ar: "عرض" },
+  // issue #383: PDF preview (auto-generated first-page thumbnail)
+  "media.viewPdf": { en: "View PDF", ms: "Lihat PDF", zh: "查看 PDF", ta: "PDF பார்", ar: "عرض PDF" },
+  "media.preview": { en: "Preview", ms: "Pratonton", zh: "预览", ta: "முன்னோட்டம்", ar: "معاينة" },
   "media.copyUrl": { en: "Copy URL", ms: "Salin URL", zh: "复制链接", ta: "URL நகலெடு", ar: "نسخ الرابط" },
   "media.copied": { en: "URL copied ✓", ms: "URL disalin ✓", zh: "链接已复制 ✓", ta: "URL நகலெடுக்கப்பட்டது ✓", ar: "تم نسخ الرابط ✓" },
   "media.pageOf": { en: "page {page} of {total}", ms: "halaman {page} daripada {total}", zh: "第 {page} 页，共 {total} 页", ta: "பக்கம் {page} / {total}", ar: "صفحة {page} من {total}" },

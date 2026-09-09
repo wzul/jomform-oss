@@ -29,6 +29,10 @@ type mediaOut struct {
 	// Sizes maps a generated image size name (thumbnail/medium/full) to its
 	// public URL for raster images (issue #382). Empty for non-images/GIFs.
 	Sizes     map[string]string `json:"sizes,omitempty"`
+	// Preview is the auto-generated first-page thumbnail URL for a PDF
+	// (issue #383), derived from the object key. Empty when no preview was
+	// generated.
+	Preview   string            `json:"preview,omitempty"`
 	CreatedAt string            `json:"created_at"`
 }
 
@@ -275,6 +279,19 @@ func (s *Server) uploadMediaPDF(ctx context.Context, acc string, raw []byte) (*m
 	if err := s.deps.Store.PutObject(ctx, key, mime, raw); err != nil {
 		return nil, mediaOut{}, fmt.Errorf("store: %w", err)
 	}
+	// Issue #383: auto-generate a first-page preview thumbnail with
+	// Ghostscript (bounded render) and store it alongside the PDF under the
+	// same account-scoped key namespace. Best-effort: if the render fails or
+	// gs is unavailable, the PDF still uploads and the grid falls back to
+	// the generic PDF tile.
+	previewURL := ""
+	if preview, perr := objstore.RenderPDFPreview(raw); perr == nil && len(preview) > 0 {
+		if pkey := objstore.BuildPDFPreviewKey(key); pkey != "" {
+			if perr := s.deps.Store.PutObject(ctx, pkey, "image/jpeg", preview); perr == nil {
+				previewURL = s.deps.Store.PublicURL(pkey)
+			}
+		}
+	}
 	// Issue #180: record the media row so list_media works.
 	rec := &dbstore.Media{
 		AccountID: acc, Key: key, URL: s.deps.Store.PublicURL(key),
@@ -287,7 +304,9 @@ func (s *Server) uploadMediaPDF(ctx context.Context, acc string, raw []byte) (*m
 	s.recordMCPMediaEvent(ctx, acc, "upload.pdf", map[string]any{
 		"mime": mime, "bytes": len(raw),
 	})
-	return nil, s.mediaOutFrom(ctx, acc, key, mime, int64(len(raw))), nil
+	out := s.mediaOutFrom(ctx, acc, key, mime, int64(len(raw)))
+	out.Preview = previewURL
+	return nil, out, nil
 }
 
 // mediaOutFromRow builds a mediaOut from a stored media row, deriving the
@@ -308,6 +327,13 @@ func (s *Server) mediaOutFromRow(m *dbstore.Media) mediaOut {
 		}
 		if len(sizes) > 0 {
 			out.Sizes = sizes
+		}
+	}
+	// Issue #383: expose the auto-generated PDF preview thumbnail URL,
+	// derived from the object key (no extra column needed).
+	if s.deps.Store != nil && m.Mime == "application/pdf" {
+		if pkey := objstore.BuildPDFPreviewKey(m.Key); pkey != "" {
+			out.Preview = s.deps.Store.PublicURL(pkey)
 		}
 	}
 	return out

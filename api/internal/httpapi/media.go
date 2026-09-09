@@ -35,6 +35,11 @@ type restMedia struct {
 	// GIFs. The media grid renders the thumbnail; the detail modal offers
 	// all sizes.
 	Sizes     map[string]string `json:"sizes,omitempty"`
+	// Preview is the auto-generated first-page thumbnail URL for a PDF
+	// (issue #383), derived from the object key. Empty when no preview was
+	// generated (e.g. Ghostscript unavailable at upload time). The media grid
+	// renders this instead of the generic PDF tile when present.
+	Preview   string            `json:"preview,omitempty"`
 	CreatedAt string            `json:"created_at"`
 }
 
@@ -81,6 +86,13 @@ func (h *RESTHandlers) listMedia(w http.ResponseWriter, r *http.Request, actx *A
 			}
 			if len(sizes) > 0 {
 				rm.Sizes = sizes
+			}
+		}
+		// Issue #383: expose the auto-generated PDF preview thumbnail URL,
+		// derived from the object key (no extra column needed).
+		if h.Store != nil && m.Mime == "application/pdf" {
+			if pkey := buildPDFPreviewKey(m.Key); pkey != "" {
+				rm.Preview = h.Store.PublicURL(pkey)
 			}
 		}
 		out = append(out, rm)

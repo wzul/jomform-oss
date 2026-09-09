@@ -20,7 +20,9 @@ import (
 	_ "image/jpeg" // sniff JPEG headers
 	_ "image/png"  // sniff PNG headers
 	"io"
+	"os/exec"
 	"strings"
+	"time"
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -75,6 +77,16 @@ const (
 	// MediumEdge is the long-edge target for the medium image size (issue
 	// #382). The detail modal offers this alongside thumbnail and full.
 	MediumEdge = 300
+
+	// PDFPreviewEdge is the long-edge target for the auto-generated PDF preview
+	// thumbnail (issue #383). The first page of a PDF is rendered to a JPEG at
+	// this size so the media grid can show a real thumbnail instead of a generic
+	// file tile.
+	PDFPreviewEdge = 300
+
+	// PDFPreviewTimeout bounds how long a single Ghostscript render may run so a
+	// malicious or pathological PDF cannot exhaust CPU (issue #383).
+	PDFPreviewTimeout = 15 * time.Second
 )
 
 // ImageUploadMIME maps an allowed canonical extension to its MIME type.
@@ -493,6 +505,80 @@ func BuildVariantKey(fullKey string, size ImageSize) string {
 	}
 	base, ext := fullKey[:dot], fullKey[dot:]
 	return base + "-" + string(size) + ext
+}
+
+// BuildPDFPreviewKey derives the object key for a PDF's auto-generated preview
+// image from the PDF's full-size key (issue #383). Full-size keys are
+// `u/{account}/{uuid}.pdf`; the preview key is `u/{account}/{uuid}-preview.jpg`
+// so it shares the same account-scoped namespace and base filename. Returns ""
+// when the key is not the canonical upload shape.
+func BuildPDFPreviewKey(fullKey string) string {
+	if AccountIDFromKey(fullKey) == "" {
+		return ""
+	}
+	dot := strings.LastIndex(fullKey, ".")
+	if dot <= 0 {
+		return ""
+	}
+	return fullKey[:dot] + "-preview.jpg"
+}
+
+// RenderPDFPreview renders the first page of a PDF to a JPEG thumbnail using
+// Ghostscript (the same approach WordPress uses, issue #383). The render is
+// bounded: only the first page is rendered, the output is size-capped to
+// PDFPreviewEdge on the long edge, and the whole render is killed after
+// PDFPreviewTimeout so a malicious or pathological PDF cannot exhaust CPU.
+//
+// It is best-effort: if the `gs` binary is unavailable (e.g. a minimal test
+// environment) it returns (nil, nil) so the caller can skip the preview rather
+// than fail the upload. The Dockerfile installs Ghostscript for production.
+func RenderPDFPreview(data []byte) ([]byte, error) {
+	if len(data) == 0 {
+		return nil, errors.New("fail kosong")
+	}
+	gsPath, err := exec.LookPath("gs")
+	if err != nil {
+		// Ghostscript not installed — skip the preview (best-effort). The
+		// api Dockerfile installs it for production.
+		return nil, nil
+	}
+	// Render the first page to a PNG at a bounded resolution, then downscale
+	// to the preview edge. -dFirstPage=1 -dLastPage=1 bounds the page count;
+	// -r72 keeps the raster small; -dSAFER disables PostScript file access.
+	ctx, cancel := context.WithTimeout(context.Background(), PDFPreviewTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, gsPath,
+		"-q", "-dSAFER", "-dBATCH", "-dNOPAUSE",
+		"-sDEVICE=png16m",
+		"-dFirstPage=1", "-dLastPage=1",
+		"-r72",
+		"-sOutputFile=-", "-",
+	)
+	cmd.Stdin = bytes.NewReader(data)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = io.Discard
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return nil, errors.New("papar PDF tamat masa")
+		}
+		return nil, errors.New("gagal papar PDF")
+	}
+	if out.Len() == 0 {
+		return nil, errors.New("gagal papar PDF")
+	}
+	img, err := decodeImage(out.Bytes())
+	if err != nil {
+		return nil, errors.New("gagal decode paparan PDF")
+	}
+	if b := img.Bounds(); b.Dx() > PDFPreviewEdge || b.Dy() > PDFPreviewEdge {
+		img = imaging.Fit(img, PDFPreviewEdge, PDFPreviewEdge, imaging.Lanczos)
+	}
+	preview := encodeJPEG(img, JPEGQuality)
+	if len(preview) == 0 {
+		return nil, errors.New("gagal papar PDF")
+	}
+	return preview, nil
 }
 
 // OptimizeImage re-encodes data so the stored artifact is ≤MaxStoredBytes.

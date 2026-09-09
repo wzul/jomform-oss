@@ -96,6 +96,8 @@ func sniffAssetType(data []byte) (string, bool) { return objstore.SniffAssetType
 func sniffPDFType(data []byte) (string, bool) { return objstore.SniffPDFType(data) }
 func buildUploadKey(accountID, ext string) string { return objstore.BuildUploadKey(accountID, ext) }
 func buildVariantKey(fullKey string, size objstore.ImageSize) string { return objstore.BuildVariantKey(fullKey, size) }
+func buildPDFPreviewKey(fullKey string) string { return objstore.BuildPDFPreviewKey(fullKey) }
+func renderPDFPreview(data []byte) ([]byte, error) { return objstore.RenderPDFPreview(data) }
 func isSizedImage(ct string) bool { return objstore.IsSizedImage(ct) }
 func optimizeImage(data []byte, ext string) ([]byte, error) { return objstore.OptimizeImage(data, ext) }
 func optimizeImageSize(data []byte, ext string, size objstore.ImageSize) ([]byte, error) { return objstore.OptimizeImageSize(data, ext, size) }
@@ -269,6 +271,26 @@ func (h *RESTHandlers) uploadImage(w http.ResponseWriter, r *http.Request, actx 
 			writeErr(w, http.StatusInternalServerError, "internal error")
 			return
 		}
+		// Issue #383: for PDFs, auto-generate a first-page preview thumbnail
+		// with Ghostscript (bounded render) and store it alongside the PDF
+		// under the same account-scoped key namespace. Best-effort: if the
+		// render fails or gs is unavailable, the PDF still uploads and the
+		// grid falls back to the generic PDF tile.
+		previewURL := ""
+		if mime == "application/pdf" {
+			if preview, perr := renderPDFPreview(data); perr == nil && len(preview) > 0 {
+				pkey := buildPDFPreviewKey(key)
+				if pkey != "" {
+					if perr := h.Store.PutObject(r.Context(), pkey, "image/jpeg", preview); perr != nil {
+						slog.Warn("upload_pdf_preview_put", "err", perr, "key", pkey, "account", actx.Account.ID)
+					} else {
+						previewURL = h.Store.PublicURL(pkey)
+					}
+				}
+			} else if perr != nil {
+				slog.Warn("upload_pdf_preview_failed", "err", perr, "account", actx.Account.ID)
+			}
+		}
 		slog.Info("upload_ok",
 			"account", actx.Account.ID, "key", key,
 			"in_bytes", len(data), "out_bytes", len(data), "mime", mime)
@@ -281,7 +303,11 @@ func (h *RESTHandlers) uploadImage(w http.ResponseWriter, r *http.Request, actx 
 		if isCodeAsset(mime) {
 			h.scanCodeAsset(r, actx, rec, key, mime, data)
 		}
-		respond(w, http.StatusOK, map[string]string{"url": h.Store.PublicURL(key)})
+		resp := map[string]string{"url": h.Store.PublicURL(key)}
+		if previewURL != "" {
+			resp["preview"] = previewURL
+		}
+		respond(w, http.StatusOK, resp)
 		return
 	}
 

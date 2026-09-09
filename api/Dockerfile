@@ -10,7 +10,11 @@ RUN CGO_ENABLED=0 go build -trimpath \
   -o /jomform-api ./cmd/jomform-api
 
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates tzdata
+# ghostscript is required for auto-generated PDF preview thumbnails (issue
+# #383): the api renders the first page of an uploaded PDF to a JPEG with the
+# `gs` binary (WordPress-style). Without it, PDF uploads still work but get no
+# preview image.
+RUN apk add --no-cache ca-certificates tzdata ghostscript
 COPY --from=build /jomform-api /usr/local/bin/jomform-api
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/jomform-api"]
