@@ -16,7 +16,7 @@ export function Shell({
   active,
 }: {
   children: React.ReactNode;
-  active: "dashboard" | "forms" | "products" | "sales" | "spam" | "deliveries" | "subscriptions" | "settings" | "profile" | "media";
+  active: "dashboard" | "forms" | "products" | "sales" | "spam" | "deliveries" | "subscriptions" | "settings" | "profile" | "media" | "admin";
 }) {
   const { user, spaces, reload } = useSession();
   const [space, setSpace] = useState<string>("");
@@ -137,7 +137,7 @@ export function Shell({
     window.location.href = "/login";
   }
 
-  const nav = [
+  let nav = [
     { key: "dashboard", href: "/", label: t("nav.dashboard"), icon: "◧" },
     { key: "forms", href: "/forms", label: t("nav.forms"), icon: "✎" },
     { key: "products", href: "/products", label: t("prod.title"), icon: "◧" },
@@ -153,6 +153,11 @@ export function Shell({
     { key: "settings", href: "/settings", label: t("nav.settings"), icon: "⚙" },
     { key: "profile", href: "/profile", label: t("prof.title"), icon: "👤" },
   ];
+
+  // Issue #387: super-admins (#385) get a platform-wide Admin nav link.
+  if (user?.is_super_admin) {
+    nav.push({ key: "admin", href: "/admin", label: t("nav.admin"), icon: "🛡" });
+  }
 
   return (
     <div className="flex min-h-screen">

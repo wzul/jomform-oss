@@ -100,6 +100,12 @@ type RESTHandlers struct {
 	// Issue #185: BNM exchange-rate cache (Valkey). Nil in bare-mode tests;
 	// the currency-rates endpoint returns empty.
 	Currency *currency.Store
+
+	// SuperAdmin (issue #385/#387): reports whether an email is on the site
+	// super-admin allowlist (SUPER_ADMIN_EMAILS). Nil → no super-admins.
+	// Gates the /v1/admin/overview endpoint (issue #387) so platform-wide
+	// usage metrics are only visible to the platform owner.
+	SuperAdmin func(email string) bool
 }
 
 // RegisterRoutes wires REST endpoints.
@@ -222,6 +228,9 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	// Issue #154: update the card on an existing subscription (re-tokenize).
 	mux.Handle("POST /v1/rest/subscriptions/{id}/update-card", h.authed(h.updateSubscriptionCard))
 	mux.Handle("GET /v1/rest/dashboard-bundle", h.authed(h.dashboardBundle))
+	// Issue #387: super-admin platform-wide usage overview. Gated on the
+	// super-admin role (#385); non-admins get 403. Read-only + audited.
+	mux.Handle("GET /v1/admin/overview", h.authed(h.handleAdminOverview))
 	mux.Handle("GET /v1/rest/analytics/forms", h.authed(h.formAnalytics))
 	mux.Handle("GET /v1/rest/analytics/products", h.authed(h.productAnalytics))
 	// Issue #92: event-tracking read endpoints (audit log + behaviour analytics).

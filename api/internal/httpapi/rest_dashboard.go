@@ -110,6 +110,9 @@ func (h *RESTHandlers) dashboardBundle(w http.ResponseWriter, r *http.Request, a
 				"id": u.ID, "email": u.Email, "name": u.Name,
 				"avatar_url": u.AvatarURL, "phone": u.Phone, "timezone": u.Timezone, "totp_enabled": u.TOTPEnabled, "created_at": u.CreatedAt,
 				"default_space_id": defSpace,
+				// Issue #387: whether the session user is a site super-admin
+				// (#385). The frontend uses this to show the /admin nav link.
+				"is_super_admin": h.SuperAdmin != nil && h.SuperAdmin(strings.TrimSpace(u.Email)),
 			}
 		}
 	}

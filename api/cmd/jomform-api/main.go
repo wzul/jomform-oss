@@ -279,6 +279,10 @@ func main() {
 			Currency: curStore,
 			// Issue #212: auto-TLS at origin for DNS-only custom domains.
 			TLS: tlsMgr,
+			// Issue #385/#387: site super-admin allowlist (SUPER_ADMIN_EMAILS).
+			// Gates the /v1/admin/overview endpoint (issue #387) so
+			// platform-wide usage metrics are only visible to the owner.
+			SuperAdmin: cfg.IsSuperAdmin,
 		}
 		pay.OnPaid = func(ctx context.Context, accountID, event string, payload map[string]any) {
 			// Issue #196: form-scoped webhooks fire for the sale's form; the

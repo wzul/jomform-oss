@@ -37,6 +37,7 @@ export type SessionUser = {
   timezone?: string; // issue #191 preferred IANA timezone (empty = Auto → browser default)
   totp_enabled?: boolean;
   default_space_id?: string; // issue #164 (empty = no default → space-picker on login)
+  is_super_admin?: boolean; // issue #387 (site super-admin, #385)
 };
 
 export type SpaceRow = { id: string; name: string; slug: string; role?: string };
