@@ -41,6 +41,10 @@ Parity checklist (dashboard → MCP):
   `delete_webhook`, `webhook_deliveries`
 - API keys → `list_api_keys`, `create_api_key`, `revoke_api_key`
 - Event tracking / audit log → `list_events` (account-scoped, read-only)
+- Space landing page (customizable storefront, #360/#362) →
+  `get_space_landing_page`, `set_space_landing_page` (incl. embedded `forms[]`)
+- Media library / asset upload (image + code, tenant-scoped, scan-gated,
+  #361/#364) → `list_media`, `upload_media`
 
 ## Conventions
 
