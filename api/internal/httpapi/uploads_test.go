@@ -19,6 +19,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+
+	"github.com/wzul/jomform/api/internal/objstore"
 )
 
 // tinyPNG returns a real 16x16 PNG so sniffImageType/optimizeImage have
@@ -480,5 +482,115 @@ func TestAccountIDFromKey(t *testing.T) {
 		if got := accountIDFromKey(k); got != "" {
 			t.Fatalf("accountIDFromKey(%q) = %q, want empty (non-canonical)", k, got)
 		}
+	}
+}
+
+// Issue #382: PDF sniffing accepts a real %PDF- header and rejects everything
+// else (images, code, plain text, empty).
+func TestSniffPDFType(t *testing.T) {
+	cases := []struct {
+		name   string
+		data   []byte
+		want   string
+		wantOK bool
+	}{
+		{"pdf-header", []byte("%PDF-1.7\n..."), ".pdf", true},
+		{"pdf-min", []byte("%PDF-"), ".pdf", true},
+		{"png", tinyPNG(t), "", false},
+		{"css", []byte("body { color: red; }"), "", false},
+		{"plain", []byte("hello world"), "", false},
+		{"empty", nil, "", false},
+		{"too-short", []byte("%PDF"), "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ext, ok := sniffPDFType(c.data)
+			if ok != c.wantOK || ext != c.want {
+				t.Fatalf("sniffPDFType = (%q, %v), want (%q, %v)", ext, ok, c.want, c.wantOK)
+			}
+		})
+	}
+}
+
+// Issue #382: BuildVariantKey derives the variant key from the full-size key,
+// keeping the same account-scoped namespace and base filename.
+func TestBuildVariantKey(t *testing.T) {
+	key := buildUploadKey("acct-382", ".png")
+	for _, size := range []objstore.ImageSize{objstore.SizeThumb, objstore.SizeMedium, objstore.SizeFull} {
+		vk := buildVariantKey(key, size)
+		if !strings.HasPrefix(vk, "u/acct-382/") {
+			t.Fatalf("variant key %q must stay in the account namespace", vk)
+		}
+		if !strings.HasSuffix(vk, "-"+string(size)+".png") {
+			t.Fatalf("variant key %q must end in -%s.png", vk, size)
+		}
+		if strings.Count(vk, "/") != 2 {
+			t.Fatalf("variant key %q must have exactly two path segments", vk)
+		}
+	}
+	// Non-canonical keys yield no variant.
+	if vk := buildVariantKey("logo.png", objstore.SizeThumb); vk != "" {
+		t.Fatalf("buildVariantKey(logo.png) = %q, want empty", vk)
+	}
+}
+
+// Issue #382: isSizedImage is true only for raster images that get
+// thumbnail/medium/full variants (png/jpeg/webp). GIFs, SVG and PDFs are not
+// sized.
+func TestIsSizedImage(t *testing.T) {
+	for _, ct := range []string{"image/png", "image/jpeg", "image/webp"} {
+		if !isSizedImage(ct) {
+			t.Errorf("isSizedImage(%q) = false, want true", ct)
+		}
+	}
+	for _, ct := range []string{"image/gif", "image/svg+xml", "application/pdf", "text/css; charset=utf-8"} {
+		if isSizedImage(ct) {
+			t.Errorf("isSizedImage(%q) = true, want false", ct)
+		}
+	}
+}
+
+// Issue #382: OptimizeImageSize produces a thumbnail/medium variant whose long
+// edge is at most the size target, and a full variant identical to
+// OptimizeImage. All stay under the stored cap.
+func TestOptimizeImageSize(t *testing.T) {
+	big := generateLargeImageFixture() // 2000x3000
+	thumb, err := optimizeImageSize(big, ".png", objstore.SizeThumb)
+	if err != nil {
+		t.Fatalf("optimize thumb: %v", err)
+	}
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(thumb))
+	if err != nil {
+		t.Fatalf("decode thumb: %v", err)
+	}
+	if cfg.Width > thumbEdge || cfg.Height > thumbEdge {
+		t.Fatalf("thumbnail %dx%d exceeds %dpx long edge", cfg.Width, cfg.Height, thumbEdge)
+	}
+	if len(thumb) > maxStoredBytes {
+		t.Fatalf("thumbnail = %d bytes > cap %d", len(thumb), maxStoredBytes)
+	}
+
+	medium, err := optimizeImageSize(big, ".png", objstore.SizeMedium)
+	if err != nil {
+		t.Fatalf("optimize medium: %v", err)
+	}
+	cfg, _, err = image.DecodeConfig(bytes.NewReader(medium))
+	if err != nil {
+		t.Fatalf("decode medium: %v", err)
+	}
+	if cfg.Width > mediumEdge || cfg.Height > mediumEdge {
+		t.Fatalf("medium %dx%d exceeds %dpx long edge", cfg.Width, cfg.Height, mediumEdge)
+	}
+
+	full, err := optimizeImageSize(big, ".png", objstore.SizeFull)
+	if err != nil {
+		t.Fatalf("optimize full: %v", err)
+	}
+	ref, err := optimizeImage(big, ".png")
+	if err != nil {
+		t.Fatalf("optimize ref: %v", err)
+	}
+	if !bytes.Equal(full, ref) {
+		t.Fatal("full variant must equal OptimizeImage output")
 	}
 }

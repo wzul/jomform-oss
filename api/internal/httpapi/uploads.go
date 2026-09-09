@@ -57,6 +57,7 @@ var _ ObjectStoreIface = (*ObjectStore)(nil)
 var (
 	imageUploadMIME = objstore.ImageUploadMIME
 	uploadAssetMIME = objstore.UploadAssetMIME
+	uploadPDFMIME   = objstore.UploadPDFMIME
 )
 
 // Constant aliases (objstore exports untyped consts so callers can use them
@@ -71,6 +72,9 @@ const (
 	avatarLongEdge      = objstore.AvatarLongEdge
 	maxAssetBytes       = objstore.MaxAssetBytes
 	maxAssetUploadBytes = objstore.MaxAssetUploadBytes
+	maxPDFBytes         = objstore.MaxPDFBytes
+	thumbEdge           = objstore.ThumbEdge
+	mediumEdge          = objstore.MediumEdge
 )
 
 func NewObjectStore(endpoint, accessKey, secretKey, bucket, region, publicBase string) (*ObjectStore, error) {
@@ -89,8 +93,12 @@ func scanGateAllowed(ctx context.Context, media *dbstore.MediaStore, key, ct str
 func publicReadPolicy(bucket string) string { return objstore.PublicReadPolicy(bucket) }
 func sniffImageType(data []byte) (string, bool) { return objstore.SniffImageType(data) }
 func sniffAssetType(data []byte) (string, bool) { return objstore.SniffAssetType(data) }
+func sniffPDFType(data []byte) (string, bool) { return objstore.SniffPDFType(data) }
 func buildUploadKey(accountID, ext string) string { return objstore.BuildUploadKey(accountID, ext) }
+func buildVariantKey(fullKey string, size objstore.ImageSize) string { return objstore.BuildVariantKey(fullKey, size) }
+func isSizedImage(ct string) bool { return objstore.IsSizedImage(ct) }
 func optimizeImage(data []byte, ext string) ([]byte, error) { return objstore.OptimizeImage(data, ext) }
+func optimizeImageSize(data []byte, ext string, size objstore.ImageSize) ([]byte, error) { return objstore.OptimizeImageSize(data, ext, size) }
 func optimizeAvatar(data []byte, ext string) ([]byte, error) { return objstore.OptimizeAvatar(data, ext) }
 
 // ── HTTP handlers ────────────────────────────────────────────────────────────
@@ -163,12 +171,20 @@ func (h *RESTHandlers) handleMedia(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(body)
 }
 
-// uploadImage handles POST /v1/rest/uploads/image (multipart). It optimises
-// the uploaded image and stores it under an account-scoped key, returning the
-// public URL.
+// uploadImage handles POST /v1/rest/uploads/image (multipart). It accepts the
+// full media allowlist — images (png/jpeg/webp/gif), merchant code assets
+// (css/js/html/svg/woff2) and PDFs — and stores the object under an
+// account-scoped key, returning the public URL(s).
+//
+// Issue #382: for raster images (png/jpeg/webp) it additionally generates
+// thumbnail / medium / full variants and stores them under the same
+// account-scoped key namespace (`u/{acct}/{uuid}-{size}.{ext}`). The response
+// carries a `sizes` map so the media grid can render the thumbnail and the
+// detail modal can offer all three.
 //
 // Request: multipart/form-data with a single "file" part (≤20MB).
-// Response: {"url": "..."} 200, or 400 on validation errors.
+// Response: {"url": "...", "sizes": {"thumbnail": "...", "medium": "...",
+// "full": "..."}} 200, or 400 on validation errors.
 func (h *RESTHandlers) uploadImage(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	if _, ok := h.requireWriteRole(w, r, actx); !ok {
 		return
@@ -213,14 +229,61 @@ func (h *RESTHandlers) uploadImage(w http.ResponseWriter, r *http.Request, actx 
 	}
 
 	// Content-type allowlist from the file's actual bytes (magic), not the
-	// client's declared header or filename (both spoofable).
+	// client's declared header or filename (both spoofable). Issue #382: the
+	// media-page upload accepts the full allowlist — images, code assets and
+	// PDFs — so we sniff in that order.
 	ext, ok := sniffImageType(data)
 	if !ok {
+		ext, ok = sniffAssetType(data)
+	}
+	if !ok {
+		ext, ok = sniffPDFType(data)
+	}
+	if !ok {
 		recordUploadFailure("bad_type")
-		writeErr(w, http.StatusBadRequest, "jenis imej tidak disokong (png/jpeg/webp/gif sahaja)")
+		writeErr(w, http.StatusBadRequest, "jenis fail tidak disokong (png/jpeg/webp/gif/css/js/html/svg/woff2/pdf sahaja)")
 		return
 	}
-	mime := imageUploadMIME[ext]
+
+	var mime string
+	if m, isImg := imageUploadMIME[ext]; isImg {
+		mime = m
+	} else if m, isAsset := uploadAssetMIME[ext]; isAsset {
+		mime = m
+	} else {
+		mime = uploadPDFMIME[ext]
+	}
+
+	// Issue #382: code assets and PDFs are stored byte-for-byte (no re-encode)
+	// under a bounded stored cap; images are optimised and get sized variants.
+	if isCodeAsset(mime) || mime == "application/pdf" {
+		if len(data) > maxAssetBytes {
+			recordUploadFailure("asset_too_large")
+			writeErr(w, http.StatusRequestEntityTooLarge, "fail melebihi had 2MB")
+			return
+		}
+		key := buildUploadKey(actx.Account.ID, ext)
+		if err := h.Store.PutObject(r.Context(), key, mime, data); err != nil {
+			recordUploadFailure("store")
+			slog.Error("upload_put", "err", err, "account", actx.Account.ID)
+			writeErr(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		slog.Info("upload_ok",
+			"account", actx.Account.ID, "key", key,
+			"in_bytes", len(data), "out_bytes", len(data), "mime", mime)
+		h.recordEvent(r, actx, h.sessionOwnerID(r), "upload.image", map[string]any{
+			"mime": mime, "in_bytes": len(data), "out_bytes": len(data),
+		})
+		rec := h.recordMedia(r, actx, key, mime, int64(len(data)), dbstore.MediaSourceMerchant, "")
+		// Issue #364: code assets are scan-gated; PDFs are not code assets and
+		// serve immediately. Only run the scan pipeline for code assets.
+		if isCodeAsset(mime) {
+			h.scanCodeAsset(r, actx, rec, key, mime, data)
+		}
+		respond(w, http.StatusOK, map[string]string{"url": h.Store.PublicURL(key)})
+		return
+	}
 
 	stored, err := optimizeImage(data, ext)
 	if err != nil {
@@ -242,6 +305,26 @@ func (h *RESTHandlers) uploadImage(w http.ResponseWriter, r *http.Request, actx 
 		return
 	}
 
+	// Issue #382: generate + store thumbnail/medium/full variants for raster
+	// images (png/jpeg/webp). GIFs are animated and stored as-is, so they get
+	// no sized variants. Variant keys share the full-size key's namespace.
+	sizes := map[string]string{}
+	if isSizedImage(mime) {
+		for _, size := range objstore.ImageSizes {
+			variant, verr := optimizeImageSize(data, ext, size)
+			if verr != nil {
+				slog.Warn("upload_size_failed", "err", verr, "size", size, "account", actx.Account.ID)
+				continue
+			}
+			vkey := buildVariantKey(key, size)
+			if verr := h.Store.PutObject(r.Context(), vkey, "image/jpeg", variant); verr != nil {
+				slog.Warn("upload_size_put", "err", verr, "size", size, "key", vkey)
+				continue
+			}
+			sizes[string(size)] = h.Store.PublicURL(vkey)
+		}
+	}
+
 	slog.Info("upload_ok",
 		"account", actx.Account.ID, "key", key,
 		"in_bytes", len(data), "out_bytes", len(stored), "mime", mime)
@@ -251,7 +334,7 @@ func (h *RESTHandlers) uploadImage(w http.ResponseWriter, r *http.Request, actx 
 	})
 	// Issue #180: record the object in the media library (best-effort).
 	h.recordMedia(r, actx, key, mime, int64(len(stored)), dbstore.MediaSourceMerchant, "")
-	respond(w, http.StatusOK, map[string]string{"url": h.Store.PublicURL(key)})
+	respond(w, http.StatusOK, map[string]any{"url": h.Store.PublicURL(key), "sizes": sizes})
 }
 
 // uploadAvatar handles POST /v1/rest/uploads/avatar (multipart). It accepts a
@@ -427,17 +510,29 @@ func (h *RESTHandlers) uploadAsset(w http.ResponseWriter, r *http.Request, actx 
 	// Issue #180: record the object in the media library (best-effort).
 	rec := h.recordMedia(r, actx, key, mime, int64(len(data)), dbstore.MediaSourceMerchant, "")
 
-	// Issue #364: code-asset scan gate. Deterministic heuristics first; if
-	// they flag the file we persist 'quarantined' immediately. Otherwise set
-	// 'scanning' and enqueue a background asset_scan job. Fail-closed: any
-	// gap leaves the row 'pending'/'scanning', which never serves.
+	// Issue #364: code-asset scan gate (shared with the media-page upload).
+	h.scanCodeAsset(r, actx, rec, key, mime, data)
+
+	respond(w, http.StatusOK, map[string]string{"url": h.Store.PublicURL(key)})
+}
+
+// scanCodeAsset runs the issue #364 code-asset scan gate on a freshly stored
+// code asset. Deterministic heuristics first; if they flag the file we persist
+// 'quarantined' immediately. Otherwise set 'scanning' and enqueue a background
+// asset_scan job. Fail-closed: any gap leaves the row 'pending'/'scanning',
+// which never serves. rec may be nil (media metadata unavailable) — the scan
+// status is then simply not persisted.
+func (h *RESTHandlers) scanCodeAsset(r *http.Request, actx *AccountCtx, rec *dbstore.Media, key, mime string, data []byte) {
+	if rec == nil || h.Media == nil {
+		return
+	}
 	det := assetgate.DeterministicScan(data, mime)
 	var scanStatus, scanReason string
 	switch {
 	case det.Status == assetgate.StatusQuarantined:
 		scanStatus = assetgate.StatusQuarantined
 		scanReason = strings.Join(det.Reasons, "; ")
-	case h.AssetQueue != nil && rec != nil && h.Media != nil:
+	case h.AssetQueue != nil:
 		scanStatus = assetgate.StatusScanning
 		scanReason = "queued for AI review"
 		_ = h.Media.MarkScanning(r.Context(), actx.Account.ID, rec.ID, scanReason)
@@ -448,12 +543,10 @@ func (h *RESTHandlers) uploadAsset(w http.ResponseWriter, r *http.Request, actx 
 		} else {
 			slog.Info("asset_scan_enqueued", "media", rec.ID, "key", key)
 		}
-	case rec != nil && h.Media != nil:
+	default:
 		scanStatus = assetgate.StatusPending
 	}
-	if scanStatus != "" && rec != nil && h.Media != nil {
+	if scanStatus != "" {
 		_ = h.Media.SetScanStatus(r.Context(), actx.Account.ID, rec.ID, scanStatus, scanReason)
 	}
-
-	respond(w, http.StatusOK, map[string]string{"url": h.Store.PublicURL(key)})
 }

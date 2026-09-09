@@ -26,7 +26,10 @@ type mediaOut struct {
 	Source     string `json:"source"`
 	ScanStatus string `json:"scan_status,omitempty"`
 	ScanReason string `json:"scan_reason,omitempty"`
-	CreatedAt  string `json:"created_at"`
+	// Sizes maps a generated image size name (thumbnail/medium/full) to its
+	// public URL for raster images (issue #382). Empty for non-images/GIFs.
+	Sizes     map[string]string `json:"sizes,omitempty"`
+	CreatedAt string            `json:"created_at"`
 }
 
 type listMediaIn struct {
@@ -69,12 +72,7 @@ func (s *Server) listMedia(ctx context.Context, _ *mcp.CallToolRequest, in listM
 		}
 		total += tot
 		for _, m := range items {
-			out = append(out, mediaOut{
-				ID: m.ID, FormID: m.FormID, Key: m.Key, URL: m.URL,
-				Mime: m.Mime, Size: m.Size, Source: m.Source,
-				ScanStatus: m.ScanStatus, ScanReason: m.ScanReason,
-				CreatedAt: m.CreatedAt.UTC().Format(time.RFC3339),
-			})
+			out = append(out, s.mediaOutFromRow(m))
 		}
 	}
 	return nil, map[string]any{
@@ -92,8 +90,8 @@ func (s *Server) listMedia(ctx context.Context, _ *mcp.CallToolRequest, in listM
 // the background scan to flip them to 'ok' before they render.
 
 type uploadMediaIn struct {
-	Kind string `json:"kind" jsonschema:"Jenis fail: 'image' (png/jpeg/webp/gif — dioptimumkan, strip EXIF) atau 'asset' (css/js/html/svg/woff2 — disimpan asli, scan-gated)"`
-	Data string `json:"data" jsonschema:"Fail content base64-encoded. Imej ≤20MB input / ≤2MB stored; asset ≤20MB input / ≤2MB stored."`
+	Kind string `json:"kind" jsonschema:"Jenis fail: 'image' (png/jpeg/webp/gif — dioptimumkan, strip EXIF; png/jpeg/webp dapat saiz thumbnail/medium/full), 'asset' (css/js/html/svg/woff2 — disimpan asli, scan-gated) atau 'pdf' (disimpan asli)"`
+	Data string `json:"data" jsonschema:"Fail content base64-encoded. Imej ≤20MB input / ≤2MB stored; asset ≤20MB input / ≤2MB stored; pdf ≤20MB input / ≤2MB stored."`
 }
 
 func (s *Server) uploadMedia(
@@ -124,8 +122,10 @@ func (s *Server) uploadMedia(
 		return s.uploadMediaImage(ctx, acc, raw)
 	case "asset":
 		return s.uploadMediaAsset(ctx, acc, raw)
+	case "pdf":
+		return s.uploadMediaPDF(ctx, acc, raw)
 	default:
-		return nil, mediaOut{}, errors.New("kind mesti 'image' atau 'asset'")
+		return nil, mediaOut{}, errors.New("kind mesti 'image', 'asset' atau 'pdf'")
 	}
 }
 
@@ -156,11 +156,33 @@ func (s *Server) uploadMediaImage(ctx context.Context, acc string, raw []byte) (
 	if err := s.deps.Store.PutObject(ctx, key, mime, stored); err != nil {
 		return nil, mediaOut{}, fmt.Errorf("store: %w", err)
 	}
+	// Issue #382: generate + store thumbnail/medium/full variants for raster
+	// images (png/jpeg/webp). GIFs are animated and stored as-is, so they get
+	// no sized variants.
+	sizes := map[string]string{}
+	if objstore.IsSizedImage(mime) {
+		for _, size := range objstore.ImageSizes {
+			variant, verr := objstore.OptimizeImageSize(raw, ext, size)
+			if verr != nil {
+				continue
+			}
+			vkey := objstore.BuildVariantKey(key, size)
+			if vkey == "" {
+				continue
+			}
+			if verr := s.deps.Store.PutObject(ctx, vkey, "image/jpeg", variant); verr != nil {
+				continue
+			}
+			sizes[string(size)] = s.deps.Store.PublicURL(vkey)
+		}
+	}
 	// Issue #92: audit upload.image (best-effort).
 	s.recordMCPMediaEvent(ctx, acc, "upload.image", map[string]any{
 		"mime": mime, "out_bytes": len(stored),
 	})
-	return nil, s.mediaOutFrom(ctx, acc, key, mime, int64(len(stored))), nil
+	out := s.mediaOutFrom(ctx, acc, key, mime, int64(len(stored)))
+	out.Sizes = sizes
+	return nil, out, nil
 }
 
 // uploadMediaAsset mirrors the dashboard POST /v1/rest/uploads/asset: sniffed
@@ -225,6 +247,70 @@ func (s *Server) uploadMediaAsset(ctx context.Context, acc string, raw []byte) (
 		_ = s.deps.Media.SetScanStatus(ctx, acc, rec.ID, scanStatus, scanReason)
 	}
 	return nil, s.mediaOutFrom(ctx, acc, key, mime, int64(len(raw))), nil
+}
+
+// uploadMediaPDF mirrors the dashboard media-page upload for PDFs (issue
+// #382): sniffed PDF allowlist, stored byte-for-byte under a bounded stored
+// cap, merchant media row. PDFs are not code assets, so they are never
+// scan-gated and serve immediately.
+func (s *Server) uploadMediaPDF(ctx context.Context, acc string, raw []byte) (*mcp.CallToolResult, mediaOut, error) {
+	if s.deps.Media == nil {
+		return nil, mediaOut{}, errors.New("media metadata tidak tersedia")
+	}
+	if len(raw) == 0 {
+		return nil, mediaOut{}, errors.New("fail kosong")
+	}
+	if len(raw) > objstore.MaxUploadBytes {
+		return nil, mediaOut{}, fmt.Errorf("fail melebihi had %dMB", objstore.MaxUploadBytes>>20)
+	}
+	if len(raw) > objstore.MaxPDFBytes {
+		return nil, mediaOut{}, fmt.Errorf("fail melebihi had %dMB", objstore.MaxPDFBytes>>20)
+	}
+	ext, ok := objstore.SniffPDFType(raw)
+	if !ok {
+		return nil, mediaOut{}, errors.New("jenis fail tidak disokong (pdf sahaja)")
+	}
+	mime := objstore.UploadPDFMIME[ext]
+	key := objstore.BuildUploadKey(acc, ext)
+	if err := s.deps.Store.PutObject(ctx, key, mime, raw); err != nil {
+		return nil, mediaOut{}, fmt.Errorf("store: %w", err)
+	}
+	// Issue #180: record the media row so list_media works.
+	rec := &dbstore.Media{
+		AccountID: acc, Key: key, URL: s.deps.Store.PublicURL(key),
+		Mime: mime, Size: int64(len(raw)), Source: dbstore.MediaSourceMerchant,
+	}
+	if err := s.deps.Media.Create(ctx, rec); err != nil {
+		return nil, mediaOut{}, fmt.Errorf("media: %w", err)
+	}
+	// Issue #92: audit upload.pdf (best-effort).
+	s.recordMCPMediaEvent(ctx, acc, "upload.pdf", map[string]any{
+		"mime": mime, "bytes": len(raw),
+	})
+	return nil, s.mediaOutFrom(ctx, acc, key, mime, int64(len(raw))), nil
+}
+
+// mediaOutFromRow builds a mediaOut from a stored media row, deriving the
+// generated image-size variant URLs from the object key (issue #382).
+func (s *Server) mediaOutFromRow(m *dbstore.Media) mediaOut {
+	out := mediaOut{
+		ID: m.ID, FormID: m.FormID, Key: m.Key, URL: m.URL,
+		Mime: m.Mime, Size: m.Size, Source: m.Source,
+		ScanStatus: m.ScanStatus, ScanReason: m.ScanReason,
+		CreatedAt: m.CreatedAt.UTC().Format(time.RFC3339),
+	}
+	if s.deps.Store != nil && objstore.IsSizedImage(m.Mime) {
+		sizes := map[string]string{}
+		for _, size := range objstore.ImageSizes {
+			if vkey := objstore.BuildVariantKey(m.Key, size); vkey != "" {
+				sizes[string(size)] = s.deps.Store.PublicURL(vkey)
+			}
+		}
+		if len(sizes) > 0 {
+			out.Sizes = sizes
+		}
+	}
+	return out
 }
 
 // mediaOutFrom builds a mediaOut for a freshly stored object, best-effort

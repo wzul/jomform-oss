@@ -1166,7 +1166,7 @@ const DICT = {
   // issue #180: media library (WordPress-style)
   "media.title": { en: "Media", ms: "Media", zh: "媒体", ta: "ஊடகம்", ar: "الوسائط" },
   "media.subtitle": { en: "All images and code files you've uploaded, in one place.", ms: "Semua gambar & fail kod yang anda muat naik, di satu tempat.", zh: "您上传的所有图片和代码文件，集中在一处。", ta: "நீங்கள் பதிவேற்றிய அனைத்து படங்கள் மற்றும் குறியீடு கோப்புகளும், ஒரே இடத்தில்.", ar: "كل الصور وملفات الأكواد التي رفعتها في مكان واحد." },
-  "media.empty": { en: "No media yet — upload an image or a code file (CSS/JS/HTML) in a form, product or landing page.", ms: "Belum ada media — muat naik gambar atau fail kod (CSS/JS/HTML) dalam borang, produk atau halaman pendaratan.", zh: "暂无媒体 — 在表单、商品或落地页中上传图片或代码文件（CSS/JS/HTML）。", ta: "இன்னும் ஊடகம் இல்லை — படிவம், தயாரிப்பு அல்லது தரையிறக்கப் பக்கத்தில் படம் அல்லது குறியீடு கோப்பை (CSS/JS/HTML) பதிவேற்றவும்.", ar: "لا وسائط بعد — ارفع صورة أو ملف أكواد (CSS/JS/HTML) في نموذج أو منتج أو صفحة هبوط." },
+  "media.empty": { en: "No media yet — upload an image, code file (CSS/JS/HTML) or PDF above.", ms: "Belum ada media — muat naik gambar, fail kod (CSS/JS/HTML) atau PDF di atas.", zh: "暂无媒体 — 请在上方上传图片、代码文件（CSS/JS/HTML）或 PDF。", ta: "இன்னும் ஊடகம் இல்லை — மேலே படம், குறியீடு கோப்பு (CSS/JS/HTML) அல்லது PDF பதிவேற்றவும்.", ar: "لا وسائط بعد — ارفع صورة أو ملف أكواد (CSS/JS/HTML) أو PDF أعلاه." },
   "media.codeFile": { en: "Code file", ms: "Fail kod", zh: "代码文件", ta: "குறியீடு கோப்பு", ar: "ملف أكواد" },
   "media.countItems": { en: "{n} items", ms: "{n} item", zh: "{n} 项", ta: "{n} உருப்படிகள்", ar: "{n} عنصر" },
   "media.filterForm": { en: "All forms", ms: "Semua borang", zh: "所有表单", ta: "அனைத்து படிவங்கள்", ar: "كل النماذج" },
@@ -1184,6 +1184,22 @@ const DICT = {
   "media.copyUrl": { en: "Copy URL", ms: "Salin URL", zh: "复制链接", ta: "URL நகலெடு", ar: "نسخ الرابط" },
   "media.copied": { en: "URL copied ✓", ms: "URL disalin ✓", zh: "链接已复制 ✓", ta: "URL நகலெடுக்கப்பட்டது ✓", ar: "تم نسخ الرابط ✓" },
   "media.pageOf": { en: "page {page} of {total}", ms: "halaman {page} daripada {total}", zh: "第 {page} 页，共 {total} 页", ta: "பக்கம் {page} / {total}", ar: "صفحة {page} من {total}" },
+  // issue #382: media page upload + multiple image sizes
+  "media.addNew": { en: "Add New Media", ms: "Tambah Media Baharu", zh: "添加新媒体", ta: "புதிய ஊடகம் சேர்", ar: "إضافة وسائط جديدة" },
+  "media.upload": { en: "Upload", ms: "Muat naik", zh: "上传", ta: "பதிவேற்று", ar: "رفع" },
+  "media.uploading": { en: "Uploading…", ms: "Memuat naik…", zh: "上传中…", ta: "பதிவேற்றுகிறது…", ar: "جارٍ الرفع…" },
+  "media.uploadFail": { en: "Upload failed.", ms: "Muat naik gagal.", zh: "上传失败。", ta: "பதிவேற்றம் தோல்வி.", ar: "فشل الرفع." },
+  "media.uploaded": { en: "Uploaded ✓", ms: "Dimuat naik ✓", zh: "已上传 ✓", ta: "பதிவேற்றப்பட்டது ✓", ar: "تم الرفع ✓" },
+  "media.dropHint": { en: "Drag & drop files here, or click to browse", ms: "Seret & lepas fail di sini, atau klik untuk pilih", zh: "将文件拖放到此处，或点击浏览", ta: "கோப்புகளை இங்கே இழுத்து விடுங்கள், அல்லது உலாவ கிளிக் செய்யவும்", ar: "اسحب الملفات وأفلتها هنا، أو انقر للتصفح" },
+  "media.uploadTypes": { en: "Images (PNG/JPEG/WebP/GIF), code files (CSS/JS/HTML/SVG/WOFF2) and PDFs. Up to 20MB.", ms: "Gambar (PNG/JPEG/WebP/GIF), fail kod (CSS/JS/HTML/SVG/WOFF2) dan PDF. Sehingga 20MB.", zh: "图片（PNG/JPEG/WebP/GIF）、代码文件（CSS/JS/HTML/SVG/WOFF2）和 PDF。最大 20MB。", ta: "படங்கள் (PNG/JPEG/WebP/GIF), குறியீடு கோப்புகள் (CSS/JS/HTML/SVG/WOFF2) மற்றும் PDF. 20MB வரை.", ar: "الصور (PNG/JPEG/WebP/GIF) وملفات الأكواد (CSS/JS/HTML/SVG/WOFF2) وPDF. حتى 20MB." },
+  "media.thumbnail": { en: "Thumbnail", ms: "Thumbnail", zh: "缩略图", ta: "சிறு படம்", ar: "مصغّرة" },
+  "media.medium": { en: "Medium", ms: "Sederhana", zh: "中等", ta: "நடுத்தரம்", ar: "متوسط" },
+  "media.full": { en: "Full", ms: "Penuh", zh: "原图", ta: "முழு", ar: "كامل" },
+  "media.sizes": { en: "Sizes", ms: "Saiz", zh: "尺寸", ta: "அளவுகள்", ar: "الأحجام" },
+  "media.pdf": { en: "PDF", ms: "PDF", zh: "PDF", ta: "PDF", ar: "PDF" },
+  "media.uploadTooLarge": { en: "File exceeds the 20MB limit.", ms: "Fail melebihi had 20MB.", zh: "文件超过 20MB 限制。", ta: "கோப்பு 20MB வரம்பை மீறுகிறது.", ar: "الملف يتجاوز حد 20MB." },
+  "media.uploadType": { en: "File type not supported (images, code files and PDFs only).", ms: "Jenis fail tidak disokong (gambar, fail kod dan PDF sahaja).", zh: "不支持的文件类型（仅限图片、代码文件和 PDF）。", ta: "கோப்பு வகை ஆதரிக்கப்படவில்லை (படங்கள், குறியீடு கோப்புகள் மற்றும் PDF மட்டும்).", ar: "نوع الملف غير مدعوم (الصور وملفات الأكواد وPDF فقط)." },
+  "media.uploadEmpty": { en: "No file selected.", ms: "Tiada fail dipilih.", zh: "未选择文件。", ta: "கோப்பு தேர்ந்தெடுக்கப்படவில்லை.", ar: "لم يتم تحديد ملف." },
 } as const;
 
 export type Key = keyof typeof DICT;

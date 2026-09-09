@@ -62,6 +62,19 @@ const (
 	// MaxAssetUploadBytes caps the raw multipart body a code-asset upload may
 	// send (issue #361).
 	MaxAssetUploadBytes = 20 << 20 // 20MB input cap
+
+	// MaxPDFBytes caps the stored size of a merchant PDF (issue #382). PDFs
+	// are stored byte-for-byte (no re-encode), so a bounded ceiling prevents
+	// one giant file blowing up storage.
+	MaxPDFBytes = 2 << 20 // 2MB stored cap for PDFs
+
+	// ThumbEdge is the long-edge target for the thumbnail image size (issue
+	// #382). The media grid renders this variant.
+	ThumbEdge = 150
+
+	// MediumEdge is the long-edge target for the medium image size (issue
+	// #382). The detail modal offers this alongside thumbnail and full.
+	MediumEdge = 300
 )
 
 // ImageUploadMIME maps an allowed canonical extension to its MIME type.
@@ -83,6 +96,13 @@ var UploadAssetMIME = map[string]string{
 	".html":  "text/html; charset=utf-8",
 	".svg":   "image/svg+xml",
 	".woff2": "font/woff2",
+}
+
+// UploadPDFMIME maps the canonical PDF extension to its MIME type (issue
+// #382). PDFs are stored byte-for-byte (no re-encode) under the merchant's
+// account-scoped key, like code assets.
+var UploadPDFMIME = map[string]string{
+	".pdf": "application/pdf",
 }
 
 // ObjectStore is a minimal S3/MinIO client for the media bucket.
@@ -407,6 +427,74 @@ func headerFormat(data []byte) string {
 	return format
 }
 
+// SniffPDFType inspects the leading magic bytes — NOT the client-supplied
+// content-type or filename — and returns the canonical storage extension if
+// the blob is a PDF (issue #382). A PDF must start with the `%PDF-` header.
+func SniffPDFType(data []byte) (string, bool) {
+	if len(data) < 5 {
+		return "", false
+	}
+	if bytes.Equal(data[:5], []byte("%PDF-")) {
+		return ".pdf", true
+	}
+	return "", false
+}
+
+// ImageSize names a generated image variant (issue #382). Thumbnail and
+// medium are downscaled re-encodes; full is the optimised original.
+type ImageSize string
+
+const (
+	SizeThumb  ImageSize = "thumbnail"
+	SizeMedium ImageSize = "medium"
+	SizeFull   ImageSize = "full"
+)
+
+// ImageSizes lists the generated variants in display order.
+var ImageSizes = []ImageSize{SizeThumb, SizeMedium, SizeFull}
+
+// SizeLongEdge returns the long-edge target for a generated image size.
+func SizeLongEdge(s ImageSize) int {
+	switch s {
+	case SizeThumb:
+		return ThumbEdge
+	case SizeMedium:
+		return MediumEdge
+	default:
+		return MaxLongEdge
+	}
+}
+
+// IsSizedImage reports whether a stored content-type is a raster image that
+// gets thumbnail/medium/full variants (issue #382). GIFs are excluded — they
+// are animated and stored as-is (no re-encode), so they have no generated
+// sizes. SVG is a code asset, not a sized raster.
+func IsSizedImage(ct string) bool {
+	switch ct {
+	case "image/png", "image/jpeg", "image/webp":
+		return true
+	}
+	return false
+}
+
+// BuildVariantKey derives the object key for a generated image size from the
+// full-size key. Full-size keys are `u/{account}/{uuid}.{ext}`; the variant
+// key is `u/{account}/{uuid}-{size}.{ext}` so all three variants share the
+// same account-scoped namespace and the same base filename. Returns "" when
+// the key is not the canonical upload shape.
+func BuildVariantKey(fullKey string, size ImageSize) string {
+	// Only canonical `u/{acct}/{uuid}.{ext}` keys get variants.
+	if AccountIDFromKey(fullKey) == "" {
+		return ""
+	}
+	dot := strings.LastIndex(fullKey, ".")
+	if dot <= 0 {
+		return ""
+	}
+	base, ext := fullKey[:dot], fullKey[dot:]
+	return base + "-" + string(size) + ext
+}
+
 // OptimizeImage re-encodes data so the stored artifact is ≤MaxStoredBytes.
 func OptimizeImage(data []byte, ext string) ([]byte, error) {
 	if len(data) <= MaxStoredBytes && ext == ".webp" {
@@ -439,6 +527,36 @@ func OptimizeImage(data []byte, ext string) ([]byte, error) {
 		}
 	}
 	if len(out) > MaxStoredBytes {
+		img = imaging.Fit(img, MaxStoredLongEdge, MaxStoredLongEdge, imaging.Lanczos)
+		out = encodeJPEG(img, JPEGQuality)
+	}
+	if len(out) > MaxStoredBytes {
+		return nil, errors.New("imej tidak dapat dimampatkan bawah 2MB")
+	}
+	return out, nil
+}
+
+// OptimizeImageSize re-encodes data into a specific image size variant (issue
+// #382). It decodes once, fits the long edge to the size's target, and
+// re-encodes to JPEG q~80 (stripping EXIF by construction). The thumbnail and
+// medium variants are always small enough to skip the 2MB cap loop; the full
+// variant reuses OptimizeImage's downscale-to-cap behaviour.
+func OptimizeImageSize(data []byte, ext string, size ImageSize) ([]byte, error) {
+	if size == SizeFull {
+		return OptimizeImage(data, ext)
+	}
+	img, err := decodeImage(data)
+	if err != nil {
+		return nil, errors.New("gagal decode imej")
+	}
+	edge := SizeLongEdge(size)
+	if b := img.Bounds(); b.Dx() > edge || b.Dy() > edge {
+		img = imaging.Fit(img, edge, edge, imaging.Lanczos)
+	}
+	out := encodeJPEG(img, JPEGQuality)
+	if len(out) > MaxStoredBytes {
+		// A tiny source can still exceed 2MB only if it is enormous; shrink
+		// further to the stored long edge to stay under the cap.
 		img = imaging.Fit(img, MaxStoredLongEdge, MaxStoredLongEdge, imaging.Lanczos)
 		out = encodeJPEG(img, JPEGQuality)
 	}

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/objstore"
 )
 
 // restMedia is the JSON shape returned by the media list endpoint.
@@ -29,7 +30,12 @@ type restMedia struct {
 	ScanStatus string `json:"scan_status"`
 	// ScanReason is why a code asset was flagged/quarantined (issue #364).
 	ScanReason string `json:"scan_reason,omitempty"`
-	CreatedAt  string `json:"created_at"`
+	// Sizes maps a generated image size name (thumbnail/medium/full) to its
+	// public URL for raster images (issue #382). Empty for non-images and
+	// GIFs. The media grid renders the thumbnail; the detail modal offers
+	// all sizes.
+	Sizes     map[string]string `json:"sizes,omitempty"`
+	CreatedAt string            `json:"created_at"`
 }
 
 // listMedia handles GET /v1/rest/media — account-scoped, paginated list of
@@ -56,12 +62,28 @@ func (h *RESTHandlers) listMedia(w http.ResponseWriter, r *http.Request, actx *A
 	}
 	out := make([]restMedia, 0, len(items))
 	for _, m := range items {
-		out = append(out, restMedia{
+		rm := restMedia{
 			ID: m.ID, FormID: m.FormID, Key: m.Key, URL: m.URL,
 			Mime: m.Mime, Size: m.Size, Source: m.Source,
 			ScanStatus: m.ScanStatus, ScanReason: m.ScanReason,
-			CreatedAt:  m.CreatedAt.UTC().Format(time.RFC3339),
-		})
+			CreatedAt: m.CreatedAt.UTC().Format(time.RFC3339),
+		}
+		// Issue #382: expose the generated thumbnail/medium/full variant URLs
+		// for raster images. They are derived from the object key (the
+		// variants share the full-size key's namespace), so no extra column is
+		// needed. h.Store may be nil in tests — then sizes are omitted.
+		if h.Store != nil && isSizedImage(m.Mime) {
+			sizes := map[string]string{}
+			for _, size := range objstore.ImageSizes {
+				if vkey := buildVariantKey(m.Key, size); vkey != "" {
+					sizes[string(size)] = h.Store.PublicURL(vkey)
+				}
+			}
+			if len(sizes) > 0 {
+				rm.Sizes = sizes
+			}
+		}
+		out = append(out, rm)
 	}
 	respond(w, http.StatusOK, map[string]any{"items": out, "page": page, "limit": limit, "total": total})
 }

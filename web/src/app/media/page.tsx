@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
@@ -21,6 +21,10 @@ type MediaItem = {
   mime: string;
   size: number;
   source: string;
+  // Issue #382: generated image-size variant URLs (thumbnail/medium/full) for
+  // raster images. The grid renders the thumbnail; the detail modal offers
+  // all sizes.
+  sizes?: Record<string, string>;
   created_at: string;
 };
 
@@ -48,8 +52,10 @@ function isImage(mime: string): boolean {
   return mime.startsWith("image/");
 }
 
-// Extension badge label for a code file (e.g. "CSS", "JS", "HTML").
+// Extension badge label for a code file (e.g. "CSS", "JS", "HTML") or a PDF
+// (issue #382).
 function extBadge(mime: string): string {
+  if (mime === "application/pdf") return "PDF";
   if (mime === "text/css; charset=utf-8") return "CSS";
   if (mime === "text/javascript; charset=utf-8" || mime === "application/javascript; charset=utf-8") return "JS";
   if (mime === "text/html; charset=utf-8") return "HTML";
@@ -85,6 +91,65 @@ export default function MediaPage() {
   const [detail, setDetail] = useState<MediaItem | null>(null);
   const [copied, setCopied] = useState(false);
   const [deleting, setDeleting] = useState(false);
+
+  // Issue #382: WordPress-style "Add New Media" upload (drag-and-drop +
+  // file picker). Uploads go through the existing uploadImage endpoint,
+  // extended to accept images + code assets + PDFs.
+  const [uploading, setUploading] = useState(false);
+  const [uploadMsg, setUploadMsg] = useState("");
+  const [dragOver, setDragOver] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Issue #382: accept the full media allowlist — images, code files and PDFs.
+  const ACCEPTED_TYPES = [
+    "image/png",
+    "image/jpeg",
+    "image/webp",
+    "image/gif",
+    "text/css",
+    "text/javascript",
+    "application/javascript",
+    "text/html",
+    "image/svg+xml",
+    "font/woff2",
+    "application/pdf",
+  ];
+  const MAX_UPLOAD = 20 * 1024 * 1024;
+
+  async function uploadFile(file: File) {
+    if (!file) return;
+    if (file.size > MAX_UPLOAD) {
+      setUploadMsg(t("media.uploadTooLarge"));
+      return;
+    }
+    setUploading(true);
+    setUploadMsg("");
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const r = await fetch("/api/rest/uploads/image", { method: "POST", body: fd });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setUploadMsg(d.error || t("media.uploadFail"));
+        return;
+      }
+      setUploadMsg(t("media.uploaded"));
+      // Refresh the grid so the new item (with its sizes) appears.
+      setPage(1);
+      load();
+    } catch {
+      setUploadMsg(t("media.uploadFail"));
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  function onFiles(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    for (const f of Array.from(files)) {
+      uploadFile(f);
+    }
+  }
 
   const load = useCallback(async () => {
     const params = new URLSearchParams();
@@ -176,7 +241,52 @@ export default function MediaPage() {
             <h1 className="max-w-xl text-xl font-semibold tracking-tight">{t("media.title")}</h1>
             <p className="max-w-xl text-sm text-[var(--jf-muted)]">{t("media.subtitle")}</p>
           </div>
+          {/* Issue #382: WordPress-style "Add New Media" upload button. */}
+          {canWrite && (
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading}
+              className="jf-btn px-4 py-2 text-sm disabled:opacity-50"
+            >
+              {uploading ? t("media.uploading") : `+ ${t("media.addNew")}`}
+            </button>
+          )}
         </div>
+
+        {/* Issue #382: drag-and-drop upload zone (hidden file input). */}
+        {canWrite && (
+          <div
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragOver(true);
+            }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragOver(false);
+              onFiles(e.dataTransfer.files);
+            }}
+            className={`mt-4 flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed px-4 py-6 text-center transition ${
+              dragOver ? "border-[#7170ff] bg-[#7170ff]/5" : "border-[var(--jf-border)]"
+            }`}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <p className="text-sm font-medium text-[var(--jf-muted)]">{t("media.dropHint")}</p>
+            <p className="mt-1 text-xs text-[var(--jf-muted)]">{t("media.uploadTypes")}</p>
+            {uploadMsg && <p className="mt-2 text-sm text-[#4f46e5]">{uploadMsg}</p>}
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept={ACCEPTED_TYPES.join(",")}
+              className="hidden"
+              onChange={(e) => {
+                onFiles(e.target.files);
+                e.target.value = "";
+              }}
+            />
+          </div>
+        )}
 
         {/* Filters */}
         <div className="mt-6 flex flex-wrap items-center gap-2">
@@ -228,7 +338,7 @@ export default function MediaPage() {
                   {isImage(m.mime) ? (
                     /* eslint-disable-next-line @next/next/no-img-element */
                     <img
-                      src={m.url}
+                      src={m.sizes?.thumbnail || m.url}
                       alt={nameFromKey(m.key)}
                       className="h-full w-full object-cover"
                       loading="lazy"
@@ -310,6 +420,36 @@ export default function MediaPage() {
                 <p className="mt-0.5 text-xs text-[var(--jf-muted)]">
                   {detail.source === "customer" ? t("media.sourceCustomer") : t("media.sourceMerchant")}
                 </p>
+                {/* Issue #382: offer all generated image sizes (thumbnail /
+                    medium / full) in the detail modal. */}
+                {detail.sizes && Object.keys(detail.sizes).length > 0 && (
+                  <div className="mt-3">
+                    <p className="text-xs font-medium text-[var(--jf-muted)]">{t("media.sizes")}</p>
+                    <div className="mt-1.5 flex flex-wrap gap-2">
+                      {(["thumbnail", "medium", "full"] as const).map((size) => {
+                        const url = detail.sizes?.[size];
+                        if (!url) return null;
+                        const label =
+                          size === "thumbnail"
+                            ? t("media.thumbnail")
+                            : size === "medium"
+                              ? t("media.medium")
+                              : t("media.full");
+                        return (
+                          <a
+                            key={size}
+                            href={url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="rounded-lg border border-[var(--jf-border)] px-3 py-1.5 text-xs text-[#4f46e5] hover:bg-slate-50"
+                          >
+                            {label}
+                          </a>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
                 <div className="mt-4 flex flex-wrap items-center gap-2">
                   <a
                     href={detail.url}
