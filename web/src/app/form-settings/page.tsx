@@ -145,6 +145,53 @@ function fromLocalInput(v: string): string | null {
   return d.toISOString();
 }
 
+// Issue #351: the form-settings page must not depend on the active jf_space.
+// If the form isn't found in the active space, probe the user's other spaces
+// (from /api/spaces) and, when found, auto-switch jf_space to the owning
+// space so the form loads regardless of the current space selection. Returns
+// the resolved form (or null) plus the HTTP status so the caller can tell a
+// 401 (unauthenticated → redirect to login) from a 404 (form not found /
+// wrong space → clear message).
+async function resolveFormAcrossSpaces(
+  formId: string,
+): Promise<{ form: FormDetail | null; status: number }> {
+  const probe = async (space: string) => {
+    const q = space ? `?space=${encodeURIComponent(space)}` : "";
+    const r = await fetch(`/api/rest/forms/${formId}${q}`);
+    if (r.ok) return { form: (await r.json()) as FormDetail, status: r.status };
+    return { form: null, status: r.status };
+  };
+
+  // Fast path: the active space.
+  const active = spaceScope();
+  const first = await probe(active);
+  if (first.form || first.status === 401) return first;
+
+  // Not found in the active space: probe the user's other spaces.
+  try {
+    const spRes = await fetch("/api/spaces");
+    if (spRes.ok) {
+      const spaces = (await spRes.json()) as { id: string; slug: string }[];
+      for (const s of spaces) {
+        if (s.slug === active) continue;
+        const r = await probe(s.slug);
+        if (r.form) {
+          // Found in another space — auto-switch jf_space to the owning space.
+          try {
+            localStorage.setItem("jf_space", s.slug);
+          } catch {}
+          window.dispatchEvent(new Event("jf:space-changed"));
+          return r;
+        }
+        if (r.status === 401) return r;
+      }
+    }
+  } catch {
+    // Network hiccup — fall through to the not-found message.
+  }
+  return { form: null, status: 404 };
+}
+
 export default function FormSettingsPage() {
   return (
     <Suspense fallback={<Shell active="forms"><div className="px-6 py-8 text-sm text-[var(--jf-muted)]">…</div></Shell>}>
@@ -235,13 +282,19 @@ function FormSettingsInner() {
     setLoading(true);
     setErr("");
     try {
-      const r = await fetch(`/api/rest/forms/${formId}${spaceQuery()}`);
-      if (!r.ok) {
-        setErr(t("fs.loadErr"));
+      // Issue #351: resolve the form across the user's spaces (not just the
+      // active jf_space). 401 → redirect to login; 404 → clear "not found /
+      // wrong space" message instead of a generic load error.
+      const { form: d, status } = await resolveFormAcrossSpaces(formId);
+      if (!d) {
+        if (status === 401) {
+          router.replace("/login");
+          return;
+        }
+        setErr(t("fs.notFound"));
         setLoading(false);
         return;
       }
-      const d = (await r.json()) as FormDetail;
       setForm(d);
       setTitle(d.title || "");
       setSlug(d.slug || "");
@@ -312,7 +365,7 @@ function FormSettingsInner() {
     } finally {
       setLoading(false);
     }
-  }, [formId, t]);
+  }, [formId, t, router]);
 
   useEffect(() => {
     void load();

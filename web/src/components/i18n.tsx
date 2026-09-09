@@ -893,6 +893,7 @@ const DICT = {
   "fs.saved": { en: "Saved ✓", ms: "Disimpan ✓", zh: "已保存 ✓", ta: "சேமிக்கப்பட்டது ✓", ar: "تم الحفظ ✓" },
   "fs.loading": { en: "Loading…", ms: "Memuat…", zh: "加载中…", ta: "ஏற்றுகிறது…", ar: "جارٍ التحميل…" },
   "fs.loadErr": { en: "Failed to load form settings.", ms: "Gagal memuatkan tetapan borang.", zh: "加载表单设置失败。", ta: "படிவ அமைப்புகளை ஏற்ற முடியவில்லை.", ar: "فشل تحميل إعدادات النموذج." },
+  "fs.notFound": { en: "Form not found, or it's in a different space.", ms: "Borang tidak dijumpai, atau ia berada dalam ruang lain.", zh: "未找到表单，或它位于其他空间。", ta: "படிவம் காணப்படவில்லை, அல்லது அது வேறு இடத்தில் உள்ளது.", ar: "لم يتم العثور على النموذج، أو أنه في مساحة أخرى." },
   "fs.noForm": { en: "Select a form to edit its settings.", ms: "Pilih borang untuk edit tetapannya.", zh: "选择一个表单以编辑其设置。", ta: "அதன் அமைப்புகளைத் திருத்த ஒரு படிவத்தைத் தேர்ந்தெடுக்கவும்.", ar: "اختر نموذجاً لتحرير إعداداته." },
   "fs.editFields": { en: "Edit fields", ms: "Edit medan", zh: "编辑字段", ta: "புலங்களைத் திருத்து", ar: "تحرير الحقول" },
   "fs.confirmationHint": { en: "What buyers see after submitting. Leave blank to use the default thank-you page.", ms: "Apa yang pembeli lihat selepas hantar. Kosongkan untuk guna halaman terima kasih lalai.", zh: "买家提交后看到的内容。留空则使用默认感谢页。", ta: "சமர்ப்பித்த பிறகு வாங்குபவர்கள் பார்ப்பது. இயல்புநிலை நன்றி பக்கத்தைப் பயன்படுத்த காலியாக விடவும்.", ar: "ما يراه المشترون بعد الإرسال. اتركه فارغاً لاستخدام صفحة الشكر الافتراضية." },
