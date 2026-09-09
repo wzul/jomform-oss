@@ -240,9 +240,11 @@ export default function Builder() {
   // hydrate from ?form=<id>
   useEffect(() => {
     load();
-    const id = new URLSearchParams(window.location.search).get("form");
-    if (!id) {
-      // Issue #174: new-form path (no ?form=) → show the template picker.
+    const params = new URLSearchParams(window.location.search);
+    const id = params.get("form");
+    const isNew = params.get("new") === "1";
+    if (!id && !isNew) {
+      // Issue #174: new-form path (no ?form= and no ?new=) → show the template picker.
       setPickerOpen(true);
       return;
     }

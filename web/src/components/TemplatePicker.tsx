@@ -124,7 +124,7 @@ export default function TemplatePicker({
           <button
             onClick={() => {
               onClose();
-              router.push("/builder");
+              router.push("/builder?new=1");
             }}
             className="flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-[var(--jf-border)] p-6 text-center transition-colors hover:border-[#7170ff]/50 hover:bg-indigo-50/40"
           >
