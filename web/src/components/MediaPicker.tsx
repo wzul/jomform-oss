@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "./i18n";
-import { spaceQuery } from "../lib/space";
+import { workspaceQuery } from "../lib/workspace";
 
 type MediaItem = {
   id: string;
@@ -58,7 +58,7 @@ export default function MediaPicker({
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await fetch(`/api/rest/media?limit=100${spaceQuery()}`);
+      const r = await fetch(`/api/rest/media?limit=100${workspaceQuery()}`);
       if (r.ok) {
         const d = await r.json();
         setItems(Array.isArray(d.items) ? d.items.filter((m: MediaItem) => isImage(m.mime)) : []);

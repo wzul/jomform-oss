@@ -12,7 +12,7 @@ import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDate } from "../../lib/formatDate";
-import { spaceQuery } from "../../lib/space";
+import { workspaceQuery } from "../../lib/workspace";
 
 type SpamSubmission = {
   id: string;
@@ -55,7 +55,7 @@ function SpamPageInner() {
   const load = useCallback(async () => {
     setChecking(true);
     setErr("");
-    const sp = spaceQuery();
+    const sp = workspaceQuery();
     const sep = sp ? "&" : "";
     try {
       const [sr, salr] = await Promise.all([
@@ -90,7 +90,7 @@ function SpamPageInner() {
     setBusy(id);
     setMsg("");
     try {
-      const r = await fetch(`/api/rest/spam/submissions/${encodeURIComponent(id)}/unspam${spaceQuery()}`, {
+      const r = await fetch(`/api/rest/spam/submissions/${encodeURIComponent(id)}/unspam${workspaceQuery()}`, {
         method: "POST",
       });
       if (r.ok) {
@@ -108,7 +108,7 @@ function SpamPageInner() {
     setBusy(ref);
     setMsg("");
     try {
-      const r = await fetch(`/api/rest/spam/sales/${encodeURIComponent(ref)}/unspam${spaceQuery()}`, {
+      const r = await fetch(`/api/rest/spam/sales/${encodeURIComponent(ref)}/unspam${workspaceQuery()}`, {
         method: "POST",
       });
       if (r.ok) {

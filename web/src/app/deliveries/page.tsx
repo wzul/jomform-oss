@@ -12,7 +12,7 @@ import { useRouter } from "next/navigation";
 import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
-import { spaceQuery } from "../../lib/space";
+import { workspaceQuery } from "../../lib/workspace";
 
 type Delivery = {
   id: number;
@@ -92,7 +92,7 @@ export default function DeliveriesPage() {
     if (formFilter) params.set("form_id", formFilter);
     if (statusFilter) params.set("event_type", statusFilter);
     try {
-      const sp = spaceQuery();
+      const sp = workspaceQuery();
       const sep = sp ? "&" : "";
       const r = await fetch(`/api/rest/email-deliveries?${params.toString()}${sep}${sp.replace("?", "")}`);
       if (!r.ok) {
@@ -115,7 +115,7 @@ export default function DeliveriesPage() {
 
   // Load forms for the filter dropdown once.
   useEffect(() => {
-    fetch(`/api/rest/forms${spaceQuery()}`)
+    fetch(`/api/rest/forms${workspaceQuery()}`)
       .then((r) => (r.ok ? r.json() : []))
       .then((f) => setForms(Array.isArray(f) ? f : []))
       .catch(() => {});
@@ -153,7 +153,7 @@ export default function DeliveriesPage() {
       const params = new URLSearchParams();
       params.set("sale_ref", saleRef);
       params.set("limit", "100");
-      const sp = spaceQuery();
+      const sp = workspaceQuery();
       const sep = sp ? "&" : "";
       const r = await fetch(`/api/rest/email-deliveries?${params.toString()}${sep}${sp.replace("?", "")}`);
       const d = (await r.json()) as DeliveryPage;

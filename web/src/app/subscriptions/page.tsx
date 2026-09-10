@@ -10,7 +10,7 @@ import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDate } from "../../lib/formatDate";
-import { spaceQuery } from "../../lib/space";
+import { workspaceQuery } from "../../lib/workspace";
 
 type Subscription = {
   id: string;
@@ -53,7 +53,7 @@ export default function Subscriptions() {
   const load = useCallback(async (status: string, pageNum: number) => {
     const q = new URLSearchParams({ page: String(pageNum), limit: String(PER_PAGE) });
     if (status !== "all") q.set("status", status);
-    const sp = spaceQuery();
+    const sp = workspaceQuery();
     const sep = sp ? "&" : "";
     const r = await fetch(`/api/rest/subscriptions?${q.toString()}${sep}${sp.replace("?", "")}`);
     if (!r.ok) {
@@ -115,7 +115,7 @@ export default function Subscriptions() {
     setBusyId(sub.id);
     setError("");
     try {
-      const r = await fetch(`/api/rest/subscriptions/${sub.id}/cancel${spaceQuery()}`, {
+      const r = await fetch(`/api/rest/subscriptions/${sub.id}/cancel${workspaceQuery()}`, {
         method: "POST",
       });
       if (!r.ok) {
@@ -140,7 +140,7 @@ export default function Subscriptions() {
     setBusyId(sub.id);
     setError("");
     try {
-      const r = await fetch(`/api/rest/subscriptions/${sub.id}/update-card${spaceQuery()}`, {
+      const r = await fetch(`/api/rest/subscriptions/${sub.id}/update-card${workspaceQuery()}`, {
         method: "POST",
       });
       if (!r.ok) {

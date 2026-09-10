@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
-import { spaceQuery } from "../../lib/space";
+import { workspaceQuery } from "../../lib/workspace";
 import TemplatePicker from "../../components/TemplatePicker";
 
 type FormRow = { id: string; slug: string; title: string; status: string; url: string };
@@ -23,7 +23,7 @@ const subdomainBase = () => {
 };
 
 const spaceHost =
-  typeof window !== "undefined" ? `${localStorage.getItem("jf_space") || "app"}.jomform.com` : "app.jomform.com";
+  typeof window !== "undefined" ? `${localStorage.getItem("jf_workspace") || "app"}.jomform.com` : "app.jomform.com";
 
 export default function FormsPage() {
   const { t } = useI18n();
@@ -41,7 +41,7 @@ export default function FormsPage() {
   const load = useCallback(async () => {
     // Issue #29: no serial `await me → fetch` gate — the list fetch runs
     // immediately; a 401 flips `anon` and the auth bounce below handles it.
-    const f = await fetch(`/api/rest/forms${spaceQuery()}`).then((r) => (r.ok ? r.json() : []));
+    const f = await fetch(`/api/rest/forms${workspaceQuery()}`).then((r) => (r.ok ? r.json() : []));
     setForms(Array.isArray(f) ? f : []);
     setSelected(new Set());
     setChecking(false);
@@ -61,7 +61,7 @@ export default function FormsPage() {
   }, [anon, router]);
 
   async function publish(id: string) {
-    await fetch(`/api/rest/forms/${id}/publish${spaceQuery()}`, { method: "POST" });
+    await fetch(`/api/rest/forms/${id}/publish${workspaceQuery()}`, { method: "POST" });
     load();
   }
 
@@ -91,7 +91,7 @@ export default function FormsPage() {
     }
     setBusy(true);
     try {
-      await fetch(`/api/rest/forms/bulk${spaceQuery()}`, {
+      await fetch(`/api/rest/forms/bulk${workspaceQuery()}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action, ids }),

@@ -16,7 +16,7 @@ const TOOL_GROUPS: { group: string; tools: { name: string; desc: string }[] }[] 
       { name: "set_form_theme", desc: "Set gaya/branding tersuai borang (issue #254): primary, background, text, card_background, card_border_radius, font_family, logo_url, layout (centered|full_width|split), spacing (compact|comfortable|spacious), custom_css. Agent bebas set CSS; JomForm kekal kuasa ke atas harga & pembayaran." },
       { name: "register_form_fields", desc: "Daftar medan input borang (issue #254) dengan kontrak ketat: {field_id, type, label, required, validation?, product_id?}. type mesti jenis input JomForm (name|email|phone|textarea|number|select|radio|checkbox|date|time|website|address|consent|hidden|list|repeater|image-choice|captcha). Ganti semua medan sedia ada. Harga kekal dari DB produk (server authority)." },
       { name: "generate_form", desc: "Jana konfigurasi borang (blok + gaya) dari prompt semula jadi (issue #256) via deepseek-v4-flash. Output disahkan server-side terhadap jenis blok JomForm; harga produk kekal dari DB (server authority). Semak/edit dulu, kemudian simpan guna upsert_form." },
-      { name: "publish_form", desc: "Publish borang \u2014 live di <space>.jomform.com/<slug> atau custom domain. status=private (dengan password) menjadikannya borang ber-kata laluan; status=draft menarik balik." },
+      { name: "publish_form", desc: "Publish borang \u2014 live di <workspace>.jomform.com/<slug> atau custom domain. status=private (dengan password) menjadikannya borang ber-kata laluan; status=draft menarik balik." },
       { name: "unpublish_form", desc: "Tarik balik borang dari live (jadikan draft)." },
       { name: "set_form_password", desc: "Set/buang kata laluan akses borang private (argon2id-hashed; tidak pernah dipulangkan). Password kosong = buang kata laluan." },
       { name: "get_form_restrictions", desc: "Baca sekatan borang (issue #207): jadual mula/tamat (start_at/end_at) + had penyertaan (entry_limit) + mesej peringkat." },
@@ -87,8 +87,8 @@ const TOOL_GROUPS: { group: string; tools: { name: string; desc: string }[] }[] 
   {
     group: "Form email & notifications",
     tools: [
-      { name: "get_form_email_settings", desc: "Baca tetapan emel notifikasi SATU borang (issue #177): subjek/badan resit, hantar resit, notifikasi merchant, HTML. Kosong = guna lalai space." },
-      { name: "set_form_email_settings", desc: "Set tetapan emel notifikasi SATU borang (issue #177): receipt_subject, receipt_body, receipt_enabled, notify_merchant, merchant_notify_email, html. Kosong subjek/badan = guna lalai space. Omit medan = kekal." },
+      { name: "get_form_email_settings", desc: "Baca tetapan emel notifikasi SATU borang (issue #177): subjek/badan resit, hantar resit, notifikasi merchant, HTML. Kosong = guna lalai workspace." },
+      { name: "set_form_email_settings", desc: "Set tetapan emel notifikasi SATU borang (issue #177): receipt_subject, receipt_body, receipt_enabled, notify_merchant, merchant_notify_email, html. Kosong subjek/badan = guna lalai workspace. Omit medan = kekal." },
       { name: "get_form_notifications", desc: "Baca senarai peraturan notifikasi emel per-borang (issue #193): event, penerima, subjek/badan, logik bersyarat, aktif. Termasuk notifikasi lalai (notify merchant on sale.paid)." },
       { name: "set_form_notifications", desc: "Ganti SEMUA peraturan notifikasi emel per-borang (issue #193). notifications[] penuh: {id?, name, event, to_email, subject, body, condition?, enabled?}. event: sale.paid|sale.failed|response.submitted|subscription.charged. to_email: emel, {admin_email}, atau {field_id}. condition: {field_id, op, value}|null (op: equals|not_equals|contains|gt|lt|not_empty). Senarai kosong = tiada emel dihantar." },
       { name: "get_form_confirmations", desc: "Baca pengesahan borang (issue #179): senarai confirmation (message/redirect) + logik bersyarat. Pengesahan lalai sentiasa wujud." },
@@ -100,8 +100,8 @@ const TOOL_GROUPS: { group: string; tools: { name: string; desc: string }[] }[] 
   {
     group: "Email settings",
     tools: [
-      { name: "get_email_settings", desc: "Baca tetapan emel satu space: subjek/badan resit (placeholder), hantar resit, notifikasi merchant, HTML." },
-      { name: "set_email_settings", desc: "Set tetapan emel space: receipt_subject, receipt_body ({{ref_code}}, {{amount}}, {{items}}, {{form_url}}, {{buyer_name}}, {{date}}), receipt_enabled, notify_merchant, merchant_notify_email, html. Omit medan = kekal." },
+      { name: "get_email_settings", desc: "Baca tetapan emel satu workspace: subjek/badan resit (placeholder), hantar resit, notifikasi merchant, HTML." },
+      { name: "set_email_settings", desc: "Set tetapan emel workspace: receipt_subject, receipt_body ({{ref_code}}, {{amount}}, {{items}}, {{form_url}}, {{buyer_name}}, {{date}}), receipt_enabled, notify_merchant, merchant_notify_email, html. Omit medan = kekal." },
     ],
   },
   {
@@ -114,8 +114,8 @@ const TOOL_GROUPS: { group: string; tools: { name: string; desc: string }[] }[] 
   {
     group: "Webhooks",
     tools: [
-      { name: "create_webhook", desc: "Daftar endpoint webhook (events: sale.paid|sale.failed|subscription.charged|*). HMAC-signed. form_id pilihan: set = webhook hanya untuk borang itu; kosong = seluruh space/akaun." },
-      { name: "list_webhooks", desc: "Senarai outbound webhooks akaun. form_id pilihan: set = webhook borang itu sahaja; kosong = webhook seluruh space/akaun." },
+      { name: "create_webhook", desc: "Daftar endpoint webhook (events: sale.paid|sale.failed|subscription.charged|*). HMAC-signed. form_id pilihan: set = webhook hanya untuk borang itu; kosong = seluruh workworkspace/akaun." },
+      { name: "list_webhooks", desc: "Senarai outbound webhooks akaun. form_id pilihan: set = webhook borang itu sahaja; kosong = webhook seluruh workworkspace/akaun." },
       { name: "delete_webhook", desc: "Padam satu webhook (id dari list_webhooks)." },
       { name: "update_webhook", desc: "Kemas kini webhook (url, events, secret pilihan \u2014 kosong = kekal sedia ada). events: sale.paid|sale.failed|subscription.charged|*." },
       { name: "webhook_deliveries", desc: "Log penghantaran terkini webhook (status_code, attempt, error)." },
@@ -134,26 +134,26 @@ const TOOL_GROUPS: { group: string; tools: { name: string; desc: string }[] }[] 
   {
     group: "Spaces & storefronts",
     tools: [
-      { name: "list_spaces", desc: "Senarai semua space (storefront) anda \u2014 id, nama, slug dan URL." },
-      { name: "create_space", desc: "Cipta space baharu. Slug 3-40 aksara (a-z, 0-9, dash); URL jadi https://<slug>.jomform.com." },
-      { name: "get_space_settings", desc: "Baca tetapan storefront satu space: footer, company_reg, privacy/terms/refund URL, contact, menu." },
-      { name: "set_space_settings", desc: "Set tetapan storefront space: footer_text, company_reg, privacy_url/terms_url/refund_url (mesti https://), contact_phone, contact_address, business_name, menu_json. Omit medan = kekal." },
-      { name: "get_space_landing_page", desc: "Baca konfigurasi 'landing page' space (issue #360): hero, subtitle, body, image_url, theme colors, logo, CTA (label + form_slug). Kosong jika tiada landing page ditetapkan." },
-      { name: "set_space_landing_page", desc: "Set 'landing page' storefront space (issue #360): enabled (true = tunjuk, false/kosong = jatuh ke senarai borang), hero, subtitle, body, image_url, primary_color, background_color, logo_url, ctas ([{label, form_slug}]). Hantar enabled:false untuk pulang ke senarai borang." },
+      { name: "list_workspaces", desc: "Senarai semua workspace (storefront) anda \u2014 id, nama, slug dan URL." },
+      { name: "create_workspace", desc: "Cipta workspace baharu. Slug 3-40 aksara (a-z, 0-9, dash); URL jadi https://<slug>.jomform.com." },
+      { name: "get_space_settings", desc: "Baca tetapan storefront satu workspace: footer, company_reg, privacy/terms/refund URL, contact, menu." },
+      { name: "set_workspace_settings", desc: "Set tetapan storefront workspace: footer_text, company_reg, privacy_url/terms_url/refund_url (mesti https://), contact_phone, contact_address, business_name, menu_json. Omit medan = kekal." },
+      { name: "get_workspace_landing_page", desc: "Baca konfigurasi 'landing page' workspace (issue #360): hero, subtitle, body, image_url, theme colors, logo, CTA (label + form_slug). Kosong jika tiada landing page ditetapkan." },
+      { name: "set_workspace_landing_page", desc: "Set 'landing page' storefront workspace (issue #360): enabled (true = tunjuk, false/kosong = jatuh ke senarai borang), hero, subtitle, body, image_url, primary_color, background_color, logo_url, ctas ([{label, form_slug}]). Hantar enabled:false untuk pulang ke senarai borang." },
       { name: "get_currency_rates", desc: "Kadar tukaran wang BNM (Ringgit per unit mata wang asing), dicache harian. Guna untuk paparan/penukaran amaun baharu." },
-      { name: "set_space_currency", desc: "Set mata wang space (default MYR). Perubahan terpakai pada produk/jualan baharu; jualan lama kekal mata wang asal (tidak ditukar balik)." },
+      { name: "set_workspace_currency", desc: "Set mata wang workspace (default MYR). Perubahan terpakai pada produk/jualan baharu; jualan lama kekal mata wang asal (tidak ditukar balik)." },
     ],
   },
   {
     group: "Space members",
     tools: [
-      { name: "invite_space_member", desc: "Jemput ahli ke space (admin sahaja). Jika emel sudah berdaftar, tambah terus sebagai ahli; jika tidak, cipta jemputan menunggu. Role: read_only|manage|admin." },
-      { name: "list_space_members", desc: "Senarai ahli space + peranan (admin sahaja)." },
-      { name: "update_space_member_role", desc: "Tukar peranan ahli space (admin sahaja). Role: read_only|manage|admin." },
-      { name: "remove_space_member", desc: "Buang ahli dari space (admin sahaja). Pemilik tidak boleh dibuang." },
-      { name: "list_space_invites", desc: "Senarai jemputan menunggu untuk space (admin sahaja)." },
-      { name: "cancel_space_invite", desc: "Batal jemputan menunggu untuk space (admin sahaja)." },
-      { name: "set_default_space", desc: "Set space lalai anda (space yang anda masuk terus selepas log masuk, tanpa prompt). space_id kosong = buang default. Space mesti milik anda." },
+      { name: "invite_workspace_member", desc: "Jemput ahli ke workspace (admin sahaja). Jika emel sudah berdaftar, tambah terus sebagai ahli; jika tidak, cipta jemputan menunggu. Role: read_only|manage|admin." },
+      { name: "list_workspace_members", desc: "Senarai ahli workspace + peranan (admin sahaja)." },
+      { name: "update_space_member_role", desc: "Tukar peranan ahli workspace (admin sahaja). Role: read_only|manage|admin." },
+      { name: "remove_workspace_member", desc: "Buang ahli dari space (admin sahaja). Pemilik tidak boleh dibuang." },
+      { name: "list_workspace_invites", desc: "Senarai jemputan menunggu untuk workspace (admin sahaja)." },
+      { name: "cancel_workspace_invite", desc: "Batal jemputan menunggu untuk workspace (admin sahaja)." },
+      { name: "set_default_workspace", desc: "Set workspace lalai anda (space yang anda masuk terus selepas log masuk, tanpa prompt). workworkspace_id kosong = buang default. Space mesti milik anda." },
     ],
   },
   {
@@ -175,9 +175,9 @@ const TOOL_GROUPS: { group: string; tools: { name: string; desc: string }[] }[] 
   {
     group: "Legal pages",
     tools: [
-      { name: "generate_legal_page", desc: "Jana draf halaman undang-undang (privacy|terms|refund) untuk space melalui LLM (deepseek-v4-flash) dengan template yang diisi butiran perniagaan. Pulangkan draf untuk semakan \u2014 belum disimpan sehingga set_legal_page dipanggil." },
-      { name: "get_legal_page", desc: "Baca satu halaman undang-undang space (privacy|terms|refund): mode (auto/manual) + kandungan." },
-      { name: "set_legal_page", desc: "Simpan kandungan halaman undang-undang space (privacy|terms|refund) dengan mode auto|manual. Kandungan dipaparkan di {space}.jomform.com/privacy|terms|refund." },
+      { name: "generate_legal_page", desc: "Jana draf halaman undang-undang (privacy|terms|refund) untuk workworkspace melalui LLM (deepseek-v4-flash) dengan template yang diisi butiran perniagaan. Pulangkan draf untuk semakan \u2014 belum disimpan sehingga set_legal_page dipanggil." },
+      { name: "get_legal_page", desc: "Baca satu halaman undang-undang workspace (privacy|terms|refund): mode (auto/manual) + kandungan." },
+      { name: "set_legal_page", desc: "Simpan kandungan halaman undang-undang workspace (privacy|terms|refund) dengan mode auto|manual. Kandungan dipaparkan di {workspace}.jomform.com/privacy|terms|refund." },
     ],
   },
   {
@@ -211,7 +211,7 @@ const TOOL_GROUPS: { group: string; tools: { name: string; desc: string }[] }[] 
     group: "Media",
     tools: [
       { name: "list_media", desc: "Senarai media yang dimuat naik akaun (perpustakaan media): thumbnail/url, nama, tarikh, saiz. Boleh tapis form_id dan source (merchant|customer). Read-only." },
-      { name: "upload_media", desc: "Muat naik media/aset ke space anda (issue #363): kind='image' (png/jpeg/webp/gif \u2014 dioptimumkan, strip EXIF, terus boleh guna; png/jpeg/webp dapat saiz thumbnail/medium/full), kind='asset' (css/js/html/svg/woff2 \u2014 disimpan asli, dikaji sebelum dipapar) atau kind='pdf' (disimpan asli, terus boleh guna). hantar content fail sebagai base64 di 'data'. Pulangkan URL untuk diguna sebagai image_url/logo_url landing atau <link>/<script> landing page." },
+      { name: "upload_media", desc: "Muat naik media/aset ke workspace anda (issue #363): kind='image' (png/jpeg/webp/gif \u2014 dioptimumkan, strip EXIF, terus boleh guna; png/jpeg/webp dapat saiz thumbnail/medium/full), kind='asset' (css/js/html/svg/woff2 \u2014 disimpan asli, dikaji sebelum dipapar) atau kind='pdf' (disimpan asli, terus boleh guna). hantar content fail sebagai base64 di 'data'. Pulangkan URL untuk diguna sebagai image_url/logo_url landing atau <link>/<script> landing page." },
     ],
   },
   {
@@ -224,8 +224,8 @@ const TOOL_GROUPS: { group: string; tools: { name: string; desc: string }[] }[] 
   {
     group: "Analytics",
     tools: [
-      { name: "get_form_analytics", desc: "Analitik per-borang: bilangan submission, paid/confirmed/failed/pending, dan hasil (RM). Merentas semua space anda. Read-only." },
-      { name: "get_product_analytics", desc: "Analitik per-produk: unit terjual (paid), hasil (RM). Merentas semua space anda. Read-only." },
+      { name: "get_form_analytics", desc: "Analitik per-borang: bilangan submission, paid/confirmed/failed/pending, dan hasil (RM). Merentas semua workspace anda. Read-only." },
+      { name: "get_product_analytics", desc: "Analitik per-produk: unit terjual (paid), hasil (RM). Merentas semua workspace anda. Read-only." },
     ],
   },
   {
@@ -273,11 +273,11 @@ const TOOL_GROUPS: { group: string; tools: { name: string; desc: string }[] }[] 
     group: "Admin (super-admin, platform-wide)",
     tools: [
       { name: "purge_unverified_accounts", desc: "Laporkan bilangan akaun belum disahkan (emel) yang lebih lama daripada ambang dan akan dipadam automatik oleh sweep. Admin sahaja; read-only \u2014 tidak memadam apa-apa." },
-      { name: "admin_list_spaces", desc: "Senarai SEMUA space (storefront) platform: id, nama, slug, emel pemilik, tarikh cipta, bilangan borang + produk. Super-admin sahaja; read-only; diaudit." },
-      { name: "admin_media_usage", desc: "Penggunaan storan media per space (bait) berbanding kuota 1GB setiap space. Super-admin sahaja; read-only; diaudit." },
-      { name: "admin_list_sales", desc: "Senarai jualan merentas SEMUA space, boleh tapis (date_from/date_to, space_id, status). Super-admin sahaja; read-only; diaudit." },
-      { name: "admin_spam_queue", desc: "Senarai semua item spam (submission + jualan) merentas semua space. Super-admin sahaja; read-only; diaudit." },
-      { name: "admin_email_deliveries", desc: "Status penghantaran emel merentas SEMUA space (delivered/bounce/complaint/open/click), boleh tapis sale_ref/event_type/form_id. Super-admin sahaja; read-only; diaudit." },
+      { name: "admin_list_workspaces", desc: "Senarai SEMUA workspace (storefront) platform: id, nama, slug, emel pemilik, tarikh cipta, bilangan borang + produk. Super-admin sahaja; read-only; diaudit." },
+      { name: "admin_media_usage", desc: "Penggunaan storan media per workspace (bait) berbanding kuota 1GB setiap workspace. Super-admin sahaja; read-only; diaudit." },
+      { name: "admin_list_sales", desc: "Senarai jualan merentas SEMUA workspace, boleh tapis (date_from/date_to, workspace_id, status). Super-admin sahaja; read-only; diaudit." },
+      { name: "admin_spam_queue", desc: "Senarai semua item spam (submission + jualan) merentas semua workspace. Super-admin sahaja; read-only; diaudit." },
+      { name: "admin_email_deliveries", desc: "Status penghantaran emel merentas SEMUA workspace (delivered/bounce/complaint/open/click), boleh tapis sale_ref/event_type/form_id. Super-admin sahaja; read-only; diaudit." },
       { name: "admin_system_health", desc: "Kesihatan sistem: uptime, bilangan ralat MCP terkini (24j), kedalaman queue emel. Super-admin sahaja; read-only; diaudit." },
     ],
   },

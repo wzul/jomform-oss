@@ -162,14 +162,14 @@ export default function ProfilePage() {
       .then((k) => setPasskeys(Array.isArray(k) ? k : []))
       .catch(() => setPasskeys([]));
     // Issue #301: connected accounts load straight from the user-level
-    // /api/auth/social endpoint (no ?space=), so they're identical across all
+    // /api/auth/social endpoint (no ?workspace=), so they're identical across all
     // of the user's spaces.
     fetch("/api/auth/social")
       .then((r) => (r.ok ? r.json() : []))
       .then((s) => setSocial(Array.isArray(s) ? s : []))
       .catch(() => setSocial([]));
     // Issue #307: connected MCP agents load straight from the user-level
-    // /api/auth/mcp-agents endpoint (no ?space=), so they're identical across
+    // /api/auth/mcp-agents endpoint (no ?workspace=), so they're identical across
     // all of the user's spaces.
     fetch("/api/auth/mcp-agents")
       .then((r) => (r.ok ? r.json() : []))

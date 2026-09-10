@@ -5,7 +5,7 @@ import Link from "next/link";
 import { Shell } from "../components/Shell";
 import { useI18n } from "../components/i18n";
 import { useSession } from "../components/session";
-import { spaceQuery, spaceScope } from "../lib/space";
+import { workspaceQuery, workspaceScope } from "../lib/workspace";
 import Landing from "./landing/page";
 import {
   Area,
@@ -73,7 +73,7 @@ export default function Dashboard() {
 
   const loadSales = useCallback(
     async (p: number) => {
-      const sp = spaceScope();
+      const sp = workspaceScope();
       const q = new URLSearchParams({ page: String(p), limit: String(PAGE_SIZE) });
       if (sp) q.set("space", sp);
       const r = await fetch(`/api/rest/sales?${q.toString()}`);
@@ -237,7 +237,7 @@ export default function Dashboard() {
             {formStats.map((f) => (
               <div key={f.slug} className="rounded-lg border border-[var(--jf-border)] p-3">
                 <p className="truncate text-sm font-medium" title={f.title}>{f.title}</p>
-                <p className="font-mono text-[11px] text-[var(--jf-muted)]">{spaceScope() || "app"}.jomform.com/{f.slug}</p>
+                <p className="font-mono text-[11px] text-[var(--jf-muted)]">{workspaceScope() || "app"}.jomform.com/{f.slug}</p>
                 <div className="mt-2 grid grid-cols-2 gap-x-2 gap-y-0.5 text-[11px] text-[var(--jf-muted)]">
                   <span>{t("dash.submissions")} <b>{f.submissions}</b></span>
                   <span>{t("dash.paidConfirmed")} <b className="text-emerald-600">{f.paid_count + f.confirmed_count}</b></span>
@@ -284,7 +284,7 @@ export default function Dashboard() {
                 {salesTotal} {t("dash.records")}
               </span>
               <a
-                href={`/api/rest/sales/export.csv${spaceQuery()}`}
+                href={`/api/rest/sales/export.csv${workspaceQuery()}`}
                 className="rounded-md border border-[var(--jf-border)] px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50"
               >
                 {t("common.exportCsv")}

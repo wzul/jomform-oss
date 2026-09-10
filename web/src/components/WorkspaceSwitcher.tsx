@@ -12,9 +12,9 @@ import type { SpaceRow } from "./session";
 // The sidebar is now nav-only.
 //
 // It is a controlled input: `value` is the active slug and `onSwitch(slug)` is
-// Shell's switchSpace, which persists `jf_space` to localStorage and reloads
+// Shell's switchSpace, which persists `jf_workspace` to localStorage and reloads
 // so every downstream fetch re-reads the new scope (see Shell.switchSpace).
-export function SpaceSwitcher({
+export function WorkspaceSwitcher({
   spaces,
   value,
   onSwitch,
@@ -81,9 +81,9 @@ export function SpaceSwitcher({
         body: JSON.stringify({ name: name.trim(), slug: slug.trim() }),
       });
       if (!res.ok) {
-        let msg = t("space.createFail");
-        if (res.status === 409) msg = t("space.slugTaken");
-        else if (res.status === 400) msg = t("space.slugInvalid");
+        let msg = t("workspace.createFail");
+        if (res.status === 409) msg = t("workspace.slugTaken");
+        else if (res.status === 400) msg = t("workspace.slugInvalid");
         setError(msg);
         setBusy(false);
         return;
@@ -92,7 +92,7 @@ export function SpaceSwitcher({
       // updated space list and the switcher shows both spaces.
       window.location.reload();
     } catch {
-      setError(t("space.createFail"));
+      setError(t("workspace.createFail"));
       setBusy(false);
     }
   }
@@ -104,11 +104,11 @@ export function SpaceSwitcher({
         onClick={() => setOpen((o) => !o)}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label={t("common.space")}
-        title={active ? `${active.name} (${active.slug}.jomform.com)` : t("common.space")}
+        aria-label={t("common.workspace")}
+        title={active ? `${active.name} (${active.slug}.jomform.com)` : t("common.workspace")}
         className="flex max-w-[180px] items-center gap-1.5 rounded-md border border-[var(--jf-border)] bg-white px-2 py-1.5 text-xs font-medium text-[var(--jf-text)] hover:bg-slate-50"
       >
-        <span className="truncate">{active ? active.name : t("common.space")}</span>
+        <span className="truncate">{active ? active.name : t("common.workspace")}</span>
         <svg
           width="12"
           height="12"
@@ -127,7 +127,7 @@ export function SpaceSwitcher({
       {open && (
         <div
           role="menu"
-          aria-label={t("common.space")}
+          aria-label={t("common.workspace")}
           className="absolute right-0 top-full z-50 mt-1 w-64 rounded-lg border border-[var(--jf-border)] bg-white p-1.5 shadow-lg"
         >
           {spaces.length > 1 ? (
@@ -180,7 +180,7 @@ export function SpaceSwitcher({
                   }}
                   className="w-full rounded-md px-2.5 py-1.5 text-left text-xs text-[var(--jf-muted)] hover:bg-slate-50 hover:text-red-500"
                 >
-                  {t("space.clearDefault")}
+                  {t("workspace.clearDefault")}
                 </button>
               ) : (
                 <button
@@ -192,7 +192,7 @@ export function SpaceSwitcher({
                   }}
                   className="w-full rounded-md px-2.5 py-1.5 text-left text-xs text-[var(--jf-muted)] hover:bg-slate-50 hover:text-[var(--jf-primary)]"
                 >
-                  {t("space.setDefault")}
+                  {t("workspace.setDefault")}
                 </button>
               )}
             </div>
@@ -205,16 +205,16 @@ export function SpaceSwitcher({
                 <input
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder={t("space.name")}
-                  aria-label={t("space.name")}
+                  placeholder={t("workspace.name")}
+                  aria-label={t("workspace.name")}
                   required
                   className="w-full rounded border border-[var(--jf-border)] bg-white px-2 py-1 text-xs"
                 />
                 <input
                   value={slug}
                   onChange={(e) => setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))}
-                  placeholder={t("space.slug")}
-                  aria-label={t("space.slug")}
+                  placeholder={t("workspace.slug")}
+                  aria-label={t("workspace.slug")}
                   required
                   className="w-full rounded border border-[var(--jf-border)] bg-white px-2 py-1 text-xs"
                 />
@@ -225,7 +225,7 @@ export function SpaceSwitcher({
                     disabled={busy}
                     className="flex-1 rounded bg-[var(--jf-primary)] px-2 py-1 text-xs font-medium text-white disabled:opacity-50"
                   >
-                    {busy ? "…" : t("space.create")}
+                    {busy ? "…" : t("workspace.create")}
                   </button>
                   <button
                     type="button"
@@ -235,7 +235,7 @@ export function SpaceSwitcher({
                     }}
                     className="rounded border border-[var(--jf-border)] bg-white px-2 py-1 text-xs text-[var(--jf-muted)]"
                   >
-                    {t("space.cancel")}
+                    {t("workspace.cancel")}
                   </button>
                 </div>
               </form>
@@ -249,7 +249,7 @@ export function SpaceSwitcher({
                 }}
                 className="w-full rounded-md px-2.5 py-1.5 text-left text-xs font-medium text-[var(--jf-primary)] hover:bg-indigo-50"
               >
-                + {t("space.new")}
+                + {t("workspace.new")}
               </button>
             )}
           </div>

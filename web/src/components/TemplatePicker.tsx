@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useI18n } from "./i18n";
-import { spaceQuery } from "../lib/space";
+import { workspaceQuery } from "../lib/workspace";
 
 type Template = {
   id: string;
@@ -54,7 +54,7 @@ export default function TemplatePicker({
     setLoading(true);
     setErr("");
     try {
-      const r = await fetch(`/api/templates${spaceQuery()}`);
+      const r = await fetch(`/api/templates${workspaceQuery()}`);
       const d = await r.json().catch(() => []);
       setTemplates(Array.isArray(d) ? d : []);
     } catch {
@@ -74,7 +74,7 @@ export default function TemplatePicker({
     setUsing(slug);
     setErr("");
     try {
-      const r = await fetch(`/api/templates/use${spaceQuery()}`, {
+      const r = await fetch(`/api/templates/use${workspaceQuery()}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ slug, name: title }),

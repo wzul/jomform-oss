@@ -42,7 +42,7 @@ Parity checklist (dashboard → MCP):
 - API keys → `list_api_keys`, `create_api_key`, `revoke_api_key`
 - Event tracking / audit log → `list_events` (account-scoped, read-only)
 - Space landing page (customizable storefront, #360/#362) →
-  `get_space_landing_page`, `set_space_landing_page` (incl. embedded `forms[]`)
+  `get_workspace_landing_page`, `set_workspace_landing_page` (incl. embedded `forms[]`)
 - Media library / asset upload (image + code, tenant-scoped, scan-gated,
   #361/#364) → `list_media`, `upload_media`
 - Analytics → `get_form_analytics`, `get_product_analytics`
@@ -64,7 +64,7 @@ Parity checklist (dashboard → MCP):
   `set_domain_tls_cert`
 - Domain ACME email (#398) → `get_domain_tls_email`, `set_domain_tls_email`
 - Super-admin platform-wide monitoring (#386, gated on #385 super-admin) →
-  `admin_list_spaces`, `admin_media_usage`, `admin_list_sales`,
+  `admin_list_workspaces`, `admin_media_usage`, `admin_list_sales`,
   `admin_spam_queue`, `admin_email_deliveries`, `admin_system_health`
 
 ## DOCUMENTATION PARITY (RULE — jangan tertinggal/terlepas)

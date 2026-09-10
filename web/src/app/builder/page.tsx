@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "../../components/i18n";
-import { spaceQuery } from "../../lib/space";
+import { workspaceQuery } from "../../lib/workspace";
 import TemplatePicker from "../../components/TemplatePicker";
 
 /* ─── types ──────────────────────────────────────────────────────────────── */
@@ -228,7 +228,7 @@ export default function Builder() {
   const [dropAt, setDropAt] = useState<number | null>(null);
 
   const load = useCallback(async () => {
-    const p = await fetch(`/api/rest/products${spaceQuery()}`).then((r) => (r.ok ? r.json() : []));
+    const p = await fetch(`/api/rest/products${workspaceQuery()}`).then((r) => (r.ok ? r.json() : []));
     setProducts(p);
   }, []);
 
@@ -244,7 +244,7 @@ export default function Builder() {
       return;
     }
     if (id) void (async () => {
-      const r = await fetch(`/api/rest/forms/${id}${spaceQuery()}`);
+      const r = await fetch(`/api/rest/forms/${id}${workspaceQuery()}`);
       if (!r.ok) return;
       const d = await r.json();
       setCurrentId(d.id);
@@ -433,7 +433,7 @@ export default function Builder() {
 
     let id = currentId;
     if (!id) {
-      const r = await fetch(`/api/rest/forms${spaceQuery()}`, {
+      const r = await fetch(`/api/rest/forms${workspaceQuery()}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -449,7 +449,7 @@ export default function Builder() {
       setSlug(d.slug);
       id = d.id;
     } else {
-      await fetch(`/api/rest/forms/${id}${spaceQuery()}`, {
+      await fetch(`/api/rest/forms/${id}${workspaceQuery()}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title, config }),
@@ -462,7 +462,7 @@ export default function Builder() {
     if (id) {
       const statusBody: { status: string; password?: string } = { status: targetStatus };
       if (targetStatus === "private") statusBody.password = accessPw;
-      const sr = await fetch(`/api/rest/forms/${id}/status${spaceQuery()}`, {
+      const sr = await fetch(`/api/rest/forms/${id}/status${workspaceQuery()}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(statusBody),
@@ -476,8 +476,8 @@ export default function Builder() {
       setStatus(targetStatus as "draft" | "private" | "published" | "unlisted");
     }
     if (publish && id) {
-      await fetch(`/api/rest/forms/${id}/publish${spaceQuery()}`, { method: "POST" });
-      setPubUrl(`https://${localStorage.getItem("jf_space") || "app"}.jomform.com/${payload.slug}`);
+      await fetch(`/api/rest/forms/${id}/publish${workspaceQuery()}`, { method: "POST" });
+      setPubUrl(`https://${localStorage.getItem("jf_workspace") || "app"}.jomform.com/${payload.slug}`);
       await load();
     }
     setSaving(false);
@@ -496,7 +496,7 @@ export default function Builder() {
     setAiMsg("");
     setLoadErr("");
     try {
-      const r = await fetch(`/api/rest/forms/ai-generate${spaceQuery()}`, {
+      const r = await fetch(`/api/rest/forms/ai-generate${workspaceQuery()}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt }),

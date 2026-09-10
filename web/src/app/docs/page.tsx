@@ -11,7 +11,7 @@ export const metadata: Metadata = {
 const FEATURES: { title: string; body: string }[] = [
   {
     title: "Order forms",
-    body: "Build beautiful order forms with a drag-and-drop builder. Add fields (name, email, phone, textarea, number, select, radio, checkbox, date, time, website, address, consent, hidden, list, repeater, image-choice, captcha), attach products, and publish to your own space URL or a custom domain. Forms can be payment forms or response-only.",
+    body: "Build beautiful order forms with a drag-and-drop builder. Add fields (name, email, phone, textarea, number, select, radio, checkbox, date, time, website, address, consent, hidden, list, repeater, image-choice, captcha), attach products, and publish to your own workspace URL or a custom domain. Forms can be payment forms or response-only.",
   },
   {
     title: "Products",
@@ -39,7 +39,7 @@ const FEATURES: { title: string; body: string }[] = [
   },
   {
     title: "Settings",
-    body: "Configure CHIP payment credentials, custom domains, tracking scripts, e-Invoice (LHDN), outbound webhooks, currency, and per-space email templates.",
+    body: "Configure CHIP payment credentials, custom domains, tracking scripts, e-Invoice (LHDN), outbound webhooks, currency, and per-workspace email templates.",
   },
   {
     title: "Custom domains",
@@ -47,7 +47,7 @@ const FEATURES: { title: string; body: string }[] = [
   },
   {
     title: "Landing pages",
-    body: "Customise your space storefront with a hero, subtitle, body, image, theme colours, logo and call-to-action buttons that link to your forms.",
+    body: "Customise your workspace storefront with a hero, subtitle, body, image, theme colours, logo and call-to-action buttons that link to your forms.",
   },
   {
     title: "MCP (AI agents)",
@@ -94,7 +94,7 @@ export default function DocsIndexPage() {
         <li>Create a free account — your first form is ready in about 5 minutes.</li>
         <li>Build a form with the drag-and-drop builder and attach products.</li>
         <li>Add your CHIP payment credentials in Settings → CHIP.</li>
-        <li>Publish the form — it goes live at your space URL or a custom domain.</li>
+        <li>Publish the form — it goes live at your workspace URL or a custom domain.</li>
         <li>Track sales, subscriptions and email delivery from the dashboard.</li>
       </ol>
 

@@ -9,7 +9,7 @@
 // space-scoped data (chip_status, keys, domains, webhooks, einvoice,
 // products, summary, sales, analytics) alongside user-level data (me,
 // spaces). Because each space owns its own account, the bundle must be
-// fetched with ?space=<slug> and cached per space — switching spaces must
+// fetched with ?workspace=<slug> and cached per space — switching spaces must
 // re-fetch the bundle for the newly selected space, never serve the previous
 // space's cached data (cross-space leakage).
 //
@@ -26,7 +26,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { spaceScope } from "../lib/space";
+import { workspaceScope } from "../lib/workspace";
 
 export type SessionUser = {
   id?: string;
@@ -76,7 +76,7 @@ export type BundleData = {
 type SessionCtx = {
   user: SessionUser | null;
   spaces: SpaceRow[];
-  // The active space slug (from localStorage "jf_space"), used to scope
+  // The active space slug (from localStorage "jf_workspace"), used to scope
   // every dashboard fetch (issue #158).
   space: string;
   // The caller's role in the active space (issue #163): "admin" | "manage" |
@@ -112,7 +112,7 @@ async function fetchBundle(space: string): Promise<BundleData | null> {
   const key = space || "__default__";
   if (bundleCache.has(key)) return bundleCache.get(key) ?? null;
   if (!inflightBySpace.has(key)) {
-    const q = space ? `?space=${encodeURIComponent(space)}` : "";
+    const q = space ? `?workspace=${encodeURIComponent(space)}` : "";
     const p = fetch(`/api/rest/dashboard-bundle${q}`)
       .then((r) => {
         if (!r.ok) return null;
@@ -140,16 +140,16 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
 
   // Resolve the active space from localStorage (same key the Shell uses).
   useEffect(() => {
-    setSpace(spaceScope());
+    setSpace(workspaceScope());
   }, []);
 
   // Issue #170: keep the active space REACTIVE to switches. Shell.switchSpace
-  // persists `jf_space` and dispatches a "jf:space-changed" event; the
+  // persists `jf_workspace` and dispatches a "jf:space-changed" event; the
   // `storage` event covers cross-tab changes. Updating `space` here re-runs
   // the space-keyed bundle fetch and lets data pages key their load() on it,
   // so switching spaces re-fetches each page's list for the new space.
   useEffect(() => {
-    const sync = () => setSpace(spaceScope());
+    const sync = () => setSpace(workspaceScope());
     window.addEventListener("jf:space-changed", sync);
     window.addEventListener("storage", sync);
     return () => {
@@ -161,10 +161,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     setMounted(true);
     // Issue #226: fetch the bundle even when `space` is empty (anonymous /
-    // incognito visitor with no jf_space in localStorage) so `anon` can flip
+    // incognito visitor with no jf_workspace in localStorage) so `anon` can flip
     // and the dashboard falls through to the Landing page instead of hanging
     // on the loading shell. fetchBundle already handles an empty space (no
-    // ?space= query) and keys the cache under "__default__".
+    // ?workspace= query) and keys the cache under "__default__".
     const key = space || "__default__";
     if (bundleCache.has(key)) {
       setBundle(bundleCache.get(key) ?? null);

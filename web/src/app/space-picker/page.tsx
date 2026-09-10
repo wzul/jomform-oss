@@ -40,14 +40,14 @@ export default function SpacePickerPage() {
           setDefaultId(me.default_space_id || "");
         }
       } catch {
-        setError(t("space.setDefaultFail"));
+        setError(t("workspace.setDefaultFail"));
       }
     })();
   }, [t]);
 
   function enter(slug: string) {
     try {
-      localStorage.setItem("jf_space", slug);
+      localStorage.setItem("jf_workspace", slug);
     } catch {}
     router.replace("/");
   }
@@ -62,12 +62,12 @@ export default function SpacePickerPage() {
         body: JSON.stringify({ space_id: spaceId }),
       });
       if (!r.ok) {
-        setError(t("space.setDefaultFail"));
+        setError(t("workspace.setDefaultFail"));
         return;
       }
       setDefaultId(spaceId);
     } catch {
-      setError(t("space.setDefaultFail"));
+      setError(t("workspace.setDefaultFail"));
     } finally {
       setBusy(false);
     }
@@ -89,9 +89,9 @@ export default function SpacePickerPage() {
             JF
           </div>
           <h1 className="text-xl font-semibold text-[var(--jf-text)]" style={{ letterSpacing: "-0.02em" }}>
-            {t("space.pickerTitle")}
+            {t("workspace.pickerTitle")}
           </h1>
-          <p className="mt-1.5 text-sm text-[var(--jf-muted)]">{t("space.pickerSubtitle")}</p>
+          <p className="mt-1.5 text-sm text-[var(--jf-muted)]">{t("workspace.pickerSubtitle")}</p>
         </div>
 
         <div className="rounded-xl border border-[var(--jf-border)] bg-white p-6 shadow-[0_0_0_1px_rgba(0,0,0,0.2),0_8px_24px_rgba(0,0,0,0.4)]">
@@ -117,7 +117,7 @@ export default function SpacePickerPage() {
                         {s.name}
                         {isDefault && (
                           <span className="ml-2 rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-medium text-[var(--jf-primary)]">
-                            {t("space.defaultLabel")}
+                            {t("workspace.defaultLabel")}
                           </span>
                         )}
                         {s.role && (
@@ -132,10 +132,10 @@ export default function SpacePickerPage() {
                           type="button"
                           disabled={busy}
                           onClick={() => setDefault(s.id)}
-                          title={t("space.setDefault")}
+                          title={t("workspace.setDefault")}
                           className="mt-1.5 text-[11px] text-[var(--jf-muted)] underline decoration-dotted underline-offset-2 hover:text-[var(--jf-primary)] disabled:opacity-50"
                         >
-                          {t("space.setDefault")}
+                          {t("workspace.setDefault")}
                         </button>
                       )}
                     </div>
@@ -145,7 +145,7 @@ export default function SpacePickerPage() {
                         onClick={() => enter(s.slug)}
                         className="rounded-md bg-[#5e6ad2] px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-[#828fff]"
                       >
-                        {t("space.enter")}
+                        {t("workspace.enter")}
                       </button>
                     </div>
                   </li>

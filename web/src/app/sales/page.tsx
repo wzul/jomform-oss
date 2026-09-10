@@ -17,7 +17,7 @@ import { Shell } from "../../components/Shell";
 import { useI18n, type Key } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDate, formatDateTime } from "../../lib/formatDate";
-import { spaceQuery } from "../../lib/space";
+import { workspaceQuery } from "../../lib/workspace";
 
 type Item = {
   product_id: string;
@@ -145,7 +145,7 @@ function SalesPageInner() {
   }, [forms]);
 
   const loadForms = useCallback(async () => {
-    const f = await fetch(`/api/rest/forms${spaceQuery()}`).then((r) => (r.ok ? r.json() : []));
+    const f = await fetch(`/api/rest/forms${workspaceQuery()}`).then((r) => (r.ok ? r.json() : []));
     setForms(Array.isArray(f) ? f : []);
   }, []);
 
@@ -170,7 +170,7 @@ function SalesPageInner() {
       if (dateFrom) qs.set("date_from", dateFrom);
       if (dateTo) qs.set("date_to", dateTo);
       if (q.trim()) qs.set("q", q.trim());
-      const sp = spaceQuery();
+      const sp = workspaceQuery();
       const sep = sp ? "&" : "";
       try {
         const r = await fetch(`/api/rest/sales?${qs.toString()}${sep}${sp.replace("?", "")}`);
@@ -219,7 +219,7 @@ function SalesPageInner() {
     setBusyRef(ref);
     setMsg("");
     try {
-      const r = await fetch(`/api/rest/sales/${encodeURIComponent(ref)}/confirm${spaceQuery()}`, {
+      const r = await fetch(`/api/rest/sales/${encodeURIComponent(ref)}/confirm${workspaceQuery()}`, {
         method: "POST",
       });
       setMsg(r.ok ? `${ref} ✓` : (await r.json().catch(() => ({}))).error || "Gagal");
@@ -247,7 +247,7 @@ function SalesPageInner() {
     setBusyRef(ref);
     setMsg("");
     try {
-      const r = await fetch(`/api/rest/sales/${encodeURIComponent(ref)}/capture${spaceQuery()}`, {
+      const r = await fetch(`/api/rest/sales/${encodeURIComponent(ref)}/capture${workspaceQuery()}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         ...(body ? { body } : {}),
@@ -266,7 +266,7 @@ function SalesPageInner() {
     setBusyRef(ref);
     setMsg("");
     try {
-      const r = await fetch(`/api/rest/sales/${encodeURIComponent(ref)}/release${spaceQuery()}`, {
+      const r = await fetch(`/api/rest/sales/${encodeURIComponent(ref)}/release${workspaceQuery()}`, {
         method: "POST",
       });
       const d = await r.json().catch(() => ({}));
@@ -297,7 +297,7 @@ function SalesPageInner() {
     setBusyRef(ref);
     setMsg("");
     try {
-      const r = await fetch(`/api/rest/sales/${encodeURIComponent(ref)}/refund${spaceQuery()}`, {
+      const r = await fetch(`/api/rest/sales/${encodeURIComponent(ref)}/refund${workspaceQuery()}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         ...(body ? { body } : {}),
@@ -319,7 +319,7 @@ function SalesPageInner() {
     setBusyRef("__all__");
     setMsg("");
     try {
-      const r = await fetch(`/api/rest/sales/bulk-capture${spaceQuery()}`, {
+      const r = await fetch(`/api/rest/sales/bulk-capture${workspaceQuery()}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ refs: awaiting.map((s) => s.ref_code) }),
@@ -355,7 +355,7 @@ function SalesPageInner() {
   const exportUrl = useMemo(() => {
     const qs = new URLSearchParams();
     if (formFilter) qs.set("form_id", formFilter);
-    const sp = spaceQuery();
+    const sp = workspaceQuery();
     const sep = sp ? "&" : "";
     return `/api/rest/sales/export.csv?${qs.toString()}${sep}${sp.replace("?", "")}`;
   }, [formFilter]);

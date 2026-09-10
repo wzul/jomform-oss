@@ -15,7 +15,7 @@ import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import MediaPicker from "../../components/MediaPicker";
-import { spaceQuery, spaceScope } from "../../lib/space";
+import { workspaceQuery, workspaceScope } from "../../lib/workspace";
 
 type FormDetail = {
   id: string;
@@ -280,9 +280,9 @@ function fromLocalInput(v: string): string | null {
   return d.toISOString();
 }
 
-// Issue #351: the form-settings page must not depend on the active jf_space.
+// Issue #351: the form-settings page must not depend on the active jf_workspace.
 // If the form isn't found in the active space, probe the user's other spaces
-// (from /api/spaces) and, when found, auto-switch jf_space to the owning
+// (from /api/spaces) and, when found, auto-switch jf_workspace to the owning
 // space so the form loads regardless of the current space selection. Returns
 // the resolved form (or null) plus the HTTP status so the caller can tell a
 // 401 (unauthenticated → redirect to login) from a 404 (form not found /
@@ -291,14 +291,14 @@ async function resolveFormAcrossSpaces(
   formId: string,
 ): Promise<{ form: FormDetail | null; status: number }> {
   const probe = async (space: string) => {
-    const q = space ? `?space=${encodeURIComponent(space)}` : "";
+    const q = space ? `?workspace=${encodeURIComponent(space)}` : "";
     const r = await fetch(`/api/rest/forms/${formId}${q}`);
     if (r.ok) return { form: (await r.json()) as FormDetail, status: r.status };
     return { form: null, status: r.status };
   };
 
   // Fast path: the active space.
-  const active = spaceScope();
+  const active = workspaceScope();
   const first = await probe(active);
   if (first.form || first.status === 401) return first;
 
@@ -311,9 +311,9 @@ async function resolveFormAcrossSpaces(
         if (s.slug === active) continue;
         const r = await probe(s.slug);
         if (r.form) {
-          // Found in another space — auto-switch jf_space to the owning space.
+          // Found in another space — auto-switch jf_workspace to the owning space.
           try {
-            localStorage.setItem("jf_space", s.slug);
+            localStorage.setItem("jf_workspace", s.slug);
           } catch {}
           window.dispatchEvent(new Event("jf:space-changed"));
           return r;
@@ -424,7 +424,7 @@ function FormSettingsInner() {
     setErr("");
     try {
       // Issue #351: resolve the form across the user's spaces (not just the
-      // active jf_space). 401 → redirect to login; 404 → clear "not found /
+      // active jf_workspace). 401 → redirect to login; 404 → clear "not found /
       // wrong space" message instead of a generic load error.
       const { form: d, status } = await resolveFormAcrossSpaces(formId);
       if (!d) {
@@ -460,7 +460,7 @@ function FormSettingsInner() {
       // the conditional-logic selector.
       const blocks = (d.config?.blocks as CondBlock[] | undefined) || [];
       setFormBlocks(blocks.filter((b) => FEED_FIELD_TYPES.has(b.type)));
-      const fr = await fetch(`/api/rest/forms/${formId}/chip-feeds${spaceQuery()}`);
+      const fr = await fetch(`/api/rest/forms/${formId}/chip-feeds${workspaceQuery()}`);
       if (fr.ok) {
         const fd = (await fr.json()) as { feeds: ChipFeed[] | null };
         // Issue: chip-feeds returns {"feeds":null} when none configured —
@@ -477,7 +477,7 @@ function FormSettingsInner() {
         );
       }
       // Load per-form email settings.
-      const er = await fetch(`/api/rest/forms/${formId}/email-settings${spaceQuery()}`);
+      const er = await fetch(`/api/rest/forms/${formId}/email-settings${workspaceQuery()}`);
       if (er.ok) {
         const es = (await er.json()) as EmailSettings;
         setEmelSubject(es.receipt_subject || "");
@@ -488,20 +488,20 @@ function FormSettingsInner() {
         setEmelHtml(!!es.html);
       }
       // Load per-form notification rules (issue #193).
-      const nr = await fetch(`/api/rest/forms/${formId}/notifications${spaceQuery()}`);
+      const nr = await fetch(`/api/rest/forms/${formId}/notifications${workspaceQuery()}`);
       if (nr.ok) {
         const list = (await nr.json()) as Notification[];
         setNotifs(list);
       }
       // Issue #196: load this form's webhooks (form_id filter).
-      const sp = spaceScope();
-      const wr = await fetch(`/api/rest/webhooks?form_id=${encodeURIComponent(formId)}${sp ? `&space=${encodeURIComponent(sp)}` : ""}`);
+      const sp = workspaceScope();
+      const wr = await fetch(`/api/rest/webhooks?form_id=${encodeURIComponent(formId)}${sp ? `&workspace=${encodeURIComponent(sp)}` : ""}`);
       if (wr.ok) {
         const whs = (await wr.json()) as { id: string; url: string; events: string[] }[];
         setFormWebhooks(Array.isArray(whs) ? whs : []);
       }
       // Issue #179: load per-form confirmations (default always present).
-      const cr = await fetch(`/api/rest/forms/${formId}/confirmations${spaceQuery()}`);
+      const cr = await fetch(`/api/rest/forms/${formId}/confirmations${workspaceQuery()}`);
       if (cr.ok) {
         const cd = (await cr.json()) as { confirmations: Confirmation[] };
         setConfs(cd.confirmations || []);
@@ -531,7 +531,7 @@ function FormSettingsInner() {
     const payload = { slug: slug.toLowerCase().replace(/[^a-z0-9-]/g, "-"), title, theme };
     let id = formId;
     if (!id) return;
-    const r = await fetch(`/api/rest/forms/${id}${spaceQuery()}`, {
+    const r = await fetch(`/api/rest/forms/${id}${workspaceQuery()}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -543,7 +543,7 @@ function FormSettingsInner() {
     // Apply status (draft | private | published).
     const statusBody: { status: string; password?: string } = { status };
     if (status === "private") statusBody.password = accessPw;
-    const sr = await fetch(`/api/rest/forms/${id}/status${spaceQuery()}`, {
+    const sr = await fetch(`/api/rest/forms/${id}/status${workspaceQuery()}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(statusBody),
@@ -559,7 +559,7 @@ function FormSettingsInner() {
   async function saveConfirmation() {
     setMsg("");
     if (!formId) return;
-    const r = await fetch(`/api/rest/forms/${formId}/settings${spaceQuery()}`, {
+    const r = await fetch(`/api/rest/forms/${formId}/settings${workspaceQuery()}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -575,7 +575,7 @@ function FormSettingsInner() {
   async function saveConfirmations() {
     setMsg("");
     if (!formId) return;
-    const r = await fetch(`/api/rest/forms/${formId}/confirmations${spaceQuery()}`, {
+    const r = await fetch(`/api/rest/forms/${formId}/confirmations${workspaceQuery()}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ confirmations: confs }),
@@ -603,7 +603,7 @@ function FormSettingsInner() {
     setMsg("");
     if (!formId) return;
     const limit = rsLimit.trim() === "" ? null : Math.max(0, parseInt(rsLimit, 10) || 0);
-    const r = await fetch(`/api/rest/forms/${formId}/restrictions${spaceQuery()}`, {
+    const r = await fetch(`/api/rest/forms/${formId}/restrictions${workspaceQuery()}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -666,8 +666,8 @@ function FormSettingsInner() {
       condition: edHasCond && edCondField ? { field_id: edCondField, op: edCondOp, value: edCondValue } : null,
     };
     const url = isNew
-      ? `/api/rest/forms/${formId}/notifications${spaceQuery()}`
-      : `/api/rest/forms/${formId}/notifications/${editing?.id}${spaceQuery()}`;
+      ? `/api/rest/forms/${formId}/notifications${workspaceQuery()}`
+      : `/api/rest/forms/${formId}/notifications/${editing?.id}${workspaceQuery()}`;
     const r = await fetch(url, {
       method: isNew ? "POST" : "PUT",
       headers: { "Content-Type": "application/json" },
@@ -685,7 +685,7 @@ function FormSettingsInner() {
   async function deleteNotification(n: Notification) {
     setMsg("");
     if (!formId) return;
-    const r = await fetch(`/api/rest/forms/${formId}/notifications/${n.id}${spaceQuery()}`, {
+    const r = await fetch(`/api/rest/forms/${formId}/notifications/${n.id}${workspaceQuery()}`, {
       method: "DELETE",
     });
     setMsg(r.ok ? t("fs.notifDeleted") : t("fs.notifFail"));
@@ -698,7 +698,7 @@ function FormSettingsInner() {
   async function saveChipOverride() {
     setMsg("");
     if (!formId || !ovBrand || !ovSecret) return;
-    const r = await fetch(`/api/rest/forms/${formId}/chip-override${spaceQuery()}`, {
+    const r = await fetch(`/api/rest/forms/${formId}/chip-override${workspaceQuery()}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -717,7 +717,7 @@ function FormSettingsInner() {
   async function clearChipOverride() {
     setMsg("");
     if (!formId) return;
-    const r = await fetch(`/api/rest/forms/${formId}/chip-override${spaceQuery()}`, { method: "DELETE" });
+    const r = await fetch(`/api/rest/forms/${formId}/chip-override${workspaceQuery()}`, { method: "DELETE" });
     setMsg(r.ok ? t("fs.chipCleared") : t("prof.failed"));
     if (r.ok) {
       setOvBrand("");
@@ -736,8 +736,8 @@ function FormSettingsInner() {
     e.preventDefault();
     setMsg("");
     if (!formId) return;
-    const sp = spaceScope();
-    const r = await fetch(`/api/rest/webhooks${sp ? `?space=${encodeURIComponent(sp)}` : ""}`, {
+    const sp = workspaceScope();
+    const r = await fetch(`/api/rest/webhooks${sp ? `?workspace=${encodeURIComponent(sp)}` : ""}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url: whUrl, secret: whSecret, events: whEvents, form_id: formId }),
@@ -755,8 +755,8 @@ function FormSettingsInner() {
 
   async function deleteFormWebhook(id: string) {
     setMsg("");
-    const sp = spaceScope();
-    const r = await fetch(`/api/rest/webhooks/${id}${sp ? `?space=${encodeURIComponent(sp)}` : ""}`, { method: "DELETE" });
+    const sp = workspaceScope();
+    const r = await fetch(`/api/rest/webhooks/${id}${sp ? `?workspace=${encodeURIComponent(sp)}` : ""}`, { method: "DELETE" });
     setMsg(r.ok ? t("fs.webhookDeleted") : t("prof.failed"));
     if (r.ok) void load();
   }
@@ -766,7 +766,7 @@ function FormSettingsInner() {
   async function saveChipFeeds() {
     setMsg("");
     if (!formId) return;
-    const r = await fetch(`/api/rest/forms/${formId}/chip-feeds${spaceQuery()}`, {
+    const r = await fetch(`/api/rest/forms/${formId}/chip-feeds${workspaceQuery()}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

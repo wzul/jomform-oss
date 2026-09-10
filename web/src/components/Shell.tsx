@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useI18n, LangToggle } from "./i18n";
 import { useSession } from "./session";
-import { SpaceSwitcher } from "./SpaceSwitcher";
+import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 
 // AppShell: fixed left sidebar + topbar + content area. Light theme.
 // Issue #29: nav links are Next <Link> (client-side transitions + prefetch,
@@ -91,18 +91,18 @@ export function Shell({
   useEffect(() => {
     const sp = Array.isArray(spaces) ? spaces : [];
     if (!sp.length) return;
-    const saved = localStorage.getItem("jf_space");
+    const saved = localStorage.getItem("jf_workspace");
     if (saved && sp.some((s) => s.slug === saved)) {
       setSpace(saved);
     } else {
       setSpace(sp[0].slug);
-      localStorage.setItem("jf_space", sp[0].slug);
+      localStorage.setItem("jf_workspace", sp[0].slug);
     }
   }, [spaces]);
 
   function switchSpace(slug: string) {
     setSpace(slug);
-    localStorage.setItem("jf_space", slug);
+    localStorage.setItem("jf_workspace", slug);
     // Issue #170: notify the session context (and any data page keyed on
     // useSession().space) that the active space changed, so page lists
     // re-fetch for the new space without a manual refresh.
@@ -224,7 +224,7 @@ export function Shell({
       <div className="flex min-w-0 flex-1 flex-col">
         {/* desktop topbar — space switcher + lang toggle (issue #380) */}
         <header className="sticky top-0 z-30 hidden items-center justify-end gap-3 border-b border-[var(--jf-border)] bg-white px-4 py-2.5 md:flex">
-          <SpaceSwitcher
+          <WorkspaceSwitcher
             spaces={spaces}
             value={space}
             onSwitch={switchSpace}
@@ -295,7 +295,7 @@ export function Shell({
               {/* issue #41: space selector reachable from the mobile drawer —
                   same shared component as the desktop topbar (issue #380) */}
               <div className="border-t border-[var(--jf-border)] px-4 py-3">
-                <SpaceSwitcher
+                <WorkspaceSwitcher
                   spaces={spaces}
                   value={space}
                   onSwitch={switchSpace}

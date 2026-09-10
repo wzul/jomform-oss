@@ -6,7 +6,7 @@ import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDate } from "../../lib/formatDate";
-import { spaceQuery } from "../../lib/space";
+import { workspaceQuery } from "../../lib/workspace";
 
 // Issue #180: WordPress-media-library-style Media page. Grid of the
 // merchant's uploaded images (thumbnail + name + date + size), filterable by
@@ -177,7 +177,7 @@ export default function MediaPage() {
     params.set("limit", String(PER_PAGE));
     if (formFilter) params.set("form", formFilter);
     if (sourceFilter) params.set("source", sourceFilter);
-    const r = await fetch(`/api/rest/media?${params.toString()}${spaceQuery()}`);
+    const r = await fetch(`/api/rest/media?${params.toString()}${workspaceQuery()}`);
     if (r.ok) {
       const d = await r.json();
       setItems(Array.isArray(d.items) ? d.items : []);
@@ -195,7 +195,7 @@ export default function MediaPage() {
 
   // Load forms for the filter dropdown once.
   useEffect(() => {
-    fetch(`/api/rest/forms${spaceQuery()}`)
+    fetch(`/api/rest/forms${workspaceQuery()}`)
       .then((r) => (r.ok ? r.json() : []))
       .then((f) => setForms(Array.isArray(f) ? f : []))
       .catch(() => {});
@@ -239,7 +239,7 @@ export default function MediaPage() {
     setDeleting(true);
     setError("");
     try {
-      const r = await fetch(`/api/rest/media/${m.id}${spaceQuery()}`, { method: "DELETE" });
+      const r = await fetch(`/api/rest/media/${m.id}${workspaceQuery()}`, { method: "DELETE" });
       if (!r.ok) {
         setError(t("media.deleteFail"));
         return;

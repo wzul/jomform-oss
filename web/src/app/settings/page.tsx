@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDateTime } from "../../lib/formatDate";
-import { spaceQuery, spaceScope } from "../../lib/space";
+import { workspaceQuery, workspaceScope } from "../../lib/workspace";
 import { MembersTab } from "../../components/MembersTab";
 import { LegalTab } from "../../components/LegalTab";
 
@@ -297,7 +297,7 @@ export default function Settings() {
     // Issue #48: when the bundle resolved as null (anonymous) there is
     // nothing to load here — the anon redirect below bounces to /landing.
     if (bundle === null) return Promise.resolve();
-    return fetch(`/api/rest/dashboard-bundle${spaceQuery()}`)
+    return fetch(`/api/rest/dashboard-bundle${workspaceQuery()}`)
       .then((r) => (r.ok ? r.json() : null))
       .then(apply);
   }, [bundle]);
@@ -307,7 +307,7 @@ export default function Settings() {
   // value, so a freshly added domain wouldn't appear until reloadSession()
   // re-renders. Fetching the list here makes new domains show immediately.
   const refreshDomains = useCallback(() => {
-    return fetch(`/api/rest/domains${spaceQuery()}`)
+    return fetch(`/api/rest/domains${workspaceQuery()}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((list) => {
         if (Array.isArray(list)) setDomains(list);
@@ -318,7 +318,7 @@ export default function Settings() {
   // when the domain is now verified (so callers can stop polling).
   const verifyDomain = useCallback(
     async (d: { id: string; domain: string }): Promise<boolean> => {
-      const r = await fetch(`/api/rest/domains/${d.id}/verify${spaceQuery()}`, { method: "POST" });
+      const r = await fetch(`/api/rest/domains/${d.id}/verify${workspaceQuery()}`, { method: "POST" });
       // Issue #242: the backend returns HTTP 200 with {verified:false, detail}
       // on failure, so r.ok is not enough — only treat it as verified when the
       // body says verified:true.
@@ -378,7 +378,7 @@ export default function Settings() {
     if (!sp.length) return;
     // Resolve the active space (same key the Shell uses).
     let slug = "";
-    try { slug = window.localStorage.getItem("jf_space") || ""; } catch { /* ignore */ }
+    try { slug = window.localStorage.getItem("jf_workspace") || ""; } catch { /* ignore */ }
     const active = sp.find((x) => x.slug === slug) || sp[0];
     if (!active) return;
     setEmelSpaceId(active.id);
@@ -408,7 +408,7 @@ export default function Settings() {
     const sp = Array.isArray(spaces) ? spaces : [];
     if (!sp.length) return;
     let slug = "";
-    try { slug = window.localStorage.getItem("jf_space") || ""; } catch { /* ignore */ }
+    try { slug = window.localStorage.getItem("jf_workspace") || ""; } catch { /* ignore */ }
     const active = sp.find((x) => x.slug === slug) || sp[0];
     if (!active) return;
     setSfSpaceId(active.id);
@@ -502,7 +502,7 @@ export default function Settings() {
     e.preventDefault();
     setMsg("");
     setErr("");
-    const r = await fetch(`/api/rest/settings/chip${spaceQuery()}`, {
+    const r = await fetch(`/api/rest/settings/chip${workspaceQuery()}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -529,7 +529,7 @@ export default function Settings() {
   }
 
   async function clearCreds() {
-    await fetch(`/api/rest/settings/chip${spaceQuery()}`, { method: "DELETE" });
+    await fetch(`/api/rest/settings/chip${workspaceQuery()}`, { method: "DELETE" });
     setMsg(t("set.credsCleared"));
     await load();
   }
@@ -537,7 +537,7 @@ export default function Settings() {
   async function addWebhook(e: React.FormEvent) {
     e.preventDefault();
     setErr("");
-    const r = await fetch(`/api/rest/webhooks${spaceQuery()}`, {
+    const r = await fetch(`/api/rest/webhooks${workspaceQuery()}`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url: whUrl, secret: whSecret, events: whEvents }),
     });
@@ -556,7 +556,7 @@ export default function Settings() {
     e.preventDefault();
     if (!editId) return;
     setErr("");
-    const r = await fetch(`/api/rest/webhooks/${editId}${spaceQuery()}`, {
+    const r = await fetch(`/api/rest/webhooks/${editId}${workspaceQuery()}`, {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url: editUrl, secret: editSecret, events: editEvents }),
     });
@@ -591,7 +591,7 @@ export default function Settings() {
   // on mount to populate the status indicator.
   async function fetchDeliveries(webhookID: string) {
     try {
-      const r = await fetch(`/api/rest/webhooks/${webhookID}/deliveries?limit=10&space=${encodeURIComponent(spaceScope())}`);
+      const r = await fetch(`/api/rest/webhooks/${webhookID}/deliveries?limit=10&workspace=${encodeURIComponent(workspaceScope())}`);
       if (!r.ok) return;
       const list = (await r.json().catch(() => ([]))) as Delivery[];
       setDeliveries((prev) => ({ ...prev, [webhookID]: Array.isArray(list) ? list : [] }));
@@ -611,7 +611,7 @@ export default function Settings() {
       const path = isDeadLettered
         ? `/api/rest/webhooks/${webhookID}/retries/${row.id}/retry`
         : `/api/rest/webhooks/${webhookID}/deliveries/${row.id}/retry`;
-      const r = await fetch(`${path}?space=${encodeURIComponent(spaceScope())}`, { method: "POST" });
+      const r = await fetch(`${path}?workspace=${encodeURIComponent(workspaceScope())}`, { method: "POST" });
       if (r.ok) {
         setMsg(t("wh.retryQueued"));
         await fetchDeliveries(webhookID);
@@ -643,7 +643,7 @@ export default function Settings() {
   async function setDomainClaim(e: React.FormEvent) {
     e.preventDefault();
     setDomainMsg("");
-    const r = await fetch(`/api/rest/domains${spaceQuery()}`, {
+    const r = await fetch(`/api/rest/domains${workspaceQuery()}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ domain: domainInput }),
@@ -675,7 +675,7 @@ export default function Settings() {
     setAutoCnameBusy((prev) => ({ ...prev, [d.id]: true }));
     setDomainMsg("");
     try {
-      const r = await fetch(`/api/rest/domains/${d.id}/auto-cname${spaceQuery()}`, { method: "POST" });
+      const r = await fetch(`/api/rest/domains/${d.id}/auto-cname${workspaceQuery()}`, { method: "POST" });
       const res = await r.json().catch(() => ({}));
       if (res.auto_cname === "created") {
         setDomainMsg(t("set.autoCnameCreated"));
@@ -699,7 +699,7 @@ export default function Settings() {
     setTlsBusy((prev) => ({ ...prev, [d.id]: true }));
     setDomainMsg("");
     try {
-      const r = await fetch(`/api/rest/domains/${d.id}/tls-mode${spaceQuery()}`, {
+      const r = await fetch(`/api/rest/domains/${d.id}/tls-mode${workspaceQuery()}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mode }),
@@ -722,7 +722,7 @@ export default function Settings() {
     setTlsBusy((prev) => ({ ...prev, [d.id]: true }));
     setDomainMsg("");
     try {
-      const r = await fetch(`/api/rest/domains/${d.id}/tls-email${spaceQuery()}`, {
+      const r = await fetch(`/api/rest/domains/${d.id}/tls-email${workspaceQuery()}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email }),
@@ -749,7 +749,7 @@ export default function Settings() {
     setTlsBusy((prev) => ({ ...prev, [d.id]: true }));
     setDomainMsg("");
     try {
-      const r = await fetch(`/api/rest/domains/${d.id}/custom-cert${spaceQuery()}`, {
+      const r = await fetch(`/api/rest/domains/${d.id}/custom-cert${workspaceQuery()}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ cert: inp.cert, key: inp.key }),
@@ -1128,7 +1128,7 @@ export default function Settings() {
                         )}
                         <button
                           onClick={async () => {
-                            await fetch(`/api/rest/domains/${d.id}${spaceQuery()}`, { method: "DELETE" });
+                            await fetch(`/api/rest/domains/${d.id}${workspaceQuery()}`, { method: "DELETE" });
                             // Issue #321: load() reads bundle.domains from the closure's stale
                             // bundle, so the removed domain would linger until reloadSession()
                             // re-renders. refreshDomains() refetches the list directly so the
@@ -1410,7 +1410,7 @@ export default function Settings() {
               className="jf-input mt-3 max-w-xl font-mono text-xs"
               placeholder={'<script src="https://www.googletagmanager.com/gtag/js?id=G-XXXX"></-script>'} />
             <button onClick={async () => {
-              const r = await fetch(`/api/rest/settings/tracking${spaceQuery()}`, {
+              const r = await fetch(`/api/rest/settings/tracking${workspaceQuery()}`, {
                 method: "PUT", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ head: trackingHead }),
               });
@@ -1437,7 +1437,7 @@ export default function Settings() {
               </div>
             </div>
             <button onClick={async () => {
-              const r = await fetch(`/api/rest/settings/einvoice${spaceQuery()}`, {
+              const r = await fetch(`/api/rest/settings/einvoice${workspaceQuery()}`, {
                 method: "PUT", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ tin, msic }),
               });
@@ -1526,7 +1526,7 @@ export default function Settings() {
                           }} className="shrink-0 text-xs text-slate-500 hover:text-slate-800">
                             {open ? t("wh.hideHistory") : t("wh.showHistory")}
                           </button>
-                          <button onClick={async () => { await fetch(`/api/rest/webhooks/${wh.id}${spaceQuery()}`, { method: "DELETE" }); load(); }}
+                          <button onClick={async () => { await fetch(`/api/rest/webhooks/${wh.id}${workspaceQuery()}`, { method: "DELETE" }); load(); }}
                             className="shrink-0 text-xs text-slate-500 hover:text-red-500">✕</button>
                         </div>
                       </div>

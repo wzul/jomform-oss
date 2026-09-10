@@ -29,7 +29,7 @@ const BODY_PLACEHOLDERS: { token: string; meaning: string }[] = [
   },
   {
     token: "{{amount}}",
-    meaning: "The formatted sale amount (e.g. 123.45 in the space's currency).",
+    meaning: "The formatted sale amount (e.g. 123.45 in the workspace's currency).",
   },
   {
     token: "{{items}}",

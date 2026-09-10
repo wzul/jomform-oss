@@ -1,8 +1,8 @@
 // Issue #164: post-login space resolution. After a successful login (password,
 // passkey, magic link), decide where to send the user:
-//   - default space set  → sync jf_space to that space's slug, go to "/"
+//   - default space set  → sync jf_workspace to that space's slug, go to "/"
 //   - >1 space, no default → go to "/space-picker" (prompt which space to enter)
-//   - single space       → sync jf_space to it, go to "/"
+//   - single space       → sync jf_workspace to it, go to "/"
 //
 // `next` is the validated ?next redirect (OAuth authorize) — when present we
 // honour it directly (the OAuth flow already scopes to a space) and skip the
@@ -38,7 +38,7 @@ export async function resolvePostLogin(next: string): Promise<string> {
     const def = spaces.find((s) => s.id === defaultSpaceId);
     if (def) {
       try {
-        localStorage.setItem("jf_space", def.slug);
+        localStorage.setItem("jf_workspace", def.slug);
       } catch {}
       return "/";
     }
@@ -47,7 +47,7 @@ export async function resolvePostLogin(next: string): Promise<string> {
   // Single space → sync and go straight in (no prompt).
   if (spaces.length === 1) {
     try {
-      localStorage.setItem("jf_space", spaces[0].slug);
+      localStorage.setItem("jf_workspace", spaces[0].slug);
     } catch {}
     return "/";
   }
