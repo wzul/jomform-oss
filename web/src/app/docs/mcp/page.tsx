@@ -236,6 +236,8 @@ const TOOL_GROUPS: { group: string; tools: { name: string; desc: string }[] }[] 
       { name: "verify_domain", desc: "Sahkan domain tersuai (id dari list_domains). Hanya disahkan bila domain benar-benar memaparkan halaman JomForm." },
       { name: "remove_domain", desc: "Buang tuntutan domain tersuai (id dari list_domains)." },
       { name: "auto_cname_domain", desc: "Cipta rekod CNAME Cloudflare secara automatik untuk domain (perlu Cloudflare dipautkan). Pulangkan auto_cname=created|failed." },
+      { name: "get_domain_tls_email", desc: "Baca emel ACME/Let's Encrypt per-domain untuk auto-TLS. Kosong = kembali ke emel akaun, kemudian ACME_EMAIL global. Read-only." },
+      { name: "set_domain_tls_email", desc: "Tetapkan emel ACME/Let's Encrypt per-domain untuk auto-TLS. Kosong = kembali ke emel akaun, kemudian ACME_EMAIL global." },
     ],
   },
   {

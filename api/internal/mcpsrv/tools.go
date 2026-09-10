@@ -545,6 +545,15 @@ func (s *Server) registerTools() {
 		Name:        "set_domain_custom_cert",
 		Description: "Muat naik sijil TLS sendiri (bring-your-own-cert) untuk domain: cert + key dalam format PEM. Domain disajikan sijil ini.",
 	}, s.setDomainCustomCertMCP)
+	// Issue #398: per-domain ACME contact email (get/set).
+	addTool(s, &mcp.Tool{
+		Name:        "get_domain_tls_email",
+		Description: "Baca emel ACME/Let's Encrypt per-domain untuk auto-TLS. Kosong = kembali ke emel akaun, kemudian ACME_EMAIL global. Read-only.",
+	}, s.getDomainTLSEmailMCP)
+	addTool(s, &mcp.Tool{
+		Name:        "set_domain_tls_email",
+		Description: "Tetapkan emel ACME/Let's Encrypt per-domain untuk auto-TLS. Kosong = kembali ke emel akaun, kemudian ACME_EMAIL global.",
+	}, s.setDomainTLSEmailMCP)
 
 	// ── Parity: tracking (issue #396) ────────────────────────────────────
 	addTool(s, &mcp.Tool{

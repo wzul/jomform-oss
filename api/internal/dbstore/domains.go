@@ -31,7 +31,11 @@ type AccountDomain struct {
 	TLSError   string
 	TLSCertEnc string
 	TLSKeyEnc  string
-	CreatedAt  time.Time
+	// TLSEmail is the per-domain ACME/Let's Encrypt contact email (issue
+	// #398). Empty = fall back to the account email, then the global
+	// ACME_EMAIL env. Defaults to the account email on verify.
+	TLSEmail  string
+	CreatedAt time.Time
 }
 
 // DomainStore wraps account_domains.
@@ -62,10 +66,10 @@ func (s *DomainStore) GetDomain(ctx context.Context, accountID, id string) (*Acc
 	d := &AccountDomain{}
 	err := s.pool.QueryRow(ctx,
 		`SELECT id, account_id, domain, provider, verified, verified_at, auto_cname,
-		        tls_mode, tls_status, tls_error, tls_cert_enc, tls_key_enc, created_at
+		        tls_mode, tls_status, tls_error, tls_cert_enc, tls_key_enc, tls_email, created_at
 		 FROM account_domains WHERE id=$1 AND account_id=$2`, id, accountID).
 		Scan(&d.ID, &d.AccountID, &d.Domain, &d.Provider, &d.Verified, &d.VerifiedAt, &d.AutoCNAME,
-			&d.TLSMode, &d.TLSStatus, &d.TLSError, &d.TLSCertEnc, &d.TLSKeyEnc, &d.CreatedAt)
+			&d.TLSMode, &d.TLSStatus, &d.TLSError, &d.TLSCertEnc, &d.TLSKeyEnc, &d.TLSEmail, &d.CreatedAt)
 	return d, err
 }
 
@@ -73,7 +77,7 @@ func (s *DomainStore) GetDomain(ctx context.Context, accountID, id string) (*Acc
 func (s *DomainStore) ListDomains(ctx context.Context, accountID string) ([]*AccountDomain, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, account_id, domain, provider, verified, verified_at, auto_cname,
-		        tls_mode, tls_status, tls_error, tls_cert_enc, tls_key_enc, created_at
+		        tls_mode, tls_status, tls_error, tls_cert_enc, tls_key_enc, tls_email, created_at
 		 FROM account_domains WHERE account_id=$1 ORDER BY created_at`, accountID)
 	if err != nil {
 		return nil, err
@@ -84,7 +88,7 @@ func (s *DomainStore) ListDomains(ctx context.Context, accountID string) ([]*Acc
 		d := &AccountDomain{}
 		if err := rows.Scan(&d.ID, &d.AccountID, &d.Domain, &d.Provider, &d.Verified,
 			&d.VerifiedAt, &d.AutoCNAME, &d.TLSMode, &d.TLSStatus, &d.TLSError,
-			&d.TLSCertEnc, &d.TLSKeyEnc, &d.CreatedAt); err != nil {
+			&d.TLSCertEnc, &d.TLSKeyEnc, &d.TLSEmail, &d.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, d)
@@ -145,6 +149,16 @@ func (s *DomainStore) SetTLSStatus(ctx context.Context, accountID, domain, statu
 	_, err := s.pool.Exec(ctx,
 		`UPDATE account_domains SET tls_status=$3, tls_error=$4
 		 WHERE domain=$1 AND account_id=$2`, domain, accountID, status, reason)
+	return err
+}
+
+// SetTLSEmail sets the per-domain ACME/Let's Encrypt contact email (issue
+// #398). An empty email clears it, so the domain falls back to the account
+// email, then the global ACME_EMAIL env.
+func (s *DomainStore) SetTLSEmail(ctx context.Context, accountID, domain, email string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE account_domains SET tls_email=NULLIF($3,'') WHERE domain=$1 AND account_id=$2`,
+		domain, accountID, email)
 	return err
 }
 

@@ -109,11 +109,14 @@ func (h *RESTHandlers) listCustomDomains(w http.ResponseWriter, r *http.Request,
 		TLSMode   string `json:"tls_mode"`
 		TLSStatus string `json:"tls_status"`
 		TLSError  string `json:"tls_error,omitempty"`
+		// Issue #398: per-domain ACME contact email ("" = fall back to the
+		// account email, then the global ACME_EMAIL env).
+		TLSEmail string `json:"tls_email,omitempty"`
 	}
 	out := make([]row, 0, len(domains))
 	for _, d := range domains {
 		out = append(out, row{ID: d.ID, Domain: d.Domain, Provider: d.Provider, Verified: d.Verified, AutoCNAME: d.AutoCNAME,
-			TLSMode: d.TLSMode, TLSStatus: d.TLSStatus, TLSError: d.TLSError})
+			TLSMode: d.TLSMode, TLSStatus: d.TLSStatus, TLSError: d.TLSError, TLSEmail: d.TLSEmail})
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -174,12 +177,23 @@ func (h *RESTHandlers) verifyCustomDomainByID(w http.ResponseWriter, r *http.Req
 		respondErr(w, r, err)
 		return
 	}
+	// Issue #398: default the per-domain ACME email to the domain owner's
+	// account email when the domain is verified (unless the merchant already
+	// set one). The merchant can change it later in the config page.
+	acmeEmail := d.TLSEmail
+	if acmeEmail == "" {
+		acmeEmail = h.accountOwnerEmail(r, actx)
+		if acmeEmail != "" {
+			_ = h.Domains.SetTLSEmail(r.Context(), actx.Account.ID, d.Domain, acmeEmail)
+		}
+	}
 	// Issue #212: register the verified domain with the origin auto-TLS
-	// manager so it provisions + renews a Let's Encrypt cert (SNI-based).
-	// No-op when ACME is not configured (Cloudflare-proxied domains keep
-	// using Cloudflare's edge TLS).
+	// manager so it provisions + renews a Let's Encrypt cert (SNI-based),
+	// using the domain's ACME email (issue #398). No-op when auto-TLS is not
+	// configured (Cloudflare-proxied domains keep using Cloudflare's edge
+	// TLS).
 	if h.TLS != nil {
-		h.TLS.AddVerified(d.Domain)
+		h.TLS.AddVerified(d.Domain, acmeEmail)
 	}
 	// Issue #397: surface the TLS provisioning status. A cached cert means
 	// the domain is already actively serving; otherwise it is still
@@ -250,20 +264,61 @@ func (h *RESTHandlers) setDomainTLSMode(w http.ResponseWriter, r *http.Request, 
 	}
 	// Keep the TLS manager in sync: a custom-cert domain is served its own
 	// cert (if one is stored); switching to auto drops any custom cert and
-	// re-registers the domain for ACME provisioning.
+	// re-registers the domain for ACME provisioning (issue #398: with the
+	// domain's ACME email).
 	if h.TLS != nil {
 		if mode == "custom" {
 			h.TLS.RemoveCustomCert(d.Domain)
 		} else {
 			h.TLS.RemoveCustomCert(d.Domain)
 			if d.Verified {
-				h.TLS.AddVerified(d.Domain)
+				h.TLS.AddVerified(d.Domain, d.TLSEmail)
 			}
 		}
 	}
 	// Issue #92: audit the TLS-mode change.
 	h.recordEvent(r, actx, h.sessionOwnerID(r), "settings.domain_tls_mode", map[string]any{"domain": d.Domain, "mode": mode})
 	writeJSON(w, http.StatusOK, map[string]any{"tls_mode": mode})
+}
+
+// setDomainTLSEmail (issue #398): set the per-domain ACME/Let's Encrypt
+// contact email used to provision + renew the domain's auto-TLS cert. An
+// empty email clears it, so the domain falls back to the account email, then
+// the global ACME_EMAIL env. The TLS manager is re-registered with the new
+// email so the next renewal uses it.
+func (h *RESTHandlers) setDomainTLSEmail(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
+	d, err := h.Domains.GetByID(r.Context(), actx.Account.ID, r.PathValue("id"))
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "domain tidak dijumpai")
+		return
+	}
+	var in struct {
+		Email string `json:"email"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeErr(w, http.StatusBadRequest, "email wajib")
+		return
+	}
+	email := strings.ToLower(strings.TrimSpace(in.Email))
+	if email != "" && !strings.Contains(email, "@") {
+		writeErr(w, http.StatusBadRequest, "email tidak sah")
+		return
+	}
+	if err := h.Domains.SetTLSEmail(r.Context(), actx.Account.ID, d.Domain, email); err != nil {
+		respondErr(w, r, err)
+		return
+	}
+	// Re-register the domain with the TLS manager so the new email drives
+	// provisioning/renewal (issue #398).
+	if h.TLS != nil && d.Verified {
+		h.TLS.AddVerified(d.Domain, email)
+	}
+	// Issue #92: audit the ACME email change.
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "settings.domain_tls_email", map[string]any{"domain": d.Domain})
+	writeJSON(w, http.StatusOK, map[string]any{"tls_email": email})
 }
 
 // uploadCustomCert (issue #397): store a merchant-supplied cert + key
@@ -326,6 +381,25 @@ func (h *RESTHandlers) uploadCustomCert(w http.ResponseWriter, r *http.Request, 
 	// Issue #92: audit the custom-cert upload.
 	h.recordEvent(r, actx, h.sessionOwnerID(r), "settings.domain_custom_cert", map[string]any{"domain": d.Domain})
 	writeJSON(w, http.StatusOK, map[string]any{"tls_mode": "custom", "tls_status": "custom"})
+}
+
+// accountOwnerEmail resolves the email of the account's owner user (the
+// session user). Used to default a custom domain's ACME contact email to the
+// domain owner's account email (issue #398). Returns "" when the owner can't
+// be resolved.
+func (h *RESTHandlers) accountOwnerEmail(r *http.Request, actx *AccountCtx) string {
+	if h.Users == nil {
+		return ""
+	}
+	uid := h.sessionOwnerID(r)
+	if uid == "" {
+		return ""
+	}
+	u, err := h.Users.ByID(r.Context(), uid)
+	if err != nil || u == nil {
+		return ""
+	}
+	return u.Email
 }
 
 // normalizeDomain strips scheme/slash and lowercases.

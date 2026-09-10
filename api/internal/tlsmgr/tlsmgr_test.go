@@ -14,9 +14,12 @@ import (
 	"time"
 )
 
-func TestNewDisabledWithoutEmail(t *testing.T) {
-	if m := New(Options{}); m != nil {
-		t.Fatal("expected nil manager when ACME email is empty")
+func TestNewAlwaysNonNil(t *testing.T) {
+	// Issue #398: New always returns a manager so per-domain ACME emails can
+	// drive provisioning even without a global ACME_EMAIL. A domain only
+	// provisions when it resolves to a non-empty email.
+	if m := New(Options{}); m == nil {
+		t.Fatal("expected non-nil manager even without a global email")
 	}
 }
 
@@ -43,7 +46,7 @@ func TestHostPolicy(t *testing.T) {
 	}
 
 	// Verified custom domain allowed.
-	m.AddVerified("shop.example.com")
+	m.AddVerified("shop.example.com", "owner@example.com")
 	if err := m.hostPolicy(context.Background(), "shop.example.com"); err != nil {
 		t.Errorf("hostPolicy(verified) = %v, want nil", err)
 	}
@@ -60,14 +63,57 @@ func TestAddVerifiedIdempotentAndNormalizes(t *testing.T) {
 	if m == nil {
 		t.Fatal("expected non-nil manager")
 	}
-	m.AddVerified("  Shop.Example.com. ")
+	m.AddVerified("  Shop.Example.com. ", "owner@example.com")
 	if err := m.hostPolicy(context.Background(), "shop.example.com"); err != nil {
 		t.Errorf("hostPolicy after AddVerified = %v, want nil", err)
 	}
 	// Idempotent.
-	m.AddVerified("shop.example.com")
+	m.AddVerified("shop.example.com", "owner@example.com")
 	if err := m.hostPolicy(context.Background(), "shop.example.com"); err != nil {
 		t.Errorf("hostPolicy after second AddVerified = %v, want nil", err)
+	}
+}
+
+func TestPerDomainEmailManagerSelection(t *testing.T) {
+	// Issue #398: a verified domain with its own email provisions via a
+	// manager bound to that email; a domain without one falls back to the
+	// default (global) email; a domain with no resolvable email never
+	// provisions.
+	m := New(Options{Email: "ops@example.com", Primary: "jomform.com"})
+	if m == nil {
+		t.Fatal("expected non-nil manager")
+	}
+	m.AddVerified("shop.example.com", "owner@example.com")
+	m.AddVerified("plain.example.com", "") // falls back to default email
+
+	if mgr := m.managerForHost("shop.example.com"); mgr == nil || mgr.Email != "owner@example.com" {
+		t.Errorf("managerForHost(shop) = %+v, want email owner@example.com", mgr)
+	}
+	if mgr := m.managerForHost("plain.example.com"); mgr == nil || mgr.Email != "ops@example.com" {
+		t.Errorf("managerForHost(plain) = %+v, want fallback email ops@example.com", mgr)
+	}
+	if mgr := m.managerForHost("jomform.com"); mgr == nil || mgr.Email != "ops@example.com" {
+		t.Errorf("managerForHost(primary) = %+v, want default email ops@example.com", mgr)
+	}
+	// Unverified host → no manager.
+	if mgr := m.managerForHost("nope.example.com"); mgr != nil {
+		t.Errorf("managerForHost(unverified) = %+v, want nil", mgr)
+	}
+}
+
+func TestNoEmailNeverProvisions(t *testing.T) {
+	// Issue #398 fallback: no per-domain email and no global email → the
+	// domain is registered but never provisions (managerForHost returns nil).
+	m := New(Options{Primary: "jomform.com"})
+	if m == nil {
+		t.Fatal("expected non-nil manager")
+	}
+	m.AddVerified("shop.example.com", "")
+	if mgr := m.managerForHost("shop.example.com"); mgr != nil {
+		t.Errorf("managerForHost(no email) = %+v, want nil", mgr)
+	}
+	if err := m.hostPolicy(context.Background(), "shop.example.com"); err != nil {
+		t.Errorf("hostPolicy(verified, no email) = %v, want nil (still allowed)", err)
 	}
 }
 

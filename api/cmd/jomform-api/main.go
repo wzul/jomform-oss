@@ -113,20 +113,25 @@ func main() {
 	// Issue #211: share the metrics instance with the HTTP server so the DB
 	// query tracer and HTTP middleware record into the same registry.
 	deps.Metrics = metricsInst
-	// Issue #212: auto-TLS at origin for DNS-only custom domains. Enabled
-	// when ACME_EMAIL is set; otherwise the origin serves plain HTTP and
-	// Cloudflare-proxied domains keep using Cloudflare's edge TLS.
-	var tlsMgr *tlsmgr.Manager
-	if cfg.ACMEEmail != "" {
-		tlsMgr = tlsmgr.New(tlsmgr.Options{
-			Email:     cfg.ACMEEmail,
-			Directory: cfg.ACMEDirectory,
-			CertDir:   cfg.ACMECertDir,
-			Primary:   primaryDomain(cfg.AppBaseURL),
-			Log:       log,
-		})
-		deps.TLS = tlsMgr
-	}
+	// Issue #212: auto-TLS at origin for DNS-only custom domains. Issue
+	// #398: the manager is always created so per-domain ACME emails (default
+	// to the account email) can drive provisioning even without a global
+	// ACME_EMAIL. The TLS listener is only started when auto-TLS is
+	// configured (a global ACME_EMAIL or a cert dir for per-domain emails);
+	// otherwise the origin serves plain HTTP and Cloudflare-proxied domains
+	// keep using Cloudflare's edge TLS.
+	tlsMgr := tlsmgr.New(tlsmgr.Options{
+		Email:     cfg.ACMEEmail,
+		Directory: cfg.ACMEDirectory,
+		CertDir:   cfg.ACMECertDir,
+		Primary:   primaryDomain(cfg.AppBaseURL),
+		Log:       log,
+	})
+	deps.TLS = tlsMgr
+	// Issue #398: the TLS listener + ACME challenge handler are only started
+	// when auto-TLS is configured — a global ACME_EMAIL or a cert dir so
+	// per-domain emails can drive provisioning.
+	autoTLSEnabled := cfg.ACMEEmail != "" || cfg.ACMECertDir != ""
 	if pool != nil {
 		accounts := dbstore.NewAccountStore(pool)
 		deps.Users = dbstore.NewUserStore(pool)
@@ -518,8 +523,8 @@ func main() {
 	handler := httpapi.NewServer(cfg, log, deps).Handler()
 	// Issue #212: mount the ACME HTTP-01 challenge handler so the origin can
 	// answer Let's Encrypt challenges for DNS-only custom domains. No-op when
-	// auto-TLS is disabled (tlsMgr nil).
-	if tlsMgr != nil {
+	// auto-TLS is disabled.
+	if autoTLSEnabled {
 		acmeHandler := tlsMgr.HTTPHandler()
 		base := handler
 		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -555,7 +560,7 @@ func main() {
 	// renew Let's Encrypt certs for verified custom domains (and the primary
 	// domain). Only started when auto-TLS is configured.
 	var tlsSrv *http.Server
-	if tlsMgr != nil {
+	if autoTLSEnabled {
 		tlsSrv = &http.Server{
 			Addr:              ":" + cfg.TLSPort,
 			Handler:           handler,

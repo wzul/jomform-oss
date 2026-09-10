@@ -43,7 +43,7 @@ const FEATURES: { title: string; body: string }[] = [
   },
   {
     title: "Custom domains",
-    body: "Put your forms on your own domain (e.g. shop.yourname.com). Add the domain, point a CNAME to custom.jomform.com, and verify. With Cloudflare linked, JomForm can auto-create the CNAME for you.",
+    body: "Put your forms on your own domain (e.g. shop.yourname.com). Add the domain, point a CNAME to custom.jomform.com, and verify. With Cloudflare linked, JomForm can auto-create the CNAME for you. Auto-TLS (Let's Encrypt) uses your account email as the ACME contact by default — you can change it per domain in Settings → Domains.",
   },
   {
     title: "Landing pages",

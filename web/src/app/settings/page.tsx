@@ -134,7 +134,8 @@ export default function Settings() {
   const [domainVerified, setDomainVerified] = useState(false);
   // Issue #322: per-domain auto-CNAME status ("created" | "failed" | "").
   // Issue #397: per-domain TLS config + status (tls_mode/tls_status/tls_error).
-  const [domains, setDomains] = useState<{ id: string; domain: string; verified: boolean; auto_cname?: string; tls_mode?: string; tls_status?: string; tls_error?: string }[]>([]);
+  // Issue #398: per-domain ACME email (tls_email).
+  const [domains, setDomains] = useState<{ id: string; domain: string; verified: boolean; auto_cname?: string; tls_mode?: string; tls_status?: string; tls_error?: string; tls_email?: string }[]>([]);
   const [domainMsg, setDomainMsg] = useState("");
   // Issue #322: domains currently running a one-click auto-CNAME request.
   const [autoCnameBusy, setAutoCnameBusy] = useState<Record<string, boolean>>({});
@@ -144,6 +145,8 @@ export default function Settings() {
   const [tlsBusy, setTlsBusy] = useState<Record<string, boolean>>({});
   const [certOpen, setCertOpen] = useState<Record<string, boolean>>({});
   const [certInput, setCertInput] = useState<Record<string, { cert: string; key: string }>>({});
+  // Issue #398: per-domain ACME email editor (keyed by domain id).
+  const [tlsEmailInput, setTlsEmailInput] = useState<Record<string, string>>({});
   const [tin, setTin] = useState("");
   const [msic, setMsic] = useState("");
   const [webhooks, setWebhooks] = useState<{ id: string; url: string; events: string[] }[]>([]);
@@ -713,6 +716,29 @@ export default function Settings() {
     }
   }
 
+  // Issue #398: set the per-domain ACME/Let's Encrypt contact email.
+  async function setDomainTlsEmail(d: { id: string; domain: string }) {
+    const email = (tlsEmailInput[d.id] ?? "").trim();
+    setTlsBusy((prev) => ({ ...prev, [d.id]: true }));
+    setDomainMsg("");
+    try {
+      const r = await fetch(`/api/rest/domains/${d.id}/tls-email${spaceQuery()}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      if (r.ok) {
+        setDomainMsg(t("set.tlsEmailSaved"));
+      } else {
+        const e = await r.json().catch(() => ({}));
+        setDomainMsg(e.error || t("set.tlsEmailFailed"));
+      }
+      await refreshDomains();
+    } finally {
+      setTlsBusy((prev) => ({ ...prev, [d.id]: false }));
+    }
+  }
+
   // Issue #397: upload a bring-your-own-cert (cert + key PEM) for a domain.
   async function uploadCustomCert(d: { id: string; domain: string }) {
     const inp = certInput[d.id];
@@ -1041,7 +1067,7 @@ export default function Settings() {
                 <p className="mt-2 text-xs text-emerald-600">{t("set.autoCnameHint")}</p>
               )}
               <ul className="mt-4 space-y-2">
-                {domains.map((d: { id: string; domain: string; verified: boolean; auto_cname?: string; tls_mode?: string; tls_status?: string; tls_error?: string }) => (
+                {domains.map((d: { id: string; domain: string; verified: boolean; auto_cname?: string; tls_mode?: string; tls_status?: string; tls_error?: string; tls_email?: string }) => (
                   <li key={d.id} className="rounded-lg border border-[var(--jf-border)] px-4 py-3">
                     <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
@@ -1188,6 +1214,24 @@ export default function Settings() {
                               {certOpen[d.id] ? t("set.tlsCertClose") : t("set.tlsCertUpload")}
                             </button>
                           )}
+                        </div>
+                        {/* Issue #398: per-domain ACME contact email (defaults to the account email). */}
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          <label className="text-[11px] font-medium text-slate-500">{t("set.tlsEmailLabel")}</label>
+                          <input
+                            value={tlsEmailInput[d.id] ?? d.tls_email ?? ""}
+                            onChange={(e) => setTlsEmailInput((prev) => ({ ...prev, [d.id]: e.target.value }))}
+                            placeholder={t("set.tlsEmailPlaceholder")}
+                            className="jf-input w-64 font-mono text-[11px]"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setDomainTlsEmail(d)}
+                            disabled={!!tlsBusy[d.id]}
+                            className="rounded-md border border-[var(--jf-primary)] px-2.5 py-1 text-[11px] font-semibold text-[var(--jf-primary)] transition-colors hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {tlsBusy[d.id] ? t("set.tlsEmailSaving") : t("set.tlsEmailSave")}
+                          </button>
                         </div>
                         {d.tls_mode === "custom" && certOpen[d.id] && (
                           <div className="mt-2 space-y-2">

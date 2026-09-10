@@ -62,6 +62,9 @@ type domainOut struct {
 	TLSMode   string `json:"tls_mode"`
 	TLSStatus string `json:"tls_status"`
 	TLSError  string `json:"tls_error,omitempty"`
+	// Issue #398: per-domain ACME contact email ("" = fall back to the
+	// account email, then the global ACME_EMAIL env).
+	TLSEmail string `json:"tls_email,omitempty"`
 }
 
 func (s *Server) listDomains(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, []domainOut, error) {
@@ -79,7 +82,7 @@ func (s *Server) listDomains(ctx context.Context, _ *mcp.CallToolRequest, _ empt
 	out := make([]domainOut, 0, len(rows))
 	for _, d := range rows {
 		out = append(out, domainOut{ID: d.ID, Domain: d.Domain, Provider: d.Provider, Verified: d.Verified, AutoCNAME: d.AutoCNAME,
-			TLSMode: d.TLSMode, TLSStatus: d.TLSStatus, TLSError: d.TLSError})
+			TLSMode: d.TLSMode, TLSStatus: d.TLSStatus, TLSError: d.TLSError, TLSEmail: d.TLSEmail})
 	}
 	return nil, out, nil
 }
@@ -204,6 +207,56 @@ func (s *Server) setDomainTLSModeMCP(ctx context.Context, _ *mcp.CallToolRequest
 type domainTLSModeIn struct {
 	DomainID string `json:"domain_id" jsonschema:"ID domain (dari list_domains)"`
 	Mode     string `json:"mode" jsonschema:"Mode TLS: auto (Let's Encrypt, default) atau custom (bring-your-own-cert)"`
+}
+
+// getDomainTLSEmailMCP (issue #398): read the per-domain ACME/Let's Encrypt
+// contact email used to provision + renew the domain's auto-TLS cert. Empty
+// means the domain falls back to the account email, then the global
+// ACME_EMAIL env.
+func (s *Server) getDomainTLSEmailMCP(ctx context.Context, _ *mcp.CallToolRequest, in domainIDIn) (*mcp.CallToolResult, map[string]any, error) {
+	acc, err := s.accountAndScope(ctx, false)
+	if err != nil {
+		return nil, nil, err
+	}
+	if s.deps.Domains == nil {
+		return nil, nil, errors.New("domain store tidak tersedia")
+	}
+	d, err := s.deps.Domains.GetByID(ctx, acc, in.DomainID)
+	if err != nil {
+		return nil, nil, errors.New("domain tidak dijumpai")
+	}
+	return nil, map[string]any{"domain": d.Domain, "tls_email": d.TLSEmail}, nil
+}
+
+type domainTLSEmailIn struct {
+	DomainID string `json:"domain_id" jsonschema:"ID domain (dari list_domains)"`
+	Email    string `json:"email" jsonschema:"Emel ACME/Let's Encrypt untuk domain. Kosong = kembali ke emel akaun, kemudian ACME_EMAIL global."`
+}
+
+// setDomainTLSEmailMCP (issue #398): set the per-domain ACME/Let's Encrypt
+// contact email used to provision + renew the domain's auto-TLS cert. An
+// empty email clears it, so the domain falls back to the account email, then
+// the global ACME_EMAIL env.
+func (s *Server) setDomainTLSEmailMCP(ctx context.Context, _ *mcp.CallToolRequest, in domainTLSEmailIn) (*mcp.CallToolResult, map[string]any, error) {
+	acc, err := s.requireWriteRole(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if s.deps.Domains == nil {
+		return nil, nil, errors.New("domain store tidak tersedia")
+	}
+	d, err := s.deps.Domains.GetByID(ctx, acc, in.DomainID)
+	if err != nil {
+		return nil, nil, errors.New("domain tidak dijumpai")
+	}
+	email := strings.ToLower(strings.TrimSpace(in.Email))
+	if email != "" && !strings.Contains(email, "@") {
+		return nil, nil, errors.New("email tidak sah")
+	}
+	if err := s.deps.Domains.SetTLSEmail(ctx, acc, d.Domain, email); err != nil {
+		return nil, nil, fmt.Errorf("db: %w", err)
+	}
+	return nil, map[string]any{"domain": d.Domain, "tls_email": email}, nil
 }
 
 // setDomainCustomCertMCP (issue #397): store a merchant-supplied cert + key
