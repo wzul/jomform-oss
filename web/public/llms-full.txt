@@ -102,6 +102,18 @@ The MCP server exposes tools covering the full dashboard feature set:
 - **Legal pages:** `generate_legal_page`, `get_legal_page`, `set_legal_page`
 - **Events / audit:** `list_events` (account-scoped, read-only), `list_email_deliveries`, `list_form_submissions`, `list_spam_submissions`, `unspam_submission`, `list_spam_sales`, `unspam_sale`
 - **Media / templates:** `list_media`, `list_templates`, `use_template`
+- **Analytics:** `get_form_analytics`, `get_product_analytics`
+- **Custom domains:** `list_domains`, `add_domain`, `verify_domain`, `remove_domain`, `auto_cname_domain`
+- **Tracking:** `get_tracking`, `set_tracking`
+- **CHIP account settings:** `get_chip_settings`, `set_chip_settings`, `clear_chip_settings`
+- **Profile:** `update_profile_avatar`
+- **Passkeys:** `list_passkeys`, `delete_passkey`
+- **Social accounts:** `list_social_accounts`, `unlink_social_account`
+- **2FA:** `get_2fa_status`, `setup_2fa`, `enable_2fa`, `disable_2fa`
+- **System settings:** `get_system_settings`, `set_system_setting`
+- **Sales export:** `export_sales_csv`
+- **Cloudflare:** `get_cloudflare_status`, `connect_cloudflare_api_token`, `connect_cloudflare_global_key`, `disconnect_cloudflare`
+- **Webhook signing key:** `get_webhook_signing_key`
 - **Admin:** `purge_unverified_accounts`
 
 ### Troubleshooting

@@ -318,6 +318,12 @@ func main() {
 			AssetQueue: deps.EmailQueue,
 			// Issue #185: BNM exchange-rate cache (get_currency_rates tool).
 			Currency: curStore,
+			// Issue #396: MCP-parity batch — custom domains, system settings,
+			// passkeys, and the session store backing the 2FA pending-TOTP flow.
+			Domains:        dbstore.NewDomainStore(pool),
+			SystemSettings: dbstore.NewSystemSettingStore(pool),
+			Passkeys:       passkeysStore,
+			Sessions:       deps.Sessions,
 			// Issue #121: allow OAuth access tokens to authenticate /mcp too.
 			OAuth:      deps.OAuth,
 			DecryptKey: decryptKey,

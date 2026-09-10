@@ -8,6 +8,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/chip"
 	"github.com/wzul/jomform/api/internal/cryptoutil"
 	"github.com/wzul/jomform/api/internal/currency"
@@ -66,6 +67,16 @@ type Deps struct {
 	// Issue #185: BNM exchange-rate cache (Valkey). Nil → the
 	// get_currency_rates tool returns an empty list.
 	Currency *currency.Store
+	// Issue #396: custom-domain store (list/add/verify/remove/auto-CNAME).
+	// Nil → the domain tools error.
+	Domains *dbstore.DomainStore
+	// Issue #396: platform system settings (get/set). Nil → the tools error.
+	SystemSettings *dbstore.SystemSettingStore
+	// Issue #396: passkey credentials (list/delete). Nil → the tools error.
+	Passkeys *dbstore.PasskeyStore
+	// Issue #396: session store backing the 2FA pending-TOTP flow. Nil → the
+	// 2FA setup/enable tools error.
+	Sessions *auth.Sessions
 	// DecryptKey (ENCRYPTION_KEY hex bytes) enables per-form CHIP override tools.
 	DecryptKey []byte
 	// Issue #184: LLM client for auto-generating legal pages. Nil → the

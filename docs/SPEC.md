@@ -102,6 +102,21 @@ audit_logs(id, account_id FK, actor, action, entity, entity_id, diff jsonb, crea
   - `create_payment_link` (one-time) / `create_subscription` / `cancel_subscription` / `list_subscriptions` / `list_subscription_charges`
   - `verify_bank_proof` / `get_sales_summary` (angka dashboard)
   - `manage_webhooks` / `manage_bank_settings` (admin scope)
+  - Analytics: `get_form_analytics` / `get_product_analytics`
+  - Custom domains: `list_domains` / `add_domain` / `verify_domain` /
+    `remove_domain` / `auto_cname_domain`
+  - Tracking: `get_tracking` / `set_tracking`
+  - CHIP account settings: `get_chip_settings` / `set_chip_settings` /
+    `clear_chip_settings`
+  - Profile avatar: `update_profile_avatar`
+  - Passkeys: `list_passkeys` / `delete_passkey`
+  - Social accounts: `list_social_accounts` / `unlink_social_account`
+  - 2FA: `get_2fa_status` / `setup_2fa` / `enable_2fa` / `disable_2fa`
+  - System settings: `get_system_settings` / `set_system_setting`
+  - Sales export: `export_sales_csv`
+  - Cloudflare: `get_cloudflare_status` / `connect_cloudflare_api_token` /
+    `connect_cloudflare_global_key` / `disconnect_cloudflare`
+  - Webhook signing key: `get_webhook_signing_key`
 - Semua tool = thin wrapper ke service layer sama seperti REST (satu logik, dua interface) + audit log `actor=mcp:<key_name>`
 - Docs: contoh config Claude/situasi self-host; tool descriptions dua bahasa
 

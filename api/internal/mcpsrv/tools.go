@@ -492,6 +492,146 @@ func (s *Server) registerTools() {
 		Description: "Kesihatan sistem: uptime, bilangan ralat MCP terkini (24j), kedalaman queue emel. Super-admin sahaja; read-only; diaudit.",
 	}, s.adminSystemHealth)
 
+	// ── Parity: analytics (issue #396) ────────────────────────────────────
+	addTool(s, &mcp.Tool{
+		Name:        "get_form_analytics",
+		Description: "Analitik per-borang: bilangan submission, paid/confirmed/failed/pending, dan hasil (RM). Merentas semua space anda. Read-only.",
+	}, s.formAnalytics)
+	addTool(s, &mcp.Tool{
+		Name:        "get_product_analytics",
+		Description: "Analitik per-produk: unit terjual (paid), hasil (RM). Merentas semua space anda. Read-only.",
+	}, s.productAnalytics)
+
+	// ── Parity: custom domains (issue #396) ──────────────────────────────
+	addTool(s, &mcp.Tool{
+		Name:        "list_domains",
+		Description: "Senarai domain tersuai akaun: id, domain, provider, verified, auto_cname. Read-only.",
+	}, s.listDomains)
+	addTool(s, &mcp.Tool{
+		Name:        "add_domain",
+		Description: "Tuntut domain tersuai baharu (cth: kedai.com). Kemudian set CNAME → custom.jomform.com dan panggil verify_domain.",
+	}, s.addDomain)
+	addTool(s, &mcp.Tool{
+		Name:        "verify_domain",
+		Description: "Sahkan domain tersuai (id dari list_domains). Hanya disahkan bila domain benar-benar memaparkan halaman JomForm.",
+	}, s.verifyDomain)
+	addTool(s, &mcp.Tool{
+		Name:        "remove_domain",
+		Description: "Buang tuntutan domain tersuai (id dari list_domains).",
+	}, s.removeDomain)
+	addTool(s, &mcp.Tool{
+		Name:        "auto_cname_domain",
+		Description: "Cipta rekod CNAME Cloudflare secara automatik untuk domain (perlu Cloudflare dipautkan). Pulangkan auto_cname=created|failed.",
+	}, s.autoCNAMEDomain)
+
+	// ── Parity: tracking (issue #396) ────────────────────────────────────
+	addTool(s, &mcp.Tool{
+		Name:        "get_tracking",
+		Description: "Baca skrip penjejakan global akaun (Google Analytics, Facebook Pixel, dll) yang disuntik ke <head> borang awam. Read-only.",
+	}, s.getTracking)
+	addTool(s, &mcp.Tool{
+		Name:        "set_tracking",
+		Description: "Set skrip penjejakan global akaun. Hanya <script src=https://...>, <meta> dan komen dibenarkan (disanitasi).",
+	}, s.setTracking)
+
+	// ── Parity: CHIP account settings (issue #396) ──────────────────────
+	addTool(s, &mcp.Tool{
+		Name:        "get_chip_settings",
+		Description: "Baca status kredensial CHIP akaun: configured, verified, mode, brand_id, secret_key_masked, email_fallback, whitelist. Secret penuh tidak pernah dipulangkan. Read-only.",
+	}, s.getChipSettings)
+	addTool(s, &mcp.Tool{
+		Name:        "set_chip_settings",
+		Description: "Set kredensial CHIP akaun (brand_id + secret_key). Secret kosong = kekalkan kunci sedia ada. Disahkan terhadap CHIP sebelum disimpan. Admin sahaja.",
+	}, s.setChipSettings)
+	addTool(s, &mcp.Tool{
+		Name:        "clear_chip_settings",
+		Description: "Kosongkan kredensial CHIP akaun. Admin sahaja.",
+	}, s.clearChipSettings)
+
+	// ── Parity: profile avatar (issue #396) ──────────────────────────────
+	addTool(s, &mcp.Tool{
+		Name:        "update_profile_avatar",
+		Description: "Set avatar profil (URL mesti imej yang dihoskan JomForm dari upload bucket). Kosong = buang avatar.",
+	}, s.updateProfileAvatar)
+
+	// ── Parity: passkeys (issue #396) ────────────────────────────────────
+	addTool(s, &mcp.Tool{
+		Name:        "list_passkeys",
+		Description: "Senarai passkey (WebAuthn) akaun anda: id. Read-only.",
+	}, s.listPasskeys)
+	addTool(s, &mcp.Tool{
+		Name:        "delete_passkey",
+		Description: "Padam satu passkey (id dari list_passkeys).",
+	}, s.deletePasskey)
+
+	// ── Parity: social accounts (issue #396) ─────────────────────────────
+	addTool(s, &mcp.Tool{
+		Name:        "list_social_accounts",
+		Description: "Senarai akaun sosial yang dipautkan (google|azure_ad|github|cloudflare): provider, emel, nama, picture, linked_at. Read-only.",
+	}, s.listSocialAccounts)
+	addTool(s, &mcp.Tool{
+		Name:        "unlink_social_account",
+		Description: "Nyah-pautkan akaun sosial (provider dari list_social_accounts).",
+	}, s.unlinkSocialAccount)
+
+	// ── Parity: 2FA (issue #396) ─────────────────────────────────────────
+	addTool(s, &mcp.Tool{
+		Name:        "get_2fa_status",
+		Description: "Baca status 2FA akaun anda: enabled (true/false). Read-only.",
+	}, s.getTwoFAStatus)
+	addTool(s, &mcp.Tool{
+		Name:        "setup_2fa",
+		Description: "Jana rahsia TOTP untuk 2FA (belum aktif). Pulangkan secret + otpauth_url untuk diimbas aplikasi authenticator, kemudian panggil enable_2fa dengan kod.",
+	}, s.setupTwoFA)
+	addTool(s, &mcp.Tool{
+		Name:        "enable_2fa",
+		Description: "Aktifkan 2FA dengan kod 6-digit dari aplikasi authenticator (selepas setup_2fa).",
+	}, s.enableTwoFA)
+	addTool(s, &mcp.Tool{
+		Name:        "disable_2fa",
+		Description: "Matikan 2FA (perlu kata laluan akaun untuk pengesahan).",
+	}, s.disableTwoFA)
+
+	// ── Parity: system settings (issue #396) ─────────────────────────────
+	addTool(s, &mcp.Tool{
+		Name:        "get_system_settings",
+		Description: "Baca semua tetapan sistem platform (site_*, landing_*). Read-only.",
+	}, s.getSystemSettings)
+	addTool(s, &mcp.Tool{
+		Name:        "set_system_setting",
+		Description: "Set satu tetapan sistem (key mesti bermula site_ atau landing_).",
+	}, s.setSystemSetting)
+
+	// ── Parity: sales export CSV (issue #396) ────────────────────────────
+	addTool(s, &mcp.Tool{
+		Name:        "export_sales_csv",
+		Description: "Eksport jualan akaun sebagai CSV (ref_code, status, payment_method, buyer, total_rm, created_at, purchase_id). Boleh tapis form_id. Pulangkan kandungan csv.",
+	}, s.exportSalesCSV)
+
+	// ── Parity: Cloudflare (issue #396) ──────────────────────────────────
+	addTool(s, &mcp.Tool{
+		Name:        "get_cloudflare_status",
+		Description: "Baca status pautan Cloudflare akaun: linked, configured. Read-only.",
+	}, s.getCloudflareStatus)
+	addTool(s, &mcp.Tool{
+		Name:        "connect_cloudflare_api_token",
+		Description: "Pautkan Cloudflare via API token (disahkan serta-merta, disimpan terenkripsi).",
+	}, s.connectCloudflareAPIToken)
+	addTool(s, &mcp.Tool{
+		Name:        "connect_cloudflare_global_key",
+		Description: "Pautkan Cloudflare via global API key (disahkan serta-merta, disimpan terenkripsi).",
+	}, s.connectCloudflareGlobalKey)
+	addTool(s, &mcp.Tool{
+		Name:        "disconnect_cloudflare",
+		Description: "Nyah-pautkan Cloudflare dari akaun.",
+	}, s.disconnectCloudflare)
+
+	// ── Parity: webhook signing key (issue #396) ─────────────────────────
+	addTool(s, &mcp.Tool{
+		Name:        "get_webhook_signing_key",
+		Description: "Baca kunci tandatangan Ed25519 akaun (key_id, public_key, alg) untuk mengesahkan tandatangan webhook X-JomForm-Signature-Ed25519. Read-only.",
+	}, s.getWebhookSigningKey)
+
 }
 
 // helper: require a write-capable key. Issue #307: the resolved account
