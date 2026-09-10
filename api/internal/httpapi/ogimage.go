@@ -11,9 +11,12 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/disintegration/imaging"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/gofont/gobold"
 	"golang.org/x/image/font/gofont/gomedium"
@@ -29,18 +32,27 @@ import (
 // branding) rendered server-side as a PNG — no headless browser dependency.
 // If the merchant sets a custom og:image (or a form logo), that is used
 // instead; otherwise the generated default is served at /og/{slug}.png.
+//
+// Issue #425: the default was redesigned to match Wan's approved mockup —
+// indigo→white gradient, real JomForm "JF" mark (white bold on indigo rounded
+// square, top-left), dark bold centered title, muted subtitle (space + domain),
+// footer with the JomForm tagline, and a subtle decorative indigo card/check
+// icon on the right. When the merchant sets a theme color or a form logo, the
+// gradient/accents are tinted with the theme color and the form logo is used
+// in place of the generic "JF" mark.
 
 const (
 	ogImageW = 1200
 	ogImageH = 630
 )
 
-// ogBrandColors mirror the JomForm brand gradient (indigo → violet).
+// ogBrandColors mirror the JomForm brand. The approved mockup uses indigo
+// (#5e6ad2) fading to white.
 var (
-	ogIndigo = color.RGBA{0x63, 0x66, 0xf1, 0xff}
-	ogViolet = color.RGBA{0x8b, 0x5c, 0xf6, 0xff}
+	ogIndigo = color.RGBA{0x5e, 0x6a, 0xd2, 0xff}
 	ogWhite  = color.RGBA{0xff, 0xff, 0xff, 0xff}
-	ogMuted  = color.RGBA{0xe0, 0xe7, 0xff, 0xff}
+	ogDark   = color.RGBA{0x1f, 0x29, 0x37, 0xff} // title / footer
+	ogMuted  = color.RGBA{0x6b, 0x72, 0x80, 0xff} // subtitle
 )
 
 // ogFonts are lazily parsed once (they are embedded in the x/image module).
@@ -129,59 +141,204 @@ func ogDrawText(img *image.RGBA, face font.Face, s string, x, y int, c color.RGB
 	d.DrawString(s)
 }
 
-// renderOGImage renders the branded 1200x630 social preview for a form.
-// title is the form title; space is the space/business name (may be empty).
-func renderOGImage(title, space string) ([]byte, error) {
+// ogParseHex parses a "#rrggbb" (or "#rgb") hex color. Returns ok=false for
+// anything malformed so callers can fall back to the brand indigo.
+func ogParseHex(s string) (color.RGBA, bool) {
+	s = strings.TrimPrefix(strings.TrimSpace(s), "#")
+	if len(s) == 3 {
+		s = string([]byte{s[0], s[0], s[1], s[1], s[2], s[2]})
+	}
+	if len(s) != 6 {
+		return color.RGBA{}, false
+	}
+	r, err1 := strconv.ParseUint(s[0:2], 16, 8)
+	g, err2 := strconv.ParseUint(s[2:4], 16, 8)
+	b, err3 := strconv.ParseUint(s[4:6], 16, 8)
+	if err1 != nil || err2 != nil || err3 != nil {
+		return color.RGBA{}, false
+	}
+	return color.RGBA{uint8(r), uint8(g), uint8(b), 0xff}, true
+}
+
+// ogBlend linearly interpolates a→b by t (0..1).
+func ogBlend(a, b color.RGBA, t float64) color.RGBA {
+	lerp := func(x, y uint8) uint8 {
+		return uint8(float64(x) + (float64(y)-float64(x))*t)
+	}
+	return color.RGBA{lerp(a.R, b.R), lerp(a.G, b.G), lerp(a.B, b.B), 0xff}
+}
+
+// ogFillRoundedRect fills a rectangle with rounded corners of the given radius
+// in the given color.
+func ogFillRoundedRect(img *image.RGBA, r image.Rectangle, radius int, c color.RGBA) {
+	u := image.NewUniform(c)
+	// Body.
+	draw.Draw(img, image.Rect(r.Min.X, r.Min.Y+radius, r.Max.X, r.Max.Y-radius), u, image.Point{}, draw.Src)
+	draw.Draw(img, image.Rect(r.Min.X+radius, r.Min.Y, r.Max.X-radius, r.Max.Y), u, image.Point{}, draw.Src)
+	// Corners.
+	corner := func(cx, cy int) {
+		for dy := -radius; dy <= radius; dy++ {
+			for dx := -radius; dx <= radius; dx++ {
+				if dx*dx+dy*dy <= radius*radius {
+					img.SetRGBA(cx+dx, cy+dy, c)
+				}
+			}
+		}
+	}
+	corner(r.Min.X+radius, r.Min.Y+radius)
+	corner(r.Max.X-radius-1, r.Min.Y+radius)
+	corner(r.Min.X+radius, r.Max.Y-radius-1)
+	corner(r.Max.X-radius-1, r.Max.Y-radius-1)
+}
+
+// ogDrawCheck draws a simple checkmark centered in the given box, in color c.
+func ogDrawCheck(img *image.RGBA, box image.Rectangle, c color.RGBA) {
+	// A 3-segment polyline checkmark scaled to the box.
+	w := float64(box.Dx())
+	h := float64(box.Dy())
+	pts := [][2]float64{
+		{0.20 * w, 0.52 * h},
+		{0.42 * w, 0.72 * h},
+		{0.80 * w, 0.30 * h},
+	}
+	thick := int(0.10 * w)
+	if thick < 6 {
+		thick = 6
+	}
+	seg := func(p0, p1 [2]float64) {
+		x0, y0 := box.Min.X+int(p0[0]), box.Min.Y+int(p0[1])
+		x1, y1 := box.Min.X+int(p1[0]), box.Min.Y+int(p1[1])
+		steps := 40
+		for i := 0; i <= steps; i++ {
+			t := float64(i) / float64(steps)
+			x := x0 + int((float64(x1)-float64(x0))*t)
+			y := y0 + int((float64(y1)-float64(y0))*t)
+			for dy := -thick / 2; dy <= thick/2; dy++ {
+				for dx := -thick / 2; dx <= thick/2; dx++ {
+					if x+dx >= 0 && x+dx < ogImageW && y+dy >= 0 && y+dy < ogImageH {
+						img.SetRGBA(x+dx, y+dy, c)
+					}
+				}
+			}
+		}
+	}
+	seg(pts[0], pts[1])
+	seg(pts[1], pts[2])
+}
+
+// ogFetchLogo fetches and decodes a form logo image (used in place of the
+// generic "JF" mark). Returns nil on any failure so the renderer falls back
+// to the JomForm mark. The logo is owner-gated (set by the merchant), so this
+// is not an arbitrary SSRF surface; a short timeout keeps the render fast.
+func ogFetchLogo(rawURL string) image.Image {
+	if rawURL == "" {
+		return nil
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return nil
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(rawURL)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+	img, err := imaging.Decode(resp.Body, imaging.AutoOrientation(true))
+	if err != nil {
+		return nil
+	}
+	return img
+}
+
+// renderOGImage renders the branded 1200x630 social preview for a form,
+// matching Wan's approved mockup (issue #425):
+//   - indigo→white gradient background (tinted toward the theme color if set)
+//   - real JomForm "JF" mark (white bold on indigo rounded square, top-left),
+//     or the form logo when set
+//   - dark bold centered title
+//   - muted subtitle (space name + domain)
+//   - footer with the JomForm tagline
+//   - subtle decorative indigo card/check icon on the right
+func renderOGImage(title, space, domain, themePrimary, logoURL string) ([]byte, error) {
 	ensureOGFonts()
 	if ogFaceTitle == nil || ogFaceSpace == nil || ogFaceMark == nil || ogFaceTag == nil {
 		return nil, errOGFontUnavailable
 	}
 
+	// Theme color (if set) tints the gradient top and the accents.
+	accent := ogIndigo
+	if c, ok := ogParseHex(themePrimary); ok {
+		accent = c
+	}
+	gradTop := ogBlend(ogIndigo, accent, 0.5)
+
 	img := image.NewRGBA(image.Rect(0, 0, ogImageW, ogImageH))
 
-	// Vertical brand gradient background.
+	// Vertical indigo→white gradient background.
 	for y := 0; y < ogImageH; y++ {
 		t := float64(y) / float64(ogImageH-1)
-		c := color.RGBA{
-			R: uint8(float64(ogIndigo.R) + (float64(ogViolet.R)-float64(ogIndigo.R))*t),
-			G: uint8(float64(ogIndigo.G) + (float64(ogViolet.G)-float64(ogIndigo.G))*t),
-			B: uint8(float64(ogIndigo.B) + (float64(ogViolet.B)-float64(ogIndigo.B))*t),
-			A: 0xff,
-		}
+		c := ogBlend(gradTop, ogWhite, t)
 		for x := 0; x < ogImageW; x++ {
 			img.SetRGBA(x, y, c)
 		}
 	}
 
-	// "JF" mark in a rounded-ish white translucent box (top-left).
-	mark := image.Rect(72, 72, 288, 288)
-	draw.Draw(img, mark, &image.Uniform{color.RGBA{0xff, 0xff, 0xff, 0x24}}, image.Point{}, draw.Src)
-	ogDrawText(img, ogFaceMark, "JF", 180, 238, ogWhite)
+	// Decorative indigo card/check icon on the right (subtle, semi-transparent).
+	iconBox := image.Rect(1010, 250, 1110, 350)
+	ogFillRoundedRect(img, iconBox, 24, color.RGBA{accent.R, accent.G, accent.B, 0x2e})
+	ogDrawCheck(img, image.Rect(1032, 272, 1088, 328), color.RGBA{accent.R, accent.G, accent.B, 0xcc})
 
-	// Title block (wrapped, bold, large) — centered vertically.
+	// Logo mark (top-left): the form logo when set, else the JomForm "JF" mark
+	// (white bold on indigo rounded square).
+	markBox := image.Rect(72, 72, 216, 216)
+	if logo := ogFetchLogo(logoURL); logo != nil {
+		// Draw the logo image scaled to fit the box (with a soft white backing
+		// so it reads on the indigo gradient).
+		ogFillRoundedRect(img, markBox, 24, color.RGBA{0xff, 0xff, 0xff, 0xcc})
+		fit := imaging.Fit(logo, markBox.Dx()-24, markBox.Dy()-24, imaging.Lanczos)
+		off := image.Pt(markBox.Min.X+(markBox.Dx()-fit.Bounds().Dx())/2,
+			markBox.Min.Y+(markBox.Dy()-fit.Bounds().Dy())/2)
+		draw.Draw(img, fit.Bounds().Add(off), fit, image.Point{}, draw.Over)
+	} else {
+		ogFillRoundedRect(img, markBox, 24, accent)
+		ogDrawText(img, ogFaceMark, "JF", 144, 196, ogWhite)
+	}
+
+	// Title block (wrapped, bold, dark) — centered.
 	titleFace := ogFaceTitle
 	titleLines := ogWrap(titleFace, title, 1000)
-	// Cap at 4 lines so the card never overflows.
 	if len(titleLines) > 4 {
 		titleLines = titleLines[:4]
 	}
 	lineH := 84
 	startY := 300 - (len(titleLines)-1)*lineH/2
 	for i, ln := range titleLines {
-		ogDrawText(img, titleFace, ln, ogImageW/2, startY+i*lineH, ogWhite)
+		ogDrawText(img, titleFace, ln, ogImageW/2, startY+i*lineH, ogDark)
 	}
 
-	// Space / business name under the title (muted).
-	if space != "" {
-		spaceLines := ogWrap(ogFaceSpace, space, 900)
-		if len(spaceLines) > 1 {
-			spaceLines = spaceLines[:1]
+	// Subtitle: space name + domain (muted).
+	sub := space
+	if domain != "" {
+		if sub != "" {
+			sub += " · " + domain
+		} else {
+			sub = domain
 		}
-		ogDrawText(img, ogFaceSpace, spaceLines[0], ogImageW/2, startY+len(titleLines)*lineH+40, ogMuted)
+	}
+	if sub != "" {
+		subLines := ogWrap(ogFaceSpace, sub, 900)
+		if len(subLines) > 1 {
+			subLines = subLines[:1]
+		}
+		ogDrawText(img, ogFaceSpace, subLines[0], ogImageW/2, startY+len(titleLines)*lineH+40, ogMuted)
 	}
 
-	// JomForm wordmark at the bottom.
-	ogDrawText(img, ogFaceMark, "JomForm", ogImageW/2, 560, ogWhite)
+	// Footer: JomForm wordmark + tagline (dark, on the white lower half).
+	ogDrawText(img, ogFaceMark, "JomForm", ogImageW/2, 560, ogDark)
 	ogDrawText(img, ogFaceTag, "Order forms, agent payments & sales", ogImageW/2, 596, ogMuted)
 
 	var buf bytes.Buffer
@@ -196,11 +353,11 @@ func renderOGImage(title, space string) ([]byte, error) {
 var ogImageCache sync.Map // formID -> []byte
 
 // cachedOGImage returns the cached PNG for a form, rendering + caching on miss.
-func cachedOGImage(formID, title, space string) ([]byte, error) {
+func cachedOGImage(formID, title, space, domain, themePrimary, logoURL string) ([]byte, error) {
 	if v, ok := ogImageCache.Load(formID); ok {
 		return v.([]byte), nil
 	}
-	pngBytes, err := renderOGImage(title, space)
+	pngBytes, err := renderOGImage(title, space, domain, themePrimary, logoURL)
 	if err != nil {
 		return nil, err
 	}
@@ -234,7 +391,13 @@ func (h *PublicHandlers) handleOGImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	space := h.spaceNameFor(r.Context(), f)
-	pngBytes, err := cachedOGImage(f.ID, f.Title, space)
+	themePrimary := ""
+	if f.Theme != nil {
+		if v, ok := f.Theme["primary"].(string); ok {
+			themePrimary = v
+		}
+	}
+	pngBytes, err := cachedOGImage(f.ID, f.Title, space, r.Host, themePrimary, f.LogoURL)
 	if err != nil {
 		slog.Error("og_image_render", "err", err)
 		http.Error(w, "image error", http.StatusInternalServerError)

@@ -13,7 +13,7 @@ import (
 // Issue #411: the generated default og:image must render a valid 1200x630 PNG
 // and the form OG meta must include title/description/url/image + twitter:card.
 func TestRenderOGImageProducesPNG(t *testing.T) {
-	pngBytes, err := renderOGImage("Wedding RSVP", "Aisyah & Hafiz")
+	pngBytes, err := renderOGImage("Wedding RSVP", "Aisyah & Hafiz", "wan.jomform.com", "", "")
 	if err != nil {
 		t.Fatalf("renderOGImage: %v", err)
 	}
@@ -25,26 +25,34 @@ func TestRenderOGImageProducesPNG(t *testing.T) {
 	if b.Dx() != ogImageW || b.Dy() != ogImageH {
 		t.Fatalf("og image size = %dx%d, want %dx%d", b.Dx(), b.Dy(), ogImageW, ogImageH)
 	}
-	// The gradient background is never pure white, so white-ish pixels mean
-	// text was actually drawn (not a blank card).
-	white := 0
+	// The approved mockup has a white lower half, so the dark title/footer
+	// text must be present (not a blank card).
+	dark := 0
 	for y := 0; y < b.Dy(); y += 4 {
 		for x := 0; x < b.Dx(); x += 4 {
 			r, g, bl, _ := img.At(x, y).RGBA()
-			if r > 60000 && g > 60000 && bl > 60000 {
-				white++
+			if r < 30000 && g < 30000 && bl < 30000 {
+				dark++
 			}
 		}
 	}
-	if white < 50 {
-		t.Fatalf("og image has too few white text pixels: %d", white)
+	if dark < 50 {
+		t.Fatalf("og image has too few dark text pixels: %d", dark)
 	}
 }
 
 func TestRenderOGImageWrapsLongTitle(t *testing.T) {
 	// A very long title must not panic and must still render.
-	if _, err := renderOGImage(strings.Repeat("A very long form title ", 20), "Space"); err != nil {
+	if _, err := renderOGImage(strings.Repeat("A very long form title ", 20), "Space", "wan.jomform.com", "", ""); err != nil {
 		t.Fatalf("renderOGImage long title: %v", err)
+	}
+}
+
+func TestRenderOGImageAcceptsThemeAndLogo(t *testing.T) {
+	// A theme color + logo URL must not break rendering (logo fetch fails
+	// gracefully and falls back to the JF mark).
+	if _, err := renderOGImage("RSVP Majlis Kahwin", "Abu & Aminah", "wan.jomform.com", "#7c3aed", "https://cdn.example.com/logo.png"); err != nil {
+		t.Fatalf("renderOGImage with theme+logo: %v", err)
 	}
 }
 
