@@ -354,11 +354,15 @@ export default function Login() {
       />
 
       <div className="relative w-full max-w-sm">
-        {/* logo */}
+        {/* logo — issue #436: clicking the JF logo returns to the home/landing page */}
         <div className="mb-8 text-center">
-          <div className="mx-auto mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-[#5e6ad2] text-lg font-bold text-white shadow-[0_0_24px_rgba(94,106,210,0.45)]">
+          <a
+            href="/"
+            aria-label={t("login.backToHome")}
+            className="mx-auto mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-[#5e6ad2] text-lg font-bold text-white shadow-[0_0_24px_rgba(94,106,210,0.45)] transition-opacity hover:opacity-90"
+          >
             JF
-          </div>
+          </a>
           <h1 className="text-xl font-semibold text-[var(--jf-text)]" style={{ letterSpacing: "-0.02em" }}>
             {step === 2
               ? t("login.totpTitle")
@@ -673,6 +677,16 @@ export default function Login() {
 
         <p className="mt-6 text-center text-xs text-[#62666d]">
           {t("login.termsNote")}
+        </p>
+
+        {/* issue #436: subtle back-to-home link below the login card */}
+        <p className="mt-4 text-center">
+          <a
+            href="/"
+            className="text-xs font-medium text-[#62666d] transition-colors hover:text-[#5e6ad2]"
+          >
+            {t("login.backToHome")}
+          </a>
         </p>
       </div>
     </main>

@@ -91,6 +91,8 @@ const DICT = {
   "login.passkeyUnsupported": { en: "Passkey cancelled or not supported by this browser.", ms: "Passkey dibatalkan atau tidak disokong pelayar.", zh: "通行密钥已取消或此浏览器不支持。", ta: "கடவுச்சாவி ரத்துசெய்யப்பட்டது அல்லது இந்த உலாவி ஆதரிக்கவில்லை.", ar: "تم إلغاء مفتاح المرور أو المتصفح لا يدعمه." },
   "login.continueWith": { en: "Continue with {provider}", ms: "Teruskan dengan {provider}", zh: "使用 {provider} 继续", ta: "{provider} உடன் தொடரவும்", ar: "المتابعة عبر {provider}" },
   "login.termsNote": { en: "By continuing, you agree to JomForm's Terms & Privacy Policy.", ms: "Dengan meneruskan, anda bersetuju dengan Terma & Polisi Privasi JomForm.", zh: "继续即表示您同意 JomForm 的服务条款和隐私政策。", ta: "தொடர்வதன் மூலம், JomForm இன் விதிமுறைகள் & தனியுரிமைக் கொள்கையை நீங்கள் ஏற்கிறீர்கள்.", ar: "بالمتابعة، فإنك توافق على شروط وسياسة خصوصية JomForm." },
+  // issue #436: back-to-home link on the login page
+  "login.backToHome": { en: "← Back to home", ms: "← Kembali ke laman utama", zh: "← 返回首页", ta: "← முகப்புக்குத் திரும்பு", ar: "← العودة إلى الصفحة الرئيسية" },
   "magic.title": { en: "Signing you in…", ms: "Memproses log masuk…", zh: "正在登录…", ta: "உள்நுழைக்கிறது…", ar: "جارٍ تسجيل الدخول…" },
   "magic.invalid": { en: "This sign-in link is invalid or has expired.", ms: "Pautan log masuk ini tidak sah atau telah tamat tempoh.", zh: "此登录链接无效或已过期。", ta: "இந்த உள்நுழைவு இணைப்பு தவறானது அல்லது காலாவதியானது.", ar: "رابط تسجيل الدخول هذا غير صالح أو منتهي الصلاحية." },
   "magic.goLogin": { en: "Go to sign in", ms: "Ke log masuk", zh: "前往登录", ta: "உள்நுழைவுக்குச் செல்", ar: "الانتقال إلى تسجيل الدخول" },
