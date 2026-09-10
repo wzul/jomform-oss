@@ -3,7 +3,7 @@
 -- to that affiliate and commission is computed on paid sales.
 CREATE TABLE IF NOT EXISTS affiliates (
     id            TEXT PRIMARY KEY,
-    workspace_id  TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    workspace_id  uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
     code          TEXT NOT NULL,
     name          TEXT NOT NULL DEFAULT '',
     email         TEXT NOT NULL DEFAULT '',
