@@ -25,7 +25,8 @@ type Manager struct {
 	m        *autocert.Manager
 	mu       sync.RWMutex
 	verified map[string]struct{} // verified custom domains (lowercased)
-	primary  string              // primary domain (e.g. jomform.com)
+	custom   map[string]*tls.Certificate
+	primary  string // primary domain (e.g. jomform.com)
 	log      *slog.Logger
 }
 
@@ -58,6 +59,7 @@ func New(o Options) *Manager {
 	}
 	mg := &Manager{
 		verified: map[string]struct{}{},
+		custom:   map[string]*tls.Certificate{},
 		primary:  strings.ToLower(o.Primary),
 		log:      log,
 	}
@@ -76,7 +78,9 @@ func New(o Options) *Manager {
 
 // hostPolicy allows the primary domain, its subdomains, and any verified
 // custom domain. This prevents the origin from issuing certs for arbitrary
-// hostnames (rate-limit + abuse protection).
+// hostnames (rate-limit + abuse protection). A domain with a merchant-supplied
+// custom cert is also allowed (it is served from the custom map, never
+// re-issued via ACME).
 func (mg *Manager) hostPolicy(_ context.Context, host string) error {
 	host = strings.ToLower(strings.TrimSuffix(host, "."))
 	if mg.primary != "" && (host == mg.primary || strings.HasSuffix(host, "."+mg.primary)) {
@@ -84,8 +88,9 @@ func (mg *Manager) hostPolicy(_ context.Context, host string) error {
 	}
 	mg.mu.RLock()
 	_, ok := mg.verified[host]
+	_, hasCustom := mg.custom[host]
 	mg.mu.RUnlock()
-	if ok {
+	if ok || hasCustom {
 		return nil
 	}
 	return fmt.Errorf("acme/autocert: host %q not allowed", host)
@@ -109,13 +114,71 @@ func (mg *Manager) RemoveVerified(domain string) {
 	domain = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(domain), "."))
 	mg.mu.Lock()
 	delete(mg.verified, domain)
+	delete(mg.custom, domain)
 	mg.mu.Unlock()
 }
 
+// SetCustomCert registers a merchant-supplied certificate for a domain
+// (bring-your-own-cert, issue #397). The domain is served this cert via SNI
+// and is never re-issued through ACME. Idempotent.
+func (mg *Manager) SetCustomCert(domain string, cert *tls.Certificate) {
+	domain = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(domain), "."))
+	if domain == "" || cert == nil {
+		return
+	}
+	mg.mu.Lock()
+	mg.custom[domain] = cert
+	mg.mu.Unlock()
+	mg.log.Info("custom_cert_registered", "domain", domain)
+}
+
+// RemoveCustomCert drops a merchant-supplied cert for a domain (issue #397).
+// The domain falls back to auto-TLS provisioning (if verified).
+func (mg *Manager) RemoveCustomCert(domain string) {
+	domain = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(domain), "."))
+	mg.mu.Lock()
+	delete(mg.custom, domain)
+	mg.mu.Unlock()
+}
+
+// HasCert reports whether a cert is already cached on disk for the domain
+// (issue #397). It is used to surface the TLS provisioning status: a cached
+// cert means the domain is actively serving (status "active"); otherwise it is
+// still provisioning ("pending"). Returns false when auto-TLS is disabled or
+// the domain has a merchant-supplied cert.
+func (mg *Manager) HasCert(domain string) bool {
+	domain = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(domain), "."))
+	if domain == "" || mg.m.Cache == nil {
+		return false
+	}
+	mg.mu.RLock()
+	_, hasCustom := mg.custom[domain]
+	mg.mu.RUnlock()
+	if hasCustom {
+		return false
+	}
+	_, err := mg.m.Cache.Get(context.Background(), domain)
+	return err == nil
+}
+
 // TLSConfig returns a *tls.Config whose GetCertificate performs SNI-based
-// cert selection via autocert, falling back to the primary domain's cert.
+// cert selection. A merchant-supplied custom cert (issue #397) takes
+// precedence; otherwise autocert provisions + serves a Let's Encrypt cert,
+// falling back to the primary domain's cert.
 func (mg *Manager) TLSConfig() *tls.Config {
-	return mg.m.TLSConfig()
+	cfg := mg.m.TLSConfig()
+	acmeGet := cfg.GetCertificate
+	cfg.GetCertificate = func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+		host := strings.ToLower(strings.TrimSuffix(hello.ServerName, "."))
+		mg.mu.RLock()
+		cert, ok := mg.custom[host]
+		mg.mu.RUnlock()
+		if ok {
+			return cert, nil
+		}
+		return acmeGet(hello)
+	}
+	return cfg
 }
 
 // HTTPHandler returns the HTTP-01 challenge handler that must be mounted

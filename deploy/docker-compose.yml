@@ -81,6 +81,15 @@ services:
       SES_SMTP_PASS: ${SES_SMTP_PASS:-}
       SES_FROM: ${SES_FROM:-}
       PORT: "8080"
+      # Issue #212/#397: origin auto-TLS for DNS-only (grey-cloud) custom
+      # domains. ACME_EMAIL enables the origin TLS listener (SNI-based cert
+      # selection via tlsmgr); ACME_CERT_DIR is a persistent volume so issued
+      # certs + account keys survive restarts (no re-request on boot).
+      ACME_EMAIL: ${ACME_EMAIL:-}
+      ACME_CERT_DIR: /var/lib/jomform/acme
+      TLS_PORT: "8443"
+    volumes:
+      - acmedata:/var/lib/jomform/acme
     depends_on:
       postgres:
         condition: service_healthy
@@ -100,3 +109,4 @@ volumes:
   pgdata:
   valkeydata:
   miniodata:
+  acmedata:

@@ -21,7 +21,17 @@ type AccountDomain struct {
 	// AutoCNAME records whether the CNAME was auto-created via the linked
 	// Cloudflare account (issue #322): "created" | "failed" | "" (manual).
 	AutoCNAME string
-	CreatedAt time.Time
+	// TLS (issue #397): per-domain TLS configuration.
+	//   TLSMode   "auto" (default) | "custom"
+	//   TLSStatus "pending" | "active" | "error" | "custom" | "" (not verified)
+	//   TLSError  human reason when TLSStatus == "error"
+	//   TLSCertEnc / TLSKeyEnc  AES-GCM sealed PEM (custom mode only)
+	TLSMode    string
+	TLSStatus  string
+	TLSError   string
+	TLSCertEnc string
+	TLSKeyEnc  string
+	CreatedAt  time.Time
 }
 
 // DomainStore wraps account_domains.
@@ -51,16 +61,19 @@ func (s *DomainStore) SetAutoCNAME(ctx context.Context, accountID, domain, statu
 func (s *DomainStore) GetDomain(ctx context.Context, accountID, id string) (*AccountDomain, error) {
 	d := &AccountDomain{}
 	err := s.pool.QueryRow(ctx,
-		`SELECT id, account_id, domain, provider, verified, verified_at, auto_cname, created_at
+		`SELECT id, account_id, domain, provider, verified, verified_at, auto_cname,
+		        tls_mode, tls_status, tls_error, tls_cert_enc, tls_key_enc, created_at
 		 FROM account_domains WHERE id=$1 AND account_id=$2`, id, accountID).
-		Scan(&d.ID, &d.AccountID, &d.Domain, &d.Provider, &d.Verified, &d.VerifiedAt, &d.AutoCNAME, &d.CreatedAt)
+		Scan(&d.ID, &d.AccountID, &d.Domain, &d.Provider, &d.Verified, &d.VerifiedAt, &d.AutoCNAME,
+			&d.TLSMode, &d.TLSStatus, &d.TLSError, &d.TLSCertEnc, &d.TLSKeyEnc, &d.CreatedAt)
 	return d, err
 }
 
 // ListDomains lists all domains claimed by an account.
 func (s *DomainStore) ListDomains(ctx context.Context, accountID string) ([]*AccountDomain, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, account_id, domain, provider, verified, verified_at, auto_cname, created_at
+		`SELECT id, account_id, domain, provider, verified, verified_at, auto_cname,
+		        tls_mode, tls_status, tls_error, tls_cert_enc, tls_key_enc, created_at
 		 FROM account_domains WHERE account_id=$1 ORDER BY created_at`, accountID)
 	if err != nil {
 		return nil, err
@@ -70,7 +83,8 @@ func (s *DomainStore) ListDomains(ctx context.Context, accountID string) ([]*Acc
 	for rows.Next() {
 		d := &AccountDomain{}
 		if err := rows.Scan(&d.ID, &d.AccountID, &d.Domain, &d.Provider, &d.Verified,
-			&d.VerifiedAt, &d.AutoCNAME, &d.CreatedAt); err != nil {
+			&d.VerifiedAt, &d.AutoCNAME, &d.TLSMode, &d.TLSStatus, &d.TLSError,
+			&d.TLSCertEnc, &d.TLSKeyEnc, &d.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, d)
@@ -111,4 +125,45 @@ func (s *DomainStore) GetByID(ctx context.Context, accountID, id string) (*Accou
 		 WHERE id=$1 AND account_id=$2`, id, accountID).
 		Scan(&d.ID, &d.AccountID, &d.Domain, &d.Provider, &d.Verified)
 	return d, err
+}
+
+// SetTLSMode sets the per-domain TLS mode (issue #397): "auto" (default) or
+// "custom". Switching to "auto" clears any stored custom cert + error so the
+// origin provisions a Let's Encrypt cert for the verified domain.
+func (s *DomainStore) SetTLSMode(ctx context.Context, accountID, domain, mode string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE account_domains SET tls_mode=$3,
+		        tls_cert_enc=NULL, tls_key_enc=NULL, tls_error=NULL
+		 WHERE domain=$1 AND account_id=$2`, domain, accountID, mode)
+	return err
+}
+
+// SetTLSStatus records the TLS provisioning status for a domain (issue #397):
+// "pending" | "active" | "error" | "custom". A non-empty reason is stored
+// when status == "error".
+func (s *DomainStore) SetTLSStatus(ctx context.Context, accountID, domain, status, reason string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE account_domains SET tls_status=$3, tls_error=$4
+		 WHERE domain=$1 AND account_id=$2`, domain, accountID, status, reason)
+	return err
+}
+
+// SetCustomCert stores the merchant-supplied cert + key (AES-GCM sealed PEM)
+// for a domain and marks it custom mode + custom status (issue #397).
+func (s *DomainStore) SetCustomCert(ctx context.Context, accountID, domain, certEnc, keyEnc string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE account_domains SET tls_mode='custom', tls_status='custom',
+		        tls_cert_enc=$3, tls_key_enc=$4, tls_error=NULL
+		 WHERE domain=$1 AND account_id=$2`, domain, accountID, certEnc, keyEnc)
+	return err
+}
+
+// CustomCert returns the sealed custom cert + key for a domain (issue #397).
+// Returns empty strings when the domain has no custom cert.
+func (s *DomainStore) CustomCert(ctx context.Context, accountID, domain string) (certEnc, keyEnc string, err error) {
+	err = s.pool.QueryRow(ctx,
+		`SELECT COALESCE(tls_cert_enc,''), COALESCE(tls_key_enc,'')
+		 FROM account_domains WHERE domain=$1 AND account_id=$2`, domain, accountID).
+		Scan(&certEnc, &keyEnc)
+	return certEnc, keyEnc, err
 }

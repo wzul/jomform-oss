@@ -133,12 +133,17 @@ export default function Settings() {
   const [domainInput, setDomainInput] = useState("");
   const [domainVerified, setDomainVerified] = useState(false);
   // Issue #322: per-domain auto-CNAME status ("created" | "failed" | "").
-  const [domains, setDomains] = useState<{ id: string; domain: string; verified: boolean; auto_cname?: string }[]>([]);
+  // Issue #397: per-domain TLS config + status (tls_mode/tls_status/tls_error).
+  const [domains, setDomains] = useState<{ id: string; domain: string; verified: boolean; auto_cname?: string; tls_mode?: string; tls_status?: string; tls_error?: string }[]>([]);
   const [domainMsg, setDomainMsg] = useState("");
   // Issue #322: domains currently running a one-click auto-CNAME request.
   const [autoCnameBusy, setAutoCnameBusy] = useState<Record<string, boolean>>({});
   // Issue #324: domains currently being auto-polled for DNS propagation.
   const [polling, setPolling] = useState<Record<string, boolean>>({});
+  // Issue #397: per-domain TLS mode selector + bring-your-own-cert upload.
+  const [tlsBusy, setTlsBusy] = useState<Record<string, boolean>>({});
+  const [certOpen, setCertOpen] = useState<Record<string, boolean>>({});
+  const [certInput, setCertInput] = useState<Record<string, { cert: string; key: string }>>({});
   const [tin, setTin] = useState("");
   const [msic, setMsic] = useState("");
   const [webhooks, setWebhooks] = useState<{ id: string; url: string; events: string[] }[]>([]);
@@ -686,6 +691,57 @@ export default function Settings() {
     setWhitelist((prev) => (prev.includes(id) ? prev.filter((m) => m !== id) : [...prev, id]));
   }
 
+  // Issue #397: set the per-domain TLS mode (auto | custom).
+  async function setDomainTlsMode(d: { id: string; domain: string }, mode: string) {
+    setTlsBusy((prev) => ({ ...prev, [d.id]: true }));
+    setDomainMsg("");
+    try {
+      const r = await fetch(`/api/rest/domains/${d.id}/tls-mode${spaceQuery()}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode }),
+      });
+      if (r.ok) {
+        setDomainMsg(mode === "auto" ? t("set.tlsModeAuto") : t("set.tlsModeCustom"));
+      } else {
+        const e = await r.json().catch(() => ({}));
+        setDomainMsg(e.error || t("set.tlsModeFailed"));
+      }
+      await refreshDomains();
+    } finally {
+      setTlsBusy((prev) => ({ ...prev, [d.id]: false }));
+    }
+  }
+
+  // Issue #397: upload a bring-your-own-cert (cert + key PEM) for a domain.
+  async function uploadCustomCert(d: { id: string; domain: string }) {
+    const inp = certInput[d.id];
+    if (!inp || !inp.cert.trim() || !inp.key.trim()) {
+      setDomainMsg(t("set.tlsCertRequired"));
+      return;
+    }
+    setTlsBusy((prev) => ({ ...prev, [d.id]: true }));
+    setDomainMsg("");
+    try {
+      const r = await fetch(`/api/rest/domains/${d.id}/custom-cert${spaceQuery()}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cert: inp.cert, key: inp.key }),
+      });
+      if (r.ok) {
+        setDomainMsg(t("set.tlsCertSaved"));
+        setCertOpen((prev) => ({ ...prev, [d.id]: false }));
+        setCertInput((prev) => ({ ...prev, [d.id]: { cert: "", key: "" } }));
+      } else {
+        const e = await r.json().catch(() => ({}));
+        setDomainMsg(e.error || t("set.tlsCertFailed"));
+      }
+      await refreshDomains();
+    } finally {
+      setTlsBusy((prev) => ({ ...prev, [d.id]: false }));
+    }
+  }
+
   // Issue #107: save the per-space email settings.
   async function saveEmailSettings() {
     if (!emelSpaceId) return;
@@ -985,7 +1041,7 @@ export default function Settings() {
                 <p className="mt-2 text-xs text-emerald-600">{t("set.autoCnameHint")}</p>
               )}
               <ul className="mt-4 space-y-2">
-                {domains.map((d: { id: string; domain: string; verified: boolean; auto_cname?: string }) => (
+                {domains.map((d: { id: string; domain: string; verified: boolean; auto_cname?: string; tls_mode?: string; tls_status?: string; tls_error?: string }) => (
                   <li key={d.id} className="rounded-lg border border-[var(--jf-border)] px-4 py-3">
                     <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
@@ -1006,6 +1062,22 @@ export default function Settings() {
                         )}
                         {d.auto_cname === "failed" && (
                           <p className="text-[11px] text-red-600">{t("set.autoCnameStatusFailed")}</p>
+                        )}
+                        {/* Issue #397: per-domain TLS status. */}
+                        {d.verified && d.tls_status === "active" && (
+                          <p className="text-[11px] text-emerald-600">{t("set.tlsStatusActive")}</p>
+                        )}
+                        {d.verified && d.tls_status === "pending" && (
+                          <p className="text-[11px] text-amber-600">{t("set.tlsStatusPending")}</p>
+                        )}
+                        {d.verified && d.tls_status === "error" && (
+                          <p className="text-[11px] text-red-600">
+                            {t("set.tlsStatusError")}
+                            {d.tls_error ? ` — ${d.tls_error}` : ""}
+                          </p>
+                        )}
+                        {d.verified && d.tls_status === "custom" && (
+                          <p className="text-[11px] text-indigo-600">{t("set.tlsStatusCustom")}</p>
                         )}
                       </div>
                       <div className="flex shrink-0 items-center gap-2">
@@ -1076,6 +1148,77 @@ export default function Settings() {
                         >
                           {t("set.liveLink", { domain: d.domain })}
                         </a>
+                      </div>
+                    )}
+                    {/* Issue #397: per-domain TLS mode selector + bring-your-own-cert. */}
+                    {d.verified && (
+                      <div className="mt-3 rounded-md bg-slate-50 px-3 py-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-[11px] font-medium text-slate-500">{t("set.tlsModeLabel")}</span>
+                          <button
+                            type="button"
+                            onClick={() => setDomainTlsMode(d, "auto")}
+                            disabled={!!tlsBusy[d.id] || d.tls_mode === "auto"}
+                            className={`rounded-md px-2.5 py-1 text-[11px] font-semibold transition-colors disabled:cursor-not-allowed ${
+                              d.tls_mode === "auto"
+                                ? "bg-[var(--jf-primary)] text-white"
+                                : "border border-[var(--jf-primary)] text-[var(--jf-primary)] hover:bg-indigo-50"
+                            }`}
+                          >
+                            {t("set.tlsModeAutoLabel")}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setDomainTlsMode(d, "custom")}
+                            disabled={!!tlsBusy[d.id] || d.tls_mode === "custom"}
+                            className={`rounded-md px-2.5 py-1 text-[11px] font-semibold transition-colors disabled:cursor-not-allowed ${
+                              d.tls_mode === "custom"
+                                ? "bg-[var(--jf-primary)] text-white"
+                                : "border border-[var(--jf-primary)] text-[var(--jf-primary)] hover:bg-indigo-50"
+                            }`}
+                          >
+                            {t("set.tlsModeCustomLabel")}
+                          </button>
+                          {d.tls_mode === "custom" && (
+                            <button
+                              type="button"
+                              onClick={() => setCertOpen((prev) => ({ ...prev, [d.id]: !prev[d.id] }))}
+                              className="text-[11px] font-semibold text-[#5e6ad2] hover:underline"
+                            >
+                              {certOpen[d.id] ? t("set.tlsCertClose") : t("set.tlsCertUpload")}
+                            </button>
+                          )}
+                        </div>
+                        {d.tls_mode === "custom" && certOpen[d.id] && (
+                          <div className="mt-2 space-y-2">
+                            <textarea
+                              value={certInput[d.id]?.cert ?? ""}
+                              onChange={(e) =>
+                                setCertInput((prev) => ({ ...prev, [d.id]: { ...(prev[d.id] ?? { cert: "", key: "" }), cert: e.target.value } }))
+                              }
+                              placeholder={t("set.tlsCertPlaceholder")}
+                              rows={4}
+                              className="jf-input w-full font-mono text-[11px]"
+                            />
+                            <textarea
+                              value={certInput[d.id]?.key ?? ""}
+                              onChange={(e) =>
+                                setCertInput((prev) => ({ ...prev, [d.id]: { ...(prev[d.id] ?? { cert: "", key: "" }), key: e.target.value } }))
+                              }
+                              placeholder={t("set.tlsKeyPlaceholder")}
+                              rows={4}
+                              className="jf-input w-full font-mono text-[11px]"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => uploadCustomCert(d)}
+                              disabled={!!tlsBusy[d.id]}
+                              className="rounded-md bg-[var(--jf-primary)] px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {tlsBusy[d.id] ? t("set.tlsCertSaving") : t("set.tlsCertSave")}
+                            </button>
+                          </div>
+                        )}
                       </div>
                     )}
                   </li>

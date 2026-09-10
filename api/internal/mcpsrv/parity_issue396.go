@@ -58,6 +58,10 @@ type domainOut struct {
 	Provider  string `json:"provider"`
 	Verified  bool   `json:"verified"`
 	AutoCNAME string `json:"auto_cname"`
+	// Issue #397: per-domain TLS config + status.
+	TLSMode   string `json:"tls_mode"`
+	TLSStatus string `json:"tls_status"`
+	TLSError  string `json:"tls_error,omitempty"`
 }
 
 func (s *Server) listDomains(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, []domainOut, error) {
@@ -74,7 +78,8 @@ func (s *Server) listDomains(ctx context.Context, _ *mcp.CallToolRequest, _ empt
 	}
 	out := make([]domainOut, 0, len(rows))
 	for _, d := range rows {
-		out = append(out, domainOut{ID: d.ID, Domain: d.Domain, Provider: d.Provider, Verified: d.Verified, AutoCNAME: d.AutoCNAME})
+		out = append(out, domainOut{ID: d.ID, Domain: d.Domain, Provider: d.Provider, Verified: d.Verified, AutoCNAME: d.AutoCNAME,
+			TLSMode: d.TLSMode, TLSStatus: d.TLSStatus, TLSError: d.TLSError})
 	}
 	return nil, out, nil
 }
@@ -170,6 +175,81 @@ func (s *Server) autoCNAMEDomain(ctx context.Context, _ *mcp.CallToolRequest, in
 	}
 	_ = s.deps.Domains.SetAutoCNAME(ctx, acc, d.Domain, "created")
 	return nil, map[string]any{"auto_cname": "created", "domain": d.Domain}, nil
+}
+
+// setDomainTLSModeMCP (issue #397): choose the per-domain TLS mode — "auto"
+// (default, Let's Encrypt) or "custom" (bring-your-own-cert).
+func (s *Server) setDomainTLSModeMCP(ctx context.Context, _ *mcp.CallToolRequest, in domainTLSModeIn) (*mcp.CallToolResult, map[string]any, error) {
+	acc, err := s.requireWriteRole(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if s.deps.Domains == nil {
+		return nil, nil, errors.New("domain store tidak tersedia")
+	}
+	d, err := s.deps.Domains.GetByID(ctx, acc, in.DomainID)
+	if err != nil {
+		return nil, nil, errors.New("domain tidak dijumpai")
+	}
+	mode := strings.ToLower(strings.TrimSpace(in.Mode))
+	if mode != "auto" && mode != "custom" {
+		return nil, nil, errors.New("mode tidak sah (auto|custom)")
+	}
+	if err := s.deps.Domains.SetTLSMode(ctx, acc, d.Domain, mode); err != nil {
+		return nil, nil, fmt.Errorf("db: %w", err)
+	}
+	return nil, map[string]any{"tls_mode": mode, "domain": d.Domain}, nil
+}
+
+type domainTLSModeIn struct {
+	DomainID string `json:"domain_id" jsonschema:"ID domain (dari list_domains)"`
+	Mode     string `json:"mode" jsonschema:"Mode TLS: auto (Let's Encrypt, default) atau custom (bring-your-own-cert)"`
+}
+
+// setDomainCustomCertMCP (issue #397): store a merchant-supplied cert + key
+// (bring-your-own-cert) for a verified domain and serve it via SNI.
+func (s *Server) setDomainCustomCertMCP(ctx context.Context, _ *mcp.CallToolRequest, in domainCustomCertIn) (*mcp.CallToolResult, map[string]any, error) {
+	acc, err := s.requireWriteRole(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if s.deps.Domains == nil {
+		return nil, nil, errors.New("domain store tidak tersedia")
+	}
+	d, err := s.deps.Domains.GetByID(ctx, acc, in.DomainID)
+	if err != nil {
+		return nil, nil, errors.New("domain tidak dijumpai")
+	}
+	certPEM := strings.TrimSpace(in.Cert)
+	keyPEM := strings.TrimSpace(in.Key)
+	if certPEM == "" || keyPEM == "" {
+		return nil, nil, errors.New("cert dan key wajib")
+	}
+	cert, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM))
+	if err != nil {
+		return nil, nil, errors.New("cert/key tidak sah — semak format PEM dan padanan kunci")
+	}
+	if len(cert.Certificate) == 0 {
+		return nil, nil, errors.New("cert tidak sah")
+	}
+	certEnc, err := cryptoutil.Encrypt(s.decKey, []byte(certPEM))
+	if err != nil {
+		return nil, nil, err
+	}
+	keyEnc, err := cryptoutil.Encrypt(s.decKey, []byte(keyPEM))
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := s.deps.Domains.SetCustomCert(ctx, acc, d.Domain, certEnc, keyEnc); err != nil {
+		return nil, nil, fmt.Errorf("db: %w", err)
+	}
+	return nil, map[string]any{"tls_mode": "custom", "tls_status": "custom", "domain": d.Domain}, nil
+}
+
+type domainCustomCertIn struct {
+	DomainID string `json:"domain_id" jsonschema:"ID domain (dari list_domains)"`
+	Cert     string `json:"cert" jsonschema:"PEM sijil (chain) untuk domain"`
+	Key      string `json:"key" jsonschema:"PEM kunci peribadi yang sepadan"`
 }
 
 // normalizeDomainMCP strips scheme/slash and lowercases (mirror of the REST

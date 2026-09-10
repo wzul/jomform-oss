@@ -536,6 +536,15 @@ func (s *Server) registerTools() {
 		Name:        "auto_cname_domain",
 		Description: "Cipta rekod CNAME Cloudflare secara automatik untuk domain (perlu Cloudflare dipautkan). Pulangkan auto_cname=created|failed.",
 	}, s.autoCNAMEDomain)
+	// Issue #397: per-domain TLS config + status.
+	addTool(s, &mcp.Tool{
+		Name:        "set_domain_tls_mode",
+		Description: "Tetapkan mode TLS per-domain: auto (Let's Encrypt, default) atau custom (bring-your-own-cert).",
+	}, s.setDomainTLSModeMCP)
+	addTool(s, &mcp.Tool{
+		Name:        "set_domain_custom_cert",
+		Description: "Muat naik sijil TLS sendiri (bring-your-own-cert) untuk domain: cert + key dalam format PEM. Domain disajikan sijil ini.",
+	}, s.setDomainCustomCertMCP)
 
 	// ── Parity: tracking (issue #396) ────────────────────────────────────
 	addTool(s, &mcp.Tool{

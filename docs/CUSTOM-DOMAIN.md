@@ -50,3 +50,25 @@ services:
   rewrites needed.
 - Remove the mapping in the CF dashboard to take the domain offline; then
   clear it here so your stats badge resets.
+
+## Per-domain TLS (issue #397)
+
+For custom domains that point straight at the JomForm origin (DNS-only /
+grey-cloud, not Cloudflare-proxied), each verified domain has a per-domain
+TLS configuration in **Settings → Custom domain**:
+
+- **Auto-TLS (default)**: JomForm issues + renews a Let's Encrypt cert for
+  the verified domain automatically (via the origin `tlsmgr`). The cert is
+  cached on a persistent volume, so it is not re-requested on every boot.
+- **Bring-your-own-cert**: the merchant uploads their own certificate +
+  private key (PEM), which JomForm serves for that domain via SNI.
+
+The domain row shows the **TLS provisioning status**:
+
+- `pending` — domain verified, cert provisioning in progress.
+- `active` — cert issued + serving.
+- `error` — provisioning failed (with reason).
+- `custom` — merchant-supplied cert is being served.
+
+MCP parity: `set_domain_tls_mode` (auto|custom) and `set_domain_custom_cert`
+(cert + key PEM) expose the same per-domain TLS config + status.

@@ -4,9 +4,12 @@ package httpapi
 
 import (
 	"context"
+	"crypto/tls"
 	"log/slog"
 	"net/http"
 	"strings"
+
+	"github.com/wzul/jomform/api/internal/cryptoutil"
 )
 
 // verifyFailDetail is the stable error code returned when a custom domain
@@ -102,10 +105,15 @@ func (h *RESTHandlers) listCustomDomains(w http.ResponseWriter, r *http.Request,
 		Provider  string `json:"provider"`
 		Verified  bool   `json:"verified"`
 		AutoCNAME string `json:"auto_cname"`
+		// Issue #397: per-domain TLS config + status.
+		TLSMode   string `json:"tls_mode"`
+		TLSStatus string `json:"tls_status"`
+		TLSError  string `json:"tls_error,omitempty"`
 	}
 	out := make([]row, 0, len(domains))
 	for _, d := range domains {
-		out = append(out, row{ID: d.ID, Domain: d.Domain, Provider: d.Provider, Verified: d.Verified, AutoCNAME: d.AutoCNAME})
+		out = append(out, row{ID: d.ID, Domain: d.Domain, Provider: d.Provider, Verified: d.Verified, AutoCNAME: d.AutoCNAME,
+			TLSMode: d.TLSMode, TLSStatus: d.TLSStatus, TLSError: d.TLSError})
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -173,6 +181,16 @@ func (h *RESTHandlers) verifyCustomDomainByID(w http.ResponseWriter, r *http.Req
 	if h.TLS != nil {
 		h.TLS.AddVerified(d.Domain)
 	}
+	// Issue #397: surface the TLS provisioning status. A cached cert means
+	// the domain is already actively serving; otherwise it is still
+	// provisioning. Custom-cert domains keep their "custom" status.
+	if d.TLSMode == "custom" {
+		_ = h.Domains.SetTLSStatus(r.Context(), actx.Account.ID, d.Domain, "custom", "")
+	} else if h.TLS != nil && h.TLS.HasCert(d.Domain) {
+		_ = h.Domains.SetTLSStatus(r.Context(), actx.Account.ID, d.Domain, "active", "")
+	} else {
+		_ = h.Domains.SetTLSStatus(r.Context(), actx.Account.ID, d.Domain, "pending", "")
+	}
 	// Issue #92: audit custom-domain verify.
 	h.recordEvent(r, actx, h.sessionOwnerID(r), "settings.domain_verified", map[string]any{"domain": d.Domain})
 	writeJSON(w, http.StatusOK, map[string]any{"verified": true, "domain": d.Domain})
@@ -199,6 +217,115 @@ func (h *RESTHandlers) deleteCustomDomainByID(w http.ResponseWriter, r *http.Req
 	// Issue #92: audit custom-domain removal.
 	h.recordEvent(r, actx, h.sessionOwnerID(r), "settings.domain_removed", map[string]any{"domain": d.Domain})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
+}
+
+// setDomainTLSMode (issue #397): choose the per-domain TLS mode — "auto"
+// (default, Let's Encrypt via tlsmgr) or "custom" (bring-your-own-cert).
+// Switching to "auto" clears any stored custom cert so the origin provisions
+// a Let's Encrypt cert for the verified domain.
+func (h *RESTHandlers) setDomainTLSMode(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
+	d, err := h.Domains.GetByID(r.Context(), actx.Account.ID, r.PathValue("id"))
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "domain tidak dijumpai")
+		return
+	}
+	var in struct {
+		Mode string `json:"mode"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeErr(w, http.StatusBadRequest, "mode wajib")
+		return
+	}
+	mode := strings.ToLower(strings.TrimSpace(in.Mode))
+	if mode != "auto" && mode != "custom" {
+		writeErr(w, http.StatusBadRequest, "mode tidak sah (auto|custom)")
+		return
+	}
+	if err := h.Domains.SetTLSMode(r.Context(), actx.Account.ID, d.Domain, mode); err != nil {
+		respondErr(w, r, err)
+		return
+	}
+	// Keep the TLS manager in sync: a custom-cert domain is served its own
+	// cert (if one is stored); switching to auto drops any custom cert and
+	// re-registers the domain for ACME provisioning.
+	if h.TLS != nil {
+		if mode == "custom" {
+			h.TLS.RemoveCustomCert(d.Domain)
+		} else {
+			h.TLS.RemoveCustomCert(d.Domain)
+			if d.Verified {
+				h.TLS.AddVerified(d.Domain)
+			}
+		}
+	}
+	// Issue #92: audit the TLS-mode change.
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "settings.domain_tls_mode", map[string]any{"domain": d.Domain, "mode": mode})
+	writeJSON(w, http.StatusOK, map[string]any{"tls_mode": mode})
+}
+
+// uploadCustomCert (issue #397): store a merchant-supplied cert + key
+// (bring-your-own-cert) for a verified domain and serve it via SNI. The PEM
+// blocks are validated and the private key must match the certificate before
+// anything is persisted.
+func (h *RESTHandlers) uploadCustomCert(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
+	d, err := h.Domains.GetByID(r.Context(), actx.Account.ID, r.PathValue("id"))
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "domain tidak dijumpai")
+		return
+	}
+	var in struct {
+		Cert string `json:"cert"`
+		Key  string `json:"key"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeErr(w, http.StatusBadRequest, "cert dan key wajib")
+		return
+	}
+	certPEM := strings.TrimSpace(in.Cert)
+	keyPEM := strings.TrimSpace(in.Key)
+	if certPEM == "" || keyPEM == "" {
+		writeErr(w, http.StatusBadRequest, "cert dan key wajib")
+		return
+	}
+	// Validate the pair before persisting: parse the cert chain + key and
+	// confirm the key matches the leaf certificate.
+	cert, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "cert/key tidak sah — semak format PEM dan padanan kunci")
+		return
+	}
+	if len(cert.Certificate) == 0 {
+		writeErr(w, http.StatusBadRequest, "cert tidak sah")
+		return
+	}
+	// Seal the PEM blocks with the account encryption key.
+	certEnc, err := cryptoutil.Encrypt(h.SecretsKey, []byte(certPEM))
+	if err != nil {
+		respondErr(w, r, err)
+		return
+	}
+	keyEnc, err := cryptoutil.Encrypt(h.SecretsKey, []byte(keyPEM))
+	if err != nil {
+		respondErr(w, r, err)
+		return
+	}
+	if err := h.Domains.SetCustomCert(r.Context(), actx.Account.ID, d.Domain, certEnc, keyEnc); err != nil {
+		respondErr(w, r, err)
+		return
+	}
+	// Serve the custom cert via SNI immediately.
+	if h.TLS != nil {
+		h.TLS.SetCustomCert(d.Domain, &cert)
+	}
+	// Issue #92: audit the custom-cert upload.
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "settings.domain_custom_cert", map[string]any{"domain": d.Domain})
+	writeJSON(w, http.StatusOK, map[string]any{"tls_mode": "custom", "tls_status": "custom"})
 }
 
 // normalizeDomain strips scheme/slash and lowercases.

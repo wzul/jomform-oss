@@ -2,8 +2,16 @@ package tlsmgr
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"log/slog"
+	"math/big"
 	"testing"
+	"time"
 )
 
 func TestNewDisabledWithoutEmail(t *testing.T) {
@@ -74,4 +82,64 @@ func TestTLSConfigAndHTTPHandler(t *testing.T) {
 	if m.HTTPHandler() == nil {
 		t.Error("HTTPHandler() = nil, want non-nil")
 	}
+}
+
+func TestCustomCertServing(t *testing.T) {
+	m := New(Options{Email: "ops@example.com", Primary: "jomform.com"})
+	if m == nil {
+		t.Fatal("expected non-nil manager")
+	}
+	// A custom-cert domain is allowed by hostPolicy even without verification.
+	if err := m.hostPolicy(context.Background(), "shop.example.com"); err == nil {
+		t.Error("hostPolicy(unverified, no custom cert) = nil, want error")
+	}
+	// Register a self-signed cert for the domain.
+	cert := testSelfSignedCert(t, "shop.example.com")
+	m.SetCustomCert("shop.example.com", cert)
+	if err := m.hostPolicy(context.Background(), "shop.example.com"); err != nil {
+		t.Errorf("hostPolicy(custom cert) = %v, want nil", err)
+	}
+	// HasCert reports false for a custom-cert domain (it is not ACME-managed).
+	if m.HasCert("shop.example.com") {
+		t.Error("HasCert(custom) = true, want false")
+	}
+	// RemoveCustomCert drops it back to unverified.
+	m.RemoveCustomCert("shop.example.com")
+	if err := m.hostPolicy(context.Background(), "shop.example.com"); err == nil {
+		t.Error("hostPolicy(after RemoveCustomCert) = nil, want error")
+	}
+}
+
+func TestHasCertNoCache(t *testing.T) {
+	// No CertDir → no disk cache → HasCert always false.
+	m := New(Options{Email: "ops@example.com", Primary: "jomform.com"})
+	if m == nil {
+		t.Fatal("expected non-nil manager")
+	}
+	if m.HasCert("shop.example.com") {
+		t.Error("HasCert(no cache) = true, want false")
+	}
+}
+
+// testSelfSignedCert builds a throwaway self-signed cert + key for a host.
+func testSelfSignedCert(t *testing.T, host string) *tls.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: host},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:     []string{host},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create cert: %v", err)
+	}
+	return &tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
 }

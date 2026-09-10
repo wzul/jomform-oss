@@ -104,7 +104,8 @@ audit_logs(id, account_id FK, actor, action, entity, entity_id, diff jsonb, crea
   - `manage_webhooks` / `manage_bank_settings` (admin scope)
   - Analytics: `get_form_analytics` / `get_product_analytics`
   - Custom domains: `list_domains` / `add_domain` / `verify_domain` /
-    `remove_domain` / `auto_cname_domain`
+    `remove_domain` / `auto_cname_domain` / `set_domain_tls_mode` /
+    `set_domain_custom_cert` (per-domain TLS config + status, issue #397)
   - Tracking: `get_tracking` / `set_tracking`
   - CHIP account settings: `get_chip_settings` / `set_chip_settings` /
     `clear_chip_settings`
