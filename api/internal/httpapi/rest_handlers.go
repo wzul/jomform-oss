@@ -925,6 +925,9 @@ type saleRow struct {
 	DiscountSen int64     `json:"discount_sen,omitempty"`
 	Items       []itemRow `json:"items,omitempty"`
 	Updated     string    `json:"updated_at,omitempty"`
+	// Issue #438: QR ordering flow — the table number the QR stand encoded
+	// (e.g. "8"). Empty = a regular online order with no table.
+	TableNumber string `json:"table_number,omitempty"`
 }
 
 type itemRow struct {
@@ -985,6 +988,7 @@ func toSaleRow(s *dbstore.Sale, emailStatus string) saleRow {
 		ShippingSen: s.ShippingSen,
 		DiscountSen: s.DiscountSen,
 		Updated:     s.UpdatedAt.UTC().Format(time.RFC3339),
+		TableNumber: s.TableNumber,
 	}
 	if s.CapturedAt != nil {
 		row.CapturedAt = s.CapturedAt.UTC().Format(time.RFC3339)

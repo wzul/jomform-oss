@@ -11,6 +11,7 @@
 import { Suspense, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import QRCode from "qrcode";
 import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
@@ -350,6 +351,12 @@ function FormSettingsInner() {
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
 
+  // Issue #438: QR ordering flow — QR generation for the form's public URL.
+  const [qrTable, setQrTable] = useState("");
+  const [qrDataUrl, setQrDataUrl] = useState("");
+  const [qrTarget, setQrTarget] = useState("");
+  const [qrBusy, setQrBusy] = useState(false);
+
   // General
   const [title, setTitle] = useState("");
   const [slug, setSlug] = useState("");
@@ -520,6 +527,27 @@ function FormSettingsInner() {
   useEffect(() => {
     if (anon) router.replace("/landing");
   }, [anon, router]);
+
+  // Issue #438: QR ordering flow — generate a QR for the form's public URL,
+  // optionally encoding a ?table=N query param so the order carries the table.
+  async function generateQR() {
+    if (!form?.url) return;
+    setQrBusy(true);
+    setQrDataUrl("");
+    setQrTarget("");
+    try {
+      const target = qrTable.trim()
+        ? `${form.url}${form.url.includes("?") ? "&" : "?"}table=${encodeURIComponent(qrTable.trim())}`
+        : form.url;
+      const dataUrl = await QRCode.toDataURL(target, { width: 320, margin: 1 });
+      setQrDataUrl(dataUrl);
+      setQrTarget(target);
+    } catch {
+      setErr(t("fs.qrError"));
+    } finally {
+      setQrBusy(false);
+    }
+  }
 
   async function saveGeneral() {
     setMsg("");
@@ -982,6 +1010,58 @@ function FormSettingsInner() {
                         <input type="checkbox" checked={fsEmbed} onChange={(e) => setFsEmbed(e.target.checked)} className="accent-[#5e6ad2]" />
                         {t("bld.allowEmbed")}
                       </label>
+                      {/* Issue #438: QR ordering flow — generate a QR for the
+                          form's public URL, optionally encoding a table number. */}
+                      <details className="rounded-md border border-[var(--jf-border)] p-3">
+                        <summary className="cursor-pointer text-sm font-medium text-slate-700">
+                          {t("fs.qrTitle")}
+                        </summary>
+                        <div className="mt-2 space-y-2">
+                          <p className="text-[11px] leading-relaxed text-slate-500">{t("fs.qrHelp")}</p>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <input
+                              value={qrTable}
+                              onChange={(e) => setQrTable(e.target.value)}
+                              className="jf-input max-w-[160px] font-mono"
+                              placeholder={t("fs.qrTablePh")}
+                            />
+                            <button
+                              type="button"
+                              onClick={generateQR}
+                              disabled={!form?.url || qrBusy}
+                              className="jf-btn px-3 py-1.5 text-xs"
+                            >
+                              {qrBusy ? "…" : t("fs.qrGenerate")}
+                            </button>
+                          </div>
+                          {qrDataUrl && (
+                            <div className="flex flex-col items-start gap-2">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img src={qrDataUrl} alt={t("fs.qrTitle")} className="h-40 w-40 rounded-lg border border-[var(--jf-border)]" />
+                              <p className="break-all font-mono text-[10px] text-[var(--jf-muted)]">{qrTarget}</p>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <a
+                                  href={qrDataUrl}
+                                  download={`qr-${slug || "form"}.png`}
+                                  className="jf-btn-ghost px-3 py-1.5 text-xs"
+                                >
+                                  {t("fs.qrDownload")}
+                                </a>
+                                {form?.url && (
+                                  <a
+                                    href={`${form.url.replace(/\/[^/]*$/, "")}/qr/${slug || "form"}/stand${qrTable.trim() ? `?table=${encodeURIComponent(qrTable.trim())}` : ""}`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="jf-btn-ghost px-3 py-1.5 text-xs"
+                                  >
+                                    {t("fs.qrStand")}
+                                  </a>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </details>
                       <div className="pt-1">
                         <button onClick={saveGeneral} disabled={!canWrite} className="jf-btn-primary">
                           {t("fs.save")}

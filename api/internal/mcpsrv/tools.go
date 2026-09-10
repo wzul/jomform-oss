@@ -282,6 +282,19 @@ func (s *Server) registerTools() {
 		Name:        "set_workspace_landing_page",
 		Description: "Set 'landing page' storefront workspace (issue #360): enabled (true = tunjuk, false/kosong = jatuh ke senarai borang), hero, subtitle, body, image_url, primary_color, background_color, logo_url, ctas ([{label, form_slug}]). Hantar enabled:false untuk pulang ke senarai borang.",
 	}, s.setWorkspaceLandingPage)
+	// Issue #438: QR ordering flow (MCP parity).
+	addTool(s, &mcp.Tool{
+		Name:        "generate_qr",
+		Description: "Jana QR code untuk borang diterbitkan (issue #438): form_slug (cth 'menu') + table pilihan (nombor meja, dikodkan sebagai ?table=N). Pulangkan qr_url (endpoint /qr/{slug}.png), data_url (PNG base64) dan target_url (URL yang dikodkan). Guna untuk stand QR di meja restoran.",
+	}, s.generateQR)
+	addTool(s, &mcp.Tool{
+		Name:        "get_menu_page",
+		Description: "Baca konfigurasi menu restoran workspace (issue #438): enabled, categories ([{name, product_ids}]), best_seller. Kosong jika tiada menu ditetapkan.",
+	}, s.getMenuPage)
+	addTool(s, &mcp.Tool{
+		Name:        "set_menu_page",
+		Description: "Set menu restoran workspace (issue #438): enabled (true = papar menu, false = jatuh ke landing page / senarai borang), categories ([{name, product_ids}]), best_seller (ID produk). Menu dibina atas landing page (#360) + produk aktif workspace.",
+	}, s.setMenuPage)
 	// Issue #185: per-workspace currency + BNM rates (MCP parity).
 	addTool(s, &mcp.Tool{
 		Name:        "get_currency_rates",

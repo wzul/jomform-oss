@@ -30,7 +30,7 @@ func (h *RESTHandlers) exportSalesCSV(w http.ResponseWriter, r *http.Request, ac
 	cw := csv.NewWriter(w)
 	_ = cw.Write([]string{
 		"ref_code", "status", "payment_method", "buyer_name", "buyer_email",
-		"total_rm", "created_at", "purchase_id",
+		"total_rm", "created_at", "purchase_id", "table_number",
 	})
 	for _, s := range sales {
 		_ = cw.Write([]string{
@@ -42,6 +42,7 @@ func (h *RESTHandlers) exportSalesCSV(w http.ResponseWriter, r *http.Request, ac
 			strconv.FormatFloat(float64(s.TotalSen)/100, 'f', 2, 64),
 			s.CreatedAt.UTC().Format("2006-01-02 15:04:05"),
 			s.ChipPurchaseID,
+			s.TableNumber,
 		})
 	}
 	cw.Flush()

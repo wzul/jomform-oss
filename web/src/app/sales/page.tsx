@@ -50,6 +50,8 @@ type Sale = {
   discount_sen?: number;
   items?: Item[];
   updated_at?: string;
+  // Issue #438: QR ordering flow — the table number the QR stand encoded.
+  table_number?: string;
 };
 
 type SalesPage = { items: Sale[]; page: number; limit: number; total: number };
@@ -510,6 +512,11 @@ function SalesPageInner() {
                     {s.buyer_email && (
                       <span className="block truncate text-[10px] text-[var(--jf-muted)]">{s.buyer_email}</span>
                     )}
+                    {s.table_number && (
+                      <span className="mt-0.5 inline-block rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-[var(--jf-primary)]">
+                        {t("sales.table")} {s.table_number}
+                      </span>
+                    )}
                   </td>
                   <td className="hidden max-w-40 truncate px-2 py-3 text-xs text-[var(--jf-muted)] sm:table-cell">
                     {Array.isArray(s.items) && s.items.length
@@ -680,6 +687,12 @@ function SalesPageInner() {
                     <dt className="text-[var(--jf-muted)]">{t("sales.saleType")}</dt>
                     <dd>{detail.sale_type === "subscription" ? t("prod.subscription") : t("prod.oneTime")}</dd>
                   </div>
+                  {detail.table_number && (
+                    <div className="flex justify-between gap-4">
+                      <dt className="text-[var(--jf-muted)]">{t("sales.table")}</dt>
+                      <dd className="font-semibold text-[var(--jf-primary)]">{detail.table_number}</dd>
+                    </div>
+                  )}
                   {detail.invoice_no && (
                     <div className="flex justify-between gap-4">
                       <dt className="text-[var(--jf-muted)]">{t("sales.invoiceNo")}</dt>

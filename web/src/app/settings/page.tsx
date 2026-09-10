@@ -217,6 +217,10 @@ export default function Settings() {
   // Issue #362: published forms embedded inline on the landing page.
   const [lpForms, setLpForms] = useState<{ label: string; form_slug: string }[]>([]);
   const [lpSpaceId, setLpSpaceId] = useState("");
+  // Issue #438: QR ordering flow — restaurant-menu landing template.
+  const [menuEnabled, setMenuEnabled] = useState(false);
+  const [menuCategories, setMenuCategories] = useState<{ name: string; product_ids: string[] }[]>([]);
+  const [menuBestSeller, setMenuBestSeller] = useState("");
   // Issue #185: per-space currency + BNM rates.
   const [currency, setCurrency] = useState("MYR");
   const [currencySpaceId, setCurrencySpaceId] = useState("");
@@ -441,6 +445,11 @@ export default function Settings() {
         setLpLogoUrl(lp.logo_url || "");
         setLpCtas(Array.isArray(lp.ctas) ? lp.ctas : []);
         setLpForms(Array.isArray(lp.forms) ? lp.forms : []);
+        // Issue #438: QR ordering flow — restaurant-menu landing template.
+        const menu = lp.menu || {};
+        setMenuEnabled(!!menu.enabled);
+        setMenuCategories(Array.isArray(menu.categories) ? menu.categories : []);
+        setMenuBestSeller(menu.best_seller || "");
       })
       .catch(() => {});
     fetch(`/api/rest/currency/rates`)
@@ -842,6 +851,12 @@ export default function Settings() {
           logo_url: lpLogoUrl,
           ctas: lpCtas,
           forms: lpForms,
+          // Issue #438: QR ordering flow — restaurant-menu landing template.
+          menu: {
+            enabled: menuEnabled,
+            categories: menuCategories,
+            best_seller: menuBestSeller,
+          },
         },
       }),
     });
@@ -2014,6 +2029,110 @@ export default function Settings() {
                       className="jf-btn-outline"
                     >
                       {t("set.lpPreview")}
+                    </a>
+                  </div>
+                </>
+              )}
+            </div>
+          </section>
+
+          {/* Issue #438: QR ordering flow — restaurant-menu landing template. */}
+          <section className="jf-card mt-6 p-6">
+            <h2 className="text-lg font-semibold">{t("set.menuTitle")}</h2>
+            <p className="mt-1 max-w-xl text-sm text-slate-400">
+              {t("set.menuHelp")}
+            </p>
+            <div className="mt-4 space-y-3">
+              <div className="flex items-start justify-between gap-4 rounded-lg border border-[var(--jf-border)] p-3">
+                <div>
+                  <p className="text-sm font-medium">{t("set.menuEnabledTitle")}</p>
+                  <p className="mt-0.5 max-w-md text-xs text-slate-500">{t("set.menuEnabledHelp")}</p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={menuEnabled}
+                  onClick={() => setMenuEnabled((v) => !v)}
+                  className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+                    menuEnabled ? "bg-[var(--jf-primary)]" : "bg-slate-300"
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${
+                      menuEnabled ? "left-[22px]" : "left-0.5"
+                    }`}
+                  />
+                </button>
+              </div>
+              {menuEnabled && (
+                <>
+                  <div>
+                    <label className="text-xs text-slate-500">{t("set.menuBestSeller")}</label>
+                    <input
+                      value={menuBestSeller}
+                      onChange={(e) => setMenuBestSeller(e.target.value)}
+                      className="jf-input mt-1 max-w-xl font-mono"
+                      placeholder="product-id"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-500">{t("set.menuCategories")}</label>
+                    <div className="mt-1 space-y-2">
+                      {menuCategories.map((c, i) => (
+                        <div key={i} className="flex flex-col gap-1.5 rounded-lg border border-[var(--jf-border)] p-3">
+                          <div className="flex items-center gap-2">
+                            <input
+                              value={c.name}
+                              onChange={(e) =>
+                                setMenuCategories((arr) =>
+                                  arr.map((x, j) => (j === i ? { ...x, name: e.target.value } : x))
+                                )
+                              }
+                              className="jf-input flex-1"
+                              placeholder={t("set.menuCatName")}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setMenuCategories((arr) => arr.filter((_, j) => j !== i))}
+                              className="jf-btn-ghost px-2 py-1 text-[11px] text-red-600"
+                            >
+                              {t("set.menuCatRemove")}
+                            </button>
+                          </div>
+                          <input
+                            value={c.product_ids.join(", ")}
+                            onChange={(e) =>
+                              setMenuCategories((arr) =>
+                                arr.map((x, j) =>
+                                  j === i
+                                    ? { ...x, product_ids: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) }
+                                    : x
+                                )
+                              )
+                            }
+                            className="jf-input font-mono"
+                            placeholder="id1, id2, id3"
+                          />
+                        </div>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={() => setMenuCategories((arr) => [...arr, { name: "", product_ids: [] }])}
+                        className="jf-btn-outline"
+                      >
+                        + {t("set.menuCatAdd")}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                    <button onClick={saveLandingPage} className="jf-btn-primary">{t("set.lpSave")}</button>
+                    <a
+                      href={`https://${activeSpaceSlug || "space"}.jomform.com`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="jf-btn-outline"
+                    >
+                      {t("set.menuPreview")}
                     </a>
                   </div>
                 </>

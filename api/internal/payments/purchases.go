@@ -199,6 +199,9 @@ func (s *Service) ProcessCallback(ctx context.Context, p *chip.Purchase) error {
 					"buyer_email": cur.Client.Email, "purchase_id": p.ID,
 					// Issue #196: form-scoped webhooks key off the sale's form.
 					"form_id": cur.FormID,
+					// Issue #438: QR ordering flow — the table number the QR
+					// stand encoded, so the merchant's webhook knows where to serve.
+					"table_number": cur.TableNumber,
 				})
 			}
 			// Issue #193: fire per-form notifications on the paid event.

@@ -90,6 +90,18 @@ func (h *PublicHandlers) RegisterRoutes(mux *http.ServeMux) {
 	// a full path segment — `{slug}.png` is invalid and panics at startup — so
 	// the route is /og/{slug} and the handler strips the .png suffix.
 	mux.HandleFunc("GET /og/{slug}", h.handleOGImage)
+	// Issue #438: QR ordering flow — a QR code pointing at a form's public
+	// URL, served at /qr/{slug}.png on the workspace subdomain / custom
+	// domain. Registered before /{slug} so it wins over a form slug. The
+	// optional ?table=N query param is encoded into the QR so a merchant can
+	// generate a per-table stand. NOTE: Go's ServeMux wildcard must be a full
+	// path segment — `{slug}.png` is invalid and panics at startup — so the
+	// route is /qr/{slug} and the handler strips the .png suffix.
+	mux.HandleFunc("GET /qr/{slug}", h.handleQRImage)
+	// Issue #438: QR ordering flow — a printable QR stand (Beep-style) the
+	// merchant can put on a table. Served at /qr/{slug}/stand; the optional
+	// ?table=N query param is encoded into the QR and shown on the stand.
+	mux.HandleFunc("GET /qr/{slug}/stand", h.handleQRStand)
 	// Issue #361: merchant code assets (CSS/JS/HTML/fonts) served on the
 	// workspace/custom domain at /assets/{key}, so a landing page can reference
 	// them same-origin (/styles/app.css). Registered before /{slug} so assets
@@ -253,6 +265,10 @@ type submitInput struct {
 	PaymentMethod string            `json:"payment_method"`         // chip | bank_direct
 	SkipCapture   bool              `json:"skip_capture,omitempty"` // authorize now, capture later
 	Fields        map[string]string `json:"fields,omitempty"`
+	// Issue #438: QR ordering flow — the table number the QR stand encoded
+	// (e.g. "8"). The buyer's client JS reads ?table=N from the URL and
+	// echoes it back so the merchant knows where to serve.
+	TableNumber string `json:"table_number,omitempty"`
 }
 
 // antiSpamRenderTime returns the current render timestamp (Unix seconds) to
@@ -507,6 +523,9 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		PaymentMethod: method,
 		Status:        dbstore.SalePending,
 		SkipCapture:   in.SkipCapture && method == "chip",
+		// Issue #438: QR ordering flow — carry the table number the QR stand
+		// encoded so the merchant knows where to serve.
+		TableNumber: strings.TrimSpace(in.TableNumber),
 	}
 	// Issue #185: record the currency the sale is transacted in from the
 	// workspace that owns the form's account (default MYR). Historical sales keep
@@ -1597,6 +1616,14 @@ func (h *PublicHandlers) handleWorkspaceRoot(w http.ResponseWriter, r *http.Requ
 		if workspaceID != "" {
 			if st, serr := h.Workspaces.Settings(r.Context(), workspaceID); serr == nil &&
 				st.LandingPage != nil && st.LandingPage.Enabled {
+				// Issue #438: QR ordering flow — when the landing page has a
+				// restaurant-menu template enabled, render the clean menu
+				// (categories, images, prices, best-seller) instead of the
+				// generic landing page.
+				if st.LandingPage.Menu != nil && st.LandingPage.Menu.Enabled {
+					h.renderWorkspaceMenu(w, r, slug, workspaceID, st.LandingPage)
+					return
+				}
 				h.renderWorkspaceLanding(w, r, slug, forms, st.LandingPage)
 				return
 			}

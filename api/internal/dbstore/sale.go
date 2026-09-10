@@ -97,6 +97,11 @@ type Sale struct {
 	IsSpam     bool
 	SpamReason *string
 
+	// Issue #438: QR ordering flow — the table number the QR stand encoded
+	// (e.g. "8"). Empty = a regular online order with no table. Shown to the
+	// merchant in the sale/notification so they know where to serve.
+	TableNumber string
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -111,7 +116,7 @@ const saleSelect = `SELECT id, account_id, COALESCE(form_id::text,''), ref_code,
 	subtotal_sen, shipping_sen, discount_sen, total_sen, currency, sale_type, payment_method, status,
 	COALESCE(chip_purchase_id,''), COALESCE(chip_checkout_url,''), COALESCE(invoice_no,''),
 	skip_capture, authorized, captured_at, COALESCE(receipt_message_id,''),
-	is_spam, spam_reason, created_at, updated_at
+	is_spam, spam_reason, COALESCE(table_number,''), created_at, updated_at
 	FROM sales`
 
 func scanSale(row pgx.Row) (*Sale, error) {
@@ -120,7 +125,7 @@ func scanSale(row pgx.Row) (*Sale, error) {
 		&s.SubtotalSen, &s.ShippingSen, &s.DiscountSen, &s.TotalSen, &s.Currency, &s.SaleType, &s.PaymentMethod, &s.Status,
 		&s.ChipPurchaseID, &s.ChipCheckoutURL, &s.InvoiceNo,
 		&s.SkipCapture, &s.Authorized, &s.CapturedAt, &s.ReceiptMessageID,
-		&s.IsSpam, &s.SpamReason, &s.CreatedAt, &s.UpdatedAt)
+		&s.IsSpam, &s.SpamReason, &s.TableNumber, &s.CreatedAt, &s.UpdatedAt)
 	return s, err
 }
 
@@ -128,13 +133,13 @@ func scanSale(row pgx.Row) (*Sale, error) {
 func (s *SaleStore) Create(ctx context.Context, sale *Sale) error {
 	return s.pool.QueryRow(ctx,
 		`INSERT INTO sales (account_id, form_id, ref_code, client, items, subtotal_sen, shipping_sen,
-		   discount_sen, total_sen, currency, sale_type, payment_method, status, skip_capture)
-		 VALUES ($1, NULLIF($2,'')::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		   discount_sen, total_sen, currency, sale_type, payment_method, status, skip_capture, table_number)
+		 VALUES ($1, NULLIF($2,'')::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NULLIF($15,''))
 		 RETURNING id, created_at, updated_at`,
 		sale.AccountID, sale.FormID, sale.RefCode, sale.Client, sale.Items,
 		sale.SubtotalSen, sale.ShippingSen, sale.DiscountSen, sale.TotalSen,
 		orDefault(sale.Currency, "MYR"),
-		sale.SaleType, sale.PaymentMethod, sale.Status, sale.SkipCapture,
+		sale.SaleType, sale.PaymentMethod, sale.Status, sale.SkipCapture, sale.TableNumber,
 	).Scan(&sale.ID, &sale.CreatedAt, &sale.UpdatedAt)
 }
 

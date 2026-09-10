@@ -48,6 +48,10 @@ type NotificationRef struct {
 	// Fields maps block_id → submitted value. Used for conditional logic and
 	// for `{field_id}` recipients and `{{field_id}}` placeholders.
 	Fields map[string]string
+	// Issue #438: QR ordering flow — the table number the QR stand encoded
+	// (e.g. "8"). Exposed as the {{table_number}} placeholder so the merchant
+	// can show it in the sale.paid notification.
+	TableNumber string
 }
 
 // FireFormNotifications evaluates a form's notification rules for one event
@@ -160,6 +164,8 @@ func (s *Service) fireSaleNotifications(ctx context.Context, sale *dbstore.Sale,
 		BuyerName:    sale.Client.FullName,
 		FormURL:      formURL,
 		Fields:       saleFields(sale),
+		// Issue #438: QR ordering flow — the table number the QR stand encoded.
+		TableNumber: sale.TableNumber,
 	}, event)
 }
 
@@ -228,6 +234,8 @@ type notificationData struct {
 	// Fields carries the submitted field values so a merchant can reference
 	// {{field_id}} directly in the subject/body.
 	Fields map[string]string
+	// Issue #438: QR ordering flow — the table number the QR stand encoded.
+	TableNumber string
 }
 
 // renderNotification renders a notification subject+body from template strings
@@ -243,6 +251,8 @@ func renderNotification(subject, body string, ref NotificationRef) (subj, render
 		BuyerName: ref.BuyerName,
 		Date:      time.Now().Format("2006-01-02"),
 		Fields:    ref.Fields,
+		// Issue #438: QR ordering flow — the table number the QR stand encoded.
+		TableNumber: ref.TableNumber,
 	}
 	funcs := template.FuncMap{
 		"ref_code":   func() string { return data.RefCode },
@@ -251,6 +261,8 @@ func renderNotification(subject, body string, ref NotificationRef) (subj, render
 		"form_url":   func() string { return data.FormURL },
 		"buyer_name": func() string { return data.BuyerName },
 		"date":       func() string { return data.Date },
+		// Issue #438: QR ordering flow — the table number the QR stand encoded.
+		"table_number": func() string { return data.TableNumber },
 	}
 	// Register every submitted field as a template function so {{field_id}}
 	// resolves to the submitted value.

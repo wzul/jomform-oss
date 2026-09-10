@@ -223,6 +223,34 @@ type LandingPage struct {
 	// submit straight into the form's submissions/sales exactly as a direct
 	// visit would. Stored in the landing_page_json blob.
 	Forms []LandingEmbed `json:"forms"`
+	// Issue #438: QR ordering flow — an optional restaurant-menu landing
+	// template. When Menu.Enabled is true, the workspace root renders a clean
+	// restaurant menu (categories, item images, prices, best-seller) instead
+	// of the generic landing page. Stored in the same landing_page_json blob.
+	Menu *MenuPage `json:"menu,omitempty"`
+}
+
+// MenuPage is the restaurant-menu landing template (issue #438, Beep-style).
+// It reuses the parent LandingPage's hero/logo/theme colors and groups the
+// workspace's published products into categories. A merchant generates a QR
+// stand pointing at the workspace root (or a form) so a customer scans it at
+// the table and orders.
+type MenuPage struct {
+	// Enabled toggles the menu template. When false the workspace root falls
+	// back to the generic landing page / bare listing.
+	Enabled bool `json:"enabled"`
+	// Categories groups product IDs under display names, e.g.
+	// [{name:"Makanan", product_ids:["...","..."]}]. Products not in any
+	// category are shown under an "All" section.
+	Categories []MenuCategory `json:"categories"`
+	// BestSeller is an optional product ID highlighted as the best-seller.
+	BestSeller string `json:"best_seller,omitempty"`
+}
+
+// MenuCategory is one named group of products on the menu page.
+type MenuCategory struct {
+	Name       string   `json:"name"`
+	ProductIDs []string `json:"product_ids"`
 }
 
 // LandingCTA is a landing-page call-to-action button linking to a public form.

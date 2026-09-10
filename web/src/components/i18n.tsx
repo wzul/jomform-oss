@@ -570,6 +570,17 @@ const DICT = {
   "set.lpSave": { en: "Save landing page", ms: "Simpan landing page", zh: "保存落地页", ta: "லேண்டிங் பக்கத்தைச் சேமி", ar: "حفظ صفحة الهبوط" },
   "set.lpSaved": { en: "Landing page saved ✓", ms: "Landing page disimpan ✓", zh: "落地页已保存 ✓", ta: "லேண்டிங் பக்கம் சேமிக்கப்பட்டது ✓", ar: "تم حفظ صفحة الهبوط ✓" },
   "set.lpPreview": { en: "Preview", ms: "Pratonton", zh: "预览", ta: "மாதிரிக்காட்சி", ar: "معاينة" },
+  // Issue #438: QR ordering flow — restaurant-menu landing template.
+  "set.menuTitle": { en: "Restaurant menu (QR ordering)", ms: "Menu restoran (pesanan QR)", zh: "餐厅菜单（二维码点餐）", ta: "உணவக மெனு (QR ஆர்டர்)", ar: "قائمة المطعم (طلب QR)" },
+  "set.menuHelp": { en: "Turn your storefront into a clean restaurant menu (categories, item images, prices, best-seller). Customers scan a QR stand at the table, pick items and pay online — the order reaches you with the table number.", ms: "Jadikan storefront anda menu restoran yang bersih (kategori, imej item, harga, best-seller). Pelanggan imbas stand QR di meja, pilih item dan bayar dalam talian — pesanan sampai kepada anda dengan nombor meja.", zh: "将您的店铺变成简洁的餐厅菜单（分类、商品图片、价格、畅销品）。顾客扫描桌上的二维码立牌，选择商品并在线支付——订单连同桌号送达给您。", ta: "உங்கள் கடையை சுத்தமான உணவக மெனுவாக மாற்றவும் (வகைகள், பொருள் படங்கள், விலைகள், சிறந்த விற்பனை). வாடிக்கையாளர்கள் மேசையில் QR ஸ்டாண்டை ஸ்கேன் செய்து, பொருட்களைத் தேர்ந்தெடுத்து ஆன்லைனில் செலுத்துகிறார்கள் — ஆர்டர் மேசை எண்ணுடன் உங்களை அடைகிறது.", ar: "حوّل متجرك إلى قائمة مطعم نظيفة (فئات، صور عناصر، أسعار، الأكثر مبيعاً). يمسح العملاء رمز QR على الطاولة، يختارون العناصر ويدفعون عبر الإنترنت — يصل الطلب إليك مع رقم الطاولة." },
+  "set.menuEnabledTitle": { en: "Enable restaurant menu", ms: "Aktifkan menu restoran", zh: "启用餐厅菜单", ta: "உணவக மெனுவை இயக்கு", ar: "تفعيل قائمة المطعم" },
+  "set.menuEnabledHelp": { en: "When on, the storefront root renders the menu template instead of the generic landing page.", ms: "Apabila diaktifkan, akar storefront memaparkan templat menu dan bukannya landing page generik.", zh: "开启后，店铺首页将渲染菜单模板而非通用落地页。", ta: "இயக்கத்தில் இருக்கும்போது, கடையின் முகப்பு பொது லேண்டிங் பக்கத்திற்குப் பதிலாக மெனு வார்ப்புருவைக் காட்டுகிறது.", ar: "عند التفعيل، يعرض جذر المتجر قالب القائمة بدلاً من صفحة الهبوط العامة." },
+  "set.menuBestSeller": { en: "Best-seller product ID (optional)", ms: "ID produk best-seller (pilihan)", zh: "畅销商品 ID（可选）", ta: "சிறந்த விற்பனை பொருள் ID (விருப்பம்)", ar: "معرف المنتج الأكثر مبيعاً (اختياري)" },
+  "set.menuCategories": { en: "Categories", ms: "Kategori", zh: "分类", ta: "வகைகள்", ar: "الفئات" },
+  "set.menuCatName": { en: "Category name", ms: "Nama kategori", zh: "分类名称", ta: "வகை பெயர்", ar: "اسم الفئة" },
+  "set.menuCatAdd": { en: "Add category", ms: "Tambah kategori", zh: "添加分类", ta: "வகையைச் சேர்", ar: "إضافة فئة" },
+  "set.menuCatRemove": { en: "Remove", ms: "Buang", zh: "移除", ta: "அகற்று", ar: "إزالة" },
+  "set.menuPreview": { en: "Preview menu", ms: "Pratonton menu", zh: "预览菜单", ta: "மெனு மாதிரிக்காட்சி", ar: "معاينة القائمة" },
   // issue #184: per-space hosted legal pages (privacy/terms/refund)
   "set.tab.legal": { en: "Legal", ms: "Undang-undang", zh: "法律", ta: "சட்டம்", ar: "قانوني" },
   "set.legalTitle": { en: "Legal pages", ms: "Halaman undang-undang", zh: "法律页面", ta: "சட்டப் பக்கங்கள்", ar: "الصفحات القانونية" },
@@ -976,6 +987,14 @@ const DICT = {
   "fs.notFound": { en: "Form not found, or it's in a different space.", ms: "Borang tidak dijumpai, atau ia berada dalam ruang lain.", zh: "未找到表单，或它位于其他空间。", ta: "படிவம் காணப்படவில்லை, அல்லது அது வேறு இடத்தில் உள்ளது.", ar: "لم يتم العثور على النموذج، أو أنه في مساحة أخرى." },
   "fs.noForm": { en: "Select a form to edit its settings.", ms: "Pilih borang untuk edit tetapannya.", zh: "选择一个表单以编辑其设置。", ta: "அதன் அமைப்புகளைத் திருத்த ஒரு படிவத்தைத் தேர்ந்தெடுக்கவும்.", ar: "اختر نموذجاً لتحرير إعداداته." },
   "fs.editFields": { en: "Edit fields", ms: "Edit medan", zh: "编辑字段", ta: "புலங்களைத் திருத்து", ar: "تحرير الحقول" },
+  // Issue #438: QR ordering flow — QR generation in form settings.
+  "fs.qrTitle": { en: "QR code (table ordering)", ms: "Kod QR (pesanan meja)", zh: "二维码（桌边点餐）", ta: "QR குறியீடு (மேசை ஆர்டர்)", ar: "رمز QR (طلب الطاولة)" },
+  "fs.qrHelp": { en: "Generate a QR that points to this form's public URL. Optionally enter a table number — it is encoded as ?table=N so the order reaches you with the table. Print it and put it on a table stand.", ms: "Jana QR yang menunjuk ke URL awam borang ini. Pilihan: masukkan nombor meja — ia dikodkan sebagai ?table=N supaya pesanan sampai kepada anda dengan meja. Cetak dan letak di stand meja.", zh: "生成指向此表单公开链接的二维码。可选输入桌号——编码为 ?table=N，订单会连同桌号送达。打印并放在桌牌上。", ta: "இந்த படிவத்தின் பொது URL-ஐ சுட்டிக்காட்டும் QR-ஐ உருவாக்கவும். விருப்பமாக மேசை எண்ணை உள்ளிடவும் — அது ?table=N என குறியாக்கம் செய்யப்படுகிறது, ஆர்டர் மேசையுடன் உங்களை அடைகிறது. அச்சிட்டு மேசை ஸ்டாண்டில் வைக்கவும்.", ar: "أنشئ رمز QR يشير إلى الرابط العام لهذا النموذج. أدخل رقم الطاولة اختيارياً — يُرمَّز كـ ?table=N ليصل الطلب إليك مع الطاولة. اطبعه وضعه على حامل الطاولة." },
+  "fs.qrTablePh": { en: "Table no. (optional)", ms: "No. meja (pilihan)", zh: "桌号（可选）", ta: "மேசை எண் (விருப்பம்)", ar: "رقم الطاولة (اختياري)" },
+  "fs.qrGenerate": { en: "Generate QR", ms: "Jana QR", zh: "生成二维码", ta: "QR உருவாக்கு", ar: "إنشاء رمز QR" },
+  "fs.qrDownload": { en: "Download PNG", ms: "Muat turun PNG", zh: "下载 PNG", ta: "PNG பதிவிறக்கு", ar: "تنزيل PNG" },
+  "fs.qrStand": { en: "Print stand", ms: "Cetak stand", zh: "打印立牌", ta: "ஸ்டாண்டை அச்சிடு", ar: "طباعة الحامل" },
+  "fs.qrError": { en: "Failed to generate QR.", ms: "Gagal menjana QR.", zh: "生成二维码失败。", ta: "QR உருவாக்க முடியவில்லை.", ar: "فشل إنشاء رمز QR." },
   "fs.confirmationHint": { en: "What buyers see after submitting. Leave blank to use the default thank-you page.", ms: "Apa yang pembeli lihat selepas hantar. Kosongkan untuk guna halaman terima kasih lalai.", zh: "买家提交后看到的内容。留空则使用默认感谢页。", ta: "சமர்ப்பித்த பிறகு வாங்குபவர்கள் பார்ப்பது. இயல்புநிலை நன்றி பக்கத்தைப் பயன்படுத்த காலியாக விடவும்.", ar: "ما يراه المشترون بعد الإرسال. اتركه فارغاً لاستخدام صفحة الشكر الافتراضية." },
   // Issue #393: per-form payment-failed message.
   "fs.failureMessage": { en: "Payment failed message (HTML, sanitized)", ms: "Mesej pembayaran gagal (HTML, disanitasi)", zh: "支付失败消息（HTML，已净化）", ta: "கட்டணம் தோல்வி செய்தி (HTML, சுத்திகரிக்கப்பட்டது)", ar: "رسالة فشل الدفع (HTML، منقّاة)" },
@@ -1191,6 +1210,8 @@ const DICT = {
   "sales.payment": { en: "Payment", ms: "Bayaran", zh: "支付", ta: "கட்டணம்", ar: "الدفع" },
   "sales.statusHistory": { en: "Timeline", ms: "Garis masa", zh: "时间线", ta: "காலவரிசை", ar: "الخط الزمني" },
   "sales.saleType": { en: "Sale type", ms: "Jenis jualan", zh: "销售类型", ta: "விற்பனை வகை", ar: "نوع البيع" },
+  // Issue #438: QR ordering flow — table number on a sale.
+  "sales.table": { en: "Table", ms: "Meja", zh: "桌号", ta: "மேசை", ar: "طاولة" },
   "sales.unauthorized": { en: "Unauthorized (skip-capture, waiting for capture)", ms: "Belum authorized (skip-capture, menunggu capture)", zh: "未捕获（跳过捕获，等待捕获）", ta: "அங்கீகரிக்கப்படாதது (skip-capture, கேப்சருக்காக காத்திருக்கிறது)", ar: "غير مأذون (تخطي التحصيل، بانتظار التحصيل)" },
   "sales.authorized": { en: "Authorized · captured", ms: "Authorized · dicaj", zh: "已授权 · 已捕获", ta: "அங்கீகரிக்கப்பட்டது · கேப்சர்", ar: "مأذون · تم التحصيل" },
   "sales.invoiceNo": { en: "Invoice no.", ms: "No. invois", zh: "发票号", ta: "இன்வாய்ஸ் எண்", ar: "رقم الفاتورة" },
