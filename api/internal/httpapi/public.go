@@ -84,6 +84,10 @@ type PublicHandlers struct {
 // RegisterRoutes wires public endpoints.
 func (h *PublicHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /f/{slug}", h.handleRender)
+	// Issue #411: GitHub-style default Open Graph image per form, served at
+	// /og/{slug}.png on the space subdomain / custom domain. Registered before
+	// /{slug} so it wins over a form slug.
+	mux.HandleFunc("GET /og/{slug}.png", h.handleOGImage)
 	// Issue #361: merchant code assets (CSS/JS/HTML/fonts) served on the
 	// space/custom domain at /assets/{key}, so a landing page can reference
 	// them same-origin (/styles/app.css). Registered before /{slug} so assets
@@ -887,6 +891,7 @@ var formTmpl = template.Must(template.New("form").Funcs(formFuncs).Parse(`<!doct
 <meta name="viewport" content="width=device-width, initial-scale=1">
 {{if .NoIndex}}<meta name="robots" content="noindex, nofollow">{{end}}
 <title>{{.Title}}</title>
+{{.OGMeta}}
 <style>
   :root { color-scheme: light; }
   * { box-sizing: border-box; }
@@ -1052,6 +1057,8 @@ func (h *PublicHandlers) renderLegacy(w http.ResponseWriter, r *http.Request, f 
 	type view struct {
 		Slug, Title, Description string
 		Products                 []tmplProduct
+		// Issue #411: Open Graph + Twitter meta for social sharing.
+		OGMeta template.HTML
 		// Issue #183: optional per-space footer.
 		Footer footerInfo
 		// Issue #244: hidden honeypot + render-timestamp fields.
@@ -1063,9 +1070,10 @@ func (h *PublicHandlers) renderLegacy(w http.ResponseWriter, r *http.Request, f 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := formTmpl.Execute(w, view{
 		Slug: f.Slug, Title: f.Title, Description: cfg.Description, Products: prods,
-		Footer:   h.spaceFooter(r.Context(), f),
-		AntiSpam: template.HTML(antiSpamRenderFields()),
-		NoIndex:  h.formNoIndex(r, f),
+		OGMeta:    h.formOGMeta(r, f),
+		Footer:    h.spaceFooter(r.Context(), f),
+		AntiSpam:  template.HTML(antiSpamRenderFields()),
+		NoIndex:   h.formNoIndex(r, f),
 	}); err != nil {
 		slog.Error("form_render", "err", err)
 	}

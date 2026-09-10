@@ -16,6 +16,23 @@ export const metadata: Metadata = {
   description:
     "Documentation for JomForm: every feature, every MCP tool, and all dynamic placeholders.",
   alternates: { canonical: "https://jomform.com/docs" },
+  openGraph: {
+    title: "JomForm Docs — knowledge base",
+    description:
+      "Documentation for JomForm: every feature, every MCP tool, and all dynamic placeholders.",
+    url: "https://jomform.com/docs",
+    siteName: "JomForm",
+    type: "website",
+    // Issue #411: brand og:image so sharing shows a preview.
+    images: [{ url: "https://jomform.com/og-default.png", width: 1200, height: 630, alt: "JomForm" }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "JomForm Docs — knowledge base",
+    description:
+      "Documentation for JomForm: every feature, every MCP tool, and all dynamic placeholders.",
+    images: ["https://jomform.com/og-default.png"],
+  },
 };
 
 export default function DocsLayout({ children }: { children: React.ReactNode }) {

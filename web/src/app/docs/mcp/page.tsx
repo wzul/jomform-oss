@@ -21,6 +21,8 @@ const TOOL_GROUPS: { group: string; tools: { name: string; desc: string }[] }[] 
       { name: "set_form_password", desc: "Set/buang kata laluan akses borang private (argon2id-hashed; tidak pernah dipulangkan). Password kosong = buang kata laluan." },
       { name: "get_form_restrictions", desc: "Baca sekatan borang (issue #207): jadual mula/tamat (start_at/end_at) + had penyertaan (entry_limit) + mesej peringkat." },
       { name: "set_form_restrictions", desc: "Set sekatan borang (issue #207): jadual mula/tamat + had penyertaan + mesej. Kosong = buang sekatan." },
+      { name: "get_form_og_image", desc: "Baca imej Open Graph (og:image) borang (issue #411): URL imej tersuai bila ditetapkan, kosong = guna lalai janaan /og/{slug}.png." },
+      { name: "set_form_og_image", desc: "Set imej Open Graph (og:image) borang (issue #411): URL imej tersuai (mesti https://) untuk pratonton sosial bila borang dikongsi. Kosong = guna lalai janaan." },
       { name: "delete_form", desc: "Soft-delete borang (pergi ke trash dashboard; slug dilepaskan). Boleh dipulihkan." },
       { name: "bulk_forms", desc: "Tindakan pukal atas banyak borang sekali gus: action=publish|draft|delete dengan ids[] (maks 500)." },
     ],

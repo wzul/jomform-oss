@@ -50,12 +50,14 @@ func TestLegacyFormRendersNoFooter(t *testing.T) {
 	err := formTmpl.Execute(&buf, struct {
 		Slug, Title, Description string
 		Products                 []tmplProduct
+		OGMeta                   template.HTML
 		Footer                   footerInfo
 		AntiSpam                 template.HTML
 		NoIndex                  bool
 	}{
 		Slug: "demo", Title: "Demo", Description: "desc",
 		Products: []tmplProduct{{ID: "p1", Name: "Item", PriceSen: 100}},
+		OGMeta:   template.HTML(""),
 		Footer:   footerInfo{},
 		AntiSpam: template.HTML(antiSpamRenderFields()),
 		NoIndex:  true,

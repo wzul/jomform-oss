@@ -11,6 +11,14 @@ export const metadata: Metadata = {
     url: "https://jomform.com/legal/terms",
     siteName: "JomForm",
     type: "website",
+    // Issue #411: brand og:image so sharing shows a preview.
+    images: [{ url: "https://jomform.com/og-default.png", width: 1200, height: 630, alt: "JomForm" }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Terms of Service — JomForm",
+    description: "Terms governing the use of JomForm.",
+    images: ["https://jomform.com/og-default.png"],
   },
 };
 

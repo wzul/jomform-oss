@@ -379,6 +379,15 @@ func (s *Server) registerTools() {
 		Name:        "set_form_failure_message",
 		Description: "Set mesej pembayaran-gagal borang (issue #393): HTML yang pembeli lihat bila pembayaran gagal (disanitasi, tiada XSS). Kosong = guna mesej lalai.",
 	}, s.setFormFailureMessage)
+	// ── Parity: per-form Open Graph image (issue #411) ──────────────────
+	addTool(s, &mcp.Tool{
+		Name:        "get_form_og_image",
+		Description: "Baca imej Open Graph (og:image) borang (issue #411): URL imej tersuai bila ditetapkan, kosong = guna lalai janaan /og/{slug}.png.",
+	}, s.getFormOGImage)
+	addTool(s, &mcp.Tool{
+		Name:        "set_form_og_image",
+		Description: "Set imej Open Graph (og:image) borang (issue #411): URL imej tersuai (mesti https://) untuk pratonton sosial bila borang dikongsi. Kosong = guna lalai janaan.",
+	}, s.setFormOGImage)
 
 	// ── Parity: per-space hosted legal pages (issue #184) ────────────────
 	addTool(s, &mcp.Tool{

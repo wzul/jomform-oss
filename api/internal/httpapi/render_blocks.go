@@ -217,6 +217,8 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 		"ThemeJS": template.HTML(themeJS),
 		"Lang": ls.Lang,
 		"Ls":   ls,
+		// Issue #411: Open Graph + Twitter meta for social sharing.
+		"OGMeta": h.formOGMeta(r, f),
 		// Issue #183: optional per-space footer.
 		"Footer": h.spaceFooter(r.Context(), f),
 		// Issue #244: hidden honeypot + render-timestamp fields.
@@ -251,6 +253,7 @@ var blockTmpl = template.Must(template.New("blocks").
 <html lang="{{.Lang}}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 {{if .NoIndex}}<meta name="robots" content="noindex, nofollow">{{end}}
 <title>{{.Title}}</title>
+{{.OGMeta}}
 {{.TrackHead}}
 <style>
   {{if .ThemePrimary}}:root { --jf-primary: {{.ThemePrimary}}; }{{end}}
@@ -665,6 +668,8 @@ func (h *PublicHandlers) renderResponseForm(w http.ResponseWriter, r *http.Reque
 		"ThemeJS": template.HTML(themeJS),
 		"Lang": ls.Lang,
 		"Ls":   ls,
+		// Issue #411: Open Graph + Twitter meta for social sharing.
+		"OGMeta": h.formOGMeta(r, f),
 		// Issue #183: optional per-space footer.
 		"Footer": h.spaceFooter(r.Context(), f),
 		// Issue #244: hidden honeypot + render-timestamp fields.
@@ -686,6 +691,7 @@ var responseTmpl = template.Must(template.New("response").
 <html lang="{{.Lang}}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 {{if .NoIndex}}<meta name="robots" content="noindex, nofollow">{{end}}
 <title>{{.Title}}</title>
+{{.OGMeta}}
 {{.TrackHead}}
 <style>
   {{if .ThemePrimary}}:root { --jf-primary: {{.ThemePrimary}}; }{{end}}
