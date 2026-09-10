@@ -108,3 +108,47 @@ func TestChargeFlow(t *testing.T) {
 		t.Errorf("status = %s, want pending_charge", p.Status)
 	}
 }
+
+// TestRefundFlow verifies the refund method hits POST /purchases/{id}/refund/
+// with the amount in sen for a partial refund, and no body for a full refund.
+func TestRefundFlow(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /purchases/pur_paid/refund/", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]int64
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["amount"] != 500 {
+			t.Errorf("partial refund amount = %v, want 500 (sen)", body["amount"])
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": "pur_paid", "status": StatusRefunded})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New(srv.URL)
+	amount := int64(500)
+	p, err := c.Refund(context.Background(), "sk", "pur_paid", &amount)
+	if err != nil {
+		t.Fatalf("partial refund: %v", err)
+	}
+	if p.Status != StatusRefunded {
+		t.Errorf("status = %s, want refunded", p.Status)
+	}
+}
+
+// TestRefundFullNoBody verifies a full refund sends no amount body.
+func TestRefundFullNoBody(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /purchases/pur_paid/refund/", func(w http.ResponseWriter, r *http.Request) {
+		if r.ContentLength != 0 {
+			t.Errorf("full refund should send no body, got content-length %d", r.ContentLength)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": "pur_paid", "status": StatusRefunded})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New(srv.URL)
+	if _, err := c.Refund(context.Background(), "sk", "pur_paid", nil); err != nil {
+		t.Fatalf("full refund: %v", err)
+	}
+}

@@ -19,7 +19,7 @@ const FEATURES: { title: string; body: string }[] = [
   },
   {
     title: "Sales",
-    body: "Track every sale: reference code, status (pending/confirmed/failed), buyer, amount, payment method and date. Confirm bank-transfer sales, capture or release skip-capture authorisations, and export sales to CSV.",
+    body: "Track every sale: reference code, status (pending/confirmed/failed/refunded), buyer, amount, payment method and date. Confirm bank-transfer sales, capture or release skip-capture authorisations, refund paid sales (full or partial), and export sales to CSV.",
   },
   {
     title: "Subscriptions",

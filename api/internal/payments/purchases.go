@@ -241,6 +241,30 @@ func (s *Service) ProcessCallback(ctx context.Context, p *chip.Purchase) error {
 			}
 		case chip.StatusPendingCharge:
 			// transient; nothing to persist beyond event row (caller stores raw event)
+		case chip.StatusRefunded:
+			// Issue #407: a refunded purchase (initiated from the Sales page or
+			// manually in the CHIP dashboard) flips the sale to refunded. Only a
+			// real transition from a paid/confirmed state is applied; an already
+			// refunded sale is idempotent.
+			if cur.Status == dbstore.SaleRefunded {
+				slog.Info("callback_refunded_idempotent", "purchase", p.ID, "sale", cur.ID)
+				return nil
+			}
+			if cur.Status != dbstore.SalePaid && cur.Status != dbstore.SaleConfirmed {
+				slog.Warn("callback_refunded_conflicting_transition",
+					"purchase", p.ID, "sale", cur.ID, "from", cur.Status, "to", dbstore.SaleRefunded)
+				return nil
+			}
+			if err := s.Sales.SetStatusTx(ctx, tx, cur.ID, dbstore.SaleRefunded); err != nil {
+				return err
+			}
+			if s.OnPaid != nil {
+				go s.OnPaid(ctx, cur.AccountID, "sale.refunded", map[string]any{
+					"ref_code": cur.RefCode, "buyer_email": cur.Client.Email,
+					"purchase_id": p.ID, "form_id": cur.FormID,
+				})
+			}
+			s.fireSaleNotifications(ctx, cur, "sale.refunded")
 		}
 		return nil
 	})
@@ -429,6 +453,30 @@ func (s *Service) ReleaseSale(ctx context.Context, sale *dbstore.Sale) error {
 		return err
 	}
 	if _, err := s.Chip.ReleasePayment(ctx, secret, sale.ChipPurchaseID); err != nil {
+		return err
+	}
+	return nil
+}
+
+// RefundSale issues a refund against a paid sale. amountSen nil = full refund;
+// a non-nil amount (integer sen) issues a partial refund. The sale must have a
+// CHIP purchase id and be in a refundable state (paid/confirmed). The caller
+// is responsible for persisting the refunded status + audit.
+func (s *Service) RefundSale(ctx context.Context, sale *dbstore.Sale, amountSen *int64) error {
+	if sale.ChipPurchaseID == "" {
+		return errors.New("jualan tiada purchase CHIP")
+	}
+	switch sale.Status {
+	case dbstore.SalePaid, dbstore.SaleConfirmed:
+		// refundable
+	default:
+		return errors.New("jualan bukan dalam status boleh-refund (paid/confirmed)")
+	}
+	secret, err := s.decryptSecret(ctx, sale.AccountID)
+	if err != nil {
+		return err
+	}
+	if _, err := s.Chip.Refund(ctx, secret, sale.ChipPurchaseID, amountSen); err != nil {
 		return err
 	}
 	return nil

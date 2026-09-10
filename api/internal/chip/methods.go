@@ -87,6 +87,21 @@ func (c *Client) ReleasePayment(ctx context.Context, secretKey, purchaseID strin
 	return &p, nil
 }
 
+// Refund issues a refund against a paid purchase. amountSen nil = full refund;
+// a non-nil amount (integer sen) issues a partial refund. Returns the updated
+// Purchase (status "refunded" on success).
+func (c *Client) Refund(ctx context.Context, secretKey, purchaseID string, amountSen *int64) (*Purchase, error) {
+	var body any
+	if amountSen != nil {
+		body = map[string]int64{"amount": *amountSen}
+	}
+	var p Purchase
+	if err := c.do(ctx, secretKey, "POST", fmt.Sprintf("/purchases/%s/refund/", purchaseID), body, &p); err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
 // PaymentMethods lists available payment methods for a brand/currency/amount.
 func (c *Client) PaymentMethods(ctx context.Context, secretKey, currency, language string, amount int64) ([]string, error) {
 	req := map[string]string{"currency": currency, "amount": strconv.FormatInt(amount, 10)}

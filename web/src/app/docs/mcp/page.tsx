@@ -51,6 +51,7 @@ const TOOL_GROUPS: { group: string; tools: { name: string; desc: string }[] }[] 
     tools: [
       { name: "capture_sale", desc: "Capture authorisasi skip_capture (kad buyer dicaj sekarang). amount_sen optional untuk partial." },
       { name: "release_sale", desc: "Release (void) authorisasi skip_capture \u2014 kad buyer TIDAK dicaj." },
+      { name: "refund_sale", desc: "Refund jualan yang telah dibayar (paid/confirmed). amount_sen optional untuk partial; kosong = refund penuh. Status jualan jadi refunded." },
       { name: "capture_all_pending_sales", desc: "Capture SEMUA authorisasi skip_capture yang masih menunggu. Satu kegagalan tidak hentikan yang lain; balas per-ref." },
     ],
   },

@@ -216,6 +216,7 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /v1/rest/sales/{ref}/confirm", h.authed(h.confirmSale))
 	mux.Handle("POST /v1/rest/sales/{ref}/capture", h.authed(h.captureSale))
 	mux.Handle("POST /v1/rest/sales/{ref}/release", h.authed(h.releaseSale))
+	mux.Handle("POST /v1/rest/sales/{ref}/refund", h.authed(h.refundSale))
 	mux.Handle("POST /v1/rest/sales/bulk-capture", h.authed(h.bulkCaptureSales))
 	mux.Handle("GET /v1/rest/sales", h.authed(h.listSales))
 	mux.Handle("GET /v1/rest/sales/{ref}/email-status", h.authed(h.saleEmailStatus))

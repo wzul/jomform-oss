@@ -1187,6 +1187,50 @@ func (h *RESTHandlers) releaseSale(w http.ResponseWriter, r *http.Request, actx 
 	respond(w, http.StatusOK, map[string]string{"status": "released", "ref_code": ref})
 }
 
+// refundSale issues a full or partial refund against a paid sale (issue #407):
+// POST /v1/rest/sales/{ref}/refund {"amount_sen": N}. amount_sen omitted = full
+// refund. Calls the CHIP refund API (amount in sen), flips the sale to
+// refunded, and audits who/what/when.
+func (h *RESTHandlers) refundSale(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
+	if h.Pay == nil {
+		writeErr(w, http.StatusServiceUnavailable, "pembayaran tidak aktif")
+		return
+	}
+	ref := r.PathValue("ref")
+	sale, err := h.Sales.ByRefCode(r.Context(), ref)
+	if err != nil || sale.AccountID != actx.Account.ID {
+		writeErr(w, http.StatusNotFound, "jualan tidak dijumpai")
+		return
+	}
+	var in struct {
+		AmountSen *int64 `json:"amount_sen,omitempty"`
+	}
+	_ = decodeJSON(r, &in)
+	if in.AmountSen != nil && *in.AmountSen <= 0 {
+		writeErr(w, http.StatusBadRequest, "amount_sen mesti positif")
+		return
+	}
+	if err := h.Pay.RefundSale(r.Context(), sale, in.AmountSen); err != nil {
+		recordPaymentFailure("refund")
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := h.Sales.SetStatus(r.Context(), sale.ID, dbstore.SaleRefunded); err != nil {
+		respondErr(w, r, err)
+		return
+	}
+	// Issue #407: audit refunds (who, amount, when).
+	props := map[string]any{"ref_code": ref, "sale_id": sale.ID}
+	if in.AmountSen != nil {
+		props["amount_sen"] = *in.AmountSen
+	}
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "sale.refunded", props)
+	respond(w, http.StatusOK, map[string]string{"status": "refunded", "ref_code": ref})
+}
+
 // bulkCaptureSales captures awaiting skip_capture authorizations in batch
 // (issue #38, the #12 addendum): POST /v1/rest/sales/bulk-capture
 // {"refs":["JF-…", …]} or {} / {"refs":"all"} for everything awaiting.

@@ -142,6 +142,10 @@ func (s *Server) registerTools() {
 		Description: "Release (void) authorisasi skip_capture — kad buyer TIDAK dicaj.",
 	}, s.releaseSaleMCP)
 	addTool(s, &mcp.Tool{
+		Name:        "refund_sale",
+		Description: "Refund jualan yang telah dibayar (paid/confirmed). amount_sen optional untuk partial; kosong = refund penuh. Status jualan jadi refunded.",
+	}, s.refundSaleMCP)
+	addTool(s, &mcp.Tool{
 		Name:        "capture_all_pending_sales",
 		Description: "Capture SEMUA authorisasi skip_capture yang masih menunggu. Satu kegagalan tidak hentikan yang lain; balas per-ref.",
 	}, s.captureAllPendingMCP)

@@ -1132,6 +1132,8 @@ const DICT = {
   "sales.all": { en: "All", ms: "Semua", zh: "全部", ta: "அனைத்தும்", ar: "الكل" },
   "sales.captureAll": { en: "Capture all pending", ms: "Capture semua menunggu", zh: "捕获全部待处理", ta: "காத்திருப்பன அனைத்தையும் கேப்சர்", ar: "تحصيل الكل المعلق" },
   "sales.confirmSale": { en: "Confirm", ms: "Sahkan", zh: "确认", ta: "உறுதிப்படுத்து", ar: "تأكيد" },
+  "sales.refund": { en: "Refund", ms: "Refund", zh: "退款", ta: "பணத்திருப்பம்", ar: "استرداد" },
+  "sales.refundInvalid": { en: "Invalid refund amount.", ms: "Jumlah refund tidak sah.", zh: "退款金额无效。", ta: "தவறான பணத்திருப்பத் தொகை.", ar: "مبلغ الاسترداد غير صالح." },
   "sales.viewDetail": { en: "View", ms: "Lihat", zh: "查看", ta: "பார்க்க", ar: "عرض" },
   "sales.payment": { en: "Payment", ms: "Bayaran", zh: "支付", ta: "கட்டணம்", ar: "الدفع" },
   "sales.statusHistory": { en: "Timeline", ms: "Garis masa", zh: "时间线", ta: "காலவரிசை", ar: "الخط الزمني" },

@@ -125,6 +125,36 @@ func (s *Server) releaseSaleMCP(
 	return nil, map[string]string{"status": "released", "ref_code": in.RefCode}, nil
 }
 
+// refundSaleMCP issues a full or partial refund against a paid sale (issue
+// #407). amount_sen nil = full refund; non-nil = partial. Flips the sale to
+// refunded on success.
+func (s *Server) refundSaleMCP(
+	ctx context.Context, _ *mcp.CallToolRequest, in saleRefIn,
+) (*mcp.CallToolResult, any, error) {
+	pay := s.pay
+	if pay == nil {
+		return nil, nil, errors.New("payments tidak aktif")
+	}
+	acc, err := s.requireSaleWrite(ctx, in.RefCode)
+	if err != nil {
+		return nil, nil, err
+	}
+	sale, err := s.deps.Sales.ByRefCode(ctx, in.RefCode)
+	if err != nil || sale.AccountID != acc {
+		return nil, nil, errors.New("jualan tidak dijumpai")
+	}
+	if in.AmountSen != nil && *in.AmountSen <= 0 {
+		return nil, nil, errors.New("amount_sen mesti positif")
+	}
+	if err := pay.RefundSale(ctx, sale, in.AmountSen); err != nil {
+		return nil, nil, err
+	}
+	if err := s.deps.Sales.SetStatus(ctx, sale.ID, dbstore.SaleRefunded); err != nil {
+		return nil, nil, err
+	}
+	return nil, map[string]string{"status": "refunded", "ref_code": in.RefCode}, nil
+}
+
 // captureAllPendingMCP captures every awaiting skip_capture authorization in
 // one call (issue #38, the #12 addendum). One CHIP rejection never aborts the
 // batch; every ref gets its own result. Issue #307: spans all the user's spaces.

@@ -107,4 +107,5 @@ const (
 	EventPendingCharge  = "purchase.pending_charge"
 	EventTokenDeleted   = "purchase.recurring_token_deleted"
 	EventPendingTokDel  = "purchase.pending_recurring_token_delete"
+	EventRefunded       = "purchase.refunded"
 )

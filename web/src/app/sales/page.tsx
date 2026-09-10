@@ -64,7 +64,7 @@ const isCapturePending = (s: Sale) =>
   !s.captured_at &&
   (s.status === "pending" || s.status === "authorized" || s.authorized === true);
 
-const STATUSES = ["pending", "paid", "confirmed", "failed", "cancelled"] as const;
+const STATUSES = ["pending", "paid", "confirmed", "failed", "cancelled", "refunded"] as const;
 
 const money = (sen: number) =>
   `RM${(sen / 100).toLocaleString("en-MY", { minimumFractionDigits: 2 })}`;
@@ -77,6 +77,7 @@ const saleBadge = (s: string) =>
     confirmed: "bg-emerald-50 text-emerald-700 border-emerald-200",
     failed: "bg-red-50 text-red-700 border-red-200",
     cancelled: "bg-slate-100 text-slate-500 border-slate-200",
+    refunded: "bg-orange-50 text-orange-700 border-orange-200",
   })[s] || "bg-slate-100 text-slate-500 border-slate-200";
 
 /* email delivery status badge colors (issue #194) */
@@ -270,6 +271,39 @@ function SalesPageInner() {
       });
       const d = await r.json().catch(() => ({}));
       setMsg(r.ok ? `Authorization ${ref} released. ✓` : d.error || `Release gagal ${ref}.`);
+      if (r.ok) await loadSales(safePage);
+    } finally {
+      setBusyRef(null);
+    }
+  }
+
+  // Issue #407: full or partial refund against a paid/confirmed sale.
+  async function refundSale(ref: string) {
+    const raw = window.prompt(
+      `Refund amount in RM for ${ref} (empty = full refund):`,
+    );
+    if (raw === null) return; // cancelled
+    const rm = raw.trim();
+    let body = "";
+    if (rm !== "") {
+      const rmNum = Number(rm);
+      if (!Number.isFinite(rmNum) || rmNum <= 0) {
+        setMsg(t("sales.refundInvalid"));
+        return;
+      }
+      body = JSON.stringify({ amount_sen: Math.round(rmNum * 100) });
+    }
+    if (!window.confirm(`Refund ${ref}? This cannot be undone.`)) return;
+    setBusyRef(ref);
+    setMsg("");
+    try {
+      const r = await fetch(`/api/rest/sales/${encodeURIComponent(ref)}/refund${spaceQuery()}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        ...(body ? { body } : {}),
+      });
+      const d = await r.json().catch(() => ({}));
+      setMsg(r.ok ? `${t("sales.refund")} ${ref} ✓` : d.error || `Refund gagal ${ref}.`);
       if (r.ok) await loadSales(safePage);
     } finally {
       setBusyRef(null);
@@ -528,6 +562,14 @@ function SalesPageInner() {
                             {t("bld.release")}
                           </button>
                         </>
+                      ) : canWrite && (s.status === "paid" || s.status === "confirmed") ? (
+                        <button
+                          onClick={() => refundSale(s.ref_code)}
+                          disabled={busyRef !== null}
+                          className="rounded-md border border-[var(--jf-border)] px-2 py-1 text-[10px] text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          {busyRef === s.ref_code ? "…" : t("sales.refund")}
+                        </button>
                       ) : (
                         <span className="text-[10px] text-[var(--jf-muted)]">—</span>
                       )}
@@ -781,6 +823,15 @@ function SalesPageInner() {
                     className="jf-btn-ghost px-3 py-1.5 text-sm"
                   >
                     {t("sales.confirmSale")}
+                  </button>
+                )}
+                {canWrite && (detail.status === "paid" || detail.status === "confirmed") && (
+                  <button
+                    onClick={() => refundSale(detail.ref_code)}
+                    disabled={busyRef !== null}
+                    className="jf-btn-ghost px-3 py-1.5 text-sm"
+                  >
+                    {busyRef === detail.ref_code ? "…" : t("sales.refund")}
                   </button>
                 )}
               </div>

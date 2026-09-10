@@ -192,4 +192,31 @@ func TestProcessCallbackLateFailureRejected(t *testing.T) {
 	}
 }
 
+// TestProcessCallbackRefunded verifies a purchase.refunded webhook flips a
+// paid sale to refunded (issue #407).
+func TestProcessCallbackRefunded(t *testing.T) {
+	ctx := context.Background()
+	pool := lockTestPool(t)
+	saleID, purchaseID := seedLockSale(t, ctx, pool)
+
+	svc := &Service{Sales: dbstore.NewSaleStore(pool), Accounts: dbstore.NewAccountStore(pool)}
+
+	// First mark the sale paid (as a prior paid callback would).
+	if err := svc.ProcessCallback(ctx, &chip.Purchase{ID: purchaseID, Status: chip.StatusPaid}); err != nil {
+		t.Fatalf("paid callback: %v", err)
+	}
+	// Now the refunded event flips it to refunded.
+	if err := svc.ProcessCallback(ctx, &chip.Purchase{ID: purchaseID, Status: chip.StatusRefunded}); err != nil {
+		t.Fatalf("refunded callback: %v", err)
+	}
+
+	got, err := dbstore.NewSaleStore(pool).ByID(ctx, saleID)
+	if err != nil {
+		t.Fatalf("reload sale: %v", err)
+	}
+	if got.Status != dbstore.SaleRefunded {
+		t.Fatalf("status after refunded callback = %q, want %q", got.Status, dbstore.SaleRefunded)
+	}
+}
+
 var _ = time.Now

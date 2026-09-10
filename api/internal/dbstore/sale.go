@@ -20,6 +20,9 @@ const (
 	SaleConfirmed = "confirmed"
 	SaleCancelled = "cancelled"
 	SaleFailed    = "failed"
+	// SaleRefunded marks a sale whose payment was refunded (initiated from the
+	// Sales page or received via the purchase.refunded webhook).
+	SaleRefunded = "refunded"
 )
 
 // SaleClient is the buyer info JSON blob. It mirrors the CHIP client fields
