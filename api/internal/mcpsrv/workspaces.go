@@ -311,6 +311,9 @@ type setWorkspaceSettingsIn struct {
 	MenuJSON       *string `json:"menu_json,omitempty" jsonschema:"Menu navigasi JSON, cth [{\"label\":\"Home\",\"url\":\"/\"}] (omit = kekal)"`
 	// Issue #276: per-workspace SEO indexing toggle. Omitted (nil) = keep current.
 	Indexing *bool `json:"indexing,omitempty" jsonschema:"Benarkan enjin carian/AI mengindeks storefront workspace ini (omit = kekal)"`
+	// Issue #447: per-workspace realtime notification sound toggle. Omitted
+	// (nil) = keep current; explicit true/false sets it.
+	SoundEnabled *bool `json:"sound_enabled,omitempty" jsonschema:"Mainkan bunyi beep pada dashboard bila jualan/respon baharu tiba (omit = kekal)"`
 }
 
 func (s *Server) setWorkspaceSettings(
@@ -370,6 +373,9 @@ func (s *Server) setWorkspaceSettings(
 	}
 	if in.Indexing != nil {
 		st.Indexing = *in.Indexing
+	}
+	if in.SoundEnabled != nil {
+		st.SoundEnabled = *in.SoundEnabled
 	}
 	if strings.TrimSpace(st.MenuJSON) == "" {
 		st.MenuJSON = "[]"

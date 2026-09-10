@@ -304,6 +304,17 @@ func (s *Server) registerTools() {
 		Name:        "generate_qr",
 		Description: "Jana QR code untuk borang diterbitkan (issue #438): form_slug (cth 'menu') + table pilihan (nombor meja, dikodkan sebagai ?table=N). Pulangkan qr_url (endpoint /qr/{slug}.png), data_url (PNG base64) dan target_url (URL yang dikodkan). Guna untuk stand QR di meja restoran.",
 	}, s.generateQR)
+	// Issue #447: realtime notifications (MCP parity). The realtime channel is
+	// the authenticated SSE stream GET /v1/rest/events/stream; these tools
+	// document it and expose the per-workspace sound toggle.
+	addTool(s, &mcp.Tool{
+		Name:        "get_realtime_status",
+		Description: "Baca status notifikasi masa-nyata workspace (issue #447): stream_url (SSE /v1/rest/events/stream — saluran masa-nyata untuk jualan/respon), senarai event, dan sound_enabled (bunyi beep pada dashboard). Read-only.",
+	}, s.getRealtimeStatus)
+	addTool(s, &mcp.Tool{
+		Name:        "set_realtime_sound",
+		Description: "Hidup/matikan bunyi beep notifikasi masa-nyata workspace (issue #447). enabled=true = dashboard berbunyi bila jualan/respon baharu tiba (cth skrin dapur); false = senyap. Write tool (peranan manage/admin).",
+	}, s.setRealtimeSound)
 	addTool(s, &mcp.Tool{
 		Name:        "get_menu_page",
 		Description: "Baca konfigurasi menu restoran workspace (issue #438): enabled, categories ([{name, product_ids}]), best_seller. Kosong jika tiada menu ditetapkan.",

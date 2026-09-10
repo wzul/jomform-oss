@@ -247,6 +247,11 @@ func main() {
 		} else {
 			log.Warn("S3_ACCESS_KEY/S3_SECRET_KEY unset — image uploads disabled")
 		}
+		// Issue #447: realtime notifications — in-memory pub/sub hub backing
+		// the SSE stream (GET /v1/rest/events/stream). The payments OnPaid +
+		// response.submitted paths publish sale/response events here so a
+		// merchant's open dashboard updates live (no manual refresh).
+		realtimeHub := httpapi.NewRealtimeHub()
 		rest := &httpapi.RESTHandlers{
 			Accounts: accounts, Products: products, Forms: formsStore,
 			ProductVariations: dbstore.NewProductVariationStore(pool),
@@ -292,12 +297,19 @@ func main() {
 			// Gates the /v1/admin/overview endpoint (issue #387) so
 			// platform-wide usage metrics are only visible to the owner.
 			SuperAdmin: cfg.IsSuperAdmin,
+			// Issue #447: realtime notifications — in-memory pub/sub hub backing
+			// the SSE stream (GET /v1/rest/events/stream). The payments OnPaid +
+			// response.submitted paths publish sale/response events here so a
+			// merchant's open dashboard updates live (no manual refresh).
+			Realtime: realtimeHub,
 		}
 		pay.OnPaid = func(ctx context.Context, accountID, event string, payload map[string]any) {
 			// Issue #196: form-scoped webhooks fire for the sale's form; the
 			// account-wide ones always fire. form_id is carried in the payload.
 			formID, _ := payload["form_id"].(string)
 			httpapi.DispatchWebhooks(ctx, rest, whStore, accountID, formID, event, payload)
+			// Issue #447: push the event to the merchant's connected dashboards.
+			realtimeHub.Publish(accountID, event, payload)
 		}
 		deps.REST = rest
 
@@ -378,6 +390,9 @@ func main() {
 			// Issue #364: media metadata store gates code-asset serving on the
 			// background scan status (only 'ok' is served).
 			Media: mediaStore,
+			// Issue #447: realtime notifications — publish response.submitted
+			// events to the merchant's connected dashboards.
+			Realtime: realtimeHub,
 			}
 
 		// Issue #199: start the background email worker. It polls the

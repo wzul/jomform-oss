@@ -214,6 +214,8 @@ export default function Settings() {
   const [sfSpaceId, setSfSpaceId] = useState("");
   // Issue #276: per-space SEO indexing toggle (Storefront tab).
   const [sfIndexing, setSfIndexing] = useState(true);
+  // Issue #447: per-space realtime notification sound toggle (Storefront tab).
+  const [sfSoundEnabled, setSfSoundEnabled] = useState(false);
   // Issue #360: per-space customizable landing page (Storefront tab).
   const [lpEnabled, setLpEnabled] = useState(false);
   const [lpHero, setLpHero] = useState("");
@@ -442,6 +444,9 @@ export default function Settings() {
         setSfFooterText(d.footer_text || "");
         // Issue #276: per-space SEO indexing toggle (default true).
         setSfIndexing(d.indexing !== false);
+        // Issue #447: per-space realtime notification sound toggle (default
+        // false — muted so no merchant is surprised by sound).
+        setSfSoundEnabled(!!d.sound_enabled);
         if (d.currency) setCurrency(d.currency);
         // Issue #360: per-space customizable landing page.
         const lp = d.landing_page || {};
@@ -870,6 +875,8 @@ export default function Settings() {
         footer_text: sfFooterText,
         // Issue #276: per-space SEO indexing toggle.
         indexing: sfIndexing,
+        // Issue #447: per-space realtime notification sound toggle.
+        sound_enabled: sfSoundEnabled,
       }),
     });
     if (r.ok) {
@@ -1867,6 +1874,28 @@ export default function Settings() {
                   <span
                     className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${
                       sfIndexing ? "left-[22px]" : "left-0.5"
+                    }`}
+                  />
+                </button>
+              </div>
+              {/* Issue #447: per-space realtime notification sound toggle. */}
+              <div className="flex items-start justify-between gap-4 rounded-lg border border-[var(--jf-border)] p-3">
+                <div>
+                  <p className="text-sm font-medium">{t("set.sfSoundTitle")}</p>
+                  <p className="mt-0.5 max-w-md text-xs text-slate-500">{t("set.sfSoundHelp")}</p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={sfSoundEnabled}
+                  onClick={() => setSfSoundEnabled((v) => !v)}
+                  className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+                    sfSoundEnabled ? "bg-[var(--jf-primary)]" : "bg-slate-300"
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${
+                      sfSoundEnabled ? "left-[22px]" : "left-0.5"
                     }`}
                   />
                 </button>

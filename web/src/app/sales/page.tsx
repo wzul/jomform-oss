@@ -71,6 +71,34 @@ const STATUSES = ["pending", "paid", "confirmed", "failed", "cancelled", "refund
 const money = (sen: number) =>
   `RM${(sen / 100).toLocaleString("en-MY", { minimumFractionDigits: 2 })}`;
 
+// Issue #447: play a short audio beep when a new order/response arrives (for
+// a kitchen/order screen). Uses the Web Audio API so no asset file is needed;
+// a short two-tone chirp is generated on the fly. Best-effort — a browser
+// that blocks audio (or an error) is silently ignored.
+function playBeep() {
+  try {
+    const Ctx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(880, now);
+    osc.frequency.setValueAtTime(1320, now + 0.12);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.25, now + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.28);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.3);
+    osc.onended = () => ctx.close();
+  } catch {
+    // audio unavailable — ignore
+  }
+}
+
 /* same status badge colors as the dashboard Recent sales table */
 const saleBadge = (s: string) =>
   ({
@@ -129,6 +157,14 @@ function SalesPageInner() {
   const [total, setTotal] = useState(0);
   const [checking, setChecking] = useState(true);
   const [err, setErr] = useState("");
+
+  // Issue #447: realtime notifications. `live` reflects whether the SSE
+  // stream is connected; `soundEnabled` is the per-workspace audio-beep
+  // toggle (muted by default). When a new sale/response arrives over the
+  // stream we re-fetch the list (no manual refresh) and, if sound is on,
+  // play a short beep (for a kitchen/order screen).
+  const [live, setLive] = useState(false);
+  const [soundEnabled, setSoundEnabled] = useState(false);
 
   // actions
   const [busyRef, setBusyRef] = useState<string | null>(null);
@@ -207,6 +243,48 @@ function SalesPageInner() {
   useEffect(() => {
     void loadSales(page);
   }, [page, loadSales, space]);
+
+  // Issue #447: realtime notifications — subscribe to the authenticated SSE
+  // stream (proxied through /api/rest/events/stream) so the list updates live
+  // when a new sale/response arrives, with no manual refresh. The stream is
+  // account-scoped server-side (no cross-tenant leak). On a sale/response
+  // event we re-fetch the current page; if the per-workspace sound toggle is
+  // on we also play a short beep (for a kitchen/order screen).
+  const pageRef = useRef(page);
+  pageRef.current = page;
+  const loadRef = useRef(loadSales);
+  loadRef.current = loadSales;
+  const soundRef = useRef(soundEnabled);
+  soundRef.current = soundEnabled;
+  useEffect(() => {
+    if (anon) return;
+    const es = new EventSource(`/api/rest/events/stream${workspaceQuery()}`);
+    es.onopen = () => setLive(true);
+    es.onerror = () => setLive(false);
+    es.onmessage = (e) => {
+      try {
+        const ev = JSON.parse(e.data) as { event?: string };
+        const evt = ev.event || "";
+        // Only re-fetch for events that change the sales list.
+        if (
+          evt === "sale.paid" ||
+          evt === "sale.failed" ||
+          evt === "sale.refunded" ||
+          evt === "subscription.charged" ||
+          evt === "response.submitted"
+        ) {
+          void loadRef.current(pageRef.current);
+          if (soundRef.current) playBeep();
+        }
+      } catch {
+        // ignore malformed frames
+      }
+    };
+    return () => {
+      es.close();
+      setLive(false);
+    };
+  }, [anon, space]);
 
   // Auth bounce via router (client transition), not a full reload.
   useEffect(() => {
@@ -400,6 +478,38 @@ function SalesPageInner() {
           <div>
             <h1 className="max-w-xl text-xl font-semibold tracking-tight">{t("sales.title")}</h1>
             <p className="max-w-xl text-sm text-[var(--jf-muted)]">{t("sales.subtitle")}</p>
+          </div>
+          {/* Issue #447: realtime status + per-workspace sound toggle. */}
+          <div className="flex items-center gap-2">
+            <span
+              className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium ${
+                live
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                  : "border-slate-200 bg-slate-50 text-slate-500"
+              }`}
+              title={t("sales.liveHint")}
+            >
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${live ? "bg-emerald-500" : "bg-slate-400"}`}
+              />
+              {live ? t("sales.live") : t("sales.offline")}
+            </span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={soundEnabled}
+              aria-label={t("sales.soundLabel")}
+              onClick={() => setSoundEnabled((v) => !v)}
+              className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+                soundEnabled ? "bg-[var(--jf-primary)]" : "bg-slate-300"
+              }`}
+            >
+              <span
+                className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${
+                  soundEnabled ? "left-[22px]" : "left-0.5"
+                }`}
+              />
+            </button>
           </div>
         </div>
 

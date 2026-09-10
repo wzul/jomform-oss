@@ -79,6 +79,12 @@ type PublicHandlers struct {
 	// Issue #364: media metadata store used to gate code-asset serving on the
 	// background scan status. Only assets scanned as 'ok' are served. Nil-safe.
 	Media *dbstore.MediaStore
+
+	// Realtime (issue #447): in-memory pub/sub hub backing the SSE stream.
+	// The response.submitted path publishes here so a merchant's open
+	// dashboard updates live when a response form is submitted. Nil in
+	// bare-mode tests → no publish (no-op).
+	Realtime *RealtimeHub
 }
 
 // RegisterRoutes wires public endpoints.
@@ -792,6 +798,16 @@ func (h *PublicHandlers) handleResponseSubmit(w http.ResponseWriter, r *http.Req
 	// submitted field values (block_id → value) drive conditional logic and
 	// {field_id} recipients. Best-effort — never blocks the submit response.
 	h.fireResponseNotifications(r.Context(), form, in.Fields)
+	// Issue #447: push a response.submitted event to the merchant's connected
+	// dashboards so an open page updates live (no manual refresh). Best-effort
+	// — never blocks the submit response.
+	if h.Realtime != nil {
+		h.Realtime.Publish(form.AccountID, "response.submitted", map[string]any{
+			"submission_id": sub.ID,
+			"form_id":       form.ID,
+			"buyer_email":   in.Client.Email,
+		})
+	}
 	// Issue #179: resolve the form's confirmation against the submitted field
 	// values and return it so the buyer-facing JS can render the message or
 	// redirect. The default confirmation always matches.

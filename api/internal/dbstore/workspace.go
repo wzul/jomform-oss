@@ -301,6 +301,11 @@ type WorkspaceSettings struct {
 	// Stored as landing_page_json on workspace_settings. When nil/empty the
 	// storefront root falls back to the auto-generated bare listing.
 	LandingPage *LandingPage `json:"landing_page,omitempty"`
+	// SoundEnabled is the per-workspace realtime notification sound toggle
+	// (issue #447). When true, the merchant's dashboard plays an audio beep
+	// when a new sale/response arrives over the SSE stream. Default false
+	// (muted) so no merchant is surprised by sound.
+	SoundEnabled bool `json:"sound_enabled"`
 }
 
 // WorkspaceLang returns the storefront default language code, or a fallback when
@@ -330,9 +335,9 @@ func (s *WorkspaceStore) Settings(ctx context.Context, workspaceID string) (*Wor
 	var lpJSON string
 	st := &WorkspaceSettings{WorkspaceID: workspaceID, MenuJSON: "[]", DefaultLang: "en", Currency: "MYR", Indexing: true}
 	err := s.pool.QueryRow(ctx,
-		`SELECT footer_text, company_reg, privacy_url, terms_url, refund_url, contact_phone, contact_address, business_name, menu_json::text, default_lang, currency, indexing, COALESCE(landing_page_json::text, '{}')
+		`SELECT footer_text, company_reg, privacy_url, terms_url, refund_url, contact_phone, contact_address, business_name, menu_json::text, default_lang, currency, indexing, COALESCE(landing_page_json::text, '{}'), sound_enabled
 		   FROM workspace_settings WHERE workspace_id=$1`,
-		workspaceID).Scan(&st.FooterText, &st.CompanyReg, &st.PrivacyURL, &st.TermsURL, &st.RefundURL, &st.ContactPhone, &st.ContactAddress, &st.BusinessName, &st.MenuJSON, &st.DefaultLang, &st.Currency, &st.Indexing, &lpJSON)
+		workspaceID).Scan(&st.FooterText, &st.CompanyReg, &st.PrivacyURL, &st.TermsURL, &st.RefundURL, &st.ContactPhone, &st.ContactAddress, &st.BusinessName, &st.MenuJSON, &st.DefaultLang, &st.Currency, &st.Indexing, &lpJSON, &st.SoundEnabled)
 	if err != nil {
 		// default row
 		_, ierr := s.pool.Exec(ctx,
@@ -369,8 +374,8 @@ func (s *WorkspaceStore) SaveSettings(ctx context.Context, st *WorkspaceSettings
 		lpJSON = "{}"
 	}
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO workspace_settings (workspace_id, footer_text, company_reg, privacy_url, terms_url, refund_url, contact_phone, contact_address, business_name, menu_json, default_lang, currency, indexing, landing_page_json)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13,$14::jsonb)
+		`INSERT INTO workspace_settings (workspace_id, footer_text, company_reg, privacy_url, terms_url, refund_url, contact_phone, contact_address, business_name, menu_json, default_lang, currency, indexing, landing_page_json, sound_enabled)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13,$14::jsonb,$15)
 		 ON CONFLICT (workspace_id) DO UPDATE SET
 		   footer_text=EXCLUDED.footer_text, company_reg=EXCLUDED.company_reg,
 		   privacy_url=EXCLUDED.privacy_url, terms_url=EXCLUDED.terms_url,
@@ -379,8 +384,9 @@ func (s *WorkspaceStore) SaveSettings(ctx context.Context, st *WorkspaceSettings
 		   menu_json=EXCLUDED.menu_json,
 		   default_lang=EXCLUDED.default_lang, currency=EXCLUDED.currency,
 		   indexing=EXCLUDED.indexing,
-		   landing_page_json=EXCLUDED.landing_page_json`,
-		st.WorkspaceID, st.FooterText, st.CompanyReg, st.PrivacyURL, st.TermsURL, st.RefundURL, st.ContactPhone, st.ContactAddress, st.BusinessName, st.MenuJSON, st.WorkspaceLang(), st.WorkspaceCurrency(), st.Indexing, lpJSON)
+		   landing_page_json=EXCLUDED.landing_page_json,
+		   sound_enabled=EXCLUDED.sound_enabled`,
+		st.WorkspaceID, st.FooterText, st.CompanyReg, st.PrivacyURL, st.TermsURL, st.RefundURL, st.ContactPhone, st.ContactAddress, st.BusinessName, st.MenuJSON, st.WorkspaceLang(), st.WorkspaceCurrency(), st.Indexing, lpJSON, st.SoundEnabled)
 	return err
 }
 

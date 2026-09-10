@@ -108,6 +108,12 @@ type RESTHandlers struct {
 	// Gates the /v1/admin/overview endpoint (issue #387) so platform-wide
 	// usage metrics are only visible to the platform owner.
 	SuperAdmin func(email string) bool
+
+	// Realtime (issue #447): in-memory pub/sub hub backing the SSE stream
+	// (GET /v1/rest/events/stream). Nil in bare-mode tests → the stream
+	// endpoint returns 503. The payments OnPaid + response.submitted paths
+	// publish sale/response events here so connected dashboards update live.
+	Realtime *RealtimeHub
 }
 
 // RegisterRoutes wires REST endpoints.
@@ -248,6 +254,11 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /v1/rest/events", h.authed(h.listEvents))
 	mux.Handle("GET /v1/rest/events/count", h.authed(h.countEvents))
 	mux.Handle("GET /v1/rest/events/breakdown", h.authed(h.breakdownEvents))
+	// Issue #447: realtime notifications — an authenticated SSE stream that
+	// pushes sale.paid / sale.failed / response.submitted / subscription.charged
+	// events to the merchant's connected clients (account-scoped, no
+	// cross-tenant leak). The Sales page subscribes via EventSource.
+	mux.Handle("GET /v1/rest/events/stream", h.authed(h.handleEventsStream))
 	mux.Handle("GET /v1/rest/sales/export.csv", h.authed(h.exportSalesCSV))
 	// Issue #245: AI spam review queue — spam-flagged submissions/sales the
 	// merchant can un-spam (false positive). A spam-flagged sale that gets a

@@ -145,6 +145,9 @@ func (h *RESTHandlers) saveWorkspaceSettings(w http.ResponseWriter, r *http.Requ
 		// current value; provided = replace. Enabled=false (or empty) falls
 		// back to the auto-generated bare listing.
 		LandingPage *dbstore.LandingPage `json:"landing_page"`
+		// Issue #447: per-workspace realtime notification sound toggle.
+		// Omitted (nil) = keep current value; explicit true/false sets it.
+		SoundEnabled *bool `json:"sound_enabled"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
 		writeErr(w, http.StatusBadRequest, "payload tidak sah")
@@ -194,6 +197,8 @@ func (h *RESTHandlers) saveWorkspaceSettings(w http.ResponseWriter, r *http.Requ
 		Indexing:       cur.Indexing,
 		// Issue #360: preserve the current landing page unless one is supplied.
 		LandingPage: cur.LandingPage,
+		// Issue #447: preserve the current sound toggle unless one is supplied.
+		SoundEnabled: cur.SoundEnabled,
 	}
 	if in.Currency != "" {
 		st.Currency = in.Currency
@@ -203,6 +208,9 @@ func (h *RESTHandlers) saveWorkspaceSettings(w http.ResponseWriter, r *http.Requ
 	}
 	if in.LandingPage != nil {
 		st.LandingPage = in.LandingPage
+	}
+	if in.SoundEnabled != nil {
+		st.SoundEnabled = *in.SoundEnabled
 	}
 	if strings.TrimSpace(st.MenuJSON) == "" {
 		st.MenuJSON = "[]"
