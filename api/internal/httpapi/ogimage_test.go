@@ -25,19 +25,25 @@ func TestRenderOGImageProducesPNG(t *testing.T) {
 	if b.Dx() != ogImageW || b.Dy() != ogImageH {
 		t.Fatalf("og image size = %dx%d, want %dx%d", b.Dx(), b.Dy(), ogImageW, ogImageH)
 	}
-	// The approved mockup has a white lower half, so the dark title/footer
-	// text must be present (not a blank card).
-	dark := 0
+	// Issue #434: the og:image must follow the JomForm branding (indigo→violet),
+	// NOT the mockup (indigo→white). The bottom of the image must be violet-ish
+	// (blue-dominant, not near-white).
+	br, bg, bb, _ := img.At(b.Dx()/2, b.Dy()-1).RGBA()
+	if bb < 50000 || br < 30000 || bg > 40000 {
+		t.Fatalf("og image bottom is not violet-ish: r=%d g=%d b=%d", br>>8, bg>>8, bb>>8)
+	}
+	// White title/footer text must be present on the gradient (not a blank card).
+	white := 0
 	for y := 0; y < b.Dy(); y += 4 {
 		for x := 0; x < b.Dx(); x += 4 {
 			r, g, bl, _ := img.At(x, y).RGBA()
-			if r < 30000 && g < 30000 && bl < 30000 {
-				dark++
+			if r > 60000 && g > 60000 && bl > 60000 {
+				white++
 			}
 		}
 	}
-	if dark < 50 {
-		t.Fatalf("og image has too few dark text pixels: %d", dark)
+	if white < 50 {
+		t.Fatalf("og image has too few white text pixels: %d", white)
 	}
 }
 

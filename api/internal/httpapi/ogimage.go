@@ -33,26 +33,33 @@ import (
 // If the merchant sets a custom og:image (or a form logo), that is used
 // instead; otherwise the generated default is served at /og/{slug}.png.
 //
-// Issue #425: the default was redesigned to match Wan's approved mockup —
-// indigo→white gradient, real JomForm "JF" mark (white bold on indigo rounded
-// square, top-left), dark bold centered title, muted subtitle (workspace + domain),
-// footer with the JomForm tagline, and a subtle decorative indigo card/check
-// icon on the right. When the merchant sets a theme color or a form logo, the
+// Issue #425: the default was redesigned to match Wan's approved mockup.
+// Issue #434: the later correction comment said og:image must follow the
+// JomForm branding (indigo→violet), NOT the mockup (indigo→white). So the
+// default now uses the brand indigo→violet gradient, the real JomForm "JF"
+// monogram (indigo→violet gradient tile with a white form sheet), white text
+// on the gradient, and a subtle decorative indigo card/check icon on the
+// right. When the merchant sets a theme color or a form logo, the
 // gradient/accents are tinted with the theme color and the form logo is used
-// in place of the generic "JF" mark.
+// in place of the JomForm monogram.
 
 const (
 	ogImageW = 1200
 	ogImageH = 630
 )
 
-// ogBrandColors mirror the JomForm brand. The approved mockup uses indigo
-// (#5e6ad2) fading to white.
+// ogBrandColors mirror the JomForm brand (/brand): Indigo 500 #6366f1,
+// Violet 500 #8b5cf6, Indigo 600 #4f46e5, Ink 900 #17181c, Paper #f7f8f8.
+// The og:image gradient is indigo→violet (branding), not indigo→white
+// (mockup). Text is white on the gradient per the /brand usage rules.
 var (
-	ogIndigo = color.RGBA{0x5e, 0x6a, 0xd2, 0xff}
-	ogWhite  = color.RGBA{0xff, 0xff, 0xff, 0xff}
-	ogDark   = color.RGBA{0x1f, 0x29, 0x37, 0xff} // title / footer
-	ogMuted  = color.RGBA{0x6b, 0x72, 0x80, 0xff} // subtitle
+	ogIndigo    = color.RGBA{0x63, 0x66, 0xf1, 0xff} // Indigo 500
+	ogViolet    = color.RGBA{0x8b, 0x5c, 0xf6, 0xff} // Violet 500
+	ogIndigo600 = color.RGBA{0x4f, 0x46, 0xe5, 0xff} // Indigo 600 (monogram JF)
+	ogInk       = color.RGBA{0x17, 0x18, 0x1c, 0xff} // Ink 900
+	ogPaper     = color.RGBA{0xf7, 0xf8, 0xf8, 0xff} // Paper
+	ogWhite     = color.RGBA{0xff, 0xff, 0xff, 0xff}
+	ogLight     = color.RGBA{0xe0, 0xe7, 0xff, 0xff} // light indigo (subtitle/tagline)
 )
 
 // ogFonts are lazily parsed once (they are embedded in the x/image module).
@@ -255,13 +262,13 @@ func ogFetchLogo(rawURL string) image.Image {
 }
 
 // renderOGImage renders the branded 1200x630 social preview for a form,
-// matching Wan's approved mockup (issue #425):
-//   - indigo→white gradient background (tinted toward the theme color if set)
-//   - real JomForm "JF" mark (white bold on indigo rounded square, top-left),
-//     or the form logo when set
-//   - dark bold centered title
-//   - muted subtitle (workspace name + domain)
-//   - footer with the JomForm tagline
+// following the JomForm branding (issue #434):
+//   - indigo→violet gradient background (tinted toward the theme color if set)
+//   - real JomForm "JF" monogram (indigo→violet gradient tile with a white
+//     form sheet), or the form logo when set
+//   - white bold centered title
+//   - light subtitle (workspace name + domain)
+//   - footer with the JomForm wordmark + tagline
 //   - subtle decorative indigo card/check icon on the right
 func renderOGImage(title, workspace, domain, themePrimary, logoURL string) ([]byte, error) {
 	ensureOGFonts()
@@ -278,10 +285,10 @@ func renderOGImage(title, workspace, domain, themePrimary, logoURL string) ([]by
 
 	img := image.NewRGBA(image.Rect(0, 0, ogImageW, ogImageH))
 
-	// Vertical indigo→white gradient background.
+	// Vertical indigo→violet gradient background (branding, not mockup).
 	for y := 0; y < ogImageH; y++ {
 		t := float64(y) / float64(ogImageH-1)
-		c := ogBlend(gradTop, ogWhite, t)
+		c := ogBlend(gradTop, ogViolet, t)
 		for x := 0; x < ogImageW; x++ {
 			img.SetRGBA(x, y, c)
 		}
@@ -292,23 +299,22 @@ func renderOGImage(title, workspace, domain, themePrimary, logoURL string) ([]by
 	ogFillRoundedRect(img, iconBox, 24, color.RGBA{accent.R, accent.G, accent.B, 0x2e})
 	ogDrawCheck(img, image.Rect(1032, 272, 1088, 328), color.RGBA{accent.R, accent.G, accent.B, 0xcc})
 
-	// Logo mark (top-left): the form logo when set, else the JomForm "JF" mark
-	// (white bold on indigo rounded square).
+	// Logo mark (top-left): the form logo when set, else the real JomForm "JF"
+	// monogram (indigo→violet gradient tile with a white form sheet).
 	markBox := image.Rect(72, 72, 216, 216)
 	if logo := ogFetchLogo(logoURL); logo != nil {
 		// Draw the logo image scaled to fit the box (with a soft white backing
-		// so it reads on the indigo gradient).
+		// so it reads on the gradient).
 		ogFillRoundedRect(img, markBox, 24, color.RGBA{0xff, 0xff, 0xff, 0xcc})
 		fit := imaging.Fit(logo, markBox.Dx()-24, markBox.Dy()-24, imaging.Lanczos)
 		off := image.Pt(markBox.Min.X+(markBox.Dx()-fit.Bounds().Dx())/2,
 			markBox.Min.Y+(markBox.Dy()-fit.Bounds().Dy())/2)
 		draw.Draw(img, fit.Bounds().Add(off), fit, image.Point{}, draw.Over)
 	} else {
-		ogFillRoundedRect(img, markBox, 24, accent)
-		ogDrawText(img, ogFaceMark, "JF", 144, 196, ogWhite)
+		ogDrawJFMonogram(img, markBox)
 	}
 
-	// Title block (wrapped, bold, dark) — centered.
+	// Title block (wrapped, bold, white) — centered.
 	titleFace := ogFaceTitle
 	titleLines := ogWrap(titleFace, title, 1000)
 	if len(titleLines) > 4 {
@@ -317,10 +323,10 @@ func renderOGImage(title, workspace, domain, themePrimary, logoURL string) ([]by
 	lineH := 84
 	startY := 300 - (len(titleLines)-1)*lineH/2
 	for i, ln := range titleLines {
-		ogDrawText(img, titleFace, ln, ogImageW/2, startY+i*lineH, ogDark)
+		ogDrawText(img, titleFace, ln, ogImageW/2, startY+i*lineH, ogWhite)
 	}
 
-	// Subtitle: workspace name + domain (muted).
+	// Subtitle: workspace name + domain (light indigo).
 	sub := workspace
 	if domain != "" {
 		if sub != "" {
@@ -334,18 +340,47 @@ func renderOGImage(title, workspace, domain, themePrimary, logoURL string) ([]by
 		if len(subLines) > 1 {
 			subLines = subLines[:1]
 		}
-		ogDrawText(img, ogFaceWorkspace, subLines[0], ogImageW/2, startY+len(titleLines)*lineH+40, ogMuted)
+		ogDrawText(img, ogFaceWorkspace, subLines[0], ogImageW/2, startY+len(titleLines)*lineH+40, ogLight)
 	}
 
-	// Footer: JomForm wordmark + tagline (dark, on the white lower half).
-	ogDrawText(img, ogFaceMark, "JomForm", ogImageW/2, 560, ogDark)
-	ogDrawText(img, ogFaceTag, "Order forms, agent payments & sales", ogImageW/2, 596, ogMuted)
+	// Footer: JomForm wordmark + tagline (white, on the gradient).
+	ogDrawText(img, ogFaceMark, "JomForm", ogImageW/2, 560, ogWhite)
+	ogDrawText(img, ogFaceTag, "Order forms, agent payments & sales", ogImageW/2, 596, ogLight)
 
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, img); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// ogDrawJFMonogram draws the real JomForm "JF" monogram inside box: an
+// indigo→violet gradient rounded tile with a white form sheet and the "JF"
+// letters in Indigo 600, matching /brand/icon.svg.
+func ogDrawJFMonogram(img *image.RGBA, box image.Rectangle) {
+	// Gradient tile (indigo→violet, diagonal).
+	tile := image.NewRGBA(box)
+	for y := 0; y < box.Dy(); y++ {
+		for x := 0; x < box.Dx(); x++ {
+			t := (float64(x)/float64(box.Dx()-1) + float64(y)/float64(box.Dy()-1)) / 2
+			tile.SetRGBA(x, y, ogBlend(ogIndigo, ogViolet, t))
+		}
+	}
+	ogFillRoundedRect(img, box, 24, ogIndigo)
+	draw.Draw(img, box, tile, image.Point{}, draw.Over)
+
+	// White form sheet (rounded rect) centered in the tile.
+	sheet := image.Rect(
+		box.Min.X+box.Dx()/5,
+		box.Min.Y+box.Dy()/5,
+		box.Max.X-box.Dx()/5,
+		box.Max.Y-box.Dy()/5,
+	)
+	ogFillRoundedRect(img, sheet, 16, ogWhite)
+
+	// "JF" monogram in Indigo 600, centered on the sheet (smaller face so it
+	// fits the inset form sheet).
+	ogDrawText(img, ogFaceTitle, "JF", box.Min.X+box.Dx()/2, box.Min.Y+box.Dy()/2+22, ogIndigo600)
 }
 
 // ogImageCache caches rendered PNGs keyed by form ID so repeated social
