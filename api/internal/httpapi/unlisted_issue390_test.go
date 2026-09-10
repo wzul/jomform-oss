@@ -1,7 +1,7 @@
 package httpapi
 
 // Issue #390: an 'unlisted' form is live at its direct /{slug} URL (served,
-// submissions work) but is excluded from the space storefront / published
+// submissions work) but is excluded from the workspace storefront / published
 // listing. draft/private/published behavior is unchanged.
 //
 // Runs against a real Postgres (JOMFORM_TEST_DATABASE_URL); skipped when unset.
@@ -15,14 +15,14 @@ import (
 	"github.com/wzul/jomform/api/internal/dbstore"
 )
 
-// unlistedFixture seeds a space with one published form and one unlisted form
-// and returns the handlers, the space slug, and both form slugs.
+// unlistedFixture seeds a workspace with one published form and one unlisted form
+// and returns the handlers, the workspace slug, and both form slugs.
 func unlistedFixture(t *testing.T) (*PublicHandlers, string, string, string) {
 	t.Helper()
 	ctx := context.Background()
 	pool := bundleTestPool(t)
 
-	var userID, spaceSlug, accountID string
+	var userID, workspaceSlug, accountID string
 	if err := pool.QueryRow(ctx,
 		`INSERT INTO users (email, password_hash)
 		 VALUES ('it-' || md5(random()::text) || '@example.test', 'it')
@@ -30,16 +30,16 @@ func unlistedFixture(t *testing.T) (*PublicHandlers, string, string, string) {
 		t.Fatalf("create user: %v", err)
 	}
 	if err := pool.QueryRow(ctx,
-		`INSERT INTO spaces (owner_user_id, name, slug)
-		 VALUES ($1, 'it-space-' || md5(random()::text), 'it-' || md5(random()::text))
-		 RETURNING slug`, userID).Scan(&spaceSlug); err != nil {
-		t.Fatalf("create space: %v", err)
+		`INSERT INTO workspaces (owner_user_id, name, slug)
+		 VALUES ($1, 'it-workspace-' || md5(random()::text), 'it-' || md5(random()::text))
+		 RETURNING slug`, userID).Scan(&workspaceSlug); err != nil {
+		t.Fatalf("create workspace: %v", err)
 	}
 	if err := pool.QueryRow(ctx,
-		`INSERT INTO accounts (owner_user_id, name, slug, space_id)
+		`INSERT INTO accounts (owner_user_id, name, slug, workspace_id)
 		 SELECT $1, 'it-acc-' || md5(random()::text), 'it-' || md5(random()::text), id
-		 FROM spaces WHERE slug = $2
-		 RETURNING id`, userID, spaceSlug).Scan(&accountID); err != nil {
+		 FROM workspaces WHERE slug = $2
+		 RETURNING id`, userID, workspaceSlug).Scan(&accountID); err != nil {
 		t.Fatalf("create account: %v", err)
 	}
 
@@ -62,18 +62,18 @@ func unlistedFixture(t *testing.T) (*PublicHandlers, string, string, string) {
 	h := &PublicHandlers{
 		Forms:    fs,
 		Accounts: dbstore.NewAccountStore(pool),
-		Spaces:   dbstore.NewSpaceStore(pool),
+		Workspaces:   dbstore.NewWorkspaceStore(pool),
 		BaseURL:  "http://localhost:8080",
 	}
-	return h, spaceSlug, pubSlug, unlSlug
+	return h, workspaceSlug, pubSlug, unlSlug
 }
 
 // TestUnlistedFormServedAtDirectURL: an unlisted form is live at its direct
-// /{slug} URL on the space subdomain (submissions work — it renders).
+// /{slug} URL on the workspace subdomain (submissions work — it renders).
 func TestUnlistedFormServedAtDirectURL(t *testing.T) {
-	h, spaceSlug, _, unlSlug := unlistedFixture(t)
+	h, workspaceSlug, _, unlSlug := unlistedFixture(t)
 
-	rec := publicServe(t, h, spaceSlug+".jomform.com", "/"+unlSlug)
+	rec := publicServe(t, h, workspaceSlug+".jomform.com", "/"+unlSlug)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /%s (unlisted) status = %d, want 200 (body %s)", unlSlug, rec.Code, rec.Body.String())
 	}
@@ -82,12 +82,12 @@ func TestUnlistedFormServedAtDirectURL(t *testing.T) {
 	}
 }
 
-// TestUnlistedFormExcludedFromStorefront: the space storefront root lists the
+// TestUnlistedFormExcludedFromStorefront: the workspace storefront root lists the
 // published form but NOT the unlisted form.
 func TestUnlistedFormExcludedFromStorefront(t *testing.T) {
-	h, spaceSlug, pubSlug, unlSlug := unlistedFixture(t)
+	h, workspaceSlug, pubSlug, unlSlug := unlistedFixture(t)
 
-	rec := publicServe(t, h, spaceSlug+".jomform.com", "/")
+	rec := publicServe(t, h, workspaceSlug+".jomform.com", "/")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET / storefront status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -100,23 +100,23 @@ func TestUnlistedFormExcludedFromStorefront(t *testing.T) {
 	}
 }
 
-// TestUnlistedFormExcludedFromPublishedList: ListPublishedBySpace returns only
+// TestUnlistedFormExcludedFromPublishedList: ListPublishedByWorkspace returns only
 // the published form, never the unlisted one.
 func TestUnlistedFormExcludedFromPublishedList(t *testing.T) {
-	h, spaceSlug, pubSlug, unlSlug := unlistedFixture(t)
+	h, workspaceSlug, pubSlug, unlSlug := unlistedFixture(t)
 
-	forms, err := h.Forms.ListPublishedBySpace(context.Background(), spaceSlug)
+	forms, err := h.Forms.ListPublishedByWorkspace(context.Background(), workspaceSlug)
 	if err != nil {
-		t.Fatalf("ListPublishedBySpace: %v", err)
+		t.Fatalf("ListPublishedByWorkspace: %v", err)
 	}
 	seen := map[string]bool{}
 	for _, f := range forms {
 		seen[f.Slug] = true
 	}
 	if !seen[pubSlug] {
-		t.Errorf("ListPublishedBySpace missing published form %q", pubSlug)
+		t.Errorf("ListPublishedByWorkspace missing published form %q", pubSlug)
 	}
 	if seen[unlSlug] {
-		t.Errorf("ListPublishedBySpace must NOT include unlisted form %q", unlSlug)
+		t.Errorf("ListPublishedByWorkspace must NOT include unlisted form %q", unlSlug)
 	}
 }

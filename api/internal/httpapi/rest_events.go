@@ -8,7 +8,7 @@
 //   Event counts grouped by event_name (behaviour analytics).
 //
 // All are read-only and account-scoped via the resolved account (or the
-// ?space= scope). The Events store is nil in bare-mode tests → 503.
+// ?workspace= scope). The Events store is nil in bare-mode tests → 503.
 package httpapi
 
 import (

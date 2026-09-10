@@ -1,7 +1,7 @@
 package dbstore
 
-// Integration tests for space RBAC access resolution (issue #162): members
-// (not just owners) must resolve to a space's accounts with their role.
+// Integration tests for workspace RBAC access resolution (issue #162): members
+// (not just owners) must resolve to a workspace's accounts with their role.
 // Skipped unless JOMFORM_TEST_DATABASE_URL is set; migrations are applied
 // first, mirroring the production boot path.
 
@@ -10,22 +10,22 @@ import (
 	"testing"
 )
 
-// TestSpaceAccessBySlugOwnerAndMember verifies AccessBySlug resolves the
+// TestWorkspaceAccessBySlugOwnerAndMember verifies AccessBySlug resolves the
 // account set + role for both the owner (admin) and a member (their role).
-func TestSpaceAccessBySlugOwnerAndMember(t *testing.T) {
+func TestWorkspaceAccessBySlugOwnerAndMember(t *testing.T) {
 	ctx := context.Background()
 	p := testPool(t)
-	sp := NewSpaceStore(p)
-	sm := NewSpaceMemberStore(p)
+	sp := NewWorkspaceStore(p)
+	sm := NewWorkspaceMemberStore(p)
 
 	owner := testOwnerUser(t, ctx, p)
-	space, err := sp.Create(ctx, owner, "RBAC Space", "rbac-"+randSuffix())
+	workspace, err := sp.Create(ctx, owner, "RBAC Workspace", "rbac-"+randSuffix())
 	if err != nil {
-		t.Fatalf("create space: %v", err)
+		t.Fatalf("create workspace: %v", err)
 	}
 
-	// Owner resolves as admin with the space's account.
-	acc, ok, err := sp.AccessBySlug(ctx, space.Slug, owner)
+	// Owner resolves as admin with the workspace's account.
+	acc, ok, err := sp.AccessBySlug(ctx, workspace.Slug, owner)
 	if err != nil {
 		t.Fatalf("access by slug (owner): %v", err)
 	}
@@ -41,10 +41,10 @@ func TestSpaceAccessBySlugOwnerAndMember(t *testing.T) {
 
 	// A member with read_only resolves with that role + the same account.
 	member := testOwnerUser(t, ctx, p)
-	if err := sm.AddMember(ctx, space.ID, member, RoleReadOnly); err != nil {
+	if err := sm.AddMember(ctx, workspace.ID, member, RoleReadOnly); err != nil {
 		t.Fatalf("add member: %v", err)
 	}
-	macc, ok, err := sp.AccessBySlug(ctx, space.Slug, member)
+	macc, ok, err := sp.AccessBySlug(ctx, workspace.Slug, member)
 	if err != nil {
 		t.Fatalf("access by slug (member): %v", err)
 	}
@@ -60,47 +60,47 @@ func TestSpaceAccessBySlugOwnerAndMember(t *testing.T) {
 
 	// A stranger has no access.
 	stranger := testOwnerUser(t, ctx, p)
-	if _, ok, err := sp.AccessBySlug(ctx, space.Slug, stranger); err != nil {
+	if _, ok, err := sp.AccessBySlug(ctx, workspace.Slug, stranger); err != nil {
 		t.Fatalf("access by slug (stranger): %v", err)
 	} else if ok {
 		t.Fatal("stranger should not have access")
 	}
 }
 
-// TestSpaceByMemberListsOwnedAndJoined verifies ByMember returns spaces the
+// TestWorkspaceByMemberListsOwnedAndJoined verifies ByMember returns workspaces the
 // user owns OR is a member of, with the correct role in each.
-func TestSpaceByMemberListsOwnedAndJoined(t *testing.T) {
+func TestWorkspaceByMemberListsOwnedAndJoined(t *testing.T) {
 	ctx := context.Background()
 	p := testPool(t)
-	sp := NewSpaceStore(p)
-	sm := NewSpaceMemberStore(p)
+	sp := NewWorkspaceStore(p)
+	sm := NewWorkspaceMemberStore(p)
 
 	owner := testOwnerUser(t, ctx, p)
-	space, err := sp.Create(ctx, owner, "ByMember Space", "bymem-"+randSuffix())
+	workspace, err := sp.Create(ctx, owner, "ByMember Workspace", "bymem-"+randSuffix())
 	if err != nil {
-		t.Fatalf("create space: %v", err)
+		t.Fatalf("create workspace: %v", err)
 	}
 
-	// Owner sees the space as admin.
+	// Owner sees the workspace as admin.
 	owned, err := sp.ByMember(ctx, owner)
 	if err != nil {
 		t.Fatalf("by member (owner): %v", err)
 	}
-	if len(owned) != 1 || owned[0].SpaceID != space.ID || owned[0].Role != RoleAdmin {
-		t.Fatalf("owner spaces = %+v, want 1 admin", owned)
+	if len(owned) != 1 || owned[0].WorkspaceID != workspace.ID || owned[0].Role != RoleAdmin {
+		t.Fatalf("owner workspaces = %+v, want 1 admin", owned)
 	}
 
-	// A member sees the space with their role.
+	// A member sees the workspace with their role.
 	member := testOwnerUser(t, ctx, p)
-	if err := sm.AddMember(ctx, space.ID, member, RoleManage); err != nil {
+	if err := sm.AddMember(ctx, workspace.ID, member, RoleManage); err != nil {
 		t.Fatalf("add member: %v", err)
 	}
 	joined, err := sp.ByMember(ctx, member)
 	if err != nil {
 		t.Fatalf("by member (member): %v", err)
 	}
-	if len(joined) != 1 || joined[0].SpaceID != space.ID || joined[0].Role != RoleManage {
-		t.Fatalf("member spaces = %+v, want 1 manage", joined)
+	if len(joined) != 1 || joined[0].WorkspaceID != workspace.ID || joined[0].Role != RoleManage {
+		t.Fatalf("member workspaces = %+v, want 1 manage", joined)
 	}
 
 	// A stranger sees nothing.
@@ -110,27 +110,27 @@ func TestSpaceByMemberListsOwnedAndJoined(t *testing.T) {
 		t.Fatalf("by member (stranger): %v", err)
 	}
 	if len(none) != 0 {
-		t.Fatalf("stranger spaces = %d, want 0", len(none))
+		t.Fatalf("stranger workspaces = %d, want 0", len(none))
 	}
 }
 
-// TestSpaceRoleByAccount verifies RoleByAccount resolves the caller's role in
-// the space that owns an account (owner → admin, member → their role).
-func TestSpaceRoleByAccount(t *testing.T) {
+// TestWorkspaceRoleByAccount verifies RoleByAccount resolves the caller's role in
+// the workspace that owns an account (owner → admin, member → their role).
+func TestWorkspaceRoleByAccount(t *testing.T) {
 	ctx := context.Background()
 	p := testPool(t)
-	sp := NewSpaceStore(p)
-	sm := NewSpaceMemberStore(p)
+	sp := NewWorkspaceStore(p)
+	sm := NewWorkspaceMemberStore(p)
 
 	owner := testOwnerUser(t, ctx, p)
-	space, err := sp.Create(ctx, owner, "RoleByAccount Space", "rba-"+randSuffix())
+	workspace, err := sp.Create(ctx, owner, "RoleByAccount Workspace", "rba-"+randSuffix())
 	if err != nil {
-		t.Fatalf("create space: %v", err)
+		t.Fatalf("create workspace: %v", err)
 	}
-	// The space's account id is the one linked at creation.
+	// The workspace's account id is the one linked at creation.
 	var accountID string
-	if err := p.QueryRow(ctx, `SELECT id FROM accounts WHERE space_id=$1`, space.ID).Scan(&accountID); err != nil {
-		t.Fatalf("get space account: %v", err)
+	if err := p.QueryRow(ctx, `SELECT id FROM accounts WHERE workspace_id=$1`, workspace.ID).Scan(&accountID); err != nil {
+		t.Fatalf("get workspace account: %v", err)
 	}
 
 	role, err := sp.RoleByAccount(ctx, accountID, owner)
@@ -142,7 +142,7 @@ func TestSpaceRoleByAccount(t *testing.T) {
 	}
 
 	member := testOwnerUser(t, ctx, p)
-	if err := sm.AddMember(ctx, space.ID, member, RoleReadOnly); err != nil {
+	if err := sm.AddMember(ctx, workspace.ID, member, RoleReadOnly); err != nil {
 		t.Fatalf("add member: %v", err)
 	}
 	role, err = sp.RoleByAccount(ctx, accountID, member)

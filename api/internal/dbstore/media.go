@@ -144,7 +144,7 @@ func (s *MediaStore) SoftDelete(ctx context.Context, accountID, id string) (stri
 }
 
 // TotalBytes returns the total stored bytes for an account across all
-// non-deleted media rows (issue #384). This is the per-space storage usage the
+// non-deleted media rows (issue #384). This is the per-workspace storage usage the
 // 1GB quota is enforced against. Soft-deleted rows are excluded, so deleting a
 // media object releases its bytes back into the quota.
 func (s *MediaStore) TotalBytes(ctx context.Context, accountID string) (int64, error) {

@@ -90,13 +90,13 @@ func scanGateAllowed(ctx context.Context, media *dbstore.MediaStore, key, ct str
 	return objstore.ScanGateAllowed(ctx, media, key, ct)
 }
 
-// spaceQuotaExceeded reports whether adding `additional` stored bytes to the
-// account would push the space over the 1GB per-space storage quota (issue
+// workspaceQuotaExceeded reports whether adding `additional` stored bytes to the
+// account would push the workspace over the 1GB per-workspace storage quota (issue
 // #384). It sums the account's current non-deleted media bytes and applies the
 // shared objstore cap. Returns the human-readable rejection message when the
 // upload would exceed the quota, or "" when it is allowed. A nil media store
 // (bare-mode tests) is treated as no quota pressure.
-func (h *RESTHandlers) spaceQuotaExceeded(ctx context.Context, accountID string, additional int64) string {
+func (h *RESTHandlers) workspaceQuotaExceeded(ctx context.Context, accountID string, additional int64) string {
 	if h.Media == nil {
 		return ""
 	}
@@ -105,8 +105,8 @@ func (h *RESTHandlers) spaceQuotaExceeded(ctx context.Context, accountID string,
 		slog.Error("media_quota_total", "err", err, "account", accountID)
 		return ""
 	}
-	if objstore.ExceedsSpaceQuota(current, additional) {
-		return "had storan space dicapai (1GB)"
+	if objstore.ExceedsWorkspaceQuota(current, additional) {
+		return "had storan workspace dicapai (1GB)"
 	}
 	return ""
 }
@@ -140,7 +140,7 @@ func optimizeAvatar(data []byte, ext string) ([]byte, error) { return objstore.O
 // embedding (forms/products render them from any origin).
 //
 // Issue #379: code assets are tenant-scoped even on /media. The requesting
-// space/domain's account must match the asset key's account, so a merchant
+// workspace/domain's account must match the asset key's account, so a merchant
 // cannot serve another account's uploaded code via /media. Images remain
 // intentionally public (forms/products render them from any origin).
 func (h *RESTHandlers) handleMedia(w http.ResponseWriter, r *http.Request) {
@@ -166,10 +166,10 @@ func (h *RESTHandlers) handleMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Issue #379: code assets are tenant-scoped even on /media. Resolve the
-	// requesting space/domain's account and require the asset key's account to
+	// requesting workspace/domain's account and require the asset key's account to
 	// match it. Images are intentionally public and unaffected.
 	if isCodeAsset(ct) {
-		requestingAccount := requestingAccountID(r.Context(), h.Accounts, h.Domains, h.Spaces, r.Host)
+		requestingAccount := requestingAccountID(r.Context(), h.Accounts, h.Domains, h.Workspaces, r.Host)
 		if !assetOwnedByRequestingTenant(key, requestingAccount) {
 			writeErr(w, http.StatusNotFound, "media tidak tersedia")
 			return
@@ -285,10 +285,10 @@ func (h *RESTHandlers) uploadImage(w http.ResponseWriter, r *http.Request, actx 
 			writeErr(w, http.StatusRequestEntityTooLarge, "fail melebihi had 2MB")
 			return
 		}
-		// Issue #384: reject an upload that would push the space over the 1GB
-		// per-space storage quota.
-		if msg := h.spaceQuotaExceeded(r.Context(), actx.Account.ID, int64(len(data))); msg != "" {
-			recordUploadFailure("space_quota")
+		// Issue #384: reject an upload that would push the workspace over the 1GB
+		// per-workspace storage quota.
+		if msg := h.workspaceQuotaExceeded(r.Context(), actx.Account.ID, int64(len(data))); msg != "" {
+			recordUploadFailure("workspace_quota")
 			writeErr(w, http.StatusRequestEntityTooLarge, msg)
 			return
 		}
@@ -350,10 +350,10 @@ func (h *RESTHandlers) uploadImage(w http.ResponseWriter, r *http.Request, actx 
 		writeErr(w, http.StatusBadRequest, "imej gagal dimampatkan bawah 2MB; cuba imej lain")
 		return
 	}
-	// Issue #384: reject an upload that would push the space over the 1GB
-	// per-space storage quota (counted against the stored artifact size).
-	if msg := h.spaceQuotaExceeded(r.Context(), actx.Account.ID, int64(len(stored))); msg != "" {
-		recordUploadFailure("space_quota")
+	// Issue #384: reject an upload that would push the workspace over the 1GB
+	// per-workspace storage quota (counted against the stored artifact size).
+	if msg := h.workspaceQuotaExceeded(r.Context(), actx.Account.ID, int64(len(stored))); msg != "" {
+		recordUploadFailure("workspace_quota")
 		writeErr(w, http.StatusRequestEntityTooLarge, msg)
 		return
 	}
@@ -484,7 +484,7 @@ func (h *RESTHandlers) uploadAvatar(w http.ResponseWriter, r *http.Request, actx
 }
 
 // uploadAsset handles POST /v1/rest/uploads/asset (multipart). It accepts a
-// merchant code asset — CSS/JS/HTML/font/SVG — for customising a landing/space
+// merchant code asset — CSS/JS/HTML/font/SVG — for customising a landing/workspace
 // page (issue #361). Bytes are stored as-is (no re-encode) under the same
 // account-scoped `u/<acct>/<uuid>.<ext>` key. Customer (form-attachment)
 // uploads stay images-only; code assets are merchant-only.

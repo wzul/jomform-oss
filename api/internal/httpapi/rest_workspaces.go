@@ -1,4 +1,4 @@
-// Space management: list/create/switch + per-space settings.
+// Workspace management: list/create/switch + per-workspace settings.
 package httpapi
 
 import (
@@ -11,16 +11,16 @@ import (
 	"strings"
 )
 
-// listSpaces: GET /v1/spaces — spaces owned by OR a member of the current
+// listWorkspaces: GET /v1/workspaces — workspaces owned by OR a member of the current
 // user (issue #162). Each row carries the caller's role so the frontend can
 // gate UI on it.
-func (h *RESTHandlers) listSpaces(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+func (h *RESTHandlers) listWorkspaces(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	userID := h.sessionOwnerID(r)
 	if userID == "" {
 		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
 		return
 	}
-	spaces, err := h.Spaces.ByMember(r.Context(), userID)
+	workspaces, err := h.Workspaces.ByMember(r.Context(), userID)
 	if err != nil {
 		respondErr(w, r, err)
 		return
@@ -31,15 +31,15 @@ func (h *RESTHandlers) listSpaces(w http.ResponseWriter, r *http.Request, actx *
 		Slug string `json:"slug"`
 		Role string `json:"role"`
 	}
-	out := make([]row, 0, len(spaces))
-	for _, s := range spaces {
-		out = append(out, row{ID: s.SpaceID, Name: s.Name, Slug: s.Slug, Role: s.Role})
+	out := make([]row, 0, len(workspaces))
+	for _, s := range workspaces {
+		out = append(out, row{ID: s.WorkspaceID, Name: s.Name, Slug: s.Slug, Role: s.Role})
 	}
 	writeJSON(w, http.StatusOK, out)
 }
 
-// createSpace: POST /v1/spaces
-func (h *RESTHandlers) createSpace(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+// createWorkspace: POST /v1/workspaces
+func (h *RESTHandlers) createWorkspace(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	userID := h.sessionOwnerID(r)
 	if userID == "" {
 		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
@@ -68,7 +68,7 @@ func (h *RESTHandlers) createSpace(w http.ResponseWriter, r *http.Request, actx 
 		writeErr(w, http.StatusBadRequest, "slug tidak sah")
 		return
 	}
-	sp, err := h.Spaces.Create(r.Context(), userID, strings.TrimSpace(in.Name), slug)
+	sp, err := h.Workspaces.Create(r.Context(), userID, strings.TrimSpace(in.Name), slug)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -84,9 +84,9 @@ func (h *RESTHandlers) createSpace(w http.ResponseWriter, r *http.Request, actx 
 	})
 }
 
-// spaceAccessByID resolves a space by id and verifies the caller is the owner
-// or a member (issue #162). Returns the space + the caller's role.
-func (h *RESTHandlers) spaceAccessByID(w http.ResponseWriter, r *http.Request) (*dbstore.Space, string, bool) {
+// workspaceAccessByID resolves a workspace by id and verifies the caller is the owner
+// or a member (issue #162). Returns the workspace + the caller's role.
+func (h *RESTHandlers) workspaceAccessByID(w http.ResponseWriter, r *http.Request) (*dbstore.Workspace, string, bool) {
 	sID := r.PathValue("id")
 	if _, perr := uuid.Parse(sID); perr != nil {
 		writeErr(w, http.StatusBadRequest, "id tidak sah")
@@ -97,26 +97,26 @@ func (h *RESTHandlers) spaceAccessByID(w http.ResponseWriter, r *http.Request) (
 		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
 		return nil, "", false
 	}
-	s, err := h.Spaces.ByID(r.Context(), sID)
+	s, err := h.Workspaces.ByID(r.Context(), sID)
 	if err != nil || s == nil {
-		writeErr(w, http.StatusNotFound, "space tidak dijumpai")
+		writeErr(w, http.StatusNotFound, "workspace tidak dijumpai")
 		return nil, "", false
 	}
-	acc, ok, err := h.Spaces.AccessByID(r.Context(), sID, userID)
+	acc, ok, err := h.Workspaces.AccessByID(r.Context(), sID, userID)
 	if err != nil || !ok {
-		writeErr(w, http.StatusForbidden, "bukan space anda")
+		writeErr(w, http.StatusForbidden, "bukan workspace anda")
 		return nil, "", false
 	}
 	return s, acc.Role, true
 }
 
-// getSpaceSettings GET/PUT for the storefront builder.
-func (h *RESTHandlers) getSpaceSettings(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
-	s, _, ok := h.spaceAccessByID(w, r)
+// getWorkspaceSettings GET/PUT for the storefront builder.
+func (h *RESTHandlers) getWorkspaceSettings(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	s, _, ok := h.workspaceAccessByID(w, r)
 	if !ok {
 		return
 	}
-	set, err := h.Spaces.Settings(r.Context(), s.ID)
+	set, err := h.Workspaces.Settings(r.Context(), s.ID)
 	if err != nil {
 		respondErr(w, r, err)
 		return
@@ -124,8 +124,8 @@ func (h *RESTHandlers) getSpaceSettings(w http.ResponseWriter, r *http.Request, 
 	writeJSON(w, http.StatusOK, set)
 }
 
-// saveSpaceSettings: PUT /v1/spaces/{id}/settings
-func (h *RESTHandlers) saveSpaceSettings(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+// saveWorkspaceSettings: PUT /v1/workspaces/{id}/settings
+func (h *RESTHandlers) saveWorkspaceSettings(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	var in struct {
 		FooterText     string `json:"footer_text"`
 		CompanyReg     string `json:"company_reg"`
@@ -138,7 +138,7 @@ func (h *RESTHandlers) saveSpaceSettings(w http.ResponseWriter, r *http.Request,
 		MenuJSON       string `json:"menu_json"`
 		DefaultLang    string `json:"default_lang"`
 		Currency       string `json:"currency"`
-		// Issue #276: per-space SEO indexing toggle. Omitted (nil) = keep
+		// Issue #276: per-workspace SEO indexing toggle. Omitted (nil) = keep
 		// current value; explicit true/false sets it.
 		Indexing *bool `json:"indexing"`
 		// Issue #360: customizable landing-page config. Omitted (nil) = keep
@@ -162,7 +162,7 @@ func (h *RESTHandlers) saveSpaceSettings(w http.ResponseWriter, r *http.Request,
 		writeErr(w, http.StatusBadRequest, "mata wang tidak disokong")
 		return
 	}
-	s, role, ok := h.spaceAccessByID(w, r)
+	s, role, ok := h.workspaceAccessByID(w, r)
 	if !ok {
 		return
 	}
@@ -173,13 +173,13 @@ func (h *RESTHandlers) saveSpaceSettings(w http.ResponseWriter, r *http.Request,
 	// Read-modify-write: omitted fields keep their current value (issue #185
 	// currency change applies to new products/sales going forward; historical
 	// sales keep their original currency).
-	cur, err := h.Spaces.Settings(r.Context(), s.ID)
+	cur, err := h.Workspaces.Settings(r.Context(), s.ID)
 	if err != nil {
 		respondErr(w, r, err)
 		return
 	}
-	st := &dbstore.SpaceSettings{
-		SpaceID:        s.ID,
+	st := &dbstore.WorkspaceSettings{
+		WorkspaceID:        s.ID,
 		FooterText:     in.FooterText,
 		CompanyReg:     in.CompanyReg,
 		PrivacyURL:     in.PrivacyURL,
@@ -207,22 +207,22 @@ func (h *RESTHandlers) saveSpaceSettings(w http.ResponseWriter, r *http.Request,
 	if strings.TrimSpace(st.MenuJSON) == "" {
 		st.MenuJSON = "[]"
 	}
-	if err := h.Spaces.SaveSettings(r.Context(), st); err != nil {
+	if err := h.Workspaces.SaveSettings(r.Context(), st); err != nil {
 		respondErr(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
 }
 
-// ── Per-space email settings (issue #107) ────────────────────────────────────
+// ── Per-workspace email settings (issue #107) ────────────────────────────────────
 
-// getSpaceEmailSettings: GET /v1/spaces/{id}/email-settings
-func (h *RESTHandlers) getSpaceEmailSettings(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
-	s, _, ok := h.spaceAccessByID(w, r)
+// getWorkspaceEmailSettings: GET /v1/workspaces/{id}/email-settings
+func (h *RESTHandlers) getWorkspaceEmailSettings(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	s, _, ok := h.workspaceAccessByID(w, r)
 	if !ok {
 		return
 	}
-	set, err := h.Spaces.EmailSettings(r.Context(), s.ID)
+	set, err := h.Workspaces.EmailSettings(r.Context(), s.ID)
 	if err != nil {
 		respondErr(w, r, err)
 		return
@@ -230,8 +230,8 @@ func (h *RESTHandlers) getSpaceEmailSettings(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, set)
 }
 
-// saveSpaceEmailSettings: PUT /v1/spaces/{id}/email-settings
-func (h *RESTHandlers) saveSpaceEmailSettings(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+// saveWorkspaceEmailSettings: PUT /v1/workspaces/{id}/email-settings
+func (h *RESTHandlers) saveWorkspaceEmailSettings(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	var in struct {
 		ReceiptSubject      string `json:"receipt_subject"`
 		ReceiptBody         string `json:"receipt_body"`
@@ -244,7 +244,7 @@ func (h *RESTHandlers) saveSpaceEmailSettings(w http.ResponseWriter, r *http.Req
 		writeErr(w, http.StatusBadRequest, "payload tidak sah")
 		return
 	}
-	s, role, ok := h.spaceAccessByID(w, r)
+	s, role, ok := h.workspaceAccessByID(w, r)
 	if !ok {
 		return
 	}
@@ -253,7 +253,7 @@ func (h *RESTHandlers) saveSpaceEmailSettings(w http.ResponseWriter, r *http.Req
 		return
 	}
 	// Read-modify-write: omitted fields keep their current value.
-	st, err := h.Spaces.EmailSettings(r.Context(), s.ID)
+	st, err := h.Workspaces.EmailSettings(r.Context(), s.ID)
 	if err != nil {
 		respondErr(w, r, err)
 		return
@@ -270,7 +270,7 @@ func (h *RESTHandlers) saveSpaceEmailSettings(w http.ResponseWriter, r *http.Req
 	if in.HTML != nil {
 		st.HTML = *in.HTML
 	}
-	if err := h.Spaces.SaveEmailSettings(r.Context(), st); err != nil {
+	if err := h.Workspaces.SaveEmailSettings(r.Context(), st); err != nil {
 		respondErr(w, r, err)
 		return
 	}

@@ -48,16 +48,16 @@ func (s *Server) listForms(
 		return nil, nil, errors.New("forms tidak tersedia")
 	}
 	// Issue #307: a user-level agent lists forms across all of the user's
-	// accessible spaces (ownership enforced per store query).
+	// accessible workspaces (ownership enforced per store query).
 	out := make([]formOut, 0)
 	for _, acc := range accs {
 		forms, err := s.deps.Forms.ListByAccount(ctx, acc)
 		if err != nil {
 			return nil, nil, err
 		}
-		// Issue #77: public links are space-scoped ({space}.jomform.com/{slug}),
+		// Issue #77: public links are workspace-scoped ({workspace}.jomform.com/{slug}),
 		// never the legacy /f/{slug} form. Issue #83: a verified custom domain
-		// takes precedence over the space subdomain.
+		// takes precedence over the workspace subdomain.
 		for _, f := range forms {
 			u := ""
 			if f.Status == dbstore.FormStatusPublished || f.Status == dbstore.FormStatusUnlisted {
@@ -78,7 +78,7 @@ func (s *Server) getForm(
 	if s.deps.Forms == nil {
 		return nil, formDetailOut{}, errors.New("forms tidak tersedia")
 	}
-	// Issue #307: the form may live in any of the user's spaces; resolve the
+	// Issue #307: the form may live in any of the user's workspaces; resolve the
 	// owning account (RBAC via resolveFormAccount scope).
 	acc, err := s.resolveFormAccount(ctx, in.FormID)
 	if err != nil {
@@ -104,30 +104,30 @@ func (s *Server) getForm(
 	return nil, formDetailOut{}, errors.New("borang tidak dijumpai")
 }
 
-// spaceSlugFor resolves the space slug an account's forms live under, for
-// building space-scoped public URLs ("" when the account has no linked space).
-func (s *Server) spaceSlugFor(ctx context.Context, accountID string) string {
-	if s.deps.Spaces == nil {
+// workspaceSlugFor resolves the workspace slug an account's forms live under, for
+// building workspace-scoped public URLs ("" when the account has no linked workspace).
+func (s *Server) workspaceSlugFor(ctx context.Context, accountID string) string {
+	if s.deps.Workspaces == nil {
 		return ""
 	}
-	slug, err := s.deps.Spaces.SpaceSlugByAccount(ctx, accountID)
+	slug, err := s.deps.Workspaces.WorkspaceSlugByAccount(ctx, accountID)
 	if err != nil {
 		return ""
 	}
 	return slug
 }
 
-// formPublicURL builds the canonical space-scoped public URL for a form
-// (issue #77). Returns "" when the space slug is unknown.
-func formPublicURL(spaceSlug, slug string) string {
-	if spaceSlug == "" {
+// formPublicURL builds the canonical workspace-scoped public URL for a form
+// (issue #77). Returns "" when the workspace slug is unknown.
+func formPublicURL(workspaceSlug, slug string) string {
+	if workspaceSlug == "" {
 		return ""
 	}
-	return "https://" + spaceSlug + ".jomform.com/" + slug
+	return "https://" + workspaceSlug + ".jomform.com/" + slug
 }
 
 // formPublicURLForAccount builds the canonical public URL for a form,
-// preferring a verified custom domain over the space subdomain (issue #83).
+// preferring a verified custom domain over the workspace subdomain (issue #83).
 // Returns "" when neither is resolvable.
 func (s *Server) formPublicURLForAccount(ctx context.Context, accountID, slug string) string {
 	if s.deps.Accounts != nil {
@@ -135,5 +135,5 @@ func (s *Server) formPublicURLForAccount(ctx context.Context, accountID, slug st
 			return "https://" + strings.TrimRight(acc.CustomDomain, "/") + "/" + slug
 		}
 	}
-	return formPublicURL(s.spaceSlugFor(ctx, accountID), slug)
+	return formPublicURL(s.workspaceSlugFor(ctx, accountID), slug)
 }

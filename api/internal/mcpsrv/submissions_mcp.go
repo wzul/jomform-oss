@@ -24,7 +24,7 @@ type listFormSubmissionsIn struct {
 
 // listFormSubmissions returns one page of response-only submissions for a
 // form, newest first, plus the total count. Issue #307: the form may live in
-// any of the user's spaces (ownership enforced per store query). Read-only.
+// any of the user's workspaces (ownership enforced per store query). Read-only.
 func (s *Server) listFormSubmissions(ctx context.Context, _ *mcp.CallToolRequest, in listFormSubmissionsIn) (*mcp.CallToolResult, map[string]any, error) {
 	if s.deps.Submissions == nil {
 		return nil, nil, fmt.Errorf("submissions tidak tersedia")

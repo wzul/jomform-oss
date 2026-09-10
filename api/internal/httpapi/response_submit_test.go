@@ -16,15 +16,15 @@ import (
 	"github.com/wzul/jomform/api/internal/dbstore"
 )
 
-// responseFormFixture seeds a user + space + account + a published response-mode
+// responseFormFixture seeds a user + workspace + account + a published response-mode
 // form with input blocks, and returns a PublicHandlers wired with the
-// submission store plus the space slug + form slug.
+// submission store plus the workspace slug + form slug.
 func responseFormFixture(t *testing.T) (*PublicHandlers, string, string) {
 	t.Helper()
 	ctx := context.Background()
 	pool := bundleTestPool(t)
 
-	var userID, spaceSlug, accountID string
+	var userID, workspaceSlug, accountID string
 	if err := pool.QueryRow(ctx,
 		`INSERT INTO users (email, password_hash)
 		 VALUES ('it-' || md5(random()::text) || '@example.test', 'it')
@@ -32,16 +32,16 @@ func responseFormFixture(t *testing.T) (*PublicHandlers, string, string) {
 		t.Fatalf("create user: %v", err)
 	}
 	if err := pool.QueryRow(ctx,
-		`INSERT INTO spaces (owner_user_id, name, slug)
-		 VALUES ($1, 'it-space-' || md5(random()::text), 'it-' || md5(random()::text))
-		 RETURNING slug`, userID).Scan(&spaceSlug); err != nil {
-		t.Fatalf("create space: %v", err)
+		`INSERT INTO workspaces (owner_user_id, name, slug)
+		 VALUES ($1, 'it-workspace-' || md5(random()::text), 'it-' || md5(random()::text))
+		 RETURNING slug`, userID).Scan(&workspaceSlug); err != nil {
+		t.Fatalf("create workspace: %v", err)
 	}
 	if err := pool.QueryRow(ctx,
-		`INSERT INTO accounts (owner_user_id, name, slug, space_id)
+		`INSERT INTO accounts (owner_user_id, name, slug, workspace_id)
 		 SELECT $1, 'it-acc-' || md5(random()::text), 'it-' || md5(random()::text), id
-		 FROM spaces WHERE slug = $2
-		 RETURNING id`, userID, spaceSlug).Scan(&accountID); err != nil {
+		 FROM workspaces WHERE slug = $2
+		 RETURNING id`, userID, workspaceSlug).Scan(&accountID); err != nil {
 		t.Fatalf("create account: %v", err)
 	}
 
@@ -68,16 +68,16 @@ func responseFormFixture(t *testing.T) (*PublicHandlers, string, string) {
 		Sales:        dbstore.NewSaleStore(pool),
 		Accounts:     dbstore.NewAccountStore(pool),
 		Products:     dbstore.NewProductStore(pool),
-		Spaces:       dbstore.NewSpaceStore(pool),
+		Workspaces:       dbstore.NewWorkspaceStore(pool),
 		Submissions:  dbstore.NewSubmissionStore(pool),
 		BaseURL:      "http://localhost:8080",
 	}
-	return h, spaceSlug, formSlug
+	return h, workspaceSlug, formSlug
 }
 
 func TestResponseSubmitStoresSubmissionNoSale(t *testing.T) {
-	h, spaceSlug, formSlug := responseFormFixture(t)
-	host := spaceSlug + ".jomform.com"
+	h, workspaceSlug, formSlug := responseFormFixture(t)
+	host := workspaceSlug + ".jomform.com"
 	path := "/" + formSlug + "/order"
 
 	body := `{"client":{"full_name":"Ali","email":"ali@example.test","phone":"0123"},

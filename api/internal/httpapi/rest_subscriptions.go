@@ -43,7 +43,7 @@ func restSubRow(sw *dbstore.SubscriptionWithProduct) subscriptionRow {
 }
 
 // GET /v1/rest/subscriptions — list subscriptions for the resolved account
-// (or every account in the selected space), paginated. Optional ?status=
+// (or every account in the selected workspace), paginated. Optional ?status=
 // (active|past_due|cancelled) and the usual ?page/&limit.
 func (h *RESTHandlers) listSubscriptions(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	scope, ok := h.scopeOr403(w, r, actx)

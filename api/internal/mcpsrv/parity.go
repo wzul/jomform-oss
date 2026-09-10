@@ -301,7 +301,7 @@ func (s *Server) upsertForm(
 	ctx context.Context, _ *mcp.CallToolRequest, in upsertFormIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
 	// Issue #307: creating a new form lands in the caller's currently-scoped
-	// account (space_id/account_id or the default/first of the user's spaces);
+	// account (workspace_id/account_id or the default/first of the user's workspaces);
 	// updating resolves + RBAC-gates the owning account.
 	acc := ""
 	var err error
@@ -549,7 +549,7 @@ func applyCustomFormConfig(cfg map[string]any, html string, fields []customform.
 	return nil
 }
 
-// uniqueFormSlug generates a URL-safe, per-space-unique slug for a new form
+// uniqueFormSlug generates a URL-safe, per-workspace-unique slug for a new form
 // (issue #176). Prefers a slugified title, falls back to a random token, and
 // appends a random suffix until the slug is free.
 func (s *Server) uniqueFormSlug(ctx context.Context, accountID, title string) string {
@@ -591,7 +591,7 @@ func orEmptyMap(m map[string]any) map[string]any {
 	return m
 }
 
-// jsonValid reports whether s parses as JSON (used for space menu_json).
+// jsonValid reports whether s parses as JSON (used for workspace menu_json).
 func jsonValid(s string) bool {
 	var v any
 	return json.Unmarshal([]byte(s), &v) == nil
@@ -608,7 +608,7 @@ type publishFormIn struct {
 func (s *Server) publishFormMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in publishFormIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	// Issue #307: resolve + RBAC-gate the owning account across the user's spaces.
+	// Issue #307: resolve + RBAC-gate the owning account across the user's workspaces.
 	acc, err := s.requireFormWrite(ctx, in.FormID)
 	if err != nil {
 		return nil, nil, err
@@ -651,7 +651,7 @@ type setFormPasswordIn struct {
 func (s *Server) setFormPassword(
 	ctx context.Context, _ *mcp.CallToolRequest, in setFormPasswordIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	// Issue #307: resolve + RBAC-gate the owning account across the user's spaces.
+	// Issue #307: resolve + RBAC-gate the owning account across the user's workspaces.
 	acc, err := s.requireFormWrite(ctx, in.FormID)
 	if err != nil {
 		return nil, nil, err
@@ -720,8 +720,8 @@ func (s *Server) bulkFormsMCP(
 		return nil, nil, errors.New("ids terlalu banyak (maks 500)")
 	}
 	// Issue #307: a user-level agent may bulk-operate across all of their
-	// spaces, but only up to their role in each. So we resolve each form's
-	// owning account and apply the action per space when the caller has the
+	// workspaces, but only up to their role in each. So we resolve each form's
+	// owning account and apply the action per workspace when the caller has the
 	// manage/admin role there.
 	seen := make(map[string]struct{}, len(in.IDs))
 	ids := make([]string, 0, len(in.IDs))
@@ -768,7 +768,7 @@ func (s *Server) archiveProductMCP(
 		ProductID string `json:"product_id" jsonschema:"ID produk"`
 	},
 ) (*mcp.CallToolResult, map[string]string, error) {
-	// Issue #307: resolve + RBAC-gate the owning account across the user's spaces.
+	// Issue #307: resolve + RBAC-gate the owning account across the user's workspaces.
 	acc, err := s.requireProductWrite(ctx, in.ProductID)
 	if err != nil {
 		return nil, nil, err
@@ -780,8 +780,8 @@ func (s *Server) archiveProductMCP(
 }
 
 // bulkProductsMCP archives many products in one call (parity with
-// POST /v1/rest/products/bulk). Issue #307: spans the user's spaces (up to the
-// caller's role per space).
+// POST /v1/rest/products/bulk). Issue #307: spans the user's workspaces (up to the
+// caller's role per workspace).
 type bulkProductsIn struct {
 	IDs []string `json:"ids" jsonschema:"Senarai produk id (maks 500)"`
 }

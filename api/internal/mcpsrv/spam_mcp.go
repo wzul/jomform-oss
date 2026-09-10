@@ -38,7 +38,7 @@ type listSpamIn struct {
 }
 
 // listSpamSubmissions returns one page of spam-flagged response submissions,
-// newest first, plus the total count. Issue #307: spans all the user's spaces.
+// newest first, plus the total count. Issue #307: spans all the user's workspaces.
 // Read-only.
 func (s *Server) listSpamSubmissions(ctx context.Context, _ *mcp.CallToolRequest, in listSpamIn) (*mcp.CallToolResult, map[string]any, error) {
 	accs, err := s.accountScopes(ctx, false)
@@ -84,7 +84,7 @@ type unspamSubmissionIn struct {
 
 // unspamSubmission clears the spam flag on a false-positive submission.
 // Write tool (manage/admin role). Issue #307: the submission may live in any
-// of the user's spaces (up to the caller's role per space).
+// of the user's workspaces (up to the caller's role per workspace).
 func (s *Server) unspamSubmission(ctx context.Context, _ *mcp.CallToolRequest, in unspamSubmissionIn) (*mcp.CallToolResult, map[string]any, error) {
 	if s.deps.Submissions == nil {
 		return nil, nil, fmt.Errorf("submissions tidak tersedia")
@@ -115,7 +115,7 @@ func (s *Server) unspamSubmission(ctx context.Context, _ *mcp.CallToolRequest, i
 }
 
 // listSpamSales returns one page of spam-flagged sales, newest first, plus
-// the total count. Issue #307: spans all the user's spaces. Read-only.
+// the total count. Issue #307: spans all the user's workspaces. Read-only.
 func (s *Server) listSpamSales(ctx context.Context, _ *mcp.CallToolRequest, in listSpamIn) (*mcp.CallToolResult, map[string]any, error) {
 	accs, err := s.accountScopes(ctx, false)
 	if err != nil {
@@ -160,7 +160,7 @@ type unspamSaleIn struct {
 }
 
 // unspamSale clears the spam flag on a false-positive sale. Write tool
-// (manage/admin role). Issue #307: the sale may live in any of the user's spaces.
+// (manage/admin role). Issue #307: the sale may live in any of the user's workspaces.
 func (s *Server) unspamSale(ctx context.Context, _ *mcp.CallToolRequest, in unspamSaleIn) (*mcp.CallToolResult, map[string]any, error) {
 	if s.deps.Sales == nil {
 		return nil, nil, fmt.Errorf("sales tidak tersedia")

@@ -1,7 +1,7 @@
 // User-level connected MCP agents (issue #307). The OAuth token is bound to
 // the user, so the dashboard can list which MCP clients a user has connected
 // and disconnect any of them (revoking its tokens) — independent of which
-// space is active. This is surfaced on the Profile → Connected/MCP tab.
+// workspace is active. This is surfaced on the Profile → Connected/MCP tab.
 package httpapi
 
 import (
@@ -18,7 +18,7 @@ type mcpAgentOut struct {
 
 // listMCPAgents returns the MCP clients the signed-in user has an active
 // (non-revoked, unexpired) token for. User-level — it is the same across all
-// of the user's spaces (issue #307).
+// of the user's workspaces (issue #307).
 func (a *AuthHandlers) listMCPAgents(w http.ResponseWriter, r *http.Request) {
 	userID := a.currentUserID(r)
 	if userID == "" {

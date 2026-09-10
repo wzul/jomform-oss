@@ -1,8 +1,8 @@
 package httpapi
 
-// Issue #379 regression test: the space/custom-domain asset route
+// Issue #379 regression test: the workspace/custom-domain asset route
 // (handleAsset) and the /media code-asset path (handleMedia) must reject a
-// key that belongs to a DIFFERENT account than the requesting space/domain.
+// key that belongs to a DIFFERENT account than the requesting workspace/domain.
 // A merchant must never be able to serve another account's uploaded code
 // asset on their own domain, even if they know the target's object key.
 //
@@ -52,8 +52,8 @@ func (f *fakeObjectStore) DeleteObject(_ context.Context, key string) error {
 	return nil
 }
 
-// assetTenancyFixture seeds a user with TWO spaces, each owning its own
-// account (issue #158), and returns the handlers plus both space slugs and
+// assetTenancyFixture seeds a user with TWO workspaces, each owning its own
+// account (issue #158), and returns the handlers plus both workspace slugs and
 // both account ids. The fake store is preloaded with a code asset (CSS) and
 // an image (PNG) under account A's key.
 func assetTenancyFixture(t *testing.T) (*PublicHandlers, *RESTHandlers, string, string, string, string) {
@@ -71,19 +71,19 @@ func assetTenancyFixture(t *testing.T) (*PublicHandlers, *RESTHandlers, string, 
 		t.Fatalf("create user: %v", err)
 	}
 
-	sp := dbstore.NewSpaceStore(pool)
-	spaceA, err := sp.Create(ctx, userID, "Asset A", "ast-a-"+userID[:8])
+	sp := dbstore.NewWorkspaceStore(pool)
+	workspaceA, err := sp.Create(ctx, userID, "Asset A", "ast-a-"+userID[:8])
 	if err != nil {
-		t.Fatalf("create space A: %v", err)
+		t.Fatalf("create workspace A: %v", err)
 	}
-	spaceB, err := sp.Create(ctx, userID, "Asset B", "ast-b-"+userID[:8])
+	workspaceB, err := sp.Create(ctx, userID, "Asset B", "ast-b-"+userID[:8])
 	if err != nil {
-		t.Fatalf("create space B: %v", err)
+		t.Fatalf("create workspace B: %v", err)
 	}
-	accA := accountIDForSpace(t, ctx, pool, spaceA.ID)
-	accB := accountIDForSpace(t, ctx, pool, spaceB.ID)
+	accA := accountIDForWorkspace(t, ctx, pool, workspaceA.ID)
+	accB := accountIDForWorkspace(t, ctx, pool, workspaceB.ID)
 	if accA == "" || accB == "" || accA == accB {
-		t.Fatalf("spaces must each own a distinct account (A=%q B=%q)", accA, accB)
+		t.Fatalf("workspaces must each own a distinct account (A=%q B=%q)", accA, accB)
 	}
 
 	store := newFakeObjectStore()
@@ -95,16 +95,16 @@ func assetTenancyFixture(t *testing.T) (*PublicHandlers, *RESTHandlers, string, 
 	ph := &PublicHandlers{
 		Accounts: accounts,
 		Domains:  dbstore.NewDomainStore(pool),
-		Spaces:   sp,
+		Workspaces:   sp,
 		Store:    store,
 	}
 	rh := &RESTHandlers{
 		Accounts: accounts,
 		Domains:  dbstore.NewDomainStore(pool),
-		Spaces:   sp,
+		Workspaces:   sp,
 		Store:    store,
 	}
-	return ph, rh, spaceA.Slug, spaceB.Slug, accA, accB
+	return ph, rh, workspaceA.Slug, workspaceB.Slug, accA, accB
 }
 
 // publicAssetServe routes GET /assets/{key} through the public mux on the
@@ -134,35 +134,35 @@ func restMediaServe(t *testing.T, h *RESTHandlers, host, key string) *httptest.R
 }
 
 // TestHandleAssetRejectsCrossTenantKey: an asset key from account A requested
-// on account B's space subdomain must 404 (issue #379).
+// on account B's workspace subdomain must 404 (issue #379).
 func TestHandleAssetRejectsCrossTenantKey(t *testing.T) {
 	ph, _, slugA, slugB, accA, _ := assetTenancyFixture(t)
 
-	// Same-tenant: account A's asset on account A's space subdomain → 200.
+	// Same-tenant: account A's asset on account A's workspace subdomain → 200.
 	rec := publicAssetServe(t, ph, slugA+".jomform.com", "u/"+accA+"/aaaa.css")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("same-tenant asset on %s = %d, want 200 (body %s)", slugA+".jomform.com", rec.Code, rec.Body.String())
 	}
 
-	// Cross-tenant: account A's asset on account B's space subdomain → 404.
+	// Cross-tenant: account A's asset on account B's workspace subdomain → 404.
 	rec = publicAssetServe(t, ph, slugB+".jomform.com", "u/"+accA+"/aaaa.css")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("cross-tenant asset on %s = %d, want 404 (body %s)", slugB+".jomform.com", rec.Code, rec.Body.String())
 	}
 }
 
-// TestHandleAssetRejectsUnknownSpace: an asset on a space subdomain that does
+// TestHandleAssetRejectsUnknownWorkspace: an asset on a workspace subdomain that does
 // not exist must 404 (the requesting tenant cannot be resolved).
-func TestHandleAssetRejectsUnknownSpace(t *testing.T) {
+func TestHandleAssetRejectsUnknownWorkspace(t *testing.T) {
 	ph, _, _, _, accA, _ := assetTenancyFixture(t)
-	rec := publicAssetServe(t, ph, "no-such-space.jomform.com", "u/"+accA+"/aaaa.css")
+	rec := publicAssetServe(t, ph, "no-such-workspace.jomform.com", "u/"+accA+"/aaaa.css")
 	if rec.Code != http.StatusNotFound {
-		t.Fatalf("asset on unknown space = %d, want 404", rec.Code)
+		t.Fatalf("asset on unknown workspace = %d, want 404", rec.Code)
 	}
 }
 
 // TestHandleMediaCodeAssetRejectsCrossTenant: a code asset from account A
-// requested on account B's space subdomain via /media must 404 (issue #379).
+// requested on account B's workspace subdomain via /media must 404 (issue #379).
 // Images remain public and are served cross-tenant.
 func TestHandleMediaCodeAssetRejectsCrossTenant(t *testing.T) {
 	_, rh, slugA, slugB, accA, _ := assetTenancyFixture(t)
@@ -179,7 +179,7 @@ func TestHandleMediaCodeAssetRejectsCrossTenant(t *testing.T) {
 		t.Fatalf("cross-tenant code asset on /media = %d, want 404 (body %s)", rec.Code, rec.Body.String())
 	}
 
-	// Images are intentionally public: account A's image on account B's space
+	// Images are intentionally public: account A's image on account B's workspace
 	// subdomain via /media → 200.
 	rec = restMediaServe(t, rh, slugB+".jomform.com", "u/"+accA+"/aaaa.png")
 	if rec.Code != http.StatusOK {

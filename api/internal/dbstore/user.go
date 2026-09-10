@@ -37,11 +37,11 @@ type User struct {
 	// rejected by session resolution, killing every prior session. NULL until
 	// the first reset (issue #63 also keys trust-cookie invalidation on it).
 	PwResetAt *time.Time
-	// DefaultSpaceID is the user's chosen default space (issue #164). NULL =
-	// no default → multi-space users are prompted to pick a space after login.
-	// Read via the dedicated accessor (DefaultSpace) so it is NOT part of the
+	// DefaultWorkspaceID is the user's chosen default workspace (issue #164). NULL =
+	// no default → multi-workspace users are prompted to pick a workspace after login.
+	// Read via the dedicated accessor (DefaultWorkspace) so it is NOT part of the
 	// main user scan; the column is intentionally unselected.
-	DefaultSpaceID *string
+	DefaultWorkspaceID *string
 }
 
 // UserStore wraps pgx for user operations.
@@ -276,11 +276,11 @@ func (s *UserStore) UpdateEmail(ctx context.Context, userID, email string) error
 	return err
 }
 
-// DefaultSpace returns the user's default space id ("" when none). Read via a
+// DefaultWorkspace returns the user's default workspace id ("" when none). Read via a
 // dedicated accessor so the column stays out of the main user scan (issue #164).
-func (s *UserStore) DefaultSpace(ctx context.Context, userID string) (string, error) {
+func (s *UserStore) DefaultWorkspace(ctx context.Context, userID string) (string, error) {
 	var id *string
-	err := s.pool.QueryRow(ctx, `SELECT default_space_id FROM users WHERE id=$1`, userID).Scan(&id)
+	err := s.pool.QueryRow(ctx, `SELECT default_workspace_id FROM users WHERE id=$1`, userID).Scan(&id)
 	if err != nil {
 		return "", err
 	}
@@ -290,19 +290,19 @@ func (s *UserStore) DefaultSpace(ctx context.Context, userID string) (string, er
 	return *id, nil
 }
 
-// SetDefaultSpace records the user's chosen default space (issue #164). The
-// caller validates the space belongs to the user (owner or member).
-func (s *UserStore) SetDefaultSpace(ctx context.Context, userID, spaceID string) error {
+// SetDefaultWorkspace records the user's chosen default workspace (issue #164). The
+// caller validates the workspace belongs to the user (owner or member).
+func (s *UserStore) SetDefaultWorkspace(ctx context.Context, userID, workspaceID string) error {
 	_, err := s.pool.Exec(ctx,
-		`UPDATE users SET default_space_id=$2, updated_at=now() WHERE id=$1`, userID, spaceID)
+		`UPDATE users SET default_workspace_id=$2, updated_at=now() WHERE id=$1`, userID, workspaceID)
 	return err
 }
 
-// ClearDefaultSpace removes the user's default space (issue #164), so the
-// space-picker prompt returns on the next login.
-func (s *UserStore) ClearDefaultSpace(ctx context.Context, userID string) error {
+// ClearDefaultWorkspace removes the user's default workspace (issue #164), so the
+// workspace-picker prompt returns on the next login.
+func (s *UserStore) ClearDefaultWorkspace(ctx context.Context, userID string) error {
 	_, err := s.pool.Exec(ctx,
-		`UPDATE users SET default_space_id=NULL, updated_at=now() WHERE id=$1`, userID)
+		`UPDATE users SET default_workspace_id=NULL, updated_at=now() WHERE id=$1`, userID)
 	return err
 }
 
@@ -318,13 +318,13 @@ func (s *UserStore) CountUnverifiedOlderThan(ctx context.Context, cutoff time.Ti
 
 // DeleteUnverifiedOlderThan deletes users who never confirmed their email and
 // were created before cutoff (issue #190). It also cleans up their
-// auto-provisioned accounts (and any owned spaces) so no orphan rows remain.
+// auto-provisioned accounts (and any owned workspaces) so no orphan rows remain.
 //
 // Safety: only rows with verified=false are ever deleted — the final DELETE
 // carries a verified=false guard as a hard backstop, so a verified account is
 // never removed even if it slipped into the scan. Accounts with sales or
 // subscriptions (RESTRICT FKs) are left untouched, and the user is only
-// deleted once their deletable accounts/spaces are gone.
+// deleted once their deletable accounts/workspaces are gone.
 //
 // Returns the number of users actually deleted.
 func (s *UserStore) DeleteUnverifiedOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
@@ -355,12 +355,12 @@ func (s *UserStore) DeleteUnverifiedOlderThan(ctx context.Context, cutoff time.T
 
 	var deleted int64
 	for _, id := range ids {
-		// Delete spaces owned by the user that have no linked accounts, so the
-		// user delete's CASCADE on spaces can't be blocked by accounts.space_id.
+		// Delete workspaces owned by the user that have no linked accounts, so the
+		// user delete's CASCADE on workspaces can't be blocked by accounts.workspace_id.
 		if _, err := tx.Exec(ctx,
-			`DELETE FROM spaces
+			`DELETE FROM workspaces
 			 WHERE owner_user_id = $1
-			   AND id NOT IN (SELECT space_id FROM accounts WHERE space_id IS NOT NULL)`,
+			   AND id NOT IN (SELECT workspace_id FROM accounts WHERE workspace_id IS NOT NULL)`,
 			id); err != nil {
 			return 0, err
 		}

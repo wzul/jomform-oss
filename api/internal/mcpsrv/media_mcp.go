@@ -45,7 +45,7 @@ type listMediaIn struct {
 
 // listMedia returns one page of the user's uploaded media, newest first,
 // optionally filtered by form and source. Issue #307: spans all of the user's
-// spaces (ownership enforced inside the store queries). Read-only.
+// workspaces (ownership enforced inside the store queries). Read-only.
 func (s *Server) listMedia(ctx context.Context, _ *mcp.CallToolRequest, in listMediaIn) (*mcp.CallToolResult, map[string]any, error) {
 	accs, err := s.accountScopes(ctx, false)
 	if err != nil {
@@ -106,7 +106,7 @@ func (s *Server) uploadMedia(
 	if err != nil {
 		return nil, mediaOut{}, err
 	}
-	// Write gate: manage-or-admin role in the space owning the account.
+	// Write gate: manage-or-admin role in the workspace owning the account.
 	if err := s.requireWriteRoleIn(ctx, acc); err != nil {
 		return nil, mediaOut{}, err
 	}
@@ -156,9 +156,9 @@ func (s *Server) uploadMediaImage(ctx context.Context, acc string, raw []byte) (
 	if len(stored) > objstore.MaxStoredBytes {
 		return nil, mediaOut{}, errors.New("imej gagal dimampatkan bawah 2MB; cuba imej lain")
 	}
-	// Issue #384: reject an upload that would push the space over the 1GB
-	// per-space storage quota (counted against the stored artifact size).
-	if err := s.spaceQuotaExceeded(ctx, acc, int64(len(stored))); err != nil {
+	// Issue #384: reject an upload that would push the workspace over the 1GB
+	// per-workspace storage quota (counted against the stored artifact size).
+	if err := s.workspaceQuotaExceeded(ctx, acc, int64(len(stored))); err != nil {
 		return nil, mediaOut{}, err
 	}
 	key := objstore.BuildUploadKey(acc, ext)
@@ -211,9 +211,9 @@ func (s *Server) uploadMediaAsset(ctx context.Context, acc string, raw []byte) (
 	if len(raw) > objstore.MaxAssetBytes {
 		return nil, mediaOut{}, fmt.Errorf("fail melebihi had %dMB", objstore.MaxAssetBytes>>20)
 	}
-	// Issue #384: reject an upload that would push the space over the 1GB
-	// per-space storage quota.
-	if err := s.spaceQuotaExceeded(ctx, acc, int64(len(raw))); err != nil {
+	// Issue #384: reject an upload that would push the workspace over the 1GB
+	// per-workspace storage quota.
+	if err := s.workspaceQuotaExceeded(ctx, acc, int64(len(raw))); err != nil {
 		return nil, mediaOut{}, err
 	}
 	ext, ok := objstore.SniffAssetType(raw)
@@ -280,9 +280,9 @@ func (s *Server) uploadMediaPDF(ctx context.Context, acc string, raw []byte) (*m
 	if len(raw) > objstore.MaxPDFBytes {
 		return nil, mediaOut{}, fmt.Errorf("fail melebihi had %dMB", objstore.MaxPDFBytes>>20)
 	}
-	// Issue #384: reject an upload that would push the space over the 1GB
-	// per-space storage quota.
-	if err := s.spaceQuotaExceeded(ctx, acc, int64(len(raw))); err != nil {
+	// Issue #384: reject an upload that would push the workspace over the 1GB
+	// per-workspace storage quota.
+	if err := s.workspaceQuotaExceeded(ctx, acc, int64(len(raw))); err != nil {
 		return nil, mediaOut{}, err
 	}
 	ext, ok := objstore.SniffPDFType(raw)
@@ -390,13 +390,13 @@ func (s *Server) recordMCPMediaEvent(ctx context.Context, accountID, event strin
 	}
 }
 
-// spaceQuotaExceeded reports whether adding `additional` stored bytes to the
-// account would push the space over the 1GB per-space storage quota (issue
+// workspaceQuotaExceeded reports whether adding `additional` stored bytes to the
+// account would push the workspace over the 1GB per-workspace storage quota (issue
 // #384). It sums the account's current non-deleted media bytes and applies the
 // shared objstore cap. Returns the rejection error when the upload would
 // exceed the quota, or nil when allowed. A nil media store is treated as no
 // quota pressure.
-func (s *Server) spaceQuotaExceeded(ctx context.Context, accountID string, additional int64) error {
+func (s *Server) workspaceQuotaExceeded(ctx context.Context, accountID string, additional int64) error {
 	if s.deps.Media == nil {
 		return nil
 	}
@@ -404,8 +404,8 @@ func (s *Server) spaceQuotaExceeded(ctx context.Context, accountID string, addit
 	if err != nil {
 		return nil // best-effort — a usage read failure must not block uploads
 	}
-	if objstore.ExceedsSpaceQuota(current, additional) {
-		return errors.New("had storan space dicapai (1GB)")
+	if objstore.ExceedsWorkspaceQuota(current, additional) {
+		return errors.New("had storan workspace dicapai (1GB)")
 	}
 	return nil
 }

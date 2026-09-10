@@ -27,8 +27,8 @@ type Deps struct {
 	MCP      *mcpsrv.Server
 	Users    *dbstore.UserStore
 	Sessions *auth.Sessions
-	// Issue #161: space membership + invites (redeemed on signup).
-	SpaceMembers *dbstore.SpaceMemberStore
+	// Issue #161: workspace membership + invites (redeemed on signup).
+	WorkspaceMembers *dbstore.WorkspaceMemberStore
 	// Issue #42: brute-force + registration hardening.
 	//   Sessions exposes the shared go-redis client used for the failed-login
 	//   counters. VerifyKey is the 32-byte AES-GCM key used to sign/verify the
@@ -115,7 +115,7 @@ func NewServer(cfg *config.Config, log *slog.Logger, deps *Deps) *Server {
 			Sessions:     deps.Sessions,
 			Users:        deps.Users,
 			Accounts:     deps.Accounts,
-			Spaces:       deps.REST.Spaces,
+			Workspaces:       deps.REST.Workspaces,
 			BaseURL:      cfg.AppBaseURL,
 			CookieDomain: SharedCookieDomain(cfg.AppBaseURL),
 			VerifyKey:    deps.VerifyKey,
@@ -128,7 +128,7 @@ func NewServer(cfg *config.Config, log *slog.Logger, deps *Deps) *Server {
 			// Issue #199: background email queue (nil → synchronous sends).
 			EmailQueue: deps.EmailQueue,
 			// Issue #161: redeem pending invites on signup.
-			SpaceMembers: deps.SpaceMembers,
+			WorkspaceMembers: deps.WorkspaceMembers,
 			// Issue #92: audit/behaviour log for auth actions.
 			Events: deps.Events,
 			// Issue #307: the user-level connected-agents (MCP) store.

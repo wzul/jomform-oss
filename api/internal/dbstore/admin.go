@@ -13,9 +13,9 @@ import (
 	"time"
 )
 
-// SpaceWithCounts is one space row plus its owner email, creation time and
-// form/product counts — the admin_list_spaces surface (issue #386).
-type SpaceWithCounts struct {
+// WorkspaceWithCounts is one workspace row plus its owner email, creation time and
+// form/product counts — the admin_list_workspaces surface (issue #386).
+type WorkspaceWithCounts struct {
 	ID           string
 	Name         string
 	Slug         string
@@ -26,23 +26,23 @@ type SpaceWithCounts struct {
 	ProductCount int64
 }
 
-// ListAllWithCounts returns every space with owner email + form/product
+// ListAllWithCounts returns every workspace with owner email + form/product
 // counts, newest first. Super-admin only (issue #386).
-func (s *SpaceStore) ListAllWithCounts(ctx context.Context) ([]SpaceWithCounts, error) {
+func (s *WorkspaceStore) ListAllWithCounts(ctx context.Context) ([]WorkspaceWithCounts, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT sp.id, sp.name, sp.slug, sp.owner_user_id, COALESCE(u.email,''), sp.created_at,
-		       (SELECT COUNT(*) FROM forms f WHERE f.space_id = sp.id),
-		       (SELECT COUNT(*) FROM products p WHERE p.space_id = sp.id)
-		FROM spaces sp
+		       (SELECT COUNT(*) FROM forms f WHERE f.workspace_id = sp.id),
+		       (SELECT COUNT(*) FROM products p WHERE p.workspace_id = sp.id)
+		FROM workspaces sp
 		LEFT JOIN users u ON u.id = sp.owner_user_id
 		ORDER BY sp.created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := []SpaceWithCounts{}
+	out := []WorkspaceWithCounts{}
 	for rows.Next() {
-		var x SpaceWithCounts
+		var x WorkspaceWithCounts
 		if err := rows.Scan(&x.ID, &x.Name, &x.Slug, &x.OwnerUserID, &x.OwnerEmail,
 			&x.CreatedAt, &x.FormCount, &x.ProductCount); err != nil {
 			return nil, err
@@ -52,21 +52,21 @@ func (s *SpaceStore) ListAllWithCounts(ctx context.Context) ([]SpaceWithCounts, 
 	return out, rows.Err()
 }
 
-// MediaUsageBySpace is one space's media storage usage (issue #386).
-type MediaUsageBySpace struct {
-	SpaceID   string
-	SpaceName string
+// MediaUsageByWorkspace is one workspace's media storage usage (issue #386).
+type MediaUsageByWorkspace struct {
+	WorkspaceID   string
+	WorkspaceName string
 	Slug      string
 	UsedBytes int64
 }
 
-// UsageBySpace returns media storage usage per space (non-deleted bytes),
-// joined through the space's account. Super-admin only (issue #386).
-func (s *MediaStore) UsageBySpace(ctx context.Context) ([]MediaUsageBySpace, error) {
+// UsageByWorkspace returns media storage usage per workspace (non-deleted bytes),
+// joined through the workspace's account. Super-admin only (issue #386).
+func (s *MediaStore) UsageByWorkspace(ctx context.Context) ([]MediaUsageByWorkspace, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT sp.id, sp.name, sp.slug, COALESCE(SUM(m.size),0)
-		FROM spaces sp
-		LEFT JOIN accounts a ON a.space_id = sp.id
+		FROM workspaces sp
+		LEFT JOIN accounts a ON a.workspace_id = sp.id
 		LEFT JOIN media m ON m.account_id = a.id AND m.deleted_at IS NULL
 		GROUP BY sp.id, sp.name, sp.slug
 		ORDER BY sp.name`)
@@ -74,10 +74,10 @@ func (s *MediaStore) UsageBySpace(ctx context.Context) ([]MediaUsageBySpace, err
 		return nil, err
 	}
 	defer rows.Close()
-	out := []MediaUsageBySpace{}
+	out := []MediaUsageByWorkspace{}
 	for rows.Next() {
-		var x MediaUsageBySpace
-		if err := rows.Scan(&x.SpaceID, &x.SpaceName, &x.Slug, &x.UsedBytes); err != nil {
+		var x MediaUsageByWorkspace
+		if err := rows.Scan(&x.WorkspaceID, &x.WorkspaceName, &x.Slug, &x.UsedBytes); err != nil {
 			return nil, err
 		}
 		out = append(out, x)

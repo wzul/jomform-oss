@@ -12,7 +12,7 @@ import (
 
 // TestSocialEnsureAccountForNewUser is an integration test for issue #298:
 // after Google (social) login, a brand-new user must be auto-provisioned a
-// default account so the dashboard's authed() routes (/api/spaces,
+// default account so the dashboard's authed() routes (/api/workspaces,
 // /api/rest/dashboard-bundle) resolve an account instead of 401ing. The
 // session cookie itself was always set correctly — the gap was the account.
 //
@@ -31,14 +31,14 @@ func TestSocialEnsureAccountForNewUser(t *testing.T) {
 
 	users := dbstore.NewUserStore(pool)
 	accounts := dbstore.NewAccountStore(pool)
-	spaces := dbstore.NewSpaceStore(pool)
+	workspaces := dbstore.NewWorkspaceStore(pool)
 	sess := authTestValkey(t)
 
 	a := &AuthHandlers{
 		Sessions: sess,
 		Users:    users,
 		Accounts: accounts,
-		Spaces:   spaces,
+		Workspaces:   workspaces,
 		BaseURL:  "http://localhost:8080",
 	}
 

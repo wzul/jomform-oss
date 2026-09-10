@@ -1,5 +1,5 @@
 // MCP parity tools: currency (issue #185). get_currency_rates exposes the
-// BNM daily-cached exchange rates; set_space_currency sets a space's
+// BNM daily-cached exchange rates; set_workspace_currency sets a workspace's
 // settlement currency (default MYR). Historical sales keep their original
 // currency — a change applies to new products/sales going forward.
 package mcpsrv
@@ -32,20 +32,20 @@ func (s *Server) getCurrencyRates(
 	return nil, map[string]any{"rates": rates, "cached": cached}, nil
 }
 
-// ── set_space_currency ──────────────────────────────────────────────────────
+// ── set_workspace_currency ──────────────────────────────────────────────────────
 
-type setSpaceCurrencyIn struct {
-	SpaceID  string `json:"space_id" jsonschema:"ID space (dari list_spaces)"`
+type setWorkspaceCurrencyIn struct {
+	WorkspaceID  string `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
 	Currency string `json:"currency" jsonschema:"Kod mata wang, cth MYR, USD, SGD (default MYR)"`
 }
 
-// setSpaceCurrency sets a space's settlement currency. The change applies to
+// setWorkspaceCurrency sets a workspace's settlement currency. The change applies to
 // new products/sales going forward; historical sales keep their original
 // currency (never auto-converted — legal/accounting requirement).
-func (s *Server) setSpaceCurrency(
-	ctx context.Context, _ *mcp.CallToolRequest, in setSpaceCurrencyIn,
+func (s *Server) setWorkspaceCurrency(
+	ctx context.Context, _ *mcp.CallToolRequest, in setWorkspaceCurrencyIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	_, role, err := s.accessibleSpace(ctx, in.SpaceID)
+	_, role, err := s.accessibleWorkspace(ctx, in.WorkspaceID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -55,11 +55,11 @@ func (s *Server) setSpaceCurrency(
 	if !dbstore.IsSupportedCurrency(in.Currency) {
 		return nil, nil, errors.New("mata wang tidak disokong")
 	}
-	sp, err := s.spacesStore()
+	sp, err := s.workspacesStore()
 	if err != nil {
 		return nil, nil, err
 	}
-	st, err := sp.Settings(ctx, in.SpaceID)
+	st, err := sp.Settings(ctx, in.WorkspaceID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
@@ -67,5 +67,5 @@ func (s *Server) setSpaceCurrency(
 	if err := sp.SaveSettings(ctx, st); err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
-	return nil, map[string]string{"status": "saved", "space_id": in.SpaceID, "currency": in.Currency}, nil
+	return nil, map[string]string{"status": "saved", "workspace_id": in.WorkspaceID, "currency": in.Currency}, nil
 }

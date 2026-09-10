@@ -1,7 +1,7 @@
 // Super-admin MCP tools — platform-wide usage monitoring (issue #386).
 //
 // These tools let the platform owner's AI agent monitor usage across ALL
-// spaces once JomForm is public. They are gated on the super-admin role
+// workspaces once JomForm is public. They are gated on the super-admin role
 // (#385): every handler calls requireSuperAdmin first and auditSuperAdminAction
 // afterwards. They are read-only by default — destructive admin writes are
 // deliberately separate and explicit (none exist yet). The account-scoped
@@ -31,9 +31,9 @@ func (s *Server) adminGate(ctx context.Context, action string) error {
 	return nil
 }
 
-// ── admin_list_spaces ───────────────────────────────────────────────────────
+// ── admin_list_workspaces ───────────────────────────────────────────────────────
 
-type adminSpaceOut struct {
+type adminWorkspaceOut struct {
 	ID           string `json:"id"`
 	Name         string `json:"name"`
 	Slug         string `json:"slug"`
@@ -43,13 +43,13 @@ type adminSpaceOut struct {
 	ProductCount int64  `json:"product_count"`
 }
 
-// adminListSpaces lists every space with its owner email, creation time and
+// adminListWorkspaces lists every workspace with its owner email, creation time and
 // form/product counts. Super-admin only, read-only, audited.
-func (s *Server) adminListSpaces(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, []adminSpaceOut, error) {
-	if err := s.adminGate(ctx, "admin.list_spaces"); err != nil {
+func (s *Server) adminListWorkspaces(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, []adminWorkspaceOut, error) {
+	if err := s.adminGate(ctx, "admin.list_workspaces"); err != nil {
 		return nil, nil, err
 	}
-	sp, err := s.spacesStore()
+	sp, err := s.workspacesStore()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -57,9 +57,9 @@ func (s *Server) adminListSpaces(ctx context.Context, _ *mcp.CallToolRequest, _ 
 	if err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
-	out := make([]adminSpaceOut, 0, len(rows))
+	out := make([]adminWorkspaceOut, 0, len(rows))
 	for _, x := range rows {
-		out = append(out, adminSpaceOut{
+		out = append(out, adminWorkspaceOut{
 			ID: x.ID, Name: x.Name, Slug: x.Slug, OwnerEmail: x.OwnerEmail,
 			CreatedAt: x.CreatedAt.UTC().Format(time.RFC3339),
 			FormCount: x.FormCount, ProductCount: x.ProductCount,
@@ -71,15 +71,15 @@ func (s *Server) adminListSpaces(ctx context.Context, _ *mcp.CallToolRequest, _ 
 // ── admin_media_usage ───────────────────────────────────────────────────────
 
 type adminMediaUsageOut struct {
-	SpaceID   string `json:"space_id"`
-	SpaceName string `json:"space_name"`
+	WorkspaceID   string `json:"workspace_id"`
+	WorkspaceName string `json:"workspace_name"`
 	Slug      string `json:"slug"`
 	UsedBytes int64  `json:"used_bytes"`
 	QuotaBytes int64 `json:"quota_bytes"`
 }
 
-// adminMediaUsage reports storage usage per space (bytes) against the 1GB
-// per-space quota (#384). Super-admin only, read-only, audited.
+// adminMediaUsage reports storage usage per workspace (bytes) against the 1GB
+// per-workspace quota (#384). Super-admin only, read-only, audited.
 func (s *Server) adminMediaUsage(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, []adminMediaUsageOut, error) {
 	if err := s.adminGate(ctx, "admin.media_usage"); err != nil {
 		return nil, nil, err
@@ -87,15 +87,15 @@ func (s *Server) adminMediaUsage(ctx context.Context, _ *mcp.CallToolRequest, _ 
 	if s.deps.Media == nil {
 		return nil, nil, errors.New("media tidak tersedia")
 	}
-	rows, err := s.deps.Media.UsageBySpace(ctx)
+	rows, err := s.deps.Media.UsageByWorkspace(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
 	out := make([]adminMediaUsageOut, 0, len(rows))
 	for _, x := range rows {
 		out = append(out, adminMediaUsageOut{
-			SpaceID: x.SpaceID, SpaceName: x.SpaceName, Slug: x.Slug,
-			UsedBytes: x.UsedBytes, QuotaBytes: objstore.MaxSpaceBytes,
+			WorkspaceID: x.WorkspaceID, WorkspaceName: x.WorkspaceName, Slug: x.Slug,
+			UsedBytes: x.UsedBytes, QuotaBytes: objstore.MaxWorkspaceBytes,
 		})
 	}
 	return nil, out, nil
@@ -106,7 +106,7 @@ func (s *Server) adminMediaUsage(ctx context.Context, _ *mcp.CallToolRequest, _ 
 type adminListSalesIn struct {
 	DateFrom string `json:"date_from,omitempty" jsonschema:"Optional — tarikh mula (YYYY-MM-DD, inklusif)"`
 	DateTo   string `json:"date_to,omitempty" jsonschema:"Optional — tarikh tamat (YYYY-MM-DD, inklusif)"`
-	SpaceID  string `json:"space_id,omitempty" jsonschema:"Optional — hadkan kepada satu space (id dari admin_list_spaces)"`
+	WorkspaceID  string `json:"workspace_id,omitempty" jsonschema:"Optional — hadkan kepada satu workspace (id dari admin_list_workspaces)"`
 	Status   string `json:"status,omitempty" jsonschema:"Optional — pending|paid|confirmed|failed|cancelled"`
 	Page     int    `json:"page,omitempty" jsonschema:"Optional — muka surat (mulai 1)"`
 	Limit    int    `json:"limit,omitempty" jsonschema:"Optional — had setiap muka (1-100, lalai 20)"`
@@ -122,7 +122,7 @@ type adminSaleOut struct {
 	CreatedAt string `json:"created_at"`
 }
 
-// adminListSales lists sales across all spaces, filterable by date, space and
+// adminListSales lists sales across all workspaces, filterable by date, workspace and
 // status. Super-admin only, read-only, audited.
 func (s *Server) adminListSales(ctx context.Context, _ *mcp.CallToolRequest, in adminListSalesIn) (*mcp.CallToolResult, map[string]any, error) {
 	if err := s.adminGate(ctx, "admin.list_sales"); err != nil {
@@ -146,18 +146,18 @@ func (s *Server) adminListSales(ctx context.Context, _ *mcp.CallToolRequest, in 
 		DateFrom: in.DateFrom,
 		DateTo:   in.DateTo,
 	}
-	// Space filter: resolve the space's account and scope the query to it.
+	// Workspace filter: resolve the workspace's account and scope the query to it.
 	// Otherwise query across all accounts.
 	var rows []*dbstore.Sale
 	var total int64
 	var err error
-	if in.SpaceID != "" {
+	if in.WorkspaceID != "" {
 		if s.deps.Accounts == nil {
 			return nil, nil, errors.New("accounts tidak tersedia")
 		}
-		a, aerr := s.deps.Accounts.BySpaceID(ctx, in.SpaceID)
+		a, aerr := s.deps.Accounts.ByWorkspaceID(ctx, in.WorkspaceID)
 		if aerr != nil || a == nil {
-			return nil, nil, errors.New("space tidak dijumpai")
+			return nil, nil, errors.New("workspace tidak dijumpai")
 		}
 		rows, total, err = s.deps.Sales.ListFilteredPage(ctx, []string{a.ID}, f, page, limit)
 	} else {
@@ -198,7 +198,7 @@ type adminSpamItem struct {
 }
 
 // adminSpamQueue lists all spam-flagged submissions and sales across all
-// spaces. Super-admin only, read-only, audited.
+// workspaces. Super-admin only, read-only, audited.
 func (s *Server) adminSpamQueue(ctx context.Context, _ *mcp.CallToolRequest, in adminSpamQueueIn) (*mcp.CallToolResult, map[string]any, error) {
 	if err := s.adminGate(ctx, "admin.spam_queue"); err != nil {
 		return nil, nil, err
@@ -275,7 +275,7 @@ type adminEmailDeliveriesIn struct {
 	Limit     int    `json:"limit,omitempty" jsonschema:"Optional — had setiap muka (1-100, lalai 20)"`
 }
 
-// adminEmailDeliveries lists email delivery status across all spaces.
+// adminEmailDeliveries lists email delivery status across all workspaces.
 // Super-admin only, read-only, audited.
 func (s *Server) adminEmailDeliveries(ctx context.Context, _ *mcp.CallToolRequest, in adminEmailDeliveriesIn) (*mcp.CallToolResult, map[string]any, error) {
 	if err := s.adminGate(ctx, "admin.email_deliveries"); err != nil {

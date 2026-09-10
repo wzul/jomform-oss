@@ -29,9 +29,9 @@ type AuthHandlers struct {
 	Sessions *auth.Sessions
 	Users    *dbstore.UserStore
 	Accounts *dbstore.AccountStore
-	// Issue #164: Spaces is used to validate a default-space choice belongs
-	// to the user (owner or member) and to resolve the default space's slug.
-	Spaces *dbstore.SpaceStore
+	// Issue #164: Workspaces is used to validate a default-workspace choice belongs
+	// to the user (owner or member) and to resolve the default workspace's slug.
+	Workspaces *dbstore.WorkspaceStore
 	BaseURL  string
 	// CookieDomain is the shared Domain attribute for the session cookie
 	// (e.g. ".jomform.com"), allowing the login session to be sent to product
@@ -59,9 +59,9 @@ type AuthHandlers struct {
 	// synchronously in the request handler. Nil (bare-mode tests) → synchronous
 	// send via VerifyMailer.
 	EmailQueue *emailqueue.Queue
-	// Issue #161: space membership store, used to redeem a pending invite
+	// Issue #161: workspace membership store, used to redeem a pending invite
 	// when a new user signs up via an invite link. Nil in bare-mode tests.
-	SpaceMembers *dbstore.SpaceMemberStore
+	WorkspaceMembers *dbstore.WorkspaceMemberStore
 
 	// Issue #92: audit/behaviour log for auth actions (login/logout/2fa).
 	// Nil in bare-mode tests; Record calls are no-ops when nil.
@@ -105,8 +105,8 @@ func (a *AuthHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/auth/profile/timezone", a.handleUpdateTimezone)
 	mux.HandleFunc("POST /v1/auth/profile/email", a.handleUpdateEmail)
 	mux.HandleFunc("PUT /v1/auth/profile/email", a.handleUpdateEmail)
-	// Issue #164: set/clear the user's default space (multi-space login picker).
-	mux.HandleFunc("PUT /v1/auth/profile/default-space", a.handleSetDefaultSpace)
+	// Issue #164: set/clear the user's default workspace (multi-workspace login picker).
+	mux.HandleFunc("PUT /v1/auth/profile/default-workspace", a.handleSetDefaultWorkspace)
 	// Email confirmation (issue #42): verifies an account is real before its
 	// first password login. GET renders a small confirmation page; the same
 	// token also works via POST if an app ever wants JSON back.
@@ -151,9 +151,9 @@ type registerRequest struct {
 	// When populated the server silently accepts the request but discards it
 	// (and logs the hit) instead of creating an account.
 	Website string `json:"website"`
-	// Invite (issue #161): a space-invite redemption token from the signup
+	// Invite (issue #161): a workspace-invite redemption token from the signup
 	// link. When present and valid, the new user is added to the inviting
-	// space with the invited role after their account is created.
+	// workspace with the invited role after their account is created.
 	Invite string `json:"invite,omitempty"`
 	// Lang (issue #206): the user's chosen locale from the signup form. It is
 	// carried on the verification link so the confirmation page renders in
@@ -186,9 +186,9 @@ type meResponse struct {
 	TOTPEnabled bool    `json:"totp_enabled"`
 	CreatedAt   string  `json:"created_at"`
 	NextStep    *string `json:"next_step,omitempty"` // set when 2FA code is required
-	// Issue #164: the user's default space id ("" when none). Lets the
-	// frontend skip the space-picker after login when a default is set.
-	DefaultSpaceID string `json:"default_space_id,omitempty"`
+	// Issue #164: the user's default workspace id ("" when none). Lets the
+	// frontend skip the workspace-picker after login when a default is set.
+	DefaultWorkspaceID string `json:"default_workspace_id,omitempty"`
 }
 
 // ─── handlers ────────────────────────────────────────────────────────────────
@@ -303,12 +303,12 @@ func (a *AuthHandlers) handleRegister(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Issue #161: redeem a pending space invite, if the signup came from an
-	// invite link. Adds the new user to the inviting space with the invited
+	// Issue #161: redeem a pending workspace invite, if the signup came from an
+	// invite link. Adds the new user to the inviting workspace with the invited
 	// role. A missing/invalid/expired token is non-fatal — the account is
 	// still created, the invite is simply not redeemed.
-	if req.Invite != "" && a.SpaceMembers != nil {
-		if err := a.SpaceMembers.RedeemInvite(r.Context(), req.Invite, user.ID); err != nil {
+	if req.Invite != "" && a.WorkspaceMembers != nil {
+		if err := a.WorkspaceMembers.RedeemInvite(r.Context(), req.Invite, user.ID); err != nil {
 			slog.Warn("invite_redeem_failed", "err", err, "user", user.ID)
 		} else {
 			slog.Info("invite_redeemed", "user", user.ID)
@@ -453,17 +453,17 @@ func (a *AuthHandlers) handleLogin(w http.ResponseWriter, r *http.Request) {
 	a.recordAuthEvent(r, a.firstAccountID(r, user.ID), user.ID, "auth.login", map[string]any{
 		"method": "password", "totp": user.TOTPEnabled,
 	})
-	// Issue #164: include the user's default space so the frontend can skip
-	// the space-picker when a default is set.
-	defSpace := ""
+	// Issue #164: include the user's default workspace so the frontend can skip
+	// the workspace-picker when a default is set.
+	defWorkspace := ""
 	if a.Users != nil {
-		if ds, err := a.Users.DefaultSpace(r.Context(), user.ID); err == nil {
-			defSpace = ds
+		if ds, err := a.Users.DefaultWorkspace(r.Context(), user.ID); err == nil {
+			defWorkspace = ds
 		}
 	}
 	writeJSON(w, http.StatusOK, meResponse{
 		ID: user.ID, Email: user.Email, TOTPEnabled: user.TOTPEnabled, CreatedAt: user.CreatedAt.UTC().Format(time.RFC3339),
-		Phone: user.Phone, Timezone: user.Timezone, DefaultSpaceID: defSpace,
+		Phone: user.Phone, Timezone: user.Timezone, DefaultWorkspaceID: defWorkspace,
 	})
 }
 
@@ -521,17 +521,17 @@ func (a *AuthHandlers) handleMe(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnauthorized, "tidak log masuk")
 		return
 	}
-	// Issue #164: surface the user's default space so the frontend knows
-	// whether to show the space-picker after login.
-	defSpace := ""
+	// Issue #164: surface the user's default workspace so the frontend knows
+	// whether to show the workspace-picker after login.
+	defWorkspace := ""
 	if a.Users != nil {
-		if ds, err := a.Users.DefaultSpace(r.Context(), user.ID); err == nil {
-			defSpace = ds
+		if ds, err := a.Users.DefaultWorkspace(r.Context(), user.ID); err == nil {
+			defWorkspace = ds
 		}
 	}
 	writeJSON(w, http.StatusOK, meResponse{
 		ID: user.ID, Email: user.Email, Name: user.Name, AvatarURL: user.AvatarURL, TOTPEnabled: user.TOTPEnabled, CreatedAt: user.CreatedAt.UTC().Format(time.RFC3339),
-		Phone: user.Phone, Timezone: user.Timezone, DefaultSpaceID: defSpace,
+		Phone: user.Phone, Timezone: user.Timezone, DefaultWorkspaceID: defWorkspace,
 	})
 }
 

@@ -10,7 +10,7 @@ import (
 
 // Issue #360: the customizable landing page template renders the merchant's
 // config (hero, subtitle, body, theme colors, CTA links) as server-side HTML.
-func TestSpaceLandingPageTemplateRenders(t *testing.T) {
+func TestWorkspaceLandingPageTemplateRenders(t *testing.T) {
 	lp := &dbstore.LandingPage{
 		Enabled:         true,
 		Hero:            "RSVP for Ali & Siti",
@@ -25,7 +25,7 @@ func TestSpaceLandingPageTemplateRenders(t *testing.T) {
 			{Label: "Hotel info", FormSlug: "hotel"},
 		},
 	}
-	data := spaceLandingData{Slug: "ali-siti", Lp: lp, HasForms: true}
+	data := workspaceLandingData{Slug: "ali-siti", Lp: lp, HasForms: true}
 	var buf bytes.Buffer
 	if err := landingPageTmpl.Execute(&buf, data); err != nil {
 		t.Fatalf("landingPageTmpl.Execute: %v", err)
@@ -55,10 +55,10 @@ func TestSpaceLandingPageTemplateRenders(t *testing.T) {
 }
 
 // Issue #360: a disabled landing page (or one with no config) must not render
-// as a landing page — the fallthrough in handleSpaceRoot serves the listing.
-func TestSpaceLandingPageTemplateDisabledShowsNoFormsHint(t *testing.T) {
+// as a landing page — the fallthrough in handleWorkspaceRoot serves the listing.
+func TestWorkspaceLandingPageTemplateDisabledShowsNoFormsHint(t *testing.T) {
 	lp := &dbstore.LandingPage{Enabled: true, Hero: "Only hero"}
-	data := spaceLandingData{Slug: "s", Lp: lp, HasForms: false}
+	data := workspaceLandingData{Slug: "s", Lp: lp, HasForms: false}
 	var buf bytes.Buffer
 	if err := landingPageTmpl.Execute(&buf, data); err != nil {
 		t.Fatalf("landingPageTmpl.Execute: %v", err)
@@ -73,13 +73,13 @@ func TestSpaceLandingPageTemplateDisabledShowsNoFormsHint(t *testing.T) {
 
 // Issue #360: the body is escaped server-side to prevent stored XSS from a
 // merchant-authored body value.
-func TestSpaceLandingPageTemplateEscapesBody(t *testing.T) {
+func TestWorkspaceLandingPageTemplateEscapesBody(t *testing.T) {
 	lp := &dbstore.LandingPage{
 		Enabled: true,
 		Hero:    "<script>alert(1)</script>",
 		Body:    "<img src=x onerror=alert(2)>",
 	}
-	data := spaceLandingData{Slug: "s", Lp: lp, HasForms: true}
+	data := workspaceLandingData{Slug: "s", Lp: lp, HasForms: true}
 	var buf bytes.Buffer
 	if err := landingPageTmpl.Execute(&buf, data); err != nil {
 		t.Fatalf("landingPageTmpl.Execute: %v", err)
@@ -98,7 +98,7 @@ func TestSpaceLandingPageTemplateEscapesBody(t *testing.T) {
 // Issue #362: a landing page configured with embedded published forms renders
 // each as a same-origin iframe to /{slug}; unknown/draft/private slugs are
 // dropped server-side.
-func TestSpaceLandingPageEmbedsPublishedForms(t *testing.T) {
+func TestWorkspaceLandingPageEmbedsPublishedForms(t *testing.T) {
 	lp := &dbstore.LandingPage{
 		Enabled: true,
 		Hero:    "Ali & Siti wedding",
@@ -116,7 +116,7 @@ func TestSpaceLandingPageEmbedsPublishedForms(t *testing.T) {
 	if len(embeds) != 2 {
 		t.Fatalf("expected 2 embeds (rsvp + dinner), got %d", len(embeds))
 	}
-	data := spaceLandingData{Slug: "ali-siti", Lp: lp, HasForms: true, Embeds: embeds}
+	data := workspaceLandingData{Slug: "ali-siti", Lp: lp, HasForms: true, Embeds: embeds}
 	var buf bytes.Buffer
 	if err := landingPageTmpl.Execute(&buf, data); err != nil {
 		t.Fatalf("landingPageTmpl.Execute: %v", err)
@@ -153,7 +153,7 @@ func TestResolveLandingEmbedsDropsUnknownSlugs(t *testing.T) {
 		t.Fatalf("expected only the published 'rsvp' embed, got %+v", embeds)
 	}
 	// Rendering must not include the dropped block.
-	data := spaceLandingData{Slug: "s", Lp: lp, HasForms: true, Embeds: embeds}
+	data := workspaceLandingData{Slug: "s", Lp: lp, HasForms: true, Embeds: embeds}
 	var buf bytes.Buffer
 	if err := landingPageTmpl.Execute(&buf, data); err != nil {
 		t.Fatalf("landingPageTmpl.Execute: %v", err)
@@ -164,9 +164,9 @@ func TestResolveLandingEmbedsDropsUnknownSlugs(t *testing.T) {
 }
 
 // Issue #362: with no embedded forms configured, no embed section is rendered.
-func TestSpaceLandingPageNoEmbedSectionWhenNoneConfigured(t *testing.T) {
+func TestWorkspaceLandingPageNoEmbedSectionWhenNoneConfigured(t *testing.T) {
 	lp := &dbstore.LandingPage{Enabled: true, Hero: "Only hero"}
-	data := spaceLandingData{Slug: "s", Lp: lp, HasForms: true}
+	data := workspaceLandingData{Slug: "s", Lp: lp, HasForms: true}
 	var buf bytes.Buffer
 	if err := landingPageTmpl.Execute(&buf, data); err != nil {
 		t.Fatalf("landingPageTmpl.Execute: %v", err)

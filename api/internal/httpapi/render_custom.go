@@ -62,7 +62,7 @@ func (h *PublicHandlers) renderCustomForm(w http.ResponseWriter, r *http.Request
 		// Issue #244: hidden honeypot + render-timestamp fields ride on the
 		// fields map so the deterministic anti-spam layers still apply.
 		"AntiSpam": template.HTML(antiSpamRenderFields()),
-		// Issue #276: noindex on jomform.com subdomains / when the space opts
+		// Issue #276: noindex on jomform.com subdomains / when the workspace opts
 		// out of indexing.
 		"NoIndex": h.formNoIndex(r, f),
 	}); err != nil {

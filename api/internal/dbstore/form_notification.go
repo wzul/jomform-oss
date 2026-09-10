@@ -1,5 +1,5 @@
 // Per-form email notifications with conditional logic + default (issue #193,
-// Gravity-Forms-style). Replaces the flat per-space email settings for form
+// Gravity-Forms-style). Replaces the flat per-workspace email settings for form
 // events: each form owns a list of notification rules; on an event the
 // matching rules (by event + condition) fire and enqueue an email via the
 // #199 background queue.
@@ -159,7 +159,7 @@ func (s *FormNotificationStore) Delete(ctx context.Context, formID, id string) e
 
 // EnsureDefault pre-creates the default notification (notify merchant on
 // sale.paid) for a form when it has none. Called on form creation so a new
-// form gets the space-default behaviour with zero configuration. A form whose
+// form gets the workspace-default behaviour with zero configuration. A form whose
 // merchant deleted every notification keeps zero (opt-out).
 func (s *FormNotificationStore) EnsureDefault(ctx context.Context, formID string) error {
 	_, err := s.pool.Exec(ctx,

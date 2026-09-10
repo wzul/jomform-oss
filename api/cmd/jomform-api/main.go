@@ -176,20 +176,20 @@ func main() {
 		deps.OAuth = dbstore.NewOAuthStore(pool)
 
 		formsStore := dbstore.NewFormStore(pool)
-		spacesStore := dbstore.NewSpaceStore(pool)
+		workspacesStore := dbstore.NewWorkspaceStore(pool)
 		usersStore := dbstore.NewUserStore(pool)
 		passkeysStore := dbstore.NewPasskeyStore(pool)
 		// Issue #171: response-only form submissions.
 		submissionsStore := dbstore.NewSubmissionStore(pool)
 		// Issue #180: media library metadata store.
 		mediaStore := dbstore.NewMediaStore(pool)
-		// Issue #161: space membership + invites.
-		spaceMembersStore := dbstore.NewSpaceMemberStore(pool)
-		deps.SpaceMembers = spaceMembersStore
+		// Issue #161: workspace membership + invites.
+		workspaceMembersStore := dbstore.NewWorkspaceMemberStore(pool)
+		deps.WorkspaceMembers = workspaceMembersStore
 		pay := payments.New(chip.New(cfg.ChipAPIBaseURL), accounts, sales, subs, decryptKey, cfg.AppBaseURL)
 		pay.Products = products
 		pay.Forms = formsStore
-		pay.Spaces = spacesStore
+		pay.Workspaces = workspacesStore
 		pay.Users = usersStore
 		// Issue #193: per-form notification rules (evaluated on form events).
 		notificationsStore := dbstore.NewFormNotificationStore(pool)
@@ -250,8 +250,8 @@ func main() {
 			Keys: keys, Sales: sales, Subs: subs, Sessions: sessions, ChipProbe: chip.New(cfg.ChipAPIBaseURL),
 			SecretsKey: decryptKey, Pay: pay, Webhooks: whStore, Domains: dbstore.NewDomainStore(pool),
 			SystemSettings: dbstore.NewSystemSettingStore(pool),
-			Spaces:         spacesStore,
-			SpaceMembers:   spaceMembersStore,
+			Workspaces:         workspacesStore,
+			WorkspaceMembers:   workspaceMembersStore,
 			Passkeys:       passkeysStore,
 			// Issue #161: invite email delivery + signup link base.
 			Mailer:   mailer,
@@ -303,9 +303,9 @@ func main() {
 			ProductVariations: dbstore.NewProductVariationStore(pool),
 			Subs: subs, Keys: keys, Forms: formsStore,
 			Webhooks: dbstore.NewWebhookStore(pool),
-			Spaces:   spacesStore,
-			SpaceMembers: spaceMembersStore,
-			Users:    usersStore, // issue #164: set_default_space tool
+			Workspaces:   workspacesStore,
+			WorkspaceMembers: workspaceMembersStore,
+			Users:    usersStore, // issue #164: set_default_workspace tool
 			Events:   deps.Events, // issue #92: list_events tool
 			// Issue #106: per-sale receipt email status tool.
 			EmailDeliveryEvents: deps.EmailDeliveryEvents,
@@ -348,19 +348,19 @@ func main() {
 			Products: products, ProductVariations: dbstore.NewProductVariationStore(pool),
 			Pay: pay, BaseURL: cfg.AppBaseURL,
 			SystemSettings: dbstore.NewSystemSettingStore(pool),
-			Spaces:         spacesStore,
+			Workspaces:         workspacesStore,
 			// Issue #171: response-only form submissions.
 			Submissions: submissionsStore,
 			// Issue #176: sign the private-form unlock cookie.
 			AccessKey: decryptKey,
 			// Issue #244: deterministic anti-spam layers. Sessions/Users/
-			// SpaceMembers resolve whether the submitter is a logged-in owner/admin
-			// of the form's space (skips the per-form rate limit + time check).
+			// WorkspaceMembers resolve whether the submitter is a logged-in owner/admin
+			// of the form's workspace (skips the per-form rate limit + time check).
 			// FormLimiter is the per-form-per-IP token bucket (15/hour). MXChecker
 			// validates the submitted email's domain accepts mail.
 			Sessions:     deps.Sessions,
 			Users:        deps.Users,
-			SpaceMembers: deps.SpaceMembers,
+			WorkspaceMembers: deps.WorkspaceMembers,
 			MXChecker:    deps.MXChecker,
 			FormLimiter:  middleware.NewRateLimiter(15.0/3600.0, 15),
 			// Issue #245: background AI spam judge. SpamQueue is the same
@@ -368,7 +368,7 @@ func main() {
 			// spam_judge jobs to the AI judge. Nil when Valkey is absent (dev).
 			SpamQueue: deps.EmailQueue,
 			// Issue #361: same media bucket serves merchant code assets on the
-			// space/custom domain via /assets/{key}. Nil disables the route.
+			// workspace/custom domain via /assets/{key}. Nil disables the route.
 			Store: store,
 			// Issue #364: media metadata store gates code-asset serving on the
 			// background scan status (only 'ok' is served).
@@ -484,7 +484,7 @@ func main() {
 				// Issue #190: purge unverified accounts (never confirmed their
 				// email) older than UnverifiedPurgeDays. Only verified=false
 				// rows are ever deleted; the store also cleans up the
-				// auto-provisioned account/space so no orphans remain.
+				// auto-provisioned account/workspace so no orphans remain.
 				if deps.Users != nil {
 					cutoff := time.Now().Add(-time.Duration(cfg.UnverifiedPurgeDays) * 24 * time.Hour)
 					if n, err := deps.Users.DeleteUnverifiedOlderThan(ctx, cutoff); err != nil {

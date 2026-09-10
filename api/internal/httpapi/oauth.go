@@ -219,7 +219,7 @@ func (o *OAuthHandlers) authorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Resolve the account being authorized. Issue #307: an OAuth connection is
-	// USER-level — the agent can operate across all of the user's spaces — so
+	// USER-level — the agent can operate across all of the user's workspaces — so
 	// the account is optional metadata (used only for display/legacy tools).
 	// The token itself is bound to the user id below.
 	accountID := ""

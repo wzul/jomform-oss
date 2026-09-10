@@ -16,14 +16,14 @@ import (
 	"github.com/wzul/jomform/api/internal/dbstore"
 )
 
-// customDomainFixture seeds a user + space + account + published form and
+// customDomainFixture seeds a user + workspace + account + published form and
 // returns the handlers plus the account slug and form slug.
 func customDomainFixture(t *testing.T) (*PublicHandlers, string, string) {
 	t.Helper()
 	ctx := context.Background()
 	pool := bundleTestPool(t)
 
-	var userID, spaceSlug, accountID, accountSlug string
+	var userID, workspaceSlug, accountID, accountSlug string
 	if err := pool.QueryRow(ctx,
 		`INSERT INTO users (email, password_hash)
 		 VALUES ('it-' || md5(random()::text) || '@example.test', 'it')
@@ -31,16 +31,16 @@ func customDomainFixture(t *testing.T) (*PublicHandlers, string, string) {
 		t.Fatalf("create user: %v", err)
 	}
 	if err := pool.QueryRow(ctx,
-		`INSERT INTO spaces (owner_user_id, name, slug)
-		 VALUES ($1, 'it-space-' || md5(random()::text), 'it-' || md5(random()::text))
-		 RETURNING slug`, userID).Scan(&spaceSlug); err != nil {
-		t.Fatalf("create space: %v", err)
+		`INSERT INTO workspaces (owner_user_id, name, slug)
+		 VALUES ($1, 'it-workspace-' || md5(random()::text), 'it-' || md5(random()::text))
+		 RETURNING slug`, userID).Scan(&workspaceSlug); err != nil {
+		t.Fatalf("create workspace: %v", err)
 	}
 	if err := pool.QueryRow(ctx,
-		`INSERT INTO accounts (owner_user_id, name, slug, space_id)
+		`INSERT INTO accounts (owner_user_id, name, slug, workspace_id)
 		 SELECT $1, 'it-acc-' || md5(random()::text), 'it-' || md5(random()::text), id
-		 FROM spaces WHERE slug = $2
-		 RETURNING id, slug`, userID, spaceSlug).Scan(&accountID, &accountSlug); err != nil {
+		 FROM workspaces WHERE slug = $2
+		 RETURNING id, slug`, userID, workspaceSlug).Scan(&accountID, &accountSlug); err != nil {
 		t.Fatalf("create account: %v", err)
 	}
 
@@ -59,7 +59,7 @@ func customDomainFixture(t *testing.T) (*PublicHandlers, string, string) {
 		Forms:    fs,
 		Accounts: dbstore.NewAccountStore(pool),
 		Domains:  dbstore.NewDomainStore(pool),
-		Spaces:   dbstore.NewSpaceStore(pool),
+		Workspaces:   dbstore.NewWorkspaceStore(pool),
 		BaseURL:  "http://localhost:8080",
 	}
 	return h, accountSlug, formSlug
@@ -134,8 +134,8 @@ func TestCustomDomainOwnerUnknownHost(t *testing.T) {
 }
 
 // TestCustomDomainRootServesStorefront: a verified custom domain's root "/"
-// must serve the space storefront (list of published forms) instead of 404
-// (issue #286). This mirrors how a space subdomain serves its root.
+// must serve the workspace storefront (list of published forms) instead of 404
+// (issue #286). This mirrors how a workspace subdomain serves its root.
 func TestCustomDomainRootServesStorefront(t *testing.T) {
 	h, accountSlug, formSlug := customDomainFixture(t)
 	ctx := context.Background()
@@ -146,11 +146,11 @@ func TestCustomDomainRootServesStorefront(t *testing.T) {
 		`SELECT id FROM accounts WHERE slug = $1`, accountSlug).Scan(&accountID); err != nil {
 		t.Fatalf("lookup account id: %v", err)
 	}
-	var spaceSlug string
+	var workspaceSlug string
 	if err := pool.QueryRow(ctx,
-		`SELECT sp.slug FROM spaces sp JOIN accounts a ON a.space_id = sp.id WHERE a.id = $1`,
-		accountID).Scan(&spaceSlug); err != nil {
-		t.Fatalf("lookup space slug: %v", err)
+		`SELECT sp.slug FROM workspaces sp JOIN accounts a ON a.workspace_id = sp.id WHERE a.id = $1`,
+		accountID).Scan(&workspaceSlug); err != nil {
+		t.Fatalf("lookup workspace slug: %v", err)
 	}
 
 	domain := "root-" + accountSlug + ".example.test"
@@ -170,13 +170,13 @@ func TestCustomDomainRootServesStorefront(t *testing.T) {
 		t.Fatalf("GET / on custom domain body missing form slug %q (body %s)", formSlug, rec.Body.String())
 	}
 
-	// Space subdomain root still serves its storefront (unchanged).
-	rec = publicServe(t, h, spaceSlug+".jomform.com", "/")
+	// Workspace subdomain root still serves its storefront (unchanged).
+	rec = publicServe(t, h, workspaceSlug+".jomform.com", "/")
 	if rec.Code != http.StatusOK {
-		t.Fatalf("GET / on space subdomain status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		t.Fatalf("GET / on workspace subdomain status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), formSlug) {
-		t.Fatalf("GET / on space subdomain body missing form slug %q (body %s)", formSlug, rec.Body.String())
+		t.Fatalf("GET / on workspace subdomain body missing form slug %q (body %s)", formSlug, rec.Body.String())
 	}
 
 	// Bare apex (no subdomain, no custom domain) still 404s (issue #77).

@@ -36,7 +36,7 @@ type emailDeliveryOut struct {
 
 // listEmailDeliveries returns the user's email delivery events, newest
 // first, paginated and filterable by form/sale/status. Read-only (read scope
-// is enough). Issue #307: spans all of the user's spaces.
+// is enough). Issue #307: spans all of the user's workspaces.
 func (s *Server) listEmailDeliveries(
 	ctx context.Context, _ *mcp.CallToolRequest, in listEmailDeliveriesIn,
 ) (*mcp.CallToolResult, map[string]any, error) {

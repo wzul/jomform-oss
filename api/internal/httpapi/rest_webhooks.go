@@ -47,7 +47,7 @@ func (h *RESTHandlers) getEinvoicing(w http.ResponseWriter, r *http.Request, act
 
 func (h *RESTHandlers) listWebhooks(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	// Issue #196: optional ?form_id= narrows to that form's webhooks; absent
-	// (or empty) returns the space/account-wide webhooks.
+	// (or empty) returns the workspace/account-wide webhooks.
 	formID := r.URL.Query().Get("form_id")
 	hooks, err := h.Webhooks.ListByAccount(r.Context(), actx.Account.ID, formID)
 	if err != nil {

@@ -12,7 +12,7 @@ import (
 func (h *PublicHandlers) embedForm(w http.ResponseWriter, r *http.Request) {
 	accSlug := r.PathValue("accslug")
 	slug := r.PathValue("slug")
-	f, err := h.Forms.BySpaceSlug(r.Context(), accSlug, slug)
+	f, err := h.Forms.ByWorkspaceSlug(r.Context(), accSlug, slug)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "borang tidak dijumpai")
 		return

@@ -7,12 +7,12 @@ import (
 	"github.com/wzul/jomform/api/internal/dbstore"
 )
 
-// Issue #57: effective buyer-facing language = form.config.lang ?? space
-// defaultLang ?? 'en'. These run without a DB: a nil Spaces store falls back
-// to 'en' for the space default, while a valid per-form override must still
+// Issue #57: effective buyer-facing language = form.config.lang ?? workspace
+// defaultLang ?? 'en'. These run without a DB: a nil Workspaces store falls back
+// to 'en' for the workspace default, while a valid per-form override must still
 // win.
 func TestEffectiveLangStringsResolution(t *testing.T) {
-	h := &PublicHandlers{} // Spaces == nil → space default resolves to "en"
+	h := &PublicHandlers{} // Workspaces == nil → workspace default resolves to "en"
 
 	ctx := context.Background()
 

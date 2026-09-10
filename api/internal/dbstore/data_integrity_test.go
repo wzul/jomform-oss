@@ -6,7 +6,7 @@ package dbstore
 //   - Money is integer sen everywhere (no float drift).
 //   - ref_code uniqueness.
 //   - No orphaned sales on form delete (soft-delete keeps form_id).
-//   - Slug uniqueness per space (#77) holds.
+//   - Slug uniqueness per workspace (#77) holds.
 //   - Suppression list + breaker counters consistent.
 //
 // They are integration tests: skipped unless JOMFORM_TEST_DATABASE_URL is
@@ -119,46 +119,46 @@ func TestNoOrphanedSalesOnFormDelete(t *testing.T) {
 	}
 }
 
-// TestSlugUniquenessPerSpace asserts the per-space unique index (#77) exists
-// and that two live forms in the same space cannot share a slug, while the
-// same slug in different spaces is allowed.
-func TestSlugUniquenessPerSpace(t *testing.T) {
+// TestSlugUniquenessPerWorkspace asserts the per-workspace unique index (#77) exists
+// and that two live forms in the same workspace cannot share a slug, while the
+// same slug in different workspaces is allowed.
+func TestSlugUniquenessPerWorkspace(t *testing.T) {
 	ctx := context.Background()
 	p := testPool(t)
 	fs := NewFormStore(p)
 
-	// Schema-level: the per-space unique index must exist.
+	// Schema-level: the per-workspace unique index must exist.
 	var n int
 	if err := p.QueryRow(ctx, `
 		SELECT COUNT(*) FROM pg_indexes
-		WHERE tablename='forms' AND indexdef ILIKE '%space_id%' AND indexdef ILIKE '%slug%' AND indexdef ILIKE '%unique%'`).Scan(&n); err != nil {
-		t.Fatalf("check per-space slug index: %v", err)
+		WHERE tablename='forms' AND indexdef ILIKE '%workspace_id%' AND indexdef ILIKE '%slug%' AND indexdef ILIKE '%unique%'`).Scan(&n); err != nil {
+		t.Fatalf("check per-workspace slug index: %v", err)
 	}
 	if n == 0 {
-		t.Error("no per-space unique index on forms(space_id, slug) — slug uniqueness per space (#77) invariant violated")
+		t.Error("no per-workspace unique index on forms(workspace_id, slug) — slug uniqueness per workspace (#77) invariant violated")
 	}
 
-	// Behavioural: same slug in the same space must fail; across spaces OK.
-	accA, spaceA := newSpaceAccount(t, ctx, p)
-	accB, spaceB := newSpaceAccount(t, ctx, p)
-	if spaceA == spaceB {
-		t.Fatalf("spaces must differ, got %q", spaceA)
+	// Behavioural: same slug in the same workspace must fail; across workspaces OK.
+	accA, workspaceA := newWorkspaceAccount(t, ctx, p)
+	accB, workspaceB := newWorkspaceAccount(t, ctx, p)
+	if workspaceA == workspaceB {
+		t.Fatalf("workspaces must differ, got %q", workspaceA)
 	}
-	slug := "it-per-space-" + accA[:8]
+	slug := "it-per-workspace-" + accA[:8]
 
 	fa := &Form{AccountID: accA, Slug: slug, Title: "A", Status: "published"}
 	if err := fs.Create(ctx, fa); err != nil {
-		t.Fatalf("create form in space A: %v", err)
+		t.Fatalf("create form in workspace A: %v", err)
 	}
-	// Same slug, same space (accA) → must fail.
+	// Same slug, same workspace (accA) → must fail.
 	dup := &Form{AccountID: accA, Slug: slug, Title: "A2", Status: "published"}
 	if err := fs.Create(ctx, dup); err == nil {
-		t.Error("duplicate slug in same space succeeded — per-space slug uniqueness violated")
+		t.Error("duplicate slug in same workspace succeeded — per-workspace slug uniqueness violated")
 	}
-	// Same slug, different space (accB) → must succeed.
+	// Same slug, different workspace (accB) → must succeed.
 	fb := &Form{AccountID: accB, Slug: slug, Title: "B", Status: "published"}
 	if err := fs.Create(ctx, fb); err != nil {
-		t.Fatalf("create form in space B with same slug: %v", err)
+		t.Fatalf("create form in workspace B with same slug: %v", err)
 	}
 }
 

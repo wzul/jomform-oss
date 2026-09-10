@@ -2,9 +2,9 @@ package httpapi
 
 // Issue #98 regression integration test for #77 slug scoping at the HTTP layer:
 //   - bare `/f/{slug}` on the apex host (jomform.com) must 404 — a public
-//     payment link is reachable only via its space subdomain or a custom domain.
-//   - a space subdomain ({space}.jomform.com/{slug}) serves the published form.
-//   - the same form slug in two different spaces resolves per-space.
+//     payment link is reachable only via its workspace subdomain or a custom domain.
+//   - a workspace subdomain ({workspace}.jomform.com/{slug}) serves the published form.
+//   - the same form slug in two different workspaces resolves per-workspace.
 //
 // Runs against a real Postgres (JOMFORM_TEST_DATABASE_URL); skipped when unset.
 
@@ -19,15 +19,15 @@ import (
 )
 
 // publicFixture wires a PublicHandlers over the shared test pool and seeds a
-// user + space + account + published form. Returns the handlers, the space
+// user + workspace + account + published form. Returns the handlers, the workspace
 // slug, and the form slug.
 func publicFixture(t *testing.T) (*PublicHandlers, string, string) {
 	t.Helper()
 	ctx := context.Background()
 	pool := bundleTestPool(t)
 
-	// user + space + account linked to the space.
-	var userID, spaceSlug, accountID string
+	// user + workspace + account linked to the workspace.
+	var userID, workspaceSlug, accountID string
 	if err := pool.QueryRow(ctx,
 		`INSERT INTO users (email, password_hash)
 		 VALUES ('it-' || md5(random()::text) || '@example.test', 'it')
@@ -35,16 +35,16 @@ func publicFixture(t *testing.T) (*PublicHandlers, string, string) {
 		t.Fatalf("create user: %v", err)
 	}
 	if err := pool.QueryRow(ctx,
-		`INSERT INTO spaces (owner_user_id, name, slug)
-		 VALUES ($1, 'it-space-' || md5(random()::text), 'it-' || md5(random()::text))
-		 RETURNING slug`, userID).Scan(&spaceSlug); err != nil {
-		t.Fatalf("create space: %v", err)
+		`INSERT INTO workspaces (owner_user_id, name, slug)
+		 VALUES ($1, 'it-workspace-' || md5(random()::text), 'it-' || md5(random()::text))
+		 RETURNING slug`, userID).Scan(&workspaceSlug); err != nil {
+		t.Fatalf("create workspace: %v", err)
 	}
 	if err := pool.QueryRow(ctx,
-		`INSERT INTO accounts (owner_user_id, name, slug, space_id)
+		`INSERT INTO accounts (owner_user_id, name, slug, workspace_id)
 		 SELECT $1, 'it-acc-' || md5(random()::text), 'it-' || md5(random()::text), id
-		 FROM spaces WHERE slug = $2
-		 RETURNING id`, userID, spaceSlug).Scan(&accountID); err != nil {
+		 FROM workspaces WHERE slug = $2
+		 RETURNING id`, userID, workspaceSlug).Scan(&accountID); err != nil {
 		t.Fatalf("create account: %v", err)
 	}
 
@@ -63,10 +63,10 @@ func publicFixture(t *testing.T) (*PublicHandlers, string, string) {
 	h := &PublicHandlers{
 		Forms:    fs,
 		Accounts: dbstore.NewAccountStore(pool),
-		Spaces:   dbstore.NewSpaceStore(pool),
+		Workspaces:   dbstore.NewWorkspaceStore(pool),
 		BaseURL:  "http://localhost:8080",
 	}
-	return h, spaceSlug, formSlug
+	return h, workspaceSlug, formSlug
 }
 
 // publicServe routes one request through the public mux with the given Host.
@@ -91,31 +91,31 @@ func TestSlugScopingBareApex404(t *testing.T) {
 	}
 }
 
-// TestSlugScopingSpaceSubdomainServes: the same form IS served on its space
+// TestSlugScopingWorkspaceSubdomainServes: the same form IS served on its workspace
 // subdomain at /{slug} (no /f/ prefix).
-func TestSlugScopingSpaceSubdomainServes(t *testing.T) {
-	h, spaceSlug, formSlug := publicFixture(t)
-	rec := publicServe(t, h, spaceSlug+".jomform.com", "/"+formSlug)
+func TestSlugScopingWorkspaceSubdomainServes(t *testing.T) {
+	h, workspaceSlug, formSlug := publicFixture(t)
+	rec := publicServe(t, h, workspaceSlug+".jomform.com", "/"+formSlug)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("space subdomain /%s status = %d, want 200 (body %s)", formSlug, rec.Code, rec.Body.String())
+		t.Fatalf("workspace subdomain /%s status = %d, want 200 (body %s)", formSlug, rec.Code, rec.Body.String())
 	}
 	if body := rec.Body.String(); body == "" {
-		t.Fatal("space subdomain served an empty body")
+		t.Fatal("workspace subdomain served an empty body")
 	}
 }
 
-// TestSlugScopingSameSlugTwoSpaces: two spaces may share the same form slug;
-// each space subdomain resolves its own form (issue #77 per-space uniqueness).
-func TestSlugScopingSameSlugTwoSpaces(t *testing.T) {
+// TestSlugScopingSameSlugTwoWorkspaces: two workspaces may share the same form slug;
+// each workspace subdomain resolves its own form (issue #77 per-workspace uniqueness).
+func TestSlugScopingSameSlugTwoWorkspaces(t *testing.T) {
 	pool := bundleTestPool(t)
 	fs := dbstore.NewFormStore(pool)
 
-	// Seed two independent space+account+form pairs sharing one slug.
+	// Seed two independent workspace+account+form pairs sharing one slug.
 	const sharedSlug = "it-shared-slug"
-	spaceA, formA := seedSpaceForm(t, pool, sharedSlug)
-	spaceB, formB := seedSpaceForm(t, pool, sharedSlug)
-	if spaceA == spaceB {
-		t.Fatalf("spaces must differ, got %q", spaceA)
+	workspaceA, formA := seedWorkspaceForm(t, pool, sharedSlug)
+	workspaceB, formB := seedWorkspaceForm(t, pool, sharedSlug)
+	if workspaceA == workspaceB {
+		t.Fatalf("workspaces must differ, got %q", workspaceA)
 	}
 	if formA == formB {
 		t.Fatalf("forms must differ, got %q", formA)
@@ -124,29 +124,29 @@ func TestSlugScopingSameSlugTwoSpaces(t *testing.T) {
 	h := &PublicHandlers{
 		Forms:    fs,
 		Accounts: dbstore.NewAccountStore(pool),
-		Spaces:   dbstore.NewSpaceStore(pool),
+		Workspaces:   dbstore.NewWorkspaceStore(pool),
 		BaseURL:  "http://localhost:8080",
 	}
 
-	// Space A serves its own form.
-	recA := publicServe(t, h, spaceA+".jomform.com", "/"+sharedSlug)
+	// Workspace A serves its own form.
+	recA := publicServe(t, h, workspaceA+".jomform.com", "/"+sharedSlug)
 	if recA.Code != http.StatusOK {
-		t.Fatalf("space A status = %d, want 200", recA.Code)
+		t.Fatalf("workspace A status = %d, want 200", recA.Code)
 	}
-	// Space B serves its own form.
-	recB := publicServe(t, h, spaceB+".jomform.com", "/"+sharedSlug)
+	// Workspace B serves its own form.
+	recB := publicServe(t, h, workspaceB+".jomform.com", "/"+sharedSlug)
 	if recB.Code != http.StatusOK {
-		t.Fatalf("space B status = %d, want 200", recB.Code)
+		t.Fatalf("workspace B status = %d, want 200", recB.Code)
 	}
 	// The two rendered pages must differ (different titles).
 	if recA.Body.String() == recB.Body.String() {
-		t.Fatal("two spaces with the same slug rendered identical pages — per-space scoping broken")
+		t.Fatal("two workspaces with the same slug rendered identical pages — per-workspace scoping broken")
 	}
 }
 
-// seedSpaceForm creates a user + space + account + published form with the
-// given slug, returning the space slug and form id.
-func seedSpaceForm(t *testing.T, pool *pgxpool.Pool, slug string) (spaceSlug, formID string) {
+// seedWorkspaceForm creates a user + workspace + account + published form with the
+// given slug, returning the workspace slug and form id.
+func seedWorkspaceForm(t *testing.T, pool *pgxpool.Pool, slug string) (workspaceSlug, formID string) {
 	t.Helper()
 	ctx := context.Background()
 	var userID, accountID string
@@ -157,25 +157,25 @@ func seedSpaceForm(t *testing.T, pool *pgxpool.Pool, slug string) (spaceSlug, fo
 		t.Fatalf("create user: %v", err)
 	}
 	if err := pool.QueryRow(ctx,
-		`INSERT INTO spaces (owner_user_id, name, slug)
-		 VALUES ($1, 'it-space-' || md5(random()::text), 'it-' || md5(random()::text))
-		 RETURNING slug`, userID).Scan(&spaceSlug); err != nil {
-		t.Fatalf("create space: %v", err)
+		`INSERT INTO workspaces (owner_user_id, name, slug)
+		 VALUES ($1, 'it-workspace-' || md5(random()::text), 'it-' || md5(random()::text))
+		 RETURNING slug`, userID).Scan(&workspaceSlug); err != nil {
+		t.Fatalf("create workspace: %v", err)
 	}
 	if err := pool.QueryRow(ctx,
-		`INSERT INTO accounts (owner_user_id, name, slug, space_id)
+		`INSERT INTO accounts (owner_user_id, name, slug, workspace_id)
 		 SELECT $1, 'it-acc-' || md5(random()::text), 'it-' || md5(random()::text), id
-		 FROM spaces WHERE slug = $2
-		 RETURNING id`, userID, spaceSlug).Scan(&accountID); err != nil {
+		 FROM workspaces WHERE slug = $2
+		 RETURNING id`, userID, workspaceSlug).Scan(&accountID); err != nil {
 		t.Fatalf("create account: %v", err)
 	}
 	f := &dbstore.Form{
-		AccountID: accountID, Slug: slug, Title: "Form in " + spaceSlug, Status: "published",
+		AccountID: accountID, Slug: slug, Title: "Form in " + workspaceSlug, Status: "published",
 		Config: map[string]any{"blocks": []any{map[string]any{"type": "text", "value": "Hi"}}},
 		Theme:  map[string]any{"primary": "#5e6ad2"},
 	}
 	if err := dbstore.NewFormStore(pool).Create(ctx, f); err != nil {
 		t.Fatalf("create form: %v", err)
 	}
-	return spaceSlug, f.ID
+	return workspaceSlug, f.ID
 }

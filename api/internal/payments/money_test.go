@@ -94,12 +94,12 @@ func TestReceiptAmountFormatting(t *testing.T) {
 		t.Errorf("body missing ref code: %q", body)
 	}
 	if !strings.Contains(body, "https://acme.jomform.com/tee") {
-		t.Errorf("body missing space-scoped form URL (issue #83): %q", body)
+		t.Errorf("body missing workspace-scoped form URL (issue #83): %q", body)
 	}
 }
 
 // TestReceiptPDFAmountAndURL asserts the PDF receipt carries the same amount
-// and the space-scoped form URL (issue #83), and no footer (issue #80).
+// and the workspace-scoped form URL (issue #83), and no footer (issue #80).
 func TestReceiptPDFAmountAndURL(t *testing.T) {
 	ref := SaleRef{RefCode: "JF-ABC123", AmountSen: 12345, ItemsSummary: "1× Tee", FormURL: "https://acme.jomform.com/tee"}
 	pdf, err := (&Service{}).ReceiptPDF(ref)

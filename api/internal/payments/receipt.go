@@ -27,11 +27,11 @@ type Receipts struct {
 	Suppression email.Suppressor
 }
 
-// defaultReceiptSubject is the subject used when a space has not customised
+// defaultReceiptSubject is the subject used when a workspace has not customised
 // its email settings (issue #107). Matches the previous hardcoded subject.
 const defaultReceiptSubject = "Resit pembayaran — {{ref_code}}"
 
-// defaultReceiptBody is the body used when a space has not customised its
+// defaultReceiptBody is the body used when a workspace has not customised its
 // email settings. Matches the previous hardcoded plain-text receipt exactly.
 const defaultReceiptBody = `Terima kasih atas pembayaran anda!
 
@@ -56,7 +56,7 @@ type SaleRef struct {
 	AmountSen    int64
 	ItemsSummary string
 	FormURL      string
-	SpaceID      string // resolves per-space email settings (issue #107)
+	WorkspaceID      string // resolves per-workspace email settings (issue #107)
 	FormID       string // resolves per-form email settings override (issue #177)
 	TIN          string // LHDN e-invoicing (optional)
 	MSIC         string
@@ -142,7 +142,7 @@ func renderTemplate(src string, data receiptData, html bool) string {
 	return b.String()
 }
 
-// SendSaleReceipt emails the buyer a receipt rendered from the space's email
+// SendSaleReceipt emails the buyer a receipt rendered from the workspace's email
 // settings (issue #107). Respects receipt_enabled (off = no buyer email) and
 // suppression (#56). Failures are logged but NEVER fail the payment flow.
 //
@@ -168,13 +168,13 @@ func (s *Service) SendSaleReceipt(ctx context.Context, ref SaleRef) {
 		}
 	}
 
-	// Per-space settings (issue #107). Defaults reproduce the old output.
+	// Per-workspace settings (issue #107). Defaults reproduce the old output.
 	subject, body, html := defaultReceiptSubject, defaultReceiptBody, false
 	receiptEnabled := true
 	notifyMerchant := false
 	merchantEmail := ""
-	if s.Spaces != nil && ref.SpaceID != "" {
-		if st, err := s.Spaces.EmailSettings(ctx, ref.SpaceID); err == nil {
+	if s.Workspaces != nil && ref.WorkspaceID != "" {
+		if st, err := s.Workspaces.EmailSettings(ctx, ref.WorkspaceID); err == nil {
 			subject, body, html = st.ReceiptSubject, st.ReceiptBody, st.HTML
 			receiptEnabled = st.ReceiptEnabled
 			notifyMerchant = st.NotifyMerchant
@@ -182,7 +182,7 @@ func (s *Service) SendSaleReceipt(ctx context.Context, ref SaleRef) {
 		}
 	}
 	// Issue #177: a per-form email override (non-empty subject or body) takes
-	// precedence over the space defaults for this form's receipts.
+	// precedence over the workspace defaults for this form's receipts.
 	if s.Forms != nil && ref.FormID != "" {
 		if st, err := s.Forms.FormEmailSettings(ctx, ref.FormID); err == nil &&
 			(st.ReceiptSubject != "" || st.ReceiptBody != "") {
@@ -207,7 +207,7 @@ func (s *Service) SendSaleReceipt(ctx context.Context, ref SaleRef) {
 			if err := s.EmailQueue.Enqueue(ctx, emailqueue.Job{
 				Type: "receipt", To: ref.BuyerEmail,
 				Subject: subj, Body: rendered,
-				AccountID: ref.SpaceID, SaleRef: ref.RefCode, SaleID: ref.SaleID,
+				AccountID: ref.WorkspaceID, SaleRef: ref.RefCode, SaleID: ref.SaleID,
 				PDFFilename: "resit-" + ref.RefCode + ".pdf", PDFData: pdf,
 			}); err != nil {
 				slog.Warn("receipt_enqueue_failed", "ref", ref.RefCode, "err", err)
@@ -220,7 +220,7 @@ func (s *Service) SendSaleReceipt(ctx context.Context, ref SaleRef) {
 			} else if err := s.EmailQueue.Enqueue(ctx, emailqueue.Job{
 				Type: "merchant_notify", To: to,
 				Subject: "Jualan baharu — " + subj, Body: rendered,
-				AccountID: ref.SpaceID, SaleRef: ref.RefCode,
+				AccountID: ref.WorkspaceID, SaleRef: ref.RefCode,
 			}); err != nil {
 				slog.Warn("receipt_merchant_notify_enqueue_failed", "ref", ref.RefCode, "err", err)
 			}
@@ -250,12 +250,12 @@ func (s *Service) SendSaleReceipt(ctx context.Context, ref SaleRef) {
 }
 
 // resolveMerchantEmail returns the merchant notification recipient: the
-// configured merchant_notify_email, else the space owner's account email.
+// configured merchant_notify_email, else the workspace owner's account email.
 func (s *Service) resolveMerchantEmail(ctx context.Context, ref SaleRef, merchantEmail string) string {
 	to := strings.TrimSpace(merchantEmail)
 	if to == "" {
-		if s.Spaces != nil && ref.SpaceID != "" {
-			if owner, err := s.Spaces.ByID(ctx, ref.SpaceID); err == nil && owner != nil {
+		if s.Workspaces != nil && ref.WorkspaceID != "" {
+			if owner, err := s.Workspaces.ByID(ctx, ref.WorkspaceID); err == nil && owner != nil {
 				if s.Users != nil {
 					if u, uerr := s.Users.ByID(ctx, owner.Owner); uerr == nil && u != nil {
 						to = u.Email
@@ -292,14 +292,14 @@ func (s *Service) sendReceipt(ctx context.Context, ref SaleRef, subject, body st
 
 // notifyMerchant sends a copy of the receipt (or a "new sale" notification)
 // to the merchant. The recipient is merchant_notify_email when set, else the
-// space owner's account email. Suppression is NOT applied to the merchant —
+// workspace owner's account email. Suppression is NOT applied to the merchant —
 // they opted in and must always get their sale notification.
 func (s *Service) notifyMerchant(ctx context.Context, ref SaleRef, subject, body string, html bool, merchantEmail string) {
 	to := strings.TrimSpace(merchantEmail)
 	if to == "" {
-		// Resolve the merchant's email from the space owner's account.
-		if s.Spaces != nil && ref.SpaceID != "" {
-			if owner, err := s.Spaces.ByID(ctx, ref.SpaceID); err == nil && owner != nil {
+		// Resolve the merchant's email from the workspace owner's account.
+		if s.Workspaces != nil && ref.WorkspaceID != "" {
+			if owner, err := s.Workspaces.ByID(ctx, ref.WorkspaceID); err == nil && owner != nil {
 				if s.Users != nil {
 					if u, uerr := s.Users.ByID(ctx, owner.Owner); uerr == nil && u != nil {
 						to = u.Email

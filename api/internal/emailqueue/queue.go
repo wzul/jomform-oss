@@ -1,7 +1,7 @@
 // Package emailqueue — persistent background email queue + worker (issue #199).
 //
 // Emails (receipts, merchant notifications, verification, magic link, password
-// reset, 2FA codes, space invites) are enqueued by the request handlers and
+// reset, 2FA codes, workspace invites) are enqueued by the request handlers and
 // sent by a background worker, so a slow SES call never blocks the
 // payment/submit/auth response.
 //

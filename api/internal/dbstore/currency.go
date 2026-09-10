@@ -1,8 +1,8 @@
 package dbstore
 
-// Supported currencies for per-space settlement (issue #185). The set mirrors
-// the CHECK constraint in migration 000029_space_currency and the BNM
-// exchange-rate coverage. MYR is the default for existing spaces.
+// Supported currencies for per-workspace settlement (issue #185). The set mirrors
+// the CHECK constraint in migration 000029_workspace_currency and the BNM
+// exchange-rate coverage. MYR is the default for existing workspaces.
 var supportedCurrencies = map[string]bool{
 	"MYR": true, "USD": true, "SGD": true, "EUR": true, "GBP": true,
 	"AUD": true, "CNY": true, "JPY": true, "THB": true, "IDR": true,
@@ -13,7 +13,7 @@ var supportedCurrencies = map[string]bool{
 }
 
 // IsSupportedCurrency reports whether code is a supported settlement
-// currency. Used to validate per-space currency input and to fall back to
+// currency. Used to validate per-workspace currency input and to fall back to
 // MYR for legacy/unset rows.
 func IsSupportedCurrency(code string) bool {
 	return supportedCurrencies[code]

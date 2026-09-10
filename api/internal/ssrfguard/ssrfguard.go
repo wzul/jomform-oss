@@ -34,7 +34,7 @@ func IsAllowedAddr(ip net.IP) bool {
 		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
 		return false
 	}
-	// CGNAT / Shared Address Space 100.64.0.0/10 (RFC 6598): not flagged by
+	// CGNAT / Shared Address Workspace 100.64.0.0/10 (RFC 6598): not flagged by
 	// IsPrivate; only usable by a carrier, so disallow outbound fetches.
 	if ip4 := ip.To4(); ip4 != nil && ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127 {
 		return false

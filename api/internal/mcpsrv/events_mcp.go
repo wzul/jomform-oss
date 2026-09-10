@@ -32,7 +32,7 @@ type eventOut struct {
 
 // listEvents returns the user's audit/behaviour log, newest first,
 // paginated and filterable. Read-only (read scope is enough). Issue #307:
-// spans all of the user's spaces.
+// spans all of the user's workspaces.
 func (s *Server) listEvents(
 	ctx context.Context, _ *mcp.CallToolRequest, in listEventsIn,
 ) (*mcp.CallToolResult, map[string]any, error) {

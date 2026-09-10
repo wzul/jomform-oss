@@ -45,7 +45,7 @@ var selectConsts = map[string]string{
 	"formSelect":    "Form",
 	"productSelect": "Product",
 	"saleSelect":    "Sale",
-	"spaceSelect":   "Space",
+	"workspaceSelect":   "Workspace",
 	"subSelect":     "Subscription",
 }
 
@@ -55,7 +55,7 @@ var selectTables = map[string]string{
 	"formSelect":    "forms",
 	"productSelect": "products",
 	"saleSelect":    "sales",
-	"spaceSelect":   "spaces",
+	"workspaceSelect":   "workspaces",
 	"subSelect":     "subscriptions",
 }
 
@@ -70,13 +70,22 @@ var selectScanFuncs = map[string][]string{
 	"formSelect":    {"FormStore.scanOne"},
 	"productSelect": {"ProductStore.ListActiveByAccount", "ProductStore.ListActiveByAccounts", "ProductStore.Get"},
 	"saleSelect":    {"scanSale"},
-	"spaceSelect":   {"scanSpace"},
+	"workspaceSelect":   {"scanWorkspace"},
 	"subSelect":     {"scanSub"},
+}
+
+// columnRenames maps historical column names (from older migrations) to their
+// current name after the Space→Workspace rename (issue #431, migration 000045).
+// Older migrations that ADD COLUMN space_id are checked against the renamed
+// workspace_id in the current select constant.
+var columnRenames = map[string]string{
+	"space_id":          "workspace_id",
+	"default_space_id":  "default_workspace_id",
 }
 
 // intentionallyUnselected lists columns that are deliberately NOT part of the
 // main *Select constant because they are read via a dedicated accessor query
-// (e.g. Tracking, SigningKeys, CFToken, ChipOverrideFor, SpaceIDByAccount).
+// (e.g. Tracking, SigningKeys, CFToken, ChipOverrideFor, WorkspaceIDByAccount).
 // A migration adding one of these must NOT be flagged. Keyed by table name.
 var intentionallyUnselected = map[string]map[string]bool{
 	"accounts": {
@@ -84,11 +93,11 @@ var intentionallyUnselected = map[string]map[string]bool{
 		"wh_sign_pub":      true, // AccountStore.SigningKeys
 		"wh_sign_priv":     true, // AccountStore.SigningKeys
 		"cf_token_enc":     true, // AccountStore.CFToken
-		"space_id":         true, // SpaceStore.SpaceIDByAccount
+		"workspace_id":         true, // WorkspaceStore.WorkspaceIDByAccount
 		"slug_changed_from": true, // legacy 301 source, not scanned
 	},
 	"forms": {
-		"space_id":              true, // denormalised, SpaceStore.SpaceIDByAccount
+		"workspace_id":              true, // denormalised, WorkspaceStore.WorkspaceIDByAccount
 		"tracking_head":         true, // FormStore.SetTracking / read via dedicated query
 		"chip_brand_id":         true, // FormStore.ChipOverrideFor
 		"chip_secret_key_enc":   true, // FormStore.ChipOverrideFor
@@ -97,17 +106,17 @@ var intentionallyUnselected = map[string]map[string]bool{
 		"access_password":       true, // FormStore.AccessPassword (dedicated accessor, issue #176)
 	},
 	"products": {
-		"space_id": true, // denormalised
+		"workspace_id": true, // denormalised
 	},
 	"sales": {
-		"space_id": true, // denormalised
+		"workspace_id": true, // denormalised
 		"fields":   true, // FormStore.SaleFields (dedicated accessor, issue #179)
 	},
-	"spaces": {
-		"created_at": true, // not scanned by spaceSelect
+	"workspaces": {
+		"created_at": true, // not scanned by workspaceSelect
 	},
 	"users": {
-		"default_space_id": true, // UserStore.DefaultSpace (dedicated accessor, issue #164)
+		"default_workspace_id": true, // UserStore.DefaultWorkspace (dedicated accessor, issue #164)
 	},
 }
 
@@ -398,6 +407,13 @@ func TestMigrationColumnsAppearInSelect(t *testing.T) {
 			selName := selectConstForTable(table)
 			if selName == "" {
 				continue
+			}
+			// Issue #431: the Space→Workspace rename (migration 000045) renamed
+			// columns like space_id → workspace_id. Older migrations that ADD
+			// COLUMN space_id must be checked against the current (renamed)
+			// select constant, so translate the historical column name.
+			if renamed, ok := columnRenames[col]; ok {
+				col = renamed
 			}
 			// Skip columns deliberately read via dedicated accessor queries.
 			if intentionallyUnselected[table][col] {

@@ -1,4 +1,4 @@
-// MCP parity tools: per-space email template + behaviour settings (issue #107).
+// MCP parity tools: per-workspace email template + behaviour settings (issue #107).
 package mcpsrv
 
 import (
@@ -10,28 +10,28 @@ import (
 	"github.com/wzul/jomform/api/internal/dbstore"
 )
 
-// getEmailSettingsIn resolves the space whose email settings to read.
+// getEmailSettingsIn resolves the workspace whose email settings to read.
 type getEmailSettingsIn struct {
-	SpaceID string `json:"space_id" jsonschema:"ID space (dari list_spaces)"`
+	WorkspaceID string `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
 }
 
-// getEmailSettings reads a space's receipt/notification email settings.
+// getEmailSettings reads a workspace's receipt/notification email settings.
 func (s *Server) getEmailSettings(
 	ctx context.Context, _ *mcp.CallToolRequest, in getEmailSettingsIn,
 ) (*mcp.CallToolResult, *dbstoreEmailSettingsOut, error) {
-	if _, _, err := s.accessibleSpace(ctx, in.SpaceID); err != nil {
+	if _, _, err := s.accessibleWorkspace(ctx, in.WorkspaceID); err != nil {
 		return nil, nil, err
 	}
-	sp, err := s.spacesStore()
+	sp, err := s.workspacesStore()
 	if err != nil {
 		return nil, nil, err
 	}
-	st, err := sp.EmailSettings(ctx, in.SpaceID)
+	st, err := sp.EmailSettings(ctx, in.WorkspaceID)
 	if err != nil {
 		return nil, nil, err
 	}
 	return nil, &dbstoreEmailSettingsOut{
-		SpaceID:             st.SpaceID,
+		WorkspaceID:             st.WorkspaceID,
 		ReceiptSubject:      st.ReceiptSubject,
 		ReceiptBody:         st.ReceiptBody,
 		ReceiptEnabled:      st.ReceiptEnabled,
@@ -43,7 +43,7 @@ func (s *Server) getEmailSettings(
 
 // dbstoreEmailSettingsOut mirrors dbstore.EmailSettings for the MCP response.
 type dbstoreEmailSettingsOut struct {
-	SpaceID             string `json:"space_id"`
+	WorkspaceID             string `json:"workspace_id"`
 	ReceiptSubject      string `json:"receipt_subject"`
 	ReceiptBody         string `json:"receipt_body"`
 	ReceiptEnabled      bool   `json:"receipt_enabled"`
@@ -52,10 +52,10 @@ type dbstoreEmailSettingsOut struct {
 	HTML                bool   `json:"html"`
 }
 
-// setEmailSettingsIn updates a space's email settings. Omitted fields keep
-// their current value (read-modify-write, matching set_space_settings).
+// setEmailSettingsIn updates a workspace's email settings. Omitted fields keep
+// their current value (read-modify-write, matching set_workspace_settings).
 type setEmailSettingsIn struct {
-	SpaceID             string  `json:"space_id" jsonschema:"ID space (dari list_spaces)"`
+	WorkspaceID             string  `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
 	ReceiptSubject      *string `json:"receipt_subject,omitempty" jsonschema:"Subjek resit (placeholder {{ref_code}} dll; omit = kekal)"`
 	ReceiptBody         *string `json:"receipt_body,omitempty" jsonschema:"Badan resit (placeholder {{ref_code}}, {{amount}}, {{items}}, {{form_url}}, {{buyer_name}}, {{date}}; omit = kekal)"`
 	ReceiptEnabled      *bool   `json:"receipt_enabled,omitempty" jsonschema:"Hantar resit kepada pembeli (true/false; omit = kekal)"`
@@ -67,19 +67,19 @@ type setEmailSettingsIn struct {
 func (s *Server) setEmailSettings(
 	ctx context.Context, _ *mcp.CallToolRequest, in setEmailSettingsIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	_, role, err := s.accessibleSpace(ctx, in.SpaceID)
+	_, role, err := s.accessibleWorkspace(ctx, in.WorkspaceID)
 	if err != nil {
 		return nil, nil, err
 	}
 	if role != "" && role != dbstore.RoleManage && role != dbstore.RoleAdmin {
 		return nil, nil, errors.New("perlu peranan manage atau admin")
 	}
-	sp, err := s.spacesStore()
+	sp, err := s.workspacesStore()
 	if err != nil {
 		return nil, nil, err
 	}
 	// Read-modify-write: omit a field = keep its current value.
-	st, err := sp.EmailSettings(ctx, in.SpaceID)
+	st, err := sp.EmailSettings(ctx, in.WorkspaceID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -104,5 +104,5 @@ func (s *Server) setEmailSettings(
 	if err := sp.SaveEmailSettings(ctx, st); err != nil {
 		return nil, nil, err
 	}
-	return nil, map[string]string{"status": "saved", "space_id": in.SpaceID}, nil
+	return nil, map[string]string{"status": "saved", "workspace_id": in.WorkspaceID}, nil
 }

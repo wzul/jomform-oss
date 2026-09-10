@@ -19,7 +19,7 @@ func TestQueryClass(t *testing.T) {
 	}{
 		{"SELECT * FROM forms WHERE id = $1", "SELECT forms"},
 		{"select id, name from products", "SELECT products"},
-		{"SELECT DISTINCT slug FROM spaces", "SELECT spaces"},
+		{"SELECT DISTINCT slug FROM workspaces", "SELECT workspaces"},
 		{"INSERT INTO sales (id) VALUES ($1)", "INSERT sales"},
 		{"UPDATE accounts SET name = $1", "UPDATE accounts"},
 		{"DELETE FROM events WHERE id = $1", "DELETE events"},

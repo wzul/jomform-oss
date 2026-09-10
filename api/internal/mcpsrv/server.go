@@ -30,12 +30,12 @@ type Deps struct {
 	Keys     *dbstore.APIKeyStore
 	Forms    *dbstore.FormStore
 	Webhooks *dbstore.WebhookStore
-	Spaces   *dbstore.SpaceStore
-	// Issue #161: space membership + invites (MCP parity tools).
-	SpaceMembers *dbstore.SpaceMemberStore
+	Workspaces   *dbstore.WorkspaceStore
+	// Issue #161: workspace membership + invites (MCP parity tools).
+	WorkspaceMembers *dbstore.WorkspaceMemberStore
 	// Issue #161: user lookup for invite-by-email (existing user → add directly).
-	// Issue #164: Users enables the set_default_space tool (user-level default
-	// space for the multi-space login picker). Nil → the tool errors.
+	// Issue #164: Users enables the set_default_workspace tool (user-level default
+	// workspace for the multi-workspace login picker). Nil → the tool errors.
 	Users *dbstore.UserStore
 	// Issue #92: audit/behaviour log (list_events tool). Nil → tool returns
 	// an error rather than panicking.

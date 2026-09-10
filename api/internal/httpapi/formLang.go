@@ -11,7 +11,7 @@ import (
 // strings live here — merchant-authored block .Value text (names, phone,
 // checkbox labels) is rendered verbatim and is never translated.
 //
-// Issue #57: the effective language is form.config.lang ?? space defaultLang
+// Issue #57: the effective language is form.config.lang ?? workspace defaultLang
 // ?? 'en' (maintainer decision 2026-09-01). Keys use the same 5-language set
 // as the dashboard i18n dictionary (web/src/components/i18n.tsx).
 type langStrings struct {
@@ -117,25 +117,25 @@ var formLangs = map[string]langStrings{
 	},
 }
 
-// resolveSpaceLang returns the space's default language for a form's account,
-// or "en" when the space/account is unresolvable.
-func (h *PublicHandlers) resolveSpaceLang(ctx context.Context, f *dbstore.Form) string {
-	if h.Spaces == nil {
+// resolveWorkspaceLang returns the workspace's default language for a form's account,
+// or "en" when the workspace/account is unresolvable.
+func (h *PublicHandlers) resolveWorkspaceLang(ctx context.Context, f *dbstore.Form) string {
+	if h.Workspaces == nil {
 		return "en"
 	}
-	spaceID, err := h.Spaces.SpaceIDByAccount(ctx, f.AccountID)
-	if err != nil || spaceID == "" {
+	workspaceID, err := h.Workspaces.WorkspaceIDByAccount(ctx, f.AccountID)
+	if err != nil || workspaceID == "" {
 		return "en"
 	}
-	st, err := h.Spaces.Settings(ctx, spaceID)
+	st, err := h.Workspaces.Settings(ctx, workspaceID)
 	if err != nil {
 		return "en"
 	}
-	return st.SpaceLang()
+	return st.WorkspaceLang()
 }
 
 // effectiveLangStrings resolves the buyer-facing dictionary for a form.
-// Resolution chain: form.config.lang ?? space defaultLang ?? 'en'.
+// Resolution chain: form.config.lang ?? workspace defaultLang ?? 'en'.
 func (h *PublicHandlers) effectiveLangStrings(ctx context.Context, f *dbstore.Form) langStrings {
 	// 1. Per-form override wins when present and valid.
 	if raw, err := json.Marshal(f.Config); err == nil {
@@ -146,8 +146,8 @@ func (h *PublicHandlers) effectiveLangStrings(ctx context.Context, f *dbstore.Fo
 			return formLangs[cfg.Lang]
 		}
 	}
-	// 2. Otherwise inherit the space default.
-	lang := h.resolveSpaceLang(ctx, f)
+	// 2. Otherwise inherit the workspace default.
+	lang := h.resolveWorkspaceLang(ctx, f)
 	if st, ok := formLangs[lang]; ok {
 		return st
 	}

@@ -28,14 +28,14 @@ import (
 )
 
 // Issue #411: GitHub-style default Open Graph image. Every form gets its own
-// on-the-fly branded 1200x630 social preview (title + space + JomForm
+// on-the-fly branded 1200x630 social preview (title + workspace + JomForm
 // branding) rendered server-side as a PNG — no headless browser dependency.
 // If the merchant sets a custom og:image (or a form logo), that is used
 // instead; otherwise the generated default is served at /og/{slug}.png.
 //
 // Issue #425: the default was redesigned to match Wan's approved mockup —
 // indigo→white gradient, real JomForm "JF" mark (white bold on indigo rounded
-// square, top-left), dark bold centered title, muted subtitle (space + domain),
+// square, top-left), dark bold centered title, muted subtitle (workspace + domain),
 // footer with the JomForm tagline, and a subtle decorative indigo card/check
 // icon on the right. When the merchant sets a theme color or a form logo, the
 // gradient/accents are tinted with the theme color and the form logo is used
@@ -60,7 +60,7 @@ var (
 	ogFontOnce sync.Once
 	// Faces at the sizes used by the card layout.
 	ogFaceTitle font.Face // bold, large (title)
-	ogFaceSpace font.Face // medium (space/business name)
+	ogFaceWorkspace font.Face // medium (workspace/business name)
 	ogFaceMark  font.Face // bold, extra-large (JF mark + wordmark)
 	ogFaceTag   font.Face // regular (tagline)
 )
@@ -82,7 +82,7 @@ func ogFace(data []byte, size float64) font.Face {
 func ensureOGFonts() {
 	ogFontOnce.Do(func() {
 		ogFaceTitle = ogFace(gobold.TTF, 64)
-		ogFaceSpace = ogFace(gomedium.TTF, 34)
+		ogFaceWorkspace = ogFace(gomedium.TTF, 34)
 		ogFaceMark = ogFace(gobold.TTF, 120)
 		ogFaceTag = ogFace(goregular.TTF, 26)
 	})
@@ -95,7 +95,7 @@ func ogTextWidth(face font.Face, s string) int {
 }
 
 // ogWrap wraps s to at most maxWidth pixels for the given face, breaking on
-// spaces. Returns the wrapped lines.
+// workspaces. Returns the wrapped lines.
 func ogWrap(face font.Face, s string, maxWidth int) []string {
 	words := strings.Fields(s)
 	if len(words) == 0 {
@@ -260,12 +260,12 @@ func ogFetchLogo(rawURL string) image.Image {
 //   - real JomForm "JF" mark (white bold on indigo rounded square, top-left),
 //     or the form logo when set
 //   - dark bold centered title
-//   - muted subtitle (space name + domain)
+//   - muted subtitle (workspace name + domain)
 //   - footer with the JomForm tagline
 //   - subtle decorative indigo card/check icon on the right
-func renderOGImage(title, space, domain, themePrimary, logoURL string) ([]byte, error) {
+func renderOGImage(title, workspace, domain, themePrimary, logoURL string) ([]byte, error) {
 	ensureOGFonts()
-	if ogFaceTitle == nil || ogFaceSpace == nil || ogFaceMark == nil || ogFaceTag == nil {
+	if ogFaceTitle == nil || ogFaceWorkspace == nil || ogFaceMark == nil || ogFaceTag == nil {
 		return nil, errOGFontUnavailable
 	}
 
@@ -320,8 +320,8 @@ func renderOGImage(title, space, domain, themePrimary, logoURL string) ([]byte, 
 		ogDrawText(img, titleFace, ln, ogImageW/2, startY+i*lineH, ogDark)
 	}
 
-	// Subtitle: space name + domain (muted).
-	sub := space
+	// Subtitle: workspace name + domain (muted).
+	sub := workspace
 	if domain != "" {
 		if sub != "" {
 			sub += " · " + domain
@@ -330,11 +330,11 @@ func renderOGImage(title, space, domain, themePrimary, logoURL string) ([]byte, 
 		}
 	}
 	if sub != "" {
-		subLines := ogWrap(ogFaceSpace, sub, 900)
+		subLines := ogWrap(ogFaceWorkspace, sub, 900)
 		if len(subLines) > 1 {
 			subLines = subLines[:1]
 		}
-		ogDrawText(img, ogFaceSpace, subLines[0], ogImageW/2, startY+len(titleLines)*lineH+40, ogMuted)
+		ogDrawText(img, ogFaceWorkspace, subLines[0], ogImageW/2, startY+len(titleLines)*lineH+40, ogMuted)
 	}
 
 	// Footer: JomForm wordmark + tagline (dark, on the white lower half).
@@ -353,11 +353,11 @@ func renderOGImage(title, space, domain, themePrimary, logoURL string) ([]byte, 
 var ogImageCache sync.Map // formID -> []byte
 
 // cachedOGImage returns the cached PNG for a form, rendering + caching on miss.
-func cachedOGImage(formID, title, space, domain, themePrimary, logoURL string) ([]byte, error) {
+func cachedOGImage(formID, title, workspace, domain, themePrimary, logoURL string) ([]byte, error) {
 	if v, ok := ogImageCache.Load(formID); ok {
 		return v.([]byte), nil
 	}
-	pngBytes, err := renderOGImage(title, space, domain, themePrimary, logoURL)
+	pngBytes, err := renderOGImage(title, workspace, domain, themePrimary, logoURL)
 	if err != nil {
 		return nil, err
 	}
@@ -373,14 +373,14 @@ type ogFontError struct{}
 func (*ogFontError) Error() string { return "og:image font unavailable" }
 
 // handleOGImage serves the generated default og:image for a form at
-// /og/{slug}.png. Resolves the form the same way handleRender does (space
+// /og/{slug}.png. Resolves the form the same way handleRender does (workspace
 // subdomain or custom domain), renders the branded preview, and caches it.
 func (h *PublicHandlers) handleOGImage(w http.ResponseWriter, r *http.Request) {
 	slug := strings.TrimSuffix(r.PathValue("slug"), ".png")
 	var f *dbstore.Form
 	var err error
 	if sub := accountSubdomain(r.Host); sub != "" {
-		f, err = h.Forms.BySpaceSlug(r.Context(), sub, slug)
+		f, err = h.Forms.ByWorkspaceSlug(r.Context(), sub, slug)
 	} else if cd := customDomainOwner(r.Context(), h.Accounts, h.Domains, r.Host); cd != "" {
 		f, err = h.Forms.ByAccountSlug(r.Context(), cd, slug)
 	} else {
@@ -390,14 +390,14 @@ func (h *PublicHandlers) handleOGImage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	space := h.spaceNameFor(r.Context(), f)
+	workspace := h.workspaceNameFor(r.Context(), f)
 	themePrimary := ""
 	if f.Theme != nil {
 		if v, ok := f.Theme["primary"].(string); ok {
 			themePrimary = v
 		}
 	}
-	pngBytes, err := cachedOGImage(f.ID, f.Title, space, r.Host, themePrimary, f.LogoURL)
+	pngBytes, err := cachedOGImage(f.ID, f.Title, workspace, r.Host, themePrimary, f.LogoURL)
 	if err != nil {
 		slog.Error("og_image_render", "err", err)
 		http.Error(w, "image error", http.StatusInternalServerError)
@@ -408,21 +408,21 @@ func (h *PublicHandlers) handleOGImage(w http.ResponseWriter, r *http.Request) {
 	w.Write(pngBytes)
 }
 
-// spaceNameFor resolves the space/business name for a form's account, used as
-// the og:description / og:image subtitle. Falls back to the space slug, then
+// workspaceNameFor resolves the workspace/business name for a form's account, used as
+// the og:description / og:image subtitle. Falls back to the workspace slug, then
 // empty.
-func (h *PublicHandlers) spaceNameFor(ctx context.Context, f *dbstore.Form) string {
-	if h.Spaces == nil {
+func (h *PublicHandlers) workspaceNameFor(ctx context.Context, f *dbstore.Form) string {
+	if h.Workspaces == nil {
 		return ""
 	}
-	spaceID, err := h.Spaces.SpaceIDByAccount(ctx, f.AccountID)
-	if err != nil || spaceID == "" {
+	workspaceID, err := h.Workspaces.WorkspaceIDByAccount(ctx, f.AccountID)
+	if err != nil || workspaceID == "" {
 		return ""
 	}
-	if st, err := h.Spaces.Settings(ctx, spaceID); err == nil && st.BusinessName != "" {
+	if st, err := h.Workspaces.Settings(ctx, workspaceID); err == nil && st.BusinessName != "" {
 		return st.BusinessName
 	}
-	if slug, err := h.Spaces.SpaceSlugByAccount(ctx, f.AccountID); err == nil {
+	if slug, err := h.Workspaces.WorkspaceSlugByAccount(ctx, f.AccountID); err == nil {
 		return slug
 	}
 	return ""
@@ -433,16 +433,16 @@ func (h *PublicHandlers) spaceNameFor(ctx context.Context, f *dbstore.Form) stri
 // default at /og/{slug}.png. Returns template.HTML (already escaped).
 func (h *PublicHandlers) formOGMeta(r *http.Request, f *dbstore.Form) template.HTML {
 	title := f.Title
-	desc := h.spaceNameFor(r.Context(), f)
+	desc := h.workspaceNameFor(r.Context(), f)
 	if desc == "" {
 		desc = "Order form on JomForm"
 	}
-	// Canonical public URL for this form (space subdomain or custom domain).
+	// Canonical public URL for this form (workspace subdomain or custom domain).
 	u := h.formPublicURL(r, f)
 	img := f.LogoURL
 	if img == "" {
 		// Generated default at the origin root /og/{slug}.png, so it resolves
-		// on the space/custom domain regardless of the form's path.
+		// on the workspace/custom domain regardless of the form's path.
 		origin := u
 		if pu, perr := url.Parse(u); perr == nil {
 			origin = pu.Scheme + "://" + pu.Host
@@ -465,7 +465,7 @@ func (h *PublicHandlers) formOGMeta(r *http.Request, f *dbstore.Form) template.H
 }
 
 // formPublicURL builds the canonical public URL for a form on the current
-// request's host (space subdomain or custom domain). Falls back to the
+// request's host (workspace subdomain or custom domain). Falls back to the
 // request host + slug.
 func (h *PublicHandlers) formPublicURL(r *http.Request, f *dbstore.Form) string {
 	scheme := "https"

@@ -2,7 +2,7 @@
 //
 // A super-admin is a user whose email is on the SUPER_ADMIN_EMAILS allowlist
 // (wired from config into Deps.SuperAdmin). Super-admin unlocks platform-wide
-// monitoring across all spaces — but ONLY on explicitly gated admin tools and
+// monitoring across all workspaces — but ONLY on explicitly gated admin tools and
 // pages (#386 MCP admin tools, #387 admin dashboard), never implicitly on
 // normal tools. This file provides the identification check and the audit
 // helper that every super-admin action must call.

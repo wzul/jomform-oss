@@ -37,7 +37,7 @@ func (s *Server) listProducts(ctx context.Context, _ *mcp.CallToolRequest, _ emp
 		return nil, nil, err
 	}
 	// Issue #307: a user-level agent lists active products across all of the
-	// user's accessible spaces (aggregated; ownership enforced per store).
+	// user's accessible workspaces (aggregated; ownership enforced per store).
 	products, err := s.deps.Products.ListActiveByAccounts(ctx, accs)
 	if err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
@@ -164,7 +164,7 @@ type archiveProductIn struct {
 }
 
 func (s *Server) archiveProduct(ctx context.Context, _ *mcp.CallToolRequest, in archiveProductIn) (*mcp.CallToolResult, map[string]string, error) {
-	// Issue #307: the product may live in any of the user's spaces; resolve +
+	// Issue #307: the product may live in any of the user's workspaces; resolve +
 	// RBAC-gate the owning account.
 	acc, err := s.requireProductWrite(ctx, in.ProductID)
 	if err != nil {
@@ -212,7 +212,7 @@ func (s *Server) listSales(ctx context.Context, _ *mcp.CallToolRequest, in listS
 	var sales []*dbstore.Sale
 	switch {
 	case in.Status != "":
-		// Issue #307: aggregate status-filtered sales across the user's spaces.
+		// Issue #307: aggregate status-filtered sales across the user's workspaces.
 		// (No multi-account status method; iterate the account set.)
 		for _, a := range accs {
 			one, err := s.deps.Sales.ListByAccountStatus(ctx, a, in.Status, 50)
@@ -222,7 +222,7 @@ func (s *Server) listSales(ctx context.Context, _ *mcp.CallToolRequest, in listS
 			sales = append(sales, one...)
 		}
 	case in.FormID != "":
-		// Scoped to one form across the user's spaces (ownership enforced per
+		// Scoped to one form across the user's workspaces (ownership enforced per
 		// store query).
 		rows, _, err := s.deps.Sales.ListByAccountsFormPage(ctx, accs, in.FormID, 1, 50)
 		if err != nil {
@@ -270,7 +270,7 @@ func (s *Server) salesSummary(ctx context.Context, _ *mcp.CallToolRequest, _ emp
 	if err != nil {
 		return nil, summaryOut{}, err
 	}
-	// Issue #307: summary spans all of the user's spaces.
+	// Issue #307: summary spans all of the user's workspaces.
 	sales, err := s.deps.Sales.ListByAccounts(ctx, accs, 200)
 	if err != nil {
 		return nil, summaryOut{}, fmt.Errorf("db: %w", err)
@@ -399,7 +399,7 @@ func (s *Server) listSubscriptions(ctx context.Context, _ *mcp.CallToolRequest, 
 	if limit > 100 {
 		limit = 100
 	}
-	// Issue #307: subscriptions span all of the user's spaces.
+	// Issue #307: subscriptions span all of the user's workspaces.
 	rows, _, err := s.deps.Subs.ListByAccountsPage(ctx, accs, in.Status, page, limit)
 	if err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
@@ -425,7 +425,7 @@ type cancelSubIn struct {
 }
 
 func (s *Server) cancelSubscription(ctx context.Context, _ *mcp.CallToolRequest, in cancelSubIn) (*mcp.CallToolResult, map[string]string, error) {
-	// Issue #307: the subscription may be in any of the user's spaces. Find the
+	// Issue #307: the subscription may be in any of the user's workspaces. Find the
 	// owning account within scope, then RBAC-gate it.
 	sub, accountID, err := s.subscriptionByEmail(ctx, in.Email)
 	if err != nil {
@@ -458,7 +458,7 @@ func (s *Server) getAccount(ctx context.Context, _ *mcp.CallToolRequest, _ empty
 		return nil, accountOut{}, fmt.Errorf("token tiada atau tidak sah")
 	}
 	// Issue #307: for a user-level OAuth token the account is scoped per call
-	// (space_id/account_id or the user's first accessible account).
+	// (workspace_id/account_id or the user's first accessible account).
 	accountID := id.AccountID
 	if cs := callScopeFrom(ctx); cs != nil {
 		if cs.ExplicitAccountID != "" {

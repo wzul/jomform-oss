@@ -215,8 +215,8 @@ func (a *AuthHandlers) socialCallback(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		// Issue #285: route through the frontend post-login resolution
-		// (resolvePostLogin syncs jf_space and sends multi-space users to the
-		// space-picker) instead of dropping the user on the Landing page.
+		// (resolvePostLogin syncs jf_workspace and sends multi-workspace users to the
+		// workspace-picker) instead of dropping the user on the Landing page.
 		http.Redirect(w, r, "/post-login", http.StatusFound)
 		return
 	}
@@ -269,7 +269,7 @@ func (a *AuthHandlers) socialCallback(w http.ResponseWriter, r *http.Request) {
 	// Auto-provision the default account so a brand-new social user can reach
 	// the dashboard immediately. Without it the session cookie validates
 	// (/auth/me returns the user) but every authed() dashboard route
-	// (/spaces, /rest/dashboard-bundle) 401s because resolveSessionAccount
+	// (/workspaces, /rest/dashboard-bundle) 401s because resolveSessionAccount
 	// finds no account (issue #298). Idempotent for existing users.
 	a.ensureAccountFor(r, newID, up.Email)
 	_ = a.startSession(w, r, newID, "", false, false)

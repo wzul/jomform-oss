@@ -1,5 +1,5 @@
 // Package currency: BNM (Bank Negara Malaysia) exchange-rate fetching,
-// Valkey caching, and minor-unit conversion for per-space currencies (issue
+// Valkey caching, and minor-unit conversion for per-workspace currencies (issue
 // #185). Rates are fetched from https://api.bnm.gov.my/public/exchange-rate
 // once daily and cached in Valkey with a 24h TTL. Conversion is used for
 // display/new amounts; historical sales keep their original currency.

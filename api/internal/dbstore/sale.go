@@ -68,7 +68,7 @@ type Sale struct {
 	DiscountSen     int64
 	TotalSen        int64
 	// Currency is the currency the sale was transacted in (issue #185).
-	// Recorded at transaction time from the space's currency; historical sales
+	// Recorded at transaction time from the workspace's currency; historical sales
 	// keep their original currency (never auto-converted on a later change).
 	Currency        string
 	SaleType        string

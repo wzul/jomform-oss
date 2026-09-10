@@ -16,7 +16,7 @@ type Product struct {
 	Description        string
 	PriceSen           int64
 	// Currency is the currency the product's price is denominated in (issue
-	// #185). Set from the space's currency at creation; a later space currency
+	// #185). Set from the workspace's currency at creation; a later workspace currency
 	// change applies to new products going forward (existing prices keep their
 	// original currency).
 	Currency           string
@@ -74,7 +74,7 @@ func (s *ProductStore) ListActiveByAccount(ctx context.Context, accountID string
 }
 
 // ListActiveByAccounts lists active products across a set of accounts
-// (e.g. every account in the space the dashboard user selected).
+// (e.g. every account in the workspace the dashboard user selected).
 func (s *ProductStore) ListActiveByAccounts(ctx context.Context, accountIDs []string) ([]*Product, error) {
 	if len(accountIDs) == 0 {
 		return []*Product{}, nil

@@ -75,7 +75,7 @@ func (s *Server) getEinvoiceSettings(
 	ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
 	// Issue #307: e-invoice settings are scoped to the call's target account
-	// (explicit space_id/account_id or the user's first accessible account).
+	// (explicit workspace_id/account_id or the user's first accessible account).
 	acc, err := s.accountAndScope(ctx, false)
 	if err != nil {
 		return nil, nil, err
@@ -94,14 +94,14 @@ type webhookIn struct {
 	Secret string   `json:"secret"`
 	Events []string `json:"events,omitempty" jsonschema:"sale.paid|sale.failed|subscription.charged|*"`
 	// Issue #196: optional form_id scopes the webhook to one form (fires only
-	// for that form's events). Empty = space/account-wide.
-	FormID string `json:"form_id,omitempty" jsonschema:"ID borang (pilihan). Set = webhook hanya untuk borang ini; kosong = seluruh space/akaun."`
+	// for that form's events). Empty = workspace/account-wide.
+	FormID string `json:"form_id,omitempty" jsonschema:"ID borang (pilihan). Set = webhook hanya untuk borang ini; kosong = seluruh workspace/akaun."`
 }
 
 func (s *Server) createWebhookMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in webhookIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	// Issue #307: the target account is the scoped one (space_id/account_id or
+	// Issue #307: the target account is the scoped one (workspace_id/account_id or
 	// the caller's first accessible account); RBAC-gate it.
 	acc, err := s.requireWriteRole(ctx)
 	if err != nil {
@@ -146,8 +146,8 @@ type webhookListOut struct {
 
 type webhookListIn struct {
 	// Issue #196: optional form_id narrows to that form's webhooks; empty =
-	// space/account-wide webhooks.
-	FormID string `json:"form_id,omitempty" jsonschema:"ID borang (pilihan). Set = senarai webhook borang ini sahaja; kosong = webhook seluruh space/akaun."`
+	// workspace/account-wide webhooks.
+	FormID string `json:"form_id,omitempty" jsonschema:"ID borang (pilihan). Set = senarai webhook borang ini sahaja; kosong = webhook seluruh workspace/akaun."`
 }
 
 func (s *Server) listWebhooksMCP(
@@ -157,7 +157,7 @@ func (s *Server) listWebhooksMCP(
 	if err != nil {
 		return nil, nil, err
 	}
-	// Issue #307: list webhooks across all of the user's spaces.
+	// Issue #307: list webhooks across all of the user's workspaces.
 	out := []webhookListOut{}
 	for _, acc := range accs {
 		hooks, err := s.deps.Webhooks.ListByAccount(ctx, acc, in.FormID)
@@ -178,7 +178,7 @@ type webhookRef struct {
 func (s *Server) deleteWebhookMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in webhookRef,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	// Issue #307: the webhook may live in any of the user's spaces; resolve the
+	// Issue #307: the webhook may live in any of the user's workspaces; resolve the
 	// owning account and RBAC-gate it.
 	acc, err := s.resolveWebhookAccount(ctx, in.ID)
 	if err != nil {

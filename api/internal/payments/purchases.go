@@ -91,10 +91,10 @@ func (s *Service) CreateChipPurchaseForSale(ctx context.Context, sale *dbstore.S
 	whitelist := s.ResolveWhitelist(ctx, string(secret), sale.Currency, sale.TotalSen, acc.ChipMethodWhitelist)
 
 	sRedirect, fRedirect := s.formRedirects(ctx, acc.ID, sale.FormID)
-	// Issue #83: thank-you redirects must land on the space subdomain (or
+	// Issue #83: thank-you redirects must land on the workspace subdomain (or
 	// custom domain) the buyer came from, not the apex base. Fall back to the
-	// apex base only when no space/custom domain is resolvable.
-	tyBase := s.spaceBaseURL(ctx, acc.ID)
+	// apex base only when no workspace/custom domain is resolvable.
+	tyBase := s.workspaceBaseURL(ctx, acc.ID)
 	if tyBase == "" {
 		tyBase = s.BaseURL
 	}
@@ -280,20 +280,20 @@ func (s *Service) sendReceiptAsync(ctx context.Context, sale *dbstore.Sale) {
 		tin, msic = acc2.EinvoiceTIN, acc2.EinvoiceMSIC
 	}
 	// Issue #83: 'Borang dibeli' must link to the purchased form's
-	// canonical space-scoped URL ({space}.jomform.com/{slug} or a
+	// canonical workspace-scoped URL ({workspace}.jomform.com/{slug} or a
 	// verified custom domain), not the apex thank-you page. Fall back
-	// to the apex thank-you page only when no space/custom domain is
+	// to the apex thank-you page only when no workspace/custom domain is
 	// resolvable.
 	formURL := s.formPublicURL(ctx, sale.AccountID, sale.FormID)
 	if formURL == "" {
 		formURL = s.BaseURL + "/t/" + sale.RefCode
 	}
-	// Issue #107: resolve the space id so the receipt renders from the
-	// space's per-space email settings (defaults when none).
-	spaceID := ""
-	if s.Spaces != nil {
-		if sid, serr := s.Spaces.SpaceIDByAccount(ctx, sale.AccountID); serr == nil {
-			spaceID = sid
+	// Issue #107: resolve the workspace id so the receipt renders from the
+	// workspace's per-workspace email settings (defaults when none).
+	workspaceID := ""
+	if s.Workspaces != nil {
+		if sid, serr := s.Workspaces.WorkspaceIDByAccount(ctx, sale.AccountID); serr == nil {
+			workspaceID = sid
 		}
 	}
 	go s.SendSaleReceipt(ctx, SaleRef{
@@ -304,7 +304,7 @@ func (s *Service) sendReceiptAsync(ctx context.Context, sale *dbstore.Sale) {
 		AmountSen:    sale.TotalSen,
 		ItemsSummary: summary,
 		FormURL:      formURL,
-		SpaceID:      spaceID,
+		WorkspaceID:      workspaceID,
 		FormID:       sale.FormID,
 		TIN:          tin,
 		MSIC:         msic,
@@ -533,10 +533,10 @@ func (s *Service) CreateChipPurchaseForSaleWithOverride(ctx context.Context, sal
 		wl = s.ResolveWhitelist(ctx, string(secret), sale.Currency, sale.TotalSen, whitelist)
 	}
 
-	// Issue #83: thank-you redirects must land on the space subdomain (or
+	// Issue #83: thank-you redirects must land on the workspace subdomain (or
 	// custom domain) the buyer came from, not the apex base. Fall back to the
-	// apex base only when no space/custom domain is resolvable.
-	tyBase := s.spaceBaseURL(ctx, acc.ID)
+	// apex base only when no workspace/custom domain is resolvable.
+	tyBase := s.workspaceBaseURL(ctx, acc.ID)
 	if tyBase == "" {
 		tyBase = s.BaseURL
 	}

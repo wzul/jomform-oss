@@ -1,5 +1,5 @@
 // Package llm provides a thin client for Ollama Cloud content generation
-// (issue #184). It is used to auto-generate per-space legal pages (privacy /
+// (issue #184). It is used to auto-generate per-workspace legal pages (privacy /
 // terms / refund) from a structured prompt template filled with the merchant's
 // business details. The merchant reviews and edits the generated text before
 // saving, so the output is a draft, not a final legal document.

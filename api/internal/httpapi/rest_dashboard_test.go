@@ -1,5 +1,5 @@
 // Issue #29: the dashboard-bundle must carry the dashboard landing data
-// (products, summary, recent sales, analytics) next to me+spaces+settings,
+// (products, summary, recent sales, analytics) next to me+workspaces+settings,
 // so the heaviest navigation becomes ONE request. Integration against a
 // real Postgres; skipped without JOMFORM_TEST_DATABASE_URL.
 package httpapi
@@ -51,7 +51,7 @@ func bundleTestPool(t *testing.T) *pgxpool.Pool {
 	return bundlePool
 }
 
-// bundleFixture seeds one user + account (+ space) and returns the account
+// bundleFixture seeds one user + account (+ workspace) and returns the account
 // and user ids. Every call creates fresh rows so tests never collide.
 func bundleFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (accountID, userID string) {
 	t.Helper()
@@ -86,7 +86,7 @@ func newBundleHandlers(pool *pgxpool.Pool) *RESTHandlers {
 		Subs:       dbstore.NewSubscriptionStore(pool),
 		Domains:    dbstore.NewDomainStore(pool),
 		Webhooks:   dbstore.NewWebhookStore(pool),
-		Spaces:     dbstore.NewSpaceStore(pool),
+		Workspaces:     dbstore.NewWorkspaceStore(pool),
 		Users:      dbstore.NewUserStore(pool),
 		SecretsKey: key,
 	}
@@ -140,7 +140,7 @@ func TestDashboardBundleCarriesLandingData(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", code)
 	}
-	for _, field := range []string{"me", "spaces", "products", "summary", "sales", "form_analytics", "product_analytics"} {
+	for _, field := range []string{"me", "workspaces", "products", "summary", "sales", "form_analytics", "product_analytics"} {
 		if _, ok := body[field]; !ok {
 			t.Errorf("bundle missing %q field", field)
 		}
@@ -224,19 +224,19 @@ func TestDashboardBundleSummaryMatchesSummaryEndpoint(t *testing.T) {
 	}
 }
 
-func TestDashboardBundleSpaceScopeHonoured(t *testing.T) {
+func TestDashboardBundleWorkspaceScopeHonoured(t *testing.T) {
 	ctx := context.Background()
 	pool := bundleTestPool(t)
 	accountID, userID := bundleFixture(t, ctx, pool)
 
-	sp := dbstore.NewSpaceStore(pool)
-	space, err := sp.Create(ctx, userID, "Bundle Space", "it-space-"+accountID[:8])
+	sp := dbstore.NewWorkspaceStore(pool)
+	workspace, err := sp.Create(ctx, userID, "Bundle Workspace", "it-workspace-"+accountID[:8])
 	if err != nil {
-		t.Fatalf("create space: %v", err)
+		t.Fatalf("create workspace: %v", err)
 	}
-	// Link the account to the space so ?space= resolves to it.
-	if _, err := pool.Exec(ctx, `UPDATE accounts SET space_id=$1 WHERE id=$2`, space.ID, accountID); err != nil {
-		t.Fatalf("link account to space: %v", err)
+	// Link the account to the workspace so ?workspace= resolves to it.
+	if _, err := pool.Exec(ctx, `UPDATE accounts SET workspace_id=$1 WHERE id=$2`, workspace.ID, accountID); err != nil {
+		t.Fatalf("link account to workspace: %v", err)
 	}
 
 	h := newBundleHandlers(pool)
@@ -251,12 +251,12 @@ func TestDashboardBundleSpaceScopeHonoured(t *testing.T) {
 	if _, ok := body["products"].([]any); !ok {
 		t.Errorf("products not a list: %v", body["products"])
 	}
-	// A foreign space slug must leave landing sections null (never 403).
+	// A foreign workspace slug must leave landing sections null (never 403).
 	// (With an API key there is no session user, so the scope cannot resolve;
 	//  the sections stay null and the bundle still returns 200.)
-	code, body = bundleGet(t, h, raw, "/v1/rest/dashboard-bundle?space=no-such-space")
+	code, body = bundleGet(t, h, raw, "/v1/rest/dashboard-bundle?workspace=no-such-workspace")
 	if code != http.StatusOK {
-		t.Fatalf("foreign-space status = %d, want 200", code)
+		t.Fatalf("foreign-workspace status = %d, want 200", code)
 	}
 	if body["products"] != nil {
 		t.Errorf("products should be null on scope error, got %v", body["products"])

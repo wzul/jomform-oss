@@ -4,9 +4,9 @@ package dbstore
 import "context"
 
 // FormEmailSettings is the per-form receipt/notification email configuration.
-// Empty subject/body means "fall back to the space's email settings"; a
-// customised row (non-empty subject or body) overrides the space defaults for
-// that form's receipts. Defaults mirror the space defaults so existing
+// Empty subject/body means "fall back to the workspace's email settings"; a
+// customised row (non-empty subject or body) overrides the workspace defaults for
+// that form's receipts. Defaults mirror the workspace defaults so existing
 // behaviour is unchanged until a merchant customises.
 type FormEmailSettings struct {
 	FormID              string `json:"form_id"`
@@ -19,7 +19,7 @@ type FormEmailSettings struct {
 }
 
 // FormEmailSettings reads (creating a default row when missing) the per-form
-// email settings. Empty subject/body signal "use the space defaults".
+// email settings. Empty subject/body signal "use the workspace defaults".
 func (s *FormStore) FormEmailSettings(ctx context.Context, formID string) (*FormEmailSettings, error) {
 	st := &FormEmailSettings{FormID: formID, ReceiptEnabled: true}
 	err := s.pool.QueryRow(ctx,

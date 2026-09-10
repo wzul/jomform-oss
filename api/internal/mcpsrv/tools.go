@@ -182,7 +182,7 @@ func (s *Server) registerTools() {
 	}, s.generateForm)
 	addTool(s, &mcp.Tool{
 		Name:        "publish_form",
-		Description: "Publish borang — live di <space>.jomform.com/<slug> atau custom domain. status=private (dengan password) menjadikannya borang ber-kata laluan; status=draft menarik balik.",
+		Description: "Publish borang — live di <workspace>.jomform.com/<slug> atau custom domain. status=private (dengan password) menjadikannya borang ber-kata laluan; status=draft menarik balik.",
 	}, s.publishFormMCP)
 	addTool(s, &mcp.Tool{
 		Name:        "unpublish_form",
@@ -219,11 +219,11 @@ func (s *Server) registerTools() {
 	}, s.getEinvoiceSettings)
 	addTool(s, &mcp.Tool{
 		Name:        "create_webhook",
-		Description: "Daftar endpoint webhook (events: sale.paid|sale.failed|subscription.charged|*). HMAC-signed. form_id pilihan: set = webhook hanya untuk borang itu; kosong = seluruh space/akaun.",
+		Description: "Daftar endpoint webhook (events: sale.paid|sale.failed|subscription.charged|*). HMAC-signed. form_id pilihan: set = webhook hanya untuk borang itu; kosong = seluruh workspace/akaun.",
 	}, s.createWebhookMCP)
 	addTool(s, &mcp.Tool{
 		Name:        "list_webhooks",
-		Description: "Senarai outbound webhooks akaun. form_id pilihan: set = webhook borang itu sahaja; kosong = webhook seluruh space/akaun.",
+		Description: "Senarai outbound webhooks akaun. form_id pilihan: set = webhook borang itu sahaja; kosong = webhook seluruh workspace/akaun.",
 	}, s.listWebhooksMCP)
 	addTool(s, &mcp.Tool{
 		Name:        "delete_webhook",
@@ -256,71 +256,71 @@ func (s *Server) registerTools() {
 		Description: "Padam API key secara PERMANEN (id dari list_api_keys; tiada disable/enable semula — cipta key baru). AMARAN: jika id ialah key yang sedang mengesahkan sesi ini, ia akan memutuskan akses sendiri serta-merta — set confirm=true untuk sahkan; sebaliknya panggilan ditolak.",
 	}, s.revokeAPIKey)
 
-	// ── Spaces (multi-tenant storefronts) ───────────────────────────────────
+	// ── Workspaces (multi-tenant storefronts) ───────────────────────────────────
 	addTool(s, &mcp.Tool{
-		Name:        "list_spaces",
-		Description: "Senarai semua space (storefront) anda — id, nama, slug dan URL.",
-	}, s.listSpaces)
+		Name:        "list_workspaces",
+		Description: "Senarai semua workspace (storefront) anda — id, nama, slug dan URL.",
+	}, s.listWorkspaces)
 	addTool(s, &mcp.Tool{
-		Name:        "create_space",
-		Description: "Cipta space baharu. Slug 3-40 aksara (a-z, 0-9, dash); URL jadi https://<slug>.jomform.com.",
-	}, s.createSpace)
+		Name:        "create_workspace",
+		Description: "Cipta workspace baharu. Slug 3-40 aksara (a-z, 0-9, dash); URL jadi https://<slug>.jomform.com.",
+	}, s.createWorkspace)
 	addTool(s, &mcp.Tool{
-		Name:        "get_space_settings",
-		Description: "Baca tetapan storefront satu space: footer, company_reg, privacy/terms/refund URL, contact, menu.",
-	}, s.getSpaceSettings)
+		Name:        "get_workspace_settings",
+		Description: "Baca tetapan storefront satu workspace: footer, company_reg, privacy/terms/refund URL, contact, menu.",
+	}, s.getWorkspaceSettings)
 	addTool(s, &mcp.Tool{
-		Name:        "set_space_settings",
-		Description: "Set tetapan storefront space: footer_text, company_reg, privacy_url/terms_url/refund_url (mesti https://), contact_phone, contact_address, business_name, menu_json. Omit medan = kekal.",
-	}, s.setSpaceSettings)
+		Name:        "set_workspace_settings",
+		Description: "Set tetapan storefront workspace: footer_text, company_reg, privacy_url/terms_url/refund_url (mesti https://), contact_phone, contact_address, business_name, menu_json. Omit medan = kekal.",
+	}, s.setWorkspaceSettings)
 	// Issue #360: customizable landing page (MCP parity).
 	addTool(s, &mcp.Tool{
-		Name:        "get_space_landing_page",
-		Description: "Baca konfigurasi 'landing page' space (issue #360): hero, subtitle, body, image_url, theme colors, logo, CTA (label + form_slug). Kosong jika tiada landing page ditetapkan.",
-	}, s.getSpaceLandingPage)
+		Name:        "get_workspace_landing_page",
+		Description: "Baca konfigurasi 'landing page' workspace (issue #360): hero, subtitle, body, image_url, theme colors, logo, CTA (label + form_slug). Kosong jika tiada landing page ditetapkan.",
+	}, s.getWorkspaceLandingPage)
 	addTool(s, &mcp.Tool{
-		Name:        "set_space_landing_page",
-		Description: "Set 'landing page' storefront space (issue #360): enabled (true = tunjuk, false/kosong = jatuh ke senarai borang), hero, subtitle, body, image_url, primary_color, background_color, logo_url, ctas ([{label, form_slug}]). Hantar enabled:false untuk pulang ke senarai borang.",
-	}, s.setSpaceLandingPage)
-	// Issue #185: per-space currency + BNM rates (MCP parity).
+		Name:        "set_workspace_landing_page",
+		Description: "Set 'landing page' storefront workspace (issue #360): enabled (true = tunjuk, false/kosong = jatuh ke senarai borang), hero, subtitle, body, image_url, primary_color, background_color, logo_url, ctas ([{label, form_slug}]). Hantar enabled:false untuk pulang ke senarai borang.",
+	}, s.setWorkspaceLandingPage)
+	// Issue #185: per-workspace currency + BNM rates (MCP parity).
 	addTool(s, &mcp.Tool{
 		Name:        "get_currency_rates",
 		Description: "Kadar tukaran wang BNM (Ringgit per unit mata wang asing), dicache harian. Guna untuk paparan/penukaran amaun baharu.",
 	}, s.getCurrencyRates)
 	addTool(s, &mcp.Tool{
-		Name:        "set_space_currency",
-		Description: "Set mata wang space (default MYR). Perubahan terpakai pada produk/jualan baharu; jualan lama kekal mata wang asal (tidak ditukar balik).",
-	}, s.setSpaceCurrency)
-	// Issue #161: space membership + invites (admin only).
+		Name:        "set_workspace_currency",
+		Description: "Set mata wang workspace (default MYR). Perubahan terpakai pada produk/jualan baharu; jualan lama kekal mata wang asal (tidak ditukar balik).",
+	}, s.setWorkspaceCurrency)
+	// Issue #161: workspace membership + invites (admin only).
 	addTool(s, &mcp.Tool{
-		Name:        "invite_space_member",
-		Description: "Jemput ahli ke space (admin sahaja). Jika emel sudah berdaftar, tambah terus sebagai ahli; jika tidak, cipta jemputan menunggu. Role: read_only|manage|admin.",
-	}, s.inviteSpaceMember)
+		Name:        "invite_workspace_member",
+		Description: "Jemput ahli ke workspace (admin sahaja). Jika emel sudah berdaftar, tambah terus sebagai ahli; jika tidak, cipta jemputan menunggu. Role: read_only|manage|admin.",
+	}, s.inviteWorkspaceMember)
 	addTool(s, &mcp.Tool{
-		Name:        "list_space_members",
-		Description: "Senarai ahli space + peranan (admin sahaja).",
-	}, s.listSpaceMembers)
+		Name:        "list_workspace_members",
+		Description: "Senarai ahli workspace + peranan (admin sahaja).",
+	}, s.listWorkspaceMembers)
 	addTool(s, &mcp.Tool{
-		Name:        "update_space_member_role",
-		Description: "Tukar peranan ahli space (admin sahaja). Role: read_only|manage|admin.",
-	}, s.updateSpaceMemberRole)
+		Name:        "update_workspace_member_role",
+		Description: "Tukar peranan ahli workspace (admin sahaja). Role: read_only|manage|admin.",
+	}, s.updateWorkspaceMemberRole)
 	addTool(s, &mcp.Tool{
-		Name:        "remove_space_member",
-		Description: "Buang ahli dari space (admin sahaja). Pemilik tidak boleh dibuang.",
-	}, s.removeSpaceMember)
+		Name:        "remove_workspace_member",
+		Description: "Buang ahli dari workspace (admin sahaja). Pemilik tidak boleh dibuang.",
+	}, s.removeWorkspaceMember)
 	addTool(s, &mcp.Tool{
-		Name:        "list_space_invites",
-		Description: "Senarai jemputan menunggu untuk space (admin sahaja).",
-	}, s.listSpaceInvites)
+		Name:        "list_workspace_invites",
+		Description: "Senarai jemputan menunggu untuk workspace (admin sahaja).",
+	}, s.listWorkspaceInvites)
 	addTool(s, &mcp.Tool{
-		Name:        "cancel_space_invite",
-		Description: "Batal jemputan menunggu untuk space (admin sahaja).",
-	}, s.cancelSpaceInvite)
-	// Issue #164: default space (multi-space login picker) parity.
+		Name:        "cancel_workspace_invite",
+		Description: "Batal jemputan menunggu untuk workspace (admin sahaja).",
+	}, s.cancelWorkspaceInvite)
+	// Issue #164: default workspace (multi-workspace login picker) parity.
 	addTool(s, &mcp.Tool{
-		Name:        "set_default_space",
-		Description: "Set space lalai anda (space yang anda masuk terus selepas log masuk, tanpa prompt). space_id kosong = buang default. Space mesti milik anda.",
-	}, s.setDefaultSpace)
+		Name:        "set_default_workspace",
+		Description: "Set workspace lalai anda (workspace yang anda masuk terus selepas log masuk, tanpa prompt). workspace_id kosong = buang default. Workspace mesti milik anda.",
+	}, s.setDefaultWorkspace)
 	// Issue #181: optional profile phone number parity.
 	addTool(s, &mcp.Tool{
 		Name:        "update_profile_phone",
@@ -332,24 +332,24 @@ func (s *Server) registerTools() {
 		Description: "Set zona waktu IANA pilihan pada profil anda (kosong = Auto, ikut pelayar/PC). Contoh: Asia/Kuala_Lumpur, UTC.",
 	}, s.updateProfileTimezone)
 
-	// ── Parity: per-space email templates (issue #107) ────────────────────
+	// ── Parity: per-workspace email templates (issue #107) ────────────────────
 	addTool(s, &mcp.Tool{
 		Name:        "get_email_settings",
-		Description: "Baca tetapan emel satu space: subjek/badan resit (placeholder), hantar resit, notifikasi merchant, HTML.",
+		Description: "Baca tetapan emel satu workspace: subjek/badan resit (placeholder), hantar resit, notifikasi merchant, HTML.",
 	}, s.getEmailSettings)
 	addTool(s, &mcp.Tool{
 		Name:        "set_email_settings",
-		Description: "Set tetapan emel space: receipt_subject, receipt_body ({{ref_code}}, {{amount}}, {{items}}, {{form_url}}, {{buyer_name}}, {{date}}), receipt_enabled, notify_merchant, merchant_notify_email, html. Omit medan = kekal.",
+		Description: "Set tetapan emel workspace: receipt_subject, receipt_body ({{ref_code}}, {{amount}}, {{items}}, {{form_url}}, {{buyer_name}}, {{date}}), receipt_enabled, notify_merchant, merchant_notify_email, html. Omit medan = kekal.",
 	}, s.setEmailSettings)
 
 	// ── Parity: per-form notification email (issue #177) ─────────────────
 	addTool(s, &mcp.Tool{
 		Name:        "get_form_email_settings",
-		Description: "Baca tetapan emel notifikasi SATU borang (issue #177): subjek/badan resit, hantar resit, notifikasi merchant, HTML. Kosong = guna lalai space.",
+		Description: "Baca tetapan emel notifikasi SATU borang (issue #177): subjek/badan resit, hantar resit, notifikasi merchant, HTML. Kosong = guna lalai workspace.",
 	}, s.getFormEmailSettings)
 	addTool(s, &mcp.Tool{
 		Name:        "set_form_email_settings",
-		Description: "Set tetapan emel notifikasi SATU borang (issue #177): receipt_subject, receipt_body, receipt_enabled, notify_merchant, merchant_notify_email, html. Kosong subjek/badan = guna lalai space. Omit medan = kekal.",
+		Description: "Set tetapan emel notifikasi SATU borang (issue #177): receipt_subject, receipt_body, receipt_enabled, notify_merchant, merchant_notify_email, html. Kosong subjek/badan = guna lalai workspace. Omit medan = kekal.",
 	}, s.setFormEmailSettings)
 
 	// ── Parity: per-form notification rules (issue #193) ────────────────
@@ -389,18 +389,18 @@ func (s *Server) registerTools() {
 		Description: "Set imej Open Graph (og:image) borang (issue #411): URL imej tersuai (mesti https://) untuk pratonton sosial bila borang dikongsi. Kosong = guna lalai janaan.",
 	}, s.setFormOGImage)
 
-	// ── Parity: per-space hosted legal pages (issue #184) ────────────────
+	// ── Parity: per-workspace hosted legal pages (issue #184) ────────────────
 	addTool(s, &mcp.Tool{
 		Name:        "generate_legal_page",
-		Description: "Jana draf halaman undang-undang (privacy|terms|refund) untuk space melalui LLM (deepseek-v4-flash) dengan template yang diisi butiran perniagaan. Pulangkan draf untuk semakan — belum disimpan sehingga set_legal_page dipanggil.",
+		Description: "Jana draf halaman undang-undang (privacy|terms|refund) untuk workspace melalui LLM (deepseek-v4-flash) dengan template yang diisi butiran perniagaan. Pulangkan draf untuk semakan — belum disimpan sehingga set_legal_page dipanggil.",
 	}, s.generateLegalPage)
 	addTool(s, &mcp.Tool{
 		Name:        "get_legal_page",
-		Description: "Baca satu halaman undang-undang space (privacy|terms|refund): mode (auto/manual) + kandungan.",
+		Description: "Baca satu halaman undang-undang workspace (privacy|terms|refund): mode (auto/manual) + kandungan.",
 	}, s.getLegalPage)
 	addTool(s, &mcp.Tool{
 		Name:        "set_legal_page",
-		Description: "Simpan kandungan halaman undang-undang space (privacy|terms|refund) dengan mode auto|manual. Kandungan dipaparkan di {space}.jomform.com/privacy|terms|refund.",
+		Description: "Simpan kandungan halaman undang-undang workspace (privacy|terms|refund) dengan mode auto|manual. Kandungan dipaparkan di {workspace}.jomform.com/privacy|terms|refund.",
 	}, s.setLegalPage)
 
 	// ── Parity: event tracking (issue #92) ────────────────────────────────
@@ -454,7 +454,7 @@ func (s *Server) registerTools() {
 	// immediately.
 	addTool(s, &mcp.Tool{
 		Name:        "upload_media",
-		Description: "Muat naik media/aset ke space anda (issue #363): kind='image' (png/jpeg/webp/gif — dioptimumkan, strip EXIF, terus boleh guna; png/jpeg/webp dapat saiz thumbnail/medium/full), kind='asset' (css/js/html/svg/woff2 — disimpan asli, dikaji sebelum dipapar) atau kind='pdf' (disimpan asli, terus boleh guna). hantar content fail sebagai base64 di 'data'. Pulangkan URL untuk diguna sebagai image_url/logo_url landing atau <link>/<script> landing page.",
+		Description: "Muat naik media/aset ke workspace anda (issue #363): kind='image' (png/jpeg/webp/gif — dioptimumkan, strip EXIF, terus boleh guna; png/jpeg/webp dapat saiz thumbnail/medium/full), kind='asset' (css/js/html/svg/woff2 — disimpan asli, dikaji sebelum dipapar) atau kind='pdf' (disimpan asli, terus boleh guna). hantar content fail sebagai base64 di 'data'. Pulangkan URL untuk diguna sebagai image_url/logo_url landing atau <link>/<script> landing page.",
 	}, s.uploadMedia)
 
 	// ── Parity: form template gallery (issue #174) ────────────────────────
@@ -478,27 +478,27 @@ func (s *Server) registerTools() {
 	// ── Super-admin: platform-wide monitoring (issue #386) ─────────────
 	// These tools are gated on the super-admin role (#385) and are read-only
 	// by default. They let the platform owner's AI agent monitor usage across
-	// ALL spaces once JomForm is public. Destructive admin writes are separate
+	// ALL workspaces once JomForm is public. Destructive admin writes are separate
 	// and explicit (none exist yet). Every call is audited.
 	addTool(s, &mcp.Tool{
-		Name:        "admin_list_spaces",
-		Description: "Senarai SEMUA space (storefront) platform: id, nama, slug, emel pemilik, tarikh cipta, bilangan borang + produk. Super-admin sahaja; read-only; diaudit.",
-	}, s.adminListSpaces)
+		Name:        "admin_list_workspaces",
+		Description: "Senarai SEMUA workspace (storefront) platform: id, nama, slug, emel pemilik, tarikh cipta, bilangan borang + produk. Super-admin sahaja; read-only; diaudit.",
+	}, s.adminListWorkspaces)
 	addTool(s, &mcp.Tool{
 		Name:        "admin_media_usage",
-		Description: "Penggunaan storan media per space (bait) berbanding kuota 1GB setiap space. Super-admin sahaja; read-only; diaudit.",
+		Description: "Penggunaan storan media per workspace (bait) berbanding kuota 1GB setiap workspace. Super-admin sahaja; read-only; diaudit.",
 	}, s.adminMediaUsage)
 	addTool(s, &mcp.Tool{
 		Name:        "admin_list_sales",
-		Description: "Senarai jualan merentas SEMUA space, boleh tapis (date_from/date_to, space_id, status). Super-admin sahaja; read-only; diaudit.",
+		Description: "Senarai jualan merentas SEMUA workspace, boleh tapis (date_from/date_to, workspace_id, status). Super-admin sahaja; read-only; diaudit.",
 	}, s.adminListSales)
 	addTool(s, &mcp.Tool{
 		Name:        "admin_spam_queue",
-		Description: "Senarai semua item spam (submission + jualan) merentas semua space. Super-admin sahaja; read-only; diaudit.",
+		Description: "Senarai semua item spam (submission + jualan) merentas semua workspace. Super-admin sahaja; read-only; diaudit.",
 	}, s.adminSpamQueue)
 	addTool(s, &mcp.Tool{
 		Name:        "admin_email_deliveries",
-		Description: "Status penghantaran emel merentas SEMUA space (delivered/bounce/complaint/open/click), boleh tapis sale_ref/event_type/form_id. Super-admin sahaja; read-only; diaudit.",
+		Description: "Status penghantaran emel merentas SEMUA workspace (delivered/bounce/complaint/open/click), boleh tapis sale_ref/event_type/form_id. Super-admin sahaja; read-only; diaudit.",
 	}, s.adminEmailDeliveries)
 	addTool(s, &mcp.Tool{
 		Name:        "admin_system_health",
@@ -508,11 +508,11 @@ func (s *Server) registerTools() {
 	// ── Parity: analytics (issue #396) ────────────────────────────────────
 	addTool(s, &mcp.Tool{
 		Name:        "get_form_analytics",
-		Description: "Analitik per-borang: bilangan submission, paid/confirmed/failed/pending, dan hasil (RM). Merentas semua space anda. Read-only.",
+		Description: "Analitik per-borang: bilangan submission, paid/confirmed/failed/pending, dan hasil (RM). Merentas semua workspace anda. Read-only.",
 	}, s.formAnalytics)
 	addTool(s, &mcp.Tool{
 		Name:        "get_product_analytics",
-		Description: "Analitik per-produk: unit terjual (paid), hasil (RM). Merentas semua space anda. Read-only.",
+		Description: "Analitik per-produk: unit terjual (paid), hasil (RM). Merentas semua workspace anda. Read-only.",
 	}, s.productAnalytics)
 
 	// ── Parity: custom domains (issue #396) ──────────────────────────────
@@ -666,7 +666,7 @@ func (s *Server) registerTools() {
 }
 
 // helper: require a write-capable key. Issue #307: the resolved account
-// honours the per-call scope (space_id/account_id or all the user's spaces).
+// honours the per-call scope (workspace_id/account_id or all the user's workspaces).
 func (s *Server) accountAndScope(ctx context.Context, write bool) (accountID string, err error) {
 	id := IdentityFromContext(ctx)
 	if id == nil {
@@ -677,7 +677,7 @@ func (s *Server) accountAndScope(ctx context.Context, write bool) (accountID str
 	}
 	// Per-call scope: if an explicit single account is requested, use it;
 	// otherwise for account-and-write tools we resolve to the caller's first
-	// accessible account by default (a space_id is honoured too).
+	// accessible account by default (a workspace_id is honoured too).
 	if cs := callScopeFrom(ctx); cs != nil {
 		if cs.ExplicitAccountID != "" {
 			return cs.ExplicitAccountID, nil
@@ -690,29 +690,29 @@ func (s *Server) accountAndScope(ctx context.Context, write bool) (accountID str
 	return id.AccountID, nil
 }
 
-// accountAndRole resolves the account id + the caller's role in the space
+// accountAndRole resolves the account id + the caller's role in the workspace
 // that owns it (issue #162). It honours the per-call scope (issue #307): when
-// the call names a space/account, the role is that space's role; otherwise the
+// the call names a workspace/account, the role is that workspace's role; otherwise the
 // caller's first accessible account's role is used. role is "" when the caller
-// is the owner (admin) or has no linked space.
+// is the owner (admin) or has no linked workspace.
 func (s *Server) accountAndRole(ctx context.Context) (accountID, role string, err error) {
 	accountID, err = s.accountAndScope(ctx, false)
 	if err != nil {
 		return "", "", err
 	}
-	if s.deps.Spaces == nil || s.deps.SpaceMembers == nil {
+	if s.deps.Workspaces == nil || s.deps.WorkspaceMembers == nil {
 		return accountID, "", nil
 	}
 	userID := s.userIDFor(ctx)
 	if userID == "" {
 		return "", "", fmt.Errorf("token tiada atau tidak sah")
 	}
-	// If the call scoped to an explicit space, use that space's role (already
+	// If the call scoped to an explicit workspace, use that workspace's role (already
 	// resolved by resolveScope — issue #307).
-	if cs := callScopeFrom(ctx); cs != nil && cs.SpaceID != "" {
+	if cs := callScopeFrom(ctx); cs != nil && cs.WorkspaceID != "" {
 		return accountID, cs.Role, nil
 	}
-	role, err = s.deps.Spaces.RoleByAccount(ctx, accountID, userID)
+	role, err = s.deps.Workspaces.RoleByAccount(ctx, accountID, userID)
 	if err != nil {
 		return "", "", fmt.Errorf("db: %w", err)
 	}
@@ -740,7 +740,7 @@ func (s *Server) requireAdminRole(ctx context.Context) (accountID string, err er
 		return "", err
 	}
 	if role != "" && role != dbstore.RoleAdmin {
-		return "", fmt.Errorf("perlu admin space")
+		return "", fmt.Errorf("perlu admin workspace")
 	}
 	return accountID, nil
 }

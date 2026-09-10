@@ -1,8 +1,8 @@
-// Per-space hosted legal pages (issue #184): privacy / terms / refund.
+// Per-workspace hosted legal pages (issue #184): privacy / terms / refund.
 // The merchant can auto-generate a draft via the LLM (deepseek-v4-flash) with
 // a prompt template filled with their business details, preview/edit it, then
 // save. They can also write their own manually. The stored content is rendered
-// on the public pages ({space}.jomform.com/privacy, /terms, /refund).
+// on the public pages ({workspace}.jomform.com/privacy, /terms, /refund).
 package httpapi
 
 import (
@@ -23,14 +23,14 @@ func validLegalPageType(t string) bool {
 	return t == dbstore.LegalPagePrivacy || t == dbstore.LegalPageTerms || t == dbstore.LegalPageRefund
 }
 
-// getSpaceLegalPages: GET /v1/spaces/{id}/legal — returns all three legal
+// getWorkspaceLegalPages: GET /v1/workspaces/{id}/legal — returns all three legal
 // pages (privacy/terms/refund) with their mode and content.
-func (h *RESTHandlers) getSpaceLegalPages(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
-	s, _, ok := h.spaceAccessByID(w, r)
+func (h *RESTHandlers) getWorkspaceLegalPages(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	s, _, ok := h.workspaceAccessByID(w, r)
 	if !ok {
 		return
 	}
-	pages, err := h.Spaces.LegalPages(r.Context(), s.ID)
+	pages, err := h.Workspaces.LegalPages(r.Context(), s.ID)
 	if err != nil {
 		respondErr(w, r, err)
 		return
@@ -38,13 +38,13 @@ func (h *RESTHandlers) getSpaceLegalPages(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, pages)
 }
 
-// generateSpaceLegalPage: POST /v1/spaces/{id}/legal/generate
+// generateWorkspaceLegalPage: POST /v1/workspaces/{id}/legal/generate
 // {type, business_name, registration_no, contact, address, data_collected,
 //  payment_terms, refund_terms, website, effective_date}
 // Calls the LLM with a prompt template filled with the merchant's business
 // details and returns the generated draft for review (not yet saved).
-func (h *RESTHandlers) generateSpaceLegalPage(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
-	_, role, ok := h.spaceAccessByID(w, r)
+func (h *RESTHandlers) generateWorkspaceLegalPage(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	_, role, ok := h.workspaceAccessByID(w, r)
 	if !ok {
 		return
 	}
@@ -98,10 +98,10 @@ func (h *RESTHandlers) generateSpaceLegalPage(w http.ResponseWriter, r *http.Req
 	})
 }
 
-// saveSpaceLegalPage: PUT /v1/spaces/{id}/legal
+// saveWorkspaceLegalPage: PUT /v1/workspaces/{id}/legal
 // {type, content, mode: auto|manual} — stores the page content.
-func (h *RESTHandlers) saveSpaceLegalPage(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
-	s, role, ok := h.spaceAccessByID(w, r)
+func (h *RESTHandlers) saveWorkspaceLegalPage(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	s, role, ok := h.workspaceAccessByID(w, r)
 	if !ok {
 		return
 	}
@@ -126,8 +126,8 @@ func (h *RESTHandlers) saveSpaceLegalPage(w http.ResponseWriter, r *http.Request
 		writeErr(w, http.StatusBadRequest, "mode mesti auto|manual")
 		return
 	}
-	if err := h.Spaces.SaveLegalPage(r.Context(), &dbstore.LegalPage{
-		SpaceID:  s.ID,
+	if err := h.Workspaces.SaveLegalPage(r.Context(), &dbstore.LegalPage{
+		WorkspaceID:  s.ID,
 		PageType: in.Type,
 		Mode:     in.Mode,
 		Content:  in.Content,
@@ -140,8 +140,8 @@ func (h *RESTHandlers) saveSpaceLegalPage(w http.ResponseWriter, r *http.Request
 
 // ── Public legal pages ───────────────────────────────────────────────────────
 
-// handlePublicLegalPage renders a space's hosted legal page
-// ({space}.jomform.com/privacy, /terms, /refund). 404 when the space is
+// handlePublicLegalPage renders a workspace's hosted legal page
+// ({workspace}.jomform.com/privacy, /terms, /refund). 404 when the workspace is
 // unknown or the page has no stored content.
 func (h *PublicHandlers) handlePublicLegalPage(w http.ResponseWriter, r *http.Request) {
 	sub := accountSubdomain(r.Host)
@@ -155,13 +155,13 @@ func (h *PublicHandlers) handlePublicLegalPage(w http.ResponseWriter, r *http.Re
 		http.NotFound(w, r)
 		return
 	}
-	spaceID, err := h.Spaces.IDBySlug(r.Context(), sub)
-	if err != nil || spaceID == "" {
-		// Unknown space (or a lookup error) → 404, never 500.
+	workspaceID, err := h.Workspaces.IDBySlug(r.Context(), sub)
+	if err != nil || workspaceID == "" {
+		// Unknown workspace (or a lookup error) → 404, never 500.
 		http.NotFound(w, r)
 		return
 	}
-	page, err := h.Spaces.LegalPage(r.Context(), spaceID, pageType)
+	page, err := h.Workspaces.LegalPage(r.Context(), workspaceID, pageType)
 	if err != nil {
 		// No stored content for this page → 404, not 500. Only genuine
 		// internal errors (e.g. DB down) should surface as 500.
@@ -183,7 +183,7 @@ func (h *PublicHandlers) handlePublicLegalPage(w http.ResponseWriter, r *http.Re
 
 // writeLegalPageHTML renders a hosted legal page. The content is merchant
 // text/HTML; it is escaped so no scripts can run (no XSS on the public page).
-func writeLegalPageHTML(w http.ResponseWriter, title, spaceSlug, content string) {
+func writeLegalPageHTML(w http.ResponseWriter, title, workspaceSlug, content string) {
 	esc := html.EscapeString(content)
 	// Render simple line breaks as paragraphs so plain-text drafts read well.
 	paras := strings.Split(esc, "\n\n")
@@ -205,5 +205,5 @@ p{font-size:14px;line-height:1.7;color:#374151;margin:0 0 14px}
 <h1>%s</h1><p class="s">%s.jomform.com</p>
 %s
 <p class="f">Dikuasakan oleh JomForm</p></div></body></html>`,
-		title, spaceSlug, title, spaceSlug, body.String())
+		title, workspaceSlug, title, workspaceSlug, body.String())
 }

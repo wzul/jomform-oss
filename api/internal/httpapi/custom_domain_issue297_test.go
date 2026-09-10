@@ -1,9 +1,9 @@
 package httpapi
 
 // Issue #297 regression integration tests: the GET /{slug} form-delivery path
-// (handleSpaceRootForm) previously resolved ONLY space subdomains and 404'd on
+// (handleWorkspaceRootForm) previously resolved ONLY workspace subdomains and 404'd on
 // a verified custom domain, even though the form existed + was published in the
-// owning space. These tests verify a verified custom domain serves its forms
+// owning workspace. These tests verify a verified custom domain serves its forms
 // end-to-end and that resolution is consistent across ALL buyer-facing routes:
 //   - GET  /{slug}          render           (was 404 — the bug)
 //   - POST /{slug}/order    submit           (already worked)
@@ -26,15 +26,15 @@ import (
 	"github.com/wzul/jomform/api/internal/dbstore"
 )
 
-// verifiedCustomDomainFixture seeds a user + space + account + published form,
+// verifiedCustomDomainFixture seeds a user + workspace + account + published form,
 // claims + verifies a custom domain for that account, and returns the handlers,
-// the domain, the space slug, the account slug, and the form slug.
+// the domain, the workspace slug, the account slug, and the form slug.
 func verifiedCustomDomainFixture(t *testing.T) (*PublicHandlers, string, string, string, string) {
 	t.Helper()
 	ctx := context.Background()
 	pool := bundleTestPool(t)
 
-	var userID, spaceSlug, accountID, accountSlug string
+	var userID, workspaceSlug, accountID, accountSlug string
 	if err := pool.QueryRow(ctx,
 		`INSERT INTO users (email, password_hash)
 		 VALUES ('it-' || md5(random()::text) || '@example.test', 'it')
@@ -42,16 +42,16 @@ func verifiedCustomDomainFixture(t *testing.T) (*PublicHandlers, string, string,
 		t.Fatalf("create user: %v", err)
 	}
 	if err := pool.QueryRow(ctx,
-		`INSERT INTO spaces (owner_user_id, name, slug)
-		 VALUES ($1, 'it-space-' || md5(random()::text), 'it-' || md5(random()::text))
-		 RETURNING slug`, userID).Scan(&spaceSlug); err != nil {
-		t.Fatalf("create space: %v", err)
+		`INSERT INTO workspaces (owner_user_id, name, slug)
+		 VALUES ($1, 'it-workspace-' || md5(random()::text), 'it-' || md5(random()::text))
+		 RETURNING slug`, userID).Scan(&workspaceSlug); err != nil {
+		t.Fatalf("create workspace: %v", err)
 	}
 	if err := pool.QueryRow(ctx,
-		`INSERT INTO accounts (owner_user_id, name, slug, space_id)
+		`INSERT INTO accounts (owner_user_id, name, slug, workspace_id)
 		 SELECT $1, 'it-acc-' || md5(random()::text), 'it-' || md5(random()::text), id
-		 FROM spaces WHERE slug = $2
-		 RETURNING id, slug`, userID, spaceSlug).Scan(&accountID, &accountSlug); err != nil {
+		 FROM workspaces WHERE slug = $2
+		 RETURNING id, slug`, userID, workspaceSlug).Scan(&accountID, &accountSlug); err != nil {
 		t.Fatalf("create account: %v", err)
 	}
 
@@ -79,7 +79,7 @@ func verifiedCustomDomainFixture(t *testing.T) (*PublicHandlers, string, string,
 		Accounts:    dbstore.NewAccountStore(pool),
 		Domains:     dbstore.NewDomainStore(pool),
 		Products:    dbstore.NewProductStore(pool),
-		Spaces:      dbstore.NewSpaceStore(pool),
+		Workspaces:      dbstore.NewWorkspaceStore(pool),
 		Submissions: dbstore.NewSubmissionStore(pool),
 		BaseURL:     "http://localhost:8080",
 	}
@@ -91,7 +91,7 @@ func verifiedCustomDomainFixture(t *testing.T) (*PublicHandlers, string, string,
 	if err := h.Domains.MarkVerified(ctx, accountID, domain); err != nil {
 		t.Fatalf("mark verified: %v", err)
 	}
-	return h, domain, spaceSlug, accountSlug, formSlug
+	return h, domain, workspaceSlug, accountSlug, formSlug
 }
 
 // postForm submits the given method/body to a path on a host through the mux.
@@ -110,7 +110,7 @@ func postForm(t *testing.T, h *PublicHandlers, host, path, body string) *httptes
 // TestCustomDomainRootFormServesRender: GET /{slug} on a verified custom domain
 // must serve the published form (the issue #297 regression — previously 404).
 func TestCustomDomainRootFormServesRender(t *testing.T) {
-	h, domain, spaceSlug, _, formSlug := verifiedCustomDomainFixture(t)
+	h, domain, workspaceSlug, _, formSlug := verifiedCustomDomainFixture(t)
 
 	// The custom domain renders the published form (the bug: was 404).
 	rec := publicServe(t, h, domain, "/"+formSlug)
@@ -121,10 +121,10 @@ func TestCustomDomainRootFormServesRender(t *testing.T) {
 		t.Fatal("custom domain render served an empty body")
 	}
 
-	// The matching space subdomain still serves the same form (unchanged).
-	rec = publicServe(t, h, spaceSlug+".jomform.com", "/"+formSlug)
+	// The matching workspace subdomain still serves the same form (unchanged).
+	rec = publicServe(t, h, workspaceSlug+".jomform.com", "/"+formSlug)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("GET /%s on space subdomain status = %d, want 200 (body %s)", formSlug, rec.Code, rec.Body.String())
+		t.Fatalf("GET /%s on workspace subdomain status = %d, want 200 (body %s)", formSlug, rec.Code, rec.Body.String())
 	}
 
 	// Bare apex (no subdomain, no custom domain) still 404s (issue #77).
@@ -135,7 +135,7 @@ func TestCustomDomainRootFormServesRender(t *testing.T) {
 }
 
 // TestCustomDomainSubmit: POST /{slug}/order through a verified custom domain
-// must accept the submission exactly as it does on the space subdomain.
+// must accept the submission exactly as it does on the workspace subdomain.
 func TestCustomDomainSubmit(t *testing.T) {
 	h, domain, _, _, formSlug := verifiedCustomDomainFixture(t)
 
@@ -230,7 +230,7 @@ func TestCustomDomainPrivateUnlock(t *testing.T) {
 }
 
 // TestCustomDomainSitemap: a verified custom domain's sitemap.xml lists the
-// space's published forms (issue #276).
+// workspace's published forms (issue #276).
 func TestCustomDomainSitemap(t *testing.T) {
 	h, domain, _, _, formSlug := verifiedCustomDomainFixture(t)
 
@@ -244,7 +244,7 @@ func TestCustomDomainSitemap(t *testing.T) {
 }
 
 // TestCustomDomainStorefrontRoot: a verified custom domain's root "/" serves
-// the space storefront list including the form slug (issue #286).
+// the workspace storefront list including the form slug (issue #286).
 func TestCustomDomainStorefrontRoot(t *testing.T) {
 	h, domain, _, _, formSlug := verifiedCustomDomainFixture(t)
 

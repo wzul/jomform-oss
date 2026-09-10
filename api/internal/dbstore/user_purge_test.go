@@ -2,7 +2,7 @@ package dbstore
 
 // Integration test for the unverified-account purge (issue #190):
 // DeleteUnverifiedOlderThan removes only unverified users older than the
-// cutoff, cleans up their auto-provisioned account/space, and never touches
+// cutoff, cleans up their auto-provisioned account/workspace, and never touches
 // verified accounts. Skipped unless JOMFORM_TEST_DATABASE_URL is set;
 // migrations are applied first, mirroring the production boot path.
 

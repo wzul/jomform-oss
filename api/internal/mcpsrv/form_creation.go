@@ -57,7 +57,7 @@ func (s *Server) setFormTheme(
 	if in.FormID == "" {
 		return nil, nil, errors.New("form_id wajib")
 	}
-	// Issue #307: resolve + RBAC-gate the owning account across the user's spaces.
+	// Issue #307: resolve + RBAC-gate the owning account across the user's workspaces.
 	acc, err := s.requireFormWrite(ctx, in.FormID)
 	if err != nil {
 		return nil, nil, err
@@ -135,7 +135,7 @@ func (s *Server) registerFormFields(
 	if in.FormID == "" {
 		return nil, nil, errors.New("form_id wajib")
 	}
-	// Issue #307: resolve + RBAC-gate the owning account across the user's spaces.
+	// Issue #307: resolve + RBAC-gate the owning account across the user's workspaces.
 	acc, err := s.requireFormWrite(ctx, in.FormID)
 	if err != nil {
 		return nil, nil, err

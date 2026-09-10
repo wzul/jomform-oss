@@ -219,11 +219,11 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 		"Ls":   ls,
 		// Issue #411: Open Graph + Twitter meta for social sharing.
 		"OGMeta": h.formOGMeta(r, f),
-		// Issue #183: optional per-space footer.
-		"Footer": h.spaceFooter(r.Context(), f),
+		// Issue #183: optional per-workspace footer.
+		"Footer": h.workspaceFooter(r.Context(), f),
 		// Issue #244: hidden honeypot + render-timestamp fields.
 		"AntiSpam": template.HTML(antiSpamRenderFields()),
-		// Issue #276: noindex on jomform.com subdomains / when the space opts
+		// Issue #276: noindex on jomform.com subdomains / when the workspace opts
 		// out of indexing.
 		"NoIndex": h.formNoIndex(r, f),
 	}); err != nil {
@@ -303,7 +303,7 @@ var blockTmpl = template.Must(template.New("blocks").
     border-color:#4f46e5; background:#4f46e5 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill='none' stroke='%23fff' stroke-width='3' stroke-linecap='round' stroke-linejoin='round' d='M5 10l3 3 6-6'/%3E%3C/svg%3E") center/14px no-repeat;
   }
   .pname { flex:1; font-weight:500; }
-  .price { color:#4f46e5; font-weight:600; font-size:14px; white-space:nowrap;
+  .price { color:#4f46e5; font-weight:600; font-size:14px; white-workspace:nowrap;
            margin-left:auto; text-align:right; }
   /* Issue #153: variation selector inside a product block. */
   .varwrap { padding:0 14px 12px; }
@@ -334,7 +334,7 @@ var blockTmpl = template.Must(template.New("blocks").
   button { width:100%; padding:12px; border:0; border-radius:10px; font-size:15px; font-weight:600;
            color:#fff; cursor:pointer; margin-top:12px; background:#5e6ad2; }
   button:hover { background:#828fff; }
-  /* Issue #183: optional per-space footer. */
+  /* Issue #183: optional per-workspace footer. */
   .jf-footer { max-width:480px; width:100%; margin:16px auto 0; padding:0 8px;
                color:#6b7280; font-size:12px; line-height:1.6; text-align:center;
                align-self:center; }
@@ -670,11 +670,11 @@ func (h *PublicHandlers) renderResponseForm(w http.ResponseWriter, r *http.Reque
 		"Ls":   ls,
 		// Issue #411: Open Graph + Twitter meta for social sharing.
 		"OGMeta": h.formOGMeta(r, f),
-		// Issue #183: optional per-space footer.
-		"Footer": h.spaceFooter(r.Context(), f),
+		// Issue #183: optional per-workspace footer.
+		"Footer": h.workspaceFooter(r.Context(), f),
 		// Issue #244: hidden honeypot + render-timestamp fields.
 		"AntiSpam": template.HTML(antiSpamRenderFields()),
-		// Issue #276: noindex on jomform.com subdomains / when the space opts
+		// Issue #276: noindex on jomform.com subdomains / when the workspace opts
 		// out of indexing.
 		"NoIndex": h.formNoIndex(r, f),
 	}); err != nil {
@@ -730,7 +730,7 @@ var responseTmpl = template.Must(template.New("response").
   button { width:100%; padding:12px; border:0; border-radius:10px; font-size:15px; font-weight:600;
            color:#fff; cursor:pointer; margin-top:12px; background:#5e6ad2; }
   button:hover { background:#828fff; }
-  /* Issue #183: optional per-space footer. */
+  /* Issue #183: optional per-workspace footer. */
   .jf-footer { max-width:480px; width:100%; margin:16px auto 0; padding:0 8px;
                color:#6b7280; font-size:12px; line-height:1.6; text-align:center;
                align-self:center; }

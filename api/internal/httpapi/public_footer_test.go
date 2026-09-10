@@ -8,8 +8,8 @@ import (
 )
 
 // Issue #80: public forms must render NO footer line by default — neither the
-// "Dikuasakan oleh JomForm" default nor any space footer. Issue #183 restores
-// an OPTIONAL per-space footer: it is rendered ONLY when the merchant sets at
+// "Dikuasakan oleh JomForm" default nor any workspace footer. Issue #183 restores
+// an OPTIONAL per-workspace footer: it is rendered ONLY when the merchant sets at
 // least one footer field. These tests render the public form templates directly
 // and assert (a) no footer content survives when nothing is set, and (b) the
 // footer renders when fields are set.

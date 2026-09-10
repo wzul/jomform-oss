@@ -32,9 +32,9 @@ type RESTHandlers struct {
 	Pay            *payments.Service
 	Webhooks       *dbstore.WebhookStore
 	SystemSettings *dbstore.SystemSettingStore
-	Spaces         *dbstore.SpaceStore
-	// Issue #161: space membership + invites.
-	SpaceMembers   *dbstore.SpaceMemberStore
+	Workspaces         *dbstore.WorkspaceStore
+	// Issue #161: workspace membership + invites.
+	WorkspaceMembers   *dbstore.WorkspaceMemberStore
 	Passkeys       *dbstore.PasskeyStore
 	// Issue #161: Mailer delivers the invite email (nil in bare-mode tests).
 	Mailer VerifyMailer
@@ -90,7 +90,7 @@ type RESTHandlers struct {
 	// 'pending' and is not served until a scan flips it (fail-closed).
 	AssetQueue *emailqueue.Queue
 
-	// Issue #184: LLM client for auto-generating per-space legal pages.
+	// Issue #184: LLM client for auto-generating per-workspace legal pages.
 	// Nil in bare-mode tests; the generate endpoint returns 503.
 	LLM interface {
 		GenerateLegalPage(ctx context.Context, pageType string, d llm.BusinessDetails) (string, error)
@@ -178,23 +178,23 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /v1/auth/passkeys/login/finish", middleware.RateLimit(http.HandlerFunc(h.passkeyLoginFinish)))
 	mux.Handle("GET /v1/auth/passkeys", h.authed(h.passkeyList))
 	mux.Handle("DELETE /v1/auth/passkeys/{id}", h.authed(h.passkeyDelete))
-	mux.Handle("GET /v1/spaces", h.authed(h.listSpaces))
-	mux.Handle("POST /v1/spaces", h.authed(h.createSpace))
-	mux.Handle("GET /v1/spaces/{id}/settings", h.authed(h.getSpaceSettings))
-	mux.Handle("PUT /v1/spaces/{id}/settings", h.authed(h.saveSpaceSettings))
-	mux.Handle("GET /v1/spaces/{id}/email-settings", h.authed(h.getSpaceEmailSettings))
-	mux.Handle("PUT /v1/spaces/{id}/email-settings", h.authed(h.saveSpaceEmailSettings))
-	// Issue #184: per-space hosted legal pages (privacy/terms/refund).
-	mux.Handle("GET /v1/spaces/{id}/legal", h.authed(h.getSpaceLegalPages))
-	mux.Handle("POST /v1/spaces/{id}/legal/generate", h.authed(h.generateSpaceLegalPage))
-	mux.Handle("PUT /v1/spaces/{id}/legal", h.authed(h.saveSpaceLegalPage))
-	// Issue #161: space membership + invites (admin only).
-	mux.Handle("POST /v1/spaces/{id}/invites", h.authed(h.createInvite))
-	mux.Handle("GET /v1/spaces/{id}/invites", h.authed(h.listInvites))
-	mux.Handle("DELETE /v1/spaces/{id}/invites/{inviteId}", h.authed(h.deleteInvite))
-	mux.Handle("GET /v1/spaces/{id}/members", h.authed(h.listMembers))
-	mux.Handle("PATCH /v1/spaces/{id}/members/{userId}", h.authed(h.updateMemberRole))
-	mux.Handle("DELETE /v1/spaces/{id}/members/{userId}", h.authed(h.removeMember))
+	mux.Handle("GET /v1/workspaces", h.authed(h.listWorkspaces))
+	mux.Handle("POST /v1/workspaces", h.authed(h.createWorkspace))
+	mux.Handle("GET /v1/workspaces/{id}/settings", h.authed(h.getWorkspaceSettings))
+	mux.Handle("PUT /v1/workspaces/{id}/settings", h.authed(h.saveWorkspaceSettings))
+	mux.Handle("GET /v1/workspaces/{id}/email-settings", h.authed(h.getWorkspaceEmailSettings))
+	mux.Handle("PUT /v1/workspaces/{id}/email-settings", h.authed(h.saveWorkspaceEmailSettings))
+	// Issue #184: per-workspace hosted legal pages (privacy/terms/refund).
+	mux.Handle("GET /v1/workspaces/{id}/legal", h.authed(h.getWorkspaceLegalPages))
+	mux.Handle("POST /v1/workspaces/{id}/legal/generate", h.authed(h.generateWorkspaceLegalPage))
+	mux.Handle("PUT /v1/workspaces/{id}/legal", h.authed(h.saveWorkspaceLegalPage))
+	// Issue #161: workspace membership + invites (admin only).
+	mux.Handle("POST /v1/workspaces/{id}/invites", h.authed(h.createInvite))
+	mux.Handle("GET /v1/workspaces/{id}/invites", h.authed(h.listInvites))
+	mux.Handle("DELETE /v1/workspaces/{id}/invites/{inviteId}", h.authed(h.deleteInvite))
+	mux.Handle("GET /v1/workspaces/{id}/members", h.authed(h.listMembers))
+	mux.Handle("PATCH /v1/workspaces/{id}/members/{userId}", h.authed(h.updateMemberRole))
+	mux.Handle("DELETE /v1/workspaces/{id}/members/{userId}", h.authed(h.removeMember))
 	mux.Handle("GET /v1/rest/settings/einvoice", h.authed(h.getEinvoicing))
 	mux.Handle("GET /v1/rest/currency/rates", h.authed(h.getCurrencyRates))
 	mux.Handle("GET /v1/rest/webhooks", h.authed(h.listWebhooks))
@@ -257,8 +257,8 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /v1/rest/uploads/avatar",
 		middleware.RateLimitWith(2, 6)(h.authed(h.uploadAvatar)))
 	// Issue #361: merchant code-asset upload (CSS/JS/HTML/SVG/woff2) for
-	// customising a landing/space page. Stored tenant-scoped and served as
-	// hardened static content on the space/custom domain. Customer uploads
+	// customising a landing/workspace page. Stored tenant-scoped and served as
+	// hardened static content on the workspace/custom domain. Customer uploads
 	// stay images-only; these are merchant-only.
 	mux.Handle("POST /v1/rest/uploads/asset",
 		middleware.RateLimitWith(2, 6)(h.authed(h.uploadAsset)))
@@ -314,12 +314,12 @@ func (h *RESTHandlers) resolve(w http.ResponseWriter, r *http.Request) (*dbstore
 		invalidateSessionAcctCache(c.Value)
 		return nil, false
 	}
-	// Resolve the account. Issue #158: when a ?space=<slug> scope is present
-	// and belongs to the session user, resolve the account from that space
-	// (each space owns its own account) instead of the user's first account.
-	// This is what makes switching spaces actually switch the account context
-	// — CHIP keys, domains, webhooks, products, revenue all follow the space.
-	// Without a space scope we fall back to the first owned account (legacy
+	// Resolve the account. Issue #158: when a ?workspace=<slug> scope is present
+	// and belongs to the session user, resolve the account from that workspace
+	// (each workspace owns its own account) instead of the user's first account.
+	// This is what makes switching workspaces actually switch the account context
+	// — CHIP keys, domains, webhooks, products, revenue all follow the workspace.
+	// Without a workspace scope we fall back to the first owned account (legacy
 	// unscoped callers / API-key path).
 	acc := h.resolveSessionAccount(r, userID, c.Value)
 	if acc == nil {
@@ -333,39 +333,39 @@ func (h *RESTHandlers) resolve(w http.ResponseWriter, r *http.Request) (*dbstore
 }
 
 // resolveSessionAccount resolves the account for a session-authenticated
-// request. When the request carries a ?space=<slug> scope that belongs to the
+// request. When the request carries a ?workspace=<slug> scope that belongs to the
 // session user (owner OR member, issue #162), the account is resolved from
-// that space (issue #158) so all account-level data is space-scoped.
+// that workspace (issue #158) so all account-level data is workspace-scoped.
 // Otherwise the user's first owned account is used (legacy unscoped callers).
 func (h *RESTHandlers) resolveSessionAccount(r *http.Request, userID, token string) *dbstore.Account {
-	// Space-scoped resolution (issue #158): each space owns its own account.
-	if slug := r.URL.Query().Get("space"); slug != "" && h.Spaces != nil {
-		acc, ok, err := h.Spaces.AccessBySlug(r.Context(), slug, userID)
+	// Workspace-scoped resolution (issue #158): each workspace owns its own account.
+	if slug := r.URL.Query().Get("workspace"); slug != "" && h.Workspaces != nil {
+		acc, ok, err := h.Workspaces.AccessBySlug(r.Context(), slug, userID)
 		if err == nil && ok {
 			for _, id := range acc.Accounts {
 				if a, err := h.Accounts.ByID(r.Context(), id); err == nil {
 					return a
 				}
 			}
-			// Accessible space with zero accounts (defensive; shouldn't happen
+			// Accessible workspace with zero accounts (defensive; shouldn't happen
 			// after the migration): fall back to the first owned account.
-			// The space is empty so nothing leaks.
+			// The workspace is empty so nothing leaks.
 			accs, err := h.Accounts.ByOwner(r.Context(), userID)
 			if err == nil && len(accs) > 0 {
 				return accs[0]
 			}
 			return nil
 		}
-		// Space not accessible / unknown: fall back to the first account the
+		// Workspace not accessible / unknown: fall back to the first account the
 		// user can access (owner OR member, issue #162) so authed() succeeds;
 		// the list/settings endpoint's scopeOr403 then returns 403 for the
-		// foreign space. Returning nil here would surface a 401 instead of the
+		// foreign workspace. Returning nil here would surface a 401 instead of the
 		// intended 403.
 		if accs, err := h.Accounts.ByOwner(r.Context(), userID); err == nil && len(accs) > 0 {
 			return accs[0]
 		}
-		if h.Spaces != nil {
-			if members, err := h.Spaces.ByMember(r.Context(), userID); err == nil {
+		if h.Workspaces != nil {
+			if members, err := h.Workspaces.ByMember(r.Context(), userID); err == nil {
 				for _, m := range members {
 					for _, id := range m.Accounts {
 						if a, err := h.Accounts.ByID(r.Context(), id); err == nil {

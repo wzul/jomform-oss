@@ -30,7 +30,7 @@ func TestBuildMultipart(t *testing.T) {
 		"multipart/alternative",
 		"Content-Type: text/html; charset=\"utf-8\"",
 		"JomForm",
-		"Made", // "Made in Malaysia" is quoted-printable encoded (=20 for spaces)
+		"Made", // "Made in Malaysia" is quoted-printable encoded (=20 for workspaces)
 	} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("mesti ada %q (branded HTML part)", want)

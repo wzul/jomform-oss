@@ -45,7 +45,7 @@ type PublicHandlers struct {
 	ProductVariations *dbstore.ProductVariationStore
 	Pay               *payments.Service
 	SystemSettings    *dbstore.SystemSettingStore
-	Spaces            *dbstore.SpaceStore
+	Workspaces            *dbstore.WorkspaceStore
 	// Issue #171: response-only form submissions.
 	Submissions *dbstore.SubmissionStore
 	BaseURL     string
@@ -53,8 +53,8 @@ type PublicHandlers struct {
 	// (issue #176). Nil disables private-form access (gate always shown).
 	AccessKey []byte
 	// Issue #244: deterministic anti-spam layers on public form submissions.
-	//   - Sessions + Users + SpaceMembers resolve whether the submitter is a
-	//     logged-in owner/admin of the form's space, in which case the
+	//   - Sessions + Users + WorkspaceMembers resolve whether the submitter is a
+	//     logged-in owner/admin of the form's workspace, in which case the
 	//     per-form rate limit and time-based check are skipped (owner testing
 	//     the form shouldn't be throttled). All nil in bare-mode tests.
 	//   - MXChecker validates the submitted email's domain accepts mail
@@ -63,7 +63,7 @@ type PublicHandlers struct {
 	//     disables the per-form rate limit (bare-mode tests).
 	Sessions     *auth.Sessions
 	Users        *dbstore.UserStore
-	SpaceMembers *dbstore.SpaceMemberStore
+	WorkspaceMembers *dbstore.WorkspaceMemberStore
 	MXChecker    *email.MXChecker
 	FormLimiter  *middleware.RateLimiter
 
@@ -73,7 +73,7 @@ type PublicHandlers struct {
 	// background. Both nil in bare-mode tests → no judge runs (submissions are
 	// accepted immediately, never flagged).
 	SpamQueue *emailqueue.Queue
-	// Issue #361: S3/MinIO store serving the space/custom-domain code-asset
+	// Issue #361: S3/MinIO store serving the workspace/custom-domain code-asset
 	// route GET /assets/{key}. Nil when media storage isn't configured.
 	Store ObjectStoreIface
 	// Issue #364: media metadata store used to gate code-asset serving on the
@@ -85,26 +85,26 @@ type PublicHandlers struct {
 func (h *PublicHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /f/{slug}", h.handleRender)
 	// Issue #411: GitHub-style default Open Graph image per form, served at
-	// /og/{slug}.png on the space subdomain / custom domain. Registered before
+	// /og/{slug}.png on the workspace subdomain / custom domain. Registered before
 	// /{slug} so it wins over a form slug. NOTE: Go's ServeMux wildcard must be
 	// a full path segment — `{slug}.png` is invalid and panics at startup — so
 	// the route is /og/{slug} and the handler strips the .png suffix.
 	mux.HandleFunc("GET /og/{slug}", h.handleOGImage)
 	// Issue #361: merchant code assets (CSS/JS/HTML/fonts) served on the
-	// space/custom domain at /assets/{key}, so a landing page can reference
+	// workspace/custom domain at /assets/{key}, so a landing page can reference
 	// them same-origin (/styles/app.css). Registered before /{slug} so assets
 	// win over a form slug.
 	mux.HandleFunc("GET /assets/{key...}", h.handleAsset)
 	mux.HandleFunc("GET /embed/f/{accslug}/{slug}", h.embedForm)
-	// Issue #276: sitemap.xml for custom-domain spaces (indexed spaces only).
+	// Issue #276: sitemap.xml for custom-domain workspaces (indexed workspaces only).
 	mux.HandleFunc("GET /sitemap.xml", h.handleSitemap)
-	// Issue #276: indexed custom-domain space URLs for the web sitemap.
-	mux.HandleFunc("GET /sitemap-spaces.json", h.handleSitemapSpaces)
+	// Issue #276: indexed custom-domain workspace URLs for the web sitemap.
+	mux.HandleFunc("GET /sitemap-workspaces.json", h.handleSitemapWorkspaces)
 	mux.Handle("POST /f/{slug}/order", middleware.RateLimit(http.HandlerFunc(h.handleSubmit)))
-	// Space subdomains serve forms at /{slug} (GET /{slug} below), so the
+	// Workspace subdomains serve forms at /{slug} (GET /{slug} below), so the
 	// buyer-facing submit must resolve there too. handleSubmit scopes by
 	// accountSubdomain(host); on bare jomform.com it 404s (issue #77 — a
-	// public payment link is reachable only via its space subdomain or a
+	// public payment link is reachable only via its workspace subdomain or a
 	// custom domain), leaving dashboard routes (/api, /v1) intact.
 	mux.Handle("POST /{slug}/order", middleware.RateLimit(http.HandlerFunc(h.handleSubmit)))
 	mux.HandleFunc("GET /t/{ref}", h.handleThankYou)
@@ -112,14 +112,14 @@ func (h *PublicHandlers) RegisterRoutes(mux *http.ServeMux) {
 	// polls while a sale is pending (bounded client-side poll). Returns the
 	// sale's current status; never mutates anything.
 	mux.HandleFunc("GET /t/{ref}/status", h.handleThankYouStatus)
-	mux.HandleFunc("GET /{$}", h.handleSpaceRoot)
-	// Issue #184: hosted legal pages on space subdomains
-	// ({space}.jomform.com/privacy, /terms, /refund). More specific than
+	mux.HandleFunc("GET /{$}", h.handleWorkspaceRoot)
+	// Issue #184: hosted legal pages on workspace subdomains
+	// ({workspace}.jomform.com/privacy, /terms, /refund). More specific than
 	// GET /{slug}, so they win over the form-slug route.
 	mux.HandleFunc("GET /privacy", h.handlePublicLegalPage)
 	mux.HandleFunc("GET /terms", h.handlePublicLegalPage)
 	mux.HandleFunc("GET /refund", h.handlePublicLegalPage)
-	mux.HandleFunc("GET /{slug}", h.handleSpaceRootForm)
+	mux.HandleFunc("GET /{slug}", h.handleWorkspaceRootForm)
 	// Issue #176: unlock a private form with its access password.
 	mux.HandleFunc("POST /{slug}/unlock", h.handleFormUnlock)
 }
@@ -275,12 +275,12 @@ func antiSpamRenderFields() string {
 }
 
 // antiSpamSubmitterIsOwner reports whether the request is from a logged-in
-// owner/admin of the form's space. When true, the per-form rate limit and
+// owner/admin of the form's workspace. When true, the per-form rate limit and
 // time-based check are skipped (owner testing the form shouldn't be
 // throttled). Returns false when any dependency is nil (bare-mode tests) or
-// the session/space cannot be resolved.
+// the session/workspace cannot be resolved.
 func (h *PublicHandlers) antiSpamSubmitterIsOwner(r *http.Request, form *dbstore.Form) bool {
-	if h.Sessions == nil || h.Users == nil || h.SpaceMembers == nil || h.Spaces == nil {
+	if h.Sessions == nil || h.Users == nil || h.WorkspaceMembers == nil || h.Workspaces == nil {
 		return false
 	}
 	c, err := r.Cookie(sessionCookie)
@@ -296,11 +296,11 @@ func (h *PublicHandlers) antiSpamSubmitterIsOwner(r *http.Request, form *dbstore
 	if u, e := h.Users.ByID(r.Context(), uid); e == nil && u != nil && u.PwResetAt != nil && !auth.ValidAfter(issued, *u.PwResetAt) {
 		return false
 	}
-	spaceID, err := h.Spaces.SpaceIDByAccount(r.Context(), form.AccountID)
-	if err != nil || spaceID == "" {
+	workspaceID, err := h.Workspaces.WorkspaceIDByAccount(r.Context(), form.AccountID)
+	if err != nil || workspaceID == "" {
 		return false
 	}
-	admin, err := h.SpaceMembers.IsAdmin(r.Context(), spaceID, uid)
+	admin, err := h.WorkspaceMembers.IsAdmin(r.Context(), workspaceID, uid)
 	return err == nil && admin
 }
 
@@ -375,7 +375,7 @@ func (h *PublicHandlers) antiSpamCheckEmail(r *http.Request, emailAddr string) b
 
 // enqueueSpamJudge enqueues a background AI spam-judge job (issue #245) for a
 // submission or sale. Best-effort: a failure is logged and never fails the
-// submit response. The judge is skipped when the submitter is the space
+// submit response. The judge is skipped when the submitter is the workspace
 // owner/admin (testing their own form) or when no queue is wired.
 func (h *PublicHandlers) enqueueSpamJudge(r *http.Request, form *dbstore.Form, owner bool, subID, saleID, emailAddr string, data map[string]any) {
 	if owner || h.SpamQueue == nil {
@@ -405,11 +405,11 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	// Same lookup rules as render: subdomain scoping first. On bare
 	// jomform.com (no subdomain, no custom domain) a published form is NOT
 	// served — issue #77: a public payment link is reachable only via its
-	// registered space subdomain or a custom domain.
+	// registered workspace subdomain or a custom domain.
 	var form *dbstore.Form
 	var err error
 	if sub := accountSubdomain(r.Host); sub != "" {
-		form, err = h.Forms.BySpaceSlug(r.Context(), sub, slug)
+		form, err = h.Forms.ByWorkspaceSlug(r.Context(), sub, slug)
 	} else if cd := customDomainOwner(r.Context(), h.Accounts, h.Domains, r.Host); cd != "" {
 		form, err = h.Forms.ByAccountSlug(r.Context(), cd, slug)
 	} else {
@@ -458,7 +458,7 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	// Issue #244: deterministic anti-spam layers. Each layer REJECTS the
 	// submission (returns an error) rather than flagging it. The per-form
 	// rate limit and time-based check are skipped for a logged-in owner/admin
-	// of the form's space (owner testing the form shouldn't be throttled).
+	// of the form's workspace (owner testing the form shouldn't be throttled).
 	owner := h.antiSpamSubmitterIsOwner(r, form)
 	// Layer 1 — honeypot: a filled hidden field marks a bot.
 	if h.antiSpamCheckHoneypot(r, &in) {
@@ -509,10 +509,10 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		SkipCapture:   in.SkipCapture && method == "chip",
 	}
 	// Issue #185: record the currency the sale is transacted in from the
-	// space that owns the form's account (default MYR). Historical sales keep
+	// workspace that owns the form's account (default MYR). Historical sales keep
 	// this original currency — never auto-converted on a later change.
-	if h.Spaces != nil {
-		if cur, cerr := h.Spaces.SpaceCurrencyByAccount(r.Context(), form.AccountID); cerr == nil && cur != "" {
+	if h.Workspaces != nil {
+		if cur, cerr := h.Workspaces.WorkspaceCurrencyByAccount(r.Context(), form.AccountID); cerr == nil && cur != "" {
 			sale.Currency = cur
 		}
 	}
@@ -598,7 +598,7 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	// Issue #245: enqueue a background AI spam-judge job for this sale. The
 	// sale is accepted immediately; the judge flags it as spam in the
-	// background (skipped for the space owner/admin testing their own form).
+	// background (skipped for the workspace owner/admin testing their own form).
 	// Never blocks the submit response.
 	judgeData := make(map[string]any, len(in.Fields))
 	for k, v := range in.Fields {
@@ -697,7 +697,7 @@ func (h *PublicHandlers) handleResponseSubmit(w http.ResponseWriter, r *http.Req
 	// Issue #244: deterministic anti-spam layers on response-mode submits too.
 	// The honeypot + render timestamp ride on the fields map (the renderer
 	// emits them as named inputs). The per-form rate limit and time-based
-	// check are skipped for a logged-in owner/admin of the form's space.
+	// check are skipped for a logged-in owner/admin of the form's workspace.
 	owner := h.antiSpamSubmitterIsOwner(r, form)
 	// Layer 1 — honeypot: a filled hidden field marks a bot.
 	if v, ok := in.Fields[antiSpamHoneypotField]; ok {
@@ -759,7 +759,7 @@ func (h *PublicHandlers) handleResponseSubmit(w http.ResponseWriter, r *http.Req
 	}
 	// Issue #245: enqueue a background AI spam-judge job for this submission.
 	// The submission is accepted immediately; the judge flags it as spam in
-	// the background (skipped for the space owner/admin testing their own
+	// the background (skipped for the workspace owner/admin testing their own
 	// form). Never blocks the submit response.
 	h.enqueueSpamJudge(r, form, owner, sub.ID, "", in.Client.Email, in.Fields)
 	// Issue #193: fire per-form notifications on response.submitted. The
@@ -809,15 +809,15 @@ func (h *PublicHandlers) fireResponseNotifications(ctx context.Context, form *db
 			}
 		}
 	}
-	spaceID := ""
-	if h.Spaces != nil {
-		if sid, serr := h.Spaces.SpaceIDByAccount(ctx, form.AccountID); serr == nil {
-			spaceID = sid
+	workspaceID := ""
+	if h.Workspaces != nil {
+		if sid, serr := h.Workspaces.WorkspaceIDByAccount(ctx, form.AccountID); serr == nil {
+			workspaceID = sid
 		}
 	}
 	formURL := ""
-	if h.Spaces != nil {
-		if slug, serr := h.Spaces.SpaceSlugByAccount(ctx, form.AccountID); serr == nil && slug != "" {
+	if h.Workspaces != nil {
+		if slug, serr := h.Workspaces.WorkspaceSlugByAccount(ctx, form.AccountID); serr == nil && slug != "" {
 			formURL = "https://" + slug + ".jomform.com/" + form.Slug
 		}
 	}
@@ -826,7 +826,7 @@ func (h *PublicHandlers) fireResponseNotifications(ctx context.Context, form *db
 	}
 	h.Pay.FireFormNotifications(ctx, payments.NotificationRef{
 		FormID:    form.ID,
-		SpaceID:   spaceID,
+		WorkspaceID:   workspaceID,
 		AccountID: form.AccountID,
 		FormURL:   formURL,
 		Fields:    strFields,
@@ -915,7 +915,7 @@ var formTmpl = template.Must(template.New("form").Funcs(formFuncs).Parse(`<!doct
                 cursor:pointer; -webkit-tap-highlight-color:transparent; }
   .prod input[type=checkbox] { width:20px; height:20px; flex:0 0 auto; accent-color:#4f46e5; margin:0; }
   .pname { flex:1; font-weight:500; }
-  .price { color:#4f46e5; font-weight:600; white-space:nowrap; margin-left:auto; text-align:right; }
+  .price { color:#4f46e5; font-weight:600; white-workspace:nowrap; margin-left:auto; text-align:right; }
   input[type=text], input[type=email], input[type=tel] {
     width:100%; padding:11px 14px; margin:6px 0 14px; border-radius:10px;
     border:1px solid #e6e8ec; background:#ffffff; color:#17181c; font-size:14px; }
@@ -926,7 +926,7 @@ var formTmpl = template.Must(template.New("form").Funcs(formFuncs).Parse(`<!doct
   button:hover { filter:brightness(1.1); }
   .total { display:flex; justify-content:space-between; padding-top:12px;
            border-top:1px dashed #e6e8ec; margin-top:6px; font-weight:600; }
-  /* Issue #183: optional per-space footer. */
+  /* Issue #183: optional per-workspace footer. */
   .jf-footer { max-width:460px; width:100%; margin:16px auto 0; padding:0 8px;
                color:#6b7280; font-size:12px; line-height:1.6; text-align:center;
                align-self:center; }
@@ -1011,11 +1011,11 @@ func (h *PublicHandlers) handleRender(w http.ResponseWriter, r *http.Request) {
 	// Subdomain routing: wanzulhosting.jomform.com/f/test resolves the form
 	// scoped to that account's slug. On bare jomform.com (no subdomain, no
 	// custom domain) a published form is NOT served — issue #77: a public
-	// payment link is reachable only via its registered space subdomain
-	// ({space}.jomform.com/{slug}) or a custom domain. The legacy global
+	// payment link is reachable only via its registered workspace subdomain
+	// ({workspace}.jomform.com/{slug}) or a custom domain. The legacy global
 	// /f/{slug} lookup is gone.
 	if sub := accountSubdomain(r.Host); sub != "" {
-		f, ferr := h.Forms.BySpaceSlug(r.Context(), sub, slug)
+		f, ferr := h.Forms.ByWorkspaceSlug(r.Context(), sub, slug)
 		if ferr != nil {
 			http.Error(w, "Borang tidak dijumpai untuk domain ini", http.StatusNotFound)
 			return
@@ -1032,7 +1032,7 @@ func (h *PublicHandlers) handleRender(w http.ResponseWriter, r *http.Request) {
 		h.serveForm(w, r, f)
 		return
 	}
-	// Bare apex (jomform.com): no space subdomain, no custom domain — 404.
+	// Bare apex (jomform.com): no workspace subdomain, no custom domain — 404.
 	http.Error(w, "Borang tidak dijumpai", http.StatusNotFound)
 }
 
@@ -1061,11 +1061,11 @@ func (h *PublicHandlers) renderLegacy(w http.ResponseWriter, r *http.Request, f 
 		Products                 []tmplProduct
 		// Issue #411: Open Graph + Twitter meta for social sharing.
 		OGMeta template.HTML
-		// Issue #183: optional per-space footer.
+		// Issue #183: optional per-workspace footer.
 		Footer footerInfo
 		// Issue #244: hidden honeypot + render-timestamp fields.
 		AntiSpam template.HTML
-		// Issue #276: noindex on jomform.com subdomains / when the space opts
+		// Issue #276: noindex on jomform.com subdomains / when the workspace opts
 		// out of indexing.
 		NoIndex bool
 	}
@@ -1073,7 +1073,7 @@ func (h *PublicHandlers) renderLegacy(w http.ResponseWriter, r *http.Request, f 
 	if err := formTmpl.Execute(w, view{
 		Slug: f.Slug, Title: f.Title, Description: cfg.Description, Products: prods,
 		OGMeta:    h.formOGMeta(r, f),
-		Footer:    h.spaceFooter(r.Context(), f),
+		Footer:    h.workspaceFooter(r.Context(), f),
 		AntiSpam:  template.HTML(antiSpamRenderFields()),
 		NoIndex:   h.formNoIndex(r, f),
 	}); err != nil {
@@ -1202,7 +1202,7 @@ func accountSubdomain(host string) string {
 	return strings.ToLower(sub)
 }
 
-// footerInfo is the optional per-space public-form footer (issue #183). Only
+// footerInfo is the optional per-workspace public-form footer (issue #183). Only
 // fields the merchant set are populated; HasFooter is false when nothing is
 // set, so the renderer emits no footer at all (preserving #80's clean default).
 type footerInfo struct {
@@ -1217,28 +1217,28 @@ type footerInfo struct {
 	FooterText     string
 }
 
-// spaceFooter resolves the optional footer for a form's space. Returns a
-// footerInfo with HasFooter=false when the space is unresolvable or the
+// workspaceFooter resolves the optional footer for a form's workspace. Returns a
+// footerInfo with HasFooter=false when the workspace is unresolvable or the
 // merchant set nothing.
-func (h *PublicHandlers) spaceFooter(ctx context.Context, f *dbstore.Form) footerInfo {
+func (h *PublicHandlers) workspaceFooter(ctx context.Context, f *dbstore.Form) footerInfo {
 	var fi footerInfo
-	if h.Spaces == nil {
+	if h.Workspaces == nil {
 		return fi
 	}
-	spaceID, err := h.Spaces.SpaceIDByAccount(ctx, f.AccountID)
-	if err != nil || spaceID == "" {
+	workspaceID, err := h.Workspaces.WorkspaceIDByAccount(ctx, f.AccountID)
+	if err != nil || workspaceID == "" {
 		return fi
 	}
-	st, err := h.Spaces.Settings(ctx, spaceID)
+	st, err := h.Workspaces.Settings(ctx, workspaceID)
 	if err != nil {
 		return fi
 	}
 	// Issue #231: the merchant's stored PrivacyURL/TermsURL/RefundURL may
-	// point at a stale/wrong space subdomain (e.g. wanzulhosting.jomform.com
-	// when the space is actually "wan"). When a link targets one of the
-	// space's own hosted legal pages ({space}.jomform.com/privacy|terms|refund),
-	// rewrite it to the CURRENT space's subdomain so it always resolves.
-	slug, _ := h.Spaces.SpaceSlugByAccount(ctx, f.AccountID)
+	// point at a stale/wrong workspace subdomain (e.g. wanzulhosting.jomform.com
+	// when the workspace is actually "wan"). When a link targets one of the
+	// workspace's own hosted legal pages ({workspace}.jomform.com/privacy|terms|refund),
+	// rewrite it to the CURRENT workspace's subdomain so it always resolves.
+	slug, _ := h.Workspaces.WorkspaceSlugByAccount(ctx, f.AccountID)
 	fi.BusinessName = st.BusinessName
 	fi.CompanyReg = st.CompanyReg
 	fi.ContactPhone = st.ContactPhone
@@ -1254,12 +1254,12 @@ func (h *PublicHandlers) spaceFooter(ctx context.Context, f *dbstore.Form) foote
 }
 
 // rewriteHostedLegalURL rewrites a stored legal-page URL that points at one of
-// the space's own hosted pages ({space}.jomform.com/privacy|terms|refund) to
-// the current space's subdomain. External URLs (any other host) are returned
+// the workspace's own hosted pages ({workspace}.jomform.com/privacy|terms|refund) to
+// the current workspace's subdomain. External URLs (any other host) are returned
 // unchanged. A stale slug in the stored URL (issue #231) is corrected so the
-// footer link always resolves to the current space.
-func rewriteHostedLegalURL(raw, spaceSlug string) string {
-	if raw == "" || spaceSlug == "" {
+// footer link always resolves to the current workspace.
+func rewriteHostedLegalURL(raw, workspaceSlug string) string {
+	if raw == "" || workspaceSlug == "" {
 		return raw
 	}
 	u, err := url.Parse(raw)
@@ -1274,25 +1274,25 @@ func rewriteHostedLegalURL(raw, spaceSlug string) string {
 	if path != dbstore.LegalPagePrivacy && path != dbstore.LegalPageTerms && path != dbstore.LegalPageRefund {
 		return raw
 	}
-	u.Host = spaceSlug + ".jomform.com"
+	u.Host = workspaceSlug + ".jomform.com"
 	return u.String()
 }
 
 // formNoIndex reports whether a public form must be noindexed (issue #276).
 // Policy:
-//   - jomform.com subdomains ({space}.jomform.com) are ALWAYS noindex —
+//   - jomform.com subdomains ({workspace}.jomform.com) are ALWAYS noindex —
 //     privacy: payment links shouldn't appear on Google.
-//   - custom domains are indexed only when the space's indexing toggle is on.
+//   - custom domains are indexed only when the workspace's indexing toggle is on.
 //   - bare jomform.com apex never serves forms (issue #77), so it's moot.
 func (h *PublicHandlers) formNoIndex(r *http.Request, f *dbstore.Form) bool {
 	if accountSubdomain(r.Host) != "" {
 		return true
 	}
 	if customDomainOwner(r.Context(), h.Accounts, h.Domains, r.Host) != "" {
-		if h.Spaces == nil {
+		if h.Workspaces == nil {
 			return false
 		}
-		idx, err := h.Spaces.IndexingByAccount(r.Context(), f.AccountID)
+		idx, err := h.Workspaces.IndexingByAccount(r.Context(), f.AccountID)
 		if err != nil {
 			return false
 		}
@@ -1364,7 +1364,7 @@ func (h *PublicHandlers) handleFormUnlock(w http.ResponseWriter, r *http.Request
 	var f *dbstore.Form
 	var err error
 	if sub := accountSubdomain(r.Host); sub != "" {
-		f, err = h.Forms.BySpaceSlug(r.Context(), sub, slug)
+		f, err = h.Forms.ByWorkspaceSlug(r.Context(), sub, slug)
 	} else if cd := customDomainOwner(r.Context(), h.Accounts, h.Domains, r.Host); cd != "" {
 		f, err = h.Forms.ByAccountSlug(r.Context(), cd, slug)
 	} else {
@@ -1521,23 +1521,23 @@ func customDomainOwner(ctx context.Context, s *dbstore.AccountStore, d *dbstore.
 	return slug
 }
 
-// handleSpaceRootForm serves a form by slug on a SPACE subdomain
+// handleWorkspaceRootForm serves a form by slug on a WORKSPACE subdomain
 // (e.g. wanzulhosting.jomform.com/form-baru) or a verified custom domain
 // (issue #297). On jomform.com it 404s so dashboard routes are unaffected.
 // Private forms (issue #176) resolve here so their password gate can render;
 // serveForm enforces the status rules.
-func (h *PublicHandlers) handleSpaceRootForm(w http.ResponseWriter, r *http.Request) {
+func (h *PublicHandlers) handleWorkspaceRootForm(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("slug")
 
 	// Same lookup rules as render/submit (#77): subdomain scoping first,
 	// then a verified custom domain's owning account. On bare jomform.com
 	// (no subdomain, no custom domain) a published form is NOT served —
-	// a public payment link is reachable only via its registered space
+	// a public payment link is reachable only via its registered workspace
 	// subdomain or a custom domain (issue #297).
 	var f *dbstore.Form
 	var err error
 	if sub := accountSubdomain(r.Host); sub != "" {
-		f, err = h.Forms.BySpaceSlug(r.Context(), sub, slug)
+		f, err = h.Forms.ByWorkspaceSlug(r.Context(), sub, slug)
 	} else if cd := customDomainOwner(r.Context(), h.Accounts, h.Domains, r.Host); cd != "" {
 		f, err = h.Forms.ByAccountSlug(r.Context(), cd, slug)
 	} else {
@@ -1550,14 +1550,14 @@ func (h *PublicHandlers) handleSpaceRootForm(w http.ResponseWriter, r *http.Requ
 	h.serveForm(w, r, f)
 }
 
-// handleSpaceRoot serves the space storefront root: a customized landing page
+// handleWorkspaceRoot serves the workspace storefront root: a customized landing page
 // when the merchant has configured one (issue #360), otherwise the auto
-// listing. It handles both a space subdomain ({space}.jomform.com — issue #77)
-// and a verified custom domain mapped to a space's account (issue #286). Bare
+// listing. It handles both a workspace subdomain ({workspace}.jomform.com — issue #77)
+// and a verified custom domain mapped to a workspace's account (issue #286). Bare
 // jomform.com (no subdomain, no custom domain) 404s so dashboard routes are
-// unaffected. The lookup is by space slug for the subdomain and by account
+// unaffected. The lookup is by workspace slug for the subdomain and by account
 // slug for a custom domain (they are different namespaces).
-func (h *PublicHandlers) handleSpaceRoot(w http.ResponseWriter, r *http.Request) {
+func (h *PublicHandlers) handleWorkspaceRoot(w http.ResponseWriter, r *http.Request) {
 	var slug string
 	var byAccount bool
 	if sub := accountSubdomain(r.Host); sub != "" {
@@ -1574,30 +1574,30 @@ func (h *PublicHandlers) handleSpaceRoot(w http.ResponseWriter, r *http.Request)
 	if byAccount {
 		forms, err = h.Forms.ListPublishedByAccountSlug(r.Context(), slug)
 	} else {
-		forms, err = h.Forms.ListPublishedBySpace(r.Context(), slug)
+		forms, err = h.Forms.ListPublishedByWorkspace(r.Context(), slug)
 	}
 	if err != nil {
 		http.Error(w, "ralat", http.StatusInternalServerError)
 		return
 	}
 
-	// Issue #360: when the space has a landing page configured, render it
+	// Issue #360: when the workspace has a landing page configured, render it
 	// instead of the bare listing. Resolution differs by namespace: the
-	// subdomain lookup uses the space slug, the custom-domain lookup uses the
-	// account slug -> resolve the owning space, read its settings.
-	if h.Spaces != nil {
-		var spaceID string
+	// subdomain lookup uses the workspace slug, the custom-domain lookup uses the
+	// account slug -> resolve the owning workspace, read its settings.
+	if h.Workspaces != nil {
+		var workspaceID string
 		if byAccount {
 			if acc, aerr := h.Accounts.BySlug(r.Context(), slug); aerr == nil && acc != nil {
-				spaceID, _ = h.Spaces.SpaceIDByAccount(r.Context(), acc.ID)
+				workspaceID, _ = h.Workspaces.WorkspaceIDByAccount(r.Context(), acc.ID)
 			}
 		} else {
-			spaceID, _ = h.Spaces.IDBySlug(r.Context(), slug)
+			workspaceID, _ = h.Workspaces.IDBySlug(r.Context(), slug)
 		}
-		if spaceID != "" {
-			if st, serr := h.Spaces.Settings(r.Context(), spaceID); serr == nil &&
+		if workspaceID != "" {
+			if st, serr := h.Workspaces.Settings(r.Context(), workspaceID); serr == nil &&
 				st.LandingPage != nil && st.LandingPage.Enabled {
-				h.renderSpaceLanding(w, r, slug, forms, st.LandingPage)
+				h.renderWorkspaceLanding(w, r, slug, forms, st.LandingPage)
 				return
 			}
 		}
@@ -1620,16 +1620,16 @@ func (h *PublicHandlers) handleSpaceRoot(w http.ResponseWriter, r *http.Request)
 	io.WriteString(w, "</div></body></html>")
 }
 
-// spaceLandingData is the template payload for the customizable storefront
+// workspaceLandingData is the template payload for the customizable storefront
 // root (issue #360).
-type spaceLandingData struct {
+type workspaceLandingData struct {
 	Slug string
 	Lp   *dbstore.LandingPage
 	// HasForms reports whether at least one published form exists (used to
 	// decide the "no forms yet" hint behind the hero).
 	HasForms bool
 	// Embeds are the published forms configured to render inline (issue #362).
-	// Only slugs that resolve to a published form in the space are included;
+	// Only slugs that resolve to a published form in the workspace are included;
 	// unknown/draft/private slugs are dropped server-side so they never render.
 	Embeds []landingEmbedView
 }
@@ -1643,11 +1643,11 @@ type landingEmbedView struct {
 	FormSlug string
 }
 
-// landingPageTmpl renders the customizable space landing page (issue #360).
+// landingPageTmpl renders the customizable workspace landing page (issue #360).
 // It is SEO-friendly server-side HTML and reuses the same layout language as
 // the public form renderer. All dynamic text is HTML-escaped by template
 // autoescaping.
-var landingPageTmpl = template.Must(template.New("space-landing").Parse(`<!doctype html>
+var landingPageTmpl = template.Must(template.New("workspace-landing").Parse(`<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
@@ -1668,7 +1668,7 @@ var landingPageTmpl = template.Must(template.New("space-landing").Parse(`<!docty
   .banner { width:100%; max-height:420px; object-fit:cover; border-radius:20px;
             margin:28px 0 0; display:{{if .Lp.ImageURL}}block{{else}}none{{end}}; }
   .body { margin-top:28px; font-size:17px; line-height:1.7; color:#3f434a;
-          white-space:pre-wrap; }
+          white-workspace:pre-wrap; }
   .ctas { display:flex; flex-wrap:wrap; gap:12px; margin-top:28px; }
   .cta { background:{{if .Lp.PrimaryColor}}{{.Lp.PrimaryColor}}{{else}}#4f46e5{{end}}; color:#fff;
          font-weight:600; text-decoration:none; padding:14px 26px; border-radius:12px;
@@ -1707,14 +1707,14 @@ var landingPageTmpl = template.Must(template.New("space-landing").Parse(`<!docty
 </body>
 </html>`))
 
-// renderSpaceLanding writes the customized landing page (issue #360).
-func (h *PublicHandlers) renderSpaceLanding(w http.ResponseWriter, r *http.Request, slug string, forms []*dbstore.Form, lp *dbstore.LandingPage) {
-	// Issue #362: resolve the embedded-form blocks against the space's
+// renderWorkspaceLanding writes the customized landing page (issue #360).
+func (h *PublicHandlers) renderWorkspaceLanding(w http.ResponseWriter, r *http.Request, slug string, forms []*dbstore.Form, lp *dbstore.LandingPage) {
+	// Issue #362: resolve the embedded-form blocks against the workspace's
 	// published forms. Only slugs that match a published form are rendered;
 	// draft/private/unknown slugs are dropped server-side. Embeds are
 	// framed same-origin at /{slug} so they reuse the full form render +
 	// validation + submit path, keeping server authority on form semantics.
-	data := spaceLandingData{
+	data := workspaceLandingData{
 		Slug:     slug,
 		Lp:       lp,
 		HasForms: len(forms) > 0,
@@ -1727,7 +1727,7 @@ func (h *PublicHandlers) renderSpaceLanding(w http.ResponseWriter, r *http.Reque
 }
 
 // resolveLandingEmbeds filters the landing page's configured embedded-form
-// blocks down to the slugs that resolve to a published form in the space
+// blocks down to the slugs that resolve to a published form in the workspace
 // (issue #362). Slugs that don't match a published form are dropped so they
 // never render on the public page.
 func resolveLandingEmbeds(configured []dbstore.LandingEmbed, published []*dbstore.Form) []landingEmbedView {
@@ -1744,22 +1744,22 @@ func resolveLandingEmbeds(configured []dbstore.LandingEmbed, published []*dbstor
 	return embeds
 }
 
-// requestingAccountID resolves the account that owns the requesting space
+// requestingAccountID resolves the account that owns the requesting workspace
 // subdomain or verified custom domain (issue #379). It returns "" when the
-// host is not a space/custom domain or the owning account cannot be resolved.
-// The subdomain namespace is the space slug (issue #158: each space owns its
-// own account), so the account is resolved via the space; the custom-domain
+// host is not a workspace/custom domain or the owning account cannot be resolved.
+// The subdomain namespace is the workspace slug (issue #158: each workspace owns its
+// own account), so the account is resolved via the workspace; the custom-domain
 // namespace is the account slug directly.
-func requestingAccountID(ctx context.Context, accounts *dbstore.AccountStore, domains *dbstore.DomainStore, spaces *dbstore.SpaceStore, host string) string {
+func requestingAccountID(ctx context.Context, accounts *dbstore.AccountStore, domains *dbstore.DomainStore, workspaces *dbstore.WorkspaceStore, host string) string {
 	if sub := accountSubdomain(host); sub != "" {
-		if spaces == nil {
+		if workspaces == nil {
 			return ""
 		}
-		spaceID, err := spaces.IDBySlug(ctx, sub)
-		if err != nil || spaceID == "" {
+		workspaceID, err := workspaces.IDBySlug(ctx, sub)
+		if err != nil || workspaceID == "" {
 			return ""
 		}
-		acc, err := accounts.BySpaceID(ctx, spaceID)
+		acc, err := accounts.ByWorkspaceID(ctx, workspaceID)
 		if err != nil || acc == nil {
 			return ""
 		}
@@ -1776,7 +1776,7 @@ func requestingAccountID(ctx context.Context, accounts *dbstore.AccountStore, do
 }
 
 // assetOwnedByRequestingTenant reports whether the object key's account
-// matches the account that owns the requesting space/domain (issue #379).
+// matches the account that owns the requesting workspace/domain (issue #379).
 // A key whose account segment is missing or differs from the requesting
 // tenant is rejected so a merchant can never serve another account's asset
 // on their own domain.
@@ -1787,32 +1787,32 @@ func assetOwnedByRequestingTenant(key, requestingAccountID string) bool {
 	return accountIDFromKey(key) == requestingAccountID
 }
 
-// handleAsset serves GET /assets/{key...} on a space/custom domain — merchant
+// handleAsset serves GET /assets/{key...} on a workspace/custom domain — merchant
 // code assets (CSS/JS/HTML/fonts) referenced same-origin by a customised
-// landing/space page (issue #361). The route only resolves on a space
-// subdomain ({space}.jomform.com) or a verified custom domain mapped to a
-// space's account, so uploaded code is tenant-scoped: it is never exposed on
+// landing/workspace page (issue #361). The route only resolves on a workspace
+// subdomain ({workspace}.jomform.com) or a verified custom domain mapped to a
+// workspace's account, so uploaded code is tenant-scoped: it is never exposed on
 // the bare app origin and never executable server-side (served as static
 // bytes with the restrictive hardening in handleMedia).
 //
 // The key is the same account-scoped `u/...` key generated at upload, so it
-// can never resolve to an object outside the uploading account's space. The
+// can never resolve to an object outside the uploading account's workspace. The
 // stored content-type is preserved and restrictive headers (nosniff, no
 // framing/embedding) are applied exactly as on /media.
 //
-// Issue #379: the requesting space/domain's account is resolved and the
+// Issue #379: the requesting workspace/domain's account is resolved and the
 // asset key's account must match it — a cross-tenant key (another account's
 // uploaded code) is rejected with 404 even if the requesting tenant is a
-// valid space/custom domain.
+// valid workspace/custom domain.
 func (h *PublicHandlers) handleAsset(w http.ResponseWriter, r *http.Request) {
 	if h.Store == nil {
 		writeErr(w, http.StatusServiceUnavailable, "media storage tidak dikonfigurasi")
 		return
 	}
-	// Tenant-scope check: only a space subdomain or a custom domain mapped to
-	// a space serves assets. Bare jomform.com (no subdomain) 404s so dashboard
+	// Tenant-scope check: only a workspace subdomain or a custom domain mapped to
+	// a workspace serves assets. Bare jomform.com (no subdomain) 404s so dashboard
 	// routes are unaffected.
-	requestingAccount := requestingAccountID(r.Context(), h.Accounts, h.Domains, h.Spaces, r.Host)
+	requestingAccount := requestingAccountID(r.Context(), h.Accounts, h.Domains, h.Workspaces, r.Host)
 	if requestingAccount == "" {
 		http.NotFound(w, r)
 		return
@@ -1823,7 +1823,7 @@ func (h *PublicHandlers) handleAsset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Issue #379: the asset must belong to the requesting tenant. A key whose
-	// account differs from the requesting space/domain's account is rejected
+	// account differs from the requesting workspace/domain's account is rejected
 	// (404) so a merchant cannot serve another account's code asset.
 	if !assetOwnedByRequestingTenant(key, requestingAccount) {
 		http.NotFound(w, r)

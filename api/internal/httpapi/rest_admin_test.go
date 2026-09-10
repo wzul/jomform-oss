@@ -36,7 +36,7 @@ func adminOverviewFixture(t *testing.T, pool *pgxpool.Pool, userID string, allow
 	h := &RESTHandlers{
 		Accounts: dbstore.NewAccountStore(pool),
 		Users:    dbstore.NewUserStore(pool),
-		Spaces:   dbstore.NewSpaceStore(pool),
+		Workspaces:   dbstore.NewWorkspaceStore(pool),
 		Sales:    dbstore.NewSaleStore(pool),
 		Submissions: dbstore.NewSubmissionStore(pool),
 		EmailDeliveryEvents: dbstore.NewEmailDeliveryEventStore(pool),

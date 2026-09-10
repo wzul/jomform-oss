@@ -65,7 +65,7 @@ func (s *Server) clearFormChipOverride(
 }
 
 // formForAdmin resolves the account owning a form and enforces the admin gate
-// for that form's space (CHIP credentials - admin only, issue #162).
+// for that form's workspace (CHIP credentials - admin only, issue #162).
 func (s *Server) formForAdmin(ctx context.Context, formID string) (string, error) {
 	acc, err := s.resolveFormAccount(ctx, formID)
 	if err != nil {
@@ -157,7 +157,7 @@ func (s *Server) refundSaleMCP(
 
 // captureAllPendingMCP captures every awaiting skip_capture authorization in
 // one call (issue #38, the #12 addendum). One CHIP rejection never aborts the
-// batch; every ref gets its own result. Issue #307: spans all the user's spaces.
+// batch; every ref gets its own result. Issue #307: spans all the user's workspaces.
 func (s *Server) captureAllPendingMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn,
 ) (*mcp.CallToolResult, any, error) {

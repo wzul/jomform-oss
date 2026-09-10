@@ -13,17 +13,17 @@ import (
 
 // addTool registers an MCP tool exactly like mcp.AddTool, but wraps the
 // handler so every CallTool:
-//   - resolves the optional per-call `space_id`/`account_id` argument and
+//   - resolves the optional per-call `workspace_id`/`account_id` argument and
 //     applies RBAC-scoping to the request context (issue #307: a connected
-//     agent can operate across all of the user's spaces, up to the user's
+//     agent can operate across all of the user's workspaces, up to the user's
 //     role in each),
 //   - is recorded as an mcp.tool_call event (issue #195).
 // The event carries {tool, agent, account_id, success, error} and is
 // best-effort: a nil Events store or a write error is logged, never fatal.
 func addTool[In, Out any](s *Server, t *mcp.Tool, h mcp.ToolHandlerFor[In, Out]) {
 	mcp.AddTool(s.mcp, t, func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
-		// Resolve + scope the call from its raw arguments (optional space_id /
-		// account_id). A failure (e.g. an inaccessible space) blocks the call.
+		// Resolve + scope the call from its raw arguments (optional workspace_id /
+		// account_id). A failure (e.g. an inaccessible workspace) blocks the call.
 		if req != nil && req.Params != nil {
 			raw := req.Params.Arguments
 			scope, serr := s.resolveScope(ctx, raw)
@@ -56,7 +56,7 @@ func (s *Server) recordMCPEvent(ctx context.Context, tool string, failed bool) {
 		return
 	}
 	// Use the per-call resolved account for the history row so a user-level
-	// agent's calls are attributed to the space they acted on (issue #307).
+	// agent's calls are attributed to the workspace they acted on (issue #307).
 	accountID := id.AccountID
 	if cs := callScopeFrom(ctx); cs != nil && len(cs.Accounts) > 0 {
 		accountID = cs.Accounts[0]

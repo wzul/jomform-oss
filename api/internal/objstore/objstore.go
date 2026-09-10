@@ -88,19 +88,19 @@ const (
 	// malicious or pathological PDF cannot exhaust CPU (issue #383).
 	PDFPreviewTimeout = 15 * time.Second
 
-	// MaxSpaceBytes is the per-space storage quota for all uploaded media/files
-	// (issue #384). A single space cannot store more than this across every
+	// MaxWorkspaceBytes is the per-workspace storage quota for all uploaded media/files
+	// (issue #384). A single workspace cannot store more than this across every
 	// media row (images, code assets, PDFs). Soft-deleting a media object
 	// releases its bytes back into the quota.
-	MaxSpaceBytes = 1 << 30 // 1GB
+	MaxWorkspaceBytes = 1 << 30 // 1GB
 )
 
-// ExceedsSpaceQuota reports whether adding `additional` bytes to an account
-// that already stores `current` bytes would push the space over the per-space
+// ExceedsWorkspaceQuota reports whether adding `additional` bytes to an account
+// that already stores `current` bytes would push the workspace over the per-workspace
 // 1GB storage quota (issue #384). Both the REST upload handlers and the MCP
-// upload_media tool share this so a space can never exceed the cap.
-func ExceedsSpaceQuota(current, additional int64) bool {
-	return current+additional > MaxSpaceBytes
+// upload_media tool share this so a workspace can never exceed the cap.
+func ExceedsWorkspaceQuota(current, additional int64) bool {
+	return current+additional > MaxWorkspaceBytes
 }
 
 // ImageUploadMIME maps an allowed canonical extension to its MIME type.
@@ -114,7 +114,7 @@ var ImageUploadMIME = map[string]string{
 
 // UploadAssetMIME maps an allowed canonical extension to its MIME type for
 // *code assets* — CSS/JS/HTML/fonts a merchant uploads to customise their
-// landing/space page (issue #361). Unlike images these are stored and served
+// landing/workspace page (issue #361). Unlike images these are stored and served
 // byte-for-byte (no re-encode) under the merchant's account-scoped key.
 var UploadAssetMIME = map[string]string{
 	".css":   "text/css; charset=utf-8",

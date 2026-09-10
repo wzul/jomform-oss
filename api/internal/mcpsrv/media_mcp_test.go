@@ -40,7 +40,7 @@ func TestUploadMediaRegistered(t *testing.T) {
 	for _, tl := range res.Tools {
 		got[tl.Name] = true
 	}
-	for _, name := range []string{"upload_media", "list_media", "get_space_landing_page", "set_space_landing_page"} {
+	for _, name := range []string{"upload_media", "list_media", "get_workspace_landing_page", "set_workspace_landing_page"} {
 		if !got[name] {
 			t.Errorf("tool %q not registered by registerTools", name)
 		}

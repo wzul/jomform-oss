@@ -26,7 +26,7 @@ type Service struct {
 	DecryptKey []byte // ENCRYPTION_KEY — used to decrypt per-account CHIP keys
 	BaseURL    string // app public base URL for redirects/callbacks
 	Forms      FormGetter
-	Spaces     *dbstore.SpaceStore
+	Workspaces     *dbstore.WorkspaceStore
 	// Users resolves the merchant's email for notify_merchant (issue #107).
 	Users      *dbstore.UserStore
 	Receipts   *Receipts
@@ -74,13 +74,13 @@ func (s *Service) accountSecrets(ctx context.Context, accountID string) (brandID
 	return acc.ChipBrandID, string(dec), nil
 }
 
-// spaceCurrency resolves the currency of the space that owns an account
+// workspaceCurrency resolves the currency of the workspace that owns an account
 // (issue #185). Falls back to the account's own currency when the account has
-// no linked space or the lookup fails. Used by the recurring-charge and
+// no linked workspace or the lookup fails. Used by the recurring-charge and
 // update-card paths, which act on an account rather than a sale.
-func (s *Service) spaceCurrency(ctx context.Context, accountID string) string {
-	if s.Spaces != nil {
-		if cur, err := s.Spaces.SpaceCurrencyByAccount(ctx, accountID); err == nil && cur != "" {
+func (s *Service) workspaceCurrency(ctx context.Context, accountID string) string {
+	if s.Workspaces != nil {
+		if cur, err := s.Workspaces.WorkspaceCurrencyByAccount(ctx, accountID); err == nil && cur != "" {
 			return cur
 		}
 	}
@@ -130,7 +130,7 @@ func (s *Service) CallbackPublicKey(ctx context.Context, accountID string) (*rsa
 type FormGetter interface {
 	GetByID(ctx context.Context, accountID, id string) (*dbstore.Form, error)
 	// FormEmailSettings reads a form's per-form notification email override
-	// (issue #177). Empty subject/body = fall back to space defaults.
+	// (issue #177). Empty subject/body = fall back to workspace defaults.
 	FormEmailSettings(ctx context.Context, formID string) (*dbstore.FormEmailSettings, error)
 }
 

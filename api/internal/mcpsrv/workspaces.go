@@ -1,4 +1,4 @@
-// MCP parity tools: spaces (multi-tenant storefronts) + per-space settings.
+// MCP parity tools: workspaces (multi-tenant storefronts) + per-workspace settings.
 package mcpsrv
 
 import (
@@ -14,20 +14,20 @@ import (
 	"github.com/wzul/jomform/api/internal/dbstore"
 )
 
-// ── Space context resolution ─────────────────────────────────────────────────
+// ── Workspace context resolution ─────────────────────────────────────────────────
 
-// spacesStore returns the space store, erroring when not wired.
-func (s *Server) spacesStore() (*dbstore.SpaceStore, error) {
-	if s.deps.Spaces == nil {
-		return nil, errors.New("spaces tidak tersedia")
+// workspacesStore returns the workspace store, erroring when not wired.
+func (s *Server) workspacesStore() (*dbstore.WorkspaceStore, error) {
+	if s.deps.Workspaces == nil {
+		return nil, errors.New("workspaces tidak tersedia")
 	}
-	return s.deps.Spaces, nil
+	return s.deps.Workspaces, nil
 }
 
-// spaceOwner resolves the user behind the MCP caller — the same identity the
+// workspaceOwner resolves the user behind the MCP caller — the same identity the
 // dashboard's sessionOwnerID resolves. Issue #307: OAuth tokens are bound to
 // the user directly; API-key auth resolves the account's owner.
-func (s *Server) spaceOwner(ctx context.Context) (string, error) {
+func (s *Server) workspaceOwner(ctx context.Context) (string, error) {
 	id := IdentityFromContext(ctx)
 	if id == nil {
 		return "", fmt.Errorf("token tiada atau tidak sah")
@@ -42,31 +42,31 @@ func (s *Server) spaceOwner(ctx context.Context) (string, error) {
 	return a.OwnerUserID, nil
 }
 
-// accessibleSpace fetches a space by ID and verifies the caller is the owner
-// or a member (issue #162). Returns the space + the caller's role.
-func (s *Server) accessibleSpace(ctx context.Context, spaceID string) (*dbstore.Space, string, error) {
-	sp, err := s.spacesStore()
+// accessibleWorkspace fetches a workspace by ID and verifies the caller is the owner
+// or a member (issue #162). Returns the workspace + the caller's role.
+func (s *Server) accessibleWorkspace(ctx context.Context, workspaceID string) (*dbstore.Workspace, string, error) {
+	sp, err := s.workspacesStore()
 	if err != nil {
 		return nil, "", err
 	}
-	owner, err := s.spaceOwner(ctx)
+	owner, err := s.workspaceOwner(ctx)
 	if err != nil {
 		return nil, "", err
 	}
-	space, err := sp.ByID(ctx, spaceID)
-	if err != nil || space == nil {
-		return nil, "", errors.New("space tidak dijumpai")
+	workspace, err := sp.ByID(ctx, workspaceID)
+	if err != nil || workspace == nil {
+		return nil, "", errors.New("workspace tidak dijumpai")
 	}
-	acc, ok, err := sp.AccessByID(ctx, spaceID, owner)
+	acc, ok, err := sp.AccessByID(ctx, workspaceID, owner)
 	if err != nil || !ok {
-		return nil, "", errors.New("space tidak dijumpai")
+		return nil, "", errors.New("workspace tidak dijumpai")
 	}
-	return space, acc.Role, nil
+	return workspace, acc.Role, nil
 }
 
-// ── list_spaces ──────────────────────────────────────────────────────────────
+// ── list_workspaces ──────────────────────────────────────────────────────────────
 
-type spaceOut struct {
+type workspaceOut struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 	Slug string `json:"slug"`
@@ -74,25 +74,25 @@ type spaceOut struct {
 	Role string `json:"role,omitempty"`
 }
 
-func (s *Server) listSpaces(
+func (s *Server) listWorkspaces(
 	ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn,
-) (*mcp.CallToolResult, []spaceOut, error) {
-	sp, err := s.spacesStore()
+) (*mcp.CallToolResult, []workspaceOut, error) {
+	sp, err := s.workspacesStore()
 	if err != nil {
 		return nil, nil, err
 	}
-	owner, err := s.spaceOwner(ctx)
+	owner, err := s.workspaceOwner(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
-	spaces, err := sp.ByMember(ctx, owner)
+	workspaces, err := sp.ByMember(ctx, owner)
 	if err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
-	out := make([]spaceOut, 0, len(spaces))
-	for _, x := range spaces {
-		out = append(out, spaceOut{
-			ID: x.SpaceID, Name: x.Name, Slug: x.Slug,
+	out := make([]workspaceOut, 0, len(workspaces))
+	for _, x := range workspaces {
+		out = append(out, workspaceOut{
+			ID: x.WorkspaceID, Name: x.Name, Slug: x.Slug,
 			URL:  "https://" + x.Slug + ".jomform.com",
 			Role: x.Role,
 		})
@@ -100,15 +100,15 @@ func (s *Server) listSpaces(
 	return nil, out, nil
 }
 
-// ── create_space ─────────────────────────────────────────────────────────────
+// ── create_workspace ─────────────────────────────────────────────────────────────
 
-type createSpaceIn struct {
-	Name string `json:"name" jsonschema:"Nama space / storefront"`
+type createWorkspaceIn struct {
+	Name string `json:"name" jsonschema:"Nama workspace / storefront"`
 	Slug string `json:"slug" jsonschema:"Slug URL unik — 3-40 aksara, a-z 0-9 dash sahaja"`
 }
 
-// validateSpaceSlug mirrors the REST handler in httpapi/rest_spaces.go.
-func validateSpaceSlug(slug string) error {
+// validateWorkspaceSlug mirrors the REST handler in httpapi/rest_workspaces.go.
+func validateWorkspaceSlug(slug string) error {
 	if len(slug) < 3 || len(slug) > 40 {
 		return errors.New("slug 3-40 aksara")
 	}
@@ -123,14 +123,14 @@ func validateSpaceSlug(slug string) error {
 	return nil
 }
 
-func (s *Server) createSpace(
-	ctx context.Context, _ *mcp.CallToolRequest, in createSpaceIn,
+func (s *Server) createWorkspace(
+	ctx context.Context, _ *mcp.CallToolRequest, in createWorkspaceIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	sp, err := s.spacesStore()
+	sp, err := s.workspacesStore()
 	if err != nil {
 		return nil, nil, err
 	}
-	owner, err := s.spaceOwner(ctx)
+	owner, err := s.workspaceOwner(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -138,13 +138,13 @@ func (s *Server) createSpace(
 		return nil, nil, errors.New("name dan slug wajib")
 	}
 	slug := strings.ToLower(strings.TrimSpace(in.Slug))
-	if err := validateSpaceSlug(slug); err != nil {
+	if err := validateWorkspaceSlug(slug); err != nil {
 		return nil, nil, err
 	}
 	if existing, _ := sp.BySlug(ctx, slug); existing != nil {
 		return nil, nil, errors.New("slug sudah digunakan")
 	}
-	space, err := sp.Create(ctx, owner, strings.TrimSpace(in.Name), slug)
+	workspace, err := sp.Create(ctx, owner, strings.TrimSpace(in.Name), slug)
 	if err != nil {
 		// unique-constraint backstop (race between the pre-check and INSERT)
 		var pgErr *pgconn.PgError
@@ -154,52 +154,52 @@ func (s *Server) createSpace(
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
 	return nil, map[string]string{
-		"status": "created", "id": space.ID, "name": space.Name, "slug": space.Slug,
-		"url": "https://" + space.Slug + ".jomform.com",
+		"status": "created", "id": workspace.ID, "name": workspace.Name, "slug": workspace.Slug,
+		"url": "https://" + workspace.Slug + ".jomform.com",
 	}, nil
 }
 
-// ── set_default_space (issue #164) ──────────────────────────────────────────
+// ── set_default_workspace (issue #164) ──────────────────────────────────────────
 
-type setDefaultSpaceIn struct {
-	SpaceID string `json:"space_id" jsonschema:"ID space (dari list_spaces). Kosong = buang default."`
+type setDefaultWorkspaceIn struct {
+	WorkspaceID string `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces). Kosong = buang default."`
 }
 
-// setDefaultSpace sets (or clears, when space_id is empty) the user's default
-// space — the space they land on after login, skipping the space-picker. The
-// space must belong to the user (owner or member).
-func (s *Server) setDefaultSpace(
-	ctx context.Context, _ *mcp.CallToolRequest, in setDefaultSpaceIn,
+// setDefaultWorkspace sets (or clears, when workspace_id is empty) the user's default
+// workspace — the workspace they land on after login, skipping the workspace-picker. The
+// workspace must belong to the user (owner or member).
+func (s *Server) setDefaultWorkspace(
+	ctx context.Context, _ *mcp.CallToolRequest, in setDefaultWorkspaceIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
 	if s.deps.Users == nil {
 		return nil, nil, errors.New("users tidak tersedia")
 	}
-	owner, err := s.spaceOwner(ctx)
+	owner, err := s.workspaceOwner(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
-	if in.SpaceID == "" {
-		if err := s.deps.Users.ClearDefaultSpace(ctx, owner); err != nil {
+	if in.WorkspaceID == "" {
+		if err := s.deps.Users.ClearDefaultWorkspace(ctx, owner); err != nil {
 			return nil, nil, fmt.Errorf("db: %w", err)
 		}
 		return nil, map[string]string{"status": "cleared"}, nil
 	}
-	sp, err := s.spacesStore()
+	sp, err := s.workspacesStore()
 	if err != nil {
 		return nil, nil, err
 	}
-	space, err := sp.ByID(ctx, in.SpaceID)
-	if err != nil || space == nil {
-		return nil, nil, errors.New("space tidak dijumpai")
+	workspace, err := sp.ByID(ctx, in.WorkspaceID)
+	if err != nil || workspace == nil {
+		return nil, nil, errors.New("workspace tidak dijumpai")
 	}
-	// The space must belong to the user (owner or member, issue #162).
-	if _, ok, aerr := sp.AccessByID(ctx, in.SpaceID, owner); aerr != nil || !ok {
-		return nil, nil, errors.New("space tidak dijumpai")
+	// The workspace must belong to the user (owner or member, issue #162).
+	if _, ok, aerr := sp.AccessByID(ctx, in.WorkspaceID, owner); aerr != nil || !ok {
+		return nil, nil, errors.New("workspace tidak dijumpai")
 	}
-	if err := s.deps.Users.SetDefaultSpace(ctx, owner, in.SpaceID); err != nil {
+	if err := s.deps.Users.SetDefaultWorkspace(ctx, owner, in.WorkspaceID); err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
-	return nil, map[string]string{"status": "saved", "space_id": in.SpaceID}, nil
+	return nil, map[string]string{"status": "saved", "workspace_id": in.WorkspaceID}, nil
 }
 
 // ── update_profile_phone (issue #181) ───────────────────────────────────────
@@ -216,7 +216,7 @@ func (s *Server) updateProfilePhone(
 	if s.deps.Users == nil {
 		return nil, nil, errors.New("users tidak tersedia")
 	}
-	owner, err := s.spaceOwner(ctx)
+	owner, err := s.workspaceOwner(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -257,7 +257,7 @@ func (s *Server) updateProfileTimezone(
 	if s.deps.Users == nil {
 		return nil, nil, errors.New("users tidak tersedia")
 	}
-	owner, err := s.spaceOwner(ctx)
+	owner, err := s.workspaceOwner(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -273,33 +273,33 @@ func (s *Server) updateProfileTimezone(
 	return nil, map[string]string{"status": "saved", "timezone": tz}, nil
 }
 
-// ── get_space_settings ───────────────────────────────────────────────────────
+// ── get_workspace_settings ───────────────────────────────────────────────────────
 
-type spaceRefIn struct {
-	SpaceID string `json:"space_id" jsonschema:"ID space (dari list_spaces)"`
+type workspaceRefIn struct {
+	WorkspaceID string `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
 }
 
-func (s *Server) getSpaceSettings(
-	ctx context.Context, _ *mcp.CallToolRequest, in spaceRefIn,
-) (*mcp.CallToolResult, *dbstore.SpaceSettings, error) {
-	if _, _, err := s.accessibleSpace(ctx, in.SpaceID); err != nil {
+func (s *Server) getWorkspaceSettings(
+	ctx context.Context, _ *mcp.CallToolRequest, in workspaceRefIn,
+) (*mcp.CallToolResult, *dbstore.WorkspaceSettings, error) {
+	if _, _, err := s.accessibleWorkspace(ctx, in.WorkspaceID); err != nil {
 		return nil, nil, err
 	}
-	sp, err := s.spacesStore()
+	sp, err := s.workspacesStore()
 	if err != nil {
 		return nil, nil, err
 	}
-	st, err := sp.Settings(ctx, in.SpaceID)
+	st, err := sp.Settings(ctx, in.WorkspaceID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
 	return nil, st, nil
 }
 
-// ── set_space_settings ───────────────────────────────────────────────────────
+// ── set_workspace_settings ───────────────────────────────────────────────────────
 
-type setSpaceSettingsIn struct {
-	SpaceID        string  `json:"space_id" jsonschema:"ID space (dari list_spaces)"`
+type setWorkspaceSettingsIn struct {
+	WorkspaceID        string  `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
 	FooterText     *string `json:"footer_text,omitempty" jsonschema:"Teks footer storefront (omit = kekal, \"\" = kosongkan)"`
 	CompanyReg     *string `json:"company_reg,omitempty" jsonschema:"Nombor pendaftaran syarikat (omit = kekal)"`
 	PrivacyURL     *string `json:"privacy_url,omitempty" jsonschema:"URL polisi privasi — mesti https:// (omit = kekal)"`
@@ -309,14 +309,14 @@ type setSpaceSettingsIn struct {
 	ContactAddress *string `json:"contact_address,omitempty" jsonschema:"Alamat perniagaan untuk footer (omit = kekal)"`
 	BusinessName   *string `json:"business_name,omitempty" jsonschema:"Nama perniagaan untuk footer (omit = kekal)"`
 	MenuJSON       *string `json:"menu_json,omitempty" jsonschema:"Menu navigasi JSON, cth [{\"label\":\"Home\",\"url\":\"/\"}] (omit = kekal)"`
-	// Issue #276: per-space SEO indexing toggle. Omitted (nil) = keep current.
-	Indexing *bool `json:"indexing,omitempty" jsonschema:"Benarkan enjin carian/AI mengindeks storefront space ini (omit = kekal)"`
+	// Issue #276: per-workspace SEO indexing toggle. Omitted (nil) = keep current.
+	Indexing *bool `json:"indexing,omitempty" jsonschema:"Benarkan enjin carian/AI mengindeks storefront workspace ini (omit = kekal)"`
 }
 
-func (s *Server) setSpaceSettings(
-	ctx context.Context, _ *mcp.CallToolRequest, in setSpaceSettingsIn,
+func (s *Server) setWorkspaceSettings(
+	ctx context.Context, _ *mcp.CallToolRequest, in setWorkspaceSettingsIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	_, role, err := s.accessibleSpace(ctx, in.SpaceID)
+	_, role, err := s.accessibleWorkspace(ctx, in.WorkspaceID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -332,12 +332,12 @@ func (s *Server) setSpaceSettings(
 	if in.MenuJSON != nil && *in.MenuJSON != "" && !jsonValid(*in.MenuJSON) {
 		return nil, nil, errors.New("menu_json bukan JSON yang sah")
 	}
-	sp, err := s.spacesStore()
+	sp, err := s.workspacesStore()
 	if err != nil {
 		return nil, nil, err
 	}
 	// Read-modify-write: omit a field = keep its current value.
-	st, err := sp.Settings(ctx, in.SpaceID)
+	st, err := sp.Settings(ctx, in.WorkspaceID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
@@ -377,26 +377,26 @@ func (s *Server) setSpaceSettings(
 	if err := sp.SaveSettings(ctx, st); err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
-	return nil, map[string]string{"status": "saved", "space_id": in.SpaceID}, nil
+	return nil, map[string]string{"status": "saved", "workspace_id": in.WorkspaceID}, nil
 }
 
-// ── get_space_landing_page / set_space_landing_page (issue #360) ─────────────
+// ── get_workspace_landing_page / set_workspace_landing_page (issue #360) ─────────────
 
-type spaceLandingRefIn struct {
-	SpaceID string `json:"space_id" jsonschema:"ID space (dari list_spaces)"`
+type workspaceLandingRefIn struct {
+	WorkspaceID string `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
 }
 
-func (s *Server) getSpaceLandingPage(
-	ctx context.Context, _ *mcp.CallToolRequest, in spaceLandingRefIn,
+func (s *Server) getWorkspaceLandingPage(
+	ctx context.Context, _ *mcp.CallToolRequest, in workspaceLandingRefIn,
 ) (*mcp.CallToolResult, *dbstore.LandingPage, error) {
-	if _, _, err := s.accessibleSpace(ctx, in.SpaceID); err != nil {
+	if _, _, err := s.accessibleWorkspace(ctx, in.WorkspaceID); err != nil {
 		return nil, nil, err
 	}
-	sp, err := s.spacesStore()
+	sp, err := s.workspacesStore()
 	if err != nil {
 		return nil, nil, err
 	}
-	st, err := sp.Settings(ctx, in.SpaceID)
+	st, err := sp.Settings(ctx, in.WorkspaceID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
@@ -406,8 +406,8 @@ func (s *Server) getSpaceLandingPage(
 	return nil, st.LandingPage, nil
 }
 
-type setSpaceLandingPageIn struct {
-	SpaceID         string                 `json:"space_id" jsonschema:"ID space (dari list_spaces)"`
+type setWorkspaceLandingPageIn struct {
+	WorkspaceID         string                 `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
 	Enabled         bool                   `json:"enabled" jsonschema:"true = papar landing page; false = jatuh ke senarai borang"`
 	Hero            string                 `json:"hero,omitempty" jsonschema:"Tajuk utama (hero)"`
 	Subtitle        string                 `json:"subtitle,omitempty" jsonschema:"Sub-tajuk di bawah hero"`
@@ -420,10 +420,10 @@ type setSpaceLandingPageIn struct {
 	Forms           []dbstore.LandingEmbed `json:"forms,omitempty" jsonschema:"Borang diterbitkan dipapar inline dalam landing page, cth [{\"label\":\"RSVP\",\"form_slug\":\"rsvp\"}]"`
 }
 
-func (s *Server) setSpaceLandingPage(
-	ctx context.Context, _ *mcp.CallToolRequest, in setSpaceLandingPageIn,
+func (s *Server) setWorkspaceLandingPage(
+	ctx context.Context, _ *mcp.CallToolRequest, in setWorkspaceLandingPageIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	_, role, err := s.accessibleSpace(ctx, in.SpaceID)
+	_, role, err := s.accessibleWorkspace(ctx, in.WorkspaceID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -436,11 +436,11 @@ func (s *Server) setSpaceLandingPage(
 			return nil, nil, errors.New("image_url/logo_url mesti https://")
 		}
 	}
-	sp, err := s.spacesStore()
+	sp, err := s.workspacesStore()
 	if err != nil {
 		return nil, nil, err
 	}
-	st, err := sp.Settings(ctx, in.SpaceID)
+	st, err := sp.Settings(ctx, in.WorkspaceID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
@@ -466,5 +466,5 @@ func (s *Server) setSpaceLandingPage(
 	if err := sp.SaveSettings(ctx, st); err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
-	return nil, map[string]string{"status": "saved", "space_id": in.SpaceID}, nil
+	return nil, map[string]string{"status": "saved", "workspace_id": in.WorkspaceID}, nil
 }

@@ -17,7 +17,7 @@ import (
 	"github.com/wzul/jomform/api/internal/dbstore"
 )
 
-// variationSubmitFixture seeds a user + space + account + published form with a
+// variationSubmitFixture seeds a user + workspace + account + published form with a
 // variable product (two variations) and returns a PublicHandlers wired with the
 // variation store, plus the product id and the limited-variation id.
 func variationSubmitFixture(t *testing.T) (*PublicHandlers, string, string, string, string) {
@@ -25,7 +25,7 @@ func variationSubmitFixture(t *testing.T) (*PublicHandlers, string, string, stri
 	ctx := context.Background()
 	pool := bundleTestPool(t)
 
-	var userID, spaceSlug, accountID string
+	var userID, workspaceSlug, accountID string
 	if err := pool.QueryRow(ctx,
 		`INSERT INTO users (email, password_hash)
 		 VALUES ('it-' || md5(random()::text) || '@example.test', 'it')
@@ -33,16 +33,16 @@ func variationSubmitFixture(t *testing.T) (*PublicHandlers, string, string, stri
 		t.Fatalf("create user: %v", err)
 	}
 	if err := pool.QueryRow(ctx,
-		`INSERT INTO spaces (owner_user_id, name, slug)
-		 VALUES ($1, 'it-space-' || md5(random()::text), 'it-' || md5(random()::text))
-		 RETURNING slug`, userID).Scan(&spaceSlug); err != nil {
-		t.Fatalf("create space: %v", err)
+		`INSERT INTO workspaces (owner_user_id, name, slug)
+		 VALUES ($1, 'it-workspace-' || md5(random()::text), 'it-' || md5(random()::text))
+		 RETURNING slug`, userID).Scan(&workspaceSlug); err != nil {
+		t.Fatalf("create workspace: %v", err)
 	}
 	if err := pool.QueryRow(ctx,
-		`INSERT INTO accounts (owner_user_id, name, slug, space_id)
+		`INSERT INTO accounts (owner_user_id, name, slug, workspace_id)
 		 SELECT $1, 'it-acc-' || md5(random()::text), 'it-' || md5(random()::text), id
-		 FROM spaces WHERE slug = $2
-		 RETURNING id`, userID, spaceSlug).Scan(&accountID); err != nil {
+		 FROM workspaces WHERE slug = $2
+		 RETURNING id`, userID, workspaceSlug).Scan(&accountID); err != nil {
 		t.Fatalf("create account: %v", err)
 	}
 
@@ -93,10 +93,10 @@ func variationSubmitFixture(t *testing.T) (*PublicHandlers, string, string, stri
 		Accounts:          dbstore.NewAccountStore(pool),
 		Products:          dbstore.NewProductStore(pool),
 		ProductVariations: vs,
-		Spaces:            dbstore.NewSpaceStore(pool),
+		Workspaces:            dbstore.NewWorkspaceStore(pool),
 		BaseURL:           "http://localhost:8080",
 	}
-	return h, spaceSlug, formSlug, prod.ID, limID
+	return h, workspaceSlug, formSlug, prod.ID, limID
 }
 
 // variationSubmit posts an order to the public mux and returns the response.
@@ -113,8 +113,8 @@ func variationSubmit(t *testing.T, h *PublicHandlers, host, path, body string) *
 }
 
 func TestVariationSubmitUsesVariationPriceAndStock(t *testing.T) {
-	h, spaceSlug, formSlug, prodID, limID := variationSubmitFixture(t)
-	host := spaceSlug + ".jomform.com"
+	h, workspaceSlug, formSlug, prodID, limID := variationSubmitFixture(t)
+	host := workspaceSlug + ".jomform.com"
 	path := "/" + formSlug + "/order"
 	body := `{"client":{"full_name":"Ali","email":"ali@example.test"},"items":[{"product_id":"` + prodID + `","variation_id":"` + limID + `","quantity":1}],"payment_method":"bank_direct"}`
 
@@ -168,8 +168,8 @@ func TestVariationSubmitUsesVariationPriceAndStock(t *testing.T) {
 }
 
 func TestVariationSubmitRejectsForeignVariation(t *testing.T) {
-	h, spaceSlug, formSlug, prodID, _ := variationSubmitFixture(t)
-	host := spaceSlug + ".jomform.com"
+	h, workspaceSlug, formSlug, prodID, _ := variationSubmitFixture(t)
+	host := workspaceSlug + ".jomform.com"
 	path := "/" + formSlug + "/order"
 
 	// A variation id that does not belong to the product must be rejected.

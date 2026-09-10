@@ -38,7 +38,7 @@ func TestAdminToolsRegistered(t *testing.T) {
 		got[tl.Name] = true
 	}
 	for _, name := range []string{
-		"admin_list_spaces", "admin_media_usage", "admin_list_sales",
+		"admin_list_workspaces", "admin_media_usage", "admin_list_sales",
 		"admin_spam_queue", "admin_email_deliveries", "admin_system_health",
 	} {
 		if !got[name] {
@@ -59,8 +59,8 @@ func TestAdminToolsFailClosed(t *testing.T) {
 	req := &mcp.CallToolRequest{}
 
 	// No allowlist configured → every admin tool must reject.
-	if _, _, err := srv.adminListSpaces(ctx, req, emptyIn{}); err == nil {
-		t.Error("admin_list_spaces should reject a non-super-admin")
+	if _, _, err := srv.adminListWorkspaces(ctx, req, emptyIn{}); err == nil {
+		t.Error("admin_list_workspaces should reject a non-super-admin")
 	}
 	if _, _, err := srv.adminMediaUsage(ctx, req, emptyIn{}); err == nil {
 		t.Error("admin_media_usage should reject a non-super-admin")

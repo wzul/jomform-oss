@@ -458,19 +458,19 @@ func strOrEmpty(s *string) string {
 }
 
 // formURL builds the canonical public URL for a form. Issue #77: a public
-// payment link is reachable only via its registered space subdomain
-// ({space}.jomform.com/{slug}) or a custom domain — the legacy /f/{slug} form
-// is gone. spaceSlug is the account's space slug ("" when unresolvable, in
+// payment link is reachable only via its registered workspace subdomain
+// ({workspace}.jomform.com/{slug}) or a custom domain — the legacy /f/{slug} form
+// is gone. workspaceSlug is the account's workspace slug ("" when unresolvable, in
 // which case no URL is emitted).
-func formURL(spaceSlug, slug string) string {
-	if spaceSlug == "" {
+func formURL(workspaceSlug, slug string) string {
+	if workspaceSlug == "" {
 		return ""
 	}
-	return "https://" + spaceSlug + ".jomform.com/" + slug
+	return "https://" + workspaceSlug + ".jomform.com/" + slug
 }
 
 // formURLForAccount builds the canonical public URL for a form, preferring a
-// verified custom domain over the space subdomain (issue #83). Returns ""
+// verified custom domain over the workspace subdomain (issue #83). Returns ""
 // when neither is resolvable.
 func (h *RESTHandlers) formURLForAccount(ctx context.Context, acc *dbstore.Account, slug string) string {
 	if acc == nil {
@@ -479,17 +479,17 @@ func (h *RESTHandlers) formURLForAccount(ctx context.Context, acc *dbstore.Accou
 	if acc.CustomDomain != "" && acc.CustomDomainVerified {
 		return "https://" + strings.TrimRight(acc.CustomDomain, "/") + "/" + slug
 	}
-	return formURL(h.spaceSlugFor(ctx, acc.ID), slug)
+	return formURL(h.workspaceSlugFor(ctx, acc.ID), slug)
 }
 
-// spaceSlugFor resolves the space slug an account's forms live under, for
-// building space-scoped public URLs. Returns "" when the account has no
-// linked space (no public URL).
-func (h *RESTHandlers) spaceSlugFor(ctx context.Context, accountID string) string {
-	if h.Spaces == nil {
+// workspaceSlugFor resolves the workspace slug an account's forms live under, for
+// building workspace-scoped public URLs. Returns "" when the account has no
+// linked workspace (no public URL).
+func (h *RESTHandlers) workspaceSlugFor(ctx context.Context, accountID string) string {
+	if h.Workspaces == nil {
 		return ""
 	}
-	slug, err := h.Spaces.SpaceSlugByAccount(ctx, accountID)
+	slug, err := h.Workspaces.WorkspaceSlugByAccount(ctx, accountID)
 	if err != nil {
 		return ""
 	}
@@ -499,7 +499,7 @@ func (h *RESTHandlers) spaceSlugFor(ctx context.Context, accountID string) strin
 // uniqueFormSlug generates a URL-safe slug for a new form (issue #176). It
 // prefers a slugified form title, falling back to a random token when the
 // title yields nothing usable, and appends a random suffix until the slug is
-// free within the account's space (uniqueness is per-space, #77).
+// free within the account's workspace (uniqueness is per-workspace, #77).
 func (h *RESTHandlers) uniqueFormSlug(ctx context.Context, accountID, title string) string {
 	base := strings.ToLower(strings.TrimSpace(title))
 	base = slugUnsafe.ReplaceAllString(base, "-")
@@ -514,7 +514,7 @@ func (h *RESTHandlers) uniqueFormSlug(ctx context.Context, accountID, title stri
 	if base == "" {
 		base = "f-" + randHex(4)
 	}
-	// Ensure uniqueness within the space; append a random suffix on collision.
+	// Ensure uniqueness within the workspace; append a random suffix on collision.
 	for i := 0; i < 5; i++ {
 		taken, err := h.Forms.SlugExists(ctx, accountID, base)
 		if err != nil || !taken {
@@ -592,7 +592,7 @@ func (h *RESTHandlers) createForm(w http.ResponseWriter, r *http.Request, actx *
 		return
 	}
 	// Issue #176: auto-generate a unique slug when the merchant leaves it
-	// blank. The slug is unique per space (#77), so a generated slug that
+	// blank. The slug is unique per workspace (#77), so a generated slug that
 	// collides gets a random suffix appended until it is free.
 	slug := strings.ToLower(strings.TrimSpace(in.Slug))
 	if slug == "" {

@@ -457,17 +457,17 @@ func (a *AuthHandlers) handleMagicLinkVerify(w http.ResponseWriter, r *http.Requ
 		}
 	}
 	slog.Info("magiclink_login", "user", user.ID, "kind", kind)
-	// Issue #164: include the user's default space so the frontend can skip
-	// the space-picker when a default is set.
-	defSpace := ""
+	// Issue #164: include the user's default workspace so the frontend can skip
+	// the workspace-picker when a default is set.
+	defWorkspace := ""
 	if a.Users != nil {
-		if ds, err := a.Users.DefaultSpace(r.Context(), user.ID); err == nil {
-			defSpace = ds
+		if ds, err := a.Users.DefaultWorkspace(r.Context(), user.ID); err == nil {
+			defWorkspace = ds
 		}
 	}
 	writeJSON(w, http.StatusOK, meResponse{
 		ID: user.ID, Email: user.Email, TOTPEnabled: user.TOTPEnabled, CreatedAt: user.CreatedAt.UTC().Format(time.RFC3339),
-		Phone: user.Phone, DefaultSpaceID: defSpace,
+		Phone: user.Phone, DefaultWorkspaceID: defWorkspace,
 	})
 }
 

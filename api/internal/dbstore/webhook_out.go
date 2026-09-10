@@ -14,7 +14,7 @@ type OutboundWebhook struct {
 	ID        string
 	AccountID string
 	// FormID scopes the webhook to a single form (issue #196). Empty = NULL =
-	// space/account-wide (fires for all forms' events); set = fires only for
+	// workspace/account-wide (fires for all forms' events); set = fires only for
 	// that form's events.
 	FormID    string
 	URL       string
@@ -31,7 +31,7 @@ type WebhookStore struct{ pool *pgxpool.Pool }
 func NewWebhookStore(pool *pgxpool.Pool) *WebhookStore { return &WebhookStore{pool: pool} }
 
 // Create registers a webhook, returning its id+url. A non-empty formID scopes
-// the webhook to that form (issue #196); empty formID = space/account-wide.
+// the webhook to that form (issue #196); empty formID = workspace/account-wide.
 func (s *WebhookStore) Create(ctx context.Context, accountID, formID, url, secret string, events []string) (*OutboundWebhook, error) {
 	wh := &OutboundWebhook{AccountID: accountID, FormID: formID, URL: url, Secret: secret, Events: events, Active: true}
 	err := s.pool.QueryRow(ctx,
@@ -43,7 +43,7 @@ func (s *WebhookStore) Create(ctx context.Context, accountID, formID, url, secre
 
 // ListByAccount lists url+id (secrets never returned to the UI). A non-empty
 // formID narrows to that form's webhooks; empty formID returns the
-// space/account-wide webhooks (form_id IS NULL).
+// workspace/account-wide webhooks (form_id IS NULL).
 func (s *WebhookStore) ListByAccount(ctx context.Context, accountID, formID string) ([]*OutboundWebhook, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, url, events FROM outbound_webhooks
@@ -110,7 +110,7 @@ func (s *WebhookStore) ActiveForEvent(ctx context.Context, accountID, event stri
 
 // ListActiveByAccount returns active webhooks for dispatch. A non-empty
 // formID narrows to that form's webhooks; empty formID returns the
-// space/account-wide webhooks (form_id IS NULL).
+// workspace/account-wide webhooks (form_id IS NULL).
 func (s *WebhookStore) ListActiveByAccount(ctx context.Context, accountID, formID string) ([]*OutboundWebhook, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, account_id, COALESCE(form_id::text,''), url, secret, events FROM outbound_webhooks

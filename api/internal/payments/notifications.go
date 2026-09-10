@@ -35,8 +35,8 @@ import (
 type NotificationRef struct {
 	// FormID is the form whose rules are evaluated.
 	FormID string
-	// SpaceID / AccountID resolve the merchant's admin_email.
-	SpaceID   string
+	// WorkspaceID / AccountID resolve the merchant's admin_email.
+	WorkspaceID   string
 	AccountID string
 	// RefCode / AmountSen / ItemsSummary / BuyerName / FormURL are the
 	// standard {{placeholders}} (mirror the receipt context).
@@ -119,8 +119,8 @@ func (s *Service) resolveNotificationRecipient(ctx context.Context, ref Notifica
 // resolveAdminEmail returns the merchant's account email for a form's owner.
 func (s *Service) resolveAdminEmail(ctx context.Context, ref NotificationRef) string {
 	accountID := ref.AccountID
-	if accountID == "" && s.Spaces != nil && ref.SpaceID != "" {
-		if sp, err := s.Spaces.ByID(ctx, ref.SpaceID); err == nil && sp != nil {
+	if accountID == "" && s.Workspaces != nil && ref.WorkspaceID != "" {
+		if sp, err := s.Workspaces.ByID(ctx, ref.WorkspaceID); err == nil && sp != nil {
 			accountID = sp.Owner
 		}
 	}
@@ -140,10 +140,10 @@ func (s *Service) fireSaleNotifications(ctx context.Context, sale *dbstore.Sale,
 	if s.Notifications == nil || sale.FormID == "" {
 		return
 	}
-	spaceID := ""
-	if s.Spaces != nil {
-		if sid, serr := s.Spaces.SpaceIDByAccount(ctx, sale.AccountID); serr == nil {
-			spaceID = sid
+	workspaceID := ""
+	if s.Workspaces != nil {
+		if sid, serr := s.Workspaces.WorkspaceIDByAccount(ctx, sale.AccountID); serr == nil {
+			workspaceID = sid
 		}
 	}
 	formURL := s.formPublicURL(ctx, sale.AccountID, sale.FormID)
@@ -152,7 +152,7 @@ func (s *Service) fireSaleNotifications(ctx context.Context, sale *dbstore.Sale,
 	}
 	s.FireFormNotifications(ctx, NotificationRef{
 		FormID:       sale.FormID,
-		SpaceID:      spaceID,
+		WorkspaceID:      workspaceID,
 		AccountID:    sale.AccountID,
 		RefCode:      sale.RefCode,
 		AmountSen:    sale.TotalSen,

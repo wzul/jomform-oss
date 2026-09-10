@@ -1,8 +1,8 @@
 // Super-admin REST endpoints — platform-wide usage monitoring (issue #387).
 //
-// GET /v1/admin/overview returns platform-wide usage metrics (spaces, forms,
-// products, sales, storage, email, spam, recent signups, active spaces) so
-// the platform owner can visually monitor usage across all spaces once
+// GET /v1/admin/overview returns platform-wide usage metrics (workspaces, forms,
+// products, sales, storage, email, spam, recent signups, active workspaces) so
+// the platform owner can visually monitor usage across all workspaces once
 // JomForm is public. It is gated on the super-admin role (#385): every
 // handler calls requireSuperAdmin first and audits the access afterwards.
 // It is read-only — no destructive actions exist on the admin surface.
@@ -82,8 +82,8 @@ type adminOverview struct {
 	Email        dbstore.EmailDeliverySummary `json:"email"`
 	Spam         dbstore.SpamQueueSize      `json:"spam"`
 	RecentSignups []dbstore.RecentSignup    `json:"recent_signups"`
-	ActiveSpaces  []dbstore.ActiveSpace     `json:"active_spaces"`
-	Storage      []dbstore.MediaUsageBySpace `json:"storage"`
+	ActiveWorkspaces  []dbstore.ActiveWorkspace     `json:"active_workspaces"`
+	Storage      []dbstore.MediaUsageByWorkspace `json:"storage"`
 	QuotaBytes   int64                      `json:"quota_bytes"`
 }
 
@@ -97,21 +97,21 @@ func (h *RESTHandlers) handleAdminOverview(w http.ResponseWriter, r *http.Reques
 	h.auditSuperAdminAccess(r, "admin.overview")
 
 	ctx := r.Context()
-	out := adminOverview{QuotaBytes: 1 << 30} // 1GB per-space quota (#384)
+	out := adminOverview{QuotaBytes: 1 << 30} // 1GB per-workspace quota (#384)
 
-	if h.Spaces != nil {
-		if t, err := h.Spaces.PlatformTotals(ctx); err == nil {
+	if h.Workspaces != nil {
+		if t, err := h.Workspaces.PlatformTotals(ctx); err == nil {
 			out.Totals = t
 		}
 		now := time.Now()
-		if g, err := h.Spaces.GrowthSince(ctx, now.Add(-24*time.Hour)); err == nil {
+		if g, err := h.Workspaces.GrowthSince(ctx, now.Add(-24*time.Hour)); err == nil {
 			out.Growth24h = g
 		}
-		if g, err := h.Spaces.GrowthSince(ctx, now.Add(-7*24*time.Hour)); err == nil {
+		if g, err := h.Workspaces.GrowthSince(ctx, now.Add(-7*24*time.Hour)); err == nil {
 			out.Growth7d = g
 		}
-		if a, err := h.Spaces.ActiveSpaces(ctx, 7); err == nil {
-			out.ActiveSpaces = a
+		if a, err := h.Workspaces.ActiveWorkspaces(ctx, 7); err == nil {
+			out.ActiveWorkspaces = a
 		}
 	}
 	if h.EmailDeliveryEvents != nil {
@@ -130,7 +130,7 @@ func (h *RESTHandlers) handleAdminOverview(w http.ResponseWriter, r *http.Reques
 		}
 	}
 	if h.Media != nil {
-		if s, err := h.Media.UsageBySpace(ctx); err == nil {
+		if s, err := h.Media.UsageByWorkspace(ctx); err == nil {
 			out.Storage = s
 		}
 	}

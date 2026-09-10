@@ -92,7 +92,7 @@ type Config struct {
 	OAuthDCRBurst float64
 
 	// LLM (issue #184): Ollama Cloud OpenAI-compatible endpoint + model used
-	// to auto-generate per-space legal pages. Empty base URL/model use the
+	// to auto-generate per-workspace legal pages. Empty base URL/model use the
 	// defaults (https://ollama.com/v1, deepseek-v4-flash:0731).
 	LLMBaseURL string
 	LLMModel   string
@@ -118,7 +118,7 @@ type Config struct {
 
 	// SuperAdminEmails (issue #385): comma-separated email allowlist of site
 	// super-admins. A user whose email matches is a super-admin, unlocking
-	// platform-wide monitoring across all spaces — but ONLY on explicitly
+	// platform-wide monitoring across all workspaces — but ONLY on explicitly
 	// gated admin tools/pages (MCP admin tools #386, admin dashboard #387),
 	// never implicitly on normal tools. Empty = no super-admins.
 	SuperAdminEmails []string

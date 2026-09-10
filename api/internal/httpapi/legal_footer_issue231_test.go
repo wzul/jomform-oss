@@ -3,28 +3,28 @@ package httpapi
 import "testing"
 
 // Issue #231: the merchant's stored PrivacyURL/TermsURL/RefundURL may point at
-// a stale/wrong space subdomain. When a link targets one of the space's own
-// hosted legal pages ({space}.jomform.com/privacy|terms|refund), it must be
-// rewritten to the CURRENT space's subdomain so the footer link always
+// a stale/wrong workspace subdomain. When a link targets one of the workspace's own
+// hosted legal pages ({workspace}.jomform.com/privacy|terms|refund), it must be
+// rewritten to the CURRENT workspace's subdomain so the footer link always
 // resolves. External URLs are left untouched.
 func TestRewriteHostedLegalURL(t *testing.T) {
 	cases := []struct {
 		name, raw, slug, want string
 	}{
 		{
-			name: "stale privacy slug rewritten to current space",
+			name: "stale privacy slug rewritten to current workspace",
 			raw:  "https://wanzulhosting.jomform.com/privacy",
 			slug: "wan",
 			want: "https://wan.jomform.com/privacy",
 		},
 		{
-			name: "stale terms slug rewritten to current space",
+			name: "stale terms slug rewritten to current workspace",
 			raw:  "https://wanzulhosting.jomform.com/terms",
 			slug: "wan",
 			want: "https://wan.jomform.com/terms",
 		},
 		{
-			name: "stale refund slug rewritten to current space",
+			name: "stale refund slug rewritten to current workspace",
 			raw:  "https://wanzulhosting.jomform.com/refund",
 			slug: "wan",
 			want: "https://wan.jomform.com/refund",

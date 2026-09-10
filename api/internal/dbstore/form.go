@@ -210,9 +210,9 @@ func (s *FormStore) AccessPassword(ctx context.Context, accountID, id string) (s
 	return hash, nil
 }
 
-// SlugExists reports whether a live (non-deleted) form in the account's space
-// already claims the given slug. Uniqueness is per-space (#77); the account
-// maps to exactly one space, so scoping by account is equivalent.
+// SlugExists reports whether a live (non-deleted) form in the account's workspace
+// already claims the given slug. Uniqueness is per-workspace (#77); the account
+// maps to exactly one workspace, so scoping by account is equivalent.
 func (s *FormStore) SlugExists(ctx context.Context, accountID, slug string) (bool, error) {
 	var n int
 	err := s.pool.QueryRow(ctx,
@@ -325,14 +325,14 @@ func (s *FormStore) TemplateBySlug(ctx context.Context, slug string) (*Form, err
 	return f, nil
 }
 
-// PublishedBySpaceSlug resolves a published form via space subdomain
+// PublishedByWorkspaceSlug resolves a published form via workspace subdomain
 // (e.g. wanzulhosting.jomform.com/form-baru — no /f/ prefix).
-func (s *FormStore) PublishedBySpaceSlug(ctx context.Context, spaceSlug, formSlug string) (*Form, error) {
-	f, err := s.PublishedByAccountSlug(ctx, spaceSlug, formSlug)
+func (s *FormStore) PublishedByWorkspaceSlug(ctx context.Context, workspaceSlug, formSlug string) (*Form, error) {
+	f, err := s.PublishedByAccountSlug(ctx, workspaceSlug, formSlug)
 	if err == nil {
 		return f, nil
 	}
-	// space slug may differ from account slug — join spaces
+	// workspace slug may differ from account slug — join workspaces
 	f2 := &Form{}
 	err = s.pool.QueryRow(ctx,
 		`SELECT f.id, f.account_id, f.slug, f.title, f.config, f.theme, f.status, f.is_main,
@@ -341,9 +341,9 @@ func (s *FormStore) PublishedBySpaceSlug(ctx context.Context, spaceSlug, formSlu
 		        f.created_at, f.updated_at
 		 FROM forms f
 		 JOIN accounts a ON a.id = f.account_id
-		 JOIN spaces sp ON sp.id = a.space_id
+		 JOIN workspaces sp ON sp.id = a.workspace_id
 		 WHERE sp.slug = $1 AND f.slug = $2 AND f.status = 'published' AND f.deleted_at IS NULL`,
-		spaceSlug, formSlug).Scan(
+		workspaceSlug, formSlug).Scan(
 		&f2.ID, &f2.AccountID, &f2.Slug, &f2.Title, &f2.Config, &f2.Theme,
 		&f2.Status, &f2.IsMain, &f2.RedirectSuccess, &f2.RedirectFailure,
 		&f2.AllowEmbed, &f2.LogoURL, &f2.IsTemplate, &f2.FailureMessage, &f2.StartAt, &f2.EndAt,
@@ -355,11 +355,11 @@ func (s *FormStore) PublishedBySpaceSlug(ctx context.Context, spaceSlug, formSlu
 	return f2, nil
 }
 
-// BySpaceSlug resolves a live (non-deleted) form by space subdomain + slug
+// ByWorkspaceSlug resolves a live (non-deleted) form by workspace subdomain + slug
 // regardless of status (issue #176). Used by the public renderer so a private
 // form can show its password gate; the caller enforces the status rules.
-func (s *FormStore) BySpaceSlug(ctx context.Context, spaceSlug, formSlug string) (*Form, error) {
-	f, err := s.ByAccountSlug(ctx, spaceSlug, formSlug)
+func (s *FormStore) ByWorkspaceSlug(ctx context.Context, workspaceSlug, formSlug string) (*Form, error) {
+	f, err := s.ByAccountSlug(ctx, workspaceSlug, formSlug)
 	if err == nil {
 		return f, nil
 	}
@@ -371,9 +371,9 @@ func (s *FormStore) BySpaceSlug(ctx context.Context, spaceSlug, formSlug string)
 		        f.created_at, f.updated_at
 		 FROM forms f
 		 JOIN accounts a ON a.id = f.account_id
-		 JOIN spaces sp ON sp.id = a.space_id
+		 JOIN workspaces sp ON sp.id = a.workspace_id
 		 WHERE sp.slug = $1 AND f.slug = $2 AND f.deleted_at IS NULL`,
-		spaceSlug, formSlug).Scan(
+		workspaceSlug, formSlug).Scan(
 		&f2.ID, &f2.AccountID, &f2.Slug, &f2.Title, &f2.Config, &f2.Theme,
 		&f2.Status, &f2.IsMain, &f2.RedirectSuccess, &f2.RedirectFailure,
 		&f2.AllowEmbed, &f2.LogoURL, &f2.IsTemplate, &f2.FailureMessage, &f2.StartAt, &f2.EndAt,
@@ -386,7 +386,7 @@ func (s *FormStore) BySpaceSlug(ctx context.Context, spaceSlug, formSlug string)
 }
 
 // ByAccountSlug resolves a live (non-deleted) form by account slug + form slug
-// regardless of status (issue #176). See BySpaceSlug.
+// regardless of status (issue #176). See ByWorkspaceSlug.
 func (s *FormStore) ByAccountSlug(ctx context.Context, accountSlug, formSlug string) (*Form, error) {
 	f := &Form{}
 	err := s.pool.QueryRow(ctx, "SELECT f.id, f.account_id, f.slug, f.title, f.config, f.theme, "+
@@ -403,8 +403,8 @@ func (s *FormStore) ByAccountSlug(ctx context.Context, accountSlug, formSlug str
 	return f, err
 }
 
-// ListPublishedBySpace lists published forms for a space (by its URL slug).
-func (s *FormStore) ListPublishedBySpace(ctx context.Context, spaceSlug string) ([]*Form, error) {
+// ListPublishedByWorkspace lists published forms for a workspace (by its URL slug).
+func (s *FormStore) ListPublishedByWorkspace(ctx context.Context, workspaceSlug string) ([]*Form, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT f.id, f.account_id, f.slug, f.title, f.config, f.theme, f.status, f.is_main,
 		        f.redirect_success, f.redirect_failure, f.allow_embed, f.logo_url, f.is_template, f.failure_message,
@@ -412,9 +412,9 @@ func (s *FormStore) ListPublishedBySpace(ctx context.Context, spaceSlug string) 
 		        f.created_at, f.updated_at
 		 FROM forms f
 		 JOIN accounts a ON a.id = f.account_id
-		 JOIN spaces sp ON sp.id = a.space_id
+		 JOIN workspaces sp ON sp.id = a.workspace_id
 		 WHERE sp.slug = $1 AND f.status = 'published' AND f.deleted_at IS NULL
-		 ORDER BY f.created_at`, spaceSlug)
+		 ORDER BY f.created_at`, workspaceSlug)
 	if err != nil {
 		return nil, err
 	}
@@ -432,7 +432,7 @@ func (s *FormStore) ListPublishedBySpace(ctx context.Context, spaceSlug string) 
 
 // ListPublishedByAccountSlug lists published forms for an account (by its URL
 // slug). Used by the sitemap handler (issue #276) to list a custom-domain
-// space's indexable forms.
+// workspace's indexable forms.
 func (s *FormStore) ListPublishedByAccountSlug(ctx context.Context, accountSlug string) ([]*Form, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT f.id, f.account_id, f.slug, f.title, f.config, f.theme, f.status, f.is_main,

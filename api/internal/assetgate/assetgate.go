@@ -1,7 +1,7 @@
 // Package assetgate — background scan of uploaded merchant code assets (issue #364).
 //
 // #361 added the ability for a merchant to upload CSS/JS/HTML (and SVG/fonts)
-// to customise their landing/space page, stored and served tenant-scoped.
+// to customise their landing/workspace page, stored and served tenant-scoped.
 // That introduced a fundamentally different risk from #255's sanitised,
 // non-executing custom HTML: served+executable JS/CSS could be used to host
 // malicious scripts. This package implements the security gate (#364):
@@ -224,7 +224,7 @@ func hasExternalURL(s string) bool {
 			return false
 		}
 		start += idx
-		// Find the end of the URL (up to a quote, space, close paren/bracket, or end).
+		// Find the end of the URL (up to a quote, workspace, close paren/bracket, or end).
 		end := start + len("https://")
 		for end < len(s) {
 			c := s[end]

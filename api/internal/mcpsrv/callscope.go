@@ -1,13 +1,13 @@
-// Per-call space scope for MCP tools (issue #307).
+// Per-call workspace scope for MCP tools (issue #307).
 //
 // A connected OAuth agent is bound to the USER, not to a single account. Each
-// MCP tool call may optionally carry a `space_id` (or `account_id`) argument
-// naming which of the user's spaces to operate on. This file extracts that
+// MCP tool call may optionally carry a `workspace_id` (or `account_id`) argument
+// naming which of the user's workspaces to operate on. This file extracts that
 // optional argument from the raw tool Arguments (the typed input structs are
 // left untouched — JSON schema allows additional properties by default) and
 // stashes a resolved scope on the request so `accountAndScope` /
-// `requireWriteRole` / `requireAdminRole` / `spaceOwner` honour it and never
-// exceed the user's role in the chosen space.
+// `requireWriteRole` / `requireAdminRole` / `workspaceOwner` honour it and never
+// exceed the user's role in the chosen workspace.
 package mcpsrv
 
 import (
@@ -23,16 +23,16 @@ import (
 type scopeCtxKey struct{}
 
 // CallScope is the resolved, per-call target: the account set the tool may
-// act on (every account of the user's chosen/accessible spaces) plus the
+// act on (every account of the user's chosen/accessible workspaces) plus the
 // caller's role within them.
 type CallScope struct {
 	// Accounts holds every account the caller may operate on for this call.
-	// With an explicit space_id it is that space's accounts; otherwise it is
-	// every account across the user's accessible spaces (issue #307).
+	// With an explicit workspace_id it is that workspace's accounts; otherwise it is
+	// every account across the user's accessible workspaces (issue #307).
 	Accounts []string
-	// SpaceID is the explicitly requested space ("" when none).
-	SpaceID string
-	// Role is the caller's role in the requested/implied space ("" when the
+	// WorkspaceID is the explicitly requested workspace ("" when none).
+	WorkspaceID string
+	// Role is the caller's role in the requested/implied workspace ("" when the
 	// caller is the owner / unscoped / API-key — owners always have admin).
 	Role string
 	// ExplicitAccountID is non-empty when the call named account_id directly.
@@ -52,10 +52,10 @@ func callScopeFrom(ctx context.Context) *CallScope {
 	return nil
 }
 
-// scopeFromArgs reads the optional `space_id` / `account_id` fields out of the
+// scopeFromArgs reads the optional `workspace_id` / `account_id` fields out of the
 // raw MCP tool arguments (json.RawMessage). Both are reserved helper fields;
 // they are never part of the typed tool input. Returns "" when absent.
-func scopeFromArgs(raw json.RawMessage) (spaceID, accountID string) {
+func scopeFromArgs(raw json.RawMessage) (workspaceID, accountID string) {
 	if len(raw) == 0 {
 		return "", ""
 	}
@@ -63,24 +63,24 @@ func scopeFromArgs(raw json.RawMessage) (spaceID, accountID string) {
 	if err := json.Unmarshal(raw, &m); err != nil {
 		return "", ""
 	}
-	if v, ok := m["space_id"].(string); ok {
-		spaceID = v
+	if v, ok := m["workspace_id"].(string); ok {
+		workspaceID = v
 	}
 	if v, ok := m["account_id"].(string); ok {
 		accountID = v
 	}
-	return spaceID, accountID
+	return workspaceID, accountID
 }
 
 // resolveScope resolves the per-call scope from the raw arguments against the
-// authenticated principal. It verifies a named space/account belongs to the
+// authenticated principal. It verifies a named workspace/account belongs to the
 // user (owner or member, issue #162). Unscoped calls resolve to every account
-// across the user's accessible spaces (issue #307). Returns an error when the
+// across the user's accessible workspaces (issue #307). Returns an error when the
 // named scope is inaccessible.
 func (s *Server) resolveScope(ctx context.Context, raw json.RawMessage) (*CallScope, error) {
-	spaceID, accountID := scopeFromArgs(raw)
-	if accountID != "" && spaceID != "" {
-		return nil, errors.New("hanya satu daripada space_id atau account_id dibenarkan")
+	workspaceID, accountID := scopeFromArgs(raw)
+	if accountID != "" && workspaceID != "" {
+		return nil, errors.New("hanya satu daripada workspace_id atau account_id dibenarkan")
 	}
 	userID := s.userIDFor(ctx)
 	if userID == "" {
@@ -88,7 +88,7 @@ func (s *Server) resolveScope(ctx context.Context, raw json.RawMessage) (*CallSc
 	}
 
 	// API-key callers have no bound user (id.UserID == ""). Issue #307 scopes
-	// OAuth agents to all the user's spaces; an API key must stay bound to the
+	// OAuth agents to all the user's workspaces; an API key must stay bound to the
 	// single account it authenticates (legacy behaviour — do not widen it).
 	if id := IdentityFromContext(ctx); id != nil && id.UserID == "" {
 		if id.AccountID != "" {
@@ -108,21 +108,21 @@ func (s *Server) resolveScope(ctx context.Context, raw json.RawMessage) (*CallSc
 		return &CallScope{Accounts: []string{accountID}, ExplicitAccountID: accountID}, nil
 	}
 
-	if spaceID != "" {
-		if s.deps.Spaces == nil {
-			return nil, errors.New("spaces tidak tersedia")
+	if workspaceID != "" {
+		if s.deps.Workspaces == nil {
+			return nil, errors.New("workspaces tidak tersedia")
 		}
-		acc, ok, err := s.deps.Spaces.AccessByID(ctx, spaceID, userID)
+		acc, ok, err := s.deps.Workspaces.AccessByID(ctx, workspaceID, userID)
 		if err != nil {
 			return nil, err
 		}
 		if !ok {
-			return nil, errors.New("space tidak dijumpai")
+			return nil, errors.New("workspace tidak dijumpai")
 		}
-		return &CallScope{Accounts: acc.Accounts, SpaceID: spaceID, Role: acc.Role}, nil
+		return &CallScope{Accounts: acc.Accounts, WorkspaceID: workspaceID, Role: acc.Role}, nil
 	}
 
-	// Unscoped: every account across the user's accessible spaces.
+	// Unscoped: every account across the user's accessible workspaces.
 	accounts, err := s.userAccessibleAccounts(ctx, userID)
 	if err != nil {
 		return nil, err
@@ -151,7 +151,7 @@ func (s *Server) userIDFor(ctx context.Context) string {
 }
 
 // accountScopes returns the full account set this call may operate on
-// (issue #307): every account across the user's accessible spaces, or the
+// (issue #307): every account across the user's accessible workspaces, or the
 // explicitly scoped subset when a per-call scope is present. Scope write gate
 // (if write) is also checked.
 func (s *Server) accountScopes(ctx context.Context, write bool) ([]string, error) {
@@ -240,7 +240,7 @@ func (s *Server) resolveProductAccount(ctx context.Context, productID string) (s
 }
 
 // requireFormWrite returns the account owning formID after enforcing the
-// manage-or-admin gate for that form's space (issue #162/#307). This replaces
+// manage-or-admin gate for that form's workspace (issue #162/#307). This replaces
 // the old single-account requireWriteRole for per-form write tools.
 func (s *Server) requireFormWrite(ctx context.Context, formID string) (string, error) {
 	acc, err := s.resolveFormAccount(ctx, formID)
@@ -254,7 +254,7 @@ func (s *Server) requireFormWrite(ctx context.Context, formID string) (string, e
 }
 
 // requireProductWrite returns the account owning productID after enforcing the
-// manage-or-admin gate for that product's space.
+// manage-or-admin gate for that product's workspace.
 func (s *Server) requireProductWrite(ctx context.Context, productID string) (string, error) {
 	acc, err := s.resolveProductAccount(ctx, productID)
 	if err != nil {
@@ -286,7 +286,7 @@ func (s *Server) resolveSaleAccount(ctx context.Context, refCode string) (string
 }
 
 // requireSaleWrite returns the account owning a sale after enforcing the
-// manage-or-admin gate for its space.
+// manage-or-admin gate for its workspace.
 func (s *Server) requireSaleWrite(ctx context.Context, refCode string) (string, error) {
 	acc, err := s.resolveSaleAccount(ctx, refCode)
 	if err != nil {
@@ -336,21 +336,21 @@ func (s *Server) subscriptionByEmail(ctx context.Context, email string) (*dbstor
 	return nil, "", errNotOwned
 }
 
-// roleForAccount resolves the caller's role in the space owning the given
+// roleForAccount resolves the caller's role in the workspace owning the given
 // account (issue #162). The account owner is always admin; a member's role
-// comes from space_members. "" = owner/legacy (full access).
+// comes from workspace_members. "" = owner/legacy (full access).
 func (s *Server) roleForAccount(ctx context.Context, accountID string) (string, error) {
 	userID := s.userIDFor(ctx)
 	if userID == "" {
 		return "", nil
 	}
-	if s.deps == nil || s.deps.Spaces == nil {
+	if s.deps == nil || s.deps.Workspaces == nil {
 		return "", nil
 	}
-	return s.deps.Spaces.RoleByAccount(ctx, accountID, userID)
+	return s.deps.Workspaces.RoleByAccount(ctx, accountID, userID)
 }
 
-// requireWriteRoleIn enforces the manage-or-admin gate for the space owning
+// requireWriteRoleIn enforces the manage-or-admin gate for the workspace owning
 // accountID. A read_only member's agent cannot write there (issue #162).
 func (s *Server) requireWriteRoleIn(ctx context.Context, accountID string) error {
 	role, err := s.roleForAccount(ctx, accountID)
@@ -358,12 +358,12 @@ func (s *Server) requireWriteRoleIn(ctx context.Context, accountID string) error
 		return fmt.Errorf("db: %w", err)
 	}
 	if role != "" && role != dbstore.RoleManage && role != dbstore.RoleAdmin {
-		return errors.New("perlu peranan manage atau admin dalam space ini")
+		return errors.New("perlu peranan manage atau admin dalam workspace ini")
 	}
 	return nil
 }
 
-// requireAdminRoleIn enforces the admin-only gate for the space owning
+// requireAdminRoleIn enforces the admin-only gate for the workspace owning
 // accountID (CHIP credentials + member management).
 func (s *Server) requireAdminRoleIn(ctx context.Context, accountID string) error {
 	role, err := s.roleForAccount(ctx, accountID)
@@ -371,12 +371,12 @@ func (s *Server) requireAdminRoleIn(ctx context.Context, accountID string) error
 		return fmt.Errorf("db: %w", err)
 	}
 	if role != "" && role != dbstore.RoleAdmin {
-		return errors.New("perlu admin space")
+		return errors.New("perlu admin workspace")
 	}
 	return nil
 }
 
-// accountAccessible reports whether the user owns or is a member of a space
+// accountAccessible reports whether the user owns or is a member of a workspace
 // that owns the given account (issue #162).
 func (s *Server) accountAccessible(ctx context.Context, userID, accountID string) (bool, error) {
 	accs, err := s.deps.Accounts.ByOwner(ctx, userID)
@@ -388,8 +388,8 @@ func (s *Server) accountAccessible(ctx context.Context, userID, accountID string
 			return true, nil
 		}
 	}
-	if s.deps.Spaces != nil {
-		if members, err := s.deps.Spaces.ByMember(ctx, userID); err == nil {
+	if s.deps.Workspaces != nil {
+		if members, err := s.deps.Workspaces.ByMember(ctx, userID); err == nil {
 			for _, m := range members {
 				for _, id := range m.Accounts {
 					if id == accountID {
@@ -403,10 +403,10 @@ func (s *Server) accountAccessible(ctx context.Context, userID, accountID string
 }
 
 // userAccessibleAccounts returns every account across the user's accessible
-// spaces (owner + member, issue #162/#307). Without multi-space support it
+// workspaces (owner + member, issue #162/#307). Without multi-workspace support it
 // falls back to the user's owned accounts.
 func (s *Server) userAccessibleAccounts(ctx context.Context, userID string) ([]string, error) {
-	if s.deps == nil || s.deps.Spaces == nil || s.deps.Accounts == nil {
+	if s.deps == nil || s.deps.Workspaces == nil || s.deps.Accounts == nil {
 		if s.deps == nil || s.deps.Accounts == nil {
 			return []string{}, nil
 		}
@@ -420,13 +420,13 @@ func (s *Server) userAccessibleAccounts(ctx context.Context, userID string) ([]s
 		}
 		return ids, nil
 	}
-	spaces, err := s.deps.Spaces.ByMember(ctx, userID)
+	workspaces, err := s.deps.Workspaces.ByMember(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
 	seen := map[string]bool{}
-	ids := make([]string, 0, len(spaces))
-	for _, sp := range spaces {
+	ids := make([]string, 0, len(workspaces))
+	for _, sp := range workspaces {
 		for _, id := range sp.Accounts {
 			if !seen[id] {
 				seen[id] = true

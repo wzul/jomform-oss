@@ -1,6 +1,6 @@
 package httpapi
 
-// Issue #384: per-space 1GB storage quota. An upload that would push the
+// Issue #384: per-workspace 1GB storage quota. An upload that would push the
 // account's stored media over the cap is rejected with 413 and a clear
 // message. Integration test: needs real Postgres (JOMFORM_TEST_DATABASE_URL);
 // skipped when unset. Uses a fake object store so no live S3/MinIO is needed.
@@ -72,13 +72,13 @@ func TestUploadRejectsOverQuota(t *testing.T) {
 	seed := &dbstore.Media{
 		AccountID: accountID, Key: "u/" + accountID + "/seed.png",
 		URL: "https://media.test/u/" + accountID + "/seed.png", Mime: "image/png",
-		Size: objstore.MaxSpaceBytes - 1, Source: dbstore.MediaSourceMerchant,
+		Size: objstore.MaxWorkspaceBytes - 1, Source: dbstore.MediaSourceMerchant,
 	}
 	if err := ms.Create(ctx, seed); err != nil {
 		t.Fatalf("seed media: %v", err)
 	}
 
-	// A 2MB PNG upload would push the space over 1GB → 413 + quota message.
+	// A 2MB PNG upload would push the workspace over 1GB → 413 + quota message.
 	code, body := quotaUpload(t, h, raw, tinyPNG(t))
 	if code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("over-quota upload = %d, want 413 (body %s)", code, body)

@@ -1,4 +1,4 @@
-// Space membership + invite endpoints (issue #161, part A of #160).
+// Workspace membership + invite endpoints (issue #161, part A of #160).
 //
 // Admin-only (owner or an admin member). Inviting an existing user adds them
 // as a member directly; inviting a new user creates a pending invite and
@@ -19,9 +19,9 @@ import (
 
 // ── admin gate ──────────────────────────────────────────────────────────────
 
-// requireSpaceAdmin resolves the space and verifies the caller is the owner or
-// an admin member. Returns the space id on success.
-func (h *RESTHandlers) requireSpaceAdmin(w http.ResponseWriter, r *http.Request) (string, bool) {
+// requireWorkspaceAdmin resolves the workspace and verifies the caller is the owner or
+// an admin member. Returns the workspace id on success.
+func (h *RESTHandlers) requireWorkspaceAdmin(w http.ResponseWriter, r *http.Request) (string, bool) {
 	sID := r.PathValue("id")
 	if _, perr := uuid.Parse(sID); perr != nil {
 		writeErr(w, http.StatusBadRequest, "id tidak sah")
@@ -32,9 +32,9 @@ func (h *RESTHandlers) requireSpaceAdmin(w http.ResponseWriter, r *http.Request)
 		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
 		return "", false
 	}
-	sp, err := h.Spaces.ByID(r.Context(), sID)
+	sp, err := h.Workspaces.ByID(r.Context(), sID)
 	if err != nil || sp == nil {
-		writeErr(w, http.StatusNotFound, "space tidak dijumpai")
+		writeErr(w, http.StatusNotFound, "workspace tidak dijumpai")
 		return "", false
 	}
 	// Owner is always an admin (stored as an admin member row). Check both
@@ -42,13 +42,13 @@ func (h *RESTHandlers) requireSpaceAdmin(w http.ResponseWriter, r *http.Request)
 	if sp.Owner == userID {
 		return sID, true
 	}
-	if h.SpaceMembers != nil {
-		admin, aerr := h.SpaceMembers.IsAdmin(r.Context(), sID, userID)
+	if h.WorkspaceMembers != nil {
+		admin, aerr := h.WorkspaceMembers.IsAdmin(r.Context(), sID, userID)
 		if aerr == nil && admin {
 			return sID, true
 		}
 	}
-	writeErr(w, http.StatusForbidden, "perlu admin space")
+	writeErr(w, http.StatusForbidden, "perlu admin workspace")
 	return "", false
 }
 
@@ -59,8 +59,8 @@ func (h *RESTHandlers) requireSpaceAdmin(w http.ResponseWriter, r *http.Request)
 func inviteEmailBody(lang, link string) string {
 	switch lang {
 	case "ms":
-		return "Anda telah dijemput untuk menyertai space JomForm.\n\n" +
-			"Klik pautan berikut untuk mendaftar akaun dan menyertai space:\n\n" +
+		return "Anda telah dijemput untuk menyertai workspace JomForm.\n\n" +
+			"Klik pautan berikut untuk mendaftar akaun dan menyertai workspace:\n\n" +
 			link + "\n\n" +
 			"Jika anda tidak mengharapkan jemputan ini, anda boleh abaikan emel ini.\n"
 	case "zh":
@@ -79,8 +79,8 @@ func inviteEmailBody(lang, link string) string {
 			link + "\n\n" +
 			"إذا لم تكن تتوقع هذه الدعوة، يمكنك تجاهل هذا البريد.\n"
 	default: // en
-		return "You've been invited to join a JomForm space.\n\n" +
-			"Click the link below to create an account and join the space:\n\n" +
+		return "You've been invited to join a JomForm workspace.\n\n" +
+			"Click the link below to create an account and join the workspace:\n\n" +
 			link + "\n\n" +
 			"If you weren't expecting this invitation, you can ignore this email.\n"
 	}
@@ -90,7 +90,7 @@ func inviteEmailBody(lang, link string) string {
 func inviteEmailSubject(lang string) string {
 	switch lang {
 	case "ms":
-		return "Jemputan menyertai space JomForm"
+		return "Jemputan menyertai workspace JomForm"
 	case "zh":
 		return "加入 JomForm 空间的邀请"
 	case "ta":
@@ -98,13 +98,13 @@ func inviteEmailSubject(lang string) string {
 	case "ar":
 		return "دعوة للانضمام إلى مساحة JomForm"
 	default:
-		return "Invitation to join a JomForm space"
+		return "Invitation to join a JomForm workspace"
 	}
 }
 
-// createInvite: POST /v1/spaces/{id}/invites {email, role}
+// createInvite: POST /v1/workspaces/{id}/invites {email, role}
 func (h *RESTHandlers) createInvite(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
-	sID, ok := h.requireSpaceAdmin(w, r)
+	sID, ok := h.requireWorkspaceAdmin(w, r)
 	if !ok {
 		return
 	}
@@ -125,17 +125,17 @@ func (h *RESTHandlers) createInvite(w http.ResponseWriter, r *http.Request, actx
 	if role == "" {
 		role = dbstore.RoleReadOnly
 	}
-	if !dbstore.ValidSpaceRole(role) {
+	if !dbstore.ValidWorkspaceRole(role) {
 		writeErr(w, http.StatusBadRequest, "role mesti read_only|manage|admin")
 		return
 	}
-	if h.SpaceMembers == nil {
+	if h.WorkspaceMembers == nil {
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	// Existing user → add as a member directly.
 	if u, uerr := h.Users.ByEmail(r.Context(), email); uerr == nil && u != nil {
-		if err := h.SpaceMembers.AddMember(r.Context(), sID, u.ID, role); err != nil {
+		if err := h.WorkspaceMembers.AddMember(r.Context(), sID, u.ID, role); err != nil {
 			respondErr(w, r, err)
 			return
 		}
@@ -150,15 +150,15 @@ func (h *RESTHandlers) createInvite(w http.ResponseWriter, r *http.Request, actx
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	inv, err := h.SpaceMembers.CreateInvite(r.Context(), sID, email, role, token)
+	inv, err := h.WorkspaceMembers.CreateInvite(r.Context(), sID, email, role, token)
 	if err != nil {
 		respondErr(w, r, err)
 		return
 	}
-	// Localize the invite email to the space's default language.
+	// Localize the invite email to the workspace's default language.
 	lang := "en"
-	if st, serr := h.Spaces.Settings(r.Context(), sID); serr == nil {
-		lang = st.SpaceLang()
+	if st, serr := h.Workspaces.Settings(r.Context(), sID); serr == nil {
+		lang = st.WorkspaceLang()
 	}
 	link := strings.TrimRight(h.BaseURL, "/") + "/login?invite=" + token
 	// Issue #199: when an EmailQueue is wired, enqueue the invite email and
@@ -195,17 +195,17 @@ func (h *RESTHandlers) createInvite(w http.ResponseWriter, r *http.Request, actx
 	})
 }
 
-// listInvites: GET /v1/spaces/{id}/invites
+// listInvites: GET /v1/workspaces/{id}/invites
 func (h *RESTHandlers) listInvites(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
-	sID, ok := h.requireSpaceAdmin(w, r)
+	sID, ok := h.requireWorkspaceAdmin(w, r)
 	if !ok {
 		return
 	}
-	if h.SpaceMembers == nil {
+	if h.WorkspaceMembers == nil {
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	invites, err := h.SpaceMembers.ListInvites(r.Context(), sID)
+	invites, err := h.WorkspaceMembers.ListInvites(r.Context(), sID)
 	if err != nil {
 		respondErr(w, r, err)
 		return
@@ -223,9 +223,9 @@ func (h *RESTHandlers) listInvites(w http.ResponseWriter, r *http.Request, actx 
 	writeJSON(w, http.StatusOK, out)
 }
 
-// deleteInvite: DELETE /v1/spaces/{id}/invites/{inviteId}
+// deleteInvite: DELETE /v1/workspaces/{id}/invites/{inviteId}
 func (h *RESTHandlers) deleteInvite(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
-	sID, ok := h.requireSpaceAdmin(w, r)
+	sID, ok := h.requireWorkspaceAdmin(w, r)
 	if !ok {
 		return
 	}
@@ -234,12 +234,12 @@ func (h *RESTHandlers) deleteInvite(w http.ResponseWriter, r *http.Request, actx
 		writeErr(w, http.StatusBadRequest, "id tidak sah")
 		return
 	}
-	if h.SpaceMembers == nil {
+	if h.WorkspaceMembers == nil {
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	if err := h.SpaceMembers.DeleteInvite(r.Context(), sID, inviteID); err != nil {
-		if errors.Is(err, dbstore.ErrNotSpaceMember) {
+	if err := h.WorkspaceMembers.DeleteInvite(r.Context(), sID, inviteID); err != nil {
+		if errors.Is(err, dbstore.ErrNotWorkspaceMember) {
 			writeErr(w, http.StatusNotFound, "jemputan tidak dijumpai")
 			return
 		}
@@ -251,17 +251,17 @@ func (h *RESTHandlers) deleteInvite(w http.ResponseWriter, r *http.Request, actx
 
 // ── members ────────────────────────────────────────────────────────────────
 
-// listMembers: GET /v1/spaces/{id}/members
+// listMembers: GET /v1/workspaces/{id}/members
 func (h *RESTHandlers) listMembers(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
-	sID, ok := h.requireSpaceAdmin(w, r)
+	sID, ok := h.requireWorkspaceAdmin(w, r)
 	if !ok {
 		return
 	}
-	if h.SpaceMembers == nil {
+	if h.WorkspaceMembers == nil {
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	members, err := h.SpaceMembers.ListMembers(r.Context(), sID)
+	members, err := h.WorkspaceMembers.ListMembers(r.Context(), sID)
 	if err != nil {
 		respondErr(w, r, err)
 		return
@@ -279,9 +279,9 @@ func (h *RESTHandlers) listMembers(w http.ResponseWriter, r *http.Request, actx 
 	writeJSON(w, http.StatusOK, out)
 }
 
-// updateMemberRole: PATCH /v1/spaces/{id}/members/{userId} {role}
+// updateMemberRole: PATCH /v1/workspaces/{id}/members/{userId} {role}
 func (h *RESTHandlers) updateMemberRole(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
-	sID, ok := h.requireSpaceAdmin(w, r)
+	sID, ok := h.requireWorkspaceAdmin(w, r)
 	if !ok {
 		return
 	}
@@ -297,16 +297,16 @@ func (h *RESTHandlers) updateMemberRole(w http.ResponseWriter, r *http.Request, 
 		writeErr(w, http.StatusBadRequest, "payload tidak sah")
 		return
 	}
-	if !dbstore.ValidSpaceRole(in.Role) {
+	if !dbstore.ValidWorkspaceRole(in.Role) {
 		writeErr(w, http.StatusBadRequest, "role mesti read_only|manage|admin")
 		return
 	}
-	if h.SpaceMembers == nil {
+	if h.WorkspaceMembers == nil {
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	if err := h.SpaceMembers.UpdateRole(r.Context(), sID, userID, in.Role); err != nil {
-		if errors.Is(err, dbstore.ErrNotSpaceMember) {
+	if err := h.WorkspaceMembers.UpdateRole(r.Context(), sID, userID, in.Role); err != nil {
+		if errors.Is(err, dbstore.ErrNotWorkspaceMember) {
 			writeErr(w, http.StatusNotFound, "ahli tidak dijumpai")
 			return
 		}
@@ -316,9 +316,9 @@ func (h *RESTHandlers) updateMemberRole(w http.ResponseWriter, r *http.Request, 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated", "user_id": userID, "role": in.Role})
 }
 
-// removeMember: DELETE /v1/spaces/{id}/members/{userId}
+// removeMember: DELETE /v1/workspaces/{id}/members/{userId}
 func (h *RESTHandlers) removeMember(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
-	sID, ok := h.requireSpaceAdmin(w, r)
+	sID, ok := h.requireWorkspaceAdmin(w, r)
 	if !ok {
 		return
 	}
@@ -328,16 +328,16 @@ func (h *RESTHandlers) removeMember(w http.ResponseWriter, r *http.Request, actx
 		return
 	}
 	// Prevent removing the last admin / the owner.
-	if sp, serr := h.Spaces.ByID(r.Context(), sID); serr == nil && sp != nil && sp.Owner == userID {
-		writeErr(w, http.StatusBadRequest, "pemilik space tidak boleh dibuang")
+	if sp, serr := h.Workspaces.ByID(r.Context(), sID); serr == nil && sp != nil && sp.Owner == userID {
+		writeErr(w, http.StatusBadRequest, "pemilik workspace tidak boleh dibuang")
 		return
 	}
-	if h.SpaceMembers == nil {
+	if h.WorkspaceMembers == nil {
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	if err := h.SpaceMembers.RemoveMember(r.Context(), sID, userID); err != nil {
-		if errors.Is(err, dbstore.ErrNotSpaceMember) {
+	if err := h.WorkspaceMembers.RemoveMember(r.Context(), sID, userID); err != nil {
+		if errors.Is(err, dbstore.ErrNotWorkspaceMember) {
 			writeErr(w, http.StatusNotFound, "ahli tidak dijumpai")
 			return
 		}

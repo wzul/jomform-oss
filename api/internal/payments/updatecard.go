@@ -57,7 +57,7 @@ func (s *Service) CreateUpdateCardPurchase(ctx context.Context, sub *dbstore.Sub
 		ForceRecurring: true,
 		SkipCapture:    true,
 		Purchase: chip.PurchaseDetails{
-			Currency: s.spaceCurrency(ctx, sub.AccountID),
+			Currency: s.workspaceCurrency(ctx, sub.AccountID),
 			Products: []chip.Product{{
 				Name:     fmt.Sprintf("Kemas kini kad — Langganan #%s", sub.ProductID),
 				Price:    0,

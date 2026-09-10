@@ -66,12 +66,12 @@ func (s *AccountStore) BySlug(ctx context.Context, slug string) (*Account, error
 	return a, err
 }
 
-// BySpaceID fetches the account linked to a space (issue #379 — used to
-// resolve the requesting tenant's account from a space subdomain so asset
-// serving can be scoped to the account that owns the space).
-func (s *AccountStore) BySpaceID(ctx context.Context, spaceID string) (*Account, error) {
+// ByWorkspaceID fetches the account linked to a workspace (issue #379 — used to
+// resolve the requesting tenant's account from a workspace subdomain so asset
+// serving can be scoped to the account that owns the workspace).
+func (s *AccountStore) ByWorkspaceID(ctx context.Context, workspaceID string) (*Account, error) {
 	a := &Account{}
-	err := s.pool.QueryRow(ctx, accountSelect+" WHERE space_id = $1", spaceID).
+	err := s.pool.QueryRow(ctx, accountSelect+" WHERE workspace_id = $1", workspaceID).
 		Scan(&a.ID, &a.OwnerUserID, &a.Name, &a.Slug,
 			&a.Timezone, &a.Currency,
 			&a.ChipBrandID, &a.ChipSecretKeyEnc, &a.ChipMode, &a.ChipVerified, &a.BNMRounding,

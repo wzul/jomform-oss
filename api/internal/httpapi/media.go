@@ -97,10 +97,10 @@ func (h *RESTHandlers) listMedia(w http.ResponseWriter, r *http.Request, actx *A
 		}
 		out = append(out, rm)
 	}
-	// Issue #384: surface the per-space storage usage so the merchant knows
+	// Issue #384: surface the per-workspace storage usage so the merchant knows
 	// their remaining quota. Best-effort — a usage read failure never fails
 	// the list.
-	usage := map[string]any{"limit": objstore.MaxSpaceBytes}
+	usage := map[string]any{"limit": objstore.MaxWorkspaceBytes}
 	if h.Media != nil {
 		if used, err := h.Media.TotalBytes(r.Context(), actx.Account.ID); err == nil {
 			usage["used"] = used

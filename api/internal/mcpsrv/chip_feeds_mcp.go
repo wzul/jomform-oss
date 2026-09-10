@@ -52,7 +52,7 @@ func (s *Server) getFormChipFeedsMCP(
 	if s.deps.Forms == nil {
 		return nil, nil, errors.New("forms tidak tersedia")
 	}
-	// Issue #307: the form may live in any of the user's spaces.
+	// Issue #307: the form may live in any of the user's workspaces.
 	acc, err := s.resolveFormAccount(ctx, in.FormID)
 	if err != nil {
 		return nil, nil, err
@@ -122,7 +122,7 @@ func (s *Server) setFormChipFeedsMCP(
 	if s.deps.Forms == nil || s.decKey == nil {
 		return nil, nil, errors.New("feeds tidak tersedia")
 	}
-	// Issue #307: resolve + RBAC-gate the owning account across the user's spaces.
+	// Issue #307: resolve + RBAC-gate the owning account across the user's workspaces.
 	acc, err := s.requireFormWrite(ctx, in.FormID)
 	if err != nil {
 		return nil, nil, err

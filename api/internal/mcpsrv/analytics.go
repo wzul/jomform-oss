@@ -33,7 +33,7 @@ func (s *Server) formAnalytics(
 	if err != nil {
 		return nil, nil, err
 	}
-	// Issue #307: analytics span all of the user's spaces.
+	// Issue #307: analytics span all of the user's workspaces.
 	out := make([]formStatsOut, 0)
 	for _, acc := range accs {
 		stats, err := s.deps.Sales.FormAnalytics(ctx, acc)
@@ -59,7 +59,7 @@ func (s *Server) productAnalytics(
 	if err != nil {
 		return nil, nil, err
 	}
-	// Issue #307: analytics span all of the user's spaces.
+	// Issue #307: analytics span all of the user's workspaces.
 	out := make([]productStatsOut, 0)
 	for _, acc := range accs {
 		stats, err := s.deps.Sales.ProductAnalytics(ctx, acc)

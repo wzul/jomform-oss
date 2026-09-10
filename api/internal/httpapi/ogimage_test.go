@@ -43,7 +43,7 @@ func TestRenderOGImageProducesPNG(t *testing.T) {
 
 func TestRenderOGImageWrapsLongTitle(t *testing.T) {
 	// A very long title must not panic and must still render.
-	if _, err := renderOGImage(strings.Repeat("A very long form title ", 20), "Space", "wan.jomform.com", "", ""); err != nil {
+	if _, err := renderOGImage(strings.Repeat("A very long form title ", 20), "Workspace", "wan.jomform.com", "", ""); err != nil {
 		t.Fatalf("renderOGImage long title: %v", err)
 	}
 }
@@ -71,7 +71,7 @@ func TestFormOGMetaIncludesTags(t *testing.T) {
 			t.Errorf("og meta missing %q", want)
 		}
 	}
-	// No custom logo -> generated default og:image on the space subdomain.
+	// No custom logo -> generated default og:image on the workspace subdomain.
 	// Scheme depends on the package-global isDev (set by other tests), so
 	// assert on the host+path only.
 	if !strings.Contains(string(meta), "wan.jomform.com/og/rsvp.png") {

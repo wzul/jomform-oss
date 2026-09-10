@@ -53,8 +53,8 @@ func (s *Server) getFormEmailSettings(
 // their current value (read-modify-write, matching set_email_settings).
 type setFormEmailSettingsIn struct {
 	FormID              string  `json:"form_id" jsonschema:"ID borang"`
-	ReceiptSubject      *string `json:"receipt_subject,omitempty" jsonschema:"Subjek resit (kosong = guna lalai space; omit = kekal)"`
-	ReceiptBody         *string `json:"receipt_body,omitempty" jsonschema:"Badan resit (kosong = guna lalai space; omit = kekal)"`
+	ReceiptSubject      *string `json:"receipt_subject,omitempty" jsonschema:"Subjek resit (kosong = guna lalai workspace; omit = kekal)"`
+	ReceiptBody         *string `json:"receipt_body,omitempty" jsonschema:"Badan resit (kosong = guna lalai workspace; omit = kekal)"`
 	ReceiptEnabled      *bool   `json:"receipt_enabled,omitempty" jsonschema:"Hantar resit kepada pembeli (true/false; omit = kekal)"`
 	NotifyMerchant      *bool   `json:"notify_merchant,omitempty" jsonschema:"Hantar salinan/notifikasi jualan kepada merchant (true/false; omit = kekal)"`
 	MerchantNotifyEmail *string `json:"merchant_notify_email,omitempty" jsonschema:"Emel merchant untuk notifikasi (kosong = guna emel akaun; omit = kekal)"`

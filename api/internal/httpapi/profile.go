@@ -74,7 +74,7 @@ func (a *AuthHandlers) handleUpdateName(w http.ResponseWriter, r *http.Request) 
 
 // handleUpdatePhone: POST /v1/auth/profile/phone (issue #181). Optional — a
 // user can set a phone number or leave it blank. Empty string clears it.
-// Format is validated loosely (digits, +, spaces, 8-15 chars) but not
+// Format is validated loosely (digits, +, workspaces, 8-15 chars) but not
 // over-restricted, since the field is optional.
 func (a *AuthHandlers) handleUpdatePhone(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -186,27 +186,27 @@ func (a *AuthHandlers) handleUpdateEmail(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
 }
 
-// handleSetDefaultSpace: PUT /v1/auth/profile/default-space (issue #164).
-// Body: {"space_id": "<id>"} to set the default, or {"space_id": ""} to clear
-// it. The space must belong to the user (owner or member) — otherwise 403.
-func (a *AuthHandlers) handleSetDefaultSpace(w http.ResponseWriter, r *http.Request) {
+// handleSetDefaultWorkspace: PUT /v1/auth/profile/default-workspace (issue #164).
+// Body: {"workspace_id": "<id>"} to set the default, or {"workspace_id": ""} to clear
+// it. The workspace must belong to the user (owner or member) — otherwise 403.
+func (a *AuthHandlers) handleSetDefaultWorkspace(w http.ResponseWriter, r *http.Request) {
 	uid := a.profileUserID(r)
 	if uid == "" {
 		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
 		return
 	}
 	var req struct {
-		SpaceID string `json:"space_id"`
+		WorkspaceID string `json:"workspace_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	spaceID := strings.TrimSpace(req.SpaceID)
+	workspaceID := strings.TrimSpace(req.WorkspaceID)
 
 	// Clearing the default: no ownership check needed.
-	if spaceID == "" {
-		if err := a.Users.ClearDefaultSpace(r.Context(), uid); err != nil {
+	if workspaceID == "" {
+		if err := a.Users.ClearDefaultWorkspace(r.Context(), uid); err != nil {
 			writeErr(w, http.StatusInternalServerError, "internal error")
 			return
 		}
@@ -214,19 +214,19 @@ func (a *AuthHandlers) handleSetDefaultSpace(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Setting the default: the space must belong to the user (owner or member).
-	if a.Spaces == nil {
+	// Setting the default: the workspace must belong to the user (owner or member).
+	if a.Workspaces == nil {
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	sp, err := a.Spaces.ByID(r.Context(), spaceID)
+	sp, err := a.Workspaces.ByID(r.Context(), workspaceID)
 	if err != nil || sp == nil || sp.Owner != uid {
-		writeErr(w, http.StatusForbidden, "space bukan milik anda")
+		writeErr(w, http.StatusForbidden, "workspace bukan milik anda")
 		return
 	}
-	if err := a.Users.SetDefaultSpace(r.Context(), uid, spaceID); err != nil {
+	if err := a.Users.SetDefaultWorkspace(r.Context(), uid, workspaceID); err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "saved", "space_id": spaceID})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "saved", "workspace_id": workspaceID})
 }
