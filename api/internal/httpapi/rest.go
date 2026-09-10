@@ -35,6 +35,8 @@ type RESTHandlers struct {
 	Workspaces         *dbstore.WorkspaceStore
 	// Issue #161: workspace membership + invites.
 	WorkspaceMembers   *dbstore.WorkspaceMemberStore
+	// Issue #444: affiliate marketing.
+	Affiliates *dbstore.AffiliateStore
 	Passkeys       *dbstore.PasskeyStore
 	// Issue #161: Mailer delivers the invite email (nil in bare-mode tests).
 	Mailer VerifyMailer
@@ -188,6 +190,11 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /v1/workspaces/{id}/legal", h.authed(h.getWorkspaceLegalPages))
 	mux.Handle("POST /v1/workspaces/{id}/legal/generate", h.authed(h.generateWorkspaceLegalPage))
 	mux.Handle("PUT /v1/workspaces/{id}/legal", h.authed(h.saveWorkspaceLegalPage))
+	// Issue #444: affiliate marketing.
+	mux.Handle("GET /v1/workspaces/{id}/affiliates", h.authed(h.listAffiliates))
+	mux.Handle("POST /v1/workspaces/{id}/affiliates", h.authed(h.createAffiliate))
+	mux.Handle("PUT /v1/workspaces/{id}/affiliates/{affid}/commission", h.authed(h.setAffiliateCommission))
+	mux.Handle("GET /v1/workspaces/{id}/affiliates/{affid}/sales", h.authed(h.getAffiliateSales))
 	// Issue #161: workspace membership + invites (admin only).
 	mux.Handle("POST /v1/workspaces/{id}/invites", h.authed(h.createInvite))
 	mux.Handle("GET /v1/workspaces/{id}/invites", h.authed(h.listInvites))

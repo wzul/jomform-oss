@@ -484,7 +484,10 @@ var blockTmpl = template.Must(template.New("blocks").
     var body={client:{full_name:(e.target.full_name||{}).value||(document.querySelector('[name=full_name]')||{}).value||'',
       email:(document.querySelector('[name=email]')||{}).value||'',
       phone:(document.querySelector('[name=phone]')||{}).value||''},
-      fields:fields,items:items,payment_method:'chip'};
+      fields:fields,items:items,payment_method:'chip',
+      // Issue #444: affiliate marketing — echo the ?aff=CODE the buyer landed
+      // with so the sale is attributed to that affiliate.
+      affiliate_code:(new URLSearchParams(location.search).get('aff')||'')};
     fetch(location.pathname+'/order',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
       .then(function(r){return r.json()}).then(function(d){
         if(d.checkout_url||d.next){
@@ -816,7 +819,10 @@ var responseTmpl = template.Must(template.New("response").
     var body={client:{
       full_name:(document.querySelector('[name]')||{}).value||'',
       email:'',phone:''
-    },fields:fields};
+    },fields:fields,
+    // Issue #444: affiliate marketing — echo the ?aff=CODE the buyer landed
+    // with so the sale is attributed to that affiliate.
+    affiliate_code:(new URLSearchParams(location.search).get('aff')||'')};
     // Map the first name/email/phone blocks into the client object too.
     var nm=form.querySelector('input[type=text]'); if(nm) body.client.full_name=nm.value;
     var em=form.querySelector('input[type=email]'); if(em) body.client.email=em.value;

@@ -269,6 +269,10 @@ type submitInput struct {
 	// (e.g. "8"). The buyer's client JS reads ?table=N from the URL and
 	// echoes it back so the merchant knows where to serve.
 	TableNumber string `json:"table_number,omitempty"`
+	// Issue #444: affiliate marketing — the affiliate code (?aff=CODE) the
+	// buyer landed with. The client JS reads ?aff=CODE from the URL and echoes
+	// it back so the sale is attributed to that affiliate.
+	AffiliateCode string `json:"affiliate_code,omitempty"`
 }
 
 // antiSpamRenderTime returns the current render timestamp (Unix seconds) to
@@ -526,6 +530,9 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		// Issue #438: QR ordering flow — carry the table number the QR stand
 		// encoded so the merchant knows where to serve.
 		TableNumber: strings.TrimSpace(in.TableNumber),
+		// Issue #444: affiliate marketing — carry the affiliate code the buyer
+		// landed with so the sale is attributed to that affiliate.
+		AffiliateCode: strings.TrimSpace(in.AffiliateCode),
 	}
 	// Issue #185: record the currency the sale is transacted in from the
 	// workspace that owns the form's account (default MYR). Historical sales keep

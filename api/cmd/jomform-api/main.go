@@ -186,6 +186,9 @@ func main() {
 		// Issue #161: workspace membership + invites.
 		workspaceMembersStore := dbstore.NewWorkspaceMemberStore(pool)
 		deps.WorkspaceMembers = workspaceMembersStore
+		// Issue #444: affiliate marketing.
+		affiliateStore := dbstore.NewAffiliateStore(pool)
+		deps.Affiliates = affiliateStore
 		pay := payments.New(chip.New(cfg.ChipAPIBaseURL), accounts, sales, subs, decryptKey, cfg.AppBaseURL)
 		pay.Products = products
 		pay.Forms = formsStore
@@ -252,6 +255,7 @@ func main() {
 			SystemSettings: dbstore.NewSystemSettingStore(pool),
 			Workspaces:         workspacesStore,
 			WorkspaceMembers:   workspaceMembersStore,
+			Affiliates:         affiliateStore,
 			Passkeys:       passkeysStore,
 			// Issue #161: invite email delivery + signup link base.
 			Mailer:   mailer,
@@ -305,6 +309,7 @@ func main() {
 			Webhooks: dbstore.NewWebhookStore(pool),
 			Workspaces:   workspacesStore,
 			WorkspaceMembers: workspaceMembersStore,
+			Affiliates:   affiliateStore, // issue #444: affiliate marketing
 			Users:    usersStore, // issue #164: set_default_workspace tool
 			Events:   deps.Events, // issue #92: list_events tool
 			// Issue #106: per-sale receipt email status tool.

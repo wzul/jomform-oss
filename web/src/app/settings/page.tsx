@@ -25,6 +25,8 @@ function detectMode(secret: string): "live" | "test" {
   return "test";
 }
 type KeyRow = { id: string; name: string; scopes: string[] };
+// Issue #444: affiliate marketing.
+type AffiliateRow = { id: string; code: string; name: string; email: string; commission_pct: number; referral_url: string };
 type DomainStatus = { domain: string; verified: boolean } | null;
 
 // Issue #68: Settings page is organised into tabs (same pattern as Profile
@@ -43,12 +45,12 @@ type DomainStatus = { domain: string; verified: boolean } | null;
 //  issue #301: they are user-level, not per-space. The MCP / connected-agents
 //  tab moved to Profile too, issue #307: an OAuth agent is a user-level
 //  credential bound to the user, not to a single space.)
-type SettingsTab = "chip" | "domains" | "tracking" | "einvoice" | "webhooks" | "emel" | "members" | "storefront" | "legal" | "currency";
+type SettingsTab = "chip" | "domains" | "tracking" | "einvoice" | "webhooks" | "emel" | "members" | "storefront" | "legal" | "currency" | "affiliates";
 
-const TAB_IDS: SettingsTab[] = ["chip", "domains", "tracking", "einvoice", "webhooks", "emel", "members", "storefront", "legal", "currency"];
+const TAB_IDS: SettingsTab[] = ["chip", "domains", "tracking", "einvoice", "webhooks", "emel", "members", "storefront", "legal", "currency", "affiliates"];
 
 function isSettingsTab(v: string | null): v is SettingsTab {
-  return v === "chip" || v === "domains" || v === "tracking" || v === "einvoice" || v === "webhooks" || v === "emel" || v === "members" || v === "storefront" || v === "legal" || v === "currency";
+  return v === "chip" || v === "domains" || v === "tracking" || v === "einvoice" || v === "webhooks" || v === "emel" || v === "members" || v === "storefront" || v === "legal" || v === "currency" || v === "affiliates";
 }
 
 // Restore the last active tab. Falls back to "chip".
@@ -128,6 +130,14 @@ export default function Settings() {
   const [err, setErr] = useState("");
   const [keys, setKeys] = useState<KeyRow[]>([]);
   const [verified, setVerified] = useState(false);
+
+  // Issue #444: affiliate marketing.
+  const [affiliates, setAffiliates] = useState<AffiliateRow[]>([]);
+  const [affCode, setAffCode] = useState("");
+  const [affName, setAffName] = useState("");
+  const [affCommission, setAffCommission] = useState("10");
+  const [affErr, setAffErr] = useState("");
+  const [affMsg, setAffMsg] = useState("");
 
   const [domain, setDomain] = useState("");
   const [domainInput, setDomainInput] = useState("");
@@ -490,6 +500,45 @@ export default function Settings() {
   useEffect(() => {
     if (anon) router.replace("/landing");
   }, [anon, router]);
+
+  // Issue #444: affiliate marketing — load the workspace's affiliates.
+  const loadAffiliates = useCallback(async () => {
+    if (!activeSpaceId) return;
+    const r = await fetch(`/api/rest/spaces/${activeSpaceId}/affiliates`);
+    if (r.ok) {
+      const d = await r.json();
+      setAffiliates(Array.isArray(d) ? d : []);
+    }
+  }, [activeSpaceId]);
+
+  useEffect(() => {
+    if (tab === "affiliates") loadAffiliates();
+  }, [tab, loadAffiliates]);
+
+  async function createAffiliate() {
+    if (!activeSpaceId) return;
+    setAffErr("");
+    setAffMsg("");
+    const r = await fetch(`/api/rest/spaces/${activeSpaceId}/affiliates`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        code: affCode,
+        name: affName,
+        commission_pct: Number(affCommission) || 0,
+      }),
+    });
+    if (r.ok) {
+      setAffCode("");
+      setAffName("");
+      setAffCommission("10");
+      setAffMsg(t("set.affiliateAdded"));
+      loadAffiliates();
+    } else {
+      const d = await r.json().catch(() => ({}));
+      setAffErr(d.error || t("set.failedSave"));
+    }
+  }
 
   const loadCfStatus = useCallback(() => {
     return fetch("/api/cf/status")
@@ -2191,6 +2240,67 @@ export default function Settings() {
                 </div>
               ) : (
                 <p className="mt-2 text-sm text-slate-400">—</p>
+              )}
+            </div>
+          </section>
+        )}
+        {/* ── Affiliates tab: affiliate marketing (issue #444) ── */}
+        {tab === "affiliates" && (
+          <section className="jf-card mt-6 p-6">
+            <h2 className="text-lg font-semibold">{t("set.affiliatesTitle")}</h2>
+            <p className="mt-1 max-w-xl text-sm text-slate-400">{t("set.affiliatesHelp")}</p>
+            <div className="mt-4 max-w-xl space-y-3">
+              <div className="flex items-end gap-2">
+                <div className="flex-1">
+                  <label className="text-xs text-slate-500">{t("set.affiliateCode")}</label>
+                  <input
+                    value={affCode}
+                    onChange={(e) => setAffCode(e.target.value)}
+                    placeholder="ALI"
+                    className="jf-input mt-1"
+                  />
+                </div>
+                <div className="flex-1">
+                  <label className="text-xs text-slate-500">{t("set.affiliateName")}</label>
+                  <input
+                    value={affName}
+                    onChange={(e) => setAffName(e.target.value)}
+                    placeholder="Ali"
+                    className="jf-input mt-1"
+                  />
+                </div>
+                <div className="w-28">
+                  <label className="text-xs text-slate-500">{t("set.affiliateCommission")}</label>
+                  <input
+                    type="number"
+                    value={affCommission}
+                    onChange={(e) => setAffCommission(e.target.value)}
+                    placeholder="10"
+                    className="jf-input mt-1"
+                  />
+                </div>
+                <button onClick={createAffiliate} className="jf-btn-primary">{t("set.affiliateAdd")}</button>
+              </div>
+              {affErr && <p className="text-sm text-red-600">{affErr}</p>}
+              {affMsg && <p className="text-sm text-emerald-600">{affMsg}</p>}
+            </div>
+            <div className="mt-6">
+              <h3 className="text-sm font-semibold text-slate-700">{t("set.affiliatesList")}</h3>
+              {affiliates.length === 0 ? (
+                <p className="mt-2 text-sm text-slate-400">{t("set.affiliatesEmpty")}</p>
+              ) : (
+                <div className="mt-2 space-y-2">
+                  {affiliates.map((a) => (
+                    <div key={a.id} className="flex items-center justify-between rounded-lg border border-slate-100 px-3 py-2 text-sm">
+                      <div>
+                        <span className="font-medium text-slate-800">{a.code}</span>
+                        {a.name && <span className="ml-2 text-slate-500">{a.name}</span>}
+                        <span className="ml-2 text-xs text-slate-400">{a.commission_pct}%</span>
+                      </div>
+                      <code className="max-w-[50%] truncate text-xs text-[var(--jf-primary)]">{a.referral_url}</code>
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
           </section>

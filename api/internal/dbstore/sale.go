@@ -102,6 +102,11 @@ type Sale struct {
 	// merchant in the sale/notification so they know where to serve.
 	TableNumber string
 
+	// Issue #444: affiliate marketing — the affiliate code (?aff=CODE) the
+	// buyer landed with. Empty = no affiliate attribution. Used to compute
+	// commission on paid sales.
+	AffiliateCode string
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -116,7 +121,7 @@ const saleSelect = `SELECT id, account_id, COALESCE(form_id::text,''), ref_code,
 	subtotal_sen, shipping_sen, discount_sen, total_sen, currency, sale_type, payment_method, status,
 	COALESCE(chip_purchase_id,''), COALESCE(chip_checkout_url,''), COALESCE(invoice_no,''),
 	skip_capture, authorized, captured_at, COALESCE(receipt_message_id,''),
-	is_spam, spam_reason, COALESCE(table_number,''), created_at, updated_at
+	is_spam, spam_reason, COALESCE(table_number,''), COALESCE(affiliate_code,''), created_at, updated_at
 	FROM sales`
 
 func scanSale(row pgx.Row) (*Sale, error) {
@@ -125,7 +130,7 @@ func scanSale(row pgx.Row) (*Sale, error) {
 		&s.SubtotalSen, &s.ShippingSen, &s.DiscountSen, &s.TotalSen, &s.Currency, &s.SaleType, &s.PaymentMethod, &s.Status,
 		&s.ChipPurchaseID, &s.ChipCheckoutURL, &s.InvoiceNo,
 		&s.SkipCapture, &s.Authorized, &s.CapturedAt, &s.ReceiptMessageID,
-		&s.IsSpam, &s.SpamReason, &s.TableNumber, &s.CreatedAt, &s.UpdatedAt)
+		&s.IsSpam, &s.SpamReason, &s.TableNumber, &s.AffiliateCode, &s.CreatedAt, &s.UpdatedAt)
 	return s, err
 }
 
@@ -133,19 +138,41 @@ func scanSale(row pgx.Row) (*Sale, error) {
 func (s *SaleStore) Create(ctx context.Context, sale *Sale) error {
 	return s.pool.QueryRow(ctx,
 		`INSERT INTO sales (account_id, form_id, ref_code, client, items, subtotal_sen, shipping_sen,
-		   discount_sen, total_sen, currency, sale_type, payment_method, status, skip_capture, table_number)
-		 VALUES ($1, NULLIF($2,'')::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NULLIF($15,''))
+		   discount_sen, total_sen, currency, sale_type, payment_method, status, skip_capture, table_number, affiliate_code)
+		 VALUES ($1, NULLIF($2,'')::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NULLIF($15,''), NULLIF($16,''))
 		 RETURNING id, created_at, updated_at`,
 		sale.AccountID, sale.FormID, sale.RefCode, sale.Client, sale.Items,
 		sale.SubtotalSen, sale.ShippingSen, sale.DiscountSen, sale.TotalSen,
 		orDefault(sale.Currency, "MYR"),
-		sale.SaleType, sale.PaymentMethod, sale.Status, sale.SkipCapture, sale.TableNumber,
+		sale.SaleType, sale.PaymentMethod, sale.Status, sale.SkipCapture, sale.TableNumber, sale.AffiliateCode,
 	).Scan(&sale.ID, &sale.CreatedAt, &sale.UpdatedAt)
 }
 
-// ByRefCode fetches a sale by its public reference code.
+// ByRefCode fetches a sale by ref code.
 func (s *SaleStore) ByRefCode(ctx context.Context, refCode string) (*Sale, error) {
 	return scanSale(s.pool.QueryRow(ctx, saleSelect+" WHERE ref_code = $1", refCode))
+}
+
+// ByAffiliateCode lists paid sales attributed to an affiliate code within a
+// workspace (issue #444). Used by the affiliate dashboard to show sales +
+// commission.
+func (s *SaleStore) ByAffiliateCode(ctx context.Context, workspaceID, code string) ([]*Sale, error) {
+	rows, err := s.pool.Query(ctx,
+		saleSelect+" WHERE affiliate_code=$2 AND account_id IN (SELECT id FROM accounts WHERE workspace_id=$1) ORDER BY created_at DESC",
+		workspaceID, code)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Sale
+	for rows.Next() {
+		sl, err := scanSale(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, sl)
+	}
+	return out, rows.Err()
 }
 
 // ByChipPurchaseID fetches a sale by CHIP purchase id.

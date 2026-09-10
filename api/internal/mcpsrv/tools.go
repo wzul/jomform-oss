@@ -261,6 +261,23 @@ func (s *Server) registerTools() {
 		Name:        "list_workspaces",
 		Description: "Senarai semua workspace (storefront) anda — id, nama, slug dan URL.",
 	}, s.listWorkspaces)
+	// ── Affiliates (issue #444) ────────────────────────────────────────────────
+	addTool(s, &mcp.Tool{
+		Name:        "create_affiliate",
+		Description: "Cipta affiliate untuk workspace: kod rujukan (?aff=CODE), nama, emel, kadar komisen. Jualan yang dibawa affiliate dikreditkan kepadanya.",
+	}, s.createAffiliate)
+	addTool(s, &mcp.Tool{
+		Name:        "list_affiliates",
+		Description: "Senarai semua affiliate dalam satu workspace — id, kod, nama, komisen, URL rujukan.",
+	}, s.listAffiliates)
+	addTool(s, &mcp.Tool{
+		Name:        "get_affiliate_sales",
+		Description: "Senarai jualan yang dibawa oleh satu affiliate (read-only, skop workspace).",
+	}, s.getAffiliateSales)
+	addTool(s, &mcp.Tool{
+		Name:        "set_affiliate_commission",
+		Description: "Set kadar komisen affiliate (cth: 10 = 10%).",
+	}, s.setAffiliateCommission)
 	addTool(s, &mcp.Tool{
 		Name:        "create_workspace",
 		Description: "Cipta workspace baharu. Slug 3-40 aksara (a-z, 0-9, dash); URL jadi https://<slug>.jomform.com.",

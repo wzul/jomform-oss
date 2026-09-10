@@ -29,6 +29,8 @@ type Deps struct {
 	Sessions *auth.Sessions
 	// Issue #161: workspace membership + invites (redeemed on signup).
 	WorkspaceMembers *dbstore.WorkspaceMemberStore
+	// Issue #444: affiliate marketing.
+	Affiliates *dbstore.AffiliateStore
 	// Issue #42: brute-force + registration hardening.
 	//   Sessions exposes the shared go-redis client used for the failed-login
 	//   counters. VerifyKey is the 32-byte AES-GCM key used to sign/verify the

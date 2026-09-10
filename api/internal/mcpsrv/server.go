@@ -33,6 +33,8 @@ type Deps struct {
 	Workspaces   *dbstore.WorkspaceStore
 	// Issue #161: workspace membership + invites (MCP parity tools).
 	WorkspaceMembers *dbstore.WorkspaceMemberStore
+	// Issue #444: affiliate marketing.
+	Affiliates *dbstore.AffiliateStore
 	// Issue #161: user lookup for invite-by-email (existing user → add directly).
 	// Issue #164: Users enables the set_default_workspace tool (user-level default
 	// workspace for the multi-workspace login picker). Nil → the tool errors.
