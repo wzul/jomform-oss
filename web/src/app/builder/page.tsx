@@ -77,7 +77,7 @@ type Block = {
   quantity?: boolean;
 };
 
-type Product = { id: string; name: string; price_sen: number; type: string };
+type Product = { id: string; name: string; price_sen: number; type: string; images?: string[] };
 
 /* Issue #173: categorized palette. Each group is a Gravity-Forms-style
    section. Items are draggable onto the canvas and click-to-add (mobile). */
@@ -427,7 +427,7 @@ export default function Builder() {
         quantity: b.quantity === undefined ? undefined : b.quantity,
         choices: b.choices?.map((c) => ({ label: c.label, value: c.value, price_sen: c.price_sen })),
       })),
-      products: products.map((p) => ({ id: p.id, name: p.name, price_sen: p.price_sen })),
+      products: products.map((p) => ({ id: p.id, name: p.name, price_sen: p.price_sen, images: p.images })),
     };
     const payload = { slug: slug.toLowerCase().replace(/[^a-z0-9-]/g, "-"), title, config };
 
@@ -1272,8 +1272,18 @@ function BlockPreview({ block, products }: { block: Block; products: Product[] }
     case "product":
       return (
         <div className="rounded-md border border-[var(--jf-border)] bg-slate-50 px-3 py-2">
-          <div className="flex items-center justify-between">
-            <span className="text-sm">{block.value || p?.name || "Product"}</span>
+          <div className="flex items-center justify-between gap-2">
+            <span className="flex min-w-0 items-center gap-2">
+              {p?.images?.[0] ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={p.images[0]}
+                  alt={p?.name || "Product"}
+                  className="h-8 w-8 flex-none rounded-md object-cover"
+                />
+              ) : null}
+              <span className="truncate text-sm">{block.value || p?.name || "Product"}</span>
+            </span>
             <span className="text-sm font-medium text-[var(--jf-primary)]">{p ? money(p.price_sen) : "—"}</span>
           </div>
           {/* Issue #249: per-product quantity selector preview. */}

@@ -26,6 +26,7 @@ func TestBlockFormRendersVariationSelector(t *testing.T) {
 		HasPrice         bool
 		HasQuantity      bool
 		CondJSON         string
+		Image            string
 		Variations       []variationView
 		Style            string
 	}

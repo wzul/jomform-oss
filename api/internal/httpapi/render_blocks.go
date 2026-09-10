@@ -52,9 +52,10 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 			} `json:"choices"`
 		} `json:"blocks"`
 		Products []struct {
-			ID       string `json:"id"`
-			Name     string `json:"name"`
-			PriceSen int64  `json:"price_sen"`
+			ID       string   `json:"id"`
+			Name     string   `json:"name"`
+			PriceSen int64    `json:"price_sen"`
+			Images   []string `json:"images"`
 		} `json:"products"`
 	}
 	if json.Unmarshal(raw, &cfg) != nil || len(cfg.Blocks) == 0 {
@@ -63,9 +64,16 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 
 	priceOf := map[string]int64{}
 	nameOf := map[string]string{}
+	imgOf := map[string]string{}
 	for _, p := range cfg.Products {
 		priceOf[p.ID] = p.PriceSen
 		nameOf[p.ID] = p.Name
+		// Issue #439: render the product's first image as a thumbnail next to
+		// the name (menu-item card). Fallback is handled in the template — no
+		// image means we just show the name as before.
+		if len(p.Images) > 0 && p.Images[0] != "" {
+			imgOf[p.ID] = p.Images[0]
+		}
 	}
 
 	// variationView is the buyer-facing shape of one product variation.
@@ -90,6 +98,9 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 		Required             bool
 		HasPrice             bool
 		CondJSON             string
+		// Issue #439: first product image (thumbnail) rendered next to the
+		// product name. Empty string = no image (fallback to name only).
+		Image string
 		// Issue #153: variations selector.
 		Variations []variationView
 		// Issue #173: per-field settings surfaced to the template.
@@ -139,6 +150,8 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 				if vb.Value == "" {
 					vb.Value = nameOf[b.ProductID]
 				}
+				// Issue #439: surface the first product image for the thumbnail.
+				vb.Image = imgOf[b.ProductID]
 				// Issue #153: load the product's variations for the selector.
 				if h.ProductVariations != nil {
 					if vs, verr := h.ProductVariations.ListByProduct(r.Context(), b.ProductID); verr == nil && len(vs) > 0 {
@@ -290,6 +303,9 @@ var blockTmpl = template.Must(template.New("blocks").
                 min-height:44px; padding:12px 14px; font-size:15px; color:#17181c;
                 cursor:pointer; -webkit-tap-highlight-color:transparent; }
   .prod input[type=checkbox] { width:20px; height:20px; flex:0 0 auto; accent-color:#4f46e5; margin:0; }
+  /* Issue #439: product image thumbnail next to the name (menu-item card). */
+  .pimg { width:52px; height:52px; flex:0 0 52px; border-radius:10px; object-fit:cover;
+          background:#f3f4f6; }
   /* Issue #58: ALL checkboxes (product .p and custom .extra) share one bright
      unchecked state + indigo accent. appearance:none + explicit border/background
      overrides UA dark defaults so Android Chrome draws a white unchecked box. */
@@ -355,7 +371,7 @@ var blockTmpl = template.Must(template.New("blocks").
 {{else if eq .Type "section"}}  <div class="section"{{styleAttr .Style}}>{{.Value}}</div>
 {{else if eq .Type "html"}}  <div class="text"{{styleAttr .Style}}>{{.Value}}</div>
 {{else if eq .Type "total"}}  <div class="total"{{styleAttr .Style}}><span>{{.Value}}</span><span class="total-val">RM0.00</span></div>
-{{else if eq .Type "product"}}  <div class="prod"{{styleAttr .Style}}><label><input type="checkbox" class="p" data-id="{{.ProductID}}" data-price="{{.PriceSen}}"><span class="pname">{{.Value}}</span><span class="price">{{if .HasPrice}}RM{{printf "%.2f" (divf .PriceSen 100)}}{{end}}</span></label>{{if .Variations}}<div class="varwrap"><select class="v" data-id="{{.ProductID}}"><option value="" disabled selected>{{$.Ls.SelectVariation}}</option>{{range .Variations}}<option value="{{.ID}}" data-price="{{.PriceSen}}"{{if .SoldOut}} disabled{{end}}>{{.Name}} — RM{{printf "%.2f" (divf .PriceSen 100)}}{{if .Stock}} ({{.Stock}} {{$.Ls.InStock}}){{end}}</option>{{end}}</select><div class="varstock"></div></div>{{end}}{{if .HasQuantity}}<div class="pqrow"><label class="lbl" style="margin:0">{{$.Ls.Quantity}}</label><input type="number" class="pq" data-id="{{.ProductID}}" min="1" value="1"></div>{{end}}</div>
+{{else if eq .Type "product"}}  <div class="prod"{{styleAttr .Style}}><label><input type="checkbox" class="p" data-id="{{.ProductID}}" data-price="{{.PriceSen}}">{{if .Image}}<img class="pimg" src="{{.Image}}" alt="{{.Value}}">{{end}}<span class="pname">{{.Value}}</span><span class="price">{{if .HasPrice}}RM{{printf "%.2f" (divf .PriceSen 100)}}{{end}}</span></label>{{if .Variations}}<div class="varwrap"><select class="v" data-id="{{.ProductID}}"><option value="" disabled selected>{{$.Ls.SelectVariation}}</option>{{range .Variations}}<option value="{{.ID}}" data-price="{{.PriceSen}}"{{if .SoldOut}} disabled{{end}}>{{.Name}} — RM{{printf "%.2f" (divf .PriceSen 100)}}{{if .Stock}} ({{.Stock}} {{$.Ls.InStock}}){{end}}</option>{{end}}</select><div class="varstock"></div></div>{{end}}{{if .HasQuantity}}<div class="pqrow"><label class="lbl" style="margin:0">{{$.Ls.Quantity}}</label><input type="number" class="pq" data-id="{{.ProductID}}" min="1" value="1"></div>{{end}}</div>
 {{else if eq .Type "quantity"}}  <div class="qtyrow"{{styleAttr .Style}}><label class="lbl" style="margin:0">{{.Value}}</label><input type="number" class="qty" min="1" value="{{if .DefaultValue}}{{.DefaultValue}}{{else}}1{{end}}"></div>
 {{else if eq .Type "option"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><select class="opt" data-id="{{.ProductID}}"><option value="" selected>{{$.Ls.SelectOption}}</option>{{range .Choices}}<option value="{{.Value}}" data-price="{{.PriceSen}}">{{.Label}}{{if .PriceSen}} (+RM{{printf "%.2f" (divf .PriceSen 100)}}){{end}}</option>{{end}}</select>
 {{else if eq .Type "shipping"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><select class="ship" data-id="{{.ProductID}}"><option value="" selected>{{$.Ls.SelectShipping}}</option>{{range .Choices}}<option value="{{.Value}}" data-price="{{.PriceSen}}">{{.Label}}{{if .PriceSen}} (RM{{printf "%.2f" (divf .PriceSen 100)}}){{end}}</option>{{end}}</select>

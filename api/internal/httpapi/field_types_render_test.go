@@ -24,6 +24,7 @@ func TestBlockFormRendersNewFieldTypes(t *testing.T) {
 		Required            bool
 		HasPrice            bool
 		CondJSON            string
+		Image               string
 		Variations          []struct{}
 		Placeholder         string
 		Description         string
@@ -42,7 +43,7 @@ func TestBlockFormRendersNewFieldTypes(t *testing.T) {
 	var buf bytes.Buffer
 	err := blockTmpl.Execute(&buf, map[string]any{
 		"Slug": "demo", "Title": "Demo", "Blocks": []block{
-			{Type: "product", Value: "Yuran", ProductID: "p1", PriceSen: 300, HasPrice: true, HasQuantity: true},
+			{Type: "product", Value: "Yuran", ProductID: "p1", PriceSen: 300, HasPrice: true, HasQuantity: true, Image: "https://cdn.example/p1.jpg"},
 			{Type: "select", Value: "Colour", Required: true, Choices: []choiceView{{Label: "Red", Value: "red"}, {Label: "Blue", Value: "blue"}}},
 			{Type: "radio", Value: "Size", Choices: []choiceView{{Label: "S", Value: "s"}, {Label: "M", Value: "m"}}},
 			{Type: "number", Value: "Qty", Min: "1", Max: "10", Step: "1"},
@@ -116,6 +117,20 @@ func TestBlockFormRendersNewFieldTypes(t *testing.T) {
 	}
 	if !strings.Contains(body, "pqty(b)") {
 		t.Error("per-product quantity not used in total calc")
+	}
+	// Issue #439: product image thumbnail next to the name. The product with an
+	// image renders <img class="pimg">; the pname span follows it inside the label.
+	if !strings.Contains(body, `<img class="pimg" src="https://cdn.example/p1.jpg" alt="Yuran">`) {
+		t.Error("product image thumbnail not rendered")
+	}
+	if !strings.Contains(body, `.pimg {`) {
+		t.Error(".pimg CSS not present")
+	}
+	// Fallback: an option/shipping block has no image, so no <img class="pimg">
+	// may appear before the option select — ensure the img only ever appears in
+	// product blocks (count = 1).
+	if n := strings.Count(body, `class="pimg"`); n != 1 {
+		t.Errorf("pimg occurrences = %d, want 1 (product image only, no fallback img for others)", n)
 	}
 }
 
