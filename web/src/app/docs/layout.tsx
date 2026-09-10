@@ -7,6 +7,7 @@ import Link from "next/link";
 
 const NAV = [
   { href: "/docs", label: "Overview & features" },
+  { href: "/docs/customize", label: "Design → AI agent → MCP" },
   { href: "/docs/placeholders", label: "Placeholders reference" },
   { href: "/docs/mcp", label: "MCP tool reference" },
 ];

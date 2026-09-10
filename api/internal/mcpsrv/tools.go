@@ -168,7 +168,7 @@ func (s *Server) registerTools() {
 	// payment flow.
 	addTool(s, &mcp.Tool{
 		Name:        "set_form_theme",
-		Description: "Set gaya/branding tersuai borang (issue #254): primary, background, text, card_background, card_border_radius, font_family, logo_url, layout (centered|full_width|split), spacing (compact|comfortable|spacious), custom_css. Agent bebas set CSS; JomForm kekal kuasa ke atas harga & pembayaran.",
+		Description: "Set gaya/branding tersuai borang (issue #254): primary, background, text, card_background, card_border_radius, font_family, logo_url, layout (centered|full_width|split), spacing (compact|comfortable|spacious), custom_css, custom_js (issue #388 — JS tersuai untuk tingkah laku borang; dikawal pemilik + diimbas). Agent bebas set CSS/JS; JomForm kekal kuasa ke atas harga & pembayaran.",
 	}, s.setFormTheme)
 	addTool(s, &mcp.Tool{
 		Name:        "register_form_fields",

@@ -53,6 +53,10 @@ const FEATURES: { title: string; body: string }[] = [
     title: "MCP (AI agents)",
     body: "Connect JomForm to Claude, Cursor and other AI agents via the Model Context Protocol. Agents can build forms, manage products, sales, subscriptions, media and more. See the MCP tool reference.",
   },
+  {
+    title: "Design → AI agent → MCP customization",
+    body: "Design your form or landing page in a tool like Canva, then use an AI agent (e.g. Claude) connected to the JomForm MCP to apply that design and customize it with CSS and JS. See the customization guide.",
+  },
 ];
 
 export default function DocsIndexPage() {
@@ -66,8 +70,14 @@ export default function DocsIndexPage() {
 
       <div className="mt-6 flex flex-wrap gap-3">
         <Link
-          href="/docs/placeholders"
+          href="/docs/customize"
           className="rounded-lg bg-[var(--jf-primary)] px-4 py-2 text-sm font-medium text-white hover:opacity-90"
+        >
+          Design → AI agent → MCP guide
+        </Link>
+        <Link
+          href="/docs/placeholders"
+          className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
         >
           Placeholders reference
         </Link>
