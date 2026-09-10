@@ -122,6 +122,8 @@ export default function ProfilePage() {
   // Issue #307: connected MCP agents (user-level OAuth clients) — loaded via
   // GET /api/auth/mcp-agents.
   const [agents, setAgents] = useState<MCPAgentRow[]>([]);
+  // Issue #426: copy feedback for the server URL box.
+  const [copied, setCopied] = useState(false);
 
   // Persist active tab.
   useEffect(() => {
@@ -630,13 +632,48 @@ export default function ProfilePage() {
                 ?
               </a>
             </h2>
-            <p className="mt-1 max-w-xl text-sm text-slate-400">
-              {t("set.serverUrl")}{" "}
-              <code className="rounded bg-slate-100 px-1">https://mcp.jomform.com/mcp</code> —{" "}
-              {t("set.mcpHelp")}{" "}
-              <code className="rounded bg-slate-100 px-1">/.well-known/oauth-authorization-server</code>{" "}
-              {t("set.mcpNoKeys")}
-            </p>
+
+            {/* Issue #426: server URL in a dedicated, copyable code box
+                (full-width, wraps cleanly) instead of inline in a paragraph. */}
+            <div className="mt-4">
+              <p className="text-xs font-medium text-slate-500">{t("set.serverUrl")}</p>
+              <div className="relative mt-1.5">
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText("https://mcp.jomform.com/mcp").then(() => {
+                      setCopied(true);
+                      setTimeout(() => setCopied(false), 1500);
+                    });
+                  }}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md bg-[var(--jf-primary)] px-2.5 py-1 text-[11px] font-medium text-white hover:opacity-90"
+                >
+                  {copied ? t("mcp.copied") : t("mcp.copy")}
+                </button>
+                <code className="block w-full break-all rounded-lg border border-[var(--jf-border)] bg-slate-50 px-3 py-2.5 pr-20 text-sm text-slate-700">
+                  https://mcp.jomform.com/mcp
+                </code>
+              </div>
+            </div>
+
+            {/* Issue #426: technical details as a compact list, not one long
+                sentence — each row has an icon + label. */}
+            <ul className="mt-4 grid gap-2 sm:grid-cols-2">
+              {[
+                { icon: "🔐", label: t("prof.mcpDetailOAuth") },
+                { icon: "🪪", label: t("prof.mcpDetailDcr") },
+                { icon: "🔑", label: t("prof.mcpDetailPkce") },
+                { icon: "🚫", label: t("prof.mcpDetailNoKeys") },
+              ].map((d) => (
+                <li
+                  key={d.label}
+                  className="flex items-center gap-2 rounded-lg border border-[var(--jf-border)] px-3 py-2 text-sm text-slate-600"
+                >
+                  <span aria-hidden="true">{d.icon}</span>
+                  <span>{d.label}</span>
+                </li>
+              ))}
+            </ul>
+
             <ul className="mt-4 space-y-2">
               {agents.map((a) => (
                 <li key={a.client_id} className="flex items-center justify-between rounded-lg border border-[var(--jf-border)] px-4 py-2.5">
@@ -657,14 +694,27 @@ export default function ProfilePage() {
                 </li>
               ))}
               {agents.length === 0 && (
-                <li className="rounded-lg border border-dashed border-[var(--jf-border)] px-4 py-3 text-sm text-slate-400">
-                  {t("set.noAgents")}
+                <li className="flex flex-col items-center gap-2 rounded-lg border border-dashed border-[var(--jf-border)] px-4 py-6 text-center">
+                  <span className="text-2xl" aria-hidden="true">🤖</span>
+                  <p className="text-sm font-medium text-slate-600">{t("prof.mcpEmptyTitle")}</p>
+                  <p className="max-w-sm text-xs text-slate-400">{t("prof.mcpEmptyHelp")}</p>
+                  <a
+                    href="/mcp"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="jf-btn-primary mt-1 inline-block"
+                  >
+                    {t("prof.mcpConnect")}
+                  </a>
                 </li>
               )}
             </ul>
-            <div className="mt-6 border-t border-[var(--jf-border)] pt-5">
+
+            {/* Issue #426: scope presented as a small info card with a clear
+                heading, not plain text. */}
+            <div className="mt-6 rounded-lg border border-[var(--jf-border)] bg-slate-50 p-4">
               <h3 className="text-sm font-semibold">{t("prof.mcpScopeTitle")}</h3>
-              <p className="mt-1 text-xs text-slate-400">
+              <p className="mt-1 text-xs text-slate-500">
                 {t("prof.mcpScopeHelp")}
               </p>
             </div>
