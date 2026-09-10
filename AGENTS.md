@@ -45,6 +45,27 @@ Parity checklist (dashboard → MCP):
   `get_space_landing_page`, `set_space_landing_page` (incl. embedded `forms[]`)
 - Media library / asset upload (image + code, tenant-scoped, scan-gated,
   #361/#364) → `list_media`, `upload_media`
+- Analytics → `get_form_analytics`, `get_product_analytics`
+- Custom domains → `list_domains`, `add_domain`, `verify_domain`,
+  `remove_domain`, `auto_cname_domain`
+- Tracking → `get_tracking`, `set_tracking`
+- CHIP account settings → `get_chip_settings`, `set_chip_settings`
+- Profile avatar → `set_avatar`
+- Passkeys → `list_passkeys`, `delete_passkey`
+- Social accounts → `list_social_accounts`, `disconnect_social_account`
+- 2FA → `get_2fa_status`, `enable_2fa`, `disable_2fa`
+- System settings → `get_system_settings`, `set_system_settings`
+- Sales export → `export_sales_csv`
+- Cloudflare → `set_cloudflare_api_token`, `set_cloudflare_global_key`,
+  `disconnect_cloudflare`
+- Webhook signing key → `get_webhook_signing_key`
+- CHIP refund → `refund_sale`
+- Domain TLS config (#397) → `get_domain_tls`, `set_domain_tls_mode`,
+  `set_domain_tls_cert`
+- Domain ACME email (#398) → `get_domain_tls_email`, `set_domain_tls_email`
+- Super-admin platform-wide monitoring (#386, gated on #385 super-admin) →
+  `admin_list_spaces`, `admin_media_usage`, `admin_list_sales`,
+  `admin_spam_queue`, `admin_email_deliveries`, `admin_system_health`
 
 ## DOCUMENTATION PARITY (RULE — jangan tertinggal/terlepas)
 
