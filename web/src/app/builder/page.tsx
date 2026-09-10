@@ -477,7 +477,23 @@ export default function Builder() {
     }
     if (publish && id) {
       await fetch(`/api/rest/forms/${id}/publish${workspaceQuery()}`, { method: "POST" });
-      setPubUrl(`https://${localStorage.getItem("jf_workspace") || "app"}.jomform.com/${payload.slug}`);
+      // Issue #450: build the public URL from the API's url field (resolves the
+      // owning workspace slug / custom domain server-side), never a client-side
+      // "app" fallback which 404s.
+      const refreshed = await fetch(`/api/rest/forms/${id}${workspaceQuery()}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null);
+      const wsSlug = (() => {
+        try {
+          return localStorage.getItem("jf_workspace") || "";
+        } catch {
+          return "";
+        }
+      })();
+      const url =
+        (refreshed && refreshed.url) ||
+        (wsSlug ? `https://${wsSlug}.jomform.com/${payload.slug}` : "");
+      setPubUrl(url);
       await load();
     }
     setSaving(false);

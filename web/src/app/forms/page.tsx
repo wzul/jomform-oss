@@ -22,8 +22,27 @@ const subdomainBase = () => {
   return "";
 };
 
-const spaceHost =
-  typeof window !== "undefined" ? `${localStorage.getItem("jf_workspace") || "app"}.jomform.com` : "app.jomform.com";
+// Issue #450: build the public form URL from the API's `url` field (which
+// resolves the owning workspace slug / custom domain server-side) — never from
+// a client-side localStorage fallback. A hardcoded "app" fallback produced
+// https://app.jomform.com/{slug}, which 404s. The fallback here is only used
+// when the API did not return a url (older payload).
+const spaceHost = (() => {
+  if (typeof window === "undefined") return "";
+  try {
+    const slug = localStorage.getItem("jf_workspace") || "";
+    return slug ? `https://${slug}.jomform.com` : "";
+  } catch {
+    return "";
+  }
+})();
+
+// formPublicURL prefers the API-provided absolute URL; falls back to the
+// workspace-subdomain host only when the payload has none.
+function formPublicURL(f: { url?: string; slug: string }): string {
+  if (f.url) return f.url;
+  return spaceHost ? `${spaceHost}/${f.slug}` : "";
+}
 
 export default function FormsPage() {
   const { t } = useI18n();
@@ -181,7 +200,7 @@ export default function FormsPage() {
                 )}
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium">{f.title}</p>
-                  <p className="font-mono text-[11px] text-[var(--jf-muted)]">{spaceHost}/{f.slug}</p>
+                  <p className="font-mono text-[11px] text-[var(--jf-muted)]">{formPublicURL(f)}</p>
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2 sm:justify-end">
@@ -203,7 +222,7 @@ export default function FormsPage() {
                     <Link href={`/sales?form=${f.id}`} className="jf-btn-ghost min-h-[44px] sm:min-h-10">
                       {t("nav.sales")}
                     </Link>
-                    <a href={`https://${spaceHost}/${f.slug}`} target="_blank" className="jf-btn-ghost min-h-[44px] sm:min-h-10">
+                    <a href={formPublicURL(f)} target="_blank" className="jf-btn-ghost min-h-[44px] sm:min-h-10">
                       {t("bld.view")}
                     </a>
                   </>
