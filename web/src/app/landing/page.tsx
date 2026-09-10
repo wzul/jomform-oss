@@ -151,6 +151,88 @@ export default function Landing() {
         </div>
       </section>
 
+      {/* use case showcase — QR ordering / restaurant (issue #441) */}
+      <section className="mx-auto max-w-4xl border-t border-slate-100 px-6 py-16">
+        <div className="mt-6 rounded-2xl border border-slate-200 bg-gradient-to-br from-emerald-50 via-white to-white p-8">
+          <div className="flex flex-col items-center gap-6 sm:flex-row sm:items-start">
+            <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-2xl bg-emerald-100 text-4xl">
+              🍽️
+            </div>
+            <div className="text-center sm:text-left">
+              <h2 className="text-xl font-bold text-slate-900 sm:text-2xl">
+                {t("land.qrtitle")}
+              </h2>
+              <p className="mt-3 max-w-xl text-sm leading-relaxed text-slate-600">
+                {t("land.qrbody")}
+              </p>
+              <ul className="mt-5 grid grid-cols-1 gap-2 text-sm text-slate-600 sm:grid-cols-2">
+                <li className="flex items-center gap-2">
+                  <span className="text-[var(--jf-primary)]">✓</span> {t("land.qr1")}
+                </li>
+                <li className="flex items-center gap-2">
+                  <span className="text-[var(--jf-primary)]">✓</span> {t("land.qr2")}
+                </li>
+                <li className="flex items-center gap-2">
+                  <span className="text-[var(--jf-primary)]">✓</span> {t("land.qr3")}
+                </li>
+                <li className="flex items-center gap-2">
+                  <span className="text-[var(--jf-primary)]">✓</span> {t("land.qr4")}
+                </li>
+              </ul>
+              <div className="mt-6 flex flex-wrap items-center justify-center gap-3 sm:justify-start">
+                <a
+                  href="/builder"
+                  className="rounded-lg bg-[var(--jf-primary)] px-4 py-2 text-sm font-medium text-white hover:opacity-90"
+                >
+                  {t("land.qrcta")}
+                </a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* use case showcase — Canva→Claude→MCP customization (issue #441) */}
+      <section className="mx-auto max-w-4xl border-t border-slate-100 px-6 py-16">
+        <div className="mt-6 rounded-2xl border border-slate-200 bg-gradient-to-br from-violet-50 via-white to-white p-8">
+          <div className="flex flex-col items-center gap-6 sm:flex-row sm:items-start">
+            <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-2xl bg-violet-100 text-4xl">
+              🎨
+            </div>
+            <div className="text-center sm:text-left">
+              <h2 className="text-xl font-bold text-slate-900 sm:text-2xl">
+                {t("land.canvatitle")}
+              </h2>
+              <p className="mt-3 max-w-xl text-sm leading-relaxed text-slate-600">
+                {t("land.canvabody")}
+              </p>
+              <ul className="mt-5 grid grid-cols-1 gap-2 text-sm text-slate-600 sm:grid-cols-2">
+                <li className="flex items-center gap-2">
+                  <span className="text-[var(--jf-primary)]">✓</span> {t("land.canva1")}
+                </li>
+                <li className="flex items-center gap-2">
+                  <span className="text-[var(--jf-primary)]">✓</span> {t("land.canva2")}
+                </li>
+                <li className="flex items-center gap-2">
+                  <span className="text-[var(--jf-primary)]">✓</span> {t("land.canva3")}
+                </li>
+                <li className="flex items-center gap-2">
+                  <span className="text-[var(--jf-primary)]">✓</span> {t("land.canva4")}
+                </li>
+              </ul>
+              <div className="mt-6 flex flex-wrap items-center justify-center gap-3 sm:justify-start">
+                <a
+                  href="/mcp"
+                  className="rounded-lg bg-[var(--jf-primary)] px-4 py-2 text-sm font-medium text-white hover:opacity-90"
+                >
+                  {t("land.canvacta")}
+                </a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       {/* features */}
       <section className="mx-auto max-w-4xl border-t border-slate-100 px-6 py-16">
         <div className="grid grid-cols-1 gap-8 sm:grid-cols-2">
