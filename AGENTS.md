@@ -66,6 +66,10 @@ Parity checklist (dashboard → MCP):
 - Super-admin platform-wide monitoring (#386, gated on #385 super-admin) →
   `admin_list_workspaces`, `admin_media_usage`, `admin_list_sales`,
   `admin_spam_queue`, `admin_email_deliveries`, `admin_system_health`
+- Affiliate marketing (#444) → `create_affiliate`, `list_affiliates`,
+  `get_affiliate_sales`, `set_affiliate_commission`
+- Realtime notifications (#447) → `get_realtime_status`, `set_realtime_sound`
+  (the SSE stream `GET /v1/rest/events/stream` is the realtime channel)
 
 ## DOCUMENTATION PARITY (RULE — jangan tertinggal/terlepas)
 
