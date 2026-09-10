@@ -893,7 +893,7 @@ export default function Settings() {
 
         {/* Tab bar (issue #68) — same styling as Profile. */}
         {visibleTabs.length > 0 && (
-        <div className="mt-4 flex gap-1 overflow-x-auto border-b border-slate-200">
+        <div className="mt-4 flex flex-wrap gap-1 border-b border-slate-200">
           {visibleTabs.map((id) => (
             <button
               key={id}

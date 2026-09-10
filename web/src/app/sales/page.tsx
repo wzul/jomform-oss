@@ -487,17 +487,17 @@ function SalesPageInner() {
 
         {/* Table */}
         <div className="jf-card mt-4 overflow-x-auto">
-          <table className="w-full min-w-[720px] text-sm">
+          <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-[var(--jf-border)] text-left text-[10px] uppercase tracking-wide text-[var(--jf-muted)]">
                 <th className="px-4 py-3 font-medium">{t("dash.ref")}</th>
                 <th className="px-2 py-3 font-medium">{t("dash.buyer")}</th>
-                <th className="px-2 py-3 font-medium">{t("sales.items")}</th>
+                <th className="hidden px-2 py-3 font-medium sm:table-cell">{t("sales.items")}</th>
                 <th className="px-2 py-3 font-medium">{t("dash.amount")}</th>
                 <th className="px-2 py-3 font-medium">{t("dash.status")}</th>
-                <th className="px-2 py-3 font-medium">{t("dash.email")}</th>
-                <th className="px-2 py-3 font-medium">{t("sales.form")}</th>
-                <th className="px-2 py-3 font-medium">{t("prod.date")}</th>
+                <th className="hidden px-2 py-3 font-medium sm:table-cell">{t("dash.email")}</th>
+                <th className="hidden px-2 py-3 font-medium sm:table-cell">{t("sales.form")}</th>
+                <th className="hidden px-2 py-3 font-medium sm:table-cell">{t("prod.date")}</th>
                 <th className="px-4 py-3 text-right font-medium">{t("sales.actions")}</th>
               </tr>
             </thead>
@@ -511,7 +511,7 @@ function SalesPageInner() {
                       <span className="block truncate text-[10px] text-[var(--jf-muted)]">{s.buyer_email}</span>
                     )}
                   </td>
-                  <td className="max-w-40 truncate px-2 py-3 text-xs text-[var(--jf-muted)]">
+                  <td className="hidden max-w-40 truncate px-2 py-3 text-xs text-[var(--jf-muted)] sm:table-cell">
                     {Array.isArray(s.items) && s.items.length
                       ? s.items.map((i) => `${i.qty}× ${i.name}${i.variation_name ? ` (${i.variation_name})` : ""}`).join(", ")
                       : "—"}
@@ -522,7 +522,7 @@ function SalesPageInner() {
                       {s.status}
                     </span>
                   </td>
-                  <td className="whitespace-nowrap px-2 py-3">
+                  <td className="hidden whitespace-nowrap px-2 py-3 sm:table-cell">
                     {s.email_status ? (
                       <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${emailStatusBadge(s.email_status)}`}>
                         {emailStatusLabel(s.email_status, t)}
@@ -531,10 +531,10 @@ function SalesPageInner() {
                       <span className="text-[10px] text-[var(--jf-muted)]">{t("dash.emailNotSent")}</span>
                     )}
                   </td>
-                  <td className="max-w-32 truncate px-2 py-3 text-xs text-[var(--jf-muted)]">
+                  <td className="hidden max-w-32 truncate px-2 py-3 text-xs text-[var(--jf-muted)] sm:table-cell">
                     {s.form_id ? formName.get(s.form_id) || "—" : "—"}
                   </td>
-                  <td className="whitespace-nowrap px-2 py-3 text-[11px] text-[var(--jf-muted)]">
+                  <td className="hidden whitespace-nowrap px-2 py-3 text-[11px] text-[var(--jf-muted)] sm:table-cell">
                     {formatDate(s.created_at, user?.timezone)}
                   </td>
                   <td className="whitespace-nowrap px-4 py-3">

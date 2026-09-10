@@ -550,10 +550,10 @@ export default function Products() {
 
         {/* Table */}
         <div className="jf-card mt-4 overflow-x-auto">
-          <table className="w-full min-w-[640px] text-sm">
+          <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-[var(--jf-border)] text-left">
-                <th className="w-10 px-4 py-3">
+                <th className="hidden w-10 px-4 py-3 sm:table-cell">
                   {canWrite && (
                     <input
                       type="checkbox"
@@ -567,10 +567,10 @@ export default function Products() {
                 <th className="px-2 py-3">
                   <SortHeader label={t("prod.name")} k="name" />
                 </th>
-                <th className="px-2 py-3 text-xs font-semibold uppercase tracking-wide text-[var(--jf-muted)]">
+                <th className="hidden px-2 py-3 text-xs font-semibold uppercase tracking-wide text-[var(--jf-muted)] sm:table-cell">
                   {t("prod.type")}
                 </th>
-                <th className="px-2 py-3 text-xs font-semibold uppercase tracking-wide text-[var(--jf-muted)]">
+                <th className="hidden px-2 py-3 text-xs font-semibold uppercase tracking-wide text-[var(--jf-muted)] sm:table-cell">
                   {t("prod.stockShort")}
                 </th>
                 <th className="px-2 py-3">
@@ -579,7 +579,7 @@ export default function Products() {
                 <th className="px-2 py-3 text-xs font-semibold uppercase tracking-wide text-[var(--jf-muted)]">
                   {t("dash.status")}
                 </th>
-                <th className="px-2 py-3">
+                <th className="hidden px-2 py-3 sm:table-cell">
                   <SortHeader label={t("prod.date")} k="created_at" />
                 </th>
                 <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-[var(--jf-muted)]">
@@ -595,7 +595,7 @@ export default function Products() {
                     p.active ? "" : "opacity-60"
                   }`}
                 >
-                  <td className="px-4 py-3">
+                  <td className="hidden px-4 py-3 sm:table-cell">
                     {canWrite && (
                       <input
                         type="checkbox"
@@ -618,8 +618,8 @@ export default function Products() {
                       <span className="font-medium">{p.name}</span>
                     )}
                   </td>
-                  <td className="px-2 py-3 text-[var(--jf-muted)]">{typeLabel(p)}</td>
-                  <td className="px-2 py-3">{stockLabel(p)}</td>
+                  <td className="hidden px-2 py-3 text-[var(--jf-muted)] sm:table-cell">{typeLabel(p)}</td>
+                  <td className="hidden px-2 py-3 sm:table-cell">{stockLabel(p)}</td>
                   <td className="px-2 py-3 font-semibold">{money(p.price_sen)}</td>
                   <td className="px-2 py-3">
                     {canWrite ? (
@@ -648,7 +648,7 @@ export default function Products() {
                       </span>
                     )}
                   </td>
-                  <td className="px-2 py-3 text-[var(--jf-muted)]">
+                  <td className="hidden px-2 py-3 text-[var(--jf-muted)] sm:table-cell">
                     {p.created_at ? formatDate(p.created_at, user?.timezone) : "—"}
                   </td>
                   <td className="px-4 py-3">

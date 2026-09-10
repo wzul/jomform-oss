@@ -344,7 +344,7 @@ export default function ProfilePage() {
         <h1 className="max-w-xl text-2xl font-bold">{t("prof.title")}</h1>
 
         {/* Tab bar */}
-        <div className="mt-4 flex gap-1 border-b border-slate-200">
+        <div className="mt-4 flex flex-wrap gap-1 border-b border-slate-200">
           {TAB_IDS.map((id) => (
             <button
               key={id}

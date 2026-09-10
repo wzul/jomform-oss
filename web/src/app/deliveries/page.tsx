@@ -207,14 +207,14 @@ export default function DeliveriesPage() {
 
         {/* Table */}
         <div className="jf-card mt-4 overflow-x-auto">
-          <table className="w-full min-w-[760px] text-sm">
+          <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-[var(--jf-border)] text-left text-[10px] uppercase tracking-wide text-[var(--jf-muted)]">
                 <th className="px-4 py-3 font-medium">{t("del.colEmail")}</th>
-                <th className="px-2 py-3 font-medium">{t("del.colEvent")}</th>
+                <th className="hidden px-2 py-3 font-medium sm:table-cell">{t("del.colEvent")}</th>
                 <th className="px-2 py-3 font-medium">{t("del.colSale")}</th>
-                <th className="px-2 py-3 font-medium">{t("del.colForm")}</th>
-                <th className="px-2 py-3 font-medium">{t("del.colTime")}</th>
+                <th className="hidden px-2 py-3 font-medium sm:table-cell">{t("del.colForm")}</th>
+                <th className="hidden px-2 py-3 font-medium sm:table-cell">{t("del.colTime")}</th>
                 <th className="px-4 py-3 text-right font-medium">{t("sales.actions")}</th>
               </tr>
             </thead>
@@ -225,7 +225,7 @@ export default function DeliveriesPage() {
                   className="border-b border-[var(--jf-border)] last:border-0 hover:bg-slate-50/60"
                 >
                   <td className="max-w-48 truncate px-4 py-3 text-xs">{d.email}</td>
-                  <td className="whitespace-nowrap px-2 py-3">
+                  <td className="hidden whitespace-nowrap px-2 py-3 sm:table-cell">
                     <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${eventBadge(d.event_type)}`}>
                       {d.event_type}
                     </span>
@@ -233,10 +233,10 @@ export default function DeliveriesPage() {
                   <td className="whitespace-nowrap px-2 py-3 font-mono text-[11px]">
                     {d.sale_ref || "—"}
                   </td>
-                  <td className="max-w-32 truncate px-2 py-3 text-xs text-[var(--jf-muted)]">
+                  <td className="hidden max-w-32 truncate px-2 py-3 text-xs text-[var(--jf-muted)] sm:table-cell">
                     {d.form_id ? formName.get(d.form_id) || "—" : "—"}
                   </td>
-                  <td className="whitespace-nowrap px-2 py-3 text-[11px] text-[var(--jf-muted)]">
+                  <td className="hidden whitespace-nowrap px-2 py-3 text-[11px] text-[var(--jf-muted)] sm:table-cell">
                     {fmtDateTime(d.created_at)}
                   </td>
                   <td className="whitespace-nowrap px-4 py-3 text-right">

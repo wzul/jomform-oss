@@ -212,13 +212,13 @@ export default function Subscriptions() {
 
         {/* Table */}
         <div className="jf-card mt-4 overflow-x-auto">
-          <table className="w-full min-w-[720px] text-sm">
+          <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-[var(--jf-border)] text-left">
                 <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-[var(--jf-muted)]">
                   {t("sub.customer")}
                 </th>
-                <th className="px-2 py-3 text-xs font-semibold uppercase tracking-wide text-[var(--jf-muted)]">
+                <th className="hidden px-2 py-3 text-xs font-semibold uppercase tracking-wide text-[var(--jf-muted)] sm:table-cell">
                   {t("sub.product")}
                 </th>
                 <th className="px-2 py-3 text-xs font-semibold uppercase tracking-wide text-[var(--jf-muted)]">
@@ -227,10 +227,10 @@ export default function Subscriptions() {
                 <th className="px-2 py-3 text-xs font-semibold uppercase tracking-wide text-[var(--jf-muted)]">
                   {t("dash.status")}
                 </th>
-                <th className="px-2 py-3 text-xs font-semibold uppercase tracking-wide text-[var(--jf-muted)]">
+                <th className="hidden px-2 py-3 text-xs font-semibold uppercase tracking-wide text-[var(--jf-muted)] sm:table-cell">
                   {t("sub.nextCharge")}
                 </th>
-                <th className="px-2 py-3 text-xs font-semibold uppercase tracking-wide text-[var(--jf-muted)]">
+                <th className="hidden px-2 py-3 text-xs font-semibold uppercase tracking-wide text-[var(--jf-muted)] sm:table-cell">
                   {t("sub.retryAttempts")}
                 </th>
                 <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-[var(--jf-muted)]">
@@ -247,7 +247,7 @@ export default function Subscriptions() {
                   <td className="px-4 py-3 font-medium text-[var(--jf-text)]">
                     {sub.customer}
                   </td>
-                  <td className="px-2 py-3 text-[var(--jf-muted)]">
+                  <td className="hidden px-2 py-3 text-[var(--jf-muted)] sm:table-cell">
                     {sub.product_name || "—"}
                   </td>
                   <td className="px-2 py-3 font-semibold">
@@ -276,12 +276,12 @@ export default function Subscriptions() {
                       </div>
                     )}
                   </td>
-                  <td className="px-2 py-3 text-[var(--jf-muted)]">
+                  <td className="hidden px-2 py-3 text-[var(--jf-muted)] sm:table-cell">
                     {sub.next_charge_at
                       ? formatDate(sub.next_charge_at, user?.timezone)
                       : "—"}
                   </td>
-                  <td className="px-2 py-3 text-[var(--jf-muted)]">
+                  <td className="hidden px-2 py-3 text-[var(--jf-muted)] sm:table-cell">
                     {sub.retry_attempts > 0 ? sub.retry_attempts : "—"}
                   </td>
                   <td className="px-4 py-3">
