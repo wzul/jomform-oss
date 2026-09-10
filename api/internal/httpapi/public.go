@@ -86,8 +86,10 @@ func (h *PublicHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /f/{slug}", h.handleRender)
 	// Issue #411: GitHub-style default Open Graph image per form, served at
 	// /og/{slug}.png on the space subdomain / custom domain. Registered before
-	// /{slug} so it wins over a form slug.
-	mux.HandleFunc("GET /og/{slug}.png", h.handleOGImage)
+	// /{slug} so it wins over a form slug. NOTE: Go's ServeMux wildcard must be
+	// a full path segment — `{slug}.png` is invalid and panics at startup — so
+	// the route is /og/{slug} and the handler strips the .png suffix.
+	mux.HandleFunc("GET /og/{slug}", h.handleOGImage)
 	// Issue #361: merchant code assets (CSS/JS/HTML/fonts) served on the
 	// space/custom domain at /assets/{key}, so a landing page can reference
 	// them same-origin (/styles/app.css). Registered before /{slug} so assets
