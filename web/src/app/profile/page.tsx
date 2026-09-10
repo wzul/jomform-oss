@@ -618,7 +618,18 @@ export default function ProfilePage() {
             each — so the connection is user-level, not per-space. */}
         {tab === "mcp" && (
           <section className="jf-card mt-6 p-6">
-            <h2 className="text-lg font-semibold">{t("prof.mcpTitle")}</h2>
+            <h2 className="text-lg font-semibold">
+              {t("prof.mcpTitle")}{" "}
+              <a
+                href="/docs/mcp"
+                target="_blank"
+                rel="noopener noreferrer"
+                title={t("prof.mcpDocs")}
+                className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full bg-slate-200 text-[10px] font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+              >
+                ?
+              </a>
+            </h2>
             <p className="mt-1 max-w-xl text-sm text-slate-400">
               {t("set.serverUrl")}{" "}
               <code className="rounded bg-slate-100 px-1">https://mcp.jomform.com/mcp</code> —{" "}

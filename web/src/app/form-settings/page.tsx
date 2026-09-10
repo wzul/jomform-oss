@@ -1265,7 +1265,16 @@ function FormSettingsInner() {
                           </div>
                           <div>
                             <label className={labelCls}>
-                              {t("fs.notifTo")} <span className="text-slate-400">{t("fs.notifToHint")}</span>
+                              {t("fs.notifTo")} <span className="text-slate-400">{t("fs.notifToHint")}</span>{" "}
+                              <a
+                                href="/docs/placeholders"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                title={t("fs.notifDocs")}
+                                className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full bg-slate-200 text-[10px] font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                              >
+                                ?
+                              </a>
                             </label>
                             <input value={edTo} onChange={(e) => setEdTo(e.target.value)} className={inputCls} placeholder="{admin_email}" />
                           </div>
@@ -1275,7 +1284,16 @@ function FormSettingsInner() {
                           </div>
                           <div>
                             <label className={labelCls}>
-                              {t("fs.notifBody")} <span className="text-slate-400">{t("fs.notifPlaceholders")}</span>
+                              {t("fs.notifBody")} <span className="text-slate-400">{t("fs.notifPlaceholders")}</span>{" "}
+                              <a
+                                href="/docs/placeholders"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                title={t("fs.notifDocs")}
+                                className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full bg-slate-200 text-[10px] font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                              >
+                                ?
+                              </a>
                             </label>
                             <textarea value={edBody} onChange={(e) => setEdBody(e.target.value)} rows={6} className={`${inputCls} font-mono text-xs`} />
                           </div>

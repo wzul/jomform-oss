@@ -625,6 +625,8 @@ const DICT = {
   // user — a connected agent can act across all the user's spaces).
   "prof.mcp": { en: "MCP agents", ms: "Agent MCP", zh: "MCP 代理", ta: "MCP முகவர்கள்", ar: "وكلاء MCP" },
   "prof.mcpTitle": { en: "Connected agents (MCP)", ms: "Agent bersambung (MCP)", zh: "已连接的代理（MCP）", ta: "இணைக்கப்பட்ட முகவர்கள் (MCP)", ar: "الوكلاء المتصلون (MCP)" },
+  // issue #395: inline "?" doc link next to the MCP settings
+  "prof.mcpDocs": { en: "MCP tool reference", ms: "Rujukan alat MCP", zh: "MCP 工具参考", ta: "MCP கருவி குறிப்பு", ar: "مرجع أدوات MCP" },
   "prof.mcpDisconnectConfirm": { en: "Disconnect this agent? It will lose access to every space it could reach", ms: "Putuskan sambungan agent ini? Ia akan hilang akses ke semua space yang boleh dicapainya", zh: "断开此代理？它将失去对所有可达空间的访问", ta: "இந்த முகவரைத் துண்டிக்கவா? அது அடையக்கூடிய ஒவ்வொரு இடத்துக்கும் அணுகலை இழக்கும்", ar: "قطع اتصال هذا الوكيل؟ سيفقد الوصول إلى كل مساحة يمكنه الوصول إليها" },
   "prof.mcpScopeTitle": { en: "Scope", ms: "Skop", zh: "范围", ta: "நோக்கம்", ar: "النطاق" },
   "prof.mcpScopeHelp": { en: "A connected agent can read, manage and administer every space you own — up to your role in each space. It is never granted more than your own role in any space.", ms: "Agent bersambung boleh membaca, mengurus dan mentadbir setiap space milik anda — setakat peranan anda dalam setiap space. Ia tidak pernah diberi lebih daripada peranan anda sendiri dalam mana-mana space.", zh: "已连接的代理可以读取、管理和维护您拥有的每个空间 — 不超过您在每个空间中的角色。它在任何空间中都绝不会获得超过您自身角色的权限。", ta: "இணைக்கப்பட்ட முகவர் நீங்கள் வைத்திருக்கும் ஒவ்வொரு இடத்தையும் படிக்கவும், நிர்வகிக்கவும், நிருவகிக்கவும் முடியும் — ஒவ்வொரு இடத்திலும் உங்கள் பாத்திரத்தின் அளவுக்கு. எந்த இடத்திலும் அது உங்கள் சொந்த பாத்திரத்தை விட அதிகமாக ஒருபோதும் வழங்கப்படாது.", ar: "يمكن للوكيل المتصل قراءة وإدارة وتدبير كل مساحة تملكها — وفقاً لدورك في كل مساحة. لا يُمنح أبداً أكثر من دورك الخاص في أي مساحة." },
@@ -976,6 +978,8 @@ const DICT = {
   "fs.notifSubject": { en: "Subject", ms: "Subjek", zh: "主题", ta: "பொருள்", ar: "الموضوع" },
   "fs.notifBody": { en: "Body (template)", ms: "Badan (templat)", zh: "正文（模板）", ta: "உடல் (வார்ப்புரு)", ar: "المحتوى (قالب)" },
   "fs.notifPlaceholders": { en: "Placeholders: {{ref_code}} {{amount}} {{items}} {{buyer_name}} {{form_url}} {{date}} or any {{field_id}}.", ms: "Placeholder: {{ref_code}} {{amount}} {{items}} {{buyer_name}} {{form_url}} {{date}} atau mana-mana {{field_id}}.", zh: "占位符：{{ref_code}} {{amount}} {{items}} {{buyer_name}} {{form_url}} {{date}} 或任意 {{field_id}}。", ta: "பிளேஸ்ஹோல்டர்கள்: {{ref_code}} {{amount}} {{items}} {{buyer_name}} {{form_url}} {{date}} அல்லது எந்த {{field_id}}.", ar: "الرموز: {{ref_code}} {{amount}} {{items}} {{buyer_name}} {{form_url}} {{date}} أو أي {{field_id}}." },
+  // issue #395: inline "?" doc link next to the notification placeholder fields
+  "fs.notifDocs": { en: "Placeholders reference", ms: "Rujukan placeholder", zh: "占位符参考", ta: "பிளேஸ்ஹோல்டர் குறிப்பு", ar: "مرجع الرموز" },
   "fs.notifCondition": { en: "Conditional logic (optional)", ms: "Logik bersyarat (pilihan)", zh: "条件逻辑（可选）", ta: "நிபந்தனை தர்க்கம் (விருப்பம்)", ar: "المنطق الشرطي (اختياري)" },
   "fs.notifCondField": { en: "Field", ms: "Medan", zh: "字段", ta: "புலம்", ar: "الحقل" },
   "fs.notifCondOp": { en: "Operator", ms: "Operator", zh: "运算符", ta: "ஆபரேட்டர்", ar: "المشغل" },

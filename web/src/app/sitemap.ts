@@ -11,6 +11,9 @@ const APEX_PAGES = [
   "/legal/terms",
   "/brand",
   "/mcp",
+  "/docs",
+  "/docs/placeholders",
+  "/docs/mcp",
 ];
 
 export const dynamic = "force-dynamic";

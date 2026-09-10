@@ -168,6 +168,7 @@ export default function Landing() {
         <div className="flex justify-center gap-6 pb-4 text-xs text-slate-500">
           <a href="/legal/privacy" className="hover:underline">Privacy Policy</a>
           <a href="/legal/terms" className="hover:underline">Terms of Service</a>
+          <a href="/docs" className="hover:underline">Docs</a>
           <a href="/brand" className="hover:underline">Brand</a>
         </div>
         <p>
