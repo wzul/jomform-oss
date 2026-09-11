@@ -16,7 +16,7 @@ export function Shell({
   active,
 }: {
   children: React.ReactNode;
-  active: "dashboard" | "forms" | "products" | "sales" | "spam" | "deliveries" | "subscriptions" | "settings" | "profile" | "media" | "admin";
+  active: "dashboard" | "forms" | "templates" | "products" | "sales" | "spam" | "deliveries" | "subscriptions" | "settings" | "profile" | "media" | "admin";
 }) {
   const { user, spaces, reload } = useSession();
   const [space, setSpace] = useState<string>("");
@@ -140,6 +140,8 @@ export function Shell({
   let nav = [
     { key: "dashboard", href: "/", label: t("nav.dashboard"), icon: "◧" },
     { key: "forms", href: "/forms", label: t("nav.forms"), icon: "✎" },
+    // Issue #457: merchant-managed templates (save/edit/delete own templates).
+    { key: "templates", href: "/templates", label: t("nav.templates"), icon: "🗂" },
     { key: "products", href: "/products", label: t("prod.title"), icon: "◧" },
     // Issue #126: dedicated Sales page, between Products and Settings.
     { key: "sales", href: "/sales", label: t("nav.sales"), icon: "💰" },

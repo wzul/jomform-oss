@@ -20,6 +20,15 @@ type Template = {
   theme?: { primary?: string };
 };
 
+// Issue #457: a merchant-owned template (from /v1/rest/templates). Cloned by
+// id via POST /v1/templates/use {template_id}, not by gallery slug.
+type OwnTemplate = {
+  id: string;
+  slug: string;
+  title: string;
+  theme?: { primary?: string };
+};
+
 const CATEGORY_ICON: Record<string, string> = {
   "Food & Beverage": "🍽",
   Booking: "📅",
@@ -46,6 +55,7 @@ export default function TemplatePicker({
   const { t } = useI18n();
   const router = useRouter();
   const [templates, setTemplates] = useState<Template[]>([]);
+  const [own, setOwn] = useState<OwnTemplate[]>([]);
   const [loading, setLoading] = useState(false);
   const [using, setUsing] = useState<string | null>(null);
   const [err, setErr] = useState("");
@@ -54,11 +64,19 @@ export default function TemplatePicker({
     setLoading(true);
     setErr("");
     try {
-      const r = await fetch(`/api/templates${workspaceQuery()}`);
+      const [r, o] = await Promise.all([
+        fetch(`/api/templates${workspaceQuery()}`),
+        // Issue #457: the merchant's own templates (owner-scoped; the API
+        // returns an empty list for read_only members / no workspace).
+        fetch(`/api/rest/templates${workspaceQuery()}`),
+      ]);
       const d = await r.json().catch(() => []);
       setTemplates(Array.isArray(d) ? d : []);
+      const od = await o.json().catch(() => []);
+      setOwn(Array.isArray(od) ? od : []);
     } catch {
       setTemplates([]);
+      setOwn([]);
     } finally {
       setLoading(false);
     }
@@ -78,6 +96,30 @@ export default function TemplatePicker({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ slug, name: title }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.id) {
+        setErr(d.error || t("tpl.useFail"));
+        return;
+      }
+      onClose();
+      router.push(`/builder?form=${d.id}`);
+    } catch {
+      setErr(t("tpl.useFail"));
+    } finally {
+      setUsing(null);
+    }
+  }
+
+  // Issue #457: clone one of the merchant's own templates by id.
+  async function useOwnTemplate(id: string, title: string) {
+    setUsing(id);
+    setErr("");
+    try {
+      const r = await fetch(`/api/templates/use${workspaceQuery()}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ template_id: id, name: title }),
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok || !d.id) {
@@ -135,6 +177,39 @@ export default function TemplatePicker({
             <span className="text-xs text-[var(--jf-muted)]">{t("tpl.blankHint")}</span>
           </button>
 
+          {/* Issue #457: the merchant's own templates come first. */}
+          {own.length > 0 && (
+            <p className="col-span-full -mb-1 text-[11px] font-medium uppercase tracking-wider text-[var(--jf-muted)]">
+              {t("tplmg.title")}
+            </p>
+          )}
+          {own.map((tpl) => (
+            <div
+              key={tpl.id}
+              className="flex flex-col rounded-xl border border-[var(--jf-border)] bg-white p-4 transition-shadow hover:shadow-sm"
+            >
+              <div className="mb-2 flex items-center gap-2">
+                <span
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-lg"
+                  style={{ backgroundColor: (tpl.theme?.primary || "#5e6ad2") + "22" }}
+                >
+                  🗂
+                </span>
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-[#374151]">{tpl.title}</p>
+                </div>
+              </div>
+              <div className="mb-3 flex-1" />
+              <button
+                onClick={() => void useOwnTemplate(tpl.id, tpl.title)}
+                disabled={using !== null}
+                className="jf-btn-primary w-full py-2 text-xs disabled:opacity-50"
+              >
+                {using === tpl.id ? t("tpl.using") : t("tpl.use")}
+              </button>
+            </div>
+          ))}
+
           {templates.map((tpl) => (
             <div
               key={tpl.id}
@@ -172,7 +247,7 @@ export default function TemplatePicker({
           {loading && (
             <p className="col-span-full py-8 text-center text-sm text-[var(--jf-muted)]">…</p>
           )}
-          {!loading && templates.length === 0 && (
+          {!loading && templates.length === 0 && own.length === 0 && (
             <p className="col-span-full py-8 text-center text-sm text-[var(--jf-muted)]">
               {t("tpl.empty")}
             </p>

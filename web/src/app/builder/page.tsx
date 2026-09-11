@@ -197,6 +197,9 @@ export default function Builder() {
   const [loadErr, setLoadErr] = useState("");
   // Issue #174: template picker on the new-form path (no ?form= param).
   const [pickerOpen, setPickerOpen] = useState(false);
+  // Issue #457: "save as template" — one-click save of the current form as a
+  // reusable template (shown next to Publish once the form has been saved).
+  const [tplMsg, setTplMsg] = useState("");
 
   // Issue #256: AI form builder — prompt input + generation state.
   const [aiPrompt, setAiPrompt] = useState("");
@@ -498,6 +501,32 @@ export default function Builder() {
     }
     setSaving(false);
     setDirty(false);
+  }
+
+  // Issue #457: save the current form (its saved config) as a reusable
+  // template. The form must exist first, so this saves before snapshotting.
+  async function saveAsTemplate() {
+    setTplMsg("");
+    if (!currentId) {
+      await save(false);
+      if (!currentId) return; // save failed; the error is shown already
+    }
+    const id = currentId;
+    if (!id) return;
+    try {
+      const r = await fetch(`/api/rest/templates${workspaceQuery()}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ form_id: id, title }),
+      });
+      if (!r.ok) {
+        setTplMsg(t("bld.saveAsTemplateFail"));
+        return;
+      }
+      setTplMsg(t("bld.saveAsTemplateDone"));
+    } catch {
+      setTplMsg(t("bld.saveAsTemplateFail"));
+    }
   }
 
   /* Issue #256: AI form builder — send the prompt to the backend, which calls
@@ -957,6 +986,15 @@ export default function Builder() {
               {t("bld.view")}
             </a>
           )}
+          {/* Issue #457: save this form's design as a reusable template. */}
+          <button
+            onClick={() => void saveAsTemplate()}
+            disabled={saving}
+            title={t("bld.saveAsTemplate")}
+            className="hidden shrink-0 rounded-md border border-[var(--jf-border)] bg-white px-3 py-1.5 text-xs text-[#374151] hover:bg-slate-50 disabled:opacity-50 md:inline-flex"
+          >
+            {t("bld.saveAsTemplate")}
+          </button>
           {/* desktop Publish — hidden on mobile (it's in row 1). */}
           <button
             onClick={() => save(true)}
@@ -1158,6 +1196,8 @@ export default function Builder() {
             )}
           </div>
           {loadErr && <p className="mt-4 text-center text-xs text-red-400">{loadErr}</p>}
+          {/* Issue #457: save-as-template feedback. */}
+          {tplMsg && <p className="mt-2 text-center text-xs text-[var(--jf-muted)]">{tplMsg}</p>}
         </section>
 
         {/* ── right: inspector − mobile: only on the Settings tab; hosts the

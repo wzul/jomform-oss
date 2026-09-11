@@ -71,8 +71,10 @@ Parity checklist (dashboard → MCP):
 - Realtime notifications (#447) → `get_realtime_status`, `set_realtime_sound`
   (the SSE stream `GET /v1/rest/events/stream` is the realtime channel)
 - Trusted devices (#454) → `list_trusted_devices`, `revoke_trusted_device`
-- Template management (#457) → `create_template`, `update_template`,
-  `delete_template` (plus existing `list_templates`, `use_template`)
+- Templates: gallery picker (#174) → `list_templates`, `use_template`
+  (slug = system gallery); merchant-managed templates (#457) →
+  `list_own_templates`, `create_template`, `update_template`, `delete_template`
+  (`use_template` also accepts `template_id` for an own template)
 
 ## DOCUMENTATION PARITY (RULE — jangan tertinggal/terlepas)
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -95,9 +96,11 @@ func (s *FormStore) Create(ctx context.Context, f *Form) error {
 	).Scan(&f.ID, &f.CreatedAt, &f.UpdatedAt)
 }
 
-// ListByAccount lists all non-deleted forms for an account.
+// ListByAccount lists all non-deleted forms for an account. Templates
+// (is_template) are excluded: they are managed separately (issue #457) and
+// must never appear in the merchant's Forms list.
 func (s *FormStore) ListByAccount(ctx context.Context, accountID string) ([]*Form, error) {
-	rows, err := s.pool.Query(ctx, formSelect+" AND account_id=$1 ORDER BY created_at DESC", accountID)
+	rows, err := s.pool.Query(ctx, formSelect+" AND account_id=$1 AND NOT is_template ORDER BY created_at DESC", accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -316,13 +319,96 @@ func (s *FormStore) ListTemplates(ctx context.Context) ([]*Form, error) {
 	return out, rows.Err()
 }
 
-// TemplateBySlug fetches one non-deleted template.
+// TemplateBySlug fetches one published (gallery) template. Published status
+// keeps this lookup deterministic: merchant-owned templates are drafts
+// (issue #457) and are therefore never resolved by slug here — callers that
+// want an own template pass its id to TemplateByIDForAccount.
 func (s *FormStore) TemplateBySlug(ctx context.Context, slug string) (*Form, error) {
-	f, err := s.scanOne(s.pool.QueryRow(ctx, formSelect+` AND is_template AND slug=$1`, slug))
+	f, err := s.scanOne(s.pool.QueryRow(ctx, formSelect+` AND is_template AND status='published' AND slug=$1`, slug))
 	if err != nil {
 		return nil, err
 	}
 	return f, nil
+}
+
+// ── Issue #457: merchant-managed templates ──────────────────────────────
+//
+// Merchant templates reuse the existing forms.is_template mechanism rather
+// than a parallel table: an own template is a forms row with
+// is_template=true, status='draft' and account_id = the owning account.
+// Because the row is a draft it is invisible to the public gallery
+// (ListTemplates filters status='published'), to the storefront
+// (ListPublishedByAccountSlug filters status='published') and to the Forms
+// list (ListByAccount filters NOT is_template) — every read is
+// owner-scoped, so templates stay inside their tenant.
+
+// ListTemplatesByAccount returns the account's own templates, newest first.
+func (s *FormStore) ListTemplatesByAccount(ctx context.Context, accountID string) ([]*Form, error) {
+	rows, err := s.pool.Query(ctx,
+		formSelect+` AND account_id=$1 AND is_template ORDER BY updated_at DESC`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Form
+	for rows.Next() {
+		f, serr := s.scanOne(rows)
+		if serr != nil {
+			return nil, serr
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// TemplateByIDForAccount fetches one of the account's own templates by id.
+// A non-template form id or another account's template is not found.
+func (s *FormStore) TemplateByIDForAccount(ctx context.Context, accountID, id string) (*Form, error) {
+	f, err := s.scanOne(s.pool.QueryRow(ctx,
+		formSelect+` AND id=$2 AND account_id=$1 AND is_template`, accountID, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrFormNotFound
+	}
+	return f, err
+}
+
+// CreateTemplate inserts an owner-scoped template. is_template is forced true
+// and status is forced to draft so the row can never be served publicly.
+func (s *FormStore) CreateTemplate(ctx context.Context, f *Form) error {
+	f.IsTemplate = true
+	f.Status = FormStatusDraft
+	return s.Create(ctx, f)
+}
+
+// UpdateTemplate mutates title/config/theme of the account's own template.
+// Nil maps mean "leave unchanged" (same COALESCE contract as Update).
+func (s *FormStore) UpdateTemplate(ctx context.Context, accountID, id, title string, config, theme map[string]any) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE forms SET title=$3, config=COALESCE($4, config), theme=COALESCE($5, theme), updated_at=now()
+		 WHERE id=$2 AND account_id=$1 AND is_template AND deleted_at IS NULL`,
+		accountID, id, title, config, theme)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrFormNotFound
+	}
+	return nil
+}
+
+// SoftDeleteTemplate soft-deletes one of the account's own templates.
+func (s *FormStore) SoftDeleteTemplate(ctx context.Context, accountID, id string) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE forms SET deleted_at=now(), updated_at=now()
+		 WHERE id=$2 AND account_id=$1 AND is_template AND deleted_at IS NULL`,
+		accountID, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrFormNotFound
+	}
+	return nil
 }
 
 // PublishedByWorkspaceSlug resolves a published form via workspace subdomain

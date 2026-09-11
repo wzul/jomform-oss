@@ -509,8 +509,27 @@ func (s *Server) registerTools() {
 	}, s.listTemplatesMCP)
 	addTool(s, &mcp.Tool{
 		Name:        "use_template",
-		Description: "Clone template borang (slug dari list_templates) menjadi draft baharu dalam akaun anda. Pulangkan form_id + slug untuk dibuka dalam builder.",
+		Description: "Clone template borang menjadi draft baharu dalam akaun anda. Isi slug (dari list_templates) untuk template sistem, atau template_id (dari list_own_templates) untuk template anda sendiri. Pulangkan form_id + slug untuk dibuka dalam builder.",
 	}, s.useTemplateMCP)
+	// ── Parity: merchant-managed templates (issue #457) ───────────────────
+	// Dashboard Templates view: save a form as a reusable template, then
+	// list/edit/delete/clone your own templates. Account-scoped.
+	addTool(s, &mcp.Tool{
+		Name:        "list_own_templates",
+		Description: "Senarai template anda sendiri (issue #457): id, slug, tajuk, config, theme. Berbeza daripada list_templates (gallery sistem).",
+	}, s.listOwnTemplatesMCP)
+	addTool(s, &mcp.Tool{
+		Name:        "create_template",
+		Description: "Simpan borang sedia ada sebagai template boleh guna semula (issue #457): isi form_id (dari list_forms) untuk salin borang itu, atau title + config untuk template baharu. Template dimiliki akaun anda sahaja.",
+	}, s.createTemplateMCP)
+	addTool(s, &mcp.Tool{
+		Name:        "update_template",
+		Description: "Kemaskini template anda sendiri (issue #457): tajuk, config dan/atau theme. Omit medan yang tak berubah. template_id dari list_own_templates.",
+	}, s.updateTemplateMCP)
+	addTool(s, &mcp.Tool{
+		Name:        "delete_template",
+		Description: "Padam (soft-delete) template anda sendiri (issue #457). template_id dari list_own_templates. Boleh dicipta semula bila-bila masa.",
+	}, s.deleteTemplateMCP)
 
 	// ── Parity: unverified-account purge (issue #190) ───────────────────
 	// The auto-deletion runs on the hourly sweep; this admin tool surfaces

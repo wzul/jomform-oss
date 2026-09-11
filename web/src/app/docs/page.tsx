@@ -50,6 +50,10 @@ const FEATURES: { title: string; body: string }[] = [
     body: "Customise your workspace storefront with a hero, subtitle, body, image, theme colours, logo and call-to-action buttons that link to your forms.",
   },
   {
+    title: "Templates",
+    body: "Start a new form from the built-in template gallery (order forms, booking, donation, contact, survey and more), or build your own: save any form as a reusable template from the builder or the Templates page. Your templates are private to your workspace — list, rename, edit and delete them, then clone one into a new draft whenever you need it. AI agents can manage the same templates over MCP (list_own_templates, create_template, update_template, delete_template).",
+  },
+  {
     title: "MCP (AI agents)",
     body: "Connect JomForm to Claude, Cursor and other AI agents via the Model Context Protocol. Agents can build forms, manage products, sales, subscriptions, media and more. See the MCP tool reference.",
   },

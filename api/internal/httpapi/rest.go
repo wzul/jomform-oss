@@ -176,6 +176,13 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /v1/system-settings", h.authed(h.listSystemSettings))
 	mux.Handle("PUT /v1/system-settings", h.authed(h.setSystemSetting))
 	mux.Handle("POST /v1/templates/use", h.authed(h.useTemplate))
+	// Issue #457: merchant-managed templates (owner-scoped CRUD + clone).
+	mux.Handle("GET /v1/rest/templates", h.authed(h.listOwnTemplates))
+	mux.Handle("POST /v1/rest/templates", h.authed(h.createOwnTemplate))
+	mux.Handle("GET /v1/rest/templates/{id}", h.authed(h.getOwnTemplate))
+	mux.Handle("PUT /v1/rest/templates/{id}", h.authed(h.updateOwnTemplate))
+	mux.Handle("DELETE /v1/rest/templates/{id}", h.authed(h.deleteOwnTemplate))
+	mux.Handle("POST /v1/rest/templates/{id}/use", h.authed(h.useOwnTemplate))
 	mux.Handle("GET /v1/cf/start", h.authed(h.cfStart))
 	mux.HandleFunc("GET /v1/cf/callback", h.cfCallback)
 	mux.Handle("GET /v1/cf/status", h.authed(h.cfStatus))
