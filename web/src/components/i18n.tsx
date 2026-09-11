@@ -803,6 +803,7 @@ const DICT = {
   "bld.redirSuccess": { en: "Custom success redirect (optional)", ms: "Redirect selepas berjaya (pilihan)", zh: "自定义成功跳转（可选）", ta: "வெற்றி திருப்புதல் (விருப்பம்)", ar: "توجيه النجاح المخصص (اختياري)" },
   "bld.redirFailure": { en: "Custom failure redirect (optional)", ms: "Redirect selepas gagal (pilihan)", zh: "自定义失败跳转（可选）", ta: "தோல்வி திருப்புதல் (விருப்பம்)", ar: "توجيه الفشل المخصص (اختياري)" },
   "bld.allowEmbed": { en: "Allow embedding (iframe)", ms: "Benarkan embed (iframe)", zh: "允许嵌入（iframe）", ta: "எம்பெட் அனுமதி (iframe)", ar: "السماح بالتضمين (iframe)" },
+  "bld.embedDocs": { en: "Embed guide (auto-height)", ms: "Panduan embed (tinggi auto)", zh: "嵌入指南（自动高度）", ta: "எம்பெட் வழிகாட்டி (தானியங்கி உயரம்)", ar: "دليل التضمين (ارتفاع تلقائي)" },
   "bld.saveDisplay": { en: "Save display settings", ms: "Simpan tetapan paparan", zh: "保存显示设置", ta: "காட்சி அமைப்புகளைச் சேமி", ar: "حفظ إعدادات العرض" },
   "bld.displaySaved": { en: "Display settings saved ✓", ms: "Tetapan paparan disimpan ✓", zh: "显示设置已保存 ✓", ta: "காட்சி அமைப்புகள் சேமிக்கப்பட்டன ✓", ar: "تم حفظ إعدادات العرض ✓" },
   "bld.restrictionsTitle": { en: "Restrictions", ms: "Sekatan", zh: "限制", ta: "கட்டுப்பாடுகள்", ar: "القيود" },

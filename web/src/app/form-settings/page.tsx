@@ -1009,6 +1009,16 @@ function FormSettingsInner() {
                       <label className="flex items-center gap-2 text-sm text-slate-700">
                         <input type="checkbox" checked={fsEmbed} onChange={(e) => setFsEmbed(e.target.checked)} className="accent-[#5e6ad2]" />
                         {t("bld.allowEmbed")}
+                        {/* Issue #456: inline doc link to the embed guide (auto-height + snippet). */}
+                        <a
+                          href="/docs/embed"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title={t("bld.embedDocs")}
+                          className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-slate-200 text-[10px] font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                        >
+                          ?
+                        </a>
                       </label>
                       {/* Issue #438: QR ordering flow — generate a QR for the
                           form's public URL, optionally encoding a table number. */}

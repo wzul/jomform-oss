@@ -1040,6 +1040,7 @@ document.getElementById('of').addEventListener('submit', async (e) => {
   else { alert(data.error || 'Ralat'); }
 });
 </script>
+{{.HeightJS}}
 </body></html>`))
 
 type tmplProduct struct {
@@ -1110,6 +1111,10 @@ func (h *PublicHandlers) renderLegacy(w http.ResponseWriter, r *http.Request, f 
 		// Issue #276: noindex on jomform.com subdomains / when the workspace opts
 		// out of indexing.
 		NoIndex bool
+		// Issue #456: postMessage auto-height for the iframe embed. No-op on a
+		// direct visit (the script only runs when framed). template.HTML so the
+		// <script> block is emitted verbatim.
+		HeightJS template.HTML
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := formTmpl.Execute(w, view{
@@ -1118,6 +1123,7 @@ func (h *PublicHandlers) renderLegacy(w http.ResponseWriter, r *http.Request, f 
 		Footer:    h.workspaceFooter(r.Context(), f),
 		AntiSpam:  template.HTML(antiSpamRenderFields()),
 		NoIndex:   h.formNoIndex(r, f),
+		HeightJS:  template.HTML(iframeHeightJS),
 	}); err != nil {
 		slog.Error("form_render", "err", err)
 	}

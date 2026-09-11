@@ -57,6 +57,10 @@ const FEATURES: { title: string; body: string }[] = [
     title: "Design → AI agent → MCP customization",
     body: "Design your form or landing page in a tool like Canva, then use an AI agent (e.g. Claude) connected to the JomForm MCP to apply that design and customize it with CSS and JS. See the customization guide.",
   },
+  {
+    title: "Embed on your site",
+    body: "Drop a form into any website with an iframe. The embedded form posts its height to your page (postMessage auto-height) so it grows with the form, with a 3-line merchant listener and a fixed-height fallback. See the embed guide.",
+  },
 ];
 
 export default function DocsIndexPage() {
@@ -80,6 +84,12 @@ export default function DocsIndexPage() {
           className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
         >
           Placeholders reference
+        </Link>
+        <Link
+          href="/docs/embed"
+          className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+        >
+          Embed on your site
         </Link>
         <Link
           href="/docs/mcp"

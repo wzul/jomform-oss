@@ -239,11 +239,42 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 		// Issue #276: noindex on jomform.com subdomains / when the workspace opts
 		// out of indexing.
 		"NoIndex": h.formNoIndex(r, f),
+		// Issue #456: postMessage auto-height for the iframe embed. No-op on a
+		// direct visit (the script only runs when framed).
+		"HeightJS": template.HTML(iframeHeightJS),
 	}); err != nil {
 		slog.Error("form_render_blocks", "err", err)
 	}
 	return true
 }
+
+// iframeHeightJS reports the rendered page's height to the parent frame so a
+// merchant's embed snippet can auto-resize the iframe (issue #456). It is a
+// no-op on a direct visit: the whole script returns early unless the page is
+// actually framed (window.self !== window.top). It re-posts on load, on
+// viewport resize, and on DOM mutation / resize (ResizeObserver + fallback
+// MutationObserver) so it tracks dynamic content (conditional fields, product
+// selection, the confirmation message after submit). When the parent does not
+// listen, nothing changes: the merchant's own iframe CSS height (the
+// documented 640px) stays the fallback.
+//
+// The full <script> wrapper is part of the constant so the renderers can emit
+// it verbatim (template.HTML) without html/template escaping the JS. The body
+// is a fixed constant with no "</script>" sequence, so it is safe to inline.
+const iframeHeightJS = `<script>(function(){
+  if(window.self===window.top)return;
+  var last=0;
+  function post(){
+    var de=document.documentElement;
+    var h=Math.max(de?de.scrollHeight:0,(document.body?document.body.scrollHeight:0));
+    if(h>0&&h!==last){last=h;window.parent.postMessage({type:'jomform:height',height:h},'*');}
+  }
+  window.addEventListener('load',post);
+  window.addEventListener('resize',post);
+  if(window.ResizeObserver){try{new ResizeObserver(post).observe(document.documentElement);}catch(e){}}
+  if(window.MutationObserver){try{new MutationObserver(post).observe(document.documentElement,{subtree:true,childList:true,attributes:true});}catch(e){}}
+  post();
+})();</script>`
 
 // blockTmpl renders each builder block. Prices ride on data-price for the
 // client total; the server remains the price authority on submit.
@@ -540,6 +571,7 @@ var blockTmpl = template.Must(template.New("blocks").
 {{.ThemeJS}}
 </script>
 {{end}}
+{{.HeightJS}}
 </body></html>`))
 
 // formTrackingHead extracts per-form tracking_head from config JSON.
@@ -696,6 +728,9 @@ func (h *PublicHandlers) renderResponseForm(w http.ResponseWriter, r *http.Reque
 		// Issue #276: noindex on jomform.com subdomains / when the workspace opts
 		// out of indexing.
 		"NoIndex": h.formNoIndex(r, f),
+		// Issue #456: postMessage auto-height for the iframe embed. No-op on a
+		// direct visit (the script only runs when framed).
+		"HeightJS": template.HTML(iframeHeightJS),
 	}); err != nil {
 		slog.Error("form_render_response", "err", err)
 	}
@@ -853,4 +888,5 @@ var responseTmpl = template.Must(template.New("response").
 {{.ThemeJS}}
 </script>
 {{end}}
+{{.HeightJS}}
 </body></html>`))

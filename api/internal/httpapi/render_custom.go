@@ -65,6 +65,9 @@ func (h *PublicHandlers) renderCustomForm(w http.ResponseWriter, r *http.Request
 		// Issue #276: noindex on jomform.com subdomains / when the workspace opts
 		// out of indexing.
 		"NoIndex": h.formNoIndex(r, f),
+		// Issue #456: postMessage auto-height for the iframe embed. No-op on a
+		// direct visit (the script only runs when framed).
+		"HeightJS": template.HTML(iframeHeightJS),
 	}); err != nil {
 		slog.Error("form_render_custom", "err", err)
 	}
@@ -180,4 +183,5 @@ var customFormTmpl = template.Must(template.New("custom").Parse(`<!doctype html>
   });
 })();
 </script>
+{{.HeightJS}}
 </body></html>`))
