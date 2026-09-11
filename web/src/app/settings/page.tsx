@@ -9,6 +9,7 @@ import { formatDateTime } from "../../lib/formatDate";
 import { workspaceQuery, workspaceScope } from "../../lib/workspace";
 import { MembersTab } from "../../components/MembersTab";
 import { LegalTab } from "../../components/LegalTab";
+import ProductPicker, { type PickerProduct } from "../../components/ProductPicker";
 
 // Issue #323: the CNAME target is consistent across all custom-domain copy.
 const CNAME_TARGET = "custom.jomform.com";
@@ -233,6 +234,13 @@ export default function Settings() {
   const [menuEnabled, setMenuEnabled] = useState(false);
   const [menuCategories, setMenuCategories] = useState<{ name: string; product_ids: string[] }[]>([]);
   const [menuBestSeller, setMenuBestSeller] = useState("");
+  // Issue #486: product picker state. `menuProducts` holds the ACTIVE
+  // workspace's active products (name + thumbnail + price) so the picker and
+  // the live preview can resolve stored product IDs to names without changing
+  // the persisted menu JSON shape.
+  const [menuProducts, setMenuProducts] = useState<PickerProduct[]>([]);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerCatIndex, setPickerCatIndex] = useState(-1); // -1 = best-seller picker
   // Issue #185: per-workspace currency + BNM rates.
   const [currency, setCurrency] = useState("MYR");
   const [currencyWorkspaceId, setCurrencyWorkspaceId] = useState("");
@@ -467,6 +475,13 @@ export default function Settings() {
         setMenuBestSeller(menu.best_seller || "");
       })
       .catch(() => {});
+    // Issue #486: load the workspace's ACTIVE products (workspace-scoped, same
+    // endpoint as the products page) so the menu product picker and the live
+    // preview can show names/thumbnails/prices instead of raw IDs.
+    fetch(`/api/rest/products${workspaceQuery()}`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((d) => setMenuProducts(Array.isArray(d) ? d.filter((p: PickerProduct) => p.active !== false) : []))
+      .catch(() => setMenuProducts([]));
     fetch(`/api/rest/currency/rates`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
@@ -922,6 +937,30 @@ export default function Settings() {
       const d = await r.json().catch(() => ({}));
       setErr(d.error || t("set.failedSave"));
     }
+  }
+
+  // Issue #486: resolve a stored product ID to the active product it points
+  // at (or undefined when the product is archived/gone — the renderer skips
+  // unknown IDs, so the preview flags them instead of silently dropping them).
+  function menuProductByID(id: string): PickerProduct | undefined {
+    return menuProducts.find((p) => p.id === id);
+  }
+
+  // Issue #486: the live menu preview — sections in order, with the picked
+  // items. Mirrors the renderer: configured categories first (in order, only
+  // the ones that resolve to a product), then "Other items" for every active
+  // product not placed in any category.
+  function menuPreviewSections(): { name: string; ids: string[] }[] {
+    const placed = new Set<string>();
+    const sections: { name: string; ids: string[] }[] = [];
+    for (const c of menuCategories) {
+      const ids = (c.product_ids || []).filter((id) => menuProductByID(id));
+      for (const id of ids) placed.add(id);
+      if (ids.length > 0) sections.push({ name: c.name, ids });
+    }
+    const rest = menuProducts.filter((p) => !placed.has(p.id)).map((p) => p.id);
+    if (rest.length > 0) sections.push({ name: t("set.menuPreviewOther"), ids: rest });
+    return sections;
   }
 
   // Issue #107: render a client-side preview of the template with sample data.
@@ -2118,7 +2157,10 @@ export default function Settings() {
           <section className="jf-card mt-6 p-6">
             <h2 className="text-lg font-semibold">{t("set.menuTitle")}</h2>
             <p className="mt-1 max-w-xl text-sm text-slate-400">
-              {t("set.menuHelp")}
+              {t("set.menuHelp")}{" "}
+              <a href="/docs" className="text-[var(--jf-primary)] hover:underline">
+                {t("set.menuDocs")}
+              </a>
             </p>
             <div className="mt-4 space-y-3">
               <div className="flex items-start justify-between gap-4 rounded-lg border border-[var(--jf-border)] p-3">
@@ -2146,18 +2188,68 @@ export default function Settings() {
                 <>
                   <div>
                     <label className="text-xs text-slate-500">{t("set.menuBestSeller")}</label>
-                    <input
-                      value={menuBestSeller}
-                      onChange={(e) => setMenuBestSeller(e.target.value)}
-                      className="jf-input mt-1 max-w-xl font-mono"
-                      placeholder="product-id"
-                    />
+                    <div className="mt-1 flex max-w-xl flex-wrap items-center gap-2 rounded-lg border border-[var(--jf-border)] p-2">
+                      {menuBestSeller && menuProductByID(menuBestSeller) ? (
+                        <>
+                          <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-md bg-slate-100">
+                            {menuProductByID(menuBestSeller)?.images?.[0] ? (
+                              /* eslint-disable-next-line @next/next/no-img-element */
+                              <img
+                                src={menuProductByID(menuBestSeller)!.images![0]}
+                                alt=""
+                                className="h-full w-full object-cover"
+                              />
+                            ) : (
+                              <span className="text-[10px] text-slate-400">—</span>
+                            )}
+                          </span>
+                          <span className="min-w-0 flex-1 truncate text-sm">
+                            {menuProductByID(menuBestSeller)!.name}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPickerCatIndex(-1);
+                              setPickerOpen(true);
+                            }}
+                            className="jf-btn-outline px-2 py-1 text-[11px]"
+                          >
+                            {t("set.menuChangeBestSeller")}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setMenuBestSeller("")}
+                            className="jf-btn-ghost px-2 py-1 text-[11px] text-red-600"
+                          >
+                            {t("set.menuClearBestSeller")}
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <span className="flex-1 truncate text-sm text-slate-400">
+                            {menuBestSeller
+                              ? t("set.menuUnknownProduct")
+                              : t("set.menuBestSellerNone")}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPickerCatIndex(-1);
+                              setPickerOpen(true);
+                            }}
+                            className="jf-btn-primary px-2.5 py-1 text-[11px]"
+                          >
+                            {t("set.menuChooseBestSeller")}
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </div>
                   <div>
                     <label className="text-xs text-slate-500">{t("set.menuCategories")}</label>
                     <div className="mt-1 space-y-2">
                       {menuCategories.map((c, i) => (
-                        <div key={i} className="flex flex-col gap-1.5 rounded-lg border border-[var(--jf-border)] p-3">
+                        <div key={i} className="flex flex-col gap-2 rounded-lg border border-[var(--jf-border)] p-3">
                           <div className="flex items-center gap-2">
                             <input
                               value={c.name}
@@ -2177,20 +2269,59 @@ export default function Settings() {
                               {t("set.menuCatRemove")}
                             </button>
                           </div>
-                          <input
-                            value={c.product_ids.join(", ")}
-                            onChange={(e) =>
-                              setMenuCategories((arr) =>
-                                arr.map((x, j) =>
-                                  j === i
-                                    ? { ...x, product_ids: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) }
-                                    : x
-                                )
-                              )
-                            }
-                            className="jf-input font-mono"
-                            placeholder="id1, id2, id3"
-                          />
+                          <div className="flex flex-wrap items-center gap-2">
+                            {(c.product_ids || []).map((id) => {
+                              const p = menuProductByID(id);
+                              return (
+                                <span
+                                  key={id}
+                                  className={`inline-flex items-center gap-1.5 rounded-full border py-0.5 pl-0.5 pr-2 text-xs ${
+                                    p
+                                      ? "border-[var(--jf-border)] bg-white"
+                                      : "border-amber-300 bg-amber-50"
+                                  }`}
+                                >
+                                  <span className="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-100">
+                                    {p?.images?.[0] ? (
+                                      /* eslint-disable-next-line @next/next/no-img-element */
+                                      <img src={p.images[0]} alt="" className="h-full w-full object-cover" />
+                                    ) : (
+                                      <span className="text-[9px] text-slate-400">—</span>
+                                    )}
+                                  </span>
+                                  <span className="max-w-[12rem] truncate">
+                                    {p ? p.name : t("set.menuUnknownProduct")}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    aria-label={t("set.menuCatRemove")}
+                                    onClick={() =>
+                                      setMenuCategories((arr) =>
+                                        arr.map((x, j) =>
+                                          j === i
+                                            ? { ...x, product_ids: (x.product_ids || []).filter((v) => v !== id) }
+                                            : x
+                                        )
+                                      )
+                                    }
+                                    className="text-slate-400 hover:text-red-500"
+                                  >
+                                    ✕
+                                  </button>
+                                </span>
+                              );
+                            })}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPickerCatIndex(i);
+                                setPickerOpen(true);
+                              }}
+                              className="jf-btn-outline px-2.5 py-1 text-[11px]"
+                            >
+                              + {t("set.menuPickProducts")}
+                            </button>
+                          </div>
                         </div>
                       ))}
                       <button
@@ -2201,6 +2332,70 @@ export default function Settings() {
                         + {t("set.menuCatAdd")}
                       </button>
                     </div>
+                  </div>
+                  {/* Issue #486: live preview of the resulting menu structure. */}
+                  <div className="rounded-lg border border-[var(--jf-border)] p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-sm font-medium">{t("set.menuPreviewTitle")}</p>
+                      <span className="text-xs text-[var(--jf-muted)]">
+                        {t("set.menuPreviewItems", {
+                          n: menuPreviewSections().reduce((n, s) => n + s.ids.length, 0),
+                        })}
+                      </span>
+                    </div>
+                    <p className="mt-0.5 max-w-xl text-xs text-slate-500">{t("set.menuPreviewHelp")}</p>
+                    {menuProducts.length === 0 ? (
+                      <p className="mt-2 text-sm text-slate-400">{t("set.menuPreviewNoProducts")}</p>
+                    ) : (
+                      <>
+                        {menuPreviewSections().length === 0 && (
+                          <p className="mt-2 text-sm text-slate-400">{t("set.menuPreviewEmpty")}</p>
+                        )}
+                        <div className="mt-2 space-y-2">
+                          {menuPreviewSections().map((s, si) => (
+                            <div key={si}>
+                              <p className="text-xs font-semibold uppercase tracking-wide text-[var(--jf-muted)]">
+                                {s.name || t("set.menuCatName")}
+                              </p>
+                              <div className="mt-1 flex flex-wrap gap-2">
+                                {s.ids.map((id) => {
+                                  const p = menuProductByID(id);
+                                  if (!p) return null;
+                                  return (
+                                    <span
+                                      key={id}
+                                      className="inline-flex items-center gap-2 rounded-lg border border-[var(--jf-border)] bg-white px-2 py-1"
+                                    >
+                                      <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-md bg-slate-100">
+                                        {p.images?.[0] ? (
+                                          /* eslint-disable-next-line @next/next/no-img-element */
+                                          <img src={p.images[0]} alt="" className="h-full w-full object-cover" />
+                                        ) : (
+                                          <span className="text-[9px] text-slate-400">—</span>
+                                        )}
+                                      </span>
+                                      <span className="text-xs">
+                                        <span className="block max-w-[10rem] truncate font-medium text-slate-700">
+                                          {p.name}
+                                        </span>
+                                        <span className="block text-[10px] text-[var(--jf-muted)]">
+                                          {`RM${(p.price_sen / 100).toLocaleString("en-MY", { minimumFractionDigits: 2 })}`}
+                                          {menuBestSeller === p.id && (
+                                            <span className="ml-1 rounded bg-[var(--jf-primary)]/10 px-1 text-[9px] font-semibold text-[var(--jf-primary)]">
+                                              {t("set.menuPreviewBestSeller")}
+                                            </span>
+                                          )}
+                                        </span>
+                                      </span>
+                                    </span>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    )}
                   </div>
                   <div className="flex flex-wrap items-center gap-2 pt-1">
                     <button onClick={saveLandingPage} className="jf-btn-primary">{t("set.lpSave")}</button>
@@ -2217,6 +2412,37 @@ export default function Settings() {
               )}
             </div>
           </section>
+
+          {/* Issue #486: product picker for a menu category (multi-select) or
+              the best-seller (single-select). Returns product IDs only, so the
+              stored menu JSON shape is unchanged. */}
+          <ProductPicker
+            open={pickerOpen}
+            onClose={() => setPickerOpen(false)}
+            multi={pickerCatIndex >= 0}
+            selected={
+              pickerCatIndex >= 0
+                ? menuCategories[pickerCatIndex]?.product_ids || []
+                : menuBestSeller
+                  ? [menuBestSeller]
+                  : []
+            }
+            title={
+              pickerCatIndex >= 0
+                ? t("set.menuPickerTitleCategory")
+                : t("set.menuPickerTitleBestSeller")
+            }
+            onConfirm={(ids) => {
+              if (pickerCatIndex >= 0) {
+                setMenuCategories((arr) =>
+                  arr.map((x, j) => (j === pickerCatIndex ? { ...x, product_ids: ids } : x))
+                );
+              } else {
+                setMenuBestSeller(ids[0] || "");
+              }
+              setPickerOpen(false);
+            }}
+          />
           </>
         )}
         {/* ── Members tab: workspace members management (issue #163) ── */}

@@ -54,6 +54,10 @@ const FEATURES: { title: string; body: string }[] = [
     body: "Customise your workspace storefront with a hero, subtitle, body, image, theme colours, logo and call-to-action buttons that link to your forms.",
   },
   {
+    title: "Restaurant menu (QR ordering)",
+    body: "Turn your storefront into a clean restaurant menu: pick your products by name, thumbnail and price into named categories (with a searchable product picker and a live preview of the section order), highlight a best-seller, and let customers scan a QR stand at the table to order and pay online. Configure it in Settings → Storefront → Restaurant menu, or over MCP via set_menu_page / get_menu_page.",
+  },
+  {
     title: "Templates",
     body: "Start a new form from the built-in template gallery (order forms, booking, donation, contact, survey and more), or build your own: save any form as a reusable template from the builder or the Templates page. Your templates are private to your workspace — list, rename, edit and delete them, then clone one into a new draft whenever you need it. AI agents can manage the same templates over MCP (list_own_templates, create_template, update_template, delete_template).",
   },
