@@ -259,10 +259,10 @@ export function Shell({
               role="dialog"
               aria-modal="true"
               aria-label="Navigation menu"
-              className="absolute left-0 top-0 h-full w-64 bg-white shadow-xl"
+              className="absolute left-0 top-0 flex h-full w-64 flex-col bg-white shadow-xl"
               onClick={(e) => e.stopPropagation()}
             >
-              <div className="flex items-center justify-between border-b border-[var(--jf-border)] px-4 py-3">
+              <div className="flex shrink-0 items-center justify-between border-b border-[var(--jf-border)] px-4 py-3">
                 <span className="text-sm font-semibold">
                   Jom<span className="text-[var(--jf-primary)]">Form</span>
                 </span>
@@ -275,35 +275,41 @@ export function Shell({
                   ✕
                 </button>
               </div>
-              <nav className="space-y-0.5 p-3">
-                {nav.map((n) => (
-                  <Link
-                    key={n.key}
-                    href={n.href}
-                    onClick={() => setMenuOpen(false)}
-                    className={`flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm ${
-                      active === n.key
-                        ? "bg-indigo-50 font-medium text-[var(--jf-primary)]"
-                        : "text-[var(--jf-muted)] hover:bg-slate-50"
-                    }`}
-                  >
-                    <span className="w-4 text-center text-xs opacity-70">{n.icon}</span>
-                    {n.label}
-                  </Link>
-                ))}
-              </nav>
-              {/* issue #41: space selector reachable from the mobile drawer —
-                  same shared component as the desktop topbar (issue #380) */}
-              <div className="border-t border-[var(--jf-border)] px-4 py-3">
-                <WorkspaceSwitcher
-                  spaces={spaces}
-                  value={space}
-                  onSwitch={switchSpace}
-                  defaultSpaceId={user?.default_space_id}
-                  onSetDefault={setDefaultSpace}
-                />
+              {/* Issue #460: nav + switcher live in the scrollable body; the
+                  user card is a normal flex item below it (shrink-0), so the
+                  card can never overlap the nav or an open switcher dropdown. */}
+              <div className="min-h-0 flex-1 overflow-y-auto">
+                <nav className="space-y-0.5 p-3">
+                  {nav.map((n) => (
+                    <Link
+                      key={n.key}
+                      href={n.href}
+                      onClick={() => setMenuOpen(false)}
+                      className={`flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm ${
+                        active === n.key
+                          ? "bg-indigo-50 font-medium text-[var(--jf-primary)]"
+                          : "text-[var(--jf-muted)] hover:bg-slate-50"
+                      }`}
+                    >
+                      <span className="w-4 text-center text-xs opacity-70">{n.icon}</span>
+                      {n.label}
+                    </Link>
+                  ))}
+                </nav>
+                {/* issue #41: space selector reachable from the mobile drawer —
+                    same shared component as the desktop topbar (issue #380) */}
+                <div className="border-t border-[var(--jf-border)] px-4 py-3">
+                  <WorkspaceSwitcher
+                    spaces={spaces}
+                    value={space}
+                    onSwitch={switchSpace}
+                    fullWidth
+                    defaultSpaceId={user?.default_space_id}
+                    onSetDefault={setDefaultSpace}
+                  />
+                </div>
               </div>
-              <div className="absolute bottom-4 left-0 right-0 px-4">
+              <div className="shrink-0 border-t border-[var(--jf-border)] px-4 py-3">
                 <div className="mb-2 flex items-center gap-2">
                   {/* Issue #133: profile picture or initial-letter fallback. */}
                   <UserAvatar className="h-8 w-8 rounded-full" />

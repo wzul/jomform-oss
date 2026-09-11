@@ -19,6 +19,7 @@ export function WorkspaceSwitcher({
   value,
   onSwitch,
   className,
+  fullWidth,
   defaultSpaceId,
   onSetDefault,
 }: {
@@ -26,6 +27,13 @@ export function WorkspaceSwitcher({
   value: string;
   onSwitch: (slug: string) => void;
   className?: string;
+  // Issue #460: when rendered in the mobile drawer the switcher is a
+  // full-width section row (leading icon + "Workspace" label, name beneath,
+  // chevron trailing) instead of the compact topbar chip, and its dropdown is
+  // rendered in flow directly under the row so it reads as attached to the
+  // trigger and is never clipped by the drawer's scroll area. Desktop topbar
+  // keeps the compact chip (fullWidth omitted).
+  fullWidth?: boolean;
   // Issue #164: optional default-space support. When provided, the dropdown
   // shows a "make this the default" action for the active space (and marks the
   // current default). onSetDefault(spaceId) persists the choice server-side.
@@ -40,6 +48,11 @@ export function WorkspaceSwitcher({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  // Issue #460: ref to the dropdown panel itself. In the drawer (fullWidth)
+  // the panel renders in flow inside the drawer's scroll body; when it opens
+  // we scroll it fully into view so every item is visible/tappable at once,
+  // instead of its lower rows sitting behind the drawer's user card.
+  const panelRef = useRef<HTMLDivElement>(null);
 
   const active = spaces.find((s) => s.slug === value) || spaces[0];
   const activeIsDefault = !!active && !!defaultSpaceId && active.id === defaultSpaceId;
@@ -47,6 +60,14 @@ export function WorkspaceSwitcher({
   // Close the dropdown on outside click or Escape.
   useEffect(() => {
     if (!open) return;
+    // Issue #460: fullWidth (drawer) panels are in-flow, so opening one can
+    // grow the scroll body and leave the panel's lower rows below the fold.
+    // Bring the whole panel into view on open so every item is reachable
+    // without the user having to discover the drawer's scroll.
+    const scrollTimer =
+      fullWidth && panelRef.current
+        ? window.setTimeout(() => panelRef.current?.scrollIntoView({ block: "nearest" }), 0)
+        : undefined;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setOpen(false);
     };
@@ -56,10 +77,11 @@ export function WorkspaceSwitcher({
     document.addEventListener("keydown", onKey);
     document.addEventListener("mousedown", onClick);
     return () => {
+      if (scrollTimer !== undefined) window.clearTimeout(scrollTimer);
       document.removeEventListener("keydown", onKey);
       document.removeEventListener("mousedown", onClick);
     };
-  }, [open]);
+  }, [open, fullWidth]);
 
   // Issue #163: short role label for the switcher (owner/admin → Admin,
   // manage → Manage, read_only → Read only).
@@ -97,8 +119,24 @@ export function WorkspaceSwitcher({
     }
   }
 
+  const chevron = (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 20 20"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="shrink-0 text-[var(--jf-muted)]"
+    >
+      <path d="M6 8l4 4 4-4" />
+    </svg>
+  );
+
   return (
-    <div ref={menuRef} className={`relative ${className || ""}`}>
+    <div ref={menuRef} className={`relative ${fullWidth ? "w-full" : ""} ${className || ""}`}>
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
@@ -106,29 +144,49 @@ export function WorkspaceSwitcher({
         aria-expanded={open}
         aria-label={t("common.workspace")}
         title={active ? `${active.name} (${active.slug}.jomform.com)` : t("common.workspace")}
-        className="flex max-w-[180px] items-center gap-1.5 rounded-md border border-[var(--jf-border)] bg-white px-2 py-1.5 text-xs font-medium text-[var(--jf-text)] hover:bg-slate-50"
+        className={
+          fullWidth
+            ? "flex w-full items-center justify-between gap-2 rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-left text-xs font-medium text-[var(--jf-text)] hover:bg-slate-50"
+            : "flex max-w-[180px] items-center gap-1.5 rounded-md border border-[var(--jf-border)] bg-white px-2 py-1.5 text-xs font-medium text-[var(--jf-text)] hover:bg-slate-50"
+        }
       >
-        <span className="truncate">{active ? active.name : t("common.workspace")}</span>
-        <svg
-          width="12"
-          height="12"
-          viewBox="0 0 20 20"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          className="shrink-0 text-[var(--jf-muted)]"
-        >
-          <path d="M6 8l4 4 4-4" />
-        </svg>
+        {fullWidth ? (
+          <>
+            <span aria-hidden className="shrink-0 text-[var(--jf-muted)]">
+              ▦
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-[10px] font-normal uppercase tracking-wide text-[var(--jf-muted)]">
+                {t("common.workspace")}
+              </span>
+              <span className="block truncate">{active ? active.name : t("common.workspace")}</span>
+            </span>
+            {chevron}
+          </>
+        ) : (
+          <>
+            <span className="truncate">{active ? active.name : t("common.workspace")}</span>
+            {chevron}
+          </>
+        )}
       </button>
 
+      {/* Issue #460: in the drawer the panel is rendered IN FLOW (full width,
+          directly under the trigger). An absolutely-positioned panel inside
+          the drawer's `overflow-y-auto` body would be clipped by the scroll
+          area and its lower items unreachable on short viewports. In flow it
+          is anchored to the trigger and always fully visible. Desktop keeps
+          the absolute, right-aligned popover. */}
       {open && (
         <div
+          ref={panelRef}
           role="menu"
           aria-label={t("common.workspace")}
-          className="absolute right-0 top-full z-50 mt-1 w-64 rounded-lg border border-[var(--jf-border)] bg-white p-1.5 shadow-lg"
+          className={
+            fullWidth
+              ? "relative z-50 mt-1 w-full rounded-lg border border-[var(--jf-border)] bg-white p-1.5 shadow-lg"
+              : "absolute right-0 top-full z-50 mt-1 w-64 rounded-lg border border-[var(--jf-border)] bg-white p-1.5 shadow-lg"
+          }
         >
           {spaces.length > 1 ? (
             <div className="max-h-56 overflow-y-auto">
