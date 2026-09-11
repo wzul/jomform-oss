@@ -6,8 +6,10 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -390,20 +392,123 @@ func (p *PasswordReset) Consume(ctx context.Context, token string) (string, erro
 	return userID, nil
 }
 
-// ─── trusted devices (issue #63) ────────────────────────────────────────────
+// ─── trusted devices (issue #63 + #454) ─────────────────────────────────────
 //
 // jf_trust is a single-purpose device cookie that waives TOTP on subsequent
 // logins (password still required every time). Raw token lives in the cookie;
 // only its SHA-256 is stored. A per-user set key makes invalidation trivial.
+//
+// Issue #454 adds device metadata so Profile → Security can LIST each trusted
+// device (label, IP, first trusted, expiry) and revoke one by id, instead of
+// only being able to forget the current device. Layout in Valkey:
+//
+//	jf:trust:{hash}            → userID                  (TTL 30d, unchanged)
+//	jf:trustset:{userID}       → SET of hashes           (unchanged)
+//	jf:trustmeta:{userID}      → HASH hash → metaJSON    (new, TTL 30d)
+//
+// The metadata hash is best-effort: a trust entry minted before #454 (or one
+// whose metadata expired) still authorizes logins — it just shows up in the
+// list with an unknown label/ip and is revocable by its hash id. The list is
+// always reconciled against the authoritative trust set, so a revoked/expired
+// device never lingers in the UI.
 
 const (
-	TrustKeyPrefix   = "jf:trust:"
-	TrustSetKeyPrefix = "jf:trustset:"
-	TrustTTL         = 30 * 24 * time.Hour
+	TrustKeyPrefix     = "jf:trust:"
+	TrustSetKeyPrefix  = "jf:trustset:"
+	TrustMetaKeyPrefix = "jf:trustmeta:"
+	TrustTTL           = 30 * 24 * time.Hour
 )
 
-func trustKey(hash string) string           { return TrustKeyPrefix + hash }
-func trustSetKey(userID string) string      { return TrustSetKeyPrefix + userID }
+func trustKey(hash string) string       { return TrustKeyPrefix + hash }
+func trustSetKey(userID string) string  { return TrustSetKeyPrefix + userID }
+func trustMetaKey(userID string) string { return TrustMetaKeyPrefix + userID }
+
+// TrustDevice is one trusted device as shown in Profile → Security.
+type TrustDevice struct {
+	// ID is the public, opaque identifier for the device (the SHA-256 of the
+	// raw trust token). It is what DELETE /v1/auth/trust/{id} accepts.
+	ID string `json:"id"`
+	// Label is a short human label derived from the device's user-agent
+	// (e.g. "Chrome · macOS"). Empty for legacy entries with no metadata.
+	Label string `json:"label,omitempty"`
+	// UserAgent is the raw UA recorded when the device was trusted.
+	UserAgent string `json:"user_agent,omitempty"`
+	// IP is the client IP recorded when the device was trusted.
+	IP string `json:"ip,omitempty"`
+	// FirstSeen is when the device was first trusted (RFC3339).
+	FirstSeen string `json:"first_seen,omitempty"`
+	// ExpiresAt is when the trust entry expires (RFC3339).
+	ExpiresAt string `json:"expires_at,omitempty"`
+	// Current marks the device making the request, so the UI can label it.
+	Current bool `json:"current,omitempty"`
+}
+
+// trustMeta is the JSON blob stored per device hash.
+type trustMeta struct {
+	Label     string `json:"label,omitempty"`
+	UserAgent string `json:"user_agent,omitempty"`
+	IP        string `json:"ip,omitempty"`
+	FirstSeen string `json:"first_seen,omitempty"`
+}
+
+// DeviceLabel derives a short, human-readable label from a user-agent string
+// (e.g. "Chrome · macOS", "Safari · iPhone"). Unrecognised UAs fall back to a
+// trimmed prefix of the raw UA. An empty UA yields "" (the UI then shows a
+// generic "unknown device" label).
+func DeviceLabel(ua string) string {
+	ua = strings.TrimSpace(ua)
+	if ua == "" {
+		return ""
+	}
+	browser := ""
+	switch {
+	case strings.Contains(ua, "Edg/") || strings.Contains(ua, "EdgA/") || strings.Contains(ua, "EdgiOS/"):
+		browser = "Edge"
+	case strings.Contains(ua, "OPR/") || strings.Contains(ua, "Opera"):
+		browser = "Opera"
+	case strings.Contains(ua, "Firefox/"):
+		browser = "Firefox"
+	case strings.Contains(ua, "CriOS/"):
+		browser = "Chrome"
+	case strings.Contains(ua, "Chrome/"):
+		browser = "Chrome"
+	case strings.Contains(ua, "Safari/"):
+		browser = "Safari"
+	case strings.Contains(ua, "curl/"):
+		browser = "curl"
+	case strings.Contains(ua, "python") || strings.Contains(ua, "Go-http-client"):
+		browser = "API client"
+	}
+	osName := ""
+	switch {
+	case strings.Contains(ua, "iPhone"):
+		osName = "iPhone"
+	case strings.Contains(ua, "iPad"):
+		osName = "iPad"
+	case strings.Contains(ua, "Android"):
+		osName = "Android"
+	case strings.Contains(ua, "Mac OS X") || strings.Contains(ua, "Macintosh"):
+		osName = "macOS"
+	case strings.Contains(ua, "Windows"):
+		osName = "Windows"
+	case strings.Contains(ua, "CrOS"):
+		osName = "ChromeOS"
+	case strings.Contains(ua, "Linux"):
+		osName = "Linux"
+	}
+	switch {
+	case browser != "" && osName != "":
+		return browser + " · " + osName
+	case browser != "":
+		return browser
+	case osName != "":
+		return osName
+	}
+	if len(ua) > 48 {
+		return ua[:48] + "…"
+	}
+	return ua
+}
 
 // TrustedDevices exposes the trust-cookie store sharing the session client.
 func (s *Sessions) TrustedDevices() *TrustedDevices { return &TrustedDevices{rdb: s.rdb} }
@@ -413,17 +518,32 @@ type TrustedDevices struct {
 }
 
 // Issue mints a fresh trust token, stores hash→userID (TTL 30d), adds it to
-// the user's trust-set, and returns the raw token for the cookie.
+// the user's trust-set, records the device metadata and returns the raw token
+// for the cookie. ua/ip are best-effort metadata for the #454 device list.
 func (t *TrustedDevices) Issue(ctx context.Context, userID string) (string, error) {
+	return t.IssueDevice(ctx, userID, "", "")
+}
+
+// IssueDevice is Issue with device metadata (issue #454). Legacy callers keep
+// using Issue; the device list then shows the entry with an unknown label.
+func (t *TrustedDevices) IssueDevice(ctx context.Context, userID, ua, ip string) (string, error) {
 	token, err := randomToken()
 	if err != nil {
 		return "", err
 	}
 	h := hashOf(token)
+	meta, merr := json.Marshal(trustMeta{
+		Label: DeviceLabel(ua), UserAgent: ua, IP: ip,
+		FirstSeen: time.Now().UTC().Format(time.RFC3339),
+	})
 	pipe := t.rdb.TxPipeline()
 	pipe.Set(ctx, trustKey(h), userID, TrustTTL)
 	pipe.SAdd(ctx, trustSetKey(userID), h)
 	pipe.Expire(ctx, trustSetKey(userID), TrustTTL)
+	if merr == nil {
+		pipe.HSet(ctx, trustMetaKey(userID), h, string(meta))
+		pipe.Expire(ctx, trustMetaKey(userID), TrustTTL)
+	}
 	if _, err := pipe.Exec(ctx); err != nil {
 		return "", fmt.Errorf("trust issue: %w", err)
 	}
@@ -442,6 +562,14 @@ func (t *TrustedDevices) UserIDFor(ctx context.Context, token string) string {
 	return userID
 }
 
+// HashFor returns the public device id (hash) for a raw trust token, or "".
+func (t *TrustedDevices) HashFor(token string) string {
+	if token == "" {
+		return ""
+	}
+	return hashOf(token)
+}
+
 // Expiry returns the absolute expiry time of a trust token, or zero time if
 // the token is unknown/expired. Used by the Profile → Security line to show an
 // exact "trusted until {date}".
@@ -456,6 +584,91 @@ func (t *TrustedDevices) Expiry(ctx context.Context, token string) time.Time {
 	return time.Now().UTC().Add(ttl)
 }
 
+// List returns every live trusted device for a user, newest-expiry first. It
+// reconciles the set against the trust keys (dropping stale/expired members)
+// so the UI never shows a device that can no longer skip TOTP. currentHash (if
+// non-empty) marks the requesting device.
+func (t *TrustedDevices) List(ctx context.Context, userID, currentHash string) ([]TrustDevice, error) {
+	members, err := t.rdb.SMembers(ctx, trustSetKey(userID)).Result()
+	if err != nil {
+		if errors.Is(err, goredis.Nil) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if len(members) == 0 {
+		return nil, nil
+	}
+	// Best-effort metadata for all members in one round-trip.
+	metas, _ := t.rdb.HGetAll(ctx, trustMetaKey(userID)).Result()
+	pipe := t.rdb.Pipeline()
+	ttlCmds := make(map[string]*goredis.DurationCmd, len(members))
+	for _, h := range members {
+		ttlCmds[h] = pipe.TTL(ctx, trustKey(h))
+	}
+	_, _ = pipe.Exec(ctx)
+
+	out := make([]TrustDevice, 0, len(members))
+	stale := make([]string, 0)
+	for _, h := range members {
+		ttl, terr := ttlCmds[h].Result()
+		if terr != nil || ttl <= 0 {
+			// Key gone or expired → drop the stale set member.
+			stale = append(stale, h)
+			continue
+		}
+		d := TrustDevice{
+			ID:        h,
+			ExpiresAt: time.Now().UTC().Add(ttl).Format(time.RFC3339),
+			Current:   currentHash != "" && h == currentHash,
+		}
+		if raw, ok := metas[h]; ok {
+			var m trustMeta
+			if json.Unmarshal([]byte(raw), &m) == nil {
+				d.Label, d.UserAgent, d.IP, d.FirstSeen = m.Label, m.UserAgent, m.IP, m.FirstSeen
+			}
+		}
+		out = append(out, d)
+	}
+	if len(stale) > 0 {
+		// Keep the set + metadata hash tidy (revoked/expired devices).
+		args := make([]any, 0, len(stale))
+		for _, h := range stale {
+			args = append(args, h)
+		}
+		pipe2 := t.rdb.TxPipeline()
+		pipe2.SRem(ctx, trustSetKey(userID), args...)
+		pipe2.HDel(ctx, trustMetaKey(userID), stale...)
+		_, _ = pipe2.Exec(ctx)
+	}
+	// Sort by expiry ascending (soonest to expire first) for a stable UI.
+	sort.SliceStable(out, func(i, j int) bool { return out[i].ExpiresAt < out[j].ExpiresAt })
+	return out, nil
+}
+
+// RevokeHash deletes one trust entry by its public device id (hash) and removes
+// it from the user's set + metadata. Immediate — the very next login on that
+// device is challenged for TOTP again (issue #454).
+func (t *TrustedDevices) RevokeHash(ctx context.Context, userID, hash string) error {
+	if hash == "" {
+		return nil
+	}
+	// Only revoke a device that actually belongs to this user's set.
+	ok, err := t.rdb.SIsMember(ctx, trustSetKey(userID), hash).Result()
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	pipe := t.rdb.TxPipeline()
+	pipe.Del(ctx, trustKey(hash))
+	pipe.SRem(ctx, trustSetKey(userID), hash)
+	pipe.HDel(ctx, trustMetaKey(userID), hash)
+	_, err = pipe.Exec(ctx)
+	return err
+}
+
 // Revoke deletes the trust entry (by raw token) and removes it from the
 // user's set — used by "forget this device".
 func (t *TrustedDevices) Revoke(ctx context.Context, userID, token string) error {
@@ -463,6 +676,7 @@ func (t *TrustedDevices) Revoke(ctx context.Context, userID, token string) error
 	pipe := t.rdb.TxPipeline()
 	pipe.Del(ctx, trustKey(h))
 	pipe.SRem(ctx, trustSetKey(userID), h)
+	pipe.HDel(ctx, trustMetaKey(userID), h)
 	_, err := pipe.Exec(ctx)
 	return err
 }
@@ -475,12 +689,20 @@ func (t *TrustedDevices) RevokeAll(ctx context.Context, userID string) error {
 		return err
 	}
 	if len(members) == 0 {
-		return t.rdb.Del(ctx, trustSetKey(userID)).Err()
+		pipe := t.rdb.TxPipeline()
+		pipe.Del(ctx, trustSetKey(userID))
+		pipe.Del(ctx, trustMetaKey(userID))
+		_, err := pipe.Exec(ctx)
+		return err
 	}
 	keys := make([]string, 0, len(members)+1)
 	for _, h := range members {
 		keys = append(keys, trustKey(h))
 	}
 	keys = append(keys, trustSetKey(userID))
-	return t.rdb.Del(ctx, keys...).Err()
+	pipe := t.rdb.TxPipeline()
+	pipe.Del(ctx, keys...)
+	pipe.Del(ctx, trustMetaKey(userID))
+	_, err = pipe.Exec(ctx)
+	return err
 }

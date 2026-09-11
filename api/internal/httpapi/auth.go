@@ -123,6 +123,11 @@ func (a *AuthHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/auth/trust-status", a.handleTrustStatus)
 	mux.HandleFunc("POST /v1/auth/trust/forget", a.handleTrustForget)
 	mux.HandleFunc("POST /v1/auth/trust/forget-all", a.handleTrustForgetAll)
+	// Trusted-device management (issue #454): list every trusted device,
+	// revoke one by its opaque id, or revoke all ("log out everywhere").
+	mux.HandleFunc("GET /v1/auth/trust-devices", a.handleTrustDevices)
+	mux.HandleFunc("DELETE /v1/auth/trust", a.handleTrustRevokeAll)
+	mux.HandleFunc("DELETE /v1/auth/trust/{id}", a.handleTrustRevokeOne)
 	// Social login (provider-generic OIDC). UI links use /api/... which the
 	// Next proxy maps to /v1/... for same-origin cookies; direct /api/* also
 	// works when the Go server is the public entrypoint.

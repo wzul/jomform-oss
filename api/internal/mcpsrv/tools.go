@@ -668,6 +668,20 @@ func (s *Server) registerTools() {
 		Description: "Matikan 2FA (perlu kata laluan akaun untuk pengesahan).",
 	}, s.disableTwoFA)
 
+	// ── Parity: trusted devices (issue #454) ─────────────────────────────
+	addTool(s, &mcp.Tool{
+		Name:        "list_trusted_devices",
+		Description: "Senarai peranti dipercayai 2FA akaun anda (label, ip, first_seen, expires_at). Peranti dipercayai melangkau kod 2FA selama 30 hari. Read-only.",
+	}, s.listTrustedDevices)
+	addTool(s, &mcp.Tool{
+		Name:        "revoke_trusted_device",
+		Description: "Batalkan satu peranti dipercayai (device_id dari list_trusted_devices). Log masuk seterusnya pada peranti itu akan meminta kod 2FA semula — serta-merta.",
+	}, s.revokeTrustedDevice)
+	addTool(s, &mcp.Tool{
+		Name:        "revoke_all_trusted_devices",
+		Description: "Batalkan SEMUA peranti dipercayai akaun anda (\"log keluar di semua tempat\"). Setiap peranti akan meminta kod 2FA semula.",
+	}, s.revokeAllTrustedDevices)
+
 	// ── Parity: system settings (issue #396) ─────────────────────────────
 	addTool(s, &mcp.Tool{
 		Name:        "get_system_settings",

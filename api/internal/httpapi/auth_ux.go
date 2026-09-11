@@ -1,6 +1,7 @@
 // Auth UX handlers for issues #62 + #63:
 //   - Password recovery (forgot/reset) with single-use, hashed, 30-min tokens.
 //   - Trusted-device (jf_trust) status and forget endpoints.
+//
 // Plus the shared session-resolution guard that rejects sessions older than a
 // password reset (pw_reset_at), used by every session-consuming caller.
 package httpapi
@@ -17,6 +18,7 @@ import (
 	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/emailqueue"
+	"github.com/wzul/jomform/api/internal/httpapi/middleware"
 )
 
 // ─── password recovery (issue #62) ───────────────────────────────────────────
@@ -183,13 +185,15 @@ func (a *AuthHandlers) trustMatchesUser(r *http.Request, userID string) bool {
 	return ts.UserIDFor(r.Context(), a.trustCookieValue(r)) == userID
 }
 
-// issueTrustCookie mints a jf_trust cookie + Valkey record for userID.
+// issueTrustCookie mints a jf_trust cookie + Valkey record for userID. The
+// requesting device's user-agent and IP are recorded so Profile → Security can
+// list the device (issue #454).
 func (a *AuthHandlers) issueTrustCookie(w http.ResponseWriter, r *http.Request, userID string) {
 	ts := a.trustStore()
 	if ts == nil {
 		return
 	}
-	token, err := ts.Issue(r.Context(), userID)
+	token, err := ts.IssueDevice(r.Context(), userID, r.UserAgent(), middleware.ClientIP(r))
 	if err != nil {
 		slog.Error("trust_issue", "err", err, "user", userID)
 		return
@@ -264,6 +268,106 @@ func (a *AuthHandlers) handleTrustForget(w http.ResponseWriter, r *http.Request)
 // handleTrustForgetAll: POST /v1/auth/trust/forget-all — revoke every trusted
 // device. Also clears the current cookie.
 func (a *AuthHandlers) handleTrustForgetAll(w http.ResponseWriter, r *http.Request) {
+	user := a.currentUser(r)
+	if user == nil {
+		writeErr(w, http.StatusUnauthorized, "tidak log masuk")
+		return
+	}
+	if ts := a.trustStore(); ts != nil {
+		if err := ts.RevokeAll(r.Context(), user.ID); err != nil {
+			slog.Error("trust_revoke_all", "err", err, "user", user.ID)
+			writeErr(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+	}
+	clearTrustCookie(w)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "revoked_all"})
+}
+
+// ─── trusted devices list + revoke (issue #454) ─────────────────────────────
+//
+// #63 could only forget the CURRENT device. #454 adds the management list:
+// GET /v1/auth/trust-devices lists every trusted device (label, IP, first
+// trusted, expiry), DELETE /v1/auth/trust/{id} revokes one by its opaque id,
+// and DELETE /v1/auth/trust revokes all ("log out everywhere"). Revocation is
+// immediate — the trust key is deleted, so the very next login on that device
+// is challenged for TOTP again.
+
+// trustDeviceOut is one row in the trusted-devices list.
+type trustDeviceOut struct {
+	ID        string `json:"id"`
+	Label     string `json:"label,omitempty"`
+	IP        string `json:"ip,omitempty"`
+	FirstSeen string `json:"first_seen,omitempty"`
+	ExpiresAt string `json:"expires_at,omitempty"`
+	Current   bool   `json:"current,omitempty"`
+}
+
+// handleTrustDevices: GET /v1/auth/trust-devices — list the logged-in user's
+// trusted devices for the Profile → Security management list.
+func (a *AuthHandlers) handleTrustDevices(w http.ResponseWriter, r *http.Request) {
+	user := a.currentUser(r)
+	if user == nil {
+		writeErr(w, http.StatusUnauthorized, "tidak log masuk")
+		return
+	}
+	ts := a.trustStore()
+	if ts == nil {
+		writeJSON(w, http.StatusOK, []trustDeviceOut{})
+		return
+	}
+	devices, err := ts.List(r.Context(), user.ID, ts.HashFor(a.trustCookieValue(r)))
+	if err != nil {
+		slog.Error("trust_list", "err", err, "user", user.ID)
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	out := make([]trustDeviceOut, 0, len(devices))
+	for _, d := range devices {
+		out = append(out, trustDeviceOut{
+			ID: d.ID, Label: d.Label, IP: d.IP,
+			FirstSeen: d.FirstSeen, ExpiresAt: d.ExpiresAt, Current: d.Current,
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleTrustRevokeOne: DELETE /v1/auth/trust/{id} — revoke one trusted device
+// by its opaque id. If it was the current device, its cookie is cleared too.
+// Idempotent: an unknown/already-revoked id still returns 200.
+func (a *AuthHandlers) handleTrustRevokeOne(w http.ResponseWriter, r *http.Request) {
+	user := a.currentUser(r)
+	if user == nil {
+		writeErr(w, http.StatusUnauthorized, "tidak log masuk")
+		return
+	}
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		writeErr(w, http.StatusBadRequest, "id peranti diperlukan")
+		return
+	}
+	ts := a.trustStore()
+	if ts == nil {
+		writeErr(w, http.StatusServiceUnavailable, "perkhidmatan tidak tersedia")
+		return
+	}
+	// RevokeHash only acts on a hash present in THIS user's trust set, so one
+	// user can never revoke another user's device.
+	if err := ts.RevokeHash(r.Context(), user.ID, id); err != nil {
+		slog.Error("trust_revoke_one", "err", err, "user", user.ID)
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if id == ts.HashFor(a.trustCookieValue(r)) {
+		clearTrustCookie(w)
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "revoked", "id": id})
+}
+
+// handleTrustRevokeAll: DELETE /v1/auth/trust — "log out everywhere": revoke
+// every trusted device for the user. Equivalent to forget-all but on the
+// management endpoint's RESTful verb.
+func (a *AuthHandlers) handleTrustRevokeAll(w http.ResponseWriter, r *http.Request) {
 	user := a.currentUser(r)
 	if user == nil {
 		writeErr(w, http.StatusUnauthorized, "tidak log masuk")

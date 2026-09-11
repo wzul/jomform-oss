@@ -174,6 +174,9 @@ const TOOL_GROUPS: { group: string; tools: { name: string; desc: string }[] }[] 
       { name: "setup_2fa", desc: "Jana rahsia TOTP untuk 2FA (belum aktif). Pulangkan secret + otpauth_url untuk diimbas aplikasi authenticator, kemudian panggil enable_2fa dengan kod." },
       { name: "enable_2fa", desc: "Aktifkan 2FA dengan kod 6-digit dari aplikasi authenticator (selepas setup_2fa)." },
       { name: "disable_2fa", desc: "Matikan 2FA (perlu kata laluan akaun untuk pengesahan)." },
+      { name: "list_trusted_devices", desc: "Senarai peranti dipercayai 2FA akaun anda (label, ip, first_seen, expires_at). Peranti dipercayai melangkau kod 2FA selama 30 hari. Read-only." },
+      { name: "revoke_trusted_device", desc: "Batalkan satu peranti dipercayai (device_id dari list_trusted_devices). Log masuk seterusnya pada peranti itu akan meminta kod 2FA semula — serta-merta." },
+      { name: "revoke_all_trusted_devices", desc: "Batalkan SEMUA peranti dipercayai akaun anda (\"log keluar di semua tempat\"). Setiap peranti akan meminta kod 2FA semula." },
     ],
   },
   {

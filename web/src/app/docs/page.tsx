@@ -61,6 +61,10 @@ const FEATURES: { title: string; body: string }[] = [
     title: "Embed on your site",
     body: "Drop a form into any website with an iframe. The embedded form posts its height to your page (postMessage auto-height) so it grows with the form, with a 3-line merchant listener and a fixed-height fallback. See the embed guide.",
   },
+  {
+    title: "Trusted devices (2FA)",
+    body: "When 2FA is enabled you can tick \"don't ask for a code on this device for 30 days\" at login — that device is then trusted and skips the 2FA code (the password is still required). Profile → Security lists every trusted device (label, IP, first trusted, expiry) with a Revoke button per device, plus \"revoke all / log out everywhere\". Revocation is immediate: the next login on a revoked device asks for a 2FA code again. Changing your password or disabling 2FA also clears all trusted devices.",
+  },
 ];
 
 export default function DocsIndexPage() {

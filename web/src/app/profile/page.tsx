@@ -32,6 +32,16 @@ type MCPAgentRow = {
   last_used_at?: string;
 };
 
+// Issue #454: one trusted 2FA device (Profile → Security management list).
+type TrustDeviceRow = {
+  id: string;
+  label?: string;
+  ip?: string;
+  first_seen?: string;
+  expires_at?: string;
+  current?: boolean;
+};
+
 type ProfileTab = "identity" | "security" | "passkeys" | "connected" | "mcp";
 const TAB_IDS: ProfileTab[] = ["identity", "security", "passkeys", "connected", "mcp"];
 
@@ -116,6 +126,9 @@ export default function ProfilePage() {
   const [enabling, setEnabling] = useState(false);
   // Issue #63: trusted-device state for the Profile → Security line.
   const [trustedUntil, setTrustedUntil] = useState("");
+  // Issue #454: trusted-devices management list (label, IP, first trusted,
+  // expiry) with a Revoke button per device + a revoke-all action.
+  const [trustDevices, setTrustDevices] = useState<TrustDeviceRow[]>([]);
   // Issue #301: connected accounts (user-level, independent of the active
   // space) — loaded via GET /api/auth/social (currentUserID-scoped).
   const [social, setSocial] = useState<SocialRow[]>([]);
@@ -180,11 +193,16 @@ export default function ProfilePage() {
   useEffect(() => { load(); }, [load]);
 
   // Issue #63: fetch trusted-device status for the Profile → Security line.
+  // Issue #454: also fetch the full trusted-devices management list.
   const loadTrust = useCallback(() => {
     fetch("/api/auth/trust-status")
       .then((r) => (r.ok ? r.json() : { trusted: false }))
       .then((d) => setTrustedUntil(d.trusted ? d.until || "" : ""))
       .catch(() => setTrustedUntil(""));
+    fetch("/api/auth/trust-devices")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((d) => setTrustDevices(Array.isArray(d) ? d : []))
+      .catch(() => setTrustDevices([]));
   }, []);
 
   useEffect(() => { loadTrust(); }, [loadTrust]);
@@ -586,6 +604,9 @@ export default function ProfilePage() {
                         setP((prev) => (prev ? { ...prev, totp_enabled: false } : prev));
                       }
                       setTrustedUntil("");
+                      // Issue #454: disabling 2FA clears every trusted device
+                      // server-side, so refresh the management list too.
+                      loadTrust();
                     }
                   }}
                   className="ml-2 px-4 py-2 text-sm text-red-500 hover:underline"
@@ -600,13 +621,75 @@ export default function ProfilePage() {
                   <button
                     onClick={async () => {
                       const r = await fetch("/api/auth/trust/forget", { method: "POST" });
-                      if (r.ok) setTrustedUntil("");
+                      if (r.ok) { setTrustedUntil(""); loadTrust(); }
                     }}
                     className="text-[13px] text-red-500 hover:underline"
                   >{t("prof.forgetDevice")}</button>
                 </div>
               )}
             </section>
+
+            {/* Issue #454: trusted-devices management list + revoke. Shown for
+                2FA users; each device can be revoked individually, plus a
+                "revoke all / log out everywhere" bulk action. */}
+            {p?.totp_enabled && (
+              <section className="jf-card mt-6 p-6">
+                <h2 className="text-lg font-semibold">{t("prof.trustedDevices")}</h2>
+                <p className="mt-1 text-sm text-slate-500">{t("prof.trustedDevicesHelp")}</p>
+                {trustDevices.length === 0 ? (
+                  <p className="mt-3 text-sm text-slate-400">{t("prof.trustedDevicesEmpty")}</p>
+                ) : (
+                  <>
+                    <ul className="mt-3 space-y-2">
+                      {trustDevices.map((d) => (
+                        <li
+                          key={d.id}
+                          className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-slate-100 px-3 py-2 text-sm"
+                        >
+                          <div className="min-w-0">
+                            <p className="font-medium text-slate-800">
+                              {d.label || t("prof.deviceUnknown")}
+                              {d.current && (
+                                <span className="ml-2 rounded bg-emerald-50 px-1.5 py-0.5 text-[11px] font-medium text-emerald-700">
+                                  {t("prof.deviceThis")}
+                                </span>
+                              )}
+                            </p>
+                            <p className="mt-0.5 text-[12px] text-slate-500">
+                              {d.ip && <span>{t("prof.deviceIP")}: {d.ip} · </span>}
+                              {d.first_seen && (
+                                <span>{t("prof.deviceFirstSeen")}: {formatDate(d.first_seen, sessionUser?.timezone)} · </span>
+                              )}
+                              {d.expires_at && (
+                                <span>{t("prof.deviceExpires")}: {formatDate(d.expires_at, sessionUser?.timezone)}</span>
+                              )}
+                            </p>
+                          </div>
+                          <button
+                            onClick={async () => {
+                              if (!window.confirm(t("prof.revokeDeviceConfirm"))) return;
+                              const r = await fetch(`/api/auth/trust/${encodeURIComponent(d.id)}`, { method: "DELETE" });
+                              if (r.ok) { setMsg(t("prof.revoked")); loadTrust(); }
+                              else { setErr(t("prof.failed")); }
+                            }}
+                            className="text-[13px] text-red-500 hover:underline"
+                          >{t("prof.revoke")}</button>
+                        </li>
+                      ))}
+                    </ul>
+                    <button
+                      onClick={async () => {
+                        if (!window.confirm(t("prof.revokeAllConfirm"))) return;
+                        const r = await fetch("/api/auth/trust", { method: "DELETE" });
+                        if (r.ok) { setMsg(t("prof.revoked")); setTrustedUntil(""); loadTrust(); }
+                        else { setErr(t("prof.failed")); }
+                      }}
+                      className="mt-4 px-4 py-2 text-sm text-red-500 hover:underline"
+                    >{t("prof.revokeAll")}</button>
+                  </>
+                )}
+              </section>
+            )}
           </>
         )}
 

@@ -331,7 +331,7 @@ func probeServesJomFormMCP(domain string) bool {
 	client := &http.Client{
 		Timeout: 10 * time.Second,
 		Transport: &http.Transport{
-			DialContext:    pin.DialContext,
+			DialContext:     pin.DialContext,
 			TLSClientConfig: tlsConfigInsecure(), //nolint:gosec // probe must reach origin before cert is trusted
 		},
 	}
@@ -384,13 +384,13 @@ func (s *Server) setTracking(ctx context.Context, _ *mcp.CallToolRequest, in set
 // ─── CHIP account settings (issue #396) ───────────────────────────────────
 
 type chipSettingsOut struct {
-	Configured       bool     `json:"configured"`
-	Verified         bool     `json:"verified"`
-	Mode             string   `json:"mode"`
-	BrandID          string   `json:"brand_id"`
-	SecretKeyMasked  string   `json:"secret_key_masked,omitempty"`
-	EmailFallback    string   `json:"email_fallback,omitempty"`
-	MethodWhitelist  []string `json:"payment_method_whitelist,omitempty"`
+	Configured      bool     `json:"configured"`
+	Verified        bool     `json:"verified"`
+	Mode            string   `json:"mode"`
+	BrandID         string   `json:"brand_id"`
+	SecretKeyMasked string   `json:"secret_key_masked,omitempty"`
+	EmailFallback   string   `json:"email_fallback,omitempty"`
+	MethodWhitelist []string `json:"payment_method_whitelist,omitempty"`
 }
 
 func (s *Server) getChipSettings(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, chipSettingsOut, error) {
@@ -563,11 +563,11 @@ func (s *Server) deletePasskey(ctx context.Context, _ *mcp.CallToolRequest, in d
 // ─── Social accounts (issue #396) ─────────────────────────────────────────
 
 type socialAccountOut struct {
-	Provider  string `json:"provider"`
-	Email     string `json:"email"`
-	Name      string `json:"name,omitempty"`
-	Picture   string `json:"picture,omitempty"`
-	LinkedAt  string `json:"linked_at"`
+	Provider string `json:"provider"`
+	Email    string `json:"email"`
+	Name     string `json:"name,omitempty"`
+	Picture  string `json:"picture,omitempty"`
+	LinkedAt string `json:"linked_at"`
 }
 
 func (s *Server) listSocialAccounts(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, []socialAccountOut, error) {
@@ -635,8 +635,8 @@ func (s *Server) getTwoFAStatus(ctx context.Context, _ *mcp.CallToolRequest, _ e
 }
 
 type twoFASetupOut struct {
-	Secret      string `json:"secret"`
-	OtpauthURL  string `json:"otpauth_url"`
+	Secret     string `json:"secret"`
+	OtpauthURL string `json:"otpauth_url"`
 }
 
 func (s *Server) setupTwoFA(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, twoFASetupOut, error) {
@@ -714,6 +714,84 @@ func (s *Server) disableTwoFA(ctx context.Context, _ *mcp.CallToolRequest, in di
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
 	return nil, map[string]string{"status": "disabled"}, nil
+}
+
+// ─── Trusted devices (issue #454) ─────────────────────────────────────────
+//
+// MCP parity for the Profile → Security trusted-devices management list: list
+// the account owner's trusted 2FA devices, revoke one by its opaque id, or
+// revoke all ("log out everywhere"). Thin wrappers over the same
+// auth.TrustedDevices store the REST handlers use.
+
+// trustDeviceMCPOut is one trusted device as returned to an agent.
+type trustDeviceMCPOut struct {
+	ID        string `json:"id"`
+	Label     string `json:"label,omitempty"`
+	IP        string `json:"ip,omitempty"`
+	FirstSeen string `json:"first_seen,omitempty"`
+	ExpiresAt string `json:"expires_at,omitempty"`
+}
+
+// listTrustedDevices (issue #454): list the account owner's trusted devices.
+func (s *Server) listTrustedDevices(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, []trustDeviceMCPOut, error) {
+	if s.deps.Sessions == nil {
+		return nil, nil, errors.New("perkhidmatan tidak tersedia")
+	}
+	userID := s.userIDFor(ctx)
+	if userID == "" {
+		return nil, nil, errors.New("auth diperlukan")
+	}
+	devices, err := s.deps.Sessions.TrustedDevices().List(ctx, userID, "")
+	if err != nil {
+		return nil, nil, fmt.Errorf("db: %w", err)
+	}
+	out := make([]trustDeviceMCPOut, 0, len(devices))
+	for _, d := range devices {
+		out = append(out, trustDeviceMCPOut{
+			ID: d.ID, Label: d.Label, IP: d.IP,
+			FirstSeen: d.FirstSeen, ExpiresAt: d.ExpiresAt,
+		})
+	}
+	return nil, out, nil
+}
+
+type revokeTrustedDeviceIn struct {
+	DeviceID string `json:"device_id" jsonschema:"ID peranti dipercayai (dari list_trusted_devices)"`
+}
+
+// revokeTrustedDevice (issue #454): revoke ONE trusted device by id. The next
+// login on that device is challenged for a 2FA code again (immediate).
+func (s *Server) revokeTrustedDevice(ctx context.Context, _ *mcp.CallToolRequest, in revokeTrustedDeviceIn) (*mcp.CallToolResult, map[string]string, error) {
+	if s.deps.Sessions == nil {
+		return nil, nil, errors.New("perkhidmatan tidak tersedia")
+	}
+	userID := s.userIDFor(ctx)
+	if userID == "" {
+		return nil, nil, errors.New("auth diperlukan")
+	}
+	if strings.TrimSpace(in.DeviceID) == "" {
+		return nil, nil, errors.New("device_id wajib")
+	}
+	if err := s.deps.Sessions.TrustedDevices().RevokeHash(ctx, userID, strings.TrimSpace(in.DeviceID)); err != nil {
+		return nil, nil, fmt.Errorf("db: %w", err)
+	}
+	return nil, map[string]string{"status": "revoked", "device_id": in.DeviceID}, nil
+}
+
+// revokeAllTrustedDevices (issue #454): "log out everywhere" — revoke every
+// trusted device for the account owner.
+func (s *Server) revokeAllTrustedDevices(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, map[string]string, error) {
+	if s.deps.Sessions == nil {
+		return nil, nil, errors.New("perkhidmatan tidak tersedia")
+	}
+	userID := s.userIDFor(ctx)
+	if userID == "" {
+		return nil, nil, errors.New("auth diperlukan")
+	}
+	if err := s.deps.Sessions.TrustedDevices().RevokeAll(ctx, userID); err != nil {
+		return nil, nil, fmt.Errorf("db: %w", err)
+	}
+	return nil, map[string]string{"status": "revoked_all"}, nil
 }
 
 // ─── System settings (issue #396) ─────────────────────────────────────────
