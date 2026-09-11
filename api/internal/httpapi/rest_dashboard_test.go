@@ -9,46 +9,23 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/cryptoutil"
-	"github.com/wzul/jomform/api/internal/db"
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/testdb"
 )
 
-var (
-	bundleOnce sync.Once
-	bundlePool *pgxpool.Pool
-	bundleErr  error
-)
-
+// bundleTestPool returns this package's scratch-schema pool. testdb.Open
+// re-creates the schema on every run (issue #474), so integration tests here
+// never see rows from a previous run and never touch another package's rows.
 func bundleTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dsn := os.Getenv("JOMFORM_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("JOMFORM_TEST_DATABASE_URL not set; skipping dashboard-bundle integration test")
-	}
-	bundleOnce.Do(func() {
-		pool, err := db.Connect(context.Background(), dsn)
-		if err != nil {
-			bundleErr = err
-			return
-		}
-		if err = db.Migrate(context.Background(), pool, testLogger()); err != nil {
-			bundleErr = err
-			return
-		}
-		bundlePool = pool
-	})
-	if bundleErr != nil {
-		t.Fatalf("test database unavailable: %v", bundleErr)
-	}
-	return bundlePool
+	return testdb.Open(t)
 }
 
 // bundleFixture seeds one user + account (+ workspace) and returns the account

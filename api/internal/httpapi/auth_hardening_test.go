@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/wzul/jomform/api/internal/auth"
-	"github.com/wzul/jomform/api/internal/db"
 	"github.com/wzul/jomform/api/internal/dbstore"
 )
 
@@ -46,18 +45,7 @@ func authTestValkey(t *testing.T) *auth.Sessions {
 
 func authUsers(t *testing.T) *dbstore.UserStore {
 	t.Helper()
-	dsn := os.Getenv("JOMFORM_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("JOMFORM_TEST_DATABASE_URL not set; skipping auth hardening integration test")
-	}
-	pool, err := db.Connect(context.Background(), dsn)
-	if err != nil {
-		t.Fatalf("db connect: %v", err)
-	}
-	if err := db.Migrate(context.Background(), pool, testLogger()); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	return dbstore.NewUserStore(pool)
+	return dbstore.NewUserStore(bundleTestPool(t))
 }
 
 // recorderMailer captures verification emails (satisfies VerifyMailer).
@@ -165,13 +153,17 @@ func TestAuthLoginLockoutAfter10(t *testing.T) {
 	h, _, _ := authTestFixture(t)
 	mux := loginMux(h)
 
+	// Unique IP per test: the per-IP lockout counter lives in the shared test
+	// Valkey with a 15-minute TTL, so a fixed IP would already be locked on a
+	// re-run (-count) or after a prior test (issue #474).
+	ip := uniqueTestIP()
 	email := fmt.Sprintf("lockout-%d@example.test", time.Now().UnixNano())
-	registerAndVerify(t, h, email, "password123", "10.1.1.1")
+	registerAndVerify(t, h, email, "password123", ip)
 
 	for i := 0; i < 10; i++ {
 		rec := postJSON(mux, "/v1/auth/login", map[string]any{
 			"email": email, "password": "WRONG",
-		}, "10.1.1.1")
+		}, ip)
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("failed login attempt %d: status = %d, want 401 (body %s)", i+1, rec.Code, rec.Body.String())
 		}
@@ -179,7 +171,7 @@ func TestAuthLoginLockoutAfter10(t *testing.T) {
 
 	rec := postJSON(mux, "/v1/auth/login", map[string]any{
 		"email": email, "password": "password123",
-	}, "10.1.1.1")
+	}, ip)
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("11th login: status = %d, want 429 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -195,9 +187,9 @@ func TestAuthLoginSuccessResetsCounter(t *testing.T) {
 	mux := loginMux(h)
 
 	email := fmt.Sprintf("reset-%d@example.test", time.Now().UnixNano())
-	// Unique IP per run so the Valkey login-breaker counter never collides
-	// with a previous run's state (test isolation).
-	ip := fmt.Sprintf("10.2.%d.%d", time.Now().UnixNano()%250+1, time.Now().UnixNano()%250+1)
+	// Unique IP per test so the Valkey login-breaker counter never collides
+	// with a previous test or -count run (issue #474).
+	ip := uniqueTestIP()
 	registerAndVerify(t, h, email, "password123", ip)
 
 	// 9 failures (below lockout).
@@ -237,11 +229,12 @@ func TestAuthUniformErrorsNoEnumeration(t *testing.T) {
 	h.RegisterRoutes(mux)
 
 	known := fmt.Sprintf("enum-%d@example.test", time.Now().UnixNano())
-	registerAndVerify(t, h, known, "password123", "10.3.3.3")
+	ip := uniqueTestIP()
+	registerAndVerify(t, h, known, "password123", ip)
 	unknown := fmt.Sprintf("nobody-%d@example.test", time.Now().UnixNano())
 
-	kr := postJSON(mux, "/v1/auth/login", map[string]any{"email": known, "password": "WRONG"}, "10.3.3.3")
-	ur := postJSON(mux, "/v1/auth/login", map[string]any{"email": unknown, "password": "WRONG"}, "10.3.3.3")
+	kr := postJSON(mux, "/v1/auth/login", map[string]any{"email": known, "password": "WRONG"}, ip)
+	ur := postJSON(mux, "/v1/auth/login", map[string]any{"email": unknown, "password": "WRONG"}, ip)
 
 	if kr.Code != http.StatusUnauthorized || ur.Code != http.StatusUnauthorized {
 		t.Fatalf("known=%d unknown=%d, want both 401", kr.Code, ur.Code)
@@ -320,11 +313,14 @@ func TestAuthRegisterRateLimit(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
+	// Unique IP per test: the register burst limiter is per-IP in the shared
+	// test Valkey (issue #474).
+	ip := uniqueTestIP()
 	for i := 0; i < 5; i++ {
 		email := fmt.Sprintf("spam-%d-%d@example.test", i, time.Now().UnixNano())
 		rec := postJSON(mux, "/v1/auth/register", map[string]any{
 			"email": email, "password": "password123",
-		}, "10.6.6.6")
+		}, ip)
 		if rec.Code != http.StatusCreated {
 			t.Fatalf("reg attempt %d status = %d, want 201 (body %s)", i+1, rec.Code, rec.Body.String())
 		}
@@ -332,7 +328,7 @@ func TestAuthRegisterRateLimit(t *testing.T) {
 	// 6th registration from the same IP within the window → 429.
 	rec := postJSON(mux, "/v1/auth/register", map[string]any{
 		"email": fmt.Sprintf("spam-x-%d@example.test", time.Now().UnixNano()), "password": "password123",
-	}, "10.6.6.6")
+	}, ip)
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("6th register status = %d, want 429 (body %s)", rec.Code, rec.Body.String())
 	}

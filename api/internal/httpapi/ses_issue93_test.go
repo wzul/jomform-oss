@@ -10,11 +10,9 @@ package httpapi
 
 import (
 	"context"
-	"os"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/wzul/jomform/api/internal/db"
 	"github.com/wzul/jomform/api/internal/dbstore"
 )
 
@@ -23,17 +21,7 @@ import (
 // create accounts/sales for correlation assertions.
 func issue93Fixture(t *testing.T) (*suppressionWriter, *dbstore.EmailDeliveryEventStore, *dbstore.SuppressionStore, *pgxpool.Pool) {
 	t.Helper()
-	dsn := os.Getenv("JOMFORM_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("JOMFORM_TEST_DATABASE_URL not set; skipping issue #93 integration test")
-	}
-	pool, err := db.Connect(context.Background(), dsn)
-	if err != nil {
-		t.Fatalf("db connect: %v", err)
-	}
-	if err := db.Migrate(context.Background(), pool, testLogger()); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	pool := bundleTestPool(t)
 	events := dbstore.NewEmailDeliveryEventStore(pool)
 	supps := dbstore.NewSuppressionStore(pool)
 	sw := &suppressionWriter{
@@ -82,7 +70,9 @@ func TestSESDeliveredOpenClickRecorded(t *testing.T) {
 	// Delivered.
 	if !sw.handleEvent(ctx, &sesSNSMessage{
 		EventType: "Delivered",
-		Delivery:  &struct{ Recipients []string `json:"recipients"` }{Recipients: []string{email}},
+		Delivery: &struct {
+			Recipients []string `json:"recipients"`
+		}{Recipients: []string{email}},
 	}) {
 		t.Fatal("Delivered should be handled")
 	}
@@ -193,7 +183,7 @@ func TestSESBounceComplaintUnchanged(t *testing.T) {
 	if !sw.handleEvent(ctx, &sesSNSMessage{
 		EventType: "Bounce",
 		Bounce: &sesBounce{
-			BounceType: "Permanent",
+			BounceType:        "Permanent",
 			BouncedRecipients: []sesRecipient{{EmailAddress: email}},
 		},
 	}) {
@@ -258,7 +248,9 @@ func TestSESOpenClickCorrelatedToSale(t *testing.T) {
 	// Delivered + Open + Click, all carrying the receipt's MessageID.
 	if !sw.handleEvent(ctx, &sesSNSMessage{
 		EventType: "Delivered",
-		Delivery:  &struct{ Recipients []string `json:"recipients"` }{Recipients: []string{"b@example.test"}},
+		Delivery: &struct {
+			Recipients []string `json:"recipients"`
+		}{Recipients: []string{"b@example.test"}},
 		Mail: struct {
 			Destination []string `json:"destination"`
 			MessageID   string   `json:"messageId"`

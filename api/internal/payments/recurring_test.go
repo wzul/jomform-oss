@@ -10,11 +10,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"sync"
 	"testing"
 	"time"
 
@@ -22,54 +19,21 @@ import (
 
 	"github.com/wzul/jomform/api/internal/chip"
 	"github.com/wzul/jomform/api/internal/cryptoutil"
-	"github.com/wzul/jomform/api/internal/db"
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/testdb"
 )
 
-var (
-	recurOnce sync.Once
-	recurPool *pgxpool.Pool
-	recurErr  error
-)
-
+// recurTestPool returns the payments package scratch-schema pool.
+//
+// The recurring-engine fixture reuses a fixed CHIP purchase id
+// ("pur_charge_child") that is UNIQUE on subscription_charges; before issue
+// #474 this needed a manual `TRUNCATE subscription_charges` because a dirty
+// shared DB made AddCharge fail silently. The scratch schema is re-created on
+// every run, so the table starts empty and no shared table is truncated —
+// removing the cross-package race that truncate used to cause.
 func recurTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dsn := os.Getenv("JOMFORM_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("JOMFORM_TEST_DATABASE_URL not set; skipping recurring-engine integration test")
-	}
-	recurOnce.Do(func() {
-		pool, err := db.Connect(context.Background(), dsn)
-		if err != nil {
-			recurErr = err
-			return
-		}
-		if err = db.Migrate(context.Background(), pool, slog.New(slog.DiscardHandler)); err != nil {
-			recurErr = err
-			return
-		}
-		// Test isolation: the fixture reuses a fixed CHIP purchase id
-		// ("pur_charge_child") which is UNIQUE on subscription_charges, so a
-		// dirty DB from a prior run makes AddCharge fail silently and the
-		// charge count never advances. Truncate ONLY subscription_charges (the
-		// actual collision source) so the test is deterministic regardless of
-		// prior runs. We deliberately do NOT truncate users/accounts/products/
-		// subscriptions: the fixture seeds those with unique random names, and
-		// truncating them would wipe rows that OTHER packages (e.g. httpapi's
-		// auth tests) create concurrently when `go test ./...` runs packages in
-		// parallel — a cross-package race that made TestAuthLoginSuccessResetsCounter
-		// flaky in CI.
-		if _, terr := pool.Exec(context.Background(),
-			`TRUNCATE subscription_charges RESTART IDENTITY CASCADE`); terr != nil {
-			recurErr = terr
-			return
-		}
-		recurPool = pool
-	})
-	if recurErr != nil {
-		t.Fatalf("test database unavailable: %v", recurErr)
-	}
-	return recurPool
+	return testdb.Open(t)
 }
 
 // seedRecurringFixture creates an account with CHIP creds, a subscription

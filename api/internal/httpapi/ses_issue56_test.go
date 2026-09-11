@@ -11,12 +11,10 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 
 	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/config"
-	"github.com/wzul/jomform/api/internal/db"
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/email"
 )
@@ -27,14 +25,7 @@ func sesTestFixture(t *testing.T) (*AuthHandlers, *dbstore.UserStore, *dbstore.S
 	t.Helper()
 	users := authUsers(t)
 	sess := authTestValkey(t)
-	dsn := os.Getenv("JOMFORM_TEST_DATABASE_URL")
-	pool, err := db.Connect(context.Background(), dsn)
-	if err != nil {
-		t.Fatalf("db connect: %v", err)
-	}
-	if err := db.Migrate(context.Background(), pool, testLogger()); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	pool := bundleTestPool(t)
 	supps := dbstore.NewSuppressionStore(pool)
 	// Clear any breaker/MX/jf:* counters from a previous run so ratio assertions
 	// in these tests are self-contained (they share one test Valkey DB).

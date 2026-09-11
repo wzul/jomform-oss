@@ -10,8 +10,6 @@ package payments
 
 import (
 	"context"
-	"log/slog"
-	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -20,38 +18,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wzul/jomform/api/internal/chip"
-	"github.com/wzul/jomform/api/internal/db"
 	"github.com/wzul/jomform/api/internal/dbstore"
-)
-
-var (
-	lockOnce sync.Once
-	lockPool *pgxpool.Pool
-	lockErr  error
+	"github.com/wzul/jomform/api/internal/testdb"
 )
 
 func lockTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dsn := os.Getenv("JOMFORM_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("JOMFORM_TEST_DATABASE_URL not set; skipping per-sale lock integration test")
-	}
-	lockOnce.Do(func() {
-		pool, err := db.Connect(context.Background(), dsn)
-		if err != nil {
-			lockErr = err
-			return
-		}
-		if err = db.Migrate(context.Background(), pool, slog.New(slog.DiscardHandler)); err != nil {
-			lockErr = err
-			return
-		}
-		lockPool = pool
-	})
-	if lockErr != nil {
-		t.Fatalf("test database unavailable: %v", lockErr)
-	}
-	return lockPool
+	return testdb.Open(t)
 }
 
 // seedLockSale creates a pending one-time sale with a CHIP purchase id and
@@ -73,8 +46,8 @@ func seedLockSale(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (saleID
 	}
 	sale := &dbstore.Sale{
 		AccountID: accountID, RefCode: "IT-LOCK-" + accountID[:8],
-		Client: dbstore.SaleClient{FullName: "Buyer", Email: "buyer@example.test"},
-		Items:  []dbstore.SaleItem{{ProductID: "p1", Name: "Tee", PriceSen: 1000, Qty: 1}},
+		Client:   dbstore.SaleClient{FullName: "Buyer", Email: "buyer@example.test"},
+		Items:    []dbstore.SaleItem{{ProductID: "p1", Name: "Tee", PriceSen: 1000, Qty: 1}},
 		TotalSen: 1000, SaleType: dbstore.SaleTypeOneTime, PaymentMethod: "chip",
 		Status: dbstore.SalePending,
 	}

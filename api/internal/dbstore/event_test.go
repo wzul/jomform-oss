@@ -9,6 +9,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/wzul/jomform/api/internal/testdb"
 )
 
 // TestEventStoreRecordListCountBreakdown exercises the full write/read path:
@@ -401,8 +403,8 @@ func TestSaleStoreReceiptMessageID(t *testing.T) {
 	ref := "JF-R-" + randSuffix()
 	sale := &Sale{
 		AccountID: acc, RefCode: ref,
-		Client: SaleClient{FullName: "Buyer", Email: "r@example.test"},
-		Items:  []SaleItem{{ProductID: "p1", Name: "Tee", PriceSen: 1000, Qty: 1}},
+		Client:   SaleClient{FullName: "Buyer", Email: "r@example.test"},
+		Items:    []SaleItem{{ProductID: "p1", Name: "Tee", PriceSen: 1000, Qty: 1}},
 		TotalSen: 1000, SaleType: SaleTypeOneTime, PaymentMethod: "chip", Status: SalePaid,
 	}
 	if err := ss.Create(ctx, sale); err != nil {
@@ -442,13 +444,12 @@ func TestEmailDeliveryEventStoreRecordListSweep(t *testing.T) {
 	p := testPool(t)
 	es := NewEmailDeliveryEventStore(p)
 
-	// Test isolation: the shared test DB accumulates rows across runs, and
-	// this test asserts on a global List. Clear the table first so the
-	// assertion is deterministic (issue #99 test hygiene).
-	if _, err := p.Exec(ctx, `DELETE FROM email_delivery_events`); err != nil {
-		t.Fatalf("clear email_delivery_events: %v", err)
-	}
-	// Unique emails so we never collide with rows written by other packages.
+	// Test isolation (issue #474): the scratch schema is re-created per run, but
+	// this test asserts on a global List, so empty the table at entry (and again
+	// on cleanup) via the shared helper — it only ever touches this package's
+	// own schema, so it can never delete rows another package is using.
+	testdb.Reset(t, p, "email_delivery_events")
+	// Unique emails so we never collide with rows written by other tests.
 	bounceEmail := "bounce-" + randSuffix() + "@example.com"
 	complaintEmail := "complaint-" + randSuffix() + "@example.com"
 

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/testdb"
 )
 
 func TestWebhookRetryREST(t *testing.T) {
@@ -18,12 +19,11 @@ func TestWebhookRetryREST(t *testing.T) {
 	pool := bundleTestPool(t)
 	accountID, _ := bundleFixture(t, ctx, pool)
 
-	// The test DB is shared across runs; stale due retries from earlier runs
-	// can fill DueRetries(limit) and hide this run's row. Clear the queue so
-	// the assertion below is deterministic (issue: flaky TestWebhookRetryREST).
-	if _, err := pool.Exec(ctx, `DELETE FROM webhook_retries`); err != nil {
-		t.Fatalf("clear webhook_retries: %v", err)
-	}
+	// Isolation (issue #474): the scratch schema is re-created per run, but
+	// other tests in this package may enqueue retries earlier in the same run.
+	// Reset empties the queue at entry (and again on cleanup) so the
+	// DueRetries(limit) assertion below always sees this test's own row.
+	testdb.Reset(t, pool, "webhook_retries")
 
 	whs := dbstore.NewWebhookStore(pool)
 	wh, err := whs.Create(ctx, accountID, "", "https://example.test/hook", "secret1234", []string{"sale.paid"})
