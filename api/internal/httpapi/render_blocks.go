@@ -573,7 +573,10 @@ var blockTmpl = template.Must(template.New("blocks").
       fields:fields,items:items,payment_method:'chip',
       // Issue #444: affiliate marketing — echo the ?aff=CODE the buyer landed
       // with so the sale is attributed to that affiliate.
-      affiliate_code:(new URLSearchParams(location.search).get('aff')||'')};
+      affiliate_code:(new URLSearchParams(location.search).get('aff')||''),
+      // Issue #489: QR ordering — echo the ?table=N the QR stand / menu page
+      // carried into the form URL so sales.table_number is populated.
+      table_number:(new URLSearchParams(location.search).get('table')||'')};
     fetch(location.pathname+'/order',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
       .then(function(r){return r.json()}).then(function(d){
         if(d.checkout_url||d.next){
@@ -912,7 +915,10 @@ var responseTmpl = template.Must(template.New("response").
     },fields:fields,
     // Issue #444: affiliate marketing — echo the ?aff=CODE the buyer landed
     // with so the sale is attributed to that affiliate.
-    affiliate_code:(new URLSearchParams(location.search).get('aff')||'')};
+    affiliate_code:(new URLSearchParams(location.search).get('aff')||''),
+    // Issue #489: QR ordering — echo the ?table=N the QR stand / menu page
+    // carried into the form URL so sales.table_number is populated.
+    table_number:(new URLSearchParams(location.search).get('table')||'')};
     // Map the first name/email/phone blocks into the client object too.
     var nm=form.querySelector('input[type=text]'); if(nm) body.client.full_name=nm.value;
     var em=form.querySelector('input[type=email]'); if(em) body.client.email=em.value;

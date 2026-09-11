@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 export const metadata: Metadata = {
   title: "Placeholders reference — JomForm Docs",
   description:
-    "Every dynamic placeholder you can use in JomForm emails and notifications: {admin_email}, {{ref_code}}, {{amount}}, {{items}}, {{buyer_name}}, {{form_url}}, {{date}} and any {{field_id}}.",
+    "Every dynamic placeholder you can use in JomForm emails and notifications: {admin_email}, {{ref_code}}, {{amount}}, {{items}}, {{buyer_name}}, {{form_url}}, {{date}}, {{table_number}} and any {{field_id}}.",
   alternates: { canonical: "https://jomform.com/docs/placeholders" },
 };
 
@@ -46,6 +46,11 @@ const BODY_PLACEHOLDERS: { token: string; meaning: string }[] = [
   {
     token: "{{date}}",
     meaning: "The date the email is sent.",
+  },
+  {
+    token: "{{table_number}}",
+    meaning:
+      "The table number a QR-ordering customer scanned (the ?table=N on the order form URL). Empty for a regular online order with no table.",
   },
   {
     token: "{{field_id}}",

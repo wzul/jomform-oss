@@ -1057,7 +1057,10 @@ document.getElementById('of').addEventListener('submit', async (e) => {
     fields: {
       website: (document.querySelector('[name=website]')||{}).value || '',
       jf_ts: (document.querySelector('[name=jf_ts]')||{}).value || ''
-    }
+    },
+    // Issue #489: QR ordering — echo the ?table=N the QR stand / menu page
+    // carried into the form URL so sales.table_number is populated.
+    table_number: (new URLSearchParams(location.search).get('table') || '')
   };
   const r = await fetch(location.pathname + '/order', {
     method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body)

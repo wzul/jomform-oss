@@ -149,7 +149,10 @@ var customFormTmpl = template.Must(template.New("custom").Parse(`<!doctype html>
   window.addEventListener('message',function(ev){
     if(!ev.data||!ev.data.jfCustomSubmit)return;
     var fields=ev.data.fields||{};
-    var body={client:{full_name:'',email:'',phone:''},fields:fields};
+    var body={client:{full_name:'',email:'',phone:''},fields:fields,
+      // Issue #489: QR ordering — echo the ?table=N the QR stand / menu page
+      // carried into the form URL so sales.table_number is populated.
+      table_number:(new URLSearchParams(location.search).get('table')||'')};
     var nm=frame.contentDocument&&frame.contentDocument.querySelector('input[type=text]');
     if(nm)body.client.full_name=nm.value;
     var em=frame.contentDocument&&frame.contentDocument.querySelector('input[type=email]');
