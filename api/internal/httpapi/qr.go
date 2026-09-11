@@ -69,11 +69,35 @@ func (h *PublicHandlers) handleQRImage(w http.ResponseWriter, r *http.Request) {
 
 // qrStandData is the template payload for the printable QR stand (issue #438).
 type qrStandData struct {
-	Title    string
-	Table    string
-	QRData   string // base64 PNG data URL
+	Title string
+	Table string
+	// QRData is the base64 PNG data URL emitted into the <img src> attribute.
+	//
+	// It is template.URL, NOT string, on purpose (issue #499): html/template
+	// auto-escapes by CONTEXT, the src attribute is a URL context, and a
+	// `data:` URL is an unsafe scheme — a plain string is silently replaced
+	// with the sentinel `#ZgotmplZ`, so the printed stand showed a broken
+	// image (HTTP 200, no error anywhere). template.URL is the documented way
+	// to hand the engine a URL the caller has already validated.
+	//
+	// The value is ALWAYS produced by qrPNGDataURL from a PNG this server
+	// generated with qrcode.Encode — it is never built from caller input (the
+	// ?table=N query param only influences the URL ENCODED INSIDE the QR, and
+	// goes through url.Query().Set, never into this field). Trusting it is
+	// therefore safe; the trusted wrapper is confined to qrPNGDataURL so an
+	// arbitrary string cannot be assigned here by accident.
+	QRData   template.URL
 	Target   string
 	HasTable bool
+}
+
+// qrPNGDataURL wraps a server-generated PNG in a base64 data URL. It is the
+// only constructor for qrStandData.QRData, which keeps the trusted
+// template.URL value provably server-generated (issue #499): the PNG bytes
+// come from qrcode.Encode, and base64 output can never contain a quote or a
+// `<`, so the trusted URL cannot break out of the attribute it is emitted in.
+func qrPNGDataURL(png []byte) template.URL {
+	return template.URL("data:image/png;base64," + base64.StdEncoding.EncodeToString(png))
 }
 
 // qrStandTmpl renders a printable QR stand (Beep-style) the merchant can put
@@ -167,7 +191,7 @@ func (h *PublicHandlers) handleQRStand(w http.ResponseWriter, r *http.Request) {
 	data := qrStandData{
 		Title:    f.Title,
 		Table:    table,
-		QRData:   "data:image/png;base64," + base64.StdEncoding.EncodeToString(png),
+		QRData:   qrPNGDataURL(png),
 		Target:   target,
 		HasTable: table != "",
 	}
