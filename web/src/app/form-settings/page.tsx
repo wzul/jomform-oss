@@ -440,6 +440,10 @@ function FormSettingsInner() {
   const [accessPw, setAccessPw] = useState("");
   const [fsTheme, setFsTheme] = useState("#5e6ad2");
   const [fsLogo, setFsLogo] = useState("");
+  // Issue #501: visible inline error for a rejected (non-https) logo URL, so
+  // the merchant sees it at the field instead of getting a silently broken
+  // image on the buyer's page.
+  const [fsLogoErr, setFsLogoErr] = useState("");
   // Issue #391: WordPress-style media picker for the logo field.
   const [logoPickerOpen, setLogoPickerOpen] = useState(false);
   const [fsEmbed, setFsEmbed] = useState(true);
@@ -792,7 +796,15 @@ function FormSettingsInner() {
 
   async function saveConfirmation() {
     setMsg("");
+    setFsLogoErr("");
     if (!formId) return;
+    // Issue #501: catch a non-https logo before the round-trip so the
+    // merchant sees the problem at the field, and surface the server's
+    // message if it still rejects the value (the server is the authority).
+    if (fsLogo.trim() && !fsLogo.trim().startsWith("https://")) {
+      setFsLogoErr(t("url.notHttps"));
+      return;
+    }
     const r = await fetch(`/api/rest/forms/${formId}/settings${workspaceQuery()}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -801,7 +813,12 @@ function FormSettingsInner() {
         allow_embed: fsEmbed, logo_url: fsLogo, failure_message: fsFailMsg,
       }),
     });
-    setMsg(r.ok ? t("fs.saved") : t("prof.failed"));
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      setFsLogoErr(d.error || t("prof.failed"));
+      return;
+    }
+    setMsg(t("fs.saved"));
   }
 
   // Issue #179: save the form's confirmations. The default confirmation is
@@ -1278,6 +1295,14 @@ function FormSettingsInner() {
                       </div>
                       <div>
                         <label className={labelCls}>{t("bld.logoUrl")}</label>
+                        {/* Issue #501: a rejected (non-https) logo shows here,
+                            at the field, instead of a silently broken image
+                            on the buyer's page. */}
+                        {fsLogoErr && (
+                          <p className="mt-1 rounded-md bg-red-50 px-2 py-1 text-[11px] font-medium text-red-600">
+                            {fsLogoErr}
+                          </p>
+                        )}
                         {/* Issue #391: WordPress-style media picker — choose
                             from the media library or upload a new image, with
                             a preview of the current logo. A paste-URL

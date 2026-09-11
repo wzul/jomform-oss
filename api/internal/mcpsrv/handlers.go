@@ -9,6 +9,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/urlguard"
 )
 
 // ─── Products ────────────────────────────────────────────────────────────────
@@ -69,7 +70,7 @@ type createProductIn struct {
 	BillingPeriod       string        `json:"billing_period,omitempty" jsonschema:"month atau year (subscription sahaja)"`
 	TrialDays           int           `json:"trial_days,omitempty" jsonschema:"hari percubaan (subscription)"`
 	Stock               *int          `json:"stock,omitempty" jsonschema:"stok (omit = unlimited)"`
-	Images              []string      `json:"images,omitempty" jsonschema:"gambar (URL)"`
+	Images              []string      `json:"images,omitempty" jsonschema:"gambar (URL mesti https:// — issue #501)"`
 	Variations          []variationIn `json:"variations,omitempty" jsonschema:"variasi produk (name, price_sen, stock, images, sort_order) — kosong = produk simple"`
 	SubscriptionCharges *int          `json:"subscription_charges,omitempty" jsonschema:"bilangan caj (subscription; omit/null = infinite, N = caj N kali)"`
 }
@@ -79,7 +80,7 @@ type variationIn struct {
 	Name      string   `json:"name" jsonschema:"nama variasi (cth: Saiz M, Merah)"`
 	PriceSen  int64    `json:"price_sen" jsonschema:"harga variasi dalam SEN"`
 	Stock     *int     `json:"stock,omitempty" jsonschema:"stok variasi (omit = unlimited)"`
-	Images    []string `json:"images,omitempty" jsonschema:"gambar variasi (URL)"`
+	Images    []string `json:"images,omitempty" jsonschema:"gambar variasi (URL mesti https:// — issue #501)"`
 	SortOrder int      `json:"sort_order,omitempty" jsonschema:"urutan (0 = ikut senarai)"`
 }
 
@@ -93,6 +94,12 @@ func (s *Server) createProduct(ctx context.Context, _ *mcp.CallToolRequest, in c
 	}
 	if in.SubscriptionCharges != nil && *in.SubscriptionCharges < 1 {
 		return nil, productOut{}, fmt.Errorf("subscription_charges mesti >= 1 (atau null untuk infinite)")
+	}
+	// Issue #501: product images (and variation images) render into
+	// buyer-facing `<img src>` attributes (form renderer + restaurant menu),
+	// so an unsafe scheme is rejected here with the ONE shared rule.
+	if !urlguard.ValidList(in.Images) {
+		return nil, productOut{}, fmt.Errorf("%s", urlguard.InvalidMessage("images"))
 	}
 	pType := in.Type
 	if pType == "" {
@@ -118,6 +125,9 @@ func (s *Server) createProduct(ctx context.Context, _ *mcp.CallToolRequest, in c
 		}
 		if v.Stock != nil && *v.Stock < 0 {
 			return nil, productOut{}, fmt.Errorf("variation stok mesti >= 0")
+		}
+		if !urlguard.ValidList(v.Images) {
+			return nil, productOut{}, fmt.Errorf("%s", urlguard.InvalidMessage("variations[].images"))
 		}
 	}
 	p := &dbstore.Product{

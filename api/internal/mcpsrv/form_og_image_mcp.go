@@ -4,9 +4,10 @@ package mcpsrv
 import (
 	"context"
 	"errors"
-	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/wzul/jomform/api/internal/urlguard"
 )
 
 // getFormOGImageIn is the input for get_form_og_image.
@@ -56,8 +57,11 @@ func (s *Server) setFormOGImage(
 	if in.FormID == "" {
 		return nil, nil, errors.New("form_id wajib")
 	}
-	if in.ImageURL != "" && !strings.HasPrefix(in.ImageURL, "https://") {
-		return nil, nil, errors.New("image_url mesti https://")
+	// Issue #501: the og:image is stored as the form's logo_url, which also
+	// renders into the buyer-facing `<img src>`, so it goes through the ONE
+	// shared scheme rule. Empty clears the custom image and stays allowed.
+	if !urlguard.Valid(in.ImageURL) {
+		return nil, nil, errors.New(urlguard.InvalidMessage("image_url"))
 	}
 	acc, err := s.requireFormWrite(ctx, in.FormID)
 	if err != nil {

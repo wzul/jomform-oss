@@ -13,6 +13,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/urlguard"
 )
 
 type templateOut struct {
@@ -201,6 +202,15 @@ func (s *Server) createTemplateMCP(
 	if title == "" {
 		return nil, nil, errors.New("title atau form_id wajib")
 	}
+	// Issue #501: a template's config/theme is cloned onto a real form by
+	// use_template, so a non-https image URL stored here would reach a
+	// buyer's page as #ZgotmplZ. Reject it with the ONE shared scheme rule.
+	if field, _ := urlguard.CheckTheme(theme); field != "" {
+		return nil, nil, errors.New(urlguard.InvalidMessage("theme." + field))
+	}
+	if field, _ := urlguard.CheckConfig(config); field != "" {
+		return nil, nil, errors.New(urlguard.InvalidMessage("config." + field))
+	}
 	f := &dbstore.Form{
 		AccountID: acc,
 		Slug:      s.uniqueFormSlug(ctx, acc, "tpl-"+title),
@@ -244,6 +254,14 @@ func (s *Server) updateTemplateMCP(
 	title := strings.TrimSpace(in.Title)
 	if title == "" {
 		title = existing.Title
+	}
+	// Issue #501: same shared scheme rule as create_template (nil = leave
+	// unchanged, so only an explicitly supplied map is validated).
+	if field, _ := urlguard.CheckTheme(in.Theme); field != "" {
+		return nil, nil, errors.New(urlguard.InvalidMessage("theme." + field))
+	}
+	if field, _ := urlguard.CheckConfig(in.Config); field != "" {
+		return nil, nil, errors.New(urlguard.InvalidMessage("config." + field))
 	}
 	if err := s.deps.Forms.UpdateTemplate(ctx, acc, in.TemplateID, title, in.Config, in.Theme); err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)

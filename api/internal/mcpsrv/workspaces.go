@@ -12,6 +12,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/urlguard"
 )
 
 // ── Workspace context resolution ─────────────────────────────────────────────────
@@ -326,10 +327,20 @@ func (s *Server) setWorkspaceSettings(
 	if role != "" && role != dbstore.RoleManage && role != dbstore.RoleAdmin {
 		return nil, nil, errors.New("perlu peranan manage atau admin")
 	}
-	// URL fields must be https:// (same rule as the REST handler).
-	for _, u := range []*string{in.PrivacyURL, in.TermsURL, in.RefundURL} {
-		if u != nil && *u != "" && !strings.HasPrefix(*u, "https://") {
-			return nil, nil, errors.New("URL mesti https://")
+	// URL fields are https-only (issue #501): ONE shared rule from
+	// internal/urlguard, the same validator the REST handlers import — so the
+	// policy cannot drift between the two write layers again.
+	// A nil (omitted) field keeps its stored value and is never rejected.
+	for _, f := range []struct {
+		name string
+		u    *string
+	}{
+		{"privacy_url", in.PrivacyURL},
+		{"terms_url", in.TermsURL},
+		{"refund_url", in.RefundURL},
+	} {
+		if f.u != nil && !urlguard.Valid(*f.u) {
+			return nil, nil, errors.New(urlguard.InvalidMessage(f.name))
 		}
 	}
 	if in.MenuJSON != nil && *in.MenuJSON != "" && !jsonValid(*in.MenuJSON) {
@@ -436,10 +447,15 @@ func (s *Server) setWorkspaceLandingPage(
 	if role != "" && role != dbstore.RoleManage && role != dbstore.RoleAdmin {
 		return nil, nil, errors.New("perlu peranan manage atau admin")
 	}
-	// Media URLs must be https:// (same rule as other URL fields).
-	for _, u := range []string{in.ImageURL, in.LogoURL} {
-		if u != "" && !strings.HasPrefix(u, "https://") {
-			return nil, nil, errors.New("image_url/logo_url mesti https://")
+	// Media URLs are https-only (issue #501), through the ONE shared rule in
+	// internal/urlguard (same validator as the REST landing-page path). An
+	// empty value means "no image" and stays allowed.
+	for _, f := range []struct{ name, u string }{
+		{"image_url", in.ImageURL},
+		{"logo_url", in.LogoURL},
+	} {
+		if !urlguard.Valid(f.u) {
+			return nil, nil, errors.New(urlguard.InvalidMessage(f.name))
 		}
 	}
 	sp, err := s.workspacesStore()

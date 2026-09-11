@@ -89,6 +89,32 @@ export default function CustomizeDocsPage() {
         </table>
       </div>
 
+      {/* Issue #501: the https-only scheme rule for image/URL fields is a
+          user-visible constraint, so it is documented here (AGENTS.md
+          documentation-parity rule). */}
+      <h2 className="mt-8 text-xl font-semibold text-slate-900">Image URLs must be https://</h2>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        Every image/URL you set — the form logo (<span className="font-mono text-xs">set_form_theme</span>), the
+        landing-page hero image and logo (<span className="font-mono text-xs">set_workspace_landing_page</span>, or
+        Settings → Storefront), product images (<span className="font-mono text-xs">create_product</span> /{" "}
+        <span className="font-mono text-xs">update_product</span>, or the Products editor) and a form&apos;s image
+        block — must be an absolute <span className="font-mono text-xs">https://</span> URL. Uploaded media from the
+        media library already qualifies: <span className="font-mono text-xs">upload_media</span> returns an absolute
+        https URL on your own media host, which is accepted everywhere.
+      </p>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        A value with any other scheme (<span className="font-mono text-xs">data:</span>,{" "}
+        <span className="font-mono text-xs">http:</span>, <span className="font-mono text-xs">javascript:</span>, or a
+        relative path) is rejected when you save it, with a clear message, on both the dashboard and the MCP — the
+        same rule on every path. This is deliberate: the page renders the value into an <span className="font-mono text-xs">&lt;img src&gt;</span> for
+        your buyers, and a browser will not load an unsafe scheme. Rejecting it at entry means you see the problem
+        immediately instead of getting a silently missing image on the live page.
+      </p>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        Leaving an image field <em>empty</em> is always allowed and means &ldquo;no image&rdquo; (or, when updating,
+        &ldquo;keep the current one&rdquo;).
+      </p>
+
       <h2 className="mt-8 text-xl font-semibold text-slate-900">Example prompt for your agent</h2>
       <pre className="mt-3 overflow-x-auto rounded-lg bg-slate-900 p-4 text-xs leading-relaxed text-slate-100">
 {`"Apply my Canva design to my JomForm checkout:

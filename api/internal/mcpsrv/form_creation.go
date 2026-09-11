@@ -15,6 +15,7 @@ import (
 
 	"github.com/wzul/jomform/api/internal/customform"
 	"github.com/wzul/jomform/api/internal/formfields"
+	"github.com/wzul/jomform/api/internal/urlguard"
 )
 
 // ── set_form_theme (issue #254) ────────────────────────────────────────────
@@ -101,6 +102,15 @@ func (s *Server) setFormTheme(
 	setThemeStr(theme, "card_background", in.CardBackground)
 	setThemeStr(theme, "card_border_radius", in.CardBorderRadius)
 	setThemeStr(theme, "font_family", in.FontFamily)
+	// Issue #501: the theme's logo_url is rendered into a buyer-facing
+	// `<img src>` (render_blocks.go / render_custom.go / menu.go). It is
+	// caller input, so a non-https scheme is REJECTED here — never trusted
+	// by marking it template.URL, which would let an arbitrary scheme into
+	// the buyer's page. ONE shared rule: internal/urlguard.
+	// Empty means "clear the key" (as before) and stays allowed.
+	if !urlguard.Valid(in.LogoURL) {
+		return nil, nil, errors.New(urlguard.InvalidMessage("logo_url"))
+	}
 	setThemeStr(theme, "logo_url", in.LogoURL)
 	setThemeStr(theme, "custom_css", in.CustomCSS)
 	// Issue #388: power-user custom JS. Owner-gated (requireFormWrite above)

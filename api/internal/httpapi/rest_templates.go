@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/urlguard"
 )
 
 // listTemplates exposes published template forms (any visitor; used by
@@ -179,6 +180,18 @@ func (h *RESTHandlers) createOwnTemplate(w http.ResponseWriter, r *http.Request,
 		writeErr(w, http.StatusBadRequest, "payload tidak sah")
 		return
 	}
+	// Issue #501: a template's config/theme is later cloned onto a real form
+	// (use_template / useOwnTemplate), so a non-https image URL stored here
+	// would reach a buyer's page as #ZgotmplZ. Reject it at write time with
+	// the ONE shared scheme rule.
+	if field, _ := urlguard.CheckTheme(in.Theme); field != "" {
+		writeErr(w, http.StatusBadRequest, urlguard.InvalidMessage("theme."+field))
+		return
+	}
+	if field, _ := urlguard.CheckConfig(in.Config); field != "" {
+		writeErr(w, http.StatusBadRequest, urlguard.InvalidMessage("config."+field))
+		return
+	}
 
 	title := strings.TrimSpace(in.Title)
 	config := in.Config
@@ -232,6 +245,18 @@ func (h *RESTHandlers) updateOwnTemplate(w http.ResponseWriter, r *http.Request,
 	}
 	if err := decodeJSON(r, &in); err != nil {
 		writeErr(w, http.StatusBadRequest, "payload tidak sah")
+		return
+	}
+	// Issue #501: a template's config/theme is cloned onto a real form
+	// (use_template / useOwnTemplate), so a non-https image URL stored here
+	// would later reach a buyer's page as #ZgotmplZ. Reject it at write time
+	// with the ONE shared scheme rule.
+	if field, _ := urlguard.CheckTheme(in.Theme); field != "" {
+		writeErr(w, http.StatusBadRequest, urlguard.InvalidMessage("theme."+field))
+		return
+	}
+	if field, _ := urlguard.CheckConfig(in.Config); field != "" {
+		writeErr(w, http.StatusBadRequest, urlguard.InvalidMessage("config."+field))
 		return
 	}
 	existing, err := h.Forms.TemplateByIDForAccount(r.Context(), actx.Account.ID, r.PathValue("id"))

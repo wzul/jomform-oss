@@ -53,6 +53,10 @@ export default function MediaPicker({
   const [uploadMsg, setUploadMsg] = useState("");
   const [showUrl, setShowUrl] = useState(false);
   const [urlValue, setUrlValue] = useState("");
+  // Issue #501: the pasted-URL path is the one place a merchant can hand-type
+  // an image URL; reject a non-https scheme here with the same message the
+  // server would return, so the value never reaches a write path.
+  const [urlErr, setUrlErr] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
@@ -76,6 +80,7 @@ export default function MediaPicker({
     if (open) {
       setShowUrl(false);
       setUrlValue("");
+      setUrlErr("");
       setUploadMsg("");
       load();
     }
@@ -162,14 +167,25 @@ export default function MediaPicker({
             <div className="mt-3">
               <input
                 value={urlValue}
-                onChange={(e) => setUrlValue(e.target.value)}
+                onChange={(e) => {
+                  setUrlValue(e.target.value);
+                  setUrlErr("");
+                }}
                 placeholder="https://cdn.example/logo.png"
                 className="jf-input w-full text-xs"
               />
+              {urlErr && <p className="mt-1 text-xs font-medium text-red-600">{urlErr}</p>}
               <button
                 type="button"
                 onClick={() => {
-                  if (urlValue.trim()) onSelect(urlValue.trim());
+                  const v = urlValue.trim();
+                  if (!v) return;
+                  if (!v.startsWith("https://")) {
+                    setUrlErr(t("url.notHttps"));
+                    return;
+                  }
+                  setUrlErr("");
+                  onSelect(v);
                 }}
                 className="jf-btn mt-2 px-3 py-1.5 text-xs"
               >

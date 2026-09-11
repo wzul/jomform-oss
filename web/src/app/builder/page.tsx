@@ -434,6 +434,18 @@ export default function Builder() {
     };
     const payload = { slug: slug.toLowerCase().replace(/[^a-z0-9-]/g, "-"), title, config };
 
+    // Issue #501: an image block whose src is not https:// would render as the
+    // html/template #ZgotmplZ sentinel on the buyer's page (HTTP 200, no
+    // image). Catch it here so it shows in the builder error line, and let
+    // the server's rejection message surface below if it still slips through
+    // (the server is the authority).
+    const badSrc = blocks.find((b) => b.type === "image" && (b.src || "").trim() && !(b.src || "").trim().startsWith("https://"));
+    if (badSrc) {
+      setLoadErr(t("url.notHttps"));
+      setSaving(false);
+      return;
+    }
+
     let id = currentId;
     if (!id) {
       const r = await fetch(`/api/rest/forms${workspaceQuery()}`, {
@@ -452,11 +464,17 @@ export default function Builder() {
       setSlug(d.slug);
       id = d.id;
     } else {
-      await fetch(`/api/rest/forms/${id}${workspaceQuery()}`, {
+      const ur = await fetch(`/api/rest/forms/${id}${workspaceQuery()}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title, config }),
       });
+      if (!ur.ok) {
+        const d = await ur.json().catch(() => ({}));
+        setLoadErr(d.error || "Failed to save");
+        setSaving(false);
+        return;
+      }
     }
     // Issue #176: apply the selected status (draft | private | published).
     // The Publish button forces published; private requires the access

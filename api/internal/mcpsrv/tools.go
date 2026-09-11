@@ -153,7 +153,7 @@ func (s *Server) registerTools() {
 	// ── Parity: forms/products (dashboard coverage) ────────────────────────
 	addTool(s, &mcp.Tool{
 		Name:        "update_product",
-		Description: "Kemaskini produk: nama, harga (price_sen), stok, jenis (type), billing_period (langganan), aktif/tidak. Omit medan tak berubah.",
+		Description: "Kemaskini produk: nama, harga (price_sen), stok, jenis (type), billing_period (langganan), aktif/tidak, images (URL imej mesti https:// — issue #501; omit = tak berubah). Omit medan tak berubah.",
 	}, s.updateProduct)
 	addTool(s, &mcp.Tool{
 		Name:        "bulk_products",
@@ -168,7 +168,7 @@ func (s *Server) registerTools() {
 	// payment flow.
 	addTool(s, &mcp.Tool{
 		Name:        "set_form_theme",
-		Description: "Set gaya/branding tersuai borang (issue #254): primary, background, text, card_background, card_border_radius, font_family, logo_url, layout (centered|full_width|split), spacing (compact|comfortable|spacious), product_image_size (small|medium|large|hidden, issue #471), product_image_layout (thumbnail-left|image-top — kad menu), custom_css, custom_js (issue #388 — JS tersuai untuk tingkah laku borang; dikawal pemilik + diimbas). Agent bebas set CSS/JS; JomForm kekal kuasa ke atas harga & pembayaran.",
+		Description: "Set gaya/branding tersuai borang (issue #254): primary, background, text, card_background, card_border_radius, font_family, logo_url (mesti https:// — issue #501), layout (centered|full_width|split), spacing (compact|comfortable|spacious), product_image_size (small|medium|large|hidden, issue #471), product_image_layout (thumbnail-left|image-top — kad menu), custom_css, custom_js (issue #388 — JS tersuai untuk tingkah laku borang; dikawal pemilik + diimbas). Agent bebas set CSS/JS; JomForm kekal kuasa ke atas harga & pembayaran.",
 	}, s.setFormTheme)
 	addTool(s, &mcp.Tool{
 		Name:        "register_form_fields",
@@ -297,7 +297,7 @@ func (s *Server) registerTools() {
 	}, s.getWorkspaceLandingPage)
 	addTool(s, &mcp.Tool{
 		Name:        "set_workspace_landing_page",
-		Description: "Set 'landing page' storefront workspace (issue #360): enabled (true = tunjuk, false/kosong = jatuh ke senarai borang), hero, subtitle, body, image_url, primary_color, background_color, logo_url, ctas ([{label, form_slug}]). Hantar enabled:false untuk pulang ke senarai borang.",
+		Description: "Set 'landing page' storefront workspace (issue #360): enabled (true = tunjuk, false/kosong = jatuh ke senarai borang), hero, subtitle, body, image_url (mesti https:// — issue #501), primary_color, background_color, logo_url (mesti https:// — issue #501), ctas ([{label, form_slug}]). Hantar enabled:false untuk pulang ke senarai borang.",
 	}, s.setWorkspaceLandingPage)
 	// Issue #438: QR ordering flow (MCP parity).
 	addTool(s, &mcp.Tool{

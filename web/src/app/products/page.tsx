@@ -388,6 +388,15 @@ export default function Products() {
     if (!editing) return;
     setDrawerBusy(true);
     setDrawerError("");
+    // Issue #501: a product image whose URL is not https:// would render as
+    // the html/template #ZgotmplZ sentinel on the buyer's page (form renderer
+    // + restaurant menu). Catch it at the field; the server rejects it too.
+    const badImage = editForm.images.find((u) => u.trim() && !u.trim().startsWith("https://"));
+    if (badImage) {
+      setDrawerError(t("url.notHttps"));
+      setDrawerBusy(false);
+      return;
+    }
     const stockVal = editForm.stock === "" ? null : Math.max(0, parseInt(editForm.stock, 10));
     const trialVal = Math.max(0, parseInt(editForm.trial || "0", 10));
     const body: Record<string, unknown> = {

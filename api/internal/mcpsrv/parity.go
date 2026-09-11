@@ -17,6 +17,7 @@ import (
 	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/customform"
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/urlguard"
 )
 
 // slugUnsafe matches any character that is not URL-safe for a form slug.
@@ -82,6 +83,13 @@ func (s *Server) updateProduct(
 	if in.Images != nil {
 		imagesPtr = &in.Images
 	}
+	// Issue #501: product images (and variation images) render into
+	// buyer-facing `<img src>` attributes, so a non-https scheme is rejected
+	// here with the ONE shared rule. nil = keep the stored images (allowed);
+	// an explicit list is validated in full.
+	if imagesPtr != nil && !urlguard.ValidList(*imagesPtr) {
+		return nil, nil, fmt.Errorf("%s", urlguard.InvalidMessage("images"))
+	}
 	// Validate variations (money stays integer sen; stock nil = unlimited).
 	for _, v := range in.Variations {
 		if v.Name == "" {
@@ -92,6 +100,9 @@ func (s *Server) updateProduct(
 		}
 		if v.Stock != nil && *v.Stock < 0 {
 			return nil, nil, fmt.Errorf("variation stok mesti >= 0")
+		}
+		if !urlguard.ValidList(v.Images) {
+			return nil, nil, fmt.Errorf("%s", urlguard.InvalidMessage("variations[].images"))
 		}
 	}
 	if err := s.deps.Products.Update(ctx, acc, in.ProductID, namePtr, descPtr,
@@ -325,6 +336,17 @@ func (s *Server) upsertForm(
 	if in.EntryLimit != nil && *in.EntryLimit < 0 {
 		return nil, nil, errors.New("had penyertaan tidak sah")
 	}
+	// Issue #501: upsert_form takes the config and theme maps verbatim from
+	// the agent. The builder image-block src (config.blocks[].src), the
+	// product snapshot images (config.products[].images) and the theme's
+	// logo_url all render into buyer-facing `<img src>` attributes, so an
+	// unsafe scheme is rejected here with the ONE shared rule.
+	if field, _ := urlguard.CheckTheme(in.Theme); field != "" {
+		return nil, nil, errors.New(urlguard.InvalidMessage("theme." + field))
+	}
+	if field, _ := urlguard.CheckConfig(in.Config); field != "" {
+		return nil, nil, errors.New(urlguard.InvalidMessage("config." + field))
+	}
 	if in.FormID == "" {
 		// Issue #176: auto-generate a unique slug when the merchant leaves it
 		// blank (slugified title + random suffix on collision).
@@ -415,6 +437,15 @@ if in.Theme != nil {
 			return nil, nil, errors.New("custom_js ditolak: " + reason)
 		}
 	}
+}
+// Issue #501: re-validate the update's theme/config with the shared rule
+// (the update path below is reached independently of the create-only
+// checks above). A nil map means "leave unchanged" and is skipped.
+if field, _ := urlguard.CheckTheme(in.Theme); field != "" {
+	return nil, nil, errors.New(urlguard.InvalidMessage("theme." + field))
+}
+if field, _ := urlguard.CheckConfig(in.Config); field != "" {
+	return nil, nil, errors.New(urlguard.InvalidMessage("config." + field))
 }
 if err := s.deps.Forms.Update(ctx, acc, in.FormID, in.Title, in.Config, in.Theme); err != nil {
 	return nil, nil, err

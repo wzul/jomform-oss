@@ -257,6 +257,14 @@ func TestIssue499QRImageEndpointIsUnaffected(t *testing.T) {
 // silently rewritten to #ZgotmplZ exactly like the QR stand was. Adding a new
 // URL interpolation therefore fails this test until it is consciously
 // classified here.
+//
+// Issue #501 closed the caller-supplied half of this class: every write path
+// (REST AND MCP) for the caller-supplied image/URL fields now applies the ONE
+// shared https-only rule in internal/urlguard, so an unsafe scheme is rejected
+// with a 400 at write time and can no longer reach a rendered attribute. The
+// classifications below were updated accordingly — "caller-supplied" would be
+// stale, and the follow-up record now points at the tests that lock the rule
+// in (#501: url_scheme_issue501_test.go in this package, and the MCP twin).
 func TestIssue499NoTemplateURLInterpolationUsesAPlainString(t *testing.T) {
 	// urlInterpRe matches `src="{{.Field}}"`, `href="{{.Field}}"` and
 	// `url({{.Field}})` in a template source.
@@ -269,15 +277,11 @@ func TestIssue499NoTemplateURLInterpolationUsesAPlainString(t *testing.T) {
 	//   server-generated — the value is produced entirely by this server, not
 	//                      from caller input (the #499 fix).
 	//   https-only       — the scheme is validated `https://` on EVERY write
-	//                      path that can set the field.
-	//   caller-supplied  — merchant/caller input that is NOT scheme-validated
-	//                      on every write path. Same silent-rewrite MECHANISM
-	//                      as #499 (an unsafe scheme becomes #ZgotmplZ), but
-	//                      deliberately NOT "fixed" by trusting the value: it
-	//                      is caller input, so marking it template.URL would
-	//                      let a merchant put an arbitrary scheme in the
-	//                      buyer's page. Tracked as a follow-up to harden the
-	//                      write paths; out of scope for #499.
+	//                      path that can set the field. Issue #501 extended
+	//                      this to the caller-supplied image/URL fields, so
+	//                      they are now in this bucket rather than
+	//                      "caller-supplied"; see the followUpURLFields note
+	//                      below for the tests that lock it in.
 	auditedURLInterpolations := map[string]string{
 		// The only data URL in the package; the #499 fix.
 		"QRData": "server-generated — base64 PNG from qrcode.Encode, wrapped by qrPNGDataURL as template.URL (issue #499)",
@@ -291,30 +295,33 @@ func TestIssue499NoTemplateURLInterpolationUsesAPlainString(t *testing.T) {
 		// Same-origin relative path built server-side from a form id.
 		"ExtraFormEdit": "server-generated — \"/builder?form=\" + form id, never a scheme",
 
-		// Caller-supplied URLs with UNEVEN validation: the REST form-settings
-		// and MCP workspace-landing paths validate https://, but MCP
-		// set_form_theme, the product-image write paths and the REST
-		// landing_page path do not. A data: or other unsafe scheme stored
-		// there renders as #ZgotmplZ — the same symptom as #499, from a
-		// different (caller-supplied) source. Hardening note only.
-		"LogoURL":    "caller-supplied, not https-validated on every path — see #499 audit note",
-		"ImageURL":   "caller-supplied, not https-validated on every path — see #499 audit note",
-		"CardImage":  "caller-supplied (derived from the product image URL) — see #499 audit note",
-		"ThumbImage": "caller-supplied (derived from the product image URL) — see #499 audit note",
-		"Image":      "caller-supplied (live product image, #461) — see #499 audit note",
-		"Src":        "caller-supplied builder image-block src — see #499 audit note",
+		// Caller-supplied image/URL fields, now https-only on EVERY write
+		// path: the REST and MCP handlers both import the ONE shared rule in
+		// internal/urlguard (issue #501), which the per-field write-path tests
+		// in url_scheme_issue501_test.go (REST) and the mcpsrv twin (MCP)
+		// assert, together with an emitted-attribute assertion that the
+		// rendered value is never #ZgotmplZ.
+		"LogoURL":    "https-only — internal/urlguard on every write path (REST form settings + form create/update/theme, MCP set_form_theme / upsert_form / set_form_og_image / templates); issue #501",
+		"ImageURL":   "https-only — internal/urlguard on every write path (REST workspace settings landing_page + MCP set_workspace_landing_page); issue #501",
+		"CardImage":  "https-only — derived server-side from the product image URL, which is https-only on every write path (issue #501)",
+		"ThumbImage": "https-only — derived server-side from the product image URL, which is https-only on every write path (issue #501)",
+		"Image":      "https-only — the live product image (#461) resolves from products.images, https-only on every write path (issue #501)",
+		"Src":        "https-only — the builder image-block src is validated on the form create/update config (REST + MCP upsert_form) and in the template config; issue #501",
 	}
 
-	// followUpURLFields are the caller-supplied fields above. They are the
-	// same rewrite MECHANISM as #499, so this test documents them explicitly
-	// rather than letting a future reader mistake the audit for "all clear".
+	// followUpURLFields are the caller-supplied fields above. #499 recorded
+	// them as a hardening follow-up; #501 closed that follow-up by rejecting
+	// an unsafe scheme at write time on every path (REST + MCP), so the note
+	// here now records WHERE the rule is enforced rather than that it is
+	// missing. They stay in the audit list so a future reader can see the
+	// lineage and the enforcing tests.
 	followUpURLFields := map[string]string{
-		"LogoURL":    "REST /forms/{id}/settings validates https://; MCP set_form_theme and generation paths do not",
-		"ImageURL":   "MCP set_workspace_landing_page validates https://; REST putWorkspaceSettings landing_page does not",
-		"CardImage":  "derived from the product image URL (unvalidated on write)",
-		"ThumbImage": "derived from the product image URL (unvalidated on write)",
-		"Image":      "product images are not scheme-validated on the REST/MCP write paths",
-		"Src":        "builder image-block src is not scheme-validated",
+		"LogoURL":    "closed by #501 — REST form settings + form create/update/theme and MCP set_form_theme / upsert_form / set_form_og_image / templates all use internal/urlguard",
+		"ImageURL":   "closed by #501 — REST workspace settings (landing_page) and MCP set_workspace_landing_page both use internal/urlguard",
+		"CardImage":  "closed by #501 — derived from the product image URL, which is https-only on every write path",
+		"ThumbImage": "closed by #501 — derived from the product image URL, which is https-only on every write path",
+		"Image":      "closed by #501 — product images are https-only on the REST (create/update product) and MCP (create_product/update_product) write paths",
+		"Src":        "closed by #501 — the builder image-block src is validated on the form config (REST create/update, MCP upsert_form) and the template config",
 	}
 
 	templates := map[string]*template.Template{

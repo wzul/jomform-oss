@@ -4,11 +4,13 @@ package httpapi
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/wzul/jomform/api/internal/dbstore"
-	"strings"
+	"github.com/wzul/jomform/api/internal/urlguard"
 )
 
 // listWorkspaces: GET /v1/workspaces — workspaces owned by OR a member of the current
@@ -153,10 +155,30 @@ func (h *RESTHandlers) saveWorkspaceSettings(w http.ResponseWriter, r *http.Requ
 		writeErr(w, http.StatusBadRequest, "payload tidak sah")
 		return
 	}
-	for _, u := range []string{in.PrivacyURL, in.TermsURL, in.RefundURL} {
-		if u != "" && !strings.HasPrefix(u, "https://") {
-			writeErr(w, http.StatusBadRequest, "URL mesti https://")
+	// Issue #501: ONE shared scheme rule for every caller-supplied URL field
+	// (see internal/urlguard). The landing-page image_url/logo_url are
+	// rendered into buyer-facing `<img src>` attributes (public.go), so an
+	// unsafe scheme must be rejected on this path too — previously only the
+	// MCP landing tool validated them.
+	for _, f := range []struct{ name, u string }{
+		{"privacy_url", in.PrivacyURL},
+		{"terms_url", in.TermsURL},
+		{"refund_url", in.RefundURL},
+	} {
+		if !urlguard.Valid(f.u) {
+			writeErr(w, http.StatusBadRequest, urlguard.InvalidMessage(f.name))
 			return
+		}
+	}
+	if in.LandingPage != nil {
+		for _, f := range []struct{ name, u string }{
+			{"image_url", in.LandingPage.ImageURL},
+			{"logo_url", in.LandingPage.LogoURL},
+		} {
+			if !urlguard.Valid(f.u) {
+				writeErr(w, http.StatusBadRequest, urlguard.InvalidMessage("landing_page."+f.name))
+				return
+			}
 		}
 	}
 	// Issue #185: currency must be a supported code (default MYR). Empty is

@@ -225,6 +225,9 @@ export default function Settings() {
   const [lpPrimaryColor, setLpPrimaryColor] = useState("#7c3aed");
   const [lpBackgroundColor, setLpBackgroundColor] = useState("#ffffff");
   const [lpLogoUrl, setLpLogoUrl] = useState("");
+  // Issue #501: inline error for a rejected (non-https) landing image/logo,
+  // shown at the field rather than only as a page-level banner.
+  const [lpUrlErr, setLpUrlErr] = useState("");
   const [lpCtas, setLpCtas] = useState<{ label: string; form_slug: string }[]>([]);
   // Issue #362: published forms embedded inline on the landing page.
   const [lpForms, setLpForms] = useState<{ label: string; form_slug: string }[]>([]);
@@ -886,6 +889,17 @@ export default function Settings() {
     if (!lpWorkspaceId) return;
     setMsg("");
     setErr("");
+    setLpUrlErr("");
+    // Issue #501: a non-https landing image/logo would render as the
+    // html/template #ZgotmplZ sentinel (a silently broken image) on the
+    // storefront. Catch it at the field and surface the server's rejection
+    // message too, since the server is the authority.
+    for (const u of [lpImageUrl, lpLogoUrl]) {
+      if (u.trim() && !u.trim().startsWith("https://")) {
+        setLpUrlErr(t("url.notHttps"));
+        return;
+      }
+    }
     const r = await fetch(`/api/workspaces/${lpWorkspaceId}/settings`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -908,7 +922,7 @@ export default function Settings() {
       setMsg(t("set.lpSaved"));
     } else {
       const d = await r.json().catch(() => ({}));
-      setErr(d.error || t("set.failedSave"));
+      setLpUrlErr(d.error || t("set.failedSave"));
     }
   }
 
@@ -1972,6 +1986,14 @@ export default function Settings() {
                       placeholder="https://…/logo.png"
                     />
                   </div>
+                  {/* Issue #501: a rejected (non-https) value shows here, at
+                      the fields, instead of a silently broken storefront
+                      image. */}
+                  {lpUrlErr && (
+                    <p className="max-w-xl rounded-md bg-red-50 px-2 py-1.5 text-xs font-medium text-red-600">
+                      {lpUrlErr}
+                    </p>
+                  )}
                   <div className="flex max-w-xl gap-4">
                     <div className="flex-1">
                       <label className="text-xs text-slate-500">{t("set.lpPrimaryColor")}</label>

@@ -14,6 +14,7 @@ import (
 	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/customform"
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/urlguard"
 )
 
 // ─── Products ────────────────────────────────────────────────────────────────
@@ -159,6 +160,14 @@ func (h *RESTHandlers) updateProduct(w http.ResponseWriter, r *http.Request, act
 		writeErr(w, http.StatusBadRequest, "stok mesti >= 0")
 		return
 	}
+	// Issue #501: product images render into buyer-facing `<img src>`
+	// attributes (form renderer, restaurant menu). An unsafe scheme stored
+	// here would be silently rewritten to #ZgotmplZ on the buyer's page, so
+	// reject it at write time with the ONE shared scheme rule.
+	if in.Images != nil && !urlguard.ValidList(*in.Images) {
+		writeErr(w, http.StatusBadRequest, urlguard.InvalidMessage("images"))
+		return
+	}
 	// Validate variations (money stays integer sen; stock nil = unlimited).
 	if in.Variations != nil {
 		for _, v := range *in.Variations {
@@ -172,6 +181,10 @@ func (h *RESTHandlers) updateProduct(w http.ResponseWriter, r *http.Request, act
 			}
 			if v.Stock != nil && *v.Stock < 0 {
 				writeErr(w, http.StatusBadRequest, "variation stok mesti >= 0")
+				return
+			}
+			if !urlguard.ValidList(v.Images) {
+				writeErr(w, http.StatusBadRequest, urlguard.InvalidMessage("variations[].images"))
 				return
 			}
 		}
@@ -337,6 +350,13 @@ func (h *RESTHandlers) createProduct(w http.ResponseWriter, r *http.Request, act
 		writeErr(w, http.StatusBadRequest, "subscription_charges mesti >= 1 (atau null untuk infinite)")
 		return
 	}
+	// Issue #501: the product's images (and its variations' images) render
+	// into buyer-facing `<img src>` attributes, so an unsafe scheme must be
+	// rejected at write time — see internal/urlguard for the shared rule.
+	if !urlguard.ValidList(in.Images) {
+		writeErr(w, http.StatusBadRequest, urlguard.InvalidMessage("images"))
+		return
+	}
 	pType := in.Type
 	if pType == "" {
 		pType = dbstore.SaleTypeOneTime
@@ -365,6 +385,10 @@ func (h *RESTHandlers) createProduct(w http.ResponseWriter, r *http.Request, act
 		}
 		if v.Stock != nil && *v.Stock < 0 {
 			writeErr(w, http.StatusBadRequest, "variation stok mesti >= 0")
+			return
+		}
+		if !urlguard.ValidList(v.Images) {
+			writeErr(w, http.StatusBadRequest, urlguard.InvalidMessage("variations[].images"))
 			return
 		}
 	}
@@ -591,6 +615,19 @@ func (h *RESTHandlers) createForm(w http.ResponseWriter, r *http.Request, actx *
 		writeErr(w, http.StatusBadRequest, "title wajib")
 		return
 	}
+	// Issue #501: a form created with a non-https theme logo_url or a
+	// non-https config URL (builder image-block src, product snapshot image)
+	// would render as #ZgotmplZ on the buyer's page. Apply the ONE shared
+	// scheme rule here too — the form create/update route accepts the config
+	// and theme maps verbatim.
+	if field, _ := urlguard.CheckTheme(in.Theme); field != "" {
+		writeErr(w, http.StatusBadRequest, urlguard.InvalidMessage("theme."+field))
+		return
+	}
+	if field, _ := urlguard.CheckConfig(in.Config); field != "" {
+		writeErr(w, http.StatusBadRequest, urlguard.InvalidMessage("config."+field))
+		return
+	}
 	// Issue #176: auto-generate a unique slug when the merchant leaves it
 	// blank. The slug is unique per workspace (#77), so a generated slug that
 	// collides gets a random suffix appended until it is free.
@@ -653,6 +690,19 @@ func (h *RESTHandlers) updateForm(w http.ResponseWriter, r *http.Request, actx *
 			writeErr(w, http.StatusBadRequest, "product_image_layout mesti thumbnail-left|image-top")
 			return
 		}
+		// Issue #501: the theme's logo_url is rendered into a buyer-facing
+		// `<img src>`; reject a non-https scheme with the shared rule.
+		if field, _ := urlguard.CheckTheme(in.Theme); field != "" {
+			writeErr(w, http.StatusBadRequest, urlguard.InvalidMessage("theme."+field))
+			return
+		}
+	}
+	// Issue #501: the config carries the builder image-block src and the
+	// product snapshot images — both render into `<img src>` attributes
+	// (render_blocks.go). Reject an unsafe scheme with the shared rule.
+	if field, _ := urlguard.CheckConfig(in.Config); field != "" {
+		writeErr(w, http.StatusBadRequest, urlguard.InvalidMessage("config."+field))
+		return
 	}
 	// Pass config/theme as-is: Forms.Update COALESCEs nil over the stored
 	// values, so a PATCH that omits either key keeps what's stored instead

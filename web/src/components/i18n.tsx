@@ -623,6 +623,17 @@ const DICT = {
   "set.lpSubtitle": { en: "Subtitle", ms: "Sub-tajuk", zh: "副标题", ta: "துணைத் தலைப்பு", ar: "العنوان الفرعي" },
   "set.lpBody": { en: "Body text", ms: "Teks badan", zh: "正文", ta: "உடல் உரை", ar: "نص أساسي" },
   "set.lpImageUrl": { en: "Hero / banner image URL (https://)", ms: "URL imej hero/banner (https://)", zh: "主图 / 横幅图片 URL（https://）", ta: "Hero/பேனர் பட URL (https://)", ar: "رابط صورة الرئيسية/اللافتة (https://)" },
+  // Issue #501: shown when the backend rejects a non-https image/URL value
+  // (form logo, landing image/logo, product image, builder image block). The
+  // value is rejected, not stored, so the buyer's page never gets the
+  // html/template #ZgotmplZ sentinel in place of a real image.
+  "url.notHttps": {
+    en: "Image/URL must start with https:// — other schemes (data:, http:, javascript:, …) are rejected so the image never breaks on the buyer's page.",
+    ms: "URL imej mesti bermula dengan https:// — skema lain (data:, http:, javascript:, …) ditolak supaya imej tidak rosak pada halaman pembeli.",
+    zh: "图片/链接必须以 https:// 开头 — 其他协议（data:、http:、javascript: 等）会被拒绝，以免买家页面上的图片损坏。",
+    ta: "படம்/URL https:// என்று தொடங்க வேண்டும் — மற்ற திட்டங்கள் (data:, http:, javascript:, …) நிராகரிக்கப்படும், வாங்குபவர் பக்கத்தில் படம் உடையாது.",
+    ar: "يجب أن يبدأ رابط الصورة بـ https:// — يتم رفض المخططات الأخرى (data:، http:، javascript:، …) حتى لا تنكسر الصورة في صفحة المشتري.",
+  },
   "set.lpLogoUrl": { en: "Logo URL (https://)", ms: "URL logo (https://)", zh: "Logo URL（https://）", ta: "Logo URL (https://)", ar: "رابط الشعار (https://)" },
   "set.lpPrimaryColor": { en: "Accent color", ms: "Warna aksen", zh: "强调色", ta: "முதன்மை வண்ணம்", ar: "اللون المميز" },
   "set.lpBackgroundColor": { en: "Background color", ms: "Warna latar", zh: "背景颜色", ta: "பின்னணி வண்ணம்", ar: "لون الخلفية" },
