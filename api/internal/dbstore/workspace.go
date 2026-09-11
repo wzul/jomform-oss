@@ -92,11 +92,11 @@ func (s *WorkspaceStore) Create(ctx context.Context, ownerUserID, name, slug str
 // user can access (owner or member). Role is one of RoleReadOnly/RoleManage/
 // RoleAdmin (issue #162). Accounts holds every account linked to the workspace.
 type WorkspaceAccess struct {
-	WorkspaceID  string
-	Name     string
-	Slug     string
-	Role     string
-	Accounts []string
+	WorkspaceID string
+	Name        string
+	Slug        string
+	Role        string
+	Accounts    []string
 }
 
 // AccessBySlug resolves the workspace's account ids + the caller's role when the
@@ -245,6 +245,52 @@ type MenuPage struct {
 	Categories []MenuCategory `json:"categories"`
 	// BestSeller is an optional product ID highlighted as the best-seller.
 	BestSeller string `json:"best_seller,omitempty"`
+	// BestSellerIDs is an optional list of product IDs for the "Best Seller"
+	// section (issue #485). When set it wins over the legacy single
+	// BestSeller id. Stored in the landing_page_json blob — no migration.
+	BestSellerIDs []string `json:"best_seller_ids,omitempty"`
+}
+
+// IsBestSeller reports whether a product ID is highlighted as a best-seller:
+// the list (issue #485) when set, otherwise the legacy single id.
+func (m *MenuPage) IsBestSeller(productID string) bool {
+	if m == nil || productID == "" {
+		return false
+	}
+	if len(m.BestSellerIDs) > 0 {
+		for _, id := range m.BestSellerIDs {
+			if id == productID {
+				return true
+			}
+		}
+		return false
+	}
+	return m.BestSeller == productID
+}
+
+// BestSellerProductIDs returns the ordered best-seller product IDs for the
+// menu page (issue #485): the explicit list when set, else the legacy single
+// id as a one-element list. Duplicates are dropped.
+func (m *MenuPage) BestSellerProductIDs() []string {
+	if m == nil {
+		return nil
+	}
+	if len(m.BestSellerIDs) == 0 {
+		if m.BestSeller == "" {
+			return nil
+		}
+		return []string{m.BestSeller}
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, id := range m.BestSellerIDs {
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
 }
 
 // MenuCategory is one named group of products on the menu page.
@@ -274,11 +320,11 @@ type LandingEmbed struct {
 
 // WorkspaceSettings is the storefront configuration for one workspace.
 type WorkspaceSettings struct {
-	WorkspaceID    string `json:"workspace_id"`
-	FooterText string `json:"footer_text"`
-	CompanyReg string `json:"company_reg"`
-	PrivacyURL string `json:"privacy_url"`
-	TermsURL   string `json:"terms_url"`
+	WorkspaceID string `json:"workspace_id"`
+	FooterText  string `json:"footer_text"`
+	CompanyReg  string `json:"company_reg"`
+	PrivacyURL  string `json:"privacy_url"`
+	TermsURL    string `json:"terms_url"`
 	// Issue #183: optional public-form footer fields.
 	RefundURL      string `json:"refund_url"`
 	ContactPhone   string `json:"contact_phone"`

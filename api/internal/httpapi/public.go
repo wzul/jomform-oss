@@ -1687,7 +1687,7 @@ func (h *PublicHandlers) handleWorkspaceRoot(w http.ResponseWriter, r *http.Requ
 				// (categories, images, prices, best-seller) instead of the
 				// generic landing page.
 				if st.LandingPage.Menu != nil && st.LandingPage.Menu.Enabled {
-					h.renderWorkspaceMenu(w, r, slug, workspaceID, st.LandingPage)
+					h.renderWorkspaceMenu(w, r, slug, workspaceID, st)
 					return
 				}
 				h.renderWorkspaceLanding(w, r, slug, forms, st.LandingPage)

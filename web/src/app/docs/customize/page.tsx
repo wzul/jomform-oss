@@ -29,7 +29,11 @@ const STEPS: { title: string; body: string }[] = [
     body: "Use set_form_theme to apply your brand colours (primary, background, text, card_background), font, logo, layout and spacing to a form. Use product_image_size (small|medium|large|hidden) and product_image_layout (thumbnail-left|image-top) to control the product photo on the form — image-top gives a restaurant menu-card look with the photo above the name. Use set_workspace_landing_page to customise your workspace storefront with a hero, subtitle, body, image, theme colours, logo and call-to-action buttons.",
   },
   {
-    title: "5. Customize with CSS and JS",
+    title: "5. Add a restaurant menu (QR ordering)",
+    body: "Use set_menu_page to turn the workspace root into a clean restaurant menu: enabled, categories ([{name, product_ids}]), and best_seller_ids (a list of product IDs shown as the Best Seller section). Pair it with generate_qr to print a per-table QR stand — the ?table=N it encodes is read by the menu page, shown in the header (\"Table 8\") and carried onto the order as the table number. The menu is server-rendered and mobile-first: the header shows the table number, cafe name and location with an info panel; a category filter and search let a diner narrow the menu; best-sellers render as two-column square-image cards, and each category as list rows (text left, thumbnail right) with a separator between rows. Items without a photo render cleanly with no empty image slot. All labels follow the workspace default language (en/ms/zh/ta/ar).",
+  },
+  {
+    title: "6. Customize with CSS and JS",
     body: "For full control, set custom_css (styling/layout) and custom_js (form behaviour) on a form via set_form_theme. Custom JS is owner-gated and scanned for malicious code before it goes live, so it is safe to run on every buyer's page. JomForm keeps authority over prices and payment.",
   },
 ];

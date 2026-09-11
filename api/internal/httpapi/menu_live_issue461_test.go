@@ -29,9 +29,9 @@ func TestIssue461MenuPageRendersLiveProductData(t *testing.T) {
 		Images: []string{"https://cdn.example/nasi-live.jpg"},
 	}
 	data := workspaceMenuData{
-		Slug: "warung", Lp: lp,
+		Slug: "warung", Lp: lp, Ls: formLangs["en"], Table: "8",
 		Categories: []menuCategoryView{{Name: "Makanan", Products: []menuProductView{
-			h.menuProductView(p, true, "order"),
+			h.menuProductView(p, true, "order", "8", formLangs["en"].MenuBestBadge),
 		}}},
 		HasForms: true,
 	}
@@ -44,7 +44,8 @@ func TestIssue461MenuPageRendersLiveProductData(t *testing.T) {
 		"https://cdn.example/nasi-live.jpg", // live image
 		"Nasi Lemak Ayam Basmathi",          // live name
 		"RM 21.00",                          // live price
-		`href="/order"`,                     // order target
+		`href="/order?table=8"`,             // order target keeps the table number (#485)
+		"Table 8",                           // table-number header (#485)
 		"Best-seller",
 	} {
 		if !strings.Contains(body, want) {

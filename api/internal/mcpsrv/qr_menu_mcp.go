@@ -136,6 +136,10 @@ type setMenuPageIn struct {
 	Categories []dbstore.MenuCategory `json:"categories,omitempty" jsonschema:"Kategori menu, cth [{\"name\":\"Makanan\",\"product_ids\":[\"id1\",\"id2\"]}]"`
 	// BestSeller is an optional product ID highlighted as the best-seller.
 	BestSeller string `json:"best_seller,omitempty" jsonschema:"ID produk yang ditonjolkan sebagai best-seller (pilihan)"`
+	// BestSellerIDs is an optional list of product IDs for the "Best Seller"
+	// section (issue #485). When set it wins over the legacy single BestSeller
+	// id. The menu renders these as 2-column square-image cards.
+	BestSellerIDs []string `json:"best_seller_ids,omitempty" jsonschema:"Senarai ID produk untuk seksyen Best Seller (pilihan; mengatasi best_seller)"`
 }
 
 func (s *Server) setMenuPage(
@@ -166,9 +170,10 @@ func (s *Server) setMenuPage(
 		st.LandingPage.Enabled = true
 	}
 	menu := &dbstore.MenuPage{
-		Enabled:     in.Enabled,
-		Categories:  in.Categories,
-		BestSeller:  in.BestSeller,
+		Enabled:       in.Enabled,
+		Categories:    in.Categories,
+		BestSeller:    in.BestSeller,
+		BestSellerIDs: in.BestSellerIDs,
 	}
 	if menu.Categories == nil {
 		menu.Categories = []dbstore.MenuCategory{}
