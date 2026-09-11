@@ -1,41 +1,43 @@
-// Issue #164: post-login space resolution. After a successful login (password,
-// passkey, magic link), decide where to send the user:
-//   - default space set  → sync jf_workspace to that space's slug, go to "/"
-//   - >1 space, no default → go to "/space-picker" (prompt which space to enter)
-//   - single space       → sync jf_workspace to it, go to "/"
+// Issue #164: post-login workspace resolution. After a successful login
+// (password, passkey, magic link), decide where to send the user:
+//   - default workspace set → sync jf_workspace to that workspace's slug, go to "/"
+//   - >1 workspace, no default → go to "/workspace-picker" (prompt which one)
+//   - single workspace      → sync jf_workspace to it, go to "/"
 //
 // `next` is the validated ?next redirect (OAuth authorize) — when present we
-// honour it directly (the OAuth flow already scopes to a space) and skip the
-// picker entirely.
+// honour it directly (the OAuth flow already scopes to a workspace) and skip
+// the picker entirely.
+//
+// Issue #475: renamed from /space-picker; the old route now redirects here.
 export async function resolvePostLogin(next: string): Promise<string> {
   if (next) return next;
 
-  let spaces: { id: string; slug: string }[] = [];
-  let defaultSpaceId = "";
+  let workspaces: { id: string; slug: string }[] = [];
+  let defaultWorkspaceId = "";
   try {
-    const [spRes, meRes] = await Promise.all([
+    const [wsRes, meRes] = await Promise.all([
       fetch("/api/workspaces"),
       fetch("/api/auth/me"),
     ]);
-    if (spRes.ok) {
-      const d = await spRes.json();
-      if (Array.isArray(d)) spaces = d;
+    if (wsRes.ok) {
+      const d = await wsRes.json();
+      if (Array.isArray(d)) workspaces = d;
     }
     if (meRes.ok) {
       const me = await meRes.json();
-      defaultSpaceId = me.default_workspace_id || "";
+      defaultWorkspaceId = me.default_workspace_id || "";
     }
   } catch {
     // Network hiccup — fall through to the dashboard; the Shell will pick a
-    // space from localStorage as before.
+    // workspace from localStorage as before.
     return "/";
   }
 
-  if (spaces.length === 0) return "/";
+  if (workspaces.length === 0) return "/";
 
-  // Default set → go straight to that space.
-  if (defaultSpaceId) {
-    const def = spaces.find((s) => s.id === defaultSpaceId);
+  // Default set → go straight to that workspace.
+  if (defaultWorkspaceId) {
+    const def = workspaces.find((s) => s.id === defaultWorkspaceId);
     if (def) {
       try {
         localStorage.setItem("jf_workspace", def.slug);
@@ -44,14 +46,14 @@ export async function resolvePostLogin(next: string): Promise<string> {
     }
   }
 
-  // Single space → sync and go straight in (no prompt).
-  if (spaces.length === 1) {
+  // Single workspace → sync and go straight in (no prompt).
+  if (workspaces.length === 1) {
     try {
-      localStorage.setItem("jf_workspace", spaces[0].slug);
+      localStorage.setItem("jf_workspace", workspaces[0].slug);
     } catch {}
     return "/";
   }
 
-  // Multi-space, no default → prompt.
-  return "/space-picker";
+  // Multi-workspace, no default → prompt.
+  return "/workspace-picker";
 }

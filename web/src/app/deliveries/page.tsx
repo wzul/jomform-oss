@@ -56,7 +56,7 @@ function fmtDateTime(iso: string): string {
 
 export default function DeliveriesPage() {
   const { t } = useI18n();
-  const { anon, space } = useSession();
+  const { anon, workspace } = useSession();
   const router = useRouter();
 
   const [rows, setRows] = useState<Delivery[]>([]);
@@ -120,13 +120,13 @@ export default function DeliveriesPage() {
       .then((f) => setForms(Array.isArray(f) ? f : []))
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [space]);
+  }, [workspace]);
 
-  // Issue #170: re-fetch when the active space changes.
+  // Issue #170: re-fetch when the active workspace changes.
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [load, space]);
+  }, [load, workspace]);
 
   // Reset to page 1 when filters change.
   useEffect(() => {

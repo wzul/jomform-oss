@@ -40,7 +40,7 @@ const money = (sen: number) =>
 
 function SpamPageInner() {
   const { t } = useI18n();
-  const { anon, role, user, space } = useSession();
+  const { anon, role, user, workspace } = useSession();
   const router = useRouter();
   const canWrite = role !== "read_only";
 
@@ -80,7 +80,7 @@ function SpamPageInner() {
   useEffect(() => {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [load, space]);
+  }, [load, workspace]);
 
   useEffect(() => {
     if (anon) router.replace("/landing");

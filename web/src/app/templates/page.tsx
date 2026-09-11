@@ -28,7 +28,7 @@ type FormRow = { id: string; title: string; status: string };
 
 export default function TemplatesPage() {
   const { t } = useI18n();
-  const { anon, role, space } = useSession();
+  const { anon, role, workspace } = useSession();
   const router = useRouter();
   const [templates, setTemplates] = useState<Template[]>([]);
   const [forms, setForms] = useState<FormRow[]>([]);
@@ -58,7 +58,7 @@ export default function TemplatesPage() {
   // Re-fetch when the active workspace changes (issue #170).
   useEffect(() => {
     load();
-  }, [load, space]);
+  }, [load, workspace]);
 
   useEffect(() => {
     if (anon) router.replace("/landing");

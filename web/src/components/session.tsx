@@ -1,20 +1,23 @@
 "use client";
 
-// Issue #29: session context — `me` + `spaces` fetched ONCE per browser
+// Issue #29: session context — `me` + `workspaces` fetched ONCE per browser
 // session (dashboard-bundle) and shared across the Shell and every page via
 // React context. Kills the per-mount /api/auth/me round-trip that each page
 // previously paid serially before fetching its own data.
 //
-// Issue #158: the bundle is now SPACE-KEYED. The dashboard-bundle carries
-// space-scoped data (chip_status, keys, domains, webhooks, einvoice,
+// Issue #158: the bundle is WORKSPACE-KEYED. The dashboard-bundle carries
+// workspace-scoped data (chip_status, keys, domains, webhooks, einvoice,
 // products, summary, sales, analytics) alongside user-level data (me,
-// spaces). Because each space owns its own account, the bundle must be
-// fetched with ?workspace=<slug> and cached per space — switching spaces must
-// re-fetch the bundle for the newly selected space, never serve the previous
-// space's cached data (cross-space leakage).
+// workspaces). Because each workspace owns its own account, the bundle must be
+// fetched with ?workspace=<slug> and cached per workspace — switching
+// workspaces must re-fetch the bundle for the newly selected workspace, never
+// serve the previous workspace's cached data (cross-workspace leakage).
+//
+// Issue #475: identifiers renamed Space→Workspace to finish the #431 rename
+// (the JSON payload keys already changed; the frontend names lagged).
 //
 // Bundle shape (api/internal/httpapi/rest_dashboard.go): one authed request
-// carrying me (id/email/name/totp_enabled), spaces, chip_status, keys,
+// carrying me (id/email/name/totp_enabled), workspaces, chip_status, keys,
 // domains, webhooks, social, einvoice + the dashboard landing data
 // (products, summary, sales, form_analytics, product_analytics).
 
@@ -42,12 +45,12 @@ export type SessionUser = {
   magic_session?: boolean;
   // Issue #164 / #472: the backend field is default_workspace_id (the
   // Space→Workspace rename in #431 renamed the key too). Empty = no default
-  // → space-picker on login.
+  // → workspace-picker on login.
   default_workspace_id?: string;
   is_super_admin?: boolean; // issue #387 (site super-admin, #385)
 };
 
-export type SpaceRow = { id: string; name: string; slug: string; role?: string };
+export type WorkspaceRow = { id: string; name: string; slug: string; role?: string };
 
 // Landing-data sections of the bundle, consumed by the dashboard page.
 export type BundleLanding = {
@@ -75,8 +78,8 @@ export type BundleData = {
   // the #431 Space→Workspace refactor; the frontend was still reading `spaces`,
   // so the workspace list came back empty and the switcher showed only one
   // workspace. Read `workspaces` (current) with `spaces` as a legacy fallback.
-  workspaces?: SpaceRow[];
-  spaces?: SpaceRow[];
+  workspaces?: WorkspaceRow[];
+  spaces?: WorkspaceRow[];
   chip_status?: ChipStatusShape | null;
   keys?: { id: string; name: string; scopes: string[] }[];
   domains?: { id: string; domain: string; provider?: string; verified: boolean }[];
@@ -87,12 +90,12 @@ export type BundleData = {
 
 type SessionCtx = {
   user: SessionUser | null;
-  spaces: SpaceRow[];
-  // The active space slug (from localStorage "jf_workspace"), used to scope
+  workspaces: WorkspaceRow[];
+  // The active workspace slug (from localStorage "jf_workspace"), used to scope
   // every dashboard fetch (issue #158).
-  space: string;
-  // The caller's role in the active space (issue #163): "admin" | "manage" |
-  // "read_only" | "" (unknown / not a member). Carried per-space in the
+  workspace: string;
+  // The caller's role in the active workspace (issue #163): "admin" | "manage" |
+  // "read_only" | "" (unknown / not a member). Carried per-workspace in the
   // bundle so the UI can gate actions by role.
   role: string;
   // undefined = fetch still in flight (callers may show their own shell);
@@ -100,31 +103,32 @@ type SessionCtx = {
   bundle: BundleData | null | undefined;
   // true once the fetch settled with no session (401) — auth gate.
   anon: boolean;
-  // reload() re-fetches the bundle for the current space (e.g. after a
-  // profile update or a space switch).
+  // reload() re-fetches the bundle for the current workspace (e.g. after a
+  // profile update or a workspace switch).
   reload: () => void;
 };
 
 const SessionContext = createContext<SessionCtx>({
   user: null,
-  spaces: [],
-  space: "",
+  workspaces: [],
+  workspace: "",
   role: "",
   bundle: undefined,
   anon: false,
   reload: () => {},
 });
 
-// Space-keyed bundle cache (issue #158): the cache key is the active space
-// slug, so switching spaces never serves another space's cached data.
+// Workspace-keyed bundle cache (issue #158): the cache key is the active
+// workspace slug, so switching workspaces never serves another workspace's
+// cached data.
 const bundleCache = new Map<string, BundleData | null>();
-const inflightBySpace = new Map<string, Promise<BundleData | null>>();
+const inflightByWorkspace = new Map<string, Promise<BundleData | null>>();
 
-async function fetchBundle(space: string): Promise<BundleData | null> {
-  const key = space || "__default__";
+async function fetchBundle(workspace: string): Promise<BundleData | null> {
+  const key = workspace || "__default__";
   if (bundleCache.has(key)) return bundleCache.get(key) ?? null;
-  if (!inflightBySpace.has(key)) {
-    const q = space ? `?workspace=${encodeURIComponent(space)}` : "";
+  if (!inflightByWorkspace.has(key)) {
+    const q = workspace ? `?workspace=${encodeURIComponent(workspace)}` : "";
     const p = fetch(`/api/rest/dashboard-bundle${q}`)
       .then((r) => {
         if (!r.ok) return null;
@@ -132,52 +136,53 @@ async function fetchBundle(space: string): Promise<BundleData | null> {
       })
       .then((d) => {
         bundleCache.set(key, d);
-        inflightBySpace.delete(key);
+        inflightByWorkspace.delete(key);
         return d;
       })
       .catch(() => {
-        inflightBySpace.delete(key);
+        inflightByWorkspace.delete(key);
         return null;
       });
-    inflightBySpace.set(key, p);
+    inflightByWorkspace.set(key, p);
   }
-  return inflightBySpace.get(key)!;
+  return inflightByWorkspace.get(key)!;
 }
 
 export function SessionProvider({ children }: { children: React.ReactNode }) {
-  const [space, setSpace] = useState<string>("");
+  const [workspace, setWorkspace] = useState<string>("");
   const [bundle, setBundle] = useState<BundleData | null | undefined>(undefined);
   const [mounted, setMounted] = useState(false);
   const reloadNonce = useRef(0);
 
-  // Resolve the active space from localStorage (same key the Shell uses).
+  // Resolve the active workspace from localStorage (same key the Shell uses).
   useEffect(() => {
-    setSpace(workspaceScope());
+    setWorkspace(workspaceScope());
   }, []);
 
-  // Issue #170: keep the active space REACTIVE to switches. Shell.switchSpace
-  // persists `jf_workspace` and dispatches a "jf:space-changed" event; the
-  // `storage` event covers cross-tab changes. Updating `space` here re-runs
-  // the space-keyed bundle fetch and lets data pages key their load() on it,
-  // so switching spaces re-fetches each page's list for the new space.
+  // Issue #170: keep the active workspace REACTIVE to switches.
+  // Shell.switchWorkspace persists `jf_workspace` and dispatches a
+  // "jf:workspace-changed" event; the `storage` event covers cross-tab changes.
+  // Updating `workspace` here re-runs the workspace-keyed bundle fetch and lets
+  // data pages key their load() on it, so switching workspaces re-fetches each
+  // page's list for the new workspace.
   useEffect(() => {
-    const sync = () => setSpace(workspaceScope());
-    window.addEventListener("jf:space-changed", sync);
+    const sync = () => setWorkspace(workspaceScope());
+    window.addEventListener("jf:workspace-changed", sync);
     window.addEventListener("storage", sync);
     return () => {
-      window.removeEventListener("jf:space-changed", sync);
+      window.removeEventListener("jf:workspace-changed", sync);
       window.removeEventListener("storage", sync);
     };
   }, []);
 
   useEffect(() => {
     setMounted(true);
-    // Issue #226: fetch the bundle even when `space` is empty (anonymous /
+    // Issue #226: fetch the bundle even when `workspace` is empty (anonymous /
     // incognito visitor with no jf_workspace in localStorage) so `anon` can flip
     // and the dashboard falls through to the Landing page instead of hanging
-    // on the loading shell. fetchBundle already handles an empty space (no
+    // on the loading shell. fetchBundle already handles an empty workspace (no
     // ?workspace= query) and keys the cache under "__default__".
-    const key = space || "__default__";
+    const key = workspace || "__default__";
     if (bundleCache.has(key)) {
       setBundle(bundleCache.get(key) ?? null);
       return;
@@ -188,12 +193,12 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     const timer = window.setTimeout(() => {
       setBundle((prev) => (prev === undefined ? null : prev));
     }, 5000);
-    fetchBundle(space).then((d) => {
+    fetchBundle(workspace).then((d) => {
       window.clearTimeout(timer);
       setBundle(d ?? null);
     });
     return () => window.clearTimeout(timer);
-  }, [space]);
+  }, [workspace]);
 
   // Issue #69: reload() (used after session-rotating actions like 2FA enable /
   // disable / password change) must keep showing the PREVIOUS bundle until the
@@ -202,40 +207,40 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   // bundle instead of nulling the UI. A nonce guards against a slow, stale
   // reload clobbering a newer one.
   const reload = useCallback(() => {
-    const key = space || "__default__";
+    const key = workspace || "__default__";
     bundleCache.delete(key);
-    inflightBySpace.delete(key);
+    inflightByWorkspace.delete(key);
     reloadNonce.current += 1;
     const nonce = reloadNonce.current;
-    fetchBundle(space).then((d) => {
+    fetchBundle(workspace).then((d) => {
       if (nonce !== reloadNonce.current) return; // superseded by a newer reload
       if (d) setBundle(d);
       // d == null (401 / wedge / failure) → keep the previous bundle rather
       // than blanking the app shell during a session rotation.
     });
-  }, [space]);
+  }, [workspace]);
 
   const user = bundle?.me ?? null;
   // Issue #452: prefer the renamed `workspaces` field; fall back to the legacy
   // `spaces` field for an older payload.
-  const spaces = Array.isArray(bundle?.workspaces)
+  const workspaces = Array.isArray(bundle?.workspaces)
     ? bundle!.workspaces
     : Array.isArray(bundle?.spaces)
       ? bundle!.spaces
       : [];
-  // Issue #163: the caller's role in the active space, carried per-space in
-  // the bundle. Used to gate write/member/CHIP actions in the UI.
-  const activeSpace = spaces.find((s) => s.slug === space);
-  const role = activeSpace?.role || "";
+  // Issue #163: the caller's role in the active workspace, carried
+  // per-workspace in the bundle. Used to gate write/member/CHIP actions in the UI.
+  const activeWorkspace = workspaces.find((s) => s.slug === workspace);
+  const role = activeWorkspace?.role || "";
 
   return (
-    <SessionContext.Provider value={{ user, spaces, space, role, bundle, anon: mounted && bundle === null, reload }}>
+    <SessionContext.Provider value={{ user, workspaces, workspace, role, bundle, anon: mounted && bundle === null, reload }}>
       {children}
     </SessionContext.Provider>
   );
 }
 
-// useSession(): me + spaces, cached at module level per space so every page
+// useSession(): me + workspaces, cached at module level per workspace so every page
 // shares the single dashboard-bundle round-trip. Callers that need the raw
 // landing sections (dashboard) read `bundle`.
 export function useSession() {

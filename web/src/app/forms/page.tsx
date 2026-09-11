@@ -27,7 +27,7 @@ const subdomainBase = () => {
 // a client-side localStorage fallback. A hardcoded "app" fallback produced
 // https://app.jomform.com/{slug}, which 404s. The fallback here is only used
 // when the API did not return a url (older payload).
-const spaceHost = (() => {
+const workspaceHost = (() => {
   if (typeof window === "undefined") return "";
   try {
     const slug = localStorage.getItem("jf_workspace") || "";
@@ -41,12 +41,12 @@ const spaceHost = (() => {
 // workspace-subdomain host only when the payload has none.
 function formPublicURL(f: { url?: string; slug: string }): string {
   if (f.url) return f.url;
-  return spaceHost ? `${spaceHost}/${f.slug}` : "";
+  return workspaceHost ? `${workspaceHost}/${f.slug}` : "";
 }
 
 export default function FormsPage() {
   const { t } = useI18n();
-  const { anon, role, space } = useSession();
+  const { anon, role, workspace } = useSession();
   const [forms, setForms] = useState<FormRow[]>([]);
   const [checking, setChecking] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -67,11 +67,11 @@ export default function FormsPage() {
   }, []);
 
   // Issue #170: re-fetch the list whenever the active space changes (keyed on
-  // useSession().space), so switching spaces shows the new space's forms
+  // useSession().workspace), so switching workspaces shows the new forms
   // without a manual refresh.
   useEffect(() => {
     load();
-  }, [load, space]);
+  }, [load, workspace]);
 
   // Auth bounce via router (client transition), not a full document reload.
   const router = useRouter();

@@ -59,7 +59,7 @@ export default function Dashboard() {
   // Issue #29: me + landing data (products, summary, sales, analytics) all
   // come from the single dashboard-bundle round-trip fetched once per
   // session — the 914ms me→5-fetch waterfall is gone.
-  const { bundle, anon, role, space } = useSession();
+  const { bundle, anon, role, workspace } = useSession();
   // Issue #163: read_only members see no write actions (confirm sale).
   const canWrite = role !== "read_only";
   const [products, setProducts] = useState<Product[]>([]);
@@ -75,7 +75,7 @@ export default function Dashboard() {
     async (p: number) => {
       const sp = workspaceScope();
       const q = new URLSearchParams({ page: String(p), limit: String(PAGE_SIZE) });
-      if (sp) q.set("space", sp);
+      if (sp) q.set("workspace", sp);
       const r = await fetch(`/api/rest/sales?${q.toString()}`);
       if (!r.ok) {
         setSales([]);
@@ -92,9 +92,9 @@ export default function Dashboard() {
 
   // Adopt the bundle landing sections as soon as the session context has
   // them (immediately on later navigations — cached).
-  // Issue #170: `space` re-runs this when the active space changes so the
-  // landing sections (products, summary, sales, analytics) re-fetch for the
-  // new space without a manual refresh.
+  // Issue #170: `workspace` re-runs this when the active workspace changes so
+  // the landing sections (products, summary, sales, analytics) re-fetch for the
+  // new workspace without a manual refresh.
   useEffect(() => {
     if (!bundle) return;
     setProducts(Array.isArray(bundle.products) ? (bundle.products as Product[]) : []);
@@ -111,7 +111,7 @@ export default function Dashboard() {
       loadSales(1);
     }
     setReady(true);
-  }, [bundle, loadSales, space]);
+  }, [bundle, loadSales, workspace]);
 
   const salesTotalPages = Math.max(1, Math.ceil(salesTotal / PAGE_SIZE));
 

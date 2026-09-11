@@ -115,8 +115,8 @@ const TOOL_GROUPS: { group: string; tools: { name: string; desc: string }[] }[] 
   {
     group: "Webhooks",
     tools: [
-      { name: "create_webhook", desc: "Daftar endpoint webhook (events: sale.paid|sale.failed|subscription.charged|*). HMAC-signed. form_id pilihan: set = webhook hanya untuk borang itu; kosong = seluruh workworkspace/akaun." },
-      { name: "list_webhooks", desc: "Senarai outbound webhooks akaun. form_id pilihan: set = webhook borang itu sahaja; kosong = webhook seluruh workworkspace/akaun." },
+      { name: "create_webhook", desc: "Daftar endpoint webhook (events: sale.paid|sale.failed|subscription.charged|*). HMAC-signed. form_id pilihan: set = webhook hanya untuk borang itu; kosong = seluruh workspace/akaun." },
+      { name: "list_webhooks", desc: "Senarai outbound webhooks akaun. form_id pilihan: set = webhook borang itu sahaja; kosong = webhook seluruh workspace/akaun." },
       { name: "delete_webhook", desc: "Padam satu webhook (id dari list_webhooks)." },
       { name: "update_webhook", desc: "Kemas kini webhook (url, events, secret pilihan \u2014 kosong = kekal sedia ada). events: sale.paid|sale.failed|subscription.charged|*." },
       { name: "webhook_deliveries", desc: "Log penghantaran terkini webhook (status_code, attempt, error)." },
@@ -133,11 +133,11 @@ const TOOL_GROUPS: { group: string; tools: { name: string; desc: string }[] }[] 
     ],
   },
   {
-    group: "Spaces & storefronts",
+    group: "Workspaces & storefronts",
     tools: [
       { name: "list_workspaces", desc: "Senarai semua workspace (storefront) anda \u2014 id, nama, slug dan URL." },
       { name: "create_workspace", desc: "Cipta workspace baharu. Slug 3-40 aksara (a-z, 0-9, dash); URL jadi https://<slug>.jomform.com." },
-      { name: "get_space_settings", desc: "Baca tetapan storefront satu workspace: footer, company_reg, privacy/terms/refund URL, contact, menu." },
+      { name: "get_workspace_settings", desc: "Baca tetapan storefront satu workspace: footer, company_reg, privacy/terms/refund URL, contact, menu." },
       { name: "set_workspace_settings", desc: "Set tetapan storefront workspace: footer_text, company_reg, privacy_url/terms_url/refund_url (mesti https://), contact_phone, contact_address, business_name, menu_json. Omit medan = kekal." },
       { name: "get_workspace_landing_page", desc: "Baca konfigurasi 'landing page' workspace (issue #360): hero, subtitle, body, image_url, theme colors, logo, CTA (label + form_slug). Kosong jika tiada landing page ditetapkan." },
       { name: "set_workspace_landing_page", desc: "Set 'landing page' storefront workspace (issue #360): enabled (true = tunjuk, false/kosong = jatuh ke senarai borang), hero, subtitle, body, image_url, primary_color, background_color, logo_url, ctas ([{label, form_slug}]). Hantar enabled:false untuk pulang ke senarai borang." },
@@ -149,15 +149,15 @@ const TOOL_GROUPS: { group: string; tools: { name: string; desc: string }[] }[] 
     ],
   },
   {
-    group: "Space members",
+    group: "Workspace members",
     tools: [
       { name: "invite_workspace_member", desc: "Jemput ahli ke workspace (admin sahaja). Jika emel sudah berdaftar, tambah terus sebagai ahli; jika tidak, cipta jemputan menunggu. Role: read_only|manage|admin." },
       { name: "list_workspace_members", desc: "Senarai ahli workspace + peranan (admin sahaja)." },
-      { name: "update_space_member_role", desc: "Tukar peranan ahli workspace (admin sahaja). Role: read_only|manage|admin." },
-      { name: "remove_workspace_member", desc: "Buang ahli dari space (admin sahaja). Pemilik tidak boleh dibuang." },
+      { name: "update_workspace_member_role", desc: "Tukar peranan ahli workspace (admin sahaja). Role: read_only|manage|admin." },
+      { name: "remove_workspace_member", desc: "Buang ahli dari workspace (admin sahaja). Pemilik tidak boleh dibuang." },
       { name: "list_workspace_invites", desc: "Senarai jemputan menunggu untuk workspace (admin sahaja)." },
       { name: "cancel_workspace_invite", desc: "Batal jemputan menunggu untuk workspace (admin sahaja)." },
-      { name: "set_default_workspace", desc: "Set workspace lalai anda (space yang anda masuk terus selepas log masuk, tanpa prompt). workworkspace_id kosong = buang default. Space mesti milik anda." },
+      { name: "set_default_workspace", desc: "Set workspace lalai anda (workspace yang anda masuk terus selepas log masuk, tanpa prompt). workspace_id kosong = buang default. Workspace mesti milik anda." },
     ],
   },
   {
@@ -188,7 +188,7 @@ const TOOL_GROUPS: { group: string; tools: { name: string; desc: string }[] }[] 
   {
     group: "Legal pages",
     tools: [
-      { name: "generate_legal_page", desc: "Jana draf halaman undang-undang (privacy|terms|refund) untuk workworkspace melalui LLM (deepseek-v4-flash) dengan template yang diisi butiran perniagaan. Pulangkan draf untuk semakan \u2014 belum disimpan sehingga set_legal_page dipanggil." },
+      { name: "generate_legal_page", desc: "Jana draf halaman undang-undang (privacy|terms|refund) untuk workspace melalui LLM (deepseek-v4-flash) dengan template yang diisi butiran perniagaan. Pulangkan draf untuk semakan \u2014 belum disimpan sehingga set_legal_page dipanggil." },
       { name: "get_legal_page", desc: "Baca satu halaman undang-undang workspace (privacy|terms|refund): mode (auto/manual) + kandungan." },
       { name: "set_legal_page", desc: "Simpan kandungan halaman undang-undang workspace (privacy|terms|refund) dengan mode auto|manual. Kandungan dipaparkan di {workspace}.jomform.com/privacy|terms|refund." },
     ],

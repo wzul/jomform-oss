@@ -225,11 +225,11 @@ export default function Login() {
       }
       // #70 login: navigate immediately, no "Berjaya log masuk" flash. The
       // dashboard-bundle (#29) already returns spaces, so no extra /
-      // api/spaces round-trip is needed before redirecting.
+      // api/workspaces round-trip is needed before redirecting.
       // Issue #140: honour the validated ?next (OAuth authorize) or fall back
       // to the dashboard root.
-      // Issue #164: multi-space users without a default are routed to the
-      // space-picker instead of the dashboard.
+      // Issue #164: multi-workspace users without a default are routed to the
+      // workspace-picker instead of the dashboard.
       window.location.href = await resolvePostLogin(next);
       return;
     }
@@ -266,8 +266,8 @@ export default function Login() {
       // #70 login: navigate immediately (no success banner flash).
       // Issue #140: honour the validated ?next (OAuth authorize) or fall back
       // to the dashboard root.
-      // Issue #164: multi-space users without a default are routed to the
-      // space-picker instead of the dashboard.
+      // Issue #164: multi-workspace users without a default are routed to the
+      // workspace-picker instead of the dashboard.
       window.location.href = await resolvePostLogin(next);
       return;
     }

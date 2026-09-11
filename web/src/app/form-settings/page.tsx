@@ -355,41 +355,41 @@ function fromLocalInput(v: string): string | null {
 }
 
 // Issue #351: the form-settings page must not depend on the active jf_workspace.
-// If the form isn't found in the active space, probe the user's other spaces
-// (from /api/workspaces) and, when found, auto-switch jf_workspace to the owning
-// space so the form loads regardless of the current space selection. Returns
-// the resolved form (or null) plus the HTTP status so the caller can tell a
-// 401 (unauthenticated → redirect to login) from a 404 (form not found /
-// wrong space → clear message).
-async function resolveFormAcrossSpaces(
+// If the form isn't found in the active workspace, probe the user's other
+// workspaces (from /api/workspaces) and, when found, auto-switch jf_workspace to
+// the owning workspace so the form loads regardless of the current workspace
+// selection. Returns the resolved form (or null) plus the HTTP status so the
+// caller can tell a 401 (unauthenticated → redirect to login) from a 404 (form
+// not found / wrong workspace → clear message).
+async function resolveFormAcrossWorkspaces(
   formId: string,
 ): Promise<{ form: FormDetail | null; status: number }> {
-  const probe = async (space: string) => {
-    const q = space ? `?workspace=${encodeURIComponent(space)}` : "";
+  const probe = async (workspace: string) => {
+    const q = workspace ? `?workspace=${encodeURIComponent(workspace)}` : "";
     const r = await fetch(`/api/rest/forms/${formId}${q}`);
     if (r.ok) return { form: (await r.json()) as FormDetail, status: r.status };
     return { form: null, status: r.status };
   };
 
-  // Fast path: the active space.
+  // Fast path: the active workspace.
   const active = workspaceScope();
   const first = await probe(active);
   if (first.form || first.status === 401) return first;
 
-  // Not found in the active space: probe the user's other spaces.
+  // Not found in the active workspace: probe the user's other workspaces.
   try {
     const spRes = await fetch("/api/workspaces");
     if (spRes.ok) {
-      const spaces = (await spRes.json()) as { id: string; slug: string }[];
-      for (const s of spaces) {
+      const workspaces = (await spRes.json()) as { id: string; slug: string }[];
+      for (const s of workspaces) {
         if (s.slug === active) continue;
         const r = await probe(s.slug);
         if (r.form) {
-          // Found in another space — auto-switch jf_workspace to the owning space.
+          // Found in another workspace — auto-switch jf_workspace to the owner.
           try {
             localStorage.setItem("jf_workspace", s.slug);
           } catch {}
-          window.dispatchEvent(new Event("jf:space-changed"));
+          window.dispatchEvent(new Event("jf:workspace-changed"));
           return r;
         }
         if (r.status === 401) return r;
@@ -516,7 +516,7 @@ function FormSettingsInner() {
       // Issue #351: resolve the form across the user's spaces (not just the
       // active jf_workspace). 401 → redirect to login; 404 → clear "not found /
       // wrong space" message instead of a generic load error.
-      const { form: d, status } = await resolveFormAcrossSpaces(formId);
+      const { form: d, status } = await resolveFormAcrossWorkspaces(formId);
       if (!d) {
         if (status === 401) {
           router.replace("/login");

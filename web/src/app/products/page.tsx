@@ -33,7 +33,7 @@ const PER_PAGE = 10;
 
 export default function Products() {
   const { t } = useI18n();
-  const { anon, bundle, role, space, user } = useSession();
+  const { anon, bundle, role, workspace, user } = useSession();
   const router = useRouter();
 
   // Issue #163: read_only members see no write actions (add/edit/archive).
@@ -86,10 +86,10 @@ export default function Products() {
       setProducts(bundle.products as Product[]);
     }
     load();
-    // Issue #170: `space` re-runs load() when the active space changes so the
-    // list re-fetches for the new space without a manual refresh.
+    // Issue #170: `workspace` re-runs load() when the active workspace changes
+    // so the list re-fetches for the new workspace without a manual refresh.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bundle, space]);
+  }, [bundle, workspace]);
 
   // Auth bounce via router (client transition), not a full document reload.
   useEffect(() => {

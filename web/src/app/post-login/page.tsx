@@ -6,8 +6,9 @@
 // redirect flow (browser → provider → /api/auth/callback/:provider → "/"), so
 // the frontend never runs resolvePostLogin during the flow. This page is the
 // landing target the backend redirects to after starting the social session:
-// it runs the SAME post-login resolution (syncs jf_workspace, routes multi-space
-// users to /space-picker, otherwise the dashboard) and drops the user where
+// it runs the SAME post-login resolution (syncs jf_workspace, routes
+// multi-workspace users to /workspace-picker, otherwise the dashboard) and
+// drops the user where
 // every other auth method drops them.
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";

@@ -37,14 +37,14 @@ type DomainStatus = { domain: string; verified: boolean } | null;
 //   einvoice  -> e-Invoice TIN/MSIC
 //   webhooks  -> Outbound webhooks
 //   emel      -> Per-space receipt/notification email templates (issue #107)
-//   members   -> Space members management (issue #163)
-//   storefront-> Per-space public-form footer (issue #183)
-//   legal     -> Per-space hosted legal pages (issue #184)
-//   currency  -> Per-space currency + BNM rates (issue #185)
+//   members   -> Workspace members management (issue #163)
+//   storefront-> Per-workspace public-form footer (issue #183)
+//   legal     -> Per-workspace hosted legal pages (issue #184)
+//   currency  -> Per-workspace currency + BNM rates (issue #185)
 // (Connected accounts — social login connectors — live on the Profile page,
-//  issue #301: they are user-level, not per-space. The MCP / connected-agents
+//  issue #301: they are user-level, not per-workspace. The MCP / connected-agents
 //  tab moved to Profile too, issue #307: an OAuth agent is a user-level
-//  credential bound to the user, not to a single space.)
+//  credential bound to the user, not to a single workspace.)
 type SettingsTab = "chip" | "domains" | "tracking" | "einvoice" | "webhooks" | "emel" | "members" | "storefront" | "legal" | "currency" | "affiliates";
 
 const TAB_IDS: SettingsTab[] = ["chip", "domains", "tracking", "einvoice", "webhooks", "emel", "members", "storefront", "legal", "currency", "affiliates"];
@@ -187,22 +187,22 @@ export default function Settings() {
   // Issue #68: transient banner shown after the Cloudflare OAuth callback
   // redirects back to /settings?cloudflare=linked|error.
   const [cfNotice, setCfNotice] = useState("");
-  // Issue #107: per-space email template + behaviour settings.
+  // Issue #107: per-workspace email template + behaviour settings.
   const [emelSubject, setEmelSubject] = useState("");
   const [emelBody, setEmelBody] = useState("");
   const [emelReceiptEnabled, setEmelReceiptEnabled] = useState(true);
   const [emelNotifyMerchant, setEmelNotifyMerchant] = useState(false);
   const [emelMerchantEmail, setEmelMerchantEmail] = useState("");
   const [emelHtml, setEmelHtml] = useState(false);
-  const [emelSpaceId, setEmelSpaceId] = useState("");
-  // Issue #163: the active space's id, resolved from the session spaces list
+  const [emelWorkspaceId, setEmelWorkspaceId] = useState("");
+  // Issue #163: the active workspace's id, resolved from the session list
   // + localStorage (same key the Shell uses). Used to scope the Members tab.
-  const [activeSpaceId, setActiveSpaceId] = useState("");
-  // Issue #184: the active space's slug, used to build the public legal-page
-  // URLs ({space}.jomform.com/privacy, /terms, /refund).
-  const [activeSpaceSlug, setActiveSpaceSlug] = useState("");
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState("");
+  // Issue #184: the active workspace's slug, used to build the public
+  // legal-page URLs ({workspace}.jomform.com/privacy, /terms, /refund).
+  const [activeWorkspaceSlug, setActiveWorkspaceSlug] = useState("");
   const [emelPreview, setEmelPreview] = useState(false);
-  // Issue #183: per-space public-form footer (Storefront tab).
+  // Issue #183: per-workspace public-form footer (Storefront tab).
   const [sfBusinessName, setSfBusinessName] = useState("");
   const [sfCompanyReg, setSfCompanyReg] = useState("");
   const [sfContactPhone, setSfContactPhone] = useState("");
@@ -211,12 +211,12 @@ export default function Settings() {
   const [sfTermsUrl, setSfTermsUrl] = useState("");
   const [sfRefundUrl, setSfRefundUrl] = useState("");
   const [sfFooterText, setSfFooterText] = useState("");
-  const [sfSpaceId, setSfSpaceId] = useState("");
-  // Issue #276: per-space SEO indexing toggle (Storefront tab).
+  const [sfWorkspaceId, setSfWorkspaceId] = useState("");
+  // Issue #276: per-workspace SEO indexing toggle (Storefront tab).
   const [sfIndexing, setSfIndexing] = useState(true);
-  // Issue #447: per-space realtime notification sound toggle (Storefront tab).
+  // Issue #447: per-workspace realtime notification sound toggle (Storefront tab).
   const [sfSoundEnabled, setSfSoundEnabled] = useState(false);
-  // Issue #360: per-space customizable landing page (Storefront tab).
+  // Issue #360: per-workspace customizable landing page (Storefront tab).
   const [lpEnabled, setLpEnabled] = useState(false);
   const [lpHero, setLpHero] = useState("");
   const [lpSubtitle, setLpSubtitle] = useState("");
@@ -228,14 +228,14 @@ export default function Settings() {
   const [lpCtas, setLpCtas] = useState<{ label: string; form_slug: string }[]>([]);
   // Issue #362: published forms embedded inline on the landing page.
   const [lpForms, setLpForms] = useState<{ label: string; form_slug: string }[]>([]);
-  const [lpSpaceId, setLpSpaceId] = useState("");
+  const [lpWorkspaceId, setLpWorkspaceId] = useState("");
   // Issue #438: QR ordering flow — restaurant-menu landing template.
   const [menuEnabled, setMenuEnabled] = useState(false);
   const [menuCategories, setMenuCategories] = useState<{ name: string; product_ids: string[] }[]>([]);
   const [menuBestSeller, setMenuBestSeller] = useState("");
-  // Issue #185: per-space currency + BNM rates.
+  // Issue #185: per-workspace currency + BNM rates.
   const [currency, setCurrency] = useState("MYR");
-  const [currencySpaceId, setCurrencySpaceId] = useState("");
+  const [currencyWorkspaceId, setCurrencyWorkspaceId] = useState("");
   const [rates, setRates] = useState<{ currency_code: string; unit: number; rate: number }[]>([]);
   const [ratesCached, setRatesCached] = useState(false);
 
@@ -387,19 +387,19 @@ export default function Settings() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [webhooks]);
 
-  // Issue #107: load the per-space email settings for the active space.
-  const { spaces } = useSession();
+  // Issue #107: load the per-workspace email settings for the active workspace.
+  const { workspaces } = useSession();
   const loadEmailSettings = useCallback(() => {
-    const sp = Array.isArray(spaces) ? spaces : [];
-    if (!sp.length) return;
-    // Resolve the active space (same key the Shell uses).
+    const ws = Array.isArray(workspaces) ? workspaces : [];
+    if (!ws.length) return;
+    // Resolve the active workspace (same key the Shell uses).
     let slug = "";
     try { slug = window.localStorage.getItem("jf_workspace") || ""; } catch { /* ignore */ }
-    const active = sp.find((x) => x.slug === slug) || sp[0];
+    const active = ws.find((x) => x.slug === slug) || ws[0];
     if (!active) return;
-    setEmelSpaceId(active.id);
-    setActiveSpaceId(active.id);
-    setActiveSpaceSlug(active.slug);
+    setEmelWorkspaceId(active.id);
+    setActiveWorkspaceId(active.id);
+    setActiveWorkspaceSlug(active.slug);
     fetch(`/api/workspaces/${active.id}/email-settings`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
@@ -412,24 +412,24 @@ export default function Settings() {
         setEmelHtml(!!d.html);
       })
       .catch(() => {});
-  }, [spaces]);
+  }, [workspaces]);
 
   useEffect(() => {
     loadEmailSettings();
   }, [loadEmailSettings]);
 
-  // Issue #183: load the per-space storefront/footer settings for the active
-  // space (same resolution as the email settings above).
+  // Issue #183: load the per-workspace storefront/footer settings for the
+  // active workspace (same resolution as the email settings above).
   const loadStorefrontSettings = useCallback(() => {
-    const sp = Array.isArray(spaces) ? spaces : [];
-    if (!sp.length) return;
+    const ws = Array.isArray(workspaces) ? workspaces : [];
+    if (!ws.length) return;
     let slug = "";
     try { slug = window.localStorage.getItem("jf_workspace") || ""; } catch { /* ignore */ }
-    const active = sp.find((x) => x.slug === slug) || sp[0];
+    const active = ws.find((x) => x.slug === slug) || ws[0];
     if (!active) return;
-    setSfSpaceId(active.id);
-    setCurrencySpaceId(active.id);
-    setLpSpaceId(active.id);
+    setSfWorkspaceId(active.id);
+    setCurrencyWorkspaceId(active.id);
+    setLpWorkspaceId(active.id);
     fetch(`/api/workspaces/${active.id}/settings`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
@@ -476,7 +476,7 @@ export default function Settings() {
         }
       })
       .catch(() => {});
-  }, [spaces]);
+  }, [workspaces]);
 
   useEffect(() => {
     loadStorefrontSettings();
@@ -484,10 +484,10 @@ export default function Settings() {
 
   // Issue #185: save the active space's currency.
   async function saveCurrency() {
-    if (!currencySpaceId) return;
+    if (!currencyWorkspaceId) return;
     setMsg("");
     setErr("");
-    const r = await fetch(`/api/workspaces/${currencySpaceId}/settings`, {
+    const r = await fetch(`/api/workspaces/${currencyWorkspaceId}/settings`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ currency }),
@@ -508,23 +508,23 @@ export default function Settings() {
 
   // Issue #444: affiliate marketing — load the workspace's affiliates.
   const loadAffiliates = useCallback(async () => {
-    if (!activeSpaceId) return;
-    const r = await fetch(`/api/workspaces/${activeSpaceId}/affiliates`);
+    if (!activeWorkspaceId) return;
+    const r = await fetch(`/api/workspaces/${activeWorkspaceId}/affiliates`);
     if (r.ok) {
       const d = await r.json();
       setAffiliates(Array.isArray(d) ? d : []);
     }
-  }, [activeSpaceId]);
+  }, [activeWorkspaceId]);
 
   useEffect(() => {
     if (tab === "affiliates") loadAffiliates();
   }, [tab, loadAffiliates]);
 
   async function createAffiliate() {
-    if (!activeSpaceId) return;
+    if (!activeWorkspaceId) return;
     setAffErr("");
     setAffMsg("");
-    const r = await fetch(`/api/workspaces/${activeSpaceId}/affiliates`, {
+    const r = await fetch(`/api/workspaces/${activeWorkspaceId}/affiliates`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -833,10 +833,10 @@ export default function Settings() {
 
   // Issue #107: save the per-space email settings.
   async function saveEmailSettings() {
-    if (!emelSpaceId) return;
+    if (!emelWorkspaceId) return;
     setMsg("");
     setErr("");
-    const r = await fetch(`/api/workspaces/${emelSpaceId}/email-settings`, {
+    const r = await fetch(`/api/workspaces/${emelWorkspaceId}/email-settings`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -858,10 +858,10 @@ export default function Settings() {
 
   // Issue #183: save the per-space public-form footer (Storefront tab).
   async function saveStorefrontSettings() {
-    if (!sfSpaceId) return;
+    if (!sfWorkspaceId) return;
     setMsg("");
     setErr("");
-    const r = await fetch(`/api/workspaces/${sfSpaceId}/settings`, {
+    const r = await fetch(`/api/workspaces/${sfWorkspaceId}/settings`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -889,10 +889,10 @@ export default function Settings() {
 
   // Issue #360: save the per-space customizable landing page (Storefront tab).
   async function saveLandingPage() {
-    if (!lpSpaceId) return;
+    if (!lpWorkspaceId) return;
     setMsg("");
     setErr("");
-    const r = await fetch(`/api/workspaces/${lpSpaceId}/settings`, {
+    const r = await fetch(`/api/workspaces/${lpWorkspaceId}/settings`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1698,10 +1698,10 @@ export default function Settings() {
 
         {/* ── MCP tab removed (issue #307): connected agents are user-level
                and moved to Profile → Connected agents. OAuth agents bind to
-               the user and can operate across all of the user's spaces, not a
-               single space. */}
+               the user and can operate across all of the user's workspaces, not a
+               single workspace. */}
 
-        {/* ── Emel tab: per-space receipt/notification email (issue #107) ── */}
+        {/* ── Emel tab: per-workspace receipt/notification email (issue #107) ── */}
         {tab === "emel" && (
           <section className="jf-card mt-6 p-6">
             <h2 className="text-lg font-semibold">{t("set.emelTitle")}</h2>
@@ -1771,7 +1771,7 @@ export default function Settings() {
             </div>
           </section>
         )}
-        {/* ── Storefront tab: per-space public-form footer (issue #183) ── */}
+        {/* ── Storefront tab: per-workspace public-form footer (issue #183) ── */}
         {tab === "storefront" && (
           <>
           <section className="jf-card mt-6 p-6">
@@ -1856,7 +1856,7 @@ export default function Settings() {
                   className="jf-input mt-1 max-w-xl"
                 />
               </div>
-              {/* Issue #276: per-space SEO indexing toggle. */}
+              {/* Issue #276: per-workspace SEO indexing toggle. */}
               <div className="flex items-start justify-between gap-4 rounded-lg border border-[var(--jf-border)] p-3">
                 <div>
                   <p className="text-sm font-medium">{t("set.sfIndexingTitle")}</p>
@@ -1878,7 +1878,7 @@ export default function Settings() {
                   />
                 </button>
               </div>
-              {/* Issue #447: per-space realtime notification sound toggle. */}
+              {/* Issue #447: per-workspace realtime notification sound toggle. */}
               <div className="flex items-start justify-between gap-4 rounded-lg border border-[var(--jf-border)] p-3">
                 <div>
                   <p className="text-sm font-medium">{t("set.sfSoundTitle")}</p>
@@ -1906,7 +1906,7 @@ export default function Settings() {
             </div>
           </section>
 
-          {/* Issue #360: per-space customizable landing page (Storefront tab). */}
+          {/* Issue #360: per-workspace customizable landing page (Storefront tab). */}
           <section className="jf-card mt-6 p-6">
             <h2 className="text-lg font-semibold">{t("set.lpTitle")}</h2>
             <p className="mt-1 max-w-xl text-sm text-slate-400">
@@ -2101,7 +2101,7 @@ export default function Settings() {
                   <div className="flex flex-wrap items-center gap-2 pt-1">
                     <button onClick={saveLandingPage} className="jf-btn-primary">{t("set.lpSave")}</button>
                     <a
-                      href={`https://${activeSpaceSlug || "space"}.jomform.com`}
+                      href={`https://${activeWorkspaceSlug || "workspace"}.jomform.com`}
                       target="_blank"
                       rel="noreferrer"
                       className="jf-btn-outline"
@@ -2205,7 +2205,7 @@ export default function Settings() {
                   <div className="flex flex-wrap items-center gap-2 pt-1">
                     <button onClick={saveLandingPage} className="jf-btn-primary">{t("set.lpSave")}</button>
                     <a
-                      href={`https://${activeSpaceSlug || "space"}.jomform.com`}
+                      href={`https://${activeWorkspaceSlug || "workspace"}.jomform.com`}
                       target="_blank"
                       rel="noreferrer"
                       className="jf-btn-outline"
@@ -2219,15 +2219,15 @@ export default function Settings() {
           </section>
           </>
         )}
-        {/* ── Members tab: space members management (issue #163) ── */}
+        {/* ── Members tab: workspace members management (issue #163) ── */}
         {tab === "members" && isAdmin && (
-          <MembersTab spaceId={emelSpaceId || activeSpaceId} />
+          <MembersTab workspaceId={emelWorkspaceId || activeWorkspaceId} />
         )}
-        {/* ── Legal tab: per-space hosted legal pages (issue #184) ── */}
+        {/* ── Legal tab: per-workspace hosted legal pages (issue #184) ── */}
         {tab === "legal" && (
-          <LegalTab spaceId={emelSpaceId || activeSpaceId} spaceSlug={activeSpaceSlug} />
+          <LegalTab workspaceId={emelWorkspaceId || activeWorkspaceId} workspaceSlug={activeWorkspaceSlug} />
         )}
-        {/* ── Currency tab: per-space currency + BNM rates (issue #185) ── */}
+        {/* ── Currency tab: per-workspace currency + BNM rates (issue #185) ── */}
         {tab === "currency" && (
           <section className="jf-card mt-6 p-6">
             <h2 className="text-lg font-semibold">{t("set.currencyTitle")}</h2>

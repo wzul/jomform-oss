@@ -2,28 +2,30 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useI18n } from "./i18n";
-import type { SpaceRow } from "./session";
+import type { WorkspaceRow } from "./session";
 
-// Compact space selector for the TOPBAR (issue #380). The old full-width
+// Compact workspace selector for the TOPBAR (issue #380). The old full-width
 // switcher lived in the sidebar user card and pushed the nav menu down so not
 // all pages were visible. This version is a small dropdown that only shows the
-// active space name + a chevron; clicking opens the space list, plus the
-// "make this the default" action and a "New space" item (inline create form).
+// active workspace name + a chevron; clicking opens the workspace list, plus
+// the "make this the default" action and a "New workspace" item (inline create
+// form).
 // The sidebar is now nav-only.
 //
 // It is a controlled input: `value` is the active slug and `onSwitch(slug)` is
-// Shell's switchSpace, which persists `jf_workspace` to localStorage and reloads
-// so every downstream fetch re-reads the new scope (see Shell.switchSpace).
+// Shell's switchWorkspace, which persists `jf_workspace` to localStorage and
+// reloads so every downstream fetch re-reads the new scope (see
+// Shell.switchWorkspace).
 export function WorkspaceSwitcher({
-  spaces,
+  workspaces,
   value,
   onSwitch,
   className,
   fullWidth,
-  defaultSpaceId,
+  defaultWorkspaceId,
   onSetDefault,
 }: {
-  spaces: SpaceRow[];
+  workspaces: WorkspaceRow[];
   value: string;
   onSwitch: (slug: string) => void;
   className?: string;
@@ -34,11 +36,12 @@ export function WorkspaceSwitcher({
   // trigger and is never clipped by the drawer's scroll area. Desktop topbar
   // keeps the compact chip (fullWidth omitted).
   fullWidth?: boolean;
-  // Issue #164: optional default-space support. When provided, the dropdown
-  // shows a "make this the default" action for the active space (and marks the
-  // current default). onSetDefault(spaceId) persists the choice server-side.
-  defaultSpaceId?: string;
-  onSetDefault?: (spaceId: string) => void;
+  // Issue #164: optional default-workspace support. When provided, the
+  // dropdown shows a "make this the default" action for the active workspace
+  // (and marks the current default). onSetDefault(workspaceId) persists the
+  // choice server-side.
+  defaultWorkspaceId?: string;
+  onSetDefault?: (workspaceId: string) => void;
 }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
@@ -54,8 +57,8 @@ export function WorkspaceSwitcher({
   // instead of its lower rows sitting behind the drawer's user card.
   const panelRef = useRef<HTMLDivElement>(null);
 
-  const active = spaces.find((s) => s.slug === value) || spaces[0];
-  const activeIsDefault = !!active && !!defaultSpaceId && active.id === defaultSpaceId;
+  const active = workspaces.find((s) => s.slug === value) || workspaces[0];
+  const activeIsDefault = !!active && !!defaultWorkspaceId && active.id === defaultWorkspaceId;
 
   // Close the dropdown on outside click or Escape.
   useEffect(() => {
@@ -91,7 +94,7 @@ export function WorkspaceSwitcher({
     return t(`role.${role}` as any) || role;
   }
 
-  async function createSpace(e: React.FormEvent) {
+  async function createWorkspace(e: React.FormEvent) {
     e.preventDefault();
     if (busy) return;
     setBusy(true);
@@ -110,8 +113,8 @@ export function WorkspaceSwitcher({
         setBusy(false);
         return;
       }
-      // New space created — hard reload so the session bundle re-fetches the
-      // updated space list and the switcher shows both spaces.
+      // New workspace created — hard reload so the session bundle re-fetches
+      // the updated workspace list and the switcher shows both workspaces.
       window.location.reload();
     } catch {
       setError(t("workspace.createFail"));
@@ -188,9 +191,9 @@ export function WorkspaceSwitcher({
               : "absolute right-0 top-full z-50 mt-1 w-64 rounded-lg border border-[var(--jf-border)] bg-white p-1.5 shadow-lg"
           }
         >
-          {spaces.length > 1 ? (
+          {workspaces.length > 1 ? (
             <div className="max-h-56 overflow-y-auto">
-              {spaces.map((s) => (
+              {workspaces.map((s) => (
                 <button
                   key={s.id}
                   type="button"
@@ -216,7 +219,7 @@ export function WorkspaceSwitcher({
               ))}
             </div>
           ) : active ? (
-            // Single-space: minimal read-only chip (just the space name).
+            // Single-workspace: minimal read-only chip (just the name).
             <div className="px-2.5 py-2 text-xs text-[var(--jf-text)]">
               <span className="block truncate font-medium">{active.name}</span>
               <span className="block truncate text-[10px] text-[var(--jf-muted)]">
@@ -225,7 +228,7 @@ export function WorkspaceSwitcher({
             </div>
           ) : null}
 
-          {/* Issue #164: make the active space the default (or clear it). */}
+          {/* Issue #164: make the active workspace the default (or clear it). */}
           {onSetDefault && active && (
             <div className="mt-1 border-t border-[var(--jf-border)] pt-1">
               {activeIsDefault ? (
@@ -256,10 +259,10 @@ export function WorkspaceSwitcher({
             </div>
           )}
 
-          {/* New space — inline create form inside the dropdown. */}
+          {/* New workspace — inline create form inside the dropdown. */}
           <div className="mt-1 border-t border-[var(--jf-border)] pt-1">
             {creating ? (
-              <form onSubmit={createSpace} className="space-y-1.5 rounded-md bg-slate-50 p-2">
+              <form onSubmit={createWorkspace} className="space-y-1.5 rounded-md bg-slate-50 p-2">
                 <input
                   value={name}
                   onChange={(e) => setName(e.target.value)}

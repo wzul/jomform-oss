@@ -2,7 +2,7 @@
 
 // Issue #387: super-admin platform-wide usage dashboard (/admin).
 // The platform owner (super-admin role, #385) can visually monitor usage
-// across ALL spaces once JomForm is public. It is gated on the super-admin
+// across ALL workspaces once JomForm is public. It is gated on the super-admin
 // role: non-admins are redirected to the landing page. Read-only — no
 // destructive actions exist on this page. Data comes from the super-admin
 // GET /v1/admin/overview endpoint (audited server-side).
@@ -15,7 +15,7 @@ import { useSession } from "../../components/session";
 import { formatDate, formatDateTime } from "../../lib/formatDate";
 
 type Totals = {
-  spaces: number;
+  workspaces: number;
   forms: number;
   products: number;
   sales: number;
@@ -24,7 +24,7 @@ type Totals = {
 };
 
 type Growth = {
-  spaces: number;
+  workspaces: number;
   forms: number;
   products: number;
   sales: number;
@@ -42,7 +42,7 @@ type EmailSummary = {
 type SpamQueue = { submissions: number; sales: number };
 
 type RecentSignup = { id: string; email: string; name?: string; created_at: string };
-type ActiveSpace = { id: string; name: string; slug: string; owner_email: string; last_activity: string };
+type ActiveWorkspace = { id: string; name: string; slug: string; owner_email: string; last_activity: string };
 type StorageRow = { workspace_id: string; workspace_name: string; slug: string; used_bytes: number };
 
 type Overview = {
@@ -52,7 +52,7 @@ type Overview = {
   email: EmailSummary;
   spam: SpamQueue;
   recent_signups: RecentSignup[];
-  active_spaces: ActiveSpace[];
+  active_workspaces: ActiveWorkspace[];
   storage: StorageRow[];
   quota_bytes: number;
 };
@@ -120,7 +120,7 @@ export default function AdminPage() {
     );
   }
 
-  const g = (g: Growth) => `${g.spaces} / ${g.forms} / ${g.products} / ${g.sales} / ${g.users}`;
+  const g = (g: Growth) => `${g.workspaces} / ${g.forms} / ${g.products} / ${g.sales} / ${g.users}`;
 
   return (
     <Shell active="admin">
@@ -146,7 +146,7 @@ export default function AdminPage() {
                 {t("admin.totals")}
               </h2>
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-                <StatCard label={t("admin.spaces")} value={data.totals.spaces} />
+                <StatCard label={t("admin.workspaces")} value={data.totals.workspaces} />
                 <StatCard label={t("admin.forms")} value={data.totals.forms} />
                 <StatCard label={t("admin.products")} value={data.totals.products} />
                 <StatCard label={t("admin.sales")} value={data.totals.sales} />
@@ -184,7 +184,7 @@ export default function AdminPage() {
               </div>
             </section>
 
-            {/* Storage per space */}
+            {/* Storage per workspace */}
             <section>
               <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-[var(--jf-muted)]">
                 {t("admin.storage")}
@@ -193,7 +193,7 @@ export default function AdminPage() {
                 <table className="w-full text-left text-sm">
                   <thead className="border-b border-[var(--jf-border)] bg-slate-50 text-xs uppercase tracking-wide text-[var(--jf-muted)]">
                     <tr>
-                      <th className="px-4 py-2 font-medium">{t("admin.spaces")}</th>
+                      <th className="px-4 py-2 font-medium">{t("admin.workspaces")}</th>
                       <th className="px-4 py-2 font-medium">{t("admin.storageUsed")}</th>
                       <th className="px-4 py-2 font-medium">{t("admin.quota")}</th>
                     </tr>
@@ -222,7 +222,7 @@ export default function AdminPage() {
               </div>
             </section>
 
-            {/* Recent signups + active spaces */}
+            {/* Recent signups + active workspaces */}
             <section className="grid grid-cols-1 gap-6 lg:grid-cols-2">
               <div>
                 <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-[var(--jf-muted)]">
@@ -260,26 +260,26 @@ export default function AdminPage() {
               </div>
               <div>
                 <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-[var(--jf-muted)]">
-                  {t("admin.activeSpaces")}
+                  {t("admin.activeWorkspaces")}
                 </h2>
                 <div className="overflow-x-auto rounded-xl border border-[var(--jf-border)]">
                   <table className="w-full text-left text-sm">
                     <thead className="border-b border-[var(--jf-border)] bg-slate-50 text-xs uppercase tracking-wide text-[var(--jf-muted)]">
                       <tr>
-                        <th className="px-4 py-2 font-medium">{t("admin.spaces")}</th>
+                        <th className="px-4 py-2 font-medium">{t("admin.workspaces")}</th>
                         <th className="px-4 py-2 font-medium">{t("admin.owner")}</th>
                         <th className="px-4 py-2 font-medium">{t("admin.lastActivity")}</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {data.active_spaces.length === 0 ? (
+                      {data.active_workspaces.length === 0 ? (
                         <tr>
                           <td colSpan={3} className="px-4 py-3 text-[var(--jf-muted)]">
                             —
                           </td>
                         </tr>
                       ) : (
-                        data.active_spaces.map((s) => (
+                        data.active_workspaces.map((s) => (
                           <tr key={s.id} className="border-b border-[var(--jf-border)] last:border-0">
                             <td className="px-4 py-2">
                               <span className="font-medium">{s.name}</span>

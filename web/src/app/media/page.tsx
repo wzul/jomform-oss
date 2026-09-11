@@ -31,7 +31,7 @@ type MediaItem = {
   created_at: string;
 };
 
-// Issue #384: per-space storage usage returned by the media list endpoint.
+// Issue #384: per-workspace storage usage returned by the media list endpoint.
 type MediaUsage = {
   used?: number;
   limit?: number;
@@ -83,7 +83,7 @@ function extBadge(mime: string): string {
 
 export default function MediaPage() {
   const { t } = useI18n();
-  const { anon, role, space, user } = useSession();
+  const { anon, role, workspace, user } = useSession();
   const router = useRouter();
 
   // Issue #163: read_only members see no delete action.
@@ -94,7 +94,7 @@ export default function MediaPage() {
   const [checking, setChecking] = useState(true);
   const [error, setError] = useState("");
 
-  // Issue #384: per-space storage usage (used / limit) for the quota bar.
+  // Issue #384: per-workspace storage usage (used / limit) for the quota bar.
   const [usage, setUsage] = useState<MediaUsage>({});
 
   // filters
@@ -182,7 +182,7 @@ export default function MediaPage() {
       const d = await r.json();
       setItems(Array.isArray(d.items) ? d.items : []);
       setTotal(typeof d.total === "number" ? d.total : 0);
-      // Issue #384: capture the per-space storage usage for the quota bar.
+      // Issue #384: capture the per-workspace storage usage for the quota bar.
       if (d.usage && typeof d.usage === "object") {
         setUsage(d.usage);
       }
@@ -200,14 +200,14 @@ export default function MediaPage() {
       .then((f) => setForms(Array.isArray(f) ? f : []))
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [space]);
+  }, [workspace]);
 
-  // Issue #170: re-fetch when the active space changes.
+  // Issue #170: re-fetch when the active workspace changes.
   useEffect(() => {
     setChecking(true);
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [load, space]);
+  }, [load, workspace]);
 
   // Reset to page 1 when filters change.
   useEffect(() => {
@@ -277,7 +277,7 @@ export default function MediaPage() {
           )}
         </div>
 
-        {/* Issue #384: per-space storage usage bar so the merchant knows their
+        {/* Issue #384: per-workspace storage usage bar so the merchant knows their
             remaining quota. Rendered when the API reports a limit. */}
         {typeof usage.limit === "number" && usage.limit > 0 && (
           <div className="mt-4">

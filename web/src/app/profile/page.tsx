@@ -724,9 +724,9 @@ export default function ProfilePage() {
         )}
 
         {/* Connected accounts tab (issue #301): user-level social login
-            connectors, moved here from space-scoped Settings. Fetched from
+            connectors, moved here from workspace-scoped Settings. Fetched from
             the user-level /api/auth/social endpoint — not tied to the active
-            space. The space-level Cloudflare auto-CNAME connect stays in
+            workspace. The workspace-level Cloudflare auto-CNAME connect stays in
             Settings → Domains. */}
         {tab === "connected" && (
           <section className="jf-card mt-6 p-6">
@@ -756,9 +756,9 @@ export default function ProfilePage() {
         )}
 
         {/* Connected agents tab (issue #307): user-level MCP OAuth clients,
-            moved here from space-scoped Settings. A connected agent can
-            operate across every space the user owns, up to the user's role in
-            each — so the connection is user-level, not per-space. */}
+            moved here from workspace-scoped Settings. A connected agent can
+            operate across every workspace the user owns, up to the user's role in
+            each — so the connection is user-level, not per-workspace. */}
         {tab === "mcp" && (
           <section className="jf-card mt-6 p-6">
             <h2 className="text-lg font-semibold">

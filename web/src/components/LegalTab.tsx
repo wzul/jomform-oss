@@ -1,10 +1,10 @@
 "use client";
 
-// Issue #184: per-space hosted legal pages (privacy / terms / refund).
+// Issue #184: per-workspace hosted legal pages (privacy / terms / refund).
 // For each page the merchant can auto-generate a draft via the LLM (fills a
 // prompt template with business details → generate → preview/edit → save) or
 // write their own manually. The stored content is rendered on the public page
-// ({space}.jomform.com/privacy, /terms, /refund).
+// ({workspace}.jomform.com/privacy, /terms, /refund).
 import { useCallback, useEffect, useState } from "react";
 import { useI18n, type Key } from "./i18n";
 
@@ -20,7 +20,7 @@ const PAGE_TITLE_KEY: Record<PageType, Key> = {
   refund: "set.legalRefund",
 };
 
-export function LegalTab({ spaceId, spaceSlug }: { spaceId: string; spaceSlug: string }) {
+export function LegalTab({ workspaceId, workspaceSlug }: { workspaceId: string; workspaceSlug: string }) {
   const { t } = useI18n();
   const [pages, setPages] = useState<LegalMap>({});
   const [mode, setMode] = useState<Record<PageType, "auto" | "manual">>({
@@ -50,8 +50,8 @@ export function LegalTab({ spaceId, spaceSlug }: { spaceId: string; spaceSlug: s
   const [err, setErr] = useState("");
 
   const load = useCallback(() => {
-    if (!spaceId) return;
-    fetch(`/api/workspaces/${spaceId}/legal`)
+    if (!workspaceId) return;
+    fetch(`/api/workspaces/${workspaceId}/legal`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (!d) return;
@@ -72,7 +72,7 @@ export function LegalTab({ spaceId, spaceSlug }: { spaceId: string; spaceSlug: s
       })
       .catch(() => setErr(t("set.legalLoadFail")));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [spaceId]);
+  }, [workspaceId]);
 
   useEffect(() => {
     load();
@@ -83,7 +83,7 @@ export function LegalTab({ spaceId, spaceSlug }: { spaceId: string; spaceSlug: s
     setErr("");
     setGenerating(pt);
     try {
-      const r = await fetch(`/api/workspaces/${spaceId}/legal/generate`, {
+      const r = await fetch(`/api/workspaces/${workspaceId}/legal/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ type: pt, ...biz }),
@@ -106,7 +106,7 @@ export function LegalTab({ spaceId, spaceSlug }: { spaceId: string; spaceSlug: s
   async function save(pt: PageType) {
     setErr("");
     setMsg("");
-    const r = await fetch(`/api/workspaces/${spaceId}/legal`, {
+    const r = await fetch(`/api/workspaces/${workspaceId}/legal`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ type: pt, content: content[pt], mode: mode[pt] }),
@@ -126,7 +126,7 @@ export function LegalTab({ spaceId, spaceSlug }: { spaceId: string; spaceSlug: s
     <section className="jf-card mt-6 p-6">
       <h2 className="text-lg font-semibold">{t("set.legalTitle")}</h2>
       <p className="mt-1 max-w-xl text-sm text-slate-400">
-        {t("set.legalHelp", { space: spaceSlug || "your-space" })}
+        {t("set.legalHelp", { workspace: workspaceSlug || "your-workspace" })}
       </p>
 
       {msg && <p className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-600">{msg}</p>}
@@ -191,9 +191,9 @@ export function LegalTab({ spaceId, spaceSlug }: { spaceId: string; spaceSlug: s
                       {t("set.legalNotSet")}
                     </span>
                   )}
-                  {isSet && spaceSlug && (
+                  {isSet && workspaceSlug && (
                     <a
-                      href={`https://${spaceSlug}.jomform.com/${pt}`}
+                      href={`https://${workspaceSlug}.jomform.com/${pt}`}
                       target="_blank"
                       rel="noreferrer"
                       className="text-[var(--jf-primary)] hover:underline"

@@ -29,12 +29,12 @@ function MagicLinkForm() {
         });
         if (cancelled) return;
         if (r.ok) {
-          // Issue #164: route multi-space users without a default to the
-          // space-picker; otherwise go straight to the dashboard.
+          // Issue #164: route multi-workspace users without a default to the
+          // workspace-picker; otherwise go straight to the dashboard.
           // Issue #349: navigate with a FULL PAGE LOAD (window.location.href),
           // NOT router.replace. The magic-link page is wrapped in the root
           // SessionProvider, which on this (still-anonymous) page load already
-          // fetched the dashboard bundle and cached a null under the space key
+          // fetched the dashboard bundle and cached a null under the workspace key
           // (401 → anon). router.replace is a client-side navigation that keeps
           // that stale null bundle in memory, so the dashboard renders
           // anon=true → Landing even though the session cookie from this verify

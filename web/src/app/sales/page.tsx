@@ -132,7 +132,7 @@ const emailStatusLabel = (e: string, t: (k: Key) => string) =>
 
 function SalesPageInner() {
   const { t } = useI18n();
-  const { anon, role, space, user } = useSession();
+  const { anon, role, workspace, user } = useSession();
   const router = useRouter();
   const search = useSearchParams();
   const deepForm = search.get("form") || "";
@@ -187,11 +187,11 @@ function SalesPageInner() {
     setForms(Array.isArray(f) ? f : []);
   }, []);
 
-  // Load forms on mount (and re-fetch when the active space changes, #170).
+  // Load forms on mount (and re-fetch when the active workspace changes, #170).
   useEffect(() => {
     void loadForms();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [space]);
+  }, [workspace]);
 
   // Reset pagination whenever filters change.
   useEffect(() => {
@@ -238,11 +238,11 @@ function SalesPageInner() {
   }, [deepForm]);
 
   // Fetch whenever filters/page change (server-side paging + filtering).
-  // Issue #170: `space` re-runs loadSales when the active space changes so the
-  // sales list re-fetches for the new space without a manual refresh.
+  // Issue #170: `workspace` re-runs loadSales when the active workspace changes
+  // so the sales list re-fetches for the new workspace without a manual refresh.
   useEffect(() => {
     void loadSales(page);
-  }, [page, loadSales, space]);
+  }, [page, loadSales, workspace]);
 
   // Issue #447: realtime notifications — subscribe to the authenticated SSE
   // stream (proxied through /api/rest/events/stream) so the list updates live
@@ -284,7 +284,7 @@ function SalesPageInner() {
       es.close();
       setLive(false);
     };
-  }, [anon, space]);
+  }, [anon, workspace]);
 
   // Auth bounce via router (client transition), not a full reload.
   useEffect(() => {

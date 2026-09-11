@@ -9,7 +9,7 @@ import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 
 // AppShell: fixed left sidebar + topbar + content area. Light theme.
 // Issue #29: nav links are Next <Link> (client-side transitions + prefetch,
-// no full document reload) and me/spaces come from the shared session
+// no full document reload) and me/workspaces come from the shared session
 // context (one dashboard-bundle fetch per session), not per-mount fetches.
 export function Shell({
   children,
@@ -18,8 +18,8 @@ export function Shell({
   children: React.ReactNode;
   active: "dashboard" | "forms" | "templates" | "products" | "sales" | "spam" | "deliveries" | "subscriptions" | "settings" | "profile" | "media" | "admin";
 }) {
-  const { user, spaces, reload } = useSession();
-  const [space, setSpace] = useState<string>("");
+  const { user, workspaces, reload } = useSession();
+  const [workspace, setWorkspace] = useState<string>("");
   const [menuOpen, setMenuOpen] = useState(false);
   const { t } = useI18n();
   const router = useRouter();
@@ -89,41 +89,42 @@ export function Shell({
   }, [menuOpen]);
 
   useEffect(() => {
-    const sp = Array.isArray(spaces) ? spaces : [];
-    if (!sp.length) return;
+    const ws = Array.isArray(workspaces) ? workspaces : [];
+    if (!ws.length) return;
     const saved = localStorage.getItem("jf_workspace");
-    if (saved && sp.some((s) => s.slug === saved)) {
-      setSpace(saved);
+    if (saved && ws.some((s) => s.slug === saved)) {
+      setWorkspace(saved);
     } else {
-      setSpace(sp[0].slug);
-      localStorage.setItem("jf_workspace", sp[0].slug);
+      setWorkspace(ws[0].slug);
+      localStorage.setItem("jf_workspace", ws[0].slug);
     }
-  }, [spaces]);
+  }, [workspaces]);
 
-  function switchSpace(slug: string) {
-    setSpace(slug);
+  function switchWorkspace(slug: string) {
+    setWorkspace(slug);
     localStorage.setItem("jf_workspace", slug);
     // Issue #170: notify the session context (and any data page keyed on
-    // useSession().space) that the active space changed, so page lists
-    // re-fetch for the new space without a manual refresh.
-    window.dispatchEvent(new Event("jf:space-changed"));
-    // Issue #158: the session bundle is now SPACE-KEYED (see session.tsx), so
-    // switching spaces re-fetches the bundle for the newly selected space —
-    // no hard reload needed. reload() drops the cached bundle for the new
-    // space and re-fetches it, so the dashboard landing sections (products,
-    // summary, sales, analytics) and the account-level settings (chip, keys,
-    // domains, webhooks, einvoice) all switch to the new space's account.
+    // useSession().workspace) that the active workspace changed, so page lists
+    // re-fetch for the new workspace without a manual refresh.
+    window.dispatchEvent(new Event("jf:workspace-changed"));
+    // Issue #158: the session bundle is now WORKSPACE-KEYED (see session.tsx),
+    // so switching workspaces re-fetches the bundle for the newly selected
+    // workspace — no hard reload needed. reload() drops the cached bundle for
+    // the new workspace and re-fetches it, so the dashboard landing sections
+    // (products, summary, sales, analytics) and the account-level settings
+    // (chip, keys, domains, webhooks, einvoice) all switch to the new
+    // workspace's account.
     reload();
   }
 
-  // Issue #164: set/clear the user's default space (server-side). Empty id
-  // clears it, so the space-picker prompt returns on the next login.
-  async function setDefaultSpace(spaceId: string) {
+  // Issue #164: set/clear the user's default workspace (server-side). Empty id
+  // clears it, so the workspace-picker prompt returns on the next login.
+  async function setDefaultWorkspace(workspaceId: string) {
     try {
       await fetch("/api/auth/profile/default-workspace", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ workspace_id: spaceId }),
+        body: JSON.stringify({ workspace_id: workspaceId }),
       });
     } catch {
       // Best-effort; the picker/profile surfaces errors on its own path.
@@ -224,14 +225,14 @@ export function Shell({
 
       {/* main */}
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* desktop topbar — space switcher + lang toggle (issue #380) */}
+        {/* desktop topbar — workspace switcher + lang toggle (issue #380) */}
         <header className="sticky top-0 z-30 hidden items-center justify-end gap-3 border-b border-[var(--jf-border)] bg-white px-4 py-2.5 md:flex">
           <WorkspaceSwitcher
-            spaces={spaces}
-            value={space}
-            onSwitch={switchSpace}
-            defaultSpaceId={user?.default_workspace_id}
-            onSetDefault={setDefaultSpace}
+            workspaces={workspaces}
+            value={workspace}
+            onSwitch={switchWorkspace}
+            defaultWorkspaceId={user?.default_workspace_id}
+            onSetDefault={setDefaultWorkspace}
           />
           <LangToggle />
         </header>
@@ -298,16 +299,16 @@ export function Shell({
                     </Link>
                   ))}
                 </nav>
-                {/* issue #41: space selector reachable from the mobile drawer —
+                {/* issue #41: workspace selector reachable from the mobile drawer —
                     same shared component as the desktop topbar (issue #380) */}
                 <div className="border-t border-[var(--jf-border)] px-4 py-3">
                   <WorkspaceSwitcher
-                    spaces={spaces}
-                    value={space}
-                    onSwitch={switchSpace}
+                    workspaces={workspaces}
+                    value={workspace}
+                    onSwitch={switchWorkspace}
                     fullWidth
-                    defaultSpaceId={user?.default_workspace_id}
-                    onSetDefault={setDefaultSpace}
+                    defaultWorkspaceId={user?.default_workspace_id}
+                    onSetDefault={setDefaultWorkspace}
                   />
                 </div>
               </div>

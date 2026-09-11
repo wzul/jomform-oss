@@ -1,10 +1,10 @@
 "use client";
 
-// Issue #163: Space Members management tab. Admin-only (owner or admin
+// Issue #163: Workspace Members management tab. Admin-only (owner or admin
 // member). Invite by email + role, list members with role badges, change
 // role, remove member, and show/cancel pending invites. Backed by the
-// endpoints from #161 (POST/GET/DELETE /v1/spaces/{id}/invites and
-// GET/PATCH/DELETE /v1/spaces/{id}/members).
+// endpoints from #161 (POST/GET/DELETE /v1/workspaces/{id}/invites and
+// GET/PATCH/DELETE /v1/workspaces/{id}/members).
 import { useCallback, useEffect, useState } from "react";
 import { useI18n } from "./i18n";
 
@@ -18,7 +18,7 @@ function roleLabel(t: (k: any) => string, role: string): string {
   return t(`role.${role}` as any) || role;
 }
 
-export function MembersTab({ spaceId }: { spaceId: string }) {
+export function MembersTab({ workspaceId }: { workspaceId: string }) {
   const { t } = useI18n();
   const [members, setMembers] = useState<Member[]>([]);
   const [invites, setInvites] = useState<Invite[]>([]);
@@ -29,16 +29,16 @@ export function MembersTab({ spaceId }: { spaceId: string }) {
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(() => {
-    if (!spaceId) return;
-    fetch(`/api/workspaces/${spaceId}/members`)
+    if (!workspaceId) return;
+    fetch(`/api/workspaces/${workspaceId}/members`)
       .then((r) => (r.ok ? r.json() : []))
       .then((d) => setMembers(Array.isArray(d) ? d : []))
       .catch(() => {});
-    fetch(`/api/workspaces/${spaceId}/invites`)
+    fetch(`/api/workspaces/${workspaceId}/invites`)
       .then((r) => (r.ok ? r.json() : []))
       .then((d) => setInvites(Array.isArray(d) ? d : []))
       .catch(() => {});
-  }, [spaceId]);
+  }, [workspaceId]);
 
   useEffect(() => {
     load();
@@ -46,12 +46,12 @@ export function MembersTab({ spaceId }: { spaceId: string }) {
 
   async function invite(e: React.FormEvent) {
     e.preventDefault();
-    if (busy || !spaceId) return;
+    if (busy || !workspaceId) return;
     setBusy(true);
     setMsg("");
     setErr("");
     try {
-      const r = await fetch(`/api/workspaces/${spaceId}/invites`, {
+      const r = await fetch(`/api/workspaces/${workspaceId}/invites`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: email.trim(), role }),
@@ -72,9 +72,9 @@ export function MembersTab({ spaceId }: { spaceId: string }) {
   }
 
   async function changeRole(userId: string, newRole: string) {
-    if (!spaceId) return;
+    if (!workspaceId) return;
     setErr("");
-    const r = await fetch(`/api/workspaces/${spaceId}/members/${userId}`, {
+    const r = await fetch(`/api/workspaces/${workspaceId}/members/${userId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ role: newRole }),
@@ -89,10 +89,10 @@ export function MembersTab({ spaceId }: { spaceId: string }) {
   }
 
   async function removeMember(userId: string, name: string) {
-    if (!spaceId) return;
+    if (!workspaceId) return;
     if (!window.confirm(t("mem.removeConfirm", { name: name || "this member" }))) return;
     setErr("");
-    const r = await fetch(`/api/workspaces/${spaceId}/members/${userId}`, { method: "DELETE" });
+    const r = await fetch(`/api/workspaces/${workspaceId}/members/${userId}`, { method: "DELETE" });
     if (r.ok) {
       setMsg(t("mem.removed"));
       load();
@@ -103,9 +103,9 @@ export function MembersTab({ spaceId }: { spaceId: string }) {
   }
 
   async function cancelInvite(inviteId: string) {
-    if (!spaceId) return;
+    if (!workspaceId) return;
     setErr("");
-    const r = await fetch(`/api/workspaces/${spaceId}/invites/${inviteId}`, { method: "DELETE" });
+    const r = await fetch(`/api/workspaces/${workspaceId}/invites/${inviteId}`, { method: "DELETE" });
     if (r.ok) {
       setMsg(t("mem.inviteCancelled"));
       load();
