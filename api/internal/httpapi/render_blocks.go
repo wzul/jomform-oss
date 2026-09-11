@@ -47,34 +47,22 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 			// distinguish "absent" (default on) from an explicit merchant "off".
 			Quantity *bool `json:"quantity"`
 			Choices  []struct {
-				Label string `json:"label"`
-				Value string `json:"value"`
+				Label    string `json:"label"`
+				Value    string `json:"value"`
+				PriceSen int64  `json:"price_sen"`
 			} `json:"choices"`
 		} `json:"blocks"`
-		Products []struct {
-			ID       string   `json:"id"`
-			Name     string   `json:"name"`
-			PriceSen int64    `json:"price_sen"`
-			Images   []string `json:"images"`
-		} `json:"products"`
+		Products []productSnapshot `json:"products"`
 	}
 	if json.Unmarshal(raw, &cfg) != nil || len(cfg.Blocks) == 0 {
 		return false
 	}
 
-	priceOf := map[string]int64{}
-	nameOf := map[string]string{}
-	imgOf := map[string]string{}
-	for _, p := range cfg.Products {
-		priceOf[p.ID] = p.PriceSen
-		nameOf[p.ID] = p.Name
-		// Issue #439: render the product's first image as a thumbnail next to
-		// the name (menu-item card). Fallback is handled in the template — no
-		// image means we just show the name as before.
-		if len(p.Images) > 0 && p.Images[0] != "" {
-			imgOf[p.ID] = p.Images[0]
-		}
-	}
+	// Issue #461: resolve each product block's display data (name, price_sen,
+	// images) LIVE from the products table, keyed by product_id, instead of the
+	// stale config snapshot. The snapshot is only the fallback for an archived
+	// or deleted product so a removed product still renders (never blanks).
+	resolver := newProductResolver(cfg.Products, h.liveProductsForForm(r.Context(), f))
 
 	// variationView is the buyer-facing shape of one product variation.
 	type variationView struct {
@@ -85,10 +73,13 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 		SoldOut  bool
 	}
 
-	// choiceView is one option of a select/radio/checkbox/image-choice field.
+	// choiceView is one option of a select/radio/checkbox/image-choice field,
+	// or one choice of an option/shipping pricing block (where it carries its
+	// own price_sen — the template renders it as the per-choice add-on).
 	type choiceView struct {
-		Label string
-		Value string
+		Label    string
+		Value    string
+		PriceSen int64
 	}
 
 	type blockView struct {
@@ -132,26 +123,31 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 		}
 		vb.CondJSON = marshalCondition(b.Condition)
 		for _, c := range b.Choices {
-			vb.Choices = append(vb.Choices, choiceView{Label: c.Label, Value: c.Value})
+			vb.Choices = append(vb.Choices, choiceView{Label: c.Label, Value: c.Value, PriceSen: c.PriceSen})
 		}
 		// Pricing fields (product/option/shipping) carry a price. Product
-		// blocks resolve price from the products snapshot; option/shipping
-		// blocks carry their own price_sen.
+		// blocks resolve price/name/image live from the products table (issue
+		// #461, snapshot only as archived fallback); option/shipping blocks
+		// carry their own price_sen and stay snapshot-based.
 		switch b.Type {
 		case "product":
 			if b.ProductID != "" {
-				if price, ok := priceOf[b.ProductID]; ok {
-					vb.PriceSen = price
-					vb.HasPrice = true
-				}
 				// Issue #249: per-product quantity selector. Defaults to on
 				// (matches the builder default) unless the merchant disabled it.
 				vb.HasQuantity = b.Quantity == nil || *b.Quantity
-				if vb.Value == "" {
-					vb.Value = nameOf[b.ProductID]
+				liveName, livePrice, liveImage, found := resolver.resolve(b.ProductID)
+				if found {
+					vb.PriceSen = livePrice
+					vb.HasPrice = true
+					vb.Image = liveImage
+					// The product name always follows the live product, except
+					// when the merchant typed an explicit per-form label that
+					// differs from the snapshotted product name (that override
+					// is intentional and stays).
+					if b.Value == "" || b.Value == resolver.snapshotName(b.ProductID) {
+						vb.Value = liveName
+					}
 				}
-				// Issue #439: surface the first product image for the thumbnail.
-				vb.Image = imgOf[b.ProductID]
 				// Issue #153: load the product's variations for the selector.
 				if h.ProductVariations != nil {
 					if vs, verr := h.ProductVariations.ListByProduct(r.Context(), b.ProductID); verr == nil && len(vs) > 0 {

@@ -800,7 +800,18 @@ export default function Builder() {
             <label className="text-xs text-[var(--jf-muted)]">{t("bld.product")}</label>
             <select
               value={b.productId || ""}
-              onChange={(e) => upd({ productId: e.target.value })}
+              onChange={(e) => {
+                // Issue #461: the block label follows the product. Switching to
+                // another product must not leave the previous product's name as
+                // a stale label — but a label the merchant typed themselves is
+                // kept (the server renders it as an explicit per-form override).
+                const nextId = e.target.value;
+                const prev = products.find((x) => x.id === b.productId);
+                const next = products.find((x) => x.id === nextId);
+                const patch: Partial<Block> = { productId: nextId };
+                if (next && (!b.value || b.value === prev?.name)) patch.value = next.name;
+                upd(patch);
+              }}
               className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-sm outline-none"
             >
               {products.map((p) => (

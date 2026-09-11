@@ -594,8 +594,11 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 				respondErr(w, r, err)
 				return
 			}
-		} else if h.Products != nil {
-			// Simple product: decrement product-level stock atomically.
+		} else if h.Products != nil && h.isProductRow(r.Context(), form.AccountID, it.ProductID) {
+			// Simple product: decrement product-level stock atomically. Pricing
+			// blocks (option/shipping) submit with product_id = the block's own
+			// id, which is not a product row — skip inventory for them (issue
+			// #461; before, the non-uuid block id blew up the stock query).
 			if err := h.Products.DecrementStock(r.Context(), it.ProductID, int(qty)); err != nil {
 				if err == dbstore.ErrOutOfStock {
 					writeErr(w, http.StatusConflict, "stok habis untuk "+name)
@@ -875,10 +878,35 @@ func (h *PublicHandlers) fireResponseNotifications(ctx context.Context, form *db
 	}, dbstore.NotifyEventResponseSubmitted)
 }
 
-// lookupProduct resolves product name/price from the form snapshot config.
-// MVP stores products inline in form config [{id,name,price_sen}]; proper
-// product references land with the full builder.
+// isProductRow reports whether productID is a real row in the account's
+// products table. Pricing blocks (option/shipping) submit their own block id as
+// product_id, which is never a product row, so inventory is skipped for them
+// (issue #461). A lookup error (including a non-uuid id) is treated as "not a
+// product row".
+func (h *PublicHandlers) isProductRow(ctx context.Context, accountID, productID string) bool {
+	if h.Products == nil || accountID == "" || productID == "" {
+		return false
+	}
+	p, err := h.Products.Get(ctx, accountID, productID)
+	return err == nil && p != nil
+}
+
+// lookupProduct resolves a submitted line item's name/price. A real product
+// reference resolves LIVE from the products table (issue #461) so the server
+// stays the price authority for the CURRENT product price, matching what the
+// buyer sees on the form — the form config snapshot is only the fallback for an
+// archived/deleted product. Pricing blocks (option/shipping, issue #173) carry
+// their own price in the config and stay snapshot-based: they are not product
+// references and must not be re-priced from the products table.
 func (h *PublicHandlers) lookupProduct(form *dbstore.Form, productID string) (string, int64) {
+	// 1. Live product row wins (active product in the form's account).
+	if h.Products != nil && form != nil && form.AccountID != "" {
+		if p, err := h.Products.Get(context.Background(), form.AccountID, productID); err == nil && p != nil {
+			return p.Name, p.PriceSen
+		}
+	}
+	// 2. Fallback: the form's saved snapshot (archived/deleted product, or a
+	// pricing block that carries its own price).
 	raw, _ := json.Marshal(form.Config)
 	var cfg struct {
 		Products []struct {
@@ -1093,11 +1121,20 @@ func (h *PublicHandlers) renderLegacy(w http.ResponseWriter, r *http.Request, f 
 	if raw, merr := json.Marshal(f.Config); merr == nil {
 		_ = json.Unmarshal(raw, &cfg)
 	}
+	// Issue #461: resolve the rendered product name/price LIVE from the products
+	// table (the config order still decides which products appear and in what
+	// order). The snapshot is the fallback for an archived/deleted product.
+	live := productMapByID(h.liveProductsForForm(r.Context(), f))
 	var prods []tmplProduct
 	for _, p := range cfg.Products {
-		if p.ID != "" {
-			prods = append(prods, tmplProduct{ID: p.ID, Name: p.Name, PriceSen: p.PriceSen})
+		if p.ID == "" {
+			continue
 		}
+		name, price := p.Name, p.PriceSen
+		if lp, ok := live[p.ID]; ok {
+			name, price = lp.Name, lp.PriceSen
+		}
+		prods = append(prods, tmplProduct{ID: p.ID, Name: name, PriceSen: price})
 	}
 	type view struct {
 		Slug, Title, Description string

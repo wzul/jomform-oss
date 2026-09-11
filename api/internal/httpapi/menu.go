@@ -53,7 +53,21 @@ type workspaceMenuData struct {
 // menuPageTmpl renders the restaurant-menu landing template (issue #438). It
 // is SEO-friendly server-side HTML and reuses the landing-page layout language.
 // All dynamic text is HTML-escaped by template autoescaping.
-var menuPageTmpl = template.Must(template.New("workspace-menu").Parse(`<!doctype html>
+//
+// The reusable product card is defined INLINE as {{define "menuItem"}} so the
+// {{template "menuItem" .}} call below resolves. A separate
+// template.New("menuItem") is NOT visible to this template at execute time and
+// made the whole menu page fail with `no such template "menuItem"` (issue
+// #461/#438).
+var menuPageTmpl = template.Must(template.New("workspace-menu").Parse(`{{define "menuItem"}}
+<a class="item" href="/{{.FormSlug}}">
+  {{if .ImageURL}}<img class="img" src="{{.ImageURL}}" alt="{{.Name}}">{{end}}
+  <div class="body">
+    <div class="nm">{{.Name}}{{if .BestSeller}}<span class="best">Best-seller</span>{{end}}</div>
+    {{if .Description}}<div class="desc">{{.Description}}</div>{{end}}
+    <div class="price">RM {{.Price}}</div>
+  </div>
+</a>{{end}}<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
@@ -81,8 +95,7 @@ var menuPageTmpl = template.Must(template.New("workspace-menu").Parse(`<!doctype
           text-decoration:none; color:inherit; display:flex; flex-direction:column;
           transition:box-shadow .15s ease, transform .15s ease; }
   .item:hover { box-shadow:0 4px 16px rgba(23,24,28,0.10); transform:translateY(-1px); }
-  .item .img { width:100%; height:150px; object-fit:cover; background:#f3f4f6;
-               display:{{if .ImageURL}}block{{else}}none{{end}}; }
+  .item .img { width:100%; height:150px; object-fit:cover; background:#f3f4f6; }
   .item .body { padding:14px 16px 16px; display:flex; flex-direction:column; gap:6px; flex:1; }
   .item .nm { font-weight:600; font-size:15px; display:flex; align-items:center; gap:6px; }
   .item .desc { font-size:13px; color:#6b7280; line-height:1.5; }
@@ -126,17 +139,6 @@ var menuPageTmpl = template.Must(template.New("workspace-menu").Parse(`<!doctype
   </div>
 </body>
 </html>`))
-
-// menuItemTmpl is the reusable product card on the menu page.
-var menuItemTmpl = template.Must(template.New("menuItem").Parse(`
-<a class="item" href="/{{.FormSlug}}">
-  <img class="img" src="{{.ImageURL}}" alt="{{.Name}}">
-  <div class="body">
-    <div class="nm">{{.Name}}{{if .BestSeller}}<span class="best">Best-seller</span>{{end}}</div>
-    {{if .Description}}<div class="desc">{{.Description}}</div>{{end}}
-    <div class="price">RM {{.Price}}</div>
-  </div>
-</a>`))
 
 // renderWorkspaceMenu writes the restaurant-menu landing template (issue
 // #438). It resolves the workspace's active products, groups them into the
