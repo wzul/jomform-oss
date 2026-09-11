@@ -339,35 +339,9 @@ func (h *PublicHandlers) antiSpamSubmitterIsOwner(r *http.Request, form *dbstore
 	return err == nil && admin
 }
 
-// antiSpamSubmitterIsOwnerForAccount is antiSpamSubmitterIsOwner for a
-// workspace-scoped request with no form (issue #491, menu checkout): the
-// submitter is a logged-in owner/admin of the workspace owning accountID.
-// Returns false when any dependency is nil (bare-mode tests) or the
-// session/workspace cannot be resolved.
-func (h *PublicHandlers) antiSpamSubmitterIsOwnerForAccount(r *http.Request, accountID string) bool {
-	if h.Sessions == nil || h.Users == nil || h.WorkspaceMembers == nil || h.Workspaces == nil || accountID == "" {
-		return false
-	}
-	c, err := r.Cookie(sessionCookie)
-	if err != nil || c.Value == "" {
-		return false
-	}
-	uid, issued, err := h.Sessions.GetCreated(r.Context(), c.Value)
-	if err != nil || uid == "" {
-		return false
-	}
-	// Password-reset invalidation (issue #62): a session issued before the
-	// user's last password reset is dead.
-	if u, e := h.Users.ByID(r.Context(), uid); e == nil && u != nil && u.PwResetAt != nil && !auth.ValidAfter(issued, *u.PwResetAt) {
-		return false
-	}
-	workspaceID, err := h.Workspaces.WorkspaceIDByAccount(r.Context(), accountID)
-	if err != nil || workspaceID == "" {
-		return false
-	}
-	admin, err := h.WorkspaceMembers.IsAdmin(r.Context(), workspaceID, uid)
-	return err == nil && admin
-}
+// antiSpamSubmitterIsOwnerForAccount was removed in issue #497 along with the
+// formless workspace-scoped menu order: every menu order is now attributed to a
+// form, so antiSpamSubmitterIsOwner (form-scoped) covers it.
 
 // antiSpamCheckHoneypot rejects a submit whose hidden honeypot field is
 // filled (issue #244, layer 1). Returns true when the submit is spam.
@@ -525,10 +499,20 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Issue #491: the order core is shared with the workspace-scoped menu
-	// checkout — the target is a parameter. A form order keeps the historical
-	// rule (email required, name optional), validates against the form's own
-	// registered-field contract, and rate-limits per form.
+	// Issue #497: a menu form's own URL is its order target. The menu is a
+	// FORM now, so the checkout posts here (POST /{slug}/order) — the same
+	// route every form uses — and the shared menu path attributes the sale to
+	// the form and validates against the form's ATTACHED order form (if any),
+	// never against the menu form's own product blocks.
+	if menu := dbstore.MenuFromConfig(form.Config); menu != nil && menu.Enabled {
+		h.submitMenuOrderForForm(w, r, form, menu)
+		return
+	}
+
+	// Issue #491: the order core is shared with the menu checkout — the target
+	// is a parameter. A form order keeps the historical rule (email required,
+	// name optional), validates against the form's own registered-field
+	// contract, and rate-limits per form.
 	h.submitOrder(w, r, orderTarget{
 		AccountID:   form.AccountID,
 		Form:        form,
@@ -1276,6 +1260,16 @@ func (h *PublicHandlers) serveForm(w http.ResponseWriter, r *http.Request, f *db
 		h.renderRestriction(w, r, f, st)
 		return
 	}
+	// Issue #497: the restaurant menu is a PER-FORM setting. When the form's
+	// config carries an enabled menu, the form's OWN public URL renders the
+	// menu page (products from the form's own product blocks) instead of the
+	// normal form layout. The workspace root is untouched by this — it renders
+	// the landing page / form listing as before. Non-menu forms fall straight
+	// through to the normal renderers below, completely unaffected.
+	if menu := dbstore.MenuFromConfig(f.Config); menu != nil && menu.Enabled {
+		h.renderFormMenu(w, r, f, menu)
+		return
+	}
 	if formMode(f) == "response" {
 		// Issue #255: a custom-HTML response form (agent-authored body in a
 		// sandboxed iframe) takes precedence over the block renderer.
@@ -1547,14 +1541,11 @@ func (h *PublicHandlers) handleWorkspaceRoot(w http.ResponseWriter, r *http.Requ
 		if workspaceID != "" {
 			if st, serr := h.Workspaces.Settings(r.Context(), workspaceID); serr == nil &&
 				st.LandingPage != nil && st.LandingPage.Enabled {
-				// Issue #438: QR ordering flow — when the landing page has a
-				// restaurant-menu template enabled, render the clean menu
-				// (categories, images, prices, best-seller) instead of the
-				// generic landing page.
-				if st.LandingPage.Menu != nil && st.LandingPage.Menu.Enabled {
-					h.renderWorkspaceMenu(w, r, slug, workspaceID, st)
-					return
-				}
+				// Issue #497: the restaurant menu is a PER-FORM setting, served
+				// at the form's own URL — it no longer hijacks the workspace
+				// root. A legacy landing_page_json.menu is ignored here (and
+				// everywhere else) rather than rendered, so a stray blob from
+				// #438 can never blank the merchant's storefront again.
 				h.renderWorkspaceLanding(w, r, slug, forms, st.LandingPage)
 				return
 			}

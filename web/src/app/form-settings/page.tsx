@@ -16,6 +16,7 @@ import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import MediaPicker from "../../components/MediaPicker";
+import ProductPicker, { type PickerProduct } from "../../components/ProductPicker";
 import { workspaceQuery, workspaceScope } from "../../lib/workspace";
 
 type FormDetail = {
@@ -80,7 +81,7 @@ type FormEmailSettingsResponse = {
 // Issue #196: dispatcher-supported webhook events (dispatch2.go + purchases.go).
 const WEBHOOK_EVENTS = ["sale.paid", "sale.failed", "subscription.charged"] as const;
 
-type Tab = "general" | "confirmation" | "restrictions" | "notifications" | "chip" | "webhooks";
+type Tab = "general" | "menu" | "confirmation" | "restrictions" | "notifications" | "chip" | "webhooks";
 
 // Issue #208: a per-form CHIP feed (Gravity-Forms-style). A feed with no
 // condition is the default feed and always matches.
@@ -120,7 +121,7 @@ function feedUid() {
 const CHOICE_FIELD_TYPES = new Set(["select", "radio", "image-choice", "option"]);
 
 // Issue #392: a form block as used by the conditional-logic picker.
-type CondBlock = { id: string; value: string; type: string; choices?: { label?: string; value?: string }[] };
+type CondBlock = { id: string; value: string; type: string; product_id?: string; choices?: { label?: string; value?: string }[] };
 
 // Issue #392: resolve a field's user-friendly label (falling back to its type).
 function condFieldLabel(b: CondBlock | undefined): string {
@@ -319,6 +320,8 @@ type Confirmation = {
 
 const TABS: { key: Tab; label: string }[] = [
   { key: "general", label: "fs.general" },
+  // Issue #497: restaurant menu is a per-form setting.
+  { key: "menu", label: "fs.menu" },
   { key: "confirmation", label: "fs.confirmation" },
   { key: "restrictions", label: "fs.restrictions" },
   { key: "notifications", label: "fs.notifications" },
@@ -445,6 +448,23 @@ function FormSettingsInner() {
   // Issue #471: product image size + layout on the buyer's form.
   const [fsImgSize, setFsImgSize] = useState<"small" | "medium" | "large" | "hidden">("small");
   const [fsImgLayout, setFsImgLayout] = useState<"thumbnail-left" | "image-top">("thumbnail-left");
+
+  // Issue #497: restaurant menu — a per-form setting. The menu config lives on
+  // the form (forms.config.menu) and the menu is served at this form's own
+  // public URL. `menuProducts` holds the products THIS form references (from
+  // its own product blocks), so the category/best-seller pickers and the live
+  // preview can resolve stored IDs to names without leaking account products.
+  const [menuEnabled, setMenuEnabled] = useState(false);
+  const [menuCategories, setMenuCategories] = useState<{ name: string; product_ids: string[] }[]>([]);
+  const [menuBestSeller, setMenuBestSeller] = useState("");
+  const [menuOrderFormSlug, setMenuOrderFormSlug] = useState("");
+  const [menuProducts, setMenuProducts] = useState<PickerProduct[]>([]);
+  // The workspace's published forms, so the menu's optional "order form"
+  // selector lists real forms by title (not a raw slug).
+  const [menuForms, setMenuForms] = useState<{ id: string; slug: string; title: string }[]>([]);
+  const [menuPickerOpen, setMenuPickerOpen] = useState(false);
+  const [menuPickerCatIndex, setMenuPickerCatIndex] = useState(-1); // -1 = best-seller picker
+  const [menuSaving, setMenuSaving] = useState(false);
 
   // Confirmation
   const [fsRedS, setFsRedS] = useState("");
@@ -605,6 +625,49 @@ function FormSettingsInner() {
         const cd = (await cr.json()) as { confirmations: Confirmation[] };
         setConfs(cd.confirmations || []);
       }
+      // Issue #497: the form's restaurant-menu config (a per-form setting).
+      const mr = await fetch(`/api/rest/forms/${formId}/menu${workspaceQuery()}`);
+      if (mr.ok) {
+        const md = (await mr.json()) as {
+          enabled?: boolean;
+          categories?: { name: string; product_ids: string[] }[];
+          best_seller?: string;
+          order_form_slug?: string;
+        };
+        setMenuEnabled(!!md.enabled);
+        setMenuCategories(Array.isArray(md.categories) ? md.categories : []);
+        setMenuBestSeller(md.best_seller || "");
+        setMenuOrderFormSlug(md.order_form_slug || "");
+      }
+      // Issue #497: the menu's products are the ones THIS form references via
+      // its product blocks — resolved to names/thumbnails/prices from the
+      // workspace's active products. Account products the form does not
+      // reference are never offered (that was the #497 leak).
+      const referenced = ((d.config?.blocks as CondBlock[] | undefined) || [])
+        .filter((b) => b.type === "product" && b.product_id)
+        .map((b) => b.product_id as string);
+      if (referenced.length > 0) {
+        const pr = await fetch(`/api/rest/products${workspaceQuery()}`);
+        if (pr.ok) {
+          const all = (await pr.json()) as PickerProduct[];
+          const byId = new Map(all.filter((p) => p.active !== false).map((p) => [p.id, p]));
+          setMenuProducts(referenced.map((id) => byId.get(id)).filter((p): p is PickerProduct => !!p));
+        }
+      } else {
+        setMenuProducts([]);
+      }
+      // The workspace's published forms for the optional order-form selector.
+      const formsRes = await fetch(`/api/rest/forms${workspaceQuery()}`);
+      if (formsRes.ok) {
+        const fd = (await formsRes.json()) as { id: string; slug: string; title: string; status: string }[];
+        setMenuForms(
+          Array.isArray(fd)
+            ? fd
+                .filter((x) => x.slug && (x.status === "published" || x.status === "unlisted"))
+                .map((x) => ({ id: x.id, slug: x.slug, title: x.title }))
+            : []
+        );
+      }
     } catch {
       setErr(t("fs.loadErr"));
     } finally {
@@ -679,6 +742,52 @@ function FormSettingsInner() {
     }
     setMsg(t("fs.saved"));
     void load();
+  }
+
+  // Issue #497: save the form's restaurant-menu config. The menu is a per-form
+  // setting (forms.config.menu); enabling it makes THIS form's own URL render
+  // the menu page. Disabling clears the config so the form renders normally.
+  async function saveMenu() {
+    setMsg("");
+    if (!formId) return;
+    setMenuSaving(true);
+    try {
+      const r = await fetch(`/api/rest/forms/${formId}/menu${workspaceQuery()}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          enabled: menuEnabled,
+          categories: menuCategories,
+          best_seller: menuBestSeller,
+          order_form_slug: menuOrderFormSlug,
+        }),
+      });
+      setMsg(r.ok ? t("fs.menuSaved") : t("prof.failed"));
+    } finally {
+      setMenuSaving(false);
+    }
+  }
+
+  // Issue #497: resolve a stored product ID to the product it points at.
+  function menuProductByID(id: string): PickerProduct | undefined {
+    return menuProducts.find((p) => p.id === id);
+  }
+
+  // Issue #497: the live menu preview — sections in order, with the picked
+  // items. Mirrors the renderer: configured categories first (only the ones
+  // that resolve to a product this form references), then an "uncategorised"
+  // section for the form's referenced products not placed in any category.
+  function menuPreviewSections(): { name: string; ids: string[] }[] {
+    const placed = new Set<string>();
+    const sections: { name: string; ids: string[] }[] = [];
+    for (const c of menuCategories) {
+      const ids = (c.product_ids || []).filter((id) => menuProductByID(id));
+      for (const id of ids) placed.add(id);
+      if (ids.length > 0) sections.push({ name: c.name, ids });
+    }
+    const rest = menuProducts.filter((p) => !placed.has(p.id)).map((p) => p.id);
+    if (rest.length > 0) sections.push({ name: t("set.menuPreviewOther"), ids: rest });
+    return sections;
   }
 
   async function saveConfirmation() {
@@ -1298,6 +1407,314 @@ function FormSettingsInner() {
                           {t("fs.save")}
                         </button>
                       </div>
+                    </div>
+                  </section>
+                )}
+
+                {/* ── Restaurant menu (issue #497: a per-form setting) ── */}
+                {tab === "menu" && (
+                  <section className="jf-card p-6">
+                    <h2 className="text-base font-semibold">{t("fs.menu")}</h2>
+                    <p className="mt-1 max-w-xl text-sm text-[var(--jf-muted)]">{t("fs.menuHint")}</p>
+
+                    <div className="mt-4 space-y-4">
+                      <div className="flex items-start justify-between gap-4 rounded-lg border border-[var(--jf-border)] p-3">
+                        <div>
+                          <p className="text-sm font-medium">{t("set.menuEnabledTitle")}</p>
+                          <p className="mt-0.5 max-w-md text-xs text-slate-500">{t("set.menuEnabledHelp")}</p>
+                        </div>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={menuEnabled}
+                          onClick={() => setMenuEnabled((v) => !v)}
+                          className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+                            menuEnabled ? "bg-[var(--jf-primary)]" : "bg-slate-300"
+                          }`}
+                        >
+                          <span
+                            className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${
+                              menuEnabled ? "left-[22px]" : "left-0.5"
+                            }`}
+                          />
+                        </button>
+                      </div>
+
+                      {menuEnabled && (
+                        <>
+                          {menuProducts.length === 0 ? (
+                            <p className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] leading-relaxed text-amber-800">
+                              {t("fs.menuNoProducts")}
+                            </p>
+                          ) : (
+                            <>
+                              <div>
+                                <label className={labelCls}>{t("set.menuBestSeller")}</label>
+                                <div className="mt-1 flex max-w-xl flex-wrap items-center gap-2 rounded-lg border border-[var(--jf-border)] p-2">
+                                  {menuBestSeller && menuProductByID(menuBestSeller) ? (
+                                    <>
+                                      <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-md bg-slate-100">
+                                        {menuProductByID(menuBestSeller)?.images?.[0] ? (
+                                          /* eslint-disable-next-line @next/next/no-img-element */
+                                          <img
+                                            src={menuProductByID(menuBestSeller)!.images![0]}
+                                            alt=""
+                                            className="h-full w-full object-cover"
+                                          />
+                                        ) : (
+                                          <span className="text-[10px] text-slate-400">—</span>
+                                        )}
+                                      </span>
+                                      <span className="min-w-0 flex-1 truncate text-sm">
+                                        {menuProductByID(menuBestSeller)!.name}
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setMenuPickerCatIndex(-1);
+                                          setMenuPickerOpen(true);
+                                        }}
+                                        className="jf-btn-outline px-2 py-1 text-[11px]"
+                                      >
+                                        {t("set.menuChangeBestSeller")}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setMenuBestSeller("")}
+                                        className="jf-btn-ghost px-2 py-1 text-[11px] text-red-600"
+                                      >
+                                        {t("set.menuClearBestSeller")}
+                                      </button>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <span className="flex-1 truncate text-sm text-slate-400">
+                                        {menuBestSeller ? t("set.menuUnknownProduct") : t("set.menuBestSellerNone")}
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setMenuPickerCatIndex(-1);
+                                          setMenuPickerOpen(true);
+                                        }}
+                                        className="jf-btn-primary px-2.5 py-1 text-[11px]"
+                                      >
+                                        {t("set.menuChooseBestSeller")}
+                                      </button>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+
+                              <div>
+                                <label className={labelCls}>{t("set.menuCategories")}</label>
+                                <div className="mt-1 space-y-2">
+                                  {menuCategories.map((c, i) => (
+                                    <div key={i} className="flex flex-col gap-2 rounded-lg border border-[var(--jf-border)] p-3">
+                                      <div className="flex items-center gap-2">
+                                        <input
+                                          value={c.name}
+                                          onChange={(e) =>
+                                            setMenuCategories((arr) =>
+                                              arr.map((x, j) => (j === i ? { ...x, name: e.target.value } : x))
+                                            )
+                                          }
+                                          className="jf-input flex-1"
+                                          placeholder={t("set.menuCatName")}
+                                        />
+                                        <button
+                                          type="button"
+                                          onClick={() => setMenuCategories((arr) => arr.filter((_, j) => j !== i))}
+                                          className="jf-btn-ghost px-2 py-1 text-[11px] text-red-600"
+                                        >
+                                          {t("set.menuCatRemove")}
+                                        </button>
+                                      </div>
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        {(c.product_ids || []).map((id) => {
+                                          const p = menuProductByID(id);
+                                          return (
+                                            <span
+                                              key={id}
+                                              className={`inline-flex items-center gap-1.5 rounded-full border py-0.5 pl-0.5 pr-2 text-xs ${
+                                                p ? "border-[var(--jf-border)] bg-white" : "border-amber-300 bg-amber-50"
+                                              }`}
+                                            >
+                                              <span className="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-100">
+                                                {p?.images?.[0] ? (
+                                                  /* eslint-disable-next-line @next/next/no-img-element */
+                                                  <img src={p.images[0]} alt="" className="h-full w-full object-cover" />
+                                                ) : (
+                                                  <span className="text-[9px] text-slate-400">—</span>
+                                                )}
+                                              </span>
+                                              <span className="max-w-[12rem] truncate">
+                                                {p ? p.name : t("set.menuUnknownProduct")}
+                                              </span>
+                                              <button
+                                                type="button"
+                                                aria-label={t("set.menuCatRemove")}
+                                                onClick={() =>
+                                                  setMenuCategories((arr) =>
+                                                    arr.map((x, j) =>
+                                                      j === i
+                                                        ? { ...x, product_ids: (x.product_ids || []).filter((v) => v !== id) }
+                                                        : x
+                                                    )
+                                                  )
+                                                }
+                                                className="text-slate-400 hover:text-red-500"
+                                              >
+                                                ✕
+                                              </button>
+                                            </span>
+                                          );
+                                        })}
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setMenuPickerCatIndex(i);
+                                            setMenuPickerOpen(true);
+                                          }}
+                                          className="jf-btn-outline px-2.5 py-1 text-[11px]"
+                                        >
+                                          + {t("set.menuPickProducts")}
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ))}
+                                  <button
+                                    type="button"
+                                    onClick={() => setMenuCategories((arr) => [...arr, { name: "", product_ids: [] }])}
+                                    className="jf-btn-outline"
+                                  >
+                                    + {t("set.menuCatAdd")}
+                                  </button>
+                                </div>
+                              </div>
+
+                              {/* Issue #493/#497: optional order form for extra
+                                  checkout fields. Its field blocks ARE the
+                                  extra fields the menu checkout collects. */}
+                              <div>
+                                <label className={labelCls}>{t("set.menuOrderForm")}</label>
+                                <div className="mt-1 max-w-xl space-y-2">
+                                  <select
+                                    value={menuOrderFormSlug}
+                                    onChange={(e) => setMenuOrderFormSlug(e.target.value)}
+                                    className="jf-input"
+                                  >
+                                    <option value="">{t("set.menuOrderFormNone")}</option>
+                                    {menuForms.map((f) => (
+                                      <option key={f.id} value={f.slug}>
+                                        {f.title} — {f.slug}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  <p className="text-[11px] leading-relaxed text-slate-500">
+                                    {t("set.menuOrderFormHelp")}
+                                  </p>
+                                  <p className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] leading-relaxed text-amber-800">
+                                    {t("set.menuOrderFormMandatory")}
+                                  </p>
+                                  {menuOrderFormSlug && (
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      {(() => {
+                                        const f = menuForms.find((x) => x.slug === menuOrderFormSlug);
+                                        return (
+                                          <>
+                                            <span className="text-[11px] text-[var(--jf-muted)]">
+                                              {f
+                                                ? t("set.menuOrderFormSelected", { n: f.title })
+                                                : t("set.menuOrderFormMissing")}
+                                            </span>
+                                            {f && (
+                                              <a
+                                                href={`/builder?form=${f.id}`}
+                                                className="jf-btn-outline px-2.5 py-1 text-[11px]"
+                                              >
+                                                {t("set.menuOrderFormEdit")}
+                                              </a>
+                                            )}
+                                          </>
+                                        );
+                                      })()}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Issue #497: live preview of the menu structure,
+                                  scoped to the products THIS form references. */}
+                              <div className="rounded-lg border border-[var(--jf-border)] p-3">
+                                <div className="flex items-center justify-between gap-2">
+                                  <p className="text-sm font-medium">{t("set.menuPreviewTitle")}</p>
+                                  <span className="text-xs text-[var(--jf-muted)]">
+                                    {t("set.menuPreviewItems", {
+                                      n: menuPreviewSections().reduce((n, s) => n + s.ids.length, 0),
+                                    })}
+                                  </span>
+                                </div>
+                                <p className="mt-0.5 max-w-xl text-xs text-slate-500">
+                                  {t("set.menuPreviewHelp")}
+                                </p>
+                                {menuPreviewSections().length === 0 && (
+                                  <p className="mt-2 text-sm text-slate-400">{t("set.menuPreviewEmpty")}</p>
+                                )}
+                                <div className="mt-2 space-y-2">
+                                  {menuPreviewSections().map((s, si) => (
+                                    <div key={si}>
+                                      <p className="text-xs font-semibold uppercase tracking-wide text-[var(--jf-muted)]">
+                                        {s.name || t("set.menuCatName")}
+                                      </p>
+                                      <div className="mt-1 flex flex-wrap gap-2">
+                                        {s.ids.map((id) => {
+                                          const p = menuProductByID(id);
+                                          if (!p) return null;
+                                          return (
+                                            <span
+                                              key={id}
+                                              className="inline-flex items-center gap-2 rounded-lg border border-[var(--jf-border)] bg-white px-2 py-1"
+                                            >
+                                              <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-md bg-slate-100">
+                                                {p.images?.[0] ? (
+                                                  /* eslint-disable-next-line @next/next/no-img-element */
+                                                  <img src={p.images[0]} alt="" className="h-full w-full object-cover" />
+                                                ) : (
+                                                  <span className="text-[9px] text-slate-400">—</span>
+                                                )}
+                                              </span>
+                                              <span className="text-xs">
+                                                <span className="block max-w-[10rem] truncate font-medium text-slate-700">
+                                                  {p.name}
+                                                </span>
+                                                <span className="block text-[10px] text-[var(--jf-muted)]">
+                                                  {`RM${(p.price_sen / 100).toLocaleString("en-MY", { minimumFractionDigits: 2 })}`}
+                                                </span>
+                                              </span>
+                                            </span>
+                                          );
+                                        })}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            </>
+                          )}
+
+                          <div className="flex flex-wrap items-center gap-2 pt-1">
+                            <button onClick={saveMenu} disabled={menuSaving} className="jf-btn-primary">
+                              {t("fs.save")}
+                            </button>
+                            {form?.url && (
+                              <a href={form.url} target="_blank" rel="noreferrer" className="jf-btn-outline">
+                                {t("set.menuPreview")}
+                              </a>
+                            )}
+                          </div>
+                        </>
+                      )}
                     </div>
                   </section>
                 )}
@@ -2001,6 +2418,36 @@ function FormSettingsInner() {
           setLogoPickerOpen(false);
         }}
         current={fsLogo}
+      />
+      {/* Issue #497: product picker for a menu category (multi-select) or the
+          best-seller (single-select), scoped to the products THIS form
+          references. Returns product IDs only, so the stored menu JSON shape is
+          unchanged. */}
+      <ProductPicker
+        open={menuPickerOpen}
+        onClose={() => setMenuPickerOpen(false)}
+        multi={menuPickerCatIndex >= 0}
+        selected={
+          menuPickerCatIndex >= 0
+            ? menuCategories[menuPickerCatIndex]?.product_ids || []
+            : menuBestSeller
+              ? [menuBestSeller]
+              : []
+        }
+        title={
+          menuPickerCatIndex >= 0 ? t("set.menuPickerTitleCategory") : t("set.menuPickerTitleBestSeller")
+        }
+        onlyIds={menuProducts.map((p) => p.id)}
+        onConfirm={(ids) => {
+          if (menuPickerCatIndex >= 0) {
+            setMenuCategories((arr) =>
+              arr.map((x, j) => (j === menuPickerCatIndex ? { ...x, product_ids: ids } : x))
+            );
+          } else {
+            setMenuBestSeller(ids[0] || "");
+          }
+          setMenuPickerOpen(false);
+        }}
       />
     </Shell>
   );

@@ -1,59 +1,40 @@
-// Issue #438: QR ordering flow — restaurant-menu landing template.
+// Issue #497: the restaurant menu is a PER-FORM setting, served at the form's
+// OWN public URL (/{formSlug}).
 //
-// A merchant can enable a clean restaurant menu on their workspace root
-// (Beep-style): categories, item images, prices and a best-seller highlight,
-// built on the landing page (#360) + the workspace's published products. A
-// customer scans a QR stand at the table, lands on this menu, picks items and
-// pays online (CHIP) — the order reaches the merchant with the table number.
+// Before #497 the menu config lived on the workspace landing page
+// (workspace_settings.landing_page_json) and the workspace ROOT rendered it —
+// which meant (a) turning the menu on hijacked the whole storefront and hid the
+// merchant's forms, (b) the menu sold EVERY active product in the account
+// (ListActiveByAccount) so unrelated junk leaked in, and (c) a workspace could
+// only ever have one menu. Wan's call: the menu belongs to a FORM, the same
+// shape as the optional order form in #493.
 //
-// The menu reuses the parent LandingPage's hero/logo/theme colors and groups
-// the workspace's active products into the configured categories. Products
-// not in any category are shown under an "All" section.
+// Now:
+//   - the config lives on the form (forms.config.menu, see dbstore.MenuFromConfig);
+//   - the workspace root renders the normal landing page / form listing again;
+//   - a menu form renders ONLY the products its own product blocks reference —
+//     no account-wide leakage, no "All" section;
+//   - two menu forms in one workspace coexist with different categories;
+//   - non-menu forms (RSVP/wedding) are completely untouched.
 //
-// Issue #485: the page was redesigned to match the reference layout —
-//   - header: back arrow + table number (?table=N, encoded by the QR stand in
-//     qr.go and carried on the order as sales.table_number), cafe name + an
-//     info (i) affordance, then the location line;
-//   - a filter row: a category <select> (native, progressive) + a search
-//     input with a magnifier submit button;
-//   - two tiers: best-sellers as a 2-column grid of square-image cards, and
-//     every category as list rows (text left, ~100px thumbnail right) with a
-//     separator between rows;
-//   - items without an image render as clean text-only cards/rows — no empty
-//     image slot.
+// A menu form's own product blocks ARE the menu source of truth: the block's
+// product_id and the block's label (the merchant's per-item display name) are
+// read from the form config, and each referenced product resolves LIVE from the
+// products table (#461) with the form snapshot as the archived/deleted
+// fallback. A menu form with no product blocks renders an empty-state — it
+// NEVER falls back to "every account product".
 //
-// Issue #492: the menu is now a real ordering surface — add to cart → basket →
-// checkout → CHIP. Before, every item was an <a href> to the workspace's first
-// published form (firstPublishedFormSlug), so clicking "Nasi Lemak RM18" landed
-// the buyer on a form titled "Beli Produk Pertama" selling a different product
-// at a different price. That link is gone: an item is now an add-to-cart
-// control and the page checks out through POST /menu-order (issue #491, the
-// workspace-scoped order endpoint that needs no form), sending
-// items[{product_id, quantity}] + client{full_name,email} + table_number +
-// affiliate_code. The basket persists in localStorage keyed by workspace, so
-// filtering/searching or reloading never loses it. A sticky bar shows the live
-// count/total and opens the basket sheet.
+// The page stays SERVER-RENDERED with the INLINE template (menuPageTmpl; the
+// {{define}} blocks are inline on purpose — do not split into a separate
+// template.New, that bug is documented below). No React, no build step.
 //
-// Issue #493 (part 3): the merchant may attach a published form to the menu
-// (Settings → Storefront → Restaurant menu) whose field blocks define the
-// EXTRA fields the menu checkout collects. Those blocks are configured in the
-// normal form builder — there is no second field editor — and the checkout
-// renders them with the form's own labels/required flags while the backend
-// re-validates them against the same contract (formfields.ValidateFields).
-// The buyer's name + email are ALWAYS collected and can never be removed by
-// the attached form, because CHIP requires both to create a purchase.
-//
-// SCOPE: this is RESTAURANT-MENU ONLY. Regular forms (RSVP, wedding, etc.)
-// keep their existing form flow completely untouched — the cart lives entirely
-// in this template + the menu-order endpoint.
-//
-// The page stays SERVER-RENDERED: the controls are plain HTML (so a GET submit
-// filters server-side without JS) and a tiny inline script upgrades them to
-// instant client-side filtering plus the cart. No build step, no client
-// framework.
+// SCOPE: this is RESTAURANT-MENU ONLY. Regular forms keep their existing form
+// flow completely untouched — the cart lives entirely in this template + the
+// form-scoped order endpoint.
 package httpapi
 
 import (
+	"encoding/json"
 	"html/template"
 	"net/http"
 	"strings"
@@ -173,10 +154,35 @@ func menuExtraFields(contract []formfields.Field, ls langStrings) []menuFieldVie
 	return out
 }
 
-// workspaceMenuData is the template payload for the restaurant menu.
+// menuTheme is the resolved styling for a per-form menu page (issue #497). The
+// menu is a FORM, so its hero/colors come from the form's theme map
+// (set_form_theme / Form Settings → General) with the workspace's contact
+// details as the info-panel fallback. A zero value is safe: every field is
+// optional and the template has a default for each.
+type menuTheme struct {
+	// Hero is the menu heading — the form title.
+	Hero string
+	// Subtitle is the optional location line (workspace contact address).
+	Subtitle string
+	// PrimaryColor is the accent (hex, e.g. "#4f46e5"). Empty = default.
+	PrimaryColor string
+	// BackgroundColor is the page background (hex). Empty = default.
+	BackgroundColor string
+	// LogoURL is an optional brand logo.
+	LogoURL string
+}
+
+// workspaceMenuData is the template payload for the per-form restaurant menu
+// (issue #497). The menu is a FORM: Slug is the FORM's public slug (the page is
+// served at /{formSlug}), Menu is the form's own config, and the products come
+// from the form's own product blocks.
 type workspaceMenuData struct {
 	Slug string
-	Lp   *dbstore.LandingPage
+	// Menu is the per-form menu config (forms.config.menu). Non-nil whenever
+	// the page renders (renderFormMenu returns early otherwise).
+	Menu *dbstore.MenuPage
+	// Th is the resolved styling (form theme + workspace contact fallback).
+	Th menuTheme
 	// Ls is the buyer-facing dictionary for the workspace's default language
 	// (issue #485) — every user-facing string on the page is localised.
 	Ls langStrings
@@ -196,15 +202,15 @@ type workspaceMenuData struct {
 	// BestSellers is the top section: 2-column square-image cards.
 	BestSellers []menuProductView
 	Categories  []menuCategoryView
-	// All is the "everything else" section (products not in any category).
-	All []menuProductView
 	// Query / Cat echo the active filter state so the controls keep their
 	// value after a no-JS GET submit (issue #485).
 	Query string
 	Cat   string
-	// HasForms reports whether at least one published form exists (used to
-	// decide the "no menu yet" hint).
-	HasForms bool
+	// HasItems reports whether the form referenced at least one renderable
+	// product (used to decide the empty-state hint). A menu form with no
+	// product blocks shows the hint instead of falling back to account
+	// products (issue #497).
+	HasItems bool
 	// Issue #493: the optional form the merchant attached to the menu for
 	// extra checkout info. ExtraFields are its field blocks (rendered in the
 	// checkout step); ExtraFormSlug / ExtraFormID identify it and
@@ -302,13 +308,13 @@ var menuPageTmpl = template.Must(template.New("workspace-menu").Parse(`{{define 
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{.Lp.Hero}}</title>
+<title>{{.Th.Hero}}</title>
 <style>
   :root { color-scheme: light; }
   * { box-sizing: border-box; }
   [hidden] { display:none !important; }
   body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-         background:{{if .Lp.BackgroundColor}}{{.Lp.BackgroundColor}}{{else}}#f7f8f8{{end}};
+         background:{{if .Th.BackgroundColor}}{{.Th.BackgroundColor}}{{else}}#f7f8f8{{end}};
          color:#17181c; min-height:100vh; }
   .wrap { max-width:860px; margin:0 auto; padding:10px 16px 64px; }
   body.has-cart .wrap { padding-bottom:104px; }
@@ -328,7 +334,7 @@ var menuPageTmpl = template.Must(template.New("workspace-menu").Parse(`{{define 
                   display:inline-flex; align-items:center; justify-content:center;
                   color:#6b7280; border:1px solid #d7dae0; background:#fff; }
   .info summary::-webkit-details-marker { display:none; }
-  .info[open] summary { color:{{if .Lp.PrimaryColor}}{{.Lp.PrimaryColor}}{{else}}#4f46e5{{end}}; }
+  .info[open] summary { color:{{if .Th.PrimaryColor}}{{.Th.PrimaryColor}}{{else}}#4f46e5{{end}}; }
   .ipanel { position:absolute; inset-inline-end:0; top:30px; z-index:5; min-width:210px; max-width:78vw;
             background:#fff; border:1px solid #e6e8ec; border-radius:12px; padding:10px 12px;
             box-shadow:0 8px 24px rgba(23,24,28,.12); font-size:13px; color:#3f434a; }
@@ -347,7 +353,7 @@ var menuPageTmpl = template.Must(template.New("workspace-menu").Parse(`{{define 
             border:1px solid #e6e8ec; border-radius:999px; background:#fff;
             padding-inline:42px; font:inherit; font-size:14px; font-weight:600; color:#17181c;
             text-overflow:ellipsis; }
-  .catsel:focus { outline:2px solid {{if .Lp.PrimaryColor}}{{.Lp.PrimaryColor}}{{else}}#4f46e5{{end}};
+  .catsel:focus { outline:2px solid {{if .Th.PrimaryColor}}{{.Th.PrimaryColor}}{{else}}#4f46e5{{end}};
                   outline-offset:1px; }
   .searchwrap { flex:0 1 168px; min-width:0; display:flex; align-items:center; gap:4px;
                 height:44px; border:1px solid #e6e8ec; border-radius:999px; background:#fff;
@@ -358,12 +364,12 @@ var menuPageTmpl = template.Must(template.New("workspace-menu").Parse(`{{define 
          justify-content:center; border:0; border-radius:50%; background:transparent;
          color:#6b7280; cursor:pointer; }
   .mag:hover { background:rgba(23,24,28,.06); }
-  .searchwrap:focus-within { border-color:{{if .Lp.PrimaryColor}}{{.Lp.PrimaryColor}}{{else}}#4f46e5{{end}}; }
+  .searchwrap:focus-within { border-color:{{if .Th.PrimaryColor}}{{.Th.PrimaryColor}}{{else}}#4f46e5{{end}}; }
 
   /* ---- sections ---- */
   .sec { margin-top:24px; }
   .sec h2 { margin:0 0 12px; padding-bottom:8px; font-size:18px; font-weight:700;
-            letter-spacing:-.01em; color:{{if .Lp.PrimaryColor}}{{.Lp.PrimaryColor}}{{else}}#17181c{{end}};
+            letter-spacing:-.01em; color:{{if .Th.PrimaryColor}}{{.Th.PrimaryColor}}{{else}}#17181c{{end}};
             border-bottom:1px solid #e6e8ec; }
 
   /* best sellers: 2-column square-image cards */
@@ -399,14 +405,14 @@ var menuPageTmpl = template.Must(template.New("workspace-menu").Parse(`{{define 
   /* add-to-cart affordance + on-item quantity badge (issue #492) */
   .plus { flex:0 0 auto; width:22px; height:22px; border-radius:50%; display:inline-flex;
           align-items:center; justify-content:center; font-size:15px; font-weight:700;
-          line-height:1; color:#fff; background:{{if .Lp.PrimaryColor}}{{.Lp.PrimaryColor}}{{else}}#4f46e5{{end}}; }
+          line-height:1; color:#fff; background:{{if .Th.PrimaryColor}}{{.Th.PrimaryColor}}{{else}}#4f46e5{{end}}; }
   .qtybadge { position:absolute; top:8px; inset-inline-end:8px; min-width:22px; height:22px;
               padding:0 6px; border-radius:999px; display:inline-flex; align-items:center;
               justify-content:center; font-size:12px; font-weight:700; color:#fff;
-              background:{{if .Lp.PrimaryColor}}{{.Lp.PrimaryColor}}{{else}}#4f46e5{{end}};
+              background:{{if .Th.PrimaryColor}}{{.Th.PrimaryColor}}{{else}}#4f46e5{{end}};
               box-shadow:0 2px 6px rgba(23,24,28,.25); }
 
-  .best { display:inline-block; background:{{if .Lp.PrimaryColor}}{{.Lp.PrimaryColor}}{{else}}#4f46e5{{end}};
+  .best { display:inline-block; background:{{if .Th.PrimaryColor}}{{.Th.PrimaryColor}}{{else}}#4f46e5{{end}};
           color:#fff; font-size:10px; font-weight:700; padding:2px 8px; border-radius:999px;
           text-transform:uppercase; letter-spacing:.04em; }
   .hint { margin-top:20px; color:#9ca3af; font-size:14px; text-align:center; }
@@ -419,7 +425,7 @@ var menuPageTmpl = template.Must(template.New("workspace-menu").Parse(`{{define 
   .baropen { width:100%; display:flex; align-items:center; justify-content:space-between; gap:12px;
              border:0; border-radius:14px; padding:14px 16px; font:inherit; font-size:15px;
              font-weight:700; color:#fff; cursor:pointer;
-             background:{{if .Lp.PrimaryColor}}{{.Lp.PrimaryColor}}{{else}}#4f46e5{{end}};
+             background:{{if .Th.PrimaryColor}}{{.Th.PrimaryColor}}{{else}}#4f46e5{{end}};
              box-shadow:0 8px 24px rgba(23,24,28,.22); }
   .baropen .barcount { display:inline-flex; align-items:center; gap:6px; }
   .baropen .barcta { opacity:.92; font-weight:600; }
@@ -449,7 +455,7 @@ var menuPageTmpl = template.Must(template.New("workspace-menu").Parse(`{{define 
   .sheetfoot input { width:100%; height:44px; margin-top:5px; border:1px solid #e6e8ec;
                      border-radius:10px; padding:0 12px; font:inherit; font-size:15px; color:#17181c;
                      background:#fff; }
-  .sheetfoot input:focus { outline:2px solid {{if .Lp.PrimaryColor}}{{.Lp.PrimaryColor}}{{else}}#4f46e5{{end}};
+  .sheetfoot input:focus { outline:2px solid {{if .Th.PrimaryColor}}{{.Th.PrimaryColor}}{{else}}#4f46e5{{end}};
                            outline-offset:1px; }
   /* Issue #493: extra checkout fields from the attached form. */
   .sheetfoot select, .sheetfoot textarea { width:100%; margin-top:5px; border:1px solid #e6e8ec;
@@ -457,7 +463,7 @@ var menuPageTmpl = template.Must(template.New("workspace-menu").Parse(`{{define 
                      background:#fff; }
   .sheetfoot select { height:44px; padding:0 12px; }
   .sheetfoot select:focus, .sheetfoot textarea:focus {
-                     outline:2px solid {{if .Lp.PrimaryColor}}{{.Lp.PrimaryColor}}{{else}}#4f46e5{{end}}; outline-offset:1px; }
+                     outline:2px solid {{if .Th.PrimaryColor}}{{.Th.PrimaryColor}}{{else}}#4f46e5{{end}}; outline-offset:1px; }
   .sheetfoot .chk { display:flex; align-items:center; gap:8px; font-size:14px; font-weight:500; margin-top:10px; }
   .sheetfoot .chk input { width:auto; height:auto; margin:0; }
   .sheetfoot .radios { display:flex; flex-direction:column; gap:4px; margin-top:5px; }
@@ -465,10 +471,10 @@ var menuPageTmpl = template.Must(template.New("workspace-menu").Parse(`{{define 
   .extrahead { margin-top:12px; }
   .extrahead .extrahelp { margin:0; font-size:12px; color:#6b7280; line-height:1.5; }
   .extrahead .extralink { display:inline-block; margin-top:2px; font-size:12px; font-weight:600;
-                          color:{{if .Lp.PrimaryColor}}{{.Lp.PrimaryColor}}{{else}}#4f46e5{{end}}; }
+                          color:{{if .Th.PrimaryColor}}{{.Th.PrimaryColor}}{{else}}#4f46e5{{end}}; }
   .paybtn { width:100%; margin-top:14px; height:50px; border:0; border-radius:12px;
             font:inherit; font-size:16px; font-weight:700; color:#fff; cursor:pointer;
-            background:{{if .Lp.PrimaryColor}}{{.Lp.PrimaryColor}}{{else}}#4f46e5{{end}}; }
+            background:{{if .Th.PrimaryColor}}{{.Th.PrimaryColor}}{{else}}#4f46e5{{end}}; }
   .paybtn:disabled { opacity:.6; cursor:default; }
   .err { margin:10px 0 0; color:#b91c1c; font-size:13px; line-height:1.45; }
 
@@ -509,20 +515,20 @@ var menuPageTmpl = template.Must(template.New("workspace-menu").Parse(`{{define 
         {{if .Table}}<div class="tbl">{{.Ls.MenuTable}} {{.Table}}</div>{{end}}
       </div>
       <div class="hname">
-        <h1>{{if .Lp.Hero}}{{.Lp.Hero}}{{else}}{{.Slug}}{{end}}</h1>
+        <h1>{{if .Th.Hero}}{{.Th.Hero}}{{else}}{{.Slug}}{{end}}</h1>
         <details class="info">
           <summary aria-label="{{.Ls.MenuInfo}}" title="{{.Ls.MenuInfo}}">
             <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 8h.01"/></svg>
           </summary>
           <div class="ipanel">
-            {{if .Lp.Hero}}<div class="irow">{{.Lp.Hero}}</div>{{end}}
-            {{if .Lp.Subtitle}}<div class="irow">{{.Lp.Subtitle}}</div>{{end}}
+            {{if .Th.Hero}}<div class="irow">{{.Th.Hero}}</div>{{end}}
+            {{if .Th.Subtitle}}<div class="irow">{{.Th.Subtitle}}</div>{{end}}
             {{if .ContactAddress}}<div class="irow">{{.ContactAddress}}</div>{{end}}
             {{if .ContactPhone}}<div class="irow">{{.ContactPhone}}</div>{{end}}
           </div>
         </details>
       </div>
-      {{if .Lp.Subtitle}}<p class="loc">{{.Lp.Subtitle}}</p>{{end}}
+      {{if .Th.Subtitle}}<p class="loc">{{.Th.Subtitle}}</p>{{end}}
     </header>
 
     <form class="filters" id="menuFilters" method="get" action="" role="search">
@@ -562,16 +568,7 @@ var menuPageTmpl = template.Must(template.New("workspace-menu").Parse(`{{define 
     </section>
     {{end}}
 
-    {{if .All}}
-    <section class="sec" data-cat="{{.Ls.MenuAll}}">
-      <h2>{{.Ls.MenuAll}}</h2>
-      <div class="rows">
-        {{range .All}}{{template "menuRow" .}}{{end}}
-      </div>
-    </section>
-    {{end}}
-
-    {{if not .HasForms}}<p class="hint">{{.Ls.MenuEmpty}}</p>{{end}}
+    {{if not .HasItems}}<p class="hint">{{.Ls.MenuEmpty}}</p>{{end}}
     <p class="foot">{{.Ls.MenuPoweredBy}}</p>
   </div>
 
@@ -687,11 +684,12 @@ document.querySelectorAll('img[data-base]').forEach(function(im){
 
 // Issue #492: restaurant-menu cart + checkout.
 //   - tapping a card/row adds the item (no navigation to a form);
-//   - the cart persists in localStorage keyed by workspace, so filtering,
-//     searching or reloading never loses the basket;
+//   - the cart persists in localStorage keyed by FORM SLUG (issue #497: the
+//     menu is a form, so two menu forms in one workspace keep separate
+//     baskets), so filtering, searching or reloading never loses the basket;
 //   - the sticky bar shows the live count + total and opens the basket sheet;
-//   - checkout posts to the workspace order endpoint (POST /menu-order, #491)
-//     with items[{product_id,quantity}], client{full_name,email},
+//   - checkout posts to the FORM's own order endpoint (POST /{slug}/order,
+//     issue #497) with items[{product_id,quantity}], client{full_name,email},
 //     table_number and affiliate_code, then redirects to the CHIP checkout URL.
 // Totals shown here are DISPLAY ONLY — the server re-reads every price from the
 // products table and re-sums the authoritative total.
@@ -725,7 +723,9 @@ document.querySelectorAll('img[data-base]').forEach(function(im){
   var table=qs.get('table')||attr('data-table')||'';
   var aff=qs.get('aff')||attr('data-aff')||'';
 
-  var KEY='jf.menu.cart.v1.'+slug;
+  // Issue #497: the cart is keyed by the FORM slug — the menu is a form, so
+  // two menu forms in one workspace keep separate baskets.
+  var KEY='jf.menu.cart.v2.'+slug;
   var cart=[];
   try{ var raw=localStorage.getItem(KEY); if(raw) cart=JSON.parse(raw)||[]; }catch(e){ cart=[]; }
   if(!Array.isArray(cart)) cart=[];
@@ -887,7 +887,7 @@ document.querySelectorAll('img[data-base]').forEach(function(im){
     // basket on any failure so the buyer can retry.
     var wait=Math.max(0,3500-(Date.now()-loadAt));
     setTimeout(function(){
-      fetch('/menu-order',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+      fetch('/'+encodeURIComponent(slug)+'/order',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
         .then(function(r){ return r.json().then(function(d){ return {ok:r.ok,d:d||{}}; }); })
         .then(function(res){
           var d=res.d;
@@ -908,27 +908,57 @@ document.querySelectorAll('img[data-base]').forEach(function(im){
 </body>
 </html>`))
 
-// renderWorkspaceMenu writes the restaurant-menu landing template (issue
-// #438, redesigned in #485, cart in #492). It resolves the workspace's active
-// products and groups them into the configured categories. Every item is an
-// add-to-cart control — the page checks out through POST /menu-order (#491),
-// so no item routes the buyer into a form. The table number from ?table=N and
-// the affiliate code from ?aff=CODE are shown/echoed, and every user-facing
-// string is localised to the workspace's default language.
-func (h *PublicHandlers) renderWorkspaceMenu(w http.ResponseWriter, r *http.Request, slug, workspaceID string, st *dbstore.WorkspaceSettings) {
-	lp := st.LandingPage
-	// Resolve the workspace's account(s) to list their active products.
-	acc, aerr := h.Accounts.ByWorkspaceID(r.Context(), workspaceID)
-	if aerr != nil || acc == nil {
-		http.Error(w, "ralat", http.StatusInternalServerError)
-		return
+// formMenuItems derives the menu's product list from a form's OWN product
+// blocks (issue #497). Each product block references one product via its
+// product_id and carries the merchant's per-item display label in value. The
+// returned order follows the block order, so the merchant controls the menu
+// order in the form builder; duplicates collapse to the first reference.
+//
+// A block with no product_id is skipped. Nothing here reads the account's
+// product list, so an unrelated account product can never leak into the menu.
+func formMenuItems(config map[string]any) []formMenuItem {
+	if config == nil {
+		return nil
 	}
-	products, perr := h.Products.ListActiveByAccount(r.Context(), acc.ID)
-	if perr != nil {
-		http.Error(w, "ralat", http.StatusInternalServerError)
-		return
+	raw, err := json.Marshal(config)
+	if err != nil {
+		return nil
 	}
+	var cfg struct {
+		Blocks []struct {
+			Type      string `json:"type"`
+			ProductID string `json:"product_id"`
+			Value     string `json:"value"`
+		} `json:"blocks"`
+	}
+	if json.Unmarshal(raw, &cfg) != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []formMenuItem
+	for _, b := range cfg.Blocks {
+		if b.Type != "product" {
+			continue
+		}
+		pid := strings.TrimSpace(b.ProductID)
+		if pid == "" || seen[pid] {
+			continue
+		}
+		seen[pid] = true
+		out = append(out, formMenuItem{ProductID: pid, Label: strings.TrimSpace(b.Value)})
+	}
+	return out
+}
 
+// renderFormMenu writes the per-form restaurant-menu page (issue #497). It is
+// called from serveForm when the form's config carries an enabled menu. The
+// menu's products come from the form's own product blocks — never from the
+// account's product list — and each item resolves LIVE from the products table
+// (#461) with the form's own snapshot as the archived/deleted fallback. The
+// table number from ?table=N and the affiliate code from ?aff=CODE are
+// shown/echoed, and every user-facing string is localised to the workspace's
+// default language.
+func (h *PublicHandlers) renderFormMenu(w http.ResponseWriter, r *http.Request, f *dbstore.Form, menu *dbstore.MenuPage) {
 	// Issue #485: the table number the QR stand encoded (?table=N, see qr.go),
 	// carried on the order as sales.table_number. Shown in the header and
 	// preserved on the filter/search round-trip.
@@ -942,49 +972,103 @@ func (h *PublicHandlers) renderWorkspaceMenu(w http.ResponseWriter, r *http.Requ
 	if runes := []rune(aff); len(runes) > 64 {
 		aff = string(runes[:64])
 	}
-	ls := langStringsForCode(st.WorkspaceLang())
 
-	byID := map[string]*dbstore.Product{}
-	for _, p := range products {
-		byID[p.ID] = p
+	// The workspace's default language + contact details style the page and
+	// localise every system string. Nil-safe: a form with no linked workspace
+	// (legacy) falls back to English and no contact panel.
+	ls := langStringsForCode("")
+	st := h.workspaceSettingsForForm(r, f)
+	if st != nil {
+		ls = langStringsForCode(st.WorkspaceLang())
 	}
-	// Group products into the configured categories; track which are placed.
+
+	// Issue #461: resolve every referenced product LIVE from the products
+	// table, with the form's own snapshot as the fallback for an archived or
+	// deleted product. A block whose product resolves to nothing (no live row,
+	// no snapshot) is skipped — the menu never invents an item.
+	live := productMapByID(h.liveProductsForForm(r.Context(), f))
+	snapByID := map[string]productSnapshot{}
+	for _, s := range configProductSnapshots(f.Config) {
+		if s.ID != "" {
+			snapByID[s.ID] = s
+		}
+	}
+
+	// Issue #497: the menu's product set is the form's own product blocks. A
+	// block's label overrides the product name only when the merchant typed
+	// one; otherwise the live product name wins (#461).
+	items := formMenuItems(f.Config)
+	view := func(pid string, bestSeller bool) (menuProductView, bool) {
+		name, desc, price, img, ok := "", "", int64(0), "", false
+		if p, isLive := live[pid]; isLive {
+			name, desc, price, img, ok = p.Name, p.Description, p.PriceSen, firstImage(p.Images), true
+		} else if s, isSnap := snapByID[pid]; isSnap {
+			name, desc, price, img, ok = s.Name, s.Description, s.PriceSen, firstImage(s.Images), true
+		}
+		if !ok {
+			return menuProductView{}, false
+		}
+		v := h.menuProductView(pid, name, desc, price, img, bestSeller, ls.MenuBestBadge, ls.MenuAdd)
+		if label := itemLabel(items, pid); label != "" {
+			v.Name = label
+		}
+		return v, true
+	}
+
+	// The set of product IDs this menu may render — the form's own references.
+	// A category or best-seller entry for an unreferenced product is dropped,
+	// so a stale ID can never pull an unrelated product into the menu.
+	referenced := map[string]bool{}
+	for _, it := range items {
+		referenced[it.ProductID] = true
+	}
+
+	// Group the referenced products into the configured categories, in
+	// category order. Only IDs the form references are considered.
 	placed := map[string]bool{}
 	var cats []menuCategoryView
-	if lp.Menu != nil {
-		for _, c := range lp.Menu.Categories {
-			cv := menuCategoryView{Name: c.Name}
-			for _, pid := range c.ProductIDs {
-				p, ok := byID[pid]
-				if !ok {
-					continue
-				}
-				cv.Products = append(cv.Products, h.menuProductView(p, lp.Menu.IsBestSeller(p.ID), ls.MenuBestBadge, ls.MenuAdd))
-				placed[pid] = true
+	for _, c := range menu.Categories {
+		cv := menuCategoryView{Name: c.Name}
+		for _, pid := range c.ProductIDs {
+			if !referenced[pid] {
+				continue
 			}
-			if len(cv.Products) > 0 {
-				cats = append(cats, cv)
-			}
-		}
-	}
-	// Everything not in a category goes under "All".
-	var all []menuProductView
-	for _, p := range products {
-		if !placed[p.ID] {
-			all = append(all, h.menuProductView(p, lp.Menu != nil && lp.Menu.IsBestSeller(p.ID), ls.MenuBestBadge, ls.MenuAdd))
-		}
-	}
-	// Best sellers: the top section, rendered as 2-column square-image cards.
-	// BestSellerIDs (issue #485, an optional JSON-blob extension) wins; the
-	// legacy single BestSeller id is the fallback.
-	var best []menuProductView
-	if lp.Menu != nil {
-		for _, pid := range lp.Menu.BestSellerProductIDs() {
-			p, ok := byID[pid]
+			v, ok := view(pid, menu.IsBestSeller(pid))
 			if !ok {
 				continue
 			}
-			best = append(best, h.menuProductView(p, true, ls.MenuBestBadge, ls.MenuAdd))
+			cv.Products = append(cv.Products, v)
+			placed[pid] = true
+		}
+		if len(cv.Products) > 0 {
+			cats = append(cats, cv)
+		}
+	}
+	// A referenced product that no category lists still belongs on the menu:
+	// fall back to a single section so nothing the form references disappears.
+	// (There is no account-wide "All" section — #497.)
+	var unplaced []menuProductView
+	for _, it := range items {
+		if placed[it.ProductID] {
+			continue
+		}
+		if v, ok := view(it.ProductID, menu.IsBestSeller(it.ProductID)); ok {
+			unplaced = append(unplaced, v)
+		}
+	}
+	if len(unplaced) > 0 {
+		cats = append(cats, menuCategoryView{Name: ls.MenuAll, Products: unplaced})
+	}
+	// Best sellers: the top section, rendered as 2-column square-image cards.
+	// BestSellerIDs (issue #485) wins; the legacy single BestSeller id is the
+	// fallback. Only referenced products qualify.
+	var best []menuProductView
+	for _, pid := range menu.BestSellerProductIDs() {
+		if !referenced[pid] {
+			continue
+		}
+		if v, ok := view(pid, true); ok {
+			best = append(best, v)
 		}
 	}
 
@@ -999,7 +1083,6 @@ func (h *PublicHandlers) renderWorkspaceMenu(w http.ResponseWriter, r *http.Requ
 		for i := range cats {
 			cats[i].Products = filterMenuItems(cats[i].Products, lq)
 		}
-		all = filterMenuItems(all, lq)
 		var kept []menuCategoryView
 		for _, c := range cats {
 			if len(c.Products) > 0 {
@@ -1018,31 +1101,32 @@ func (h *PublicHandlers) renderWorkspaceMenu(w http.ResponseWriter, r *http.Requ
 		if len(only) > 0 {
 			cats = only
 			best = nil
-			all = nil
 		}
 	}
 
 	data := workspaceMenuData{
-		Slug:           slug,
-		Lp:             lp,
+		Slug:           f.Slug,
+		Menu:           menu,
+		Th:             h.formMenuTheme(f, st),
 		Ls:             ls,
 		Table:          table,
 		Aff:            aff,
 		RenderTS:       antiSpamRenderTime(),
-		ContactAddress: st.ContactAddress,
-		ContactPhone:   st.ContactPhone,
 		BestSellers:    best,
 		Categories:     cats,
-		All:            all,
-		HasForms:       len(products) > 0,
+		HasItems:       len(best) > 0 || len(cats) > 0,
 		Query:          query,
 		Cat:            cat,
+	}
+	if st != nil {
+		data.ContactAddress = st.ContactAddress
+		data.ContactPhone = st.ContactPhone
 	}
 	// Issue #493: the merchant may attach a published form to the menu whose
 	// field blocks define the EXTRA fields the checkout collects. The same
 	// form is what the order endpoint validates against, so the rendered
 	// fields and the server contract can never drift.
-	if extra := h.workspaceOrderExtraForm(r, acc, workspaceID); extra != nil {
+	if extra := h.formOrderExtraForm(r, f, menu.OrderFormSlug); extra != nil {
 		contract := menuExtraContract(extra.Config)
 		data.ExtraFields = menuExtraFields(contract, ls)
 		data.ExtraFormSlug = extra.Slug
@@ -1055,6 +1139,93 @@ func (h *PublicHandlers) renderWorkspaceMenu(w http.ResponseWriter, r *http.Requ
 	if err := menuPageTmpl.Execute(w, data); err != nil {
 		http.Error(w, "ralat", http.StatusInternalServerError)
 	}
+}
+
+// formMenuItem is one product reference from a form's product blocks (issue
+// #497): the product id plus the merchant's optional per-item display label.
+type formMenuItem struct {
+	ProductID string
+	Label     string
+}
+
+// itemLabel returns the merchant's display label for a referenced product (the
+// block's value), or "" when the merchant typed none (the live product name is
+// used instead).
+func itemLabel(items []formMenuItem, productID string) string {
+	for _, it := range items {
+		if it.ProductID == productID {
+			return it.Label
+		}
+	}
+	return ""
+}
+
+// workspaceSettingsForForm reads the storefront settings of the workspace that
+// owns the form's account (issue #497). Nil-safe: returns nil when the form
+// has no linked workspace or the store is not wired, so the caller degrades to
+// the English defaults / no contact panel.
+func (h *PublicHandlers) workspaceSettingsForForm(r *http.Request, f *dbstore.Form) *dbstore.WorkspaceSettings {
+	if h.Workspaces == nil || h.Accounts == nil || f == nil || f.AccountID == "" {
+		return nil
+	}
+	workspaceID, err := h.Workspaces.WorkspaceIDByAccount(r.Context(), f.AccountID)
+	if err != nil || workspaceID == "" {
+		return nil
+	}
+	st, err := h.Workspaces.Settings(r.Context(), workspaceID)
+	if err != nil {
+		return nil
+	}
+	return st
+}
+
+// formMenuTheme resolves the per-form menu styling (issue #497): the form's own
+// theme map (set_form_theme / Form Settings → General) supplies the hero,
+// colors and logo, with the workspace's contact address as the location line.
+// Every value is optional; the template falls back to sensible defaults.
+func (h *PublicHandlers) formMenuTheme(f *dbstore.Form, st *dbstore.WorkspaceSettings) menuTheme {
+	th := menuTheme{}
+	if f != nil {
+		th.Hero = f.Title
+		if v, ok := f.Theme["primary"].(string); ok {
+			th.PrimaryColor = strings.TrimSpace(v)
+		}
+		if v, ok := f.Theme["background"].(string); ok {
+			th.BackgroundColor = strings.TrimSpace(v)
+		}
+		if v, ok := f.Theme["logo_url"].(string); ok {
+			th.LogoURL = strings.TrimSpace(v)
+		}
+	}
+	if st != nil {
+		th.Subtitle = strings.TrimSpace(st.ContactAddress)
+	}
+	return th
+}
+
+// formOrderExtraForm returns the published form the merchant attached to the
+// menu for extra order info (issue #491/#493), or nil when none is attached (or
+// the configured slug no longer resolves to a published form in the same
+// account). The setting lives on the per-form menu config
+// (MenuPage.OrderFormSlug) — a JSON blob on forms.config, so no migration is
+// needed (issue #497 moved it from the workspace landing page).
+func (h *PublicHandlers) formOrderExtraForm(r *http.Request, f *dbstore.Form, slug string) *dbstore.Form {
+	if h.Forms == nil || f == nil {
+		return nil
+	}
+	slug = strings.TrimSpace(slug)
+	if slug == "" {
+		return nil
+	}
+	acc, err := h.Accounts.ByID(r.Context(), f.AccountID)
+	if err != nil || acc == nil {
+		return nil
+	}
+	extra, ferr := h.Forms.PublishedByAccountSlug(r.Context(), acc.Slug, slug)
+	if ferr != nil || extra == nil {
+		return nil
+	}
+	return extra
 }
 
 // filterMenuItems keeps the items whose name or description contains q
@@ -1070,24 +1241,24 @@ func filterMenuItems(items []menuProductView, q string) []menuProductView {
 	return out
 }
 
-// menuProductView builds one product card / list row for the menu page.
-func (h *PublicHandlers) menuProductView(p *dbstore.Product, bestSeller bool, bestLabel, addLabel string) menuProductView {
-	img := ""
-	if len(p.Images) > 0 {
-		img = p.Images[0]
-	}
+// menuProductView builds one product card / list row for the menu page. It
+// takes already-resolved name/price/image/description values (issue #497: the
+// menu resolves each referenced product LIVE from the products table, #461,
+// with the form snapshot as the archived fallback) so the caller owns
+// resolution and this stays a pure view builder.
+func (h *PublicHandlers) menuProductView(productID, name, description string, priceSen int64, image string, bestSeller bool, bestLabel, addLabel string) menuProductView {
 	// Issue #382/#471: resolve the media variant that fits each tier — the
 	// square card wants the medium variant, the row thumbnail the small one.
 	// A non-canonical URL (external, GIF/SVG) is returned unchanged.
-	cardImg := productImageForSize(img, ProductImageSizeMedium)
-	thumbImg := productImageForSize(img, ProductImageSizeSmall)
+	cardImg := productImageForSize(image, ProductImageSizeMedium)
+	thumbImg := productImageForSize(image, ProductImageSizeSmall)
 	return menuProductView{
-		ID:          p.ID,
-		Name:        p.Name,
-		Description: p.Description,
-		Price:       formatPriceSen(p.PriceSen),
-		PriceSen:    p.PriceSen,
-		ImageURL:    img,
+		ID:          productID,
+		Name:        name,
+		Description: description,
+		Price:       formatPriceSen(priceSen),
+		PriceSen:    priceSen,
+		ImageURL:    image,
 		CardImage:   cardImg,
 		ThumbImage:  thumbImg,
 		BestSeller:  bestSeller,

@@ -26,10 +26,11 @@ import (
 
 // productSnapshot is one product as recorded in the form config at save time.
 type productSnapshot struct {
-	ID       string   `json:"id"`
-	Name     string   `json:"name"`
-	PriceSen int64    `json:"price_sen"`
-	Images   []string `json:"images"`
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	PriceSen    int64    `json:"price_sen"`
+	Images      []string `json:"images"`
 }
 
 // productResolver overlays the live products table over the form's saved

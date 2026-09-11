@@ -14,13 +14,10 @@ import (
 )
 
 func TestIssue461MenuPageRendersLiveProductData(t *testing.T) {
-	lp := &dbstore.LandingPage{
-		Enabled: true, Hero: "Warung Ali", PrimaryColor: "#4f46e5",
-		Menu: &dbstore.MenuPage{
-			Enabled:    true,
-			BestSeller: "p1",
-			Categories: []dbstore.MenuCategory{{Name: "Makanan", ProductIDs: []string{"p1"}}},
-		},
+	menu := &dbstore.MenuPage{
+		Enabled:    true,
+		BestSeller: "p1",
+		Categories: []dbstore.MenuCategory{{Name: "Makanan", ProductIDs: []string{"p1"}}},
 	}
 	h := &PublicHandlers{}
 	p := &dbstore.Product{
@@ -29,11 +26,13 @@ func TestIssue461MenuPageRendersLiveProductData(t *testing.T) {
 		Images: []string{"https://cdn.example/nasi-live.jpg"},
 	}
 	data := workspaceMenuData{
-		Slug: "warung", Lp: lp, Ls: formLangs["en"], Table: "8",
+		Slug: "menu", Menu: menu,
+		Th: menuTheme{Hero: "Warung Ali", PrimaryColor: "#4f46e5"},
+		Ls: formLangs["en"], Table: "8",
 		Categories: []menuCategoryView{{Name: "Makanan", Products: []menuProductView{
-			h.menuProductView(p, true, formLangs["en"].MenuBestBadge, formLangs["en"].MenuAdd),
+			h.menuProductView(p.ID, p.Name, p.Description, p.PriceSen, p.Images[0], true, formLangs["en"].MenuBestBadge, formLangs["en"].MenuAdd),
 		}}},
-		HasForms: true,
+		HasItems: true,
 	}
 	var buf bytes.Buffer
 	if err := menuPageTmpl.Execute(&buf, data); err != nil {

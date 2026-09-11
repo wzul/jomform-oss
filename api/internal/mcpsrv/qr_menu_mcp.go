@@ -102,80 +102,77 @@ func (s *Server) generateQR(
 	}, nil
 }
 
-// ── get_menu_page / set_menu_page ────────────────────────────────────────────
+// ── get_menu_page / set_menu_page (per-form, issue #497) ─────────────────────
+//
+// Before #497 the menu was a per-workspace landing template (get/set_menu_page
+// took a workspace_id). It is now a PER-FORM setting: the config lives on the
+// form (forms.config.menu) and the menu is served at the form's own public URL.
+// Both tools therefore take a form_id.
 
 type menuPageRefIn struct {
-	WorkspaceID string `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
+	FormID string `json:"form_id" jsonschema:"ID borang (dari list_forms atau upsert_form)"`
 }
 
 func (s *Server) getMenuPage(
 	ctx context.Context, _ *mcp.CallToolRequest, in menuPageRefIn,
 ) (*mcp.CallToolResult, *dbstore.MenuPage, error) {
-	if _, _, err := s.accessibleWorkspace(ctx, in.WorkspaceID); err != nil {
-		return nil, nil, err
+	if strings.TrimSpace(in.FormID) == "" {
+		return nil, nil, errors.New("form_id diperlukan")
 	}
-	sp, err := s.workspacesStore()
+	// Issue #307: resolve the owning account across the user's workspaces (read
+	// scope is enforced by resolveFormAccount).
+	acc, err := s.resolveFormAccount(ctx, in.FormID)
 	if err != nil {
 		return nil, nil, err
 	}
-	st, err := sp.Settings(ctx, in.WorkspaceID)
-	if err != nil {
-		return nil, nil, fmt.Errorf("db: %w", err)
+	if s.deps.Forms == nil {
+		return nil, nil, errors.New("forms tidak tersedia")
 	}
-	if st.LandingPage == nil || st.LandingPage.Menu == nil {
-		return nil, &dbstore.MenuPage{}, nil
+	f, err := s.deps.Forms.GetByID(ctx, acc, in.FormID)
+	if err != nil || f == nil {
+		return nil, nil, errors.New("borang tidak dijumpai")
 	}
-	return nil, st.LandingPage.Menu, nil
+	if menu := dbstore.MenuFromConfig(f.Config); menu != nil {
+		return nil, menu, nil
+	}
+	return nil, &dbstore.MenuPage{}, nil
 }
 
 type setMenuPageIn struct {
-	WorkspaceID string `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
-	Enabled     bool   `json:"enabled" jsonschema:"true = papar menu restoran; false = jatuh ke landing page / senarai borang"`
+	FormID  string `json:"form_id" jsonschema:"ID borang (dari list_forms atau upsert_form)"`
+	Enabled bool   `json:"enabled" jsonschema:"true = borang ini jadi menu restoran (dipapar di URL borang); false = borang kembali normal"`
 	// Categories groups product IDs under display names, e.g.
 	// [{name:"Makanan", product_ids:["...","..."]}].
-	Categories []dbstore.MenuCategory `json:"categories,omitempty" jsonschema:"Kategori menu, cth [{\"name\":\"Makanan\",\"product_ids\":[\"id1\",\"id2\"]}]"`
+	Categories []dbstore.MenuCategory `json:"categories,omitempty" jsonschema:"Kategori menu, cth [{\"name\":\"Makanan\",\"product_ids\":[\"id1\",\"id2\"]}]. Hanya produk yang dirujuk oleh blok produk borang ini dipaparkan — produk akaun lain tidak boleh bocor masuk."`
 	// BestSeller is an optional product ID highlighted as the best-seller.
-	BestSeller string `json:"best_seller,omitempty" jsonschema:"ID produk yang ditonjolkan sebagai best-seller (pilihan)"`
+	BestSeller string `json:"best_seller,omitempty" jsonschema:"ID produk yang ditonjolkan sebagai best-seller (pilihan; mesti dirujuk oleh blok produk borang ini)"`
 	// BestSellerIDs is an optional list of product IDs for the "Best Seller"
 	// section (issue #485). When set it wins over the legacy single BestSeller
 	// id. The menu renders these as 2-column square-image cards.
 	BestSellerIDs []string `json:"best_seller_ids,omitempty" jsonschema:"Senarai ID produk untuk seksyen Best Seller (pilihan; mengatasi best_seller)"`
-	// OrderFormSlug is an optional published form attached to the menu so the
-	// menu checkout can collect extra order info (issue #491/#493). When set,
-	// the workspace-level order endpoint validates the submitted fields against
-	// that form's field contract — its registered_fields (#254) when present,
-	// otherwise the field blocks configured in the form builder — and stores
-	// them on the sale. The checkout always collects the buyer's name + email
-	// regardless (CHIP requires both); empty = name + email only.
-	OrderFormSlug string `json:"order_form_slug,omitempty" jsonschema:"Slug borang diterbitkan untuk maklumat tambahan pesanan (pilihan; kosong = checkout menu tanpa borang). Medan borang itu dirender dalam checkout menu dan disahkan server-side; nama + emel pembeli sentiasa wajib."`
+	// OrderFormSlug is an optional published form in the same account attached
+	// to the menu so the menu checkout can collect extra order info (issue
+	// #491/#493). Its field blocks define the extra checkout fields; the server
+	// re-validates them. The buyer's name + email are always collected.
+	OrderFormSlug string `json:"order_form_slug,omitempty" jsonschema:"Slug borang diterbitkan (dalam akaun sama) untuk maklumat tambahan pesanan (pilihan; kosong = checkout nama + emel sahaja). Medan borang itu dirender dalam checkout menu dan disahkan server-side."`
 }
 
 func (s *Server) setMenuPage(
 	ctx context.Context, _ *mcp.CallToolRequest, in setMenuPageIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	_, role, err := s.accessibleWorkspace(ctx, in.WorkspaceID)
+	if strings.TrimSpace(in.FormID) == "" {
+		return nil, nil, errors.New("form_id diperlukan")
+	}
+	acc, err := s.requireFormWrite(ctx, in.FormID)
 	if err != nil {
 		return nil, nil, err
 	}
-	if role != "" && role != dbstore.RoleManage && role != dbstore.RoleAdmin {
-		return nil, nil, errors.New("perlu peranan manage atau admin")
+	if s.deps.Forms == nil {
+		return nil, nil, errors.New("forms tidak tersedia")
 	}
-	sp, err := s.workspacesStore()
-	if err != nil {
-		return nil, nil, err
-	}
-	st, err := sp.Settings(ctx, in.WorkspaceID)
-	if err != nil {
-		return nil, nil, fmt.Errorf("db: %w", err)
-	}
-	// Ensure a landing page exists so the menu template has a hero/theme to
-	// build on. If none, seed a minimal one.
-	if st.LandingPage == nil {
-		st.LandingPage = &dbstore.LandingPage{Enabled: true}
-	}
-	if in.Enabled {
-		// Enabling the menu implies the landing page is on.
-		st.LandingPage.Enabled = true
+	f, err := s.deps.Forms.GetByID(ctx, acc, in.FormID)
+	if err != nil || f == nil {
+		return nil, nil, errors.New("borang tidak dijumpai")
 	}
 	menu := &dbstore.MenuPage{
 		Enabled:       in.Enabled,
@@ -187,11 +184,15 @@ func (s *Server) setMenuPage(
 	if menu.Categories == nil {
 		menu.Categories = []dbstore.MenuCategory{}
 	}
-	st.LandingPage.Menu = menu
-	if err := sp.SaveSettings(ctx, st); err != nil {
+	// Write the menu under forms.config.menu, preserving the form's blocks and
+	// every other config key (issue #497 — the menu is one more key on the
+	// form, never a replacement for it). Disabling the menu removes the key so
+	// the form renders normally again.
+	next := dbstore.WithMenu(f.Config, menu)
+	if err := s.deps.Forms.Update(ctx, acc, in.FormID, f.Title, next, nil); err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
-	return nil, map[string]string{"status": "saved", "workspace_id": in.WorkspaceID}, nil
+	return nil, map[string]string{"status": "saved", "form_id": in.FormID}, nil
 }
 
 // urlQueryEscape percent-encodes a value for a query string.

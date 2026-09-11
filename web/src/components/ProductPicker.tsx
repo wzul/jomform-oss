@@ -33,6 +33,7 @@ export default function ProductPicker({
   selected,
   multi,
   title,
+  onlyIds,
 }: {
   open: boolean;
   onClose: () => void;
@@ -40,6 +41,11 @@ export default function ProductPicker({
   selected: string[];
   multi: boolean;
   title: string;
+  // Issue #497: restrict the picker to a fixed set of product IDs (the
+  // products a menu form references via its own product blocks). When set, an
+  // account product the form does not reference can never be picked. Omit for
+  // the unrestricted (workspace-wide) behaviour.
+  onlyIds?: string[];
 }) {
   const { t } = useI18n();
   const [items, setItems] = useState<PickerProduct[]>([]);
@@ -54,7 +60,14 @@ export default function ProductPicker({
     try {
       const r = await fetch(`/api/rest/products${workspaceQuery()}`);
       const d = r.ok ? await r.json() : [];
-      setItems(Array.isArray(d) ? d.filter((p: PickerProduct) => p.active !== false) : []);
+      let list: PickerProduct[] = Array.isArray(d) ? d.filter((p: PickerProduct) => p.active !== false) : [];
+      // Issue #497: when the caller scopes the picker (a menu form's products),
+      // keep only the allowed IDs and preserve that order.
+      if (onlyIds) {
+        const byId = new Map(list.map((p) => [p.id, p]));
+        list = onlyIds.map((id) => byId.get(id)).filter((p): p is PickerProduct => !!p);
+      }
+      setItems(list);
     } catch {
       setItems([]);
     } finally {

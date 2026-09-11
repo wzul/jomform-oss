@@ -101,8 +101,8 @@ func TestIssue492CheckoutScriptWiring(t *testing.T) {
 	body := renderMenu492(t, menu492Fixture(t))
 	for _, want := range []string{
 		"localStorage",                        // persists across reload
-		"'jf.menu.cart.v1.'+slug",             // keyed by workspace
-		"fetch('/menu-order'",                 // workspace order endpoint (#491)
+		"'jf.menu.cart.v2.'+slug",             // keyed by FORM slug (#497)
+		"fetch('/'+encodeURIComponent(slug)+'/order'", // the form's own order route (#497)
 		"product_id:it.id,quantity:it.qty",    // items[{product_id,quantity}]
 		"client:{full_name:name,email:email}", // client{full_name,email}
 		"table_number:table||''",              // table carried (#489)

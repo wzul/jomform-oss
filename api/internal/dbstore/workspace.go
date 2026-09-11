@@ -223,88 +223,20 @@ type LandingPage struct {
 	// submit straight into the form's submissions/sales exactly as a direct
 	// visit would. Stored in the landing_page_json blob.
 	Forms []LandingEmbed `json:"forms"`
-	// Issue #438: QR ordering flow — an optional restaurant-menu landing
-	// template. When Menu.Enabled is true, the workspace root renders a clean
-	// restaurant menu (categories, item images, prices, best-seller) instead
-	// of the generic landing page. Stored in the same landing_page_json blob.
-	Menu *MenuPage `json:"menu,omitempty"`
+	// Issue #438 shipped a per-workspace restaurant menu here (LandingPage.Menu,
+	// rendered at the workspace ROOT). Issue #497 moved the menu onto the FORM
+	// (forms.config.menu) because the workspace-level shape hijacked the whole
+	// storefront, sold every account product, and allowed only one menu per
+	// workspace. The field is retained ONLY so a stray/legacy
+	// landing_page_json.menu is parsed and safely ignored — nothing reads it.
+	//
+	// Deprecated: use MenuFromConfig(form.Config) / WithMenu instead.
+	LegacyMenu *MenuPage `json:"menu,omitempty"`
 }
 
-// MenuPage is the restaurant-menu landing template (issue #438, Beep-style).
-// It reuses the parent LandingPage's hero/logo/theme colors and groups the
-// workspace's published products into categories. A merchant generates a QR
-// stand pointing at the workspace root (or a form) so a customer scans it at
-// the table and orders.
-type MenuPage struct {
-	// Enabled toggles the menu template. When false the workspace root falls
-	// back to the generic landing page / bare listing.
-	Enabled bool `json:"enabled"`
-	// Categories groups product IDs under display names, e.g.
-	// [{name:"Makanan", product_ids:["...","..."]}]. Products not in any
-	// category are shown under an "All" section.
-	Categories []MenuCategory `json:"categories"`
-	// BestSeller is an optional product ID highlighted as the best-seller.
-	BestSeller string `json:"best_seller,omitempty"`
-	// BestSellerIDs is an optional list of product IDs for the "Best Seller"
-	// section (issue #485). When set it wins over the legacy single
-	// BestSeller id. Stored in the landing_page_json blob — no migration.
-	BestSellerIDs []string `json:"best_seller_ids,omitempty"`
-	// OrderFormSlug is an optional published form the merchant attaches to the
-	// menu so the menu checkout can collect extra order info (issue #491, part
-	// 3). When set, the workspace-level order endpoint validates the submitted
-	// fields against that form's registered-field contract (#254) and persists
-	// them on the sale; when empty the menu checks out with no form at all.
-	// Stored in the landing_page_json blob — no migration.
-	OrderFormSlug string `json:"order_form_slug,omitempty"`
-}
-
-// IsBestSeller reports whether a product ID is highlighted as a best-seller:
-// the list (issue #485) when set, otherwise the legacy single id.
-func (m *MenuPage) IsBestSeller(productID string) bool {
-	if m == nil || productID == "" {
-		return false
-	}
-	if len(m.BestSellerIDs) > 0 {
-		for _, id := range m.BestSellerIDs {
-			if id == productID {
-				return true
-			}
-		}
-		return false
-	}
-	return m.BestSeller == productID
-}
-
-// BestSellerProductIDs returns the ordered best-seller product IDs for the
-// menu page (issue #485): the explicit list when set, else the legacy single
-// id as a one-element list. Duplicates are dropped.
-func (m *MenuPage) BestSellerProductIDs() []string {
-	if m == nil {
-		return nil
-	}
-	if len(m.BestSellerIDs) == 0 {
-		if m.BestSeller == "" {
-			return nil
-		}
-		return []string{m.BestSeller}
-	}
-	seen := map[string]bool{}
-	var out []string
-	for _, id := range m.BestSellerIDs {
-		if id == "" || seen[id] {
-			continue
-		}
-		seen[id] = true
-		out = append(out, id)
-	}
-	return out
-}
-
-// MenuCategory is one named group of products on the menu page.
-type MenuCategory struct {
-	Name       string   `json:"name"`
-	ProductIDs []string `json:"product_ids"`
-}
+// MenuPage, MenuCategory, IsBestSeller, BestSellerProductIDs and the
+// config helpers now live in form_menu.go — issue #497 moved the restaurant
+// menu onto the FORM. See MenuFromConfig / WithMenu.
 
 // LandingCTA is a landing-page call-to-action button linking to a public form.
 type LandingCTA struct {

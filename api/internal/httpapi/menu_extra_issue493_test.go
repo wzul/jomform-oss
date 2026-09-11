@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -322,7 +323,7 @@ func TestIssue493MenuExtraContractDropsNameEmail(t *testing.T) {
 // The attached form here has NO registered_fields — its extra fields live in
 // the normal builder blocks, which is exactly the merchant flow #493 wires.
 func TestIssue493MenuOrderValidatesBuilderBlockFields(t *testing.T) {
-	h, workspaceSlug, accountID, prodID := menuOrderFixture(t)
+	h, workspaceSlug, accountID, prodID, _ := menuOrderFixture(t)
 	ctx := context.Background()
 	host := workspaceSlug + ".jomform.com"
 
@@ -351,33 +352,57 @@ func TestIssue493MenuOrderValidatesBuilderBlockFields(t *testing.T) {
 		`"payment_method":"bank_direct"`
 
 	// No form attached yet → blocks are not enforced, the order goes through.
-	rec := menuOrderPost(t, h, host, base+`}`)
+	// Issue #497: the menu is a form; the order posts to its own URL and the
+	// extra fields come from the menu form's attached order form.
+	menuForm := &dbstore.Form{
+		AccountID: accountID, Slug: "it-493-menu-" + accountID[:8], Title: "Menu",
+		Status: "published",
+		Config: map[string]any{
+			"blocks": []any{
+				map[string]any{"id": "p1", "type": "product", "product_id": prodID, "value": "Nasi Lemak"},
+			},
+			"menu": map[string]any{"enabled": true, "categories": []any{}},
+		},
+	}
+	if err := h.Forms.Create(ctx, menuForm); err != nil {
+		t.Fatalf("create menu form: %v", err)
+	}
+	menuOrderURL := "/" + menuForm.Slug + "/order"
+	postMenu := func(body string) *httptest.ResponseRecorder {
+		mux := http.NewServeMux()
+		h.RegisterRoutes(mux)
+		req := httptest.NewRequest(http.MethodPost, menuOrderURL, bytes.NewBufferString(body))
+		req.Host = host
+		req.RemoteAddr = uniqueTestIP() + ":1234"
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		return rec
+	}
+
+	rec := postMenu(base + `}`)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("unattached form: status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
 	}
 
-	// Attach the form to the menu (JSON blob setting, no migration).
-	st, err := h.Workspaces.Settings(ctx, workspaceIDForSlug(t, h, workspaceSlug))
-	if err != nil {
-		t.Fatalf("settings: %v", err)
-	}
-	st.LandingPage = &dbstore.LandingPage{
-		Enabled: true,
-		Menu:    &dbstore.MenuPage{Enabled: true, OrderFormSlug: formSlug},
-	}
-	if err := h.Workspaces.SaveSettings(ctx, st); err != nil {
-		t.Fatalf("save settings: %v", err)
+	// Attach the extra form to the MENU FORM's config (JSON blob setting, no
+	// migration). Issue #497: the attachment lives on the form, not the
+	// workspace landing page.
+	menuForm.Config = dbstore.WithMenu(menuForm.Config,
+		&dbstore.MenuPage{Enabled: true, OrderFormSlug: formSlug})
+	if err := h.Forms.Update(ctx, accountID, menuForm.ID, menuForm.Title, menuForm.Config, nil); err != nil {
+		t.Fatalf("attach extra form: %v", err)
 	}
 
 	// Missing a required block field → 400.
-	rec = menuOrderPost(t, h, host, base+`}`)
+	rec = postMenu(base + `}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("attached form, missing required block field: status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
 	}
 
 	// Providing both → 201 and the values persist on the sale under the block
 	// ids (the same keys the form's own submit path records).
-	rec = menuOrderPost(t, h, host, base+`,"fields":{"addr":"No 1 Jalan","spice":"biasa"}}`)
+	rec = postMenu(base + `,"fields":{"addr":"No 1 Jalan","spice":"biasa"}}`)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("attached form, fields supplied: status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -398,13 +423,14 @@ func TestIssue493MenuOrderValidatesBuilderBlockFields(t *testing.T) {
 	if fields["addr"] != "No 1 Jalan" || fields["spice"] != "biasa" {
 		t.Errorf("sale fields = %+v, want addr + spice persisted", fields)
 	}
-	// The attached form validates only — the sale stays formless.
-	if sale.FormID != "" {
-		t.Errorf("sale.form_id = %q, want empty (the extra form is not the order target)", sale.FormID)
+	// The attached form validates only — the sale is attributed to the MENU
+	// form, never to the attached extra-info form (issue #497).
+	if sale.FormID != menuForm.ID {
+		t.Errorf("sale.form_id = %q, want the menu form id %q", sale.FormID, menuForm.ID)
 	}
 	// The attached form never relaxes the mandatory name + email.
-	rec = menuOrderPost(t, h, host, `{"client":{"email":"ali@example.test"},`+
-		`"items":[{"product_id":"`+prodID+`","quantity":1}],"payment_method":"bank_direct",`+
+	rec = postMenu(`{"client":{"email":"ali@example.test"},` +
+		`"items":[{"product_id":"` + prodID + `","quantity":1}],"payment_method":"bank_direct",` +
 		`"fields":{"addr":"x","spice":"biasa"}}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("name-less order with an attached form: status = %d, want 400", rec.Code)

@@ -24,8 +24,10 @@
 package httpapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -331,44 +333,87 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 	})
 }
 
-// handleMenuOrder is the workspace-scoped order endpoint (issue #491): the
-// restaurant menu page checks out here with no form in the path. It resolves
-// the account from the request host (workspace subdomain or verified custom
-// domain), optionally attaches the merchant's extra-info form, and hands off
-// to the SAME order core the form path uses.
+// handleMenuOrder is the legacy workspace-scoped order endpoint (issue #491).
 //
-// Route: POST /menu-order.
+// Issue #497 moved the menu onto the FORM, so the menu checkout now posts to
+// the form's own order route (POST /{slug}/order) and there is ONE order path.
+// This route is kept as a thin compatibility shim for a cached menu page or an
+// old QR stand that still posts here: it resolves the menu FORM from the
+// request (a `form_slug` in the JSON body + the host's account) and delegates
+// to the exact same form-scoped menu order path. It no longer accepts a
+// formless order — a menu order is always attributed to its form.
+//
+// Route: POST /menu-order (deprecated; prefer POST /{slug}/order).
 func (h *PublicHandlers) handleMenuOrder(w http.ResponseWriter, r *http.Request) {
-	acc, workspaceID, ok := h.resolveWorkspaceAccount(r)
+	acc, _, ok := h.resolveWorkspaceAccount(r)
 	if !ok {
 		writeErr(w, http.StatusNotFound, "kedai tidak dijumpai")
 		return
 	}
-	// Issue #493 (part 3): when the merchant attached a form to the menu for
-	// extra info, its field contract (registered_fields, else the builder
-	// blocks) validates the submitted fields. No attachment → no field
-	// validation at all.
-	extra := h.workspaceOrderExtraForm(r, acc, workspaceID)
+	// Buffer the body once: we must read form_slug to resolve the target and
+	// then hand the SAME bytes to the shared order core.
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxSubmitBodyBytes))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "butiran tidak lengkap")
+		return
+	}
+	var probe struct {
+		FormSlug string `json:"form_slug"`
+	}
+	if jerr := json.Unmarshal(body, &probe); jerr != nil {
+		writeErr(w, http.StatusBadRequest, "butiran tidak lengkap")
+		return
+	}
+	slug := strings.TrimSpace(probe.FormSlug)
+	if slug == "" {
+		writeErr(w, http.StatusBadRequest, "form_slug diperlukan")
+		return
+	}
+	if h.Forms == nil {
+		writeErr(w, http.StatusNotFound, "borang tidak dijumpai")
+		return
+	}
+	f, ferr := h.Forms.PublishedByAccountSlug(r.Context(), acc.Slug, slug)
+	if ferr != nil || f == nil {
+		writeErr(w, http.StatusNotFound, "borang tidak dijumpai")
+		return
+	}
+	menu := dbstore.MenuFromConfig(f.Config)
+	if menu == nil || !menu.Enabled {
+		writeErr(w, http.StatusNotFound, "menu tidak dijumpai")
+		return
+	}
+	// Replay the buffered body for the shared core (anti-spam layer 3 reads the
+	// jf_ts field from it, and submitOrder decodes it).
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	h.submitMenuOrderForForm(w, r, f, menu)
+}
+
+// submitMenuOrderForForm runs a menu form's checkout through the ONE shared
+// order core (issue #497). The menu is a FORM, so:
+//   - the sale is attributed to the menu form (sale.form_id = the form id), not
+//     left formless as in the workspace-scoped #491 shape;
+//   - the extra checkout fields come from the form's ATTACHED order form
+//     (menu.OrderFormSlug), never from the menu form's own product blocks — a
+//     product block is not an input field;
+//   - name + email are both mandatory (CHIP needs them).
+func (h *PublicHandlers) submitMenuOrderForForm(w http.ResponseWriter, r *http.Request, f *dbstore.Form, menu *dbstore.MenuPage) {
 	var contract []formfields.Field
-	if extra != nil {
+	if extra := h.formOrderExtraForm(r, f, menu.OrderFormSlug); extra != nil {
 		contract = menuExtraContract(extra.Config)
 	}
-	// The rate-limit bucket keys on the workspace (the formless equivalent of
-	// the per-form key) so the protection survives without a form. Fall back to
-	// the account id when the account has no linked workspace (legacy).
-	rateKey := workspaceID
-	if rateKey == "" {
-		rateKey = acc.ID
-	}
 	h.submitOrder(w, r, orderTarget{
-		AccountID:      acc.ID,
-		Form:           nil,
+		AccountID:      f.AccountID,
+		Form:           f,
 		FieldsContract: contract,
-		RateKey:        "ws:" + rateKey,
-		OwnerSkip:      h.antiSpamSubmitterIsOwnerForAccount(r, acc.ID),
+		RateKey:        f.ID,
+		OwnerSkip:      h.antiSpamSubmitterIsOwner(r, f),
 		RequireName:    true,
 	})
 }
+
+// maxSubmitBodyBytes bounds the buffered legacy /menu-order body (issue #497).
+const maxSubmitBodyBytes = 1 << 20 // 1 MiB
 
 // resolveWorkspaceAccount resolves the account a workspace-scoped public route
 // serves, from the request host: a workspace subdomain
@@ -408,28 +453,8 @@ func (h *PublicHandlers) resolveWorkspaceAccount(r *http.Request) (*dbstore.Acco
 	return nil, "", false
 }
 
-// workspaceOrderExtraForm returns the published form the merchant attached to
-// the menu for extra order info (part 3), or nil when none is attached (or the
-// configured slug no longer resolves to a published form in this account).
-//
-// The setting lives on the menu config (MenuPage.OrderFormSlug) — a JSON blob
-// on workspace_settings, so no migration is needed. Part 3 wires the config UI
-// and the MCP tool; the endpoint already honours it.
-func (h *PublicHandlers) workspaceOrderExtraForm(r *http.Request, acc *dbstore.Account, workspaceID string) *dbstore.Form {
-	if h.Forms == nil || h.Workspaces == nil || workspaceID == "" || acc == nil {
-		return nil
-	}
-	st, err := h.Workspaces.Settings(r.Context(), workspaceID)
-	if err != nil || st == nil || st.LandingPage == nil || st.LandingPage.Menu == nil {
-		return nil
-	}
-	slug := strings.TrimSpace(st.LandingPage.Menu.OrderFormSlug)
-	if slug == "" {
-		return nil
-	}
-	f, ferr := h.Forms.PublishedByAccountSlug(r.Context(), acc.Slug, slug)
-	if ferr != nil || f == nil {
-		return nil
-	}
-	return f
-}
+// workspaceOrderExtraForm was removed in issue #497: the menu is a per-form
+// setting, so the attached order form now resolves from the menu form itself
+// (see PublicHandlers.formOrderExtraForm in menu.go). Keeping a workspace-scoped
+// resolver here would leave two overlapping menu-order paths.
+

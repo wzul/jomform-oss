@@ -317,11 +317,11 @@ func (s *Server) registerTools() {
 	}, s.setRealtimeSound)
 	addTool(s, &mcp.Tool{
 		Name:        "get_menu_page",
-		Description: "Baca konfigurasi menu restoran workspace (issue #438): enabled, categories ([{name, product_ids}]), best_seller, best_seller_ids (senarai, #485), order_form_slug (borang maklumat tambahan pesanan, #491). Kosong jika tiada menu ditetapkan.",
+		Description: "Baca konfigurasi menu restoran satu BORANG (issue #497): form_id. Pulangkan enabled, categories ([{name, product_ids}]), best_seller, best_seller_ids (senarai, #485), order_form_slug (borang maklumat tambahan pesanan, #491). Menu ialah tetapan PER-BORANG dan dipapar di URL borang itu sendiri. Kosong jika borang tiada menu.",
 	}, s.getMenuPage)
 	addTool(s, &mcp.Tool{
 		Name:        "set_menu_page",
-		Description: "Set menu restoran workspace (issue #438): enabled (true = papar menu, false = jatuh ke landing page / senarai borang), categories ([{name, product_ids}]), best_seller (ID produk) atau best_seller_ids (senarai ID untuk seksyen Best Seller, #485 — mengatasi best_seller), order_form_slug (pilihan, #491 — borang diterbitkan untuk kumpul maklumat tambahan semasa checkout menu; kosong = checkout menu terus tanpa borang, nama + emel pembeli tetap wajib untuk CHIP). Menu dibina atas landing page (#360) + produk aktif workspace; halaman menu menunjukkan nombor meja dari ?table=N dan ada penapis kategori + carian.",
+		Description: "Set menu restoran untuk satu BORANG (issue #497): form_id, enabled (true = borang ini jadi menu di URL-nya; false = borang kembali normal), categories ([{name, product_ids}]), best_seller (ID produk) atau best_seller_ids (senarai ID untuk seksyen Best Seller, #485 — mengatasi best_seller), order_form_slug (pilihan, #491 — borang diterbitkan dalam akaun sama untuk kumpul maklumat tambahan semasa checkout menu; kosong = checkout nama + emel sahaja, kedua-duanya tetap wajib untuk CHIP). Produk menu datang dari blok produk BORANG itu sendiri (bukan semua produk akaun), jadi produk akaun lain tidak boleh bocor masuk; kategori/best-seller mesti merujuk produk yang dirujuk oleh borang. Halaman menu menunjukkan nombor meja dari ?table=N dan ada penapis kategori + carian. Borang tanpa blok produk memaparkan keadaan kosong.",
 	}, s.setMenuPage)
 	// Issue #185: per-workspace currency + BNM rates (MCP parity).
 	addTool(s, &mcp.Tool{

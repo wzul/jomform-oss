@@ -1,12 +1,16 @@
 package mcpsrv
 
-// Issue #493: MCP parity for the restaurant-menu extra checkout fields.
+// Issue #493 / #497: MCP parity for the restaurant menu.
 //
 // The menu tools get_menu_page / set_menu_page are the MCP surface of the
 // "Restaurant menu" dashboard setting, including the optional order form
 // (order_form_slug) whose field blocks define the extra fields the menu
-// checkout collects. These are pure tests (no DB): registration is checked over
-// the MCP protocol, and the input plumbing is checked directly.
+// checkout collects.
+//
+// Issue #497 moved the menu from a per-workspace landing template to a PER-FORM
+// setting: both tools now take a form_id and read/write forms.config.menu.
+// These are pure tests (no DB): registration is checked over the MCP protocol,
+// and the input plumbing + config round-trip are checked directly.
 
 import (
 	"context"
@@ -54,7 +58,8 @@ func TestIssue493MenuToolsRegistered(t *testing.T) {
 			t.Errorf("tool %q not registered by registerTools", name)
 		}
 	}
-	// The order_form_slug input is advertised to the agent.
+	// Issue #497: the tools are per-form — the input schema advertises form_id
+	// (not the old workspace_id) and still exposes order_form_slug.
 	var found bool
 	for _, tl := range res.Tools {
 		if tl.Name != "set_menu_page" {
@@ -65,6 +70,12 @@ func TestIssue493MenuToolsRegistered(t *testing.T) {
 		if merr != nil {
 			t.Fatalf("marshal input schema: %v", merr)
 		}
+		if !strings.Contains(string(raw), "form_id") {
+			t.Errorf("set_menu_page input schema does not expose form_id: %s", raw)
+		}
+		if strings.Contains(string(raw), "workspace_id") {
+			t.Errorf("set_menu_page still exposes workspace_id (issue #497 moved the menu onto the form): %s", raw)
+		}
 		if !strings.Contains(string(raw), "order_form_slug") {
 			t.Errorf("set_menu_page input schema does not expose order_form_slug: %s", raw)
 		}
@@ -74,45 +85,75 @@ func TestIssue493MenuToolsRegistered(t *testing.T) {
 	}
 }
 
-// The setting round-trips through the workspace_settings JSON blob under the
-// order_form_slug key (no migration), and the MCP input trims it.
+// The setting round-trips through the form's config JSON blob under the `menu`
+// key (no migration), and the MCP input trims the attached order form slug.
 func TestIssue493MenuPageOrderFormSlugRoundTrip(t *testing.T) {
-	in := setMenuPageIn{WorkspaceID: "ws-1", Enabled: true, OrderFormSlug: "  extra-info  "}
+	in := setMenuPageIn{FormID: "form-1", Enabled: true, OrderFormSlug: "  extra-info  "}
 	trimmed := strings.TrimSpace(in.OrderFormSlug)
 	if trimmed != "extra-info" {
 		t.Fatalf("trimmed order form slug = %q, want extra-info", trimmed)
 	}
 	// A blank slug means "no extra fields" — the checkout collects name+email.
-	blank := setMenuPageIn{WorkspaceID: "ws-1", Enabled: true, OrderFormSlug: "   "}
+	blank := setMenuPageIn{FormID: "form-1", Enabled: true, OrderFormSlug: "   "}
 	if strings.TrimSpace(blank.OrderFormSlug) != "" {
 		t.Error("a blank order form slug must mean no attached form")
 	}
 
-	// The JSON key the dashboard and MCP share is order_form_slug, and the
-	// value survives a marshal/unmarshal through the landing_page_json blob.
-	raw, err := json.Marshal(&dbstore.LandingPage{
-		Enabled: true,
-		Menu:    &dbstore.MenuPage{Enabled: true, OrderFormSlug: trimmed},
-	})
+	// Issue #497: the menu is written under forms.config.menu, preserving the
+	// form's blocks and every other config key, and round-trips through JSON.
+	formConfig := map[string]any{
+		"blocks": []any{map[string]any{"id": "p1", "type": "product", "product_id": "prod-1"}},
+		"mode":   "payment",
+	}
+	next := dbstore.WithMenu(formConfig, &dbstore.MenuPage{Enabled: true, OrderFormSlug: trimmed})
+	raw, err := json.Marshal(next)
 	if err != nil {
-		t.Fatalf("marshal landing page: %v", err)
+		t.Fatalf("marshal form config: %v", err)
 	}
 	if !strings.Contains(string(raw), `"order_form_slug":"extra-info"`) {
-		t.Errorf("landing page JSON missing order_form_slug: %s", raw)
+		t.Errorf("form config JSON missing order_form_slug: %s", raw)
 	}
-	var back dbstore.LandingPage
-	if err := json.Unmarshal(raw, &back); err != nil {
-		t.Fatalf("unmarshal landing page: %v", err)
+	if !strings.Contains(string(raw), `"blocks"`) {
+		t.Errorf("WithMenu dropped the form's blocks: %s", raw)
 	}
-	if back.Menu == nil || back.Menu.OrderFormSlug != "extra-info" {
-		t.Errorf("order_form_slug did not round-trip: %+v", back.Menu)
+	if !strings.Contains(string(raw), `"mode":"payment"`) {
+		t.Errorf("WithMenu dropped an unrelated config key: %s", raw)
 	}
-	// A menu without the key decodes to an empty slug (no attached form).
-	var legacy dbstore.LandingPage
-	if err := json.Unmarshal([]byte(`{"enabled":true,"menu":{"enabled":true,"categories":[]}}`), &legacy); err != nil {
-		t.Fatalf("unmarshal legacy menu: %v", err)
+	back := dbstore.MenuFromConfig(next)
+	if back == nil || back.OrderFormSlug != "extra-info" || !back.Enabled {
+		t.Errorf("menu did not round-trip through the form config: %+v", back)
 	}
-	if legacy.Menu == nil || legacy.Menu.OrderFormSlug != "" {
-		t.Errorf("legacy menu decoded a non-empty order form slug: %+v", legacy.Menu)
+
+	// A form without a menu key decodes to no menu (nil), and WithMenu(nil)
+	// removes the key entirely so a disabled menu clears cleanly.
+	if dbstore.MenuFromConfig(map[string]any{"blocks": []any{}}) != nil {
+		t.Error("a form with no menu key must decode to nil")
+	}
+	cleared := dbstore.WithMenu(next, nil)
+	if _, ok := cleared["menu"]; ok {
+		t.Error("WithMenu(config, nil) must remove the menu key")
+	}
+	if _, ok := cleared["blocks"]; !ok {
+		t.Error("WithMenu(config, nil) must preserve the form's blocks")
+	}
+}
+
+// Issue #497: a legacy landing_page_json.menu blob is parsed but safely ignored
+// — nothing reads LandingPage.LegacyMenu, and a stray blob cannot render a menu
+// at the workspace root.
+func TestIssue497LegacyLandingMenuIgnored(t *testing.T) {
+	var lp dbstore.LandingPage
+	if err := json.Unmarshal([]byte(`{"enabled":true,"menu":{"enabled":true,"categories":[]}}`), &lp); err != nil {
+		t.Fatalf("unmarshal legacy landing page: %v", err)
+	}
+	// The legacy field exists only so the payload parses; it must not be a
+	// live menu the renderer would honour.
+	if lp.LegacyMenu == nil {
+		t.Fatal("legacy menu blob did not parse — a stray payload must not crash")
+	}
+	// The form-scoped accessor is the only live source, and a landing page is
+	// not a form config.
+	if dbstore.MenuFromConfig(map[string]any{"landing_page": map[string]any{"menu": map[string]any{"enabled": true}}}) != nil {
+		t.Error("MenuFromConfig must only read forms.config.menu, not a nested landing page")
 	}
 }

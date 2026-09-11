@@ -19,18 +19,17 @@ import (
 )
 
 // menu485Fixture builds a two-tier menu: one best-seller with an image, one
-// category item with an image, and one category item without an image.
+// category item with an image, and one category item without an image. Issue
+// #497: the menu is a FORM, so the payload carries the form's own menu config
+// and a resolved theme (Th) rather than a workspace landing page.
 func menu485Fixture(t *testing.T) workspaceMenuData {
 	t.Helper()
-	lp := &dbstore.LandingPage{
-		Enabled: true, Hero: "Hawa Cafe Nadayu 801", Subtitle: "Nadayu 801, Bandar Baru Bangi",
-		PrimaryColor: "#4f46e5",
-		Menu: &dbstore.MenuPage{
-			Enabled:       true,
-			BestSellerIDs: []string{"p1", "p2"},
-			Categories:    []dbstore.MenuCategory{{Name: "Nasi Lemak", ProductIDs: []string{"p2", "p3"}}},
-		},
+	menu := &dbstore.MenuPage{
+		Enabled:       true,
+		BestSellerIDs: []string{"p1", "p2"},
+		Categories:    []dbstore.MenuCategory{{Name: "Nasi Lemak", ProductIDs: []string{"p2", "p3"}}},
 	}
+	th := menuTheme{Hero: "Hawa Cafe Nadayu 801", Subtitle: "Nadayu 801, Bandar Baru Bangi", PrimaryColor: "#4f46e5"}
 	h := &PublicHandlers{}
 	ls := formLangs["en"]
 	// Canonical JomForm media URLs so the #382/#471 variant rewrite applies.
@@ -39,17 +38,22 @@ func menu485Fixture(t *testing.T) workspaceMenuData {
 	p2 := &dbstore.Product{ID: "p2", Name: "Nasi Lemak Sambal", Description: "Pedes", PriceSen: 680,
 		Images: []string{"https://jomform.com/media/u/acc/11111111-2222-3333-4444-555555555555.jpg"}}
 	p3 := &dbstore.Product{ID: "p3", Name: "Nasi Lemak Kosong", Description: "Tanpa lauk", PriceSen: 380}
+	view := func(p *dbstore.Product, best bool) menuProductView {
+		img := ""
+		if len(p.Images) > 0 {
+			img = p.Images[0]
+		}
+		return h.menuProductView(p.ID, p.Name, p.Description, p.PriceSen, img, best, ls.MenuBestBadge, ls.MenuAdd)
+	}
 	return workspaceMenuData{
-		Slug: "hawa", Lp: lp, Ls: ls, Table: "8",
+		Slug: "menu", Menu: menu, Th: th, Ls: ls, Table: "8",
 		ContactAddress: "Nadayu 801", ContactPhone: "+60123456789",
-		BestSellers: []menuProductView{
-			h.menuProductView(p1, true, ls.MenuBestBadge, ls.MenuAdd),
-		},
+		BestSellers: []menuProductView{view(p1, true)},
 		Categories: []menuCategoryView{{Name: "Nasi Lemak", Products: []menuProductView{
-			h.menuProductView(p2, false, ls.MenuBestBadge, ls.MenuAdd),
-			h.menuProductView(p3, false, ls.MenuBestBadge, ls.MenuAdd),
+			view(p2, false),
+			view(p3, false),
 		}}},
-		HasForms: true,
+		HasItems: true,
 	}
 }
 

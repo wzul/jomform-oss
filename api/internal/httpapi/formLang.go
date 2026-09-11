@@ -109,7 +109,7 @@ var formLangs = map[string]langStrings{
 		MenuSubmitError: "Could not place the order. Please try again.",
 		MenuRequired:    "Please enter your name and email.",
 		Required:        "(required)",
-		MenuExtraHelp:   "Extra details requested by the merchant — these fields come from the order form set in Settings → Storefront → Restaurant menu.",
+		MenuExtraHelp:   "Extra details requested by the merchant — these fields come from the order form attached in this form's menu settings.",
 		MenuExtraEdit:   "Edit this form",
 	},
 	"ms": {
@@ -138,7 +138,7 @@ var formLangs = map[string]langStrings{
 		MenuSubmitError: "Pesanan tidak berjaya dihantar. Sila cuba lagi.",
 		MenuRequired:    "Sila masukkan nama dan emel anda.",
 		Required:        "wajib",
-		MenuExtraHelp:   "Butiran tambahan yang diminta peniaga — medan ini datang dari borang pesanan yang ditetapkan dalam Tetapan → Storefront → Menu restoran.",
+		MenuExtraHelp:   "Butiran tambahan yang diminta peniaga — medan ini datang dari borang pesanan yang dilampirkan dalam tetapan menu borang ini.",
 		MenuExtraEdit:   "Edit borang ini",
 	},
 	"zh": {
@@ -167,7 +167,7 @@ var formLangs = map[string]langStrings{
 		MenuSubmitError: "无法提交订单，请重试。",
 		MenuRequired:    "请输入您的姓名和电子邮件。",
 		Required:        "必填",
-		MenuExtraHelp:   "商家要求的额外信息 — 这些字段来自“设置 → 店铺 → 餐厅菜单”中设置的订单表单。",
+		MenuExtraHelp:   "商家要求的额外信息 — 这些字段来自此表单菜单设置中附加的订单表单。",
 		MenuExtraEdit:   "编辑此表单",
 	},
 	"ta": {
@@ -196,7 +196,7 @@ var formLangs = map[string]langStrings{
 		MenuSubmitError: "ஆர்டரை அனுப்ப முடியவில்லை. மீண்டும் முயற்சிக்கவும்.",
 		MenuRequired:    "உங்கள் பெயர் மற்றும் மின்னஞ்சலை உள்ளிடவும்.",
 		Required:        "கட்டாயம்",
-		MenuExtraHelp:   "வணிகர் கேட்கும் கூடுதல் விவரங்கள் — இந்தப் புலங்கள் அமைப்புகள் → ஸ்டோர்ஃப்ரண்ட் → உணவக மெனு-இல் அமைக்கப்பட்ட ஆர்டர் படிவத்திலிருந்து வருகின்றன.",
+		MenuExtraHelp:   "வணிகர் கேட்கும் கூடுதல் விவரங்கள் — இந்தப் புலங்கள் இந்தப் படிவத்தின் மெனு அமைப்புகளில் இணைக்கப்பட்ட ஆர்டர் படிவத்திலிருந்து வருகின்றன.",
 		MenuExtraEdit:   "இந்தப் படிவத்தைத் திருத்து",
 	},
 	"ar": {
@@ -225,7 +225,7 @@ var formLangs = map[string]langStrings{
 		MenuSubmitError: "تعذّر إرسال الطلب. يرجى المحاولة مرة أخرى.",
 		MenuRequired:    "يرجى إدخال اسمك وبريدك الإلكتروني.",
 		Required:        "مطلوب",
-		MenuExtraHelp:   "تفاصيل إضافية يطلبها التاجر — تأتي هذه الحقول من نموذج الطلب المحدد في الإعدادات ← المتجر ← قائمة المطعم.",
+		MenuExtraHelp:   "تفاصيل إضافية يطلبها التاجر — تأتي هذه الحقول من نموذج الطلب المرفق في إعدادات قائمة هذا النموذج.",
 		MenuExtraEdit:   "تعديل هذا النموذج",
 	},
 }

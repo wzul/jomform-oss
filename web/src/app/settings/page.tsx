@@ -9,7 +9,6 @@ import { formatDateTime } from "../../lib/formatDate";
 import { workspaceQuery, workspaceScope } from "../../lib/workspace";
 import { MembersTab } from "../../components/MembersTab";
 import { LegalTab } from "../../components/LegalTab";
-import ProductPicker, { type PickerProduct } from "../../components/ProductPicker";
 
 // Issue #323: the CNAME target is consistent across all custom-domain copy.
 const CNAME_TARGET = "custom.jomform.com";
@@ -230,23 +229,9 @@ export default function Settings() {
   // Issue #362: published forms embedded inline on the landing page.
   const [lpForms, setLpForms] = useState<{ label: string; form_slug: string }[]>([]);
   const [lpWorkspaceId, setLpWorkspaceId] = useState("");
-  // Issue #438: QR ordering flow — restaurant-menu landing template.
-  const [menuEnabled, setMenuEnabled] = useState(false);
-  const [menuCategories, setMenuCategories] = useState<{ name: string; product_ids: string[] }[]>([]);
-  const [menuBestSeller, setMenuBestSeller] = useState("");
-  // Issue #486: product picker state. `menuProducts` holds the ACTIVE
-  // workspace's active products (name + thumbnail + price) so the picker and
-  // the live preview can resolve stored product IDs to names without changing
-  // the persisted menu JSON shape.
-  const [menuProducts, setMenuProducts] = useState<PickerProduct[]>([]);
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const [pickerCatIndex, setPickerCatIndex] = useState(-1); // -1 = best-seller picker
-  // Issue #493: the optional order form attached to the menu. Its field blocks
-  // define the EXTRA fields the menu checkout collects; the checkout always
-  // collects name + email regardless. `menuForms` holds the workspace's
-  // published forms so the merchant picks one by title instead of a slug.
-  const [menuOrderFormSlug, setMenuOrderFormSlug] = useState("");
-  const [menuForms, setMenuForms] = useState<{ id: string; slug: string; title: string; status: string }[]>([]);
+  // Issue #497: the restaurant menu is a PER-FORM setting now — its config
+  // lives on the form and its UI is in Form Settings. Settings → Storefront no
+  // longer owns a menu.
   // Issue #185: per-workspace currency + BNM rates.
   const [currency, setCurrency] = useState("MYR");
   const [currencyWorkspaceId, setCurrencyWorkspaceId] = useState("");
@@ -474,38 +459,8 @@ export default function Settings() {
         setLpLogoUrl(lp.logo_url || "");
         setLpCtas(Array.isArray(lp.ctas) ? lp.ctas : []);
         setLpForms(Array.isArray(lp.forms) ? lp.forms : []);
-        // Issue #438: QR ordering flow — restaurant-menu landing template.
-        const menu = lp.menu || {};
-        setMenuEnabled(!!menu.enabled);
-        setMenuCategories(Array.isArray(menu.categories) ? menu.categories : []);
-        setMenuBestSeller(menu.best_seller || "");
-        // Issue #493: the optional form attached to the menu for extra
-        // checkout fields (its field blocks define them).
-        setMenuOrderFormSlug(menu.order_form_slug || "");
       })
       .catch(() => {});
-    // Issue #486: load the workspace's ACTIVE products (workspace-scoped, same
-    // endpoint as the products page) so the menu product picker and the live
-    // preview can show names/thumbnails/prices instead of raw IDs.
-    fetch(`/api/rest/products${workspaceQuery()}`)
-      .then((r) => (r.ok ? r.json() : []))
-      .then((d) => setMenuProducts(Array.isArray(d) ? d.filter((p: PickerProduct) => p.active !== false) : []))
-      .catch(() => setMenuProducts([]));
-    // Issue #493: the workspace's published forms, so the menu's optional
-    // "order form" selector lists real forms by title (not a raw slug).
-    fetch(`/api/rest/forms${workspaceQuery()}`)
-      .then((r) => (r.ok ? r.json() : []))
-      .then((d) =>
-        setMenuForms(
-          Array.isArray(d)
-            ? d.filter(
-                (f: { slug: string; title: string; status: string }) =>
-                  f.slug && (f.status === "published" || f.status === "unlisted")
-              )
-            : []
-        )
-      )
-      .catch(() => setMenuForms([]));
     fetch(`/api/rest/currency/rates`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
@@ -946,15 +901,6 @@ export default function Settings() {
           logo_url: lpLogoUrl,
           ctas: lpCtas,
           forms: lpForms,
-          // Issue #438: QR ordering flow — restaurant-menu landing template.
-          menu: {
-            enabled: menuEnabled,
-            categories: menuCategories,
-            best_seller: menuBestSeller,
-            // Issue #493: optional form whose field blocks define the extra
-            // checkout fields. Empty = checkout collects name + email only.
-            order_form_slug: menuOrderFormSlug,
-          },
         },
       }),
     });
@@ -964,30 +910,6 @@ export default function Settings() {
       const d = await r.json().catch(() => ({}));
       setErr(d.error || t("set.failedSave"));
     }
-  }
-
-  // Issue #486: resolve a stored product ID to the active product it points
-  // at (or undefined when the product is archived/gone — the renderer skips
-  // unknown IDs, so the preview flags them instead of silently dropping them).
-  function menuProductByID(id: string): PickerProduct | undefined {
-    return menuProducts.find((p) => p.id === id);
-  }
-
-  // Issue #486: the live menu preview — sections in order, with the picked
-  // items. Mirrors the renderer: configured categories first (in order, only
-  // the ones that resolve to a product), then "Other items" for every active
-  // product not placed in any category.
-  function menuPreviewSections(): { name: string; ids: string[] }[] {
-    const placed = new Set<string>();
-    const sections: { name: string; ids: string[] }[] = [];
-    for (const c of menuCategories) {
-      const ids = (c.product_ids || []).filter((id) => menuProductByID(id));
-      for (const id of ids) placed.add(id);
-      if (ids.length > 0) sections.push({ name: c.name, ids });
-    }
-    const rest = menuProducts.filter((p) => !placed.has(p.id)).map((p) => p.id);
-    if (rest.length > 0) sections.push({ name: t("set.menuPreviewOther"), ids: rest });
-    return sections;
   }
 
   // Issue #107: render a client-side preview of the template with sample data.
@@ -2179,348 +2101,9 @@ export default function Settings() {
               )}
             </div>
           </section>
-
-          {/* Issue #438: QR ordering flow — restaurant-menu landing template. */}
-          <section className="jf-card mt-6 p-6">
-            <h2 className="text-lg font-semibold">{t("set.menuTitle")}</h2>
-            <p className="mt-1 max-w-xl text-sm text-slate-400">
-              {t("set.menuHelp")}{" "}
-              <a href="/docs" className="text-[var(--jf-primary)] hover:underline">
-                {t("set.menuDocs")}
-              </a>
-            </p>
-            <div className="mt-4 space-y-3">
-              <div className="flex items-start justify-between gap-4 rounded-lg border border-[var(--jf-border)] p-3">
-                <div>
-                  <p className="text-sm font-medium">{t("set.menuEnabledTitle")}</p>
-                  <p className="mt-0.5 max-w-md text-xs text-slate-500">{t("set.menuEnabledHelp")}</p>
-                </div>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={menuEnabled}
-                  onClick={() => setMenuEnabled((v) => !v)}
-                  className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
-                    menuEnabled ? "bg-[var(--jf-primary)]" : "bg-slate-300"
-                  }`}
-                >
-                  <span
-                    className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${
-                      menuEnabled ? "left-[22px]" : "left-0.5"
-                    }`}
-                  />
-                </button>
-              </div>
-              {menuEnabled && (
-                <>
-                  <div>
-                    <label className="text-xs text-slate-500">{t("set.menuBestSeller")}</label>
-                    <div className="mt-1 flex max-w-xl flex-wrap items-center gap-2 rounded-lg border border-[var(--jf-border)] p-2">
-                      {menuBestSeller && menuProductByID(menuBestSeller) ? (
-                        <>
-                          <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-md bg-slate-100">
-                            {menuProductByID(menuBestSeller)?.images?.[0] ? (
-                              /* eslint-disable-next-line @next/next/no-img-element */
-                              <img
-                                src={menuProductByID(menuBestSeller)!.images![0]}
-                                alt=""
-                                className="h-full w-full object-cover"
-                              />
-                            ) : (
-                              <span className="text-[10px] text-slate-400">—</span>
-                            )}
-                          </span>
-                          <span className="min-w-0 flex-1 truncate text-sm">
-                            {menuProductByID(menuBestSeller)!.name}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setPickerCatIndex(-1);
-                              setPickerOpen(true);
-                            }}
-                            className="jf-btn-outline px-2 py-1 text-[11px]"
-                          >
-                            {t("set.menuChangeBestSeller")}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setMenuBestSeller("")}
-                            className="jf-btn-ghost px-2 py-1 text-[11px] text-red-600"
-                          >
-                            {t("set.menuClearBestSeller")}
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <span className="flex-1 truncate text-sm text-slate-400">
-                            {menuBestSeller
-                              ? t("set.menuUnknownProduct")
-                              : t("set.menuBestSellerNone")}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setPickerCatIndex(-1);
-                              setPickerOpen(true);
-                            }}
-                            className="jf-btn-primary px-2.5 py-1 text-[11px]"
-                          >
-                            {t("set.menuChooseBestSeller")}
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                  <div>
-                    <label className="text-xs text-slate-500">{t("set.menuCategories")}</label>
-                    <div className="mt-1 space-y-2">
-                      {menuCategories.map((c, i) => (
-                        <div key={i} className="flex flex-col gap-2 rounded-lg border border-[var(--jf-border)] p-3">
-                          <div className="flex items-center gap-2">
-                            <input
-                              value={c.name}
-                              onChange={(e) =>
-                                setMenuCategories((arr) =>
-                                  arr.map((x, j) => (j === i ? { ...x, name: e.target.value } : x))
-                                )
-                              }
-                              className="jf-input flex-1"
-                              placeholder={t("set.menuCatName")}
-                            />
-                            <button
-                              type="button"
-                              onClick={() => setMenuCategories((arr) => arr.filter((_, j) => j !== i))}
-                              className="jf-btn-ghost px-2 py-1 text-[11px] text-red-600"
-                            >
-                              {t("set.menuCatRemove")}
-                            </button>
-                          </div>
-                          <div className="flex flex-wrap items-center gap-2">
-                            {(c.product_ids || []).map((id) => {
-                              const p = menuProductByID(id);
-                              return (
-                                <span
-                                  key={id}
-                                  className={`inline-flex items-center gap-1.5 rounded-full border py-0.5 pl-0.5 pr-2 text-xs ${
-                                    p
-                                      ? "border-[var(--jf-border)] bg-white"
-                                      : "border-amber-300 bg-amber-50"
-                                  }`}
-                                >
-                                  <span className="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-100">
-                                    {p?.images?.[0] ? (
-                                      /* eslint-disable-next-line @next/next/no-img-element */
-                                      <img src={p.images[0]} alt="" className="h-full w-full object-cover" />
-                                    ) : (
-                                      <span className="text-[9px] text-slate-400">—</span>
-                                    )}
-                                  </span>
-                                  <span className="max-w-[12rem] truncate">
-                                    {p ? p.name : t("set.menuUnknownProduct")}
-                                  </span>
-                                  <button
-                                    type="button"
-                                    aria-label={t("set.menuCatRemove")}
-                                    onClick={() =>
-                                      setMenuCategories((arr) =>
-                                        arr.map((x, j) =>
-                                          j === i
-                                            ? { ...x, product_ids: (x.product_ids || []).filter((v) => v !== id) }
-                                            : x
-                                        )
-                                      )
-                                    }
-                                    className="text-slate-400 hover:text-red-500"
-                                  >
-                                    ✕
-                                  </button>
-                                </span>
-                              );
-                            })}
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setPickerCatIndex(i);
-                                setPickerOpen(true);
-                              }}
-                              className="jf-btn-outline px-2.5 py-1 text-[11px]"
-                            >
-                              + {t("set.menuPickProducts")}
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                      <button
-                        type="button"
-                        onClick={() => setMenuCategories((arr) => [...arr, { name: "", product_ids: [] }])}
-                        className="jf-btn-outline"
-                      >
-                        + {t("set.menuCatAdd")}
-                      </button>
-                    </div>
-                  </div>
-                  {/* Issue #493: optional order form for extra checkout fields.
-                      Its field blocks ARE the extra fields the menu checkout
-                      collects and validates; there is no second field editor. */}
-                  <div>
-                    <label className="text-xs text-slate-500">{t("set.menuOrderForm")}</label>
-                    <div className="mt-1 max-w-xl space-y-2">
-                      <select
-                        value={menuOrderFormSlug}
-                        onChange={(e) => setMenuOrderFormSlug(e.target.value)}
-                        className="jf-input"
-                      >
-                        <option value="">{t("set.menuOrderFormNone")}</option>
-                        {menuForms.map((f) => (
-                          <option key={f.id} value={f.slug}>
-                            {f.title} — {f.slug}
-                          </option>
-                        ))}
-                      </select>
-                      <p className="text-[11px] leading-relaxed text-slate-500">
-                        {t("set.menuOrderFormHelp")}
-                      </p>
-                      {/* Name + email are never removable — say why. */}
-                      <p className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] leading-relaxed text-amber-800">
-                        {t("set.menuOrderFormMandatory")}
-                      </p>
-                      {menuOrderFormSlug && (
-                        <div className="flex flex-wrap items-center gap-2">
-                          {(() => {
-                            const f = menuForms.find((x) => x.slug === menuOrderFormSlug);
-                            return (
-                              <>
-                                <span className="text-[11px] text-[var(--jf-muted)]">
-                                  {f ? t("set.menuOrderFormSelected", { n: f.title }) : t("set.menuOrderFormMissing")}
-                                </span>
-                                {f && (
-                                  <a
-                                    href={`/builder?form=${f.id}`}
-                                    className="jf-btn-outline px-2.5 py-1 text-[11px]"
-                                  >
-                                    {t("set.menuOrderFormEdit")}
-                                  </a>
-                                )}
-                              </>
-                            );
-                          })()}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  {/* Issue #486: live preview of the resulting menu structure. */}
-                  <div className="rounded-lg border border-[var(--jf-border)] p-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="text-sm font-medium">{t("set.menuPreviewTitle")}</p>
-                      <span className="text-xs text-[var(--jf-muted)]">
-                        {t("set.menuPreviewItems", {
-                          n: menuPreviewSections().reduce((n, s) => n + s.ids.length, 0),
-                        })}
-                      </span>
-                    </div>
-                    <p className="mt-0.5 max-w-xl text-xs text-slate-500">{t("set.menuPreviewHelp")}</p>
-                    {menuProducts.length === 0 ? (
-                      <p className="mt-2 text-sm text-slate-400">{t("set.menuPreviewNoProducts")}</p>
-                    ) : (
-                      <>
-                        {menuPreviewSections().length === 0 && (
-                          <p className="mt-2 text-sm text-slate-400">{t("set.menuPreviewEmpty")}</p>
-                        )}
-                        <div className="mt-2 space-y-2">
-                          {menuPreviewSections().map((s, si) => (
-                            <div key={si}>
-                              <p className="text-xs font-semibold uppercase tracking-wide text-[var(--jf-muted)]">
-                                {s.name || t("set.menuCatName")}
-                              </p>
-                              <div className="mt-1 flex flex-wrap gap-2">
-                                {s.ids.map((id) => {
-                                  const p = menuProductByID(id);
-                                  if (!p) return null;
-                                  return (
-                                    <span
-                                      key={id}
-                                      className="inline-flex items-center gap-2 rounded-lg border border-[var(--jf-border)] bg-white px-2 py-1"
-                                    >
-                                      <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-md bg-slate-100">
-                                        {p.images?.[0] ? (
-                                          /* eslint-disable-next-line @next/next/no-img-element */
-                                          <img src={p.images[0]} alt="" className="h-full w-full object-cover" />
-                                        ) : (
-                                          <span className="text-[9px] text-slate-400">—</span>
-                                        )}
-                                      </span>
-                                      <span className="text-xs">
-                                        <span className="block max-w-[10rem] truncate font-medium text-slate-700">
-                                          {p.name}
-                                        </span>
-                                        <span className="block text-[10px] text-[var(--jf-muted)]">
-                                          {`RM${(p.price_sen / 100).toLocaleString("en-MY", { minimumFractionDigits: 2 })}`}
-                                          {menuBestSeller === p.id && (
-                                            <span className="ml-1 rounded bg-[var(--jf-primary)]/10 px-1 text-[9px] font-semibold text-[var(--jf-primary)]">
-                                              {t("set.menuPreviewBestSeller")}
-                                            </span>
-                                          )}
-                                        </span>
-                                      </span>
-                                    </span>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </>
-                    )}
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2 pt-1">
-                    <button onClick={saveLandingPage} className="jf-btn-primary">{t("set.lpSave")}</button>
-                    <a
-                      href={`https://${activeWorkspaceSlug || "workspace"}.jomform.com`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="jf-btn-outline"
-                    >
-                      {t("set.menuPreview")}
-                    </a>
-                  </div>
-                </>
-              )}
-            </div>
-          </section>
-
-          {/* Issue #486: product picker for a menu category (multi-select) or
-              the best-seller (single-select). Returns product IDs only, so the
-              stored menu JSON shape is unchanged. */}
-          <ProductPicker
-            open={pickerOpen}
-            onClose={() => setPickerOpen(false)}
-            multi={pickerCatIndex >= 0}
-            selected={
-              pickerCatIndex >= 0
-                ? menuCategories[pickerCatIndex]?.product_ids || []
-                : menuBestSeller
-                  ? [menuBestSeller]
-                  : []
-            }
-            title={
-              pickerCatIndex >= 0
-                ? t("set.menuPickerTitleCategory")
-                : t("set.menuPickerTitleBestSeller")
-            }
-            onConfirm={(ids) => {
-              if (pickerCatIndex >= 0) {
-                setMenuCategories((arr) =>
-                  arr.map((x, j) => (j === pickerCatIndex ? { ...x, product_ids: ids } : x))
-                );
-              } else {
-                setMenuBestSeller(ids[0] || "");
-              }
-              setPickerOpen(false);
-            }}
-          />
           </>
         )}
+
         {/* ── Members tab: workspace members management (issue #163) ── */}
         {tab === "members" && isAdmin && (
           <MembersTab workspaceId={emelWorkspaceId || activeWorkspaceId} />
