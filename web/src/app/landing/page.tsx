@@ -9,6 +9,7 @@ const FEATURES = [
   { icon: "💳", key: "land.f2" as const },
   { icon: "🤖", key: "land.f3" as const },
   { icon: "📊", key: "land.f4" as const },
+  { icon: "🤝", key: "land.f5" as const },
 ];
 
 const STEPS = [
@@ -226,6 +227,53 @@ export default function Landing() {
                   className="rounded-lg bg-[var(--jf-primary)] px-4 py-2 text-sm font-medium text-white hover:opacity-90"
                 >
                   {t("land.canvacta")}
+                </a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* use case showcase — affiliate marketing (issue #450) */}
+      <section className="mx-auto max-w-4xl border-t border-slate-100 px-6 py-16">
+        <div className="mt-6 rounded-2xl border border-slate-200 bg-gradient-to-br from-amber-50 via-white to-white p-8">
+          <div className="flex flex-col items-center gap-6 sm:flex-row sm:items-start">
+            <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-2xl bg-amber-100 text-4xl">
+              🤝
+            </div>
+            <div className="text-center sm:text-left">
+              <h2 className="text-xl font-bold text-slate-900 sm:text-2xl">
+                {t("land.afftitle")}
+              </h2>
+              <p className="mt-3 max-w-xl text-sm leading-relaxed text-slate-600">
+                {t("land.affbody")}
+              </p>
+              <ul className="mt-5 grid grid-cols-1 gap-2 text-sm text-slate-600 sm:grid-cols-2">
+                <li className="flex items-center gap-2">
+                  <span className="text-[var(--jf-primary)]">✓</span> {t("land.aff1")}
+                </li>
+                <li className="flex items-center gap-2">
+                  <span className="text-[var(--jf-primary)]">✓</span> {t("land.aff2")}
+                </li>
+                <li className="flex items-center gap-2">
+                  <span className="text-[var(--jf-primary)]">✓</span> {t("land.aff3")}
+                </li>
+                <li className="flex items-center gap-2">
+                  <span className="text-[var(--jf-primary)]">✓</span> {t("land.aff4")}
+                </li>
+              </ul>
+              <div className="mt-6 flex flex-wrap items-center justify-center gap-3 sm:justify-start">
+                <a
+                  href="/settings"
+                  className="rounded-lg bg-[var(--jf-primary)] px-4 py-2 text-sm font-medium text-white hover:opacity-90"
+                >
+                  {t("land.affcta")}
+                </a>
+                <a
+                  href="/mcp"
+                  className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
+                >
+                  {t("land.affmcp")}
                 </a>
               </div>
             </div>
