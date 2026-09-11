@@ -125,6 +125,15 @@ func (h *PublicHandlers) RegisterRoutes(mux *http.ServeMux) {
 	// public payment link is reachable only via its workspace subdomain or a
 	// custom domain), leaving dashboard routes (/api, /v1) intact.
 	mux.Handle("POST /{slug}/order", middleware.RateLimit(http.HandlerFunc(h.handleSubmit)))
+	// Issue #491: workspace-level order endpoint — the restaurant menu page
+	// checks out here with NO form in the path. A dedicated single-segment
+	// literal path is deliberately used: a workspace slug and a form slug share
+	// one URL namespace, so /{workspaceSlug}/order would be ambiguous with the
+	// form route above, and /menu/order would shadow the order endpoint of a
+	// form whose slug is literally "menu". A literal segment is never a
+	// wildcard match, so no form slug can reach it. Resolves the account from
+	// the request host (workspace subdomain or verified custom domain).
+	mux.Handle("POST /menu-order", middleware.RateLimit(http.HandlerFunc(h.handleMenuOrder)))
 	mux.HandleFunc("GET /t/{ref}", h.handleThankYou)
 	// Issue #202: lightweight read-only status endpoint the thank-you page
 	// polls while a sale is pending (bounded client-side poll). Returns the
@@ -330,6 +339,36 @@ func (h *PublicHandlers) antiSpamSubmitterIsOwner(r *http.Request, form *dbstore
 	return err == nil && admin
 }
 
+// antiSpamSubmitterIsOwnerForAccount is antiSpamSubmitterIsOwner for a
+// workspace-scoped request with no form (issue #491, menu checkout): the
+// submitter is a logged-in owner/admin of the workspace owning accountID.
+// Returns false when any dependency is nil (bare-mode tests) or the
+// session/workspace cannot be resolved.
+func (h *PublicHandlers) antiSpamSubmitterIsOwnerForAccount(r *http.Request, accountID string) bool {
+	if h.Sessions == nil || h.Users == nil || h.WorkspaceMembers == nil || h.Workspaces == nil || accountID == "" {
+		return false
+	}
+	c, err := r.Cookie(sessionCookie)
+	if err != nil || c.Value == "" {
+		return false
+	}
+	uid, issued, err := h.Sessions.GetCreated(r.Context(), c.Value)
+	if err != nil || uid == "" {
+		return false
+	}
+	// Password-reset invalidation (issue #62): a session issued before the
+	// user's last password reset is dead.
+	if u, e := h.Users.ByID(r.Context(), uid); e == nil && u != nil && u.PwResetAt != nil && !auth.ValidAfter(issued, *u.PwResetAt) {
+		return false
+	}
+	workspaceID, err := h.Workspaces.WorkspaceIDByAccount(r.Context(), accountID)
+	if err != nil || workspaceID == "" {
+		return false
+	}
+	admin, err := h.WorkspaceMembers.IsAdmin(r.Context(), workspaceID, uid)
+	return err == nil && admin
+}
+
 // antiSpamCheckHoneypot rejects a submit whose hidden honeypot field is
 // filled (issue #244, layer 1). Returns true when the submit is spam.
 func (h *PublicHandlers) antiSpamCheckHoneypot(r *http.Request, in *submitInput) bool {
@@ -368,11 +407,22 @@ func (h *PublicHandlers) antiSpamCheckTime(r *http.Request, in *submitInput) boo
 // layer 2): max antiSpamFormLimitPerHour submissions per form per IP per hour.
 // Returns true when the submit is over the limit.
 func (h *PublicHandlers) antiSpamCheckRateLimit(r *http.Request, form *dbstore.Form) bool {
-	if h.FormLimiter == nil {
+	if form == nil {
 		return false
 	}
-	key := form.ID + "|" + middleware.ClientIP(r)
-	return !h.FormLimiter.Allow(key)
+	return h.antiSpamCheckRateLimitKey(r, form.ID)
+}
+
+// antiSpamCheckRateLimitKey is antiSpamCheckRateLimit over an arbitrary target
+// key. The formless (menu) order path (issue #491) has no form id, so it keys
+// the same token bucket on the workspace id — the protection is preserved on
+// the formless path instead of silently dropped. An empty key never throttles.
+// Returns true when the submit is over the limit.
+func (h *PublicHandlers) antiSpamCheckRateLimitKey(r *http.Request, key string) bool {
+	if h.FormLimiter == nil || key == "" {
+		return false
+	}
+	return !h.FormLimiter.Allow(key + "|" + middleware.ClientIP(r))
 }
 
 // antiSpamCheckEmail validates the submitted email format + MX (issue #244,
@@ -402,23 +452,29 @@ func (h *PublicHandlers) antiSpamCheckEmail(r *http.Request, emailAddr string) b
 // enqueueSpamJudge enqueues a background AI spam-judge job (issue #245) for a
 // submission or sale. Best-effort: a failure is logged and never fails the
 // submit response. The judge is skipped when the submitter is the workspace
-// owner/admin (testing their own form) or when no queue is wired.
-func (h *PublicHandlers) enqueueSpamJudge(r *http.Request, form *dbstore.Form, owner bool, subID, saleID, emailAddr string, data map[string]any) {
-	if owner || h.SpamQueue == nil {
+// owner/admin (testing their own store) or when no queue is wired.
+//
+// accountID is passed explicitly (rather than read off the form) so the
+// formless menu-order path (issue #491) can enqueue a judge job too; form is
+// nil on that path and its form id/title are then omitted from the job.
+func (h *PublicHandlers) enqueueSpamJudge(r *http.Request, accountID string, form *dbstore.Form, owner bool, subID, saleID, emailAddr string, data map[string]any) {
+	if owner || h.SpamQueue == nil || accountID == "" {
 		return
 	}
 	job := spamjudge.Job{
 		SubmissionID: subID,
 		SaleID:       saleID,
-		AccountID:    form.AccountID,
-		FormID:       form.ID,
-		FormTitle:    form.Title,
+		AccountID:    accountID,
 		Data:         data,
 		Email:        emailAddr,
 		IP:           middleware.ClientIP(r),
 	}
+	if form != nil {
+		job.FormID = form.ID
+		job.FormTitle = form.Title
+	}
 	if err := spamjudge.Enqueue(r.Context(), h.SpamQueue, job); err != nil {
-		slog.Warn("spamjudge_enqueue_failed", "account", form.AccountID, "err", err)
+		slog.Warn("spamjudge_enqueue_failed", "account", accountID, "err", err)
 	}
 }
 
@@ -469,219 +525,17 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var in submitInput
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Client.Email == "" || len(in.Items) == 0 {
-		writeErr(w, http.StatusBadRequest, "butiran tidak lengkap")
-		return
-	}
-	// Issue #254: server-side re-validation of registered fields. Agent JS is
-	// client-side only and bypassable, so the server re-validates every field
-	// against the form's registered contract before accepting the order.
-	if err := formfields.Validate(form.Config, in.Fields); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	// Issue #244: deterministic anti-spam layers. Each layer REJECTS the
-	// submission (returns an error) rather than flagging it. The per-form
-	// rate limit and time-based check are skipped for a logged-in owner/admin
-	// of the form's workspace (owner testing the form shouldn't be throttled).
-	owner := h.antiSpamSubmitterIsOwner(r, form)
-	// Layer 1 — honeypot: a filled hidden field marks a bot.
-	if h.antiSpamCheckHoneypot(r, &in) {
-		writeErr(w, http.StatusBadRequest, "butiran tidak lengkap")
-		return
-	}
-	// Layer 5 — email/domain validation (format + MX).
-	if h.antiSpamCheckEmail(r, in.Client.Email) {
-		writeErr(w, http.StatusBadRequest, "emel tidak sah")
-		return
-	}
-	// Layer 2 — per-form rate limit (15/form/IP/hour), skipped for owner.
-	if !owner && h.antiSpamCheckRateLimit(r, form) {
-		writeErr(w, http.StatusTooManyRequests, "terlalu banyak cubaan. Cuba lagi kemudian.")
-		return
-	}
-	// Layer 3 — time-based check (reject too-fast submits), skipped for owner.
-	if !owner && h.antiSpamCheckTime(r, &in) {
-		writeErr(w, http.StatusBadRequest, "butiran tidak lengkap")
-		return
-	}
-	method := in.PaymentMethod
-	if method != "chip" && method != "bank_direct" {
-		writeErr(w, http.StatusBadRequest, "kaedah pembayaran tidak sah")
-		return
-	}
-
-	// Validate totals against the account currency (MVP: MYR only).
-	if _, err := h.Accounts.ByID(r.Context(), form.AccountID); err != nil {
-		respondErr(w, r, err)
-		return
-	}
-
-	sale := &dbstore.Sale{
-		AccountID: form.AccountID,
-		FormID:    form.ID,
-		RefCode:   genRef(),
-		Client: resolveChipClient(form, in.Fields, dbstore.SaleClient{
-			FullName: in.Client.FullName, Email: in.Client.Email, Phone: in.Client.Phone,
-			StreetAddress: in.Client.StreetAddress, City: in.Client.City, State: in.Client.State,
-			ZipCode: in.Client.ZipCode, Country: in.Client.Country,
-			LegalName: in.Client.LegalName, RegistrationNum: in.Client.RegistrationNum,
-			TaxNumber: in.Client.TaxNumber,
-		}),
-		SaleType:      dbstore.SaleTypeOneTime,
-		PaymentMethod: method,
-		Status:        dbstore.SalePending,
-		SkipCapture:   in.SkipCapture && method == "chip",
-		// Issue #438: QR ordering flow — carry the table number the QR stand
-		// encoded so the merchant knows where to serve.
-		TableNumber: strings.TrimSpace(in.TableNumber),
-		// Issue #444: affiliate marketing — carry the affiliate code the buyer
-		// landed with so the sale is attributed to that affiliate.
-		AffiliateCode: strings.TrimSpace(in.AffiliateCode),
-	}
-	// Issue #185: record the currency the sale is transacted in from the
-	// workspace that owns the form's account (default MYR). Historical sales keep
-	// this original currency — never auto-converted on a later change.
-	if h.Workspaces != nil {
-		if cur, cerr := h.Workspaces.WorkspaceCurrencyByAccount(r.Context(), form.AccountID); cerr == nil && cur != "" {
-			sale.Currency = cur
-		}
-	}
-	if sale.Currency == "" {
-		sale.Currency = "MYR"
-	}
-	var subtotal int64
-	for _, it := range in.Items {
-		// For MVP the form config carries product id + authoritative price.
-		name, price := h.lookupProduct(form, it.ProductID)
-		if price <= 0 && name == "" {
-			writeErr(w, http.StatusBadRequest, "produk tidak sah: "+it.ProductID)
-			return
-		}
-		qty := it.Quantity
-		if qty < 1 {
-			qty = 1
-		}
-		item := dbstore.SaleItem{ProductID: it.ProductID, Name: name, PriceSen: price, Qty: qty}
-		// Issue #153: when the buyer chose a variation, validate it belongs to
-		// the product, use the variation's price, and decrement the variation's
-		// stock (not the product-level stock). The variation is persisted on the
-		// sale so the receipt/merchant view shows which variation was bought.
-		if it.VariationID != "" {
-			if h.ProductVariations == nil {
-				writeErr(w, http.StatusBadRequest, "variasi tidak sah: "+it.VariationID)
-				return
-			}
-			v, verr := h.ProductVariations.GetByProduct(r.Context(), it.ProductID, it.VariationID)
-			if verr != nil {
-				if verr == dbstore.ErrVariationNotFound {
-					writeErr(w, http.StatusBadRequest, "variasi tidak sah: "+it.VariationID)
-					return
-				}
-				respondErr(w, r, verr)
-				return
-			}
-			item.PriceSen = v.PriceSen
-			item.VariationID = v.ID
-			item.VariationName = v.Name
-			// Inventory: limited-stock variations decrement atomically; SOLD OUT rejects.
-			if err := h.ProductVariations.DecrementStock(r.Context(), v.ID, int(qty)); err != nil {
-				if err == dbstore.ErrOutOfStock {
-					writeErr(w, http.StatusConflict, "stok habis untuk "+name+" ("+v.Name+")")
-					return
-				}
-				respondErr(w, r, err)
-				return
-			}
-		} else if h.Products != nil && h.isProductRow(r.Context(), form.AccountID, it.ProductID) {
-			// Simple product: decrement product-level stock atomically. Pricing
-			// blocks (option/shipping) submit with product_id = the block's own
-			// id, which is not a product row — skip inventory for them (issue
-			// #461; before, the non-uuid block id blew up the stock query).
-			if err := h.Products.DecrementStock(r.Context(), it.ProductID, int(qty)); err != nil {
-				if err == dbstore.ErrOutOfStock {
-					writeErr(w, http.StatusConflict, "stok habis untuk "+name)
-					return
-				}
-				respondErr(w, r, err)
-				return
-			}
-		}
-		sale.Items = append(sale.Items, item)
-		subtotal += item.PriceSen * qty
-	}
-	sale.SubtotalSen = subtotal
-	// Issue #99 money invariant: total_sen = subtotal + shipping - discount.
-	// The submit path currently has no shipping/discount inputs, so total
-	// equals subtotal; the formula is centralized in payments.SumItems so the
-	// invariant is enforced and unit-tested in one place.
-	sale.TotalSen = payments.SumItems(subtotal, 0, 0)
-
-	if err := h.Sales.Create(r.Context(), sale); err != nil {
-		respondErr(w, r, err)
-		return
-	}
-	// Issue #179: persist the submitted field values on the sale so the
-	// thank-you page can evaluate confirmation conditional logic against them.
-	if len(in.Fields) > 0 {
-		fm := make(map[string]any, len(in.Fields))
-		for k, v := range in.Fields {
-			fm[k] = v
-		}
-		_ = h.Sales.SetSaleFields(r.Context(), sale.ID, fm)
-	}
-	// Issue #245: enqueue a background AI spam-judge job for this sale. The
-	// sale is accepted immediately; the judge flags it as spam in the
-	// background (skipped for the workspace owner/admin testing their own form).
-	// Never blocks the submit response.
-	judgeData := make(map[string]any, len(in.Fields))
-	for k, v := range in.Fields {
-		judgeData[k] = v
-	}
-	h.enqueueSpamJudge(r, form, owner, "", sale.ID, in.Client.Email, judgeData)
-
-	// CHIP flow: create purchase & return checkout URL.
-	if method == "chip" {
-		// Issue #208: resolve the CHIP feed for this submission. A form's
-		// chip_feeds are evaluated in order against the submitted field
-		// values; the first matching feed (default feed = no condition
-		// always matches) supplies the brand/secret. When no feed matches,
-		// fall back to the legacy single per-form override, then account.
-		var ov *payments.ChipOverride
-		if h.Forms != nil {
-			if feeds, ferr := h.Forms.ChipFeedsFor(r.Context(), form.AccountID, form.ID); ferr == nil {
-				if feed := resolveChipFeed(feeds, in.Fields); feed != nil && feed.BrandID != "" && feed.SecretKeyEnc != "" {
-					ov = &payments.ChipOverride{
-						BrandID: feed.BrandID, SecretEnc: feed.SecretKeyEnc,
-						EmailFallback: feed.EmailFallback, MethodWhitelist: feed.MethodWhitelist,
-					}
-				}
-			}
-			if ov == nil {
-				if b, s, ef, wl, oerr := h.Forms.ChipOverrideFor(r.Context(), form.AccountID, form.ID); oerr == nil && b != "" && s != "" {
-					ov = &payments.ChipOverride{BrandID: b, SecretEnc: s, EmailFallback: ef, MethodWhitelist: wl}
-				}
-			}
-		}
-		if err := h.Pay.CreateChipPurchaseForSaleWithOverride(r.Context(), sale, ov); err != nil {
-			slog.Error("chip_create_for_sale", "err", fmt.Sprintf("%+v", err), "sale", sale.RefCode)
-			writeErr(w, http.StatusBadGateway, "gagal mencipta pembayaran")
-			return
-		}
-		respond(w, http.StatusCreated, map[string]string{
-			"ref_code":     sale.RefCode,
-			"checkout_url": sale.ChipCheckoutURL,
-			"status":       "redirect",
-		})
-		return
-	}
-
-	// Bank direct: buyer sees instructions & upload proof next.
-	respond(w, http.StatusCreated, map[string]string{
-		"ref_code": sale.RefCode,
-		"status":   "bank_direct",
-		"next":     "/t/" + sale.RefCode,
+	// Issue #491: the order core is shared with the workspace-scoped menu
+	// checkout — the target is a parameter. A form order keeps the historical
+	// rule (email required, name optional), validates against the form's own
+	// registered-field contract, and rate-limits per form.
+	h.submitOrder(w, r, orderTarget{
+		AccountID:   form.AccountID,
+		Form:        form,
+		FieldsForm:  form,
+		RateKey:     form.ID,
+		OwnerSkip:   h.antiSpamSubmitterIsOwner(r, form),
+		RequireName: false,
 	})
 }
 
@@ -796,7 +650,7 @@ func (h *PublicHandlers) handleResponseSubmit(w http.ResponseWriter, r *http.Req
 	// The submission is accepted immediately; the judge flags it as spam in
 	// the background (skipped for the workspace owner/admin testing their own
 	// form). Never blocks the submit response.
-	h.enqueueSpamJudge(r, form, owner, sub.ID, "", in.Client.Email, in.Fields)
+	h.enqueueSpamJudge(r, form.AccountID, form, owner, sub.ID, "", in.Client.Email, in.Fields)
 	// Issue #193: fire per-form notifications on response.submitted. The
 	// submitted field values (block_id → value) drive conditional logic and
 	// {field_id} recipients. Best-effort — never blocks the submit response.
@@ -898,15 +752,23 @@ func (h *PublicHandlers) isProductRow(ctx context.Context, accountID, productID 
 // archived/deleted product. Pricing blocks (option/shipping, issue #173) carry
 // their own price in the config and stay snapshot-based: they are not product
 // references and must not be re-priced from the products table.
-func (h *PublicHandlers) lookupProduct(form *dbstore.Form, productID string) (string, int64) {
-	// 1. Live product row wins (active product in the form's account).
-	if h.Products != nil && form != nil && form.AccountID != "" {
-		if p, err := h.Products.Get(context.Background(), form.AccountID, productID); err == nil && p != nil {
+//
+// accountID is passed explicitly and form may be nil (issue #491, menu
+// checkout): a formless order has no snapshot, so it resolves live only and
+// rejects an unknown product id.
+func (h *PublicHandlers) lookupProduct(ctx context.Context, accountID string, form *dbstore.Form, productID string) (string, int64) {
+	// 1. Live product row wins (active product in the account).
+	if h.Products != nil && accountID != "" {
+		if p, err := h.Products.Get(ctx, accountID, productID); err == nil && p != nil {
 			return p.Name, p.PriceSen
 		}
 	}
 	// 2. Fallback: the form's saved snapshot (archived/deleted product, or a
-	// pricing block that carries its own price).
+	// pricing block that carries its own price). No form → nothing to fall
+	// back to.
+	if form == nil {
+		return "", 0
+	}
 	raw, _ := json.Marshal(form.Config)
 	var cfg struct {
 		Products []struct {

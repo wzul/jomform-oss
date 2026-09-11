@@ -140,6 +140,11 @@ type setMenuPageIn struct {
 	// section (issue #485). When set it wins over the legacy single BestSeller
 	// id. The menu renders these as 2-column square-image cards.
 	BestSellerIDs []string `json:"best_seller_ids,omitempty" jsonschema:"Senarai ID produk untuk seksyen Best Seller (pilihan; mengatasi best_seller)"`
+	// OrderFormSlug is an optional published form attached to the menu so the
+	// menu checkout can collect extra order info (issue #491). When set, the
+	// workspace-level order endpoint validates the submitted fields against
+	// that form's registered-field contract and stores them on the sale.
+	OrderFormSlug string `json:"order_form_slug,omitempty" jsonschema:"Slug borang diterbitkan untuk maklumat tambahan pesanan (pilihan; kosong = checkout menu tanpa borang)"`
 }
 
 func (s *Server) setMenuPage(
@@ -174,6 +179,7 @@ func (s *Server) setMenuPage(
 		Categories:    in.Categories,
 		BestSeller:    in.BestSeller,
 		BestSellerIDs: in.BestSellerIDs,
+		OrderFormSlug: strings.TrimSpace(in.OrderFormSlug),
 	}
 	if menu.Categories == nil {
 		menu.Categories = []dbstore.MenuCategory{}

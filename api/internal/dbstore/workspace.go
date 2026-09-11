@@ -249,6 +249,13 @@ type MenuPage struct {
 	// section (issue #485). When set it wins over the legacy single
 	// BestSeller id. Stored in the landing_page_json blob — no migration.
 	BestSellerIDs []string `json:"best_seller_ids,omitempty"`
+	// OrderFormSlug is an optional published form the merchant attaches to the
+	// menu so the menu checkout can collect extra order info (issue #491, part
+	// 3). When set, the workspace-level order endpoint validates the submitted
+	// fields against that form's registered-field contract (#254) and persists
+	// them on the sale; when empty the menu checks out with no form at all.
+	// Stored in the landing_page_json blob — no migration.
+	OrderFormSlug string `json:"order_form_slug,omitempty"`
 }
 
 // IsBestSeller reports whether a product ID is highlighted as a best-seller:

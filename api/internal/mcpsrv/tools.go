@@ -317,11 +317,11 @@ func (s *Server) registerTools() {
 	}, s.setRealtimeSound)
 	addTool(s, &mcp.Tool{
 		Name:        "get_menu_page",
-		Description: "Baca konfigurasi menu restoran workspace (issue #438): enabled, categories ([{name, product_ids}]), best_seller. Kosong jika tiada menu ditetapkan.",
+		Description: "Baca konfigurasi menu restoran workspace (issue #438): enabled, categories ([{name, product_ids}]), best_seller, best_seller_ids (senarai, #485), order_form_slug (borang maklumat tambahan pesanan, #491). Kosong jika tiada menu ditetapkan.",
 	}, s.getMenuPage)
 	addTool(s, &mcp.Tool{
 		Name:        "set_menu_page",
-		Description: "Set menu restoran workspace (issue #438): enabled (true = papar menu, false = jatuh ke landing page / senarai borang), categories ([{name, product_ids}]), best_seller (ID produk). Menu dibina atas landing page (#360) + produk aktif workspace.",
+		Description: "Set menu restoran workspace (issue #438): enabled (true = papar menu, false = jatuh ke landing page / senarai borang), categories ([{name, product_ids}]), best_seller (ID produk) atau best_seller_ids (senarai ID untuk seksyen Best Seller, #485 — mengatasi best_seller), order_form_slug (pilihan, #491 — borang diterbitkan untuk kumpul maklumat tambahan semasa checkout menu; kosong = checkout menu terus tanpa borang, nama + emel pembeli tetap wajib untuk CHIP). Menu dibina atas landing page (#360) + produk aktif workspace; halaman menu menunjukkan nombor meja dari ?table=N dan ada penapis kategori + carian.",
 	}, s.setMenuPage)
 	// Issue #185: per-workspace currency + BNM rates (MCP parity).
 	addTool(s, &mcp.Tool{
