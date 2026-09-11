@@ -383,15 +383,19 @@ func (s *Server) registerTools() {
 		Description: "Set tetapan emel workspace: receipt_subject, receipt_body ({{ref_code}}, {{amount}}, {{items}}, {{form_url}}, {{buyer_name}}, {{date}}), receipt_enabled, notify_merchant, merchant_notify_email, html. Omit medan = kekal.",
 	}, s.setEmailSettings)
 
-	// ── Parity: per-form notification email (issue #177) ─────────────────
+	// ── Parity: per-form notification email (issue #177, overrides #107/#453) ──
 	addTool(s, &mcp.Tool{
 		Name:        "get_form_email_settings",
-		Description: "Baca tetapan emel notifikasi SATU borang (issue #177): subjek/badan resit, hantar resit, notifikasi merchant, HTML. Kosong = guna lalai workspace.",
+		Description: "Baca tetapan emel SATU borang: override per-borang (subjek/badan resit, hantar resit, notifikasi merchant, HTML), tetapan workspace yang diwarisi, dan nilai efektif (resolusi per-borang -> workspace -> lalai). Kosong/null = ikut tetapan workspace.",
 	}, s.getFormEmailSettings)
 	addTool(s, &mcp.Tool{
 		Name:        "set_form_email_settings",
-		Description: "Set tetapan emel notifikasi SATU borang (issue #177): receipt_subject, receipt_body, receipt_enabled, notify_merchant, merchant_notify_email, html. Kosong subjek/badan = guna lalai workspace. Omit medan = kekal.",
+		Description: "Set override emel SATU borang (issue #453): receipt_subject, receipt_body, receipt_enabled_override, notify_merchant_override, merchant_notify_email, html_override. Toggle adalah tri-state — true/false = override eksplisit, null = ikut tetapan workspace. Kosong subjek/badan = ikut workspace. Omit medan = kekal.",
 	}, s.setFormEmailSettings)
+	addTool(s, &mcp.Tool{
+		Name:        "clear_form_email_overrides",
+		Description: "Padam SEMUA override emel per-borang supaya borang ini kembali mewarisi tetapan emel workspace (issue #453).",
+	}, s.clearFormEmailOverrides)
 
 	// ── Parity: per-form notification rules (issue #193) ────────────────
 	addTool(s, &mcp.Tool{

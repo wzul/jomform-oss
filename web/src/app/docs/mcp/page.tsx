@@ -87,8 +87,9 @@ const TOOL_GROUPS: { group: string; tools: { name: string; desc: string }[] }[] 
   {
     group: "Form email & notifications",
     tools: [
-      { name: "get_form_email_settings", desc: "Baca tetapan emel notifikasi SATU borang (issue #177): subjek/badan resit, hantar resit, notifikasi merchant, HTML. Kosong = guna lalai workspace." },
-      { name: "set_form_email_settings", desc: "Set tetapan emel notifikasi SATU borang (issue #177): receipt_subject, receipt_body, receipt_enabled, notify_merchant, merchant_notify_email, html. Kosong subjek/badan = guna lalai workspace. Omit medan = kekal." },
+      { name: "get_form_email_settings", desc: "Baca tetapan emel SATU borang (issue #453): override per-borang (subjek/badan resit, hantar resit, notifikasi merchant, HTML), tetapan workspace yang diwarisi, dan nilai efektif (resolusi per-borang -> workspace -> lalai)." },
+      { name: "set_form_email_settings", desc: "Set override emel SATU borang (issue #453): receipt_subject, receipt_body, receipt_enabled_override, notify_merchant_override, merchant_notify_email, html_override. Toggle tri-state — true/false = override, null = ikut workspace. Omit medan = kekal." },
+      { name: "clear_form_email_overrides", desc: "Padam SEMUA override emel per-borang supaya borang kembali mewarisi tetapan emel workspace (issue #453)." },
       { name: "get_form_notifications", desc: "Baca senarai peraturan notifikasi emel per-borang (issue #193): event, penerima, subjek/badan, logik bersyarat, aktif. Termasuk notifikasi lalai (notify merchant on sale.paid)." },
       { name: "set_form_notifications", desc: "Ganti SEMUA peraturan notifikasi emel per-borang (issue #193). notifications[] penuh: {id?, name, event, to_email, subject, body, condition?, enabled?}. event: sale.paid|sale.failed|response.submitted|subscription.charged. to_email: emel, {admin_email}, atau {field_id}. condition: {field_id, op, value}|null (op: equals|not_equals|contains|gt|lt|not_empty). Senarai kosong = tiada emel dihantar." },
       { name: "get_form_confirmations", desc: "Baca pengesahan borang (issue #179): senarai confirmation (message/redirect) + logik bersyarat. Pengesahan lalai sentiasa wujud." },

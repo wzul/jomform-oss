@@ -55,6 +55,11 @@ type Notification = {
   is_default: boolean;
 };
 
+// Issue #453: the per-form email settings are an OVERRIDE of the workspace
+// email settings (#107). The boolean toggles are tri-state — null = inherit the
+// workspace default; true/false = explicit per-form override. The response also
+// carries the workspace settings the form inherits from and the resolved
+// effective values.
 type EmailSettings = {
   receipt_subject: string;
   receipt_body: string;
@@ -62,7 +67,15 @@ type EmailSettings = {
   notify_merchant: boolean;
   merchant_notify_email: string;
   html: boolean;
+  receipt_enabled_override?: boolean | null;
+  notify_merchant_override?: boolean | null;
+  html_override?: boolean | null;
 };
+
+type FormEmailSettingsResponse = {
+  workspace?: EmailSettings | null;
+  effective?: EmailSettings | null;
+} & EmailSettings;
 
 // Issue #196: dispatcher-supported webhook events (dispatch2.go + purchases.go).
 const WEBHOOK_EVENTS = ["sale.paid", "sale.failed", "subscription.charged"] as const;
@@ -223,6 +236,53 @@ function ConditionPicker({
   );
 }
 
+// Issue #453: a tri-state override control — "use workspace default" plus an
+// explicit on/off. Used for the per-form email settings toggles so a form can
+// override the workspace without forcing a value on every field.
+function TriToggle({
+  label,
+  value,
+  onChange,
+  disabled,
+  inheritLabel,
+  t,
+}: {
+  label: string;
+  value: "" | "on" | "off";
+  onChange: (v: "" | "on" | "off") => void;
+  disabled?: boolean;
+  inheritLabel: string;
+  t: (k: import("../../components/i18n").Key) => string;
+}) {
+  const opts: { v: "" | "on" | "off"; label: string }[] = [
+    { v: "", label: inheritLabel },
+    { v: "on", label: t("fs.emelOn") },
+    { v: "off", label: t("fs.emelOff") },
+  ];
+  return (
+    <div>
+      <label className="text-xs font-medium text-[var(--jf-muted)]">{label}</label>
+      <div className="mt-1 flex flex-wrap gap-2">
+        {opts.map((o) => (
+          <button
+            key={o.v}
+            type="button"
+            disabled={disabled}
+            onClick={() => onChange(o.v)}
+            className={`rounded-lg border px-3 py-1.5 text-xs ${
+              value === o.v
+                ? "border-[var(--jf-primary)] bg-[var(--jf-primary)] text-white"
+                : "border-[var(--jf-border)] text-[var(--jf-muted)] hover:text-[#374151]"
+            } disabled:opacity-50`}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 const NOTIF_EVENTS = [
   "sale.paid",
   "sale.failed",
@@ -265,6 +325,19 @@ const TABS: { key: Tab; label: string }[] = [
   { key: "chip", label: "fs.chip" },
   { key: "webhooks", label: "fs.webhooks" },
 ];
+
+// Issue #453: tri-state helpers for the per-form email override toggles.
+// null/undefined = inherit the workspace default (""), otherwise "on"/"off".
+function triFrom(v: boolean | null | undefined): "" | "on" | "off" {
+  if (v === null || v === undefined) return "";
+  return v ? "on" : "off";
+}
+
+// triTo converts the UI tri-state back to the API's nullable boolean.
+function triTo(v: "" | "on" | "off"): boolean | null {
+  if (v === "") return null;
+  return v === "on";
+}
 
 function toLocalInput(iso?: string): string {
   if (!iso) return "";
@@ -417,13 +490,20 @@ function FormSettingsInner() {
   const [feeds, setFeeds] = useState<ChipFeedDraft[]>([]);
   const [formBlocks, setFormBlocks] = useState<CondBlock[]>([]);
 
-  // Per-form email settings (issue #177).
+  // Per-form email settings override (issue #177, extended by #453). The
+  // booleans are tri-state: "" = inherit the workspace default, "on"/"off" =
+  // explicit per-form override.
   const [emelSubject, setEmelSubject] = useState("");
   const [emelBody, setEmelBody] = useState("");
-  const [emelReceiptEnabled, setEmelReceiptEnabled] = useState(true);
-  const [emelNotifyMerchant, setEmelNotifyMerchant] = useState(false);
+  const [emelReceiptEnabled, setEmelReceiptEnabled] = useState<"" | "on" | "off">("");
+  const [emelNotifyMerchant, setEmelNotifyMerchant] = useState<"" | "on" | "off">("");
   const [emelMerchantEmail, setEmelMerchantEmail] = useState("");
-  const [emelHtml, setEmelHtml] = useState(false);
+  const [emelHtml, setEmelHtml] = useState<"" | "on" | "off">("");
+  // The workspace settings this form inherits from + the resolved effective
+  // values (issue #453), so the UI can show "use workspace default".
+  const [emelWorkspace, setEmelWorkspace] = useState<EmailSettings | null>(null);
+  const [emelEffective, setEmelEffective] = useState<EmailSettings | null>(null);
+  const [emelSaving, setEmelSaving] = useState(false);
 
   const load = useCallback(async () => {
     if (!formId) return;
@@ -483,16 +563,18 @@ function FormSettingsInner() {
           })),
         );
       }
-      // Load per-form email settings.
+      // Load per-form email settings (issue #177/#453).
       const er = await fetch(`/api/rest/forms/${formId}/email-settings${workspaceQuery()}`);
       if (er.ok) {
-        const es = (await er.json()) as EmailSettings;
+        const es = (await er.json()) as FormEmailSettingsResponse;
         setEmelSubject(es.receipt_subject || "");
         setEmelBody(es.receipt_body || "");
-        setEmelReceiptEnabled(es.receipt_enabled !== false);
-        setEmelNotifyMerchant(!!es.notify_merchant);
+        setEmelReceiptEnabled(triFrom(es.receipt_enabled_override));
+        setEmelNotifyMerchant(triFrom(es.notify_merchant_override));
         setEmelMerchantEmail(es.merchant_notify_email || "");
-        setEmelHtml(!!es.html);
+        setEmelHtml(triFrom(es.html_override));
+        setEmelWorkspace(es.workspace || null);
+        setEmelEffective(es.effective || null);
       }
       // Load per-form notification rules (issue #193).
       const nr = await fetch(`/api/rest/forms/${formId}/notifications${workspaceQuery()}`);
@@ -820,6 +902,61 @@ function FormSettingsInner() {
       ...prev,
       { id: feedUid(), name: "", brand_id: "", secret_key: "", email_fallback: "", condition: null },
     ]);
+  }
+
+  // Issue #453: save the per-form email override. Tri-state toggles ("") are
+  // sent as null so the form inherits the workspace setting for that field.
+  async function saveFormEmailSettings() {
+    if (!formId) return;
+    setMsg("");
+    setErr("");
+    setEmelSaving(true);
+    try {
+      const r = await fetch(`/api/rest/forms/${formId}/email-settings${workspaceQuery()}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          receipt_subject: emelSubject,
+          receipt_body: emelBody,
+          merchant_notify_email: emelMerchantEmail,
+          receipt_enabled_override: triTo(emelReceiptEnabled),
+          notify_merchant_override: triTo(emelNotifyMerchant),
+          html_override: triTo(emelHtml),
+        }),
+      });
+      if (r.ok) {
+        setMsg(t("fs.emelSaved"));
+        await load();
+      } else {
+        const d = await r.json().catch(() => ({}));
+        setErr(d.error || t("fs.emelFail"));
+      }
+    } finally {
+      setEmelSaving(false);
+    }
+  }
+
+  // Issue #453: clear every per-form override so the form inherits the
+  // workspace email settings again.
+  async function clearFormEmailOverrides() {
+    if (!formId) return;
+    setMsg("");
+    setErr("");
+    setEmelSaving(true);
+    try {
+      const r = await fetch(`/api/rest/forms/${formId}/email-settings${workspaceQuery()}`, {
+        method: "DELETE",
+      });
+      if (r.ok) {
+        setMsg(t("fs.emelCleared"));
+        await load();
+      } else {
+        const d = await r.json().catch(() => ({}));
+        setErr(d.error || t("fs.emelFail"));
+      }
+    } finally {
+      setEmelSaving(false);
+    }
   }
 
   function updateChipFeed(id: string, patch: Partial<ChipFeedDraft>) {
@@ -1278,6 +1415,130 @@ function FormSettingsInner() {
 
                 {/* ── Notifications (issue #193) ── */}
                 {tab === "notifications" && (
+                  <>
+                  {/* Issue #453: per-form email settings override of the workspace
+                      email settings (#107). Every field has a "use workspace
+                      default" option; the resolution is per-form -> workspace
+                      -> default. */}
+                  <section className="jf-card p-6">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <h2 className="text-base font-semibold">{t("fs.emelTitle")}</h2>
+                        <p className="mt-1 text-sm text-[var(--jf-muted)]">{t("fs.emelHint")}</p>
+                      </div>
+                      <a
+                        href="/docs/placeholders"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title={t("fs.notifDocs")}
+                        className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 text-[11px] font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                      >
+                        ?
+                      </a>
+                    </div>
+
+                    {emelEffective && (
+                      <p className="mt-3 rounded-lg border border-[var(--jf-border)] bg-[var(--jf-bg-soft,#f8f8f8)] px-3 py-2 text-[11px] text-[var(--jf-muted)]">
+                        {t("fs.emelEffective")}:{" "}
+                        <span className="font-medium">
+                          {emelEffective.receipt_enabled ? t("fs.emelOn") : t("fs.emelOff")}
+                        </span>{" "}
+                        · {t("fs.emelNotifyShort")}:{" "}
+                        <span className="font-medium">
+                          {emelEffective.notify_merchant ? t("fs.emelOn") : t("fs.emelOff")}
+                        </span>
+                      </p>
+                    )}
+
+                    <div className="mt-4 space-y-4">
+                      <div>
+                        <label className={labelCls}>
+                          {t("fs.emelSubject")} <span className="text-slate-400">{t("fs.emelInheritHint")}</span>
+                        </label>
+                        <input
+                          value={emelSubject}
+                          onChange={(e) => setEmelSubject(e.target.value)}
+                          disabled={!canWrite}
+                          className={inputCls}
+                          placeholder={emelWorkspace?.receipt_subject || "Resit pembayaran — {{ref_code}}"}
+                        />
+                      </div>
+                      <div>
+                        <label className={labelCls}>
+                          {t("fs.emelBody")} <span className="text-slate-400">{t("fs.emelPlaceholders")}</span>
+                        </label>
+                        <textarea
+                          value={emelBody}
+                          onChange={(e) => setEmelBody(e.target.value)}
+                          disabled={!canWrite}
+                          rows={6}
+                          className={`${inputCls} font-mono text-xs`}
+                          placeholder={emelWorkspace?.receipt_body || ""}
+                        />
+                      </div>
+
+                      <TriToggle
+                        label={t("fs.emelReceiptEnabled")}
+                        value={emelReceiptEnabled}
+                        onChange={setEmelReceiptEnabled}
+                        disabled={!canWrite}
+                        t={t}
+                        inheritLabel={
+                          emelWorkspace
+                            ? `${t("fs.emelWorkspaceDefault")} (${emelWorkspace.receipt_enabled ? t("fs.emelOn") : t("fs.emelOff")})`
+                            : t("fs.emelWorkspaceDefault")
+                        }
+                      />
+                      <TriToggle
+                        label={t("fs.emelNotifyMerchant")}
+                        value={emelNotifyMerchant}
+                        onChange={setEmelNotifyMerchant}
+                        disabled={!canWrite}
+                        t={t}
+                        inheritLabel={
+                          emelWorkspace
+                            ? `${t("fs.emelWorkspaceDefault")} (${emelWorkspace.notify_merchant ? t("fs.emelOn") : t("fs.emelOff")})`
+                            : t("fs.emelWorkspaceDefault")
+                        }
+                      />
+                      <TriToggle
+                        label={t("fs.emelHtml")}
+                        value={emelHtml}
+                        onChange={setEmelHtml}
+                        disabled={!canWrite}
+                        t={t}
+                        inheritLabel={
+                          emelWorkspace
+                            ? `${t("fs.emelWorkspaceDefault")} (${emelWorkspace.html ? t("fs.emelOn") : t("fs.emelOff")})`
+                            : t("fs.emelWorkspaceDefault")
+                        }
+                      />
+
+                      <div>
+                        <label className={labelCls}>
+                          {t("fs.emelMerchantEmail")} <span className="text-slate-400">{t("fs.emelInheritHint")}</span>
+                        </label>
+                        <input
+                          value={emelMerchantEmail}
+                          onChange={(e) => setEmelMerchantEmail(e.target.value)}
+                          disabled={!canWrite}
+                          type="email"
+                          className={inputCls}
+                          placeholder={emelWorkspace?.merchant_notify_email || t("fs.emelAccountEmail")}
+                        />
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2 pt-1">
+                        <button onClick={saveFormEmailSettings} disabled={!canWrite || emelSaving} className="jf-btn-primary">
+                          {t("fs.emelSave")}
+                        </button>
+                        <button onClick={clearFormEmailOverrides} disabled={!canWrite || emelSaving} className="jf-btn-ghost text-slate-600">
+                          {t("fs.emelClear")}
+                        </button>
+                      </div>
+                    </div>
+                  </section>
+
                   <section className="jf-card p-6">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div>
@@ -1430,6 +1691,7 @@ function FormSettingsInner() {
                       </div>
                     )}
                   </section>
+                  </>
                 )}
 
                 {/* ── CHIP feed ── */}

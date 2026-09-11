@@ -12,6 +12,7 @@ import (
 	texttemplate "text/template"
 	"time"
 
+	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/email"
 	"github.com/wzul/jomform/api/internal/emailqueue"
 )
@@ -173,25 +174,27 @@ func (s *Service) SendSaleReceipt(ctx context.Context, ref SaleRef) {
 	receiptEnabled := true
 	notifyMerchant := false
 	merchantEmail := ""
+	var ws *dbstore.EmailSettings
 	if s.Workspaces != nil && ref.WorkspaceID != "" {
 		if st, err := s.Workspaces.EmailSettings(ctx, ref.WorkspaceID); err == nil {
-			subject, body, html = st.ReceiptSubject, st.ReceiptBody, st.HTML
-			receiptEnabled = st.ReceiptEnabled
-			notifyMerchant = st.NotifyMerchant
-			merchantEmail = st.MerchantNotifyEmail
+			ws = st
 		}
 	}
-	// Issue #177: a per-form email override (non-empty subject or body) takes
-	// precedence over the workspace defaults for this form's receipts.
+	// Issue #177/#453: resolve per-form override -> workspace -> default. A
+	// per-form override wins field-by-field: non-empty subject/body/merchant
+	// email, or an explicit on/off toggle. A form with no override at all
+	// inherits the workspace settings unchanged.
+	var formSt *dbstore.FormEmailSettings
 	if s.Forms != nil && ref.FormID != "" {
-		if st, err := s.Forms.FormEmailSettings(ctx, ref.FormID); err == nil &&
-			(st.ReceiptSubject != "" || st.ReceiptBody != "") {
-			subject, body, html = st.ReceiptSubject, st.ReceiptBody, st.HTML
-			receiptEnabled = st.ReceiptEnabled
-			notifyMerchant = st.NotifyMerchant
-			merchantEmail = st.MerchantNotifyEmail
+		if st, err := s.Forms.FormEmailSettings(ctx, ref.FormID); err == nil {
+			formSt = st
 		}
 	}
+	resolved := dbstore.ResolveFormEmailSettings(formSt, ws)
+	subject, body, html = resolved.ReceiptSubject, resolved.ReceiptBody, resolved.HTML
+	receiptEnabled = resolved.ReceiptEnabled
+	notifyMerchant = resolved.NotifyMerchant
+	merchantEmail = resolved.MerchantNotifyEmail
 
 	subj, rendered := renderReceipt(ref, subject, body, html)
 

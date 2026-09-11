@@ -161,6 +161,8 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	// Issue #177: per-form notification email settings (Gravity-Forms-style).
 	mux.Handle("GET /v1/rest/forms/{id}/email-settings", h.authed(h.getFormEmailSettings))
 	mux.Handle("PUT /v1/rest/forms/{id}/email-settings", h.authed(h.saveFormEmailSettings))
+	// Issue #453: clear every per-form email override (inherit workspace again).
+	mux.Handle("DELETE /v1/rest/forms/{id}/email-settings", h.authed(h.clearFormEmailOverrides))
 	// Issue #193: per-form notification rules (list/create/update/delete).
 	mux.Handle("GET /v1/rest/forms/{id}/notifications", h.authed(h.listFormNotifications))
 	mux.Handle("POST /v1/rest/forms/{id}/notifications", h.authed(h.createFormNotification))
