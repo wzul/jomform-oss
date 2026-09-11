@@ -54,10 +54,10 @@ func (s *WorkspaceStore) ListAllWithCounts(ctx context.Context) ([]WorkspaceWith
 
 // MediaUsageByWorkspace is one workspace's media storage usage (issue #386).
 type MediaUsageByWorkspace struct {
-	WorkspaceID   string
-	WorkspaceName string
-	Slug      string
-	UsedBytes int64
+	WorkspaceID   string `json:"workspace_id"`
+	WorkspaceName string `json:"workspace_name"`
+	Slug          string `json:"slug"`
+	UsedBytes     int64  `json:"used_bytes"`
 }
 
 // UsageByWorkspace returns media storage usage per workspace (non-deleted bytes),

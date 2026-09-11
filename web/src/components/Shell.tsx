@@ -120,10 +120,10 @@ export function Shell({
   // clears it, so the space-picker prompt returns on the next login.
   async function setDefaultSpace(spaceId: string) {
     try {
-      await fetch("/api/auth/profile/default-space", {
+      await fetch("/api/auth/profile/default-workspace", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ space_id: spaceId }),
+        body: JSON.stringify({ workspace_id: spaceId }),
       });
     } catch {
       // Best-effort; the picker/profile surfaces errors on its own path.
@@ -230,7 +230,7 @@ export function Shell({
             spaces={spaces}
             value={space}
             onSwitch={switchSpace}
-            defaultSpaceId={user?.default_space_id}
+            defaultSpaceId={user?.default_workspace_id}
             onSetDefault={setDefaultSpace}
           />
           <LangToggle />
@@ -306,7 +306,7 @@ export function Shell({
                     value={space}
                     onSwitch={switchSpace}
                     fullWidth
-                    defaultSpaceId={user?.default_space_id}
+                    defaultSpaceId={user?.default_workspace_id}
                     onSetDefault={setDefaultSpace}
                   />
                 </div>

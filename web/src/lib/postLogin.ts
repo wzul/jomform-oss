@@ -14,7 +14,7 @@ export async function resolvePostLogin(next: string): Promise<string> {
   let defaultSpaceId = "";
   try {
     const [spRes, meRes] = await Promise.all([
-      fetch("/api/spaces"),
+      fetch("/api/workspaces"),
       fetch("/api/auth/me"),
     ]);
     if (spRes.ok) {
@@ -23,7 +23,7 @@ export async function resolvePostLogin(next: string): Promise<string> {
     }
     if (meRes.ok) {
       const me = await meRes.json();
-      defaultSpaceId = me.default_space_id || "";
+      defaultSpaceId = me.default_workspace_id || "";
     }
   } catch {
     // Network hiccup — fall through to the dashboard; the Shell will pick a

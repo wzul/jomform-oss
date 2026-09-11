@@ -356,7 +356,7 @@ function fromLocalInput(v: string): string | null {
 
 // Issue #351: the form-settings page must not depend on the active jf_workspace.
 // If the form isn't found in the active space, probe the user's other spaces
-// (from /api/spaces) and, when found, auto-switch jf_workspace to the owning
+// (from /api/workspaces) and, when found, auto-switch jf_workspace to the owning
 // space so the form loads regardless of the current space selection. Returns
 // the resolved form (or null) plus the HTTP status so the caller can tell a
 // 401 (unauthenticated → redirect to login) from a 404 (form not found /
@@ -378,7 +378,7 @@ async function resolveFormAcrossSpaces(
 
   // Not found in the active space: probe the user's other spaces.
   try {
-    const spRes = await fetch("/api/spaces");
+    const spRes = await fetch("/api/workspaces");
     if (spRes.ok) {
       const spaces = (await spRes.json()) as { id: string; slug: string }[];
       for (const s of spaces) {

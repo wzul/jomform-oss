@@ -28,7 +28,7 @@ export default function SpacePickerPage() {
     (async () => {
       try {
         const [spRes, meRes] = await Promise.all([
-          fetch("/api/spaces"),
+          fetch("/api/workspaces"),
           fetch("/api/auth/me"),
         ]);
         if (spRes.ok) {
@@ -37,7 +37,7 @@ export default function SpacePickerPage() {
         }
         if (meRes.ok) {
           const me = await meRes.json();
-          setDefaultId(me.default_space_id || "");
+          setDefaultId(me.default_workspace_id || "");
         }
       } catch {
         setError(t("workspace.setDefaultFail"));
@@ -56,10 +56,10 @@ export default function SpacePickerPage() {
     setBusy(true);
     setError("");
     try {
-      const r = await fetch("/api/auth/profile/default-space", {
+      const r = await fetch("/api/auth/profile/default-workspace", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ space_id: spaceId }),
+        body: JSON.stringify({ workspace_id: spaceId }),
       });
       if (!r.ok) {
         setError(t("workspace.setDefaultFail"));

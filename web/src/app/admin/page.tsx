@@ -43,7 +43,7 @@ type SpamQueue = { submissions: number; sales: number };
 
 type RecentSignup = { id: string; email: string; name?: string; created_at: string };
 type ActiveSpace = { id: string; name: string; slug: string; owner_email: string; last_activity: string };
-type StorageRow = { space_id: string; space_name: string; slug: string; used_bytes: number };
+type StorageRow = { workspace_id: string; workspace_name: string; slug: string; used_bytes: number };
 
 type Overview = {
   totals: Totals;
@@ -207,9 +207,9 @@ export default function AdminPage() {
                       </tr>
                     ) : (
                       data.storage.map((s) => (
-                        <tr key={s.space_id} className="border-b border-[var(--jf-border)] last:border-0">
+                        <tr key={s.workspace_id} className="border-b border-[var(--jf-border)] last:border-0">
                           <td className="px-4 py-2">
-                            <span className="font-medium">{s.space_name}</span>
+                            <span className="font-medium">{s.workspace_name}</span>
                             <span className="ml-2 text-xs text-[var(--jf-muted)]">/{s.slug}</span>
                           </td>
                           <td className="px-4 py-2">{fmtBytes(s.used_bytes)}</td>

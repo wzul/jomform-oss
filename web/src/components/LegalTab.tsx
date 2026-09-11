@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useI18n, type Key } from "./i18n";
 
-type LegalPage = { space_id: string; page_type: string; mode: string; content: string };
+type LegalPage = { workspace_id: string; page_type: string; mode: string; content: string };
 type LegalMap = Record<string, LegalPage>;
 
 const PAGE_TYPES = ["privacy", "terms", "refund"] as const;
