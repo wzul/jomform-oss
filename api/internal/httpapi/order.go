@@ -48,10 +48,13 @@ type orderTarget struct {
 	Form *dbstore.Form
 	// FieldsForm is the form whose registered-field contract (issue #254)
 	// validates the submitted fields, if any. A form-scoped order validates
-	// against the form itself; a menu order validates against an optional
-	// attached extra-info form (part 3) and skips field validation entirely
-	// when none is attached.
+	// against the form itself.
 	FieldsForm *dbstore.Form
+	// FieldsContract is an explicit field contract (issue #493) used when the
+	// order target has no form of its own: a menu order validates against the
+	// contract derived from the optional attached extra-info form's builder
+	// blocks. Nil/empty means no field validation at all.
+	FieldsContract []formfields.Field
 	// RateKey scopes the per-target anti-spam rate limit (issue #244, layer 2).
 	// Form orders key on the form id; menu orders key on the workspace id, so
 	// the protection is preserved on the formless path instead of silently
@@ -101,11 +104,17 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 	}
 	// Issue #254: server-side re-validation of registered fields. Agent JS is
 	// client-side only and bypassable, so the server re-validates every field
-	// against the form's registered contract before accepting the order. A
-	// formless order with no attached form has no contract — nothing to
-	// enforce (part 3 wires the optional attachment).
+	// against the form's registered contract before accepting the order.
+	// Issue #493: a formless menu order validates against the contract derived
+	// from the attached extra-info form's builder blocks (FieldsContract); a
+	// menu with no form attached has no contract — nothing to enforce.
 	if tgt.FieldsForm != nil {
 		if err := formfields.Validate(tgt.FieldsForm.Config, in.Fields); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	} else if len(tgt.FieldsContract) > 0 {
+		if err := formfields.ValidateFields(tgt.FieldsContract, in.Fields); err != nil {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -335,10 +344,15 @@ func (h *PublicHandlers) handleMenuOrder(w http.ResponseWriter, r *http.Request)
 		writeErr(w, http.StatusNotFound, "kedai tidak dijumpai")
 		return
 	}
-	// Part 3 hooks in here: when the merchant attached a form to the menu for
-	// extra info, its registered-field contract validates the submitted fields.
-	// No attachment → no field validation at all.
+	// Issue #493 (part 3): when the merchant attached a form to the menu for
+	// extra info, its field contract (registered_fields, else the builder
+	// blocks) validates the submitted fields. No attachment → no field
+	// validation at all.
 	extra := h.workspaceOrderExtraForm(r, acc, workspaceID)
+	var contract []formfields.Field
+	if extra != nil {
+		contract = menuExtraContract(extra.Config)
+	}
 	// The rate-limit bucket keys on the workspace (the formless equivalent of
 	// the per-form key) so the protection survives without a form. Fall back to
 	// the account id when the account has no linked workspace (legacy).
@@ -347,12 +361,12 @@ func (h *PublicHandlers) handleMenuOrder(w http.ResponseWriter, r *http.Request)
 		rateKey = acc.ID
 	}
 	h.submitOrder(w, r, orderTarget{
-		AccountID:   acc.ID,
-		Form:        nil,
-		FieldsForm:  extra,
-		RateKey:     "ws:" + rateKey,
-		OwnerSkip:   h.antiSpamSubmitterIsOwnerForAccount(r, acc.ID),
-		RequireName: true,
+		AccountID:      acc.ID,
+		Form:           nil,
+		FieldsContract: contract,
+		RateKey:        "ws:" + rateKey,
+		OwnerSkip:      h.antiSpamSubmitterIsOwnerForAccount(r, acc.ID),
+		RequireName:    true,
 	})
 }
 

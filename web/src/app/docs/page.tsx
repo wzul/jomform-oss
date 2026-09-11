@@ -55,7 +55,7 @@ const FEATURES: { title: string; body: string }[] = [
   },
   {
     title: "Restaurant menu (QR ordering)",
-    body: "Turn your storefront into a clean restaurant menu: pick your products by name, thumbnail and price into named categories (with a searchable product picker and a live preview of the section order), highlight a best-seller, and let customers scan a QR stand at the table to order and pay online. Configure it in Settings → Storefront → Restaurant menu, or over MCP via set_menu_page / get_menu_page.",
+    body: "Turn your storefront into a clean restaurant menu: pick your products by name, thumbnail and price into named categories (with a searchable product picker and a live preview of the section order), highlight a best-seller, and let customers scan a QR stand at the table to order and pay online. Configure it in Settings → Storefront → Restaurant menu, or over MCP via set_menu_page / get_menu_page. The menu checkout always collects the buyer's name and email (CHIP requires both — they can never be removed). Need more per order — a delivery address, phone number, spice level, notes or pickup time? Attach an optional order form to the menu: the form's own fields render in the checkout step with their labels and required flags, are validated on the server, and are stored on the sale. There is no second field editor — you create and edit those fields in the normal form builder, and the settings screen links straight to it. With no form attached the checkout collects name + email only and still works.",
   },
   {
     title: "Templates",

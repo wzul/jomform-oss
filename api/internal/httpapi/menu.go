@@ -34,6 +34,15 @@
 // filtering/searching or reloading never loses it. A sticky bar shows the live
 // count/total and opens the basket sheet.
 //
+// Issue #493 (part 3): the merchant may attach a published form to the menu
+// (Settings → Storefront → Restaurant menu) whose field blocks define the
+// EXTRA fields the menu checkout collects. Those blocks are configured in the
+// normal form builder — there is no second field editor — and the checkout
+// renders them with the form's own labels/required flags while the backend
+// re-validates them against the same contract (formfields.ValidateFields).
+// The buyer's name + email are ALWAYS collected and can never be removed by
+// the attached form, because CHIP requires both to create a purchase.
+//
 // SCOPE: this is RESTAURANT-MENU ONLY. Regular forms (RSVP, wedding, etc.)
 // keep their existing form flow completely untouched — the cart lives entirely
 // in this template + the menu-order endpoint.
@@ -50,6 +59,7 @@ import (
 	"strings"
 
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/formfields"
 )
 
 // menuProductView is one product card / list row on the menu page.
@@ -90,6 +100,79 @@ type menuCategoryView struct {
 	Products []menuProductView
 }
 
+// menuFieldView is one merchant-configured extra checkout field on the menu
+// page (issue #493). The field blocks come from the published form the
+// merchant attached to the menu (Settings → Storefront → Restaurant menu);
+// the checkout renders them with the form's own labels/required flags and the
+// backend re-validates them against the same contract.
+//
+// The buyer's name and email are ALWAYS collected separately and are never
+// part of this list — CHIP requires both to create a purchase.
+type menuFieldView struct {
+	ID          string
+	Type        string
+	Label       string
+	Required    bool
+	Placeholder string
+	Value       string
+	Choices     []formfields.Choice
+	// RequiredMark is the localised "required" marker (resolved in Go because
+	// the inline {{define}} sub-template receives the field view as its data
+	// and cannot reach the page-level $.Ls).
+	RequiredMark string
+	// SelectLabel is the localised empty-option label for a select field
+	// (same resolution reason).
+	SelectLabel string
+}
+
+// menuExtraContract derives the menu checkout's extra-field contract from the
+// attached form's config (issue #493) with name/email blocks REMOVED. The
+// checkout always collects the buyer's name + email as the mandatory
+// full_name/email inputs (CHIP requires both), so a form that also declares a
+// name/email block must not add a second, unrendered required field — that
+// would make the order impossible to submit. Everything else (delivery
+// address, phone, spice level, notes, pickup time…) is enforced as the
+// merchant configured it.
+func menuExtraContract(config map[string]any) []formfields.Field {
+	var out []formfields.Field
+	for _, f := range formfields.Contract(config) {
+		if f.Type == "name" || f.Type == "email" {
+			continue
+		}
+		out = append(out, f)
+	}
+	return out
+}
+
+// menuExtraFields builds the checkout field views for the attached form's
+// contract (issue #493). A name/email block is skipped: the checkout always
+// collects both as the mandatory buyer fields, so rendering them again would
+// duplicate inputs. Fields without a usable label fall back to their id.
+func menuExtraFields(contract []formfields.Field, ls langStrings) []menuFieldView {
+	var out []menuFieldView
+	for _, f := range contract {
+		if f.Type == "name" || f.Type == "email" {
+			continue
+		}
+		label := strings.TrimSpace(f.Label)
+		if label == "" {
+			label = f.FieldID
+		}
+		out = append(out, menuFieldView{
+			ID:           f.FieldID,
+			Type:         f.Type,
+			Label:        label,
+			Required:     f.Required,
+			Placeholder:  f.Placeholder,
+			Value:        f.DefaultValue,
+			Choices:      f.Choices,
+			RequiredMark: ls.Required,
+			SelectLabel:  ls.SelectOption,
+		})
+	}
+	return out
+}
+
 // workspaceMenuData is the template payload for the restaurant menu.
 type workspaceMenuData struct {
 	Slug string
@@ -122,6 +205,18 @@ type workspaceMenuData struct {
 	// HasForms reports whether at least one published form exists (used to
 	// decide the "no menu yet" hint).
 	HasForms bool
+	// Issue #493: the optional form the merchant attached to the menu for
+	// extra checkout info. ExtraFields are its field blocks (rendered in the
+	// checkout step); ExtraFormSlug / ExtraFormID identify it and
+	// ExtraFormEdit links into the form builder to edit those fields. When no
+	// form is attached the checkout collects name + email only.
+	ExtraFields   []menuFieldView
+	ExtraFormSlug string
+	// ExtraFormID is the attached form's id, so the helper's edit link can
+	// open it directly in the builder.
+	ExtraFormID string
+	// ExtraFormEdit is the builder URL for the attached form.
+	ExtraFormEdit string
 }
 
 // langStringsForCode returns the buyer-facing dictionary for a language code,
@@ -166,7 +261,43 @@ var menuPageTmpl = template.Must(template.New("workspace-menu").Parse(`{{define 
   </div>
   {{if .ThumbImage}}<img class="rthumb" src="{{.ThumbImage}}" alt="{{.Name}}" data-base="{{.ImageURL}}" loading="lazy">{{end}}
   <span class="qtybadge" hidden></span>
-</button>{{end}}<!doctype html>
+</button>{{end}}{{define "menuField"}}
+  {{if eq .Type "select"}}<label>{{.Label}}{{if .Required}} {{.RequiredMark}}{{end}}
+    <select name="{{.ID}}"{{if .Required}} required{{end}}>
+      <option value="" selected>{{.SelectLabel}}</option>
+      {{range .Choices}}<option value="{{.Value}}">{{.Label}}</option>{{end}}
+    </select>
+  </label>
+  {{else if eq .Type "radio"}}<label>{{.Label}}{{if .Required}} {{.RequiredMark}}{{end}}</label>
+    <div class="radios">{{range .Choices}}<label class="rad"><input type="radio" name="{{$.ID}}" value="{{.Value}}"{{if $.Required}} required{{end}}> {{.Label}}</label>{{end}}</div>
+  {{else if eq .Type "checkbox"}}<label class="chk"><input type="checkbox" name="{{.ID}}" value="1"{{if .Value}} checked{{end}}> {{.Label}}</label>
+  {{else if eq .Type "consent"}}<label class="chk"><input type="checkbox" name="{{.ID}}" value="1"{{if .Required}} required{{end}}> {{.Label}}</label>
+  {{else if eq .Type "textarea"}}<label>{{.Label}}{{if .Required}} {{.RequiredMark}}{{end}}
+    <textarea name="{{.ID}}" rows="2"{{if .Required}} required{{end}} placeholder="{{.Placeholder}}">{{.Value}}</textarea>
+  </label>
+  {{else if eq .Type "address"}}<label>{{.Label}}{{if .Required}} {{.RequiredMark}}{{end}}
+    <textarea name="{{.ID}}" rows="2"{{if .Required}} required{{end}} placeholder="{{.Placeholder}}">{{.Value}}</textarea>
+  </label>
+  {{else if eq .Type "number"}}<label>{{.Label}}{{if .Required}} {{.RequiredMark}}{{end}}
+    <input type="number" name="{{.ID}}" value="{{.Value}}" placeholder="{{.Placeholder}}"{{if .Required}} required{{end}}>
+  </label>
+  {{else if eq .Type "date"}}<label>{{.Label}}{{if .Required}} {{.RequiredMark}}{{end}}
+    <input type="date" name="{{.ID}}" value="{{.Value}}"{{if .Required}} required{{end}}>
+  </label>
+  {{else if eq .Type "time"}}<label>{{.Label}}{{if .Required}} {{.RequiredMark}}{{end}}
+    <input type="time" name="{{.ID}}" value="{{.Value}}"{{if .Required}} required{{end}}>
+  </label>
+  {{else if eq .Type "website"}}<label>{{.Label}}{{if .Required}} {{.RequiredMark}}{{end}}
+    <input type="url" name="{{.ID}}" value="{{.Value}}" placeholder="{{.Placeholder}}"{{if .Required}} required{{end}}>
+  </label>
+  {{else if eq .Type "hidden"}}<input type="hidden" name="{{.ID}}" value="{{.Value}}">
+  {{else if eq .Type "phone"}}<label>{{.Label}}{{if .Required}} {{.RequiredMark}}{{end}}
+    <input type="tel" name="{{.ID}}" value="{{.Value}}" placeholder="{{.Placeholder}}" autocomplete="tel"{{if .Required}} required{{end}}>
+  </label>
+  {{else}}<label>{{.Label}}{{if .Required}} {{.RequiredMark}}{{end}}
+    <input type="text" name="{{.ID}}" value="{{.Value}}" placeholder="{{.Placeholder}}"{{if .Required}} required{{end}}>
+  </label>
+  {{end}}{{end}}<!doctype html>
 <html lang="{{.Ls.Lang}}"{{if eq .Ls.Lang "ar"}} dir="rtl"{{end}}>
 <head>
 <meta charset="utf-8">
@@ -320,6 +451,21 @@ var menuPageTmpl = template.Must(template.New("workspace-menu").Parse(`{{define 
                      background:#fff; }
   .sheetfoot input:focus { outline:2px solid {{if .Lp.PrimaryColor}}{{.Lp.PrimaryColor}}{{else}}#4f46e5{{end}};
                            outline-offset:1px; }
+  /* Issue #493: extra checkout fields from the attached form. */
+  .sheetfoot select, .sheetfoot textarea { width:100%; margin-top:5px; border:1px solid #e6e8ec;
+                     border-radius:10px; padding:10px 12px; font:inherit; font-size:15px; color:#17181c;
+                     background:#fff; }
+  .sheetfoot select { height:44px; padding:0 12px; }
+  .sheetfoot select:focus, .sheetfoot textarea:focus {
+                     outline:2px solid {{if .Lp.PrimaryColor}}{{.Lp.PrimaryColor}}{{else}}#4f46e5{{end}}; outline-offset:1px; }
+  .sheetfoot .chk { display:flex; align-items:center; gap:8px; font-size:14px; font-weight:500; margin-top:10px; }
+  .sheetfoot .chk input { width:auto; height:auto; margin:0; }
+  .sheetfoot .radios { display:flex; flex-direction:column; gap:4px; margin-top:5px; }
+  .sheetfoot .radios .rad { display:flex; align-items:center; gap:8px; font-size:14px; font-weight:500; margin:0; }
+  .extrahead { margin-top:12px; }
+  .extrahead .extrahelp { margin:0; font-size:12px; color:#6b7280; line-height:1.5; }
+  .extrahead .extralink { display:inline-block; margin-top:2px; font-size:12px; font-weight:600;
+                          color:{{if .Lp.PrimaryColor}}{{.Lp.PrimaryColor}}{{else}}#4f46e5{{end}}; }
   .paybtn { width:100%; margin-top:14px; height:50px; border:0; border-radius:12px;
             font:inherit; font-size:16px; font-weight:700; color:#fff; cursor:pointer;
             background:{{if .Lp.PrimaryColor}}{{.Lp.PrimaryColor}}{{else}}#4f46e5{{end}}; }
@@ -475,6 +621,15 @@ var menuPageTmpl = template.Must(template.New("workspace-menu").Parse(`{{define 
           <label for="menuEmail">{{.Ls.EmailLabel}}
             <input id="menuEmail" name="email" type="email" autocomplete="email" required>
           </label>
+          {{if .ExtraFields}}
+          {{/* Issue #493: extra fields from the attached form, with a helper
+               line that says where they come from and links to the builder. */}}
+          <div class="extrahead">
+            <p class="extrahelp">{{.Ls.MenuExtraHelp}}</p>
+            {{if .ExtraFormEdit}}<a class="extralink" href="{{.ExtraFormEdit}}" target="_blank" rel="noreferrer">{{.Ls.MenuExtraEdit}}</a>{{end}}
+          </div>
+          {{range .ExtraFields}}{{template "menuField" .}}{{end}}
+          {{end}}
           <div style="display:none" aria-hidden="true">
             <label>Website<input type="text" name="website" tabindex="-1" autocomplete="off"></label>
           </div>
@@ -582,9 +737,26 @@ document.querySelectorAll('img[data-base]').forEach(function(im){
   function totalSen(){ var t=0; for(var i=0;i<cart.length;i++){ t+=cart[i].price*cart[i].qty; } return t; }
   function rm(sen){ return 'RM '+(Math.round(sen)/100).toFixed(2); }
 
-  // Part-3 hook: merchant-configured extra order fields (validated server-side
-  // against the attached form's contract) can be merged in here.
-  function extraFields(){ return {}; }
+  // Issue #493: collect the merchant-configured extra fields from the attached
+  // form. The inputs are rendered server-side from the form's field blocks
+  // (the "menuField" sub-template), each named by its block id — the same key
+  // the form's own submit path records and the server re-validates against the
+  // same contract. The buyer's name + email are always collected separately.
+  function extraFields(){
+    var out={};
+    var els=payForm.querySelectorAll('[name]');
+    for(var i=0;i<els.length;i++){
+      var el=els[i];
+      var n=el.name;
+      // The mandatory buyer fields, the honeypot and the anti-spam timestamp
+      // are handled explicitly below — never folded into the extra fields.
+      if(!n||n==='full_name'||n==='email'||n==='website'||n==='jf_ts') continue;
+      if(el.type==='checkbox'){ out[n]=el.checked?(el.value||'1'):''; }
+      else if(el.type==='radio'){ if(el.checked) out[n]=el.value; }
+      else { out[n]=el.value; }
+    }
+    return out;
+  }
   window.jfMenuExtraFields=extraFields;
 
   function addItem(id,name,price){
@@ -679,6 +851,19 @@ document.querySelectorAll('img[data-base]').forEach(function(im){
     errEl.hidden=true;
     // Name + email are BOTH mandatory: CHIP needs them to create a purchase.
     if(!name||!email){ errEl.textContent=attr('data-lbl-required'); errEl.hidden=false; return; }
+    // Issue #493: the form is novalidate, so enforce the attached form's
+    // required extra fields client-side too. The server re-validates the same
+    // contract regardless, so this is only a friendlier first line.
+    var missing=payForm.querySelector('[name][required]');
+    if(missing){
+      var reqs=payForm.querySelectorAll('[name][required]');
+      for(var ri=0;ri<reqs.length;ri++){
+        var re=reqs[ri], rn=re.name;
+        if(rn==='full_name'||rn==='email') continue;
+        var rv=re.type==='checkbox'?(re.checked?re.value:''):re.value;
+        if(!String(rv||'').trim()){ errEl.textContent=attr('data-lbl-required'); errEl.hidden=false; return; }
+      }
+    }
     var fields=Object.assign({
       website:(payForm.querySelector('[name=website]')||{}).value||'',
       jf_ts:String(ts)
@@ -852,6 +1037,19 @@ func (h *PublicHandlers) renderWorkspaceMenu(w http.ResponseWriter, r *http.Requ
 		HasForms:       len(products) > 0,
 		Query:          query,
 		Cat:            cat,
+	}
+	// Issue #493: the merchant may attach a published form to the menu whose
+	// field blocks define the EXTRA fields the checkout collects. The same
+	// form is what the order endpoint validates against, so the rendered
+	// fields and the server contract can never drift.
+	if extra := h.workspaceOrderExtraForm(r, acc, workspaceID); extra != nil {
+		contract := menuExtraContract(extra.Config)
+		data.ExtraFields = menuExtraFields(contract, ls)
+		data.ExtraFormSlug = extra.Slug
+		data.ExtraFormID = extra.ID
+		// Link into the form builder so the merchant can edit the fields —
+		// the attached form's fields ARE the checkout's extra fields.
+		data.ExtraFormEdit = "/builder?form=" + extra.ID
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := menuPageTmpl.Execute(w, data); err != nil {

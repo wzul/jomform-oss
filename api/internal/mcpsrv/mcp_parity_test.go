@@ -182,13 +182,10 @@ var mcpParityBaselineTools = []string{
 	"update_profile_timezone",
 	// 2FA setup step (get/enable/disable_2fa are in the checklist).
 	"setup_2fa",
-	// Content, media, QR menu, legal pages.
+	// Content, media, legal pages.
 	"generate_legal_page",
-	"generate_qr",
 	"get_legal_page",
-	"get_menu_page",
 	"set_legal_page",
-	"set_menu_page",
 	// Webhook delivery ops + trusted-device bulk revoke.
 	"retry_webhook_delivery",
 	"revoke_all_trusted_devices",

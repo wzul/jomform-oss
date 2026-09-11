@@ -75,6 +75,9 @@ Parity checklist (dashboard → MCP):
   (slug = system gallery); merchant-managed templates (#457) →
   `list_own_templates`, `create_template`, `update_template`, `delete_template`
   (`use_template` also accepts `template_id` for an own template)
+- Restaurant menu (QR ordering, #438/#491/#493) → `get_menu_page`,
+  `set_menu_page` (includes the optional order form for extra checkout
+  fields), `generate_qr`
 
 ## DOCUMENTATION PARITY (RULE — jangan tertinggal/terlepas)
 

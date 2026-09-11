@@ -72,6 +72,11 @@ type langStrings struct {
 	MenuSubmitting  string // button label while the order is being submitted
 	MenuSubmitError string // generic submit-failure message
 	MenuRequired    string // name/email mandatory validation message
+	// Issue #493: merchant-configured extra checkout fields (from the attached
+	// form). The field labels themselves are merchant-authored and never
+	// translated; only these two system strings are.
+	MenuExtraHelp string // helper line: where the extra fields come from
+	MenuExtraEdit string // link label: edit the attached form
 }
 
 // formLangs maps every supported language code to its buyer-facing strings.
@@ -103,6 +108,9 @@ var formLangs = map[string]langStrings{
 		MenuSubmitting:  "Placing order…",
 		MenuSubmitError: "Could not place the order. Please try again.",
 		MenuRequired:    "Please enter your name and email.",
+		Required:        "(required)",
+		MenuExtraHelp:   "Extra details requested by the merchant — these fields come from the order form set in Settings → Storefront → Restaurant menu.",
+		MenuExtraEdit:   "Edit this form",
 	},
 	"ms": {
 		Lang: "ms", EmailLabel: "Emel", CouponLabel: "Kod kupon",
@@ -129,6 +137,9 @@ var formLangs = map[string]langStrings{
 		MenuSubmitting:  "Menghantar pesanan…",
 		MenuSubmitError: "Pesanan tidak berjaya dihantar. Sila cuba lagi.",
 		MenuRequired:    "Sila masukkan nama dan emel anda.",
+		Required:        "wajib",
+		MenuExtraHelp:   "Butiran tambahan yang diminta peniaga — medan ini datang dari borang pesanan yang ditetapkan dalam Tetapan → Storefront → Menu restoran.",
+		MenuExtraEdit:   "Edit borang ini",
 	},
 	"zh": {
 		Lang: "zh", EmailLabel: "电子邮件", CouponLabel: "优惠券",
@@ -155,6 +166,9 @@ var formLangs = map[string]langStrings{
 		MenuSubmitting:  "正在提交订单…",
 		MenuSubmitError: "无法提交订单，请重试。",
 		MenuRequired:    "请输入您的姓名和电子邮件。",
+		Required:        "必填",
+		MenuExtraHelp:   "商家要求的额外信息 — 这些字段来自“设置 → 店铺 → 餐厅菜单”中设置的订单表单。",
+		MenuExtraEdit:   "编辑此表单",
 	},
 	"ta": {
 		Lang: "ta", EmailLabel: "மின்னஞ்சல்", CouponLabel: "கூப்பன்",
@@ -181,6 +195,9 @@ var formLangs = map[string]langStrings{
 		MenuSubmitting:  "ஆர்டர் அனுப்பப்படுகிறது…",
 		MenuSubmitError: "ஆர்டரை அனுப்ப முடியவில்லை. மீண்டும் முயற்சிக்கவும்.",
 		MenuRequired:    "உங்கள் பெயர் மற்றும் மின்னஞ்சலை உள்ளிடவும்.",
+		Required:        "கட்டாயம்",
+		MenuExtraHelp:   "வணிகர் கேட்கும் கூடுதல் விவரங்கள் — இந்தப் புலங்கள் அமைப்புகள் → ஸ்டோர்ஃப்ரண்ட் → உணவக மெனு-இல் அமைக்கப்பட்ட ஆர்டர் படிவத்திலிருந்து வருகின்றன.",
+		MenuExtraEdit:   "இந்தப் படிவத்தைத் திருத்து",
 	},
 	"ar": {
 		Lang: "ar", EmailLabel: "البريد الإلكتروني", CouponLabel: "قسيمة",
@@ -207,6 +224,9 @@ var formLangs = map[string]langStrings{
 		MenuSubmitting:  "جارٍ إرسال الطلب…",
 		MenuSubmitError: "تعذّر إرسال الطلب. يرجى المحاولة مرة أخرى.",
 		MenuRequired:    "يرجى إدخال اسمك وبريدك الإلكتروني.",
+		Required:        "مطلوب",
+		MenuExtraHelp:   "تفاصيل إضافية يطلبها التاجر — تأتي هذه الحقول من نموذج الطلب المحدد في الإعدادات ← المتجر ← قائمة المطعم.",
+		MenuExtraEdit:   "تعديل هذا النموذج",
 	},
 }
 

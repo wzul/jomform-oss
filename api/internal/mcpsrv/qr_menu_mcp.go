@@ -141,10 +141,13 @@ type setMenuPageIn struct {
 	// id. The menu renders these as 2-column square-image cards.
 	BestSellerIDs []string `json:"best_seller_ids,omitempty" jsonschema:"Senarai ID produk untuk seksyen Best Seller (pilihan; mengatasi best_seller)"`
 	// OrderFormSlug is an optional published form attached to the menu so the
-	// menu checkout can collect extra order info (issue #491). When set, the
-	// workspace-level order endpoint validates the submitted fields against
-	// that form's registered-field contract and stores them on the sale.
-	OrderFormSlug string `json:"order_form_slug,omitempty" jsonschema:"Slug borang diterbitkan untuk maklumat tambahan pesanan (pilihan; kosong = checkout menu tanpa borang)"`
+	// menu checkout can collect extra order info (issue #491/#493). When set,
+	// the workspace-level order endpoint validates the submitted fields against
+	// that form's field contract — its registered_fields (#254) when present,
+	// otherwise the field blocks configured in the form builder — and stores
+	// them on the sale. The checkout always collects the buyer's name + email
+	// regardless (CHIP requires both); empty = name + email only.
+	OrderFormSlug string `json:"order_form_slug,omitempty" jsonschema:"Slug borang diterbitkan untuk maklumat tambahan pesanan (pilihan; kosong = checkout menu tanpa borang). Medan borang itu dirender dalam checkout menu dan disahkan server-side; nama + emel pembeli sentiasa wajib."`
 }
 
 func (s *Server) setMenuPage(

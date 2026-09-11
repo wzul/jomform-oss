@@ -241,6 +241,12 @@ export default function Settings() {
   const [menuProducts, setMenuProducts] = useState<PickerProduct[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerCatIndex, setPickerCatIndex] = useState(-1); // -1 = best-seller picker
+  // Issue #493: the optional order form attached to the menu. Its field blocks
+  // define the EXTRA fields the menu checkout collects; the checkout always
+  // collects name + email regardless. `menuForms` holds the workspace's
+  // published forms so the merchant picks one by title instead of a slug.
+  const [menuOrderFormSlug, setMenuOrderFormSlug] = useState("");
+  const [menuForms, setMenuForms] = useState<{ id: string; slug: string; title: string; status: string }[]>([]);
   // Issue #185: per-workspace currency + BNM rates.
   const [currency, setCurrency] = useState("MYR");
   const [currencyWorkspaceId, setCurrencyWorkspaceId] = useState("");
@@ -473,6 +479,9 @@ export default function Settings() {
         setMenuEnabled(!!menu.enabled);
         setMenuCategories(Array.isArray(menu.categories) ? menu.categories : []);
         setMenuBestSeller(menu.best_seller || "");
+        // Issue #493: the optional form attached to the menu for extra
+        // checkout fields (its field blocks define them).
+        setMenuOrderFormSlug(menu.order_form_slug || "");
       })
       .catch(() => {});
     // Issue #486: load the workspace's ACTIVE products (workspace-scoped, same
@@ -482,6 +491,21 @@ export default function Settings() {
       .then((r) => (r.ok ? r.json() : []))
       .then((d) => setMenuProducts(Array.isArray(d) ? d.filter((p: PickerProduct) => p.active !== false) : []))
       .catch(() => setMenuProducts([]));
+    // Issue #493: the workspace's published forms, so the menu's optional
+    // "order form" selector lists real forms by title (not a raw slug).
+    fetch(`/api/rest/forms${workspaceQuery()}`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((d) =>
+        setMenuForms(
+          Array.isArray(d)
+            ? d.filter(
+                (f: { slug: string; title: string; status: string }) =>
+                  f.slug && (f.status === "published" || f.status === "unlisted")
+              )
+            : []
+        )
+      )
+      .catch(() => setMenuForms([]));
     fetch(`/api/rest/currency/rates`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
@@ -927,6 +951,9 @@ export default function Settings() {
             enabled: menuEnabled,
             categories: menuCategories,
             best_seller: menuBestSeller,
+            // Issue #493: optional form whose field blocks define the extra
+            // checkout fields. Empty = checkout collects name + email only.
+            order_form_slug: menuOrderFormSlug,
           },
         },
       }),
@@ -2331,6 +2358,55 @@ export default function Settings() {
                       >
                         + {t("set.menuCatAdd")}
                       </button>
+                    </div>
+                  </div>
+                  {/* Issue #493: optional order form for extra checkout fields.
+                      Its field blocks ARE the extra fields the menu checkout
+                      collects and validates; there is no second field editor. */}
+                  <div>
+                    <label className="text-xs text-slate-500">{t("set.menuOrderForm")}</label>
+                    <div className="mt-1 max-w-xl space-y-2">
+                      <select
+                        value={menuOrderFormSlug}
+                        onChange={(e) => setMenuOrderFormSlug(e.target.value)}
+                        className="jf-input"
+                      >
+                        <option value="">{t("set.menuOrderFormNone")}</option>
+                        {menuForms.map((f) => (
+                          <option key={f.id} value={f.slug}>
+                            {f.title} — {f.slug}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="text-[11px] leading-relaxed text-slate-500">
+                        {t("set.menuOrderFormHelp")}
+                      </p>
+                      {/* Name + email are never removable — say why. */}
+                      <p className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] leading-relaxed text-amber-800">
+                        {t("set.menuOrderFormMandatory")}
+                      </p>
+                      {menuOrderFormSlug && (
+                        <div className="flex flex-wrap items-center gap-2">
+                          {(() => {
+                            const f = menuForms.find((x) => x.slug === menuOrderFormSlug);
+                            return (
+                              <>
+                                <span className="text-[11px] text-[var(--jf-muted)]">
+                                  {f ? t("set.menuOrderFormSelected", { n: f.title }) : t("set.menuOrderFormMissing")}
+                                </span>
+                                {f && (
+                                  <a
+                                    href={`/builder?form=${f.id}`}
+                                    className="jf-btn-outline px-2.5 py-1 text-[11px]"
+                                  >
+                                    {t("set.menuOrderFormEdit")}
+                                  </a>
+                                )}
+                              </>
+                            );
+                          })()}
+                        </div>
+                      )}
                     </div>
                   </div>
                   {/* Issue #486: live preview of the resulting menu structure. */}
