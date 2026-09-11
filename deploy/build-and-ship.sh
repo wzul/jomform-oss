@@ -9,6 +9,14 @@
 # Guarantees:
 #   * refuses to build from a dirty working tree (git status --porcelain)
 #   * flock on /tmp/jomform-build.lock so concurrent builds cannot interleave
+#   * runs the LOCAL build+test gate (AGENTS.md: CI is not the merge gate)
+#     BEFORE building the image:
+#         cd api && go build ./...
+#         cd api && go test  ./...
+#         cd web && npm run build
+#     A failing gate aborts with a non-zero exit before any image exists, so a
+#     broken build cannot ship. (issue #476: the 000047 migration crash-looped
+#     prod; a single `go test ./...` before the image build would have caught it)
 #   * stamps VERSION + COMMIT (git describe / rev-parse) as build args and
 #     OCI labels, so prod startup logs and `docker image inspect` prove
 #     exactly what is running
@@ -16,7 +24,8 @@
 # Deploy order (do it in this sequence, every time):
 #   0. Merge all PRs; create the git tag + GitHub release FIRST
 #      (git tag vX.Y.Z && git push origin vX.Y.Z && gh release create vX.Y.Z)
-#   1. ./deploy/build-and-ship.sh                       # on a clean tree
+#   1. ./deploy/build-and-ship.sh                       # on a clean tree;
+#                                                       # build+test gate runs first
 #   2. scp the tarball to the server (script does this when SSH_HOST is set)
 #   3. on the server:  docker load -i <tarball>
 #   4. on the server:  docker tag jomform-api:X.Y.Z jomform-api:latest
@@ -28,9 +37,21 @@
 #      version=... commit=... matching the tag; then curl the health route
 #
 # Usage:
-#   ./deploy/build-and-ship.sh [VERSION]
+#   ./deploy/build-and-ship.sh [--skip-tests] [VERSION]
+#
+#   --skip-tests  DANGER: bypass the pre-build build+test gate and print a loud
+#                 warning. Only for a genuine emergency (e.g. an urgent hotfix
+#                 while the local test Postgres/Valkey is down) — never for a
+#                 normal release. The gate is what keeps a broken build from
+#                 crash-looping prod, so re-run WITHOUT this flag as soon as the
+#                 emergency is over.
+#
+# The gate inherits your environment: export JOMFORM_TEST_DATABASE_URL /
+# JOMFORM_TEST_VALKEY_URL so the DB-backed tests actually run (without them the
+# suite skips those tests, as it does on a bare checkout).
 #
 # Overridable via environment:
+#   SKIP_TESTS  1 = same as --skip-tests  (default: 0)
 #   IMAGE       image name            (default: jomform-api)
 #   CONTEXT     build context dir     (default: api)
 #   DOCKERFILE  Dockerfile path       (default: api/Dockerfile)
@@ -56,16 +77,27 @@ SSH_USER="${SSH_USER:-root}"
 SSH_PORT="${SSH_PORT:-22}"
 SSH_PATH="${SSH_PATH:-/tmp}"
 LOCK_FILE="${LOCK_FILE:-/tmp/jomform-build.lock}"
+SKIP_TESTS="${SKIP_TESTS:-0}"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 info() { echo "==> $*"; }
 
-usage() { sed -n '2,45p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
-case "${1:-}" in
-  -h|--help) usage; exit 0 ;;
-  "") ;;
-  *) VERSION_OVERRIDE="$1" ;;
-esac
+# usage() prints this script's own header comment (from line 2 down to the
+# `set -euo pipefail` line) with the leading "# " stripped.
+usage() { sed -n '2,/^set -euo pipefail/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'; }
+
+VERSION_OVERRIDE=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help)   usage; exit 0 ;;
+    --skip-tests) SKIP_TESTS=1 ;;
+    --)          shift; break ;;
+    -*)          die "unknown flag: $1 (see --help)" ;;
+    *)           [ -z "$VERSION_OVERRIDE" ] || die "unexpected extra argument: $1 (see --help)"
+                 VERSION_OVERRIDE="$1" ;;
+  esac
+  shift
+done
 
 # ---------------------------------------------------------------------------
 # 1. Single-writer lock: fail fast if another build is already running.
@@ -100,7 +132,46 @@ command -v docker >/dev/null 2>&1 || die "docker not found in PATH"
 mkdir -p "$OUT_DIR"
 
 # ---------------------------------------------------------------------------
-# 5. Build with provenance stamps (build args + OCI labels).
+# 5. Pre-build gate: local build + test trio (AGENTS.md rule — CI is NOT the
+#    merge gate for this repo). Nothing is built or shipped unless all three
+#    are green. Runs on the repo root (cd "$REPO_ROOT" above); api/ and web/
+#    are the source dirs the images are built from.
+#
+#    Escape hatch: --skip-tests (or SKIP_TESTS=1) for genuine emergencies only.
+# ---------------------------------------------------------------------------
+run_gate_step() {
+  local label="$1"; shift
+  info "gate: $label"
+  if ! "$@"; then
+    die "pre-build gate FAILED: $label — fix it before building/shipping (or use --skip-tests for a genuine emergency)"
+  fi
+}
+
+if [ "$SKIP_TESTS" = "1" ]; then
+  cat >&2 <<'EOF'
+
+  ============================================================
+   !!!  WARNING: --skip-tests — PRE-BUILD GATE BYPASSED  !!!
+  ============================================================
+   go build / go test / npm run build were NOT run.
+   A broken build can ship and crash-loop prod
+   (see the 000047 migration incident).
+   Re-run WITHOUT this flag as soon as the emergency is over.
+  ============================================================
+
+EOF
+else
+  run_gate_step "cd api && go build ./..." \
+    bash -c 'cd api && go build ./...'
+  run_gate_step "cd api && go test ./..." \
+    bash -c 'cd api && go test ./...'
+  run_gate_step "cd web && npm run build" \
+    bash -c 'cd web && npm run build'
+  info "pre-build gate green: go build + go test + npm run build"
+fi
+
+# ---------------------------------------------------------------------------
+# 6. Build with provenance stamps (build args + OCI labels).
 #    api/Dockerfile should declare ARG VERSION / COMMIT / BUILD_DATE and wire
 #    them into the go build -ldflags -X version.* values; until it does, the
 #    labels below still tie the image to the exact commit.
@@ -122,14 +193,14 @@ IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$IMAGE:$VERSION")"
 info "built $IMAGE:$VERSION ($IMAGE_ID)"
 
 # ---------------------------------------------------------------------------
-# 6. Save as a gzip tarball (server-to-server pattern: no registry needed).
+# 7. Save as a gzip tarball (server-to-server pattern: no registry needed).
 # ---------------------------------------------------------------------------
 TARBALL="$OUT_DIR/$IMAGE-$VERSION.tar.gz"
 info "saving image → $TARBALL"
 docker save "$IMAGE:$VERSION" | gzip > "$TARBALL"
 
 # ---------------------------------------------------------------------------
-# 7. Ship (optional): scp to the server when SSH_HOST is set.
+# 8. Ship (optional): scp to the server when SSH_HOST is set.
 # ---------------------------------------------------------------------------
 if [ -n "$SSH_HOST" ]; then
   info "shipping $TARBALL → $SSH_USER@$SSH_HOST:$SSH_PATH/ (port $SSH_PORT)"
@@ -139,7 +210,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 8. Print the remaining server-side steps (never executed from here).
+# 9. Print the remaining server-side steps (never executed from here).
 # ---------------------------------------------------------------------------
 REMOTE_TARBALL="$SSH_PATH/$(basename "$TARBALL")"
 cat <<EOF
