@@ -30,11 +30,11 @@ export function MembersTab({ spaceId }: { spaceId: string }) {
 
   const load = useCallback(() => {
     if (!spaceId) return;
-    fetch(`/api/rest/spaces/${spaceId}/members`)
+    fetch(`/api/workspaces/${spaceId}/members`)
       .then((r) => (r.ok ? r.json() : []))
       .then((d) => setMembers(Array.isArray(d) ? d : []))
       .catch(() => {});
-    fetch(`/api/rest/spaces/${spaceId}/invites`)
+    fetch(`/api/workspaces/${spaceId}/invites`)
       .then((r) => (r.ok ? r.json() : []))
       .then((d) => setInvites(Array.isArray(d) ? d : []))
       .catch(() => {});
@@ -51,7 +51,7 @@ export function MembersTab({ spaceId }: { spaceId: string }) {
     setMsg("");
     setErr("");
     try {
-      const r = await fetch(`/api/rest/spaces/${spaceId}/invites`, {
+      const r = await fetch(`/api/workspaces/${spaceId}/invites`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: email.trim(), role }),
@@ -74,7 +74,7 @@ export function MembersTab({ spaceId }: { spaceId: string }) {
   async function changeRole(userId: string, newRole: string) {
     if (!spaceId) return;
     setErr("");
-    const r = await fetch(`/api/rest/spaces/${spaceId}/members/${userId}`, {
+    const r = await fetch(`/api/workspaces/${spaceId}/members/${userId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ role: newRole }),
@@ -92,7 +92,7 @@ export function MembersTab({ spaceId }: { spaceId: string }) {
     if (!spaceId) return;
     if (!window.confirm(t("mem.removeConfirm", { name: name || "this member" }))) return;
     setErr("");
-    const r = await fetch(`/api/rest/spaces/${spaceId}/members/${userId}`, { method: "DELETE" });
+    const r = await fetch(`/api/workspaces/${spaceId}/members/${userId}`, { method: "DELETE" });
     if (r.ok) {
       setMsg(t("mem.removed"));
       load();
@@ -105,7 +105,7 @@ export function MembersTab({ spaceId }: { spaceId: string }) {
   async function cancelInvite(inviteId: string) {
     if (!spaceId) return;
     setErr("");
-    const r = await fetch(`/api/rest/spaces/${spaceId}/invites/${inviteId}`, { method: "DELETE" });
+    const r = await fetch(`/api/workspaces/${spaceId}/invites/${inviteId}`, { method: "DELETE" });
     if (r.ok) {
       setMsg(t("mem.inviteCancelled"));
       load();

@@ -400,7 +400,7 @@ export default function Settings() {
     setEmelSpaceId(active.id);
     setActiveSpaceId(active.id);
     setActiveSpaceSlug(active.slug);
-    fetch(`/api/rest/spaces/${active.id}/email-settings`)
+    fetch(`/api/workspaces/${active.id}/email-settings`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (!d) return;
@@ -430,7 +430,7 @@ export default function Settings() {
     setSfSpaceId(active.id);
     setCurrencySpaceId(active.id);
     setLpSpaceId(active.id);
-    fetch(`/api/rest/spaces/${active.id}/settings`)
+    fetch(`/api/workspaces/${active.id}/settings`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (!d) return;
@@ -487,7 +487,7 @@ export default function Settings() {
     if (!currencySpaceId) return;
     setMsg("");
     setErr("");
-    const r = await fetch(`/api/rest/spaces/${currencySpaceId}/settings`, {
+    const r = await fetch(`/api/workspaces/${currencySpaceId}/settings`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ currency }),
@@ -509,7 +509,7 @@ export default function Settings() {
   // Issue #444: affiliate marketing — load the workspace's affiliates.
   const loadAffiliates = useCallback(async () => {
     if (!activeSpaceId) return;
-    const r = await fetch(`/api/rest/spaces/${activeSpaceId}/affiliates`);
+    const r = await fetch(`/api/workspaces/${activeSpaceId}/affiliates`);
     if (r.ok) {
       const d = await r.json();
       setAffiliates(Array.isArray(d) ? d : []);
@@ -524,7 +524,7 @@ export default function Settings() {
     if (!activeSpaceId) return;
     setAffErr("");
     setAffMsg("");
-    const r = await fetch(`/api/rest/spaces/${activeSpaceId}/affiliates`, {
+    const r = await fetch(`/api/workspaces/${activeSpaceId}/affiliates`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -836,7 +836,7 @@ export default function Settings() {
     if (!emelSpaceId) return;
     setMsg("");
     setErr("");
-    const r = await fetch(`/api/rest/spaces/${emelSpaceId}/email-settings`, {
+    const r = await fetch(`/api/workspaces/${emelSpaceId}/email-settings`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -861,7 +861,7 @@ export default function Settings() {
     if (!sfSpaceId) return;
     setMsg("");
     setErr("");
-    const r = await fetch(`/api/rest/spaces/${sfSpaceId}/settings`, {
+    const r = await fetch(`/api/workspaces/${sfSpaceId}/settings`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -892,7 +892,7 @@ export default function Settings() {
     if (!lpSpaceId) return;
     setMsg("");
     setErr("");
-    const r = await fetch(`/api/rest/spaces/${lpSpaceId}/settings`, {
+    const r = await fetch(`/api/workspaces/${lpSpaceId}/settings`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

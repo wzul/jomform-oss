@@ -75,7 +75,7 @@ export function WorkspaceSwitcher({
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch("/v1/spaces", {
+      const res = await fetch("/api/workspaces", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: name.trim(), slug: slug.trim() }),

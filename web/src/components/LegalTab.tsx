@@ -51,7 +51,7 @@ export function LegalTab({ spaceId, spaceSlug }: { spaceId: string; spaceSlug: s
 
   const load = useCallback(() => {
     if (!spaceId) return;
-    fetch(`/api/rest/spaces/${spaceId}/legal`)
+    fetch(`/api/workspaces/${spaceId}/legal`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (!d) return;
@@ -83,7 +83,7 @@ export function LegalTab({ spaceId, spaceSlug }: { spaceId: string; spaceSlug: s
     setErr("");
     setGenerating(pt);
     try {
-      const r = await fetch(`/api/rest/spaces/${spaceId}/legal/generate`, {
+      const r = await fetch(`/api/workspaces/${spaceId}/legal/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ type: pt, ...biz }),
@@ -106,7 +106,7 @@ export function LegalTab({ spaceId, spaceSlug }: { spaceId: string; spaceSlug: s
   async function save(pt: PageType) {
     setErr("");
     setMsg("");
-    const r = await fetch(`/api/rest/spaces/${spaceId}/legal`, {
+    const r = await fetch(`/api/workspaces/${spaceId}/legal`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ type: pt, content: content[pt], mode: mode[pt] }),

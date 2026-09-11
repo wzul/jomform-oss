@@ -64,6 +64,11 @@ export type ChipStatusShape = {
 
 export type BundleData = {
   me?: SessionUser | null;
+  // Issue #452: the dashboard-bundle field was renamed spaces → workspaces in
+  // the #431 Space→Workspace refactor; the frontend was still reading `spaces`,
+  // so the workspace list came back empty and the switcher showed only one
+  // workspace. Read `workspaces` (current) with `spaces` as a legacy fallback.
+  workspaces?: SpaceRow[];
   spaces?: SpaceRow[];
   chip_status?: ChipStatusShape | null;
   keys?: { id: string; name: string; scopes: string[] }[];
@@ -204,7 +209,13 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   }, [space]);
 
   const user = bundle?.me ?? null;
-  const spaces = Array.isArray(bundle?.spaces) ? bundle!.spaces : [];
+  // Issue #452: prefer the renamed `workspaces` field; fall back to the legacy
+  // `spaces` field for an older payload.
+  const spaces = Array.isArray(bundle?.workspaces)
+    ? bundle!.workspaces
+    : Array.isArray(bundle?.spaces)
+      ? bundle!.spaces
+      : [];
   // Issue #163: the caller's role in the active space, carried per-space in
   // the bundle. Used to gate write/member/CHIP actions in the UI.
   const activeSpace = spaces.find((s) => s.slug === space);
