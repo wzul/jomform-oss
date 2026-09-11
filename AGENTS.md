@@ -70,6 +70,9 @@ Parity checklist (dashboard → MCP):
   `get_affiliate_sales`, `set_affiliate_commission`
 - Realtime notifications (#447) → `get_realtime_status`, `set_realtime_sound`
   (the SSE stream `GET /v1/rest/events/stream` is the realtime channel)
+- Trusted devices (#454) → `list_trusted_devices`, `revoke_trusted_device`
+- Template management (#457) → `create_template`, `update_template`,
+  `delete_template` (plus existing `list_templates`, `use_template`)
 
 ## DOCUMENTATION PARITY (RULE — jangan tertinggal/terlepas)
 
