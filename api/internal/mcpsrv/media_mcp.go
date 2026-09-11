@@ -148,6 +148,11 @@ func (s *Server) uploadMediaImage(ctx context.Context, acc string, raw []byte) (
 	if !ok {
 		return nil, mediaOut{}, errors.New("jenis imej tidak disokong (png/jpeg/webp/gif sahaja)")
 	}
+	// Issue #455: enforce the magic-byte (file signature) check — the sniffed
+	// signature must match the declared image kind.
+	if msg := objstore.MagicByteMismatch(objstore.KindRasterImage, "", "", ext); msg != "" {
+		return nil, mediaOut{}, errors.New(msg)
+	}
 	mime := objstore.ImageUploadMIME[ext]
 	stored, err := objstore.OptimizeImage(raw, ext)
 	if err != nil {
@@ -220,6 +225,11 @@ func (s *Server) uploadMediaAsset(ctx context.Context, acc string, raw []byte) (
 	if !ok {
 		return nil, mediaOut{}, errors.New("jenis fail tidak disokong (css/js/html/svg/woff2 sahaja)")
 	}
+	// Issue #455: enforce the magic-byte (file signature) check — the sniffed
+	// signature must match the declared asset kind.
+	if msg := objstore.MagicByteMismatch(objstore.KindAsset, "", "", ext); msg != "" {
+		return nil, mediaOut{}, errors.New(msg)
+	}
 	mime := objstore.UploadAssetMIME[ext]
 	key := objstore.BuildUploadKey(acc, ext)
 	if err := s.deps.Store.PutObject(ctx, key, mime, raw); err != nil {
@@ -288,6 +298,11 @@ func (s *Server) uploadMediaPDF(ctx context.Context, acc string, raw []byte) (*m
 	ext, ok := objstore.SniffPDFType(raw)
 	if !ok {
 		return nil, mediaOut{}, errors.New("jenis fail tidak disokong (pdf sahaja)")
+	}
+	// Issue #455: enforce the magic-byte (file signature) check — the sniffed
+	// signature must match the declared PDF kind.
+	if msg := objstore.MagicByteMismatch(objstore.KindPDF, "", "", ext); msg != "" {
+		return nil, mediaOut{}, errors.New(msg)
 	}
 	mime := objstore.UploadPDFMIME[ext]
 	key := objstore.BuildUploadKey(acc, ext)

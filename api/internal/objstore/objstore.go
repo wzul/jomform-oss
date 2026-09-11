@@ -399,6 +399,10 @@ func SniffImageType(data []byte) (string, bool) {
 // extension or content-type — and returns the canonical storage extension if
 // the blob is a merchant code asset on the allowlist (issue #361):
 // css/js/html/svg/woff2.
+//
+// Issue #455: SVG is text/XML with no binary magic bytes, so it is an explicit
+// allowed exception — the root element (optionally behind an XML prolog or
+// comment) is its signature.
 func SniffAssetType(data []byte) (string, bool) {
 	if len(data) == 0 {
 		return "", false
@@ -411,6 +415,12 @@ func SniffAssetType(data []byte) (string, bool) {
 		return ".html", true
 	}
 	if strings.HasPrefix(lower, "<svg") {
+		return ".svg", true
+	}
+	// Issue #455: XML documents (typically an SVG exported/hand-authored with
+	// an `<?xml ...?>` prolog and/or a leading comment) have no binary magic.
+	// Classify by root element so a real SVG is not rejected.
+	if root := xmlRootElement(lower); root == "svg" {
 		return ".svg", true
 	}
 	if len(data) >= 4 && bytes.Equal(data[:4], []byte{'w', 'O', 'F', 'F'}) {
@@ -464,6 +474,204 @@ func SniffPDFType(data []byte) (string, bool) {
 		return ".pdf", true
 	}
 	return "", false
+}
+
+// xmlRootElement returns the lower-cased name of the first XML element in doc,
+// skipping an XML declaration (`<?xml ...?>`), processing instructions,
+// comments, and a DOCTYPE. Returns "" when the document has no element or is
+// not XML. It exists so an SVG carrying an `<?xml ...?>` prolog or a leading
+// comment is still recognised as SVG (issue #455) — SVG is text/XML with no
+// binary magic bytes, so its root element is the signature.
+func xmlRootElement(doc string) string {
+	trim := func(s string) string {
+		return strings.TrimLeftFunc(s, func(r rune) bool { return r <= ' ' })
+	}
+	s := trim(doc)
+	for len(s) > 0 && s[0] == '<' {
+		switch {
+		case strings.HasPrefix(s, "<!--"):
+			end := strings.Index(s, "-->")
+			if end < 0 {
+				return ""
+			}
+			s = trim(s[end+3:])
+		case strings.HasPrefix(s, "<?"):
+			end := strings.Index(s, "?>")
+			if end < 0 {
+				return ""
+			}
+			s = trim(s[end+2:])
+		case strings.HasPrefix(s, "<!"):
+			end := strings.Index(s, ">")
+			if end < 0 {
+				return ""
+			}
+			s = trim(s[end+1:])
+		default:
+			// First real element — read its name.
+			s = trim(s[1:])
+			end := strings.IndexAny(s, " 	\r\n/>")
+			if end < 0 {
+				return ""
+			}
+			return strings.ToLower(s[:end])
+		}
+	}
+	return ""
+}
+
+// ── Issue #455: magic-byte (file signature) enforcement ──────────────────────
+//
+// The sniffers above already derive the stored extension from the file's
+// actual bytes, never from the client's declared content-type or filename.
+// What was missing is *enforcement*: nothing verified that the sniffed
+// signature belongs to the kind of upload the endpoint was asked to accept, so
+// a file that merely happened to match a different allowlist entry could be
+// stored as that other type (e.g. HTML bytes sent to the image endpoint as a
+// `.png` were happily stored as `text/html`). The helpers below close that gap:
+// the declared kind, the declared filename extension and the declared
+// content-type must all be consistent with the sniffed signature, otherwise the
+// upload is rejected before anything is stored.
+
+// UploadKind names the family of upload an endpoint accepts (issue #455).
+type UploadKind string
+
+const (
+	// KindMedia is the media-page/image endpoint, which accepts the full
+	// allowlist — raster images, merchant code assets and PDFs (issue #382).
+	KindMedia UploadKind = "media"
+	// KindRasterImage is a raster-image-only path (profile avatar, MCP
+	// upload_media kind=image): png/jpeg/webp/gif.
+	KindRasterImage UploadKind = "image"
+	// KindAsset is a merchant code-asset path (css/js/html/svg/woff2).
+	KindAsset UploadKind = "asset"
+	// KindPDF is a PDF-only path.
+	KindPDF UploadKind = "pdf"
+)
+
+// uploadKindExts maps an upload kind to the canonical extensions its sniffed
+// signature may legitimately resolve to.
+var uploadKindExts = map[UploadKind]map[string]bool{
+	KindMedia:       {".png": true, ".jpg": true, ".webp": true, ".gif": true, ".css": true, ".js": true, ".html": true, ".svg": true, ".woff2": true, ".pdf": true},
+	KindRasterImage: {".png": true, ".jpg": true, ".webp": true, ".gif": true},
+	KindAsset:       {".css": true, ".js": true, ".html": true, ".svg": true, ".woff2": true},
+	KindPDF:         {".pdf": true},
+}
+
+// extFamily maps every allowlisted canonical extension to the upload family it
+// belongs to, so a client-declared extension can be compared against the
+// sniffed signature. Note `image/svg+xml` is a code asset (SVG is text/XML).
+var extFamily = map[string]UploadKind{
+	".png": KindRasterImage, ".jpg": KindRasterImage, ".jpeg": KindRasterImage,
+	".webp": KindRasterImage, ".gif": KindRasterImage,
+	".css": KindAsset, ".js": KindAsset, ".html": KindAsset, ".htm": KindAsset,
+	".svg": KindAsset, ".woff2": KindAsset,
+	".pdf": KindPDF,
+}
+
+// extAlias canonicalises equivalent extensions so a declared `.jpeg`/`.htm`
+// is compared against the sniffer's `.jpg`/`.html`.
+var extAlias = map[string]string{
+	".jpeg": ".jpg",
+	".htm":  ".html",
+}
+
+// mimeFamily maps a client-declared content-type to the upload family it
+// claims. Only unambiguous, allowlisted MIME types are mapped; anything else
+// (application/octet-stream, empty, unknown) yields no opinion and is ignored,
+// because browsers routinely send a generic type for perfectly valid files.
+var mimeFamily = map[string]UploadKind{
+	"image/png": KindRasterImage, "image/jpeg": KindRasterImage, "image/jpg": KindRasterImage,
+	"image/webp": KindRasterImage, "image/gif": KindRasterImage,
+	"text/css": KindAsset, "text/html": KindAsset, "image/svg+xml": KindAsset,
+	"text/xml": KindAsset, "application/xml": KindAsset,
+	"text/javascript": KindAsset, "application/javascript": KindAsset,
+	"text/ecmascript": KindAsset, "application/x-javascript": KindAsset,
+	"font/woff2": KindAsset, "application/font-woff2": KindAsset,
+	"application/pdf": KindPDF,
+}
+
+// canonicalExt normalises an extension through extAlias (identity when absent).
+func canonicalExt(ext string) string {
+	if c, ok := extAlias[ext]; ok {
+		return c
+	}
+	return ext
+}
+
+// declaredExtOf returns the lower-cased extension of a client-declared filename
+// (including the leading dot), or "" when there is none.
+func declaredExtOf(filename string) string {
+	name := strings.ToLower(strings.TrimSpace(filename))
+	name = strings.ReplaceAll(name, "\\", "/")
+	if i := strings.LastIndex(name, "/"); i >= 0 {
+		name = name[i+1:]
+	}
+	dot := strings.LastIndex(name, ".")
+	if dot <= 0 || dot == len(name)-1 {
+		return ""
+	}
+	return name[dot:]
+}
+
+// textExts are the code assets with no binary magic bytes — they are
+// classified by heuristics over their text, which is inherently ambiguous
+// (e.g. a CSS file starting with a `/*! license */` comment reads like a JS
+// block comment). Cross-checking a declared extension against a sniffed one
+// inside this group would reject real uploads, so the declared-vs-sniffed
+// comparison is only exact when a binary signature is involved; within the
+// text group the kind allowlist is the gate.
+var textExts = map[string]bool{".css": true, ".js": true, ".html": true, ".svg": true}
+
+// familyOf maps an extension to its upload family, defaulting to "" when
+// unknown.
+func familyOf(ext string) UploadKind { return extFamily[ext] }
+
+// MagicByteMismatch reports why a sniffed signature is not acceptable for an
+// upload, or "" when it is fine (issue #455). `sniffedExt` is the extension the
+// magic-byte sniffer derived from the bytes; `declaredFilename` and
+// `declaredMIME` are the client's claims (either may be empty). The check is:
+//
+//  1. the sniffed signature must be one the declared kind may accept — a
+//     mismatch here is the spoof the issue is about (HTML bytes uploaded to the
+//     avatar path as a `.png`, PDF bytes uploaded as CSS, …);
+//  2. when the client declared a *known* extension, it must agree with the
+//     sniffed signature. Agreement is exact whenever either side is a binary
+//     format (png/jpeg/webp/gif/pdf/woff2 — real magic bytes); only when BOTH
+//     sides are in the heuristic text code-asset group (css/js/html/svg) is the
+//     comparison relaxed to the kind allowlist, because there a real file can
+//     legitimately sniff into a sibling (a CSS file starting with a `/*!`
+//     comment reads as JS);
+//  3. when the client declared a *known* content-type, its family must match
+//     the sniffed signature's family.
+//
+// Unknown/ambiguous declarations are ignored so valid uploads with odd
+// filenames (e.g. a JPEG named `.jfif`) or a generic
+// `application/octet-stream` type are not rejected.
+func MagicByteMismatch(kind UploadKind, declaredFilename, declaredMIME, sniffedExt string) string {
+	if sniffedExt == "" {
+		return "kandungan fail tidak dapat dikenal pasti"
+	}
+	allowed, ok := uploadKindExts[kind]
+	if !ok || !allowed[sniffedExt] {
+		return "kandungan fail tidak sepadan dengan jenis fail yang didakwa"
+	}
+	sniffed := canonicalExt(sniffedExt)
+	sniffedFamily := familyOf(sniffed)
+	if dex := canonicalExt(declaredExtOf(declaredFilename)); dex != "" {
+		if declFamily, known := extFamily[dex]; known {
+			// Exact comparison unless both sides are heuristic text assets.
+			if !(textExts[dex] && textExts[sniffed]) && (declFamily != sniffedFamily || dex != sniffed) {
+				return "kandungan fail tidak sepadan dengan sambungan fail"
+			}
+		}
+	}
+	if dm := strings.ToLower(strings.TrimSpace(strings.SplitN(declaredMIME, ";", 2)[0])); dm != "" {
+		if declFamily, known := mimeFamily[dm]; known && declFamily != sniffedFamily {
+			return "kandungan fail tidak sepadan dengan jenis kandungan yang didakwa"
+		}
+	}
+	return ""
 }
 
 // ImageSize names a generated image variant (issue #382). Thumbnail and

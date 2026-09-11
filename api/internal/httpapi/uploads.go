@@ -114,7 +114,15 @@ func (h *RESTHandlers) workspaceQuotaExceeded(ctx context.Context, accountID str
 func publicReadPolicy(bucket string) string { return objstore.PublicReadPolicy(bucket) }
 func sniffImageType(data []byte) (string, bool) { return objstore.SniffImageType(data) }
 func sniffAssetType(data []byte) (string, bool) { return objstore.SniffAssetType(data) }
-func sniffPDFType(data []byte) (string, bool) { return objstore.SniffPDFType(data) }
+func sniffPDFType(data []byte) (string, bool)   { return objstore.SniffPDFType(data) }
+
+// magicByteMismatch enforces the issue #455 magic-byte (file signature) check:
+// the sniffed signature must be consistent with the declared upload kind, the
+// client-declared filename extension and the client-declared content-type.
+// Returns "" when consistent, else a 400-worthy message.
+func magicByteMismatch(kind objstore.UploadKind, declaredFilename, declaredMIME, sniffedExt string) string {
+	return objstore.MagicByteMismatch(kind, declaredFilename, declaredMIME, sniffedExt)
+}
 func buildUploadKey(accountID, ext string) string { return objstore.BuildUploadKey(accountID, ext) }
 func buildVariantKey(fullKey string, size objstore.ImageSize) string { return objstore.BuildVariantKey(fullKey, size) }
 func buildPDFPreviewKey(fullKey string) string { return objstore.BuildPDFPreviewKey(fullKey) }
@@ -226,7 +234,7 @@ func (h *RESTHandlers) uploadImage(w http.ResponseWriter, r *http.Request, actx 
 	}
 	defer func() { _ = r.MultipartForm.RemoveAll() }()
 
-	file, _, err := r.FormFile("file")
+	file, fileHeader, err := r.FormFile("file")
 	if err != nil {
 		recordUploadFailure("missing_file")
 		writeErr(w, http.StatusBadRequest, "part 'file' diperlukan")
@@ -254,7 +262,10 @@ func (h *RESTHandlers) uploadImage(w http.ResponseWriter, r *http.Request, actx 
 	// Content-type allowlist from the file's actual bytes (magic), not the
 	// client's declared header or filename (both spoofable). Issue #382: the
 	// media-page upload accepts the full allowlist — images, code assets and
-	// PDFs — so we sniff in that order.
+	// PDFs — so we sniff in that order. Issue #455: the sniffed signature is
+	// then ENFORCED against the declared kind, filename extension and
+	// content-type, so a file whose bytes are not what it claims is rejected
+	// (400) instead of being silently stored under a different type.
 	ext, ok := sniffImageType(data)
 	if !ok {
 		ext, ok = sniffAssetType(data)
@@ -265,6 +276,11 @@ func (h *RESTHandlers) uploadImage(w http.ResponseWriter, r *http.Request, actx 
 	if !ok {
 		recordUploadFailure("bad_type")
 		writeErr(w, http.StatusBadRequest, "jenis fail tidak disokong (png/jpeg/webp/gif/css/js/html/svg/woff2/pdf sahaja)")
+		return
+	}
+	if msg := magicByteMismatch(objstore.KindMedia, fileHeader.Filename, fileHeader.Header.Get("Content-Type"), ext); msg != "" {
+		recordUploadFailure("signature_mismatch")
+		writeErr(w, http.StatusBadRequest, msg)
 		return
 	}
 
@@ -419,7 +435,7 @@ func (h *RESTHandlers) uploadAvatar(w http.ResponseWriter, r *http.Request, actx
 	}
 	defer func() { _ = r.MultipartForm.RemoveAll() }()
 
-	file, _, err := r.FormFile("file")
+	file, fileHeader, err := r.FormFile("file")
 	if err != nil {
 		recordUploadFailure("missing_file")
 		writeErr(w, http.StatusBadRequest, "part 'file' diperlukan")
@@ -444,10 +460,17 @@ func (h *RESTHandlers) uploadAvatar(w http.ResponseWriter, r *http.Request, actx
 		return
 	}
 
+	// Issue #455: the avatar path is raster-image-only. The magic-byte check
+	// must match the declared image kind, filename extension and content-type.
 	ext, ok := sniffImageType(data)
 	if !ok {
 		recordUploadFailure("bad_type")
 		writeErr(w, http.StatusBadRequest, "jenis imej tidak disokong (png/jpeg/webp/gif sahaja)")
+		return
+	}
+	if msg := magicByteMismatch(objstore.KindRasterImage, fileHeader.Filename, fileHeader.Header.Get("Content-Type"), ext); msg != "" {
+		recordUploadFailure("signature_mismatch")
+		writeErr(w, http.StatusBadRequest, msg)
 		return
 	}
 	mime := imageUploadMIME[ext]
@@ -511,7 +534,7 @@ func (h *RESTHandlers) uploadAsset(w http.ResponseWriter, r *http.Request, actx 
 	}
 	defer func() { _ = r.MultipartForm.RemoveAll() }()
 
-	file, _, err := r.FormFile("file")
+	file, fileHeader, err := r.FormFile("file")
 	if err != nil {
 		recordUploadFailure("missing_file")
 		writeErr(w, http.StatusBadRequest, "part 'file' diperlukan")
@@ -537,11 +560,18 @@ func (h *RESTHandlers) uploadAsset(w http.ResponseWriter, r *http.Request, actx 
 	}
 
 	// Content-type allowlist from the file's actual bytes (magic), not the
-	// client's declared header or filename (both spoofable).
+	// client's declared header or filename (both spoofable). Issue #455: the
+	// sniffed signature is then ENFORCED against the declared asset kind,
+	// filename extension and content-type.
 	ext, ok := sniffAssetType(data)
 	if !ok {
 		recordUploadFailure("bad_type")
 		writeErr(w, http.StatusBadRequest, "jenis fail tidak disokong (css/js/html/svg/woff2 sahaja)")
+		return
+	}
+	if msg := magicByteMismatch(objstore.KindAsset, fileHeader.Filename, fileHeader.Header.Get("Content-Type"), ext); msg != "" {
+		recordUploadFailure("signature_mismatch")
+		writeErr(w, http.StatusBadRequest, msg)
 		return
 	}
 	mime := uploadAssetMIME[ext]
