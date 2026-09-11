@@ -13,8 +13,16 @@ func TestAffiliateCRUD(t *testing.T) {
 	pool := testPool(t)
 	store := NewAffiliateStore(pool)
 
+	// workspaces.owner_user_id is a FK to users(id) — create the owner first.
+	var ownerID string
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO users (email, password_hash) VALUES ($1, 'it') RETURNING id`,
+		"aff-test-"+uuid.NewString()[:8]+"@example.test").Scan(&ownerID); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+
 	// Create a workspace to own the affiliate.
-	ws := &Workspace{ID: uuid.NewString(), Name: "Aff Test", Slug: "aff-test-" + uuid.NewString()[:8], Owner: uuid.NewString()}
+	ws := &Workspace{ID: uuid.NewString(), Name: "Aff Test", Slug: "aff-test-" + uuid.NewString()[:8], Owner: ownerID}
 	if _, err := pool.Exec(ctx, `INSERT INTO workspaces (id, owner_user_id, name, slug) VALUES ($1,$2,$3,$4)`, ws.ID, ws.Owner, ws.Name, ws.Slug); err != nil {
 		t.Fatalf("insert workspace: %v", err)
 	}
