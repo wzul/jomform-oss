@@ -27,8 +27,12 @@ func TestBlockFormRendersVariationSelector(t *testing.T) {
 		HasQuantity      bool
 		CondJSON         string
 		Image            string
-		Variations       []variationView
-		Style            string
+		// Issue #471: product image size + layout + full-size fallback URL.
+		ImgSize    string
+		ImgTop     bool
+		BaseImage  string
+		Variations []variationView
+		Style      string
 	}
 	stockZero := 0
 	stockFive := 5

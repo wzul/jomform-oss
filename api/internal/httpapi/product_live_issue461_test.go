@@ -129,7 +129,7 @@ func TestIssue461FormRendersLiveProductImageNameAndPrice(t *testing.T) {
 	body := rec.Body.String()
 
 	// The image uploaded after the form save must render (issue #461 root cause).
-	if !strings.Contains(body, `class="pimg" src="https://cdn.example/nasi-live.jpg"`) {
+	if !strings.Contains(body, `class="pimg" data-size="small" src="https://cdn.example/nasi-live.jpg"`) {
 		t.Errorf("product block did not render the LIVE image\nbody:\n%s", body)
 	}
 	// The live name + price must win over the stale snapshot.

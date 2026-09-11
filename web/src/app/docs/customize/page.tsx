@@ -26,7 +26,7 @@ const STEPS: { title: string; body: string }[] = [
   },
   {
     title: "4. Apply the theme and landing page",
-    body: "Use set_form_theme to apply your brand colours (primary, background, text, card_background), font, logo, layout and spacing to a form. Use set_workspace_landing_page to customise your workspace storefront with a hero, subtitle, body, image, theme colours, logo and call-to-action buttons.",
+    body: "Use set_form_theme to apply your brand colours (primary, background, text, card_background), font, logo, layout and spacing to a form. Use product_image_size (small|medium|large|hidden) and product_image_layout (thumbnail-left|image-top) to control the product photo on the form — image-top gives a restaurant menu-card look with the photo above the name. Use set_workspace_landing_page to customise your workspace storefront with a hero, subtitle, body, image, theme colours, logo and call-to-action buttons.",
   },
   {
     title: "5. Customize with CSS and JS",
@@ -35,7 +35,7 @@ const STEPS: { title: string; body: string }[] = [
 ];
 
 const TOOLS: { name: string; purpose: string }[] = [
-  { name: "set_form_theme", purpose: "Apply brand colours, font, logo, layout, spacing, custom_css and custom_js to a form." },
+  { name: "set_form_theme", purpose: "Apply brand colours, font, logo, layout, spacing, product_image_size, product_image_layout, custom_css and custom_js to a form." },
   { name: "set_workspace_landing_page", purpose: "Customise the workspace storefront: hero, subtitle, body, image, theme colours, logo and CTAs." },
   { name: "upload_media", purpose: "Upload images and code assets (css/js/html/svg/woff2) for the landing page and forms." },
   { name: "upsert_form", purpose: "Create or update a form, including its optional theme." },

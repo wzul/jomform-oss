@@ -25,6 +25,10 @@ func TestBlockFormRendersNewFieldTypes(t *testing.T) {
 		HasPrice            bool
 		CondJSON            string
 		Image               string
+		// Issue #471: product image size + layout + full-size fallback URL.
+		ImgSize   string
+		ImgTop    bool
+		BaseImage string
 		Variations          []struct{}
 		Placeholder         string
 		Description         string
@@ -43,7 +47,8 @@ func TestBlockFormRendersNewFieldTypes(t *testing.T) {
 	var buf bytes.Buffer
 	err := blockTmpl.Execute(&buf, map[string]any{
 		"Slug": "demo", "Title": "Demo", "Blocks": []block{
-			{Type: "product", Value: "Yuran", ProductID: "p1", PriceSen: 300, HasPrice: true, HasQuantity: true, Image: "https://cdn.example/p1.jpg"},
+			{Type: "product", Value: "Yuran", ProductID: "p1", PriceSen: 300, HasPrice: true, HasQuantity: true,
+				Image: "https://cdn.example/p1.jpg", ImgSize: "small", BaseImage: "https://cdn.example/p1.jpg"},
 			{Type: "select", Value: "Colour", Required: true, Choices: []choiceView{{Label: "Red", Value: "red"}, {Label: "Blue", Value: "blue"}}},
 			{Type: "radio", Value: "Size", Choices: []choiceView{{Label: "S", Value: "s"}, {Label: "M", Value: "m"}}},
 			{Type: "number", Value: "Qty", Min: "1", Max: "10", Step: "1"},
@@ -120,7 +125,9 @@ func TestBlockFormRendersNewFieldTypes(t *testing.T) {
 	}
 	// Issue #439: product image thumbnail next to the name. The product with an
 	// image renders <img class="pimg">; the pname span follows it inside the label.
-	if !strings.Contains(body, `<img class="pimg" src="https://cdn.example/p1.jpg" alt="Yuran">`) {
+	// Issue #471: the image now carries data-size (the merchant-configurable
+	// size; default small) and data-base (the full-size fallback URL).
+	if !strings.Contains(body, `<img class="pimg" data-size="small" src="https://cdn.example/p1.jpg" alt="Yuran" data-base="https://cdn.example/p1.jpg">`) {
 		t.Error("product image thumbnail not rendered")
 	}
 	if !strings.Contains(body, `.pimg {`) {

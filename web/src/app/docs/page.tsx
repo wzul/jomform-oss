@@ -18,6 +18,10 @@ const FEATURES: { title: string; body: string }[] = [
     body: "Sell one-time items and subscriptions. Each product has a name, price (in sen), stock, images, and optional variations (size/colour) with their own price, stock and image. Subscriptions support monthly/yearly billing, trial days, and a fixed or infinite number of charges.",
   },
   {
+    title: "Product images on forms",
+    body: "Choose how each product photo appears on your form: size (small 52px, medium 96px, large 160px or hidden) and layout (thumbnail-left, the default, or image-top — a menu-card look with a full-width photo above the name, ideal for a restaurant menu). The renderer serves the matching optimised media variant for the chosen size. Set it in Form Settings → General (with a live preview) or over MCP via set_form_theme (product_image_size / product_image_layout).",
+  },
+  {
     title: "Sales",
     body: "Track every sale: reference code, status (pending/confirmed/failed/refunded), buyer, amount, payment method and date. Confirm bank-transfer sales, capture or release skip-capture authorisations, refund paid sales (full or partial), and export sales to CSV.",
   },

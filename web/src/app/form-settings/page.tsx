@@ -442,6 +442,9 @@ function FormSettingsInner() {
   const [fsEmbed, setFsEmbed] = useState(true);
   // Issue #388: power-user custom JS (owner-gated + scanned server-side).
   const [fsCustomJS, setFsCustomJS] = useState("");
+  // Issue #471: product image size + layout on the buyer's form.
+  const [fsImgSize, setFsImgSize] = useState<"small" | "medium" | "large" | "hidden">("small");
+  const [fsImgLayout, setFsImgLayout] = useState<"thumbnail-left" | "image-top">("thumbnail-left");
 
   // Confirmation
   const [fsRedS, setFsRedS] = useState("");
@@ -532,6 +535,13 @@ function FormSettingsInner() {
       setFsEmbed(d.allow_embed !== false);
       // Issue #388: hydrate the power-user custom JS from the theme.
       setFsCustomJS((d.theme?.custom_js as string) || "");
+      // Issue #471: hydrate the product image size + layout from the theme.
+      setFsImgSize(
+        d.theme?.product_image_size === "medium" || d.theme?.product_image_size === "large" || d.theme?.product_image_size === "hidden"
+          ? (d.theme.product_image_size as "medium" | "large" | "hidden")
+          : "small",
+      );
+      setFsImgLayout(d.theme?.product_image_layout === "image-top" ? "image-top" : "thumbnail-left");
       setFsRedS(d.redirect_success || "");
       setFsRedF(d.redirect_failure || "");
       setFsFailMsg(d.failure_message || "");
@@ -638,6 +648,11 @@ function FormSettingsInner() {
     // malicious JS before it is ever served on the buyer's page.
     const theme: Record<string, unknown> = { primary: fsTheme };
     if (fsCustomJS.trim() !== "") theme.custom_js = fsCustomJS;
+    // Issue #471: product image size + layout. The server validates these
+    // against the same allowlist and the renderer applies them (incl. the
+    // matching media variant per size).
+    theme.product_image_size = fsImgSize;
+    theme.product_image_layout = fsImgLayout;
     const payload = { slug: slug.toLowerCase().replace(/[^a-z0-9-]/g, "-"), title, theme };
     let id = formId;
     if (!id) return;
@@ -1082,6 +1097,75 @@ function FormSettingsInner() {
                           onChange={(e) => setFsTheme(e.target.value)}
                           className="mt-1 h-8 w-full max-w-xl cursor-pointer rounded border border-[var(--jf-border)]"
                         />
+                      </div>
+                      {/* Issue #471: product image size + layout with a live
+                          preview (a restaurant menu wants a bigger image or
+                          the image-top menu-card layout). */}
+                      <div>
+                        <label className={labelCls}>{t("fs.prodImgSize")}</label>
+                        <div className="mt-1 flex max-w-xl flex-wrap gap-1.5">
+                          {(["small", "medium", "large", "hidden"] as const).map((sz) => (
+                            <button
+                              key={sz}
+                              type="button"
+                              onClick={() => setFsImgSize(sz)}
+                              className={`rounded-md border px-3 py-2 text-xs font-medium transition-colors ${
+                                fsImgSize === sz
+                                  ? "border-[#7170ff]/60 bg-indigo-50 text-[var(--jf-primary)]"
+                                  : "border-[var(--jf-border)] text-[#374151] hover:bg-slate-50"
+                              }`}
+                            >
+                              {t(`fs.prodImgSize${sz[0].toUpperCase()}${sz.slice(1)}` as import("../../components/i18n").Key)}
+                            </button>
+                          ))}
+                        </div>
+                        <div className="mt-2">
+                          <label className={labelCls}>{t("fs.prodImgLayout")}</label>
+                          <div className="mt-1 flex max-w-xl gap-1.5">
+                            {(["thumbnail-left", "image-top"] as const).map((ly) => (
+                              <button
+                                key={ly}
+                                type="button"
+                                onClick={() => setFsImgLayout(ly)}
+                                disabled={fsImgSize === "hidden"}
+                                className={`rounded-md border px-3 py-2 text-xs font-medium transition-colors disabled:opacity-40 ${
+                                  fsImgLayout === ly
+                                    ? "border-[#7170ff]/60 bg-indigo-50 text-[var(--jf-primary)]"
+                                    : "border-[var(--jf-border)] text-[#374151] hover:bg-slate-50"
+                                }`}
+                              >
+                                {t(`fs.prodImgLayout${ly === "image-top" ? "Top" : "Left"}` as import("../../components/i18n").Key)}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        {/* Live preview of the chosen size/layout. */}
+                        {fsImgSize !== "hidden" && (
+                          <div className="mt-3 max-w-xl rounded-lg border border-[var(--jf-border)] bg-white p-3">
+                            <p className="mb-2 text-[10px] uppercase tracking-wide text-[var(--jf-muted)]">
+                              {t("fs.prodImgPreview")}
+                            </p>
+                            <div
+                              className={`flex gap-3 rounded-lg border border-[var(--jf-border)] p-3 ${
+                                fsImgLayout === "image-top" ? "flex-col items-stretch" : "items-center"
+                              }`}
+                            >
+                              <div
+                                className="shrink-0 rounded-[10px] bg-slate-100"
+                                style={
+                                  fsImgLayout === "image-top"
+                                    ? { width: "100%", height: fsImgSize === "large" ? 120 : 84 }
+                                    : { width: fsImgSize === "small" ? 52 : fsImgSize === "medium" ? 96 : 160, height: fsImgSize === "small" ? 52 : fsImgSize === "medium" ? 96 : 160 }
+                                }
+                              />
+                              <div className={fsImgLayout === "image-top" ? "flex w-full items-center gap-3" : "flex flex-1 items-center gap-3"}>
+                                <span className="inline-block h-5 w-5 shrink-0 rounded border-2 border-slate-300 bg-white" />
+                                <span className="flex-1 text-sm font-medium text-slate-700">{t("fs.prodImgSample")}</span>
+                                <span className="ml-auto text-sm font-semibold text-[var(--jf-primary)]">RM 12.00</span>
+                              </div>
+                            </div>
+                          </div>
+                        )}
                       </div>
                       <div>
                         <label className={labelCls}>{t("bld.logoUrl")}</label>

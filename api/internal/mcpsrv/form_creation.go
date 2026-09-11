@@ -38,6 +38,9 @@ type setFormThemeIn struct {
 	LogoURL          string `json:"logo_url,omitempty" jsonschema:"URL logo (branding)"`
 	Layout           string `json:"layout,omitempty" jsonschema:"Susun atur: centered (lalai) | full_width | split"`
 	Spacing          string `json:"spacing,omitempty" jsonschema:"Jarak: compact | comfortable (lalai) | spacious"`
+	// Issue #471: product image size + layout on the buyer's form.
+	ProductImageSize   string `json:"product_image_size,omitempty" jsonschema:"Saiz imej produk: small (52px, lalai) | medium (96px) | large (160px) | hidden. Guna medium/large untuk menu restoran; hidden menyembunyikan imej."`
+	ProductImageLayout string `json:"product_image_layout,omitempty" jsonschema:"Susun atur imej produk: thumbnail-left (lalai, imej di kiri nama) | image-top (kad menu: imej penuh di atas nama)."`
 	// CustomCSS is arbitrary CSS injected into the rendered page. It is
 	// HTML-escaped so a </style> cannot break out of the style block. The
 	// agent controls look-and-feel only — never prices or payment logic.
@@ -81,6 +84,17 @@ func (s *Server) setFormTheme(
 		}
 		theme["spacing"] = in.Spacing
 	}
+	// Issue #471: product image size + layout. Validated against the same
+	// allowlist the renderer uses (empty = unset → clear the key, restoring the
+	// default small / thumbnail-left look).
+	if in.ProductImageSize != "" && !validProductImageSize(in.ProductImageSize) {
+		return nil, nil, errors.New("product_image_size mesti small|medium|large|hidden")
+	}
+	if in.ProductImageLayout != "" && !validProductImageLayout(in.ProductImageLayout) {
+		return nil, nil, errors.New("product_image_layout mesti thumbnail-left|image-top")
+	}
+	setThemeStr(theme, "product_image_size", in.ProductImageSize)
+	setThemeStr(theme, "product_image_layout", in.ProductImageLayout)
 	setThemeStr(theme, "primary", in.Primary)
 	setThemeStr(theme, "background", in.Background)
 	setThemeStr(theme, "text", in.Text)
@@ -111,6 +125,29 @@ func setThemeStr(theme map[string]any, key, val string) {
 		return
 	}
 	theme[key] = val
+}
+
+// ── product image size + layout (issue #471) ──────────────────────────────
+//
+// The renderer (httpapi/product_image_issue471.go) owns the canonical
+// allowlists; these mirrors keep MCP validation independent of the httpapi
+// package (the dependency runs httpapi -> mcpsrv, not the reverse) while
+// staying in lockstep. An empty value is allowed and means "unset" (clear the
+// theme key, restoring the default small / thumbnail-left look).
+func validProductImageSize(v string) bool {
+	switch v {
+	case "", "small", "medium", "large", "hidden":
+		return true
+	}
+	return false
+}
+
+func validProductImageLayout(v string) bool {
+	switch v {
+	case "", "thumbnail-left", "image-top":
+		return true
+	}
+	return false
 }
 
 // ── register_form_fields (issue #254) ─────────────────────────────────────

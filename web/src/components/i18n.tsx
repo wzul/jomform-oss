@@ -1080,6 +1080,17 @@ const DICT = {
   "fs.qrDownload": { en: "Download PNG", ms: "Muat turun PNG", zh: "下载 PNG", ta: "PNG பதிவிறக்கு", ar: "تنزيل PNG" },
   "fs.qrStand": { en: "Print stand", ms: "Cetak stand", zh: "打印立牌", ta: "ஸ்டாண்டை அச்சிடு", ar: "طباعة الحامل" },
   "fs.qrError": { en: "Failed to generate QR.", ms: "Gagal menjana QR.", zh: "生成二维码失败。", ta: "QR உருவாக்க முடியவில்லை.", ar: "فشل إنشاء رمز QR." },
+  // Issue #471: product image size + layout (thumbnail-left / image-top menu card).
+  "fs.prodImgSize": { en: "Product image size", ms: "Saiz imej produk", zh: "产品图片尺寸", ta: "தயாரிப்பு பட அளவு", ar: "حجم صورة المنتج" },
+  "fs.prodImgSizeSmall": { en: "Small (52px)", ms: "Kecil (52px)", zh: "小（52px）", ta: "சிறியது (52px)", ar: "صغير (52px)" },
+  "fs.prodImgSizeMedium": { en: "Medium (96px)", ms: "Sederhana (96px)", zh: "中（96px）", ta: "நடுத்தரம் (96px)", ar: "متوسط (96px)" },
+  "fs.prodImgSizeLarge": { en: "Large (160px)", ms: "Besar (160px)", zh: "大（160px）", ta: "பெரியது (160px)", ar: "كبير (160px)" },
+  "fs.prodImgSizeHidden": { en: "Hidden", ms: "Tersembunyi", zh: "隐藏", ta: "மறை", ar: "مخفي" },
+  "fs.prodImgLayout": { en: "Product image layout", ms: "Susun atur imej produk", zh: "产品图片布局", ta: "தயாரிப்பு பட அமைப்பு", ar: "تخطيط صورة المنتج" },
+  "fs.prodImgLayoutLeft": { en: "Thumbnail left", ms: "Imej di kiri", zh: "缩略图在左", ta: "இடதுபுறம் சிறுபடம்", ar: "مصغّرة على اليسار" },
+  "fs.prodImgLayoutTop": { en: "Image top (menu card)", ms: "Imej di atas (kad menu)", zh: "图片在上（菜单卡片）", ta: "படம் மேலே (மெனு அட்டை)", ar: "الصورة أعلى (بطاقة القائمة)" },
+  "fs.prodImgPreview": { en: "Preview", ms: "Pratonton", zh: "预览", ta: "முன்னோட்டம்", ar: "معاينة" },
+  "fs.prodImgSample": { en: "Sample product", ms: "Produk contoh", zh: "示例产品", ta: "மாதிரி தயாரிப்பு", ar: "منتج تجريبي" },
   "fs.confirmationHint": { en: "What buyers see after submitting. Leave blank to use the default thank-you page.", ms: "Apa yang pembeli lihat selepas hantar. Kosongkan untuk guna halaman terima kasih lalai.", zh: "买家提交后看到的内容。留空则使用默认感谢页。", ta: "சமர்ப்பித்த பிறகு வாங்குபவர்கள் பார்ப்பது. இயல்புநிலை நன்றி பக்கத்தைப் பயன்படுத்த காலியாக விடவும்.", ar: "ما يراه المشترون بعد الإرسال. اتركه فارغاً لاستخدام صفحة الشكر الافتراضية." },
   // Issue #393: per-form payment-failed message.
   "fs.failureMessage": { en: "Payment failed message (HTML, sanitized)", ms: "Mesej pembayaran gagal (HTML, disanitasi)", zh: "支付失败消息（HTML，已净化）", ta: "கட்டணம் தோல்வி செய்தி (HTML, சுத்திகரிக்கப்பட்டது)", ar: "رسالة فشل الدفع (HTML، منقّاة)" },

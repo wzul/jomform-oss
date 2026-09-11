@@ -92,6 +92,15 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 		// Issue #439: first product image (thumbnail) rendered next to the
 		// product name. Empty string = no image (fallback to name only).
 		Image string
+		// Issue #471: the product image size/layout the merchant chose. ImgSize
+		// is the chosen size (a data-size value: small|medium|large) and ImgTop
+		// selects the menu-card placement (image above the name/price row).
+		ImgSize string
+		ImgTop  bool
+		// BaseImage is the full-size image URL. The template ships it as a
+		// client-side fallback (onerror) for an image uploaded before #382,
+		// which has no generated variants.
+		BaseImage string
 		// Issue #153: variations selector.
 		Variations []variationView
 		// Issue #173: per-field settings surfaced to the template.
@@ -111,6 +120,23 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 		// Issue #249: per-product quantity selector (Gravity-Forms-style).
 		HasQuantity bool
 	}
+
+	// Issue #471: product image size + layout, read from the form theme.
+	// Defaults are the pre-#471 look (small thumbnail, left of the name).
+	// Declared here (before the theme map is parsed below) so the per-product
+	// loop can resolve each image to the matching media variant.
+	themeProductImageSize := ProductImageSizeSmall
+	themeProductImageLayout := ProductImageLayoutThumbnailLeft
+	if f.Theme != nil {
+		if v, ok := f.Theme["product_image_size"].(string); ok {
+			themeProductImageSize = productImageSizeOrDefault(v)
+		}
+		if v, ok := f.Theme["product_image_layout"].(string); ok {
+			themeProductImageLayout = productImageLayoutOrDefault(v)
+		}
+	}
+	imgHidden := themeProductImageSize == ProductImageSizeHidden
+	imgTop := themeProductImageLayout == ProductImageLayoutImageTop
 
 	blocks := make([]blockView, 0, len(cfg.Blocks))
 	for _, b := range cfg.Blocks {
@@ -139,7 +165,16 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 				if found {
 					vb.PriceSen = livePrice
 					vb.HasPrice = true
-					vb.Image = liveImage
+					// Issue #471: resolve the LIVE product image (#461) to the
+					// media variant that matches the merchant's chosen size,
+					// unless the merchant hid the image. An empty image stays
+					// empty (no <img> is rendered).
+					if !imgHidden && liveImage != "" {
+						vb.Image = productImageForSize(liveImage, themeProductImageSize)
+						vb.BaseImage = liveImage
+						vb.ImgSize = themeProductImageSize
+						vb.ImgTop = imgTop
+					}
 					// The product name always follows the live product, except
 					// when the merchant typed an explicit per-form label that
 					// differs from the snapshotted product name (that override
@@ -330,9 +365,22 @@ var blockTmpl = template.Must(template.New("blocks").
                 min-height:44px; padding:12px 14px; font-size:15px; color:#17181c;
                 cursor:pointer; -webkit-tap-highlight-color:transparent; }
   .prod input[type=checkbox] { width:20px; height:20px; flex:0 0 auto; accent-color:#4f46e5; margin:0; }
-  /* Issue #439: product image thumbnail next to the name (menu-item card). */
-  .pimg { width:52px; height:52px; flex:0 0 52px; border-radius:10px; object-fit:cover;
-          background:#f3f4f6; }
+  /* Issue #439: product image next to the name (menu-item card).
+     Issue #471: the size is merchant-configurable — data-size=small (52px,
+     default) | medium (96px) | large (160px) — and the layout can be
+     thumbnail-left (default) or image-top (menu card). The base rule is the
+     52px default so an image with no data-size still renders correctly. */
+  .pimg { width:52px; height:52px; flex:0 0 52px; border-radius:10px;
+          object-fit:cover; background:#f3f4f6; }
+  .pimg[data-size=medium] { width:96px; height:96px; flex-basis:96px; }
+  .pimg[data-size=large] { width:160px; height:160px; flex-basis:160px; }
+  /* Issue #471: menu-card layout — a full-width image above the name/price
+     row (what a restaurant menu wants). */
+  .prod.menu-card label { flex-direction:column; align-items:stretch; gap:10px; }
+  .prod.menu-card .pimg { width:100%; height:auto; flex-basis:auto; aspect-ratio:16/9; }
+  .prod.menu-card .pimg[data-size=medium] { aspect-ratio:3/2; }
+  .prod.menu-card .pimg[data-size=large] { aspect-ratio:4/3; }
+  .prod.menu-card .prow { display:flex; align-items:center; gap:12px; width:100%; }
   /* Issue #58: ALL checkboxes (product .p and custom .extra) share one bright
      unchecked state + indigo accent. appearance:none + explicit border/background
      overrides UA dark defaults so Android Chrome draws a white unchecked box. */
@@ -398,7 +446,7 @@ var blockTmpl = template.Must(template.New("blocks").
 {{else if eq .Type "section"}}  <div class="section"{{styleAttr .Style}}>{{.Value}}</div>
 {{else if eq .Type "html"}}  <div class="text"{{styleAttr .Style}}>{{.Value}}</div>
 {{else if eq .Type "total"}}  <div class="total"{{styleAttr .Style}}><span>{{.Value}}</span><span class="total-val">RM0.00</span></div>
-{{else if eq .Type "product"}}  <div class="prod"{{styleAttr .Style}}><label><input type="checkbox" class="p" data-id="{{.ProductID}}" data-price="{{.PriceSen}}">{{if .Image}}<img class="pimg" src="{{.Image}}" alt="{{.Value}}">{{end}}<span class="pname">{{.Value}}</span><span class="price">{{if .HasPrice}}RM{{printf "%.2f" (divf .PriceSen 100)}}{{end}}</span></label>{{if .Variations}}<div class="varwrap"><select class="v" data-id="{{.ProductID}}"><option value="" disabled selected>{{$.Ls.SelectVariation}}</option>{{range .Variations}}<option value="{{.ID}}" data-price="{{.PriceSen}}"{{if .SoldOut}} disabled{{end}}>{{.Name}} — RM{{printf "%.2f" (divf .PriceSen 100)}}{{if .Stock}} ({{.Stock}} {{$.Ls.InStock}}){{end}}</option>{{end}}</select><div class="varstock"></div></div>{{end}}{{if .HasQuantity}}<div class="pqrow"><label class="lbl" style="margin:0">{{$.Ls.Quantity}}</label><input type="number" class="pq" data-id="{{.ProductID}}" min="1" value="1"></div>{{end}}</div>
+{{else if eq .Type "product"}}  <div class="prod{{if .ImgTop}} menu-card{{end}}"{{styleAttr .Style}}><label>{{if .ImgTop}}{{if .Image}}<img class="pimg" data-size="{{.ImgSize}}" src="{{.Image}}" alt="{{.Value}}" data-base="{{.BaseImage}}">{{end}}<span class="prow">{{end}}<input type="checkbox" class="p" data-id="{{.ProductID}}" data-price="{{.PriceSen}}">{{if not .ImgTop}}{{if .Image}}<img class="pimg" data-size="{{.ImgSize}}" src="{{.Image}}" alt="{{.Value}}" data-base="{{.BaseImage}}">{{end}}{{end}}<span class="pname">{{.Value}}</span><span class="price">{{if .HasPrice}}RM{{printf "%.2f" (divf .PriceSen 100)}}{{end}}</span>{{if .ImgTop}}</span>{{end}}</label>{{if .Variations}}<div class="varwrap"><select class="v" data-id="{{.ProductID}}"><option value="" disabled selected>{{$.Ls.SelectVariation}}</option>{{range .Variations}}<option value="{{.ID}}" data-price="{{.PriceSen}}"{{if .SoldOut}} disabled{{end}}>{{.Name}} — RM{{printf "%.2f" (divf .PriceSen 100)}}{{if .Stock}} ({{.Stock}} {{$.Ls.InStock}}){{end}}</option>{{end}}</select><div class="varstock"></div></div>{{end}}{{if .HasQuantity}}<div class="pqrow"><label class="lbl" style="margin:0">{{$.Ls.Quantity}}</label><input type="number" class="pq" data-id="{{.ProductID}}" min="1" value="1"></div>{{end}}</div>
 {{else if eq .Type "quantity"}}  <div class="qtyrow"{{styleAttr .Style}}><label class="lbl" style="margin:0">{{.Value}}</label><input type="number" class="qty" min="1" value="{{if .DefaultValue}}{{.DefaultValue}}{{else}}1{{end}}"></div>
 {{else if eq .Type "option"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><select class="opt" data-id="{{.ProductID}}"><option value="" selected>{{$.Ls.SelectOption}}</option>{{range .Choices}}<option value="{{.Value}}" data-price="{{.PriceSen}}">{{.Label}}{{if .PriceSen}} (+RM{{printf "%.2f" (divf .PriceSen 100)}}){{end}}</option>{{end}}</select>
 {{else if eq .Type "shipping"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><select class="ship" data-id="{{.ProductID}}"><option value="" selected>{{$.Ls.SelectShipping}}</option>{{range .Choices}}<option value="{{.Value}}" data-price="{{.PriceSen}}">{{.Label}}{{if .PriceSen}} (RM{{printf "%.2f" (divf .PriceSen 100)}}){{end}}</option>{{end}}</select>
@@ -442,6 +490,17 @@ var blockTmpl = template.Must(template.New("blocks").
 <script>
 (function(){
   var boxes=document.querySelectorAll('.p');
+  // Issue #471: product image variant fallback. When the merchant chose a
+  // larger size the <img> points at the medium/full media variant (#382). An
+  // image uploaded before #382 has no generated variants, so if that variant
+  // object 404s we fall back to the base image (data-base) — one attempt only,
+  // so a genuinely broken URL cannot loop.
+  document.querySelectorAll('img.pimg[data-base]').forEach(function(im){
+    im.addEventListener('error',function(){
+      var base=im.getAttribute('data-base');
+      if(base&&im.getAttribute('src')!==base){im.setAttribute('src',base);}
+    },{once:true});
+  });
   // Issue #153: variation selectors. Each variable product has a <select class="v">
   // whose options carry data-price; sold-out options are disabled server-side.
   var sels=document.querySelectorAll('select.v');

@@ -643,6 +643,16 @@ func (h *RESTHandlers) updateForm(w http.ResponseWriter, r *http.Request, actx *
 				return
 			}
 		}
+		// Issue #471: product image size + layout are validated against the
+		// renderer's allowlist so a bad value never reaches the buyer's page.
+		if v, ok := in.Theme["product_image_size"].(string); ok && !ValidProductImageSize(v) {
+			writeErr(w, http.StatusBadRequest, "product_image_size mesti small|medium|large|hidden")
+			return
+		}
+		if v, ok := in.Theme["product_image_layout"].(string); ok && !ValidProductImageLayout(v) {
+			writeErr(w, http.StatusBadRequest, "product_image_layout mesti thumbnail-left|image-top")
+			return
+		}
 	}
 	// Pass config/theme as-is: Forms.Update COALESCEs nil over the stored
 	// values, so a PATCH that omits either key keeps what's stored instead
