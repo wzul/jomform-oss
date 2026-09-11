@@ -201,6 +201,42 @@ export default function ProfilePage() {
     return false;
   }
 
+  // Issue #458: a magic-link session belonging to a 2FA-enabled user must
+  // confirm a fresh TOTP code before a sensitive action (change password /
+  // disable 2FA / add passkey). Everyone else is unaffected. When the backend
+  // answers 401 + next_step=totp_stepup_required we prompt for the code and
+  // retry the same request once with totp_code attached.
+  async function postSensitive(path: string, body: Record<string, unknown>): Promise<boolean> {
+    setMsg(""); setErr("");
+    const send = (payload: Record<string, unknown>) =>
+      fetch(path, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    let payload = { ...body };
+    // Pre-empt the prompt when we already know the step-up applies.
+    if (sessionUser?.magic_session && p?.totp_enabled) {
+      const code = window.prompt(t("prof.stepUpDesc"));
+      if (!code || !code.trim()) { setErr(t("prof.stepUpInvalid")); return false; }
+      payload = { ...payload, totp_code: code.trim() };
+    }
+    let r = await send(payload);
+    if (r.status === 401) {
+      const d = await r.json().catch(() => ({}));
+      if (d.next_step !== "totp_stepup_required") {
+        setErr(d.error || t("prof.failed"));
+        return false;
+      }
+      const code = window.prompt(t("prof.stepUpDesc"));
+      if (!code || !code.trim()) { setErr(t("prof.stepUpInvalid")); return false; }
+      r = await send({ ...payload, totp_code: code.trim() });
+    }
+    if (r.ok) { setMsg(t("prof.saved")); load(); reloadSession(); return true; }
+    const d = await r.json().catch(() => ({}));
+    setErr(d.error || t("prof.failed"));
+    return false;
+  }
+
   // Issue #133: upload a profile picture → POST /api/rest/uploads/avatar
   // (server downscales to ~256px) → save the returned URL.
   async function uploadAvatar(file: File) {
@@ -257,7 +293,25 @@ export default function ProfilePage() {
   async function registerPasskey() {
     setMsg(""); setErr("");
     try {
-      const st = await fetch("/api/auth/passkeys/register/start", { method: "POST" }).then((r) => r.json());
+      // Issue #458: a magic-link session with 2FA enabled must confirm a fresh
+      // TOTP code before a passkey can be added. We ask up front and pass it to
+      // /register/start (which mints a short-lived grant the /finish leg then
+      // inherits). Everyone else is unaffected.
+      let totpCode = "";
+      if (sessionUser?.magic_session && p?.totp_enabled) {
+        const code = window.prompt(t("prof.stepUpDesc"));
+        if (!code || !code.trim()) { setErr(t("prof.stepUpInvalid")); return; }
+        totpCode = code.trim();
+      }
+      const st = await fetch("/api/auth/passkeys/register/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(totpCode ? { totp_code: totpCode } : {}),
+      }).then((r) => r.json());
+      if (!st || !st.options) {
+        setErr(st?.error || t("prof.passkeyRegFailed"));
+        return;
+      }
       const opts = st.options.publicKey || st.options;
       // decode base64url fields
       opts.challenge = Uint8Array.from(atob(opts.challenge.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
@@ -495,7 +549,9 @@ export default function ProfilePage() {
               <button
                 onClick={async () => {
                   if (pwNew !== pwConfirm) { setErr(t("prof.pwMismatch")); return; }
-                  await post("/api/auth/change-password", { password: pwCurrent, new_password: pwNew });
+                  // Issue #458: postSensitive handles the TOTP step-up prompt
+                  // for a magic + 2FA session; unchanged for everyone else.
+                  await postSensitive("/api/auth/change-password", { password: pwCurrent, new_password: pwNew });
                   setPwCurrent(""); setPwNew(""); setPwConfirm("");
                 }}
                 className="jf-btn-primary mt-3"
@@ -520,7 +576,9 @@ export default function ProfilePage() {
                     // (not a TOTP code) before disabling.
                     const password = window.prompt(t("prof.enter2faCode"));
                     if (password) {
-                      const ok = await post("/api/auth/2fa/disable", { password });
+                      // Issue #458: postSensitive adds a TOTP step-up prompt
+                      // when this is a magic-link session with 2FA enabled.
+                      const ok = await postSensitive("/api/auth/2fa/disable", { password });
                       // #69: flip optimistically so the status line ("Belum
                       // aktif") agrees with reality immediately; post() already
                       // reloadSession()'d (keeps prev user until it resolves).

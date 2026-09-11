@@ -176,6 +176,12 @@ const TOOL_GROUPS: { group: string; tools: { name: string; desc: string }[] }[] 
     ],
   },
   {
+    group: "Keselamatan sesi",
+    tools: [
+      { name: "—", desc: "Sesi log masuk melalui pautan emel (magic link) ditandakan magic. Jika 2FA aktif, tindakan sensitif (tukar kata laluan, nyahaktif 2FA, tambah passkey) memerlukan kod 2FA baharu. Pengguna tanpa 2FA atau sesi log masuk biasa tidak terjejas." },
+    ],
+  },
+  {
     group: "Legal pages",
     tools: [
       { name: "generate_legal_page", desc: "Jana draf halaman undang-undang (privacy|terms|refund) untuk workworkspace melalui LLM (deepseek-v4-flash) dengan template yang diisi butiran perniagaan. Pulangkan draf untuk semakan \u2014 belum disimpan sehingga set_legal_page dipanggil." },

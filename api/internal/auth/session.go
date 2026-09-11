@@ -39,29 +39,44 @@ func NewSessions(valkeyURL string) (*Sessions, error) {
 func sessionKey(token string) string { return "jf:session:" + token }
 
 // value encodes the stored userID together with the session's issued-at
-// timestamp (unix ns) and the remember flag (issue #69). Formats over time:
+// timestamp (unix ns), the remember flag (issue #69) and the magic flag
+// (issue #458). Formats over time:
 //   - legacy v1: bare userID (no separator)
 //   - v2:        userID:issuedNs
-//   - v3 (now):  userID:issuedNs:remember  (remember "1"/"0")
+//   - v3:        userID:issuedNs:remember  (remember "1"/"0")
+//   - v4 (now):  userID:issuedNs:remember:magic  (magic "1"/"0")
 //
 // The remember flag is persisted so a session-rotating action (2FA enable per
 // issue #69) can inherit the original session's persistence choice instead of
 // silently downgrading a "remember me" login to a 24h browser-session cookie.
+//
+// The magic flag (issue #458) records that the session was started by a
+// passwordless magic-link click rather than a password/social/passkey login.
+// It is a pure marker: it changes no UX on its own, but it makes the login
+// method observable in the audit log and lets sensitive actions require a
+// fresh second factor (TOTP step-up) when a magic session belongs to a
+// 2FA-enabled user.
 const valueSep = ":"
 
-func encodeValue(userID string, issued time.Time, remember bool) string {
+func encodeValue(userID string, issued time.Time, remember, magic bool) string {
 	flag := "0"
 	if remember {
 		flag = "1"
 	}
-	return userID + valueSep + strconv.FormatInt(issued.UnixNano(), 10) + valueSep + flag
+	mflag := "0"
+	if magic {
+		mflag = "1"
+	}
+	return userID + valueSep + strconv.FormatInt(issued.UnixNano(), 10) + valueSep + flag + valueSep + mflag
 }
 
-// parseValue returns the userID, issuance time, and remember flag. It tolerates
-// every historical value format. A value carrying a zero issued time (bare or
-// malformed) means "issued unknown" and defaults remember to false (the safe,
-// short-session default).
-func parseValue(v string) (userID string, issued time.Time, remember bool) {
+// parseValue returns the userID, issuance time, remember flag and magic flag.
+// It tolerates every historical value format: a v1/v2/v3 value carries no
+// magic component and is therefore reported as magic=false (the safe default —
+// an unknown login method never gets the step-up exemption). A value carrying
+// a zero issued time (bare or malformed) means "issued unknown" and defaults
+// remember to false (the safe, short-session default).
+func parseValue(v string) (userID string, issued time.Time, remember, magic bool) {
 	parts := strings.Split(v, valueSep)
 	if len(parts) > 0 {
 		userID = parts[0]
@@ -74,7 +89,10 @@ func parseValue(v string) (userID string, issued time.Time, remember bool) {
 	if len(parts) >= 3 && parts[2] == "1" {
 		remember = true
 	}
-	return userID, issued, remember
+	if len(parts) >= 4 && parts[3] == "1" {
+		magic = true
+	}
+	return userID, issued, remember, magic
 }
 
 // Create stores userID under a fresh opaque token with the default SessionTTL
@@ -94,13 +112,27 @@ func (s *Sessions) CreateWithTTL(ctx context.Context, userID string, ttl time.Du
 // CreateRememberedWithTTL stores userID under a fresh opaque token with the
 // given TTL and remember flag. Same contract as CreateWithTTL plus persisting
 // remember so a later session rotation can preserve the persistence choice.
+// The session is not a magic session (magic=false).
 func (s *Sessions) CreateRememberedWithTTL(ctx context.Context, userID string, ttl time.Duration, remember bool) (string, error) {
+	return s.CreateSession(ctx, userID, ttl, remember, false)
+}
+
+// CreateMagicWithTTL is CreateRememberedWithTTL for a session started by a
+// passwordless magic-link click (issue #458): the persisted value carries
+// magic=true so the login method is observable and the step-up gate can fire.
+func (s *Sessions) CreateMagicWithTTL(ctx context.Context, userID string, ttl time.Duration, remember bool) (string, error) {
+	return s.CreateSession(ctx, userID, ttl, remember, true)
+}
+
+// CreateSession stores userID under a fresh opaque token with the given TTL,
+// remember flag and magic flag.
+func (s *Sessions) CreateSession(ctx context.Context, userID string, ttl time.Duration, remember, magic bool) (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}
 	token := hex.EncodeToString(b)
-	if err := s.rdb.Set(ctx, sessionKey(token), encodeValue(userID, time.Now().UTC(), remember), ttl).Err(); err != nil {
+	if err := s.rdb.Set(ctx, sessionKey(token), encodeValue(userID, time.Now().UTC(), remember, magic), ttl).Err(); err != nil {
 		return "", fmt.Errorf("session create: %w", err)
 	}
 	return token, nil
@@ -112,7 +144,7 @@ func (s *Sessions) Get(ctx context.Context, token string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	uid, _, _ := parseValue(v)
+	uid, _, _, _ := parseValue(v)
 	return uid, nil
 }
 
@@ -123,7 +155,7 @@ func (s *Sessions) GetCreated(ctx context.Context, token string) (string, time.T
 	if err != nil {
 		return "", time.Time{}, err
 	}
-	uid, issued, _ := parseValue(v)
+	uid, issued, _, _ := parseValue(v)
 	return uid, issued, nil
 }
 
@@ -139,8 +171,24 @@ func (s *Sessions) Remembered(ctx context.Context, token string) bool {
 	if err != nil {
 		return false
 	}
-	_, _, remember := parseValue(v)
+	_, _, remember, _ := parseValue(v)
 	return remember
+}
+
+// Magic reports whether a session token was started by a passwordless
+// magic-link click (issue #458). A missing session, an expired session, or any
+// legacy v1/v2/v3 value reports false — the safe default, since an unknown
+// login method must never be exempted from the sensitive-action step-up gate.
+func (s *Sessions) Magic(ctx context.Context, token string) bool {
+	if token == "" {
+		return false
+	}
+	v, err := s.rdb.Get(ctx, sessionKey(token)).Result()
+	if err != nil {
+		return false
+	}
+	_, _, _, magic := parseValue(v)
+	return magic
 }
 
 // ValidAfter reports whether the session's issuance time is not before cut —
@@ -207,6 +255,60 @@ func (p *PendingTOTP) Get(ctx context.Context, userID string) (string, error) {
 // Delete removes the pending secret (used after successful enable).
 func (p *PendingTOTP) Delete(ctx context.Context, userID string) error {
 	return p.rdb.Del(ctx, pendingTOTPKey(userID)).Err()
+}
+
+// ─── step-up grants (issue #458) ────────────────────────────────────────────
+//
+// A step-up grant records that the holder of a given session has just proved a
+// second factor (a fresh TOTP code) for a sensitive action. It is keyed by the
+// session token's hash and lives for a few minutes, so a multi-step flow (e.g.
+// WebAuthn passkey registration: /start then /finish) only asks for the code
+// once. Grants are per-session and short-lived; they are never a session and
+// never survive a logout (the session key is destroyed, but the grant expires
+// on its own TTL anyway).
+
+const (
+	StepUpKeyPrefix = "jf:stepup:"
+	StepUpTTL       = 5 * time.Minute
+)
+
+func stepUpKey(sessionToken string) string { return StepUpKeyPrefix + hashOf(sessionToken) }
+
+// StepUp exposes the short-lived step-up grant store sharing the session client.
+func (s *Sessions) StepUp() *StepUp { return &StepUp{rdb: s.rdb} }
+
+type StepUp struct {
+	rdb *goredis.Client
+}
+
+// Grant records a fresh step-up for the session token (TTL StepUpTTL).
+func (s *StepUp) Grant(ctx context.Context, sessionToken, userID string) error {
+	if sessionToken == "" {
+		return errors.New("stepup: empty session token")
+	}
+	return s.rdb.Set(ctx, stepUpKey(sessionToken), userID, StepUpTTL).Err()
+}
+
+// Granted reports whether the session token carries a live step-up grant for
+// userID.
+func (s *StepUp) Granted(ctx context.Context, sessionToken, userID string) bool {
+	if sessionToken == "" || userID == "" {
+		return false
+	}
+	v, err := s.rdb.Get(ctx, stepUpKey(sessionToken)).Result()
+	if err != nil {
+		return false
+	}
+	return v == userID
+}
+
+// Consume removes a step-up grant (single-use, after the sensitive action
+// completes).
+func (s *StepUp) Consume(ctx context.Context, sessionToken string) error {
+	if sessionToken == "" {
+		return nil
+	}
+	return s.rdb.Del(ctx, stepUpKey(sessionToken)).Err()
 }
 
 // ─── shared helpers ──────────────────────────────────────────────────────────

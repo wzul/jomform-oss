@@ -186,6 +186,11 @@ type meResponse struct {
 	TOTPEnabled bool    `json:"totp_enabled"`
 	CreatedAt   string  `json:"created_at"`
 	NextStep    *string `json:"next_step,omitempty"` // set when 2FA code is required
+	// Issue #458: true when the current session was started by a passwordless
+	// magic-link click. The frontend uses it to pre-empt the TOTP step-up
+	// prompt on sensitive actions (change password / disable 2FA / add passkey)
+	// instead of discovering it from a 401.
+	MagicSession bool `json:"magic_session,omitempty"`
 	// Issue #164: the user's default workspace id ("" when none). Lets the
 	// frontend skip the workspace-picker after login when a default is set.
 	DefaultWorkspaceID string `json:"default_workspace_id,omitempty"`
@@ -445,13 +450,14 @@ func (a *AuthHandlers) handleLogin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := a.startSession(w, r, user.ID, user.Email, user.TOTPEnabled, req.Remember); err != nil {
+	if err := a.startSession(w, r, user.ID, req.Remember, false); err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	// Issue #92: audit login (with the user's first owned account).
+	// Issue #458: the magic flag is recorded so the login method is observable.
 	a.recordAuthEvent(r, a.firstAccountID(r, user.ID), user.ID, "auth.login", map[string]any{
-		"method": "password", "totp": user.TOTPEnabled,
+		"method": "password", "totp": user.TOTPEnabled, "magic": false,
 	})
 	// Issue #164: include the user's default workspace so the frontend can skip
 	// the workspace-picker when a default is set.
@@ -532,6 +538,7 @@ func (a *AuthHandlers) handleMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, meResponse{
 		ID: user.ID, Email: user.Email, Name: user.Name, AvatarURL: user.AvatarURL, TOTPEnabled: user.TOTPEnabled, CreatedAt: user.CreatedAt.UTC().Format(time.RFC3339),
 		Phone: user.Phone, Timezone: user.Timezone, DefaultWorkspaceID: defWorkspace,
+		MagicSession: a.Sessions != nil && a.Sessions.Magic(r.Context(), sessionTokenFrom(r)),
 	})
 }
 
@@ -597,10 +604,15 @@ func (a *AuthHandlers) handle2FAEnable(w http.ResponseWriter, r *http.Request) {
 	// the rotation silently downgrades persistence (sidebar + stale 2FA status
 	// broke because the frontend raced this new cookie).
 	remember := false
+	// Issue #458: the rotation must also inherit the magic flag — dropping it
+	// would silently erase the login-method marker (and its step-up gate) for
+	// the rest of the session.
+	magic := false
 	if c, err := r.Cookie(sessionCookie); err == nil {
 		remember = a.Sessions.Remembered(r.Context(), c.Value)
+		magic = a.Sessions.Magic(r.Context(), c.Value)
 	}
-	if err := a.startSession(w, r, user.ID, user.Email, true, remember); err != nil { // fresh session post-2FA, inherit remember
+	if err := a.startSession(w, r, user.ID, remember, magic); err != nil { // fresh session post-2FA, inherit remember + magic
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
@@ -631,9 +643,19 @@ func (a *AuthHandlers) handle2FADisable(w http.ResponseWriter, r *http.Request) 
 	}
 	var req struct {
 		Password string `json:"password"`
+		// Issue #458: a magic session owned by a 2FA user must also prove a
+		// fresh TOTP code before 2FA can be stripped. Non-2FA / non-magic
+		// sessions ignore this field.
+		TOTPCode string `json:"totp_code"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	// Issue #458 (option C): a magic-link session for a 2FA-enabled user must
+	// step up with a fresh TOTP code before 2FA is disabled — otherwise a
+	// stolen inbox could silently remove the second factor.
+	if !a.gateMagicStepUp(w, r, user, req.TOTPCode) {
 		return
 	}
 	ok, err := auth.VerifyPassword(req.Password, user.PasswordHash)
@@ -644,6 +666,11 @@ func (a *AuthHandlers) handle2FADisable(w http.ResponseWriter, r *http.Request) 
 	if err := a.Users.DisableTOTP(r.Context(), user.ID); err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
+	}
+	// Issue #458: the step-up grant is single-use — consume it now that the
+	// sensitive action has completed.
+	if a.Sessions != nil {
+		_ = a.Sessions.StepUp().Consume(r.Context(), sessionTokenFrom(r))
 	}
 	// Issue #63: disabling 2FA invalidates every trusted device — there must
 	// be no trust cookie lingering that would waive a (now-removed) 2FA step.
@@ -669,10 +696,14 @@ const (
 
 // startSession creates a session for userID, honoring the remember flag for
 // cookie MaxAge and server TTL, and persists remember so a later session
-// rotation (2FA enable, issue #69) can inherit the persistence choice. The
-// email/totpEnabled args are accepted for historical compatibility with call
-// sites that threaded them through; they no longer influence the session.
-func (a *AuthHandlers) startSession(w http.ResponseWriter, r *http.Request, userID, _ string, _ bool, remember bool) error {
+// rotation (2FA enable, issue #69) can inherit the persistence choice.
+//
+// magic marks a session started by a passwordless magic-link click (issue
+// #458). It is persisted in the session value (v4) so the login method is
+// observable in the audit log and so sensitive actions can require a fresh
+// TOTP step-up. Every other login path (password, social, passkey) passes
+// magic=false.
+func (a *AuthHandlers) startSession(w http.ResponseWriter, r *http.Request, userID string, remember, magic bool) error {
 	ttl := rememberLongTTL
 	maxAge := int(rememberLongTTL.Seconds())
 	if !remember {
@@ -685,7 +716,7 @@ func (a *AuthHandlers) startSession(w http.ResponseWriter, r *http.Request, user
 		// persistence, so the unticked login must not emit Max-Age at all.
 		maxAge = 0
 	}
-	token, err := a.Sessions.CreateRememberedWithTTL(r.Context(), userID, ttl, remember)
+	token, err := a.Sessions.CreateSession(r.Context(), userID, ttl, remember, magic)
 	if err != nil {
 		return err
 	}

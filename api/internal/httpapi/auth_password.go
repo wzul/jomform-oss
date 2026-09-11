@@ -16,6 +16,9 @@ func (a *AuthHandlers) handleChangePassword(w http.ResponseWriter, r *http.Reque
 	var req struct {
 		OldPassword string `json:"old_password"`
 		NewPassword string `json:"new_password"`
+		// Issue #458: a magic session owned by a 2FA user must also prove a
+		// fresh TOTP code. Non-2FA / non-magic sessions ignore this field.
+		TOTPCode string `json:"totp_code"`
 	}
 	if err := decodeJSON(r, &req); err != nil || req.OldPassword == "" || req.NewPassword == "" {
 		writeErr(w, http.StatusBadRequest, "old_password dan new_password diperlukan")
@@ -23,6 +26,11 @@ func (a *AuthHandlers) handleChangePassword(w http.ResponseWriter, r *http.Reque
 	}
 	if len(req.NewPassword) < 10 {
 		writeErr(w, http.StatusBadRequest, "kata laluan baharu mesti sekurang-kurangnya 10 aksara")
+		return
+	}
+	// Issue #458 (option C): a magic-link session for a 2FA-enabled user must
+	// step up with a fresh TOTP code before rotating the password.
+	if !a.gateMagicStepUp(w, r, user, req.TOTPCode) {
 		return
 	}
 	ok, err := auth.VerifyPassword(req.OldPassword, user.PasswordHash)

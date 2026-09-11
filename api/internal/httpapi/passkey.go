@@ -31,6 +31,9 @@ func (h *RESTHandlers) webAuthnInstance(r *http.Request) *webauthn.WebAuthn {
 }
 
 // passkeyRegisterStart: POST /v1/auth/passkeys/register/start (authed)
+// Issue #458: a magic-link session owned by a 2FA user must supply a fresh TOTP
+// code (totp_code in the JSON body) before a passkey can be planted. Non-2FA /
+// non-magic sessions are unchanged.
 func (h *RESTHandlers) passkeyRegisterStart(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	wa := h.webAuthnInstance(r)
 	if wa == nil {
@@ -45,6 +48,14 @@ func (h *RESTHandlers) passkeyRegisterStart(w http.ResponseWriter, r *http.Reque
 	prof, err := h.profileUser(r)
 	if err != nil || prof == nil {
 		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		return
+	}
+	var in struct {
+		TOTPCode string `json:"totp_code"`
+	}
+	// The body is optional for the common case, so a decode error is not fatal.
+	_ = decodeJSON(r, &in)
+	if !h.gateMagicStepUpREST(w, r, actx, prof, in.TOTPCode) {
 		return
 	}
 	wu, err := h.Passkeys.UserFor(r.Context(), uid, prof.Email)
@@ -66,6 +77,10 @@ func (h *RESTHandlers) passkeyRegisterStart(w http.ResponseWriter, r *http.Reque
 }
 
 // passkeyRegisterFinish: POST /v1/auth/passkeys/register/finish (authed)
+// Issue #458: the step-up gate also applies here (defense in depth). In the
+// normal flow the TOTP code was already supplied at /start, which minted a
+// short-lived grant that this call inherits; a direct /finish without a grant
+// must carry its own totp_code.
 func (h *RESTHandlers) passkeyRegisterFinish(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	wa := h.webAuthnInstance(r)
 	uid := h.sessionOwnerID(r)
@@ -85,9 +100,14 @@ func (h *RESTHandlers) passkeyRegisterFinish(w http.ResponseWriter, r *http.Requ
 	}
 	var in struct {
 		Key string `json:"key"`
+		// Issue #458: optional step-up code for a magic + 2FA session.
+		TOTPCode string `json:"totp_code"`
 	}
 	if err := json.Unmarshal(raw, &in); err != nil || in.Key == "" {
 		writeErr(w, http.StatusBadRequest, "key wajib")
+		return
+	}
+	if !h.gateMagicStepUpREST(w, r, actx, prof, in.TOTPCode) {
 		return
 	}
 	sessRaw, err := h.Passkeys.TakeChallenge(r.Context(), in.Key, "register")

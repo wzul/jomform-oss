@@ -105,6 +105,7 @@ func authTestFixture(t *testing.T) (*AuthHandlers, *dbstore.UserStore, *recorder
 	h := &AuthHandlers{
 		Sessions:     sess,
 		Users:        users,
+		Accounts:     dbstore.NewAccountStore(bundleTestPool(t)),
 		BaseURL:      "http://localhost:8080",
 		LoginLimiter: auth.NewLoginLimiter(sess.Client()),
 		VerifyKey:    testVerifyKey,

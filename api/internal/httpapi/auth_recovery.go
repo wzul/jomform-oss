@@ -444,7 +444,10 @@ func (a *AuthHandlers) handleMagicLinkVerify(w http.ResponseWriter, r *http.Requ
 
 	// Start a short, default (non-remembered) session. No trust-device cookie
 	// is ever issued via magic link. Existing sessions are left intact.
-	if err := a.startSession(w, r, user.ID, user.Email, user.TOTPEnabled, false); err != nil {
+	// Issue #458: the session is marked magic=true — the login method is
+	// observable and sensitive actions require a fresh TOTP step-up when the
+	// user also has 2FA enabled.
+	if err := a.startSession(w, r, user.ID, false, true); err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
@@ -457,6 +460,11 @@ func (a *AuthHandlers) handleMagicLinkVerify(w http.ResponseWriter, r *http.Requ
 		}
 	}
 	slog.Info("magiclink_login", "user", user.ID, "kind", kind)
+	// Issue #92/#458: audit the login with the magic flag set, so the
+	// passwordless path is distinguishable from a password login.
+	a.recordAuthEvent(r, a.firstAccountID(r, user.ID), user.ID, "auth.login", map[string]any{
+		"method": "magic_link", "totp": user.TOTPEnabled, "magic": true,
+	})
 	// Issue #164: include the user's default workspace so the frontend can skip
 	// the workspace-picker when a default is set.
 	defWorkspace := ""
@@ -468,6 +476,9 @@ func (a *AuthHandlers) handleMagicLinkVerify(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, meResponse{
 		ID: user.ID, Email: user.Email, TOTPEnabled: user.TOTPEnabled, CreatedAt: user.CreatedAt.UTC().Format(time.RFC3339),
 		Phone: user.Phone, DefaultWorkspaceID: defWorkspace,
+		// Issue #458: this response is the magic-link verify path, so the
+		// session is always magic here.
+		MagicSession: true,
 	})
 }
 

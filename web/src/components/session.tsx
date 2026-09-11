@@ -36,6 +36,10 @@ export type SessionUser = {
   phone?: string; // issue #181 optional phone number (empty = not set)
   timezone?: string; // issue #191 preferred IANA timezone (empty = Auto → browser default)
   totp_enabled?: boolean;
+  // Issue #458: true when this session came from a passwordless magic-link
+  // click. With 2FA enabled, sensitive actions (change password / disable 2FA /
+  // add passkey) require a fresh TOTP code.
+  magic_session?: boolean;
   default_space_id?: string; // issue #164 (empty = no default → space-picker on login)
   is_super_admin?: boolean; // issue #387 (site super-admin, #385)
 };

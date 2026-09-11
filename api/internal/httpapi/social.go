@@ -205,7 +205,7 @@ func (a *AuthHandlers) socialCallback(w http.ResponseWriter, r *http.Request) {
 	userID, err := a.Users.FindIdentity(r.Context(), provider, up.UID)
 	if err == nil && userID != "" {
 		a.ensureAccountFor(r, userID, up.Email)
-		_ = a.startSession(w, r, userID, "", false, false)
+		_ = a.startSession(w, r, userID, false, false)
 		// Successful social login resets the failure counters (issue #345) so
 		// a user locked out on the password path isn't re-locked by stale
 		// history after signing in via OAuth. Fail-open (log only, never block).
@@ -272,7 +272,7 @@ func (a *AuthHandlers) socialCallback(w http.ResponseWriter, r *http.Request) {
 	// (/workspaces, /rest/dashboard-bundle) 401s because resolveSessionAccount
 	// finds no account (issue #298). Idempotent for existing users.
 	a.ensureAccountFor(r, newID, up.Email)
-	_ = a.startSession(w, r, newID, "", false, false)
+	_ = a.startSession(w, r, newID, false, false)
 	// Reset failure counters on a successful social signup-login too (issue
 	// #345). Fail-open (log only, never block).
 	if a.LoginLimiter != nil {
@@ -408,7 +408,7 @@ func (a *AuthHandlers) socialConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.ensureAccountFor(r, existing.ID, email)
-	if err := a.startSession(w, r, existing.ID, "", false, false); err != nil {
+	if err := a.startSession(w, r, existing.ID, false, false); err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}

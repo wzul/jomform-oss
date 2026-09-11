@@ -29,8 +29,9 @@ Automated gates (govulncheck, npm audit, gitleaks) run in CI — see
 | 2.2 | **Email OTP (issue #72):** brute-force the 6-digit email code. | Per-IP limit (3/hour) + code single-use + short expiry. Verify no timing/entropy weakness. | | |
 | 2.3 | **Trust cookie (issue #63):** steal/replay the `jf_trust` cookie. | Cookie is single-purpose (waives TOTP only), bound to user ID, 30-day expiry, `HttpOnly`/`Secure`/`SameSite`. Password is still required — trust cookie alone must NOT authenticate. | | |
 | 2.4 | TOTP code reuse / replay. | TOTP codes single-use; clock-skew window bounded. | | |
-| 2.5 | Disable-2FA flow without re-auth. | Disabling 2FA must require the current password / a fresh 2FA challenge. | | |
+| 2.5 | Disable-2FA flow without re-auth. | Disabling 2FA must require the current password / a fresh 2FA challenge. On a magic-link session for a 2FA user, a fresh TOTP code is also required (issue #458). | | |
 | 2.6 | Abandoned TOTP setup (secret set, `totp_enabled=false`). | Must NOT be held at a 2FA challenge (auth.go guards on `TOTPEnabled`). | | |
+| 2.7 | **Magic-link session step-up (issue #458):** sign in via magic link as a 2FA user, then call `change-password` / `2fa/disable` / `passkeys/register/start` without a `totp_code`. | Each returns 401 with `next_step=totp_stepup_required`; with a fresh TOTP code the action proceeds. Non-2FA users and normal (non-magic) sessions are unchanged. | | |
 
 ## 3. Payment
 

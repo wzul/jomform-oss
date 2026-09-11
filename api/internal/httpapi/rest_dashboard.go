@@ -106,10 +106,19 @@ func (h *RESTHandlers) dashboardBundle(w http.ResponseWriter, r *http.Request, a
 			if ds, derr := h.Users.DefaultWorkspace(ctx, userID); derr == nil {
 				defWorkspace = ds
 			}
+			// Issue #458: whether this session came from a magic-link click.
+			// The frontend shows a TOTP step-up prompt on sensitive actions
+			// (change password / disable 2FA / add passkey) for a 2FA user on a
+			// magic session.
+			magicSession := false
+			if h.Sessions != nil {
+				magicSession = h.Sessions.Magic(ctx, sessionTokenFrom(r))
+			}
 			bundle.Me = &map[string]any{
 				"id": u.ID, "email": u.Email, "name": u.Name,
 				"avatar_url": u.AvatarURL, "phone": u.Phone, "timezone": u.Timezone, "totp_enabled": u.TOTPEnabled, "created_at": u.CreatedAt,
 				"default_workspace_id": defWorkspace,
+				"magic_session":        magicSession,
 				// Issue #387: whether the session user is a site super-admin
 				// (#385). The frontend uses this to show the /admin nav link.
 				"is_super_admin": h.SuperAdmin != nil && h.SuperAdmin(strings.TrimSpace(u.Email)),

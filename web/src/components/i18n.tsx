@@ -727,6 +727,13 @@ const DICT = {
   "prof.resetup2fa": { en: "Re-setup 2FA", ms: "Sediakan semula 2FA", zh: "重新设置 2FA", ta: "2FA மீண்டும் அமை", ar: "إعادة إعداد التحقق الثنائي" },
   "prof.disable2fa": { en: "Disable 2FA", ms: "Nyahaktif 2FA", zh: "停用 2FA", ta: "2FA முடக்கு", ar: "تعطيل التحقق الثنائي" },
   "prof.enter2faCode": { en: "Enter a current 2FA code to disable:", ms: "Masukkan kod 2FA semasa untuk nyahaktif:", zh: "输入当前的 2FA 验证码以停用：", ta: "2FA ஐ முடக்க தற்போதைய குறியீட்டை உள்ளிடவும்:", ar: "أدخل رمز التحقق الثنائي الحالي للتعطيل:" },
+  // Issue #458: a magic-link session for a 2FA user must confirm a fresh TOTP
+  // code before a sensitive action (change password / disable 2FA / add
+  // passkey). Only those users see this prompt.
+  "prof.stepUpTitle": { en: "Confirm your 2FA code", ms: "Sahkan kod 2FA anda", zh: "确认您的 2FA 验证码", ta: "உங்கள் 2FA குறியீட்டை உறுதிப்படுத்தவும்", ar: "أكّد رمز التحقق الثنائي" },
+  "prof.stepUpDesc": { en: "You signed in with an email link. Enter a current 2FA code to continue.", ms: "Anda log masuk melalui pautan emel. Masukkan kod 2FA semasa untuk teruskan.", zh: "您通过电子邮件链接登录。请输入当前的 2FA 验证码以继续。", ta: "நீங்கள் மின்னஞ்சல் இணைப்பு மூலம் உள்நுழைந்தீர்கள். தொடர தற்போதைய 2FA குறியீட்டை உள்ளிடவும்.", ar: "لقد سجّلت الدخول عبر رابط البريد الإلكتروني. أدخل رمز التحقق الثنائي الحالي للمتابعة." },
+  "prof.stepUpConfirm": { en: "Confirm", ms: "Sahkan", zh: "确认", ta: "உறுதிப்படுத்து", ar: "تأكيد" },
+  "prof.stepUpInvalid": { en: "Invalid or missing 2FA code.", ms: "Kod 2FA tidak sah atau tiada.", zh: "2FA 验证码无效或缺失。", ta: "2FA குறியீடு தவறானது அல்லது இல்லை.", ar: "رمز التحقق الثنائي غير صالح أو مفقود." },
   "prof.twoFaSetupTitle": { en: "Set up two-factor authentication", ms: "Sediakan pengesahan dua faktor", zh: "设置双因素认证", ta: "இரு-காரணி அங்கீகாரத்தை அமை", ar: "إعداد المصادقة الثنائية" },
   "prof.twoFaScan": { en: "1. Scan the QR code with your authenticator app", ms: "1. Imbas kod QR dengan aplikasi autentikator anda", zh: "1. 使用您的验证器应用扫描二维码", ta: "1. உங்கள் அங்கீகாரப் பயன்பாட்டில் QR குறியீட்டை ஸ்கேன் செய்யவும்", ar: "1. امسح رمز QR بتطبيق المصادقة الخاص بك" },
   "prof.twoFaManual": { en: "2. Or enter this code manually", ms: "2. Atau masukkan kod ini secara manual", zh: "2. 或手动输入此代码", ta: "2. அல்லது இந்தக் குறியீட்டை கைமுறையாக உள்ளிடவும்", ar: "2. أو أدخل هذا الرمز يدويًا" },
