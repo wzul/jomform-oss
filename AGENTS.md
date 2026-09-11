@@ -128,7 +128,17 @@ Follow this checklist so the guard stays green:
    — both must pass.
 4. Run the data-integrity invariants against a real Postgres:
    `JOMFORM_TEST_DATABASE_URL=... go test ./internal/dbstore/ -run 'TestMoneyIsIntegerSen|TestRefCodeUniqueness|TestNoOrphanedSalesOnFormDelete|TestSlugUniquenessPerSpace|TestSuppressionListConsistency'`.
-5. Run the full suite: `go build ./... && go test ./...` in `api/`.
+5. Run the fresh-DB migration guard — it creates a throwaway database, applies
+   **every** `*.up.sql` from zero via the same `db.Migrate` runner the API uses
+   at startup, and fails on the first error. This is what catches the 000047
+   class of bug (a migration that only fails on a database where the object does
+   not already exist — e.g. a `TEXT` column with a FK to a `uuid` PK,
+   `SQLSTATE 42804`):
+   `JOMFORM_TEST_DATABASE_URL=... go test ./internal/db/ -run 'TestMigrationsApplyFromZero|TestEveryMigrationHasDownFile'`.
+   `TestEveryMigrationHasDownFile` also requires every new migration to ship a
+   matching `.down.sql`; the two pre-existing gaps (`000005_form_overrides`,
+   `000012_spaces`) are pinned in the test's allowlist.
+6. Run the full suite: `go build ./... && go test ./...` in `api/`.
 
 CI runs the migration + data-integrity tests against a fresh Postgres service,
 so any column/scan mismatch or invariant violation fails the build.
