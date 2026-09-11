@@ -43,11 +43,11 @@ func menu485Fixture(t *testing.T) workspaceMenuData {
 		Slug: "hawa", Lp: lp, Ls: ls, Table: "8",
 		ContactAddress: "Nadayu 801", ContactPhone: "+60123456789",
 		BestSellers: []menuProductView{
-			h.menuProductView(p1, true, "order", "8", ls.MenuBestBadge),
+			h.menuProductView(p1, true, ls.MenuBestBadge, ls.MenuAdd),
 		},
 		Categories: []menuCategoryView{{Name: "Nasi Lemak", Products: []menuProductView{
-			h.menuProductView(p2, false, "order", "8", ls.MenuBestBadge),
-			h.menuProductView(p3, false, "order", "8", ls.MenuBestBadge),
+			h.menuProductView(p2, false, ls.MenuBestBadge, ls.MenuAdd),
+			h.menuProductView(p3, false, ls.MenuBestBadge, ls.MenuAdd),
 		}}},
 		HasForms: true,
 	}
@@ -89,11 +89,16 @@ func TestIssue485NoTableOmitsHeader(t *testing.T) {
 	}
 }
 
-// The table number survives on the order links (filter/search round-trip).
-func TestIssue485OrderLinksKeepTable(t *testing.T) {
+// The table number survives the filter/search round-trip (the no-JS GET submit
+// re-posts it as a hidden input). Issue #492 removed the per-item order links
+// entirely — no item routes the buyer into a form any more.
+func TestIssue485FilterKeepsTableNoItemLinksToForm(t *testing.T) {
 	body := renderMenu485(t, menu485Fixture(t))
-	if !strings.Contains(body, `href="/order?table=8"`) {
-		t.Errorf("order link did not preserve the table number\nbody:\n%s", body)
+	if !strings.Contains(body, `<input type="hidden" name="table" value="8">`) {
+		t.Errorf("filter form did not carry the table number\nbody:\n%s", body)
+	}
+	if strings.Contains(body, `href="/order`) {
+		t.Errorf("issue #492: menu items must not link to a form\nbody:\n%s", body)
 	}
 }
 
@@ -133,8 +138,8 @@ func TestIssue485TwoTierLayoutAndCleanNoImageRow(t *testing.T) {
 	if idx < 0 {
 		t.Fatal("no-image item missing from the menu")
 	}
-	rowStart := strings.LastIndex(body[:idx], `<a class="row"`)
-	rowEnd := strings.Index(body[idx:], "</a>")
+	rowStart := strings.LastIndex(body[:idx], `<button class="row"`)
+	rowEnd := strings.Index(body[idx:], "</button>")
 	if rowStart < 0 || rowEnd < 0 {
 		t.Fatal("could not isolate the no-image row")
 	}

@@ -31,7 +31,7 @@ func TestIssue461MenuPageRendersLiveProductData(t *testing.T) {
 	data := workspaceMenuData{
 		Slug: "warung", Lp: lp, Ls: formLangs["en"], Table: "8",
 		Categories: []menuCategoryView{{Name: "Makanan", Products: []menuProductView{
-			h.menuProductView(p, true, "order", "8", formLangs["en"].MenuBestBadge),
+			h.menuProductView(p, true, formLangs["en"].MenuBestBadge, formLangs["en"].MenuAdd),
 		}}},
 		HasForms: true,
 	}
@@ -44,7 +44,8 @@ func TestIssue461MenuPageRendersLiveProductData(t *testing.T) {
 		"https://cdn.example/nasi-live.jpg", // live image
 		"Nasi Lemak Ayam Basmathi",          // live name
 		"RM 21.00",                          // live price
-		`href="/order?table=8"`,             // order target keeps the table number (#485)
+		`data-id="p1"`,                      // add-to-cart target carries the product id (#492)
+		`data-price="2100"`,                 // the client price is integer sen (#492)
 		"Table 8",                           // table-number header (#485)
 		"Best-seller",
 	} {

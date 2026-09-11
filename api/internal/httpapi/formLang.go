@@ -55,6 +55,23 @@ type langStrings struct {
 	MenuFilterLabel       string // category <select> aria label
 	MenuEmpty             string // "no menu yet" hint
 	MenuPoweredBy         string // footer
+	// Issue #492: restaurant-menu cart + checkout strings.
+	MenuAdd         string // add-to-cart affordance / aria label
+	MenuBasket      string // basket sheet title
+	MenuItems       string // "item" unit label on the sticky bar (e.g. "3 item")
+	MenuViewBasket  string // sticky-bar call to action ("View basket")
+	MenuSubtotal    string // running subtotal label
+	MenuCheckout    string // checkout / pay button
+	MenuClear       string // clear-cart action
+	MenuBasketEmpty string // empty-basket message
+	MenuName        string // buyer name field label
+	MenuRemove      string // remove line item
+	MenuClose       string // close the basket sheet
+	MenuInc         string // quantity increment aria label
+	MenuDec         string // quantity decrement aria label
+	MenuSubmitting  string // button label while the order is being submitted
+	MenuSubmitError string // generic submit-failure message
+	MenuRequired    string // name/email mandatory validation message
 }
 
 // formLangs maps every supported language code to its buyer-facing strings.
@@ -77,6 +94,15 @@ var formLangs = map[string]langStrings{
 		MenuBestSeller: "Best Seller", MenuBestBadge: "Best-seller", MenuAll: "All",
 		MenuSearchPlaceholder: "Search menu…", MenuFilterLabel: "Filter by category",
 		MenuEmpty: "No menu yet.", MenuPoweredBy: "Powered by JomForm",
+		MenuAdd: "Add", MenuBasket: "Your basket", MenuItems: "item",
+		MenuViewBasket: "View basket", MenuSubtotal: "Subtotal",
+		MenuCheckout: "Checkout", MenuClear: "Clear basket",
+		MenuBasketEmpty: "Your basket is empty.", MenuName: "Name",
+		MenuRemove: "Remove", MenuClose: "Close",
+		MenuInc: "Increase quantity", MenuDec: "Decrease quantity",
+		MenuSubmitting:  "Placing order…",
+		MenuSubmitError: "Could not place the order. Please try again.",
+		MenuRequired:    "Please enter your name and email.",
 	},
 	"ms": {
 		Lang: "ms", EmailLabel: "Emel", CouponLabel: "Kod kupon",
@@ -94,6 +120,15 @@ var formLangs = map[string]langStrings{
 		MenuBestSeller: "Paling Laris", MenuBestBadge: "Paling laris", MenuAll: "Semua",
 		MenuSearchPlaceholder: "Cari menu…", MenuFilterLabel: "Tapis mengikut kategori",
 		MenuEmpty: "Belum ada menu.", MenuPoweredBy: "Dikuasakan oleh JomForm",
+		MenuAdd: "Tambah", MenuBasket: "Bakul anda", MenuItems: "item",
+		MenuViewBasket: "Lihat bakul", MenuSubtotal: "Jumlah kecil",
+		MenuCheckout: "Bayar", MenuClear: "Kosongkan bakul",
+		MenuBasketEmpty: "Bakul anda kosong.", MenuName: "Nama",
+		MenuRemove: "Buang", MenuClose: "Tutup",
+		MenuInc: "Tambah kuantiti", MenuDec: "Kurang kuantiti",
+		MenuSubmitting:  "Menghantar pesanan…",
+		MenuSubmitError: "Pesanan tidak berjaya dihantar. Sila cuba lagi.",
+		MenuRequired:    "Sila masukkan nama dan emel anda.",
 	},
 	"zh": {
 		Lang: "zh", EmailLabel: "电子邮件", CouponLabel: "优惠券",
@@ -111,6 +146,15 @@ var formLangs = map[string]langStrings{
 		MenuBestSeller: "最畅销", MenuBestBadge: "畅销", MenuAll: "全部",
 		MenuSearchPlaceholder: "搜索菜单…", MenuFilterLabel: "按分类筛选",
 		MenuEmpty: "暂无菜单。", MenuPoweredBy: "由 JomForm 提供支持",
+		MenuAdd: "加入", MenuBasket: "您的购物篮", MenuItems: "件",
+		MenuViewBasket: "查看购物篮", MenuSubtotal: "小计",
+		MenuCheckout: "结账", MenuClear: "清空购物篮",
+		MenuBasketEmpty: "您的购物篮是空的。", MenuName: "姓名",
+		MenuRemove: "移除", MenuClose: "关闭",
+		MenuInc: "增加数量", MenuDec: "减少数量",
+		MenuSubmitting:  "正在提交订单…",
+		MenuSubmitError: "无法提交订单，请重试。",
+		MenuRequired:    "请输入您的姓名和电子邮件。",
 	},
 	"ta": {
 		Lang: "ta", EmailLabel: "மின்னஞ்சல்", CouponLabel: "கூப்பன்",
@@ -128,6 +172,15 @@ var formLangs = map[string]langStrings{
 		MenuBestSeller: "அதிகம் விற்பனையாகும்", MenuBestBadge: "சிறந்த விற்பனை", MenuAll: "அனைத்தும்",
 		MenuSearchPlaceholder: "மெனுவைத் தேடு…", MenuFilterLabel: "வகைப்படி வடிகட்டு",
 		MenuEmpty: "இன்னும் மெனு இல்லை.", MenuPoweredBy: "JomForm வழங்குகிறது",
+		MenuAdd: "சேர்", MenuBasket: "உங்கள் கூடை", MenuItems: "பொருள்",
+		MenuViewBasket: "கூடையைப் பார்", MenuSubtotal: "கூட்டுத்தொகை",
+		MenuCheckout: "பணம் செலுத்து", MenuClear: "கூடையை காலி செய்",
+		MenuBasketEmpty: "உங்கள் கூடை காலியாக உள்ளது.", MenuName: "பெயர்",
+		MenuRemove: "நீக்கு", MenuClose: "மூடு",
+		MenuInc: "அளவை அதிகரி", MenuDec: "அளவை குறை",
+		MenuSubmitting:  "ஆர்டர் அனுப்பப்படுகிறது…",
+		MenuSubmitError: "ஆர்டரை அனுப்ப முடியவில்லை. மீண்டும் முயற்சிக்கவும்.",
+		MenuRequired:    "உங்கள் பெயர் மற்றும் மின்னஞ்சலை உள்ளிடவும்.",
 	},
 	"ar": {
 		Lang: "ar", EmailLabel: "البريد الإلكتروني", CouponLabel: "قسيمة",
@@ -145,6 +198,15 @@ var formLangs = map[string]langStrings{
 		MenuBestSeller: "الأكثر مبيعاً", MenuBestBadge: "الأكثر مبيعاً", MenuAll: "الكل",
 		MenuSearchPlaceholder: "ابحث في القائمة…", MenuFilterLabel: "تصفية حسب الفئة",
 		MenuEmpty: "لا توجد قائمة بعد.", MenuPoweredBy: "مدعوم بواسطة JomForm",
+		MenuAdd: "إضافة", MenuBasket: "سلتك", MenuItems: "عنصر",
+		MenuViewBasket: "عرض السلة", MenuSubtotal: "المجموع الفرعي",
+		MenuCheckout: "الدفع", MenuClear: "إفراغ السلة",
+		MenuBasketEmpty: "سلتك فارغة.", MenuName: "الاسم",
+		MenuRemove: "إزالة", MenuClose: "إغلاق",
+		MenuInc: "زيادة الكمية", MenuDec: "تقليل الكمية",
+		MenuSubmitting:  "جارٍ إرسال الطلب…",
+		MenuSubmitError: "تعذّر إرسال الطلب. يرجى المحاولة مرة أخرى.",
+		MenuRequired:    "يرجى إدخال اسمك وبريدك الإلكتروني.",
 	},
 }
 
