@@ -10,6 +10,7 @@ import (
 
 	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/oauthmeta"
 )
 
 // HTTPHandler returns an http.Handler serving MCP over Streamable HTTP at
@@ -22,6 +23,18 @@ func (s *Server) HTTPHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		accountID, userID, scopes, apikey, agent, ok := s.authenticate(r)
 		if !ok {
+			// Issue #509: an unauthenticated /mcp request MUST carry an RFC 6750
+			// Bearer challenge pointing at the RFC 9728 protected-resource
+			// metadata, otherwise a native MCP client has to guess the metadata
+			// URL (the documented flow is 401 → read the challenge → fetch the
+			// resource metadata → fetch AS metadata → OAuth → retry).
+			//
+			// error="invalid_token" is emitted only when the request actually
+			// carried a Bearer credential that did not resolve (RFC 6750 §3.1);
+			// a request with no Authorization header gets the bare challenge
+			// telling the client where to authenticate.
+			w.Header().Set("WWW-Authenticate", oauthmeta.Challenge(
+				oauthmeta.HostOrDefault(r), strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ")))
 			http.Error(w, `{"error":"token tidak sah"}`, http.StatusUnauthorized)
 			return
 		}

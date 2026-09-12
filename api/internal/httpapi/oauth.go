@@ -36,6 +36,7 @@ import (
 	"github.com/wzul/jomform/api/internal/config"
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/httpapi/middleware"
+	"github.com/wzul/jomform/api/internal/oauthmeta"
 )
 
 // oauthStore is the storage dependency the OAuth endpoints need. dbstore.OAuthStore
@@ -190,6 +191,26 @@ func validHTTPSRedirect(uri string) bool {
 	return redirectURISafe(u)
 }
 
+// resourceAllowed validates the RFC 8707 `resource` parameter against the MCP
+// endpoint this deployment protects (issue #509).
+//
+// An empty value is allowed: the parameter is not mandatory in RFC 8707 and
+// older clients omit it, and this server has exactly one resource, so an
+// omitted value is unambiguous. A present value must designate the /mcp
+// endpoint — the canonical resource derived from the configured issuer base or
+// from the request host (the same derivation the RFC 9728 document and the
+// AS metadata's mcp_endpoint use), tolerating only scheme/host case and a
+// trailing slash. This is the only check needed for a single-resource server:
+// with one audience, validating that the request names it is equivalent to
+// audience-restricting the token, and it stops an authorize/token request
+// silently minting a token for a resource we do not serve.
+func resourceAllowed(resource, requestHost string) bool {
+	if strings.TrimSpace(resource) == "" {
+		return true
+	}
+	return oauthmeta.ResourceMatches(resource, requestHost)
+}
+
 // redirectURIAllowed reports whether uri is one of the client's registered
 // redirect URIs.
 //
@@ -258,6 +279,16 @@ func (o *OAuthHandlers) authorize(w http.ResponseWriter, r *http.Request) {
 	codeChallenge := q.Get("code_challenge")
 	challengeMethod := q.Get("code_challenge_method")
 	state := q.Get("state")
+	// Issue #509: RFC 8707 `resource` (RFC 9728-aware clients send it). JomForm
+	// is a single-resource authorization server — the only resource is the /mcp
+	// endpoint — so an omitted value is fine and any value that does not
+	// designate that endpoint is rejected here (a token must never be issued
+	// for a resource we do not serve).
+	if !resourceAllowed(q.Get("resource"), r.Host) {
+		oauthErr(w, http.StatusBadRequest, "invalid_target",
+			"parameter resource tidak menunjuk kepada endpoint MCP ini")
+		return
+	}
 
 	client, err := o.Store.ClientByID(r.Context(), clientID)
 	if err != nil {
@@ -319,7 +350,9 @@ func (o *OAuthHandlers) authorize(w http.ResponseWriter, r *http.Request) {
 	ac := &dbstore.OAuthAuthCode{
 		ClientID: clientID, UserID: user.ID, AccountID: accountID,
 		RedirectURI: redirectURI, CodeChallenge: codeChallenge,
-		Scope: []string{"readwrite"}, ExpiresAt: time.Now().UTC().Add(o.CodeTTL),
+		// One scope source (internal/oauthmeta) so the issued scope always
+		// matches the scopes_supported advertised by discovery (issue #509).
+		Scope: oauthmeta.ScopesSupported(), ExpiresAt: time.Now().UTC().Add(o.CodeTTL),
 	}
 	if err := o.Store.StoreAuthCode(r.Context(), hashToken(code), ac); err != nil {
 		oauthErr(w, http.StatusInternalServerError, "server_error", "gagal menyimpan authorization code",
@@ -375,6 +408,15 @@ func (o *OAuthHandlers) currentUser(r *http.Request) *dbstore.User {
 func (o *OAuthHandlers) token(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		oauthErr(w, http.StatusBadRequest, "invalid_request", "bentuk form tidak sah")
+		return
+	}
+	// Issue #509: the RFC 8707 `resource` parameter is validated on the token
+	// request too — the 2025-06-18 MCP spec requires clients to send it on both
+	// the authorize and the token request. Same rule as authorize (see
+	// resourceAllowed): empty = fine, a value must name the /mcp endpoint.
+	if !resourceAllowed(r.Form.Get("resource"), r.Host) {
+		oauthErr(w, http.StatusBadRequest, "invalid_target",
+			"parameter resource tidak menunjuk kepada endpoint MCP ini")
 		return
 	}
 	grantType := r.Form.Get("grant_type")
@@ -483,7 +525,9 @@ func writeTokenResponse(w http.ResponseWriter, access, refresh string, ttl time.
 		"token_type":    "Bearer",
 		"expires_in":    int(ttl.Seconds()),
 		"refresh_token": refresh,
-		"scope":         "readwrite",
+		// Single scope source (issue #509): the token response, the AS metadata
+		// scopes_supported and the RFC 9728 scopes_supported cannot diverge.
+		"scope": strings.Join(oauthmeta.ScopesSupported(), " "),
 	})
 }
 

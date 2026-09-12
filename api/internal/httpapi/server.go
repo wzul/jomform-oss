@@ -14,6 +14,7 @@ import (
 	"github.com/wzul/jomform/api/internal/httpapi/middleware"
 	"github.com/wzul/jomform/api/internal/mcpsrv"
 	"github.com/wzul/jomform/api/internal/metrics"
+	"github.com/wzul/jomform/api/internal/oauthmeta"
 	"github.com/wzul/jomform/api/internal/tlsmgr"
 	"github.com/wzul/jomform/api/internal/version"
 )
@@ -186,6 +187,14 @@ func (s *Server) Handler() http.Handler {
 		// authorization-code/PKCE flow (issue #121).
 		mux.HandleFunc("/.well-known/oauth-authorization-server", wellKnownOAuth)
 		mux.HandleFunc("/.well-known/oauth-authorization-server/mcp", wellKnownOAuth)
+		// Issue #509: OAuth 2.0 Protected Resource Metadata (RFC 9728) is
+		// MANDATORY for MCP servers, and it is how MCP clients discover the
+		// authorization server. Served at the RFC's default location plus the
+		// /mcp path-inserted form, because the protected resource is the /mcp
+		// endpoint. Clients reach it from the /mcp 401 WWW-Authenticate
+		// challenge (resource_metadata) as well.
+		mux.HandleFunc(oauthmeta.ProtectedResourcePath, wellKnownProtectedResource)
+		mux.HandleFunc(oauthmeta.ProtectedResourcePathSuffixed, wellKnownProtectedResource)
 		if s.oauth != nil {
 			// Defaults when a bare config (tests) left rate/burst at 0.
 			rate, burst := s.cfg.OAuthDCRRate, s.cfg.OAuthDCRBurst

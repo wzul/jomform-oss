@@ -311,6 +311,45 @@ export default function McpReferencePage() {
         {TOOL_GROUPS.reduce((n, g) => n + g.tools.length, 0)} tools across {TOOL_GROUPS.length} categories.
       </p>
 
+      {/* Issue #509: the OAuth discovery surface. Every MCP client is required
+          to discover the authorization server through the protected-resource
+          metadata, so the documents a client will fetch (and the 401 challenge
+          that points at them) are documented here rather than left implicit. */}
+      <section className="mt-8">
+        <h2 className="text-lg font-semibold text-slate-900">OAuth discovery</h2>
+        <p className="mt-2 text-sm leading-relaxed text-slate-600">
+          The connector authenticates with OAuth 2.1 (authorization code + PKCE, no API keys). A client
+          discovers how to authenticate from the server itself:
+        </p>
+        <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm leading-relaxed text-slate-600">
+          <li>
+            An unauthenticated request to <code className="rounded bg-slate-100 px-1">https://mcp.jomform.com/mcp</code>{" "}
+            is refused with <code className="rounded bg-slate-100 px-1">401</code> and a{" "}
+            <code className="rounded bg-slate-100 px-1">WWW-Authenticate: Bearer resource_metadata=&quot;…&quot;</code>{" "}
+            header naming the protected-resource metadata URL.
+          </li>
+          <li>
+            The client fetches <code className="rounded bg-slate-100 px-1">/.well-known/oauth-protected-resource</code>{" "}
+            (RFC 9728). It names the protected resource (<code className="rounded bg-slate-100 px-1">https://mcp.jomform.com/mcp</code>),
+            the authorization server (<code className="rounded bg-slate-100 px-1">https://mcp.jomform.com</code>), the scope{" "}
+            (<code className="rounded bg-slate-100 px-1">readwrite</code>) and that the bearer token is presented in the{" "}
+            <code className="rounded bg-slate-100 px-1">Authorization</code> header.
+          </li>
+          <li>
+            It then fetches the authorization-server metadata at{" "}
+            <code className="rounded bg-slate-100 px-1">/.well-known/oauth-authorization-server</code> (RFC 8414) for the
+            authorize, token, revoke and registration endpoints.
+          </li>
+          <li>
+            It registers itself dynamically, opens the authorize URL in the browser (you log in and grant access), and
+            exchanges the code for an access token — sending the{" "}
+            <code className="rounded bg-slate-100 px-1">resource</code> parameter on both the authorize and token
+            requests. JomForm validates it: a value that is not this MCP endpoint is rejected and no token is issued.
+          </li>
+          <li>Every later call to /mcp carries the access token as a Bearer credential.</li>
+        </ol>
+      </section>
+
       {TOOL_GROUPS.map((g) => (
         <section key={g.group} className="mt-8">
           <h2 className="text-lg font-semibold text-slate-900">{g.group}</h2>
