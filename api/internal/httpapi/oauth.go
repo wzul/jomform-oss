@@ -227,9 +227,23 @@ func redirectURIAllowed(client *dbstore.OAuthClient, uri string) bool {
 }
 
 // oauthErr writes an OAuth-spec error response and logs it.
+//
+// A 5xx (server_error) is ALWAYS logged, and the caller should pass the
+// underlying failure as an `"err", err` prop so it reaches the server log.
+// Issue #507: the authorize store failure produced a bare 500 with nothing in
+// the app log — the cause was only visible in the Postgres log. The response
+// written to the client is unchanged either way: the underlying error is
+// server-side only (the client keeps the generic error_description).
+//
+// Non-5xx responses keep the previous behaviour exactly (logged only when
+// props are supplied).
 func oauthErr(w http.ResponseWriter, status int, code, desc string, props ...any) {
-	if len(props) > 0 {
-		slog.Warn("oauth_error", append([]any{"code", code, "desc", desc}, props...)...)
+	attrs := append([]any{"code", code, "desc", desc}, props...)
+	switch {
+	case status >= http.StatusInternalServerError:
+		slog.Error("oauth_error", append([]any{"status", status}, attrs...)...)
+	case len(props) > 0:
+		slog.Warn("oauth_error", attrs...)
 	}
 	writeJSON(w, status, map[string]string{"error": code, "error_description": desc})
 }
@@ -308,7 +322,8 @@ func (o *OAuthHandlers) authorize(w http.ResponseWriter, r *http.Request) {
 		Scope: []string{"readwrite"}, ExpiresAt: time.Now().UTC().Add(o.CodeTTL),
 	}
 	if err := o.Store.StoreAuthCode(r.Context(), hashToken(code), ac); err != nil {
-		oauthErr(w, http.StatusInternalServerError, "server_error", "gagal menyimpan authorization code")
+		oauthErr(w, http.StatusInternalServerError, "server_error", "gagal menyimpan authorization code",
+			"err", err, "client_id", clientID, "user_id", user.ID)
 		return
 	}
 	q2 := url.Values{}
@@ -439,7 +454,8 @@ func (o *OAuthHandlers) issueTokenPair(w http.ResponseWriter, r *http.Request, c
 		AccessExpiresAt: now.Add(o.AccessTokenTTL), RefreshExpiresAt: &refreshExp,
 	}
 	if err := o.Store.CreateToken(r.Context(), t); err != nil {
-		oauthErr(w, http.StatusInternalServerError, "server_error", "gagal menyimpan token")
+		oauthErr(w, http.StatusInternalServerError, "server_error", "gagal menyimpan token",
+			"err", err, "client_id", clientID, "user_id", userID)
 		return
 	}
 	writeTokenResponse(w, access, refresh, o.AccessTokenTTL)
@@ -526,7 +542,7 @@ func (o *OAuthHandlers) register(w http.ResponseWriter, r *http.Request) {
 		GrantTypes:              []string{"authorization_code", "refresh_token"},
 	}
 	if err := o.Store.CreateClient(r.Context(), c); err != nil {
-		oauthErr(w, http.StatusInternalServerError, "server_error", "gagal menyimpan client")
+		oauthErr(w, http.StatusInternalServerError, "server_error", "gagal menyimpan client", "err", err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{

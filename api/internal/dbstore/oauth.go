@@ -98,7 +98,7 @@ func (s *OAuthStore) StoreAuthCode(ctx context.Context, codeHash string, c *OAut
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO oauth_auth_codes
 		 (code_hash, client_id, user_id, account_id, redirect_uri, code_challenge, scope, expires_at)
-		 VALUES ($1,$2,$3,NULLIF($4,''),$5,$6,$7,$8)`,
+		 VALUES ($1,$2,$3,NULLIF($4,'')::uuid,$5,$6,$7,$8)`,
 		codeHash, c.ClientID, c.UserID, c.AccountID, c.RedirectURI, c.CodeChallenge, c.Scope, c.ExpiresAt)
 	return err
 }
@@ -131,7 +131,7 @@ func (s *OAuthStore) CreateToken(ctx context.Context, t *OAuthToken) error {
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO oauth_tokens (token_hash, refresh_hash, client_id, user_id, account_id, scope,
 		                       access_expires_at, refresh_expires_at)
-		 VALUES ($1,$2,$3,$4,NULLIF($5,''),$6,$7,$8)`,
+		 VALUES ($1,$2,$3,$4,NULLIF($5,'')::uuid,$6,$7,$8)`,
 		t.TokenHash, t.RefreshHash, t.ClientID, t.UserID, t.AccountID, t.Scope,
 		t.AccessExpiresAt, t.RefreshExpiresAt)
 	return err
@@ -192,7 +192,7 @@ func (s *OAuthStore) RefreshGrant(ctx context.Context, refreshHash, newAccessHas
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO oauth_tokens (token_hash, refresh_hash, client_id, user_id, account_id, scope,
 		                      access_expires_at, refresh_expires_at)
-		 VALUES ($1,$2,$3,$4,NULLIF($5,''),$6,$7,$8)`,
+		 VALUES ($1,$2,$3,$4,NULLIF($5,'')::uuid,$6,$7,$8)`,
 		nt.TokenHash, newRefreshHash, nt.ClientID, nt.UserID, nt.AccountID, nt.Scope,
 		nt.AccessExpiresAt, nt.RefreshExpiresAt); err != nil {
 		return nil, err
