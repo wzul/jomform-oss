@@ -12,6 +12,10 @@ const APEX_PAGES = [
   "/brand",
   "/mcp",
   "/docs",
+  // Issue #513: the customize page carries the menu-basket and affiliate
+  // guides (the docs nav links into both), so it belongs in the sitemap.
+  "/docs/customize",
+  "/docs/embed",
   "/docs/placeholders",
   "/docs/mcp",
 ];

@@ -255,6 +255,17 @@ const TOOL_GROUPS: { group: string; tools: { name: string; desc: string }[] }[] 
       { name: "auto_cname_domain", desc: "Cipta rekod CNAME Cloudflare secara automatik untuk domain (perlu Cloudflare dipautkan). Pulangkan auto_cname=created|failed." },
       { name: "get_domain_tls_email", desc: "Baca emel ACME/Let's Encrypt per-domain untuk auto-TLS. Kosong = kembali ke emel akaun, kemudian ACME_EMAIL global. Read-only." },
       { name: "set_domain_tls_email", desc: "Tetapkan emel ACME/Let's Encrypt per-domain untuk auto-TLS. Kosong = kembali ke emel akaun, kemudian ACME_EMAIL global." },
+      { name: "set_domain_tls_mode", desc: "Tetapkan mode TLS per-domain: auto (Let's Encrypt, lalai) atau custom (bawa sijil sendiri). Dalam mode custom, muat naik sijil dengan set_domain_custom_cert." },
+    ],
+  },
+  {
+    // Issue #513: the realtime channel (#447) was documented only in the tool
+    // description. It gets its own reference group so the docs-coverage guard
+    // passes on the shipped behaviour rather than on an exemption.
+    group: "Realtime notifications",
+    tools: [
+      { name: "get_realtime_status", desc: "Baca saluran notifikasi masa nyata satu workspace: URL stream SSE (GET /v1/rest/events/stream), peristiwa yang dihantar (sale.paid, sale.failed, response.submitted, subscription.charged, sale.refunded) dan togol bunyi. Read-only. Sambungkan ke stream untuk notifikasi segera pada skrin dapur/pesanan." },
+      { name: "set_realtime_sound", desc: "Hidup/matikan bunyi beep notifikasi masa nyata satu workspace (true = bunyi bila jualan/respons baharu tiba; false = senyap)." },
     ],
   },
   {

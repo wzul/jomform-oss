@@ -28,6 +28,25 @@ package mcpsrv
 //     entries must be genuinely stale. When AGENTS.md is corrected, the lists
 //     must shrink or this test fails.
 //
+//  4. TestMCPChecklistToolsAppearInDocs (issue #513) — the DOCUMENTATION
+//     PARITY direction. AGENTS.md's "DOCUMENTATION PARITY" rule says every
+//     feature must be documented, not just have MCP parity; the #477 guard
+//     above only proves a dashboard feature reached the checklist. Every
+//     checklist tool that is actually REGISTERED must appear by name in at
+//     least one docs page under web/src/app/docs. This is the guard that
+//     makes the #513 failure mode (a shipped, wired feature with zero docs)
+//     fail the build instead of shipping silently.
+//
+//     Coverage limits — stated so the guard is not over-claimed: it is a
+//     TEXT-PRESENCE check. It proves a checklist tool name is written on a
+//     docs page; it does NOT prove the surrounding prose is accurate, complete
+//     or well placed, it does NOT check docs for non-checklist tools (the
+//     mcpParityBaselineTools plumbing set), it does NOT check that a docs page
+//     is reachable from the docs nav, and it does NOT check the dashboard UI
+//     behind a tool. Stale checklist names (mcpParityStaleChecklistEntries)
+//     are skipped: they are not real tools, so requiring docs for them would
+//     demand documentation of something that does not exist.
+//
 // Parsing rules (kept deliberately narrow so the guard is honest, not noisy):
 // only lines inside the parity checklist section are read, and only backticked
 // snake_case identifiers to the RIGHT of the "→" arrow are treated as tool
@@ -370,6 +389,170 @@ func TestMCPParityRegisteredToolsAreDocumented(t *testing.T) {
 		t.Errorf("%d registered MCP tool(s) are absent from the AGENTS.md parity checklist: %v\n"+
 			"Add them to the checklist (AGENTS.md \"MCP FEATURE PARITY\") or, if they are not "+
 			"dashboard features, record them in mcpParityBaselineTools with a reason.", len(undocumented), undocumented)
+	}
+}
+
+// mcpDocsExemptTools are checklist tools that are registered but for which the
+// docs-coverage guard (issue #513) does NOT require a docs mention. It is
+// deliberately EMPTY: the guard is meant to be strict — every checklist tool
+// that ships must have docs.
+//
+// The map exists only so a future introduction of the guard is not blocked on
+// pre-existing gaps: an entry is a KNOWN, pre-existing documentation gap — a
+// feature that works and is wired but whose docs page was never written. That
+// is the #513 failure mode itself, so adding an entry is a debt, not a fix.
+//
+// This list may only SHRINK. The hygiene test below keeps it honest: an entry
+// that has since gained docs, is no longer in the checklist, or is not
+// registered fails the build, so the list cannot silently rot into a permanent
+// exemption for everything. When #513 introduced the guard, the only
+// pre-existing gaps it found were #397 (per-domain TLS mode) and #447
+// (realtime notifications); both were documented on the MCP reference page in
+// the same change, so no entry remains.
+var mcpDocsExemptTools = map[string]string{}
+
+// docsDirPaths locates web/src/app/docs at the repository root, relative to
+// this test file (api/internal/mcpsrv → ../../../web/src/app/docs).
+func docsDirPaths(t *testing.T) string {
+	t.Helper()
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed — cannot locate the docs directory")
+	}
+	path := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "..", "web", "src", "app", "docs"))
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			t.Skipf("docs directory not found at %s — docs-coverage guard skipped", path)
+		}
+		t.Fatalf("stat docs directory: %v", err)
+	}
+	return path
+}
+
+// readDocsCorpus returns the concatenated source text of every file under the
+// docs directory, keyed by relative path. Docs pages are React/Next pages, so
+// the merchant-facing copy lives verbatim in the page source (either as JSX
+// text or inside the string literals the page maps over) — a plain text scan
+// is therefore the honest, build-free way to assert coverage from Go.
+func readDocsCorpus(t *testing.T, dir string) map[string]string {
+	t.Helper()
+
+	corpus := map[string]string{}
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		switch strings.ToLower(filepath.Ext(path)) {
+		case ".tsx", ".ts", ".jsx", ".js", ".md", ".mdx":
+		default:
+			return nil
+		}
+		b, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return rerr
+		}
+		rel, _ := filepath.Rel(dir, path)
+		corpus[rel] = string(b)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk docs directory %s: %v", dir, err)
+	}
+	if len(corpus) == 0 {
+		t.Fatalf("no docs page source files found under %s — the docs-coverage guard cannot run", dir)
+	}
+	return corpus
+}
+
+// docsMentioning returns the docs files whose source mentions the tool name as
+// a whole word (so `set_form_theme` does not match `set_form_settings`).
+func docsMentioning(corpus map[string]string, tool string) []string {
+	re := regexp.MustCompile(`\b` + regexp.QuoteMeta(tool) + `\b`)
+	var hits []string
+	for name, body := range corpus {
+		if re.MatchString(body) {
+			hits = append(hits, name)
+		}
+	}
+	sort.Strings(hits)
+	return hits
+}
+
+// TestMCPChecklistToolsAppearInDocs is the DOCUMENTATION-PARITY guard (issue
+// #513). Every AGENTS.md parity-checklist tool that is REGISTERED must be named
+// on at least one docs page under web/src/app/docs — a feature cannot reach the
+// MCP checklist and ship with zero documentation.
+//
+// It deliberately covers the checklist intersection only (see the file header
+// for the full statement of what this does and does not check), and skips the
+// tools recorded in mcpDocsExemptTools, which are known pre-existing gaps.
+//
+// FAILURE DEMO: delete a tool name from the docs (e.g. remove every mention of
+// `set_menu_page` from web/src/app/docs) and this test fails naming it.
+func TestMCPChecklistToolsAppearInDocs(t *testing.T) {
+	registered := registeredToolNames(t)
+	checklist := parseParityChecklist(t, readAgentsMDPaths(t))
+	corpus := readDocsCorpus(t, docsDirPaths(t))
+
+	// Sanity: the corpus must be non-trivial, otherwise a walk mistake would
+	// make the guard pass vacuously.
+	total := 0
+	for _, body := range corpus {
+		total += len(body)
+	}
+	if total < 5000 {
+		t.Fatalf("docs corpus is only %d bytes across %d file(s) — refusing to pass a "+
+			"coverage check on an empty corpus", total, len(corpus))
+	}
+
+	var undocumented []string
+	for name := range checklist {
+		if !registered[name] {
+			continue // stale checklist name (not a real tool) — nothing to document
+		}
+		if _, exempt := mcpDocsExemptTools[name]; exempt {
+			continue
+		}
+		if len(docsMentioning(corpus, name)) == 0 {
+			undocumented = append(undocumented, name)
+		}
+	}
+	sort.Strings(undocumented)
+	if len(undocumented) > 0 {
+		t.Errorf("%d checklist MCP tool(s) are registered but appear on NO docs page: %v\n"+
+			"Document each tool on a page under web/src/app/docs (AGENTS.md \"DOCUMENTATION "+
+			"PARITY\" rule), or — only if it is a known pre-existing gap — record it in "+
+			"mcpDocsExemptTools with a reason. Do not add a new feature to this list.",
+			len(undocumented), undocumented)
+	}
+}
+
+// TestMCPDocsExemptListStaysHonest keeps mcpDocsExemptTools from rotting into a
+// blanket exemption: every entry must still be a registered checklist tool that
+// genuinely has no docs mention. The moment a tool gains docs coverage (or is
+// removed/renamed), the entry must be deleted or this test fails.
+func TestMCPDocsExemptListStaysHonest(t *testing.T) {
+	registered := registeredToolNames(t)
+	checklist := parseParityChecklist(t, readAgentsMDPaths(t))
+	corpus := readDocsCorpus(t, docsDirPaths(t))
+
+	for name, reason := range mcpDocsExemptTools {
+		switch {
+		case !registered[name]:
+			t.Errorf("mcpDocsExemptTools lists %q, which is not a registered tool — remove it", name)
+		case !checklist[name]:
+			t.Errorf("mcpDocsExemptTools lists %q, which the parity checklist does not name — remove it", name)
+		}
+		if hits := docsMentioning(corpus, name); len(hits) > 0 {
+			t.Errorf("mcpDocsExemptTools lists %q, but it IS documented in %v — remove the exemption",
+				name, hits)
+		}
+		if strings.TrimSpace(reason) == "" {
+			t.Errorf("mcpDocsExemptTools entry %q has no reason", name)
+		}
 	}
 }
 

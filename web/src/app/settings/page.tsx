@@ -2203,8 +2203,24 @@ export default function Settings() {
         {/* ── Affiliates tab: affiliate marketing (issue #444) ── */}
         {tab === "affiliates" && (
           <section className="jf-card mt-6 p-6">
-            <h2 className="text-lg font-semibold">{t("set.affiliatesTitle")}</h2>
-            <p className="mt-1 max-w-xl text-sm text-slate-400">{t("set.affiliatesHelp")}</p>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold">{t("set.affiliatesTitle")}</h2>
+                <p className="mt-1 max-w-xl text-sm text-slate-400">{t("set.affiliatesHelp")}</p>
+              </div>
+              {/* Issue #513: inline "?" doc link (AGENTS.md documentation-parity
+                  rule 4) — the affiliate surface had no docs at all. */}
+              <a
+                href="/docs/customize#affiliate-marketing"
+                target="_blank"
+                rel="noopener noreferrer"
+                title={t("set.affiliatesDocs")}
+                aria-label={t("set.affiliatesDocs")}
+                className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-200 text-[11px] font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+              >
+                ?
+              </a>
+            </div>
             <div className="mt-4 max-w-xl space-y-3">
               <div className="flex items-end gap-2">
                 <div className="flex-1">

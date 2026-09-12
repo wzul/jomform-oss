@@ -1439,8 +1439,25 @@ function FormSettingsInner() {
                 {/* ── Restaurant menu (issue #497: a per-form setting) ── */}
                 {tab === "menu" && (
                   <section className="jf-card p-6">
-                    <h2 className="text-base font-semibold">{t("fs.menu")}</h2>
-                    <p className="mt-1 max-w-xl text-sm text-[var(--jf-muted)]">{t("fs.menuHint")}</p>
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <h2 className="text-base font-semibold">{t("fs.menu")}</h2>
+                        <p className="mt-1 max-w-xl text-sm text-[var(--jf-muted)]">{t("fs.menuHint")}</p>
+                      </div>
+                      {/* Issue #513: inline "?" doc link (AGENTS.md
+                          documentation-parity rule 4) — covers the QR menu and
+                          the diner-side basket it renders. */}
+                      <a
+                        href="/docs/customize"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title={t("fs.menuDocs")}
+                        aria-label={t("fs.menuDocs")}
+                        className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-200 text-[11px] font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                      >
+                        ?
+                      </a>
+                    </div>
 
                     <div className="mt-4 space-y-4">
                       <div className="flex items-start justify-between gap-4 rounded-lg border border-[var(--jf-border)] p-3">

@@ -13,6 +13,14 @@ const NAV = [
   { href: "/docs/mcp", label: "MCP tool reference" },
 ];
 
+// Issue #513: deep links into the two sections this change added, so the
+// features are reachable from the docs nav (the affiliate tab and the menu
+// settings link here with an inline "?" button).
+const NAV_SECTIONS = [
+  { href: "/docs/customize#affiliate-marketing", label: "Affiliate marketing guide" },
+  { href: "/docs/customize#menu-basket", label: "Menu basket guide" },
+];
+
 export const metadata: Metadata = {
   title: "JomForm Docs — knowledge base",
   description:
@@ -59,6 +67,21 @@ export default function DocsLayout({ children }: { children: React.ReactNode }) 
                 {n.label}
               </Link>
             ))}
+            {/* Issue #513: deep links to the affiliate + menu-basket sections. */}
+            <div className="pt-3">
+              <p className="px-3 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                Guides
+              </p>
+              {NAV_SECTIONS.map((n) => (
+                <Link
+                  key={n.href}
+                  href={n.href}
+                  className="mt-1 block rounded-md px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+                >
+                  {n.label}
+                </Link>
+              ))}
+            </div>
           </nav>
         </aside>
         <div className="min-w-0 flex-1">{children}</div>
