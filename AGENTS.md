@@ -110,6 +110,22 @@ issue #395) so users know what JomForm offers and how to use it:
   `cancel_redirect`/`success_callback`/`reference` are **TOP-LEVEL** fields.
 - Never auto-revoke a card token on cancellation (Wan's rule).
 - Repo must stay free of any OnPay mention (open-source constraint).
+- **Caller-supplied image/URL fields MUST be scheme-validated `https://`-only**
+  through `api/internal/urlguard` — ONE shared rule; never hand-roll another
+  `strings.HasPrefix` copy. Applies to EVERY write path, REST **and** MCP:
+  form theme `logo_url`/`og_image_url`, landing `image_url`/`logo_url`,
+  product `images` + variation images, builder image-block `src`, and template
+  `config`/`theme`. Reject a non-https value with 400 / `urlguard.InvalidMessage`;
+  empty or omitted means "keep existing" and stays valid. `ObjectStore.PublicURL`
+  returns an absolute config-derived https URL, so media uploads pass unchanged —
+  do not add a relative-path exception. Do NOT type caller input `template.URL`,
+  and do NOT use `ssrfguard.ValidateURL` here (it allows http and resolves DNS —
+  it is for outbound webhooks).
+  **Why:** an unsafe scheme reaching `<img src>` is silently rewritten by
+  `html/template` to the `#ZgotmplZ` sentinel — the image never loads, HTTP is
+  200, and nothing errors, so it only surfaces when someone looks at the page
+  (#499/#501). The exception is a SERVER-GENERATED data URL (e.g. the QR stand
+  PNG): type that field `template.URL` so it is emitted verbatim.
 
 ## Adding a migration safely (checklist)
 
