@@ -12,7 +12,8 @@
 //	                         authenticates MCP /mcp calls; refresh tokens rotate.
 //	POST /oauth/revoke     — RFC 7009 token revocation.
 //	POST /oauth/register   — RFC 7591 Dynamic Client Registration (persisted,
-//	                         https-redirect-URI only, rate-limited).
+//	                         https redirect URIs, or http on a loopback host
+//	                         per RFC 8252 §7.3; rate-limited).
 //
 // All secret material (codes, access + refresh tokens) is stored only as
 // SHA-256 hashes — the same opaque, revocable pattern as the API keys.
@@ -25,6 +26,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -130,11 +132,94 @@ func hashToken(raw string) string {
 // newOAuthToken mints a fresh opaque token (32 random bytes, hex).
 func newOAuthToken() string { return randTokenHex(32) }
 
+// isLoopbackHost reports whether the host of a parsed URL is a loopback
+// target: an IP literal in 127.0.0.0/8, the IPv6 literal ::1, or the exact
+// name "localhost" (issue #505).
+//
+// "localhost" is accepted in addition to the literals because native MCP
+// clients (the reported one included) send the name, and the redirect is
+// followed by the USER'S OWN BROWSER, so the DNS-rebinding concern that
+// motivates IP-pinning for server-side fetches does not apply the same way
+// (RFC 8252 §7.3 is written in terms of the loopback port). Only the exact
+// name — no subdomains, no wildcards, no other names.
+func isLoopbackURL(u *url.URL) bool {
+	host := u.Hostname() // strips the [] around IPv6 literals
+	if host == "" {
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return strings.EqualFold(host, "localhost")
+}
+
+// redirectURISafe reports whether a registered/requested redirect_uri is
+// acceptable as a redirect target:
+//
+//   - absolute https (unchanged, issue #121 scope 5); or
+//   - http with a loopback host (loopback IP literal or the exact name
+//     "localhost") — accepted in prod as well as dev, per RFC 8252 §7.3
+//     (issue #505). http to any other host is always rejected.
+//
+// Only the scheme, the host and the loopback property are decided here; the
+// port is deliberately NOT part of this check (see redirectURIAllowed for the
+// RFC 8252 §7.3 port relaxation).
+//
+// url.Parse is authoritative here (no string matching), so a host like
+// "127.0.0.1.evil.com" or userinfo ("127.0.0.1@evil.com") does not qualify.
+func redirectURISafe(u *url.URL) bool {
+	if u.Host == "" {
+		return false
+	}
+	switch u.Scheme {
+	case "https":
+		return true
+	case "http":
+		return isLoopbackURL(u)
+	default:
+		return false
+	}
+}
+
+// validHTTPSRedirect checks a redirect_uri string against redirectURISafe.
+func validHTTPSRedirect(uri string) bool {
+	u, err := url.Parse(uri)
+	if err != nil {
+		return false
+	}
+	return redirectURISafe(u)
+}
+
 // redirectURIAllowed reports whether uri is one of the client's registered
-// redirect URIs (exact match — no prefix looseness → no open redirect).
+// redirect URIs.
+//
+// Non-loopback URIs must match exactly — no prefix or host looseness, so this
+// stays an open-redirect guard. Loopback http URIs additionally match when
+// scheme + host + path are identical and ONLY the port differs: native clients
+// pick a random ephemeral port on every run, so a client that registered
+// http://127.0.0.1:5555/callback legitimately sends
+// http://127.0.0.1:61234/callback at authorize time and RFC 8252 §7.3
+// requires us to accept it (issue #505).
 func redirectURIAllowed(client *dbstore.OAuthClient, uri string) bool {
 	for _, r := range client.RedirectURIs {
-		if r == uri {
+		if r == uri { // exact match for every URI shape
+			return true
+		}
+	}
+	// RFC 8252 §7.3 port relaxation — loopback only, and only when host+path
+	// are byte-identical (url.Parse also rejects malformed input). Userinfo is
+	// never allowed to differ: it is not part of the port, so a mismatch there
+	// is not the relaxation we are making.
+	req, err := url.Parse(uri)
+	if err != nil || req.Scheme != "http" || req.User != nil || !isLoopbackURL(req) {
+		return false
+	}
+	for _, r := range client.RedirectURIs {
+		reg, err := url.Parse(r)
+		if err != nil || reg.Scheme != "http" || reg.User != nil || !isLoopbackURL(reg) {
+			continue
+		}
+		if strings.EqualFold(reg.Hostname(), req.Hostname()) && reg.EscapedPath() == req.EscapedPath() {
 			return true
 		}
 	}
@@ -147,22 +232,6 @@ func oauthErr(w http.ResponseWriter, status int, code, desc string, props ...any
 		slog.Warn("oauth_error", append([]any{"code", code, "desc", desc}, props...)...)
 	}
 	writeJSON(w, status, map[string]string{"error": code, "error_description": desc})
-}
-
-// validHTTPSRedirect checks a redirect_uri is absolute https; localhost/private
-// hosts are only allowed in dev builds (issue #121 scope 5).
-func validHTTPSRedirect(uri string) bool {
-	u, err := url.Parse(uri)
-	if err != nil {
-		return false
-	}
-	if u.Scheme != "https" || u.Host == "" {
-		if isDev && u.Scheme == "http" && (u.Host == "localhost" || strings.HasPrefix(u.Host, "127.")) {
-			return true
-		}
-		return false
-	}
-	return true
 }
 
 // ─── GET /oauth/authorize ────────────────────────────────────────────────────
@@ -446,7 +515,7 @@ func (o *OAuthHandlers) register(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, u := range in.RedirectURIs {
 		if !validHTTPSRedirect(u) {
-			oauthErr(w, http.StatusBadRequest, "invalid_redirect_uri", "redirect_uri mesti https (localhost dibenar hanya dalam dev)")
+			oauthErr(w, http.StatusBadRequest, "invalid_redirect_uri", "redirect_uri mesti https; http dibenar hanya untuk loopback (127.0.0.1, [::1], localhost)")
 			return
 		}
 	}
