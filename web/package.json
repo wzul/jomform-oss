@@ -4,9 +4,10 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "npm run test:unit && next build",
     "start": "next start",
     "lint": "next lint",
+    "test:unit": "node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON src/lib/*.test.ts",
     "a11y": "playwright test",
     "a11y:install": "playwright install chromium"
   },

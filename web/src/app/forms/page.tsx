@@ -7,6 +7,7 @@ import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { workspaceQuery } from "../../lib/workspace";
+import { fetchJson, runLoad } from "../../lib/wsfetch";
 import TemplatePicker from "../../components/TemplatePicker";
 
 type FormRow = { id: string; slug: string; title: string; status: string; url: string };
@@ -47,8 +48,10 @@ function formPublicURL(f: { url?: string; slug: string }): string {
 export default function FormsPage() {
   const { t } = useI18n();
   const { anon, role, workspace } = useSession();
+  const router = useRouter();
   const [forms, setForms] = useState<FormRow[]>([]);
   const [checking, setChecking] = useState(true);
+  const [err, setErr] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -57,14 +60,37 @@ export default function FormsPage() {
   // delete). manage + admin keep full write access.
   const canWrite = role !== "read_only";
 
+  // Issue #503: 401/403 → /login, the same redirect Shell.signOut() uses.
+  const goToLogin = useCallback(() => {
+    router.replace("/login");
+    window.location.href = "/login";
+  }, [router]);
+
   const load = useCallback(async () => {
     // Issue #29: no serial `await me → fetch` gate — the list fetch runs
     // immediately; a 401 flips `anon` and the auth bounce below handles it.
-    const f = await fetch(`/api/rest/forms${workspaceQuery()}`).then((r) => (r.ok ? r.json() : []));
-    setForms(Array.isArray(f) ? f : []);
+    // Issue #503: a non-ok response used to become an EMPTY list with no error
+    // (`r.ok ? r.json() : []`), so a 401/500 was indistinguishable from "no
+    // forms". Route it through the shared helper: 401/403 → /login, anything
+    // else → a visible message.
+    const r = await runLoad(
+      async () => {
+        const d = await fetchJson<unknown>(`/api/rest/forms${workspaceQuery()}`);
+        return Array.isArray(d) ? (d as FormRow[]) : [];
+      },
+      { onUnauth: goToLogin, message: t("forms.loadFail") },
+    );
+    if (!r.ok) {
+      setForms([]);
+      setErr(r.error);
+      setChecking(false);
+      return;
+    }
+    setForms(r.data);
     setSelected(new Set());
+    setErr("");
     setChecking(false);
-  }, []);
+  }, [t, goToLogin]);
 
   // Issue #170: re-fetch the list whenever the active space changes (keyed on
   // useSession().workspace), so switching workspaces shows the new forms
@@ -74,7 +100,6 @@ export default function FormsPage() {
   }, [load, workspace]);
 
   // Auth bounce via router (client transition), not a full document reload.
-  const router = useRouter();
   useEffect(() => {
     if (anon) router.replace("/landing");
   }, [anon, router]);
@@ -121,7 +146,24 @@ export default function FormsPage() {
     }
   }
 
+  // Issue #503: a failed load must be visible and actionable — never an empty
+  // list that reads as "you have no forms".
   if (checking) return <main className="flex min-h-screen items-center justify-center text-slate-400">…</main>;
+
+  if (err) {
+    return (
+      <Shell active="forms">
+        <div className="w-full flex-1 px-6 py-8">
+          <div role="alert" className="jf-card flex flex-col items-start gap-3 p-6">
+            <p className="text-sm text-red-600">{err}</p>
+            <button type="button" onClick={() => void load()} className="jf-btn-ghost px-3 py-1.5 text-xs">
+              {t("common.retry")}
+            </button>
+          </div>
+        </div>
+      </Shell>
+    );
+  }
 
   return (
     <Shell active="forms">

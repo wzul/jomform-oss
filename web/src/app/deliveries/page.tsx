@@ -13,6 +13,7 @@ import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { workspaceQuery } from "../../lib/workspace";
+import { fetchJson, runLoad } from "../../lib/wsfetch";
 
 type Delivery = {
   id: number;
@@ -77,6 +78,12 @@ export default function DeliveriesPage() {
   // row detail drawer (per-sale timeline)
   const [detail, setDetail] = useState<Delivery | null>(null);
 
+  // Issue #503: 401/403 → /login, the same redirect Shell.signOut() uses.
+  const goToLogin = useCallback(() => {
+    router.replace("/login");
+    window.location.href = "/login";
+  }, [router]);
+
   const formName = useMemo(() => {
     const m = new Map<string, string>();
     for (const f of forms) m.set(f.id, f.title);
@@ -91,34 +98,43 @@ export default function DeliveriesPage() {
     params.set("limit", String(PER_PAGE));
     if (formFilter) params.set("form_id", formFilter);
     if (statusFilter) params.set("event_type", statusFilter);
-    try {
-      const sp = workspaceQuery();
-      const sep = sp ? "&" : "";
-      const r = await fetch(`/api/rest/email-deliveries?${params.toString()}${sep}${sp.replace("?", "")}`);
-      if (!r.ok) {
-        setRows([]);
-        setTotal(0);
-        setErr(t("del.loadErr"));
-        return;
-      }
-      const d = (await r.json()) as DeliveryPage;
-      setRows(Array.isArray(d.items) ? d.items : []);
-      setTotal(typeof d.total === "number" ? d.total : 0);
-    } catch {
+    const sp = workspaceQuery();
+    const sep = sp ? "&" : "";
+    // Issue #503: a non-ok response used to be reported as a generic load
+    // error, losing the 401 entirely (an expired session looked like a broken
+    // page). Route it through the shared helper so 401/403 → /login.
+    const r = await runLoad(
+      () => fetchJson<DeliveryPage>(`/api/rest/email-deliveries?${params.toString()}${sep}${sp.replace("?", "")}`),
+      { onUnauth: goToLogin, message: t("del.loadErr") },
+    );
+    if (!r.ok) {
       setRows([]);
       setTotal(0);
-      setErr(t("del.loadErr"));
-    } finally {
+      setErr(r.error);
       setChecking(false);
+      return;
     }
-  }, [page, formFilter, statusFilter, t]);
+    setRows(Array.isArray(r.data.items) ? r.data.items : []);
+    setTotal(typeof r.data.total === "number" ? r.data.total : 0);
+    setChecking(false);
+  }, [page, formFilter, statusFilter, t, goToLogin]);
 
   // Load forms for the filter dropdown once.
   useEffect(() => {
-    fetch(`/api/rest/forms${workspaceQuery()}`)
-      .then((r) => (r.ok ? r.json() : []))
-      .then((f) => setForms(Array.isArray(f) ? f : []))
-      .catch(() => {});
+    // Issue #503: a non-ok response used to silently become an empty dropdown
+    // (and the `.catch(() => {})` hid the network failure too). 401/403 →
+    // /login; a non-auth failure leaves the dropdown empty (the list itself
+    // already surfaces the load error).
+    void (async () => {
+      const r = await runLoad(
+        async () => {
+          const d = await fetchJson<unknown>(`/api/rest/forms${workspaceQuery()}`);
+          return Array.isArray(d) ? (d as FormRow[]) : [];
+        },
+        { onUnauth: goToLogin, message: t("forms.loadFail") },
+      );
+      setForms(r.ok ? r.data : []);
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspace]);
 
@@ -260,6 +276,18 @@ export default function DeliveriesPage() {
                 <tr>
                   <td colSpan={6} className="px-4 py-10 text-center text-sm text-[var(--jf-muted)]">
                     {err || t("del.empty")}
+                    {/* Issue #503: a failed load gets an action, not a dead end. */}
+                    {err && (
+                      <div className="mt-2">
+                        <button
+                          type="button"
+                          onClick={() => void load()}
+                          className="text-xs text-[var(--jf-muted)] underline decoration-dotted underline-offset-2 hover:text-[var(--jf-primary)]"
+                        >
+                          {t("common.retry")}
+                        </button>
+                      </div>
+                    )}
                   </td>
                 </tr>
               )}

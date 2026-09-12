@@ -11,6 +11,7 @@ import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { workspaceQuery } from "../../lib/workspace";
+import { fetchJson, runLoad } from "../../lib/wsfetch";
 
 export type Variation = {
   id?: string;
@@ -67,6 +68,12 @@ export default function ProductEditor({ productId }: { productId?: string }) {
   const [savedFlash, setSavedFlash] = useState("");
   const [uploadingIdx, setUploadingIdx] = useState<number | null>(null);
 
+  // Issue #503: 401/403 → /login, the same redirect Shell.signOut() uses.
+  const goToLogin = useCallback(() => {
+    router.replace("/login");
+    window.location.href = "/login";
+  }, [router]);
+
   // product type: simple (zero variations) vs variable (>=1)
   const isVariable = form.variations.length > 0;
 
@@ -80,13 +87,21 @@ export default function ProductEditor({ productId }: { productId?: string }) {
     if (isNew) return;
     let cancelled = false;
     (async () => {
+      // Issue #503: a non-ok response was always reported as "product not
+      // found", which hid an expired session behind a 404-shaped message.
+      // Now 401/403 → /login and a genuine 404 keeps the not-found copy.
+      const r = await runLoad(
+        () => fetchJson<Record<string, any>>(`/api/rest/products/${productId}${workspaceQuery()}`),
+        { onUnauth: goToLogin, message: t("prod.loadFail") },
+      );
+      if (cancelled) return;
+      if (!r.ok) {
+        setError(r.status === 404 ? t("prod.notFound") : r.error);
+        setLoading(false);
+        return;
+      }
       try {
-        const r = await fetch(`/api/rest/products/${productId}${workspaceQuery()}`);
-        if (!r.ok) {
-          if (!cancelled) setError(t("prod.notFound"));
-          return;
-        }
-        const p = await r.json();
+        const p = r.data;
         if (cancelled) return;
         setForm({
           id: p.id,
@@ -121,7 +136,7 @@ export default function ProductEditor({ productId }: { productId?: string }) {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [productId, isNew]);
+  }, [productId, isNew, goToLogin, t]);
 
   // ── image upload (reuse #61 upload endpoint) ─────────────────────────────
   async function uploadImage(file: File, variationIdx: number | null) {

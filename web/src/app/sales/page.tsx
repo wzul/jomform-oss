@@ -18,6 +18,7 @@ import { useI18n, type Key } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDate, formatDateTime } from "../../lib/formatDate";
 import { workspaceQuery } from "../../lib/workspace";
+import { fetchJson, runLoad } from "../../lib/wsfetch";
 
 type Item = {
   product_id: string;
@@ -141,6 +142,12 @@ function SalesPageInner() {
   // manage + admin keep full write access.
   const canWrite = role !== "read_only";
 
+  // Issue #503: 401/403 → /login, the same redirect Shell.signOut() uses.
+  const goToLogin = useCallback(() => {
+    router.replace("/login");
+    window.location.href = "/login";
+  }, [router]);
+
   // forms for the filter dropdown (fetched from /api/rest/forms)
   const [forms, setForms] = useState<FormRow[]>([]);
 
@@ -183,9 +190,19 @@ function SalesPageInner() {
   }, [forms]);
 
   const loadForms = useCallback(async () => {
-    const f = await fetch(`/api/rest/forms${workspaceQuery()}`).then((r) => (r.ok ? r.json() : []));
-    setForms(Array.isArray(f) ? f : []);
-  }, []);
+    // Issue #503: a non-ok response used to silently become an empty dropdown.
+    // A 401 must not be swallowed (an expired session would leave the filter
+    // empty with no signal) — 401/403 → /login. A non-auth failure just leaves
+    // the dropdown empty; the sales list itself surfaces the load error.
+    const r = await runLoad(
+      async () => {
+        const d = await fetchJson<unknown>(`/api/rest/forms${workspaceQuery()}`);
+        return Array.isArray(d) ? (d as FormRow[]) : [];
+      },
+      { onUnauth: goToLogin, message: t("forms.loadFail") },
+    );
+    setForms(r.ok ? r.data : []);
+  }, [t, goToLogin]);
 
   // Load forms on mount (and re-fetch when the active workspace changes, #170).
   useEffect(() => {
@@ -210,26 +227,25 @@ function SalesPageInner() {
       if (q.trim()) qs.set("q", q.trim());
       const sp = workspaceQuery();
       const sep = sp ? "&" : "";
-      try {
-        const r = await fetch(`/api/rest/sales?${qs.toString()}${sep}${sp.replace("?", "")}`);
-        if (!r.ok) {
-          setRows([]);
-          setTotal(0);
-          setErr(t("bld.loadSalesErr"));
-          return;
-        }
-        const d = (await r.json()) as SalesPage;
-        setRows(Array.isArray(d.items) ? d.items : []);
-        setTotal(d.total || 0);
-      } catch {
+      // Issue #503: a 401 was flattened into a generic load error (and the
+      // expired session then looked like an app bug). Route it through the
+      // shared helper: 401/403 → /login, anything else → the visible error.
+      const r = await runLoad(
+        () => fetchJson<SalesPage>(`/api/rest/sales?${qs.toString()}${sep}${sp.replace("?", "")}`),
+        { onUnauth: goToLogin, message: t("bld.loadSalesErr") },
+      );
+      if (!r.ok) {
         setRows([]);
         setTotal(0);
-        setErr(t("bld.loadSalesErr"));
-      } finally {
+        setErr(r.error);
         setChecking(false);
+        return;
       }
+      setRows(Array.isArray(r.data.items) ? r.data.items : []);
+      setTotal(r.data.total || 0);
+      setChecking(false);
     },
-    [formFilter, statusFilter, dateFrom, dateTo, q, t],
+    [formFilter, statusFilter, dateFrom, dateTo, q, t, goToLogin],
   );
 
   // Deep-link: when /sales?form=<id>, the form dropdown mirrors it.
@@ -698,6 +714,18 @@ function SalesPageInner() {
                 <tr>
                   <td colSpan={9} className="px-4 py-10 text-center text-sm text-[var(--jf-muted)]">
                     {err || t("sales.empty")}
+                    {/* Issue #503: a failed load gets an action, not a dead end. */}
+                    {err && (
+                      <div className="mt-2">
+                        <button
+                          type="button"
+                          onClick={() => void loadSales(safePage)}
+                          className="text-xs text-[var(--jf-muted)] underline decoration-dotted underline-offset-2 hover:text-[var(--jf-primary)]"
+                        >
+                          {t("common.retry")}
+                        </button>
+                      </div>
+                    )}
                   </td>
                 </tr>
               )}

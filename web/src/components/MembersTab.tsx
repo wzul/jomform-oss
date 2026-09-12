@@ -6,7 +6,9 @@
 // endpoints from #161 (POST/GET/DELETE /v1/workspaces/{id}/invites and
 // GET/PATCH/DELETE /v1/workspaces/{id}/members).
 import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useI18n } from "./i18n";
+import { fetchJson, runLoad } from "../lib/wsfetch";
 
 type Member = { user_id: string; email: string; name: string; role: string };
 type Invite = { id: string; email: string; role: string; created_at?: string };
@@ -20,6 +22,7 @@ function roleLabel(t: (k: any) => string, role: string): string {
 
 export function MembersTab({ workspaceId }: { workspaceId: string }) {
   const { t } = useI18n();
+  const router = useRouter();
   const [members, setMembers] = useState<Member[]>([]);
   const [invites, setInvites] = useState<Invite[]>([]);
   const [email, setEmail] = useState("");
@@ -30,15 +33,40 @@ export function MembersTab({ workspaceId }: { workspaceId: string }) {
 
   const load = useCallback(() => {
     if (!workspaceId) return;
-    fetch(`/api/workspaces/${workspaceId}/members`)
-      .then((r) => (r.ok ? r.json() : []))
-      .then((d) => setMembers(Array.isArray(d) ? d : []))
-      .catch(() => {});
-    fetch(`/api/workspaces/${workspaceId}/invites`)
-      .then((r) => (r.ok ? r.json() : []))
-      .then((d) => setInvites(Array.isArray(d) ? d : []))
-      .catch(() => {});
-  }, [workspaceId]);
+    // Issue #503: both fetches used `r.ok ? r.json() : []` with a silent
+    // `.catch(() => {})`, so a 401/500 rendered "no members / no pending
+    // invites" — an empty-state lie that also hid an expired session. Now the
+    // failure is explicit: 401/403 → /login, otherwise a visible message.
+    void (async () => {
+      // 401/403 → /login; the message is only shown for non-auth failures.
+      const goToLogin = () => {
+        router.replace("/login");
+        window.location.href = "/login";
+      };
+      const r = await runLoad(
+        async () => {
+          const [m, inv] = await Promise.all([
+            fetchJson<unknown>(`/api/workspaces/${workspaceId}/members`),
+            fetchJson<unknown>(`/api/workspaces/${workspaceId}/invites`),
+          ]);
+          return {
+            members: Array.isArray(m) ? (m as Member[]) : [],
+            invites: Array.isArray(inv) ? (inv as Invite[]) : [],
+          };
+        },
+        { onUnauth: goToLogin, message: t("mem.loadFail") },
+      );
+      if (!r.ok) {
+        setMembers([]);
+        setInvites([]);
+        setErr(r.error);
+        return;
+      }
+      setMembers(r.data.members);
+      setInvites(r.data.invites);
+      setErr("");
+    })();
+  }, [workspaceId, t, router]);
 
   useEffect(() => {
     load();

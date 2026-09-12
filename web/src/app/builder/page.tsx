@@ -1,8 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useI18n } from "../../components/i18n";
 import { workspaceQuery } from "../../lib/workspace";
+import { fetchJson, runLoad } from "../../lib/wsfetch";
 import TemplatePicker from "../../components/TemplatePicker";
 
 /* ─── types ──────────────────────────────────────────────────────────────── */
@@ -179,6 +181,7 @@ function defaultBlocks(products: { id: string; name: string; price_sen: number }
 
 export default function Builder() {
   const { t } = useI18n();
+  const router = useRouter();
   /* translated palette/field labels; block type "textarea" displays as "Note" */
   const typeLabel = (bt: BlockType) => t((bt === "textarea" ? "blk.note" : `blk.${bt}`) as import("../../components/i18n").Key);
   const typeHint = (bt: BlockType) => t((bt === "textarea" ? "blk.noteHint" : `blk.${bt}Hint`) as import("../../components/i18n").Key);
@@ -230,10 +233,31 @@ export default function Builder() {
   const dragIdx = useRef<number | null>(null);
   const [dropAt, setDropAt] = useState<number | null>(null);
 
+  // Issue #503: 401/403 → /login, the same redirect Shell.signOut() uses.
+  const goToLogin = useCallback(() => {
+    router.replace("/login");
+    window.location.href = "/login";
+  }, [router]);
+
   const load = useCallback(async () => {
-    const p = await fetch(`/api/rest/products${workspaceQuery()}`).then((r) => (r.ok ? r.json() : []));
-    setProducts(p);
-  }, []);
+    // Issue #503: this used `r.ok ? r.json() : []`, so a failed products fetch
+    // (including an expired session) silently emptied the palette with no
+    // error. Surface it — 401/403 → /login, otherwise the translated message.
+    // The palette is only an aid, so a failure does NOT block the builder.
+    const r = await runLoad(
+      async () => {
+        const d = await fetchJson<unknown>(`/api/rest/products${workspaceQuery()}`);
+        return Array.isArray(d) ? (d as Product[]) : [];
+      },
+      { onUnauth: goToLogin, message: t("bld.prodLoadFail") },
+    );
+    if (!r.ok) {
+      setProducts([]);
+      setLoadErr(r.error);
+      return;
+    }
+    setProducts(r.data);
+  }, [t, goToLogin]);
 
   // hydrate from ?form=<id>
   useEffect(() => {
@@ -247,9 +271,19 @@ export default function Builder() {
       return;
     }
     if (id) void (async () => {
-      const r = await fetch(`/api/rest/forms/${id}${workspaceQuery()}`);
-      if (!r.ok) return;
-      const d = await r.json();
+      // Issue #503: `if (!r.ok) return;` silently abandoned hydration — an
+      // expired session left the builder showing a blank default form with no
+      // explanation. Now a 401/403 goes to /login and any other failure is a
+      // visible load error.
+      const r = await runLoad(
+        () => fetchJson<Record<string, any>>(`/api/rest/forms/${id}${workspaceQuery()}`),
+        { onUnauth: goToLogin, message: t("bld.formLoadFail") },
+      );
+      if (!r.ok) {
+        setLoadErr(r.error);
+        return;
+      }
+      const d = r.data;
       setCurrentId(d.id);
       setSlug(d.slug);
       setTitle(d.title);

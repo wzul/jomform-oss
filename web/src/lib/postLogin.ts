@@ -9,29 +9,42 @@
 // the picker entirely.
 //
 // Issue #475: renamed from /space-picker; the old route now redirects here.
+// The explicit ".ts" extension is required by the Node test runner (which runs
+// this module's regression test directly; see postLogin.test.ts).
+import { fetchJson, runLoad } from "./wsfetch.ts";
+
 export async function resolvePostLogin(next: string): Promise<string> {
   if (next) return next;
 
   let workspaces: { id: string; slug: string }[] = [];
   let defaultWorkspaceId = "";
-  try {
-    const [wsRes, meRes] = await Promise.all([
-      fetch("/api/workspaces"),
-      fetch("/api/auth/me"),
-    ]);
-    if (wsRes.ok) {
-      const d = await wsRes.json();
-      if (Array.isArray(d)) workspaces = d;
-    }
-    if (meRes.ok) {
-      const me = await meRes.json();
-      defaultWorkspaceId = me.default_workspace_id || "";
-    }
-  } catch {
+
+  // Issue #503: both responses used to be read as `if (res.ok)` with no `else`,
+  // so an expired session (401) resolved as "no workspaces" and the user was
+  // bounced to "/" as if they had none. Now the decision is explicit: an
+  // unauthorised response goes to /login, and a transient failure still falls
+  // back to the dashboard (the Shell picks a workspace from localStorage).
+  // `me` only supplies the default-workspace id, so its failure stays
+  // non-fatal — it is fired alongside the list fetch to keep the flow parallel.
+  const mePromise = fetchJson<{ default_workspace_id?: string }>("/api/auth/me").catch(() => null);
+
+  const ws = await runLoad(
+    async () => {
+      const d = await fetchJson<unknown>("/api/workspaces");
+      return Array.isArray(d) ? (d as { id: string; slug: string }[]) : [];
+    },
+    { onUnauth: () => {}, message: "" },
+  );
+  if (!ws.ok) {
+    if (ws.kind === "unauth") return "/login";
     // Network hiccup — fall through to the dashboard; the Shell will pick a
     // workspace from localStorage as before.
     return "/";
   }
+  workspaces = ws.data;
+
+  const me = await mePromise;
+  if (me) defaultWorkspaceId = me.default_workspace_id || "";
 
   if (workspaces.length === 0) return "/";
 

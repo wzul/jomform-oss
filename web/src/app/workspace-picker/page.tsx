@@ -9,10 +9,23 @@
 // Issue #475: the route was /space-picker before the Space→Workspace rename
 // (#431); the old path now redirects here so bookmarked links keep working
 // (see app/space-picker/page.tsx).
-import { useEffect, useState } from "react";
+//
+// Issue #503: this page used to render "…" FOREVER when /api/workspaces
+// answered 401 — the response was swallowed by `if (wsRes.ok)` with no `else`,
+// the page had no loading flag (it used `workspaces.length === 0` to mean
+// "still loading"), and so an expired session left a terminal placeholder with
+// no error and no way forward. The load now goes through the shared
+// lib/wsfetch decision helper: 401/403 redirect to /login, any other failure
+// shows a real message plus a Retry action, the loading state is a genuine
+// flag, and a truly empty list gets its own message.
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useI18n } from "../../components/i18n";
 import type { WorkspaceRow } from "../../components/session";
+import { fetchJson, runLoad } from "../../lib/wsfetch";
+
+// The subset of /api/auth/me this page needs.
+type Me = { default_workspace_id?: string };
 
 export default function WorkspacePickerPage() {
   const { t } = useI18n();
@@ -21,6 +34,9 @@ export default function WorkspacePickerPage() {
   const [defaultId, setDefaultId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // Issue #503: a REAL loading flag. Never infer "loading" from an empty list —
+  // that is what made empty, failed and loading indistinguishable.
+  const [checking, setChecking] = useState(true);
 
   // Issue #163: short role label for the picker rows.
   function roleLabel(role?: string): string {
@@ -29,26 +45,49 @@ export default function WorkspacePickerPage() {
     return t(`role.${role}` as any) || role;
   }
 
+  // 401/403 → the session is gone; bounce to /login. Mirrors the existing
+  // pattern in components/Shell.tsx.signOut() (router.replace + a hard
+  // window.location.href so the stale client state cannot survive).
+  const goToLogin = useCallback(() => {
+    router.replace("/login");
+    window.location.href = "/login";
+  }, [router]);
+
+  const load = useCallback(async () => {
+    setChecking(true);
+    setError("");
+    // The workspaces list is the one that decides the page state. `me` only
+    // supplies the default-workspace badge, so a failure there must never hide
+    // a perfectly good list.
+    const ws = await runLoad(
+      async () => {
+        const d = await fetchJson<unknown>("/api/workspaces");
+        return Array.isArray(d) ? (d as WorkspaceRow[]) : [];
+      },
+      { onUnauth: goToLogin, message: t("workspace.loadFail") },
+    );
+    if (!ws.ok) {
+      // A failure is NEVER silent: the message is rendered, and the list is
+      // cleared so a failed load can never look like an empty one.
+      setWorkspaces([]);
+      setError(ws.error);
+      setChecking(false);
+      return;
+    }
+    setWorkspaces(ws.data);
+
+    const me = await runLoad(
+      () => fetchJson<Me>("/api/auth/me"),
+      { onUnauth: goToLogin, message: t("workspace.loadFail") },
+    );
+    if (me.ok) setDefaultId(me.data.default_workspace_id || "");
+
+    setChecking(false);
+  }, [t, goToLogin]);
+
   useEffect(() => {
-    (async () => {
-      try {
-        const [wsRes, meRes] = await Promise.all([
-          fetch("/api/workspaces"),
-          fetch("/api/auth/me"),
-        ]);
-        if (wsRes.ok) {
-          const d = await wsRes.json();
-          if (Array.isArray(d)) setWorkspaces(d);
-        }
-        if (meRes.ok) {
-          const me = await meRes.json();
-          setDefaultId(me.default_workspace_id || "");
-        }
-      } catch {
-        setError(t("workspace.setDefaultFail"));
-      }
-    })();
-  }, [t]);
+    void load();
+  }, [load]);
 
   function enter(slug: string) {
     try {
@@ -60,22 +99,21 @@ export default function WorkspacePickerPage() {
   async function setDefault(workspaceId: string) {
     setBusy(true);
     setError("");
-    try {
-      const r = await fetch("/api/auth/profile/default-workspace", {
+    const r = await runLoad(
+      () => fetchJson<unknown>("/api/auth/profile/default-workspace", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ workspace_id: workspaceId }),
-      });
-      if (!r.ok) {
-        setError(t("workspace.setDefaultFail"));
-        return;
-      }
-      setDefaultId(workspaceId);
-    } catch {
-      setError(t("workspace.setDefaultFail"));
-    } finally {
+      }),
+      { onUnauth: goToLogin, message: t("workspace.setDefaultFail") },
+    );
+    if (!r.ok) {
+      setError(r.error);
       setBusy(false);
+      return;
     }
+    setDefaultId(workspaceId);
+    setBusy(false);
   }
 
   return (
@@ -100,14 +138,29 @@ export default function WorkspacePickerPage() {
         </div>
 
         <div className="rounded-xl border border-[var(--jf-border)] bg-white p-6 shadow-[0_0_0_1px_rgba(0,0,0,0.2),0_8px_24px_rgba(0,0,0,0.4)]">
-          {error && (
-            <p role="alert" className="mb-4 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-[13px] text-red-700">
-              {error}
+          {/* Issue #503: the four states are now distinct and explicit —
+              loading / error (+ retry) / empty / list. */}
+          {checking ? (
+            <p role="status" aria-live="polite" className="py-6 text-center text-sm text-[var(--jf-muted)]">
+              {t("workspace.loading")}
             </p>
-          )}
-
-          {workspaces.length === 0 ? (
-            <p className="py-6 text-center text-sm text-[var(--jf-muted)]">…</p>
+          ) : error ? (
+            <div role="alert" className="flex flex-col items-center gap-3 py-4 text-center">
+              <p className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-[13px] text-red-700">
+                {error}
+              </p>
+              <button
+                type="button"
+                onClick={() => void load()}
+                className="rounded-md border border-[var(--jf-border)] px-3 py-1.5 text-xs font-medium text-[var(--jf-text)] transition-colors hover:bg-slate-50"
+              >
+                {t("common.retry")}
+              </button>
+            </div>
+          ) : workspaces.length === 0 ? (
+            <p className="py-6 text-center text-sm text-[var(--jf-muted)]">
+              {t("workspace.empty")}
+            </p>
           ) : (
             <ul className="space-y-2">
               {workspaces.map((s) => {
@@ -159,6 +212,20 @@ export default function WorkspacePickerPage() {
             </ul>
           )}
         </div>
+
+        {/* Issue #503: a genuinely empty list is still a dead end without an
+            action — offer a re-check. */}
+        {!checking && !error && workspaces.length === 0 && (
+          <div className="mt-4 text-center">
+            <button
+              type="button"
+              onClick={() => void load()}
+              className="text-xs text-[var(--jf-muted)] underline decoration-dotted underline-offset-2 hover:text-[var(--jf-primary)]"
+            >
+              {t("common.retry")}
+            </button>
+          </div>
+        )}
       </div>
     </main>
   );

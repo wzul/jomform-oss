@@ -15,6 +15,7 @@ import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { workspaceQuery } from "../../lib/workspace";
+import { fetchJson, runLoad } from "../../lib/wsfetch";
 
 type Template = {
   id: string;
@@ -45,15 +46,42 @@ export default function TemplatesPage() {
   // Issue #163: read_only members see no write actions.
   const canWrite = role !== "read_only";
 
+  // Issue #503: 401/403 → /login, the same redirect Shell.signOut() uses.
+  const goToLogin = useCallback(() => {
+    router.replace("/login");
+    window.location.href = "/login";
+  }, [router]);
+
   const load = useCallback(async () => {
-    const [tpl, frm] = await Promise.all([
-      fetch(`/api/rest/templates${workspaceQuery()}`).then((r) => (r.ok ? r.json() : [])),
-      fetch(`/api/rest/forms${workspaceQuery()}`).then((r) => (r.ok ? r.json() : [])),
-    ]);
-    setTemplates(Array.isArray(tpl) ? tpl : []);
-    setForms(Array.isArray(frm) ? frm : []);
+    // Issue #503: both fetches used `r.ok ? r.json() : []`, so a 401/500 was
+    // silently turned into an EMPTY list (no error, no redirect). Route them
+    // through the shared helper: 401/403 → /login, anything else → a visible
+    // message.
+    const r = await runLoad(
+      async () => {
+        const [tpl, frm] = await Promise.all([
+          fetchJson<unknown>(`/api/rest/templates${workspaceQuery()}`),
+          fetchJson<unknown>(`/api/rest/forms${workspaceQuery()}`),
+        ]);
+        return {
+          templates: Array.isArray(tpl) ? (tpl as Template[]) : [],
+          forms: Array.isArray(frm) ? (frm as FormRow[]) : [],
+        };
+      },
+      { onUnauth: goToLogin, message: t("tplmg.loadFail") },
+    );
+    if (!r.ok) {
+      setTemplates([]);
+      setForms([]);
+      setErr(r.error);
+      setChecking(false);
+      return;
+    }
+    setTemplates(r.data.templates);
+    setForms(r.data.forms);
+    setErr("");
     setChecking(false);
-  }, []);
+  }, [t, goToLogin]);
 
   // Re-fetch when the active workspace changes (issue #170).
   useEffect(() => {
@@ -258,7 +286,19 @@ export default function TemplatesPage() {
         )}
 
         {msg && <p className="mt-4 text-sm text-emerald-600">{msg}</p>}
-        {err && <p className="mt-4 text-sm text-red-500">{err}</p>}
+        {err && (
+          <p role="alert" className="mt-4 text-sm text-red-500">
+            {err}
+            {/* Issue #503: a failed load gets an action, not a dead end. */}
+            <button
+              type="button"
+              onClick={() => void load()}
+              className="ml-2 underline decoration-dotted underline-offset-2"
+            >
+              {t("common.retry")}
+            </button>
+          </p>
+        )}
 
         <ul className="mt-6 space-y-2">
           {templates.map((tpl) => (

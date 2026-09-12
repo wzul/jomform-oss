@@ -13,6 +13,7 @@ import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDate } from "../../lib/formatDate";
 import { workspaceQuery } from "../../lib/workspace";
+import { fetchJson, runLoad } from "../../lib/wsfetch";
 
 type SpamSubmission = {
   id: string;
@@ -52,30 +53,45 @@ function SpamPageInner() {
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState("");
 
+  // Issue #503: 401/403 → /login, the same redirect Shell.signOut() uses.
+  const goToLogin = useCallback(() => {
+    router.replace("/login");
+    window.location.href = "/login";
+  }, [router]);
+
   const load = useCallback(async () => {
     setChecking(true);
     setErr("");
     const sp = workspaceQuery();
     const sep = sp ? "&" : "";
-    try {
-      const [sr, salr] = await Promise.all([
-        fetch(`/api/rest/spam/submissions?page=1&limit=${PAGE_SIZE}${sep}${sp.replace("?", "")}`),
-        fetch(`/api/rest/spam/sales?page=1&limit=${PAGE_SIZE}${sep}${sp.replace("?", "")}`),
-      ]);
-      if (!sr.ok || !salr.ok) {
-        setErr(t("bld.loadSalesErr"));
-        return;
-      }
-      const sd = await sr.json();
-      const sald = await salr.json();
-      setSubs(Array.isArray(sd.items) ? sd.items : []);
-      setSales(Array.isArray(sald.items) ? sald.items : []);
-    } catch {
-      setErr(t("bld.loadSalesErr"));
-    } finally {
+    // Issue #503: a non-ok response was folded into a generic "failed to load
+    // sales" message, losing the 401 (an expired session looked like a broken
+    // page rather than an auth problem). Route it through the shared helper:
+    // 401/403 → /login, anything else → the visible message.
+    const r = await runLoad(
+      async () => {
+        const [sd, sald] = await Promise.all([
+          fetchJson<{ items?: unknown[] }>(`/api/rest/spam/submissions?page=1&limit=${PAGE_SIZE}${sep}${sp.replace("?", "")}`),
+          fetchJson<{ items?: unknown[] }>(`/api/rest/spam/sales?page=1&limit=${PAGE_SIZE}${sep}${sp.replace("?", "")}`),
+        ]);
+        return {
+          subs: Array.isArray(sd.items) ? (sd.items as SpamSubmission[]) : [],
+          sales: Array.isArray(sald.items) ? (sald.items as SpamSale[]) : [],
+        };
+      },
+      { onUnauth: goToLogin, message: t("bld.loadSalesErr") },
+    );
+    if (!r.ok) {
+      setSubs([]);
+      setSales([]);
+      setErr(r.error);
       setChecking(false);
+      return;
     }
-  }, [t]);
+    setSubs(r.data.subs);
+    setSales(r.data.sales);
+    setChecking(false);
+  }, [t, goToLogin]);
 
   useEffect(() => {
     void load();
@@ -156,7 +172,19 @@ function SpamPageInner() {
         </div>
 
         {msg && <p className="mt-3 text-xs text-[var(--jf-primary)]">{msg}</p>}
-        {err && <p className="mt-3 text-xs text-red-500">{err}</p>}
+        {err && (
+          <p role="alert" className="mt-3 text-xs text-red-500">
+            {err}
+            {/* Issue #503: a failed load gets an action, not a dead end. */}
+            <button
+              type="button"
+              onClick={() => void load()}
+              className="ml-2 underline decoration-dotted underline-offset-2"
+            >
+              {t("common.retry")}
+            </button>
+          </p>
+        )}
 
         <div className="jf-card mt-4 overflow-x-auto">
           {tab === "submissions" ? (

@@ -13,6 +13,7 @@ import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDate, formatDateTime } from "../../lib/formatDate";
+import { fetchJson, runLoad } from "../../lib/wsfetch";
 
 type Totals = {
   workspaces: number;
@@ -83,6 +84,12 @@ export default function AdminPage() {
 
   const isSuperAdmin = !!user?.is_super_admin;
 
+  // Issue #503: 401/403 → /login, the same redirect Shell.signOut() uses.
+  const goToLogin = useCallback(() => {
+    router.replace("/login");
+    window.location.href = "/login";
+  }, [router]);
+
   // Issue #48: anonymous visit bounces to the landing page.
   useEffect(() => {
     if (anon) router.replace("/landing");
@@ -96,17 +103,16 @@ export default function AdminPage() {
   }, [anon, bundle, isSuperAdmin, router]);
 
   const load = useCallback(async () => {
-    const r = await fetch("/api/admin/overview");
-    if (r.status === 403) {
-      setErr(t("admin.forbidden"));
-      return;
-    }
-    if (!r.ok) {
-      setErr("Failed to load overview");
-      return;
-    }
-    setData(await r.json());
-  }, [t]);
+    // Issue #503: explicit non-ok handling. 401 (expired session) and 403 both
+    // bounce to /login — a non-super-admin never reaches this page anyway (the
+    // redirect above fires first), so a 403 here means a stale session.
+    const r = await runLoad(
+      () => fetchJson<Overview>("/api/admin/overview"),
+      { onUnauth: goToLogin, message: t("admin.loadFail") },
+    );
+    setErr(r.ok ? "" : r.error);
+    if (r.ok) setData(r.data);
+  }, [t, goToLogin]);
 
   useEffect(() => {
     if (isSuperAdmin) load();
@@ -135,7 +141,17 @@ export default function AdminPage() {
         </div>
 
         {err ? (
-          <p className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">{err}</p>
+          <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+            {err}
+            {/* Issue #503: a failed load gets an action, not a dead end. */}
+            <button
+              type="button"
+              onClick={() => void load()}
+              className="ml-2 underline decoration-dotted underline-offset-2"
+            >
+              {t("common.retry")}
+            </button>
+          </div>
         ) : !data ? (
           <p className="text-sm text-[var(--jf-muted)]">Loading…</p>
         ) : (

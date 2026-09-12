@@ -7,6 +7,7 @@ import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDate } from "../../lib/formatDate";
 import { workspaceQuery } from "../../lib/workspace";
+import { fetchJson, runLoad } from "../../lib/wsfetch";
 
 type Product = {
   id: string;
@@ -44,6 +45,12 @@ export default function Products() {
   const [checking, setChecking] = useState(true);
   const [error, setError] = useState("");
 
+  // Issue #503: 401/403 → /login, the same redirect Shell.signOut() uses.
+  const goToLogin = useCallback(() => {
+    router.replace("/login");
+    window.location.href = "/login";
+  }, [router]);
+
   // search + filters
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
@@ -70,12 +77,26 @@ export default function Products() {
     // immediately; a 401 flips `anon` and the auth bounce below handles it.
     // include_archived=1 so the WooCommerce-style admin list shows a status
     // column and lets owners toggle products back to active.
-    const p = await fetch(`/api/rest/products?include_archived=1${workspaceQuery()}`).then((r) =>
-      r.ok ? r.json() : []
+    // Issue #503: a non-ok response used to become an EMPTY list with no error
+    // (`r.ok ? r.json() : []`). Route it through the shared helper: 401/403 →
+    // /login, anything else → a visible message. Never empty-as-error.
+    const r = await runLoad(
+      async () => {
+        const d = await fetchJson<unknown>(`/api/rest/products?include_archived=1${workspaceQuery()}`);
+        return Array.isArray(d) ? (d as Product[]) : [];
+      },
+      { onUnauth: goToLogin, message: t("prod.loadFailList") },
     );
-    setProducts(Array.isArray(p) ? p : []);
+    if (!r.ok) {
+      setProducts([]);
+      setError(r.error);
+      setChecking(false);
+      return;
+    }
+    setProducts(r.data);
+    setError("");
     setChecking(false);
-  }, []);
+  }, [t, goToLogin]);
 
   useEffect(() => {
     // Always fetch the authoritative list (include_archived=1) so archived
@@ -517,7 +538,19 @@ export default function Products() {
           <button className="jf-btn-primary">{t("prod.add")}</button>
         </form>
         )}
-        {error && <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">{error}</p>}
+        {error && (
+          <p role="alert" className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">
+            {error}
+            {/* Issue #503: a failed load gets an action, not a dead end. */}
+            <button
+              type="button"
+              onClick={() => void load()}
+              className="ml-2 underline decoration-dotted underline-offset-2"
+            >
+              {t("common.retry")}
+            </button>
+          </p>
+        )}
 
         {/* Bulk action bar */}
         {canWrite && ids.length > 0 && (

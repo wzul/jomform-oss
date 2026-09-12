@@ -11,6 +11,7 @@ import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDate } from "../../lib/formatDate";
 import { workspaceQuery } from "../../lib/workspace";
+import { fetchJson, runLoad } from "../../lib/wsfetch";
 
 type Subscription = {
   id: string;
@@ -50,23 +51,37 @@ export default function Subscriptions() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
 
+  // Issue #503: 401/403 → /login, the same redirect Shell.signOut() uses.
+  const goToLogin = useCallback(() => {
+    router.replace("/login");
+    window.location.href = "/login";
+  }, [router]);
+
   const load = useCallback(async (status: string, pageNum: number) => {
     const q = new URLSearchParams({ page: String(pageNum), limit: String(PER_PAGE) });
     if (status !== "all") q.set("status", status);
     const sp = workspaceQuery();
     const sep = sp ? "&" : "";
-    const r = await fetch(`/api/rest/subscriptions?${q.toString()}${sep}${sp.replace("?", "")}`);
+    // Issue #503: a non-ok response was reported as the CANCEL error string
+    // (sub.cancelErr) and, worse, a 401 was never recognised — an expired
+    // session just showed "failed to cancel". Route it through the shared
+    // helper: 401/403 → /login, anything else → the visible message.
+    const r = await runLoad(
+      () => fetchJson<ListResp>(`/api/rest/subscriptions?${q.toString()}${sep}${sp.replace("?", "")}`),
+      { onUnauth: goToLogin, message: t("sub.loadFail") },
+    );
     if (!r.ok) {
-      setError(t("sub.cancelErr"));
+      setRows([]);
+      setTotal(0);
+      setError(r.error);
       setChecking(false);
       return;
     }
-    const d: ListResp = await r.json();
-    setRows(Array.isArray(d.items) ? d.items : []);
-    setTotal(d.total ?? 0);
+    setRows(Array.isArray(r.data.items) ? r.data.items : []);
+    setTotal(r.data.total ?? 0);
     setError("");
     setChecking(false);
-  }, [t]);
+  }, [t, goToLogin]);
 
   useEffect(() => {
     setPage(1);
@@ -200,8 +215,16 @@ export default function Subscriptions() {
           </span>
         </div>
         {error && (
-          <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">
+          <p role="alert" className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">
             {error}
+            {/* Issue #503: a failed load gets an action, not a dead end. */}
+            <button
+              type="button"
+              onClick={() => void load(statusFilter, safePage)}
+              className="ml-2 underline decoration-dotted underline-offset-2"
+            >
+              {t("common.retry")}
+            </button>
           </p>
         )}
         {notice && (

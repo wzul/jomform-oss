@@ -7,6 +7,7 @@ import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDateTime } from "../../lib/formatDate";
 import { workspaceQuery, workspaceScope } from "../../lib/workspace";
+import { fetchJson, runLoad } from "../../lib/wsfetch";
 import { MembersTab } from "../../components/MembersTab";
 import { LegalTab } from "../../components/LegalTab";
 
@@ -503,15 +504,34 @@ export default function Settings() {
     if (anon) router.replace("/landing");
   }, [anon, router]);
 
+  // Issue #503: 401/403 → /login, the same redirect Shell.signOut() uses.
+  // (The bundle-backed sections bounce to /landing via `anon`; the direct
+  // fetches below have no such signal, so they use this.)
+  const goToLogin = useCallback(() => {
+    router.replace("/login");
+    window.location.href = "/login";
+  }, [router]);
+
   // Issue #444: affiliate marketing — load the workspace's affiliates.
+  // Issue #503: `if (r.ok)` had no `else`, so a 401/500 left "no affiliates
+  // yet" on screen — an empty-state lie. Now it is explicit.
   const loadAffiliates = useCallback(async () => {
     if (!activeWorkspaceId) return;
-    const r = await fetch(`/api/workspaces/${activeWorkspaceId}/affiliates`);
-    if (r.ok) {
-      const d = await r.json();
-      setAffiliates(Array.isArray(d) ? d : []);
+    const r = await runLoad(
+      async () => {
+        const d = await fetchJson<unknown>(`/api/workspaces/${activeWorkspaceId}/affiliates`);
+        return Array.isArray(d) ? (d as AffiliateRow[]) : [];
+      },
+      { onUnauth: goToLogin, message: t("set.affiliatesLoadFail") },
+    );
+    if (!r.ok) {
+      setAffiliates([]);
+      setErr(r.error);
+      return;
     }
-  }, [activeWorkspaceId]);
+    setAffiliates(r.data);
+    setErr("");
+  }, [activeWorkspaceId, t, goToLogin]);
 
   useEffect(() => {
     if (tab === "affiliates") loadAffiliates();

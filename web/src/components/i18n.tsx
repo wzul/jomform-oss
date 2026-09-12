@@ -182,9 +182,27 @@ const DICT = {
   "workspace.defaultLabel": { en: "Default", ms: "Lalai", zh: "默认", ta: "இயல்புநிலை", ar: "الافتراضية" },
   "workspace.setDefaultFail": { en: "Failed to set default workspace.", ms: "Gagal tetapkan default workspace.", zh: "设置默认工作区失败。", ta: "இயல்புநிலை பணியிடத்தை அமைக்க முடியவில்லை.", ar: "فشل تعيين مساحة العمل الافتراضية." },
   "workspace.clearDefaultFail": { en: "Failed to remove default workspace.", ms: "Gagal buang default workspace.", zh: "移除默认工作区失败。", ta: "இயல்புநிலை பணியிடத்தை நீக்க முடியவில்லை.", ar: "فشل إزالة مساحة العمل الافتراضية." },
+  // Issue #503: the workspace picker's real states. "loading" is a genuine
+  // loading flag (never `length === 0`), "loadFail" is the visible non-auth
+  // error, "empty" is a genuinely empty list, and "common.retry" is the action
+  // that keeps a failed load from being a dead end.
+  "workspace.loading": { en: "Loading your workspaces…", ms: "Memuatkan workspace anda…", zh: "正在加载您的工作区…", ta: "உங்கள் பணியிடங்களை ஏற்றுகிறது…", ar: "جارٍ تحميل مساحات العمل…" },
+  "workspace.loadFail": { en: "We couldn't load your workspaces. Please try again.", ms: "Kami tidak dapat memuatkan workspace anda. Sila cuba lagi.", zh: "无法加载您的工作区。请重试。", ta: "உங்கள் பணியிடங்களை ஏற்ற முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر تحميل مساحات العمل. يرجى المحاولة مرة أخرى." },
+  "workspace.empty": { en: "You don't have any workspaces yet.", ms: "Anda belum mempunyai sebarang workspace.", zh: "您还没有任何工作区。", ta: "உங்களிடம் இன்னும் பணியிடங்கள் இல்லை.", ar: "ليس لديك أي مساحات عمل بعد." },
+  "common.retry": { en: "Retry", ms: "Cuba semula", zh: "重试", ta: "மீண்டும் முயற்சி", ar: "إعادة المحاولة" },
+  // Issue #503 (audit): the same visible-failure text for the other list pages
+  // that used to swallow a non-ok response into an empty list.
+  "forms.loadFail": { en: "We couldn't load your forms. Please try again.", ms: "Kami tidak dapat memuatkan borang anda. Sila cuba lagi.", zh: "无法加载您的表单。请重试。", ta: "உங்கள் படிவங்களை ஏற்ற முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر تحميل نماذجك. يرجى المحاولة مرة أخرى." },
+  "prod.loadFailList": { en: "We couldn't load your products. Please try again.", ms: "Kami tidak dapat memuatkan produk anda. Sila cuba lagi.", zh: "无法加载您的商品。请重试。", ta: "உங்கள் தயாரிப்புகளை ஏற்ற முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر تحميل منتجاتك. يرجى المحاولة مرة أخرى." },
+  "sub.loadFail": { en: "We couldn't load your subscriptions. Please try again.", ms: "Kami tidak dapat memuatkan langganan anda. Sila cuba lagi.", zh: "无法加载您的订阅。请重试。", ta: "உங்கள் சந்தாக்களை ஏற்ற முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر تحميل اشتراكاتك. يرجى المحاولة مرة أخرى." },
+  "tplmg.loadFail": { en: "We couldn't load your templates. Please try again.", ms: "Kami tidak dapat memuatkan templat anda. Sila cuba lagi.", zh: "无法加载您的模板。请重试。", ta: "உங்கள் வார்ப்புருக்களை ஏற்ற முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر تحميل قوالبك. يرجى المحاولة مرة أخرى." },
+  "media.loadFail": { en: "We couldn't load your media. Please try again.", ms: "Kami tidak dapat memuatkan media anda. Sila cuba lagi.", zh: "无法加载您的媒体。请重试。", ta: "உங்கள் ஊடகத்தை ஏற்ற முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر تحميل وسائطك. يرجى المحاولة مرة أخرى." },
+  "bld.prodLoadFail": { en: "We couldn't load your products. Please try again.", ms: "Kami tidak dapat memuatkan produk anda. Sila cuba lagi.", zh: "无法加载您的商品。请重试。", ta: "உங்கள் தயாரிப்புகளை ஏற்ற முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر تحميل منتجاتك. يرجى المحاولة مرة أخرى." },
+  "bld.formLoadFail": { en: "We couldn't load this form. Please try again.", ms: "Kami tidak dapat memuatkan borang ini. Sila cuba lagi.", zh: "无法加载此表单。请重试。", ta: "இந்தப் படிவத்தை ஏற்ற முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر تحميل هذا النموذج. يرجى المحاولة مرة أخرى." },
   // issue #163: workspace members management UI + role-gated actions
   "set.tab.members": { en: "Members", ms: "Ahli", zh: "成员", ta: "உறுப்பினர்கள்", ar: "الأعضاء" },
   "mem.title": { en: "Workspace members", ms: "Ahli ruang kerja", zh: "工作区成员", ta: "பணியிட உறுப்பினர்கள்", ar: "أعضاء مساحة العمل" },
+  "mem.loadFail": { en: "We couldn't load the member list. Please try again.", ms: "Kami tidak dapat memuatkan senarai ahli. Sila cuba lagi.", zh: "无法加载成员列表。请重试。", ta: "உறுப்பினர் பட்டியலை ஏற்ற முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر تحميل قائمة الأعضاء. يرجى المحاولة مرة أخرى." },
   "mem.inviteTitle": { en: "Invite a member", ms: "Jemput ahli", zh: "邀请成员", ta: "உறுப்பினரை அழை", ar: "دعوة عضو" },
   "mem.inviteEmail": { en: "Email address", ms: "Alamat emel", zh: "邮箱地址", ta: "மின்னஞ்சல் முகவரி", ar: "البريد الإلكتروني" },
   "mem.inviteRole": { en: "Role", ms: "Peranan", zh: "角色", ta: "பங்கு", ar: "الدور" },
@@ -707,6 +725,7 @@ const DICT = {
   "set.affiliateAdded": { en: "Affiliate added ✓", ms: "Affiliate ditambah ✓", zh: "联盟已添加 ✓", ta: "இணைப்பாளர் சேர்க்கப்பட்டது ✓", ar: "تمت إضافة الشريك ✓" },
   "set.affiliatesList": { en: "Affiliates", ms: "Senarai affiliate", zh: "联盟列表", ta: "இணைப்பாளர்கள்", ar: "الشركاء" },
   "set.affiliatesEmpty": { en: "No affiliates yet. Add one above.", ms: "Belum ada affiliate. Tambah di atas.", zh: "暂无联盟。请在上方添加。", ta: "இன்னும் இணைப்பாளர்கள் இல்லை. மேலே சேர்க்கவும்.", ar: "لا يوجد شركاء بعد. أضف واحداً أعلاه." },
+  "set.affiliatesLoadFail": { en: "We couldn't load your affiliates. Please try again.", ms: "Kami tidak dapat memuatkan affiliate anda. Sila cuba lagi.", zh: "无法加载您的联盟。请重试。", ta: "உங்கள் இணைப்பாளர்களை ஏற்ற முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر تحميل الشركاء. يرجى المحاولة مرة أخرى." },
   "set.legalTitle": { en: "Legal pages", ms: "Halaman undang-undang", zh: "法律页面", ta: "சட்டப் பக்கங்கள்", ar: "الصفحات القانونية" },
   "set.legalHelp": { en: "Host privacy, terms and refund policies on your storefront ({workspace}.jomform.com/privacy, /terms, /refund). Auto-generate a draft with AI, or write your own.", ms: "Hos polisi privasi, terma dan refund di storefront anda ({workspace}.jomform.com/privacy, /terms, /refund). Jana draf dengan AI, atau tulis sendiri.", zh: "在您的商店托管隐私、条款和退款政策（{workspace}.jomform.com/privacy、/terms、/refund）。用 AI 自动生成草稿，或自行编写。", ta: "உங்கள் கடையில் தனியுரிமை, விதிமுறைகள் மற்றும் பணத்திருப்பக் கொள்கைகளை ஹோஸ்ட் செய்யுங்கள் ({workspace}.jomform.com/privacy, /terms, /refund). AI மூலம் வரைவை உருவாக்கவும், அல்லது நீங்களே எழுதவும்.", ar: "استضف سياسات الخصوصية والشروط والاسترداد في متجرك ({workspace}.jomform.com/privacy و/terms و/refund). أنشئ مسودة بالذكاء الاصطناعي أو اكتبها بنفسك." },
   "set.legalPrivacy": { en: "Privacy Policy", ms: "Polisi Privasi", zh: "隐私政策", ta: "தனியுரிமைக் கொள்கை", ar: "سياسة الخصوصية" },
@@ -1514,6 +1533,7 @@ const DICT = {
   "admin.owner": { en: "Owner", ms: "Pemilik", zh: "所有者", ta: "உரிமையாளர்", ar: "المالك" },
   "admin.readonly": { en: "Read-only view", ms: "Paparan baca sahaja", zh: "只读视图", ta: "படிக்க மட்டும் காட்சி", ar: "عرض للقراءة فقط" },
   "admin.forbidden": { en: "You don't have permission to view the admin dashboard.", ms: "Anda tiada kebenaran untuk melihat papan pemuka admin.", zh: "您没有权限查看管理仪表板。", ta: "நிர்வாக டாஷ்போர்டைப் பார்க்க உங்களுக்கு அனுமதி இல்லை.", ar: "ليس لديك إذن لعرض لوحة تحكم الإدارة." },
+  "admin.loadFail": { en: "We couldn't load the overview. Please try again.", ms: "Kami tidak dapat memuatkan ringkasan. Sila cuba lagi.", zh: "无法加载概览。请重试。", ta: "மேலோட்டத்தை ஏற்ற முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر تحميل النظرة العامة. يرجى المحاولة مرة أخرى." },
 } as const;
 
 export type Key = keyof typeof DICT;

@@ -7,6 +7,7 @@ import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDate } from "../../lib/formatDate";
 import { workspaceQuery } from "../../lib/workspace";
+import { fetchJson, runLoad } from "../../lib/wsfetch";
 
 // Issue #180: WordPress-media-library-style Media page. Grid of the
 // merchant's uploaded images (thumbnail + name + date + size), filterable by
@@ -120,6 +121,12 @@ export default function MediaPage() {
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Issue #503: 401/403 → /login, the same redirect Shell.signOut() uses.
+  const goToLogin = useCallback(() => {
+    router.replace("/login");
+    window.location.href = "/login";
+  }, [router]);
+
   // Issue #382: accept the full media allowlist — images, code files and PDFs.
   const ACCEPTED_TYPES = [
     "image/png",
@@ -177,28 +184,49 @@ export default function MediaPage() {
     params.set("limit", String(PER_PAGE));
     if (formFilter) params.set("form", formFilter);
     if (sourceFilter) params.set("source", sourceFilter);
-    const r = await fetch(`/api/rest/media?${params.toString()}${workspaceQuery()}`);
-    if (r.ok) {
-      const d = await r.json();
-      setItems(Array.isArray(d.items) ? d.items : []);
-      setTotal(typeof d.total === "number" ? d.total : 0);
-      // Issue #384: capture the per-workspace storage usage for the quota bar.
-      if (d.usage && typeof d.usage === "object") {
-        setUsage(d.usage);
-      }
-    } else {
+    // Issue #503: a non-ok response used to render an EMPTY grid with no error
+    // (the `else { setItems([]) }` branch), so an expired session looked like an
+    // empty library. Route it through the shared helper: 401/403 → /login,
+    // anything else → a visible message.
+    const r = await runLoad(
+      () => fetchJson<{ items?: unknown[]; total?: number; usage?: MediaUsage }>(
+        `/api/rest/media?${params.toString()}${workspaceQuery()}`,
+      ),
+      { onUnauth: goToLogin, message: t("media.loadFail") },
+    );
+    if (!r.ok) {
       setItems([]);
       setTotal(0);
+      setError(r.error);
+      setChecking(false);
+      return;
     }
+    const d = r.data;
+    setItems(Array.isArray(d.items) ? (d.items as MediaItem[]) : []);
+    setTotal(typeof d.total === "number" ? d.total : 0);
+    // Issue #384: capture the per-workspace storage usage for the quota bar.
+    if (d.usage && typeof d.usage === "object") {
+      setUsage(d.usage);
+    }
+    setError("");
     setChecking(false);
-  }, [page, formFilter, sourceFilter]);
+  }, [page, formFilter, sourceFilter, t, goToLogin]);
 
   // Load forms for the filter dropdown once.
   useEffect(() => {
-    fetch(`/api/rest/forms${workspaceQuery()}`)
-      .then((r) => (r.ok ? r.json() : []))
-      .then((f) => setForms(Array.isArray(f) ? f : []))
-      .catch(() => {});
+    // Issue #503: a non-ok response used to silently become an empty dropdown.
+    // 401/403 → /login; a non-auth failure leaves the dropdown empty (the grid
+    // itself already surfaces the load error).
+    void (async () => {
+      const r = await runLoad(
+        async () => {
+          const d = await fetchJson<unknown>(`/api/rest/forms${workspaceQuery()}`);
+          return Array.isArray(d) ? (d as FormRow[]) : [];
+        },
+        { onUnauth: goToLogin, message: t("forms.loadFail") },
+      );
+      setForms(r.ok ? r.data : []);
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspace]);
 
@@ -367,7 +395,19 @@ export default function MediaPage() {
           <span className="text-xs text-[var(--jf-muted)]">{countLabel}</span>
         </div>
 
-        {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+        {error && (
+          <p role="alert" className="mt-3 text-sm text-red-600">
+            {error}
+            {/* Issue #503: a failed load gets an action, not a dead end. */}
+            <button
+              type="button"
+              onClick={() => void load()}
+              className="ml-2 underline decoration-dotted underline-offset-2"
+            >
+              {t("common.retry")}
+            </button>
+          </p>
+        )}
 
         {/* Grid */}
         {items.length === 0 ? (
