@@ -211,36 +211,59 @@ func resourceAllowed(resource, requestHost string) bool {
 	return oauthmeta.ResourceMatches(resource, requestHost)
 }
 
-// redirectURIAllowed reports whether uri is one of the client's registered
-// redirect URIs.
+// redirectURIMatches reports whether the redirect_uri presented at token
+// exchange is acceptable for a grant issued with `stored`.
 //
-// Non-loopback URIs must match exactly — no prefix or host looseness, so this
-// stays an open-redirect guard. Loopback http URIs additionally match when
-// scheme + host + path are identical and ONLY the port differs: native clients
-// pick a random ephemeral port on every run, so a client that registered
-// http://127.0.0.1:5555/callback legitimately sends
-// http://127.0.0.1:61234/callback at authorize time and RFC 8252 §7.3
-// requires us to accept it (issue #505).
-func redirectURIAllowed(client *dbstore.OAuthClient, uri string) bool {
-	for _, r := range client.RedirectURIs {
-		if r == uri { // exact match for every URI shape
-			return true
-		}
+// This is the ONE implementation of the redirect_uri acceptance rule, shared by
+// both steps of the flow: authorize (via redirectURIAllowed, over the client's
+// registered URIs) and token exchange (over the URI recorded on the
+// authorization code). Before issue #511 the two steps each carried their own
+// copy: #505 taught the authorize step the RFC 8252 §7.3 loopback-port
+// relaxation while the token step kept an exact string compare, so a native
+// client that changed its ephemeral port mid-flow was rejected at the last step
+// — after the user had already consented. Keeping the rule in one place means
+// the two call sites cannot drift apart again.
+//
+//   - Non-loopback URIs (and any other scheme) must match exactly — no prefix
+//     or host looseness, so this stays an open-redirect / code-injection guard.
+//   - Loopback http URIs additionally match when scheme + host + path are
+//     identical and ONLY the port differs: native clients pick a random
+//     ephemeral port on every run, so a client that registered
+//     http://127.0.0.1:5555/callback legitimately presents
+//     http://127.0.0.1:61234/callback and RFC 8252 §7.3 requires us to accept
+//     it (issue #505).
+//
+// PKCE (RFC 7636) is the primary protection against authorization-code
+// interception; this is the secondary, defence-in-depth check and must never
+// become a general prefix/loose match.
+func redirectURIMatches(stored, presented string) bool {
+	if stored == presented { // exact match for every URI shape
+		return true
 	}
 	// RFC 8252 §7.3 port relaxation — loopback only, and only when host+path
 	// are byte-identical (url.Parse also rejects malformed input). Userinfo is
 	// never allowed to differ: it is not part of the port, so a mismatch there
 	// is not the relaxation we are making.
-	req, err := url.Parse(uri)
-	if err != nil || req.Scheme != "http" || req.User != nil || !isLoopbackURL(req) {
+	a, err := url.Parse(stored)
+	if err != nil || a.Scheme != "http" || a.User != nil || !isLoopbackURL(a) {
 		return false
 	}
+	b, err := url.Parse(presented)
+	if err != nil || b.Scheme != "http" || b.User != nil || !isLoopbackURL(b) {
+		return false
+	}
+	return strings.EqualFold(a.Hostname(), b.Hostname()) && a.EscapedPath() == b.EscapedPath()
+}
+
+// redirectURIAllowed reports whether uri is one of the client's registered
+// redirect URIs, using the shared acceptance rule (redirectURIMatches): exact
+// for every URI shape, plus the RFC 8252 §7.3 loopback-port relaxation from
+// #505 — loopback http URIs match when scheme + host + path are identical and
+// ONLY the port differs (native clients pick a random ephemeral port on every
+// run). Non-loopback URIs stay exact, so this remains an open-redirect guard.
+func redirectURIAllowed(client *dbstore.OAuthClient, uri string) bool {
 	for _, r := range client.RedirectURIs {
-		reg, err := url.Parse(r)
-		if err != nil || reg.Scheme != "http" || reg.User != nil || !isLoopbackURL(reg) {
-			continue
-		}
-		if strings.EqualFold(reg.Hostname(), req.Hostname()) && reg.EscapedPath() == req.EscapedPath() {
+		if redirectURIMatches(r, uri) {
 			return true
 		}
 	}
@@ -446,7 +469,23 @@ func (o *OAuthHandlers) tokenAuthCode(w http.ResponseWriter, r *http.Request) {
 		oauthErr(w, http.StatusBadRequest, "invalid_grant", "client_id tidak padan dengan code")
 		return
 	}
-	if redirectURI != "" && ac.RedirectURI != redirectURI {
+	// Second check on redirect_uri (PKCE is the primary protection; this is the
+	// secondary, defence-in-depth check against code injection). It uses the
+	// SAME acceptance rule as the authorize step (redirectURIMatches), so
+	// whatever authorize accepted for a loopback URI is accepted here too —
+	// including the RFC 8252 §7.3 case where only the ephemeral port changed
+	// between the two steps (issue #511). A different host, path or scheme is
+	// still rejected.
+	//
+	// Missing redirect_uri is intentionally tolerated (kept as-is by #511): a
+	// code issued through this flow always carries a non-empty RedirectURI
+	// (authorize rejects an empty one), so an omitted parameter here skips the
+	// comparison. RFC 6749 §4.1.3 requires the token request to repeat the
+	// parameter, but some clients omit it, and PKCE (mandatory at authorize)
+	// still binds the exchange to the original request — so the leniency
+	// bypasses no primary protection. Tightening it is separate hardening, not
+	// part of this bug fix.
+	if redirectURI != "" && !redirectURIMatches(ac.RedirectURI, redirectURI) {
 		oauthErr(w, http.StatusBadRequest, "invalid_grant", "redirect_uri tidak padan dengan yang digunakan semasa authorize")
 		return
 	}
