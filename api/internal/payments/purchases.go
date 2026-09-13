@@ -158,129 +158,142 @@ func (s *Service) ProcessCallback(ctx context.Context, p *chip.Purchase) error {
 	// the transaction (so we see the locked, current status), apply the
 	// transition guard, and only run side effects on a real transition.
 	return s.Sales.WithSaleLock(ctx, sale.ID, func(tx pgx.Tx) error {
-		cur, err := s.Sales.SaleByChipPurchaseIDTx(ctx, tx, p.ID)
-		if err != nil {
+		return s.ProcessCallbackTx(ctx, tx, p)
+	})
+}
+
+// ProcessCallbackTx runs the direct-sale callback transitions inside an
+// already-open transaction (the per-sale advisory lock transaction opened by
+// WithSaleLock, issue #202).
+//
+// Split out of ProcessCallback for issue #517: the HTTP callback handler claims
+// the inbound event in the SAME transaction as the state change, so a failed
+// attempt can never leave a consumed dedup key behind. Callers must hold the
+// per-sale lock (or an equivalent serialization) for the sale that owns
+// p.ID — the transition guard alone is not a concurrency guard.
+func (s *Service) ProcessCallbackTx(ctx context.Context, tx pgx.Tx, p *chip.Purchase) error {
+	cur, err := s.Sales.SaleByChipPurchaseIDTx(ctx, tx, p.ID)
+	if err != nil {
+		return err
+	}
+
+	switch p.Status {
+	case chip.StatusPaid:
+		// Transition guard: only pending → paid is a real transition.
+		// A sale already paid (or confirmed/cancelled) must not re-fire
+		// webhooks or re-send the receipt.
+		if cur.Status == dbstore.SalePaid {
+			slog.Info("callback_paid_idempotent", "purchase", p.ID, "sale", cur.ID)
+			return nil
+		}
+		if cur.Status != dbstore.SalePending {
+			slog.Warn("callback_paid_conflicting_transition",
+				"purchase", p.ID, "sale", cur.ID, "from", cur.Status, "to", dbstore.SalePaid)
+			return nil
+		}
+		if err := s.Sales.SetStatusTx(ctx, tx, cur.ID, dbstore.SalePaid); err != nil {
 			return err
 		}
-
-		switch p.Status {
-		case chip.StatusPaid:
-			// Transition guard: only pending → paid is a real transition.
-			// A sale already paid (or confirmed/cancelled) must not re-fire
-			// webhooks or re-send the receipt.
-			if cur.Status == dbstore.SalePaid {
-				slog.Info("callback_paid_idempotent", "purchase", p.ID, "sale", cur.ID)
-				return nil
-			}
-			if cur.Status != dbstore.SalePending {
-				slog.Warn("callback_paid_conflicting_transition",
-					"purchase", p.ID, "sale", cur.ID, "from", cur.Status, "to", dbstore.SalePaid)
-				return nil
-			}
-			if err := s.Sales.SetStatusTx(ctx, tx, cur.ID, dbstore.SalePaid); err != nil {
+		// Issue #245: a successful payment means the entry is legit — a
+		// spam-flagged sale that gets paid is automatically un-spammed
+		// (atomic with the status transition under the sale lock).
+		if cur.IsSpam {
+			if err := s.Sales.UnSpamTx(ctx, tx, cur.ID); err != nil {
 				return err
 			}
-			// Issue #245: a successful payment means the entry is legit — a
-			// spam-flagged sale that gets paid is automatically un-spammed
-			// (atomic with the status transition under the sale lock).
-			if cur.IsSpam {
-				if err := s.Sales.UnSpamTx(ctx, tx, cur.ID); err != nil {
-					return err
-				}
-				slog.Info("sale_paid_auto_unspam", "sale", cur.ID, "ref", cur.RefCode)
-			}
-			if s.OnPaid != nil {
-				event := "sale.paid"
-				if cur.SaleType == dbstore.SaleTypeSubscription {
-					event = "subscription.charged"
-				}
-				go s.OnPaid(ctx, cur.AccountID, event, map[string]any{
-					"ref_code": cur.RefCode, "amount_sen": cur.TotalSen,
-					"buyer_email": cur.Client.Email, "purchase_id": p.ID,
-					// Issue #196: form-scoped webhooks key off the sale's form.
-					"form_id": cur.FormID,
-					// Issue #438: QR ordering flow — the table number the QR
-					// stand encoded, so the merchant's webhook knows where to serve.
-					"table_number": cur.TableNumber,
-				})
-			}
-			// Issue #193: fire per-form notifications on the paid event.
+			slog.Info("sale_paid_auto_unspam", "sale", cur.ID, "ref", cur.RefCode)
+		}
+		if s.OnPaid != nil {
 			event := "sale.paid"
 			if cur.SaleType == dbstore.SaleTypeSubscription {
 				event = "subscription.charged"
 			}
-			s.fireSaleNotifications(ctx, cur, event)
-			// Receipt (one-time sales only; subscription receipts follow their
-			// own charge lifecycle). Never blocks the payment flow.
-			if cur.SaleType != dbstore.SaleTypeSubscription {
-				s.sendReceiptAsync(ctx, cur)
-			}
-			// Subscription first payment: token purchase completed → activate sub.
-			if cur.SaleType == dbstore.SaleTypeSubscription {
-				return s.activateSubscription(ctx, cur)
-			}
-		case chip.StatusError:
-			// Transition guard: only pending → failed is a real transition.
-			// A late payment_failure after the sale is already paid must not
-			// flip it back to failed.
-			if cur.Status == dbstore.SaleFailed {
-				slog.Info("callback_failed_idempotent", "purchase", p.ID, "sale", cur.ID)
-				return nil
-			}
-			if cur.Status != dbstore.SalePending {
-				slog.Warn("callback_failed_conflicting_transition",
-					"purchase", p.ID, "sale", cur.ID, "from", cur.Status, "to", dbstore.SaleFailed)
-				return nil
-			}
-			if s.OnPaid != nil {
-				go s.OnPaid(ctx, cur.AccountID, "sale.failed", map[string]any{
-					"ref_code": cur.RefCode, "buyer_email": cur.Client.Email,
-				})
-			}
-			// Issue #193: fire per-form notifications on the failed event.
-			s.fireSaleNotifications(ctx, cur, "sale.failed")
-			if err := s.Sales.SetStatusTx(ctx, tx, cur.ID, dbstore.SaleFailed); err != nil {
-				return err
-			}
-		case chip.StatusPendingCharge:
-			// transient; nothing to persist beyond event row (caller stores raw event)
-		case chip.StatusRefunded:
-			// Issue #407: a refunded purchase (initiated from the Sales page or
-			// manually in the CHIP dashboard) flips the sale to refunded. Only a
-			// real transition from a paid/confirmed state is applied; an already
-			// refunded sale is idempotent.
-			if cur.Status == dbstore.SaleRefunded {
-				slog.Info("callback_refunded_idempotent", "purchase", p.ID, "sale", cur.ID)
-				return nil
-			}
-			if cur.Status != dbstore.SalePaid && cur.Status != dbstore.SaleConfirmed {
-				slog.Warn("callback_refunded_conflicting_transition",
-					"purchase", p.ID, "sale", cur.ID, "from", cur.Status, "to", dbstore.SaleRefunded)
-				return nil
-			}
-			if err := s.Sales.SetStatusTx(ctx, tx, cur.ID, dbstore.SaleRefunded); err != nil {
-				return err
-			}
-			// Issue #518: the refunded purchase is terminal at CHIP, so record
-			// the refunded amount as the FULL total. Without this an
-			// out-of-band refund (CHIP dashboard / another integration) would
-			// leave refunded_sen behind a `refunded` status, which would
-			// misstate the balance and trip the refunded_sen <= total_sen money
-			// invariant. The refunded event carries no amount, so the full
-			// total is the only value consistent with the terminal status.
-			if err := s.Sales.SetRefundedSenTx(ctx, tx, cur.ID, cur.TotalSen); err != nil {
-				return err
-			}
-			if s.OnPaid != nil {
-				go s.OnPaid(ctx, cur.AccountID, "sale.refunded", map[string]any{
-					"ref_code": cur.RefCode, "buyer_email": cur.Client.Email,
-					"purchase_id": p.ID, "form_id": cur.FormID,
-				})
-			}
-			s.fireSaleNotifications(ctx, cur, "sale.refunded")
+			go s.OnPaid(ctx, cur.AccountID, event, map[string]any{
+				"ref_code": cur.RefCode, "amount_sen": cur.TotalSen,
+				"buyer_email": cur.Client.Email, "purchase_id": p.ID,
+				// Issue #196: form-scoped webhooks key off the sale's form.
+				"form_id": cur.FormID,
+				// Issue #438: QR ordering flow — the table number the QR
+				// stand encoded, so the merchant's webhook knows where to serve.
+				"table_number": cur.TableNumber,
+			})
 		}
-		return nil
-	})
+		// Issue #193: fire per-form notifications on the paid event.
+		event := "sale.paid"
+		if cur.SaleType == dbstore.SaleTypeSubscription {
+			event = "subscription.charged"
+		}
+		s.fireSaleNotifications(ctx, cur, event)
+		// Receipt (one-time sales only; subscription receipts follow their
+		// own charge lifecycle). Never blocks the payment flow.
+		if cur.SaleType != dbstore.SaleTypeSubscription {
+			s.sendReceiptAsync(ctx, cur)
+		}
+		// Subscription first payment: token purchase completed → activate sub.
+		if cur.SaleType == dbstore.SaleTypeSubscription {
+			return s.activateSubscription(ctx, cur)
+		}
+	case chip.StatusError:
+		// Transition guard: only pending → failed is a real transition.
+		// A late payment_failure after the sale is already paid must not
+		// flip it back to failed.
+		if cur.Status == dbstore.SaleFailed {
+			slog.Info("callback_failed_idempotent", "purchase", p.ID, "sale", cur.ID)
+			return nil
+		}
+		if cur.Status != dbstore.SalePending {
+			slog.Warn("callback_failed_conflicting_transition",
+				"purchase", p.ID, "sale", cur.ID, "from", cur.Status, "to", dbstore.SaleFailed)
+			return nil
+		}
+		if s.OnPaid != nil {
+			go s.OnPaid(ctx, cur.AccountID, "sale.failed", map[string]any{
+				"ref_code": cur.RefCode, "buyer_email": cur.Client.Email,
+			})
+		}
+		// Issue #193: fire per-form notifications on the failed event.
+		s.fireSaleNotifications(ctx, cur, "sale.failed")
+		if err := s.Sales.SetStatusTx(ctx, tx, cur.ID, dbstore.SaleFailed); err != nil {
+			return err
+		}
+	case chip.StatusPendingCharge:
+		// transient; nothing to persist beyond event row (caller stores raw event)
+	case chip.StatusRefunded:
+		// Issue #407: a refunded purchase (initiated from the Sales page or
+		// manually in the CHIP dashboard) flips the sale to refunded. Only a
+		// real transition from a paid/confirmed state is applied; an already
+		// refunded sale is idempotent.
+		if cur.Status == dbstore.SaleRefunded {
+			slog.Info("callback_refunded_idempotent", "purchase", p.ID, "sale", cur.ID)
+			return nil
+		}
+		if cur.Status != dbstore.SalePaid && cur.Status != dbstore.SaleConfirmed {
+			slog.Warn("callback_refunded_conflicting_transition",
+				"purchase", p.ID, "sale", cur.ID, "from", cur.Status, "to", dbstore.SaleRefunded)
+			return nil
+		}
+		if err := s.Sales.SetStatusTx(ctx, tx, cur.ID, dbstore.SaleRefunded); err != nil {
+			return err
+		}
+		// Issue #518: the refunded purchase is terminal at CHIP, so record
+		// the refunded amount as the FULL total. Without this an
+		// out-of-band refund (CHIP dashboard / another integration) would
+		// leave refunded_sen behind a `refunded` status, which would
+		// misstate the balance and trip the refunded_sen <= total_sen money
+		// invariant. The refunded event carries no amount, so the full
+		// total is the only value consistent with the terminal status.
+		if err := s.Sales.SetRefundedSenTx(ctx, tx, cur.ID, cur.TotalSen); err != nil {
+			return err
+		}
+		if s.OnPaid != nil {
+			go s.OnPaid(ctx, cur.AccountID, "sale.refunded", map[string]any{
+				"ref_code": cur.RefCode, "buyer_email": cur.Client.Email,
+				"purchase_id": p.ID, "form_id": cur.FormID,
+			})
+		}
+		s.fireSaleNotifications(ctx, cur, "sale.refunded")
+	}
+	return nil
 }
 
 // sendReceiptAsync builds and fires the buyer receipt for a one-time sale in
@@ -317,7 +330,7 @@ func (s *Service) sendReceiptAsync(ctx context.Context, sale *dbstore.Sale) {
 		AmountSen:    sale.TotalSen,
 		ItemsSummary: summary,
 		FormURL:      formURL,
-		WorkspaceID:      workspaceID,
+		WorkspaceID:  workspaceID,
 		FormID:       sale.FormID,
 		TIN:          tin,
 		MSIC:         msic,

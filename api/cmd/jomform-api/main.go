@@ -439,6 +439,16 @@ func main() {
 		go httpapi.RunWebhookRetrySweep(ctx, rest, whStore, 30*time.Second)
 		log.Info("webhook_retry_sweep_started")
 
+		// Issue #517: the inbound CHIP callback claims its event row before
+		// running the business logic, and a failed attempt releases it. This
+		// sweep is the retry path for a claim whose attempt is gone (crash,
+		// deploy restart, DB blip): it releases dead claims and replays
+		// unprocessed events, so a paid sale can never be stranded.
+		if deps.Payments != nil && deps.Payments.Events != nil && deps.Payments.Service != nil {
+			go payments.RunInboundCallbackSweep(ctx, deps.Payments.Service, deps.Payments.Events, 5*time.Minute)
+			log.Info("chip_callback_reclaim_sweep_started")
+		}
+
 		// Issue #185: daily BNM exchange-rate refresh (once daily, cached in
 	// Valkey with a 24h TTL). Runs at startup and then every 24h. Failures are
 	// logged and retried on the next tick — the cache keeps serving the last
