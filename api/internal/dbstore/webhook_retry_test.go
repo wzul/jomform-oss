@@ -21,11 +21,11 @@ func TestWebhookRetryQueue(t *testing.T) {
 	}
 
 	// Enqueue a retry that is due now.
-	if err := ws.EnqueueRetry(ctx, wh.ID, "sale.paid", `{"ok":1}`, 1, time.Now()); err != nil {
+	if err := ws.EnqueueRetry(ctx, acc, wh.ID, "sale.paid", `{"ok":1}`, 1, time.Now()); err != nil {
 		t.Fatalf("enqueue retry: %v", err)
 	}
 	// Enqueue a retry that is not yet due (should not be picked up).
-	if err := ws.EnqueueRetry(ctx, wh.ID, "sale.paid", `{"ok":2}`, 1, time.Now().Add(time.Hour)); err != nil {
+	if err := ws.EnqueueRetry(ctx, acc, wh.ID, "sale.paid", `{"ok":2}`, 1, time.Now().Add(time.Hour)); err != nil {
 		t.Fatalf("enqueue future retry: %v", err)
 	}
 
@@ -104,7 +104,7 @@ func TestWebhookRetryQueue(t *testing.T) {
 
 	// Account scoping: a different account cannot retry this webhook's retry.
 	other := uniqueAccount(t, ctx, p)
-	if err := ws.EnqueueRetry(ctx, wh.ID, "sale.paid", `{"ok":3}`, 1, time.Now()); err != nil {
+	if err := ws.EnqueueRetry(ctx, acc, wh.ID, "sale.paid", `{"ok":3}`, 1, time.Now()); err != nil {
 		t.Fatalf("enqueue retry 3: %v", err)
 	}
 	due, _ = ws.DueRetries(ctx, 1000)
@@ -119,5 +119,42 @@ func TestWebhookRetryQueue(t *testing.T) {
 	}
 	if err := ws.RetryNow(ctx, other, mine[0].ID); err == nil {
 		t.Fatalf("other account retried a foreign retry — account scoping failed")
+	}
+}
+
+// TestEnqueueRetryScopedToAccount pins issue #522 at the store boundary: there
+// is no way to enqueue a retry against a webhook the caller's account does not
+// own. The sweep delivers a retry with the webhook's own URL AND its own
+// signing secret, so an unscoped enqueue is a cross-tenant signed-injection
+// primitive — the store must refuse it and create no row.
+func TestEnqueueRetryScopedToAccount(t *testing.T) {
+	ctx := context.Background()
+	p := testPool(t)
+
+	owner := uniqueAccount(t, ctx, p)
+	other := uniqueAccount(t, ctx, p)
+	ws := NewWebhookStore(p)
+	wh, err := ws.Create(ctx, owner, "", "https://example.test/hook", "secret1234", []string{"sale.paid"})
+	if err != nil {
+		t.Fatalf("create webhook: %v", err)
+	}
+
+	// A foreign account cannot enqueue against this webhook.
+	if err := ws.EnqueueRetry(ctx, other, wh.ID, "sale.paid", `{"forged":1}`, 1, time.Now()); err == nil {
+		t.Fatalf("foreign account enqueued a retry for another account's webhook — scoping failed")
+	}
+	due, err := ws.DueRetries(ctx, 1000)
+	if err != nil {
+		t.Fatalf("due retries: %v", err)
+	}
+	for _, r := range due {
+		if r.WebhookID == wh.ID {
+			t.Fatalf("cross-account enqueue created a retry row for webhook %s", wh.ID)
+		}
+	}
+
+	// The owner can.
+	if err := ws.EnqueueRetry(ctx, owner, wh.ID, "sale.paid", `{"ok":1}`, 1, time.Now()); err != nil {
+		t.Fatalf("owner enqueue retry: %v", err)
 	}
 }

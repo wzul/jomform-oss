@@ -194,10 +194,20 @@ func (h *RESTHandlers) listWebhookDeliveries(w http.ResponseWriter, r *http.Requ
 // The delivery is looked up account-scoped; a new retry row is inserted with
 // next_retry_at = now so the sweep re-delivers it on the next tick. Returns
 // 404 when the delivery is not found or not owned.
+//
+// Issue #522 (cross-tenant signing bypass): the webhook id comes from the URL
+// path and is NOT authorised by looking up the delivery alone. The sweep
+// resolves the webhook id with an any-account lookup and delivers with that
+// webhook's own URL and signing secret, so enqueuing against a foreign webhook
+// id would inject attacker-controlled payload into another tenant's endpoint,
+// validly signed with the victim's secret. Authorise {id} first: the delivery's
+// owning webhook must be exactly the webhook in the path. A mismatch is a 404
+// ("tidak dijumpai") so existence is not leaked, and it creates no row.
 func (h *RESTHandlers) retryWebhookDelivery(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	if _, ok := h.requireWriteRole(w, r, actx); !ok {
 		return
 	}
+	webhookID := r.PathValue("id")
 	delivery, err := h.Webhooks.GetDelivery(r.Context(), actx.Account.ID, r.PathValue("deliveryId"))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -207,10 +217,19 @@ func (h *RESTHandlers) retryWebhookDelivery(w http.ResponseWriter, r *http.Reque
 		respondErr(w, r, err)
 		return
 	}
-	webhookID := r.PathValue("id")
+	// The delivery must belong to the webhook named in the path — otherwise the
+	// caller is trying to retry its own delivery against someone else's webhook.
+	if owned, _ := delivery["webhook_id"].(string); owned != webhookID {
+		writeErr(w, http.StatusNotFound, "tidak dijumpai")
+		return
+	}
 	event, _ := delivery["event"].(string)
 	payload, _ := delivery["payload"].(string)
-	if err := h.Webhooks.EnqueueRetry(r.Context(), webhookID, event, payload, 1, time.Now()); err != nil {
+	if err := h.Webhooks.EnqueueRetry(r.Context(), actx.Account.ID, webhookID, event, payload, 1, time.Now()); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeErr(w, http.StatusNotFound, "tidak dijumpai")
+			return
+		}
 		respondErr(w, r, err)
 		return
 	}

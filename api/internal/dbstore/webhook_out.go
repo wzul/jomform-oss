@@ -5,6 +5,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -216,12 +217,30 @@ type WebhookRetry struct {
 // EnqueueRetry inserts a retry into the persistent queue. nextRetryAt is when
 // the sweep should re-deliver it. A manual retry passes time.Now() so it is
 // picked up on the next sweep tick.
-func (s *WebhookStore) EnqueueRetry(ctx context.Context, webhookID, event, payload string, attempt int, nextRetryAt time.Time) error {
-	_, err := s.pool.Exec(ctx,
+//
+// Issue #522: the enqueue is account-scoped at the SQL level — the webhook id
+// must belong to accountID, and the row is only inserted when it does. There is
+// deliberately no unscoped variant: a retry row is delivered by the sweep with
+// the webhook's own URL AND its own signing secret, so enqueuing against an id
+// the caller does not own is a cross-tenant signed-injection primitive. Callers
+// that legitimately enqueue for an account they are acting as (the dispatcher,
+// which enqueues for the account owning the form/sale) pass that account id.
+// Returns pgx.ErrNoRows when the webhook does not exist or is not owned by
+// accountID — no row is created.
+func (s *WebhookStore) EnqueueRetry(ctx context.Context, accountID, webhookID, event, payload string, attempt int, nextRetryAt time.Time) error {
+	tag, err := s.pool.Exec(ctx,
 		`INSERT INTO webhook_retries (webhook_id, event, payload, attempt, next_retry_at)
-		 VALUES ($1,$2,$3,$4,$5)`,
-		webhookID, event, payload, attempt, nextRetryAt)
-	return err
+		 SELECT w.id, $2, $3, $4, $5
+		   FROM outbound_webhooks w
+		  WHERE w.id=$1 AND w.account_id=$6`,
+		webhookID, event, payload, attempt, nextRetryAt, accountID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
 }
 
 // DueRetries returns the non-dead-lettered retries whose next_retry_at has
@@ -336,8 +355,13 @@ func (s *WebhookStore) GetByID(ctx context.Context, accountID, webhookID string)
 	return wh, nil
 }
 
-// GetByIDAny returns one webhook by id regardless of account. Used by the
-// retry sweep, which re-delivers queued retries across all accounts.
+// GetByIDAny returns one webhook by id regardless of account. It is
+// SWEEPER-ONLY (issue #522): it exists for the retry sweep, which re-delivers
+// queued retries across all accounts and has no request context to scope
+// against. It must NEVER be called from an HTTP/MCP handler with an id taken
+// from the request — handlers authorise through GetByID (account-scoped) or by
+// comparing GetDelivery's webhook_id. The Any suffix (and the sweeper-only name
+// at the call site) is the warning.
 func (s *WebhookStore) GetByIDAny(ctx context.Context, webhookID string) (*OutboundWebhook, error) {
 	wh := &OutboundWebhook{}
 	err := s.pool.QueryRow(ctx,
@@ -352,23 +376,27 @@ func (s *WebhookStore) GetByIDAny(ctx context.Context, webhookID string) (*Outbo
 
 // GetDelivery returns one delivery row by id, account-scoped via the webhook
 // join. Returns pgx.ErrNoRows when not found or not owned.
+//
+// The returned map includes webhook_id (issue #522) so a caller can authorise
+// the webhook id it was given against the delivery's actual owner in one round
+// trip, instead of trusting a separate id from the request.
 func (s *WebhookStore) GetDelivery(ctx context.Context, accountID, deliveryID string) (map[string]any, error) {
-	var id, event, payload, errMsg string
+	var id, webhookID, event, payload, errMsg string
 	var code *int
 	var ok bool
 	var attempt int
 	var ts time.Time
 	err := s.pool.QueryRow(ctx,
-		`SELECT d.id, d.event, d.payload, d.status_code, d.success, d.attempt, COALESCE(d.error,''), d.created_at
+		`SELECT d.id, d.webhook_id, d.event, d.payload, d.status_code, d.success, d.attempt, COALESCE(d.error,''), d.created_at
 		 FROM outbound_webhook_deliveries d
 		 JOIN outbound_webhooks w ON w.id = d.webhook_id
 		 WHERE d.id=$2 AND w.account_id=$1`,
-		accountID, deliveryID).Scan(&id, &event, &payload, &code, &ok, &attempt, &errMsg, &ts)
+		accountID, deliveryID).Scan(&id, &webhookID, &event, &payload, &code, &ok, &attempt, &errMsg, &ts)
 	if err != nil {
 		return nil, err
 	}
 	return map[string]any{
-		"id": id, "event": event, "payload": payload,
+		"id": id, "webhook_id": webhookID, "event": event, "payload": payload,
 		"status_code": code, "success": ok, "attempt": attempt,
 		"error": errMsg, "created_at": ts,
 	}, nil

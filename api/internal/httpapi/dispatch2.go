@@ -71,8 +71,11 @@ func DispatchWebhooks(ctx context.Context, h *RESTHandlers, store *dbstore.Webho
 			continue
 		}
 		// Enqueue a due delivery job (next_retry_at = now) so the sweep picks
-		// it up on the next tick. Durable — survives a restart.
-		if err := store.EnqueueRetry(ctx, wh.ID, event, string(body), 1, time.Now()); err != nil {
+		// it up on the next tick. Durable — survives a restart. The enqueue is
+		// scoped to this account (issue #522): the retry is signed and
+		// delivered with the webhook's own secret, so it must never be created
+		// against an id outside the account the event belongs to.
+		if err := store.EnqueueRetry(ctx, accountID, wh.ID, event, string(body), 1, time.Now()); err != nil {
 			slog.Error("wh_enqueue", "err", err, "webhook", wh.ID, "event", event)
 		}
 	}
@@ -204,6 +207,9 @@ func sweepDueRetries(ctx context.Context, h *RESTHandlers, store *dbstore.Webhoo
 		return err
 	}
 	for _, r := range retries {
+		// Sweeper-only lookup (issue #522): no request context here, so the
+		// webhook is resolved across all accounts on purpose. Handlers must
+		// never do this — see GetByIDAny's doc comment.
 		wh, err := store.GetByIDAny(ctx, r.WebhookID)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {

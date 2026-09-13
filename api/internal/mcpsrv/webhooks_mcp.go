@@ -268,9 +268,12 @@ type retryWebhookDeliveryIn struct {
 }
 
 // retryWebhookDeliveryMCP re-enqueues a failed webhook delivery immediately
-// (issue #197, MCP parity with the dashboard Retry action). The delivery is
-// looked up account-scoped; a new retry row is inserted with next_retry_at =
-// now so the sweep re-delivers it on the next tick.
+// (issue #197, MCP parity with the dashboard Retry action). Both ids come from
+// the caller: the delivery is looked up account-scoped, and — issue #522 — the
+// delivery's owning webhook must be exactly the requested webhook_id before
+// anything is enqueued. Without that check a caller could name another
+// workspace's webhook and have its own payload delivered to that endpoint,
+// signed with that webhook's secret. EnqueueRetry is itself account-scoped.
 func (s *Server) retryWebhookDeliveryMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in retryWebhookDeliveryIn,
 ) (*mcp.CallToolResult, map[string]any, error) {
@@ -288,9 +291,12 @@ func (s *Server) retryWebhookDeliveryMCP(
 		}
 		return nil, nil, err
 	}
+	if owned, _ := delivery["webhook_id"].(string); owned != in.WebhookID {
+		return nil, nil, errors.New("penghantaran tidak dijumpai")
+	}
 	event, _ := delivery["event"].(string)
 	payload, _ := delivery["payload"].(string)
-	if err := s.deps.Webhooks.EnqueueRetry(ctx, in.WebhookID, event, payload, 1, time.Now()); err != nil {
+	if err := s.deps.Webhooks.EnqueueRetry(ctx, acc, in.WebhookID, event, payload, 1, time.Now()); err != nil {
 		return nil, nil, err
 	}
 	return nil, map[string]any{"status": "queued", "webhook_id": in.WebhookID, "delivery_id": in.DeliveryID}, nil
