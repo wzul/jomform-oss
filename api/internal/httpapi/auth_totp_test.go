@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/pquerna/otp/totp"
 	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/dbstore"
 )
@@ -120,11 +119,33 @@ func randSuffix() string {
 	return hex.EncodeToString(b)
 }
 
+// totpCode returns a current TOTP code for a secret.
+//
+// Issue #528: a TOTP code is single-use, so this hands out a code from a
+// strictly LATER time-step on each call for the same secret (modelling a real
+// authenticator) instead of repeatedly returning one code. The validator accepts
+// the current 30s step ±1, so three codes are available per secret per window.
 func totpCode(t *testing.T, secret string) string {
 	t.Helper()
-	code, err := totp.GenerateCode(secret, time.Now())
-	if err != nil {
-		t.Fatalf("generate totp code: %v", err)
+	totpStepAlloc.Lock()
+	base := time.Now().Unix() / totpTestPeriod
+	floor := base - 1
+	step := totpStepAlloc.used[secret]
+	if step < floor {
+		step = floor
+	} else {
+		step++
+	}
+	totpStepAlloc.used[secret] = step
+	totpStepAlloc.Unlock()
+
+	if step > base+1 {
+		t.Fatalf("totpCode: exhausted the ±1 drift window for this secret; " +
+			"a real authenticator cannot supply another valid code yet")
+	}
+	code := totpCodeAtStep(secret, step)
+	if code == "" {
+		t.Fatal("generate totp code: empty")
 	}
 	return code
 }
@@ -218,7 +239,9 @@ func Test2FAEnableValidatesPendingThenActivates(t *testing.T) {
 		t.Fatal("enable succeeded with no pending secret (should have been consumed)")
 	}
 
-	// Now login demands TOTP.
+	// Now login demands TOTP. Issue #528 made the enable-time code single-use,
+	// so a fresh code is required here (as a real authenticator would show).
+	freshCode := totpCode(t, secret)
 	email := meByID(t, a, userID).Email
 	rec = totpServe(t, a, "POST", base+"/v1/auth/login", map[string]string{
 		"email": email, "password": "correct-horse-battery-staple",
@@ -232,10 +255,19 @@ func Test2FAEnableValidatesPendingThenActivates(t *testing.T) {
 		t.Fatalf("expected next_step=totp_required, got %v", body)
 	}
 	rec = totpServe(t, a, "POST", base+"/v1/auth/login", map[string]string{
-		"email": email, "password": "correct-horse-battery-staple", "totp_code": code,
+		"email": email, "password": "correct-horse-battery-staple", "totp_code": freshCode,
 	}, "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("login with code = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+
+	// Issue #528: the enable-time code must NOT work again — replaying it at
+	// login has to be refused.
+	rec = totpServe(t, a, "POST", base+"/v1/auth/login", map[string]string{
+		"email": email, "password": "correct-horse-battery-staple", "totp_code": code,
+	}, "")
+	if rec.Code == http.StatusOK {
+		t.Fatal("issue #528: the already-consumed enable code was accepted at login — TOTP replay")
 	}
 }
 

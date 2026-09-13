@@ -422,7 +422,10 @@ func (a *AuthHandlers) handleLogin(w http.ResponseWriter, r *http.Request) {
 			// Accept EITHER the authenticator TOTP or an emailed backup code
 			// (issue #72). TOTP is tried first; on failure the code is checked
 			// against the emailed-code store (single-use, hashed, 10-min).
-			totpOK := auth.ValidateTOTPSecret(user.TOTPSecret, req.TOTPCode)
+			// Issue #528: consume the matched time-step so a TOTP code is
+			// single-use. ValidateTOTPSecret alone accepted the same code
+			// repeatedly for its whole drift window.
+			totpOK := checkAndConsumeTOTP(r.Context(), a.Users, user, req.TOTPCode)
 			emailOK := false
 			if !totpOK {
 				if e2fa := a.email2FA(); e2fa != nil {
@@ -591,7 +594,22 @@ func (a *AuthHandlers) handle2FAEnable(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "2fa belum di-setup atau ralat")
 		return
 	}
-	if !auth.ValidateTOTPSecret(pending, req.Code) {
+	// Issue #528: verify the code against the PENDING secret (that is what is
+	// being confirmed — the user's stored secret is still empty here), and
+	// consume the matched step so the confirming code itself is single-use: a
+	// code seen at the confirmation screen cannot be reused at the next login.
+	step, ok := auth.ValidateTOTPSecretStep(pending, req.Code)
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "kod tidak sah")
+		return
+	}
+	if consumed, cerr := a.Users.ConsumeTOTPStep(r.Context(), user.ID, step); cerr != nil {
+		// Fail closed: a database error must not hand out 2FA activation.
+		slog.Error("totp_consume_step", "err", cerr, "user", user.ID)
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	} else if !consumed {
+		slog.Warn("totp_replay_rejected", "user", user.ID, "step", step)
 		writeErr(w, http.StatusUnauthorized, "kod tidak sah")
 		return
 	}

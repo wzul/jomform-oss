@@ -19,7 +19,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pquerna/otp/totp"
 	"github.com/wzul/jomform/api/internal/auth"
 )
 
@@ -328,12 +327,34 @@ func requireUserID(t *testing.T, h *AuthHandlers, email string) string {
 }
 
 // mustTOTP returns a current TOTP code for a secret, failing the test.
+//
+// Issue #528: a TOTP code is now single-use, so this returns a code from a
+// strictly LATER time-step on each call for the same secret — modelling a real
+// authenticator rather than repeating one code. Callers that verify several
+// times (enable, then each login) therefore keep working, and a test can no
+// longer accidentally assert "the same code works twice", which is the bug #528
+// fixed.
 func mustTOTP(secret string) string {
-	code, err := totp.GenerateCode(secret, time.Now())
-	if err != nil {
-		panic("totp: " + err.Error())
+	totpStepAlloc.Lock()
+	base := time.Now().Unix() / totpTestPeriod
+	// The validator accepts the current step ±1, so three distinct codes are
+	// available per secret per window: base-1, base, base+1. Hand them out in
+	// that order.
+	floor := base - 1
+	step := totpStepAlloc.used[secret]
+	if step < floor {
+		step = floor
+	} else {
+		step++
 	}
-	return code
+	totpStepAlloc.used[secret] = step
+	totpStepAlloc.Unlock()
+
+	if step > base+1 {
+		panic("mustTOTP: exhausted the ±1 drift window for this secret; " +
+			"a real authenticator cannot supply another valid code yet")
+	}
+	return totpCodeAtStep(secret, step)
 }
 
 // _resetTrust forces a password reset to invalidate the user's trust cookies.

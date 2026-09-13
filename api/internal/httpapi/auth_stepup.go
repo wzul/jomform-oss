@@ -65,7 +65,7 @@ const (
 // checkMagicStepUp evaluates the gate without writing a response, so callers
 // can audit the decision before replying. code is the TOTP code supplied in the
 // request ("" when the client did not send one).
-func checkMagicStepUp(r *http.Request, sessions *auth.Sessions, user *dbstore.User, code string) stepUpDecision {
+func checkMagicStepUp(r *http.Request, sessions *auth.Sessions, users *dbstore.UserStore, user *dbstore.User, code string) stepUpDecision {
 	if !magicStepUpNeeded(r, sessions, user) {
 		return stepUpNotRequired
 	}
@@ -76,7 +76,11 @@ func checkMagicStepUp(r *http.Request, sessions *auth.Sessions, user *dbstore.Us
 	if sessions.StepUp().Granted(r.Context(), token, user.ID) {
 		return stepUpSatisfied
 	}
-	if code == "" || !auth.ValidateTOTPSecret(user.TOTPSecret, code) {
+	// Issue #528: the CODE must also be single-use, not just the grant. A code
+	// that verifies is consumed here, so a replayed code (a leaked screenshot,
+	// an over-shoulder read, a proxy log) cannot mint a second grant inside its
+	// ~90s window.
+	if code == "" || !checkAndConsumeTOTP(r.Context(), users, user, code) {
 		return stepUpMissing
 	}
 	// Grant for the remainder of the flow. Single-use semantics are handled by
@@ -99,7 +103,7 @@ func writeStepUpRequired(w http.ResponseWriter) {
 // gateMagicStepUp runs the gate and writes the challenge response when it
 // fails. Returns true when the caller may proceed.
 func (a *AuthHandlers) gateMagicStepUp(w http.ResponseWriter, r *http.Request, user *dbstore.User, code string) bool {
-	switch checkMagicStepUp(r, a.Sessions, user, code) {
+	switch checkMagicStepUp(r, a.Sessions, a.Users, user, code) {
 	case stepUpNotRequired:
 		return true
 	case stepUpSatisfied:
@@ -118,7 +122,7 @@ func (a *AuthHandlers) gateMagicStepUp(w http.ResponseWriter, r *http.Request, u
 // gateMagicStepUpREST is gateMagicStepUp for the RESTHandlers surface (passkey
 // registration). It audits through the RESTHandlers event helper.
 func (h *RESTHandlers) gateMagicStepUpREST(w http.ResponseWriter, r *http.Request, actx *AccountCtx, user *dbstore.User, code string) bool {
-	switch checkMagicStepUp(r, h.Sessions, user, code) {
+	switch checkMagicStepUp(r, h.Sessions, h.Users, user, code) {
 	case stepUpNotRequired, stepUpSatisfied:
 		return true
 	default:

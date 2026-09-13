@@ -37,6 +37,11 @@ type User struct {
 	// rejected by session resolution, killing every prior session. NULL until
 	// the first reset (issue #63 also keys trust-cookie invalidation on it).
 	PwResetAt *time.Time
+	// TOTPLastStep is the last TOTP time-step whose code was accepted
+	// (issue #528). TOTP was stateless, so the same 6-digit code verified
+	// repeatedly for its whole drift window; recording the consumed step makes
+	// each code single-use. 0 = nothing consumed yet.
+	TOTPLastStep int64
 	// DefaultWorkspaceID is the user's chosen default workspace (issue #164). NULL =
 	// no default → multi-workspace users are prompted to pick a workspace after login.
 	// Read via the dedicated accessor (DefaultWorkspace) so it is NOT part of the
@@ -59,9 +64,9 @@ func (s *UserStore) Create(ctx context.Context, email, passwordHash string) (*Us
 	u := &User{}
 	err := s.pool.QueryRow(ctx,
 		`INSERT INTO users (email, password_hash, verified) VALUES ($1, $2, false)
-		 RETURNING id, email, password_hash, COALESCE(totp_secret,''), totp_enabled, COALESCE(name,''), COALESCE(avatar_url,''), COALESCE(phone,''), COALESCE(timezone,''), verified, created_at, updated_at, pw_reset_at`,
+		 RETURNING id, email, password_hash, COALESCE(totp_secret,''), totp_enabled, COALESCE(name,''), COALESCE(avatar_url,''), COALESCE(phone,''), COALESCE(timezone,''), verified, created_at, updated_at, pw_reset_at, totp_last_step`,
 		email, passwordHash,
-	).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.TOTPSecret, &u.TOTPEnabled, &u.Name, &u.AvatarURL, &u.Phone, &u.Timezone, &u.Verified, &u.CreatedAt, &u.UpdatedAt, &u.PwResetAt)
+	).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.TOTPSecret, &u.TOTPEnabled, &u.Name, &u.AvatarURL, &u.Phone, &u.Timezone, &u.Verified, &u.CreatedAt, &u.UpdatedAt, &u.PwResetAt, &u.TOTPLastStep)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -75,14 +80,14 @@ func (s *UserStore) Create(ctx context.Context, email, passwordHash string) (*Us
 // ByEmail fetches a user by email (case-insensitive column).
 func (s *UserStore) ByEmail(ctx context.Context, email string) (*User, error) {
 	return s.scanOne(s.pool.QueryRow(ctx,
-		`SELECT id, email, password_hash, COALESCE(totp_secret,''), totp_enabled, COALESCE(name,''), COALESCE(avatar_url,''), COALESCE(phone,''), COALESCE(timezone,''), verified, created_at, updated_at, pw_reset_at
+		`SELECT id, email, password_hash, COALESCE(totp_secret,''), totp_enabled, COALESCE(name,''), COALESCE(avatar_url,''), COALESCE(phone,''), COALESCE(timezone,''), verified, created_at, updated_at, pw_reset_at, totp_last_step
 		 FROM users WHERE email = $1`, email))
 }
 
 // ByID fetches a user by UUID string.
 func (s *UserStore) ByID(ctx context.Context, id string) (*User, error) {
 	return s.scanOne(s.pool.QueryRow(ctx,
-		`SELECT id, email, password_hash, COALESCE(totp_secret,''), totp_enabled, COALESCE(name,''), COALESCE(avatar_url,''), COALESCE(phone,''), COALESCE(timezone,''), verified, created_at, updated_at, pw_reset_at
+		`SELECT id, email, password_hash, COALESCE(totp_secret,''), totp_enabled, COALESCE(name,''), COALESCE(avatar_url,''), COALESCE(phone,''), COALESCE(timezone,''), verified, created_at, updated_at, pw_reset_at, totp_last_step
 		 FROM users WHERE id = $1`, id))
 }
 
@@ -119,9 +124,28 @@ func (s *UserStore) DisableTOTP(ctx context.Context, userID string) error {
 	return err
 }
 
+// ConsumeTOTPStep records that the TOTP time-step `step` has been used
+// (issue #528), returning true only when this call actually advanced the stored
+// step. The predicate is part of the UPDATE, so two concurrent submissions of
+// the SAME code cannot both succeed: the first advances totp_last_step, the
+// second matches no row and gets ok=false. That is what makes a TOTP code
+// single-use rather than single-use-per-window.
+//
+// A false return must be treated as a replayed code (reject it), not as an
+// error — err is only for a genuine database failure.
+func (s *UserStore) ConsumeTOTPStep(ctx context.Context, userID string, step int64) (bool, error) {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE users SET totp_last_step = $2, updated_at = now()
+		  WHERE id = $1 AND totp_last_step < $2`, userID, step)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 func (s *UserStore) scanOne(row pgx.Row) (*User, error) {
 	u := &User{}
-	err := row.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.TOTPSecret, &u.TOTPEnabled, &u.Name, &u.AvatarURL, &u.Phone, &u.Timezone, &u.Verified, &u.CreatedAt, &u.UpdatedAt, &u.PwResetAt)
+	err := row.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.TOTPSecret, &u.TOTPEnabled, &u.Name, &u.AvatarURL, &u.Phone, &u.Timezone, &u.Verified, &u.CreatedAt, &u.UpdatedAt, &u.PwResetAt, &u.TOTPLastStep)
 	if err != nil {
 		return nil, err
 	}
