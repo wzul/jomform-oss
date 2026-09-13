@@ -5,6 +5,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -72,8 +73,13 @@ func (h *RESTHandlers) createAffiliate(w http.ResponseWriter, r *http.Request, a
 }
 
 // setAffiliateCommission PUT /v1/workspaces/{id}/affiliates/{affid}/commission.
+//
+// Issue #519: the affiliate id in the path is checked against the workspace the
+// caller was authorised against before anything is written — the same rule
+// getAffiliateSales applies. A mismatch is a 404, identical to an unknown id in
+// one's own workspace, so the caller cannot probe for ids in other tenants.
 func (h *RESTHandlers) setAffiliateCommission(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
-	_, role, ok := h.workspaceAccessByID(w, r)
+	s, role, ok := h.workspaceAccessByID(w, r)
 	if !ok {
 		return
 	}
@@ -88,7 +94,21 @@ func (h *RESTHandlers) setAffiliateCommission(w http.ResponseWriter, r *http.Req
 		writeErr(w, http.StatusBadRequest, "body tidak sah")
 		return
 	}
-	if err := h.Affiliates.SetCommission(r.Context(), r.PathValue("affid"), in.CommissionPct); err != nil {
+	affid := r.PathValue("affid")
+	// Scope check (issue #519): the affiliate must belong to the authorised
+	// workspace. 404 — never 403 — so no other tenant's ids are enumerable.
+	aff, err := h.Affiliates.ByID(r.Context(), affid)
+	if err != nil || aff == nil || aff.WorkspaceID != s.ID {
+		writeErr(w, http.StatusNotFound, "affiliate tidak dijumpai")
+		return
+	}
+	// Scoped store write (issue #519): the UPDATE itself is bound to the
+	// authorised workspace, so a future caller cannot reintroduce the bug.
+	if err := h.Affiliates.SetCommission(r.Context(), s.ID, affid, in.CommissionPct); err != nil {
+		if errors.Is(err, dbstore.ErrAffiliateNotFound) {
+			writeErr(w, http.StatusNotFound, "affiliate tidak dijumpai")
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, "ralat")
 		return
 	}

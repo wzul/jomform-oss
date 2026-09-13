@@ -2,6 +2,7 @@ package dbstore
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -40,12 +41,26 @@ func TestAffiliateCRUD(t *testing.T) {
 		t.Fatalf("commission = %v, want 10", got.CommissionPct)
 	}
 
-	if err := store.SetCommission(ctx, a.ID, 15); err != nil {
+	if err := store.SetCommission(ctx, ws.ID, a.ID, 15); err != nil {
 		t.Fatalf("set commission: %v", err)
 	}
 	got2, _ := store.ByID(ctx, a.ID)
 	if got2.CommissionPct != 15 {
 		t.Fatalf("commission after set = %v, want 15", got2.CommissionPct)
+	}
+
+	// Issue #519: the store rejects a write scoped to the WRONG workspace, so
+	// the guard cannot be bypassed by a future caller that forgets its own
+	// handler-side check. The row must be left untouched.
+	otherWS := &Workspace{ID: uuid.NewString(), Name: "Other", Slug: "aff-other-" + uuid.NewString()[:8], Owner: ownerID}
+	if _, err := pool.Exec(ctx, `INSERT INTO workspaces (id, owner_user_id, name, slug) VALUES ($1,$2,$3,$4)`, otherWS.ID, otherWS.Owner, otherWS.Name, otherWS.Slug); err != nil {
+		t.Fatalf("insert other workspace: %v", err)
+	}
+	if err := store.SetCommission(ctx, otherWS.ID, a.ID, 99); !errors.Is(err, ErrAffiliateNotFound) {
+		t.Fatalf("cross-workspace SetCommission err = %v, want ErrAffiliateNotFound", err)
+	}
+	if got3, _ := store.ByID(ctx, a.ID); got3.CommissionPct != 15 {
+		t.Fatalf("cross-workspace SetCommission modified the row: %v, want 15", got3.CommissionPct)
 	}
 
 	list, err := store.ByWorkspace(ctx, ws.ID)

@@ -163,6 +163,12 @@ type setAffiliateCommissionIn struct {
 	CommissionPct float64 `json:"commission_pct" jsonschema:"Kadar komisen %% (cth: 10 = 10%%)"`
 }
 
+// setAffiliateCommission sets an affiliate's commission rate (issue #444).
+//
+// Issue #519: the affiliate id is checked against the workspace the caller was
+// authorised against before anything is written — the same rule
+// get_affiliate_sales applies. A mismatch reports the same not-found error as
+// an unknown id, so a caller cannot tell whether an id exists elsewhere.
 func (s *Server) setAffiliateCommission(
 	ctx context.Context, _ *mcp.CallToolRequest, in setAffiliateCommissionIn,
 ) (*mcp.CallToolResult, map[string]bool, error) {
@@ -177,7 +183,17 @@ func (s *Server) setAffiliateCommission(
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := affStore.SetCommission(ctx, in.AffiliateID, in.CommissionPct); err != nil {
+	// Scope check (issue #519): the affiliate must belong to in.WorkspaceID.
+	aff, err := affStore.ByID(ctx, in.AffiliateID)
+	if err != nil || aff == nil || aff.WorkspaceID != in.WorkspaceID {
+		return nil, nil, errors.New("affiliate tidak dijumpai")
+	}
+	// Scoped store write (issue #519): the UPDATE itself is bound to the
+	// authorised workspace, so a future caller cannot reintroduce the bug.
+	if err := affStore.SetCommission(ctx, in.WorkspaceID, in.AffiliateID, in.CommissionPct); err != nil {
+		if errors.Is(err, dbstore.ErrAffiliateNotFound) {
+			return nil, nil, errors.New("affiliate tidak dijumpai")
+		}
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
 	return nil, map[string]bool{"ok": true}, nil

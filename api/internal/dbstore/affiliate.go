@@ -5,9 +5,16 @@ package dbstore
 
 import (
 	"context"
+	"errors"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// ErrAffiliateNotFound is returned when a workspace-scoped affiliate operation
+// matches no row (issue #519) — either the id does not exist or it belongs to
+// another workspace. Callers must treat both the same way (a not-found
+// response) so the difference never leaks.
+var ErrAffiliateNotFound = errors.New("affiliate not found")
 
 // Affiliate models the affiliates table.
 type Affiliate struct {
@@ -79,8 +86,23 @@ func (s *AffiliateStore) ByID(ctx context.Context, id string) (*Affiliate, error
 	return a, nil
 }
 
-// SetCommission updates an affiliate's commission rate.
-func (s *AffiliateStore) SetCommission(ctx context.Context, id string, pct float64) error {
-	_, err := s.pool.Exec(ctx, `UPDATE affiliates SET commission_pct=$2 WHERE id=$1`, id, pct)
-	return err
+// SetCommission updates an affiliate's commission rate, scoped to its owning
+// workspace (issue #519).
+//
+// The workspace predicate is part of the UPDATE itself, not a handler-side
+// convention: an affiliate id that does not belong to workspaceID updates zero
+// rows and reports ErrAffiliateNotFound, so a caller can never move another
+// workspace's commission rate by passing its affiliate id. Callers must supply
+// the workspace they were authorised against.
+func (s *AffiliateStore) SetCommission(ctx context.Context, workspaceID, id string, pct float64) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE affiliates SET commission_pct=$3 WHERE id=$2 AND workspace_id=$1`,
+		workspaceID, id, pct)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrAffiliateNotFound
+	}
+	return nil
 }
