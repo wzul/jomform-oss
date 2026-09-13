@@ -91,6 +91,11 @@ func (h *PublicHandlers) renderRestriction(w http.ResponseWriter, r *http.Reques
 	title := f.Title
 	ls := h.effectiveLangStrings(r.Context(), f)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// Issue #537: f.Title is merchant-controlled TEXT, so it MUST be escaped —
+	// this is a raw fmt.Fprintf (no html/template autoescaping), and an
+	// unescaped title let a `</title><script>` break out and execute on the
+	// buyer's page. msg/lang come from server-side maps, but they ride through
+	// the same helper so no future edit can reintroduce a raw sink.
 	fmt.Fprintf(w, `<!doctype html><html lang="%s"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>%s</title>
 <style>body{background:#f7f8f8;color:#17181c;font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:24px}
@@ -99,7 +104,7 @@ h1{font-size:20px;margin:0 0 8px}.m{color:#6b7280;font-size:14px;line-height:1.6
 .f{color:#9ca3af;font-size:12px;margin-top:20px}</style></head><body><div class="c">
 <h1>%s</h1><p class="m">%s</p>
 <p class="f">Dikuasakan oleh JomForm</p></div></body></html>`,
-		ls.Lang, title, title, msg)
+		htmlEsc(ls.Lang), htmlEsc(title), htmlEsc(title), htmlEsc(msg))
 }
 
 // checkRestrictionsRender returns the restriction state that should block the

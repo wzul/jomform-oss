@@ -214,6 +214,38 @@ func htmlEsc(s string) string {
 	return r.Replace(s)
 }
 
+// jsSingleQuoted escapes a value for interpolation inside a SINGLE-QUOTED
+// JavaScript string literal in an inline <script> (issue #537).
+//
+// HTML escaping is not sufficient for that context: `'` would terminate the
+// literal and let the remainder run as code. Anything that is not a safe
+// identifier character is emitted as a \uXXXX escape, so the result can be
+// placed between single quotes without terminating or escaping the literal.
+// This also neutralises `</script>` (the `<` becomes \u003c), which would
+// otherwise end the script block early.
+//
+// Only used for values the page interpolates into JS; HTML text uses htmlEsc.
+func jsSingleQuoted(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '-', r == '_', r == '.', r == '/':
+			b.WriteRune(r)
+		default:
+			// \uXXXX keeps the literal intact for every other rune.
+			if r <= 0xFFFF {
+				fmt.Fprintf(&b, `\u%04x`, r)
+			} else {
+				// Supplementary plane: encode as a surrogate pair.
+				r -= 0x10000
+				fmt.Fprintf(&b, `\u%04x\u%04x`, 0xD800+(r>>10), 0xDC00+(r&0x3FF))
+			}
+		}
+	}
+	return b.String()
+}
+
 // obfuscateEmail masks an address for logs while keeping it greppable, e.g.
 // "wan***@jomform.com" — logs the per-IP register attempt but not the full PII
 // (issue #42 operational guardrail).

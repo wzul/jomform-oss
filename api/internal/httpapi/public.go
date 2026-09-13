@@ -1087,6 +1087,9 @@ const iv = setInterval(async () => {
 	} else if conf != nil && conf.Message != "" {
 		message = conf.Message
 	}
+	// Issue #537: raw fmt.Fprintf has no autoescaping. The values here are
+	// server-generated today, but they ride through the same escape helper so the
+	// sink cannot become an XSS if a caller-supplied value is ever added.
 	fmt.Fprintf(w, `<!doctype html><html lang="ms"><head><meta charset="utf-8">%s
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Terima kasih</title>
 <meta name="jf-ref" content="%s">
@@ -1099,7 +1102,7 @@ h1{color:#10b981;font-size:24px}
 <h1>✓ Terima kasih!</h1><div class="msg">%s</div>
 <p class="ref">Tempahan <strong>%s</strong> · Status: %s.</p>
 <p style="color:#9ca3af;font-size:12px">Dikuasakan oleh JomForm</p></div></body></html>`,
-		refresh, sale.RefCode, message, sale.RefCode, statusText)
+		refresh, htmlEsc(sale.RefCode), message, htmlEsc(sale.RefCode), htmlEsc(statusText))
 }
 
 // handleThankYouStatus is the read-only status endpoint the thank-you page
@@ -1359,6 +1362,11 @@ func (h *PublicHandlers) handleFormUnlock(w http.ResponseWriter, r *http.Request
 // renderPrivateGate renders the password gate screen for a private form.
 func (h *PublicHandlers) renderPrivateGate(w http.ResponseWriter, r *http.Request, f *dbstore.Form) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// Issue #537: raw fmt.Fprintf has no html/template autoescaping, so every
+	// merchant-controlled value must be escaped for the context it lands in.
+	// f.Title is HTML text; f.Slug is interpolated into a JS single-quoted
+	// string literal inside the fetch() below, so it needs JS-context escaping —
+	// HTML escaping alone would still allow a `'` to break out of the string.
 	fmt.Fprintf(w, `<!doctype html><html lang="ms"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>%s</title>
 <style>body{background:#f7f8f8;color:#17181c;font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
@@ -1380,7 +1388,7 @@ var r=await fetch('/%s/unlock',{method:'POST',headers:{'Content-Type':'applicati
 if(r.ok){location.reload();}else{var d=await r.json().catch(function(){return{};});document.getElementById('err').textContent=d.error||'Kata laluan salah';}
 return false;}
 </script></body></html>`,
-		f.Title, f.Title, f.Slug)
+		htmlEsc(f.Title), htmlEsc(f.Title), jsSingleQuoted(f.Slug))
 }
 
 // formAccessCookie names the signed cookie that unlocks a private form.
