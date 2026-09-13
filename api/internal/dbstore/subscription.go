@@ -3,6 +3,7 @@ package dbstore
 import (
 	"context"
 	"errors"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -44,8 +45,8 @@ type Subscription struct {
 	// 7-day overdue auto-cancel is paused. CardUpdatePurchaseID holds the
 	// CHIP token purchase created by the update-card flow; on payment it
 	// atomically replaces ChipTokenPurchaseID.
-	CardUpdatePending     bool
-	CardUpdatePurchaseID  string
+	CardUpdatePending    bool
+	CardUpdatePurchaseID string
 }
 
 // SubscriptionStore wraps pgx for subscriptions.
@@ -125,6 +126,65 @@ func (s *SubscriptionStore) ScheduleNextCharge(ctx context.Context, subID string
 	return err
 }
 
+// ClaimDue atomically takes ownership of a due subscription before a charge is
+// attempted, and reports whether THIS caller won the claim.
+//
+// Issue #534: a due subscription used to be charged again on the next sweep while
+// its previous charge was still pending, because next_charge_at is only advanced
+// by the purchase.paid callback and nothing leased the subscription in between.
+// The customer's card was charged twice for one period.
+//
+// The claim is a conditional UPDATE whose WHERE clause carries the guard, so it is
+// correct under concurrency (the database serialises competing claimants and
+// RowsAffected reports exactly one winner) and needs no application-level lock.
+// Advancing next_charge_at IS the lease: it both removes the subscription from the
+// due window and records when the lease expires.
+//
+//   - A successful charge later corrects next_charge_at to the true period via
+//     ScheduleNextCharge.
+//   - A failed charge shortens it to the retry backoff.
+//   - If the process dies mid-attempt, the lease (not the guard) is what expires,
+//     so a crashed attempt is retried after leaseFor rather than never.
+func (s *SubscriptionStore) ClaimDue(ctx context.Context, subID string, leaseFor time.Duration) (bool, error) {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE subscriptions
+		    SET next_charge_at = now() + $2::interval, updated_at = now()
+		  WHERE id = $1
+		    AND status = 'active'
+		    AND next_charge_at <= now()
+		    AND NOT EXISTS (
+		          SELECT 1 FROM subscription_charges c
+		           WHERE c.subscription_id = $1 AND c.status = 'pending')`,
+		subID, leaseDurationSQL(leaseFor))
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// leaseDurationSQL renders a duration as a Postgres interval literal, avoiding a
+// dependency on pgtype for a single parameter.
+func leaseDurationSQL(d time.Duration) string {
+	if d <= 0 {
+		d = time.Hour
+	}
+	return strconv.FormatInt(int64(d/time.Second), 10) + " seconds"
+}
+
+// HasPendingCharge reports whether the subscription has an outstanding charge.
+// The claim above already refuses such a subscription, so this is a read-only
+// companion for callers that want to explain why a claim was skipped.
+func (s *SubscriptionStore) HasPendingCharge(ctx context.Context, subID string) (bool, error) {
+	var exists bool
+	err := s.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM subscription_charges
+		                WHERE subscription_id=$1 AND status='pending')`, subID).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
 // SetStatus transitions subscription status.
 func (s *SubscriptionStore) SetStatus(ctx context.Context, subID, status string) error {
 	_, err := s.pool.Exec(ctx,
@@ -163,26 +223,45 @@ func (s *SubscriptionStore) MarkChargeFailed(ctx context.Context, chipPurchaseID
 }
 
 // FailedAttempts counts failed charges for the current retry cycle.
-func (s *SubscriptionStore) FailedAttempts(ctx context.Context, subID string) int64 {
+//
+// Issue #535: this used to read a `created_at` column that does not exist on
+// subscription_charges (the column is `charged_at`), and discarded the resulting
+// error with `_ =`. It therefore returned 0 forever, so the caller's
+// `attempt := FailedAttempts(...) + 1` was always 1 and the retry ladder never
+// reached maxChargeAttempts — leaving past_due, the card-update prompt and the
+// overdue auto-cancel unreachable. The error is now returned, so a future
+// mismatch fails loudly instead of silently disarming the ladder.
+func (s *SubscriptionStore) FailedAttempts(ctx context.Context, subID string) (int64, error) {
 	var n int64
-	_ = s.pool.QueryRow(ctx,
+	err := s.pool.QueryRow(ctx,
 		`SELECT COUNT(*) FROM subscription_charges
 		 WHERE subscription_id=$1 AND status='failed'
-		   AND created_at > COALESCE((SELECT MAX(updated_at) FROM subscription_charges
-		                             WHERE subscription_id=$1 AND status='paid'), 'epoch')`,
+		   AND charged_at > COALESCE((SELECT MAX(updated_at) FROM subscription_charges
+		                              WHERE subscription_id=$1 AND status='paid'), 'epoch')`,
 		subID).Scan(&n)
-	return n
+	if err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 // ChargeCount returns the number of paid charges recorded for a subscription.
 // This is the "charge count reached" used to enforce a fixed billing count
 // (subscription_charges = N stops after the Nth paid charge).
-func (s *SubscriptionStore) ChargeCount(ctx context.Context, subID string) int64 {
+//
+// Issue #535: like FailedAttempts, this used to discard its query error and
+// return 0. Here a swallowed error is not benign: 0 means "no charges consumed
+// yet", so a fixed-billing subscription would keep charging past its Nth charge
+// instead of completing. The error is returned so callers can fail safely.
+func (s *SubscriptionStore) ChargeCount(ctx context.Context, subID string) (int64, error) {
 	var n int64
-	_ = s.pool.QueryRow(ctx,
+	err := s.pool.QueryRow(ctx,
 		`SELECT COUNT(*) FROM subscription_charges
 		 WHERE subscription_id=$1 AND status='paid'`, subID).Scan(&n)
-	return n
+	if err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 // ByChargePurchase finds the subscription owning a child charge purchase id

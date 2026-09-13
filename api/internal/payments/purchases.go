@@ -443,7 +443,14 @@ func (s *Service) completeIfLimitReached(ctx context.Context, sub *dbstore.Subsc
 	if prod.SubscriptionCharges == nil {
 		return nil // infinite
 	}
-	total := 1 + s.Subs.ChargeCount(ctx, sub.ID)
+	paid, err := s.Subs.ChargeCount(ctx, sub.ID)
+	if err != nil {
+		// Issue #535: a swallowed error here would read as "0 charges consumed",
+		// so a fixed-billing subscription would keep charging past its Nth charge
+		// instead of completing. Fail the cycle instead of guessing.
+		return err
+	}
+	total := 1 + paid
 	if total >= int64(*prod.SubscriptionCharges) {
 		if err := s.Subs.SetStatus(ctx, sub.ID, dbstore.SubCompleted); err != nil {
 			return err

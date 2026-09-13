@@ -38,6 +38,13 @@ func (s *Service) RunDueCharges(ctx context.Context) error {
 	return nil
 }
 
+// chargeLease is how long a claimed subscription stays out of the due window
+// while its charge is in flight. It must exceed a normal gateway round-trip and
+// the callback latency, so a healthy attempt is never double-charged; it only
+// has to be long enough that a crashed attempt is retried later rather than
+// immediately (issue #534).
+const chargeLease = 1 * time.Hour
+
 func (s *Service) chargeSubscription(ctx context.Context, sub *dbstore.Subscription) error {
 	// Issue #152: a fixed billing count (subscription_charges = N) stops the
 	// subscription after the Nth charge. The initial token purchase is always
@@ -47,6 +54,24 @@ func (s *Service) chargeSubscription(ctx context.Context, sub *dbstore.Subscript
 	if done, err := s.maybeCompleteSubscription(ctx, sub); err != nil {
 		return err
 	} else if done {
+		return nil
+	}
+
+	// Issue #534: claim the subscription BEFORE charging. next_charge_at is only
+	// advanced by the purchase.paid callback, so without a lease the next sweep
+	// (hourly, and immediately on process start) sees the subscription as still
+	// due while the first charge is pending and charges the customer's card again
+	// for the same period. The claim is a conditional UPDATE, so exactly one
+	// caller can win — concurrent sweeps cannot both charge.
+	claimed, err := s.Subs.ClaimDue(ctx, sub.ID, chargeLease)
+	if err != nil {
+		return fmt.Errorf("claim due: %w", err)
+	}
+	if !claimed {
+		// Either another worker/instance holds the lease, or an earlier charge is
+		// still pending, or the subscription is no longer due. All mean: do not
+		// charge now.
+		slog.Info("sub_charge_skipped_not_claimed", "sub", sub.ID)
 		return nil
 	}
 
@@ -60,7 +85,14 @@ func (s *Service) chargeSubscription(ctx context.Context, sub *dbstore.Subscript
 	}
 
 	// attempt number = previous failed attempts + 1
-	attempt := s.Subs.FailedAttempts(ctx, sub.ID) + 1
+	prior, err := s.Subs.FailedAttempts(ctx, sub.ID)
+	if err != nil {
+		// Issue #535: never guess the attempt number. A wrong value disarms the
+		// retry ladder (past_due / card-update / auto-cancel become unreachable),
+		// so abort this cycle and try again on the next sweep.
+		return fmt.Errorf("failed attempts: %w", err)
+	}
+	attempt := prior + 1
 
 	req := chip.PurchaseRequest{
 		CreatorAgent:    "JomForm",
@@ -106,7 +138,13 @@ func (s *Service) maybeCompleteSubscription(ctx context.Context, sub *dbstore.Su
 	if prod.SubscriptionCharges == nil {
 		return false, nil // infinite
 	}
-	total := 1 + s.Subs.ChargeCount(ctx, sub.ID)
+	paid, err := s.Subs.ChargeCount(ctx, sub.ID)
+	if err != nil {
+		// Issue #535: never treat a failed count as "0 charges consumed" — that
+		// would keep a fixed-billing subscription charging past its Nth charge.
+		return false, err
+	}
+	total := 1 + paid
 	if total >= int64(*prod.SubscriptionCharges) {
 		if err := s.Subs.SetStatus(ctx, sub.ID, dbstore.SubCompleted); err != nil {
 			return false, err
