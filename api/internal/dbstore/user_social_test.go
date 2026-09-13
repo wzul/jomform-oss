@@ -16,7 +16,7 @@ func TestCreateFromSocialEmptyName(t *testing.T) {
 	store := NewUserStore(p)
 
 	email := "social-empty-" + md5Rand() + "@example.test"
-	uid, err := store.CreateFromSocial(ctx, email, "", "google", "uid-"+md5Rand(), "")
+	uid, err := store.CreateFromSocial(ctx, email, "", "google", "uid-"+md5Rand(), "", true)
 	if err != nil {
 		t.Fatalf("CreateFromSocial with empty name: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestCreateFromSocialEmptyNameNoLocalPart(t *testing.T) {
 	// Email with no local part (e.g. "@example.test") and empty name → the
 	// generic "User" fallback must be used so name is never NULL.
 	email := "@" + md5Rand() + ".test"
-	uid, err := store.CreateFromSocial(ctx, email, "", "google", "uid-"+md5Rand(), "")
+	uid, err := store.CreateFromSocial(ctx, email, "", "google", "uid-"+md5Rand(), "", true)
 	if err != nil {
 		t.Fatalf("CreateFromSocial with empty name and no local part: %v", err)
 	}

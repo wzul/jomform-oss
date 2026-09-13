@@ -35,9 +35,14 @@ import (
 )
 
 type oidcProvider struct {
-	AuthURL   string
-	TokenURL  string
-	UserURL   string
+	AuthURL  string
+	TokenURL string
+	UserURL  string
+	// EmailsURL is an optional provider endpoint that authoritatively reports
+	// the user's addresses and their verification state (GitHub: /user/emails).
+	// When set, it is the source of truth for the email + verified flag rather
+	// than the profile-level email_verified claim (issue #539).
+	EmailsURL string
 	Scope     string
 	IDEnv     string
 	SecretEnv string
@@ -61,9 +66,13 @@ var oidcProviders = map[string]oidcProvider{
 		Scope:     "openid email profile",
 	},
 	"github": {
-		AuthURL:   "https://github.com/login/oauth/authorize",
-		TokenURL:  "https://github.com/login/oauth/access_token",
-		UserURL:   "https://api.github.com/user",
+		AuthURL:  "https://github.com/login/oauth/authorize",
+		TokenURL: "https://github.com/login/oauth/access_token",
+		UserURL:  "https://api.github.com/user",
+		// Issue #539: GitHub's /user omits email_verified and hides the address
+		// unless it is public; /user/emails is authoritative and the
+		// config already requests the user:email scope it needs.
+		EmailsURL: "https://api.github.com/user/emails",
 		IDEnv:     "JF_GITHUB_CLIENT_ID",
 		SecretEnv: "JF_GITHUB_CLIENT_SECRET",
 		Scope:     "read:user user:email",
@@ -204,6 +213,19 @@ func (a *AuthHandlers) socialCallback(w http.ResponseWriter, r *http.Request) {
 	// 1) existing identity → log the user in
 	userID, err := a.Users.FindIdentity(r.Context(), provider, up.UID)
 	if err == nil && userID != "" {
+		// Issue #539: the same verification gate applies to an existing account.
+		// A local account whose email was never confirmed must not gain a session
+		// merely by presenting a social identity for it, so an unverified local
+		// row is held to the password path's rule (auth.go: "an unverified
+		// account may not log in").
+		if u, uerr := a.Users.ByID(r.Context(), userID); uerr == nil && u != nil && !u.Verified {
+			slog.Info("social_login_unverified_account", "provider", provider, "email", obfuscateEmail(up.Email))
+			if err := a.sendVerifyEmail(r.Context(), userID, up.Email, ""); err != nil {
+				slog.Warn("social_login_verify_send_failed", "err", err, "email", obfuscateEmail(up.Email))
+			}
+			http.Redirect(w, r, "/login?verify=1", http.StatusFound)
+			return
+		}
 		a.ensureAccountFor(r, userID, up.Email)
 		_ = a.startSession(w, r, userID, false, false)
 		// Successful social login resets the failure counters (issue #345) so
@@ -261,7 +283,15 @@ func (a *AuthHandlers) socialCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 4) brand-new social user → create account (email scope required)
-	newID, err := a.Users.CreateFromSocial(r.Context(), up.Email, up.Name, provider, up.UID, up.Picture)
+	//
+	// Issue #539: the account's verified state comes from the PROVIDER's
+	// email_verified assertion, resolved in fetchUserInfo (and, for a provider
+	// with a dedicated emails endpoint, from that authoritative source). It is
+	// written explicitly so the row can never inherit the verified=true schema
+	// default. An unverified provider claim therefore produces an unverified
+	// account that must go through the normal email-verification flow, exactly
+	// like a password signup.
+	newID, err := a.Users.CreateFromSocial(r.Context(), up.Email, up.Name, provider, up.UID, up.Picture, up.EmailVerified)
 	if err != nil {
 		writeErr(w, http.StatusConflict, "tidak boleh cipta akaun: "+err.Error())
 		return
@@ -272,6 +302,18 @@ func (a *AuthHandlers) socialCallback(w http.ResponseWriter, r *http.Request) {
 	// (/workspaces, /rest/dashboard-bundle) 401s because resolveSessionAccount
 	// finds no account (issue #298). Idempotent for existing users.
 	a.ensureAccountFor(r, newID, up.Email)
+	// Issue #539: a session is only minted for a VERIFIED email. When the
+	// provider would not assert the address, send the user through the same
+	// verification gate the password path enforces (auth.go: "an unverified
+	// account may not log in") instead of starting a session.
+	if !up.EmailVerified {
+		slog.Info("social_signup_unverified", "provider", provider, "email", obfuscateEmail(up.Email))
+		if err := a.sendVerifyEmail(r.Context(), newID, up.Email, ""); err != nil {
+			slog.Warn("social_signup_verify_send_failed", "err", err, "email", obfuscateEmail(up.Email))
+		}
+		http.Redirect(w, r, "/login?verify=1", http.StatusFound)
+		return
+	}
 	_ = a.startSession(w, r, newID, false, false)
 	// Reset failure counters on a successful social signup-login too (issue
 	// #345). Fail-open (log only, never block).
@@ -532,13 +574,24 @@ func exchangeCode(p oidcProvider, redirect, code string) (string, error) {
 }
 
 func fetchUserInfo(p oidcProvider, token string) (*socialProfile, error) {
-	req, _ := http.NewRequest(http.MethodGet, p.UserURL, nil)
+	req, err := http.NewRequest(http.MethodGet, p.UserURL, nil)
+	if err != nil {
+		return nil, err
+	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := http.Get(req.URL.String())
+	req.Header.Set("Accept", "application/json")
+	// Issue #539: send the request we built. This previously called http.Get with
+	// req.URL, which DROPS the Authorization header entirely — so every OIDC
+	// userinfo call was unauthenticated (it only worked because some providers
+	// tolerate an anonymous userinfo hit, and it would fail hard on others).
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("userinfo: unexpected status %d", resp.StatusCode)
+	}
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	var raw struct {
 		Sub           string `json:"sub"`
@@ -561,7 +614,75 @@ func fetchUserInfo(p oidcProvider, token string) (*socialProfile, error) {
 	if pic == "" {
 		pic = raw.Avatar
 	}
-	return &socialProfile{UID: uid, Email: raw.Email, Name: raw.Name, Picture: pic, EmailVerified: raw.EmailVerified}, nil
+
+	verified := raw.EmailVerified
+	email := raw.Email
+
+	// Issue #539: GitHub's /user endpoint does NOT return email_verified at all,
+	// and returns `email: null` unless the user's address is public — so
+	// EmailVerified decoded as false while the account used to be created
+	// verified anyway. Resolve the address and its verified flag from
+	// /user/emails (the scope the provider config already requests: user:email).
+	if p.EmailsURL != "" {
+		ve, vOK, err := fetchPrimaryVerifiedEmail(p.EmailsURL, token)
+		if err != nil {
+			// Never fail the login on this; fall through as UNVERIFIED so the
+			// normal verification flow applies instead of assuming trust.
+			slog.Warn("social_emails_lookup_failed", "url", p.EmailsURL, "err", err)
+		}
+		if vOK {
+			email = ve
+			verified = true
+		} else {
+			verified = false
+		}
+		// A provider that exposes a dedicated emails endpoint is authoritative:
+		// if we could not establish a verified primary address, do not trust the
+		// profile-level claim (which such providers do not make).
+		if email == "" && vOK {
+			email = ve
+		}
+	}
+	if strings.TrimSpace(email) == "" {
+		return nil, fmt.Errorf("userinfo: provider returned no email address")
+	}
+	return &socialProfile{UID: uid, Email: email, Name: raw.Name, Picture: pic, EmailVerified: verified}, nil
+}
+
+// fetchPrimaryVerifiedEmail reads the user's primary, verified email from a
+// provider's emails endpoint (GitHub: GET /user/emails). Returns (email, true)
+// only when a primary AND verified address exists, so the caller can treat any
+// other outcome as unverified rather than assuming trust (issue #539).
+func fetchPrimaryVerifiedEmail(emailsURL, token string) (string, bool, error) {
+	req, err := http.NewRequest(http.MethodGet, emailsURL, nil)
+	if err != nil {
+		return "", false, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", false, fmt.Errorf("emails: unexpected status %d", resp.StatusCode)
+	}
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	var list []struct {
+		Email    string `json:"email"`
+		Primary  bool   `json:"primary"`
+		Verified bool   `json:"verified"`
+	}
+	if err := json.Unmarshal(b, &list); err != nil {
+		return "", false, err
+	}
+	for _, e := range list {
+		if e.Primary && e.Verified && strings.TrimSpace(e.Email) != "" {
+			return strings.ToLower(strings.TrimSpace(e.Email)), true, nil
+		}
+	}
+	return "", false, nil
 }
 
 var _ = strings.TrimSpace

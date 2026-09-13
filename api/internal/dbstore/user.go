@@ -25,13 +25,13 @@ type User struct {
 	Name         string
 	AvatarURL    string
 	// Phone is the user's optional phone number (issue #181). Empty = not set.
-	Phone        string
+	Phone string
 	// Timezone is the user's preferred IANA timezone (issue #191). Empty =
 	// Auto — dashboard timestamps follow the browser/PC default.
-	Timezone     string
-	Verified     bool // email confirmed; new accounts require this before login (issue #42)
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	Timezone  string
+	Verified  bool // email confirmed; new accounts require this before login (issue #42)
+	CreatedAt time.Time
+	UpdatedAt time.Time
 	// PwResetAt is set when the user resets their password via the
 	// self-service flow (issue #62). Sessions issued before this timestamp are
 	// rejected by session resolution, killing every prior session. NULL until
@@ -230,7 +230,18 @@ func (s *UserStore) ListIdentities(ctx context.Context, userID string) ([]*Socia
 }
 
 // CreateFromSocial creates a user from a social profile (no password).
-func (s *UserStore) CreateFromSocial(ctx context.Context, email, name, provider, providerUID, picture string) (string, error) {
+//
+// Issue #539: `verified` is now written EXPLICITLY from the caller's assessment
+// of the provider's email_verified claim. It used to be omitted, so the row
+// inherited the schema default — and 000017 sets `verified DEFAULT true`. Every
+// social signup was therefore born verified without the provider ever asserting
+// the address, bypassing the email-verification gate the password path enforces
+// and exempting the row from the unverified purge sweep.
+//
+// emailVerified must come from the provider, never be assumed. Callers that
+// cannot establish it (a provider that omits the claim, or asserts false) must
+// pass false so the normal verification flow applies.
+func (s *UserStore) CreateFromSocial(ctx context.Context, email, name, provider, providerUID, picture string, emailVerified bool) (string, error) {
 	var id string
 	email = strings.ToLower(strings.TrimSpace(email))
 	// users.name is NOT NULL — never let an empty provider name become NULL.
@@ -242,7 +253,9 @@ func (s *UserStore) CreateFromSocial(ctx context.Context, email, name, provider,
 		name = "User"
 	}
 	err := s.pool.QueryRow(ctx,
-		`INSERT INTO users (email, password_hash, name, avatar_url) VALUES ($1,'',NULLIF($2,''),NULLIF($3,'')) RETURNING id`, email, name, picture).Scan(&id)
+		`INSERT INTO users (email, password_hash, name, avatar_url, verified)
+		 VALUES ($1,'',NULLIF($2,''),NULLIF($3,''),$4) RETURNING id`,
+		email, name, picture, emailVerified).Scan(&id)
 	if err != nil {
 		// Existing user (unique email)? return its id instead.
 		var existing string

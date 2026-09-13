@@ -45,7 +45,7 @@ func TestSocialEnsureAccountForNewUser(t *testing.T) {
 	// Simulate a brand-new social signup (only a users row, like
 	// CreateFromSocial) with zero accounts.
 	email := "social-" + randSuffix() + "@example.test"
-	uid, err := users.CreateFromSocial(ctx, email, "Social Tester", "google", "gid-"+randSuffix(), "")
+	uid, err := users.CreateFromSocial(ctx, email, "Social Tester", "google", "gid-"+randSuffix(), "", true)
 	if err != nil {
 		t.Fatalf("CreateFromSocial: %v", err)
 	}
