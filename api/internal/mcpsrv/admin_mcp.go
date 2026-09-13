@@ -120,6 +120,10 @@ type adminSaleOut struct {
 	Client    string `json:"client"`
 	FormID    string `json:"form_id,omitempty"`
 	CreatedAt string `json:"created_at"`
+	// Issue #518: partial-refund accounting for the platform-wide sales list.
+	RefundedSen    int64  `json:"refunded_sen"`
+	OutstandingSen int64  `json:"outstanding_sen"`
+	RefundStatus   string `json:"refund_status"`
 }
 
 // adminListSales lists sales across all workspaces, filterable by date, workspace and
@@ -172,6 +176,8 @@ func (s *Server) adminListSales(ctx context.Context, _ *mcp.CallToolRequest, in 
 			RefCode: sl.RefCode, Status: sl.Status, TotalSen: sl.TotalSen,
 			SaleType: sl.SaleType, Client: sl.Client.FullName, FormID: sl.FormID,
 			CreatedAt: sl.CreatedAt.UTC().Format(time.RFC3339),
+			RefundedSen: sl.RefundedSen, OutstandingSen: sl.OutstandingSen(),
+			RefundStatus: sl.RefundStatus(),
 		})
 	}
 	return nil, map[string]any{"items": out, "page": page, "limit": limit, "total": total}, nil

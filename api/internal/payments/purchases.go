@@ -261,6 +261,16 @@ func (s *Service) ProcessCallback(ctx context.Context, p *chip.Purchase) error {
 			if err := s.Sales.SetStatusTx(ctx, tx, cur.ID, dbstore.SaleRefunded); err != nil {
 				return err
 			}
+			// Issue #518: the refunded purchase is terminal at CHIP, so record
+			// the refunded amount as the FULL total. Without this an
+			// out-of-band refund (CHIP dashboard / another integration) would
+			// leave refunded_sen behind a `refunded` status, which would
+			// misstate the balance and trip the refunded_sen <= total_sen money
+			// invariant. The refunded event carries no amount, so the full
+			// total is the only value consistent with the terminal status.
+			if err := s.Sales.SetRefundedSenTx(ctx, tx, cur.ID, cur.TotalSen); err != nil {
+				return err
+			}
 			if s.OnPaid != nil {
 				go s.OnPaid(ctx, cur.AccountID, "sale.refunded", map[string]any{
 					"ref_code": cur.RefCode, "buyer_email": cur.Client.Email,
@@ -461,28 +471,117 @@ func (s *Service) ReleaseSale(ctx context.Context, sale *dbstore.Sale) error {
 	return nil
 }
 
-// RefundSale issues a refund against a paid sale. amountSen nil = full refund;
-// a non-nil amount (integer sen) issues a partial refund. The sale must have a
-// CHIP purchase id and be in a refundable state (paid/confirmed). The caller
-// is responsible for persisting the refunded status + audit.
-func (s *Service) RefundSale(ctx context.Context, sale *dbstore.Sale, amountSen *int64) error {
+// refundResult reports what a completed refund did (issue #518).
+type RefundResult struct {
+	// AmountSen is the amount actually refunded on this call.
+	AmountSen int64
+	// RefundedSen is the sale's running refunded total after this refund.
+	RefundedSen int64
+	// OutstandingSen is the balance still refundable (total - refunded).
+	OutstandingSen int64
+	// FullyRefunded is true once the whole total has been returned.
+	FullyRefunded bool
+	// Status is the sale's status after the refund: SaleRefunded once the full
+	// total is returned, otherwise the sale keeps its paid/confirmed status.
+	Status string
+}
+
+// ErrRefundNotRefundable is returned when a refund is attempted on a sale that
+// is not in a refundable state (the pre-existing paid/confirmed guard).
+var ErrRefundNotRefundable = errors.New("jualan bukan dalam status boleh-refund (paid/confirmed)")
+
+// RefundSale issues a refund against a paid sale (issue #407) and records the
+// amount on the sale (issue #518). amountSen nil = full refund of the
+// OUTSTANDING balance; a non-nil amount (integer sen) issues a partial refund.
+//
+// The whole operation is atomic under the per-sale advisory lock
+// (WithSaleLock): the balance check and the refunded-total increment happen in
+// one serialized transaction, so two concurrent partial refunds cannot both
+// pass a stale balance read and over-refund. Order of operations:
+//
+//  1. lock the sale and re-read its current status + refunded total;
+//  2. enforce the refundable-state guard (paid/confirmed only — a partially
+//     refunded sale keeps its status, so further partials are allowed but a
+//     fully refunded one is rejected);
+//  3. enforce the over-refund guard: amount > 0 and
+//     refunded_sen + amount <= total_sen;
+//  4. only then call CHIP (an over-refund never reaches the gateway);
+//  5. record the amount, moving the status to SaleRefunded only when the full
+//     total has been returned.
+//
+// The caller persists nothing — the refunded amount, the status transition and
+// the audit are all handled here. Any error is returned unwrapped so the REST
+// 400 / MCP error carries the user-facing reason, with
+// dbstore.ErrRefundExceedsBalance / ErrRefundNoOutstanding /
+// ErrRefundAmountInvalid identifying the guard that fired.
+func (s *Service) RefundSale(ctx context.Context, sale *dbstore.Sale, amountSen *int64) (*RefundResult, error) {
 	if sale.ChipPurchaseID == "" {
-		return errors.New("jualan tiada purchase CHIP")
+		return nil, errors.New("jualan tiada purchase CHIP")
 	}
-	switch sale.Status {
-	case dbstore.SalePaid, dbstore.SaleConfirmed:
-		// refundable
-	default:
-		return errors.New("jualan bukan dalam status boleh-refund (paid/confirmed)")
+	if amountSen != nil && *amountSen <= 0 {
+		return nil, dbstore.ErrRefundAmountInvalid
 	}
-	secret, err := s.decryptSecret(ctx, sale.AccountID)
+
+	var result *RefundResult
+	err := s.Sales.WithSaleLock(ctx, sale.ID, func(tx pgx.Tx) error {
+		cur, err := s.Sales.SaleByIDTx(ctx, tx, sale.ID)
+		if err != nil {
+			return err
+		}
+		// The refundable-state guard. A partial refund deliberately leaves the
+		// status paid/confirmed, so a partially refunded sale is still
+		// refundable here — the balance guard below is what stops over-refunding.
+		switch cur.Status {
+		case dbstore.SalePaid, dbstore.SaleConfirmed:
+			// refundable
+		default:
+			return ErrRefundNotRefundable
+		}
+
+		// Resolve the amount: nil = the whole outstanding balance. Guard it
+		// BEFORE calling CHIP so an over-refund never reaches the gateway.
+		amount := cur.OutstandingSen()
+		if amountSen != nil {
+			amount = *amountSen
+		}
+		if amount <= 0 {
+			return dbstore.ErrRefundNoOutstanding
+		}
+		if amount > cur.OutstandingSen() {
+			return dbstore.ErrRefundExceedsBalance
+		}
+
+		secret, err := s.decryptSecret(ctx, cur.AccountID)
+		if err != nil {
+			return err
+		}
+		refunded := amount
+		if _, err := s.Chip.Refund(ctx, secret, cur.ChipPurchaseID, &refunded); err != nil {
+			return err
+		}
+
+		updated, err := s.Sales.ApplyRefundTx(ctx, tx, cur, amount)
+		if err != nil {
+			// A failure here (after CHIP accepted the refund) rolls the record
+			// back. That cannot be a concurrent-write race — every refund for
+			// this sale is serialized by the advisory lock — so it is a real DB
+			// error; the purchase.refunded webhook then flips the sale to
+			// refunded and records the full amount, so the ledger self-heals.
+			return err
+		}
+		result = &RefundResult{
+			AmountSen:      amount,
+			RefundedSen:    updated.RefundedSen,
+			OutstandingSen: updated.OutstandingSen(),
+			FullyRefunded:  updated.RefundStatus() == dbstore.RefundFull,
+			Status:         updated.Status,
+		}
+		return nil
+	})
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if _, err := s.Chip.Refund(ctx, secret, sale.ChipPurchaseID, amountSen); err != nil {
-		return err
-	}
-	return nil
+	return result, nil
 }
 
 // ChipOverride carries per-form credentials that, when set, replace the

@@ -1,0 +1,25 @@
+-- Issue #518: track the amount refunded on a sale (money correctness).
+--
+-- A PARTIAL refund used to mark the sale fully `refunded` and record nothing
+-- about how much was actually returned, so:
+--   - every read surface (list/summary/analytics/CSV/MCP) reported the sale as
+--     fully refunded while only part of the money had gone back;
+--   - the outstanding balance was unreachable (the paid/confirmed refund guard
+--     rejected a follow-up refund), pushing merchants to refund outside
+--     JomForm — which is how a real over-refund happens; and
+--   - there was no field to compare against, so no over-refund guard was
+--     possible.
+--
+-- refunded_sen is the RUNNING total already refunded against the sale, in
+-- integer sen, never greater than total_sen. It starts at 0 and is incremented
+-- on every refund (full and partial); a full refund leaves it at total_sen.
+-- The partial-vs-full distinction is derived from it (0 < refunded_sen <
+-- total_sen is partial) — the sale keeps its paid/confirmed status until the
+-- full total has been returned, and only then becomes `refunded`.
+--
+-- Backfill: every sale already in the terminal `refunded` status had, under the
+-- pre-#518 behaviour, its full amount returned (a partial refund also flipped
+-- the status), so materialise refunded_sen = total_sen for those rows. This is
+-- also required by the money invariant refunded_sen <= total_sen.
+ALTER TABLE sales ADD COLUMN refunded_sen BIGINT NOT NULL DEFAULT 0;
+UPDATE sales SET refunded_sen = total_sen WHERE status = 'refunded';

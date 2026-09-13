@@ -53,6 +53,14 @@ type Sale = {
   updated_at?: string;
   // Issue #438: QR ordering flow — the table number the QR stand encoded.
   table_number?: string;
+  // Issue #518: partial-refund accounting. refunded_sen is the running total
+  // already returned, outstanding_sen the balance still refundable, and
+  // refund_status the derived "none" | "partial" | "full" label. A partially
+  // refunded sale keeps its paid/confirmed status, so the refund badge must
+  // come from refund_status — reading `status` alone would show it as paid.
+  refunded_sen?: number;
+  outstanding_sen?: number;
+  refund_status?: string;
 };
 
 type SalesPage = { items: Sale[]; page: number; limit: number; total: number };
@@ -68,6 +76,16 @@ const isCapturePending = (s: Sale) =>
   (s.status === "pending" || s.status === "authorized" || s.authorized === true);
 
 const STATUSES = ["pending", "paid", "confirmed", "failed", "cancelled", "refunded"] as const;
+
+// Issue #518: a partially refunded sale keeps its paid/confirmed status, so the
+// partial state is derived from the recorded refunded amount. `refund_status`
+// is what the API reports.
+const isPartiallyRefunded = (s: Sale) =>
+  s.refund_status === "partial" ||
+  (typeof s.refunded_sen === "number" &&
+    s.refunded_sen > 0 &&
+    typeof s.total_sen === "number" &&
+    s.refunded_sen < s.total_sen);
 
 const money = (sen: number) =>
   `RM${(sen / 100).toLocaleString("en-MY", { minimumFractionDigits: 2 })}`;
@@ -110,6 +128,11 @@ const saleBadge = (s: string) =>
     cancelled: "bg-slate-100 text-slate-500 border-slate-200",
     refunded: "bg-orange-50 text-orange-700 border-orange-200",
   })[s] || "bg-slate-100 text-slate-500 border-slate-200";
+
+/* Issue #518: the partial-refund chip. A partially refunded sale keeps its
+   paid/confirmed status, so it needs its own visible marker — otherwise the
+   merchant reads the sale as fully paid while money has already gone back. */
+const refundBadge = "bg-amber-50 text-amber-700 border-amber-300";
 
 /* email delivery status badge colors (issue #194) */
 const emailStatusBadge = (e: string) =>
@@ -374,9 +397,17 @@ function SalesPageInner() {
   }
 
   // Issue #407: full or partial refund against a paid/confirmed sale.
+  // Issue #518: the balance (total − already refunded) is enforced server-side;
+  // the prompt shows it so a merchant does not have to guess, and the API error
+  // (e.g. an over-refund) is surfaced verbatim.
   async function refundSale(ref: string) {
+    const target = rows.find((r) => r.ref_code === ref) || (detail?.ref_code === ref ? detail : undefined);
+    const outstanding = target?.outstanding_sen ?? target?.total_sen ?? 0;
+    const already = target?.refunded_sen ?? 0;
     const raw = window.prompt(
-      `Refund amount in RM for ${ref} (empty = full refund):`,
+      already > 0
+        ? `Refund amount in RM for ${ref} — remaining balance RM${(outstanding / 100).toFixed(2)} (already refunded RM${(already / 100).toFixed(2)}). Empty = refund the remaining balance:`
+        : `Refund amount in RM for ${ref} (empty = full refund):`,
     );
     if (raw === null) return; // cancelled
     const rm = raw.trim();
@@ -384,6 +415,12 @@ function SalesPageInner() {
     if (rm !== "") {
       const rmNum = Number(rm);
       if (!Number.isFinite(rmNum) || rmNum <= 0) {
+        setMsg(t("sales.refundInvalid"));
+        return;
+      }
+      // Client-side guard mirroring the server rule so the merchant gets an
+      // immediate answer; the server is still the authority.
+      if (Math.round(rmNum * 100) > outstanding) {
         setMsg(t("sales.refundInvalid"));
         return;
       }
@@ -654,6 +691,14 @@ function SalesPageInner() {
                     <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${saleBadge(s.status)}`}>
                       {s.status}
                     </span>
+                    {isPartiallyRefunded(s) && (
+                      <span
+                        className={`ml-1 inline-block rounded-full border px-2 py-0.5 text-[10px] font-medium ${refundBadge}`}
+                        title={`${t("sales.refundedLabel")}: ${money(s.refunded_sen || 0)} · ${t("sales.outstanding")}: ${money(s.outstanding_sen || 0)}`}
+                      >
+                        {t("sales.partiallyRefunded")}
+                      </span>
+                    )}
                   </td>
                   <td className="hidden whitespace-nowrap px-2 py-3 sm:table-cell">
                     {s.email_status ? (
@@ -896,7 +941,26 @@ function SalesPageInner() {
                   <span>{t("sales.total")}</span>
                   <span>{money(detail.total_sen)}</span>
                 </div>
+                {/* Issue #518: partial-refund accounting in the detail drawer. */}
+                {(detail.refunded_sen ?? 0) > 0 && (
+                  <>
+                    <div className="mt-1 flex justify-between gap-4 text-amber-700">
+                      <span>{t("sales.refundBalance")}</span>
+                      <span>−{money(detail.refunded_sen || 0)}</span>
+                    </div>
+                    <div className="mt-1 flex justify-between gap-4 font-semibold">
+                      <span>{t("sales.outstanding")}</span>
+                      <span>{money(detail.outstanding_sen ?? 0)}</span>
+                    </div>
+                  </>
+                )}
               </section>
+
+              {isPartiallyRefunded(detail) && (
+                <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                  {t("sales.refundPartialHelp")}
+                </p>
+              )}
 
               {/* Payment + status */}
               <section className="mt-5">

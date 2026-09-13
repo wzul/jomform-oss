@@ -15,7 +15,11 @@ type formStatsOut struct {
 	ConfirmedCount int64   `json:"confirmed_count"`
 	FailedCount    int64   `json:"failed_count"`
 	PendingCount   int64   `json:"pending_count"`
-	RevenueRM      float64 `json:"revenue_rm"`
+	// Issue #518: refundedCount + refundedRM surface refunds, and revenueRM is
+	// NET of refunds (a partial refund reduces reported revenue).
+	RefundedCount int64   `json:"refunded_count"`
+	RefundedRM    float64 `json:"refunded_rm"`
+	RevenueRM     float64 `json:"revenue_rm"`
 }
 
 type productStatsOut struct {
@@ -45,7 +49,8 @@ func (s *Server) formAnalytics(
 				Title: f.Title, Slug: f.Slug,
 				Submissions: f.Submissions, PaidCount: f.PaidCount,
 				ConfirmedCount: f.ConfirmedCnt, FailedCount: f.FailedCount,
-				PendingCount: f.PendingCount, RevenueRM: float64(f.RevenueSen) / 100,
+				PendingCount: f.PendingCount, RefundedCount: f.RefundedCount,
+				RefundedRM: float64(f.RefundedSen) / 100, RevenueRM: float64(f.RevenueSen) / 100,
 			})
 		}
 	}

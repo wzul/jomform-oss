@@ -62,12 +62,12 @@ func (s *Server) registerTools() {
 	// ── Sales ───────────────────────────────────────────────────────────────
 	addTool(s, &mcp.Tool{
 		Name:        "list_sales",
-		Description: "Senarai jualan terkini (terbaru dahulu).",
+		Description: "Senarai jualan terkini (terbaru dahulu). Setiap jualan: refunded_sen (telah direfund), outstanding_sen (baki boleh refund), refund_status (none|partial|full) — issue #518.",
 	}, s.listSales)
 
 	addTool(s, &mcp.Tool{
 		Name:        "get_sales_summary",
-		Description: "Ringkasan jualan: bilangan mengikut status dan jumlah nilai.",
+		Description: "Ringkasan jualan: bilangan mengikut status (termasuk refunded), refunded_sen (jumlah direfund) dan revenue_sen (nilai bersih selepas refund) — issue #518.",
 	}, s.salesSummary)
 
 	addTool(s, &mcp.Tool{
@@ -143,7 +143,7 @@ func (s *Server) registerTools() {
 	}, s.releaseSaleMCP)
 	addTool(s, &mcp.Tool{
 		Name:        "refund_sale",
-		Description: "Refund jualan yang telah dibayar (paid/confirmed). amount_sen optional untuk partial; kosong = refund penuh. Status jualan jadi refunded.",
+		Description: "Refund jualan yang telah dibayar (paid/confirmed). amount_sen = jumlah refund separa; kosong = refund penuh baki yang tinggal. Mesti > 0 dan refunded_sen + amount_sen <= total_sen (refund melebihi baki ditolak sebelum CHIP, issue #518). Refund separa merekod jumlah dan jualan kekal paid/confirmed (refund_status=partial); hanya baki penuh direfund barulah status jadi refunded.",
 	}, s.refundSaleMCP)
 	addTool(s, &mcp.Tool{
 		Name:        "capture_all_pending_sales",
@@ -554,7 +554,7 @@ func (s *Server) registerTools() {
 	}, s.adminMediaUsage)
 	addTool(s, &mcp.Tool{
 		Name:        "admin_list_sales",
-		Description: "Senarai jualan merentas SEMUA workspace, boleh tapis (date_from/date_to, workspace_id, status). Super-admin sahaja; read-only; diaudit.",
+		Description: "Senarai jualan merentas SEMUA workspace, boleh tapis (date_from/date_to, workspace_id, status). Termasuk refunded_sen/outstanding_sen/refund_status (issue #518). Super-admin sahaja; read-only; diaudit.",
 	}, s.adminListSales)
 	addTool(s, &mcp.Tool{
 		Name:        "admin_spam_queue",
@@ -714,7 +714,7 @@ func (s *Server) registerTools() {
 	// ── Parity: sales export CSV (issue #396) ────────────────────────────
 	addTool(s, &mcp.Tool{
 		Name:        "export_sales_csv",
-		Description: "Eksport jualan akaun sebagai CSV (ref_code, status, payment_method, buyer, total_rm, created_at, purchase_id). Boleh tapis form_id. Pulangkan kandungan csv.",
+		Description: "Eksport jualan akaun sebagai CSV (ref_code, status, payment_method, buyer, total_rm, created_at, purchase_id, refunded_rm, outstanding_rm, refund_status). Boleh tapis form_id. Pulangkan kandungan csv.",
 	}, s.exportSalesCSV)
 
 	// ── Parity: Cloudflare (issue #396) ──────────────────────────────────

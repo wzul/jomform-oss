@@ -207,6 +207,11 @@ type saleOut struct {
 	CreatedAt string `json:"created_at"`
 	// Issue #153: line items (with variation) so agents see what was bought.
 	Items []saleItemOut `json:"items,omitempty"`
+	// Issue #518: partial-refund accounting, so an agent can tell a partial
+	// refund from a full one and see the balance still refundable.
+	RefundedSen    int64  `json:"refunded_sen"`
+	OutstandingSen int64  `json:"outstanding_sen"`
+	RefundStatus   string `json:"refund_status"`
 }
 
 type listSalesIn struct {
@@ -251,6 +256,8 @@ func (s *Server) listSales(ctx context.Context, _ *mcp.CallToolRequest, in listS
 			RefCode: sl.RefCode, Status: sl.Status, TotalSen: sl.TotalSen,
 			SaleType: sl.SaleType, Client: sl.Client.FullName,
 			CreatedAt: sl.CreatedAt.UTC().Format(time.RFC3339),
+			RefundedSen: sl.RefundedSen, OutstandingSen: sl.OutstandingSen(),
+			RefundStatus: sl.RefundStatus(),
 		}
 		// Issue #153: include line items (with variation) for parity.
 		if len(sl.Items) > 0 {
@@ -273,6 +280,13 @@ type summaryOut struct {
 	Confirmed int64 `json:"confirmed"`
 	Failed    int64 `json:"failed"`
 	Cancelled int64 `json:"cancelled"`
+	Refunded  int64 `json:"refunded"`
+	// Issue #518: refunded_sen is the total refunded across the account's
+	// sales, and revenue_sen the NET paid/confirmed value (total - refunded),
+	// so a partial refund is visible in the summary instead of the sale
+	// silently reading as fully paid.
+	RefundedSen int64 `json:"refunded_sen"`
+	RevenueSen  int64 `json:"revenue_sen"`
 }
 
 func (s *Server) salesSummary(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, summaryOut, error) {
@@ -298,6 +312,12 @@ func (s *Server) salesSummary(ctx context.Context, _ *mcp.CallToolRequest, _ emp
 			sum.Failed++
 		case dbstore.SaleCancelled:
 			sum.Cancelled++
+		case dbstore.SaleRefunded:
+			sum.Refunded++
+		}
+		sum.RefundedSen += sl.RefundedSen
+		if sl.Status == dbstore.SalePaid || sl.Status == dbstore.SaleConfirmed {
+			sum.RevenueSen += sl.TotalSen - sl.RefundedSen
 		}
 	}
 	return nil, sum, nil

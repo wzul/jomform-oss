@@ -58,15 +58,21 @@ func (h *RESTHandlers) summaryData(ctx context.Context, accountIDs []string) (ma
 	if err != nil {
 		return nil, err
 	}
-	sum := map[string]int64{"pending": 0, "paid": 0, "confirmed": 0, "failed": 0, "cancelled": 0}
+	sum := map[string]int64{"pending": 0, "paid": 0, "confirmed": 0, "failed": 0, "cancelled": 0, "refunded": 0}
 	var revenue int64
+	// Issue #518: refunded money is not revenue. revenue_sen counts a
+	// paid/confirmed sale's NET (total - refunded), and the running refunded
+	// total is surfaced separately so a partial refund reduces revenue on every
+	// surface instead of the sale silently reading as fully paid.
+	var refunded int64
 	for _, s := range sales {
 		sum[s.Status]++
 		if s.Status == dbstore.SalePaid || s.Status == dbstore.SaleConfirmed {
-			revenue += s.TotalSen
+			revenue += s.TotalSen - s.RefundedSen
 		}
+		refunded += s.RefundedSen
 	}
-	return map[string]any{"counts": sum, "revenue_sen": revenue}, nil
+	return map[string]any{"counts": sum, "revenue_sen": revenue, "refunded_sen": refunded}, nil
 }
 
 // dashboardBundle: GET /v1/rest/dashboard-bundle — one authed round-trip

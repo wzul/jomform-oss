@@ -19,6 +19,7 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"html/template"
 	"net/http"
@@ -258,11 +259,29 @@ func TestIssue489SubmitPersistsAndSurfacesTableNumber(t *testing.T) {
 	rest.exportSalesCSV(rec2, req2, &AccountCtx{Account: &dbstore.Account{ID: sale.AccountID, Slug: "it"}})
 	csvBuf.Write(rec2.Body.Bytes())
 	csvOut := csvBuf.String()
-	if !strings.Contains(csvOut, "table_number") {
-		t.Errorf("CSV export header missing table_number column:\n%s", csvOut)
+	// Issue #518 appended refund columns after table_number, so the old
+	// positional "ends with ,8" substring is no longer a valid assertion.
+	// Resolve the column by header name and read the same index from the data
+	// row — this keeps the check honest (a shifted row still fails) without
+	// pinning table_number to last place.
+	recs, err := csv.NewReader(strings.NewReader(csvOut)).ReadAll()
+	if err != nil || len(recs) < 2 {
+		t.Fatalf("CSV export unreadable (%d rows, err %v):\n%s", len(recs), err, csvOut)
 	}
-	if !strings.Contains(csvOut, ",8\n") && !strings.Contains(csvOut, ",8\r\n") {
-		t.Errorf("CSV export row does not carry table_number 8:\n%s", csvOut)
+	col := -1
+	for i, name := range recs[0] {
+		if name == "table_number" {
+			col = i
+		}
+	}
+	if col < 0 {
+		t.Fatalf("CSV export header missing table_number column:\n%s", csvOut)
+	}
+	if len(recs[1]) != len(recs[0]) {
+		t.Fatalf("CSV export row has %d fields, header has %d — columns are misaligned:\n%s", len(recs[1]), len(recs[0]), csvOut)
+	}
+	if recs[1][col] != "8" {
+		t.Errorf("CSV export table_number = %q, want \"8\":\n%s", recs[1][col], csvOut)
 	}
 }
 

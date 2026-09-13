@@ -28,9 +28,12 @@ func (h *RESTHandlers) exportSalesCSV(w http.ResponseWriter, r *http.Request, ac
 	w.Header().Set("Content-Disposition",
 		fmt.Sprintf(`attachment; filename="jomform-sales-%s.csv"`, actx.Account.Slug))
 	cw := csv.NewWriter(w)
+	// Issue #518: refunded_rm / outstanding_rm / refund_status make a partial
+	// refund visible in the export instead of the sale reading as fully paid.
 	_ = cw.Write([]string{
 		"ref_code", "status", "payment_method", "buyer_name", "buyer_email",
 		"total_rm", "created_at", "purchase_id", "table_number",
+		"refunded_rm", "outstanding_rm", "refund_status",
 	})
 	for _, s := range sales {
 		_ = cw.Write([]string{
@@ -43,6 +46,9 @@ func (h *RESTHandlers) exportSalesCSV(w http.ResponseWriter, r *http.Request, ac
 			s.CreatedAt.UTC().Format("2006-01-02 15:04:05"),
 			s.ChipPurchaseID,
 			s.TableNumber,
+			strconv.FormatFloat(float64(s.RefundedSen)/100, 'f', 2, 64),
+			strconv.FormatFloat(float64(s.OutstandingSen())/100, 'f', 2, 64),
+			s.RefundStatus(),
 		})
 	}
 	cw.Flush()

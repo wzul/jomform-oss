@@ -2,6 +2,7 @@ package dbstore
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"strings"
 	"time"
@@ -23,6 +24,57 @@ const (
 	// SaleRefunded marks a sale whose payment was refunded (initiated from the
 	// Sales page or received via the purchase.refunded webhook).
 	SaleRefunded = "refunded"
+)
+
+// Refund states derived from Sale.RefundedSen (issue #518). A partial refund
+// records the amount and leaves the sale reading as PARTIAL — the sale keeps
+// its paid/confirmed status until the full total has been returned, and only
+// then becomes the terminal SaleRefunded. These values are what the read
+// surfaces (list/summary/CSV/MCP) expose as `refund_status`; nothing is
+// persisted, so there is no new status column to keep in sync.
+const (
+	RefundNone    = "none"
+	RefundPartial = "partial"
+	RefundFull    = "full"
+)
+
+// RefundStatus derives the partial-vs-full refund state from the running
+// refunded total (issue #518). A sale is only "full" once the whole total has
+// been returned; anything in between is "partial".
+func (s *Sale) RefundStatus() string {
+	switch {
+	case s == nil || s.RefundedSen <= 0:
+		return RefundNone
+	case s.RefundedSen >= s.TotalSen:
+		return RefundFull
+	default:
+		return RefundPartial
+	}
+}
+
+// OutstandingSen is the balance still refundable on the sale (issue #518):
+// total_sen - refunded_sen, never negative.
+func (s *Sale) OutstandingSen() int64 {
+	if s == nil {
+		return 0
+	}
+	if s.RefundedSen >= s.TotalSen {
+		return 0
+	}
+	return s.TotalSen - s.RefundedSen
+}
+
+// Refund rejections (issue #518). The over-refund guard is the important one:
+// a refund may never push refunded_sen past total_sen. These are exported so
+// the REST and MCP callers can render the same message and so tests can assert
+// the rejection reason rather than a bare error.
+var (
+	// ErrRefundAmountInvalid: amount_sen must be a positive integer.
+	ErrRefundAmountInvalid = errors.New("amount_sen mesti positif")
+	// ErrRefundExceedsBalance: refunded_sen + amount_sen > total_sen.
+	ErrRefundExceedsBalance = errors.New("jumlah refund melebihi baki yang boleh dipulangkan")
+	// ErrRefundNoOutstanding: nothing is left to refund on this sale.
+	ErrRefundNoOutstanding = errors.New("jualan ini tiada baki untuk dipulangkan")
 )
 
 // SaleClient is the buyer info JSON blob. It mirrors the CHIP client fields
@@ -67,6 +119,13 @@ type Sale struct {
 	ShippingSen     int64
 	DiscountSen     int64
 	TotalSen        int64
+	// RefundedSen is the running total already refunded against this sale, in
+	// integer sen, never greater than TotalSen (issue #518). 0 = nothing
+	// refunded; 0 < RefundedSen < TotalSen = a partial refund (the sale keeps
+	// its paid/confirmed status); RefundedSen == TotalSen = fully refunded
+	// (status moves to SaleRefunded). RefundStatus()/OutstandingSen() derive
+	// the partial state and the remaining balance from it.
+	RefundedSen int64
 	// Currency is the currency the sale was transacted in (issue #185).
 	// Recorded at transaction time from the workspace's currency; historical sales
 	// keep their original currency (never auto-converted on a later change).
@@ -118,7 +177,7 @@ type SaleStore struct{ pool *pgxpool.Pool }
 func NewSaleStore(pool *pgxpool.Pool) *SaleStore { return &SaleStore{pool: pool} }
 
 const saleSelect = `SELECT id, account_id, COALESCE(form_id::text,''), ref_code, client, items,
-	subtotal_sen, shipping_sen, discount_sen, total_sen, currency, sale_type, payment_method, status,
+	subtotal_sen, shipping_sen, discount_sen, total_sen, refunded_sen, currency, sale_type, payment_method, status,
 	COALESCE(chip_purchase_id,''), COALESCE(chip_checkout_url,''), COALESCE(invoice_no,''),
 	skip_capture, authorized, captured_at, COALESCE(receipt_message_id,''),
 	is_spam, spam_reason, COALESCE(table_number,''), COALESCE(affiliate_code,''), created_at, updated_at
@@ -127,7 +186,7 @@ const saleSelect = `SELECT id, account_id, COALESCE(form_id::text,''), ref_code,
 func scanSale(row pgx.Row) (*Sale, error) {
 	s := &Sale{}
 	err := row.Scan(&s.ID, &s.AccountID, &s.FormID, &s.RefCode, &s.Client, &s.Items,
-		&s.SubtotalSen, &s.ShippingSen, &s.DiscountSen, &s.TotalSen, &s.Currency, &s.SaleType, &s.PaymentMethod, &s.Status,
+		&s.SubtotalSen, &s.ShippingSen, &s.DiscountSen, &s.TotalSen, &s.RefundedSen, &s.Currency, &s.SaleType, &s.PaymentMethod, &s.Status,
 		&s.ChipPurchaseID, &s.ChipCheckoutURL, &s.InvoiceNo,
 		&s.SkipCapture, &s.Authorized, &s.CapturedAt, &s.ReceiptMessageID,
 		&s.IsSpam, &s.SpamReason, &s.TableNumber, &s.AffiliateCode, &s.CreatedAt, &s.UpdatedAt)
@@ -283,11 +342,82 @@ func (s *SaleStore) SaleByChipPurchaseIDTx(ctx context.Context, tx pgx.Tx, purch
 	return scanSale(tx.QueryRow(ctx, saleSelect+" WHERE chip_purchase_id = $1", purchaseID))
 }
 
+// SaleByRefCodeTx reads a sale by ref code within an open transaction (used
+// inside WithSaleLock so a refund sees the locked, current refunded total
+// rather than a stale snapshot — issue #518).
+func (s *SaleStore) SaleByRefCodeTx(ctx context.Context, tx pgx.Tx, refCode string) (*Sale, error) {
+	return scanSale(tx.QueryRow(ctx, saleSelect+" WHERE ref_code = $1", refCode))
+}
+
+// SaleByIDTx reads a sale by id within an open transaction (issue #518).
+func (s *SaleStore) SaleByIDTx(ctx context.Context, tx pgx.Tx, saleID string) (*Sale, error) {
+	return scanSale(tx.QueryRow(ctx, saleSelect+" WHERE id = $1", saleID))
+}
+
+// ApplyRefundTx records a refund against a sale inside an open transaction
+// (issue #518). It performs the whole refund bookkeeping atomically under the
+// caller's per-sale lock (WithSaleLock):
+//
+//   - the balance guard refunded_sen + amountSen <= total_sen is enforced in
+//     the UPDATE's WHERE clause, so two concurrent partial refunds cannot both
+//     pass a stale read and over-refund — the second blocks on the advisory
+//     lock, then re-reads the committed total and is rejected;
+//   - amountSen is added to the running refunded total;
+//   - a full refund sets refunded_sen = total_sen and moves the status to the
+//     terminal SaleRefunded; a partial refund leaves the status as it was
+//     (paid/confirmed) so the sale keeps reading as PARTIAL.
+//
+// Returns the updated sale (with the new refunded total). Returns
+// ErrRefundNotAllowed when a partial total would exceed total_sen on the
+// current row, and ErrRefundNoOutstanding when nothing is left to refund.
+func (s *SaleStore) ApplyRefundTx(ctx context.Context, tx pgx.Tx, sale *Sale, amountSen int64) (*Sale, error) {
+	if amountSen <= 0 {
+		return nil, ErrRefundAmountInvalid
+	}
+	outstanding := sale.TotalSen - sale.RefundedSen
+	if outstanding <= 0 {
+		return nil, ErrRefundNoOutstanding
+	}
+	if amountSen > outstanding {
+		return nil, ErrRefundExceedsBalance
+	}
+	status := sale.Status
+	if sale.RefundedSen+amountSen >= sale.TotalSen {
+		status = SaleRefunded
+	}
+	// The WHERE clause re-asserts the guard against the live row: even if a
+	// caller reached here with a stale read, the UPDATE cannot push
+	// refunded_sen past total_sen.
+	tag, err := tx.Exec(ctx,
+		`UPDATE sales SET refunded_sen = refunded_sen + $2, status = $3, updated_at = now()
+		  WHERE id = $1 AND refunded_sen + $2 <= total_sen`,
+		sale.ID, amountSen, status)
+	if err != nil {
+		return nil, err
+	}
+	if tag.RowsAffected() == 0 {
+		return nil, ErrRefundExceedsBalance
+	}
+	return s.SaleByIDTx(ctx, tx, sale.ID)
+}
+
 // SetStatusTx updates the sale status within an open transaction (used inside
 // WithSaleLock so the status write is atomic with the advisory lock).
 func (s *SaleStore) SetStatusTx(ctx context.Context, tx pgx.Tx, saleID, status string) error {
 	_, err := tx.Exec(ctx,
 		`UPDATE sales SET status=$2, updated_at=now() WHERE id=$1`, saleID, status)
+	return err
+}
+
+// SetRefundedSenTx records the running refunded total within an open
+// transaction (issue #518). Used by the purchase.refunded webhook path, where
+// the terminal `refunded` status means the full amount was returned but CHIP
+// carries no amount on the event. The write is clamped to total_sen so the
+// refunded_sen <= total_sen money invariant can never be violated.
+func (s *SaleStore) SetRefundedSenTx(ctx context.Context, tx pgx.Tx, saleID string, sen int64) error {
+	_, err := tx.Exec(ctx,
+		`UPDATE sales SET refunded_sen = LEAST($2, total_sen), updated_at = now() WHERE id = $1`,
+		saleID, sen)
 	return err
 }
 

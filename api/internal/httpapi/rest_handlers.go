@@ -988,6 +988,15 @@ type saleRow struct {
 	// Issue #438: QR ordering flow — the table number the QR stand encoded
 	// (e.g. "8"). Empty = a regular online order with no table.
 	TableNumber string `json:"table_number,omitempty"`
+
+	// Issue #518: partial-refund accounting. RefundedSen is the running total
+	// already returned, OutstandingSen the balance still refundable, and
+	// RefundStatus the derived "none"|"partial"|"full" label. Exposing both
+	// numbers means every consumer (Sales page, CSV, agents) can tell a partial
+	// refund from a full one instead of reading the status alone.
+	RefundedSen    int64  `json:"refunded_sen"`
+	OutstandingSen int64  `json:"outstanding_sen"`
+	RefundStatus   string `json:"refund_status"`
 }
 
 type itemRow struct {
@@ -1049,6 +1058,9 @@ func toSaleRow(s *dbstore.Sale, emailStatus string) saleRow {
 		DiscountSen: s.DiscountSen,
 		Updated:     s.UpdatedAt.UTC().Format(time.RFC3339),
 		TableNumber: s.TableNumber,
+		RefundedSen:    s.RefundedSen,
+		OutstandingSen: s.OutstandingSen(),
+		RefundStatus:   s.RefundStatus(),
 	}
 	if s.CapturedAt != nil {
 		row.CapturedAt = s.CapturedAt.UTC().Format(time.RFC3339)
@@ -1086,13 +1098,13 @@ func (h *RESTHandlers) listSales(w http.ResponseWriter, r *http.Request, actx *A
 		emailStatus := h.latestEmailStatuses(r.Context(), sales)
 		out := make([]saleRow, 0, len(sales))
 		for _, s := range sales {
-			out = append(out, saleRow{
-				RefCode: s.RefCode, Status: s.Status, TotalSen: s.TotalSen,
-				Method: s.PaymentMethod, Buyer: s.Client.FullName,
-				Created:     s.CreatedAt.UTC().Format(time.RFC3339),
-				SkipCapture: s.SkipCapture, Authorized: s.Authorized, CapturedAt: capturedAt(s),
-				EmailStatus: emailStatus[s.RefCode],
-			})
+			// Issue #518: build the full row (not a subset) so the legacy
+			// array shape carries refunded_sen / outstanding_sen /
+			// refund_status too — a partial refund must be visible on EVERY
+			// read surface, and the legacy shape is the dashboard's.
+			row := toSaleRow(s, emailStatus[s.RefCode])
+			row.CapturedAt = capturedAt(s)
+			out = append(out, row)
 		}
 		respond(w, http.StatusOK, out)
 	}
@@ -1252,9 +1264,16 @@ func (h *RESTHandlers) releaseSale(w http.ResponseWriter, r *http.Request, actx 
 }
 
 // refundSale issues a full or partial refund against a paid sale (issue #407):
-// POST /v1/rest/sales/{ref}/refund {"amount_sen": N}. amount_sen omitted = full
-// refund. Calls the CHIP refund API (amount in sen), flips the sale to
-// refunded, and audits who/what/when.
+// POST /v1/rest/sales/{ref}/refund {"amount_sen": N}. amount_sen omitted = a
+// full refund of the OUTSTANDING balance. Validates the amount against the
+// sale's remaining balance, calls the CHIP refund API (amount in sen), records
+// the refunded total on the sale and audits who/what/when (issue #518).
+//
+// Issue #518: a PARTIAL refund no longer flips the sale to the terminal
+// `refunded` status. The refunded amount + balance guard and the increment are
+// atomic inside payments.RefundSale (per-sale lock), so a partial leaves the
+// sale reading as partial and only a refund that clears the whole total marks
+// it fully refunded.
 func (h *RESTHandlers) refundSale(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	if _, ok := h.requireWriteRole(w, r, actx); !ok {
 		return
@@ -1273,26 +1292,45 @@ func (h *RESTHandlers) refundSale(w http.ResponseWriter, r *http.Request, actx *
 		AmountSen *int64 `json:"amount_sen,omitempty"`
 	}
 	_ = decodeJSON(r, &in)
-	if in.AmountSen != nil && *in.AmountSen <= 0 {
-		writeErr(w, http.StatusBadRequest, "amount_sen mesti positif")
-		return
-	}
-	if err := h.Pay.RefundSale(r.Context(), sale, in.AmountSen); err != nil {
+	res, err := h.Pay.RefundSale(r.Context(), sale, in.AmountSen)
+	if err != nil {
 		recordPaymentFailure("refund")
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := h.Sales.SetStatus(r.Context(), sale.ID, dbstore.SaleRefunded); err != nil {
-		respondErr(w, r, err)
-		return
-	}
-	// Issue #407: audit refunds (who, amount, when).
-	props := map[string]any{"ref_code": ref, "sale_id": sale.ID}
-	if in.AmountSen != nil {
-		props["amount_sen"] = *in.AmountSen
+	// Issue #407: audit refunds (who, amount, when). Issue #518: extend the
+	// props with the running refunded total and the partial/full outcome so the
+	// audit trail can reconstruct the outstanding balance.
+	props := map[string]any{
+		"ref_code":        ref,
+		"sale_id":         sale.ID,
+		"amount_sen":      res.AmountSen,
+		"refunded_sen":    res.RefundedSen,
+		"total_sen":       sale.TotalSen,
+		"outstanding_sen": res.OutstandingSen,
+		"fully_refunded":  res.FullyRefunded,
 	}
 	h.recordEvent(r, actx, h.sessionOwnerID(r), "sale.refunded", props)
-	respond(w, http.StatusOK, map[string]string{"status": "refunded", "ref_code": ref})
+	respond(w, http.StatusOK, map[string]any{
+		"status": res.Status, "ref_code": ref,
+		"amount_sen": res.AmountSen, "refunded_sen": res.RefundedSen,
+		"outstanding_sen": res.OutstandingSen, "fully_refunded": res.FullyRefunded,
+		"refund_status": refundStatusFor(sale.TotalSen, res.RefundedSen),
+	})
+}
+
+// refundStatusFor derives the partial/full refund label for a REST response
+// from the sale total + the recorded refunded amount (issue #518). It mirrors
+// dbstore.Sale.RefundStatus() for call sites that only have the two numbers.
+func refundStatusFor(totalSen, refundedSen int64) string {
+	switch {
+	case refundedSen <= 0:
+		return dbstore.RefundNone
+	case refundedSen >= totalSen:
+		return dbstore.RefundFull
+	default:
+		return dbstore.RefundPartial
+	}
 }
 
 // bulkCaptureSales captures awaiting skip_capture authorizations in batch

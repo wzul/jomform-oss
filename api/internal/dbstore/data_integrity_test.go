@@ -15,6 +15,8 @@ package dbstore
 import (
 	"context"
 	"testing"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // TestMoneyIsIntegerSen asserts every money column is an integer type (BIGINT)
@@ -33,6 +35,8 @@ func TestMoneyIsIntegerSen(t *testing.T) {
 		{"sales", "shipping_sen"},
 		{"sales", "discount_sen"},
 		{"sales", "total_sen"},
+		// Issue #518: the running refunded total is money too.
+		{"sales", "refunded_sen"},
 		{"subscriptions", "amount_sen"},
 		{"subscription_charges", "amount_sen"},
 	}
@@ -209,5 +213,124 @@ func TestSuppressionListConsistency(t *testing.T) {
 		t.Fatalf("IsSuppressed (after remove): %v", err)
 	} else if ok {
 		t.Error("removed address still reported suppressed")
+	}
+}
+
+// TestRefundedSenNeverExceedsTotalSen asserts the #518 money invariant:
+// refunded_sen <= total_sen for every sale, and refunded_sen is never negative.
+// The whole over-refund guard rests on this — if a refund could push the
+// running total past the sale total, the balance would be unrecoverable and a
+// merchant could be refunded more than they ever charged.
+//
+// It also asserts the schema default: a freshly inserted sale starts at 0, so a
+// sale that has never been refunded cannot misreport a balance.
+func TestRefundedSenNeverExceedsTotalSen(t *testing.T) {
+	ctx := context.Background()
+	p := testPool(t)
+	ss := NewSaleStore(p)
+	acc := uniqueAccount(t, ctx, p)
+
+	// A fresh sale defaults to refunded_sen = 0.
+	sale := &Sale{
+		AccountID: acc, RefCode: "JF-RF-" + randSuffix(),
+		Client:      SaleClient{FullName: "A", Email: "a@example.test"},
+		Items:       []SaleItem{{Name: "Tee", PriceSen: 5000, Qty: 1}},
+		SubtotalSen: 5000, TotalSen: 5000,
+		SaleType: SaleTypeOneTime, PaymentMethod: "chip", Status: SalePaid,
+	}
+	if err := ss.Create(ctx, sale); err != nil {
+		t.Fatalf("create sale: %v", err)
+	}
+	got, err := ss.ByID(ctx, sale.ID)
+	if err != nil {
+		t.Fatalf("reload sale: %v", err)
+	}
+	if got.RefundedSen != 0 {
+		t.Errorf("new sale refunded_sen = %d, want 0", got.RefundedSen)
+	}
+	if got.RefundStatus() != RefundNone {
+		t.Errorf("new sale RefundStatus() = %q, want %q", got.RefundStatus(), RefundNone)
+	}
+
+	// A partial refund is recorded and stays within the total.
+	if err := ss.WithSaleLock(ctx, sale.ID, func(tx pgx.Tx) error {
+		cur, err := ss.SaleByIDTx(ctx, tx, sale.ID)
+		if err != nil {
+			return err
+		}
+		_, err = ss.ApplyRefundTx(ctx, tx, cur, 2000)
+		return err
+	}); err != nil {
+		t.Fatalf("partial refund: %v", err)
+	}
+	got, err = ss.ByID(ctx, sale.ID)
+	if err != nil {
+		t.Fatalf("reload after partial: %v", err)
+	}
+	if got.RefundedSen != 2000 || got.RefundStatus() != RefundPartial {
+		t.Errorf("after partial: refunded_sen = %d status = %q, want 2000 / %q", got.RefundedSen, got.RefundStatus(), RefundPartial)
+	}
+	if got.Status == SaleRefunded {
+		t.Errorf("status = %q after a PARTIAL refund — must not read as fully refunded", got.Status)
+	}
+
+	// An over-refund inside the same atomic path is rejected by the SQL guard.
+	if err := ss.WithSaleLock(ctx, sale.ID, func(tx pgx.Tx) error {
+		cur, err := ss.SaleByIDTx(ctx, tx, sale.ID)
+		if err != nil {
+			return err
+		}
+		if _, err := ss.ApplyRefundTx(ctx, tx, cur, 9999); err == nil {
+			t.Error("ApplyRefundTx accepted an over-refund")
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("over-refund attempt: %v", err)
+	}
+
+	// The remainder completes the refund and can never exceed the total.
+	if err := ss.WithSaleLock(ctx, sale.ID, func(tx pgx.Tx) error {
+		cur, err := ss.SaleByIDTx(ctx, tx, sale.ID)
+		if err != nil {
+			return err
+		}
+		_, err = ss.ApplyRefundTx(ctx, tx, cur, 3000)
+		return err
+	}); err != nil {
+		t.Fatalf("remainder refund: %v", err)
+	}
+	got, err = ss.ByID(ctx, sale.ID)
+	if err != nil {
+		t.Fatalf("reload after full: %v", err)
+	}
+	if got.RefundedSen != got.TotalSen {
+		t.Errorf("fully refunded: refunded_sen = %d, want total_sen = %d", got.RefundedSen, got.TotalSen)
+	}
+	if got.RefundStatus() != RefundFull {
+		t.Errorf("RefundStatus() = %q, want %q", got.RefundStatus(), RefundFull)
+	}
+	if got.Status != SaleRefunded {
+		t.Errorf("status = %q, want %q once fully refunded", got.Status, SaleRefunded)
+	}
+	if got.OutstandingSen() != 0 {
+		t.Errorf("OutstandingSen() = %d, want 0 after a full refund", got.OutstandingSen())
+	}
+
+	// Schema-wide: no sale anywhere may have refunded_sen > total_sen or < 0.
+	rows, err := p.Query(ctx, `SELECT id, refunded_sen, total_sen FROM sales WHERE refunded_sen < 0 OR refunded_sen > total_sen`)
+	if err != nil {
+		t.Fatalf("scan refund invariant: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var refunded, total int64
+		if err := rows.Scan(&id, &refunded, &total); err != nil {
+			t.Fatalf("scan row: %v", err)
+		}
+		t.Errorf("sale %s violates the money invariant: refunded_sen = %d, total_sen = %d (want 0 <= refunded_sen <= total_sen)", id, refunded, total)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows err: %v", err)
 	}
 }

@@ -41,11 +41,11 @@ const TOOL_GROUPS: { group: string; tools: { name: string; desc: string }[] }[] 
   {
     group: "Sales",
     tools: [
-      { name: "list_sales", desc: "Senarai jualan terkini (terbaru dahulu)." },
-      { name: "get_sales_summary", desc: "Ringkasan jualan: bilangan mengikut status dan jumlah nilai." },
+      { name: "list_sales", desc: "Senarai jualan terkini (terbaru dahulu). Setiap jualan membawa refunded_sen (jumlah telah direfund), outstanding_sen (baki boleh refund) dan refund_status (none|partial|full) supaya agen boleh bezakan refund sebahagian daripada refund penuh (issue #518)." },
+      { name: "get_sales_summary", desc: "Ringkasan jualan: bilangan mengikut status (termasuk refunded), refunded_sen (jumlah direfund) dan revenue_sen (nilai bersih selepas refund, issue #518)." },
       { name: "confirm_sale", desc: "Sahkan jualan (contoh: selepas semak bukti bank transfer)." },
       { name: "get_sale_email_status", desc: "Status emel resit untuk satu jualan: Sent \u2192 Delivered \u2192 Opened \u2192 (Clicked) dengan masa. Guna ref_code dari list_sales." },
-      { name: "export_sales_csv", desc: "Eksport jualan akaun sebagai CSV (ref_code, status, payment_method, buyer, total_rm, created_at, purchase_id). Boleh tapis form_id. Pulangkan kandungan csv." },
+      { name: "export_sales_csv", desc: "Eksport jualan akaun sebagai CSV (ref_code, status, payment_method, buyer, total_rm, created_at, purchase_id, refunded_rm, outstanding_rm, refund_status). Kolum refund mendedahkan refund sebahagian (issue #518). Boleh tapis form_id. Pulangkan kandungan csv." },
     ],
   },
   {
@@ -53,7 +53,7 @@ const TOOL_GROUPS: { group: string; tools: { name: string; desc: string }[] }[] 
     tools: [
       { name: "capture_sale", desc: "Capture authorisasi skip_capture (kad buyer dicaj sekarang). amount_sen optional untuk partial." },
       { name: "release_sale", desc: "Release (void) authorisasi skip_capture \u2014 kad buyer TIDAK dicaj." },
-      { name: "refund_sale", desc: "Refund jualan yang telah dibayar (paid/confirmed). amount_sen optional untuk partial; kosong = refund penuh. Status jualan jadi refunded." },
+      { name: "refund_sale", desc: "Refund jualan yang telah dibayar (paid/confirmed). amount_sen = jumlah untuk refund separa; kosong = refund penuh baki yang tinggal. Jumlah mesti > 0 dan refunded_sen + amount_sen <= total_sen — refund melebihi baki ditolak sebelum CHIP dipanggil (issue #518). Refund separa MEREKOD jumlahnya dan jualan kekal 'paid'/'confirmed' dengan refund_status='partial'; hanya apabila baki penuh direfund barulah status jadi 'refunded'. Balasan: refunded_sen, outstanding_sen, refund_status, fully_refunded." },
       { name: "capture_all_pending_sales", desc: "Capture SEMUA authorisasi skip_capture yang masih menunggu. Satu kegagalan tidak hentikan yang lain; balas per-ref." },
     ],
   },

@@ -859,12 +859,17 @@ func (s *Server) exportSalesCSV(ctx context.Context, _ *mcp.CallToolRequest, in 
 	}
 	var sb strings.Builder
 	cw := csv.NewWriter(&sb)
-	_ = cw.Write([]string{"ref_code", "status", "payment_method", "buyer_name", "buyer_email", "total_rm", "created_at", "purchase_id"})
+	// Issue #518: mirror the REST export's refund columns so an agent gets the
+	// same partial-refund picture from the MCP CSV.
+	_ = cw.Write([]string{"ref_code", "status", "payment_method", "buyer_name", "buyer_email", "total_rm", "created_at", "purchase_id", "refunded_rm", "outstanding_rm", "refund_status"})
 	for _, s := range sales {
 		_ = cw.Write([]string{
 			s.RefCode, s.Status, s.PaymentMethod, s.Client.FullName, s.Client.Email,
 			fmt.Sprintf("%.2f", float64(s.TotalSen)/100),
 			s.CreatedAt.UTC().Format("2006-01-02 15:04:05"), s.ChipPurchaseID,
+			fmt.Sprintf("%.2f", float64(s.RefundedSen)/100),
+			fmt.Sprintf("%.2f", float64(s.OutstandingSen())/100),
+			s.RefundStatus(),
 		})
 	}
 	cw.Flush()

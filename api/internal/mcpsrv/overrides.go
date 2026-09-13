@@ -126,8 +126,11 @@ func (s *Server) releaseSaleMCP(
 }
 
 // refundSaleMCP issues a full or partial refund against a paid sale (issue
-// #407). amount_sen nil = full refund; non-nil = partial. Flips the sale to
-// refunded on success.
+// #407, extended by #518). amount_sen nil = a full refund of the OUTSTANDING
+// balance; non-nil = a partial refund. The amount is validated against the
+// sale's remaining balance before CHIP is called, and the refunded total is
+// recorded on the sale: only a refund that clears the whole total marks the
+// sale `refunded` — a partial leaves it reading as partially refunded.
 func (s *Server) refundSaleMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in saleRefIn,
 ) (*mcp.CallToolResult, any, error) {
@@ -143,16 +146,30 @@ func (s *Server) refundSaleMCP(
 	if err != nil || sale.AccountID != acc {
 		return nil, nil, errors.New("jualan tidak dijumpai")
 	}
-	if in.AmountSen != nil && *in.AmountSen <= 0 {
-		return nil, nil, errors.New("amount_sen mesti positif")
-	}
-	if err := pay.RefundSale(ctx, sale, in.AmountSen); err != nil {
+	res, err := pay.RefundSale(ctx, sale, in.AmountSen)
+	if err != nil {
 		return nil, nil, err
 	}
-	if err := s.deps.Sales.SetStatus(ctx, sale.ID, dbstore.SaleRefunded); err != nil {
-		return nil, nil, err
+	return nil, map[string]any{
+		"status": res.Status, "ref_code": in.RefCode,
+		"amount_sen": res.AmountSen, "refunded_sen": res.RefundedSen,
+		"outstanding_sen": res.OutstandingSen, "fully_refunded": res.FullyRefunded,
+		"refund_status": saleRefundStatus(sale.TotalSen, res.RefundedSen),
+	}, nil
+}
+
+// saleRefundStatus derives the partial/full refund label from the sale total +
+// the recorded refunded amount (issue #518), mirroring
+// dbstore.Sale.RefundStatus() for callers holding the two numbers.
+func saleRefundStatus(totalSen, refundedSen int64) string {
+	switch {
+	case refundedSen <= 0:
+		return dbstore.RefundNone
+	case refundedSen >= totalSen:
+		return dbstore.RefundFull
+	default:
+		return dbstore.RefundPartial
 	}
-	return nil, map[string]string{"status": "refunded", "ref_code": in.RefCode}, nil
 }
 
 // captureAllPendingMCP captures every awaiting skip_capture authorization in

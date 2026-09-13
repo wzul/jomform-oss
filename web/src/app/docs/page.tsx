@@ -26,6 +26,10 @@ const FEATURES: { title: string; body: string }[] = [
     body: "Track every sale: reference code, status (pending/confirmed/failed/refunded), buyer, amount, payment method and date. Confirm bank-transfer sales, capture or release skip-capture authorisations, refund paid sales (full or partial), and export sales to CSV.",
   },
   {
+    title: "Partial refunds",
+    body: "Refund a paid or confirmed sale in full or in part. JomForm records how much has actually been returned on the sale (refunded_sen), so a partial refund is never mistaken for a full one: the sale keeps its paid/confirmed status with a “Partially refunded” marker and the remaining balance (outstanding_sen) stays refundable until it reaches zero — only then does the sale become refunded. Every read surface reports the same picture: the Sales page (status chip, plus a refunded/balance breakdown in the sale detail), get_sales_summary, analytics (revenue is net of refunds), the CSV export (refunded_rm, outstanding_rm, refund_status) and the MCP tools (list_sales, refund_sale, export_sales_csv). An amount that would push the refunded total past the sale total (refunded_sen + amount_sen > total_sen) or a non-positive amount is rejected before the gateway is ever called, and the guard is applied under a per-sale lock so two refunds racing each other cannot over-refund.",
+  },
+  {
     title: "Subscriptions",
     body: "Manage recurring customer subscriptions. Cancel a subscription without losing the customer's card token (it can be re-activated later), and send a secure link to update a card.",
   },
