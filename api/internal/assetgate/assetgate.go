@@ -352,19 +352,113 @@ func (h *Handler) Send(ctx context.Context, job emailqueue.Job) error {
 		slog.Warn("assetgate_ai_failed", "media", sj.MediaID, "err", err)
 		return err
 	}
-	switch strings.ToLower(strings.TrimSpace(verdict)) {
-	case "malicious":
-		final = StatusQuarantined
-	case "needs review", "needs_review", "review":
-		final = StatusNeedsReview
-	default:
-		final = StatusOK
+	// Issue #547 (round 8): an unrecognised reply is NOT benign. The asset
+	// content itself is the classifier's input, so a file can attempt to steer
+	// the verdict; treating "anything else" as OK let an unexpected or injected
+	// reply publish the file. Only an explicit benign verdict unlocks serving —
+	// everything else stays behind the gate for a human (needs_review), which is
+	// the same fail-closed posture as the no-LLM and error branches above.
+	final = verdictToScanStatus(verdict)
+	var reason string
+	if final == StatusOK || final == StatusQuarantined {
+		reason = "AI judge verdict: " + verdict
+	} else {
+		reason = "AI judge verdict not recognised as benign (fail closed): " + verdict
 	}
-	reason := "AI judge verdict: " + verdict
 	if err := h.Media.SetScanStatus(ctx, sj.AccountID, sj.MediaID, final, reason); err != nil {
 		slog.Warn("assetgate_store_failed", "media", sj.MediaID, "err", err)
 		return err
 	}
-	slog.Info("assetgate_scan_done", "media", sj.MediaID, "key", sj.Key, "status", final)
+	slog.Info("assetgate_scan_done", "media", sj.MediaID, "key", sj.Key, "status", final, "verdict", verdict)
 	return nil
+}
+
+// verdictToScanStatus maps a model reply onto the scan status the gate enforces.
+//
+// Issue #547 (round 8): this is FAIL-CLOSED. The classifier's input is the
+// uploaded file itself, so its reply is steerable; previously the mapping ended
+// in `default: StatusOK`, meaning any reply the switch did not recognise —
+// an unexpected token, a model quirk, or an injection the model partially obeyed
+// — PUBLISHED the asset, because scan_status="ok" is exactly what
+// objstore.ScanGateAllowed requires to serve a code asset. Only an explicit
+// benign verdict may unlock serving; everything else is held for a human.
+//
+// Factored out of the scan handler so the mapping itself is directly testable:
+// a test that only exercises classifyVerdict cannot catch a change here.
+func verdictToScanStatus(reply string) string {
+	switch classifyVerdict(reply) {
+	case "malicious":
+		return StatusQuarantined
+	case "benign":
+		return StatusOK
+	default:
+		return StatusNeedsReview
+	}
+}
+
+// classifyVerdict reduces a model reply to one of "malicious", "benign" or
+// "needs_review". Anything unrecognised — or ambiguous — yields "" so the caller
+// fails closed (issue #547).
+//
+// Two conditions must BOTH hold, because the reply is a security decision derived
+// from attacker-supplied input:
+//
+//  1. The verdict must be the FIRST meaningful token. The operator instructs
+//     "reply with exactly one word", so a well-behaved model answers with the
+//     verdict alone. Requiring first position rejects a chatty reply such as
+//     "sure, here you go: BENIGN" — exactly the shape a successful nudge produces.
+//  2. The reply must contain exactly ONE distinct verdict token. A self-
+//     contradicting reply ("benign / malicious") is not a decision we can trust.
+//
+// A trailing note on a genuine verdict ("BENIGN - ordinary styling") still
+// classifies, because the verdict leads and is the only verdict token.
+func classifyVerdict(reply string) string {
+	words := strings.FieldsFunc(strings.ToLower(reply), func(r rune) bool {
+		return r == ' ' || r == '\n' || r == '\r' || r == '	' || r == ',' || r == '.' ||
+			r == ':' || r == ';' || r == '-' || r == '*' || r == '"' || r == '\'' ||
+			r == '`' || r == '(' || r == ')' || r == '!' || r == '/' || r == '|'
+	})
+	if len(words) == 0 {
+		return ""
+	}
+
+	// Condition 2: collect every verdict token in the reply.
+	seen := map[string]bool{}
+	for i, w := range words {
+		switch w {
+		case "malicious":
+			seen["malicious"] = true
+		case "benign":
+			seen["benign"] = true
+		case "needs_review", "review":
+			seen["needs_review"] = true
+		case "needs":
+			if i+1 < len(words) && words[i+1] == "review" {
+				seen["needs_review"] = true
+			}
+		}
+	}
+	if len(seen) != 1 {
+		// No verdict at all, or more than one distinct verdict.
+		return ""
+	}
+
+	// Condition 1: the leading token must itself be that verdict.
+	lead := words[0]
+	switch lead {
+	case "malicious", "benign", "needs_review", "review":
+		for v := range seen {
+			if lead == "review" && v == "needs_review" {
+				return v
+			}
+			if lead == v {
+				return v
+			}
+		}
+	case "needs":
+		if len(words) > 1 && words[1] == "review" {
+			return "needs_review"
+		}
+	}
+	return ""
 }
