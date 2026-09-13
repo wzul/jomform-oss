@@ -103,6 +103,7 @@ type Verdict struct {
 // references external fonts/images via url()/@import).
 func DeterministicScan(data []byte, mime string) Verdict {
 	lower := strings.ToLower(string(data))
+	src := string(data)
 	var v Verdict
 
 	isCSS := strings.Contains(mime, "text/css")
@@ -120,14 +121,34 @@ func DeterministicScan(data []byte, mime string) Verdict {
 	}
 
 	// --- Hard block: active code execution the browser would run. ---------
+	//
+	// Issue #543: the bare keyword markers `function(` and `new function(` were
+	// REMOVED. `function(` is the JavaScript function keyword and appears in
+	// essentially every non-trivial script, so as a case-folded substring test it
+	// hard-blocked ordinary merchant code — anonymous functions, callbacks and
+	// IIFEs all quarantined permanently with no recovery path, which broke the
+	// custom-asset feature rather than protecting anything. A bare language
+	// keyword carries no signal.
+	//
+	// The remaining entries are specific execution vectors. The `Function`
+	// constructor is detected separately below, case-sensitively, because a
+	// case-folded `new function(` can never match real `new Function(` source
+	// (and would also fire on the unrelated lowercase identifier `function`).
 	for _, m := range []string{
-		"eval(", "eval (", "new function(", "new function (", "function(",
-		"document.write(", "document.writeln(", "constructor.constructor",
+		"eval(", "eval (",
+		"document.write(", "document.writeln(",
+		"constructor.constructor",
 		"constructor[\"constructor\"]", "constructor['constructor']",
 	} {
 		if strings.Contains(lower, m) {
 			addM("active code execution marker: " + m)
 		}
+	}
+	// The Function constructor: dynamic code compilation. Matched on the ORIGINAL
+	// source, case-sensitively, so `new Function("...")` and `Function("...")` are
+	// caught while a plain lowercase `function` declaration is not (issue #543).
+	if containsFunctionConstructor(src) {
+		addM("Function constructor (dynamic code compilation)")
 	}
 	// CSS-as-code and javascript: URI vectors.
 	for _, m := range []string{"expression(", "-moz-binding", "behavior:url", "url(javascript:"} {
@@ -234,6 +255,17 @@ func hasExternalURL(s string) bool {
 			end++
 		}
 		raw := s[start:end]
+		// Issue #543: a namespace declaration is not a network reference. Every
+		// valid SVG carries xmlns="http://www.w3.org/2000/svg" (and often the
+		// xlink namespace), which previously flagged EVERY SVG as referencing an
+		// external URL — so no SVG could ever reach an automatic "ok".
+		if isNamespaceDeclaration(s, start) {
+			idx = end
+			if idx >= len(s) {
+				return false
+			}
+			continue
+		}
 		if u, err := url.Parse("http://" + strings.TrimPrefix(strings.TrimPrefix(raw, "http://"), "https://")); err == nil && u.Host != "" {
 			if !hostIsJomform(u.Host) {
 				return true
@@ -244,6 +276,69 @@ func hasExternalURL(s string) bool {
 			return false
 		}
 	}
+}
+
+// namespaceHosts are hosts used only in XML/SVG namespace declarations. A URL on
+// one of these is a namespace identifier, not a fetch, so it must not count as an
+// external reference (issue #543).
+var namespaceHosts = map[string]bool{
+	"www.w3.org": true,
+}
+
+// isNamespaceDeclaration reports whether the URL starting at `start` is the value
+// of an xmlns (or xmlns:*) attribute, or points at a namespace host.
+func isNamespaceDeclaration(s string, start int) bool {
+	// Look back a short distance for the attribute name.
+	lookFrom := start - 24
+	if lookFrom < 0 {
+		lookFrom = 0
+	}
+	pre := strings.ToLower(s[lookFrom:start])
+	if strings.Contains(pre, "xmlns=") || strings.Contains(pre, "xmlns:") {
+		return true
+	}
+	// Otherwise check the host itself against the namespace-only hosts.
+	raw := s[start:]
+	if i := strings.IndexAny(raw, "\"' >;)"); i >= 0 {
+		raw = raw[:i]
+	}
+	host := strings.TrimPrefix(strings.TrimPrefix(raw, "http://"), "https://")
+	if i := strings.IndexAny(host, "/?#"); i >= 0 {
+		host = host[:i]
+	}
+	return namespaceHosts[strings.ToLower(host)]
+}
+
+// containsFunctionConstructor reports whether the source uses JavaScript's
+// Function constructor (`new Function(...)`, `Function('return ...')`) — dynamic
+// code compilation, a real execution vector.
+//
+// Issue #543: matched CASE-SENSITIVELY on the original source, with a boundary
+// before the identifier. The previous case-folded `function(` substring test could
+// never match real `new Function(` source and instead hard-blocked every ordinary
+// script that used the `function` keyword; the bare keyword is not a signal.
+func containsFunctionConstructor(src string) bool {
+	for _, marker := range []string{"new Function(", "new Function (", "Function(", "Function ("} {
+		for i := 0; i+len(marker) <= len(src); i++ {
+			if src[i:i+len(marker)] != marker {
+				continue
+			}
+			// Require a non-identifier char before, so `myFunction(` and
+			// `function(` (lowercase keyword) are not mistaken for the
+			// `Function` constructor.
+			if i == 0 {
+				return true
+			}
+			prev := src[i-1]
+			isIdent := prev == '_' || prev == '$' ||
+				(prev >= 'a' && prev <= 'z') || (prev >= 'A' && prev <= 'Z') ||
+				(prev >= '0' && prev <= '9')
+			if !isIdent {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 var base64Re = regexp.MustCompile(`[A-Za-z0-9+/=]{16,}`)
