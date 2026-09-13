@@ -27,6 +27,7 @@ import (
 
 	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/cryptoutil"
+	"github.com/wzul/jomform/api/internal/csvguard"
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/ssrfguard"
 )
@@ -864,7 +865,8 @@ func (s *Server) exportSalesCSV(ctx context.Context, _ *mcp.CallToolRequest, in 
 	_ = cw.Write([]string{"ref_code", "status", "payment_method", "buyer_name", "buyer_email", "total_rm", "created_at", "purchase_id", "refunded_rm", "outstanding_rm", "refund_status"})
 	for _, s := range sales {
 		_ = cw.Write([]string{
-			s.RefCode, s.Status, s.PaymentMethod, s.Client.FullName, s.Client.Email,
+			s.RefCode, s.Status, s.PaymentMethod,
+			csvguard.Cell(s.Client.FullName), csvguard.Cell(s.Client.Email),
 			fmt.Sprintf("%.2f", float64(s.TotalSen)/100),
 			s.CreatedAt.UTC().Format("2006-01-02 15:04:05"), s.ChipPurchaseID,
 			fmt.Sprintf("%.2f", float64(s.RefundedSen)/100),

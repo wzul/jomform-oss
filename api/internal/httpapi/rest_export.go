@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/wzul/jomform/api/internal/csvguard"
 	"github.com/wzul/jomform/api/internal/dbstore"
 )
 
@@ -40,12 +41,12 @@ func (h *RESTHandlers) exportSalesCSV(w http.ResponseWriter, r *http.Request, ac
 			s.RefCode,
 			s.Status,
 			s.PaymentMethod,
-			s.Client.FullName,
-			s.Client.Email,
+			csvguard.Cell(s.Client.FullName),
+			csvguard.Cell(s.Client.Email),
 			strconv.FormatFloat(float64(s.TotalSen)/100, 'f', 2, 64),
 			s.CreatedAt.UTC().Format("2006-01-02 15:04:05"),
 			s.ChipPurchaseID,
-			s.TableNumber,
+			csvguard.Cell(s.TableNumber),
 			strconv.FormatFloat(float64(s.RefundedSen)/100, 'f', 2, 64),
 			strconv.FormatFloat(float64(s.OutstandingSen())/100, 'f', 2, 64),
 			s.RefundStatus(),
