@@ -32,6 +32,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"log/slog"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -39,6 +40,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // scratchPrefix names the throwaway databases this test creates. Kept short so
@@ -75,15 +77,35 @@ func migrationUpFiles(t *testing.T) []string {
 	return files
 }
 
+// currentDatabase reports the database the pool is actually connected to.
+func currentDatabase(ctx context.Context, pool *pgxpool.Pool) (string, error) {
+	var name string
+	err := pool.QueryRow(ctx, `SELECT current_database()`).Scan(&name)
+	return name, err
+}
+
 // dsnFor returns the connection string with its database name replaced.
+//
+// Do NOT go back to pgx.ParseConfig(dsn) + cfg.Database = database +
+// cfg.ConnString(): pgx's ConnString() returns the ORIGINAL string and discards
+// a mutated Database, so the caller silently keeps connecting to the DSN's own
+// database. That defect (issue #532) made this guard connect to the shared test
+// database instead of the empty scratch one, find every migration already
+// applied, apply none, and pass vacuously — the exact 000047 class it exists to
+// catch could have shipped green.
+//
+// Building the URL with url.URL keeps it explicit and correct, and
+// TestMigrationsApplyFromZero additionally asserts (via current_database) that
+// the pool really landed on the scratch database, so a regression here fails
+// loudly instead of silently disabling the guard.
 func dsnFor(t *testing.T, dsn, database string) string {
 	t.Helper()
-	cfg, err := pgx.ParseConfig(dsn)
+	u, err := url.Parse(dsn)
 	if err != nil {
 		t.Fatalf("parse JOMFORM_TEST_DATABASE_URL: %v", err)
 	}
-	cfg.Database = database
-	return cfg.ConnString()
+	u.Path = "/" + database
+	return u.String()
 }
 
 // createScratchDB creates a uniquely named empty database and registers its
@@ -148,6 +170,31 @@ func TestMigrationsApplyFromZero(t *testing.T) {
 		t.Fatalf("connect to scratch database %s: %v", name, err)
 	}
 	defer pool.Close()
+
+	// Issue #532: prove we are actually on the throwaway database, and that it
+	// starts EMPTY. Without this the guard can silently degrade into applying
+	// the migrations to the shared test database (where they are already
+	// applied), finding every migration present, applying none, and passing
+	// vacuously — i.e. the 000047 class could ship green. Asserting here means
+	// any regression fails loudly instead.
+	if cur, err := currentDatabase(ctx, pool); err != nil {
+		t.Fatalf("resolve current_database for the scratch pool: %v", err)
+	} else if cur != name {
+		t.Fatalf("fresh-DB guard is connected to %q but the scratch database is %q — "+
+			"the migrations would be applied to the wrong database and the guard would "+
+			"pass vacuously (see issue #532)", cur, name)
+	}
+	var preExisting int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM information_schema.tables
+		 WHERE table_schema = 'public' AND table_name = 'schema_migrations'`,
+	).Scan(&preExisting); err != nil {
+		t.Fatalf("probe scratch database for a pre-existing schema_migrations: %v", err)
+	}
+	if preExisting != 0 {
+		t.Fatalf("scratch database %s is NOT empty: schema_migrations already exists — "+
+			"the from-zero guard cannot prove anything against a pre-migrated database", name)
+	}
 
 	log := slog.New(slog.DiscardHandler)
 	if err := Migrate(ctx, pool, log); err != nil {
