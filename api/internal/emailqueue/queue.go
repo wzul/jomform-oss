@@ -9,8 +9,27 @@
 // durable: jobs survive a restart. A job is a JSON blob pushed onto a list
 // (`jf:emailq:jobs`). On a send failure the worker re-enqueues the job onto a
 // delayed sorted set (`jf:emailq:delayed`) with an exponential backoff ladder,
-// and promotes due jobs back onto the main list. After the max attempt count a
-// job is dropped and logged.
+// and promotes due jobs back onto the main list.
+//
+// # Delivery guarantee (issue #547)
+//
+// Jobs are claimed, not popped. A worker atomically MOVEs a job from the ready
+// list into an in-flight list (`jf:emailq:inflight`) and only removes it once the
+// handler has succeeded. This closes the old failure window: the queue used a
+// destructive BLPOP, so a job that had been taken but not yet completed was gone
+// from Valkey entirely, and a process stop (deploy, OOM, reboot) lost it silently
+// — retries only existed for a handler that RETURNED an error, and a crash returns
+// nothing.
+//
+// A reaper promotes in-flight jobs older than the visibility timeout back onto the
+// ready list, so a crashed job is retried rather than lost. A job that exhausts
+// maxAttempts is pushed to a dead-letter list (`jf:emailq:dead`) instead of being
+// discarded, so a persistently failing job can be inspected and replayed.
+//
+// Delivery is therefore at-least-once: a job whose handler succeeded but whose ack
+// did not land (e.g. a crash in that instant) will run again. Handlers must be
+// repeat-safe — email re-sends a duplicate, while asset_scan and spam_judge simply
+// recompute a terminal status from the verdict and are naturally idempotent.
 //
 // The worker is generic: it takes a Handler that performs the actual SES send.
 // The wiring in cmd/jomform-api provides a dispatcher that routes each job type
@@ -51,6 +70,10 @@ type Job struct {
 	PDFData     []byte `json:"pdf_data,omitempty"`
 	// Attempts counts how many times this job has been tried (for backoff).
 	Attempts int `json:"attempts,omitempty"`
+	// ClaimedAt records when a worker took the job (unix seconds, issue #547).
+	// Zero when the job is not in flight. Used by the reaper to detect a job
+	// whose worker died, and cleared on ack so a requeued job looks fresh.
+	ClaimedAt int64 `json:"claimed_at,omitempty"`
 }
 
 // Queue is a durable Valkey-backed email job queue.
@@ -70,12 +93,29 @@ const (
 	// delayedKey is a sorted set of jobs waiting for a retry, scored by the
 	// unix time at which they become due.
 	delayedKey = "jf:emailq:delayed"
-	// dequeueTimeout bounds each BLPOP so the worker can periodically promote
-	// due delayed jobs.
+	// inflightKey holds jobs a worker has CLAIMED but not yet acked
+	// (issue #547). A job here is still owned by the queue: the reaper returns
+	// it to the ready list if its worker never acked.
+	inflightKey = "jf:emailq:inflight"
+	// deadKey holds jobs that exhausted their attempts (issue #547), so a
+	// permanently failing job can be inspected instead of vanishing.
+	deadKey = "jf:emailq:dead"
+	// dequeueTimeout bounds each blocking move so the worker can periodically
+	// promote due delayed jobs and reap abandoned in-flight jobs.
 	dequeueTimeout = 2 * time.Second
 )
 
-// ErrNoJob is returned by Dequeue when the queue is empty (BLPOP timed out).
+// VisibilityTimeout is how long a claimed job may sit in the in-flight list
+// before the reaper assumes its worker died and returns it to the ready list
+// (issue #547). It must comfortably exceed a realistic handler duration so a slow
+// send is never re-delivered while still running.
+const VisibilityTimeout = 5 * time.Minute
+
+// reapInterval is how often the worker checks the in-flight list for abandoned
+// claims (issue #547).
+const reapInterval = 30 * time.Second
+
+// ErrNoJob is returned by Dequeue when the queue is empty (move timed out).
 var ErrNoJob = errors.New("email queue empty")
 
 // Enqueue pushes a job onto the ready list. Durable — survives a restart.
@@ -98,26 +138,160 @@ func (q *Queue) EnqueueDelayed(ctx context.Context, job Job, delay time.Duration
 	return q.rdb.ZAdd(ctx, delayedKey, goredis.Z{Score: float64(when), Member: data}).Err()
 }
 
-// Dequeue pops the next ready job, blocking up to dequeueTimeout. Returns
-// ErrNoJob when the queue is empty.
+// Dequeue claims the next ready job, blocking up to dequeueTimeout.
+//
+// Issue #547: this MOVEs the job to the in-flight list and stamps ClaimedAt,
+// rather than popping it off the queue. The job therefore remains recorded until
+// Ack removes it, so a process stop mid-handler loses nothing — the reaper returns
+// it to the ready list.
+//
+// Returns ErrNoJob when the queue is empty.
 func (q *Queue) Dequeue(ctx context.Context) (Job, error) {
-	res, err := q.rdb.BLPop(ctx, dequeueTimeout, queueKey).Result()
+	job, _, err := q.DequeueRaw(ctx)
+	return job, err
+}
+
+// DequeueRaw claims the next ready job and also returns the RAW stored blob, which
+// the caller must hand back to Ack so the removal matches byte-for-byte
+// (issue #547). The returned job has ClaimedAt populated.
+func (q *Queue) DequeueRaw(ctx context.Context) (Job, string, error) {
+	// BLMOVE <src> <dst> RIGHT LEFT <timeout>: atomic, and keeps FIFO order on
+	// both lists. Valkey >= 6.2 (prod runs 9.1), the same requirement the rest
+	// of the codebase assumes.
+	res, err := q.rdb.BLMove(ctx, queueKey, inflightKey, "RIGHT", "LEFT", dequeueTimeout).Result()
 	if err != nil {
 		if errors.Is(err, goredis.Nil) {
-			return Job{}, ErrNoJob
+			return Job{}, "", ErrNoJob
 		}
-		return Job{}, err
+		return Job{}, "", err
 	}
-	// res is [key, value].
 	var job Job
-	if err := json.Unmarshal([]byte(res[1]), &job); err != nil {
-		return Job{}, err
+	if err := json.Unmarshal([]byte(res), &job); err != nil {
+		// An unparseable job cannot be retried meaningfully: drop it from the
+		// in-flight list so it does not pin a reaper slot forever, and surface
+		// the error so the worker logs it.
+		_ = q.rdb.LRem(ctx, inflightKey, 1, res).Err()
+		return Job{}, "", err
 	}
-	return job, nil
+	// Stamp the claim so the reaper can tell a live claim from an abandoned one.
+	// Replace the in-flight member with the stamped copy; the caller gets the
+	// stamped blob back for its ack.
+	job.ClaimedAt = time.Now().Unix()
+	stamped, merr := json.Marshal(job)
+	if merr != nil {
+		// Cannot stamp: keep the original in flight so the reaper still finds it
+		// (a zero ClaimedAt is treated as stale), and ack against the original.
+		return job, res, nil
+	}
+	// Move atomically enough for a single-worker queue: remove the unstamped
+	// member, then push the stamped one. If either step fails the job is still
+	// in flight under one of the two forms, so nothing is lost.
+	if lerr := q.rdb.LRem(ctx, inflightKey, 1, res).Err(); lerr != nil {
+		slog.Warn("emailq_claim_stamp_failed", "err", lerr)
+		return job, res, nil
+	}
+	if perr := q.rdb.LPush(ctx, inflightKey, stamped).Err(); perr != nil {
+		slog.Warn("emailq_claim_stamp_failed", "err", perr)
+		// Put the original back so the job is not stranded.
+		_ = q.rdb.LPush(ctx, inflightKey, res).Err()
+		return job, res, nil
+	}
+	return job, string(stamped), nil
+}
+
+// Ack removes a successfully-handled job from the in-flight list (issue #547).
+// acked is the json blob exactly as it was claimed, so the removal matches the
+// stored member byte-for-byte.
+func (q *Queue) Ack(ctx context.Context, raw string) error {
+	return q.rdb.LRem(ctx, inflightKey, 1, raw).Err()
+}
+
+// ReapInflight returns in-flight jobs whose worker has not acked within the
+// visibility timeout to the ready list (issue #547), so a job claimed by a
+// process that then stopped is retried instead of lost.
+//
+// Returns the number of jobs reaped.
+func (q *Queue) ReapInflight(ctx context.Context, timeout time.Duration) (int, error) {
+	res, err := q.rdb.LRange(ctx, inflightKey, 0, -1).Result()
+	if err != nil {
+		return 0, err
+	}
+	if len(res) == 0 {
+		return 0, nil
+	}
+	cutoff := time.Now().Add(-timeout).Unix()
+	reaped := 0
+	for _, raw := range res {
+		var job Job
+		if err := json.Unmarshal([]byte(raw), &job); err != nil {
+			// Unparseable in-flight entry: cannot retry it, so drop it rather
+			// than reap it forever.
+			if err := q.rdb.LRem(ctx, inflightKey, 1, raw).Err(); err != nil {
+				return reaped, err
+			}
+			continue
+		}
+		// A zero ClaimedAt means the claim stamp failed; treat it as stale so
+		// the job is not stranded in flight forever.
+		if job.ClaimedAt != 0 && job.ClaimedAt > cutoff {
+			continue // still within its visibility window
+		}
+		// Return it as a fresh ready job. Attempts is preserved so the backoff
+		// ladder still bounds a job that keeps crashing its worker; ClaimedAt is
+		// cleared so the next claim stamps it anew.
+		job.ClaimedAt = 0
+		next, merr := json.Marshal(job)
+		if merr != nil {
+			continue
+		}
+		// Claim-then-requeue: move it out of in-flight first so a concurrent
+		// reaper cannot requeue the same member twice.
+		if err := q.rdb.LRem(ctx, inflightKey, 1, raw).Err(); err != nil {
+			return reaped, err
+		}
+		if err := q.rdb.RPush(ctx, queueKey, next).Err(); err != nil {
+			// Put it back in flight rather than dropping it.
+			_ = q.rdb.RPush(ctx, inflightKey, raw).Err()
+			return reaped, err
+		}
+		reaped++
+	}
+	return reaped, nil
+}
+
+// DeadLetter moves a job that exhausted its attempts to the dead list
+// (issue #547), so a permanently failing job can be inspected and replayed
+// instead of being discarded.
+func (q *Queue) DeadLetter(ctx context.Context, job Job, reason string) error {
+	rec := map[string]any{
+		"job":      job,
+		"reason":   reason,
+		"died_at":  time.Now().Unix(),
+		"attempts": job.Attempts,
+	}
+	data, err := json.Marshal(rec)
+	if err != nil {
+		return err
+	}
+	return q.rdb.RPush(ctx, deadKey, data).Err()
+}
+
+// DeadLen reports the dead-letter list length (for tests/ops).
+func (q *Queue) DeadLen(ctx context.Context) (int64, error) {
+	return q.rdb.LLen(ctx, deadKey).Result()
+}
+
+// InflightLen reports the in-flight list length (for tests/ops).
+func (q *Queue) InflightLen(ctx context.Context) (int64, error) {
+	return q.rdb.LLen(ctx, inflightKey).Result()
 }
 
 // PromoteDue moves every delayed job whose due time has passed onto the ready
 // list. Called by the worker each loop so retries are picked up.
+//
+// Issue #547: the ZREM happens BEFORE the RPush for each member, so with more than
+// one worker a member can only be promoted once — previously the read-then-move
+// pair could promote the same member from two workers concurrently.
 func (q *Queue) PromoteDue(ctx context.Context) error {
 	now := time.Now().Unix()
 	res, err := q.rdb.ZRangeByScore(ctx, delayedKey, &goredis.ZRangeBy{
@@ -126,16 +300,23 @@ func (q *Queue) PromoteDue(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if len(res) == 0 {
-		return nil
-	}
-	pipe := q.rdb.TxPipeline()
 	for _, m := range res {
-		pipe.RPush(ctx, queueKey, m)
-		pipe.ZRem(ctx, delayedKey, m)
+		// Claim the member first: ZRem returns 1 only for the worker that
+		// actually removed it, so only that worker pushes it to the ready list.
+		removed, rerr := q.rdb.ZRem(ctx, delayedKey, m).Result()
+		if rerr != nil {
+			return rerr
+		}
+		if removed == 0 {
+			continue // another worker got it
+		}
+		if perr := q.rdb.RPush(ctx, queueKey, m).Err(); perr != nil {
+			// Re-add to delayed so the retry is not lost.
+			_ = q.rdb.ZAdd(ctx, delayedKey, goredis.Z{Score: float64(time.Now().Unix()), Member: m}).Err()
+			return perr
+		}
 	}
-	_, err = pipe.Exec(ctx)
-	return err
+	return nil
 }
 
 // Len reports the number of ready jobs (for tests/ops).
@@ -178,12 +359,32 @@ func NewWorker(q *Queue, h Handler, log *slog.Logger) *Worker {
 
 // Run processes jobs until ctx is cancelled.
 func (w *Worker) Run(ctx context.Context) {
+	// Reap abandoned in-flight jobs once at start, so a job whose worker died
+	// before this process came up is retried promptly rather than waiting for
+	// the reaper interval (issue #547).
+	if n, err := w.q.ReapInflight(ctx, VisibilityTimeout); err != nil {
+		w.log.Warn("emailq_reap_inflight", "err", err)
+	} else if n > 0 {
+		w.log.Warn("emailq_reaped_inflight", "jobs", n)
+	}
+	lastReap := time.Now()
 	for {
 		// Promote any due retries before blocking on the ready list.
 		if err := w.q.PromoteDue(ctx); err != nil {
 			w.log.Warn("emailq_promote_due", "err", err)
 		}
-		job, err := w.q.Dequeue(ctx)
+		// Periodically reap jobs whose worker never acked (issue #547).
+		if time.Since(lastReap) >= reapInterval {
+			if n, err := w.q.ReapInflight(ctx, VisibilityTimeout); err != nil {
+				w.log.Warn("emailq_reap_inflight", "err", err)
+			} else if n > 0 {
+				w.log.Warn("emailq_reaped_inflight", "jobs", n)
+			}
+			lastReap = time.Now()
+		}
+		// Claim the next job. Dequeue returns both the parsed job and the raw
+		// blob, because the ack must match the stored member byte-for-byte.
+		job, raw, err := w.q.DequeueRaw(ctx)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return
@@ -196,16 +397,36 @@ func (w *Worker) Run(ctx context.Context) {
 			continue
 		}
 		if err := w.handler.Send(ctx, job); err != nil {
-			w.retry(ctx, job, err)
+			w.retry(ctx, job, raw, err)
+			continue
+		}
+		// Success: ack the claimed job out of the in-flight list. If this fails
+		// the job stays in flight and the reaper will retry it later — a
+		// duplicate run, never a loss (issue #547).
+		if err := w.q.Ack(ctx, raw); err != nil {
+			w.log.Warn("emailq_ack_failed", "type", job.Type, "to", job.To, "err", err)
 		}
 	}
 }
 
-// retry re-enqueues a failed job with backoff, or drops it after maxAttempts.
-func (w *Worker) retry(ctx context.Context, job Job, sendErr error) {
+// retry re-enqueues a failed job with backoff, or dead-letters it after
+// maxAttempts (issue #547: previously it was dropped and only logged, which made
+// a permanently failing job disappear).
+func (w *Worker) retry(ctx context.Context, job Job, raw string, sendErr error) {
+	// Release the claim first: this job is being scheduled again (or retired), so
+	// it must not also be reaped.
+	if err := w.q.Ack(ctx, raw); err != nil {
+		w.log.Warn("emailq_ack_failed", "type", job.Type, "to", job.To, "err", err)
+	}
 	job.Attempts++
+	job.ClaimedAt = 0
 	if job.Attempts >= w.maxAttempts {
-		w.log.Error("emailq_dropped",
+		if err := w.q.DeadLetter(ctx, job, sendErr.Error()); err != nil {
+			w.log.Error("emailq_deadletter_failed",
+				"type", job.Type, "to", job.To, "attempts", job.Attempts, "err", err)
+			return
+		}
+		w.log.Error("emailq_deadlettered",
 			"type", job.Type, "to", job.To, "attempts", job.Attempts, "err", sendErr)
 		return
 	}
