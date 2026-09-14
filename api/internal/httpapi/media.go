@@ -17,13 +17,13 @@ import (
 
 // restMedia is the JSON shape returned by the media list endpoint.
 type restMedia struct {
-	ID        string `json:"id"`
-	FormID    string `json:"form_id,omitempty"`
-	Key       string `json:"key"`
-	URL       string `json:"url"`
-	Mime      string `json:"mime"`
-	Size      int64  `json:"size"`
-	Source    string `json:"source"`
+	ID     string `json:"id"`
+	FormID string `json:"form_id,omitempty"`
+	Key    string `json:"key"`
+	URL    string `json:"url"`
+	Mime   string `json:"mime"`
+	Size   int64  `json:"size"`
+	Source string `json:"source"`
 	// ScanStatus is the #364 scan status ('pending' until the scan engine
 	// lands). Exposed for the media UI + ops to see unscanned/quarantined
 	// code assets; only 'ok' is served (issue #364).
@@ -34,13 +34,13 @@ type restMedia struct {
 	// public URL for raster images (issue #382). Empty for non-images and
 	// GIFs. The media grid renders the thumbnail; the detail modal offers
 	// all sizes.
-	Sizes     map[string]string `json:"sizes,omitempty"`
+	Sizes map[string]string `json:"sizes,omitempty"`
 	// Preview is the auto-generated first-page thumbnail URL for a PDF
 	// (issue #383), derived from the object key. Empty when no preview was
 	// generated (e.g. Ghostscript unavailable at upload time). The media grid
 	// renders this instead of the generic PDF tile when present.
-	Preview   string            `json:"preview,omitempty"`
-	CreatedAt string            `json:"created_at"`
+	Preview   string `json:"preview,omitempty"`
+	CreatedAt string `json:"created_at"`
 }
 
 // listMedia handles GET /v1/rest/media — account-scoped, paginated list of
@@ -97,12 +97,15 @@ func (h *RESTHandlers) listMedia(w http.ResponseWriter, r *http.Request, actx *A
 		}
 		out = append(out, rm)
 	}
-	// Issue #384: surface the per-workspace storage usage so the merchant knows
-	// their remaining quota. Best-effort — a usage read failure never fails
-	// the list.
+	// Issue #384/#545: surface the per-workspace storage usage so the merchant
+	// knows their remaining quota. Best-effort — a usage read failure never fails
+	// the list. Read from the quota COUNTER (the enforced figure) so the number
+	// shown matches what is actually enforced; fall back to the media sum.
 	usage := map[string]any{"limit": objstore.MaxWorkspaceBytes}
 	if h.Media != nil {
-		if used, err := h.Media.TotalBytes(r.Context(), actx.Account.ID); err == nil {
+		if used, err := h.Media.UsedBytes(r.Context(), actx.Account.ID); err == nil {
+			usage["used"] = used
+		} else if used, err := h.Media.TotalBytes(r.Context(), actx.Account.ID); err == nil {
 			usage["used"] = used
 		}
 	}
@@ -120,7 +123,7 @@ func (h *RESTHandlers) deleteMedia(w http.ResponseWriter, r *http.Request, actx 
 		writeErr(w, http.StatusServiceUnavailable, "media tidak dikonfigurasi")
 		return
 	}
-	key, ok, err := h.Media.SoftDelete(r.Context(), actx.Account.ID, r.PathValue("id"))
+	key, size, ok, err := h.Media.SoftDelete(r.Context(), actx.Account.ID, r.PathValue("id"))
 	if err != nil {
 		slog.Error("media_delete", "err", err, "account", actx.Account.ID, "id", r.PathValue("id"))
 		writeErr(w, http.StatusInternalServerError, "internal error")
@@ -130,6 +133,10 @@ func (h *RESTHandlers) deleteMedia(w http.ResponseWriter, r *http.Request, actx 
 		writeErr(w, http.StatusNotFound, "media tidak dijumpai")
 		return
 	}
+	// Issue #545: deleting an object releases its bytes back into the workspace
+	// quota, so the counter must come down with it. Without this the account
+	// would keep paying quota for objects it removed.
+	h.releaseMediaQuota(r.Context(), actx.Account.ID, size)
 	// Remove the object from MinIO (best-effort; the row is already
 	// soft-deleted so a storage failure must not fail the request).
 	if h.Store != nil {

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/objstore"
 )
 
 // isSuperAdmin reports whether the authenticated session user is a site
@@ -76,15 +77,15 @@ func (h *RESTHandlers) auditSuperAdminAccess(r *http.Request, action string) {
 
 // adminOverview is the response shape of GET /v1/admin/overview (issue #387).
 type adminOverview struct {
-	Totals       dbstore.PlatformTotals     `json:"totals"`
-	Growth24h    dbstore.GrowthCounts       `json:"growth_24h"`
-	Growth7d     dbstore.GrowthCounts       `json:"growth_7d"`
-	Email        dbstore.EmailDeliverySummary `json:"email"`
-	Spam         dbstore.SpamQueueSize      `json:"spam"`
-	RecentSignups []dbstore.RecentSignup    `json:"recent_signups"`
-	ActiveWorkspaces  []dbstore.ActiveWorkspace     `json:"active_workspaces"`
-	Storage      []dbstore.MediaUsageByWorkspace `json:"storage"`
-	QuotaBytes   int64                      `json:"quota_bytes"`
+	Totals           dbstore.PlatformTotals          `json:"totals"`
+	Growth24h        dbstore.GrowthCounts            `json:"growth_24h"`
+	Growth7d         dbstore.GrowthCounts            `json:"growth_7d"`
+	Email            dbstore.EmailDeliverySummary    `json:"email"`
+	Spam             dbstore.SpamQueueSize           `json:"spam"`
+	RecentSignups    []dbstore.RecentSignup          `json:"recent_signups"`
+	ActiveWorkspaces []dbstore.ActiveWorkspace       `json:"active_workspaces"`
+	Storage          []dbstore.MediaUsageByWorkspace `json:"storage"`
+	QuotaBytes       int64                           `json:"quota_bytes"`
 }
 
 // handleAdminOverview: GET /v1/admin/overview — platform-wide usage metrics.
@@ -97,7 +98,9 @@ func (h *RESTHandlers) handleAdminOverview(w http.ResponseWriter, r *http.Reques
 	h.auditSuperAdminAccess(r, "admin.overview")
 
 	ctx := r.Context()
-	out := adminOverview{QuotaBytes: 1 << 30} // 1GB per-workspace quota (#384)
+	// Issue #545: reference the shared constant rather than a literal, so the
+	// reported quota can never drift from the enforced one.
+	out := adminOverview{QuotaBytes: objstore.MaxWorkspaceBytes} // 1GB per-workspace (#384)
 
 	if h.Workspaces != nil {
 		if t, err := h.Workspaces.PlatformTotals(ctx); err == nil {

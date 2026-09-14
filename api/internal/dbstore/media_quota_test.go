@@ -48,8 +48,15 @@ func TestMediaStoreTotalBytes(t *testing.T) {
 	}
 
 	// Soft-delete one row (200 bytes) → quota released.
-	if _, ok, err := ms.SoftDelete(ctx, acc, ids[1]); err != nil || !ok {
+	delKey, delSize, ok, err := ms.SoftDelete(ctx, acc, ids[1])
+	if err != nil || !ok {
 		t.Fatalf("soft delete: ok=%v err=%v", ok, err)
+	}
+	if delSize != 200 {
+		t.Fatalf("soft delete returned size %d, want 200 (issue #545: delete must release the right bytes)", delSize)
+	}
+	if delKey == "" {
+		t.Fatal("soft delete returned an empty key")
 	}
 	total, err = ms.TotalBytes(ctx, acc)
 	if err != nil {

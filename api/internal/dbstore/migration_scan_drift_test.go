@@ -41,22 +41,22 @@ import (
 // Keep this in sync with the store files; the column/field counts themselves
 // are derived from source so drift is still caught.
 var selectConsts = map[string]string{
-	"accountSelect": "Account",
-	"formSelect":    "Form",
-	"productSelect": "Product",
-	"saleSelect":    "Sale",
-	"workspaceSelect":   "Workspace",
-	"subSelect":     "Subscription",
+	"accountSelect":   "Account",
+	"formSelect":      "Form",
+	"productSelect":   "Product",
+	"saleSelect":      "Sale",
+	"workspaceSelect": "Workspace",
+	"subSelect":       "Subscription",
 }
 
 // selectTables maps a *Select constant name to the table it selects from.
 var selectTables = map[string]string{
-	"accountSelect": "accounts",
-	"formSelect":    "forms",
-	"productSelect": "products",
-	"saleSelect":    "sales",
-	"workspaceSelect":   "workspaces",
-	"subSelect":     "subscriptions",
+	"accountSelect":   "accounts",
+	"formSelect":      "forms",
+	"productSelect":   "products",
+	"saleSelect":      "sales",
+	"workspaceSelect": "workspaces",
+	"subSelect":       "subscriptions",
 }
 
 // selectScanFuncs maps a *Select constant to the receiver-qualified
@@ -66,12 +66,12 @@ var selectTables = map[string]string{
 // updating every one of these scan functions is caught by
 // TestSelectScanColumnAlignment. Format: "ReceiverType.Method".
 var selectScanFuncs = map[string][]string{
-	"accountSelect": {"AccountStore.ByID", "AccountStore.ByOwner"},
-	"formSelect":    {"FormStore.scanOne"},
-	"productSelect": {"ProductStore.ListActiveByAccount", "ProductStore.ListActiveByAccounts", "ProductStore.Get"},
-	"saleSelect":    {"scanSale"},
-	"workspaceSelect":   {"scanWorkspace"},
-	"subSelect":     {"scanSub"},
+	"accountSelect":   {"AccountStore.ByID", "AccountStore.ByOwner"},
+	"formSelect":      {"FormStore.scanOne"},
+	"productSelect":   {"ProductStore.ListActiveByAccount", "ProductStore.ListActiveByAccounts", "ProductStore.Get"},
+	"saleSelect":      {"scanSale"},
+	"workspaceSelect": {"scanWorkspace"},
+	"subSelect":       {"scanSub"},
 }
 
 // columnRenames maps historical column names (from older migrations) to their
@@ -79,8 +79,8 @@ var selectScanFuncs = map[string][]string{
 // Older migrations that ADD COLUMN space_id are checked against the renamed
 // workspace_id in the current select constant.
 var columnRenames = map[string]string{
-	"space_id":          "workspace_id",
-	"default_space_id":  "default_workspace_id",
+	"space_id":         "workspace_id",
+	"default_space_id": "default_workspace_id",
 }
 
 // intentionallyUnselected lists columns that are deliberately NOT part of the
@@ -89,15 +89,19 @@ var columnRenames = map[string]string{
 // A migration adding one of these must NOT be flagged. Keyed by table name.
 var intentionallyUnselected = map[string]map[string]bool{
 	"accounts": {
-		"tracking_head":    true, // AccountStore.Tracking
-		"wh_sign_pub":      true, // AccountStore.SigningKeys
-		"wh_sign_priv":     true, // AccountStore.SigningKeys
-		"cf_token_enc":     true, // AccountStore.CFToken
-		"workspace_id":         true, // WorkspaceStore.WorkspaceIDByAccount
+		"tracking_head":     true, // AccountStore.Tracking
+		"wh_sign_pub":       true, // AccountStore.SigningKeys
+		"wh_sign_priv":      true, // AccountStore.SigningKeys
+		"cf_token_enc":      true, // AccountStore.CFToken
+		"workspace_id":      true, // WorkspaceStore.WorkspaceIDByAccount
 		"slug_changed_from": true, // legacy 301 source, not scanned
+		// Issue #545: the storage-quota counter is read and maintained by
+		// MediaStore.UsedBytes / ReserveQuota / SettleQuotaBytes / ReleaseQuota —
+		// dedicated accessors, deliberately not part of accountSelect.
+		"media_used_bytes": true,
 	},
 	"forms": {
-		"workspace_id":              true, // denormalised, WorkspaceStore.WorkspaceIDByAccount
+		"workspace_id":          true, // denormalised, WorkspaceStore.WorkspaceIDByAccount
 		"tracking_head":         true, // FormStore.SetTracking / read via dedicated query
 		"chip_brand_id":         true, // FormStore.ChipOverrideFor
 		"chip_secret_key_enc":   true, // FormStore.ChipOverrideFor
@@ -110,7 +114,7 @@ var intentionallyUnselected = map[string]map[string]bool{
 	},
 	"sales": {
 		"workspace_id": true, // denormalised
-		"fields":   true, // FormStore.SaleFields (dedicated accessor, issue #179)
+		"fields":       true, // FormStore.SaleFields (dedicated accessor, issue #179)
 	},
 	"workspaces": {
 		"created_at": true, // not scanned by workspaceSelect

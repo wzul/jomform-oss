@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -28,12 +29,12 @@ type mediaOut struct {
 	ScanReason string `json:"scan_reason,omitempty"`
 	// Sizes maps a generated image size name (thumbnail/medium/full) to its
 	// public URL for raster images (issue #382). Empty for non-images/GIFs.
-	Sizes     map[string]string `json:"sizes,omitempty"`
+	Sizes map[string]string `json:"sizes,omitempty"`
 	// Preview is the auto-generated first-page thumbnail URL for a PDF
 	// (issue #383), derived from the object key. Empty when no preview was
 	// generated.
-	Preview   string            `json:"preview,omitempty"`
-	CreatedAt string            `json:"created_at"`
+	Preview   string `json:"preview,omitempty"`
+	CreatedAt string `json:"created_at"`
 }
 
 type listMediaIn struct {
@@ -161,19 +162,21 @@ func (s *Server) uploadMediaImage(ctx context.Context, acc string, raw []byte) (
 	if len(stored) > objstore.MaxStoredBytes {
 		return nil, mediaOut{}, errors.New("imej gagal dimampatkan bawah 2MB; cuba imej lain")
 	}
-	// Issue #384: reject an upload that would push the workspace over the 1GB
-	// per-workspace storage quota (counted against the stored artifact size).
-	if err := s.workspaceQuotaExceeded(ctx, acc, int64(len(stored))); err != nil {
+	// Issue #384/#545: reserve ATOMICALLY before storing, then settle to the true
+	// stored total (base + variants) once every object is written.
+	key := objstore.BuildUploadKey(acc, ext)
+	if err := s.reserveQuota(ctx, acc, int64(len(stored))); err != nil {
 		return nil, mediaOut{}, err
 	}
-	key := objstore.BuildUploadKey(acc, ext)
 	if err := s.deps.Store.PutObject(ctx, key, mime, stored); err != nil {
+		s.releaseQuota(ctx, acc, int64(len(stored)))
 		return nil, mediaOut{}, fmt.Errorf("store: %w", err)
 	}
 	// Issue #382: generate + store thumbnail/medium/full variants for raster
 	// images (png/jpeg/webp). GIFs are animated and stored as-is, so they get
 	// no sized variants.
 	sizes := map[string]string{}
+	storedTotal := int64(len(stored))
 	if objstore.IsSizedImage(mime) {
 		for _, size := range objstore.ImageSizes {
 			variant, verr := objstore.OptimizeImageSize(raw, ext, size)
@@ -187,9 +190,11 @@ func (s *Server) uploadMediaImage(ctx context.Context, acc string, raw []byte) (
 			if verr := s.deps.Store.PutObject(ctx, vkey, "image/jpeg", variant); verr != nil {
 				continue
 			}
+			storedTotal += int64(len(variant))
 			sizes[string(size)] = s.deps.Store.PublicURL(vkey)
 		}
 	}
+	s.settleQuota(ctx, acc, int64(len(stored)), storedTotal)
 	// Issue #92: audit upload.image (best-effort).
 	s.recordMCPMediaEvent(ctx, acc, "upload.image", map[string]any{
 		"mime": mime, "out_bytes": len(stored),
@@ -231,8 +236,13 @@ func (s *Server) uploadMediaAsset(ctx context.Context, acc string, raw []byte) (
 		return nil, mediaOut{}, errors.New(msg)
 	}
 	mime := objstore.UploadAssetMIME[ext]
+	// Issue #545: this MCP path had NO quota check at all.
 	key := objstore.BuildUploadKey(acc, ext)
+	if err := s.reserveQuota(ctx, acc, int64(len(raw))); err != nil {
+		return nil, mediaOut{}, err
+	}
 	if err := s.deps.Store.PutObject(ctx, key, mime, raw); err != nil {
+		s.releaseQuota(ctx, acc, int64(len(raw)))
 		return nil, mediaOut{}, fmt.Errorf("store: %w", err)
 	}
 	// Issue #180: record the media row so list_media + the serving gate work.
@@ -305,8 +315,13 @@ func (s *Server) uploadMediaPDF(ctx context.Context, acc string, raw []byte) (*m
 		return nil, mediaOut{}, errors.New(msg)
 	}
 	mime := objstore.UploadPDFMIME[ext]
+	// Issue #545: this MCP path had NO quota check at all.
 	key := objstore.BuildUploadKey(acc, ext)
+	if err := s.reserveQuota(ctx, acc, int64(len(raw))); err != nil {
+		return nil, mediaOut{}, err
+	}
 	if err := s.deps.Store.PutObject(ctx, key, mime, raw); err != nil {
+		s.releaseQuota(ctx, acc, int64(len(raw)))
 		return nil, mediaOut{}, fmt.Errorf("store: %w", err)
 	}
 	// Issue #383: auto-generate a first-page preview thumbnail with
@@ -315,17 +330,21 @@ func (s *Server) uploadMediaPDF(ctx context.Context, acc string, raw []byte) (*m
 	// gs is unavailable, the PDF still uploads and the grid falls back to
 	// the generic PDF tile.
 	previewURL := ""
+	storedTotal := int64(len(raw))
 	if preview, perr := objstore.RenderPDFPreview(raw); perr == nil && len(preview) > 0 {
 		if pkey := objstore.BuildPDFPreviewKey(key); pkey != "" {
 			if perr := s.deps.Store.PutObject(ctx, pkey, "image/jpeg", preview); perr == nil {
 				previewURL = s.deps.Store.PublicURL(pkey)
+				storedTotal += int64(len(preview))
 			}
 		}
 	}
+	// Issue #545: settle the reservation with the true total (PDF + preview).
+	s.settleQuota(ctx, acc, int64(len(raw)), storedTotal)
 	// Issue #180: record the media row so list_media works.
 	rec := &dbstore.Media{
 		AccountID: acc, Key: key, URL: s.deps.Store.PublicURL(key),
-		Mime: mime, Size: int64(len(raw)), Source: dbstore.MediaSourceMerchant,
+		Mime: mime, Size: storedTotal, Source: dbstore.MediaSourceMerchant,
 	}
 	if err := s.deps.Media.Create(ctx, rec); err != nil {
 		return nil, mediaOut{}, fmt.Errorf("media: %w", err)
@@ -374,7 +393,7 @@ func (s *Server) mediaOutFromRow(m *dbstore.Media) mediaOut {
 func (s *Server) mediaOutFrom(ctx context.Context, acc, key, mime string, size int64) mediaOut {
 	out := mediaOut{
 		Key: key, URL: s.deps.Store.PublicURL(key), Mime: mime, Size: size,
-		Source: dbstore.MediaSourceMerchant,
+		Source:    dbstore.MediaSourceMerchant,
 		CreatedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 	if s.deps.Media != nil {
@@ -405,12 +424,9 @@ func (s *Server) recordMCPMediaEvent(ctx context.Context, accountID, event strin
 	}
 }
 
-// workspaceQuotaExceeded reports whether adding `additional` stored bytes to the
-// account would push the workspace over the 1GB per-workspace storage quota (issue
-// #384). It sums the account's current non-deleted media bytes and applies the
-// shared objstore cap. Returns the rejection error when the upload would
-// exceed the quota, or nil when allowed. A nil media store is treated as no
-// quota pressure.
+// workspaceQuotaExceeded is the MCP equivalent of the REST pre-flight check
+// (issue #384). It is a cheap read-only guard; the ATOMIC enforcement is
+// reserveQuota below (issue #545).
 func (s *Server) workspaceQuotaExceeded(ctx context.Context, accountID string, additional int64) error {
 	if s.deps.Media == nil {
 		return nil
@@ -423,4 +439,42 @@ func (s *Server) workspaceQuotaExceeded(ctx context.Context, accountID string, a
 		return errors.New("had storan workspace dicapai (1GB)")
 	}
 	return nil
+}
+
+// reserveQuota atomically reserves `bytes` against the workspace storage cap
+// (issue #545). Returns an error when the cap would be exceeded. On success the
+// caller owns the reservation and must settle or release it.
+func (s *Server) reserveQuota(ctx context.Context, accountID string, bytes int64) error {
+	if s.deps.Media == nil || accountID == "" {
+		return nil
+	}
+	if err := s.deps.Media.ReserveQuota(ctx, accountID, bytes); err != nil {
+		if errors.Is(err, dbstore.ErrQuotaExceeded) {
+			return errors.New("had storan workspace dicapai (1GB)")
+		}
+		return fmt.Errorf("quota check: %w", err)
+	}
+	return nil
+}
+
+// releaseQuota gives back a reservation whose object was not stored.
+func (s *Server) releaseQuota(ctx context.Context, accountID string, bytes int64) {
+	if s.deps.Media == nil || accountID == "" || bytes <= 0 {
+		return
+	}
+	if err := s.deps.Media.ReleaseQuota(ctx, accountID, bytes); err != nil {
+		slog.Warn("mcp_media_quota_release", "err", err, "account", accountID, "bytes", bytes)
+	}
+}
+
+// settleQuota records the true stored total for an upload (base + variants +
+// preview) against the reservation (issue #545).
+func (s *Server) settleQuota(ctx context.Context, accountID string, reserved, actual int64) {
+	if s.deps.Media == nil || accountID == "" || actual <= 0 {
+		return
+	}
+	if err := s.deps.Media.SettleQuotaBytes(ctx, accountID, reserved, actual); err != nil {
+		slog.Warn("mcp_media_quota_settle", "err", err, "account", accountID,
+			"reserved", reserved, "actual", actual)
+	}
 }

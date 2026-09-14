@@ -59,23 +59,24 @@ func quotaUpload(t *testing.T, h *RESTHandlers, rawKey string, body []byte) (int
 	return rec.Code, rec.Body.String()
 }
 
-// TestUploadRejectsOverQuota (issue #384): seed the account's media near the
-// 1GB cap, then an upload that would push it over must be rejected with 413
-// and the quota message. A small upload that stays under the cap succeeds.
+// TestUploadRejectsOverQuota (issue #384): seed the account's usage near the 1GB
+// cap, then an upload that would push it over must be rejected with 413 and the
+// quota message. A small upload that stays under the cap succeeds.
+//
+// Issue #545: usage is now the account's quota COUNTER (media_used_bytes), which
+// is the figure actually enforced — the counter is written atomically by
+// ReserveQuota, so seeding media rows alone no longer places an account near the
+// cap. The test seeds the counter directly, which is also what makes it a true
+// test of the enforcement path.
 func TestUploadRejectsOverQuota(t *testing.T) {
 	ctx := context.Background()
 	h, accountID, raw := uploadQuotaFixture(t)
 
-	// Seed media so the account is just under the 1GB cap (1GB - 1 byte), so
-	// even a tiny stored artifact pushes it over.
+	// Seed the usage counter to just under the 1GB cap (cap - 1 byte), so even a
+	// tiny stored artifact pushes it over.
 	ms := dbstore.NewMediaStore(bundleTestPool(t))
-	seed := &dbstore.Media{
-		AccountID: accountID, Key: "u/" + accountID + "/seed.png",
-		URL: "https://media.test/u/" + accountID + "/seed.png", Mime: "image/png",
-		Size: objstore.MaxWorkspaceBytes - 1, Source: dbstore.MediaSourceMerchant,
-	}
-	if err := ms.Create(ctx, seed); err != nil {
-		t.Fatalf("seed media: %v", err)
+	if err := seedQuotaUsage(ctx, t, accountID, objstore.MaxWorkspaceBytes-1); err != nil {
+		t.Fatalf("seed usage: %v", err)
 	}
 
 	// A 2MB PNG upload would push the workspace over 1GB → 413 + quota message.
@@ -85,6 +86,13 @@ func TestUploadRejectsOverQuota(t *testing.T) {
 	}
 	if !bytes.Contains([]byte(body), []byte("1GB")) {
 		t.Fatalf("over-quota body %q must mention the 1GB limit", body)
+	}
+	// The counter must not have grown: a rejected upload reserves nothing.
+	if used, err := ms.UsedBytes(ctx, accountID); err != nil {
+		t.Fatalf("used bytes: %v", err)
+	} else if used != objstore.MaxWorkspaceBytes-1 {
+		t.Fatalf("issue #545: usage moved to %d after a REJECTED upload, want unchanged %d",
+			used, objstore.MaxWorkspaceBytes-1)
 	}
 }
 

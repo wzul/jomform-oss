@@ -2,11 +2,17 @@ package dbstore
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// MaxWorkspaceBytesFromStore mirrors objstore.MaxWorkspaceBytes for use inside the
+// store's single-statement quota guard, which cannot import objstore without a
+// cycle. A test asserts the two stay equal (issue #545).
+const MaxWorkspaceBytesFromStore = 1 << 30 // 1GB
 
 // MediaSource distinguishes merchant uploads from customer file uploads.
 // Customer uploads are a dependency (issue #180) — the column exists so the
@@ -58,6 +64,150 @@ func (s *MediaStore) Create(ctx context.Context, m *Media) error {
 		 RETURNING id, created_at`,
 		m.AccountID, nullString(m.FormID), m.Key, m.URL, m.Mime, m.Size, m.Source,
 	).Scan(&m.ID, &m.CreatedAt)
+}
+
+// ErrQuotaExceeded is returned when a storage reservation would push an account
+// over the per-workspace cap (issue #545).
+var ErrQuotaExceeded = errors.New("storage quota exceeded")
+
+// ReserveQuota atomically reserves `bytes` of storage for an account against the
+// per-workspace cap, returning ErrQuotaExceeded when the reservation would push
+// the account over it.
+//
+// Issue #545: the upload handlers previously read the account's used bytes,
+// compared against the cap, and THEN stored the object — a check-then-act with
+// nothing serialising the read against the write, so N concurrent uploads all
+// passed against the same snapshot (measured: 5 concurrent 100MB uploads took a
+// workspace at cap-minus-one to 1.39x the cap). The decision now happens in the
+// DATABASE as a single conditional statement, so the cap holds under concurrency
+// regardless of how many requests arrive at once.
+//
+// The reservation is taken BEFORE the object is stored and adjusted by
+// SettleQuotaBytes once the real byte total is known, or released with
+// ReleaseQuota if storing fails, so a failed upload does not leak quota.
+func (s *MediaStore) ReserveQuota(ctx context.Context, accountID string, bytes int64) error {
+	if accountID == "" || bytes <= 0 {
+		return nil
+	}
+	// One statement: increment only if the result stays within the cap. A
+	// concurrent racer either sees the updated value (and is refused) or blocks
+	// on the row lock — the cap cannot be breached by interleaving.
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE accounts
+		    SET media_used_bytes = media_used_bytes + $2
+		  WHERE id = $1
+		    AND media_used_bytes + $2 <= $3`,
+		accountID, bytes, MaxWorkspaceBytesFromStore)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrQuotaExceeded
+	}
+	return nil
+}
+
+// ReleaseQuota gives back a reservation that will not be settled by a media row
+// (e.g. the object failed to store). Best-effort and clamped at zero.
+func (s *MediaStore) ReleaseQuota(ctx context.Context, accountID string, bytes int64) error {
+	if accountID == "" || bytes <= 0 {
+		return nil
+	}
+	_, err := s.pool.Exec(ctx,
+		`UPDATE accounts
+		    SET media_used_bytes = GREATEST(media_used_bytes - $2, 0)
+		  WHERE id = $1`, accountID, bytes)
+	return err
+}
+
+// SettleQuotaBytes records the FINAL byte total for an upload once every object it
+// wrote is known (base object + any sized variants + any PDF preview), adjusting
+// the reservation taken up front. delta = actual - reserved, so it may be positive
+// (more bytes stored than reserved) or negative (fewer).
+//
+// Issue #545: only the base object's size was ever recorded, so the sized variants
+// (thumbnail/medium/full) and the PDF preview occupied the bucket while remaining
+// invisible to the quota — measured at 64% of an image upload's real bytes.
+func (s *MediaStore) SettleQuotaBytes(ctx context.Context, accountID string, reserved, actual int64) error {
+	if accountID == "" {
+		return nil
+	}
+	delta := actual - reserved
+	if delta == 0 {
+		return nil
+	}
+	if delta > 0 {
+		// Growing usage still has to respect the cap.
+		tag, err := s.pool.Exec(ctx,
+			`UPDATE accounts
+			    SET media_used_bytes = media_used_bytes + $2
+			  WHERE id = $1
+			    AND media_used_bytes + $2 <= $3`,
+			accountID, delta, MaxWorkspaceBytesFromStore)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			// Cannot grow further; clamp to the cap so reported usage never
+			// overstates what the account is allowed.
+			_, cerr := s.pool.Exec(ctx,
+				`UPDATE accounts SET media_used_bytes = $2 WHERE id = $1`,
+				accountID, MaxWorkspaceBytesFromStore)
+			return cerr
+		}
+		return nil
+	}
+	_, err := s.pool.Exec(ctx,
+		`UPDATE accounts
+		    SET media_used_bytes = GREATEST(media_used_bytes + $2, 0)
+		  WHERE id = $1`, accountID, delta)
+	return err
+}
+
+// UsedBytes returns the account's media bytes as tracked by the quota counter.
+func (s *MediaStore) UsedBytes(ctx context.Context, accountID string) (int64, error) {
+	if accountID == "" {
+		return 0, nil
+	}
+	var n int64
+	if err := s.pool.QueryRow(ctx,
+		`SELECT COALESCE(media_used_bytes, 0) FROM accounts WHERE id = $1`, accountID).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+// ReconcileQuotaBytes recomputes the counter from the media rows (the authoritative
+// record of what was stored) and repairs drift.
+//
+// Reservations are released on failure and settled on success, but a crash between
+// reserving and storing would leave a debt behind, and historical rows predate the
+// counter entirely. This is the repair path: it sets the counter to the sum of the
+// account's non-deleted media sizes, clamped to the cap, and reports the previous
+// value so a caller can log the correction.
+func (s *MediaStore) ReconcileQuotaBytes(ctx context.Context, accountID string) (before, after int64, err error) {
+	if accountID == "" {
+		return 0, 0, nil
+	}
+	if err = s.pool.QueryRow(ctx,
+		`SELECT COALESCE(media_used_bytes, 0) FROM accounts WHERE id = $1`, accountID).Scan(&before); err != nil {
+		return 0, 0, err
+	}
+	var sum int64
+	if err = s.pool.QueryRow(ctx,
+		`SELECT COALESCE(SUM(size), 0) FROM media WHERE account_id = $1 AND deleted_at IS NULL`,
+		accountID).Scan(&sum); err != nil {
+		return 0, 0, err
+	}
+	if sum > MaxWorkspaceBytesFromStore {
+		sum = MaxWorkspaceBytesFromStore
+	}
+	if err = s.pool.QueryRow(ctx,
+		`UPDATE accounts SET media_used_bytes = $2 WHERE id = $1
+		 RETURNING media_used_bytes`, accountID, sum).Scan(&after); err != nil {
+		return 0, 0, err
+	}
+	return before, after, nil
 }
 
 // ListPage returns one page of non-deleted media for an account, newest
@@ -128,19 +278,23 @@ func (s *MediaStore) ByIDAccount(ctx context.Context, accountID, id string) (*Me
 // SoftDelete marks a media row deleted (soft-delete) and returns the object
 // key so the caller can remove it from MinIO. Returns (key, true) when the
 // row existed and was not already deleted; ("", false) when not found.
-func (s *MediaStore) SoftDelete(ctx context.Context, accountID, id string) (string, bool, error) {
+// SoftDelete marks a media row deleted and returns its object key and recorded
+// size, so the caller can remove the object and release the bytes from the
+// account's storage quota (issue #545).
+func (s *MediaStore) SoftDelete(ctx context.Context, accountID, id string) (string, int64, bool, error) {
 	var key string
+	var size int64
 	err := s.pool.QueryRow(ctx,
 		`UPDATE media SET deleted_at = now()
 		 WHERE id = $1 AND account_id = $2 AND deleted_at IS NULL
-		 RETURNING key`, id, accountID).Scan(&key)
+		 RETURNING key, size`, id, accountID).Scan(&key, &size)
 	if err == pgx.ErrNoRows {
-		return "", false, nil
+		return "", 0, false, nil
 	}
 	if err != nil {
-		return "", false, err
+		return "", 0, false, err
 	}
-	return key, true, nil
+	return key, size, true, nil
 }
 
 // TotalBytes returns the total stored bytes for an account across all
