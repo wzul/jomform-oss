@@ -242,7 +242,7 @@ func (s *Server) getFormChipMapping(
 
 // setFormChipMappingIn is the input for set_form_chip_mapping (issue #186).
 type setFormChipMappingIn struct {
-	FormID string            `json:"form_id" jsonschema:"ID borang"`
+	FormID  string            `json:"form_id" jsonschema:"ID borang"`
 	Mapping map[string]string `json:"mapping" jsonschema:"Peta medan CHIP → id blok borang, cth {\"full_name\":\"block_abc\",\"email\":\"block_def\"}. Kosong = guna lalai (name→full_name, email→email, phone→phone)."`
 }
 
@@ -304,7 +304,7 @@ type upsertFormIn struct {
 	// rendered in a sandboxed iframe (CSP + sanitized) and only the
 	// registered custom_fields are recorded on submit. Omit to leave
 	// unchanged; pass an empty string to clear the custom form.
-	CustomHTML   string         `json:"custom_html,omitempty" jsonschema:"HTML badan borang tersuai (response-only, sandboxed iframe). Kosong = buang mod tersuai."`
+	CustomHTML   string             `json:"custom_html,omitempty" jsonschema:"HTML badan borang tersuai (response-only, sandboxed iframe). Kosong = buang mod tersuai."`
 	CustomFields []customform.Field `json:"custom_fields,omitempty" jsonschema:"Kontrak pendaftaran medan: [{field_id, type, label, required, validation}]. Input HTML mesti bawa field_id sebagai name."`
 }
 
@@ -379,77 +379,77 @@ func (s *Server) upsertForm(
 				return nil, nil, err
 			}
 		}
-	// Issue #208: apply CHIP feeds on create when provided.
-	if in.ChipFeeds != nil {
-		feeds, err := s.toChipFeeds(ctx, acc, f.ID, in.ChipFeeds)
-		if err != nil {
-			return nil, nil, err
+		// Issue #208: apply CHIP feeds on create when provided.
+		if in.ChipFeeds != nil {
+			feeds, err := s.toChipFeeds(ctx, acc, f.ID, in.ChipFeeds)
+			if err != nil {
+				return nil, nil, err
+			}
+			if err := s.deps.Forms.SetChipFeeds(ctx, acc, f.ID, feeds); err != nil {
+				return nil, nil, err
+			}
 		}
-		if err := s.deps.Forms.SetChipFeeds(ctx, acc, f.ID, feeds); err != nil {
-			return nil, nil, err
+		// Issue #179: apply confirmations on create when provided.
+		if in.Confirmations != nil {
+			if err := s.applyConfirmations(ctx, f.ID, in.Confirmations); err != nil {
+				return nil, nil, err
+			}
 		}
+		// Issue #193: apply notifications when provided on create.
+		if len(in.Notifications) > 0 {
+			if err := s.applyFormNotifications(ctx, f.ID, in.Notifications); err != nil {
+				return nil, nil, err
+			}
+		}
+		// Issue #255: apply the custom-HTML response form when provided.
+		if in.CustomHTML != "" || in.CustomFields != nil {
+			if err := applyCustomFormConfig(f.Config, in.CustomHTML, in.CustomFields); err != nil {
+				return nil, nil, err
+			}
+			if err := s.deps.Forms.Update(ctx, acc, f.ID, f.Title, f.Config, nil); err != nil {
+				return nil, nil, err
+			}
+		}
+		return nil, map[string]string{"status": "created", "form_id": f.ID, "slug": f.Slug}, nil
 	}
-	// Issue #179: apply confirmations on create when provided.
-	if in.Confirmations != nil {
-		if err := s.applyConfirmations(ctx, f.ID, in.Confirmations); err != nil {
-			return nil, nil, err
-		}
-	}
-	// Issue #193: apply notifications when provided on create.
-	if len(in.Notifications) > 0 {
-		if err := s.applyFormNotifications(ctx, f.ID, in.Notifications); err != nil {
-			return nil, nil, err
-		}
-	}
-	// Issue #255: apply the custom-HTML response form when provided.
+	// Update store treats nil maps as "leave unchanged", so an omitted
+	// config (and the nil theme below) keep the stored values intact.
+	// Issue #255: when a custom form is provided on update, merge it into the
+	// existing config (so blocks/other settings are preserved) and pass the
+	// merged config to Update.
 	if in.CustomHTML != "" || in.CustomFields != nil {
-		if err := applyCustomFormConfig(f.Config, in.CustomHTML, in.CustomFields); err != nil {
+		existing, gerr := s.deps.Forms.GetByID(ctx, acc, in.FormID)
+		if gerr != nil {
+			return nil, nil, errors.New("borang tidak dijumpai")
+		}
+		merged := orEmptyMap(existing.Config)
+		if err := applyCustomFormConfig(merged, in.CustomHTML, in.CustomFields); err != nil {
 			return nil, nil, err
 		}
-		if err := s.deps.Forms.Update(ctx, acc, f.ID, f.Title, f.Config, nil); err != nil {
-			return nil, nil, err
+		in.Config = merged
+	}
+	// Issue #388: power-user custom JS in the theme is owner-gated (requireFormWrite
+	// above) and scanned with the deterministic code-asset scan (#364) so obviously
+	// malicious JS is never served on the buyer's page.
+	if in.Theme != nil {
+		if js, ok := in.Theme["custom_js"].(string); ok {
+			if reason := customform.ScanCustomJS(js); reason != "" {
+				return nil, nil, errors.New("custom_js ditolak: " + reason)
+			}
 		}
 	}
-	return nil, map[string]string{"status": "created", "form_id": f.ID, "slug": f.Slug}, nil
-}
-// Update store treats nil maps as "leave unchanged", so an omitted
-// config (and the nil theme below) keep the stored values intact.
-// Issue #255: when a custom form is provided on update, merge it into the
-// existing config (so blocks/other settings are preserved) and pass the
-// merged config to Update.
-if in.CustomHTML != "" || in.CustomFields != nil {
-	existing, gerr := s.deps.Forms.GetByID(ctx, acc, in.FormID)
-	if gerr != nil {
-		return nil, nil, errors.New("borang tidak dijumpai")
+	// Issue #501: re-validate the update's theme/config with the shared rule
+	// (the update path below is reached independently of the create-only
+	// checks above). A nil map means "leave unchanged" and is skipped.
+	if field, _ := urlguard.CheckTheme(in.Theme); field != "" {
+		return nil, nil, errors.New(urlguard.InvalidMessage("theme." + field))
 	}
-	merged := orEmptyMap(existing.Config)
-	if err := applyCustomFormConfig(merged, in.CustomHTML, in.CustomFields); err != nil {
+	if field, _ := urlguard.CheckConfig(in.Config); field != "" {
+		return nil, nil, errors.New(urlguard.InvalidMessage("config." + field))
+	}
+	if err := s.deps.Forms.Update(ctx, acc, in.FormID, in.Title, in.Config, in.Theme); err != nil {
 		return nil, nil, err
 	}
-	in.Config = merged
-}
-// Issue #388: power-user custom JS in the theme is owner-gated (requireFormWrite
-// above) and scanned with the deterministic code-asset scan (#364) so obviously
-// malicious JS is never served on the buyer's page.
-if in.Theme != nil {
-	if js, ok := in.Theme["custom_js"].(string); ok {
-		if reason := customform.ScanCustomJS(js); reason != "" {
-			return nil, nil, errors.New("custom_js ditolak: " + reason)
-		}
-	}
-}
-// Issue #501: re-validate the update's theme/config with the shared rule
-// (the update path below is reached independently of the create-only
-// checks above). A nil map means "leave unchanged" and is skipped.
-if field, _ := urlguard.CheckTheme(in.Theme); field != "" {
-	return nil, nil, errors.New(urlguard.InvalidMessage("theme." + field))
-}
-if field, _ := urlguard.CheckConfig(in.Config); field != "" {
-	return nil, nil, errors.New(urlguard.InvalidMessage("config." + field))
-}
-if err := s.deps.Forms.Update(ctx, acc, in.FormID, in.Title, in.Config, in.Theme); err != nil {
-	return nil, nil, err
-}
 	// Apply restrictions on update when provided.
 	if in.StartAt != nil || in.EndAt != nil || in.EntryLimit != nil ||
 		in.PendingMessage != "" || in.ExpiredMessage != "" || in.LimitMessage != "" {
@@ -541,8 +541,14 @@ func (s *Server) applyConfirmations(ctx context.Context, formID string, in []con
 		if c.Type != dbstore.ConfirmationTypeMessage && c.Type != dbstore.ConfirmationTypeRedirect {
 			return errors.New("jenis pengesahan tidak sah")
 		}
-		if c.Type == dbstore.ConfirmationTypeRedirect && (c.RedirectURL == "" || !strings.HasPrefix(c.RedirectURL, "https://")) {
-			return errors.New("URL pengesahan mesti https://")
+		if c.Type == dbstore.ConfirmationTypeRedirect {
+			// Issue #549: the ONE shared URL rule (urlguard), not a hand-rolled
+			// strings.HasPrefix copy — see the REST handler for why (the copy
+			// rejected valid "HTTPS://…" and whitespace-padded values). A redirect
+			// requires a target, and urlguard.Valid("") is true by design.
+			if strings.TrimSpace(c.RedirectURL) == "" || !urlguard.Valid(c.RedirectURL) {
+				return errors.New(urlguard.InvalidMessage("redirect_url"))
+			}
 		}
 		cc := &dbstore.Confirmation{
 			ID: c.ID, Name: c.Name, Type: c.Type, Message: c.Message,

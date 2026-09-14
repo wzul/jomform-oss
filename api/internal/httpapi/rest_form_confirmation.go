@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/urlguard"
 )
 
 // getFormConfirmations: GET /v1/rest/forms/{id}/confirmations
@@ -52,8 +53,15 @@ func (h *RESTHandlers) saveFormConfirmations(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		if c.Type == dbstore.ConfirmationTypeRedirect {
-			if c.RedirectURL == "" || !strings.HasPrefix(c.RedirectURL, "https://") {
-				writeErr(w, http.StatusBadRequest, "URL pengesahan mesti https://")
+			// Issue #549: use the ONE shared URL rule (urlguard), not a hand-rolled
+			// strings.HasPrefix copy. The copy diverged: it missed urlguard's
+			// TrimSpace+ToLower normalisation, so "HTTPS://example.com" and a value
+			// with leading whitespace were rejected here while every other URL field
+			// in the product accepted them. A redirect also genuinely requires a
+			// target, and urlguard.Valid("") is true by design (empty = "no value"),
+			// so the empty case is checked explicitly.
+			if strings.TrimSpace(c.RedirectURL) == "" || !urlguard.Valid(c.RedirectURL) {
+				writeErr(w, http.StatusBadRequest, urlguard.InvalidMessage("redirect_url"))
 				return
 			}
 		}
