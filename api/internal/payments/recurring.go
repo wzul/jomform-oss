@@ -123,10 +123,14 @@ func (s *Service) chargeSubscription(ctx context.Context, sub *dbstore.Subscript
 }
 
 // maybeCompleteSubscription marks a subscription completed once it has reached
-// its fixed billing count (subscription_charges = N, NULL = infinite). The
-// initial token purchase is always charge #1, so the total consumed is
-// 1 + paid recurring charges. Returns true when the subscription was just
-// completed (and no further charge should be scheduled).
+// its fixed billing count (subscription_charges = N, NULL = infinite). Called
+// after the FIRST payment (activateSubscription) and at the start of every
+// charge attempt, so the Nth payment completes the subscription immediately and
+// no (N+1)th charge is ever scheduled.
+//
+// ChargeCount counts PAID charge rows, and the first payment is recorded as a
+// paid row, so the total consumed is `paid` — NOT `1 + paid`, which counted the
+// first payment twice. Returns true when the subscription was just completed.
 func (s *Service) maybeCompleteSubscription(ctx context.Context, sub *dbstore.Subscription) (bool, error) {
 	if s.Products == nil {
 		return false, nil
@@ -144,12 +148,11 @@ func (s *Service) maybeCompleteSubscription(ctx context.Context, sub *dbstore.Su
 		// would keep a fixed-billing subscription charging past its Nth charge.
 		return false, err
 	}
-	total := 1 + paid
-	if total >= int64(*prod.SubscriptionCharges) {
+	if paid >= int64(*prod.SubscriptionCharges) {
 		if err := s.Subs.SetStatus(ctx, sub.ID, dbstore.SubCompleted); err != nil {
 			return false, err
 		}
-		slog.Info("sub_completed_charge_limit", "sub", sub.ID, "charges", total)
+		slog.Info("sub_completed_charge_limit", "sub", sub.ID, "charges", paid)
 		return true, nil
 	}
 	return false, nil

@@ -364,7 +364,25 @@ func (s *Service) activateSubscription(ctx context.Context, sale *dbstore.Sale) 
 	if err := s.Subs.Create(ctx, newSub); err != nil {
 		return fmt.Errorf("create subscription: %w", err)
 	}
-	return s.Subs.AddCharge(ctx, newSub.ID, "", sale.TotalSen, dbstore.ChargePending, 0)
+	// The initial token purchase is the customer's FIRST payment, and it is
+	// already paid at this point — we are in the purchase.paid callback. Record
+	// it as PAID, stamped with the token purchase id.
+	//
+	// It used to be recorded as PENDING with an empty chip_purchase_id. That was
+	// a phantom outstanding charge: ClaimDue refuses to charge a subscription
+	// that has a pending row, and MarkChargePaid/MarkChargeFailed can only match
+	// a row BY chip_purchase_id — which this row never had. Nothing else ever
+	// reconciled it, so no subscription was EVER charged a second time: the
+	// recurring engine silently did nothing for every subscription (whether the
+	// product had a fixed charge count or was infinite).
+	saleType := dbstore.ChargePaid
+	if err := s.Subs.AddCharge(ctx, newSub.ID, sale.ChipPurchaseID, sale.TotalSen, saleType, 0); err != nil {
+		return err
+	}
+	// A fixed billing count (subscription_charges = N) counts PAID charges, so if
+	// N == 1 the whole subscription is already complete: there is no month 2.
+	_, err = s.maybeCompleteSubscription(ctx, newSub)
+	return err
 }
 
 // itemsSummary renders "2× Tee RM45.00, 1× Cap RM25.00"-style text. When a
@@ -429,9 +447,14 @@ func (s *Service) processSubscriptionEvent(ctx context.Context, p *chip.Purchase
 }
 
 // completeIfLimitReached marks a subscription completed once it has reached its
-// fixed billing count (subscription_charges = N, NULL = infinite). The initial
-// token purchase is always charge #1, so the total consumed is 1 + paid
-// recurring charges. Returns nil when the limit is not (yet) reached.
+// fixed billing count (subscription_charges = N, NULL = infinite).
+//
+// ChargeCount counts PAID charge rows. The customer's first payment
+// (activateSubscription) is itself recorded as a paid row stamped with the token
+// purchase id, so `paid` already includes it — the total consumed is simply
+// `paid`. It must NOT be `1 + paid`: that counted the first payment twice and
+// left the subscription permanently short of its limit, so it never completed.
+// Returns nil when the limit is not (yet) reached.
 func (s *Service) completeIfLimitReached(ctx context.Context, sub *dbstore.Subscription) error {
 	if s.Products == nil {
 		return nil
@@ -450,12 +473,11 @@ func (s *Service) completeIfLimitReached(ctx context.Context, sub *dbstore.Subsc
 		// instead of completing. Fail the cycle instead of guessing.
 		return err
 	}
-	total := 1 + paid
-	if total >= int64(*prod.SubscriptionCharges) {
+	if paid >= int64(*prod.SubscriptionCharges) {
 		if err := s.Subs.SetStatus(ctx, sub.ID, dbstore.SubCompleted); err != nil {
 			return err
 		}
-		slog.Info("sub_completed_charge_limit", "sub", sub.ID, "charges", total)
+		slog.Info("sub_completed_charge_limit", "sub", sub.ID, "charges", paid)
 	}
 	return nil
 }

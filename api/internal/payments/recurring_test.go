@@ -72,13 +72,26 @@ func seedRecurringFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool,
 	if err := dbstore.NewProductStore(pool).Create(ctx, prod); err != nil {
 		t.Fatalf("create product: %v", err)
 	}
+	// Unique per run: subscription_charges has a UNIQUE constraint on
+	// chip_purchase_id, so a fixed literal collides on a second run (or with a
+	// parallel test) against the shared test database.
+	tokenID := fmt.Sprintf("tok-purchase-%d", time.Now().UnixNano())
 	sub := &dbstore.Subscription{
 		AccountID: accountID, ClientEmail: "buyer@example.com", ProductID: prod.ID,
-		ChipTokenPurchaseID: "tok-purchase-1", Status: dbstore.SubActive, Period: "month",
+		ChipTokenPurchaseID: tokenID, Status: dbstore.SubActive, Period: "month",
 		AmountSen: 1500, NextChargeAt: time.Now().Add(-time.Minute),
 	}
 	if err := dbstore.NewSubscriptionStore(pool).Create(ctx, sub); err != nil {
 		t.Fatalf("create subscription: %v", err)
+	}
+	// Model production's activateSubscription: the customer's first payment is
+	// recorded as a PAID charge row stamped with the token purchase id, so
+	// ChargeCount() starts at 1. Without this the fixture would not represent a
+	// real subscription and would mask exactly the accounting the engine relies
+	// on (a fixed N-charge subscription is complete once it has N PAID rows).
+	if err := dbstore.NewSubscriptionStore(pool).AddCharge(
+		ctx, sub.ID, tokenID, 1500, dbstore.ChargePaid, 0); err != nil {
+		t.Fatalf("seed initial paid charge: %v", err)
 	}
 	return accountID, prod.ID, sub.ID
 }
