@@ -351,6 +351,16 @@ export const DICT = {
   "prod.saveProduct": { en: "Save product", ms: "Simpan produk", zh: "保存商品", ta: "தயாரிப்பைச் சேமி", ar: "حفظ المنتج" },
   "prod.notFound": { en: "Product not found.", ms: "Produk tidak dijumpai.", zh: "未找到商品。", ta: "தயாரிப்பு கிடைக்கவில்லை.", ar: "المنتج غير موجود." },
   "prod.loadFail": { en: "Failed to load product.", ms: "Gagal muat produk.", zh: "加载商品失败。", ta: "தயாரிப்பை ஏற்ற முடியவில்லை.", ar: "فشل تحميل المنتج." },
+  // Issue #551: shown when the price is not a usable amount (non-finite / out of
+  // range), so a malformed price is refused with a visible reason instead of being
+  // sent as null and silently stored as RM 0.00.
+  "prod.priceInvalid": {
+    en: "Price is not valid: enter a normal amount (e.g. 25.00) in {name}.",
+    ms: "Harga tidak sah: masukkan jumlah biasa (cth. 25.00) dalam {name}.",
+    zh: "价格无效：请在 {name} 输入正常金额（例如 25.00）。",
+    ta: "விலை தவறானது: {name} இல் சாதாரண தொகையை (எ.கா. 25.00) உள்ளிடவும்.",
+    ar: "السعر غير صالح: أدخل مبلغًا عاديًا (مثل 25.00) في {name}.",
+  },
   "prod.variationTypeNote": { en: "Variable products use per-variation price, stock and image. Product-level price/stock/images are ignored.", ms: "Produk variable guna harga, stok dan gambar per variasi. Harga/stok/gambar peringkat produk diabaikan.", zh: "多规格商品使用每个规格的价格、库存和图片。商品级价格/库存/图片将被忽略。", ta: "மாறுபடும் தயாரிப்புகள் ஒவ்வொரு மாறுபாட்டின் விலை, சரக்கு மற்றும் படத்தைப் பயன்படுத்துகின்றன. தயாரிப்பு நிலை விலை/சரக்கு/படங்கள் புறக்கணிக்கப்படும்.", ar: "تستخدم المنتجات المتغيرة سعر ومخزون وصورة كل خيار. تُتجاهل أسعار/مخزون/صور مستوى المنتج." },
   // issue #131: Subscriptions dashboard (list/filter/paginate/cancel)
   "sub.title": { en: "Subscriptions", ms: "Langganan", zh: "订阅", ta: "சந்தாக்கள்", ar: "الاشتراكات" },

@@ -15,17 +15,17 @@ import (
 // ─── Products ────────────────────────────────────────────────────────────────
 
 type productOut struct {
-	ID                  string         `json:"id"`
-	Name                string         `json:"name"`
-	Description         string         `json:"description,omitempty"`
-	PriceSen            int64          `json:"price_sen"`
-	Images              []string       `json:"images,omitempty"`
-	Type                string         `json:"type"`
-	BillingPeriod       string         `json:"billing_period,omitempty"`
-	TrialDays           int            `json:"trial_days"`
-	SubscriptionCharges *int           `json:"subscription_charges,omitempty"` // nil = infinite
-	Active              bool           `json:"active"`
-	Stock               *int           `json:"stock,omitempty"`
+	ID                  string   `json:"id"`
+	Name                string   `json:"name"`
+	Description         string   `json:"description,omitempty"`
+	PriceSen            int64    `json:"price_sen"`
+	Images              []string `json:"images,omitempty"`
+	Type                string   `json:"type"`
+	BillingPeriod       string   `json:"billing_period,omitempty"`
+	TrialDays           int      `json:"trial_days"`
+	SubscriptionCharges *int     `json:"subscription_charges,omitempty"` // nil = infinite
+	Active              bool     `json:"active"`
+	Stock               *int     `json:"stock,omitempty"`
 	// Issue #153: variations for variable products (empty for simple products).
 	Variations []variationOut `json:"variations,omitempty"`
 }
@@ -65,7 +65,7 @@ func (s *Server) listProducts(ctx context.Context, _ *mcp.CallToolRequest, _ emp
 type createProductIn struct {
 	Name                string        `json:"name" jsonschema:"nama produk"`
 	Description         string        `json:"description,omitempty" jsonschema:"penerangan produk"`
-	PriceSen            int64         `json:"price_sen" jsonschema:"harga dalam SEN (RM25.00 = 2500)"`
+	PriceSen            *int64        `json:"price_sen" jsonschema:"harga dalam SEN (RM25.00 = 2500)"`
 	Type                string        `json:"type" jsonschema:"one_time atau subscription"`
 	BillingPeriod       string        `json:"billing_period,omitempty" jsonschema:"month atau year (subscription sahaja)"`
 	TrialDays           int           `json:"trial_days,omitempty" jsonschema:"hari percubaan (subscription)"`
@@ -78,7 +78,7 @@ type createProductIn struct {
 // variationIn is the MCP input shape for one product variation.
 type variationIn struct {
 	Name      string   `json:"name" jsonschema:"nama variasi (cth: Saiz M, Merah)"`
-	PriceSen  int64    `json:"price_sen" jsonschema:"harga variasi dalam SEN"`
+	PriceSen  *int64   `json:"price_sen" jsonschema:"harga variasi dalam SEN"`
 	Stock     *int     `json:"stock,omitempty" jsonschema:"stok variasi (omit = unlimited)"`
 	Images    []string `json:"images,omitempty" jsonschema:"gambar variasi (URL mesti https:// — issue #501)"`
 	SortOrder int      `json:"sort_order,omitempty" jsonschema:"urutan (0 = ikut senarai)"`
@@ -89,7 +89,9 @@ func (s *Server) createProduct(ctx context.Context, _ *mcp.CallToolRequest, in c
 	if err != nil {
 		return nil, productOut{}, err
 	}
-	if in.Name == "" || in.PriceSen < 0 {
+	// Issue #551: price_sen is a POINTER so missing or explicit `null` is rejected
+	// rather than silently decoding to 0 (which created a RM 0.00 product).
+	if in.Name == "" || in.PriceSen == nil || *in.PriceSen < 0 {
 		return nil, productOut{}, fmt.Errorf("nama dan price_sen wajib")
 	}
 	if in.SubscriptionCharges != nil && *in.SubscriptionCharges < 1 {
@@ -120,7 +122,7 @@ func (s *Server) createProduct(ctx context.Context, _ *mcp.CallToolRequest, in c
 		if v.Name == "" {
 			return nil, productOut{}, fmt.Errorf("variation name wajib")
 		}
-		if v.PriceSen < 0 {
+		if v.PriceSen == nil || *v.PriceSen < 0 {
 			return nil, productOut{}, fmt.Errorf("variation price_sen mesti >= 0")
 		}
 		if v.Stock != nil && *v.Stock < 0 {
@@ -132,7 +134,7 @@ func (s *Server) createProduct(ctx context.Context, _ *mcp.CallToolRequest, in c
 	}
 	p := &dbstore.Product{
 		AccountID: accountID, Name: in.Name, Description: in.Description,
-		PriceSen: in.PriceSen, Images: in.Images, Type: pType,
+		PriceSen: *in.PriceSen, Images: in.Images, Type: pType,
 		BillingPeriod: period, TrialDays: in.TrialDays, Active: true,
 		Stock: in.Stock, SubscriptionCharges: in.SubscriptionCharges,
 	}
@@ -148,7 +150,7 @@ func (s *Server) createProduct(ctx context.Context, _ *mcp.CallToolRequest, in c
 				order = i
 			}
 			vs = append(vs, &dbstore.ProductVariation{
-				Name: v.Name, PriceSen: v.PriceSen, Stock: v.Stock,
+				Name: v.Name, PriceSen: *v.PriceSen, Stock: v.Stock,
 				Images: v.Images, SortOrder: order,
 			})
 		}
@@ -255,7 +257,7 @@ func (s *Server) listSales(ctx context.Context, _ *mcp.CallToolRequest, in listS
 		o := saleOut{
 			RefCode: sl.RefCode, Status: sl.Status, TotalSen: sl.TotalSen,
 			SaleType: sl.SaleType, Client: sl.Client.FullName,
-			CreatedAt: sl.CreatedAt.UTC().Format(time.RFC3339),
+			CreatedAt:   sl.CreatedAt.UTC().Format(time.RFC3339),
 			RefundedSen: sl.RefundedSen, OutstandingSen: sl.OutstandingSen(),
 			RefundStatus: sl.RefundStatus(),
 		}

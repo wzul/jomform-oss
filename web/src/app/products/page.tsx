@@ -250,20 +250,29 @@ export default function Products() {
   async function add(e: React.FormEvent) {
     e.preventDefault();
     setError("");
+    // Issue #551: this is the ONE place RM (typed) becomes sen. Never rely on
+    // Math.max/parseFloat to sanitise — a non-finite result serialises to null,
+    // which the server decodes as 0 (a silent RM 0.00 product). Reject it visibly.
+    const rm = parseFloat(price);
+    if (!Number.isFinite(rm) || rm < 0) {
+      setError(t("prod.priceInvalid", { name: name || t("prod.price") }));
+      return;
+    }
+    const priceSen = Math.round(rm * 100);
     const r = await fetch(`/api/rest/products${workspaceQuery()}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         name,
-        price_sen: Math.round(parseFloat(price) * 100),
+        price_sen: priceSen,
         type,
         billing_period: type === "subscription" ? period : undefined,
-        trial_days: type === "subscription" ? Math.max(0, parseInt(trial || "0", 10)) : undefined,
+        trial_days: type === "subscription" ? Math.max(0, parseInt(trial || "0", 10) || 0) : undefined,
         subscription_charges:
           type === "subscription" && chargesMode === "fixed"
-            ? Math.max(1, parseInt(charges || "1", 10))
+            ? Math.max(1, parseInt(charges || "1", 10) || 1)
             : null,
-        stock: stock === "" ? null : Math.max(0, parseInt(stock, 10)),
+        stock: stock === "" ? null : Math.max(0, parseInt(stock, 10) || 0),
       }),
     });
     if (r.ok) {
@@ -418,18 +427,26 @@ export default function Products() {
       setDrawerBusy(false);
       return;
     }
-    const stockVal = editForm.stock === "" ? null : Math.max(0, parseInt(editForm.stock, 10));
-    const trialVal = Math.max(0, parseInt(editForm.trial || "0", 10));
+    const stockVal = editForm.stock === "" ? null : Math.max(0, parseInt(editForm.stock, 10) || 0);
+    const trialVal = Math.max(0, parseInt(editForm.trial || "0", 10) || 0);
+    // Issue #551: same single-conversion rule as the create path — RM typed here
+    // becomes sen exactly once, and a non-finite price is refused visibly.
+    const rm = parseFloat(editForm.price);
+    if (!Number.isFinite(rm) || rm < 0) {
+      setDrawerError(t("prod.priceInvalid", { name: editForm.name || t("prod.price") }));
+      setDrawerBusy(false);
+      return;
+    }
     const body: Record<string, unknown> = {
       name: editForm.name,
       description: editForm.description,
-      price_sen: Math.round(parseFloat(editForm.price) * 100),
+      price_sen: Math.round(rm * 100),
       type: editForm.type,
       billing_period: editForm.type === "subscription" ? editForm.period : undefined,
       trial_days: editForm.type === "subscription" ? trialVal : undefined,
       subscription_charges:
         editForm.type === "subscription" && editForm.chargesMode === "fixed"
-          ? Math.max(1, parseInt(editForm.charges || "1", 10))
+          ? Math.max(1, parseInt(editForm.charges || "1", 10) || 1)
           : null,
       stock: stockVal,
       active: editForm.active,

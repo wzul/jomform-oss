@@ -31,20 +31,20 @@ type restVariation struct {
 }
 
 type restProduct struct {
-	ID                  string           `json:"id"`
-	Name                string           `json:"name"`
-	Description         string           `json:"description,omitempty"`
-	PriceSen            int64            `json:"price_sen"`
-	Images              []string         `json:"images,omitempty"`
-	Type                string           `json:"type"`
-	BillingPeriod       string           `json:"billing_period,omitempty"`
-	TrialDays           int              `json:"trial_days"`
-	SubscriptionCharges *int             `json:"subscription_charges,omitempty"` // nil = infinite
-	Active              bool             `json:"active"`
-	Stock               *int             `json:"stock,omitempty"` // nil = unlimited
-	Variations          []restVariation  `json:"variations,omitempty"`
-	CreatedAt           string           `json:"created_at,omitempty"`
-	UpdatedAt           string           `json:"updated_at,omitempty"`
+	ID                  string          `json:"id"`
+	Name                string          `json:"name"`
+	Description         string          `json:"description,omitempty"`
+	PriceSen            int64           `json:"price_sen"`
+	Images              []string        `json:"images,omitempty"`
+	Type                string          `json:"type"`
+	BillingPeriod       string          `json:"billing_period,omitempty"`
+	TrialDays           int             `json:"trial_days"`
+	SubscriptionCharges *int            `json:"subscription_charges,omitempty"` // nil = infinite
+	Active              bool            `json:"active"`
+	Stock               *int            `json:"stock,omitempty"` // nil = unlimited
+	Variations          []restVariation `json:"variations,omitempty"`
+	CreatedAt           string          `json:"created_at,omitempty"`
+	UpdatedAt           string          `json:"updated_at,omitempty"`
 }
 
 // toRestProduct maps a store Product to the REST JSON shape (money stays
@@ -122,7 +122,7 @@ func (h *RESTHandlers) updateProduct(w http.ResponseWriter, r *http.Request, act
 		BillingPeriod       *string          `json:"billing_period"`
 		Stock               *int             `json:"stock"` // nil = unlimited, keep-unset if omitted
 		Active              *bool            `json:"active"`
-		Variations          *[]restVariation `json:"variations"` // nil = keep; [] = clear (simple)
+		Variations          *[]restVariation `json:"variations"`           // nil = keep; [] = clear (simple)
 		SubscriptionCharges **int            `json:"subscription_charges"` // nil = keep; &nil = infinite; &N = fixed count
 	}
 	if err := decodeJSON(r, &in); err != nil {
@@ -329,7 +329,7 @@ func (h *RESTHandlers) createProduct(w http.ResponseWriter, r *http.Request, act
 	var in struct {
 		Name                string          `json:"name"`
 		Description         string          `json:"description"`
-		PriceSen            int64           `json:"price_sen"`
+		PriceSen            *int64          `json:"price_sen"`
 		Type                string          `json:"type"`
 		BillingPeriod       string          `json:"billing_period"`
 		TrialDays           int             `json:"trial_days"`
@@ -338,7 +338,12 @@ func (h *RESTHandlers) createProduct(w http.ResponseWriter, r *http.Request, act
 		Variations          []restVariation `json:"variations"`
 		SubscriptionCharges *int            `json:"subscription_charges"` // nil = infinite
 	}
-	if err := decodeJSON(r, &in); err != nil || in.Name == "" || in.PriceSen < 0 {
+	// Issue #551: price_sen is a POINTER so a missing or explicit `null` is
+	// distinguishable from a legitimate 0. Previously a plain int64 meant
+	// `{"price_sen":null}` decoded to 0 with NO error, so a client sending a
+	// non-finite price (JSON.stringify(Infinity) === null) silently created a
+	// RM 0.00 product which could then be sold and charged at zero.
+	if err := decodeJSON(r, &in); err != nil || in.Name == "" || in.PriceSen == nil || *in.PriceSen < 0 {
 		writeErr(w, http.StatusBadRequest, "nama dan price_sen wajib")
 		return
 	}
@@ -394,7 +399,7 @@ func (h *RESTHandlers) createProduct(w http.ResponseWriter, r *http.Request, act
 	}
 	p := &dbstore.Product{
 		AccountID: actx.Account.ID, Name: in.Name, Description: in.Description,
-		PriceSen: in.PriceSen, Images: in.Images, Type: pType,
+		PriceSen: *in.PriceSen, Images: in.Images, Type: pType,
 		BillingPeriod: period, TrialDays: in.TrialDays, Active: true,
 		Stock: in.Stock, SubscriptionCharges: in.SubscriptionCharges,
 	}
@@ -432,10 +437,10 @@ func (h *RESTHandlers) createProduct(w http.ResponseWriter, r *http.Request, act
 // ─── Forms ───────────────────────────────────────────────────────────────────
 
 type restForm struct {
-	ID        string         `json:"id"`
-	Slug      string         `json:"slug"`
-	Title     string         `json:"title"`
-	Status    string         `json:"status"`
+	ID     string `json:"id"`
+	Slug   string `json:"slug"`
+	Title  string `json:"title"`
+	Status string `json:"status"`
 	// IsPrivate reports whether the form is password-protected (issue #176).
 	// The password itself is never returned.
 	IsPrivate bool           `json:"is_private"`
@@ -452,12 +457,12 @@ type restForm struct {
 	LogoURL         string `json:"logo_url,omitempty"`
 	// Issue #393: per-form payment-failed message (HTML, sanitized on render).
 	FailureMessage string `json:"failure_message,omitempty"`
-	StartAt         string `json:"start_at,omitempty"`
-	EndAt           string `json:"end_at,omitempty"`
-	EntryLimit      *int   `json:"entry_limit,omitempty"`
-	PendingMessage  string `json:"pending_message,omitempty"`
-	ExpiredMessage  string `json:"expired_message,omitempty"`
-	LimitMessage    string `json:"limit_message,omitempty"`
+	StartAt        string `json:"start_at,omitempty"`
+	EndAt          string `json:"end_at,omitempty"`
+	EntryLimit     *int   `json:"entry_limit,omitempty"`
+	PendingMessage string `json:"pending_message,omitempty"`
+	ExpiredMessage string `json:"expired_message,omitempty"`
+	LimitMessage   string `json:"limit_message,omitempty"`
 
 	// Per-form CHIP feed status (issue #177): whether a per-form override is
 	// configured. The secret itself is never returned.
@@ -590,13 +595,13 @@ func (h *RESTHandlers) getForm(w http.ResponseWriter, r *http.Request, actx *Acc
 	respond(w, http.StatusOK, restForm{
 		ID: f.ID, Slug: f.Slug, Title: f.Title, Status: f.Status,
 		IsPrivate: f.Status == dbstore.FormStatusPrivate,
-		URL: h.formURLForAccount(r.Context(), actx.Account, f.Slug), Config: f.Config, Theme: f.Theme,
-		UpdatedAt: f.UpdatedAt.UTC().Format(time.RFC3339),
+		URL:       h.formURLForAccount(r.Context(), actx.Account, f.Slug), Config: f.Config, Theme: f.Theme,
+		UpdatedAt:       f.UpdatedAt.UTC().Format(time.RFC3339),
 		RedirectSuccess: f.RedirectSuccess, RedirectFailure: f.RedirectFailure,
 		AllowEmbed: f.AllowEmbed, LogoURL: f.LogoURL, FailureMessage: f.FailureMessage,
 		StartAt: fmtTime(f.StartAt), EndAt: fmtTime(f.EndAt), EntryLimit: f.EntryLimit,
 		PendingMessage: strOrEmpty(f.PendingMessage), ExpiredMessage: strOrEmpty(f.ExpiredMessage),
-		LimitMessage: strOrEmpty(f.LimitMessage),
+		LimitMessage:   strOrEmpty(f.LimitMessage),
 		ChipConfigured: chipConfigured, ChipBrandID: chipBrandID,
 	})
 }
@@ -1047,17 +1052,17 @@ func toSaleRow(s *dbstore.Sale, emailStatus string) saleRow {
 		Method: s.PaymentMethod, Buyer: s.Client.FullName,
 		Created:     s.CreatedAt.UTC().Format(time.RFC3339),
 		SkipCapture: s.SkipCapture, Authorized: s.Authorized,
-		EmailStatus: emailStatus,
-		FormID:      s.FormID,
-		SaleType:    s.SaleType,
-		InvoiceNo:   s.InvoiceNo,
-		BuyerEmail:  s.Client.Email,
-		BuyerPhone:  s.Client.Phone,
-		SubtotalSen: s.SubtotalSen,
-		ShippingSen: s.ShippingSen,
-		DiscountSen: s.DiscountSen,
-		Updated:     s.UpdatedAt.UTC().Format(time.RFC3339),
-		TableNumber: s.TableNumber,
+		EmailStatus:    emailStatus,
+		FormID:         s.FormID,
+		SaleType:       s.SaleType,
+		InvoiceNo:      s.InvoiceNo,
+		BuyerEmail:     s.Client.Email,
+		BuyerPhone:     s.Client.Phone,
+		SubtotalSen:    s.SubtotalSen,
+		ShippingSen:    s.ShippingSen,
+		DiscountSen:    s.DiscountSen,
+		Updated:        s.UpdatedAt.UTC().Format(time.RFC3339),
+		TableNumber:    s.TableNumber,
 		RefundedSen:    s.RefundedSen,
 		OutstandingSen: s.OutstandingSen(),
 		RefundStatus:   s.RefundStatus(),
@@ -1069,10 +1074,10 @@ func toSaleRow(s *dbstore.Sale, emailStatus string) saleRow {
 		items := make([]itemRow, 0, len(s.Items))
 		for _, it := range s.Items {
 			items = append(items, itemRow{
-				ProductID: it.ProductID,
-				PriceSen:  it.PriceSen,
-				Qty:       it.Qty,
-				Name:      it.Name,
+				ProductID:     it.ProductID,
+				PriceSen:      it.PriceSen,
+				Qty:           it.Qty,
+				Name:          it.Name,
 				VariationID:   it.VariationID,
 				VariationName: it.VariationName,
 			})

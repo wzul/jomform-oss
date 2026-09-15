@@ -38,6 +38,22 @@ export type ProductForm = {
   subscription_charges?: number | null;
 };
 
+/**
+ * isSenPrice reports whether a state price is a usable integer-sen amount.
+ *
+ * Issue #551: the price fields live in the same unit as the API (`price_sen`, an
+ * integer number of sen — `AGENTS.md`: "Money = integer sen everywhere"), so a
+ * value is only valid when it is a finite, non-negative integer. `Math.max(0, …)`
+ * and bare `parseFloat(...)` do NOT sanitise: `Math.max(0, parseInt(""))` is NaN,
+ * and `Math.round(parseFloat("1e999") * 100)` is Infinity — both of which
+ * `JSON.stringify` turns into `null`, which Go's encoding/json then decodes into a
+ * non-pointer int64 as 0, quietly creating a RM 0.00 product. Rejecting here keeps
+ * a malformed price out of the request entirely.
+ */
+function isSenPrice(v: unknown): v is number {
+  return typeof v === "number" && Number.isFinite(v) && v >= 0 && Number.isInteger(v);
+}
+
 const emptyForm = (): ProductForm => ({
   name: "",
   description: "",
@@ -256,16 +272,31 @@ export default function ProductEditor({ productId }: { productId?: string }) {
     };
     if (isVariable) {
       // Variable: per-variation price/stock/images; product-level ignored.
+      //
+      // Issue #551: v.price_sen is ALREADY sen (it is loaded straight from the API
+      // and the priceInput onChange stores sen), so it must be sent as-is. This
+      // used to multiply by 100 again, storing 100x the price the merchant saw.
+      const badVar = form.variations.find((v) => !isSenPrice(v.price_sen));
+      if (badVar) {
+        setError(t("prod.priceInvalid", { name: badVar.name || "variation" }));
+        return;
+      }
       body.variations = form.variations.map((v, i) => ({
         name: v.name.trim(),
-        price_sen: Math.round(parseFloat(String(v.price_sen)) * 100),
+        price_sen: Math.round(v.price_sen),
         stock: typeof v.stock === "number" ? v.stock : null,
         images: v.images || [],
         sort_order: i,
       }));
     } else {
       // Simple: product-level price/stock/images.
-      body.price_sen = Math.round(parseFloat(String(form.price_sen)) * 100);
+      //
+      // Issue #551: same unit as above — form.price_sen is sen already.
+      if (!isSenPrice(form.price_sen)) {
+        setError(t("prod.priceInvalid", { name: form.name }));
+        return;
+      }
+      body.price_sen = Math.round(form.price_sen);
       body.stock = typeof form.stock === "number" ? form.stock : null;
       body.images = form.images;
       body.variations = [];
@@ -308,7 +339,14 @@ export default function ProductEditor({ productId }: { productId?: string }) {
       step="0.01"
       min="0"
       value={value === 0 ? "" : (value / 100).toFixed(2)}
-      onChange={(e) => onChange(Math.round(parseFloat(e.target.value || "0") * 100))}
+      onChange={(e) => {
+        // Issue #551: this is the ONE place RM (typed) is converted to sen (state).
+        // The save path must NOT convert again. A non-finite entry (e.g. "1e999",
+        // which a step=0.01/min=0 input accepts) becomes 0 here rather than a value
+        // that serialises to null.
+        const rm = parseFloat(e.target.value);
+        onChange(Number.isFinite(rm) && rm > 0 ? Math.round(rm * 100) : 0);
+      }}
       placeholder="0.00"
       className="jf-input mt-1"
     />

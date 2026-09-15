@@ -95,7 +95,8 @@ func (s *Server) updateProduct(
 		if v.Name == "" {
 			return nil, nil, fmt.Errorf("variation name wajib")
 		}
-		if v.PriceSen < 0 {
+		// Issue #551: *int64 so missing/null is a rejection, not a silent 0.
+		if v.PriceSen == nil || *v.PriceSen < 0 {
 			return nil, nil, fmt.Errorf("variation price_sen mesti >= 0")
 		}
 		if v.Stock != nil && *v.Stock < 0 {
@@ -118,7 +119,7 @@ func (s *Server) updateProduct(
 				order = i
 			}
 			vs = append(vs, &dbstore.ProductVariation{
-				Name: v.Name, PriceSen: v.PriceSen, Stock: v.Stock,
+				Name: v.Name, PriceSen: *v.PriceSen, Stock: v.Stock,
 				Images: v.Images, SortOrder: order,
 			})
 		}

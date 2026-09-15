@@ -207,19 +207,19 @@ func TestIssue501MCPProductImagesRejectNonHTTPS(t *testing.T) {
 	st := issue501MCPFixture(t)
 
 	_, _, err := st.srv.createProduct(st.ctx, nil, createProductIn{
-		Name: "Tee", PriceSen: 1000, Images: []string{"data:image/png;base64,AA"},
+		Name: "Tee", PriceSen: senPtr(1000), Images: []string{"data:image/png;base64,AA"},
 	})
 	mustReject(t, err, "images")
 
 	_, _, err = st.srv.createProduct(st.ctx, nil, createProductIn{
-		Name: "Tee", PriceSen: 1000,
-		Variations: []variationIn{{Name: "M", PriceSen: 1000, Images: []string{"javascript:alert(1)"}}},
+		Name: "Tee", PriceSen: senPtr(1000),
+		Variations: []variationIn{{Name: "M", PriceSen: senPtr(1000), Images: []string{"javascript:alert(1)"}}},
 	})
 	mustReject(t, err, "variations[].images")
 
 	// A valid https image works, and an image-less product works.
 	if _, _, err := st.srv.createProduct(st.ctx, nil, createProductIn{
-		Name: "Tee", PriceSen: 1000, Images: []string{"https://jomform.com/media/u/a/x.jpg"},
+		Name: "Tee", PriceSen: senPtr(1000), Images: []string{"https://jomform.com/media/u/a/x.jpg"},
 	}); err != nil {
 		t.Fatalf("create_product with an https image rejected: %v", err)
 	}
