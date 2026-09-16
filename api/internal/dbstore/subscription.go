@@ -523,3 +523,21 @@ func (s *SubscriptionStore) Reactivate(ctx context.Context, accountID, subID str
 	}
 	return nil
 }
+
+// AddChargeFailedWithReason records a failed recurring charge together with the
+// gateway's reason (issue #562).
+//
+// The plain AddCharge left the cause unknown — the engine discarded the CHIP
+// error — so a merchant could not tell an expired card from an invalid recurring
+// token from a gateway outage. The reason is truncated to keep a pathological
+// upstream message from bloating the row.
+func (s *SubscriptionStore) AddChargeFailedWithReason(ctx context.Context, subID string, amountSen int64, attempt int, reason string) error {
+	if len(reason) > 500 {
+		reason = reason[:500]
+	}
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO subscription_charges (subscription_id, chip_purchase_id, amount_sen, status, attempt, failure_reason)
+		 VALUES ($1, NULL, $2, 'failed', $3, NULLIF($4,''))`,
+		subID, amountSen, attempt, reason)
+	return err
+}

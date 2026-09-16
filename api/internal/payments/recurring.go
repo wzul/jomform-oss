@@ -114,7 +114,17 @@ func (s *Service) chargeSubscription(ctx context.Context, sub *dbstore.Subscript
 	// final result arrives async via purchase.paid / payment_failure callbacks.
 	p, err := s.Chip.Charge(ctx, string(secret), req, sub.ChipTokenPurchaseID)
 	if err != nil {
-		_ = s.Subs.AddCharge(ctx, sub.ID, "", sub.AmountSen, dbstore.ChargeFailed, int(attempt))
+		// Issue #562: the gateway's reason was DISCARDED here, so a failed
+		// recurring charge recorded only "failed" with no cause — a merchant
+		// could not tell an expired card from an invalid token from a gateway
+		// outage, and neither could support. Log it, and record it on the charge
+		// row so it survives the log rotation.
+		errText := err.Error()
+		slog.Warn("sub_charge_failed", "sub", sub.ID, "attempt", attempt,
+			"amount_sen", sub.AmountSen, "err", errText)
+		if aerr := s.Subs.AddChargeFailedWithReason(ctx, sub.ID, sub.AmountSen, int(attempt), errText); aerr != nil {
+			slog.Warn("sub_charge_reason_not_recorded", "sub", sub.ID, "err", aerr)
+		}
 		return s.afterFailedCharge(ctx, sub, attempt)
 	}
 	_ = s.Subs.AddCharge(ctx, sub.ID, p.ID, sub.AmountSen, dbstore.ChargePending, int(attempt))
