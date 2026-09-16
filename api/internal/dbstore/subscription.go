@@ -269,6 +269,14 @@ func (s *SubscriptionStore) ChargeCount(ctx context.Context, subID string) (int6
 	return n, nil
 }
 
+// SubByChargePurchase is ByChargePurchase under the name the payment-callback
+// key resolver uses (issue #564). A recurring charge exists only as a
+// subscription_charges row — never a sale — so the callback must be able to
+// resolve the owning account from it, or every renewal is unverifiable.
+func (s *SubscriptionStore) SubByChargePurchase(ctx context.Context, purchaseID string) (*Subscription, error) {
+	return s.ByChargePurchase(ctx, purchaseID)
+}
+
 // ByChargePurchase finds the subscription owning a child charge purchase id
 // (a recurring charge, distinct from the token-creating purchase). Used by
 // the callback to advance the charge count / mark completion after a paid

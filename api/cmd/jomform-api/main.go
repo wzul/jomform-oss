@@ -222,7 +222,7 @@ func main() {
 		deps.Payments = &httpapi.PaymentsHandlers{
 			Service:     pay,
 			Events:      events,
-			EventLookup: sales,
+			EventLookup: httpapi.NewCallbackLookup(sales, subs),
 		}
 
 		// REST API for the web dashboard.

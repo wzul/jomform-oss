@@ -24,8 +24,17 @@ type PaymentsHandlers struct {
 	// event claim before another attempt may retake it. Zero uses
 	// dbstore.DefaultClaimTimeout.
 	ClaimTimeout time.Duration
-	EventLookup  interface {
+	// EventLookup resolves the ACCOUNT owning a purchase id, so the account's CHIP
+	// secret can fetch the verification key.
+	//
+	// Issue #564: it must cover BOTH purchase kinds. A one-time/token purchase has
+	// a sale row; a RECURRING CHARGE has only a subscription_charges row and never
+	// a sale, so the sale lookup alone could never resolve it and every renewal
+	// callback was rejected 503 — the first payment would work and every month
+	// after it would silently fail.
+	EventLookup interface {
 		SaleByChipPurchaseID(ctx context.Context, id string) (*dbstore.Sale, error)
+		SubByChargePurchase(ctx context.Context, purchaseID string) (*dbstore.Subscription, error)
 	} // CHIP company-wide callback verification key
 }
 
@@ -58,8 +67,8 @@ func (h *PaymentsHandlers) handleChipCallback(w http.ResponseWriter, r *http.Req
 			ID string `json:"id"`
 		}
 		if json.Unmarshal(raw, &peek) == nil {
-			if sale, err := h.EventLookup.SaleByChipPurchaseID(r.Context(), peek.ID); err == nil {
-				if k, kerr := h.Service.CallbackPublicKey(r.Context(), sale.AccountID); kerr == nil {
+			if accountID := h.accountForPurchase(r, peek.ID); accountID != "" {
+				if k, kerr := h.Service.CallbackPublicKey(r.Context(), accountID); kerr == nil {
 					h.PublicKey = k
 				}
 			}
@@ -141,4 +150,66 @@ func (h *PaymentsHandlers) handleChipCallback(w http.ResponseWriter, r *http.Req
 
 	slog.Info("chip_callback_processed", "purchase", p.ID, "event", p.EventType, "status", p.Status)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "at": time.Now().UTC().Format(time.RFC3339)})
+}
+
+// accountForPurchase returns the id of the account that owns a purchase id, for
+// callback-key resolution (issue #564).
+//
+// Two kinds of purchases arrive here:
+//
+//   - a sale purchase (the initial one-time payment, or the subscription's first
+//     token purchase) — it has a sale row;
+//   - a RECURRING CHARGE — it exists only as a subscription_charges row, and
+//     looking it up as a sale finds nothing. Missing this case made every renewal
+//     callback unresolvable, so the key was never fetched and the callback was
+//     rejected 503: the first payment succeeded and every renewal after it
+//     silently failed.
+//
+// Returns "" when neither resolves, which leaves the key nil and the fail-closed
+// guard to reject the callback.
+func (h *PaymentsHandlers) accountForPurchase(r *http.Request, purchaseID string) string {
+	if purchaseID == "" || h.EventLookup == nil {
+		return ""
+	}
+	if sale, err := h.EventLookup.SaleByChipPurchaseID(r.Context(), purchaseID); err == nil && sale != nil {
+		return sale.AccountID
+	}
+	if sub, err := h.EventLookup.SubByChargePurchase(r.Context(), purchaseID); err == nil && sub != nil {
+		return sub.AccountID
+	}
+	return ""
+}
+
+// CallbackLookup resolves the account that owns a CHIP purchase id, so the
+// callback can fetch that account's verification key (issue #564).
+//
+// It spans two stores because a purchase id can be either a sale (a one-time
+// payment, or a subscription's first token purchase) or a recurring charge (a
+// subscription_charges row, which has no sale).
+type CallbackLookup struct {
+	Sales interface {
+		SaleByChipPurchaseID(ctx context.Context, id string) (*dbstore.Sale, error)
+	}
+	Subscriptions interface {
+		SubByChargePurchase(ctx context.Context, purchaseID string) (*dbstore.Subscription, error)
+	}
+}
+
+// NewCallbackLookup builds the lookup used by the payment callback handler.
+func NewCallbackLookup(sales interface {
+	SaleByChipPurchaseID(ctx context.Context, id string) (*dbstore.Sale, error)
+}, subs interface {
+	SubByChargePurchase(ctx context.Context, purchaseID string) (*dbstore.Subscription, error)
+}) CallbackLookup {
+	return CallbackLookup{Sales: sales, Subscriptions: subs}
+}
+
+// SaleByChipPurchaseID resolves a sale purchase.
+func (c CallbackLookup) SaleByChipPurchaseID(ctx context.Context, id string) (*dbstore.Sale, error) {
+	return c.Sales.SaleByChipPurchaseID(ctx, id)
+}
+
+// SubByChargePurchase resolves a recurring charge purchase.
+func (c CallbackLookup) SubByChargePurchase(ctx context.Context, purchaseID string) (*dbstore.Subscription, error) {
+	return c.Subscriptions.SubByChargePurchase(ctx, purchaseID)
 }

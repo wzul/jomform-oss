@@ -19,6 +19,13 @@ func (failingLookup) SaleByChipPurchaseID(ctx context.Context, id string) (*dbst
 	return nil, errors.New("sale not found")
 }
 
+// SubByChargePurchase: issue #564 extended the callback's account resolution to
+// cover recurring charges too. This failure-injection lookup fails BOTH, which is
+// what the #365 test needs (no account resolvable by any route).
+func (failingLookup) SubByChargePurchase(ctx context.Context, purchaseID string) (*dbstore.Subscription, error) {
+	return nil, errors.New("subscription charge not found")
+}
+
 // Issue #365 regression: a forged CHIP callback (e.g. purchase.paid) where the
 // public key cannot be resolved MUST be rejected (503) and MUST NOT proceed to
 // ProcessCallback. Previously this fell through and marked the sale paid
