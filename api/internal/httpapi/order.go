@@ -168,6 +168,14 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 			LegalName: in.Client.LegalName, RegistrationNum: in.Client.RegistrationNum,
 			TaxNumber: in.Client.TaxNumber,
 		}),
+		// Issue #560: the checkout used to hardcode one_time, so a subscription
+		// product could never create a subscription — activateSubscription only
+		// runs for SaleTypeSubscription, and the card is only tokenized for
+		// future charges when the sale is a subscription. The product's own type
+		// now decides.
+		// Issue #560: finalised after the cart is resolved — the product type
+		// decides it. Default one_time so a cart with no subscription product
+		// is unchanged.
 		SaleType:      dbstore.SaleTypeOneTime,
 		PaymentMethod: method,
 		Status:        dbstore.SalePending,
@@ -196,6 +204,10 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 		sale.Currency = "MYR"
 	}
 	var subtotal int64
+	// Issue #560: the resolution of the subscription product for this order (nil
+	// when no line item is a subscription). See subItems below.
+	var product *dbstore.Product
+	var subItems []dbstore.SaleItem
 	for _, it := range in.Items {
 		// Issue #461: the products table is the price authority — the name and
 		// price resolve LIVE from the product row, with the form snapshot only
@@ -211,6 +223,15 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 			qty = 1
 		}
 		item := dbstore.SaleItem{ProductID: it.ProductID, Name: name, PriceSen: price, Qty: qty}
+		// Issue #560: a line item's product type decides whether this order is a
+		// subscription. The products table is the authority (same source as the
+		// price above); a pricing/add-on block is not a product row and is
+		// therefore never a subscription.
+		if h.Products != nil && product == nil {
+			if pr, perr := h.Products.Get(r.Context(), tgt.AccountID, it.ProductID); perr == nil && pr != nil {
+				product = pr
+			}
+		}
 		// Issue #153: when the buyer chose a variation, validate it belongs to
 		// the product, use the variation's price, and decrement the variation's
 		// stock (not the product-level stock). The variation is persisted on the
@@ -256,7 +277,24 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 			}
 		}
 		sale.Items = append(sale.Items, item)
+		if product != nil && product.Type == dbstore.SaleTypeSubscription {
+			subItems = append(subItems, item)
+		}
 		subtotal += item.PriceSen * qty
+	}
+	// Issue #560: a subscription order is one where a PURCHASED PRODUCT is
+	// type=subscription. The recurring amount and schedule come from THAT
+	// product (its own price x quantity), not the whole order total: any
+	// one-time items in the same cart are charged once, in this first payment
+	// only.
+	//
+	// Persisted on the sale so activation never has to re-derive the terms from
+	// a mixed cart, and never falls back to a hardcoded monthly period.
+	if st, amount, period := resolveSubscriptionTerms(product, subItems); st != "" {
+		sale.SaleType = st
+		sale.SubscriptionProductID = product.ID
+		sale.SubscriptionAmountSen = amount
+		sale.SubscriptionPeriod = period
 	}
 	sale.SubtotalSen = subtotal
 	// Issue #99 money invariant: total_sen = subtotal + shipping - discount.
@@ -458,3 +496,29 @@ func (h *PublicHandlers) resolveWorkspaceAccount(r *http.Request) (*dbstore.Acco
 // (see PublicHandlers.formOrderExtraForm in menu.go). Keeping a workspace-scoped
 // resolver here would leave two overlapping menu-order paths.
 
+// resolveSubscriptionTerms maps a resolved cart to the subscription terms for the
+// sale (issue #560).
+//
+// It returns ("", 0, "") when no purchased product is a subscription, so the sale
+// stays one_time. Otherwise the sale is a subscription and the terms come from
+// THAT product:
+//
+//   - amount: the subscription product's own price x quantity — NOT the order
+//     total, because a cart may also contain one-time items, and those must be
+//     charged once rather than re-billed every period;
+//   - period: the product's billing period, never a hardcoded default (a yearly
+//     product billed monthly is a real, silent billing error).
+//
+// Extracted so the rule is directly testable: when it lived inline in submitOrder,
+// a test could only re-implement it and would pass even with the production rule
+// removed.
+func resolveSubscriptionTerms(product *dbstore.Product, subItems []dbstore.SaleItem) (saleType string, amountSen int64, period string) {
+	if product == nil || product.Type != dbstore.SaleTypeSubscription {
+		return "", 0, ""
+	}
+	var total int64
+	for _, it := range subItems {
+		total += it.PriceSen * it.Qty
+	}
+	return dbstore.SaleTypeSubscription, total, product.BillingPeriod
+}

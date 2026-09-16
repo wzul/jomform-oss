@@ -346,19 +346,38 @@ func (s *Service) activateSubscription(ctx context.Context, sale *dbstore.Sale) 
 		return nil
 	}
 
-	// Product determines period & amount — fetch from items metadata stored in sale.
-	period := "month" // default; product lookup lands with products store wiring
+	// Issue #560: the terms come from the SALE, recorded when the checkout
+	// resolved the subscription product.
+	//
+	// Two things used to be wrong here:
+	//   - period was hardcoded "month" ("product lookup lands with products
+	//     store wiring" — a TODO never finished), so a YEARLY product would have
+	//     been billed monthly;
+	//   - the amount was sale.TotalSen, so a cart mixing a subscription with
+	//     one-time items would have re-billed those one-time items every period.
+	period := sale.SubscriptionPeriod
+	if period != "month" && period != "year" {
+		period = "month" // a sale with no recorded terms (pre-#560 rows)
+	}
+	amount := sale.SubscriptionAmountSen
+	if amount <= 0 {
+		amount = sale.TotalSen
+	}
+	productID := sale.SubscriptionProductID
+	if productID == "" {
+		productID = firstProductID(sale)
+	}
 	next := nextChargeFrom(time.Now(), period)
 
 	newSub := &dbstore.Subscription{
 		AccountID:           sale.AccountID,
 		ClientEmail:         sale.Client.Email,
-		ProductID:           firstProductID(sale),
+		ProductID:           productID,
 		SaleID:              sale.ID,
 		ChipTokenPurchaseID: sale.ChipPurchaseID,
 		Status:              dbstore.SubActive,
 		Period:              period,
-		AmountSen:           sale.TotalSen,
+		AmountSen:           amount,
 		NextChargeAt:        next,
 	}
 	if err := s.Subs.Create(ctx, newSub); err != nil {
@@ -376,7 +395,7 @@ func (s *Service) activateSubscription(ctx context.Context, sale *dbstore.Sale) 
 	// recurring engine silently did nothing for every subscription (whether the
 	// product had a fixed charge count or was infinite).
 	saleType := dbstore.ChargePaid
-	if err := s.Subs.AddCharge(ctx, newSub.ID, sale.ChipPurchaseID, sale.TotalSen, saleType, 0); err != nil {
+	if err := s.Subs.AddCharge(ctx, newSub.ID, sale.ChipPurchaseID, amount, saleType, 0); err != nil {
 		return err
 	}
 	// A fixed billing count (subscription_charges = N) counts PAID charges, so if
