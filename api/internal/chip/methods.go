@@ -3,6 +3,7 @@ package chip
 import (
 	"context"
 	"crypto/rsa"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"net/url"
@@ -44,14 +45,44 @@ func (c *Client) DeleteRecurringToken(ctx context.Context, secretKey, purchaseID
 }
 
 // PublicKey fetches the company-wide callback verification key (PEM).
+//
+// Issue #557 (second cause): CHIP returns the PEM as a BARE JSON STRING
+//
+//	"-----BEGIN PUBLIC KEY-----\nMIIB...\n-----END PUBLIC KEY-----\n"
+//
+// but this used to decode into an object `{"public_key": "..."}`. The
+// unmarshal failed with "cannot unmarshal string into Go value of type struct",
+// Chip.PublicKey returned an error, CallbackPublicKey propagated it, the handler
+// never obtained a key, and the fail-closed guard rejected EVERY callback with
+// 503 — the customer was charged while the sale stayed pending forever.
+//
+// It now accepts both shapes: the bare string CHIP actually sends, and the
+// object form (used elsewhere in their API and by our own tests/fakes), so a
+// future change on either side keeps working.
 func (c *Client) PublicKey(ctx context.Context, secretKey string) (string, error) {
-	var out struct {
-		PublicKey string `json:"public_key"` // PEM-encoded RSA
-	}
-	if err := c.do(ctx, secretKey, "GET", "/public_key/", nil, &out); err != nil {
+	var raw json.RawMessage
+	if err := c.do(ctx, secretKey, "GET", "/public_key/", nil, &raw); err != nil {
 		return "", err
 	}
-	return out.PublicKey, nil
+	if len(raw) == 0 {
+		return "", fmt.Errorf("chip: empty public key response")
+	}
+
+	// 1. Bare JSON string — what the live API returns.
+	var pemStr string
+	if err := json.Unmarshal(raw, &pemStr); err == nil && pemStr != "" {
+		return pemStr, nil
+	}
+
+	// 2. Object form {"public_key": "..."}.
+	var obj struct {
+		PublicKey string `json:"public_key"`
+	}
+	if err := json.Unmarshal(raw, &obj); err == nil && obj.PublicKey != "" {
+		return obj.PublicKey, nil
+	}
+
+	return "", fmt.Errorf("chip: unrecognised public key response: %s", truncateBytes(raw, 200))
 }
 
 // ParsePublicKey parses a PEM-encoded RSA public key (e.g. from PublicKey or
