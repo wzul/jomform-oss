@@ -109,16 +109,16 @@ type SaleItem struct {
 
 // Sale models the sales table.
 type Sale struct {
-	ID              string
-	AccountID       string
-	FormID          string
-	RefCode         string
-	Client          SaleClient
-	Items           []SaleItem
-	SubtotalSen     int64
-	ShippingSen     int64
-	DiscountSen     int64
-	TotalSen        int64
+	ID          string
+	AccountID   string
+	FormID      string
+	RefCode     string
+	Client      SaleClient
+	Items       []SaleItem
+	SubtotalSen int64
+	ShippingSen int64
+	DiscountSen int64
+	TotalSen    int64
 	// RefundedSen is the running total already refunded against this sale, in
 	// integer sen, never greater than TotalSen (issue #518). 0 = nothing
 	// refunded; 0 < RefundedSen < TotalSen = a partial refund (the sale keeps
@@ -340,6 +340,18 @@ func (s *SaleStore) WithSaleLock(ctx context.Context, saleID string, fn func(tx 
 // status rather than a stale snapshot).
 func (s *SaleStore) SaleByChipPurchaseIDTx(ctx context.Context, tx pgx.Tx, purchaseID string) (*Sale, error) {
 	return scanSale(tx.QueryRow(ctx, saleSelect+" WHERE chip_purchase_id = $1", purchaseID))
+}
+
+// SaleByChipPurchaseID reads a sale by CHIP purchase id outside a transaction.
+//
+// Issue #557: the CHIP callback resolves the owning account from the payload's
+// purchase id before it can fetch that account's verification key, and it runs
+// before any transaction is opened — so it needs the non-transactional form.
+// The interface it satisfies (httpapi.PaymentsHandlers.EventLookup) had no
+// implementation anywhere, which is why the dynamic-key path never ran and
+// every callback was rejected 503.
+func (s *SaleStore) SaleByChipPurchaseID(ctx context.Context, purchaseID string) (*Sale, error) {
+	return scanSale(s.pool.QueryRow(ctx, saleSelect+" WHERE chip_purchase_id = $1", purchaseID))
 }
 
 // SaleByRefCodeTx reads a sale by ref code within an open transaction (used

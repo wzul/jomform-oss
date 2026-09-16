@@ -213,7 +213,17 @@ func main() {
 		// Issue #199: receipts + merchant notifications go through the
 		// background email queue (nil when Valkey is absent → synchronous).
 		pay.EmailQueue = deps.EmailQueue
-		deps.Payments = &httpapi.PaymentsHandlers{Service: pay, Events: events}
+		// Issue #557: EventLookup is REQUIRED. The dynamic callback-key path
+		// resolves the owning account from the callback payload's purchase id
+		// before it can fetch that account's CHIP verification key. Without it
+		// the guard below is permanently false, no key is ever fetched, and
+		// EVERY signed callback is rejected 503 by the fail-closed check — the
+		// customer is charged while JomForm records the sale as pending forever.
+		deps.Payments = &httpapi.PaymentsHandlers{
+			Service:     pay,
+			Events:      events,
+			EventLookup: sales,
+		}
 
 		// REST API for the web dashboard.
 		whStore := dbstore.NewWebhookStore(pool)
@@ -255,20 +265,20 @@ func main() {
 		rest := &httpapi.RESTHandlers{
 			Accounts: accounts, Products: products, Forms: formsStore,
 			ProductVariations: dbstore.NewProductVariationStore(pool),
-			Keys: keys, Sales: sales, Subs: subs, Sessions: sessions, ChipProbe: chip.New(cfg.ChipAPIBaseURL),
+			Keys:              keys, Sales: sales, Subs: subs, Sessions: sessions, ChipProbe: chip.New(cfg.ChipAPIBaseURL),
 			SecretsKey: decryptKey, Pay: pay, Webhooks: whStore, Domains: dbstore.NewDomainStore(pool),
-			SystemSettings: dbstore.NewSystemSettingStore(pool),
-			Workspaces:         workspacesStore,
-			WorkspaceMembers:   workspaceMembersStore,
-			Affiliates:         affiliateStore,
-			Passkeys:       passkeysStore,
+			SystemSettings:   dbstore.NewSystemSettingStore(pool),
+			Workspaces:       workspacesStore,
+			WorkspaceMembers: workspaceMembersStore,
+			Affiliates:       affiliateStore,
+			Passkeys:         passkeysStore,
 			// Issue #161: invite email delivery + signup link base.
-			Mailer:   mailer,
+			Mailer: mailer,
 			// Issue #199: invite emails go through the background queue.
 			EmailQueue: deps.EmailQueue,
-			BaseURL:  cfg.AppBaseURL,
-			Users:          usersStore,
-			Store:          store,
+			BaseURL:    cfg.AppBaseURL,
+			Users:      usersStore,
+			Store:      store,
 			// Issue #140: shared Domain so passkey sessions stay valid on
 			// product subdomains (mcp.jomform.com).
 			CookieDomain: httpapi.SharedCookieDomain(cfg.AppBaseURL),
@@ -317,13 +327,13 @@ func main() {
 		mcpSrv := mcpsrv.New(&mcpsrv.Deps{
 			Accounts: accounts, Products: products, Sales: sales,
 			ProductVariations: dbstore.NewProductVariationStore(pool),
-			Subs: subs, Keys: keys, Forms: formsStore,
-			Webhooks: dbstore.NewWebhookStore(pool),
-			Workspaces:   workspacesStore,
+			Subs:              subs, Keys: keys, Forms: formsStore,
+			Webhooks:         dbstore.NewWebhookStore(pool),
+			Workspaces:       workspacesStore,
 			WorkspaceMembers: workspaceMembersStore,
-			Affiliates:   affiliateStore, // issue #444: affiliate marketing
-			Users:    usersStore, // issue #164: set_default_workspace tool
-			Events:   deps.Events, // issue #92: list_events tool
+			Affiliates:       affiliateStore, // issue #444: affiliate marketing
+			Users:            usersStore,     // issue #164: set_default_workspace tool
+			Events:           deps.Events,    // issue #92: list_events tool
 			// Issue #106: per-sale receipt email status tool.
 			EmailDeliveryEvents: deps.EmailDeliveryEvents,
 			// Issue #171: response-only form submissions tool.
@@ -361,11 +371,11 @@ func main() {
 		deps.Public = &httpapi.PublicHandlers{
 			Forms: formsStore, Sales: sales, Accounts: accounts,
 			// Issue #236: resolve custom domains via the account_domains table.
-			Domains: dbstore.NewDomainStore(pool),
+			Domains:  dbstore.NewDomainStore(pool),
 			Products: products, ProductVariations: dbstore.NewProductVariationStore(pool),
 			Pay: pay, BaseURL: cfg.AppBaseURL,
 			SystemSettings: dbstore.NewSystemSettingStore(pool),
-			Workspaces:         workspacesStore,
+			Workspaces:     workspacesStore,
 			// Issue #171: response-only form submissions.
 			Submissions: submissionsStore,
 			// Issue #176: sign the private-form unlock cookie.
@@ -375,11 +385,11 @@ func main() {
 			// of the form's workspace (skips the per-form rate limit + time check).
 			// FormLimiter is the per-form-per-IP token bucket (15/hour). MXChecker
 			// validates the submitted email's domain accepts mail.
-			Sessions:     deps.Sessions,
-			Users:        deps.Users,
+			Sessions:         deps.Sessions,
+			Users:            deps.Users,
 			WorkspaceMembers: deps.WorkspaceMembers,
-			MXChecker:    deps.MXChecker,
-			FormLimiter:  middleware.NewRateLimiter(15.0/3600.0, 15),
+			MXChecker:        deps.MXChecker,
+			FormLimiter:      middleware.NewRateLimiter(15.0/3600.0, 15),
 			// Issue #245: background AI spam judge. SpamQueue is the same
 			// Valkey-backed queue as email (#199); the worker below routes
 			// spam_judge jobs to the AI judge. Nil when Valkey is absent (dev).
@@ -393,7 +403,7 @@ func main() {
 			// Issue #447: realtime notifications — publish response.submitted
 			// events to the merchant's connected dashboards.
 			Realtime: realtimeHub,
-			}
+		}
 
 		// Issue #199: start the background email worker. It polls the
 		// Valkey-backed email queue and sends via SES, so a slow SES call never
@@ -450,35 +460,35 @@ func main() {
 		}
 
 		// Issue #185: daily BNM exchange-rate refresh (once daily, cached in
-	// Valkey with a 24h TTL). Runs at startup and then every 24h. Failures are
-	// logged and retried on the next tick — the cache keeps serving the last
-	// good rates meanwhile.
-	if curStore != nil {
-		go func() {
-			refresh := func() {
-				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				defer cancel()
-				if n, err := curStore.Refresh(ctx); err != nil {
-					slog.Warn("bnm_rates_refresh", "err", err)
-				} else {
-					slog.Info("bnm_rates_refresh", "rates", n)
+		// Valkey with a 24h TTL). Runs at startup and then every 24h. Failures are
+		// logged and retried on the next tick — the cache keeps serving the last
+		// good rates meanwhile.
+		if curStore != nil {
+			go func() {
+				refresh := func() {
+					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cancel()
+					if n, err := curStore.Refresh(ctx); err != nil {
+						slog.Warn("bnm_rates_refresh", "err", err)
+					} else {
+						slog.Info("bnm_rates_refresh", "rates", n)
+					}
 				}
-			}
-			refresh()
-			ticker := time.NewTicker(24 * time.Hour)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-					refresh()
+				refresh()
+				ticker := time.NewTicker(24 * time.Hour)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-ticker.C:
+						refresh()
+					}
 				}
-			}
-		}()
-	}
+			}()
+		}
 
-	// Subscription charge runner: hourly sweep for due charges + overdue cancels.
+		// Subscription charge runner: hourly sweep for due charges + overdue cancels.
 		go func() {
 			ticker := time.NewTicker(1 * time.Hour)
 			defer ticker.Stop()
