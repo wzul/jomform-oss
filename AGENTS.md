@@ -33,7 +33,8 @@ Parity checklist (dashboard → MCP):
   `confirm_sale`
 - Skip-capture flow → `capture_sale`, `release_sale`
 - Subscriptions → `cancel_subscription` (no token revoke — Wan rule),
-  `run_due_charges`
+  `run_due_charges`, `update_subscription_card`, `retry_subscription`
+  (revive a past_due subscription so the engine retries it — round 13c)
 - Analytics → `get_form_analytics`, `get_product_analytics`
 - CHIP per-form override → `set_form_chip_override`, `clear_form_chip_override`
 - e-Invoice settings → `set_einvoice_settings`, `get_einvoice_settings`

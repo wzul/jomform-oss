@@ -180,7 +180,6 @@ var mcpParityBaselineTools = []string{
 	// Subscriptions + product variations.
 	"list_product_variations",
 	"list_subscriptions",
-	"update_subscription_card",
 	// Settings surfaces (email, CHIP, currency, system).
 	"clear_chip_settings",
 	"get_currency_rates",

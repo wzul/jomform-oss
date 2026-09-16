@@ -9,6 +9,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/payments"
 	"github.com/wzul/jomform/api/internal/urlguard"
 )
 
@@ -23,7 +24,8 @@ type productOut struct {
 	Type                string   `json:"type"`
 	BillingPeriod       string   `json:"billing_period,omitempty"`
 	TrialDays           int      `json:"trial_days"`
-	SubscriptionCharges *int     `json:"subscription_charges,omitempty"` // nil = infinite
+	SubscriptionCharges *int     `json:"subscription_charges,omitempty"`                          // nil = infinite
+	ScheduleMode        string   `json:"schedule_mode" jsonschema:"polisi tarikh caj seterusnya"` // round 13c
 	Active              bool     `json:"active"`
 	Stock               *int     `json:"stock,omitempty"`
 	// Issue #153: variations for variable products (empty for simple products).
@@ -50,6 +52,7 @@ func (s *Server) listProducts(ctx context.Context, _ *mcp.CallToolRequest, _ emp
 			Images: p.Images, Type: p.Type, BillingPeriod: p.BillingPeriod,
 			TrialDays: p.TrialDays, Active: p.Active, Stock: p.Stock,
 			SubscriptionCharges: p.SubscriptionCharges,
+			ScheduleMode:        p.ScheduleMode,
 		}
 		// Issue #153: include variations for variable products.
 		if s.deps.ProductVariations != nil {
@@ -73,6 +76,7 @@ type createProductIn struct {
 	Images              []string      `json:"images,omitempty" jsonschema:"gambar (URL mesti https:// — issue #501)"`
 	Variations          []variationIn `json:"variations,omitempty" jsonschema:"variasi produk (name, price_sen, stock, images, sort_order) — kosong = produk simple"`
 	SubscriptionCharges *int          `json:"subscription_charges,omitempty" jsonschema:"bilangan caj (subscription; omit/null = infinite, N = caj N kali)"`
+	ScheduleMode        *string       `json:"schedule_mode,omitempty" jsonschema:"from_payment (lalai) | catch_up | skip_missed"`
 }
 
 // variationIn is the MCP input shape for one product variation.
@@ -96,6 +100,14 @@ func (s *Server) createProduct(ctx context.Context, _ *mcp.CallToolRequest, in c
 	}
 	if in.SubscriptionCharges != nil && *in.SubscriptionCharges < 1 {
 		return nil, productOut{}, fmt.Errorf("subscription_charges mesti >= 1 (atau null untuk infinite)")
+	}
+	// round 13c: schedule mode for the next-charge date.
+	schedMode := payments.ScheduleFromPayment
+	if in.ScheduleMode != nil && *in.ScheduleMode != "" {
+		if !payments.ValidScheduleMode(*in.ScheduleMode) {
+			return nil, productOut{}, fmt.Errorf("schedule_mode tidak sah: %q (from_payment|catch_up|skip_missed)", *in.ScheduleMode)
+		}
+		schedMode = *in.ScheduleMode
 	}
 	// Issue #501: product images (and variation images) render into
 	// buyer-facing `<img src>` attributes (form renderer + restaurant menu),
@@ -136,7 +148,7 @@ func (s *Server) createProduct(ctx context.Context, _ *mcp.CallToolRequest, in c
 		AccountID: accountID, Name: in.Name, Description: in.Description,
 		PriceSen: *in.PriceSen, Images: in.Images, Type: pType,
 		BillingPeriod: period, TrialDays: in.TrialDays, Active: true,
-		Stock: in.Stock, SubscriptionCharges: in.SubscriptionCharges,
+		Stock: in.Stock, SubscriptionCharges: in.SubscriptionCharges, ScheduleMode: schedMode,
 	}
 	if err := s.deps.Products.Create(ctx, p); err != nil {
 		return nil, productOut{}, fmt.Errorf("db: %w", err)

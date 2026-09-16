@@ -313,6 +313,12 @@ export const DICT = {
   "prod.chargesInfinite": { en: "Infinite (recurring)", ms: "Tak terhad (berulang)", zh: "无限（循环）", ta: "வரம்பற்ற (தொடர்ச்சி)", ar: "غير محدود (متكرر)" },
   "prod.chargesFixed": { en: "Fixed N times", ms: "Tetap N kali", zh: "固定 N 次", ta: "நிலையான N முறை", ar: "N مرة ثابتة" },
   "prod.chargesN": { en: "N charges", ms: "N caj", zh: "N 次扣费", ta: "N கட்டணங்கள்", ar: "N شحنة" },
+  // round 13c: next-charge date policy after a successful charge.
+  "prod.scheduleMode": { en: "Next charge date", ms: "Tarikh caj seterusnya", zh: "下次扣费日期", ta: "அடுத்த கட்டண தேதி", ar: "تاريخ الدفع التالي" },
+  "prod.schedFromPayment": { en: "From the day it succeeds (drifts if late)", ms: "Dari hari ia berjaya (beralih jika lewat)", zh: "从成功当天起算（迟付会顺延）", ta: "வெற்றியடைந்த நாளிலிருந்து (தாமதமானால் நகரும்)", ar: "من يوم النجاح (يتغير عند التأخر)" },
+  "prod.schedCatchUp": { en: "Keep original dates — collect missed months", ms: "Kekal tarikh asal — bulan tertinggal tetap dicaj", zh: "保持原定日期 — 补收错过的月份", ta: "அசல் தேதிகளை வைத்திரு — தவறிய மாதங்களை வசூலி", ar: "الاحتفاظ بالتواريخ الأصلية — تحصيل الأشهر الفائتة" },
+  "prod.schedSkipMissed": { en: "Keep original dates — skip missed months", ms: "Kekal tarikh asal — bulan tertinggal dilangkau", zh: "保持原定日期 — 跳过错过的月份", ta: "அசல் தேதிகளை வைத்திரு — தவறிய மாதங்களை தவிர்", ar: "الاحتفاظ بالتواريخ الأصلية — تخطي الأشهر الفائتة" },
+  "prod.scheduleModeHint": { en: "If a charge is late: keep the original billing dates, or start counting from the day it finally succeeds.", ms: "Jika caj lewat: kekalkan tarikh asal, atau mula kira dari hari ia berjaya.", zh: "若扣费延迟：保持原定日期，或从成功当天重新起算。", ta: "கட்டணம் தாமதமானால்: அசல் தேதிகளை வைத்திரு, அல்லது வெற்றியடைந்த நாளிலிருந்து கணக்கிடு.", ar: "إذا تأخر الدفع: احتفظ بالتواريخ الأصلية أو ابدأ العد من يوم النجاح." },
   "prod.chargesNLabel": { en: "{n} charges", ms: "{n} caj", zh: "{n} 次扣费", ta: "{n} கட்டணங்கள்", ar: "{n} شحنة" },
   "prod.chargesHint": { en: "Infinite bills forever; N stops after the Nth charge.", ms: "Tak terhad bil selamanya; N berhenti selepas caj ke-N.", zh: "无限则永久计费；N 表示第 N 次扣费后停止。", ta: "வரம்பற்றது என்றும் பில் செய்யும்; N என்பது N-வது கட்டணத்திற்குப் பிறகு நிறுத்தும்.", ar: "غير المحدود يفوتر للأبد؛ N يتوقف بعد الشحنة رقم N." },
   "prod.noStockNote": { en: "Leave stock blank for unlimited.", ms: "Kosongkan stok untuk unlimited.", zh: "库存留空表示不限量。", ta: "வரம்பற்றதற்கு சரக்கை காலியாக விடவும்.", ar: "اترك المخزون فارغاً لغير المحدود." },

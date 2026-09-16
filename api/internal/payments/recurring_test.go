@@ -222,7 +222,7 @@ func TestRecurringEngineInfiniteKeepsCharging(t *testing.T) {
 	// Force the product's subscription_charges to NULL (infinite).
 	var nilCharges *int
 	if err := products.Update(ctx, accountID, sub.ProductID, nil, nil, nil, nil, nil, nil,
-		nil, nil, nil, &nilCharges); err != nil {
+		nil, nil, nil, &nilCharges, nil); err != nil {
 		t.Fatalf("clear subscription_charges: %v", err)
 	}
 	done, err := svc.maybeCompleteSubscription(ctx, sub)

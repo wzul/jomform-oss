@@ -33,7 +33,7 @@ func restSubRow(sw *dbstore.SubscriptionWithProduct) subscriptionRow {
 		ID: sw.ID, Customer: sw.ClientEmail, ProductID: sw.ProductID,
 		ProductName: sw.ProductName, AmountSen: sw.AmountSen, Period: sw.Period,
 		Status: sw.Status, RetryAttempts: sw.RetryAttempts,
-		CreatedAt: sw.CreatedAt.UTC().Format(time.RFC3339),
+		CreatedAt:         sw.CreatedAt.UTC().Format(time.RFC3339),
 		CardUpdatePending: sw.CardUpdatePending,
 	}
 	if !sw.NextChargeAt.IsZero() {
@@ -142,5 +142,57 @@ func (h *RESTHandlers) updateSubscriptionCard(w http.ResponseWriter, r *http.Req
 	respond(w, http.StatusOK, map[string]any{
 		"id": sub.ID, "status": sub.Status,
 		"checkout_url": p.CheckoutURL, "purchase_id": p.ID,
+	})
+}
+
+// POST /v1/rest/subscriptions/{id}/retry — merchant/admin action to revive a
+// past_due subscription so the engine charges it again (round 13c).
+//
+// Why this exists: after 3 failed attempts a subscription became past_due, and
+// the due-charge scan only ever selects 'active' — so a past_due subscription
+// was never retried again. The only way out was a completed customer card
+// update, which meant a merchant could not charge a customer who had topped up
+// their account or whose card was temporarily blocked.
+//
+// This returns the subscription to 'active' and clears card_update_pending. It
+// does NOT charge immediately: the next scheduled sweep picks it up, which keeps
+// the money movement in one place (the engine) rather than a second path that
+// could double-charge. Cancelled and completed subscriptions are refused.
+func (h *RESTHandlers) retrySubscription(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
+	id := r.PathValue("id")
+	if id == "" {
+		writeErr(w, http.StatusBadRequest, "id diperlukan")
+		return
+	}
+	sub, err := h.Subs.ByIDForAccount(r.Context(), actx.Account.ID, id)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			writeErr(w, http.StatusNotFound, "langganan tidak dijumpai")
+			return
+		}
+		respondErr(w, r, err)
+		return
+	}
+	if err := h.Subs.Reactivate(r.Context(), actx.Account.ID, sub.ID); err != nil {
+		if err == dbstore.ErrNotPastDue {
+			writeErr(w, http.StatusConflict,
+				"hanya langganan past_due boleh dicuba semula (status: "+sub.Status+")")
+			return
+		}
+		respondErr(w, r, err)
+		return
+	}
+	// Make it due now so the next sweep charges it without waiting a full
+	// billing period, while a successful charge still corrects the date via the
+	// product's schedule mode.
+	if err := h.Subs.ScheduleNextCharge(r.Context(), sub.ID, time.Now().Add(-time.Minute)); err != nil {
+		respondErr(w, r, err)
+		return
+	}
+	respond(w, http.StatusOK, map[string]any{
+		"id": sub.ID, "status": dbstore.SubActive, "retry_queued": true,
 	})
 }

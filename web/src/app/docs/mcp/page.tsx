@@ -62,6 +62,7 @@ const TOOL_GROUPS: { group: string; tools: { name: string; desc: string }[] }[] 
     tools: [
       { name: "list_subscriptions", desc: "Senarai langganan akaun: pelanggan (emel), produk, jumlah/period, status (active/past_due/cancelled), tarikh caj seterusnya. Tapis ?status, page/limit." },
       { name: "cancel_subscription", desc: "Batalkan langganan pelanggan. Kad token kekal pada merchant \u2014 boleh aktif semula." },
+      { name: "retry_subscription", desc: "Cuba semula langganan yang past_due (round 13c): kembalikan status kepada active dan tetapkan ia due supaya sweep seterusnya mencaj kad semula. Guna selepas pelanggan top-up atau betulkan kad. Hanya past_due layak; cancelled/completed ditolak. Tidak mencaj serta-merta." },
       { name: "update_subscription_card", desc: "Kemas kini kad pada langganan sedia ada (issue #154): cipta token purchase baharu supaya pelanggan boleh sahkan kad baharu. Pulangkan checkout_url untuk dihantar kepada pelanggan. Token lama kekal di CHIP (tidak dibatalkan) tetapi tidak lagi digunakan." },
     ],
   },

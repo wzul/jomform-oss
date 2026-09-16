@@ -17,6 +17,8 @@ type Product = {
   images?: string[];
   type: string;
   billing_period?: string;
+  // round 13c: from_payment | catch_up | skip_missed
+  schedule_mode?: string;
   trial_days?: number;
   subscription_charges?: number | null; // null = infinite
   stock?: number | null;
@@ -245,6 +247,7 @@ export default function Products() {
   const [stock, setStock] = useState("");
   // Issue #152: billing count — "infinite" (null) or a fixed N charges.
   const [chargesMode, setChargesMode] = useState<"infinite" | "fixed">("infinite");
+  const [schedMode, setSchedMode] = useState<string>("from_payment");
   const [charges, setCharges] = useState("");
 
   async function add(e: React.FormEvent) {
@@ -272,6 +275,8 @@ export default function Products() {
           type === "subscription" && chargesMode === "fixed"
             ? Math.max(1, parseInt(charges || "1", 10) || 1)
             : null,
+        // round 13c: next-charge date policy.
+        schedule_mode: type === "subscription" ? schedMode : undefined,
         stock: stock === "" ? null : Math.max(0, parseInt(stock, 10) || 0),
       }),
     });
@@ -318,6 +323,7 @@ export default function Products() {
     active: true,
     images: [] as string[],
     chargesMode: "infinite" as "infinite" | "fixed",
+    scheduleMode: "from_payment",
     charges: "",
   });
   const [editTab, setEditTab] = useState("general");
@@ -367,6 +373,7 @@ export default function Products() {
         chargesMode:
           typeof editing.subscription_charges === "number" ? "fixed" : "infinite",
         charges: String(editing.subscription_charges ?? 1),
+        scheduleMode: editing.schedule_mode || "from_payment",
       });
       setEditTab("general");
       setDrawerError("");
@@ -448,6 +455,7 @@ export default function Products() {
         editForm.type === "subscription" && editForm.chargesMode === "fixed"
           ? Math.max(1, parseInt(editForm.charges || "1", 10) || 1)
           : null,
+      schedule_mode: editForm.type === "subscription" ? editForm.scheduleMode : undefined,
       stock: stockVal,
       active: editForm.active,
       images: editForm.images,
@@ -537,6 +545,16 @@ export default function Products() {
               >
                 <option value="infinite">{t("prod.chargesInfinite")}</option>
                 <option value="fixed">{t("prod.chargesFixed")}</option>
+              </select>
+              <select
+                value={schedMode}
+                onChange={(e) => setSchedMode(e.target.value)}
+                className="jf-input w-56"
+                title={t("prod.scheduleMode")}
+              >
+                <option value="from_payment">{t("prod.schedFromPayment")}</option>
+                <option value="catch_up">{t("prod.schedCatchUp")}</option>
+                <option value="skip_missed">{t("prod.schedSkipMissed")}</option>
               </select>
               {chargesMode === "fixed" && (
                 <input
@@ -914,6 +932,20 @@ export default function Products() {
                             <option value="infinite">{t("prod.chargesInfinite")}</option>
                             <option value="fixed">{t("prod.chargesFixed")}</option>
                           </select>
+                          <select
+                            value={editForm.scheduleMode}
+                            onChange={(e) =>
+                              setEditForm((f) => ({ ...f, scheduleMode: e.target.value }))
+                            }
+                            className="jf-input mt-1"
+                          >
+                            <option value="from_payment">{t("prod.schedFromPayment")}</option>
+                            <option value="catch_up">{t("prod.schedCatchUp")}</option>
+                            <option value="skip_missed">{t("prod.schedSkipMissed")}</option>
+                          </select>
+                          <span className="mt-1 block text-xs text-[var(--jf-muted)]">
+                            {t("prod.scheduleModeHint")}
+                          </span>
                           {editForm.chargesMode === "fixed" && (
                             <input
                               value={editForm.charges}

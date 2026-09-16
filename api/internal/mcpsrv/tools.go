@@ -93,6 +93,10 @@ func (s *Server) registerTools() {
 		Name:        "update_subscription_card",
 		Description: "Kemas kini kad pada langganan sedia ada (issue #154): cipta token purchase baharu supaya pelanggan boleh sahkan kad baharu. Pulangkan checkout_url untuk dihantar kepada pelanggan. Token lama kekal di CHIP (tidak dibatalkan) tetapi tidak lagi digunakan.",
 	}, s.updateSubscriptionCard)
+	addTool(s, &mcp.Tool{
+		Name:        "retry_subscription",
+		Description: "Cuba semula langganan yang past_due (round 13c): kembalikan status kepada active dan tetapkan ia due sekarang supaya sweep seterusnya mencaj kad semula. Guna selepas pelanggan top-up akaun atau betulkan kad. Hanya langganan past_due layak — yang cancelled/completed ditolak. Tidak mencaj serta-merta (elak caj dua kali).",
+	}, s.retrySubscription)
 
 	// ── Account ─────────────────────────────────────────────────────────────
 	addTool(s, &mcp.Tool{

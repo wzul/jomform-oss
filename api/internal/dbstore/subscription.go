@@ -25,6 +25,11 @@ const (
 // ErrNoDueSubs returned when the due-subscriptions scan finds nothing.
 var ErrNoDueSubs = errors.New("no due subscriptions")
 
+// ErrNotPastDue is returned by Reactivate when the subscription is not in the
+// past_due state, so there is nothing to revive (round 13c). Cancelled and
+// completed subscriptions are deliberately not resurrectable.
+var ErrNotPastDue = errors.New("langganan bukan dalam keadaan past_due")
+
 // Subscription models the subscriptions table.
 type Subscription struct {
 	ID                  string
@@ -454,4 +459,67 @@ func (s *SubscriptionStore) PendingCardUpdate(ctx context.Context) ([]*Subscript
 		out = append(out, sub)
 	}
 	return out, rows.Err()
+}
+
+// ── Round 13c (Wan): subscription recovery ───────────────────────────────────
+
+// LastPaidChargeAt returns when the most recent PAID charge row for this
+// subscription was created (its lease claim). Used to tell an arrears payment
+// from an on-time one when computing a fixed billing schedule.
+func (s *SubscriptionStore) LastPaidChargeAt(ctx context.Context, subID string) (time.Time, error) {
+	var t time.Time
+	err := s.pool.QueryRow(ctx,
+		`SELECT COALESCE(MAX(charged_at), 'epoch'::timestamptz)
+		   FROM subscription_charges WHERE subscription_id=$1 AND status='paid'`, subID).Scan(&t)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return t, nil
+}
+
+// ReactivateOnPayment returns a past_due subscription to active once a charge
+// for it has PAID, and clears card_update_pending.
+//
+// Round 13c (Wan): a subscription that failed its 3 attempts became past_due and
+// could only ever leave that state through a completed card update — so a
+// customer who paid (or whose card was fixed) left the subscription stuck and
+// one grace-window expiry away from auto-cancel. A settled payment is proof the
+// card works, so the subscription resumes.
+//
+// Scoped by purchase id and guarded on status so it is a no-op for a
+// subscription that is already active, completed or cancelled — it must never
+// resurrect a cancelled subscription, and it must not undo a completion.
+func (s *SubscriptionStore) ReactivateOnPayment(ctx context.Context, chipPurchaseID string) error {
+	if chipPurchaseID == "" {
+		return nil
+	}
+	_, err := s.pool.Exec(ctx,
+		`UPDATE subscriptions
+		    SET status='active', card_update_pending=FALSE, card_update_purchase_id='', updated_at=now()
+		  WHERE status = 'past_due'
+		    AND id = (SELECT subscription_id FROM subscription_charges WHERE chip_purchase_id=$1)`,
+		chipPurchaseID)
+	return err
+}
+
+// Reactivate returns a past_due subscription to active WITHOUT a payment, and
+// clears card_update_pending. This is the merchant/admin "retry this
+// subscription now" action: it re-arms the subscription so the next sweep
+// charges it again with the (possibly updated) card token.
+//
+// Only past_due is eligible. A cancelled subscription stays cancelled, and a
+// completed one is a finished fixed-term plan — neither is resurrectable.
+func (s *SubscriptionStore) Reactivate(ctx context.Context, accountID, subID string) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE subscriptions
+		    SET status='active', card_update_pending=FALSE, card_update_purchase_id='', updated_at=now()
+		  WHERE id=$1 AND account_id=$2 AND status='past_due'`,
+		subID, accountID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotPastDue
+	}
+	return nil
 }

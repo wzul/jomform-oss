@@ -36,6 +36,11 @@ export type ProductForm = {
   variations: Variation[];
   // Issue #152: subscription billing count — null = infinite, N = fixed charges.
   subscription_charges?: number | null;
+  // round 13c: next-charge date policy after a successful charge.
+  // from_payment = from the moment it succeeds (default)
+  // catch_up     = keep the ORIGINAL dates; a missed period is still collected
+  // skip_missed  = keep the ORIGINAL dates; a missed period is skipped
+  schedule_mode?: string;
 };
 
 /**
@@ -64,6 +69,7 @@ const emptyForm = (): ProductForm => ({
   trial_days: 0,
   stock: null,
   active: true,
+  schedule_mode: "from_payment",
   variations: [],
   subscription_charges: null,
 });
@@ -127,6 +133,7 @@ export default function ProductEditor({ productId }: { productId?: string }) {
           images: Array.isArray(p.images) ? p.images : [],
           type: p.type || "one_time",
           billing_period: p.billing_period || "month",
+        schedule_mode: p.schedule_mode || "from_payment",
           trial_days: p.trial_days || 0,
           stock: typeof p.stock === "number" ? p.stock : null,
           active: p.active !== false,
@@ -263,6 +270,7 @@ export default function ProductEditor({ productId }: { productId?: string }) {
       description: form.description,
       type: form.type,
       billing_period: form.type === "subscription" ? form.billing_period : undefined,
+      schedule_mode: form.type === "subscription" ? form.schedule_mode || "from_payment" : undefined,
       trial_days: form.type === "subscription" ? Math.max(0, form.trial_days) : undefined,
       subscription_charges:
         form.type === "subscription" && typeof form.subscription_charges === "number"
@@ -517,6 +525,21 @@ export default function ProductEditor({ productId }: { productId?: string }) {
                     />
                   </label>
                 )}
+                <label className="block text-sm font-medium">
+                  {t("prod.scheduleMode")}
+                  <select
+                    value={form.schedule_mode || "from_payment"}
+                    onChange={(e) => setForm((f) => ({ ...f, schedule_mode: e.target.value }))}
+                    className="jf-input mt-1"
+                  >
+                    <option value="from_payment">{t("prod.schedFromPayment")}</option>
+                    <option value="catch_up">{t("prod.schedCatchUp")}</option>
+                    <option value="skip_missed">{t("prod.schedSkipMissed")}</option>
+                  </select>
+                  <span className="mt-1 block text-xs text-[var(--jf-muted)]">
+                    {t("prod.scheduleModeHint")}
+                  </span>
+                </label>
               </>
             )}
           </div>

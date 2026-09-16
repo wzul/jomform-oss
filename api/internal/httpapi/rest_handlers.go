@@ -14,6 +14,7 @@ import (
 	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/customform"
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/payments"
 	"github.com/wzul/jomform/api/internal/urlguard"
 )
 
@@ -31,20 +32,23 @@ type restVariation struct {
 }
 
 type restProduct struct {
-	ID                  string          `json:"id"`
-	Name                string          `json:"name"`
-	Description         string          `json:"description,omitempty"`
-	PriceSen            int64           `json:"price_sen"`
-	Images              []string        `json:"images,omitempty"`
-	Type                string          `json:"type"`
-	BillingPeriod       string          `json:"billing_period,omitempty"`
-	TrialDays           int             `json:"trial_days"`
-	SubscriptionCharges *int            `json:"subscription_charges,omitempty"` // nil = infinite
-	Active              bool            `json:"active"`
-	Stock               *int            `json:"stock,omitempty"` // nil = unlimited
-	Variations          []restVariation `json:"variations,omitempty"`
-	CreatedAt           string          `json:"created_at,omitempty"`
-	UpdatedAt           string          `json:"updated_at,omitempty"`
+	ID                  string   `json:"id"`
+	Name                string   `json:"name"`
+	Description         string   `json:"description,omitempty"`
+	PriceSen            int64    `json:"price_sen"`
+	Images              []string `json:"images,omitempty"`
+	Type                string   `json:"type"`
+	BillingPeriod       string   `json:"billing_period,omitempty"`
+	TrialDays           int      `json:"trial_days"`
+	SubscriptionCharges *int     `json:"subscription_charges,omitempty"` // nil = infinite
+	// ScheduleMode is the next-charge date policy (round 13c). Always present:
+	// the column is NOT NULL DEFAULT 'from_payment'.
+	ScheduleMode string          `json:"schedule_mode"`
+	Active       bool            `json:"active"`
+	Stock        *int            `json:"stock,omitempty"` // nil = unlimited
+	Variations   []restVariation `json:"variations,omitempty"`
+	CreatedAt    string          `json:"created_at,omitempty"`
+	UpdatedAt    string          `json:"updated_at,omitempty"`
 }
 
 // toRestProduct maps a store Product to the REST JSON shape (money stays
@@ -57,6 +61,7 @@ func toRestProduct(p *dbstore.Product) restProduct {
 		TrialDays: p.TrialDays, Active: p.Active,
 		Stock:               p.Stock,
 		SubscriptionCharges: p.SubscriptionCharges,
+		ScheduleMode:        p.ScheduleMode,
 		CreatedAt:           p.CreatedAt.UTC().Format(time.RFC3339),
 	}
 	if !p.UpdatedAt.IsZero() {
@@ -124,6 +129,8 @@ func (h *RESTHandlers) updateProduct(w http.ResponseWriter, r *http.Request, act
 		Active              *bool            `json:"active"`
 		Variations          *[]restVariation `json:"variations"`           // nil = keep; [] = clear (simple)
 		SubscriptionCharges **int            `json:"subscription_charges"` // nil = keep; &nil = infinite; &N = fixed count
+		// round 13c: next-charge date policy after a successful charge.
+		ScheduleMode *string `json:"schedule_mode"` // nil = keep
 	}
 	if err := decodeJSON(r, &in); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid json")
@@ -193,9 +200,17 @@ func (h *RESTHandlers) updateProduct(w http.ResponseWriter, r *http.Request, act
 		writeErr(w, http.StatusBadRequest, "subscription_charges mesti >= 1 (atau null untuk infinite)")
 		return
 	}
+	// round 13c: reject an unknown schedule mode rather than silently keeping
+	// the old one (an ignored setting is how a merchant ends up on the wrong
+	// billing schedule without knowing).
+	if in.ScheduleMode != nil && *in.ScheduleMode != "" && !payments.ValidScheduleMode(*in.ScheduleMode) {
+		writeErr(w, http.StatusBadRequest,
+			"schedule_mode tidak sah (from_payment|catch_up|skip_missed)")
+		return
+	}
 	err := h.Products.Update(r.Context(), actx.Account.ID, r.PathValue("id"),
 		in.Name, in.Description, in.PriceSen, in.Images, in.Stock, in.Active,
-		typPtr, periodPtr, in.TrialDays, in.SubscriptionCharges)
+		typPtr, periodPtr, in.TrialDays, in.SubscriptionCharges, in.ScheduleMode)
 	if err != nil {
 		respondErr(w, r, err)
 		return
@@ -337,6 +352,8 @@ func (h *RESTHandlers) createProduct(w http.ResponseWriter, r *http.Request, act
 		Images              []string        `json:"images"`
 		Variations          []restVariation `json:"variations"`
 		SubscriptionCharges *int            `json:"subscription_charges"` // nil = infinite
+		// round 13c: next-charge date policy after a successful charge.
+		ScheduleMode *string `json:"schedule_mode"`
 	}
 	// Issue #551: price_sen is a POINTER so a missing or explicit `null` is
 	// distinguishable from a legitimate 0. Previously a plain int64 meant
@@ -397,11 +414,21 @@ func (h *RESTHandlers) createProduct(w http.ResponseWriter, r *http.Request, act
 			return
 		}
 	}
+	schedMode := payments.ScheduleFromPayment
+	if in.ScheduleMode != nil && *in.ScheduleMode != "" {
+		if !payments.ValidScheduleMode(*in.ScheduleMode) {
+			writeErr(w, http.StatusBadRequest,
+				"schedule_mode tidak sah (from_payment|catch_up|skip_missed)")
+			return
+		}
+		schedMode = *in.ScheduleMode
+	}
 	p := &dbstore.Product{
 		AccountID: actx.Account.ID, Name: in.Name, Description: in.Description,
 		PriceSen: *in.PriceSen, Images: in.Images, Type: pType,
 		BillingPeriod: period, TrialDays: in.TrialDays, Active: true,
 		Stock: in.Stock, SubscriptionCharges: in.SubscriptionCharges,
+		ScheduleMode: schedMode,
 	}
 	if err := h.Products.Create(r.Context(), p); err != nil {
 		respondErr(w, r, err)

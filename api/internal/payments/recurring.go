@@ -169,7 +169,17 @@ func (s *Service) afterFailedCharge(ctx context.Context, sub *dbstore.Subscripti
 		// auto-cancel so the subscription is not doomed once the card dies.
 		_ = s.Subs.SetCardUpdatePending(ctx, sub.ID, "")
 		slog.Warn("sub_past_due", "sub", sub.ID, "attempts", attempt)
+		// The past-due transition is the actionable moment for the merchant.
+		s.OnPastDue(ctx, sub)
 		return nil
+	}
+	// round 13c (Wan): tell someone. A failed recurring charge used to notify
+	// nobody — no event, no webhook, no email — so a card that died went
+	// unnoticed until the customer complained. Fire once per failure cycle
+	// (attempt 1), not on every retry: three identical emails per billing cycle
+	// are how a merchant learns to ignore them.
+	if attempt <= 1 {
+		s.fireSubscriptionChargeFailed(ctx, sub, attempt)
 	}
 	_ = s.Subs.ScheduleNextCharge(ctx, sub.ID, time.Now().Add(retryEvery))
 	slog.Info("sub_retry_scheduled", "sub", sub.ID, "attempt", attempt)

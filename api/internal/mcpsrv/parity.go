@@ -17,6 +17,7 @@ import (
 	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/customform"
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/payments"
 	"github.com/wzul/jomform/api/internal/urlguard"
 )
 
@@ -38,6 +39,8 @@ type updateProductIn struct {
 	TrialDays           *int          `json:"trial_days,omitempty" jsonschema:"Hari percubaan (subscription; optional)"`
 	Variations          []variationIn `json:"variations,omitempty" jsonschema:"Set penuh variasi (name, price_sen, stock, images, sort_order). Kosong = produk simple; omit = tak berubah."`
 	SubscriptionCharges **int         `json:"subscription_charges,omitempty" jsonschema:"Bilangan caj (subscription; omit = tak berubah, null = infinite, N = caj N kali)"`
+	// round 13c: next-charge date policy after a SUCCESSFUL charge.
+	ScheduleMode *string `json:"schedule_mode,omitempty" jsonschema:"Polisi tarikh caj seterusnya: from_payment (dari saat berjaya, lalai) | catch_up (ikut tarikh asal; period tertinggal tetap dicaj) | skip_missed (ikut tarikh asal; period tertinggal dilangkau)"`
 }
 
 func (s *Server) updateProduct(
@@ -106,8 +109,13 @@ func (s *Server) updateProduct(
 			return nil, nil, fmt.Errorf("%s", urlguard.InvalidMessage("variations[].images"))
 		}
 	}
+	// round 13c: validate the schedule mode before it reaches the store.
+	if in.ScheduleMode != nil && *in.ScheduleMode != "" && !payments.ValidScheduleMode(*in.ScheduleMode) {
+		return nil, nil, fmt.Errorf("schedule_mode tidak sah: %q (from_payment|catch_up|skip_missed)", *in.ScheduleMode)
+	}
 	if err := s.deps.Products.Update(ctx, acc, in.ProductID, namePtr, descPtr,
-		in.PriceSen, imagesPtr, stockPtr, in.Active, typPtr, periodPtr, in.TrialDays, in.SubscriptionCharges); err != nil {
+		in.PriceSen, imagesPtr, stockPtr, in.Active, typPtr, periodPtr, in.TrialDays, in.SubscriptionCharges,
+		in.ScheduleMode); err != nil {
 		return nil, nil, err
 	}
 	// Wholesale-replace variations when the caller sent them (nil = keep).

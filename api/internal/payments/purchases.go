@@ -407,6 +407,78 @@ func nextChargeFrom(now time.Time, period string) time.Time {
 	return now.AddDate(0, 1, 0)
 }
 
+// Schedule-mode values for products.schedule_mode (round 13c). They decide the
+// next-charge date after a SUCCESSFUL charge.
+const (
+	// ScheduleFromPayment computes the next charge from the moment the charge
+	// succeeded. This is the historical behaviour: a late charge permanently
+	// shifts every later charge.
+	ScheduleFromPayment = "from_payment"
+	// ScheduleCatchUp computes it from the PLANNED date plus one period, so a
+	// period that was charged late is still collected in full — the schedule
+	// returns to its original anchors. For a fixed-term class (RM100 x 3) the
+	// three periods land on the original dates even after a failure.
+	ScheduleCatchUp = "catch_up"
+	// ScheduleSkipMissed jumps to the next planned date that is still in the
+	// FUTURE, so a period missed during a failure is never collected. The
+	// schedule also returns to its original anchors.
+	ScheduleSkipMissed = "skip_missed"
+)
+
+// ValidScheduleMode reports whether a caller-supplied schedule mode is one of
+// the three supported values.
+func ValidScheduleMode(m string) bool {
+	switch m {
+	case ScheduleFromPayment, ScheduleCatchUp, ScheduleSkipMissed:
+		return true
+	}
+	return false
+}
+
+// nextChargeForPolicy returns the next charge date after a successful charge.
+//
+//	now     = the moment the charge succeeded
+//	planned = the date this charge was DUE (subscriptions.next_charge_at)
+//
+// from_payment is `now` — the historical behaviour, where a late charge
+// permanently shifts every later charge.
+//
+// The two fixed-schedule modes keep the subscription on its ORIGINAL anchors
+// (e.g. the 1st of the month) by walking forward from the planned date in whole
+// periods. A charge is always created at or after the period it settles, so
+// `planned` is the start of the period being paid and `planned + 1 period` is
+// the next UNPAID period. That is why the two modes differ by exactly one step:
+//
+//	catch_up    -> planned + 1 period. Collects the period that came next, even
+//	               if `now` has already passed it, so a missed month is still
+//	               billed. Walking from the true planned date converges on its
+//	               own, so the same period is never collected twice.
+//	skip_missed -> the first anchor at or after `now`. The period missed during
+//	               the failure is dropped.
+//
+// Both fall back to normal billing when nothing was missed (planned is in the
+// future, or zero), so an on-time charge behaves identically in every mode.
+func nextChargeForPolicy(mode string, now, planned time.Time, period string, paidLate bool) time.Time {
+	if mode != ScheduleCatchUp && mode != ScheduleSkipMissed {
+		return nextChargeFrom(now, period) // from_payment (default)
+	}
+	if planned.IsZero() || planned.After(now) {
+		return nextChargeFrom(now, period)
+	}
+	if mode == ScheduleCatchUp {
+		return nextChargeFrom(planned, period)
+	}
+	// skip_missed: first anchor at or after now.
+	next := planned
+	for i := 0; i < 600; i++ { // 600 periods ≈ 50 years: always terminates
+		next = nextChargeFrom(next, period)
+		if !next.Before(now) {
+			return next
+		}
+	}
+	return nextChargeFrom(now, period)
+}
+
 func firstProductID(sale *dbstore.Sale) string {
 	if len(sale.Items) > 0 {
 		return sale.Items[0].ProductID
@@ -429,6 +501,16 @@ func (s *Service) processSubscriptionEvent(ctx context.Context, p *chip.Purchase
 		if err := s.Subs.MarkChargePaid(ctx, p.ID); err != nil {
 			return err
 		}
+		// round 13c (Wan): a payment settles the arrears, so a past_due
+		// subscription returns to active immediately. Without this a
+		// subscription that failed 3x stayed past_due until the customer
+		// completed a card update — it could not recover on its own, and it
+		// was one grace-window expiry away from being auto-cancelled even
+		// though the customer had just paid. Marking it active also clears
+		// card_update_pending (there is nothing left to update).*/
+		if err := s.Subs.ReactivateOnPayment(ctx, p.ID); err != nil {
+			return err
+		}
 		// Advance the next charge by the billing period and, for a fixed
 		// billing count, mark the subscription completed once the Nth charge
 		// has been reached (no further charges scheduled).
@@ -436,7 +518,12 @@ func (s *Service) processSubscriptionEvent(ctx context.Context, p *chip.Purchase
 		if err != nil {
 			return err
 		}
-		if err := s.Subs.ScheduleNextCharge(ctx, sub.ID, nextChargeFrom(time.Now(), sub.Period)); err != nil {
+		// round 13c: the next-charge date follows the product's schedule mode.
+		// A charge that succeeded late used to shift every later charge, because
+		// this was always computed from time.Now().
+		mode := s.scheduleModeFor(ctx, sub)
+		next := nextChargeForPolicy(mode, time.Now(), sub.NextChargeAt, sub.Period, false)
+		if err := s.Subs.ScheduleNextCharge(ctx, sub.ID, next); err != nil {
 			return err
 		}
 		return s.completeIfLimitReached(ctx, sub)

@@ -25,19 +25,19 @@ type RESTHandlers struct {
 	Products          *dbstore.ProductStore
 	ProductVariations *dbstore.ProductVariationStore
 	Forms             *dbstore.FormStore
-	Keys           *dbstore.APIKeyStore
-	Sales          *dbstore.SaleStore
-	Subs           *dbstore.SubscriptionStore
-	Sessions       *auth.Sessions
-	Pay            *payments.Service
-	Webhooks       *dbstore.WebhookStore
-	SystemSettings *dbstore.SystemSettingStore
-	Workspaces         *dbstore.WorkspaceStore
+	Keys              *dbstore.APIKeyStore
+	Sales             *dbstore.SaleStore
+	Subs              *dbstore.SubscriptionStore
+	Sessions          *auth.Sessions
+	Pay               *payments.Service
+	Webhooks          *dbstore.WebhookStore
+	SystemSettings    *dbstore.SystemSettingStore
+	Workspaces        *dbstore.WorkspaceStore
 	// Issue #161: workspace membership + invites.
-	WorkspaceMembers   *dbstore.WorkspaceMemberStore
+	WorkspaceMembers *dbstore.WorkspaceMemberStore
 	// Issue #444: affiliate marketing.
 	Affiliates *dbstore.AffiliateStore
-	Passkeys       *dbstore.PasskeyStore
+	Passkeys   *dbstore.PasskeyStore
 	// Issue #161: Mailer delivers the invite email (nil in bare-mode tests).
 	Mailer VerifyMailer
 	// Issue #199: when non-nil, the invite email is enqueued and sent by a
@@ -46,8 +46,8 @@ type RESTHandlers struct {
 	EmailQueue *emailqueue.Queue
 	// BaseURL is the app origin used to build invite signup links.
 	BaseURL string
-	Users          *dbstore.UserStore
-	Domains        *dbstore.DomainStore
+	Users   *dbstore.UserStore
+	Domains *dbstore.DomainStore
 	// Issue #212: auto-TLS at origin. Nil when ACME is not configured.
 	// Verified custom domains are registered here so the origin provisions
 	// + renews their Let's Encrypt certs (SNI-based cert selection).
@@ -257,6 +257,8 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /v1/rest/subscriptions/{id}/cancel", h.authed(h.cancelSubscription))
 	// Issue #154: update the card on an existing subscription (re-tokenize).
 	mux.Handle("POST /v1/rest/subscriptions/{id}/update-card", h.authed(h.updateSubscriptionCard))
+	// round 13c: revive a past_due subscription so the engine retries it.
+	mux.Handle("POST /v1/rest/subscriptions/{id}/retry", h.authed(h.retrySubscription))
 	mux.Handle("GET /v1/rest/dashboard-bundle", h.authed(h.dashboardBundle))
 	// Issue #387: super-admin platform-wide usage overview. Gated on the
 	// super-admin role (#385); non-admins get 403. Read-only + audited.

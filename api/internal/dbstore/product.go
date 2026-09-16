@@ -10,25 +10,30 @@ import (
 
 // Product models the products table.
 type Product struct {
-	ID                 string
-	AccountID          string
-	Name               string
-	Description        string
-	PriceSen           int64
+	ID          string
+	AccountID   string
+	Name        string
+	Description string
+	PriceSen    int64
 	// Currency is the currency the product's price is denominated in (issue
 	// #185). Set from the workspace's currency at creation; a later workspace currency
 	// change applies to new products going forward (existing prices keep their
 	// original currency).
-	Currency           string
-	Images             []string
-	Stock              *int
-	Type               string // one_time | subscription
-	BillingPeriod      string // month | year when subscription
-	TrialDays          int
+	Currency            string
+	Images              []string
+	Stock               *int
+	Type                string // one_time | subscription
+	BillingPeriod       string // month | year when subscription
+	TrialDays           int
 	SubscriptionCharges *int // NULL = infinite; N = stop after Nth charge
-	Active             bool
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	// ScheduleMode selects the next-charge date policy after a SUCCESSFUL charge
+	// (round 13c). "from_payment" (default) = from the moment it succeeded;
+	// "catch_up" = planned + 1 period (a missed period is still collected);
+	// "skip_missed" = the next planned date still in the future.
+	ScheduleMode string
+	Active       bool
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 var ErrProductNotFound = errors.New("product not found")
@@ -40,17 +45,18 @@ type ProductStore struct{ pool *pgxpool.Pool }
 func NewProductStore(pool *pgxpool.Pool) *ProductStore { return &ProductStore{pool: pool} }
 
 const productSelect = `SELECT id, account_id, name, COALESCE(description,''), price_sen, currency,
-	images, stock, type, COALESCE(billing_period,''), trial_days, subscription_charges, active, created_at, updated_at
+	images, stock, type, COALESCE(billing_period,''), trial_days, subscription_charges, active, created_at, updated_at,
+	COALESCE(schedule_mode, 'from_payment')
 	FROM products`
 
 // Create inserts a product.
 func (s *ProductStore) Create(ctx context.Context, p *Product) error {
 	return s.pool.QueryRow(ctx,
-		`INSERT INTO products (account_id, name, description, price_sen, currency, type, billing_period, trial_days, subscription_charges, stock, images)
-		 VALUES ($1,$2,$3,$4,$5,$6,NULLIF($7,''),$8,$9,$10,COALESCE($11::jsonb,'[]'::jsonb))
+		`INSERT INTO products (account_id, name, description, price_sen, currency, type, billing_period, trial_days, subscription_charges, stock, images, schedule_mode)
+		 VALUES ($1,$2,$3,$4,$5,$6,NULLIF($7,''),$8,$9,$10,COALESCE($11::jsonb,'[]'::jsonb),COALESCE(NULLIF($12,''),'from_payment'))
 		 RETURNING id, created_at, updated_at`,
 		p.AccountID, p.Name, p.Description, p.PriceSen, orDefault(p.Currency, "MYR"), p.Type, p.BillingPeriod,
-		p.TrialDays, p.SubscriptionCharges, p.Stock, p.Images,
+		p.TrialDays, p.SubscriptionCharges, p.Stock, p.Images, p.ScheduleMode,
 	).Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt)
 }
 
@@ -65,7 +71,7 @@ func (s *ProductStore) ListActiveByAccount(ctx context.Context, accountID string
 	for rows.Next() {
 		q := &Product{}
 		if err := rows.Scan(&q.ID, &q.AccountID, &q.Name, &q.Description, &q.PriceSen, &q.Currency,
-			&q.Images, &q.Stock, &q.Type, &q.BillingPeriod, &q.TrialDays, &q.SubscriptionCharges, &q.Active, &q.CreatedAt, &q.UpdatedAt); err != nil {
+			&q.Images, &q.Stock, &q.Type, &q.BillingPeriod, &q.TrialDays, &q.SubscriptionCharges, &q.Active, &q.CreatedAt, &q.UpdatedAt, &q.ScheduleMode); err != nil {
 			return nil, err
 		}
 		out = append(out, q)
@@ -89,7 +95,7 @@ func (s *ProductStore) ListActiveByAccounts(ctx context.Context, accountIDs []st
 	for rows.Next() {
 		q := &Product{}
 		if err := rows.Scan(&q.ID, &q.AccountID, &q.Name, &q.Description, &q.PriceSen, &q.Currency,
-			&q.Images, &q.Stock, &q.Type, &q.BillingPeriod, &q.TrialDays, &q.SubscriptionCharges, &q.Active, &q.CreatedAt, &q.UpdatedAt); err != nil {
+			&q.Images, &q.Stock, &q.Type, &q.BillingPeriod, &q.TrialDays, &q.SubscriptionCharges, &q.Active, &q.CreatedAt, &q.UpdatedAt, &q.ScheduleMode); err != nil {
 			return nil, err
 		}
 		out = append(out, q)
@@ -114,7 +120,7 @@ func (s *ProductStore) ListAllByAccounts(ctx context.Context, accountIDs []strin
 	for rows.Next() {
 		q := &Product{}
 		if err := rows.Scan(&q.ID, &q.AccountID, &q.Name, &q.Description, &q.PriceSen, &q.Currency,
-			&q.Images, &q.Stock, &q.Type, &q.BillingPeriod, &q.TrialDays, &q.SubscriptionCharges, &q.Active, &q.CreatedAt, &q.UpdatedAt); err != nil {
+			&q.Images, &q.Stock, &q.Type, &q.BillingPeriod, &q.TrialDays, &q.SubscriptionCharges, &q.Active, &q.CreatedAt, &q.UpdatedAt, &q.ScheduleMode); err != nil {
 			return nil, err
 		}
 		out = append(out, q)
@@ -141,7 +147,7 @@ func (s *ProductStore) Get(ctx context.Context, accountID, productID string) (*P
 	q := &Product{}
 	err := s.pool.QueryRow(ctx, productSelect+" WHERE id=$2 AND account_id=$1", accountID, productID).
 		Scan(&q.ID, &q.AccountID, &q.Name, &q.Description, &q.PriceSen, &q.Currency,
-			&q.Images, &q.Stock, &q.Type, &q.BillingPeriod, &q.TrialDays, &q.SubscriptionCharges, &q.Active, &q.CreatedAt, &q.UpdatedAt)
+			&q.Images, &q.Stock, &q.Type, &q.BillingPeriod, &q.TrialDays, &q.SubscriptionCharges, &q.Active, &q.CreatedAt, &q.UpdatedAt, &q.ScheduleMode)
 	return q, err
 }
 
@@ -207,7 +213,8 @@ var ErrOutOfStock = errors.New("produk telah habis (out of stock)")
 // pointing to a value = set that fixed charge count.
 func (s *ProductStore) Update(ctx context.Context, accountID, productID string,
 	name, description *string, priceSen *int64, images *[]string, stock *int,
-	active *bool, typ, billingPeriod *string, trialDays *int, subscriptionCharges **int) error {
+	active *bool, typ, billingPeriod *string, trialDays *int, subscriptionCharges **int,
+	scheduleMode *string) error {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE products SET
 		   name = COALESCE($3, name),
@@ -220,11 +227,12 @@ func (s *ProductStore) Update(ctx context.Context, accountID, productID string,
 		   trial_days = COALESCE($12, trial_days),
 		   active = COALESCE($13, active),
 		   subscription_charges = CASE WHEN $14::boolean THEN $15 ELSE subscription_charges END,
+		   schedule_mode = COALESCE(NULLIF($16,''), schedule_mode),
 		   updated_at = now()
 		 WHERE id=$2 AND account_id=$1`,
 		accountID, productID, name, description, priceSen, images != nil, images,
 		stock != nil, stock, typ, billingPeriod, trialDays, active,
-		subscriptionCharges != nil, derefIntPtr(subscriptionCharges))
+		subscriptionCharges != nil, derefIntPtr(subscriptionCharges), derefStr(scheduleMode))
 	if err != nil {
 		return err
 	}
@@ -242,4 +250,13 @@ func derefIntPtr(p **int) *int {
 		return nil
 	}
 	return *p
+}
+
+// derefStr returns the pointed-to string, or "" when nil (which the product
+// Update treats as "keep existing" via NULLIF + COALESCE).
+func derefStr(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
