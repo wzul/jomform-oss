@@ -31,9 +31,10 @@
 #   4. on the server:  docker tag jomform-api:X.Y.Z jomform-api:latest
 #                      # compose runs :latest — a stale :latest keeps the
 #                      # OLD image even after `restart`
-#   5. on the server:  docker compose up -d --force-recreate api
+#   5. on the server:  docker compose up -d --force-recreate <service>
+#                      (the service matching IMAGE - see the NOTE printed at the end)
 #                      # plain `restart` will NOT pick up the new image
-#   6. verify: docker compose logs api | head   → startup line shows
+#   6. verify: docker compose logs <service> | head   → startup line shows
 #      version=... commit=... matching the tag; then curl the health route
 #
 # Usage:
@@ -69,6 +70,15 @@ REPO_ROOT="$(git -C "$(dirname "${BASH_SOURCE[0]}")/.." rev-parse --show-topleve
 cd "$REPO_ROOT"
 
 IMAGE="${IMAGE:-jomform-api}"
+# Issue #576: the server-side steps are printed for a human to run, and they
+# used to hardcode the api service. Building the web image therefore printed
+# "docker compose up -d --force-recreate api" - following it reloads the API,
+# leaves the new web image unloaded, and the failure is invisible: the API comes
+# back healthy and prints the expected version line while the web container keeps
+# serving the old build (v1.5.12 shipped this way and /docs/subscriptions 404'd).
+# Derive the service from the image (jomform-api -> api, jomform-web -> web); set
+# SERVICE explicitly if the compose service is ever renamed.
+SERVICE="${SERVICE:-${IMAGE##*-}}"
 CONTEXT="${CONTEXT:-api}"
 DOCKERFILE="${DOCKERFILE:-api/Dockerfile}"
 OUT_DIR="${OUT_DIR:-/tmp}"
@@ -215,10 +225,23 @@ fi
 REMOTE_TARBALL="$SSH_PATH/$(basename "$TARBALL")"
 cat <<EOF
 
-Remaining steps ON THE SERVER (run manually):
+Remaining steps ON THE SERVER for service '$SERVICE' (run manually):
   docker load -i $REMOTE_TARBALL
   docker tag $IMAGE:$VERSION $IMAGE:latest
-  docker compose up -d --force-recreate api
-  docker compose logs api | head        # must show version=$VERSION commit=$COMMIT
+  docker compose up -d --force-recreate $SERVICE
+  docker compose logs $SERVICE | head   # must show version=$VERSION commit=$COMMIT
 EOF
+
+# The API image carries the version banner, so its log line proves the deploy.
+# The web image has no such banner - a successful recreate proves nothing about
+# which build is live, so it needs a request-level check instead.
+if [ "$SERVICE" != "api" ]; then
+cat <<EOF
+
+NOTE - '$SERVICE' has no startup version banner, so "container started" does NOT
+mean the new build is live. Verify with a request-level check, e.g. for the web
+image a page added in this release must return 200 (not 404):
+  curl -s -o /dev/null -w '%{http_code}\n' https://<host>/<page-added-in-$VERSION>
+EOF
+fi
 info "done"
