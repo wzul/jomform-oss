@@ -9,7 +9,9 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -139,4 +141,99 @@ func (h *RESTHandlers) handleAdminOverview(w http.ResponseWriter, r *http.Reques
 	}
 
 	respond(w, http.StatusOK, out)
+}
+
+// ── Dead-letter endpoints (issue #579) ──────────────────────────────────────
+
+type adminDeadLetterOut struct {
+	DedupKey  string `json:"dedup_key"`
+	AccountID string `json:"account_id,omitempty"`
+	EventType string `json:"event_type"`
+	Attempts  int    `json:"attempts"`
+	LastError string `json:"last_error"`
+	CreatedAt string `json:"created_at"`
+	DeadSince string `json:"dead_since"`
+}
+
+// handleAdminDeadLetters: GET /v1/admin/dead-letters — inbound callback events
+// parked as dead. Super-admin only, read-only, audited (issue #579).
+//
+// Mirrors the admin_dead_letter_events MCP tool: the same store, the same gate.
+// A parked event is a real gateway callback that was never processed, so it
+// belongs on the admin page an operator already watches rather than only behind
+// an MCP client.
+func (h *RESTHandlers) handleAdminDeadLetters(w http.ResponseWriter, r *http.Request, _ *AccountCtx) {
+	if !h.requireSuperAdmin(r) {
+		writeErr(w, http.StatusForbidden, "perlu super-admin untuk tindakan ini")
+		return
+	}
+	h.auditSuperAdminAccess(r, "admin.dead_letters")
+	if h.WebhookEvents == nil {
+		writeErr(w, http.StatusServiceUnavailable, "store peristiwa webhook tidak dikonfigurasi")
+		return
+	}
+	limit := 100
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			limit = n
+		}
+	}
+	events, err := h.WebhookEvents.ListDead(r.Context(), limit)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "gagal membaca dead letter")
+		return
+	}
+	out := make([]adminDeadLetterOut, 0, len(events))
+	for _, e := range events {
+		out = append(out, adminDeadLetterOut{
+			DedupKey:  e.DedupKey,
+			AccountID: e.AccountID,
+			EventType: e.EventType,
+			Attempts:  e.Attempts,
+			LastError: e.LastError,
+			CreatedAt: e.CreatedAt.UTC().Format(time.RFC3339),
+			DeadSince: e.DeadSince.UTC().Format(time.RFC3339),
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": out, "total": len(out)})
+}
+
+type adminRequeueDeadLetterIn struct {
+	DedupKey string `json:"dedup_key"`
+}
+
+// handleAdminRequeueDeadLetter: POST /v1/admin/dead-letters/requeue — revive a
+// parked event so the replay retries it. Super-admin only, audited (issue #579).
+//
+// The store resets the attempt counter, so the event is not buried again by the
+// same sweep pass before it has had a chance to run.
+func (h *RESTHandlers) handleAdminRequeueDeadLetter(w http.ResponseWriter, r *http.Request, _ *AccountCtx) {
+	if !h.requireSuperAdmin(r) {
+		writeErr(w, http.StatusForbidden, "perlu super-admin untuk tindakan ini")
+		return
+	}
+	h.auditSuperAdminAccess(r, "admin.requeue_dead_letter")
+	if h.WebhookEvents == nil {
+		writeErr(w, http.StatusServiceUnavailable, "store peristiwa webhook tidak dikonfigurasi")
+		return
+	}
+	var in adminRequeueDeadLetterIn
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeErr(w, http.StatusBadRequest, "badan permintaan tidak sah")
+		return
+	}
+	if strings.TrimSpace(in.DedupKey) == "" {
+		writeErr(w, http.StatusBadRequest, "dedup_key wajib diisi")
+		return
+	}
+	ok, err := h.WebhookEvents.RequeueDead(r.Context(), in.DedupKey)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "gagal menghidupkan semula peristiwa")
+		return
+	}
+	if !ok {
+		writeErr(w, http.StatusNotFound, "peristiwa tidak dijumpai atau bukan dalam keadaan dead")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"requeued": true, "dedup_key": in.DedupKey})
 }

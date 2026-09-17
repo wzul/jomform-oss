@@ -75,6 +75,9 @@ type RESTHandlers struct {
 	// EmailDeliveryEvents is the SES delivery-event log (issue #92/#106). Nil
 	// in bare-mode tests; the per-sale email status view returns empty.
 	EmailDeliveryEvents *dbstore.EmailDeliveryEventStore
+	// WebhookEvents is the inbound callback event store (issue #579). Nil → the
+	// admin dead-letter endpoints report the store as unavailable.
+	WebhookEvents *dbstore.WebhookEventStore
 
 	// Issue #171: response-only form submissions (list + count endpoints).
 	Submissions *dbstore.SubmissionStore
@@ -263,6 +266,10 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	// Issue #387: super-admin platform-wide usage overview. Gated on the
 	// super-admin role (#385); non-admins get 403. Read-only + audited.
 	mux.Handle("GET /v1/admin/overview", h.authed(h.handleAdminOverview))
+	// Issue #579: dead-letter visibility for the admin dashboard, mirroring the
+	// admin_dead_letter_events / admin_requeue_dead_letter_event MCP tools.
+	mux.Handle("GET /v1/admin/dead-letters", h.authed(h.handleAdminDeadLetters))
+	mux.Handle("POST /v1/admin/dead-letters/requeue", h.authed(h.handleAdminRequeueDeadLetter))
 	mux.Handle("GET /v1/rest/analytics/forms", h.authed(h.formAnalytics))
 	mux.Handle("GET /v1/rest/analytics/products", h.authed(h.productAnalytics))
 	// Issue #92: event-tracking read endpoints (audit log + behaviour analytics).

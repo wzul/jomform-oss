@@ -68,8 +68,22 @@ func (s *Service) ProcessCallbackClaimed(ctx context.Context, p *chip.Purchase, 
 		// Not a direct sale: claim the event on its own, then run the
 		// subscription/card-update path, completing (or releasing) the claim
 		// around it.
+		//
+		// Issue #578: a recurring charge has no sale row, so resolve the owner
+		// through the subscription the purchase belongs to. Unknown owner stays
+		// empty (NULL) rather than blocking the claim — the event still matters.
+		acctID := ""
+		// s.Subs is nil for a service built without the subscription store (some
+		// test constructions) — guard rather than panic. An unresolved owner is
+		// fine: the event is still recorded, just unattributed.
+		if s.Subs != nil {
+			if sub, serr := s.Subs.ByChargePurchase(ctx, p.ID); serr == nil && sub != nil {
+				acctID = sub.AccountID
+			}
+		}
 		claimed, cerr := events.ClaimStandalone(ctx, &dbstore.WebhookEvent{
 			Source: "chip", EventType: p.EventType, Payload: payload, DedupKey: dedupKey,
+			AccountID: acctID,
 		}, claimTimeout)
 		if cerr != nil || !claimed {
 			return claimed, cerr
@@ -91,6 +105,9 @@ func (s *Service) ProcessCallbackClaimed(ctx context.Context, p *chip.Purchase, 
 			EventType: p.EventType,
 			Payload:   payload,
 			DedupKey:  dedupKey,
+			// Issue #578: the sale is already in hand here, so the owner is
+			// always known on this path.
+			AccountID: sale.AccountID,
 		}, claimTimeout)
 		if cerr != nil || !claimed {
 			return cerr

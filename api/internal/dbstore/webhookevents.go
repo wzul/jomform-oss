@@ -61,7 +61,10 @@ const DefaultClaimTimeout = 2 * time.Minute
 
 // WebhookEvent models the webhook_events table (inbound provider events).
 type WebhookEvent struct {
-	ID          string
+	ID string
+	// AccountID is the workspace the event belongs to (issue #578). Empty when
+	// the purchase could not be attributed — the column is nullable and an
+	// unattributable event is still worth recording.
 	AccountID   string
 	Source      string
 	EventType   string
@@ -97,16 +100,20 @@ func (s *WebhookEventStore) ClaimTx(ctx context.Context, tx pgx.Tx, e *WebhookEv
 		claimTimeout = DefaultClaimTimeout
 	}
 	tag, err := tx.Exec(ctx,
-		`INSERT INTO webhook_events (source, event_type, payload, dedup_key, status)
-		 VALUES ($1,$2,$3,$4,$5)
+		`INSERT INTO webhook_events (source, event_type, payload, dedup_key, status, account_id)
+		 VALUES ($1,$2,$3,$4,$5,$6)
 		 ON CONFLICT (dedup_key) DO UPDATE
 		    SET status     = $5,
 		        attempts   = webhook_events.attempts + 1,
-		        updated_at = now()
+		        updated_at = now(),
+		        -- Issue #578: fill the owner in on a redelivery when it was not
+		        -- known on the first attempt, but never blank an id we already have.
+		        account_id = COALESCE(webhook_events.account_id, EXCLUDED.account_id)
 		  WHERE webhook_events.processed_at IS NULL
-		    AND (webhook_events.updated_at < now() - $6::interval
-		         OR webhook_events.status IN ($7, $8))`,
+		    AND (webhook_events.updated_at < now() - $7::interval
+		         OR webhook_events.status IN ($8, $9))`,
 		e.Source, e.EventType, e.Payload, e.DedupKey, WebhookEventProcessing,
+		nullableAccountID(e.AccountID),
 		claimTimeout.String(), WebhookEventPending, WebhookEventFailed)
 	if err != nil {
 		return false, err
@@ -143,10 +150,10 @@ func (s *WebhookEventStore) TryInsert(ctx context.Context, e *WebhookEvent) (boo
 		status = WebhookEventPending
 	}
 	tag, err := s.pool.Exec(ctx,
-		`INSERT INTO webhook_events (source, event_type, payload, dedup_key, status)
-		 VALUES ($1,$2,$3,$4,$5)
+		`INSERT INTO webhook_events (source, event_type, payload, dedup_key, status, account_id)
+		 VALUES ($1,$2,$3,$4,$5,$6)
 		 ON CONFLICT (dedup_key) DO NOTHING`,
-		e.Source, e.EventType, e.Payload, e.DedupKey, status)
+		e.Source, e.EventType, e.Payload, e.DedupKey, status, nullableAccountID(e.AccountID))
 	if err != nil {
 		return false, err
 	}
@@ -287,7 +294,10 @@ func (s *WebhookEventStore) BuryExhausted(ctx context.Context, lastError string)
 
 // DeadLetterEvent is a parked event as an operator sees it (issue #574).
 type DeadLetterEvent struct {
-	ID        string
+	ID string
+	// AccountID is the owning workspace, empty when the purchase could not be
+	// attributed (issue #578).
+	AccountID string
 	Source    string
 	EventType string
 	DedupKey  string
@@ -308,8 +318,8 @@ func (s *WebhookEventStore) ListDead(ctx context.Context, limit int) ([]*DeadLet
 		limit = 100
 	}
 	rows, err := s.pool.Query(ctx,
-		`SELECT id::text, source, COALESCE(event_type,''), dedup_key, attempts,
-		        COALESCE(last_error,''), created_at, updated_at
+		`SELECT id::text, COALESCE(account_id::text,''), source, COALESCE(event_type,''),
+		        dedup_key, attempts, COALESCE(last_error,''), created_at, updated_at
 		   FROM webhook_events
 		  WHERE status = $1
 		  ORDER BY updated_at DESC
@@ -322,7 +332,7 @@ func (s *WebhookEventStore) ListDead(ctx context.Context, limit int) ([]*DeadLet
 	var out []*DeadLetterEvent
 	for rows.Next() {
 		e := &DeadLetterEvent{}
-		if err := rows.Scan(&e.ID, &e.Source, &e.EventType, &e.DedupKey,
+		if err := rows.Scan(&e.ID, &e.AccountID, &e.Source, &e.EventType, &e.DedupKey,
 			&e.Attempts, &e.LastError, &e.CreatedAt, &e.DeadSince); err != nil {
 			return nil, err
 		}
@@ -354,4 +364,16 @@ func (s *WebhookEventStore) RequeueDead(ctx context.Context, dedupKey string) (b
 		return false, err
 	}
 	return tag.RowsAffected() > 0, nil
+}
+
+// nullableAccountID maps an empty account id to SQL NULL (issue #578).
+//
+// webhook_events.account_id is nullable by design, and "" is not a valid uuid —
+// passing it to the uuid column would fail the insert, so an event whose owner
+// could not be resolved must send NULL instead.
+func nullableAccountID(id string) any {
+	if id == "" {
+		return nil
+	}
+	return id
 }

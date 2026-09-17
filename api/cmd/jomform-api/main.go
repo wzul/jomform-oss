@@ -286,6 +286,9 @@ func main() {
 			Events: deps.Events,
 			// Issue #106: per-sale receipt email status (Sent/Delivered/Opened/Clicked).
 			EmailDeliveryEvents: deps.EmailDeliveryEvents,
+			// Issue #579: dead-letter view for the admin dashboard. `events` is
+			// the webhook event store (NOT deps.Events, which is the audit log).
+			WebhookEvents: events,
 			// Issue #171: response-only form submissions.
 			Submissions: submissionsStore,
 			// Issue #193: per-form notification rules.

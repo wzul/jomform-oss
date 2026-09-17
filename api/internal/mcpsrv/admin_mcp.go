@@ -352,6 +352,7 @@ type adminDeadLetterEventsIn struct {
 }
 
 type adminDeadLetterEventOut struct {
+	AccountID string `json:"account_id,omitempty"`
 	DedupKey  string `json:"dedup_key"`
 	Source    string `json:"source"`
 	EventType string `json:"event_type"`
@@ -381,6 +382,7 @@ func (s *Server) adminDeadLetterEvents(ctx context.Context, _ *mcp.CallToolReque
 	out := make([]adminDeadLetterEventOut, 0, len(events))
 	for _, e := range events {
 		out = append(out, adminDeadLetterEventOut{
+			AccountID: e.AccountID,
 			DedupKey:  e.DedupKey,
 			Source:    e.Source,
 			EventType: e.EventType,

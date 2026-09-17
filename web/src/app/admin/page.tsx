@@ -46,6 +46,18 @@ type RecentSignup = { id: string; email: string; name?: string; created_at: stri
 type ActiveWorkspace = { id: string; name: string; slug: string; owner_email: string; last_activity: string };
 type StorageRow = { workspace_id: string; workspace_name: string; slug: string; used_bytes: number };
 
+type DeadLetter = {
+  dedup_key: string;
+  account_id?: string;
+  event_type: string;
+  attempts: number;
+  last_error: string;
+  created_at: string;
+  dead_since: string;
+};
+
+type DeadLetters = { items: DeadLetter[]; total: number };
+
 type Overview = {
   totals: Totals;
   growth_24h: Growth;
@@ -102,6 +114,39 @@ export default function AdminPage() {
     }
   }, [anon, bundle, isSuperAdmin, router]);
 
+  // Issue #579: dead letters — inbound callbacks parked because they could not
+  // be processed. Loaded alongside the overview; a failure here must not blank
+  // the rest of the page.
+  const [dead, setDead] = useState<DeadLetters | null>(null);
+  const [deadErr, setDeadErr] = useState("");
+  const [requeueing, setRequeueing] = useState("");
+
+  const loadDead = useCallback(async () => {
+    const r = await runLoad(
+      () => fetchJson<DeadLetters>("/api/admin/dead-letters"),
+      { onUnauth: goToLogin, message: t("admin.deadLettersLoadFail") },
+    );
+    setDeadErr(r.ok ? "" : r.error);
+    if (r.ok) setDead(r.data);
+  }, [goToLogin, t]);
+
+  const requeue = useCallback(async (dedupKey: string) => {
+    setRequeueing(dedupKey);
+    setDeadErr("");
+    try {
+      await fetchJson("/api/admin/dead-letters/requeue", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dedup_key: dedupKey }),
+      });
+      await loadDead();
+    } catch (e) {
+      setDeadErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRequeueing("");
+    }
+  }, [loadDead]);
+
   const load = useCallback(async () => {
     // Issue #503: explicit non-ok handling. 401 (expired session) and 403 both
     // bounce to /login — a non-super-admin never reaches this page anyway (the
@@ -115,8 +160,11 @@ export default function AdminPage() {
   }, [t, goToLogin]);
 
   useEffect(() => {
-    if (isSuperAdmin) load();
-  }, [isSuperAdmin, load]);
+    if (isSuperAdmin) {
+      load();
+      loadDead();
+    }
+  }, [isSuperAdmin, load, loadDead]);
 
   if (anon || !isSuperAdmin) {
     return (
@@ -198,6 +246,60 @@ export default function AdminPage() {
                   <StatCard label={t("admin.spamSales")} value={data.spam.sales} />
                 </div>
               </div>
+            </section>
+
+            {/* Dead letters (issue #579) */}
+            <section>
+              <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-[var(--jf-muted)]">
+                {t("admin.deadLetters")}
+              </h2>
+              <p className="mb-3 text-xs text-[var(--jf-muted)]">{t("admin.deadLettersHint")}</p>
+              {deadErr && (
+                <p className="mb-2 text-xs text-red-600">{deadErr}</p>
+              )}
+              {!dead || dead.items.length === 0 ? (
+                <p className="text-sm text-[var(--jf-muted)]">{t("admin.deadLettersNone")}</p>
+              ) : (
+                <div className="overflow-x-auto rounded-xl border border-[var(--jf-border)]">
+                  <table className="w-full text-left text-sm">
+                    <thead className="border-b border-[var(--jf-border)] bg-slate-50 text-xs uppercase tracking-wide text-[var(--jf-muted)]">
+                      <tr>
+                        <th className="px-4 py-2 font-medium">{t("admin.dlEvent")}</th>
+                        <th className="px-4 py-2 font-medium">{t("admin.dlWorkspace")}</th>
+                        <th className="px-4 py-2 font-medium">{t("admin.dlAttempts")}</th>
+                        <th className="px-4 py-2 font-medium">{t("admin.dlReason")}</th>
+                        <th className="px-4 py-2 font-medium">{t("admin.dlParked")}</th>
+                        <th className="px-4 py-2 font-medium">{t("admin.dlAction")}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {dead.items.map((d) => (
+                        <tr key={d.dedup_key} className="border-b border-[var(--jf-border)] last:border-0">
+                          <td className="px-4 py-2">
+                            <div className="font-medium">{d.event_type || "—"}</div>
+                            <div className="font-mono text-[11px] text-[var(--jf-muted)]">{d.dedup_key}</div>
+                          </td>
+                          <td className="px-4 py-2 font-mono text-[11px]">
+                            {d.account_id ? d.account_id.slice(0, 8) : <span className="italic text-[var(--jf-muted)]">{t("admin.dlUnattributed")}</span>}
+                          </td>
+                          <td className="px-4 py-2">{d.attempts}</td>
+                          <td className="px-4 py-2 text-xs">{d.last_error || "—"}</td>
+                          <td className="px-4 py-2 text-xs">{d.dead_since?.slice(0, 19).replace("T", " ")}</td>
+                          <td className="px-4 py-2">
+                            <button
+                              onClick={() => requeue(d.dedup_key)}
+                              disabled={requeueing === d.dedup_key}
+                              className="rounded-md border border-[var(--jf-border)] px-2 py-1 text-xs font-medium hover:bg-slate-50 disabled:opacity-50"
+                            >
+                              {requeueing === d.dedup_key ? t("admin.dlRequeueing") : t("admin.dlRequeue")}
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </section>
 
             {/* Storage per workspace */}

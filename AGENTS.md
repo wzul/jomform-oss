@@ -68,7 +68,9 @@ Parity checklist (dashboard → MCP):
   `admin_list_workspaces`, `admin_media_usage`, `admin_list_sales`,
   `admin_spam_queue`, `admin_email_deliveries`, `admin_system_health`,
   `admin_dead_letter_events`, `admin_requeue_dead_letter_event`
-  (dead-letter visibility + requeue for parked inbound callbacks — issue #574)
+  (dead-letter visibility + requeue for parked inbound callbacks — issue #574;
+  also exposed to the admin dashboard as `GET /v1/admin/dead-letters` +
+  `POST /v1/admin/dead-letters/requeue` — issue #579)
 - Affiliate marketing (#444) → `create_affiliate`, `list_affiliates`,
   `get_affiliate_sales`, `set_affiliate_commission`
 - Realtime notifications (#447) → `get_realtime_status`, `set_realtime_sound`
