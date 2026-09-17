@@ -23,6 +23,19 @@ const (
 // stored recurring token, retries per the ladder, and drives status.
 // Called by the ticker loop started in main; safe for zero due subs.
 func (s *Service) RunDueCharges(ctx context.Context) error {
+	// Issue #568: settle charges whose callback never arrived BEFORE looking for
+	// work. A pending row makes ClaimDue refuse its subscription forever, so one
+	// lost callback used to disable that subscription permanently while it still
+	// read 'active'. Reaping first means the retry ladder can take over on this
+	// very sweep.
+	if n, err := s.Subs.FailStalePendingCharges(ctx, time.Now().Add(-chargeCallbackTimeout), staleChargeReason); err != nil {
+		slog.Warn("stale_pending_charge_reap_failed", "err", err)
+	} else if n > 0 {
+		slog.Warn("stale_pending_charges_reaped", "count", n,
+			"older_than", chargeCallbackTimeout.String(),
+			"note", "no callback arrived in time — marked failed so the subscription can retry")
+	}
+
 	due, err := s.Subs.DueActive(ctx, time.Now().Add(-time.Minute), 200)
 	if err != nil {
 		return err
@@ -44,6 +57,20 @@ func (s *Service) RunDueCharges(ctx context.Context) error {
 // has to be long enough that a crashed attempt is retried later rather than
 // immediately (issue #534).
 const chargeLease = 1 * time.Hour
+
+// chargeCallbackTimeout is how long a charge may stay 'pending' before the sweep
+// gives up on its callback and marks it failed (issue #568).
+//
+// It must comfortably exceed a normal gateway round-trip plus callback latency
+// (seconds in practice) so a healthy charge is never reaped, while being far
+// shorter than the billing period so the subscription recovers on the following
+// sweep rather than a month later. One hour matches chargeLease: by the time the
+// claim itself expires, a charge with no callback is definitively lost.
+const chargeCallbackTimeout = 1 * time.Hour
+
+// staleChargeReason is recorded on a charge reaped by the timeout, so the
+// merchant can see WHY a charge was written off instead of it silently vanishing.
+const staleChargeReason = "no callback received within 1h (gateway did not confirm the charge; marked failed so the subscription can retry)"
 
 func (s *Service) chargeSubscription(ctx context.Context, sub *dbstore.Subscription) error {
 	// Issue #152: a fixed billing count (subscription_charges = N) stops the

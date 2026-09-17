@@ -549,3 +549,33 @@ func (s *SubscriptionStore) AddChargeFailedWithReason(ctx context.Context, subID
 		subID, amountSen, attempt, reason)
 	return err
 }
+
+// FailStalePendingCharges marks pending charge rows older than the cutoff as
+// failed, and returns how many it settled (issue #568).
+//
+// A charge row is created 'pending' and is resolved ONLY by the CHIP callback
+// (MarkChargePaid / MarkChargeFailed). afterFailedCharge — the retry ladder — is
+// reached only when Chip.Charge returns an error, i.e. when the gateway rejects
+// the attempt synchronously. So a charge CHIP accepted whose callback is later
+// lost, undelivered, or rejected stays 'pending' FOREVER.
+//
+// That is not a cosmetic problem: ClaimDue refuses to charge a subscription that
+// has any pending row, so one lost callback silently disables the subscription
+// for good. It still reads 'active', the engine finds it due, the claim is
+// declined, and nothing surfaces the reason. The merchant has no action that
+// clears it (retry_subscription only revives past_due).
+//
+// Ageing the row out restores the normal path: the charge is recorded as failed
+// with the reason, so it is visible to the merchant, and the subscription's retry
+// ladder takes over on the next sweep.
+func (s *SubscriptionStore) FailStalePendingCharges(ctx context.Context, olderThan time.Time, reason string) (int64, error) {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE subscription_charges
+		    SET status='failed', failure_reason=$2, updated_at=now()
+		  WHERE status='pending' AND charged_at < $1`,
+		olderThan, reason)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
