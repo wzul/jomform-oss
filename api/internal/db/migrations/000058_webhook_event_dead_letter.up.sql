@@ -1,0 +1,12 @@
+-- Terminal state for inbound events that can never be processed (issue #569).
+--
+-- The reclaim sweep releases a stale claim and the replay retries the event. For
+-- an event that CANNOT succeed — the purchase it references does not exist — the
+-- retry fails at the same point, the event is released again, and the loop
+-- repeats forever (observed at attempts=46, every 5 minutes, with
+-- unprocessed_total pinned at 1 so any backlog signal is drowned out).
+--
+-- `status='dead'` is terminal: excluded from ReclaimStale and Reclaimable, so it
+-- is neither replayed nor counted. last_error keeps the reason for an operator,
+-- making it a visible dead letter rather than an infinite retry.
+ALTER TABLE webhook_events ADD COLUMN last_error TEXT;

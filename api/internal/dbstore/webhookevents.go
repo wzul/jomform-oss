@@ -39,6 +39,16 @@ const (
 	WebhookEventProcessed = "processed"
 	// WebhookEventFailed: an attempt returned an error. Immediately re-claimable.
 	WebhookEventFailed = "failed"
+	// WebhookEventDead: an attempt failed more than MaxReplayAttempts times
+	// (issue #569). TERMINAL — never reclaimed, never replayed.
+	//
+	// Some events can never be processed: the purchase they reference does not
+	// exist (a sandbox/test purchase, or a record removed since). Without a
+	// terminal state the reclaim sweep releases them, the replay fails at the
+	// same point, and the loop repeats forever — observed at attempts=46, every 5
+	// minutes, keeping unprocessed_total permanently non-zero so any
+	// backlog-based signal is drowned out.
+	WebhookEventDead = "dead"
 )
 
 // DefaultClaimTimeout is how long one attempt may own a claim before another
@@ -176,8 +186,9 @@ func (s *WebhookEventStore) ReclaimStale(ctx context.Context, olderThan time.Dur
 		    SET status=$3, updated_at=now()
 		  WHERE status=$1
 		    AND processed_at IS NULL
+		    AND status <> $4
 		    AND updated_at < now() - $2::interval`,
-		WebhookEventProcessing, olderThan.String(), WebhookEventPending)
+		WebhookEventProcessing, olderThan.String(), WebhookEventPending, WebhookEventDead)
 	if err != nil {
 		return 0, err
 	}
@@ -186,7 +197,8 @@ func (s *WebhookEventStore) ReclaimStale(ctx context.Context, olderThan time.Dur
 
 // Reclaimable lists events that have not been successfully processed and are
 // due for a retry: 'pending' (never completed, or released by ReclaimStale) and
-// 'failed'. They are returned oldest first, capped at limit.
+// 'failed'. A 'dead' event (issue #569) is deliberately NOT included — it has
+// exhausted its attempts and is terminal. Returned oldest first, capped at limit.
 func (s *WebhookEventStore) Reclaimable(ctx context.Context, limit int) ([]*WebhookEvent, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
@@ -236,4 +248,39 @@ func (s *WebhookEventStore) UnprocessedCount(ctx context.Context) (int64, error)
 	err := s.pool.QueryRow(ctx,
 		`SELECT count(*) FROM webhook_events WHERE processed_at IS NULL`).Scan(&n)
 	return n, err
+}
+
+// MaxReplayAttempts bounds how many times an inbound event may fail before it is
+// parked as dead (issue #569).
+//
+// Generous enough that a transient fault (a DB blip, a restart mid-attempt, the
+// gateway briefly unreachable) is always retried, while a permanently
+// unprocessable event stops consuming sweeps and noise.
+const MaxReplayAttempts = 20
+
+// BuryExhausted parks events that have failed MaxReplayAttempts times as dead,
+// and returns how many it buried.
+//
+// A stuck 'processing' row is included deliberately: the reclaim sweep flips it
+// back to 'pending' and the loop continues, so at high attempts it is the same
+// unprocessable event, just caught mid-cycle.
+//
+// Terminal by design: a dead event is excluded from ReclaimStale and Reclaimable,
+// so it is neither replayed nor counted in the backlog. The row and its
+// last_error remain for an operator to inspect — a visible dead letter rather
+// than an infinite retry.
+func (s *WebhookEventStore) BuryExhausted(ctx context.Context, lastError string) (int64, error) {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE webhook_events
+		    SET status=$1, last_error=$2, updated_at=now()
+		  WHERE status = ANY($3)
+		    AND processed_at IS NULL
+		    AND attempts >= $4`,
+		WebhookEventDead, lastError,
+		[]string{WebhookEventPending, WebhookEventFailed, WebhookEventProcessing},
+		MaxReplayAttempts)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }

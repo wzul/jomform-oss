@@ -179,6 +179,15 @@ func RunInboundCallbackSweep(ctx context.Context, s *Service, events *dbstore.We
 
 // sweepInboundCallbacks performs one reclaim + replay pass.
 func sweepInboundCallbacks(ctx context.Context, s *Service, events *dbstore.WebhookEventStore) {
+	// Issue #569: park events that have exhausted their attempts BEFORE
+	// reclaiming, so a permanently unprocessable event stops being replayed
+	// forever. Terminal — it leaves the backlog instead of pinning it non-zero.
+	if n, err := events.BuryExhausted(ctx, "max replay attempts exceeded"); err != nil {
+		slog.Warn("chip_callback_bury_exhausted", "err", err)
+	} else if n > 0 {
+		slog.Warn("chip_callback_buried", "count", n,
+			"note", "events that failed too many times — parked as dead, no longer replayed")
+	}
 	if n, err := events.ReclaimStale(ctx, dbstore.DefaultClaimTimeout); err != nil {
 		slog.Warn("chip_callback_reclaim_stale", "err", err)
 	} else if n > 0 {
