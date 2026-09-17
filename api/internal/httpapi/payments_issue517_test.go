@@ -109,9 +109,9 @@ func newClaimHarness(t *testing.T, ctx context.Context) *claimHarness {
 	return &claimHarness{
 		pool: pool, key: key, saleID: sale.ID, purchaseID: purchaseID, webhooks: webhooks,
 		h: &PaymentsHandlers{
-			Service:   svc,
-			Events:    dbstore.NewWebhookEventStore(pool),
-			PublicKey: &key.PublicKey,
+			Service:         svc,
+			Events:          dbstore.NewWebhookEventStore(pool),
+			StaticPublicKey: &key.PublicKey,
 		},
 	}
 }

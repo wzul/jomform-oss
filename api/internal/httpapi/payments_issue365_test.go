@@ -48,8 +48,11 @@ func TestChipCallbackFailsClosedWhenKeyUnresolvable(t *testing.T) {
 	if rr.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected 503 Service Unavailable, got %d", rr.Code)
 	}
-	// A nil PublicKey is the "unresolvable" condition — assert the guard state.
-	if h.PublicKey != nil {
-		t.Fatal("expected PublicKey to remain unresolvable (nil)")
+	// No static key is configured and the lookup cannot resolve an account, so no
+	// key can be obtained — assert the guard state. (Issue #566 removed the
+	// handler's cached key field; the per-callback key stays nil here because
+	// resolution fails.)
+	if h.StaticPublicKey != nil {
+		t.Fatal("expected no verification key to be available")
 	}
 }

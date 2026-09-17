@@ -17,9 +17,20 @@ import (
 
 // PaymentsHandlers exposes payment-related HTTP endpoints.
 type PaymentsHandlers struct {
-	Service   *payments.Service
-	Events    *dbstore.WebhookEventStore
-	PublicKey *rsa.PublicKey
+	Service *payments.Service
+	Events  *dbstore.WebhookEventStore
+	// StaticPublicKey is an OPTIONAL company-wide verification key.
+	//
+	// Issue #566: this used to be a single `PublicKey` field that the handler
+	// CACHED after the first successful fetch. With more than one CHIP account
+	// that is wrong: the first account's key was reused to verify every other
+	// account's callbacks (and the nil-check then skipped resolving the right
+	// one), so a second merchant's callbacks would fail signature verification.
+	// The key is now resolved per callback, per account, and cached inside
+	// payments.Service keyed by the account's secret.
+	//
+	// Leave this nil in production: each account has its own CHIP key.
+	StaticPublicKey *rsa.PublicKey
 	// ClaimTimeout (issue #517) bounds how long one callback attempt owns the
 	// event claim before another attempt may retake it. Zero uses
 	// dbstore.DefaultClaimTimeout.
@@ -59,18 +70,26 @@ func (h *PaymentsHandlers) handleChipCallback(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// 1. Verify RSA signature BEFORE trusting the payload (fetch+cache per
-	// account secret when no static key configured).
-	if h.PublicKey == nil && h.Service != nil && h.EventLookup != nil {
+	// 1. Resolve the verification key for THIS callback's account, then verify the
+	// RSA signature BEFORE trusting the payload.
+	//
+	// Issue #566: the key must be resolved per account on every callback. This
+	// used to be a single cached field on the handler, which meant the first
+	// account's key was reused for every other account's callbacks.
+	key := h.StaticPublicKey
+	if key == nil && h.Service != nil && h.EventLookup != nil {
 		// account_id lives in the payload; parse first for key resolution
 		var peek struct {
 			ID string `json:"id"`
 		}
 		if json.Unmarshal(raw, &peek) == nil {
-			if accountID := h.accountForPurchase(r, peek.ID); accountID != "" {
-				if k, kerr := h.Service.CallbackPublicKey(r.Context(), accountID); kerr == nil {
-					h.PublicKey = k
-				}
+			accountID := h.accountForPurchase(r, peek.ID)
+			if accountID == "" {
+				slog.Warn("chip_callback_account_unresolved", "purchase", peek.ID)
+			} else if k, kerr := h.Service.CallbackPublicKey(r.Context(), accountID); kerr == nil {
+				key = k
+			} else {
+				slog.Warn("chip_callback_key_unresolved", "account", accountID, "err", kerr)
 			}
 		}
 	}
@@ -79,7 +98,7 @@ func (h *PaymentsHandlers) handleChipCallback(w http.ResponseWriter, r *http.Req
 	// the signature, so the callback MUST be rejected (503) rather than
 	// processed. Never fall through to ProcessCallback with an unverified
 	// signature.
-	if h.PublicKey == nil {
+	if key == nil {
 		slog.Warn("chip_callback_no_public_key_configured")
 		writeErr(w, http.StatusServiceUnavailable, "verification key unavailable")
 		return
@@ -89,7 +108,7 @@ func (h *PaymentsHandlers) handleChipCallback(w http.ResponseWriter, r *http.Req
 		writeErr(w, http.StatusUnauthorized, "signature hilang")
 		return
 	}
-	if err := chip.VerifySignature(h.PublicKey, raw, sig); err != nil {
+	if err := chip.VerifySignature(key, raw, sig); err != nil {
 		slog.Warn("chip_callback_bad_signature", "err", err)
 		writeErr(w, http.StatusUnauthorized, "signature tidak sah")
 		return
