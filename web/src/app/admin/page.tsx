@@ -13,6 +13,7 @@ import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDate, formatDateTime } from "../../lib/formatDate";
+import { growthLegend, growthValue, type GrowthCounts } from "../../lib/adminGrowth";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 
 type Totals = {
@@ -24,13 +25,11 @@ type Totals = {
   media_bytes: number;
 };
 
-type Growth = {
-  workspaces: number;
-  forms: number;
-  products: number;
-  sales: number;
-  users: number;
-};
+// The growth counts (workspaces/forms/products/sales/users) come from the API's
+// dbstore.GrowthCounts via growth_24h / growth_7d. The shape and the field order
+// are declared once in ../../lib/adminGrowth so the value line and the legend
+// under it cannot drift.
+type Growth = GrowthCounts;
 
 type EmailSummary = {
   delivered: number;
@@ -82,7 +81,9 @@ function StatCard({ label, value, sub }: { label: string; value: string | number
     <div className="rounded-xl border border-[var(--jf-border)] bg-white p-4">
       <p className="text-xs font-medium uppercase tracking-wide text-[var(--jf-muted)]">{label}</p>
       <p className="mt-1 text-2xl font-semibold text-[var(--jf-text)]">{value}</p>
-      {sub ? <p className="mt-0.5 text-xs text-[var(--jf-muted)]">{sub}</p> : null}
+      {sub ? (
+        <p className="mt-0.5 break-words text-xs text-[var(--jf-muted)]">{sub}</p>
+      ) : null}
     </div>
   );
 }
@@ -174,8 +175,6 @@ export default function AdminPage() {
     );
   }
 
-  const g = (g: Growth) => `${g.workspaces} / ${g.forms} / ${g.products} / ${g.sales} / ${g.users}`;
-
   return (
     <Shell active="admin">
       <div className="mx-auto max-w-6xl px-4 py-8">
@@ -217,9 +216,21 @@ export default function AdminPage() {
                 <StatCard label={t("admin.users")} value={data.totals.users} />
                 <StatCard label={t("admin.storageUsed")} value={fmtBytes(data.totals.media_bytes)} />
               </div>
+              {/* Issue #387 / stat-card report: the five counts are
+                  workspaces/forms/products/sales/users and used to render as a
+                  bare `0 / 0 / 0 / 0 / 0`. The legend line names each number in
+                  the same order, in the active locale. */}
               <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <StatCard label={t("admin.growth24h")} value={g(data.growth_24h)} />
-                <StatCard label={t("admin.growth7d")} value={g(data.growth_7d)} />
+                <StatCard
+                  label={t("admin.growth24h")}
+                  value={growthValue(data.growth_24h)}
+                  sub={growthLegend(t)}
+                />
+                <StatCard
+                  label={t("admin.growth7d")}
+                  value={growthValue(data.growth_7d)}
+                  sub={growthLegend(t)}
+                />
               </div>
             </section>
 

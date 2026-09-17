@@ -1,0 +1,59 @@
+# Docker build ignore rules for the REPO ROOT context.
+#
+# The web image is built from the repo root:
+#
+#     docker build -f web/Dockerfile .
+#
+# and not from web/ (see web/Dockerfile and deploy/DEPLOY.md). The web unit
+# tests run as part of `npm run build` and web/src/lib/adminGrowth.test.ts reads
+# the Go struct behind the /admin growth JSON at the web-relative path
+# ../../../api/internal/dbstore/admin_overview.go. That cross-language read is
+# the point of the guard (it pins the legend order to the API's field order
+# instead of restating it), so the build context must contain api/ and the repo
+# layout has to survive COPY — which means the repo root becomes the context,
+# which means this file is required: without it every build ships ~1 GB to the
+# daemon and `COPY . .` overwrites the node_modules that `npm ci` just created.
+#
+# This file applies ONLY to the root context. The api image keeps its own
+# ignore file (api/.dockerignore, context api/); the root rules below do not
+# weaken it.
+
+# VCS, CI, agent worktrees and repo docs — nothing here goes into an image.
+# .worktrees/ is ~600 MB in a working checkout (a worktree per Kanban card).
+.git
+.github
+.worktrees
+docs
+loadtest
+e2e
+Makefile
+AGENTS.md
+README.md
+
+# Installed dependencies and build output: the image installs its own
+# (`npm ci`) and a host copy would clobber it. Also the bulk of the context.
+**/node_modules
+**/.next
+**/out
+**/coverage
+**/test-results
+**/playwright-report
+**/blob-report
+**/playwright/.cache
+
+# Go build output (api/bin, ~60 MB) — same rule as api/.dockerignore.
+api/bin
+
+# Local data, env and secrets (never ship these into an image layer).
+deploy/data
+*.sql.gz
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Editor / OS noise.
+.idea
+.vscode
+.DS_Store

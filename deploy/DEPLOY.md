@@ -30,7 +30,7 @@ Environment overrides:
 | Variable | Default | Purpose |
 |---|---|---|
 | `IMAGE` | `jomform-api` | image name (and tarball name) |
-| `CONTEXT` | `api` | build context directory |
+| `CONTEXT` | `api` | build context directory — **`api` for the api image, `.` (the repo root) for the web image** |
 | `DOCKERFILE` | `api/Dockerfile` | Dockerfile path |
 | `OUT_DIR` | `/tmp` | tarball output (kept **outside** the repo on purpose — anything inside the repo would trip the dirty-tree guard) |
 | `SSH_HOST` | unset | set to scp the tarball (e.g. the prod VPS IP) |
@@ -40,8 +40,26 @@ Environment overrides:
 Example — build the web image instead:
 
 ```bash
-IMAGE=jomform-web CONTEXT=web DOCKERFILE=web/Dockerfile ./deploy/build-and-ship.sh
+IMAGE=jomform-web CONTEXT=. DOCKERFILE=web/Dockerfile ./deploy/build-and-ship.sh
 ```
+
+### Why the web image is built from the repo root
+
+`web/package.json` runs the unit tests before `next build`
+(`"build": "npm run test:unit && next build"`), and
+`web/src/lib/adminGrowth.test.ts` reads `api/internal/dbstore/admin_overview.go`
+— the Go struct behind the `/admin` growth JSON — to pin the growth-card legend
+order to the API's field order instead of restating it in the test. That read
+lives at `../../../api/...` **relative to `web/src/lib/`**, so the build context
+has to contain `api/` and `web/` as siblings: the context is the repo root
+(`CONTEXT=.`), the Dockerfile copies into `/repo/web` + `/repo/api` so the
+relative path resolves the same way inside the container as on a developer's
+machine, and the root `.dockerignore` keeps the uploaded context small.
+Building the web image from `web/` resolves the read to
+`/api/internal/dbstore/admin_overview.go`, which does not exist — an unhandled
+ENOENT that fails `npm run build`, so the image build exits 1.
+The api image is unaffected: `CONTEXT=api` + `api/Dockerfile` (with its own
+`api/.dockerignore`) still build.
 
 ## Deploy order (the whole sequence, every time)
 

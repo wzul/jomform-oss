@@ -61,8 +61,10 @@
 #   SSH_HOST    set to enable scp of the tarball (e.g. 203.0.113.10)
 #   SSH_USER    (default: root)   SSH_PORT (default: 22)   SSH_PATH (default: /tmp)
 #
-# Example — build the web image instead:
-#   IMAGE=jomform-web CONTEXT=web DOCKERFILE=web/Dockerfile ./deploy/build-and-ship.sh
+# Example — build the web image instead (context is the repo ROOT: the web
+# unit tests, which `npm run build` runs first, read api/ sources — see
+# web/Dockerfile and deploy/DEPLOY.md):
+#   IMAGE=jomform-web CONTEXT=. DOCKERFILE=web/Dockerfile ./deploy/build-and-ship.sh
 
 set -euo pipefail
 
