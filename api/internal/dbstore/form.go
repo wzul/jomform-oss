@@ -341,11 +341,22 @@ func (s *FormStore) TemplateBySlug(ctx context.Context, slug string) (*Form, err
 // (ListPublishedByAccountSlug filters status='published') and to the Forms
 // list (ListByAccount filters NOT is_template) — every read is
 // owner-scoped, so templates stay inside their tenant.
+//
+// Issue #589: "own template" must mean NOT ALSO a published gallery template.
+// The two template queries used to overlap — a published template owned by a
+// merchant account satisfied both ListTemplates and ListTemplatesByAccount — so
+// such a row was returned twice and the picker (which merges both lists) carded
+// it twice. The gallery is the single source for published templates, so the
+// own-templates query excludes them and the two lists are now disjoint by
+// construction: a row is either a gallery template or an own template.
 
-// ListTemplatesByAccount returns the account's own templates, newest first.
+// ListTemplatesByAccount returns the account's own (non-gallery) templates,
+// newest first. Templates the public gallery already serves are excluded
+// (issue #589) so this list can never overlap ListTemplates.
 func (s *FormStore) ListTemplatesByAccount(ctx context.Context, accountID string) ([]*Form, error) {
 	rows, err := s.pool.Query(ctx,
-		formSelect+` AND account_id=$1 AND is_template ORDER BY updated_at DESC`, accountID)
+		formSelect+` AND account_id=$1 AND is_template
+		 AND NOT (status=$2) ORDER BY updated_at DESC`, accountID, FormStatusPublished)
 	if err != nil {
 		return nil, err
 	}

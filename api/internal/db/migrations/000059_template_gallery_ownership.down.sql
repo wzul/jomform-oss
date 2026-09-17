@@ -1,0 +1,13 @@
+-- Issue #589 (down): no-op, kept for symmetry.
+--
+-- The up migration moves the three hand-inserted gallery templates
+-- (tpl-fnb, tpl-booking, tpl-tuition) from the merchant account that happened to
+-- create them to the system templates account. The original owner is not
+-- recorded anywhere, so a rollback would have to guess it — and guessing wrong
+-- either re-creates the duplicate (the bug) or moves a gallery template into an
+-- unrelated tenant. Neither is acceptable, so this migration intentionally does
+-- nothing structural on the way down.
+--
+-- Reverting the ownership is a data decision for an operator, not a schema
+-- rollback: the rows are intact and can be re-pointed with an explicit UPDATE if
+-- that is ever wanted.

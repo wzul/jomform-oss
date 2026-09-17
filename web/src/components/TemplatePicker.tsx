@@ -5,29 +5,21 @@
 // template gallery. Picking a template clones it into a new draft via
 // POST /v1/templates/use and opens the builder with the cloned draft.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useI18n } from "./i18n";
 import { workspaceQuery } from "../lib/workspace";
+import {
+  mergePickerTemplates,
+  splitPickerTemplates,
+  type PickerTemplate,
+} from "../lib/templatePicker";
 
-type Template = {
-  id: string;
-  slug: string;
-  title: string;
-  description?: string;
-  category?: string;
-  mode?: string;
-  theme?: { primary?: string };
-};
+type Template = PickerTemplate;
 
 // Issue #457: a merchant-owned template (from /v1/rest/templates). Cloned by
 // id via POST /v1/templates/use {template_id}, not by gallery slug.
-type OwnTemplate = {
-  id: string;
-  slug: string;
-  title: string;
-  theme?: { primary?: string };
-};
+type OwnTemplate = PickerTemplate;
 
 const CATEGORY_ICON: Record<string, string> = {
   "Food & Beverage": "🍽",
@@ -59,6 +51,15 @@ export default function TemplatePicker({
   const [loading, setLoading] = useState(false);
   const [using, setUsing] = useState<string | null>(null);
   const [err, setErr] = useState("");
+  // Issue #589: the gallery and the merchant's own templates are two sources
+  // whose queries overlap (a published template owned by the caller's account is
+  // returned by both), so one forms row used to be carded twice. Assemble them
+  // once, deduped by row id, and split the result so each row is drawn by
+  // exactly one section.
+  const { ownCards, galleryCards } = useMemo(
+    () => splitPickerTemplates(mergePickerTemplates({ own, gallery: templates }), templates),
+    [own, templates],
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -177,13 +178,15 @@ export default function TemplatePicker({
             <span className="text-xs text-[var(--jf-muted)]">{t("tpl.blankHint")}</span>
           </button>
 
-          {/* Issue #457: the merchant's own templates come first. */}
-          {own.length > 0 && (
+          {/* Issue #457: the merchant's own templates come first. Issue #589:
+              only own-ONLY rows here — a row the gallery also serves is rendered
+              by the gallery loop below, so it is never carded twice. */}
+          {ownCards.length > 0 && (
             <p className="col-span-full -mb-1 text-[11px] font-medium uppercase tracking-wider text-[var(--jf-muted)]">
               {t("tplmg.title")}
             </p>
           )}
-          {own.map((tpl) => (
+          {ownCards.map((tpl) => (
             <div
               key={tpl.id}
               className="flex flex-col rounded-xl border border-[var(--jf-border)] bg-white p-4 transition-shadow hover:shadow-sm"
@@ -210,7 +213,7 @@ export default function TemplatePicker({
             </div>
           ))}
 
-          {templates.map((tpl) => (
+          {galleryCards.map((tpl) => (
             <div
               key={tpl.id}
               className="flex flex-col rounded-xl border border-[var(--jf-border)] bg-white p-4 transition-shadow hover:shadow-sm"
@@ -247,7 +250,7 @@ export default function TemplatePicker({
           {loading && (
             <p className="col-span-full py-8 text-center text-sm text-[var(--jf-muted)]">…</p>
           )}
-          {!loading && templates.length === 0 && own.length === 0 && (
+          {!loading && galleryCards.length === 0 && ownCards.length === 0 && (
             <p className="col-span-full py-8 text-center text-sm text-[var(--jf-muted)]">
               {t("tpl.empty")}
             </p>
