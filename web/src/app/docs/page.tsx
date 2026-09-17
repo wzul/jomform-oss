@@ -31,7 +31,7 @@ const FEATURES: { title: string; body: string }[] = [
   },
   {
     title: "Subscriptions",
-    body: "Manage recurring customer subscriptions. Cancel a subscription without losing the customer's card token (it can be re-activated later), and send a secure link to update a card.",
+    body: "Charge customers automatically on a schedule \u2014 monthly or yearly, for as long as the plan runs or for a fixed number of payments. A product can carry a billing period and, optionally, a fixed number of charges so a three-month plan completes itself once the third payment lands. When a payment is late you choose where the next one lands (from the day it succeeds, keep the original dates and collect the missed period, or keep them and skip it), which is what makes a fixed-term class or course bill correctly. If a charge is declined JomForm retries three times over three days, notifies you on the first failure and again when the subscription falls past due, and the customer can update their card through a secure link; you can also retry a past-due subscription yourself. Cancelling never revokes the customer's card token (it can be re-activated later). Every action is available to an AI agent over MCP.",
   },
   {
     title: "Spam protection",

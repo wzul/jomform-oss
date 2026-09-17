@@ -9,6 +9,7 @@ const NAV = [
   { href: "/docs", label: "Overview & features" },
   { href: "/docs/customize", label: "Design → AI agent → MCP" },
   { href: "/docs/embed", label: "Embed on your site" },
+  { href: "/docs/subscriptions", label: "Subscriptions & recurring billing" },
   { href: "/docs/placeholders", label: "Placeholders reference" },
   { href: "/docs/mcp", label: "MCP tool reference" },
 ];

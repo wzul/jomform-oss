@@ -469,7 +469,18 @@ export default function ProductEditor({ productId }: { productId?: string }) {
             {form.type === "subscription" && (
               <>
                 <label className="block text-sm font-medium">
-                  {t("prod.billingPeriod")}
+                  <span className="inline-flex items-center gap-2">
+                    {t("prod.billingPeriod")}
+                    <a
+                      href="/docs/subscriptions#billing-period"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title={t("prod.subscriptionDocs")}
+                      className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 text-[11px] font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                    >
+                      ?
+                    </a>
+                  </span>
                   <select
                     value={form.billing_period}
                     onChange={(e) => setForm((f) => ({ ...f, billing_period: e.target.value }))}
@@ -492,7 +503,18 @@ export default function ProductEditor({ productId }: { productId?: string }) {
                   <span className="mt-1 block text-xs text-[var(--jf-muted)]">{t("prod.trialHint")}</span>
                 </label>
                 <label className="block text-sm font-medium">
-                  {t("prod.billingCount")}
+                  <span className="inline-flex items-center gap-2">
+                    {t("prod.billingCount")}
+                    <a
+                      href="/docs/subscriptions#charge-count"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title={t("prod.subscriptionDocs")}
+                      className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 text-[11px] font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                    >
+                      ?
+                    </a>
+                  </span>
                   <select
                     value={typeof form.subscription_charges === "number" ? "fixed" : "infinite"}
                     onChange={(e) =>
@@ -526,7 +548,18 @@ export default function ProductEditor({ productId }: { productId?: string }) {
                   </label>
                 )}
                 <label className="block text-sm font-medium">
-                  {t("prod.scheduleMode")}
+                  <span className="inline-flex items-center gap-2">
+                    {t("prod.scheduleMode")}
+                    <a
+                      href="/docs/subscriptions#schedule-mode"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title={t("prod.subscriptionDocs")}
+                      className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 text-[11px] font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                    >
+                      ?
+                    </a>
+                  </span>
                   <select
                     value={form.schedule_mode || "from_payment"}
                     onChange={(e) => setForm((f) => ({ ...f, schedule_mode: e.target.value }))}
