@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -73,9 +74,9 @@ func (s *Server) adminListWorkspaces(ctx context.Context, _ *mcp.CallToolRequest
 type adminMediaUsageOut struct {
 	WorkspaceID   string `json:"workspace_id"`
 	WorkspaceName string `json:"workspace_name"`
-	Slug      string `json:"slug"`
-	UsedBytes int64  `json:"used_bytes"`
-	QuotaBytes int64 `json:"quota_bytes"`
+	Slug          string `json:"slug"`
+	UsedBytes     int64  `json:"used_bytes"`
+	QuotaBytes    int64  `json:"quota_bytes"`
 }
 
 // adminMediaUsage reports storage usage per workspace (bytes) against the 1GB
@@ -104,12 +105,12 @@ func (s *Server) adminMediaUsage(ctx context.Context, _ *mcp.CallToolRequest, _ 
 // ── admin_list_sales ────────────────────────────────────────────────────────
 
 type adminListSalesIn struct {
-	DateFrom string `json:"date_from,omitempty" jsonschema:"Optional — tarikh mula (YYYY-MM-DD, inklusif)"`
-	DateTo   string `json:"date_to,omitempty" jsonschema:"Optional — tarikh tamat (YYYY-MM-DD, inklusif)"`
-	WorkspaceID  string `json:"workspace_id,omitempty" jsonschema:"Optional — hadkan kepada satu workspace (id dari admin_list_workspaces)"`
-	Status   string `json:"status,omitempty" jsonschema:"Optional — pending|paid|confirmed|failed|cancelled"`
-	Page     int    `json:"page,omitempty" jsonschema:"Optional — muka surat (mulai 1)"`
-	Limit    int    `json:"limit,omitempty" jsonschema:"Optional — had setiap muka (1-100, lalai 20)"`
+	DateFrom    string `json:"date_from,omitempty" jsonschema:"Optional — tarikh mula (YYYY-MM-DD, inklusif)"`
+	DateTo      string `json:"date_to,omitempty" jsonschema:"Optional — tarikh tamat (YYYY-MM-DD, inklusif)"`
+	WorkspaceID string `json:"workspace_id,omitempty" jsonschema:"Optional — hadkan kepada satu workspace (id dari admin_list_workspaces)"`
+	Status      string `json:"status,omitempty" jsonschema:"Optional — pending|paid|confirmed|failed|cancelled"`
+	Page        int    `json:"page,omitempty" jsonschema:"Optional — muka surat (mulai 1)"`
+	Limit       int    `json:"limit,omitempty" jsonschema:"Optional — had setiap muka (1-100, lalai 20)"`
 }
 
 type adminSaleOut struct {
@@ -175,7 +176,7 @@ func (s *Server) adminListSales(ctx context.Context, _ *mcp.CallToolRequest, in 
 		out = append(out, adminSaleOut{
 			RefCode: sl.RefCode, Status: sl.Status, TotalSen: sl.TotalSen,
 			SaleType: sl.SaleType, Client: sl.Client.FullName, FormID: sl.FormID,
-			CreatedAt: sl.CreatedAt.UTC().Format(time.RFC3339),
+			CreatedAt:   sl.CreatedAt.UTC().Format(time.RFC3339),
 			RefundedSen: sl.RefundedSen, OutstandingSen: sl.OutstandingSen(),
 			RefundStatus: sl.RefundStatus(),
 		})
@@ -342,4 +343,85 @@ func (s *Server) adminSystemHealth(ctx context.Context, _ *mcp.CallToolRequest, 
 		out.QueueNote = "queue tidak dikonfigurasi (dev)"
 	}
 	return nil, out, nil
+}
+
+// ── admin_dead_letter_events / admin_requeue_dead_letter_event (issue #574) ──
+
+type adminDeadLetterEventsIn struct {
+	Limit int `json:"limit,omitempty" jsonschema:"Optional — had (1-500, lalai 100)"`
+}
+
+type adminDeadLetterEventOut struct {
+	DedupKey  string `json:"dedup_key"`
+	Source    string `json:"source"`
+	EventType string `json:"event_type"`
+	Attempts  int    `json:"attempts"`
+	LastError string `json:"last_error"`
+	CreatedAt string `json:"created_at"`
+	DeadSince string `json:"dead_since"`
+}
+
+// adminDeadLetterEvents lists inbound callback events parked as dead letters.
+// Super-admin only, read-only, audited.
+//
+// Before #574 there was no way to see these at all: a parked event could only be
+// found by querying the database, so a callback that was never processed was
+// invisible to the operator.
+func (s *Server) adminDeadLetterEvents(ctx context.Context, _ *mcp.CallToolRequest, in adminDeadLetterEventsIn) (*mcp.CallToolResult, map[string]any, error) {
+	if err := s.adminGate(ctx, "admin.dead_letter_events"); err != nil {
+		return nil, nil, err
+	}
+	if s.deps.WebhookEvents == nil {
+		return nil, nil, errors.New("store peristiwa webhook tidak dikonfigurasi")
+	}
+	events, err := s.deps.WebhookEvents.ListDead(ctx, in.Limit)
+	if err != nil {
+		return nil, nil, err
+	}
+	out := make([]adminDeadLetterEventOut, 0, len(events))
+	for _, e := range events {
+		out = append(out, adminDeadLetterEventOut{
+			DedupKey:  e.DedupKey,
+			Source:    e.Source,
+			EventType: e.EventType,
+			Attempts:  e.Attempts,
+			LastError: e.LastError,
+			CreatedAt: e.CreatedAt.UTC().Format(time.RFC3339),
+			DeadSince: e.DeadSince.UTC().Format(time.RFC3339),
+		})
+	}
+	return nil, map[string]any{"items": out, "total": len(out)}, nil
+}
+
+type adminRequeueDeadLetterEventIn struct {
+	DedupKey string `json:"dedup_key" jsonschema:"Wajib — dedup_key peristiwa dari admin_dead_letter_events"`
+}
+
+// adminRequeueDeadLetterEvent revives a parked event so the replay retries it.
+// Super-admin only, audited.
+//
+// The attempt counter is reset by the store, so the event is not buried again by
+// the same sweep pass before it has had a chance to run.
+func (s *Server) adminRequeueDeadLetterEvent(ctx context.Context, _ *mcp.CallToolRequest, in adminRequeueDeadLetterEventIn) (*mcp.CallToolResult, map[string]any, error) {
+	if err := s.adminGate(ctx, "admin.requeue_dead_letter_event"); err != nil {
+		return nil, nil, err
+	}
+	if s.deps.WebhookEvents == nil {
+		return nil, nil, errors.New("store peristiwa webhook tidak dikonfigurasi")
+	}
+	if strings.TrimSpace(in.DedupKey) == "" {
+		return nil, nil, errors.New("dedup_key wajib diisi")
+	}
+	ok, err := s.deps.WebhookEvents.RequeueDead(ctx, in.DedupKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !ok {
+		return nil, nil, errors.New("peristiwa tidak dijumpai atau bukan dalam keadaan dead")
+	}
+	return nil, map[string]any{
+		"requeued":  true,
+		"dedup_key": in.DedupKey,
+		"note":      "peristiwa akan dicuba semula oleh sweep replay",
+	}, nil
 }

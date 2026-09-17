@@ -25,12 +25,12 @@ type Deps struct {
 	Products *dbstore.ProductStore
 	// Issue #151: product variations (per-variation image/price/stock).
 	ProductVariations *dbstore.ProductVariationStore
-	Sales    *dbstore.SaleStore
-	Subs     *dbstore.SubscriptionStore
-	Keys     *dbstore.APIKeyStore
-	Forms    *dbstore.FormStore
-	Webhooks *dbstore.WebhookStore
-	Workspaces   *dbstore.WorkspaceStore
+	Sales             *dbstore.SaleStore
+	Subs              *dbstore.SubscriptionStore
+	Keys              *dbstore.APIKeyStore
+	Forms             *dbstore.FormStore
+	Webhooks          *dbstore.WebhookStore
+	Workspaces        *dbstore.WorkspaceStore
 	// Issue #161: workspace membership + invites (MCP parity tools).
 	WorkspaceMembers *dbstore.WorkspaceMemberStore
 	// Issue #444: affiliate marketing.
@@ -45,6 +45,9 @@ type Deps struct {
 	// Issue #106: SES delivery-event log, for the per-sale email status tool.
 	// Nil → the tool returns an empty status.
 	EmailDeliveryEvents *dbstore.EmailDeliveryEventStore
+	// Issue #574: inbound callback events parked as dead letters. Nil → the
+	// admin dead-letter tools error.
+	WebhookEvents *dbstore.WebhookEventStore
 	// Issue #171: response-only form submissions (list_form_submissions tool).
 	// Nil → the tool errors.
 	Submissions *dbstore.SubmissionStore

@@ -284,3 +284,74 @@ func (s *WebhookEventStore) BuryExhausted(ctx context.Context, lastError string)
 	}
 	return tag.RowsAffected(), nil
 }
+
+// DeadLetterEvent is a parked event as an operator sees it (issue #574).
+type DeadLetterEvent struct {
+	ID        string
+	Source    string
+	EventType string
+	DedupKey  string
+	Attempts  int
+	LastError string
+	CreatedAt time.Time
+	DeadSince time.Time
+}
+
+// ListDead returns events parked as dead, newest first (issue #574).
+//
+// Before this, a buried event could only be found by querying the database:
+// nothing in the API or the MCP surface read webhook_events at all, so the #569
+// fix moved the failure from noisy to silent. This makes the dead letters — and
+// the reason each was parked — visible to an operator.
+func (s *WebhookEventStore) ListDead(ctx context.Context, limit int) ([]*DeadLetterEvent, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT id::text, source, COALESCE(event_type,''), dedup_key, attempts,
+		        COALESCE(last_error,''), created_at, updated_at
+		   FROM webhook_events
+		  WHERE status = $1
+		  ORDER BY updated_at DESC
+		  LIMIT $2`,
+		WebhookEventDead, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*DeadLetterEvent
+	for rows.Next() {
+		e := &DeadLetterEvent{}
+		if err := rows.Scan(&e.ID, &e.Source, &e.EventType, &e.DedupKey,
+			&e.Attempts, &e.LastError, &e.CreatedAt, &e.DeadSince); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// RequeueDead revives a parked event so the replay retries it, and reports
+// whether a row was actually revived (issue #574).
+//
+// The attempt counter is reset deliberately. The sweep buries BEFORE it
+// reclaims, so an event revived while still at or over MaxReplayAttempts would
+// be buried again in the same pass without ever being replayed — the requeue
+// would look like it worked and do nothing. last_error is cleared with it so a
+// later failure records its own reason rather than inheriting the old one.
+//
+// Only a 'dead' event may be revived: anything else is either in flight or
+// already settled.
+func (s *WebhookEventStore) RequeueDead(ctx context.Context, dedupKey string) (bool, error) {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE webhook_events
+		    SET status=$1, attempts=0, last_error=NULL, updated_at=now()
+		  WHERE dedup_key=$2
+		    AND status=$3
+		    AND processed_at IS NULL`,
+		WebhookEventPending, dedupKey, WebhookEventDead)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}

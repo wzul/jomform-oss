@@ -569,6 +569,14 @@ func (s *Server) registerTools() {
 		Description: "Status penghantaran emel merentas SEMUA workspace (delivered/bounce/complaint/open/click), boleh tapis sale_ref/event_type/form_id. Super-admin sahaja; read-only; diaudit.",
 	}, s.adminEmailDeliveries)
 	addTool(s, &mcp.Tool{
+		Name:        "admin_dead_letter_events",
+		Description: "Senarai peristiwa callback masuk yang di-park sebagai dead letter (issue #574): dedup_key, event_type, bilangan cubaan, sebab, masa. Selepas #569 peristiwa yang tak boleh diproses di-park sebagai 'dead' dan BERHENTI dicuba — sebelum ini ia tidak kelihatan sama sekali (tiada MCP/REST membaca webhook_events). Super-admin sahaja; read-only; diaudit.",
+	}, s.adminDeadLetterEvents)
+	addTool(s, &mcp.Tool{
+		Name:        "admin_requeue_dead_letter_event",
+		Description: "Hidupkan semula peristiwa dead letter supaya sweep replay mencubanya lagi (issue #574), selepas punca dibetulkan. dedup_key dari admin_dead_letter_events. Kiraan cubaan di-reset supaya ia tidak di-park semula oleh sweep yang sama sebelum sempat berjalan. Super-admin sahaja; diaudit.",
+	}, s.adminRequeueDeadLetterEvent)
+	addTool(s, &mcp.Tool{
 		Name:        "admin_system_health",
 		Description: "Kesihatan sistem: uptime, bilangan ralat MCP terkini (24j), kedalaman queue emel. Super-admin sahaja; read-only; diaudit.",
 	}, s.adminSystemHealth)

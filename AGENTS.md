@@ -66,7 +66,9 @@ Parity checklist (dashboard → MCP):
 - Domain ACME email (#398) → `get_domain_tls_email`, `set_domain_tls_email`
 - Super-admin platform-wide monitoring (#386, gated on #385 super-admin) →
   `admin_list_workspaces`, `admin_media_usage`, `admin_list_sales`,
-  `admin_spam_queue`, `admin_email_deliveries`, `admin_system_health`
+  `admin_spam_queue`, `admin_email_deliveries`, `admin_system_health`,
+  `admin_dead_letter_events`, `admin_requeue_dead_letter_event`
+  (dead-letter visibility + requeue for parked inbound callbacks — issue #574)
 - Affiliate marketing (#444) → `create_affiliate`, `list_affiliates`,
   `get_affiliate_sales`, `set_affiliate_commission`
 - Realtime notifications (#447) → `get_realtime_status`, `set_realtime_sound`

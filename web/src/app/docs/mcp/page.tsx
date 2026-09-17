@@ -307,6 +307,8 @@ const TOOL_GROUPS: { group: string; tools: { name: string; desc: string }[] }[] 
       { name: "admin_list_sales", desc: "Senarai jualan merentas SEMUA workspace, boleh tapis (date_from/date_to, workspace_id, status). Super-admin sahaja; read-only; diaudit." },
       { name: "admin_spam_queue", desc: "Senarai semua item spam (submission + jualan) merentas semua workspace. Super-admin sahaja; read-only; diaudit." },
       { name: "admin_email_deliveries", desc: "Status penghantaran emel merentas SEMUA workspace (delivered/bounce/complaint/open/click), boleh tapis sale_ref/event_type/form_id. Super-admin sahaja; read-only; diaudit." },
+      { name: "admin_dead_letter_events", desc: "Senarai peristiwa callback masuk yang di-park sebagai dead letter (issue #574): dedup_key, event_type, bilangan cubaan, sebab dan masa. Selepas #569 peristiwa yang tak boleh diproses di-park 'dead' dan berhenti dicuba — sebelum ini ia tidak kelihatan langsung. Super-admin sahaja; read-only; diaudit." },
+      { name: "admin_requeue_dead_letter_event", desc: "Hidupkan semula peristiwa dead letter supaya sweep replay mencubanya lagi (issue #574), selepas punca dibetulkan. Kiraan cubaan di-reset supaya ia tidak di-park semula oleh sweep yang sama. Super-admin sahaja; diaudit." },
       { name: "admin_system_health", desc: "Kesihatan sistem: uptime, bilangan ralat MCP terkini (24j), kedalaman queue emel. Super-admin sahaja; read-only; diaudit." },
     ],
   },

@@ -336,6 +336,7 @@ func main() {
 			Events:           deps.Events,    // issue #92: list_events tool
 			// Issue #106: per-sale receipt email status tool.
 			EmailDeliveryEvents: deps.EmailDeliveryEvents,
+			WebhookEvents:       events,
 			// Issue #171: response-only form submissions tool.
 			Submissions: submissionsStore,
 			// Issue #193: per-form notification rules tool.
