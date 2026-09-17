@@ -31,6 +31,10 @@
 //      legend readable, so the reused keys are checked here explicitly.
 //   4. The page actually passes the legend to the cards: a fix that is never
 //      wired into the render is dead code behind a green suite.
+//   5. Each legend `key` names the `field` it sits beside. The order check pins
+//      the FIELDS only, so a key<->field swap keeps the field order intact and
+//      passes while every number is labelled with the wrong name — the exact
+//      mispairing this card calls "worse than no label".
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -57,6 +61,12 @@ const goGrowthCounts = readFileSync(
   "utf8",
 ).match(/type GrowthCounts struct \{([\s\S]*?)\n\}/);
 
+// The field names as the API serialises them (`json:"..."`), in struct order.
+// Derived from the Go source so the pairing expectation cannot be updated by
+// copying the production array — which would make the test agree with the bug.
+const goGrowthFields = () =>
+  [...goGrowthCounts![1].matchAll(/^\s*(\w+)\s+int64\s+`json:"(\w+)"/gm)].map((m) => m[2]);
+
 // A distinct value per field, so a mis-ordered or dropped field is visible.
 const SAMPLE: GrowthCounts = { workspaces: 1, forms: 2, products: 3, sales: 4, users: 5 };
 
@@ -69,15 +79,58 @@ test("the API's GrowthCounts struct was located (the order check cannot pass vac
 });
 
 test("the legend order matches the API's GrowthCounts field order", () => {
-  const goFields = [...goGrowthCounts![1].matchAll(/^\s*(\w+)\s+int64\s+`json:"(\w+)"/gm)].map(
-    (m) => m[2],
-  );
+  const goFields = goGrowthFields();
   assert.deepEqual(
     GROWTH_LEGEND.map((e) => e.field),
     goFields,
     "the legend order drifted from api/internal/dbstore/admin_overview.go GrowthCounts — " +
       "each number would then sit above the wrong label",
   );
+});
+
+test("each legend key names the field it sits beside (a key<->field swap is caught)", () => {
+  // The order test above pins the FIELDS only, so swapping two `key` values
+  // leaves the field order intact and passes while every number carries the
+  // wrong name — the mispairing this card calls "worse than no label":
+  //   { field: "sales", key: "admin.users" },
+  //   { field: "users", key: "admin.sales" },
+  // Pin the pairing itself. Both halves of the expectation come from OUTSIDE
+  // GROWTH_LEGEND, so neither can be edited into agreement with a mispairing:
+  //   - the field's JSON name in the Go struct (the field is what the number IS)
+  //   - the key's own English label (the key is what the label SAYS)
+  const goFields = goGrowthFields();
+  const valueParts = growthValue(SAMPLE).split(" / ");
+  assert.equal(GROWTH_LEGEND.length, goFields.length);
+
+  for (const [i, entry] of GROWTH_LEGEND.entries()) {
+    const { field, key } = entry;
+    const label = (DICT[key] as Record<string, string>).en;
+
+    // The key must be the field's own key in the shared admin.* namespace.
+    assert.equal(
+      key,
+      `admin.${field}`,
+      `legend entry ${i} pairs field "${field}" with key "${key}" — ` +
+        `the number for "${field}" would be labelled "${label}"`,
+    );
+
+    // ...and that key's label must actually name the field. This is the
+    // assertion the order check cannot make: it fails on the swap above
+    // because "Users" does not name the `sales` count.
+    assert.equal(
+      label.toLowerCase(),
+      field,
+      `the legend labels the "${field}" position with "${label}", which does not name it`,
+    );
+
+    // The number in that position is the field's own count, so the pair
+    // (number, label) on the rendered card is (field's count, field's name).
+    assert.equal(
+      valueParts[i],
+      String(SAMPLE[field]),
+      `position ${i} of the value line is not the "${field}" count`,
+    );
+  }
 });
 
 test("the legend names five distinct entities — no bare `0 / 0 / 0 / 0 / 0`", () => {
