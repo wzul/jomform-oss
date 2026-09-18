@@ -874,11 +874,25 @@ func (h *RESTHandlers) bulkForms(w http.ResponseWriter, r *http.Request, actx *A
 	}
 
 	var updated int64
+	var skipped []string
 	switch in.Action {
 	case "publish", "draft":
 		status := "published"
 		if in.Action == "draft" {
 			status = "draft"
+		}
+		// Issue #594: a bulk publish skips templates that carry no category or
+		// no description text block (they would reach the gallery as a bare
+		// title), while still publishing the ordinary forms in the same batch.
+		// Collect the skipped ids so the caller is told, instead of the skip
+		// looking like a no-op.
+		if status == dbstore.FormStatusPublished {
+			var err error
+			skipped, err = h.Forms.BlockedGalleryTemplates(r.Context(), actx.Account.ID, ids)
+			if err != nil {
+				respondErr(w, r, err)
+				return
+			}
 		}
 		tag, err := h.Forms.SetStatusMany(r.Context(), actx.Account.ID, ids, status)
 		if err != nil {
@@ -896,9 +910,15 @@ func (h *RESTHandlers) bulkForms(w http.ResponseWriter, r *http.Request, actx *A
 	}
 	// Issue #92: audit bulk form action.
 	h.recordEvent(r, actx, h.sessionOwnerID(r), "form.bulk_"+in.Action, map[string]any{
-		"action": in.Action, "ids": ids, "updated": updated,
+		"action": in.Action, "ids": ids, "updated": updated, "skipped": len(skipped),
 	})
-	respond(w, http.StatusOK, map[string]int64{"updated": updated})
+	out := map[string]any{"updated": updated}
+	if len(skipped) > 0 {
+		out["skipped"] = skipped
+		out["skipped_reason"] = "template perlu category dan satu blok text (description) " +
+			"sebelum diterbitkan ke galeri"
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // ─── API keys ────────────────────────────────────────────────────────────────

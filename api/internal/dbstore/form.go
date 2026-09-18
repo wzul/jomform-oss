@@ -57,6 +57,13 @@ type Form struct {
 // ErrFormNotFound indicates a missing form.
 var ErrFormNotFound = errors.New("form not found")
 
+// ErrTemplateGalleryMetadata indicates a template is being published into the
+// gallery without the two fields every gallery card renders (issue #594): a
+// category and a text block whose value is the description line. The gallery
+// endpoint reads config.category and the FIRST text block, so a template
+// published without them shows up in the New-form picker as a bare title.
+var ErrTemplateGalleryMetadata = errors.New("template needs a category and a description text block")
+
 // validFormStatus reports whether status is one of the accepted form statuses
 // (draft | private | published | unlisted).
 func validFormStatus(status string) bool {
@@ -141,45 +148,109 @@ func (s *FormStore) Update(ctx context.Context, accountID, id, title string, con
 	return nil
 }
 
+// galleryMetadataMissingSQL is the predicate that reports a template row as
+// unfit for the gallery: no config.category, or no text block carrying a value
+// (issue #594). The gallery endpoint and the picker read exactly these two
+// things, so a row failing it would render as a bare title.
+const galleryMetadataMissingSQL = `
+	COALESCE(config->>'category', '') = ''
+	OR NOT EXISTS (
+	     SELECT 1 FROM jsonb_array_elements(COALESCE(config->'blocks', '[]'::jsonb)) b
+	      WHERE b->>'type' = 'text' AND COALESCE(b->>'value', '') <> ''
+	   )`
+
+// setStatusSQL performs a status change and, in the same round trip, reports
+// whether the row exists and whether the gallery-metadata rule blocks it
+// (issue #594). Publishing a template with neither a category nor a description
+// text block is refused rather than silently producing a card with no category
+// and no description — the defect this issue is about.
+//
+// The UPDATE is written with a CTE rather than a WHERE clause so the caller can
+// tell "no such form" (0 rows matched) apart from "refused" (matched but
+// blocked): a WHERE clause would collapse both into 0 rows affected and the
+// caller would report "not found" for a row it was looking straight at.
+const setStatusSQL = `
+	WITH target AS (
+	  SELECT id, is_template, config FROM forms
+	   WHERE id = $2 AND account_id = $1 AND deleted_at IS NULL
+	),
+	blocked AS (
+	  SELECT id FROM target
+	   WHERE is_template AND $3 = 'published' AND (` + galleryMetadataMissingSQL + `)
+	),
+	updated AS (
+	  UPDATE forms SET status = $3, updated_at = now()
+	   WHERE id IN (SELECT id FROM target)
+	     AND id NOT IN (SELECT id FROM blocked)
+	   RETURNING id
+	)
+	SELECT (SELECT count(*) FROM target), (SELECT count(*) FROM blocked)`
+
+// setStatusWithPasswordSQL is setStatusSQL with the access password written in
+// the same statement (issue #176: the password and the status must never drift
+// apart). Same existence/blocked reporting as setStatusSQL.
+const setStatusWithPasswordSQL = `
+	WITH target AS (
+	  SELECT id, is_template, config FROM forms
+	   WHERE id = $2 AND account_id = $1 AND deleted_at IS NULL
+	),
+	blocked AS (
+	  SELECT id FROM target
+	   WHERE is_template AND $3 = 'published' AND (` + galleryMetadataMissingSQL + `)
+	),
+	updated AS (
+	  UPDATE forms SET status = $3, access_password = $4, updated_at = now()
+	   WHERE id IN (SELECT id FROM target)
+	     AND id NOT IN (SELECT id FROM blocked)
+	   RETURNING id
+	)
+	SELECT (SELECT count(*) FROM target), (SELECT count(*) FROM blocked)`
+
+// classifyStatusWrite turns the two counts into the store's error contract.
+func classifyStatusWrite(matched, blocked int64) error {
+	switch {
+	case matched == 0:
+		return ErrFormNotFound
+	case blocked > 0:
+		return ErrTemplateGalleryMetadata
+	}
+	return nil
+}
+
 // SetStatus sets a form's status (draft | private | published | unlisted).
 // Soft-deleted forms keep their status. When moving to 'private' the caller
 // must have set an access password first (SetAccessPassword) — a private form
 // with no password would be permanently locked.
+//
+// Publishing a template (is_template) requires a category and a text block
+// (issue #594); without them it returns ErrTemplateGalleryMetadata instead of
+// putting an unlabelled card in the gallery.
 func (s *FormStore) SetStatus(ctx context.Context, accountID, id, status string) error {
 	if !validFormStatus(status) {
 		return errors.New("status mesti draft|private|published|unlisted")
 	}
-	tag, err := s.pool.Exec(ctx,
-		`UPDATE forms SET status=$3, updated_at=now() WHERE id=$2 AND account_id=$1 AND deleted_at IS NULL`,
-		accountID, id, status)
-	if err != nil {
+	var matched, blocked int64
+	if err := s.pool.QueryRow(ctx, setStatusSQL, accountID, id, status).Scan(&matched, &blocked); err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
-		return ErrFormNotFound
-	}
-	return nil
+	return classifyStatusWrite(matched, blocked)
 }
 
 // SetStatusWithPassword sets a form's status AND its access password in one
 // statement (issue #176). Used when publishing a private form so the password
 // and status can never drift apart. passwordHash is an argon2id PHC string;
-// pass "" to clear the password (e.g. when leaving private status).
+// pass "" to clear the password (e.g. when leaving private status). The
+// gallery-metadata rule of SetStatus applies unchanged (issue #594).
 func (s *FormStore) SetStatusWithPassword(ctx context.Context, accountID, id, status, passwordHash string) error {
 	if !validFormStatus(status) {
 		return errors.New("status mesti draft|private|published|unlisted")
 	}
-	tag, err := s.pool.Exec(ctx,
-		`UPDATE forms SET status=$3, access_password=$4, updated_at=now()
-		 WHERE id=$2 AND account_id=$1 AND deleted_at IS NULL`,
-		accountID, id, status, passwordHash)
-	if err != nil {
+	var matched, blocked int64
+	if err := s.pool.QueryRow(ctx, setStatusWithPasswordSQL,
+		accountID, id, status, passwordHash).Scan(&matched, &blocked); err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
-		return ErrFormNotFound
-	}
-	return nil
+	return classifyStatusWrite(matched, blocked)
 }
 
 // SetAccessPassword stores (or clears, when hash is "") the argon2id PHC hash
@@ -623,9 +694,55 @@ func (s *FormStore) SoftDeleteMany(ctx context.Context, accountID string, formID
 	return tag.RowsAffected(), nil
 }
 
+// BlockedGalleryTemplates returns the ids in formIDs that a publish would skip
+// because they are templates without a category or a description text block
+// (issue #594). The bulk form action uses it to tell the caller which ids were
+// left behind, so a skip is reported instead of looking like a silent no-op.
+func (s *FormStore) BlockedGalleryTemplates(ctx context.Context, accountID string, formIDs []string) ([]string, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id FROM forms
+		  WHERE account_id=$1 AND deleted_at IS NULL AND id = ANY($2)
+		    AND is_template AND (`+galleryMetadataMissingSQL+`)`,
+		accountID, formIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 // SetStatusMany publishes/unpublishes many forms at once; returns how many
 // rows were updated (account-scoped, live forms only).
+//
+// Publishing skips any template missing its gallery metadata rather than
+// failing the whole batch (issue #594): the other ids in a bulk action are
+// ordinary forms and must still be honoured. Rows skipped this way are counted
+// by TemplateStatusBlocked, which the handler reports back to the caller.
 func (s *FormStore) SetStatusMany(ctx context.Context, accountID string, formIDs []string, status string) (int64, error) {
+	if !validFormStatus(status) {
+		return 0, errors.New("status mesti draft|private|published|unlisted")
+	}
+	// galleryMetadataMissingSQL refers to `forms` columns via bare names, so
+	// the UPDATE's table must stay named `forms` (no alias).
+	if status == FormStatusPublished {
+		tag, err := s.pool.Exec(ctx,
+			`UPDATE forms SET status=$3, updated_at=now()
+			 WHERE account_id=$1 AND deleted_at IS NULL AND id = ANY($2)
+			   AND NOT (is_template AND (`+galleryMetadataMissingSQL+`))`,
+			accountID, formIDs, status)
+		if err != nil {
+			return 0, err
+		}
+		return tag.RowsAffected(), nil
+	}
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE forms SET status=$3, updated_at=now()
 		 WHERE account_id=$1 AND deleted_at IS NULL AND id = ANY($2)`,

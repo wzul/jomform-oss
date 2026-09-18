@@ -71,7 +71,7 @@ const FEATURES: { title: string; body: string }[] = [
   },
   {
     title: "Templates",
-    body: "Start a new form from the built-in template gallery (order forms, booking, donation, contact, survey and more), or build your own: save any form as a reusable template from the builder or the Templates page. Your templates are private to your workspace — list, rename, edit and delete them, then clone one into a new draft whenever you need it. AI agents can manage the same templates over MCP (list_own_templates, create_template, update_template, delete_template).",
+    body: "Start a new form from the built-in template gallery (order forms, booking, donation, contact, survey and more), or build your own: save any form as a reusable template from the builder or the Templates page. Every gallery card shows a category and a one-line description, so a template always reads as more than a title; those two fields live in the form's own config (the category and the first text block), which also means a template you write yourself gets the same treatment — set a category and put a short intro line in a Text block. Your templates are private to your workspace — list, rename, edit and delete them, then clone one into a new draft whenever you need it. Publishing a template into the gallery requires both fields: a template without them is refused with a clear message rather than appearing as a bare title, and a bulk publish skips such a template while still publishing the other forms you selected. AI agents can manage the same templates over MCP (list_own_templates, create_template, update_template, delete_template). See the customization guide for a step-by-step.",
   },
   {
     title: "MCP (AI agents)",

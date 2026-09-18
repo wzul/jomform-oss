@@ -31,6 +31,10 @@ func errorClass(err error) string {
 		return "conflict"
 	case errors.Is(err, dbstore.ErrOutOfStock):
 		return "conflict"
+	case errors.Is(err, dbstore.ErrTemplateGalleryMetadata):
+		// Issue #594: refused for a reason the caller can fix, so it is a
+		// validation error, not an internal one.
+		return "validation"
 	case errors.Is(err, payments.ErrNotConfigured):
 		return "not_configured"
 	default:
@@ -71,6 +75,12 @@ func respondErr(w http.ResponseWriter, r *http.Request, err error) {
 		writeErr(w, http.StatusConflict, "emel sudah didaftarkan")
 	case errors.Is(err, dbstore.ErrOutOfStock):
 		writeErr(w, http.StatusConflict, "produk telah habis (out of stock)")
+	case errors.Is(err, dbstore.ErrTemplateGalleryMetadata):
+		// Issue #594: publishing a template into the gallery needs the two
+		// fields its card renders. Refused, with the reason, rather than
+		// shipping a card with no category and no description.
+		writeErr(w, http.StatusBadRequest,
+			"template perlu category dan satu blok text (description) sebelum diterbitkan ke galeri")
 	case errors.Is(err, payments.ErrNotConfigured):
 		writeErr(w, http.StatusBadRequest, "chip belum dikonfigurasi akaun ini")
 	default:
