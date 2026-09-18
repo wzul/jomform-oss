@@ -40,7 +40,7 @@ type getFormNotificationsIn struct {
 // getFormNotifications lists a form's notification rules (issue #193).
 func (s *Server) getFormNotifications(
 	ctx context.Context, _ *mcp.CallToolRequest, in getFormNotificationsIn,
-) (*mcp.CallToolResult, []notificationOut, error) {
+) (*mcp.CallToolResult, *listOutput[notificationOut], error) {
 	if s.deps.Forms == nil || s.deps.Notifications == nil {
 		return nil, nil, errors.New("notifications tidak tersedia")
 	}
@@ -59,7 +59,7 @@ func (s *Server) getFormNotifications(
 	for _, n := range list {
 		out = append(out, toNotificationOut(n))
 	}
-	return nil, out, nil
+	return nil, newListOut(out), nil
 }
 
 // notificationIn is one notification rule in set_form_notifications.

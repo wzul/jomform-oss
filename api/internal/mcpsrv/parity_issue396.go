@@ -68,7 +68,7 @@ type domainOut struct {
 	TLSEmail string `json:"tls_email,omitempty"`
 }
 
-func (s *Server) listDomains(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, []domainOut, error) {
+func (s *Server) listDomains(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, *listOutput[domainOut], error) {
 	acc, err := s.accountAndScope(ctx, false)
 	if err != nil {
 		return nil, nil, err
@@ -85,7 +85,7 @@ func (s *Server) listDomains(ctx context.Context, _ *mcp.CallToolRequest, _ empt
 		out = append(out, domainOut{ID: d.ID, Domain: d.Domain, Provider: d.Provider, Verified: d.Verified, AutoCNAME: d.AutoCNAME,
 			TLSMode: d.TLSMode, TLSStatus: d.TLSStatus, TLSError: d.TLSError, TLSEmail: d.TLSEmail})
 	}
-	return nil, out, nil
+	return nil, newListOut(out), nil
 }
 
 type addDomainIn struct {
@@ -520,7 +520,7 @@ type passkeyOut struct {
 	CreatedAt string `json:"created_at,omitempty"`
 }
 
-func (s *Server) listPasskeys(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, []passkeyOut, error) {
+func (s *Server) listPasskeys(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, *listOutput[passkeyOut], error) {
 	if s.deps.Passkeys == nil {
 		return nil, nil, errors.New("passkey store tidak tersedia")
 	}
@@ -536,7 +536,7 @@ func (s *Server) listPasskeys(ctx context.Context, _ *mcp.CallToolRequest, _ emp
 	for _, c := range creds {
 		out = append(out, passkeyOut{ID: base64URLMCP(c.ID)})
 	}
-	return nil, out, nil
+	return nil, newListOut(out), nil
 }
 
 type deletePasskeyIn struct {
@@ -571,7 +571,7 @@ type socialAccountOut struct {
 	LinkedAt string `json:"linked_at"`
 }
 
-func (s *Server) listSocialAccounts(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, []socialAccountOut, error) {
+func (s *Server) listSocialAccounts(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, *listOutput[socialAccountOut], error) {
 	if s.deps.Users == nil {
 		return nil, nil, errors.New("perkhidmatan tidak tersedia")
 	}
@@ -590,7 +590,7 @@ func (s *Server) listSocialAccounts(ctx context.Context, _ *mcp.CallToolRequest,
 			Picture: l.Picture, LinkedAt: l.CreatedAt.UTC().Format(time.RFC3339),
 		})
 	}
-	return nil, out, nil
+	return nil, newListOut(out), nil
 }
 
 type unlinkSocialIn struct {
@@ -734,7 +734,7 @@ type trustDeviceMCPOut struct {
 }
 
 // listTrustedDevices (issue #454): list the account owner's trusted devices.
-func (s *Server) listTrustedDevices(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, []trustDeviceMCPOut, error) {
+func (s *Server) listTrustedDevices(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, *listOutput[trustDeviceMCPOut], error) {
 	if s.deps.Sessions == nil {
 		return nil, nil, errors.New("perkhidmatan tidak tersedia")
 	}
@@ -753,7 +753,7 @@ func (s *Server) listTrustedDevices(ctx context.Context, _ *mcp.CallToolRequest,
 			FirstSeen: d.FirstSeen, ExpiresAt: d.ExpiresAt,
 		})
 	}
-	return nil, out, nil
+	return nil, newListOut(out), nil
 }
 
 type revokeTrustedDeviceIn struct {
@@ -802,7 +802,7 @@ type systemSettingOut struct {
 	Value string `json:"value"`
 }
 
-func (s *Server) getSystemSettings(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, []systemSettingOut, error) {
+func (s *Server) getSystemSettings(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, *listOutput[systemSettingOut], error) {
 	if s.deps.SystemSettings == nil {
 		return nil, nil, errors.New("system settings tidak tersedia")
 	}
@@ -814,7 +814,7 @@ func (s *Server) getSystemSettings(ctx context.Context, _ *mcp.CallToolRequest, 
 	for _, kv := range all {
 		out = append(out, systemSettingOut{Key: kv["key"], Value: kv["value"]})
 	}
-	return nil, out, nil
+	return nil, newListOut(out), nil
 }
 
 type setSystemSettingIn struct {

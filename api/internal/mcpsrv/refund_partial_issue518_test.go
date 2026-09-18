@@ -135,7 +135,7 @@ func TestIssue518MCPRefundPartialRecordsAmountAndStaysPartial(t *testing.T) {
 	if err != nil {
 		t.Fatalf("refund_sale (partial): %v", err)
 	}
-	res, _ := out.(map[string]any)
+	res := map[string]any(out)
 	if res["refunded_sen"] != int64(1000) {
 		t.Errorf("refund_sale refunded_sen = %v, want 1000", res["refunded_sen"])
 	}
@@ -160,10 +160,14 @@ func TestIssue518MCPRefundPartialRecordsAmountAndStaysPartial(t *testing.T) {
 	}
 
 	// list_sales must show the partial state.
-	_, rows, err := st.srv.listSales(st.ctx, nil, listSalesIn{})
+	_, listed, err := st.srv.listSales(st.ctx, nil, listSalesIn{})
 	if err != nil {
 		t.Fatalf("list_sales: %v", err)
 	}
+	if listed == nil {
+		t.Fatal("list_sales returned no output")
+	}
+	rows := listed.Items
 	var found *saleOut
 	for i := range rows {
 		if rows[i].RefCode == st.refCode {

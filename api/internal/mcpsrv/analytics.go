@@ -32,7 +32,7 @@ type productStatsOut struct {
 
 func (s *Server) formAnalytics(
 	ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn,
-) (*mcp.CallToolResult, []formStatsOut, error) {
+) (*mcp.CallToolResult, *listOutput[formStatsOut], error) {
 	accs, err := s.accountScopes(ctx, false)
 	if err != nil {
 		return nil, nil, err
@@ -54,12 +54,12 @@ func (s *Server) formAnalytics(
 			})
 		}
 	}
-	return nil, out, nil
+	return nil, newListOut(out), nil
 }
 
 func (s *Server) productAnalytics(
 	ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn,
-) (*mcp.CallToolResult, []productStatsOut, error) {
+) (*mcp.CallToolResult, *listOutput[productStatsOut], error) {
 	accs, err := s.accountScopes(ctx, false)
 	if err != nil {
 		return nil, nil, err
@@ -78,5 +78,5 @@ func (s *Server) productAnalytics(
 			})
 		}
 	}
-	return nil, out, nil
+	return nil, newListOut(out), nil
 }

@@ -147,7 +147,7 @@ type listProductVariationsIn struct {
 // image/price/stock) — MCP parity for the dashboard editor (issue #151).
 func (s *Server) listProductVariations(
 	ctx context.Context, _ *mcp.CallToolRequest, in listProductVariationsIn,
-) (*mcp.CallToolResult, []variationOut, error) {
+) (*mcp.CallToolResult, *listOutput[variationOut], error) {
 	acc, err := s.accountAndScope(ctx, false)
 	if err != nil {
 		return nil, nil, err
@@ -160,13 +160,13 @@ func (s *Server) listProductVariations(
 		return nil, nil, fmt.Errorf("produk tidak dijumpai")
 	}
 	if s.deps.ProductVariations == nil {
-		return nil, []variationOut{}, nil
+		return nil, newListOut([]variationOut{}), nil
 	}
 	vs, err := s.deps.ProductVariations.ListByProduct(ctx, in.ProductID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
-	return nil, toVariationOuts(vs), nil
+	return nil, newListOut(toVariationOuts(vs)), nil
 }
 
 // variationOut is the MCP output shape for one product variation.
@@ -873,13 +873,13 @@ func (s *Server) bulkProductsMCP(
 
 func (s *Server) formAnalyticsAlias(
 	ctx context.Context, req *mcp.CallToolRequest, in emptyIn,
-) (*mcp.CallToolResult, []formStatsOut, error) {
+) (*mcp.CallToolResult, *listOutput[formStatsOut], error) {
 	return s.formAnalytics(ctx, req, in)
 }
 
 func (s *Server) productAnalyticsAlias(
 	ctx context.Context, req *mcp.CallToolRequest, in emptyIn,
-) (*mcp.CallToolResult, []productStatsOut, error) {
+) (*mcp.CallToolResult, *listOutput[productStatsOut], error) {
 	return s.productAnalytics(ctx, req, in)
 }
 

@@ -152,7 +152,7 @@ type webhookListIn struct {
 
 func (s *Server) listWebhooksMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in webhookListIn,
-) (*mcp.CallToolResult, []webhookListOut, error) {
+) (*mcp.CallToolResult, *listOutput[webhookListOut], error) {
 	accs, err := s.accountScopes(ctx, true)
 	if err != nil {
 		return nil, nil, err
@@ -168,7 +168,7 @@ func (s *Server) listWebhooksMCP(
 			out = append(out, webhookListOut{ID: w.ID, URL: w.URL, Events: w.Events, Active: w.Active, FormID: w.FormID})
 		}
 	}
-	return nil, out, nil
+	return nil, newListOut(out), nil
 }
 
 type webhookRef struct {
@@ -239,7 +239,7 @@ type webhookDeliveriesIn struct {
 
 func (s *Server) webhookDeliveriesMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in webhookDeliveriesIn,
-) (*mcp.CallToolResult, []map[string]any, error) {
+) (*mcp.CallToolResult, *listOutput[map[string]any], error) {
 	acc, err := s.resolveWebhookAccount(ctx, in.WebhookID)
 	if err != nil {
 		return nil, nil, err
@@ -258,7 +258,7 @@ func (s *Server) webhookDeliveriesMCP(
 	if err == nil && len(dead) > 0 {
 		deliveries = append(deliveries, dead...)
 	}
-	return nil, deliveries, nil
+	return nil, newListOut(deliveries), nil
 }
 
 // retryWebhookDeliveryIn is the input for retry_webhook_delivery.

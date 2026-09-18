@@ -366,6 +366,37 @@ export default function McpReferencePage() {
         </ol>
       </section>
 
+      {/* Every list tool returns the same object envelope. This is documented
+          because a client that validates tools/list rejects the WHOLE list
+          when one tool advertises a non-object output schema, so the shape is
+          a compatibility contract, not an implementation detail. */}
+      <section className="mt-8">
+        <h2 className="text-lg font-semibold text-slate-900">Structured output</h2>
+        <p className="mt-2 text-sm leading-relaxed text-slate-600">
+          Tool results are returned as structured content, and every tool declares the shape of that
+          result in its <code className="rounded bg-slate-100 px-1">outputSchema</code>. All tools
+          declare an <em>object</em> schema, which is what makes the server usable with a client that
+          validates <code className="rounded bg-slate-100 px-1">tools/list</code> strictly.
+        </p>
+        <p className="mt-2 text-sm leading-relaxed text-slate-600">
+          Every listing tool therefore wraps its array in an object: the records are under{" "}
+          <code className="rounded bg-slate-100 px-1">items</code>, and paginated listings also carry{" "}
+          <code className="rounded bg-slate-100 px-1">page</code>,{" "}
+          <code className="rounded bg-slate-100 px-1">limit</code> and{" "}
+          <code className="rounded bg-slate-100 px-1">total</code>. So{" "}
+          <code className="rounded bg-slate-100 px-1">list_products</code> returns{" "}
+          <code className="rounded bg-slate-100 px-1">{`{"items": [...]}`}</code>, not a bare array.
+        </p>
+        <p className="mt-2 text-sm leading-relaxed text-slate-600">
+          Batch tools report their summary next to the per-item outcomes:{" "}
+          <code className="rounded bg-slate-100 px-1">capture_all_pending_sales</code> returns{" "}
+          <code className="rounded bg-slate-100 px-1">
+            {`{"requested", "captured", "failed", "results": [...]}`}
+          </code>
+          . Single-record tools return their fields at the top level of the object.
+        </p>
+      </section>
+
       {TOOL_GROUPS.map((g) => (
         <section key={g.group} className="mt-8">
           <h2 className="text-lg font-semibold text-slate-900">{g.group}</h2>

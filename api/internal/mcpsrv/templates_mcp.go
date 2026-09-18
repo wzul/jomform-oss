@@ -30,7 +30,7 @@ type templateOut struct {
 // same as the REST listTemplates endpoint).
 func (s *Server) listTemplatesMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn,
-) (*mcp.CallToolResult, []templateOut, error) {
+) (*mcp.CallToolResult, *listOutput[templateOut], error) {
 	if s.deps.Forms == nil {
 		return nil, nil, errors.New("forms tidak tersedia")
 	}
@@ -62,7 +62,7 @@ func (s *Server) listTemplatesMCP(
 			Description: desc, Category: cat, Mode: mode, Theme: f.Theme,
 		})
 	}
-	return nil, out, nil
+	return nil, newListOut(out), nil
 }
 
 type useTemplateIn struct {
@@ -145,7 +145,7 @@ type ownTemplateOut struct {
 // listOwnTemplatesMCP returns the account's own templates (issue #457).
 func (s *Server) listOwnTemplatesMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn,
-) (*mcp.CallToolResult, []ownTemplateOut, error) {
+) (*mcp.CallToolResult, *listOutput[ownTemplateOut], error) {
 	acc, err := s.accountAndScope(ctx, false)
 	if err != nil {
 		return nil, nil, err
@@ -165,7 +165,7 @@ func (s *Server) listOwnTemplatesMCP(
 			Config:    f.Config, Theme: f.Theme,
 		})
 	}
-	return nil, out, nil
+	return nil, newListOut(out), nil
 }
 
 type createTemplateIn struct {

@@ -28,7 +28,7 @@ type apiKeyListOut struct {
 // material (hash) is never returned — only id/name/scopes/created_at/last_used.
 func (s *Server) listAPIKeys(
 	ctx context.Context, _ *mcp.CallToolRequest, _ struct{},
-) (*mcp.CallToolResult, []apiKeyListOut, error) {
+) (*mcp.CallToolResult, *listOutput[apiKeyListOut], error) {
 	acc, err := s.accountAndScope(ctx, false) // read scope enough
 	if err != nil {
 		return nil, nil, err
@@ -48,7 +48,7 @@ func (s *Server) listAPIKeys(
 		}
 		out = append(out, row)
 	}
-	return nil, out, nil
+	return nil, newListOut(out), nil
 }
 
 // ── create_api_key ───────────────────────────────────────────────────────────

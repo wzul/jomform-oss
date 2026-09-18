@@ -123,7 +123,7 @@ type workspaceMemberOut struct {
 
 func (s *Server) listWorkspaceMembers(
 	ctx context.Context, _ *mcp.CallToolRequest, in listWorkspaceMembersIn,
-) (*mcp.CallToolResult, []workspaceMemberOut, error) {
+) (*mcp.CallToolResult, *listOutput[workspaceMemberOut], error) {
 	if _, err := s.requireWorkspaceAdmin(ctx, in.WorkspaceID); err != nil {
 		return nil, nil, err
 	}
@@ -139,7 +139,7 @@ func (s *Server) listWorkspaceMembers(
 	for _, m := range members {
 		out = append(out, workspaceMemberOut{UserID: m.UserID, Email: m.Email, Name: m.Name, Role: m.Role})
 	}
-	return nil, out, nil
+	return nil, newListOut(out), nil
 }
 
 // ── update_workspace_member_role ────────────────────────────────────────────────
@@ -213,7 +213,7 @@ type workspaceInviteOut struct {
 
 func (s *Server) listWorkspaceInvites(
 	ctx context.Context, _ *mcp.CallToolRequest, in listWorkspaceInvitesIn,
-) (*mcp.CallToolResult, []workspaceInviteOut, error) {
+) (*mcp.CallToolResult, *listOutput[workspaceInviteOut], error) {
 	if _, err := s.requireWorkspaceAdmin(ctx, in.WorkspaceID); err != nil {
 		return nil, nil, err
 	}
@@ -229,7 +229,7 @@ func (s *Server) listWorkspaceInvites(
 	for _, inv := range invites {
 		out = append(out, workspaceInviteOut{ID: inv.ID, Email: inv.Email, Role: inv.Role, CreatedAt: inv.CreatedAt})
 	}
-	return nil, out, nil
+	return nil, newListOut(out), nil
 }
 
 // ── remove_workspace_member ─────────────────────────────────────────────────────

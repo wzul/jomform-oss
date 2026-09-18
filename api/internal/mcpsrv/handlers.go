@@ -34,7 +34,7 @@ type productOut struct {
 
 type emptyIn struct{}
 
-func (s *Server) listProducts(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, []productOut, error) {
+func (s *Server) listProducts(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, *listOutput[productOut], error) {
 	accs, err := s.accountScopes(ctx, false)
 	if err != nil {
 		return nil, nil, err
@@ -62,7 +62,7 @@ func (s *Server) listProducts(ctx context.Context, _ *mcp.CallToolRequest, _ emp
 		}
 		out = append(out, o)
 	}
-	return nil, out, nil
+	return nil, newListOut(out), nil
 }
 
 type createProductIn struct {
@@ -233,7 +233,7 @@ type listSalesIn struct {
 	Status string `json:"status,omitempty" jsonschema:"Optional — hadkan kepada status: pending|paid|confirmed|failed|cancelled"`
 }
 
-func (s *Server) listSales(ctx context.Context, _ *mcp.CallToolRequest, in listSalesIn) (*mcp.CallToolResult, []saleOut, error) {
+func (s *Server) listSales(ctx context.Context, _ *mcp.CallToolRequest, in listSalesIn) (*mcp.CallToolResult, *listOutput[saleOut], error) {
 	accs, err := s.accountScopes(ctx, false)
 	if err != nil {
 		return nil, nil, err
@@ -285,7 +285,7 @@ func (s *Server) listSales(ctx context.Context, _ *mcp.CallToolRequest, in listS
 		}
 		out = append(out, o)
 	}
-	return nil, out, nil
+	return nil, newListOut(out), nil
 }
 
 type summaryOut struct {
@@ -423,7 +423,7 @@ type listSubscriptionsIn struct {
 	Limit  int    `json:"limit,omitempty" jsonschema:"Optional — had setiap muka (1-100, lalai 20)"`
 }
 
-func (s *Server) listSubscriptions(ctx context.Context, _ *mcp.CallToolRequest, in listSubscriptionsIn) (*mcp.CallToolResult, []subscriptionOut, error) {
+func (s *Server) listSubscriptions(ctx context.Context, _ *mcp.CallToolRequest, in listSubscriptionsIn) (*mcp.CallToolResult, *listOutput[subscriptionOut], error) {
 	accs, err := s.accountScopes(ctx, false)
 	if err != nil {
 		return nil, nil, err
@@ -461,7 +461,7 @@ func (s *Server) listSubscriptions(ctx context.Context, _ *mcp.CallToolRequest, 
 		}
 		out = append(out, o)
 	}
-	return nil, out, nil
+	return nil, newListOut(out), nil
 }
 
 type cancelSubIn struct {

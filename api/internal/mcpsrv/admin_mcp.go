@@ -46,7 +46,7 @@ type adminWorkspaceOut struct {
 
 // adminListWorkspaces lists every workspace with its owner email, creation time and
 // form/product counts. Super-admin only, read-only, audited.
-func (s *Server) adminListWorkspaces(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, []adminWorkspaceOut, error) {
+func (s *Server) adminListWorkspaces(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, *listOutput[adminWorkspaceOut], error) {
 	if err := s.adminGate(ctx, "admin.list_workspaces"); err != nil {
 		return nil, nil, err
 	}
@@ -66,7 +66,7 @@ func (s *Server) adminListWorkspaces(ctx context.Context, _ *mcp.CallToolRequest
 			FormCount: x.FormCount, ProductCount: x.ProductCount,
 		})
 	}
-	return nil, out, nil
+	return nil, newListOut(out), nil
 }
 
 // ── admin_media_usage ───────────────────────────────────────────────────────
@@ -81,7 +81,7 @@ type adminMediaUsageOut struct {
 
 // adminMediaUsage reports storage usage per workspace (bytes) against the 1GB
 // per-workspace quota (#384). Super-admin only, read-only, audited.
-func (s *Server) adminMediaUsage(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, []adminMediaUsageOut, error) {
+func (s *Server) adminMediaUsage(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, *listOutput[adminMediaUsageOut], error) {
 	if err := s.adminGate(ctx, "admin.media_usage"); err != nil {
 		return nil, nil, err
 	}
@@ -99,7 +99,7 @@ func (s *Server) adminMediaUsage(ctx context.Context, _ *mcp.CallToolRequest, _ 
 			UsedBytes: x.UsedBytes, QuotaBytes: objstore.MaxWorkspaceBytes,
 		})
 	}
-	return nil, out, nil
+	return nil, newListOut(out), nil
 }
 
 // ── admin_list_sales ────────────────────────────────────────────────────────

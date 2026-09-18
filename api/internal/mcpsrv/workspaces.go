@@ -77,7 +77,7 @@ type workspaceOut struct {
 
 func (s *Server) listWorkspaces(
 	ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn,
-) (*mcp.CallToolResult, []workspaceOut, error) {
+) (*mcp.CallToolResult, *listOutput[workspaceOut], error) {
 	sp, err := s.workspacesStore()
 	if err != nil {
 		return nil, nil, err
@@ -98,7 +98,7 @@ func (s *Server) listWorkspaces(
 			Role: x.Role,
 		})
 	}
-	return nil, out, nil
+	return nil, newListOut(out), nil
 }
 
 // ── create_workspace ─────────────────────────────────────────────────────────────

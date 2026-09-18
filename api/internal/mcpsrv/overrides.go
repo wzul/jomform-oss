@@ -32,7 +32,7 @@ type saleRefIn struct {
 
 func (s *Server) setFormChipOverride(
 	ctx context.Context, _ *mcp.CallToolRequest, in formOverrideIn,
-) (*mcp.CallToolResult, any, error) {
+) (*mcp.CallToolResult, map[string]string, error) {
 	if s.deps.Forms == nil || s.decKey == nil {
 		return nil, nil, errors.New("override tidak tersedia")
 	}
@@ -53,7 +53,7 @@ func (s *Server) setFormChipOverride(
 
 func (s *Server) clearFormChipOverride(
 	ctx context.Context, _ *mcp.CallToolRequest, in formRefIn,
-) (*mcp.CallToolResult, any, error) {
+) (*mcp.CallToolResult, map[string]string, error) {
 	acc, err := s.formForAdmin(ctx, in.FormID)
 	if err != nil {
 		return nil, nil, err
@@ -79,7 +79,7 @@ func (s *Server) formForAdmin(ctx context.Context, formID string) (string, error
 
 func (s *Server) captureSaleMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in saleRefIn,
-) (*mcp.CallToolResult, any, error) {
+) (*mcp.CallToolResult, map[string]string, error) {
 	pay := s.pay
 	if pay == nil {
 		return nil, nil, errors.New("payments tidak aktif")
@@ -103,7 +103,7 @@ func (s *Server) captureSaleMCP(
 
 func (s *Server) releaseSaleMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in saleRefIn,
-) (*mcp.CallToolResult, any, error) {
+) (*mcp.CallToolResult, map[string]string, error) {
 	pay := s.pay
 	if pay == nil {
 		return nil, nil, errors.New("payments tidak aktif")
@@ -133,7 +133,7 @@ func (s *Server) releaseSaleMCP(
 // sale `refunded` — a partial leaves it reading as partially refunded.
 func (s *Server) refundSaleMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in saleRefIn,
-) (*mcp.CallToolResult, any, error) {
+) (*mcp.CallToolResult, map[string]any, error) {
 	pay := s.pay
 	if pay == nil {
 		return nil, nil, errors.New("payments tidak aktif")
@@ -172,40 +172,52 @@ func saleRefundStatus(totalSen, refundedSen int64) string {
 	}
 }
 
+// captureAllResult is one ref's outcome in capture_all_pending_sales.
+type captureAllResult struct {
+	RefCode string `json:"ref_code"`
+	OK      bool   `json:"ok"`
+	Error   string `json:"error,omitempty"`
+}
+
+// captureAllPendingOut is the output of capture_all_pending_sales: the batch
+// summary plus the per-ref results (an object, so the tool's outputSchema stays
+// an object — see list_output.go).
+type captureAllPendingOut struct {
+	Requested int                `json:"requested"`
+	Captured  int                `json:"captured"`
+	Failed    int                `json:"failed"`
+	Results   []captureAllResult `json:"results"`
+}
+
 // captureAllPendingMCP captures every awaiting skip_capture authorization in
 // one call (issue #38, the #12 addendum). One CHIP rejection never aborts the
 // batch; every ref gets its own result. Issue #307: spans all the user's workspaces.
 func (s *Server) captureAllPendingMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn,
-) (*mcp.CallToolResult, any, error) {
+) (*mcp.CallToolResult, captureAllPendingOut, error) {
 	pay := s.pay
 	if pay == nil {
-		return nil, nil, errors.New("payments tidak aktif")
+		return nil, captureAllPendingOut{}, errors.New("payments tidak aktif")
 	}
 	accs, err := s.accountScopes(ctx, false)
 	if err != nil {
-		return nil, nil, err
+		return nil, captureAllPendingOut{}, err
 	}
 	var sales []*dbstore.Sale
 	for _, acc := range accs {
 		if err := s.requireWriteRoleIn(ctx, acc); err != nil {
-			return nil, nil, err
+			return nil, captureAllPendingOut{}, err
 		}
 		one, err := s.deps.Sales.ListAwaitingCapture(ctx, acc)
 		if err != nil {
-			return nil, nil, fmt.Errorf("db: %w", err)
+			return nil, captureAllPendingOut{}, fmt.Errorf("db: %w", err)
 		}
 		sales = append(sales, one...)
 	}
-	type refResult struct {
-		RefCode string `json:"ref_code"`
-		OK      bool   `json:"ok"`
-		Error   string `json:"error,omitempty"`
-	}
-	results := make([]refResult, 0, len(sales))
+	results := make([]captureAllResult, 0, len(sales))
 	ok, failed := 0, 0
 	for _, sale := range sales {
-		res := refResult{RefCode: sale.RefCode}
+		res := captureAllResult{RefCode: sale.RefCode}
 		if err := pay.CaptureSale(ctx, sale, nil); err != nil {
 			res.Error = err.Error()
 		} else if err := s.deps.Sales.MarkCaptured(ctx, sale.ID); err != nil {
@@ -219,8 +231,8 @@ func (s *Server) captureAllPendingMCP(
 		}
 		results = append(results, res)
 	}
-	return nil, map[string]any{
-		"requested": len(sales), "captured": ok, "failed": failed, "results": results,
+	return nil, captureAllPendingOut{
+		Requested: len(sales), Captured: ok, Failed: failed, Results: results,
 	}, nil
 }
 

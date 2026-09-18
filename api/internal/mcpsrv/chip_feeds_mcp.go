@@ -48,7 +48,7 @@ type chipFeedOut struct {
 // getFormChipFeedsMCP returns a form's CHIP feeds (secrets masked).
 func (s *Server) getFormChipFeedsMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in formRefIn,
-) (*mcp.CallToolResult, []chipFeedOut, error) {
+) (*mcp.CallToolResult, *listOutput[chipFeedOut], error) {
 	if s.deps.Forms == nil {
 		return nil, nil, errors.New("forms tidak tersedia")
 	}
@@ -77,7 +77,7 @@ func (s *Server) getFormChipFeedsMCP(
 		}
 		out = append(out, item)
 	}
-	return nil, out, nil
+	return nil, newListOut(out), nil
 }
 
 // toChipFeeds converts MCP input feeds to dbstore feeds, preserving the

@@ -88,7 +88,7 @@ type listAffiliatesIn struct {
 
 func (s *Server) listAffiliates(
 	ctx context.Context, _ *mcp.CallToolRequest, in listAffiliatesIn,
-) (*mcp.CallToolResult, []affiliateOut, error) {
+) (*mcp.CallToolResult, *listOutput[affiliateOut], error) {
 	ws, _, err := s.accessibleWorkspace(ctx, in.WorkspaceID)
 	if err != nil {
 		return nil, nil, err
@@ -105,7 +105,7 @@ func (s *Server) listAffiliates(
 	for _, a := range affs {
 		out = append(out, *s.affiliateOut(ws.Slug, a))
 	}
-	return nil, out, nil
+	return nil, newListOut(out), nil
 }
 
 // ── get_affiliate_sales ─────────────────────────────────────────────────────────
@@ -125,7 +125,7 @@ type affiliateSaleOut struct {
 
 func (s *Server) getAffiliateSales(
 	ctx context.Context, _ *mcp.CallToolRequest, in getAffiliateSalesIn,
-) (*mcp.CallToolResult, []affiliateSaleOut, error) {
+) (*mcp.CallToolResult, *listOutput[affiliateSaleOut], error) {
 	if _, _, err := s.accessibleWorkspace(ctx, in.WorkspaceID); err != nil {
 		return nil, nil, err
 	}
@@ -152,7 +152,7 @@ func (s *Server) getAffiliateSales(
 			Currency: sl.Currency, CreatedAt: sl.CreatedAt.Format("2006-01-02 15:04"),
 		})
 	}
-	return nil, out, nil
+	return nil, newListOut(out), nil
 }
 
 // ── set_affiliate_commission ─────────────────────────────────────────────────────
