@@ -172,6 +172,9 @@ export const DICT = {
   // common
   "common.exportCsv": { en: "Export CSV", ms: "Eksport CSV", zh: "导出 CSV", ta: "CSV ஏற்றுமதி", ar: "تصدير CSV" },
   "common.workspace": { en: "Workspace", ms: "Workspace", zh: "工作区", ta: "பணியிடம்", ar: "مساحة العمل" },
+  // The phone topbar's language <select> (the five-button toggle does not fit a
+  // 360px bar once every button meets the 44x44 tap-target floor).
+  "common.language": { en: "Language", ms: "Bahasa", zh: "语言", ta: "மொழி", ar: "اللغة" },
   // issue #144: create-workspace UI (always-visible switcher + inline form)
   "workspace.new": { en: "New workspace", ms: "Workspace baharu", zh: "新建工作区", ta: "புதிய பணியிடம்", ar: "مساحة عمل جديدة" },
   "workspace.name": { en: "Workspace name", ms: "Nama workspace", zh: "工作区名称", ta: "பணியிடப் பெயர்", ar: "اسم مساحة العمل" },

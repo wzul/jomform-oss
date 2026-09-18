@@ -56,22 +56,68 @@ export function useI18n() {
 }
 
 // Small toggle for the sidebar/topbar.
+//
+// Mobile audit (issue: /admin not mobile friendly): the five buttons measured
+// 27-37px wide by 23px tall — far under the 44x44 tap-target floor — and simply
+// growing them does not fit the phone topbar next to the menu button and the
+// logo. So the phone topbar uses LangSelect (one native control, 44px tall)
+// and the desktop topbar keeps this segmented control, raised to 44px.
+const LANG_LABEL: Record<Lang, string> = {
+  en: "English",
+  ms: "Bahasa Melayu",
+  zh: "中文",
+  ta: "தமிழ்",
+  ar: "العربية",
+};
+
+const LANG_SHORT: Record<Lang, string> = {
+  en: "EN",
+  ms: "BM",
+  zh: "中文",
+  ta: "தமிழ்",
+  ar: "عربي",
+};
+
+export const LANGS_SHOWN: readonly Lang[] = ["en", "ms", "zh", "ta", "ar"];
+
 export function LangToggle() {
   const { lang, setLang } = useI18n();
   return (
     <div className="flex overflow-hidden rounded-md border border-[var(--jf-border)] text-xs">
-      {(["en", "ms", "zh", "ta", "ar"] as const).map((l) => (
+      {LANGS_SHOWN.map((l) => (
         <button
           key={l}
           onClick={() => setLang(l)}
-          title={l === "en" ? "English" : l === "ms" ? "Bahasa Melayu" : l === "zh" ? "中文" : l === "ta" ? "தமிழ்" : "العربية"}
-          className={`px-1.5 py-1 text-[11px] font-medium transition-colors ${
+          title={LANG_LABEL[l]}
+          className={`flex min-h-11 min-w-11 items-center justify-center px-2 text-xs font-medium transition-colors ${
             lang === l ? "bg-[var(--jf-primary)] text-white" : "bg-white text-[var(--jf-muted)]"
           }`}
         >
-          {l === "en" ? "EN" : l === "ms" ? "BM" : l === "zh" ? "中文" : l === "ta" ? "தமிழ்" : "عربي"}
+          {LANG_SHORT[l]}
         </button>
       ))}
     </div>
+  );
+}
+
+// Phone-width language control. A native <select> is a single 44px-tall target
+// (the platform's own picker on touch), which the five-button row cannot be on a
+// 360px topbar. The accessible name describes the control ("Language"); the
+// current value is read from the selected option, so the label stays static.
+export function LangSelect() {
+  const { lang, setLang, t } = useI18n();
+  return (
+    <select
+      aria-label={t("common.language")}
+      value={lang}
+      onChange={(e) => setLang(e.target.value as Lang)}
+      className="min-h-11 max-w-[9.5rem] rounded-md border border-[var(--jf-border)] bg-white px-2 text-sm text-[var(--jf-text)]"
+    >
+      {LANGS_SHOWN.map((l) => (
+        <option key={l} value={l}>
+          {LANG_SHORT[l]} · {LANG_LABEL[l]}
+        </option>
+      ))}
+    </select>
   );
 }

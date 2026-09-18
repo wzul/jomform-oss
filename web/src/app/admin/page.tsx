@@ -79,10 +79,18 @@ const fmtBytes = (b: number) => {
 function StatCard({ label, value, sub }: { label: string; value: string | number; sub?: string }) {
   return (
     <div className="rounded-xl border border-[var(--jf-border)] bg-white p-4">
-      <p className="text-xs font-medium uppercase tracking-wide text-[var(--jf-muted)]">{label}</p>
-      <p className="mt-1 text-2xl font-semibold text-[var(--jf-text)]">{value}</p>
+      {/* Type sizes: the label/sub lines are body text and must not go below
+          14px (text-sm) on any viewport — the mobile audit found 37 text
+          leaves at 12px on this page. The text-2xl value stays as it is. */}
+      <p className="text-sm font-medium uppercase tracking-wide text-[var(--jf-muted)]">{label}</p>
+      {/* `[overflow-wrap:anywhere]` is the last-resort guard: a 6-digit count in
+          text-2xl is ~100px wide and an unbreakable run of digits would paint
+          past the card border in a narrow grid cell (measured 1.2px past a 116px
+          card at 1024px). Allowing the break makes the card's min-content one
+          character, so the value wraps instead of escaping the card. */}
+      <p className="mt-1 text-2xl font-semibold text-[var(--jf-text)] [overflow-wrap:anywhere]">{value}</p>
       {sub ? (
-        <p className="mt-0.5 break-words text-xs text-[var(--jf-muted)]">{sub}</p>
+        <p className="mt-0.5 break-words text-sm text-[var(--jf-muted)]">{sub}</p>
       ) : null}
     </div>
   );
@@ -177,7 +185,16 @@ export default function AdminPage() {
 
   return (
     <Shell active="admin">
-      <div className="mx-auto max-w-6xl px-4 py-8">
+      {/* The page root is a flex item of #main-content, which Shell renders as a
+          COLUMN flex container (Shell.tsx). `mx-auto` (margin-left/right: auto)
+          cancels `align-self: stretch`, so without a definite width this box
+          sizes to MAX-CONTENT — its min-content is the dead-letters table, so
+          the whole document became ~1047px wide on a 360px phone and every
+          section was pushed off-screen. `w-full` gives the flex item a definite
+          width; `mx-auto` + `max-w-6xl` still centre it above 1152px, so desktop
+          is unchanged. Every other Shell page already uses `w-full` — this was
+          the only one that did not (adminResponsive.test.ts guards the rule). */}
+      <div className="mx-auto w-full max-w-6xl px-4 py-8">
         <div className="mb-6 flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-semibold text-[var(--jf-text)]">{t("admin.title")}</h1>
@@ -194,7 +211,7 @@ export default function AdminPage() {
             <button
               type="button"
               onClick={() => void load()}
-              className="ml-2 underline decoration-dotted underline-offset-2"
+              className="ml-2 inline-flex min-h-11 items-center px-2 underline decoration-dotted underline-offset-2"
             >
               {t("common.retry")}
             </button>
@@ -240,7 +257,18 @@ export default function AdminPage() {
                 <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-[var(--jf-muted)]">
                   {t("admin.email")}
                 </h2>
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+                {/* Mobile audit: `sm:grid-cols-5` put five cards in one row from
+                    640px up, but this grid sits inside the `lg:grid-cols-2`
+                    section, so the cards were only 90px wide at 1280px and the
+                    `text-2xl` values painted past the card border (measured at
+                    1280px on the unfixed page: a 6-digit value 26.8px past, a
+                    label 7.7px past — pre-existing, and present at widths where
+                    the page had no horizontal overflow at all). Five columns can
+                    never fit this half-width section. Two up on a phone and
+                    three up once the section is really wide (xl) keeps every
+                    value inside its card: the narrowest cell is 164px at 1280px
+                    and 138px at 320px, against a ~100px value. */}
+                <div className="grid grid-cols-2 gap-3 xl:grid-cols-3">
                   <StatCard label={t("admin.emailDelivered")} value={data.email.delivered} />
                   <StatCard label={t("admin.emailBounce")} value={data.email.bounce} />
                   <StatCard label={t("admin.emailComplaint")} value={data.email.complaint} />
@@ -264,52 +292,113 @@ export default function AdminPage() {
               <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-[var(--jf-muted)]">
                 {t("admin.deadLetters")}
               </h2>
-              <p className="mb-3 text-xs text-[var(--jf-muted)]">{t("admin.deadLettersHint")}</p>
+              <p className="mb-3 text-sm text-[var(--jf-muted)]">{t("admin.deadLettersHint")}</p>
               {deadErr && (
-                <p className="mb-2 text-xs text-red-600">{deadErr}</p>
+                <p className="mb-2 text-sm text-red-600">{deadErr}</p>
               )}
               {!dead || dead.items.length === 0 ? (
                 <p className="text-sm text-[var(--jf-muted)]">{t("admin.deadLettersNone")}</p>
               ) : (
-                <div className="overflow-x-auto rounded-xl border border-[var(--jf-border)]">
-                  <table className="w-full text-left text-sm">
-                    <thead className="border-b border-[var(--jf-border)] bg-slate-50 text-xs uppercase tracking-wide text-[var(--jf-muted)]">
-                      <tr>
-                        <th className="px-4 py-2 font-medium">{t("admin.dlEvent")}</th>
-                        <th className="px-4 py-2 font-medium">{t("admin.dlWorkspace")}</th>
-                        <th className="px-4 py-2 font-medium">{t("admin.dlAttempts")}</th>
-                        <th className="px-4 py-2 font-medium">{t("admin.dlReason")}</th>
-                        <th className="px-4 py-2 font-medium">{t("admin.dlParked")}</th>
-                        <th className="px-4 py-2 font-medium">{t("admin.dlAction")}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {dead.items.map((d) => (
-                        <tr key={d.dedup_key} className="border-b border-[var(--jf-border)] last:border-0">
-                          <td className="px-4 py-2">
-                            <div className="font-medium">{d.event_type || "—"}</div>
-                            <div className="font-mono text-[11px] text-[var(--jf-muted)]">{d.dedup_key}</div>
-                          </td>
-                          <td className="px-4 py-2 font-mono text-[11px]">
-                            {d.account_id ? d.account_id.slice(0, 8) : <span className="italic text-[var(--jf-muted)]">{t("admin.dlUnattributed")}</span>}
-                          </td>
-                          <td className="px-4 py-2">{d.attempts}</td>
-                          <td className="px-4 py-2 text-xs">{d.last_error || "—"}</td>
-                          <td className="px-4 py-2 text-xs">{d.dead_since?.slice(0, 19).replace("T", " ")}</td>
-                          <td className="px-4 py-2">
-                            <button
-                              onClick={() => requeue(d.dedup_key)}
-                              disabled={requeueing === d.dedup_key}
-                              className="rounded-md border border-[var(--jf-border)] px-2 py-1 text-xs font-medium hover:bg-slate-50 disabled:opacity-50"
-                            >
-                              {requeueing === d.dedup_key ? t("admin.dlRequeueing") : t("admin.dlRequeue")}
-                            </button>
-                          </td>
+                <>
+                  {/* The six-column table's min-content is ~823px even with the
+                      two long cells breakable (it was ~1013px before), and this
+                      page box is only `min(1152px, 100vw-32px)` wide — so below
+                      an xl viewport the table cannot fit and its Requeue column
+                      (the one action on this section, and the reason an operator
+                      opens this page) sat outside the visible area: measured
+                      687px to the right at 360px and still 24px past the edge at
+                      1024px. Below xl each dead letter is a stacked card with a
+                      full-width 44px Requeue button in view; the table appears
+                      from xl up, where 823px fits inside 1056px. */}
+                  <ul className="space-y-3 xl:hidden">
+                    {dead.items.map((d) => (
+                      <li
+                        key={d.dedup_key}
+                        className="rounded-xl border border-[var(--jf-border)] bg-white p-3"
+                      >
+                        <div className="flex flex-wrap items-baseline justify-between gap-2">
+                          <span className="font-medium">{d.event_type || "—"}</span>
+                          <span className="text-xs text-[var(--jf-muted)]">
+                            {d.dead_since?.slice(0, 19).replace("T", " ")}
+                          </span>
+                        </div>
+                        <p className="mt-1 break-all font-mono text-xs text-[var(--jf-muted)]">
+                          {d.dedup_key}
+                        </p>
+                        <dl className="mt-2 space-y-1 text-sm">
+                          <div className="flex gap-2">
+                            <dt className="shrink-0 text-[var(--jf-muted)]">{t("admin.dlWorkspace")}</dt>
+                            <dd className="min-w-0 break-all font-mono text-xs">
+                              {d.account_id ? (
+                                d.account_id.slice(0, 8)
+                              ) : (
+                                <span className="italic text-[var(--jf-muted)]">{t("admin.dlUnattributed")}</span>
+                              )}
+                            </dd>
+                          </div>
+                          <div className="flex gap-2">
+                            <dt className="shrink-0 text-[var(--jf-muted)]">{t("admin.dlAttempts")}</dt>
+                            <dd>{d.attempts}</dd>
+                          </div>
+                          <div className="flex gap-2">
+                            <dt className="shrink-0 text-[var(--jf-muted)]">{t("admin.dlReason")}</dt>
+                            <dd className="min-w-0 [overflow-wrap:anywhere]">{d.last_error || "—"}</dd>
+                          </div>
+                        </dl>
+                        <button
+                          onClick={() => requeue(d.dedup_key)}
+                          disabled={requeueing === d.dedup_key}
+                          className="mt-3 min-h-11 w-full rounded-md border border-[var(--jf-border)] px-3 text-sm font-medium hover:bg-slate-50 disabled:opacity-50"
+                        >
+                          {requeueing === d.dedup_key ? t("admin.dlRequeueing") : t("admin.dlRequeue")}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="hidden overflow-x-auto rounded-xl border border-[var(--jf-border)] xl:block">
+                    <table className="w-full text-left text-sm">
+                      <thead className="border-b border-[var(--jf-border)] bg-slate-50 text-sm uppercase tracking-wide text-[var(--jf-muted)]">
+                        <tr>
+                          <th className="px-4 py-2 font-medium">{t("admin.dlEvent")}</th>
+                          <th className="px-4 py-2 font-medium">{t("admin.dlWorkspace")}</th>
+                          <th className="px-4 py-2 font-medium">{t("admin.dlAttempts")}</th>
+                          <th className="px-4 py-2 font-medium">{t("admin.dlReason")}</th>
+                          <th className="px-4 py-2 font-medium">{t("admin.dlParked")}</th>
+                          <th className="px-4 py-2 font-medium">{t("admin.dlAction")}</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                      </thead>
+                      <tbody>
+                        {dead.items.map((d) => (
+                          <tr key={d.dedup_key} className="border-b border-[var(--jf-border)] last:border-0">
+                            <td className="px-4 py-2">
+                              <div className="font-medium">{d.event_type || "—"}</div>
+                              {/* break-all: a dedup_key is an opaque token with no
+                                  spaces, so it set the table's min-content floor
+                                  (1013px). Breaking it is what lets the wrapper
+                                  scroll instead of the page. */}
+                              <div className="break-all font-mono text-xs text-[var(--jf-muted)]">{d.dedup_key}</div>
+                            </td>
+                            <td className="px-4 py-2 font-mono text-xs">
+                              {d.account_id ? d.account_id.slice(0, 8) : <span className="italic text-[var(--jf-muted)]">{t("admin.dlUnattributed")}</span>}
+                            </td>
+                            <td className="px-4 py-2">{d.attempts}</td>
+                            <td className="px-4 py-2 [overflow-wrap:anywhere]">{d.last_error || "—"}</td>
+                            <td className="px-4 py-2 whitespace-nowrap text-xs">{d.dead_since?.slice(0, 19).replace("T", " ")}</td>
+                            <td className="px-4 py-2">
+                              <button
+                                onClick={() => requeue(d.dedup_key)}
+                                disabled={requeueing === d.dedup_key}
+                                className="min-h-11 whitespace-nowrap rounded-md border border-[var(--jf-border)] px-3 text-sm font-medium hover:bg-slate-50 disabled:opacity-50"
+                              >
+                                {requeueing === d.dedup_key ? t("admin.dlRequeueing") : t("admin.dlRequeue")}
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
               )}
             </section>
 
@@ -320,7 +409,7 @@ export default function AdminPage() {
               </h2>
               <div className="overflow-x-auto rounded-xl border border-[var(--jf-border)]">
                 <table className="w-full text-left text-sm">
-                  <thead className="border-b border-[var(--jf-border)] bg-slate-50 text-xs uppercase tracking-wide text-[var(--jf-muted)]">
+                  <thead className="border-b border-[var(--jf-border)] bg-slate-50 text-sm uppercase tracking-wide text-[var(--jf-muted)]">
                     <tr>
                       <th className="px-4 py-2 font-medium">{t("admin.workspaces")}</th>
                       <th className="px-4 py-2 font-medium">{t("admin.storageUsed")}</th>
@@ -339,7 +428,7 @@ export default function AdminPage() {
                         <tr key={s.workspace_id} className="border-b border-[var(--jf-border)] last:border-0">
                           <td className="px-4 py-2">
                             <span className="font-medium">{s.workspace_name}</span>
-                            <span className="ml-2 text-xs text-[var(--jf-muted)]">/{s.slug}</span>
+                            <span className="ml-2 break-all text-xs text-[var(--jf-muted)]">/{s.slug}</span>
                           </td>
                           <td className="px-4 py-2">{fmtBytes(s.used_bytes)}</td>
                           <td className="px-4 py-2">{fmtBytes(data.quota_bytes)}</td>
@@ -359,7 +448,7 @@ export default function AdminPage() {
                 </h2>
                 <div className="overflow-x-auto rounded-xl border border-[var(--jf-border)]">
                   <table className="w-full text-left text-sm">
-                    <thead className="border-b border-[var(--jf-border)] bg-slate-50 text-xs uppercase tracking-wide text-[var(--jf-muted)]">
+                    <thead className="border-b border-[var(--jf-border)] bg-slate-50 text-sm uppercase tracking-wide text-[var(--jf-muted)]">
                       <tr>
                         <th className="px-4 py-2 font-medium">{t("admin.users")}</th>
                         <th className="px-4 py-2 font-medium">{t("admin.lastActivity")}</th>
@@ -377,9 +466,9 @@ export default function AdminPage() {
                           <tr key={u.id} className="border-b border-[var(--jf-border)] last:border-0">
                             <td className="px-4 py-2">
                               <span className="font-medium">{u.name || u.email}</span>
-                              {u.name ? <span className="ml-2 text-xs text-[var(--jf-muted)]">{u.email}</span> : null}
+                              {u.name ? <span className="ml-2 break-all text-xs text-[var(--jf-muted)]">{u.email}</span> : null}
                             </td>
-                            <td className="px-4 py-2 text-[var(--jf-muted)]">{formatDate(u.created_at)}</td>
+                            <td className="px-4 py-2 whitespace-nowrap text-[var(--jf-muted)]">{formatDate(u.created_at)}</td>
                           </tr>
                         ))
                       )}
@@ -393,7 +482,7 @@ export default function AdminPage() {
                 </h2>
                 <div className="overflow-x-auto rounded-xl border border-[var(--jf-border)]">
                   <table className="w-full text-left text-sm">
-                    <thead className="border-b border-[var(--jf-border)] bg-slate-50 text-xs uppercase tracking-wide text-[var(--jf-muted)]">
+                    <thead className="border-b border-[var(--jf-border)] bg-slate-50 text-sm uppercase tracking-wide text-[var(--jf-muted)]">
                       <tr>
                         <th className="px-4 py-2 font-medium">{t("admin.workspaces")}</th>
                         <th className="px-4 py-2 font-medium">{t("admin.owner")}</th>
@@ -412,10 +501,10 @@ export default function AdminPage() {
                           <tr key={s.id} className="border-b border-[var(--jf-border)] last:border-0">
                             <td className="px-4 py-2">
                               <span className="font-medium">{s.name}</span>
-                              <span className="ml-2 text-xs text-[var(--jf-muted)]">/{s.slug}</span>
+                              <span className="ml-2 break-all text-xs text-[var(--jf-muted)]">/{s.slug}</span>
                             </td>
-                            <td className="px-4 py-2 text-[var(--jf-muted)]">{s.owner_email}</td>
-                            <td className="px-4 py-2 text-[var(--jf-muted)]">{formatDateTime(s.last_activity)}</td>
+                            <td className="px-4 py-2 break-all text-[var(--jf-muted)]">{s.owner_email}</td>
+                            <td className="px-4 py-2 whitespace-nowrap text-[var(--jf-muted)]">{formatDateTime(s.last_activity)}</td>
                           </tr>
                         ))
                       )}

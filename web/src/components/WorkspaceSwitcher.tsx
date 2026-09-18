@@ -149,8 +149,8 @@ export function WorkspaceSwitcher({
         title={active ? `${active.name} (${active.slug}.jomform.com)` : t("common.workspace")}
         className={
           fullWidth
-            ? "flex w-full items-center justify-between gap-2 rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-left text-xs font-medium text-[var(--jf-text)] hover:bg-slate-50"
-            : "flex max-w-[180px] items-center gap-1.5 rounded-md border border-[var(--jf-border)] bg-white px-2 py-1.5 text-xs font-medium text-[var(--jf-text)] hover:bg-slate-50"
+            ? "flex min-h-11 w-full items-center justify-between gap-2 rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-left text-sm font-medium text-[var(--jf-text)] hover:bg-slate-50"
+            : "flex min-h-11 max-w-[220px] items-center gap-1.5 rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-1.5 text-sm font-medium text-[var(--jf-text)] hover:bg-slate-50"
         }
       >
         {fullWidth ? (
@@ -159,7 +159,7 @@ export function WorkspaceSwitcher({
               ▦
             </span>
             <span className="min-w-0 flex-1">
-              <span className="block text-[10px] font-normal uppercase tracking-wide text-[var(--jf-muted)]">
+              <span className="block text-xs font-normal uppercase tracking-wide text-[var(--jf-muted)]">
                 {t("common.workspace")}
               </span>
               <span className="block truncate">{active ? active.name : t("common.workspace")}</span>
@@ -202,15 +202,20 @@ export function WorkspaceSwitcher({
                     onSwitch(s.slug);
                     setOpen(false);
                   }}
-                  className={`flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-xs ${
+                  className={`flex min-h-11 w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-sm ${
                     s.slug === value
                       ? "bg-indigo-50 font-medium text-[var(--jf-primary)]"
                       : "text-[var(--jf-text)] hover:bg-slate-50"
                   }`}
                 >
                   <span className="min-w-0">
-                    <span className="block truncate">{s.name}</span>
-                    <span className="block truncate text-[10px] text-[var(--jf-muted)]">
+                    {/* Mobile audit: the topbar chip truncates a long workspace
+                        name and its `title` tooltip is hover-only, so on a touch
+                        device the full name was unreachable. The menu item is
+                        where the name is shown in full — it wraps instead of
+                        truncating, and the item is a 44px tap target. */}
+                    <span className="block break-words">{s.name}</span>
+                    <span className="block break-all text-xs text-[var(--jf-muted)]">
                       {s.slug}.jomform.com{s.role ? ` · ${roleLabel(s.role)}` : ""}
                     </span>
                   </span>
@@ -220,9 +225,9 @@ export function WorkspaceSwitcher({
             </div>
           ) : active ? (
             // Single-workspace: minimal read-only chip (just the name).
-            <div className="px-2.5 py-2 text-xs text-[var(--jf-text)]">
-              <span className="block truncate font-medium">{active.name}</span>
-              <span className="block truncate text-[10px] text-[var(--jf-muted)]">
+            <div className="px-2.5 py-2 text-sm text-[var(--jf-text)]">
+              <span className="block break-words font-medium">{active.name}</span>
+              <span className="block break-all text-xs text-[var(--jf-muted)]">
                 {active.slug}.jomform.com{active.role ? ` · ${roleLabel(active.role)}` : ""}
               </span>
             </div>
@@ -239,7 +244,7 @@ export function WorkspaceSwitcher({
                     onSetDefault("");
                     setOpen(false);
                   }}
-                  className="w-full rounded-md px-2.5 py-1.5 text-left text-xs text-[var(--jf-muted)] hover:bg-slate-50 hover:text-red-500"
+                  className="min-h-11 w-full rounded-md px-2.5 py-1.5 text-left text-sm text-[var(--jf-muted)] hover:bg-slate-50 hover:text-red-500"
                 >
                   {t("workspace.clearDefault")}
                 </button>
@@ -251,7 +256,7 @@ export function WorkspaceSwitcher({
                     onSetDefault(active.id);
                     setOpen(false);
                   }}
-                  className="w-full rounded-md px-2.5 py-1.5 text-left text-xs text-[var(--jf-muted)] hover:bg-slate-50 hover:text-[var(--jf-primary)]"
+                  className="min-h-11 w-full rounded-md px-2.5 py-1.5 text-left text-sm text-[var(--jf-muted)] hover:bg-slate-50 hover:text-[var(--jf-primary)]"
                 >
                   {t("workspace.setDefault")}
                 </button>
@@ -269,7 +274,7 @@ export function WorkspaceSwitcher({
                   placeholder={t("workspace.name")}
                   aria-label={t("workspace.name")}
                   required
-                  className="w-full rounded border border-[var(--jf-border)] bg-white px-2 py-1 text-xs"
+                  className="min-h-11 w-full rounded border border-[var(--jf-border)] bg-white px-2 text-sm"
                 />
                 <input
                   value={slug}
@@ -277,14 +282,14 @@ export function WorkspaceSwitcher({
                   placeholder={t("workspace.slug")}
                   aria-label={t("workspace.slug")}
                   required
-                  className="w-full rounded border border-[var(--jf-border)] bg-white px-2 py-1 text-xs"
+                  className="min-h-11 w-full rounded border border-[var(--jf-border)] bg-white px-2 text-sm"
                 />
-                {error && <p className="text-[11px] text-red-500">{error}</p>}
+                {error && <p className="text-sm text-red-500">{error}</p>}
                 <div className="flex gap-1.5">
                   <button
                     type="submit"
                     disabled={busy}
-                    className="flex-1 rounded bg-[var(--jf-primary)] px-2 py-1 text-xs font-medium text-white disabled:opacity-50"
+                    className="min-h-11 flex-1 rounded bg-[var(--jf-primary)] px-2 text-sm font-medium text-white disabled:opacity-50"
                   >
                     {busy ? "…" : t("workspace.create")}
                   </button>
@@ -294,7 +299,7 @@ export function WorkspaceSwitcher({
                       setCreating(false);
                       setError(null);
                     }}
-                    className="rounded border border-[var(--jf-border)] bg-white px-2 py-1 text-xs text-[var(--jf-muted)]"
+                    className="min-h-11 rounded border border-[var(--jf-border)] bg-white px-2 text-sm text-[var(--jf-muted)]"
                   >
                     {t("workspace.cancel")}
                   </button>
@@ -308,7 +313,7 @@ export function WorkspaceSwitcher({
                   setCreating(true);
                   setError(null);
                 }}
-                className="w-full rounded-md px-2.5 py-1.5 text-left text-xs font-medium text-[var(--jf-primary)] hover:bg-indigo-50"
+                className="min-h-11 w-full rounded-md px-2.5 py-1.5 text-left text-sm font-medium text-[var(--jf-primary)] hover:bg-indigo-50"
               >
                 + {t("workspace.new")}
               </button>

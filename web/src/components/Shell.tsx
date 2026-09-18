@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useI18n, LangToggle } from "./i18n";
+import { useI18n, LangToggle, LangSelect } from "./i18n";
 import { useSession } from "./session";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 
@@ -187,7 +187,7 @@ export function Shell({
               key={n.key}
               href={n.href}
               aria-current={active === n.key ? "page" : undefined}
-              className={`flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors ${
+              className={`flex items-center gap-2.5 rounded-lg px-3 py-3 text-sm transition-colors ${
                 active === n.key
                   ? "bg-indigo-50 font-medium text-[var(--jf-primary)]"
                   : "text-[var(--jf-muted)] hover:bg-slate-50 hover:text-[var(--jf-text)]"
@@ -204,17 +204,19 @@ export function Shell({
             {/* Issue #133: uploaded profile picture, falling back to the initial letter. */}
             <UserAvatar className="h-8 w-8 rounded-full" />
             <div className="min-w-0 flex-1">
-              <p className="truncate text-[13px] font-medium" title={user?.name || user?.email || ""}>
+              <p className="truncate text-sm font-medium" title={user?.name || user?.email || ""}>
                 {user?.name || user?.email || "…"}
               </p>
               {user?.name && (
-                <p className="truncate text-[11px] text-[var(--jf-muted)]" title={user?.email || ""}>
+                <p className="truncate text-xs text-[var(--jf-muted)]" title={user?.email || ""}>
                   {user?.email || ""}
                 </p>
               )}
+              {/* Mobile audit: this was a 46x17 text link (11px). It is a real
+                  action, so it gets a 44px-tall box and body-size text. */}
               <button
                 onClick={signOut}
-                className="text-[11px] text-[var(--jf-muted)] hover:text-red-500"
+                className="mt-1 flex min-h-11 items-center rounded-md px-2 text-sm text-[var(--jf-muted)] hover:bg-slate-50 hover:text-red-500"
               >
                 {t("nav.signout")}
               </button>
@@ -225,8 +227,10 @@ export function Shell({
 
       {/* main */}
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* desktop topbar — workspace switcher + lang toggle (issue #380) */}
-        <header className="sticky top-0 z-30 hidden items-center justify-end gap-3 border-b border-[var(--jf-border)] bg-white px-4 py-2.5 md:flex">
+        {/* desktop topbar — workspace switcher + lang toggle (issue #380).
+            Mobile audit: the switcher chip truncates a long workspace name; the
+            bar wraps instead of overflowing so the full chip can grow. */}
+        <header className="sticky top-0 z-30 hidden flex-wrap items-center justify-end gap-3 border-b border-[var(--jf-border)] bg-white px-4 py-2.5 md:flex">
           <WorkspaceSwitcher
             workspaces={workspaces}
             value={workspace}
@@ -237,20 +241,24 @@ export function Shell({
           <LangToggle />
         </header>
         {/* mobile topbar */}
-        <header className="sticky top-0 z-30 flex items-center justify-between border-b border-[var(--jf-border)] bg-white px-4 py-2.5 md:hidden">
+        <header className="sticky top-0 z-30 flex items-center justify-between gap-2 border-b border-[var(--jf-border)] bg-white px-2 py-2 md:hidden">
+          {/* Mobile audit: this button measured 32x32 — under the 44x44 tap
+              floor. h-11/w-11 gives it a 44px box with the icon unchanged. */}
           <button
             onClick={() => setMenuOpen(true)}
             aria-label="Open menu"
-            className="-ml-1 rounded-md p-1.5 text-[var(--jf-text)] hover:bg-slate-50"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-[var(--jf-text)] hover:bg-slate-50"
           >
             <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
               <path d="M3 5h14M3 10h14M3 15h14" />
             </svg>
           </button>
-          <span className="text-sm font-semibold">
+          <span className="truncate text-sm font-semibold">
             Jom<span className="text-[var(--jf-primary)]">Form</span>
           </span>
-          <LangToggle />
+          {/* Five 44px buttons cannot fit this bar at 360px, so the phone uses a
+              single native select (one 44px-tall target) instead. */}
+          <LangSelect />
         </header>
 
         {/* mobile drawer */}
@@ -269,18 +277,37 @@ export function Shell({
                 <span className="text-sm font-semibold">
                   Jom<span className="text-[var(--jf-primary)]">Form</span>
                 </span>
+                {/* Mobile audit: the close affordance measured 21x32. h-11/w-11
+                    gives it the 44px box (same icon). */}
                 <button
                   ref={closeBtnRef}
                   onClick={() => setMenuOpen(false)}
                   aria-label="Close menu"
-                  className="rounded-md p-1 text-[var(--jf-muted)] hover:bg-slate-50"
+                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-[var(--jf-muted)] hover:bg-slate-50"
                 >
                   ✕
                 </button>
               </div>
-              {/* Issue #460: nav + switcher live in the scrollable body; the
-                  user card is a normal flex item below it (shrink-0), so the
-                  card can never overlap the nav or an open switcher dropdown. */}
+              {/* Workspace selector reachable from the mobile drawer (issue #41),
+                  same shared component as the desktop topbar (issue #380).
+                  Issue #460: the dropdown panel is rendered in flow (fullWidth)
+                  so it reads as attached to its trigger and is never clipped.
+                  Mobile audit: it used to sit at the END of the scrollable body,
+                  so on a 640px-tall phone it started below the fold (y 596..643
+                  inside a body ending at 537) and the hit-test at its centre
+                  returned "Sign out". It is now a shrink-0 row above the nav, so
+                  it is visible without discovering the body scroll; the nav
+                  below it keeps its own scroll for shorter viewports. */}
+              <div className="shrink-0 border-b border-[var(--jf-border)] px-4 py-3">
+                <WorkspaceSwitcher
+                  workspaces={workspaces}
+                  value={workspace}
+                  onSwitch={switchWorkspace}
+                  fullWidth
+                  defaultWorkspaceId={user?.default_workspace_id}
+                  onSetDefault={setDefaultWorkspace}
+                />
+              </div>
               <div className="min-h-0 flex-1 overflow-y-auto">
                 <nav className="space-y-0.5 p-3">
                   {nav.map((n) => (
@@ -288,7 +315,7 @@ export function Shell({
                       key={n.key}
                       href={n.href}
                       onClick={() => setMenuOpen(false)}
-                      className={`flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm ${
+                      className={`flex min-h-11 items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm ${
                         active === n.key
                           ? "bg-indigo-50 font-medium text-[var(--jf-primary)]"
                           : "text-[var(--jf-muted)] hover:bg-slate-50"
@@ -299,31 +326,19 @@ export function Shell({
                     </Link>
                   ))}
                 </nav>
-                {/* issue #41: workspace selector reachable from the mobile drawer —
-                    same shared component as the desktop topbar (issue #380) */}
-                <div className="border-t border-[var(--jf-border)] px-4 py-3">
-                  <WorkspaceSwitcher
-                    workspaces={workspaces}
-                    value={workspace}
-                    onSwitch={switchWorkspace}
-                    fullWidth
-                    defaultWorkspaceId={user?.default_workspace_id}
-                    onSetDefault={setDefaultWorkspace}
-                  />
-                </div>
               </div>
               <div className="shrink-0 border-t border-[var(--jf-border)] px-4 py-3">
                 <div className="mb-2 flex items-center gap-2">
                   {/* Issue #133: profile picture or initial-letter fallback. */}
                   <UserAvatar className="h-8 w-8 rounded-full" />
                   <p
-                    className="truncate text-xs text-[var(--jf-muted)]"
+                    className="truncate text-sm text-[var(--jf-muted)]"
                     title={user?.name ? `${user.name} (${user?.email || ""})` : user?.email || ""}
                   >
                     {user?.name || user?.email || "…"}
                   </p>
                 </div>
-                <button onClick={signOut} className="w-full rounded-lg border border-[var(--jf-border)] py-2 text-sm text-slate-600">
+                <button onClick={signOut} className="w-full min-h-11 rounded-lg border border-[var(--jf-border)] py-2 text-sm text-slate-600">
                   {t("nav.signout")}
                 </button>
               </div>
