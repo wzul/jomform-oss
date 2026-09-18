@@ -62,7 +62,7 @@ func (s *Server) registerTools() {
 	// ── Sales ───────────────────────────────────────────────────────────────
 	addTool(s, &mcp.Tool{
 		Name:        "list_sales",
-		Description: "Senarai jualan terkini (terbaru dahulu). Setiap jualan: refunded_sen (telah direfund), outstanding_sen (baki boleh refund), refund_status (none|partial|full) — issue #518.",
+		Description: "Senarai jualan terkini (terbaru dahulu). Setiap jualan: refunded_sen (telah direfund), outstanding_sen (baki boleh refund), refund_status (none|partial|full) — issue #518. Jika form_id ialah borang mode 'response' (tiada bayaran), yang dipulangkan ialah RESPONS borang itu (sale_type 'response', submission_id + data), bukan senarai kosong.",
 	}, s.listSales)
 
 	addTool(s, &mcp.Tool{

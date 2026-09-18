@@ -129,6 +129,20 @@ func (s *FormStore) GetByID(ctx context.Context, accountID, id string) (*Form, e
 		formSelect+" AND id=$2 AND account_id=$1", accountID, id))
 }
 
+// GetByIDInAccounts fetches one non-deleted form by id across a SET of accounts,
+// enforcing ownership inside the query. The multi-account read surfaces (e.g.
+// the workspace-scoped sales list) resolve the account set once and then need
+// the form behind a single-account-only GetByID — resolving it per account would
+// be N queries and would silently miss the form when the caller's scope spans
+// accounts. Same select/scan as every other form read.
+func (s *FormStore) GetByIDInAccounts(ctx context.Context, accountIDs []string, id string) (*Form, error) {
+	if len(accountIDs) == 0 || id == "" {
+		return nil, ErrFormNotFound
+	}
+	return s.scanOne(s.pool.QueryRow(ctx,
+		formSelect+" AND id=$2 AND account_id = ANY($1)", accountIDs, id))
+}
+
 // Update mutates title/config/theme (soft-deleted forms are immutable).
 // A nil map means "leave unchanged": the SQL COALESCEs nil config/theme over
 // the stored values, so partial payloads (e.g. PATCH without a theme key,

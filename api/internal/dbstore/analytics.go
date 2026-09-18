@@ -48,7 +48,14 @@ func (s *SaleStore) FormAnalyticsAccounts(ctx context.Context, accountIDs []stri
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT f.id, f.slug, f.title,
-		       COUNT(s.id)                                  AS submissions,
+		       -- Issue #604: a response-mode form records NOTHING in the sales
+		       -- table — its entries live in submissions (issue #171). Counting
+		       -- sales alone reported 0 for such a form, which made "nothing was
+		       -- recorded" look confirmed on the dashboard while submissions
+		       -- existed. Count the table the form actually writes to.
+		       CASE WHEN f.config->>'mode' = 'response'
+		            THEN (SELECT COUNT(*) FROM submissions sub WHERE sub.form_id = f.id)
+		            ELSE COUNT(s.id) END                     AS submissions,
 		       COUNT(s.id) FILTER (WHERE s.status IN `+paidSet+`) AS paid_count,
 		       COUNT(s.id) FILTER (WHERE s.status = 'confirmed')  AS confirmed_cnt,
 		       COUNT(s.id) FILTER (WHERE s.status = 'failed')     AS failed_cnt,

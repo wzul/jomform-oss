@@ -1015,6 +1015,13 @@ export const DICT = {
   "bld.responseCount": { en: "{n} responses", ms: "{n} respons", zh: "{n} 条响应", ta: "{n} பதில்கள்", ar: "{n} رد" },
   "bld.responses": { en: "Responses", ms: "Respons", zh: "响应", ta: "பதில்கள்", ar: "الردود" },
   "bld.responseData": { en: "Data", ms: "Data", zh: "数据", ta: "தரவு", ar: "البيانات" },
+  // Issue #604: the Sales page renders a response-mode form's submissions in the
+  // same table shell, so it needs its own header/columns/empty state.
+  "bld.responsesSubtitle": { en: "Every response recorded for this form.", ms: "Semua respons yang direkodkan untuk borang ini.", zh: "此表单记录的每一条响应。", ta: "இந்த படிவத்திற்குப் பதிவான ஒவ்வொரு பதிலும்.", ar: "كل رد مسجَّل لهذا النموذج." },
+  "bld.responsesEmpty": { en: "No responses yet for this form.", ms: "Belum ada respons untuk borang ini.", zh: "此表单暂无响应。", ta: "இந்த படிவத்திற்கு இன்னும் பதில்கள் இல்லை.", ar: "لا توجد ردود لهذا النموذج بعد." },
+  "bld.responseAnswers": { en: "Answers", ms: "Jawapan", zh: "回答", ta: "பதில்கள்", ar: "الإجابات" },
+  "bld.responseReceived": { en: "Received", ms: "Diterima", zh: "收到时间", ta: "பெறப்பட்டது", ar: "الاستلام" },
+  "bld.responseSubmittedAt": { en: "Submitted", ms: "Dihantar", zh: "提交于", ta: "சமர்ப்பிக்கப்பட்டது", ar: "تم الإرسال" },
   "bld.chipOverride": { en: "CHIP override (this form)", ms: "CHIP override (borang ini)", zh: "CHIP 覆盖（此表单）", ta: "CHIP மேலெழுதல் (இந்த படிவம்)", ar: "تجاوز CHIP (هذا النموذج)" },
   "bld.emptyDefaults": { en: "Empty = use account defaults.", ms: "Kosong = guna tetapan lalai akaun.", zh: "留空 = 使用账户默认设置。", ta: "காலியாக = கணக்கின் இயல்புநிலையைப் பயன்படுத்தவும்.", ar: "فارغ = استخدم الإعدادات الافتراضية للحساب." },
   "bld.saveOverride": { en: "Save override", ms: "Simpan override", zh: "保存覆盖", ta: "மேலெழுதலைச் சேமி", ar: "حفظ التجاوز" },

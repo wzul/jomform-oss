@@ -470,7 +470,13 @@ type restForm struct {
 	Status string `json:"status"`
 	// IsPrivate reports whether the form is password-protected (issue #176).
 	// The password itself is never returned.
-	IsPrivate bool           `json:"is_private"`
+	IsPrivate bool `json:"is_private"`
+	// Mode is the form's collection mode: "payment" (default) or "response"
+	// (issue #171). The dedicated /sales page lists a response form's entries by
+	// reading that form's submissions instead of its (always empty) sales, so it
+	// needs the mode in the SAME payload it already loads for the filter
+	// dropdown — otherwise the page would have to fetch every form singly.
+	Mode      string         `json:"mode"`
 	URL       string         `json:"url"`
 	Config    map[string]any `json:"config,omitempty"`
 	Theme     map[string]any `json:"theme,omitempty"`
@@ -599,6 +605,7 @@ func (h *RESTHandlers) listForms(w http.ResponseWriter, r *http.Request, actx *A
 		out = append(out, restForm{
 			ID: f.ID, Slug: f.Slug, Title: f.Title, Status: f.Status,
 			IsPrivate: f.Status == dbstore.FormStatusPrivate,
+			Mode:      formMode(f),
 			URL:       h.formURLForAccount(r.Context(), actx.Account, f.Slug),
 			UpdatedAt: f.UpdatedAt.UTC().Format(time.RFC3339),
 		})
@@ -1134,6 +1141,113 @@ func toSaleRow(s *dbstore.Sale, emailStatus string) saleRow {
 	return row
 }
 
+// ─── Issue #171: response-mode rows on the sales surface ─────────────────────
+
+// restSubmissionRow is one response-mode entry rendered in the sales list
+// envelope. A response form has no sale, so the money/status columns are
+// meaningless; the row carries the recorded field values instead and is marked
+// sale_type "response" so every consumer can tell the two apart.
+type restSubmissionRow struct {
+	// RefCode is empty for a response (there is no payment reference); the id
+	// is surfaced as submission_id.
+	RefCode    string `json:"ref_code"`
+	Status     string `json:"status"`
+	SaleType   string `json:"sale_type"`
+	Created    string `json:"created_at"`
+	FormID     string `json:"form_id,omitempty"`
+	Buyer      string `json:"buyer,omitempty"`
+	BuyerEmail string `json:"buyer_email,omitempty"`
+	BuyerPhone string `json:"buyer_phone,omitempty"`
+	// Issue #171/#604: the submission identity + recorded answers.
+	SubmissionID string         `json:"submission_id"`
+	Data         map[string]any `json:"data"`
+	// Money is integer sen everywhere; a response has none, so these stay 0 so
+	// a table that renders them unconditionally shows zero rather than a NaN.
+	TotalSen       int64  `json:"total_sen"`
+	RefundedSen    int64  `json:"refunded_sen"`
+	OutstandingSen int64  `json:"outstanding_sen"`
+	RefundStatus   string `json:"refund_status"`
+	Updated        string `json:"updated_at,omitempty"`
+}
+
+// submissionsAsRows maps response entries into the sales-list row shape.
+func submissionsAsRows(subs []*dbstore.Submission) []restSubmissionRow {
+	out := make([]restSubmissionRow, 0, len(subs))
+	for _, s := range subs {
+		row := restSubmissionRow{
+			Status:       "response",
+			SaleType:     "response",
+			Created:      s.CreatedAt.UTC().Format(time.RFC3339),
+			FormID:       s.FormID,
+			SubmissionID: s.ID,
+			Data:         s.Data,
+			Updated:      s.CreatedAt.UTC().Format(time.RFC3339),
+		}
+		// Buyer identity is recorded alongside the answers by the submit
+		// handler (public.go handleResponseSubmit), so surface it in the same
+		// columns a sale uses.
+		if s.Data != nil {
+			row.Buyer = strField(s.Data, "full_name")
+			row.BuyerEmail = strField(s.Data, "email")
+			row.BuyerPhone = strField(s.Data, "phone")
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
+// strField reads a string value out of a submission's recorded answers.
+func strField(data map[string]any, key string) string {
+	if v, ok := data[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+// responseModeForm reports whether formID names a response-mode form inside the
+// caller's account scope, and returns that form. This is the ONE place the sales
+// read decides which table to read; it is deliberately keyed on the form's
+// config, never on a form id.
+func (h *RESTHandlers) responseModeForm(r *http.Request, scope *scopeResult, formID string) (*dbstore.Form, bool) {
+	if h.Forms == nil || h.Submissions == nil || formID == "" {
+		return nil, false
+	}
+	form, err := h.Forms.GetByIDInAccounts(r.Context(), scope.Accounts, formID)
+	if err != nil || form == nil {
+		return nil, false
+	}
+	return form, formMode(form) == "response"
+}
+
+// listResponseRows writes one page of a response-mode form's submissions in the
+// same envelope the sales list uses, so /sales?form=<response form> shows the
+// form's entries instead of an always-empty sales page.
+//
+// A submission has no status column and no payment: a status filter therefore
+// matches nothing (the merchant asked for a state responses cannot be in), while
+// the date range and the free-text search apply to the recorded values.
+func (h *RESTHandlers) listResponseRows(w http.ResponseWriter, r *http.Request, scope *scopeResult, formID string, page, limit int) {
+	if r.URL.Query().Get("status") != "" {
+		respond(w, http.StatusOK, map[string]any{
+			"items": []restSubmissionRow{}, "page": page, "limit": limit, "total": 0,
+		})
+		return
+	}
+	subs, total, err := h.Submissions.ListFilteredPage(r.Context(), scope.Accounts, dbstore.SubmissionFilter{
+		FormID:   formID,
+		DateFrom: r.URL.Query().Get("date_from"),
+		DateTo:   r.URL.Query().Get("date_to"),
+		Q:        r.URL.Query().Get("q"),
+	}, page, limit)
+	if err != nil {
+		respondErr(w, r, err)
+		return
+	}
+	respond(w, http.StatusOK, map[string]any{
+		"items": submissionsAsRows(subs), "page": page, "limit": limit, "total": total,
+	})
+}
+
 func (h *RESTHandlers) listSales(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	scope, ok := h.scopeOr403(w, r, actx)
 	if !ok {
@@ -1163,6 +1277,27 @@ func (h *RESTHandlers) listSales(w http.ResponseWriter, r *http.Request, actx *A
 
 	// Legacy shape: plain array when the caller does not ask for paging.
 	if r.URL.Query().Get("page") == "" {
+		// Issue #171: a response-mode form has no sales at all, so the array
+		// shape must read its submissions — otherwise every caller of this form
+		// (the dashboard's recent-list included) sees an empty array as if
+		// nothing had ever been recorded.
+		if formID := r.URL.Query().Get("form_id"); formID != "" {
+			if _, isResponse := h.responseModeForm(r, scope, formID); isResponse {
+				page, limit := parsePageLimit(r)
+				subs, _, err := h.Submissions.ListFilteredPage(r.Context(), scope.Accounts, dbstore.SubmissionFilter{
+					FormID:   formID,
+					DateFrom: r.URL.Query().Get("date_from"),
+					DateTo:   r.URL.Query().Get("date_to"),
+					Q:        r.URL.Query().Get("q"),
+				}, page, limit)
+				if err != nil {
+					respondErr(w, r, err)
+					return
+				}
+				respond(w, http.StatusOK, submissionsAsRows(subs))
+				return
+			}
+		}
 		var sales []*dbstore.Sale
 		var err error
 		if formID := r.URL.Query().Get("form_id"); formID != "" {
@@ -1181,6 +1316,14 @@ func (h *RESTHandlers) listSales(w http.ResponseWriter, r *http.Request, actx *A
 	// Paginated shape: { items, page, limit, total }.
 	page, limit := parsePageLimit(r)
 	formID := r.URL.Query().Get("form_id")
+	// Issue #171: the Sales page's per-form deep link must show a response-mode
+	// form's entries. Its entries live in `submissions`, not `sales`, so the
+	// sales-only query below can never match them (that was the reported
+	// defect). Pick the table from the form's own mode.
+	if _, isResponse := h.responseModeForm(r, scope, formID); isResponse {
+		h.listResponseRows(w, r, scope, formID, page, limit)
+		return
+	}
 	var sales []*dbstore.Sale
 	var total int64
 	var err error

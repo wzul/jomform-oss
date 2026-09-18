@@ -161,10 +161,19 @@ func genRef() string {
 // formMode returns the form's collection mode from its config: "payment"
 // (default, current behaviour) or "response" (collect-only, no payment).
 func formMode(f *dbstore.Form) string {
-	if f == nil || f.Config == nil {
+	if f == nil {
 		return "payment"
 	}
-	if raw, err := json.Marshal(f.Config); err == nil {
+	return formModeFromConfig(f.Config)
+}
+
+// formModeFromConfig is formMode over a bare config map, for call sites that
+// hold the config but not the form (e.g. the forms-list REST payload).
+func formModeFromConfig(config map[string]any) string {
+	if config == nil {
+		return "payment"
+	}
+	if raw, err := json.Marshal(config); err == nil {
 		var cfg struct {
 			Mode string `json:"mode"`
 		}

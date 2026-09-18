@@ -17,6 +17,7 @@ import { Shell } from "../../components/Shell";
 import { useI18n, type Key } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDate, formatDateTime } from "../../lib/formatDate";
+import { answersPreview, answerText, isResponseForm, rowKind } from "../../lib/salesRows";
 import { workspaceQuery } from "../../lib/workspace";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 
@@ -61,10 +62,20 @@ type Sale = {
   refunded_sen?: number;
   outstanding_sen?: number;
   refund_status?: string;
+  // Issue #171/#604: a response-mode form has no sale at all — its entries are
+  // submissions. The API returns those rows in this same envelope (marked
+  // sale_type "response"), carrying the submission id and the recorded answers
+  // instead of money/status. Without this the table would look up undefined
+  // fields and the entry would still not be readable.
+  submission_id?: string;
+  data?: Record<string, unknown>;
 };
 
 type SalesPage = { items: Sale[]; page: number; limit: number; total: number };
-type FormRow = { id: string; slug: string; title: string; status: string };
+// Issue #604: `mode` is what tells the page whether the selected form collects
+// payments (read /api/rest/sales) or responses (its entries live in
+// submissions, which the same /api/rest/sales call now returns for such a form).
+type FormRow = { id: string; slug: string; title: string; status: string; mode?: string };
 
 const PAGE_SIZE = 15;
 
@@ -244,7 +255,12 @@ function SalesPageInner() {
       setErr("");
       const qs = new URLSearchParams({ page: String(p), limit: String(PAGE_SIZE) });
       if (formFilter) qs.set("form_id", formFilter);
-      if (statusFilter) qs.set("status", statusFilter);
+      // Issue #604: a response has no payment status, so a status filter would
+      // silently match nothing. The control is hidden in that view; do not send
+      // a stale value either (a merchant can filter by status, then switch the
+      // form dropdown to a response form).
+      const responseForm = isResponseForm(forms, formFilter);
+      if (statusFilter && !responseForm) qs.set("status", statusFilter);
       if (dateFrom) qs.set("date_from", dateFrom);
       if (dateTo) qs.set("date_to", dateTo);
       if (q.trim()) qs.set("q", q.trim());
@@ -268,7 +284,7 @@ function SalesPageInner() {
       setTotal(r.data.total || 0);
       setChecking(false);
     },
-    [formFilter, statusFilter, dateFrom, dateTo, q, t, goToLogin],
+    [formFilter, statusFilter, dateFrom, dateTo, q, t, goToLogin, forms],
   );
 
   // Deep-link: when /sales?form=<id>, the form dropdown mirrors it.
@@ -524,13 +540,26 @@ function SalesPageInner() {
   const countLabel = total > 0 ? `${total} ${t("dash.records")}` : t("sales.empty");
   const hasFilters = !!(formFilter || statusFilter || dateFrom || dateTo || q.trim());
 
+  // Issue #604: when a response-mode form is selected, the rows are its
+  // submissions. Their shape differs (no money, no status, capture/refund do
+  // not apply), so the table switches to the answers view and the status filter
+  // is hidden — a submission has no status column, so offering the filter would
+  // silently return nothing.
+  const responsesView =
+    isResponseForm(forms, formFilter) ||
+    (!formFilter && rows.length > 0 && rows.every((r) => rowKind(r) === "response"));
+
   return (
     <Shell active="sales">
       <div className="w-full flex-1 px-6 py-8">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h1 className="max-w-xl text-xl font-semibold tracking-tight">{t("sales.title")}</h1>
-            <p className="max-w-xl text-sm text-[var(--jf-muted)]">{t("sales.subtitle")}</p>
+            <h1 className="max-w-xl text-xl font-semibold tracking-tight">
+              {responsesView ? t("bld.responsesThisForm") : t("sales.title")}
+            </h1>
+            <p className="max-w-xl text-sm text-[var(--jf-muted)]">
+              {responsesView ? t("bld.responsesSubtitle") : t("sales.subtitle")}
+            </p>
           </div>
           {/* Issue #447: realtime status + per-workspace sound toggle. */}
           <div className="flex items-center gap-2">
@@ -581,19 +610,24 @@ function SalesPageInner() {
               </option>
             ))}
           </select>
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            aria-label={t("sales.filterStatus")}
-            className="jf-input w-40"
-          >
-            <option value="">{t("sales.allStatuses")}</option>
-            {STATUSES.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
+          {/* Issue #604: a response has no payment status, so the filter is not
+              rendered at all (rather than hidden) — offering a control that can
+              only ever return nothing is worse than not offering it. */}
+          {!responsesView && (
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              aria-label={t("sales.filterStatus")}
+              className="jf-input w-40"
+            >
+              <option value="">{t("sales.allStatuses")}</option>
+              {STATUSES.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          )}
           <label className="text-xs text-[var(--jf-muted)]">
             {t("sales.dateFrom")}
             <input
@@ -654,21 +688,67 @@ function SalesPageInner() {
         <div className="jf-card mt-4 overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-[var(--jf-border)] text-left text-[10px] uppercase tracking-wide text-[var(--jf-muted)]">
-                <th className="px-4 py-3 font-medium">{t("dash.ref")}</th>
-                <th className="px-2 py-3 font-medium">{t("dash.buyer")}</th>
-                <th className="hidden px-2 py-3 font-medium sm:table-cell">{t("sales.items")}</th>
-                <th className="px-2 py-3 font-medium">{t("dash.amount")}</th>
-                <th className="px-2 py-3 font-medium">{t("dash.status")}</th>
-                <th className="hidden px-2 py-3 font-medium sm:table-cell">{t("dash.email")}</th>
-                <th className="hidden px-2 py-3 font-medium sm:table-cell">{t("sales.form")}</th>
-                <th className="hidden px-2 py-3 font-medium sm:table-cell">{t("prod.date")}</th>
-                <th className="px-4 py-3 text-right font-medium">{t("sales.actions")}</th>
-              </tr>
+              {responsesView ? (
+                /* Issue #604: a response form's entries have no money and no
+                   payment status, so the sale columns would all read "—"/RM0.00.
+                   Show the recorded answers instead. */
+                <tr className="border-b border-[var(--jf-border)] text-left text-[10px] uppercase tracking-wide text-[var(--jf-muted)]">
+                  <th className="px-4 py-3 font-medium">{t("bld.responseReceived")}</th>
+                  <th className="px-2 py-3 font-medium">{t("dash.buyer")}</th>
+                  <th className="hidden px-2 py-3 font-medium sm:table-cell">{t("bld.responseAnswers")}</th>
+                  <th className="hidden px-2 py-3 font-medium sm:table-cell">{t("sales.form")}</th>
+                  <th className="px-4 py-3 text-right font-medium">{t("sales.actions")}</th>
+                </tr>
+              ) : (
+                <tr className="border-b border-[var(--jf-border)] text-left text-[10px] uppercase tracking-wide text-[var(--jf-muted)]">
+                  <th className="px-4 py-3 font-medium">{t("dash.ref")}</th>
+                  <th className="px-2 py-3 font-medium">{t("dash.buyer")}</th>
+                  <th className="hidden px-2 py-3 font-medium sm:table-cell">{t("sales.items")}</th>
+                  <th className="px-2 py-3 font-medium">{t("dash.amount")}</th>
+                  <th className="px-2 py-3 font-medium">{t("dash.status")}</th>
+                  <th className="hidden px-2 py-3 font-medium sm:table-cell">{t("dash.email")}</th>
+                  <th className="hidden px-2 py-3 font-medium sm:table-cell">{t("sales.form")}</th>
+                  <th className="hidden px-2 py-3 font-medium sm:table-cell">{t("prod.date")}</th>
+                  <th className="px-4 py-3 text-right font-medium">{t("sales.actions")}</th>
+                </tr>
+              )}
             </thead>
             <tbody>
-              {rows.map((s) => (
-                <tr key={s.ref_code} className="border-b border-[var(--jf-border)] last:border-0 hover:bg-slate-50/60">
+              {rows.map((s) =>
+                responsesView ? (
+                  <tr
+                    key={s.submission_id || s.created_at}
+                    className="border-b border-[var(--jf-border)] last:border-0 hover:bg-slate-50/60"
+                  >
+                    <td className="whitespace-nowrap px-4 py-3 text-[11px] text-[var(--jf-muted)]">
+                      {formatDateTime(s.created_at, user?.timezone)}
+                    </td>
+                    <td className="max-w-32 truncate px-2 py-3 text-xs">
+                      {s.buyer || "—"}
+                      {s.buyer_email && (
+                        <span className="block truncate text-[10px] text-[var(--jf-muted)]">{s.buyer_email}</span>
+                      )}
+                      {s.buyer_phone && (
+                        <span className="block truncate text-[10px] text-[var(--jf-muted)]">{s.buyer_phone}</span>
+                      )}
+                    </td>
+                    <td className="hidden max-w-64 truncate px-2 py-3 text-xs text-[var(--jf-muted)] sm:table-cell">
+                      {answersPreview(s) || "—"}
+                    </td>
+                    <td className="hidden max-w-32 truncate px-2 py-3 text-xs text-[var(--jf-muted)] sm:table-cell">
+                      {s.form_id ? formName.get(s.form_id) || "—" : "—"}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3 text-right">
+                      <button
+                        onClick={() => setDetail(s)}
+                        className="jf-btn-ghost px-2.5 py-1 text-xs"
+                      >
+                        {t("sales.viewDetail")}
+                      </button>
+                    </td>
+                  </tr>
+                ) : (
+                  <tr key={s.ref_code} className="border-b border-[var(--jf-border)] last:border-0 hover:bg-slate-50/60">
                   <td className="whitespace-nowrap px-4 py-3 font-mono text-[11px]">{s.ref_code}</td>
                   <td className="max-w-32 truncate px-2 py-3 text-xs">
                     {s.buyer || "—"}
@@ -754,11 +834,12 @@ function SalesPageInner() {
                     </div>
                   </td>
                 </tr>
-              ))}
+                ),
+              )}
               {!checking && rows.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="px-4 py-10 text-center text-sm text-[var(--jf-muted)]">
-                    {err || t("sales.empty")}
+                  <td colSpan={responsesView ? 5 : 9} className="px-4 py-10 text-center text-sm text-[var(--jf-muted)]">
+                    {err || (responsesView ? t("bld.responsesEmpty") : t("sales.empty"))}
                     {/* Issue #503: a failed load gets an action, not a dead end. */}
                     {err && (
                       <div className="mt-2">
@@ -820,7 +901,12 @@ function SalesPageInner() {
             >
               <div className="flex items-center justify-between">
                 <h2 className="text-lg font-semibold">
-                  {t("sales.detail")} · <span className="font-mono text-sm">{detail.ref_code}</span>
+                  {t("sales.detail")} ·{" "}
+                  <span className="font-mono text-sm">
+                    {rowKind(detail) === "response"
+                      ? (detail.submission_id || "").slice(0, 8)
+                      : detail.ref_code}
+                  </span>
                 </h2>
                 <button
                   ref={closeBtnRef}
@@ -832,6 +918,43 @@ function SalesPageInner() {
                 </button>
               </div>
 
+              {rowKind(detail) === "response" ? (
+                /* Issue #604: a response has no payment, so the sale drawer's
+                   status chip / amounts / capture-refund actions are replaced by
+                   the recorded answers — the whole point of the entry. */
+                <>
+                  <section className="mt-5">
+                    <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--jf-muted)]">
+                      {t("sales.buyerInfo")}
+                    </h3>
+                    <dl className="mt-2 space-y-1 text-sm">
+                      <div className="flex justify-between gap-4">
+                        <dt className="text-[var(--jf-muted)]">{t("sales.form")}</dt>
+                        <dd className="truncate">{detail.form_id ? formName.get(detail.form_id) || "—" : "—"}</dd>
+                      </div>
+                      <div className="flex justify-between gap-4">
+                        <dt className="text-[var(--jf-muted)]">{t("bld.responseSubmittedAt")}</dt>
+                        <dd>{formatDateTime(detail.created_at, user?.timezone)}</dd>
+                      </div>
+                    </dl>
+                  </section>
+
+                  <section className="mt-5">
+                    <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--jf-muted)]">
+                      {t("bld.responseAnswers")}
+                    </h3>
+                    <dl className="mt-2 space-y-1 text-sm">
+                      {Object.entries(detail.data || {}).map(([k, v]) => (
+                        <div key={k} className="flex justify-between gap-4">
+                          <dt className="truncate text-[var(--jf-muted)]">{k}</dt>
+                          <dd className="truncate font-medium">{answerText(v) || "—"}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  </section>
+                </>
+              ) : (
+                <>
               <div className="mt-3">
                 <span className={`rounded-full border px-2.5 py-0.5 text-xs font-medium ${saleBadge(detail.status)}`}>
                   {detail.status}
@@ -1010,8 +1133,13 @@ function SalesPageInner() {
                   <p className="mt-2 text-sm text-[var(--jf-muted)]">{t("dash.emailNotSent")}</p>
                 )}
               </section>
+                </>
+              )}
 
-              {/* Actions */}
+              {/* Actions — issue #604: these are payment actions (capture /
+                  release / confirm / refund), so they only render for a sale. A
+                  response has none, and its drawer already closed above. */}
+              {rowKind(detail) !== "response" && (
               <div className="mt-6 flex justify-end gap-2 border-t border-[var(--jf-border)] pt-4">
                 {canWrite && isCapturePending(detail) && (
                   <>
@@ -1050,6 +1178,7 @@ function SalesPageInner() {
                   </button>
                 )}
               </div>
+              )}
             </div>
           </div>
         )}

@@ -41,7 +41,7 @@ const TOOL_GROUPS: { group: string; tools: { name: string; desc: string }[] }[] 
   {
     group: "Sales",
     tools: [
-      { name: "list_sales", desc: "Senarai jualan terkini (terbaru dahulu). Setiap jualan membawa refunded_sen (jumlah telah direfund), outstanding_sen (baki boleh refund) dan refund_status (none|partial|full) supaya agen boleh bezakan refund sebahagian daripada refund penuh (issue #518)." },
+      { name: "list_sales", desc: "Senarai jualan terkini (terbaru dahulu). Setiap jualan membawa refunded_sen (jumlah telah direfund), outstanding_sen (baki boleh refund) dan refund_status (none|partial|full) supaya agen boleh bezakan refund sebahagian daripada refund penuh (issue #518). Jika form_id yang diberi ialah borang mode 'response' (tiada bayaran), senarai yang dipulangkan ialah RESPONS borang itu (sale_type 'response', submission_id + data) — sama seperti halaman Sales, bukan senarai kosong." },
       { name: "get_sales_summary", desc: "Ringkasan jualan: bilangan mengikut status (termasuk refunded), refunded_sen (jumlah direfund) dan revenue_sen (nilai bersih selepas refund, issue #518)." },
       { name: "confirm_sale", desc: "Sahkan jualan (contoh: selepas semak bukti bank transfer)." },
       { name: "get_sale_email_status", desc: "Status emel resit untuk satu jualan: Sent \u2192 Delivered \u2192 Opened \u2192 (Clicked) dengan masa. Guna ref_code dari list_sales." },

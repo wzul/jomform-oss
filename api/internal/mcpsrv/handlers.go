@@ -226,6 +226,12 @@ type saleOut struct {
 	RefundedSen    int64  `json:"refunded_sen"`
 	OutstandingSen int64  `json:"outstanding_sen"`
 	RefundStatus   string `json:"refund_status"`
+	// Issue #604: for a response-mode form the row is a SUBMISSION, not a sale
+	// (issue #171) — sale_type is "response", submission_id identifies it and
+	// data carries the recorded answers. Without these an agent following the
+	// dashboard would see an empty list for a form that has entries.
+	SubmissionID string         `json:"submission_id,omitempty"`
+	Data         map[string]any `json:"data,omitempty"`
 }
 
 type listSalesIn struct {
@@ -233,10 +239,61 @@ type listSalesIn struct {
 	Status string `json:"status,omitempty" jsonschema:"Optional — hadkan kepada status: pending|paid|confirmed|failed|cancelled"`
 }
 
+// responseModeFormID reports whether formID names a response-mode form inside
+// the call's account scope. Read-only, and the ONE place list_sales decides
+// which table to read — keyed on the form's config, never on a form id.
+func (s *Server) responseModeFormID(ctx context.Context, accs []string, formID string) bool {
+	if formID == "" || s.deps.Forms == nil {
+		return false
+	}
+	form, err := s.deps.Forms.GetByIDInAccounts(ctx, accs, formID)
+	if err != nil || form == nil {
+		return false
+	}
+	if form.Config == nil {
+		return false
+	}
+	if m, ok := form.Config["mode"].(string); ok {
+		return m == "response"
+	}
+	return false
+}
+
 func (s *Server) listSales(ctx context.Context, _ *mcp.CallToolRequest, in listSalesIn) (*mcp.CallToolResult, *listOutput[saleOut], error) {
 	accs, err := s.accountScopes(ctx, false)
 	if err != nil {
 		return nil, nil, err
+	}
+	// Issue #604: a response-mode form records no sales at all — its entries are
+	// submissions (issue #171). Reading `sales` for such a form returns an empty
+	// list, which reads to an agent as "nothing was recorded". Return the
+	// submissions in the same shape, marked sale_type "response".
+	if s.responseModeFormID(ctx, accs, in.FormID) {
+		if s.deps.Submissions == nil {
+			return nil, nil, fmt.Errorf("submissions tidak tersedia")
+		}
+		subs, _, err := s.deps.Submissions.ListByAccountsFormPage(ctx, accs, in.FormID, 1, 50)
+		if err != nil {
+			return nil, nil, fmt.Errorf("db: %w", err)
+		}
+		out := make([]saleOut, 0, len(subs))
+		for _, sub := range subs {
+			client := ""
+			if v, ok := sub.Data["full_name"].(string); ok && v != "" {
+				client = v
+			} else if v, ok := sub.Data["email"].(string); ok {
+				client = v
+			}
+			out = append(out, saleOut{
+				Status:       "response",
+				SaleType:     "response",
+				Client:       client,
+				CreatedAt:    sub.CreatedAt.UTC().Format(time.RFC3339),
+				SubmissionID: sub.ID,
+				Data:         sub.Data,
+			})
+		}
+		return nil, newListOut(out), nil
 	}
 	var sales []*dbstore.Sale
 	switch {
