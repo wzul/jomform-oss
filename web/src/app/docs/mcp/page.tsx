@@ -312,6 +312,12 @@ const TOOL_GROUPS: { group: string; tools: { name: string; desc: string }[] }[] 
       { name: "admin_dead_letter_events", desc: "Versi dashboard: GET /v1/admin/dead-letters (issue #579). Senarai sama seperti tool MCP, dipaparkan di halaman /admin dengan butang requeue setiap baris — supaya operator nampak callback yang gagal tanpa perlu klien MCP." },
       { name: "admin_requeue_dead_letter_event", desc: "Versi dashboard: POST /v1/admin/dead-letters/requeue (issue #579). Tindakan requeue yang sama dari halaman /admin." },
       { name: "admin_system_health", desc: "Kesihatan sistem: uptime, bilangan ralat MCP terkini (24j), kedalaman queue emel. Super-admin sahaja; read-only; diaudit." },
+      { name: "admin_list_suppressions", desc: "Senarai alamat yang disekat daripada dihantar emel (issue #601): emel, sebab (hard_bounce|complaint|manual), sumber, nota, siapa tambah dan bila. Boleh cari (q) dan berhalaman (page/limit). Super-admin sahaja; read-only; diaudit." },
+      { name: "admin_add_suppression", desc: "Tambah alamat ke senarai sekatan secara manual supaya tiada emel dihantar kepadanya (issue #601). reason: hard_bounce|complaint|manual (lalai manual), note pilihan. Idempotent. Super-admin sahaja; diaudit." },
+      { name: "admin_remove_suppression", desc: "Buang alamat dari senarai sekatan supaya penghantaran emel bermula semula (issue #601) \u2014 untuk kes positif palsu. Super-admin sahaja; diaudit." },
+      { name: "admin_list_suppressions", desc: "Versi dashboard: GET /v1/admin/suppressions (issue #601) dengan kotak carian dan pager, di halaman /admin." },
+      { name: "admin_add_suppression", desc: "Versi dashboard: POST /v1/admin/suppressions (issue #601) \u2014 borang tambah manual pada halaman /admin." },
+      { name: "admin_remove_suppression", desc: "Versi dashboard: DELETE /v1/admin/suppressions/{email} (issue #601) \u2014 butang buang dengan pengesahan pada halaman /admin." },
     ],
   },
 ];

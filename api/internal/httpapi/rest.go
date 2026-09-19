@@ -78,6 +78,10 @@ type RESTHandlers struct {
 	// WebhookEvents is the inbound callback event store (issue #579). Nil → the
 	// admin dead-letter endpoints report the store as unavailable.
 	WebhookEvents *dbstore.WebhookEventStore
+	// Suppressions is the SES suppression list (issue #56). Nil → the admin
+	// suppression endpoints report the store as unavailable. Backs the
+	// super-admin screen added in issue #601.
+	Suppressions *dbstore.SuppressionStore
 
 	// Issue #171: response-only form submissions (list + count endpoints).
 	Submissions *dbstore.SubmissionStore
@@ -270,6 +274,12 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	// admin_dead_letter_events / admin_requeue_dead_letter_event MCP tools.
 	mux.Handle("GET /v1/admin/dead-letters", h.authed(h.handleAdminDeadLetters))
 	mux.Handle("POST /v1/admin/dead-letters/requeue", h.authed(h.handleAdminRequeueDeadLetter))
+	// Issue #601: super-admin suppression list — list/search, manual add, and
+	// remove so mail to an address resumes. Mirrors the admin_list_suppressions
+	// / admin_add_suppression / admin_remove_suppression MCP tools.
+	mux.Handle("GET /v1/admin/suppressions", h.authed(h.handleAdminListSuppressions))
+	mux.Handle("POST /v1/admin/suppressions", h.authed(h.handleAdminAddSuppression))
+	mux.Handle("DELETE /v1/admin/suppressions/{email}", h.authed(h.handleAdminRemoveSuppression))
 	mux.Handle("GET /v1/rest/analytics/forms", h.authed(h.formAnalytics))
 	mux.Handle("GET /v1/rest/analytics/products", h.authed(h.productAnalytics))
 	// Issue #92: event-tracking read endpoints (audit log + behaviour analytics).

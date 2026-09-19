@@ -57,6 +57,47 @@ type DeadLetter = {
 
 type DeadLetters = { items: DeadLetter[]; total: number };
 
+// Issue #601: the suppression list — addresses JomForm refuses to mail.
+type Suppression = {
+  email: string;
+  reason: string;
+  source: string;
+  note?: string;
+  created_by?: string;
+  created_by_email?: string;
+  created_at: string;
+};
+
+type Suppressions = { items: Suppression[]; page: number; limit: number; total: number };
+
+const SUPP_PER_PAGE = 20;
+// The three canonical reason codes (suppressed_emails_reason_chk, migration
+// 000061). Kept as one list so the add form's dropdown and the row badge cannot
+// drift from what the API accepts.
+const SUPP_REASONS = ["hard_bounce", "complaint", "manual"] as const;
+
+// A pragmatic address check for the client side only — the API validates with
+// a real RFC 5322 parse and is the authority. This exists so an obvious typo is
+// caught before a round trip, not to replace the server's answer.
+const looksLikeEmail = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
+
+/**
+ * Reads the API's `{error: "..."}` body off a failed response, falling back to
+ * `fallback` when the body is absent or unparseable. The write endpoints answer
+ * with a specific Malay message ("emel tidak sah", an invalid reason code) that
+ * is more useful to the operator than a generic line, so it is surfaced
+ * verbatim rather than swallowed.
+ */
+async function serverError(r: Response, fallback: string): Promise<string> {
+  try {
+    const body = (await r.json()) as { error?: unknown };
+    if (typeof body?.error === "string" && body.error.trim() !== "") return body.error;
+  } catch {
+    // Non-JSON body (a proxy error page, an empty 500): use the fallback.
+  }
+  return fallback;
+}
+
 type Overview = {
   totals: Totals;
   growth_24h: Growth;
@@ -75,6 +116,16 @@ const fmtBytes = (b: number) => {
   if (b >= 1 << 10) return `${(b / (1 << 10)).toFixed(0)} KB`;
   return `${b} B`;
 };
+
+// Suppression reason badge colours (mirror the deliveries page palette):
+// a hard bounce and a complaint are damage to the sending identity, a manual
+// entry is a decision an operator made.
+const suppReasonBadge = (reason: string) =>
+  ({
+    hard_bounce: "bg-red-50 text-red-700 border-red-200",
+    complaint: "bg-orange-50 text-orange-700 border-orange-200",
+    manual: "bg-slate-100 text-slate-600 border-slate-200",
+  })[reason] || "bg-slate-100 text-slate-500 border-slate-200";
 
 function StatCard({ label, value, sub }: { label: string; value: string | number; sub?: string }) {
   return (
@@ -168,12 +219,143 @@ export default function AdminPage() {
     if (r.ok) setData(r.data);
   }, [t, goToLogin]);
 
+  // Issue #601: suppression list state. Kept separate from `load`/`loadDead`
+  // so a failure in one section never blanks the others.
+  const [supp, setSupp] = useState<Suppressions | null>(null);
+  const [suppErr, setSuppErr] = useState("");
+  const [suppPages, setSuppPages] = useState(1);
+  const [suppSearch, setSuppSearch] = useState("");
+  // The debounced value actually sent to the server; typing must not fire a
+  // request per keystroke.
+  const [suppQuery, setSuppQuery] = useState("");
+  const [suppBusy, setSuppBusy] = useState("");
+  const [addEmail, setAddEmail] = useState("");
+  const [addReason, setAddReason] = useState<string>(SUPP_REASONS[0]);
+  const [addNote, setAddNote] = useState("");
+  const [addMsg, setAddMsg] = useState("");
+  const [addErr, setAddErr] = useState("");
+  const [adding, setAdding] = useState(false);
+
+  const loadSupp = useCallback(async (page: number, q: string) => {
+    const params = new URLSearchParams();
+    params.set("page", String(page));
+    params.set("limit", String(SUPP_PER_PAGE));
+    if (q) params.set("q", q);
+    const r = await runLoad(
+      () => fetchJson<Suppressions>(`/api/admin/suppressions?${params.toString()}`),
+      { onUnauth: goToLogin, message: t("admin.suppLoadFail") },
+    );
+    setSuppErr(r.ok ? "" : r.error);
+    if (r.ok) setSupp(r.data);
+  }, [goToLogin, t]);
+
+  // Debounce the search box; a change resets to page 1 (a filtered result set
+  // has its own pagination, so staying on page 4 would show an empty page).
+  useEffect(() => {
+    const id = window.setTimeout(() => {
+      setSuppQuery(suppSearch);
+      setSuppPages(1);
+    }, 300);
+    return () => window.clearTimeout(id);
+  }, [suppSearch]);
+
+  const removeSupp = useCallback(async (addr: string) => {
+    if (!window.confirm(t("admin.suppRemoveConfirm", { email: addr }))) return;
+    setSuppBusy(addr);
+    setSuppErr("");
+    try {
+      const r = await fetch(`/api/admin/suppressions/${encodeURIComponent(addr)}`, { method: "DELETE" });
+      if (r.status === 401 || r.status === 403) {
+        goToLogin();
+        return;
+      }
+      if (!r.ok) {
+        // The server knows why better than the page does: a 404 is "not on the
+        // list" and an infrastructure failure says so. Show its message, and
+        // only fall back to the generic line when the body has none.
+        setSuppErr(await serverError(r, t("admin.suppRemoveFail")));
+        return;
+      }
+      // Re-read the SAME page the operator was on, so the row disappears in
+      // place instead of jumping them back to page 1. If that was the last row
+      // on the last page, step back one page so they do not land on an empty
+      // page — changing the page fires the loader effect, so only reload
+      // explicitly when the page is unchanged (otherwise the row is fetched
+      // twice).
+      const remaining = supp?.items.filter((s) => s.email !== addr).length ?? 0;
+      const target = remaining === 0 && suppPages > 1 ? suppPages - 1 : suppPages;
+      if (target !== suppPages) {
+        setSuppPages(target);
+      } else {
+        await loadSupp(target, suppQuery);
+      }
+    } catch {
+      setSuppErr(t("admin.suppRemoveFail"));
+    } finally {
+      setSuppBusy("");
+    }
+  }, [goToLogin, loadSupp, supp, suppPages, suppQuery, t]);
+
+  const addSupp = useCallback(async () => {
+    setAddErr("");
+    setAddMsg("");
+    // Lowercase + trim exactly as the API does, so what the operator sees in
+    // the confirmation is what was stored.
+    const addr = addEmail.trim().toLowerCase();
+    if (!looksLikeEmail(addr)) {
+      setAddErr(t("admin.suppBadEmail"));
+      return;
+    }
+    setAdding(true);
+    try {
+      const r = await fetch("/api/admin/suppressions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: addr, reason: addReason, note: addNote.trim() }),
+      });
+      if (r.status === 401 || r.status === 403) {
+        goToLogin();
+        return;
+      }
+      if (!r.ok) {
+        // A rejected write carries the reason ("emel tidak sah", an invalid
+        // reason code); surfacing it verbatim is what makes the form fixable.
+        setAddErr(await serverError(r, t("admin.suppAddFail")));
+        return;
+      }
+      const res = (await r.json()) as { email: string; created: boolean };
+      setAddMsg(res.created
+        ? t("admin.suppAdded", { email: res.email })
+        : t("admin.suppAddedExisting", { email: res.email }));
+      setAddEmail("");
+      setAddNote("");
+      if (suppPages !== 1) {
+        // The new row is newest-first, so page 1 is where it shows; changing
+        // the page fires the loader effect.
+        setSuppPages(1);
+      } else {
+        await loadSupp(1, suppQuery);
+      }
+    } catch {
+      setAddErr(t("admin.suppAddFail"));
+    } finally {
+      setAdding(false);
+    }
+  }, [addEmail, addNote, addReason, goToLogin, loadSupp, suppPages, suppQuery, t]);
+
   useEffect(() => {
     if (isSuperAdmin) {
       load();
       loadDead();
     }
   }, [isSuperAdmin, load, loadDead]);
+
+  // Issue #601: the suppression list is a server-paginated, server-searched
+  // section, so it reloads on its own whenever the debounced query or the page
+  // changes (and once on entry).
+  useEffect(() => {
+    if (isSuperAdmin) void loadSupp(suppPages, suppQuery);
+  }, [isSuperAdmin, loadSupp, suppPages, suppQuery]);
 
   if (anon || !isSuperAdmin) {
     return (
@@ -398,6 +580,254 @@ export default function AdminPage() {
                       </tbody>
                     </table>
                   </div>
+                </>
+              )}
+            </section>
+
+            {/* Suppression list (issue #601) */}
+            {/*
+              The addresses JomForm refuses to mail. Kept on this page rather
+              than a new route (same precedent as dead letters, #579): it is
+              super-admin only, needs no new nav entry, and the mobile guard
+              already covers /admin.
+
+              Mobile discipline: an email address is a long unbreakable token —
+              the same thing that blew this page to 1047px wide on a phone
+              (#592). Every cell carrying an address breaks (break-all), and the
+              section uses the card-list-below-xl + table-from-xl shape of the
+              dead-letters section, because an email plus six other columns
+              cannot fit the page box below xl.
+            */}
+            <section>
+              <h2 className="mb-3 flex flex-wrap items-center gap-2 text-sm font-semibold uppercase tracking-wide text-[var(--jf-muted)]">
+                {t("admin.supp")}
+                {/* AGENTS.md DOCUMENTATION PARITY rule 4: an inline "?" next to
+                    the feature, deep-linking the docs page that explains it. */}
+                <a
+                  href="/docs/ses-reputation#suppression"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={t("admin.suppDocs")}
+                  aria-label={t("admin.suppDocs")}
+                  className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 text-xs font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                >
+                  ?
+                </a>
+              </h2>
+              <p className="mb-3 text-sm text-[var(--jf-muted)]">{t("admin.suppHint")}</p>
+
+              {/* Manual add. Its own error/success line, so a rejected email
+                  does not read as a failed list load. */}
+              <div className="mb-4 rounded-xl border border-[var(--jf-border)] bg-white p-3">
+                <p className="mb-2 text-sm font-medium text-[var(--jf-text)]">{t("admin.suppAddTitle")}</p>
+                <div className="flex flex-wrap items-end gap-2">
+                  <label className="flex min-w-0 flex-1 basis-56 flex-col gap-1 text-sm">
+                    <span className="text-[var(--jf-muted)]">{t("admin.suppAddEmail")}</span>
+                    <input
+                      value={addEmail}
+                      onChange={(e) => setAddEmail(e.target.value)}
+                      type="email"
+                      inputMode="email"
+                      autoComplete="off"
+                      placeholder="name@example.com"
+                      aria-label={t("admin.suppAddEmail")}
+                      className="jf-input w-full"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1 text-sm">
+                    <span className="text-[var(--jf-muted)]">{t("admin.suppAddReason")}</span>
+                    <select
+                      value={addReason}
+                      onChange={(e) => setAddReason(e.target.value)}
+                      aria-label={t("admin.suppAddReason")}
+                      className="jf-input"
+                    >
+                      {SUPP_REASONS.map((r) => (
+                        <option key={r} value={r}>
+                          {r}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="flex min-w-0 flex-1 basis-48 flex-col gap-1 text-sm">
+                    <span className="text-[var(--jf-muted)]">{t("admin.suppAddNote")}</span>
+                    <input
+                      value={addNote}
+                      onChange={(e) => setAddNote(e.target.value)}
+                      autoComplete="off"
+                      aria-label={t("admin.suppAddNote")}
+                      className="jf-input w-full"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => void addSupp()}
+                    disabled={adding}
+                    className="min-h-11 whitespace-nowrap rounded-md border border-[var(--jf-border)] px-4 text-sm font-medium hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    {adding ? t("admin.suppAdding") : t("admin.suppAddSubmit")}
+                  </button>
+                </div>
+                {addErr && (
+                  <p role="alert" className="mt-2 break-words text-sm text-red-600">
+                    {addErr}
+                  </p>
+                )}
+                {addMsg && <p className="mt-2 break-all text-sm text-emerald-700">{addMsg}</p>}
+              </div>
+
+              {/* Search (debounced, resets to page 1). */}
+              <div className="mb-3 flex flex-wrap items-center gap-2">
+                <input
+                  value={suppSearch}
+                  onChange={(e) => setSuppSearch(e.target.value)}
+                  type="search"
+                  autoComplete="off"
+                  placeholder={t("admin.suppSearchPh")}
+                  aria-label={t("admin.suppSearchPh")}
+                  className="jf-input min-h-11 w-full sm:w-72"
+                />
+                {supp && (
+                  <span className="text-sm text-[var(--jf-muted)]">
+                    {t("admin.suppCount", { n: supp.total })}
+                  </span>
+                )}
+              </div>
+
+              {suppErr && (
+                <div role="alert" className="mb-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                  {suppErr}
+                  <button
+                    type="button"
+                    onClick={() => void loadSupp(suppPages, suppQuery)}
+                    className="ml-2 inline-flex min-h-11 items-center px-2 underline decoration-dotted underline-offset-2"
+                  >
+                    {t("common.retry")}
+                  </button>
+                </div>
+              )}
+
+              {!supp ? (
+                <p className="text-sm text-[var(--jf-muted)]">Loading…</p>
+              ) : supp.items.length === 0 ? (
+                <p className="text-sm text-[var(--jf-muted)]">
+                  {suppQuery ? t("admin.suppNoMatch") : t("admin.suppNone")}
+                </p>
+              ) : (
+                <>
+                  {/* Below xl: one card per address, with the Remove action in
+                      view. */}
+                  <ul className="space-y-3 xl:hidden">
+                    {supp.items.map((s) => (
+                      <li
+                        key={s.email}
+                        className="rounded-xl border border-[var(--jf-border)] bg-white p-3"
+                      >
+                        {/* break-all: an address is unbreakable and sets the
+                            card's min-content otherwise. */}
+                        <div className="break-all font-medium text-[var(--jf-text)]">{s.email}</div>
+                        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
+                          <span
+                            className={`rounded-full border px-2 py-0.5 font-medium ${suppReasonBadge(s.reason)}`}
+                          >
+                            {s.reason}
+                          </span>
+                          <span className="text-[var(--jf-muted)]">{s.source}</span>
+                          <span className="text-[var(--jf-muted)]">
+                            {s.created_at?.slice(0, 19).replace("T", " ")}
+                          </span>
+                        </div>
+                        {s.note ? (
+                          <p className="mt-1 [overflow-wrap:anywhere] text-xs text-[var(--jf-muted)]">
+                            {s.note}
+                          </p>
+                        ) : null}
+                        <p className="mt-1 break-all text-xs text-[var(--jf-muted)]">
+                          {t("admin.suppColBy")}: {s.created_by_email || "—"}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => void removeSupp(s.email)}
+                          disabled={suppBusy === s.email}
+                          className="mt-3 min-h-11 w-full rounded-md border border-[var(--jf-border)] px-3 text-sm font-medium hover:bg-slate-50 disabled:opacity-50"
+                        >
+                          {suppBusy === s.email ? t("admin.suppRemoving") : t("admin.suppRemove")}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                  {/* From xl up: the table. */}
+                  <div className="hidden overflow-x-auto rounded-xl border border-[var(--jf-border)] xl:block">
+                    <table className="w-full text-left text-sm">
+                      <thead className="border-b border-[var(--jf-border)] bg-slate-50 text-sm uppercase tracking-wide text-[var(--jf-muted)]">
+                        <tr>
+                          <th className="px-4 py-2 font-medium">{t("admin.suppColEmail")}</th>
+                          <th className="px-4 py-2 font-medium">{t("admin.suppColReason")}</th>
+                          <th className="px-4 py-2 font-medium">{t("admin.suppColSource")}</th>
+                          <th className="px-4 py-2 font-medium">{t("admin.suppColNote")}</th>
+                          <th className="px-4 py-2 font-medium">{t("admin.suppColAdded")}</th>
+                          <th className="px-4 py-2 font-medium">{t("admin.suppColBy")}</th>
+                          <th className="px-4 py-2 font-medium">{t("admin.suppColAction")}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {supp.items.map((s) => (
+                          <tr key={s.email} className="border-b border-[var(--jf-border)] last:border-0">
+                            <td className="px-4 py-2 break-all font-medium">{s.email}</td>
+                            <td className="px-4 py-2">
+                              <span
+                                className={`whitespace-nowrap rounded-full border px-2 py-0.5 text-xs font-medium ${suppReasonBadge(s.reason)}`}
+                              >
+                                {s.reason}
+                              </span>
+                            </td>
+                            <td className="px-4 py-2 whitespace-nowrap text-[var(--jf-muted)]">{s.source}</td>
+                            <td className="px-4 py-2 [overflow-wrap:anywhere] text-[var(--jf-muted)]">{s.note || "—"}</td>
+                            <td className="px-4 py-2 whitespace-nowrap text-xs text-[var(--jf-muted)]">
+                              {s.created_at?.slice(0, 19).replace("T", " ")}
+                            </td>
+                            <td className="px-4 py-2 break-all text-[var(--jf-muted)]">{s.created_by_email || "—"}</td>
+                            <td className="px-4 py-2">
+                              <button
+                                type="button"
+                                onClick={() => void removeSupp(s.email)}
+                                disabled={suppBusy === s.email}
+                                className="min-h-11 whitespace-nowrap rounded-md border border-[var(--jf-border)] px-3 text-sm font-medium hover:bg-slate-50 disabled:opacity-50"
+                              >
+                                {suppBusy === s.email ? t("admin.suppRemoving") : t("admin.suppRemove")}
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Pager. Server-side, so the buttons only move the page
+                      number; the loader effect refetches. */}
+                  {suppPages > 1 && (
+                    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-sm text-[var(--jf-muted)]">
+                      <span>{t("admin.suppPageOf", { page: supp.page, total: suppPages })}</span>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => setSuppPages((p) => Math.max(1, p - 1))}
+                          disabled={supp.page <= 1}
+                          className="min-h-11 rounded-md border border-[var(--jf-border)] px-3 text-sm font-medium hover:bg-slate-50 disabled:opacity-40"
+                        >
+                          {t("common.prev")}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSuppPages((p) => Math.min(suppPages, p + 1))}
+                          disabled={supp.page >= suppPages}
+                          className="min-h-11 rounded-md border border-[var(--jf-border)] px-3 text-sm font-medium hover:bg-slate-50 disabled:opacity-40"
+                        >
+                          {t("common.next")}
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
             </section>

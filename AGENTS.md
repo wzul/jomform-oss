@@ -71,6 +71,12 @@ Parity checklist (dashboard → MCP):
   (dead-letter visibility + requeue for parked inbound callbacks — issue #574;
   also exposed to the admin dashboard as `GET /v1/admin/dead-letters` +
   `POST /v1/admin/dead-letters/requeue` — issue #579)
+- Email suppression list (gated on #385 super-admin) →
+  `admin_list_suppressions`, `admin_add_suppression`, `admin_remove_suppression`
+  (the addresses JomForm refuses to mail — SES hard bounces and complaints
+  ingested asynchronously by the pre-send-check lane, plus manual entries;
+  also exposed to the admin dashboard as `GET`/`POST /v1/admin/suppressions` +
+  `DELETE /v1/admin/suppressions/{email}`)
 - Affiliate marketing (#444) → `create_affiliate`, `list_affiliates`,
   `get_affiliate_sales`, `set_affiliate_commission`
 - Realtime notifications (#447) → `get_realtime_status`, `set_realtime_sound`

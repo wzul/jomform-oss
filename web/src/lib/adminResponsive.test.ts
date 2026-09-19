@@ -301,6 +301,80 @@ test("the phone language control's accessible name is translated in all locales"
   }
 });
 
+test("the suppression section's email cells can break, so they cannot floor the page", () => {
+  // Issue #601. The suppression table's first column is an email address — a
+  // long, unbreakable token, which is exactly what blew /admin to 1047px wide
+  // on a phone (#592: the dedup_key column). The assertions above are anchored
+  // to `dedup_key` and therefore do NOT cover a new section, so this pins the
+  // new one.
+  //
+  // Two things must hold, and both are load-bearing:
+  //   1. every cell carrying an address breaks (break-all), and
+  //   2. the section uses the card-list-below-xl + table-from-xl shape, because
+  //      an address plus six other columns cannot fit the page box below xl.
+  const section = adminPage.slice(adminPage.indexOf('{/* Suppression list (issue #601) */}'));
+  assert.ok(section.length > 0, "the suppression section is gone — re-anchor this guard");
+
+  // The address cell in the table. Anchored on the <td>, not a bare
+  // `break-all` — the phone card carries the same class earlier in the section,
+  // so a loose pattern would pass while the table cell was unbreakable (it did:
+  // removing break-all from the <td> still passed this test when the pattern was
+  // /break-all[^"]*">{s.email}/).
+  assert.match(
+    section,
+    /<td className="px-4 py-2 break-all font-medium">\{s\.email\}<\/td>/,
+    "the suppression table's email cell no longer breaks — an unbreakable address floors the table's min-content",
+  );
+  // The address line in the phone card.
+  assert.match(
+    section,
+    /className="break-all font-medium text-\[var\(--jf-text\)\]">\{s\.email\}/,
+    "the suppression phone card's email line no longer breaks",
+  );
+  // Card list below xl, table from xl up.
+  assert.match(
+    section,
+    /className="space-y-3 xl:hidden"/,
+    "the suppression card list is gone — below xl the seven-column table shows instead",
+  );
+  assert.match(
+    section,
+    /className="hidden overflow-x-auto[^"]*xl:block"/,
+    "the suppression table is no longer xl-and-up only — below that it is wider than the page box",
+  );
+  // The note column carries free text that can contain an unbreakable token.
+  assert.match(
+    section,
+    /\[overflow-wrap:anywhere\]/,
+    "no suppression cell allows overflow-wrap: anywhere",
+  );
+  // The action must be in view on a phone: a full-width, 44px Remove button in
+  // the card (the same failure as the dead-letters Requeue).
+  const card = section.slice(section.indexOf("space-y-3 xl:hidden"));
+  assert.match(
+    card.slice(0, card.indexOf("hidden overflow-x-auto")),
+    /className="mt-3 min-h-11 w-full rounded-md border[^"]*"[\s\S]{0,200}?admin\.suppRemove/,
+    "the suppression phone card lost its full-width 44px-tall Remove button",
+  );
+});
+
+test("the suppression section's own control and hint text meet the type-size floor", () => {
+  // Issue #601, same rule as the dead-letters hint above: the text an operator
+  // has to read stays at >=14px, and the section must carry the docs link
+  // AGENTS.md's DOCUMENTATION PARITY rule requires.
+  const section = adminPage.slice(adminPage.indexOf('{/* Suppression list (issue #601) */}'));
+  assert.match(
+    section,
+    /className="mb-3 text-sm text-\[var\(--jf-muted\)\]">\{t\("admin\.suppHint"\)\}/,
+    "the suppression hint is not 14px (text-sm) — re-check its size",
+  );
+  assert.match(
+    section,
+    /href="\/docs\/ses-reputation#suppression"/,
+    "the suppression section lost its inline docs link (AGENTS.md DOCUMENTATION PARITY rule 4)",
+  );
+});
+
 test("the viewport meta tag is declared (do not 'fix' a correct one)", () => {
   const layout = read("../app/layout.tsx");
   assert.match(

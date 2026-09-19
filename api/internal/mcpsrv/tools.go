@@ -581,6 +581,25 @@ func (s *Server) registerTools() {
 		Description: "Kesihatan sistem: uptime, bilangan ralat MCP terkini (24j), kedalaman queue emel. Super-admin sahaja; read-only; diaudit.",
 	}, s.adminSystemHealth)
 
+	// ── Super-admin: suppression list (issue #601) ──────────────────────
+	// The pre-send suppression list (issue #56) had no surface at all: SES
+	// ingestion could add an address, but nothing could read the list back,
+	// add one by hand, or remove a false positive without psql. These three
+	// tools back the /admin suppression section; the dashboard uses the
+	// matching REST endpoints (GET/POST/DELETE /v1/admin/suppressions).
+	addTool(s, &mcp.Tool{
+		Name:        "admin_list_suppressions",
+		Description: "Senarai alamat yang disekat daripada dihantar emel (issue #601): emel, sebab (hard_bounce|complaint|manual), sumber, nota, siapa tambah dan bila. Boleh cari (q, padan emel atau nota) dan berhalaman (page/limit). Super-admin sahaja; read-only; diaudit.",
+	}, s.adminListSuppressions)
+	addTool(s, &mcp.Tool{
+		Name:        "admin_add_suppression",
+		Description: "Tambah alamat ke senarai sekatan secara manual supaya tiada emel dihantar kepadanya (issue #601). reason: hard_bounce|complaint|manual (lalai manual), note pilihan. Idempotent — alamat yang sudah dalam senarai tidak menghasilkan ralat. Super-admin sahaja; diaudit.",
+	}, s.adminAddSuppression)
+	addTool(s, &mcp.Tool{
+		Name:        "admin_remove_suppression",
+		Description: "Buang alamat dari senarai sekatan supaya penghantaran emel kepadanya bermula semula (issue #601) — untuk kes positif palsu. Super-admin sahaja; diaudit.",
+	}, s.adminRemoveSuppression)
+
 	// ── Parity: analytics (issue #396) ────────────────────────────────────
 	addTool(s, &mcp.Tool{
 		Name:        "get_form_analytics",

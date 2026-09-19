@@ -18,22 +18,41 @@ row (if any) is flagged `verified=false`, so the account cannot log in.
 **Every outbound send consults the list first** — verification emails AND
 receipts — so a suppressed address never gets another message.
 
+The list is managed by the platform owner on the `/admin` page (**Email
+suppression list** section) and over MCP (`admin_list_suppressions`,
+`admin_add_suppression`, `admin_remove_suppression`), backed by
+`GET`/`POST /v1/admin/suppressions` and `DELETE /v1/admin/suppressions/{email}`
+(issue #601). The same story is written for readers in
+`web/src/app/docs/ses-reputation` — the dashboard links to it from that
+section's inline "?".
+
 | column | meaning |
 |---|---|
-| `email` | lower-cased address (PK) |
-| `reason` | `permanent bounce (...)` / `complaint` |
-| `source` | `bounce` / `complaint` / `manual` |
+| `email` | lower-cased address (CITEXT PK — uniqueness and the equality lookup are case-insensitive) |
+| `reason` | `hard_bounce` / `complaint` / `manual` (CHECK, migration 000061) |
+| `source` | `bounce` / `complaint` / `manual` (CHECK, migration 000061) |
+| `note` | the detail behind the reason: the SES bounce sub-type, `repeated soft bounce (n in 7d)`, or the operator's free text on a manual add |
+| `created_by` | the super-admin's `users.id` for a manual add; NULL for bounce/complaint ingestion |
 | `created_at` | when suppressed |
 
-Transient (`Transient`/`Undeliverable`) bounces are NOT suppressed (they are
-not reputation-damaging and a mailbox may recover), but they are still counted
-towards the breaker so an anomalous transient-bounce storm is visible.
+**Reason codes.** `hard_bounce` is a permanent bounce (including
+`Suppressed` and `OnAccountSuppressionList`, which SES accepts without
+attempting delivery and which therefore only burn quota), or an address that
+produced ≥3 `Transient` bounces in a rolling 7 days. `complaint` is a spam
+complaint. `manual` is an address the platform owner added by hand.
+
+Transient (`Transient`/`Undeliverable`) bounces are NOT suppressed on the first
+event (they are not reputation-damaging and a mailbox may recover), but they are
+still counted towards the breaker so an anomalous transient-bounce storm is
+visible. Migration 000061 replaced the free-text reasons this endpoint used to
+write (`permanent bounce (Permanent)`) with the three codes above, moving the old
+text into `note` so no provenance was lost.
 
 ### Inspect / un-suppress a false positive (ops)
 
 ```sql
 -- list suppressions, newest first
-SELECT email, reason, source, created_at
+SELECT email, reason, source, note, created_by, created_at
 FROM suppressed_emails ORDER BY created_at DESC LIMIT 100;
 
 -- does a specific address have a suppression?
@@ -45,6 +64,9 @@ DELETE FROM suppressed_emails WHERE email = 'person@example.com';
 -- (the address's user row, if a person complains on the account they still own,
 --  stays verified=false until they re-verify via a /verify link)
 ```
+
+The dashboard/MCP path is preferred where an operator is involved: it writes an
+`admin.super_admin_action` audit row, which a psql session does not.
 
 ## 2. Verification circuit breaker (`jf:bnc:*` in Valkey)
 

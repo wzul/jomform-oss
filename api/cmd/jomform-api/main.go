@@ -289,6 +289,8 @@ func main() {
 			// Issue #579: dead-letter view for the admin dashboard. `events` is
 			// the webhook event store (NOT deps.Events, which is the audit log).
 			WebhookEvents: events,
+			// Issue #601: suppression list view/manage for the admin dashboard.
+			Suppressions: dbstore.NewSuppressionStore(pool),
 			// Issue #171: response-only form submissions.
 			Submissions: submissionsStore,
 			// Issue #193: per-form notification rules.
@@ -340,6 +342,9 @@ func main() {
 			// Issue #106: per-sale receipt email status tool.
 			EmailDeliveryEvents: deps.EmailDeliveryEvents,
 			WebhookEvents:       events,
+			// Issue #601: suppression list tools (admin_list_suppressions /
+			// admin_add_suppression / admin_remove_suppression).
+			Suppressions: dbstore.NewSuppressionStore(pool),
 			// Issue #171: response-only form submissions tool.
 			Submissions: submissionsStore,
 			// Issue #193: per-form notification rules tool.

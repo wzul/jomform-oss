@@ -48,6 +48,10 @@ type Deps struct {
 	// Issue #574: inbound callback events parked as dead letters. Nil → the
 	// admin dead-letter tools error.
 	WebhookEvents *dbstore.WebhookEventStore
+	// Suppressions is the SES suppression list (issue #56). Nil → the
+	// super-admin suppression tools (issue #601) error. Backs the /admin
+	// suppression section through the matching REST endpoints.
+	Suppressions *dbstore.SuppressionStore
 	// Issue #171: response-only form submissions (list_form_submissions tool).
 	// Nil → the tool errors.
 	Submissions *dbstore.SubmissionStore
