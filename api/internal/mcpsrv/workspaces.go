@@ -315,6 +315,9 @@ type setWorkspaceSettingsIn struct {
 	// Issue #447: per-workspace realtime notification sound toggle. Omitted
 	// (nil) = keep current; explicit true/false sets it.
 	SoundEnabled *bool `json:"sound_enabled,omitempty" jsonschema:"Mainkan bunyi beep pada dashboard bila jualan/respon baharu tiba (omit = kekal)"`
+	// Per-workspace AI spam-judge toggle. Omitted (nil) = keep
+	// current; explicit true/false sets it. Default true.
+	SpamJudgeEnabled *bool `json:"spam_judge_enabled,omitempty" jsonschema:"Hidupkan AI spam detection (judge gemma4) untuk workspace ini — true = hidup (lalai), false = MATI: tiada job AI dihantar langsung dan is_spam tidak lagi ditetapkan, jadi /spam kekal kosong (omit = kekal)"`
 }
 
 func (s *Server) setWorkspaceSettings(
@@ -387,6 +390,9 @@ func (s *Server) setWorkspaceSettings(
 	}
 	if in.SoundEnabled != nil {
 		st.SoundEnabled = *in.SoundEnabled
+	}
+	if in.SpamJudgeEnabled != nil {
+		st.SpamJudgeEnabled = *in.SpamJudgeEnabled
 	}
 	if strings.TrimSpace(st.MenuJSON) == "" {
 		st.MenuJSON = "[]"

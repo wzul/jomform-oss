@@ -150,6 +150,9 @@ func (h *RESTHandlers) saveWorkspaceSettings(w http.ResponseWriter, r *http.Requ
 		// Issue #447: per-workspace realtime notification sound toggle.
 		// Omitted (nil) = keep current value; explicit true/false sets it.
 		SoundEnabled *bool `json:"sound_enabled"`
+		// Per-workspace AI spam-judge toggle. Omitted (nil) =
+		// keep current value; explicit true/false sets it. Default is true.
+		SpamJudgeEnabled *bool `json:"spam_judge_enabled"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
 		writeErr(w, http.StatusBadRequest, "payload tidak sah")
@@ -221,6 +224,12 @@ func (h *RESTHandlers) saveWorkspaceSettings(w http.ResponseWriter, r *http.Requ
 		LandingPage: cur.LandingPage,
 		// Issue #447: preserve the current sound toggle unless one is supplied.
 		SoundEnabled: cur.SoundEnabled,
+		// Preserve the current AI spam-judge toggle unless one is
+		// supplied. This line is load-bearing: SaveSettings writes every
+		// column from this struct, so a fresh literal that omitted the field
+		// would persist false and silently switch spam detection off for the
+		// workspace on the next unrelated settings save.
+		SpamJudgeEnabled: cur.SpamJudgeEnabled,
 	}
 	if in.Currency != "" {
 		st.Currency = in.Currency
@@ -233,6 +242,9 @@ func (h *RESTHandlers) saveWorkspaceSettings(w http.ResponseWriter, r *http.Requ
 	}
 	if in.SoundEnabled != nil {
 		st.SoundEnabled = *in.SoundEnabled
+	}
+	if in.SpamJudgeEnabled != nil {
+		st.SpamJudgeEnabled = *in.SpamJudgeEnabled
 	}
 	if strings.TrimSpace(st.MenuJSON) == "" {
 		st.MenuJSON = "[]"

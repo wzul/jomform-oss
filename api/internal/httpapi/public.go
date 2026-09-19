@@ -414,14 +414,35 @@ func (h *PublicHandlers) antiSpamCheckEmail(r *http.Request, emailAddr string) b
 // enqueueSpamJudge enqueues a background AI spam-judge job (issue #245) for a
 // submission or sale. Best-effort: a failure is logged and never fails the
 // submit response. The judge is skipped when the submitter is the workspace
-// owner/admin (testing their own store) or when no queue is wired.
+// owner/admin (testing their own store), when no queue is wired, or when the
+// workspace has turned the judge off.
 //
 // accountID is passed explicitly (rather than read off the form) so the
 // formless menu-order path (issue #491) can enqueue a judge job too; form is
 // nil on that path and its form id/title are then omitted from the job.
+//
+// The per-workspace toggle gates the ENQUEUE, not the worker — a
+// workspace with the judge off sends nothing to the queue, so no AI work is
+// spent and is_spam is never set on a new entry. The workspace is resolved
+// from accountID, which is exactly what this signature already carries, so the
+// formless path is gated identically to the form path.
 func (h *PublicHandlers) enqueueSpamJudge(r *http.Request, accountID string, form *dbstore.Form, owner bool, subID, saleID, emailAddr string, data map[string]any) {
 	if owner || h.SpamQueue == nil || accountID == "" {
 		return
+	}
+	// Per-workspace AI spam-judge toggle. A lookup error fails
+	// toward running the judge (the store returns true with the error): the
+	// toggle removes work, so a database hiccup must not silently disable spam
+	// protection platform-wide, and running is the pre-existing behaviour.
+	// Never fails the submission.
+	if h.Workspaces != nil {
+		on, err := h.Workspaces.SpamJudgeEnabledByAccount(r.Context(), accountID)
+		if err != nil {
+			slog.Warn("spamjudge_toggle_lookup_failed", "account", accountID, "err", err)
+		}
+		if !on {
+			return
+		}
 	}
 	job := spamjudge.Job{
 		SubmissionID: subID,

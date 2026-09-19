@@ -18,6 +18,9 @@ const APEX_PAGES = [
   "/docs/embed",
   "/docs/placeholders",
   "/docs/mcp",
+  // The per-workspace AI spam-detection toggle is documented here
+  // and the Settings switch deep-links into it.
+  "/docs/spam-detection",
 ];
 
 export const dynamic = "force-dynamic";

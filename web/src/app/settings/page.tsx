@@ -217,6 +217,9 @@ export default function Settings() {
   const [sfIndexing, setSfIndexing] = useState(true);
   // Issue #447: per-workspace realtime notification sound toggle (Storefront tab).
   const [sfSoundEnabled, setSfSoundEnabled] = useState(false);
+  // Per-workspace AI spam-judge toggle (Storefront tab). Default
+  // true — the judge runs unless the merchant explicitly turns it off.
+  const [sfSpamJudgeEnabled, setSfSpamJudgeEnabled] = useState(true);
   // Issue #360: per-workspace customizable landing page (Storefront tab).
   const [lpEnabled, setLpEnabled] = useState(false);
   const [lpHero, setLpHero] = useState("");
@@ -450,6 +453,11 @@ export default function Settings() {
         // Issue #447: per-space realtime notification sound toggle (default
         // false — muted so no merchant is surprised by sound).
         setSfSoundEnabled(!!d.sound_enabled);
+        // Per-space AI spam-judge toggle. `!== false` so a
+        // response that predates the field (or omits it) reads as ON, which is
+        // what the server actually does — the UI must not show "off" for a
+        // workspace that is still judging spam.
+        setSfSpamJudgeEnabled(d.spam_judge_enabled !== false);
         if (d.currency) setCurrency(d.currency);
         // Issue #360: per-space customizable landing page.
         const lp = d.landing_page || {};
@@ -894,6 +902,8 @@ export default function Settings() {
         indexing: sfIndexing,
         // Issue #447: per-space realtime notification sound toggle.
         sound_enabled: sfSoundEnabled,
+        // Per-space AI spam-judge toggle.
+        spam_judge_enabled: sfSpamJudgeEnabled,
       }),
     });
     if (r.ok) {
@@ -1918,6 +1928,41 @@ export default function Settings() {
                   <span
                     className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${
                       sfSoundEnabled ? "left-[22px]" : "left-0.5"
+                    }`}
+                  />
+                </button>
+              </div>
+              {/* Per-workspace AI spam-judge toggle, with an inline
+                  "?" doc link (AGENTS.md documentation-parity rule, step 4). */}
+              <div className="flex items-start justify-between gap-4 rounded-lg border border-[var(--jf-border)] p-3">
+                <div>
+                  <p className="flex items-center gap-2 text-sm font-medium">
+                    {t("set.sfSpamTitle")}
+                    <a
+                      href="/docs/spam-detection#per-workspace-toggle"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title={t("set.sfSpamDocs")}
+                      className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-slate-200 text-[10px] font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                    >
+                      ?
+                    </a>
+                  </p>
+                  <p className="mt-0.5 max-w-md text-xs text-slate-500">{t("set.sfSpamHelp")}</p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={sfSpamJudgeEnabled}
+                  aria-label={t("set.sfSpamTitle")}
+                  onClick={() => setSfSpamJudgeEnabled((v) => !v)}
+                  className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+                    sfSpamJudgeEnabled ? "bg-[var(--jf-primary)]" : "bg-slate-300"
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${
+                      sfSpamJudgeEnabled ? "left-[22px]" : "left-0.5"
                     }`}
                   />
                 </button>

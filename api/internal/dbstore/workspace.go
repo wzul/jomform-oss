@@ -291,6 +291,14 @@ type WorkspaceSettings struct {
 	// when a new sale/response arrives over the SSE stream. Default false
 	// (muted) so no merchant is surprised by sound.
 	SoundEnabled bool `json:"sound_enabled"`
+	// SpamJudgeEnabled is the per-workspace AI spam-judge toggle.
+	// When true (the default) the background judge (issue #245) is enqueued for
+	// every public submission/sale. When false NO judge job is enqueued at all
+	// (the gate is on the enqueue, not in the worker, so no AI work is spent),
+	// and is_spam is therefore never set — the workspace's /spam queue stays
+	// empty. True by default so enabling the feature changes no existing
+	// workspace's behaviour.
+	SpamJudgeEnabled bool `json:"spam_judge_enabled"`
 }
 
 // WorkspaceLang returns the storefront default language code, or a fallback when
@@ -316,13 +324,16 @@ func (st *WorkspaceSettings) WorkspaceCurrency() string {
 }
 
 // Settings reads (creating default row when missing) the storefront config.
+// The fallback literal mirrors the migration defaults so a workspace whose row
+// does not exist yet behaves exactly like a migrated one: indexing on and the
+// AI spam judge on (issue #276 / this change).
 func (s *WorkspaceStore) Settings(ctx context.Context, workspaceID string) (*WorkspaceSettings, error) {
 	var lpJSON string
-	st := &WorkspaceSettings{WorkspaceID: workspaceID, MenuJSON: "[]", DefaultLang: "en", Currency: "MYR", Indexing: true}
+	st := &WorkspaceSettings{WorkspaceID: workspaceID, MenuJSON: "[]", DefaultLang: "en", Currency: "MYR", Indexing: true, SpamJudgeEnabled: true}
 	err := s.pool.QueryRow(ctx,
-		`SELECT footer_text, company_reg, privacy_url, terms_url, refund_url, contact_phone, contact_address, business_name, menu_json::text, default_lang, currency, indexing, COALESCE(landing_page_json::text, '{}'), sound_enabled
+		`SELECT footer_text, company_reg, privacy_url, terms_url, refund_url, contact_phone, contact_address, business_name, menu_json::text, default_lang, currency, indexing, COALESCE(landing_page_json::text, '{}'), sound_enabled, spam_judge_enabled
 		   FROM workspace_settings WHERE workspace_id=$1`,
-		workspaceID).Scan(&st.FooterText, &st.CompanyReg, &st.PrivacyURL, &st.TermsURL, &st.RefundURL, &st.ContactPhone, &st.ContactAddress, &st.BusinessName, &st.MenuJSON, &st.DefaultLang, &st.Currency, &st.Indexing, &lpJSON, &st.SoundEnabled)
+		workspaceID).Scan(&st.FooterText, &st.CompanyReg, &st.PrivacyURL, &st.TermsURL, &st.RefundURL, &st.ContactPhone, &st.ContactAddress, &st.BusinessName, &st.MenuJSON, &st.DefaultLang, &st.Currency, &st.Indexing, &lpJSON, &st.SoundEnabled, &st.SpamJudgeEnabled)
 	if err != nil {
 		// default row
 		_, ierr := s.pool.Exec(ctx,
@@ -359,8 +370,8 @@ func (s *WorkspaceStore) SaveSettings(ctx context.Context, st *WorkspaceSettings
 		lpJSON = "{}"
 	}
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO workspace_settings (workspace_id, footer_text, company_reg, privacy_url, terms_url, refund_url, contact_phone, contact_address, business_name, menu_json, default_lang, currency, indexing, landing_page_json, sound_enabled)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13,$14::jsonb,$15)
+		`INSERT INTO workspace_settings (workspace_id, footer_text, company_reg, privacy_url, terms_url, refund_url, contact_phone, contact_address, business_name, menu_json, default_lang, currency, indexing, landing_page_json, sound_enabled, spam_judge_enabled)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13,$14::jsonb,$15,$16)
 		 ON CONFLICT (workspace_id) DO UPDATE SET
 		   footer_text=EXCLUDED.footer_text, company_reg=EXCLUDED.company_reg,
 		   privacy_url=EXCLUDED.privacy_url, terms_url=EXCLUDED.terms_url,
@@ -370,8 +381,9 @@ func (s *WorkspaceStore) SaveSettings(ctx context.Context, st *WorkspaceSettings
 		   default_lang=EXCLUDED.default_lang, currency=EXCLUDED.currency,
 		   indexing=EXCLUDED.indexing,
 		   landing_page_json=EXCLUDED.landing_page_json,
-		   sound_enabled=EXCLUDED.sound_enabled`,
-		st.WorkspaceID, st.FooterText, st.CompanyReg, st.PrivacyURL, st.TermsURL, st.RefundURL, st.ContactPhone, st.ContactAddress, st.BusinessName, st.MenuJSON, st.WorkspaceLang(), st.WorkspaceCurrency(), st.Indexing, lpJSON, st.SoundEnabled)
+		   sound_enabled=EXCLUDED.sound_enabled,
+		   spam_judge_enabled=EXCLUDED.spam_judge_enabled`,
+		st.WorkspaceID, st.FooterText, st.CompanyReg, st.PrivacyURL, st.TermsURL, st.RefundURL, st.ContactPhone, st.ContactAddress, st.BusinessName, st.MenuJSON, st.WorkspaceLang(), st.WorkspaceCurrency(), st.Indexing, lpJSON, st.SoundEnabled, st.SpamJudgeEnabled)
 	return err
 }
 
@@ -407,6 +419,32 @@ func (s *WorkspaceStore) IndexingByAccount(ctx context.Context, accountID string
 		return true, err
 	}
 	return idx, nil
+}
+
+// SpamJudgeEnabledByAccount resolves whether the workspace owning the given
+// account has the AI spam judge enabled. Defaults to true when the
+// account has no linked workspace (legacy) or the setting is unset — the same
+// "on unless explicitly turned off" contract the migration default gives a
+// migrated row. Used by the public submit path to decide whether to enqueue a
+// spam-judge job AT ALL (the gate is on the enqueue, so a disabled judge costs
+// no AI work).
+//
+// The bool returned alongside the error is the FAIL DIRECTION, and it is true
+// on error: the judge exists to remove work, so a database hiccup must not
+// silently stop spam protection for every workspace, and running the judge is
+// the pre-existing behaviour — an error therefore cannot change behaviour. The
+// caller logs the error; it must not fail the submission on it.
+func (s *WorkspaceStore) SpamJudgeEnabledByAccount(ctx context.Context, accountID string) (bool, error) {
+	var on bool
+	err := s.pool.QueryRow(ctx,
+		`SELECT COALESCE(ss.spam_judge_enabled, TRUE)
+		   FROM accounts a
+		   LEFT JOIN workspace_settings ss ON ss.workspace_id = a.workspace_id
+		  WHERE a.id=$1`, accountID).Scan(&on)
+	if err != nil {
+		return true, err
+	}
+	return on, nil
 }
 
 // IndexedWorkspaceURLs returns the custom-domain URLs of workspaces that have indexing

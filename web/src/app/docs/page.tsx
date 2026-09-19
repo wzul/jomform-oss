@@ -43,7 +43,7 @@ const FEATURES: { title: string; body: string }[] = [
   },
   {
     title: "Spam protection",
-    body: "AI-powered spam review. Spam-flagged submissions and sales are held in a queue for review; a false positive can be un-spammed. A spam-flagged sale that receives a successful payment is auto-un-spammed.",
+    body: "AI-powered spam review. Spam-flagged submissions and sales are held in a queue for review; a false positive can be un-spammed. A spam-flagged sale that receives a successful payment is auto-un-spammed. A flagged entry that is never reviewed is permanently deleted 30 days later, so review the queue. The judge is set per workspace and can be turned off entirely (Settings → Storefront, or set_workspace_settings with spam_judge_enabled: false): with it off nothing is sent to the judge, nothing is flagged, and the Spam page stays empty. See the AI spam detection guide.",
   },
   {
     title: "Email & notifications",

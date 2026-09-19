@@ -1,0 +1,26 @@
+-- Migration 000062: per-workspace AI spam-judge toggle.
+--
+-- A merchant can turn the background AI spam judge (issue #245, gemma4) OFF for
+-- one workspace. When off, the submit path enqueues NO judge job at all — the
+-- AI work is never spent and `is_spam` is never set on a new entry, so the
+-- workspace's /spam queue stays empty.
+--
+-- DEFAULT TRUE is the load-bearing part: every existing workspace keeps the
+-- behaviour it has today, so adding the column changes nothing until a merchant
+-- explicitly opts out. The name is positive (`..._enabled`) to match `indexing`
+-- on this same table — a boolean whose TRUE default is the on state — so every
+-- read surface can report the stored value directly instead of negating it.
+--
+-- Guard notes this file must respect:
+--   * `workspace_settings` has NO `*Select` constant (selectTables in
+--     api/internal/dbstore/migration_scan_drift_test.go lists only
+--     accounts/forms/products/sales/workspaces/subscriptions), so there is no
+--     select/struct/Scan alignment to keep and no `intentionallyUnselected`
+--     entry to add. The dedicated accessors read it directly
+--     (WorkspaceStore.Settings, WorkspaceStore.SpamJudgeEnabledByAccount).
+--   * TestMigrationsApplyFromZero runs this on an EMPTY database, where
+--     ADD COLUMN IF NOT EXISTS is a no-op on an empty table — it must not depend
+--     on rows existing.
+--   * Idempotent and re-runnable-safe: IF NOT EXISTS, and Migrate records the
+--     file in schema_migrations so it applies at most once.
+ALTER TABLE workspace_settings ADD COLUMN IF NOT EXISTS spam_judge_enabled BOOLEAN NOT NULL DEFAULT TRUE;
