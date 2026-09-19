@@ -119,15 +119,43 @@ test("the /admin page root keeps its definite width and its desktop centring", (
 test("the dead-letters long tokens can break, so they no longer floor the table", () => {
   // The dedup_key is an opaque 41-64 char token with no spaces; unbroken it set
   // the table's min-content to ~1013px (measured). The failure text is a URL.
+  //
+  // Both dedup_key renderings are pinned separately. The class sequence
+  // `break-all[^"]*font-mono[^"]*text-xs` matches the phone card's <p> AND the xl
+  // table's <div>, so a single assertion was satisfied by whichever site still
+  // carried it (mutation-proved: removing `break-all` from the phone <p> alone —
+  // the only rendering below xl — left the suite green). Scoped to the tag, each
+  // mutation fails. Measured for the table cell before the fix: removing
+  // break-all takes the six-column table's min-content back to ~1013px.
   assert.match(
     adminPage,
-    /break-all[^"]*font-mono[^"]*text-xs[^"]*">\{d\.dedup_key\}/,
-    "the dedup_key cell no longer breaks (word-break: break-all) — the table's min-content goes back to ~1013px",
+    /<p className="[^"]*break-all[^"]*font-mono[^"]*text-xs[^"]*">\s*\{d\.dedup_key\}/,
+    "the phone dead-letter card no longer breaks the dedup_key (word-break: break-all) — below xl this card is the only rendering of that opaque token, so it overflows the phone viewport",
   );
   assert.match(
     adminPage,
-    /\[overflow-wrap:anywhere\]/,
-    "no cell allows overflow-wrap: anywhere — a long unbreakable failure URL floors the table again",
+    /<div className="[^"]*break-all[^"]*font-mono[^"]*text-xs[^"]*">\{d\.dedup_key\}/,
+    "the dedup_key cell no longer breaks (word-break: break-all) — the table's min-content goes back to ~1013px",
+  );
+  // Each guard is pinned by the markup that carries it, NOT by a file-wide
+  // `[overflow-wrap:anywhere]` match. There are three guards in page.tsx and a
+  // file-wide match is satisfied by any one of them, so deleting the class from
+  // the xl table cell alone still passed the suite (mutation-proved: the
+  // sabotage compiled and stayed green). Scoped to the cell, the same mutation
+  // fails. Measured DOM-only at 1280px with a genuinely unbreakable 100-char
+  // token in the Reason cell: with the guard table 1022px / wrapper
+  // clientWidth 1022 / internalScroll false; without it table 1716px / wrapper
+  // clientWidth 1022 / scrollWidth 1716 / internalScroll true — the Requeue
+  // column leaves the viewport, which is the defect this test exists to stop.
+  assert.match(
+    adminPage,
+    /<dd className="[^"]*\[overflow-wrap:anywhere\][^"]*">\{d\.last_error/,
+    "the phone dead-letter card's Reason cell no longer allows overflow-wrap: anywhere — an unbreakable failure URL pushes the card past the phone viewport",
+  );
+  assert.match(
+    adminPage,
+    /<td className="[^"]*\[overflow-wrap:anywhere\][^"]*">\{d\.last_error/,
+    "the xl dead-letters table's Reason cell no longer allows overflow-wrap: anywhere — the table's min-content goes to 1716px (measured), the wrapper scrolls sideways, and the Requeue column sits outside the viewport",
   );
 });
 
