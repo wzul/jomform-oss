@@ -26,9 +26,10 @@ npx playwright test
 
 ## CI
 
-The money-invariant **unit** tests run in the existing `api` CI job
-(`go test ./... -race`). The DB integration tests
-(`api/internal/dbstore/money_invariants_test.go`) run when
-`JOMFORM_TEST_DATABASE_URL` is set. The Playwright suite runs against a
-staging deploy in a separate job with the `E2E_*` vars from GitHub Actions
-secrets.
+There is no GitHub Actions CI for this repo (the workflows were removed; see
+`deploy/DEPLOY.md`). The money-invariant **unit** tests run as part of the local
+gate (`scripts/preflight.sh`, gate `test` → `go test ./... -race`). The DB
+integration tests (`api/internal/dbstore/money_invariants_test.go`) run when
+`JOMFORM_TEST_DATABASE_URL` is set — the preflight refuses to run without it,
+precisely so they cannot be skipped silently. The Playwright suite here runs
+against a staging deploy with the `E2E_*` env vars, and is run manually.

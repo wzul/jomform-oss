@@ -6,8 +6,9 @@ screen-reader and browser-matrix checklists that must be run before a release.
 
 ## Automated scan (axe-core)
 
-The web app runs an **axe-core** scan in CI on every push/PR. It covers the
-key public pages and **fails the build on any critical or serious violation**:
+The web app runs an **axe-core** scan as part of the local preflight
+(`scripts/preflight.sh`, gate `a11y`). It covers the
+key public pages and **fails the gate on any critical or serious violation**:
 
 - `/login` (two-step 2FA login, passkey, magic-link, social)
 - `/landing`
@@ -21,15 +22,24 @@ Run it locally:
 
 ```sh
 cd web
-npm run a11y          # builds + starts the app, runs axe against the pages
+npm run a11y          # starts the app's own server, runs axe against the pages
+# or run every gate at once, from the repo root:
+../scripts/preflight.sh --only a11y
 ```
 
 The scan lives in `web/e2e/a11y.spec.ts` (Playwright + `@axe-core/playwright`).
 Minor/moderate findings are reported for triage but do not fail the gate.
 
+> **Do not reuse a running server.** `web/playwright.config.ts` sets
+> `reuseExistingServer` to **false** unless `A11Y_REUSE_SERVER=1`. With a
+> leftover `next-server` on the port, playwright would reuse it and axe would
+> report a clean pass for a build this tree never produced. `preflight.sh`
+> additionally picks a free port (`A11Y_PORT`) so a stale server cannot collide.
+> Override the port with `A11Y_PORT=<n> npm run a11y` if 3100 is busy.
+
 > **Note on authenticated pages.** The dashboard surfaces (`/`, `/forms`,
 > `/builder`, `/settings`, `/profile`, `/products`) require a live session
-> cookie from the Go API, which CI does not provision. They are exercised by
+> cookie from the Go API, which the scan does not provision. They are exercised by
 > the manual screen-reader and browser-matrix checklists below instead.
 
 ## Manual screen-reader checklist

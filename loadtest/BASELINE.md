@@ -7,7 +7,8 @@ first-bottleneck analysis.
 
 ## Tooling
 
-- **Driver:** [k6](https://k6.io) (self-hosted, no SaaS dependency).
+- **Driver:** [k6](https://k6.io) (self-hosted, no SaaS dependency; also
+  runnable with no install via `go run go.k6.io/k6@latest`).
 - **Scripts:** `loadtest/*.js` (see below).
 - **Mock CHIP:** `loadtest/mock-chip` — a minimal CHIP Collect API stub so the
   payment path can be load-tested without hitting the live CHIP sandbox.
@@ -78,20 +79,47 @@ These are the defaults in `loadtest/gate.js` (`THRESH_P95=500`,
 `THRESH_ERR=0.01`). Adjust only after a measured baseline shows the current
 stack comfortably under them.
 
-## CI / on-demand load gate
+## On-demand load gate (was the `load-gate.yml` workflow)
 
 The gate runs the public-form scenario at a fixed concurrency and fails the
 run (k6 exits non-zero) if p95 latency or error rate exceeds the threshold.
-It is wired as a **workflow_dispatch** job in
-`.github/workflows/load-gate.yml` so it can be triggered on demand against a
-staging URL, and can be added to the PR CI once a staging endpoint is
-available.
+
+It was wired as a **`workflow_dispatch`** job in `.github/workflows/load-gate.yml`,
+which has been removed along with the rest of the CI (see `deploy/DEPLOY.md` —
+"A job that never ran is not a gate"). It is deliberately **not** part of
+`scripts/preflight.sh`: it was never a per-PR gate, and it needs a
+prod-equivalent endpoint that a local run does not have.
+
+Installing k6 — there is no k6 binary on the agent host, and you do not need to
+add one. Run it straight from the module proxy:
 
 ```bash
-# On-demand gate (CI or local)
-k6 run -e VUS=50 -e DURATION=30s -e THRESH_P95=500 -e THRESH_ERR=0.01 \
+# no install, ~90s the first time (subsequent runs hit the build cache)
+go run go.k6.io/k6@latest version
+
+# or install it properly if you will run it repeatedly
+#   https://grafana.com/docs/k6/latest/set-up/install-k6/
+```
+
+Then run the gate (against a staging / prod-equivalent URL):
+
+```bash
+go run go.k6.io/k6@latest run \
+  -e BASE_URL=https://staging.example.com \
+  -e VUS=50 -e DURATION=30s -e THRESH_P95=500 -e THRESH_ERR=0.01 \
   loadtest/gate.js
 ```
+
+For the full concurrency sweep instead of the single gate scenario:
+
+```bash
+go run go.k6.io/k6@latest run -e BASE_URL=https://staging.example.com loadtest/public-form.js
+# or, for the whole VUS_LIST sweep writing machine-readable summaries:
+./loadtest/baseline.sh https://staging.example.com
+```
+
+A non-zero exit means the threshold was breached — that is the gate firing.
+Record the result in the table above; it is a release-health check, not a PR gate.
 
 ## First-bottleneck analysis
 

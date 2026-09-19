@@ -12,11 +12,42 @@ binary labelled as the release.
 | Never builds from a dirty tree | exits non-zero if `git status --porcelain` is non-empty |
 | Two builds can't interleave | `flock -n` on `/tmp/jomform-build.lock` — second invocation fails fast instead of racing |
 | Provenance | stamps `VERSION` (git describe) + `COMMIT` (rev-parse) as build args and OCI labels; `docker image inspect` ties any image to an exact commit |
+| **The security + build gate ran** | runs `scripts/preflight.sh` before any image is built — api build/vet/test `-race`/govulncheck, web build/axe-core a11y/npm audit, and gitleaks over the full git history. A failing gate exits non-zero **before an image exists**, so a broken or vulnerable build cannot ship |
 | Works with the scp pattern | `docker save | gzip` tarball, optional `scp` when `SSH_HOST` is set — no registry needed |
+
+There is **no GitHub Actions CI** for this repo (see "Why there is no CI"
+below), so the preflight is not a convenience — it is the only gate. `--skip-tests`
+bypasses the whole preflight and prints a loud warning; it is for a genuine
+emergency only, and the resulting image carries no gate evidence.
 
 The api binary logs `version=... commit=...` at startup
 (`api/internal/version`), so after deploy `docker compose logs api` proves
 exactly which commit is running.
+
+## Why there is no CI (and where the gates went)
+
+`.github/workflows/` was removed on 2026-09-19. Every Actions job failed with
+**0 steps** on an account-wide billing failure ("The job was not started because
+recent account payments have failed or your spending limit needs to be
+increased"), so a red check on a PR said nothing about the code — it was noise,
+not a gate. The workflows will be rebuilt when the repo is made public.
+
+Deleting them would have silently dropped four security gates that existed
+nowhere else, so each was ported to `scripts/preflight.sh`:
+
+| Old CI gate | Now |
+|---|---|
+| `go vet ./...` | `scripts/preflight.sh` gate `vet` |
+| `go test ./... -race` | gate `test` (`-race` added to the local trio too) |
+| `govulncheck ./...` | gate `govuln` |
+| `npm run build` | gate `web` |
+| `npm run a11y` (axe-core) | gate `a11y` |
+| `npm audit --audit-level=high` | gate `npmaudit` |
+| `gitleaks detect` (full history) | gate `gitleaks` |
+| `load-gate.yml` (k6, **on demand only**) | run manually — see `loadtest/BASELINE.md` |
+
+The k6 load gate was never a per-PR gate (it was `workflow_dispatch`), so it did
+not move into the preflight; it is documented as a manual on-demand run.
 
 ## Usage
 
@@ -67,6 +98,13 @@ The api image is unaffected: `CONTEXT=api` + `api/Dockerfile` (with its own
    `git tag vX.Y.Z && git push origin vX.Y.Z && gh release create vX.Y.Z`.
    Never build before the tag exists.
 2. `./deploy/build-and-ship.sh` on a clean tree (the script refuses otherwise).
+   It runs `scripts/preflight.sh` itself — do not pre-check by hand and do not
+   reach for `--skip-tests`. The gate is:
+   ```bash
+   source /tmp/jf-env.sh     # JOMFORM_TEST_DATABASE_URL + JOMFORM_TEST_VALKEY_URL
+   ./scripts/preflight.sh    # 8 gates, ~6 min; runs again inside build-and-ship.sh
+   ```
+   Run it standalone first if you want to see a failure before the lock is held.
 3. Ship the tarball (`SSH_HOST=... ./deploy/build-and-ship.sh` or scp manually).
 4. On the server: `docker load -i /tmp/jomform-api-vX.Y.Z.tar.gz`.
 5. On the server: `docker tag jomform-api:vX.Y.Z jomform-api:latest`.

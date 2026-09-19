@@ -33,10 +33,11 @@ test-mode credentials.
 4. Confirm the account now reports `chip_mode = 'test'` (dashboard Settings →
    CHIP shows the mode badge; the MCP `get_account` returns `chip_mode`).
 
-> **CI/staging:** export the test credentials as env vars
+> **Local/staging:** export the test credentials as env vars
 > `JOMFORM_E2E_CHIP_BRAND_ID` and `JOMFORM_E2E_CHIP_SECRET_KEY` and have the
 > E2E setup seed an account with them (see `e2e/README.md`). Never commit a
-> real secret; use a GitHub Actions secret.
+> real secret — keep it in your shell's env or an ignored file. There is no CI
+> secret store for this repo (no GitHub Actions; see `deploy/DEPLOY.md`).
 
 ## 2. Sandbox card
 
@@ -84,7 +85,7 @@ The five scenarios (see `e2e/specs/money-path.spec.ts`):
   index means a re-delivered CHIP callback is inserted once, so it never
   double-charges or double-confirms.
 
-These are covered by unit tests that run in CI without a database
+These are covered by unit tests that run locally without a database
 (`api/internal/payments/money_test.go`) and by DB integration tests that run
 when `JOMFORM_TEST_DATABASE_URL` is set (`api/internal/dbstore/money_invariants_test.go`).
 
@@ -101,11 +102,20 @@ cd web && npm run dev
 cd e2e && npm ci && npx playwright test
 ```
 
-## 6. Running in CI
+## 6. Running locally (there is no CI)
 
-The money-invariant unit tests run in the existing `api` CI job
-(`go test ./... -race`). The DB integration tests are skipped unless
-`JOMFORM_TEST_DATABASE_URL` is set; to enable them, add a Postgres service
-container and set that env var in the workflow. The Playwright E2E suite runs
-against a staging deploy in a separate job that sets the `E2E_*` env vars from
-GitHub Actions secrets.
+The repo has **no GitHub Actions CI** — the workflows were removed because every
+job failed with 0 steps on an account-wide billing failure (see
+`deploy/DEPLOY.md`). The local gate is `scripts/preflight.sh`; run it with the
+test env exported so the DB-backed tests actually execute instead of skipping:
+
+```bash
+source /tmp/jf-env.sh
+./scripts/preflight.sh
+```
+
+The money-invariant unit tests run inside that gate's `test` step
+(`go test ./... -race`). The DB integration tests need
+`JOMFORM_TEST_DATABASE_URL`; the preflight refuses to run without it rather than
+report a green suite that skipped them. The Playwright E2E suite in `e2e/` is
+run manually against a staging deploy with the `E2E_*` env vars set.

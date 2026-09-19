@@ -4,8 +4,9 @@ Manual security review checklist for the JomForm auth and payment surface.
 Run after any major auth/payment change and before any public release
 (see issue #74). Each item: **test** → **expected** → **result** → **fix/decision**.
 
-Automated gates (govulncheck, npm audit, gitleaks) run in CI — see
-`.github/workflows/ci.yml`. This checklist covers what automation cannot.
+Automated gates (govulncheck, npm audit, gitleaks, axe-core a11y) run **locally**
+as `scripts/preflight.sh` — there is no GitHub Actions CI for this repo. This
+checklist covers what automation cannot.
 
 ---
 
@@ -56,13 +57,24 @@ Automated gates (govulncheck, npm audit, gitleaks) run in CI — see
 
 - [ ] `go mod tidy` clean (no diff) — verified.
 - [ ] `web/package-lock.json` committed.
-- [ ] No scan step uses `|| true` or `continue-on-error` in CI.
+- [ ] No scan step uses `|| true` or `continue-on-error` anywhere in
+      `scripts/preflight.sh` (grep it: every gate must be able to stop the run;
+      `scripts/preflight_test.sh` asserts this automatically).
 
 ---
 
 ## How to run
 
 ```bash
+# Every gate at once, from the repo root (the deploy gate — see AGENTS.md).
+source /tmp/jf-env.sh
+./scripts/preflight.sh
+
+# ...or one gate at a time:
+./scripts/preflight.sh --only govuln
+./scripts/preflight.sh --only npmaudit
+./scripts/preflight.sh --only gitleaks
+
 # Go vuln scan (fails on known vulns).
 # GOTOOLCHAIN pin (issue #368): govulncheck@latest declares go 1.26, so the go
 # command would build the scanner with go1.26.8 and fail on this go1.27 module.
@@ -71,8 +83,17 @@ cd api && GOTOOLCHAIN=$(go env GOVERSION) go run golang.org/x/vuln/cmd/govulnche
 # Web vuln scan (fails on high/critical)
 cd web && npm audit --audit-level=high
 
-# Secrets scan (full history)
-gitleaks detect --source . --log-opts="--all"
+# Secrets scan (full history — preflight refuses to run it on a shallow clone)
+gitleaks detect --source . --no-banner --redact --config .gitleaks.toml
+#   via go run (no binary install needed; the toolchain must come from api/,
+#   because the repo ROOT has no go.mod and reports the host default go1.22.2,
+#   which gitleaks v8 refuses to build with):
+GOTOOLCHAIN=$(cd api && go env GOVERSION) go run github.com/zricethezav/gitleaks/v8@latest \
+  detect --source . --no-banner --redact --config .gitleaks.toml
+
+# NOTE: .gitleaks.toml MUST keep [extend] useDefault = true. --config REPLACES
+# gitleaks' built-in rules, so an allowlist-only file scans with an EMPTY
+# ruleset and can never report a leak. scripts/preflight_test.sh guards this.
 ```
 
 ## Sign-off

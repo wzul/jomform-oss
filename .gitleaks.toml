@@ -1,6 +1,25 @@
-# gitleaks config — allowlist for test fixtures and non-secret placeholders.
-# The only historical finding is a `SESSION_SECRET: "x"` test fixture in
-# config_test.go (initial commit) — a false positive, not a real secret.
+# gitleaks config — the default secret rules, minus the known-good test fixtures.
+#
+# ⚠️  [extend] useDefault = true is REQUIRED, do not remove it.
+#
+# Supplying `--config <this file>` REPLACES gitleaks' embedded default ruleset
+# with the file's contents. This file defines only an [allowlist] and no
+# [[rules]], so without [extend] the scan runs with an EMPTY ruleset: nothing
+# can ever match, `gitleaks detect` always exits 0, and the secrets gate is a
+# permanent green no-op that looks exactly like a clean history.
+#
+# That is not hypothetical — it is how this repo's gitleaks gate behaved until
+# 2026-09-19. Verified against a standalone repo: with the old config a GitHub
+# PAT, an AWS secret key and an OpenSSH private key were ALL missed (rc=0); with
+# [extend] useDefault = true all three are caught (rc=1), and the allowlist
+# below still suppresses the historical false positive.
+#
+# The allowlist entries are the fixtures that legitimately contain secret-shaped
+# strings (a `SESSION_SECRET: "x"` test fixture and similar). They are scoped by
+# PATH so a real secret in a non-test file is still reported.
+[extend]
+  useDefault = true
+
 [allowlist]
   description = "Test fixtures and non-secret placeholders"
   paths = [
