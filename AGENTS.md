@@ -1,19 +1,52 @@
 # AGENTS.md — JomForm repo agent guidance
 
-## LOCAL BUILD/TEST BEFORE MERGE (RULE — jangan guna CI sebagai gate)
+## LOCAL BUILD/TEST BEFORE MERGE (RULE — there is NO CI; this gate is the gate)
 
-**GitHub Actions CI is NOT a merge gate for this repo.** Before merging ANY
-PR (or any agent change), the agent MUST run the full build + test suite
-**locally** and confirm it is green:
+**This repo has no GitHub Actions CI.** The workflows were removed
+(`.github/workflows/` no longer exists) because every job failed with **0 steps**
+on an account-wide Actions billing failure — a red check on a PR said nothing
+about the code, so it was noise, not a gate. It will be rebuilt if/when the repo
+goes public. Until then, **the local preflight is the only gate**, and there is
+nothing upstream to catch what it misses: if it does not run, nothing ran.
 
-1. `cd api && go build ./...` — must pass.
-2. `cd api && go test ./...` — must pass (against the local test Postgres +
-   Valkey; see the test DB setup in the pipeline notes).
-3. `cd web && npm run build` — must pass (Next.js build, 0 errors).
+Before merging ANY PR (or any agent change), run the full preflight and confirm
+it is green:
 
-Only merge after all three are green locally. Do NOT rely on (or wait for)
-GitHub Actions checks — they may be unavailable (e.g. billing) or flaky
-(npm audit network timeouts). Local green is the source of truth.
+```bash
+source /tmp/jf-env.sh          # JOMFORM_TEST_DATABASE_URL + JOMFORM_TEST_VALKEY_URL
+./scripts/preflight.sh
+```
+
+`scripts/preflight.sh` is the single entry point — the ported CI gates, in the
+same order as the three CI jobs they replace:
+
+| Gate | Command | What it catches |
+|---|---|---|
+| api build | `cd api && go build ./...` | compile errors |
+| api vet | `cd api && go vet ./...` | suspicious constructs |
+| api test | `cd api && go test ./... -race -count=1` | regressions **and data races** (the old local trio ran without `-race`) |
+| api govuln | `govulncheck ./...` | known CVEs reachable from the module graph |
+| web build | `cd web && npm run build` | `test:unit` (incl. the cross-language Go-contract guards) then the Next build |
+| web a11y | `cd web && npm run a11y` | axe-core; fails on any **critical/serious** WCAG violation |
+| web audit | `cd web && npm audit --audit-level=high` | high/critical npm advisories |
+| secrets | `gitleaks detect` over the **full git history** | committed secrets (repo may go public) |
+
+`deploy/build-and-ship.sh` calls `scripts/preflight.sh` itself, so a deploy
+cannot skip it — the "check before deploy" instruction is now enforced by the
+build script, not by asking the operator to remember. `--skip-tests` bypasses
+the whole preflight and prints a loud warning; it is for a genuine emergency
+only, never a routine release.
+
+Every gate **fails loudly** when its prerequisite is missing rather than
+silently skipping — an unset `JOMFORM_TEST_DATABASE_URL` makes `go test` skip
+the DB-backed tests and report a green suite that proves nothing, and a worktree
+without `web/node_modules` makes `npm run build` exit 0 with
+`sh: 1: next: not found` having built nothing. Both shapes are treated as
+failures.
+
+Do NOT rely on (or wait for) GitHub checks — they do not exist for this repo
+any more, and the branch-protection endpoint returns 403 on the free plan.
+Local green is the source of truth.
 
 ## MCP FEATURE PARITY (RULE — jangan tertinggal/terlepas)
 
