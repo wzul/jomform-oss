@@ -43,7 +43,7 @@ func (h *PublicHandlers) entryLimitReached(ctx context.Context, f *dbstore.Form)
 	}
 	var count int64
 	var err error
-	if formMode(f) == "response" {
+	if formMode(f) == dbstore.FormModeResponse {
 		if h.Submissions == nil {
 			return false, nil
 		}

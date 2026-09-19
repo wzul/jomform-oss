@@ -8,9 +8,20 @@ import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { workspaceQuery } from "../../lib/workspace";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
+import { isSalesForm } from "../../lib/formMode";
 import TemplatePicker from "../../components/TemplatePicker";
 
-type FormRow = { id: string; slug: string; title: string; status: string; url: string };
+type FormRow = {
+  id: string;
+  slug: string;
+  title: string;
+  status: string;
+  url: string;
+  // "payment" (default) or "response". A response-only form
+  // (RSVP, contact, event signup) can never record a sale, so it must not be
+  // offered the "Sales" action.
+  mode?: string;
+};
 
 const HOST = typeof window !== "undefined" ? window.location.hostname : "";
 // Subdomain URL when app itself runs on a subdomain? Dashboard always apex.
@@ -220,7 +231,7 @@ export default function FormsPage() {
             <li className="flex items-center gap-3 px-5 py-2">
               <input
                 type="checkbox"
-                aria-label="Select all forms"
+                aria-label={t("forms.selectAllAria")}
                 checked={allSelected}
                 onChange={toggleAll}
                 className="h-4 w-4 accent-[var(--jf-primary)]"
@@ -234,7 +245,7 @@ export default function FormsPage() {
                 {canWrite && (
                   <input
                     type="checkbox"
-                    aria-label={`Select ${f.title}`}
+                    aria-label={t("forms.selectOneAria", { title: f.title })}
                     checked={selected.has(f.id)}
                     onChange={() => toggle(f.id)}
                     className="h-4 w-4 shrink-0 accent-[var(--jf-primary)]"
@@ -260,10 +271,15 @@ export default function FormsPage() {
                     <Link href={`/form-settings?form=${f.id}`} className="jf-btn-ghost min-h-[44px] sm:min-h-10">
                       {t("fs.title")}
                     </Link>
-                    {/* Issue #126: per-form Sales deep-link -> /sales?form=<id> */}
-                    <Link href={`/sales?form=${f.id}`} className="jf-btn-ghost min-h-[44px] sm:min-h-10">
-                      {t("nav.sales")}
-                    </Link>
+                    {/* Issue #126: per-form Sales deep-link -> /sales?form=<id>.
+                        : only a payment form can have sales — a
+                        response-only form (RSVP, contact) hides this action
+                        instead of mislabelling it "Sales". */}
+                    {isSalesForm(f) && (
+                      <Link href={`/sales?form=${f.id}`} className="jf-btn-ghost min-h-[44px] sm:min-h-10">
+                        {t("nav.sales")}
+                      </Link>
+                    )}
                     <a href={formPublicURL(f)} target="_blank" className="jf-btn-ghost min-h-[44px] sm:min-h-10">
                       {t("bld.view")}
                     </a>
@@ -282,10 +298,14 @@ export default function FormsPage() {
                     <Link href={`/form-settings?form=${f.id}`} className="jf-btn-ghost min-h-[44px] sm:min-h-10">
                       {t("fs.title")}
                     </Link>
-                    {/* Issue #126: per-form Sales deep-link (works for drafts too) */}
-                    <Link href={`/sales?form=${f.id}`} className="jf-btn-ghost min-h-[44px] sm:min-h-10">
-                      {t("nav.sales")}
-                    </Link>
+                    {/* Issue #126: per-form Sales deep-link (works for drafts too).
+                        : a response-only form can never have sales —
+                        it gets no Sales action, so the row is not mislabelled. */}
+                    {isSalesForm(f) && (
+                      <Link href={`/sales?form=${f.id}`} className="jf-btn-ghost min-h-[44px] sm:min-h-10">
+                        {t("nav.sales")}
+                      </Link>
+                    )}
                     {canWrite && (
                       <button onClick={() => publish(f.id)} className="jf-btn-primary min-h-[44px] sm:min-h-10">
                         {t("builder.publish")}

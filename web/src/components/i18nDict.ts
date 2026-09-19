@@ -414,6 +414,12 @@ export const DICT = {
   "forms.delete": { en: "Delete", ms: "Buang", zh: "删除", ta: "நீக்கு", ar: "حذف" },
   "forms.selectAll": { en: "Select all", ms: "Pilih semua", zh: "全选", ta: "அனைத்தையும் தேர்ந்தெடு", ar: "تحديد الكل" },
   "forms.nSelected": { en: "{n} selected", ms: "{n} dipilih", zh: "已选 {n} 项", ta: "{n} தேர்ந்தெடுக்கப்பட்டது", ar: "تم اختيار {n}" },
+  // the two per-row checkbox labels were hardcoded English
+  // ("Select all forms" / `Select ${title}`) on a fully i18n page, so a
+  // screen-reader user on ms/zh/ta/ar heard English. Keyed so the accessible
+  // name is translated like every other string on this page.
+  "forms.selectAllAria": { en: "Select all forms", ms: "Pilih semua borang", zh: "选择所有表单", ta: "அனைத்து படிவங்களையும் தேர்ந்தெடு", ar: "تحديد كل النماذج" },
+  "forms.selectOneAria": { en: "Select {title}", ms: "Pilih {title}", zh: "选择 {title}", ta: "{title} தேர்ந்தெடு", ar: "تحديد {title}" },
   "forms.bulkDeleteConfirm": { en: "Move {n} form(s) to trash? They will be soft-deleted (hidden from the dashboard and public pages) and can be restored later.", ms: "Pindahkan {n} borang ke tong sampah? Ia akan dihapus lembut (tersembunyi dari dashboard & halaman awam) dan boleh dipulihkan kemudian.", zh: "将 {n} 个表单移入回收站？它们将被软删除（从仪表板和公开页面隐藏），之后可以恢复。", ta: "{n} படிவங்களை குப்பைக்கு நகர்த்தவா? அவை மென்-நீக்கம் செய்யப்படும் (டாஷ்போர்டு மற்றும் பொது பக்கங்களில் மறைக்கப்படும்), பின்னர் மீட்டெடுக்கலாம்.", ar: "نقل {n} نموذج (نماذج) إلى سلة المهملات؟ ستُحذف حذفاً ناعماً (تختفي من لوحة التحكم والصفحات العامة) ويمكن استعادتها لاحقاً." },
   // issue #174: template picker modal
   "tpl.title": { en: "Explore form templates", ms: "Terokai template borang", zh: "浏览表单模板", ta: "படிவ வார்ப்புருக்களை ஆராயுங்கள்", ar: "استكشف قوالب النماذج" },

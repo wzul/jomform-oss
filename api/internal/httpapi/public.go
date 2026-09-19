@@ -158,31 +158,10 @@ func genRef() string {
 	return "JF-" + hex.EncodeToString(b)
 }
 
-// formMode returns the form's collection mode from its config: "payment"
-// (default, current behaviour) or "response" (collect-only, no payment).
-func formMode(f *dbstore.Form) string {
-	if f == nil {
-		return "payment"
-	}
-	return formModeFromConfig(f.Config)
-}
-
-// formModeFromConfig is formMode over a bare config map, for call sites that
-// hold the config but not the form (e.g. the forms-list REST payload).
-func formModeFromConfig(config map[string]any) string {
-	if config == nil {
-		return "payment"
-	}
-	if raw, err := json.Marshal(config); err == nil {
-		var cfg struct {
-			Mode string `json:"mode"`
-		}
-		if json.Unmarshal(raw, &cfg) == nil && cfg.Mode == "response" {
-			return "response"
-		}
-	}
-	return "payment"
-}
+// formMode is the httpapi-local name for the shared dbstore.FormMode rule.
+// One delegating line, so the call sites in this package read as before while
+// exactly ONE implementation of the rule exists.
+func formMode(f *dbstore.Form) string { return dbstore.FormMode(f) }
 
 // chipMappingFromConfig reads the form's merchant-configured CHIP field
 // mapping (issue #186): a map of CHIP client field → form block id. When the
@@ -503,7 +482,7 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Issue #171: response-only forms collect field values, not orders.
-	if formMode(form) == "response" {
+	if formMode(form) == dbstore.FormModeResponse {
 		h.handleResponseSubmit(w, r, form)
 		return
 	}
@@ -1282,7 +1261,7 @@ func (h *PublicHandlers) serveForm(w http.ResponseWriter, r *http.Request, f *db
 		h.renderFormMenu(w, r, f, menu)
 		return
 	}
-	if formMode(f) == "response" {
+	if formMode(f) == dbstore.FormModeResponse {
 		// Issue #255: a custom-HTML response form (agent-authored body in a
 		// sandboxed iframe) takes precedence over the block renderer.
 		if h.renderCustomForm(w, r, f) {

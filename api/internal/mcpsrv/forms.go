@@ -19,21 +19,27 @@ type formOut struct {
 	Status string `json:"status"`
 	// IsPrivate reports whether the form is password-protected (issue #176).
 	// The password itself is never returned.
-	IsPrivate bool   `json:"is_private"`
-	URL       string `json:"url,omitempty"`
+	IsPrivate bool `json:"is_private"`
+	// Mode is the form's collection mode — "payment" or "response".
+	// An agent must be able to tell an order form from an RSVP form before
+	// offering the merchant a sales action.
+	Mode string `json:"mode"`
+	URL  string `json:"url,omitempty"`
 }
 
 type formDetailOut struct {
-	ID     string         `json:"id"`
-	Slug   string         `json:"slug"`
-	Title  string         `json:"title"`
-	Status string         `json:"status"`
+	ID     string `json:"id"`
+	Slug   string `json:"slug"`
+	Title  string `json:"title"`
+	Status string `json:"status"`
 	// IsPrivate reports whether the form is password-protected (issue #176).
-	IsPrivate bool           `json:"is_private"`
-	URL       string         `json:"url,omitempty"`
-	Config    map[string]any `json:"config,omitempty"`
+	IsPrivate bool `json:"is_private"`
+	// Mode is the form's collection mode — "payment" or "response".
+	Mode   string         `json:"mode"`
+	URL    string         `json:"url,omitempty"`
+	Config map[string]any `json:"config,omitempty"`
 	// Issue #254: custom styling/theme + registered input fields (MCP parity).
-	Theme            map[string]any   `json:"theme,omitempty"`
+	Theme            map[string]any     `json:"theme,omitempty"`
 	RegisteredFields []formfields.Field `json:"registered_fields,omitempty"`
 }
 
@@ -66,6 +72,7 @@ func (s *Server) listForms(
 			out = append(out, formOut{
 				ID: f.ID, Slug: f.Slug, Title: f.Title, Status: f.Status,
 				IsPrivate: f.Status == dbstore.FormStatusPrivate, URL: u,
+				Mode: dbstore.FormMode(f),
 			})
 		}
 	}
@@ -94,6 +101,7 @@ func (s *Server) getForm(
 				ID: f.ID, Slug: f.Slug, Title: f.Title, Status: f.Status,
 				IsPrivate: f.Status == dbstore.FormStatusPrivate, Config: f.Config,
 				Theme: f.Theme, RegisteredFields: formfields.FromConfig(f.Config),
+				Mode: dbstore.FormMode(f),
 			}
 			if f.Status == dbstore.FormStatusPublished || f.Status == dbstore.FormStatusUnlisted {
 				out.URL = s.formPublicURLForAccount(ctx, acc, f.Slug)

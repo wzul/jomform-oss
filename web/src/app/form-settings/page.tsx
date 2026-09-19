@@ -18,6 +18,7 @@ import { useSession } from "../../components/session";
 import MediaPicker from "../../components/MediaPicker";
 import ProductPicker, { type PickerProduct } from "../../components/ProductPicker";
 import { workspaceQuery, workspaceScope } from "../../lib/workspace";
+import { isSalesForm } from "../../lib/formMode";
 
 type FormDetail = {
   id: string;
@@ -25,6 +26,9 @@ type FormDetail = {
   title: string;
   status: string;
   url: string;
+  // "payment" (default) or "response" — a response-only form can
+  // never record a sale, so it must not be offered a "Sales" action.
+  mode?: string;
   config?: Record<string, unknown>;
   theme?: Record<string, unknown>;
   redirect_success?: string;
@@ -1125,9 +1129,14 @@ function FormSettingsInner() {
                 <Link href={`/builder?form=${formId}`} className="jf-btn-ghost px-3 py-1.5 text-xs">
                   {t("fs.editFields")}
                 </Link>
-                <Link href={`/sales?form=${formId}`} className="jf-btn-ghost px-3 py-1.5 text-xs">
-                  {t("nav.sales")}
-                </Link>
+                {/* : only a payment form can have sales — a
+                    response-only form (RSVP, contact) hides this action
+                    instead of offering an empty, misleading Sales view. */}
+                {isSalesForm(form) && (
+                  <Link href={`/sales?form=${formId}`} className="jf-btn-ghost px-3 py-1.5 text-xs">
+                    {t("nav.sales")}
+                  </Link>
+                )}
                 {form?.url && (
                   <a href={form.url} target="_blank" rel="noreferrer" className="jf-btn-ghost px-3 py-1.5 text-xs">
                     {t("bld.view")}

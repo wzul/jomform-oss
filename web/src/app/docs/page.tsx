@@ -23,7 +23,7 @@ const FEATURES: { title: string; body: string }[] = [
   },
   {
     title: "Sales",
-    body: "Track every sale: reference code, status (pending/confirmed/failed/refunded), buyer, amount, payment method and date. Confirm bank-transfer sales, capture or release skip-capture authorisations, refund paid sales (full or partial), and export sales to CSV.",
+    body: "Track every sale: reference code, status (pending/confirmed/failed/refunded), buyer, amount, payment method and date. Confirm bank-transfer sales, capture or release skip-capture authorisations, refund paid sales (full or partial), and export sales to CSV. A form's mode decides whether it has sales at all: a payment form (the default) takes payment and shows a Sales action on the Forms list, while a response-only form collects responses and is not offered one — an RSVP form is never labelled sales. The Forms list and Form Settings both hide the Sales action on a response-only form, and `GET /v1/rest/forms` (list, single and create) reports the mode as `mode` (`payment` or `response`; a form created before response mode existed reports `payment`).",
   },
   {
     title: "Responses (response-only forms)",

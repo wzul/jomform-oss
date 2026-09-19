@@ -472,10 +472,15 @@ type restForm struct {
 	// The password itself is never returned.
 	IsPrivate bool `json:"is_private"`
 	// Mode is the form's collection mode: "payment" (default) or "response"
-	// (issue #171). The dedicated /sales page lists a response form's entries by
-	// reading that form's submissions instead of its (always empty) sales, so it
-	// needs the mode in the SAME payload it already loads for the filter
-	// dropdown — otherwise the page would have to fetch every form singly.
+	// (issue #171). Two read surfaces need it in this same payload:
+	//   - the forms list, so it can label a non-sales form correctly instead of
+	//     offering every row a "Sales" action — before this, the list payload
+	//     carried no way to tell an RSVP form from an order form, so the
+	//     dashboard had to guess (and guessed "sales" for all of them);
+	//   - the dedicated /sales page, which lists a response form's entries by
+	//     reading that form's submissions instead of its (always empty) sales,
+	//     and loads the filter dropdown from this list — without the mode here
+	//     the page would have to fetch every form singly.
 	Mode      string         `json:"mode"`
 	URL       string         `json:"url"`
 	Config    map[string]any `json:"config,omitempty"`
@@ -637,6 +642,7 @@ func (h *RESTHandlers) getForm(w http.ResponseWriter, r *http.Request, actx *Acc
 		PendingMessage: strOrEmpty(f.PendingMessage), ExpiredMessage: strOrEmpty(f.ExpiredMessage),
 		LimitMessage:   strOrEmpty(f.LimitMessage),
 		ChipConfigured: chipConfigured, ChipBrandID: chipBrandID,
+		Mode: dbstore.FormMode(f),
 	})
 }
 
@@ -693,6 +699,7 @@ func (h *RESTHandlers) createForm(w http.ResponseWriter, r *http.Request, actx *
 	respond(w, http.StatusCreated, restForm{
 		ID: f.ID, Slug: f.Slug, Title: f.Title, Status: f.Status,
 		URL: h.formURLForAccount(r.Context(), actx.Account, f.Slug), UpdatedAt: f.UpdatedAt.UTC().Format(time.RFC3339),
+		Mode: dbstore.FormMode(f),
 	})
 }
 
