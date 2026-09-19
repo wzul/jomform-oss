@@ -211,6 +211,11 @@ export const DICT = {
   "workspace.loading": { en: "Loading your workspaces…", ms: "Memuatkan workspace anda…", zh: "正在加载您的工作区…", ta: "உங்கள் பணியிடங்களை ஏற்றுகிறது…", ar: "جارٍ تحميل مساحات العمل…" },
   "workspace.loadFail": { en: "We couldn't load your workspaces. Please try again.", ms: "Kami tidak dapat memuatkan workspace anda. Sila cuba lagi.", zh: "无法加载您的工作区。请重试。", ta: "உங்கள் பணியிடங்களை ஏற்ற முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر تحميل مساحات العمل. يرجى المحاولة مرة أخرى." },
   "workspace.empty": { en: "You don't have any workspaces yet.", ms: "Anda belum mempunyai sebarang workspace.", zh: "您还没有任何工作区。", ta: "உங்களிடம் இன்னும் பணியிடங்கள் இல்லை.", ar: "ليس لديك أي مساحات عمل بعد." },
+  // The accessible status text for a page's in-flight load (see
+  // components/PageLoading.tsx). Rendered sr-only inside the shell's skeleton:
+  // the skeleton bars themselves are decorative, so a screen reader would
+  // otherwise get no signal at all that the page is still loading.
+  "common.loading": { en: "Loading…", ms: "Memuatkan…", zh: "正在加载…", ta: "ஏற்றுகிறது…", ar: "جارٍ التحميل…" },
   "common.retry": { en: "Retry", ms: "Cuba semula", zh: "重试", ta: "மீண்டும் முயற்சி", ar: "إعادة المحاولة" },
   // Issue #503 (audit): the same visible-failure text for the other list pages
   // that used to swallow a non-ok response into an empty list.

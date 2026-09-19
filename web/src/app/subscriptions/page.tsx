@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { PageLoading } from "../../components/PageLoading";
 import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
@@ -174,12 +175,11 @@ export default function Subscriptions() {
     }
   }
 
+  // In-flight: render inside the shell (see components/PageLoading.tsx) so the
+  // sidebar and top bar stay mounted; the bare `<main>` this replaced dropped
+  // the whole app chrome while the subscriptions fetch was outstanding.
   if (checking) {
-    return (
-      <main className="flex min-h-screen items-center justify-center text-slate-400">
-        …
-      </main>
-    );
+    return <PageLoading active="subscriptions" />;
   }
 
   return (

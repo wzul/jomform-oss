@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { PageLoading } from "../../components/PageLoading";
 import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
@@ -159,7 +160,10 @@ export default function FormsPage() {
 
   // Issue #503: a failed load must be visible and actionable — never an empty
   // list that reads as "you have no forms".
-  if (checking) return <main className="flex min-h-screen items-center justify-center text-slate-400">…</main>;
+  // The in-flight state renders INSIDE the shell. It used to be a bare
+  // `<main>` with no Shell around it, which unmounted the sidebar and the top
+  // bar for the duration of the fetch — reading as a full page reload.
+  if (checking) return <PageLoading active="forms" />;
 
   if (err) {
     return (
