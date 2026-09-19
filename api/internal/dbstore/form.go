@@ -5,7 +5,6 @@ import (
 	"errors"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -487,11 +486,16 @@ func (s *FormStore) ListTemplatesByAccount(ctx context.Context, accountID string
 }
 
 // TemplateByIDForAccount fetches one of the account's own templates by id.
-// A non-template form id or another account's template is not found.
+// A non-template form id or another account's template is not found. So is an
+// id that is not a UUID at all: Postgres raises SQLSTATE 22P02 for an id that
+// can never name a row, which is bad input rather than a server fault, and
+// respondErr only maps the store sentinels — the raw driver error would become
+// a 500 with an error_class=internal counter. isNoSuchRow recognises both
+// shapes at the error level.
 func (s *FormStore) TemplateByIDForAccount(ctx context.Context, accountID, id string) (*Form, error) {
 	f, err := s.scanOne(s.pool.QueryRow(ctx,
 		formSelect+` AND id=$2 AND account_id=$1 AND is_template`, accountID, id))
-	if errors.Is(err, pgx.ErrNoRows) {
+	if isNoSuchRow(err) {
 		return nil, ErrFormNotFound
 	}
 	return f, err
@@ -522,11 +526,18 @@ func (s *FormStore) UpdateTemplate(ctx context.Context, accountID, id, title str
 }
 
 // SoftDeleteTemplate soft-deletes one of the account's own templates.
+// A miss is a not-found like TemplateByIDForAccount: an id naming no row
+// (never existed, another account's, or not a template) and an id that cannot
+// be a UUID at all (SQLSTATE 22P02) both map to ErrFormNotFound, so the delete
+// route answers 404 rather than leaking a driver error into a 500.
 func (s *FormStore) SoftDeleteTemplate(ctx context.Context, accountID, id string) error {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE forms SET deleted_at=now(), updated_at=now()
 		 WHERE id=$2 AND account_id=$1 AND is_template AND deleted_at IS NULL`,
 		accountID, id)
+	if isNoSuchRow(err) {
+		return ErrFormNotFound
+	}
 	if err != nil {
 		return err
 	}
