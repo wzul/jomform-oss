@@ -234,6 +234,60 @@ export default function CustomizeDocsPage() {
         </table>
       </div>
 
+      {/* Issue #457 follow-up (Wan, 2026-09-19): editing one of your own
+          templates. AGENTS.md documentation-parity rule — the feature is
+          documented where templates are already documented, and the two
+          semantics a merchant asks about (it does NOT change forms already
+          created from it; a template is never published) are stated. */}
+      <h2 id="templates" className="mt-8 scroll-mt-6 text-xl font-semibold text-slate-900">Templates (save a form &amp; reuse it)</h2>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        A <strong>template</strong> is a saved form you can start new forms from. It is private to
+        your workspace: it never appears in another merchant&apos;s gallery and it has no
+        draft/published state to manage. Build one either way:
+      </p>
+      <ul className="mt-3 list-disc space-y-1.5 pl-5 text-sm leading-relaxed text-slate-600">
+        <li>
+          <strong>Save form as template</strong> in the builder, or <strong>Save form as template</strong> on
+          the Templates page (pick the form) — its fields and design are copied into a template.
+        </li>
+        <li>
+          <strong>New template</strong> on the Templates page — an empty template, ready to fill in.
+        </li>
+      </ul>
+
+      <h3 className="mt-5 text-base font-semibold text-slate-900">Edit a template&apos;s fields and design</h3>
+      <p className="mt-1 text-sm leading-relaxed text-slate-600">
+        The <strong>Templates</strong> page lists your templates with <strong>Edit</strong>,{" "}
+        <strong>Use template</strong>, <strong>Rename</strong> and <strong>Delete</strong>.{" "}
+        <strong>Edit</strong> opens the template in the same builder you use for forms, so you change
+        its fields, blocks and design exactly as you would on a form, then <strong>Save</strong>. The
+        builder recognises that it is editing a template: there is no slug, no Publish and no Form
+        Settings — a template is not published and has no public URL, so those controls are not
+        shown.
+      </p>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        <strong>Editing a template does not change forms already created from it.</strong> Cloning a
+        template copies its fields and design at that moment, so a form and its template are
+        independent afterwards: fix a typo in a template and the forms you already made keep the old
+        text until you edit them too. Over MCP the same edit is{" "}
+        <span className="font-mono text-xs">update_template</span> (with{" "}
+        <span className="font-mono text-xs">template_id</span> from{" "}
+        <span className="font-mono text-xs">list_own_templates</span>); the REST equivalent is{" "}
+        <span className="font-mono text-xs">PUT /v1/rest/templates/{`{id}`}</span> with{" "}
+        <span className="font-mono text-xs">title</span> /{" "}
+        <span className="font-mono text-xs">config</span> /{" "}
+        <span className="font-mono text-xs">theme</span> (an omitted field is left unchanged).
+      </p>
+
+      <h3 className="mt-5 text-base font-semibold text-slate-900">A template never lands in another merchant&apos;s gallery by accident</h3>
+      <p className="mt-1 text-sm leading-relaxed text-slate-600">
+        Your templates and the public gallery are two separate lists, and the builder&apos;s template
+        mode keeps them that way: saving a template writes only its fields and design, never a
+        publish. Publishing a template into the shared gallery is a deliberate, separate act that
+        requires a category and a short description line, so a template can never appear in someone
+        else&apos;s New-form picker just because you edited it.
+      </p>
+
       {/* Issue #501: the https-only scheme rule for image/URL fields is a
           user-visible constraint, so it is documented here (AGENTS.md
           documentation-parity rule). */}

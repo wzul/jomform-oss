@@ -213,6 +213,7 @@ export const DICT = {
   "media.loadFail": { en: "We couldn't load your media. Please try again.", ms: "Kami tidak dapat memuatkan media anda. Sila cuba lagi.", zh: "无法加载您的媒体。请重试。", ta: "உங்கள் ஊடகத்தை ஏற்ற முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر تحميل وسائطك. يرجى المحاولة مرة أخرى." },
   "bld.prodLoadFail": { en: "We couldn't load your products. Please try again.", ms: "Kami tidak dapat memuatkan produk anda. Sila cuba lagi.", zh: "无法加载您的商品。请重试。", ta: "உங்கள் தயாரிப்புகளை ஏற்ற முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر تحميل منتجاتك. يرجى المحاولة مرة أخرى." },
   "bld.formLoadFail": { en: "We couldn't load this form. Please try again.", ms: "Kami tidak dapat memuatkan borang ini. Sila cuba lagi.", zh: "无法加载此表单。请重试。", ta: "இந்தப் படிவத்தை ஏற்ற முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر تحميل هذا النموذج. يرجى المحاولة مرة أخرى." },
+  "bld.saveFail": { en: "Failed to save.", ms: "Gagal simpan.", zh: "保存失败。", ta: "சேமிக்க முடியவில்லை.", ar: "فشل الحفظ." },
   // issue #163: workspace members management UI + role-gated actions
   "set.tab.members": { en: "Members", ms: "Ahli", zh: "成员", ta: "உறுப்பினர்கள்", ar: "الأعضاء" },
   "mem.title": { en: "Workspace members", ms: "Ahli ruang kerja", zh: "工作区成员", ta: "பணியிட உறுப்பினர்கள்", ar: "أعضاء مساحة العمل" },
@@ -467,6 +468,22 @@ export const DICT = {
   "tplmg.use": { en: "Use template", ms: "Guna template", zh: "使用模板", ta: "வார்ப்புருவைப் பயன்படுத்து", ar: "استخدم القالب" },
   "tplmg.useFail": { en: "Failed to use template.", ms: "Gagal guna template.", zh: "使用模板失败。", ta: "வார்ப்புருவைப் பயன்படுத்த முடியவில்லை.", ar: "فشل استخدام القالب." },
   "tplmg.rename": { en: "Rename", ms: "Namakan semula", zh: "重命名", ta: "மறுபெயரிடு", ar: "إعادة تسمية" },
+  // Issue #457 follow-up (Wan, 2026-09-19): edit one of your own templates in
+  // the builder — its FIELDS and DESIGN, which the Templates page could not
+  // reach before (only Use template / Rename / Delete existed).
+  "tplmg.edit": { en: "Edit", ms: "Edit", zh: "编辑", ta: "திருத்து", ar: "تحرير" },
+  "tplmg.editHint": { en: "Edit this template's fields and design", ms: "Edit medan dan reka bentuk template ini", zh: "编辑此模板的字段和设计", ta: "இந்த வார்ப்புருவின் புலங்களையும் வடிவமைப்பையும் திருத்து", ar: "حرّر حقول هذا القالب وتصميمه" },
+  "tplmg.editLabel": { en: "Template", ms: "Template", zh: "模板", ta: "வார்ப்புரு", ar: "القالب" },
+  "tplmg.editTitle": { en: "Template title", ms: "Tajuk template", zh: "模板标题", ta: "வார்ப்புரு தலைப்பு", ar: "عنوان القالب" },
+  "tplmg.editSaved": {
+    en: "Template saved. Forms already created from it are not affected.",
+    ms: "Template disimpan. Borang yang sudah dicipta daripadanya tidak terjejas.",
+    zh: "模板已保存。已由此创建的表单不受影响。",
+    ta: "வார்ப்புரு சேமிக்கப்பட்டது. ஏற்கனவே அதிலிருந்து உருவாக்கப்பட்ட படிவங்கள் பாதிக்கப்படாது.",
+    ar: "تم حفظ القالب. النماذج المنشأة منه بالفعل لن تتأثر.",
+  },
+  "tplmg.editFail": { en: "Failed to save the template.", ms: "Gagal simpan template.", zh: "保存模板失败。", ta: "வார்ப்புருவைச் சேமிக்க முடியவில்லை.", ar: "فشل حفظ القالب." },
+  "tplmg.editLoadFail": { en: "Failed to load the template.", ms: "Gagal muat template.", zh: "加载模板失败。", ta: "வார்ப்புருவை ஏற்ற முடியவில்லை.", ar: "فشل تحميل القالب." },
   "tplmg.save": { en: "Save", ms: "Simpan", zh: "保存", ta: "சேமி", ar: "حفظ" },
   "tplmg.cancel": { en: "Cancel", ms: "Batal", zh: "取消", ta: "ரத்துசெய்", ar: "إلغاء" },
   "tplmg.docs": { en: "Templates documentation", ms: "Dokumentasi template", zh: "模板文档", ta: "வார்ப்புரு ஆவணங்கள்", ar: "وثائق القوالب" },

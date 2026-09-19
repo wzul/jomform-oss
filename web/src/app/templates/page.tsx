@@ -16,6 +16,7 @@ import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { workspaceQuery } from "../../lib/workspace";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
+import { templateEditHref } from "../../lib/templateEdit";
 
 type Template = {
   id: string;
@@ -220,7 +221,7 @@ export default function TemplatesPage() {
           <div className="flex shrink-0 items-center gap-2 self-start sm:self-auto">
             {/* Issue #457: inline doc link (AGENTS.md docs parity). */}
             <a
-              href="/docs"
+              href="/docs/customize#templates"
               target="_blank"
               rel="noopener noreferrer"
               title={t("tplmg.docs")}
@@ -344,6 +345,24 @@ export default function TemplatesPage() {
               <div className="flex flex-wrap items-center gap-2 sm:justify-end">
                 {canWrite && (
                   <>
+                    {/* Issue #457 follow-up (Wan, 2026-09-19): Edit the
+                        template's FIELDS and DESIGN in the builder. This list
+                        is ListTemplatesByAccount (account_id + is_template), so
+                        every row here is the caller's own — a gallery template
+                        is owned by the system account and never appears, and
+                        the builder's read route is owner-scoped anyway, so an
+                        id from elsewhere fails as 404 rather than opening.
+                        Edit saves through PUT /api/rest/templates/{id}: the
+                        builder's normal form save would write status, and a
+                        published template drops out of this list and lands in
+                        every merchant's gallery. */}
+                    <a
+                      href={templateEditHref(tpl.id)}
+                      title={t("tplmg.editHint")}
+                      className="jf-btn-ghost min-h-[44px] sm:min-h-10"
+                    >
+                      {t("tplmg.edit")}
+                    </a>
                     <button
                       onClick={() => void useTemplate(tpl.id)}
                       disabled={busy}

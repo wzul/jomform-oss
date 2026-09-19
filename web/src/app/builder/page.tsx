@@ -6,6 +6,15 @@ import { useI18n } from "../../components/i18n";
 import { workspaceQuery } from "../../lib/workspace";
 import { canMove, moveBlock } from "../../lib/blockReorder";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
+import {
+  builderControls,
+  builderTarget,
+  loadPath,
+  savePlan,
+  templateConfigWithStoredKeys,
+  templateSaveBody,
+  type BuilderTarget,
+} from "../../lib/templateEdit";
 import TemplatePicker from "../../components/TemplatePicker";
 
 /* ─── types ──────────────────────────────────────────────────────────────── */
@@ -204,6 +213,22 @@ export default function Builder() {
   // Issue #457: "save as template" — one-click save of the current form as a
   // reusable template (shown next to Publish once the form has been saved).
   const [tplMsg, setTplMsg] = useState("");
+  // Issue #457 follow-up (Wan, 2026-09-19): editing one of your OWN templates.
+  // The builder edits either a form (?form=<id>) or a template
+  // (?template=<id>); a template saves through PUT /api/rest/templates/{id} and
+  // must never touch a status/publish route (that would empty it from
+  // /templates and push it into every merchant's gallery). The target + its
+  // controls + its save plan all come from lib/templateEdit so the decision is
+  // unit-tested rather than inline.
+  const [target, setTarget] = useState<BuilderTarget>({ kind: "new" });
+  const editingTemplate = target.kind === "template";
+  const controls = builderControls(target.kind);
+  // The template's stored theme and config. Forms keep their theme in Form
+  // Settings, but a template has no settings page, so the builder round-trips
+  // the theme verbatim AND preserves config keys it has no control for (e.g.
+  // `category`, which a gallery card shows) instead of replacing the blob.
+  const templateTheme = useRef<Record<string, unknown> | null>(null);
+  const templateConfig = useRef<Record<string, unknown> | null>(null);
 
   // Issue #256: AI form builder — prompt input + generation state.
   const [aiPrompt, setAiPrompt] = useState("");
@@ -260,25 +285,39 @@ export default function Builder() {
     setProducts(r.data);
   }, [t, goToLogin]);
 
-  // hydrate from ?form=<id>
+  // hydrate from ?form=<id> (a form) or ?template=<id> (one of your own
+  // templates — issue #457 follow-up). Both are `forms` rows, so they hydrate
+  // the same way; only the route they load from and the route they save to
+  // differ, and that difference is the whole point (a template must never touch
+  // a status/publish route).
   useEffect(() => {
     load();
     const params = new URLSearchParams(window.location.search);
-    const id = params.get("form");
-    const isNew = params.get("new") === "1";
-    if (!id && !isNew) {
-      // Issue #174: new-form path (no ?form= and no ?new=) → show the template picker.
-      setPickerOpen(true);
+    const resolved = builderTarget({
+      template: params.get("template"),
+      form: params.get("form"),
+      isNew: params.get("new") === "1",
+    });
+    setTarget(resolved);
+    const id = resolved.kind === "new" ? null : resolved.id;
+    if (!id) {
+      // Issue #174: only the bare new-form path (no ?form=, no ?template= and
+      // no ?new=) shows the template picker. ?new=1 means "start blank", so it
+      // must NOT open the picker.
+      if (!params.get("new")) setPickerOpen(true);
       return;
     }
-    if (id) void (async () => {
+    void (async () => {
       // Issue #503: `if (!r.ok) return;` silently abandoned hydration — an
       // expired session left the builder showing a blank default form with no
       // explanation. Now a 401/403 goes to /login and any other failure is a
       // visible load error.
+      // A template is read from the TEMPLATE route: it is owner-scoped
+      // (TemplateByIDForAccount), so another account's template — or a gallery
+      // template — fails as 404 instead of opening read-only-able.
       const r = await runLoad(
-        () => fetchJson<Record<string, any>>(`/api/rest/forms/${id}${workspaceQuery()}`),
-        { onUnauth: goToLogin, message: t("bld.formLoadFail") },
+        () => fetchJson<Record<string, any>>(`${loadPath(resolved)(id)}${workspaceQuery()}`),
+        { onUnauth: goToLogin, message: t(resolved.kind === "template" ? "tplmg.editLoadFail" : "bld.formLoadFail") },
       );
       if (!r.ok) {
         setLoadErr(r.error);
@@ -286,13 +325,17 @@ export default function Builder() {
       }
       const d = r.data;
       setCurrentId(d.id);
-      setSlug(d.slug);
+      setSlug(d.slug || "");
       setTitle(d.title);
       setStatus(d.status === "private" ? "private" : d.status === "published" ? "published" : d.status === "unlisted" ? "unlisted" : "draft");
       setPubUrl(d.status === "published" || d.status === "unlisted" ? d.url : "");
       const cfg = d.config || {};
       setMode(cfg.mode === "response" ? "response" : "payment");
       setChipMapping(cfg.chip_mapping || {});
+      if (resolved.kind === "template") {
+        templateTheme.current = d.theme && typeof d.theme === "object" ? (d.theme as Record<string, unknown>) : null;
+        templateConfig.current = cfg as Record<string, unknown>;
+      }
       const hydrated: Block[] = [];
       (cfg.blocks || []).forEach(
         (b: Record<string, unknown>) => {
@@ -301,7 +344,7 @@ export default function Builder() {
       );
       setBlocks(hydrated.length ? hydrated : defaultBlocks(cfg.products || []));
     })();
-  }, [load]);
+  }, [load, goToLogin, t]);
 
   /* Issue #173: map a stored block (snake_case) to the builder Block shape,
      carrying the new per-field settings through. */
@@ -444,6 +487,23 @@ export default function Builder() {
     // it is no longer required here. The merchant can still edit it manually.
     setSaving(true);
     setLoadErr("");
+    // A template that failed to load has no id to write to. Without this guard
+    // the isCreate branch below would POST a create to the template collection
+    // from a page whose template never loaded — a new template out of an error
+    // screen. Refuse and keep the load error visible instead.
+    if (editingTemplate && !currentId) {
+      setLoadErr(t("tplmg.editLoadFail"));
+      setSaving(false);
+      return;
+    }
+    // Which record this save writes, and through which routes, is decided once
+    // in lib/templateEdit (unit-tested): a TEMPLATE saves with
+    // PUT /api/rest/templates/{id} and gets NO status write and NO publish,
+    // because setting a template's status to 'published' would remove it from
+    // /templates (ListTemplatesByAccount excludes published rows) and insert it
+    // into the public gallery every merchant picks new forms from
+    // (ListTemplates filters is_template AND published with NO account filter).
+    const plan = savePlan(target, publish);
     const config = {
       mode,
       description: (blocks.find((b) => b.type === "text")?.value || "").slice(0, 300),
@@ -479,7 +539,8 @@ export default function Builder() {
       })),
       products: products.map((p) => ({ id: p.id, name: p.name, price_sen: p.price_sen, images: p.images })),
     };
-    const payload = { slug: slug.toLowerCase().replace(/[^a-z0-9-]/g, "-"), title, config };
+    const slugValue = slug.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+    const payload = { slug: slugValue, title, config };
 
     // Issue #501: an image block whose src is not https:// would render as the
     // html/template #ZgotmplZ sentinel on the buyer's page (HTTP 200, no
@@ -494,40 +555,50 @@ export default function Builder() {
     }
 
     let id = currentId;
-    if (!id) {
-      const r = await fetch(`/api/rest/forms${workspaceQuery()}`, {
-        method: "POST",
+    if (plan.steps.includes("writeRecord")) {
+      const isCreate = !id;
+      // A template's own body: title + config (+ its unchanged theme, so the
+      // PUT's COALESCE cannot clear the design). A form keeps its existing
+      // PATCH body — the theme belongs to Form Settings, not the builder.
+      const body = editingTemplate
+        ? templateSaveBody(
+            title,
+            templateConfigWithStoredKeys(templateConfig.current, config as Record<string, unknown>),
+            templateTheme.current,
+          )
+        : isCreate
+          ? payload
+          : { title, config };
+      const wr = await fetch(`${plan.recordPath(id || "")}${workspaceQuery()}`, {
+        method: isCreate ? "POST" : plan.method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(body),
       });
-      if (!r.ok) {
-        const d = await r.json().catch(() => ({}));
-        setLoadErr(d.error || "Failed to save");
+      if (!wr.ok) {
+        const d = await wr.json().catch(() => ({}));
+        setLoadErr(d.error || t(editingTemplate ? "tplmg.editFail" : "bld.saveFail"));
         setSaving(false);
         return;
       }
-      const d = await r.json();
-      setCurrentId(d.id);
-      setSlug(d.slug);
-      id = d.id;
-    } else {
-      const ur = await fetch(`/api/rest/forms/${id}${workspaceQuery()}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, config }),
-      });
-      if (!ur.ok) {
-        const d = await ur.json().catch(() => ({}));
-        setLoadErr(d.error || "Failed to save");
-        setSaving(false);
-        return;
+      if (isCreate) {
+        const d = await wr.json();
+        setCurrentId(d.id);
+        setSlug(d.slug || "");
+        id = d.id;
+      } else if (editingTemplate) {
+        // A template has no slug and no public URL; the PUT answers with the
+        // stored row, so keep the title canonical (the API trims it).
+        const d = await wr.json().catch(() => null);
+        if (d && typeof d.title === "string") setTitle(d.title);
       }
     }
+
     // Issue #176: apply the selected status (draft | private | published).
     // The Publish button forces published; private requires the access
-    // password; published/draft clears any stored password.
-    const targetStatus = publish ? "published" : status;
-    if (id) {
+    // password; published/draft clears any stored password. FORMS only —
+    // `writeStatus` is absent from a template's plan by construction.
+    if (plan.steps.includes("writeStatus") && id) {
+      const targetStatus = publish ? "published" : status;
       const statusBody: { status: string; password?: string } = { status: targetStatus };
       if (targetStatus === "private") statusBody.password = accessPw;
       const sr = await fetch(`/api/rest/forms/${id}/status${workspaceQuery()}`, {
@@ -543,7 +614,7 @@ export default function Builder() {
       }
       setStatus(targetStatus as "draft" | "private" | "published" | "unlisted");
     }
-    if (publish && id) {
+    if (plan.steps.includes("publish") && id) {
       await fetch(`/api/rest/forms/${id}/publish${workspaceQuery()}`, { method: "POST" });
       // Issue #450: build the public URL from the API's url field (resolves the
       // owning workspace slug / custom domain server-side), never a client-side
@@ -560,10 +631,11 @@ export default function Builder() {
       })();
       const url =
         (refreshed && refreshed.url) ||
-        (wsSlug ? `https://${wsSlug}.jomform.com/${payload.slug}` : "");
+        (wsSlug ? `https://${wsSlug}.jomform.com/${slugValue}` : "");
       setPubUrl(url);
       await load();
     }
+    if (editingTemplate) setTplMsg(t("tplmg.editSaved"));
     setSaving(false);
     setDirty(false);
   }
@@ -1018,7 +1090,10 @@ export default function Builder() {
           flex-1 min-w-0 on mobile). */}
       <header className="sticky top-0 z-20 flex flex-col gap-1.5 border-b border-[var(--jf-border)] bg-white/95 px-3 py-2 backdrop-blur md:flex-row md:items-center md:gap-3 md:px-4 md:py-2.5">
         <div className="flex min-w-0 items-center gap-1.5">
-          <a href="/forms" className="shrink-0 rounded-md px-2 py-1 text-sm text-[var(--jf-muted)] hover:text-[#374151]">
+          <a
+            href={editingTemplate ? "/templates" : "/forms"}
+            className="shrink-0 rounded-md px-2 py-1 text-sm text-[var(--jf-muted)] hover:text-[#374151]"
+          >
             ←
           </a>
           <input
@@ -1027,33 +1102,51 @@ export default function Builder() {
               setTitle(e.target.value);
               setDirty(true);
             }}
+            aria-label={t(editingTemplate ? "tplmg.editTitle" : "bld.formTitle")}
             placeholder={t("bld.formTitle")}
             className="min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-2 py-1 text-sm font-medium outline-none hover:border-[var(--jf-border)] focus:border-[#7170ff]/60 md:w-56 md:flex-none"
           />
           {/* Publish is row 1 on mobile; row 2 on desktop via ml-auto below.
-              On mobile the actions block moves to row 2 (hidden here). */}
-          <button
-            onClick={() => save(true)}
-            disabled={saving}
-            className="shrink-0 md:hidden jf-btn-primary"
-          >
-            {saving ? t("builder.saving") : currentId ? t("builder.publish") : t("builder.savePub")}
-          </button>
+              On mobile the actions block moves to row 2 (hidden here).
+              Template mode (issue #457 follow-up): a template has no draft /
+              published lifecycle — publishing it would remove it from
+              /templates and put it in every merchant's gallery — so this
+              control is replaced by a plain Save. */}
+          {(controls.publish || editingTemplate) && (
+            <button
+              onClick={() => save(controls.publish)}
+              disabled={saving}
+              className="shrink-0 md:hidden jf-btn-primary"
+            >
+              {saving
+                ? t("builder.saving")
+                : editingTemplate
+                  ? t("tplmg.save")
+                  : currentId
+                    ? t("builder.publish")
+                    : t("builder.savePub")}
+            </button>
+          )}
         </div>
         <div className="flex min-w-0 items-center gap-2 border-t border-[var(--jf-border)] pt-1.5 md:ml-auto md:border-0 md:pt-0">
-          <input
-            value={slug}
-            onChange={(e) => {
-              setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-"));
-              setDirty(true);
-            }}
-            placeholder="slug-url"
-            className="min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-2 py-1 font-mono text-xs text-[var(--jf-muted)] outline-none hover:border-[var(--jf-border)] focus:border-[#7170ff]/60 md:w-40 md:flex-none"
-          />
+          {controls.slug && (
+            <input
+              value={slug}
+              onChange={(e) => {
+                setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-"));
+                setDirty(true);
+              }}
+              placeholder="slug-url"
+              className="min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-2 py-1 font-mono text-xs text-[var(--jf-muted)] outline-none hover:border-[var(--jf-border)] focus:border-[#7170ff]/60 md:w-40 md:flex-none"
+            />
+          )}
+          {editingTemplate && (
+            <span className="shrink-0 font-mono text-xs text-[var(--jf-muted)]">{t("tplmg.editLabel")}</span>
+          )}
           <span className="shrink-0">
             {dirty && <span className="text-xs text-[#f59e0b]">• {t("builder.unsaved")}</span>}
           </span>
-          {pubUrl && (
+          {controls.view && pubUrl && (
             <a
               href={pubUrl}
               target="_blank"
@@ -1062,23 +1155,38 @@ export default function Builder() {
               {t("bld.view")}
             </a>
           )}
-          {/* Issue #457: save this form's design as a reusable template. */}
-          <button
-            onClick={() => void saveAsTemplate()}
-            disabled={saving}
-            title={t("bld.saveAsTemplate")}
-            className="hidden shrink-0 rounded-md border border-[var(--jf-border)] bg-white px-3 py-1.5 text-xs text-[#374151] hover:bg-slate-50 disabled:opacity-50 md:inline-flex"
-          >
-            {t("bld.saveAsTemplate")}
-          </button>
+          {/* Issue #457: save this form's design as a reusable template. NOT in
+              template mode — a template cannot be a template of itself. */}
+          {controls.saveAsTemplate && (
+            <button
+              onClick={() => void saveAsTemplate()}
+              disabled={saving}
+              title={t("bld.saveAsTemplate")}
+              className="hidden shrink-0 rounded-md border border-[var(--jf-border)] bg-white px-3 py-1.5 text-xs text-[#374151] hover:bg-slate-50 disabled:opacity-50 md:inline-flex"
+            >
+              {t("bld.saveAsTemplate")}
+            </button>
+          )}
           {/* desktop Publish — hidden on mobile (it's in row 1). */}
-          <button
-            onClick={() => save(true)}
-            disabled={saving}
-            className="hidden md:inline-flex jf-btn-primary"
-          >
-            {saving ? t("builder.saving") : currentId ? t("builder.publish") : t("builder.savePub")}
-          </button>
+          {controls.publish && (
+            <button
+              onClick={() => save(true)}
+              disabled={saving}
+              className="hidden md:inline-flex jf-btn-primary"
+            >
+              {saving ? t("builder.saving") : currentId ? t("builder.publish") : t("builder.savePub")}
+            </button>
+          )}
+          {/* Template mode: the only write action is Save (PUT /templates/{id}). */}
+          {editingTemplate && (
+            <button
+              onClick={() => save(false)}
+              disabled={saving}
+              className="hidden shrink-0 md:inline-flex jf-btn-primary disabled:opacity-50"
+            >
+              {saving ? t("builder.saving") : t("tplmg.save")}
+            </button>
+          )}
         </div>
       </header>
 
@@ -1105,7 +1213,10 @@ export default function Builder() {
              Add tab, desktop: always visible. Tap = add (already exists). */}
         <aside className={`border-r border-[var(--jf-border)] p-4 ${mobileTab === "add" ? "block" : "hidden"} md:block`}>
           {/* Issue #256: AI form builder — prompt input. The backend calls
-              deepseek-v4-flash:0731 to draft a validated form config. */}
+              deepseek-v4-flash:0731 to draft a validated form config. Kept in
+              template mode (controls.aiGenerate): it only drafts blocks into
+              the canvas, which is exactly what a template is made of. */}
+          {controls.aiGenerate && (
           <div className="mb-4 rounded-lg border border-[var(--jf-border)] bg-white p-3">
             <p className="mb-1 flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wider text-[#9ca3af]">
               <span>✨</span>
@@ -1128,6 +1239,7 @@ export default function Builder() {
             </button>
             {aiMsg && <p className="mt-2 text-[11px] leading-snug text-[#374151]">{aiMsg}</p>}
           </div>
+          )}
           <p className="mb-3 text-xs font-medium uppercase tracking-wider text-[#9ca3af]">
             {t("bld.dragToAdd")}
           </p>
@@ -1328,8 +1440,11 @@ export default function Builder() {
 
         {/* Issue #177: everything else about the form (status, display,
             restrictions, notifications, CHIP feed, sales) lives in the
-            dedicated Form Settings view — the builder is fields-only. */}
-        {currentId && (
+            dedicated Form Settings view — the builder is fields-only. A
+            TEMPLATE has no such view: its whole definition is this canvas, and
+            Form Settings edits a `forms` row by id (not owner-scoped for
+            templates), so the link is hidden in template mode. */}
+        {controls.formSettings && currentId && (
           <div className="mt-8 rounded-lg border border-[var(--jf-border)] bg-white p-3">
             <p className="text-xs font-medium uppercase tracking-wider text-[#9ca3af]">
               {t("fs.title")}

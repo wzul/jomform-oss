@@ -1,0 +1,173 @@
+// Builder edit target: which record the builder is editing, and how it may be
+// saved.
+//
+// The Templates page lists the merchant's own templates (issue #457) and now
+// opens one in the builder with ?template=<id>. The builder already edited
+// FORMS (?form=<id>). Both are `forms` rows — a template is a row with
+// is_template=true and status='draft' — but they must NOT share a save path:
+//
+//   - a FORM      (?form=<id>)     ->  GET  /api/rest/forms/{id}
+//                                      PATCH /api/rest/forms/{id}
+//                                      POST /api/rest/forms/{id}/status
+//                                      (+ POST /forms/{id}/publish on Publish)
+//   - a TEMPLATE  (?template=<id>) ->  GET  /api/rest/templates/{id}
+//                                      PUT  /api/rest/templates/{id}
+//
+// Publishing a template sets status='published', which breaks TWO things at
+// once, because the two template queries are disjoint by status:
+//
+//   * ListTemplatesByAccount (the /templates page) is
+//     `account_id=$1 AND is_template AND NOT (status='published')`, so the row
+//     vanishes from the merchant's own list;
+//   * ListTemplates (the public gallery) is
+//     `is_template AND status='published'` with NO account filter, so the row
+//     appears in EVERY merchant's New-form picker.
+//
+// So the template contract never writes a status and never publishes — not even
+// when the caller asks to publish. Everything here is pure so the decision is
+// testable without a component renderer (this repo has no JSX test setup — see
+// src/lib/formMode.test.ts for the same pattern), and the builder executes the
+// plan returned by `savePlan` rather than re-deciding inline.
+//
+// A template id also wins over a form id when both are present: silently
+// treating a template as a form is exactly the failure this guards.
+
+export type BuilderTarget =
+  | { kind: "template"; id: string }
+  | { kind: "form"; id: string }
+  | { kind: "new" };
+
+/** Resolves the builder's edit target from the URL query parameters. */
+export function builderTarget(params: {
+  template?: string | null;
+  form?: string | null;
+  isNew?: boolean;
+}): BuilderTarget {
+  const template = (params.template || "").trim();
+  if (template) return { kind: "template", id: template };
+  const form = (params.form || "").trim();
+  if (form) return { kind: "form", id: form };
+  return { kind: "new" };
+}
+
+/** Where the builder reads the target from. */
+export function loadPath(target: BuilderTarget): (id: string) => string {
+  if (target.kind === "template") return (id) => `/api/rest/templates/${id}`;
+  return (id) => `/api/rest/forms/${id}`;
+}
+
+/** One write the builder performs when saving. */
+export type SaveStep =
+  // Create or update the record itself (the fields + design).
+  | "writeRecord"
+  // POST /forms/{id}/status — a FORM-only route.
+  | "writeStatus"
+  // POST /forms/{id}/publish — a FORM-only route.
+  | "publish";
+
+export type SavePlan = {
+  steps: SaveStep[];
+  /** HTTP method for `writeRecord`. */
+  method: "POST" | "PUT" | "PATCH";
+  /** Path builder for `writeRecord`; pass the current record id. */
+  recordPath: (id: string) => string;
+  /** True when this plan can publish the record into the gallery. */
+  canPublish: boolean;
+};
+
+/**
+ * The writes the builder performs for a target. Mirrors the existing form flow
+ * exactly — a NEW form is POSTed and then (once it has an id) has its status
+ * written like any other — so template mode is the only branch that differs.
+ *
+ * A template saves through PUT /api/rest/templates/{id} and NOTHING else: no
+ * status write, no publish, even when `publish` is true. That is the whole
+ * point of the plan — a caller cannot accidentally publish a template into the
+ * public gallery, because there is no step for it.
+ */
+export function savePlan(target: BuilderTarget, publish: boolean): SavePlan {
+  if (target.kind === "template") {
+    return {
+      steps: ["writeRecord"],
+      method: "PUT",
+      recordPath: (id) => `/api/rest/templates/${id}`,
+      canPublish: false,
+    };
+  }
+  const steps: SaveStep[] = ["writeRecord", "writeStatus"];
+  if (publish) steps.push("publish");
+  return {
+    steps,
+    method: target.kind === "new" ? "POST" : "PATCH",
+    recordPath: (id) => `/api/rest/forms/${id}`,
+    canPublish: true,
+  };
+}
+
+/** The PUT body for a template save. `theme` is omitted when unknown so the
+ *  API's COALESCE keeps the stored theme instead of clearing it. */
+export function templateSaveBody(
+  title: string,
+  config: unknown,
+  theme?: Record<string, unknown> | null,
+): { title: string; config: unknown; theme?: Record<string, unknown> } {
+  const body: { title: string; config: unknown; theme?: Record<string, unknown> } = { title, config };
+  if (theme && typeof theme === "object") body.theme = theme;
+  return body;
+}
+
+/**
+ * The config a template save writes: the builder's freshly-built config laid
+ * over the stored one.
+ *
+ * The builder owns the keys it renders (`mode`, `blocks`, `products`,
+ * `description`, `chip_mapping`), and those must win — that is the edit. But a
+ * stored template config can legitimately carry a key the builder has no
+ * control for, and the gallery's own metadata is exactly that:
+ * `config.category` is what a gallery card shows. A wholesale replace would
+ * silently strip it and the card would lose its category, so the stored keys
+ * survive unless the builder explicitly owns them.
+ */
+export function templateConfigWithStoredKeys(
+  storedConfig: Record<string, unknown> | null | undefined,
+  builtConfig: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!storedConfig || typeof storedConfig !== "object") return builtConfig;
+  // ...stored first, built second: builder-owned keys win, unknown stored keys
+  // are carried through. A builder key set to undefined stays undefined and is
+  // dropped by JSON.stringify, which is how a cleared field clears.
+  return { ...storedConfig, ...builtConfig };
+}
+
+// Which builder controls are legitimate for each target. Everything that would
+// write a status, publish, or reach the form-only settings surface is off in
+// template mode; the field/design controls (palette, inspector, form mode, AI
+// drafting) stay on, because they only change the record's own config.
+export const TEMPLATE_BUILDER_CONTROLS = {
+  slug: false,
+  publish: false,
+  saveAsTemplate: false,
+  formSettings: false,
+  view: false,
+  aiGenerate: true,
+  mode: true,
+} as const;
+
+export const FORM_BUILDER_CONTROLS = {
+  slug: true,
+  publish: true,
+  saveAsTemplate: true,
+  formSettings: true,
+  view: true,
+  aiGenerate: true,
+  mode: true,
+} as const;
+
+export function builderControls(kind: "template" | "form" | "new") {
+  return kind === "template" ? TEMPLATE_BUILDER_CONTROLS : FORM_BUILDER_CONTROLS;
+}
+
+/** The Templates-page link that opens one of the merchant's own templates. */
+export function templateEditHref(id: string): string {
+  return `/builder?template=${encodeURIComponent(id)}`;
+}
