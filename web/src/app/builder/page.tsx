@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useI18n } from "../../components/i18n";
 import { workspaceQuery } from "../../lib/workspace";
+import { canMove, moveBlock } from "../../lib/blockReorder";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 import TemplatePicker from "../../components/TemplatePicker";
 
@@ -420,8 +421,20 @@ export default function Builder() {
     setDirty(true);
   }
 
-  function move(from: number, to: number) {
-    insertAt(to, null, from);
+  /** Move a canvas block one row in `dir` (-1 up, +1 down).
+   *
+   *  The arrow buttons used to call `move(i, i ± 1)`, but `insertAt` resolves
+   *  its index against the array as it stood BEFORE the row was removed (the
+   *  semantics the drag-and-drop gap zones need). For the down button that
+   *  collapsed to `(i + 1) - 1 = i`, so ↓ spliced the row out and put it back
+   *  where it was: a no-op at every position, while ↑ worked. A row move is a
+   *  swap of adjacent rows — the same shape the other reorder controls in this
+   *  repo use (products moveImage / moveVariation) — so up and down can no
+   *  longer disagree about the arithmetic. `insertAt` is untouched and still
+   *  serves the drag path. */
+  function moveRow(i: number, dir: -1 | 1) {
+    setBlocks((prev) => moveBlock(prev, i, dir));
+    setDirty(true);
   }
 
   /* drag wiring */
@@ -1201,20 +1214,22 @@ export default function Builder() {
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          move(i, i - 1);
+                          moveRow(i, -1);
                         }}
+                        disabled={!canMove(blocks, i, -1)}
                         title={t("bld.moveUp")}
-                        className="flex h-11 w-11 items-center justify-center rounded-md text-base text-[#9ca3af] hover:text-[#374151] active:bg-slate-100 md:h-auto md:w-auto md:px-1 md:text-[10px]"
+                        className="flex h-11 w-11 items-center justify-center rounded-md text-base text-[#9ca3af] hover:text-[#374151] active:bg-slate-100 disabled:opacity-30 disabled:hover:text-[#9ca3af] md:h-auto md:w-auto md:px-1 md:text-[10px]"
                       >
                         ↑
                       </button>
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          move(i, i + 1);
+                          moveRow(i, 1);
                         }}
+                        disabled={!canMove(blocks, i, 1)}
                         title={t("bld.moveDown")}
-                        className="flex h-11 w-11 items-center justify-center rounded-md text-base text-[#9ca3af] hover:text-[#374151] active:bg-slate-100 md:h-auto md:w-auto md:px-1 md:text-[10px]"
+                        className="flex h-11 w-11 items-center justify-center rounded-md text-base text-[#9ca3af] hover:text-[#374151] active:bg-slate-100 disabled:opacity-30 disabled:hover:text-[#9ca3af] md:h-auto md:w-auto md:px-1 md:text-[10px]"
                       >
                         ↓
                       </button>
