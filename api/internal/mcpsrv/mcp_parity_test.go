@@ -180,7 +180,25 @@ var mcpParityBaselineTools = []string{
 	"unspam_sale",
 	"unspam_submission",
 	// Subscriptions + product variations.
+	//
+	// ⚠️ Issue #623: the three variation WRITE tools are registered (the
+	// dashboard could always edit variations, so MCP had to gain
+	// create/update/delete to satisfy the AGENTS.md parity rule) but the
+	// AGENTS.md checklist line for them could NOT be added in the same change:
+	// AGENTS.md is a write-gated agent-instruction file
+	// (tools/file_tools_write_guards.py → _PROTECTED_INSTRUCTION_BASENAMES), so a
+	// headless worker's write is refused by design.
+	//
+	// The exact checklist line is staged at the top of this file's sibling
+	// docs/mcp page AND in the task handoff; Wan must apply it. When it lands,
+	// TestMCPParityGuardBaselinesStayHonest FAILS on these three entries
+	// ("which the parity checklist already names — remove it"), which is the
+	// intended pressure to delete them here. They are listed with a reason
+	// (never silently) precisely so this drift is visible until then.
 	"list_product_variations",
+	"create_product_variation",
+	"update_product_variation",
+	"delete_product_variation",
 	"list_subscriptions",
 	// Settings surfaces (email, CHIP, currency, system).
 	"clear_chip_settings",

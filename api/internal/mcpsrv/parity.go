@@ -94,19 +94,10 @@ func (s *Server) updateProduct(
 		return nil, nil, fmt.Errorf("%s", urlguard.InvalidMessage("images"))
 	}
 	// Validate variations (money stays integer sen; stock nil = unlimited).
+	// Issue #623: also validates each variation's own subscription cycle.
 	for _, v := range in.Variations {
-		if v.Name == "" {
-			return nil, nil, fmt.Errorf("variation name wajib")
-		}
-		// Issue #551: *int64 so missing/null is a rejection, not a silent 0.
-		if v.PriceSen == nil || *v.PriceSen < 0 {
-			return nil, nil, fmt.Errorf("variation price_sen mesti >= 0")
-		}
-		if v.Stock != nil && *v.Stock < 0 {
-			return nil, nil, fmt.Errorf("variation stok mesti >= 0")
-		}
-		if !urlguard.ValidList(v.Images) {
-			return nil, nil, fmt.Errorf("%s", urlguard.InvalidMessage("variations[].images"))
+		if err := validateVariationIn(v); err != nil {
+			return nil, nil, err
 		}
 	}
 	// round 13c: validate the schedule mode before it reaches the store.
@@ -120,18 +111,8 @@ func (s *Server) updateProduct(
 	}
 	// Wholesale-replace variations when the caller sent them (nil = keep).
 	if in.Variations != nil && s.deps.ProductVariations != nil {
-		vs := make([]*dbstore.ProductVariation, 0, len(in.Variations))
-		for i, v := range in.Variations {
-			order := v.SortOrder
-			if order == 0 {
-				order = i
-			}
-			vs = append(vs, &dbstore.ProductVariation{
-				Name: v.Name, PriceSen: *v.PriceSen, Stock: v.Stock,
-				Images: v.Images, SortOrder: order,
-			})
-		}
-		if err := s.deps.ProductVariations.ReplaceAll(ctx, in.ProductID, vs); err != nil {
+		if err := s.deps.ProductVariations.ReplaceAll(ctx, in.ProductID,
+			toStoreVariations(in.Variations)); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -169,7 +150,164 @@ func (s *Server) listProductVariations(
 	return nil, newListOut(toVariationOuts(vs)), nil
 }
 
+// ── Product variation writes (issue #623) ─────────────────────────────────
+//
+// MCP FEATURE PARITY (AGENTS.md): the dashboard could always edit a product's
+// variations — the editor saves them wholesale — but an agent could only LIST
+// them. That made the MCP promise ("control everything from your agent") false
+// for variations. These three tools close the gap:
+//
+//	create_product_variation  add one variation
+//	update_product_variation  edit one (including clearing a cycle field)
+//	delete_product_variation  remove one
+//
+// update_product's `variations[]` wholesale replace is untouched and still the
+// right tool for a full re-list; these act on ONE row, so an agent never has to
+// re-send a set it did not read.
+
+// createVariationIn is the input for create_product_variation.
+type createVariationIn struct {
+	ProductID string `json:"product_id" jsonschema:"ID produk"`
+	variationIn
+}
+
+// createProductVariation adds ONE variation to a product (issue #623).
+func (s *Server) createProductVariation(
+	ctx context.Context, _ *mcp.CallToolRequest, in createVariationIn,
+) (*mcp.CallToolResult, variationOut, error) {
+	if in.ProductID == "" {
+		return nil, variationOut{}, fmt.Errorf("product_id wajib")
+	}
+	if s.deps.ProductVariations == nil {
+		return nil, variationOut{}, fmt.Errorf("variasi produk tidak tersedia")
+	}
+	if _, err := s.requireProductWrite(ctx, in.ProductID); err != nil {
+		return nil, variationOut{}, err
+	}
+	if err := validateVariationIn(in.variationIn); err != nil {
+		return nil, variationOut{}, err
+	}
+	v := toStoreVariations([]variationIn{in.variationIn})[0]
+	v.ProductID = in.ProductID
+	if err := s.deps.ProductVariations.Create(ctx, v); err != nil {
+		return nil, variationOut{}, fmt.Errorf("db: %w", err)
+	}
+	return nil, toVariationOut(v), nil
+}
+
+// updateVariationIn is the input for update_product_variation. Every field is
+// optional (nil = leave unchanged); the clear_* flags reset a cycle field back
+// to "not set", which is what makes the variation inherit the product again —
+// without them a cleared field could never be told apart from a set one.
+type updateVariationIn struct {
+	ProductID   string    `json:"product_id" jsonschema:"ID produk"`
+	VariationID string    `json:"variation_id" jsonschema:"ID variasi"`
+	Name        *string   `json:"name,omitempty" jsonschema:"Nama baharu (optional)"`
+	PriceSen    *int64    `json:"price_sen,omitempty" jsonschema:"Harga baharu dalam SEN (optional)"`
+	Stock       *int      `json:"stock,omitempty" jsonschema:"Stok baharu (optional)"`
+	Images      *[]string `json:"images,omitempty" jsonschema:"Gambar (URL mesti https://) — set penuh; kosong = kosongkan"`
+
+	// Issue #623: the variation's own subscription cycle.
+	BillingPeriod            *string `json:"billing_period,omitempty" jsonschema:"month | year. Kosongkan dengan clear_billing_period=true untuk warisi produk semula."`
+	TrialDays                *int    `json:"trial_days,omitempty" jsonschema:"Hari percubaan. Kosongkan dengan clear_trial_days=true."`
+	SubscriptionCharges      *int    `json:"subscription_charges,omitempty" jsonschema:"Bilangan caj. Kosongkan dengan clear_subscription_charges=true."`
+	ClearBillingPeriod       bool    `json:"clear_billing_period,omitempty" jsonschema:"true = buang kitaran variasi ini supaya ia warisi produk semula"`
+	ClearTrialDays           bool    `json:"clear_trial_days,omitempty" jsonschema:"true = buang hari percubaan variasi supaya ia warisi produk semula"`
+	ClearSubscriptionCharges bool    `json:"clear_subscription_charges,omitempty" jsonschema:"true = buang bilangan caj variasi supaya ia warisi produk semula"`
+}
+
+// updateProductVariation edits ONE variation (issue #623). A cleared cycle field
+// goes back to NULL, which is the "inherit the product" state.
+func (s *Server) updateProductVariation(
+	ctx context.Context, _ *mcp.CallToolRequest, in updateVariationIn,
+) (*mcp.CallToolResult, variationOut, error) {
+	if in.ProductID == "" || in.VariationID == "" {
+		return nil, variationOut{}, fmt.Errorf("product_id dan variation_id wajib")
+	}
+	if s.deps.ProductVariations == nil {
+		return nil, variationOut{}, fmt.Errorf("variasi produk tidak tersedia")
+	}
+	if _, err := s.requireProductWrite(ctx, in.ProductID); err != nil {
+		return nil, variationOut{}, err
+	}
+	if in.Name != nil && *in.Name == "" {
+		return nil, variationOut{}, fmt.Errorf("nama variasi tidak boleh kosong")
+	}
+	if in.PriceSen != nil && *in.PriceSen < 0 {
+		return nil, variationOut{}, fmt.Errorf("variation price_sen mesti >= 0")
+	}
+	if in.Stock != nil && *in.Stock < 0 {
+		return nil, variationOut{}, fmt.Errorf("variation stok mesti >= 0")
+	}
+	if in.Images != nil && !urlguard.ValidList(*in.Images) {
+		return nil, variationOut{}, fmt.Errorf("%s", urlguard.InvalidMessage("variations[].images"))
+	}
+	// Issue #623: an unknown period is rejected, not silently dropped.
+	if in.BillingPeriod != nil && !in.ClearBillingPeriod &&
+		*in.BillingPeriod != "" && *in.BillingPeriod != "month" && *in.BillingPeriod != "year" {
+		return nil, variationOut{}, fmt.Errorf("variation billing_period mesti month|year")
+	}
+	if in.TrialDays != nil && *in.TrialDays < 0 {
+		return nil, variationOut{}, fmt.Errorf("variation trial_days mesti >= 0")
+	}
+	if in.SubscriptionCharges != nil && *in.SubscriptionCharges < 1 {
+		return nil, variationOut{}, fmt.Errorf("variation subscription_charges mesti >= 1")
+	}
+	if err := s.deps.ProductVariations.Update(ctx, in.ProductID, in.VariationID,
+		in.Name, in.PriceSen, &in.Stock, in.Images, nil,
+		in.BillingPeriod, in.ClearBillingPeriod,
+		in.TrialDays, in.ClearTrialDays,
+		in.SubscriptionCharges, in.ClearSubscriptionCharges); err != nil {
+		if err == dbstore.ErrVariationNotFound {
+			return nil, variationOut{}, fmt.Errorf("variasi tidak dijumpai untuk produk ini")
+		}
+		return nil, variationOut{}, fmt.Errorf("db: %w", err)
+	}
+	v, err := s.deps.ProductVariations.GetByProduct(ctx, in.ProductID, in.VariationID)
+	if err != nil {
+		return nil, variationOut{}, fmt.Errorf("db: %w", err)
+	}
+	return nil, toVariationOut(v), nil
+}
+
+// deleteVariationIn is the input for delete_product_variation.
+type deleteVariationIn struct {
+	ProductID   string `json:"product_id" jsonschema:"ID produk"`
+	VariationID string `json:"variation_id" jsonschema:"ID variasi"`
+}
+
+// deleteProductVariation removes ONE variation from a product (issue #623),
+// scoped to that product so an agent cannot delete a variation out of another
+// product's set. Deleting the LAST variation turns the product back into a
+// simple product (the editor's own rule: >=1 variation = variable).
+func (s *Server) deleteProductVariation(
+	ctx context.Context, _ *mcp.CallToolRequest, in deleteVariationIn,
+) (*mcp.CallToolResult, map[string]string, error) {
+	if in.ProductID == "" || in.VariationID == "" {
+		return nil, nil, fmt.Errorf("product_id dan variation_id wajib")
+	}
+	if s.deps.ProductVariations == nil {
+		return nil, nil, fmt.Errorf("variasi produk tidak tersedia")
+	}
+	if _, err := s.requireProductWrite(ctx, in.ProductID); err != nil {
+		return nil, nil, err
+	}
+	if err := s.deps.ProductVariations.Delete(ctx, in.ProductID, in.VariationID); err != nil {
+		if err == dbstore.ErrVariationNotFound {
+			return nil, nil, fmt.Errorf("variasi tidak dijumpai untuk produk ini")
+		}
+		return nil, nil, fmt.Errorf("db: %w", err)
+	}
+	return nil, map[string]string{
+		"status": "deleted", "product_id": in.ProductID, "variation_id": in.VariationID,
+	}, nil
+}
+
 // variationOut is the MCP output shape for one product variation.
+//
+// Issue #623: the subscription cycle fields are OMITTED when the variation has
+// none, so an agent can tell "not set → inherits the product" from "set to the
+// product's value". A zero-filled output would erase that distinction.
 type variationOut struct {
 	ID        string   `json:"id"`
 	Name      string   `json:"name"`
@@ -177,6 +315,10 @@ type variationOut struct {
 	Stock     *int     `json:"stock,omitempty"`
 	Images    []string `json:"images,omitempty"`
 	SortOrder int      `json:"sort_order"`
+	// Issue #623: present only when the variation carries its own cycle.
+	BillingPeriod       string `json:"billing_period,omitempty"`
+	TrialDays           *int   `json:"trial_days,omitempty"`
+	SubscriptionCharges *int   `json:"subscription_charges,omitempty"`
 }
 
 // toVariationOuts maps store variations to the MCP output shape.
@@ -186,12 +328,20 @@ func toVariationOuts(vs []*dbstore.ProductVariation) []variationOut {
 	}
 	out := make([]variationOut, 0, len(vs))
 	for _, v := range vs {
-		out = append(out, variationOut{
-			ID: v.ID, Name: v.Name, PriceSen: v.PriceSen, Stock: v.Stock,
-			Images: v.Images, SortOrder: v.SortOrder,
-		})
+		out = append(out, toVariationOut(v))
 	}
 	return out
+}
+
+// toVariationOut maps one store variation (see variationOut for the
+// omitted-means-inherit rule).
+func toVariationOut(v *dbstore.ProductVariation) variationOut {
+	return variationOut{
+		ID: v.ID, Name: v.Name, PriceSen: v.PriceSen, Stock: v.Stock,
+		Images: v.Images, SortOrder: v.SortOrder,
+		BillingPeriod: v.BillingPeriod, TrialDays: v.TrialDays,
+		SubscriptionCharges: v.Charges,
+	}
 }
 
 // ── Forms upsert + publish + delete ─────────────────────────────────────

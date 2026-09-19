@@ -132,9 +132,15 @@ type Sale struct {
 	// include one-time items in the same cart), and the period comes from that
 	// product rather than a hardcoded default. Empty/zero for every one-time
 	// sale.
-	SubscriptionProductID string
-	SubscriptionAmountSen int64
-	SubscriptionPeriod    string
+	//
+	// Issue #623: SubscriptionVariationID is the variation the buyer chose, when
+	// it was a variable subscription product. Activation carries it onto the
+	// subscription row so the recurring engine resolves that variation's own
+	// cycle (charge count, period) through the same rule the checkout used.
+	SubscriptionProductID   string
+	SubscriptionAmountSen   int64
+	SubscriptionPeriod      string
+	SubscriptionVariationID string
 	// Currency is the currency the sale was transacted in (issue #185).
 	// Recorded at transaction time from the workspace's currency; historical sales
 	// keep their original currency (never auto-converted on a later change).
@@ -190,7 +196,8 @@ const saleSelect = `SELECT id, account_id, COALESCE(form_id::text,''), ref_code,
 	COALESCE(chip_purchase_id,''), COALESCE(chip_checkout_url,''), COALESCE(invoice_no,''),
 	skip_capture, authorized, captured_at, COALESCE(receipt_message_id,''),
 	is_spam, spam_reason, COALESCE(table_number,''), COALESCE(affiliate_code,''), created_at, updated_at,
-	COALESCE(subscription_product_id::text,''), COALESCE(subscription_amount_sen,0), COALESCE(subscription_period,'')
+	COALESCE(subscription_product_id::text,''), COALESCE(subscription_amount_sen,0), COALESCE(subscription_period,''),
+	COALESCE(subscription_variation_id::text,'')
 	FROM sales`
 
 func scanSale(row pgx.Row) (*Sale, error) {
@@ -200,7 +207,8 @@ func scanSale(row pgx.Row) (*Sale, error) {
 		&s.ChipPurchaseID, &s.ChipCheckoutURL, &s.InvoiceNo,
 		&s.SkipCapture, &s.Authorized, &s.CapturedAt, &s.ReceiptMessageID,
 		&s.IsSpam, &s.SpamReason, &s.TableNumber, &s.AffiliateCode, &s.CreatedAt, &s.UpdatedAt,
-		&s.SubscriptionProductID, &s.SubscriptionAmountSen, &s.SubscriptionPeriod)
+		&s.SubscriptionProductID, &s.SubscriptionAmountSen, &s.SubscriptionPeriod,
+		&s.SubscriptionVariationID)
 	return s, err
 }
 
@@ -209,15 +217,15 @@ func (s *SaleStore) Create(ctx context.Context, sale *Sale) error {
 	return s.pool.QueryRow(ctx,
 		`INSERT INTO sales (account_id, form_id, ref_code, client, items, subtotal_sen, shipping_sen,
 		   discount_sen, total_sen, currency, sale_type, payment_method, status, skip_capture, table_number, affiliate_code,
-		   subscription_product_id, subscription_amount_sen, subscription_period)
+		   subscription_product_id, subscription_amount_sen, subscription_period, subscription_variation_id)
 		 VALUES ($1, NULLIF($2,'')::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NULLIF($15,''), NULLIF($16,''),
-		    NULLIF($17,'')::uuid, NULLIF($18,0), NULLIF($19,''))
+		    NULLIF($17,'')::uuid, NULLIF($18,0), NULLIF($19,''), NULLIF($20,'')::uuid)
 		 RETURNING id, created_at, updated_at`,
 		sale.AccountID, sale.FormID, sale.RefCode, sale.Client, sale.Items,
 		sale.SubtotalSen, sale.ShippingSen, sale.DiscountSen, sale.TotalSen,
 		orDefault(sale.Currency, "MYR"),
 		sale.SaleType, sale.PaymentMethod, sale.Status, sale.SkipCapture, sale.TableNumber, sale.AffiliateCode,
-		sale.SubscriptionProductID, sale.SubscriptionAmountSen, sale.SubscriptionPeriod,
+		sale.SubscriptionProductID, sale.SubscriptionAmountSen, sale.SubscriptionPeriod, sale.SubscriptionVariationID,
 	).Scan(&sale.ID, &sale.CreatedAt, &sale.UpdatedAt)
 }
 

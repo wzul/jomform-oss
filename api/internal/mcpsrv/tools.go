@@ -56,8 +56,23 @@ func (s *Server) registerTools() {
 
 	addTool(s, &mcp.Tool{
 		Name:        "list_product_variations",
-		Description: "Senarai variasi produk (name, price_sen, stock, images, sort_order) untuk satu produk. Produk simple = senarai kosong.",
+		Description: "Senarai variasi produk (name, price_sen, stock, images, sort_order, dan kitaran langganan sendiri bila ada) untuk satu produk. Produk simple = senarai kosong. Medan billing_period/trial_days/subscription_charges HANYA hadir bila variasi menetapkannya sendiri; jika tiada, variasi itu mewarisi kitaran produk.",
 	}, s.listProductVariations)
+
+	addTool(s, &mcp.Tool{
+		Name:        "create_product_variation",
+		Description: "Tambah SATU variasi pada produk (cth: Saiz M). Boleh tetapkan kitaran langganan variasi sendiri (billing_period month|year, trial_days, subscription_charges). Biarkan kosong = variasi mewarisi kitaran produk.",
+	}, s.createProductVariation)
+
+	addTool(s, &mcp.Tool{
+		Name:        "update_product_variation",
+		Description: "Kemaskini SATU variasi (nama, harga, stok, gambar, kitaran langganan). Medan yang tidak diisi kekal tidak berubah. Set clear_billing_period / clear_trial_days / clear_subscription_charges = true untuk BUANG kitaran variasi itu supaya ia mewarisi kitaran produk semula.",
+	}, s.updateProductVariation)
+
+	addTool(s, &mcp.Tool{
+		Name:        "delete_product_variation",
+		Description: "Padam SATU variasi dari produk. Variasi terakhir yang dipadam menjadikan produk itu produk simple semula.",
+	}, s.deleteProductVariation)
 
 	// ── Sales ───────────────────────────────────────────────────────────────
 	addTool(s, &mcp.Tool{

@@ -207,6 +207,9 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 	// Issue #560: the resolution of the subscription product for this order (nil
 	// when no line item is a subscription). See subItems below.
 	var product *dbstore.Product
+	// Issue #623: the variation bought of that subscription product, when the
+	// buyer chose one. It carries the subscription cycle the sale bills on.
+	var subVariation *dbstore.ProductVariation
 	var subItems []dbstore.SaleItem
 	for _, it := range in.Items {
 		// Issue #461: the products table is the price authority — the name and
@@ -253,6 +256,13 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 			item.PriceSen = v.PriceSen
 			item.VariationID = v.ID
 			item.VariationName = v.Name
+			// Issue #623: remember the chosen variation so the sale records the
+			// cycle it actually bills on. Only the subscription product's own
+			// variation counts — a variation on a one-time item in the same cart
+			// must not change the recurring terms.
+			if product != nil && product.Type == dbstore.SaleTypeSubscription && subVariation == nil {
+				subVariation = v
+			}
 			// Inventory: limited-stock variations decrement atomically; SOLD OUT rejects.
 			if err := h.ProductVariations.DecrementStock(r.Context(), v.ID, int(qty)); err != nil {
 				if err == dbstore.ErrOutOfStock {
@@ -288,13 +298,25 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 	// one-time items in the same cart are charged once, in this first payment
 	// only.
 	//
+	// Issue #623: the schedule also follows the VARIATION the buyer chose when
+	// that variation carries its own cycle — so "Size M monthly" and "Size L
+	// yearly" from one product each bill on their own terms. A variation with no
+	// cycle of its own inherits the product's, which is why a product whose
+	// variations carry none is unchanged.
+	//
 	// Persisted on the sale so activation never has to re-derive the terms from
-	// a mixed cart, and never falls back to a hardcoded monthly period.
-	if st, amount, period := resolveSubscriptionTerms(product, subItems); st != "" {
+	// a mixed cart, and never falls back to a hardcoded monthly period. The
+	// variation id rides along so the recurring engine resolves the fixed charge
+	// count through the SAME rule (dbstore.EffectiveCycle) from the second
+	// charge onward.
+	if st, amount, cycle := resolveSubscriptionTerms(product, subVariation, subItems); st != "" {
 		sale.SaleType = st
 		sale.SubscriptionProductID = product.ID
 		sale.SubscriptionAmountSen = amount
-		sale.SubscriptionPeriod = period
+		sale.SubscriptionPeriod = cycle.Period
+		if subVariation != nil {
+			sale.SubscriptionVariationID = subVariation.ID
+		}
 	}
 	sale.SubtotalSen = subtotal
 	// Issue #99 money invariant: total_sen = subtotal + shipping - discount.
@@ -497,28 +519,34 @@ func (h *PublicHandlers) resolveWorkspaceAccount(r *http.Request) (*dbstore.Acco
 // resolver here would leave two overlapping menu-order paths.
 
 // resolveSubscriptionTerms maps a resolved cart to the subscription terms for the
-// sale (issue #560).
+// sale (issue #560, extended by issue #623 for per-variation cycles).
 //
-// It returns ("", 0, "") when no purchased product is a subscription, so the sale
-// stays one_time. Otherwise the sale is a subscription and the terms come from
-// THAT product:
+// It returns ("", 0, "", dbstore.SubscriptionCycle{}) when no purchased product
+// is a subscription, so the sale stays one_time. Otherwise the sale is a
+// subscription and the terms come from THAT product:
 //
 //   - amount: the subscription product's own price x quantity — NOT the order
 //     total, because a cart may also contain one-time items, and those must be
 //     charged once rather than re-billed every period;
-//   - period: the product's billing period, never a hardcoded default (a yearly
-//     product billed monthly is a real, silent billing error).
+//   - period: the EFFECTIVE cycle of the product, or of the chosen variation when
+//     that variation carries its own (issue #623). A yearly product billed
+//     monthly is a real, silent billing error.
+//
+// v is the variation the buyer chose, or nil. The cycle is resolved in exactly
+// ONE place — dbstore.EffectiveCycle — so a variation's own cycle cannot be
+// honoured at checkout and ignored by the recurring engine (or vice versa).
 //
 // Extracted so the rule is directly testable: when it lived inline in submitOrder,
 // a test could only re-implement it and would pass even with the production rule
 // removed.
-func resolveSubscriptionTerms(product *dbstore.Product, subItems []dbstore.SaleItem) (saleType string, amountSen int64, period string) {
+func resolveSubscriptionTerms(product *dbstore.Product, v *dbstore.ProductVariation,
+	subItems []dbstore.SaleItem) (saleType string, amountSen int64, cycle dbstore.SubscriptionCycle) {
 	if product == nil || product.Type != dbstore.SaleTypeSubscription {
-		return "", 0, ""
+		return "", 0, dbstore.SubscriptionCycle{}
 	}
 	var total int64
 	for _, it := range subItems {
 		total += it.PriceSen * it.Qty
 	}
-	return dbstore.SaleTypeSubscription, total, product.BillingPeriod
+	return dbstore.SaleTypeSubscription, total, dbstore.EffectiveCycle(product, v)
 }

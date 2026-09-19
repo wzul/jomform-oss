@@ -45,6 +45,12 @@ type Subscription struct {
 	CancelledAt         time.Time
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
+	// Issue #623: the product variation this subscription was bought as (empty
+	// for a simple-product subscription). The recurring engine resolves its
+	// fixed billing count and cycle through the variation when set, so a
+	// variation's own terms keep governing every later charge — not just the
+	// first payment. Empty = no variation, the product's cycle fully applies.
+	VariationID string
 	// Issue #154: update-card flow. CardUpdatePending is set when a charge
 	// fails so the merchant/customer knows to re-tokenize; while true the
 	// 7-day overdue auto-cancel is paused. CardUpdatePurchaseID holds the
@@ -65,7 +71,7 @@ func NewSubscriptionStore(pool *pgxpool.Pool) *SubscriptionStore {
 const subSelect = `SELECT id, account_id, client_email, product_id, COALESCE(sale_id::text,''),
 	chip_token_purchase_id, status, period, amount_sen, next_charge_at,
 	COALESCE(cancelled_at, 'epoch'::timestamptz), created_at, updated_at,
-	card_update_pending, card_update_purchase_id
+	card_update_pending, card_update_purchase_id, COALESCE(variation_id::text,'')
 	FROM subscriptions`
 
 func scanSub(row pgx.Row) (*Subscription, error) {
@@ -73,7 +79,7 @@ func scanSub(row pgx.Row) (*Subscription, error) {
 	err := row.Scan(&sub.ID, &sub.AccountID, &sub.ClientEmail, &sub.ProductID, &sub.SaleID,
 		&sub.ChipTokenPurchaseID, &sub.Status, &sub.Period, &sub.AmountSen, &sub.NextChargeAt,
 		&sub.CancelledAt, &sub.CreatedAt, &sub.UpdatedAt,
-		&sub.CardUpdatePending, &sub.CardUpdatePurchaseID)
+		&sub.CardUpdatePending, &sub.CardUpdatePurchaseID, &sub.VariationID)
 	return sub, err
 }
 
@@ -81,11 +87,11 @@ func scanSub(row pgx.Row) (*Subscription, error) {
 func (s *SubscriptionStore) Create(ctx context.Context, sub *Subscription) error {
 	return s.pool.QueryRow(ctx,
 		`INSERT INTO subscriptions (account_id, client_email, product_id, sale_id, chip_token_purchase_id,
-		   status, period, amount_sen, next_charge_at)
-		 VALUES ($1,$2,$3,NULLIF($4,'')::uuid,$5,$6,$7,$8,$9)
+		   status, period, amount_sen, next_charge_at, variation_id)
+		 VALUES ($1,$2,$3,NULLIF($4,'')::uuid,$5,$6,$7,$8,$9,NULLIF($10,'')::uuid)
 		 RETURNING id, created_at, updated_at`,
 		sub.AccountID, sub.ClientEmail, sub.ProductID, sub.SaleID, sub.ChipTokenPurchaseID,
-		sub.Status, sub.Period, sub.AmountSen, sub.NextChargeAt,
+		sub.Status, sub.Period, sub.AmountSen, sub.NextChargeAt, sub.VariationID,
 	).Scan(&sub.ID, &sub.CreatedAt, &sub.UpdatedAt)
 }
 
@@ -352,7 +358,7 @@ func (s *SubscriptionStore) ListByAccountsPage(ctx context.Context, accountIDs [
 		q = `SELECT s.id, s.account_id, s.client_email, s.product_id, COALESCE(s.sale_id::text,''),
 			s.chip_token_purchase_id, s.status, s.period, s.amount_sen, s.next_charge_at,
 			COALESCE(s.cancelled_at, 'epoch'::timestamptz), s.created_at, s.updated_at,
-			s.card_update_pending, s.card_update_purchase_id,
+			s.card_update_pending, s.card_update_purchase_id, COALESCE(s.variation_id::text,''),
 			COALESCE(p.name, ''),
 			COALESCE((SELECT COUNT(*) FROM subscription_charges sc
 			          WHERE sc.subscription_id = s.id AND sc.status = 'failed'
@@ -365,7 +371,7 @@ func (s *SubscriptionStore) ListByAccountsPage(ctx context.Context, accountIDs [
 		q = `SELECT s.id, s.account_id, s.client_email, s.product_id, COALESCE(s.sale_id::text,''),
 			s.chip_token_purchase_id, s.status, s.period, s.amount_sen, s.next_charge_at,
 			COALESCE(s.cancelled_at, 'epoch'::timestamptz), s.created_at, s.updated_at,
-			s.card_update_pending, s.card_update_purchase_id,
+			s.card_update_pending, s.card_update_purchase_id, COALESCE(s.variation_id::text,''),
 			COALESCE(p.name, ''),
 			COALESCE((SELECT COUNT(*) FROM subscription_charges sc
 			          WHERE sc.subscription_id = s.id AND sc.status = 'failed'
@@ -387,7 +393,8 @@ func (s *SubscriptionStore) ListByAccountsPage(ctx context.Context, accountIDs [
 		if err := rows.Scan(&sub.ID, &sub.AccountID, &sub.ClientEmail, &sub.ProductID, &sub.SaleID,
 			&sub.ChipTokenPurchaseID, &sub.Status, &sub.Period, &sub.AmountSen, &sub.NextChargeAt,
 			&sub.CancelledAt, &sub.CreatedAt, &sub.UpdatedAt,
-			&sub.CardUpdatePending, &sub.CardUpdatePurchaseID, &sw.ProductName, &sw.RetryAttempts); err != nil {
+			&sub.CardUpdatePending, &sub.CardUpdatePurchaseID, &sub.VariationID,
+			&sw.ProductName, &sw.RetryAttempts); err != nil {
 			return nil, 0, err
 		}
 		sw.Subscription = sub

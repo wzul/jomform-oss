@@ -18,6 +18,10 @@ const FEATURES: { title: string; body: string; slug?: string }[] = [
     body: "Sell one-time items and subscriptions. Each product has a name, price (in sen), stock, images, and optional variations (size/colour) with their own price, stock and image. Subscriptions support monthly/yearly billing, trial days, and a fixed or infinite number of charges.",
   },
   {
+    title: "Variation products",
+    body: "A product with one or more variations is a variable product: each variation carries its own name, price, stock and image, and the buyer picks one at checkout. A variation of a subscription product may also carry its own subscription cycle — period (monthly/yearly), trial days and number of charges — so one product can sell \"Size M monthly\" and \"Size L yearly\" and bill each on its own terms. A field left empty inherits the product's value for that field, so a variation that never set a cycle keeps following the product; a variation with its own value is fixed. Variations are discrete rows (not an attribute grid): you create each combination you actually sell, and each gets its own price, stock and image. Manage them over MCP with list_product_variations, create_product_variation, update_product_variation and delete_product_variation. See the variation products guide.",
+  },
+  {
     title: "Product images on forms",
     body: "Choose how each product photo appears on your form: size (small 52px, medium 96px, large 160px or hidden) and layout (thumbnail-left, the default, or image-top — a menu-card look with a full-width photo above the name, ideal for a restaurant menu). The renderer serves the matching optimised media variant for the chosen size. Set it in Form Settings → General (with a live preview) or over MCP via set_form_theme (product_image_size / product_image_layout).",
   },

@@ -207,6 +207,10 @@ func main() {
 		deps.Affiliates = affiliateStore
 		pay := payments.New(chip.New(cfg.ChipAPIBaseURL), accounts, sales, subs, decryptKey, cfg.AppBaseURL)
 		pay.Products = products
+		// Issue #623: a subscription bought as a product variation must resolve
+		// that variation's own cycle on every later charge, exactly as the
+		// checkout did — so the recurring engine gets the variation store too.
+		pay.ProductVariations = dbstore.NewProductVariationStore(pool)
 		pay.Forms = formsStore
 		pay.Workspaces = workspacesStore
 		pay.Users = usersStore

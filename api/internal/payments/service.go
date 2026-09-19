@@ -23,6 +23,11 @@ type Service struct {
 	Sales      *dbstore.SaleStore
 	Subs       *dbstore.SubscriptionStore
 	Products   *dbstore.ProductStore // reads subscription_charges for fixed billing counts
+	// Issue #623: product variations, so a subscription bought as a variation
+	// resolves that variation's own cycle (period / fixed charge count) on every
+	// later charge. Nil → the product's cycle alone applies (the pre-#623
+	// behaviour), which is safe for a simple product and for bare-mode tests.
+	ProductVariations *dbstore.ProductVariationStore
 	DecryptKey []byte // ENCRYPTION_KEY — used to decrypt per-account CHIP keys
 	BaseURL    string // app public base URL for redirects/callbacks
 	Forms      FormGetter

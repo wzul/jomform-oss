@@ -355,6 +355,11 @@ func (s *Service) activateSubscription(ctx context.Context, sale *dbstore.Sale) 
 	//     been billed monthly;
 	//   - the amount was sale.TotalSen, so a cart mixing a subscription with
 	//     one-time items would have re-billed those one-time items every period.
+	//
+	// Issue #623: the period recorded on the sale is already the EFFECTIVE cycle
+	// (the chosen variation's when it carries one, otherwise the product's), and
+	// the variation id rides along so every later charge resolves its terms
+	// through the same rule.
 	period := sale.SubscriptionPeriod
 	if period != "month" && period != "year" {
 		period = "month" // a sale with no recorded terms (pre-#560 rows)
@@ -373,6 +378,7 @@ func (s *Service) activateSubscription(ctx context.Context, sale *dbstore.Sale) 
 		AccountID:           sale.AccountID,
 		ClientEmail:         sale.Client.Email,
 		ProductID:           productID,
+		VariationID:         sale.SubscriptionVariationID,
 		SaleID:              sale.ID,
 		ChipTokenPurchaseID: sale.ChipPurchaseID,
 		Status:              dbstore.SubActive,
@@ -561,16 +567,17 @@ func (s *Service) processSubscriptionEvent(ctx context.Context, p *chip.Purchase
 // `paid`. It must NOT be `1 + paid`: that counted the first payment twice and
 // left the subscription permanently short of its limit, so it never completed.
 // Returns nil when the limit is not (yet) reached.
+//
+// Issue #623: the limit is resolved through the subscription's VARIATION when it
+// has one (the same EffectiveCycle rule the checkout used), so a variation with
+// its own fixed count is not billed on the product's.
 func (s *Service) completeIfLimitReached(ctx context.Context, sub *dbstore.Subscription) error {
-	if s.Products == nil {
-		return nil
-	}
-	prod, err := s.Products.Get(ctx, sub.AccountID, sub.ProductID)
+	cycle, ok, err := s.subscriptionCycleFor(ctx, sub)
 	if err != nil {
 		return err
 	}
-	if prod.SubscriptionCharges == nil {
-		return nil // infinite
+	if !ok || cycle.Charges == nil {
+		return nil // no product resolved, or infinite
 	}
 	paid, err := s.Subs.ChargeCount(ctx, sub.ID)
 	if err != nil {
@@ -579,7 +586,7 @@ func (s *Service) completeIfLimitReached(ctx context.Context, sub *dbstore.Subsc
 		// instead of completing. Fail the cycle instead of guessing.
 		return err
 	}
-	if paid >= int64(*prod.SubscriptionCharges) {
+	if paid >= int64(*cycle.Charges) {
 		if err := s.Subs.SetStatus(ctx, sub.ID, dbstore.SubCompleted); err != nil {
 			return err
 		}

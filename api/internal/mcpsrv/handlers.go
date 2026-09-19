@@ -80,12 +80,79 @@ type createProductIn struct {
 }
 
 // variationIn is the MCP input shape for one product variation.
+//
+// Issue #623: the subscription cycle fields are POINTERS so an omitted field is
+// distinguishable from a set one. Omitted/null = "not set → inherit the
+// product's", which is a different state from "explicitly set to the product's
+// value" and must stay so (pre-filling would silently make the product-level
+// cycle inert for that variation).
 type variationIn struct {
 	Name      string   `json:"name" jsonschema:"nama variasi (cth: Saiz M, Merah)"`
 	PriceSen  *int64   `json:"price_sen" jsonschema:"harga variasi dalam SEN"`
 	Stock     *int     `json:"stock,omitempty" jsonschema:"stok variasi (omit = unlimited)"`
 	Images    []string `json:"images,omitempty" jsonschema:"gambar variasi (URL mesti https:// — issue #501)"`
 	SortOrder int      `json:"sort_order,omitempty" jsonschema:"urutan (0 = ikut senarai)"`
+	// Issue #623: the variation's own subscription cycle. Omit = inherit the
+	// product's for that field.
+	BillingPeriod       *string `json:"billing_period,omitempty" jsonschema:"kitaran variasi ini: month | year. Omit = ikut produk."`
+	TrialDays           *int    `json:"trial_days,omitempty" jsonschema:"hari percubaan variasi. Omit = ikut produk."`
+	SubscriptionCharges *int    `json:"subscription_charges,omitempty" jsonschema:"bilangan caj variasi (N = caj N kali). Omit = ikut produk."`
+}
+
+// validateVariationIn validates one MCP variation (money stays integer sen;
+// stock nil = unlimited; cycle fields optional and inherit the product when
+// omitted, but validated when present).
+func validateVariationIn(v variationIn) error {
+	if v.Name == "" {
+		return fmt.Errorf("variation name wajib")
+	}
+	// Issue #551: *int64 so missing/null is a rejection, not a silent 0.
+	if v.PriceSen == nil || *v.PriceSen < 0 {
+		return fmt.Errorf("variation price_sen mesti >= 0")
+	}
+	if v.Stock != nil && *v.Stock < 0 {
+		return fmt.Errorf("variation stok mesti >= 0")
+	}
+	if !urlguard.ValidList(v.Images) {
+		return fmt.Errorf("%s", urlguard.InvalidMessage("variations[].images"))
+	}
+	// Issue #623: an unknown period is rejected, not silently dropped — an
+	// ignored cycle is how a merchant ends up billing yearly where they chose
+	// monthly.
+	if v.BillingPeriod != nil && *v.BillingPeriod != "" &&
+		*v.BillingPeriod != "month" && *v.BillingPeriod != "year" {
+		return fmt.Errorf("variation billing_period mesti month|year")
+	}
+	if v.TrialDays != nil && *v.TrialDays < 0 {
+		return fmt.Errorf("variation trial_days mesti >= 0")
+	}
+	if v.SubscriptionCharges != nil && *v.SubscriptionCharges < 1 {
+		return fmt.Errorf("variation subscription_charges mesti >= 1")
+	}
+	return nil
+}
+
+// toStoreVariations maps MCP variation inputs to store rows (fill a zero
+// sort_order from the list position). An omitted cycle field stays nil in the
+// store, which is the "inherit the product" state.
+func toStoreVariations(vs []variationIn) []*dbstore.ProductVariation {
+	out := make([]*dbstore.ProductVariation, 0, len(vs))
+	for i, v := range vs {
+		order := v.SortOrder
+		if order == 0 {
+			order = i
+		}
+		bp := ""
+		if v.BillingPeriod != nil {
+			bp = *v.BillingPeriod
+		}
+		out = append(out, &dbstore.ProductVariation{
+			Name: v.Name, PriceSen: *v.PriceSen, Stock: v.Stock,
+			Images: v.Images, SortOrder: order,
+			BillingPeriod: bp, TrialDays: v.TrialDays, Charges: v.SubscriptionCharges,
+		})
+	}
+	return out
 }
 
 func (s *Server) createProduct(ctx context.Context, _ *mcp.CallToolRequest, in createProductIn) (*mcp.CallToolResult, productOut, error) {
@@ -130,18 +197,10 @@ func (s *Server) createProduct(ctx context.Context, _ *mcp.CallToolRequest, in c
 		}
 	}
 	// Validate variations (money stays integer sen; stock nil = unlimited).
+	// Issue #623: also validates each variation's own subscription cycle.
 	for _, v := range in.Variations {
-		if v.Name == "" {
-			return nil, productOut{}, fmt.Errorf("variation name wajib")
-		}
-		if v.PriceSen == nil || *v.PriceSen < 0 {
-			return nil, productOut{}, fmt.Errorf("variation price_sen mesti >= 0")
-		}
-		if v.Stock != nil && *v.Stock < 0 {
-			return nil, productOut{}, fmt.Errorf("variation stok mesti >= 0")
-		}
-		if !urlguard.ValidList(v.Images) {
-			return nil, productOut{}, fmt.Errorf("%s", urlguard.InvalidMessage("variations[].images"))
+		if err := validateVariationIn(v); err != nil {
+			return nil, productOut{}, err
 		}
 	}
 	p := &dbstore.Product{
@@ -155,18 +214,8 @@ func (s *Server) createProduct(ctx context.Context, _ *mcp.CallToolRequest, in c
 	}
 	// Persist variations wholesale when provided.
 	if len(in.Variations) > 0 && s.deps.ProductVariations != nil {
-		vs := make([]*dbstore.ProductVariation, 0, len(in.Variations))
-		for i, v := range in.Variations {
-			order := v.SortOrder
-			if order == 0 {
-				order = i
-			}
-			vs = append(vs, &dbstore.ProductVariation{
-				Name: v.Name, PriceSen: *v.PriceSen, Stock: v.Stock,
-				Images: v.Images, SortOrder: order,
-			})
-		}
-		if err := s.deps.ProductVariations.ReplaceAll(ctx, p.ID, vs); err != nil {
+		if err := s.deps.ProductVariations.ReplaceAll(ctx, p.ID,
+			toStoreVariations(in.Variations)); err != nil {
 			return nil, productOut{}, fmt.Errorf("db: %w", err)
 		}
 	}

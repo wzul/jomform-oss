@@ -20,6 +20,13 @@ export type Variation = {
   stock?: number | null;
   images?: string[];
   sort_order?: number;
+  // Issue #623: the variation's own subscription cycle. UNSET (undefined/null)
+  // means "inherit the product's" and is NOT the same state as "set to the
+  // product's value" — so these stay null until the merchant actually sets one,
+  // and saving must omit them rather than pre-fill the product's cycle.
+  billing_period?: string | null; // month | year | null = inherit
+  trial_days?: number | null; // null = inherit
+  subscription_charges?: number | null; // null = inherit
 };
 
 export type ProductForm = {
@@ -146,6 +153,13 @@ export default function ProductEditor({ productId }: { productId?: string }) {
                 stock: typeof v.stock === "number" ? v.stock : null,
                 images: Array.isArray(v.images) ? v.images : [],
                 sort_order: v.sort_order || 0,
+                // Issue #623: absent in the API response = the variation has no
+                // cycle of its own → keep it null so the field shows the
+                // product's value as a HINT (a placeholder), never as a value.
+                billing_period: typeof v.billing_period === "string" ? v.billing_period : null,
+                trial_days: typeof v.trial_days === "number" ? v.trial_days : null,
+                subscription_charges:
+                  typeof v.subscription_charges === "number" ? v.subscription_charges : null,
               }))
             : [],
         });
@@ -221,7 +235,19 @@ export default function ProductEditor({ productId }: { productId?: string }) {
       ...f,
       variations: [
         ...f.variations,
-        { name: "", price_sen: 0, stock: null, images: [], sort_order: f.variations.length },
+        {
+          name: "",
+          price_sen: 0,
+          stock: null,
+          images: [],
+          sort_order: f.variations.length,
+          // Issue #623: a NEW variation inherits the product's cycle (null), it
+          // is never pre-filled with it — pre-filling would make the
+          // product-level setting silently inert for this row.
+          billing_period: null,
+          trial_days: null,
+          subscription_charges: null,
+        },
       ],
     }));
   }
@@ -295,6 +321,17 @@ export default function ProductEditor({ productId }: { productId?: string }) {
         stock: typeof v.stock === "number" ? v.stock : null,
         images: v.images || [],
         sort_order: i,
+        // Issue #623: send a cycle field ONLY when the merchant actually set it.
+        // An unset field is omitted (the API stores NULL = "inherit the
+        // product"), so a product-level cycle change still reaches every
+        // variation that never had one of its own. Pre-filling the product's
+        // value here would freeze it onto each row and make the product setting
+        // silently inert.
+        ...(v.billing_period ? { billing_period: v.billing_period } : {}),
+        ...(typeof v.trial_days === "number" ? { trial_days: v.trial_days } : {}),
+        ...(typeof v.subscription_charges === "number"
+          ? { subscription_charges: Math.max(1, v.subscription_charges) }
+          : {}),
       }));
     } else {
       // Simple: product-level price/stock/images.
@@ -370,6 +407,10 @@ export default function ProductEditor({ productId }: { productId?: string }) {
       className="jf-input mt-1"
     />
   );
+
+  // Issue #623: the label of the product's own cycle, used as the "inherit"
+  // option/hint text per variation.
+  const periodLabel = (p: string) => (p === "year" ? "prod.yearly" : "prod.monthly");
 
   const imagePicker = (variationIdx: number | null, images: string[]) => (
     <div>
@@ -641,7 +682,19 @@ export default function ProductEditor({ productId }: { productId?: string }) {
             <div>
               <div className="mb-2 flex items-center justify-between">
                 <div className="text-sm font-medium">
-                  {t("prod.variations")}{" "}
+                  <span className="inline-flex items-center gap-2">
+                    {t("prod.variations")}{" "}
+                    <a
+                      href="/docs/variations"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title={t("prod.variationDocs")}
+                      aria-label={t("prod.variationDocs")}
+                      className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-200 text-[11px] font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                    >
+                      ?
+                    </a>
+                  </span>
                   <span className="text-xs font-normal text-[var(--jf-muted)]">
                     {t("prod.variationCount", { n: form.variations.length })}
                   </span>
@@ -714,6 +767,89 @@ export default function ProductEditor({ productId }: { productId?: string }) {
                         {imagePicker(idx, v.images || [])}
                       </div>
                     </div>
+                    {/* Issue #623: per-variation subscription cycle, shown only
+                        for a subscription product — the WooCommerce
+                        variable-subscription pattern of a separate UI for the
+                        subscribing variation. Every field starts EMPTY with the
+                        product's value as a placeholder hint: "not set" (inherit)
+                        must stay distinguishable from "set to the same value",
+                        so nothing is pre-filled and each field has an explicit
+                        reset back to inherit. */}
+                    {form.type === "subscription" && (
+                      <div className="mt-3 rounded-md bg-slate-50 p-3">
+                        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--jf-muted)]">
+                          {t("prod.variationCycle")}
+                        </div>
+                        <div className="grid gap-3 sm:grid-cols-3">
+                          <label className="block text-sm font-medium">
+                            {t("prod.billingPeriod")}
+                            <select
+                              value={v.billing_period || ""}
+                              onChange={(e) =>
+                                updateVariation(idx, {
+                                  billing_period: e.target.value === "" ? null : e.target.value,
+                                })
+                              }
+                              className="jf-input mt-1"
+                            >
+                              <option value="">
+                                {t("prod.inheritProduct", { value: t(periodLabel(form.billing_period)) })}
+                              </option>
+                              <option value="month">{t("prod.monthly")}</option>
+                              <option value="year">{t("prod.yearly")}</option>
+                            </select>
+                          </label>
+                          <label className="block text-sm font-medium">
+                            {t("prod.trial")}
+                            <input
+                              type="number"
+                              min="0"
+                              step="1"
+                              value={typeof v.trial_days === "number" ? String(v.trial_days) : ""}
+                              onChange={(e) =>
+                                updateVariation(idx, {
+                                  trial_days:
+                                    e.target.value === ""
+                                      ? null
+                                      : Math.max(0, parseInt(e.target.value, 10) || 0),
+                                })
+                              }
+                              placeholder={t("prod.inheritProduct", { value: String(form.trial_days) })}
+                              className="jf-input mt-1"
+                            />
+                          </label>
+                          <label className="block text-sm font-medium">
+                            {t("prod.billingCount")}
+                            <input
+                              type="number"
+                              min="1"
+                              step="1"
+                              value={
+                                typeof v.subscription_charges === "number"
+                                  ? String(v.subscription_charges)
+                                  : ""
+                              }
+                              onChange={(e) =>
+                                updateVariation(idx, {
+                                  subscription_charges:
+                                    e.target.value === ""
+                                      ? null
+                                      : Math.max(1, parseInt(e.target.value, 10) || 1),
+                                })
+                              }
+                              placeholder={t("prod.inheritProduct", {
+                                value:
+                                  typeof form.subscription_charges === "number"
+                                    ? String(form.subscription_charges)
+                                    : t("prod.chargesInfinite"),
+                              })}
+                              className="jf-input mt-1"
+                            />
+                          </label>
+                        </div>
+                        <p className="mt-2 text-xs text-[var(--jf-muted)]">{t("prod.variationCycleHint")}</p>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

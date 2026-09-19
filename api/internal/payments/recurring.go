@@ -168,16 +168,17 @@ func (s *Service) chargeSubscription(ctx context.Context, sub *dbstore.Subscript
 // ChargeCount counts PAID charge rows, and the first payment is recorded as a
 // paid row, so the total consumed is `paid` — NOT `1 + paid`, which counted the
 // first payment twice. Returns true when the subscription was just completed.
+//
+// Issue #623: the limit comes from the same EffectiveCycle rule the checkout
+// used (the variation's own count when it has one, otherwise the product's), so
+// a variation-fixed plan completes after ITS Nth charge.
 func (s *Service) maybeCompleteSubscription(ctx context.Context, sub *dbstore.Subscription) (bool, error) {
-	if s.Products == nil {
-		return false, nil
-	}
-	prod, err := s.Products.Get(ctx, sub.AccountID, sub.ProductID)
+	cycle, ok, err := s.subscriptionCycleFor(ctx, sub)
 	if err != nil {
 		return false, err
 	}
-	if prod.SubscriptionCharges == nil {
-		return false, nil // infinite
+	if !ok || cycle.Charges == nil {
+		return false, nil // no product resolved, or infinite
 	}
 	paid, err := s.Subs.ChargeCount(ctx, sub.ID)
 	if err != nil {
@@ -185,7 +186,7 @@ func (s *Service) maybeCompleteSubscription(ctx context.Context, sub *dbstore.Su
 		// would keep a fixed-billing subscription charging past its Nth charge.
 		return false, err
 	}
-	if paid >= int64(*prod.SubscriptionCharges) {
+	if paid >= int64(*cycle.Charges) {
 		if err := s.Subs.SetStatus(ctx, sub.ID, dbstore.SubCompleted); err != nil {
 			return false, err
 		}

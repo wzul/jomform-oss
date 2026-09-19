@@ -57,15 +57,18 @@ func TestIssue560CheckoutResolvesSaleTypeFromTheProduct(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			gotType, gotAmount, gotPeriod := resolveSubscriptionTerms(tc.product, tc.subItems)
+			// Issue #623: the terms resolve with the chosen variation (nil =
+			// simple product, no variation), so this test keeps its #560 intent
+			// — the product's own terms — with no variation in play.
+			gotType, gotAmount, gotCycle := resolveSubscriptionTerms(tc.product, nil, tc.subItems)
 			if gotType != tc.wantType {
 				t.Errorf("sale_type = %q, want %q", gotType, tc.wantType)
 			}
 			if gotAmount != tc.wantAmount {
 				t.Errorf("amount = %d, want %d — the recurring amount is the subscription product's own price x qty, never the order total", gotAmount, tc.wantAmount)
 			}
-			if gotPeriod != tc.wantPeriod {
-				t.Errorf("period = %q, want %q — a yearly product billed monthly is a real billing error", gotPeriod, tc.wantPeriod)
+			if gotCycle.Period != tc.wantPeriod {
+				t.Errorf("period = %q, want %q — a yearly product billed monthly is a real billing error", gotCycle.Period, tc.wantPeriod)
 			}
 		})
 	}

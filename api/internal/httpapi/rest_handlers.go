@@ -23,6 +23,12 @@ import (
 
 // restVariation is the REST JSON shape of one product variation (money stays
 // integer sen; stock nil = unlimited).
+//
+// Issue #623: the subscription cycle fields are POINTERS so nil/omitted is
+// distinguishable from a set value — nil means "not set, inherit the product's",
+// which is not the same as "set to the same value as the product". Pre-filling
+// the product's cycle into every variation would erase that difference and
+// silently make the product-level setting inert for those rows.
 type restVariation struct {
 	ID        string   `json:"id,omitempty"`
 	Name      string   `json:"name"`
@@ -30,6 +36,11 @@ type restVariation struct {
 	Stock     *int     `json:"stock,omitempty"` // nil = unlimited
 	Images    []string `json:"images,omitempty"`
 	SortOrder int      `json:"sort_order,omitempty"`
+	// Issue #623: the variation's own subscription cycle. Omitted/null = inherit
+	// the product's for that field.
+	BillingPeriod       *string `json:"billing_period,omitempty"`       // month | year
+	TrialDays           *int    `json:"trial_days,omitempty"`           // >= 0
+	SubscriptionCharges *int    `json:"subscription_charges,omitempty"` // >= 1
 }
 
 type restProduct struct {
@@ -71,18 +82,97 @@ func toRestProduct(p *dbstore.Product) restProduct {
 	return out
 }
 
+// validateRestVariations validates the editor's variation list (money stays
+// integer sen; stock nil = unlimited). Shared by POST and PUT so the two write
+// paths can never disagree about what a valid variation is.
+//
+// Issue #623: the variation's OWN subscription cycle is validated here too. An
+// unknown period is rejected rather than silently dropped — an ignored cycle is
+// how a merchant ends up billing yearly where they chose monthly.
+func validateRestVariations(vs []restVariation) string {
+	for _, v := range vs {
+		if v.Name == "" {
+			return "variation name wajib"
+		}
+		if v.PriceSen < 0 {
+			return "variation price_sen mesti >= 0"
+		}
+		if v.Stock != nil && *v.Stock < 0 {
+			return "variation stok mesti >= 0"
+		}
+		if !urlguard.ValidList(v.Images) {
+			return urlguard.InvalidMessage("variations[].images")
+		}
+		if v.BillingPeriod != nil && *v.BillingPeriod != "" &&
+			*v.BillingPeriod != "month" && *v.BillingPeriod != "year" {
+			return "variations[].billing_period mesti month|year"
+		}
+		if v.TrialDays != nil && *v.TrialDays < 0 {
+			return "variations[].trial_days mesti >= 0"
+		}
+		if v.SubscriptionCharges != nil && *v.SubscriptionCharges < 1 {
+			return "variations[].subscription_charges mesti >= 1"
+		}
+	}
+	return ""
+}
+
+// toStoreVariations maps the editor's variation list to store rows, filling a
+// zero sort_order from the list position. Used by the wholesale replace on
+// product create/update.
+//
+// Issue #623: a variation whose cycle field was omitted stores NULL for it,
+// which is the "inherit the product's" state — the editor must therefore send
+// only what the merchant actually set (see ProductEditor's placeholder hint).
+func toStoreVariations(vs []restVariation) []*dbstore.ProductVariation {
+	out := make([]*dbstore.ProductVariation, 0, len(vs))
+	for i, v := range vs {
+		order := v.SortOrder
+		if order == 0 {
+			order = i
+		}
+		bp := ""
+		if v.BillingPeriod != nil {
+			bp = *v.BillingPeriod
+		}
+		out = append(out, &dbstore.ProductVariation{
+			Name: v.Name, PriceSen: v.PriceSen, Stock: v.Stock,
+			Images: v.Images, SortOrder: order,
+			BillingPeriod: bp, TrialDays: v.TrialDays, Charges: v.SubscriptionCharges,
+		})
+	}
+	return out
+}
+
 // toRestVariations maps store variations to the REST JSON shape.
+//
+// Issue #623: a variation with no cycle of its own reports the cycle fields
+// OMITTED (not zero-filled), so the editor can show the product's value as a
+// placeholder/hint and keep "not set" distinct from "set to the same value".
 func toRestVariations(vs []*dbstore.ProductVariation) []restVariation {
 	if len(vs) == 0 {
 		return nil
 	}
 	out := make([]restVariation, 0, len(vs))
 	for _, v := range vs {
-		out = append(out, restVariation{
-			ID: v.ID, Name: v.Name, PriceSen: v.PriceSen, Stock: v.Stock,
-			Images: v.Images, SortOrder: v.SortOrder,
-		})
+		out = append(out, toRestVariation(v))
 	}
+	return out
+}
+
+// toRestVariation maps one store variation to the REST JSON shape (see
+// toRestVariations for the omitted-means-inherit rule).
+func toRestVariation(v *dbstore.ProductVariation) restVariation {
+	out := restVariation{
+		ID: v.ID, Name: v.Name, PriceSen: v.PriceSen, Stock: v.Stock,
+		Images: v.Images, SortOrder: v.SortOrder,
+	}
+	if v.BillingPeriod != "" {
+		bp := v.BillingPeriod
+		out.BillingPeriod = &bp
+	}
+	out.TrialDays = v.TrialDays
+	out.SubscriptionCharges = v.Charges
 	return out
 }
 
@@ -177,24 +267,11 @@ func (h *RESTHandlers) updateProduct(w http.ResponseWriter, r *http.Request, act
 		return
 	}
 	// Validate variations (money stays integer sen; stock nil = unlimited).
+	// Issue #623 also validates each variation's own subscription cycle.
 	if in.Variations != nil {
-		for _, v := range *in.Variations {
-			if v.Name == "" {
-				writeErr(w, http.StatusBadRequest, "variation name wajib")
-				return
-			}
-			if v.PriceSen < 0 {
-				writeErr(w, http.StatusBadRequest, "variation price_sen mesti >= 0")
-				return
-			}
-			if v.Stock != nil && *v.Stock < 0 {
-				writeErr(w, http.StatusBadRequest, "variation stok mesti >= 0")
-				return
-			}
-			if !urlguard.ValidList(v.Images) {
-				writeErr(w, http.StatusBadRequest, urlguard.InvalidMessage("variations[].images"))
-				return
-			}
+		if msg := validateRestVariations(*in.Variations); msg != "" {
+			writeErr(w, http.StatusBadRequest, msg)
+			return
 		}
 	}
 	if in.SubscriptionCharges != nil && *in.SubscriptionCharges != nil && **in.SubscriptionCharges < 1 {
@@ -218,17 +295,8 @@ func (h *RESTHandlers) updateProduct(w http.ResponseWriter, r *http.Request, act
 	}
 	// Wholesale-replace variations when the editor sent them (nil = keep).
 	if in.Variations != nil && h.ProductVariations != nil {
-		vs := make([]*dbstore.ProductVariation, 0, len(*in.Variations))
-		for i, v := range *in.Variations {
-			vs = append(vs, &dbstore.ProductVariation{
-				Name: v.Name, PriceSen: v.PriceSen, Stock: v.Stock,
-				Images: v.Images, SortOrder: v.SortOrder,
-			})
-			if v.SortOrder == 0 {
-				vs[len(vs)-1].SortOrder = i
-			}
-		}
-		if err := h.ProductVariations.ReplaceAll(r.Context(), r.PathValue("id"), vs); err != nil {
+		if err := h.ProductVariations.ReplaceAll(r.Context(), r.PathValue("id"),
+			toStoreVariations(*in.Variations)); err != nil {
 			respondErr(w, r, err)
 			return
 		}
@@ -397,23 +465,10 @@ func (h *RESTHandlers) createProduct(w http.ResponseWriter, r *http.Request, act
 		}
 	}
 	// Validate variations (money stays integer sen; stock nil = unlimited).
-	for _, v := range in.Variations {
-		if v.Name == "" {
-			writeErr(w, http.StatusBadRequest, "variation name wajib")
-			return
-		}
-		if v.PriceSen < 0 {
-			writeErr(w, http.StatusBadRequest, "variation price_sen mesti >= 0")
-			return
-		}
-		if v.Stock != nil && *v.Stock < 0 {
-			writeErr(w, http.StatusBadRequest, "variation stok mesti >= 0")
-			return
-		}
-		if !urlguard.ValidList(v.Images) {
-			writeErr(w, http.StatusBadRequest, urlguard.InvalidMessage("variations[].images"))
-			return
-		}
+	// Issue #623 also validates each variation's own subscription cycle.
+	if msg := validateRestVariations(in.Variations); msg != "" {
+		writeErr(w, http.StatusBadRequest, msg)
+		return
 	}
 	schedMode := payments.ScheduleFromPayment
 	if in.ScheduleMode != nil && *in.ScheduleMode != "" {
@@ -437,18 +492,8 @@ func (h *RESTHandlers) createProduct(w http.ResponseWriter, r *http.Request, act
 	}
 	// Persist variations wholesale when the editor sent them.
 	if len(in.Variations) > 0 && h.ProductVariations != nil {
-		vs := make([]*dbstore.ProductVariation, 0, len(in.Variations))
-		for i, v := range in.Variations {
-			order := v.SortOrder
-			if order == 0 {
-				order = i
-			}
-			vs = append(vs, &dbstore.ProductVariation{
-				Name: v.Name, PriceSen: v.PriceSen, Stock: v.Stock,
-				Images: v.Images, SortOrder: order,
-			})
-		}
-		if err := h.ProductVariations.ReplaceAll(r.Context(), p.ID, vs); err != nil {
+		if err := h.ProductVariations.ReplaceAll(r.Context(), p.ID,
+			toStoreVariations(in.Variations)); err != nil {
 			respondErr(w, r, err)
 			return
 		}

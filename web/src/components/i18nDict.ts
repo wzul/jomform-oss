@@ -381,6 +381,13 @@ export const DICT = {
     ar: "السعر غير صالح: أدخل مبلغًا عاديًا (مثل 25.00) في {name}.",
   },
   "prod.variationTypeNote": { en: "Variable products use per-variation price, stock and image. Product-level price/stock/images are ignored.", ms: "Produk variable guna harga, stok dan gambar per variasi. Harga/stok/gambar peringkat produk diabaikan.", zh: "多规格商品使用每个规格的价格、库存和图片。商品级价格/库存/图片将被忽略。", ta: "மாறுபடும் தயாரிப்புகள் ஒவ்வொரு மாறுபாட்டின் விலை, சரக்கு மற்றும் படத்தைப் பயன்படுத்துகின்றன. தயாரிப்பு நிலை விலை/சரக்கு/படங்கள் புறக்கணிக்கப்படும்.", ar: "تستخدم المنتجات المتغيرة سعر ومخزون وصورة كل خيار. تُتجاهل أسعار/مخزون/صور مستوى المنتج." },
+  // Issue #623: per-variation subscription cycle. The empty field means
+  // "inherit the product", which is why the hint is a placeholder and the reset
+  // is an explicit empty option — the two states must stay distinguishable.
+  "prod.variationCycle": { en: "Subscription cycle for this variation", ms: "Kitaran langganan untuk variasi ini", zh: "此规格的订阅周期", ta: "இந்த மாறுபாட்டின் சந்தா சுழற்சி", ar: "دورة الاشتراك لهذا الخيار" },
+  "prod.variationCycleHint": { en: "Leave a field empty to use the product's value. Typing a value overrides it for this variation only.", ms: "Biarkan kosong untuk guna nilai produk. Isi nilai untuk ganti bagi variasi ini sahaja.", zh: "留空即使用商品的设置。填入值则仅针对此规格覆盖。", ta: "தயாரிப்பின் மதிப்பைப் பயன்படுத்த காலியாக விடவும். மதிப்பை உள்ளிட்டால் இந்த மாறுபாட்டிற்கு மட்டும் மாற்றும்.", ar: "اترك الحقل فارغًا لاستخدام قيمة المنتج. إدخال قيمة يستبدلها لهذا الخيار فقط." },
+  "prod.inheritProduct": { en: "Use product ({value})", ms: "Ikut produk ({value})", zh: "跟随商品（{value}）", ta: "தயாரிப்பைப் பின்பற்று ({value})", ar: "استخدم المنتج ({value})" },
+  "prod.variationDocs": { en: "Variation products documentation", ms: "Dokumentasi produk variasi", zh: "多规格商品文档", ta: "மாறுபாட்டு தயாரிப்புகள் ஆவணம்", ar: "وثائق المنتجات المتغيرة" },
   // issue #131: Subscriptions dashboard (list/filter/paginate/cancel)
   "sub.title": { en: "Subscriptions", ms: "Langganan", zh: "订阅", ta: "சந்தாக்கள்", ar: "الاشتراكات" },
   "sub.subtitle": { en: "Recurring customer subscriptions — cancel without losing their card token (re-activatable).", ms: "Langganan berulang pelanggan — batalkan tanpa hilang token kad mereka (boleh aktif semula).", zh: "循环客户订阅 — 取消不会丢失其卡片令牌（可重新激活）。", ta: "தொடர்ச்சியான வாடிக்கையாளர் சந்தாக்கள் — அட்டை டோக்கனை இழக்காமல் ரத்து செய்யலாம் (மீண்டும் செயல்படுத்தக்கூடியது).", ar: "اشتراكات العملاء المتكررة — يمكن الإلغاء دون فقدان رمز البطاقة (قابل لإعادة التنشيط)." },
