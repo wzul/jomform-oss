@@ -4,6 +4,7 @@ package payments
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	htmltemplate "html/template"
 	"log/slog"
@@ -57,7 +58,7 @@ type SaleRef struct {
 	AmountSen    int64
 	ItemsSummary string
 	FormURL      string
-	WorkspaceID      string // resolves per-workspace email settings (issue #107)
+	WorkspaceID  string // resolves per-workspace email settings (issue #107)
 	FormID       string // resolves per-form email settings override (issue #177)
 	TIN          string // LHDN e-invoicing (optional)
 	MSIC         string
@@ -271,11 +272,20 @@ func (s *Service) resolveMerchantEmail(ctx context.Context, ref SaleRef, merchan
 }
 
 // sendReceipt delivers the buyer receipt (with PDF attachment when available).
+//
+// The recipient was already checked at (*email.Sender).SendReceipt — the
+// pre-send choke point — so a suppression hit here arrives as
+// email.ErrSuppressed. It is logged and swallowed: the receipt is correctly not
+// sent, no MessageID is persisted, and the payment flow is unaffected.
 func (s *Service) sendReceipt(ctx context.Context, ref SaleRef, subject, body string, html bool, persistReceiptMessageID func(string)) {
 	if pdf, err := s.ReceiptPDF(ref); err == nil && len(pdf) > 0 {
 		messageID, err := s.Receipts.Sender.SendReceiptWithAttachment(ref.BuyerEmail, subject, body,
 			"resit-"+ref.RefCode+".pdf", pdf)
 		if err != nil {
+			if errors.Is(err, email.ErrSuppressed) {
+				slog.Warn("receipt_suppressed_skipped", "ref", ref.RefCode, "to", ref.BuyerEmail)
+				return
+			}
 			slog.Warn("receipt_send_failed", "ref", ref.RefCode, "err", err)
 		} else {
 			slog.Info("receipt_sent_pdf", "ref", ref.RefCode, "to", ref.BuyerEmail)
@@ -284,8 +294,21 @@ func (s *Service) sendReceipt(ctx context.Context, ref SaleRef, subject, body st
 		return
 	}
 	// fallback: text-only
+	//
+	// Reachability note (issue #601): ReceiptPDF has no failure path a caller can
+	// provoke — it renders from a fixed template and returned a valid PDF for
+	// every SaleRef tried, including the zero value — so in practice a receipt
+	// with a buyer address always takes the attachment branch above. This branch
+	// is kept as the guard-of-last-resort for a ref whose PDF cannot be built,
+	// and it carries the same suppression handling so it cannot become a silent
+	// hole if that ever changes. It is deliberately NOT covered by a test: no
+	// input reaches it, so a test here would assert behaviour nobody can produce.
 	messageID, err := s.Receipts.Sender.SendReceipt(ref.BuyerEmail, subject, body)
 	if err != nil {
+		if errors.Is(err, email.ErrSuppressed) {
+			slog.Warn("receipt_suppressed_skipped", "ref", ref.RefCode, "to", ref.BuyerEmail)
+			return
+		}
 		slog.Warn("receipt_send_failed", "ref", ref.RefCode, "err", err)
 	} else {
 		slog.Info("receipt_sent", "ref", ref.RefCode, "to", ref.BuyerEmail)
@@ -295,8 +318,15 @@ func (s *Service) sendReceipt(ctx context.Context, ref SaleRef, subject, body st
 
 // notifyMerchant sends a copy of the receipt (or a "new sale" notification)
 // to the merchant. The recipient is merchant_notify_email when set, else the
-// workspace owner's account email. Suppression is NOT applied to the merchant —
-// they opted in and must always get their sale notification.
+// workspace owner's account email.
+//
+// Suppression APPLIES to the merchant too. This deliberately reverses the
+// earlier exemption ("the merchant opted in, always notify"): a merchant whose
+// mailbox hard-bounces keeps generating bounces from the same sending identity
+// that delivers buyer receipts, so exempting them is what lets one bad mailbox
+// damage deliverability for every buyer. A merchant who stops receiving
+// notifications changes the address in workspace email settings, which is the
+// action the notification itself enables.
 func (s *Service) notifyMerchant(ctx context.Context, ref SaleRef, subject, body string, html bool, merchantEmail string) {
 	to := strings.TrimSpace(merchantEmail)
 	if to == "" {
@@ -318,6 +348,10 @@ func (s *Service) notifyMerchant(ctx context.Context, ref SaleRef, subject, body
 	// Prefix the subject so the merchant can tell it apart from the buyer copy.
 	merchantSubject := "Jualan baharu — " + subject
 	if err := s.Receipts.Sender.Send(to, merchantSubject, body); err != nil {
+		if errors.Is(err, email.ErrSuppressed) {
+			slog.Warn("receipt_merchant_suppressed_skipped", "ref", ref.RefCode, "to", to)
+			return
+		}
 		slog.Warn("receipt_merchant_notify_failed", "ref", ref.RefCode, "to", to, "err", err)
 	} else {
 		slog.Info("receipt_merchant_notify_sent", "ref", ref.RefCode, "to", to)

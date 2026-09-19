@@ -17,6 +17,7 @@ import (
 
 	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/dbstore"
+	emailpkg "github.com/wzul/jomform/api/internal/email"
 	"github.com/wzul/jomform/api/internal/emailqueue"
 	"github.com/wzul/jomform/api/internal/httpapi/middleware"
 )
@@ -76,9 +77,24 @@ func (a *AuthHandlers) replyForgotPasswordOK(w http.ResponseWriter) {
 // sendPasswordResetEmail delivers the reset link (BASE_URL/reset-password?token=…).
 // Issue #199: when an EmailQueue is wired the email is enqueued and sent by a
 // background worker; otherwise it is sent synchronously.
+//
+// The suppression check here is an early exit that avoids minting a link for an
+// address we will never mail; the load-bearing guard is the pre-send choke point
+// at (*email.Sender).SendReceipt, which also covers the queued path. A store
+// error fails open (the send proceeds) — see (*email.Sender).suppressed.
 func (a *AuthHandlers) sendPasswordResetEmail(ctx context.Context, email, token string) error {
 	if a.VerifyMailer == nil {
 		return errors.New("reset mailer not configured")
+	}
+	if a.Suppressions != nil {
+		sup, err := emailpkg.ShouldSuppress(ctx, a.Suppressions, email)
+		if err != nil {
+			slog.Error("email_suppression_check_error", "to", obfuscateEmail(email), "err", err)
+		} else if sup {
+			slog.Warn("pwreset_email_suppressed_skipped", "email", obfuscateEmail(email))
+			recordSESSuppression("password_reset")
+			return nil // suppressed: don't send, don't surface as a hard error
+		}
 	}
 	link := strings.TrimRight(a.BaseURL, "/") + "/reset-password?token=" + token
 	body := "Anda telah meminta untuk set semula kata laluan JomForm anda.\n\n" +

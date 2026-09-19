@@ -10,10 +10,12 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/email"
@@ -49,9 +51,20 @@ type sesSNSMessage struct {
 }
 
 type sesBounce struct {
-	BounceType        string         `json:"bounceType"` // Permanent | Transient
+	BounceType        string         `json:"bounceType"`    // Permanent | Transient
+	BounceSubType     string         `json:"bounceSubType"` // General | NoEmail | Suppressed | OnAccountSuppressionList | UnsubscribedRecipient | …
 	BouncedRecipients []sesRecipient `json:"bouncedRecipients"`
 }
+
+// Soft-bounce rule (issue #601). SES retries a transient bounce internally
+// before emitting the event, so one Transient event is not worth suppressing —
+// but repeated transient bounces for the same mailbox mean it is effectively
+// dead, and continuing to mail it only damages the sending identity. Suppress
+// on the third Transient bounce for the same address inside a rolling 7 days.
+const (
+	softBounceThreshold = 3
+	softBounceWindow    = 7 * 24 * time.Hour
+)
 
 type sesRecipient struct {
 	EmailAddress string `json:"emailAddress"`
@@ -74,10 +87,18 @@ type suppressionWriter struct {
 // (issue #92), in addition to the suppression write. saleRef is the sale's
 // ref_code this event correlates to (issue #106); empty → NULL. Best-effort: a
 // nil store or a write error is logged, never fatal to the suppression path.
+//
+// The address is lower-cased and trimmed before the insert. The column is plain
+// TEXT (no CITEXT), so without this the same mailbox could be logged as
+// "Buyer@Example.com" by one SES event and "buyer@example.com" by the next, and
+// any per-address query — the soft-bounce tally in handleTransientBounce, and
+// the store's own CountRecentBounces — would undercount a real repeat offender
+// and let a dead mailbox keep being mailed.
 func (sw *suppressionWriter) recordDeliveryEvent(ctx context.Context, email, eventType, bounceType, saleRef string, detail map[string]any) {
 	if sw.EmailDeliveryEvents == nil {
 		return
 	}
+	email = strings.ToLower(strings.TrimSpace(email))
 	if err := sw.EmailDeliveryEvents.Record(ctx, "", email, eventType, bounceType, saleRef, detail); err != nil {
 		slog.Error("ses_delivery_event_record", "err", err, "email", email, "event", eventType)
 	}
@@ -99,15 +120,68 @@ func (sw *suppressionWriter) correlateSaleRef(ctx context.Context, messageID str
 	return sale.RefCode
 }
 
+// handleTransientBounce applies the soft-bounce rule to one Transient bounce.
+//
+// SES already retries a transient bounce internally before it emits the event,
+// so a single one is not suppressed: the mailbox may simply be full or the
+// receiving server briefly unavailable, and suppressing on the first event would
+// cut off a recoverable address. The signal is *repetition* — three Transient
+// bounces for the same address inside a rolling 7 days means the mailbox is
+// effectively dead, and continuing to mail it only spends quota and damages the
+// sending identity, so on the third the address is suppressed like a hard
+// bounce (reason hard_bounce, note carries the tally).
+//
+// Counting: the caller has ALREADY recorded the current event via
+// recordDeliveryEvent, so the count below includes the event that triggered the
+// check and no off-by-one adjustment is applied — the third event counts 3 and
+// fires. (Deliberately not "count before writing" plus a +1: counting what is
+// actually stored is the number an operator can reproduce by hand with a SELECT
+// over email_delivery_events.) With no event store wired there is nothing to
+// count, so no suppression decision can be made and the bounce is only counted
+// towards the breaker.
+//
+// Transient bounces always also bump the breaker counter (unchanged #56
+// behaviour) so an anomalous transient-bounce storm stays visible.
+func (sw *suppressionWriter) handleTransientBounce(ctx context.Context, addr string) {
+	if sw.Breaker != nil {
+		_ = sw.Breaker.RecordBounceCount(ctx, 1)
+	}
+	if sw.EmailDeliveryEvents == nil || sw.Suppressions == nil {
+		return
+	}
+	n, err := sw.EmailDeliveryEvents.CountRecentBounces(ctx, addr,
+		[]string{"bounce"}, "Transient", time.Now().Add(-softBounceWindow))
+	if err != nil {
+		slog.Error("ses_soft_bounce_count", "err", err, "email", addr)
+		return
+	}
+	if n < softBounceThreshold {
+		return
+	}
+	sw.suppress(ctx, addr, dbstore.SuppressionReasonHardBounce,
+		fmt.Sprintf("repeated soft bounce (%d in 7d)", n), dbstore.SuppressionSourceBounce, false)
+}
+
 // suppress persists a suppression for one address and flips its user row
 // (if any) back to unverified. Breaker bounce counts are only incremented for
 // permanent bounces (they are what damage SES reputation).
-func (sw *suppressionWriter) suppress(ctx context.Context, addr string, reason string, source dbstore.SuppressionSource, countBounce bool) {
+//
+// reason must be one of the canonical codes migration 000061's CHECK allows
+// (dbstore.SuppressionReason*); note carries the provider detail (bounce
+// sub-type, or the soft-bounce tally) that used to be crammed into the reason
+// string. The write goes through SuppressionStore.Add, the one write path, so a
+// repeat event refreshes the single row for that address instead of erroring.
+//
+// MarkUnverified only gates *auth* mail — the account's next login/verify
+// attempt. It does not stop a buyer receipt or a merchant notification, which is
+// exactly why the pre-send guard at (*email.Sender).SendReceipt is required for
+// those paths.
+func (sw *suppressionWriter) suppress(ctx context.Context, addr string, reason, note string, source dbstore.SuppressionSource, countBounce bool) {
 	addr = strings.ToLower(strings.TrimSpace(addr))
 	if addr == "" {
 		return
 	}
-	if _, err := sw.Suppressions.Upsert(ctx, addr, reason, source); err != nil {
+	if _, err := sw.Suppressions.Add(ctx, addr, reason, source, note, ""); err != nil {
 		slog.Error("ses_suppress_upsert", "err", err, "email", addr)
 		return
 	}
@@ -121,7 +195,7 @@ func (sw *suppressionWriter) suppress(ctx context.Context, addr string, reason s
 			slog.Warn("ses_suppress_bounce_count", "err", err)
 		}
 	}
-	slog.Warn("email_suppressed", "email", addr, "reason", reason, "source", source)
+	slog.Warn("email_suppressed", "email", addr, "reason", reason, "source", source, "note", note)
 }
 
 // handleSESNotification processes a verified SNS notification.
@@ -214,14 +288,32 @@ func (sw *suppressionWriter) handleEvent(ctx context.Context, msg *sesSNSMessage
 				"bounceType": msg.Bounce.BounceType,
 			})
 			if !permanent {
-				// Transient bounces are not suppressed, but still counted so the
-				// breaker can react to an anomalous transient-bounce storm.
-				if sw.Breaker != nil {
-					_ = sw.Breaker.RecordBounceCount(ctx, 1)
-				}
+				sw.handleTransientBounce(ctx, rec.EmailAddress)
 				continue
 			}
-			sw.suppress(ctx, rec.EmailAddress, "permanent bounce ("+msg.Bounce.BounceType+")", dbstore.SuppressionSourceBounce, true)
+			// A permanent bounce suppresses immediately. The sub-type decides
+			// the note, not the decision: every Permanent variant SES emits
+			// means this mailbox will not accept our mail.
+			//
+			//   General / NoEmail            mailbox does not exist
+			//   Suppressed                   on SES's own global list
+			//   OnAccountSuppressionList     on this account's list; SES accepts
+			//                                the send, never attempts delivery, and
+			//                                it still counts against the daily
+			//                                quota while being excluded from
+			//                                BounceRate — so ingesting it is the
+			//                                only way to stop burning quota
+			//   UnsubscribedRecipient        delivery not attempted; the
+			//                                recipient asked not to be mailed
+			note := msg.Bounce.BounceSubType
+			if note == "" {
+				note = msg.Bounce.BounceType
+			}
+			if msg.Bounce.BounceSubType == "UnsubscribedRecipient" {
+				note = "unsubscribed"
+			}
+			sw.suppress(ctx, rec.EmailAddress, dbstore.SuppressionReasonHardBounce, note,
+				dbstore.SuppressionSourceBounce, true)
 		}
 	case "Complaint":
 		if msg.Complaint == nil {
@@ -230,7 +322,10 @@ func (sw *suppressionWriter) handleEvent(ctx context.Context, msg *sesSNSMessage
 		for _, rec := range msg.Complaint.ComplainedRecipients {
 			// Issue #92: record the complaint into email_delivery_events.
 			sw.recordDeliveryEvent(ctx, rec.EmailAddress, "complaint", "", "", nil)
-			sw.suppress(ctx, rec.EmailAddress, "complaint", dbstore.SuppressionSourceComplaint, false)
+			// A complaint suppresses immediately — a recipient who presses
+			// "report spam" must never be mailed again.
+			sw.suppress(ctx, rec.EmailAddress, dbstore.SuppressionReasonComplaint, "",
+				dbstore.SuppressionSourceComplaint, false)
 		}
 	case "Delivery", "Delivered":
 		// Issue #93: informational — record delivery, no suppression/breaker.

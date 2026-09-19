@@ -41,9 +41,11 @@ func (a *AuthHandlers) sendVerifyEmail(ctx context.Context, userID, email, lang 
 	if a.Suppressions != nil {
 		sup, err := emailpkg.ShouldSuppress(ctx, a.Suppressions, email)
 		if err != nil {
-			return fmt.Errorf("suppression check: %w", err)
-		}
-		if sup {
+			// Fail open (see (*email.Sender).suppressed): a store blip must not
+			// strand a registering user's verify link. The pre-send choke point
+			// repeats this check, so the send is still guarded there.
+			slog.Error("email_suppression_check_error", "to", obfuscateEmail(email), "err", err)
+		} else if sup {
 			slog.Warn("verify_email_suppressed_skipped", "user", userID)
 			recordSESSuppression("verify")
 			return nil // suppressed: don't resend, don't surface as a hard error

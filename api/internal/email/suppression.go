@@ -22,8 +22,16 @@ type Suppressor interface {
 // ShouldSuppress reports whether a message to `to` must be skipped because the
 // address is suppressed. It returns suppressed=true with err==nil when the
 // address is suppressed. If the underlying store errors, it returns
-// (false, err) — senders must NOT silently drop revenue-critical mail on a
-// store failure, so a suppression check failure is surfaced to the caller.
+// (false, err) — it surfaces the store failure rather than deciding.
+//
+// How a caller must treat that error depends on the layer:
+//
+//   - The pre-send choke point ((*Sender).suppressed in ses.go) FAILS OPEN: it
+//     logs email_suppression_check_error and lets the send proceed, because a
+//     database blip must not strand a paying buyer's receipt or a registering
+//     user's verify link.
+//   - A caller doing its own pre-render check should treat a hit as a success
+//     no-op (log + return nil), never an error response.
 func ShouldSuppress(ctx context.Context, s Suppressor, to string) (bool, error) {
 	return s.IsSuppressed(ctx, strings.ToLower(strings.TrimSpace(to)))
 }

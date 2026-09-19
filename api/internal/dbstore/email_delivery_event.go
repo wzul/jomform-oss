@@ -9,6 +9,7 @@ package dbstore
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -25,7 +26,7 @@ type EmailDeliveryEvent struct {
 	// SaleRef is the sale's ref_code this event correlates to (issue #106).
 	// "" when the event could not be tied to a sale (system mail, or the SES
 	// MessageID did not match a stored receipt).
-	SaleRef   string
+	SaleRef string
 	// FormID is the sale's form_id this event correlates to (issue #194),
 	// resolved via the sale_ref join. "" when the event has no sale.
 	FormID    string
@@ -135,6 +136,36 @@ func (s *EmailDeliveryEventStore) LatestBySaleRefs(ctx context.Context, saleRefs
 		out[e.SaleRef] = e
 	}
 	return out, rows.Err()
+}
+
+// CountRecentBounces counts the bounce events for one address in a trailing
+// window, optionally narrowed to a bounce type. It backs the soft-bounce rule:
+// SES already retries a transient bounce internally, so a single Transient event
+// is not worth suppressing — but repeated transient bounces for the same mailbox
+// mean it is effectively dead, and the address should stop being mailed.
+//
+// eventTypes is required (e.g. []string{"bounce"}); bounceType is "" to count
+// every bounce type or "Transient"/"Permanent" to narrow. The email argument is
+// lower-cased here so a mixed-case caller cannot miss rows — every event is
+// written lower-cased (see suppressionWriter.recordDeliveryEvent). Served by the
+// idx_ede_email_time btree on (email, created_at DESC).
+func (s *EmailDeliveryEventStore) CountRecentBounces(ctx context.Context, email string, eventTypes []string, bounceType string, since time.Time) (int, error) {
+	if len(eventTypes) == 0 {
+		return 0, nil
+	}
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" {
+		return 0, nil
+	}
+	var n int
+	err := s.pool.QueryRow(ctx, `
+		SELECT count(*) FROM email_delivery_events
+		 WHERE email = $1
+		   AND event_type = ANY($2)
+		   AND ($3 = '' OR bounce_type = $3)
+		   AND created_at >= $4`,
+		email, eventTypes, bounceType, since).Scan(&n)
+	return n, err
 }
 
 // DeliveryFilter narrows an account-scoped delivery-event query (issue #194).

@@ -18,6 +18,7 @@ package payments
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	htmltemplate "html/template"
 	"log/slog"
@@ -27,6 +28,7 @@ import (
 	"time"
 
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/email"
 	"github.com/wzul/jomform/api/internal/emailqueue"
 )
 
@@ -36,8 +38,8 @@ type NotificationRef struct {
 	// FormID is the form whose rules are evaluated.
 	FormID string
 	// WorkspaceID / AccountID resolve the merchant's admin_email.
-	WorkspaceID   string
-	AccountID string
+	WorkspaceID string
+	AccountID   string
 	// RefCode / AmountSen / ItemsSummary / BuyerName / FormURL are the
 	// standard {{placeholders}} (mirror the receipt context).
 	RefCode      string
@@ -95,6 +97,12 @@ func (s *Service) sendNotification(ctx context.Context, ref NotificationRef, n *
 	// Synchronous path (bare-mode tests / no queue wired).
 	if s.Receipts != nil && s.Receipts.Sender != nil {
 		if err := s.Receipts.Sender.Send(to, subj, body); err != nil {
+			// A suppression hit is a correct skip, not a failure: the pre-send
+			// guard refused the send before SES, and retrying is pointless.
+			if errors.Is(err, email.ErrSuppressed) {
+				slog.Warn("notify_suppressed_skipped", "form", ref.FormID, "id", n.ID, "to", to)
+				return
+			}
 			slog.Warn("notify_send_failed", "form", ref.FormID, "id", n.ID, "err", err)
 		}
 	}
@@ -156,7 +164,7 @@ func (s *Service) fireSaleNotifications(ctx context.Context, sale *dbstore.Sale,
 	}
 	s.FireFormNotifications(ctx, NotificationRef{
 		FormID:       sale.FormID,
-		WorkspaceID:      workspaceID,
+		WorkspaceID:  workspaceID,
 		AccountID:    sale.AccountID,
 		RefCode:      sale.RefCode,
 		AmountSen:    sale.TotalSen,

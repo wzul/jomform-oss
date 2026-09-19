@@ -496,9 +496,18 @@ func (a *AuthHandlers) sendConnectEmail(ctx context.Context, email, link string)
 		return errors.New("connect mailer not configured")
 	}
 	if a.Suppressions != nil {
-		if sup, serr := emailpkg.ShouldSuppress(ctx, a.Suppressions, email); serr != nil || sup {
-			// Suppressed address never receives a connect email.
-			return errors.New("connect email suppressed")
+		if sup, serr := emailpkg.ShouldSuppress(ctx, a.Suppressions, email); serr != nil {
+			// Fail open (see (*email.Sender).suppressed): the pre-send choke
+			// point still guards the send.
+			slog.Error("email_suppression_check_error", "to", obfuscateEmail(email), "err", serr)
+		} else if sup {
+			// A suppressed address never receives a connect email, and that is
+			// a deliberate skip — NOT a failure. Returning an error here would
+			// surface a suppressed address as a broken connect flow to the
+			// caller (and, on the queued path, as a job failure to retry).
+			slog.Warn("connect_email_suppressed_skipped", "email", obfuscateEmail(email))
+			recordSESSuppression("connect")
+			return nil
 		}
 	}
 	subject := "Pautan penghubung akaun JomForm anda"

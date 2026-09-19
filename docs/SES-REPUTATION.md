@@ -16,7 +16,16 @@ topic → `POST /v1/internal/ses/notifications`. On a **permanent** bounce or a
 row (if any) is flagged `verified=false`, so the account cannot log in.
 
 **Every outbound send consults the list first** — verification emails AND
-receipts — so a suppressed address never gets another message.
+receipts — so a suppressed address never gets another message. See §1.1 for
+where that check lives and what it does when it cannot reach the database.
+
+The list is managed by the platform owner on the `/admin` page (**Email
+suppression list** section) and over MCP (`admin_list_suppressions`,
+`admin_add_suppression`, `admin_remove_suppression`), backed by
+`GET`/`POST /v1/admin/suppressions` and `DELETE /v1/admin/suppressions/{email}`
+(issue #601). The same story is written for readers in
+`web/src/app/docs/ses-reputation` — the dashboard links to it from that
+section's inline "?".
 
 The list is managed by the platform owner on the `/admin` page (**Email
 suppression list** section) and over MCP (`admin_list_suppressions`,
@@ -44,9 +53,51 @@ complaint. `manual` is an address the platform owner added by hand.
 Transient (`Transient`/`Undeliverable`) bounces are NOT suppressed on the first
 event (they are not reputation-damaging and a mailbox may recover), but they are
 still counted towards the breaker so an anomalous transient-bounce storm is
-visible. Migration 000061 replaced the free-text reasons this endpoint used to
+visible. **Soft-bounce rule:** the third `Transient` bounce for the same address
+inside a rolling 7 days suppresses it, because at that point the mailbox is
+effectively dead and continuing to mail it only spends quota and damages the
+sending identity. The tally is counted from `email_delivery_events` and includes
+the event that triggered the check, so the `note`
+(`repeated soft bounce (3 in 7d)`) is a number an operator can reproduce with a
+`SELECT`. Event addresses are stored lower-cased so one mailbox cannot be tallied
+under two spellings.
+
+Migration 000061 replaced the free-text reasons this endpoint used to
 write (`permanent bounce (Permanent)`) with the three codes above, moving the old
 text into `note` so no provenance was lost.
+
+### 1.1 The pre-send choke point
+
+The check is **not** left to each caller to remember. `(*email.Sender).SendReceipt`
+and `SendReceiptWithAttachment` — the only two `sesv2.SendEmail` calls in the
+codebase — consult the list before handing anything to SES. Every outbound
+message reaches SES through one of them, so a suppressed address never gets
+another message whichever path produced it: buyer receipts, merchant
+notifications, per-form notifications, verification, 2FA codes, magic links,
+password resets and workspace invites, whether sent inline in a request handler
+or by the background email worker.
+
+- A suppressed recipient is **skipped**: the guard logs one
+  `email_suppressed_skip` line (recipient obfuscated, subject) and returns
+  `ErrSuppressed`. Every caller maps that to a logged no-op — it is never an
+  error response, never a queue retry, never a dead-letter entry, because a
+  retry to a suppressed address can never succeed. The worker logs
+  `emailq_skip_suppressed`.
+- A **lookup failure fails open**: it is logged as
+  `email_suppression_check_error` and the send proceeds. A database blip must
+  not strand a paying buyer's receipt or a registering user's verify link on a
+  healthy address. (`ShouldSuppress` itself still surfaces the error; the
+  fail-open decision belongs to the sender's guard.)
+- **The merchant is not exempt.** The merchant notification is suppressed like
+  any other mail. A merchant whose mailbox hard-bounces would otherwise keep
+  generating bounces from the same sending identity that delivers buyer
+  receipts, so one bad mailbox would drag down deliverability for every buyer. A
+  merchant who stops receiving notifications changes the address in workspace
+  email settings.
+
+Individual senders keep their own pre-render checks as an early exit (they avoid
+building a link or rendering a receipt for a message that will not be sent), but
+those are no longer load-bearing: the choke point is what guarantees the rule.
 
 ### Inspect / un-suppress a false positive (ops)
 

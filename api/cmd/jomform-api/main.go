@@ -100,6 +100,13 @@ func main() {
 	decryptKey := mustHexKey(cfg.EncryptionKey)
 	// Transactional sender (SESv2 API), nil when SMTP env is absent. Reused by
 	// payment receipts and the email-verification flow.
+	//
+	// The Sender carries the suppression list itself so that
+	// SendReceipt/SendReceiptWithAttachment — the two and only sesv2.SendEmail
+	// calls in the repo — consult it before every send. That is the single
+	// pre-send choke point: it covers buyer receipts, merchant notifications,
+	// per-form notifications and auth/invite mail, sent synchronously or by the
+	// background email worker, without each caller having to remember the check.
 	var mailer *email.Sender
 	if cfg.SESSMTPHost != "" {
 		mailer = email.New(email.SMTPConfig{
@@ -158,6 +165,12 @@ func main() {
 		// Issue #92: event-tracking stores (audit log + SES delivery events).
 		deps.Events = dbstore.NewEventStore(pool)
 		deps.EmailDeliveryEvents = dbstore.NewEmailDeliveryEventStore(pool)
+		// The auth mailer built above sends through the same choke point, so it
+		// gets the suppression list too. Wired here because the store needs the
+		// pool, which is created before the sender.
+		if mailer != nil {
+			mailer.Suppressor = deps.Suppressions
+		}
 	}
 
 	// Payments wiring (CHIP): needs DB; decrypt key from config.
@@ -198,16 +211,23 @@ func main() {
 		notificationsStore := dbstore.NewFormNotificationStore(pool)
 		pay.Notifications = notificationsStore
 		if cfg.SESSMTPHost != "" {
+			receiptSender := email.New(email.SMTPConfig{
+				Host: cfg.SESSMTPHost, Port: cfg.SESSMTPPort,
+				Username: cfg.SESSMTPUser, Password: cfg.SESSMTPPass, From: cfg.SESFrom,
+				Region: cfg.SESRegion,
+			})
+			// Issue #56: receipts (buyers) consult suppression but not the
+			// verification breaker. The Sender now enforces that itself, at the
+			// pre-send choke point, so every receipt/notification path is
+			// guarded — including the merchant notification, whose old
+			// exemption is deliberately removed.
+			receiptSender.Suppressor = deps.Suppressions
 			pay.Receipts = &payments.Receipts{
-				Sender: email.New(email.SMTPConfig{
-					Host: cfg.SESSMTPHost, Port: cfg.SESSMTPPort,
-					Username: cfg.SESSMTPUser, Password: cfg.SESSMTPPass, From: cfg.SESFrom,
-					Region: cfg.SESRegion,
-				}),
-				Base: cfg.AppBaseURL,
-				// Issue #56: receipts (buyers) consult suppression but not the
-				// verification breaker.
-				Suppression: dbstore.NewSuppressionStore(pool),
+				Sender: receiptSender,
+				Base:   cfg.AppBaseURL,
+				// Kept as the pre-render early exit (avoids rendering a receipt
+				// we will not send); the choke point is the load-bearing guard.
+				Suppression: deps.Suppressions,
 			}
 		}
 		// Issue #199: receipts + merchant notifications go through the

@@ -9,11 +9,13 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 
 	"github.com/google/uuid"
 	"github.com/wzul/jomform/api/internal/dbstore"
+	emailpkg "github.com/wzul/jomform/api/internal/email"
 	"github.com/wzul/jomform/api/internal/emailqueue"
 )
 
@@ -161,6 +163,25 @@ func (h *RESTHandlers) createInvite(w http.ResponseWriter, r *http.Request, actx
 		lang = st.WorkspaceLang()
 	}
 	link := strings.TrimRight(h.BaseURL, "/") + "/login?invite=" + token
+	// Suppression is checked before enqueue/send: the invite ROW is already
+	// recorded, so a suppressed address still returns 201 {"status":"invited"}
+	// — the invitation exists and is claimable if the address is later
+	// un-suppressed — but no mail is queued for an address that hard-bounced.
+	// The pre-send choke point would also catch it; this keeps the skip visible
+	// at the point an operator would look for it.
+	if h.Suppressions != nil {
+		sup, serr := emailpkg.ShouldSuppress(r.Context(), h.Suppressions, email)
+		if serr != nil {
+			slog.Error("email_suppression_check_error", "to", obfuscateEmail(email), "err", serr)
+		} else if sup {
+			slog.Warn("invite_email_suppressed_skipped", "email", obfuscateEmail(email))
+			recordSESSuppression("invite")
+			writeJSON(w, http.StatusCreated, map[string]string{
+				"status": "invited", "id": inv.ID, "email": email, "role": role,
+			})
+			return
+		}
+	}
 	// Issue #199: when an EmailQueue is wired, enqueue the invite email and
 	// return immediately — the worker sends it. Otherwise send synchronously.
 	if h.EmailQueue != nil {

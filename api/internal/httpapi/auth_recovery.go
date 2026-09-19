@@ -121,7 +121,10 @@ func (a *AuthHandlers) sendEmail2FACode(ctx context.Context, email, code string)
 	}
 	if a.Suppressions != nil {
 		if sup, err := emailpkg.ShouldSuppress(ctx, a.Suppressions, email); err != nil {
-			return err
+			// Fail open (see (*email.Sender).suppressed): the pre-send choke
+			// point still guards the send, and a store blip must not stop a
+			// user from receiving their 2FA fallback code.
+			slog.Error("email_suppression_check_error", "to", obfuscateEmail(email), "err", err)
 		} else if sup {
 			slog.Warn("email2fa_suppressed_skipped", "email", obfuscateEmail(email))
 			recordSESSuppression("email2fa")
@@ -164,7 +167,9 @@ func (a *AuthHandlers) send2FAActiveEmail(ctx context.Context, email string) err
 	}
 	if a.Suppressions != nil {
 		if sup, err := emailpkg.ShouldSuppress(ctx, a.Suppressions, email); err != nil {
-			return err
+			// Fail open (see (*email.Sender).suppressed): the pre-send choke
+			// point still guards the send.
+			slog.Error("email_suppression_check_error", "to", obfuscateEmail(email), "err", err)
 		} else if sup {
 			slog.Warn("2fa_active_suppressed_skipped", "email", obfuscateEmail(email))
 			recordSESSuppression("2fa_active")
@@ -209,6 +214,7 @@ func (a *AuthHandlers) send2FAActiveEmail(ctx context.Context, email string) err
 //   - New email → mints a single-use hashed 15-min token bound to the email
 //     and emails a sign-up link that, on click, creates the account
 //     (verified=true, since the address was confirmed by clicking) + logs in.
+//
 // Tight per-IP rate limit in RegisterRoutes. Honeypot (issue #42) applies to
 // the signup path so a bot that fills the hidden field is silently discarded.
 func (a *AuthHandlers) handleMagicLinkRequest(w http.ResponseWriter, r *http.Request) {
@@ -295,7 +301,9 @@ func (a *AuthHandlers) sendMagicLinkEmail(ctx context.Context, email, token stri
 	}
 	if a.Suppressions != nil {
 		if sup, err := emailpkg.ShouldSuppress(ctx, a.Suppressions, email); err != nil {
-			return err
+			// Fail open (see (*email.Sender).suppressed): the pre-send choke
+			// point still guards the send.
+			slog.Error("email_suppression_check_error", "to", obfuscateEmail(email), "err", err)
 		} else if sup {
 			slog.Warn("magiclink_suppressed_skipped", "email", obfuscateEmail(email))
 			recordSESSuppression("magic_link")

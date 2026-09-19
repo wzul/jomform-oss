@@ -11,7 +11,9 @@ package email
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -20,6 +22,12 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2/types"
 )
+
+// ErrSuppressed is returned when the recipient is on the suppression list and
+// the message was therefore NOT handed to SES. It is a *skip*, not a failure:
+// every caller must map it to a logged no-op — never an error response, never a
+// queue retry, never a dead letter.
+var ErrSuppressed = errors.New("email suppressed")
 
 // SMTPConfig holds SES credentials. Despite the name (kept for compatibility),
 // these are now used for the SESv2 API, not SMTP:
@@ -42,6 +50,17 @@ type Sender struct {
 	cfg  SMTPConfig
 	from string
 	cli  *sesv2.Client
+	// Suppressor, when non-nil, is consulted before EVERY SES send. This is
+	// the single pre-send choke point: every outbound message in the repo —
+	// buyer receipts, merchant notifications, per-form notifications and all
+	// auth/invite mail, whether sent synchronously or by the background email
+	// worker — reaches SES through SendReceipt/SendReceiptWithAttachment below,
+	// so guarding them covers present and future callers alike. Call-site
+	// checks remain as an extra layer but are no longer load-bearing.
+	//
+	// nil → no check at all (bare-mode tests, or a deployment with SES but no
+	// database).
+	Suppressor Suppressor
 }
 
 // New builds a sender. The client is created lazily on first send so a missing
@@ -51,6 +70,65 @@ func New(cfg SMTPConfig) *Sender {
 		cfg.Region = "ap-southeast-1"
 	}
 	return &Sender{cfg: cfg, from: cfg.From}
+}
+
+// NewWithSuppressor builds a sender whose every send is checked against the
+// suppression list first.
+func NewWithSuppressor(cfg SMTPConfig, s Suppressor) *Sender {
+	snd := New(cfg)
+	snd.Suppressor = s
+	return snd
+}
+
+// suppressed reports whether this send must be skipped because the recipient is
+// on the suppression list. It is the pre-send choke point guard.
+//
+//   - A nil Suppressor means "no check configured" and never blocks a send
+//     (bare-mode tests, SES-without-DB).
+//   - The check runs on context.Background(): the SES call in this file already
+//     does, and threading a request ctx down would force a change to the
+//     VerifyMailer interface and every recorder mailer for no gain. The lookup
+//     is a single indexed primary-key hit.
+//   - A store error FAILS OPEN: it is logged as email_suppression_check_error
+//     and the send proceeds. A fail-closed rule would strand a paying buyer's
+//     receipt and a registering user's verify link on a database blip, and the
+//     suppression list is a reputation guard, not a correctness gate.
+//   - A hit is logged as one structured email_suppressed_skip line, so an
+//     operator can always tell why a message never left.
+func (s *Sender) suppressed(to, subject string) bool {
+	if s.Suppressor == nil {
+		return false
+	}
+	sup, err := ShouldSuppress(context.Background(), s.Suppressor, to)
+	if err != nil {
+		// Fail open, loudly. Never silently swallow a real suppression: the
+		// error path is always logged, and only an infrastructure error lands
+		// here.
+		slog.Error("email_suppression_check_error", "to", obfuscate(to), "err", err)
+		return false
+	}
+	if sup {
+		slog.Warn("email_suppressed_skip", "to", obfuscate(to), "subject", subject)
+		return true
+	}
+	return false
+}
+
+// obfuscate masks the local part of an address for logs (e.g.
+// "wan***@jomform.com") so a skip line is greppable without writing full PII
+// into the log. Local to this package: the email package must not import the
+// HTTP layer that owns the equivalent helper.
+func obfuscate(addr string) string {
+	addr = strings.TrimSpace(addr)
+	at := strings.Index(addr, "@")
+	if at <= 1 {
+		return "***"
+	}
+	local, domain := addr[:at], addr[at:]
+	if len(local) <= 3 {
+		return local[:1] + "***" + domain
+	}
+	return local[:3] + "***" + domain
 }
 
 // client returns a lazily-initialised SESv2 client using static IAM creds.
@@ -89,6 +167,12 @@ func (s *Sender) Send(to, subject, body string) error {
 // Issue #339: the email is sent as multipart — a plain-text part (fallback for
 // clients without HTML) plus a branded HTML part (JomForm logo, colors, layout).
 func (s *Sender) SendReceipt(to, subject, body string) (string, error) {
+	// The pre-send choke point. Checked before the SES client is even
+	// constructed so a suppressed address costs one indexed lookup and never
+	// opens a connection.
+	if s.suppressed(to, subject) {
+		return "", ErrSuppressed
+	}
 	cli, err := s.client()
 	if err != nil {
 		return "", err
@@ -128,6 +212,11 @@ func (s *Sender) SendWithAttachment(to, subject, body string, filename string, d
 // attachment (PDF receipts) via SESv2 SendEmail using a raw MIME message, and
 // returns the SES MessageID (issue #106) for open/click correlation.
 func (s *Sender) SendReceiptWithAttachment(to, subject, body string, filename string, data []byte) (string, error) {
+	// Same pre-send choke point as SendReceipt — the second and last
+	// sesv2.SendEmail call in the repo.
+	if s.suppressed(to, subject) {
+		return "", ErrSuppressed
+	}
 	cli, err := s.client()
 	if err != nil {
 		return "", err

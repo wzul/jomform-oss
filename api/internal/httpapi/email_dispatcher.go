@@ -17,6 +17,7 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
 	"github.com/wzul/jomform/api/internal/assetgate"
@@ -48,6 +49,13 @@ type EmailDispatcher struct {
 
 // Send delivers one queued email job. A returned error triggers the worker's
 // retry-with-backoff ladder.
+//
+// A suppression hit is NOT one of those errors. The pre-send guard at
+// (*email.Sender).SendReceipt returns email.ErrSuppressed when the recipient is
+// on the suppression list, and this dispatcher maps it to a logged skip and a
+// nil return: retrying can never succeed, and a non-nil error would push a job
+// that is correctly being dropped onto the retry ladder and eventually into the
+// dead-letter list, where it would look like a delivery failure forever.
 func (d *EmailDispatcher) Send(ctx context.Context, job emailqueue.Job) error {
 	switch job.Type {
 	case "receipt":
@@ -74,6 +82,19 @@ func (d *EmailDispatcher) Send(ctx context.Context, job emailqueue.Job) error {
 	}
 }
 
+// suppressionSkip reports whether err is the pre-send suppression sentinel, and
+// if so logs the structured skip line for a queued job. It returns true when the
+// caller must treat the job as successfully handled (nil error).
+func (d *EmailDispatcher) suppressionSkip(job emailqueue.Job, err error) bool {
+	if !errors.Is(err, email.ErrSuppressed) {
+		return false
+	}
+	slog.Warn("emailq_skip_suppressed", "type", job.Type, "to", obfuscateEmail(job.To),
+		"ref", job.SaleRef, "account", job.AccountID)
+	recordSESSuppression(job.Type)
+	return true
+}
+
 // sendReceipt delivers a buyer receipt (with PDF attachment when present) and
 // persists the SES MessageID onto the sale for open/click correlation.
 func (d *EmailDispatcher) sendReceipt(ctx context.Context, job emailqueue.Job) error {
@@ -90,6 +111,11 @@ func (d *EmailDispatcher) sendReceipt(ctx context.Context, job emailqueue.Job) e
 		messageID, err = d.Pay.Receipts.Sender.SendReceipt(job.To, job.Subject, job.Body)
 	}
 	if err != nil {
+		if d.suppressionSkip(job, err) {
+			// Suppressed: the sale keeps its (absent) MessageID — persisting
+			// nothing is correct, and the job is done.
+			return nil
+		}
 		slog.Warn("emailq_receipt_send_failed", "ref", job.SaleRef, "to", job.To, "err", err)
 		return err
 	}
@@ -111,6 +137,9 @@ func (d *EmailDispatcher) sendMerchantNotify(ctx context.Context, job emailqueue
 		return nil
 	}
 	if err := d.Pay.Receipts.Sender.Send(job.To, job.Subject, job.Body); err != nil {
+		if d.suppressionSkip(job, err) {
+			return nil
+		}
 		slog.Warn("emailq_merchant_notify_failed", "ref", job.SaleRef, "to", job.To, "err", err)
 		return err
 	}
@@ -126,6 +155,9 @@ func (d *EmailDispatcher) sendAuth(ctx context.Context, job emailqueue.Job) erro
 		return nil
 	}
 	if err := d.AuthMailer.Send(job.To, job.Subject, job.Body); err != nil {
+		if d.suppressionSkip(job, err) {
+			return nil
+		}
 		slog.Warn("emailq_auth_send_failed", "type", job.Type, "to", job.To, "err", err)
 		return err
 	}
