@@ -99,6 +99,18 @@ Individual senders keep their own pre-render checks as an early exit (they avoid
 building a link or rendering a receipt for a message that will not be sent), but
 those are no longer load-bearing: the choke point is what guarantees the rule.
 
+**The choke point only sees mail the worker actually routes.** With Valkey up,
+most mail is enqueued and delivered by the background email worker, so the
+dispatcher (`(*EmailDispatcher).Send`) stands in front of the guard: a job type
+with no case there is discarded before any sender is reached, and such a message
+is neither delivered nor suppression-checked. That was live — `form_notification`
+and `connect` were both enqueued and both unrouted — so the unknown-type branch
+now returns an error instead of a logged no-op (the job retries, then
+dead-letters where an operator can see and replay it), and
+`api/internal/httpapi/email_dispatcher_jobtype_test.go` fails the build when any
+enqueued `Type:` literal has no matching case. When adding a new queued job type,
+add its case in the same change.
+
 ### Inspect / un-suppress a false positive (ops)
 
 ```sql

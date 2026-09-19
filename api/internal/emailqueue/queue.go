@@ -52,8 +52,13 @@ import (
 // which is cheap local work — only the SES network call is deferred to the
 // worker).
 type Job struct {
-	// Type is one of: receipt | merchant_notify | verify | magic_link |
-	// password_reset | email2fa | 2fa_active | invite.
+	// Type selects the dispatcher case. Values enqueued by this repo are:
+	// receipt | merchant_notify | form_notification | verify | magic_link |
+	// password_reset | email2fa | 2fa_active | invite | connect, plus
+	// spamjudge.JobType and assetgate.JobType (those two carry their payload in
+	// Body rather than an email). The dispatcher refuses and retries any value
+	// it has no case for; email_dispatcher_jobtype_test.go keeps that set and
+	// this list in step.
 	Type string `json:"type"`
 	To   string `json:"to"`
 	// Subject and Body are the fully-rendered message.

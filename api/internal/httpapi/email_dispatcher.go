@@ -4,12 +4,19 @@
 // dispatcher's Send for each job. The dispatcher routes each job type to the
 // appropriate SES sender:
 //
-//   - receipt / merchant_notify → the payments Service's receipt sender (with
-//     PDF attachment when present), persisting the SES MessageID back onto the
-//     sale (issue #106) for open/click correlation.
-//   - verify / magic_link / password_reset / email2fa / 2fa_active / invite →
-//     the shared auth mailer, recording the SES send metric + breaker counter
-//     exactly as the synchronous path did.
+//   - receipt / merchant_notify / form_notification → the payments Service's
+//     receipt sender (with PDF attachment when present for receipts),
+//     persisting the SES MessageID back onto the sale (issue #106) for
+//     open/click correlation.
+//   - verify / magic_link / password_reset / email2fa / 2fa_active / invite /
+//     connect → the shared auth mailer, recording the SES send metric + breaker
+//     counter exactly as the synchronous path did.
+//   - spam_judge / asset_scan → the background AI judge / asset gate.
+//
+// Every job type the repo enqueues has a case below; a type with no case would
+// be mail the dispatcher discards, so `default:` fails loudly instead of
+// returning nil, and email_dispatcher_jobtype_test.go asserts that each `Type:`
+// literal enqueued anywhere in the repo has a matching case here.
 //
 // The dispatcher is wired in cmd/jomform-api and is nil-safe: a nil field means
 // that job type is dropped with a warning (should not happen in production).
@@ -18,6 +25,7 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 
 	"github.com/wzul/jomform/api/internal/assetgate"
@@ -26,6 +34,14 @@ import (
 	"github.com/wzul/jomform/api/internal/payments"
 	"github.com/wzul/jomform/api/internal/spamjudge"
 )
+
+// errUnknownJobType marks a queued job the dispatcher has no case for. It is
+// deliberately an error rather than a logged no-op: a silent nil discard means
+// the message never retries and never dead-letters, so mail disappears with no
+// trace anywhere. On the worker's ladder a missing case surfaces as retries and
+// then a dead-letter entry, which is visible and replayable. No type the repo
+// actually enqueues may reach it (email_dispatcher_jobtype_test.go asserts that).
+var errUnknownJobType = errors.New("emailq: unknown job type")
 
 // EmailDispatcher routes queued email jobs to the right sender. It implements
 // emailqueue.Handler.
@@ -62,7 +78,12 @@ func (d *EmailDispatcher) Send(ctx context.Context, job emailqueue.Job) error {
 		return d.sendReceipt(ctx, job)
 	case "merchant_notify":
 		return d.sendMerchantNotify(ctx, job)
-	case "verify", "magic_link", "password_reset", "email2fa", "2fa_active", "invite":
+	case "form_notification":
+		return d.sendFormNotification(ctx, job)
+	// connect (issue #302, the social-login email-ownership link) rides the
+	// shared auth mailer exactly as its synchronous branch does — same sender,
+	// same sent metric, same breaker.
+	case "verify", "magic_link", "password_reset", "email2fa", "2fa_active", "invite", "connect":
 		return d.sendAuth(ctx, job)
 	case spamjudge.JobType:
 		if d.SpamJudge == nil {
@@ -77,8 +98,15 @@ func (d *EmailDispatcher) Send(ctx context.Context, job emailqueue.Job) error {
 		}
 		return d.AssetScan.Send(ctx, job)
 	default:
-		slog.Warn("emailq_unknown_type", "type", job.Type, "to", job.To)
-		return nil
+		// Fail loudly. Returning nil here (the pre-fix behaviour) discards the
+		// job with no error, so nothing retries and nothing dead-letters: the
+		// message is simply gone. An error puts it on the worker's retry ladder
+		// and then the dead-letter list (#547), where it is visible and
+		// replayable. email_dispatcher_jobtype_test.go keeps this branch
+		// unreachable for every type the repo actually enqueues.
+		slog.Error("emailq_unknown_type", "type", job.Type)
+		recordError("emailq_unknown_type")
+		return fmt.Errorf("%w: %q", errUnknownJobType, job.Type)
 	}
 }
 
@@ -144,6 +172,33 @@ func (d *EmailDispatcher) sendMerchantNotify(ctx context.Context, job emailqueue
 		return err
 	}
 	slog.Info("emailq_merchant_notify_sent", "ref", job.SaleRef, "to", job.To)
+	return nil
+}
+
+// sendFormNotification delivers a per-form notification rule (issue #193) —
+// the merchant-facing "someone paid / responded" alert evaluated by
+// payments.Service.FireFormNotifications.
+//
+// It goes through pay.Receipts.Sender, the same sender the synchronous branch
+// in payments.sendNotification uses, so the message passes the pre-send
+// suppression choke point. Before this case existed the job type fell to the
+// dispatcher's default branch and was discarded: the alert was never delivered
+// and the choke point never saw it, so it was neither suppression-checked nor
+// auditable. No SaleID is persisted — a form notification is not a receipt, so
+// there is no sale to attach a SES MessageID to.
+func (d *EmailDispatcher) sendFormNotification(ctx context.Context, job emailqueue.Job) error {
+	if d.Pay == nil || d.Pay.Receipts == nil || d.Pay.Receipts.Sender == nil {
+		slog.Warn("emailq_form_notification_no_sender", "to", job.To, "ref", job.SaleRef)
+		return nil
+	}
+	if err := d.Pay.Receipts.Sender.Send(job.To, job.Subject, job.Body); err != nil {
+		if d.suppressionSkip(job, err) {
+			return nil
+		}
+		slog.Warn("emailq_form_notification_failed", "ref", job.SaleRef, "to", job.To, "err", err)
+		return err
+	}
+	slog.Info("emailq_form_notification_sent", "ref", job.SaleRef, "to", job.To)
 	return nil
 }
 
