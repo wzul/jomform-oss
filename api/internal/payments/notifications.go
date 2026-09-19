@@ -129,17 +129,51 @@ func (s *Service) resolveNotificationRecipient(ctx context.Context, ref Notifica
 }
 
 // resolveAdminEmail returns the merchant's account email for a form's owner.
+//
+// The recipient must be resolved through the OWNER USER id, never the account id
+// (issue #606): `users.id` and `accounts.id` are independent UUIDs — the FK is
+// `accounts.owner_user_id` (migrations/000001_init.up.sql:20-21) — so looking a
+// user up by account id ALWAYS missed and the recipient resolved to "". Since
+// `{admin_email}` is the recipient of the DEFAULT rule EnsureDefault creates for
+// every new form, that silently killed the merchant's new-sale email.
+//
+// Mirrors the receipt path (receipt.go resolveMerchantEmail / notifyMerchant):
+// account -> owner_user_id (or a workspace's owner when the ref carries no
+// account) -> user email. A missing/unreadable store degrades to "" — no
+// recipient, never a panic and never an invented address.
 func (s *Service) resolveAdminEmail(ctx context.Context, ref NotificationRef) string {
-	accountID := ref.AccountID
-	if accountID == "" && s.Workspaces != nil && ref.WorkspaceID != "" {
-		if sp, err := s.Workspaces.ByID(ctx, ref.WorkspaceID); err == nil && sp != nil {
-			accountID = sp.Owner
-		}
-	}
-	if accountID == "" || s.Users == nil {
+	if s.Users == nil {
 		return ""
 	}
-	if u, err := s.Users.ByID(ctx, accountID); err == nil && u != nil {
+	// The owner USER id to look the email up by. Never an account id.
+	ownerUserID := ""
+	switch {
+	case ref.AccountID != "":
+		if s.Accounts == nil {
+			// No way to map the account to its owner — degrade, don't guess.
+			return ""
+		}
+		acc, err := s.Accounts.ByID(ctx, ref.AccountID)
+		if err != nil || acc == nil {
+			// An unreadable account (deleted, foreign, or a non-UUID id) fails
+			// closed. `AccountStore.ByID` returns a non-nil zero Account with
+			// its error, so the trailing `ownerUserID == ""` check would also
+			// catch this — the early return is belt-and-braces and the nil half
+			// guards a future ByID that nils its result.
+			return ""
+		}
+		ownerUserID = acc.OwnerUserID
+	case ref.WorkspaceID != "" && s.Workspaces != nil:
+		// No account on the ref: fall back to the workspace owner (the
+		// pre-#606 behaviour, kept for refs built without an account id).
+		if sp, err := s.Workspaces.ByID(ctx, ref.WorkspaceID); err == nil && sp != nil {
+			ownerUserID = sp.Owner
+		}
+	}
+	if ownerUserID == "" {
+		return ""
+	}
+	if u, err := s.Users.ByID(ctx, ownerUserID); err == nil && u != nil {
 		return u.Email
 	}
 	return ""
