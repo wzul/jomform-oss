@@ -37,6 +37,7 @@ import {
   answerKeys,
   answerText,
   answersPreview,
+  isMixedList,
   isResponseForm,
   listView,
   responsesList,
@@ -341,10 +342,46 @@ test("listView keeps a payment page on the sales layout", () => {
   ];
   assert.equal(listView(sales), "sale");
   assert.equal(responsesList(sales, false), false);
+  assert.equal(isMixedList(sales), false);
   // Even a form the forms list calls a response form keeps the money columns
   // when its rows are sales (not producible today: a form is either a payment
   // form or a response form — the row wins, deliberately).
   assert.equal(responsesList(sales, true), false);
+});
+
+// A list holding BOTH kinds is now producible: with no form filter the API
+// returns the account's sales AND its response entries. Before this, the rule
+// was "every row a response → responses, otherwise sales", so a mixed page
+// rendered every response through the sales layout — an empty reference and
+// RM0.00 in a table whose column count does not match.
+test("a MIXED list is its own view, not a sale list", () => {
+  const rows: RowLike[] = [
+    { ref_code: "JF-a", sale_type: "one_time" },
+    { sale_type: "response", submission_id: "sub-1" },
+  ];
+  assert.equal(listView(rows), "mixed");
+  assert.equal(isMixedList(rows), true);
+  // The chrome must NOT read as a responses-only list: half the rows are sales
+  // and the money columns still apply to them.
+  assert.equal(responsesList(rows, false), false);
+  // ...and it must not read as a plain sales list either, because the status
+  // filter is meaningless for the response half.
+  assert.notEqual(listView(rows), "sale");
+
+  // Order must not matter: a response first is the same list.
+  const reversed: RowLike[] = [
+    { sale_type: "response", submission_id: "sub-1" },
+    { ref_code: "JF-a", sale_type: "one_time" },
+  ];
+  assert.equal(listView(reversed), "mixed");
+
+  // Two responses and one sale is still mixed (not "mostly responses").
+  const twoOfThree: RowLike[] = [
+    { sale_type: "response", submission_id: "sub-1" },
+    { sale_type: "response", submission_id: "sub-2" },
+    { ref_code: "JF-a", sale_type: "one_time" },
+  ];
+  assert.equal(listView(twoOfThree), "mixed");
 });
 
 test("listView is stable across the forms landing (no branch flip on the same rows)", () => {
@@ -375,8 +412,18 @@ const rowsRegion = (() => {
 test("the row map picks the layout PER ROW, from rowKind — not from a global flag", () => {
   // The call site, asserted from source: the pure functions above can all be
   // correct while the page still branches on `responsesView`.
+  //
+  // The map now has an outer branch for the MIXED case (sales + responses on one
+  // page, which the API could not produce before the unfiltered read was fixed),
+  // so the assertion is that `rowKind(s)` decides the layout with the mixed
+  // branch present as well — and that inside it the layout is STILL per row.
   assert.ok(
-    /rows\.map\(\(s\) =>\s*\n\s*rowKind\(s\) === "response"/.test(rowsRegion),
+    /rows\.map\(\(s\) =>\s*\n\s*mixedView \?/.test(rowsRegion),
+    "the row map lost its mixed-list branch — a mixed page would render every " +
+      "response through the 9-column sales layout (empty ref, RM0.00)",
+  );
+  assert.ok(
+    /rowKind\(s\) === "response"/.test(rowsRegion),
     "the row map no longer chooses the layout from rowKind(s) — a global flag " +
       "that flips after the rows rendered is how the stale rows survived",
   );
@@ -415,11 +462,80 @@ test("the header and the rows read the SAME decision (chrome cannot disagree wit
     /const filteredForm = isResponseForm\(forms, formFilter\)/.test(pageSource),
     "the filtered-form mode is no longer read via isResponseForm(forms, formFilter)",
   );
+  // The mixed-list flag must come from the same per-row decision, so the header
+  // cannot claim a combined list while the rows are all one kind (or the
+  // reverse).
+  assert.ok(
+    /const mixedView = isMixedList\(rows\)/.test(pageSource),
+    "mixedView is no longer derived from isMixedList(rows) — the combined header " +
+      "and the rows would be decided separately",
+  );
   // isResponseForm must be used for the CHROME only: if it appears in the row map
   // the row layout is back on the racy flag.
   assert.ok(
     !rowsRegion.includes("isResponseForm"),
     "the row map consults isResponseForm (the forms list) — the row layout must " +
       "depend on the row alone",
+  );
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The mixed-list WIRE CONTRACT: the page renders a combined list, and the API's
+// export names its two kinds. A rename on either side must fail here.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// The Go source that builds the merged record export.
+const goExport = readFileSync(
+  fileURLToPath(new URL("../../../api/internal/httpapi/rest_export.go", import.meta.url)),
+  "utf8",
+);
+
+const goRecords = readFileSync(
+  fileURLToPath(new URL("../../../api/internal/dbstore/records.go", import.meta.url)),
+  "utf8",
+);
+
+// The REST record-set reader (the paginated list's row mapping + envelope).
+const goRestRecords = readFileSync(
+  fileURLToPath(new URL("../../../api/internal/httpapi/rest_records.go", import.meta.url)),
+  "utf8",
+);
+
+test("the record kinds the export writes are the constants the merged read defines", () => {
+  // The exporter writes `RecordKindSale` / `RecordKindSubmission`; the constants'
+  // VALUES are what appear in the CSV. Pin both against the source so a rename
+  // fails here instead of shipping a file whose record_type nothing matches.
+  assert.ok(
+    /RecordKindSale\s*=\s*"sale"/.test(goRecords),
+    "RecordKindSale is no longer \"sale\" — the export's record_type column changed",
+  );
+  assert.ok(
+    /RecordKindSubmission\s*=\s*"response"/.test(goRecords),
+    "RecordKindSubmission is no longer \"response\" — the export's record_type would " +
+      "say something different from the list's sale_type marker for the same row",
+  );
+  // The exporter must actually use them (a hardcoded string would drift).
+  assert.ok(
+    /writeRecordsCSV|header = append\(\[\]string\{"record_type", "submission_id"\}/.test(goExport),
+    "the export lost its mixed-list column set — the page and the file would disagree",
+  );
+  assert.ok(
+    /record_type/.test(goExport),
+    "the export no longer names the record kind, so a merchant cannot tell a " +
+      "sale row from a response row in the file",
+  );
+});
+
+test("the list envelope reports the mixed flag the page reads", () => {
+  // The page (and any other consumer) distinguishes a combined list from a
+  // sales-only one; the API must keep emitting the flag.
+  assert.ok(
+    /"mixed":\s*sc\.Mixed/.test(goRestRecords),
+    "the paginated /sales envelope no longer emits `mixed`, so the page cannot " +
+      "tell a combined list from a sales list",
+  );
+  assert.ok(
+    /dbstore\.ResolveRecordScope/.test(goRestRecords),
+    "the /sales read no longer calls the ONE scope decision (dbstore.ResolveRecordScope)",
   );
 });

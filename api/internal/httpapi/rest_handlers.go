@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1212,21 +1213,6 @@ func strField(data map[string]any, key string) string {
 	return ""
 }
 
-// responseModeForm reports whether formID names a response-mode form inside the
-// caller's account scope, and returns that form. This is the ONE place the sales
-// read decides which table to read; it is deliberately keyed on the form's
-// config, never on a form id.
-func (h *RESTHandlers) responseModeForm(r *http.Request, scope *scopeResult, formID string) (*dbstore.Form, bool) {
-	if h.Forms == nil || h.Submissions == nil || formID == "" {
-		return nil, false
-	}
-	form, err := h.Forms.GetByIDInAccounts(r.Context(), scope.Accounts, formID)
-	if err != nil || form == nil {
-		return nil, false
-	}
-	return form, formMode(form) == "response"
-}
-
 // listResponseRows writes one page of a response-mode form's submissions in the
 // same envelope the sales list uses, so /sales?form=<response form> shows the
 // form's entries instead of an always-empty sales page.
@@ -1234,6 +1220,10 @@ func (h *RESTHandlers) responseModeForm(r *http.Request, scope *scopeResult, for
 // A submission has no status column and no payment: a status filter therefore
 // matches nothing (the merchant asked for a state responses cannot be in), while
 // the date range and the free-text search apply to the recorded values.
+//
+// The caller passes a formID only for the single-response-form case, which the
+// scope decision (dbstore.ResolveRecordScope.OnlyResponses) has already
+// established — this function does not re-decide which table to read.
 func (h *RESTHandlers) listResponseRows(w http.ResponseWriter, r *http.Request, scope *scopeResult, formID string, page, limit int) {
 	if r.URL.Query().Get("status") != "" {
 		respond(w, http.StatusOK, map[string]any{
@@ -1256,102 +1246,122 @@ func (h *RESTHandlers) listResponseRows(w http.ResponseWriter, r *http.Request, 
 	})
 }
 
+// legacyPageLimit reads the legacy array shape's ?limit= (which has always
+// honoured a caller-supplied limit for the response branch) with the shape's
+// historical default cap of 100 when none is given.
+func legacyPageLimit(r *http.Request) (page, limit int) {
+	page, limit = 1, legacyArrayLimit
+	if v, err := strconv.Atoi(r.URL.Query().Get("page")); err == nil && v > 0 {
+		page = v
+	}
+	if v, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && v > 0 {
+		limit = v
+	}
+	if limit > maxRecordPageLimit {
+		limit = maxRecordPageLimit
+	}
+	return page, limit
+}
+
+// legacyArrayLimit is the row cap of the paging-less array shape. It is kept at
+// the value that shape has always used so an existing API-key consumer does not
+// silently receive a shorter list.
+const legacyArrayLimit = 100
+
 func (h *RESTHandlers) listSales(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	scope, ok := h.scopeOr403(w, r, actx)
 	if !ok {
 		return
 	}
-	capturedAt := func(s *dbstore.Sale) string {
-		if s.CapturedAt == nil {
-			return ""
-		}
-		return s.CapturedAt.UTC().Format(time.RFC3339)
+	formID := r.URL.Query().Get("form_id")
+	// ONE decision, over the whole account scope: which tables does this read
+	// cover? (dbstore.ResolveRecordScope.) An unfiltered read spans both tables
+	// whenever the scope owns a response-mode form — that is the fix for the
+	// reported defect, and it is resolved here for every shape below.
+	sc, err := h.recordScope(r.Context(), scope, formID)
+	if err != nil {
+		respondErr(w, r, err)
+		return
 	}
-	writeRows := func(sales []*dbstore.Sale) {
+
+	// Legacy shape: plain array when the caller does not ask for paging.
+	if r.URL.Query().Get("page") == "" {
+		page, limit := legacyPageLimit(r)
+		switch {
+		case sc.OnlyResponses:
+			// Issue #171: a response-mode form has no sales at all, so the
+			// array shape reads its submissions — otherwise every caller of
+			// this form (the dashboard's recent-list included) sees an empty
+			// array as if nothing had ever been recorded.
+			subs, _, err := h.Submissions.ListFilteredPage(r.Context(), scope.Accounts,
+				recordFilter(r).SubmissionFilter(sc.ResponseFormIDs), page, limit)
+			if err != nil {
+				respondErr(w, r, err)
+				return
+			}
+			respond(w, http.StatusOK, submissionsAsRows(subs))
+			return
+		case sc.IncludeSubs:
+			// Unfiltered (or a filter that keeps both halves): the array shape
+			// must carry the same record set as the paginated list, in the same
+			// order — the dashboard reads this shape, and a different answer
+			// per shape is how the counts drifted.
+			records, _, err := h.Sales.MergedPage(r.Context(), scope.Accounts, sc, recordFilter(r), page, limit)
+			if err != nil {
+				respondErr(w, r, err)
+				return
+			}
+			respond(w, http.StatusOK, h.recordRows(r.Context(), records))
+			return
+		}
+		// Sales-only scope (no response form in play). The array shape applies
+		// the same filters as the paginated one: it used to ignore
+		// status/date/q entirely, so two callers of the same URL got different
+		// semantics for the same query string.
+		rows, _, err := h.Sales.ListFilteredPage(r.Context(), scope.Accounts, recordFilter(r).SaleFilter(), page, limit)
+		if err != nil {
+			respondErr(w, r, err)
+			return
+		}
 		// Issue #106: surface the most recent receipt delivery event per sale.
-		emailStatus := h.latestEmailStatuses(r.Context(), sales)
-		out := make([]saleRow, 0, len(sales))
-		for _, s := range sales {
+		emailStatus := h.latestEmailStatuses(r.Context(), rows)
+		out := make([]saleRow, 0, len(rows))
+		for _, s := range rows {
 			// Issue #518: build the full row (not a subset) so the legacy
 			// array shape carries refunded_sen / outstanding_sen /
 			// refund_status too — a partial refund must be visible on EVERY
 			// read surface, and the legacy shape is the dashboard's.
 			row := toSaleRow(s, emailStatus[s.RefCode])
-			row.CapturedAt = capturedAt(s)
+			if s.CapturedAt != nil {
+				row.CapturedAt = s.CapturedAt.UTC().Format(time.RFC3339)
+			}
 			out = append(out, row)
 		}
 		respond(w, http.StatusOK, out)
-	}
-
-	// Legacy shape: plain array when the caller does not ask for paging.
-	if r.URL.Query().Get("page") == "" {
-		// Issue #171: a response-mode form has no sales at all, so the array
-		// shape must read its submissions — otherwise every caller of this form
-		// (the dashboard's recent-list included) sees an empty array as if
-		// nothing had ever been recorded.
-		if formID := r.URL.Query().Get("form_id"); formID != "" {
-			if _, isResponse := h.responseModeForm(r, scope, formID); isResponse {
-				page, limit := parsePageLimit(r)
-				subs, _, err := h.Submissions.ListFilteredPage(r.Context(), scope.Accounts, dbstore.SubmissionFilter{
-					FormID:   formID,
-					DateFrom: r.URL.Query().Get("date_from"),
-					DateTo:   r.URL.Query().Get("date_to"),
-					Q:        r.URL.Query().Get("q"),
-				}, page, limit)
-				if err != nil {
-					respondErr(w, r, err)
-					return
-				}
-				respond(w, http.StatusOK, submissionsAsRows(subs))
-				return
-			}
-		}
-		var sales []*dbstore.Sale
-		var err error
-		if formID := r.URL.Query().Get("form_id"); formID != "" {
-			sales, err = h.Sales.ListByAccountForm(r.Context(), actx.Account.ID, formID, 100)
-		} else {
-			sales, err = h.Sales.ListByAccount(r.Context(), actx.Account.ID, 100)
-		}
-		if err != nil {
-			respondErr(w, r, err)
-			return
-		}
-		writeRows(sales)
 		return
 	}
 
 	// Paginated shape: { items, page, limit, total }.
 	page, limit := parsePageLimit(r)
-	formID := r.URL.Query().Get("form_id")
-	// Issue #171: the Sales page's per-form deep link must show a response-mode
-	// form's entries. Its entries live in `submissions`, not `sales`, so the
-	// sales-only query below can never match them (that was the reported
-	// defect). Pick the table from the form's own mode.
-	if _, isResponse := h.responseModeForm(r, scope, formID); isResponse {
+	switch {
+	case sc.OnlyResponses:
+		// Issue #171: the Sales page's per-form deep link must show a
+		// response-mode form's entries. Its entries live in `submissions`, not
+		// `sales`, so the sales-only query can never match them (the reported
+		// defect). The form's own mode picks the table.
 		h.listResponseRows(w, r, scope, formID, page, limit)
 		return
+	case sc.IncludeSubs:
+		// The unfiltered list (and any filter that keeps both halves): sales
+		// AND the scope's response entries, merged newest-first with one
+		// combined total.
+		if err := h.listRecordRows(w, r, scope, sc, page, limit); err != nil {
+			respondErr(w, r, err)
+		}
+		return
 	}
-	var sales []*dbstore.Sale
-	var total int64
-	var err error
-	f := dbstore.SaleFilter{
-		FormID:   formID,
-		Status:   r.URL.Query().Get("status"),
-		DateFrom: r.URL.Query().Get("date_from"),
-		DateTo:   r.URL.Query().Get("date_to"),
-		Q:        r.URL.Query().Get("q"),
-	}
-	// The dedicated /sales page (issue #126) always pages and uses the unified
-	// filtered query whenever any filter is present; a bare form_id keeps the
-	// existing per-account query path (cheap, already covered by tests).
-	if f.Status != "" || f.DateFrom != "" || f.DateTo != "" || f.Q != "" {
-		sales, total, err = h.Sales.ListFilteredPage(r.Context(), scope.Accounts, f, page, limit)
-	} else if formID != "" {
-		sales, total, err = h.Sales.ListByAccountsFormPage(r.Context(), scope.Accounts, formID, page, limit)
-	} else {
-		sales, total, err = h.Sales.ListByAccountsPage(r.Context(), scope.Accounts, page, limit)
-	}
+
+	sales, total, err := h.Sales.ListFilteredPage(r.Context(), scope.Accounts, recordFilter(r).SaleFilter(), page, limit)
 	if err != nil {
 		respondErr(w, r, err)
 		return

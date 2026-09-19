@@ -62,7 +62,7 @@ func (s *Server) registerTools() {
 	// ── Sales ───────────────────────────────────────────────────────────────
 	addTool(s, &mcp.Tool{
 		Name:        "list_sales",
-		Description: "Senarai jualan terkini (terbaru dahulu). Setiap jualan: refunded_sen (telah direfund), outstanding_sen (baki boleh refund), refund_status (none|partial|full) — issue #518. Jika form_id ialah borang mode 'response' (tiada bayaran), yang dipulangkan ialah RESPONS borang itu (sale_type 'response', submission_id + data), bukan senarai kosong.",
+		Description: "Senarai rekod terkini (terbaru dahulu). Tanpa form_id ini ialah SELURUH set rekod akaun: jualan DAN respons borang mode 'response' (sale_type 'response', submission_id + data) — sama seperti halaman Sales. Dengan form_id, mode borang itu menentukan jualan atau respons. Setiap jualan: refunded_sen, outstanding_sen, refund_status (none|partial|full) — issue #518. Status ialah soalan bayaran, jadi menetapkan status mengecualikan bahagian respons.",
 	}, s.listSales)
 
 	addTool(s, &mcp.Tool{
@@ -745,7 +745,7 @@ func (s *Server) registerTools() {
 	// ── Parity: sales export CSV (issue #396) ────────────────────────────
 	addTool(s, &mcp.Tool{
 		Name:        "export_sales_csv",
-		Description: "Eksport jualan akaun sebagai CSV (ref_code, status, payment_method, buyer, total_rm, created_at, purchase_id, refunded_rm, outstanding_rm, refund_status). Boleh tapis form_id. Pulangkan kandungan csv.",
+		Description: "Eksport set rekod akaun sebagai CSV. Tanpa form_id ia mengandungi jualan DAN respons (lajur record_type menandakan setiap baris, serta lajur jawapan yang direkodkan), sepadan dengan senarai yang dipaparkan. Boleh tapis form_id/status/date_from/date_to/q — penapis yang sama seperti senarai. Kolum refund mendedahkan refund sebahagian (issue #518). Pulangkan kandungan csv.",
 	}, s.exportSalesCSV)
 
 	// ── Parity: Cloudflare (issue #396) ──────────────────────────────────

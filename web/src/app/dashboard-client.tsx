@@ -6,6 +6,7 @@ import { Shell } from "../components/Shell";
 import { useI18n } from "../components/i18n";
 import { useSession } from "../components/session";
 import { workspaceQuery, workspaceScope } from "../lib/workspace";
+import { answersPreview, rowKey, rowKind } from "../lib/salesRows";
 import Landing from "./landing/page";
 import {
   Area,
@@ -26,6 +27,12 @@ type SaleRow = {
   buyer: string;
   created_at: string;
   email_status?: string;
+  // The bundle's recent list is the account's record set, so it can carry a
+  // response entry too: the API marks it sale_type "response" and gives it the
+  // submission id + recorded answers instead of a payment reference.
+  sale_type?: string;
+  submission_id?: string;
+  data?: Record<string, unknown> | null;
 };
 type SalesPage = { items: SaleRow[]; page: number; limit: number; total: number };
 type FormStats = {
@@ -298,20 +305,29 @@ export default function Dashboard() {
           {/* mobile: stacked cards (no table scroll needed) */}
           <ul className="divide-y divide-[var(--jf-border)] md:hidden">
             {sales.map((s) => (
-              <li key={s.ref_code} className="flex items-center justify-between gap-3 px-4 py-3">
+              <li key={rowKey(s)} className="flex items-center justify-between gap-3 px-4 py-3">
                 <div className="min-w-0">
-                  <p className="truncate font-mono text-xs text-[var(--jf-muted)]">{s.ref_code}</p>
+                  <p className="truncate font-mono text-xs text-[var(--jf-muted)]">
+                    {rowKind(s) === "response" ? (s.submission_id || "").slice(0, 8) : s.ref_code}
+                  </p>
                   <p className="mt-0.5 truncate text-sm font-medium">{s.buyer || "—"}</p>
+                  {rowKind(s) === "response" && answersPreview(s) && (
+                    <p className="truncate text-[10px] text-[var(--jf-muted)]">{answersPreview(s)}</p>
+                  )}
                   <span className={`mt-1 inline-block rounded-full border px-2 py-0.5 text-[10px] font-medium ${badge(s.status)}`}>
                     {s.status}
                   </span>
-                  <span className={`ml-1 inline-block rounded-full border px-2 py-0.5 text-[10px] font-medium ${emailBadge(s.email_status)}`}>
-                    {emailLabel(s.email_status)}
-                  </span>
+                  {rowKind(s) !== "response" && (
+                    <span className={`ml-1 inline-block rounded-full border px-2 py-0.5 text-[10px] font-medium ${emailBadge(s.email_status)}`}>
+                      {emailLabel(s.email_status)}
+                    </span>
+                  )}
                 </div>
                 <div className="flex shrink-0 flex-col items-end gap-1.5">
-                  <span className="text-sm font-semibold">{money(s.total_sen)}</span>
-                  {s.status === "paid" && canWrite && (
+                  <span className="text-sm font-semibold">
+                    {rowKind(s) === "response" ? "—" : money(s.total_sen)}
+                  </span>
+                  {s.status === "paid" && rowKind(s) !== "response" && canWrite && (
                     <button onClick={() => confirmSale(s.ref_code)} className="text-xs font-medium text-[var(--jf-primary)] hover:underline">
                       {t("common.confirm")}
                     </button>
@@ -339,22 +355,38 @@ export default function Dashboard() {
               </thead>
               <tbody>
                 {sales.map((s) => (
-                  <tr key={s.ref_code} className="border-b border-[var(--jf-border)] last:border-0 hover:bg-slate-50/60">
-                    <td className="whitespace-nowrap px-5 py-3 font-mono text-xs">{s.ref_code}</td>
+                  <tr key={rowKey(s)} className="border-b border-[var(--jf-border)] last:border-0 hover:bg-slate-50/60">
+                    <td className="whitespace-nowrap px-5 py-3 font-mono text-xs">
+                      {rowKind(s) === "response" ? (
+                        <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[10px] font-medium text-[var(--jf-primary)]">
+                          {t("bld.responses")}
+                        </span>
+                      ) : (
+                        s.ref_code
+                      )}
+                    </td>
                     <td className="max-w-40 truncate px-3 py-3">{s.buyer || "—"}</td>
-                    <td className="whitespace-nowrap px-5 py-3 font-medium">{money(s.total_sen)}</td>
+                    <td className="whitespace-nowrap px-5 py-3 font-medium">
+                      {rowKind(s) === "response" ? "—" : money(s.total_sen)}
+                    </td>
                     <td className="px-5 py-3">
                       <span className={`whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${badge(s.status)}`}>
                         {s.status}
                       </span>
                     </td>
                     <td className="px-5 py-3">
-                      <span className={`whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${emailBadge(s.email_status)}`}>
-                        {emailLabel(s.email_status)}
-                      </span>
+                      {rowKind(s) === "response" ? (
+                        <span className="text-[11px] text-[var(--jf-muted)]">
+                          {answersPreview(s) || "—"}
+                        </span>
+                      ) : (
+                        <span className={`whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${emailBadge(s.email_status)}`}>
+                          {emailLabel(s.email_status)}
+                        </span>
+                      )}
                     </td>
                     <td className="px-5 py-3 text-right">
-                      {s.status === "paid" && canWrite && (
+                      {s.status === "paid" && rowKind(s) !== "response" && canWrite && (
                         <button onClick={() => confirmSale(s.ref_code)} className="whitespace-nowrap text-xs font-medium text-[var(--jf-primary)] hover:underline">
                           {t("common.confirm")}
                         </button>

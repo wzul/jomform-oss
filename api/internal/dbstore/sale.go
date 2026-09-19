@@ -645,27 +645,14 @@ type SaleFilter struct {
 	Q        string // matches ref_code or buyer full name (case-insensitive)
 }
 
-// ListFilteredPage returns one page of sales across a set of accounts, newest
-// first, matching the optional filters, plus the total row count for the same
-// filter. Column-aligned with saleSelect/scanSale. Every clause targets sales
-// rows only (no joins), so the scan stays the single-column form.
-func (s *SaleStore) ListFilteredPage(ctx context.Context, accountIDs []string, f SaleFilter, page, limit int) ([]*Sale, int64, error) {
-	if len(accountIDs) == 0 {
-		return []*Sale{}, 0, nil
-	}
-	if page < 1 {
-		page = 1
-	}
-	if limit <= 0 {
-		limit = 20
-	}
-	if limit > 100 {
-		limit = 100
-	}
-
-	where := []string{"account_id = ANY($1)"}
+// saleWhere builds the shared WHERE clause + args for a sales read. $start is
+// the position the caller's account-id array occupies, so the same builder
+// serves the per-store queries and the merged record read (records.go), with
+// one definition of each filter's semantics.
+func saleWhere(accountIDs []string, f SaleFilter, start int) (string, []any) {
+	where := []string{"account_id = ANY($" + strconv.Itoa(start) + ")"}
 	args := []any{accountIDs}
-	next := func() int { return len(args) + 1 }
+	next := func() int { return start + len(args) }
 
 	if f.FormID != "" {
 		args = append(args, f.FormID)
@@ -687,8 +674,32 @@ func (s *SaleStore) ListFilteredPage(ctx context.Context, accountIDs []string, f
 		args = append(args, "%"+f.Q+"%")
 		where = append(where, "(ref_code ILIKE $"+strconv.Itoa(next()-1)+" OR client->>'full_name' ILIKE $"+strconv.Itoa(next()-1)+")")
 	}
+	return strings.Join(where, " AND "), args
+}
 
-	clause := strings.Join(where, " AND ")
+// ListFilteredPage returns one page of sales across a set of accounts, newest
+// first, matching the optional filters, plus the total row count for the same
+// filter. Column-aligned with saleSelect/scanSale. Every clause targets sales
+// rows only (no joins), so the scan stays the single-column form.
+//
+// Ordering carries an id tiebreaker: Postgres `now()` is the transaction
+// timestamp, so rows inserted in one transaction share created_at exactly and
+// an unordered LIMIT/OFFSET can repeat or skip rows across pages.
+func (s *SaleStore) ListFilteredPage(ctx context.Context, accountIDs []string, f SaleFilter, page, limit int) ([]*Sale, int64, error) {
+	if len(accountIDs) == 0 {
+		return []*Sale{}, 0, nil
+	}
+	if page < 1 {
+		page = 1
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	clause, args := saleWhere(accountIDs, f, 1)
 	offset := (page - 1) * limit
 
 	var total int64
@@ -699,7 +710,7 @@ func (s *SaleStore) ListFilteredPage(ctx context.Context, accountIDs []string, f
 
 	fullArgs := append(append([]any{}, args...), limit, offset)
 	rows, err := s.pool.Query(ctx,
-		saleSelect+" WHERE "+clause+" ORDER BY created_at DESC LIMIT $"+strconv.Itoa(len(args)+1)+" OFFSET $"+strconv.Itoa(len(args)+2),
+		saleSelect+" WHERE "+clause+" ORDER BY created_at DESC, id DESC LIMIT $"+strconv.Itoa(len(args)+1)+" OFFSET $"+strconv.Itoa(len(args)+2),
 		fullArgs...)
 	if err != nil {
 		return nil, 0, err
@@ -714,6 +725,31 @@ func (s *SaleStore) ListFilteredPage(ctx context.Context, accountIDs []string, f
 		out = append(out, sale)
 	}
 	return out, total, rows.Err()
+}
+
+// ByIDs hydrates a set of sales by id, scoped to an account set (ownership is
+// enforced inside the query). It is how the merged record read gets the rows it
+// selected in a different connection order, without re-implementing saleSelect
+// or its scan — the column alignment stays defined once, in this file.
+func (s *SaleStore) ByIDs(ctx context.Context, accountIDs []string, ids []string) ([]*Sale, error) {
+	if len(accountIDs) == 0 || len(ids) == 0 {
+		return []*Sale{}, nil
+	}
+	rows, err := s.pool.Query(ctx,
+		saleSelect+" WHERE account_id = ANY($1) AND id = ANY($2)", accountIDs, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []*Sale{}
+	for rows.Next() {
+		sale, err := scanSale(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, sale)
+	}
+	return out, rows.Err()
 }
 
 // CountByAccounts counts sales across a set of accounts.

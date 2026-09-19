@@ -32,6 +32,14 @@ type Submission struct {
 // SubmissionStore wraps pgx for the submissions table.
 type SubmissionStore struct{ pool *pgxpool.Pool }
 
+// submissionSelect is the column list every submissions read scans. It is a
+// constant for the same reason saleSelect is: the migration/scan-drift guard in
+// this package asserts that a read's column count matches the struct it scans,
+// and a hand-repeated SELECT (which this read used to carry) is exactly how
+// such a list drifts.
+const submissionSelect = `SELECT id, form_id, account_id, data, is_spam, spam_reason, created_at
+	FROM submissions`
+
 // NewSubmissionStore builds a SubmissionStore.
 func NewSubmissionStore(pool *pgxpool.Pool) *SubmissionStore { return &SubmissionStore{pool: pool} }
 
@@ -103,38 +111,43 @@ func (s *SubmissionStore) ListByAccountsFormPage(ctx context.Context, accountIDs
 // so only the date range and the free-text search over the recorded field
 // values apply; the form + account scope is always enforced by the caller.
 // Date fields are YYYY-MM-DD inclusive day bounds, matching SaleFilter.
+//
+// FormIDs carries a SET of response-mode forms: the merged read (records.go)
+// has to match the submissions of every response form in the caller's scope,
+// since an unfiltered read covers all of them. FormID remains for the
+// single-form reads (a per-form deep link, an MCP call with form_id).
 type SubmissionFilter struct {
 	FormID   string
-	DateFrom string // YYYY-MM-DD, inclusive
-	DateTo   string // YYYY-MM-DD, inclusive
-	Q        string // matches any recorded field value (case-insensitive)
+	FormIDs  []string // when set, takes precedence over FormID
+	DateFrom string   // YYYY-MM-DD, inclusive
+	DateTo   string   // YYYY-MM-DD, inclusive
+	Q        string   // matches any recorded field value (case-insensitive)
 }
 
-// ListFilteredPage returns one page of submissions for a single form across a
-// set of accounts, honouring the optional date range + free-text filter, newest
-// first, plus the total row count for the same filter (for paging). Ownership
-// is enforced inside the query.
-//
-// The row shape is the same as ListByAccountsFormPage (one submissions row per
-// entry); only the WHERE clause differs, so the scan stays column-aligned with
-// scanSubmission.
-func (s *SubmissionStore) ListFilteredPage(ctx context.Context, accountIDs []string, f SubmissionFilter, page, limit int) ([]*Submission, int64, error) {
-	if len(accountIDs) == 0 || f.FormID == "" {
-		return []*Submission{}, 0, nil
+// formClause builds the form predicate + its argument for a submissions read:
+// one form id, or a set of them. An empty filter matches no rows (the caller
+// must always say which form(s) it is reading) — never the whole table.
+func (f SubmissionFilter) formClause(col string, start int) (string, []any) {
+	if len(f.FormIDs) > 0 {
+		return col + " = ANY($" + strconv.Itoa(start) + ")", []any{f.FormIDs}
 	}
-	if page < 1 {
-		page = 1
+	if f.FormID != "" {
+		return col + " = $" + strconv.Itoa(start), []any{f.FormID}
 	}
-	if limit <= 0 {
-		limit = 20
-	}
-	if limit > 100 {
-		limit = 100
-	}
+	return "false", nil
+}
 
-	where := []string{"account_id = ANY($1)", "form_id = $2"}
-	args := []any{accountIDs, f.FormID}
-	next := func() int { return len(args) + 1 }
+// submissionWhere builds the shared WHERE clause + args for a submissions read.
+// $start is the position the account-id array occupies. One definition, used by
+// the per-form page read and by the merged record read (records.go).
+func submissionWhere(accountIDs []string, f SubmissionFilter, start int) (string, []any) {
+	where := []string{"account_id = ANY($" + strconv.Itoa(start) + ")"}
+	args := []any{accountIDs}
+	next := func() int { return start + len(args) }
+
+	fc, fa := f.formClause("form_id", next())
+	where = append(where, fc)
+	args = append(args, fa...)
 
 	if f.DateFrom != "" {
 		args = append(args, f.DateFrom+" 00:00:00")
@@ -150,8 +163,32 @@ func (s *SubmissionStore) ListFilteredPage(ctx context.Context, accountIDs []str
 		// value they saw in a response, not for a column name.
 		where = append(where, "data::text ILIKE $"+strconv.Itoa(next()-1))
 	}
+	return strings.Join(where, " AND "), args
+}
 
-	clause := strings.Join(where, " AND ")
+// ListFilteredPage returns one page of submissions for a form (or a set of
+// forms) across a set of accounts, honouring the optional date range +
+// free-text filter, newest first, plus the total row count for the same filter
+// (for paging). Ownership is enforced inside the query.
+//
+// The row shape is the same as ListByAccountsFormPage (one submissions row per
+// entry); only the WHERE clause differs, so the scan stays column-aligned with
+// scanSubmission.
+func (s *SubmissionStore) ListFilteredPage(ctx context.Context, accountIDs []string, f SubmissionFilter, page, limit int) ([]*Submission, int64, error) {
+	if len(accountIDs) == 0 || (f.FormID == "" && len(f.FormIDs) == 0) {
+		return []*Submission{}, 0, nil
+	}
+	if page < 1 {
+		page = 1
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	clause, args := submissionWhere(accountIDs, f, 1)
 	offset := (page - 1) * limit
 
 	var total int64
@@ -161,9 +198,8 @@ func (s *SubmissionStore) ListFilteredPage(ctx context.Context, accountIDs []str
 	}
 	fullArgs := append(append([]any{}, args...), limit, offset)
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, form_id, account_id, data, is_spam, spam_reason, created_at
-		 FROM submissions WHERE `+clause+
-			` ORDER BY created_at DESC LIMIT $`+strconv.Itoa(len(args)+1)+
+		submissionSelect+` WHERE `+clause+
+			` ORDER BY created_at DESC, id DESC LIMIT $`+strconv.Itoa(len(args)+1)+
 			` OFFSET $`+strconv.Itoa(len(args)+2),
 		fullArgs...)
 	if err != nil {
@@ -179,6 +215,30 @@ func (s *SubmissionStore) ListFilteredPage(ctx context.Context, accountIDs []str
 		out = append(out, sub)
 	}
 	return out, total, rows.Err()
+}
+
+// ByIDs hydrates a set of submissions by id, scoped to an account set. Used by
+// the merged record read (records.go) so the submissions row shape and its scan
+// stay defined once, in this file.
+func (s *SubmissionStore) ByIDs(ctx context.Context, accountIDs []string, ids []string) ([]*Submission, error) {
+	if len(accountIDs) == 0 || len(ids) == 0 {
+		return []*Submission{}, nil
+	}
+	rows, err := s.pool.Query(ctx,
+		submissionSelect+` WHERE account_id = ANY($1) AND id = ANY($2)`, accountIDs, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []*Submission{}
+	for rows.Next() {
+		sub, err := scanSubmission(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, sub)
+	}
+	return out, rows.Err()
 }
 
 // ListSpamByAccountsPage returns one page of spam-flagged submissions across

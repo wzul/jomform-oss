@@ -41,11 +41,11 @@ const TOOL_GROUPS: { group: string; tools: { name: string; desc: string }[] }[] 
   {
     group: "Sales",
     tools: [
-      { name: "list_sales", desc: "Senarai jualan terkini (terbaru dahulu). Setiap jualan membawa refunded_sen (jumlah telah direfund), outstanding_sen (baki boleh refund) dan refund_status (none|partial|full) supaya agen boleh bezakan refund sebahagian daripada refund penuh (issue #518). Jika form_id yang diberi ialah borang mode 'response' (tiada bayaran), senarai yang dipulangkan ialah RESPONS borang itu (sale_type 'response', submission_id + data) — sama seperti halaman Sales, bukan senarai kosong." },
+      { name: "list_sales", desc: "Senarai rekod terkini (terbaru dahulu). Tanpa form_id ini ialah SELURUH set rekod akaun: jualan DAN respons borang mode 'response' (sale_type 'response', submission_id + data) — sama seperti halaman Sales, bukan senarai kosong atau separa. Dengan form_id, mode borang itu menentukan: borang bayaran → jualan, borang respons → respons. Setiap jualan: refunded_sen (telah direfund), outstanding_sen (baki boleh refund), refund_status (none|partial|full) — issue #518. Status ialah soalan bayaran, jadi menetapkan status mengecualikan bahagian respons." },
       { name: "get_sales_summary", desc: "Ringkasan jualan: bilangan mengikut status (termasuk refunded), refunded_sen (jumlah direfund) dan revenue_sen (nilai bersih selepas refund, issue #518)." },
       { name: "confirm_sale", desc: "Sahkan jualan (contoh: selepas semak bukti bank transfer)." },
       { name: "get_sale_email_status", desc: "Status emel resit untuk satu jualan: Sent \u2192 Delivered \u2192 Opened \u2192 (Clicked) dengan masa. Guna ref_code dari list_sales." },
-      { name: "export_sales_csv", desc: "Eksport jualan akaun sebagai CSV (ref_code, status, payment_method, buyer, total_rm, created_at, purchase_id, refunded_rm, outstanding_rm, refund_status). Kolum refund mendedahkan refund sebahagian (issue #518). Boleh tapis form_id. Pulangkan kandungan csv." },
+      { name: "export_sales_csv", desc: "Eksport set rekod akaun sebagai CSV. Tanpa form_id ia mengandungi jualan DAN respons (satu lajur record_type menandakan setiap baris, serta lajur jawapan yang direkodkan), sepadan dengan senarai yang dipaparkan. Boleh tapis form_id/status/date_from/date_to/q — penapis yang sama seperti senarai, supaya fail dan halaman sepadan. Kolum refund mendedahkan refund sebahagian (issue #518). Pulangkan kandungan csv." },
     ],
   },
   {

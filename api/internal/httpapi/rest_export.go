@@ -1,4 +1,22 @@
-// CSV export of account sales (session or API-key authed).
+// CSV export of the /sales record set (session or API-key authed).
+//
+// The export button lives on the Sales page, directly above the list, so the
+// file it produces has to BE that list. Four separate defects broke that:
+//
+//  1. It read ONE account (`actx.Account.ID`) while the list above it read the
+//     whole workspace account SET — a multi-account workspace exported a subset
+//     of what the page displayed.
+//  2. It ignored every filter except form_id, so a page filtered to
+//     `status=failed` exported every sale.
+//  3. It asked for 5000 rows and got 50: the sales list clamps any limit above
+//     200 down to 50, so a "complete" export silently stopped at the newest 50
+//     rows. Latent at production's row count, wrong by construction.
+//  4. It only followed the form's mode when a form_id was given, so exporting
+//     "All" dropped every response entry.
+//
+// All four are one class of bug — a reader that answered a different question
+// than the list it sits on — so they are fixed together, from the one scope
+// decision (dbstore.ResolveRecordScope) and the same filter set.
 package httpapi
 
 import (
@@ -13,89 +31,173 @@ import (
 	"github.com/wzul/jomform/api/internal/dbstore"
 )
 
+// exportSalesCSV writes GET /v1/rest/sales/export.csv.
+//
+// The same scope rule the list uses decides the columns:
+//
+//   - a single response-mode form selected → the answers-columns export (issue
+//     #604; a response has no money, so the sales columns would all be empty);
+//   - anything that includes the scope's response forms → the sales columns for
+//     sale rows, extended with the union of the response forms' answer keys, one
+//     row per record;
+//   - sales only → the sales columns.
+//
+// Every filter the list applies is applied here, and the read is
+// paging-complete, so the file and the page hold the same rows.
 func (h *RESTHandlers) exportSalesCSV(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	scope, ok := h.scopeOr403(w, r, actx)
 	if !ok {
 		return
 	}
-	// Optional per-form filter: /v1/rest/sales/export.csv?form_id=<uuid>.
 	formID := r.URL.Query().Get("form_id")
-	// Issue #604: the export button lives on the same page as the list, so it has
-	// to follow the same table choice — a response-mode form's entries are
+	filter := recordFilter(r)
+
+	// Issue #604: the export button lives on the same page as the list, so it
+	// has to follow the same table choice — a response-mode form's entries are
 	// submissions, and exporting `sales` for one produced a header-only file
 	// while the page above it listed entries.
-	if _, isResponse := h.responseModeForm(r, scope, formID); isResponse {
-		h.exportResponsesCSV(w, r, scope, formID, actx.Account.Slug)
-		return
-	}
-	// Account scoping is unchanged: sales must belong to actx.Account.ID.
-	var sales []*dbstore.Sale
-	var err error
-	if formID != "" {
-		sales, err = h.Sales.ListByAccountForm(r.Context(), actx.Account.ID, formID, 5000)
-	} else {
-		sales, err = h.Sales.ListByAccount(r.Context(), actx.Account.ID, 5000)
-	}
+	sc, err := h.recordScope(r.Context(), scope, formID)
 	if err != nil {
 		respondErr(w, r, err)
 		return
 	}
-	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-	w.Header().Set("Content-Disposition",
-		fmt.Sprintf(`attachment; filename="jomform-sales-%s.csv"`, actx.Account.Slug))
-	cw := csv.NewWriter(w)
+	// Account scoping is the workspace account SET, exactly as the list uses
+	// (the export used to read one account and silently omit the rest).
+	records, _, err := h.Sales.MergedAll(r.Context(), scope.Accounts, sc, filter)
+	if err != nil {
+		respondErr(w, r, err)
+		return
+	}
+	if sc.OnlyResponses {
+		subs := make([]*dbstore.Submission, 0, len(records))
+		for _, rec := range records {
+			if rec.Submission != nil {
+				subs = append(subs, rec.Submission)
+			}
+		}
+		writeResponsesCSV(w, subs, actx.Account.Slug)
+		return
+	}
+	writeRecordsCSV(w, records, actx.Account.Slug)
+}
+
+// writeRecordsCSV writes the merged export: the sales columns, extended with
+// one column per distinct response answer key when the record set contains
+// response rows. The columns are the SAME for every row, so a spreadsheet can
+// sort and filter the file as one table; a response row leaves the money
+// columns at 0.00 and a sale row leaves the answer columns empty.
+func writeRecordsCSV(w http.ResponseWriter, records []*dbstore.Record, accountSlug string) {
+	keys := []string{}
+	seen := map[string]bool{}
+	haveSubs := false
+	for _, rec := range records {
+		if rec.Submission == nil {
+			continue
+		}
+		haveSubs = true
+		for k := range rec.Submission.Data {
+			if !seen[k] {
+				seen[k] = true
+				keys = append(keys, k)
+			}
+		}
+	}
+	// One column per answer key, in a stable order, so the same form always
+	// exports the same columns.
+	sort.Strings(keys)
+
 	// Issue #518: refunded_rm / outstanding_rm / refund_status make a partial
 	// refund visible in the export instead of the sale reading as fully paid.
-	_ = cw.Write([]string{
-		"ref_code", "status", "payment_method", "buyer_name", "buyer_email",
+	header := []string{"ref_code", "status", "payment_method", "buyer_name", "buyer_email",
 		"total_rm", "created_at", "purchase_id", "table_number",
-		"refunded_rm", "outstanding_rm", "refund_status",
-	})
-	for _, s := range sales {
-		_ = cw.Write([]string{
-			s.RefCode,
-			s.Status,
-			s.PaymentMethod,
-			csvguard.Cell(s.Client.FullName),
-			csvguard.Cell(s.Client.Email),
-			strconv.FormatFloat(float64(s.TotalSen)/100, 'f', 2, 64),
-			s.CreatedAt.UTC().Format("2006-01-02 15:04:05"),
-			s.ChipPurchaseID,
-			csvguard.Cell(s.TableNumber),
-			strconv.FormatFloat(float64(s.RefundedSen)/100, 'f', 2, 64),
-			strconv.FormatFloat(float64(s.OutstandingSen())/100, 'f', 2, 64),
-			s.RefundStatus(),
-		})
+		"refunded_rm", "outstanding_rm", "refund_status"}
+	if haveSubs {
+		// record_type + submission_id only when the set is actually mixed: a
+		// pure sales export keeps the columns its consumers already parse.
+		header = append([]string{"record_type", "submission_id"}, header...)
+		header = append(header, keys...)
+	}
+
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition",
+		fmt.Sprintf(`attachment; filename="jomform-sales-%s.csv"`, accountSlug))
+	cw := csv.NewWriter(w)
+	_ = cw.Write(header)
+
+	for _, rec := range records {
+		var row []string
+		if rec.Sale != nil {
+			s := rec.Sale
+			row = []string{
+				s.RefCode, s.Status, s.PaymentMethod,
+				csvguard.Cell(s.Client.FullName), csvguard.Cell(s.Client.Email),
+				strconv.FormatFloat(float64(s.TotalSen)/100, 'f', 2, 64),
+				s.CreatedAt.UTC().Format("2006-01-02 15:04:05"),
+				s.ChipPurchaseID, csvguard.Cell(s.TableNumber),
+				strconv.FormatFloat(float64(s.RefundedSen)/100, 'f', 2, 64),
+				strconv.FormatFloat(float64(s.OutstandingSen())/100, 'f', 2, 64),
+				s.RefundStatus(),
+			}
+			if haveSubs {
+				row = append([]string{dbstore.RecordKindSale, ""}, row...)
+				for range keys {
+					row = append(row, "")
+				}
+			}
+		} else if rec.Submission != nil {
+			sub := rec.Submission
+			buyer, email := subBuyer(sub)
+			row = []string{
+				sub.ID, "response", "",
+				csvguard.Cell(buyer), csvguard.Cell(email),
+				"0.00",
+				sub.CreatedAt.UTC().Format("2006-01-02 15:04:05"),
+				"", "",
+				"0.00", "0.00", dbstore.RefundNone,
+			}
+			if haveSubs {
+				row = append([]string{dbstore.RecordKindSubmission, sub.ID}, row...)
+			}
+			for _, k := range keys {
+				row = append(row, csvguard.Cell(anyToCSVText(sub.Data[k])))
+			}
+		} else {
+			continue
+		}
+		_ = cw.Write(row)
 	}
 	cw.Flush()
 }
 
-// exportResponsesCSV writes a response-mode form's entries as CSV. The columns
-// differ from the sales export on purpose: a response has no reference code, no
-// payment and no money — the value is the recorded answers, so they are emitted
-// as one column per distinct answer key (issue #604).
-func (h *RESTHandlers) exportResponsesCSV(w http.ResponseWriter, r *http.Request, scope *scopeResult, formID, accountSlug string) {
-	subs, _, err := h.Submissions.ListFilteredPage(r.Context(), scope.Accounts, dbstore.SubmissionFilter{
-		FormID: formID, Q: r.URL.Query().Get("q"),
-	}, 1, 100)
-	if err != nil {
-		respondErr(w, r, err)
-		return
+// subBuyer reads the buyer identity the submit handler folds into a response's
+// recorded answers (public.go handleResponseSubmit), so a response row carries
+// a name/email in the export exactly as it does in the list.
+func subBuyer(sub *dbstore.Submission) (name, email string) {
+	if sub == nil || sub.Data == nil {
+		return "", ""
 	}
+	name, _ = sub.Data["full_name"].(string)
+	email, _ = sub.Data["email"].(string)
+	return name, email
+}
+
+// writeResponsesCSV emits a response-only export: one column per distinct
+// answer key (issue #604). The columns differ from the sales export on purpose
+// — a response has no reference code, no payment and no money, so the value is
+// the recorded answers, emitted as one column each.
+func writeResponsesCSV(w http.ResponseWriter, subs []*dbstore.Submission, accountSlug string) {
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition",
+		fmt.Sprintf(`attachment; filename="jomform-responses-%s.csv"`, accountSlug))
+	cw := csv.NewWriter(w)
 	if len(subs) == 0 {
 		// No rows means no answer keys to head, so emit just the identity
 		// columns rather than a bare empty file.
-		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-		w.Header().Set("Content-Disposition",
-			fmt.Sprintf(`attachment; filename="jomform-responses-%s.csv"`, accountSlug))
-		cw := csv.NewWriter(w)
 		_ = cw.Write([]string{"submission_id", "created_at"})
 		cw.Flush()
 		return
 	}
-	// One column per answer key, in the order the API returns them, so the same
-	// form always exports the same columns.
-	keys := make([]string, 0, 8)
+	keys := []string{}
 	seen := map[string]bool{}
 	for _, sub := range subs {
 		for k := range sub.Data {
@@ -107,10 +209,6 @@ func (h *RESTHandlers) exportResponsesCSV(w http.ResponseWriter, r *http.Request
 	}
 	sort.Strings(keys)
 
-	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-	w.Header().Set("Content-Disposition",
-		fmt.Sprintf(`attachment; filename="jomform-responses-%s.csv"`, accountSlug))
-	cw := csv.NewWriter(w)
 	_ = cw.Write(append([]string{"submission_id", "created_at"}, keys...))
 	for _, sub := range subs {
 		row := []string{

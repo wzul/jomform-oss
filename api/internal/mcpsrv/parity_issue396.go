@@ -20,6 +20,8 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -840,42 +842,188 @@ func (s *Server) setSystemSetting(ctx context.Context, _ *mcp.CallToolRequest, i
 
 // ─── Sales export CSV (issue #396) ─────────────────────────────────────────
 
+// exportSalesIn is the export_sales_csv input. Status/date/q are accepted so an
+// agent can export the SAME set the list_sales call (or the dashboard's filtered
+// page) shows — an export that ignored the filters produced a different data set
+// from the list it mirrors.
 type exportSalesIn struct {
-	FormID string `json:"form_id,omitempty" jsonschema:"Optional — hadkan eksport kepada jualan borang ini"`
+	FormID   string `json:"form_id,omitempty" jsonschema:"Optional — hadkan eksport kepada jualan borang ini"`
+	Status   string `json:"status,omitempty" jsonschema:"Optional — hadkan kepada status: pending|paid|confirmed|failed|cancelled"`
+	DateFrom string `json:"date_from,omitempty" jsonschema:"Optional — YYYY-MM-DD, termasuk hari itu"`
+	DateTo   string `json:"date_to,omitempty" jsonschema:"Optional — YYYY-MM-DD, termasuk hari itu"`
+	Q        string `json:"q,omitempty" jsonschema:"Optional — cari pada kod rujukan/nama pembeli (jualan) atau nilai jawapan (respons)"`
 }
 
 func (s *Server) exportSalesCSV(ctx context.Context, _ *mcp.CallToolRequest, in exportSalesIn) (*mcp.CallToolResult, map[string]string, error) {
-	acc, err := s.accountAndScope(ctx, false)
+	accs, err := s.accountScopes(ctx, false)
 	if err != nil {
 		return nil, nil, err
 	}
-	var sales []*dbstore.Sale
-	if in.FormID != "" {
-		sales, err = s.deps.Sales.ListByAccountForm(ctx, acc, in.FormID, 5000)
-	} else {
-		sales, err = s.deps.Sales.ListByAccount(ctx, acc, 5000)
+	if s.deps.Sales == nil {
+		return nil, nil, fmt.Errorf("sales tidak tersedia")
 	}
+	// Same scope decision as list_sales and as the REST export: an unfiltered
+	// export covers the account's sales AND its response entries, and a status
+	// filter excludes the responses half (a submission has no status).
+	sc, err := s.recordScope(ctx, accs, in.FormID)
+	if err != nil {
+		return nil, nil, err
+	}
+	filter := dbstore.RecordFilter{
+		FormID: in.FormID, Status: in.Status,
+		DateFrom: in.DateFrom, DateTo: in.DateTo, Q: in.Q,
+	}
+	records, _, err := s.deps.Sales.MergedAll(ctx, accs, sc, filter)
 	if err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
+
 	var sb strings.Builder
 	cw := csv.NewWriter(&sb)
+	if sc.OnlyResponses {
+		// A response form's export is its recorded answers, not empty sales
+		// columns — the same choice REST's export makes (issue #604).
+		writeSubmissionsCSV(cw, records)
+		cw.Flush()
+		return nil, map[string]string{"csv": sb.String(), "count": fmt.Sprintf("%d", len(records))}, nil
+	}
 	// Issue #518: mirror the REST export's refund columns so an agent gets the
 	// same partial-refund picture from the MCP CSV.
-	_ = cw.Write([]string{"ref_code", "status", "payment_method", "buyer_name", "buyer_email", "total_rm", "created_at", "purchase_id", "refunded_rm", "outstanding_rm", "refund_status"})
-	for _, s := range sales {
-		_ = cw.Write([]string{
-			s.RefCode, s.Status, s.PaymentMethod,
-			csvguard.Cell(s.Client.FullName), csvguard.Cell(s.Client.Email),
-			fmt.Sprintf("%.2f", float64(s.TotalSen)/100),
-			s.CreatedAt.UTC().Format("2006-01-02 15:04:05"), s.ChipPurchaseID,
-			fmt.Sprintf("%.2f", float64(s.RefundedSen)/100),
-			fmt.Sprintf("%.2f", float64(s.OutstandingSen())/100),
-			s.RefundStatus(),
-		})
+	header := []string{"ref_code", "status", "payment_method", "buyer_name", "buyer_email",
+		"total_rm", "created_at", "purchase_id", "table_number",
+		"refunded_rm", "outstanding_rm", "refund_status"}
+	keys, haveSubs := recordAnswerKeys(records)
+	if haveSubs {
+		header = append([]string{"record_type", "submission_id"}, header...)
+		header = append(header, keys...)
+	}
+	_ = cw.Write(header)
+	for _, rec := range records {
+		if rec.Sale != nil {
+			sl := rec.Sale
+			row := []string{
+				sl.RefCode, sl.Status, sl.PaymentMethod,
+				csvguard.Cell(sl.Client.FullName), csvguard.Cell(sl.Client.Email),
+				fmt.Sprintf("%.2f", float64(sl.TotalSen)/100),
+				sl.CreatedAt.UTC().Format("2006-01-02 15:04:05"), sl.ChipPurchaseID,
+				csvguard.Cell(sl.TableNumber),
+				fmt.Sprintf("%.2f", float64(sl.RefundedSen)/100),
+				fmt.Sprintf("%.2f", float64(sl.OutstandingSen())/100),
+				sl.RefundStatus(),
+			}
+			if haveSubs {
+				row = append([]string{dbstore.RecordKindSale, ""}, row...)
+				for range keys {
+					row = append(row, "")
+				}
+			}
+			_ = cw.Write(row)
+			continue
+		}
+		if rec.Submission == nil {
+			continue
+		}
+		sub := rec.Submission
+		row := []string{
+			sub.ID, "response", "",
+			csvguard.Cell(subStrField(sub, "full_name")), csvguard.Cell(subStrField(sub, "email")),
+			"0.00",
+			sub.CreatedAt.UTC().Format("2006-01-02 15:04:05"), "", "",
+			"0.00", "0.00", dbstore.RefundNone,
+		}
+		if haveSubs {
+			row = append([]string{dbstore.RecordKindSubmission, sub.ID}, row...)
+		}
+		for _, k := range keys {
+			row = append(row, csvguard.Cell(submissionCSVText(sub.Data[k])))
+		}
+		_ = cw.Write(row)
 	}
 	cw.Flush()
-	return nil, map[string]string{"csv": sb.String(), "count": fmt.Sprintf("%d", len(sales))}, nil
+	return nil, map[string]string{"csv": sb.String(), "count": fmt.Sprintf("%d", len(records))}, nil
+}
+
+// recordAnswerKeys collects the distinct answer keys across a record set's
+// response rows (sorted, so a form always exports the same columns) and reports
+// whether the set contains any response row at all.
+func recordAnswerKeys(records []*dbstore.Record) ([]string, bool) {
+	keys := []string{}
+	seen := map[string]bool{}
+	have := false
+	for _, rec := range records {
+		if rec.Submission == nil {
+			continue
+		}
+		have = true
+		for k := range rec.Submission.Data {
+			if !seen[k] {
+				seen[k] = true
+				keys = append(keys, k)
+			}
+		}
+	}
+	sort.Strings(keys)
+	return keys, have
+}
+
+func writeSubmissionsCSV(cw *csv.Writer, records []*dbstore.Record) {
+	subs := make([]*dbstore.Submission, 0, len(records))
+	for _, rec := range records {
+		if rec.Submission != nil {
+			subs = append(subs, rec.Submission)
+		}
+	}
+	if len(subs) == 0 {
+		_ = cw.Write([]string{"submission_id", "created_at"})
+		return
+	}
+	keys := []string{}
+	seen := map[string]bool{}
+	for _, sub := range subs {
+		for k := range sub.Data {
+			if !seen[k] {
+				seen[k] = true
+				keys = append(keys, k)
+			}
+		}
+	}
+	sort.Strings(keys)
+	_ = cw.Write(append([]string{"submission_id", "created_at"}, keys...))
+	for _, sub := range subs {
+		row := []string{sub.ID, sub.CreatedAt.UTC().Format("2006-01-02 15:04:05")}
+		for _, k := range keys {
+			row = append(row, csvguard.Cell(submissionCSVText(sub.Data[k])))
+		}
+		_ = cw.Write(row)
+	}
+}
+
+func subStrField(sub *dbstore.Submission, key string) string {
+	if sub == nil || sub.Data == nil {
+		return ""
+	}
+	v, _ := sub.Data[key].(string)
+	return v
+}
+
+// submissionCSVText renders one recorded answer as CSV text; non-string values
+// are emitted as their JSON text rather than a Go-formatting artifact.
+func submissionCSVText(v any) string {
+	switch t := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return t
+	case float64:
+		return strconv.FormatFloat(t, 'f', -1, 64)
+	case bool:
+		return strconv.FormatBool(t)
+	default:
+		if b, err := json.Marshal(v); err == nil {
+			return string(b)
+		}
+		return ""
+	}
 }
 
 // ─── Cloudflare (issue #396) ──────────────────────────────────────────────

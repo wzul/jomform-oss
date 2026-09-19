@@ -123,6 +123,35 @@ func (s *FormStore) ListByAccount(ctx context.Context, accountID string) ([]*For
 	return out, rows.Err()
 }
 
+// ListByAccounts lists every non-deleted form across a SET of accounts.
+// Templates (is_template) are excluded, matching ListByAccount. Ownership is
+// enforced inside the query.
+//
+// The multi-account read exists for the /sales record decision (records.go):
+// an unfiltered read has to know which forms in the account scope are
+// response-mode forms, and resolving that per account would be N queries and
+// would silently miss a form when the caller's scope spans accounts (the same
+// reason GetByIDInAccounts exists).
+func (s *FormStore) ListByAccounts(ctx context.Context, accountIDs []string) ([]*Form, error) {
+	if len(accountIDs) == 0 {
+		return []*Form{}, nil
+	}
+	rows, err := s.pool.Query(ctx, formSelect+" AND account_id = ANY($1) AND NOT is_template ORDER BY created_at DESC", accountIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []*Form{}
+	for rows.Next() {
+		f, serr := s.scanOne(rows)
+		if serr != nil {
+			return nil, serr
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
 // GetByID fetches one non-deleted form scoped to account.
 func (s *FormStore) GetByID(ctx context.Context, accountID, id string) (*Form, error) {
 	return s.scanOne(s.pool.QueryRow(ctx,

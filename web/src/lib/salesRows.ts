@@ -15,6 +15,16 @@
 
 export type RowKind = "sale" | "response";
 
+// RowView is what the LIST renders: one of the two row kinds, or "mixed" now
+// that the API can return a combined list.
+//
+// Until this existed, `listView` returned "response" only when EVERY row was a
+// response and otherwise "sale" — so a mixed list rendered through the sales
+// layout, whose 9 columns a response row (5 cells) does not fill. The API now
+// serves sales + responses together when no form filter is set, so the list has
+// to have an answer for that case rather than pretend it cannot happen.
+export type RowView = RowKind | "mixed";
+
 // Minimal shape both row kinds satisfy. Deliberately structural: the page's own
 // Sale type widens this. `ref_code`/`created_at` are here because rowKey has to
 // accept either kind of row (a sale is keyed by its reference, a response by its
@@ -82,29 +92,51 @@ export function rowKey(row: RowLike | null | undefined): string {
 // listView decides what the LIST (header + per-row layout) shows, from the rows
 // themselves.
 //
-// The rule: a list shows the answers view exactly when every row it holds is a
-// response. That is the same decision the page used to make from `responsesView`
-// (which also consulted the filtered form's `mode`), but derived per row — so
-// the header, the caption and each row agree with each other ALWAYS, including
-// while the forms list is still in flight. No request ordering can make one row
-// render through the other branch's layout, which is what left stale nodes.
+// Three outcomes:
+//   - every row is a response → the answers view;
+//   - every row is a sale → the money view;
+//   - BOTH kinds present → "mixed", the combined layout (see the page).
+//
+// That last case is new: the API used to be unable to produce a mixed list (no
+// form filter meant "sales only"), so the old rule treated anything not entirely
+// responses as a sale list and a mixed page would have rendered every response
+// through the 9-column sales layout with an empty ref and RM0.00. The API now
+// returns sales + responses together when no form filter is set, so the list
+// chrome and the per-row layout both need the third answer.
 //
 // An empty list is a sale list: the filtered form's mode is used only to pick
 // the right EMPTY/loading copy (emptyFor), because no row exists to classify.
-export function listView(rows: readonly RowLike[] | null | undefined): RowKind {
+export function listView(rows: readonly RowLike[] | null | undefined): RowView {
   if (!rows || rows.length === 0) return "sale";
-  return rows.every((r) => rowKind(r) === "response") ? "response" : "sale";
+  let sales = 0;
+  let responses = 0;
+  for (const r of rows) {
+    if (rowKind(r) === "response") responses++;
+    else sales++;
+  }
+  if (responses === 0) return "sale";
+  if (sales === 0) return "response";
+  return "mixed";
 }
 
 // responsesList decides whether the list CHROME should read as a responses list
 // — the header, the subtitle, the empty-state copy and the hidden status filter.
 // It prefers the per-row view (listView) and falls back to the selected form's
 // mode ONLY while there are no rows to classify (loading / genuinely empty),
-// because then there is no row to ask. A mixed list (which the API cannot
-// produce today — a form is either a payment form or a response form) is treated
-// as a sale list, preserving the money columns and the actions.
+// because then there is no row to ask.
+//
+// A MIXED list is NOT a responses list: the money columns still apply to half
+// the rows, so the chrome must read as the combined list (the page labels that
+// case separately) rather than claim the page is a responses view.
 export function responsesList(rows: readonly RowLike[], filteredFormIsResponse: boolean): boolean {
   return rows.length > 0 ? listView(rows) === "response" : filteredFormIsResponse;
+}
+
+// isMixedList reports whether the rows hold both kinds, so the page can label the
+// combined list and keep the money columns while still rendering each response
+// row through its own layout.
+export function isMixedList(rows: readonly RowLike[] | null | undefined): boolean {
+  return listView(rows) === "mixed";
 }
 
 // answerKeys returns the recorded answer keys of a response row, excluding the

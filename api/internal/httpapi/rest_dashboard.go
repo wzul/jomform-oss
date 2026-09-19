@@ -53,6 +53,13 @@ func (h *RESTHandlers) chipStatusData(ctx context.Context, accountID string) (ma
 // summaryData computes the sales rollup over a set of accounts. Shared by
 // GET /v1/rest/summary and the dashboard bundle (issue #29) so both stay
 // identical.
+//
+// SALES ONLY, deliberately: every number here is money or payment status
+// (counts per status, revenue net of refunds), and a response-mode form's entry
+// has neither. A response row must not be counted as a `pending` sale to make a
+// total look bigger — the record LIST shows responses (rest_records.go), the
+// money rollup reports money. The two are different questions and this comment
+// is where the boundary is recorded.
 func (h *RESTHandlers) summaryData(ctx context.Context, accountIDs []string) (map[string]any, error) {
 	sales, err := h.Sales.ListByAccounts(ctx, accountIDs, 200)
 	if err != nil {
@@ -89,7 +96,7 @@ func (h *RESTHandlers) dashboardBundle(w http.ResponseWriter, r *http.Request, a
 
 	bundle := struct {
 		Me               *map[string]any        `json:"me"`
-		Workspaces           []map[string]any       `json:"workspaces"`
+		Workspaces       []map[string]any       `json:"workspaces"`
 		ChipStatus       map[string]any         `json:"chip_status"`
 		Keys             []restKey              `json:"keys"`
 		Domains          []map[string]any       `json:"domains"`
@@ -227,17 +234,15 @@ func (h *RESTHandlers) dashboardBundle(w http.ResponseWriter, r *http.Request, a
 				if sum, err := h.summaryData(ctx, scope.Accounts); err == nil {
 					bundle.Summary = sum
 				}
-				if sales, total, err := h.Sales.ListByAccountsPage(ctx, scope.Accounts, 1, bundleSalesLimit); err == nil {
-					rows := restSaleRows(sales)
-					// Issue #106: surface the most recent receipt delivery
-					// event per sale in the initial bundle too.
-					emailStatus := h.latestEmailStatuses(ctx, sales)
-					for i := range rows {
-						rows[i].EmailStatus = emailStatus[rows[i].RefCode]
-					}
-					bundle.Sales = map[string]any{
-						"items": rows, "page": 1,
-						"limit": bundleSalesLimit, "total": total,
+				if sc, serr := h.recordScope(ctx, scope, ""); serr == nil {
+					if records, total, err := h.Sales.MergedPage(ctx, scope.Accounts, sc, dbstore.RecordFilter{}, 1, bundleSalesLimit); err == nil {
+						// Issue #106: last receipt delivery event per sale
+						// is resolved inside recordRows.
+						bundle.Sales = map[string]any{
+							"items": h.recordRows(ctx, records), "page": 1,
+							"limit": bundleSalesLimit, "total": total,
+							"mixed": sc.Mixed,
+						}
 					}
 				}
 				if fs, err := h.Sales.FormAnalyticsAccounts(ctx, scope.Accounts); err == nil {

@@ -14,6 +14,11 @@ const (
 	maxPageLimit     = 100
 )
 
+// maxRecordPageLimit is the row cap of a merged /sales page. It matches
+// maxPageLimit so a mixed list is not silently capped lower than the sales-only
+// list it replaces.
+const maxRecordPageLimit = maxPageLimit
+
 // scopeResult carries the account set a list endpoint should filter by.
 // When workspace is unset (or unusable), Accounts holds just the resolved
 // account — the pre-existing behaviour.

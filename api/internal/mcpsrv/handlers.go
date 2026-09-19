@@ -239,24 +239,24 @@ type listSalesIn struct {
 	Status string `json:"status,omitempty" jsonschema:"Optional — hadkan kepada status: pending|paid|confirmed|failed|cancelled"`
 }
 
-// responseModeFormID reports whether formID names a response-mode form inside
-// the call's account scope. Read-only, and the ONE place list_sales decides
-// which table to read — keyed on the form's config, never on a form id.
-func (s *Server) responseModeFormID(ctx context.Context, accs []string, formID string) bool {
-	if formID == "" || s.deps.Forms == nil {
-		return false
+// recordScope resolves the ONE sales-read decision for this MCP call: which
+// tables does the call cover, given the caller's account scope and its optional
+// form_id. It is the same dbstore.ResolveRecordScope the REST list and export
+// use, so an agent and the dashboard cannot be told different things about the
+// same account.
+//
+// Read-only. A failure to read the forms is returned rather than degraded to
+// "sales only": that silent fallback is what hid response entries from every
+// caller without a form_id (the reported defect).
+func (s *Server) recordScope(ctx context.Context, accs []string, formID string) (dbstore.RecordScope, error) {
+	if s.deps.Forms == nil {
+		return dbstore.ResolveRecordScope(nil, formID), nil
 	}
-	form, err := s.deps.Forms.GetByIDInAccounts(ctx, accs, formID)
-	if err != nil || form == nil {
-		return false
+	forms, err := s.deps.Forms.ListByAccounts(ctx, accs)
+	if err != nil {
+		return dbstore.RecordScope{}, fmt.Errorf("db: %w", err)
 	}
-	if form.Config == nil {
-		return false
-	}
-	if m, ok := form.Config["mode"].(string); ok {
-		return m == "response"
-	}
-	return false
+	return dbstore.ResolveRecordScope(forms, formID), nil
 }
 
 func (s *Server) listSales(ctx context.Context, _ *mcp.CallToolRequest, in listSalesIn) (*mcp.CallToolResult, *listOutput[saleOut], error) {
@@ -264,85 +264,86 @@ func (s *Server) listSales(ctx context.Context, _ *mcp.CallToolRequest, in listS
 	if err != nil {
 		return nil, nil, err
 	}
-	// Issue #604: a response-mode form records no sales at all — its entries are
-	// submissions (issue #171). Reading `sales` for such a form returns an empty
-	// list, which reads to an agent as "nothing was recorded". Return the
-	// submissions in the same shape, marked sale_type "response".
-	if s.responseModeFormID(ctx, accs, in.FormID) {
-		if s.deps.Submissions == nil {
-			return nil, nil, fmt.Errorf("submissions tidak tersedia")
-		}
-		subs, _, err := s.deps.Submissions.ListByAccountsFormPage(ctx, accs, in.FormID, 1, 50)
-		if err != nil {
-			return nil, nil, fmt.Errorf("db: %w", err)
-		}
-		out := make([]saleOut, 0, len(subs))
-		for _, sub := range subs {
-			client := ""
-			if v, ok := sub.Data["full_name"].(string); ok && v != "" {
-				client = v
-			} else if v, ok := sub.Data["email"].(string); ok {
-				client = v
-			}
-			out = append(out, saleOut{
-				Status:       "response",
-				SaleType:     "response",
-				Client:       client,
-				CreatedAt:    sub.CreatedAt.UTC().Format(time.RFC3339),
-				SubmissionID: sub.ID,
-				Data:         sub.Data,
-			})
-		}
-		return nil, newListOut(out), nil
+	if s.deps.Sales == nil {
+		return nil, nil, fmt.Errorf("sales tidak tersedia")
 	}
-	var sales []*dbstore.Sale
-	switch {
-	case in.Status != "":
-		// Issue #307: aggregate status-filtered sales across the user's workspaces.
-		// (No multi-account status method; iterate the account set.)
-		for _, a := range accs {
-			one, err := s.deps.Sales.ListByAccountStatus(ctx, a, in.Status, 50)
-			if err != nil {
-				return nil, nil, fmt.Errorf("db: %w", err)
-			}
-			sales = append(sales, one...)
-		}
-	case in.FormID != "":
-		// Scoped to one form across the user's workspaces (ownership enforced per
-		// store query).
-		rows, _, err := s.deps.Sales.ListByAccountsFormPage(ctx, accs, in.FormID, 1, 50)
-		if err != nil {
-			return nil, nil, fmt.Errorf("db: %w", err)
-		}
-		sales = rows
-	default:
-		sales, err = s.deps.Sales.ListByAccounts(ctx, accs, 50)
+	// Issue #604 + the unfiltered-read defect: a response-mode form records no
+	// sales — its entries are submissions (issue #171). Reading `sales` for such
+	// a form (or for no form at all, when the scope owns one) returns an empty
+	// or partial list, which reads to an agent as "nothing was recorded".
+	// Resolve the record set once, then read it from the merged query.
+	sc, err := s.recordScope(ctx, accs, in.FormID)
+	if err != nil {
+		return nil, nil, err
 	}
+	if in.Status != "" {
+		// The tool has no date/q inputs, so only the status filter can apply —
+		// and a status is a payment-status question a submission cannot answer,
+		// so the responses half is excluded rather than silently emptied.
+		sc.IncludeSubs = false
+		sc.ResponseFormIDs = nil
+		sc.Mixed = false
+		sc.OnlyResponses = false
+	}
+	filter := dbstore.RecordFilter{FormID: in.FormID, Status: in.Status}
+	records, _, err := s.deps.Sales.MergedPage(ctx, accs, sc, filter, 1, 50)
 	if err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
-	out := make([]saleOut, 0, len(sales))
-	for _, sl := range sales {
-		o := saleOut{
-			RefCode: sl.RefCode, Status: sl.Status, TotalSen: sl.TotalSen,
-			SaleType: sl.SaleType, Client: sl.Client.FullName,
-			CreatedAt:   sl.CreatedAt.UTC().Format(time.RFC3339),
-			RefundedSen: sl.RefundedSen, OutstandingSen: sl.OutstandingSen(),
-			RefundStatus: sl.RefundStatus(),
+	out := make([]saleOut, 0, len(records))
+	for _, rec := range records {
+		if rec.Submission != nil {
+			out = append(out, submissionSaleOut(rec.Submission))
+			continue
 		}
-		// Issue #153: include line items (with variation) for parity.
-		if len(sl.Items) > 0 {
-			o.Items = make([]saleItemOut, 0, len(sl.Items))
-			for _, it := range sl.Items {
-				o.Items = append(o.Items, saleItemOut{
-					ProductID: it.ProductID, Name: it.Name, PriceSen: it.PriceSen, Qty: it.Qty,
-					VariationID: it.VariationID, VariationName: it.VariationName,
-				})
-			}
+		if rec.Sale == nil {
+			continue
 		}
-		out = append(out, o)
+		out = append(out, saleOutFromSale(rec.Sale))
 	}
 	return nil, newListOut(out), nil
+}
+
+// submissionSaleOut renders a submission in the sales tool's row shape, marked
+// sale_type "response" — the same contract the REST list emits, so an agent
+// reading either surface gets one answer.
+func submissionSaleOut(sub *dbstore.Submission) saleOut {
+	client := ""
+	if v, ok := sub.Data["full_name"].(string); ok && v != "" {
+		client = v
+	} else if v, ok := sub.Data["email"].(string); ok {
+		client = v
+	}
+	return saleOut{
+		Status:       "response",
+		SaleType:     "response",
+		Client:       client,
+		CreatedAt:    sub.CreatedAt.UTC().Format(time.RFC3339),
+		SubmissionID: sub.ID,
+		Data:         sub.Data,
+	}
+}
+
+// saleOutFromSale maps a sale to the tool's row shape, including the line items
+// (issue #153) and the partial-refund accounting (issue #518).
+func saleOutFromSale(sl *dbstore.Sale) saleOut {
+	o := saleOut{
+		RefCode: sl.RefCode, Status: sl.Status, TotalSen: sl.TotalSen,
+		SaleType: sl.SaleType, Client: sl.Client.FullName,
+		CreatedAt:   sl.CreatedAt.UTC().Format(time.RFC3339),
+		RefundedSen: sl.RefundedSen, OutstandingSen: sl.OutstandingSen(),
+		RefundStatus: sl.RefundStatus(),
+	}
+	if len(sl.Items) > 0 {
+		o.Items = make([]saleItemOut, 0, len(sl.Items))
+		for _, it := range sl.Items {
+			o.Items = append(o.Items, saleItemOut{
+				ProductID: it.ProductID, Name: it.Name, PriceSen: it.PriceSen, Qty: it.Qty,
+				VariationID: it.VariationID, VariationName: it.VariationName,
+			})
+		}
+	}
+	return o
 }
 
 type summaryOut struct {

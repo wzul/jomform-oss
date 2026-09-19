@@ -17,7 +17,7 @@ import { Shell } from "../../components/Shell";
 import { useI18n, type Key } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDate, formatDateTime } from "../../lib/formatDate";
-import { answersPreview, answerText, isResponseForm, responsesList, rowKey, rowKind } from "../../lib/salesRows";
+import { answersPreview, answerText, isResponseForm, isMixedList, responsesList, rowKey, rowKind } from "../../lib/salesRows";
 import { workspaceQuery } from "../../lib/workspace";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 
@@ -500,14 +500,27 @@ function SalesPageInner() {
     setPage(1);
   }
 
-  // CSV export — same endpoint the builder uses, honors the form filter.
+  // CSV export — same endpoint the builder uses. It must carry the SAME filters
+  // the list is showing, because the button sits directly above the list: an
+  // export that ignored status/date/q produced a different data set from the
+  // page, and (before the server fix) an unfiltered export dropped every
+  // response entry the list showed.
   const exportUrl = useMemo(() => {
     const qs = new URLSearchParams();
     if (formFilter) qs.set("form_id", formFilter);
+    // Issue #604: a response has no payment status, so the control is hidden in
+    // that view — do not send a stale value (mirrors loadSales). Read the form's
+    // mode directly: `filteredForm` is derived further down the component and
+    // this memo runs during the same render pass (a forward reference here would
+    // be a temporal-dead-zone crash, not a stale value).
+    if (statusFilter && !isResponseForm(forms, formFilter)) qs.set("status", statusFilter);
+    if (dateFrom) qs.set("date_from", dateFrom);
+    if (dateTo) qs.set("date_to", dateTo);
+    if (q.trim()) qs.set("q", q.trim());
     const sp = workspaceQuery();
     const sep = sp ? "&" : "";
     return `/api/rest/sales/export.csv?${qs.toString()}${sep}${sp.replace("?", "")}`;
-  }, [formFilter]);
+  }, [formFilter, statusFilter, dateFrom, dateTo, q, forms]);
 
   // drawer focus management (mirrors Shell #104: focus + Escape + Tab trap)
   useEffect(() => {
@@ -555,6 +568,13 @@ function SalesPageInner() {
   // view (2 phantom rows over the 3 real ones).
   const filteredForm = isResponseForm(forms, formFilter);
   const responsesView = responsesList(rows, filteredForm);
+  // A MIXED list (both kinds on one page) is now producible: with no form
+  // filter the API returns the account's sales AND its response entries. The
+  // table then has to render BOTH row layouts under one header, so it uses the
+  // combined column set below instead of the responses-only one; each row still
+  // picks its own layout from rowKind, so no row can be rendered through the
+  // wrong branch.
+  const mixedView = isMixedList(rows);
 
   return (
     <Shell active="sales">
@@ -565,7 +585,11 @@ function SalesPageInner() {
               {responsesView ? t("bld.responsesThisForm") : t("sales.title")}
             </h1>
             <p className="max-w-xl text-sm text-[var(--jf-muted)]">
-              {responsesView ? t("bld.responsesSubtitle") : t("sales.subtitle")}
+              {responsesView
+                ? t("bld.responsesSubtitle")
+                : mixedView
+                  ? t("sales.mixedSubtitle")
+                  : t("sales.subtitle")}
             </p>
           </div>
           {/* Issue #447: realtime status + per-workspace sound toggle. */}
@@ -706,6 +730,23 @@ function SalesPageInner() {
                   <th className="hidden px-2 py-3 font-medium sm:table-cell">{t("sales.form")}</th>
                   <th className="px-4 py-3 text-right font-medium">{t("sales.actions")}</th>
                 </tr>
+              ) : mixedView ? (
+                /* A MIXED list: sales and responses on one page. One header has
+                   to serve both row layouts, so it is the COMBINED column set —
+                   ref/type, buyer, items-or-answers, amount, status, form, date,
+                   actions — and every row below emits exactly these 8 cells.
+                   Without this branch the responses rendered through the 9-column
+                   sales layout with an empty ref and RM0.00. */
+                <tr className="border-b border-[var(--jf-border)] text-left text-[10px] uppercase tracking-wide text-[var(--jf-muted)]">
+                  <th className="px-4 py-3 font-medium">{t("sales.type")}</th>
+                  <th className="px-2 py-3 font-medium">{t("dash.buyer")}</th>
+                  <th className="hidden px-2 py-3 font-medium sm:table-cell">{t("sales.itemsOrAnswers")}</th>
+                  <th className="px-2 py-3 font-medium">{t("dash.amount")}</th>
+                  <th className="px-2 py-3 font-medium">{t("dash.status")}</th>
+                  <th className="hidden px-2 py-3 font-medium sm:table-cell">{t("sales.form")}</th>
+                  <th className="hidden px-2 py-3 font-medium sm:table-cell">{t("prod.date")}</th>
+                  <th className="px-4 py-3 text-right font-medium">{t("sales.actions")}</th>
+                </tr>
               ) : (
                 <tr className="border-b border-[var(--jf-border)] text-left text-[10px] uppercase tracking-wide text-[var(--jf-muted)]">
                   <th className="px-4 py-3 font-medium">{t("dash.ref")}</th>
@@ -725,9 +766,58 @@ function SalesPageInner() {
                   can flip after the rows have already rendered: a response row
                   has no `ref_code`, so rendering it through the sales branch
                   gave every response row the SAME React key ("") and the stale
-                  <tr> nodes survived the later flip to the answers view. */}
+                  <tr> nodes survived the later flip to the answers view.
+                  On a MIXED list each branch emits the 8 combined cells so one
+                  header still lines up with both kinds. */}
               {rows.map((s) =>
-                rowKind(s) === "response" ? (
+                mixedView ? (
+                  <tr key={rowKey(s)} className="border-b border-[var(--jf-border)] last:border-0 hover:bg-slate-50/60">
+                    <td className="whitespace-nowrap px-4 py-3 font-mono text-[11px]">
+                      {rowKind(s) === "response" ? (
+                        <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[10px] font-medium text-[var(--jf-primary)]">
+                          {t("bld.responses")}
+                        </span>
+                      ) : (
+                        s.ref_code
+                      )}
+                    </td>
+                    <td className="max-w-32 truncate px-2 py-3 text-xs">
+                      {s.buyer || "—"}
+                      {s.buyer_email && (
+                        <span className="block truncate text-[10px] text-[var(--jf-muted)]">{s.buyer_email}</span>
+                      )}
+                    </td>
+                    <td className="hidden max-w-48 truncate px-2 py-3 text-xs text-[var(--jf-muted)] sm:table-cell">
+                      {rowKind(s) === "response"
+                        ? answersPreview(s) || "—"
+                        : Array.isArray(s.items) && s.items.length
+                          ? s.items.map((i) => `${i.qty}× ${i.name}`).join(", ")
+                          : "—"}
+                    </td>
+                    <td className="whitespace-nowrap px-2 py-3 text-xs font-semibold">
+                      {rowKind(s) === "response" ? "—" : money(s.total_sen)}
+                    </td>
+                    <td className="whitespace-nowrap px-2 py-3">
+                      <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${saleBadge(s.status)}`}>
+                        {s.status}
+                      </span>
+                    </td>
+                    <td className="hidden max-w-32 truncate px-2 py-3 text-xs text-[var(--jf-muted)] sm:table-cell">
+                      {s.form_id ? formName.get(s.form_id) || "—" : "—"}
+                    </td>
+                    <td className="hidden whitespace-nowrap px-2 py-3 text-[11px] text-[var(--jf-muted)] sm:table-cell">
+                      {formatDate(s.created_at, user?.timezone)}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3 text-right">
+                      <button
+                        onClick={() => setDetail(s)}
+                        className="jf-btn-ghost px-2.5 py-1 text-xs"
+                      >
+                        {t("sales.viewDetail")}
+                      </button>
+                    </td>
+                  </tr>
+                ) : rowKind(s) === "response" ? (
                   <tr
                     key={rowKey(s)}
                     className="border-b border-[var(--jf-border)] last:border-0 hover:bg-slate-50/60"
@@ -850,7 +940,7 @@ function SalesPageInner() {
               )}
               {!checking && rows.length === 0 && (
                 <tr>
-                  <td colSpan={responsesView ? 5 : 9} className="px-4 py-10 text-center text-sm text-[var(--jf-muted)]">
+                  <td colSpan={responsesView ? 5 : mixedView ? 8 : 9} className="px-4 py-10 text-center text-sm text-[var(--jf-muted)]">
                     {err || (responsesView ? t("bld.responsesEmpty") : t("sales.empty"))}
                     {/* Issue #503: a failed load gets an action, not a dead end. */}
                     {err && (

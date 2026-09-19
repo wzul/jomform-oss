@@ -1431,6 +1431,12 @@ export const DICT = {
   "nav.spam": { en: "Spam", ms: "Spam", zh: "垃圾邮件", ta: "ஸ்பேம்", ar: "رسائل مزعجة" },
   "sales.title": { en: "Sales", ms: "Jualan", zh: "销售", ta: "விற்பனைகள்", ar: "المبيعات" },
   "sales.subtitle": { en: "Every sale across your forms — filter, search, export.", ms: "Semua jualan merentas borang anda — tapis, cari, eksport.", zh: "所有表单的每笔销售 — 筛选、搜索、导出。", ta: "உங்கள் படிவங்களின் ஒவ்வொரு விற்பனையும் — வடிகட்டி, தேடு, ஏற்றுமதி.", ar: "كل مبيعاتك عبر النماذج — صفِّ، ابحث، صدّر." },
+  // The unfiltered list is the account's whole record set: sales AND the
+  // responses its response-mode forms recorded. Naming it plainly is the point —
+  // a merchant who filtered nothing must not be told the page holds only sales.
+  "sales.mixedSubtitle": { en: "Every sale and response across your forms — filter, search, export.", ms: "Setiap jualan dan respons merentas borang anda — tapis, cari, eksport.", zh: "所有表单的每笔销售和响应 — 筛选、搜索、导出。", ta: "உங்கள் படிவங்களின் ஒவ்வொரு விற்பனையும் பதிலும் — வடிகட்டி, தேடு, ஏற்றுமதி.", ar: "كل مبيعة ورد عبر نماذجك — صفِّ، ابحث، صدّر." },
+  "sales.type": { en: "Type / Ref", ms: "Jenis / Rujukan", zh: "类型 / 参考号", ta: "வகை / குறிப்பு", ar: "النوع / المرجع" },
+  "sales.itemsOrAnswers": { en: "Items / Answers", ms: "Item / Jawapan", zh: "商品 / 回答", ta: "பொருட்கள் / பதில்கள்", ar: "العناصر / الإجابات" },
   "sales.search": { en: "Search ref or buyer…", ms: "Cari rujukan atau pembeli…", zh: "搜索参考号或买家…", ta: "குறிப்பு அல்லது வாங்குபவரைத் தேடு…", ar: "ابحث عن المرجع أو المشتري…" },
   "sales.allForms": { en: "All forms", ms: "Semua borang", zh: "所有表单", ta: "அனைத்து படிவங்களும்", ar: "جميع النماذج" },
   "sales.filterForm": { en: "Form filter", ms: "Tapis borang", zh: "表单筛选", ta: "படிவ வடிப்பான்", ar: "تصفية النموذج" },
