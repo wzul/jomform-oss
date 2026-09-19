@@ -115,6 +115,15 @@ Parity checklist (dashboard → MCP):
 - Realtime notifications (#447) → `get_realtime_status`, `set_realtime_sound`
   (the SSE stream `GET /v1/rest/events/stream` is the realtime channel)
 - Trusted devices (#454) → `list_trusted_devices`, `revoke_trusted_device`
+- In-app feedback (#639) → `list_feedback`, `get_feedback_thread`,
+  `reply_feedback`, `set_feedback_status`.
+  **USER-SCOPED, not account-scoped:** a feedback thread belongs to the person
+  who filed it and carries no `account_id`, so naming a workspace cannot widen
+  the read. A super-admin sees every thread from the same tools (triage).
+  `reply_feedback` writes as `admin` for a super-admin (moving an `open` thread
+  to `in_progress`) and as the owner otherwise; `set_feedback_status` is
+  super-admin only and audited. REST: `POST`/`GET /v1/rest/feedback`,
+  `GET /v1/rest/feedback/{id}`, `POST /v1/rest/feedback/{id}/messages`.
 - Templates: gallery picker (#174) → `list_templates`, `use_template`
   (slug = system gallery); merchant-managed templates (#457) →
   `list_own_templates`, `create_template`, `update_template`, `delete_template`
