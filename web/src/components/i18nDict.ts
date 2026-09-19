@@ -1527,6 +1527,13 @@ export const DICT = {
   "sales.offline": { en: "Offline", ms: "Luar talian", zh: "离线", ta: "ஆஃப்லைன்", ar: "غير متصل" },
   "sales.liveHint": { en: "Realtime updates are on — new sales/responses appear without refreshing.", ms: "Kemas kini masa-nyata aktif — jualan/respon baharu muncul tanpa muat semula.", zh: "实时更新已开启 — 新销售/响应无需刷新即可出现。", ta: "நேரலை புதுப்பிப்புகள் இயக்கத்தில் — புதிய விற்பனைகள்/பதில்கள் புதுப்பிக்காமல் தோன்றும்.", ar: "التحديثات الفورية مفعّلة — تظهر المبيعات/الردود الجديدة دون تحديث." },
   "sales.soundLabel": { en: "Play a beep when a new order arrives", ms: "Bunyikan beep bila pesanan baharu tiba", zh: "新订单到达时播放提示音", ta: "புதிய ஆர்டர் வரும்போது பீப் ஒலி", ar: "تشغيل صوت تنبيه عند وصول طلب جديد" },
+  // Issue #447: the sound setting is stored per WORKSPACE (and written from this
+  // page), so these three state it plainly: the read in flight, a rejected
+  // write, and the inline "?" doc link.
+  "sales.soundLoading": { en: "Loading this workspace's sound setting…", ms: "Memuatkan tetapan bunyi workspace ini…", zh: "正在加载此工作区的提示音设置…", ta: "இந்த பணியிடத்தின் ஒலி அமைப்பை ஏற்றுகிறது…", ar: "جارٍ تحميل إعداد الصوت لهذه المساحة…" },
+  "sales.soundSaveFail": { en: "Could not save the sound setting — it has been switched back. This setting is saved per workspace.", ms: "Tetapan bunyi gagal disimpan — ia telah dipulihkan. Tetapan ini disimpan bagi setiap workspace.", zh: "无法保存提示音设置 — 已恢复原状。此设置按工作区保存。", ta: "ஒலி அமைப்பைச் சேமிக்க முடியவில்லை — அது மீட்டமைக்கப்பட்டது. இந்த அமைப்பு ஒவ்வொரு பணியிடத்திற்கும் தனியாகச் சேமிக்கப்படுகிறது.", ar: "تعذّر حفظ إعداد الصوت — تم إرجاعه. يُحفظ هذا الإعداد لكل مساحة عمل." },
+  "sales.soundReadFail": { en: "Sound setting could not be read", ms: "Tetapan bunyi gagal dibaca", zh: "无法读取提示音设置", ta: "ஒலி அமைப்பைப் படிக்க முடியவில்லை", ar: "تعذّرت قراءة إعداد الصوت" },
+  "sales.soundDocs": { en: "Why the sound setting is per workspace", ms: "Mengapa tetapan bunyi adalah per workspace", zh: "为什么提示音设置按工作区保存", ta: "ஒலி அமைப்பு ஏன் ஒவ்வொரு பணியிடத்திற்கும் தனி", ar: "لماذا يُحفظ إعداد الصوت لكل مساحة عمل" },
   // issue #194: email delivery status view
   "del.title": { en: "Email deliveries", ms: "Penghantaran emel", zh: "邮件投递", ta: "மின்னஞ்சல் விநியோகங்கள்", ar: "تسليم البريد" },
   "del.subtitle": { en: "Delivery status of every email — delivered, bounce, open, click — per form or per sale.", ms: "Status penghantaran setiap emel — delivered, bounce, open, click — per borang atau per jualan.", zh: "每封邮件的投递状态 — 已送达、退回、打开、点击 — 按表单或按销售。", ta: "ஒவ்வொரு மின்னஞ்சலின் விநியோக நிலை — வழங்கப்பட்டது, திரும்பியது, திறந்தது, கிளிக் — படிவம் அல்லது விற்பனை வாரியாக.", ar: "حالة تسليم كل بريد — تم التسليم، ارتد، فتح، نقر — لكل نموذج أو عملية بيع." },

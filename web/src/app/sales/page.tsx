@@ -18,7 +18,7 @@ import { useI18n, type Key } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDate, formatDateTime } from "../../lib/formatDate";
 import { answersPreview, answerText, isResponseForm, isMixedList, responsesList, rowKey, rowKind } from "../../lib/salesRows";
-import { workspaceQuery } from "../../lib/workspace";
+import { workspaceQuery, activeWorkspaceId, soundEnabledFromSettings, soundToggleBody } from "../../lib/workspace";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 
 type Item = {
@@ -167,7 +167,9 @@ const emailStatusLabel = (e: string, t: (k: Key) => string) =>
 
 function SalesPageInner() {
   const { t } = useI18n();
-  const { anon, role, workspace, user } = useSession();
+  // Issue #447: `workspaces` carries the id↔slug map the per-workspace sound
+  // setting needs (its REST path is keyed by workspace id).
+  const { anon, role, workspace, user, workspaces } = useSession();
   const router = useRouter();
   const search = useSearchParams();
   const deepForm = search.get("form") || "";
@@ -201,9 +203,16 @@ function SalesPageInner() {
 
   // Issue #447: realtime notifications. `live` reflects whether the SSE
   // stream is connected; `soundEnabled` is the per-workspace audio-beep
-  // toggle (muted by default). When a new sale/response arrives over the
-  // stream we re-fetch the list (no manual refresh) and, if sound is on,
-  // play a short beep (for a kitchen/order screen).
+  // setting (stored on workspace_settings.sound_enabled, off unless the
+  // merchant turned it on). When a new sale/response arrives over the stream we
+  // re-fetch the list (no manual refresh) and, if sound is on, play a short beep
+  // (for a kitchen/order screen).
+  //
+  // The setting is PER WORKSPACE and must survive a reload: a kitchen screen
+  // that goes silent on reload is useless, so the toggle is seeded from the
+  // stored value on mount and written back when it changes (see the two effects
+  // below). It is deliberately NOT held in localStorage — a per-browser value
+  // would show a different answer on the second device in the same workspace.
   const [live, setLive] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(false);
 
@@ -340,6 +349,103 @@ function SalesPageInner() {
       setLive(false);
     };
   }, [anon, workspace]);
+
+  // Issue #447: the workspace whose settings the sound toggle reads/writes. The
+  // REST settings endpoint is keyed by workspace ID while every list fetch on
+  // this page is scoped by SLUG, so the id has to be resolved from the session's
+  // workspace list. It is a plain string, so it is a stable effect dependency
+  // (the list itself is a fresh array on some renders and would re-run an effect
+  // on every render).
+  const soundWorkspaceId = activeWorkspaceId(workspaces);
+  // True once the stored value has been read for the current workspace (also on
+  // a failed read). The toggle stays DISABLED until then, so it can never render
+  // a value that is not the server's — the bug this card fixes — and it can
+  // never write the default over a value it has not read yet.
+  const [soundLoaded, setSoundLoaded] = useState(false);
+  // True when the stored value could NOT be read. The switch then says so (via
+  // the inline text below it) instead of presenting the default OFF as if it
+  // were the workspace's setting — a kitchen screen whose beep is ON must not
+  // silently read "off" after a failed load.
+  const [soundReadFailed, setSoundReadFailed] = useState(false);
+  // Monotonic write sequence: a slow failed write must not revert the state a
+  // newer click already set.
+  const soundWriteSeq = useRef(0);
+
+  // Issue #447: read the workspace's STORED sound setting and seed the toggle
+  // from it. Before this the toggle was a `useState(false)` that no request ever
+  // touched, so enabling the beep on a kitchen screen lasted exactly until the
+  // next reload — the reload is the whole point of the feature.
+  useEffect(() => {
+    setSoundLoaded(false);
+    setSoundReadFailed(false);
+    if (anon || !soundWorkspaceId) return;
+    let cancelled = false;
+    fetch(`/api/workspaces/${soundWorkspaceId}/settings`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (cancelled) return;
+        if (!d) {
+          // The read did not produce a payload, so the control must not render
+          // the default as if it were the stored value: a workspace whose beep
+          // is ON would show OFF, which is the bug this card is about. Say so.
+          setSoundReadFailed(true);
+        } else {
+          setSoundEnabled(soundEnabledFromSettings(d));
+        }
+        setSoundLoaded(true);
+      })
+      .catch(() => {
+        // Offline / proxy failure: same rule as above — report the failed read
+        // (never a silent default) but leave the control usable, because losing
+        // an unrelated request must not cost the merchant the ability to set
+        // the value.
+        if (!cancelled) {
+          setSoundReadFailed(true);
+          setSoundLoaded(true);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [anon, soundWorkspaceId]);
+
+  // Issue #447: apply the toggle. The UI flips IMMEDIATELY (optimistic) and the
+  // new value is written through the existing workspace-settings REST path —
+  // exactly the one `sound_enabled` field, which saveWorkspaceSettings merges
+  // into the stored settings, so no other setting can be clobbered by this
+  // request. If the write fails the toggle is REVERTED and the failure is shown:
+  // a switch that silently displays a value the server does not hold is the bug
+  // being fixed.
+  async function toggleSound(next: boolean) {
+    const previous = soundEnabled;
+    setErr("");
+    setSoundEnabled(next);
+    if (!soundWorkspaceId) {
+      // No workspace to write to (session still resolving): leaving the flip in
+      // place would be exactly the silent lie this card is about.
+      setSoundEnabled(previous);
+      setErr(t("sales.soundSaveFail"));
+      return;
+    }
+    const seq = ++soundWriteSeq.current;
+    let message = t("sales.soundSaveFail");
+    try {
+      const r = await fetch(`/api/workspaces/${soundWorkspaceId}/settings`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(soundToggleBody(next)),
+      });
+      if (r.ok) return;
+      const d = (await r.json().catch(() => ({}))) as { error?: string };
+      message = d.error || message;
+    } catch {
+      // network failure — the same visible outcome as a rejected write
+    }
+    // A newer click owns the state now; its own write decides the outcome.
+    if (seq !== soundWriteSeq.current) return;
+    setSoundEnabled(previous);
+    setErr(message);
+  }
 
   // Auth bounce via router (client transition), not a full reload.
   useEffect(() => {
@@ -592,7 +698,9 @@ function SalesPageInner() {
                   : t("sales.subtitle")}
             </p>
           </div>
-          {/* Issue #447: realtime status + per-workspace sound toggle. */}
+          {/* Issue #447: realtime status + per-workspace sound toggle. The pill
+              is STATUS ONLY (it lights when the SSE stream is connected); the
+              switch is the stored per-workspace beep setting. */}
           <div className="flex items-center gap-2">
             <span
               className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium ${
@@ -612,8 +720,13 @@ function SalesPageInner() {
               role="switch"
               aria-checked={soundEnabled}
               aria-label={t("sales.soundLabel")}
-              onClick={() => setSoundEnabled((v) => !v)}
-              className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+              // Reads the workspace's stored value first: an unread switch would
+              // be showing a value the server does not hold (the bug #447 fixes),
+              // so it is disabled for the moment the read takes.
+              disabled={!soundLoaded}
+              title={soundLoaded ? t("sales.soundLabel") : t("sales.soundLoading")}
+              onClick={() => void toggleSound(!soundEnabled)}
+              className={`relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-60 ${
                 soundEnabled ? "bg-[var(--jf-primary)]" : "bg-slate-300"
               }`}
             >
@@ -623,6 +736,24 @@ function SalesPageInner() {
                 }`}
               />
             </button>
+            {/* AGENTS.md documentation-parity step 4: the inline "?" link next
+                to the field, pointing at the section that documents it. */}
+            <a
+              href="/docs#realtime-notifications"
+              className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 text-[10px] font-semibold text-slate-500 hover:bg-slate-50"
+              aria-label={t("sales.soundDocs")}
+              title={t("sales.soundDocs")}
+            >
+              ?
+            </a>
+            {/* A failed READ must not pass the default off as the stored value:
+                say the setting could not be read instead of showing a state the
+                workspace may not hold. */}
+            {soundReadFailed && (
+              <span role="status" className="text-[11px] text-amber-700">
+                {t("sales.soundReadFail")}
+              </span>
+            )}
           </div>
         </div>
 
