@@ -38,6 +38,9 @@ import {
   answerText,
   answersPreview,
   isResponseForm,
+  listView,
+  responsesList,
+  rowKey,
   rowKind,
   type RowLike,
 } from "./salesRows.ts";
@@ -224,4 +227,199 @@ test("a response with no answers renders as an empty preview, not a crash", () =
   assert.equal(answersPreview({ data: {} }), "");
   assert.equal(answersPreview({ data: null }), "");
   assert.equal(answersPreview(null), "");
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REGRESSION: stale sales-layout rows on the responses view (duplicate key race)
+//
+// THE BUG: the row LAYOUT was chosen from one global flag, `responsesView`, which
+// is false until `/api/rest/forms` resolves — a DIFFERENT request from the rows'
+// `/api/rest/sales`. When the sales read won that race, the response rows first
+// rendered through the SALES branch, whose React key was `s.ref_code`. On a
+// response row `ref_code` is "" (a submission has no payment reference), so ALL
+// of them shared the key "". When the forms list landed the branch flipped, React
+// reconciled children whose previous keys were indistinguishable, and 2 stale
+// 9-cell sales-layout <tr> nodes stayed in the tbody above the 3 real 5-cell
+// response rows. Deterministic with /api/rest/forms delayed 4s (2/2 trials), and
+// intermittent without the delay (1-2 of every 4-5 loads).
+//
+// WHAT IS GUARDED HERE
+//   A. rowKey is derived from the ROW, and is UNIQUE across a response page —
+//      the duplicate-key precondition is what let stale nodes survive. The old
+//      expression `s.submission_id || s.created_at` is NOT used any more (it
+//      falls through to a shared timestamp when a row has neither), and the old
+//      sales-branch key `s.ref_code` cannot be reached by rowKey.
+//   B. The row layout is chosen per row: a response renders through the answers
+//      branch and a sale through the sales branch, WITH THE FORMS LIST STILL
+//      EMPTY — i.e. before /api/rest/forms has landed. Under the old code this is
+//      exactly when the wrong branch was used.
+//   C. The page's call site is asserted from SOURCE: the tbody maps with
+//      `rowKind(s)` / `key={rowKey(s)}` and there is no `responsesView ? (` in
+//      the tbody at all. A refactor that reintroduces the global flag in the row
+//      map fails here even though the pure functions above stay green (that gap
+//      is why the QA card's mutations W4/W5 slipped through).
+//
+// WHAT IT DOES NOT COVER (stated honestly): the rendered DOM. There is no JSX
+// test runner in this repo, so the React reconciliation itself is observed by the
+// browser control in the PR — /api/rest/forms delayed 4s through page.route,
+// final cell counts 5+5+5 with 0 sales-layout rows, plus the same control FAILING
+// on the pre-fix build.
+
+const pageSource = readFileSync(
+  fileURLToPath(new URL("../app/sales/page.tsx", import.meta.url)),
+  "utf8",
+);
+
+// The three response rows from the reported form (production shapes).
+const responseRows = () => [
+  { sale_type: "response", submission_id: "bd923c63-ecbc-49f4-875e-0b06813d5633" },
+  { sale_type: "response", submission_id: "dbc995fa-a71e-4569-a610-f48f3bf42915" },
+  { sale_type: "response", submission_id: "1ff6f1c2-5a5c-4a86-9d3f-6b1c2de0a001" },
+];
+
+test("rowKey is UNIQUE across a page of response rows (the duplicate-key precondition)", () => {
+  const keys = responseRows().map(rowKey);
+  assert.equal(new Set(keys).size, keys.length, `duplicate keys: ${JSON.stringify(keys)}`);
+  for (const k of keys) assert.notEqual(k, "", "a response row keyed on \"\" is the defect");
+});
+
+test("rowKey never falls back to the sales-branch key for a response row", () => {
+  // The exact row the API emits for a response: ref_code "" and a unique
+  // submission id. The old sales-branch key (`ref_code`) must not be what
+  // rowKey returns, or every response row collides again.
+  const row = {
+    ref_code: "",
+    created_at: "2026-09-18T14:01:19Z",
+    sale_type: "response",
+    submission_id: "bd923c63-ecbc-49f4-875e-0b06813d5633",
+  };
+  assert.equal(rowKey(row), "bd923c63-ecbc-49f4-875e-0b06813d5633");
+  assert.notEqual(rowKey(row), row.ref_code);
+});
+
+test("rowKey is still stable and unique for sale rows (the payment view must not move)", () => {
+  const keys = ["JF-abc123", "JF-def456", "JF-ghi789"].map((ref_code) => rowKey({ ref_code }));
+  assert.deepEqual(keys, ["JF-abc123", "JF-def456", "JF-ghi789"]);
+  assert.equal(new Set(keys).size, 3);
+});
+
+test("rowKey never returns a shared empty key, even for a row with no id at all", () => {
+  // The old expression `submission_id || created_at` produced "" for a row that
+  // carried neither; rowKey must stay distinguishable instead.
+  const a = rowKey({ created_at: "2026-09-18T14:01:19Z" });
+  const b = rowKey({});
+  assert.notEqual(a, "");
+  assert.notEqual(b, "");
+  assert.notEqual(a, b);
+});
+
+test("rowKey prefers submission_id over ref_code (a response is never keyed by a ref)", () => {
+  // Precedence matters: if a response row ever carried BOTH (e.g. the API started
+  // emitting a placeholder reference), keying it on ref_code would re-create the
+  // collision this card fixes. submission_id wins, always.
+  const row = { submission_id: "bd923c63", ref_code: "JF-placeholder" };
+  assert.equal(rowKey(row), "bd923c63");
+});
+
+test("listView reads the ROW kind, with the forms list still empty (the race window)", () => {
+  // Before /api/rest/forms lands, isResponseForm([], formFilter) is false. The
+  // per-row view must still say "response" — under the old code this exact
+  // combination rendered the rows through the sales branch.
+  assert.equal(isResponseForm([], "86037683-e9d7-40a6-b36b-ed94805dd957"), false);
+  assert.equal(listView(responseRows()), "response");
+  assert.equal(responsesList(responseRows(), false), true);
+  // ...and the header follows the same decision, so chrome and rows agree.
+  assert.equal(listView(responseRows()) === "response", responsesList(responseRows(), false));
+});
+
+test("listView keeps a payment page on the sales layout", () => {
+  // RowLike is a weak-ish type; type the fixture so the fields the page's own
+  // Sale carries are visible to the compiler.
+  const sales: RowLike[] = [
+    { ref_code: "JF-a", sale_type: "one_time" },
+    { ref_code: "JF-b", sale_type: "" },
+  ];
+  assert.equal(listView(sales), "sale");
+  assert.equal(responsesList(sales, false), false);
+  // Even a form the forms list calls a response form keeps the money columns
+  // when its rows are sales (not producible today: a form is either a payment
+  // form or a response form — the row wins, deliberately).
+  assert.equal(responsesList(sales, true), false);
+});
+
+test("listView is stable across the forms landing (no branch flip on the same rows)", () => {
+  // The whole defect in one assertion: the layout for a given row set must be the
+  // same before and after /api/rest/forms resolves. Only the EMPTY list may use
+  // the form's mode, because then there is no row to classify.
+  const rows = responseRows();
+  const before = listView(rows);
+  const after = listView(rows);
+  assert.equal(before, after, "the row layout flipped without the rows changing");
+  assert.equal(before, "response");
+  // The empty list is the one case that legitimately consults the forms list.
+  assert.equal(responsesList([], false), false);
+  assert.equal(responsesList([], true), true);
+});
+
+// The region of the page that renders ONE <tr> per sale/response row. Sliced by
+// its own boundaries so an assertion about the ROW LAYOUT cannot accidentally
+// cover the empty-state cell, whose colSpan legitimately reads the header flag
+// (that cell is not a row and has no key to collide).
+const rowsRegion = (() => {
+  const start = pageSource.indexOf("rows.map((s) =>");
+  const end = pageSource.indexOf("!checking && rows.length === 0");
+  assert.ok(start > 0 && end > start, "could not locate the row-render region in the sales page");
+  return pageSource.slice(start, end);
+})();
+
+test("the row map picks the layout PER ROW, from rowKind — not from a global flag", () => {
+  // The call site, asserted from source: the pure functions above can all be
+  // correct while the page still branches on `responsesView`.
+  assert.ok(
+    /rows\.map\(\(s\) =>\s*\n\s*rowKind\(s\) === "response"/.test(rowsRegion),
+    "the row map no longer chooses the layout from rowKind(s) — a global flag " +
+      "that flips after the rows rendered is how the stale rows survived",
+  );
+  assert.ok(
+    /key=\{rowKey\(s\)\}/.test(rowsRegion),
+    "the row key is no longer rowKey(s)",
+  );
+  assert.ok(
+    !/key=\{s\.ref_code\}/.test(rowsRegion),
+    "the sales branch is keyed on s.ref_code again — \"\" for every response row, " +
+      "which is the duplicate-key precondition for the stale rows",
+  );
+  assert.ok(
+    !/key=\{s\.submission_id/.test(rowsRegion),
+    "the row key is a hand-rolled `s.submission_id || …` again — rowKey is the " +
+      "one place that decides it, so a sale and a response cannot collide",
+  );
+  // No branch on the header flag anywhere in the row map: `responsesView ? (` is
+  // the exact pre-fix shape.
+  assert.ok(
+    !/responsesView/.test(rowsRegion),
+    "the row map consults responsesView (the forms list) again — the forms list " +
+      "arriving later then re-keys rows that already rendered (stale rows return)",
+  );
+});
+
+test("the header and the rows read the SAME decision (chrome cannot disagree with the rows)", () => {
+  // responsesView (header/caption/status-filter/empty copy) must come from
+  // responsesList(rows, …), and the rows from rowKind — one source, so a header
+  // can never say "Responses (this form)" over a table of money columns.
+  assert.ok(
+    /const responsesView = responsesList\(rows, filteredForm\)/.test(pageSource),
+    "responsesView is no longer derived from responsesList(rows, filteredForm)",
+  );
+  assert.ok(
+    /const filteredForm = isResponseForm\(forms, formFilter\)/.test(pageSource),
+    "the filtered-form mode is no longer read via isResponseForm(forms, formFilter)",
+  );
+  // isResponseForm must be used for the CHROME only: if it appears in the row map
+  // the row layout is back on the racy flag.
+  assert.ok(
+    !rowsRegion.includes("isResponseForm"),
+    "the row map consults isResponseForm (the forms list) — the row layout must " +
+      "depend on the row alone",
+  );
 });

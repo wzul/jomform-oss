@@ -16,10 +16,14 @@
 export type RowKind = "sale" | "response";
 
 // Minimal shape both row kinds satisfy. Deliberately structural: the page's own
-// Sale type widens this.
+// Sale type widens this. `ref_code`/`created_at` are here because rowKey has to
+// accept either kind of row (a sale is keyed by its reference, a response by its
+// submission id).
 export type RowLike = {
   sale_type?: string;
   submission_id?: string;
+  ref_code?: string;
+  created_at?: string;
   data?: Record<string, unknown> | null;
 };
 
@@ -38,6 +42,12 @@ export function rowKind(row: RowLike | null | undefined): RowKind {
 // `mode` the API puts on every row of the forms list; an unknown form id (or an
 // API build without the field) is a payment form, which preserves the previous
 // behaviour exactly.
+//
+// NOTE: this answers "is the FILTERED form a response form" — a question about
+// the forms list, not about the rows. It must NOT decide which row layout to
+// render (see listView below): the forms list is a separate request from the
+// rows, so keying the row layout on it renders the rows through one branch and
+// then flips them to the other.
 export function isResponseForm(
   forms: readonly { id: string; mode?: string }[],
   formId: string,
@@ -45,6 +55,56 @@ export function isResponseForm(
   if (!formId) return false;
   const form = forms.find((f) => f.id === formId);
   return !!form && form.mode === "response";
+}
+
+// rowKey returns the React key for one row.
+//
+// It is derived from the ROW, never from the layout being rendered: a response
+// row has no payment reference (`ref_code` is "" for every one of them), so
+// keying a response row on `ref_code` gives React a set of IDENTICAL keys. That
+// is not hypothetical — it is exactly how 2 stale sales-layout rows survived on
+// the responses view: the rows first rendered through the sales branch (all keys
+// ""), and when the branch flipped React reconciled children whose previous keys
+// were indistinguishable and left the old <tr> nodes in the tbody.
+//
+// `submission_id` first (unique per response and never present on a sale), then
+// the sale's `ref_code`, then a stable last resort. The last resort is prefixed
+// so it can never collide with a real reference.
+export function rowKey(row: RowLike | null | undefined): string {
+  if (!row) return "";
+  const sub = typeof row.submission_id === "string" ? row.submission_id : "";
+  if (sub !== "") return sub;
+  const ref = typeof row.ref_code === "string" ? row.ref_code : "";
+  if (ref !== "") return ref;
+  return `row:${typeof row.created_at === "string" ? row.created_at : "unknown"}`;
+}
+
+// listView decides what the LIST (header + per-row layout) shows, from the rows
+// themselves.
+//
+// The rule: a list shows the answers view exactly when every row it holds is a
+// response. That is the same decision the page used to make from `responsesView`
+// (which also consulted the filtered form's `mode`), but derived per row — so
+// the header, the caption and each row agree with each other ALWAYS, including
+// while the forms list is still in flight. No request ordering can make one row
+// render through the other branch's layout, which is what left stale nodes.
+//
+// An empty list is a sale list: the filtered form's mode is used only to pick
+// the right EMPTY/loading copy (emptyFor), because no row exists to classify.
+export function listView(rows: readonly RowLike[] | null | undefined): RowKind {
+  if (!rows || rows.length === 0) return "sale";
+  return rows.every((r) => rowKind(r) === "response") ? "response" : "sale";
+}
+
+// responsesList decides whether the list CHROME should read as a responses list
+// — the header, the subtitle, the empty-state copy and the hidden status filter.
+// It prefers the per-row view (listView) and falls back to the selected form's
+// mode ONLY while there are no rows to classify (loading / genuinely empty),
+// because then there is no row to ask. A mixed list (which the API cannot
+// produce today — a form is either a payment form or a response form) is treated
+// as a sale list, preserving the money columns and the actions.
+export function responsesList(rows: readonly RowLike[], filteredFormIsResponse: boolean): boolean {
+  return rows.length > 0 ? listView(rows) === "response" : filteredFormIsResponse;
 }
 
 // answerKeys returns the recorded answer keys of a response row, excluding the

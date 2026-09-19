@@ -17,7 +17,7 @@ import { Shell } from "../../components/Shell";
 import { useI18n, type Key } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDate, formatDateTime } from "../../lib/formatDate";
-import { answersPreview, answerText, isResponseForm, rowKind } from "../../lib/salesRows";
+import { answersPreview, answerText, isResponseForm, responsesList, rowKey, rowKind } from "../../lib/salesRows";
 import { workspaceQuery } from "../../lib/workspace";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 
@@ -545,9 +545,16 @@ function SalesPageInner() {
   // not apply), so the table switches to the answers view and the status filter
   // is hidden — a submission has no status column, so offering the filter would
   // silently return nothing.
-  const responsesView =
-    isResponseForm(forms, formFilter) ||
-    (!formFilter && rows.length > 0 && rows.every((r) => rowKind(r) === "response"));
+  //
+  // The header/caption/empty-copy flag is NOT the row-layout flag: it may fall
+  // back to the selected form's `mode`, which arrives with the forms list — a
+  // DIFFERENT request from the rows. Each row's layout comes from that row alone
+  // (rowKind in the tbody), so a row can never be rendered by one branch and
+  // then re-keyed by the other while the forms list is still in flight. That
+  // ordering is exactly what left stale sales-layout <tr> nodes on the responses
+  // view (2 phantom rows over the 3 real ones).
+  const filteredForm = isResponseForm(forms, formFilter);
+  const responsesView = responsesList(rows, filteredForm);
 
   return (
     <Shell active="sales">
@@ -714,10 +721,15 @@ function SalesPageInner() {
               )}
             </thead>
             <tbody>
+              {/* The layout is chosen PER ROW (rowKind), never from a flag that
+                  can flip after the rows have already rendered: a response row
+                  has no `ref_code`, so rendering it through the sales branch
+                  gave every response row the SAME React key ("") and the stale
+                  <tr> nodes survived the later flip to the answers view. */}
               {rows.map((s) =>
-                responsesView ? (
+                rowKind(s) === "response" ? (
                   <tr
-                    key={s.submission_id || s.created_at}
+                    key={rowKey(s)}
                     className="border-b border-[var(--jf-border)] last:border-0 hover:bg-slate-50/60"
                   >
                     <td className="whitespace-nowrap px-4 py-3 text-[11px] text-[var(--jf-muted)]">
@@ -748,7 +760,7 @@ function SalesPageInner() {
                     </td>
                   </tr>
                 ) : (
-                  <tr key={s.ref_code} className="border-b border-[var(--jf-border)] last:border-0 hover:bg-slate-50/60">
+                  <tr key={rowKey(s)} className="border-b border-[var(--jf-border)] last:border-0 hover:bg-slate-50/60">
                   <td className="whitespace-nowrap px-4 py-3 font-mono text-[11px]">{s.ref_code}</td>
                   <td className="max-w-32 truncate px-2 py-3 text-xs">
                     {s.buyer || "—"}
