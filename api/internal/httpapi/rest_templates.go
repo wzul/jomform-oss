@@ -100,10 +100,10 @@ func (h *RESTHandlers) useTemplate(w http.ResponseWriter, r *http.Request, actx 
 		respondErr(w, r, err)
 		return
 	}
-	// Issue #193: a cloned form gets the default merchant notification, like
-	// every other new form.
+	// Issue #193: a cloned form gets the default notification for its own mode
+	// (issue #597).
 	if h.Notifications != nil {
-		_ = h.Notifications.EnsureDefault(r.Context(), f.ID)
+		_ = h.Notifications.EnsureDefault(r.Context(), f)
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"id": f.ID, "slug": f.Slug, "title": f.Title,
@@ -336,7 +336,7 @@ func (h *RESTHandlers) useOwnTemplate(w http.ResponseWriter, r *http.Request, ac
 		return
 	}
 	if h.Notifications != nil {
-		_ = h.Notifications.EnsureDefault(r.Context(), f.ID)
+		_ = h.Notifications.EnsureDefault(r.Context(), f)
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"id": f.ID, "slug": f.Slug, "title": f.Title,

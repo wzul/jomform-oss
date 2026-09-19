@@ -27,6 +27,7 @@ import { fileURLToPath } from "node:url";
 import {
   FORM_MODE_PAYMENT,
   FORM_MODE_RESPONSE,
+  defaultNotificationEvent,
   formMode,
   isSalesForm,
   salesFormHref,
@@ -235,6 +236,53 @@ test("the JS rule mirrors the Go rule: only an explicit 'response' is a response
   );
   assert.match(goFormMode, /FormModeResponse = "response"/);
   assert.match(goFormMode, /FormModePayment\s+= "payment"/);
+});
+
+test("a new notification rule starts on an event the form can actually fire", () => {
+  // The reported defect (issue #597): a response form's only notification rule
+  // was created on sale.paid, an event a response form can never produce, so it
+  // existed, was enabled, and silently never fired. The editor opened a new rule
+  // on sale.paid for every form — the same mistake, one click away.
+  assert.equal(defaultNotificationEvent({ mode: "response" }), "response.submitted");
+  assert.equal(defaultNotificationEvent({ mode: "payment" }), "sale.paid");
+  // The load-bearing default: a legacy form with no mode key is a payment form
+  // with real sales, so it must keep sale.paid.
+  assert.equal(defaultNotificationEvent({}), "sale.paid");
+  assert.equal(defaultNotificationEvent({ config: { blocks: [] } }), "sale.paid");
+  assert.equal(defaultNotificationEvent({ config: { mode: "response" } }), "response.submitted");
+  assert.equal(defaultNotificationEvent(null), "sale.paid");
+  assert.equal(defaultNotificationEvent(undefined), "sale.paid");
+});
+
+test("the notification editor actually uses the mode-aware default", () => {
+  // A correct helper the page never calls is dead code behind a green suite.
+  assert.match(
+    settingsPage,
+    /setEdEvent\(defaultNotificationEvent\(form\)\)/,
+    "the notification editor no longer derives a new rule's event from the form mode",
+  );
+  // And no hardcoded sale.paid seed may remain as the editor's starting event.
+  assert.doesNotMatch(
+    settingsPage,
+    /useState<string>\("sale\.paid"\)/,
+    "the notification editor's event state is seeded with sale.paid again, so a response form's new rule opens on an event it can never fire",
+  );
+});
+
+test("the JS notification default mirrors the Go EnsureDefault rule", () => {
+  // Two readers of the same rule that disagree is its own bug: the API decides
+  // what a new form GETS, the editor decides what a new rule OPENS ON.
+  const goNotification = read("../../../api/internal/dbstore/form_notification.go");
+  assert.match(
+    goNotification,
+    /if mode == FormModeResponse \{\s*\n\s*return defaultResponseNotificationName, NotifyEventResponseSubmitted/,
+    "EnsureDefault's response branch no longer selects the response event",
+  );
+  assert.match(
+    goNotification,
+    /return defaultSaleNotificationName, NotifyEventSalePaid/,
+    "EnsureDefault's default branch no longer selects sale.paid for a payment form",
+  );
 });
 
 test("the checkbox accessible names are translated, not hardcoded English", () => {

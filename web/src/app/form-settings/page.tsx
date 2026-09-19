@@ -18,7 +18,7 @@ import { useSession } from "../../components/session";
 import MediaPicker from "../../components/MediaPicker";
 import ProductPicker, { type PickerProduct } from "../../components/ProductPicker";
 import { workspaceQuery, workspaceScope } from "../../lib/workspace";
-import { formEntriesAction } from "../../lib/formMode";
+import { defaultNotificationEvent, formEntriesAction } from "../../lib/formMode";
 
 type FormDetail = {
   id: string;
@@ -496,7 +496,7 @@ function FormSettingsInner() {
   const [isNew, setIsNew] = useState(false);
   // Editor fields
   const [edName, setEdName] = useState("");
-  const [edEvent, setEdEvent] = useState<string>("sale.paid");
+  const [edEvent, setEdEvent] = useState<string>("");
   const [edTo, setEdTo] = useState("");
   const [edSubject, setEdSubject] = useState("");
   const [edBody, setEdBody] = useState("");
@@ -877,7 +877,11 @@ function FormSettingsInner() {
     setEditing(null);
     setIsNew(true);
     setEdName("");
-    setEdEvent("sale.paid");
+    // The event a NEW rule starts on follows the form's mode, because the two
+    // events are not interchangeable: a response-mode form records submissions
+    // and never a sale, so a rule defaulting to sale.paid would never fire.
+    // Same rule the API applies.
+    setEdEvent(defaultNotificationEvent(form));
     setEdTo("{admin_email}");
     setEdSubject("");
     setEdBody("");

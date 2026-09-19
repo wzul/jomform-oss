@@ -91,10 +91,12 @@ func issue606Jobs(t *testing.T, rdb *goredis.Client) []emailqueue.Job {
 }
 
 // issue606Fixture seeds an owner user + workspace + account (linked to the
-// workspace, as WorkspaceStore.Create does) + a published response-mode form,
-// and returns the ids the notification ref needs. The owner's email is unique
-// per call so a job's recipient can be asserted exactly.
-func issue606Fixture(t *testing.T, ctx context.Context) (ownerEmail, userID, workspaceID, accountID, formID string) {
+// workspace, as WorkspaceStore.Create does) + a published payment-mode form,
+// and returns the ids the notification ref needs, plus the form itself (issue
+// #597: EnsureDefault takes the form, because which default rule a form gets
+// depends on its mode). The owner's email is unique per call so a job's
+// recipient can be asserted exactly.
+func issue606Fixture(t *testing.T, ctx context.Context) (ownerEmail, userID, workspaceID, accountID string, form *dbstore.Form) {
 	t.Helper()
 	pool := testdb.Open(t)
 
@@ -119,15 +121,15 @@ func issue606Fixture(t *testing.T, ctx context.Context) (ownerEmail, userID, wor
 		t.Fatalf("create account: %v", err)
 	}
 
-	f := &dbstore.Form{
+	form = &dbstore.Form{
 		AccountID: accountID, Slug: "it-606-" + accountID[:8], Title: "Order form",
 		Status: dbstore.FormStatusPublished,
 		Config: map[string]any{"blocks": []any{}},
 	}
-	if err := dbstore.NewFormStore(pool).Create(ctx, f); err != nil {
+	if err := dbstore.NewFormStore(pool).Create(ctx, form); err != nil {
 		t.Fatalf("create form: %v", err)
 	}
-	return ownerEmail, userID, workspaceID, accountID, f.ID
+	return ownerEmail, userID, workspaceID, accountID, form
 }
 
 // TestIssue606AdminEmailResolvesToTheOwnerUser is the regression: a
@@ -139,7 +141,7 @@ func issue606Fixture(t *testing.T, ctx context.Context) (ownerEmail, userID, wor
 // recipient is resolved and NOTHING is enqueued — so this test fails.
 func TestIssue606AdminEmailResolvesToTheOwnerUser(t *testing.T) {
 	ctx := context.Background()
-	ownerEmail, userID, workspaceID, accountID, formID := issue606Fixture(t, ctx)
+	ownerEmail, userID, workspaceID, accountID, form := issue606Fixture(t, ctx)
 	pool := testdb.Open(t)
 
 	// Fixture precondition, asserted rather than assumed: the account id names
@@ -154,7 +156,7 @@ func TestIssue606AdminEmailResolvesToTheOwnerUser(t *testing.T) {
 	notif := dbstore.NewFormNotificationStore(pool)
 	// The production writer for the default rule every new form is created with
 	// (rest_handlers.go:682 calls exactly this).
-	if err := notif.EnsureDefault(ctx, formID); err != nil {
+	if err := notif.EnsureDefault(ctx, form); err != nil {
 		t.Fatalf("ensure default notification: %v", err)
 	}
 
@@ -169,7 +171,7 @@ func TestIssue606AdminEmailResolvesToTheOwnerUser(t *testing.T) {
 
 	// sale.paid is the event the default rule listens for.
 	svc.FireFormNotifications(ctx, NotificationRef{
-		FormID: formID, WorkspaceID: workspaceID, AccountID: accountID,
+		FormID: form.ID, WorkspaceID: workspaceID, AccountID: accountID,
 		RefCode: "IT606REF", AmountSen: 1500, ItemsSummary: "Tee x1", BuyerName: "Ali",
 	}, dbstore.NotifyEventSalePaid)
 
@@ -200,13 +202,13 @@ func TestIssue606AdminEmailResolvesToTheOwnerUser(t *testing.T) {
 	// Asserted against the literal job itself, not the total queue length, so
 	// this check is independent of whether the {admin_email} job above fired.
 	if err := notif.Create(ctx, &dbstore.FormNotification{
-		FormID: formID, Name: "literal control", Event: dbstore.NotifyEventResponseSubmitted,
+		FormID: form.ID, Name: "literal control", Event: dbstore.NotifyEventResponseSubmitted,
 		ToEmail: "organizer@example.test", Subject: "New response", Body: "body", Enabled: true,
 	}); err != nil {
 		t.Fatalf("create literal rule: %v", err)
 	}
 	svc.FireFormNotifications(ctx, NotificationRef{
-		FormID: formID, WorkspaceID: workspaceID, AccountID: accountID,
+		FormID: form.ID, WorkspaceID: workspaceID, AccountID: accountID,
 		RefCode: "IT606CTL", AmountSen: 100, BuyerName: "Siti",
 	}, dbstore.NotifyEventResponseSubmitted)
 
@@ -230,12 +232,12 @@ func TestIssue606AdminEmailResolvesToTheOwnerUser(t *testing.T) {
 // forms against a regression from the owner-id fix.
 func TestIssue606FieldIDRecipientStillResolves(t *testing.T) {
 	ctx := context.Background()
-	_, _, _, accountID, formID := issue606Fixture(t, ctx)
+	_, _, _, accountID, form := issue606Fixture(t, ctx)
 	pool := testdb.Open(t)
 
 	notif := dbstore.NewFormNotificationStore(pool)
 	if err := notif.Create(ctx, &dbstore.FormNotification{
-		FormID: formID, Name: "respondent", Event: dbstore.NotifyEventResponseSubmitted,
+		FormID: form.ID, Name: "respondent", Event: dbstore.NotifyEventResponseSubmitted,
 		ToEmail: "{email}", Subject: "Thanks {{full_name}}", Body: "{{full_name}} replied", Enabled: true,
 	}); err != nil {
 		t.Fatalf("create {field_id} rule: %v", err)
@@ -246,7 +248,7 @@ func TestIssue606FieldIDRecipientStillResolves(t *testing.T) {
 		Notifications: notif, EmailQueue: q,
 	}
 	svc.FireFormNotifications(ctx, NotificationRef{
-		FormID: formID, AccountID: accountID,
+		FormID: form.ID, AccountID: accountID,
 		Fields: map[string]string{"email": "buyer@example.test", "full_name": "Nurul Huda"},
 	}, dbstore.NotifyEventResponseSubmitted)
 

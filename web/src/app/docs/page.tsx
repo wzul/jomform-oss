@@ -43,7 +43,7 @@ const FEATURES: { title: string; body: string }[] = [
   },
   {
     title: "Email & notifications",
-    body: "Customise the receipt email sent to buyers and per-form notification rules. Email settings are configured per workspace, and any form can override them (subject, body, receipt on/off, merchant notify) with a \"use workspace default\" option — resolution order is form → workspace → built-in default. Use dynamic placeholders like {{ref_code}}, {{amount}}, {{items}}, {{buyer_name}}, {{form_url}}, {{date}} and any {{field_id}}. Track delivery (sent → delivered → opened → clicked).",
+    body: "Customise the receipt email sent to buyers and per-form notification rules. Email settings are configured per workspace, and any form can override them (subject, body, receipt on/off, merchant notify) with a \"use workspace default\" option — resolution order is form → workspace → built-in default. Use dynamic placeholders like {{ref_code}}, {{amount}}, {{items}}, {{buyer_name}}, {{form_url}}, {{date}} and any {{field_id}}. Every new form also starts with a default notification to you: a payment form notifies on sale.paid, a response form on response.submitted (its message uses the responder's name and email, because a response has no sale). Track delivery (sent → delivered → opened → clicked).",
   },
   {
     title: "Media library",

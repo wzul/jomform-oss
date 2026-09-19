@@ -25,19 +25,27 @@ const RECIPIENT_PLACEHOLDERS: { token: string; meaning: string }[] = [
 const BODY_PLACEHOLDERS: { token: string; meaning: string }[] = [
   {
     token: "{{ref_code}}",
-    meaning: "The sale's reference code (e.g. the code shown to the buyer and used to look up the sale).",
+    meaning: "The sale's reference code (e.g. the code shown to the buyer and used to look up the sale). Empty on a response form — a response has no sale.",
   },
   {
     token: "{{amount}}",
-    meaning: "The formatted sale amount (e.g. 123.45 in the workspace's currency).",
+    meaning: "The formatted sale amount (e.g. 123.45 in the workspace's currency). Empty on a response form.",
   },
   {
     token: "{{items}}",
-    meaning: "A summary of the purchased items (product names and quantities).",
+    meaning: "A summary of the purchased items (product names and quantities). Empty on a response form.",
   },
   {
     token: "{{buyer_name}}",
-    meaning: "The buyer's name as submitted on the form.",
+    meaning: "The buyer's name as submitted on the form. On a response form this is the responder's name.",
+  },
+  {
+    token: "{{full_name}}",
+    meaning: "The name of the person who submitted (the buyer, or the responder on a response form). Always defined — empty when the submission carried no name.",
+  },
+  {
+    token: "{{email}}",
+    meaning: "The email of the person who submitted. Always defined — empty when the submission carried no email.",
   },
   {
     token: "{{form_url}}",
@@ -133,6 +141,17 @@ Body:
   Pembeli : {{buyer_name}}
   Borang  : {{form_url}}`}
       </pre>
+      <p className="mt-3 text-sm leading-relaxed text-slate-600">
+        A <strong>response form</strong> gets a different default notification, because a response
+        has no sale: its rule fires on <code className="rounded bg-slate-100 px-1">response.submitted</code>{" "}
+        and uses only placeholders that carry a value for a submission —
+        <code className="rounded bg-slate-100 px-1">{"{{full_name}}"}</code>,{" "}
+        <code className="rounded bg-slate-100 px-1">{"{{email}}"}</code>,{" "}
+        <code className="rounded bg-slate-100 px-1">{"{{form_url}}"}</code> and{" "}
+        <code className="rounded bg-slate-100 px-1">{"{{date}}"}</code>. A placeholder with no value
+        is sent as an empty string, so check the reference above before using a sale placeholder in
+        a notification that runs on a response form.
+      </p>
     </div>
   );
 }

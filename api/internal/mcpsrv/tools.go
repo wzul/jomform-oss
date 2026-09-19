@@ -404,7 +404,7 @@ func (s *Server) registerTools() {
 	// ── Parity: per-form notification rules (issue #193) ────────────────
 	addTool(s, &mcp.Tool{
 		Name:        "get_form_notifications",
-		Description: "Baca senarai peraturan notifikasi emel per-borang (issue #193): event, penerima, subjek/badan, logik bersyarat, aktif. Termasuk notifikasi lalai (notify merchant on sale.paid).",
+		Description: "Baca senarai peraturan notifikasi emel per-borang (issue #193): event, penerima, subjek/badan, logik bersyarat, aktif. Setiap borang baharu disertakan satu notifikasi lalai kepada merchant: event sale.paid untuk borang pembayaran, response.submitted untuk borang respons (issue #597).",
 	}, s.getFormNotifications)
 	addTool(s, &mcp.Tool{
 		Name:        "set_form_notifications",

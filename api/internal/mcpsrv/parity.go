@@ -374,11 +374,11 @@ func (s *Server) upsertForm(
 		if err := s.deps.Forms.Create(ctx, f); err != nil {
 			return nil, nil, err
 		}
-		// Issue #193: pre-create the default notification (notify merchant on
-		// sale.paid) so a new form sends the merchant a new-sale email with zero
-		// configuration. Best-effort.
+		// Issue #193: pre-create the default notification for the form's mode
+		// — sale.paid for a payment form, response.submitted for a response
+		// form (issue #597). Best-effort.
 		if s.deps.Notifications != nil {
-			_ = s.deps.Notifications.EnsureDefault(ctx, f.ID)
+			_ = s.deps.Notifications.EnsureDefault(ctx, f)
 		}
 		// Apply restrictions on create when provided.
 		if in.StartAt != nil || in.EndAt != nil || in.EntryLimit != nil ||

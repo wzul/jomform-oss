@@ -57,6 +57,19 @@ export function isSalesForm(f: ModeCarrier | null | undefined): boolean {
 }
 
 /**
+ * defaultNotificationEvent returns the event a NEW per-form notification rule
+ * should start on for this form.
+ *
+ * The two events are NOT interchangeable: a response-mode form records
+ * submissions and never a sale, so a rule left on `sale.paid` can never fire and
+ * the merchant is silently never told anyone responded. Mirrors the API's
+ * EnsureDefault rule (`dbstore.defaultNotificationFor`, issue #597).
+ */
+export function defaultNotificationEvent(f: ModeCarrier | null | undefined): string {
+  return isSalesForm(f) ? "sale.paid" : "response.submitted";
+}
+
+/**
  * The i18n key for a form's entries action, chosen by the form's mode: a
  * payment form's entries are Sales, a response form's entries are Submissions.
  * Kept as a literal union (not the renderer's `Key` type from

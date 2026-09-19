@@ -688,11 +688,12 @@ func (h *RESTHandlers) createForm(w http.ResponseWriter, r *http.Request, actx *
 		respondErr(w, r, err)
 		return
 	}
-	// Issue #193: pre-create the default notification (notify merchant on
-	// sale.paid) so a new form sends the merchant a new-sale email with zero
+	// Issue #193: pre-create the default notification for the form's mode —
+	// sale.paid for a payment form, response.submitted for a response form
+	// (issue #597) — so a new form sends the merchant an email with zero
 	// configuration. Best-effort.
 	if h.Notifications != nil {
-		_ = h.Notifications.EnsureDefault(r.Context(), f.ID)
+		_ = h.Notifications.EnsureDefault(r.Context(), f)
 	}
 	// Issue #92: audit form creation.
 	h.recordEvent(r, actx, h.sessionOwnerID(r), "form.created", map[string]any{"form_id": f.ID, "slug": f.Slug})

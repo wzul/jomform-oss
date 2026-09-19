@@ -117,9 +117,10 @@ func (s *Server) useTemplateMCP(
 	if err := s.deps.Forms.Create(ctx, f); err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
-	// Issue #193: a cloned form gets the default merchant notification.
+	// Issue #193: a cloned form gets the default notification for its own mode
+	// (issue #597).
 	if s.deps.Notifications != nil {
-		_ = s.deps.Notifications.EnsureDefault(ctx, f.ID)
+		_ = s.deps.Notifications.EnsureDefault(ctx, f)
 	}
 	return nil, map[string]string{"status": "created", "form_id": f.ID, "slug": f.Slug, "title": f.Title}, nil
 }

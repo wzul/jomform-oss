@@ -700,8 +700,29 @@ func (h *PublicHandlers) fireResponseNotifications(ctx context.Context, form *db
 		WorkspaceID:   workspaceID,
 		AccountID: form.AccountID,
 		FormURL:   formURL,
+		// Issue #597: a response's default notification shows WHO responded, so
+		// the responder's name is carried on BuyerName as well as on the fields
+		// map below. BuyerName is the always-defined {{full_name}}/{{buyer_name}}
+		// value, whereas a field value only exists when the submission actually
+		// carried that block id.
+		BuyerName: responderName(strFields),
 		Fields:    strFields,
 	}, dbstore.NotifyEventResponseSubmitted)
+}
+
+// responderName picks the responder's display name out of a response form's
+// submitted field values (issue #597). The public submit path always mirrors
+// the submitted client identity onto `full_name` (and `email`/`phone`), so a
+// form with a name block resolves through the first key; a form that only
+// collected an email falls back to it. Both empty is a legitimate submission —
+// the caller then renders an empty name rather than a literal placeholder.
+func responderName(fields map[string]string) string {
+	for _, key := range []string{"full_name", "name", "email"} {
+		if v := strings.TrimSpace(fields[key]); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // isProductRow reports whether productID is a real row in the account's

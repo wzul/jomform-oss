@@ -306,6 +306,17 @@ func renderNotification(subject, body string, ref NotificationRef) (subj, render
 		// Issue #438: QR ordering flow — the table number the QR stand encoded.
 		"table_number": func() string { return data.TableNumber },
 	}
+	// The responder's identity, registered as ALWAYS-defined. text/template
+	// REFUSES to parse a template that names an undefined function, and
+	// renderNotificationTemplate then falls back to the raw source — so a
+	// placeholder the submission did not carry would be mailed as its own
+	// literal text ({{email}}), not as an empty string. That is the shape a
+	// response form's default notification hits: it shows who responded, and
+	// a form need not have a name or email block at all. Defining the two keys
+	// here makes an absent value render EMPTY. The submitted field values below
+	// override them, so a present value still wins.
+	funcs["full_name"] = func() string { return data.BuyerName }
+	funcs["email"] = func() string { return "" }
 	// Register every submitted field as a template function so {{field_id}}
 	// resolves to the submitted value.
 	for k, v := range data.Fields {
