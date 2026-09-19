@@ -87,13 +87,15 @@ var backtickRe = regexp.MustCompile("`([^`]+)`")
 // Do NOT add entries for newly intended tools: fix the checklist instead. The
 // hygiene test asserts each entry is genuinely still stale, so this map must
 // be emptied as AGENTS.md catches up.
+//
+// REMOVED (issue: MCP had no form reader): "list_forms" and "get_form" were
+// pinned here with the justification that "form retrieval is covered by
+// upsert_form's form_id path". That justification was FALSE — upsert_form is a
+// writer (its title is required and it never returns the form), so an agent
+// could not read a form at all. Both tools are now registered (forms.go) and
+// the entries were removed; TestMCPParityGuardBaselinesStayHonest fails if a
+// registered tool is left in this map.
 var mcpParityStaleChecklistEntries = map[string]string{
-	// Never registered under this name: the checklist's "Form builder" line
-	// names list_forms/get_form, but the registered form tools are
-	// upsert_form/publish_form/unpublish_form/bulk_forms and list_forms/get_form
-	// have no registered counterpart.
-	"list_forms": "checklist names it; not registered (form listing is covered by upsert_form/bulk_forms)",
-	"get_form":   "checklist names it; not registered (form retrieval is covered by upsert_form's form_id path)",
 	// Subscriptions: cancel_subscription is registered, but the on-demand
 	// recurring-charge sweep is not exposed as a tool.
 	"run_due_charges": "checklist names it; not registered (the due-charge sweep runs on the scheduler, not as a tool)",

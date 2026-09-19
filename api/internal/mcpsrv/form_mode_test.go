@@ -68,11 +68,14 @@ func TestMCPFormToolsExposeTheCollectionMode(t *testing.T) {
 	callCtx := WithAuthIdentity(ctx, &AuthIdentity{AccountID: accountID, Scopes: []string{"readwrite"}})
 
 	// ── list ────────────────────────────────────────────────────────────────
-	_, out, err := srv.listForms(callCtx, nil, emptyIn{})
+	_, page, err := srv.listForms(callCtx, nil, emptyIn{})
 	if err != nil {
 		t.Fatalf("listForms: %v", err)
 	}
-	raw, err := json.Marshal(out)
+	if page == nil {
+		t.Fatal("listForms returned no list output")
+	}
+	raw, err := json.Marshal(page.Items)
 	if err != nil {
 		t.Fatalf("marshal listForms output: %v", err)
 	}

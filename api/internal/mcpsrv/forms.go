@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -41,11 +42,17 @@ type formDetailOut struct {
 	// Issue #254: custom styling/theme + registered input fields (MCP parity).
 	Theme            map[string]any     `json:"theme,omitempty"`
 	RegisteredFields []formfields.Field `json:"registered_fields,omitempty"`
+	// created_at/updated_at are RFC3339 strings, matching every other MCP
+	// timestamp shape (admin_mcp.go, events_mcp.go, …). They let an agent tell
+	// two same-titled forms apart, and let a read → write → re-read cycle show
+	// that the write actually landed.
+	CreatedAt string `json:"created_at,omitempty"`
+	UpdatedAt string `json:"updated_at,omitempty"`
 }
 
 func (s *Server) listForms(
 	ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn,
-) (*mcp.CallToolResult, []formOut, error) {
+) (*mcp.CallToolResult, *listOutput[formOut], error) {
 	accs, err := s.accountScopes(ctx, false)
 	if err != nil {
 		return nil, nil, err
@@ -76,40 +83,45 @@ func (s *Server) listForms(
 			})
 		}
 	}
-	return nil, out, nil
+	// Wrapped in listOutput so the tool advertises an OBJECT outputSchema —
+	// a bare slice makes a schema-strict client reject the WHOLE tools/list
+	// result and take all tools down (see output_schema_test.go).
+	return nil, newListOut(out), nil
 }
 
 func (s *Server) getForm(
 	ctx context.Context, _ *mcp.CallToolRequest, in formRefIn,
-) (*mcp.CallToolResult, formDetailOut, error) {
+) (*mcp.CallToolResult, *formDetailOut, error) {
 	if s.deps.Forms == nil {
-		return nil, formDetailOut{}, errors.New("forms tidak tersedia")
+		return nil, nil, errors.New("forms tidak tersedia")
+	}
+	if in.FormID == "" {
+		return nil, nil, errors.New("form_id wajib")
 	}
 	// Issue #307: the form may live in any of the user's workspaces; resolve the
 	// owning account (RBAC via resolveFormAccount scope).
 	acc, err := s.resolveFormAccount(ctx, in.FormID)
 	if err != nil {
-		return nil, formDetailOut{}, err
+		return nil, nil, err
 	}
-	forms, err := s.deps.Forms.ListByAccount(ctx, acc)
+	// One form by id: the store query enforces ownership and does not depend on
+	// the form being present in a list read.
+	f, err := s.deps.Forms.GetByID(ctx, acc, in.FormID)
 	if err != nil {
-		return nil, formDetailOut{}, err
+		return nil, nil, errors.New("borang tidak dijumpai")
 	}
-	for _, f := range forms {
-		if f.ID == in.FormID {
-			out := formDetailOut{
-				ID: f.ID, Slug: f.Slug, Title: f.Title, Status: f.Status,
-				IsPrivate: f.Status == dbstore.FormStatusPrivate, Config: f.Config,
-				Theme: f.Theme, RegisteredFields: formfields.FromConfig(f.Config),
-				Mode: dbstore.FormMode(f),
-			}
-			if f.Status == dbstore.FormStatusPublished || f.Status == dbstore.FormStatusUnlisted {
-				out.URL = s.formPublicURLForAccount(ctx, acc, f.Slug)
-			}
-			return nil, out, nil
-		}
+	out := &formDetailOut{
+		ID: f.ID, Slug: f.Slug, Title: f.Title, Status: f.Status,
+		IsPrivate: f.Status == dbstore.FormStatusPrivate, Config: f.Config,
+		Theme: f.Theme, RegisteredFields: formfields.FromConfig(f.Config),
+		Mode:      dbstore.FormMode(f),
+		CreatedAt: f.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt: f.UpdatedAt.UTC().Format(time.RFC3339),
 	}
-	return nil, formDetailOut{}, errors.New("borang tidak dijumpai")
+	if f.Status == dbstore.FormStatusPublished || f.Status == dbstore.FormStatusUnlisted {
+		out.URL = s.formPublicURLForAccount(ctx, acc, f.Slug)
+	}
+	return nil, out, nil
 }
 
 // workspaceSlugFor resolves the workspace slug an account's forms live under, for

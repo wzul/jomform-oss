@@ -164,8 +164,16 @@ func (s *Server) registerTools() {
 		Description: "Arkibkan banyak produk sekali gus (active=false). ids[] maks 500.",
 	}, s.bulkProductsMCP)
 	addTool(s, &mcp.Tool{
+		Name:        "list_forms",
+		Description: "Senarai borang akaun anda: id, slug, tajuk, status (draft|private|published|unlisted), mode (payment|response) dan URL awam bila ia live. Read-only — guna untuk penemuan id borang sebelum membaca atau menulis.",
+	}, s.listForms)
+	addTool(s, &mcp.Tool{
+		Name:        "get_form",
+		Description: "Baca SATU borang sepenuhnya (read-only): id, slug, tajuk, status, mode, config — TERMASUK blocks semasa — theme, registered_fields, URL awam, created_at dan updated_at. Baca borang dahulu, ubah hanya medan yang dikehendaki, kemudian hantar semula config penuh melalui upsert_form. Menulis tanpa membaca dahulu boleh memusnahkan blok sedia ada.",
+	}, s.getForm)
+	addTool(s, &mcp.Tool{
 		Name:        "upsert_form",
-		Description: "Cipta/kemaskini borang (form_id kosong = baru). Config blocks ikut get_form. Theme (pilihan) = gaya/branding tersuai.",
+		Description: "Cipta/kemaskini borang (form_id kosong = baru). Baca sedia ada dengan get_form dahulu dan hantar config penuh supaya blok sedia ada tidak hilang. Theme (pilihan) = gaya/branding tersuai.",
 	}, s.upsertForm)
 	// Issue #254: MCP-driven form creation — styling freedom + field
 	// registration. JomForm keeps authority over field types, prices and the
