@@ -47,6 +47,12 @@ var selectConsts = map[string]string{
 	"saleSelect":      "Sale",
 	"workspaceSelect": "Workspace",
 	"subSelect":       "Subscription",
+	// account_domains had no registered select, so a migration adding a column
+	// to it could land without the matching struct field or Scan destination —
+	// exactly how the nullable auto_cname/tls_* columns came to be scanned into
+	// plain strings and broke every domain read. Registering it puts the table
+	// under the same column-alignment guard as the rest.
+	"domainSelect": "AccountDomain",
 }
 
 // selectTables maps a *Select constant name to the table it selects from.
@@ -57,6 +63,7 @@ var selectTables = map[string]string{
 	"saleSelect":      "sales",
 	"workspaceSelect": "workspaces",
 	"subSelect":       "subscriptions",
+	"domainSelect":    "account_domains",
 }
 
 // selectScanFuncs maps a *Select constant to the receiver-qualified
@@ -72,6 +79,7 @@ var selectScanFuncs = map[string][]string{
 	"saleSelect":      {"scanSale"},
 	"workspaceSelect": {"scanWorkspace"},
 	"subSelect":       {"scanSub"},
+	"domainSelect":    {"DomainStore.GetDomain", "DomainStore.ListDomains"},
 }
 
 // columnRenames maps historical column names (from older migrations) to their

@@ -38,6 +38,28 @@ type AccountDomain struct {
 	CreatedAt time.Time
 }
 
+// domainSelect is the shared column list for an AccountDomain read, so the
+// two full-row reads (GetDomain, ListDomains) cannot drift apart, and it is
+// registered with the migration/scan-drift guard in
+// migration_scan_drift_test.go so a future account_domains column must land
+// here, in the struct, and in both scan sites in the same change.
+//
+// The five columns added by migrations 000038 (auto_cname), 000043
+// (tls_error, tls_cert_enc, tls_key_enc) and 000044 (tls_email) are nullable
+// and have NO default, so they read as NULL for any row created through the
+// production write path — AddDomain inserts only
+// (account_id, domain, provider), and SetTLSEmail / SetTLSMode /
+// SetCustomCert actively write NULL back. A NULL can never scan into the
+// plain `string` fields below, so every such row made the whole read fail:
+// "can't scan into dest[6] (col: auto_cname): cannot scan NULL into *string".
+// COALESCE(col, empty-string) keeps the string fields meaningful and the scan
+// column-aligned; the repo uses the same convention for the nullable accounts
+// columns (see accountSelect).
+const domainSelect = `SELECT id, account_id, domain, provider, verified, verified_at,
+	        COALESCE(auto_cname,''), tls_mode, tls_status, COALESCE(tls_error,''),
+	        COALESCE(tls_cert_enc,''), COALESCE(tls_key_enc,''), COALESCE(tls_email,''), created_at
+	 FROM account_domains`
+
 // DomainStore wraps account_domains.
 type DomainStore struct{ pool *pgxpool.Pool }
 
@@ -65,20 +87,17 @@ func (s *DomainStore) SetAutoCNAME(ctx context.Context, accountID, domain, statu
 func (s *DomainStore) GetDomain(ctx context.Context, accountID, id string) (*AccountDomain, error) {
 	d := &AccountDomain{}
 	err := s.pool.QueryRow(ctx,
-		`SELECT id, account_id, domain, provider, verified, verified_at, auto_cname,
-		        tls_mode, tls_status, tls_error, tls_cert_enc, tls_key_enc, tls_email, created_at
-		 FROM account_domains WHERE id=$1 AND account_id=$2`, id, accountID).
-		Scan(&d.ID, &d.AccountID, &d.Domain, &d.Provider, &d.Verified, &d.VerifiedAt, &d.AutoCNAME,
-			&d.TLSMode, &d.TLSStatus, &d.TLSError, &d.TLSCertEnc, &d.TLSKeyEnc, &d.TLSEmail, &d.CreatedAt)
+		domainSelect+` WHERE id=$1 AND account_id=$2`, id, accountID).
+		Scan(&d.ID, &d.AccountID, &d.Domain, &d.Provider, &d.Verified, &d.VerifiedAt,
+			&d.AutoCNAME, &d.TLSMode, &d.TLSStatus, &d.TLSError,
+			&d.TLSCertEnc, &d.TLSKeyEnc, &d.TLSEmail, &d.CreatedAt)
 	return d, err
 }
 
 // ListDomains lists all domains claimed by an account.
 func (s *DomainStore) ListDomains(ctx context.Context, accountID string) ([]*AccountDomain, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, account_id, domain, provider, verified, verified_at, auto_cname,
-		        tls_mode, tls_status, tls_error, tls_cert_enc, tls_key_enc, tls_email, created_at
-		 FROM account_domains WHERE account_id=$1 ORDER BY created_at`, accountID)
+		domainSelect+` WHERE account_id=$1 ORDER BY created_at`, accountID)
 	if err != nil {
 		return nil, err
 	}
