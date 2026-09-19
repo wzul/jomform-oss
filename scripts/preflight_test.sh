@@ -44,7 +44,7 @@ echo "preflight self-test (sandbox $SB)"
 echo "--- safety properties ---"
 
 # 1. Skipping EVERY gate must be refused, not reported green.
-out=$(./scripts/preflight.sh --skip build,vet,test,govuln,web,a11y,npmaudit,gitleaks 2>&1)
+out=$(./scripts/preflight.sh --skip build,vet,test,govuln,web,a11y,npmaudit,gitleaks,monitor 2>&1)
 rc=$?
 if [ $rc -ne 0 ] && printf '%s' "$out" | grep -q 'every gate was skipped'; then
   ok "all gates skipped -> refused (rc=$rc)"
@@ -101,10 +101,10 @@ fi
 
 # 6. Every gate is still wired up: --list names all of them. If someone deletes
 #    a gate from the array this drops, which is the silent-coverage-loss case.
-expected="build vet test govuln web a11y npmaudit gitleaks"
+expected="build vet test govuln web a11y npmaudit gitleaks monitor"
 got=$(./scripts/preflight.sh --list | tr '\n' ' ' | sed 's/ $//')
 if [ "$got" = "$expected" ]; then
-  ok "--list names all 8 gates"
+  ok "--list names all 9 gates"
 else
   bad "--list drift: want [$expected] got [$got]"
 fi

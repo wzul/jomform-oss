@@ -24,6 +24,9 @@
 #              a11y       cd web && npm run a11y    (axe-core, critical/serious)
 #              npmaudit   cd web && npm audit --audit-level=high
 #   secrets    gitleaks   full-history secret scan (not just the tip)
+#   monitor    watchdog   deploy/monitoring/jomform-watch_test.sh — proves the
+#                         uptime watchdog ALERTS on a failure and stays quiet on
+#                         a success (offline: stub server + fake notifier)
 #
 # USAGE
 #   scripts/preflight.sh                    # every gate
@@ -80,7 +83,7 @@ cd "$REPO_ROOT" || exit 1
 
 # `build` is the api build; `web` is `npm run build` in web/. Both are named so
 # --only/--skip can address them without ambiguity.
-GATE_NAMES=(build vet test govuln web a11y npmaudit gitleaks)
+GATE_NAMES=(build vet test govuln web a11y npmaudit gitleaks monitor)
 
 ONLY=""
 SKIP=""
@@ -352,6 +355,17 @@ gitleaks_run() {
 }
 
 run gitleaks "gitleaks detect (full git history, no leaks)" gitleaks_run
+
+# monitor — the uptime watchdog's self-test. This gate is unusual: the watchdog
+# is production-only (it runs on the prod host, not in the repo), so the only
+# thing testable here is its own harness — that the alerting path fires on a
+# failure, stays quiet on a success, and refuses to report green when it has no
+# way to alert. Those are exactly the properties that make a watcher worth
+# having, and they are cheap (stub server + fake notifier, no network).
+monitor_run() {
+  bash "$REPO_ROOT/deploy/monitoring/jomform-watch_test.sh"
+}
+run monitor "watchdog self-test (alert fires, quiet when healthy, never blind)" monitor_run
 
 summary
 

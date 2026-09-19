@@ -1,0 +1,16 @@
+# JomForm watchdog — cron entries.
+#
+# Install as /etc/cron.d/jomform-watch (root:root, 0644). cron.d files need the
+# user column, which is why this is not a crontab line.
+#
+# The interval is the detection latency: a 5-minute check means an outage is
+# noticed within ~5 minutes rather than when the first customer complains. Five
+# curl+ssh probes every five minutes is not a measurable cost.
+#
+# The digest is the watchdog's own heartbeat. If it stops arriving, the WATCHER
+# is dead — which is otherwise indistinguishable from "everything is fine".
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+*/5 * * * * root /usr/local/bin/jomform-watch.sh >> /var/log/jomform-watch.cron.log 2>&1
+17 9 * * *  root JF_WATCH_MODE=digest /usr/local/bin/jomform-watch.sh >> /var/log/jomform-watch.cron.log 2>&1
