@@ -278,20 +278,26 @@ func registeredToolNames(t *testing.T) map[string]bool {
 	return got
 }
 
-// readAgentsMDPaths locates AGENTS.md at the repository root, relative to this
-// test file (api/internal/mcpsrv → ../../../AGENTS.md).
+// readAgentsMDPaths locates MCP-PARITY.md at the repository root, relative to
+// this test file (api/internal/mcpsrv → ../../../MCP-PARITY.md).
+//
+// The checklist lives in its own file, NOT in AGENTS.md, because AGENTS.md is a
+// write-gated agent-instruction file: a worker registering a tool could not add
+// the matching checklist line (the approval prompt times out with no human
+// channel, and the gate fails closed), so every parity update was a human-only
+// edit. The RULE is still in AGENTS.md; the DATA the guard parses is here.
 func readAgentsMDPaths(t *testing.T) string {
 	t.Helper()
 	_, file, _, ok := runtime.Caller(0)
 	if !ok {
-		t.Fatal("runtime.Caller failed — cannot locate AGENTS.md")
+		t.Fatal("runtime.Caller failed — cannot locate MCP-PARITY.md")
 	}
-	path := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "..", "AGENTS.md"))
+	path := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "..", "MCP-PARITY.md"))
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
-			t.Skipf("AGENTS.md not found at %s — parity guard skipped", path)
+			t.Skipf("MCP-PARITY.md not found at %s — parity guard skipped", path)
 		}
-		t.Fatalf("stat AGENTS.md: %v", err)
+		t.Fatalf("stat MCP-PARITY.md: %v", err)
 	}
 	return path
 }
@@ -377,7 +383,7 @@ func TestMCPParityChecklistToolsAreRegistered(t *testing.T) {
 	}
 	sort.Strings(missing)
 	if len(missing) > 0 {
-		t.Errorf("AGENTS.md parity checklist names %d tool(s) that are not registered: %v\n"+
+		t.Errorf("MCP-PARITY.md checklist names %d tool(s) that are not registered: %v\n"+
 			"Either register the tool or, if the checklist entry is stale, record it in "+
 			"mcpParityStaleChecklistEntries with a reason.", len(missing), missing)
 	}
@@ -405,8 +411,8 @@ func TestMCPParityRegisteredToolsAreDocumented(t *testing.T) {
 	}
 	sort.Strings(undocumented)
 	if len(undocumented) > 0 {
-		t.Errorf("%d registered MCP tool(s) are absent from the AGENTS.md parity checklist: %v\n"+
-			"Add them to the checklist (AGENTS.md \"MCP FEATURE PARITY\") or, if they are not "+
+		t.Errorf("%d registered MCP tool(s) are absent from the MCP-PARITY.md checklist: %v\n"+
+			"Add them to the checklist (MCP-PARITY.md) or, if they are not "+
 			"dashboard features, record them in mcpParityBaselineTools with a reason.", len(undocumented), undocumented)
 	}
 }
