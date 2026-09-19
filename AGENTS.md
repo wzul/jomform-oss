@@ -118,10 +118,10 @@ Parity checklist (dashboard → MCP):
 - In-app feedback (#639) → `list_feedback`, `get_feedback_thread`,
   `reply_feedback`, `set_feedback_status`.
   **USER-SCOPED, not account-scoped:** a feedback thread belongs to the person
-  who filed it and carries no `account_id`, so naming a workspace cannot widen
+  who filed it and carries no account id, so naming a workspace cannot widen
   the read. A super-admin sees every thread from the same tools (triage).
-  `reply_feedback` writes as `admin` for a super-admin (moving an `open` thread
-  to `in_progress`) and as the owner otherwise; `set_feedback_status` is
+  `reply_feedback` writes as an admin message for a super-admin (moving an open
+  thread to in-progress) and as the owner otherwise; `set_feedback_status` is
   super-admin only and audited. REST: `POST`/`GET /v1/rest/feedback`,
   `GET /v1/rest/feedback/{id}`, `POST /v1/rest/feedback/{id}/messages`.
 - Templates: gallery picker (#174) → `list_templates`, `use_template`
