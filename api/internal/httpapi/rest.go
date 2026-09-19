@@ -121,6 +121,16 @@ type RESTHandlers struct {
 	// endpoint returns 503. The payments OnPaid + response.submitted paths
 	// publish sale/response events here so connected dashboards update live.
 	Realtime *RealtimeHub
+
+	// Feedback is the in-app feedback thread store (system-owned, two-way
+	// conversation). Nil → the feedback endpoints report the store as
+	// unavailable. It is NOT account-scoped: a thread carries no account_id,
+	// so these routes never resolve a workspace (see rest_feedback.go).
+	Feedback *dbstore.FeedbackThreadStore
+	// SuperAdminEmails is the same allowlist backing SuperAdmin, kept as a list
+	// so the feedback notification can address the platform team through the
+	// existing email lane. One list, one place to change who is notified.
+	SuperAdminEmails []string
 }
 
 // RegisterRoutes wires REST endpoints.
@@ -280,6 +290,18 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /v1/admin/suppressions", h.authed(h.handleAdminListSuppressions))
 	mux.Handle("POST /v1/admin/suppressions", h.authed(h.handleAdminAddSuppression))
 	mux.Handle("DELETE /v1/admin/suppressions/{email}", h.authed(h.handleAdminRemoveSuppression))
+	// In-app feedback: the user's own threads (system-owned form, so these are
+	// NOT account-scoped) and the super-admin triage surface. Mirrors the
+	// list_feedback / get_feedback_thread / reply_feedback / set_feedback_status
+	// MCP tools.
+	mux.Handle("GET /v1/rest/feedback", h.authed(h.handleListFeedback))
+	mux.Handle("POST /v1/rest/feedback", h.authed(h.handleCreateFeedback))
+	mux.Handle("GET /v1/rest/feedback/{id}", h.authed(h.handleGetFeedback))
+	mux.Handle("POST /v1/rest/feedback/{id}/messages", h.authed(h.handleReplyFeedback))
+	mux.Handle("GET /v1/admin/feedback", h.authed(h.handleAdminListFeedback))
+	mux.Handle("GET /v1/admin/feedback/{id}", h.authed(h.handleAdminGetFeedback))
+	mux.Handle("POST /v1/admin/feedback/{id}/messages", h.authed(h.handleAdminReplyFeedback))
+	mux.Handle("POST /v1/admin/feedback/{id}/status", h.authed(h.handleAdminSetFeedbackStatus))
 	mux.Handle("GET /v1/rest/analytics/forms", h.authed(h.formAnalytics))
 	mux.Handle("GET /v1/rest/analytics/products", h.authed(h.productAnalytics))
 	// Issue #92: event-tracking read endpoints (audit log + behaviour analytics).

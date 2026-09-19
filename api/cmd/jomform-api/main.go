@@ -194,6 +194,9 @@ func main() {
 		passkeysStore := dbstore.NewPasskeyStore(pool)
 		// Issue #171: response-only form submissions.
 		submissionsStore := dbstore.NewSubmissionStore(pool)
+		// In-app feedback threads (system-owned, two-way conversation). NOT
+		// account-scoped: a thread belongs to the user who filed it.
+		feedbackStore := dbstore.NewFeedbackThreadStore(pool)
 		// Issue #180: media library metadata store.
 		mediaStore := dbstore.NewMediaStore(pool)
 		// Issue #161: workspace membership + invites.
@@ -337,6 +340,12 @@ func main() {
 			// response.submitted paths publish sale/response events here so a
 			// merchant's open dashboard updates live (no manual refresh).
 			Realtime: realtimeHub,
+			// In-app feedback threads (system-owned form + admin triage).
+			Feedback: feedbackStore,
+			// The same super-admin allowlist, as a list: the feedback
+			// notification addresses the platform team through the existing
+			// email lane, so there is one place to change who is notified.
+			SuperAdminEmails: cfg.SuperAdminEmails,
 		}
 		pay.OnPaid = func(ctx context.Context, accountID, event string, payload map[string]any) {
 			// Issue #196: form-scoped webhooks fire for the sale's form; the
@@ -393,6 +402,9 @@ func main() {
 			// Issue #385: site super-admin allowlist (SUPER_ADMIN_EMAILS). Gates
 			// platform-wide monitoring on explicit admin tools/pages only.
 			SuperAdmin: cfg.IsSuperAdmin,
+			// In-app feedback threads: the user's own threads, and every thread
+			// for a super-admin (triage). User-scoped, not account-scoped.
+			Feedback: feedbackStore,
 		}, chip.New(cfg.ChipAPIBaseURL), decryptKey, pay)
 		deps.MCP = mcpSrv
 

@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Shell } from "../../components/Shell";
-import { useI18n } from "../../components/i18n";
+import { useI18n, type Key } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDate, formatDateTime } from "../../lib/formatDate";
 import { growthLegend, growthValue, type GrowthCounts } from "../../lib/adminGrowth";
@@ -70,6 +70,42 @@ type Suppression = {
 
 type Suppressions = { items: Suppression[]; page: number; limit: number; total: number };
 
+// In-app feedback: threads filed by users. The triage section lists every
+// thread, opens one, replies, and changes the status. A thread belongs to the
+// person who filed it (it is system-owned, not account data), so this list is
+// the only place an operator can see the queue.
+type FeedbackThread = {
+  id: string;
+  subject: string;
+  status: string;
+  user_id: string;
+  user_email: string;
+  created_at: string;
+  last_activity_at: string;
+  message_count: number;
+};
+
+type FeedbackMessage = {
+  id: string;
+  author_kind: string;
+  author_email?: string;
+  body: string;
+  created_at: string;
+};
+
+type FeedbackList = {
+  items: FeedbackThread[];
+  page: number;
+  limit: number;
+  total: number;
+  counts: Record<string, number>;
+};
+
+// The four statuses the API accepts (dbstore.FeedbackStatuses). One list, so
+// the filter chips and the status dropdown cannot drift from the server's set.
+const FB_STATUSES = ["open", "in_progress", "resolved", "closed"] as const;
+const FB_PER_PAGE = 20;
+
 const SUPP_PER_PAGE = 20;
 // The three canonical reason codes (suppressed_emails_reason_chk, migration
 // 000061). Kept as one list so the add form's dropdown and the row badge cannot
@@ -126,6 +162,23 @@ const suppReasonBadge = (reason: string) =>
     complaint: "bg-orange-50 text-orange-700 border-orange-200",
     manual: "bg-slate-100 text-slate-600 border-slate-200",
   })[reason] || "bg-slate-100 text-slate-500 border-slate-200";
+
+// The feedback status badge colours. One function so the list rows, the thread
+// header and the user-facing page's legend cannot drift apart.
+function fbStatusBadge(status: string) {
+  switch (status) {
+    case "open":
+      return "bg-amber-100 text-amber-700";
+    case "in_progress":
+      return "bg-blue-100 text-blue-700";
+    case "resolved":
+      return "bg-emerald-100 text-emerald-700";
+    case "closed":
+      return "bg-slate-200 text-slate-600";
+    default:
+      return "bg-slate-100 text-slate-600";
+  }
+}
 
 function StatCard({ label, value, sub }: { label: string; value: string | number; sub?: string }) {
   return (
@@ -343,6 +396,115 @@ export default function AdminPage() {
     }
   }, [addEmail, addNote, addReason, goToLogin, loadSupp, suppPages, suppQuery, t]);
 
+  // In-app feedback triage state. Separate from the other sections for the same
+  // reason the suppression list is: a failure here must not blank the overview.
+  const [fbList, setFbList] = useState<FeedbackList | null>(null);
+  const [fbErr, setFbErr] = useState("");
+  const [fbFilter, setFbFilter] = useState<string>("");
+  const [fbPage, setFbPage] = useState(1);
+  const [fbOpenId, setFbOpenId] = useState("");
+  const [fbThread, setFbThread] = useState<FeedbackThread | null>(null);
+  const [fbMessages, setFbMessages] = useState<FeedbackMessage[]>([]);
+  const [fbReply, setFbReply] = useState("");
+  const [fbBusy, setFbBusy] = useState("");
+  const [fbMsg, setFbMsg] = useState("");
+  const [fbActionErr, setFbActionErr] = useState("");
+
+  const loadFeedback = useCallback(async (page: number, status: string) => {
+    const params = new URLSearchParams();
+    params.set("page", String(page));
+    params.set("limit", String(FB_PER_PAGE));
+    if (status) params.set("status", status);
+    setFbErr("");
+    const r = await runLoad(
+      () => fetchJson<FeedbackList>(`/api/admin/feedback?${params.toString()}`),
+      { onUnauth: goToLogin, message: t("afb.loadFail") },
+    );
+    if (!r.ok) {
+      setFbErr(r.error);
+      return;
+    }
+    setFbList(r.data);
+  }, [t, goToLogin]);
+
+  const openFeedback = useCallback(async (id: string) => {
+    setFbOpenId(id);
+    setFbMsg("");
+    setFbActionErr("");
+    setFbMessages([]);
+    setFbThread(null);
+    const r = await runLoad(
+      () => fetchJson<{ thread: FeedbackThread; messages: FeedbackMessage[] }>(
+        `/api/admin/feedback/${encodeURIComponent(id)}`),
+      { onUnauth: goToLogin, message: t("afb.loadFail") },
+    );
+    if (!r.ok) {
+      setFbActionErr(r.error);
+      return;
+    }
+    setFbThread(r.data.thread);
+    setFbMessages(Array.isArray(r.data.messages) ? r.data.messages : []);
+  }, [t, goToLogin]);
+
+  const sendFeedbackReply = useCallback(async () => {
+    if (!fbOpenId || fbReply.trim().length < 10) return;
+    setFbBusy("reply");
+    setFbActionErr("");
+    setFbMsg("");
+    try {
+      const r = await fetch(`/api/admin/feedback/${encodeURIComponent(fbOpenId)}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ body: fbReply.trim() }),
+      });
+      if (r.status === 401 || r.status === 403) {
+        goToLogin();
+        return;
+      }
+      if (!r.ok) {
+        setFbActionErr(t("afb.replyFail"));
+        return;
+      }
+      setFbReply("");
+      setFbMsg(t("afb.replied"));
+      await openFeedback(fbOpenId);
+      await loadFeedback(fbPage, fbFilter);
+    } catch {
+      setFbActionErr(t("afb.replyFail"));
+    } finally {
+      setFbBusy("");
+    }
+  }, [fbOpenId, fbReply, fbPage, fbFilter, goToLogin, loadFeedback, openFeedback, t]);
+
+  const setFeedbackStatus = useCallback(async (status: string) => {
+    if (!fbOpenId) return;
+    setFbBusy("status");
+    setFbActionErr("");
+    setFbMsg("");
+    try {
+      const r = await fetch(`/api/admin/feedback/${encodeURIComponent(fbOpenId)}/status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      if (r.status === 401 || r.status === 403) {
+        goToLogin();
+        return;
+      }
+      if (!r.ok) {
+        setFbActionErr(t("afb.statusFail"));
+        return;
+      }
+      setFbMsg(t("afb.statusSet"));
+      await openFeedback(fbOpenId);
+      await loadFeedback(fbPage, fbFilter);
+    } catch {
+      setFbActionErr(t("afb.statusFail"));
+    } finally {
+      setFbBusy("");
+    }
+  }, [fbOpenId, fbPage, fbFilter, goToLogin, loadFeedback, openFeedback, t]);
+
   useEffect(() => {
     if (isSuperAdmin) {
       load();
@@ -356,6 +518,12 @@ export default function AdminPage() {
   useEffect(() => {
     if (isSuperAdmin) void loadSupp(suppPages, suppQuery);
   }, [isSuperAdmin, loadSupp, suppPages, suppQuery]);
+
+  // In-app feedback: same pattern as the suppression list — a server-side
+  // filter + pager, reloading when either changes (and once on entry).
+  useEffect(() => {
+    if (isSuperAdmin) void loadFeedback(fbPage, fbFilter);
+  }, [isSuperAdmin, loadFeedback, fbPage, fbFilter]);
 
   if (anon || !isSuperAdmin) {
     return (
@@ -829,6 +997,224 @@ export default function AdminPage() {
                     </div>
                   )}
                 </>
+              )}
+            </section>
+
+            {/* In-app feedback triage (system-owned threads filed by users). */}
+            <section>
+              <h2 className="mb-3 flex flex-wrap items-center gap-2 text-sm font-semibold uppercase tracking-wide text-[var(--jf-muted)]">
+                {t("afb.title")}
+                {/* AGENTS.md DOCUMENTATION PARITY rule 4: an inline "?" next to
+                    the feature, deep-linking the docs page that explains it. */}
+                <a
+                  href="/docs/feedback"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={t("fb.docs")}
+                  aria-label={t("fb.docs")}
+                  className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 text-xs font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                >
+                  ?
+                </a>
+              </h2>
+              <p className="mb-3 text-sm text-[var(--jf-muted)]">{t("afb.subtitle")}</p>
+
+              {/* Status filter chips (server-side filter). */}
+              <div className="mb-3 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFbFilter("");
+                    setFbPage(1);
+                  }}
+                  className={`min-h-11 rounded-md px-3 text-sm font-medium ${
+                    fbFilter === ""
+                      ? "bg-[var(--jf-primary)] text-white"
+                      : "border border-[var(--jf-border)] hover:bg-slate-50"
+                  }`}
+                >
+                  {t("afb.filterAll")}
+                  {fbList && ` (${fbList.total})`}
+                </button>
+                {FB_STATUSES.map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => {
+                      setFbFilter(s);
+                      setFbPage(1);
+                    }}
+                    className={`min-h-11 rounded-md px-3 text-sm font-medium ${
+                      fbFilter === s
+                        ? "bg-[var(--jf-primary)] text-white"
+                        : "border border-[var(--jf-border)] hover:bg-slate-50"
+                    }`}
+                  >
+                    {t(`fb.status.${s}` as Key)}
+                    {fbList && ` (${fbList.counts?.[s] ?? 0})`}
+                  </button>
+                ))}
+              </div>
+
+              {fbErr && (
+                <div role="alert" className="mb-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                  {fbErr}
+                  <button
+                    type="button"
+                    onClick={() => void loadFeedback(fbPage, fbFilter)}
+                    className="ml-2 inline-flex min-h-11 items-center px-2 underline decoration-dotted underline-offset-2"
+                  >
+                    {t("common.retry")}
+                  </button>
+                </div>
+              )}
+
+              {!fbList ? (
+                <p className="text-sm text-[var(--jf-muted)]">Loading…</p>
+              ) : fbList.items.length === 0 ? (
+                <p className="text-sm text-[var(--jf-muted)]">{t("afb.empty")}</p>
+              ) : (
+                <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                  {/* Thread list. Below xl each row is a stacked card. */}
+                  <ul className="space-y-2">
+                    {fbList.items.map((th) => (
+                      <li key={th.id}>
+                        <button
+                          type="button"
+                          onClick={() => void openFeedback(th.id)}
+                          className={`flex w-full flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left ${
+                            fbOpenId === th.id
+                              ? "border-[var(--jf-primary)] bg-indigo-50/40"
+                              : "border-[var(--jf-border)] bg-white hover:bg-slate-50"
+                          }`}
+                        >
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-sm font-medium">
+                              {th.subject || t("fb.noSubject")}
+                            </span>
+                            <span className="mt-0.5 block break-all text-xs text-[var(--jf-muted)]">
+                              {th.user_email} · {formatDateTime(th.last_activity_at)} ·{" "}
+                              {t("fb.messages", { n: th.message_count })}
+                            </span>
+                          </span>
+                          <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${fbStatusBadge(th.status)}`}>
+                            {t(`fb.status.${th.status}` as Key)}
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+
+                  {/* The selected thread: messages, reply box, status control. */}
+                  <div className="rounded-xl border border-[var(--jf-border)] bg-white p-4">
+                    {!fbThread ? (
+                      <p className="text-sm text-[var(--jf-muted)]">{t("fb.pickOne")}</p>
+                    ) : (
+                      <>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <h3 className="min-w-0 flex-1 truncate text-sm font-semibold">
+                            {fbThread.subject || t("fb.noSubject")}
+                          </h3>
+                          <select
+                            value={fbThread.status}
+                            onChange={(e) => void setFeedbackStatus(e.target.value)}
+                            disabled={fbBusy === "status"}
+                            aria-label={t("afb.columnStatus")}
+                            className="jf-input min-h-11 w-auto text-sm"
+                          >
+                            {FB_STATUSES.map((s) => (
+                              <option key={s} value={s}>
+                                {t(`fb.status.${s}` as Key)}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <p className="mt-1 break-all text-xs text-[var(--jf-muted)]">
+                          {t("afb.columnFiler")}: {fbThread.user_email}
+                        </p>
+
+                        <ul className="mt-3 space-y-3">
+                          {fbMessages.map((m) => {
+                            const isAdmin = m.author_kind === "admin";
+                            return (
+                              <li
+                                key={m.id}
+                                className={`rounded-lg border px-3 py-2 ${
+                                  isAdmin
+                                    ? "border-indigo-100 bg-indigo-50/50"
+                                    : "border-[var(--jf-border)] bg-slate-50"
+                                }`}
+                              >
+                                <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--jf-muted)]">
+                                  <span className="font-medium text-[var(--jf-text)]">
+                                    {isAdmin ? t("fb.whoTeam") : fbThread.user_email}
+                                  </span>
+                                  <span>{formatDateTime(m.created_at)}</span>
+                                </div>
+                                <p className="mt-1 whitespace-pre-wrap break-words text-sm">{m.body}</p>
+                              </li>
+                            );
+                          })}
+                        </ul>
+
+                        {fbMsg && <p className="mt-3 text-sm text-emerald-700">{fbMsg}</p>}
+                        {fbActionErr && (
+                          <p role="alert" className="mt-3 break-words text-sm text-red-600">{fbActionErr}</p>
+                        )}
+
+                        <div className="mt-4">
+                          <label htmlFor="afb-reply" className="text-xs font-medium text-[var(--jf-muted)]">
+                            {t("afb.replyTitle")}
+                          </label>
+                          <textarea
+                            id="afb-reply"
+                            value={fbReply}
+                            onChange={(e) => setFbReply(e.target.value)}
+                            rows={3}
+                            maxLength={5000}
+                            placeholder={t("afb.replyPh")}
+                            className="jf-input mt-1"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => void sendFeedbackReply()}
+                            disabled={fbBusy === "reply" || fbReply.trim().length < 10}
+                            className="mt-2 min-h-11 rounded-md bg-[var(--jf-primary)] px-4 text-sm font-medium text-white disabled:opacity-50"
+                          >
+                            {t("afb.replySend")}
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {fbList && fbList.total > FB_PER_PAGE && (
+                <div className="mt-3 flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setFbPage((p) => Math.max(1, p - 1))}
+                    disabled={fbPage <= 1}
+                    className="min-h-11 rounded-md border border-[var(--jf-border)] px-3 text-sm font-medium hover:bg-slate-50 disabled:opacity-40"
+                  >
+                    {t("common.prev")}
+                  </button>
+                  <span className="text-sm text-[var(--jf-muted)]">
+                    {t("admin.suppPageOf", {
+                      page: fbPage,
+                      total: Math.max(1, Math.ceil(fbList.total / FB_PER_PAGE)),
+                    })}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setFbPage((p) => p + 1)}
+                    disabled={fbPage >= Math.ceil(fbList.total / FB_PER_PAGE)}
+                    className="min-h-11 rounded-md border border-[var(--jf-border)] px-3 text-sm font-medium hover:bg-slate-50 disabled:opacity-40"
+                  >
+                    {t("common.next")}
+                  </button>
+                </div>
               )}
             </section>
 

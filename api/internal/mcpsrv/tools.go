@@ -608,6 +608,29 @@ func (s *Server) registerTools() {
 		Description: "Buang alamat dari senarai sekatan supaya penghantaran emel kepadanya bermula semula (issue #601) — untuk kes positif palsu. Super-admin sahaja; diaudit.",
 	}, s.adminRemoveSuppression)
 
+	// ── Parity: in-app feedback (system-owned, two-way thread) ──────────
+	// The dashboard's feedback form + admin triage, over MCP. Unlike the rest
+	// of the registry, these tools are scoped to the authenticated USER, not to
+	// a workspace: a feedback thread belongs to the person who filed it and
+	// carries no account_id, so naming a workspace cannot widen the read. A
+	// super-admin additionally sees every thread (triage) from the same tools.
+	addTool(s, &mcp.Tool{
+		Name:        "list_feedback",
+		Description: "Senarai thread maklum balas anda sendiri (terbaru dahulu), boleh tapis status (open|in_progress|resolved|closed) dan berhalaman (page/limit). Skop ialah PENGGUNA yang disahkan, bukan workspace — maklum balas bukan data akaun. Super-admin melihat SEMUA thread (triage). Read-only.",
+	}, s.listFeedback)
+	addTool(s, &mcp.Tool{
+		Name:        "get_feedback_thread",
+		Description: "Baca satu thread maklum balas beserta semua mesejnya (author_kind: user|admin), terawal dahulu. Thread milik pengguna lain menjawab 'tidak dijumpai' — sama seperti id yang tidak wujud. Super-admin boleh membaca mana-mana thread. Read-only.",
+	}, s.getFeedbackThread)
+	addTool(s, &mcp.Tool{
+		Name:        "reply_feedback",
+		Description: "Balas dalam thread maklum balas. Penulis ditentukan oleh pemanggil: super-admin membalas sebagai admin (dan thread 'open' bergerak ke in_progress), pengguna lain membalas sebagai pemilik thread. Body minimum 10 aksara. Skop pengguna — tidak boleh membalas thread orang lain.",
+	}, s.replyFeedback)
+	addTool(s, &mcp.Tool{
+		Name:        "set_feedback_status",
+		Description: "Tukar status thread maklum balas (open|in_progress|resolved|closed). Keputusan triage — super-admin sahaja; diaudit. Status adalah per-thread, bukan per-mesej.",
+	}, s.setFeedbackStatus)
+
 	// ── Parity: analytics (issue #396) ────────────────────────────────────
 	addTool(s, &mcp.Tool{
 		Name:        "get_form_analytics",

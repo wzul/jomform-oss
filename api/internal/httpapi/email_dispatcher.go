@@ -80,6 +80,14 @@ func (d *EmailDispatcher) Send(ctx context.Context, job emailqueue.Job) error {
 		return d.sendMerchantNotify(ctx, job)
 	case "form_notification":
 		return d.sendFormNotification(ctx, job)
+	// feedback_notify rides the same sender as form_notification: a feedback
+	// thread's notification is a plain message to a person, and routing it
+	// through pay.Receipts.Sender is what puts it behind the shared pre-send
+	// suppression choke point. The feedback lane adds no second channel — this
+	// case is what keeps it on the existing one (email_dispatcher_jobtype_test
+	// fails if a type is enqueued with no case here).
+	case "feedback_notify":
+		return d.sendFeedbackNotify(ctx, job)
 	// connect (issue #302, the social-login email-ownership link) rides the
 	// shared auth mailer exactly as its synchronous branch does — same sender,
 	// same sent metric, same breaker.
@@ -199,6 +207,31 @@ func (d *EmailDispatcher) sendFormNotification(ctx context.Context, job emailque
 		return err
 	}
 	slog.Info("emailq_form_notification_sent", "ref", job.SaleRef, "to", job.To)
+	return nil
+}
+
+// sendFeedbackNotify delivers an in-app feedback notification (a new thread
+// alert to the platform team, or a reply alert to the filer).
+//
+// It rides pay.Receipts.Sender — the same sender as form_notification — which
+// is what puts it behind the shared pre-send suppression guard. A suppression
+// hit is a correct skip, not a failure: retrying can never succeed, and a
+// non-nil error would push a job that is being dropped correctly onto the retry
+// ladder and into the dead-letter list. There is no SaleID to persist: a
+// feedback thread is not a sale.
+func (d *EmailDispatcher) sendFeedbackNotify(ctx context.Context, job emailqueue.Job) error {
+	if d.Pay == nil || d.Pay.Receipts == nil || d.Pay.Receipts.Sender == nil {
+		slog.Warn("emailq_feedback_notify_no_sender", "to", job.To)
+		return nil
+	}
+	if err := d.Pay.Receipts.Sender.Send(job.To, job.Subject, job.Body); err != nil {
+		if d.suppressionSkip(job, err) {
+			return nil
+		}
+		slog.Warn("emailq_feedback_notify_failed", "to", job.To, "err", err)
+		return err
+	}
+	slog.Info("emailq_feedback_notify_sent", "to", job.To)
 	return nil
 }
 

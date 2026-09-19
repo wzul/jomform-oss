@@ -16,7 +16,7 @@ export function Shell({
   active,
 }: {
   children: React.ReactNode;
-  active: "dashboard" | "forms" | "templates" | "products" | "sales" | "spam" | "deliveries" | "subscriptions" | "settings" | "profile" | "media" | "admin";
+  active: "dashboard" | "forms" | "templates" | "products" | "sales" | "spam" | "deliveries" | "subscriptions" | "settings" | "profile" | "media" | "feedback" | "admin";
 }) {
   const { user, workspaces, reload } = useSession();
   const [workspace, setWorkspace] = useState<string>("");
@@ -155,6 +155,11 @@ export function Shell({
     { key: "media", href: "/media", label: t("media.title"), icon: "🖼" },
     { key: "settings", href: "/settings", label: t("nav.settings"), icon: "⚙" },
     { key: "profile", href: "/profile", label: t("prof.title"), icon: "👤" },
+    // In-app feedback: a plain link for EVERY signed-in user, deliberately NOT
+    // gated on the super-admin role. The feedback form is the system's, not a
+    // workspace's, so reaching it must not depend on owning an account — the
+    // same reason /admin (below) is the only role-gated entry in this list.
+    { key: "feedback", href: "/feedback", label: t("nav.feedback"), icon: "💬" },
   ];
 
   // Issue #387: super-admins (#385) get a platform-wide Admin nav link.

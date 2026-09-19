@@ -100,6 +100,11 @@ type Deps struct {
 	// Super-admin unlocks platform-wide monitoring ONLY on explicitly gated
 	// admin tools/pages (#386/#387), never implicitly on normal tools.
 	SuperAdmin func(email string) bool
+	// Feedback is the in-app feedback thread store. Nil → the feedback tools
+	// error. It is user-scoped, NOT account-scoped: a thread belongs to the
+	// person who filed it and carries no account_id (migration 000063), so
+	// these tools never resolve a workspace scope.
+	Feedback *dbstore.FeedbackThreadStore
 }
 
 // Server wraps the MCP *Server with JomForm deps.
