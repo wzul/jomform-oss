@@ -26,6 +26,7 @@ import (
 	"text/template"
 	texttemplate "text/template"
 	"time"
+	"unicode"
 
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/email"
@@ -318,8 +319,26 @@ func renderNotification(subject, body string, ref NotificationRef) (subj, render
 	funcs["full_name"] = func() string { return data.BuyerName }
 	funcs["email"] = func() string { return "" }
 	// Register every submitted field as a template function so {{field_id}}
-	// resolves to the submitted value.
+	// resolves to the submitted value. A block id that is not a valid template
+	// identifier is SKIPPED, because text/template PANICS on such a FuncMap key
+	// (text/template/funcs.go `addValueFuncs` → `goodName`) and that panic
+	// escaped renderNotification's contract and 500'd the public submit route
+	// (issue #635).
+	//
+	// The builder mints ids with `Math.random().toString(36).slice(2, 9)`
+	// (web/src/app/builder/page.tsx), which is base36, so an id routinely leads
+	// with a digit (`4nwz0vg`) — the exact shape that reached this loop.
+	//
+	// Nothing addressable is lost by skipping: a name that is not a valid
+	// template identifier is not parseable as a placeholder either, so
+	// `{{4nwz0vg}}` could never have resolved (the lexer reads the leading digit
+	// as a number). The submitted value still drives conditional logic
+	// (notificationConditionMet) and `{field_id}` recipients
+	// (resolveNotificationRecipient) — both read ref.Fields, not this map.
 	for k, v := range data.Fields {
+		if !isTemplateFuncName(k) {
+			continue
+		}
 		kv := v
 		funcs[k] = func() string { return kv }
 	}
@@ -328,10 +347,49 @@ func renderNotification(subject, body string, ref NotificationRef) (subj, render
 	return subj, rendered
 }
 
-func renderNotificationTemplate(src string, funcs template.FuncMap, data notificationData) string {
+// isTemplateFuncName reports whether name may be used as a text/template
+// FuncMap key. text/template PANICS on any other name (text/template/funcs.go
+// addValueFuncs → goodName), and that panic is not catchable by the parse-error
+// fallback below it. The rule is restated here rather than exported by
+// text/template, so it is pinned by a test against the stdlib's own behaviour
+// (TestTemplateFuncNameMatchesStdlibGoodName) instead of by comment.
+func isTemplateFuncName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i, r := range name {
+		switch {
+		case r == '_':
+		case i == 0 && !unicode.IsLetter(r):
+			return false
+		case !unicode.IsLetter(r) && !unicode.IsDigit(r):
+			return false
+		}
+	}
+	return true
+}
+
+// renderNotificationTemplate executes a source template against the notification
+// data, falling back to the raw source on any failure — including a PANIC.
+//
+// The panic half is load-bearing (issue #635): text/template's Funcs PANICS
+// (`function name %q is not a valid identifier`) when handed a FuncMap key that
+// is not a valid identifier, and that happens BEFORE Parse, so neither the
+// parse-error nor the execute-error fallback below can see it. A panic here
+// escaped this function's documented "a bad merchant template can never block a
+// notification" contract and reached the HTTP recoverer, turning a form
+// submission into a 500. The caller skips invalid field ids so this should be
+// unreachable; the recover makes the contract true rather than intended.
+func renderNotificationTemplate(src string, funcs template.FuncMap, data notificationData) (out string) {
 	if strings.TrimSpace(src) == "" {
 		return src
 	}
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("notify_render_panic_recovered", "err", rec)
+			out = src
+		}
+	}()
 	t, err := texttemplate.New("notify").Funcs(funcs).Parse(src)
 	if err != nil {
 		return src
