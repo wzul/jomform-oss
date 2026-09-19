@@ -405,9 +405,19 @@ func (s *SubscriptionStore) ListByAccountsPage(ctx context.Context, accountIDs [
 
 // ByIDForAccount returns a subscription by id, but only when it belongs to
 // the given account (used by per-subscription mutations to keep them
-// account-scoped). Returns pgx.ErrNoRows when not owned.
+// account-scoped).
+// A miss — no such subscription, another account's, or an id that cannot be a
+// UUID at all (Postgres raises SQLSTATE 22P02) — is pgx.ErrNoRows, the
+// not-found signal this store already uses and its callers already map to 404.
+// Without it the malformed-id shape escaped as a driver error and the routes
+// that compare errors.Is(err, pgx.ErrNoRows) fell through to a 500 (see
+// isNoSuchRow).
 func (s *SubscriptionStore) ByIDForAccount(ctx context.Context, accountID, subID string) (*Subscription, error) {
-	return scanSub(s.pool.QueryRow(ctx, subSelect+" WHERE id=$1 AND account_id=$2", subID, accountID))
+	sub, err := scanSub(s.pool.QueryRow(ctx, subSelect+" WHERE id=$1 AND account_id=$2", subID, accountID))
+	if isNoSuchRow(err) {
+		return nil, pgx.ErrNoRows
+	}
+	return sub, err
 }
 
 // UpdateToken atomically replaces the recurring token on a subscription,

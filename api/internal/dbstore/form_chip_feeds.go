@@ -75,6 +75,9 @@ func (s *FormStore) SetChipFeeds(ctx context.Context, accountID, formID string, 
 		`UPDATE forms SET config = jsonb_set(config, '{chip_feeds}', $3::jsonb), updated_at=now()
 		 WHERE id=$2 AND account_id=$1 AND deleted_at IS NULL`,
 		accountID, formID, string(raw))
+	if isNoSuchRow(err) {
+		return ErrFormNotFound
+	}
 	if err != nil {
 		return err
 	}

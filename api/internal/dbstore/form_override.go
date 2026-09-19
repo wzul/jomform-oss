@@ -6,21 +6,40 @@ import "context"
 
 // SetChipOverride stores per-form credentials (secret already encrypted by caller).
 func (s *FormStore) SetChipOverride(ctx context.Context, accountID, formID, brandID, secretEnc, emailFallback string, whitelist []string) error {
-	_, err := s.pool.Exec(ctx,
+	tag, err := s.pool.Exec(ctx,
 		`UPDATE forms SET chip_brand_id=NULLIF($3,''), chip_secret_key_enc=NULLIF($4,''),
 		   chip_email_fallback=NULLIF($5,'')::citext, chip_method_whitelist=$6
 		 WHERE id=$2 AND account_id=$1`,
 		accountID, formID, brandID, secretEnc, emailFallback, whitelist)
-	return err
+	if isNoSuchRow(err) {
+		return ErrFormNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrFormNotFound
+	}
+	return nil
 }
 
 // ClearChipOverride removes the per-form override so account creds apply.
+// A miss is ErrFormNotFound (see isNoSuchRow).
 func (s *FormStore) ClearChipOverride(ctx context.Context, accountID, formID string) error {
-	_, err := s.pool.Exec(ctx,
+	tag, err := s.pool.Exec(ctx,
 		`UPDATE forms SET chip_brand_id=NULL, chip_secret_key_enc=NULL,
 		   chip_email_fallback=NULL, chip_method_whitelist=NULL
 		 WHERE id=$2 AND account_id=$1`, accountID, formID)
-	return err
+	if isNoSuchRow(err) {
+		return ErrFormNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrFormNotFound
+	}
+	return nil
 }
 
 // ChipOverrideFor returns the form's override credentials (may be zero-value).

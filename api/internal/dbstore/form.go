@@ -151,10 +151,22 @@ func (s *FormStore) ListByAccounts(ctx context.Context, accountIDs []string) ([]
 	return out, rows.Err()
 }
 
-// GetByID fetches one non-deleted form scoped to account.
+// GetByID fetches one non-deleted form scoped to account. Every way an id can
+// fail to name a form the caller may see — no such row, another account's
+// form, a gallery template owned by the system account, an id that is not a
+// UUID at all — is ErrFormNotFound. See isNoSuchRow for why the raw driver
+// error must not escape: respondErr only maps the store sentinels, so an
+// unmapped error became HTTP 500 "internal error" and an error_class=internal
+// counter on a plain not-found lookup, and the MCP call scope (which walks the
+// caller's accounts and needs "not owned here" to continue) could not tell a
+// miss from a failure.
 func (s *FormStore) GetByID(ctx context.Context, accountID, id string) (*Form, error) {
-	return s.scanOne(s.pool.QueryRow(ctx,
+	f, err := s.scanOne(s.pool.QueryRow(ctx,
 		formSelect+" AND id=$2 AND account_id=$1", accountID, id))
+	if isNoSuchRow(err) {
+		return nil, ErrFormNotFound
+	}
+	return f, err
 }
 
 // GetByIDInAccounts fetches one non-deleted form by id across a SET of accounts,
@@ -181,6 +193,9 @@ func (s *FormStore) Update(ctx context.Context, accountID, id, title string, con
 		`UPDATE forms SET title=$3, config=COALESCE($4, config), theme=COALESCE($5, theme), updated_at=now()
 		 WHERE id=$2 AND account_id=$1 AND deleted_at IS NULL`,
 		accountID, id, title, config, theme)
+	if isNoSuchRow(err) {
+		return ErrFormNotFound
+	}
 	if err != nil {
 		return err
 	}
@@ -273,6 +288,9 @@ func (s *FormStore) SetStatus(ctx context.Context, accountID, id, status string)
 	}
 	var matched, blocked int64
 	if err := s.pool.QueryRow(ctx, setStatusSQL, accountID, id, status).Scan(&matched, &blocked); err != nil {
+		if isNoSuchRow(err) {
+			return ErrFormNotFound
+		}
 		return err
 	}
 	return classifyStatusWrite(matched, blocked)
@@ -290,6 +308,9 @@ func (s *FormStore) SetStatusWithPassword(ctx context.Context, accountID, id, st
 	var matched, blocked int64
 	if err := s.pool.QueryRow(ctx, setStatusWithPasswordSQL,
 		accountID, id, status, passwordHash).Scan(&matched, &blocked); err != nil {
+		if isNoSuchRow(err) {
+			return ErrFormNotFound
+		}
 		return err
 	}
 	return classifyStatusWrite(matched, blocked)
@@ -302,6 +323,9 @@ func (s *FormStore) SetAccessPassword(ctx context.Context, accountID, id, passwo
 		`UPDATE forms SET access_password=$3, updated_at=now()
 		 WHERE id=$2 AND account_id=$1 AND deleted_at IS NULL`,
 		accountID, id, passwordHash)
+	if isNoSuchRow(err) {
+		return ErrFormNotFound
+	}
 	if err != nil {
 		return err
 	}
@@ -374,30 +398,61 @@ func (s *FormStore) PublishedByAccountSlug(ctx context.Context, accountSlug, for
 	return f, err
 }
 
-// SetTracking stores per-form head tracking (sanitised by caller).
+// SetTracking stores a form's custom head markup. A miss — no such form,
+// another account's, or an id that cannot be a UUID at all — is ErrFormNotFound
+// (see isNoSuchRow).
 func (s *FormStore) SetTracking(ctx context.Context, accountID, formID, markup string) error {
-	_, err := s.pool.Exec(ctx,
+	tag, err := s.pool.Exec(ctx,
 		`UPDATE forms SET tracking_head=$3, updated_at=now() WHERE id=$2 AND account_id=$1`,
 		accountID, formID, markup)
-	return err
+	if isNoSuchRow(err) {
+		return ErrFormNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrFormNotFound
+	}
+	return nil
 }
 
-// UpdateSettings changes redirect/embed/failure-message fields on a form.
+// UpdateSettings changes redirect/embed/failure-message fields on a form. A
+// miss is ErrFormNotFound (see isNoSuchRow).
 func (s *FormStore) UpdateSettings(ctx context.Context, accountID, id, redirectSuccess, redirectFailure string, allowEmbed bool, logoURL, failureMessage string) error {
-	_, err := s.pool.Exec(ctx,
+	tag, err := s.pool.Exec(ctx,
 		`UPDATE forms SET redirect_success=$3, redirect_failure=$4, allow_embed=$5, logo_url=$6, failure_message=$7, updated_at=now()
 		 WHERE id=$2 AND account_id=$1`,
 		accountID, id, redirectSuccess, redirectFailure, allowEmbed, logoURL, failureMessage)
-	return err
+	if isNoSuchRow(err) {
+		return ErrFormNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrFormNotFound
+	}
+	return nil
 }
 
 // SetFailureMessage stores a form's payment-failed message (issue #393).
 // Empty clears it so the renderer falls back to the buyer-facing default.
+// A miss is ErrFormNotFound (see isNoSuchRow).
 func (s *FormStore) SetFailureMessage(ctx context.Context, accountID, id, message string) error {
-	_, err := s.pool.Exec(ctx,
+	tag, err := s.pool.Exec(ctx,
 		`UPDATE forms SET failure_message=$3, updated_at=now() WHERE id=$2 AND account_id=$1`,
 		accountID, id, message)
-	return err
+	if isNoSuchRow(err) {
+		return ErrFormNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrFormNotFound
+	}
+	return nil
 }
 
 // UpdateRestrictions sets a form's schedule + entry limit (issue #207).
@@ -405,12 +460,21 @@ func (s *FormStore) SetFailureMessage(ctx context.Context, accountID, id, messag
 // clear the limit. Empty message strings clear the per-state override so the
 // renderer falls back to the buyer-facing default for the form's language.
 func (s *FormStore) UpdateRestrictions(ctx context.Context, accountID, id string, startAt, endAt *time.Time, entryLimit *int, pendingMessage, expiredMessage, limitMessage string) error {
-	_, err := s.pool.Exec(ctx,
+	tag, err := s.pool.Exec(ctx,
 		`UPDATE forms SET start_at=$3, end_at=$4, entry_limit=$5,
 		        pending_message=$6, expired_message=$7, limit_message=$8, updated_at=now()
 		 WHERE id=$2 AND account_id=$1 AND deleted_at IS NULL`,
 		accountID, id, startAt, endAt, entryLimit, pendingMessage, expiredMessage, limitMessage)
-	return err
+	if isNoSuchRow(err) {
+		return ErrFormNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrFormNotFound
+	}
+	return nil
 }
 
 // ListTemplates returns published template forms for the gallery.
@@ -687,6 +751,9 @@ func (s *FormStore) SoftDelete(ctx context.Context, accountID, formID string) er
 		`UPDATE forms SET deleted_at=now(), updated_at=now()
 		 WHERE id=$2 AND account_id=$1 AND deleted_at IS NULL`,
 		accountID, formID)
+	if isNoSuchRow(err) {
+		return ErrFormNotFound
+	}
 	if err != nil {
 		return err
 	}

@@ -83,6 +83,13 @@ func (s *SubmissionStore) ListByAccountsFormPage(ctx context.Context, accountIDs
 	if err := s.pool.QueryRow(ctx,
 		`SELECT COUNT(*) FROM submissions WHERE account_id = ANY($1) AND form_id = $2`,
 		accountIDs, formID).Scan(&total); err != nil {
+		if isNoSuchRow(err) {
+			// The form id cannot name a row at all (SQLSTATE 22P02), which is
+			// the same answer a well-formed id naming no form already gets on
+			// this route: no submissions. It must not surface as a driver
+			// error and become a 500 on a caller-supplied bad id.
+			return []*Submission{}, 0, nil
+		}
 		return nil, 0, err
 	}
 	rows, err := s.pool.Query(ctx,
@@ -91,6 +98,9 @@ func (s *SubmissionStore) ListByAccountsFormPage(ctx context.Context, accountIDs
 		 WHERE account_id = ANY($1) AND form_id = $2
 		 ORDER BY created_at DESC LIMIT $3 OFFSET $4`,
 		accountIDs, formID, limit, offset)
+	if isNoSuchRow(err) {
+		return []*Submission{}, total, nil
+	}
 	if err != nil {
 		return nil, 0, err
 	}
@@ -326,6 +336,11 @@ func (s *SubmissionStore) CountByAccountsForm(ctx context.Context, accountIDs []
 	err := s.pool.QueryRow(ctx,
 		`SELECT COUNT(*) FROM submissions WHERE account_id = ANY($1) AND form_id = $2`,
 		accountIDs, formID).Scan(&total)
+	if isNoSuchRow(err) {
+		// Same as ListByAccountsFormPage: an id that cannot be a uuid counts
+		// zero submissions rather than raising a 500 (see isNoSuchRow).
+		return 0, nil
+	}
 	return total, err
 }
 

@@ -78,11 +78,33 @@ func (s *APIKeyStore) ListByAccount(ctx context.Context, accountID string) ([]*A
 	return out, rows.Err()
 }
 
-// Revoke marks a key revoked.
+// Revoke marks a key revoked. Account-scoped.
+//
+// A miss is a not-found: an id naming no row this account owns — never existed,
+// another account's key — and an id that cannot be a UUID at all (Postgres
+// SQLSTATE 22P02) both return ErrAPIKeyInvalid, so DELETE /v1/rest/keys/{id}
+// answers 404. Before this, the malformed id escaped as a raw driver error into
+// a 500, and a missing/foreign id answered 200 "revoked" while revoking
+// nothing — telling the caller an access path was closed when it was not.
+//
+// Revoking a key the caller owns is idempotent: the UPDATE matches on id +
+// account and does not filter on revoked_at, so a repeat (or a client retry)
+// still affects the row and answers 200 rather than a confusing 404 for a key
+// that is, in fact, revoked (see isNoSuchRow).
 func (s *APIKeyStore) Revoke(ctx context.Context, accountID, keyID string) error {
-	_, err := s.pool.Exec(ctx,
-		`UPDATE api_keys SET revoked_at=now() WHERE id=$2 AND account_id=$1`, accountID, keyID)
-	return err
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE api_keys SET revoked_at=now() WHERE id=$2 AND account_id=$1`,
+		accountID, keyID)
+	if isNoSuchRow(err) {
+		return ErrAPIKeyInvalid
+	}
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrAPIKeyInvalid
+	}
+	return nil
 }
 
 // Touch updates last_used_at (fire-and-forget).

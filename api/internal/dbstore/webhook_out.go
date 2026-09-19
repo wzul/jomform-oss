@@ -3,6 +3,7 @@ package dbstore
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -27,6 +28,12 @@ type OutboundWebhook struct {
 
 // WebhookStore wraps pgx for outbound webhooks.
 type WebhookStore struct{ pool *pgxpool.Pool }
+
+// ErrWebhookNotFound means the id named no webhook this account may see:
+// it exists nowhere, it belongs to another account, or it cannot be a UUID at
+// all (Postgres raises SQLSTATE 22P02). The delete/update/deliveries routes
+// answer 404 from it, so a caller-supplied bad id is never a 500.
+var ErrWebhookNotFound = errors.New("webhook not found")
 
 // NewWebhookStore builds one.
 func NewWebhookStore(pool *pgxpool.Pool) *WebhookStore { return &WebhookStore{pool: pool} }
@@ -65,17 +72,31 @@ func (s *WebhookStore) ListByAccount(ctx context.Context, accountID, formID stri
 	return out, rows.Err()
 }
 
-// Delete soft-disables a webhook owned by the account.
+// Delete soft-disables a webhook owned by the account. A miss — no such
+// webhook, another account's, or an id that cannot be a UUID at all (SQLSTATE
+// 22P02) — is ErrWebhookNotFound, so DELETE /v1/rest/webhooks/{id} answers 404
+// rather than 200 ("deleted") for an endpoint it did not disable or 500 for a
+// malformed id (see isNoSuchRow).
 func (s *WebhookStore) Delete(ctx context.Context, accountID, webhookID string) error {
-	_, err := s.pool.Exec(ctx,
+	tag, err := s.pool.Exec(ctx,
 		`UPDATE outbound_webhooks SET active=false WHERE id=$2 AND account_id=$1`,
 		accountID, webhookID)
-	return err
+	if isNoSuchRow(err) {
+		return ErrWebhookNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrWebhookNotFound
+	}
+	return nil
 }
 
 // Update edits a webhook owned by the account. If secret is "" it is left
 // unchanged; url and events are always replaced with the provided values.
-// Returns pgx.ErrNoRows when the webhook does not exist or is not owned.
+// A miss — no such webhook, another account's, or an id that cannot be a UUID
+// at all — is ErrWebhookNotFound (see isNoSuchRow).
 func (s *WebhookStore) Update(ctx context.Context, accountID, webhookID, url, secret string, events []string) error {
 	var res string
 	err := s.pool.QueryRow(ctx,
@@ -86,6 +107,9 @@ func (s *WebhookStore) Update(ctx context.Context, accountID, webhookID, url, se
 		 WHERE id=$2 AND account_id=$1
 		 RETURNING id`,
 		accountID, webhookID, url, secret, events).Scan(&res)
+	if isNoSuchRow(err) {
+		return ErrWebhookNotFound
+	}
 	return err
 }
 
@@ -166,7 +190,23 @@ func (s *WebhookStore) RecordDelivery(ctx context.Context, webhookID, event, pay
 
 // ListDeliveries latest N for a webhook (settings UI + REST + MCP parity).
 // Payload is truncated so the summary log stays light over the wire.
+//
+// Account-scoped, and the webhook id must resolve for the caller: an id that
+// names no webhook this account owns — never existed, another account's, or
+// not a UUID at all (SQLSTATE 22P02) — is ErrWebhookNotFound, so the route
+// answers 404 instead of an empty 200 list or a 500 (see isNoSuchRow). The
+// ownership check is a separate lookup rather than a filter on the delivery
+// join, because a webhook with no deliveries yet must still report "found".
 func (s *WebhookStore) ListDeliveries(ctx context.Context, accountID, webhookID string, limit int) ([]map[string]any, error) {
+	var owned string
+	if err := s.pool.QueryRow(ctx,
+		`SELECT id FROM outbound_webhooks WHERE id=$2 AND account_id=$1`,
+		accountID, webhookID).Scan(&owned); err != nil {
+		if isNoSuchRow(err) {
+			return nil, ErrWebhookNotFound
+		}
+		return nil, err
+	}
 	rows, err := s.pool.Query(ctx,
 		`SELECT d.id, d.event, LEFT(d.payload, 500), d.status_code, d.success, d.attempt, COALESCE(d.error,''), d.created_at
 		 FROM outbound_webhook_deliveries d
@@ -294,7 +334,10 @@ func (s *WebhookStore) ScheduleRetry(ctx context.Context, retryID string, attemp
 
 // RetryNow re-enqueues a dead-lettered (or any) retry immediately so the next
 // sweep tick re-delivers it. Returns pgx.ErrNoRows when the retry does not
-// exist or is not owned by the account (via the webhook join).
+// exist, is not owned by the account (via the webhook join), or cannot be a
+// UUID at all — a malformed id is the same "no such row" to the caller, and
+// without the mapping it escaped as SQLSTATE 22P02 and became a 500 (see
+// isNoSuchRow).
 func (s *WebhookStore) RetryNow(ctx context.Context, accountID, retryID string) error {
 	var res string
 	err := s.pool.QueryRow(ctx,
@@ -304,6 +347,9 @@ func (s *WebhookStore) RetryNow(ctx context.Context, accountID, retryID string) 
 		  WHERE r.id=$2 AND r.webhook_id=w.id AND w.account_id=$1
 		  RETURNING r.id`,
 		accountID, retryID).Scan(&res)
+	if isNoSuchRow(err) {
+		return pgx.ErrNoRows
+	}
 	return err
 }
 
@@ -375,7 +421,10 @@ func (s *WebhookStore) GetByIDAny(ctx context.Context, webhookID string) (*Outbo
 }
 
 // GetDelivery returns one delivery row by id, account-scoped via the webhook
-// join. Returns pgx.ErrNoRows when not found or not owned.
+// join. Returns pgx.ErrNoRows when not found, not owned, or when the id cannot
+// be a UUID at all — all three are the same answer to the caller, and without
+// the mapping the malformed id raised SQLSTATE 22P02 into a 500 on the manual
+// retry routes (see isNoSuchRow).
 //
 // The returned map includes webhook_id (issue #522) so a caller can authorise
 // the webhook id it was given against the delivery's actual owner in one round
@@ -392,6 +441,9 @@ func (s *WebhookStore) GetDelivery(ctx context.Context, accountID, deliveryID st
 		 JOIN outbound_webhooks w ON w.id = d.webhook_id
 		 WHERE d.id=$2 AND w.account_id=$1`,
 		accountID, deliveryID).Scan(&id, &webhookID, &event, &payload, &code, &ok, &attempt, &errMsg, &ts)
+	if isNoSuchRow(err) {
+		return nil, pgx.ErrNoRows
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -128,11 +128,16 @@ func (s *ProductStore) ListAllByAccounts(ctx context.Context, accountIDs []strin
 	return out, rows.Err()
 }
 
-// SetActive archives/restores a product.
+// SetActive archives/restores a product. A miss — no such product, another
+// account's, or an id that cannot be a UUID at all (SQLSTATE 22P02) — is
+// ErrProductNotFound rather than a raw driver error (see isNoSuchRow).
 func (s *ProductStore) SetActive(ctx context.Context, accountID, productID string, active bool) error {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE products SET active=$3, updated_at=now() WHERE id=$2 AND account_id=$1`,
 		accountID, productID, active)
+	if isNoSuchRow(err) {
+		return ErrProductNotFound
+	}
 	if err != nil {
 		return err
 	}
@@ -142,23 +147,41 @@ func (s *ProductStore) SetActive(ctx context.Context, accountID, productID strin
 	return nil
 }
 
-// Get fetches one product scoped to the account.
+// Get fetches one product scoped to the account. A miss — archived/deleted,
+// another account's product, or an id that cannot name a row — is
+// ErrProductNotFound, never a raw driver error (see isNoSuchRow).
 func (s *ProductStore) Get(ctx context.Context, accountID, productID string) (*Product, error) {
 	q := &Product{}
 	err := s.pool.QueryRow(ctx, productSelect+" WHERE id=$2 AND account_id=$1", accountID, productID).
 		Scan(&q.ID, &q.AccountID, &q.Name, &q.Description, &q.PriceSen, &q.Currency,
 			&q.Images, &q.Stock, &q.Type, &q.BillingPeriod, &q.TrialDays, &q.SubscriptionCharges, &q.Active, &q.CreatedAt, &q.UpdatedAt, &q.ScheduleMode)
+	if isNoSuchRow(err) {
+		return nil, ErrProductNotFound
+	}
 	return q, err
 }
 
 var _ = pgxpool.Pool{} // ensure pgxpool import remains for future stores in this package
 
-// Archive sets active=false on a product owned by the account.
+// Archive sets active=false on a product owned by the account. An id that
+// names no row the account owns — never existed, another account's, or not a
+// UUID at all (SQLSTATE 22P02) — is ErrProductNotFound, so DELETE
+// /v1/rest/products/{id} answers 404 rather than 200 ("archived") for a row
+// nothing archived, or 500 for a malformed id (see isNoSuchRow).
 func (s *ProductStore) Archive(ctx context.Context, accountID, productID string) error {
-	_, err := s.pool.Exec(ctx,
+	tag, err := s.pool.Exec(ctx,
 		`UPDATE products SET active=false, updated_at=now() WHERE id=$1 AND account_id=$2`,
 		productID, accountID)
-	return err
+	if isNoSuchRow(err) {
+		return ErrProductNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrProductNotFound
+	}
+	return nil
 }
 
 // ArchiveMany soft-deletes (archives) many products at once; returns how many
@@ -233,6 +256,9 @@ func (s *ProductStore) Update(ctx context.Context, accountID, productID string,
 		accountID, productID, name, description, priceSen, images != nil, images,
 		stock != nil, stock, typ, billingPeriod, trialDays, active,
 		subscriptionCharges != nil, derefIntPtr(subscriptionCharges), derefStr(scheduleMode))
+	if isNoSuchRow(err) {
+		return ErrProductNotFound
+	}
 	if err != nil {
 		return err
 	}

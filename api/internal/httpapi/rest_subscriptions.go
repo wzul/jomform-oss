@@ -5,6 +5,7 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 	"time"
 
@@ -87,7 +88,7 @@ func (h *RESTHandlers) cancelSubscription(w http.ResponseWriter, r *http.Request
 	}
 	sub, err := h.Subs.ByIDForAccount(r.Context(), actx.Account.ID, id)
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			writeErr(w, http.StatusNotFound, "langganan tidak dijumpai")
 			return
 		}
@@ -119,7 +120,7 @@ func (h *RESTHandlers) updateSubscriptionCard(w http.ResponseWriter, r *http.Req
 	}
 	sub, err := h.Subs.ByIDForAccount(r.Context(), actx.Account.ID, id)
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			writeErr(w, http.StatusNotFound, "langganan tidak dijumpai")
 			return
 		}
@@ -169,7 +170,7 @@ func (h *RESTHandlers) retrySubscription(w http.ResponseWriter, r *http.Request,
 	}
 	sub, err := h.Subs.ByIDForAccount(r.Context(), actx.Account.ID, id)
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			writeErr(w, http.StatusNotFound, "langganan tidak dijumpai")
 			return
 		}

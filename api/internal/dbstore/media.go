@@ -288,7 +288,7 @@ func (s *MediaStore) SoftDelete(ctx context.Context, accountID, id string) (stri
 		`UPDATE media SET deleted_at = now()
 		 WHERE id = $1 AND account_id = $2 AND deleted_at IS NULL
 		 RETURNING key, size`, id, accountID).Scan(&key, &size)
-	if err == pgx.ErrNoRows {
+	if isNoSuchRow(err) {
 		return "", 0, false, nil
 	}
 	if err != nil {

@@ -183,9 +183,13 @@ func (s *Server) ownedOrScopedAccounts(ctx context.Context) ([]string, error) {
 }
 
 // isStoredNotFound reports whether err is a store "absent in this account"
-// sentinel (not owned here) rather than a real failure.
+// sentinel (not owned here) rather than a real failure. Both entity sentinels
+// belong here: resolveEntityAccount walks the caller's accounts, so a
+// not-owned answer for one account must let the walk continue to the next
+// (ErrFormNotFound and ErrProductNotFound are the two lookups it drives).
 func isStoredNotFound(err error) bool {
 	return errors.Is(err, dbstore.ErrFormNotFound) ||
+		errors.Is(err, dbstore.ErrProductNotFound) ||
 		errors.Is(err, dbstore.ErrAuthCodeInvalid) ||
 		errors.Is(err, dbstore.ErrAccessTokenInvalid) ||
 		errors.Is(err, dbstore.ErrRefreshInvalid)
