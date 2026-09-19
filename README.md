@@ -13,7 +13,9 @@ Bina borang tempahan yang cantik dan pantas, terima bayaran melalui [CHIP](https
 
 Additional reads: `docs/SES-REPUTATION.md` (issue #56: SES bounce/complaint
 suppression, verification circuit breaker, MX pre-check, SNS feedback
-endpoint) and `docs/PROXY-DECISION.md`.
+endpoint), `docs/SITE-NAME-SEARCH.md` (what the home page's `WebSite` structured
+data does — and does not — do for the name Search prints) and
+`docs/PROXY-DECISION.md`.
 
 ## Repo layout (planned monorepo)
 
