@@ -8,7 +8,7 @@ import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { workspaceQuery } from "../../lib/workspace";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
-import { isSalesForm } from "../../lib/formMode";
+import { formEntriesAction } from "../../lib/formMode";
 import TemplatePicker from "../../components/TemplatePicker";
 
 type FormRow = {
@@ -239,7 +239,16 @@ export default function FormsPage() {
               <span className="text-xs text-[var(--jf-muted)]">{t("forms.selectAll")}</span>
             </li>
           )}
-          {forms.map((f) => (
+          {forms.map((f) => {
+            // Issue #126 / #602: the row's way into this form's entries.
+            // A payment form's entries are Sales; a response form's entries
+            // are Submissions — the SAME destination, because /sales?form=<id>
+            // renders a response form's submissions in the answers layout
+            // (#604). Computed once and reused by BOTH the published branch
+            // and the draft/private branch below: gating either branch on the
+            // mode is what left a response form with no entry point at all.
+            const entries = formEntriesAction(f, f.id);
+            return (
             <li key={f.id} className="jf-card flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex min-w-0 items-center gap-3">
                 {canWrite && (
@@ -271,13 +280,17 @@ export default function FormsPage() {
                     <Link href={`/form-settings?form=${f.id}`} className="jf-btn-ghost min-h-[44px] sm:min-h-10">
                       {t("fs.title")}
                     </Link>
-                    {/* Issue #126: per-form Sales deep-link -> /sales?form=<id>.
-                        : only a payment form can have sales — a
-                        response-only form (RSVP, contact) hides this action
-                        instead of mislabelling it "Sales". */}
-                    {isSalesForm(f) && (
-                      <Link href={`/sales?form=${f.id}`} className="jf-btn-ghost min-h-[44px] sm:min-h-10">
-                        {t("nav.sales")}
+                    {/* Issue #126: per-form entries deep-link -> /sales?form=<id>.
+                        #602 removed the "Sales" label from a response form
+                        (correct — an RSVP is not a sale); #604 made that same
+                        URL render a response form's submissions. So both modes
+                        get an action here, and only the label differs: Sales
+                        for a payment form, Submission for a response form.
+                        Gating this on the mode (as the Sales link alone was)
+                        leaves a response form with no route to its entries. */}
+                    {entries && (
+                      <Link href={entries.href} className="jf-btn-ghost min-h-[44px] sm:min-h-10">
+                        {t(entries.labelKey)}
                       </Link>
                     )}
                     <a href={formPublicURL(f)} target="_blank" className="jf-btn-ghost min-h-[44px] sm:min-h-10">
@@ -298,12 +311,15 @@ export default function FormsPage() {
                     <Link href={`/form-settings?form=${f.id}`} className="jf-btn-ghost min-h-[44px] sm:min-h-10">
                       {t("fs.title")}
                     </Link>
-                    {/* Issue #126: per-form Sales deep-link (works for drafts too).
-                        : a response-only form can never have sales —
-                        it gets no Sales action, so the row is not mislabelled. */}
-                    {isSalesForm(f) && (
-                      <Link href={`/sales?form=${f.id}`} className="jf-btn-ghost min-h-[44px] sm:min-h-10">
-                        {t("nav.sales")}
+                    {/* Issue #126: per-form entries deep-link (works for drafts too).
+                        Same rule as the published branch above: both modes get
+                        an action, and only the label differs (Sales / Submission).
+                        This branch is the one that matters for an unpublished
+                        response form, whose submissions would otherwise have no
+                        route at all until it is published. */}
+                    {entries && (
+                      <Link href={entries.href} className="jf-btn-ghost min-h-[44px] sm:min-h-10">
+                        {t(entries.labelKey)}
                       </Link>
                     )}
                     {canWrite && (
@@ -315,7 +331,8 @@ export default function FormsPage() {
                 )}
               </div>
             </li>
-          ))}
+            );
+          })}
           {forms.length === 0 && (
             <li className="rounded-lg text-sm text-[var(--jf-muted)]">{t("forms.empty")}</li>
           )}

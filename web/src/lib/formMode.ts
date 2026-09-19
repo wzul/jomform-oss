@@ -57,15 +57,62 @@ export function isSalesForm(f: ModeCarrier | null | undefined): boolean {
 }
 
 /**
+ * The i18n key for a form's entries action, chosen by the form's mode: a
+ * payment form's entries are Sales, a response form's entries are Submissions.
+ * Kept as a literal union (not the renderer's `Key` type from
+ * ../components/i18n.tsx) so this module stays loadable by the plain-node test
+ * runner, which cannot execute a `.tsx` file — see the comment at the top of
+ * src/lib/i18n.test.ts.
+ */
+export type FormEntriesLabelKey = "nav.sales" | "nav.submissions";
+
+/** The one place the per-form entries URL is built. */
+function formEntriesPath(formId: string): string {
+  return `/sales?form=${encodeURIComponent(formId)}`;
+}
+
+/**
  * salesFormHref returns the per-form Sales deep-link for a form that can take
  * payment, or null for a response-only form.
  *
- * Returning null (rather than always building the URL) is what removes the
- * misleading action: a response-only form can never record a sale, so a
- * "Sales" button on its row leads to a surface that is empty by construction.
- * Callers render the action only when this returns a non-null href.
+ * Returning null (rather than always building the URL) is the #602 decision: a
+ * response-only form can never record a sale, so labelling it "Sales" is
+ * wrong.
+ *
+ * The dashboard surfaces now reach their entries through formEntriesAction
+ * below, which renders for BOTH modes — the #602 fix hid the Sales action from
+ * a response form and, in doing so, removed the only way to reach that form's
+ * submissions. This helper stays as the *Sales* half of the rule (and the
+ * place a payment-only surface would call).
  */
 export function salesFormHref(f: ModeCarrier | null | undefined, formId: string): string | null {
   if (!isSalesForm(f) || !formId) return null;
-  return `/sales?form=${encodeURIComponent(formId)}`;
+  return formEntriesPath(formId);
+}
+
+/**
+ * formEntriesAction returns the per-form entries action — the deep-link plus
+ * the label to give it — for a form of EITHER mode, or null when there is no
+ * id to link to.
+ *
+ * The destination is the same for both modes (/sales?form=<id>): that page
+ * lists the entries of the selected form, switching to the answers layout when
+ * the form is a response form (#604). Only the label differs, because a
+ * payment form's entries are sales and a response form's entries are
+ * submissions.
+ *
+ * This is deliberately an action for both modes rather than a mode-gated one.
+ * Gating it (as the Sales link alone was gated by #602) leaves a response form
+ * — an event registration, an RSVP, a contact form — with NO action at all, so
+ * its submissions become unreachable from the dashboard.
+ */
+export function formEntriesAction(
+  f: ModeCarrier | null | undefined,
+  formId: string,
+): { href: string; labelKey: FormEntriesLabelKey } | null {
+  if (!formId) return null;
+  return {
+    href: formEntriesPath(formId),
+    labelKey: isSalesForm(f) ? "nav.sales" : "nav.submissions",
+  };
 }

@@ -18,7 +18,7 @@ import { useSession } from "../../components/session";
 import MediaPicker from "../../components/MediaPicker";
 import ProductPicker, { type PickerProduct } from "../../components/ProductPicker";
 import { workspaceQuery, workspaceScope } from "../../lib/workspace";
-import { isSalesForm } from "../../lib/formMode";
+import { formEntriesAction } from "../../lib/formMode";
 
 type FormDetail = {
   id: string;
@@ -1115,6 +1115,11 @@ function FormSettingsInner() {
   const inputCls = "jf-input mt-1 w-full max-w-xl";
   const labelCls = "text-xs text-slate-500";
 
+  // The header's way into this form's entries: Sales for a payment form,
+  // Submission for a response form. Both are /sales?form=<id>; that page
+  // renders a response form's submissions in the answers layout (#604).
+  const entries = formEntriesAction(form, formId);
+
   return (
     <Shell active="forms">
       <div className="w-full flex-1 px-6 py-8">
@@ -1129,12 +1134,16 @@ function FormSettingsInner() {
                 <Link href={`/builder?form=${formId}`} className="jf-btn-ghost px-3 py-1.5 text-xs">
                   {t("fs.editFields")}
                 </Link>
-                {/* : only a payment form can have sales — a
-                    response-only form (RSVP, contact) hides this action
-                    instead of offering an empty, misleading Sales view. */}
-                {isSalesForm(form) && (
-                  <Link href={`/sales?form=${formId}`} className="jf-btn-ghost px-3 py-1.5 text-xs">
-                    {t("nav.sales")}
+                {/* Issue #126: per-form entries deep-link -> /sales?form=<id>.
+                    A payment form's entries are Sales; a response form's
+                    entries are Submissions — the same destination, which
+                    /sales?form=<id> renders in the answers layout for a
+                    response form (#604). Both modes get an action; only the
+                    label differs, so a response form is neither mislabelled
+                    "Sales" (#602) nor left with no route to its submissions. */}
+                {entries && (
+                  <Link href={entries.href} className="jf-btn-ghost px-3 py-1.5 text-xs">
+                    {t(entries.labelKey)}
                   </Link>
                 )}
                 {form?.url && (

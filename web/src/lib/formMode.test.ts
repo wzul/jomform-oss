@@ -30,6 +30,7 @@ import {
   formMode,
   isSalesForm,
   salesFormHref,
+  formEntriesAction,
 } from "./formMode.ts";
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
@@ -103,33 +104,114 @@ test("no Sales link is built for a form with no id", () => {
   assert.equal(salesFormHref({ mode: "payment" }, ""), null);
 });
 
-test("the /forms page actually gates BOTH Sales actions on the mode", () => {
-  // A correct helper that the page never calls is dead code behind a green
-  // suite. The page renders the Sales link twice (published rows and
-  // draft/private rows), so both sites must be gated — an unguarded second site
-  // would leave the reported bug live on drafts.
-  const gated = [...formsPage.matchAll(/isSalesForm\(f\)\s*&&[\s\S]{0,240}?sales\?form=\$\{f\.id\}/g)];
-  assert.equal(
-    gated.length,
-    2,
-    `expected both Sales link sites on /forms to be gated by isSalesForm; found ${gated.length}`,
-  );
-  // And no UNGATED Sales link may remain anywhere in the page.
-  const allSalesLinks = [...formsPage.matchAll(/href=\{`\/sales\?form=\$\{f\.id\}`\}/g)].length;
-  assert.equal(allSalesLinks, 2, `expected exactly the two known Sales link sites, found ${allSalesLinks}`);
+// Issue: a response form had NO way into its entries.
+//
+// #602 (correctly) stopped labelling an RSVP "Sales" by gating the action on
+// isSalesForm — and that removed the row's only link to its data, because #604
+// had made /sales?form=<id> the one destination that renders a response form's
+// submissions. The fix is the action for BOTH modes with different labels:
+// Sales -> nav.sales, response -> nav.submissions, same URL.
+test("a response form gets a Submission action to the same entries URL", () => {
+  const rsvp = { id: "f1", title: "Event registration", mode: "response" };
+  const action = formEntriesAction(rsvp, rsvp.id);
+  assert.ok(action, "a response form must have an action — no link means its submissions are unreachable");
+  assert.equal(action.href, "/sales?form=f1", "the destination is the same URL as a payment form's");
+  assert.equal(action.labelKey, "nav.submissions");
+  // The label must NOT be the sales one: that is the #602 defect coming back.
+  assert.notEqual(action.labelKey, "nav.sales");
 });
 
-test("form-settings gates its Sales action on the mode too", () => {
+test("a payment form keeps the Sales action", () => {
+  const order = { id: "f2", title: "Order", mode: "payment" };
+  assert.deepEqual(formEntriesAction(order, order.id), {
+    href: "/sales?form=f2",
+    labelKey: "nav.sales",
+  });
+});
+
+test("a LEGACY form with no mode still gets the Sales action", () => {
+  // Same load-bearing default as formMode: the pre-#171 forms are the ones
+  // that actually have sales in production.
+  for (const legacy of [{ id: "f3" }, { id: "f4", mode: undefined }]) {
+    assert.equal(formEntriesAction(legacy, legacy.id)?.labelKey, "nav.sales");
+  }
+  assert.equal(formEntriesAction(null, "f5")?.labelKey, "nav.sales");
+});
+
+test("no action is built for a form with no id", () => {
+  assert.equal(formEntriesAction({ mode: "response" }, ""), null);
+  assert.equal(formEntriesAction({ mode: "payment" }, ""), null);
+});
+
+test("the action's destinations differ ONLY by label, never by URL", () => {
+  // If a future edit sends the two modes to different URLs, the submissions
+  // view (#604, the answers layout on the sales page) stops being reachable
+  // while every assertion above still passes.
+  const asResponse = { id: "zz-1", mode: "response" };
+  const asPayment = { id: "zz-1", mode: "payment" };
+  const response = formEntriesAction(asResponse, "zz-1");
+  const payment = formEntriesAction(asPayment, "zz-1");
+  assert.equal(response?.href, payment?.href);
+});
+
+test("the /forms page offers the entries action on BOTH row branches, for both modes", () => {
+  // The reported symptom: an action that renders for a payment form and not
+  // for a response form. The page draws two row branches (published, and
+  // draft/private), so a fix that converts only one leaves the bug live on the
+  // other.
+  //
+  // One assertion per site, anchored on the Link tag plus its href expression —
+  // a single loose match would be satisfied by whichever site still carries it.
+  const sites = [...formsPage.matchAll(/\{entries && \(\s*<Link href=\{entries\.href\}/g)];
+  assert.equal(sites.length, 2, `expected the entries action at both row branches on /forms; found ${sites.length}`);
+  assert.equal(
+    [...formsPage.matchAll(/\{t\(entries\.labelKey\)\}/g)].length,
+    2,
+    "both entries links must take their label from the mode, not a hardcoded key",
+  );
+  // No site may be gated on the sales predicate. This is the mutation check:
+  // restoring `isSalesForm(f) && ...` drops the response form's action, which
+  // is exactly the bug, and it fails here by name.
+  assert.doesNotMatch(
+    formsPage,
+    /isSalesForm/,
+    "/forms gates its entries action on isSalesForm again — a response form loses the link to its submissions",
+  );
+});
+
+test("form-settings offers the entries action for both modes too", () => {
+  // Same page-level gap one surface over: Form Settings drew the sales action
+  // only, so a response form reached from its own settings page had no route
+  // to its submissions either.
   assert.match(
     settingsPage,
-    /isSalesForm\(form\)\s*&&[\s\S]{0,240}?sales\?form=\$\{formId\}/,
-    "the Form Settings page still offers an unconditional Sales action",
+    /\{entries && \(\s*<Link href=\{entries\.href\}/,
+    "form-settings no longer renders a per-form entries action",
+  );
+  assert.match(settingsPage, /formEntriesAction\(form, formId\)/);
+  assert.doesNotMatch(
+    settingsPage,
+    /isSalesForm/,
+    "form-settings gates its entries action on isSalesForm again — a response form loses the link to its submissions",
   );
   assert.equal(
-    [...settingsPage.matchAll(/href=\{`\/sales\?form=\$\{formId\}`\}/g)].length,
+    [...settingsPage.matchAll(/href=\{entries\.href\}/g)].length,
     1,
-    "expected exactly one Sales link site on form-settings",
+    "expected exactly one entries link site on form-settings",
   );
+});
+
+test("nav.submissions is present in all five locales and is not the stat-card key", () => {
+  // The button label. It must NOT reuse dash.submissions, which is
+  // "Submissions:" (trailing colon, dashboard stat card) and would read wrong
+  // as a button.
+  const row = i18nDict.split("\n").find((l) => l.includes('"nav.submissions":'));
+  assert.ok(row, "nav.submissions is missing from the dictionary");
+  for (const lang of ["en", "ms", "zh", "ta", "ar"]) {
+    assert.match(row as string, new RegExp(`\\b${lang}:\\s*"`), `nav.submissions has no ${lang} value`);
+  }
+  assert.match(row as string, /en:\s*"Submission"/, "the English label must be the singular \"Submission\"");
+  assert.doesNotMatch(row as string, /en:\s*"Submissions/);
 });
 
 test("the mode field is declared on both page payload types", () => {
