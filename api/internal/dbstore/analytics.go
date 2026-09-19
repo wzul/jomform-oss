@@ -5,11 +5,36 @@ import "context"
 
 // FormStats summarises one form's performance.
 type FormStats struct {
-	FormID       string `json:"form_id"`
-	Slug         string `json:"slug"`
-	Title        string `json:"title"`
-	Submissions  int64  `json:"submissions"` // all sales rows (any status)
-	PaidCount    int64  `json:"paid_count"`  // paid + confirmed
+	FormID string `json:"form_id"`
+	Slug   string `json:"slug"`
+	Title  string `json:"title"`
+	// Mode is the form's collection mode (dbstore.FormMode), carried in the
+	// payload so the caller can LABEL Submissions honestly — see below.
+	Mode string `json:"mode"`
+	// Submissions means "entries recorded for this form": the number of entry
+	// rows the form has produced, read from the table the form actually writes
+	// to — a response form writes `submissions` (issue #171), a payment form
+	// writes `sales`.
+	//
+	// Why the field is defined this way (issue #598):
+	//   * The mode is exclusive. The public submit path branches on it and
+	//     writes exactly ONE table (public.go handleSubmit → handleResponseSubmit
+	//     or the shared order core), so this figure can never be the sum of two
+	//     counts and a form that produces "both" cannot double count.
+	//   * Reporting 0 for a payment form that has entries would reintroduce the
+	//     exact defect #598 reported ("a working counter reading zero"), on the
+	//     other mode.
+	//   * The paid/confirmed/pending/failed/refunded/revenue figures stay their
+	//     own separately named fields, so a sale's money is never conflated with
+	//     the entries count.
+	//
+	// What was actually wrong was the LABEL, not the number: the dashboard
+	// rendered this figure as "Submissions:" for every form while a payment
+	// form's value is a count of sales rows (any status). The payload therefore
+	// carries Mode (above) and the dashboard labels the figure per mode —
+	// "Submission(s)" for a response form, "Entries" for a payment form.
+	Submissions  int64 `json:"submissions"`
+	PaidCount    int64 `json:"paid_count"` // paid + confirmed
 	ConfirmedCnt int64  `json:"confirmed_count"`
 	FailedCount  int64  `json:"failed_count"`
 	PendingCount int64  `json:"pending_count"`
@@ -48,11 +73,25 @@ func (s *SaleStore) FormAnalyticsAccounts(ctx context.Context, accountIDs []stri
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT f.id, f.slug, f.title,
+		       -- Issue #598: the mode rides along so a caller can label the
+		       -- figure honestly. Same rule as dbstore.FormMode: only an
+		       -- explicit JSON string "response" is a response form, so a
+		       -- legacy form with no mode key (or mode: 1) reads as payment —
+		       -- exactly what the Go rule returns.
+		       CASE WHEN f.config->>'mode' = 'response'
+		            THEN 'response' ELSE 'payment' END       AS mode,
 		       -- Issue #604: a response-mode form records NOTHING in the sales
 		       -- table — its entries live in submissions (issue #171). Counting
 		       -- sales alone reported 0 for such a form, which made "nothing was
 		       -- recorded" look confirmed on the dashboard while submissions
 		       -- existed. Count the table the form actually writes to.
+		       --
+		       -- Issue #598: ONE table, never a SUM of both. The mode is
+		       -- exclusive — the public submit path writes the submissions row
+		       -- OR the sale, never both (public.go handleSubmit) — so a
+		       -- payment form that once recorded sales and was later switched to
+		       -- response mode cannot have its two tables added together and
+		       -- double counted.
 		       CASE WHEN f.config->>'mode' = 'response'
 		            THEN (SELECT COUNT(*) FROM submissions sub WHERE sub.form_id = f.id)
 		            ELSE COUNT(s.id) END                     AS submissions,
@@ -78,7 +117,7 @@ func (s *SaleStore) FormAnalyticsAccounts(ctx context.Context, accountIDs []stri
 	out := []FormStats{}
 	for rows.Next() {
 		var fs FormStats
-		if err := rows.Scan(&fs.FormID, &fs.Slug, &fs.Title,
+		if err := rows.Scan(&fs.FormID, &fs.Slug, &fs.Title, &fs.Mode,
 			&fs.Submissions, &fs.PaidCount, &fs.ConfirmedCnt,
 			&fs.FailedCount, &fs.PendingCount, &fs.RefundedCount,
 			&fs.RevenueSen, &fs.RefundedSen); err != nil {

@@ -634,7 +634,7 @@ func (s *Server) registerTools() {
 	// ── Parity: analytics (issue #396) ────────────────────────────────────
 	addTool(s, &mcp.Tool{
 		Name:        "get_form_analytics",
-		Description: "Analitik per-borang: bilangan submission, paid/confirmed/failed/pending, dan hasil (RM). Merentas semua workspace anda. Read-only.",
+		Description: "Analitik per-borang: bilangan entri (submissions), paid/confirmed/failed/pending, dan hasil (RM) — NET selepas refund. `submissions` bermaksud entri yang direkod untuk borang itu, dibaca dari jadual yang borang itu tulis: borang respons (mode=response) dikira dari `submissions`, borang bayaran dari `sales` (semua status). Medan `mode` disertakan supaya label betul. Merentas semua workspace anda. Read-only.",
 	}, s.formAnalytics)
 	addTool(s, &mcp.Tool{
 		Name:        "get_product_analytics",

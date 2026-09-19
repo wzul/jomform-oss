@@ -102,7 +102,7 @@ The MCP server exposes tools covering the full dashboard feature set:
 - **Legal pages:** `generate_legal_page`, `get_legal_page`, `set_legal_page`
 - **Events / audit:** `list_events` (account-scoped, read-only), `list_email_deliveries`, `list_form_submissions`, `list_spam_submissions`, `unspam_submission`, `list_spam_sales`, `unspam_sale`
 - **Media / templates:** `list_media`, `list_templates`, `use_template`
-- **Analytics:** `get_form_analytics`, `get_product_analytics`
+- **Analytics:** `get_form_analytics` (per-form entries — the rows the form actually recorded: a response-mode form's responses, or a payment form's sales in every status; reports the form's `mode` so the figure is labelled correctly, and the two tables are never summed), `get_product_analytics`
 - **Custom domains:** `list_domains`, `add_domain`, `verify_domain`, `remove_domain`, `auto_cname_domain`
 - **Tracking:** `get_tracking`, `set_tracking`
 - **CHIP account settings:** `get_chip_settings`, `set_chip_settings`, `clear_chip_settings`

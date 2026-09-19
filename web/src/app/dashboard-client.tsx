@@ -6,6 +6,7 @@ import { Shell } from "../components/Shell";
 import { useI18n } from "../components/i18n";
 import { useSession } from "../components/session";
 import { workspaceQuery, workspaceScope } from "../lib/workspace";
+import { formEntriesCountLabel, paidConfirmedCount } from "../lib/dashboardStats";
 import { answersPreview, rowKey, rowKind } from "../lib/salesRows";
 import Landing from "./landing/page";
 import {
@@ -38,6 +39,9 @@ type SalesPage = { items: SaleRow[]; page: number; limit: number; total: number 
 type FormStats = {
   title: string;
   slug: string;
+  // Issue #598: the form's collection mode, so the counter is labelled for what
+  // it actually counts (see src/lib/dashboardStats.ts).
+  mode?: string;
   submissions: number;
   paid_count: number;
   confirmed_count: number;
@@ -239,15 +243,34 @@ export default function Dashboard() {
 
         {/* Form analytics */}
         <section className="jf-card mt-6 p-5">
-          <h2 className="text-sm font-semibold">{t("dash.formAnalytics")}</h2>
+          <h2 className="text-sm font-semibold">
+            {t("dash.formAnalytics")}
+            {/* Issue #598 / AGENTS.md docs-parity rule 4: the inline "?" that
+                explains what each per-form counter counts. */}
+            <a
+              href="/docs#form-analytics"
+              target="_blank"
+              rel="noopener noreferrer"
+              title={t("dash.formAnalyticsDocs")}
+              className="ml-1.5 align-middle font-mono text-[11px] text-[var(--jf-primary)] hover:underline"
+            >
+              ?
+            </a>
+          </h2>
           <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
             {formStats.map((f) => (
               <div key={f.slug} className="rounded-lg border border-[var(--jf-border)] p-3">
                 <p className="truncate text-sm font-medium" title={f.title}>{f.title}</p>
                 <p className="font-mono text-[11px] text-[var(--jf-muted)]">{workspaceScope() || "app"}.jomform.com/{f.slug}</p>
                 <div className="mt-2 grid grid-cols-2 gap-x-2 gap-y-0.5 text-[11px] text-[var(--jf-muted)]">
-                  <span>{t("dash.submissions")} <b>{f.submissions}</b></span>
-                  <span>{t("dash.paidConfirmed")} <b className="text-emerald-600">{f.paid_count + f.confirmed_count}</b></span>
+                  {/* Issue #598: the figure is "entries recorded for this form"
+                      — submissions for a response form, sales rows for a
+                      payment form — so the label follows the mode. */}
+                  <span>{t(formEntriesCountLabel(f.mode))} <b>{f.submissions}</b></span>
+                  {/* Issue #598: paid_count ALREADY includes confirmed sales, so
+                      adding confirmed_count counted every confirmed sale twice.
+                      The union is the honest figure for this label. */}
+                  <span>{t("dash.paidConfirmed")} <b className="text-emerald-600">{paidConfirmedCount(f)}</b></span>
                   <span>{t("dash.pendingLabel")} <b>{f.pending_count}</b></span>
                   <span>{t("dash.failedLabel")} <b>{f.failed_count}</b></span>
                 </div>

@@ -8,8 +8,12 @@ import (
 )
 
 type formStatsOut struct {
-	Title          string  `json:"title"`
-	Slug           string  `json:"slug"`
+	Title string `json:"title"`
+	Slug  string `json:"slug"`
+	// Mode is the form's collection mode ("payment" | "response", issue #598).
+	// It is carried so an agent labels `submissions` honestly instead of
+	// reading the figure as literal submission rows for every form.
+	Mode           string  `json:"mode"`
 	Submissions    int64   `json:"submissions"`
 	PaidCount      int64   `json:"paid_count"`
 	ConfirmedCount int64   `json:"confirmed_count"`
@@ -46,7 +50,7 @@ func (s *Server) formAnalytics(
 		}
 		for _, f := range stats {
 			out = append(out, formStatsOut{
-				Title: f.Title, Slug: f.Slug,
+				Title: f.Title, Slug: f.Slug, Mode: f.Mode,
 				Submissions: f.Submissions, PaidCount: f.PaidCount,
 				ConfirmedCount: f.ConfirmedCnt, FailedCount: f.FailedCount,
 				PendingCount: f.PendingCount, RefundedCount: f.RefundedCount,

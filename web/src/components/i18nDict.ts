@@ -148,8 +148,16 @@ export const DICT = {
   "dash.status": { en: "Status", ms: "Status", zh: "状态", ta: "நிலை", ar: "الحالة" },
   "dash.emptySales": { en: "No sales yet.", ms: "Belum ada jualan lagi.", zh: "暂无销售。", ta: "இன்னும் விற்பனை இல்லை.", ar: "لا توجد مبيعات بعد." },
   "dash.formAnalytics": { en: "Form analytics", ms: "Analitik borang", zh: "表单分析", ta: "படிவ பகுப்பாய்வு", ar: "تحليلات النماذج" },
+  // AGENTS.md documentation-parity rule 4: the inline "?" doc link next to the
+  // per-form counter (issue #598).
+  "dash.formAnalyticsDocs": { en: "What the per-form counters mean", ms: "Maksud pembilang per-borang", zh: "每个表单计数的含义", ta: "ஒரு படிவத்தின் எண்ணிக்கையின் பொருள்", ar: "معنى عدّادات كل نموذج" },
   "dash.productPerf": { en: "Product performance", ms: "Prestasi produk", zh: "商品表现", ta: "பொருள் செயல்திறன்", ar: "أداء المنتجات" },
   "dash.submissions": { en: "Submissions:", ms: "Submisi:", zh: "提交数：", ta: "சமர்ப்பிப்புகள்:", ar: "الإرسالات:" },
+  // Issue #598: the per-form counter for a PAYMENT form counts its sales rows
+  // (paid + failed + pending + refunded), not submission rows — calling that
+  // "Submissions:" was the reported defect. The label follows the mode:
+  // response → dash.submissions, payment → this key.
+  "dash.entries": { en: "Entries:", ms: "Entri:", zh: "条目：", ta: "பதிவுகள்:", ar: "الإدخالات:" },
   "dash.paidConfirmed": { en: "Paid+Confirmed:", ms: "Bayar+Disahkan:", zh: "已付+已确认：", ta: "செலுத்திய+உறுதிப்படுத்தப்பட்ட:", ar: "مدفوع+مؤكد:" },
   "dash.pendingLabel": { en: "Pending:", ms: "Menunggu:", zh: "待定：", ta: "நிலுவை:", ar: "قيد الانتظار:" },
   "dash.failedLabel": { en: "Failed:", ms: "Gagal:", zh: "失败：", ta: "தோல்வி:", ar: "فاشل:" },

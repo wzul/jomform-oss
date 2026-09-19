@@ -8,7 +8,7 @@ export const metadata: Metadata = {
   alternates: { canonical: "https://jomform.com/docs" },
 };
 
-const FEATURES: { title: string; body: string }[] = [
+const FEATURES: { title: string; body: string; slug?: string }[] = [
   {
     title: "Order forms",
     body: "Build beautiful order forms with a drag-and-drop builder. Add fields (name, email, phone, textarea, number, select, radio, checkbox, date, time, website, address, consent, hidden, list, repeater, image-choice, captcha), attach products, and publish to your own workspace URL or a custom domain. Forms can be payment forms or response-only.",
@@ -32,6 +32,13 @@ const FEATURES: { title: string; body: string }[] = [
   {
     title: "Responses (response-only forms)",
     body: "A form can collect responses instead of payments (set the form mode to response in the builder — no products, no payment). Its entries are stored as responses, not sales, and they are shown on the Sales page too: open a response form from Forms → Submission (or Form Settings → Submission) and the list shows that form's responses — when each one arrived, the buyer's name/email/phone and the recorded answers — with a detail drawer holding every field value. A payment form's button says Sales instead, because its entries are sales; the destination is the same. The search box matches any recorded answer and the date range applies as usual; the payment-status filter does not appear, because a response has no payment status. Export CSV and the capture/refund actions are payment-only and do not apply. The dashboard's per-form counter counts responses for a response form, so a form that has collected entries never reads as zero. AI agents read the same data with list_form_submissions (and list_sales returns them for a response form id).",
+  },
+  {
+    title: "Form analytics (the per-form counter)",
+    // The dashboard's inline "?" (issue #598, AGENTS.md docs-parity rule 4)
+    // deep-links this section.
+    slug: "form-analytics",
+    body: "The dashboard lists one card per form with a count of the entries that form has recorded — the rows the form actually produced, read from the table it writes to. Set the form mode to response and the card says Submissions, counting that form's responses; leave it as a payment form (the default) and the card says Entries, counting that form's sales in every status (paid, confirmed, pending, failed, refunded). The two tables are never added together, because a form's mode decides which one it writes: the counter counts exactly one of them, so a form cannot double count. Beside the counter the card shows the money figures as their own separately named values — Paid+Confirmed (how many of the form's sales reached the paid set, each sale counted once), Pending, Failed and revenue in RM net of refunds. AI agents read the same rollup with get_form_analytics, which reports the form's mode as `mode` so the figure can be labelled correctly, and GET /v1/rest/dashboard-bundle carries it as form_analytics.",
   },
   {
     title: "Partial refunds",
@@ -138,7 +145,7 @@ export default function DocsIndexPage() {
       <h2 className="mt-10 text-xl font-semibold text-slate-900">Features</h2>
       <div className="mt-4 space-y-6">
         {FEATURES.map((f) => (
-          <section key={f.title}>
+          <section key={f.title} id={f.slug} className="scroll-mt-24">
             <h3 className="text-base font-semibold text-slate-900">{f.title}</h3>
             <p className="mt-1 text-sm leading-relaxed text-slate-600">{f.body}</p>
           </section>
