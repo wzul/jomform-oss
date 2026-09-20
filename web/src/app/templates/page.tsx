@@ -220,7 +220,16 @@ export default function TemplatesPage() {
             <h1 className="max-w-xl text-xl font-semibold tracking-tight">{t("tplmg.title")}</h1>
             <p className="max-w-xl text-sm text-[var(--jf-muted)]">{t("tplmg.subtitle")}</p>
           </div>
-          <div className="flex shrink-0 items-center gap-2 self-start sm:self-auto">
+          {/* t_ea90e668: these two buttons are nowrap (globals.css), and this
+              group is a `shrink-0` child of the column half of the header row
+              at phone width. Without `flex-wrap` + `max-w-full` the group kept
+              its max-content width (measured 367.6px at 320px in `en`, 461.5px
+              in `ms`) inside a 272px column, so the page scrolled sideways —
+              the nowrap buttons refused the shrink the group used to get for
+              free by wrapping. Each label still fits the 272px column on its
+              own line (en 197.4px + 134.2px; ms 271.6px + 153.9px), so the
+              group wraps instead of the labels breaking. */}
+          <div className="flex max-w-full shrink-0 flex-wrap items-center gap-2 self-start sm:self-auto">
             {/* Issue #457: inline doc link (AGENTS.md docs parity). */}
             <a
               href="/docs/customize#templates"

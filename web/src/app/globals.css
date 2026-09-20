@@ -68,6 +68,21 @@ body {
   line-height: 1.2;
   font-weight: 500;
   transition: background 0.15s;
+  /* A button label never wraps and the button never gives up width. These
+     classes style the CTA inside `flex items-center justify-between` header
+     rows (dashboard, forms, media, templates, brand, ...). A flex item
+     defaults to flex-shrink: 1, so on a narrow screen the button — not the
+     heading block — is what gave way, and because the label could also wrap it
+     shrank by WRAPPING: "New form" measured 53.59px tall at 320px against its
+     40px single-line height at 1280px, and a longer locale's label reached 3
+     lines (72.39px). min-height is a floor, not a ceiling, so the box just
+     grew taller and drifted out of line with the heading beside it.
+     Fixed in the class, not per call site: there are 137 uses of the three
+     jf-btn* classes and a per-site utility would be missed by the next button.
+     globals.css is unlayered, so these rules outrank same-specificity Tailwind
+     utilities — the outcome here does not depend on layer ordering. */
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .jf-btn-primary:hover {
   background: var(--jf-primary-hover);
@@ -84,6 +99,10 @@ body {
   min-height: 40px;
   line-height: 1.2;
   transition: background 0.15s;
+  /* Same defect, same fix as .jf-btn-primary above (80 call sites). Measured
+     before the fix at 320px: a 3-line ghost label reached 72.39px tall. */
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .jf-btn-ghost:hover {
   background: #f3f4f6;
