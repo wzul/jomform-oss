@@ -3,11 +3,8 @@ package mcpsrv
 
 import (
 	"context"
-	"errors"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-
-	"github.com/wzul/jomform/api/internal/dbstore"
 )
 
 // getEmailSettingsIn resolves the workspace whose email settings to read.
@@ -67,12 +64,9 @@ type setEmailSettingsIn struct {
 func (s *Server) setEmailSettings(
 	ctx context.Context, _ *mcp.CallToolRequest, in setEmailSettingsIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	_, role, err := s.accessibleWorkspace(ctx, in.WorkspaceID)
-	if err != nil {
+	// Issue #645: write gate = API-key write scope AND manage-or-admin role.
+	if _, err := s.requireWorkspaceWriteRole(ctx, in.WorkspaceID); err != nil {
 		return nil, nil, err
-	}
-	if role != "" && role != dbstore.RoleManage && role != dbstore.RoleAdmin {
-		return nil, nil, errors.New("perlu peranan manage atau admin")
 	}
 	sp, err := s.workspacesStore()
 	if err != nil {

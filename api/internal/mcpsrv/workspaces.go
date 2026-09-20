@@ -65,6 +65,31 @@ func (s *Server) accessibleWorkspace(ctx context.Context, workspaceID string) (*
 	return workspace, acc.Role, nil
 }
 
+// requireWorkspaceWriteRole is the ONE gate for a per-workspace write tool. It
+// enforces both independent axes:
+//
+//   - the API-key WRITE SCOPE (requireWriteScope): a readonly key is refused.
+//     Issue #645 — the axis the role-only gate dropped.
+//   - the manage-or-admin ROLE in the named workspace (issue #162).
+//
+// It replaces the `_, role, err := s.accessibleWorkspace(...)` + inline role
+// comparison that six write handlers used to repeat: that copy-paste is how the
+// scope half went missing from all of them at once, so the check lives here now
+// and each handler names it.
+func (s *Server) requireWorkspaceWriteRole(ctx context.Context, workspaceID string) (*dbstore.Workspace, error) {
+	if err := s.requireWriteScope(ctx); err != nil {
+		return nil, err
+	}
+	workspace, role, err := s.accessibleWorkspace(ctx, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	if role != "" && role != dbstore.RoleManage && role != dbstore.RoleAdmin {
+		return nil, errors.New("perlu peranan manage atau admin")
+	}
+	return workspace, nil
+}
+
 // ── list_workspaces ──────────────────────────────────────────────────────────────
 
 type workspaceOut struct {
@@ -127,6 +152,11 @@ func validateWorkspaceSlug(slug string) error {
 func (s *Server) createWorkspace(
 	ctx context.Context, _ *mcp.CallToolRequest, in createWorkspaceIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
+	// Issue #645: creating a workspace is a write. It has no target workspace to
+	// take a role from yet, so the API-key write scope is the gate.
+	if err := s.requireWriteScope(ctx); err != nil {
+		return nil, nil, err
+	}
 	sp, err := s.workspacesStore()
 	if err != nil {
 		return nil, nil, err
@@ -172,6 +202,11 @@ type setDefaultWorkspaceIn struct {
 func (s *Server) setDefaultWorkspace(
 	ctx context.Context, _ *mcp.CallToolRequest, in setDefaultWorkspaceIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
+	// Issue #645: this is a user-level preference write (the user row, not the
+	// account), so the API-key write scope is the gate.
+	if err := s.requireWriteScope(ctx); err != nil {
+		return nil, nil, err
+	}
 	if s.deps.Users == nil {
 		return nil, nil, errors.New("users tidak tersedia")
 	}
@@ -214,6 +249,11 @@ type updateProfilePhoneIn struct {
 func (s *Server) updateProfilePhone(
 	ctx context.Context, _ *mcp.CallToolRequest, in updateProfilePhoneIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
+	// Issue #645: the profile writes edit the USER row (no account role applies),
+	// so the API-key write scope is the gate.
+	if err := s.requireWriteScope(ctx); err != nil {
+		return nil, nil, err
+	}
 	if s.deps.Users == nil {
 		return nil, nil, errors.New("users tidak tersedia")
 	}
@@ -255,6 +295,10 @@ type updateProfileTimezoneIn struct {
 func (s *Server) updateProfileTimezone(
 	ctx context.Context, _ *mcp.CallToolRequest, in updateProfileTimezoneIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
+	// Issue #645: user-row write — API-key write scope is the gate.
+	if err := s.requireWriteScope(ctx); err != nil {
+		return nil, nil, err
+	}
 	if s.deps.Users == nil {
 		return nil, nil, errors.New("users tidak tersedia")
 	}
@@ -323,12 +367,9 @@ type setWorkspaceSettingsIn struct {
 func (s *Server) setWorkspaceSettings(
 	ctx context.Context, _ *mcp.CallToolRequest, in setWorkspaceSettingsIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	_, role, err := s.accessibleWorkspace(ctx, in.WorkspaceID)
-	if err != nil {
+	// Issue #645: write gate = API-key write scope AND manage-or-admin role.
+	if _, err := s.requireWorkspaceWriteRole(ctx, in.WorkspaceID); err != nil {
 		return nil, nil, err
-	}
-	if role != "" && role != dbstore.RoleManage && role != dbstore.RoleAdmin {
-		return nil, nil, errors.New("perlu peranan manage atau admin")
 	}
 	// URL fields are https-only (issue #501): ONE shared rule from
 	// internal/urlguard, the same validator the REST handlers import — so the
@@ -446,12 +487,9 @@ type setWorkspaceLandingPageIn struct {
 func (s *Server) setWorkspaceLandingPage(
 	ctx context.Context, _ *mcp.CallToolRequest, in setWorkspaceLandingPageIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	_, role, err := s.accessibleWorkspace(ctx, in.WorkspaceID)
-	if err != nil {
+	// Issue #645: write gate = API-key write scope AND manage-or-admin role.
+	if _, err := s.requireWorkspaceWriteRole(ctx, in.WorkspaceID); err != nil {
 		return nil, nil, err
-	}
-	if role != "" && role != dbstore.RoleManage && role != dbstore.RoleAdmin {
-		return nil, nil, errors.New("perlu peranan manage atau admin")
 	}
 	// Media URLs are https-only (issue #501), through the ONE shared rule in
 	// internal/urlguard (same validator as the REST landing-page path). An

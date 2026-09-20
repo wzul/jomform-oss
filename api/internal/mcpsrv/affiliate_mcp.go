@@ -52,12 +52,12 @@ type affiliateOut struct {
 func (s *Server) createAffiliate(
 	ctx context.Context, _ *mcp.CallToolRequest, in createAffiliateIn,
 ) (*mcp.CallToolResult, *affiliateOut, error) {
-	ws, role, err := s.accessibleWorkspace(ctx, in.WorkspaceID)
+	// Issue #645: write gate = API-key write scope AND manage-or-admin role.
+	// This also replaces the inline role comparison below, which checked the role
+	// but never the scope.
+	ws, err := s.requireWorkspaceWriteRole(ctx, in.WorkspaceID)
 	if err != nil {
 		return nil, nil, err
-	}
-	if role != "admin" && role != "manage" {
-		return nil, nil, errors.New("peranan tidak mencukupi")
 	}
 	affStore, err := s.affiliatesStore()
 	if err != nil {
@@ -172,12 +172,9 @@ type setAffiliateCommissionIn struct {
 func (s *Server) setAffiliateCommission(
 	ctx context.Context, _ *mcp.CallToolRequest, in setAffiliateCommissionIn,
 ) (*mcp.CallToolResult, map[string]bool, error) {
-	_, role, err := s.accessibleWorkspace(ctx, in.WorkspaceID)
-	if err != nil {
+	// Issue #645: write gate = API-key write scope AND manage-or-admin role.
+	if _, err := s.requireWorkspaceWriteRole(ctx, in.WorkspaceID); err != nil {
 		return nil, nil, err
-	}
-	if role != "admin" && role != "manage" {
-		return nil, nil, errors.New("peranan tidak mencukupi")
 	}
 	affStore, err := s.affiliatesStore()
 	if err != nil {

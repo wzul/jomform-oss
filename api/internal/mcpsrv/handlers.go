@@ -485,7 +485,9 @@ type saleEmailStatusOut struct {
 // "sent" step is implied by the sale having a receipt_message_id; the rest
 // come from SES delivery events correlated to the sale's ref.
 func (s *Server) saleEmailStatusMCP(ctx context.Context, _ *mcp.CallToolRequest, in saleEmailStatusIn) (*mcp.CallToolResult, saleEmailStatusOut, error) {
-	accountID, err := s.accountAndScope(ctx, true)
+	// Issue #645: reading a sale's receipt-email timeline is a pure READ. It
+	// used to demand a readwrite scope, which refused a readonly key on a read.
+	accountID, err := s.accountAndScope(ctx, false)
 	if err != nil {
 		return nil, saleEmailStatusOut{}, err
 	}

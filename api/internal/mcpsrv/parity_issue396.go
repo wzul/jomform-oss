@@ -498,6 +498,10 @@ type updateAvatarIn struct {
 }
 
 func (s *Server) updateProfileAvatar(ctx context.Context, _ *mcp.CallToolRequest, in updateAvatarIn) (*mcp.CallToolResult, map[string]string, error) {
+	// Issue #645: user-row write — API-key write scope is the gate.
+	if err := s.requireWriteScope(ctx); err != nil {
+		return nil, nil, err
+	}
 	if s.deps.Users == nil {
 		return nil, nil, errors.New("perkhidmatan tidak tersedia")
 	}
@@ -546,6 +550,11 @@ type deletePasskeyIn struct {
 }
 
 func (s *Server) deletePasskey(ctx context.Context, _ *mcp.CallToolRequest, in deletePasskeyIn) (*mcp.CallToolResult, map[string]string, error) {
+	// Issue #645: user-row write (a passkey belongs to the person) — API-key
+	// write scope is the gate.
+	if err := s.requireWriteScope(ctx); err != nil {
+		return nil, nil, err
+	}
 	if s.deps.Passkeys == nil {
 		return nil, nil, errors.New("passkey store tidak tersedia")
 	}
@@ -600,6 +609,12 @@ type unlinkSocialIn struct {
 }
 
 func (s *Server) unlinkSocialAccount(ctx context.Context, _ *mcp.CallToolRequest, in unlinkSocialIn) (*mcp.CallToolResult, map[string]string, error) {
+	// Issue #645: unlinking a social identity is a WRITE on the person's own
+	// account. The scope axis is the gate here (there is no workspace role on a
+	// user-level write); without it a readonly key could strip a login method.
+	if err := s.requireWriteScope(ctx); err != nil {
+		return nil, nil, err
+	}
 	if s.deps.Users == nil {
 		return nil, nil, errors.New("perkhidmatan tidak tersedia")
 	}
@@ -643,6 +658,11 @@ type twoFASetupOut struct {
 }
 
 func (s *Server) setupTwoFA(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, twoFASetupOut, error) {
+	// Issue #645: 2FA is a credential change for the person — API-key write
+	// scope is the gate.
+	if err := s.requireWriteScope(ctx); err != nil {
+		return nil, twoFASetupOut{}, err
+	}
 	if s.deps.Users == nil || s.deps.Sessions == nil {
 		return nil, twoFASetupOut{}, errors.New("perkhidmatan tidak tersedia")
 	}
@@ -669,6 +689,10 @@ type enableTwoFAIn struct {
 }
 
 func (s *Server) enableTwoFA(ctx context.Context, _ *mcp.CallToolRequest, in enableTwoFAIn) (*mcp.CallToolResult, map[string]string, error) {
+	// Issue #645: enabling 2FA is a credential change — API-key write scope gate.
+	if err := s.requireWriteScope(ctx); err != nil {
+		return nil, nil, err
+	}
 	if s.deps.Users == nil || s.deps.Sessions == nil {
 		return nil, nil, errors.New("perkhidmatan tidak tersedia")
 	}
@@ -698,6 +722,10 @@ type disableTwoFAIn struct {
 }
 
 func (s *Server) disableTwoFA(ctx context.Context, _ *mcp.CallToolRequest, in disableTwoFAIn) (*mcp.CallToolResult, map[string]string, error) {
+	// Issue #645: disabling 2FA weakens a credential — API-key write scope gate.
+	if err := s.requireWriteScope(ctx); err != nil {
+		return nil, nil, err
+	}
 	if s.deps.Users == nil {
 		return nil, nil, errors.New("perkhidmatan tidak tersedia")
 	}
@@ -765,6 +793,10 @@ type revokeTrustedDeviceIn struct {
 // revokeTrustedDevice (issue #454): revoke ONE trusted device by id. The next
 // login on that device is challenged for a 2FA code again (immediate).
 func (s *Server) revokeTrustedDevice(ctx context.Context, _ *mcp.CallToolRequest, in revokeTrustedDeviceIn) (*mcp.CallToolResult, map[string]string, error) {
+	// Issue #645: revoking a trusted device is a write on the person's account.
+	if err := s.requireWriteScope(ctx); err != nil {
+		return nil, nil, err
+	}
 	if s.deps.Sessions == nil {
 		return nil, nil, errors.New("perkhidmatan tidak tersedia")
 	}
@@ -784,6 +816,10 @@ func (s *Server) revokeTrustedDevice(ctx context.Context, _ *mcp.CallToolRequest
 // revokeAllTrustedDevices (issue #454): "log out everywhere" — revoke every
 // trusted device for the account owner.
 func (s *Server) revokeAllTrustedDevices(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, map[string]string, error) {
+	// Issue #645: "log out everywhere" is a write on the person's account.
+	if err := s.requireWriteScope(ctx); err != nil {
+		return nil, nil, err
+	}
 	if s.deps.Sessions == nil {
 		return nil, nil, errors.New("perkhidmatan tidak tersedia")
 	}
@@ -825,6 +861,10 @@ type setSystemSettingIn struct {
 }
 
 func (s *Server) setSystemSetting(ctx context.Context, _ *mcp.CallToolRequest, in setSystemSettingIn) (*mcp.CallToolResult, map[string]string, error) {
+	// Issue #645: platform-wide settings are a write — API-key write scope gate.
+	if err := s.requireWriteScope(ctx); err != nil {
+		return nil, nil, err
+	}
 	if s.deps.SystemSettings == nil {
 		return nil, nil, errors.New("system settings tidak tersedia")
 	}
@@ -1130,6 +1170,14 @@ func (s *Server) getWebhookSigningKey(ctx context.Context, _ *mcp.CallToolReques
 	acc, err := s.accountAndScope(ctx, false)
 	if err != nil {
 		return nil, webhookKeyOut{}, err
+	}
+	// Issue #645: the tool is a pure READ when the account already has a key,
+	// but ensureSigningKeyMCP GENERATES AND SAVES one on first use — a write.
+	// A readonly key may read an existing public key and must not create one.
+	if pubB64, privB64, kerr := s.deps.Accounts.SigningKeys(ctx, acc); kerr == nil && (pubB64 == "" || privB64 == "") {
+		if werr := s.requireWriteScope(ctx); werr != nil {
+			return nil, webhookKeyOut{}, werr
+		}
 	}
 	pub, _ := ensureSigningKeyMCP(ctx, s, acc)
 	if pub == nil {

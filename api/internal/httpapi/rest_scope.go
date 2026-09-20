@@ -87,10 +87,42 @@ func roleAtLeast(role, required string) bool {
 	return rank[role] >= rank[required]
 }
 
-// requireWriteRole enforces the manage-or-admin gate on a write endpoint. It
+// requireWriteScope enforces the API-key WRITE SCOPE on a mutating REST
+// endpoint. Scope and workspace role are INDEPENDENT axes and a write must
+// satisfy both:
+//
+//	scope = what this credential may do at all (readonly vs readwrite)
+//	role  = what this person may do in the ?workspace= scope (issue #162)
+//
+// This is the REST half of the issue #645 regression. requireWriteRole used to
+// test only scope.Role, and resolve() never read key.Scopes at all, so a readonly
+// key could write every account endpoint (delete forms, archive products, cancel
+// subscriptions, mint itself a readwrite key). A session-authenticated caller
+// has no key and no scope restriction — its write gate is its role.
+//
+// It is a separately named function on purpose: folding the scope test back into
+// requireWriteRole is exactly what 5dafe3a did to the MCP layer, and a named
+// gate makes dropping it a visible diff line rather than a changed boolean.
+func (h *RESTHandlers) requireWriteScope(w http.ResponseWriter, actx *AccountCtx) bool {
+	if actx == nil || !actx.ViaAPIKey {
+		return true // session caller: role is the gate
+	}
+	if !dbstore.ScopeHasWrite(actx.KeyScopes) {
+		writeErr(w, http.StatusForbidden, "scope tidak mencukupi (perlu readwrite)")
+		return false
+	}
+	return true
+}
+
+// requireWriteRole enforces BOTH axes of a write: the API-key scope (via
+// requireWriteScope) and the manage-or-admin role in the ?workspace= scope. It
 // resolves the ?workspace= scope (so a member's role is known) and writes a 403
-// when the caller is a read_only member. Returns the scope (nil when handled).
+// when the caller is a read_only member or holds a readonly key. Returns the
+// scope (nil when handled).
 func (h *RESTHandlers) requireWriteRole(w http.ResponseWriter, r *http.Request, actx *AccountCtx) (*scopeResult, bool) {
+	if !h.requireWriteScope(w, actx) {
+		return nil, false
+	}
 	scope, ok := h.scopeOr403(w, r, actx)
 	if !ok {
 		return nil, false
@@ -103,9 +135,14 @@ func (h *RESTHandlers) requireWriteRole(w http.ResponseWriter, r *http.Request, 
 }
 
 // requireAdminRole enforces the admin-only gate (CHIP credentials + member
-// management). Writes a 403 when the caller is not an admin of the scoped
-// workspace. Returns the scope (nil when handled).
+// management), on BOTH axes: the API-key write scope and the admin role. Writes
+// a 403 when the caller is not an admin of the scoped workspace, or holds a
+// readonly key (a readonly key is refused before the role is even consulted —
+// an admin scope, not a workspace role, is what a key carries).
 func (h *RESTHandlers) requireAdminRole(w http.ResponseWriter, r *http.Request, actx *AccountCtx) (*scopeResult, bool) {
+	if !h.requireWriteScope(w, actx) {
+		return nil, false
+	}
 	scope, ok := h.scopeOr403(w, r, actx)
 	if !ok {
 		return nil, false

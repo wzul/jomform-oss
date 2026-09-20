@@ -60,6 +60,14 @@ func signingKeyInfo(ctx context.Context, h *RESTHandlers, accountID string) *Sig
 var _ = json.Marshal
 
 func (h *RESTHandlers) getWebhookKey(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	// Issue #645: signingKeyInfo lazily GENERATES AND SAVES the account's
+	// Ed25519 keypair on first use, so this GET is a write the first time. A
+	// readonly key may read an existing public key but must not create one.
+	if pub, priv, err := h.Accounts.SigningKeys(r.Context(), actx.Account.ID); err == nil && (pub == "" || priv == "") {
+		if !h.requireWriteScope(w, actx) {
+			return
+		}
+	}
 	info := signingKeyInfo(r.Context(), h, actx.Account.ID)
 	writeJSON(w, http.StatusOK, info)
 }

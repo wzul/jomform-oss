@@ -350,8 +350,9 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 }
 
 // Resolve identifies the caller: Bearer API key (preferred) or session
-// cookie + default account (owner's first account).
-func (h *RESTHandlers) resolve(w http.ResponseWriter, r *http.Request) (*dbstore.Account, bool) {
+// cookie + default account (owner's first account). It returns the resolved
+// account plus the credential context (an API key's scopes — issue #645).
+func (h *RESTHandlers) resolve(w http.ResponseWriter, r *http.Request) (*AccountCtx, bool) {
 	// 1. Bearer API key
 	if header := r.Header.Get("Authorization"); strings.HasPrefix(header, "Bearer ") {
 		raw := strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
@@ -367,7 +368,13 @@ func (h *RESTHandlers) resolve(w http.ResponseWriter, r *http.Request) (*dbstore
 			return nil, false
 		}
 		go h.Keys.Touch(context.Background(), key.ID)
-		return acc, true
+		// Issue #645: carry the key's scopes so the write gate can enforce
+		// them. Without this the scope was read from nowhere on REST and a
+		// readonly key could write every account endpoint.
+		return &AccountCtx{
+			Account: acc, ViaAPIKey: true,
+			KeyScopes: key.Scopes, KeyID: key.ID,
+		}, true
 	}
 
 	// 2. Session cookie
@@ -401,7 +408,9 @@ func (h *RESTHandlers) resolve(w http.ResponseWriter, r *http.Request) (*dbstore
 		invalidateSessionAcctCache(c.Value)
 		return nil, false
 	}
-	return acc, true
+	// A session caller has no API key, so no scope restriction applies
+	// (ViaAPIKey false): the session user's own role remains the write gate.
+	return &AccountCtx{Account: acc}, true
 }
 
 // resolveSessionAccount resolves the account for a session-authenticated
@@ -473,9 +482,24 @@ func (h *RESTHandlers) resolveSessionAccount(r *http.Request, userID, token stri
 	return accs[0]
 }
 
-// AccountCtx carries the resolved account through the request.
+// AccountCtx carries the resolved account through the request, plus — when the
+// request was authenticated with a Bearer API key — that key's scopes.
+//
+// The scopes ride on the context because requireWriteRole needs BOTH axes
+// (scope and workspace role) and scope is a property of the credential, not of
+// the account or of the ?workspace= scope. Before this, resolve() read
+// key.AccountID and never key.Scopes, so the scope was not enforced on ANY REST
+// write path (issue #645). A session-authenticated request has no key and
+// therefore no scope restriction (ViaAPIKey false).
 type AccountCtx struct {
 	Account *dbstore.Account
+	// ViaAPIKey is true when the request authenticated with a Bearer API key
+	// (not a session cookie). Scope is enforced only on this path.
+	ViaAPIKey bool
+	// KeyScopes holds the authenticating API key's scopes (nil for sessions).
+	KeyScopes []string
+	// KeyID is the authenticating key's id, for audit/self-revoke checks.
+	KeyID string
 }
 
 type acctKey struct{}
@@ -493,14 +517,14 @@ type acctRequestKey struct{}
 // authed wraps a handler with auth + account resolution.
 func (h *RESTHandlers) authed(next func(http.ResponseWriter, *http.Request, *AccountCtx)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		acc, ok := h.resolve(w, r)
+		actx, ok := h.resolve(w, r)
 		if !ok {
 			writeErr(w, http.StatusUnauthorized, "auth diperlukan")
 			return
 		}
-		ctx := context.WithValue(r.Context(), acctRequestKey{}, &AccountCtx{Account: acc})
-		ctx = middleware.WithAccountID(ctx, acc.ID)
-		next(w, r.WithContext(ctx), &AccountCtx{Account: acc})
+		ctx := context.WithValue(r.Context(), acctRequestKey{}, actx)
+		ctx = middleware.WithAccountID(ctx, actx.Account.ID)
+		next(w, r.WithContext(ctx), actx)
 	})
 }
 

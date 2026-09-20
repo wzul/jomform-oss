@@ -354,9 +354,20 @@ func (s *Server) roleForAccount(ctx context.Context, accountID string) (string, 
 	return s.deps.Workspaces.RoleByAccount(ctx, accountID, userID)
 }
 
-// requireWriteRoleIn enforces the manage-or-admin gate for the workspace owning
-// accountID. A read_only member's agent cannot write there (issue #162).
+// requireWriteRoleIn enforces BOTH write gates for the workspace owning
+// accountID:
+//
+//   - the API-key WRITE SCOPE (requireWriteScope): a readonly key is refused
+//     (issue #645 — the axis the role-only gate dropped).
+//   - the manage-or-admin ROLE there (issue #162): a read_only member's agent
+//     cannot write.
+//
+// The scope check runs first because it is credential-wide: there is no reason
+// to walk the account's workspaces for a caller whose key cannot write at all.
 func (s *Server) requireWriteRoleIn(ctx context.Context, accountID string) error {
+	if err := s.requireWriteScope(ctx); err != nil {
+		return err
+	}
 	role, err := s.roleForAccount(ctx, accountID)
 	if err != nil {
 		return fmt.Errorf("db: %w", err)
@@ -368,8 +379,12 @@ func (s *Server) requireWriteRoleIn(ctx context.Context, accountID string) error
 }
 
 // requireAdminRoleIn enforces the admin-only gate for the workspace owning
-// accountID (CHIP credentials + member management).
+// accountID (CHIP credentials + member management), on BOTH axes: the API-key
+// write scope and the admin role.
 func (s *Server) requireAdminRoleIn(ctx context.Context, accountID string) error {
+	if err := s.requireWriteScope(ctx); err != nil {
+		return err
+	}
 	role, err := s.roleForAccount(ctx, accountID)
 	if err != nil {
 		return fmt.Errorf("db: %w", err)

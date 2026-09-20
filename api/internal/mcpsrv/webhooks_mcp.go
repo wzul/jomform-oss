@@ -153,7 +153,11 @@ type webhookListIn struct {
 func (s *Server) listWebhooksMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in webhookListIn,
 ) (*mcp.CallToolResult, *listOutput[webhookListOut], error) {
-	accs, err := s.accountScopes(ctx, true)
+	// Issue #645: listing webhooks is a pure READ. It used to demand a
+	// readwrite scope (accountScopes(ctx, true)), so a readonly key was refused
+	// on a read — the opposite of the intended gate. Read scope is enough here;
+	// the mutating webhook tools carry their own write gates.
+	accs, err := s.accountScopes(ctx, false)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -112,12 +112,39 @@ func (s *APIKeyStore) Touch(ctx context.Context, keyID string) {
 	_, _ = s.pool.Exec(ctx, `UPDATE api_keys SET last_used_at=now() WHERE id=$1`, keyID)
 }
 
+// API-key scopes. A key carries ONE of these (prod data also holds "admin",
+// which is a superset). Scope and workspace ROLE are independent axes:
+//   - scope  = what this credential may do at all (readonly vs readwrite)
+//   - role   = what this person may do in a given workspace (read_only vs manage
+//              vs admin, issue #162)
+// A write must satisfy BOTH. The RBAC work in 5dafe3a replaced the per-tool
+// scope test with a role-only gate and silently dropped the scope half, which
+// let a readonly key delete forms (issue #645) — so the scope names live here,
+// next to the test, and the enforcement lives in one named function per layer
+// (mcpsrv.requireWriteScope, httpapi.requireWriteScope).
+const (
+	// ScopeReadonly permits read-only calls.
+	ScopeReadonly = "readonly"
+	// ScopeReadWrite permits read + write calls.
+	ScopeReadWrite = "readwrite"
+	// ScopeAdmin is the legacy/prod-admin scope; ScopeHas treats it as a
+	// superset of every other scope so existing keys keep working.
+	ScopeAdmin = "admin"
+)
+
 // ScopeHas reports whether the key holds the scope.
 func ScopeHas(scopes []string, want string) bool {
 	for _, s := range scopes {
-		if s == want || s == "admin" {
+		if s == want || s == ScopeAdmin {
 			return true
 		}
 	}
 	return false
+}
+
+// ScopeHasWrite reports whether a key's scopes permit a mutating call. It is the
+// ONE test every write path uses; a readonly key is refused, an admin-scoped key
+// (prod legacy) passes.
+func ScopeHasWrite(scopes []string) bool {
+	return ScopeHas(scopes, ScopeReadWrite)
 }

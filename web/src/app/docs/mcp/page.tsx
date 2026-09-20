@@ -127,7 +127,7 @@ const TOOL_GROUPS: { group: string; tools: { name: string; desc: string }[] }[] 
       { name: "update_webhook", desc: "Kemas kini webhook (url, events, secret pilihan \u2014 kosong = kekal sedia ada). events: sale.paid|sale.failed|subscription.charged|*." },
       { name: "webhook_deliveries", desc: "Log penghantaran terkini webhook (status_code, attempt, error)." },
       { name: "retry_webhook_delivery", desc: "Cuba semula satu penghantaran webhook yang gagal dengan segera (id dari webhook_deliveries). Ia dienqueue semula dan dihantar semula pada sweep seterusnya." },
-      { name: "get_webhook_signing_key", desc: "Baca kunci tandatangan Ed25519 akaun (key_id, public_key, alg) untuk mengesahkan tandatangan webhook X-JomForm-Signature-Ed25519. Read-only." },
+      { name: "get_webhook_signing_key", desc: "Baca kunci tandatangan Ed25519 akaun (key_id, public_key, alg) untuk mengesahkan tandatangan webhook X-JomForm-Signature-Ed25519. Membaca kunci sedia ada tidak memerlukan skop tulis; JANA kunci baharu (kali pertama, atau selepas dipadam) memerlukan readwrite." },
     ],
   },
   {
@@ -405,6 +405,49 @@ export default function McpReferencePage() {
             {`{"requested", "captured", "failed", "results": [...]}`}
           </code>
           . Single-record tools return their fields at the top level of the object.
+        </p>
+      </section>
+
+      {/* Issue #645: the scope model. Documented because the two axes are easy
+          to conflate, and conflating them is exactly what let a readonly key
+          write (the API-key scope was silently dropped from the write gate). */}
+      <section className="mt-8">
+        <h2 className="text-lg font-semibold text-slate-900">API-key scopes</h2>
+        <p className="mt-2 text-sm leading-relaxed text-slate-600">
+          An API key carries a <em>scope</em>, which says what that credential may do at all. It is
+          one of:
+        </p>
+        <ul className="mt-3 list-disc space-y-2 pl-5 text-sm leading-relaxed text-slate-600">
+          <li>
+            <code className="rounded bg-slate-100 px-1">readonly</code> — read tools only. Every
+            read works; every tool that creates, updates, deletes, archives, cancels, revokes or
+            generates a stored key is refused with a scope error. A readonly key cannot mint another
+            key, so it cannot escalate itself to readwrite.
+          </li>
+          <li>
+            <code className="rounded bg-slate-100 px-1">readwrite</code> — read and write. This is
+            what OAuth connectors receive.
+          </li>
+          <li>
+            <code className="rounded bg-slate-100 px-1">admin</code> — kept for existing keys; it
+            satisfies every scope, so it behaves as readwrite.
+          </li>
+        </ul>
+        <p className="mt-2 text-sm leading-relaxed text-slate-600">
+          Scope is a separate axis from your <em>workspace role</em> (
+          <code className="rounded bg-slate-100 px-1">read_only</code>,{" "}
+          <code className="rounded bg-slate-100 px-1">manage</code>,{" "}
+          <code className="rounded bg-slate-100 px-1">admin</code>). A write has to satisfy both: a{" "}
+          <code className="rounded bg-slate-100 px-1">readwrite</code> key held by a{" "}
+          <code className="rounded bg-slate-100 px-1">read_only</code> member is still refused, and
+          so is a <code className="rounded bg-slate-100 px-1">readonly</code> key held by the owner.
+          Reading never requires the write scope.
+        </p>
+        <p className="mt-2 text-sm leading-relaxed text-slate-600">
+          A few tools are worth calling out because their name suggests otherwise:{" "}
+          <code className="rounded bg-slate-100 px-1">get_webhook_signing_key</code> needs{" "}
+          <code className="rounded bg-slate-100 px-1">readwrite</code> only when it has to{" "}
+          <em>create</em> the account&apos;s keypair on first use — reading an existing key does not.
         </p>
       </section>
 

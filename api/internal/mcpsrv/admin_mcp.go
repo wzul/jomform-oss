@@ -408,6 +408,11 @@ func (s *Server) adminRequeueDeadLetterEvent(ctx context.Context, _ *mcp.CallToo
 	if err := s.adminGate(ctx, "admin.requeue_dead_letter_event"); err != nil {
 		return nil, nil, err
 	}
+	// Issue #645: a requeue re-delivers a webhook — a write. Super-admin is the
+	// role axis; the key's write scope is a separate axis.
+	if err := s.requireWriteScope(ctx); err != nil {
+		return nil, nil, err
+	}
 	if s.deps.WebhookEvents == nil {
 		return nil, nil, errors.New("store peristiwa webhook tidak dikonfigurasi")
 	}

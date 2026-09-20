@@ -3,6 +3,7 @@ package mcpsrv
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -815,19 +816,61 @@ func (s *Server) registerTools() {
 	// ── Parity: webhook signing key (issue #396) ─────────────────────────
 	addTool(s, &mcp.Tool{
 		Name:        "get_webhook_signing_key",
-		Description: "Baca kunci tandatangan Ed25519 akaun (key_id, public_key, alg) untuk mengesahkan tandatangan webhook X-JomForm-Signature-Ed25519. Read-only.",
+		Description: "Baca kunci tandatangan Ed25519 akaun (key_id, public_key, alg) untuk mengesahkan tandatangan webhook X-JomForm-Signature-Ed25519. Membaca kunci sedia ada tidak memerlukan skop tulis; JANA kunci baharu (kali pertama, atau selepas dipadam) memerlukan readwrite.",
 	}, s.getWebhookSigningKey)
 
 }
 
-// helper: require a write-capable key. Issue #307: the resolved account
-// honours the per-call scope (workspace_id/account_id or all the user's workspaces).
+// requireWriteScope enforces the API-key WRITE SCOPE on a mutating tool. It is
+// deliberately separate from the role gate (requireWriteRole /
+// requireWriteRoleIn): scope and workspace role are two independent axes and a
+// write must satisfy both.
+//
+// WHY IT IS ITS OWN FUNCTION (issue #645). The role gate used to BE the scope
+// gate: each write tool called accountAndScope(ctx, true), which tested
+// dbstore.ScopeHas(scopes, "readwrite") before doing anything. 5dafe3a (issue
+// #162, workspace RBAC) swapped those call sites for requireWriteRole, whose
+// chain reaches accountAndScope(ctx, false) — write=false — so the scope test
+// was skipped and a readonly key could delete forms, archive products, cancel
+// subscriptions and mint itself a readwrite key. Folding the two gates back into
+// one function is what caused that: a future RBAC change could drop the scope
+// half again with no test noticing. Keeping the scope test in a separately named
+// function means every write tool names BOTH gates, and dropping one is a
+// visible diff line rather than a changed boolean argument.
+//
+// OAuth tokens carry the readwrite scope (http.go, issue #121/#307), so agents
+// are unaffected. A key with the legacy "admin" scope passes (ScopeHasWrite).
+func (s *Server) requireWriteScope(ctx context.Context) error {
+	id := IdentityFromContext(ctx)
+	if id == nil {
+		return errors.New("token tiada atau tidak sah")
+	}
+	if !dbstore.ScopeHasWrite(id.Scopes) {
+		return errors.New("scope tidak mencukupi (perlu readwrite)")
+	}
+	return nil
+}
+
+// requireWriteScopeIn is the per-workspace form of requireWriteScope: the scope
+// axis is credential-wide, not per-workspace, so accountID is only there to keep
+// the call sites symmetrical with requireWriteRoleIn.
+func (s *Server) requireWriteScopeIn(ctx context.Context, _ string) error {
+	return s.requireWriteScope(ctx)
+}
+
+// accountAndScope resolves the account id for a call, enforcing the WRITE SCOPE
+// when write is true.
+//
+// Deprecated for write gates: the write argument is a boolean a caller can get
+// wrong (that is exactly the 5dafe3a regression). Write tools must instead name
+// requireWriteScope / requireWriteRole explicitly. Kept because read calls use
+// it with write=false and two write call sites still pass true.
 func (s *Server) accountAndScope(ctx context.Context, write bool) (accountID string, err error) {
 	id := IdentityFromContext(ctx)
 	if id == nil {
 		return "", fmt.Errorf("token tiada atau tidak sah")
 	}
-	if write && !dbstore.ScopeHas(id.Scopes, "readwrite") {
+	if write && !dbstore.ScopeHasWrite(id.Scopes) {
 		return "", fmt.Errorf("scope tidak mencukupi (perlu readwrite)")
 	}
 	// Per-call scope: if an explicit single account is requested, use it;
@@ -874,9 +917,20 @@ func (s *Server) accountAndRole(ctx context.Context) (accountID, role string, er
 	return accountID, role, nil
 }
 
-// requireWriteRole enforces the manage-or-admin gate on a write tool. A
-// read_only member's agent cannot write (issue #162 MCP parity).
+// requireWriteRole enforces BOTH gates a write needs, on the account resolved
+// for this call:
+//
+//   - the API-key WRITE SCOPE (requireWriteScope): a readonly key is refused.
+//     This is the axis 5dafe3a dropped (issue #645).
+//   - the manage-or-admin ROLE in the workspace owning that account (issue #162
+//     MCP parity): a read_only member's agent cannot write.
+//
+// The two are separate calls on purpose — see requireWriteScope for why folding
+// them into one function is what caused the regression.
 func (s *Server) requireWriteRole(ctx context.Context) (accountID string, err error) {
+	if err := s.requireWriteScope(ctx); err != nil {
+		return "", err
+	}
 	accountID, role, err := s.accountAndRole(ctx)
 	if err != nil {
 		return "", err
@@ -888,8 +942,11 @@ func (s *Server) requireWriteRole(ctx context.Context) (accountID string, err er
 }
 
 // requireAdminRole enforces the admin-only gate (CHIP credentials + member
-// management). A manage/read_only member's agent cannot manage these.
+// management), on BOTH axes: the API-key write scope and the admin role.
 func (s *Server) requireAdminRole(ctx context.Context) (accountID string, err error) {
+	if err := s.requireWriteScope(ctx); err != nil {
+		return "", err
+	}
 	accountID, role, err := s.accountAndRole(ctx)
 	if err != nil {
 		return "", err
@@ -898,4 +955,24 @@ func (s *Server) requireAdminRole(ctx context.Context) (accountID string, err er
 		return "", fmt.Errorf("perlu admin workspace")
 	}
 	return accountID, nil
+}
+
+// requireAdminRoleForRead is the ROLE-only form of requireAdminRole, for an
+// admin-surface READ.
+//
+// Issue #645 made the scope axis explicit, which is correct for writes — but it
+// also means a tool that only READS an admin view must not be routed through
+// requireAdminRole, or a readonly key would be refused on a read (the same
+// defect as item 4 of the card, one layer down). Naming the two intents
+// separately is what keeps "admin read" and "admin write" from sharing a gate
+// whose meaning changed underneath them.
+func (s *Server) requireAdminRoleForRead(ctx context.Context) error {
+	_, role, err := s.accountAndRole(ctx)
+	if err != nil {
+		return err
+	}
+	if role != "" && role != dbstore.RoleAdmin {
+		return fmt.Errorf("perlu admin workspace")
+	}
+	return nil
 }

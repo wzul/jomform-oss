@@ -33,6 +33,10 @@ func (s *Server) workspaceMembersStore() (*dbstore.WorkspaceMemberStore, error) 
 
 // requireWorkspaceAdmin resolves the caller's user id and verifies they are the
 // owner or an admin member of the workspace. Returns the workspace id on success.
+//
+// It checks the ROLE only. Mutating member/invite tools must use
+// requireWorkspaceAdminWrite, which adds the API-key write scope (issue #645:
+// the two axes are independent and a write must satisfy both).
 func (s *Server) requireWorkspaceAdmin(ctx context.Context, workspaceID string) (string, error) {
 	owner, err := s.workspaceOwner(ctx)
 	if err != nil {
@@ -60,6 +64,16 @@ func (s *Server) requireWorkspaceAdmin(ctx context.Context, workspaceID string) 
 	return "", errors.New("perlu admin workspace")
 }
 
+// requireWorkspaceAdminWrite is requireWorkspaceAdmin plus the API-key write
+// scope, for the MUTATING member/invite tools (invite, update role, remove,
+// cancel invite). The two list tools use the plain admin gate.
+func (s *Server) requireWorkspaceAdminWrite(ctx context.Context, workspaceID string) (string, error) {
+	if err := s.requireWriteScope(ctx); err != nil {
+		return "", err
+	}
+	return s.requireWorkspaceAdmin(ctx, workspaceID)
+}
+
 // ── invite_workspace_member ─────────────────────────────────────────────────────
 
 type inviteWorkspaceMemberIn struct {
@@ -71,7 +85,8 @@ type inviteWorkspaceMemberIn struct {
 func (s *Server) inviteWorkspaceMember(
 	ctx context.Context, _ *mcp.CallToolRequest, in inviteWorkspaceMemberIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	if _, err := s.requireWorkspaceAdmin(ctx, in.WorkspaceID); err != nil {
+	// Issue #645: mutating admin action — write scope AND admin role.
+	if _, err := s.requireWorkspaceAdminWrite(ctx, in.WorkspaceID); err != nil {
 		return nil, nil, err
 	}
 	role := in.Role
@@ -153,7 +168,8 @@ type updateWorkspaceMemberRoleIn struct {
 func (s *Server) updateWorkspaceMemberRole(
 	ctx context.Context, _ *mcp.CallToolRequest, in updateWorkspaceMemberRoleIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	if _, err := s.requireWorkspaceAdmin(ctx, in.WorkspaceID); err != nil {
+	// Issue #645: mutating admin action — write scope AND admin role.
+	if _, err := s.requireWorkspaceAdminWrite(ctx, in.WorkspaceID); err != nil {
 		return nil, nil, err
 	}
 	if !dbstore.ValidWorkspaceRole(in.Role) {
@@ -182,7 +198,8 @@ type cancelWorkspaceInviteIn struct {
 func (s *Server) cancelWorkspaceInvite(
 	ctx context.Context, _ *mcp.CallToolRequest, in cancelWorkspaceInviteIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	if _, err := s.requireWorkspaceAdmin(ctx, in.WorkspaceID); err != nil {
+	// Issue #645: mutating admin action — write scope AND admin role.
+	if _, err := s.requireWorkspaceAdminWrite(ctx, in.WorkspaceID); err != nil {
 		return nil, nil, err
 	}
 	sm, err := s.workspaceMembersStore()
@@ -242,7 +259,8 @@ type removeWorkspaceMemberIn struct {
 func (s *Server) removeWorkspaceMember(
 	ctx context.Context, _ *mcp.CallToolRequest, in removeWorkspaceMemberIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	if _, err := s.requireWorkspaceAdmin(ctx, in.WorkspaceID); err != nil {
+	// Issue #645: mutating admin action — write scope AND admin role.
+	if _, err := s.requireWorkspaceAdminWrite(ctx, in.WorkspaceID); err != nil {
 		return nil, nil, err
 	}
 	// Prevent removing the owner.

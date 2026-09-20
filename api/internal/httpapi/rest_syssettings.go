@@ -31,6 +31,11 @@ func (h *RESTHandlers) listSystemSettings(w http.ResponseWriter, r *http.Request
 
 // setSystemSetting (admin): upsert one key.
 func (h *RESTHandlers) setSystemSetting(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	// Issue #645: this route is reachable with a Bearer API key and was the one
+	// mutating REST endpoint with no gate at all. Platform settings are a write.
+	if !h.requireWriteScope(w, actx) {
+		return
+	}
 	var in struct {
 		Key   string `json:"key"`
 		Value string `json:"value"`

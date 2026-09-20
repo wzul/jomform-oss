@@ -81,12 +81,11 @@ type generateLegalPageIn struct {
 func (s *Server) generateLegalPage(
 	ctx context.Context, _ *mcp.CallToolRequest, in generateLegalPageIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	_, role, err := s.accessibleWorkspace(ctx, in.WorkspaceID)
-	if err != nil {
+	// Issue #645: write gate = API-key write scope AND manage-or-admin role.
+	// This used to compare the role inline, which checked the role but never the
+	// scope — the exact 5dafe3a shape, one call site over.
+	if _, err := s.requireWorkspaceWriteRole(ctx, in.WorkspaceID); err != nil {
 		return nil, nil, err
-	}
-	if role != "" && role != dbstore.RoleManage && role != dbstore.RoleAdmin {
-		return nil, nil, errors.New("perlu peranan manage atau admin")
 	}
 	if !validLegalPageType(in.PageType) {
 		return nil, nil, errors.New("page_type mesti privacy|terms|refund")
@@ -126,12 +125,9 @@ type setLegalPageIn struct {
 func (s *Server) setLegalPage(
 	ctx context.Context, _ *mcp.CallToolRequest, in setLegalPageIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	_, role, err := s.accessibleWorkspace(ctx, in.WorkspaceID)
-	if err != nil {
+	// Issue #645: write gate = API-key write scope AND manage-or-admin role.
+	if _, err := s.requireWorkspaceWriteRole(ctx, in.WorkspaceID); err != nil {
 		return nil, nil, err
-	}
-	if role != "" && role != dbstore.RoleManage && role != dbstore.RoleAdmin {
-		return nil, nil, errors.New("perlu peranan manage atau admin")
 	}
 	if !validLegalPageType(in.PageType) {
 		return nil, nil, errors.New("page_type mesti privacy|terms|refund")

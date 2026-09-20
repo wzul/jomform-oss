@@ -45,12 +45,9 @@ type setWorkspaceCurrencyIn struct {
 func (s *Server) setWorkspaceCurrency(
 	ctx context.Context, _ *mcp.CallToolRequest, in setWorkspaceCurrencyIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
-	_, role, err := s.accessibleWorkspace(ctx, in.WorkspaceID)
-	if err != nil {
+	// Issue #645: write gate = API-key write scope AND manage-or-admin role.
+	if _, err := s.requireWorkspaceWriteRole(ctx, in.WorkspaceID); err != nil {
 		return nil, nil, err
-	}
-	if role != "" && role != dbstore.RoleManage && role != dbstore.RoleAdmin {
-		return nil, nil, errors.New("perlu peranan manage atau admin")
 	}
 	if !dbstore.IsSupportedCurrency(in.Currency) {
 		return nil, nil, errors.New("mata wang tidak disokong")

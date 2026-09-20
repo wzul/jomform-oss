@@ -241,6 +241,11 @@ func (s *Server) replyFeedback(ctx context.Context, _ *mcp.CallToolRequest, in r
 	if err != nil {
 		return nil, nil, err
 	}
+	// Issue #645: a reply is a WRITE. The feedback tools are user-scoped so no
+	// workspace role applies; the credential's write scope is the gate.
+	if err := s.requireWriteScope(ctx); err != nil {
+		return nil, nil, err
+	}
 	store, err := s.feedbackStore()
 	if err != nil {
 		return nil, nil, err
@@ -307,6 +312,10 @@ func (s *Server) setFeedbackStatus(ctx context.Context, _ *mcp.CallToolRequest, 
 	// would open the whole triage queue. feedbackScopeFor is what encodes that
 	// (it builds the admin scope only for a caller WITH a user identity).
 	if _, err := s.feedbackScopeFor(ctx); err != nil {
+		return nil, nil, err
+	}
+	// Issue #645: a status change is a WRITE — the credential's write scope.
+	if err := s.requireWriteScope(ctx); err != nil {
 		return nil, nil, err
 	}
 	store, err := s.feedbackStore()

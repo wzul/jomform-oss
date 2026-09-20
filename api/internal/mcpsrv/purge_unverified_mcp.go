@@ -26,7 +26,12 @@ type purgeUnverifiedIn struct {
 func (s *Server) purgeUnverifiedAccounts(
 	ctx context.Context, _ *mcp.CallToolRequest, in purgeUnverifiedIn,
 ) (*mcp.CallToolResult, map[string]any, error) {
-	if _, err := s.requireAdminRole(ctx); err != nil {
+	// Issue #645: this tool only REPORTS a count (a read), so it gates on the
+	// ROLE axis only. requireAdminRole now also demands the write scope, which
+	// would refuse a readonly key on a read — the item-4 defect one layer down.
+	// The description says "Admin sahaja; read-only — tidak memadam apa-apa", and
+	// the handler only calls CountUnverifiedOlderThan; the role gate is intact.
+	if err := s.requireAdminRoleForRead(ctx); err != nil {
 		return nil, nil, err
 	}
 	if s.deps.Users == nil {

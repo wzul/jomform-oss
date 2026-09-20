@@ -10,12 +10,9 @@ package mcpsrv
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-
-	"github.com/wzul/jomform/api/internal/dbstore"
 )
 
 // getRealtimeStatus reports the realtime notification channel for a workspace:
@@ -48,12 +45,9 @@ func (s *Server) getRealtimeStatus(
 func (s *Server) setRealtimeSound(
 	ctx context.Context, _ *mcp.CallToolRequest, in setRealtimeSoundIn,
 ) (*mcp.CallToolResult, map[string]any, error) {
-	_, role, err := s.accessibleWorkspace(ctx, in.WorkspaceID)
-	if err != nil {
+	// Issue #645: write gate = API-key write scope AND manage-or-admin role.
+	if _, err := s.requireWorkspaceWriteRole(ctx, in.WorkspaceID); err != nil {
 		return nil, nil, err
-	}
-	if role != "" && role != dbstore.RoleManage && role != dbstore.RoleAdmin {
-		return nil, nil, errors.New("perlu peranan manage atau admin")
 	}
 	sp, err := s.workspacesStore()
 	if err != nil {

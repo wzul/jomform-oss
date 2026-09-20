@@ -107,6 +107,11 @@ func (s *Server) adminAddSuppression(ctx context.Context, _ *mcp.CallToolRequest
 	if err := s.adminGate(ctx, "admin.add_suppression"); err != nil {
 		return nil, nil, err
 	}
+	// Issue #645: super-admin is a ROLE/allowlist axis; the key's scope is a
+	// separate axis. A readonly key must not write the suppression list.
+	if err := s.requireWriteScope(ctx); err != nil {
+		return nil, nil, err
+	}
 	store, err := s.suppressionsStore()
 	if err != nil {
 		return nil, nil, err
@@ -142,6 +147,10 @@ type adminRemoveSuppressionIn struct {
 // to it resumes. Super-admin only, audited.
 func (s *Server) adminRemoveSuppression(ctx context.Context, _ *mcp.CallToolRequest, in adminRemoveSuppressionIn) (*mcp.CallToolResult, map[string]any, error) {
 	if err := s.adminGate(ctx, "admin.remove_suppression"); err != nil {
+		return nil, nil, err
+	}
+	// Issue #645: separate axes — a readonly key must not write the list.
+	if err := s.requireWriteScope(ctx); err != nil {
 		return nil, nil, err
 	}
 	store, err := s.suppressionsStore()
