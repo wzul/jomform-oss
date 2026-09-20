@@ -20,15 +20,25 @@
 # /api/internal/dbstore/admin_overview.go, an unhandled ENOENT, so `next build`
 # never ran and the image build exited 1.
 #
+# MCP-PARITY.md is copied for the same reason: web/src/lib/langPlacement.test.ts
+# reads the repo-root parity checklist (the tool registry in
+# api/internal/mcpsrv/ is checked against it), and a host checkout has that file
+# while the build context did not — so the suite passed on the host and the image
+# build died at import with 'ENOENT: /repo/MCP-PARITY.md'. A repo-root file read
+# by a web test must be listed here. web/src/lib/buildContext.test.ts enforces
+# exactly that rule in both environments, so a new one cannot reintroduce this.
+#
 # The container mirrors the checkout layout (/repo/web + /repo/api) so a
 # web-relative path resolves inside the image exactly as it does on a
-# developer's machine. Nothing from api/ reaches the runtime stage below.
+# developer's machine. Nothing from api/ or MCP-PARITY.md reaches the runtime
+# stage below.
 FROM node:24-alpine AS build
 WORKDIR /repo/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
 COPY web/ ./
 COPY api/ /repo/api/
+COPY MCP-PARITY.md /repo/MCP-PARITY.md
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
