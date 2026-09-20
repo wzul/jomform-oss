@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { PRIVACY_SECTIONS, PRIVACY_POLICY } from "../privacy-content";
+import OperatorNotice from "../../../components/OperatorNotice";
 
 export const metadata: Metadata = {
   title: "Privacy Policy — JomForm",
@@ -39,6 +40,12 @@ export default function PrivacyPage() {
           </section>
         ))}
       </div>
+      {/* The data controller. The privacy policy does not name the operator
+          anywhere else, and this is the one place it is stated — rendered from
+          the shared component so it cannot drift from the footer or /legal/terms. */}
+      <footer className="mt-12 border-t border-slate-100 pt-6">
+        <OperatorNotice className="text-sm leading-relaxed text-slate-600" />
+      </footer>
     </main>
   );
 }

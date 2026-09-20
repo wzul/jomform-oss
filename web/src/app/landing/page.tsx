@@ -3,6 +3,7 @@
 // Marketing landing page — i18n (EN default, BM toggle in-shell).
 import { useEffect } from "react";
 import { useI18n } from "../../components/i18n";
+import OperatorNotice from "../../components/OperatorNotice";
 
 const FEATURES = [
   { icon: "✏️", key: "land.f1" as const },
@@ -304,6 +305,10 @@ export default function Landing() {
         <p>
           {t("land.footer")}
         </p>
+        {/* Who runs JomForm. The landing page is also the logged-out home page,
+            so this is the home footer too. One shared component — see
+            src/lib/operator.ts for the single source of the identifiers. */}
+        <OperatorNotice className="mt-2" />
       </footer>
     </main>
   );

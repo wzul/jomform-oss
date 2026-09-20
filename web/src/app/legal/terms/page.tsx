@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { TERMS_SECTIONS, TERMS_LAST_UPDATED } from "../terms-content";
+import OperatorNotice from "../../../components/OperatorNotice";
 
 export const metadata: Metadata = {
   title: "Terms of Service — JomForm",
@@ -39,6 +40,11 @@ export default function TermsPage() {
           </section>
         ))}
       </div>
+      {/* Who the contract is with. Same shared component as the footer and
+          /legal/privacy — the operator identity has exactly one definition. */}
+      <footer className="mt-12 border-t border-slate-100 pt-6">
+        <OperatorNotice className="text-sm leading-relaxed text-slate-600" />
+      </footer>
     </main>
   );
 }

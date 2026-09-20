@@ -1396,6 +1396,27 @@ export const DICT = {
   "land.mcpbody": { en: 'JomForm speaks MCP (Model Context Protocol). Connect your AI agent once, then: \"add product RM25\", \"how many sales today?\", \"refund order JF-xxxx\" — all without opening a dashboard.', ms: 'JomForm cakap MCP (Model Context Protocol). Sambung agent AI sekali, lepas tu: \"tambah produk RM20\", \"berapa sales hari ni?\", \"refund order JF-xxxx\" — semua tanpa buka dashboard.', zh: 'JomForm 支持 MCP。连接一次 AI 代理：添加商品、查销售、退款——无需仪表板。', ta: 'JomForm MCP பேசுகிறது — டாஷ்போர்டு இல்லாமல் கடை நிர்வகி.', ar: 'JomForm يتحدث MCP — أدر متجرك دون لوحة تحكم.' },
   "land.mcpsnippet": { en: "Connect at https://mcp.jomform.com/mcp → OAuth 2.1 (one-click) → your agent, your store.", ms: "Sambung di https://mcp.jomform.com/mcp → OAuth 2.1 (satu klik) → agent kau, kedai kau.", zh: "在 https://mcp.jomform.com/mcp 连接 → OAuth 2.1（一键）→ 您的代理，您的商店。", ta: "https://mcp.jomform.com/mcp இல் இணைக்கவும் → OAuth 2.1 (ஒரே கிளிக்) → உங்கள் முகவர், உங்கள் கடை.", ar: "اتصل عبر https://mcp.jomform.com/mcp → OAuth 2.1 (بنقرة واحدة) → وكيلك، متجرك." },
   "land.footer": { en: "JomForm — Made in Malaysia.", ms: "JomForm — Buatan Malaysia.", zh: "JomForm — 马来西亚制造", ta: "JomForm — மலேசியாவில் தயாரிக்கப்பட்டது", ar: "JomForm — صُنع في ماليزيا" },
+  // Operator identity (WANZUL HOSTING ENTERPRISE) — the ONE sentence naming who
+  // runs JomForm. Rendered by components/OperatorNotice.tsx on the landing/home
+  // footer AND both legal pages, so all three read from this entry; the
+  // identifiers it must contain verbatim live in src/lib/operator.ts.
+  //
+  // The registration numbers (201403298654, PC0012291-H) and the legal name
+  // (WANZUL HOSTING ENTERPRISE) are legal identifiers: they stay byte-identical
+  // in every locale, and only the sentence around them is translated. Do not
+  // translate, reorder or reformat them.
+  //
+  // RTL: the Arabic string is read under dir="rtl", and the clause from the
+  // number onwards is wrapped in <bdi dir="ltr"> by OperatorNotice. The
+  // parenthesis pair and the sentence-final period would otherwise render
+  // inverted — see the measured note in src/lib/operator.ts before editing this.
+  "land.operator": {
+    en: "JomForm is operated by WANZUL HOSTING ENTERPRISE — Registration No. 201403298654 (formerly PC0012291-H).",
+    ms: "JomForm dikendalikan oleh WANZUL HOSTING ENTERPRISE — No. Pendaftaran 201403298654 (dahulunya PC0012291-H).",
+    zh: "JomForm 由 WANZUL HOSTING ENTERPRISE 运营 — 注册号 201403298654（原 PC0012291-H）。",
+    ta: "JomForm WANZUL HOSTING ENTERPRISE ஆல் இயக்கப்படுகிறது — பதிவு எண் 201403298654 (முன்பு PC0012291-H).",
+    ar: "يُدار JomForm بواسطة WANZUL HOSTING ENTERPRISE — رقم التسجيل 201403298654 (سابقًا PC0012291-H).",
+  },
   // issue #120: MCP setup instructions page (/mcp) + homepage guide link
   "land.mcpguide": { en: "View setup guide", ms: "Lihat cara sambung", zh: "查看设置指南", ta: "அமைப்பு வழிகாட்டியைக் காண்க", ar: "عرض دليل الإعداد" },
   // issue #381: wedding / RSVP use-case showcase

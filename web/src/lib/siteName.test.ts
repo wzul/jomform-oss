@@ -88,6 +88,14 @@ test("the guard is looking at real files (it cannot pass vacuously)", () => {
     DICT["land.footer"] && typeof DICT["land.footer"].en === "string",
     "the landing dictionary key this guard reads is gone",
   );
+  // The operator block is the landing page's other brand-bearing string; it is
+  // asserted in full (all five locales, both registration numbers) by
+  // operatorNotice.test.ts, and named here as a second anchor so this guard
+  // still fails if the landing dictionary loses its footer identity.
+  assert.ok(
+    DICT["land.operator"] && typeof DICT["land.operator"].en === "string",
+    "the land.operator key (who runs JomForm) is gone from the landing dictionary",
+  );
   assert.ok(appSources(fileURLToPath(APP)).length > 30, "app/ scan found implausibly few sources");
 });
 

@@ -1,0 +1,326 @@
+// Guard for the platform's own operator identity — who runs JomForm.
+//
+// THE GAP: JomForm never named its operator anywhere. The landing/home footer
+// said only "JomForm — Made in Malaysia.", and /legal/privacy and /legal/terms
+// named nobody at all — a privacy policy with no data controller on it. The
+// company (WANZUL HOSTING ENTERPRISE, registration 201403298654, formerly
+// PC0012291-H) is now stated on all three surfaces.
+//
+// WHY THIS IS A SOURCE SCAN
+//   Three surfaces must show the same legal sentence, and the way this breaks is
+//   not "the feature vanished" — it is "someone edited one surface". There is no
+//   JSX/DOM runner in this repo (no vitest/jest — see src/lib/i18n.test.ts,
+//   src/lib/homeServerContent.test.ts), so the surface rules are asserted
+//   against source and the data rules against the modules they render from.
+//   Rendered-text evidence (including the RTL claim, which no source scan can
+//   make) is in the PR.
+//
+// WHAT IS PINNED, AND WHY EACH ONE MATTERS
+//   1. All three surfaces still render the shared OperatorNotice component. A
+//      per-surface literal is what this file exists to prevent: the card's
+//      requirement is one definition, so a change to the number cannot leave
+//      one page stale. Removing the block from ANY ONE surface fails here.
+//   2. The legal identifiers exist in exactly ONE non-test module
+//      (src/lib/operator.ts). A copy of the number in a page, a dictionary or a
+//      second component fails, because that copy is a definition that no longer
+//      tracks the others.
+//   3. The sentence lives once, in the `land.operator` dictionary entry, and
+//      every surface reads it through the shared component — no surface carries
+//      the sentence as a literal.
+//   4. Each of the five locales is real: non-empty, different from English (a
+//      non-English locale left English-only is the failure the card names), and
+//      carrying the legal name and BOTH numbers verbatim and in the documented
+//      order (current first, former in parentheses).
+//   5. operatorParts() splits at the current number, so the registration clause
+//      is the part the component isolates for RTL; it reassembles exactly, and
+//      a locale that lost the number degrades instead of throwing.
+//   6. The component wraps that clause in <bdi dir="ltr">. Measured in
+//      Chromium: under the app's dir="rtl" for Arabic, the raw string renders
+//      the parenthesis pair INVERTED — `. (PC0012291-H` — and strands the
+//      sentence-final period at the start of the visual line. This is why the
+//      isolation is here and why a "tidy-up" that drops it is a regression.
+//   7. The merchant-facing public form footer is a DIFFERENT thing (a merchant
+//      showing their own company, issue #183). The platform identity must not
+//      leak into that render path.
+//
+// Run with:
+//
+//   npm run test:unit
+//   (node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON src/lib/*.test.ts)
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+import { DICT } from "../components/i18nDict.ts";
+import {
+  OPERATOR_FORMER_REG_NO,
+  OPERATOR_KEY,
+  OPERATOR_LEGAL_NAME,
+  OPERATOR_LOCALES,
+  OPERATOR_REG_NO,
+  operatorParts,
+} from "./operator.ts";
+import { SITE_NAME } from "./siteName.ts";
+
+const HERE = new URL(".", import.meta.url);
+const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, HERE)), "utf8");
+
+/** Every source file under web/src, as paths relative to src/. */
+function srcSources(dir = fileURLToPath(new URL("..", HERE))): string[] {
+  const base = dir.replace(/\/+$/, "");
+  return readdirSync(base).flatMap((name) => {
+    const full = `${base}/${name}`;
+    if (statSync(full).isDirectory()) return srcSources(full);
+    return /\.tsx?$/.test(name) ? [full] : [];
+  });
+}
+
+// The three surfaces that must name the operator. The landing page is also the
+// logged-out home page (app/page.tsx renders <Landing />), so it is listed once.
+// `metadata` is false for the landing page: it is a client component in the
+// dashboard shell, NOT a route with its own Metadata export.
+const SURFACES: { name: string; file: string; metadata: boolean }[] = [
+  { name: "landing/home footer", file: "../app/landing/page.tsx", metadata: false },
+  { name: "privacy policy", file: "../app/legal/privacy/page.tsx", metadata: true },
+  { name: "terms of service", file: "../app/legal/terms/page.tsx", metadata: true },
+];
+
+const COMPONENT = "../components/OperatorNotice.tsx";
+const DICT_MODULE = "../components/i18nDict.ts";
+
+/** The module allowed to hold the identifiers: the one definition. */
+const OPERATOR_MODULE = "/lib/operator.ts";
+
+/** Modules allowed to CONTAIN the identifiers as text without defining them. */
+const IDENTITY_ALLOWED = [OPERATOR_MODULE, "/components/i18nDict.ts", "/components/OperatorNotice.tsx"];
+
+/** A per-surface literal of the identity — the drift this guard exists to stop. */
+const IDENTITY_LITERAL = new RegExp(
+  `${OPERATOR_REG_NO}|${OPERATOR_FORMER_REG_NO}|${OPERATOR_LEGAL_NAME}`,
+);
+
+test("the guard is looking at real files (it cannot pass vacuously)", () => {
+  // If a path moves, fail here rather than asserting against nothing (the
+  // failure mode #507 was filed about).
+  for (const s of SURFACES) {
+    const src = read(s.file);
+    assert.ok(src.includes("export default function"), `${s.file} is not the ${s.name} page`);
+    if (s.metadata) assert.ok(src.includes("export const metadata"), `${s.file} is not a Next page`);
+  }
+  const all = srcSources();
+  assert.ok(all.length > 40, `the src/ scan found implausibly few sources (${all.length})`);
+  assert.ok(all.some((p) => p.endsWith(OPERATOR_MODULE)), "src/lib/operator.ts is gone");
+  assert.ok(all.some((p) => p.endsWith("/components/OperatorNotice.tsx")), "the component is gone");
+});
+
+test("the identifiers exist in exactly one non-test module that DEFINES them", () => {
+  // One definition, not three: a copy of the number in a page or a second
+  // component is a definition that stops tracking the others. The dictionary
+  // and the component are allowed to CONTAIN the sentence — they render it —
+  // but they must not spell the identity out as a second source: the dictionary
+  // strings are asserted against the module's constants in the locale test below.
+  const offenders = srcSources()
+    .filter((p) => !/\.test\.tsx?$/.test(p))
+    .filter((p) => !IDENTITY_ALLOWED.some((allowed) => p.endsWith(allowed)))
+    .filter((p) => IDENTITY_LITERAL.test(readFileSync(p, "utf8")));
+  assert.deepEqual(
+    offenders,
+    [],
+    "the operator's legal identifiers must be defined only in src/lib/operator.ts — render them through " +
+      "components/OperatorNotice.tsx instead of copying them into these files",
+  );
+});
+
+test("every one of the three surfaces renders the shared operator block", () => {
+  // The bite requirement: dropping the block from ANY ONE surface fails here.
+  const missing: string[] = [];
+  for (const s of SURFACES) {
+    const src = read(s.file);
+    if (!/<OperatorNotice\b/.test(src)) missing.push(`${s.name} (${s.file})`);
+    // And it must come from the shared component, not a look-alike.
+    else if (!/import\s+OperatorNotice\s+from\s+["'][^"']*components\/OperatorNotice["']/.test(src)) {
+      missing.push(`${s.name}: OperatorNotice is not imported from components/OperatorNotice`);
+    }
+  }
+  assert.deepEqual(
+    missing,
+    [],
+    `these surfaces no longer render the operator identity — JomForm must name who runs it everywhere ` +
+      `it has a footer:\n  ${missing.join("\n  ")}`,
+  );
+});
+
+test("the landing footer block is inside the <footer>, not somewhere unrelated", () => {
+  // A surface check on the word alone would pass on a block parked in a hidden
+  // div; the home footer is where the identity is legible, so anchor it.
+  const landmark = read("../app/landing/page.tsx");
+  const at = landmark.indexOf("<OperatorNotice");
+  const footer = landmark.indexOf("<footer");
+  assert.ok(footer > 0 && at > footer, "the operator block must sit inside the landing's <footer>");
+  assert.ok(
+    landmark.indexOf("</footer>") > at,
+    "the operator block escaped the landing's <footer>",
+  );
+});
+
+test("both legal pages state it in their own footer, below the policy text", () => {
+  for (const s of SURFACES.slice(1)) {
+    const src = read(s.file);
+    const at = src.indexOf("<OperatorNotice");
+    const lastSection = src.lastIndexOf("</section>");
+    assert.ok(
+      at > lastSection,
+      `${s.name}: the operator block must follow the policy sections (it is the controller statement, ` +
+        `not another clause)`,
+    );
+  }
+});
+
+test("each surface reads the sentence from the dictionary, not from a literal", () => {
+  // The sentence is a translated string; a literal in a page could not be
+  // localized, and would silently be the English one for every locale.
+  assert.equal(OPERATOR_KEY, "land.operator");
+  for (const s of SURFACES) {
+    assert.doesNotMatch(
+      read(s.file),
+      /is operated by|dikendalikan oleh|由 WANZUL|ஆல் இயக்கப்படுகிறது|يُدار/,
+      `${s.name} carries its own copy of the operator sentence instead of rendering the shared block`,
+    );
+  }
+  assert.match(
+    read(COMPONENT),
+    /t\(OPERATOR_KEY\)/,
+    "the component no longer reads the operator sentence from the dictionary",
+  );
+  assert.match(read(DICT_MODULE), /"land\.operator":\s*\{/, "the land.operator entry is gone");
+});
+
+test("the operator sentence is real in all five locales and none is English-only", () => {
+  const entry = DICT[OPERATOR_KEY] as Record<string, string>;
+  const problems: string[] = [];
+
+  for (const lang of OPERATOR_LOCALES) {
+    const v = entry[lang];
+    if (typeof v !== "string" || v.trim() === "") {
+      problems.push(`${lang}: missing/empty`);
+      continue;
+    }
+    // A non-English locale that still reads English is the card's named failure.
+    if (lang !== "en" && v === entry.en) problems.push(`${lang}: identical to the English string`);
+    // The legal identifiers are not translatable.
+    for (const id of [OPERATOR_LEGAL_NAME, OPERATOR_REG_NO, OPERATOR_FORMER_REG_NO]) {
+      if (!v.includes(id)) problems.push(`${lang}: does not contain ${id} verbatim`);
+    }
+    // Legibility: the current number first, the former number parenthesized.
+    const cur = v.indexOf(OPERATOR_REG_NO);
+    const former = v.indexOf(OPERATOR_FORMER_REG_NO);
+    if (cur > former) problems.push(`${lang}: the former number appears before the current one`);
+    if (!/[（(][^()（）]*PC0012291-H/.test(v)) {
+      problems.push(`${lang}: the former number is not written in parentheses after the current one`);
+    }
+    if (!v.includes(SITE_NAME)) problems.push(`${lang}: does not name ${SITE_NAME}`);
+  }
+
+  assert.deepEqual(problems, [], `the operator sentence is incomplete:\n  ${problems.join("\n  ")}`);
+});
+
+test("every locale's sentence splits at the registration number", () => {
+  for (const lang of OPERATOR_LOCALES) {
+    const text = DICT[OPERATOR_KEY][lang];
+    const { lead, regClause } = operatorParts(text);
+    assert.notEqual(regClause, "", `${lang}: operatorParts could not find the registration number`);
+    // The split is a split, not a rewrite: it reassembles to the original. The
+    // separator between the halves is spelled out because the component renders
+    // that space itself (see OperatorNotice) — it is dropped from `lead`, not
+    // from the sentence.
+    assert.equal(
+      `${lead.trimEnd()} ${regClause}`,
+      text,
+      `${lang}: operatorParts lost text (lead + " " + clause must be the original string)`,
+    );
+    assert.ok(regClause.startsWith(OPERATOR_REG_NO), `${lang}: the clause must start at the number`);
+    assert.ok(
+      regClause.includes(OPERATOR_FORMER_REG_NO),
+      `${lang}: the former number fell outside the clause that gets isolated for RTL`,
+    );
+    assert.ok(lead.trim() !== "", `${lang}: the sentence would render as the number alone`);
+  }
+});
+
+test("operatorParts degrades instead of throwing when the number is gone", () => {
+  // The component runs on a server-rendered page: a throw takes the page down,
+  // so a drifted string must render (un-isolated) and let the test above fail.
+  const noNumber = "JomForm is operated by WANZUL HOSTING ENTERPRISE.";
+  assert.deepEqual(operatorParts(noNumber), { lead: noNumber, regClause: "" });
+});
+
+test("the registration clause is isolated for RTL in the shared component", () => {
+  const component = read(COMPONENT);
+  // Measured in Chromium under dir="rtl": without this, the Arabic sentence
+  // renders its parenthesis pair inverted and strands the final period.
+  assert.match(
+    component,
+    /<bdi dir="ltr">\{regClause\}<\/bdi>/,
+    "the registration clause must be wrapped in <bdi dir=\"ltr\"> — under the app's dir=\"rtl\" for " +
+      "Arabic the raw clause renders its parentheses inverted, and the sentence-final period lands " +
+      "at the start of the visual line (measured, not assumed)",
+  );
+  assert.match(component, /lead\.trim\(\)/, "the lead must be trimmed or a locale doubles the gap in RTL");
+  // The locale is per-visitor (jf_lang), so the block must read the shared
+  // context: a `lang` prop could only ever be the caller's compile-time default,
+  // and the two legal pages are static server components — they would print the
+  // English sentence to every visitor, in every locale, forever.
+  assert.match(component, /"use client";/, "the operator block must be a client component");
+  assert.match(
+    component,
+    /const \{ t \} = useI18n\(\)/,
+    "the operator block must take the visitor's locale from useI18n(), not from a prop",
+  );
+  assert.match(component, /t\(OPERATOR_KEY\)/, "the component no longer translates the sentence");
+  assert.doesNotMatch(
+    component,
+    /lang\?:|lang =/,
+    "the component takes a lang prop again — that pins it to the server default and leaves four " +
+      "locales English-only on the legal pages",
+  );
+  assert.doesNotMatch(
+    component,
+    /\{lang\}/,
+    "a surface is still passing a lang prop to the operator block",
+  );
+  for (const s of SURFACES.slice(1)) {
+    const src = read(s.file);
+    assert.doesNotMatch(
+      src,
+      /"use client"/,
+      `${s.name}: the legal page became a client component — it must stay a static server page`,
+    );
+  }
+});
+
+test("the operator block is not the merchant's own company footer", () => {
+  // Issue #183's footer is a DIFFERENT feature: the per-workspace company name /
+  // registration a merchant shows on their own public form (api/internal/httpapi
+  // public.go, editable at /settings). The platform identity must not be wired
+  // into it — Wan scoped the public form footer out of this change.
+  const go = readFileSync(
+    fileURLToPath(new URL("../../../api/internal/httpapi/public.go", HERE)),
+    "utf8",
+  );
+  assert.doesNotMatch(
+    go,
+    IDENTITY_LITERAL,
+    "the platform's operator identity leaked into the merchant public-form footer — that footer shows " +
+      "the MERCHANT's company (issue #183) and is not where JomForm identifies itself",
+  );
+  const rest = readFileSync(
+    fileURLToPath(new URL("../../../api/internal/httpapi/rest_workspaces.go", HERE)),
+    "utf8",
+  );
+  assert.doesNotMatch(
+    rest,
+    IDENTITY_LITERAL,
+    "the platform's operator identity was folded into the per-workspace company_reg setting",
+  );
+});
