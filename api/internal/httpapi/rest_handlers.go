@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -820,13 +821,66 @@ func (h *RESTHandlers) publishForm(w http.ResponseWriter, r *http.Request, actx 
 	// Publishing requires CHIP configured OR at least one product; CHIP-only store
 	// means a form without CHIP setup can still publish for bank-direct? Per spec:
 	// CHIP-only. Warn but allow (bank_direct exists).
-	if err := h.Forms.SetStatus(r.Context(), actx.Account.ID, r.PathValue("id"), dbstore.FormStatusPublished); err != nil {
+	id := r.PathValue("id")
+	// Onboarding gap: a PAYMENT form with nothing to sell publishes fine and can
+	// never take money. It is not blocked — bank-direct and a later product edit
+	// are both legitimate — but it may not publish SILENTLY: the caller is told
+	// and has to acknowledge (`{"acknowledge":true}` body or `?acknowledge=1`).
+	// A response form and an enabled-menu form are never affected (see
+	// dbstore.PaymentFormWithoutProducts).
+	//
+	// Gated on the TRANSITION (dbstore.PublishNeedsAck), not on the raw rule: a
+	// form that is already live must not ask again on every subsequent publish
+	// call, or the dashboard would nag a merchant who publishes an empty payment
+	// form on purpose.
+	f, err := h.Forms.GetByID(r.Context(), actx.Account.ID, id)
+	if err != nil {
+		respondErr(w, r, err)
+		return
+	}
+	if dbstore.PublishNeedsAck(f, dbstore.FormStatusPublished) && !publishAcknowledged(r) {
+		writePublishNeedsAck(w)
+		return
+	}
+	if err := h.Forms.SetStatus(r.Context(), actx.Account.ID, id, dbstore.FormStatusPublished); err != nil {
 		respondErr(w, r, err)
 		return
 	}
 	// Issue #92: audit form publish.
-	h.recordEvent(r, actx, h.sessionOwnerID(r), "form.published", map[string]any{"form_id": r.PathValue("id")})
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "form.published", map[string]any{"form_id": id})
 	respond(w, http.StatusOK, map[string]string{"status": "published"})
+}
+
+// writePublishNeedsAck answers a publish that a payment form with no products
+// cannot complete silently. The status is 409 because nothing was changed: the
+// caller asked for a state it has to confirm first. `code` is the stable token
+// the dashboard matches on (web/src/lib/publishResult.ts holds the same value),
+// so it never has to parse the message.
+func writePublishNeedsAck(w http.ResponseWriter) {
+	writeJSON(w, http.StatusConflict, map[string]any{
+		"error": "Borang bayaran ini tiada produk — ia tidak boleh menerima bayaran. " +
+			"Tambah produk dahulu, atau sahkan untuk teruskan.",
+		"code":         dbstore.PublishWarningNoProducts,
+		"requires_ack": true,
+	})
+}
+
+// publishAcknowledged reports whether the caller explicitly accepted the
+// "payment form with no products" warning: `{"acknowledge":true}` in the body
+// (the dashboard's path) or `?acknowledge=1` on the URL (a curl/agent path that
+// has no body to send).
+func publishAcknowledged(r *http.Request) bool {
+	if r.URL.Query().Get("acknowledge") == "1" {
+		return true
+	}
+	b, err := io.ReadAll(io.LimitReader(r.Body, 1<<16))
+	if err != nil || len(b) == 0 {
+		return false
+	}
+	var in struct {
+		Acknowledge bool `json:"acknowledge"`
+	}
+	return json.Unmarshal(b, &in) == nil && in.Acknowledge
 }
 
 // setFormStatus sets a form's status (draft | private | published) and, when
@@ -840,10 +894,29 @@ func (h *RESTHandlers) setFormStatus(w http.ResponseWriter, r *http.Request, act
 	var in struct {
 		Status   string `json:"status"`
 		Password string `json:"password"`
+		// Acknowledge accepts the "payment form with nothing to sell" warning.
+		// The publish route reads it from the request body instead, because it
+		// takes no JSON input (see publishAcknowledged).
+		Acknowledge bool `json:"acknowledge"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid json")
 		return
+	}
+	// Onboarding gap: entering a LIVE status with a payment form that has
+	// nothing to sell is the same silent mistake the publish route refuses, and
+	// the dashboard's status control reaches THIS route. Gated on the
+	// transition, so re-saving a form that is already live is never blocked.
+	if dbstore.IsLiveStatus(in.Status) {
+		f, ferr := h.Forms.GetByID(r.Context(), actx.Account.ID, r.PathValue("id"))
+		if ferr != nil {
+			respondErr(w, r, ferr)
+			return
+		}
+		if dbstore.PublishNeedsAck(f, in.Status) && !in.Acknowledge && r.URL.Query().Get("acknowledge") != "1" {
+			writePublishNeedsAck(w)
+			return
+		}
 	}
 	switch in.Status {
 	case dbstore.FormStatusDraft, dbstore.FormStatusPublished, dbstore.FormStatusUnlisted:
@@ -900,6 +973,9 @@ func (h *RESTHandlers) bulkForms(w http.ResponseWriter, r *http.Request, actx *A
 	var in struct {
 		Action string   `json:"action"`
 		IDs    []string `json:"ids"`
+		// Acknowledge accepts the "payment form with nothing to sell" warning
+		// (see publishForm / dbstore.PublishNeedsAck).
+		Acknowledge bool `json:"acknowledge"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid json")
@@ -938,6 +1014,10 @@ func (h *RESTHandlers) bulkForms(w http.ResponseWriter, r *http.Request, actx *A
 
 	var updated int64
 	var skipped []string
+	// Onboarding gap: ids published WITHOUT anything to sell, and which the
+	// caller acknowledged. Reported alongside `skipped` so the merchant can see
+	// which live forms still cannot take money.
+	var needsProducts []string
 	switch in.Action {
 	case "publish", "draft":
 		status := "published"
@@ -955,6 +1035,32 @@ func (h *RESTHandlers) bulkForms(w http.ResponseWriter, r *http.Request, actx *A
 			if err != nil {
 				respondErr(w, r, err)
 				return
+			}
+			// Onboarding gap: the same rule as the single publish. A bulk
+			// "publish" must not be a way around the "payment form with nothing
+			// to sell" guard, so those ids are held back. `in.Acknowledge` (not
+			// publishAcknowledged) because decodeJSON above already consumed the
+			// body.
+			needsProd, perr := h.Forms.PublishNeedsAckIDs(r.Context(), actx.Account.ID, ids)
+			if perr != nil {
+				respondErr(w, r, perr)
+				return
+			}
+			if len(needsProd) > 0 {
+				if !in.Acknowledge {
+					writeJSON(w, http.StatusConflict, map[string]any{
+						"error": "Sebahagian borang bayaran tiada produk, jadi ia tidak " +
+							"diterbitkan. Tambah produk dahulu, atau sahkan untuk teruskan.",
+						"code":           dbstore.PublishWarningNoProducts,
+						"requires_ack":   true,
+						"needs_products": needsProd,
+					})
+					return
+				}
+				// Acknowledged: these publish too, and are reported separately
+				// (a form with nothing to sell is not a template skip, and the
+				// two have different fixes).
+				needsProducts = needsProd
 			}
 		}
 		tag, err := h.Forms.SetStatusMany(r.Context(), actx.Account.ID, ids, status)
@@ -980,6 +1086,11 @@ func (h *RESTHandlers) bulkForms(w http.ResponseWriter, r *http.Request, actx *A
 		out["skipped"] = skipped
 		out["skipped_reason"] = "template perlu category dan satu blok text (description) " +
 			"sebelum diterbitkan ke galeri"
+	}
+	if len(needsProducts) > 0 {
+		out["needs_products"] = needsProducts
+		out["needs_products_reason"] = "borang bayaran tanpa produk — ia diterbitkan, " +
+			"tetapi tidak boleh menerima bayaran sehingga produk ditambah"
 	}
 	writeJSON(w, http.StatusOK, out)
 }

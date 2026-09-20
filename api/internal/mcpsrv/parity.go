@@ -793,12 +793,23 @@ func jsonValid(s string) bool {
 	return json.Unmarshal([]byte(s), &v) == nil
 }
 
+// errPublishNeedsAck is the single refusal message for "a payment form with
+// nothing to sell cannot go live silently". The REST routes send it with a 409
+// and a `code`; MCP returns the same sentence as the tool error, so an agent is
+// told the same thing a merchant is.
+const errPublishNeedsAck = "Borang bayaran ini tiada produk — ia tidak boleh menerima bayaran. " +
+	"Tambah produk dahulu, atau hantar acknowledge=true untuk teruskan."
+
 // publishFormIn extends publish_form for the private status (issue #176):
 // status=private requires a password; status=published/draft/unlisted clears it.
 type publishFormIn struct {
 	FormID   string `json:"form_id" jsonschema:"ID borang"`
 	Status   string `json:"status,omitempty" jsonschema:"published (lalai) | private | draft | unlisted"`
 	Password string `json:"password,omitempty" jsonschema:"Kata laluan akses (wajib bila status=private)"`
+	// Acknowledge accepts the "payment form with nothing to sell" warning. An
+	// agent reading the tool error sees exactly the same refusal the dashboard
+	// does, and re-calls with acknowledge=true to proceed.
+	Acknowledge bool `json:"acknowledge,omitempty" jsonschema:"Sahkan amaran: borang bayaran tanpa produk tetap diterbitkan"`
 }
 
 func (s *Server) publishFormMCP(
@@ -812,6 +823,18 @@ func (s *Server) publishFormMCP(
 	status := in.Status
 	if status == "" {
 		status = dbstore.FormStatusPublished
+	}
+	// Onboarding gap: a payment form with nothing to sell must not go live
+	// silently through MCP either — this is the same rule the REST publish and
+	// status routes apply (dbstore.PublishNeedsAck), not a second copy.
+	if dbstore.IsLiveStatus(status) && !in.Acknowledge {
+		f, ferr := s.deps.Forms.GetByID(ctx, acc, in.FormID)
+		if ferr != nil {
+			return nil, nil, errors.New("borang tidak dijumpai")
+		}
+		if dbstore.PublishNeedsAck(f, status) {
+			return nil, nil, errors.New(errPublishNeedsAck)
+		}
 	}
 	switch status {
 	case dbstore.FormStatusPublished, dbstore.FormStatusDraft, dbstore.FormStatusUnlisted:
@@ -901,6 +924,10 @@ func (s *Server) deleteFormMCPSoft(
 type bulkFormsIn struct {
 	Action string   `json:"action" jsonschema:"publish | draft | delete"`
 	IDs    []string `json:"ids" jsonschema:"Senarai form id (maks 500)"`
+	// Acknowledge accepts the "payment form with nothing to sell" warning for a
+	// bulk publish (see publish_form / dbstore.PublishNeedsAck). Without it the
+	// ids that cannot take money are withheld and reported instead.
+	Acknowledge bool `json:"acknowledge,omitempty" jsonschema:"Sahkan amaran: borang bayaran tanpa produk tetap diterbitkan"`
 }
 
 func (s *Server) bulkFormsMCP(
@@ -932,6 +959,10 @@ func (s *Server) bulkFormsMCP(
 		return nil, nil, errors.New("ids mesti diisi")
 	}
 	var updated int64
+	// Onboarding gap: ids the bulk publish would have flipped live with nothing
+	// to sell. They are withheld and reported (a bulk publish must not be a way
+	// around the single-publish guard).
+	var needsProducts []string
 	for _, id := range ids {
 		acc, err := s.resolveFormAccount(ctx, id)
 		if err != nil {
@@ -947,6 +978,16 @@ func (s *Server) bulkFormsMCP(
 			if in.Action == "draft" {
 				status = "draft"
 			}
+			if status == dbstore.FormStatusPublished && !in.Acknowledge {
+				f, ferr := s.deps.Forms.GetByID(ctx, acc, id)
+				if ferr != nil {
+					continue
+				}
+				if dbstore.PublishNeedsAck(f, status) {
+					needsProducts = append(needsProducts, id)
+					continue
+				}
+			}
 			_, e = s.deps.Forms.SetStatusMany(ctx, acc, []string{id}, status)
 		default:
 			_, e = s.deps.Forms.SoftDeleteMany(ctx, acc, []string{id})
@@ -955,7 +996,13 @@ func (s *Server) bulkFormsMCP(
 			updated++
 		}
 	}
-	return nil, map[string]any{"status": "ok", "action": in.Action, "updated": updated}, nil
+	out := map[string]any{"status": "ok", "action": in.Action, "updated": updated}
+	if len(needsProducts) > 0 {
+		out["needs_products"] = needsProducts
+		out["needs_products_reason"] = "borang bayaran tanpa produk tidak diterbitkan — " +
+			"tambah produk dahulu, atau hantar acknowledge=true"
+	}
+	return nil, out, nil
 }
 
 // delete product alias to archive

@@ -11,6 +11,7 @@ import { workspaceQuery } from "../../lib/workspace";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 import { formEntriesAction } from "../../lib/formMode";
 import { formViewAction } from "../../lib/formPublicURL";
+import { acknowledgmentBody, needsProductsIDs, outcomeMessage, publishOutcome } from "../../lib/publishResult";
 import TemplatePicker from "../../components/TemplatePicker";
 
 type FormRow = {
@@ -111,7 +112,34 @@ export default function FormsPage() {
   }, [anon, router]);
 
   async function publish(id: string) {
-    await fetch(`/api/rest/forms/${id}/publish${workspaceQuery()}`, { method: "POST" });
+    const r = await fetch(`/api/rest/forms/${id}/publish${workspaceQuery()}`, { method: "POST" });
+    if (r.ok) {
+      setErr("");
+      load();
+      return;
+    }
+    // Onboarding gap: a payment form with nothing to sell is refused once
+    // (409, code=no_products) rather than published silently. Ask the merchant
+    // to confirm; on confirm the same call is re-sent acknowledged.
+    const d = await r.json().catch(() => ({}));
+    const outcome = publishOutcome({ ok: false, status: r.status, body: d }, "");
+    if (outcome.kind !== "needs_ack") {
+      setErr(outcomeMessage(outcome) || t("forms.loadFail"));
+      return;
+    }
+    if (!window.confirm(outcome.message || t("bld.noProductsWarn"))) return;
+    const retry = await fetch(`/api/rest/forms/${id}/publish${workspaceQuery()}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(acknowledgmentBody()),
+    });
+    if (!retry.ok) {
+      const rd = await retry.json().catch(() => ({}));
+      const retryOutcome = publishOutcome({ ok: false, status: retry.status, body: rd }, "");
+      setErr(outcomeMessage(retryOutcome) || t("forms.loadFail"));
+      return;
+    }
+    setErr("");
     load();
   }
 
@@ -141,11 +169,39 @@ export default function FormsPage() {
     }
     setBusy(true);
     try {
-      await fetch(`/api/rest/forms/bulk${workspaceQuery()}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, ids }),
-      });
+      const send = (ack: boolean) =>
+        fetch(`/api/rest/forms/bulk${workspaceQuery()}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action, ids, ...(ack ? acknowledgmentBody() : {}) }),
+        });
+      const r = await send(false);
+      if (!r.ok) {
+        // Onboarding gap: a bulk publish holds back any payment form with
+        // nothing to sell (409, code=no_products). Confirm once, then re-send
+        // the same batch acknowledged — the ids are named so the merchant knows
+        // which forms are the problem.
+        const d = await r.json().catch(() => ({}));
+        const outcome = publishOutcome({ ok: false, status: r.status, body: d }, "");
+        if (outcome.kind !== "needs_ack") {
+          setErr(outcomeMessage(outcome) || t("forms.loadFail"));
+          return;
+        }
+        const named = needsProductsIDs(d).length;
+        const ask =
+          named > 0
+            ? t("forms.bulkNoProductsConfirm", { n: named })
+            : outcome.message || t("bld.noProductsWarn");
+        if (!window.confirm(ask)) return;
+        const retry = await send(true);
+        if (!retry.ok) {
+          const rd = await retry.json().catch(() => ({}));
+          const ro = publishOutcome({ ok: false, status: retry.status, body: rd }, "");
+          setErr(outcomeMessage(ro) || t("forms.loadFail"));
+          return;
+        }
+      }
+      setErr("");
     } finally {
       setBusy(false);
       load();

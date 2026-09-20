@@ -18,7 +18,7 @@ const TOOL_GROUPS: { group: string; tools: { name: string; desc: string }[] }[] 
       { name: "set_form_theme", desc: "Set gaya/branding tersuai borang (issue #254): primary, background, text, card_background, card_border_radius, font_family, logo_url (mesti https:// — issue #501), layout (centered|full_width|split), spacing (compact|comfortable|spacious), product_image_size (small|medium|large|hidden, issue #471), product_image_layout (thumbnail-left|image-top — kad menu), custom_css, custom_js (issue #388 — JS tersuai untuk tingkah laku borang; dikawal pemilik + diimbas). Agent bebas set CSS/JS; JomForm kekal kuasa ke atas harga & pembayaran." },
       { name: "register_form_fields", desc: "Daftar medan input borang (issue #254) dengan kontrak ketat: {field_id, type, label, required, validation?, product_id?}. type mesti jenis input JomForm (name|email|phone|textarea|number|select|radio|checkbox|date|time|website|address|consent|hidden|list|repeater|image-choice|captcha). Ganti semua medan sedia ada. Harga kekal dari DB produk (server authority)." },
       { name: "generate_form", desc: "Jana konfigurasi borang (blok + gaya) dari prompt semula jadi (issue #256) via deepseek-v4-flash. Output disahkan server-side terhadap jenis blok JomForm; harga produk kekal dari DB (server authority). Semak/edit dulu, kemudian simpan guna upsert_form." },
-      { name: "publish_form", desc: "Publish borang \u2014 live di <workspace>.jomform.com/<slug> atau custom domain. status=private (dengan password) menjadikannya borang ber-kata laluan; status=draft menarik balik." },
+      { name: "publish_form", desc: "Publish borang \u2014 live di <workspace>.jomform.com/<slug> atau custom domain. status=private (dengan password) menjadikannya borang ber-kata laluan; status=draft menarik balik. Borang bayaran tanpa produk ditolak SEKALI dengan mesej jelas (ia tidak boleh menerima bayaran) \u2014 hantar acknowledge=true untuk teruskan. Borang response dan borang yang sudah live tidak pernah ditanya." },
       { name: "unpublish_form", desc: "Tarik balik borang dari live (jadikan draft)." },
       { name: "set_form_password", desc: "Set/buang kata laluan akses borang private (argon2id-hashed; tidak pernah dipulangkan). Password kosong = buang kata laluan." },
       { name: "get_form_restrictions", desc: "Baca sekatan borang (issue #207): jadual mula/tamat (start_at/end_at) + had penyertaan (entry_limit) + mesej peringkat." },
@@ -26,7 +26,7 @@ const TOOL_GROUPS: { group: string; tools: { name: string; desc: string }[] }[] 
       { name: "get_form_og_image", desc: "Baca imej Open Graph (og:image) borang (issue #411): URL imej tersuai bila ditetapkan, kosong = guna lalai janaan /og/{slug}.png." },
       { name: "set_form_og_image", desc: "Set imej Open Graph (og:image) borang (issue #411): URL imej tersuai (mesti https://) untuk pratonton sosial bila borang dikongsi. Kosong = guna lalai janaan." },
       { name: "delete_form", desc: "Soft-delete borang (pergi ke trash dashboard; slug dilepaskan). Boleh dipulihkan." },
-      { name: "bulk_forms", desc: "Tindakan pukal atas banyak borang sekali gus: action=publish|draft|delete dengan ids[] (maks 500)." },
+      { name: "bulk_forms", desc: "Tindakan pukal atas banyak borang sekali gus: action=publish|draft|delete dengan ids[] (maks 500). Borang bayaran tanpa produk DIKECUALIKAN dari publish dan dipulangkan dalam needs_products \u2014 hantar acknowledge=true untuk menerbitkannya juga." },
     ],
   },
   {

@@ -19,6 +19,7 @@ import MediaPicker from "../../components/MediaPicker";
 import ProductPicker, { type PickerProduct } from "../../components/ProductPicker";
 import { workspaceQuery, workspaceScope } from "../../lib/workspace";
 import { defaultNotificationEvent, formEntriesAction } from "../../lib/formMode";
+import { acknowledgmentBody, outcomeMessage, publishOutcome } from "../../lib/publishResult";
 
 type FormDetail = {
   id: string;
@@ -737,7 +738,7 @@ function FormSettingsInner() {
       return;
     }
     // Apply status (draft | private | published).
-    const statusBody: { status: string; password?: string } = { status };
+    const statusBody: { status: string; password?: string; acknowledge?: boolean } = { status };
     if (status === "private") statusBody.password = accessPw;
     const sr = await fetch(`/api/rest/forms/${id}/status${workspaceQuery()}`, {
       method: "POST",
@@ -745,8 +746,28 @@ function FormSettingsInner() {
       body: JSON.stringify(statusBody),
     });
     if (!sr.ok) {
-      setMsg(t("prof.failed"));
-      return;
+      // Onboarding gap: making a payment form with nothing to sell live is
+      // refused once (409, code=no_products) instead of happening silently.
+      // Ask, and on confirm re-send the SAME status acknowledged — the guard is
+      // a transition rule, so a form that is already live never asks again.
+      const d = await sr.json().catch(() => ({}));
+      const outcome = publishOutcome({ ok: false, status: sr.status, body: d }, "");
+      if (outcome.kind !== "needs_ack") {
+        setMsg(outcomeMessage(outcome) || t("prof.failed"));
+        return;
+      }
+      if (!window.confirm(outcome.message || t("bld.noProductsWarn"))) return;
+      const retry = await fetch(`/api/rest/forms/${id}/status${workspaceQuery()}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...statusBody, ...acknowledgmentBody() }),
+      });
+      if (!retry.ok) {
+        const rd = await retry.json().catch(() => ({}));
+        const ro = publishOutcome({ ok: false, status: retry.status, body: rd }, "");
+        setMsg(outcomeMessage(ro) || t("prof.failed"));
+        return;
+      }
     }
     setMsg(t("fs.saved"));
     void load();

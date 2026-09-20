@@ -15,9 +15,26 @@ import {
   templateSaveBody,
   type BuilderTarget,
 } from "../../lib/templateEdit";
+import {
+  acknowledgmentBody,
+  liveLink,
+  outcomeMessage,
+  publishOutcome,
+} from "../../lib/publishResult";
 import TemplatePicker from "../../components/TemplatePicker";
 
 /* ─── types ──────────────────────────────────────────────────────────────── */
+
+/* Onboarding gap: what the builder shows after a publish attempt.
+   `live`    — the form is live; show the public URL with open + copy.
+   `needsAck`— the API refused (409, code=no_products): a payment form with
+               nothing to sell may not publish silently. The merchant confirms
+               with "Publish anyway", which re-sends the publish acknowledged.
+   `error`   — anything else, with the server's own message. */
+type PublishNotice =
+  | { kind: "live"; url: string }
+  | { kind: "needsAck"; message: string }
+  | { kind: "error"; message: string };
 
 /* Issue #173: Gravity-Forms-style field palette. BlockType is the union of
    every field the builder can place. Categories mirror Gravity Forms:
@@ -207,6 +224,16 @@ export default function Builder() {
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [pubUrl, setPubUrl] = useState("");
+  // Onboarding gap: the "your form is live" moment. After a successful publish
+  // the builder used to show nothing at all (the View link renders only when a
+  // URL already resolved), so a first-time publisher had no confirmation, no
+  // link and no way to discover the form was on the internet. `publishNotice`
+  // is the panel that fills that hole, and it also carries the payment-form
+  // warning the API returns instead of publishing silently.
+  const [publishNotice, setPublishNotice] = useState<PublishNotice | null>(null);
+  // "Link copied ✓" feedback for the panel's copy action. Reset whenever a new
+  // notice appears, so a stale ✓ cannot sit beside a different URL.
+  const [copied, setCopied] = useState(false);
   const [loadErr, setLoadErr] = useState("");
   // Issue #174: template picker on the new-form path (no ?form= param).
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -607,15 +634,36 @@ export default function Builder() {
         body: JSON.stringify(statusBody),
       });
       if (!sr.ok) {
+        // Onboarding gap: the status route is the one the dashboard's status
+        // control reaches, and it refuses to make a payment form with nothing
+        // to sell live without an acknowledgement. Surface it as the warning
+        // panel (with "Publish anyway"), not as an opaque error line.
         const d = await sr.json().catch(() => ({}));
-        setLoadErr(d.error || "Failed to set status");
+        const outcome = publishOutcome({ ok: false, status: sr.status, body: d }, "");
+        setPublishNotice(
+          outcome.kind === "needs_ack"
+            ? { kind: "needsAck", message: outcome.message }
+            : { kind: "error", message: outcomeMessage(outcome) || "Failed to set status" },
+        );
         setSaving(false);
         return;
       }
       setStatus(targetStatus as "draft" | "private" | "published" | "unlisted");
     }
     if (plan.steps.includes("publish") && id) {
-      await fetch(`/api/rest/forms/${id}/publish${workspaceQuery()}`, { method: "POST" });
+      const pr = await fetch(`/api/rest/forms/${id}/publish${workspaceQuery()}`, { method: "POST" });
+      const pd = await pr.json().catch(() => ({}));
+      const outcome = publishOutcome({ ok: pr.ok, status: pr.status, body: pd }, "");
+      if (outcome.kind !== "published") {
+        setPublishNotice(
+          outcome.kind === "needs_ack"
+            ? { kind: "needsAck", message: outcome.message }
+            : { kind: "error", message: outcome.message || t("bld.saveFail") },
+        );
+        setSaving(false);
+        await load();
+        return;
+      }
       // Issue #450: build the public URL from the API's url field (resolves the
       // owning workspace slug / custom domain server-side), never a client-side
       // "app" fallback which 404s.
@@ -633,11 +681,73 @@ export default function Builder() {
         (refreshed && refreshed.url) ||
         (wsSlug ? `https://${wsSlug}.jomform.com/${slugValue}` : "");
       setPubUrl(url);
+      // The missing moment: tell the merchant the form is live and hand over the
+      // link (the panel renders no anchor unless the URL is a real https one —
+      // see liveLink; an empty href would reload the current page).
+      setCopied(false);
+      setPublishNotice({ kind: "live", url });
       await load();
     }
     if (editingTemplate) setTplMsg(t("tplmg.editSaved"));
     setSaving(false);
     setDirty(false);
+  }
+
+  /* Onboarding gap: copy the just-published link. Guarded on an https URL so
+     nothing but a real one can ever reach the clipboard (or, one call up, an
+     href). A failed clipboard write leaves the label unchanged rather than
+     claiming success. */
+  async function copyPublishUrl(url: string) {
+    const link = liveLink(url);
+    if (!link) return;
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopied(true);
+    } catch {
+      setCopied(false);
+    }
+  }
+
+  /* Onboarding gap: "Publish anyway" — the merchant confirmed that a payment
+     form with nothing to sell should still go live. Both the status write and
+     the publish call are re-sent with the acknowledgement, because either can
+     be the one the API refused, and the publish route's own body carries it. */
+  async function publishAnyway() {
+    if (!currentId) return;
+    setPublishNotice(null);
+    setSaving(true);
+    try {
+      await fetch(`/api/rest/forms/${currentId}/status${workspaceQuery()}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "published", acknowledge: true }),
+      });
+      const pr = await fetch(`/api/rest/forms/${currentId}/publish${workspaceQuery()}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(acknowledgmentBody()),
+      });
+      const pd = await pr.json().catch(() => ({}));
+      const outcome = publishOutcome({ ok: pr.ok, status: pr.status, body: pd }, "");
+      if (outcome.kind !== "published") {
+        setPublishNotice({
+          kind: "error",
+          message: outcomeMessage(outcome) || t("bld.saveFail"),
+        });
+        return;
+      }
+      const refreshed = await fetch(`/api/rest/forms/${currentId}${workspaceQuery()}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null);
+      const url = (refreshed && refreshed.url) || "";
+      setStatus("published");
+      setPubUrl(url);
+      setPublishNotice({ kind: "live", url });
+      await load();
+    } finally {
+      setSaving(false);
+      setDirty(false);
+    }
   }
 
   // Issue #457: save the current form (its saved config) as a reusable
@@ -1189,6 +1299,107 @@ export default function Builder() {
           )}
         </div>
       </header>
+
+      {/* Onboarding gap: the moment the form goes live. Placed directly under
+          the builder header — the surface the merchant is already looking at
+          when they press Publish — because that is exactly where the missing
+          confirmation was. It carries the public URL with an open action and a
+          copy action, or the payment-form warning with its confirm action. */}
+      {publishNotice && (
+        <div
+          role={publishNotice.kind === "live" ? "status" : "alert"}
+          className={`flex flex-col gap-2 border-b px-3 py-2.5 md:px-4 ${
+            publishNotice.kind === "live"
+              ? "border-emerald-200 bg-emerald-50"
+              : publishNotice.kind === "needsAck"
+                ? "border-amber-200 bg-amber-50"
+                : "border-red-200 bg-red-50"
+          }`}
+        >
+          {publishNotice.kind === "live" ? (
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <span className="shrink-0 text-sm font-medium text-emerald-800">{t("bld.liveTitle")}</span>
+              {liveLink(publishNotice.url) ? (
+                <>
+                  <a
+                    href={liveLink(publishNotice.url) as string}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="jf-btn-primary"
+                  >
+                    {t("bld.openForm")}
+                  </a>
+                  <button
+                    type="button"
+                    onClick={() => void copyPublishUrl(publishNotice.url)}
+                    className="jf-btn-ghost"
+                  >
+                    {copied ? t("bld.urlCopied") : t("bld.copyUrl")}
+                  </button>
+                  <a
+                    href={liveLink(publishNotice.url) as string}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="min-w-0 truncate font-mono text-[11px] text-emerald-800 underline"
+                  >
+                    {publishNotice.url}
+                  </a>
+                </>
+              ) : (
+                <span className="text-xs text-emerald-900">{t("bld.liveNoUrl")}</span>
+              )}
+              <button
+                type="button"
+                onClick={() => setPublishNotice(null)}
+                className="ml-auto shrink-0 text-xs text-emerald-800 underline"
+              >
+                {t("bld.dismiss")}
+              </button>
+            </div>
+          ) : (
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <span className="text-xs text-[var(--jf-text)]">
+                {publishNotice.kind === "needsAck"
+                  ? publishNotice.message || t("bld.noProductsWarn")
+                  : publishNotice.message}
+              </span>
+              {/* Docs parity (AGENTS.md rule 4): the "?" beside the field that
+                  raises the question deep-links the publish section of the
+                  knowledge base. */}
+              <a
+                href="/docs#publishing"
+                className="shrink-0 text-xs font-medium text-[var(--jf-primary)] underline"
+              >
+                ?
+              </a>
+              {publishNotice.kind === "needsAck" && (
+                <button
+                  type="button"
+                  onClick={() => void publishAnyway()}
+                  disabled={saving}
+                  className="jf-btn-primary shrink-0"
+                >
+                  {t("bld.publishAnyway")}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setPublishNotice(null)}
+                className="ml-auto shrink-0 text-xs underline"
+              >
+                {t("bld.dismiss")}
+              </button>
+            </div>
+          )}
+          {/* The "anyone with this link" hint only makes sense when there IS a
+              link. With no resolvable URL the panel already says so, and adding
+              "anyone who opens this link" beside it contradicts itself — which
+              the render proof caught. */}
+          {publishNotice.kind === "live" && Boolean(publishNotice.url) && (
+            <p className="text-[11px] text-emerald-800">{t("bld.liveHint")}</p>
+          )}
+        </div>
+      )}
 
       {/* mobile (<md) section switcher — issue #59: one tab at a time,
           canvas is default. Desktop keeps the 3-col grid (md:grid). */}
