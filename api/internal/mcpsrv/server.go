@@ -105,6 +105,11 @@ type Deps struct {
 	// person who filed it and carries no account_id (migration 000063), so
 	// these tools never resolve a workspace scope.
 	Feedback *dbstore.FeedbackThreadStore
+	// NotifyFeedback is called (best-effort) after a feedback thread is filed
+	// through an MCP tool, so the platform team is notified exactly as it is
+	// when the same thread is filed on the /feedback page. Nil → no
+	// notification (the thread is still filed and readable).
+	NotifyFeedback func(th *dbstore.FeedbackThread, body string)
 }
 
 // Server wraps the MCP *Server with JomForm deps.

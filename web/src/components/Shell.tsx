@@ -16,7 +16,7 @@ export function Shell({
   active,
 }: {
   children: React.ReactNode;
-  active: "dashboard" | "forms" | "templates" | "products" | "sales" | "spam" | "deliveries" | "subscriptions" | "settings" | "profile" | "media" | "feedback" | "admin";
+  active: "dashboard" | "forms" | "templates" | "products" | "sales" | "spam" | "deliveries" | "subscriptions" | "settings" | "profile" | "media" | "feedback" | "chat" | "admin";
 }) {
   const { user, workspaces, reload } = useSession();
   const [workspace, setWorkspace] = useState<string>("");
@@ -160,6 +160,10 @@ export function Shell({
     // workspace's, so reaching it must not depend on owning an account — the
     // same reason /admin (below) is the only role-gated entry in this list.
     { key: "feedback", href: "/feedback", label: t("nav.feedback"), icon: "💬" },
+    // In-app assistant (phase 1): read-only over the user's own data, plus
+    // filing feedback. Placed next to Feedback because that is where a filing
+    // lands — the two surfaces are one story.
+    { key: "chat", href: "/chat", label: t("nav.chat"), icon: "✨" },
   ];
 
   // Issue #387: super-admins (#385) get a platform-wide Admin nav link.

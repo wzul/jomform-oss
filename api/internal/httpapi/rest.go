@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/wzul/jomform/api/internal/auth"
+	"github.com/wzul/jomform/api/internal/chat"
 	"github.com/wzul/jomform/api/internal/currency"
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/emailqueue"
@@ -131,6 +132,32 @@ type RESTHandlers struct {
 	// so the feedback notification can address the platform team through the
 	// existing email lane. One list, one place to change who is notified.
 	SuperAdminEmails []string
+
+	// Chat is the in-app assistant (phase 1: read-only + file feedback). Nil
+	// when no LLM is configured → the endpoint reports the assistant as
+	// unavailable rather than offering a chat box that errors. It runs its tool
+	// calls under a READONLY identity (see rest_chat.go), so it cannot write.
+	Chat ChatRunner
+	// ChatLimiter is the per-user chat message bucket (LLM calls cost money).
+	// Nil in bare-mode tests.
+	ChatLimiter *middleware.RateLimiter
+}
+
+// ChatRunner answers one chat message. The production value is *chat.Runner;
+// it is an interface only so the REST edge can be tested with a fake.
+type ChatRunner interface {
+	Run(ctx context.Context, history []chat.Turn, message string) (*chat.Result, error)
+	// Ready reports whether this runner can answer at all: a model is wired AND
+	// it has a credential. GET /v1/rest/chat reports it as `available`, which
+	// the UI uses to decide whether to offer the box at all.
+	//
+	// It is part of the interface on purpose. Availability used to be inferred
+	// from `Chat != nil`, which answers "was the object constructed", not "can
+	// this deployment answer a message" — a deployment with no model key got a
+	// box whose every message died. Making it a method means every
+	// implementation must answer the question, and the compiler refuses one
+	// that would rather not.
+	Ready() bool
 }
 
 // RegisterRoutes wires REST endpoints.
@@ -302,6 +329,12 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /v1/admin/feedback/{id}", h.authed(h.handleAdminGetFeedback))
 	mux.Handle("POST /v1/admin/feedback/{id}/messages", h.authed(h.handleAdminReplyFeedback))
 	mux.Handle("POST /v1/admin/feedback/{id}/status", h.authed(h.handleAdminSetFeedbackStatus))
+	// In-app chat (phase 1): answers questions about the caller's own data and
+	// can file feedback — nothing else. Session-only and per-user rate limited;
+	// its tool calls run under a READONLY identity (rest_chat.go), so no sentence
+	// typed into the box can reach a write.
+	mux.Handle("GET /v1/rest/chat", h.authed(h.handleChatStatus))
+	mux.Handle("POST /v1/rest/chat", h.authed(h.handleChat))
 	mux.Handle("GET /v1/rest/analytics/forms", h.authed(h.formAnalytics))
 	mux.Handle("GET /v1/rest/analytics/products", h.authed(h.productAnalytics))
 	// Issue #92: event-tracking read endpoints (audit log + behaviour analytics).

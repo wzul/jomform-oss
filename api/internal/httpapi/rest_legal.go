@@ -88,7 +88,11 @@ func (h *RESTHandlers) generateWorkspaceLegalPage(w http.ResponseWriter, r *http
 		EffectiveDate:  in.EffectiveDate,
 	})
 	if err != nil {
-		respondErr(w, r, err)
+		// A rejected credential is "LLM generation is not available" (the same
+		// 503 the nil-client branch above answers), not a generic internal
+		// error: the merchant's fix is an operator fixing the key, and the UI
+		// already has copy for the unavailable case.
+		respondAIErr(w, r, err, "penjanaan LLM tidak tersedia")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{

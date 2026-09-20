@@ -16,6 +16,7 @@ const NAV = [
   { href: "/docs/placeholders", label: "Placeholders reference" },
   { href: "/docs/mcp", label: "MCP tool reference" },
   { href: "/docs/feedback", label: "In-app feedback" },
+  { href: "/docs/chat", label: "In-app assistant" },
 ];
 
 // Issue #513: deep links into the two sections this change added, so the

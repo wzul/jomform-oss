@@ -34,6 +34,7 @@ import (
 
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/emailqueue"
+	"github.com/wzul/jomform/api/internal/feedbacksvc"
 )
 
 // Feedback job type enqueued on the #199 queue. It rides the SAME sender as the
@@ -41,23 +42,15 @@ import (
 // suppression guard; see email_dispatcher.go's case for it.
 const feedbackNotifyJobType = "feedback_notify"
 
+// The length and rate bounds live in feedbacksvc, which is the ONE filing path
+// (REST, MCP tool, in-app chat). These aliases keep this file's existing
+// validation readable without introducing a second copy of the numbers — a
+// second copy is how a guard silently stops applying on one surface.
 const (
-	// feedbackBodyMin is the shortest accepted message. It exists to filter a
-	// stray Enter press, not to judge content: a filer who has nothing to say
-	// should get a validation message, not silence from a queue nobody reads.
-	feedbackBodyMin = 10
-	// feedbackBodyMax / feedbackSubjectMax bound what one filing can store and
-	// mail, so a single request cannot become an unbounded row.
-	feedbackBodyMax    = 5000
-	feedbackSubjectMax = 200
-	// feedbackDailyLimit is the per-user filing cap over a rolling 24h.
-	//
-	// It is a product decision, not a measured rate: more than 10 separate
-	// reports in a day is either someone stress-testing the queue or a problem
-	// that needs a conversation rather than 11 tickets. A rate limit cannot
-	// "false-positive" a genuine complaint — it only delays it — which is
-	// exactly why it is the right guard here instead of a spam classifier.
-	feedbackDailyLimit = 10
+	feedbackBodyMin    = feedbacksvc.BodyMin
+	feedbackBodyMax    = feedbacksvc.BodyMax
+	feedbackSubjectMax = feedbacksvc.SubjectMax
+	feedbackDailyLimit = feedbacksvc.DefaultDailyLimit
 )
 
 // feedbackThreadOut is the user-facing thread shape. It carries no filer
@@ -142,6 +135,11 @@ type createFeedbackIn struct {
 //
 // The filer is the SESSION user. There is no user_id in the request and no way
 // to file on someone else's behalf.
+//
+// The filing itself goes through feedbacksvc — the SAME service the MCP
+// submit_feedback tool and the in-app chat use. A second copy of the validation,
+// the daily limit and the notification here is how one of them silently stops
+// applying, so this handler owns only the HTTP mapping.
 func (h *RESTHandlers) handleCreateFeedback(w http.ResponseWriter, r *http.Request, _ *AccountCtx) {
 	if h.Feedback == nil {
 		writeErr(w, http.StatusServiceUnavailable, "sistem maklum balas tidak dikonfigurasi")
@@ -157,50 +155,26 @@ func (h *RESTHandlers) handleCreateFeedback(w http.ResponseWriter, r *http.Reque
 		writeErr(w, http.StatusBadRequest, "badan permintaan tidak sah")
 		return
 	}
-	body := strings.TrimSpace(in.Body)
-	subject := strings.TrimSpace(in.Subject)
-	switch {
-	case len(body) < feedbackBodyMin:
-		writeErr(w, http.StatusBadRequest, "sila tulis sekurang-kurangnya 10 aksara supaya kami faham")
-		return
-	case len(body) > feedbackBodyMax:
-		writeErr(w, http.StatusBadRequest, "maklum balas terlalu panjang (maksimum 5000 aksara)")
-		return
-	case len(subject) > feedbackSubjectMax:
-		writeErr(w, http.StatusBadRequest, "tajuk terlalu panjang (maksimum 200 aksara)")
-		return
-	}
-
-	// Per-user daily limit. Counted BEFORE the insert so a rejected filing
-	// stores nothing, and scoped to this user only — one account flooding
-	// cannot exhaust another account's allowance.
-	since := time.Now().Add(-24 * time.Hour)
-	if n, err := h.Feedback.CountRecentByUser(r.Context(), uid, since); err != nil {
-		writeErr(w, http.StatusInternalServerError, "gagal menyemak had maklum balas")
-		return
-	} else if n >= feedbackDailyLimit {
-		writeErr(w, http.StatusTooManyRequests,
-			"had maklum balas harian dicapai (10 sehari). Sila cuba lagi esok atau balas dalam thread sedia ada.")
-		return
-	}
-
-	email := ""
-	if h.Users != nil {
-		if u, err := h.Users.ByID(r.Context(), uid); err == nil && u != nil {
-			email = u.Email
-		}
-	}
-
-	th, err := h.Feedback.CreateThread(r.Context(), uid, email, subject, body)
+	th, err := h.feedbackService().CreateThread(r.Context(), uid, in.Subject, in.Body)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "gagal menyimpan maklum balas")
+		writeErr(w, feedbacksvc.HTTPStatusHint(err), err.Error())
 		return
 	}
-	// Best-effort: a notification that fails must not fail the filing — the
-	// thread is filed and readable either way.
-	h.notifyFeedbackAdmins(th, body)
 	h.recordFeedbackEvent(r, "feedback.created", th.ID, map[string]any{"status": th.Status})
 	writeJSON(w, http.StatusCreated, map[string]any{"status": "created", "id": th.ID})
+}
+
+// feedbackService builds the shared filing service from the wired stores. The
+// notification is passed as the service's Notify hook, so a filing is notified
+// exactly once wherever it came from.
+func (h *RESTHandlers) feedbackService() *feedbacksvc.Service {
+	return &feedbacksvc.Service{
+		Store: h.Feedback,
+		Users: h.Users,
+		Notify: func(th *dbstore.FeedbackThread, body string) {
+			h.notifyFeedbackAdmins(th, body)
+		},
+	}
 }
 
 // handleListFeedback: GET /v1/rest/feedback?page=&limit= — the caller's own
@@ -529,6 +503,14 @@ func (h *RESTHandlers) recordFeedbackEvent(r *http.Request, event, threadID stri
 // existing #199 email lane. Recipients are the configured super-admin
 // allowlist — the same list that gates the triage surface, so there is exactly
 // one place to change who is notified.
+//
+// NotifyFeedbackAdmins is the exported form: the MCP submit_feedback tool and
+// the in-app chat file through the same feedbacksvc, whose Notify hook is this
+// function, so a thread filed from any surface notifies identically.
+func (h *RESTHandlers) NotifyFeedbackAdmins(th *dbstore.FeedbackThread, body string) {
+	h.notifyFeedbackAdmins(th, body)
+}
+
 func (h *RESTHandlers) notifyFeedbackAdmins(th *dbstore.FeedbackThread, body string) {
 	if th == nil || len(h.SuperAdminEmails) == 0 {
 		return

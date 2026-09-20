@@ -82,7 +82,8 @@ Parity checklist (dashboard → MCP):
   (the SSE stream `GET /v1/rest/events/stream` is the realtime channel)
 - Trusted devices (#454) → `list_trusted_devices`, `revoke_trusted_device`
 - In-app feedback (#639) → `list_feedback`, `get_feedback_thread`,
-  `reply_feedback`, `set_feedback_status`.
+  `reply_feedback`, `set_feedback_status`,
+  `submit_feedback`.
   **USER-SCOPED, not account-scoped:** a feedback thread belongs to the person
   who filed it and carries no account id, so naming a workspace cannot widen
   the read. A super-admin sees every thread from the same tools (triage).

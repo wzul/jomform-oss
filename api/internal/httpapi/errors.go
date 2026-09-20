@@ -15,6 +15,7 @@ import (
 
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/httpapi/middleware"
+	"github.com/wzul/jomform/api/internal/llm"
 	"github.com/wzul/jomform/api/internal/payments"
 )
 
@@ -60,6 +61,28 @@ func logError(r *http.Request, event string, err error) {
 	if globalMetrics != nil {
 		globalMetrics.IncError(class)
 	}
+}
+
+// respondAIErr maps a failure from an AI (LLM) call to the caller.
+//
+// WHY A NAMED MAPPING. A model credential the provider REJECTED (rotated,
+// revoked, expired) is not an internal bug — it is a deployment state, and every
+// AI surface in this package already answers "unavailable" with 503 when the
+// client is absent. Without this, a rejected key turns the same feature into a
+// bare 500 on every attempt: the UI's unavailable branch never fires and the
+// operator sees a generic internal error instead of "the key is bad". The
+// credential case therefore joins the not-configured case, and every other
+// failure keeps the standard mapping (500, detail logged, never leaked).
+//
+// unavailableMsg is the surface's own copy for "the AI is not available", which
+// each endpoint already has: one rule, the surface's own words.
+func respondAIErr(w http.ResponseWriter, r *http.Request, err error, unavailableMsg string) {
+	if errors.Is(err, llm.ErrCredential) {
+		logError(r, "llm_credential_rejected", err)
+		writeErr(w, http.StatusServiceUnavailable, unavailableMsg)
+		return
+	}
+	respondErr(w, r, err)
 }
 
 // respondErr maps an error to a user-facing response. User-actionable errors

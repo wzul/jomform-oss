@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,6 +21,28 @@ import (
 // DefaultModel is the Ollama Cloud model used for legal-page generation
 // (same model family as the chatwoot-ai decision).
 const DefaultModel = "deepseek-v4-flash:0731"
+
+// ErrCredential is returned when the provider REJECTS the API key (HTTP 401 or
+// 403). It exists so a caller can tell "this deployment has no working model
+// credential" apart from every other failure: the first is a deployment state
+// the user-facing surfaces report as UNAVAILABLE (an AI control that only ever
+// errors is worse than no control), while a 500, a bad body or a timeout is an
+// internal error that must stay a 500.
+//
+// It does NOT fire for an empty key: a client with no credential never reaches
+// the provider. Use HasCredential for that case — the two together are what
+// callers need to answer "is the feature usable, and if not, why".
+var ErrCredential = errors.New("llm: kredensial model ditolak oleh pembekal")
+
+// HasCredential reports whether an API key is CONFIGURED. It is a presence
+// check, not a validity check: only the provider can say whether the key still
+// works, and that answer arrives as ErrCredential when a call is made.
+//
+// Both halves matter to the surfaces that expose an AI feature. Presence
+// decides whether the control is offered at all (the chat panel asks before
+// showing a box), and validity decides what happens when a key is rotated or
+// expires under a running deployment.
+func (c *Client) HasCredential() bool { return c != nil && c.apiKey != "" }
 
 // DefaultBaseURL is the Ollama Cloud OpenAI-compatible API root.
 const DefaultBaseURL = "https://ollama.com/v1"
@@ -218,32 +241,9 @@ func (c *Client) GenerateFormConfig(ctx context.Context, prompt string) (string,
 
 // chat posts a chat-completion request body and returns the trimmed reply.
 func (c *Client) chat(ctx context.Context, body []byte) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
+	raw, err := c.post(ctx, body)
 	if err != nil {
 		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if c.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	}
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("llm: %w", err)
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return "", err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("llm: status %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
-	}
-	// Guard against non-JSON responses (e.g. an HTML landing page served by a
-	// misconfigured endpoint). json.Unmarshal would otherwise fail with a
-	// confusing "invalid character '<'" error.
-	ct := resp.Header.Get("Content-Type")
-	if !strings.Contains(ct, "application/json") {
-		return "", fmt.Errorf("llm: unexpected response Content-Type %q (expected application/json); body: %s", ct, strings.TrimSpace(string(raw)))
 	}
 	var out chatResponse
 	if err := json.Unmarshal(raw, &out); err != nil {
@@ -256,6 +256,191 @@ func (c *Client) chat(ctx context.Context, body []byte) (string, error) {
 		return "", fmt.Errorf("llm: empty response")
 	}
 	return strings.TrimSpace(out.Choices[0].Message.Content), nil
+}
+
+// post sends a chat-completion request body and returns the raw response body.
+func (c *Client) post(ctx context.Context, body []byte) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("llm: %w", err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		// A rejected key is a deployment state, not a bug: the provider refused
+		// this credential. Typed so an AI surface can answer "unavailable"
+		// rather than masking it as a generic internal error.
+		return nil, fmt.Errorf("%w (status %d): %s",
+			ErrCredential, resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("llm: status %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	// Guard against non-JSON responses (e.g. an HTML landing page served by a
+	// misconfigured endpoint). json.Unmarshal would otherwise fail with a
+	// confusing "invalid character '<'" error.
+	ct := resp.Header.Get("Content-Type")
+	if !strings.Contains(ct, "application/json") {
+		return nil, fmt.Errorf("llm: unexpected response Content-Type %q (expected application/json); body: %s", ct, strings.TrimSpace(string(raw)))
+	}
+	return raw, nil
+}
+
+// ── Tool-calling chat (in-app chat, phase 1) ─────────────────────────────────
+
+// ToolDef is one function offered to the model, in the OpenAI-compatible
+// "tools" shape. Parameters is a JSON Schema object.
+//
+// The caller decides WHICH functions exist: the in-app chat offers a small
+// read-only set plus one write (file feedback), never the whole tool registry.
+type ToolDef struct {
+	Name        string
+	Description string
+	Parameters  json.RawMessage
+}
+
+// ToolCall is one function call the model asked for. Arguments is the raw JSON
+// string the model emitted — it is UNTRUSTED and must be validated by the
+// executor, never assumed to match the declared schema.
+type ToolCall struct {
+	ID        string
+	Name      string
+	Arguments string
+}
+
+// ChatTurn is one message in a tool-using conversation.
+//
+// Roles: system | user | assistant | tool. An assistant turn that requests
+// functions carries ToolCalls; a tool turn carries ToolCallID (the call it
+// answers) and Name.
+type ChatTurn struct {
+	Role       string
+	Content    string
+	ToolCalls  []ToolCall
+	ToolCallID string
+	Name       string
+}
+
+// ChatReply is the model's answer to one turn: prose, function calls, or both.
+type ChatReply struct {
+	Content   string
+	ToolCalls []ToolCall
+}
+
+// toolMessage is the wire shape of a message in a tool-using request.
+type toolMessage struct {
+	Role       string         `json:"role"`
+	Content    string         `json:"content,omitempty"`
+	ToolCalls  []toolCallWire `json:"tool_calls,omitempty"`
+	ToolCallID string         `json:"tool_call_id,omitempty"`
+	Name       string         `json:"name,omitempty"`
+}
+
+type toolCallWire struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
+type toolRequest struct {
+	Model    string        `json:"model"`
+	Messages []toolMessage `json:"messages"`
+	Tools    []toolTool    `json:"tools,omitempty"`
+	Stream   bool          `json:"stream"`
+}
+
+type toolTool struct {
+	Type     string `json:"type"`
+	Function struct {
+		Name        string          `json:"name"`
+		Description string          `json:"description"`
+		Parameters  json.RawMessage `json:"parameters,omitempty"`
+	} `json:"function"`
+}
+
+// toolResponse is the OpenAI-compatible response for a tool-using request.
+type toolResponse struct {
+	Choices []struct {
+		Message struct {
+			Content   string         `json:"content"`
+			ToolCalls []toolCallWire `json:"tool_calls"`
+		} `json:"message"`
+	} `json:"choices"`
+	Error *struct {
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+// ChatWithTools runs one turn of a tool-using conversation on the SAME Ollama
+// Cloud client the rest of the app uses (no second LLM client — AGENTS.md).
+//
+// It returns the model's prose and/or the functions it wants called. The caller
+// executes them (or refuses) and feeds the results back as "tool" turns.
+func (c *Client) ChatWithTools(ctx context.Context, turns []ChatTurn, tools []ToolDef) (ChatReply, error) {
+	msgs := make([]toolMessage, 0, len(turns))
+	for _, t := range turns {
+		m := toolMessage{Role: t.Role, Content: t.Content, ToolCallID: t.ToolCallID, Name: t.Name}
+		for _, tc := range t.ToolCalls {
+			var w toolCallWire
+			w.ID, w.Type = tc.ID, "function"
+			w.Function.Name, w.Function.Arguments = tc.Name, tc.Arguments
+			m.ToolCalls = append(m.ToolCalls, w)
+		}
+		msgs = append(msgs, m)
+	}
+	req := toolRequest{Model: c.model, Messages: msgs, Stream: false}
+	for _, t := range tools {
+		var tt toolTool
+		tt.Type, tt.Function.Name, tt.Function.Description = "function", t.Name, t.Description
+		tt.Function.Parameters = t.Parameters
+		req.Tools = append(req.Tools, tt)
+	}
+	body, err := json.Marshal(req)
+	if err != nil {
+		return ChatReply{}, err
+	}
+	raw, err := c.post(ctx, body)
+	if err != nil {
+		return ChatReply{}, err
+	}
+	var out toolResponse
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return ChatReply{}, fmt.Errorf("llm: response is not valid JSON: %w", err)
+	}
+	if out.Error != nil && out.Error.Message != "" {
+		return ChatReply{}, fmt.Errorf("llm: %s", out.Error.Message)
+	}
+	if len(out.Choices) == 0 {
+		return ChatReply{}, fmt.Errorf("llm: empty response")
+	}
+	msg := out.Choices[0].Message
+	reply := ChatReply{Content: strings.TrimSpace(msg.Content)}
+	for _, tc := range msg.ToolCalls {
+		if tc.Function.Name == "" {
+			continue
+		}
+		reply.ToolCalls = append(reply.ToolCalls, ToolCall{
+			ID: tc.ID, Name: tc.Function.Name, Arguments: tc.Function.Arguments,
+		})
+	}
+	if reply.Content == "" && len(reply.ToolCalls) == 0 {
+		return ChatReply{}, fmt.Errorf("llm: empty response")
+	}
+	return reply, nil
 }
 
 // BusinessDetails carries the merchant's business facts used to fill the

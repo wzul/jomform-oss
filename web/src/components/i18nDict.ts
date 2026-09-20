@@ -1766,6 +1766,28 @@ export const DICT = {
   "fb.docs": { en: "How feedback works", ms: "Cara maklum balas berfungsi", zh: "反馈如何运作", ta: "கருத்து எவ்வாறு செயல்படுகிறது", ar: "كيف تعمل الملاحظات" },
   "fb.adminHint": { en: "You are a platform admin — the Admin tab shows every thread for triage.", ms: "Anda pentadbir platform — tab Admin menunjukkan setiap thread untuk triaj.", zh: "您是平台管理员——管理标签页显示所有对话以便分类处理。", ta: "நீங்கள் தள நிர்வாகி — நிர்வாகி தாவல் ஒவ்வொரு உரையாடலையும் காட்டுகிறது.", ar: "أنت مسؤول المنصة — تبويب الإدارة يعرض كل المحادثات للفرز." },
 
+  // ── In-app assistant (phase 1) ───────────────────────────────────────────
+  // The chat is READ-ONLY apart from filing feedback. The strings say so
+  // plainly: "it cannot change your account" is the feature, not a disclaimer,
+  // and a user who asks it to delete a form must read why it will not.
+  "nav.chat": { en: "Assistant", ms: "Pembantu", zh: "助手", ta: "உதவியாளர்", ar: "المساعد" },
+  "chat.title": { en: "Assistant", ms: "Pembantu", zh: "助手", ta: "உதவியாளர்", ar: "المساعد" },
+  "chat.subtitle": { en: "Ask about your own forms, sales and products. It can file feedback for you — it cannot change your account.", ms: "Tanya tentang borang, jualan dan produk anda sendiri. Ia boleh menghantar maklum balas untuk anda — ia tidak boleh mengubah akaun anda.", zh: "询问您自己的表单、销售和产品。它可以替您提交反馈——它无法更改您的账户。", ta: "உங்கள் சொந்த படிவங்கள், விற்பனை மற்றும் தயாரிப்புகள் பற்றி கேளுங்கள். உங்களுக்காக கருத்தை அனுப்ப முடியும் — ஆனால் உங்கள் கணக்கை மாற்ற முடியாது.", ar: "اسأل عن نماذجك ومبيعاتك ومنتجاتك. يمكنه إرسال ملاحظات نيابة عنك — لكنه لا يستطيع تغيير حسابك." },
+  "chat.readOnlyBadge": { en: "Read-only", ms: "Baca sahaja", zh: "只读", ta: "படிக்க மட்டும்", ar: "للقراءة فقط" },
+  "chat.placeholder": { en: "Ask a question about your data…", ms: "Tanya soalan tentang data anda…", zh: "就您的数据提问…", ta: "உங்கள் தரவு பற்றி கேள்வி கேளுங்கள்…", ar: "اطرح سؤالاً عن بياناتك…" },
+  "chat.send": { en: "Send", ms: "Hantar", zh: "发送", ta: "அனுப்பு", ar: "إرسال" },
+  "chat.thinking": { en: "Looking that up…", ms: "Sedang mencari…", zh: "正在查询…", ta: "தேடுகிறது…", ar: "جارٍ البحث…" },
+  "chat.empty": { en: "Ask something like \"which of my forms are live?\" or \"how many sales came in this week?\".", ms: "Tanya seperti \"borang mana yang live?\" atau \"berapa banyak jualan masuk minggu ini?\".", zh: "试试问“我有哪些表单已上线？”或“本周有多少笔销售？”。", ta: "\"என்னுடைய எந்தப் படிவங்கள் நேரலையில் உள்ளன?\" அல்லது \"இந்த வாரம் எத்தனை விற்பனைகள் வந்தன?\" போன்று கேளுங்கள்.", ar: "اسأل مثلاً \"أي نماذجي مُفعَّلة؟\" أو \"كم عملية بيع وردت هذا الأسبوع؟\"." },
+  "chat.fail": { en: "The assistant could not answer. Please try again.", ms: "Pembantu tidak dapat menjawab. Sila cuba lagi.", zh: "助手无法回答。请重试。", ta: "உதவியாளரால் பதிலளிக்க முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر على المساعد الإجابة. يرجى المحاولة مرة أخرى." },
+  "chat.unavailable": { en: "The assistant is not available right now.", ms: "Pembantu tidak tersedia buat masa ini.", zh: "助手目前不可用。", ta: "உதவியாளர் இப்போது கிடைக்கவில்லை.", ar: "المساعد غير متاح حاليًا." },
+  "chat.rateLimited": { en: "You have reached the chat limit (60 messages an hour). Please try again shortly.", ms: "Anda telah mencapai had chat (60 mesej sejam). Sila cuba sebentar lagi.", zh: "您已达到聊天上限（每小时 60 条）。请稍后再试。", ta: "அரட்டை வரம்பை அடைந்துவிட்டீர்கள் (மணிக்கு 60 செய்திகள்). சிறிது நேரத்தில் மீண்டும் முயற்சிக்கவும்.", ar: "لقد بلغت حد المحادثة (60 رسالة في الساعة). يرجى المحاولة بعد قليل." },
+  "chat.tooLong": { en: "That message is too long — please shorten it.", ms: "Mesej itu terlalu panjang — sila pendekkan.", zh: "该消息过长——请缩短。", ta: "அந்தச் செய்தி மிக நீளமானது — சுருக்கவும்.", ar: "هذه الرسالة طويلة جدًا — يرجى تقصيرها." },
+  "chat.filed": { en: "Feedback filed — we will reply in your Feedback threads.", ms: "Maklum balas dihantar — kami akan membalas dalam thread Maklum Balas anda.", zh: "反馈已提交——我们会在您的反馈对话中回复。", ta: "கருத்து அனுப்பப்பட்டது — உங்கள் கருத்து உரையாடல்களில் நாங்கள் பதிலளிப்போம்.", ar: "تم إرسال الملاحظات — سنرد في محادثات ملاحظاتك." },
+  "chat.viewThread": { en: "Open my threads", ms: "Buka thread saya", zh: "打开我的对话", ta: "எனது உரையாடல்களைத் திற", ar: "افتح محادثاتي" },
+  "chat.refused": { en: "That action is not allowed here.", ms: "Tindakan itu tidak dibenarkan di sini.", zh: "此处不允许该操作。", ta: "அந்தச் செயல் இங்கே அனுமதிக்கப்படாது.", ar: "هذا الإجراء غير مسموح به هنا." },
+  "chat.docs": { en: "What the assistant can and cannot do", ms: "Apa yang pembantu boleh dan tidak boleh lakukan", zh: "助手能做什么、不能做什么", ta: "உதவியாளர் என்ன செய்ய முடியும், முடியாது", ar: "ما يستطيع المساعد فعله وما لا يستطيع" },
+  "chat.limitNote": { en: "Up to {n} messages an hour. This is a limit, not a judgement — it keeps the feature affordable for everyone.", ms: "Sehingga {n} mesej sejam. Ini had, bukan penilaian — ia menjaga kos ciri ini untuk semua orang.", zh: "每小时最多 {n} 条消息。这是限额，不是评判——它让这项功能对所有人都可负担。", ta: "மணிக்கு அதிகபட்சம் {n} செய்திகள். இது ஒரு வரம்பு, தீர்ப்பு அல்ல — அனைவருக்கும் இந்த அம்சம் மலிவாக இருக்க இது உதவுகிறது.", ar: "{n} رسالة في الساعة كحد أقصى. هذا حد وليس حكمًا — فهو يبقي هذه الميزة في متناول الجميع." },
+
   // admin feedback triage
   "afb.title": { en: "Feedback triage", ms: "Triaj maklum balas", zh: "反馈分类", ta: "கருத்து வகைப்படுத்தல்", ar: "فرز الملاحظات" },
   "afb.subtitle": { en: "Every thread filed by any user. Reply in the thread and set its status.", ms: "Setiap thread yang dihantar oleh mana-mana pengguna. Balas dalam thread dan tetapkan statusnya.", zh: "所有用户提交的对话。在对话中回复并设置状态。", ta: "எந்தப் பயனரும் சமர்ப்பித்த ஒவ்வொரு உரையாடலும். உரையாடலில் பதிலளித்து நிலையை அமைக்கவும்.", ar: "كل محادثة أرسلها أي مستخدم. ردّ في المحادثة وحدّد حالتها." },

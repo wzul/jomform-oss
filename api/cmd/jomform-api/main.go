@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	chatpkg "github.com/wzul/jomform/api/internal/chat"
 	"github.com/wzul/jomform/api/internal/chip"
 	"github.com/wzul/jomform/api/internal/currency"
 	"github.com/wzul/jomform/api/internal/llm"
@@ -26,6 +27,7 @@ import (
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/email"
 	"github.com/wzul/jomform/api/internal/emailqueue"
+	"github.com/wzul/jomform/api/internal/feedbacksvc"
 	"github.com/wzul/jomform/api/internal/httpapi"
 	"github.com/wzul/jomform/api/internal/httpapi/middleware"
 	"github.com/wzul/jomform/api/internal/mcpsrv"
@@ -409,8 +411,34 @@ func main() {
 			// In-app feedback threads: the user's own threads, and every thread
 			// for a super-admin (triage). User-scoped, not account-scoped.
 			Feedback: feedbackStore,
+			// The same notification the /feedback page sends when a thread is
+			// filed: one lane, one place to change who is notified. A filing
+			// through the MCP submit_feedback tool notifies exactly like the
+			// page does.
+			NotifyFeedback: rest.NotifyFeedbackAdmins,
 		}, chip.New(cfg.ChipAPIBaseURL), decryptKey, pay)
 		deps.MCP = mcpSrv
+
+		// In-app chat (phase 1): the assistant answers questions about the
+		// caller's OWN data and can file feedback — nothing else. It runs its
+		// tool calls over the MCP server above under a READONLY identity
+		// (wired in httpapi), so no sentence typed into the box can reach a
+		// write. Wired with the same LLM client the legal-page generator uses:
+		// there is no second LLM client in this repo.
+		//
+		// The runner is ALWAYS constructed; whether the assistant is offered is
+		// the runner's own report (chat.Runner.Ready: a model with a credential),
+		// which GET /v1/rest/chat publishes as `available`. Constructing it
+		// unconditionally is why the flag could not be inferred from the object:
+		// a deployment with no OLLAMA_API_KEY gets a runner that exists and
+		// cannot answer, and the UI must hide the box rather than offer it.
+		rest.Chat = chatpkg.New(llm.New(cfg.LLMBaseURL, cfg.LLMModel), mcpSrv, &feedbacksvc.Service{
+			Store:  feedbackStore,
+			Users:  usersStore,
+			Notify: rest.NotifyFeedbackAdmins,
+		})
+		// Per-user message limit: every chat message is at least one LLM call.
+		rest.ChatLimiter = httpapi.NewChatLimiter()
 
 		// Public order-form renderer + submit.
 		deps.Public = &httpapi.PublicHandlers{

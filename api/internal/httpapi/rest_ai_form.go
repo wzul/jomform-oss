@@ -46,7 +46,10 @@ func (h *RESTHandlers) aiGenerateForm(w http.ResponseWriter, r *http.Request, ac
 	}
 	raw, err := h.LLM.GenerateFormConfig(r.Context(), formgen.Prompt(prompt))
 	if err != nil {
-		respondErr(w, r, err)
+		// A rejected credential means "AI generation is not available" — the
+		// same 503 as the nil-client branch above — rather than a bare 500 that
+		// tells the merchant nothing and hides a deployment problem.
+		respondAIErr(w, r, err, "penjanaan AI tidak tersedia")
 		return
 	}
 	cfg, err := formgen.Parse(raw)

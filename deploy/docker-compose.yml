@@ -80,6 +80,17 @@ services:
       SES_SMTP_USER: ${SES_SMTP_USER:-}
       SES_SMTP_PASS: ${SES_SMTP_PASS:-}
       SES_FROM: ${SES_FROM:-}
+      # Ollama Cloud credential for every AI surface (legal-page draft, AI form
+      # builder, spam judge, code-asset scan, and the in-app assistant). The
+      # client reads OLLAMA_API_KEY itself, so it must be passed through here —
+      # without it a deployment built from this file has no model credential at
+      # all, and the in-app assistant reports itself unavailable (GET
+      # /v1/rest/chat → available:false) instead of offering a box whose every
+      # message fails. LLM_BASE_URL / LLM_MODEL override the endpoint and model
+      # (defaults: https://ollama.com/v1, deepseek-v4-flash:0731).
+      OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_MODEL: ${LLM_MODEL:-}
       PORT: "8080"
       # Issue #212/#397: origin auto-TLS for DNS-only (grey-cloud) custom
       # domains. ACME_EMAIL enables the origin TLS listener (SNI-based cert

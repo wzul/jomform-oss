@@ -652,6 +652,16 @@ func (s *Server) registerTools() {
 		Description: "Tukar status thread maklum balas (open|in_progress|resolved|closed). Keputusan triage — super-admin sahaja; diaudit. Status adalah per-thread, bukan per-mesej.",
 	}, s.setFeedbackStatus)
 
+	// In-app chat (phase 1): the ONE write the chat has — file a feedback thread
+	// from the conversation. Registered here so the dashboard capability has its
+	// MCP counterpart (AGENTS.md parity), and it goes through the same
+	// feedbacksvc as the /feedback page: same validation, same per-user daily
+	// limit, same notification. User-scoped + write-scoped (see the file).
+	addTool(s, &mcp.Tool{
+		Name:        "submit_feedback",
+		Description: "Failkan maklum balas atau permintaan ciri baharu daripada perbualan chat. Sama seperti menghantar di halaman /feedback: disimpan sebagai thread yang boleh anda baca dan balas, dan pasukan JomForm dimaklumkan. Body minimum 10 aksara, maksimum 5000; maksimum 10 penghantaran sehari bagi setiap pengguna. Memerlukan token PENGGUNA (OAuth/sesi) dan skop readwrite — API key ditolak kerana maklum balas ialah data peribadi pengguna.",
+	}, s.submitFeedback)
+
 	// ── Parity: analytics (issue #396) ────────────────────────────────────
 	addTool(s, &mcp.Tool{
 		Name:        "get_form_analytics",
