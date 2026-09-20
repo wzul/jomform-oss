@@ -27,6 +27,12 @@
 #   monitor    watchdog   deploy/monitoring/jomform-watch_test.sh — proves the
 #                         uptime watchdog ALERTS on a failure and stays quiet on
 #                         a success (offline: stub server + fake notifier)
+#   tmpkey     helper     deploy/tmp-apikey_test.sh — proves a captured key id
+#                         cannot carry psql's `INSERT 0 1` tag, that cleanup
+#                         deletes by exact name (never a LIKE sweep of a sibling
+#                         card's live key), and that a row which survives the
+#                         delete is a FAILURE, not a quiet success
+#                         (offline: fake ssh/scp/docker/curl, no host)
 #
 # USAGE
 #   scripts/preflight.sh                    # every gate
@@ -83,7 +89,7 @@ cd "$REPO_ROOT" || exit 1
 
 # `build` is the api build; `web` is `npm run build` in web/. Both are named so
 # --only/--skip can address them without ambiguity.
-GATE_NAMES=(build vet test govuln web a11y npmaudit gitleaks monitor)
+GATE_NAMES=(build vet test govuln web a11y npmaudit gitleaks monitor tmpkey)
 
 ONLY=""
 SKIP=""
@@ -366,6 +372,20 @@ monitor_run() {
   bash "$REPO_ROOT/deploy/monitoring/jomform-watch_test.sh"
 }
 run monitor "watchdog self-test (alert fires, quiet when healthy, never blind)" monitor_run
+
+# tmpkey — the temp-API-key helper's self-test. Same shape of gate as `monitor` and
+# for the same reason: `deploy/tmp-apikey.sh` is only ever run against a live host,
+# so what is testable in the repo is its own harness — that the psql command tag
+# cannot ride along in a captured id, that cleanup deletes by EXACT name and cannot
+# reach a sibling card's key, and that a row which does NOT go away is reported as a
+# failure instead of a quiet success. Those three defects each left a live
+# credential stranded on prod, so this is the gate that keeps them from returning.
+# Offline by construction: fake ssh/scp, a fake `docker` that answers the queries
+# from a state file, and a fake curl. No host, no network, no credentials.
+tmpkey_run() {
+  bash "$REPO_ROOT/deploy/tmp-apikey_test.sh"
+}
+run tmpkey "temp-key helper self-test (no tag in the id, exact-name delete, survivor is a failure)" tmpkey_run
 
 summary
 

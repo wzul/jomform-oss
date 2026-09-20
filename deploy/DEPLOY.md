@@ -118,6 +118,67 @@ The api image is unaffected: `CONTEXT=api` + `api/Dockerfile` (with its own
 Steps 4–7 are printed by the script at the end as a reminder; they are always
 run on the server manually.
 
+## Verifying a deploy: probe a form you own, never a merchant's live form
+
+A deploy acceptance that drives the real public route has to POST a real
+submission somewhere. On 2026-09-18/19 four different deploy cards did that
+against **a real merchant's live form** (`wan.jomform.com/f/event-registration`),
+which left six probe rows inside that merchant's own submission list — listed on
+his `/spam` page, where the deploy lane has no business writing.
+
+**Rule: a probe that submits a form must submit to a form the deploy lane owns.**
+
+### The probe surface
+
+Use a form in the account **`abc-abefb94b`** (owned by `wan@jomform.com`). It is
+deliberately *not* the merchant-facing `wan` account, so nothing a probe writes
+is ever visible to a customer. Its `test` form is published and reachable today.
+
+Verified against prod 2026-09-20, this is the whole state — do not assume more:
+
+| Fact | Measured |
+|---|---|
+| The `abc-abefb94b` account exists and is published-visible | 2 forms, both `published` (`cuba`, `test`) |
+| Its `test` form is usable as an order probe | 4 blocks |
+| Its `test` form can serve a *response-mode* probe as it stands | **no** — `config.mode` is unset and its blocks carry **no `id` at all** |
+| ANY published response-mode form on the whole deployment with a digit-leading block id | exactly one — the merchant's `event-registration` (`4nwz0vg`). **There is no non-merchant one yet.** |
+
+So for issue #635's shape (`4nwz0vg`, a base36 id leading with a digit — the id
+that panicked `renderNotification`) a probe form has to be *created* with a
+chosen id, not found. The config is caller-supplied and unvalidated for block
+ids: `FormStore.Create`/`Update` take `config map[string]any`
+(`api/internal/dbstore/form.go`), and the `upsert_form` MCP tool exposes the same
+free-form `Config map[string]any` — so the id can be fixed deliberately:
+
+```jsonc
+// probe form config: one text block whose id is chosen, not random
+{"mode": "response", "blocks": [{"id": "4nwz0vg", "type": "text", "value": ""}]}
+```
+
+`api/internal/httpapi/response_form_digit_block_id_635_test.go` builds exactly
+this shape in the test DB, so the same fixture is known to produce a submittable
+form — the probe target is reproducible, it just does not exist in prod yet.
+
+Creating that form is a one-time prod write for whoever owns the probe lane — it
+is **not** part of a deploy, and it must not be created inside a merchant's
+workspace. Do not mint a throwaway form per deploy: `uid()` in
+`web/src/app/builder/page.tsx` is `Math.random().toString(36).slice(2, 9)`, so a
+random id only leads with a digit ~28% of the time — the shape is a property you
+either choose deliberately or get lucky with. Never borrow a merchant's form
+because it already has the id you need.
+
+### Cleanup is part of the probe, not a follow-up
+
+A probe write is removed in the same run that made it, per row, by **exact id**
+— never a blanket `DELETE`, and never a widened `WHERE`.
+
+Temp API keys have a supported helper instead of a hand-rolled `INSERT`:
+`deploy/tmp-apikey.sh`, self-tested by `deploy/tmp-apikey_test.sh` (the `tmpkey`
+preflight gate). Hand-rolled versions left live credentials on the prod host
+three separate ways — a captured id glued to psql's `INSERT 0 1` command tag, a
+key minted in a shape the API can never accept, and a cleanup written as a `LIKE`
+sweep that would take a sibling card's live key.
+
 ## Prerequisite
 
 The api image Dockerfile (`api/Dockerfile`) is being added by the Dockerfile
