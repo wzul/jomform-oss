@@ -30,6 +30,15 @@ same order as the three CI jobs they replace:
 | web a11y | `cd web && npm run a11y` | axe-core; fails on any **critical/serious** WCAG violation |
 | web audit | `cd web && npm audit --audit-level=high` | high/critical npm advisories |
 | secrets | `gitleaks detect` over the **full git history** | committed secrets (repo may go public) |
+| monitor | `deploy/monitoring/jomform-watch_test.sh` | the uptime watchdog alerts on a failure, stays quiet on a success, and never reports green when it has no way to alert |
+| tmpkey | `deploy/tmp-apikey_test.sh` | the temp-API-key helper cannot carry a psql tag in the key id, deletes by exact name, and treats a surviving row as a failure |
+| selftest | `scripts/preflight_test.sh` | the gate runner's own safety properties: an all-skipped run is refused instead of reported green, a missing prerequisite fails instead of skipping, and the gate inventory cannot drift from the gates that can actually run |
+
+**This table is documentation, not the inventory — `./scripts/preflight.sh --list` is the
+authority.** Read the count from there rather than from this table: the list above lagged the
+runner by three gates (`monitor`, `tmpkey`, `selftest`) because the table is written by hand
+while the gates are added in code. Every gate can stop the run, so treating a missing row as
+"not a gate" is the failure mode this note exists to prevent.
 
 `deploy/build-and-ship.sh` calls `scripts/preflight.sh` itself, so a deploy
 cannot skip it — the "check before deploy" instruction is now enforced by the
