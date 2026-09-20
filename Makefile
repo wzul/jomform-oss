@@ -4,7 +4,7 @@ export PATH := /usr/local/go/bin:$(PATH)
 GO      ?= go
 API_DIR := api
 
-.PHONY: help build test test-integration lint dev up down migrate-new migrate-up
+.PHONY: help build test test-integration lint dev up down migrate-new preflight preflight-selftest
 
 help: ## Senarai target
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -38,4 +38,10 @@ down: ## Stop dev services
 migrate-new: ## Usage: make migrate-new NAME=create_users
 	cd $(API_DIR) && migrate create -ext sql -dir internal/db/migrations -seq "$(NAME)"
 
-.PHONY: help build test lint tidy dev up down migrate-new
+preflight: ## Run the local gate — the ONLY gate (no CI for this repo)
+	./scripts/preflight.sh
+
+preflight-selftest: ## Run the gate runner's own safety self-test (also gate `selftest`)
+	./scripts/preflight_test.sh
+
+.PHONY: help build test test-integration lint tidy dev up down migrate-new migrate-up preflight preflight-selftest

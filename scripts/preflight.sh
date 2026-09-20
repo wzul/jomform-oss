@@ -33,6 +33,16 @@
 #                         card's live key), and that a row which survives the
 #                         delete is a FAILURE, not a quiet success
 #                         (offline: fake ssh/scp/docker/curl, no host)
+#   selftest   selfcheck  scripts/preflight_test.sh — the gate runner's OWN
+#                         safety properties: an all-skipped run is REFUSED
+#                         rather than reported green, a missing prerequisite
+#                         FAILS instead of skipping, and the gate inventory
+#                         cannot drift from the gates that can actually run.
+#                         Offline and cheap: a sandbox repo plus a copy of this
+#                         script, so it never triggers a full build/test.
+#                         This gate is why the two checks that had rotted in
+#                         preflight_test.sh could not stay broken (they were
+#                         unreferenced, so nothing ever ran them).
 #
 # USAGE
 #   scripts/preflight.sh                    # every gate
@@ -89,7 +99,13 @@ cd "$REPO_ROOT" || exit 1
 
 # `build` is the api build; `web` is `npm run build` in web/. Both are named so
 # --only/--skip can address them without ambiguity.
-GATE_NAMES=(build vet test govuln web a11y npmaudit gitleaks monitor tmpkey)
+#
+# ADDING A GATE: append the name here AND add its `run <name> ...` call below.
+# scripts/preflight_test.sh derives both sides from this file (the inventory via
+# `--list`, the runnable set from the `run <name>` call sites) and FAILS if they
+# disagree, so a gate named here but never run — the silent-coverage-loss shape —
+# is caught by `--only selftest`. No edit to the self-test is needed for gate #N.
+GATE_NAMES=(build vet test govuln web a11y npmaudit gitleaks monitor tmpkey selftest)
 
 ONLY=""
 SKIP=""
@@ -386,6 +402,25 @@ tmpkey_run() {
   bash "$REPO_ROOT/deploy/tmp-apikey_test.sh"
 }
 run tmpkey "temp-key helper self-test (no tag in the id, exact-name delete, survivor is a failure)" tmpkey_run
+
+# selftest — the gate runner's OWN self-test (scripts/preflight_test.sh). Same
+# shape of gate as `monitor`/`tmpkey`, one level up: the only thing testable about
+# the gate runner is its own safety properties, and they are exactly the ones that
+# matter here — an all-skipped run must be REFUSED rather than reported green, a
+# missing prerequisite must FAIL rather than silently skip, and the gate
+# inventory must not drift from the gates that can actually run.
+#
+# WHY IT IS A GATE AND NOT JUST A SCRIPT: until this line existed,
+# `grep -rn preflight_test scripts/ deploy/ Makefile` found no caller, so the
+# self-test was never executed by anything — two of its checks had rotted
+# (check 1 stopped testing anything, and the --list expectation was stale) and
+# nothing noticed. A regression net nobody runs is not a net. It is offline and
+# cheap (a sandbox repo plus a COPY of this script, so it never triggers a real
+# build), so it can run inside every full gate.
+selftest_run() {
+  bash "$REPO_ROOT/scripts/preflight_test.sh"
+}
+run selftest "gate-runner self-test (empty run refused, missing prereq fails, no gate inventory drift)" selftest_run
 
 summary
 

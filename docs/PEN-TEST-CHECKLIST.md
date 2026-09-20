@@ -59,7 +59,9 @@ checklist covers what automation cannot.
 - [ ] `web/package-lock.json` committed.
 - [ ] No scan step uses `|| true` or `continue-on-error` anywhere in
       `scripts/preflight.sh` (grep it: every gate must be able to stop the run;
-      `scripts/preflight_test.sh` asserts this automatically).
+      `scripts/preflight_test.sh` asserts this automatically — run it directly
+      with `./scripts/preflight_test.sh`, or as the preflight's own `selftest`
+      gate: `./scripts/preflight.sh --only selftest`).
 
 ---
 
