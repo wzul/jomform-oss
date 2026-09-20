@@ -53,11 +53,53 @@ import (
 	"github.com/wzul/jomform/api/internal/payments"
 )
 
-// issue635Keyspace is a dedicated Valkey DB for the queue assertions, so the
-// per-test FlushDB here cannot wipe a keyspace another package owns (emailqueue
-// /3, the breaker /2, the shared test env /1, and keyspaces 7, 11 and 12 owned
-// by the other notification tests in this package).
-const issue635Keyspace = 13
+// issue635ReservedKeyspaces are the Valkey DBs this test may use; the keyspace
+// is picked PER RUN from them (see issue635Keyspace).
+//
+// Why not one fixed DB (it used to be 13): the keyspace is the only isolation
+// axis available, because the queue's LIST name is fixed inside emailqueue. A
+// single keyspace is per PACKAGE, not per RUN, so concurrent `go test` binaries
+// of this package — the board's normal shape, several worktrees at once — land
+// on the same DB. The old fixture called FlushDB on it at entry, and a run
+// starting mid-test therefore deleted the job its peer was about to count. The
+// assertion then reported
+//
+//	"enqueued 0 form_notification jobs, want exactly 1"
+//
+// for a submission that had enqueued it correctly: a false report about the
+// #635 fix, not a defect in it. A second, opposite symptom is possible too — a
+// peer's queued job counted as this run's own (count 2).
+//
+// Two guards fix that:
+//
+//  1. NOTHING HERE FLUSHES, and the count is scoped to this run's own account
+//     (issue635FormNotifications). This is the correctness guarantee: deleting a
+//     key this run did not write is what made the fixture destructive, so it no
+//     longer does, and each run counts only the job carrying the account it
+//     minted itself. Two runs sharing a DB is therefore harmless to both.
+//  2. The keyspace is derived from the pid, so concurrent runs usually get
+//     different DBs. That also keeps this run clear of the DB the OLD fixture
+//     hardcoded, so a peer still built from the pre-fix fixture — which FlushDBs
+//     /13 — cannot touch this run's queue.
+//
+// The candidates are the DBs left over after removing every keyspace another
+// test flushes or an env file uses as its base index (auth_hardening_test
+// FlushDBs whatever JOMFORM_TEST_VALKEY_URL points at). Audited on this host:
+// hardcoded flush targets are /2 (email breaker), /3 (emailqueue), /4 (spam
+// toggle), /7 (response notification #597), /11 (payments #606), /12 (httpapi
+// #606) and /13 (this test, before this change); env base indexes in use were
+// /1, /4, /5, /6, /7, /9, /13 and /14. /8, /10 and /15 are clear of both.
+//
+// Residual risk, stated because it is not removable: a keyspace is a shared
+// resource, and a process that FlushDBs the DB this run was given would still
+// delete the job. Guard 1 makes that the only way to break this test, and the
+// candidate set keeps this run off every keyspace known to be flushed.
+var issue635ReservedKeyspaces = []int{8, 10, 15}
+
+// issue635Keyspace is this run's Valkey DB for the queue assertions.
+func issue635Keyspace() int {
+	return issue635ReservedKeyspaces[os.Getpid()%len(issue635ReservedKeyspaces)]
+}
 
 // captureSlog routes the global slog sink into a buffer for one test and
 // returns a reader for it. The HTTP recoverer logs `panic_recovered` there, so
@@ -72,9 +114,14 @@ func captureSlog(t *testing.T) func() string {
 	return buf.String
 }
 
-// issue635Queue returns a queue on that keyspace, flushed at entry so the
-// assertion counts the job THIS test produced.
-func issue635Queue(t *testing.T) (*emailqueue.Queue, *goredis.Client) {
+// issue635Queue returns a queue on the shared notification keyspace, plus the
+// client backing it, and removes this run's own entries when the test ends.
+//
+// It deliberately does NOT FlushDB. See the keyspace comment above: the
+// isolation this test needs is per RUN (by account id), not ownership of a
+// keyspace — a flush here deletes a concurrent run's job mid-test, which is
+// exactly how this test used to report 0 enqueued jobs for a correct enqueue.
+func issue635Queue(t *testing.T, accountID string) (*emailqueue.Queue, *goredis.Client) {
 	t.Helper()
 	valkeyURL := os.Getenv("JOMFORM_TEST_VALKEY_URL")
 	if valkeyURL == "" {
@@ -84,16 +131,65 @@ func issue635Queue(t *testing.T) (*emailqueue.Queue, *goredis.Client) {
 	if i := strings.LastIndex(u, "/"); i >= 0 {
 		u = u[:i]
 	}
-	opts, err := goredis.ParseURL(fmt.Sprintf("redis://%s/%d", u, issue635Keyspace))
+	opts, err := goredis.ParseURL(fmt.Sprintf("redis://%s/%d", u, issue635Keyspace()))
 	if err != nil {
 		t.Fatalf("parse valkey url: %v", err)
 	}
 	rdb := goredis.NewClient(opts)
-	t.Cleanup(func() { _ = rdb.Close() })
-	if err := rdb.FlushDB(context.Background()).Err(); err != nil {
-		t.Fatalf("flush keyspace: %v", err)
-	}
+	t.Cleanup(func() {
+		issue635RemoveOwn(t, rdb, accountID)
+		_ = rdb.Close()
+	})
 	return emailqueue.NewQueue(rdb), rdb
+}
+
+// issue635FormNotifications returns the form_notification jobs belonging to
+// accountID — i.e. this run's own job, at most one.
+//
+// Concurrent runs of this same package share the ready list, so a bare
+// "how many form_notification jobs are queued" count is a question about other
+// people's runs. The account id is this run's identity: bundleFixture mints a
+// fresh account per call, and the notification carries it as AccountID. Other
+// runs' jobs are counted out, not deleted.
+func issue635FormNotifications(t *testing.T, rdb *goredis.Client, accountID string) []emailqueue.Job {
+	t.Helper()
+	raw, err := rdb.LRange(context.Background(), "jf:emailq:jobs", 0, -1).Result()
+	if err != nil {
+		t.Fatalf("read queue: %v", err)
+	}
+	var out []emailqueue.Job
+	for _, s := range raw {
+		var j emailqueue.Job
+		if err := json.Unmarshal([]byte(s), &j); err != nil {
+			t.Fatalf("decode job %q: %v", s, err)
+		}
+		if j.Type == "form_notification" && j.AccountID == accountID {
+			out = append(out, j)
+		}
+	}
+	return out
+}
+
+// issue635RemoveOwn deletes this run's own jobs from the ready list, matching
+// the exact blob read so a concurrent run's entries are never touched.
+func issue635RemoveOwn(t *testing.T, rdb *goredis.Client, accountID string) {
+	t.Helper()
+	raw, err := rdb.LRange(context.Background(), "jf:emailq:jobs", 0, -1).Result()
+	if err != nil {
+		t.Errorf("cleanup: read queue: %v", err)
+		return
+	}
+	for _, s := range raw {
+		var j emailqueue.Job
+		if err := json.Unmarshal([]byte(s), &j); err != nil {
+			continue
+		}
+		if j.Type == "form_notification" && j.AccountID == accountID {
+			if err := rdb.LRem(context.Background(), "jf:emailq:jobs", 1, s).Err(); err != nil {
+				t.Errorf("cleanup: remove own job: %v", err)
+			}
+		}
+	}
 }
 
 // TestResponseFormWithDigitLeadingBlockIDSubmits201AndNotifies is the
@@ -106,7 +202,7 @@ func TestResponseFormWithDigitLeadingBlockIDSubmits201AndNotifies(t *testing.T) 
 	pool := bundleTestPool(t)
 	acc, ownerUserID := bundleFixture(t, ctx, pool)
 	key := bundleAPIKey(t, ctx, pool, acc)
-	queue, rdb := issue635Queue(t)
+	queue, rdb := issue635Queue(t, acc)
 
 	store := dbstore.NewFormNotificationStore(pool)
 	forms := dbstore.NewFormStore(pool)
@@ -236,24 +332,17 @@ func TestResponseFormWithDigitLeadingBlockIDSubmits201AndNotifies(t *testing.T) 
 	}
 
 	// ── the notification must really have been produced ─────────────────────
-	raw0, err := rdb.LRange(ctx, "jf:emailq:jobs", 0, -1).Result()
-	if err != nil {
-		t.Fatalf("read queue: %v", err)
-	}
-	var sent []emailqueue.Job
-	for _, s := range raw0 {
-		var j emailqueue.Job
-		if err := json.Unmarshal([]byte(s), &j); err != nil {
-			t.Fatalf("decode job %q: %v", s, err)
-		}
-		if j.Type == "form_notification" {
-			sent = append(sent, j)
-		}
-	}
+	// Counted by THIS run's account id, and the captured engine log is included
+	// in the failure so the reason is visible: the notification path logs its
+	// skip/failure cases (notify_no_recipient, notify_enqueue_failed,
+	// notify_list_failed) to the sink captureSlog is holding, and this assertion
+	// used to discard them exactly when they mattered.
+	sent := issue635FormNotifications(t, rdb, acc)
 	if len(sent) != 1 {
 		t.Fatalf("a submission with a digit-leading block id enqueued %d form_notification "+
 			"jobs, want exactly 1 — a fix that dodges the panic by skipping the send "+
-			"silences the merchant instead of fixing the form", len(sent))
+			"silences the merchant instead of fixing the form. engine log:\n%s",
+			len(sent), logs())
 	}
 	if sent[0].To == "" || sent[0].To == "{admin_email}" {
 		t.Errorf("notification recipient = %q, want the merchant's resolved email", sent[0].To)
