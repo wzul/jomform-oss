@@ -17,23 +17,79 @@ type Ctx = { lang: Lang; setLang: (l: Lang) => void; t: (k: Key, params?: Record
 
 const I18nContext = createContext<Ctx>({ lang: "en", setLang: () => {}, t: (k) => k });
 
+// Legacy per-BROWSER language key (issue #380). The dashboard language is now
+// PER-PROFILE (users.lang): this key is kept only as the migration source and as
+// an instant first-paint value, never as the source of truth.
 const STORAGE_KEY = "jf_lang";
+
+const isLang = (v: unknown): v is Lang => ["en", "ms", "zh", "ta", "ar"].includes(v as string);
+
+// persistLang writes the choice to the user's PROFILE (users.lang) so it
+// follows them into any browser. Best-effort: the local mirror above already
+// keeps the UI responsive, and a signed-out/offline user simply keeps the
+// browser value.
+function persistLang(l: Lang) {
+  fetch("/api/auth/profile/lang", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ lang: l }),
+  }).catch(() => {
+    // not signed in / offline — the local value still applies
+  });
+}
 
 export function I18nProvider({ children }: { children: React.ReactNode }) {
   const [lang, setLangState] = useState<Lang>("en");
 
+  // 1. Instant first paint from the legacy browser value, so an existing user
+  //    never flashes English while the profile request is in flight.
   useEffect(() => {
-    const saved = (localStorage.getItem(STORAGE_KEY) as Lang) || "en";
-    setLangState((["en", "ms", "zh", "ta", "ar"].includes(saved) ? saved : "en") as Lang);
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (isLang(saved)) setLangState(saved);
+    } catch {
+      // storage unavailable — stay on the default
+    }
+  }, []);
+
+  // 2. The PROFILE wins. The dashboard language is per-profile, so the same
+  //    user gets their language in every browser — localStorage cannot express
+  //    that. When the profile has never been set ("" — e.g. a user whose
+  //    preference only ever lived in this browser), migrate the local value up
+  //    to the profile exactly once so nobody silently resets to English.
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/auth/profile")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (cancelled || !d) return;
+        if (isLang(d.lang)) {
+          setLangState(d.lang);
+          try { localStorage.setItem(STORAGE_KEY, d.lang); } catch { /* ignore */ }
+          return;
+        }
+        // Profile unset: promote the browser value (migration path).
+        let local: string | null = null;
+        try { local = localStorage.getItem(STORAGE_KEY); } catch { /* ignore */ }
+        if (isLang(local)) persistLang(local);
+      })
+      .catch(() => {
+        // Not signed in / offline: the browser value stays in effect.
+      });
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
     document.documentElement.dir = lang === "ar" ? "rtl" : "ltr";
+    document.documentElement.lang = lang;
   }, [lang]);
 
   const setLang = useCallback((l: Lang) => {
     setLangState(l);
-    localStorage.setItem(STORAGE_KEY, l);
+    // Mirror locally for the next first paint, then persist to the PROFILE —
+    // the server is the source of truth so the choice follows the user.
+    try { localStorage.setItem(STORAGE_KEY, l); } catch { /* ignore */ }
+    persistLang(l);
   }, []);
 
   const t = useCallback(
@@ -62,7 +118,7 @@ export function useI18n() {
 // growing them does not fit the phone topbar next to the menu button and the
 // logo. So the phone topbar uses LangSelect (one native control, 44px tall)
 // and the desktop topbar keeps this segmented control, raised to 44px.
-const LANG_LABEL: Record<Lang, string> = {
+export const LANG_LABEL: Record<Lang, string> = {
   en: "English",
   ms: "Bahasa Melayu",
   zh: "中文",

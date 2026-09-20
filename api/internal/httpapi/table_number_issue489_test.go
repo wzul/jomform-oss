@@ -84,6 +84,9 @@ func TestIssue489EveryOrderBodyEchoesTableNumber(t *testing.T) {
 				AntiSpam                 template.HTML
 				NoIndex                  bool
 				HeightJS                 template.HTML
+				// Language placement: <html lang> + translated chrome.
+				Lang string
+				Ls   langStrings
 			}{
 				Slug: "demo", Title: "Demo", Description: "desc",
 				Products: []tmplProduct{{ID: "p1", Name: "Item", PriceSen: 100}},
@@ -92,6 +95,8 @@ func TestIssue489EveryOrderBodyEchoesTableNumber(t *testing.T) {
 				AntiSpam: template.HTML(antiSpamRenderFields()),
 				NoIndex:  true,
 				HeightJS: template.HTML(iframeHeightJS),
+				Lang:     "en",
+				Ls:       langStringsForCode("en"),
 			}); err != nil {
 				t.Fatalf("formTmpl.Execute: %v", err)
 			}

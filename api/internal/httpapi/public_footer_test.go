@@ -56,6 +56,9 @@ func TestLegacyFormRendersNoFooter(t *testing.T) {
 		NoIndex                  bool
 		// Issue #456: postMessage auto-height reporter.
 		HeightJS template.HTML
+		// Language placement: <html lang> + the translated chrome strings.
+		Lang string
+		Ls   langStrings
 	}{
 		Slug: "demo", Title: "Demo", Description: "desc",
 		Products: []tmplProduct{{ID: "p1", Name: "Item", PriceSen: 100}},
@@ -64,6 +67,8 @@ func TestLegacyFormRendersNoFooter(t *testing.T) {
 		AntiSpam: template.HTML(antiSpamRenderFields()),
 		NoIndex:  true,
 		HeightJS: template.HTML(iframeHeightJS),
+		Lang:     "en",
+		Ls:       langStringsForCode("en"),
 	})
 	if err != nil {
 		t.Fatalf("formTmpl.Execute: %v", err)

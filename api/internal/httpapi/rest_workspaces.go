@@ -190,6 +190,15 @@ func (h *RESTHandlers) saveWorkspaceSettings(w http.ResponseWriter, r *http.Requ
 		writeErr(w, http.StatusBadRequest, "mata wang tidak disokong")
 		return
 	}
+	// Language placement: the workspace's buyer-facing default language must be
+	// one of the five supported codes. Empty is treated as "keep current" by the
+	// read-modify-write below, so an unsupported value is rejected rather than
+	// silently persisted (a stored "fr" would leave the storefront on a language
+	// the renderer has no strings for).
+	if in.DefaultLang != "" && !dbstore.ValidProfileLang(in.DefaultLang) {
+		writeErr(w, http.StatusBadRequest, "bahasa tidak disokong")
+		return
+	}
 	s, role, ok := h.workspaceAccessByID(w, r)
 	if !ok {
 		return
@@ -217,9 +226,17 @@ func (h *RESTHandlers) saveWorkspaceSettings(w http.ResponseWriter, r *http.Requ
 		ContactAddress: in.ContactAddress,
 		BusinessName:   in.BusinessName,
 		MenuJSON:       in.MenuJSON,
-		DefaultLang:    in.DefaultLang,
-		Currency:       cur.Currency,
-		Indexing:       cur.Indexing,
+		// Language placement: preserve the current buyer-facing default language
+		// unless one is supplied. This MUST be seeded from cur (like currency),
+		// not from in: SaveSettings writes default_lang on every save, so the
+		// zero value from a request that omitted the field would be stored —
+		// and WorkspaceLang() coerces any unrecognised value (including "") to
+		// "en", so an unrelated "save my footer" would silently reset the
+		// merchant's language choice to English instead of erroring. The
+		// assignment below the literal only overrides it when a code was sent.
+		DefaultLang: cur.DefaultLang,
+		Currency:    cur.Currency,
+		Indexing:    cur.Indexing,
 		// Issue #360: preserve the current landing page unless one is supplied.
 		LandingPage: cur.LandingPage,
 		// Issue #447: preserve the current sound toggle unless one is supplied.
@@ -242,6 +259,11 @@ func (h *RESTHandlers) saveWorkspaceSettings(w http.ResponseWriter, r *http.Requ
 	}
 	if in.SoundEnabled != nil {
 		st.SoundEnabled = *in.SoundEnabled
+	}
+	// Language placement: only an explicitly supplied code replaces the current
+	// default ("" = keep current, matching the currency pattern above).
+	if in.DefaultLang != "" {
+		st.DefaultLang = in.DefaultLang
 	}
 	if in.SpamJudgeEnabled != nil {
 		st.SpamJudgeEnabled = *in.SpamJudgeEnabled

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/wzul/jomform/api/internal/auth"
+	"github.com/wzul/jomform/api/internal/dbstore"
 )
 
 // profileUserID resolves the current session user ("" when anonymous).
@@ -43,7 +44,7 @@ func (a *AuthHandlers) handleProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id": u.ID, "email": u.Email, "name": u.Name,
-		"avatar_url": u.AvatarURL, "phone": u.Phone, "timezone": u.Timezone, "totp_enabled": u.TOTPEnabled, "created_at": u.CreatedAt,
+		"avatar_url": u.AvatarURL, "phone": u.Phone, "timezone": u.Timezone, "lang": u.Lang, "totp_enabled": u.TOTPEnabled, "created_at": u.CreatedAt,
 	})
 }
 
@@ -144,6 +145,36 @@ func (a *AuthHandlers) handleUpdateTimezone(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
+}
+
+// handleUpdateLang: POST /v1/auth/profile/lang (language placement). Sets the
+// user's PER-PROFILE dashboard UI language. This is deliberately separate from
+// the workspace's buyer-facing default_lang and from a form's config.lang: it
+// decides what the DASHBOARD speaks to this person, in every browser. Empty
+// string clears it (falls back to the legacy browser value, then English).
+func (a *AuthHandlers) handleUpdateLang(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Lang string `json:"lang"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	uid := a.profileUserID(r)
+	if uid == "" {
+		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		return
+	}
+	lang := strings.TrimSpace(req.Lang)
+	if !dbstore.ValidProfileLang(lang) {
+		writeErr(w, http.StatusBadRequest, "bahasa tidak disokong")
+		return
+	}
+	if err := a.Users.UpdateLang(r.Context(), uid, lang); err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "saved", "lang": lang})
 }
 
 // handleUpdateEmail: POST /v1/auth/profile/email (requires current password)

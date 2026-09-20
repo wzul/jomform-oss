@@ -833,7 +833,7 @@ var formFuncs = template.FuncMap{
 }
 
 var formTmpl = template.Must(template.New("form").Funcs(formFuncs).Parse(`<!doctype html>
-<html lang="ms">
+<html lang="{{.Lang}}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -893,15 +893,15 @@ var formTmpl = template.Must(template.New("form").Funcs(formFuncs).Parse(`<!doct
       <label><input type="checkbox" class="p" data-id="{{.ID}}" data-price="{{.PriceSen}}" data-name="{{.Name}}"><span class="pname">{{.Name}}</span><span class="price">RM{{div100 .PriceSen}}</span></label>
     </div>
     {{end}}
-    <label class="sub">Nama penuh</label>
+    <label class="sub">{{.Ls.NameLabel}}</label>
     <input type="text" name="full_name" required>
-    <label class="sub">Emel</label>
+    <label class="sub">{{.Ls.EmailLabel}}</label>
     <input type="email" name="email" required>
-    <label class="sub">No. telefon</label>
+    <label class="sub">{{.Ls.PhoneLabel}}</label>
     <input type="tel" name="phone">
-    <div class="total"><span>Jumlah</span><span id="total">RM0.00</span></div>
+    <div class="total"><span>{{.Ls.Total}}</span><span id="total">RM0.00</span></div>
     {{.AntiSpam}}
-    <button type="submit">Teruskan ke Pembayaran</button>
+    <button type="submit">{{.Ls.Submit}}</button>
   </form>
   {{if .Footer.HasFooter}}<footer class="jf-footer">
     {{if .Footer.BusinessName}}<div class="jf-fbiz">{{.Footer.BusinessName}}{{if .Footer.CompanyReg}} · {{.Footer.CompanyReg}}{{end}}</div>{{end}}
@@ -909,9 +909,9 @@ var formTmpl = template.Must(template.New("form").Funcs(formFuncs).Parse(`<!doct
     {{if .Footer.ContactAddress}}<div class="jf-frow">{{.Footer.ContactAddress}}</div>{{end}}
     {{if .Footer.FooterText}}<div class="jf-ftext">{{.Footer.FooterText}}</div>{{end}}
     {{if or .Footer.PrivacyURL .Footer.TermsURL .Footer.RefundURL}}<div class="jf-flinks">
-      {{if .Footer.PrivacyURL}}<a href="{{.Footer.PrivacyURL}}" target="_blank" rel="noopener">Polisi Privasi</a>{{end}}
-      {{if .Footer.TermsURL}}<a href="{{.Footer.TermsURL}}" target="_blank" rel="noopener">Terma &amp; Syarat</a>{{end}}
-      {{if .Footer.RefundURL}}<a href="{{.Footer.RefundURL}}" target="_blank" rel="noopener">Polisi Bayaran Balik</a>{{end}}
+      {{if .Footer.PrivacyURL}}<a href="{{.Footer.PrivacyURL}}" target="_blank" rel="noopener">{{.Ls.PrivacyLabel}}</a>{{end}}
+      {{if .Footer.TermsURL}}<a href="{{.Footer.TermsURL}}" target="_blank" rel="noopener">{{.Ls.TermsLabel}}</a>{{end}}
+      {{if .Footer.RefundURL}}<a href="{{.Footer.RefundURL}}" target="_blank" rel="noopener">{{.Ls.RefundLabel}}</a>{{end}}
     </div>{{end}}
   </footer>{{end}}
 <script>
@@ -926,7 +926,7 @@ document.getElementById('of').addEventListener('submit', async (e) => {
   e.preventDefault();
   const items = [];
   boxes.forEach(b => { if (b.checked) items.push({product_id: b.dataset.id, quantity: 1}); });
-  if (!items.length) { alert('Pilih sekurang-kurangnya satu produk'); return; }
+  if (!items.length) { alert('{{.Ls.NoProductAlert}}'); return; }
   const body = {
     client: { full_name: e.target.full_name.value, email: e.target.email.value, phone: e.target.phone.value },
     items, payment_method: 'chip',
@@ -944,7 +944,7 @@ document.getElementById('of').addEventListener('submit', async (e) => {
   const data = await r.json();
   if (data.checkout_url) { location.href = data.checkout_url; }
   else if (data.next) { location.href = data.next; }
-  else { alert(data.error || 'Ralat'); }
+  else { alert(data.error || '{{.Ls.ErrorAlert}}'); }
 });
 </script>
 {{.HeightJS}}
@@ -1031,15 +1031,23 @@ func (h *PublicHandlers) renderLegacy(w http.ResponseWriter, r *http.Request, f 
 		// direct visit (the script only runs when framed). template.HTML so the
 		// <script> block is emitted verbatim.
 		HeightJS template.HTML
+		// Language placement: the resolved buyer-facing language (per-form
+		// config.lang ?? workspace default ?? "en") and its chrome strings. The
+		// legacy layout used to be hardcoded Malay regardless of the workspace.
+		Lang string
+		Ls   langStrings
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	ls := h.effectiveLangStrings(r.Context(), f)
 	if err := formTmpl.Execute(w, view{
 		Slug: f.Slug, Title: f.Title, Description: cfg.Description, Products: prods,
-		OGMeta:    h.formOGMeta(r, f),
-		Footer:    h.workspaceFooter(r.Context(), f),
-		AntiSpam:  template.HTML(antiSpamRenderFields()),
-		NoIndex:   h.formNoIndex(r, f),
-		HeightJS:  template.HTML(iframeHeightJS),
+		OGMeta:   h.formOGMeta(r, f),
+		Footer:   h.workspaceFooter(r.Context(), f),
+		AntiSpam: template.HTML(antiSpamRenderFields()),
+		NoIndex:  h.formNoIndex(r, f),
+		HeightJS: template.HTML(iframeHeightJS),
+		Lang:     ls.Lang,
+		Ls:       ls,
 	}); err != nil {
 		slog.Error("form_render", "err", err)
 	}
@@ -1092,16 +1100,24 @@ const iv = setInterval(async () => {
 }, 4000);
 </script>`
 	}
-	statusText := "menunggu pengesahan"
+	// Language placement: the thank-you page belongs to a workspace, so its
+	// chrome follows the workspace's language (there is no form override on this
+	// path when the form cannot be resolved). Previously this page was hardcoded
+	// Malay, so an English workspace still showed BM to its buyers.
+	ls := h.effectiveLangStringsByAccount(r.Context(), sale.AccountID)
+	if form != nil {
+		ls = h.effectiveLangStrings(r.Context(), form)
+	}
+	statusText := ls.StatusPending
 	switch sale.Status {
 	case dbstore.SalePaid:
-		statusText = "pembayaran diterima"
+		statusText = ls.StatusPaid
 	case dbstore.SaleConfirmed:
-		statusText = "disahkan"
+		statusText = ls.StatusConfirmed
 	case dbstore.SaleFailed:
-		statusText = "pembayaran gagal"
+		statusText = ls.StatusFailed
 	case dbstore.SaleCancelled:
-		statusText = "dibatalkan"
+		statusText = ls.StatusCancelled
 	}
 	// The confirmation message (sanitized) replaces the hardcoded thank-you
 	// text. Fall back to the default message when none resolved.
@@ -1120,8 +1136,8 @@ const iv = setInterval(async () => {
 	// Issue #537: raw fmt.Fprintf has no autoescaping. The values here are
 	// server-generated today, but they ride through the same escape helper so the
 	// sink cannot become an XSS if a caller-supplied value is ever added.
-	fmt.Fprintf(w, `<!doctype html><html lang="ms"><head><meta charset="utf-8">%s
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>Terima kasih</title>
+	fmt.Fprintf(w, `<!doctype html><html lang="%s"><head><meta charset="utf-8">%s
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>%s</title>
 <meta name="jf-ref" content="%s">
 <style>body{background:#f7f8f8;color:#17181c;font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
 .c{background:#ffffff;border:1px solid #e6e8ec;border-radius:16px;padding:40px;text-align:center;max-width:420px}
@@ -1129,10 +1145,11 @@ h1{color:#10b981;font-size:24px}
 .msg{color:#17181c;font-size:15px;line-height:1.6;margin-top:8px}
 .msg a{color:#4f46e5}
 .ref{color:#9ca3af;font-size:12px;margin-top:12px}</style></head><body><div class="c">
-<h1>✓ Terima kasih!</h1><div class="msg">%s</div>
-<p class="ref">Tempahan <strong>%s</strong> · Status: %s.</p>
-<p style="color:#9ca3af;font-size:12px">Dikuasakan oleh JomForm</p></div></body></html>`,
-		refresh, htmlEsc(sale.RefCode), message, htmlEsc(sale.RefCode), htmlEsc(statusText))
+<h1>✓ %s</h1><div class="msg">%s</div>
+<p class="ref">%s <strong>%s</strong> · %s: %s.</p>
+<p style="color:#9ca3af;font-size:12px">%s</p></div></body></html>`,
+		htmlEsc(ls.Lang), refresh, htmlEsc(ls.ThankYou), htmlEsc(sale.RefCode), htmlEsc(ls.ThankYou), message,
+		htmlEsc(ls.OrderLabel), htmlEsc(sale.RefCode), htmlEsc(ls.StatusLabel), htmlEsc(statusText), htmlEsc(ls.PoweredBy))
 }
 
 // handleThankYouStatus is the read-only status endpoint the thank-you page
@@ -1392,13 +1409,17 @@ func (h *PublicHandlers) handleFormUnlock(w http.ResponseWriter, r *http.Request
 // renderPrivateGate renders the password gate screen for a private form.
 func (h *PublicHandlers) renderPrivateGate(w http.ResponseWriter, r *http.Request, f *dbstore.Form) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// Language placement: the gate must speak the same language as the form
+	// behind it — it was hardcoded Malay, so a workspace set to English showed
+	// a BM password prompt to its buyers.
+	ls := h.effectiveLangStrings(r.Context(), f)
 	// Issue #537: raw fmt.Fprintf has no html/template autoescaping, so every
 	// merchant-controlled value must be escaped for the context it lands in.
 	// f.Title is HTML text; f.Slug is interpolated into a JS single-quoted
 	// string literal inside the fetch() below, so it needs JS-context escaping —
 	// HTML escaping alone would still allow a `'` to break out of the string.
-	fmt.Fprintf(w, `<!doctype html><html lang="ms"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>%s</title>
+	fmt.Fprintf(w, `<!doctype html><html lang="%s"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>%s · %s</title>
 <style>body{background:#f7f8f8;color:#17181c;font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
 .c{background:#ffffff;border:1px solid #e6e8ec;border-radius:16px;padding:40px;text-align:center;max-width:400px;width:100%%}
 h1{font-size:20px;margin:0 0 4px}.m{color:#6b7280;font-size:14px;margin:0 0 20px}
@@ -1406,19 +1427,21 @@ input{width:100%%;box-sizing:border-box;padding:10px 12px;border:1px solid #d1d5
 button{width:100%%;background:#5e6ad2;color:#fff;border:0;border-radius:8px;padding:11px;font-size:14px;font-weight:600;cursor:pointer}
 .err{color:#dc2626;font-size:13px;margin:10px 0 0;min-height:18px}
 .f{color:#9ca3af;font-size:12px;margin-top:20px}</style></head><body><div class="c">
-<h1>🔒 %s</h1><p class="m">Borang ini dilindungi kata laluan.</p>
+<h1>🔒 %s</h1><p class="m">%s</p>
 <form id="g" onsubmit="return unlock(event)">
-<input type="password" id="pw" placeholder="Kata laluan" autocomplete="current-password" required>
-<button type="submit">Buka kunci</button>
+<input type="password" id="pw" placeholder="%s" autocomplete="current-password" required>
+<button type="submit">%s</button>
 <p class="err" id="err"></p>
-</form><p class="f">Dikuasakan oleh JomForm</p></div>
+</form><p class="f">%s</p></div>
 <script>
 async function unlock(e){e.preventDefault();var p=document.getElementById('pw').value;
 var r=await fetch('/%s/unlock',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:p})});
-if(r.ok){location.reload();}else{var d=await r.json().catch(function(){return{};});document.getElementById('err').textContent=d.error||'Kata laluan salah';}
+if(r.ok){location.reload();}else{var d=await r.json().catch(function(){return{};});document.getElementById('err').textContent=d.error||'%s';}
 return false;}
 </script></body></html>`,
-		htmlEsc(f.Title), htmlEsc(f.Title), jsSingleQuoted(f.Slug))
+		htmlEsc(ls.Lang), htmlEsc(f.Title), htmlEsc(ls.UnlockTitle), htmlEsc(f.Title), htmlEsc(ls.UnlockHelp),
+		htmlEsc(ls.UnlockAction), htmlEsc(ls.UnlockAction), htmlEsc(ls.PoweredBy),
+		jsSingleQuoted(f.Slug), jsSingleQuoted(ls.UnlockError))
 }
 
 // formAccessCookie names the signed cookie that unlocks a private form.

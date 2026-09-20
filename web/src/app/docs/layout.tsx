@@ -24,6 +24,7 @@ const NAV = [
 const NAV_SECTIONS = [
   { href: "/docs/customize#affiliate-marketing", label: "Affiliate marketing guide" },
   { href: "/docs/customize#menu-basket", label: "Menu basket guide" },
+  { href: "/docs/customize#language", label: "Language guide" },
 ];
 
 export const metadata: Metadata = {

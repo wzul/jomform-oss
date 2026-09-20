@@ -38,6 +38,7 @@ export type SessionUser = {
   avatar_url?: string; // issue #133 profile picture (empty = initial-letter fallback)
   phone?: string; // issue #181 optional phone number (empty = not set)
   timezone?: string; // issue #191 preferred IANA timezone (empty = Auto → browser default)
+  lang?: string; // language placement: per-profile dashboard UI language (empty = not set → browser value → en)
   totp_enabled?: boolean;
   // Issue #458: true when this session came from a passwordless magic-link
   // click. With 2FA enabled, sensitive actions (change password / disable 2FA /

@@ -51,6 +51,9 @@ const shell = read("../components/Shell.tsx");
 const switcher = read("../components/WorkspaceSwitcher.tsx");
 const i18n = read("../components/i18n.tsx");
 const dict = read("../components/i18nDict.ts");
+// Language placement: the dashboard language picker now lives on /profile, so
+// this file is part of the chrome-tap-target guard.
+const profilePage = read("../app/profile/page.tsx");
 
 // Every page that renders inside Shell, so rule 1 is checked across the app and
 // not just on the file that was broken.
@@ -227,13 +230,23 @@ test("the page-shell tap targets are at least 44px tall", () => {
   }
 });
 
-test("the mobile topbar controls are 44px tall and the language control is a single target", () => {
-  // Five 27-37px-wide buttons sat in the phone topbar; growing them all to 44px
-  // does not fit a 360px bar, so the phone uses one native select.
+test("the mobile topbar controls are 44px tall and no language control sits in the chrome", () => {
+  // Originally five 27-37px-wide buttons sat in the phone topbar; growing them
+  // all to 44px does not fit a 360px bar. The language control has since MOVED
+  // to /profile (language placement): the dashboard language is PER-PROFILE, so
+  // it belongs on the profile page, not in every page's chrome. This guard now
+  // holds the placement — the topbar carries no language control at all, on
+  // either breakpoint — while keeping the 44px floor on the controls that
+  // remain (hamburger, and the profile picker itself).
+  assert.doesNotMatch(
+    shell,
+    /<LangToggle \/>|<LangSelect \/>/,
+    "a language control is back in the app chrome; the dashboard language is per-profile and is set on /profile",
+  );
   assert.match(
     shell,
-    /md:hidden[\s\S]{0,1600}?<LangSelect \/>/,
-    "the mobile topbar no longer uses the single-target language select (measured 5 targets of 23px height)",
+    /md:hidden[\s\S]{0,1200}?aria-label="Open menu"[\s\S]{0,300}?h-11 w-11/,
+    "the mobile hamburger is under 44px (it was 32x32)",
   );
   assert.match(
     i18n,
@@ -244,6 +257,19 @@ test("the mobile topbar controls are 44px tall and the language control is a sin
     i18n,
     /export function LangSelect\(\)[\s\S]*?className="min-h-11/,
     "the mobile language select is under 44px tall",
+  );
+  // The profile picker must be a real, labelled control (not a bare div), and
+  // it must be reachable by its label — this is the only place the dashboard
+  // language can now be changed.
+  assert.match(
+    profilePage,
+    /htmlFor="prof-lang"[\s\S]{0,1200}?id="prof-lang"/,
+    "the /profile language control lost its label/id pairing",
+  );
+  assert.match(
+    profilePage,
+    /id="prof-lang"[\s\S]{0,600}?className="jf-input/,
+    "the /profile language picker is missing its input styling",
   );
 });
 

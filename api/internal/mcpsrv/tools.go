@@ -400,6 +400,11 @@ func (s *Server) registerTools() {
 		Name:        "update_profile_timezone",
 		Description: "Set zona waktu IANA pilihan pada profil anda (kosong = Auto, ikut pelayar/PC). Contoh: Asia/Kuala_Lumpur, UTC.",
 	}, s.updateProfileTimezone)
+	// Language placement: the dashboard UI language is per-PROFILE.
+	addTool(s, &mcp.Tool{
+		Name:        "update_profile_language",
+		Description: "Set bahasa UI dashboard anda: en, ms, zh, ta, ar (kosong = buang, kembali ikut pelayar). Ini bahasa DASHBOARD sahaja dan ia per-profil — bahasa borang awam ditetapkan per-borang atau per-workspace, bukan di sini.",
+	}, s.updateProfileLanguage)
 
 	// ── Parity: per-workspace email templates (issue #107) ────────────────────
 	addTool(s, &mcp.Tool{

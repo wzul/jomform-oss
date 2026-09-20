@@ -23,6 +23,23 @@ type langStrings struct {
 	ErrorAlert     string
 	NoProductAlert string
 	Required       string
+	// Language placement: the legacy product-checkbox renderer and the
+	// thank-you / private-gate pages were hardcoded Malay; these are the chrome
+	// strings they need so a workspace set to English really serves English.
+	NameLabel       string // "Full name"
+	PhoneLabel      string // "Phone number"
+	PoweredBy       string // "Powered by JomForm"
+	OrderLabel      string // "Order"
+	StatusLabel     string // "Status"
+	UnlockTitle     string // private gate heading text
+	UnlockHelp      string // private gate explanation
+	UnlockAction    string // private gate button
+	UnlockError     string // private gate fallback error
+	StatusPending   string
+	StatusPaid      string
+	StatusConfirmed string
+	StatusFailed    string
+	StatusCancelled string
 	// Issue #153: variation selector strings.
 	SelectVariation      string
 	SelectVariationAlert string
@@ -111,6 +128,20 @@ var formLangs = map[string]langStrings{
 		Required:        "(required)",
 		MenuExtraHelp:   "Extra details requested by the merchant — these fields come from the order form attached in this form's menu settings.",
 		MenuExtraEdit:   "Edit this form",
+		NameLabel:       "Full name",
+		PhoneLabel:      "Phone number",
+		PoweredBy:       "Powered by JomForm",
+		OrderLabel:      "Order",
+		StatusLabel:     "Status",
+		UnlockTitle:     "Password protected",
+		UnlockHelp:      "This form is password protected.",
+		UnlockAction:    "Unlock",
+		UnlockError:     "Wrong password",
+		StatusPending:   "pending confirmation",
+		StatusPaid:      "payment received",
+		StatusConfirmed: "confirmed",
+		StatusFailed:    "payment failed",
+		StatusCancelled: "cancelled",
 	},
 	"ms": {
 		Lang: "ms", EmailLabel: "Emel", CouponLabel: "Kod kupon",
@@ -140,6 +171,20 @@ var formLangs = map[string]langStrings{
 		Required:        "wajib",
 		MenuExtraHelp:   "Butiran tambahan yang diminta peniaga — medan ini datang dari borang pesanan yang dilampirkan dalam tetapan menu borang ini.",
 		MenuExtraEdit:   "Edit borang ini",
+		NameLabel:       "Nama penuh",
+		PhoneLabel:      "No. telefon",
+		PoweredBy:       "Dikuasakan oleh JomForm",
+		OrderLabel:      "Tempahan",
+		StatusLabel:     "Status",
+		UnlockTitle:     "Dilindungi kata laluan",
+		UnlockHelp:      "Borang ini dilindungi kata laluan.",
+		UnlockAction:    "Buka kunci",
+		UnlockError:     "Kata laluan salah",
+		StatusPending:   "menunggu pengesahan",
+		StatusPaid:      "pembayaran diterima",
+		StatusConfirmed: "disahkan",
+		StatusFailed:    "pembayaran gagal",
+		StatusCancelled: "dibatalkan",
 	},
 	"zh": {
 		Lang: "zh", EmailLabel: "电子邮件", CouponLabel: "优惠券",
@@ -169,6 +214,20 @@ var formLangs = map[string]langStrings{
 		Required:        "必填",
 		MenuExtraHelp:   "商家要求的额外信息 — 这些字段来自此表单菜单设置中附加的订单表单。",
 		MenuExtraEdit:   "编辑此表单",
+		NameLabel:       "全名",
+		PhoneLabel:      "电话号码",
+		PoweredBy:       "由 JomForm 提供支持",
+		OrderLabel:      "订单",
+		StatusLabel:     "状态",
+		UnlockTitle:     "受密码保护",
+		UnlockHelp:      "此表单受密码保护。",
+		UnlockAction:    "解锁",
+		UnlockError:     "密码错误",
+		StatusPending:   "等待确认",
+		StatusPaid:      "已收到付款",
+		StatusConfirmed: "已确认",
+		StatusFailed:    "付款失败",
+		StatusCancelled: "已取消",
 	},
 	"ta": {
 		Lang: "ta", EmailLabel: "மின்னஞ்சல்", CouponLabel: "கூப்பன்",
@@ -198,6 +257,20 @@ var formLangs = map[string]langStrings{
 		Required:        "கட்டாயம்",
 		MenuExtraHelp:   "வணிகர் கேட்கும் கூடுதல் விவரங்கள் — இந்தப் புலங்கள் இந்தப் படிவத்தின் மெனு அமைப்புகளில் இணைக்கப்பட்ட ஆர்டர் படிவத்திலிருந்து வருகின்றன.",
 		MenuExtraEdit:   "இந்தப் படிவத்தைத் திருத்து",
+		NameLabel:       "முழுப் பெயர்",
+		PhoneLabel:      "தொலைபேசி எண்",
+		PoweredBy:       "JomForm வழங்குகிறது",
+		OrderLabel:      "ஆர்டர்",
+		StatusLabel:     "நிலை",
+		UnlockTitle:     "கடவுச்சொல் பாதுகாப்பு",
+		UnlockHelp:      "இந்தப் படிவம் கடவுச்சொல்லால் பாதுகாக்கப்பட்டுள்ளது.",
+		UnlockAction:    "திற",
+		UnlockError:     "கடவுச்சொல் தவறு",
+		StatusPending:   "உறுதிப்படுத்தல் நிலுவையில்",
+		StatusPaid:      "பணம் பெறப்பட்டது",
+		StatusConfirmed: "உறுதிப்படுத்தப்பட்டது",
+		StatusFailed:    "பணம் செலுத்துவது தோல்வி",
+		StatusCancelled: "ரத்துசெய்யப்பட்டது",
 	},
 	"ar": {
 		Lang: "ar", EmailLabel: "البريد الإلكتروني", CouponLabel: "قسيمة",
@@ -227,16 +300,41 @@ var formLangs = map[string]langStrings{
 		Required:        "مطلوب",
 		MenuExtraHelp:   "تفاصيل إضافية يطلبها التاجر — تأتي هذه الحقول من نموذج الطلب المرفق في إعدادات قائمة هذا النموذج.",
 		MenuExtraEdit:   "تعديل هذا النموذج",
+		NameLabel:       "الاسم الكامل",
+		PhoneLabel:      "رقم الهاتف",
+		PoweredBy:       "مدعوم بواسطة JomForm",
+		OrderLabel:      "الطلب",
+		StatusLabel:     "الحالة",
+		UnlockTitle:     "محمي بكلمة مرور",
+		UnlockHelp:      "هذا النموذج محمي بكلمة مرور.",
+		UnlockAction:    "فتح",
+		UnlockError:     "كلمة المرور خاطئة",
+		StatusPending:   "بانتظار التأكيد",
+		StatusPaid:      "تم استلام الدفع",
+		StatusConfirmed: "مؤكد",
+		StatusFailed:    "فشل الدفع",
+		StatusCancelled: "ملغى",
 	},
 }
 
 // resolveWorkspaceLang returns the workspace's default language for a form's account,
 // or "en" when the workspace/account is unresolvable.
 func (h *PublicHandlers) resolveWorkspaceLang(ctx context.Context, f *dbstore.Form) string {
-	if h.Workspaces == nil {
+	if f == nil {
 		return "en"
 	}
-	workspaceID, err := h.Workspaces.WorkspaceIDByAccount(ctx, f.AccountID)
+	return h.resolveWorkspaceLangByAccount(ctx, f.AccountID)
+}
+
+// resolveWorkspaceLangByAccount is the account-scoped form of
+// resolveWorkspaceLang, for buyer-facing pages that are reached with a sale
+// (and therefore an account) but not necessarily a resolvable form — the
+// thank-you page is the case that needs it (language placement).
+func (h *PublicHandlers) resolveWorkspaceLangByAccount(ctx context.Context, accountID string) string {
+	if h.Workspaces == nil || accountID == "" {
+		return "en"
+	}
+	workspaceID, err := h.Workspaces.WorkspaceIDByAccount(ctx, accountID)
 	if err != nil || workspaceID == "" {
 		return "en"
 	}
@@ -247,16 +345,33 @@ func (h *PublicHandlers) resolveWorkspaceLang(ctx context.Context, f *dbstore.Fo
 	return st.WorkspaceLang()
 }
 
+// effectiveLangStringsByAccount resolves the buyer-facing dictionary for an
+// account when no form is available (thank-you page), honouring the workspace
+// default. There is no per-form override on this path: the form is the only
+// carrier of config.lang, and when it cannot be resolved the workspace default
+// (then "en") is the correct answer.
+func (h *PublicHandlers) effectiveLangStringsByAccount(ctx context.Context, accountID string) langStrings {
+	if st, ok := formLangs[h.resolveWorkspaceLangByAccount(ctx, accountID)]; ok {
+		return st
+	}
+	return formLangs["en"]
+}
+
 // effectiveLangStrings resolves the buyer-facing dictionary for a form.
 // Resolution chain: form.config.lang ?? workspace defaultLang ?? 'en'.
+// A nil form is safe and resolves to the workspace default chain — the
+// thank-you page legitimately reaches this code when the sale's form can no
+// longer be resolved (deleted form), and must not panic.
 func (h *PublicHandlers) effectiveLangStrings(ctx context.Context, f *dbstore.Form) langStrings {
 	// 1. Per-form override wins when present and valid.
-	if raw, err := json.Marshal(f.Config); err == nil {
-		var cfg struct {
-			Lang string `json:"lang"`
-		}
-		if json.Unmarshal(raw, &cfg) == nil && validFormLang(cfg.Lang) {
-			return formLangs[cfg.Lang]
+	if f != nil {
+		if raw, err := json.Marshal(f.Config); err == nil {
+			var cfg struct {
+				Lang string `json:"lang"`
+			}
+			if json.Unmarshal(raw, &cfg) == nil && validFormLang(cfg.Lang) {
+				return formLangs[cfg.Lang]
+			}
 		}
 	}
 	// 2. Otherwise inherit the workspace default.

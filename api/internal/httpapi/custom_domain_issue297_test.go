@@ -196,8 +196,13 @@ func TestCustomDomainPrivateUnlock(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /%s (private gate) status = %d, want 200 (body %s)", formSlug, rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "dilindungi kata laluan") {
-		t.Fatalf("private gate not rendered for custom domain (body %s)", rec.Body.String())
+	// Language placement: the gate is no longer hardcoded Malay, so assert on
+	// the gate's STRUCTURE (the password input + the unlock POST target) rather
+	// than on a specific language's wording — otherwise this test would only
+	// pass while the gate was stuck in one language, which is the bug.
+	if body := rec.Body.String(); !strings.Contains(body, `id="pw"`) ||
+		!strings.Contains(body, "unlock") {
+		t.Fatalf("private gate not rendered for custom domain (body %s)", body)
 	}
 
 	// Wrong password is rejected via the custom domain.
@@ -224,7 +229,10 @@ func TestCustomDomainPrivateUnlock(t *testing.T) {
 	if rec2.Code != http.StatusOK {
 		t.Fatalf("GET /%s after unlock status = %d, want 200 (body %s)", formSlug, rec2.Code, rec2.Body.String())
 	}
-	if strings.Contains(rec2.Body.String(), "dilindungi kata laluan") {
+	// Language placement: assert on the gate's structure, not on a specific
+	// language's wording — the gate now follows the workspace language, so a
+	// Malay substring would make this assertion meaningless.
+	if strings.Contains(rec2.Body.String(), `id="pw"`) {
 		t.Fatalf("gate still shown after unlock on custom domain (body %s)", rec2.Body.String())
 	}
 }

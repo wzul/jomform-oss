@@ -103,6 +103,10 @@ func (a *AuthHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/auth/profile/name", a.handleUpdateName)
 	mux.HandleFunc("POST /v1/auth/profile/phone", a.handleUpdatePhone)
 	mux.HandleFunc("POST /v1/auth/profile/timezone", a.handleUpdateTimezone)
+	// Language placement: the dashboard UI language is PER-PROFILE (not
+	// per-browser, not per-workspace). See handleUpdateLang.
+	mux.HandleFunc("POST /v1/auth/profile/lang", a.handleUpdateLang)
+	mux.HandleFunc("PUT /v1/auth/profile/lang", a.handleUpdateLang)
 	mux.HandleFunc("POST /v1/auth/profile/email", a.handleUpdateEmail)
 	mux.HandleFunc("PUT /v1/auth/profile/email", a.handleUpdateEmail)
 	// Issue #164: set/clear the user's default workspace (multi-workspace login picker).
@@ -188,6 +192,10 @@ type meResponse struct {
 	// Issue #191: the user's preferred IANA timezone ("" = Auto — follow the
 	// browser/PC default).
 	Timezone    string  `json:"timezone,omitempty"`
+	// Language placement: the user's preferred DASHBOARD UI language ("" = not
+	// set → fall back to the browser value, then English). Per-profile, not
+	// per-workspace.
+	Lang        string  `json:"lang,omitempty"`
 	TOTPEnabled bool    `json:"totp_enabled"`
 	CreatedAt   string  `json:"created_at"`
 	NextStep    *string `json:"next_step,omitempty"` // set when 2FA code is required
@@ -477,7 +485,7 @@ func (a *AuthHandlers) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, meResponse{
 		ID: user.ID, Email: user.Email, TOTPEnabled: user.TOTPEnabled, CreatedAt: user.CreatedAt.UTC().Format(time.RFC3339),
-		Phone: user.Phone, Timezone: user.Timezone, DefaultWorkspaceID: defWorkspace,
+		Phone: user.Phone, Timezone: user.Timezone, Lang: user.Lang, DefaultWorkspaceID: defWorkspace,
 	})
 }
 
@@ -545,7 +553,7 @@ func (a *AuthHandlers) handleMe(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, meResponse{
 		ID: user.ID, Email: user.Email, Name: user.Name, AvatarURL: user.AvatarURL, TOTPEnabled: user.TOTPEnabled, CreatedAt: user.CreatedAt.UTC().Format(time.RFC3339),
-		Phone: user.Phone, Timezone: user.Timezone, DefaultWorkspaceID: defWorkspace,
+		Phone: user.Phone, Timezone: user.Timezone, Lang: user.Lang, DefaultWorkspaceID: defWorkspace,
 		MagicSession: a.Sessions != nil && a.Sessions.Magic(r.Context(), sessionTokenFrom(r)),
 	})
 }

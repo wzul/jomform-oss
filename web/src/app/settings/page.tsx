@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Shell } from "../../components/Shell";
 import { useRouter } from "next/navigation";
-import { useI18n } from "../../components/i18n";
+import { useI18n, LANGS_SHOWN, LANG_LABEL } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDateTime } from "../../lib/formatDate";
 import { workspaceQuery, workspaceScope } from "../../lib/workspace";
@@ -220,6 +220,11 @@ export default function Settings() {
   // Per-workspace AI spam-judge toggle (Storefront tab). Default
   // true — the judge runs unless the merchant explicitly turns it off.
   const [sfSpamJudgeEnabled, setSfSpamJudgeEnabled] = useState(true);
+  // Language placement: the WORKSPACE default language for public forms — what
+  // a buyer sees when a form has no per-form override. Always a real code
+  // (default "en"). This is the buyer-facing language, NOT the dashboard UI
+  // language (which is per-profile, on /profile).
+  const [sfDefaultLang, setSfDefaultLang] = useState("en");
   // Issue #360: per-workspace customizable landing page (Storefront tab).
   const [lpEnabled, setLpEnabled] = useState(false);
   const [lpHero, setLpHero] = useState("");
@@ -458,6 +463,8 @@ export default function Settings() {
         // what the server actually does — the UI must not show "off" for a
         // workspace that is still judging spam.
         setSfSpamJudgeEnabled(d.spam_judge_enabled !== false);
+        // Language placement: workspace default language for PUBLIC forms.
+        setSfDefaultLang(d.default_lang || "en");
         if (d.currency) setCurrency(d.currency);
         // Issue #360: per-space customizable landing page.
         const lp = d.landing_page || {};
@@ -904,6 +911,10 @@ export default function Settings() {
         sound_enabled: sfSoundEnabled,
         // Per-space AI spam-judge toggle.
         spam_judge_enabled: sfSpamJudgeEnabled,
+        // Language placement: workspace default language for public forms
+        // (buyer-facing). Always a real code — the column is NOT NULL with a
+        // CHECK on the five locales, so "English" is sent as "en", not "".
+        default_lang: sfDefaultLang,
       }),
     });
     if (r.ok) {
@@ -1887,6 +1898,27 @@ export default function Settings() {
                   rows={2}
                   className="jf-input mt-1 max-w-xl"
                 />
+              </div>
+              {/* Language placement: the WORKSPACE default language for public
+                  forms — the fallback a buyer gets when a form carries no
+                  per-form language. Sits next to the other Storefront fields
+                  because it changes what the storefront/form shows. Explicitly
+                  distinct from the per-profile dashboard language on /profile. */}
+              <div>
+                <label className="text-xs text-slate-500" htmlFor="sf-default-lang">
+                  {t("set.sfDefaultLang")}
+                </label>
+                <select
+                  id="sf-default-lang"
+                  value={sfDefaultLang}
+                  onChange={(e) => setSfDefaultLang(e.target.value)}
+                  className="jf-input mt-1 max-w-xl"
+                >
+                  {LANGS_SHOWN.map((l) => (
+                    <option key={l} value={l}>{LANG_LABEL[l]}</option>
+                  ))}
+                </select>
+                <p className="mt-1 max-w-xl text-xs text-slate-500">{t("set.sfDefaultLangHelp")}</p>
               </div>
               {/* Issue #276: per-workspace SEO indexing toggle. */}
               <div className="flex items-start justify-between gap-4 rounded-lg border border-[var(--jf-border)] p-3">

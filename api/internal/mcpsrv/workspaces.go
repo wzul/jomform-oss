@@ -318,6 +318,43 @@ func (s *Server) updateProfileTimezone(
 	return nil, map[string]string{"status": "saved", "timezone": tz}, nil
 }
 
+// ── update_profile_language (language placement) ──────────────────────────
+
+type updateProfileLanguageIn struct {
+	Lang string `json:"lang" jsonschema:"Bahasa UI dashboard pilihan anda: en, ms, zh, ta atau ar. Kosong = buang tetapan (kembali ikut pelayar, kemudian English). Ini bahasa DASHBOARD sahaja — bahasa borang awam ditetapkan per-borang/per-workspace."`
+}
+
+// updateProfileLanguage sets (or clears, when lang is empty) the account owner's
+// preferred DASHBOARD UI language — MCP parity for the dashboard Profile →
+// Identity language picker. This is per-PROFILE (per-user): the setting follows
+// the person into every browser. It is deliberately NOT the workspace's
+// buyer-facing default_lang, which is set via set_workspace_settings.
+func (s *Server) updateProfileLanguage(
+	ctx context.Context, _ *mcp.CallToolRequest, in updateProfileLanguageIn,
+) (*mcp.CallToolResult, map[string]string, error) {
+	// Issue #645: this edits the USER row (the caller's own profile), not the
+	// account, so no workspace role applies — the API-key write scope is the
+	// gate, exactly as for the neighbouring profile writes.
+	if err := s.requireWriteScope(ctx); err != nil {
+		return nil, nil, err
+	}
+	if s.deps.Users == nil {
+		return nil, nil, errors.New("users tidak tersedia")
+	}
+	owner, err := s.workspaceOwner(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	lang := strings.TrimSpace(in.Lang)
+	if !dbstore.ValidProfileLang(lang) {
+		return nil, nil, errors.New("bahasa tidak disokong (en, ms, zh, ta, ar)")
+	}
+	if err := s.deps.Users.UpdateLang(ctx, owner, lang); err != nil {
+		return nil, nil, fmt.Errorf("db: %w", err)
+	}
+	return nil, map[string]string{"status": "saved", "lang": lang}, nil
+}
+
 // ── get_workspace_settings ───────────────────────────────────────────────────────
 
 type workspaceRefIn struct {
@@ -362,6 +399,11 @@ type setWorkspaceSettingsIn struct {
 	// Per-workspace AI spam-judge toggle. Omitted (nil) = keep
 	// current; explicit true/false sets it. Default true.
 	SpamJudgeEnabled *bool `json:"spam_judge_enabled,omitempty" jsonschema:"Hidupkan AI spam detection (judge gemma4) untuk workspace ini — true = hidup (lalai), false = MATI: tiada job AI dihantar langsung dan is_spam tidak lagi ditetapkan, jadi /spam kekal kosong (omit = kekal)"`
+	// Language placement: the workspace's buyer-facing default language, used by
+	// PUBLIC forms when the form itself sets no config.lang (form-level wins).
+	// Omitted (nil) = keep current. This is the STOREFRONT language, not the
+	// dashboard UI language (that one is per-profile, update_profile_language).
+	DefaultLang *string `json:"default_lang,omitempty" jsonschema:"Bahasa lalai borang AWAM untuk workspace ini bila borang itu tidak menetapkan bahasa sendiri: en, ms, zh, ta atau ar. Ini bahasa pembeli, bukan bahasa dashboard anda (omit = kekal)."`
 }
 
 func (s *Server) setWorkspaceSettings(
@@ -434,6 +476,15 @@ func (s *Server) setWorkspaceSettings(
 	}
 	if in.SpamJudgeEnabled != nil {
 		st.SpamJudgeEnabled = *in.SpamJudgeEnabled
+	}
+	// Language placement: the workspace's buyer-facing default language. An
+	// unsupported code is rejected rather than silently stored, so a typo cannot
+	// leave the storefront on an unrenderable language.
+	if in.DefaultLang != nil {
+		if !dbstore.ValidProfileLang(*in.DefaultLang) || strings.TrimSpace(*in.DefaultLang) == "" {
+			return nil, nil, errors.New("bahasa tidak disokong (en, ms, zh, ta, ar)")
+		}
+		st.DefaultLang = strings.TrimSpace(*in.DefaultLang)
 	}
 	if strings.TrimSpace(st.MenuJSON) == "" {
 		st.MenuJSON = "[]"

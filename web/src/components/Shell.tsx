@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useI18n, LangToggle, LangSelect } from "./i18n";
+import { useI18n } from "./i18n";
 import { useSession } from "./session";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 
@@ -232,9 +232,12 @@ export function Shell({
 
       {/* main */}
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* desktop topbar — workspace switcher + lang toggle (issue #380).
-            Mobile audit: the switcher chip truncates a long workspace name; the
-            bar wraps instead of overflowing so the full chip can grow. */}
+        {/* desktop topbar — workspace switcher (issue #380). The language
+            switcher moved to /profile (language placement): the dashboard
+            language is PER-PROFILE, so it belongs on the profile page, not in
+            every page's chrome. Mobile audit: the switcher chip truncates a
+            long workspace name; the bar wraps instead of overflowing so the
+            full chip can grow. */}
         <header className="sticky top-0 z-30 hidden flex-wrap items-center justify-end gap-3 border-b border-[var(--jf-border)] bg-white px-4 py-2.5 md:flex">
           <WorkspaceSwitcher
             workspaces={workspaces}
@@ -243,9 +246,11 @@ export function Shell({
             defaultWorkspaceId={user?.default_workspace_id}
             onSetDefault={setDefaultWorkspace}
           />
-          <LangToggle />
         </header>
-        {/* mobile topbar */}
+        {/* mobile topbar. The language control moved to /profile (language
+            placement). The logo takes the remaining width so the bar still
+            reads as hamburger + brand, with no dead space where the language
+            select used to sit. */}
         <header className="sticky top-0 z-30 flex items-center justify-between gap-2 border-b border-[var(--jf-border)] bg-white px-2 py-2 md:hidden">
           {/* Mobile audit: this button measured 32x32 — under the 44x44 tap
               floor. h-11/w-11 gives it a 44px box with the icon unchanged. */}
@@ -258,12 +263,9 @@ export function Shell({
               <path d="M3 5h14M3 10h14M3 15h14" />
             </svg>
           </button>
-          <span className="truncate text-sm font-semibold">
+          <span className="flex-1 truncate text-right text-sm font-semibold">
             Jom<span className="text-[var(--jf-primary)]">Form</span>
           </span>
-          {/* Five 44px buttons cannot fit this bar at 360px, so the phone uses a
-              single native select (one 44px-tall target) instead. */}
-          <LangSelect />
         </header>
 
         {/* mobile drawer */}

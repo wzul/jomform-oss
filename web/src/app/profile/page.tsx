@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useState } from "react";
 import QRCode from "qrcode";
 import { Shell } from "../../components/Shell";
-import { useI18n } from "../../components/i18n";
+import { useI18n, LANGS_SHOWN, LANG_LABEL, type Lang } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDate } from "../../lib/formatDate";
 
@@ -97,7 +97,7 @@ function loadStoredTab(): ProfileTab {
 }
 
 export default function ProfilePage() {
-  const { t } = useI18n();
+  const { t, lang: ctxLang, setLang } = useI18n();
   const { user: sessionUser, reload: reloadSession } = useSession();
   const [tab, setTab] = useState<ProfileTab>(loadStoredTab);
   const [p, setP] = useState<Profile | null>(null);
@@ -107,6 +107,9 @@ export default function ProfilePage() {
   const [phone, setPhone] = useState("");
   // Issue #191: preferred timezone state ("" = Auto → browser default).
   const [timezone, setTimezone] = useState("");
+  // Language placement: the dashboard UI language is PER-PROFILE and lives in
+  // the shared i18n context (persisted to /api/auth/profile/lang), so this page
+  // does not keep its own copy — `ctxLang` is the single source of truth.
   // Issue #133: profile picture state — current avatar URL, upload progress.
   const [avatarUrl, setAvatarUrl] = useState("");
   const [avatarPreview, setAvatarPreview] = useState("");
@@ -524,6 +527,45 @@ export default function ProfilePage() {
                   onClick={() => post("/api/auth/profile/timezone", { timezone })}
                   className="jf-btn-primary mt-3"
                 >{t("prof.saveTimezone")}</button>
+              </div>
+              {/* Language placement: the DASHBOARD language is per-profile — it
+                  follows the user into any browser, unlike the old topbar
+                  switcher (which stored per-browser). Choosing here applies
+                  immediately AND persists to the profile; the help text states
+                  plainly that this is NOT the public form's language. The
+                  control reads ctxLang (the i18n context, hydrated from
+                  /api/auth/profile) so there is exactly one source of truth. */}
+              <div className="mt-4 border-t border-slate-100 pt-4">
+                <div className="mt-3 flex items-center gap-2">
+                  <label className="block text-xs text-slate-500" htmlFor="prof-lang">{t("prof.language")}</label>
+                  {/* Inline "?" doc link (AGENTS.md docs-parity rule 4): the
+                      dashboard-language vs form-language split is the thing
+                      users get wrong, so the doc is one click from the field. */}
+                  <a
+                    href="/docs/customize#language"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title={t("prof.languageDocs")}
+                    className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 text-[11px] font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                  >
+                    ?
+                  </a>
+                </div>
+                <select
+                  id="prof-lang"
+                  value={ctxLang}
+                  onChange={(e) => {
+                    setLang(e.target.value as Lang);
+                    setMsg(t("prof.languageSaved"));
+                    setErr("");
+                  }}
+                  className="jf-input mt-1 max-w-xl"
+                >
+                  {LANGS_SHOWN.map((l) => (
+                    <option key={l} value={l}>{LANG_LABEL[l]}</option>
+                  ))}
+                </select>
+                <p className="mt-2 max-w-xl text-xs text-slate-400">{t("prof.languageHelp")}</p>
               </div>
             </section>
 

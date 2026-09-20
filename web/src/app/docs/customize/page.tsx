@@ -288,6 +288,50 @@ export default function CustomizeDocsPage() {
         else&apos;s New-form picker just because you edited it.
       </p>
 
+      {/* Language placement (AGENTS.md documentation-parity rule): the split
+          between the per-profile DASHBOARD language and the buyer-facing form
+          language is the thing merchants get wrong, so it is stated as a rule
+          and not just described. */}
+      <h2 id="language" className="mt-8 scroll-mt-6 text-xl font-semibold text-slate-900">Language: dashboard vs. your forms</h2>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        JomForm has <strong>two separate language settings</strong>, and they are deliberately not the
+        same one. The supported languages are <strong>English, Bahasa Melayu, 中文, தமிழ்</strong> and{" "}
+        <strong>العربية</strong> (Arabic also switches the dashboard to right-to-left).
+      </p>
+      <ul className="mt-3 list-disc space-y-1.5 pl-5 text-sm leading-relaxed text-slate-600">
+        <li>
+          <strong>Dashboard language</strong> — the language <em>you</em> see when signed in. It is a{" "}
+          <strong>per-user</strong> setting: change it on <strong>Profile</strong> (Dashboard language) and
+          it follows you into any browser you sign in from, on any machine. It never changes what a
+          buyer sees. Until you pick one, the dashboard uses the language last used in that browser,
+          and English if there is none.
+        </li>
+        <li>
+          <strong>Form language</strong> — the language your <em>customers</em> see on a public form, the
+          menu, the thank-you page and the password gate. It is set per form or per workspace, never
+          per browser and never from your dashboard choice.
+        </li>
+      </ul>
+
+      <h3 className="mt-5 text-base font-semibold text-slate-900">Choosing your customers&apos; language</h3>
+      <p className="mt-1 text-sm leading-relaxed text-slate-600">
+        Resolution is <strong>form → workspace → English</strong>: a per-form language wins when set;
+        otherwise the form uses its workspace&apos;s <strong>Default form language</strong> (Settings →
+        Storefront); otherwise English. Set the workspace default once and every form you publish
+        inherits it, so a Malay storefront does not need the language set on each form. Over MCP the
+        workspace default is <span className="font-mono text-xs">set_workspace_settings</span> with{" "}
+        <span className="font-mono text-xs">default_lang</span>; the per-form language is{" "}
+        <span className="font-mono text-xs">config.lang</span> on{" "}
+        <span className="font-mono text-xs">upsert_form</span>. An unsupported code is rejected rather
+        than stored, so a form can never be left on a language with no strings.
+      </p>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        The translation covers the buyer-facing chrome — field labels, the total, the submit button,
+        error messages, the menu, and the footer links (Privacy / Terms / Refund) — while your own
+        field labels, product names, prices and descriptions are shown exactly as you typed them.
+        JomForm does not machine-translate your content.
+      </p>
+
       {/* Issue #501: the https-only scheme rule for image/URL fields is a
           user-visible constraint, so it is documented here (AGENTS.md
           documentation-parity rule). */}

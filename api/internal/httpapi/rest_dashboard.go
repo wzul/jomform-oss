@@ -129,7 +129,7 @@ func (h *RESTHandlers) dashboardBundle(w http.ResponseWriter, r *http.Request, a
 			}
 			bundle.Me = &map[string]any{
 				"id": u.ID, "email": u.Email, "name": u.Name,
-				"avatar_url": u.AvatarURL, "phone": u.Phone, "timezone": u.Timezone, "totp_enabled": u.TOTPEnabled, "created_at": u.CreatedAt,
+				"avatar_url": u.AvatarURL, "phone": u.Phone, "timezone": u.Timezone, "lang": u.Lang, "totp_enabled": u.TOTPEnabled, "created_at": u.CreatedAt,
 				"default_workspace_id": defWorkspace,
 				"magic_session":        magicSession,
 				// Issue #387: whether the session user is a site super-admin

@@ -45,6 +45,12 @@ Parity checklist (dashboard → MCP):
 - Tracking → `get_tracking`, `set_tracking`
 - CHIP account settings → `get_chip_settings`, `set_chip_settings`
 - Profile avatar → `set_avatar`
+- Profile language (the dashboard UI language, stored per-profile on `users.lang`) →
+  `update_profile_language`.
+  **DASHBOARD ONLY, PER-PROFILE:** it decides what the signed-in user's own dashboard
+  speaks, in every browser — it is NOT the buyer-facing language of a public form
+  (Settings → Storefront sets the workspace default form language, and a form's own
+  config.lang overrides that). The dashboard picker is on /profile.
 - Passkeys → `list_passkeys`, `delete_passkey`
 - Social accounts → `list_social_accounts`, `disconnect_social_account`
 - 2FA → `get_2fa_status`, `enable_2fa`, `disable_2fa`
