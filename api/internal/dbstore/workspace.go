@@ -514,6 +514,50 @@ func (s *WorkspaceStore) RoleByAccount(ctx context.Context, accountID, userID st
 	return role, nil
 }
 
+// PublicHostSlugByAccount resolves the subdomain a form's account is publicly
+// reachable under, for building {slug}.jomform.com/{form-slug} URLs.
+//
+// It resolves the way the PUBLIC REQUEST PATH resolves, which is the invariant
+// that matters: form serving (FormStore.ByWorkspaceSlug, reached from
+// accountSubdomain + handleWorkspaceRootForm) accepts EITHER the account's own
+// slug (accounts.slug) OR its workspace's slug (workspaces.slug) — it tries the
+// account slug first and falls back to the workspace join. A URL builder that
+// resolved ONLY through the workspace join therefore disagreed with the server
+// that serves the URL, and answered "" whenever accounts.workspace_id was NULL.
+//
+// accounts.workspace_id is NULL for every account created through signup
+// (AccountStore.Create does not set it; only WorkspaceStore.Create does), so
+// that empty answer was the norm, not an edge case: it produced an empty href on
+// the dashboard's "View" action, an empty url on MCP list_forms, and a receipt
+// email/PDF whose form link fell back to the apex thank-you page.
+//
+// So: prefer the workspace slug (a merchant who named their workspace keeps the
+// pretty host), and fall back to the account slug — the host the serving path
+// resolves second — instead of degrading to "". Both branches yield a host the
+// public server actually serves; "" is now returned only when the account row
+// itself cannot be read.
+//
+// NOT for legal-page hosts ({slug}.jomform.com/privacy|terms|refund): those are
+// resolved by workspaces.IDBySlug alone (handlePublicLegalPage), so a legal URL
+// must keep using WorkspaceSlugByAccount — see rewriteHostedLegalURL, which
+// leaves a stored legal URL untouched when no workspace slug resolves rather
+// than rewriting it to a host that would 404.
+func (s *WorkspaceStore) PublicHostSlugByAccount(ctx context.Context, accountID string) (string, error) {
+	var workspaceSlug, accountSlug string
+	err := s.pool.QueryRow(ctx,
+		`SELECT COALESCE(sp.slug, ''), a.slug
+		   FROM accounts a
+		   LEFT JOIN workspaces sp ON sp.id = a.workspace_id
+		  WHERE a.id=$1`, accountID).Scan(&workspaceSlug, &accountSlug)
+	if err != nil {
+		return "", err
+	}
+	if workspaceSlug != "" {
+		return workspaceSlug, nil
+	}
+	return accountSlug, nil
+}
+
 // WorkspaceSlugByAccount resolves the workspace slug a form's account belongs to
 // ("" when the account has no linked workspace). Used to build the canonical
 // workspace-scoped public URL {workspace}.jomform.com/{slug} (issue #77).

@@ -709,7 +709,10 @@ func (h *PublicHandlers) fireResponseNotifications(ctx context.Context, form *db
 	}
 	formURL := ""
 	if h.Workspaces != nil {
-		if slug, serr := h.Workspaces.WorkspaceSlugByAccount(ctx, form.AccountID); serr == nil && slug != "" {
+		// The notification's form link must be a host that SERVES the form; the
+		// workspace-only lookup answered "" for signup-created accounts, and the
+		// fallback below is the apex /f/{slug} redirect, not the form's own URL.
+		if slug, serr := h.Workspaces.PublicHostSlugByAccount(ctx, form.AccountID); serr == nil && slug != "" {
 			formURL = "https://" + slug + ".jomform.com/" + form.Slug
 		}
 	}

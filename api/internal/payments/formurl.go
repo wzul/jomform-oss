@@ -31,8 +31,12 @@ func (s *Service) formPublicURL(ctx context.Context, accountID, formID string) s
 }
 
 // workspaceBaseURL resolves the scheme+host a buyer-facing page for the given
-// account lives under: a verified custom domain first, else the workspace
-// subdomain ({workspace}.jomform.com). Returns "" when neither is resolvable.
+// account lives under: a verified custom domain first, else the subdomain host
+// the public serving path resolves ({host}.jomform.com). Returns "" only when
+// neither is resolvable — in particular the workspace-only lookup used to
+// answer "" for every signup-created account (accounts.workspace_id NULL), so a
+// receipt's "view your order" link fell back to the apex thank-you page instead
+// of the form. See WorkspaceStore.PublicHostSlugByAccount.
 func (s *Service) workspaceBaseURL(ctx context.Context, accountID string) string {
 	if s.Accounts != nil {
 		if acc, aerr := s.Accounts.ByID(ctx, accountID); aerr == nil && acc.CustomDomain != "" && acc.CustomDomainVerified {
@@ -40,7 +44,7 @@ func (s *Service) workspaceBaseURL(ctx context.Context, accountID string) string
 		}
 	}
 	if s.Workspaces != nil {
-		if slug, serr := s.Workspaces.WorkspaceSlugByAccount(ctx, accountID); serr == nil && slug != "" {
+		if slug, serr := s.Workspaces.PublicHostSlugByAccount(ctx, accountID); serr == nil && slug != "" {
 			return fmt.Sprintf("https://%s.jomform.com", slug)
 		}
 	}

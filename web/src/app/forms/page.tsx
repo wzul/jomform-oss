@@ -10,6 +10,7 @@ import { useSession } from "../../components/session";
 import { workspaceQuery } from "../../lib/workspace";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 import { formEntriesAction } from "../../lib/formMode";
+import { formViewAction } from "../../lib/formPublicURL";
 import TemplatePicker from "../../components/TemplatePicker";
 
 type FormRow = {
@@ -49,13 +50,6 @@ const workspaceHost = (() => {
     return "";
   }
 })();
-
-// formPublicURL prefers the API-provided absolute URL; falls back to the
-// workspace-subdomain host only when the payload has none.
-function formPublicURL(f: { url?: string; slug: string }): string {
-  if (f.url) return f.url;
-  return workspaceHost ? `${workspaceHost}/${f.slug}` : "";
-}
 
 export default function FormsPage() {
   const { t } = useI18n();
@@ -252,6 +246,13 @@ export default function FormsPage() {
             // and the draft/private branch below: gating either branch on the
             // mode is what left a response form with no entry point at all.
             const entries = formEntriesAction(f, f.id);
+            // Layer 3 (defence-in-depth): resolve the row's public link ONCE,
+            // through the module that can never hand back an empty href. The
+            // pre-fix page passed a bare string straight into `href={...}`, so
+            // an unresolved URL rendered `<a href="">` — which the browser
+            // resolves to the CURRENT document, opening /forms again in a new
+            // tab. That is the reported symptom; see src/lib/formPublicURL.ts.
+            const view = formViewAction(f, workspaceHost);
             return (
             <li key={f.id} className="jf-card flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex min-w-0 items-center gap-3">
@@ -266,7 +267,9 @@ export default function FormsPage() {
                 )}
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium">{f.title}</p>
-                  <p className="font-mono text-[11px] text-[var(--jf-muted)]">{formPublicURL(f)}</p>
+                  <p className="font-mono text-[11px] text-[var(--jf-muted)]">
+                    {view.kind === "link" ? view.href : t("forms.urlUnavailable")}
+                  </p>
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2 sm:justify-end">
@@ -297,9 +300,26 @@ export default function FormsPage() {
                         {t(entries.labelKey)}
                       </Link>
                     )}
-                    <a href={formPublicURL(f)} target="_blank" className="jf-btn-ghost min-h-[44px] sm:min-h-10">
-                      {t("bld.view")}
-                    </a>
+                    {view.kind === "link" ? (
+                      <a href={view.href} target="_blank" rel="noreferrer" className="jf-btn-ghost min-h-[44px] sm:min-h-10">
+                        {t("bld.view")}
+                      </a>
+                    ) : (
+                      // Layer 3: never an anchor with an empty href. `href=""`
+                      // resolves to the CURRENT page, so the click reloaded
+                      // /forms (in a new tab, via target="_blank") instead of
+                      // opening the form. A disabled button keeps the row's
+                      // layout and says why via title/aria.
+                      <button
+                        type="button"
+                        disabled
+                        title={t("forms.viewUnavailableHint")}
+                        aria-label={t("forms.viewUnavailableHint")}
+                        className="jf-btn-ghost min-h-[44px] sm:min-h-10 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {t("bld.view")}
+                      </button>
+                    )}
                   </>
                 ) : (
                   <>

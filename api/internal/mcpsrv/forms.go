@@ -124,13 +124,14 @@ func (s *Server) getForm(
 	return nil, out, nil
 }
 
-// workspaceSlugFor resolves the workspace slug an account's forms live under, for
-// building workspace-scoped public URLs ("" when the account has no linked workspace).
-func (s *Server) workspaceSlugFor(ctx context.Context, accountID string) string {
+// publicHostSlugFor resolves the subdomain host an account's forms are publicly
+// served under ("", only when the account row cannot be read). Delegates to the
+// shared resolver; see WorkspaceStore.PublicHostSlugByAccount.
+func (s *Server) publicHostSlugFor(ctx context.Context, accountID string) string {
 	if s.deps.Workspaces == nil {
 		return ""
 	}
-	slug, err := s.deps.Workspaces.WorkspaceSlugByAccount(ctx, accountID)
+	slug, err := s.deps.Workspaces.PublicHostSlugByAccount(ctx, accountID)
 	if err != nil {
 		return ""
 	}
@@ -155,5 +156,5 @@ func (s *Server) formPublicURLForAccount(ctx context.Context, accountID, slug st
 			return "https://" + strings.TrimRight(acc.CustomDomain, "/") + "/" + slug
 		}
 	}
-	return formPublicURL(s.workspaceSlugFor(ctx, accountID), slug)
+	return formPublicURL(s.publicHostSlugFor(ctx, accountID), slug)
 }

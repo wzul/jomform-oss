@@ -431,6 +431,10 @@ export const DICT = {
   "forms.draft": { en: "Draft", ms: "Draft", zh: "草稿", ta: "வரைவு", ar: "مسودة" },
   "forms.private": { en: "Private", ms: "Private", zh: "私密", ta: "தனிப்பட்ட", ar: "خاص" },
   "forms.unlisted": { en: "Unlisted", ms: "Tidak disenaraikan", zh: "未列出", ta: "பட்டியலிடப்படாதது", ar: "غير مدرج" },
+  // A form with no resolvable public host has no link to show. The row must say
+  // so instead of rendering a link to nowhere (an empty href reloads /forms).
+  "forms.urlUnavailable": { en: "No public link yet", ms: "Belum ada pautan awam", zh: "暂无公开链接", ta: "பொது இணைப்பு இன்னும் இல்லை", ar: "لا يوجد رابط عام بعد" },
+  "forms.viewUnavailableHint": { en: "No public link yet — publish the form, or set a workspace/custom domain first", ms: "Belum ada pautan awam — terbitkan borang, atau tetapkan domain tersuai dahulu", zh: "暂无公开链接 — 请先发布表单或设置自定义域名", ta: "பொது இணைப்பு இல்லை — படிவத்தை வெளியிடவும் அல்லது தனிப்பயன் டொமைன் அமைக்கவும்", ar: "لا يوجد رابط عام بعد — انشر النموذج أو اضبط نطاقًا مخصصًا أولاً" },
   "forms.edit": { en: "Edit", ms: "Edit", zh: "编辑", ta: "திருத்து", ar: "تحرير" },
   "forms.delete": { en: "Delete", ms: "Buang", zh: "删除", ta: "நீக்கு", ar: "حذف" },
   "forms.selectAll": { en: "Select all", ms: "Pilih semua", zh: "全选", ta: "அனைத்தையும் தேர்ந்தெடு", ar: "تحديد الكل" },

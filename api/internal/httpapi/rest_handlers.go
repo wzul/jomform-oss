@@ -592,17 +592,19 @@ func (h *RESTHandlers) formURLForAccount(ctx context.Context, acc *dbstore.Accou
 	if acc.CustomDomain != "" && acc.CustomDomainVerified {
 		return "https://" + strings.TrimRight(acc.CustomDomain, "/") + "/" + slug
 	}
-	return formURL(h.workspaceSlugFor(ctx, acc.ID), slug)
+	return formURL(h.publicHostSlugFor(ctx, acc.ID), slug)
 }
 
-// workspaceSlugFor resolves the workspace slug an account's forms live under, for
-// building workspace-scoped public URLs. Returns "" when the account has no
-// linked workspace (no public URL).
-func (h *RESTHandlers) workspaceSlugFor(ctx context.Context, accountID string) string {
+// publicHostSlugFor resolves the subdomain host an account's forms are publicly
+// served under, for building {host}.jomform.com/{slug} URLs. It delegates to the
+// shared resolver so every URL builder agrees with the public serving path;
+// see WorkspaceStore.PublicHostSlugByAccount for why the workspace-only lookup
+// was wrong ("" for every signup-created account).
+func (h *RESTHandlers) publicHostSlugFor(ctx context.Context, accountID string) string {
 	if h.Workspaces == nil {
 		return ""
 	}
-	slug, err := h.Workspaces.WorkspaceSlugByAccount(ctx, accountID)
+	slug, err := h.Workspaces.PublicHostSlugByAccount(ctx, accountID)
 	if err != nil {
 		return ""
 	}
