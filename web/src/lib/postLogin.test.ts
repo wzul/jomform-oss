@@ -105,3 +105,22 @@ test("resolvePostLogin: a 500 on the list is a non-auth failure, not a /login re
     restore();
   }
 });
+
+// Issue #503 follow-up: a 403 (expired or forbidden session) must leave the page
+// exactly like a 401 does. The shared load wrapper classifies both as "unauth"
+// and the resolver turns that into a /login redirect — so this has to be driven
+// through resolvePostLogin itself, with a real 403 response. Asserting the
+// classifier's own return value (isUnauthStatus(403) === true) proves nothing
+// about the resolver: the unauth branch below it can be dead and the suite still
+// passes green.
+test("resolvePostLogin: a 403 from /api/workspaces goes to /login (not the dashboard)", async () => {
+  const restore = stubFetch({
+    "/api/workspaces": { status: 403, body: { error: "forbidden" } },
+    "/api/auth/me": { status: 200, body: {} },
+  });
+  try {
+    assert.equal(await resolvePostLogin(""), "/login");
+  } finally {
+    restore();
+  }
+});
