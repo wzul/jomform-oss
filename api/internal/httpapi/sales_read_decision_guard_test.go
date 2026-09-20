@@ -10,18 +10,34 @@ package httpapi
 // These guards exist so a FIFTH reader cannot quietly reintroduce the sixth copy.
 // They are SOURCE scans, not behavioural tests, and that is deliberate: a
 // behaviour test can only cover the readers that exist today, so it cannot refuse
-// the next one. The trade-off is that a scan can be satisfied by a rename, so
-// every assertion is anchored on a shape that encodes the bug — and every scan
-// WALKS THE TREE instead of naming files, so a new file is scanned because it
-// exists, not because someone remembered to add it to a list. The only lists here
-// are allowlists of files that are already justified, so an unlisted new file
-// fails by default. (The guard used to hold a hardcoded four-file list: a
-// compiling fifth reader planted beside them shipped green.)
+// the next one. The trade-off is that a scan is satisfied by the SPELLING of the
+// read, so every assertion below is anchored on something that is part of the
+// API being used (a filter TYPE, a store VALUE, a consumed RecordScope field)
+// rather than on a name a caller may choose — and every scan WALKS THE TREE
+// instead of naming files, so a new file is scanned because it exists, not
+// because someone remembered to add it to a list. The only lists here are
+// allowlists of files that are already justified, so an unlisted new file fails
+// by default. (The guard used to hold a hardcoded four-file list: a compiling
+// fifth reader planted beside them shipped green. The table-choice scan then
+// used to key on the receiver IDENTIFIER `Sales.`/`Submissions.` and on a
+// MENTION of the shared decision: a locally-aliased store, a helper that
+// returned the store, and a discarded ResolveRecordScope call all defeated it.
+// See the measurement block above the table-choice scan for what each of those
+// proved and how it is closed now.)
 //
 // Coverage limits, stated honestly: it scans Go source under api/internal for the
-// enumerable shapes below. It cannot see a reader that decides the table from
-// something else entirely (a new column, a per-form cache), and it does not scan
-// non-Go callers.
+// enumerable shapes below, and it is a source scan, so it cannot see:
+//
+//   - a reader that decides the table from something other than a form mode (a
+//     new column, a per-form cache, a caller-supplied bool). MEASURED: such a
+//     reader passes (see TestTheTableChoiceScanDiscriminates' "coverage limit"
+//     allow-cases);
+//   - a mode derived through a NEW WRAPPER NAME (`if h.isResponseOnly(f)`),
+//     because the scan does not chase aliases of the decision itself. MEASURED:
+//     passes. TestTheModeRuleHasOneDefinition only refuses the literal
+//     `== "response"` and a bare assignment, so a delegating wrapper is
+//     invisible to it too — a stated limit of the pair, not a silent gap;
+//   - non-Go callers, and behaviour (what the query actually reads at runtime).
 
 import (
 	"os"
@@ -238,56 +254,155 @@ func refusesTheShape(fn string) bool { return shapeScanHits(fn) != "" }
 // This scan encodes the INVARIANT rather than the bug, which is what makes it
 // reach the next reader: the table choice for a record list belongs to
 // dbstore.ResolveRecordScope, so a function that derives a form's MODE and then
-// reads sales/submissions ROWS (or builds a RecordScope of its own) without
-// reaching the one decision is refused — whatever its control flow looks like.
+// reads sales/submissions ROWS (or hands a record store to someone else) without
+// USING the one decision is refused — whatever its control flow looks like.
 //
-// Two deliberate exclusions, both measured: they are the only two functions the
-// scan flags on the healthy tree out of 119 scanned in mode-deriving files, and
-// neither is a list/export reader.
+// # What the first version of this scan missed (all measured, all compiling)
 //
-//   - `<Store>.Count*` is a scalar counter for a form the caller ALREADY HOLDS,
-//     not a table choice for a list (httpapi/restrictions.go entryLimitReached
-//     compares a form's entry count against its cap). A list reader pages rows;
-//     that is what this scan looks for.
+// The first strengthening (d9edb4e, PR #643) bound the row read to the receiver
+// NAME and the escape to a MENTION. Three readers that reintroduce the very
+// defect it names each left EVERY guard test green on that revision:
+//
+//  1. the store reached through a LOCAL ALIAS (`salesStore := h.Sales`) — the
+//     predicate wanted the literal identifier `Sales.`/`Submissions.`, so one
+//     rename defeated it and the ENTIRE internal/httpapi package stayed green
+//     (go test ./internal/httpapi/ -count=1 -> ok 60.705s, rc=0, 0 FAIL);
+//  2. a HELPER that returns the store — mode derivation in one function and the
+//     row read in another, so no single function carried the whole shape;
+//  3. a function that MENTIONS the one decision (`dbstore.ResolveRecordScope`)
+//     and DISCARDS the result — the escape was a mention, not a use.
+//
+// All three are closed below, by binding the row read to the table's own FILTER
+// TYPE (part of its API, unlike a local variable name), by treating a handed-out
+// or aliased store as the table pick it is, and by requiring the decision to be
+// USED — its RecordScope fields consumed, or the merged read called.
+//
+// # The exclusions, and what they cost
+//
+// There is no allowlist: the exemption is the predicate itself (a scalar Count*
+// is not in it at all, and a per-form read with no mode derivation is not in it
+// either), so a new file cannot be grandfathered into it. The cost of that is
+// pinned by TestTheTableChoiceScanDiscriminates below, which asserts it in BOTH
+// directions.
+//
+// # Measured on the healthy tree (so the exclusions are evidence, not taste)
+//
+// Numbers below are per-FUNCTION, which is how this scan is applied; the
+// per-FILE reading of the same predicate is given too because it differs:
+//
+//	walked files        228 non-test Go files under internal/
+//	top-level functions 1757 split by goFunctions
+//	mode-deriving funcs 14, in 7 files (dbstore/form_mode.go, dbstore/
+//	                    form_notification.go, dbstore/records.go, httpapi/
+//	                    public.go, httpapi/rest_handlers.go, httpapi/
+//	                    restrictions.go, mcpsrv/forms.go)
+//	PRE-EXCLUSION hits  1 per-FUNCTION, 2 per-FILE
+//	POST-EXCLUSION hits 0 — the guard is green on this tree
+//
+// The single per-function hit is dbstore.ResolveRecordScope itself, which is
+// exempted by its own DECLARATION line — an exemption a CALL SITE cannot reach.
+// The per-FILE count is higher (2) because a file that holds a mode derivation
+// and a table read ANYWHERE is flagged at file scope even when no single
+// function does: dbstore/records.go (the decision + the merged readers over the
+// same table names) and httpapi/rest_handlers.go (a `formMode` read in the form
+// handlers + the sales row reads elsewhere in the file). The shipped scan is
+// per-FUNCTION, so neither file is reported — the per-file number is given here
+// only so a later reader does not re-derive it and conclude the guard is
+// vacuous.
+//
+// Two things this scan deliberately does NOT flag, both previously counted as
+// exclusions and now simply outside the predicate:
+//
+//   - `<Store>.Count*` is a scalar about ONE form the caller already holds
+//     (httpapi/restrictions.go entryLimitReached compares a form's entry count
+//     against its cap), not a table choice for a list;
 //   - a submissions read with a literal form id and NO mode derivation is the
 //     per-form route, correct by design (#604). It answers "read this form's
 //     entries", not "which table is this list".
 //
-// There is no allowlist: the exemption is the predicate itself, so a new file
-// cannot be grandfathered into it. The cost of the exclusions is pinned by
-// TestTheTableChoiceScanDiscriminates below.
+// # The remaining coverage limit, measured rather than claimed
+//
+// A reader that derives the mode through a NEW WRAPPER NAME
+// (`if h.isResponseOnly(f) { ... }`) still passes, because this scan does not
+// chase aliases of the decision itself. That is stated in the file header and
+// asserted as an ALLOW-case in the control below, so a future tightening that
+// closes it will fail loudly instead of passing for the wrong reason.
 var (
-	// modeDerivation is the same rule TestTheModeRuleHasOneDefinition protects.
+	// modeDerivation is the same rule TestTheModeRuleHasOneDefinition protects;
+	// how the mode was derived is that guard's business, and this scan only needs
+	// to know that a mode derivation happened.
 	modeDerivation = regexp.MustCompile(`IsResponseForm\(|FormMode\(|formMode\(|FormModeResponse`)
-	// recordRowRead is a read of sales/submissions ROWS: a paging/listing store
-	// call, a raw SELECT from either table, or a RecordScope the function builds
-	// itself. Count* is excluded on purpose (see above).
-	recordRowRead = regexp.MustCompile(`(?i)\b(Sales|Submissions)\.(List|Merged|Page|ByID)\w*|\bFROM\s+(sales|submissions)\b|\bRecordScope\{`)
-	// reachesTheOneDecision is how a reader is SUPPOSED to answer the question.
-	// ResolveRecordScope matches its own declaration line, which is intended:
-	// that function IS the decision.
-	reachesTheOneDecision = regexp.MustCompile(`recordScope\(|ResolveRecordScope|Merged(Page|All|Count)|sc\.Include`)
+	// recordRowRead is a read of sales/submissions ROWS. The first alternative
+	// binds the call to the FILTER TYPE the table defines, so an aliased store is
+	// caught as well as a named one; a local variable name is not part of the
+	// table's API, the filter struct is. The call's arguments may span lines, but
+	// only CONTINUATION lines (each starting with whitespace) are allowed through
+	// — a top-level `func ` or a column-0 comment cannot be crossed, so this can
+	// never match a call in one function with a filter literal in the next one.
+	// Then the named store, a raw SELECT from either table, or a RecordScope the
+	// function builds itself.
+	//
+	// `<Store>.Count*` is deliberately absent: a Count is a scalar about ONE form
+	// the caller already holds (httpapi/restrictions.go entryLimitReached compares
+	// a form's entry count against its cap), not a table choice for a list.
+	recordRowRead = regexp.MustCompile(`(?i)\.(List|Merged|Page|ByID)\w*\s*\([^\n]*(?:\n[ 	]+[^\n]*){0,8}?\b(Sale|Submission)Filter\s*\{` +
+		`|(?i)\b(Sales|Submissions)\.(List|Merged|Page|ByID)\w*` +
+		`|(?i)\bFROM\s+(sales|submissions)\b` +
+		`|RecordScope\s*\{`)
+	// storeHandout is the other half of "pick the table": a function whose ANSWER
+	// to "which store?" is a record store — returned to its caller, or bound to a
+	// local the rest of the function reads through. This is the value, not the
+	// receiver spelling, so a rename cannot hide it. The line-anchored tail keeps
+	// it off an ordinary call through the store (`err = h.Sales.Count...`), which
+	// is a read, not a choice of table.
+	storeHandout = regexp.MustCompile(`(?m)\breturn\s+(?:[A-Za-z_]\w*\.)*(?:Sales|Submissions)\b\s*(?:,|$|;|\})` +
+		`|\b\w+\s*:=\s*(?:[A-Za-z_]\w*\.)*(?:Sales|Submissions)\b\s*(?:$|;|//)`)
+	// reachesTheOneDecision is how a reader is SUPPOSED to answer the question,
+	// and it demands a USE, not a mention: consuming a RecordScope's fields, or
+	// calling the merged read. A call whose result is thrown away
+	// (`_ = dbstore.ResolveRecordScope(...)`) deliberately does NOT match — that
+	// spelling satisfied the first predicate while the function still picked its
+	// table from the mode.
+	//
+	// The decision's own DECLARATION is the one exemption, and it is anchored on
+	// the declaration line so a call site cannot reach it. It lives in this
+	// predicate, not in a separate one, so that this scan has exactly ONE escape
+	// to neutralise and the in-suite control can still prove it bites in both
+	// directions (see TestTheTableChoiceScanDiscriminates).
+	reachesTheOneDecision = regexp.MustCompile(`(?m)^func\s+(?:\([^)]*\)\s+)?ResolveRecordScope\s*\(` +
+		`|\b\w+\.(IncludeSales|IncludeSubs|OnlyResponses|ResponseFormIDs|Mixed|FilterFormID)\b` +
+		`|(?i)\bMerged(Page|All|Count)\s*\(`)
 )
 
 // tableChoiceHits reports why a function picks the record table from a mode
-// instead of asking the one decision, or "" when it does not do so.
+// instead of using the one decision, or "" when it does not do so.
 func tableChoiceHits(fn string) string {
-	if !modeDerivation.MatchString(fn) || !recordRowRead.MatchString(fn) {
+	if !modeDerivation.MatchString(fn) {
+		return ""
+	}
+	var why string
+	switch {
+	case recordRowRead.MatchString(fn):
+		why = "reads sales/submissions rows"
+	case storeHandout.MatchString(fn):
+		why = "hands a sales/submissions store to its caller or to a local alias"
+	default:
 		return ""
 	}
 	if reachesTheOneDecision.MatchString(fn) {
 		return ""
 	}
-	return "derives the form mode, then reads sales/submissions rows (or builds a RecordScope) " +
-		"without reaching dbstore.ResolveRecordScope"
+	return "derives a form's mode, then " + why + ", without USING the one decision " +
+		"(dbstore.ResolveRecordScope: consume its RecordScope fields, or call the merged read)"
 }
 
 // TestTheTableChoiceScanDiscriminates is the control for the invariant scan. It
-// must refuse the fifth reader that defeated the shape scan (both flavours: one
-// form read by id, and no form read at all), and must leave the two measured
-// exclusions and ordinary code alone — a scan that flags clean code fails on a
-// healthy tree, which is how the false positive in the mode-literal pattern
-// turned main red.
+// must refuse the readers that defeat the OLD shape scan, the three escapes that
+// defeated the FIRST version of THIS scan (aliased store, a helper that returns
+// the store, a mention of the decision that is discarded), and must leave the
+// measured exclusions and ordinary code alone — a scan that flags clean code
+// fails on a healthy tree, which is how the false positive in the mode-literal
+// pattern turned main red.
 func TestTheTableChoiceScanDiscriminates(t *testing.T) {
 	refuses := []struct{ name, src string }{
 		{"fifth reader: one form read by id, mode picks the store", `func (h *RESTHandlers) fifthReader(w http.ResponseWriter, r *http.Request, scope *scopeResult) {
@@ -339,6 +454,57 @@ func TestTheTableChoiceScanDiscriminates(t *testing.T) {
 			t.Errorf("the invariant scan does NOT refuse %q — a fifth reader of that shape would ship green", c.name)
 		}
 	}
+
+	// The three escapes the FIRST version of this scan let through. Each is
+	// asserted through the SAME per-function walk the guard performs, because two
+	// of them only look like the defect once the function is split out (the
+	// alias in one function, the row read in another).
+	escapes := []struct{ name, src string }{
+		{"P1 escape: the store reached through a LOCAL ALIAS", `func (h *RESTHandlers) aliasedReader(w http.ResponseWriter, r *http.Request, f *dbstore.Form, formID string) {
+	salesStore := h.Sales
+	subsStore := h.Submissions
+	if dbstore.IsResponseForm(f) {
+		rows, _, _ := subsStore.ListFilteredPage(ctx, accs, dbstore.SubmissionFilter{FormID: formID}, 1, 20)
+		_ = rows
+		return
+	}
+	rows, _, _ := salesStore.ListFilteredPage(ctx, accs, dbstore.SaleFilter{FormID: formID}, 1, 20)
+	_ = rows
+}`},
+		{"P4 escape: a HELPER that answers with the store, the read in another function", `func (h *RESTHandlers) qaPicker(f *dbstore.Form) any {
+	if dbstore.IsResponseForm(f) {
+		return h.Submissions
+	}
+	return h.Sales
+}
+
+func (h *RESTHandlers) qaRead(ctx context.Context, f *dbstore.Form, accs []string) int {
+	switch st := h.qaPicker(f).(type) {
+	case *dbstore.SubmissionStore:
+		rows, _, _ := st.ListFilteredPage(ctx, accs, dbstore.SubmissionFilter{}, 1, 20)
+		return len(rows)
+	}
+	rows, _, _ := h.Sales.ListFilteredPage(ctx, accs, dbstore.SaleFilter{}, 1, 20)
+	return len(rows)
+}`},
+		{"P6 escape: MENTIONS the one decision and DISCARDS it", `func (h *RESTHandlers) mentionsTheDecision(ctx context.Context, f *dbstore.Form, accs []string) int {
+	forms, _ := h.Forms.ListByAccounts(ctx, accs)
+	_ = dbstore.ResolveRecordScope(forms, "")
+	if dbstore.IsResponseForm(f) {
+		rows, _, _ := h.Submissions.ListFilteredPage(ctx, accs, dbstore.SubmissionFilter{}, 1, 20)
+		return len(rows)
+	}
+	rows, _, _ := h.Sales.ListFilteredPage(ctx, accs, dbstore.SaleFilter{}, 1, 20)
+	return len(rows)
+}`},
+	}
+	for _, c := range escapes {
+		if !refusesAnyFunction(c.src) {
+			t.Errorf("the invariant scan does NOT refuse %q — that reader reintroduces the defect it names "+
+				"and ships green, exactly as the FIRST version of this scan did on d9edb4e", c.name)
+		}
+	}
+
 	allows := []struct{ name, src string }{
 		{"the entry-limit counter (Count of a form already in hand)", `func (h *PublicHandlers) entryLimitReached(ctx context.Context, f *dbstore.Form) (bool, error) {
 	if f.EntryLimit == nil {
@@ -356,7 +522,7 @@ func TestTheTableChoiceScanDiscriminates(t *testing.T) {
 	_ = subs
 	_ = err
 }`},
-		{"the one decision itself", `func ResolveRecordScope(forms []*Form, formID string) RecordScope {
+		{"the one decision itself (exempt by its own DECLARATION line)", `func ResolveRecordScope(forms []*Form, formID string) RecordScope {
 	if formID != "" {
 		for _, f := range forms {
 			if IsResponseForm(f) {
@@ -366,11 +532,56 @@ func TestTheTableChoiceScanDiscriminates(t *testing.T) {
 	}
 	return RecordScope{IncludeSales: true}
 }`},
-		{"a caller that asks the one decision", `func (h *RESTHandlers) listRecordRows(w http.ResponseWriter, r *http.Request, scope *scopeResult, sc dbstore.RecordScope) error {
-	records, total, err := h.Sales.MergedPage(r.Context(), scope.Accounts, sc, recordFilter(r), 1, 20)
+		{"a caller that uses the one decision (consumes its fields)", `func (h *RESTHandlers) listRecordRows(w http.ResponseWriter, r *http.Request, scope *scopeResult, sc dbstore.RecordScope) error {
+	if !sc.IncludeSubs {
+		return nil
+	}
+	records, _, err := h.Sales.MergedPage(r.Context(), scope.Accounts, sc, recordFilter(r), 1, 20)
 	_ = records
-	_ = total
 	return err
+}`},
+		{"a reader that ALIASES the store but USES the one decision", `func (h *RESTHandlers) aliasedButCorrect(f *dbstore.Form, sc dbstore.RecordScope) (int, error) {
+	salesStore := h.Sales
+	_ = dbstore.IsResponseForm(f)
+	if !sc.IncludeSales {
+		return 0, nil
+	}
+	rows, _, err := salesStore.MergedPage(ctx, accs, sc, dbstore.RecordFilter{}, 1, 20)
+	return len(rows), err
+}`},
+		{"the delegating mode wrapper itself (a name, not a decision)", `func (h *RESTHandlers) isResponseOnly(f *dbstore.Form) bool {
+	return dbstore.IsResponseForm(f)
+}`},
+		{"STATED COVERAGE LIMIT: the mode derived through a NEW WRAPPER NAME", `func (h *RESTHandlers) p5Reader(f *dbstore.Form, accs []string) int {
+	if h.isResponseOnly(f) {
+		rows, _, _ := h.Submissions.ListFilteredPage(ctx, accs, dbstore.SubmissionFilter{}, 1, 20)
+		return len(rows)
+	}
+	rows, _, _ := h.Sales.ListFilteredPage(ctx, accs, dbstore.SaleFilter{}, 1, 20)
+	return len(rows)
+}`},
+		{"STATED COVERAGE LIMIT: the table chosen from a caller-supplied bool, not a mode", `func (h *RESTHandlers) p7Reader(accs []string, isResponse bool) int {
+	if isResponse {
+		rows, _, _ := h.Submissions.ListFilteredPage(ctx, accs, dbstore.SubmissionFilter{}, 1, 20)
+		return len(rows)
+	}
+	rows, _, _ := h.Sales.ListFilteredPage(ctx, accs, dbstore.SaleFilter{}, 1, 20)
+	return len(rows)
+}`},
+		{"a MULTI-LINE call whose filter literal is in the NEXT function (must not over-reach)", `func (h *RESTHandlers) windowA(f *dbstore.Form, st storeIface) int {
+	if dbstore.IsResponseForm(f) {
+		rows, _, _ := st.ListFilteredPage(
+			ctx,
+			accs,
+			1, 20,
+		)
+		return len(rows)
+	}
+	return 0
+}
+
+func (h *RESTHandlers) windowB() {
+	_ = dbstore.SubmissionFilter{}
 }`},
 	}
 	for _, c := range allows {
@@ -378,26 +589,78 @@ func TestTheTableChoiceScanDiscriminates(t *testing.T) {
 			t.Errorf("the invariant scan refuses %q (%s) — the guard would block ordinary code", c.name, hits)
 		}
 	}
+
+	// The call window must still reach a genuine MULTI-LINE call: the previous
+	// allow-case only proves it does not OVER-reach, and a window of zero would
+	// pass that while catching nothing.
+	multiLine := `func (h *RESTHandlers) multiLineReader(f *dbstore.Form, st storeIface) int {
+	if dbstore.IsResponseForm(f) {
+		rows, _, _ := st.ListFilteredPage(
+			ctx,
+			accs,
+			dbstore.SubmissionFilter{FormID: "x"},
+			1, 20,
+		)
+		return len(rows)
+	}
+	return 0
+}`
+	if tableChoiceHits(multiLine) == "" {
+		t.Error("the invariant scan does NOT refuse a multi-line ListFilteredPage call — the argument window is " +
+			"too narrow, so the filter-type binding only works for single-line calls")
+	}
+}
+
+// refusesAnyFunction reports whether the guard's per-function walk refuses any
+// single function of src — the exact predicate TestNoReaderPicksTheTableFromAMode
+// applies to the tree, reused so the control cannot drift from the guard.
+func refusesAnyFunction(src string) bool {
+	for _, fn := range goFunctions(src) {
+		if tableChoiceHits(fn) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // TestNoReaderPicksTheTableFromAMode is the CLASS GUARD for the next reader: no
 // function under api/internal may derive a form's mode and then read
-// sales/submissions rows without going through dbstore.ResolveRecordScope.
+// sales/submissions rows, or hand out a record store, without USING
+// dbstore.ResolveRecordScope.
 //
 // It walks the tree, so a reader in a file that does not exist yet is refused
 // because its file exists, not because someone remembered to allowlist it.
 func TestNoReaderPicksTheTableFromAMode(t *testing.T) {
+	scanned, modeDerived := 0, 0
 	for _, path := range internalGoFiles(t) {
 		src := readWalked(t, path)
 		for _, fn := range goFunctions(src) {
+			scanned++
+			if modeDerivation.MatchString(fn) {
+				modeDerived++
+			}
 			if hits := tableChoiceHits(fn); hits != "" {
 				t.Errorf("%s: a function %s. That is the shape that made an unfiltered read fall "+
 					"back to sales-only — it can be reached with no `formID == \"\"` at all, which is why "+
-					"the pre-fix shape scan alone does not cover it. Ask the one decision instead "+
-					"(RESTHandlers.recordScope → dbstore.ResolveRecordScope, or the merged read).\n"+
+					"the pre-fix shape scan alone does not cover it, and it survives a receiver rename, "+
+					"which is why the scan binds the read to the filter type instead of the store's "+
+					"identifier. Use the one decision (RESTHandlers.recordScope → "+
+					"dbstore.ResolveRecordScope, then consume its fields or call the merged read).\n"+
 					"offending function:\n%s", relInternal(path), hits, firstLines(fn, 16))
 			}
 		}
+	}
+	// Anti-vacuity floor: a splitter or a matcher that stopped seeing the tree
+	// would otherwise report a clean scan. The measured tree holds 1757 top-level
+	// functions of which 14 derive a mode; the floors are well below that so
+	// ordinary growth cannot trip them, and a broken scan cannot pass them.
+	if scanned < 500 {
+		t.Fatalf("the table-choice scan split only %d top-level functions out of internal/ — the "+
+			"scan is not looking at the tree, so it would pass vacuously", scanned)
+	}
+	if modeDerived < 5 {
+		t.Fatalf("the table-choice scan found only %d mode-deriving functions — the mode predicate is "+
+			"not matching, so no reader could ever be refused", modeDerived)
 	}
 }
 
@@ -515,7 +778,7 @@ func TestMCPReaderUsesTheOneDecision(t *testing.T) {
 // `=\s*FormModeResponse` flagged every caller that asks the rule exactly the way
 // the guard's own message recommends. A preceding operator character is
 // therefore excluded — RE2 has no lookbehind, so the character is consumed by the
-// negated class instead. That fix is the whole point of this card: it must stay
+// negated class instead. That narrowing is load-bearing: the pattern must stay
 // discriminating in BOTH directions.
 var modeLiteralShape = regexp.MustCompile(`==\s*"response"|[^=<>!&|+\-*/%]\s*=\s*FormModeResponse`)
 
