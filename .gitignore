@@ -11,6 +11,12 @@ coverage.txt
 node_modules/
 .next/
 out/
+# TypeScript incremental build state (`incremental: true` in web/tsconfig.json).
+# It is a machine-generated output: `next build` / `tsc` rewrite it on every
+# run, so a tracked copy dirties the tree on every gate run and conflicts with
+# no semantic content. Ignored by pattern, not by the single web/tsconfig.tsbuildinfo
+# path, so a second one (e.g. a future tsconfig at another path) cannot ride in.
+*.tsbuildinfo
 
 # Playwright (issue #99 E2E)
 e2e/test-results/
