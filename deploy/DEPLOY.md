@@ -101,7 +101,7 @@ The api image is unaffected: `CONTEXT=api` + `api/Dockerfile` (with its own
    It runs `scripts/preflight.sh` itself — do not pre-check by hand and do not
    reach for `--skip-tests`. The gate is:
    ```bash
-   source /tmp/jf-env.sh     # JOMFORM_TEST_DATABASE_URL + JOMFORM_TEST_VALKEY_URL
+   source ${JOMFORM_ENV:-$HOME/.config/jomform/test-env.sh}   # JOMFORM_TEST_DATABASE_URL + JOMFORM_TEST_VALKEY_URL
    ./scripts/preflight.sh    # 8 gates, ~6 min; runs again inside build-and-ship.sh
    ```
    Run it standalone first if you want to see a failure before the lock is held.

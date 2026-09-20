@@ -13,7 +13,7 @@ Before merging ANY PR (or any agent change), run the full preflight and confirm
 it is green:
 
 ```bash
-source /tmp/jf-env.sh          # JOMFORM_TEST_DATABASE_URL + JOMFORM_TEST_VALKEY_URL
+source ${JOMFORM_ENV:-$HOME/.config/jomform/test-env.sh}   # JOMFORM_TEST_DATABASE_URL + JOMFORM_TEST_VALKEY_URL
 ./scripts/preflight.sh
 ```
 

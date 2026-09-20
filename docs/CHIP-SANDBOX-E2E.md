@@ -110,7 +110,7 @@ job failed with 0 steps on an account-wide billing failure (see
 test env exported so the DB-backed tests actually execute instead of skipping:
 
 ```bash
-source /tmp/jf-env.sh
+source ${JOMFORM_ENV:-$HOME/.config/jomform/test-env.sh}
 ./scripts/preflight.sh
 ```
 

@@ -67,7 +67,7 @@ checklist covers what automation cannot.
 
 ```bash
 # Every gate at once, from the repo root (the deploy gate — see AGENTS.md).
-source /tmp/jf-env.sh
+source ${JOMFORM_ENV:-$HOME/.config/jomform/test-env.sh}
 ./scripts/preflight.sh
 
 # ...or one gate at a time:

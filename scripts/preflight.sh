@@ -50,7 +50,7 @@
 #                               Without it `go test ./...` SKIPS the DB tests
 #                               and prints a green summary that proves nothing.
 #   JOMFORM_TEST_VALKEY_URL     same for the Valkey-backed tests.
-#                               `source /tmp/jf-env.sh` exports both.
+#                               `source ${JOMFORM_ENV:-$HOME/.config/jomform/test-env.sh}` exports both.
 #   web/node_modules            a fresh worktree has none, and `npm run build`
 #                               then exits 0 with "sh: 1: next: not found" —
 #                               a green-looking gate that built nothing.
@@ -180,9 +180,9 @@ preflight_env() {
 
   if [ "$need_api" = 1 ]; then
     [ -n "${JOMFORM_TEST_DATABASE_URL:-}" ] || die \
-      "JOMFORM_TEST_DATABASE_URL is unset — the integration tests would SKIP and report a green suite that proves nothing. Run: source /tmp/jf-env.sh"
+      "JOMFORM_TEST_DATABASE_URL is unset — the integration tests would SKIP and report a green suite that proves nothing. Run: source ${JOMFORM_ENV:-$HOME/.config/jomform/test-env.sh}"
     [ -n "${JOMFORM_TEST_VALKEY_URL:-}" ] || die \
-      "JOMFORM_TEST_VALKEY_URL is unset — same silent-skip problem. Run: source /tmp/jf-env.sh"
+      "JOMFORM_TEST_VALKEY_URL is unset — same silent-skip problem. Run: source ${JOMFORM_ENV:-$HOME/.config/jomform/test-env.sh}"
   fi
 
   if [ "$need_web" = 1 ]; then
