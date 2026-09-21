@@ -266,3 +266,28 @@ a copy of the script in a temp dir).
 It stubs `docker` and `rclone` on the `PATH` it hands the script, so it runs on a
 laptop, in a worktree, or on the production host without touching Drive.
 
+### This suite is a preflight gate (`backup`)
+
+`scripts/preflight.sh` runs it on every full gate, as the `backup` gate, alongside
+the other two offline self-tests (`monitor`, `tmpkey`):
+
+```bash
+./scripts/preflight.sh --only backup
+```
+
+Until that gate existed **nothing ran this suite** — `--list` did not name it and
+the runner had no call site for it, so an edit to `jomform-backup.sh` could break
+the whole suite while the gate still printed green. The nightly backup is the one
+job whose failure is silent data loss, so it is exactly the wrong one to leave
+ungated. `scripts/preflight_test.sh` check 2 now fails if the gate is advertised but
+has no `run backup` call site (verified by de-wiring it: `listed but never run:
+[backup]`).
+
+The **bite proof** (`jomform-backup_bite.sh`, ~8 minutes) is deliberately *not* a
+per-run gate — 8 minutes on every merge is how a gate gets skipped. Run it on demand
+whenever the seam or the failure paths change:
+
+```bash
+bash deploy/backup/jomform-backup_bite.sh
+```
+

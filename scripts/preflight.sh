@@ -33,6 +33,16 @@
 #                         card's live key), and that a row which survives the
 #                         delete is a FAILURE, not a quiet success
 #                         (offline: fake ssh/scp/docker/curl, no host)
+#   backup     suite      deploy/backup/jomform-backup_test.sh — the nightly
+#                         Postgres + media backup's own failure-path suite: a
+#                         copy that "exits 0" having landed nothing, a same-size
+#                         object whose bytes differ, an empty dump archive, a
+#                         remote with no hash, a restore drill that must not
+#                         overwrite the backup job's status, and the fail-closed
+#                         override seam. (offline: stubbed rclone/docker on the
+#                         PATH it hands the script, no network, no DB, ~45s).
+#                         The suite's bite proof (jomform-backup_bite.sh, ~8 min)
+#                         is deliberately NOT wired in — on-demand only.
 #   selftest   selfcheck  scripts/preflight_test.sh — the gate runner's OWN
 #                         safety properties: an all-skipped run is REFUSED
 #                         rather than reported green, a missing prerequisite
@@ -68,8 +78,8 @@
 #   playwright chromium         `cd web && npx playwright install chromium`
 #
 # RUNTIME (measured on the agent host): api build 13s, vet 13s, test 2m35s,
-#   govuln 25s, web build ~2m, a11y 15s, npm audit 1s, gitleaks 30s.
-#   Budget ~6 minutes for a full run.
+#   govuln 25s, web build ~2m, a11y 15s, npm audit 1s, gitleaks 30s, backup ~45s.
+#   Budget ~7 minutes for a full run.
 #
 # CONCURRENCY: `go test ./...` gives each test PROCESS its own scratch schema,
 #   named `test_<pkg>_p<pid>` — per-package so parallel packages do not collide,
@@ -107,7 +117,7 @@ cd "$REPO_ROOT" || exit 1
 # `--list`, the runnable set from the `run <name>` call sites) and FAILS if they
 # disagree, so a gate named here but never run — the silent-coverage-loss shape —
 # is caught by `--only selftest`. No edit to the self-test is needed for gate #N.
-GATE_NAMES=(build vet test govuln web a11y npmaudit gitleaks monitor tmpkey selftest)
+GATE_NAMES=(build vet test govuln web a11y npmaudit gitleaks monitor tmpkey backup selftest)
 
 ONLY=""
 SKIP=""
@@ -404,6 +414,35 @@ tmpkey_run() {
   bash "$REPO_ROOT/deploy/tmp-apikey_test.sh"
 }
 run tmpkey "temp-key helper self-test (no tag in the id, exact-name delete, survivor is a failure)" tmpkey_run
+
+# backup — the nightly Postgres + media backup's failure-path suite. Same shape of
+# gate as `monitor`/`tmpkey` and for the same reason: `deploy/backup/jomform-backup.sh`
+# only ever runs on the production host, so what is testable in the repo is its own
+# harness. The defect it exists to close is DATA LOSS THAT LOOKS FINE — the job whose
+# failure is silent is the one the whole directory is a deliverable for:
+#   * `rclone copy` exits 0 but nothing lands on the remote -> the run must FAIL
+#     (exit 0 is not proof of an upload);
+#   * the object lands with the same size but different bytes -> FAIL on hash;
+#   * the backend exposes no hash -> FAIL rather than degrade to a size-only check;
+#   * an empty dump (no TABLE DATA) -> refused instead of uploaded;
+#   * a restore drill must not overwrite the nightly job's own status, or a green
+#     drill would hide that the backups had stopped succeeding;
+#   * a partial-override hand-run must fail closed BEFORE any dump/lock/alert.
+# Offline by construction: stub `rclone`/`docker` on the PATH it hands the script, no
+# network, no database. ~45s.
+#
+# WHY IT IS A GATE AND NOT JUST A SCRIPT: until this line existed, NOTHING invoked
+# this suite — `./scripts/preflight.sh --list` did not name it and the runner had no
+# call site, so a future edit to jomform-backup.sh could break all 98 assertions
+# while the gate still printed green. A regression net nobody runs is not a net.
+# The suite's BITE PROOF (deploy/backup/jomform-backup_bite.sh, ~8 min, mutates a
+# throwaway copy per sabotage) is deliberately NOT a per-run gate: it is on-demand
+# (see deploy/backup/README.md), because 8 minutes on every merge is how a gate gets
+# skipped. The ~45s suite is the one that has to run every time.
+backup_run() {
+  bash "$REPO_ROOT/deploy/backup/jomform-backup_test.sh"
+}
+run backup "nightly backup failure-path suite (exit 0 is not an upload, empty dump refused, drill cannot mask a failing job)" backup_run
 
 # selftest — the gate runner's OWN self-test (scripts/preflight_test.sh). Same
 # shape of gate as `monitor`/`tmpkey`, one level up: the only thing testable about

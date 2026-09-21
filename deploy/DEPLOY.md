@@ -106,7 +106,7 @@ The api image is unaffected: `CONTEXT=api` + `api/Dockerfile` (with its own
    ```bash
    source ${JOMFORM_ENV:-$HOME/.config/jomform/test-env.sh}   # JOMFORM_TEST_DATABASE_URL + JOMFORM_TEST_VALKEY_URL
    ./scripts/preflight.sh --list   # the gate inventory (authoritative)
-   ./scripts/preflight.sh          # every gate, ~6 min; runs again inside build-and-ship.sh
+   ./scripts/preflight.sh          # every gate, ~7 min; runs again inside build-and-ship.sh
    ```
    Run it standalone first if you want to see a failure before the lock is held.
 3. Ship the tarball (`SSH_HOST=... ./deploy/build-and-ship.sh` or scp manually).
