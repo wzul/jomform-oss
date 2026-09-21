@@ -457,6 +457,13 @@ func main() {
 		})
 		// Per-user message limit: every chat message is at least one LLM call.
 		rest.ChatLimiter = httpapi.NewChatLimiter()
+		// Phase 2: the proposal store and its own per-user confirmation limit.
+		// The store is what makes a proposal stay WHAT THE USER WAS SHOWN
+		// between propose and confirm (see dbstore/chat_proposal.go); without
+		// it propose_write refuses rather than pretending, which is why wiring
+		// is explicit here rather than optional.
+		rest.Chat.(*chatpkg.Runner).SetProposalStore(dbstore.NewChatWriteProposalStore(pool))
+		rest.ChatConfirmLimiter = httpapi.NewChatConfirmLimiter()
 
 		// Public order-form renderer + submit.
 		deps.Public = &httpapi.PublicHandlers{

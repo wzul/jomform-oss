@@ -125,3 +125,36 @@ Parity checklist (dashboard → MCP):
   own URL; the workspace root always renders the normal landing page. REST:
   `GET/PUT /v1/rest/forms/{id}/menu`.
 
+## In-app assistant — the proposal lane (phase 2 of #639)
+
+**Deliberately NOT a checklist entry, and the reason matters.** The chat's
+`propose_write` tool is named here as PROSE, not as a backticked name to the
+right of an arrow, because it is not a registered MCP tool at all and the
+checklist parser (and the guard behind it) would correctly reject it.
+
+The in-app assistant has two tools that execute IN PROCESS rather than over
+MCP, because neither one dispatches a tool the caller names:
+
+- `submit_feedback` — registered (it is the checklist's in-app feedback entry)
+  and also called in-process by the chat, so a filing from a conversation
+  notifies and rate-limits exactly like the /feedback page.
+- `propose_write` — NOT registered. It records a proposal and returns an opaque
+  single-use token, and the step that actually performs the write is a
+  **session-only** route (`POST /v1/rest/chat/confirm`), because a confirmation
+  is a signed-in person's click. Registering it would ship an MCP tool whose
+  only possible outcome is a token no MCP caller could ever confirm: the token
+  goes to the browser and is never returned to the model. An agent that wants
+  the write calls the write tool itself — its own client is the human's
+  confirmation channel.
+
+What that means for parity: there is no new dashboard capability here that MCP
+lacks. The three tools the model may PROPOSE are pre-existing registered writers
+(`update_product`, `update_product_variation`, `set_form_theme`), each already
+reachable over MCP and each already covered by this checklist or the baseline
+above. The chat adds no write path of its own — it adds a human confirmation
+step in front of writes the merchant could already make.
+
+Related routes (session-only, never API-key reachable): `POST /v1/rest/chat`
+(message), `POST /v1/rest/chat/confirm` (apply a confirmed proposal),
+`POST /v1/rest/chat/cancel` (kill one). Docs: `/docs/chat`.
+

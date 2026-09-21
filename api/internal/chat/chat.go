@@ -1,5 +1,7 @@
-// Package chat is the PHASE 1 in-app chat: the model may READ the caller's own
-// account data and FILE FEEDBACK. It cannot do anything else.
+// Package chat is the in-app assistant: PHASE 1 read-only over the caller's own
+// data plus one write (file feedback), and PHASE 2 proposal-only writes — the
+// model may PROPOSE a write, the USER confirms it, and only then does the server
+// execute. It can never execute a write on its own.
 //
 // WHY A RUNNER AND NOT A SECOND MCP SERVER. The tools the model may call are the
 // real registered MCP tools, dispatched over a real MCP session against the real
@@ -11,32 +13,47 @@
 //
 // THREE INDEPENDENT LAYERS STAND BETWEEN THE MODEL AND A WRITE:
 //
-//  1. THE ALLOWLIST (this file). The model is offered a small, explicit set of
-//     tools — the read tools a merchant needs about their own account, plus one
-//     write (submit_feedback). A tool name outside the set is refused here and
-//     never dispatched, so a prompt-injected instruction to "call delete_form"
-//     has nothing to call.
+//  1. THE ALLOWLIST (this file + mcpsrv.ChatToolIsAllowed). The model is offered
+//     a small, explicit set: the read tools a merchant needs about their own
+//     account, plus submit_feedback (in-process) and propose_write (in-process,
+//     executes nothing). A tool name outside the set — delete_form, refund_sale,
+//     any write at all — is refused HERE and never dispatched, so a
+//     prompt-injected instruction to "call delete_form" has nothing to call.
+//     Phase 2 does NOT widen this: a proposal is not a dispatch.
 //
-//  2. THE IDENTITY (this file + mcpsrv). Every tool call runs under an identity
-//     whose scopes are READONLY, whatever the caller's own credential can do. So
-//     even if the allowlist were widened by mistake, every write tool the server
-//     registers answers "scope tidak mencukupi" — the issue #645 gate.
+//  2. THE IDENTITY (this file + mcpsrv). Every tool call made during a message
+//     runs under an identity whose scopes are READONLY, whatever the caller's own
+//     credential can do. So even if the allowlist were widened by mistake, every
+//     write tool the server registers answers "scope tidak mencukupi" — the issue
+//     #645 gate. The ONLY code that dispatches a tool with a write scope is
+//     Runner.Confirm, which requires an opaque, single-use, server-issued token
+//     bound to (tool, arguments, caller, expiry). See proposal.go.
 //
 //  3. THE SERVER'S OWN GATES (mcpsrv). Workspace role, ownership and scope are
-//     re-checked per call, exactly as for an external agent.
+//     re-checked per call, exactly as for an external agent — including the
+//     confirmed call, which runs under the human's identity.
 //
 // Layer 2 is what makes "the model cannot write" a property of the SERVER rather
 // than of a prompt, and layer 1 is what keeps the model from wandering: offering
 // 161 tools and trusting the gate would work, but it also invites the model to
-// try. Both are asserted by tests, and the refusal tests are proven to BITE
-// (see chat_refusal_test.go).
+// try. Both are asserted by tests, and the refusal tests are proven to BITE (see
+// chat_refusal_test.go and the phase-2 acceptance file).
+//
+// A MODEL-SET `confirm=true` IS NOT A CONFIRMATION. The MCP tools that carry a
+// Confirm argument (api_key_mcp.go) are confirmed by the human typing into their
+// own client; in the chat the caller is the model, so a boolean it writes proves
+// nothing. Therefore no `confirm` argument is consulted anywhere on the model's
+// path: a write tool called directly is REFUSED, `confirm=true` included. The
+// confirmation that counts is a token only the human's browser holds.
 //
 // UNTRUSTED CONTENT. Tool results are the caller's own data — product names,
 // form answers, a customer's typed message. That data is wrapped in an explicit
 // fence and the model is told, before and after it, that it is DATA and not
-// instructions. Phase 1 has no write to reach, so a successful injection could
-// at worst produce a wrong ANSWER; the fence exists because phase 2 (writes with
-// confirmation) will depend on exactly this framing.
+// instructions. Phase 1 had no write to reach; phase 2 has a PROPOSAL, which is
+// why the fence matters more rather than less: injected text that talks the model
+// into proposing a destructive edit still has to survive a human reading a card
+// that the SERVER rendered from the arguments, and the destructive classes are not
+// proposable at all.
 package chat
 
 import (
@@ -44,6 +61,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -79,26 +97,46 @@ const (
 	MaxReplyChars = 4000
 )
 
-// ToolSubmitFeedback is the ONE write capability the chat has, and it is not
-// dispatched over MCP: it calls the shared feedback service directly, so the
-// same validation, per-user daily limit and notification apply as on the
-// /feedback page. It is the only name in the allowlist that is allowed to
-// change anything.
+// ToolSubmitFeedback is the chat's in-process filing tool: it is not dispatched
+// over MCP but calls the shared feedback service directly, so the same
+// validation, per-user daily limit and notification apply as on the /feedback
+// page. It needs no confirmation — filing a report changes nothing about the
+// caller's account.
 const ToolSubmitFeedback = mcpsrv.ChatSubmitFeedbackTool
 
-// allowedTools is the complete exposure set: the read allowlist plus the one
-// write. Nothing else is ever offered to the model or dispatched.
+// ToolProposeWrite is the chat's in-process PROPOSAL tool (phase 2). It records
+// what the model WANTS to do and returns a card plus an opaque token; it executes
+// nothing. It is in-process for the same reason as submit_feedback: the tool it
+// names is not being dispatched, so there is nothing to route through MCP.
+const ToolProposeWrite = mcpsrv.ChatProposeWriteTool
+
+// Step statuses. "proposed" is phase 2's addition: the model asked for a change
+// and the server turned it into a card for the user instead of doing it. It is
+// reported to the UI (and NOT as "called", which is what a read is) so the
+// transcript can say "I have prepared this — confirm it?" rather than implying the
+// change already happened.
+const (
+	StepCalled   = "called"
+	StepRefused  = "refused"
+	StepProposed = "proposed"
+)
+
+// allowedTools is the complete DISPATCH set: the read allowlist plus the two
+// in-process tools (filing, proposing). Nothing that reaches a store write is in
+// it — see mcpsrv.ChatToolIsAllowed, which is the single predicate this map and
+// the dispatch path both consult.
 //
-// The allowlist itself lives in mcpsrv (ChatReadTools / ChatToolIsAllowed) so
-// the call-graph guard that polices every registered tool's authorization also
-// proves this list contains no writer. Keeping a second copy here is how the
-// offered set and the dispatched set would drift apart.
+// The allowlist itself lives in mcpsrv (ChatReadTools / ChatToolIsAllowed) so the
+// call-graph guard that polices every registered tool's authorization also proves
+// this list contains no writer. Keeping a second copy here is how the offered set
+// and the dispatched set would drift apart.
 func allowedTools() map[string]bool {
-	out := make(map[string]bool, len(mcpsrv.ChatReadTools())+1)
+	out := make(map[string]bool, len(mcpsrv.ChatReadTools())+2)
 	for _, n := range mcpsrv.ChatReadTools() {
 		out[n] = true
 	}
 	out[ToolSubmitFeedback] = true
+	out[ToolProposeWrite] = true
 	return out
 }
 
@@ -145,8 +183,10 @@ type Turn struct {
 }
 
 // Step records one tool the model attempted, for the UI to show what happened.
-// Status is "called" or "refused" — a refusal is shown, not hidden, because a
-// silent refusal reads to the user as the assistant being broken.
+// Status is "called", "refused" or "proposed" — a refusal and a proposal are both
+// shown, not hidden, because a silent refusal reads to the user as the assistant
+// being broken, and a silent proposal would be a change they were never asked
+// about.
 type Step struct {
 	Tool   string `json:"tool"`
 	Status string `json:"status"`
@@ -170,6 +210,11 @@ type Result struct {
 	Steps []Step `json:"steps"`
 	// Filed is non-nil when the model filed feedback during this exchange.
 	Filed *Filed `json:"filed,omitempty"`
+	// Proposals are the write proposals this exchange produced, in the order the
+	// model made them. Each carries the opaque confirmation token, which goes to
+	// the BROWSER: the token is what makes the user's click the only way the
+	// proposed write can happen. Empty for a read-only exchange.
+	Proposals []ProposalCard `json:"proposals,omitempty"`
 }
 
 // toolCaller dispatches one tool by name. It exists so the Runner can be given
@@ -186,6 +231,10 @@ type Runner struct {
 	llm      LLMClient
 	mcp      *mcpsrv.Server
 	feedback *feedbacksvc.Service
+	// proposals stores the write proposals the model makes (phase 2). Nil means
+	// the proposal lane is not configured: propose_write refuses rather than
+	// pretending, and Confirm refuses too. The runner still answers questions.
+	proposals proposalStore
 
 	// newSession builds the tool caller for one exchange. Overridden in tests.
 	newSession func(ctx context.Context) (toolCaller, error)
@@ -197,11 +246,18 @@ type Runner struct {
 }
 
 // New builds a Runner over the real MCP server and the shared feedback service.
+// proposals may be nil (no proposal lane); see SetProposalStore.
 func New(client LLMClient, mcpSrv *mcpsrv.Server, fb *feedbacksvc.Service) *Runner {
 	r := &Runner{llm: client, mcp: mcpSrv, feedback: fb}
 	r.newSession = r.mcpSession
 	return r
 }
+
+// SetProposalStore wires the phase-2 proposal lane. It is a setter rather than a
+// New argument so the production wiring stays readable and a deployment that has
+// no proposal store simply does not get the lane (propose_write refuses with a
+// clear reason instead of failing at the first model call).
+func (r *Runner) SetProposalStore(s proposalStore) { r.proposals = s }
 
 // mcpSession opens a real MCP session against the in-process server, with the
 // CALLER's ctx — which is what binds the identity (mcpsrv.WithAuthIdentity) to
@@ -317,6 +373,8 @@ func (r *Runner) Run(ctx context.Context, history []Turn, message string) (*Resu
 
 	turns := r.buildTurns(history, message)
 	res := &Result{Steps: []Step{}}
+	// Per-message state: the proposal budget is this message's, not the Runner's.
+	rs := &runState{}
 	for step := 0; step < MaxSteps; step++ {
 		reply, err := r.llm.ChatWithTools(ctx, turns, tools)
 		if err != nil {
@@ -330,23 +388,38 @@ func (r *Runner) Run(ctx context.Context, history []Turn, message string) (*Resu
 		// model sees next is well-formed.
 		turns = append(turns, llm.ChatTurn{Role: "assistant", Content: reply.Content, ToolCalls: reply.ToolCalls})
 		for _, tc := range reply.ToolCalls {
-			out, refused, ferr := r.dispatch(ctx, caller, tc)
+			out, refused, ferr := r.dispatchIn(ctx, caller, tc, rs)
 			switch {
 			case ferr != nil:
 				out = "RALAT: " + ferr.Error()
 				refused = true
 			}
-			st := Step{Tool: tc.Name, Status: "called"}
+			st := Step{Tool: tc.Name, Status: StepCalled}
 			if refused {
-				st.Status = "refused"
+				st.Status = StepRefused
 				st.Detail = bound(out, 300)
 			}
-			res.Steps = append(res.Steps, st)
 			if tc.Name == ToolSubmitFeedback && !refused {
 				if f := filedFrom(out); f != nil {
 					res.Filed = f
 				}
 			}
+			// A proposal is a step in its own right: the model asked for a change
+			// and the server prepared a card instead of doing it. Reporting it as
+			// "called" would tell the user their thing had happened.
+			//
+			// The card comes from the per-message state (the TOKEN-BEARING one),
+			// not from the tool result: the result the model saw was stripped of
+			// the token, so the browser must get it from here.
+			if tc.Name == ToolProposeWrite {
+				st.Status = StepProposed
+				if n := len(rs.cards); n > 0 {
+					card := rs.cards[n-1]
+					res.Proposals = append(res.Proposals, card)
+					st.Detail = card.Title
+				}
+			}
+			res.Steps = append(res.Steps, st)
 			turns = append(turns, llm.ChatTurn{
 				Role: "tool", ToolCallID: tc.ID, Name: tc.Name,
 				Content: fenceToolResult(tc.Name, out),
@@ -367,17 +440,117 @@ func (r *Runner) Run(ctx context.Context, history []Turn, message string) (*Resu
 	return res, nil
 }
 
-// dispatch routes one model-requested call. It is the ONLY place a call becomes
-// real, and it is where the allowlist is enforced.
+// dispatch routes one model-requested call. It is the ONLY place a model-requested
+// call becomes real, and it is where the allowlist is enforced.
+//
+// PHASE 2: a model that calls a write tool DIRECTLY is refused here, whatever it
+// put in the arguments — `confirm=true` included. That is the whole point of the
+// proposal design: a boolean the model typed is not a human's confirmation, so the
+// write tools are not in the allowlist at all and the only path to one is
+// Runner.Confirm with a token only the user's browser holds.
 func (r *Runner) dispatch(ctx context.Context, caller toolCaller, tc llm.ToolCall) (string, bool, error) {
+	return r.dispatchIn(ctx, caller, tc, &runState{})
+}
+
+// runState carries the per-MESSAGE state a dispatch decision needs.
+//
+// It lives here, not on the Runner: a Runner is shared (its doc says the identity
+// comes from each Run's ctx), so per-message state on the struct would be a data
+// race between two people talking to the same assistant at once.
+type runState struct {
+	// proposals is how many proposals this message has already produced. It
+	// bounds how many confirmation cards one answer can put in front of the user.
+	proposals int
+	// cards are the cards this message produced, in order. They are collected
+	// HERE rather than read back out of the tool result, because the tool result
+	// is what the MODEL sees and it must not contain the confirmation token: the
+	// token is the user's authorisation, and a model holding it could complete
+	// the confirmation itself. See proposeWrite.
+	cards []ProposalCard
+}
+
+// dispatchIn is dispatch with the per-message state threaded through.
+func (r *Runner) dispatchIn(ctx context.Context, caller toolCaller, tc llm.ToolCall, st *runState) (string, bool, error) {
+	if st == nil {
+		st = &runState{}
+	}
 	if !mcpsrv.ChatToolIsAllowed(tc.Name) {
-		// An invented or injected tool name. Refused here, never dispatched.
+		// An invented, injected or WRITE tool name. Refused here, never
+		// dispatched. The message names the proposal lane so the model can offer
+		// the user the supported route instead of a dead end — and, for a write
+		// tool, says plainly that `confirm` proves nothing.
+		if isWriteToolName(tc.Name) {
+			return fmt.Sprintf("alat %q tidak boleh dilaksanakan oleh chat — penulisan mesti "+
+				"DICADANGKAN kepada pengguna dan disahkan oleh mereka (propose_write). "+
+				"Menetapkan confirm=true dalam hujah tidak mengesahkan apa-apa: model yang "+
+				"menulisnya bukan manusia. Cadangkan perubahan itu; pengguna akan sahkan "+
+				"dalam UI.", tc.Name), true, nil
+		}
 		return fmt.Sprintf("alat %q tidak dibenarkan dalam chat ini", tc.Name), true, nil
 	}
 	if tc.Name == ToolSubmitFeedback {
 		return r.submitFeedback(ctx, tc.Arguments)
 	}
+	if tc.Name == ToolProposeWrite {
+		return r.proposeWrite(ctx, caller, tc.Arguments, st)
+	}
 	return caller.call(ctx, tc.Name, tc.Arguments)
+}
+
+// isWriteToolName reports whether a refused name looks like a WRITE tool, so the
+// refusal can say the useful thing ("propose it instead") rather than only "not
+// allowed". It is a hint for the message ONLY — the allowlist decides, and the
+// name is never trusted for anything else.
+func isWriteToolName(name string) bool {
+	for _, seg := range []string{"delete", "archive", "revoke", "update", "create",
+		"set_", "cancel", "refund", "publish", "unpublish", "remove", "invite",
+		"retry", "capture", "release", "confirm", "purge", "bulk", "reply", "use_"} {
+		if strings.Contains(name, seg) {
+			return true
+		}
+	}
+	return false
+}
+
+// proposeWrite handles the in-process proposal tool: it records what the model
+// wants to do and returns a description of the card. NOTHING IS EXECUTED — that is
+// why this tool is dispatchable while every real writer is not.
+//
+// THE TOKEN IS NOT IN THE RESULT. What the model gets back is the card WITHOUT
+// its token: the title, the summary and the fields, so it can tell the user what it
+// prepared and what it will change. The token goes to the browser (res.Proposals)
+// and never into the prompt. That is not cosmetic — a model that held the token
+// could "confirm" the proposal by posting it, and the whole point of this design is
+// that the confirmation is a HUMAN's click. Keeping the token out of the only
+// channel the model reads is what makes that structural rather than advisory.
+//
+// The proposal budget (MaxProposalsPerRun) is enforced by the runner, not by the
+// model: a message can put at most that many decisions in front of the user, so a
+// single answer cannot become a wall of confirmations to click through.
+func (r *Runner) proposeWrite(ctx context.Context, caller toolCaller, argsJSON string, st *runState) (string, bool, error) {
+	if st.proposals >= MaxProposalsPerRun {
+		return fmt.Sprintf("had cadangan untuk satu mesej dicapai (%d). Jawab dengan cadangan "+
+			"yang sudah ada; pengguna boleh minta lagi selepas ini.", MaxProposalsPerRun), true, nil
+	}
+	card, err := r.proposeFromArgs(ctx, caller, argsJSON)
+	if err != nil {
+		return err.Error(), true, nil
+	}
+	st.proposals++
+	st.cards = append(st.cards, *card)
+	// modelCard is the card as the MODEL may see it: no token, no args_hash.
+	out, _ := json.Marshal(card.withoutSecrets())
+	return string(out), false, nil
+}
+
+// lastCard returns the most recent card a message produced, which is the
+// TOKEN-BEARING one (the tool result the model saw has its token stripped). It is
+// used by tests to read the card the way the UI receives it.
+func (st *runState) lastCard() *ProposalCard {
+	if len(st.cards) == 0 {
+		return nil
+	}
+	return &st.cards[len(st.cards)-1]
 }
 
 // submitFeedback files a feedback thread from the conversation, through the
@@ -463,9 +636,10 @@ func (r *Runner) toolDefs(ctx context.Context, caller toolCaller) ([]llm.ToolDef
 			Parameters:  params,
 		})
 	}
-	// A local copy of the one write's schema: it is registered as an MCP tool
-	// too (parity), but the chat executes it in-process.
-	out = append(out, submitFeedbackDef())
+	// A local copy of the two in-process tools' schemas: they are the chat's own
+	// (submit_feedback runs through feedbacksvc, propose_write records intent),
+	// so neither comes from tools/list.
+	out = append(out, submitFeedbackDef(), proposeWriteDef())
 	return out, nil
 }
 
@@ -477,7 +651,7 @@ func (r *Runner) testToolDefs() []llm.ToolDef {
 	if r.toolDefsFn != nil {
 		return r.toolDefsFn()
 	}
-	return []llm.ToolDef{submitFeedbackDef()}
+	return []llm.ToolDef{submitFeedbackDef(), proposeWriteDef()}
 }
 
 // submitFeedbackDef describes the one write to the model.
@@ -500,12 +674,47 @@ func submitFeedbackDef() llm.ToolDef {
 	}
 }
 
+// proposeWriteDef describes propose_write to the model.
+//
+// The `arguments` object is deliberately an OPEN object (`additionalProperties`
+// true) with the proposable names listed in the description rather than as a
+// oneOf: the per-tool schemas belong to the registered tools, and copying them
+// here would be a second contract that can drift from the one the tool actually
+// validates. The model is told to build `arguments` from the tool's own
+// definition, which it also has in this same tool list.
+func proposeWriteDef() llm.ToolDef {
+	proposable := mcpsrv.ChatProposableTools()
+	sort.Strings(proposable)
+	return llm.ToolDef{
+		Name: ToolProposeWrite,
+		Description: "CADANGKAN satu perubahan supaya PENGGUNA dapat mengesahkannya. Alat ini " +
+			"TIDAK melaksanakan apa-apa: ia menyediakan kad pengesahan dalam chat dan " +
+			"menunggu pengguna menekan Sahkan. Selepas memanggilnya, beritahu pengguna " +
+			"cadangan itu sedia dan minta mereka sahkan — JANGAN kata perubahan telah " +
+			"berlaku. Guna hujah yang sama seperti alat sebenar (lihat definisi alat itu " +
+			"dalam senarai ini) di dalam medan `arguments`. Boleh dicadangkan: " +
+			strings.Join(proposable, ", ") + ". Alat lain (padam, arkib, wang, kelayakan " +
+			"akses, emel, terbit) TIDAK boleh dicadangkan — beritahu pengguna untuk " +
+			"melakukannya sendiri di papan pemuka.",
+		Parameters: json.RawMessage(`{
+  "type": "object",
+  "properties": {
+    "tool": {"type": "string", "description": "Nama alat yang mahu dijalankan, cth update_product."},
+    "arguments": {"type": "object", "description": "Hujah untuk alat itu, sama seperti anda memanggil alat itu sendiri.", "additionalProperties": true},
+    "reason": {"type": "string", "description": "Sebab ringkas dalam bahasa pengguna — dipaparkan pada kad sebagai kata-kata anda, bukan sebagai fakta."}
+  },
+  "required": ["tool", "arguments"],
+  "additionalProperties": false
+}`),
+	}
+}
+
 // buildTurns assembles the model-facing conversation: the fixed system prompt,
 // the bounded client history, and the new message. A client-supplied "system" or
 // "tool" turn is DROPPED — those roles are server-owned, and accepting one would
 // let the caller overwrite the operating instructions.
 func (r *Runner) buildTurns(history []Turn, message string) []llm.ChatTurn {
-	turns := []llm.ChatTurn{{Role: "system", Content: systemPrompt}}
+	turns := []llm.ChatTurn{{Role: "system", Content: systemPromptText()}}
 	if len(history) > MaxTurns {
 		history = history[len(history)-MaxTurns:]
 	}

@@ -54,21 +54,52 @@ type Limits = {
   max_message_chars: number;
   max_history_turns: number;
   max_tool_steps: number;
+  max_proposals_per_message: number;
+  proposal_ttl_seconds: number;
+  confirms_per_hour: number;
+  confirm_burst: number;
+};
+
+type ProposalField = { label: string; value: string };
+
+// A confirmation card (phase 2). It carries the opaque token, which is the ONLY
+// thing that can authorise the write — and the args_hash, which binds the
+// execution to the arguments shown here. Neither is ever sent to the model.
+type Proposal = {
+  token: string;
+  args_hash: string;
+  tool: string;
+  title: string;
+  summary: string;
+  fields: ProposalField[];
+  note?: string;
+  expires_at: string;
+  reversible: boolean;
 };
 
 type ChatReply = {
   reply: string;
   steps?: Step[];
   filed?: Filed;
+  proposals?: Proposal[];
   limits?: Limits;
 };
+
+// A card's lifecycle in the UI. "pending" is the only state where the buttons
+// exist: a confirmed or cancelled card is spent server-side, so offering the
+// buttons again would produce a 409 the user cannot act on.
+type ProposalState = "pending" | "confirming" | "cancelling" | "done" | "cancelled" | "stale" | "failed";
 
 type Msg = {
   role: "user" | "assistant";
   content: string;
-  // files / steps are only present on an assistant turn that produced them.
+  // files / steps / proposals are only present on an assistant turn that
+  // produced them.
   filed?: Filed;
   refused?: Step[];
+  proposals?: Proposal[];
+  // states maps a proposal token to what happened to it.
+  states?: Record<string, ProposalState>;
 };
 
 // Mirrors the server's cap (chatMaxHistory in rest_chat.go). The server drops
@@ -167,6 +198,9 @@ export default function ChatPage() {
       const d = (await r.json()) as ChatReply;
       if (d.limits) setLimits(d.limits);
       const refused = (d.steps ?? []).filter((s) => s.status === "refused");
+      const proposals = d.proposals ?? [];
+      const states: Record<string, ProposalState> = {};
+      for (const p of proposals) states[p.token] = "pending";
       setMsgs((prev) => [
         ...prev,
         {
@@ -174,6 +208,8 @@ export default function ChatPage() {
           content: d.reply ?? "",
           filed: d.filed,
           refused: refused.length ? refused : undefined,
+          proposals: proposals.length ? proposals : undefined,
+          states: proposals.length ? states : undefined,
         },
       ]);
     } catch {
@@ -181,6 +217,72 @@ export default function ChatPage() {
     } finally {
       setSending(false);
     }
+  }
+
+  // ── The confirmation lane ──────────────────────────────────────────────────
+  //
+  // The ONLY place this page can cause a write. Everything the model controls is
+  // already fixed by the time we get here: the token is opaque and single use, the
+  // args_hash binds the execution to the arguments rendered above, and the server
+  // re-checks the token, the hash, the expiry and the caller. So this function's
+  // whole job is to send those two values and report honestly what came back —
+  // it cannot "confirm the wrong thing" because it does not decide what runs.
+  //
+  // The model never sees the token: it went straight from the server's response
+  // into this component's state.
+  async function decide(msgIndex: number, p: Proposal, action: "confirm" | "cancel") {
+    setErr("");
+    setState(msgIndex, p.token, action === "confirm" ? "confirming" : "cancelling");
+    // The two routes are written LITERALLY rather than built from `action`: the
+    // route-parity guard resolves frontend paths against the backend mux by
+    // reading this source, and a computed path is a path nothing can check. A
+    // typo here would then be a 404 at the one moment the user has committed to a
+    // decision.
+    const url = action === "confirm" ? "/api/rest/chat/confirm" : "/api/rest/chat/cancel";
+    try {
+      const r = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          action === "confirm"
+            ? { token: p.token, args_hash: p.args_hash }
+            : { token: p.token },
+        ),
+      });
+      if (r.status === 401 || r.status === 403) {
+        goToLogin();
+        return;
+      }
+      if (r.status === 429) {
+        setState(msgIndex, p.token, "failed");
+        setErr(t("chat.confirmRateLimited"));
+        return;
+      }
+      if (r.status === 409) {
+        // Spent or expired — the card cannot be answered any more. The user needs
+        // the assistant to prepare it again, which is what the copy says.
+        setState(msgIndex, p.token, "stale");
+        setErr(action === "confirm" ? t("chat.proposalStale") : t("chat.cancelStale"));
+        return;
+      }
+      if (!r.ok) {
+        setState(msgIndex, p.token, "failed");
+        setErr(action === "confirm" ? t("chat.confirmFail") : t("chat.cancelFail"));
+        return;
+      }
+      setState(msgIndex, p.token, action === "confirm" ? "done" : "cancelled");
+    } catch {
+      setState(msgIndex, p.token, "failed");
+      setErr(action === "confirm" ? t("chat.confirmFail") : t("chat.cancelFail"));
+    }
+  }
+
+  function setState(msgIndex: number, token: string, state: ProposalState) {
+    setMsgs((prev) =>
+      prev.map((m, i) =>
+        i === msgIndex ? { ...m, states: { ...(m.states ?? {}), [token]: state } } : m,
+      ),
+    );
   }
 
   const disabled = sending || available === false;
@@ -273,6 +375,98 @@ export default function ChatPage() {
                   ))}
                 </div>
               ) : null,
+            )}
+
+            {/* A proposal is a DECISION, so it is rendered as a card with the
+                specific arguments, not as assistant prose. The badge says plainly
+                that nothing has happened yet — the model cannot write, and a user
+                who believed the change was already made would not read the card
+                at all. */}
+            {msgs.map((m, i) =>
+              m.proposals
+                ? m.proposals.map((p) => {
+                    const state = m.states?.[p.token] ?? "pending";
+                    const open = state === "pending";
+                    return (
+                      <div
+                        key={`p${i}-${p.token}`}
+                        className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900"
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          {/* The badge must not keep saying "needs your confirmation"
+                              once the user has settled it — a done card headed
+                              "NEEDS CONFIRMATION" reads as an unfinished task and
+                              invites a second click the server would refuse. */}
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white ${
+                              open ? "bg-sky-600" : state === "failed" ? "bg-red-500" : "bg-slate-500"
+                            }`}
+                          >
+                            {open
+                              ? t("chat.proposalBadge")
+                              : state === "done"
+                                ? t("chat.proposalBadgeDone")
+                                : state === "cancelled"
+                                  ? t("chat.proposalBadgeCancelled")
+                                  : state === "stale"
+                                    ? t("chat.proposalBadgeStale")
+                                    : t("chat.proposalBadgeFailed")}
+                          </span>
+                          <span className="font-semibold">{p.title}</span>
+                        </div>
+                        {p.summary && <p className="mt-1 opacity-80">{p.summary}</p>}
+                        <dl className="mt-2 space-y-0.5">
+                          {p.fields?.map((f) => (
+                            <div key={f.label} className="flex gap-2">
+                              <dt className="min-w-[7rem] shrink-0 opacity-70">{f.label}</dt>
+                              <dd className="break-words font-medium">{f.value}</dd>
+                            </div>
+                          ))}
+                        </dl>
+                        {p.note && (
+                          <p className="mt-2 border-l-2 border-sky-300 pl-2 italic opacity-80">
+                            {p.note}
+                          </p>
+                        )}
+                        <p className="mt-2 font-mono text-[10px] opacity-60">{p.tool}</p>
+
+                        {open && (
+                          <div className="mt-2 flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => void decide(i, p, "confirm")}
+                              className="jf-btn-primary disabled:opacity-50"
+                            >
+                              {t("chat.confirm")}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void decide(i, p, "cancel")}
+                              className="jf-btn-ghost disabled:opacity-50"
+                            >
+                              {t("chat.cancel")}
+                            </button>
+                            <span className="opacity-70">{t("chat.confirmHint")}</span>
+                          </div>
+                        )}
+                        {state === "confirming" && <p className="mt-2 font-medium">{t("chat.confirming")}</p>}
+                        {state === "cancelling" && <p className="mt-2 font-medium">{t("chat.cancelling")}</p>}
+                        {state === "done" && (
+                          <p className="mt-2 font-medium text-emerald-700">{t("chat.confirmed")}</p>
+                        )}
+                        {state === "cancelled" && (
+                          <p className="mt-2 font-medium opacity-80">{t("chat.cancelled")}</p>
+                        )}
+                        {state === "stale" && (
+                          <p className="mt-2 font-medium text-amber-700">{t("chat.proposalStale")}</p>
+                        )}
+                        {state === "failed" && (
+                          <p className="mt-2 font-medium text-red-600">{t("chat.confirmFail")}</p>
+                        )}
+                      </div>
+                    );
+                  })
+                : null,
             )}
 
             {sending && <p className="text-xs text-[var(--jf-muted)]">{t("chat.thinking")}</p>}

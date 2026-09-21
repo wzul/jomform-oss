@@ -630,7 +630,7 @@ func TestRejectsEmptyAndOverlongMessages(t *testing.T) {
 func TestSystemPromptStatesTheRenderableMarkdownSubset(t *testing.T) {
 	// 1. The rule text itself.
 	for _, want := range []string{"**bold**", "HTML", "table", "code block"} {
-		if !strings.Contains(systemPrompt, want) {
+		if !strings.Contains(systemPromptText(), want) {
 			t.Errorf("the system prompt no longer tells the model about %q — the UI renders a "+
 				"Markdown subset and the model must be told which one (see "+
 				"web/src/components/Markdown.ts)", want)
@@ -639,12 +639,12 @@ func TestSystemPromptStatesTheRenderableMarkdownSubset(t *testing.T) {
 	// 2. A blank line still separates paragraphs: the renderer keeps a single
 	//    newline as a line break, so the model must know a paragraph break is a
 	//    blank line rather than a newline.
-	if !strings.Contains(systemPrompt, "blank") {
+	if !strings.Contains(systemPromptText(), "blank") {
 		t.Error("the prompt no longer mentions the blank-line paragraph rule")
 	}
 	// 3. The language rule must survive alongside it (they are both in HOW TO
 	//    ANSWER, and a formatting edit must not push the language rule out).
-	if !strings.Contains(systemPrompt, "in Malay, answer") {
+	if !strings.Contains(systemPromptText(), "in Malay, answer") {
 		t.Error("the language-matching rule was removed while adding the formatting rule")
 	}
 

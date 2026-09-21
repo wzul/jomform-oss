@@ -133,14 +133,22 @@ type RESTHandlers struct {
 	// existing email lane. One list, one place to change who is notified.
 	SuperAdminEmails []string
 
-	// Chat is the in-app assistant (phase 1: read-only + file feedback). Nil
-	// when no LLM is configured → the endpoint reports the assistant as
-	// unavailable rather than offering a chat box that errors. It runs its tool
-	// calls under a READONLY identity (see rest_chat.go), so it cannot write.
+	// Chat is the in-app assistant: phase 1 reads the caller's own data and files
+	// feedback; phase 2 PROPOSES writes for the user to confirm. Nil when no LLM
+	// is configured → the endpoint reports the assistant as unavailable rather than
+	// offering a chat box that errors. Its message path runs its tool calls under a
+	// READONLY identity (see rest_chat.go), so a message cannot write; only
+	// Confirm — with a server-issued token a human holds — runs a tool with the
+	// write scope.
 	Chat ChatRunner
 	// ChatLimiter is the per-user chat message bucket (LLM calls cost money).
 	// Nil in bare-mode tests.
 	ChatLimiter *middleware.RateLimiter
+	// ChatConfirmLimiter is the per-user PROPOSAL CONFIRMATION bucket (phase 2).
+	// Separate from ChatLimiter because a confirmation costs no model call: the
+	// thing being bounded is how fast a person can be walked through confirmation
+	// cards, not spend. Nil in bare-mode tests.
+	ChatConfirmLimiter *middleware.RateLimiter
 }
 
 // ChatRunner answers one chat message. The production value is *chat.Runner;
@@ -158,6 +166,17 @@ type ChatRunner interface {
 	// implementation must answer the question, and the compiler refuses one
 	// that would rather not.
 	Ready() bool
+	// Confirm executes a proposal a HUMAN confirmed on the card (phase 2). It
+	// takes the opaque token and the argument hash the card carried, and it
+	// executes the STORED arguments under writeCtx (the human's identity with the
+	// write scope). It is the only method on this interface that can write, and it
+	// is unreachable without a token this server issued to this user.
+	Confirm(ctx context.Context, writeCtx context.Context, userID, token, argsHash string) (*chat.Confirmed, error)
+	// Cancel spends a proposal WITHOUT executing it — the user's "no". It is on
+	// this interface because the UI must be able to kill a card server-side: a
+	// cancel that only hid the card in the browser would leave a live
+	// authorisation behind.
+	Cancel(ctx context.Context, userID, token string) error
 }
 
 // RegisterRoutes wires REST endpoints.
@@ -352,6 +371,11 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	// typed into the box can reach a write.
 	mux.Handle("GET /v1/rest/chat", h.authed(h.handleChatStatus))
 	mux.Handle("POST /v1/rest/chat", h.authed(h.handleChat))
+	// In-app chat (phase 2): the confirmation lane. A proposal the model made is
+	// executed ONLY here, and only with the opaque single-use token the browser
+	// holds — the model never sees it. Session-only, per-user limited, and audited.
+	mux.Handle("POST /v1/rest/chat/confirm", h.authed(h.handleChatConfirm))
+	mux.Handle("POST /v1/rest/chat/cancel", h.authed(h.handleChatCancel))
 	mux.Handle("GET /v1/rest/analytics/forms", h.authed(h.formAnalytics))
 	mux.Handle("GET /v1/rest/analytics/products", h.authed(h.productAnalytics))
 	// Issue #92: event-tracking read endpoints (audit log + behaviour analytics).

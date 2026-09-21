@@ -67,11 +67,59 @@ type recordingRunner struct {
 	err error
 	// block, when set, makes Run synchronously wait for a release.
 	block chan struct{}
+
+	// ── phase 2 (proposal confirmation) ──
+	// confirmScopes / confirmUserID / confirmAccountID are the identity of the
+	// ctx Confirm was given (the HUMAN's, which must carry the write scope).
+	confirmScopes    []string
+	confirmUserID    string
+	confirmAccountID string
+	// confirmCalls records every (token, argsHash) pair Confirm was asked to
+	// execute, so a test can assert the endpoint passed on exactly what the
+	// client sent.
+	confirmCalls []string
+	// confirmErr, when set, is what Confirm returns.
+	confirmErr error
+	// confirmResult is what Confirm answers with on success.
+	confirmResult *chat.Confirmed
+	// cancelCalls records every Cancel the endpoint made (userID|token), and
+	// cancelErr is what Cancel returns.
+	cancelCalls []string
+	cancelErr   error
 }
 
 // Ready is the availability half of ChatRunner. It is a field here because the
 // tests that care about availability are about the FLAG, not the runner.
 func (r *recordingRunner) Ready() bool { return r.ready }
+
+// Confirm records the identity it was handed and what it was asked to execute.
+// The REAL implementation is what enforces the token binding; this fake exists so
+// the EDGE can be asserted (which identity, which limiter, which status).
+func (r *recordingRunner) Confirm(ctx context.Context, writeCtx context.Context, userID, token, argsHash string) (*chat.Confirmed, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if id := mcpsrv.IdentityFromContext(writeCtx); id != nil {
+		r.confirmScopes = append([]string(nil), id.Scopes...)
+		r.confirmUserID = id.UserID
+		r.confirmAccountID = id.AccountID
+	}
+	r.confirmCalls = append(r.confirmCalls, token+"|"+argsHash)
+	if r.confirmErr != nil {
+		return nil, r.confirmErr
+	}
+	if r.confirmResult != nil {
+		return r.confirmResult, nil
+	}
+	return &chat.Confirmed{Tool: "update_product", Result: `{"status":"updated"}`}, nil
+}
+
+func (r *recordingRunner) Cancel(_ context.Context, userID, token string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.confirmCalls = append(r.confirmCalls, "cancel|"+token)
+	r.cancelCalls = append(r.cancelCalls, userID+"|"+token)
+	return r.cancelErr
+}
 
 func (r *recordingRunner) Run(ctx context.Context, history []chat.Turn, message string) (*chat.Result, error) {
 	if r.block != nil {
@@ -120,6 +168,8 @@ func newChatEnv(t *testing.T, runner ChatRunner) *chatEnv {
 		// A fresh bucket per env: the limiter is per-server in production, and a
 		// shared one here would make tests depend on each other's message counts.
 		ChatLimiter: NewChatLimiter(),
+		// Phase 2: the confirmation bucket, fresh for the same reason.
+		ChatConfirmLimiter: NewChatConfirmLimiter(),
 	}
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -489,3 +539,168 @@ func TestChatUnavailableWhenTheProviderRejectsTheKey(t *testing.T) {
 // skipped in a given environment; the chat tables are reset by the fixtures that
 // own them (feedback_isolation_issue615_test.go).
 var _ = testdb.Reset
+
+// ── Phase 2: the confirmation lane at the HTTP edge ──────────────────────────
+
+// TestChatConfirmEndpointRequiresASessionAndAToken pins the endpoint's gate before
+// anything is executed: the confirmation is a PERSON's click, so it must be
+// session-only, and it must be useless without a token.
+func TestChatConfirmEndpointRequiresASessionAndAToken(t *testing.T) {
+	runner := &recordingRunner{ready: true}
+	e := newChatEnv(t, runner)
+	_, _, token := e.newUser(t)
+
+	// No session: refused before the runner is consulted at all.
+	rec := e.do(t, "", http.MethodPost, "/v1/rest/chat/confirm",
+		`{"token":"abc","args_hash":"deadbeef"}`)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("confirm without a session = %d, want 401 (body %s) — a confirmation belongs to "+
+			"a person, not to a bearer token", rec.Code, rec.Body.String())
+	}
+	if len(runner.confirmCalls) != 0 {
+		t.Fatalf("the runner was asked to confirm without a session: %v", runner.confirmCalls)
+	}
+
+	// A session, but no token: refused, and the runner is still not consulted.
+	rec = e.do(t, token, http.MethodPost, "/v1/rest/chat/confirm", `{"args_hash":"deadbeef"}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("confirm with no token = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+	}
+	// A token but NO args_hash: also refused. Without the hash nothing binds the
+	// execution to what the user read, so it is not "no change requested".
+	rec = e.do(t, token, http.MethodPost, "/v1/rest/chat/confirm", `{"token":"abc"}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("confirm with no args_hash = %d, want 400 (body %s) — the hash is the binding, "+
+			"and an absent one must not be read as 'unchanged'", rec.Code, rec.Body.String())
+	}
+	if len(runner.confirmCalls) != 0 {
+		t.Fatalf("the runner was asked to confirm a malformed request: %v", runner.confirmCalls)
+	}
+}
+
+// TestChatConfirmEndpointRunsUnderAHumanWriteIdentity pins the identity the
+// confirmed tool runs under.
+//
+// This is the ONE place the chat gains a write, and it is granted by a human's
+// click on a bound proposal — not by loosening the read-only identity every
+// message runs under. The test asserts the identity the runner was HANDED, so a
+// regression that passed the readonly ctx (making the feature useless) or the
+// caller's own credential (making it unbounded) both fail here.
+func TestChatConfirmEndpointRunsUnderAHumanWriteIdentity(t *testing.T) {
+	runner := &recordingRunner{ready: true}
+	e := newChatEnv(t, runner)
+	userID, _, token := e.newUser(t)
+
+	rec := e.do(t, token, http.MethodPost, "/v1/rest/chat/confirm",
+		`{"token":"tok-1","args_hash":"hash-1"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("confirm = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if runner.confirmUserID != userID {
+		t.Errorf("the confirmed tool ran under user %q, want the session's user %q",
+			runner.confirmUserID, userID)
+	}
+	if len(runner.confirmScopes) != 1 || runner.confirmScopes[0] != dbstore.ScopeReadWrite {
+		t.Errorf("the confirmed tool ran with scopes %v, want exactly [%s] — the write is granted "+
+			"for this bound proposal and nowhere else", runner.confirmScopes, dbstore.ScopeReadWrite)
+	}
+	// And the wire carried exactly what the client sent: no substituted token.
+	if len(runner.confirmCalls) != 1 || runner.confirmCalls[0] != "tok-1|hash-1" {
+		t.Errorf("the runner was asked to execute %v, want exactly [tok-1|hash-1]", runner.confirmCalls)
+	}
+}
+
+// TestChatConfirmEndpointMapsStaleTokensTo409 pins the UI contract: a token that
+// is spent or expired needs the CARD REPLACED, which the page tells the user by
+// asking them to have the assistant prepare it again. A 400 would read as a bad
+// request and give them nothing to do.
+func TestChatConfirmEndpointMapsStaleTokensTo409(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"consumed", dbstore.ErrChatProposalConsumed, http.StatusConflict},
+		{"expired", dbstore.ErrChatProposalExpired, http.StatusConflict},
+		{"args changed", chat.ErrProposalArgsChanged, http.StatusConflict},
+		// Not this caller's token: the SAME answer as a token that never existed,
+		// so the endpoint cannot be used to probe for other people's proposals.
+		{"not found", dbstore.ErrChatProposalNotFound, http.StatusNotFound},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			runner := &recordingRunner{ready: true, confirmErr: c.err}
+			e := newChatEnv(t, runner)
+			_, _, token := e.newUser(t)
+			rec := e.do(t, token, http.MethodPost, "/v1/rest/chat/confirm",
+				`{"token":"tok-x","args_hash":"hash-x"}`)
+			if rec.Code != c.want {
+				t.Fatalf("confirm with %v = %d, want %d (body %s)", c.err, rec.Code, c.want, rec.Body.String())
+			}
+			// Nothing internal is echoed back to the browser.
+			if strings.Contains(rec.Body.String(), "pgx") || strings.Contains(rec.Body.String(), "SQLSTATE") {
+				t.Errorf("the refusal leaks a database detail: %s", rec.Body.String())
+			}
+		})
+	}
+}
+
+// TestChatCancelEndpointSpendsTheProposalServerSide pins that the Cancel button
+// is a real action: the token is killed on the server, not merely hidden in the
+// browser. A card the user believes they declined must not remain confirmable.
+func TestChatCancelEndpointSpendsTheProposalServerSide(t *testing.T) {
+	runner := &recordingRunner{ready: true}
+	e := newChatEnv(t, runner)
+	userID, _, token := e.newUser(t)
+
+	// No session → refused, and the runner is not consulted.
+	rec := e.do(t, "", http.MethodPost, "/v1/rest/chat/cancel", `{"token":"tok-c"}`)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("cancel without a session = %d, want 401 (body %s)", rec.Code, rec.Body.String())
+	}
+	// No token → refused.
+	rec = e.do(t, token, http.MethodPost, "/v1/rest/chat/cancel", `{}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("cancel with no token = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+	}
+	if len(runner.cancelCalls) != 0 {
+		t.Fatalf("the runner was asked to cancel without a valid request: %v", runner.cancelCalls)
+	}
+
+	// A real cancel reaches the runner, for this user and this token.
+	rec = e.do(t, token, http.MethodPost, "/v1/rest/chat/cancel", `{"token":"tok-c"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("cancel = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if len(runner.cancelCalls) != 1 || runner.cancelCalls[0] != userID+"|tok-c" {
+		t.Fatalf("the runner cancelled %v, want exactly [%s|tok-c]", runner.cancelCalls, userID)
+	}
+	if !strings.Contains(rec.Body.String(), "cancelled") {
+		t.Errorf("the cancel response does not report the outcome: %s", rec.Body.String())
+	}
+
+	// A cancel on an already-spent proposal is a 409 with copy that tells the user
+	// what to do, not a 500.
+	runner.cancelErr = dbstore.ErrChatProposalConsumed
+	rec = e.do(t, token, http.MethodPost, "/v1/rest/chat/cancel", `{"token":"tok-c"}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("cancelling a spent proposal = %d, want 409 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestChatRoutesAreRegisteredForTheProposalLane pins the two new routes. Without
+// them the UI's buttons would post into a 404 and the feature would be a card
+// nobody can answer.
+func TestChatRoutesAreRegisteredForTheProposalLane(t *testing.T) {
+	runner := &recordingRunner{ready: true}
+	e := newChatEnv(t, runner)
+	_, _, token := e.newUser(t)
+
+	for _, path := range []string{"/v1/rest/chat/confirm", "/v1/rest/chat/cancel"} {
+		// A GET on a POST-only route is 405, not 404: the route EXISTS.
+		rec := e.do(t, token, http.MethodGet, path, "")
+		if rec.Code == http.StatusNotFound {
+			t.Errorf("%s is not registered (404) — the UI's button would post into nothing", path)
+		}
+	}
+}

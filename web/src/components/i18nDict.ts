@@ -1799,8 +1799,8 @@ export const DICT = {
   // and a user who asks it to delete a form must read why it will not.
   "nav.chat": { en: "Assistant", ms: "Pembantu", zh: "助手", ta: "உதவியாளர்", ar: "المساعد" },
   "chat.title": { en: "Assistant", ms: "Pembantu", zh: "助手", ta: "உதவியாளர்", ar: "المساعد" },
-  "chat.subtitle": { en: "Ask about your own forms, sales and products. It can file feedback for you — it cannot change your account.", ms: "Tanya tentang borang, jualan dan produk anda sendiri. Ia boleh menghantar maklum balas untuk anda — ia tidak boleh mengubah akaun anda.", zh: "询问您自己的表单、销售和产品。它可以替您提交反馈——它无法更改您的账户。", ta: "உங்கள் சொந்த படிவங்கள், விற்பனை மற்றும் தயாரிப்புகள் பற்றி கேளுங்கள். உங்களுக்காக கருத்தை அனுப்ப முடியும் — ஆனால் உங்கள் கணக்கை மாற்ற முடியாது.", ar: "اسأل عن نماذجك ومبيعاتك ومنتجاتك. يمكنه إرسال ملاحظات نيابة عنك — لكنه لا يستطيع تغيير حسابك." },
-  "chat.readOnlyBadge": { en: "Read-only", ms: "Baca sahaja", zh: "只读", ta: "படிக்க மட்டும்", ar: "للقراءة فقط" },
+  "chat.subtitle": { en: "Ask about your own forms, sales and products. It can file feedback, and it can prepare a change for you to confirm — it never changes your account by itself.", ms: "Tanya tentang borang, jualan dan produk anda sendiri. Ia boleh menghantar maklum balas dan menyediakan perubahan untuk anda sahkan — ia tidak pernah mengubah akaun anda sendiri.", zh: "询问您自己的表单、销售和产品。它可以提交反馈，也可以准备变更供您确认——它绝不会自行更改您的账户。", ta: "உங்கள் சொந்த படிவங்கள், விற்பனை மற்றும் தயாரிப்புகள் பற்றி கேளுங்கள். கருத்தை அனுப்பலாம், மேலும் மாற்றத்தை உங்கள் உறுதிப்படுத்தலுக்குத் தயார் செய்யலாம் — உங்கள் கணக்கை அது தானாக மாற்றாது.", ar: "اسأل عن نماذجك ومبيعاتك ومنتجاتك. يمكنه إرسال ملاحظات، ويمكنه تحضير تغيير لتؤكده — لكنه لا يغيّر حسابك من تلقاء نفسه." },
+  "chat.readOnlyBadge": { en: "Confirms with you", ms: "Sahkan dengan anda", zh: "由您确认", ta: "நீங்கள் உறுதிப்படுத்துவீர்கள்", ar: "بتأكيدك" },
   "chat.placeholder": { en: "Ask a question about your data…", ms: "Tanya soalan tentang data anda…", zh: "就您的数据提问…", ta: "உங்கள் தரவு பற்றி கேள்வி கேளுங்கள்…", ar: "اطرح سؤالاً عن بياناتك…" },
   "chat.send": { en: "Send", ms: "Hantar", zh: "发送", ta: "அனுப்பு", ar: "إرسال" },
   "chat.thinking": { en: "Looking that up…", ms: "Sedang mencari…", zh: "正在查询…", ta: "தேடுகிறது…", ar: "جارٍ البحث…" },
@@ -1814,6 +1814,26 @@ export const DICT = {
   "chat.refused": { en: "That action is not allowed here.", ms: "Tindakan itu tidak dibenarkan di sini.", zh: "此处不允许该操作。", ta: "அந்தச் செயல் இங்கே அனுமதிக்கப்படாது.", ar: "هذا الإجراء غير مسموح به هنا." },
   "chat.docs": { en: "What the assistant can and cannot do", ms: "Apa yang pembantu boleh dan tidak boleh lakukan", zh: "助手能做什么、不能做什么", ta: "உதவியாளர் என்ன செய்ய முடியும், முடியாது", ar: "ما يستطيع المساعد فعله وما لا يستطيع" },
   "chat.limitNote": { en: "Up to {n} messages an hour. This is a limit, not a judgement — it keeps the feature affordable for everyone.", ms: "Sehingga {n} mesej sejam. Ini had, bukan penilaian — ia menjaga kos ciri ini untuk semua orang.", zh: "每小时最多 {n} 条消息。这是限额，不是评判——它让这项功能对所有人都可负担。", ta: "மணிக்கு அதிகபட்சம் {n} செய்திகள். இது ஒரு வரம்பு, தீர்ப்பு அல்ல — அனைவருக்கும் இந்த அம்சம் மலிவாக இருக்க இது உதவுகிறது.", ar: "{n} رسالة في الساعة كحد أقصى. هذا حد وليس حكمًا — فهو يبقي هذه الميزة في متناول الجميع." },
+  // Proposal confirmation (phase 2). The card is a DECISION, so the copy has to
+  // say plainly that nothing has happened yet: a user who believes the change was
+  // already made would not read the card at all.
+  "chat.proposalBadge": { en: "Needs your confirmation", ms: "Perlu pengesahan anda", zh: "需要您确认", ta: "உங்கள் உறுதிப்படுத்தல் தேவை", ar: "يحتاج تأكيدك" },
+  "chat.proposalBadgeDone": { en: "Confirmed", ms: "Disahkan", zh: "已确认", ta: "உறுதிப்படுத்தப்பட்டது", ar: "تم التأكيد" },
+  "chat.proposalBadgeCancelled": { en: "Cancelled — nothing changed", ms: "Dibatalkan — tiada apa-apa diubah", zh: "已取消 — 未作更改", ta: "ரத்து — எதுவும் மாறவில்லை", ar: "أُلغي — لم يتغير شيء" },
+  "chat.proposalBadgeStale": { en: "Expired — nothing changed", ms: "Luput — tiada apa-apa diubah", zh: "已过期 — 未作更改", ta: "காலாவதி — எதுவும் மாறவில்லை", ar: "انتهت الصلاحية — لم يتغير شيء" },
+  "chat.proposalBadgeFailed": { en: "Did not go through", ms: "Tidak berjaya", zh: "未能完成", ta: "நடைபெறவில்லை", ar: "لم يكتمل" },
+  "chat.confirm": { en: "Confirm", ms: "Sahkan", zh: "确认", ta: "உறுதிப்படுத்து", ar: "تأكيد" },
+  "chat.cancel": { en: "Cancel", ms: "Batal", zh: "取消", ta: "ரத்து", ar: "إلغاء" },
+  "chat.confirmHint": { en: "Nothing has changed yet.", ms: "Belum ada apa-apa yang berubah.", zh: "目前尚未发生任何更改。", ta: "இதுவரை எதுவும் மாறவில்லை.", ar: "لم يتغير شيء بعد." },
+  "chat.confirming": { en: "Applying the change…", ms: "Sedang melaksanakan perubahan…", zh: "正在应用更改…", ta: "மாற்றம் பயன்படுத்தப்படுகிறது…", ar: "جارٍ تطبيق التغيير…" },
+  "chat.cancelling": { en: "Discarding the proposal…", ms: "Sedang membuang cadangan…", zh: "正在丢弃该提议…", ta: "முன்மொழிவு நீக்கப்படுகிறது…", ar: "جارٍ تجاهل المقترح…" },
+  "chat.confirmed": { en: "Done — the change has been applied.", ms: "Selesai — perubahan telah dilaksanakan.", zh: "完成——更改已生效。", ta: "முடிந்தது — மாற்றம் பயன்படுத்தப்பட்டது.", ar: "تم — طُبِّق التغيير." },
+  "chat.cancelled": { en: "Cancelled — nothing was changed.", ms: "Dibatalkan — tiada apa-apa yang diubah.", zh: "已取消——未做任何更改。", ta: "ரத்து செய்யப்பட்டது — எதுவும் மாற்றப்படவில்லை.", ar: "أُلغي — لم يتغير شيء." },
+  "chat.proposalStale": { en: "This proposal has expired or was already used. Ask the assistant to prepare it again.", ms: "Cadangan ini telah luput atau sudah digunakan. Minta pembantu menyediakannya semula.", zh: "该提议已过期或已被使用。请让助手重新准备。", ta: "இந்த முன்மொழிவு காலாவதியானது அல்லது ஏற்கனவே பயன்படுத்தப்பட்டது. உதவியாளரை மீண்டும் தயார் செய்யச் சொல்லுங்கள்.", ar: "انتهت صلاحية هذا المقترح أو استُخدم سابقًا. اطلب من المساعد تحضيره من جديد." },
+  "chat.cancelStale": { en: "That proposal is already settled — nothing to cancel.", ms: "Cadangan itu sudah selesai — tiada apa untuk dibatalkan.", zh: "该提议已结案——无可取消。", ta: "அந்த முன்மொழிவு ஏற்கனவே முடிந்தது — ரத்து செய்ய ஒன்றுமில்லை.", ar: "هذا المقترح محسوم بالفعل — لا شيء لإلغائه." },
+  "chat.confirmFail": { en: "The change could not be applied. Please try again.", ms: "Perubahan tidak dapat dilaksanakan. Sila cuba lagi.", zh: "无法应用该更改。请重试。", ta: "மாற்றத்தைப் பயன்படுத்த முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر تطبيق التغيير. يرجى المحاولة مرة أخرى." },
+  "chat.cancelFail": { en: "The proposal could not be cancelled. Please try again.", ms: "Cadangan tidak dapat dibatalkan. Sila cuba lagi.", zh: "无法取消该提议。请重试。", ta: "முன்மொழிவை ரத்து செய்ய முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر إلغاء المقترح. يرجى المحاولة مرة أخرى." },
+  "chat.confirmRateLimited": { en: "You have reached the confirmation limit (30 an hour). Please try again shortly.", ms: "Anda telah mencapai had pengesahan (30 sejam). Sila cuba sebentar lagi.", zh: "您已达到确认上限（每小时 30 次）。请稍后再试。", ta: "உறுதிப்படுத்தல் வரம்பை அடைந்துவிட்டீர்கள் (மணிக்கு 30). சிறிது நேரத்தில் மீண்டும் முயற்சிக்கவும்.", ar: "بلغت حد التأكيد (30 في الساعة). يرجى المحاولة بعد قليل." },
 
   // admin feedback triage
   "afb.title": { en: "Feedback triage", ms: "Triaj maklum balas", zh: "反馈分类", ta: "கருத்து வகைப்படுத்தல்", ar: "فرز الملاحظات" },

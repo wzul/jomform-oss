@@ -51,6 +51,7 @@ const DOCS_PAGE = "../app/docs/chat/page.tsx";
 // living in two languages, and a UI that asserts it while the server does not
 // enforce it is the failure this guard exists for.
 const goChat = read("../../../api/internal/chat/chat.go");
+const goChatProposal = read("../../../api/internal/chat/proposal.go");
 const goRest = read("../../../api/internal/httpapi/rest_chat.go");
 const goRestRoutes = read("../../../api/internal/httpapi/rest.go");
 const goChatTools = read("../../../api/internal/mcpsrv/chat_tools.go");
@@ -85,7 +86,7 @@ test("the server really runs the chat's tools read-only (the UI's claim is not j
     goRest.includes("sessionOwnerID"),
     "rest_chat.go no longer resolves the caller from the session — a chat belongs to a person",
   );
-  // The one write must be the feedback tool and nothing else.
+  // The in-process tools and nothing else.
   assert.match(
     goChatTools,
     /chatReadTools\s*=\s*\[\]string\{/,
@@ -93,8 +94,146 @@ test("the server really runs the chat's tools read-only (the UI's claim is not j
   );
   assert.ok(
     goChatTools.includes("ChatSubmitFeedbackTool") && goChatTools.includes("submit_feedback"),
-    "chat_tools.go no longer declares the one write (submit_feedback)",
+    "chat_tools.go no longer declares the in-process filing tool (submit_feedback)",
   );
+});
+
+test("phase 2: a write is only reachable through a human's confirmation", () => {
+  // The confirmed tool runs under a DIFFERENT scope from a message. Both facts are
+  // read from the same file so the pair cannot drift: a message read-only, a
+  // confirmation the human's write.
+  assert.match(
+    goRest,
+    /Scopes:\s*chat\.WriteScopes\(\)/,
+    "rest_chat.go no longer builds a write identity for the confirm path — either the feature " +
+      "cannot work at all, or the write scope has been moved onto the message path",
+  );
+  assert.match(
+    goChatProposal,
+    /func WriteScopes\(\)\s*\[\]string\s*\{\s*return\s*\[\]string\{dbstore\.ScopeReadWrite\}/,
+    "chat.WriteScopes no longer returns exactly the readwrite scope",
+  );
+  // The confirmation requires a token the MODEL never sees. This is the whole
+  // design: a `confirm` boolean the model wrote is not a confirmation, so the
+  // confirm input must not carry one.
+  assert.match(
+    goRest,
+    /type chatConfirmRequestIn struct\s*\{[^}]*Token\s+string\s+`json:"token"`[\s\S]{0,200}?ArgsHash\s+string\s+`json:"args_hash"`/,
+    "the confirm request no longer carries exactly {token, args_hash} — the token IS the " +
+      "authorisation, and the hash is what binds the execution to the arguments the user read",
+  );
+  assert.doesNotMatch(
+    goRest,
+    /confirm\s*(?:bool|string)[^`]*`json:"confirm"/i,
+    "the confirm request accepts a `confirm` field again — a boolean on the wire proves nothing " +
+      "about who sent it, which is exactly the MCP shape this lane must not copy",
+  );
+  // The route is session-only and its own route, so the message path cannot reach it.
+  assert.ok(
+    goRestRoutes.includes('"POST /v1/rest/chat/confirm"'),
+    "POST /v1/rest/chat/confirm is not registered — the card's Confirm button would 404",
+  );
+  assert.ok(
+    goRestRoutes.includes('"POST /v1/rest/chat/cancel"'),
+    "POST /v1/rest/chat/cancel is not registered — a Cancel that only hides the card would " +
+      "leave a live authorisation in the browser",
+  );
+  // The confirmation has its OWN per-user bucket: a confirmation costs no model
+  // call, so bounding it is about decision pace, not spend.
+  assert.ok(
+    goRest.includes("ChatConfirmLimiter") && goRest.includes("chatConfirmPerHour"),
+    "the confirmation path has no per-user limit — a script could be walked through cards as " +
+      "fast as it can post",
+  );
+});
+
+test("phase 2: the proposable set excludes the destructive classes, and says so", () => {
+  // The set itself: reversible field edits only. If this grows, the UI's promise
+  // that the assistant can only prepare a small reversible change has to be
+  // re-argued — which is what the assertion is for.
+  assert.match(
+    goChatTools,
+    /var chatProposableTools\s*=\s*\[\]string\{[\s\S]*?update_product[\s\S]*?\}/,
+    "the proposable set moved or no longer includes update_product",
+  );
+  for (const forbidden of ["delete_form", "refund_sale", "archive_product", "cancel_subscription"]) {
+    assert.ok(
+      !new RegExp(`chatProposableTools[\\s\\S]{0,900}?"${forbidden}"`).test(goChatTools),
+      `${forbidden} is in the proposable set — delete/refund/archive/cancel are phase-3 decisions ` +
+        "at the earliest, and the card is explicit that Wan must say so",
+    );
+  }
+  // And the exclusions are WRITTEN DOWN, not merely absent.
+  assert.ok(
+    /WHAT IS EXCLUDED/i.test(goChatTools),
+    "chat_tools.go no longer documents which classes are excluded — an unwritten exclusion is " +
+      "an invitation to add one back",
+  );
+});
+
+test("the page renders the proposal as a decision, not as done work", () => {
+  // The card carries the token and the hash; nothing else may authorise.
+  assert.match(
+    page,
+    /args_hash/,
+    "the page no longer sends args_hash — without it the server has nothing binding the " +
+      "execution to the arguments the user read",
+  );
+  // One decision call site, parameterised by action, hitting the two routes.
+  assert.match(
+    page,
+    /"\/api\/rest\/chat\/confirm"\s*:\s*"\/api\/rest\/chat\/cancel"/,
+    "the page no longer posts a decision to the literal /api/rest/chat/{confirm,cancel} routes — " +
+      "a computed path is one the route-parity guard cannot resolve, so a typo would be a 404 " +
+      "at the moment the user has committed to a decision",
+  );
+  assert.match(
+    page,
+    /"confirm"\s*\|\s*"cancel"/,
+    "the decision call no longer distinguishes confirm from cancel",
+  );
+  // Both actions exist as buttons; a card with only Confirm is not a decision.
+  assert.match(page, /chat\.confirm/, "the card has no Confirm button");
+  assert.match(page, /chat\.cancel/, "the card has no Cancel button");
+  // The badge that says nothing has happened yet.
+  assert.match(
+    page,
+    /chat\.proposalBadge/,
+    "the card carries no 'needs your confirmation' badge — a user who believes the change was " +
+      "already made will not read the card",
+  );
+  // A spent or expired card must not keep offering the buttons: the server would
+  // answer 409 to a click the user cannot act on.
+  assert.ok(
+    page.includes('"stale"') || page.includes("proposalStale"),
+    "the page does not handle a stale (spent/expired) proposal — the user would get a bare error",
+  );
+  assert.match(
+    page,
+    /state\s*===\s*"pending"/,
+    "the buttons are no longer gated on the card's state — a settled card would be re-clickable",
+  );
+  // A settled card must stop claiming it still needs the user. Verified in a real
+  // browser against a production build: with the badge hard-coded, a CONFIRMED
+  // card still read "NEEDS YOUR CONFIRMATION" and looked like an unfinished task.
+  //
+  // Matched as the literal CALL, not as a substring: a mutation run showed that
+  // `page.includes("chat.proposalBadgeDone")` also passes for a mangled key like
+  // `chat.proposalBadgeDoneMUTANT`, i.e. it would not have caught the key being
+  // broken — only removed. The call form is the thing that has to exist.
+  for (const key of [
+    "chat.proposalBadgeDone",
+    "chat.proposalBadgeCancelled",
+    "chat.proposalBadgeStale",
+    "chat.proposalBadgeFailed",
+  ]) {
+    assert.match(
+      page,
+      new RegExp(`t\\("${key}"\\)`),
+      `the card's badge is not state-dependent (${key} is not used in a t() call) — a settled card ` +
+        `would keep saying it needs your confirmation and invite a second click the server refuses`,
+    );
+  }
 });
 
 test("the chat routes are registered, GET for availability and POST for a message", () => {
@@ -241,6 +380,18 @@ test('the inline "?" doc link points at the docs page that documents the boundar
   assert.ok(
     docs.includes("submit_feedback"),
     "the docs page does not name the MCP tool behind the one write (submit_feedback)",
+  );
+  // Phase 2: the docs page must document the confirmation lane too — how a
+  // proposal is confirmed, and that the assistant cannot confirm it itself.
+  assert.ok(
+    docs.includes("propose_write"),
+    "the docs page does not name propose_write — the phase-2 tool would be undocumented " +
+      "(AGENTS.md DOCUMENTATION PARITY step 2)",
+  );
+  assert.ok(
+    /confirm/i.test(docs),
+    "the docs page does not explain confirmation — the whole phase-2 design is that a human " +
+      "confirms and the server executes",
   );
 });
 
