@@ -7,6 +7,7 @@ import Link from "next/link";
 
 const NAV = [
   { href: "/docs", label: "Overview & features" },
+  { href: "/docs/builder", label: "The form builder" },
   { href: "/docs/customize", label: "Design → AI agent → MCP" },
   { href: "/docs/embed", label: "Embed on your site" },
   { href: "/docs/subscriptions", label: "Subscriptions & recurring billing" },

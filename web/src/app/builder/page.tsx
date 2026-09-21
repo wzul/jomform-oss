@@ -262,12 +262,54 @@ export default function Builder() {
   const [aiGenerating, setAiGenerating] = useState(false);
   const [aiMsg, setAiMsg] = useState("");
 
-  // Issue #59: mobile (<md) shows ONE section at a time via a tab bar
-  // (Add | Canvas | Settings); canvas is the default and the palette is the
-  // least important thing on a phone. Desktop ≥768px ignores this and keeps
-  // the 3-col grid.
-  type MobileTab = "add" | "canvas" | "settings";
+  // Issue #59 → #652: mobile (<md) shows ONE section at a time via a tab bar
+  // (Add | Canvas); canvas is the default and the palette is the least
+  // important thing on a phone. Desktop ≥768px ignores this and keeps the
+  // 3-col grid.
+  //
+  // The third "Settings" tab is GONE (Wan's report: tapping a field and then
+  // having to reach for Settings at the top is not friendly on a phone). The
+  // edit panel is now the CANVAS column's mobile face — it appears in place of
+  // the canvas while a block is selected, and the panel's own "← Canvas" row is
+  // the way out. A tab that could open an empty panel with no block selected
+  // was the trap this removes.
+  type MobileTab = "add" | "canvas";
   const [mobileTab, setMobileTab] = useState<MobileTab>("canvas");
+
+  // #652: whether the edit panel is open on mobile. This is deliberately NOT
+  // the same thing as `selected`: the highlight (selected) survives closing the
+  // panel and follows a newly added block, while the panel itself opens only
+  // when the user asks for it — by tapping a block card. Without the split, a
+  // block added from the Add tab would drop the user straight into a panel they
+  // did not ask for.
+  const [panelOpen, setPanelOpen] = useState(false);
+
+  // #652: which block card has its ⋯ actions menu open (null = none). One menu
+  // at a time; opening another closes the first.
+  const [menuOpen, setMenuOpen] = useState<string | null>(null);
+  // The ⋯ button that opened the menu, so Escape can hand focus back to it.
+  const menuBtn = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    if (menuOpen === null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setMenuOpen(null);
+      menuBtn.current?.focus();
+    };
+    // A pointer press outside the card's menu region closes it. Inside the
+    // region the item's own click handler runs, so a menu item is never lost to
+    // this handler.
+    const onDown = (e: MouseEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (!el || !el.closest("[data-block-menu]")) setMenuOpen(null);
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("mousedown", onDown);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("mousedown", onDown);
+    };
+  }, [menuOpen]);
 
   // Issue #61: image upload progress flag for the inspector file picker.
   const [uploading, setUploading] = useState(false);
@@ -446,7 +488,36 @@ export default function Builder() {
     setSelected(b.id);
     setDirty(true);
     // Issue #59: on mobile, after adding from the Add tab, drop the user onto
-    // the canvas so the new block is immediately visible/editable.
+    // the canvas so the new block is immediately visible. #652: the panel does
+    // NOT auto-open here — the new block is highlighted on the canvas instead,
+    // which is the behaviour that already worked and that keeps "add several
+    // fields in a row" one tap each.
+    setPanelOpen(false);
+    setMobileTab("canvas");
+  }
+
+  /* #652: opening and closing the mobile edit panel. The panel IS the canvas
+     column's mobile face — it replaces the canvas below `md` while it is open.
+     Two rules matter:
+
+       * The way IN is a tap anywhere on the block card, which is what a phone
+         user actually reaches for (the old flow selected the block silently and
+         then needed the Settings tab).
+       * The way OUT is the panel's own header row. Without it this change would
+         swap one trap (a tab at the top) for a worse one (no exit at all): the
+         old Settings tab had no back button either. */
+  function openBlockPanel(id: string) {
+    setSelected(id);
+    setMenuOpen(null);
+    setPanelOpen(true);
+    setMobileTab("canvas");
+  }
+
+  function closeBlockPanel() {
+    // Keep the block selected: after closing, the canvas keeps the highlight so
+    // the user can see which block they were editing (and tap it to return).
+    setMenuOpen(null);
+    setPanelOpen(false);
     setMobileTab("canvas");
   }
 
@@ -457,7 +528,14 @@ export default function Builder() {
 
   function removeBlock(id: string) {
     setBlocks((prev) => prev.filter((b) => b.id !== id));
-    if (selected === id) setSelected(null);
+    if (selected === id) {
+      setSelected(null);
+      // #652: the panel edits the selected block, so removing that block must
+      // close the panel — otherwise the canvas column stays hidden behind a
+      // panel with nothing left to edit.
+      setPanelOpen(false);
+    }
+    setMenuOpen(null);
     setDirty(true);
   }
 
@@ -847,6 +925,20 @@ export default function Builder() {
   }
 
   const selectedBlock = blocks.find((b) => b.id === selected);
+
+  /* #652: the panel is the canvas column's mobile face, and it exists ONLY
+     while a block is selected — that invariant is DERIVED here rather than
+     trusted at each call site. It has to be: `panelOpen` is not the only thing
+     that can change, and a cleared selection used to be enough to strand the
+     panel. Reproduced before this line existed — AI-generate on the Add tab
+     (`aiGenerate` replaces the canvas and calls `setSelected(null)`) left
+     `panelOpen` true, so tapping Canvas showed a panel reading "Select a block
+     to edit" with NO ← Canvas row (that row requires a selected block) while
+     the freshly drafted blocks stayed hidden — a trap with no exit, which is
+     exactly what this change exists to remove. Deriving it means any future
+     path that drops the selection closes the panel instead of re-creating it. */
+  const panelVisible = panelOpen && !!selectedBlock;
+
   const dragging = dragType.current !== null || dragIdx.current !== null;
 
   // Issue #61: upload an image for the selected block via the direct S3
@@ -1402,19 +1494,28 @@ export default function Builder() {
       )}
 
       {/* mobile (<md) section switcher — issue #59: one tab at a time,
-          canvas is default. Desktop keeps the 3-col grid (md:grid). */}
+          canvas is default. Desktop keeps the 3-col grid (md:grid).
+          #652: TWO tabs, not three — "Settings" is gone; editing a block is a
+          tap on the block itself, so a tab for it would be a second, emptier
+          route to the same panel. */}
       <nav className="flex border-b border-[var(--jf-border)] bg-white md:hidden">
-        {(["add", "canvas", "settings"] as MobileTab[]).map((tab) => (
+        {(["add", "canvas"] as MobileTab[]).map((tab) => (
           <button
             key={tab}
-            onClick={() => setMobileTab(tab)}
-            className={`flex-1 py-2.5 text-sm font-medium capitalize ${
+            onClick={() => {
+              // Leaving to the palette closes an open actions menu; the panel
+              // itself stays open, because the canvas tab is its home.
+              setMenuOpen(null);
+              setMobileTab(tab);
+            }}
+            aria-current={mobileTab === tab ? "true" : undefined}
+            className={`min-h-11 flex-1 py-2.5 text-sm font-medium ${
               mobileTab === tab
                 ? "border-b-2 border-[#7170ff] text-[var(--jf-primary)]"
                 : "text-[var(--jf-muted)] hover:text-[#374151]"
             }`}
           >
-            {tab === "add" ? t("bld.addBlock") : tab === "canvas" ? t("bld.canvas") : t("bld.settings")}
+            {tab === "add" ? t("bld.addBlock") : t("bld.canvas")}
           </button>
         ))}
       </nav>
@@ -1485,9 +1586,13 @@ export default function Builder() {
           })}
         </aside>
 
-        {/* ── center: canvas (drop zone) − mobile: only on the Canvas tab;
-             desktop always visible. max-w-lg on desktop, max-w-full mobile. */}
-        <section className={`p-4 md:p-6 ${mobileTab === "canvas" ? "block" : "hidden"} md:block`}>
+        {/* ── center: canvas (drop zone) − mobile: only on the Canvas tab with
+             NO block selected; desktop always visible. max-w-lg on desktop,
+             max-w-full mobile.
+             #652: on mobile the canvas and the edit panel are the same slot —
+             selecting a block swaps the canvas for the panel below, so a tap on
+             a field goes straight to its settings. */}
+        <section className={`p-4 md:p-6 ${mobileTab === "canvas" && !panelVisible ? "block" : "hidden"} md:block`}>
           <div className="mx-auto max-w-full md:max-w-lg">
             {blocks.length === 0 && (
               <div
@@ -1524,7 +1629,7 @@ export default function Builder() {
                   }}
                   onDragOver={(e) => canvasDragOver(e, i + 1)}
                   onDrop={(e) => canvasDrop(e, i + 1)}
-                  onClick={() => setSelected(b.id)}
+                  onClick={() => openBlockPanel(b.id)}
                   className={`cursor-grab rounded-lg border bg-white p-3 transition-colors active:cursor-grabbing ${
                     selected === b.id
                       ? "border-[#7170ff]/60 shadow-[0_0_0_1px_rgba(113,112,255,0.4)]"
@@ -1533,7 +1638,12 @@ export default function Builder() {
                 >
                   <div className="mb-1.5 flex items-center justify-between text-[10px] uppercase tracking-wider text-[#9ca3af]">
                     <span>{typeLabel(b.type)}</span>
-                    <span className="flex gap-1">
+                    {/* #652: four 44px buttons ate ~176px of a ~350px card.
+                        Reorder (the most frequent action) keeps its own small
+                        icon buttons; the rarer Duplicate/Remove move into one ⋯
+                        menu. Every control stops propagation so a tap on it does
+                        not open the edit panel. */}
+                    <span className="flex items-center gap-1">
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -1541,7 +1651,7 @@ export default function Builder() {
                         }}
                         disabled={!canMove(blocks, i, -1)}
                         title={t("bld.moveUp")}
-                        className="flex h-11 w-11 items-center justify-center rounded-md text-base text-[#9ca3af] hover:text-[#374151] active:bg-slate-100 disabled:opacity-30 disabled:hover:text-[#9ca3af] md:h-auto md:w-auto md:px-1 md:text-[10px]"
+                        className="flex h-8 w-8 items-center justify-center rounded-md text-base text-[#9ca3af] hover:text-[#374151] active:bg-slate-100 disabled:opacity-30 disabled:hover:text-[#9ca3af] md:h-auto md:w-auto md:px-1 md:text-[10px]"
                       >
                         ↑
                       </button>
@@ -1552,31 +1662,54 @@ export default function Builder() {
                         }}
                         disabled={!canMove(blocks, i, 1)}
                         title={t("bld.moveDown")}
-                        className="flex h-11 w-11 items-center justify-center rounded-md text-base text-[#9ca3af] hover:text-[#374151] active:bg-slate-100 disabled:opacity-30 disabled:hover:text-[#9ca3af] md:h-auto md:w-auto md:px-1 md:text-[10px]"
+                        className="flex h-8 w-8 items-center justify-center rounded-md text-base text-[#9ca3af] hover:text-[#374151] active:bg-slate-100 disabled:opacity-30 disabled:hover:text-[#9ca3af] md:h-auto md:w-auto md:px-1 md:text-[10px]"
                       >
                         ↓
                       </button>
-                      {/* Issue #173: duplicate */}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          duplicateBlock(b.id);
-                        }}
-                        title={t("bld.duplicate")}
-                        className="flex h-11 w-11 items-center justify-center rounded-md text-base text-[#9ca3af] hover:text-[#374151] active:bg-slate-100 md:h-auto md:w-auto md:px-1 md:text-[10px]"
-                      >
-                        ⧉
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          removeBlock(b.id);
-                        }}
-                        title={t("bld.removeBlock")}
-                        className="flex h-11 w-11 items-center justify-center rounded-md text-base text-[#9ca3af] hover:text-red-400 active:bg-slate-100 md:h-auto md:w-auto md:px-1 md:text-[10px]"
-                      >
-                        ✕
-                      </button>
+                      {/* Issue #173: duplicate + remove, behind one menu (#652). */}
+                      <span data-block-menu className="relative">
+                        <button
+                          type="button"
+                          ref={menuOpen === b.id ? menuBtn : undefined}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setMenuOpen(menuOpen === b.id ? null : b.id);
+                          }}
+                          aria-label={t("bld.blockMenu")}
+                          aria-haspopup="true"
+                          aria-expanded={menuOpen === b.id}
+                          title={t("bld.blockMenu")}
+                          className="flex h-11 w-11 items-center justify-center rounded-md text-base text-[#9ca3af] hover:text-[#374151] active:bg-slate-100 aria-expanded:bg-slate-100 md:h-auto md:w-auto md:px-1 md:text-[10px]"
+                        >
+                          ⋯
+                        </button>
+                        {menuOpen === b.id && (
+                          <div className="absolute right-0 top-full z-10 mt-1 w-40 rounded-md border border-[var(--jf-border)] bg-white py-1 shadow-lg">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setMenuOpen(null);
+                                duplicateBlock(b.id);
+                              }}
+                              className="flex min-h-11 w-full items-center px-3 text-left text-sm normal-case tracking-normal text-[#374151] hover:bg-slate-50"
+                            >
+                              {t("bld.duplicate")}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setMenuOpen(null);
+                                removeBlock(b.id);
+                              }}
+                              className="flex min-h-11 w-full items-center px-3 text-left text-sm normal-case tracking-normal text-red-500 hover:bg-red-50"
+                            >
+                              {t("bld.removeBlock")}
+                            </button>
+                          </div>
+                        )}
+                      </span>
                     </span>
                   </div>
                   <BlockPreview block={b} products={products} />
@@ -1601,10 +1734,44 @@ export default function Builder() {
           {tplMsg && <p className="mt-2 text-center text-xs text-[var(--jf-muted)]">{tplMsg}</p>}
         </section>
 
-        {/* ── right: inspector − mobile: only on the Settings tab; hosts the
-             existing right-aside unchanged. */}
-        <aside className={`border-l border-[var(--jf-border)] p-4 ${mobileTab === "settings" ? "block" : "hidden"} md:block`}>
-          <p className="mb-3 text-xs font-medium uppercase tracking-wider text-[#9ca3af]">{t("bld.blockSettings")}</p>
+        {/* ── right: inspector − desktop: always visible (3-col grid, unchanged);
+             mobile (#652): the canvas column's alternate face. It is shown only
+             when the Canvas tab is active AND the panel is open, so tapping a
+             block card on a phone opens this panel in place of the canvas, and
+             the panel's own header row is the way back out. */}
+        <aside className={`border-l border-[var(--jf-border)] p-4 ${mobileTab === "canvas" && panelVisible ? "block" : "hidden"} md:block`}>
+          {/* #652: the exit. The old Settings tab had no back button either, so
+              without this row the change would trade one trap (a tab at the
+              top) for a worse one (no way out at all). Mobile only — `md:` and
+              up keeps the plain three-column layout. */}
+          {panelVisible && selectedBlock && (
+            <div className="mb-3 flex items-center gap-2 md:hidden">
+              <button
+                type="button"
+                onClick={closeBlockPanel}
+                className="min-h-11 shrink-0 rounded-md border border-[var(--jf-border)] bg-white px-3 text-sm font-medium text-[#374151] hover:bg-slate-50"
+              >
+                ← {t("bld.canvas")}
+              </button>
+              <span className="min-w-0 flex-1 text-xs font-medium uppercase tracking-wider text-[#9ca3af]">
+                {typeLabel(selectedBlock.type)}
+              </span>
+            </div>
+          )}
+          <p className="mb-3 hidden text-xs font-medium uppercase tracking-wider text-[#9ca3af] md:block">{t("bld.blockSettings")}</p>
+          {/* AGENTS.md DOCUMENTATION PARITY rule 4: the inline "?" next to the
+              feature it documents. It deep-links the builder guide, which is the
+              page that carries "editing a block taps into its settings". */}
+          <a
+            href="/docs/builder"
+            target="_blank"
+            rel="noreferrer"
+            title={t("bld.builderHelp")}
+            aria-label={t("bld.builderHelp")}
+            className="mb-3 ml-1 inline-flex h-6 w-6 items-center justify-center rounded-full border border-[var(--jf-border)] text-xs text-[var(--jf-muted)] hover:bg-slate-50 md:mb-2"
+          >
+            ?
+          </a>
           {!selectedBlock && <p className="text-xs text-[#9ca3af]">{t("bld.selectBlock")}</p>}
           {selectedBlock && renderFieldSettings(selectedBlock)}
 
@@ -1712,6 +1879,7 @@ export default function Builder() {
 
 /* renders a non-interactive preview of each block type */
 function BlockPreview({ block, products }: { block: Block; products: Product[] }) {
+  const { t } = useI18n();
   const p = products.find((x) => x.id === block.productId);
   switch (block.type) {
     case "text":
@@ -1725,8 +1893,14 @@ function BlockPreview({ block, products }: { block: Block; products: Product[] }
         // eslint-disable-next-line @next/next/no-img-element
         <img src={block.src} alt="" className="max-h-40 rounded-md border border-[var(--jf-border)] object-cover" />
       ) : (
-        <div className="flex h-24 items-center justify-center rounded-md border border-dashed border-slate-300 text-xs text-[#9ca3af]">
-          Image URL →
+        // #652: this used to read "Image URL →" inside a dashed, bordered box —
+        // a shape that promised a text field or a link and delivered neither.
+        // The URL is set in the block's own settings (the panel on mobile), so
+        // the placeholder is now a flat caption naming the setting, not a
+        // control-shaped box.
+        <div className="flex h-24 flex-col items-center justify-center gap-1 rounded-md bg-slate-100 text-xs text-[#9ca3af]">
+          <span aria-hidden className="text-base">🖼</span>
+          <span>{t("bld.imageUrl")}</span>
         </div>
       );
     case "product":
@@ -1788,16 +1962,19 @@ function BlockPreview({ block, products }: { block: Block; products: Product[] }
     case "divider":
       return <hr className="border-[var(--jf-border)]" />;
     case "checkbox":
+      // #652: the fake box was a bordered 16px square — a control the merchant
+      // would try to tap. It is decoration, so it must not look tappable: flat
+      // grey fill, no border, and marked non-interactive for assistive tech.
       return (
-        <label className="flex items-center gap-2 text-sm text-[#374151]">
-          <span className="inline-block h-4 w-4 rounded border border-slate-300" /> {block.value}
-        </label>
+        <div className="flex items-center gap-2 text-sm text-[#374151]">
+          <span aria-hidden className="inline-block h-4 w-4 rounded bg-slate-300" /> {block.value}
+        </div>
       );
     case "consent":
       return (
-        <label className="flex items-center gap-2 text-sm text-[#374151]">
-          <span className="inline-block h-4 w-4 rounded border border-slate-300" /> {block.value || "Consent"}
-        </label>
+        <div className="flex items-center gap-2 text-sm text-[#374151]">
+          <span aria-hidden className="inline-block h-4 w-4 rounded bg-slate-300" /> {block.value || "Consent"}
+        </div>
       );
     case "select":
       return (
@@ -1821,9 +1998,11 @@ function BlockPreview({ block, products }: { block: Block; products: Product[] }
           </p>
           <div className="space-y-1">
             {(block.choices || []).map((c, i) => (
-              <label key={i} className="flex items-center gap-2 text-sm text-[#374151]">
-                <span className="inline-block h-4 w-4 rounded-full border border-slate-300" /> {c.label}
-              </label>
+              <div key={i} className="flex items-center gap-2 text-sm text-[#374151]">
+                {/* #652: flat grey dot — the bordered ring looked like a tappable
+                    radio button in a preview that has no controls at all. */}
+                <span aria-hidden className="inline-block h-4 w-4 rounded-full bg-slate-300" /> {c.label}
+              </div>
             ))}
           </div>
         </div>

@@ -1248,6 +1248,10 @@ export const DICT = {
   "bld.defaultQty": { en: "Default quantity", ms: "Kuantiti lalai", zh: "默认数量", ta: "இயல்புநிலை அளவு", ar: "الكمية الافتراضية" },
   "bld.perProductQty": { en: "Per-product quantity", ms: "Kuantiti setiap produk", zh: "每件商品数量", ta: "ஒவ்வொரு பொருளுக்கும் அளவு", ar: "الكمية لكل منتج" },
   "bld.duplicate": { en: "Duplicate", ms: "Duplikat", zh: "复制", ta: "நகலெடு", ar: "تكرار" },
+  // #652: the block card's ⋯ actions menu (holds Duplicate + Remove).
+  "bld.blockMenu": { en: "More actions", ms: "Tindakan lain", zh: "更多操作", ta: "மேலும் செயல்கள்", ar: "مزيد من الإجراءات" },
+  "bld.builderHelp": { en: "How the builder works", ms: "Cara pembina berfungsi", zh: "构建器使用说明", ta: "பில்டர் எவ்வாறு செயல்படுகிறது", ar: "كيف يعمل المُنشئ" },
+
   // form settings (issue #177)
   "fs.title": { en: "Form Settings", ms: "Tetapan Borang", zh: "表单设置", ta: "படிவ அமைப்புகள்", ar: "إعدادات النموذج" },
   "fs.subtitle": { en: "Everything about this form except its fields — general, confirmation, restrictions, notifications and the per-form CHIP feed.", ms: "Semua tentang borang ini kecuali medannya — umum, pengesahan, sekatan, notifikasi dan feed CHIP per-borang.", zh: "除字段外的所有表单设置 — 常规、确认、限制、通知和每表单 CHIP 配置。", ta: "புலங்கள் தவிர இந்த படிவத்தைப் பற்றிய அனைத்தும் — பொது, உறுதிப்படுத்தல், கட்டுப்பாடுகள், அறிவிப்புகள் மற்றும் ஒவ்வொரு படிவ CHIP ஃபீட்.", ar: "كل ما يخص هذا النموذج عدا حقوله — عام، تأكيد، قيود، إشعارات وخلاصة CHIP لكل نموذج." },

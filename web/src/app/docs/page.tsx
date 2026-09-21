@@ -11,7 +11,7 @@ export const metadata: Metadata = {
 const FEATURES: { title: string; body: string; slug?: string }[] = [
   {
     title: "Order forms",
-    body: "Build beautiful order forms with a drag-and-drop builder. Add fields (name, email, phone, textarea, number, select, radio, checkbox, date, time, website, address, consent, hidden, list, repeater, image-choice, captcha), attach products, and publish to your own workspace URL or a custom domain. Forms can be payment forms or response-only.",
+    body: "Build beautiful order forms with a drag-and-drop builder. Add fields (name, email, phone, textarea, number, select, radio, checkbox, date, time, website, address, consent, hidden, list, repeater, image-choice, captcha), attach products, and publish to your own workspace URL or a custom domain. Forms can be payment forms or response-only. Editing is a tap on the block itself — on a phone the block's settings open in place of the canvas, with a ← Canvas row to close them (see the form builder guide).",
   },
   {
     title: "Products",

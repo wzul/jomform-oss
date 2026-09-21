@@ -58,7 +58,7 @@ Use the rotor (`Ctrl+Option+U`) to check headings, links, and form controls.
 | 1 | **Login (two-step 2FA)** | Email + password fields announced with labels; on wrong password the error is announced (`role="alert"`); the 2FA step announces the code input, the "trust this device" checkbox, and the back link; focus moves to the code input on step 2. |
 | 2 | **Login — passkey** | "Log in without password" / passkey button announced; the WebAuthn prompt is reachable and cancellable. |
 | 3 | **Login — magic link** | Email field labeled; success/invalid states announced. |
-| 4 | **Build a form** | Builder palette blocks announced with names; canvas blocks selectable; inspector fields (text, image URL, product, required checkbox, conditional logic) all labeled; move-up/down/remove buttons announced. |
+| 4 | **Build a form** | Builder palette blocks announced with names; canvas blocks selectable; the block's settings panel (text, image URL, product, required checkbox, conditional logic) labeled; the ↑/↓ move buttons and the ⋯ actions menu announced (`aria-haspopup` + `aria-expanded`), and Escape closes the menu returning focus to its ⋯ button. |
 | 5 | **Buyer pays** | Public form: product checkboxes announced with name + price; name/email/phone fields labeled; total announced; submit button announced. |
 | 6 | **Settings tabs** | Tab bar announced with `role="tab"` + `aria-selected`; each tab's content reachable; form fields labeled. |
 | 7 | **Profile tabs** | Same as settings; 2FA setup modal announced as a dialog with a label; QR image has alt text. |
@@ -115,7 +115,7 @@ must be confirmed on the target device).
 | Area | Pass criteria |
 |------|---------------|
 | **Login (two-step)** | Tab order: email → password → remember → forgot → submit → (step 2) code → trust → back. Visible focus ring on every control. |
-| **Builder** | Palette blocks, canvas blocks, inspector fields, and move/remove buttons all reachable by Tab; visible focus ring. |
+| **Builder** | Palette blocks, canvas blocks, the block settings panel, the ↑/↓ move buttons and the ⋯ actions menu all reachable by Tab; the menu opens with Enter/Space, closes with Escape and returns focus to its button; visible focus ring. |
 | **Settings tabs** | Tab bar reachable; arrow keys move between tabs (or Tab reaches each); visible focus ring. |
 | **Mobile drawer** | Opens with focus on close button; Tab trapped inside; Escape closes and returns focus. |
 | **Global** | `:focus-visible` ring (indigo outline) is applied to all interactive elements (see `globals.css`). |
