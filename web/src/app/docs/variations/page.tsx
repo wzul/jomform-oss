@@ -41,6 +41,8 @@ const SECTIONS: Section[] = [
     title: "What happens at checkout",
     body: [
       "The buyer sees the option list for each variable product and picks one. The variation's price is charged, the variation's stock is reduced, and the subscription — when the product is a subscription — is created with the cycle of the variation the buyer chose, falling back to the product's for any field the variation does not set.",
+      "The restaurant menu works the same way: a variable dish shows its options on the card with each option's own price, a sold-out option cannot be picked, and the buyer cannot add the dish to the basket until they have chosen. The card's tap adds the chosen option at that option's price, so a dish is never ordered at a price the buyer did not choose.",
+      "A product that has variations must be ordered with one. It is not possible to buy the product-level price while variations exist — not from the form, not from the menu, and not by crafting the checkout request by hand.",
       "The terms are recorded on the sale at checkout, so a later change to the product or the variation never alters an existing subscription's schedule. The same rule is applied by the recurring engine on every later charge, so a variation's charge count is honoured for the whole plan and not just the first payment.",
       "One purchase makes one subscription. A cart that mixes a subscription variation with one-time items bills the subscription on its own terms and charges the one-time items once.",
     ],

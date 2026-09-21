@@ -226,6 +226,19 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 			qty = 1
 		}
 		item := dbstore.SaleItem{ProductID: it.ProductID, Name: name, PriceSen: price, Qty: qty}
+		// A product that offers variations must be ordered WITH one: once a
+		// product is variable, the base price is not a purchasable option.
+		// The selectors on the form and the menu are the buyer's guard, not the
+		// server's — without this check a hand-made, replayed or truncated
+		// request buys the base price silently, which is exactly what the
+		// variation selectors exist to prevent.
+		if it.VariationID == "" && h.ProductVariations != nil &&
+			h.isProductRow(r.Context(), tgt.AccountID, it.ProductID) {
+			if vs, verr := h.ProductVariations.ListByProduct(r.Context(), it.ProductID); verr == nil && len(vs) > 0 {
+				writeErr(w, http.StatusBadRequest, "pilih variasi untuk "+name)
+				return
+			}
+		}
 		// Issue #560: a line item's product type decides whether this order is a
 		// subscription. The products table is the authority (same source as the
 		// price above); a pricing/add-on block is not a product row and is

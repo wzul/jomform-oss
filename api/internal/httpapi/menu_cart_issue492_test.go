@@ -100,14 +100,14 @@ func TestIssue492BasketBarSheetAndCheckoutPresent(t *testing.T) {
 func TestIssue492CheckoutScriptWiring(t *testing.T) {
 	body := renderMenu492(t, menu492Fixture(t))
 	for _, want := range []string{
-		"localStorage",                                // persists across reload
-		"'jf.menu.cart.v2.'+slug",                     // keyed by FORM slug (#497)
+		"localStorage",                        // persists across reload
+		"'jf.menu.cart.v2.'+slug",             // keyed by FORM slug (#497)
 		"fetch('/'+encodeURIComponent(slug)+'/order'", // the form's own order route (#497)
-		"product_id:it.id,quantity:it.qty",            // items[{product_id,quantity}]
-		"client:{full_name:name,email:email}",         // client{full_name,email}
-		"table_number:table||''",                      // table carried (#489)
-		"affiliate_code:aff||''",                      // affiliate carried (#444)
-		"d.checkout_url||d.next",                      // redirect to CHIP
+		"product_id:it.id,variation_id:it.vid||'',quantity:it.qty", // items[{product_id,variation_id,quantity}]
+		"client:{full_name:name,email:email}",                    // client{full_name,email}
+		"table_number:table||''",                                 // table carried (#489)
+		"affiliate_code:aff||''",                                 // affiliate carried (#444)
+		"d.checkout_url||d.next",                                 // redirect to CHIP
 		"location.href=d.checkout_url||d.next",
 		"new URLSearchParams(location.search)", // ?table=/?aff= read client-side
 		"qs.get('table')",
@@ -117,6 +117,11 @@ func TestIssue492CheckoutScriptWiring(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("checkout script missing %q", want)
 		}
+	}
+	// A menu cart line carries the variant the buyer chose, so a variable
+	// product is not silently flattened to its base price at checkout.
+	if !strings.Contains(body, "variation_id:it.vid") {
+		t.Error("checkout script does not send the chosen variation_id")
 	}
 }
 
@@ -185,6 +190,11 @@ func TestIssue492CartStringsInFiveLocales(t *testing.T) {
 		"MenuSubmitting":  func(l langStrings) string { return l.MenuSubmitting },
 		"MenuSubmitError": func(l langStrings) string { return l.MenuSubmitError },
 		"MenuRequired":    func(l langStrings) string { return l.MenuRequired },
+		// The variation selector a variable menu product renders, and the
+		// prompt a card tap raises when no variant is chosen yet.
+		"SelectVariation":      func(l langStrings) string { return l.SelectVariation },
+		"InStock":              func(l langStrings) string { return l.InStock },
+		"SelectVariationAlert": func(l langStrings) string { return l.SelectVariationAlert },
 	}
 	if len(formLangs) != 5 {
 		t.Fatalf("formLangs has %d entries, want 5", len(formLangs))

@@ -11,6 +11,42 @@ import (
 	"github.com/wzul/jomform/api/internal/dbstore"
 )
 
+// variationView is the buyer-facing shape of one product variation. It is
+// PACKAGE-scoped (not local to renderBlocks) because the restaurant menu
+// renders the same selector for a variable product (issue #665) — one shape,
+// one convention, so the form path and the menu path cannot drift apart.
+type variationView struct {
+	ID       string
+	Name     string
+	PriceSen int64
+	Stock    *int
+	SoldOut  bool
+	// Price is the display form of PriceSen ("12.50"). The menu template has
+	// no arithmetic helper of its own (issue #665), so the formatted value is
+	// carried on the view instead of being computed in the template.
+	Price string
+}
+
+// variationViews maps a product's stored variations to the buyer-facing view
+// shared by the form block renderer and the restaurant menu (issue #665). The
+// caller passes the result of ProductVariations.ListByProduct; a sold-out
+// variation (limited stock that has reached zero) is flagged so every renderer
+// disables it rather than selling it.
+func variationViews(vs []*dbstore.ProductVariation) []variationView {
+	if len(vs) == 0 {
+		return nil
+	}
+	out := make([]variationView, 0, len(vs))
+	for _, v := range vs {
+		out = append(out, variationView{
+			ID: v.ID, Name: v.Name, PriceSen: v.PriceSen, Stock: v.Stock,
+			SoldOut: v.Stock != nil && *v.Stock <= 0,
+			Price:   formatPriceSen(v.PriceSen),
+		})
+	}
+	return out
+}
+
 // renderBlocks renders a form from its builder blocks snapshot. Returns false
 // when the form has no blocks (caller falls back to legacy product layout).
 // Submit contract stays identical: POST /f/<slug>/order {client, items[]}.
@@ -63,15 +99,6 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 	// stale config snapshot. The snapshot is only the fallback for an archived
 	// or deleted product so a removed product still renders (never blanks).
 	resolver := newProductResolver(cfg.Products, h.liveProductsForForm(r.Context(), f))
-
-	// variationView is the buyer-facing shape of one product variation.
-	type variationView struct {
-		ID       string
-		Name     string
-		PriceSen int64
-		Stock    *int
-		SoldOut  bool
-	}
 
 	// choiceView is one option of a select/radio/checkbox/image-choice field,
 	// or one choice of an option/shipping pricing block (where it carries its
@@ -185,13 +212,8 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 				}
 				// Issue #153: load the product's variations for the selector.
 				if h.ProductVariations != nil {
-					if vs, verr := h.ProductVariations.ListByProduct(r.Context(), b.ProductID); verr == nil && len(vs) > 0 {
-						for _, v := range vs {
-							vb.Variations = append(vb.Variations, variationView{
-								ID: v.ID, Name: v.Name, PriceSen: v.PriceSen, Stock: v.Stock,
-								SoldOut: v.Stock != nil && *v.Stock <= 0,
-							})
-						}
+					if vs, verr := h.ProductVariations.ListByProduct(r.Context(), b.ProductID); verr == nil {
+						vb.Variations = variationViews(vs)
 					}
 				}
 			}

@@ -73,6 +73,24 @@ type menuProductView struct {
 	// AddLabel is the localised add-to-cart label (issue #492), resolved in Go
 	// for the same reason.
 	AddLabel string
+	// Issue #665: Variations are the product's variants, resolved LIVE from
+	// product_variations. A non-empty list makes the card a variable item: the
+	// buyer must choose one variant and the chosen variant's price is what is
+	// charged. This is the same shape the ordinary form block renderer uses
+	// (render_blocks.go) — one convention, not a second one.
+	Variations []variationView
+	// SelectLabel is the localised empty option of the variant selector (e.g.
+	// "Select an option"), InStockLabel the localised stock suffix, and
+	// PickLabel the localised prompt a variable item shows until the buyer
+	// chooses a variant. All three are resolved in Go because the item
+	// sub-templates receive this view as their data and cannot reach the
+	// page-level $.Ls.
+	SelectLabel  string
+	InStockLabel string
+	PickLabel    string
+	// Variable reports whether this item has a variant selector, so the cart
+	// script can require a choice instead of adding the base price.
+	Variable bool
 }
 
 // menuCategoryView is one named group of products on the menu page.
@@ -251,15 +269,19 @@ func langStringsForCode(code string) langStrings {
 // script needs are shipped as data-* attributes on #menuSheet so no template
 // action has to live inside the JS.
 var menuPageTmpl = template.Must(template.New("workspace-menu").Parse(`{{define "menuCard"}}
-<button class="card" type="button" data-id="{{.ID}}" data-name="{{.Name}}" data-desc="{{.Description}}" data-price="{{.PriceSen}}" data-add="{{.AddLabel}}" aria-label="{{.AddLabel}}: {{.Name}}">
+<div class="item">
+<button class="card" type="button" data-id="{{.ID}}" data-name="{{.Name}}" data-desc="{{.Description}}" data-price="{{.PriceSen}}" data-add="{{.AddLabel}}"{{if .Variable}} data-pick="{{.PickLabel}}"{{end}} aria-label="{{.AddLabel}}: {{.Name}}">
   {{if .CardImage}}<img class="cimg" src="{{.CardImage}}" alt="{{.Name}}" data-base="{{.ImageURL}}" loading="lazy">{{end}}
   <div class="cbody">
     <div class="cname">{{.Name}}{{if .BestSeller}}<span class="best">{{.BestLabel}}</span>{{end}}</div>
     <div class="cfoot"><span class="cprice">RM {{.Price}}</span><span class="plus" aria-hidden="true">+</span></div>
   </div>
   <span class="qtybadge" hidden></span>
-</button>{{end}}{{define "menuRow"}}
-<button class="row" type="button" data-id="{{.ID}}" data-name="{{.Name}}" data-desc="{{.Description}}" data-price="{{.PriceSen}}" data-add="{{.AddLabel}}" aria-label="{{.AddLabel}}: {{.Name}}">
+</button>
+{{if .Variations}}<div class="varwrap"><select class="v" data-id="{{.ID}}" aria-label="{{.SelectLabel}}"><option value="" selected disabled>{{.SelectLabel}}</option>{{$it := .}}{{range .Variations}}<option value="{{.ID}}" data-vname="{{.Name}}" data-price="{{.PriceSen}}"{{if .SoldOut}} disabled{{end}}>{{.Name}} — RM {{.Price}}{{if .Stock}} ({{.Stock}} {{$it.InStockLabel}}){{end}}</option>{{end}}</select><div class="varstock" data-hint="{{.PickLabel}}" hidden>{{.PickLabel}}</div></div>{{end}}
+</div>{{end}}{{define "menuRow"}}
+<div class="item">
+<button class="row" type="button" data-id="{{.ID}}" data-name="{{.Name}}" data-desc="{{.Description}}" data-price="{{.PriceSen}}" data-add="{{.AddLabel}}"{{if .Variable}} data-pick="{{.PickLabel}}"{{end}} aria-label="{{.AddLabel}}: {{.Name}}">
   <div class="rtext">
     <div class="rname">{{.Name}}{{if .BestSeller}}<span class="best">{{.BestLabel}}</span>{{end}}</div>
     {{if .Description}}<div class="rdesc">{{.Description}}</div>{{end}}
@@ -267,7 +289,9 @@ var menuPageTmpl = template.Must(template.New("workspace-menu").Parse(`{{define 
   </div>
   {{if .ThumbImage}}<img class="rthumb" src="{{.ThumbImage}}" alt="{{.Name}}" data-base="{{.ImageURL}}" loading="lazy">{{end}}
   <span class="qtybadge" hidden></span>
-</button>{{end}}{{define "menuField"}}
+</button>
+{{if .Variations}}<div class="varwrap"><select class="v" data-id="{{.ID}}" aria-label="{{.SelectLabel}}"><option value="" selected disabled>{{.SelectLabel}}</option>{{$it := .}}{{range .Variations}}<option value="{{.ID}}" data-vname="{{.Name}}" data-price="{{.PriceSen}}"{{if .SoldOut}} disabled{{end}}>{{.Name}} — RM {{.Price}}{{if .Stock}} ({{.Stock}} {{$it.InStockLabel}}){{end}}</option>{{end}}</select><div class="varstock" data-hint="{{.PickLabel}}" hidden>{{.PickLabel}}</div></div>{{end}}
+</div>{{end}}{{define "menuField"}}
   {{if eq .Type "select"}}<label>{{.Label}}{{if .Required}} {{.RequiredMark}}{{end}}
     <select name="{{.ID}}"{{if .Required}} required{{end}}>
       <option value="" selected>{{.SelectLabel}}</option>
@@ -406,6 +430,23 @@ var menuPageTmpl = template.Must(template.New("workspace-menu").Parse(`{{define 
   .plus { flex:0 0 auto; width:22px; height:22px; border-radius:50%; display:inline-flex;
           align-items:center; justify-content:center; font-size:15px; font-weight:700;
           line-height:1; color:#fff; background:{{if .Th.PrimaryColor}}{{.Th.PrimaryColor}}{{else}}#4f46e5{{end}}; }
+  /* Issue #665: variant selector. A variable item's card/row is followed by a
+     <select> (a select cannot legally live inside a <button>), so the card
+     keeps its own wrapper for the quantity badge and the selector sits under
+     it, full width. */
+  .item { position:relative; display:flex; flex-direction:column; }
+  .item .qtybadge { top:8px; }
+  .varwrap { padding:4px 2px 12px; }
+  .varwrap select { width:100%; height:40px; border:1px solid #e6e8ec; border-radius:10px;
+                    background:#fff; padding-inline:10px; font:inherit; font-size:14px;
+                    color:#17181c; }
+  .varwrap select:focus { outline:2px solid {{if .Th.PrimaryColor}}{{.Th.PrimaryColor}}{{else}}#4f46e5{{end}};
+                          outline-offset:1px; }
+  .varwrap select.missing { border-color:#dc2626; }
+  .varstock { margin-top:5px; font-size:12px; color:#dc2626; }
+  .rows .item + .item { border-top:1px solid #e9ebef; }
+  .rows .item > .row { padding-bottom:4px; }
+  .rows .item + .item > .row { border-top:0; }
   .qtybadge { position:absolute; top:8px; inset-inline-end:8px; min-width:22px; height:22px;
               padding:0 6px; border-radius:999px; display:inline-flex; align-items:center;
               justify-content:center; font-size:12px; font-weight:700; color:#fff;
@@ -730,9 +771,20 @@ document.querySelectorAll('img[data-base]').forEach(function(im){
   try{ var raw=localStorage.getItem(KEY); if(raw) cart=JSON.parse(raw)||[]; }catch(e){ cart=[]; }
   if(!Array.isArray(cart)) cart=[];
   cart=cart.filter(function(it){ return it&&it.id; });
-  for(var ci=0;ci<cart.length;ci++){ cart[ci].qty=Math.max(1,parseInt(cart[ci].qty,10)||1); cart[ci].price=Math.max(0,parseInt(cart[ci].price,10)||0); }
+  for(var ci=0;ci<cart.length;ci++){
+    cart[ci].qty=Math.max(1,parseInt(cart[ci].qty,10)||1);
+    cart[ci].price=Math.max(0,parseInt(cart[ci].price,10)||0);
+    // A basket saved before variant support (#665) has no key; backfill it
+    // from the product id so an in-progress order is never lost on reload.
+    if(!cart[ci].key) cart[ci].key=keyOf(cart[ci].id,cart[ci].vid||'');
+    if(!cart[ci].vid) cart[ci].vid='';
+  }
   function save(){ try{ localStorage.setItem(KEY,JSON.stringify(cart)); }catch(e){} }
-  function find(id){ for(var i=0;i<cart.length;i++){ if(cart[i].id===id) return cart[i]; } return null; }
+  // Issue #665: a variable item is identified by product + variation, so two
+  // sizes of one dish are two basket lines with their own prices (the ordinary
+  // form cart keys on the variation too). A simple item keeps key = product id.
+  function keyOf(id,vid){ return vid?id+'::'+vid:id; }
+  function find(id,vid){ var k=keyOf(id,vid); for(var i=0;i<cart.length;i++){ if(cart[i].key===k) return cart[i]; } return null; }
   function count(){ var c=0; for(var i=0;i<cart.length;i++){ c+=cart[i].qty; } return c; }
   function totalSen(){ var t=0; for(var i=0;i<cart.length;i++){ t+=cart[i].price*cart[i].qty; } return t; }
   function rm(sen){ return 'RM '+(Math.round(sen)/100).toFixed(2); }
@@ -759,31 +811,39 @@ document.querySelectorAll('img[data-base]').forEach(function(im){
   }
   window.jfMenuExtraFields=extraFields;
 
-  function addItem(id,name,price){
+  function addItem(id,name,price,vid,vname){
     if(!id) return;
-    var it=find(id);
-    if(it){ it.qty++; } else { cart.push({id:id,name:name,price:Math.max(0,parseInt(price,10)||0),qty:1}); }
+    vid=vid||'';
+    var it=find(id,vid);
+    if(it){ it.qty++; } else {
+      cart.push({key:keyOf(id,vid),id:id,vid:vid,vname:vname||'',name:vname?(name+' — '+vname):name,
+                 price:Math.max(0,parseInt(price,10)||0),qty:1});
+    }
     save(); render();
   }
-  function setQty(id,delta){
-    var it=find(id);
+  function setQty(key,delta){
+    var it=findByKey(key);
     if(!it) return;
     it.qty+=delta;
-    if(it.qty<1){ removeItem(id); return; }
+    if(it.qty<1){ removeItem(key); return; }
     save(); render();
   }
-  function removeItem(id){
-    cart=cart.filter(function(it){ return it.id!==id; });
+  function findByKey(key){ for(var i=0;i<cart.length;i++){ if(cart[i].key===key) return cart[i]; } return null; }
+  function removeItem(key){
+    cart=cart.filter(function(it){ return it.key!==key; });
     save(); render();
   }
   function clearCart(){ cart=[]; save(); render(); }
 
   function renderBadges(){
     document.querySelectorAll('.card[data-id],.row[data-id]').forEach(function(el){
-      var it=find(el.getAttribute('data-id'));
       var b=el.querySelector('.qtybadge');
       if(!b) return;
-      if(it&&it.qty>0){ b.textContent=String(it.qty); b.hidden=false; }
+      // A variable item's badge is the sum of its variants: the card is one
+      // product, so it shows how many of it are in the basket altogether.
+      var n=0;
+      for(var i=0;i<cart.length;i++){ if(cart[i].id===el.getAttribute('data-id')) n+=cart[i].qty; }
+      if(n>0){ b.textContent=String(n); b.hidden=false; }
       else { b.hidden=true; }
     });
   }
@@ -799,15 +859,15 @@ document.querySelectorAll('img[data-base]').forEach(function(im){
         var step=document.createElement('div'); step.className='stepper';
         var dec=document.createElement('button'); dec.type='button'; dec.textContent='−';
         dec.setAttribute('aria-label',attr('data-lbl-dec'));
-        dec.addEventListener('click',function(){ setQty(it.id,-1); });
+        dec.addEventListener('click',function(){ setQty(it.key,-1); });
         var q=document.createElement('span'); q.className='qty'; q.textContent=String(it.qty);
         var inc=document.createElement('button'); inc.type='button'; inc.textContent='+';
         inc.setAttribute('aria-label',attr('data-lbl-inc'));
-        inc.addEventListener('click',function(){ setQty(it.id,1); });
+        inc.addEventListener('click',function(){ setQty(it.key,1); });
         step.appendChild(dec); step.appendChild(q); step.appendChild(inc);
         var rmBtn=document.createElement('button'); rmBtn.type='button'; rmBtn.className='lrm';
         rmBtn.textContent=attr('data-lbl-remove');
-        rmBtn.addEventListener('click',function(){ removeItem(it.id); });
+        rmBtn.addEventListener('click',function(){ removeItem(it.key); });
         row.appendChild(text); row.appendChild(step); row.appendChild(rmBtn);
         linesEl.appendChild(row);
       })(cart[i]);
@@ -832,10 +892,69 @@ document.querySelectorAll('img[data-base]').forEach(function(im){
   });
 
   // The whole card/row is the add button (mobile-first).
+  //
+  // Issue #665: a variable item must NOT be added on the card tap alone — the
+  // buyer has to choose a variant, and the chosen variant's price is what is
+  // charged. So the tap on a variable card is a no-op that flags the selector
+  // below it (and shows its localised hint); picking an option adds, or tops up
+  // the line for that variant. A simple item behaves exactly as in #492.
+  //
+  // The selector is resolved from the TAPPED item's own container, never by a
+  // page-wide data-id lookup: the same dish can be rendered more than once (a
+  // best-seller card and its category row, or two rows in one category), and a
+  // document-wide query always answers with the FIRST one — so the second
+  // render's tap used to flag the first item's selector, or none at all.
+  function varOf(el){
+    if(!el) return null;
+    var box=el.closest('.item')||el.parentNode;
+    return box?box.querySelector('select.v'):null;
+  }
+  function flagPick(sel){
+    if(!sel) return;
+    sel.classList.add('missing');
+    var wrap=sel.parentNode;
+    var hint=wrap?wrap.querySelector('.varstock'):null;
+    if(hint) hint.hidden=false;
+    try{ sel.focus(); }catch(e){}
+  }
+  function clearPick(sel){
+    if(!sel) return;
+    sel.classList.remove('missing');
+    var wrap=sel.parentNode;
+    var hint=wrap?wrap.querySelector('.varstock'):null;
+    if(hint) hint.hidden=true;
+  }
   document.addEventListener('click',function(e){
     var el=e.target&&e.target.closest?e.target.closest('.card[data-id],.row[data-id]'):null;
     if(!el) return;
-    addItem(el.getAttribute('data-id'),el.getAttribute('data-name'),el.getAttribute('data-price'));
+    var id=el.getAttribute('data-id');
+    var sel=varOf(el);
+    if(sel){
+      // Variable item: the card tap cannot decide a variant. If the buyer has
+      // already picked one, top up that line; otherwise prompt for the choice.
+      if(!sel.value){ flagPick(sel); return; }
+      var o=sel.options[sel.selectedIndex];
+      addItem(id,el.getAttribute('data-name'),o.getAttribute('data-price'),sel.value,o.getAttribute('data-vname'));
+      return;
+    }
+    addItem(id,el.getAttribute('data-name'),el.getAttribute('data-price'));
+  });
+  // Picking a variant adds it immediately (matching the tap-to-add feel of a
+  // simple item) and clears any pending prompt.
+  //
+  // A .varwrap resolves its OWN host. The .item wrapper is what each item is
+  // rendered in, and previousElementSibling is that same button for a menu
+  // rendered by an older build (or any HTML that lost the wrapper), so neither
+  // path can reach out and return a sibling item's product.
+  document.addEventListener('change',function(e){
+    var t=e.target;
+    if(!t||!t.classList||!t.classList.contains('v')) return;
+    var box=t.closest('.item');
+    var host=box?box.querySelector('.card[data-id],.row[data-id]'):t.previousElementSibling;
+    if(!t.value){ if(host) flagPick(t); return; }
+    clearPick(t);
+    var o=t.options[t.selectedIndex];
+    if(host) addItem(host.getAttribute('data-id'),host.getAttribute('data-name'),o.getAttribute('data-price'),t.value,o.getAttribute('data-vname'));
   });
   barBtn.addEventListener('click',openSheet);
   sheetClose.addEventListener('click',closeSheet);
@@ -870,7 +989,7 @@ document.querySelectorAll('img[data-base]').forEach(function(im){
     },extraFields());
     var body={
       client:{full_name:name,email:email},
-      items:cart.map(function(it){ return {product_id:it.id,quantity:it.qty}; }),
+      items:cart.map(function(it){ return {product_id:it.id,variation_id:it.vid||'',quantity:it.qty}; }),
       payment_method:'chip',
       table_number:table||'',
       affiliate_code:aff||'',
@@ -1012,6 +1131,11 @@ func (h *PublicHandlers) renderFormMenu(w http.ResponseWriter, r *http.Request, 
 		if label := itemLabel(items, pid); label != "" {
 			v.Name = label
 		}
+		// Issue #665: attach the product's LIVE variations so a variable item
+		// offers the same choice the ordinary form does, and the chosen
+		// variant's price/stock is what the order core applies. Resolved here
+		// (not in the template) because it needs the DB.
+		v = h.withVariations(r, v, ls)
 		return v, true
 	}
 
@@ -1265,6 +1389,30 @@ func (h *PublicHandlers) menuProductView(productID, name, description string, pr
 		BestLabel:   bestLabel,
 		AddLabel:    addLabel,
 	}
+}
+
+// withVariations returns v with its live variation list attached (issue #665).
+// The menu resolves a product from a thinner view than the form does, and the
+// difference was invisible until a merchant sold a variant: every menu order
+// fell through to the simple-product branch, so the buyer was charged the base
+// price and the variant's own stock was never decremented. The list resolved
+// here is exactly what the form block renderer reads, so both surfaces offer
+// the same choice. Prices are taken from the variation (the order core
+// re-reads and re-validates them server-side regardless).
+func (h *PublicHandlers) withVariations(r *http.Request, v menuProductView, ls langStrings) menuProductView {
+	v.SelectLabel = ls.SelectVariation
+	v.InStockLabel = ls.InStock
+	v.PickLabel = ls.SelectVariationAlert
+	if h.ProductVariations == nil || v.ID == "" {
+		return v
+	}
+	vs, err := h.ProductVariations.ListByProduct(r.Context(), v.ID)
+	if err != nil {
+		return v
+	}
+	v.Variations = variationViews(vs)
+	v.Variable = len(v.Variations) > 0
+	return v
 }
 
 // formatPriceSen renders an integer sen amount as "12.50".
