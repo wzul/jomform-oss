@@ -218,7 +218,7 @@ func TestOAuth507ServerErrorLogsUnderlyingError(t *testing.T) {
 	_, userID, accountID := newRealOAuthHandlers(t, ctx, pool, true)
 	users := &fakeOAuthUsers{byID: map[string]*dbstore.User{userID: {ID: userID, Verified: true}}}
 	o := &OAuthHandlers{
-		Store: &failingOAuthStore{OAuthStore: dbstore.NewOAuthStore(pool), err: errOAuth507Sentinel},
+		Store:    &failingOAuthStore{OAuthStore: dbstore.NewOAuthStore(pool), err: errOAuth507Sentinel},
 		Sessions: &fakeOAuthSessions{userID: userID}, Users: users,
 		Accounts: &fakeOAuthAccounts{ownerAccounts: []*dbstore.Account{{ID: accountID}}},
 		BaseURL:  "http://localhost:8080",

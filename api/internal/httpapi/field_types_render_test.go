@@ -19,30 +19,30 @@ func TestBlockFormRendersNewFieldTypes(t *testing.T) {
 	}
 	type block struct {
 		ID, Type, Value, Src string
-		ProductID           string
-		PriceSen            int64
-		Required            bool
-		HasPrice            bool
-		CondJSON            string
-		Image               string
+		ProductID            string
+		PriceSen             int64
+		Required             bool
+		HasPrice             bool
+		CondJSON             string
+		Image                string
 		// Issue #471: product image size + layout + full-size fallback URL.
-		ImgSize   string
-		ImgTop    bool
-		BaseImage string
-		Variations          []struct{}
-		Placeholder         string
-		Description         string
-		CSSClass            string
-		Style               string
-		MaxLength           int
-		DefaultValue        string
-		Min, Max            string
-		Step                string
-		Format              string
-		Pattern             string
-		RequiredMsg         string
-		Choices             []choiceView
-		HasQuantity         bool
+		ImgSize      string
+		ImgTop       bool
+		BaseImage    string
+		Variations   []struct{}
+		Placeholder  string
+		Description  string
+		CSSClass     string
+		Style        string
+		MaxLength    int
+		DefaultValue string
+		Min, Max     string
+		Step         string
+		Format       string
+		Pattern      string
+		RequiredMsg  string
+		Choices      []choiceView
+		HasQuantity  bool
 	}
 	var buf bytes.Buffer
 	err := blockTmpl.Execute(&buf, map[string]any{
@@ -80,14 +80,14 @@ func TestBlockFormRendersNewFieldTypes(t *testing.T) {
 	// Standard fields render their input types.
 	for _, want := range []string{
 		`<select name="notes" data-id="" required>`, // select
-		`type="radio"`,                   // radio
+		`type="radio"`, // radio
 		`type="number" name="notes" data-id="" min="1" max="10" step="1"`, // number
 		`type="date"`, `type="time"`, `type="url"`, // date/time/website
-		`<textarea name="notes" data-id="" rows="2">`, // address
+		`<textarea name="notes" data-id="" rows="2">`,                 // address
 		`type="checkbox" class="extra" data-id="" value="1" required`, // consent
 		`type="hidden" name="notes" data-id="" value="abc"`,           // hidden
 		`<textarea name="notes" data-id="" rows="3">`,                 // list/repeater
-		`class="section"`, // section
+		`class="section"`,    // section
 		`<div class="text">`, // html
 	} {
 		if !strings.Contains(body, want) {
@@ -178,12 +178,12 @@ func TestResponseFormRendersNewFieldTypes(t *testing.T) {
 	}
 	body := buf.String()
 	for _, want := range []string{
-		`name="f1" required`, // select
-		`name="f2"`,          // radio
-		`name="f3" min="1" max="5"`, // number
-		`name="f4"`,          // date
+		`name="f1" required`,           // select
+		`name="f2"`,                    // radio
+		`name="f3" min="1" max="5"`,    // number
+		`name="f4"`,                    // date
 		`name="f5" value="1" required`, // consent
-		`name="f6" value="x"`, // hidden
+		`name="f6" value="x"`,          // hidden
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("missing %q in rendered response form", want)

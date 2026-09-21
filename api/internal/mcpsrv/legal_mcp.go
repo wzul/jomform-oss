@@ -15,10 +15,10 @@ import (
 
 // legalPageOut is the MCP response shape for one legal page.
 type legalPageOut struct {
-	WorkspaceID  string `json:"workspace_id"`
-	PageType string `json:"page_type"`
-	Mode     string `json:"mode"`
-	Content  string `json:"content"`
+	WorkspaceID string `json:"workspace_id"`
+	PageType    string `json:"page_type"`
+	Mode        string `json:"mode"`
+	Content     string `json:"content"`
 }
 
 // validLegalPageType reports whether a page type is one of the three hosted
@@ -29,8 +29,8 @@ func validLegalPageType(t string) bool {
 
 // getLegalPageIn reads one legal page for a workspace.
 type getLegalPageIn struct {
-	WorkspaceID  string `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
-	PageType string `json:"page_type" jsonschema:"Jenis halaman: privacy|terms|refund"`
+	WorkspaceID string `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
+	PageType    string `json:"page_type" jsonschema:"Jenis halaman: privacy|terms|refund"`
 }
 
 // getLegalPage returns one legal page's content + mode for a workspace.
@@ -62,7 +62,7 @@ func (s *Server) getLegalPage(
 // generateLegalPageIn carries the merchant's business details for the prompt
 // template.
 type generateLegalPageIn struct {
-	WorkspaceID        string `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
+	WorkspaceID    string `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
 	PageType       string `json:"page_type" jsonschema:"Jenis halaman: privacy|terms|refund"`
 	BusinessName   string `json:"business_name,omitempty" jsonschema:"Nama perniagaan"`
 	RegistrationNo string `json:"registration_no,omitempty" jsonschema:"Nombor pendaftaran"`
@@ -115,10 +115,10 @@ func (s *Server) generateLegalPage(
 
 // setLegalPageIn stores a legal page's content + mode.
 type setLegalPageIn struct {
-	WorkspaceID  string `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
-	PageType string `json:"page_type" jsonschema:"Jenis halaman: privacy|terms|refund"`
-	Content  string `json:"content" jsonschema:"Kandungan halaman (teks/HTML)"`
-	Mode     string `json:"mode" jsonschema:"auto (dijana LLM) atau manual (ditulis sendiri)"`
+	WorkspaceID string `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
+	PageType    string `json:"page_type" jsonschema:"Jenis halaman: privacy|terms|refund"`
+	Content     string `json:"content" jsonschema:"Kandungan halaman (teks/HTML)"`
+	Mode        string `json:"mode" jsonschema:"auto (dijana LLM) atau manual (ditulis sendiri)"`
 }
 
 // setLegalPage stores a legal page's content + mode for a workspace.

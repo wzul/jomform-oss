@@ -95,13 +95,13 @@ var writeVerbs = map[string]bool{
 // Exact names are weaker than segments (a NEW UnSpam-shaped method would not be
 // caught), which is why this list carries the justification inline.
 var exactWriteMethods = map[string]bool{
-	"UnSpam":          true, // Sales.UnSpam / Submissions.UnSpam
-	"ReplaceAll":      true, // ProductVariations.ReplaceAll
-	"Reactivate":      true, // Subs.Reactivate
-	"UnlinkIdentity":  true, // Users.UnlinkIdentity
-	"EnsureDefault":   true, // Notifications.EnsureDefault
-	"PutObject":       true, // ObjectStore.PutObject
-	"ReserveQuota":    true, // MediaStore.ReserveQuota
+	"UnSpam":           true, // Sales.UnSpam / Submissions.UnSpam
+	"ReplaceAll":       true, // ProductVariations.ReplaceAll
+	"Reactivate":       true, // Subs.Reactivate
+	"UnlinkIdentity":   true, // Users.UnlinkIdentity
+	"EnsureDefault":    true, // Notifications.EnsureDefault
+	"PutObject":        true, // ObjectStore.PutObject
+	"ReserveQuota":     true, // MediaStore.ReserveQuota
 	"SettleQuotaBytes": true, // MediaStore.SettleQuotaBytes
 }
 

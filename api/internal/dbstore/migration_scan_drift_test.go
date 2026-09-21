@@ -47,6 +47,11 @@ var selectConsts = map[string]string{
 	"saleSelect":      "Sale",
 	"workspaceSelect": "Workspace",
 	"subSelect":       "Subscription",
+	// The trash read is a SEPARATE constant from formSelect (its filter is the
+	// opposite one), and it scans into the same Form struct, so it must satisfy
+	// the same column/field alignment. Registering it means the trash read
+	// cannot drift away from Form either — the pair moves together.
+	"trashedFormSelect": "Form",
 	// account_domains had no registered select, so a migration adding a column
 	// to it could land without the matching struct field or Scan destination —
 	// exactly how the nullable auto_cname/tls_* columns came to be scanned into
@@ -57,13 +62,14 @@ var selectConsts = map[string]string{
 
 // selectTables maps a *Select constant name to the table it selects from.
 var selectTables = map[string]string{
-	"accountSelect":   "accounts",
-	"formSelect":      "forms",
-	"productSelect":   "products",
-	"saleSelect":      "sales",
-	"workspaceSelect": "workspaces",
-	"subSelect":       "subscriptions",
-	"domainSelect":    "account_domains",
+	"accountSelect":     "accounts",
+	"formSelect":        "forms",
+	"productSelect":     "products",
+	"saleSelect":        "sales",
+	"workspaceSelect":   "workspaces",
+	"subSelect":         "subscriptions",
+	"domainSelect":      "account_domains",
+	"trashedFormSelect": "forms",
 }
 
 // selectScanFuncs maps a *Select constant to the receiver-qualified
@@ -73,13 +79,14 @@ var selectTables = map[string]string{
 // updating every one of these scan functions is caught by
 // TestSelectScanColumnAlignment. Format: "ReceiverType.Method".
 var selectScanFuncs = map[string][]string{
-	"accountSelect":   {"AccountStore.ByID", "AccountStore.ByOwner"},
-	"formSelect":      {"FormStore.scanOne"},
-	"productSelect":   {"ProductStore.ListActiveByAccount", "ProductStore.ListActiveByAccounts", "ProductStore.Get"},
-	"saleSelect":      {"scanSale"},
-	"workspaceSelect": {"scanWorkspace"},
-	"subSelect":       {"scanSub"},
-	"domainSelect":    {"DomainStore.GetDomain", "DomainStore.ListDomains"},
+	"accountSelect":     {"AccountStore.ByID", "AccountStore.ByOwner"},
+	"formSelect":        {"FormStore.scanOne"},
+	"productSelect":     {"ProductStore.ListActiveByAccount", "ProductStore.ListActiveByAccounts", "ProductStore.Get"},
+	"saleSelect":        {"scanSale"},
+	"workspaceSelect":   {"scanWorkspace"},
+	"subSelect":         {"scanSub"},
+	"domainSelect":      {"DomainStore.GetDomain", "DomainStore.ListDomains"},
+	"trashedFormSelect": {"FormStore.scanTrashed"},
 }
 
 // columnRenames maps historical column names (from older migrations) to their

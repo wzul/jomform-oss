@@ -100,7 +100,7 @@ func probeServesJomFormURL(url string, dial func(ctx context.Context, network, a
 	client := &http.Client{
 		Timeout: 10 * time.Second,
 		Transport: &http.Transport{
-			DialContext:    dial,
+			DialContext:     dial,
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // probe must reach origin before cert is trusted
 		},
 	}

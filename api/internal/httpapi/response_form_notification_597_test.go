@@ -314,11 +314,11 @@ func TestEnsureDefaultIsModeAwareAtTheStoreLevel(t *testing.T) {
 	store := dbstore.NewFormNotificationStore(pool)
 
 	cases := []struct {
-		name  string
-		slug  string
-		cfg   map[string]any
-		want  string
-		why   string
+		name string
+		slug string
+		cfg  map[string]any
+		want string
+		why  string
 	}{
 		{"response form", "ed-resp-" + acc[:8], map[string]any{"mode": "response", "blocks": []any{}},
 			dbstore.NotifyEventResponseSubmitted,

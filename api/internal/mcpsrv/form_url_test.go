@@ -148,7 +148,7 @@ func TestMCPFormURLIsServedForASignupCreatedAccount(t *testing.T) {
 		t.Fatalf("getForm: %v", err)
 	}
 	if detail.URL == "" {
-		t.Errorf("get_form returned an empty url for a published form — Form Settings and any agent "+
+		t.Errorf("get_form returned an empty url for a published form — Form Settings and any agent " +
 			"reading one form get the same dead link the dashboard had")
 	}
 	if !strings.HasSuffix(detail.URL, "/"+published.Slug) {

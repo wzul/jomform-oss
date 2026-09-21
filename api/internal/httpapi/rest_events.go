@@ -1,11 +1,16 @@
 // REST: event-tracking read endpoints (issue #92).
 //
 // GET /v1/rest/events?account_id=&event_name=&from=&to=&page=&limit=
-//   Account-scoped, paginated audit/behaviour log for the dashboard.
+//
+//	Account-scoped, paginated audit/behaviour log for the dashboard.
+//
 // GET /v1/rest/events/count?event_name=&from=&to=
-//   Simple count for behaviour analytics.
+//
+//	Simple count for behaviour analytics.
+//
 // GET /v1/rest/events/breakdown?from=&to=
-//   Event counts grouped by event_name (behaviour analytics).
+//
+//	Event counts grouped by event_name (behaviour analytics).
 //
 // All are read-only and account-scoped via the resolved account (or the
 // ?workspace= scope). The Events store is nil in bare-mode tests → 503.

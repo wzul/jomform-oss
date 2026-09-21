@@ -7,11 +7,11 @@
 // a database that already holds rows (production has held a row since
 // 2026-09-11). These tests cover exactly that gap:
 //
-//   1. UP with legacy data: the free-text reason the SNS ingestion path used to
-//      write is mapped to a canonical code, the original text survives in
-//      `note`, and the two CHECK constraints then hold.
-//   2. DOWN: the migration reverses — index, constraints and both columns go —
-//      and it is a no-op when run against a database that never had them.
+//  1. UP with legacy data: the free-text reason the SNS ingestion path used to
+//     write is mapped to a canonical code, the original text survives in
+//     `note`, and the two CHECK constraints then hold.
+//  2. DOWN: the migration reverses — index, constraints and both columns go —
+//     and it is a no-op when run against a database that never had them.
 //
 // Skipped unless JOMFORM_TEST_DATABASE_URL is set (same convention as the rest
 // of the package).

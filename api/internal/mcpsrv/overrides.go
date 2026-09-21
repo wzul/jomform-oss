@@ -25,6 +25,21 @@ type formRefIn struct {
 	FormID string `json:"form_id" jsonschema:"ID borang"`
 }
 
+// purgeFormIn confirms a permanent form delete. The confirmation is the form's
+// SLUG, not a boolean: this cannot be undone and it takes the form's CASCADE
+// children, so the caller must name what it is destroying (the same level as
+// revoke_api_key's confirm=true).
+//
+// confirm_slug is `omitempty` on purpose. The MCP SDK turns a non-omitempty
+// field into a required JSON-schema property and REJECTS the call before the
+// handler runs, so a caller who forgot the confirmation would get a validator
+// error instead of this tool's own message naming what to type. Same shape as
+// api_key_mcp.go's Confirm.
+type purgeFormIn struct {
+	FormID      string `json:"form_id" jsonschema:"ID borang (mesti dalam tong sampah)"`
+	ConfirmSlug string `json:"confirm_slug,omitempty" jsonschema:"Slug borang itu sendiri, untuk sahkan pemadaman kekal. Salah/tiada = ditolak."`
+}
+
 type saleRefIn struct {
 	RefCode   string `json:"ref_code" jsonschema:"Kod rujukan jualan (JF-...)"`
 	AmountSen *int64 `json:"amount_sen,omitempty" jsonschema:"Optional: jumlah penuh dalam sen untuk partial capture"`

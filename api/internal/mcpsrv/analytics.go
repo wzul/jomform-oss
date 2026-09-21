@@ -13,12 +13,12 @@ type formStatsOut struct {
 	// Mode is the form's collection mode ("payment" | "response", issue #598).
 	// It is carried so an agent labels `submissions` honestly instead of
 	// reading the figure as literal submission rows for every form.
-	Mode           string  `json:"mode"`
-	Submissions    int64   `json:"submissions"`
-	PaidCount      int64   `json:"paid_count"`
-	ConfirmedCount int64   `json:"confirmed_count"`
-	FailedCount    int64   `json:"failed_count"`
-	PendingCount   int64   `json:"pending_count"`
+	Mode           string `json:"mode"`
+	Submissions    int64  `json:"submissions"`
+	PaidCount      int64  `json:"paid_count"`
+	ConfirmedCount int64  `json:"confirmed_count"`
+	FailedCount    int64  `json:"failed_count"`
+	PendingCount   int64  `json:"pending_count"`
 	// Issue #518: refundedCount + refundedRM surface refunds, and revenueRM is
 	// NET of refunds (a partial refund reduces reported revenue).
 	RefundedCount int64   `json:"refunded_count"`

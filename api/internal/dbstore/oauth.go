@@ -231,9 +231,9 @@ func (s *OAuthStore) RevokeAllByAccount(ctx context.Context, accountID string) e
 // UserToken is one connected-agent (OAuth client) the user has an active
 // token for, surfaced in the user-level Profile → MCP tab (issue #307).
 type UserToken struct {
-	ClientID string
+	ClientID   string
 	ClientName string
-	CreatedAt time.Time
+	CreatedAt  time.Time
 	LastUsedAt *time.Time
 }
 

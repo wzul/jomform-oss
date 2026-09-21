@@ -24,9 +24,9 @@ func TestConvertMinorMath(t *testing.T) {
 		ok     bool
 	}{
 		{"same currency", "MYR", "MYR", 100, 100, true},
-		{"MYR to USD", "MYR", "USD", 400, 100, true},   // 400 sen MYR = 100 sen USD
-		{"USD to MYR", "USD", "MYR", 100, 400, true},   // 100 sen USD = 400 sen MYR
-		{"USD to SGD", "USD", "SGD", 300, 400, true},   // 300*4/3 = 400
+		{"MYR to USD", "MYR", "USD", 400, 100, true}, // 400 sen MYR = 100 sen USD
+		{"USD to MYR", "USD", "MYR", 100, 400, true}, // 100 sen USD = 400 sen MYR
+		{"USD to SGD", "USD", "SGD", 300, 400, true}, // 300*4/3 = 400
 		{"unknown from", "XXX", "MYR", 100, 100, false},
 		{"unknown to", "MYR", "XXX", 100, 100, false},
 	}

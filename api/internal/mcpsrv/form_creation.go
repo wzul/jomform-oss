@@ -168,8 +168,8 @@ func validProductImageLayout(v string) bool {
 
 // registerFormFieldsIn is the input for register_form_fields.
 type registerFormFieldsIn struct {
-	FormID string              `json:"form_id" jsonschema:"ID borang"`
-	Fields []formfields.Field  `json:"fields" jsonschema:"Senarai medan input berdaftar: {field_id, type, label, required, validation?, product_id?}. Ganti semua medan sedia ada."`
+	FormID string             `json:"form_id" jsonschema:"ID borang"`
+	Fields []formfields.Field `json:"fields" jsonschema:"Senarai medan input berdaftar: {field_id, type, label, required, validation?, product_id?}. Ganti semua medan sedia ada."`
 }
 
 // registerFormFields validates and stores a form's registered input fields

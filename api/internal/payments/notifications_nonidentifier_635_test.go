@@ -61,9 +61,9 @@ func stdlibFuncsPanics(name string) (panicked bool) {
 // mutation table in the commit.
 func TestTemplateFuncNameMatchesStdlibGoodName(t *testing.T) {
 	cases := []struct {
-		name    string
-		valid   bool
-		note    string
+		name  string
+		valid bool
+		note  string
 	}{
 		{"b1", true, "the synthetic id every #597 fixture uses — must keep working"},
 		{"b_1", true, "underscore and digits inside an id are fine"},

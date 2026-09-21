@@ -9,8 +9,8 @@ import "testing"
 
 func TestValidAllowsEmptyAndHTTPSOnly(t *testing.T) {
 	for _, ok := range []string{
-		"",                  // unset — "keep the stored value"
-		"   ",               // whitespace-only is still unset
+		"",    // unset — "keep the stored value"
+		"   ", // whitespace-only is still unset
 		"https://cdn.example.com/a.png",
 		"https://jomform.com/media/u/acct/uuid.jpg",
 		"  https://cdn.example.com/a.png  ", // pasted with a stray space

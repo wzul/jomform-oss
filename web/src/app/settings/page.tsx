@@ -9,6 +9,7 @@ import { formatDateTime } from "../../lib/formatDate";
 import { workspaceQuery, workspaceScope } from "../../lib/workspace";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 import { MembersTab } from "../../components/MembersTab";
+import WorkspaceTab from "../../components/WorkspaceTab";
 import { LegalTab } from "../../components/LegalTab";
 
 // Issue #323: the CNAME target is consistent across all custom-domain copy.
@@ -46,12 +47,12 @@ type DomainStatus = { domain: string; verified: boolean } | null;
 //  issue #301: they are user-level, not per-workspace. The MCP / connected-agents
 //  tab moved to Profile too, issue #307: an OAuth agent is a user-level
 //  credential bound to the user, not to a single workspace.)
-type SettingsTab = "chip" | "domains" | "tracking" | "einvoice" | "webhooks" | "emel" | "members" | "storefront" | "legal" | "currency" | "affiliates";
+type SettingsTab = "chip" | "domains" | "tracking" | "einvoice" | "webhooks" | "emel" | "members" | "storefront" | "legal" | "currency" | "affiliates" | "workspace";
 
-const TAB_IDS: SettingsTab[] = ["chip", "domains", "tracking", "einvoice", "webhooks", "emel", "members", "storefront", "legal", "currency", "affiliates"];
+const TAB_IDS: SettingsTab[] = ["chip", "domains", "tracking", "einvoice", "webhooks", "emel", "members", "storefront", "legal", "currency", "affiliates", "workspace"];
 
 function isSettingsTab(v: string | null): v is SettingsTab {
-  return v === "chip" || v === "domains" || v === "tracking" || v === "einvoice" || v === "webhooks" || v === "emel" || v === "members" || v === "storefront" || v === "legal" || v === "currency" || v === "affiliates";
+  return v === "chip" || v === "domains" || v === "tracking" || v === "einvoice" || v === "webhooks" || v === "emel" || v === "members" || v === "storefront" || v === "legal" || v === "currency" || v === "affiliates" || v === "workspace";
 }
 
 // Restore the last active tab. Falls back to "chip".
@@ -2226,6 +2227,13 @@ export default function Settings() {
         {/* ── Members tab: workspace members management (issue #163) ── */}
         {tab === "members" && isAdmin && (
           <MembersTab workspaceId={emelWorkspaceId || activeWorkspaceId} />
+        )}
+        {/* ── Workspace tab: identity + Danger zone (delete workspace) ──
+            Owner-only inside the component (an admin member is told to leave
+            via Members instead). Gated to admin here too so a read_only member
+            never sees a write tab. */}
+        {tab === "workspace" && isAdmin && (
+          <WorkspaceTab workspaceId={emelWorkspaceId || activeWorkspaceId} />
         )}
         {/* ── Legal tab: per-workspace hosted legal pages (issue #184) ── */}
         {tab === "legal" && (

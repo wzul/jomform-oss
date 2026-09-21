@@ -230,8 +230,24 @@ func (s *Server) registerTools() {
 	}, s.setFormRestrictions)
 	addTool(s, &mcp.Tool{
 		Name:        "delete_form",
-		Description: "Soft-delete borang (pergi ke trash dashboard; slug dilepaskan). Boleh dipulihkan.",
+		Description: "Soft-delete borang (pergi ke trash dashboard; slug dilepaskan). Boleh dipulihkan — guna restore_form.",
 	}, s.deleteFormMCPSoft)
+	// Tong sampah: padam kekal + pulihkan (Wan's decision on the delete-workspace
+	// card — the bulk-delete copy promises \"can be restored later\", so the
+	// restore path has to exist; and the workspace-empty guard is only
+	// satisfiable if a trashed form can be destroyed for good).
+	addTool(s, &mcp.Tool{
+		Name:        "list_deleted_forms",
+		Description: "Senarai borang dalam TONG SAMPAH (deleted_at IS NOT NULL): id, slug, title, deleted_at, sales_count dan can_purge. Borang dengan jualan tidak boleh dipadam kekal (can_purge=false).",
+	}, s.listDeletedForms)
+	addTool(s, &mcp.Tool{
+		Name:        "restore_form",
+		Description: "Pulihkan borang dari tong sampah (deleted_at=NULL). Tiada apa-apa dimusnahkan — borang kembali dengan slug asalnya. Jika slug sudah diambil borang lain, pulihan DITOLAK (tiada penamaan semula automatik) — tukar slug borang itu dahulu.",
+	}, s.restoreFormMCP)
+	addTool(s, &mcp.Tool{
+		Name:        "purge_form",
+		Description: "Padam borang secara KEKAL dari tong sampah (submissions/notifikasi/confirmations/tetapan emel borang/webhook borang gugur bersama). AMARAN: tidak boleh dibatalkan. Wajib confirm_slug = slug borang itu. Borang yang ADA JUALAN ditolak (sales tidak pernah dimusnahkan atau dijadikan yatim). Hanya borang dalam tong sampah — padam dulu guna delete_form.",
+	}, s.purgeFormMCP)
 	addTool(s, &mcp.Tool{
 		Name:        "bulk_forms",
 		Description: "Tindakan pukal atas banyak borang sekali gus: action=publish|draft|delete dengan ids[] (maks 500).",
@@ -390,6 +406,14 @@ func (s *Server) registerTools() {
 		Name:        "set_default_workspace",
 		Description: "Set workspace lalai anda (workspace yang anda masuk terus selepas log masuk, tanpa prompt). workspace_id kosong = buang default. Workspace mesti milik anda.",
 	}, s.setDefaultWorkspace)
+	addTool(s, &mcp.Tool{
+		Name:        "delete_workspace",
+		Description: "PADAM workspace secara kekal (pemilik sahaja). TIGA syarat: (1) confirm_slug wajib sepadan dengan slug workspace; (2) anda mesti ada sekurang-kurangnya satu workspace lain — workspace terakhir tidak boleh dipadam; (3) workspace mesti KOSONG — borang (termasuk dalam tong sampah), produk, jualan, domain, webhook, kunci API aktif dan langganan aktif semuanya menyekat, dan penolakan menyenaraikan setiap kategori dengan kiraannya. Jualan tidak pernah dimusnahkan: jualan mesti diselesaikan dahulu. Akaun CHIP workspace dipadam BERSAMA (kredential tidak pernah dikongsi atau ditinggalkan yatim). Guna check_workspace_deletion dahulu untuk lihat penghalang. Tidak boleh dibatalkan.",
+	}, s.deleteWorkspaceMCP)
+	addTool(s, &mcp.Tool{
+		Name:        "check_workspace_deletion",
+		Description: "Semak sama ada satu workspace boleh dipadam (baca sahaja, tiada kesan). Pulangkan can_delete, empty, last_workspace, is_owner dan blockers[] (setiap kategori + kiraan) — takrifan 'kosong' yang SAMA yang dikuatkuasa oleh delete_workspace.",
+	}, s.checkWorkspaceDeletionMCP)
 	// Issue #181: optional profile phone number parity.
 	addTool(s, &mcp.Tool{
 		Name:        "update_profile_phone",

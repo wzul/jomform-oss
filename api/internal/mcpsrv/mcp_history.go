@@ -18,6 +18,7 @@ import (
 //     agent can operate across all of the user's workspaces, up to the user's
 //     role in each),
 //   - is recorded as an mcp.tool_call event (issue #195).
+//
 // The event carries {tool, agent, account_id, success, error} and is
 // best-effort: a nil Events store or a write error is logged, never fatal.
 func addTool[In, Out any](s *Server, t *mcp.Tool, h mcp.ToolHandlerFor[In, Out]) {

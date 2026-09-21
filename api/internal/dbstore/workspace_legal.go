@@ -28,10 +28,10 @@ var ErrLegalPageNotFound = errors.New("legal page not set")
 
 // LegalPage is one hosted legal page for a workspace.
 type LegalPage struct {
-	WorkspaceID  string `json:"workspace_id"`
-	PageType string `json:"page_type"`
-	Mode     string `json:"mode"`
-	Content  string `json:"content"`
+	WorkspaceID string `json:"workspace_id"`
+	PageType    string `json:"page_type"`
+	Mode        string `json:"mode"`
+	Content     string `json:"content"`
 }
 
 // LegalPage reads one legal page for a workspace. Returns ErrLegalPageNotFound

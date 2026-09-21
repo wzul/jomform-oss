@@ -18,23 +18,23 @@ import (
 
 // Service wires CHIP client + stores for payment operations.
 type Service struct {
-	Chip       *chip.Client
-	Accounts   *dbstore.AccountStore
-	Sales      *dbstore.SaleStore
-	Subs       *dbstore.SubscriptionStore
-	Products   *dbstore.ProductStore // reads subscription_charges for fixed billing counts
+	Chip     *chip.Client
+	Accounts *dbstore.AccountStore
+	Sales    *dbstore.SaleStore
+	Subs     *dbstore.SubscriptionStore
+	Products *dbstore.ProductStore // reads subscription_charges for fixed billing counts
 	// Issue #623: product variations, so a subscription bought as a variation
 	// resolves that variation's own cycle (period / fixed charge count) on every
 	// later charge. Nil → the product's cycle alone applies (the pre-#623
 	// behaviour), which is safe for a simple product and for bare-mode tests.
 	ProductVariations *dbstore.ProductVariationStore
-	DecryptKey []byte // ENCRYPTION_KEY — used to decrypt per-account CHIP keys
-	BaseURL    string // app public base URL for redirects/callbacks
-	Forms      FormGetter
-	Workspaces     *dbstore.WorkspaceStore
+	DecryptKey        []byte // ENCRYPTION_KEY — used to decrypt per-account CHIP keys
+	BaseURL           string // app public base URL for redirects/callbacks
+	Forms             FormGetter
+	Workspaces        *dbstore.WorkspaceStore
 	// Users resolves the merchant's email for notify_merchant (issue #107).
-	Users      *dbstore.UserStore
-	Receipts   *Receipts
+	Users    *dbstore.UserStore
+	Receipts *Receipts
 	// EmailQueue (issue #199): when non-nil, receipts + merchant notifications
 	// are enqueued and sent by a background worker instead of synchronously in
 	// the request handler. Nil (bare-mode tests) → synchronous send.

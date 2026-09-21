@@ -11,19 +11,19 @@ import (
 
 // Config holds all runtime settings for jomform-api.
 type Config struct {
-	Port          string
-	DatabaseURL   string
-	ValkeyURL     string
-	S3Endpoint    string
-	S3AccessKey   string
-	S3SecretKey   string
-	S3Bucket      string
-	S3Region      string
+	Port        string
+	DatabaseURL string
+	ValkeyURL   string
+	S3Endpoint  string
+	S3AccessKey string
+	S3SecretKey string
+	S3Bucket    string
+	S3Region    string
 	// S3PublicBase is the browser-reachable base URL for uploaded media
 	// (issue #145). It must point at the public media route (e.g.
 	// https://jomform.com/media), NOT the internal S3/MinIO endpoint. When
 	// empty, the API derives it from AppBaseURL + "/media".
-	S3PublicBase string
+	S3PublicBase  string
 	SessionSecret string
 	// EncryptionKey must decode to exactly 32 bytes (hex) — used for AES-GCM
 	// encryption of per-account CHIP secret keys at rest.

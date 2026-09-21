@@ -35,11 +35,11 @@ func TestSocialEnsureAccountForNewUser(t *testing.T) {
 	sess := authTestValkey(t)
 
 	a := &AuthHandlers{
-		Sessions: sess,
-		Users:    users,
-		Accounts: accounts,
-		Workspaces:   workspaces,
-		BaseURL:  "http://localhost:8080",
+		Sessions:   sess,
+		Users:      users,
+		Accounts:   accounts,
+		Workspaces: workspaces,
+		BaseURL:    "http://localhost:8080",
 	}
 
 	// Simulate a brand-new social signup (only a users row, like

@@ -124,6 +124,141 @@ func (s *Server) getForm(
 	return nil, out, nil
 }
 
+// ── Tong sampah (trash): list / restore / purge ──────────────────────────────
+//
+// Parity for the REST trash routes (GET /v1/rest/forms/trash, POST
+// /v1/rest/forms/{id}/restore, DELETE /v1/rest/forms/{id}/purge).
+
+// trashedFormOut is one row of the trash listing.
+type trashedFormOut struct {
+	ID    string `json:"id"`
+	Slug  string `json:"slug"`
+	Title string `json:"title"`
+	// DeletedAt is when the form entered the trash (RFC3339).
+	DeletedAt string `json:"deleted_at"`
+	// SalesCount is how many sales reference the form. Non-zero means purge
+	// refuses (409): sales.form_id is ON DELETE SET NULL, so the purge would
+	// silently orphan those sales.
+	SalesCount int64 `json:"sales_count"`
+	// CanPurge is the pre-computed answer, so a caller does not have to derive it
+	// from sales_count.
+	CanPurge bool `json:"can_purge"`
+}
+
+// listDeletedForms: trash listing across the caller's accessible accounts.
+func (s *Server) listDeletedForms(
+	ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn,
+) (*mcp.CallToolResult, *listOutput[trashedFormOut], error) {
+	if s.deps.Forms == nil {
+		return nil, nil, errors.New("forms tidak tersedia")
+	}
+	accs, err := s.accountScopes(ctx, false)
+	if err != nil {
+		return nil, nil, err
+	}
+	out := make([]trashedFormOut, 0)
+	for _, acc := range accs {
+		forms, err := s.deps.Forms.ListTrashed(ctx, acc)
+		if err != nil {
+			return nil, nil, err
+		}
+		if len(forms) == 0 {
+			continue
+		}
+		counts, err := s.deps.Forms.SalesCountsByForm(ctx, acc)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, f := range forms {
+			n := counts[f.ID]
+			row := trashedFormOut{
+				ID: f.ID, Slug: f.Slug, Title: f.Title,
+				SalesCount: n, CanPurge: n == 0,
+			}
+			if f.DeletedAt != nil {
+				row.DeletedAt = f.DeletedAt.UTC().Format(time.RFC3339)
+			}
+			out = append(out, row)
+		}
+	}
+	return nil, newListOut(out), nil
+}
+
+// restoreFormMCP brings one trashed form back. No confirmation: it destroys
+// nothing, and trashing it again undoes it.
+//
+// The slug-collision refusal is surfaced as data, not a silent rename: the
+// per-workspace unique index covers live rows only, so a new form may have taken
+// the slug while this one sat in the trash. Restoring would violate the index
+// (SQLSTATE 23505 → dbstore.ErrFormSlugTaken), and renaming behind the caller's
+// back would silently move a public URL they were told about.
+func (s *Server) restoreFormMCP(
+	ctx context.Context, _ *mcp.CallToolRequest, in formRefIn,
+) (*mcp.CallToolResult, map[string]any, error) {
+	acc, err := s.requireTrashedFormWrite(ctx, in.FormID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := s.deps.Forms.Restore(ctx, acc, in.FormID); err != nil {
+		if errors.Is(err, dbstore.ErrFormSlugTaken) {
+			return nil, map[string]any{
+				"status": "refused",
+				"error": "slug borang ini telah diambil borang lain semasa ia dalam tong sampah — " +
+					"tukar slug borang itu dahulu, kemudian pulihkan semula. Tiada apa-apa dinamakan semula secara automatik.",
+				"form_id": in.FormID,
+			}, nil
+		}
+		return nil, nil, err
+	}
+	return nil, map[string]any{"status": "restored", "form_id": in.FormID}, nil
+}
+
+// purgeFormMCP permanently destroys a TRASHED form.
+//
+// Two gates, because this cannot be undone:
+//
+//	confirm_slug — the caller must type the form's slug (same level as
+//	  revoke_api_key's confirm=true). A destructive, irreversible call should
+//	  require the caller to name what it is destroying.
+//	sales        — a form that has ever been sold is REFUSED, not purged.
+//	  sales.form_id is ON DELETE SET NULL, so the delete would succeed and
+//	  silently orphan every sale that references it. Sales are history.
+func (s *Server) purgeFormMCP(
+	ctx context.Context, _ *mcp.CallToolRequest, in purgeFormIn,
+) (*mcp.CallToolResult, map[string]any, error) {
+	acc, err := s.requireTrashedFormWrite(ctx, in.FormID)
+	if err != nil {
+		return nil, nil, err
+	}
+	f, err := s.deps.Forms.GetTrashed(ctx, acc, in.FormID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if strings.TrimSpace(in.ConfirmSlug) != f.Slug {
+		return nil, map[string]any{
+			"status": "refused",
+			"error": "taip slug borang untuk sahkan pemadaman kekal (borang: " + f.Slug + "). " +
+				"Pemadaman kekal tidak boleh dibatalkan.",
+			"form_id": in.FormID, "slug": f.Slug,
+		}, nil
+	}
+	if err := s.deps.Forms.Purge(ctx, acc, in.FormID); err != nil {
+		if errors.Is(err, dbstore.ErrFormHasSales) {
+			n, _ := s.deps.Forms.CountSalesByForm(ctx, acc, in.FormID)
+			return nil, map[string]any{
+				"status": "refused",
+				"error": "borang ini mempunyai jualan — sejarah jualan tidak boleh dimusnahkan " +
+					"dengan memadam borang. Ia kekal dalam tong sampah.",
+				"form_id": in.FormID, "sales_count": n,
+			}, nil
+		}
+		return nil, nil, err
+	}
+	return nil, map[string]any{
+		"status": "purged", "form_id": in.FormID, "slug": f.Slug, "title": f.Title,
+	}, nil
+}
+
 // publicHostSlugFor resolves the subdomain host an account's forms are publicly
 // served under ("", only when the account row cannot be read). Delegates to the
 // shared resolver; see WorkspaceStore.PublicHostSlugByAccount.

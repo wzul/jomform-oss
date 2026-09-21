@@ -32,7 +32,7 @@ func (s *Server) getFormOGImage(
 		return nil, nil, errors.New("borang tidak dijumpai")
 	}
 	return nil, map[string]string{
-		"form_id": f.ID,
+		"form_id":  f.ID,
 		"og_image": f.LogoURL,
 	}, nil
 }

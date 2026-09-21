@@ -132,25 +132,30 @@ var mcpParityStaleChecklistEntries = map[string]string{
 // honest.
 var mcpParityBaselineTools = []string{
 	// Account / workspace plumbing (login picker, workspace CRUD, membership).
+	//
+	// Workspace lifecycle now HAS a checklist line, so create_workspace,
+	// list_workspaces and set_default_workspace were removed. delete_workspace
+	// and check_workspace_deletion are named there too, so they are never added
+	// here. Only the plumbing tools the checklist does not track stay:
+	// get_account, the member/invite tools, and per-workspace settings.
 	"cancel_workspace_invite",
-	"create_workspace",
 	"get_account",
 	"get_workspace_settings",
 	"invite_workspace_member",
 	"list_workspace_invites",
 	"list_workspace_members",
-	"list_workspaces",
 	"remove_workspace_member",
 	"set_default_workspace",
 	"set_workspace_currency",
 	"set_workspace_settings",
 	"update_workspace_member_role",
 	// Form sub-resources and per-form settings (each dashboard tab has its own
-	// tool; the checklist tracks the form builder itself).
+	// tool; the checklist tracks the form builder itself). The trash trio
+	// (list_deleted_forms/restore_form/purge_form) and delete_form now HAVE a
+	// checklist line, so they are not listed here.
 	"bulk_forms",
 	"bulk_products",
 	"clear_form_email_overrides",
-	"delete_form",
 	"generate_form",
 	"get_form_chip_feeds",
 	"get_form_chip_mapping",

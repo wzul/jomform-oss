@@ -12,13 +12,13 @@ import (
 // under the "chip_feeds" key (same pattern as chip_mapping, issue #186), so
 // no schema migration is required.
 type ChipFeed struct {
-	ID             string            `json:"id"`
-	Name           string            `json:"name"`
-	BrandID        string            `json:"brand_id"`
-	SecretKeyEnc   string            `json:"secret_key_enc"`
-	EmailFallback  string            `json:"email_fallback"`
-	MethodWhitelist []string          `json:"method_whitelist"`
-	Condition      *ChipFeedCondition `json:"condition"`
+	ID              string             `json:"id"`
+	Name            string             `json:"name"`
+	BrandID         string             `json:"brand_id"`
+	SecretKeyEnc    string             `json:"secret_key_enc"`
+	EmailFallback   string             `json:"email_fallback"`
+	MethodWhitelist []string           `json:"method_whitelist"`
+	Condition       *ChipFeedCondition `json:"condition"`
 }
 
 // ChipFeedCondition is the conditional rule that gates a feed: it matches

@@ -52,9 +52,9 @@ func fakeJPEG(t *testing.T) []byte {
 
 func TestSniffImageTypeAllowlist(t *testing.T) {
 	cases := []struct {
-		name  string
-		data  []byte
-		want  string
+		name   string
+		data   []byte
+		want   string
 		wantOK bool
 	}{
 		{"png", tinyPNG(t), ".png", true},

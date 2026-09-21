@@ -22,6 +22,7 @@ import (
 
 // ErrBlocked is returned when a URL resolves to (or is) a disallowed address.
 var ErrBlocked = errors.New("request address is not allowed")
+
 // IsAllowedAddr reports whether ip may be fetched outbound. It rejects
 // loopback, unspecified, private (RFC1918), link-local unicast/multicast
 // (169.254.0.0/16 incl. cloud metadata 169.254.169.254), and CGNAT

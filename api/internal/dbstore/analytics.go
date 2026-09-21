@@ -35,9 +35,9 @@ type FormStats struct {
 	// "Submission(s)" for a response form, "Entries" for a payment form.
 	Submissions  int64 `json:"submissions"`
 	PaidCount    int64 `json:"paid_count"` // paid + confirmed
-	ConfirmedCnt int64  `json:"confirmed_count"`
-	FailedCount  int64  `json:"failed_count"`
-	PendingCount int64  `json:"pending_count"`
+	ConfirmedCnt int64 `json:"confirmed_count"`
+	FailedCount  int64 `json:"failed_count"`
+	PendingCount int64 `json:"pending_count"`
 	// RefundedCount is how many sales have any refunded amount (issue #518).
 	RefundedCount int64 `json:"refunded_count"`
 	// RevenueSen is the NET paid + confirmed total (total_sen - refunded_sen).
@@ -48,11 +48,11 @@ type FormStats struct {
 
 // ProductStats summarises how often a product appears in sales.
 type ProductStats struct {
-	ProductID   string `json:"product_id"`
-	Name        string `json:"name"`
-	UnitsSold   int64  `json:"units_sold"`
-	PaidUnits   int64  `json:"paid_units"`
-	RevenueSen  int64  `json:"revenue_sen"`
+	ProductID  string `json:"product_id"`
+	Name       string `json:"name"`
+	UnitsSold  int64  `json:"units_sold"`
+	PaidUnits  int64  `json:"paid_units"`
+	RevenueSen int64  `json:"revenue_sen"`
 	// PaidRevenue is the NET paid revenue for this product (issue #518): the
 	// refunded share of each line is subtracted proportionally to the sale
 	// total, so a partial refund reduces the reported revenue.

@@ -35,8 +35,8 @@ func (s *Server) getCurrencyRates(
 // ── set_workspace_currency ──────────────────────────────────────────────────────
 
 type setWorkspaceCurrencyIn struct {
-	WorkspaceID  string `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
-	Currency string `json:"currency" jsonschema:"Kod mata wang, cth MYR, USD, SGD (default MYR)"`
+	WorkspaceID string `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
+	Currency    string `json:"currency" jsonschema:"Kod mata wang, cth MYR, USD, SGD (default MYR)"`
 }
 
 // setWorkspaceCurrency sets a workspace's settlement currency. The change applies to

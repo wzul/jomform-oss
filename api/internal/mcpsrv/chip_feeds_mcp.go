@@ -13,13 +13,13 @@ import (
 )
 
 type chipFeedIn struct {
-	ID             string   `json:"id" jsonschema:"ID unik feed (cth feed_1)"`
-	Name           string   `json:"name" jsonschema:"Nama feed"`
-	BrandID        string   `json:"brand_id" jsonschema:"CHIP Brand ID untuk feed ini"`
-	SecretKey      string   `json:"secret_key" jsonschema:"CHIP Secret Key (akan dienkripsi). Kosong pada feed sedia ada = kekalkan kunci lama"`
-	EmailFallback  string   `json:"email_fallback,omitempty" jsonschema:"Fallback emel bila buyer tak bagi emel (one-time saja)"`
+	ID              string   `json:"id" jsonschema:"ID unik feed (cth feed_1)"`
+	Name            string   `json:"name" jsonschema:"Nama feed"`
+	BrandID         string   `json:"brand_id" jsonschema:"CHIP Brand ID untuk feed ini"`
+	SecretKey       string   `json:"secret_key" jsonschema:"CHIP Secret Key (akan dienkripsi). Kosong pada feed sedia ada = kekalkan kunci lama"`
+	EmailFallback   string   `json:"email_fallback,omitempty" jsonschema:"Fallback emel bila buyer tak bagi emel (one-time saja)"`
 	MethodWhitelist []string `json:"payment_method_whitelist,omitempty" jsonschema:"Senarai kaedah bayaran, kosong = semua"`
-	Condition      *struct {
+	Condition       *struct {
 		FieldID string `json:"field_id" jsonschema:"ID blok borang yang dinilai"`
 		Op      string `json:"op" jsonschema:"equals | not_equals | contains | gt | lt | not_empty"`
 		Value   string `json:"value" jsonschema:"Nilai perbandingan"`
@@ -32,13 +32,13 @@ type chipFeedsIn struct {
 }
 
 type chipFeedOut struct {
-	ID             string   `json:"id"`
-	Name           string   `json:"name"`
-	BrandID        string   `json:"brand_id"`
-	EmailFallback  string   `json:"email_fallback"`
+	ID              string   `json:"id"`
+	Name            string   `json:"name"`
+	BrandID         string   `json:"brand_id"`
+	EmailFallback   string   `json:"email_fallback"`
 	MethodWhitelist []string `json:"payment_method_whitelist"`
-	Configured     bool     `json:"configured"`
-	Condition      *struct {
+	Configured      bool     `json:"configured"`
+	Condition       *struct {
 		FieldID string `json:"field_id"`
 		Op      string `json:"op"`
 		Value   string `json:"value"`

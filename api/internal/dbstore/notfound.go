@@ -33,3 +33,14 @@ func isNoSuchRow(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "22P02"
 }
+
+// isUniqueViolation reports whether err is the driver's "that value already
+// exists" answer (SQLSTATE 23505). Callers map it to their own named error, so a
+// collision on a unique index is refused with a reason instead of surfacing as a
+// generic 500. Checked at the error level rather than by pre-checking the
+// database so the store's opinion of uniqueness stays exactly Postgres's — a
+// pre-check races with any concurrent writer.
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}

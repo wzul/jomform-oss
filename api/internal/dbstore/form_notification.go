@@ -32,10 +32,10 @@ type NotificationCondition struct {
 
 // FormNotification is one per-form email notification rule.
 type FormNotification struct {
-	ID        string `json:"id"`
-	FormID    string `json:"form_id"`
-	Name      string `json:"name"`
-	Event     string `json:"event"`
+	ID     string `json:"id"`
+	FormID string `json:"form_id"`
+	Name   string `json:"name"`
+	Event  string `json:"event"`
 	// ToEmail is the recipient: a literal address, `{admin_email}` (the
 	// merchant's account email, resolved at send time), or `{field_id}` (the
 	// submitted value of a form field, e.g. a buyer email field).

@@ -13,11 +13,11 @@ import (
 
 // PlatformTotals is the platform-wide headline counts (issue #387).
 type PlatformTotals struct {
-	Workspaces   int64 `json:"workspaces"`
-	Forms    int64 `json:"forms"`
-	Products int64 `json:"products"`
-	Sales    int64 `json:"sales"`
-	Users    int64 `json:"users"`
+	Workspaces int64 `json:"workspaces"`
+	Forms      int64 `json:"forms"`
+	Products   int64 `json:"products"`
+	Sales      int64 `json:"sales"`
+	Users      int64 `json:"users"`
 	// MediaBytes is the total non-deleted media storage across all workspaces.
 	MediaBytes int64 `json:"media_bytes"`
 }
@@ -40,11 +40,11 @@ func (s *WorkspaceStore) PlatformTotals(ctx context.Context) (PlatformTotals, er
 
 // GrowthCounts is the number of rows created within a window (issue #387).
 type GrowthCounts struct {
-	Workspaces   int64 `json:"workspaces"`
-	Forms    int64 `json:"forms"`
-	Products int64 `json:"products"`
-	Sales    int64 `json:"sales"`
-	Users    int64 `json:"users"`
+	Workspaces int64 `json:"workspaces"`
+	Forms      int64 `json:"forms"`
+	Products   int64 `json:"products"`
+	Sales      int64 `json:"sales"`
+	Users      int64 `json:"users"`
 }
 
 // GrowthSince returns how many workspaces/forms/products/sales/users were created
@@ -158,10 +158,10 @@ func (s *UserStore) RecentSignups(ctx context.Context, limit int) ([]RecentSignu
 // ActiveWorkspace is one workspace with recent activity (issue #387). A workspace is
 // "active" if it has any sale or submission within the window.
 type ActiveWorkspace struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Slug      string    `json:"slug"`
-	OwnerEmail string   `json:"owner_email"`
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	Slug         string    `json:"slug"`
+	OwnerEmail   string    `json:"owner_email"`
 	LastActivity time.Time `json:"last_activity"`
 }
 

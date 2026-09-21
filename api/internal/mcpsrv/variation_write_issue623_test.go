@@ -32,8 +32,8 @@ type issue623State struct {
 	session   *mcp.ClientSession
 }
 
-func i64p(n int64) *int64 { return &n }
-func intpMCP(n int) *int  { return &n }
+func i64p(n int64) *int64   { return &n }
+func intpMCP(n int) *int    { return &n }
 func strp(s string) *string { return &s }
 
 // issue623Fixture seeds a subscription product owned by the caller's account and

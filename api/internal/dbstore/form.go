@@ -51,6 +51,11 @@ type Form struct {
 
 	CreatedAt time.Time
 	UpdatedAt time.Time
+
+	// DeletedAt is set only by the trash reads (ListTrashed / GetTrashed). The
+	// normal reads never populate it: a nil value is how a caller tells a live
+	// form from a trashed one without a second query.
+	DeletedAt *time.Time `json:"deleted_at,omitempty"`
 }
 
 // ErrFormNotFound indicates a missing form.
@@ -62,6 +67,23 @@ var ErrFormNotFound = errors.New("form not found")
 // endpoint reads config.category and the FIRST text block, so a template
 // published without them shows up in the New-form picker as a bare title.
 var ErrTemplateGalleryMetadata = errors.New("template needs a category and a description text block")
+
+// ErrFormHasSales refuses a permanent purge of a form that was ever sold. A
+// purged form row is gone for good, and sales.form_id is ON DELETE SET NULL, so
+// the purge would not fail — it would silently detach the sale from the form it
+// records (the sale becomes an orphan pointing at nothing). History is never
+// destroyed by deleting the thing that produced it, so the purge is refused and
+// the caller must decide what to do with the sales first.
+var ErrFormHasSales = errors.New("form has sales")
+
+// ErrFormSlugTaken refuses a restore whose slug was re-claimed by another live
+// form in the same workspace. The per-workspace unique index covers live rows
+// only (forms_workspace_slug_key, WHERE deleted_at IS NULL), so a trashed form
+// releases its slug — a new form may then take it. Clearing deleted_at would
+// violate the index (SQLSTATE 23505), which without this mapping escaped as a
+// 500. Two live forms can never share a slug, so the restore is refused by name
+// rather than silently renaming the row into a URL nobody was told about.
+var ErrFormSlugTaken = errors.New("slug borang itu telah diambil borang lain")
 
 // validFormStatus reports whether status is one of the accepted form statuses
 // (draft | private | published | unlisted).
@@ -80,8 +102,13 @@ type FormStore struct{ pool *pgxpool.Pool }
 func NewFormStore(pool *pgxpool.Pool) *FormStore { return &FormStore{pool: pool} }
 
 // formSelect builds every non-trash form read: deleted forms are
-// invisible everywhere except the explicit trash query.
-const formSelect = `SELECT id, account_id, slug, title, config, theme, status, is_main, redirect_success, redirect_failure, allow_embed, logo_url, is_template, failure_message, start_at, end_at, entry_limit, pending_message, expired_message, limit_message, created_at, updated_at
+// invisible everywhere except the explicit trash query. deleted_at is part of
+// the column list because every form read scans into a Form, and the
+// migration/scan-drift guard pins a select's column count to that struct's
+// field count — so Form.DeletedAt has to be selectable here. It is always NULL
+// on these reads (the WHERE filters to live rows), which is exactly how a
+// caller tells a live form from a trashed one.
+const formSelect = `SELECT id, account_id, slug, title, config, theme, status, is_main, redirect_success, redirect_failure, allow_embed, logo_url, is_template, failure_message, start_at, end_at, entry_limit, pending_message, expired_message, limit_message, created_at, updated_at, deleted_at
 	FROM forms WHERE deleted_at IS NULL`
 
 // Create inserts a form. Nil config/theme maps are coerced to {} so a
@@ -376,7 +403,7 @@ func (s *FormStore) scanOne(row rowScanner) (*Form, error) {
 		&f.Status, &f.IsMain, &f.RedirectSuccess, &f.RedirectFailure,
 		&f.AllowEmbed, &f.LogoURL, &f.IsTemplate, &f.FailureMessage, &f.StartAt, &f.EndAt,
 		&f.EntryLimit, &f.PendingMessage, &f.ExpiredMessage, &f.LimitMessage,
-		&f.CreatedAt, &f.UpdatedAt)
+		&f.CreatedAt, &f.UpdatedAt, &f.DeletedAt)
 	return f, err
 }
 
@@ -387,14 +414,14 @@ func (s *FormStore) PublishedByAccountSlug(ctx context.Context, accountSlug, for
 	err := s.pool.QueryRow(ctx, "SELECT f.id, f.account_id, f.slug, f.title, f.config, f.theme, "+
 		"f.status, f.is_main, f.redirect_success, f.redirect_failure, f.allow_embed, f.logo_url, f.is_template, f.failure_message, "+
 		"f.start_at, f.end_at, f.entry_limit, f.pending_message, f.expired_message, f.limit_message, "+
-		"f.created_at, f.updated_at "+
+		"f.created_at, f.updated_at, f.deleted_at "+
 		"FROM forms f JOIN accounts a ON a.id = f.account_id "+
 		"WHERE a.slug = $1 AND f.slug = $2 AND f.status = 'published' AND f.deleted_at IS NULL",
 		accountSlug, formSlug).Scan(&f.ID, &f.AccountID, &f.Slug, &f.Title, &f.Config, &f.Theme,
 		&f.Status, &f.IsMain, &f.RedirectSuccess, &f.RedirectFailure,
 		&f.AllowEmbed, &f.LogoURL, &f.IsTemplate, &f.FailureMessage, &f.StartAt, &f.EndAt,
 		&f.EntryLimit, &f.PendingMessage, &f.ExpiredMessage, &f.LimitMessage,
-		&f.CreatedAt, &f.UpdatedAt)
+		&f.CreatedAt, &f.UpdatedAt, &f.DeletedAt)
 	return f, err
 }
 
@@ -624,7 +651,7 @@ func (s *FormStore) PublishedByWorkspaceSlug(ctx context.Context, workspaceSlug,
 		`SELECT f.id, f.account_id, f.slug, f.title, f.config, f.theme, f.status, f.is_main,
 		        f.redirect_success, f.redirect_failure, f.allow_embed, f.logo_url, f.is_template, f.failure_message,
 		        f.start_at, f.end_at, f.entry_limit, f.pending_message, f.expired_message, f.limit_message,
-		        f.created_at, f.updated_at
+		        f.created_at, f.updated_at, f.deleted_at
 		 FROM forms f
 		 JOIN accounts a ON a.id = f.account_id
 		 JOIN workspaces sp ON sp.id = a.workspace_id
@@ -634,7 +661,7 @@ func (s *FormStore) PublishedByWorkspaceSlug(ctx context.Context, workspaceSlug,
 		&f2.Status, &f2.IsMain, &f2.RedirectSuccess, &f2.RedirectFailure,
 		&f2.AllowEmbed, &f2.LogoURL, &f2.IsTemplate, &f2.FailureMessage, &f2.StartAt, &f2.EndAt,
 		&f2.EntryLimit, &f2.PendingMessage, &f2.ExpiredMessage, &f2.LimitMessage,
-		&f2.CreatedAt, &f2.UpdatedAt)
+		&f2.CreatedAt, &f2.UpdatedAt, &f2.DeletedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -654,7 +681,7 @@ func (s *FormStore) ByWorkspaceSlug(ctx context.Context, workspaceSlug, formSlug
 		`SELECT f.id, f.account_id, f.slug, f.title, f.config, f.theme, f.status, f.is_main,
 		        f.redirect_success, f.redirect_failure, f.allow_embed, f.logo_url, f.is_template, f.failure_message,
 		        f.start_at, f.end_at, f.entry_limit, f.pending_message, f.expired_message, f.limit_message,
-		        f.created_at, f.updated_at
+		        f.created_at, f.updated_at, f.deleted_at
 		 FROM forms f
 		 JOIN accounts a ON a.id = f.account_id
 		 JOIN workspaces sp ON sp.id = a.workspace_id
@@ -664,7 +691,7 @@ func (s *FormStore) ByWorkspaceSlug(ctx context.Context, workspaceSlug, formSlug
 		&f2.Status, &f2.IsMain, &f2.RedirectSuccess, &f2.RedirectFailure,
 		&f2.AllowEmbed, &f2.LogoURL, &f2.IsTemplate, &f2.FailureMessage, &f2.StartAt, &f2.EndAt,
 		&f2.EntryLimit, &f2.PendingMessage, &f2.ExpiredMessage, &f2.LimitMessage,
-		&f2.CreatedAt, &f2.UpdatedAt)
+		&f2.CreatedAt, &f2.UpdatedAt, &f2.DeletedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -678,14 +705,14 @@ func (s *FormStore) ByAccountSlug(ctx context.Context, accountSlug, formSlug str
 	err := s.pool.QueryRow(ctx, "SELECT f.id, f.account_id, f.slug, f.title, f.config, f.theme, "+
 		"f.status, f.is_main, f.redirect_success, f.redirect_failure, f.allow_embed, f.logo_url, f.is_template, f.failure_message, "+
 		"f.start_at, f.end_at, f.entry_limit, f.pending_message, f.expired_message, f.limit_message, "+
-		"f.created_at, f.updated_at "+
+		"f.created_at, f.updated_at, f.deleted_at "+
 		"FROM forms f JOIN accounts a ON a.id = f.account_id "+
 		"WHERE a.slug = $1 AND f.slug = $2 AND f.deleted_at IS NULL",
 		accountSlug, formSlug).Scan(&f.ID, &f.AccountID, &f.Slug, &f.Title, &f.Config, &f.Theme,
 		&f.Status, &f.IsMain, &f.RedirectSuccess, &f.RedirectFailure,
 		&f.AllowEmbed, &f.LogoURL, &f.IsTemplate, &f.FailureMessage, &f.StartAt, &f.EndAt,
 		&f.EntryLimit, &f.PendingMessage, &f.ExpiredMessage, &f.LimitMessage,
-		&f.CreatedAt, &f.UpdatedAt)
+		&f.CreatedAt, &f.UpdatedAt, &f.DeletedAt)
 	return f, err
 }
 
@@ -695,7 +722,7 @@ func (s *FormStore) ListPublishedByWorkspace(ctx context.Context, workspaceSlug 
 		`SELECT f.id, f.account_id, f.slug, f.title, f.config, f.theme, f.status, f.is_main,
 		        f.redirect_success, f.redirect_failure, f.allow_embed, f.logo_url, f.is_template, f.failure_message,
 		        f.start_at, f.end_at, f.entry_limit, f.pending_message, f.expired_message, f.limit_message,
-		        f.created_at, f.updated_at
+		        f.created_at, f.updated_at, f.deleted_at
 		 FROM forms f
 		 JOIN accounts a ON a.id = f.account_id
 		 JOIN workspaces sp ON sp.id = a.workspace_id
@@ -724,7 +751,7 @@ func (s *FormStore) ListPublishedByAccountSlug(ctx context.Context, accountSlug 
 		`SELECT f.id, f.account_id, f.slug, f.title, f.config, f.theme, f.status, f.is_main,
 		        f.redirect_success, f.redirect_failure, f.allow_embed, f.logo_url, f.is_template, f.failure_message,
 		        f.start_at, f.end_at, f.entry_limit, f.pending_message, f.expired_message, f.limit_message,
-		        f.created_at, f.updated_at
+		        f.created_at, f.updated_at, f.deleted_at
 		 FROM forms f
 		 JOIN accounts a ON a.id = f.account_id
 		 WHERE a.slug = $1 AND f.status = 'published' AND f.deleted_at IS NULL
@@ -764,11 +791,21 @@ func (s *FormStore) SoftDelete(ctx context.Context, accountID, formID string) er
 }
 
 // Restore clears deleted_at on a trashed form.
+//
+// A restore whose slug was re-claimed while the form sat in the trash is
+// refused with ErrFormSlugTaken rather than failing as an opaque 500: the
+// per-workspace unique index only covers LIVE rows, so trashing releases the
+// slug and a new form may take it, at which point clearing deleted_at violates
+// the index (SQLSTATE 23505). Nothing is renamed behind the merchant's back —
+// the caller is told which obstacle to clear.
 func (s *FormStore) Restore(ctx context.Context, accountID, formID string) error {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE forms SET deleted_at=NULL, updated_at=now()
 		 WHERE id=$2 AND account_id=$1 AND deleted_at IS NOT NULL`,
 		accountID, formID)
+	if isUniqueViolation(err) {
+		return ErrFormSlugTaken
+	}
 	if err != nil {
 		return err
 	}
@@ -778,26 +815,151 @@ func (s *FormStore) Restore(ctx context.Context, accountID, formID string) error
 	return nil
 }
 
+// Purge permanently deletes ONE trashed form (and, through the FKs already on
+// the table, its submissions, notifications, confirmations, per-form email
+// settings and form-scoped webhooks — all ON DELETE CASCADE).
+//
+// Two guards, because a purge cannot be undone:
+//
+//  1. Only a TRASHED form may be purged (`deleted_at IS NOT NULL`), so the only
+//     purge path is trash → purge and a live form cannot be destroyed by a
+//     single mistyped call. A live form is ErrFormNotFound here, exactly as an
+//     unknown id is.
+//  2. A form that has EVER received a sale is refused outright with
+//     ErrFormHasSales. `sales.form_id` is ON DELETE SET NULL, so the delete
+//     itself would succeed and silently detach every sale from the form it
+//     records. Sales are history: they are never destroyed or orphaned by the
+//     deletion of the form that produced them.
+func (s *FormStore) Purge(ctx context.Context, accountID, formID string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Lock the row so a concurrent restore cannot flip it live between the
+	// trashed check and the delete.
+	var slug string
+	if err := tx.QueryRow(ctx,
+		`SELECT slug FROM forms
+		  WHERE id=$2 AND account_id=$1 AND deleted_at IS NOT NULL
+		  FOR UPDATE`,
+		accountID, formID).Scan(&slug); isNoSuchRow(err) {
+		return ErrFormNotFound
+	} else if err != nil {
+		return err
+	}
+
+	var sales int64
+	if err := tx.QueryRow(ctx,
+		`SELECT COUNT(*) FROM sales WHERE account_id=$1 AND form_id=$2`,
+		accountID, formID).Scan(&sales); err != nil {
+		return err
+	}
+	if sales > 0 {
+		return ErrFormHasSales
+	}
+
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM forms WHERE id=$2 AND account_id=$1 AND deleted_at IS NOT NULL`,
+		accountID, formID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// CountSalesByForm reports how many sales reference a form (account-scoped).
+// Used by the purge guard so the refusal can state the number.
+func (s *FormStore) CountSalesByForm(ctx context.Context, accountID, formID string) (int64, error) {
+	var n int64
+	err := s.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM sales WHERE account_id=$1 AND form_id=$2`,
+		accountID, formID).Scan(&n)
+	return n, err
+}
+
+// trashedFormSelect builds the two trash reads (ListTrashed / GetTrashed).
+//
+// It is a SEPARATE constant from formSelect, and its filter is the OPPOSITE
+// one, on purpose: appending `deleted_at IS NOT NULL` to formSelect would make
+// that query self-contradictory and every trash read would silently return
+// nothing (the issue #98 regression class). The columns are formSelect's plus
+// deleted_at, which is what the trash UI shows and what the purge confirmation
+// needs to know.
+const trashedFormSelect = `SELECT id, account_id, slug, title, config, theme, status, is_main, redirect_success, redirect_failure, allow_embed, logo_url, is_template, failure_message, start_at, end_at, entry_limit, pending_message, expired_message, limit_message, created_at, updated_at, deleted_at
+	FROM forms WHERE deleted_at IS NOT NULL`
+
+// scanTrashed scans a trashedFormSelect row (formSelect's columns + deleted_at).
+func (s *FormStore) scanTrashed(row rowScanner) (*Form, error) {
+	f := &Form{}
+	err := row.Scan(&f.ID, &f.AccountID, &f.Slug, &f.Title, &f.Config, &f.Theme,
+		&f.Status, &f.IsMain, &f.RedirectSuccess, &f.RedirectFailure,
+		&f.AllowEmbed, &f.LogoURL, &f.IsTemplate, &f.FailureMessage, &f.StartAt, &f.EndAt,
+		&f.EntryLimit, &f.PendingMessage, &f.ExpiredMessage, &f.LimitMessage,
+		&f.CreatedAt, &f.UpdatedAt, &f.DeletedAt)
+	return f, err
+}
+
 // ListTrashed lists soft-deleted forms for an account (explicit trash read —
 // the only query in the store that may return deleted rows). It must NOT reuse
 // formSelect, which already filters `deleted_at IS NULL`; appending
 // `deleted_at IS NOT NULL` to it would make the query self-contradictory and
 // the trash list would always be empty (issue #98 regression).
 func (s *FormStore) ListTrashed(ctx context.Context, accountID string) ([]*Form, error) {
-	rows, err := s.pool.Query(ctx,
-		`SELECT id, account_id, slug, title, config, theme, status, is_main, redirect_success, redirect_failure, allow_embed, logo_url, is_template, failure_message, start_at, end_at, entry_limit, pending_message, expired_message, limit_message, created_at, updated_at
-		 FROM forms WHERE deleted_at IS NOT NULL AND account_id=$1 ORDER BY deleted_at DESC`, accountID)
+	rows, err := s.pool.Query(ctx, trashedFormSelect+` AND account_id=$1 ORDER BY deleted_at DESC`, accountID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var out []*Form
 	for rows.Next() {
-		f, serr := s.scanOne(rows)
+		f, serr := s.scanTrashed(rows)
 		if serr != nil {
 			return nil, serr
 		}
 		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// GetTrashed reads ONE trashed form, account-scoped. A live form, another
+// account's form, or an unknown id is ErrFormNotFound — so this cannot be used
+// as a side door to read or act on a live form, and it is the read the purge
+// confirmation compares its typed slug against.
+func (s *FormStore) GetTrashed(ctx context.Context, accountID, formID string) (*Form, error) {
+	f, err := s.scanTrashed(s.pool.QueryRow(ctx,
+		trashedFormSelect+` AND id=$2 AND account_id=$1`, accountID, formID))
+	if isNoSuchRow(err) {
+		return nil, ErrFormNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return f, nil
+}
+
+// SalesCountsByForm returns, for every form of an account that has at least one
+// sale, how many sales reference it — in ONE query, so the trash list can show
+// the count and decide `can_purge` per row instead of N+1 queries.
+//
+// The map is keyed by form_id and omits forms with zero sales (a missing key IS
+// zero).
+func (s *FormStore) SalesCountsByForm(ctx context.Context, accountID string) (map[string]int64, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT form_id, COUNT(*) FROM sales
+		  WHERE account_id=$1 AND form_id IS NOT NULL GROUP BY form_id`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int64{}
+	for rows.Next() {
+		var id string
+		var n int64
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, err
+		}
+		out[id] = n
 	}
 	return out, rows.Err()
 }

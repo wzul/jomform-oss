@@ -135,10 +135,10 @@ func TestReadonlyKeyIsRefusedEveryWriteAndStillReads(t *testing.T) {
 		Forms: formsFor(pool), Accounts: dbstore.NewAccountStore(pool), Keys: keys,
 		Products: dbstore.NewProductStore(pool),
 		Sales:    dbstore.NewSaleStore(pool), Subs: dbstore.NewSubscriptionStore(pool),
-		Webhooks:           dbstore.NewWebhookStore(pool),
-		Workspaces:         dbstore.NewWorkspaceStore(pool),
-		WorkspaceMembers:   dbstore.NewWorkspaceMemberStore(pool),
-		ProductVariations:  dbstore.NewProductVariationStore(pool),
+		Webhooks:          dbstore.NewWebhookStore(pool),
+		Workspaces:        dbstore.NewWorkspaceStore(pool),
+		WorkspaceMembers:  dbstore.NewWorkspaceMemberStore(pool),
+		ProductVariations: dbstore.NewProductVariationStore(pool),
 	}, nil, nil, nil)
 	httpSrv := httptest.NewServer(srv.HTTPHandler())
 	defer httpSrv.Close()

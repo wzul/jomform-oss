@@ -23,15 +23,15 @@ type ConfirmationCondition struct {
 
 // Confirmation is one configurable post-submit confirmation for a form.
 type Confirmation struct {
-	ID          string                `json:"id"`
-	FormID      string                `json:"form_id"`
-	Name        string                `json:"name"`
-	Type        string                `json:"type"` // message | redirect
-	Message     string                `json:"message"`
-	RedirectURL string                `json:"redirect_url"`
+	ID          string                 `json:"id"`
+	FormID      string                 `json:"form_id"`
+	Name        string                 `json:"name"`
+	Type        string                 `json:"type"` // message | redirect
+	Message     string                 `json:"message"`
+	RedirectURL string                 `json:"redirect_url"`
 	Condition   *ConfirmationCondition `json:"condition,omitempty"`
-	IsDefault   bool                  `json:"is_default"`
-	Position    int                   `json:"position"`
+	IsDefault   bool                   `json:"is_default"`
+	Position    int                    `json:"position"`
 }
 
 // DefaultConfirmationName is the name of the always-present default.

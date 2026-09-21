@@ -45,7 +45,7 @@ type PublicHandlers struct {
 	ProductVariations *dbstore.ProductVariationStore
 	Pay               *payments.Service
 	SystemSettings    *dbstore.SystemSettingStore
-	Workspaces            *dbstore.WorkspaceStore
+	Workspaces        *dbstore.WorkspaceStore
 	// Issue #171: response-only form submissions.
 	Submissions *dbstore.SubmissionStore
 	BaseURL     string
@@ -61,11 +61,11 @@ type PublicHandlers struct {
 	//     (issue #56 reuse). Nil disables the MX check (format still checked).
 	//   - FormLimiter is the per-form-per-IP token bucket (15/hour). Nil
 	//     disables the per-form rate limit (bare-mode tests).
-	Sessions     *auth.Sessions
-	Users        *dbstore.UserStore
+	Sessions         *auth.Sessions
+	Users            *dbstore.UserStore
 	WorkspaceMembers *dbstore.WorkspaceMemberStore
-	MXChecker    *email.MXChecker
-	FormLimiter  *middleware.RateLimiter
+	MXChecker        *email.MXChecker
+	FormLimiter      *middleware.RateLimiter
 
 	// Issue #245: background AI spam judge. SpamQueue is the Valkey-backed
 	// background queue (#199) that spam-judge jobs are enqueued to; a worker
@@ -720,10 +720,10 @@ func (h *PublicHandlers) fireResponseNotifications(ctx context.Context, form *db
 		formURL = h.BaseURL + "/f/" + form.Slug
 	}
 	h.Pay.FireFormNotifications(ctx, payments.NotificationRef{
-		FormID:    form.ID,
-		WorkspaceID:   workspaceID,
-		AccountID: form.AccountID,
-		FormURL:   formURL,
+		FormID:      form.ID,
+		WorkspaceID: workspaceID,
+		AccountID:   form.AccountID,
+		FormURL:     formURL,
 		// Issue #597: a response's default notification shows WHO responded, so
 		// the responder's name is carried on BuyerName as well as on the fields
 		// map below. BuyerName is the always-defined {{full_name}}/{{buyer_name}}

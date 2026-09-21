@@ -66,10 +66,10 @@ var (
 var (
 	ogFontOnce sync.Once
 	// Faces at the sizes used by the card layout.
-	ogFaceTitle font.Face // bold, large (title)
+	ogFaceTitle     font.Face // bold, large (title)
 	ogFaceWorkspace font.Face // medium (workspace/business name)
-	ogFaceMark  font.Face // bold, extra-large (JF mark + wordmark)
-	ogFaceTag   font.Face // regular (tagline)
+	ogFaceMark      font.Face // bold, extra-large (JF mark + wordmark)
+	ogFaceTag       font.Face // regular (tagline)
 )
 
 // ogFace parses an embedded TTF into a font.Face at the given point size.

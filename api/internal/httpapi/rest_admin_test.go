@@ -34,15 +34,15 @@ func adminOverviewFixture(t *testing.T, pool *pgxpool.Pool, userID string, allow
 		t.Fatalf("create session: %v", err)
 	}
 	h := &RESTHandlers{
-		Accounts: dbstore.NewAccountStore(pool),
-		Users:    dbstore.NewUserStore(pool),
-		Workspaces:   dbstore.NewWorkspaceStore(pool),
-		Sales:    dbstore.NewSaleStore(pool),
-		Submissions: dbstore.NewSubmissionStore(pool),
+		Accounts:            dbstore.NewAccountStore(pool),
+		Users:               dbstore.NewUserStore(pool),
+		Workspaces:          dbstore.NewWorkspaceStore(pool),
+		Sales:               dbstore.NewSaleStore(pool),
+		Submissions:         dbstore.NewSubmissionStore(pool),
 		EmailDeliveryEvents: dbstore.NewEmailDeliveryEventStore(pool),
-		Media:    dbstore.NewMediaStore(pool),
-		Sessions: sess,
-		SuperAdmin: allowlist,
+		Media:               dbstore.NewMediaStore(pool),
+		Sessions:            sess,
+		SuperAdmin:          allowlist,
 	}
 	return h, token
 }

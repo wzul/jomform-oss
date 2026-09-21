@@ -41,7 +41,7 @@ func TestRenderNotification(t *testing.T) {
 	ref := NotificationRef{
 		RefCode: "ABC123", AmountSen: 1500, ItemsSummary: "Widget x1",
 		BuyerName: "Ali", FormURL: "https://shop.jomform.com/w",
-		Fields:    map[string]string{"email": "buyer@example.com", "tier": "gold"},
+		Fields: map[string]string{"email": "buyer@example.com", "tier": "gold"},
 	}
 	subj, body := renderNotification("Order {{ref_code}} for {{tier}}", "Hi {{buyer_name}}, total RM {{amount}} to {{email}}", ref)
 	if subj != "Order ABC123 for gold" {

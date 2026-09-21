@@ -174,6 +174,9 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /v1/rest/forms/{id}/chip-feeds", h.authed(h.getFormChipFeeds))
 	mux.Handle("PUT /v1/rest/forms/{id}/chip-feeds", h.authed(h.setFormChipFeeds))
 	mux.Handle("GET /v1/rest/forms", h.authed(h.listForms))
+	// Trash (issue: workspace must be emptyable). A literal segment beats
+	// `{id}`, so this is not shadowed by GET /v1/rest/forms/{id}.
+	mux.Handle("GET /v1/rest/forms/trash", h.authed(h.listTrashedForms))
 	mux.Handle("POST /v1/rest/forms", h.authed(h.createForm))
 	// Issue #256: AI form builder — draft a form config from a prompt. Tight
 	// per-IP rate limit because LLM calls cost money (5/hour, burst 3).
@@ -182,6 +185,11 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /v1/rest/forms/{id}", h.authed(h.getForm))
 	mux.Handle("PATCH /v1/rest/forms/{id}", h.authed(h.updateForm))
 	mux.Handle("DELETE /v1/rest/forms/{id}", h.authed(h.deleteForm))
+	// Tong sampah (Wan's decision): a trashed form can come back, and can also
+	// be destroyed for good. Restore touches no CASCADE; purge does, so purge
+	// additionally refuses a form that has ever been sold.
+	mux.Handle("POST /v1/rest/forms/{id}/restore", h.authed(h.restoreForm))
+	mux.Handle("DELETE /v1/rest/forms/{id}/purge", h.authed(h.purgeForm))
 	// Issue #171: response-only form submissions (list + count).
 	mux.Handle("GET /v1/rest/forms/{id}/submissions", h.authed(h.listSubmissions))
 	mux.Handle("GET /v1/rest/forms/{id}/submissions/count", h.authed(h.countSubmissions))
@@ -245,6 +253,15 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("DELETE /v1/auth/passkeys/{id}", h.authed(h.passkeyDelete))
 	mux.Handle("GET /v1/workspaces", h.authed(h.listWorkspaces))
 	mux.Handle("POST /v1/workspaces", h.authed(h.createWorkspace))
+	// Delete a workspace. Owner-only, and refused when it would leave the owner
+	// with zero workspaces or when the workspace still owns content (the
+	// refusal lists each blocking category with its count). Accounts are
+	// removed WITH the workspace — CHIP credentials are never shared or
+	// orphaned.
+	mux.Handle("DELETE /v1/workspaces/{id}", h.authed(h.deleteWorkspace))
+	// Pre-flight for the delete button: the same emptiness definition, as a
+	// read, so the UI can list blockers before the destructive call.
+	mux.Handle("GET /v1/workspaces/{id}/deletion-check", h.authed(h.workspaceDeletionCheck))
 	mux.Handle("GET /v1/workspaces/{id}/settings", h.authed(h.getWorkspaceSettings))
 	mux.Handle("PUT /v1/workspaces/{id}/settings", h.authed(h.saveWorkspaceSettings))
 	mux.Handle("GET /v1/workspaces/{id}/email-settings", h.authed(h.getWorkspaceEmailSettings))

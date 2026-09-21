@@ -132,7 +132,7 @@ func tokenAfterKeyword(s, keyword string) string {
 // firstIdentifier returns the first non-keyword identifier token in s.
 func firstIdentifier(s string) string {
 	for _, f := range strings.Fields(s) {
-		clean := strings.Trim(f, `"()`,)
+		clean := strings.Trim(f, `"()`)
 		if clean == "" {
 			continue
 		}

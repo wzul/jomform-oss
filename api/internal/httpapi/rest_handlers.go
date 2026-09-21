@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -960,6 +961,154 @@ func (h *RESTHandlers) deleteForm(w http.ResponseWriter, r *http.Request, actx *
 	// Issue #92: audit form delete.
 	h.recordEvent(r, actx, h.sessionOwnerID(r), "form.deleted", map[string]any{"form_id": r.PathValue("id")})
 	respond(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// ── Tong sampah (trash): restore + purge ─────────────────────────────────────
+//
+// Wan's decision on the card: keep the "can be restored later" promise the bulk
+// delete already makes, and make it TRUE. So a trashed form has two exits:
+//
+//	restore  — clears deleted_at. Touches no CASCADE at all, so it is completely
+//	           safe and reversible; a second click can trash it again.
+//	purge    — destroys the row for good, taking submissions, notifications,
+//	           confirmations, per-form email settings and form-scoped webhooks
+//	           with it by CASCADE. Irreversible, so it is confirmed by TYPING THE
+//	           SLUG (same level as revoke_api_key's confirm), and it refuses
+//	           outright when the form has ever been sold.
+//
+// WHY THE PURGE GUARD EXISTS: sales.form_id is ON DELETE SET NULL, so purging a
+// sold form does NOT fail — it silently orphans the sale, detaching the payment
+// record from the form that produced it. Sales are history; deleting the form
+// that produced them must never destroy or detach them.
+
+// restTrashedForm is a trash row: the form fields the trash list renders, plus
+// when it was trashed and whether a purge is currently allowed.
+type restTrashedForm struct {
+	ID    string `json:"id"`
+	Slug  string `json:"slug"`
+	Title string `json:"title"`
+	// DeletedAt is when the form entered the trash (RFC3339).
+	DeletedAt string `json:"deleted_at"`
+	// SalesCount is how many sales reference this form. Non-zero means purge
+	// will refuse (409): those sales would be silently orphaned.
+	SalesCount int64 `json:"sales_count"`
+	// CanPurge is the pre-computed answer for the UI's "Padam kekal" button, so
+	// it can be disabled with a stated reason instead of failing after a click.
+	CanPurge bool `json:"can_purge"`
+}
+
+// listTrashedForms: GET /v1/rest/forms/trash
+//
+// The trash listing — the read side of restore/purge. It is a DEDICATED store
+// query (ListTrashed), deliberately not a relaxed filter on the normal list:
+// loosening formSelect would expose soft-deleted rows to every ordinary read
+// (the issue #98 regression class).
+func (h *RESTHandlers) listTrashedForms(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	forms, err := h.Forms.ListTrashed(r.Context(), actx.Account.ID)
+	if err != nil {
+		respondErr(w, r, err)
+		return
+	}
+	counts, err := h.Forms.SalesCountsByForm(r.Context(), actx.Account.ID)
+	if err != nil {
+		respondErr(w, r, err)
+		return
+	}
+	out := make([]restTrashedForm, 0, len(forms))
+	for _, f := range forms {
+		n := counts[f.ID]
+		out = append(out, restTrashedForm{
+			ID: f.ID, Slug: f.Slug, Title: f.Title,
+			DeletedAt:  f.DeletedAt.UTC().Format(time.RFC3339),
+			SalesCount: n,
+			CanPurge:   n == 0,
+		})
+	}
+	respond(w, http.StatusOK, out)
+}
+
+// restoreForm: POST /v1/rest/forms/{id}/restore
+//
+// Brings a trashed form back. No confirmation: it destroys nothing and a second
+// click undoes it.
+//
+// A 409 with a clear message when the slug was re-claimed while the form sat in
+// the trash — the per-workspace unique index covers live rows only, so trashing
+// releases the slug and a new form may take it. Nothing is renamed behind the
+// merchant's back (that would silently move a public URL they were told about);
+// they are told which obstacle to clear.
+func (h *RESTHandlers) restoreForm(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
+	formID := r.PathValue("id")
+	if err := h.Forms.Restore(r.Context(), actx.Account.ID, formID); err != nil {
+		if errors.Is(err, dbstore.ErrFormSlugTaken) {
+			writeErr(w, http.StatusConflict,
+				"tidak boleh dipulihkan: slug borang ini telah diambil borang lain — "+
+					"tukar slug borang itu dahulu, kemudian cuba pulihkan semula")
+			return
+		}
+		respondErr(w, r, err)
+		return
+	}
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "form.restored", map[string]any{"form_id": formID})
+	respond(w, http.StatusOK, map[string]string{"status": "restored", "form_id": formID})
+}
+
+// purgeForm: DELETE /v1/rest/forms/{id}/purge
+//
+// Permanently destroys a TRASHED form. Confirmed by typing the form's slug into
+// {"confirm_slug":"..."} — the same level as revoke_api_key, because this one
+// cannot be undone and it takes the form's CASCADE children with it.
+//
+// Order of checks matters: the write gate first (so a readonly key cannot probe),
+// then the confirmation, then the store's own two guards (trashed-only, and
+// never a sold form). A live form is a 404 here — the only way in is trash.
+func (h *RESTHandlers) purgeForm(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
+	formID := r.PathValue("id")
+	var in struct {
+		ConfirmSlug string `json:"confirm_slug"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeErr(w, http.StatusBadRequest, "payload tidak sah")
+		return
+	}
+	// Read the trashed form to compare the confirmation slug. GetTrashed is
+	// scoped to the caller's account AND to deleted rows, so this cannot be
+	// used to probe a live form's existence.
+	f, err := h.Forms.GetTrashed(r.Context(), actx.Account.ID, formID)
+	if err != nil {
+		respondErr(w, r, err)
+		return
+	}
+	if strings.TrimSpace(in.ConfirmSlug) != f.Slug {
+		writeErr(w, http.StatusBadRequest,
+			"taip slug borang ("+f.Slug+") untuk sahkan pemadaman kekal")
+		return
+	}
+	if err := h.Forms.Purge(r.Context(), actx.Account.ID, formID); err != nil {
+		if errors.Is(err, dbstore.ErrFormHasSales) {
+			n, cerr := h.Forms.CountSalesByForm(r.Context(), actx.Account.ID, formID)
+			if cerr != nil {
+				n = 0
+			}
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error": "borang ini mempunyai jualan — sejarah jualan tidak boleh dimusnahkan " +
+					"dengan memadam borang. Ia kekal dalam tong sampah.",
+				"sales_count": n,
+			})
+			return
+		}
+		respondErr(w, r, err)
+		return
+	}
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "form.purged",
+		map[string]any{"form_id": formID, "slug": f.Slug, "title": f.Title})
+	respond(w, http.StatusOK, map[string]string{"status": "purged", "form_id": formID, "slug": f.Slug})
 }
 
 // bulkForms applies an action to many forms at once:

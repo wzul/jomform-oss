@@ -79,7 +79,7 @@ func verifiedCustomDomainFixture(t *testing.T) (*PublicHandlers, string, string,
 		Accounts:    dbstore.NewAccountStore(pool),
 		Domains:     dbstore.NewDomainStore(pool),
 		Products:    dbstore.NewProductStore(pool),
-		Workspaces:      dbstore.NewWorkspaceStore(pool),
+		Workspaces:  dbstore.NewWorkspaceStore(pool),
 		Submissions: dbstore.NewSubmissionStore(pool),
 		BaseURL:     "http://localhost:8080",
 	}

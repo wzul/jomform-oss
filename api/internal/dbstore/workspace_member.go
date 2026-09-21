@@ -36,23 +36,23 @@ var ErrNotWorkspaceMember = errors.New("bukan ahli workspace")
 
 // WorkspaceMember models a workspace_members row.
 type WorkspaceMember struct {
-	ID        string
-	WorkspaceID   string
-	UserID    string
-	Role      string
-	Email     string // joined from users, for listing
-	Name      string // joined from users, for listing
-	CreatedAt string
+	ID          string
+	WorkspaceID string
+	UserID      string
+	Role        string
+	Email       string // joined from users, for listing
+	Name        string // joined from users, for listing
+	CreatedAt   string
 }
 
 // WorkspaceInvite models a workspace_invites row.
 type WorkspaceInvite struct {
-	ID        string
-	WorkspaceID   string
-	Email     string
-	Role      string
-	Token     string
-	CreatedAt string
+	ID          string
+	WorkspaceID string
+	Email       string
+	Role        string
+	Token       string
+	CreatedAt   string
 }
 
 // WorkspaceMemberStore wraps workspace_members + workspace_invites.

@@ -17,8 +17,8 @@ import (
 	"fmt"
 	"strings"
 
-	qrcode "github.com/skip2/go-qrcode"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	qrcode "github.com/skip2/go-qrcode"
 
 	"github.com/wzul/jomform/api/internal/dbstore"
 )

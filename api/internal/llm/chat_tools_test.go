@@ -4,16 +4,16 @@
 // output becomes a function call the chat will act on. Two properties matter and
 // neither is visible from the chat package:
 //
-//   1. THE WIRE SHAPE. The request must use the OpenAI-compatible "tools" array
-//      and the response's tool_calls must be carried through with their call id,
-//      name and RAW arguments string. A dropped id makes the follow-up "tool"
-//      turn unattributable — every provider rejects it — and a re-marshalled
-//      arguments object would reinterpret the model's JSON before the executor
-//      validates it.
-//   2. THE UNTRUSTED BOUNDARY. Arguments are passed through as the raw string the
-//      model emitted. This client must not "helpfully" parse or repair them; the
-//      EXECUTOR validates, because that is where the schema and the allowlist
-//      live.
+//  1. THE WIRE SHAPE. The request must use the OpenAI-compatible "tools" array
+//     and the response's tool_calls must be carried through with their call id,
+//     name and RAW arguments string. A dropped id makes the follow-up "tool"
+//     turn unattributable — every provider rejects it — and a re-marshalled
+//     arguments object would reinterpret the model's JSON before the executor
+//     validates it.
+//  2. THE UNTRUSTED BOUNDARY. Arguments are passed through as the raw string the
+//     model emitted. This client must not "helpfully" parse or repair them; the
+//     EXECUTOR validates, because that is where the schema and the allowlist
+//     live.
 //
 // These run against an httptest server, so no network and no API key.
 package llm
@@ -76,9 +76,9 @@ func TestChatWithToolsSendsTheOpenAIToolsShape(t *testing.T) {
 		Model    string `json:"model"`
 		Stream   bool   `json:"stream"`
 		Messages []struct {
-			Role       string `json:"role"`
-			Content    string `json:"content"`
-			ToolCalls  []struct {
+			Role      string `json:"role"`
+			Content   string `json:"content"`
+			ToolCalls []struct {
 				ID       string `json:"id"`
 				Type     string `json:"type"`
 				Function struct {

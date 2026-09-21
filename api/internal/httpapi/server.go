@@ -118,7 +118,7 @@ func NewServer(cfg *config.Config, log *slog.Logger, deps *Deps) *Server {
 			Sessions:     deps.Sessions,
 			Users:        deps.Users,
 			Accounts:     deps.Accounts,
-			Workspaces:       deps.REST.Workspaces,
+			Workspaces:   deps.REST.Workspaces,
 			BaseURL:      cfg.AppBaseURL,
 			CookieDomain: SharedCookieDomain(cfg.AppBaseURL),
 			VerifyKey:    deps.VerifyKey,

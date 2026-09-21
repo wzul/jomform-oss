@@ -212,8 +212,8 @@ func TestSaleCaptureStateMachine(t *testing.T) {
 
 	sale := &Sale{
 		AccountID: acc, RefCode: "IT-CAP-" + acc[:8],
-		Client: SaleClient{FullName: "Buyer", Email: "buyer@example.test"},
-		Items:  []SaleItem{{ProductID: "p1", Name: "Tee", PriceSen: 1000, Qty: 1}},
+		Client:   SaleClient{FullName: "Buyer", Email: "buyer@example.test"},
+		Items:    []SaleItem{{ProductID: "p1", Name: "Tee", PriceSen: 1000, Qty: 1}},
 		TotalSen: 1000, SaleType: SaleTypeOneTime, PaymentMethod: "chip",
 		Status: SalePending, SkipCapture: true,
 	}
@@ -268,8 +268,8 @@ func TestSaleReleaseStateMachine(t *testing.T) {
 
 	sale := &Sale{
 		AccountID: acc, RefCode: "IT-REL-" + acc[:8],
-		Client: SaleClient{FullName: "Buyer", Email: "buyer@example.test"},
-		Items:  []SaleItem{{ProductID: "p1", Name: "Tee", PriceSen: 1000, Qty: 1}},
+		Client:   SaleClient{FullName: "Buyer", Email: "buyer@example.test"},
+		Items:    []SaleItem{{ProductID: "p1", Name: "Tee", PriceSen: 1000, Qty: 1}},
 		TotalSen: 1000, SaleType: SaleTypeOneTime, PaymentMethod: "chip",
 		Status: SalePending, SkipCapture: true,
 	}
@@ -305,8 +305,8 @@ func TestSaleAwaitingCaptureExcludesNonSkipCapture(t *testing.T) {
 
 	sale := &Sale{
 		AccountID: acc, RefCode: "IT-NOSKIP-" + acc[:8],
-		Client: SaleClient{FullName: "Buyer", Email: "buyer@example.test"},
-		Items:  []SaleItem{{ProductID: "p1", Name: "Tee", PriceSen: 1000, Qty: 1}},
+		Client:   SaleClient{FullName: "Buyer", Email: "buyer@example.test"},
+		Items:    []SaleItem{{ProductID: "p1", Name: "Tee", PriceSen: 1000, Qty: 1}},
 		TotalSen: 1000, SaleType: SaleTypeOneTime, PaymentMethod: "chip",
 		Status: SalePaid, SkipCapture: false,
 	}
@@ -351,8 +351,8 @@ func TestSalePerFormScoping(t *testing.T) {
 	mk := func(formID, ref string) *Sale {
 		return &Sale{
 			AccountID: acc, FormID: formID, RefCode: ref,
-			Client: SaleClient{FullName: "Buyer", Email: "buyer@example.test"},
-			Items:  []SaleItem{{ProductID: "p1", Name: "Tee", PriceSen: 1000, Qty: 1}},
+			Client:   SaleClient{FullName: "Buyer", Email: "buyer@example.test"},
+			Items:    []SaleItem{{ProductID: "p1", Name: "Tee", PriceSen: 1000, Qty: 1}},
 			TotalSen: 1000, SaleType: SaleTypeOneTime, PaymentMethod: "chip",
 			Status: SaleConfirmed,
 		}

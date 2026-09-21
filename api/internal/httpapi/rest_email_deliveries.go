@@ -1,10 +1,11 @@
 // REST: email delivery status view (issue #194).
 //
 // GET /v1/rest/email-deliveries?form_id=&sale_ref=&event_type=&page=&limit=
-//   Account-scoped, paginated list of email delivery events (delivered /
-//   bounce / complaint / open / click) with email, event type, timestamp,
-//   sale ref and detail. Filterable by form (via the sale's form_id), sale
-//   ref, and event type. Read-only.
+//
+//	Account-scoped, paginated list of email delivery events (delivered /
+//	bounce / complaint / open / click) with email, event type, timestamp,
+//	sale ref and detail. Filterable by form (via the sale's form_id), sale
+//	ref, and event type. Read-only.
 //
 // The store is nil in bare-mode tests → 503.
 package httpapi

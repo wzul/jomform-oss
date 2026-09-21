@@ -32,8 +32,8 @@ func TestRefCodeUniqueness(t *testing.T) {
 	ref := "JF-UNIQ-" + randSuffix()
 	first := &Sale{
 		AccountID: acc, RefCode: ref,
-		Client: SaleClient{FullName: "Ali", Email: "ali@example.test"},
-		Items:  []SaleItem{{Name: "Tee", PriceSen: 1000, Qty: 1}},
+		Client:      SaleClient{FullName: "Ali", Email: "ali@example.test"},
+		Items:       []SaleItem{{Name: "Tee", PriceSen: 1000, Qty: 1}},
 		SubtotalSen: 1000, TotalSen: 1000,
 		SaleType: SaleTypeOneTime, PaymentMethod: "chip", Status: SalePending,
 	}
@@ -44,8 +44,8 @@ func TestRefCodeUniqueness(t *testing.T) {
 	// Second sale with the SAME ref_code must be rejected by the DB.
 	dup := &Sale{
 		AccountID: acc, RefCode: ref,
-		Client: SaleClient{FullName: "Baba", Email: "baba@example.test"},
-		Items:  []SaleItem{{Name: "Cap", PriceSen: 2000, Qty: 1}},
+		Client:      SaleClient{FullName: "Baba", Email: "baba@example.test"},
+		Items:       []SaleItem{{Name: "Cap", PriceSen: 2000, Qty: 1}},
 		SubtotalSen: 2000, TotalSen: 2000,
 		SaleType: SaleTypeOneTime, PaymentMethod: "chip", Status: SalePending,
 	}
@@ -56,8 +56,8 @@ func TestRefCodeUniqueness(t *testing.T) {
 	// A distinct ref_code still inserts fine.
 	other := &Sale{
 		AccountID: acc, RefCode: ref + "-2",
-		Client: SaleClient{FullName: "Chong", Email: "chong@example.test"},
-		Items:  []SaleItem{{Name: "Cap", PriceSen: 2000, Qty: 1}},
+		Client:      SaleClient{FullName: "Chong", Email: "chong@example.test"},
+		Items:       []SaleItem{{Name: "Cap", PriceSen: 2000, Qty: 1}},
 		SubtotalSen: 2000, TotalSen: 2000,
 		SaleType: SaleTypeOneTime, PaymentMethod: "chip", Status: SalePending,
 	}

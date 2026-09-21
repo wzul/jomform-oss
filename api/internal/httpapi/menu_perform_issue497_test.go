@@ -75,7 +75,7 @@ func TestIssue497MenuItemsComeFromTheFormBlocks(t *testing.T) {
 			map[string]any{"id": "b1", "type": "product", "product_id": "prod-a", "value": "Nasi Lemak Ayam"},
 			map[string]any{"id": "b2", "type": "text", "value": "Not a product"},
 			map[string]any{"id": "b3", "type": "product", "product_id": "  prod-b  "},
-			map[string]any{"id": "b4", "type": "product"}, // no product_id → skipped
+			map[string]any{"id": "b4", "type": "product"},                         // no product_id → skipped
 			map[string]any{"id": "b5", "type": "product", "product_id": "prod-a"}, // dup → skipped
 		},
 	})

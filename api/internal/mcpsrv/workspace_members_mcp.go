@@ -78,8 +78,8 @@ func (s *Server) requireWorkspaceAdminWrite(ctx context.Context, workspaceID str
 
 type inviteWorkspaceMemberIn struct {
 	WorkspaceID string `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
-	Email   string `json:"email" jsonschema:"Emel ahli yang dijemput"`
-	Role    string `json:"role,omitempty" jsonschema:"Peranan: read_only|manage|admin (lalai read_only)"`
+	Email       string `json:"email" jsonschema:"Emel ahli yang dijemput"`
+	Role        string `json:"role,omitempty" jsonschema:"Peranan: read_only|manage|admin (lalai read_only)"`
 }
 
 func (s *Server) inviteWorkspaceMember(
@@ -161,8 +161,8 @@ func (s *Server) listWorkspaceMembers(
 
 type updateWorkspaceMemberRoleIn struct {
 	WorkspaceID string `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
-	UserID  string `json:"user_id" jsonschema:"ID ahli (dari list_workspace_members)"`
-	Role    string `json:"role" jsonschema:"Peranan baharu: read_only|manage|admin"`
+	UserID      string `json:"user_id" jsonschema:"ID ahli (dari list_workspace_members)"`
+	Role        string `json:"role" jsonschema:"Peranan baharu: read_only|manage|admin"`
 }
 
 func (s *Server) updateWorkspaceMemberRole(
@@ -191,8 +191,8 @@ func (s *Server) updateWorkspaceMemberRole(
 // ── cancel_workspace_invite ─────────────────────────────────────────────────────
 
 type cancelWorkspaceInviteIn struct {
-	WorkspaceID  string `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
-	InviteID string `json:"invite_id" jsonschema:"ID jemputan (dari list_workspace_invites)"`
+	WorkspaceID string `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
+	InviteID    string `json:"invite_id" jsonschema:"ID jemputan (dari list_workspace_invites)"`
 }
 
 func (s *Server) cancelWorkspaceInvite(
@@ -253,7 +253,7 @@ func (s *Server) listWorkspaceInvites(
 
 type removeWorkspaceMemberIn struct {
 	WorkspaceID string `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
-	UserID  string `json:"user_id" jsonschema:"ID ahli (dari list_workspace_members)"`
+	UserID      string `json:"user_id" jsonschema:"ID ahli (dari list_workspace_members)"`
 }
 
 func (s *Server) removeWorkspaceMember(

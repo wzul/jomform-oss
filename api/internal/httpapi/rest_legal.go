@@ -40,7 +40,9 @@ func (h *RESTHandlers) getWorkspaceLegalPages(w http.ResponseWriter, r *http.Req
 
 // generateWorkspaceLegalPage: POST /v1/workspaces/{id}/legal/generate
 // {type, business_name, registration_no, contact, address, data_collected,
-//  payment_terms, refund_terms, website, effective_date}
+//
+//	payment_terms, refund_terms, website, effective_date}
+//
 // Calls the LLM with a prompt template filled with the merchant's business
 // details and returns the generated draft for review (not yet saved).
 func (h *RESTHandlers) generateWorkspaceLegalPage(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
@@ -131,10 +133,10 @@ func (h *RESTHandlers) saveWorkspaceLegalPage(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if err := h.Workspaces.SaveLegalPage(r.Context(), &dbstore.LegalPage{
-		WorkspaceID:  s.ID,
-		PageType: in.Type,
-		Mode:     in.Mode,
-		Content:  in.Content,
+		WorkspaceID: s.ID,
+		PageType:    in.Type,
+		Mode:        in.Mode,
+		Content:     in.Content,
 	}); err != nil {
 		respondErr(w, r, err)
 		return

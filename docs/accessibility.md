@@ -63,6 +63,7 @@ Use the rotor (`Ctrl+Option+U`) to check headings, links, and form controls.
 | 6 | **Settings tabs** | Tab bar announced with `role="tab"` + `aria-selected`; each tab's content reachable; form fields labeled. |
 | 7 | **Profile tabs** | Same as settings; 2FA setup modal announced as a dialog with a label; QR image has alt text. |
 | 8 | **Mobile drawer** | Hamburger button announced ("Open menu"); drawer announced as a dialog; focus moves to the close button on open; Escape closes; Tab is trapped inside the drawer. |
+| 9 | **Delete-workspace confirmation** (Settings → Workspace) | Danger-zone button is announced with its disabled state and the reason stated in text ("you need at least one workspace", or the blocker list with counts); the confirmation is announced as a dialog with a label (`role="dialog"` + `aria-modal` + `aria-labelledby`); focus moves to the type-the-slug input on open; Escape closes and clears the field; the inline "?" doc link is announced. |
 
 ### NVDA — Windows (Firefox/Chrome)
 

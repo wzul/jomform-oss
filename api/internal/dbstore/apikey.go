@@ -116,7 +116,8 @@ func (s *APIKeyStore) Touch(ctx context.Context, keyID string) {
 // which is a superset). Scope and workspace ROLE are independent axes:
 //   - scope  = what this credential may do at all (readonly vs readwrite)
 //   - role   = what this person may do in a given workspace (read_only vs manage
-//              vs admin, issue #162)
+//     vs admin, issue #162)
+//
 // A write must satisfy BOTH. The RBAC work in 5dafe3a replaced the per-tool
 // scope test with a role-only gate and silently dropped the scope half, which
 // let a readonly key delete forms (issue #645) — so the scope names live here,

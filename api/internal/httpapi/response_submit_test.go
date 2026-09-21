@@ -64,13 +64,13 @@ func responseFormFixture(t *testing.T) (*PublicHandlers, string, string) {
 	}
 
 	h := &PublicHandlers{
-		Forms:        fs,
-		Sales:        dbstore.NewSaleStore(pool),
-		Accounts:     dbstore.NewAccountStore(pool),
-		Products:     dbstore.NewProductStore(pool),
-		Workspaces:       dbstore.NewWorkspaceStore(pool),
-		Submissions:  dbstore.NewSubmissionStore(pool),
-		BaseURL:      "http://localhost:8080",
+		Forms:       fs,
+		Sales:       dbstore.NewSaleStore(pool),
+		Accounts:    dbstore.NewAccountStore(pool),
+		Products:    dbstore.NewProductStore(pool),
+		Workspaces:  dbstore.NewWorkspaceStore(pool),
+		Submissions: dbstore.NewSubmissionStore(pool),
+		BaseURL:     "http://localhost:8080",
 	}
 	return h, workspaceSlug, formSlug
 }

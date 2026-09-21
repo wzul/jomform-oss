@@ -238,6 +238,160 @@ func (s *Server) setDefaultWorkspace(
 	return nil, map[string]string{"status": "saved", "workspace_id": in.WorkspaceID}, nil
 }
 
+// mcpExemptKeyID returns the id of the API key authenticating this MCP call, or
+// "" for a non-key identity (OAuth token). It is passed to the workspace
+// emptiness guard as the ONE key exempt from the live-key blocker — see
+// dbstore.emptyCheckArgs for why that exemption is required rather than
+// convenient.
+func mcpExemptKeyID(ctx context.Context) string {
+	id := IdentityFromContext(ctx)
+	if id == nil || id.APIKey == nil {
+		return ""
+	}
+	return id.APIKey.ID
+}
+
+// ── delete_workspace / check_workspace_deletion ─────────────────────────────────
+//
+// Parity for DELETE /v1/workspaces/{id} and GET /v1/workspaces/{id}/deletion-check.
+//
+// OWNER ONLY. An admin member manages a workspace but does not own its public
+// identity, its trading history, or the CHIP account holding its credentials;
+// they leave through remove_workspace_member. The MCP path enforces the same
+// rule as REST rather than relying on the manage-or-admin role gate, because
+// "admin member" would otherwise be enough to destroy someone else's workspace.
+
+// deleteWorkspaceIn confirms a permanent workspace delete.
+//
+// The confirmation is the workspace SLUG, not a boolean — the same level as
+// revoke_api_key's confirm=true. This destroys the workspace, everything under
+// it, and its CHIP account, and cannot be undone.
+type deleteWorkspaceIn struct {
+	WorkspaceID string `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
+	ConfirmSlug string `json:"confirm_slug,omitempty" jsonschema:"Slug workspace itu sendiri, untuk sahkan pemadaman. Salah/tiada = ditolak."`
+}
+
+// deleteWorkspaceMCP permanently deletes a workspace the caller OWNS.
+//
+// It is not a thin wrapper over the store call: both guards the store enforces
+// are surfaced as named refusals here, so an agent gets a reason it can act on
+// (which categories block, or "you need at least one workspace") instead of an
+// opaque failure.
+func (s *Server) deleteWorkspaceMCP(
+	ctx context.Context, _ *mcp.CallToolRequest, in deleteWorkspaceIn,
+) (*mcp.CallToolResult, map[string]any, error) {
+	// Issue #645: the scope axis. Checked first so a readonly key cannot probe.
+	if err := s.requireWriteScope(ctx); err != nil {
+		return nil, nil, err
+	}
+	sp, err := s.workspacesStore()
+	if err != nil {
+		return nil, nil, err
+	}
+	owner, err := s.workspaceOwner(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	workspace, err := sp.ByID(ctx, in.WorkspaceID)
+	if err != nil || workspace == nil {
+		return nil, nil, errors.New("workspace tidak dijumpai")
+	}
+	// Ownership, not membership: the caller must be the OWNER. A member who is
+	// an admin is refused with the same message as REST.
+	if workspace.Owner != owner {
+		return nil, nil, errors.New("hanya pemilik workspace boleh memadamnya")
+	}
+	// Confirmation: the caller must name the workspace it is destroying.
+	if strings.TrimSpace(in.ConfirmSlug) != workspace.Slug {
+		return nil, map[string]any{
+			"status": "refused",
+			"error": "taip slug workspace untuk sahkan pemadaman: " + workspace.Slug +
+				". Pemadaman workspace tidak boleh dibatalkan.",
+			"workspace_id": workspace.ID, "slug": workspace.Slug,
+		}, nil
+	}
+	deleted, err := sp.Delete(ctx, workspace.ID, owner, mcpExemptKeyID(ctx))
+	if err != nil {
+		var de *dbstore.WorkspaceDeleteError
+		if errors.As(err, &de) {
+			if de.Reason == "last_workspace" {
+				return nil, map[string]any{
+					"status": "refused",
+					"error": "anda perlu sekurang-kurangnya satu workspace — cipta workspace baharu dahulu " +
+						"sebelum memadam yang terakhir.",
+					"workspace_id": workspace.ID, "last_workspace": true,
+				}, nil
+			}
+			blockers := make([]map[string]any, 0, len(de.Blockers))
+			for _, b := range de.Blockers {
+				blockers = append(blockers, map[string]any{"kind": b.Kind, "count": b.Count, "label": b.Label})
+			}
+			return nil, map[string]any{
+				"status": "refused",
+				"error": "workspace tidak kosong — kosongkan setiap kategori di bawah dahulu " +
+					"(borang: trash dahulu, kemudian purge_form).",
+				"workspace_id": workspace.ID, "empty": false, "blockers": blockers,
+			}, nil
+		}
+		if errors.Is(err, dbstore.ErrWorkspaceNotFound) {
+			return nil, nil, errors.New("workspace tidak dijumpai")
+		}
+		return nil, nil, fmt.Errorf("db: %w", err)
+	}
+	return nil, map[string]any{
+		"status": "deleted", "workspace_id": workspace.ID, "slug": workspace.Slug,
+		"name": workspace.Name, "deleted": deleted,
+	}, nil
+}
+
+// checkWorkspaceDeletionMCP is the READ half of delete_workspace: it reports the
+// SAME emptiness definition the delete enforces, plus whether this is the
+// caller's last workspace, so an agent can state what must be cleared instead of
+// discovering it by attempting the delete.
+func (s *Server) checkWorkspaceDeletionMCP(
+	ctx context.Context, _ *mcp.CallToolRequest, in workspaceRefIn,
+) (*mcp.CallToolResult, map[string]any, error) {
+	workspace, role, err := s.accessibleWorkspace(ctx, in.WorkspaceID)
+	if err != nil {
+		return nil, nil, err
+	}
+	sp, err := s.workspacesStore()
+	if err != nil {
+		return nil, nil, err
+	}
+	owner, err := s.workspaceOwner(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	_, blockers, err := sp.CountEmpty(ctx, workspace.ID, mcpExemptKeyID(ctx))
+	if err != nil {
+		return nil, nil, fmt.Errorf("db: %w", err)
+	}
+	out := make([]map[string]any, 0, len(blockers))
+	for _, b := range blockers {
+		out = append(out, map[string]any{"kind": b.Kind, "count": b.Count, "label": b.Label})
+	}
+	listed, err := sp.ByMember(ctx, owner)
+	if err != nil {
+		return nil, nil, fmt.Errorf("db: %w", err)
+	}
+	last := true
+	for _, w := range listed {
+		if w.WorkspaceID != workspace.ID {
+			last = false
+			break
+		}
+	}
+	isOwner := workspace.Owner == owner
+	return nil, map[string]any{
+		"workspace_id": workspace.ID, "name": workspace.Name, "slug": workspace.Slug,
+		"role": role, "is_owner": isOwner,
+		"last_workspace": last, "empty": len(out) == 0,
+		"blockers":   out,
+		"can_delete": isOwner && len(out) == 0 && !last,
+	}, nil
+}
+
 // ── update_profile_phone (issue #181) ───────────────────────────────────────
 
 type updateProfilePhoneIn struct {
@@ -381,7 +535,7 @@ func (s *Server) getWorkspaceSettings(
 // ── set_workspace_settings ───────────────────────────────────────────────────────
 
 type setWorkspaceSettingsIn struct {
-	WorkspaceID        string  `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
+	WorkspaceID    string  `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
 	FooterText     *string `json:"footer_text,omitempty" jsonschema:"Teks footer storefront (omit = kekal, \"\" = kosongkan)"`
 	CompanyReg     *string `json:"company_reg,omitempty" jsonschema:"Nombor pendaftaran syarikat (omit = kekal)"`
 	PrivacyURL     *string `json:"privacy_url,omitempty" jsonschema:"URL polisi privasi — mesti https:// (omit = kekal)"`
@@ -522,7 +676,7 @@ func (s *Server) getWorkspaceLandingPage(
 }
 
 type setWorkspaceLandingPageIn struct {
-	WorkspaceID         string                 `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
+	WorkspaceID     string                 `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
 	Enabled         bool                   `json:"enabled" jsonschema:"true = papar landing page; false = jatuh ke senarai borang"`
 	Hero            string                 `json:"hero,omitempty" jsonschema:"Tajuk utama (hero)"`
 	Subtitle        string                 `json:"subtitle,omitempty" jsonschema:"Sub-tajuk di bawah hero"`

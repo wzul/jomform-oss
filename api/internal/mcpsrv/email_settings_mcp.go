@@ -28,7 +28,7 @@ func (s *Server) getEmailSettings(
 		return nil, nil, err
 	}
 	return nil, &dbstoreEmailSettingsOut{
-		WorkspaceID:             st.WorkspaceID,
+		WorkspaceID:         st.WorkspaceID,
 		ReceiptSubject:      st.ReceiptSubject,
 		ReceiptBody:         st.ReceiptBody,
 		ReceiptEnabled:      st.ReceiptEnabled,
@@ -40,7 +40,7 @@ func (s *Server) getEmailSettings(
 
 // dbstoreEmailSettingsOut mirrors dbstore.EmailSettings for the MCP response.
 type dbstoreEmailSettingsOut struct {
-	WorkspaceID             string `json:"workspace_id"`
+	WorkspaceID         string `json:"workspace_id"`
 	ReceiptSubject      string `json:"receipt_subject"`
 	ReceiptBody         string `json:"receipt_body"`
 	ReceiptEnabled      bool   `json:"receipt_enabled"`
@@ -52,7 +52,7 @@ type dbstoreEmailSettingsOut struct {
 // setEmailSettingsIn updates a workspace's email settings. Omitted fields keep
 // their current value (read-modify-write, matching set_workspace_settings).
 type setEmailSettingsIn struct {
-	WorkspaceID             string  `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
+	WorkspaceID         string  `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
 	ReceiptSubject      *string `json:"receipt_subject,omitempty" jsonschema:"Subjek resit (placeholder {{ref_code}} dll; omit = kekal)"`
 	ReceiptBody         *string `json:"receipt_body,omitempty" jsonschema:"Badan resit (placeholder {{ref_code}}, {{amount}}, {{items}}, {{form_url}}, {{buyer_name}}, {{date}}; omit = kekal)"`
 	ReceiptEnabled      *bool   `json:"receipt_enabled,omitempty" jsonschema:"Hantar resit kepada pembeli (true/false; omit = kekal)"`

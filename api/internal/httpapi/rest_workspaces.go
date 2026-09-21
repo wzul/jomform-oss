@@ -112,6 +112,148 @@ func (h *RESTHandlers) workspaceAccessByID(w http.ResponseWriter, r *http.Reques
 	return s, acc.Role, true
 }
 
+// ── Delete a workspace ───────────────────────────────────────────────────────────
+
+// deleteWorkspace: DELETE /v1/workspaces/{id}
+//
+// Two invariants, both enforced in the store inside one transaction:
+//
+//  1. A user always has AT LEAST ONE workspace. The guard counts the remaining
+//     workspaces the caller owns-or-is-a-member-of rather than flagging a
+//     particular "original" workspace, so whichever workspace is last is the one
+//     that is protected — and a member of someone else's workspace may still
+//     delete their own last one, because they still have somewhere to land.
+//  2. The workspace must be EMPTY. A refusal lists every blocking category with
+//     its count (forms — including trashed ones, products, sales, custom
+//     domains, webhooks, live API keys, active subscriptions) so the merchant
+//     knows exactly what to clear. Sales in particular may never be destroyed by
+//     this call: they are trading history.
+//
+// OWNER ONLY. An admin member manages the workspace but does not own its public
+// identity, its trading history, or the CHIP account that holds its credentials;
+// they leave through the existing member-removal path instead.
+//
+// The confirmation is the workspace SLUG, not a boolean, on both the REST and the
+// MCP path (same precedent as revoke_api_key's confirm=true): a destructive,
+// irreversible call should require the caller to name what it is destroying.
+func (h *RESTHandlers) deleteWorkspace(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	// The API-key write scope is the credential axis; it is checked before
+	// anything else so a readonly key cannot even probe the guards.
+	if !h.requireWriteScope(w, actx) {
+		return
+	}
+	s, role, ok := h.workspaceAccessByID(w, r)
+	if !ok {
+		return
+	}
+	if role != dbstore.RoleAdmin {
+		writeErr(w, http.StatusForbidden, "hanya pemilik workspace boleh memadamnya")
+		return
+	}
+	userID := h.sessionOwnerID(r)
+	if userID == "" || s.Owner != userID {
+		writeErr(w, http.StatusForbidden, "hanya pemilik workspace boleh memadamnya")
+		return
+	}
+	// Typed confirmation: {"confirm_slug":"<slug>"}. A missing or mismatching
+	// slug is refused — the point is that the caller names the workspace.
+	var in struct {
+		ConfirmSlug string `json:"confirm_slug"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeErr(w, http.StatusBadRequest, "payload tidak sah")
+		return
+	}
+	if strings.TrimSpace(in.ConfirmSlug) != s.Slug {
+		writeErr(w, http.StatusBadRequest,
+			"taip slug workspace ("+s.Slug+") untuk sahkan pemadaman")
+		return
+	}
+	deleted, err := h.Workspaces.Delete(r.Context(), s.ID, userID, actx.KeyID)
+	if err != nil {
+		var de *dbstore.WorkspaceDeleteError
+		if errors.As(err, &de) {
+			switch de.Reason {
+			case "last_workspace":
+				writeErr(w, http.StatusBadRequest,
+					"anda perlu sekurang-kurangnya satu workspace — cipta workspace baharu dahulu")
+			default:
+				writeJSON(w, http.StatusConflict, map[string]any{
+					"error":    "workspace tidak kosong — kosongkan dahulu sebelum memadam",
+					"blockers": de.Blockers,
+				})
+			}
+			return
+		}
+		if errors.Is(err, dbstore.ErrWorkspaceNotFound) {
+			writeErr(w, http.StatusNotFound, "workspace tidak dijumpai")
+			return
+		}
+		respondErr(w, r, err)
+		return
+	}
+	// Audit: names the workspace and what went with it. Recorded AFTER the
+	// delete, against the caller's remaining account (the deleted one is gone).
+	h.recordEvent(r, actx, userID, "workspace.deleted", map[string]any{
+		"workspace_id": s.ID, "slug": s.Slug, "name": s.Name, "deleted": deleted,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": "deleted", "id": s.ID, "slug": s.Slug, "deleted": deleted,
+	})
+}
+
+// workspaceDeletionCheck: GET /v1/workspaces/{id}/deletion-check
+//
+// The read half of the delete path, for the UI's Danger zone. It reports the
+// SAME emptiness definition the delete enforces (one query, shared), plus
+// whether this is the caller's last workspace, so the button can be disabled
+// with a stated reason instead of failing after it is pressed.
+func (h *RESTHandlers) workspaceDeletionCheck(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	s, role, ok := h.workspaceAccessByID(w, r)
+	if !ok {
+		return
+	}
+	userID := h.sessionOwnerID(r)
+	_, blockers, err := h.Workspaces.CountEmpty(r.Context(), s.ID, actx.KeyID)
+	if err != nil {
+		respondErr(w, r, err)
+		return
+	}
+	if blockers == nil {
+		blockers = []dbstore.WorkspaceBlocker{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id": s.ID, "name": s.Name, "slug": s.Slug,
+		"is_owner":       userID != "" && s.Owner == userID,
+		"role":           role,
+		"last_workspace": h.isLastWorkspace(r, s.ID, userID),
+		"empty":          len(blockers) == 0,
+		"blockers":       blockers,
+		"can_delete":     userID != "" && s.Owner == userID && len(blockers) == 0 && !h.isLastWorkspace(r, s.ID, userID),
+	})
+}
+
+// isLastWorkspace reports whether deleting workspaceID would leave userID with
+// no workspace at all (owned or joined). Shared by the delete guard's read half
+// so the UI and the write agree.
+func (h *RESTHandlers) isLastWorkspace(r *http.Request, workspaceID, userID string) bool {
+	if userID == "" {
+		return true
+	}
+	list, err := h.Workspaces.ByMember(r.Context(), userID)
+	if err != nil {
+		// Fail CLOSED: if we cannot prove the user has another workspace, treat
+		// this as the last one and do not invite the delete.
+		return true
+	}
+	for _, w := range list {
+		if w.WorkspaceID != workspaceID {
+			return false
+		}
+	}
+	return true
+}
+
 // getWorkspaceSettings GET/PUT for the storefront builder.
 func (h *RESTHandlers) getWorkspaceSettings(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	s, _, ok := h.workspaceAccessByID(w, r)
@@ -216,7 +358,7 @@ func (h *RESTHandlers) saveWorkspaceSettings(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	st := &dbstore.WorkspaceSettings{
-		WorkspaceID:        s.ID,
+		WorkspaceID:    s.ID,
 		FooterText:     in.FooterText,
 		CompanyReg:     in.CompanyReg,
 		PrivacyURL:     in.PrivacyURL,

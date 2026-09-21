@@ -35,7 +35,7 @@ func TestApplyCustomFormConfig(t *testing.T) {
 
 func TestApplyCustomFormConfigClears(t *testing.T) {
 	cfg := map[string]any{
-		"mode": "response",
+		"mode":               "response",
 		customform.ConfigKey: map[string]any{"html": "<div>x</div>", "fields": []any{}},
 	}
 	if err := applyCustomFormConfig(cfg, "  ", nil); err != nil {

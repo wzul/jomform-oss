@@ -5,6 +5,7 @@ package dbstore
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -152,6 +153,370 @@ func (s *WorkspaceStore) access(ctx context.Context, where string, key, userID s
 	}
 	return out, found, nil
 }
+
+// WorkspaceBlocker is one category of content that prevents a workspace from
+// being deleted, with the count that blocked it. The delete path returns the
+// non-zero categories so the caller can list exactly what must be cleared
+// instead of a bare "not empty".
+type WorkspaceBlocker struct {
+	// Kind is the machine-readable category: "forms", "products", "sales",
+	// "domains", "webhooks", "api_keys" or "subscriptions".
+	Kind string `json:"kind"`
+	// Count is how many rows of that kind the workspace still owns.
+	Count int64 `json:"count"`
+	// Label is the human-readable category name shown in the refusal.
+	Label string `json:"label"`
+}
+
+// WorkspaceDeleteError is returned by Delete when the workspace cannot be
+// removed. Two shapes, both actionable:
+//
+//	reason "last_workspace" — the owner would be left with zero workspaces. A
+//	   user must always have at least one, so this is the guard Wan asked for: it
+//	   protects the workspace they started with without hard-coding which one
+//	   that is.
+//	reason "not_empty"     — the workspace still owns content. Blockers lists
+//	   each category and its count, so the caller can clear them (trash + purge a
+//	   form, archive a product, …) instead of guessing.
+type WorkspaceDeleteError struct {
+	Reason   string
+	Blockers []WorkspaceBlocker
+}
+
+func (e *WorkspaceDeleteError) Error() string {
+	if e.Reason == "last_workspace" {
+		return "sekurang-kurangnya satu workspace diperlukan"
+	}
+	return "workspace tidak kosong"
+}
+
+// ErrWorkspaceNotEmpty reports whether err is the "still owns content" refusal,
+// and returns the blocking categories.
+func ErrWorkspaceNotEmpty(err error) ([]WorkspaceBlocker, bool) {
+	var de *WorkspaceDeleteError
+	if errors.As(err, &de) && de.Reason == "not_empty" {
+		return de.Blockers, true
+	}
+	return nil, false
+}
+
+// IsLastWorkspaceError reports whether err is the "you would be left with no
+// workspace" refusal.
+func IsLastWorkspaceError(err error) bool {
+	var de *WorkspaceDeleteError
+	return errors.As(err, &de) && de.Reason == "last_workspace"
+}
+
+// emptyCheckSQL is the definition of "an empty workspace", in ONE place so the
+// refusal message and the delete path can never disagree about it. A workspace
+// is empty when ALL of these are zero:
+//
+//	forms         — INCLUDING trashed ones. A form in the trash is still a row
+//	                in `forms`; it must be purged (trash → delete permanently)
+//	                before the workspace can go. This is why the refusal message
+//	                names the trash path.
+//	products      — LIVE products only (active). The card asks that products
+//	                block, and they do — but ONLY the ones the merchant is still
+//	                selling. There is deliberately no product DELETE in the
+//	                store (archiving is "dulang tanpa padam data"), so counting
+//	                archived products too would make this guard UNSATISFIABLE and
+//	                lock the merchant into a workspace they can never empty. An
+//	                archived product is already withdrawn from sale; it is
+//	                removed with the workspace below, exactly like the account.
+//	                (A subscription is the one thing that could keep an archived
+//	                product alive — and every subscription, of any status,
+//	                blocks above, so that interaction is refused first.)
+//	sales         — the trading history. Never destroyed by a workspace delete.
+//	subscriptions — EVERY status, not just active. The FK is
+//	                `subscriptions.account_id → accounts ON DELETE RESTRICT`
+//	                (and `product_id → products RESTRICT`), so a CANCELLED
+//	                subscription still blocks the account and product deletes.
+//	                Counting only active/past_due would let the guard pass and
+//	                then fail the DELETE with SQLSTATE 23503 — a raw 500 on a
+//	                path the merchant was told was clear. Billing history joins
+//	                sales as something this call never destroys.
+//	domains, webhooks, api_keys — merchant-facing configuration. Domains and
+//	                webhooks CASCADE at the DB level and live API keys CASCADE
+//	                too, so these are a POLICY choice (the card asks for them):
+//	                the merchant is told to clear configuration rather than have
+//	                it vanish silently. Revoked keys are not counted — they are
+//	                already dead — but they are still deleted below, because a
+//	                revoked row keeps its workspace_id and that FK RESTRICTs.
+//
+// The account holding CHIP credentials is removed WITH the workspace, never
+// shared, so it is not a blocker — it is the thing that must go.
+//
+// WHY THIS IS ONE ROW OF FILTERED COUNTS, NOT A UNION OF PER-CATEGORY ROWS.
+// The repo has a single definition of "the merged record read" (sales +
+// submissions), and a guard (httpapi TestMergedReadGoesThroughTheOneBuilder)
+// refuses an explicit union of the two tables outside dbstore/records.go — a
+// union in a second file is how that record set grew a second definition (the
+// guard matches the SQL keyword, comments included, so this note names it only
+// in prose). This query is not a record read; it is a per-category blocker
+// census. Returning ONE row of seven counters keeps the shape impossible to
+// mistake for the merged read, counts every category in a single scan of
+// `forms`, and leaves each category's filter exactly as it was.
+const emptyCheckSQL = `
+	SELECT
+	  COUNT(*) FILTER (WHERE TRUE) AS forms,
+	  (SELECT COUNT(*) FROM products WHERE account_id = ANY($1) AND active) AS products,
+	  (SELECT COUNT(*) FROM sales WHERE account_id = ANY($1)) AS sales,
+	  (SELECT COUNT(*) FROM subscriptions WHERE account_id = ANY($1)) AS subscriptions,
+	  (SELECT COUNT(*) FROM account_domains WHERE account_id = ANY($1)) AS domains,
+	  (SELECT COUNT(*) FROM outbound_webhooks WHERE account_id = ANY($1) AND active) AS webhooks,
+	  (SELECT COUNT(*) FROM api_keys
+	    WHERE account_id = ANY($1) AND revoked_at IS NULL
+	      AND id <> COALESCE($2::uuid, '00000000-0000-0000-0000-000000000000'::uuid)) AS api_keys
+	FROM forms WHERE account_id = ANY($1)`
+
+// emptyCheckArgs builds the parameter list for emptyCheckSQL: the account ids,
+// and the API key (if any) that is EXEMPT from the live-key blocker.
+//
+// WHY THE EXEMPTION EXISTS. The live-key blocker stops a workspace being
+// destroyed while credentials still point at it. But the delete revokes every
+// key on the account anyway, so no live key can survive it — and without the
+// exemption the check is self-defeating: whoever deletes the workspace is
+// authenticated by a key, that key is live, so every key-authenticated caller
+// (i.e. every MCP caller) would be refused. That is a lock, not a guard. Exactly
+// ONE key is ignored, and only when it is the very key making the call.
+func emptyCheckArgs(accIDs []string, exemptKeyID string) []any {
+	return []any{accIDs, nullableKeyID(exemptKeyID)}
+}
+
+// nullableKeyID turns an empty key id into a nil, so the COALESCE in
+// emptyCheckSQL handles "no key on the call" (a session caller) without a
+// second statement.
+func nullableKeyID(id string) any {
+	if id == "" {
+		return nil
+	}
+	return id
+}
+
+// blockerLabels names each blocker for the refusal message.
+var blockerLabels = map[string]string{
+	"forms":         "borang (termasuk yang dalam tong sampah)",
+	"products":      "produk",
+	"sales":         "jualan",
+	"subscriptions": "langganan (sejarah bil)",
+	"domains":       "domain tersuai",
+	"webhooks":      "webhook",
+	"api_keys":      "kunci API",
+}
+
+// CountEmpty reports what still blocks the workspace from being deleted — the
+// non-zero categories only, ordered as in emptyCheckSQL. An empty slice means
+// the workspace may be deleted.
+//
+// This is a READ, deliberately separate from Delete: the handler calls it first
+// so a refusal can list every blocking category with its count, instead of
+// discovering the first obstacle and stopping.
+func (s *WorkspaceStore) CountEmpty(ctx context.Context, workspaceID, exemptKeyID string) (int64, []WorkspaceBlocker, error) {
+	accs, err := s.accountIDs(ctx, workspaceID)
+	if err != nil {
+		return 0, nil, err
+	}
+	var forms, products, sales, subs, domains, webhooks, keys int64
+	err = s.pool.QueryRow(ctx, emptyCheckSQL, emptyCheckArgs(accs, exemptKeyID)...).
+		Scan(&forms, &products, &sales, &subs, &domains, &webhooks, &keys)
+	if err != nil {
+		return 0, nil, err
+	}
+	return int64(len(accs)), blockersFrom(forms, products, sales, subs, domains, webhooks, keys), nil
+}
+
+// blockersFrom turns the seven counters into the non-zero blocker list, in the
+// order emptyCheckSQL returns them. ONE place, so the delete path and the read
+// path can never disagree about which categories blocked or how they are named.
+func blockersFrom(forms, products, sales, subs, domains, webhooks, keys int64) []WorkspaceBlocker {
+	var out []WorkspaceBlocker
+	for _, c := range []struct {
+		kind  string
+		count int64
+	}{
+		{"forms", forms}, {"products", products}, {"sales", sales},
+		{"subscriptions", subs}, {"domains", domains},
+		{"webhooks", webhooks}, {"api_keys", keys},
+	} {
+		if c.count > 0 {
+			out = append(out, WorkspaceBlocker{Kind: c.kind, Count: c.count, Label: blockerLabels[c.kind]})
+		}
+	}
+	return out
+}
+
+// accountIDs returns every account id linked to a workspace.
+func (s *WorkspaceStore) accountIDs(ctx context.Context, workspaceID string) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id FROM accounts WHERE workspace_id=$1`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// Delete removes a workspace and everything that belongs to it, refusing when
+// either guard says no.
+//
+// exemptKeyID is the id of the API key authenticating the call, or "" for a
+// session caller. See emptyCheckArgs for why exactly one live key may be
+// ignored by the emptiness guard.
+//
+// WHY THIS IS NOT ONE `DELETE FROM workspaces`. The foreign keys on the live
+// schema make that statement FAIL (SQLSTATE 23503) on any workspace holding an
+// account — accounts.workspace_id, api_keys.workspace_id, forms.workspace_id,
+// products.workspace_id and sales.workspace_id are all NO ACTION (RESTRICT),
+// while only the seven child tables (workspace_settings, workspace_members,
+// workspace_invites, workspace_legal_pages, workspace_email_settings,
+// affiliates) cascade. Every workspace MUST own an account (migration 000024),
+// so the naive delete works on literally nothing.
+//
+// The order below is what makes the cascade reach the workspace: the RESTRICT
+// rows are removed deepest-first (sales → their subscription/charge children
+// cascade; then forms, products, api_keys; then the accounts), and only then the
+// workspaces row, whose own children fall away by CASCADE.
+//
+// The accounts go WITH the workspace: an account holds CHIP credentials, and
+// the repo invariant is that CHIP is never shared between workspaces, so an
+// account orphaned by a workspace delete would be a credential nobody owns.
+//
+// Guards (both checked inside the transaction, so nothing is deleted when
+// either refuses):
+//
+//	last_workspace — the owner would be left with zero workspaces. The rule is
+//	   "a user always has at least one", expressed as a COUNT rather than by
+//	   pinning the workspace they started with, so it protects whichever
+//	   workspace is last without a "is this the original one" flag.
+//	not_empty      — CountEmpty reports blockers; the workspace is untouched.
+//
+// Returns the number of rows removed per table for the audit trail.
+func (s *WorkspaceStore) Delete(ctx context.Context, workspaceID, ownerUserID, exemptKeyID string) (map[string]int64, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Lock the workspace row: two concurrent deletes of the same workspace
+	// would otherwise both pass the guards and the second would fail late with a
+	// raw FK error.
+	var owner string
+	if err := tx.QueryRow(ctx,
+		`SELECT owner_user_id FROM workspaces WHERE id=$1 FOR UPDATE`,
+		workspaceID).Scan(&owner); isNoSuchRow(err) {
+		return nil, ErrWorkspaceNotFound
+	} else if err != nil {
+		return nil, err
+	}
+
+	// Guard 1 — at least one workspace must remain. Counted on the owner's
+	// membership (owned OR member), which is exactly what the switcher lists, so
+	// a user who is a member of someone else's workspace still has one to land
+	// on and may delete their own last one.
+	var remaining int64
+	if err := tx.QueryRow(ctx, `
+		SELECT COUNT(*) FROM workspaces sp
+		 WHERE sp.id <> $1
+		   AND (sp.owner_user_id = $2
+		        OR EXISTS (SELECT 1 FROM workspace_members m
+		                    WHERE m.workspace_id = sp.id AND m.user_id = $2))`,
+		workspaceID, ownerUserID).Scan(&remaining); err != nil {
+		return nil, err
+	}
+	if remaining == 0 {
+		return nil, &WorkspaceDeleteError{Reason: "last_workspace"}
+	}
+
+	// Guard 2 — the workspace must be empty, using the ONE definition.
+	var accIDs []string
+	{
+		rows, qerr := tx.Query(ctx, `SELECT id FROM accounts WHERE workspace_id=$1`, workspaceID)
+		if qerr != nil {
+			return nil, qerr
+		}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			accIDs = append(accIDs, id)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+	}
+	if len(accIDs) > 0 {
+		var forms, products, sales, subs, domains, webhooks, keys int64
+		qerr := tx.QueryRow(ctx, emptyCheckSQL, emptyCheckArgs(accIDs, exemptKeyID)...).
+			Scan(&forms, &products, &sales, &subs, &domains, &webhooks, &keys)
+		if qerr != nil {
+			return nil, qerr
+		}
+		if blockers := blockersFrom(forms, products, sales, subs, domains, webhooks, keys); len(blockers) > 0 {
+			return nil, &WorkspaceDeleteError{Reason: "not_empty", Blockers: blockers}
+		}
+	}
+
+	deleted := map[string]int64{}
+	// Step 1: trading history first — sales/subscriptions RESTRICT their
+	// account, and subscription_charges CASCADE off their subscription. Only
+	// counts of zero can reach here (guard 2), but the statement is written as
+	// a delete so a race that inserts a sale between the check and here cannot
+	// leave the account behind.
+	for _, step := range []struct {
+		table string
+		sql   string
+	}{
+		{"sales", `DELETE FROM sales WHERE account_id = ANY($1)`},
+		{"forms", `DELETE FROM forms WHERE account_id = ANY($1)`},
+		{"products", `DELETE FROM products WHERE account_id = ANY($1)`},
+		{"api_keys", `DELETE FROM api_keys WHERE account_id = ANY($1)`},
+	} {
+		tag, derr := tx.Exec(ctx, step.sql, accIDs)
+		if derr != nil {
+			return nil, derr
+		}
+		deleted[step.table] = tag.RowsAffected()
+	}
+	// Step 2: the accounts (they hold the CHIP credentials; never orphaned).
+	if len(accIDs) > 0 {
+		tag, derr := tx.Exec(ctx, `DELETE FROM accounts WHERE workspace_id=$1`, workspaceID)
+		if derr != nil {
+			return nil, derr
+		}
+		deleted["accounts"] = tag.RowsAffected()
+	}
+	// Step 3: the workspace itself. workspace_settings / workspace_members /
+	// workspace_invites / workspace_legal_pages / workspace_email_settings /
+	// affiliates go with it by CASCADE. users.default_workspace_id is SET NULL
+	// by its FK, so no dangling default is left behind.
+	tag, derr := tx.Exec(ctx, `DELETE FROM workspaces WHERE id=$1`, workspaceID)
+	if derr != nil {
+		return nil, derr
+	}
+	deleted["workspaces"] = tag.RowsAffected()
+	if deleted["workspaces"] == 0 {
+		return nil, ErrWorkspaceNotFound
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return deleted, nil
+}
+
+// ErrWorkspaceNotFound means the workspace id named no row.
+var ErrWorkspaceNotFound = errors.New("workspace not found")
 
 // ByMember lists workspaces the user owns OR is a member of, with the caller's
 // role in each (issue #162). Used by the workspace switcher so members see the

@@ -32,7 +32,7 @@ type AuthHandlers struct {
 	// Issue #164: Workspaces is used to validate a default-workspace choice belongs
 	// to the user (owner or member) and to resolve the default workspace's slug.
 	Workspaces *dbstore.WorkspaceStore
-	BaseURL  string
+	BaseURL    string
 	// CookieDomain is the shared Domain attribute for the session cookie
 	// (e.g. ".jomform.com"), allowing the login session to be sent to product
 	// subdomains such as mcp.jomform.com (issue #140). Empty when the host is
@@ -183,15 +183,15 @@ type loginRequest struct {
 }
 
 type meResponse struct {
-	ID          string  `json:"id"`
-	Email       string  `json:"email"`
-	Name        string  `json:"name,omitempty"`
-	AvatarURL   string  `json:"avatar_url,omitempty"` // issue #133
+	ID        string `json:"id"`
+	Email     string `json:"email"`
+	Name      string `json:"name,omitempty"`
+	AvatarURL string `json:"avatar_url,omitempty"` // issue #133
 	// Issue #181: the user's optional phone number ("" when not set).
-	Phone       string  `json:"phone,omitempty"`
+	Phone string `json:"phone,omitempty"`
 	// Issue #191: the user's preferred IANA timezone ("" = Auto — follow the
 	// browser/PC default).
-	Timezone    string  `json:"timezone,omitempty"`
+	Timezone string `json:"timezone,omitempty"`
 	// Language placement: the user's preferred DASHBOARD UI language ("" = not
 	// set → fall back to the browser value, then English). Per-profile, not
 	// per-workspace.

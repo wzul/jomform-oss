@@ -257,4 +257,3 @@ func (h *RESTHandlers) retryDeadLettered(w http.ResponseWriter, r *http.Request,
 	h.recordEvent(r, actx, h.sessionOwnerID(r), "settings.webhook_retried", map[string]any{"webhook_id": r.PathValue("id"), "retry_id": r.PathValue("retryId")})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "queued"})
 }
-

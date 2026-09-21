@@ -1105,18 +1105,18 @@ func (h *PublicHandlers) renderFormMenu(w http.ResponseWriter, r *http.Request, 
 	}
 
 	data := workspaceMenuData{
-		Slug:           f.Slug,
-		Menu:           menu,
-		Th:             h.formMenuTheme(f, st),
-		Ls:             ls,
-		Table:          table,
-		Aff:            aff,
-		RenderTS:       antiSpamRenderTime(),
-		BestSellers:    best,
-		Categories:     cats,
-		HasItems:       len(best) > 0 || len(cats) > 0,
-		Query:          query,
-		Cat:            cat,
+		Slug:        f.Slug,
+		Menu:        menu,
+		Th:          h.formMenuTheme(f, st),
+		Ls:          ls,
+		Table:       table,
+		Aff:         aff,
+		RenderTS:    antiSpamRenderTime(),
+		BestSellers: best,
+		Categories:  cats,
+		HasItems:    len(best) > 0 || len(cats) > 0,
+		Query:       query,
+		Cat:         cat,
 	}
 	if st != nil {
 		data.ContactAddress = st.ContactAddress

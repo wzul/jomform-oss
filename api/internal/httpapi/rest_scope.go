@@ -23,10 +23,10 @@ const maxRecordPageLimit = maxPageLimit
 // When workspace is unset (or unusable), Accounts holds just the resolved
 // account — the pre-existing behaviour.
 type scopeResult struct {
-	Accounts   []string
+	Accounts       []string
 	Workspace      string // slug that was applied ("" when no workspace scope)
 	WorkspaceKnown bool   // true when the workspace exists but owns zero accounts
-	Role       string // caller's role in the workspace ("" when unscoped/API-key)
+	Role           string // caller's role in the workspace ("" when unscoped/API-key)
 }
 
 // errWorkspaceForbidden is signalled when a workspace slug is given that does not

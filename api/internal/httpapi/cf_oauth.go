@@ -75,8 +75,8 @@ type cfCred struct {
 	Kind         cfCredKind `json:"kind"`
 	Access       string     `json:"access,omitempty"`        // oauth access token OR api token OR global key
 	Refresh      string     `json:"refresh,omitempty"`       // oauth refresh token only
-	AccountEmail string     `json:"account_email,omitempty"`  // manual kinds: the CF account email
-	AccountName  string     `json:"account_name,omitempty"`   // optional label / zones hint
+	AccountEmail string     `json:"account_email,omitempty"` // manual kinds: the CF account email
+	AccountName  string     `json:"account_name,omitempty"`  // optional label / zones hint
 }
 
 // cfTokenPair is the OAuth token set returned by the token endpoint. Access

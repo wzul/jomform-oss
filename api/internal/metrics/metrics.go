@@ -36,12 +36,12 @@ type Metrics struct {
 	uploadFailuresTotal *prometheus.CounterVec
 
 	// SES send + suppression counts.
-	sesSendsTotal      *prometheus.CounterVec
+	sesSendsTotal        *prometheus.CounterVec
 	sesSuppressionsTotal *prometheus.CounterVec
 
 	// DB query timing (issue #211): per-query duration histogram + slow-query
 	// counter, labelled by query class (normalised SQL operation).
-	dbQueryDuration   *prometheus.HistogramVec
+	dbQueryDuration    *prometheus.HistogramVec
 	dbSlowQueriesTotal *prometheus.CounterVec
 }
 

@@ -74,7 +74,7 @@ func issue461Fixture(t *testing.T) (h *PublicHandlers, workspaceSlug, formSlug, 
 			"blocks": []any{
 				map[string]any{"type": "product", "product_id": prod.ID, "value": "Nasi Lemak"},
 				map[string]any{"type": "option", "id": "opt-1", "value": "Extra sambal", "price_sen": 500,
-				"choices": []any{map[string]any{"label": "Extra sambal", "value": "1", "price_sen": 500}}},
+					"choices": []any{map[string]any{"label": "Extra sambal", "value": "1", "price_sen": 500}}},
 			},
 			"products": []any{
 				map[string]any{"id": prod.ID, "name": "Nasi Lemak", "price_sen": 1800},

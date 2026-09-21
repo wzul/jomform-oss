@@ -12,16 +12,16 @@ import (
 
 // notificationOut mirrors dbstore.FormNotification for the MCP response.
 type notificationOut struct {
-	ID        string `json:"id"`
-	FormID    string `json:"form_id"`
-	Name      string `json:"name"`
-	Event     string `json:"event"`
-	ToEmail   string `json:"to_email"`
-	Subject   string `json:"subject"`
-	Body      string `json:"body"`
+	ID        string                         `json:"id"`
+	FormID    string                         `json:"form_id"`
+	Name      string                         `json:"name"`
+	Event     string                         `json:"event"`
+	ToEmail   string                         `json:"to_email"`
+	Subject   string                         `json:"subject"`
+	Body      string                         `json:"body"`
 	Condition *dbstore.NotificationCondition `json:"condition,omitempty"`
-	Enabled   bool   `json:"enabled"`
-	IsDefault bool   `json:"is_default"`
+	Enabled   bool                           `json:"enabled"`
+	IsDefault bool                           `json:"is_default"`
 }
 
 func toNotificationOut(n *dbstore.FormNotification) notificationOut {
@@ -64,14 +64,14 @@ func (s *Server) getFormNotifications(
 
 // notificationIn is one notification rule in set_form_notifications.
 type notificationIn struct {
-	ID        string `json:"id,omitempty" jsonschema:"ID sedia ada (kosong = baharu)"`
-	Name      string `json:"name" jsonschema:"Nama notifikasi"`
-	Event     string `json:"event" jsonschema:"sale.paid|sale.failed|response.submitted|subscription.charged"`
-	ToEmail   string `json:"to_email" jsonschema:"Emel penerima, {admin_email}, atau {field_id}"`
-	Subject   string `json:"subject" jsonschema:"Subjek (placeholder {{ref_code}}, {{amount}}, {{field_id}})"`
-	Body      string `json:"body" jsonschema:"Badan (placeholder {{ref_code}}, {{amount}}, {{field_id}})"`
+	ID        string                         `json:"id,omitempty" jsonschema:"ID sedia ada (kosong = baharu)"`
+	Name      string                         `json:"name" jsonschema:"Nama notifikasi"`
+	Event     string                         `json:"event" jsonschema:"sale.paid|sale.failed|response.submitted|subscription.charged"`
+	ToEmail   string                         `json:"to_email" jsonschema:"Emel penerima, {admin_email}, atau {field_id}"`
+	Subject   string                         `json:"subject" jsonschema:"Subjek (placeholder {{ref_code}}, {{amount}}, {{field_id}})"`
+	Body      string                         `json:"body" jsonschema:"Badan (placeholder {{ref_code}}, {{amount}}, {{field_id}})"`
 	Condition *dbstore.NotificationCondition `json:"condition,omitempty" jsonschema:"Logik bersyarat {field_id, op, value} | null"`
-	Enabled   *bool  `json:"enabled,omitempty" jsonschema:"Aktif (lalai true)"`
+	Enabled   *bool                          `json:"enabled,omitempty" jsonschema:"Aktif (lalai true)"`
 }
 
 // setFormNotificationsIn replaces a form's notification rules wholesale.

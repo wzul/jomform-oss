@@ -67,7 +67,6 @@ func issue501JSON(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
 	return out
 }
 
-
 // ── REST: product images (create + update) ──────────────────────────────────
 
 func TestIssue501RESTProductImagesRejectNonHTTPS(t *testing.T) {
@@ -338,10 +337,10 @@ func TestIssue501EmittedAttributesNeverZgotmplZ(t *testing.T) {
 		v := h.menuProductView("p1", "Nasi Lemak", "Pedes", 800, mediaURL, false, "Best-seller", "Add")
 		body := issue501Render(menuPageTmpl, workspaceMenuData{
 			Slug: "menu", Menu: &dbstore.MenuPage{Enabled: true},
-			Th:        menuTheme{Hero: "Warung Ali"},
-			Ls:        formLangs["en"],
+			Th:         menuTheme{Hero: "Warung Ali"},
+			Ls:         formLangs["en"],
 			Categories: []menuCategoryView{{Name: "Makanan", Products: []menuProductView{v}}},
-			HasItems:  true,
+			HasItems:   true,
 		})
 		issue501AssertEmitted(t, body, mediaURL)
 	})

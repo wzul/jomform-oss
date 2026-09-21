@@ -45,11 +45,11 @@ func (h *RESTHandlers) putFormMenu(w http.ResponseWriter, r *http.Request, actx 
 		return
 	}
 	var in struct {
-		Enabled       bool                  `json:"enabled"`
+		Enabled       bool                   `json:"enabled"`
 		Categories    []dbstore.MenuCategory `json:"categories"`
-		BestSeller    string                `json:"best_seller"`
-		BestSellerIDs []string              `json:"best_seller_ids"`
-		OrderFormSlug string                `json:"order_form_slug"`
+		BestSeller    string                 `json:"best_seller"`
+		BestSellerIDs []string               `json:"best_seller_ids"`
+		OrderFormSlug string                 `json:"order_form_slug"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
 		writeErr(w, http.StatusBadRequest, "payload tidak sah")

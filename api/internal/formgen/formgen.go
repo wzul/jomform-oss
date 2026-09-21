@@ -53,12 +53,12 @@ type Choice struct {
 // Block is one field/block in the generated form config. It mirrors the
 // builder Block shape and the render_blocks schema (snake_case JSON).
 type Block struct {
-	ID        string   `json:"id"`
-	Type      string   `json:"type"`
-	Value     string   `json:"value,omitempty"`
-	Src       string   `json:"src,omitempty"`
-	ProductID string   `json:"product_id,omitempty"`
-	Required  bool     `json:"required,omitempty"`
+	ID        string `json:"id"`
+	Type      string `json:"type"`
+	Value     string `json:"value,omitempty"`
+	Src       string `json:"src,omitempty"`
+	ProductID string `json:"product_id,omitempty"`
+	Required  bool   `json:"required,omitempty"`
 	// Issue #173: per-field settings.
 	Placeholder  string   `json:"placeholder,omitempty"`
 	Description  string   `json:"description,omitempty"`

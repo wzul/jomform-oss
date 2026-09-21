@@ -60,10 +60,10 @@ func unlistedFixture(t *testing.T) (*PublicHandlers, string, string, string) {
 	}
 
 	h := &PublicHandlers{
-		Forms:    fs,
-		Accounts: dbstore.NewAccountStore(pool),
-		Workspaces:   dbstore.NewWorkspaceStore(pool),
-		BaseURL:  "http://localhost:8080",
+		Forms:      fs,
+		Accounts:   dbstore.NewAccountStore(pool),
+		Workspaces: dbstore.NewWorkspaceStore(pool),
+		BaseURL:    "http://localhost:8080",
 	}
 	return h, workspaceSlug, pubSlug, unlSlug
 }

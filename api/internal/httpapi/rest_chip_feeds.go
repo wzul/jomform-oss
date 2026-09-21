@@ -13,13 +13,13 @@ import (
 // write-only: a blank secret_key on an existing feed keeps the stored one.
 type chipFeedsIn struct {
 	Feeds []struct {
-		ID             string   `json:"id"`
-		Name           string   `json:"name"`
-		BrandID        string   `json:"brand_id"`
-		SecretKey      string   `json:"secret_key"`
-		EmailFallback  string   `json:"email_fallback"`
+		ID              string   `json:"id"`
+		Name            string   `json:"name"`
+		BrandID         string   `json:"brand_id"`
+		SecretKey       string   `json:"secret_key"`
+		EmailFallback   string   `json:"email_fallback"`
 		MethodWhitelist []string `json:"payment_method_whitelist"`
-		Condition      *struct {
+		Condition       *struct {
 			FieldID string `json:"field_id"`
 			Op      string `json:"op"`
 			Value   string `json:"value"`
@@ -31,13 +31,13 @@ type chipFeedsIn struct {
 // configured flag per feed.
 type chipFeedsOut struct {
 	Feeds []struct {
-		ID             string   `json:"id"`
-		Name           string   `json:"name"`
-		BrandID        string   `json:"brand_id"`
-		EmailFallback  string   `json:"email_fallback"`
+		ID              string   `json:"id"`
+		Name            string   `json:"name"`
+		BrandID         string   `json:"brand_id"`
+		EmailFallback   string   `json:"email_fallback"`
 		MethodWhitelist []string `json:"payment_method_whitelist"`
-		Configured     bool     `json:"configured"`
-		Condition      *struct {
+		Configured      bool     `json:"configured"`
+		Condition       *struct {
 			FieldID string `json:"field_id"`
 			Op      string `json:"op"`
 			Value   string `json:"value"`
@@ -55,13 +55,13 @@ func (h *RESTHandlers) getFormChipFeeds(w http.ResponseWriter, r *http.Request, 
 	out := chipFeedsOut{}
 	for _, f := range feeds {
 		item := struct {
-			ID             string   `json:"id"`
-			Name           string   `json:"name"`
-			BrandID        string   `json:"brand_id"`
-			EmailFallback  string   `json:"email_fallback"`
+			ID              string   `json:"id"`
+			Name            string   `json:"name"`
+			BrandID         string   `json:"brand_id"`
+			EmailFallback   string   `json:"email_fallback"`
 			MethodWhitelist []string `json:"payment_method_whitelist"`
-			Configured     bool     `json:"configured"`
-			Condition      *struct {
+			Configured      bool     `json:"configured"`
+			Condition       *struct {
 				FieldID string `json:"field_id"`
 				Op      string `json:"op"`
 				Value   string `json:"value"`

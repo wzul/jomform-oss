@@ -9,7 +9,7 @@ import (
 // Defaults reproduce the previous hardcoded receipt exactly, so existing
 // behaviour is unchanged until a merchant customises.
 type EmailSettings struct {
-	WorkspaceID             string `json:"workspace_id"`
+	WorkspaceID         string `json:"workspace_id"`
 	ReceiptSubject      string `json:"receipt_subject"`
 	ReceiptBody         string `json:"receipt_body"`
 	ReceiptEnabled      bool   `json:"receipt_enabled"`

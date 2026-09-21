@@ -56,11 +56,11 @@ func customDomainFixture(t *testing.T) (*PublicHandlers, string, string) {
 	}
 
 	h := &PublicHandlers{
-		Forms:    fs,
-		Accounts: dbstore.NewAccountStore(pool),
-		Domains:  dbstore.NewDomainStore(pool),
-		Workspaces:   dbstore.NewWorkspaceStore(pool),
-		BaseURL:  "http://localhost:8080",
+		Forms:      fs,
+		Accounts:   dbstore.NewAccountStore(pool),
+		Domains:    dbstore.NewDomainStore(pool),
+		Workspaces: dbstore.NewWorkspaceStore(pool),
+		BaseURL:    "http://localhost:8080",
 	}
 	return h, accountSlug, formSlug
 }

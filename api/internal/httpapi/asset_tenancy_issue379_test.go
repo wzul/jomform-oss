@@ -93,16 +93,16 @@ func assetTenancyFixture(t *testing.T) (*PublicHandlers, *RESTHandlers, string, 
 
 	accounts := dbstore.NewAccountStore(pool)
 	ph := &PublicHandlers{
-		Accounts: accounts,
-		Domains:  dbstore.NewDomainStore(pool),
-		Workspaces:   sp,
-		Store:    store,
+		Accounts:   accounts,
+		Domains:    dbstore.NewDomainStore(pool),
+		Workspaces: sp,
+		Store:      store,
 	}
 	rh := &RESTHandlers{
-		Accounts: accounts,
-		Domains:  dbstore.NewDomainStore(pool),
-		Workspaces:   sp,
-		Store:    store,
+		Accounts:   accounts,
+		Domains:    dbstore.NewDomainStore(pool),
+		Workspaces: sp,
+		Store:      store,
 	}
 	return ph, rh, workspaceA.Slug, workspaceB.Slug, accA, accB
 }

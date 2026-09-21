@@ -75,7 +75,7 @@ func customFormFixture(t *testing.T) (*PublicHandlers, string, string) {
 		Sales:       dbstore.NewSaleStore(pool),
 		Accounts:    dbstore.NewAccountStore(pool),
 		Products:    dbstore.NewProductStore(pool),
-		Workspaces:      dbstore.NewWorkspaceStore(pool),
+		Workspaces:  dbstore.NewWorkspaceStore(pool),
 		Submissions: dbstore.NewSubmissionStore(pool),
 		BaseURL:     "http://localhost:8080",
 	}

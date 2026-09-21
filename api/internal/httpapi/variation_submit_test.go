@@ -78,7 +78,7 @@ func variationSubmitFixture(t *testing.T) (*PublicHandlers, string, string, stri
 	f := &dbstore.Form{
 		AccountID: accountID, Slug: formSlug, Title: "Var form", Status: "published",
 		Config: map[string]any{
-			"blocks": []any{map[string]any{"type": "product", "product_id": prod.ID}},
+			"blocks":   []any{map[string]any{"type": "product", "product_id": prod.ID}},
 			"products": []any{map[string]any{"id": prod.ID, "name": "Tee", "price_sen": 1000}},
 		},
 		Theme: map[string]any{"primary": "#5e6ad2"},
@@ -93,7 +93,7 @@ func variationSubmitFixture(t *testing.T) (*PublicHandlers, string, string, stri
 		Accounts:          dbstore.NewAccountStore(pool),
 		Products:          dbstore.NewProductStore(pool),
 		ProductVariations: vs,
-		Workspaces:            dbstore.NewWorkspaceStore(pool),
+		Workspaces:        dbstore.NewWorkspaceStore(pool),
 		BaseURL:           "http://localhost:8080",
 	}
 	return h, workspaceSlug, formSlug, prod.ID, limID

@@ -15,8 +15,8 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	_ "image/gif" // sniff GIF headers
 	"image/jpeg"
-	_ "image/gif"  // sniff GIF headers
 	_ "image/jpeg" // sniff JPEG headers
 	_ "image/png"  // sniff PNG headers
 	"io"

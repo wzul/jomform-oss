@@ -257,6 +257,45 @@ func (s *Server) requireFormWrite(ctx context.Context, formID string) (string, e
 	return acc, nil
 }
 
+// resolveTrashedFormAccount is resolveFormAccount's counterpart for a form in the
+// TRASH. It must be separate: resolveFormAccount's lookup is Forms.GetByID, whose
+// select filters `deleted_at IS NULL`, so a trashed form is invisible to it and
+// every trash operation would fail as "not owned" — including restore, whose
+// entire purpose is reaching a trashed row.
+func (s *Server) resolveTrashedFormAccount(ctx context.Context, formID string) (string, error) {
+	if s.deps.Forms == nil {
+		return "", errors.New("forms tidak tersedia")
+	}
+	return s.resolveEntityAccount(ctx, func(acc string) error {
+		_, err := s.deps.Forms.GetTrashed(ctx, acc, formID)
+		return err
+	})
+}
+
+// requireTrashedFormWrite is the gate for restore / purge / trash reads: it
+// resolves the owning account through the TRASH-aware lookup and then enforces
+// both write axes (API-key scope + manage-or-admin role in that workspace).
+//
+// The SCOPE axis is checked FIRST, before the entity lookup. requireWriteRoleIn
+// also checks it, but only after the resolve — and the resolve's failure mode
+// ("entiti tidak dijumpai") differs from a refusal, so a readonly key could tell
+// a real form id from a fake one by the wording of the error. Naming the gate
+// before any lookup removes that probe. Same reason the REST purge handler
+// checks the write role before reading the row.
+func (s *Server) requireTrashedFormWrite(ctx context.Context, formID string) (string, error) {
+	if err := s.requireWriteScope(ctx); err != nil {
+		return "", err
+	}
+	acc, err := s.resolveTrashedFormAccount(ctx, formID)
+	if err != nil {
+		return "", err
+	}
+	if err := s.requireWriteRoleIn(ctx, acc); err != nil {
+		return "", err
+	}
+	return acc, nil
+}
+
 // requireProductWrite returns the account owning productID after enforcing the
 // manage-or-admin gate for that product's workspace.
 func (s *Server) requireProductWrite(ctx context.Context, productID string) (string, error) {

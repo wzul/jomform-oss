@@ -22,6 +22,16 @@ Parity checklist (dashboard → MCP):
   `update_product`, `archive_product`
 - Form builder: create/update/publish/unpublish/list/get → `upsert_form`,
   `publish_form`, `unpublish_form`, `list_forms`, `get_form`
+- Form trash (soft delete → restore or permanent purge) → `list_deleted_forms`,
+  `restore_form`, `purge_form`.
+  The existing soft-delete tool `delete_form` trashes a form; `restore_form`
+  brings it back with no CASCADE and no silent rename (a slug re-taken while
+  trashed refuses the restore); `purge_form` destroys the row AND its CASCADE
+  children, requires the slug typed as confirm_slug, and is REFUSED for a form
+  that has any sale — sales.form_id is ON DELETE SET NULL, so a purge would
+  silently orphan the sale.
+  REST: `GET /v1/rest/forms/trash`, `POST /v1/rest/forms/{id}/restore`,
+  `DELETE /v1/rest/forms/{id}/purge`.
 - Sales: list/summary/confirm → `list_sales`, `get_sales_summary`,
   `confirm_sale`
 - Skip-capture flow → `capture_sale`, `release_sale`
@@ -37,6 +47,17 @@ Parity checklist (dashboard → MCP):
 - Event tracking / audit log → `list_events` (account-scoped, read-only)
 - Space landing page (customizable storefront, #360/#362) →
   `get_workspace_landing_page`, `set_workspace_landing_page` (incl. embedded `forms[]`)
+- Workspace lifecycle (#162, member/invite tools above) → `list_workspaces`,
+  `create_workspace`, `delete_workspace`, `check_workspace_deletion`.
+  `delete_workspace` is OWNER-ONLY and needs the workspace slug typed as
+  confirm_slug; it is refused when
+  the owner would be left with NO workspace (the "at least one workspace" rule)
+  or when the workspace is not empty (blockers are listed per category, with
+  counts). Restore is not offered: the delete is permanent, and the CHIP
+  account goes with the workspace. `check_workspace_deletion` is the read half —
+  the SAME emptiness definition, so the UI can state a reason instead of
+  failing after the click. REST: `DELETE /v1/workspaces/{id}`,
+  `GET /v1/workspaces/{id}/deletion-check`.
 - Media library / asset upload (image + code, tenant-scoped, scan-gated,
   #361/#364) → `list_media`, `upload_media`
 - Analytics → `get_form_analytics`, `get_product_analytics`

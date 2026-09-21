@@ -17,10 +17,10 @@ import (
 type restrictionState int
 
 const (
-	restrictionOpen restrictionState = iota
-	restrictionPending               // before start_at
-	restrictionExpired               // after end_at
-	restrictionLimitReached          // entry limit reached
+	restrictionOpen         restrictionState = iota
+	restrictionPending                       // before start_at
+	restrictionExpired                       // after end_at
+	restrictionLimitReached                  // entry limit reached
 )
 
 // scheduleState returns pending/expired/open based on the form's schedule

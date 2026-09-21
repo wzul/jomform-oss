@@ -58,14 +58,14 @@ func newBundleHandlers(pool *pgxpool.Pool) *RESTHandlers {
 		Products:          dbstore.NewProductStore(pool),
 		ProductVariations: dbstore.NewProductVariationStore(pool),
 		Forms:             dbstore.NewFormStore(pool),
-		Keys:       dbstore.NewAPIKeyStore(pool),
-		Sales:      dbstore.NewSaleStore(pool),
-		Subs:       dbstore.NewSubscriptionStore(pool),
-		Domains:    dbstore.NewDomainStore(pool),
-		Webhooks:   dbstore.NewWebhookStore(pool),
-		Workspaces:     dbstore.NewWorkspaceStore(pool),
-		Users:      dbstore.NewUserStore(pool),
-		SecretsKey: key,
+		Keys:              dbstore.NewAPIKeyStore(pool),
+		Sales:             dbstore.NewSaleStore(pool),
+		Subs:              dbstore.NewSubscriptionStore(pool),
+		Domains:           dbstore.NewDomainStore(pool),
+		Webhooks:          dbstore.NewWebhookStore(pool),
+		Workspaces:        dbstore.NewWorkspaceStore(pool),
+		Users:             dbstore.NewUserStore(pool),
+		SecretsKey:        key,
 	}
 }
 

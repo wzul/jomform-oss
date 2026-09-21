@@ -34,13 +34,13 @@ func (h *RESTHandlers) createFormNotification(w http.ResponseWriter, r *http.Req
 		return
 	}
 	var in struct {
-		Name      string                        `json:"name"`
-		Event     string                        `json:"event"`
-		ToEmail   string                        `json:"to_email"`
-		Subject   string                        `json:"subject"`
-		Body      string                        `json:"body"`
+		Name      string                         `json:"name"`
+		Event     string                         `json:"event"`
+		ToEmail   string                         `json:"to_email"`
+		Subject   string                         `json:"subject"`
+		Body      string                         `json:"body"`
 		Condition *dbstore.NotificationCondition `json:"condition"`
-		Enabled   *bool                         `json:"enabled"`
+		Enabled   *bool                          `json:"enabled"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
 		writeErr(w, http.StatusBadRequest, "payload tidak sah")
@@ -79,13 +79,13 @@ func (h *RESTHandlers) updateFormNotification(w http.ResponseWriter, r *http.Req
 		return
 	}
 	var in struct {
-		Name      string                        `json:"name"`
-		Event     string                        `json:"event"`
-		ToEmail   string                        `json:"to_email"`
-		Subject   string                        `json:"subject"`
-		Body      string                        `json:"body"`
+		Name      string                         `json:"name"`
+		Event     string                         `json:"event"`
+		ToEmail   string                         `json:"to_email"`
+		Subject   string                         `json:"subject"`
+		Body      string                         `json:"body"`
 		Condition *dbstore.NotificationCondition `json:"condition"`
-		Enabled   *bool                         `json:"enabled"`
+		Enabled   *bool                          `json:"enabled"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
 		writeErr(w, http.StatusBadRequest, "payload tidak sah")

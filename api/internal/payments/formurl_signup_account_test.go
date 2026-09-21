@@ -114,7 +114,7 @@ func TestReceiptFormURLForASignupCreatedAccount(t *testing.T) {
 	// thank-you base (purchases.go) is built by workspaceBaseURL, so a paid
 	// buyer's redirect lands on the same served host.
 	if base := svc.workspaceBaseURL(ctx, acc.ID); base == "" {
-		t.Errorf("workspaceBaseURL returned \"\" — the checkout's success/failure redirect falls back to "+
+		t.Errorf("workspaceBaseURL returned \"\" — the checkout's success/failure redirect falls back to " +
 			"the apex base, landing the buyer outside their merchant's storefront")
 	} else if !strings.Contains(got, base) {
 		t.Errorf("receipt url %q is not under the thank-you base %q — the two buyer-facing surfaces disagree",

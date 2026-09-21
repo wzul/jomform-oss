@@ -61,8 +61,8 @@ func (s *Server) getFormConfirmations(
 // setFormConfirmationsIn replaces a form's confirmations (issue #179). The
 // default confirmation is always preserved server-side.
 type setFormConfirmationsIn struct {
-	FormID        string            `json:"form_id" jsonschema:"ID borang"`
-	Confirmations []confirmationIn  `json:"confirmations" jsonschema:"Senarai pengesahan (ganti semua; lalai sentiasa dikekalkan)"`
+	FormID        string           `json:"form_id" jsonschema:"ID borang"`
+	Confirmations []confirmationIn `json:"confirmations" jsonschema:"Senarai pengesahan (ganti semua; lalai sentiasa dikekalkan)"`
 }
 
 // confirmationIn is one confirmation to save.

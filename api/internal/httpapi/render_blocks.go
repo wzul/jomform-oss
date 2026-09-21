@@ -29,12 +29,12 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 			Required  bool       `json:"required"`
 			Condition *Condition `json:"condition"`
 			// Issue #173: per-field settings.
-			Placeholder  string `json:"placeholder"`
-			Description  string `json:"description"`
-			CSSClass     string `json:"css_class"`
+			Placeholder string `json:"placeholder"`
+			Description string `json:"description"`
+			CSSClass    string `json:"css_class"`
 			// Issue #388: per-field inline style (sanitized server-side).
-			Style       string `json:"style"`
-			MaxLength   int    `json:"max_length"`
+			Style        string `json:"style"`
+			MaxLength    int    `json:"max_length"`
 			DefaultValue string `json:"default_value"`
 			Min          string `json:"min"`
 			Max          string `json:"max"`
@@ -104,12 +104,12 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 		// Issue #153: variations selector.
 		Variations []variationView
 		// Issue #173: per-field settings surfaced to the template.
-		Placeholder  string
-		Description  string
-		CSSClass     string
+		Placeholder string
+		Description string
+		CSSClass    string
 		// Issue #388: per-field inline style, sanitized to safe CSS only.
-		Style       string
-		MaxLength   int
+		Style        string
+		MaxLength    int
 		DefaultValue string
 		Min, Max     string
 		Step         string
@@ -143,7 +143,7 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 		vb := blockView{
 			ID: b.ID, Type: b.Type, Value: b.Value, Src: b.Src, ProductID: b.ProductID, Required: b.Required,
 			Placeholder: b.Placeholder, Description: b.Description, CSSClass: b.CSSClass,
-			Style: customform.SanitizeStyle(b.Style),
+			Style:     customform.SanitizeStyle(b.Style),
 			MaxLength: b.MaxLength, DefaultValue: b.DefaultValue, Min: b.Min, Max: b.Max,
 			Step: b.Step, Format: b.Format, Pattern: b.Pattern, RequiredMsg: b.RequiredMsg,
 		}
@@ -258,9 +258,9 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 		"ThemeText": themeText, "ThemeCardBg": themeCardBg, "ThemeRadius": themeRadius,
 		"ThemeFont": themeFont, "ThemeLayout": themeLayout, "ThemeSpacing": themeSpacing,
 		"ThemeCSS": template.HTML(themeCSS),
-		"ThemeJS": template.HTML(themeJS),
-		"Lang": ls.Lang,
-		"Ls":   ls,
+		"ThemeJS":  template.HTML(themeJS),
+		"Lang":     ls.Lang,
+		"Ls":       ls,
 		// Issue #411: Open Graph + Twitter meta for social sharing.
 		"OGMeta": h.formOGMeta(r, f),
 		// Issue #183: optional per-workspace footer.
@@ -657,10 +657,10 @@ func (h *PublicHandlers) renderResponseForm(w http.ResponseWriter, r *http.Reque
 	}
 	var cfg struct {
 		Blocks []struct {
-			ID       string     `json:"id"`
-			Type     string     `json:"type"`
-			Value    string     `json:"value"`
-			Required bool       `json:"required"`
+			ID        string     `json:"id"`
+			Type      string     `json:"type"`
+			Value     string     `json:"value"`
+			Required  bool       `json:"required"`
 			Condition *Condition `json:"condition"`
 			// Issue #173: per-field settings.
 			Placeholder  string `json:"placeholder"`
@@ -708,7 +708,7 @@ func (h *PublicHandlers) renderResponseForm(w http.ResponseWriter, r *http.Reque
 			"consent", "hidden", "list", "repeater", "image-choice", "captcha":
 			fv := fieldView{
 				ID: b.ID, Type: b.Type, Value: b.Value, Required: b.Required,
-				CondJSON: marshalCondition(b.Condition),
+				CondJSON:    marshalCondition(b.Condition),
 				Placeholder: b.Placeholder, Description: b.Description,
 				MaxLength: b.MaxLength, DefaultValue: b.DefaultValue,
 				Min: b.Min, Max: b.Max, Step: b.Step, Pattern: b.Pattern,
@@ -774,9 +774,9 @@ func (h *PublicHandlers) renderResponseForm(w http.ResponseWriter, r *http.Reque
 		"ThemeText": themeText, "ThemeCardBg": themeCardBg, "ThemeRadius": themeRadius,
 		"ThemeFont": themeFont, "ThemeLayout": themeLayout, "ThemeSpacing": themeSpacing,
 		"ThemeCSS": template.HTML(themeCSS),
-		"ThemeJS": template.HTML(themeJS),
-		"Lang": ls.Lang,
-		"Ls":   ls,
+		"ThemeJS":  template.HTML(themeJS),
+		"Lang":     ls.Lang,
+		"Ls":       ls,
 		// Issue #411: Open Graph + Twitter meta for social sharing.
 		"OGMeta": h.formOGMeta(r, f),
 		// Issue #183: optional per-workspace footer.

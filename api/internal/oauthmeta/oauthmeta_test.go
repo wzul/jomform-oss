@@ -89,12 +89,12 @@ func TestResourceMatches(t *testing.T) {
 
 	rejected := []string{
 		"",
-		"https://mcp.jomform.com",              // the origin is not the resource
-		"https://mcp.jomform.com/other",        // wrong path
-		"https://evil.example/mcp",             // wrong host — token must not be minted
+		"https://mcp.jomform.com",               // the origin is not the resource
+		"https://mcp.jomform.com/other",         // wrong path
+		"https://evil.example/mcp",              // wrong host — token must not be minted
 		"https://mcp.jomform.com.evil.test/mcp", // host suffix trick
-		"http://mcp.jomform.com/mcp",           // wrong scheme
-		"mcp.jomform.com/mcp",                  // not absolute
+		"http://mcp.jomform.com/mcp",            // wrong scheme
+		"mcp.jomform.com/mcp",                   // not absolute
 		"not a url",
 	}
 	for _, c := range rejected {
