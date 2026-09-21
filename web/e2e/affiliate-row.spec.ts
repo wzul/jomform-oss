@@ -14,14 +14,17 @@
 // 320px), so the row was also overflowing its card.
 //
 // THE CLASS, NOT THE ONE ROW
-// The same shape exists on four other pages, so this guard measures all five rows
-// the card names — settings/affiliates (settings/page.tsx:2302), the chat composer
+// The same shape exists on other pages, so this guard measures every row in the
+// class — settings/affiliates (settings/page.tsx:2302), the chat composer
 // (chat/page.tsx:284), the settings/members invite row (MembersTab.tsx:157), the
-// admin suppression add row (admin/page.tsx:791) and the sales filter bar
-// (sales/page.tsx:761) — because `flex-wrap` alone is NOT proof of correctness: the
-// members row already had `flex-wrap` and still overflowed its container by 2px
-// (`min-w-56` is `flex: 1 1 0%`'s min-width, so it could not shrink) until this card
-// fixed it. Each rule is therefore a property of the RENDERED box.
+// admin suppression add row (admin/page.tsx:791), the sales filter bar
+// (sales/page.tsx:761), and the three settings rows added later: the add-domain
+// row (settings/page.tsx:1175), the add-webhook row (settings/page.tsx:1575) and
+// the webhooks inline edit drawer (settings/page.tsx:1706) — because `flex-wrap`
+// alone is NOT proof of correctness: the members row already had `flex-wrap` and
+// still overflowed its container by 2px (`min-w-56` is `flex: 1 1 0%`'s
+// min-width, so it could not shrink) until this card fixed it. Each rule is
+// therefore a property of the RENDERED box.
 //
 // WHY THE GUARD IS A BROWSER MEASUREMENT, NOT A CLASS-NAME ASSERTION
 // `npm run test:unit` (node --test over src/lib/*.test.ts) has no DOM, and a guard
@@ -81,6 +84,12 @@ type Control = {
   contentW: number;
   boxH: number;
   textRun: number;
+  // A single-line field holding a VALUE (not just a placeholder). An `input`
+  // with a value wider than its box scrolls its own text — that is how every
+  // filled text field behaves and is not a clipping defect, so the per-control
+  // overflow clause below does not apply to one (`scrollWidth` is not a
+  // rendered-clipping measure for a value; the placeholder is not in it at all).
+  hasValue: boolean;
 };
 type RowMeasure = { rowClientW: number; rowScrollW: number; controls: Control[] };
 
@@ -103,10 +112,39 @@ const MAX_BUTTON_FIELD_RATIO = 2.5;
 // Desktop bound: the affiliate row lives under a `max-w-xl` column (36rem = 576px).
 const DESKTOP_MAX_ROW_PX = 576;
 
-// The five rows the card names, with the URL and the on-page locator that finds
-// each one. They live on four different pages, so this walks them in one browser
-// session per locale.
-const ROW_PAGES = [
+// The rows the class guard covers, with the URL and the on-page locator that
+// finds each one. They live on five different pages, so this walks them in one
+// browser session per locale.
+//
+// ROWS 6-8 WERE ADDED AFTER THIS FILE'S FIRST CARD: the `min-w-56`-on-a-`flex-1`
+// shape this file was written for survived in three more settings rows that the
+// first card never measured (`settings/page.tsx:1175`, `:1575`, `:1706`). One of
+// them — the webhooks edit drawer — is behind `editId !== null`, so it needs an
+// explicit open step (`openLabel`/`openSelector` below); the other two are the
+// add-domain and add-webhook rows. Their row-overflow violation is the same
+// `row scrollWidth 224 > clientWidth 222` RULE 2 already fires on, with no new
+// rule: the drawer row is worse (224 > 188, because the drawer spends 16px of
+// padding on each side).
+// A row on a page, as the guard needs to reach and measure it.
+type RowPage = {
+  name: string;
+  file: string;
+  path: string;
+  waitFor: string;
+  rowExpr: string;
+  isButtonRow: boolean;
+  // Rows behind a click (the webhooks edit drawer) name the control that opens
+  // them — a dictionary KEY, because the label is localized — and the selector
+  // that must then exist. Both are absent for the rows that render directly.
+  openLabel?: keyof typeof DICT;
+  openSelector?: string;
+  // Dictionary keys for placeholders on this row that are a SENTENCE of help
+  // text rather than a token: those may truncate (see RULE 1) and are held to
+  // the "reads as empty" floor instead of a full glyph-run render.
+  hintPlaceholderKeys?: Array<keyof typeof DICT>;
+};
+
+const ROW_PAGES: RowPage[] = [
   { name: "settings affiliates create row", file: "settings/page.tsx:2302",
     path: "/settings?tab=affiliates",
     waitFor: 'input[placeholder="ALI"]',
@@ -128,7 +166,29 @@ const ROW_PAGES = [
     waitFor: "div.jf-card select.jf-input",
     rowExpr: `document.querySelector('div.jf-card select.jf-input').closest('div.jf-card')`,
     isButtonRow: false },
-];
+  { name: "settings domains add row", file: "settings/page.tsx:1188", path: "/settings?tab=domains",
+    waitFor: 'input[placeholder="shop.yourdomain.com"]',
+    rowExpr: `document.querySelector('input[placeholder="shop.yourdomain.com"]').closest('form')`,
+    isButtonRow: true },
+  { name: "settings webhooks add row", file: "settings/page.tsx:1604", path: "/settings?tab=webhooks",
+    waitFor: 'form.mt-3 input[placeholder="https://yourapp.com/jomform-hook"]',
+    rowExpr: `document.querySelector('form.mt-3 input[placeholder="https://yourapp.com/jomform-hook"]').closest('div.flex')`,
+    isButtonRow: true },
+  { name: "settings webhooks edit drawer row", file: "settings/page.tsx:1741", path: "/settings?tab=webhooks",
+    // The drawer only exists while `editId !== null`, so this row needs an
+    // explicit open step that the other rows do not: `waitFor` proves the tab
+    // rendered, `openLabel` is the row's (localized) Edit button, and
+    // `openSelector` is the drawer's own form, which is what gets measured.
+    waitFor: 'form.mt-3 input[placeholder="https://yourapp.com/jomform-hook"]',
+    openLabel: "set.webhookEdit",
+    openSelector: 'form.bg-slate-50 input[placeholder="https://yourapp.com/jomform-hook"]',
+    // `set.secretKeep` is a sentence of help text, not a token: 46 characters in
+    // `en` (a 307.56px run) and 12 in `zh`. It truncates in every locale by
+    // design, so it answers to the "reads as empty" floor, not a full render.
+    hintPlaceholderKeys: ["set.secretKeep"],
+    rowExpr: `document.querySelector('form.bg-slate-50 input[placeholder="https://yourapp.com/jomform-hook"]').closest('div.flex')`,
+    isButtonRow: false },
+] as const;
 
 // The dashboard-bundle + endpoint shapes each page needs to reach its loaded
 // state. No Go server, no session cookie, no database: every /api/* call is
@@ -136,7 +196,11 @@ const ROW_PAGES = [
 const BUNDLE = {
   me: { id: "u1", email: "merchant@example.com", name: "Merchant", lang: "", is_super_admin: true },
   workspaces: [{ id: "ws1", name: "Demo", slug: "demo", role: "admin" }],
-  chip_status: null, keys: [], domains: [], webhooks: [], social: [], einvoice: null,
+  chip_status: null, keys: [], domains: [], social: [], einvoice: null,
+  // One webhook row, so the webhooks tab renders the edit drawer's opener. The
+  // drawer itself is behind `editId !== null` and is opened by the row's Edit
+  // button (see ROW_PAGES), so the bundle has to carry a row to open.
+  webhooks: [{ id: "wh1", url: "https://yourapp.com/jomform-hook", events: ["sale.paid"] }],
   products: [], summary: { counts: {}, revenue_sen: 0 },
   sales: { items: [], page: 1, limit: 20, total: 0 },
   form_analytics: [], product_analytics: [],
@@ -215,6 +279,10 @@ async function measureRow(page: Page, rowExpr: string): Promise<RowMeasure> {
         boxW: r2(b.width), clientW: el.clientWidth, scrollW: el.scrollWidth,
         contentW: r2(el.clientWidth - padL - padR), boxH: r2(b.height),
         textRun: r2(ctx.measureText(text).width),
+        // A filled field vs an empty one. A textarea's value is not read here
+        // and a select's scrollWidth is about its options, not a value, so only
+        // an input counts.
+        hasValue: el.tagName === "INPUT" && (el.value || "").length > 0,
       };
     });
     return {
@@ -281,6 +349,15 @@ for (const lang of LANGS) {
           await page.goto(`${baseURL}${rowPage.path}`, { waitUntil: "domcontentloaded" });
           await page.waitForSelector(rowPage.waitFor, { timeout: 15_000 });
         }
+        // A row behind a click must be OPENED before it can be measured, and the
+        // open itself is asserted: if the drawer's own form does not appear, the
+        // row below would measure something else (or throw) and the failure would
+        // be misattributed. The label is the locale's, from the dictionary.
+        if (rowPage.openLabel && rowPage.openSelector) {
+          await page.getByRole("button", { name: DICT[rowPage.openLabel][lang], exact: true }).first()
+            .click();
+          await page.waitForSelector(rowPage.openSelector, { timeout: 15_000 });
+        }
         const m = rowPage === ROW_PAGES[0] ? aff : await measureRow(page, rowPage.rowExpr);
         const where = `${rowPage.name} (${rowPage.file})`;
 
@@ -291,9 +368,22 @@ for (const lang of LANGS) {
         // "ALI" run in 5px / 0px of content). A `textarea` and a button label wrap
         // by design, so a single-line comparison is not a valid criterion for them;
         // RULE 2 below is what catches a label that is genuinely clipped.
+        //
+        // The full-run term applies to text that is a TOKEN (a code, a URL, a
+        // domain) or a short label — something the user cannot reconstruct from a
+        // partial render. A row may name `hintPlaceholderKeys` for a placeholder
+        // that is a SENTENCE of help text (e.g. "Signing secret (leave blank to
+        // keep current)", measured at 307.56px — wider than any 320px field, and
+        // truncated in every locale by design); a character-count test alone is
+        // locale-fragile, because the same sentence is 46 characters in `en` and
+        // only 12 in `zh`, so it would enforce the full render for one translation
+        // and exempt the other. Those fields keep the "reads as empty" floor.
         for (const c of m.controls) {
           if (c.tag !== "input" && c.tag !== "select") continue;
-          const short = c.text.length > 0 && c.text.length <= SHORT_TEXT_MAX_CHARS;
+          const isHint = (rowPage.hintPlaceholderKeys ?? []).some(
+            (k) => c.text === DICT[k][lang],
+          );
+          const short = !isHint && c.text.length > 0 && c.text.length <= SHORT_TEXT_MAX_CHARS;
           const floor = short ? Math.max(c.textRun + RUN_SLACK_PX, FIELD_FLOOR_PX) : FIELD_FLOOR_PX;
           expect(
             c.contentW,
@@ -304,7 +394,16 @@ for (const lang of LANGS) {
         }
 
         // RULE 2 — nothing overflows itself or its row.
+        //
+        // A field that holds a VALUE is excluded from the per-control clause: an
+        // `input` whose value is wider than its box scrolls that text, which is how
+        // every filled text field behaves (measured: the webhooks edit drawer's URL
+        // field reports scrollWidth 269 against clientWidth 186 purely from its
+        // pre-filled value — clear the value and scrollWidth drops to 186). That is
+        // not the clipping this rule is for; an EMPTY field's scrollWidth is what
+        // catches a real overflow, and the row clause below is unaffected.
         for (const c of m.controls) {
+          if (c.hasValue && c.tag === "input") continue;
           expect(
             c.scrollW,
             `${lang}@${width} ${where}: ${c.tag} ${JSON.stringify(c.text)} overflows ` +

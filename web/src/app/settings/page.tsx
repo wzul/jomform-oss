@@ -1169,11 +1169,23 @@ export default function Settings() {
               </p>
               {domainMsg && <p className="mt-3 rounded-lg bg-indigo-50 px-3 py-2 text-sm text-indigo-700">{domainMsg}</p>}
               <form onSubmit={setDomainClaim} className="mt-4 flex flex-wrap gap-2">
+                {/* `min-w-56` (224px) is a hard `min-width`, and this input is a
+                    `flex-1` child (`flex: 1 1 0%`), whose `min-width` is a floor
+                    the item cannot shrink below. The card's content box is only
+                    222px at a 320px viewport, so the field pushed the row 2px past
+                    its container (measured: row scrollWidth 224 > clientWidth 222,
+                    input box 224 in a 222px row, every locale). Same shape and
+                    same fix as MembersTab.tsx:158. `basis-56` keeps the 224px as a
+                    PREFERRED size the item may shrink from, and `min-w-0` removes
+                    the floor, so the row holds at phone widths while desktop is
+                    unchanged. NOT a `min-w-[…]` utility: measured on the built
+                    page, a `min-width` utility DOES win against the unlayered
+                    `.jf-input`, so it would reproduce this same overflow. */}
                 <input
                   value={domainInput}
                   onChange={(e) => setDomainInput(e.target.value)}
                   placeholder="shop.yourdomain.com"
-                  className="jf-input min-w-56 max-w-xl flex-1"
+                  className="jf-input min-w-0 max-w-xl flex-1 basis-56 sm:basis-auto"
                 />
                 <button className="jf-btn-primary" type="submit">{t("set.addDomain")}</button>
               </form>
@@ -1398,7 +1410,16 @@ export default function Settings() {
               <p className="mt-2 text-sm text-slate-400">
                 {t("set.cfHelp")}
               </p>
-              <div className="mt-3 flex gap-2">
+              {/* `flex-wrap` because a non-wrapping row of two button classes
+                  cannot be narrower than their combined min-content: both classes
+                  carry `white-space: nowrap; flex-shrink: 0` (globals.css, #655),
+                  so at 320px the two buttons measured 200.25px each in a 222px
+                  content box and the cluster — not the button row — set the
+                  DOCUMENT's min-content to 446px, i.e. the whole tab scrolled
+                  126px sideways at 320/360/390/430px. Same defect and same fix as
+                  the /form-settings header cluster (PR 673); measured on the built
+                  page before: documentElement scrollWidth 446 vs clientWidth 320. */}
+              <div className="mt-3 flex flex-wrap gap-2">
                 {!cfLinked && (
                   <a href="/api/cf/start" className="jf-btn-primary inline-block">
                     {t("set.cfLogin")}
@@ -1572,8 +1593,15 @@ export default function Settings() {
               </p>
               <form onSubmit={addWebhook} className="mt-3">
                 <div className="flex flex-wrap gap-2">
+                  {/* Same `min-w-56`-on-a-`flex-1`-child defect as the domains row
+                      above (MembersTab.tsx:158): measured at 320px the row was
+                      scrollWidth 224 > clientWidth 222, the URL field's box was
+                      224px in a 222px row, and its placeholder is a 244.98px glyph
+                      run in 198px of content, so it rendered cut at
+                      "https://yourapp.com/jomform". `basis-56` + `min-w-0` keeps
+                      the 224px desktop preference without the shrink floor. */}
                   <input value={whUrl} onChange={(e) => setWhUrl(e.target.value)} required type="url"
-                    placeholder="https://yourapp.com/jomform-hook" className="jf-input min-w-56 max-w-xl flex-1" />
+                    placeholder="https://yourapp.com/jomform-hook" className="jf-input min-w-0 max-w-xl flex-1 basis-56 sm:basis-auto" />
                   <input value={whSecret} onChange={(e) => setWhSecret(e.target.value)} required type="text"
                     placeholder={t("set.signingSecret")} className="jf-input w-48" />
                   <button className="jf-btn-primary">{t("set.add")}</button>
@@ -1703,8 +1731,14 @@ export default function Settings() {
                 <form onSubmit={saveWebhook} className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
                   <h3 className="text-sm font-semibold text-slate-700">{t("set.webhookEditTitle")}</h3>
                   <div className="mt-2 flex flex-wrap gap-2">
+                    {/* The third instance of the `min-w-56`-on-a-`flex-1`-child
+                        defect (MembersTab.tsx:158). It is worse here: the drawer
+                        already spends 16px of padding on each side, so at 320px the
+                        row was scrollWidth 224 > clientWidth 188 — 36px over — and
+                        the URL placeholder rendered cut. `basis-56` + `min-w-0`
+                        keeps the 224px desktop preference without the shrink floor. */}
                     <input value={editUrl} onChange={(e) => setEditUrl(e.target.value)} required type="url"
-                      placeholder="https://yourapp.com/jomform-hook" className="jf-input min-w-56 max-w-xl flex-1" />
+                      placeholder="https://yourapp.com/jomform-hook" className="jf-input min-w-0 max-w-xl flex-1 basis-56 sm:basis-auto" />
                     <input value={editSecret} onChange={(e) => setEditSecret(e.target.value)} type="text"
                       placeholder={t("set.secretKeep")} className="jf-input w-48" />
                   </div>
