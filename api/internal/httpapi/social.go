@@ -492,7 +492,7 @@ func (a *AuthHandlers) connectResend(w http.ResponseWriter, r *http.Request) {
 // #302). Issue #199: enqueued when a queue is wired; otherwise sent
 // synchronously via VerifyMailer.
 func (a *AuthHandlers) sendConnectEmail(ctx context.Context, email, link string) error {
-	if a.VerifyMailer == nil {
+	if mailerUnavailable(a.VerifyMailer) {
 		return errors.New("connect mailer not configured")
 	}
 	if a.Suppressions != nil {

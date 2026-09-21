@@ -83,7 +83,7 @@ func (a *AuthHandlers) replyForgotPasswordOK(w http.ResponseWriter) {
 // at (*email.Sender).SendReceipt, which also covers the queued path. A store
 // error fails open (the send proceeds) — see (*email.Sender).suppressed.
 func (a *AuthHandlers) sendPasswordResetEmail(ctx context.Context, email, token string) error {
-	if a.VerifyMailer == nil {
+	if mailerUnavailable(a.VerifyMailer) {
 		return errors.New("reset mailer not configured")
 	}
 	if a.Suppressions != nil {

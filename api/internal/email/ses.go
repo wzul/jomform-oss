@@ -29,6 +29,16 @@ import (
 // queue retry, never a dead letter.
 var ErrSuppressed = errors.New("email suppressed")
 
+// ErrNotConfigured is returned when a send reaches an unconfigured (nil)
+// *Sender. It is a last-resort backstop: an unconfigured deployment
+// (SES_SMTP_HOST unset) leaves the auth mailer nil, and cmd/jomform-api hands
+// that out as a nil VerifyMailer INTERFACE, so httpapi.mailerUnavailable is what
+// normally drops the job. This error exists so that a wiring mistake which
+// stores a nil *Sender inside an interface cannot panic instead — the panic it
+// replaces ran on the email worker goroutine, which recovers nothing, so the
+// whole API process died with it.
+var ErrNotConfigured = errors.New("email sender not configured")
+
 // SMTPConfig holds SES credentials. Despite the name (kept for compatibility),
 // these are now used for the SESv2 API, not SMTP:
 //   - Username = IAM access key id (AKIA…)
@@ -96,7 +106,7 @@ func NewWithSuppressor(cfg SMTPConfig, s Suppressor) *Sender {
 //   - A hit is logged as one structured email_suppressed_skip line, so an
 //     operator can always tell why a message never left.
 func (s *Sender) suppressed(to, subject string) bool {
-	if s.Suppressor == nil {
+	if s == nil || s.Suppressor == nil {
 		return false
 	}
 	sup, err := ShouldSuppress(context.Background(), s.Suppressor, to)
@@ -132,7 +142,13 @@ func obfuscate(addr string) string {
 }
 
 // client returns a lazily-initialised SESv2 client using static IAM creds.
+//
+// The nil check is a backstop (see ErrNotConfigured); it also makes the s.cfg
+// reads below provably safe on an unconfigured sender.
 func (s *Sender) client() (*sesv2.Client, error) {
+	if s == nil {
+		return nil, ErrNotConfigured
+	}
 	if s.cli != nil {
 		return s.cli, nil
 	}
@@ -167,6 +183,12 @@ func (s *Sender) Send(to, subject, body string) error {
 // Issue #339: the email is sent as multipart — a plain-text part (fallback for
 // clients without HTML) plus a branded HTML part (JomForm logo, colors, layout).
 func (s *Sender) SendReceipt(to, subject, body string) (string, error) {
+	// A nil receiver is the unconfigured-SES shape. The wiring must hand the
+	// caller a nil INTERFACE (never a nil *Sender inside one) — see
+	// cmd/jomform-api — so this is a backstop, not the primary guard.
+	if s == nil {
+		return "", ErrNotConfigured
+	}
 	// The pre-send choke point. Checked before the SES client is even
 	// constructed so a suppressed address costs one indexed lookup and never
 	// opens a connection.
@@ -212,6 +234,10 @@ func (s *Sender) SendWithAttachment(to, subject, body string, filename string, d
 // attachment (PDF receipts) via SESv2 SendEmail using a raw MIME message, and
 // returns the SES MessageID (issue #106) for open/click correlation.
 func (s *Sender) SendReceiptWithAttachment(to, subject, body string, filename string, data []byte) (string, error) {
+	// Nil-receiver backstop, same as SendReceipt.
+	if s == nil {
+		return "", ErrNotConfigured
+	}
 	// Same pre-send choke point as SendReceipt — the second and last
 	// sesv2.SendEmail call in the repo.
 	if s.suppressed(to, subject) {

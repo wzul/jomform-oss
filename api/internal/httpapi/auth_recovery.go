@@ -116,7 +116,7 @@ func (a *AuthHandlers) replyEmail2FACodeOK(w http.ResponseWriter) {
 // when an EmailQueue is wired the email is enqueued and sent by a background
 // worker; otherwise it is sent synchronously.
 func (a *AuthHandlers) sendEmail2FACode(ctx context.Context, email, code string) error {
-	if a.VerifyMailer == nil {
+	if mailerUnavailable(a.VerifyMailer) {
 		return errors.New("email code mailer not configured")
 	}
 	if a.Suppressions != nil {
@@ -162,7 +162,7 @@ func (a *AuthHandlers) sendEmail2FACode(ctx context.Context, email, code string)
 // recovery path that bypasses the authenticator, so it is more convenient but
 // marginally weaker than TOTP alone. Issue #199: enqueued when a queue is wired.
 func (a *AuthHandlers) send2FAActiveEmail(ctx context.Context, email string) error {
-	if a.VerifyMailer == nil {
+	if mailerUnavailable(a.VerifyMailer) {
 		return errors.New("2fa active mailer not configured")
 	}
 	if a.Suppressions != nil {
@@ -237,7 +237,7 @@ func (a *AuthHandlers) handleMagicLinkRequest(w http.ResponseWriter, r *http.Req
 		a.replyMagicLinkRequestOK(w)
 		return
 	}
-	if a.Sessions == nil || a.VerifyMailer == nil {
+	if a.Sessions == nil || mailerUnavailable(a.VerifyMailer) {
 		a.replyMagicLinkRequestOK(w) // nothing wired (bare test) — generic ok
 		return
 	}
@@ -296,7 +296,7 @@ func (a *AuthHandlers) replyMagicLinkRequestOK(w http.ResponseWriter) {
 // Issue #278: when signup is true the email is the hybrid sign-up variant
 // (account is created on click) and lang localizes the body.
 func (a *AuthHandlers) sendMagicLinkEmail(ctx context.Context, email, token string, signup bool, lang string) error {
-	if a.VerifyMailer == nil {
+	if mailerUnavailable(a.VerifyMailer) {
 		return errors.New("magic link mailer not configured")
 	}
 	if a.Suppressions != nil {

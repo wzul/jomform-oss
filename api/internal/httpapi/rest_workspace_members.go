@@ -201,7 +201,7 @@ func (h *RESTHandlers) createInvite(w http.ResponseWriter, r *http.Request, actx
 		})
 		return
 	}
-	if h.Mailer != nil {
+	if !mailerUnavailable(h.Mailer) {
 		if merr := h.Mailer.Send(email, inviteEmailSubject(lang), inviteEmailBody(lang, link)); merr != nil {
 			// The invite is recorded; a failed email is surfaced but not fatal.
 			writeJSON(w, http.StatusCreated, map[string]string{

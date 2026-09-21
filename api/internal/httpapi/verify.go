@@ -32,7 +32,7 @@ import (
 // and sent by a background worker — the register handler returns immediately.
 // When the queue is nil (bare-mode tests) the send happens synchronously.
 func (a *AuthHandlers) sendVerifyEmail(ctx context.Context, userID, email, lang string) error {
-	if a.VerifyMailer == nil {
+	if mailerUnavailable(a.VerifyMailer) {
 		return fmt.Errorf("verify mailer not configured")
 	}
 	if len(a.VerifyKey) != 32 {

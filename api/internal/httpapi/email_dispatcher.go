@@ -19,7 +19,9 @@
 // literal enqueued anywhere in the repo has a matching case here.
 //
 // The dispatcher is wired in cmd/jomform-api and is nil-safe: a nil field means
-// that job type is dropped with a warning (should not happen in production).
+// that job type is dropped with a warning (should not happen in production), and
+// so does a TYPED nil (a nil *email.Sender held in the VerifyMailer interface) —
+// see mailerUnavailable.
 package httpapi
 
 import (
@@ -27,6 +29,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 
 	"github.com/wzul/jomform/api/internal/assetgate"
 	"github.com/wzul/jomform/api/internal/email"
@@ -43,11 +46,42 @@ import (
 // actually enqueues may reach it (email_dispatcher_jobtype_test.go asserts that).
 var errUnknownJobType = errors.New("emailq: unknown job type")
 
+// mailerUnavailable reports whether a VerifyMailer cannot deliver anything.
+//
+// It exists because `m == nil` is NOT sufficient for an interface: a nil
+// *email.Sender stored in the interface makes `m != nil` true, so the caller
+// proceeds and the method runs on a nil receiver — (*email.Sender).SendReceipt
+// dereferences the receiver in suppressed() and SIGSEGVs. On the email queue
+// worker goroutine, which recovers nothing, that kills the whole API process.
+// Found by driving the built binary with SES unconfigured: register → 201 →
+// worker panic → every later request connection-refused.
+//
+// cmd/jomform-api no longer stores a nil *email.Sender in these fields, so the
+// typed nil should not occur in production; this is the layer that makes the
+// guard's intent ("no mailer → drop the job") hold for EITHER shape, so a future
+// wiring change cannot reintroduce the crash.
+//
+// A typed nil is unwrapped to its nil pointer value here so the caller's
+// "no mailer → drop the job" branch is reached with either shape.
+func mailerUnavailable(m VerifyMailer) bool {
+	if m == nil {
+		return true
+	}
+	v := reflect.ValueOf(m)
+	switch v.Kind() {
+	case reflect.Ptr, reflect.Interface, reflect.Func, reflect.Chan, reflect.Map, reflect.Slice:
+		return v.IsNil()
+	}
+	return false
+}
+
 // EmailDispatcher routes queued email jobs to the right sender. It implements
 // emailqueue.Handler.
 type EmailDispatcher struct {
 	// AuthMailer delivers auth/invite emails (verify, magic link, reset, 2FA,
-	// invite). Nil → those job types are dropped.
+	// invite). Nil → those job types are dropped. A typed-nil mailer (a nil
+	// *email.Sender in this interface) is treated as nil too — see
+	// mailerUnavailable for why the plain `== nil` check was not enough.
 	AuthMailer VerifyMailer
 	// Breaker records verification sends (issue #56). Nil-safe.
 	Breaker *email.Breaker
@@ -238,7 +272,7 @@ func (d *EmailDispatcher) sendFeedbackNotify(ctx context.Context, job emailqueue
 // sendAuth delivers an auth/invite email via the shared mailer, recording the
 // SES send metric + breaker counter (mirroring the synchronous path).
 func (d *EmailDispatcher) sendAuth(ctx context.Context, job emailqueue.Job) error {
-	if d.AuthMailer == nil {
+	if mailerUnavailable(d.AuthMailer) {
 		slog.Warn("emailq_auth_no_mailer", "type", job.Type, "to", job.To)
 		return nil
 	}

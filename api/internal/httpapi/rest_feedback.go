@@ -562,7 +562,7 @@ func (h *RESTHandlers) sendFeedbackMail(to, subject, body string) {
 		})
 		return
 	}
-	if h.Mailer != nil {
+	if !mailerUnavailable(h.Mailer) {
 		_ = h.Mailer.Send(to, subject, body)
 	}
 }

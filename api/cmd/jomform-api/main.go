@@ -118,6 +118,22 @@ func main() {
 		})
 	}
 
+	// Issue #199: the auth mailer is a *email.Sender assigned into the
+	// VerifyMailer INTERFACE (deps.VerifyMailer, dispatcher.AuthMailer,
+	// rest.Mailer). A nil *email.Sender stored in an interface is NOT a nil
+	// interface, so every `if mailer == nil` guard downstream is false and the
+	// call walks into a nil receiver — SendReceipt → suppressed → SIGSEGV on
+	// the email worker goroutine, which is not recovered, so the whole API
+	// process died on the first registration. Only assign when SES is really
+	// configured; with SES absent the fields stay nil interfaces and every
+	// guard drops the job as designed.
+	makeAuthMailer := func() httpapi.VerifyMailer {
+		if mailer == nil {
+			return nil
+		}
+		return mailer
+	}
+
 	deps := &httpapi.Deps{}
 	// Issue #211: share the metrics instance with the HTTP server so the DB
 	// query tracer and HTTP middleware record into the same registry.
@@ -152,7 +168,8 @@ func main() {
 		// sender delivers them (nil when unconfigured — registration still
 		// completes, verification just can't be emailed).
 		deps.VerifyKey = decryptKey
-		deps.VerifyMailer = mailer
+		// Nil interface when SES is unconfigured — see makeAuthMailer.
+		deps.VerifyMailer = makeAuthMailer()
 		// Issue #56: SES reputation hardening over the same Valkey client.
 		// Suppression store + user store come from the pool below; breaker and
 		// MX checker are Valkey-backed so they're wired when Valkey is up.
@@ -302,7 +319,8 @@ func main() {
 			Affiliates:       affiliateStore,
 			Passkeys:         passkeysStore,
 			// Issue #161: invite email delivery + signup link base.
-			Mailer: mailer,
+			// Nil interface when SES is unconfigured — see makeAuthMailer.
+			Mailer: makeAuthMailer(),
 			// Issue #199: invite emails go through the background queue.
 			EmailQueue: deps.EmailQueue,
 			BaseURL:    cfg.AppBaseURL,
@@ -486,7 +504,8 @@ func main() {
 		// judge, so it starts whenever the queue is wired (even without SES).
 		if deps.EmailQueue != nil && (mailer != nil || pay.Receipts != nil || submissionsStore != nil) {
 			dispatcher := &httpapi.EmailDispatcher{
-				AuthMailer: mailer,
+				// Nil interface when SES is unconfigured — see makeAuthMailer.
+				AuthMailer: makeAuthMailer(),
 				Breaker:    deps.Breaker,
 				Pay:        pay,
 				// Issue #245: the same background worker also routes
