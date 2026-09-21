@@ -57,7 +57,11 @@ HOSTNAME_S="$(hostname)"
 STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 DAILY_NAME="jomform-daily-$(date -u +%Y-%m-%d)"
 MONTHLY_NAME="jomform-monthly-$(date -u +%Y-%m)"
-DAY_OF_MONTH="$(date -u +%d)"
+# Test seam. The monthly promotion only runs on the 1st, so without an override
+# the promotion branch could never execute in the test suite — which is how a
+# monthly sidecar that fails `sha256sum -c` shipped with every case green. The
+# harness sets JFBACKUP_DAY_OF_MONTH to drive that branch; production never does.
+DAY_OF_MONTH="${JFBACKUP_DAY_OF_MONTH:-$(date -u +%d)}"
 LOCAL_ONLY=0
 NO_MEDIA=0
 RESTORE_FILE=""
@@ -487,13 +491,39 @@ done
 # Monthly copy on the 1st. rclone server-side copy, so no re-upload.
 if [ "$DAY_OF_MONTH" = "01" ]; then
   log INFO "first of month: promoting to $MONTHLY_DIR/$MONTHLY_NAME.dump.gz"
-  if rclone --config "$RCLONE_CONFIG" copyto \
-      "$DAILY_DIR/$DAILY_NAME.dump.gz" "$MONTHLY_DIR/$MONTHLY_NAME.dump.gz" 2>/dev/null \
-     && rclone --config "$RCLONE_CONFIG" copyto \
-      "$DAILY_DIR/$DAILY_NAME.dump.gz.sha256" "$MONTHLY_DIR/$MONTHLY_NAME.dump.gz.sha256" 2>/dev/null; then
-    log INFO "monthly copy ok"
+  monthly_ok=1
+  if ! PROMOTE_ERR="$(rclone --config "$RCLONE_CONFIG" copyto \
+      "$DAILY_DIR/$DAILY_NAME.dump.gz" "$MONTHLY_DIR/$MONTHLY_NAME.dump.gz" 2>&1)"; then
+    FAIL_DETAIL="$(printf '%s' "$PROMOTE_ERR" | tr '\n' ' ' | cut -c1-300)"
+    log ERROR "monthly dump copy failed: $FAIL_DETAIL"
+    monthly_ok=0
+  fi
+  # The sidecar is written HERE, not copied from the daily object. The daily
+  # sidecar's content is "<digest>  /var/backups/jomform/jomform-daily-<date>.dump.gz"
+  # because it was produced by `sha256sum "$out"`; copying that file verbatim
+  # leaves the monthly artifact with a sidecar naming the DAILY path, so
+  # `sha256sum -c jomform-monthly-<ym>.dump.gz.sha256` fails on a perfectly good
+  # dump and the path stops existing once local retention prunes the daily file.
+  # Same digest (the copy is server-side, so the bytes are identical), monthly
+  # name, bare basename so it resolves beside the object in any directory the
+  # reader downloaded the pair into.
+  if [ "$monthly_ok" = "1" ]; then
+    local_sidecar="$STAGE_DIR/$DAILY_NAME.dump.gz.sha256"
+    digest="$(cut -d' ' -f1 "$local_sidecar" 2>/dev/null || true)"
+    if [ -z "$digest" ]; then
+      FAIL_DETAIL="monthly sidecar: no digest in $local_sidecar"
+      log ERROR "$FAIL_DETAIL"
+      monthly_ok=0
+    elif ! printf '%s  %s\n' "$digest" "$MONTHLY_NAME.dump.gz" \
+        | rclone --config "$RCLONE_CONFIG" rcat "$MONTHLY_DIR/$MONTHLY_NAME.dump.gz.sha256" 2>/dev/null; then
+      FAIL_DETAIL="monthly sidecar write failed: $MONTHLY_DIR/$MONTHLY_NAME.dump.gz.sha256"
+      log ERROR "$FAIL_DETAIL"
+      monthly_ok=0
+    fi
+  fi
+  if [ "$monthly_ok" = "1" ]; then
+    log INFO "monthly copy ok (sha256 $digest, sidecar names $MONTHLY_NAME.dump.gz)"
   else
-    log ERROR "monthly promotion failed"
     uploads_ok=0
   fi
 fi

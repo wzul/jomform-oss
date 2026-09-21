@@ -21,6 +21,28 @@ Retention: **30 daily** and **12 monthly**. The monthly copy is promoted on the
 `gdrive:jomform-backups/monthly/`. Local staging keeps the most recent 3 days of
 dumps; Drive is the durable copy.
 
+The monthly pair is `jomform-monthly-<YYYY-MM>.dump.gz` plus a
+`.dump.gz.sha256` sidecar whose **content names the monthly object**:
+
+```
+<digest>  jomform-monthly-<YYYY-MM>.dump.gz
+```
+
+The sidecar is written at promotion time from the daily sidecar's digest, not
+copied from the daily object. Copying the file verbatim leaves a sidecar that
+names the **daily** path — `sha256sum -c` then fails on a perfectly good monthly
+dump, and the path it names stops existing as soon as local retention prunes the
+daily file. The digest is identical either way (a server-side copy does not
+change the bytes); only the name differs, and the name is a bare basename so it
+resolves beside the object wherever the pair is downloaded to.
+
+Verify a monthly copy by downloading the pair and checking it:
+
+```bash
+rclone copy gdrive:jomform-backups/monthly/jomform-monthly-<YYYY-MM>.dump.gz* /tmp/
+cd /tmp && sha256sum -c jomform-monthly-<YYYY-MM>.dump.gz.sha256
+```
+
 ### Is the media volume covered?
 
 **Yes, deliberately.** The MinIO volume holds customer-uploaded media. A
@@ -181,8 +203,8 @@ sent; a failing run does not retry in a tight loop because the lock file
 
 ## Tested failure paths
 
-Every one of these is exercised by `jomform-backup_test.sh` (49 assertions,
-stubbed `rclone`/`docker`, no network and no database required) and ten of them
+Every one of these is exercised by `jomform-backup_test.sh` (69 assertions,
+stubbed `rclone`/`docker`, no network and no database required) and eleven of them
 are additionally proven to *bite* by sabotaging the script and requiring the
 suite to go red:
 
@@ -215,13 +237,29 @@ bash deploy/backup/jomform-backup_test.sh
   quotes is escaped, and the test asserts the file actually parses.
 - **A restore drill must not overwrite the backup job's status** — a drill that
   wrote `last-run.json` would hide a failing nightly backup behind a green drill.
+- **The monthly sidecar must name the monthly object** — the promotion writes the
+  sidecar for the monthly name instead of copying the daily file, and the case
+  downloads the pair into an empty directory and runs a real `sha256sum -c`. The
+  daily files are deleted first, because local retention prunes them: without
+  that step an absolute staging path in the sidecar still resolves on the host,
+  and the check would pass on the very sidecar this case exists to reject.
+  The 1st-of-month branch is driven through the `JFBACKUP_DAY_OF_MONTH` seam
+  (`DAY_OF_MONTH` is otherwise computed from `date -u +%d`, so the branch would
+  never execute in the suite at all); a separate case asserts that with the
+  override unset the script still uses the real date, so the seam is not a way
+  to promote every night.
+- **The monthly sidecar write fails** — the run sets `uploads_ok=0`, logs the
+  failure and writes `last-failure.json`, rather than reporting a healthy run
+  with an unverifiable monthly copy.
 
 A test that only ever passes proves nothing, so the suite is run against a
 deliberately sabotaged script for each of: removed hash verification, removed
 post-upload verification, the `FAILED` line downgraded to `WARN`, removed
 empty-archive guard, unescaped status JSON, ignored restore failure, upload
-failure returning exit 0, disabled remote check, a removed cron `PATH` pin, and
-a restore drill writing the backup job's status.
+failure returning exit 0, disabled remote check, a removed cron `PATH` pin,
+a restore drill writing the backup job's status, and the monthly sidecar copied
+verbatim from the daily object (the last one is done inside the suite itself, on
+a copy of the script in a temp dir).
 
 ### Running the suite needs nothing but bash
 
