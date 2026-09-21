@@ -133,7 +133,7 @@ func (s *Service) resolveNotificationRecipient(ctx context.Context, ref Notifica
 //
 // The recipient must be resolved through the OWNER USER id, never the account id
 // (issue #606): `users.id` and `accounts.id` are independent UUIDs — the FK is
-// `accounts.owner_user_id` (migrations/000001_init.up.sql:20-21) — so looking a
+// `accounts.owner_user_id` (migrations/000001_init.up.sql:26-27) — so looking a
 // user up by account id ALWAYS missed and the recipient resolved to "". Since
 // `{admin_email}` is the recipient of the DEFAULT rule EnsureDefault creates for
 // every new form, that silently killed the merchant's new-sale email.

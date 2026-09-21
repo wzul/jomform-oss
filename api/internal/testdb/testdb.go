@@ -56,6 +56,20 @@ import (
 // DSNEnv is the environment variable holding the integration-test database URL.
 const DSNEnv = "JOMFORM_TEST_DATABASE_URL"
 
+// publicSchema is where the shared extensions (citext, pgcrypto) must live.
+const publicSchema = "public"
+
+// extensionLockKey serializes scratch-schema preparation across every test
+// package — and every checkout — sharing one database. The value is arbitrary;
+// it only has to be a constant, because the state it guards (the location of a
+// database-global extension) is shared by all of them.
+const extensionLockKey int64 = 0x4A6F6D466F726D // "JomForm"
+
+// publicExtensions are the extensions migration 000001_init declares. They are
+// database-global, so they get one canonical home (`public`) that every
+// package's `<scratch>,public` search_path can resolve — see prepareExtensions.
+var publicExtensions = []string{"citext", "pgcrypto"}
+
 var (
 	once sync.Once
 	pool *pgxpool.Pool
@@ -140,6 +154,80 @@ func ensureSchema(ctx context.Context, admin *pgxpool.Pool, schema string) error
 	}
 	if _, err := admin.Exec(ctx, `CREATE SCHEMA `+quote(schema)); err != nil {
 		return fmt.Errorf("create scratch schema: %w", err)
+	}
+	if err := prepareExtensions(ctx, admin); err != nil {
+		return fmt.Errorf("prepare shared extensions: %w", err)
+	}
+	return nil
+}
+
+// prepareExtensions pins the database-global extensions migration 000001_init
+// declares into `public`, so every package's `<scratch>,public` search_path can
+// resolve them.
+//
+// The defect this closes: a *fresh* database (one where `public` has no citext)
+// made 000001's `CREATE EXTENSION IF NOT EXISTS citext` take its schema from
+// the session search_path — and every package migrates under
+// `SET search_path=<scratch>,public`, so the extension was installed into
+// whichever scratch schema migrated first. From then on the extension
+// *existed*, so `IF NOT EXISTS` skipped it in every other package, and those
+// packages' `<their scratch>,public` could not resolve `citext`: the whole
+// suite failed with `type "citext" does not exist (SQLSTATE 42704)` in packages
+// the change never touched. It also survived the run, because
+// `DROP SCHEMA ... CASCADE` only drops an extension that lives inside the
+// schema being dropped — which is exactly why the first package's own re-run
+// healed it and everyone else's stayed broken.
+//
+// Two details make this correct rather than merely tidy:
+//
+//   - `CREATE EXTENSION ... SCHEMA public` does NOT relocate an extension that
+//     already exists elsewhere (`IF NOT EXISTS` turns into a NOTICE and the
+//     schema argument is ignored), so a database already poisoned this way
+//     needs an explicit `ALTER EXTENSION ... SET SCHEMA public`. citext and
+//     pgcrypto are both relocatable, and the ALTER is a no-op when the
+//     extension is already in public.
+//   - Extension creation is not concurrency-safe on its own: `go test ./...`
+//     runs every package in parallel, and two packages racing the first
+//     `CREATE EXTENSION IF NOT EXISTS` can collide on the database-global
+//     `pg_extension_name_index` (duplicate key, SQLSTATE 23505). A transaction
+//     advisory lock keyed to the database serializes this across packages and
+//     across concurrent checkouts, so exactly one installs and the rest wait
+//     and then see it.
+//
+// Extensions are database-global, not schema-scoped, so this deliberately runs
+// on every ensureSchema: it is cheap, idempotent, and it also repairs a
+// database an earlier run (or an earlier version of this helper) left poisoned.
+func prepareExtensions(ctx context.Context, admin *pgxpool.Pool) error {
+	tx, err := admin.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin extension transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, extensionLockKey); err != nil {
+		return fmt.Errorf("acquire extension lock: %w", err)
+	}
+	for _, ext := range publicExtensions {
+		// Relocate an extension an earlier run installed into a scratch schema.
+		// A scratch schema is dropped CASCADE on every run, so a surviving
+		// wrong-schema install is one that lived in a *different* package's
+		// schema (e.g. test_chat) and outlived the package that made it.
+		var installed bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname=$1)`, ext).Scan(&installed); err != nil {
+			return fmt.Errorf("check extension %s: %w", ext, err)
+		}
+		if installed {
+			if _, err := tx.Exec(ctx, `ALTER EXTENSION `+quote(ext)+` SET SCHEMA `+quote(publicSchema)); err != nil {
+				return fmt.Errorf("relocate extension %s to %s: %w", ext, publicSchema, err)
+			}
+			continue
+		}
+		if _, err := tx.Exec(ctx, `CREATE EXTENSION IF NOT EXISTS `+quote(ext)+` SCHEMA `+quote(publicSchema)); err != nil {
+			return fmt.Errorf("create extension %s in %s: %w", ext, publicSchema, err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit extension transaction: %w", err)
 	}
 	return nil
 }

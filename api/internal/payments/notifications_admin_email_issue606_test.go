@@ -6,7 +6,7 @@ package payments
 //
 // Root cause: resolveAdminEmail passed the ACCOUNT id to Users.ByID, but
 // `users.id` and `accounts.id` are independent UUIDs — the FK is
-// `accounts.owner_user_id` (000001_init.up.sql:20-21). So the lookup always
+// `accounts.owner_user_id` (000001_init.up.sql:26-27). So the lookup always
 // missed and the recipient resolved to "".
 //
 // `{admin_email}` is the recipient of the DEFAULT rule EnsureDefault creates for

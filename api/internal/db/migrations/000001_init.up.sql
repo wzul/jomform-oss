@@ -1,8 +1,14 @@
 -- JomForm initial schema (Postgres 18)
 -- All money amounts are integer SEN. Timestamps: timestamptz, UTC.
 
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
-CREATE EXTENSION IF NOT EXISTS citext;
+-- Extensions are database-global. Pin them to `public` explicitly so the schema
+-- does not come from the session search_path: callers apply these migrations with
+-- `SET search_path=<their schema>,public` (testdb scratch schemas, per-tenant
+-- installs), and an unpinned CREATE EXTENSION would then install citext into
+-- whichever schema happened to be first — leaving every other schema unable to
+-- resolve the type (SQLSTATE 42704).
+CREATE EXTENSION IF NOT EXISTS pgcrypto SCHEMA public;
+CREATE EXTENSION IF NOT EXISTS citext SCHEMA public;
 
 -- ─── Identity & tenancy ─────────────────────────────────────────────────────
 
