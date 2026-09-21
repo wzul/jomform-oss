@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Shell } from "../../components/Shell";
+import { Markdown } from "../../components/Markdown";
 import { useI18n, type Key } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDate, formatDateTime } from "../../lib/formatDate";
@@ -1151,7 +1152,11 @@ export default function AdminPage() {
                                   </span>
                                   <span>{formatDateTime(m.created_at)}</span>
                                 </div>
-                                <p className="mt-1 whitespace-pre-wrap break-words text-sm">{m.body}</p>
+                                <div className="mt-1 text-sm">
+                                  {/* Same shared renderer as /chat and /feedback
+                                      (the card requires ONE, not two copies). */}
+                                  <Markdown text={m.body} variant="plain" />
+                                </div>
                               </li>
                             );
                           })}

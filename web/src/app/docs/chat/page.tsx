@@ -50,6 +50,16 @@ const SECTIONS: Section[] = [
     ],
   },
   {
+    id: "formatting",
+    title: "Formatting in the answer",
+    body: [
+      "Answers are rendered, not printed. When the assistant writes bold text, a list, a piece of code or a link, you see bold text, a list, code in a monospace chip or a real link — not the markers it typed. Before this, an answer that said **this** showed the asterisks.",
+      "What is rendered: bold, italic, inline code, fenced code blocks (which scroll sideways instead of stretching the card), bulleted and numbered lists, links, and paragraph breaks. What is not: tables, images, headings and raw HTML — a table would arrive as a row of pipe characters and raw HTML as text, because the assistant's text is never inserted into the page as code. The assistant is told which subset it may use, so it produces lists where a table would have been.",
+      "The same rendering applies to a feedback thread you file from the chat, and to the reply you read on the Feedback page: a report's body is rendered the same way in your own threads and in the team's triage view.",
+      "The stored text is exactly what was written. Nothing is stripped on the way in or out, so a report is never altered by how it happens to be displayed.",
+    ],
+  },
+  {
     id: "limits",
     title: "Limits and cost",
     body: [

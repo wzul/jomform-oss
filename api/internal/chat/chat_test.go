@@ -617,6 +617,75 @@ func TestRejectsEmptyAndOverlongMessages(t *testing.T) {
 	}
 }
 
+// TestSystemPromptStatesTheRenderableMarkdownSubset pins the answer-format rule
+// added with the Markdown renderer (web/src/components/Markdown.ts).
+//
+// WHY IT LIVES HERE AND NOT ONLY IN THE WEB SUITE. The renderer guarantees that
+// a `**` becomes bold; the prompt is what stops the model from emitting what the
+// renderer deliberately drops (tables, raw HTML, an image) so an answer does not
+// silently lose structure. The web guard pins the two halves together from the
+// other side; this side proves the rule is actually in the prompt the model
+// receives, including on the round-trips where a tool result is fenced in —
+// a rule that only exists in a comment is not a rule.
+func TestSystemPromptStatesTheRenderableMarkdownSubset(t *testing.T) {
+	// 1. The rule text itself.
+	for _, want := range []string{"**bold**", "HTML", "table", "code block"} {
+		if !strings.Contains(systemPrompt, want) {
+			t.Errorf("the system prompt no longer tells the model about %q — the UI renders a "+
+				"Markdown subset and the model must be told which one (see "+
+				"web/src/components/Markdown.ts)", want)
+		}
+	}
+	// 2. A blank line still separates paragraphs: the renderer keeps a single
+	//    newline as a line break, so the model must know a paragraph break is a
+	//    blank line rather than a newline.
+	if !strings.Contains(systemPrompt, "blank") {
+		t.Error("the prompt no longer mentions the blank-line paragraph rule")
+	}
+	// 3. The language rule must survive alongside it (they are both in HOW TO
+	//    ANSWER, and a formatting edit must not push the language rule out).
+	if !strings.Contains(systemPrompt, "in Malay, answer") {
+		t.Error("the language-matching rule was removed while adding the formatting rule")
+	}
+
+	// 4. And it really reaches the model: run one round-trip with a tool call and
+	//    read the system turn of BOTH prompts (the initial one and the one that
+	//    carries the fenced tool result).
+	caller := &fakeCaller{answer: "{}"}
+	model := &scriptedLLM{replies: []llm.ChatReply{
+		{ToolCalls: []llm.ToolCall{toolCall("c1", "list_forms", `{}`)}},
+		{Content: "ok"},
+	}}
+	r := newTestRunner(t, caller, model, nil)
+	if _, err := r.Run(chatCtx(), nil, "senaraikan borang"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(model.prompts) < 2 {
+		t.Fatalf("the model was called %d times, want at least 2", len(model.prompts))
+	}
+	for i, turns := range model.prompts {
+		sys := ""
+		fenced := false
+		for _, turn := range turns {
+			if turn.Role == "system" {
+				sys = turn.Content
+			}
+			// The fence is carried on the tool turn, so the check is per-turn
+			// rather than per-system-prompt.
+			if turn.Role == "tool" && strings.Contains(turn.Content, untrustedFence) {
+				fenced = true
+			}
+		}
+		if !strings.Contains(sys, "**bold**") {
+			t.Fatalf("round-trip %d reached the model without the formatting rule", i+1)
+		}
+		if i > 0 && !fenced {
+			t.Fatalf("round-trip %d lost the untrusted-data fence while the formatting rule was "+
+				"added", i+1)
+		}
+	}
+}
+
 // TestNoUserIdentityRefusesRatherThanFilingForNobody: the one write needs a
 // filer. An identity with no user id must be a refusal, never a thread filed
 // against an empty user.

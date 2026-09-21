@@ -37,6 +37,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Shell } from "../../components/Shell";
+import { Markdown } from "../../components/Markdown";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
@@ -224,13 +225,16 @@ export default function ChatPage() {
             {msgs.map((m, i) => (
               <div key={i} className={m.role === "user" ? "flex justify-end" : "flex justify-start"}>
                 <div
-                  className={`max-w-[46rem] whitespace-pre-wrap break-words rounded-lg px-3 py-2 text-sm ${
+                  className={`max-w-[46rem] min-w-0 rounded-lg px-3 py-2 text-sm ${
                     m.role === "user"
                       ? "bg-[var(--jf-primary)] text-white"
                       : "bg-slate-50 text-[var(--jf-text)]"
                   }`}
                 >
-                  {m.content}
+                  {/* The answer is rendered as ELEMENTS, not raw text: the model
+                      writes Markdown, and showing its markers was the reported
+                      defect. One shared renderer with /feedback. */}
+                  <Markdown text={m.content} variant={m.role === "user" ? "user" : "assistant"} />
                 </div>
               </div>
             ))}

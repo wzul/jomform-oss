@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Shell } from "../../components/Shell";
+import { Markdown } from "../../components/Markdown";
 import { useI18n, type Key } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDateTime } from "../../lib/formatDate";
@@ -372,7 +373,12 @@ export default function FeedbackPage() {
                           </span>
                           <span>{formatDateTime(m.created_at)}</span>
                         </div>
-                        <p className="mt-1 whitespace-pre-wrap text-sm">{m.body}</p>
+                        <div className="mt-1 text-sm">
+                          {/* The assistant files thread bodies with Markdown in
+                              them, and an admin replies from the same surface —
+                              one renderer with /chat so the two cannot drift. */}
+                          <Markdown text={m.body} variant="plain" />
+                        </div>
                       </li>
                     );
                   })}
