@@ -2307,8 +2307,31 @@ export default function Settings() {
               </a>
             </div>
             <div className="mt-4 max-w-xl space-y-3">
-              <div className="flex items-end gap-2">
-                <div className="flex-1">
+              {/* Two columns on a phone, the original one-line flex row from
+                  `sm:` up.
+                  WHY NOT A FLEX ROW AT EVERY WIDTH: a non-wrapping flex row of
+                  two `flex-1` inputs, a fixed field and a content-sized button
+                  cannot hold at 320-430px. Measured on the built page before this
+                  change, the two `flex-1` boxes collapsed to a 30.73px / 26px
+                  border box — 5px / 0px of CONTENT once `.jf-input`'s own
+                  `padding: 8px 12px` (globals.css, unlayered) took its 24px — so
+                  the "ALI" / "Ali" placeholder (a 21.51px / 17.36px glyph run at
+                  14px) never rendered and the fields read as empty; that is why
+                  they looked like blank boxes in the report. The button came out
+                  at 2.9x the width of a field locally (3.2x on the screenshot).
+                  A `w-*`/`min-w-*` UTILITY on those inputs cannot win either:
+                  `.jf-input` is written outside any `@layer`, so it beats every
+                  layered Tailwind utility (measured: `w-32` and `min-w-[200px]`
+                  on a `.jf-input` both computed to the parent's full width, not
+                  128px / 200px). A grid cell is a DEFINITE width, so the inputs
+                  fill it and the button cannot claim space from them — no
+                  dependence on which rule wins — and `grid-cols-2` is
+                  `repeat(2, minmax(0, 1fr))`, so a long placeholder cannot push
+                  the row wider than the card. The button spans both columns, so
+                  it is now 2.05-2.07x a field (measured at 320/360/390/430px,
+                  every locale) rather than 3.2x, and 0.75x at 1024px. */}
+              <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-end">
+                <div className="min-w-0 sm:flex-1">
                   <label className="text-xs text-slate-500">{t("set.affiliateCode")}</label>
                   <input
                     value={affCode}
@@ -2317,7 +2340,7 @@ export default function Settings() {
                     className="jf-input mt-1"
                   />
                 </div>
-                <div className="flex-1">
+                <div className="min-w-0 sm:flex-1">
                   <label className="text-xs text-slate-500">{t("set.affiliateName")}</label>
                   <input
                     value={affName}
@@ -2326,7 +2349,7 @@ export default function Settings() {
                     className="jf-input mt-1"
                   />
                 </div>
-                <div className="w-28">
+                <div className="min-w-0 sm:w-28">
                   <label className="text-xs text-slate-500">{t("set.affiliateCommission")}</label>
                   <input
                     type="number"
@@ -2336,7 +2359,12 @@ export default function Settings() {
                     className="jf-input mt-1"
                   />
                 </div>
-                <button onClick={createAffiliate} className="jf-btn-primary">{t("set.affiliateAdd")}</button>
+                <button
+                  onClick={createAffiliate}
+                  className="jf-btn-primary col-span-2 w-full sm:col-span-1 sm:w-auto"
+                >
+                  {t("set.affiliateAdd")}
+                </button>
               </div>
               {affErr && <p className="text-sm text-red-600">{affErr}</p>}
               {affMsg && <p className="text-sm text-emerald-600">{affMsg}</p>}

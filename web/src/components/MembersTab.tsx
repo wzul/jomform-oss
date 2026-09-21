@@ -155,7 +155,15 @@ export function MembersTab({ workspaceId }: { workspaceId: string }) {
       <form onSubmit={invite} className="mt-4">
         <h3 className="text-sm font-semibold text-slate-700">{t("mem.inviteTitle")}</h3>
         <div className="mt-2 flex flex-wrap items-end gap-2">
-          <div className="min-w-56 flex-1">
+          {/* `min-w-56` (224px) is a desktop guard, but the card's content box is
+              only 222px at a 320px viewport, and it sat on a `flex-1` child —
+              `flex: 1 1 0%`, whose `min-width` is a hard floor the item cannot
+              shrink below — so the email input pushed the row 2px past its
+              container (measured row 222/224 in en/ms/ta/zh). Expressing the
+              guard as `basis-56` (a PREFERRED size the item may shrink from) with
+              `min-w-0` lets the row hold at 320px while keeping the 224px desktop
+              guard, which is the shape the admin suppression row already uses. */}
+          <div className="min-w-0 flex-1 basis-56 sm:basis-auto">
             <label className="text-xs text-slate-500">{t("mem.inviteEmail")}</label>
             <input
               value={email}
