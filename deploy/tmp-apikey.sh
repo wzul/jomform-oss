@@ -80,9 +80,19 @@ usage() { sed -n '2,/^set -uo pipefail$/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 
 # "… RETURNING id"` emits the id and the `INSERT 0 1` command tag on separate
 # lines of the same stream; a naive whitespace strip glues them together. This
 # cannot: it returns a bare uuid or fails.
+#
+# NOTE: `sed -n '1p'`, not `head -1`. `head -1` closes the pipe at the first
+# match, so grep can die of SIGPIPE; under the `set -o pipefail` above, a
+# non-zero grep status turns a SUCCESSFUL match into a non-zero pipeline status.
+# Measured on a large multi-match input this does NOT change what uuid_from
+# returns here (it reads all matches into a command substitution, where the
+# failed `head` contributes no bytes), but the class is real and observed
+# elsewhere: it is what makes the self-test's `contains` assertion flaky under
+# load (see deploy/tmp-apikey_test.sh). Both readers now consume to EOF — that
+# is the rule, and it is why neither can be raced.
 uuid_from() {
   local text="$1" id
-  id="$(printf '%s' "$text" | grep -oE '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}' | head -1)"
+  id="$(printf '%s' "$text" | grep -oE '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}' | sed -n '1p')"
   [ -n "$id" ] || return 1
   printf '%s' "$id"
 }
@@ -95,14 +105,14 @@ valid_name() {
   case "$name" in
     *%*|*'*'*|*'?'*|*'['*) return 1 ;;
   esac
-  printf '%s' "$name" | grep -qE "^${NAME_PREFIX}[A-Za-z0-9._-]+$"
+  grep -qE "^${NAME_PREFIX}[A-Za-z0-9._-]+$" <<<"$name"
 }
 
 # valid_key_shape — the shape auth.GenerateAPIKey produces (jfk + 48 hex).
 # A key outside this shape can never authenticate, so minting one would produce
 # a verification that proves nothing.
 valid_key_shape() {
-  printf '%s' "$1" | grep -qE '^jfk_[0-9a-f]{48}$'
+  grep -qE '^jfk_[0-9a-f]{48}$' <<<"$1"
 }
 
 # ─── transport: SQL goes to the host as a FILE, never as nested shell quoting ─
@@ -151,8 +161,8 @@ cmd_mint() {
     shift
   done
   [ -n "$task" ] || die "mint: --task <card id> is required (the name is per CARD)"
-  printf '%s' "$task" | grep -qE '^[A-Za-z0-9._-]+$' || die "mint: --task '$task' has characters outside [A-Za-z0-9._-]"
-  printf '%s' "$scope" | grep -qE '^(readonly|readwrite|admin)$' || die "mint: --scope must be readonly|readwrite|admin"
+  grep -qE '^[A-Za-z0-9._-]+$' <<<"$task" || die "mint: --task '$task' has characters outside [A-Za-z0-9._-]"
+  grep -qE '^(readonly|readwrite|admin)$' <<<"$scope" || die "mint: --scope must be readonly|readwrite|admin"
   local name="${NAME_PREFIX}${task}"
   valid_name "$name" || die "mint: refusing to use the name '$name'"
 
@@ -236,7 +246,7 @@ cmd_rm() {
     shift
   done
   [ -n "$task" ] || die "rm: --task <card id> is required"
-  printf '%s' "$task" | grep -qE '^[A-Za-z0-9._-]+$' || die "rm: --task '$task' has characters outside [A-Za-z0-9._-]"
+  grep -qE '^[A-Za-z0-9._-]+$' <<<"$task" || die "rm: --task '$task' has characters outside [A-Za-z0-9._-]"
   local name="${NAME_PREFIX}${task}"
   valid_name "$name" || die "rm: refusing to delete by the name '$name' (a LIKE sweep can take a sibling card's live key)"
 

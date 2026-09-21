@@ -31,7 +31,14 @@ check() { # desc expected actual
   if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 (got '$3', want '$2')"; fi
 }
 contains() { # desc haystack needle
-  if printf '%s' "$2" | grep -qF -- "$3"; then ok "$1"
+  # A herestring, NOT `printf '%s' "$2" | grep -qF -- "$3"`. `grep -q` exits at
+  # the first match, so under `set -o pipefail` the writer's SIGPIPE (141) wins
+  # the pipeline's status and a haystack that DOES contain the needle is
+  # reported as missing it. Measured on this host: 5 false negatives in 3000
+  # calls at load ~33, 0 in 2000 idle — which is why it read as a load flake.
+  # A herestring gives grep a file descriptor, so no writer process is ever
+  # signalled and the assertion depends only on the text.
+  if grep -qF -- "$3" <<<"$2"; then ok "$1"
   else bad "$1 (missing '$3' in: $(printf '%s' "$2" | tr '\n' ' ' | cut -c1-260))"; fi
 }
 
@@ -49,6 +56,11 @@ STATE="$SB/api_keys.state"    # 'id|name' lines, the fake api_keys table
 # reply carries the command tag on its own line, exactly like real psql.
 cat >"$SB/bin/psql-responder.sh" <<'PY'
 #!/usr/bin/env bash
+# Runs with pipefail ON deliberately: the whole point of this harness is to catch
+# the class of bug where a pipe's reader exits early and the writer's SIGPIPE
+# (status 141) is then reported as a failure even though the match succeeded.
+# Without pipefail here, a regression to `… | head -1` would still look green.
+set -uo pipefail
 STATE="${JF_TEST_STATE:?JF_TEST_STATE must be set by the harness}"
 count_name() { # name
   awk -F'|' -v n="$1" '$2==n' "$STATE" | wc -l | tr -d ' '
@@ -59,35 +71,41 @@ count_prefix() {
 sql="$(cat)"
 # psql's own command tag, on its own line — the thing that corrupts a capture.
 tag() { printf '%s\n' "$1"; }
-name_in_sql() { printf '%s' "$sql" | sed -nE "s/.*name = '([^']+)'.*/\1/p" | head -1; }
+# `sed -n '1p'`, never `head -1`: see the note in tmp-apikey.sh's uuid_from.
+name_in_sql() { printf '%s' "$sql" | sed -nE "s/.*name = '([^']+)'.*/\1/p" | sed -n '1p'; }
 
 # Replies are emitted in the SAME ORDER the statements would execute, because a
 # post-condition read that the real psql runs AFTER the delete must not be
 # answered from the pre-delete state — that is exactly the "DELETE 0 looks like
 # success" trap this suite exists to catch.
-if printf '%s' "$sql" | grep -q "SELECT 'BEFORE"; then
+#
+# Every match below is a herestring, not `printf … | grep`: `grep -q` exits at
+# the first match, so a pipe would make the writer die of SIGPIPE (141) and
+# pipefail would report a matching statement as absent. Herestrings have no
+# writer process to signal.
+if grep -q "SELECT 'BEFORE" <<<"$sql"; then
   tag "BEFORE|$(count_name "$(name_in_sql)")"
 fi
-if printf '%s' "$sql" | grep -q "SELECT 'ACCOUNT"; then
+if grep -q "SELECT 'ACCOUNT" <<<"$sql"; then
   tag "ACCOUNT|1"
 fi
-if printf '%s' "$sql" | grep -q "INSERT INTO api_keys"; then
-  name="$(printf '%s' "$sql" | grep -oE "deploy-verify-tmp-[A-Za-z0-9._-]+" | head -1)"
+if grep -q "INSERT INTO api_keys" <<<"$sql"; then
+  name="$(grep -oE "deploy-verify-tmp-[A-Za-z0-9._-]+" <<<"$sql" | sed -n '1p')"
   # A deterministic id per name so assertions can name it.
   id="$(printf '%s' "$name" | md5sum | sed -E 's/^(.{8})(.{4})(.{4})(.{4})(.{12}).*/\1-\2-\3-\4-\5/')"
   printf '%s|%s\n' "$id" "$name" >>"$STATE"
   tag "MINTED|$id"
   tag "INSERT 0 1"     # <-- the real psql behaviour that produced <uuid>INSERT01
 fi
-if printf '%s' "$sql" | grep -q "SELECT 'MINE"; then
+if grep -q "SELECT 'MINE" <<<"$sql"; then
   n="$(name_in_sql)"
   tag "MINE|$(awk -F'|' -v n="$n" '$2==n{print $1}' "$STATE" | paste -sd, -)"
 fi
-if printf '%s' "$sql" | grep -q "SELECT 'IDS"; then
+if grep -q "SELECT 'IDS" <<<"$sql"; then
   n="$(name_in_sql)"
   tag "IDS|$(awk -F'|' -v n="$n" '$2==n{print $1}' "$STATE" | paste -sd, -)"
 fi
-if printf '%s' "$sql" | grep -q "DELETE FROM api_keys"; then
+if grep -q "DELETE FROM api_keys" <<<"$sql"; then
   n="$(name_in_sql)"
   before="$(count_name "$n")"
   # JF_TEST_DELETE_NOOP models the failure the post-condition exists to catch: the
@@ -102,17 +120,17 @@ if printf '%s' "$sql" | grep -q "DELETE FROM api_keys"; then
     tag "DELETE $before"
   fi
 fi
-if printf '%s' "$sql" | grep -q "SELECT 'AFTER"; then
+if grep -q "SELECT 'AFTER" <<<"$sql"; then
   tag "AFTER|$(count_name "$(name_in_sql)")"
 fi
-if printf '%s' "$sql" | grep -q "SELECT 'LIVE"; then
+if grep -q "SELECT 'LIVE" <<<"$sql"; then
   tag "LIVE|$(count_name "$(name_in_sql)")"
 fi
-if printf '%s' "$sql" | grep -q "SELECT 'NAMES"; then
+if grep -q "SELECT 'NAMES" <<<"$sql"; then
   n="$(name_in_sql)"
   tag "NAMES|$(awk -F'|' -v n="$n" '$2==n{print $2}' "$STATE" | paste -sd, -)"
 fi
-if printf '%s' "$sql" | grep -q "SELECT 'FOREIGN"; then
+if grep -q "SELECT 'FOREIGN" <<<"$sql"; then
   tag "FOREIGN|$(count_prefix)"
 fi
 exit 0
@@ -188,13 +206,35 @@ check "uuid_from extracts a clean uuid from psql's two-line output" \
   "a7167e2f-db05-4c9e-8ebe-9e2adf7b53c7" "$LIB_OUT"
 
 NAIVE="$(printf 'a7167e2f-db05-4c9e-8ebe-9e2adf7b53c7\nINSERT 0 1' | tr -d '[:space:]')"
-if printf '%s' "$NAIVE" | grep -qE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'; then
+if grep -qE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' <<<"$NAIVE"; then
   bad "the naive tr -d capture should NOT be a valid uuid (got '$NAIVE')"
 else
   ok "control: the old 'tr -d [:space:]' capture is '$NAIVE' — not a uuid, so a DELETE by it would fail and leave the key live"
 fi
 check "uuid_from on a tag-only input fails instead of returning junk" \
   "EXTRACT_FAILED" "$( JF_LIB_ONLY=1 bash -c ". '$SCRIPT'; uuid_from 'INSERT 0 1' || echo EXTRACT_FAILED" )"
+
+# 1b. The load-independence control. `contains` used to match its haystack with
+#     `printf '%s' "$2" | grep -qF -- "$3"`, and `grep -q` EXITS AT THE FIRST
+#     MATCH: the writer is then still writing and dies of SIGPIPE, and under
+#     `set -o pipefail` that makes a SUCCESSFUL match report failure. That is the
+#     flake this test exists to pin (measured: 1 in 8 full runs under a concurrent
+#     build, 0 in 256 idle). The race needs the writer to have more to write when
+#     grep exits, so a haystack of MANY MATCHING LINES reproduces it WITHOUT any
+#     load — measured 200/200 failures with the pipe, 0/200 with the herestring.
+#     A herestring gives grep a descriptor, so there is no writer to signal.
+#     Driven through `contains` itself (quietly) so the control exercises the
+#     real helper, then reported as ONE assertion: present needle FOUND, absent
+#     needle MISSED (without the second half, a `contains` that matched
+#     everything would also look green).
+BIG_HAY="$(for i in $(seq 1 20000); do printf 'probe-needle line %s\n' "$i"; done)"
+PASS_BEFORE=$PASS; FAIL_BEFORE=$FAIL
+contains "probe: present needle" "$BIG_HAY" "probe-needle line 1" >/dev/null 2>&1
+contains "probe: absent needle"  "$BIG_HAY" "probe-needle line 99999" >/dev/null 2>&1
+CONTROL_GOT="$((PASS - PASS_BEFORE))/$((FAIL - FAIL_BEFORE))"
+PASS=$PASS_BEFORE; FAIL=$FAIL_BEFORE
+check "control: contains() is pipe-free — FOUND the present needle and MISSED the absent one on a 20000-line haystack" \
+  "1/1" "$CONTROL_GOT"
 
 # 2. Name safety: a bare prefix, or anything with a LIKE metacharacter, must be
 #    refused — that is what stops a cleanup taking a sibling card's key. The quote
@@ -233,7 +273,7 @@ OUT="$(run_key mint --task t_test001 --out-dir "$SB/out" 2>&1)"; RC=$?
 check "mint exits 0" 0 "$RC"
 contains "mint reports the per-card name" "$OUT" "name=deploy-verify-tmp-t_test001"
 contains "mint prints a clean id (no INSERT01 anywhere)" "$OUT" "id=$(printf 'deploy-verify-tmp-t_test001' | md5sum | sed -E 's/^(.{8})(.{4})(.{4})(.{4})(.{12}).*/\1-\2-\3-\4-\5/')"
-if printf '%s' "$OUT" | grep -q 'INSERT01\|INSERT 0 1'; then
+if grep -q 'INSERT01\|INSERT 0 1' <<<"$OUT"; then
   bad "mint's output carries psql's command tag"
 else
   ok "mint's output carries no command tag"
@@ -241,7 +281,7 @@ fi
 KEYFILE="$SB/out/jf-tmpkey-t_test001.raw"
 [ -f "$KEYFILE" ] && ok "raw key written to $KEYFILE" || bad "raw key file missing"
 check "raw key file mode is 600" "600" "$(stat -c '%a' "$KEYFILE" 2>/dev/null)"
-if printf '%s' "$OUT" | grep -qF "$(cat "$KEYFILE" 2>/dev/null)"; then
+if grep -qF -- "$(cat "$KEYFILE" 2>/dev/null)" <<<"$OUT"; then
   bad "mint PRINTED the raw key"
 else
   ok "mint never prints the raw key"
