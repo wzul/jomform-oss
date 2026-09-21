@@ -71,13 +71,15 @@
 #   govuln 25s, web build ~2m, a11y 15s, npm audit 1s, gitleaks 30s.
 #   Budget ~6 minutes for a full run.
 #
-# CONCURRENCY CAVEAT: `go test ./...` gives each package its own scratch schema
-#   named `test_<pkg>` with no per-run qualifier, so a CONCURRENT full run from
-#   another checkout DROPs the schema mid-suite and the failures look like
-#   `relation "users" does not exist` in code you never touched. If a package
-#   fails here that passes alone, that race is the first thing to suspect —
-#   re-run the package by itself. For a clean run, point the env vars at your
-#   own database (see docs in the pipeline notes).
+# CONCURRENCY: `go test ./...` gives each test PROCESS its own scratch schema,
+#   named `test_<pkg>_p<pid>` — per-package so parallel packages do not collide,
+#   and per-pid so a CONCURRENT full run from another checkout cannot drop this
+#   one's schema mid-suite. Every checkout points at the same test database, so a
+#   per-package-only name let two lanes gating at once destroy each other's data
+#   and fail in code neither had touched (`relation "workspaces" does not exist`,
+#   SQLSTATE 42P01). If a package still fails here but passes alone, the first
+#   thing to suspect is a shared RESOURCE other than the schema: the test Valkey
+#   (login-breaker counters). Re-run the package by itself to tell them apart.
 #
 # ESCAPE HATCH: there is none here by design. `deploy/build-and-ship.sh
 #   --skip-tests` bypasses this entire script and says so loudly; that flag is

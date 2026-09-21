@@ -8,14 +8,27 @@
 // missing owner user, a reused CHIP purchase id collided on subscription_charges,
 // and global-count assertions (email_delivery_events) saw other runs' rows.
 //
-// Open gives each package a scratch schema that is dropped and re-created on
-// every test-binary run, then migrated into. A test therefore starts from a
+// Open gives each test PROCESS a scratch schema that is dropped and re-created
+// on every test-binary run, then migrated into. A test therefore starts from a
 // schema it alone owns, with only migration seed data present:
 //
 //   - history-independent — a previous run's rows can never be seen, and
 //   - cross-package-safe — `go test ./...` runs packages in parallel against
-//     the same database, and each package owns its own schema, so a cleanup in
-//     one package can no longer delete rows another package is using.
+//     the same database, and each package runs in its own process, so each
+//     process owns its own schema and a cleanup in one can no longer delete
+//     rows another is using.
+//
+// The schema name carries the process's pid (`test_<pkg>_p<pid>`), not just the
+// package name. Every checkout points at the SAME test database, so a per-package
+// name means two concurrent full suites — the normal state of this board, where
+// several worktrees gate at once — both DROP and re-create `test_<pkg>`, and
+// whichever re-creates it second pulls the tables out from under the other
+// mid-test. The failures then look like a regression in code the diff never
+// touched: `relation "workspaces" does not exist (SQLSTATE 42P01)`, or a peer's
+// rows surviving into a schema that was supposed to be fresh (`duplicate key
+// value violates unique constraint "subscription_charges_chip_purchase_id_key"`
+// in a test that had just re-created its schema). Schemas left behind by a
+// process that has exited are pruned on the next Open.
 //
 // Tables the migrations seed (system_settings, the template library) are
 // populated, exactly as a freshly-migrated database would be. For tests that
@@ -29,8 +42,10 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -47,13 +62,17 @@ var (
 	err  error
 )
 
-// Open returns a pool connected to this test package's scratch schema, applying
+// Open returns a pool connected to this test process's scratch schema, applying
 // migrations on first use (mirroring the production boot path). It skips the
 // test when DSNEnv is unset, so unit-only runs stay hermetic.
 //
-// The scratch schema is named after the test package and is dropped and
-// re-created on every call — i.e. once per test-binary run — so no row from a
-// previous run survives into this one.
+// The scratch schema is named after the test package AND this process's pid
+// (`test_<pkg>_p<pid>`), and is dropped and re-created on every call — i.e. once
+// per test-binary run — so no row from a previous run survives into this one.
+// The pid is what makes the name unique per RUN rather than merely per package:
+// every checkout points at the same test database, so two concurrent `go test`
+// binaries for the same package would otherwise share one name and each one's
+// DROP SCHEMA ... CASCADE would delete the tables the other is mid-test on.
 func Open(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	dsn := os.Getenv(DSNEnv)
@@ -90,6 +109,7 @@ func open(ctx context.Context, dsn, schema string) (*pgxpool.Pool, error) {
 	if err := ensureSchema(ctx, admin, schema); err != nil {
 		return nil, err
 	}
+	pruneDeadSchemas(ctx, admin, schema)
 
 	// Pool whose connections resolve unqualified names to the scratch schema
 	// first, then `public` for shared extensions (pgcrypto, citext). This is the
@@ -122,6 +142,164 @@ func ensureSchema(ctx context.Context, admin *pgxpool.Pool, schema string) error
 		return fmt.Errorf("create scratch schema: %w", err)
 	}
 	return nil
+}
+
+// pruneDeadSchemas drops leftover scratch schemas whose owning process is gone.
+//
+// Once the name carries a pid, a run that was killed (or a test that crashed)
+// leaves its schema behind, and without this the test database would accumulate
+// one per crashed run forever. Only schemas matching the scratch naming shape are
+// considered, and a schema whose pid is still alive — i.e. another test binary
+// gating right now — is NEVER touched: dropping a live peer's schema is exactly
+// the mid-test race this naming scheme exists to prevent.
+//
+// A name without a pid suffix predates this scheme and cannot be attributed to a
+// process at all, so it is reclaimed only when the database has no OTHER live
+// connection. With a peer connected, leaving it is the conservative answer: a
+// stray empty schema costs nothing, a wrong drop costs a peer's whole run.
+//
+// Cleanup is best-effort: a failure here must not fail the test that is about to
+// run, so errors are swallowed rather than propagated.
+func pruneDeadSchemas(ctx context.Context, admin *pgxpool.Pool, keep string) {
+	_, _ = pruneScratch(ctx, keep, pgScratch{admin})
+}
+
+// scratchQuerier is the slice of the connection prune needs. It exists so the
+// prune logic can be driven against a fake that reports planted schemas and a
+// controlled "other connections" count — the live-database test can only ever
+// observe the real answers, so the rule's two directions (drop what is
+// abandoned, never drop what a peer owns) need a driver that can set them.
+type scratchQuerier interface {
+	schemas(ctx context.Context) ([]string, error)
+	otherConnections(ctx context.Context) (int, error)
+	dropSchema(ctx context.Context, name string) error
+}
+
+// pgScratch is the live implementation, over the admin connection.
+type pgScratch struct{ admin *pgxpool.Pool }
+
+func (q pgScratch) schemas(ctx context.Context) ([]string, error) {
+	rows, err := q.admin.Query(ctx,
+		`SELECT nspname FROM pg_namespace WHERE nspname LIKE 'test\_%'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var names []string
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err == nil {
+			names = append(names, n)
+		}
+	}
+	return names, rows.Err()
+}
+
+func (q pgScratch) otherConnections(ctx context.Context) (int, error) {
+	var others int
+	err := q.admin.QueryRow(ctx,
+		`SELECT count(*) FROM pg_stat_activity
+		  WHERE datname = current_database() AND pid <> pg_backend_pid()`).Scan(&others)
+	return others, err
+}
+
+func (q pgScratch) dropSchema(ctx context.Context, name string) error {
+	_, err := q.admin.Exec(ctx, `DROP SCHEMA IF EXISTS `+quote(name)+` CASCADE`)
+	return err
+}
+
+// pruneScratch drops every leftover scratch schema the delete rule says is
+// reclaimable, and reports the names it dropped. `keep` is this process's own
+// schema and is never a candidate. A nil error with an empty slice is the normal
+// "nothing to do" case; the caller ignores the error entirely (best-effort
+// cleanup must not fail the test about to run).
+func pruneScratch(ctx context.Context, keep string, q scratchQuerier) ([]string, error) {
+	names, err := q.schemas(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Unattributable (legacy) schemas may be reclaimed only when this is the
+	// sole connection to the database.
+	solo := true
+	if others, err := q.otherConnections(ctx); err == nil && others > 0 {
+		solo = false
+	}
+
+	var dropped []string
+	for _, n := range names {
+		if n == keep || !reclaimableScratchSchema(n, solo) {
+			continue
+		}
+		if err := q.dropSchema(ctx, n); err != nil {
+			continue
+		}
+		dropped = append(dropped, n)
+	}
+	return dropped, nil
+}
+
+// reclaimableScratchSchema reports whether a leftover scratch schema may be
+// dropped. It is deliberately conservative in BOTH directions:
+//
+//   - a schema a live process still owns is never reclaimable, because dropping
+//     it reproduces the mid-test race this naming scheme exists to prevent, and
+//   - nothing is reclaimed while any other connection exists, because
+//     `DROP SCHEMA ... CASCADE` is database-wide DDL: it invalidates catalogue
+//     entries a peer may be reading, and a peer's `pg_indexes` scan can then die
+//     with `could not open relation with OID (SQLSTATE XX000)`. Cleanup is not
+//     worth a peer's gate run — a leaked empty schema costs nothing.
+func reclaimableScratchSchema(schema string, solo bool) bool {
+	if !solo {
+		// `DROP SCHEMA ... CASCADE` is database-wide DDL: it invalidates
+		// catalogue entries a peer may be reading, so it is never issued while
+		// any other connection exists, however abandoned the schema looks.
+		return false
+	}
+	// Alone, a schema may be reclaimed if it predates the pid scheme and so
+	// cannot be attributed to a process at all, or if its owning process is gone.
+	return legacyScratchSchema(schema) || !liveScratchSchema(schema)
+}
+
+// legacyScratchSchema reports whether a scratch schema predates the pid suffix,
+// i.e. it cannot be attributed to any process.
+func legacyScratchSchema(schema string) bool {
+	_, ok := schemaPID(schema)
+	return !ok
+}
+
+// liveScratchSchema reports whether a scratch schema belongs to a process that
+// still exists. A name with no pid suffix cannot be attributed, so it is
+// reported live here; pruneDeadSchemas decides separately whether an
+// unattributable schema is safe to reclaim.
+func liveScratchSchema(schema string) bool {
+	pid, ok := schemaPID(schema)
+	if !ok {
+		return true
+	}
+	return ownerAliveFromErr(syscall.Kill(pid, 0))
+}
+
+// ownerAliveFromErr maps the result of `kill(pid, 0)` to "that process still
+// exists". EPERM counts as alive: the process is there but owned by another
+// user, and treating it as dead would delete a schema out from under a running
+// test — the exact race this naming scheme exists to prevent. Split out from the
+// syscall so that arm is testable without needing a second unprivileged user.
+func ownerAliveFromErr(err error) bool {
+	return err == nil || err == syscall.EPERM
+}
+
+// schemaPID extracts the pid encoded by pkgName, e.g. test_httpapi_p1234 → 1234.
+func schemaPID(schema string) (int, bool) {
+	i := strings.LastIndex(schema, "_p")
+	if i < 0 {
+		return 0, false
+	}
+	pid, err := strconv.Atoi(schema[i+2:])
+	if err != nil || pid <= 0 {
+		return 0, false
+	}
+	return pid, true
 }
 
 // migrate applies the embedded migrations into schema. Unlike db.Migrate it
@@ -178,7 +356,7 @@ func Reset(t *testing.T, pool *pgxpool.Pool, tables ...string) {
 	})
 }
 
-// ResetSchema drops and re-creates this package's scratch schema, wiping every
+// ResetSchema drops and re-creates this process's scratch schema, wiping every
 // row (including migration seed data) and re-applying migrations. Use it only
 // for a test that must observe a truly empty database; prefer Reset for
 // per-table cleanup.
@@ -210,11 +388,19 @@ func ResetSchema(t *testing.T) *pgxpool.Pool {
 // NewLogger is the discard logger used for migration output.
 func NewLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }
 
-// pkgName derives a schema name from the calling test package (e.g.
-// internal/dbstore → test_dbstore). Different packages run in parallel against
-// the same database, so the name must be per-package.
+// pkgName derives a schema name from the calling test package AND this process's
+// pid (e.g. internal/dbstore → test_dbstore_p1234).
+//
+//   - the package part is what separates the packages `go test ./...` runs in
+//     parallel against the one shared database, and
+//   - the pid part is what separates concurrent RUNS of the same package from
+//     different checkouts. Every checkout points at the same database, so a
+//     name without it is shared by every lane gating at once, and each lane's
+//     `DROP SCHEMA ... CASCADE` deletes the tables the others are mid-test on.
+//
+// Do not "simplify" the pid away — see the package doc comment.
 func pkgName() string {
-	return "test_" + sanitize(pkgFromFrames())
+	return "test_" + sanitize(pkgFromFrames()) + "_p" + strconv.Itoa(os.Getpid())
 }
 
 func sanitize(s string) string {
