@@ -138,6 +138,26 @@ type ObjectStore struct {
 	publicBase string // browser-reachable public URL prefix (issue #145)
 }
 
+// ErrNotConfigured is returned when a method is called on an unconfigured
+// (nil) *ObjectStore.
+//
+// It exists because the store is a *ObjectStore handed into INTERFACE fields
+// (httpapi.RESTHandlers.Store / PublicHandlers.Store, assetgate.Handler.Store).
+// A nil *T stored in an interface is NOT a nil interface, so every
+// `if store == nil` guard downstream is false and the call runs on a nil
+// receiver: the method dereferences o.client and panics with a nil pointer at
+// addr=0x0. cmd/jomform-api leaves that pointer nil whenever S3_ACCESS_KEY /
+// S3_SECRET_KEY are unset, so a visitor-reachable GET /media/u/<id>/<file>
+// produced a 500 + a recovered panic instead of the intended 503
+// "media storage tidak dikonfigurasi".
+//
+// The nil-receiver check in each method is the bottom layer that makes a panic
+// impossible whatever shape the wiring takes; cmd/jomform-api no longer hands
+// out a typed nil, and the httpapi edge maps this sentinel to the 503 the
+// guard always intended. Callers should check `errors.Is(err, ErrNotConfigured)`
+// rather than the message.
+var ErrNotConfigured = errors.New("object store not configured")
+
 // NewObjectStore builds an ObjectStore from config. endpoint empty uses AWS.
 func NewObjectStore(endpoint, accessKey, secretKey, bucket, region, publicBase string) (*ObjectStore, error) {
 	if bucket == "" {
@@ -174,7 +194,13 @@ func NewObjectStore(endpoint, accessKey, secretKey, bucket, region, publicBase s
 }
 
 // PutObject stores body under key with the given content-type.
+//
+// A nil receiver (an unconfigured store) answers ErrNotConfigured instead of
+// dereferencing o.client — see ErrNotConfigured for why that matters.
 func (o *ObjectStore) PutObject(ctx context.Context, key, contentType string, body []byte) error {
+	if o == nil {
+		return ErrNotConfigured
+	}
 	_, err := o.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:      &o.bucket,
 		Key:         &key,
@@ -190,12 +216,27 @@ func (o *ObjectStore) PutObject(ctx context.Context, key, contentType string, bo
 // PublicURL returns the canonical browser-reachable URL for a key. It points
 // at the API's public media route (issue #145), never the internal
 // S3/MinIO endpoint, so browsers can actually load the object.
+//
+// A nil receiver (an unconfigured store) has no public base, so it returns ""
+// rather than dereferencing itself. Nothing can be stored through an
+// unconfigured store, so no caller can reach here with a real key in
+// production — the guard exists so a typed-nil store cannot panic a URL
+// builder.
 func (o *ObjectStore) PublicURL(key string) string {
+	if o == nil {
+		return ""
+	}
 	return o.publicBase + "/" + key
 }
 
 // GetObject streams an object's bytes and content-type from the bucket.
+//
+// A nil receiver (an unconfigured store) answers ErrNotConfigured instead of
+// dereferencing o.client — see ErrNotConfigured.
 func (o *ObjectStore) GetObject(ctx context.Context, key string) ([]byte, string, error) {
+	if o == nil {
+		return nil, "", ErrNotConfigured
+	}
 	out, err := o.client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: &o.bucket,
 		Key:    &key,
@@ -227,7 +268,13 @@ func (o *ObjectStore) GetBytes(ctx context.Context, key string) ([]byte, string,
 // DeleteObject removes an object from the bucket (issue #180). Used by the
 // media delete endpoint after the row is soft-deleted. A missing object is
 // not an error (idempotent delete).
+//
+// A nil receiver (an unconfigured store) answers ErrNotConfigured instead of
+// dereferencing o.client — see ErrNotConfigured.
 func (o *ObjectStore) DeleteObject(ctx context.Context, key string) error {
+	if o == nil {
+		return ErrNotConfigured
+	}
 	_, err := o.client.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: &o.bucket,
 		Key:    &key,
@@ -314,7 +361,13 @@ func ScanGateAllowed(ctx context.Context, media *dbstore.MediaStore, key, ct str
 
 // EnsureBucket provisions the media bucket if it does not exist and makes it
 // public-read (issue #79). It is idempotent.
+//
+// A nil receiver (an unconfigured store) answers ErrNotConfigured instead of
+// dereferencing o.client — see ErrNotConfigured.
 func (o *ObjectStore) EnsureBucket(ctx context.Context) error {
+	if o == nil {
+		return ErrNotConfigured
+	}
 	_, err := o.client.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: &o.bucket})
 	if err == nil {
 		return nil

@@ -76,8 +76,10 @@ func (h *RESTHandlers) listMedia(w http.ResponseWriter, r *http.Request, actx *A
 		// Issue #382: expose the generated thumbnail/medium/full variant URLs
 		// for raster images. They are derived from the object key (the
 		// variants share the full-size key's namespace), so no extra column is
-		// needed. h.Store may be nil in tests — then sizes are omitted.
-		if h.Store != nil && isSizedImage(m.Mime) {
+		// needed. The store may be unconfigured in tests or when S3_* is unset
+		// — then sizes are omitted (storeUnavailable also catches a nil
+		// *ObjectStore behind the interface).
+		if !storeUnavailable(h.Store) && isSizedImage(m.Mime) {
 			sizes := map[string]string{}
 			for _, size := range objstore.ImageSizes {
 				if vkey := buildVariantKey(m.Key, size); vkey != "" {
@@ -90,7 +92,7 @@ func (h *RESTHandlers) listMedia(w http.ResponseWriter, r *http.Request, actx *A
 		}
 		// Issue #383: expose the auto-generated PDF preview thumbnail URL,
 		// derived from the object key (no extra column needed).
-		if h.Store != nil && m.Mime == "application/pdf" {
+		if !storeUnavailable(h.Store) && m.Mime == "application/pdf" {
 			if pkey := buildPDFPreviewKey(m.Key); pkey != "" {
 				rm.Preview = h.Store.PublicURL(pkey)
 			}
@@ -139,7 +141,7 @@ func (h *RESTHandlers) deleteMedia(w http.ResponseWriter, r *http.Request, actx 
 	h.releaseMediaQuota(r.Context(), actx.Account.ID, size)
 	// Remove the object from MinIO (best-effort; the row is already
 	// soft-deleted so a storage failure must not fail the request).
-	if h.Store != nil {
+	if !storeUnavailable(h.Store) {
 		if err := h.Store.DeleteObject(r.Context(), key); err != nil {
 			slog.Warn("media_delete_object", "err", err, "key", key)
 		}

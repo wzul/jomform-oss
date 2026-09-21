@@ -32,6 +32,7 @@ import (
 
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/emailqueue"
+	"github.com/wzul/jomform/api/internal/niliface"
 )
 
 // Media scan statuses stored on media.scan_status (migration 000040).
@@ -362,6 +363,12 @@ func longestBase64Run(s string) int {
 
 // ObjectFetcher fetches an object's bytes by key from the media bucket.
 // *httpapi.ObjectStore satisfies it structurally (no import cycle).
+//
+// A nil *httpapi.ObjectStore stored in this interface is NOT a nil interface, so
+// `h.Store != nil` is not a sufficient guard — see Handler.Send, which uses
+// niliface.IsNil for exactly that reason. cmd/jomform-api leaves the pointer nil
+// when S3 creds are absent, and the unguarded fetch below ran on the WORKER
+// goroutine (which recovers nothing, so it would have killed the process).
 type ObjectFetcher interface {
 	GetBytes(ctx context.Context, key string) ([]byte, string, error)
 }
@@ -391,6 +398,21 @@ type Handler struct {
 	LLM   AssetClassifier
 }
 
+// fetcher returns the object store to fetch an asset's bytes from, or nil when
+// there is nothing that can fetch.
+//
+// It exists so the "can we actually re-fetch this asset?" question has ONE
+// answer. `h.Store != nil` is not that answer: cmd/jomform-api leaves the store
+// pointer nil when S3 creds are absent and assigns it into this interface, and a
+// nil *T in an interface makes the field non-nil, so the fetch would run on a nil
+// receiver. On the worker goroutine that is an unrecoverable panic.
+func (h *Handler) fetcher() ObjectFetcher {
+	if niliface.IsNil(h.Store) {
+		return nil
+	}
+	return h.Store
+}
+
 // Send classifies one asset-scan job: re-checks deterministic heuristics
 // (defence in depth), then asks the LLM for a verdict and persists it to the
 // media row. A returned error triggers the worker's retry-with-backoff ladder
@@ -415,8 +437,9 @@ func (h *Handler) Send(ctx context.Context, job emailqueue.Job) error {
 	// a file that somehow reached the queue without being flagged upstream is
 	// still caught before the (fallible) AI step.
 	final := StatusOK
-	if h.Store != nil {
-		body, mime, err := h.Store.GetBytes(ctx, sj.Key)
+	fetcher := h.fetcher()
+	if fetcher != nil {
+		body, mime, err := fetcher.GetBytes(ctx, sj.Key)
 		if err != nil {
 			slog.Warn("assetgate_fetch_failed", "media", sj.MediaID, "key", sj.Key, "err", err)
 			return err // retry — object may be still propagating
@@ -432,13 +455,22 @@ func (h *Handler) Send(ctx context.Context, job emailqueue.Job) error {
 			return nil
 		}
 	}
-	if h.LLM == nil {
+	if niliface.IsNil(h.LLM) {
 		// No AI available — leave the asset blocked (pending/needs_review).
 		// Never mark ok without a scan.
 		slog.Warn("assetgate_no_llm", "media", sj.MediaID, "account", sj.AccountID)
 		return nil
 	}
-	body, _, err := h.Store.GetBytes(ctx, sj.Key)
+	if fetcher == nil {
+		// An LLM is wired but the object store is not, so the bytes cannot be
+		// re-fetched and the asset cannot be scanned. Fail closed (it stays
+		// pending/needs_review, never served) — the alternative is the
+		// nil-receiver panic this card is about, on a goroutine that recovers
+		// nothing.
+		slog.Warn("assetgate_no_store", "media", sj.MediaID, "account", sj.AccountID)
+		return nil
+	}
+	body, _, err := fetcher.GetBytes(ctx, sj.Key)
 	if err != nil {
 		return err
 	}

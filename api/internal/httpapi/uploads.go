@@ -214,7 +214,7 @@ func optimizeAvatar(data []byte, ext string) ([]byte, error) {
 // cannot serve another account's uploaded code via /media. Images remain
 // intentionally public (forms/products render them from any origin).
 func (h *RESTHandlers) handleMedia(w http.ResponseWriter, r *http.Request) {
-	if h.Store == nil {
+	if storeUnavailable(h.Store) {
 		writeErr(w, http.StatusServiceUnavailable, "media storage tidak dikonfigurasi")
 		return
 	}
@@ -225,6 +225,14 @@ func (h *RESTHandlers) handleMedia(w http.ResponseWriter, r *http.Request) {
 	}
 	body, ct, err := h.Store.GetObject(r.Context(), key)
 	if err != nil {
+		// A store that reports itself unconfigured is a deployment gap, not a
+		// server fault: answer the same 503 the guard above writes. The guard
+		// already catches a typed nil, so this only fires if the store itself
+		// says so — one meaning, one status, never a 500.
+		if errors.Is(err, objstore.ErrNotConfigured) {
+			writeErr(w, http.StatusServiceUnavailable, "media storage tidak dikonfigurasi")
+			return
+		}
 		// Distinguish a missing object (404) from a storage failure (500).
 		var nf *types.NoSuchKey
 		if errors.As(err, &nf) {
@@ -282,7 +290,7 @@ func (h *RESTHandlers) uploadImage(w http.ResponseWriter, r *http.Request, actx 
 	if _, ok := h.requireWriteRole(w, r, actx); !ok {
 		return
 	}
-	if h.Store == nil {
+	if storeUnavailable(h.Store) {
 		recordUploadFailure("not_configured")
 		writeErr(w, http.StatusServiceUnavailable, "media storage tidak dikonfigurasi")
 		return
@@ -502,7 +510,7 @@ func (h *RESTHandlers) uploadAvatar(w http.ResponseWriter, r *http.Request, actx
 	if _, ok := h.requireWriteRole(w, r, actx); !ok {
 		return
 	}
-	if h.Store == nil {
+	if storeUnavailable(h.Store) {
 		recordUploadFailure("not_configured")
 		writeErr(w, http.StatusServiceUnavailable, "media storage tidak dikonfigurasi")
 		return
@@ -608,7 +616,7 @@ func (h *RESTHandlers) uploadAsset(w http.ResponseWriter, r *http.Request, actx 
 	if _, ok := h.requireWriteRole(w, r, actx); !ok {
 		return
 	}
-	if h.Store == nil {
+	if storeUnavailable(h.Store) {
 		recordUploadFailure("not_configured")
 		writeErr(w, http.StatusServiceUnavailable, "media storage tidak dikonfigurasi")
 		return

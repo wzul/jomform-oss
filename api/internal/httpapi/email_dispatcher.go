@@ -29,7 +29,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"reflect"
 
 	"github.com/wzul/jomform/api/internal/assetgate"
 	"github.com/wzul/jomform/api/internal/email"
@@ -46,34 +45,13 @@ import (
 // actually enqueues may reach it (email_dispatcher_jobtype_test.go asserts that).
 var errUnknownJobType = errors.New("emailq: unknown job type")
 
-// mailerUnavailable reports whether a VerifyMailer cannot deliver anything.
-//
-// It exists because `m == nil` is NOT sufficient for an interface: a nil
-// *email.Sender stored in the interface makes `m != nil` true, so the caller
-// proceeds and the method runs on a nil receiver — (*email.Sender).SendReceipt
-// dereferences the receiver in suppressed() and SIGSEGVs. On the email queue
-// worker goroutine, which recovers nothing, that kills the whole API process.
-// Found by driving the built binary with SES unconfigured: register → 201 →
-// worker panic → every later request connection-refused.
-//
-// cmd/jomform-api no longer stores a nil *email.Sender in these fields, so the
-// typed nil should not occur in production; this is the layer that makes the
-// guard's intent ("no mailer → drop the job") hold for EITHER shape, so a future
-// wiring change cannot reintroduce the crash.
-//
-// A typed nil is unwrapped to its nil pointer value here so the caller's
-// "no mailer → drop the job" branch is reached with either shape.
-func mailerUnavailable(m VerifyMailer) bool {
-	if m == nil {
-		return true
-	}
-	v := reflect.ValueOf(m)
-	switch v.Kind() {
-	case reflect.Ptr, reflect.Interface, reflect.Func, reflect.Chan, reflect.Map, reflect.Slice:
-		return v.IsNil()
-	}
-	return false
-}
+// mailerUnavailable (the "can this VerifyMailer deliver anything at all?" gate)
+// lives in niliface.go next to storeUnavailable: both are the same typed-nil
+// question — a nil *T stored in a non-nil interface is not a nil interface —
+// and `m == nil` alone is NOT sufficient for an interface. A nil *email.Sender
+// made that check false, so the call ran on a nil receiver
+// ((*email.Sender).SendReceipt → suppressed → SIGSEGV) on the email queue
+// worker goroutine, which recovers nothing, and the whole API process died.
 
 // EmailDispatcher routes queued email jobs to the right sender. It implements
 // emailqueue.Handler.

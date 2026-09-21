@@ -303,6 +303,27 @@ func main() {
 		} else {
 			log.Warn("S3_ACCESS_KEY/S3_SECRET_KEY unset — image uploads disabled")
 		}
+		// The store is a *httpapi.ObjectStore assigned into INTERFACE fields
+		// (rest.Store, public.Store, dispatcher.AssetScan.Store). A nil
+		// *ObjectStore stored in an interface is NOT a nil interface, so every
+		// `if store == nil` guard downstream is false and the call walks into a
+		// nil receiver — GET /media/u/<id>/<file> answered 500 + a recovered
+		// panic instead of the intended 503 "media storage tidak
+		// dikonfigurasi". Only assign when S3 really is configured; with S3
+		// absent the fields stay nil interfaces and every guard works as
+		// designed. Same shape as makeAuthMailer above.
+		makeStore := func() httpapi.ObjectStoreIface {
+			if store == nil {
+				return nil
+			}
+			return store
+		}
+		makeAssetFetcher := func() assetgate.ObjectFetcher {
+			if store == nil {
+				return nil
+			}
+			return store
+		}
 		// Issue #447: realtime notifications — in-memory pub/sub hub backing
 		// the SSE stream (GET /v1/rest/events/stream). The payments OnPaid +
 		// response.submitted paths publish sale/response events here so a
@@ -325,7 +346,10 @@ func main() {
 			EmailQueue: deps.EmailQueue,
 			BaseURL:    cfg.AppBaseURL,
 			Users:      usersStore,
-			Store:      store,
+			// Nil interface when S3 is unconfigured — see makeStore. Never a
+			// nil *ObjectStore inside the interface: that shape skipped every
+			// `h.Store == nil` guard and panicked the media handler.
+			Store: makeStore(),
 			// Issue #140: shared Domain so passkey sessions stay valid on
 			// product subdomains (mcp.jomform.com).
 			CookieDomain: httpapi.SharedCookieDomain(cfg.AppBaseURL),
@@ -406,6 +430,9 @@ func main() {
 			Media: mediaStore,
 			// Issue #361/#363: object store backing media upload (upload_media
 			// tool). Shared with the dashboard REST upload; nil when S3 unset.
+			// This field is a CONCRETE *objstore.ObjectStore, so a plain nil
+			// check is correct here — the typed-nil trap only exists where the
+			// pointer is stored in an interface.
 			Store: store,
 			// Issue #364/#363: background asset-scan queue (upload_media code
 			// assets enqueue an asset_scan job).
@@ -493,8 +520,9 @@ func main() {
 			// spam_judge jobs to the AI judge. Nil when Valkey is absent (dev).
 			SpamQueue: deps.EmailQueue,
 			// Issue #361: same media bucket serves merchant code assets on the
-			// workspace/custom domain via /assets/{key}. Nil disables the route.
-			Store: store,
+			// workspace/custom domain via /assets/{key}. A nil interface
+			// disables the route (see makeStore).
+			Store: makeStore(),
 			// Issue #364: media metadata store gates code-asset serving on the
 			// background scan status (only 'ok' is served).
 			Media: mediaStore,
@@ -529,10 +557,13 @@ func main() {
 				// the deterministic + LLM code-asset gate (Ollama Cloud). The
 				// handler flips scan_status on the media row; only 'ok' assets
 				// are served. Nil-safe: without a store or LLM the handler
-				// leaves the asset unserved (fail-closed).
+				// leaves the asset unserved (fail-closed). The store is handed
+				// over as a nil INTERFACE when S3 is unset (see makeAssetFetcher)
+				// so the handler's `h.Store != nil` guard is not defeated by a
+				// typed nil.
 				AssetScan: &assetgate.Handler{
 					Media: mediaStore,
-					Store: store,
+					Store: makeAssetFetcher(),
 					LLM:   llm.New(cfg.LLMBaseURL, cfg.LLMModel),
 				},
 			}

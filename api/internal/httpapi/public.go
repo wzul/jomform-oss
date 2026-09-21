@@ -28,6 +28,7 @@ import (
 	"github.com/wzul/jomform/api/internal/email"
 	"github.com/wzul/jomform/api/internal/emailqueue"
 	"github.com/wzul/jomform/api/internal/formfields"
+	"github.com/wzul/jomform/api/internal/objstore"
 	"github.com/wzul/jomform/api/internal/payments"
 	"github.com/wzul/jomform/api/internal/spamjudge"
 )
@@ -1818,7 +1819,7 @@ func assetOwnedByRequestingTenant(key, requestingAccountID string) bool {
 // uploaded code) is rejected with 404 even if the requesting tenant is a
 // valid workspace/custom domain.
 func (h *PublicHandlers) handleAsset(w http.ResponseWriter, r *http.Request) {
-	if h.Store == nil {
+	if storeUnavailable(h.Store) {
 		writeErr(w, http.StatusServiceUnavailable, "media storage tidak dikonfigurasi")
 		return
 	}
@@ -1844,6 +1845,12 @@ func (h *PublicHandlers) handleAsset(w http.ResponseWriter, r *http.Request) {
 	}
 	body, ct, err := h.Store.GetObject(r.Context(), key)
 	if err != nil {
+		// Same one-meaning/one-status rule as handleMedia: a store that
+		// reports itself unconfigured is a deployment gap (503), never a 500.
+		if errors.Is(err, objstore.ErrNotConfigured) {
+			writeErr(w, http.StatusServiceUnavailable, "media storage tidak dikonfigurasi")
+			return
+		}
 		var nf *types.NoSuchKey
 		if errors.As(err, &nf) {
 			writeErr(w, http.StatusNotFound, "media tidak dijumpai")
