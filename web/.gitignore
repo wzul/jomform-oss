@@ -1,0 +1,29 @@
+# Files Next.js 16 writes INTO web/ that must never be tracked.
+#
+# `next dev` / `next build` regenerate all three on every run, so a tracked or
+# unignored copy shows up as untracked/modified in `git status --short` before a
+# worker has written a line of code — the same class as the tsbuildinfo churn
+# (#661, ignored in the repo-root .gitignore).
+#
+# /AGENTS.md and /CLAUDE.md — the managed AI-agent-rules scaffold, written by
+#   next/dist/server/lib/generate-agent-files.js (called from start-server.js ->
+#   ensureAgentRulesForDev) whenever an AI coding agent is detected in the
+#   environment. This repo disables the writer with `agentRules: false` in
+#   next.config.mjs (next's documented opt-out); these two lines are the belt to
+#   that braces, so a future Next that drops or renames the switch still cannot
+#   dirty the tree.
+#
+# /next-env.d.ts — Next's own generated type reference; `next dev` points it at
+#   .next/dev/types and `next build` at .next/types, so while it is tracked the
+#   two commands flip it back and forth forever. Next documents the fix the same
+#   way ("Add it to .gitignore. If your project already tracks the file, remove
+#   it from Git" — node_modules/next/dist/docs/01-app/03-api-reference/05-config/
+#   02-typescript.md). It is regenerated before the type check in every
+#   `next dev` / `next build`, so nothing needs the committed copy — verified by
+#   running a full `npm run build` with the file absent (exit 0).
+#
+# Guard: web/src/lib/nextManagedFiles.test.ts refuses a tree that drops either
+# half of this (the ignore rules, or `agentRules: false`).
+/AGENTS.md
+/CLAUDE.md
+/next-env.d.ts
