@@ -8,6 +8,7 @@ import { Shell } from "../../components/Shell";
 import { useI18n, LANGS_SHOWN, LANG_LABEL, type Lang } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDate } from "../../lib/formatDate";
+import { isValidStepUpCode, stepUpRequired } from "../../lib/stepUp";
 
 type Profile = {
   id: string;
@@ -227,30 +228,48 @@ export default function ProfilePage() {
   // disable 2FA / add passkey). Everyone else is unaffected. When the backend
   // answers 401 + next_step=totp_stepup_required we prompt for the code and
   // retry the same request once with totp_code attached.
-  async function postSensitive(path: string, body: Record<string, unknown>): Promise<boolean> {
+  //
+  // bodyFn builds the payload from the collected code, so an action whose proof
+  // IS the code (disable 2FA) carries it instead of a password.
+  //
+  // opts.prompt forces the prompt for such an action, even when the #458
+  // step-up does not apply — disabling 2FA takes a code on EVERY session type.
+  // Because that prompt always supplies a code, the gate below can never fire
+  // for the disable action: the code is sent in the first request and consumed
+  // by the handler as the action's own proof. (A separate step-up prompt would
+  // ask for a SECOND code from the same 30s window, which #528 refuses — the
+  // failure mode in the report.)
+  async function postSensitive(
+    path: string,
+    bodyFn: (code: string) => Record<string, unknown>,
+    opts?: { prompt: string },
+  ): Promise<boolean> {
     setMsg(""); setErr("");
     const send = (payload: Record<string, unknown>) =>
       fetch(path, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-    let payload = { ...body };
-    // Pre-empt the prompt when we already know the step-up applies.
-    if (sessionUser?.magic_session && p?.totp_enabled) {
-      const code = window.prompt(t("prof.stepUpDesc"));
-      if (!code || !code.trim()) { setErr(t("prof.stepUpInvalid")); return false; }
-      payload = { ...payload, totp_code: code.trim() };
+    // Pre-empt the prompt when we already know a code is needed.
+    let code = "";
+    if (opts || stepUpRequired(sessionUser, p)) {
+      const entered = window.prompt(opts ? opts.prompt : t("prof.stepUpDesc"));
+      if (!isValidStepUpCode(entered)) { setErr(t("prof.stepUpInvalid")); return false; }
+      code = entered!.trim();
     }
-    let r = await send(payload);
+    let r = await send(bodyFn(code));
     if (r.status === 401) {
       const d = await r.json().catch(() => ({}));
       if (d.next_step !== "totp_stepup_required") {
         setErr(d.error || t("prof.failed"));
         return false;
       }
-      const code = window.prompt(t("prof.stepUpDesc"));
-      if (!code || !code.trim()) { setErr(t("prof.stepUpInvalid")); return false; }
-      r = await send({ ...payload, totp_code: code.trim() });
+      // The backend asked for a step-up we did not pre-empt (e.g. the session
+      // became magic after this page loaded). Ask once and retry.
+      const entered = window.prompt(t("prof.stepUpDesc"));
+      if (!isValidStepUpCode(entered)) { setErr(t("prof.stepUpInvalid")); return false; }
+      code = entered!.trim();
+      r = await send(bodyFn(code));
     }
     if (r.ok) { setMsg(t("prof.saved")); load(); reloadSession(); return true; }
     const d = await r.json().catch(() => ({}));
@@ -319,10 +338,10 @@ export default function ProfilePage() {
       // /register/start (which mints a short-lived grant the /finish leg then
       // inherits). Everyone else is unaffected.
       let totpCode = "";
-      if (sessionUser?.magic_session && p?.totp_enabled) {
+      if (stepUpRequired(sessionUser, p)) {
         const code = window.prompt(t("prof.stepUpDesc"));
-        if (!code || !code.trim()) { setErr(t("prof.stepUpInvalid")); return; }
-        totpCode = code.trim();
+        if (!isValidStepUpCode(code)) { setErr(t("prof.stepUpInvalid")); return; }
+        totpCode = code!.trim();
       }
       const st = await fetch("/api/auth/passkeys/register/start", {
         method: "POST",
@@ -611,7 +630,11 @@ export default function ProfilePage() {
                   if (pwNew !== pwConfirm) { setErr(t("prof.pwMismatch")); return; }
                   // Issue #458: postSensitive handles the TOTP step-up prompt
                   // for a magic + 2FA session; unchanged for everyone else.
-                  await postSensitive("/api/auth/change-password", { password: pwCurrent, new_password: pwNew });
+                  await postSensitive("/api/auth/change-password", (code) =>
+                    code
+                      ? { password: pwCurrent, new_password: pwNew, totp_code: code }
+                      : { password: pwCurrent, new_password: pwNew },
+                  );
                   setPwCurrent(""); setPwNew(""); setPwConfirm("");
                 }}
                 className="jf-btn-primary mt-3"
@@ -619,7 +642,18 @@ export default function ProfilePage() {
             </section>
 
             <section className="jf-card mt-6 p-6">
-              <h2 className="text-lg font-semibold">{t("prof.twoFa")}</h2>
+              <h2 className="text-lg font-semibold">
+                {t("prof.twoFa")}{" "}
+                <a
+                  href="/docs#two-factor"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={t("prof.twoFaDocs")}
+                  className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full bg-slate-200 text-[10px] font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                >
+                  ?
+                </a>
+              </h2>
               <p className="mt-1 text-sm text-slate-500">
                 {t("prof.status")} <strong>{p?.totp_enabled ? t("prof.enabled") : t("prof.notEnabled")}</strong>
               </p>
@@ -632,24 +666,31 @@ export default function ProfilePage() {
               {p?.totp_enabled && (
                 <button
                   onClick={async () => {
-                    // Backend handle2FADisable verifies the account password
-                    // (not a TOTP code) before disabling.
-                    const password = window.prompt(t("prof.enter2faCode"));
-                    if (password) {
-                      // Issue #458: postSensitive adds a TOTP step-up prompt
-                      // when this is a magic-link session with 2FA enabled.
-                      const ok = await postSensitive("/api/auth/2fa/disable", { password });
-                      // #69: flip optimistically so the status line ("Belum
-                      // aktif") agrees with reality immediately; post() already
-                      // reloadSession()'d (keeps prev user until it resolves).
-                      if (ok) {
-                        setP((prev) => (prev ? { ...prev, totp_enabled: false } : prev));
-                      }
-                      setTrustedUntil("");
-                      // Issue #454: disabling 2FA clears every trusted device
-                      // server-side, so refresh the management list too.
-                      loadTrust();
+                    // Backend handle2FADisable: a fresh 6-digit code from the
+                    // authenticator app is the proof — the SAME value this
+                    // prompt asks for, on every session type.
+                    //
+                    // postSensitive prompts ONCE with this label (opts.prompt
+                    // replaces the generic #458 prompt) and sends what the user
+                    // typed as totp_code, which the handler consumes as both the
+                    // step-up and the action's proof. A separate step-up prompt
+                    // would ask for a second code from the same 30s window,
+                    // which #528 refuses — the failure mode in the report.
+                    const ok = await postSensitive(
+                      "/api/auth/2fa/disable",
+                      (code) => (code ? { totp_code: code } : {}),
+                      { prompt: t("prof.enter2faCode") },
+                    );
+                    // #69: flip optimistically so the status line ("Belum
+                    // aktif") agrees with reality immediately; post() already
+                    // reloadSession()'d (keeps prev user until it resolves).
+                    if (ok) {
+                      setP((prev) => (prev ? { ...prev, totp_enabled: false } : prev));
                     }
+                    setTrustedUntil("");
+                    // Issue #454: disabling 2FA clears every trusted device
+                    // server-side, so refresh the management list too.
+                    loadTrust();
                   }}
                   className="ml-2 px-4 py-2 text-sm text-red-500 hover:underline"
                 >{t("prof.disable2fa")}</button>

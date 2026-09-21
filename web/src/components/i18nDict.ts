@@ -961,6 +961,7 @@ export const DICT = {
   "prof.resetup2fa": { en: "Re-setup 2FA", ms: "Sediakan semula 2FA", zh: "重新设置 2FA", ta: "2FA மீண்டும் அமை", ar: "إعادة إعداد التحقق الثنائي" },
   "prof.disable2fa": { en: "Disable 2FA", ms: "Nyahaktif 2FA", zh: "停用 2FA", ta: "2FA முடக்கு", ar: "تعطيل التحقق الثنائي" },
   "prof.enter2faCode": { en: "Enter a current 2FA code to disable:", ms: "Masukkan kod 2FA semasa untuk nyahaktif:", zh: "输入当前的 2FA 验证码以停用：", ta: "2FA ஐ முடக்க தற்போதைய குறியீட்டை உள்ளிடவும்:", ar: "أدخل رمز التحقق الثنائي الحالي للتعطيل:" },
+  "prof.twoFaDocs": { en: "How 2FA and disabling it work", ms: "Cara 2FA dan nyahaktifnya berfungsi", zh: "2FA 及其停用方式", ta: "2FA மற்றும் அதை முடக்குவது எப்படி", ar: "كيف يعمل التحقق الثنائي وتعطيله" },
   // Issue #458: a magic-link session for a 2FA user must confirm a fresh TOTP
   // code before a sensitive action (change password / disable 2FA / add
   // passkey). Only those users see this prompt.

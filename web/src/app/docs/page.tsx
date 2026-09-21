@@ -126,6 +126,13 @@ const FEATURES: { title: string; body: string; slug?: string }[] = [
     body: "Drop a form into any website with an iframe. The embedded form posts its height to your page (postMessage auto-height) so it grows with the form, with a 3-line merchant listener and a fixed-height fallback. See the embed guide.",
   },
   {
+    title: "Two-factor authentication (2FA)",
+    // The Profile → Security 2FA controls (AGENTS.md docs-parity rule 4) and the
+    // disable2fa.test.ts guard deep-link this section.
+    slug: "two-factor",
+    body: "Add a second factor to your account from Profile → Security. Set up 2FA by scanning the QR code into an authenticator app (Google Authenticator, 1Password, Authy…) and confirming the 6-digit code it shows — the secret is only activated once you confirm a code, so an abandoned setup never locks you out. From then on, each sign-in asks for the current 6-digit code. You can tick \"don't ask for a code on this device for 30 days\" at login to trust that device (the password is still required every time); Profile → Security lists every trusted device with a Revoke button per device and \"revoke all / log out everywhere\". To turn 2FA off, open Profile → Security and click Disable 2FA: you are asked for the current 6-digit code from your authenticator app, and that is the only thing you need to type — there is no separate password prompt, so it also works on a session you started from an emailed sign-in link. Disabling 2FA also clears every trusted device, because a device that skipped the removed factor must not keep that exemption. A session started from an emailed sign-in link (a magic link) is treated as unproven: when 2FA is on, changing your password, disabling 2FA or adding a passkey asks for a fresh code, so a stolen inbox cannot strip the second factor. Each code is single-use — if a prompt is submitted twice, use the fresh code your app shows next, not the previous one.",
+  },
+  {
     title: "Trusted devices (2FA)",
     body: "When 2FA is enabled you can tick \"don't ask for a code on this device for 30 days\" at login — that device is then trusted and skips the 2FA code (the password is still required). Profile → Security (your account block at the bottom of the sidebar, or at the bottom of the menu on a phone) lists every trusted device (label, IP, first trusted, expiry) with a Revoke button per device, plus \"revoke all / log out everywhere\". Revocation is immediate: the next login on a revoked device asks for a 2FA code again. Changing your password or disabling 2FA also clears all trusted devices.",
   },

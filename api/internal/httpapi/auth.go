@@ -665,7 +665,29 @@ func (a *AuthHandlers) pendingTOTP() *auth.PendingTOTP {
 	return a.Sessions.PendingTOTP()
 }
 
-// handle2FADisable turns 2FA off after password confirmation.
+// handle2FADisable turns 2FA off.
+//
+// WHAT THE CALLER MUST PROVE (one rule, three cases — the proof the Profile UI
+// asks for is the SAME value this handler verifies):
+//
+//   - A fresh 6-digit TOTP code (`totp_code`) is the proof. It is verified by
+//     checkAndConsumeTOTP, so it stays single-use (#528) and it satisfies the
+//     magic-session step-up (#458) in the same call — one code, one prompt.
+//   - No code on a magic-link session for a 2FA user → the #458 challenge
+//     (401 + next_step). A magic session never proved a second factor, so a
+//     stolen inbox must not be able to strip 2FA, and the account password is
+//     NOT accepted as a substitute here. A magic-link signup has a random-UUID
+//     password the user has never seen, so a password confirm would lock those
+//     users out of their own security settings.
+//     A live step-up grant (proved moments ago in the same flow) counts.
+//   - No code on any other session (password / social / passkey / passkey-
+//     registered) → the account password confirms the action, unchanged. The
+//     password is verified whenever it is used.
+//
+// History: #458 added the step-up in front of the password check, and the UI
+// kept prompting with a "enter a 2FA code" label while sending `password`, so
+// a magic-link user typing the code their authenticator showed had it checked
+// as a password and rejected with 401 for ever. Both ends now agree.
 func (a *AuthHandlers) handle2FADisable(w http.ResponseWriter, r *http.Request) {
 	user := a.currentUser(r)
 	if user == nil {
@@ -673,26 +695,41 @@ func (a *AuthHandlers) handle2FADisable(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var req struct {
-		Password string `json:"password"`
-		// Issue #458: a magic session owned by a 2FA user must also prove a
-		// fresh TOTP code before 2FA can be stripped. Non-2FA / non-magic
-		// sessions ignore this field.
+		// TOTPCode is the 6-digit code from the user's authenticator. This is
+		// what the dashboard prompts for.
 		TOTPCode string `json:"totp_code"`
+		// Password is the account password. Still honoured for API/MCP
+		// clients (the disable_2fa MCP tool takes it) on a non-magic session;
+		// the dashboard no longer sends it.
+		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	// Issue #458 (option C): a magic-link session for a 2FA-enabled user must
-	// step up with a fresh TOTP code before 2FA is disabled — otherwise a
-	// stolen inbox could silently remove the second factor.
-	if !a.gateMagicStepUp(w, r, user, req.TOTPCode) {
+	// magicStepUp is the #458 condition: a magic session owned by a 2FA user.
+	magicStepUp := magicStepUpNeeded(r, a.Sessions, user)
+	switch {
+	case req.TOTPCode != "":
+		// The code is both the second factor and the action's proof.
+		if !checkAndConsumeTOTP(r.Context(), a.Users, user, req.TOTPCode) {
+			writeErr(w, http.StatusUnauthorized, "kod 2FA tidak sah")
+			return
+		}
+	case magicStepUp && !a.stepUpGranted(r, user):
+		// No second factor on this session yet → challenge (and audit the
+		// decision, #458) so the client prompts and retries with totp_code.
+		a.gateMagicStepUp(w, r, user, "")
 		return
-	}
-	ok, err := auth.VerifyPassword(req.Password, user.PasswordHash)
-	if err != nil || !ok {
-		writeErr(w, http.StatusUnauthorized, "kata laluan tidak sah")
-		return
+	case !magicStepUp:
+		// Established session: the account password confirms the action.
+		ok, err := auth.VerifyPassword(req.Password, user.PasswordHash)
+		if err != nil || !ok {
+			writeErr(w, http.StatusUnauthorized, "kata laluan tidak sah")
+			return
+		}
+		// case magicStepUp && granted: falls through — a fresh second factor
+		// was already proved for this session moments ago in this flow.
 	}
 	if err := a.Users.DisableTOTP(r.Context(), user.ID); err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal error")

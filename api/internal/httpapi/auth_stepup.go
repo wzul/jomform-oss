@@ -50,6 +50,18 @@ func magicStepUpNeeded(r *http.Request, sessions *auth.Sessions, user *dbstore.U
 	return sessions.Magic(r.Context(), sessionTokenFrom(r))
 }
 
+// stepUpGranted reports whether this session already holds a live step-up
+// grant (a fresh second factor proved moments ago in the same flow, e.g.
+// passkey register /start → /finish). It lets a handler ask "is the #458
+// condition satisfied?" without going through the gate, which would consume a
+// code or write a challenge of its own.
+func (a *AuthHandlers) stepUpGranted(r *http.Request, user *dbstore.User) bool {
+	if a.Sessions == nil || user == nil {
+		return false
+	}
+	return a.Sessions.StepUp().Granted(r.Context(), sessionTokenFrom(r), user.ID)
+}
+
 // stepUpDecision is the outcome of the magic-session step-up gate.
 type stepUpDecision int
 
