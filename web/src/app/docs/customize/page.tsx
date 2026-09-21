@@ -361,7 +361,10 @@ export default function CustomizeDocsPage() {
       </p>
 
       <h2 className="mt-8 text-xl font-semibold text-slate-900">Example prompt for your agent</h2>
-      <pre className="mt-3 overflow-x-auto rounded-lg bg-slate-900 p-4 text-xs leading-relaxed text-slate-100">
+      <pre
+        tabIndex={0}
+        className="mt-3 overflow-x-auto rounded-lg bg-slate-900 p-4 text-xs leading-relaxed text-slate-100"
+      >
 {`"Apply my Canva design to my JomForm checkout:
 1. Upload the logo and hero image from my design (upload_media).
 2. Set the form theme to my brand colours, font and layout (set_form_theme).
@@ -372,7 +375,10 @@ export default function CustomizeDocsPage() {
       <p className="mt-8 text-sm leading-relaxed text-slate-600">
         JomForm keeps authority over prices and the payment flow — the agent customizes the look and
         feel, never the checkout logic. See the{" "}
-        <a href="/docs/mcp" className="text-[var(--jf-primary)] hover:underline">
+        <a
+          href="/docs/mcp"
+          className="text-[var(--jf-primary)] underline underline-offset-2 hover:underline"
+        >
           MCP tool reference
         </a>{" "}
         for the full list of tools.

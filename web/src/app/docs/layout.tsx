@@ -56,7 +56,13 @@ export const metadata: Metadata = {
 export default function DocsLayout({ children }: { children: React.ReactNode }) {
   return (
     <main className="min-h-screen bg-white">
-      <nav className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
+      {/* t_f5a8730d / axe `landmark-unique`: the layout holds two <nav>
+          elements, so each needs its own accessible name to be told apart
+          (this one is the site bar, the one below is the docs sidebar). */}
+      <nav
+        aria-label="JomForm site"
+        className="flex items-center justify-between border-b border-slate-100 px-5 py-3"
+      >
         <a href="/" className="text-sm font-medium text-slate-600 hover:text-slate-900">
           ← Back to JomForm
         </a>
@@ -65,7 +71,8 @@ export default function DocsLayout({ children }: { children: React.ReactNode }) 
 
       <div className="mx-auto flex max-w-6xl gap-8 px-6 py-10">
         <aside className="hidden w-56 shrink-0 md:block">
-          <nav className="sticky top-10 space-y-1">
+          {/* axe `landmark-unique`: the second landmark needs a name too. */}
+          <nav aria-label="Docs sections" className="sticky top-10 space-y-1">
             {NAV.map((n) => (
               <Link
                 key={n.href}
@@ -77,7 +84,11 @@ export default function DocsLayout({ children }: { children: React.ReactNode }) 
             ))}
             {/* Issue #513: deep links to the affiliate + menu-basket sections. */}
             <div className="pt-3">
-              <p className="px-3 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+              {/* axe `color-contrast`: text-slate-400 is 2.63:1 on the white
+                  page at 11px, against a 4.5:1 AA minimum. slate-600 is
+                  7.58:1 and still reads as a quieter heading than the links
+                  it introduces. */}
+              <p className="px-3 text-[11px] font-semibold uppercase tracking-wide text-slate-600">
                 Guides
               </p>
               {NAV_SECTIONS.map((n) => (

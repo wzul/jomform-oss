@@ -17,6 +17,16 @@ key public pages and **fails the gate on any critical or serious violation**:
 - `/brand`
 - `/legal/privacy`
 - `/legal/terms`
+- `/docs` and every page under `web/src/app/docs` (`/docs/builder`,
+  `/docs/customize`, `/docs/embed`, `/docs/subscriptions`, `/docs/variations`,
+  `/docs/spam-detection`, `/docs/ses-reputation`, `/docs/placeholders`,
+  `/docs/mcp`, `/docs/feedback`, `/docs/chat`). The knowledge base is public
+  and the dashboard links into it from Settings with inline "?" buttons, so it
+  is a route this scan exists for — it was outside the gate until card
+  `t_f5a8730d` extended the list, which is how serious axe violations sat on
+  `/docs/customize` (and every other docs route) unreported while the gate
+  passed 7/7. `web/src/lib/docsA11y.test.ts` fails the unit suite if a docs
+  page is missing from the scan, so a page added later cannot stay outside it.
 
 Run it locally:
 

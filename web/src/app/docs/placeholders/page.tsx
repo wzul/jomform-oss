@@ -132,7 +132,10 @@ export default function PlaceholdersPage() {
       </div>
 
       <h2 className="mt-8 text-xl font-semibold text-slate-900">Example</h2>
-      <pre className="mt-3 overflow-x-auto rounded-lg bg-slate-900 p-4 text-xs leading-relaxed text-slate-100">
+      <pre
+        tabIndex={0}
+        className="mt-3 overflow-x-auto rounded-lg bg-slate-900 p-4 text-xs leading-relaxed text-slate-100"
+      >
 {`Subject: Jualan baharu — {{ref_code}}
 Body:
   Rujukan : {{ref_code}}

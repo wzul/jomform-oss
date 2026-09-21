@@ -19,6 +19,25 @@ const PAGES = [
   { name: "brand", path: "/brand" },
   { name: "legal-privacy", path: "/legal/privacy" },
   { name: "legal-terms", path: "/legal/terms" },
+  // t_f5a8730d: the knowledge base was outside this scan entirely, so a docs
+  // PR could not be checked by the a11y gate at all (PR 676 edited
+  // /docs/customize and even a full `npm run a11y` never looked at it). Every
+  // page under web/src/app/docs is listed here; /docs and /docs/customize are
+  // the minimum, the rest so a regression on any guide turns this red.
+  // src/lib/docsA11y.test.ts fails the unit suite when a docs page is missing
+  // from this list, so a page added later cannot quietly stay outside the gate.
+  { name: "docs-index", path: "/docs" },
+  { name: "docs-builder", path: "/docs/builder" },
+  { name: "docs-customize", path: "/docs/customize" },
+  { name: "docs-embed", path: "/docs/embed" },
+  { name: "docs-subscriptions", path: "/docs/subscriptions" },
+  { name: "docs-variations", path: "/docs/variations" },
+  { name: "docs-spam-detection", path: "/docs/spam-detection" },
+  { name: "docs-ses-reputation", path: "/docs/ses-reputation" },
+  { name: "docs-placeholders", path: "/docs/placeholders" },
+  { name: "docs-mcp", path: "/docs/mcp" },
+  { name: "docs-feedback", path: "/docs/feedback" },
+  { name: "docs-chat", path: "/docs/chat" },
 ];
 
 for (const page of PAGES) {

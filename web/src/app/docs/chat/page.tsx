@@ -132,7 +132,7 @@ export default function ChatDocsPage() {
           <a
             key={s.id}
             href={`#${s.id}`}
-            className="rounded-full bg-slate-100 px-3 py-1 text-xs text-[var(--jf-muted)] hover:bg-[var(--jf-primary)] hover:text-white"
+            className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-700 hover:bg-[var(--jf-primary)] hover:text-white"
           >
             {s.title}
           </a>

@@ -45,7 +45,10 @@ export default function EmbedDocsPage() {
         Turn on <strong>Allow embedding (iframe)</strong> in the form&apos;s settings, then paste this on your page.
         Replace the <code className="rounded bg-slate-100 px-1">src</code> with your form&apos;s public URL.
       </p>
-      <pre className="mt-3 overflow-x-auto rounded-lg bg-slate-900 p-4 text-xs leading-relaxed text-slate-100">
+      <pre
+        tabIndex={0}
+        className="mt-3 overflow-x-auto rounded-lg bg-slate-900 p-4 text-xs leading-relaxed text-slate-100"
+      >
 {`<iframe src="https://yourworkspace.jomform.com/your-form-slug"
         style="width:100%;height:640px;border:0"
         title="Your form"></iframe>`}
@@ -58,7 +61,10 @@ export default function EmbedDocsPage() {
         message after submit). Add this 3-line listener so the iframe grows and shrinks with the form — no inner
         scrollbars:
       </p>
-      <pre className="mt-3 overflow-x-auto rounded-lg bg-slate-900 p-4 text-xs leading-relaxed text-slate-100">
+      <pre
+        tabIndex={0}
+        className="mt-3 overflow-x-auto rounded-lg bg-slate-900 p-4 text-xs leading-relaxed text-slate-100"
+      >
 {MERCHANT_SNIPPET}
       </pre>
       <p className="mt-3 text-sm leading-relaxed text-slate-600">
@@ -111,7 +117,10 @@ export default function EmbedDocsPage() {
 
       <p className="mt-8 text-sm leading-relaxed text-slate-600">
         Related: see the{" "}
-        <a href="/docs/customize" className="text-[var(--jf-primary)] hover:underline">
+        <a
+          href="/docs/customize"
+          className="text-[var(--jf-primary)] underline underline-offset-2 hover:underline"
+        >
           customization guide
         </a>{" "}
         to brand the embedded form with your own colours, CSS and JS.
