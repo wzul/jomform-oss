@@ -11,10 +11,15 @@
 #   * flock on /tmp/jomform-build.lock so concurrent builds cannot interleave
 #   * runs the LOCAL PREFLIGHT gate (scripts/preflight.sh) BEFORE building the
 #     image. There is no CI to fall back on — GitHub Actions is not a gate for
-#     this repo — so the preflight IS the gate:
-#         api   go build ./... / go vet ./... / go test ./... -race / govulncheck
-#         web   npm run build (runs test:unit) / npm run a11y (axe-core) / npm audit
-#         git   gitleaks detect over the FULL history
+#     this repo — so the preflight IS the gate.
+#     THE GATE LIST IS DERIVED, NOT WRITTEN DOWN HERE. The authoritative
+#     inventory is `scripts/preflight.sh --list`, and this script derives both
+#     the label it prints and the --skip-tests warning from it, so neither can
+#     drift. Do NOT hand-write the list back in: an earlier version of this
+#     header named the CI-era gates only, while the preflight had also grown
+#     self-tests for the uptime watchdog and the temp-API-key helper — gates
+#     that can stop a release and were invisible to anyone reading the header.
+#     Run `./scripts/preflight.sh --list` for the current set.
 #     A failing gate aborts with a non-zero exit before any image exists, so a
 #     broken or vulnerable build cannot ship. (issue #476: the 000047 migration
 #     crash-looped prod; a single `go test ./...` before the image build would
@@ -42,11 +47,11 @@
 # Usage:
 #   ./deploy/build-and-ship.sh [--skip-tests] [VERSION]
 #
-#   --skip-tests  DANGER: bypass the pre-build preflight (scripts/preflight.sh:
-#                 go build/vet/test -race, govulncheck, npm run build, axe-core
-#                 a11y, npm audit, gitleaks) and print a loud warning. Only for
-#                 a genuine emergency (e.g. an urgent hotfix while the local
-#                 test Postgres/Valkey is down) — never for a normal release.
+#   --skip-tests  DANGER: bypass the pre-build preflight (scripts/preflight.sh,
+#                 every gate it lists) and print a loud warning naming them.
+#                 Only for a genuine emergency (e.g. an urgent hotfix while the
+#                 local test Postgres/Valkey is down) — never for a normal
+#                 release.
 #                 The gate is what keeps a broken build from crash-looping prod,
 #                 so re-run WITHOUT this flag as soon as the emergency is over.
 #
@@ -146,15 +151,28 @@ command -v docker >/dev/null 2>&1 || die "docker not found in PATH"
 [ -f "$DOCKERFILE" ] || die "$DOCKERFILE not found — the api image Dockerfile lives on the Dockerfile branch (issue #25); merge/checkout it first"
 mkdir -p "$OUT_DIR"
 
+# The gate inventory is READ FROM THE RUNNER, never copied into this file (the
+# label and the --skip-tests warning below are the two places a hand-written
+# list used to live, and both had gone stale: they named the CI-era gates while
+# the preflight had also grown self-tests that can fail a release). Cosmetic
+# only — the gate itself is the `preflight.sh` call — so a failure here degrades
+# the wording instead of aborting the build, and the explicit `|| true` keeps
+# `set -e` from turning that read into a silent exit.
+GATE_INVENTORY=""
+if [ -x "$REPO_ROOT/scripts/preflight.sh" ]; then
+  GATE_INVENTORY="$(bash "$REPO_ROOT/scripts/preflight.sh" --list 2>/dev/null \
+    | tr '\n' '/' | sed 's:/$::' || true)"
+fi
+[ -n "$GATE_INVENTORY" ] || GATE_INVENTORY="(./scripts/preflight.sh --list failed — run it by hand)"
+
 # ---------------------------------------------------------------------------
 # 5. Pre-build gate: the LOCAL preflight (scripts/preflight.sh).
 #
 #    AGENTS.md rule — GitHub Actions is NOT the merge/deploy gate for this repo
 #    (every job fails with 0 steps on an account-wide billing failure, so a red
-#    check says nothing about the code). scripts/preflight.sh is the gate now:
-#      api  go build / go vet / go test -race / govulncheck
-#      web  npm run build (incl. test:unit) / axe-core a11y / npm audit
-#      git  gitleaks over the FULL history
+#    check says nothing about the code). scripts/preflight.sh is the gate now,
+#    and its gate list is the authoritative one (`--list`) — see the derivation
+#    above rather than a copy of the names here.
 #
 #    Nothing is built or shipped unless the whole preflight is green.
 #
@@ -169,14 +187,13 @@ run_gate_step() {
 }
 
 if [ "$SKIP_TESTS" = "1" ]; then
-  cat >&2 <<'EOF'
+  cat >&2 <<EOF
 
   ============================================================
    !!!  WARNING: --skip-tests — PRE-BUILD GATE BYPASSED  !!!
   ============================================================
-   scripts/preflight.sh was NOT run, so ALL of these were
-   skipped: go build, go vet, go test -race, govulncheck,
-   npm run build, axe-core a11y, npm audit, gitleaks.
+   scripts/preflight.sh was NOT run, so ALL of its gates were
+   skipped: $GATE_INVENTORY
    A broken or vulnerable build can ship and crash-loop prod
    (see the 000047 migration incident).
    Re-run WITHOUT this flag as soon as the emergency is over.
@@ -190,7 +207,7 @@ else
   # preflight — a reducible deploy gate is not a gate. (--skip-tests above is
   # the single, loud, emergency-only bypass; there is deliberately no way to
   # run *part* of the gate before shipping.)
-  run_gate_step "./scripts/preflight.sh (api build/vet/test/govuln, web build/a11y/audit, gitleaks)" \
+  run_gate_step "./scripts/preflight.sh ($GATE_INVENTORY)" \
     bash -c "cd '$REPO_ROOT' && ./scripts/preflight.sh"
   info "pre-build gate green: all scripts/preflight.sh gates passed"
 fi

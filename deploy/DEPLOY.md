@@ -12,7 +12,7 @@ binary labelled as the release.
 | Never builds from a dirty tree | exits non-zero if `git status --porcelain` is non-empty |
 | Two builds can't interleave | `flock -n` on `/tmp/jomform-build.lock` — second invocation fails fast instead of racing |
 | Provenance | stamps `VERSION` (git describe) + `COMMIT` (rev-parse) as build args and OCI labels; `docker image inspect` ties any image to an exact commit |
-| **The security + build gate ran** | runs `scripts/preflight.sh` before any image is built — api build/vet/test `-race`/govulncheck, web build/axe-core a11y/npm audit, and gitleaks over the full git history. A failing gate exits non-zero **before an image exists**, so a broken or vulnerable build cannot ship |
+| **The security + build gate ran** | runs `scripts/preflight.sh` before any image is built, and does not proceed unless **every** gate it lists passes (`./scripts/preflight.sh --list` is the authoritative inventory; the script's own label and `--skip-tests` warning are derived from it, so they cannot drift). A failing gate exits non-zero **before an image exists**, so a broken or vulnerable build cannot ship |
 | Works with the scp pattern | `docker save | gzip` tarball, optional `scp` when `SSH_HOST` is set — no registry needed |
 
 There is **no GitHub Actions CI** for this repo (see "Why there is no CI"
@@ -32,8 +32,11 @@ recent account payments have failed or your spending limit needs to be
 increased"), so a red check on a PR said nothing about the code — it was noise,
 not a gate. The workflows will be rebuilt when the repo is made public.
 
-Deleting them would have silently dropped four security gates that existed
-nowhere else, so each was ported to `scripts/preflight.sh`:
+Deleting them would have silently dropped security gates that existed
+nowhere else, so each was ported to `scripts/preflight.sh` — which has since
+grown gates the CI never had. `scripts/preflight.sh --list` is the authority on
+the current set; do not read the list below as the full count (it is the old-CI
+mapping only):
 
 | Old CI gate | Now |
 |---|---|
@@ -102,7 +105,8 @@ The api image is unaffected: `CONTEXT=api` + `api/Dockerfile` (with its own
    reach for `--skip-tests`. The gate is:
    ```bash
    source ${JOMFORM_ENV:-$HOME/.config/jomform/test-env.sh}   # JOMFORM_TEST_DATABASE_URL + JOMFORM_TEST_VALKEY_URL
-   ./scripts/preflight.sh    # 8 gates, ~6 min; runs again inside build-and-ship.sh
+   ./scripts/preflight.sh --list   # the gate inventory (authoritative)
+   ./scripts/preflight.sh          # every gate, ~6 min; runs again inside build-and-ship.sh
    ```
    Run it standalone first if you want to see a failure before the lock is held.
 3. Ship the tarball (`SSH_HOST=... ./deploy/build-and-ship.sh` or scp manually).
