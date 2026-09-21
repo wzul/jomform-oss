@@ -1229,13 +1229,27 @@ function FormSettingsInner() {
                       </div>
                       <div>
                         <label className={labelCls}>{t("bld.status")}</label>
-                        <div className="mt-1 grid max-w-xl grid-cols-4 gap-1.5">
+                        {/* Wrap, do not divide: a `grid-cols-4` row forced four
+                            EQUAL columns at every width, so on a phone each
+                            chip got a 51px box for a label that does not fit —
+                            measured, Tamil "பட்டியலிடப்படாதது" is 96px and Malay
+                            "Tidak disenaraikan" is 113px — and the glyph run
+                            painted over the chip's own border. Each chip is now
+                            content-sized and the row wraps when it runs out of
+                            room: the same `flex max-w-xl flex-wrap gap-1.5`
+                            shape the product-image-size row below already uses.
+                            `whitespace-nowrap` is defensive only (measured: a
+                            one-word label cannot wrap anyway, so removing it
+                            changes nothing today) — it documents the intent so
+                            a future label with a space still cannot break.
+                            Do NOT shrink the font or widen past max-w-xl. */}
+                        <div className="mt-1 flex max-w-xl flex-wrap gap-1.5">
                           {(["draft", "private", "published", "unlisted"] as const).map((s) => (
                             <button
                               key={s}
                               type="button"
                               onClick={() => setStatus(s)}
-                              className={`rounded-md border px-2 py-2 text-xs font-medium transition-colors ${
+                              className={`whitespace-nowrap rounded-md border px-2 py-2 text-xs font-medium transition-colors ${
                                 status === s
                                   ? "border-[#7170ff]/60 bg-indigo-50 text-[var(--jf-primary)]"
                                   : "border-[var(--jf-border)] text-[#374151] hover:bg-slate-50"
