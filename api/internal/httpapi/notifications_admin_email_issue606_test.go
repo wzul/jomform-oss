@@ -20,9 +20,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"testing"
 
@@ -34,40 +32,30 @@ import (
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/emailqueue"
 	"github.com/wzul/jomform/api/internal/payments"
+	"github.com/wzul/jomform/api/internal/testdb"
 )
 
-// issue606HTTPKeyspace is a dedicated Valkey DB so FlushDB here cannot wipe a
-// keyspace another package owns (emailqueue /3, the email breaker /2, the shared
-// test env /1, the payments-package notifications test /11).
-const issue606HTTPKeyspace = 12
-
-// issue606HTTPQueue returns a queue on that keyspace, flushed per test.
+// issue606HTTPQueue returns an email queue whose key set belongs to this test
+// process (testdb.Valkey), so a live API worker on the same Valkey database can
+// neither steal nor wipe the job asserted below.
+//
+// It used to FlushDB a fixed DB number (12). A fixed number is not owned by the
+// test binary: a live process, a second suite or another package configured on
+// it collides, and the flush deleted their keys. Owning the key NAMES is the fix
+// — testdb.Valkey + NewQueueWithPrefix, see testdb/valkey.go for the
+// reproduction (payments reported "0 jobs enqueued" for an enqueue a live worker
+// had claimed).
 func issue606HTTPQueue(t *testing.T) (*emailqueue.Queue, *goredis.Client) {
 	t.Helper()
-	valkeyURL := os.Getenv("JOMFORM_TEST_VALKEY_URL")
-	if valkeyURL == "" {
-		t.Skip("JOMFORM_TEST_VALKEY_URL not set; skipping notification integration test")
-	}
-	u := strings.TrimPrefix(valkeyURL, "valkey://")
-	if i := strings.LastIndex(u, "/"); i >= 0 {
-		u = u[:i]
-	}
-	opts, err := goredis.ParseURL(fmt.Sprintf("redis://%s/%d", u, issue606HTTPKeyspace))
-	if err != nil {
-		t.Fatalf("parse valkey url: %v", err)
-	}
-	rdb := goredis.NewClient(opts)
-	t.Cleanup(func() { _ = rdb.Close() })
-	if ferr := rdb.FlushDB(context.Background()).Err(); ferr != nil {
-		t.Fatalf("flush test keyspace: %v", ferr)
-	}
-	return emailqueue.NewQueue(rdb), rdb
+	rdb, prefix := testdb.Valkey(t)
+	return emailqueue.NewQueueWithPrefix(rdb, prefix), rdb
 }
 
-// issue606HTTPJobs reads the ready list without claiming it.
-func issue606HTTPJobs(t *testing.T, rdb *goredis.Client) []emailqueue.Job {
+// issue606HTTPJobs reads the ready list without claiming it. The key comes from
+// the queue so it matches the prefix this process writes under.
+func issue606HTTPJobs(t *testing.T, q *emailqueue.Queue, rdb *goredis.Client) []emailqueue.Job {
 	t.Helper()
-	raw, err := rdb.LRange(context.Background(), "jf:emailq:jobs", 0, -1).Result()
+	raw, err := rdb.LRange(context.Background(), q.ReadyKey(), 0, -1).Result()
 	if err != nil {
 		t.Fatalf("read email queue: %v", err)
 	}
@@ -194,7 +182,7 @@ func TestIssue606DefaultRuleDeliversOnSalePaidForARESTCreatedForm(t *testing.T) 
 	}
 
 	// ── 6. the merchant's new-sale email is queued, to the OWNER ───────────
-	jobs := issue606HTTPJobs(t, rdb)
+	jobs := issue606HTTPJobs(t, q, rdb)
 	var got *emailqueue.Job
 	for i := range jobs {
 		if jobs[i].Type == "form_notification" {

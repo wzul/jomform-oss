@@ -9,45 +9,34 @@ package emailqueue
 import (
 	"context"
 	"errors"
-	"os"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
+
+	"github.com/wzul/jomform/api/internal/testdb"
 )
 
-func testClient(t *testing.T) *goredis.Client {
+// testQueue returns a queue on this test's own key namespace, plus the client
+// backing it (issue #21aec38d).
+//
+// The previous shape pinned DB /3 and FlushDB'd it. A fixed DB number is not
+// owned by the test binary — a live API or a second suite configured on that
+// number shares it, and the flush deleted their keys. A namespace of the test's
+// own is the same isolation without any delete; see testdb/valkey.go.
+func testQueue(t *testing.T) (*Queue, *goredis.Client) {
 	t.Helper()
-	valkeyURL := os.Getenv("JOMFORM_TEST_VALKEY_URL")
-	if valkeyURL == "" {
-		t.Skip("JOMFORM_TEST_VALKEY_URL not set; skipping email queue integration test")
-	}
-	// Test isolation: route to a dedicated DB (…/3) so this package's FlushDB
-	// never wipes keys that other packages (httpapi auth on …/1, email on …/2)
-	// create concurrently when `go test ./...` runs packages in parallel.
-	u := strings.TrimPrefix(valkeyURL, "valkey://")
-	if i := strings.LastIndex(u, "/"); i >= 0 {
-		u = u[:i]
-	}
-	opts, err := goredis.ParseURL("redis://" + u + "/3")
-	if err != nil {
-		t.Fatalf("parse valkey url: %v", err)
-	}
-	rdb := goredis.NewClient(opts)
-	t.Cleanup(func() { _ = rdb.Close() })
-	// flush a dedicated keyspace so queue state never leaks across runs
-	if err := rdb.FlushDB(context.Background()).Err(); err != nil {
-		t.Fatalf("flush db: %v", err)
-	}
-	return rdb
+	// The namespace comes from testdb.Valkey, which is per TEST — the isolation
+	// the old FlushDB was standing in for, without deleting anything else's keys.
+	// See testdb/valkey.go.
+	rdb, prefix := testdb.Valkey(t)
+	return NewQueueWithPrefix(rdb, prefix), rdb
 }
 
 // TestEnqueueDequeueRoundTrip verifies a job enqueued is dequeued intact.
 func TestEnqueueDequeueRoundTrip(t *testing.T) {
-	rdb := testClient(t)
-	q := NewQueue(rdb)
+	q, _ := testQueue(t)
 	ctx := context.Background()
 
 	job := Job{Type: "verify", To: "a@b.c", Subject: "S", Body: "B", AccountID: "u1"}
@@ -66,8 +55,7 @@ func TestEnqueueDequeueRoundTrip(t *testing.T) {
 // TestDelayedPromotion verifies a delayed job is promoted back to the ready
 // list once its due time passes.
 func TestDelayedPromotion(t *testing.T) {
-	rdb := testClient(t)
-	q := NewQueue(rdb)
+	q, _ := testQueue(t)
 	ctx := context.Background()
 
 	job := Job{Type: "receipt", To: "x@y.z", Subject: "R", Body: "B"}
@@ -103,8 +91,7 @@ func (h *failingHandler) Send(ctx context.Context, job Job) error {
 // TestWorkerRetriesThenDrops verifies a failing job is retried (backoff) and
 // dropped after maxAttempts, and that the queue is left empty.
 func TestWorkerRetriesThenDrops(t *testing.T) {
-	rdb := testClient(t)
-	q := NewQueue(rdb)
+	q, rdb := testQueue(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -134,7 +121,7 @@ func TestWorkerRetriesThenDrops(t *testing.T) {
 	if n, _ := q.Len(ctx); n != 0 {
 		t.Fatalf("ready queue len = %d, want 0 after drop", n)
 	}
-	if n, _ := rdb.ZCard(ctx, delayedKey).Result(); n != 0 {
+	if n, _ := rdb.ZCard(ctx, q.DelayedKey()).Result(); n != 0 {
 		t.Fatalf("delayed set len = %d, want 0 after drop", n)
 	}
 	cancel()

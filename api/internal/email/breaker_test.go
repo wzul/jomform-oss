@@ -6,45 +6,41 @@ package email
 import (
 	"context"
 	"net"
-	"os"
-	"strings"
 	"testing"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
+
+	"github.com/wzul/jomform/api/internal/testdb"
 )
 
+// breakerTestClient returns a client on this test process's own DB, without
+// flushing: the fixtures used to pin DB /2 and FlushDB it, which deleted a live
+// API's or a peer run's keys. The namespace for anything an assertion depends on
+// comes from testdb.PrefixFor(t); see testdb/valkey.go (issue #21aec38d).
 func breakerTestClient(t *testing.T) *goredis.Client {
 	t.Helper()
-	valkeyURL := os.Getenv("JOMFORM_TEST_VALKEY_URL")
-	if valkeyURL == "" {
-		t.Skip("JOMFORM_TEST_VALKEY_URL not set; skipping breaker integration test")
-	}
-	// Test isolation: route to a dedicated DB (…/2) so this package's FlushDB
-	// never wipes keys that other packages (httpapi auth on …/1, emailqueue on
-	// …/3) create concurrently when `go test ./...` runs packages in parallel.
-	u := strings.TrimPrefix(valkeyURL, "valkey://")
-	if i := strings.LastIndex(u, "/"); i >= 0 {
-		u = u[:i]
-	}
-	opts, err := goredis.ParseURL("redis://" + u + "/2")
-	if err != nil {
-		t.Fatalf("parse valkey url: %v", err)
-	}
-	rdb := goredis.NewClient(opts)
-	t.Cleanup(func() { _ = rdb.Close() })
-	// flush a dedicated keyspace so counters never leak across runs
-	if err := rdb.FlushDB(context.Background()).Err(); err != nil {
-		t.Fatalf("flush db: %v", err)
-	}
+	rdb, _ := testdb.Valkey(t)
 	return rdb
+}
+
+// testBreaker returns a breaker on this TEST's own key namespace.
+func testBreaker(t *testing.T, rdb *goredis.Client) *Breaker {
+	t.Helper()
+	return NewBreakerWithPrefix(rdb, 0, 0, testdb.PrefixFor(t))
+}
+
+// testMXChecker returns an MX checker on this TEST's own cache namespace.
+func testMXChecker(t *testing.T, rdb *goredis.Client) *MXChecker {
+	t.Helper()
+	return NewMXCheckerWithPrefix(rdb, testdb.PrefixFor(t))
 }
 
 // TestBreakerFlipsAboveThreshold: 25 sends with 5 bounces (20%) trips the
 // 5%/20 threshold; a clean set of sends does not.
 func TestBreakerFlipsAboveThreshold(t *testing.T) {
 	rdb := breakerTestClient(t)
-	b := NewBreaker(rdb, 0, 0) // defaults 20 / 0.05
+	b := testBreaker(t, rdb) // defaults 20 / 0.05
 	ctx := context.Background()
 
 	for i := 0; i < 25; i++ {
@@ -73,7 +69,7 @@ func TestBreakerFlipsAboveThreshold(t *testing.T) {
 // TestBreakerNeedsMinimumSamples: fewer than minSends never trips even at 100%.
 func TestBreakerNeedsMinimumSamples(t *testing.T) {
 	rdb := breakerTestClient(t)
-	b := NewBreaker(rdb, 0, 0)
+	b := testBreaker(t, rdb)
 	ctx := context.Background()
 
 	for i := 0; i < 5; i++ {
@@ -95,20 +91,22 @@ func TestBreakerNeedsMinimumSamples(t *testing.T) {
 // of the TTL by writing a fresh send-only bucket for a shifted window.
 func TestBreakerAutoResets(t *testing.T) {
 	rdb := breakerTestClient(t)
-	b := NewBreaker(rdb, 0, 0)
+	b := testBreaker(t, rdb)
 	ctx := context.Background()
 
 	now := time.Now()
 	h := now.UTC().Format("20060102T15")
-	rdb.Del(ctx, sendKey(h), bounceKey(h))
-	rdb.Set(ctx, sendKey(h), "20", BreakerKeyTTL)
-	rdb.Set(ctx, bounceKey(h), "5", BreakerKeyTTL)
+	// The counters live under this process's own prefix, so the delete and the
+	// writes below touch only keys this run owns.
+	rdb.Del(ctx, b.sendKey(h), b.bounceKey(h))
+	rdb.Set(ctx, b.sendKey(h), "20", BreakerKeyTTL)
+	rdb.Set(ctx, b.bounceKey(h), "5", BreakerKeyTTL)
 	if tripped, _ := b.Tripped(ctx); !tripped {
 		t.Fatal("precondition: breaker should be tripped")
 	}
 	// A quiet hour = the old buckets expire (removed) and only fresh sends
 	// occur in the new window.
-	rdb.Del(ctx, sendKey(h), bounceKey(h))
+	rdb.Del(ctx, b.sendKey(h), b.bounceKey(h))
 	_ = b.RecordSend(ctx) // one clean send, no bounces
 	if tripped, _ := b.Tripped(ctx); tripped {
 		t.Fatal("breaker did not auto-reset after a quiet window")
@@ -145,7 +143,7 @@ func TestShouldSuppress(t *testing.T) {
 // test hook to avoid real DNS dependency.
 func TestMXCheckerCaches(t *testing.T) {
 	rdb := breakerTestClient(t)
-	m := NewMXChecker(rdb)
+	m := testMXChecker(t, rdb)
 	ctx := context.Background()
 
 	// Positive: domain with an MX record.

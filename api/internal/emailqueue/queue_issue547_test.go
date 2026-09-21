@@ -21,8 +21,7 @@ import (
 // TestIssue547ClaimSurvivesWorkerDeath is the core guard: a job claimed by a worker
 // that never acks must still exist and be retryable.
 func TestIssue547ClaimSurvivesWorkerDeath(t *testing.T) {
-	rdb := testClient(t)
-	q := NewQueue(rdb)
+	q, _ := testQueue(t)
 	ctx := context.Background()
 
 	job := Job{Type: "receipt", To: "buyer@example.test", Subject: "S", Body: "B"}
@@ -83,8 +82,7 @@ func TestIssue547ClaimSurvivesWorkerDeath(t *testing.T) {
 
 // TestIssue547AckClearsInflight proves a successful job leaves nothing behind.
 func TestIssue547AckClearsInflight(t *testing.T) {
-	rdb := testClient(t)
-	q := NewQueue(rdb)
+	q, _ := testQueue(t)
 	ctx := context.Background()
 
 	if err := q.Enqueue(ctx, Job{Type: "verify", To: "a@b.test", Subject: "S", Body: "B"}); err != nil {
@@ -108,8 +106,7 @@ func TestIssue547AckClearsInflight(t *testing.T) {
 // TestIssue547FreshClaimIsNotReaped proves the visibility timeout protects a job
 // that is legitimately still running.
 func TestIssue547FreshClaimIsNotReaped(t *testing.T) {
-	rdb := testClient(t)
-	q := NewQueue(rdb)
+	q, _ := testQueue(t)
 	ctx := context.Background()
 
 	if err := q.Enqueue(ctx, Job{Type: "verify", To: "a@b.test", Subject: "S", Body: "B"}); err != nil {
@@ -136,8 +133,7 @@ func TestIssue547FreshClaimIsNotReaped(t *testing.T) {
 // TestIssue547DeadLetterOnExhaustion proves a permanently failing job is preserved
 // for inspection rather than discarded.
 func TestIssue547DeadLetterOnExhaustion(t *testing.T) {
-	rdb := testClient(t)
-	q := NewQueue(rdb)
+	q, rdb := testQueue(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -177,7 +173,7 @@ func TestIssue547DeadLetterOnExhaustion(t *testing.T) {
 	if n, _ := q.Len(bg); n != 0 {
 		t.Fatalf("ready len = %d, want 0", n)
 	}
-	if n, _ := rdb.ZCard(bg, delayedKey).Result(); n != 0 {
+	if n, _ := rdb.ZCard(bg, q.DelayedKey()).Result(); n != 0 {
 		t.Fatalf("delayed len = %d, want 0", n)
 	}
 	if n, _ := q.InflightLen(bg); n != 0 {
@@ -188,8 +184,7 @@ func TestIssue547DeadLetterOnExhaustion(t *testing.T) {
 // TestIssue547SuccessfulJobIsAckedByWorker proves the worker loop acks on success,
 // leaving neither ready nor in-flight entries.
 func TestIssue547SuccessfulJobIsAckedByWorker(t *testing.T) {
-	rdb := testClient(t)
-	q := NewQueue(rdb)
+	q, _ := testQueue(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -228,8 +223,7 @@ func TestIssue547SuccessfulJobIsAckedByWorker(t *testing.T) {
 // TestIssue547PromoteDueIsSingleClaim proves the delayed-promotion path cannot
 // promote the same retry twice under concurrency (multi-worker safety).
 func TestIssue547PromoteDueIsSingleClaim(t *testing.T) {
-	rdb := testClient(t)
-	q := NewQueue(rdb)
+	q, rdb := testQueue(t)
 	ctx := context.Background()
 
 	job := Job{Type: "receipt", To: "x@y.test", Subject: "R", Body: "B", Attempts: 1}
@@ -262,7 +256,7 @@ func TestIssue547PromoteDueIsSingleClaim(t *testing.T) {
 			"the ZREM-first claim must make promotion single-owner", n)
 	}
 	// And the delayed set must be empty (the member was claimed exactly once).
-	if z, _ := rdb.ZCard(ctx, delayedKey).Result(); z != 0 {
+	if z, _ := rdb.ZCard(ctx, q.DelayedKey()).Result(); z != 0 {
 		t.Fatalf("delayed len = %d, want 0", z)
 	}
 }

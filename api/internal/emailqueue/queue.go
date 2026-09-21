@@ -11,6 +11,19 @@
 // delayed sorted set (`jf:emailq:delayed`) with an exponential backoff ladder,
 // and promotes due jobs back onto the main list.
 //
+// # Keys are namespaced per queue (NewQueueWithPrefix)
+//
+// Every one of those keys lives under a prefix (DefaultKeyPrefix for the
+// production queue). The prefix is the queue's identity: a caller that builds
+// its queue with a prefix of its own gets a key set no other queue writes,
+// claims or flushes, even when it shares a Valkey database with a live API. That
+// matters because the keys are otherwise identical on every host — a test that
+// read the ready list while a live worker was running on the same database
+// reported "0 jobs enqueued" for an enqueue that had in fact succeeded, the
+// worker having claimed and retried the job. Reach the key set through
+// ReadyKey/DelayedKey/InflightKey/DeadKey rather than a literal, so an
+// assertion follows the same prefix the queue writes under.
+//
 // # Delivery guarantee (issue #547)
 //
 // Jobs are claimed, not popped. A worker atomically MOVEs a job from the ready
@@ -84,31 +97,77 @@ type Job struct {
 // Queue is a durable Valkey-backed email job queue.
 type Queue struct {
 	rdb *goredis.Client
+	// prefix namespaces every key this queue touches. It is what makes the
+	// key set an OWNED resource: a process that builds its queue with its own
+	// prefix writes jobs no other queue reads or claims, even when it shares a
+	// Valkey database with a live API.
+	prefix string
 }
 
 // NewQueue wires a queue over the given Valkey client (the same one that backs
 // sessions). The client is shared — the queue does not own it.
 func NewQueue(rdb *goredis.Client) *Queue {
-	return &Queue{rdb: rdb}
+	return &Queue{rdb: rdb, prefix: DefaultKeyPrefix}
+}
+
+// NewQueueWithPrefix wires a queue whose keys are namespaced by prefix instead
+// of DefaultKeyPrefix.
+//
+// The keys were the only isolation axis this queue had, and the production
+// literals (`jf:emailq:jobs` and its siblings) are the same on every host, so a
+// test that read or flushed them was competing with any live worker on that
+// Valkey database: the worker claims the job the assertion is about and the
+// test reports 0 enqueued jobs for an enqueue that worked. A per-process prefix
+// gives each such caller a key set of its own. prefix must be non-empty and end
+// with a separator; an empty prefix falls back to DefaultKeyPrefix.
+func NewQueueWithPrefix(rdb *goredis.Client, prefix string) *Queue {
+	if prefix == "" {
+		prefix = DefaultKeyPrefix
+	}
+	return &Queue{rdb: rdb, prefix: prefix}
 }
 
 const (
-	// queueKey is the main FIFO list of ready jobs.
-	queueKey = "jf:emailq:jobs"
-	// delayedKey is a sorted set of jobs waiting for a retry, scored by the
-	// unix time at which they become due.
-	delayedKey = "jf:emailq:delayed"
-	// inflightKey holds jobs a worker has CLAIMED but not yet acked
-	// (issue #547). A job here is still owned by the queue: the reaper returns
-	// it to the ready list if its worker never acked.
-	inflightKey = "jf:emailq:inflight"
-	// deadKey holds jobs that exhausted their attempts (issue #547), so a
-	// permanently failing job can be inspected instead of vanishing.
-	deadKey = "jf:emailq:dead"
+	// DefaultKeyPrefix namespaces every key of the production queue. It is the
+	// value NewQueue uses; nothing else in the codebase may hardcode the full
+	// key literals, since a queue may legitimately run under another prefix.
+	DefaultKeyPrefix = "jf:emailq:"
+	// keyJobs is the suffix of the main FIFO list of ready jobs.
+	keyJobs = "jobs"
+	// keyDelayed is the suffix of the sorted set of jobs waiting for a retry,
+	// scored by the unix time at which they become due.
+	keyDelayed = "delayed"
+	// keyInflight is the suffix of the list holding jobs a worker has CLAIMED
+	// but not yet acked (issue #547). A job here is still owned by the queue:
+	// the reaper returns it to the ready list if its worker never acked.
+	keyInflight = "inflight"
+	// keyDead is the suffix of the list holding jobs that exhausted their
+	// attempts (issue #547), so a permanently failing job can be inspected
+	// instead of vanishing.
+	keyDead = "dead"
 	// dequeueTimeout bounds each blocking move so the worker can periodically
 	// promote due delayed jobs and reap abandoned in-flight jobs.
 	dequeueTimeout = 2 * time.Second
 )
+
+// key returns this queue's name for one of the suffixes above.
+func (q *Queue) key(suffix string) string { return q.prefix + suffix }
+
+// ReadyKey is this queue's ready-list key. Exported because a caller that must
+// assert on jobs WITHOUT consuming them cannot use Dequeue (it MOVEs the job to
+// the in-flight list and blocks for dequeueTimeout); reading the ready list is
+// the only non-destructive way, and the key must come from the queue so it
+// matches the prefix that queue writes under.
+func (q *Queue) ReadyKey() string { return q.key(keyJobs) }
+
+// DelayedKey is this queue's delayed sorted-set key.
+func (q *Queue) DelayedKey() string { return q.key(keyDelayed) }
+
+// InflightKey is this queue's in-flight list key.
+func (q *Queue) InflightKey() string { return q.key(keyInflight) }
+
+// DeadKey is this queue's dead-letter list key.
+func (q *Queue) DeadKey() string { return q.key(keyDead) }
 
 // VisibilityTimeout is how long a claimed job may sit in the in-flight list
 // before the reaper assumes its worker died and returns it to the ready list
@@ -129,7 +188,7 @@ func (q *Queue) Enqueue(ctx context.Context, job Job) error {
 	if err != nil {
 		return err
 	}
-	return q.rdb.RPush(ctx, queueKey, data).Err()
+	return q.rdb.RPush(ctx, q.key(keyJobs), data).Err()
 }
 
 // EnqueueDelayed schedules a job for a retry after delay. The job is stored in
@@ -140,7 +199,7 @@ func (q *Queue) EnqueueDelayed(ctx context.Context, job Job, delay time.Duration
 		return err
 	}
 	when := time.Now().Add(delay).Unix()
-	return q.rdb.ZAdd(ctx, delayedKey, goredis.Z{Score: float64(when), Member: data}).Err()
+	return q.rdb.ZAdd(ctx, q.key(keyDelayed), goredis.Z{Score: float64(when), Member: data}).Err()
 }
 
 // Dequeue claims the next ready job, blocking up to dequeueTimeout.
@@ -163,7 +222,7 @@ func (q *Queue) DequeueRaw(ctx context.Context) (Job, string, error) {
 	// BLMOVE <src> <dst> RIGHT LEFT <timeout>: atomic, and keeps FIFO order on
 	// both lists. Valkey >= 6.2 (prod runs 9.1), the same requirement the rest
 	// of the codebase assumes.
-	res, err := q.rdb.BLMove(ctx, queueKey, inflightKey, "RIGHT", "LEFT", dequeueTimeout).Result()
+	res, err := q.rdb.BLMove(ctx, q.key(keyJobs), q.key(keyInflight), "RIGHT", "LEFT", dequeueTimeout).Result()
 	if err != nil {
 		if errors.Is(err, goredis.Nil) {
 			return Job{}, "", ErrNoJob
@@ -175,7 +234,7 @@ func (q *Queue) DequeueRaw(ctx context.Context) (Job, string, error) {
 		// An unparseable job cannot be retried meaningfully: drop it from the
 		// in-flight list so it does not pin a reaper slot forever, and surface
 		// the error so the worker logs it.
-		_ = q.rdb.LRem(ctx, inflightKey, 1, res).Err()
+		_ = q.rdb.LRem(ctx, q.key(keyInflight), 1, res).Err()
 		return Job{}, "", err
 	}
 	// Stamp the claim so the reaper can tell a live claim from an abandoned one.
@@ -191,14 +250,14 @@ func (q *Queue) DequeueRaw(ctx context.Context) (Job, string, error) {
 	// Move atomically enough for a single-worker queue: remove the unstamped
 	// member, then push the stamped one. If either step fails the job is still
 	// in flight under one of the two forms, so nothing is lost.
-	if lerr := q.rdb.LRem(ctx, inflightKey, 1, res).Err(); lerr != nil {
+	if lerr := q.rdb.LRem(ctx, q.key(keyInflight), 1, res).Err(); lerr != nil {
 		slog.Warn("emailq_claim_stamp_failed", "err", lerr)
 		return job, res, nil
 	}
-	if perr := q.rdb.LPush(ctx, inflightKey, stamped).Err(); perr != nil {
+	if perr := q.rdb.LPush(ctx, q.key(keyInflight), stamped).Err(); perr != nil {
 		slog.Warn("emailq_claim_stamp_failed", "err", perr)
 		// Put the original back so the job is not stranded.
-		_ = q.rdb.LPush(ctx, inflightKey, res).Err()
+		_ = q.rdb.LPush(ctx, q.key(keyInflight), res).Err()
 		return job, res, nil
 	}
 	return job, string(stamped), nil
@@ -208,7 +267,7 @@ func (q *Queue) DequeueRaw(ctx context.Context) (Job, string, error) {
 // acked is the json blob exactly as it was claimed, so the removal matches the
 // stored member byte-for-byte.
 func (q *Queue) Ack(ctx context.Context, raw string) error {
-	return q.rdb.LRem(ctx, inflightKey, 1, raw).Err()
+	return q.rdb.LRem(ctx, q.key(keyInflight), 1, raw).Err()
 }
 
 // ReapInflight returns in-flight jobs whose worker has not acked within the
@@ -217,7 +276,7 @@ func (q *Queue) Ack(ctx context.Context, raw string) error {
 //
 // Returns the number of jobs reaped.
 func (q *Queue) ReapInflight(ctx context.Context, timeout time.Duration) (int, error) {
-	res, err := q.rdb.LRange(ctx, inflightKey, 0, -1).Result()
+	res, err := q.rdb.LRange(ctx, q.key(keyInflight), 0, -1).Result()
 	if err != nil {
 		return 0, err
 	}
@@ -231,7 +290,7 @@ func (q *Queue) ReapInflight(ctx context.Context, timeout time.Duration) (int, e
 		if err := json.Unmarshal([]byte(raw), &job); err != nil {
 			// Unparseable in-flight entry: cannot retry it, so drop it rather
 			// than reap it forever.
-			if err := q.rdb.LRem(ctx, inflightKey, 1, raw).Err(); err != nil {
+			if err := q.rdb.LRem(ctx, q.key(keyInflight), 1, raw).Err(); err != nil {
 				return reaped, err
 			}
 			continue
@@ -251,12 +310,12 @@ func (q *Queue) ReapInflight(ctx context.Context, timeout time.Duration) (int, e
 		}
 		// Claim-then-requeue: move it out of in-flight first so a concurrent
 		// reaper cannot requeue the same member twice.
-		if err := q.rdb.LRem(ctx, inflightKey, 1, raw).Err(); err != nil {
+		if err := q.rdb.LRem(ctx, q.key(keyInflight), 1, raw).Err(); err != nil {
 			return reaped, err
 		}
-		if err := q.rdb.RPush(ctx, queueKey, next).Err(); err != nil {
+		if err := q.rdb.RPush(ctx, q.key(keyJobs), next).Err(); err != nil {
 			// Put it back in flight rather than dropping it.
-			_ = q.rdb.RPush(ctx, inflightKey, raw).Err()
+			_ = q.rdb.RPush(ctx, q.key(keyInflight), raw).Err()
 			return reaped, err
 		}
 		reaped++
@@ -278,17 +337,17 @@ func (q *Queue) DeadLetter(ctx context.Context, job Job, reason string) error {
 	if err != nil {
 		return err
 	}
-	return q.rdb.RPush(ctx, deadKey, data).Err()
+	return q.rdb.RPush(ctx, q.key(keyDead), data).Err()
 }
 
 // DeadLen reports the dead-letter list length (for tests/ops).
 func (q *Queue) DeadLen(ctx context.Context) (int64, error) {
-	return q.rdb.LLen(ctx, deadKey).Result()
+	return q.rdb.LLen(ctx, q.key(keyDead)).Result()
 }
 
 // InflightLen reports the in-flight list length (for tests/ops).
 func (q *Queue) InflightLen(ctx context.Context) (int64, error) {
-	return q.rdb.LLen(ctx, inflightKey).Result()
+	return q.rdb.LLen(ctx, q.key(keyInflight)).Result()
 }
 
 // PromoteDue moves every delayed job whose due time has passed onto the ready
@@ -299,7 +358,7 @@ func (q *Queue) InflightLen(ctx context.Context) (int64, error) {
 // pair could promote the same member from two workers concurrently.
 func (q *Queue) PromoteDue(ctx context.Context) error {
 	now := time.Now().Unix()
-	res, err := q.rdb.ZRangeByScore(ctx, delayedKey, &goredis.ZRangeBy{
+	res, err := q.rdb.ZRangeByScore(ctx, q.key(keyDelayed), &goredis.ZRangeBy{
 		Min: "-inf", Max: strconv.FormatInt(now, 10),
 	}).Result()
 	if err != nil {
@@ -308,16 +367,16 @@ func (q *Queue) PromoteDue(ctx context.Context) error {
 	for _, m := range res {
 		// Claim the member first: ZRem returns 1 only for the worker that
 		// actually removed it, so only that worker pushes it to the ready list.
-		removed, rerr := q.rdb.ZRem(ctx, delayedKey, m).Result()
+		removed, rerr := q.rdb.ZRem(ctx, q.key(keyDelayed), m).Result()
 		if rerr != nil {
 			return rerr
 		}
 		if removed == 0 {
 			continue // another worker got it
 		}
-		if perr := q.rdb.RPush(ctx, queueKey, m).Err(); perr != nil {
+		if perr := q.rdb.RPush(ctx, q.key(keyJobs), m).Err(); perr != nil {
 			// Re-add to delayed so the retry is not lost.
-			_ = q.rdb.ZAdd(ctx, delayedKey, goredis.Z{Score: float64(time.Now().Unix()), Member: m}).Err()
+			_ = q.rdb.ZAdd(ctx, q.key(keyDelayed), goredis.Z{Score: float64(time.Now().Unix()), Member: m}).Err()
 			return perr
 		}
 	}
@@ -326,7 +385,7 @@ func (q *Queue) PromoteDue(ctx context.Context) error {
 
 // Len reports the number of ready jobs (for tests/ops).
 func (q *Queue) Len(ctx context.Context) (int64, error) {
-	return q.rdb.LLen(ctx, queueKey).Result()
+	return q.rdb.LLen(ctx, q.key(keyJobs)).Result()
 }
 
 // Handler performs the actual send for one job. Returning an error triggers a

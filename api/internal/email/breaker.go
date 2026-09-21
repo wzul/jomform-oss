@@ -28,34 +28,54 @@ type Breaker struct {
 	rdb      *goredis.Client
 	minSends int64
 	ratio    float64
+	// keyPrefix namespaces the hour-bucket counters, so a caller can run a
+	// breaker whose counters no other breaker writes or deletes. Defaults to
+	// BreakerKeyPrefix (the production value).
+	keyPrefix string
 }
 
 // NewBreaker wires the breaker over the same Valkey client that backs
 // sessions. minSends<=0 falls back to BreakerDefaultMin; ratio<=0 falls back
 // to BreakerDefaultRatio.
 func NewBreaker(rdb *goredis.Client, minSends int64, ratio float64) *Breaker {
+	return NewBreakerWithPrefix(rdb, minSends, ratio, BreakerKeyPrefix)
+}
+
+// NewBreakerWithPrefix is NewBreaker with an explicit key prefix.
+//
+// The counters are plain Redis keys with fixed production names, so two
+// processes sharing a Valkey database — a test run and a live API, or two
+// concurrent test runs — write and delete the same keys: one process's flush
+// wipes the other's counters, and a ratio assertion then reads traffic it never
+// generated. A prefix gives the caller counters of its own. An empty prefix
+// falls back to BreakerKeyPrefix.
+func NewBreakerWithPrefix(rdb *goredis.Client, minSends int64, ratio float64, prefix string) *Breaker {
 	if minSends <= 0 {
 		minSends = BreakerDefaultMin
 	}
 	if ratio <= 0 {
 		ratio = BreakerDefaultRatio
 	}
-	return &Breaker{rdb: rdb, minSends: minSends, ratio: ratio}
+	if prefix == "" {
+		prefix = BreakerKeyPrefix
+	}
+	return &Breaker{rdb: rdb, minSends: minSends, ratio: ratio, keyPrefix: prefix}
 }
 
 // hour returns the current UTC bucket label, e.g. "20260902T10".
 func hour(t time.Time) string { return t.UTC().Format("20060102T15") }
 
-// sendKey / bounceKey namespace the per-hour counters.
-func sendKey(h string) string   { return BreakerKeyPrefix + "send:" + h }
-func bounceKey(h string) string { return BreakerKeyPrefix + "bounce:" + h }
+// sendKey / bounceKey namespace the per-hour counters under this breaker's
+// prefix.
+func (b *Breaker) sendKey(h string) string   { return b.keyPrefix + "send:" + h }
+func (b *Breaker) bounceKey(h string) string { return b.keyPrefix + "bounce:" + h }
 
 // RecordSend counts a verification email sent in the current hour.
 func (b *Breaker) RecordSend(ctx context.Context) error {
 	now := time.Now()
 	pipe := b.rdb.Pipeline()
-	pipe.Incr(ctx, sendKey(hour(now)))
-	pipe.Expire(ctx, sendKey(hour(now)), BreakerKeyTTL)
+	pipe.Incr(ctx, b.sendKey(hour(now)))
+	pipe.Expire(ctx, b.sendKey(hour(now)), BreakerKeyTTL)
 	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("breaker record send: %w", err)
 	}
@@ -65,7 +85,7 @@ func (b *Breaker) RecordSend(ctx context.Context) error {
 // RecordBounceCount adds n bounces in the current hour.
 func (b *Breaker) RecordBounceCount(ctx context.Context, n int64) error {
 	now := time.Now()
-	key := bounceKey(hour(now))
+	key := b.bounceKey(hour(now))
 	pipe := b.rdb.Pipeline()
 	pipe.IncrBy(ctx, key, n)
 	pipe.Expire(ctx, key, BreakerKeyTTL)
@@ -87,7 +107,7 @@ func (b *Breaker) RecordBounceCount(ctx context.Context, n int64) error {
 func (b *Breaker) Tripped(ctx context.Context) (bool, error) {
 	now := time.Now()
 	h0, h1 := hour(now), hour(now.Add(-1*time.Hour)) // current + previous bucket
-	cmd := b.rdb.MGet(ctx, sendKey(h0), sendKey(h1), bounceKey(h0), bounceKey(h1))
+	cmd := b.rdb.MGet(ctx, b.sendKey(h0), b.sendKey(h1), b.bounceKey(h0), b.bounceKey(h1))
 	res, err := cmd.Result()
 	if err != nil {
 		return false, fmt.Errorf("breaker read: %w", err)

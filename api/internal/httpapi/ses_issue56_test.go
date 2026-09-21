@@ -17,29 +17,32 @@ import (
 	"github.com/wzul/jomform/api/internal/config"
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/email"
+	"github.com/wzul/jomform/api/internal/testdb"
 )
 
 // sesTestFixture wires a full AuthHandlers over real Postgres + Valkey plus the
 // suppression store, breaker, and MX checker (issue #56).
+//
+// The breaker and MX cache are built on this TEST's OWN key namespace (issue
+// #21aec38d). They used to use the production prefixes on the shared test DB and
+// to delete every `jf:bnc:*` / `jf:mx:*` key they found: those keys are what a
+// live API or a peer run writes, so the "clear stale counters" step deleted
+// another process's state, and the ratio assertions below read traffic this test
+// never generated. The namespace has to be per TEST rather than per process
+// here: the counters are what makes an assertion about a ratio meaningful, so
+// one test's 25 sends must not be counted by the next one's assertion. Nothing
+// in this file deletes a key it did not write.
 func sesTestFixture(t *testing.T) (*AuthHandlers, *dbstore.UserStore, *dbstore.SuppressionStore, *email.Breaker, *recorderMailer) {
 	t.Helper()
 	users := authUsers(t)
 	sess := authTestValkey(t)
 	pool := bundleTestPool(t)
 	supps := dbstore.NewSuppressionStore(pool)
-	// Clear any breaker/MX/jf:* counters from a previous run so ratio assertions
-	// in these tests are self-contained (they share one test Valkey DB).
-	keys, err := sess.Client().Keys(context.Background(), "jf:bnc:*").Result()
-	if err == nil && len(keys) > 0 {
-		_ = sess.Client().Del(context.Background(), keys...).Err()
-	}
-	mxKeys, _ := sess.Client().Keys(context.Background(), "jf:mx:*").Result()
-	if len(mxKeys) > 0 {
-		_ = sess.Client().Del(context.Background(), mxKeys...).Err()
-	}
+	prefix := testdb.PrefixFor(t)
 
 	mailer := &recorderMailer{}
-	breaker := email.NewBreaker(sess.Client(), 0, 0) // defaults 20 / 0.05
+	// defaults 20 / 0.05
+	breaker := email.NewBreakerWithPrefix(sess.Client(), 0, 0, prefix)
 	h := &AuthHandlers{
 		Sessions:     sess,
 		Users:        users,
@@ -49,7 +52,7 @@ func sesTestFixture(t *testing.T) (*AuthHandlers, *dbstore.UserStore, *dbstore.S
 		VerifyMailer: mailer,
 		Suppressions: supps,
 		Breaker:      breaker,
-		MXChecker:    email.NewMXChecker(sess.Client()),
+		MXChecker:    email.NewMXCheckerWithPrefix(sess.Client(), prefix),
 	}
 	return h, users, supps, breaker, mailer
 }

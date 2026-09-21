@@ -24,11 +24,20 @@ import (
 
 var authOnce sync.Once
 
-// authTestValkey returns a Sessions client and flushes the ENTIRE dedicated
-// test Valkey DB once per test-binary run, so stale jf:loginfail:* counters
-// from a previous run (15-min TTL, fixed test IPs) can't skew the lockout and
-// rate-limit assertions. Tests must point JOMFORM_TEST_VALKEY_URL at a throwaway
-// DB (e.g. .../15), never the dev/prod DB.
+// authTestValkey returns a Sessions client, after clearing the login-hardening
+// keys this suite writes once per test-binary run, so stale jf:loginfail:*
+// counters from a previous run (15-min TTL, IPs that repeat between runs) cannot
+// skew the lockout and rate-limit assertions.
+//
+// It clears exactly the two key families this suite owns — the login-failure
+// counters and the sessions it minted — by SCAN, and never issues FlushDB. A
+// whole-database flush deletes keys this suite did not write, which means it also
+// wipes a live API's or a concurrent run's state on the same database; that is
+// the same defect the queue fixtures had, and the fix is the same shape: clean up
+// what you own, not the database.
+//
+// Tests must still point JOMFORM_TEST_VALKEY_URL at a throwaway DB, never the
+// dev/prod DB.
 func authTestValkey(t *testing.T) *auth.Sessions {
 	t.Helper()
 	valkeyURL := os.Getenv("JOMFORM_TEST_VALKEY_URL")
@@ -39,7 +48,29 @@ func authTestValkey(t *testing.T) *auth.Sessions {
 	if err != nil {
 		t.Fatalf("valkey sessions: %v", err)
 	}
-	authOnce.Do(func() { _ = sess.Client().FlushDB(context.Background()).Err() })
+	authOnce.Do(func() {
+		ctx := context.Background()
+		for _, prefix := range []string{"jf:loginfail:", "jf:session:"} {
+			var cursor uint64
+			for {
+				keys, next, err := sess.Client().Scan(ctx, cursor, prefix+"*", 100).Result()
+				if err != nil {
+					t.Errorf("clear %s keys: %v", prefix, err)
+					break
+				}
+				if len(keys) > 0 {
+					if err := sess.Client().Del(ctx, keys...).Err(); err != nil {
+						t.Errorf("delete %s keys: %v", prefix, err)
+						break
+					}
+				}
+				if next == 0 {
+					break
+				}
+				cursor = next
+			}
+		}
+	})
 	return sess
 }
 

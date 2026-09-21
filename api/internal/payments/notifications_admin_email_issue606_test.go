@@ -23,9 +23,6 @@ package payments
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"os"
-	"strings"
 	"testing"
 
 	goredis "github.com/redis/go-redis/v9"
@@ -35,47 +32,31 @@ import (
 	"github.com/wzul/jomform/api/internal/testdb"
 )
 
-// emailQueueReadyKey is emailqueue's ready-list key (emailqueue.queueKey,
-// unexported there). Pinned as a literal so a test can read the RAW queue
-// without consuming it — Dequeue blocks, which makes it useless for asserting
-// "exactly one job, with this To".
-const emailQueueReadyKey = "jf:emailq:jobs"
-
-// issue606Keyspace is a dedicated Valkey DB for this package's queue
-// assertions, so FlushDB here never wipes a keyspace another package owns
-// (emailqueue uses /3, the email breaker /2, the shared test env /1).
-const issue606Keyspace = 11
-
-// issue606Queue returns an email queue on a dedicated keyspace, flushed at the
-// start of every test so a previous test's (or run's) ready jobs can never be
-// mistaken for this test's. No test in this package runs in parallel, so the
-// flush cannot race a sibling.
+// issue606Queue returns an email queue whose key set belongs to this test
+// process, so a live API worker (or a second suite) sharing the test Valkey can
+// neither steal nor wipe the job an assertion is about.
+//
+// It used to build a queue on a dedicated DB number (11) and FlushDB it. A fixed
+// DB number is not owned by the test binary: QA's own live API ran on DB 11, its
+// email worker claimed the asserted job, and this package reported
+//
+//	the default {admin_email} rule enqueued 0 job(s), want exactly 1.
+//
+// for an enqueue that had succeeded (the job was in jf:emailq:delayed). The keys
+// are what have to be owned, and testdb.Valkey + NewQueueWithPrefix give this
+// process keys of its own.
 func issue606Queue(t *testing.T) (*emailqueue.Queue, *goredis.Client) {
 	t.Helper()
-	valkeyURL := os.Getenv("JOMFORM_TEST_VALKEY_URL")
-	if valkeyURL == "" {
-		t.Skip("JOMFORM_TEST_VALKEY_URL not set; skipping notification integration test")
-	}
-	u := strings.TrimPrefix(valkeyURL, "valkey://")
-	if i := strings.LastIndex(u, "/"); i >= 0 {
-		u = u[:i]
-	}
-	opts, err := goredis.ParseURL(fmt.Sprintf("redis://%s/%d", u, issue606Keyspace))
-	if err != nil {
-		t.Fatalf("parse valkey url: %v", err)
-	}
-	rdb := goredis.NewClient(opts)
-	t.Cleanup(func() { _ = rdb.Close() })
-	if ferr := rdb.FlushDB(context.Background()).Err(); ferr != nil {
-		t.Fatalf("flush test keyspace: %v", ferr)
-	}
-	return emailqueue.NewQueue(rdb), rdb
+	rdb, prefix := testdb.Valkey(t)
+	return emailqueue.NewQueueWithPrefix(rdb, prefix), rdb
 }
 
-// issue606Jobs reads every job on the ready list without claiming it.
-func issue606Jobs(t *testing.T, rdb *goredis.Client) []emailqueue.Job {
+// issue606Jobs reads every job on the ready list without claiming it. The key
+// comes from the queue, not a literal: it must be the same prefixed key the
+// queue writes under, or this asks about another process's jobs.
+func issue606Jobs(t *testing.T, q *emailqueue.Queue, rdb *goredis.Client) []emailqueue.Job {
 	t.Helper()
-	raw, err := rdb.LRange(context.Background(), emailQueueReadyKey, 0, -1).Result()
+	raw, err := rdb.LRange(context.Background(), q.ReadyKey(), 0, -1).Result()
 	if err != nil {
 		t.Fatalf("read email queue: %v", err)
 	}
@@ -175,7 +156,7 @@ func TestIssue606AdminEmailResolvesToTheOwnerUser(t *testing.T) {
 		RefCode: "IT606REF", AmountSen: 1500, ItemsSummary: "Tee x1", BuyerName: "Ali",
 	}, dbstore.NotifyEventSalePaid)
 
-	jobs := issue606Jobs(t, rdb)
+	jobs := issue606Jobs(t, q, rdb)
 	if len(jobs) != 1 {
 		t.Errorf("the default {admin_email} rule enqueued %d job(s), want exactly 1.\n"+
 			"Zero means the recipient resolved to \"\" (notify_no_recipient) and the "+
@@ -213,7 +194,7 @@ func TestIssue606AdminEmailResolvesToTheOwnerUser(t *testing.T) {
 	}, dbstore.NotifyEventResponseSubmitted)
 
 	var literal *emailqueue.Job
-	jobs = issue606Jobs(t, rdb)
+	jobs = issue606Jobs(t, q, rdb)
 	for i := range jobs {
 		if jobs[i].To == "organizer@example.test" {
 			literal = &jobs[i]
@@ -252,7 +233,7 @@ func TestIssue606FieldIDRecipientStillResolves(t *testing.T) {
 		Fields: map[string]string{"email": "buyer@example.test", "full_name": "Nurul Huda"},
 	}, dbstore.NotifyEventResponseSubmitted)
 
-	jobs := issue606Jobs(t, rdb)
+	jobs := issue606Jobs(t, q, rdb)
 	found := false
 	for _, j := range jobs {
 		if j.To == "buyer@example.test" {

@@ -37,7 +37,6 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -51,109 +50,39 @@ import (
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/emailqueue"
 	"github.com/wzul/jomform/api/internal/payments"
+	"github.com/wzul/jomform/api/internal/testdb"
 )
 
-// issue635ReservedKeyspaces are the Valkey DBs this test may use; the keyspace
-// is picked PER RUN from them (see issue635Keyspace).
+// issue635Queue returns a queue whose key set belongs to this test process
+// (testdb.Valkey), plus the client backing it.
 //
-// Why not one fixed DB (it used to be 13): the keyspace is the only isolation
-// axis available, because the queue's LIST name is fixed inside emailqueue. A
-// single keyspace is per PACKAGE, not per RUN, so concurrent `go test` binaries
-// of this package — the board's normal shape, several worktrees at once — land
-// on the same DB. The old fixture called FlushDB on it at entry, and a run
-// starting mid-test therefore deleted the job its peer was about to count. The
-// assertion then reported
+// The keys are namespaced per process, which is the isolation this test needs —
+// the earlier shape, a dedicated DB number picked from a small pid-derived set,
+// was only belt to that: a shared keyspace still let a peer built from the
+// PRE-FIX fixture FlushDB it and delete the job this test was about to count,
+// reporting "enqueued 0 form_notification jobs, want exactly 1" for a correct
+// enqueue. Ownership of the key NAMES is what removes the failure, and it is
+// what the account-scoped count below can no longer be undermined by.
 //
-//	"enqueued 0 form_notification jobs, want exactly 1"
-//
-// for a submission that had enqueued it correctly: a false report about the
-// #635 fix, not a defect in it. A second, opposite symptom is possible too — a
-// peer's queued job counted as this run's own (count 2).
-//
-// Two guards fix that:
-//
-//  1. NOTHING HERE FLUSHES, and the count is scoped to this run's own account
-//     (issue635FormNotifications). This is the correctness guarantee: deleting a
-//     key this run did not write is what made the fixture destructive, so it no
-//     longer does, and each run counts only the job carrying the account it
-//     minted itself. Two runs sharing a DB is therefore harmless to both.
-//  2. The keyspace is derived from the pid, so concurrent runs usually get
-//     different DBs. That also keeps this run clear of the DB the OLD fixture
-//     hardcoded, so a peer still built from the pre-fix fixture — which FlushDBs
-//     /13 — cannot touch this run's queue.
-//
-// The candidates are the DBs left over after removing every keyspace another
-// test flushes or an env file uses as its base index (auth_hardening_test
-// FlushDBs whatever JOMFORM_TEST_VALKEY_URL points at). Audited on this host:
-// hardcoded flush targets are /2 (email breaker), /3 (emailqueue), /4 (spam
-// toggle), /7 (response notification #597), /11 (payments #606), /12 (httpapi
-// #606) and /13 (this test, before this change); env base indexes in use were
-// /1, /4, /5, /6, /7, /9, /13 and /14. /8, /10 and /15 are clear of both.
-//
-// Residual risk, stated because it is not removable: a keyspace is a shared
-// resource, and a process that FlushDBs the DB this run was given would still
-// delete the job. Guard 1 makes that the only way to break this test, and the
-// candidate set keeps this run off every keyspace known to be flushed.
-var issue635ReservedKeyspaces = []int{8, 10, 15}
-
-// issue635Keyspace is this run's Valkey DB for the queue assertions.
-func issue635Keyspace() int {
-	return issue635ReservedKeyspaces[os.Getpid()%len(issue635ReservedKeyspaces)]
-}
-
-// captureSlog routes the global slog sink into a buffer for one test and
-// returns a reader for it. The HTTP recoverer logs `panic_recovered` there, so
-// reading this buffer is how "no panic occurred" is observed rather than
-// inferred from a status code.
-func captureSlog(t *testing.T) func() string {
-	t.Helper()
-	var buf strings.Builder
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
-	t.Cleanup(func() { slog.SetDefault(prev) })
-	return buf.String
-}
-
-// issue635Queue returns a queue on the shared notification keyspace, plus the
-// client backing it, and removes this run's own entries when the test ends.
-//
-// It deliberately does NOT FlushDB. See the keyspace comment above: the
-// isolation this test needs is per RUN (by account id), not ownership of a
-// keyspace — a flush here deletes a concurrent run's job mid-test, which is
-// exactly how this test used to report 0 enqueued jobs for a correct enqueue.
+// It deliberately does NOT FlushDB: deleting a key this run did not write is
+// what made the old fixture destructive.
 func issue635Queue(t *testing.T, accountID string) (*emailqueue.Queue, *goredis.Client) {
 	t.Helper()
-	valkeyURL := os.Getenv("JOMFORM_TEST_VALKEY_URL")
-	if valkeyURL == "" {
-		t.Skip("JOMFORM_TEST_VALKEY_URL not set; skipping the digit-leading block id regression")
-	}
-	u := strings.TrimPrefix(valkeyURL, "valkey://")
-	if i := strings.LastIndex(u, "/"); i >= 0 {
-		u = u[:i]
-	}
-	opts, err := goredis.ParseURL(fmt.Sprintf("redis://%s/%d", u, issue635Keyspace()))
-	if err != nil {
-		t.Fatalf("parse valkey url: %v", err)
-	}
-	rdb := goredis.NewClient(opts)
-	t.Cleanup(func() {
-		issue635RemoveOwn(t, rdb, accountID)
-		_ = rdb.Close()
-	})
-	return emailqueue.NewQueue(rdb), rdb
+	rdb, prefix := testdb.Valkey(t)
+	q := emailqueue.NewQueueWithPrefix(rdb, prefix)
+	t.Cleanup(func() { issue635RemoveOwn(t, q, rdb, accountID) })
+	return q, rdb
 }
 
 // issue635FormNotifications returns the form_notification jobs belonging to
 // accountID — i.e. this run's own job, at most one.
 //
-// Concurrent runs of this same package share the ready list, so a bare
-// "how many form_notification jobs are queued" count is a question about other
-// people's runs. The account id is this run's identity: bundleFixture mints a
-// fresh account per call, and the notification carries it as AccountID. Other
-// runs' jobs are counted out, not deleted.
-func issue635FormNotifications(t *testing.T, rdb *goredis.Client, accountID string) []emailqueue.Job {
+// The ready list is this process's own (testdb.Valkey namespaces the keys), and
+// the count is also scoped to the account this run minted, so even a job from
+// another fixture in this same process is counted out rather than counted in.
+func issue635FormNotifications(t *testing.T, q *emailqueue.Queue, rdb *goredis.Client, accountID string) []emailqueue.Job {
 	t.Helper()
-	raw, err := rdb.LRange(context.Background(), "jf:emailq:jobs", 0, -1).Result()
+	raw, err := rdb.LRange(context.Background(), q.ReadyKey(), 0, -1).Result()
 	if err != nil {
 		t.Fatalf("read queue: %v", err)
 	}
@@ -170,11 +99,24 @@ func issue635FormNotifications(t *testing.T, rdb *goredis.Client, accountID stri
 	return out
 }
 
-// issue635RemoveOwn deletes this run's own jobs from the ready list, matching
-// the exact blob read so a concurrent run's entries are never touched.
-func issue635RemoveOwn(t *testing.T, rdb *goredis.Client, accountID string) {
+// captureSlog routes the global slog sink into a buffer for one test and
+// returns a reader for it. The HTTP recoverer logs `panic_recovered` there, so
+// reading this buffer is how "no panic occurred" is observed rather than
+// inferred from a status code.
+func captureSlog(t *testing.T) func() string {
 	t.Helper()
-	raw, err := rdb.LRange(context.Background(), "jf:emailq:jobs", 0, -1).Result()
+	var buf strings.Builder
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return buf.String
+}
+
+// issue635RemoveOwn deletes this run's own jobs from the ready list, matching
+// the exact blob read so another fixture's entries are never touched.
+func issue635RemoveOwn(t *testing.T, q *emailqueue.Queue, rdb *goredis.Client, accountID string) {
+	t.Helper()
+	raw, err := rdb.LRange(context.Background(), q.ReadyKey(), 0, -1).Result()
 	if err != nil {
 		t.Errorf("cleanup: read queue: %v", err)
 		return
@@ -185,7 +127,7 @@ func issue635RemoveOwn(t *testing.T, rdb *goredis.Client, accountID string) {
 			continue
 		}
 		if j.Type == "form_notification" && j.AccountID == accountID {
-			if err := rdb.LRem(context.Background(), "jf:emailq:jobs", 1, s).Err(); err != nil {
+			if err := rdb.LRem(context.Background(), q.ReadyKey(), 1, s).Err(); err != nil {
 				t.Errorf("cleanup: remove own job: %v", err)
 			}
 		}
@@ -337,7 +279,7 @@ func TestResponseFormWithDigitLeadingBlockIDSubmits201AndNotifies(t *testing.T) 
 	// skip/failure cases (notify_no_recipient, notify_enqueue_failed,
 	// notify_list_failed) to the sink captureSlog is holding, and this assertion
 	// used to discard them exactly when they mattered.
-	sent := issue635FormNotifications(t, rdb, acc)
+	sent := issue635FormNotifications(t, queue, rdb, acc)
 	if len(sent) != 1 {
 		t.Fatalf("a submission with a digit-leading block id enqueued %d form_notification "+
 			"jobs, want exactly 1 — a fix that dodges the panic by skipping the send "+

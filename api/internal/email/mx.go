@@ -26,12 +26,32 @@ const (
 // MXChecker resolves MX records for a domain and caches the result.
 type MXChecker struct {
 	rdb *goredis.Client
+	// keyPrefix namespaces the cache entries, so a caller can run a checker
+	// whose cache no other checker writes or deletes. Defaults to
+	// mxCachePrefix (the production value).
+	keyPrefix string
 }
 
 // NewMXChecker wires the checker over the same Valkey client as sessions.
 // A nil client disables caching (lookups still run).
 func NewMXChecker(rdb *goredis.Client) *MXChecker {
-	return &MXChecker{rdb: rdb}
+	return NewMXCheckerWithPrefix(rdb, mxCachePrefix)
+}
+
+// NewMXCheckerWithPrefix is NewMXChecker with an explicit cache-key prefix.
+//
+// The cache entries are plain Redis keys with a fixed production name derived
+// from the domain, so two processes sharing a Valkey database — a test run and a
+// live API, or two concurrent test runs — read and write the same entries: a
+// test asserting a domain is cacheable can be answered by another process's
+// entry for that domain, and a delete meant to clear the test's own state also
+// clears the live process's cache. A prefix gives the caller a cache of its own.
+// An empty prefix falls back to mxCachePrefix.
+func NewMXCheckerWithPrefix(rdb *goredis.Client, prefix string) *MXChecker {
+	if prefix == "" {
+		prefix = mxCachePrefix
+	}
+	return &MXChecker{rdb: rdb, keyPrefix: prefix}
 }
 
 // DomainOf extracts the domain from an email address ("a@b.com" → "b.com").
@@ -42,9 +62,9 @@ func DomainOf(email string) string {
 	}
 	return strings.ToLower(strings.TrimSpace(email[at+1:]))
 }
-func mxKey(domain string) string {
+func (m *MXChecker) mxKey(domain string) string {
 	sum := sha256.Sum256([]byte(strings.ToLower(domain)))
-	return mxCachePrefix + hex.EncodeToString(sum[:])
+	return m.keyPrefix + hex.EncodeToString(sum[:])
 }
 
 // lookupRaw is a package-level var so tests can intercept real DNS. Production
@@ -84,7 +104,7 @@ func (m *MXChecker) Check(ctx context.Context, domain string) (bool, error) {
 
 	// Cache hit?
 	if m.rdb != nil {
-		cached, err := m.rdb.Get(ctx, mxKey(domain)).Result()
+		cached, err := m.rdb.Get(ctx, m.mxKey(domain)).Result()
 		if err == nil {
 			return cached != mxNegVal, nil
 		}
@@ -120,5 +140,5 @@ func (m *MXChecker) cacheSet(ctx context.Context, domain, val string, ttl time.D
 	if m.rdb == nil {
 		return
 	}
-	_ = m.rdb.Set(ctx, mxKey(domain), val, ttl).Err()
+	_ = m.rdb.Set(ctx, m.mxKey(domain), val, ttl).Err()
 }

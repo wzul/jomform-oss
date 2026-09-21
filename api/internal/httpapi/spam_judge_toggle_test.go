@@ -49,46 +49,29 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"strings"
-	"sync"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	goredis "github.com/redis/go-redis/v9"
 
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/emailqueue"
 	"github.com/wzul/jomform/api/internal/spamjudge"
+	"github.com/wzul/jomform/api/internal/testdb"
 )
 
-// issue622Queue returns a queue on this suite's own Valkey database, flushed
-// once so a previous run's jobs cannot be counted.
+// issue622Queue returns a queue whose key set belongs to this test process
+// (testdb.Valkey), so the "how many jobs did this submission enqueue" assertions
+// below count only jobs this process wrote.
+//
+// It used to FlushDB a fixed DB number (4). A fixed number is not owned by the
+// test binary — a live API worker on it claims the very spam-judge job the
+// assertion is about — and the flush deleted keys the test did not create.
+// Owning the key NAMES is the fix; see testdb/valkey.go.
 func issue622Queue(t *testing.T) *emailqueue.Queue {
 	t.Helper()
-	valkeyURL := os.Getenv("JOMFORM_TEST_VALKEY_URL")
-	if valkeyURL == "" {
-		t.Skip("JOMFORM_TEST_VALKEY_URL not set; skipping spam-judge toggle integration test")
-	}
-	u := strings.TrimPrefix(valkeyURL, "valkey://")
-	if i := strings.LastIndex(u, "/"); i >= 0 {
-		u = u[:i]
-	}
-	opts, err := goredis.ParseURL("redis://" + u + "/4")
-	if err != nil {
-		t.Fatalf("parse valkey url: %v", err)
-	}
-	rdb := goredis.NewClient(opts)
-	t.Cleanup(func() { _ = rdb.Close() })
-	issue622FlushOnce.Do(func() {
-		if err := rdb.FlushDB(context.Background()).Err(); err != nil {
-			t.Fatalf("flush issue622 valkey db: %v", err)
-		}
-	})
-	return emailqueue.NewQueue(rdb)
+	rdb, prefix := testdb.Valkey(t)
+	return emailqueue.NewQueueWithPrefix(rdb, prefix)
 }
-
-var issue622FlushOnce sync.Once
 
 // issue622Fixture is one workspace with a published response-mode form, wired
 // PublicHandlers carrying a real queue, and the ids the assertions need.

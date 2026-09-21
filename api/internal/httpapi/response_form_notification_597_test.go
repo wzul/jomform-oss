@@ -45,40 +45,27 @@ import (
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/emailqueue"
 	"github.com/wzul/jomform/api/internal/payments"
+	"github.com/wzul/jomform/api/internal/testdb"
 )
 
-// respNotifValkey returns a client on a dedicated keyspace, flushed at entry so
-// the assertion counts the jobs THIS test produced and not a previous test's.
-// emailqueue owns /3 and the other httpapi tests own /1, so /7 is free.
-func respNotifValkey(t *testing.T) *goredis.Client {
+// respNotifQueue returns a queue whose key set belongs to this test process
+// (testdb.Valkey). It used to FlushDB a fixed DB number (7), which a live
+// process, a second suite or another package configured on that number shares —
+// and the flush deleted their keys. Owning the key NAMES is the fix; see
+// testdb/valkey.go.
+func respNotifQueue(t *testing.T) (*emailqueue.Queue, *goredis.Client) {
 	t.Helper()
-	raw := os.Getenv("JOMFORM_TEST_VALKEY_URL")
-	if raw == "" {
-		t.Skip("JOMFORM_TEST_VALKEY_URL not set; skipping response notification test")
-	}
-	u := strings.TrimPrefix(raw, "valkey://")
-	if i := strings.LastIndex(u, "/"); i >= 0 {
-		u = u[:i]
-	}
-	opts, err := goredis.ParseURL("redis://" + u + "/7")
-	if err != nil {
-		t.Fatalf("parse valkey url: %v", err)
-	}
-	rdb := goredis.NewClient(opts)
-	t.Cleanup(func() { _ = rdb.Close() })
-	if err := rdb.FlushDB(context.Background()).Err(); err != nil {
-		t.Fatalf("flush keyspace: %v", err)
-	}
-	return rdb
+	rdb, prefix := testdb.Valkey(t)
+	return emailqueue.NewQueueWithPrefix(rdb, prefix), rdb
 }
 
-// queuedFormNotifications reads the ready jobs without claiming them. The job
-// list key is emailqueue's `queueKey` (unexported there), pinned here as a
-// literal; Dequeue must not be used because it MOVEs a job into the in-flight
-// list and blocks for its dequeue timeout.
-func queuedFormNotifications(t *testing.T, rdb *goredis.Client) []emailqueue.Job {
+// queuedFormNotifications reads the ready jobs without claiming them. The key
+// comes from the queue (Dequeue must not be used: it MOVEs a job into the
+// in-flight list and blocks for its dequeue timeout), so it matches the prefix
+// this process writes under.
+func queuedFormNotifications(t *testing.T, q *emailqueue.Queue, rdb *goredis.Client) []emailqueue.Job {
 	t.Helper()
-	raw, err := rdb.LRange(context.Background(), "jf:emailq:jobs", 0, -1).Result()
+	raw, err := rdb.LRange(context.Background(), q.ReadyKey(), 0, -1).Result()
 	if err != nil {
 		t.Fatalf("read queue: %v", err)
 	}
@@ -101,7 +88,7 @@ func TestResponseFormDefaultNotificationFires(t *testing.T) {
 	pool := bundleTestPool(t)
 	acc, ownerUserID := bundleFixture(t, ctx, pool)
 	key := bundleAPIKey(t, ctx, pool, acc)
-	rdb := respNotifValkey(t)
+	q, rdb := respNotifQueue(t)
 
 	store := dbstore.NewFormNotificationStore(pool)
 	forms := dbstore.NewFormStore(pool)
@@ -222,7 +209,7 @@ func TestResponseFormDefaultNotificationFires(t *testing.T) {
 		Users:         dbstore.NewUserStore(pool),
 		Workspaces:    dbstore.NewWorkspaceStore(pool),
 		Notifications: store,
-		EmailQueue:    emailqueue.NewQueue(rdb),
+		EmailQueue:    q,
 	}
 	ph := &PublicHandlers{
 		Forms:       forms,
@@ -247,7 +234,7 @@ func TestResponseFormDefaultNotificationFires(t *testing.T) {
 		t.Fatalf("submit status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
 	}
 
-	jobs := queuedFormNotifications(t, rdb)
+	jobs := queuedFormNotifications(t, q, rdb)
 	var sent []emailqueue.Job
 	for _, j := range jobs {
 		if j.Type == "form_notification" {
