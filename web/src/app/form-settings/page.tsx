@@ -19,7 +19,7 @@ import MediaPicker from "../../components/MediaPicker";
 import ProductPicker, { type PickerProduct } from "../../components/ProductPicker";
 import { workspaceQuery, workspaceScope } from "../../lib/workspace";
 import { defaultNotificationEvent, formEntriesAction } from "../../lib/formMode";
-import { acknowledgmentBody, outcomeMessage, publishOutcome } from "../../lib/publishResult";
+import { acknowledgmentBody, outcomeMessage, publishConfirmText, publishOutcome } from "../../lib/publishResult";
 
 type FormDetail = {
   id: string;
@@ -756,7 +756,9 @@ function FormSettingsInner() {
         setMsg(outcomeMessage(outcome) || t("prof.failed"));
         return;
       }
-      if (!window.confirm(outcome.message || t("bld.noProductsWarn"))) return;
+      // The refusal's text is localized (the API's own prose for it is Malay and
+      // the API never receives the caller's language) — see lib/publishResult.ts.
+      if (!window.confirm(publishConfirmText(outcome, t))) return;
       const retry = await fetch(`/api/rest/forms/${id}/status${workspaceQuery()}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

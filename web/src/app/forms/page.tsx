@@ -11,7 +11,7 @@ import { workspaceQuery } from "../../lib/workspace";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 import { formEntriesAction } from "../../lib/formMode";
 import { formViewAction } from "../../lib/formPublicURL";
-import { acknowledgmentBody, needsProductsIDs, outcomeMessage, publishOutcome } from "../../lib/publishResult";
+import { acknowledgmentBody, needsProductsIDs, outcomeMessage, publishConfirmText, publishOutcome } from "../../lib/publishResult";
 import TemplatePicker from "../../components/TemplatePicker";
 
 type FormRow = {
@@ -232,7 +232,9 @@ export default function FormsPage() {
       setErr(outcomeMessage(outcome) || t("forms.loadFail"));
       return;
     }
-    if (!window.confirm(outcome.message || t("bld.noProductsWarn"))) return;
+    // The refusal's text is localized (the API's own prose for it is Malay and
+    // the API never receives the caller's language) — see lib/publishResult.ts.
+    if (!window.confirm(publishConfirmText(outcome, t))) return;
     const retry = await fetch(`/api/rest/forms/${id}/publish${workspaceQuery()}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -293,10 +295,13 @@ export default function FormsPage() {
           return;
         }
         const named = needsProductsIDs(d).length;
+        // Both branches are localized: the named count is its own dictionary
+        // entry, and the fallback is the same warning sentence the single-form
+        // path uses. The response's prose is never read (see the module doc).
         const ask =
           named > 0
             ? t("forms.bulkNoProductsConfirm", { n: named })
-            : outcome.message || t("bld.noProductsWarn");
+            : publishConfirmText(outcome, t);
         if (!window.confirm(ask)) return;
         const retry = await send(true);
         if (!retry.ok) {

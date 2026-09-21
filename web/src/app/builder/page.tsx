@@ -16,6 +16,7 @@ import {
   type BuilderTarget,
 } from "../../lib/templateEdit";
 import {
+  PUBLISH_NEEDS_ACK_KEY,
   acknowledgmentBody,
   liveLink,
   outcomeMessage,
@@ -33,7 +34,9 @@ import TemplatePicker from "../../components/TemplatePicker";
    `error`   — anything else, with the server's own message. */
 type PublishNotice =
   | { kind: "live"; url: string }
-  | { kind: "needsAck"; message: string }
+  // Message-less on purpose: the sentence is rendered from the dictionary (see
+  // lib/publishResult.ts), never from the API's Malay prose.
+  | { kind: "needsAck" }
   | { kind: "error"; message: string };
 
 /* Issue #173: Gravity-Forms-style field palette. BlockType is the union of
@@ -720,7 +723,7 @@ export default function Builder() {
         const outcome = publishOutcome({ ok: false, status: sr.status, body: d }, "");
         setPublishNotice(
           outcome.kind === "needs_ack"
-            ? { kind: "needsAck", message: outcome.message }
+            ? { kind: "needsAck" }
             : { kind: "error", message: outcomeMessage(outcome) || "Failed to set status" },
         );
         setSaving(false);
@@ -733,10 +736,13 @@ export default function Builder() {
       const pd = await pr.json().catch(() => ({}));
       const outcome = publishOutcome({ ok: pr.ok, status: pr.status, body: pd }, "");
       if (outcome.kind !== "published") {
+        // A `needsAck` notice carries no message: its sentence is rendered from
+        // the dictionary (the API's prose for that refusal is Malay) — see
+        // lib/publishResult.ts.
         setPublishNotice(
           outcome.kind === "needs_ack"
-            ? { kind: "needsAck", message: outcome.message }
-            : { kind: "error", message: outcome.message || t("bld.saveFail") },
+            ? { kind: "needsAck" }
+            : { kind: "error", message: outcomeMessage(outcome) || t("bld.saveFail") },
         );
         setSaving(false);
         await load();
@@ -1452,7 +1458,7 @@ export default function Builder() {
             <div className="flex min-w-0 flex-wrap items-center gap-2">
               <span className="text-xs text-[var(--jf-text)]">
                 {publishNotice.kind === "needsAck"
-                  ? publishNotice.message || t("bld.noProductsWarn")
+                  ? t(PUBLISH_NEEDS_ACK_KEY)
                   : publishNotice.message}
               </span>
               {/* Docs parity (AGENTS.md rule 4): the "?" beside the field that

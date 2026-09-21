@@ -1,5 +1,6 @@
 // Onboarding-gap guard: the dashboard must actually SHOW the merchant that the
-// form is live, and must not be able to render a dead "View" link.
+// form is live, must not be able to render a dead "View" link, and must NEVER
+// print the API's own prose for a refusal.
 //
 // THE GAP (drop-off, not a crash). Three outside signups built a form, saved it
 // as a draft and never published. Nothing failed — the publish handler answers
@@ -7,6 +8,21 @@
 // URL and no way to discover the form was on the internet: the "View ↗" link is
 // rendered only when a URL already resolved, so a FIRST publish produced nothing
 // visible at all.
+//
+// THE SECOND DEFECT (t_1d96a18f, the same class as issue #6177). The publish
+// refusal's sentence was taken from the response —
+// `window.confirm(outcome.message || t("bld.noProductsWarn"))` — and the API's
+// `error` for it is a MALAY literal it never localizes (the server does not
+// receive the caller's language on a JSON call). So a merchant on an English
+// dashboard read:
+//
+//   Borang bayaran ini tiada produk — ia tidak boleh menerima bayaran. …
+//
+// #6177's source rule bans `body.error || fallback`, which is why it did not see
+// this: the prose arrived through `outcome.message`, a field
+// lib/publishResult.ts filled from the response. The fix is structural — the
+// outcome for that refusal carries NO message — so this file guards the SHAPE,
+// not one call site, and asserts the rendered sentence per locale.
 //
 // This repo has no JSX test runner (see src/lib/i18n.test.ts,
 // src/lib/formMode.test.ts), so the decision lives in src/lib/publishResult.ts
@@ -19,17 +35,20 @@
 //   (node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON src/lib/*.test.ts)
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import {
   PUBLISH_NEEDS_ACK,
+  PUBLISH_NEEDS_ACK_KEY,
   acknowledgmentBody,
   liveLink,
   needsProductsIDs,
   outcomeMessage,
+  publishConfirmText,
   publishOutcome,
 } from "./publishResult.ts";
+import { DICT, LANGS } from "../components/i18nDict.ts";
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
 
@@ -41,6 +60,42 @@ const i18nDict = read("../components/i18nDict.ts");
 // silently (a mirror that disagrees is a second, wrong rule).
 const goPublishReady = read("../../../api/internal/dbstore/form_publish_ready.go");
 const goRestHandlers = read("../../../api/internal/httpapi/rest_handlers.go");
+
+/**
+ * The API's own prose for the no-products refusal, read out of the Go source
+ * (`writePublishNeedsAck`) rather than restated here — the assertion below is
+ * about THAT string never reaching a merchant, so it must be the real one.
+ */
+function goNoProductsProse(): string {
+  const m = goRestHandlers.match(
+    /func writePublishNeedsAck[\s\S]*?writeJSON\([\s\S]*?"error":\s*((?:"[^"]*"\s*\+?\s*)+)/,
+  );
+  assert.ok(m, "writePublishNeedsAck's prose was not found in rest_handlers.go — the Go rule moved");
+  const parts = [...m[1].matchAll(/"([^"]*)"/g)].map((x) => x[1]);
+  return parts.join("");
+}
+
+/** The dictionary's rendering of a key in one locale (English is the fallback). */
+function dict(lang: string, key: string): string {
+  const entry = (DICT as Record<string, Record<string, unknown>>)[key];
+  assert.ok(entry, `missing dictionary key ${key}`);
+  const v = entry[lang];
+  return typeof v === "string" && v !== "" ? v : (entry.en as string);
+}
+
+/** Every source file under src/ (excluding tests). */
+function walk(dir: string, out: string[] = []): string[] {
+  for (const name of readdirSync(dir)) {
+    if (name === "node_modules" || name === ".next") continue;
+    const p = `${dir}/${name}`;
+    if (statSync(p).isDirectory()) walk(p, out);
+    else if (name.endsWith(".tsx") || name.endsWith(".ts")) out.push(p);
+  }
+  return out;
+}
+
+const SRC = fileURLToPath(new URL("..", import.meta.url));
+const sources = walk(SRC);
 
 test("a successful publish is reported as live, with the URL", () => {
   const out = publishOutcome({ ok: true, status: 200, body: { status: "published" } }, "https://acme.jomform.com/contest");
@@ -73,14 +128,104 @@ test("an empty or non-https URL can never become an href", () => {
 
 test("the API's no-products refusal is classified as needs_ack, not a generic error", () => {
   // The merchant cannot act on a generic "failed" — the whole point is that the
-  // message tells them to add a product or confirm.
-  const warn = "Borang bayaran ini tiada produk — ia tidak boleh menerima bayaran.";
+  // message tells them to add a product or confirm. And the outcome must NOT
+  // carry the server's prose (the next test is the reason).
   const out = publishOutcome(
-    { ok: false, status: 409, body: { error: warn, code: PUBLISH_NEEDS_ACK, requires_ack: true } },
+    {
+      ok: false,
+      status: 409,
+      body: { error: goNoProductsProse(), code: PUBLISH_NEEDS_ACK, requires_ack: true },
+    },
     "",
   );
   assert.equal(out.kind, "needs_ack");
-  assert.equal(out.kind === "needs_ack" && out.message, warn);
+  // The whole fix in one assertion: there is no prose field to render.
+  assert.equal(
+    "message" in out,
+    false,
+    `the needs_ack outcome carries a message again (${JSON.stringify(out)}) — that field is where the API's Malay prose reached the dashboard`,
+  );
+  // Classification is on the machine code, not the wording: a reworded prose
+  // still lands in the actionable branch.
+  assert.equal(publishOutcome({ ok: false, status: 409, body: { code: PUBLISH_NEEDS_ACK } }, "").kind, "needs_ack");
+});
+
+test("THE DEFECT: the refusal renders in the dashboard's language, never the API's prose", () => {
+  // The reported case, end to end: the response carries the real Go prose, and
+  // what a merchant gets per locale is asserted — all five, so a missing
+  // translation shows as the English sentence rather than as Malay.
+  const body = { error: goNoProductsProse(), code: PUBLISH_NEEDS_ACK, requires_ack: true };
+  const prose = goNoProductsProse();
+  // The fixture must really be the Malay string, or this test proves nothing.
+  assert.match(prose, /Borang bayaran ini tiada produk/, "the Go prose is not the reported Malay sentence");
+
+  const outcome = publishOutcome({ ok: false, status: 409, body }, "");
+  const tIn = (lang: string) => (k: typeof PUBLISH_NEEDS_ACK_KEY) => dict(lang, k);
+
+  const en = publishConfirmText(outcome, tIn("en"));
+  assert.match(en, /payment form with no products/i, `lang=en rendered ${JSON.stringify(en)}`);
+  assert.ok(!en.includes(prose), "lang=en rendered the server's prose");
+
+  for (const lang of LANGS) {
+    const rendered = publishConfirmText(outcome, tIn(lang));
+    assert.ok(rendered.trim() !== "", `lang=${lang} rendered nothing`);
+    assert.ok(
+      !rendered.includes("Borang bayaran ini tiada produk"),
+      `lang=${lang} rendered the API's Malay prose: ${JSON.stringify(rendered)}`,
+    );
+    // The English fallback is legitimate for an untranslated locale, Malay is
+    // never legitimate for any locale.
+    assert.equal(rendered, dict(lang, PUBLISH_NEEDS_ACK_KEY), `lang=${lang} is not the dictionary sentence`);
+  }
+  // Spot-check the two languages the report names, so a dictionary entry that
+  // quietly became English is caught rather than merely "not the prose".
+  assert.match(publishConfirmText(outcome, tIn("ms")), /Ini borang bayaran tanpa produk/);
+  assert.match(publishConfirmText(outcome, tIn("ar")), /نموذج دفع بلا منتجات/);
+
+  // A non-refusal outcome has no confirm sentence at all, so a caller cannot
+  // use this as a generic fallback.
+  assert.equal(publishConfirmText(publishOutcome({ ok: true, status: 200 }, ""), tIn("en")), "");
+  assert.equal(publishConfirmText(publishOutcome({ ok: false, status: 500, body: { error: "boom" } }, ""), tIn("en")), "");
+});
+
+test("NO source file reads a message off a publish outcome", () => {
+  // The structural half of the fix. #6177's rule bans `body.error || fallback`
+  // and could not see this defect because the prose travelled through
+  // `outcome.message` / `publishNotice.message`. Both names are banned here, and
+  // the walk is asserted non-empty so it cannot pass vacuously.
+  assert.ok(sources.length > 40, `expected to walk the whole dashboard, got ${sources.length} source files`);
+  assert.ok(
+    sources.some((p) => p.endsWith("app/form-settings/page.tsx")),
+    "form-settings/page.tsx (the reported call site) is not in the walked set",
+  );
+
+  const banned = [/(?<![\w$])outcome\s*\??\.\s*message\b/, /kind:\s*"needsAck",\s*message/];
+  const offenders: string[] = [];
+  for (const p of sources) {
+    const rel = p.slice(SRC.length);
+    if (rel === "lib/publishResult.ts" || rel.endsWith(".test.ts")) continue; // the module + this file quote the shape
+    readFileSync(p, "utf8")
+      .split("\n")
+      .forEach((line, i) => {
+        if (/^\s*(\/\/|\*|\/\*)/.test(line)) return; // a comment quoting the bug
+        if (banned.some((re) => re.test(line))) offenders.push(`${rel}:${i + 1}: ${line.trim()}`);
+      });
+  }
+  assert.deepEqual(
+    offenders,
+    [],
+    `a publish outcome's message is the API's unlocalized prose — render the refusal from ` +
+      `PUBLISH_NEEDS_ACK_KEY (publishConfirmText) instead:\n  ` +
+      offenders.join("\n  "),
+  );
+
+  // And the fix must be really in place at the reported call site, not merely
+  // absent: form-settings renders the refusal through the module.
+  assert.match(
+    settingsPage,
+    /window\.confirm\(publishConfirmText\(outcome,\s*t\)\)/,
+    "the reported call site no longer renders the refusal from the dictionary",
+  );
 });
 
 test("a 409 with a different code is NOT swallowed as the warning", () => {
@@ -109,27 +254,28 @@ test("the acknowledgement body carries exactly the one field", () => {
 
 test("WEB/GO CONTRACT: PUBLISH_NEEDS_ACK equals the Go constant", () => {
   // A rename on either side would silently turn the actionable warning into an
-  // opaque error, which is exactly the failure this card exists to fix.
+  // opaque error, which is exactly the failure this module exists to fix.
   const m = goPublishReady.match(/PublishWarningNoProducts\s*=\s*"([a-z_]+)"/);
   assert.ok(m, "dbstore.PublishWarningNoProducts not found — the Go rule moved or was renamed");
   assert.equal(PUBLISH_NEEDS_ACK, m[1]);
 });
 
-test("outcomeMessage yields the failure text and nothing for a success", () => {
-  // Callers use `outcomeMessage(o) || fallback`. If this returned a message for
-  // a published outcome the fallback would never apply; if it returned "" for a
-  // failure the user would see a bare fallback instead of the server's reason.
+test("outcomeMessage yields the failure text, and nothing for a refusal or a success", () => {
+  // Callers use `outcomeMessage(o) || fallback`. A published outcome must return
+  // "" so the fallback applies; a `needs_ack` outcome must ALSO return "" now —
+  // its sentence comes from the dictionary, and a caller that took it from here
+  // is how the Malay prose reached the dashboard.
   const live = publishOutcome({ ok: true, status: 200 }, "https://a.jomform.com/x");
   assert.equal(outcomeMessage(live), "");
   const warn = publishOutcome({ ok: false, status: 409, body: { error: "no", code: PUBLISH_NEEDS_ACK } }, "");
-  assert.equal(outcomeMessage(warn), "no");
+  assert.equal(outcomeMessage(warn), "", "the refusal's text must not be reachable through outcomeMessage");
   const err = publishOutcome({ ok: false, status: 500, body: { error: "boom" } }, "");
   assert.equal(outcomeMessage(err), "boom");
 });
 
 test("needsProductsIDs reads the bulk route's withheld ids", () => {
   // The bulk 409 names the ids it held back. A malformed body must degrade to
-  // "no ids" (the caller then shows the server's prose), never throw.
+  // "no ids" (the caller then shows the localized warning), never throw.
   assert.deepEqual(needsProductsIDs({ needs_products: ["a", "b"] }), ["a", "b"]);
   assert.deepEqual(needsProductsIDs({ needs_products: ["a", 7, null] }), ["a"]);
   for (const bad of [null, undefined, {}, { needs_products: "a" }, { needs_products: {} }, 42]) {
@@ -143,6 +289,8 @@ test("the Forms page confirms and re-sends the bulk publish acknowledged", () =>
   assert.match(formsPage, /t\("forms\.bulkNoProductsConfirm",\s*\{\s*n:\s*named\s*\}\)/);
   assert.match(formsPage, /acknowledgmentBody\(\)/);
   assert.match(formsPage, /needsProductsIDs\(d\)/);
+  // Its unnamed fallback is localized too — that branch used to read the prose.
+  assert.match(formsPage, /:\s*publishConfirmText\(outcome,\s*t\)/);
 });
 
 test("WEB/GO CONTRACT: the two REST routes still gate on the Go rule", () => {
@@ -162,7 +310,7 @@ test("WEB/GO CONTRACT: the two REST routes still gate on the Go rule", () => {
 test("the builder renders the live panel with an open and a copy action", () => {
   // The builder is where the merchant pressed Publish, so it is where the
   // confirmation has to appear. Assert the call sites, not just the module.
-  assert.match(builderPage, /import\s*\{[^}]*publishOutcome[^}]*\}\s*from\s*["']\.\.\/\.\.\/lib\/publishResult["']/);
+  assert.match(builderPage, /import\s*\{[^}]*publishOutcome[^}]*\}\s*from\s*["']\.\.\/\.\.\/lib\/publishResult["']/s);
   // EXACTLY two places raise the live panel: the ordinary save/publish path and
   // the "Publish anyway" retry. A count (not a presence test) is what makes this
   // bite — dropping either one leaves the merchant without the confirmation at
@@ -215,7 +363,15 @@ test("the 'anyone with this link' hint is only shown when there IS a link", () =
   );
 });
 
-test("the builder offers the warn-then-confirm path, and re-sends acknowledged", () => {
+test("the builder's warning panel renders the localized refusal from the key", () => {
+  // The builder is the other surface that prints this refusal, and it had the
+  // same shape (`publishNotice.message || t("bld.noProductsWarn")`). It now
+  // renders the dictionary key off a message-less notice.
+  assert.match(
+    builderPage,
+    /publishNotice\.kind === "needsAck"\s*\?\s*t\(PUBLISH_NEEDS_ACK_KEY\)/,
+    "the builder's warning text is not rendered from the dictionary key",
+  );
   assert.match(builderPage, /t\("bld\.publishAnyway"\)/);
   assert.match(builderPage, /publishAnyway/, "no confirm handler");
   // The status write must be acknowledged too, or the retry is refused a second
@@ -254,6 +410,13 @@ test("every string the live panel and the warning use exists in all five locales
     for (const lang of ["en", "ms", "zh", "ta", "ar"]) {
       assert.match(line as string, new RegExp(`\\b${lang}:\\s*"`), `"${k}" is missing ${lang}`);
     }
+  }
+  // Every key except the refusal itself is rendered literally by its own name.
+  for (const k of keys.filter((k) => k !== "bld.noProductsWarn")) {
     assert.match(builderPage, new RegExp(`t\\("${k.replace(".", "\\.")}"\\)`), `"${k}" is never rendered`);
   }
+  // The refusal is rendered through the constant, so that its name lives in ONE
+  // place (lib/publishResult.ts) and a rename cannot split it from the Go code.
+  assert.match(builderPage, new RegExp(`t\\(PUBLISH_NEEDS_ACK_KEY\\)`), `"bld.noProductsWarn" is never rendered`);
+  assert.match(i18nDict, new RegExp(`"${PUBLISH_NEEDS_ACK_KEY}":\\s*\\{`), "PUBLISH_NEEDS_ACK_KEY does not name a dictionary entry");
 });
