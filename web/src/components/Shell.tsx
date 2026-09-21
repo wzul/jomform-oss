@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useI18n } from "./i18n";
+import { useI18n, type Key } from "./i18n";
 import { useSession } from "./session";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 
@@ -11,6 +11,15 @@ import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 // Issue #29: nav links are Next <Link> (client-side transitions + prefetch,
 // no full document reload) and me/workspaces come from the shared session
 // context (one dashboard-bundle fetch per session), not per-mount fetches.
+//
+// Sidebar redesign: the destination list is GROUPED (four labelled sections)
+// and rendered by ONE component (NavList) for both surfaces — the desktop
+// <aside> and the mobile drawer used to keep two copies of `nav.map(...)` with
+// their own classes, so every nav change had to be made twice and the two
+// surfaces could drift apart. `Profile` is deliberately NOT a nav row any more:
+// it is the account block at the bottom of both surfaces, which is a link to
+// /profile (the email was already shown there, and the block looked clickable
+// without being it).
 export function Shell({
   children,
   active,
@@ -138,37 +147,129 @@ export function Shell({
     window.location.href = "/login";
   }
 
-  let nav = [
-    { key: "dashboard", href: "/", label: t("nav.dashboard"), icon: "◧" },
-    { key: "forms", href: "/forms", label: t("nav.forms"), icon: "✎" },
-    // Issue #457: merchant-managed templates (save/edit/delete own templates).
-    { key: "templates", href: "/templates", label: t("nav.templates"), icon: "🗂" },
-    { key: "products", href: "/products", label: t("prod.title"), icon: "◧" },
-    // Issue #126: dedicated Sales page, between Products and Settings.
-    { key: "sales", href: "/sales", label: t("nav.sales"), icon: "💰" },
-    // Issue #245: AI spam review queue.
-    { key: "spam", href: "/spam", label: t("nav.spam"), icon: "⚠" },
-    // Issue #194: email delivery status view.
-    { key: "deliveries", href: "/deliveries", label: t("del.title"), icon: "✉" },
-    { key: "subscriptions", href: "/subscriptions", label: t("sub.title"), icon: "⟳" },
-    // Issue #180: media library (WordPress-style).
-    { key: "media", href: "/media", label: t("media.title"), icon: "🖼" },
-    { key: "settings", href: "/settings", label: t("nav.settings"), icon: "⚙" },
-    { key: "profile", href: "/profile", label: t("prof.title"), icon: "👤" },
-    // In-app feedback: a plain link for EVERY signed-in user, deliberately NOT
-    // gated on the super-admin role. The feedback form is the system's, not a
-    // workspace's, so reaching it must not depend on owning an account — the
-    // same reason /admin (below) is the only role-gated entry in this list.
-    { key: "feedback", href: "/feedback", label: t("nav.feedback"), icon: "💬" },
-    // In-app assistant (phase 1): read-only over the user's own data, plus
-    // filing feedback. Placed next to Feedback because that is where a filing
-    // lands — the two surfaces are one story.
-    { key: "chat", href: "/chat", label: t("nav.chat"), icon: "✨" },
+  type NavItem = { key: string; href: string; label: string; icon: string };
+  type NavGroup = { id: string; labelKey: Key; items: NavItem[] };
+
+  // The destinations, grouped by what the user is doing — not an arbitrary
+  // list of 13 rows. Every destination is kept; only the shape changed, so no
+  // URL moves and no docs deep link breaks.
+  //
+  // `Profile` is intentionally absent: /profile is reached from the account
+  // block at the foot of both surfaces (it repeated the email that block
+  // already shows, and the block itself looked like a control but was not one).
+  let navGroups: NavGroup[] = [
+    {
+      id: "build",
+      labelKey: "navgroup.build",
+      items: [
+        { key: "dashboard", href: "/", label: t("nav.dashboard"), icon: "◧" },
+        { key: "forms", href: "/forms", label: t("nav.forms"), icon: "✎" },
+        // Issue #457: merchant-managed templates (save/edit/delete own templates).
+        { key: "templates", href: "/templates", label: t("nav.templates"), icon: "🗂" },
+        { key: "products", href: "/products", label: t("prod.title"), icon: "◧" },
+      ],
+    },
+    {
+      id: "sales",
+      labelKey: "navgroup.sales",
+      items: [
+        // Issue #126: dedicated Sales page, between Products and Settings.
+        { key: "sales", href: "/sales", label: t("nav.sales"), icon: "💰" },
+        // Issue #245: AI spam review queue.
+        { key: "spam", href: "/spam", label: t("nav.spam"), icon: "⚠" },
+        { key: "subscriptions", href: "/subscriptions", label: t("sub.title"), icon: "⟳" },
+        // Issue #194: email delivery status view.
+        { key: "deliveries", href: "/deliveries", label: t("del.title"), icon: "✉" },
+      ],
+    },
+    {
+      id: "settings",
+      labelKey: "navgroup.settings",
+      items: [
+        { key: "settings", href: "/settings", label: t("nav.settings"), icon: "⚙" },
+        // Issue #180: media library (WordPress-style).
+        { key: "media", href: "/media", label: t("media.title"), icon: "🖼" },
+      ],
+    },
+    {
+      id: "help",
+      labelKey: "navgroup.help",
+      items: [
+        // In-app assistant (phase 1): read-only over the user's own data, plus
+        // filing feedback. Placed next to Feedback because that is where a
+        // filing lands — the two surfaces are one story.
+        { key: "chat", href: "/chat", label: t("nav.chat"), icon: "✨" },
+        // In-app feedback: a plain link for EVERY signed-in user, deliberately
+        // NOT gated on the super-admin role. The feedback form is the system's,
+        // not a workspace's, so reaching it must not depend on owning an
+        // account — the same reason /admin (below) is the only role-gated entry
+        // in this list.
+        { key: "feedback", href: "/feedback", label: t("nav.feedback"), icon: "💬" },
+      ],
+    },
   ];
 
-  // Issue #387: super-admins (#385) get a platform-wide Admin nav link.
+  // Issue #387: super-admins (#385) get a platform-wide Admin nav link. It
+  // sits with the other platform/user-level entries rather than next to the
+  // merchant's own settings, and the group it lands in is never empty without it.
   if (user?.is_super_admin) {
-    nav.push({ key: "admin", href: "/admin", label: t("nav.admin"), icon: "🛡" });
+    navGroups = navGroups.map((g) =>
+      g.id === "help"
+        ? { ...g, items: [...g.items, { key: "admin", href: "/admin", label: t("nav.admin"), icon: "🛡" }] }
+        : g,
+    );
+  }
+
+  // The ONE nav list. Both surfaces render this, so a future reorder, rename or
+  // extra destination is a single edit — the two-surface duplication is what let
+  // `Profile` appear as its own row in both places at once.
+  //
+  // Each group is a <ul> named by its own visible label via aria-labelledby, so
+  // a screen reader announces "Build, list, 4 items" instead of a flat run of 13
+  // links with no structure. The label is a plain <p>, not a heading: the
+  // sidebar is not part of the document outline and a heading here would sit
+  // before the page's own <h1>.
+  //
+  // `idPrefix` keeps the label ids unique — the desktop <aside> stays in the DOM
+  // (hidden by `hidden md:flex`) while the drawer is open on a narrow viewport.
+  function NavList({ idPrefix, touch, onNavigate }: { idPrefix: string; touch?: boolean; onNavigate?: () => void }) {
+    return (
+      <>
+        {navGroups.map((g) => (
+          <div key={g.id} className={touch ? "mb-1" : "mb-0.5"}>
+            <p
+              id={`${idPrefix}-grp-${g.id}`}
+              className={`px-3 pb-1 text-xs font-medium uppercase tracking-wide text-[var(--jf-muted)] ${touch ? "pt-3" : "pt-4"}`}
+            >
+              {t(g.labelKey)}
+            </p>
+            <ul aria-labelledby={`${idPrefix}-grp-${g.id}`} className="space-y-0.5">
+              {g.items.map((n) => (
+                <li key={n.key}>
+                  <Link
+                    href={n.href}
+                    onClick={onNavigate}
+                    aria-current={active === n.key ? "page" : undefined}
+                    // ONE row class for both surfaces. Mobile audit: drawer rows
+                    // measured 40px tall (py-2.5), under the 44x44 tap floor —
+                    // `min-h-11` is what raises them, and it is harmless on the
+                    // desktop rows, which already measured 44px (py-3).
+                    className={`flex min-h-11 items-center gap-2.5 rounded-lg px-3 py-3 text-sm transition-colors ${
+                      active === n.key
+                        ? "bg-indigo-50 font-medium text-[var(--jf-primary-on-tint)]"
+                        : "text-[var(--jf-muted)] hover:bg-slate-50 hover:text-[var(--jf-text)]"
+                    }`}
+                  >
+                    <span className="w-4 text-center text-xs opacity-70">{n.icon}</span>
+                    {n.label}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </>
+    );
   }
 
   return (
@@ -190,47 +291,44 @@ export function Shell({
             Jom<span className="text-[var(--jf-primary)]">Form</span>
           </span>
         </div>
-        <nav className="mt-2 min-h-0 flex-1 space-y-0.5 overflow-y-auto px-3">
-          {nav.map((n) => (
-            <Link
-              key={n.key}
-              href={n.href}
-              aria-current={active === n.key ? "page" : undefined}
-              className={`flex items-center gap-2.5 rounded-lg px-3 py-3 text-sm transition-colors ${
-                active === n.key
-                  ? "bg-indigo-50 font-medium text-[var(--jf-primary)]"
-                  : "text-[var(--jf-muted)] hover:bg-slate-50 hover:text-[var(--jf-text)]"
-              }`}
-            >
-              <span className="w-4 text-center text-xs opacity-70">{n.icon}</span>
-              {n.label}
-            </Link>
-          ))}
+        <nav className="mt-2 min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+          <NavList idPrefix="nav-desktop" />
         </nav>
-        {/* user card — flex-none at the bottom of the full-height aside (always visible) */}
+        {/* user card — flex-none at the bottom of the full-height aside (always
+            visible). The avatar + name + email ARE the Profile destination: the
+            block was a dead-looking control before, and /profile was also a nav
+            row, so the same destination was offered twice with the email shown
+            twice. Sign out stays a separate button below it: it is destructive
+            and must not share a tap area with a navigation link. */}
         <div className="shrink-0 border-t border-[var(--jf-border)] p-3">
-          <div className="flex items-center gap-2.5 rounded-lg px-2 py-2">
+          <Link
+            href="/profile"
+            aria-current={active === "profile" ? "page" : undefined}
+            className={`flex items-center gap-2.5 rounded-lg px-2 py-2 ${
+              active === "profile" ? "bg-indigo-50" : "hover:bg-slate-50"
+            }`}
+          >
             {/* Issue #133: uploaded profile picture, falling back to the initial letter. */}
             <UserAvatar className="h-8 w-8 rounded-full" />
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium" title={user?.name || user?.email || ""}>
+            <span className="min-w-0 flex-1">
+              {/* Mobile audit / sidebar width: this text used to be `truncate`, so
+                  the user's own email rendered as "owner00@example.c…" and
+                  was unreadable on a touch device (the `title` tooltip is
+                  hover-only). It wraps instead. */}
+              <span className="block break-words text-sm font-medium">
                 {user?.name || user?.email || "…"}
-              </p>
+              </span>
               {user?.name && (
-                <p className="truncate text-xs text-[var(--jf-muted)]" title={user?.email || ""}>
-                  {user?.email || ""}
-                </p>
+                <span className="block break-all text-xs text-[var(--jf-muted-on-tint)]">{user?.email || ""}</span>
               )}
-              {/* Mobile audit: this was a 46x17 text link (11px). It is a real
-                  action, so it gets a 44px-tall box and body-size text. */}
-              <button
-                onClick={signOut}
-                className="mt-1 flex min-h-11 items-center rounded-md px-2 text-sm text-[var(--jf-muted)] hover:bg-slate-50 hover:text-red-500"
-              >
-                {t("nav.signout")}
-              </button>
-            </div>
-          </div>
+            </span>
+          </Link>
+          <button
+            onClick={signOut}
+            className="mt-1 flex min-h-11 w-full items-center rounded-md px-2 text-sm text-[var(--jf-muted)] hover:bg-slate-50 hover:text-red-500"
+          >
+            {t("nav.signout")}
+          </button>
         </div>
       </aside>
 
@@ -319,37 +417,35 @@ export function Shell({
                   onSetDefault={setDefaultWorkspace}
                 />
               </div>
-              <div className="min-h-0 flex-1 overflow-y-auto">
-                <nav className="space-y-0.5 p-3">
-                  {nav.map((n) => (
-                    <Link
-                      key={n.key}
-                      href={n.href}
-                      onClick={() => setMenuOpen(false)}
-                      className={`flex min-h-11 items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm ${
-                        active === n.key
-                          ? "bg-indigo-50 font-medium text-[var(--jf-primary)]"
-                          : "text-[var(--jf-muted)] hover:bg-slate-50"
-                      }`}
-                    >
-                      <span className="w-4 text-center text-xs opacity-70">{n.icon}</span>
-                      {n.label}
-                    </Link>
-                  ))}
-                </nav>
-              </div>
+              {/* Mobile audit: the scroll body is the <nav> landmark itself, so
+                  assistive tech still gets a navigation region inside the
+                  dialog (the desktop <aside> has one and the drawer must not
+                  silently lose it). */}
+              <nav className="min-h-0 flex-1 overflow-y-auto p-3" aria-label="Navigation menu">
+                <NavList idPrefix="nav-mobile" touch onNavigate={() => setMenuOpen(false)} />
+              </nav>
+              {/* account footer: the Profile destination (see the desktop block
+                  above). border-t keeps it reading as the drawer's account
+                  footer, and the nav above it scrolls independently. */}
               <div className="shrink-0 border-t border-[var(--jf-border)] px-4 py-3">
-                <div className="mb-2 flex items-center gap-2">
+                <Link
+                  href="/profile"
+                  onClick={() => setMenuOpen(false)}
+                  aria-current={active === "profile" ? "page" : undefined}
+                  className={`flex items-center gap-2.5 rounded-lg px-2 py-2 ${
+                    active === "profile" ? "bg-indigo-50" : "hover:bg-slate-50"
+                  }`}
+                >
                   {/* Issue #133: profile picture or initial-letter fallback. */}
                   <UserAvatar className="h-8 w-8 rounded-full" />
-                  <p
-                    className="truncate text-sm text-[var(--jf-muted)]"
-                    title={user?.name ? `${user.name} (${user?.email || ""})` : user?.email || ""}
-                  >
-                    {user?.name || user?.email || "…"}
-                  </p>
-                </div>
-                <button onClick={signOut} className="w-full min-h-11 rounded-lg border border-[var(--jf-border)] py-2 text-sm text-slate-600">
+                  <span className="min-w-0 flex-1">
+                    <span className="block break-words text-sm">{user?.name || user?.email || "…"}</span>
+                    {user?.name && (
+                      <span className="block break-all text-xs text-[var(--jf-muted-on-tint)]">{user?.email || ""}</span>
+                    )}
+                  </span>
+                </Link>
+                <button onClick={signOut} className="mt-1 w-full min-h-11 rounded-lg border border-[var(--jf-border)] py-2 text-sm text-slate-600">
                   {t("nav.signout")}
                 </button>
               </div>

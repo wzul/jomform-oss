@@ -25,6 +25,14 @@ export const DICT = {
   "nav.forms": { en: "Forms", icon: undefined, ms: "Borang", zh: "表单", ta: "படிவங்கள்", ar: "النماذج" },
   "nav.settings": { en: "Settings", ms: "Tetapan", zh: "设置", ta: "அமைப்புகள்", ar: "الإعدادات" },
   "nav.signout": { en: "Sign out", ms: "Log keluar", zh: "退出登录", ta: "வெளியேறு", ar: "تسجيل الخروج" },
+  // nav group labels (sidebar redesign): the destination list is grouped so a
+  // user scanning for one destination reads four labelled sections instead of a
+  // flat run of 13 rows. Rendered uppercase by CSS, so the values stay in
+  // sentence case like every other label.
+  "navgroup.build": { en: "Build", ms: "Bina", zh: "构建", ta: "உருவாக்கு", ar: "الإنشاء" },
+  "navgroup.sales": { en: "Sales", ms: "Jualan", zh: "销售", ta: "விற்பனை", ar: "المبيعات" },
+  "navgroup.settings": { en: "Settings", ms: "Tetapan", zh: "设置", ta: "அமைப்புகள்", ar: "الإعدادات" },
+  "navgroup.help": { en: "Help", ms: "Bantuan", zh: "帮助", ta: "உதவி", ar: "المساعدة" },
   // login
   "login.welcome": { en: "Welcome back", ms: "Selamat kembali", zh: "欢迎回来", ta: "மீண்டும் வருக", ar: "أهلاً بعودتك" },
   "login.registerTitle": { en: "Create your JomForm account", ms: "Cipta akaun JomForm anda", zh: "创建您的 JomForm 账户", ta: "உங்கள் JomForm கணக்கை உருவாக்கவும்", ar: "أنشئ حساب JomForm الخاص بك" },

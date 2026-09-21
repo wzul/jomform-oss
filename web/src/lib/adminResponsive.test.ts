@@ -214,11 +214,25 @@ test("the page-shell tap targets are at least 44px tall", () => {
     assert.match(classes, /\bmin-h-11\b/, `a sign-out button is under 44px tall (measured 46x17 text link): ${classes}`);
     assert.match(classes, /\btext-sm\b/, `sign-out text is under 14px (measured 11px): ${classes}`);
   }
-  // Drawer nav rows.
+  // Drawer nav rows. Both surfaces now render the ONE shared NavList, so the
+  // row class is asserted once and the shared-list wiring separately — the old
+  // anchor (`onClick={() => setMenuOpen(false)}` immediately before the class)
+  // was satisfied only while the drawer held its own copy of `nav.map(...)`,
+  // which is exactly the duplication the redesign removed.
   assert.match(
     shell,
-    /onClick=\{\(\) => setMenuOpen\(false\)\}[\s\S]{0,240}?className=\{`flex min-h-11 items-center/,
-    "the mobile drawer nav rows are under 44px tall (measured 40px)",
+    /className=\{`flex min-h-11 items-center gap-2\.5 rounded-lg px-3 py-3 text-sm/,
+    "the shared nav row lost its 44px tap floor (drawer rows measured 40px)",
+  );
+  assert.equal(
+    [...shell.matchAll(/g\.items\.map\(/g)].length,
+    1,
+    "Shell.tsx maps the nav items in more than one place — the desktop sidebar and the mobile drawer must share one list, not keep two copies that can drift apart",
+  );
+  assert.match(
+    shell,
+    /<NavList idPrefix="nav-mobile" touch onNavigate=\{\(\) => setMenuOpen\(false\)\}/,
+    "the mobile drawer no longer renders the shared NavList with close-on-navigate — the drawer copy is back",
   );
   // The page's primary recovery action, in both the card list and the table.
   const requeues = [...adminPage.matchAll(/onClick=\{\(\) => requeue\(d\.dedup_key\)\}[\s\S]{0,200}?className="([^"]*)"/g)].map(

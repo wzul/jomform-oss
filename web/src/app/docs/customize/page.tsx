@@ -301,7 +301,9 @@ export default function CustomizeDocsPage() {
       <ul className="mt-3 list-disc space-y-1.5 pl-5 text-sm leading-relaxed text-slate-600">
         <li>
           <strong>Dashboard language</strong> — the language <em>you</em> see when signed in. It is a{" "}
-          <strong>per-user</strong> setting: change it on <strong>Profile</strong> (Dashboard language) and
+          <strong>per-user</strong> setting: change it on <strong>Profile</strong> (Dashboard language),
+          reached by clicking your <strong>account block</strong> — your name and email at the bottom of
+          the sidebar, or at the bottom of the menu on a phone — and
           it follows you into any browser you sign in from, on any machine. It never changes what a
           buyer sees. Until you pick one, the dashboard uses the language last used in that browser,
           and English if there is none.

@@ -9,6 +9,14 @@
   --jf-muted: #6b7280;
   --jf-primary: #5e6ad2;
   --jf-primary-hover: #828fff;
+  /* The tinted "active/selected" surface needs a darker text pair: on
+     Tailwind's indigo-50 (#eef2ff) the brand indigo measures 4.20:1 and
+     --jf-muted measures 4.32:1 — both below the 4.5:1 AA floor for the 14px/12px
+     text the sidebar uses, while both PASS on white (4.70:1 / 4.83:1). Found by
+     running axe over the authenticated chrome (the repo's own a11y gate only
+     scans the public routes). Measured on #eef2ff: 7.07:1 and 5.35:1. */
+  --jf-primary-on-tint: #4338ca;
+  --jf-muted-on-tint: #5b6472;
   --jf-success: #10b981;
   --jf-danger: #ef4444;
 }
