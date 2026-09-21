@@ -1153,7 +1153,18 @@ function FormSettingsInner() {
             <h1 className="text-xl font-semibold tracking-tight">{t("fs.title")}</h1>
             <p className="max-w-xl text-sm text-[var(--jf-muted)]">{t("fs.subtitle")}</p>
           </div>
-          <div className="flex items-center gap-2">
+          {/* t_8b35a9f4: the header's action cluster must be able to wrap. In a
+              long-label locale the three nowrap buttons are wider than the
+              viewport's content box on their own (measured on the built page at
+              320px: 371.64px in `ta` against a 272px content box), and a
+              non-wrapping flex row cannot shrink below its widest button's
+              min-content, so the cluster forced the DOCUMENT's min-content
+              wider than the viewport and the whole page scrolled sideways
+              (`ta` 76px, `ms` 8px, `ar` 11px at 320px). `flex-wrap` lets the
+              buttons stack instead; `max-w-full` is what makes the wrap
+              reachable inside the header row's column. Same shape as the
+              /templates header group (see web/src/lib/buttonWrap.test.ts). */}
+          <div className="flex max-w-full flex-wrap items-center gap-2">
             {formId && (
               <>
                 <Link href={`/builder?form=${formId}`} className="jf-btn-ghost px-3 py-1.5 text-xs">
