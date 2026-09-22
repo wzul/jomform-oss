@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/wzul/jomform/api/internal/chat"
 	"github.com/wzul/jomform/api/internal/dbstore"
@@ -420,6 +421,15 @@ func (h *RESTHandlers) recordChatConfirmEvent(r *http.Request, uid, token, tool 
 
 // chatLimits echoes the caps so one place states them (the docs page reads the
 // same numbers, and the UI explains a 429 with them).
+//
+// EVERY field must reference the constant that ENFORCES it, never a literal.
+// The response is the client's only view of the caps — the UI renders
+// max_message_chars as the box's maxlength and explains a 429 with
+// messages_per_hour — so a reported cap that is a second copy of the number is
+// a cap that drifts from the one the server actually applies, silently and in
+// the direction that lies to the user. A test walks this struct to keep it
+// honest (TestChatLimitsReportsEveryEnforcedCap), because a field added here
+// and left unset serialises as 0 and nothing else notices.
 func chatLimits() chatLimitsOut {
 	return chatLimitsOut{
 		MessagesPerHour: int(chatRatePerHour),
@@ -427,6 +437,14 @@ func chatLimits() chatLimitsOut {
 		MaxMessageChars: chat.MaxMessageChars,
 		MaxHistoryTurns: chat.MaxTurns,
 		MaxToolSteps:    chat.MaxSteps,
+		// Phase 2 — the same constants the proposal lane enforces with:
+		// chat.MaxProposalsPerRun bounds one answer's cards, chat.ProposalTTL is
+		// the window Runner.Confirm will accept, and the chatConfirm* pair is
+		// the bucket handleChatConfirm/handleChatCancel check.
+		MaxProposalsPerMessage: chat.MaxProposalsPerRun,
+		ProposalTTLSeconds:     int(chat.ProposalTTL / time.Second),
+		ConfirmsPerHour:        int(chatConfirmPerHour),
+		ConfirmBurst:           int(chatConfirmBurst),
 	}
 }
 
