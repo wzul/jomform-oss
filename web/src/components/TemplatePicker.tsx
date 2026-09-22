@@ -171,7 +171,7 @@ export default function TemplatePicker({
             }}
             className="flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-[var(--jf-border)] p-6 text-center transition-colors hover:border-[#7170ff]/50 hover:bg-indigo-50/40"
           >
-            <span className="flex h-12 w-12 items-center justify-center rounded-full bg-indigo-50 text-2xl text-[var(--jf-primary)]">
+            <span className="flex h-12 w-12 items-center justify-center rounded-full bg-indigo-50 text-2xl text-[var(--jf-primary-on-tint)]">
               +
             </span>
             <span className="text-sm font-semibold text-[#374151]">{t("tpl.blank")}</span>

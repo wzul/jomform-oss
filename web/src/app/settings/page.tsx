@@ -1137,7 +1137,7 @@ export default function Settings() {
                       onClick={() => toggleMethod(m.id)}
                       className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
                         whitelist.includes(m.id)
-                          ? "border-[var(--jf-primary)] bg-indigo-50 text-[var(--jf-primary)]"
+                          ? "border-[var(--jf-primary)] bg-indigo-50 text-[var(--jf-primary-on-tint)]"
                           : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"
                       }`}
                     >
@@ -1248,7 +1248,7 @@ export default function Settings() {
                           <button
                             onClick={() => autoCreateCname(d)}
                             disabled={!!autoCnameBusy[d.id]}
-                            className="rounded-md border border-[var(--jf-primary)] px-3 py-1.5 text-xs font-semibold text-[var(--jf-primary)] transition-colors hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-60"
+                            className="rounded-md border border-[var(--jf-primary)] px-3 py-1.5 text-xs font-semibold text-[var(--jf-primary)] transition-colors hover:bg-indigo-50 hover:text-[var(--jf-primary-on-tint)] disabled:cursor-not-allowed disabled:opacity-60"
                           >
                             {autoCnameBusy[d.id] ? t("set.autoCnameBusy") : t("set.autoCnameCta")}
                           </button>
@@ -1315,7 +1315,7 @@ export default function Settings() {
                             className={`rounded-md px-2.5 py-1 text-[11px] font-semibold transition-colors disabled:cursor-not-allowed ${
                               d.tls_mode === "auto"
                                 ? "bg-[var(--jf-primary)] text-white"
-                                : "border border-[var(--jf-primary)] text-[var(--jf-primary)] hover:bg-indigo-50"
+                                : "border border-[var(--jf-primary)] text-[var(--jf-primary)] hover:bg-indigo-50 hover:text-[var(--jf-primary-on-tint)]"
                             }`}
                           >
                             {t("set.tlsModeAutoLabel")}
@@ -1327,7 +1327,7 @@ export default function Settings() {
                             className={`rounded-md px-2.5 py-1 text-[11px] font-semibold transition-colors disabled:cursor-not-allowed ${
                               d.tls_mode === "custom"
                                 ? "bg-[var(--jf-primary)] text-white"
-                                : "border border-[var(--jf-primary)] text-[var(--jf-primary)] hover:bg-indigo-50"
+                                : "border border-[var(--jf-primary)] text-[var(--jf-primary)] hover:bg-indigo-50 hover:text-[var(--jf-primary-on-tint)]"
                             }`}
                           >
                             {t("set.tlsModeCustomLabel")}
@@ -1355,7 +1355,7 @@ export default function Settings() {
                             type="button"
                             onClick={() => setDomainTlsEmail(d)}
                             disabled={!!tlsBusy[d.id]}
-                            className="rounded-md border border-[var(--jf-primary)] px-2.5 py-1 text-[11px] font-semibold text-[var(--jf-primary)] transition-colors hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-60"
+                            className="rounded-md border border-[var(--jf-primary)] px-2.5 py-1 text-[11px] font-semibold text-[var(--jf-primary)] transition-colors hover:bg-indigo-50 hover:text-[var(--jf-primary-on-tint)] disabled:cursor-not-allowed disabled:opacity-60"
                           >
                             {tlsBusy[d.id] ? t("set.tlsEmailSaving") : t("set.tlsEmailSave")}
                           </button>

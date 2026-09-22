@@ -204,7 +204,7 @@ export function WorkspaceSwitcher({
                   }}
                   className={`flex min-h-11 w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-sm ${
                     s.slug === value
-                      ? "bg-indigo-50 font-medium text-[var(--jf-primary)]"
+                      ? "bg-indigo-50 font-medium text-[var(--jf-primary-on-tint)]"
                       : "text-[var(--jf-text)] hover:bg-slate-50"
                   }`}
                 >
@@ -215,11 +215,11 @@ export function WorkspaceSwitcher({
                         where the name is shown in full — it wraps instead of
                         truncating, and the item is a 44px tap target. */}
                     <span className="block break-words">{s.name}</span>
-                    <span className="block break-all text-xs text-[var(--jf-muted)]">
+                    <span className="block break-all text-xs text-[var(--jf-muted-on-tint)]">
                       {s.slug}.jomform.com{s.role ? ` · ${roleLabel(s.role)}` : ""}
                     </span>
                   </span>
-                  {s.slug === value && <span className="shrink-0 text-[var(--jf-primary)]">✓</span>}
+                  {s.slug === value && <span className="shrink-0 text-[var(--jf-primary-on-tint)]">✓</span>}
                 </button>
               ))}
             </div>
@@ -313,7 +313,7 @@ export function WorkspaceSwitcher({
                   setCreating(true);
                   setError(null);
                 }}
-                className="min-h-11 w-full rounded-md px-2.5 py-1.5 text-left text-sm font-medium text-[var(--jf-primary)] hover:bg-indigo-50"
+                className="min-h-11 w-full rounded-md px-2.5 py-1.5 text-left text-sm font-medium text-[var(--jf-primary)] hover:bg-indigo-50 hover:text-[var(--jf-primary-on-tint)]"
               >
                 + {t("workspace.new")}
               </button>

@@ -627,7 +627,7 @@ export default function ProductEditor({ productId }: { productId?: string }) {
                 onClick={() => setForm((f) => ({ ...f, variations: [] }))}
                 className={`rounded-lg border px-4 py-2 text-sm font-medium ${
                   !isVariable
-                    ? "border-[var(--jf-primary)] bg-indigo-50 text-[var(--jf-primary)]"
+                    ? "border-[var(--jf-primary)] bg-indigo-50 text-[var(--jf-primary-on-tint)]"
                     : "border-[var(--jf-border)] text-[var(--jf-muted)] hover:border-[var(--jf-primary)]"
                 }`}
               >
@@ -644,7 +644,7 @@ export default function ProductEditor({ productId }: { productId?: string }) {
                 }
                 className={`rounded-lg border px-4 py-2 text-sm font-medium ${
                   isVariable
-                    ? "border-[var(--jf-primary)] bg-indigo-50 text-[var(--jf-primary)]"
+                    ? "border-[var(--jf-primary)] bg-indigo-50 text-[var(--jf-primary-on-tint)]"
                     : "border-[var(--jf-border)] text-[var(--jf-muted)] hover:border-[var(--jf-primary)]"
                 }`}
               >

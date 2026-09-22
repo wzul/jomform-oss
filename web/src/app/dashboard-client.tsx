@@ -381,7 +381,7 @@ export default function Dashboard() {
                   <tr key={rowKey(s)} className="border-b border-[var(--jf-border)] last:border-0 hover:bg-slate-50/60">
                     <td className="whitespace-nowrap px-5 py-3 font-mono text-xs">
                       {rowKind(s) === "response" ? (
-                        <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[10px] font-medium text-[var(--jf-primary)]">
+                        <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[10px] font-medium text-[var(--jf-primary-on-tint)]">
                           {t("bld.responses")}
                         </span>
                       ) : (

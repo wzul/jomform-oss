@@ -1796,7 +1796,7 @@ export default function Builder() {
               }}
               className={`rounded-md border px-2 py-2 text-xs font-medium transition-colors ${
                 mode === "payment"
-                  ? "border-[#7170ff]/60 bg-indigo-50 text-[var(--jf-primary)]"
+                  ? "border-[#7170ff]/60 bg-indigo-50 text-[var(--jf-primary-on-tint)]"
                   : "border-[var(--jf-border)] text-[#374151] hover:bg-slate-50"
               }`}
             >
@@ -1810,7 +1810,7 @@ export default function Builder() {
               }}
               className={`rounded-md border px-2 py-2 text-xs font-medium transition-colors ${
                 mode === "response"
-                  ? "border-[#7170ff]/60 bg-indigo-50 text-[var(--jf-primary)]"
+                  ? "border-[#7170ff]/60 bg-indigo-50 text-[var(--jf-primary-on-tint)]"
                   : "border-[var(--jf-border)] text-[#374151] hover:bg-slate-50"
               }`}
             >

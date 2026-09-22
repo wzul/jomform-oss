@@ -233,7 +233,7 @@ export default function FeedbackPage() {
         </div>
 
         {user?.is_super_admin && (
-          <p className="mt-3 rounded-md bg-indigo-50 px-3 py-2 text-xs text-[var(--jf-primary)]">
+          <p className="mt-3 rounded-md bg-indigo-50 px-3 py-2 text-xs text-[var(--jf-primary-on-tint)]">
             {t("fb.adminHint")}{" "}
             <a href="/admin?tab=feedback" className="underline decoration-dotted underline-offset-2">
               /admin

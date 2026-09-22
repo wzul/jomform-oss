@@ -214,7 +214,7 @@ export function MembersTab({ workspaceId }: { workspaceId: string }) {
                 <span
                   className={`mt-0.5 inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${
                     m.role === "admin" || m.role === "owner"
-                      ? "border border-indigo-200 bg-indigo-50 text-[var(--jf-primary)]"
+                      ? "border border-indigo-200 bg-indigo-50 text-[var(--jf-primary-on-tint)]"
                       : m.role === "manage"
                         ? "border border-sky-200 bg-sky-50 text-sky-700"
                         : "border border-slate-200 bg-slate-50 text-slate-500"

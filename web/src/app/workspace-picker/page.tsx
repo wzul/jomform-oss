@@ -174,7 +174,7 @@ export default function WorkspacePickerPage() {
                       <p className="text-sm font-medium text-[var(--jf-text)]">
                         {s.name}
                         {isDefault && (
-                          <span className="ml-2 rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-medium text-[var(--jf-primary)]">
+                          <span className="ml-2 rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-medium text-[var(--jf-primary-on-tint)]">
                             {t("workspace.defaultLabel")}
                           </span>
                         )}

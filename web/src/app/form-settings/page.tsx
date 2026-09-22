@@ -1264,7 +1264,7 @@ function FormSettingsInner() {
                               onClick={() => setStatus(s)}
                               className={`whitespace-nowrap rounded-md border px-2 py-2 text-xs font-medium transition-colors ${
                                 status === s
-                                  ? "border-[#7170ff]/60 bg-indigo-50 text-[var(--jf-primary)]"
+                                  ? "border-[#7170ff]/60 bg-indigo-50 text-[var(--jf-primary-on-tint)]"
                                   : "border-[var(--jf-border)] text-[#374151] hover:bg-slate-50"
                               }`}
                             >
@@ -1307,7 +1307,7 @@ function FormSettingsInner() {
                               onClick={() => setFsImgSize(sz)}
                               className={`rounded-md border px-3 py-2 text-xs font-medium transition-colors ${
                                 fsImgSize === sz
-                                  ? "border-[#7170ff]/60 bg-indigo-50 text-[var(--jf-primary)]"
+                                  ? "border-[#7170ff]/60 bg-indigo-50 text-[var(--jf-primary-on-tint)]"
                                   : "border-[var(--jf-border)] text-[#374151] hover:bg-slate-50"
                               }`}
                             >
@@ -1326,7 +1326,7 @@ function FormSettingsInner() {
                                 disabled={fsImgSize === "hidden"}
                                 className={`rounded-md border px-3 py-2 text-xs font-medium transition-colors disabled:opacity-40 ${
                                   fsImgLayout === ly
-                                    ? "border-[#7170ff]/60 bg-indigo-50 text-[var(--jf-primary)]"
+                                    ? "border-[#7170ff]/60 bg-indigo-50 text-[var(--jf-primary-on-tint)]"
                                     : "border-[var(--jf-border)] text-[#374151] hover:bg-slate-50"
                                 }`}
                               >

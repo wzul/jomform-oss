@@ -905,7 +905,7 @@ function SalesPageInner() {
                   <tr key={rowKey(s)} className="border-b border-[var(--jf-border)] last:border-0 hover:bg-slate-50/60">
                     <td className="whitespace-nowrap px-4 py-3 font-mono text-[11px]">
                       {rowKind(s) === "response" ? (
-                        <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[10px] font-medium text-[var(--jf-primary)]">
+                        <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[10px] font-medium text-[var(--jf-primary-on-tint)]">
                           {t("bld.responses")}
                         </span>
                       ) : (
@@ -989,7 +989,7 @@ function SalesPageInner() {
                       <span className="block truncate text-[10px] text-[var(--jf-muted)]">{s.buyer_email}</span>
                     )}
                     {s.table_number && (
-                      <span className="mt-0.5 inline-block rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-[var(--jf-primary)]">
+                      <span className="mt-0.5 inline-block rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-[var(--jf-primary-on-tint)]">
                         {t("sales.table")} {s.table_number}
                       </span>
                     )}
