@@ -33,8 +33,29 @@ assert_eq() { # label expected actual
 assert_contains() { # label needle file
   if grep -qF -- "$2" "$3" 2>/dev/null; then ok "$1"; else bad "$1: '$2' not found in $3"; fi
 }
+# For the refusal path: the point is what did NOT happen (no email, no dump), and
+# "the string is absent" is the only assertion that can catch a leak.
+assert_not_contains() { # label needle file
+  if grep -qF -- "$2" "$3" 2>/dev/null; then
+    bad "$1: '$2' MUST NOT appear in $3: $(grep -nF -- "$2" "$3" | head -3 | tr '\n' ' ')"
+  else
+    ok "$1"
+  fi
+}
 assert_file() { # label path
   if [ -f "$2" ]; then ok "$1"; else bad "$1: $2 does not exist"; fi
+}
+# The fail-closed assertions have to be about what did NOT happen; the stage
+# directory holding exactly what it held before the run is the only shape that
+# proves the refusal landed BEFORE the dump.
+assert_no_file() { # label path
+  if [ -e "$2" ]; then bad "$1: $2 exists but must not"; else ok "$1"; fi
+}
+assert_same_listing() { # label expected-listing dir
+  local now
+  now="$(ls -A "$2" 2>/dev/null | sort | tr '\n' ' ')"
+  if [ "$1" = "$now" ]; then ok "$1: listing unchanged"
+  else bad "$1: listing changed: before '$1' after '$now'"; fi
 }
 # The status file is read by machines; a value needing escaping must not break it.
 assert_json_valid() { # label path
@@ -203,6 +224,13 @@ EOF
   RUN_LOG="$CASE_DIR/run.log"
 }
 # run_backup [env assignments...] -- [script args...]
+#
+# Every knob the script's fail-closed test seam watches must be set here (and by
+# any hand-run), which is the point: safety is a property of the CALLER in the
+# committed suite too, so the suite must satisfy the guard the same way an
+# operator has to. A case that needs a knob UNSET on purpose passes an explicit
+# override (see the seam cases below), and the sabotaged-COPY case below reaches
+# the same guard through this same helper.
 run_backup() { run_backup_script "$SCRIPT" "$@"; }
 
 # run_backup_script <script> [env assignments...] -- [script args...]
@@ -219,6 +247,8 @@ run_backup_script() {
       JFBACKUP_LOG_FILE="$RUN_LOG" \
       JFBACKUP_LOCK_FILE="$CASE_DIR/lock" \
       JFBACKUP_ENV_FILE="$CASE_DIR/env" \
+      JFBACKUP_REMOTE="googldrive" \
+      JFBACKUP_REMOTE_ROOT="jfbackup-test" \
       RCLONE_CONFIG="$CASE_DIR/rclone.conf" \
       "${extra[@]}" \
       bash "$script" "$@" >>"$RUN_LOG" 2>&1
@@ -326,7 +356,7 @@ setup_case; touch_rclone_conf
 rc="$(run_backup STUB_RCLONE_MODE=ok --)"
 assert_eq "exit code" "exit=0" "$rc"
 assert_contains "log says OK" "jomform-backup OK" "$RUN_LOG"
-assert_contains "upload verified" "verified googldrive:jomform-backups/daily/" "$RUN_LOG"
+assert_contains "upload verified" "verified googldrive:jfbackup-test/daily/" "$RUN_LOG"
 assert_contains "status file OK" '"status": "OK"' "$CASE_DIR/state/last-run.json"
 if [ -f "$CASE_DIR/state/last-failure.json" ]; then bad "no last-failure.json on success"; else ok "no last-failure.json on success"; fi
 teardown_case
@@ -404,6 +434,8 @@ env -i \
     JFBACKUP_LOG_FILE="$run_log" \
     JFBACKUP_LOCK_FILE="$CASE_DIR/lock" \
     JFBACKUP_ENV_FILE="$CASE_DIR/env" \
+    JFBACKUP_REMOTE="googldrive" \
+    JFBACKUP_REMOTE_ROOT="jfbackup-test" \
     RCLONE_CONFIG="$CASE_DIR/rclone.conf" \
     STUB_RCLONE_MODE=ok \
     /bin/bash "$SCRIPT" --local-only >"$run_log" 2>&1
@@ -583,6 +615,161 @@ else
   bad "the pre-fix script wrote no monthly sidecar at all — cannot judge the bite"
 fi
 teardown_case
+
+# ---------------------------------------------------------------------------
+# The fail-closed test seam. On 2026-09-19 a hand-run set STAGE_DIR/STATE_DIR/
+# LOG_FILE and forgot ENV_FILE/REMOTE_ROOT: it read the real SES credentials out
+# of /opt/jomform/.env, mailed the real super-admin inbox, and wrote into the
+# production Drive folder. These cases hold that shape to a refusal.
+# ---------------------------------------------------------------------------
+
+# run_backup_unset "<VARS to remove>" [assignments] -- [args]
+# Every seam knob is set first and then the named ones are REMOVED, so each case
+# isolates exactly one leg: an "ENV_FILE unset" case that also left REMOTE_ROOT
+# unset would still refuse for the other reason and would pass with the ENV_FILE
+# leg deleted — a case that measures nothing. `env -u X X=value` does NOT work
+# for this: env applies arguments in order, so the assignment re-sets it after
+# the unset. The knob is filtered out of the list instead.
+run_backup_unset() {
+  local unsets=" $1 "; shift
+  local extra=()
+  while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do extra+=("$1"); shift; done
+  [ "$#" -gt 0 ] && shift
+  local assigns=(
+    "JFBACKUP_PATH_PREFIX=$STUB_BIN"
+    "JFBACKUP_STAGE_DIR=$CASE_DIR/stage"
+    "JFBACKUP_STATE_DIR=$CASE_DIR/state"
+    "JFBACKUP_LOG_FILE=$RUN_LOG"
+    "JFBACKUP_LOCK_FILE=$CASE_DIR/lock"
+    "JFBACKUP_ENV_FILE=$CASE_DIR/env"
+    "JFBACKUP_REMOTE=googldrive"
+    "JFBACKUP_REMOTE_ROOT=jfbackup-test"
+    "RCLONE_CONFIG=$CASE_DIR/rclone.conf"
+  )
+  local keep=() a name
+  for a in "${assigns[@]}"; do
+    name="${a%%=*}"
+    case "$unsets" in *" $name "*) continue ;; esac
+    keep+=("$a")
+  done
+  env "${keep[@]}" "${extra[@]}" bash "$SCRIPT" "$@" >>"$RUN_LOG" 2>&1
+  echo "exit=$?"
+}
+
+echo "case: partial override (STAGE_DIR set, JFBACKUP_ENV_FILE unset) REFUSES before any work"
+# The remote is deliberately left WORKING and the rclone config readable, so the
+# only reason this run cannot succeed is the seam itself. With the guard removed
+# the run uploads through the stub and exits 0 — which is what makes the
+# assertions below bite rather than pass by accident.
+setup_case; touch_rclone_conf
+before="$(ls -A "$CASE_DIR/stage" | sort | tr '\n' ' ')"
+rc="$(run_backup_unset JFBACKUP_ENV_FILE STUB_RCLONE_MODE=no-remote --)"
+assert_eq "exit code" "exit=1" "$rc"
+assert_contains "one line names the missing variable" "JFBACKUP_ENV_FILE" "$RUN_LOG"
+assert_contains "log says it refused" "refusing a partial-override run" "$RUN_LOG"
+assert_contains "the override that triggered it is named" "JFBACKUP_STAGE_DIR" "$RUN_LOG"
+assert_contains "names the production value it would have fallen back to" "/opt/jomform/.env" "$RUN_LOG"
+# ORDERING, not just the exit code: an exit 1 AFTER the dump is not fail-closed.
+assert_no_file "no dump was taken" "$CASE_DIR/stage/jomform-daily-$(date -u +%Y-%m-%d).dump.gz"
+assert_no_file "no media archive was taken" "$CASE_DIR/stage/jomform-daily-$(date -u +%Y-%m-%d)-media.tar.gz"
+assert_same_listing "$before" "$CASE_DIR/stage"
+assert_no_file "no lock file was taken" "$CASE_DIR/lock"
+# The email is the half the operator actually saw: the alert must not be raised.
+assert_not_contains "no alert email was attempted" "[JomForm]" "$RUN_LOG"
+assert_not_contains "no ALERT line was logged" " ALERT " "$RUN_LOG"
+assert_contains "failure is recorded in the log" "jomform-backup FAILED" "$RUN_LOG"
+assert_contains "syslog record written" "jomform-backup FAILED" "$CASE_DIR/alerts.log"
+assert_contains "status file records the refusal" '"status": "FAILED"' "$CASE_DIR/state/last-run.json"
+teardown_case
+
+echo "case: partial override with JFBACKUP_REMOTE_ROOT unset also REFUSES"
+setup_case; touch_rclone_conf
+before="$(ls -A "$CASE_DIR/stage" | sort | tr '\n' ' ')"
+rc="$(run_backup_unset JFBACKUP_REMOTE_ROOT STUB_RCLONE_MODE=no-remote --)"
+assert_eq "exit code" "exit=1" "$rc"
+assert_contains "one line names the missing variable" "JFBACKUP_REMOTE_ROOT" "$RUN_LOG"
+assert_contains "log says it refused" "refusing a partial-override run" "$RUN_LOG"
+assert_contains "names the production folder it would have fallen back to" "jomform-backups" "$RUN_LOG"
+assert_no_file "no dump was taken" "$CASE_DIR/stage/jomform-daily-$(date -u +%Y-%m-%d).dump.gz"
+assert_same_listing "$before" "$CASE_DIR/stage"
+assert_not_contains "no alert email was attempted" "[JomForm]" "$RUN_LOG"
+assert_contains "syslog record written" "jomform-backup FAILED" "$CASE_DIR/alerts.log"
+teardown_case
+
+echo "case: partial override naming both missing variables lists both in one line"
+setup_case; touch_rclone_conf
+rc="$(run_backup_unset "JFBACKUP_ENV_FILE JFBACKUP_REMOTE JFBACKUP_REMOTE_ROOT" STUB_RCLONE_MODE=no-remote --)"
+assert_eq "exit code" "exit=1" "$rc"
+assert_contains "names ENV_FILE" "JFBACKUP_ENV_FILE" "$RUN_LOG"
+assert_contains "names REMOTE" "JFBACKUP_REMOTE" "$RUN_LOG"
+assert_contains "names REMOTE_ROOT" "JFBACKUP_REMOTE_ROOT" "$RUN_LOG"
+assert_not_contains "no alert email was attempted" "[JomForm]" "$RUN_LOG"
+teardown_case
+
+echo "case: a --restore drill with a partial override is refused too, before its container"
+setup_case; touch_rclone_conf
+rc="$(run_backup_unset JFBACKUP_ENV_FILE -- --restore "$CASE_DIR/stage/payload.dump")"
+assert_eq "exit code" "exit=1" "$rc"
+assert_contains "refused" "refusing a partial-override run" "$RUN_LOG"
+assert_not_contains "the drill never started" "restore drill: container" "$RUN_LOG"
+teardown_case
+
+echo "case: the SAME run with the seam knobs set proceeds normally"
+setup_case; touch_rclone_conf
+rc="$(run_backup STUB_RCLONE_MODE=ok --)"
+assert_eq "exit code" "exit=0" "$rc"
+assert_contains "log says OK" "jomform-backup OK" "$RUN_LOG"
+assert_file "dump was taken" "$CASE_DIR/stage/jomform-daily-$(date -u +%Y-%m-%d).dump.gz"
+assert_not_contains "seam did not fire" "refusing a partial-override run" "$RUN_LOG"
+teardown_case
+
+echo "case: JFBACKUP_ALLOW_UNSAFE=1 is the deliberate escape hatch, and it WARNs"
+setup_case; touch_rclone_conf
+# All three production fallbacks unset, so the WARN has to name the real values
+# it is about to reach — that is the operator's only signal of what they hit.
+rc="$(run_backup_unset "JFBACKUP_ENV_FILE JFBACKUP_REMOTE JFBACKUP_REMOTE_ROOT" JFBACKUP_ALLOW_UNSAFE=1 STUB_RCLONE_MODE=ok --)"
+assert_eq "exit code" "exit=0" "$rc"
+assert_contains "warns the hatch was used" "JFBACKUP_ALLOW_UNSAFE=1" "$RUN_LOG"
+assert_contains "names the credential file reached" "/opt/jomform/.env" "$RUN_LOG"
+assert_contains "names the production remote reached" "googldrive:jomform-backups" "$RUN_LOG"
+assert_contains "syslog carries the unsafe override too" "unsafe override allowed" "$CASE_DIR/alerts.log"
+assert_file "dump was taken" "$CASE_DIR/stage/jomform-daily-$(date -u +%Y-%m-%d).dump.gz"
+teardown_case
+
+echo "case: the installed cron shape is NOT refused (no false positive on the nightly job)"
+# The four location knobs at their installed values with ENV_FILE/REMOTE_ROOT
+# unset is exactly what cron runs, and it must stay allowed — a seam that
+# refuses the nightly job is worse than none. Checked against the documented
+# cron entry rather than by running it: executing the installed shape offline
+# would write to /var/backups on this host, and the property under test is the
+# classification, which is determined by what the cron line sets.
+cron_line="$(grep -m1 -F '/usr/local/bin/jomform-backup.sh' "$SCRIPT_DIR/README.md" || true)"
+if [ -z "$cron_line" ]; then
+  bad "no cron entry found in README to check the installed shape against"
+elif printf '%s' "$cron_line" | grep -qE 'JFBACKUP_|RCLONE_CONFIG='; then
+  bad "the documented cron entry overrides a seam knob — the guard would refuse the nightly job: $cron_line"
+else
+  ok "the cron entry sets none of the seam knobs (so the nightly job is never refused)"
+fi
+# And the guard must fire on a value that merely DIFFERS for the four location
+# knobs, which is how the installed job is told apart from a hand-run.
+for knob in JFBACKUP_STAGE_DIR JFBACKUP_STATE_DIR JFBACKUP_LOG_FILE JFBACKUP_LOCK_FILE RCLONE_CONFIG; do
+  if grep -qE "^seam_moved ${knob}[[:space:]]" "$SCRIPT"; then
+    ok "seam watches $knob"
+  else
+    bad "seam does not watch $knob — a hand-run that moves only that knob is not detected"
+  fi
+done
+# The guard must test PROVISION, not value: requiring REMOTE_ROOT to *differ*
+# would let an operator point it at the scratch name and still be refused, and
+# requiring it to merely be non-empty would not distinguish default from set.
+for knob in JFBACKUP_ENV_FILE JFBACKUP_REMOTE JFBACKUP_REMOTE_ROOT; do
+  if grep -qE "^  if \[ -z \"\\\$\{${knob}:-\}\" \]; then" "$SCRIPT"; then
+    ok "seam tests that $knob was PROVIDED (not that its value differs)"
+  else
+    bad "seam does not test provision of $knob"
+  fi
+done
 
 echo
 printf '%d passed, %d failed\n' "$PASSES" "$FAILURES"

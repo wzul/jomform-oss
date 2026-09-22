@@ -39,14 +39,25 @@ fi
 export PATH
 
 # ---------------------------------------------------------------- configuration
-REMOTE="${JFBACKUP_REMOTE:-googldrive}"
-REMOTE_ROOT="${JFBACKUP_REMOTE_ROOT:-jomform-backups}"
-RCLONE_CONFIG="${RCLONE_CONFIG:-/root/.config/rclone/rclone.conf}"
-ENV_FILE="${JFBACKUP_ENV_FILE:-/opt/jomform/.env}"
-STAGE_DIR="${JFBACKUP_STAGE_DIR:-/var/backups/jomform}"
-STATE_DIR="${JFBACKUP_STATE_DIR:-/var/lib/jomform-backup}"
-LOG_FILE="${JFBACKUP_LOG_FILE:-/var/log/jomform-backup.log}"
-LOCK_FILE="${JFBACKUP_LOCK_FILE:-/var/lock/jomform-backup.lock}"
+# The installed values, named, so the fail-closed seam below can tell "this is
+# the cron job" from "somebody is running this by hand".
+REMOTE_DEFAULT="googldrive"
+REMOTE_ROOT_DEFAULT="jomform-backups"
+RCLONE_CONFIG_DEFAULT="/root/.config/rclone/rclone.conf"
+ENV_FILE_DEFAULT="/opt/jomform/.env"
+STAGE_DIR_DEFAULT="/var/backups/jomform"
+STATE_DIR_DEFAULT="/var/lib/jomform-backup"
+LOG_FILE_DEFAULT="/var/log/jomform-backup.log"
+LOCK_FILE_DEFAULT="/var/lock/jomform-backup.lock"
+
+REMOTE="${JFBACKUP_REMOTE:-$REMOTE_DEFAULT}"
+REMOTE_ROOT="${JFBACKUP_REMOTE_ROOT:-$REMOTE_ROOT_DEFAULT}"
+RCLONE_CONFIG="${RCLONE_CONFIG:-$RCLONE_CONFIG_DEFAULT}"
+ENV_FILE="${JFBACKUP_ENV_FILE:-$ENV_FILE_DEFAULT}"
+STAGE_DIR="${JFBACKUP_STAGE_DIR:-$STAGE_DIR_DEFAULT}"
+STATE_DIR="${JFBACKUP_STATE_DIR:-$STATE_DIR_DEFAULT}"
+LOG_FILE="${JFBACKUP_LOG_FILE:-$LOG_FILE_DEFAULT}"
+LOCK_FILE="${JFBACKUP_LOCK_FILE:-$LOCK_FILE_DEFAULT}"
 KEEP_DAILY="${JFBACKUP_KEEP_DAILY:-30}"
 KEEP_MONTHLY="${JFBACKUP_KEEP_MONTHLY:-12}"
 MEDIA_ENABLED="${JFBACKUP_MEDIA_ENABLED:-1}"
@@ -202,6 +213,69 @@ cleanup() {
   return 0
 }
 trap cleanup EXIT
+
+# ------------------------------------------------------------- partial override
+# A backup run that has any of its LOCATION knobs moved off the installed value
+# is not the cron job, it is a hand-run. On 2026-09-19 such a run (three knobs
+# set, two forgotten) read the real SES credentials out of /opt/jomform/.env and
+# mailed the real super-admin inbox while writing into the production Drive
+# folder. Safety there came from the caller remembering; this makes it come from
+# the script.
+#
+# `JFBACKUP_STAGE_DIR=...` etc. is the signal. RCLONE_CONFIG and
+# JFBACKUP_PATH_PREFIX are included because neither is ever set by the installed
+# cron job, and a run that moves only RCLONE_CONFIG is still a hand-run — it
+# does NOT contain the run, since alert_email reads $ENV_FILE directly rather
+# than going through rclone at all.
+UNSAFE_KNOBS=""
+seam_moved() { # VARNAME effective-value installed-default
+  [ "$2" = "$3" ] || UNSAFE_KNOBS="${UNSAFE_KNOBS}${UNSAFE_KNOBS:+, }$1"
+}
+seam_moved JFBACKUP_STAGE_DIR  "$STAGE_DIR"       "$STAGE_DIR_DEFAULT"
+seam_moved JFBACKUP_STATE_DIR  "$STATE_DIR"       "$STATE_DIR_DEFAULT"
+seam_moved JFBACKUP_LOG_FILE   "$LOG_FILE"        "$LOG_FILE_DEFAULT"
+seam_moved JFBACKUP_LOCK_FILE  "$LOCK_FILE"       "$LOCK_FILE_DEFAULT"
+seam_moved RCLONE_CONFIG       "$RCLONE_CONFIG"   "$RCLONE_CONFIG_DEFAULT"
+if [ -n "${JFBACKUP_PATH_PREFIX:-}" ]; then
+  UNSAFE_KNOBS="${UNSAFE_KNOBS}${UNSAFE_KNOBS:+, }JFBACKUP_PATH_PREFIX"
+fi
+
+# enforce_test_seam — refuse a partial override BEFORE any work (no dump, no
+# upload, no `mkdir`). Tests "was it provided", not "does its value differ from
+# the default": pointing REMOTE_ROOT at a scratch name is legitimate, so a guard
+# that only refused a *changed* value would let the dangerous shape through.
+enforce_test_seam() {
+  [ -n "$UNSAFE_KNOBS" ] || return 0   # the installed nightly job: nothing to do
+  if [ -n "${JFBACKUP_ALLOW_UNSAFE:-}" ]; then
+    log WARN "JFBACKUP_ALLOW_UNSAFE=1: ${UNSAFE_KNOBS} overridden and the escape hatch was used deliberately. This run WILL read credentials from $ENV_FILE and write to $REMOTE:$REMOTE_ROOT."
+    syslog_alert user.warning "jomform-backup: unsafe override allowed (${UNSAFE_KNOBS}); reached $ENV_FILE and $REMOTE:$REMOTE_ROOT"
+    return 0
+  fi
+  # Each of these three falls back to a PRODUCTION value when omitted: the real
+  # credential file, the real remote, the real folder inside it. "Provided"
+  # means the caller named it, whatever the name is. `detail` names the specific
+  # installed value a MISSING knob would fall back to — not the effective value,
+  # which may legitimately be a scratch name.
+  local missing="" detail=""
+  if [ -z "${JFBACKUP_ENV_FILE:-}" ]; then
+    missing="JFBACKUP_ENV_FILE"
+    detail="$ENV_FILE_DEFAULT (production SES credentials and super-admin inbox)"
+  fi
+  if [ -z "${JFBACKUP_REMOTE:-}" ]; then
+    missing="${missing:+$missing and }JFBACKUP_REMOTE"
+    detail="${detail:+$detail; }$REMOTE_DEFAULT (the production remote)"
+  fi
+  if [ -z "${JFBACKUP_REMOTE_ROOT:-}" ]; then
+    missing="${missing:+$missing and }JFBACKUP_REMOTE_ROOT"
+    detail="${detail:+$detail; }$REMOTE_ROOT_DEFAULT (the production backup folder)"
+  fi
+  [ -z "$missing" ] && return 0
+  # One actionable line, via fail so the status file and syslog record it too.
+  # Deliberately NO alert email here: the alert is half of what leaked to the
+  # real super-admin inbox on the run this guard exists for.
+  fail "refusing a partial-override run: $missing not set while $UNSAFE_KNOBS are overridden, so the missing knob(s) would default to $detail. Set JFBACKUP_ENV_FILE, JFBACKUP_REMOTE and JFBACKUP_REMOTE_ROOT to scratch values, or set JFBACKUP_ALLOW_UNSAFE=1 for a deliberate real run."
+  exit 1
+}
 
 # ------------------------------------------------------------------ discover DB
 # Resolve containers by compose label: container names carry a project prefix
@@ -391,13 +465,8 @@ do_restore() {
 }
 
 # --------------------------------------------------------------------- main
-mkdir -p "$STAGE_DIR" "$STATE_DIR"
-exec 9>"$LOCK_FILE"
-if ! flock -n 9; then
-  log WARN "another jomform-backup run holds $LOCK_FILE; exiting"
-  exit 0
-fi
-
+# Argument parsing comes first: --help must work, and an unknown argument must
+# still be a usage error rather than a seam refusal.
 while [ $# -gt 0 ]; do
   case "$1" in
     --local-only) LOCAL_ONLY=1; shift ;;
@@ -407,6 +476,18 @@ while [ $# -gt 0 ]; do
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+
+# Fail closed before ANY work: no mkdir, no lock, no dump, no upload, no email.
+# A partial-override run must not reach production credentials or the production
+# Drive folder, so this runs above everything that could touch them.
+enforce_test_seam
+
+mkdir -p "$STAGE_DIR" "$STATE_DIR"
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+  log WARN "another jomform-backup run holds $LOCK_FILE; exiting"
+  exit 0
+fi
 
 if [ -n "$RESTORE_FILE" ]; then
   # A drill is not a backup: record it under its own name so it can never

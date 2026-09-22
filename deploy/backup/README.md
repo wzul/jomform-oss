@@ -141,6 +141,48 @@ permissions"* and skips it silently — the log would grow unbounded.
 /usr/local/bin/jomform-backup.sh --local-only  # dump + verify locally, do not upload
 ```
 
+### A hand-run must not reach production — this is enforced, not advised
+
+The script is installed **outside** the checkout and reads its credentials from
+`/opt/jomform/.env` (real SES keys, real `SUPER_ADMIN_EMAILS`) and its
+destination from `JFBACKUP_REMOTE_ROOT` (the production Drive folder). An ad-hoc
+run that sets some knobs and forgets others therefore silently reaches production
+credentials and production storage. That is not hypothetical: on 2026-09-19 two
+hand-runs set `JFBACKUP_STAGE_DIR`/`_STATE_DIR`/`_LOG_FILE`, forgot
+`JFBACKUP_ENV_FILE` and `JFBACKUP_REMOTE_ROOT`, mailed the real super-admin
+inbox over SES and wrote into the production backup folder.
+
+So the script now **fails closed on a partial override**:
+
+- If any of `JFBACKUP_STAGE_DIR`, `JFBACKUP_STATE_DIR`, `JFBACKUP_LOG_FILE`,
+  `JFBACKUP_LOCK_FILE`, `JFBACKUP_PATH_PREFIX` or `RCLONE_CONFIG` differs from
+  its installed value, the run is a hand-run, not the cron job.
+- On such a run, `JFBACKUP_ENV_FILE`, `JFBACKUP_REMOTE` and
+  `JFBACKUP_REMOTE_ROOT` must be **explicitly set** (any value — a scratch name
+  is fine). The test is "was it provided", not "does it differ from the default".
+- If one is missing the run prints one line naming it and exits non-zero
+  **before any work**: no dump, no archive, no upload, no lock file, and
+  deliberately **no alert email** — the alert is half of what leaked.
+- For a deliberate real run, set `JFBACKUP_ALLOW_UNSAFE=1`; the run logs a WARN
+  naming the credential file and the remote it is about to reach, and records it
+  in syslog. It is not the default.
+
+A hand-run therefore looks like this:
+
+```bash
+JFBACKUP_STAGE_DIR=/tmp/jfbtest/stage \
+JFBACKUP_STATE_DIR=/tmp/jfbtest/state \
+JFBACKUP_LOG_FILE=/tmp/jfbtest/run.log \
+JFBACKUP_ENV_FILE=/tmp/jfbtest/env \
+JFBACKUP_REMOTE=googldrive \
+JFBACKUP_REMOTE_ROOT=jfbtest-scratch \
+  /usr/local/bin/jomform-backup.sh --local-only
+```
+
+The same rule binds the committed test suite, which is the point: every case in
+`jomform-backup_test.sh` sets all of those knobs, so safety is a property of the
+script rather than of the caller remembering.
+
 ## Restore drill — run this, do not just trust the dump
 
 Restores a dump into a throwaway `postgres:18-alpine` container, prints the row
@@ -203,7 +245,7 @@ sent; a failing run does not retry in a tight loop because the lock file
 
 ## Tested failure paths
 
-Every one of these is exercised by `jomform-backup_test.sh` (69 assertions,
+Every one of these is exercised by `jomform-backup_test.sh` (118 assertions,
 stubbed `rclone`/`docker`, no network and no database required) and eleven of them
 are additionally proven to *bite* by sabotaging the script and requiring the
 suite to go red:
@@ -251,6 +293,14 @@ bash deploy/backup/jomform-backup_test.sh
 - **The monthly sidecar write fails** — the run sets `uploads_ok=0`, logs the
   failure and writes `last-failure.json`, rather than reporting a healthy run
   with an unverifiable monthly copy.
+- **A partial override refuses before doing any work** — with `JFBACKUP_STAGE_DIR`
+  (or any other location knob) set and `JFBACKUP_ENV_FILE`, `JFBACKUP_REMOTE` or
+  `JFBACKUP_REMOTE_ROOT` missing, the run exits non-zero naming the missing
+  variable and takes **no** dump, **no** media archive, **no** lock file and
+  **sends no alert email** — asserted on the ordering (the stage directory is
+  byte-for-byte unchanged), not just on the exit code. The same run with those
+  knobs set proceeds normally, and `JFBACKUP_ALLOW_UNSAFE=1` is the deliberate
+  escape hatch that logs a WARN naming the credentials and remote it reached.
 
 A test that only ever passes proves nothing, so the suite is run against a
 deliberately sabotaged script for each of: removed hash verification, removed
@@ -260,6 +310,22 @@ failure returning exit 0, disabled remote check, a removed cron `PATH` pin,
 a restore drill writing the backup job's status, and the monthly sidecar copied
 verbatim from the daily object (the last one is done inside the suite itself, on
 a copy of the script in a temp dir).
+
+The fail-closed test seam above has its own bite proof, which mutates the seam
+one part at a time in a throwaway copy of this directory and requires the suite
+to go red each time (a mutation that does not land, or one that leaves the script
+unparseable, is reported as an abort rather than counted):
+
+```bash
+bash deploy/backup/jomform-backup_bite.sh
+```
+
+It covers: the seam never called, the `JFBACKUP_ENV_FILE` leg removed (the
+credential half that actually mailed the real inbox), the
+`JFBACKUP_REMOTE_ROOT` leg removed, the refusal moved below the mkdir+lock (so
+only the ordering assertions can catch it), the refusal also sending the alert
+email, the escape hatch defaulting to ON, and the location knobs no longer being
+watched.
 
 ### Running the suite needs nothing but bash
 
