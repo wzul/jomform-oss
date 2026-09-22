@@ -71,7 +71,7 @@ func TestSendReceiptSkipsSuppressedRecipient(t *testing.T) {
 	sup := &staticSuppressor{suppressed: true}
 	s := testSender(sup)
 
-	id, err := s.SendReceipt("buyer@example.com", "Resit pembayaran", "Badan")
+	id, err := s.SendReceipt("buyer@example.com", "Resit pembayaran", "Badan", "")
 	if !errors.Is(err, ErrSuppressed) {
 		t.Fatalf("SendReceipt err = %v, want ErrSuppressed", err)
 	}
@@ -92,7 +92,7 @@ func TestSendReceiptWithAttachmentSkipsSuppressedRecipient(t *testing.T) {
 	calls := fakeSES(t)
 	s := testSender(&staticSuppressor{suppressed: true})
 
-	id, err := s.SendReceiptWithAttachment("buyer@example.com", "Resit", "Badan",
+	id, err := s.SendReceiptWithAttachment("buyer@example.com", "Resit", "Badan", "",
 		"resit.pdf", []byte("%PDF-1.4"))
 	if !errors.Is(err, ErrSuppressed) {
 		t.Fatalf("SendReceiptWithAttachment err = %v, want ErrSuppressed", err)
@@ -112,7 +112,7 @@ func TestSendReceiptUnsuppressedStillSends(t *testing.T) {
 	sup := &staticSuppressor{suppressed: false}
 	s := testSender(sup)
 
-	id, err := s.SendReceipt("buyer@example.com", "Resit pembayaran", "Badan")
+	id, err := s.SendReceipt("buyer@example.com", "Resit pembayaran", "Badan", "")
 	if err != nil {
 		t.Fatalf("SendReceipt err = %v, want nil", err)
 	}
@@ -133,7 +133,7 @@ func TestSendReceiptWithAttachmentUnsuppressedStillSends(t *testing.T) {
 	calls := fakeSES(t)
 	s := testSender(&staticSuppressor{suppressed: false})
 
-	if _, err := s.SendReceiptWithAttachment("buyer@example.com", "Resit", "Badan",
+	if _, err := s.SendReceiptWithAttachment("buyer@example.com", "Resit", "Badan", "",
 		"resit.pdf", []byte("%PDF-1.4")); err != nil {
 		t.Fatalf("SendReceiptWithAttachment err = %v, want nil", err)
 	}
@@ -150,7 +150,7 @@ func TestSendReceiptSuppressionLookupIsNormalised(t *testing.T) {
 	sup := &staticSuppressor{suppressed: true}
 	s := testSender(sup)
 
-	if _, err := s.SendReceipt("  Buyer@Example.COM  ", "Resit", "Badan"); !errors.Is(err, ErrSuppressed) {
+	if _, err := s.SendReceipt("  Buyer@Example.COM  ", "Resit", "Badan", ""); !errors.Is(err, ErrSuppressed) {
 		t.Fatalf("err = %v, want ErrSuppressed for a mixed-case + padded address", err)
 	}
 	if sup.lastAsk != "buyer@example.com" {
@@ -170,7 +170,7 @@ func TestSendReceiptNilSuppressorSendsWithNoLookup(t *testing.T) {
 	if s.Suppressor != nil {
 		t.Fatal("test setup: expected a nil Suppressor")
 	}
-	if _, err := s.SendReceipt("buyer@example.com", "Resit", "Badan"); err != nil {
+	if _, err := s.SendReceipt("buyer@example.com", "Resit", "Badan", ""); err != nil {
 		t.Fatalf("SendReceipt err = %v, want nil", err)
 	}
 	if n := calls.Load(); n != 1 {
@@ -190,7 +190,7 @@ func TestSendReceiptSuppressionStoreErrorFailsOpen(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	s := testSender(sup)
-	if _, err := s.SendReceipt("buyer@example.com", "Resit", "Badan"); err != nil {
+	if _, err := s.SendReceipt("buyer@example.com", "Resit", "Badan", ""); err != nil {
 		t.Fatalf("SendReceipt err = %v, want nil (fail open on a store error)", err)
 	}
 	if n := calls.Load(); n != 1 {
@@ -217,7 +217,7 @@ func TestSendReceiptSuppressedSkipIsLogged(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	s := testSender(&staticSuppressor{suppressed: true})
-	_, _ = s.SendReceipt("wan@jomform.com", "Resit pembayaran", "Badan")
+	_, _ = s.SendReceipt("wan@jomform.com", "Resit pembayaran", "Badan", "")
 
 	logged := buf.String()
 	if !strings.Contains(logged, "email_suppressed_skip") {
@@ -260,10 +260,10 @@ func TestSendDelegatesThroughTheGuardedPath(t *testing.T) {
 	calls := fakeSES(t)
 	s := testSender(&staticSuppressor{suppressed: true})
 
-	if err := s.Send("buyer@example.com", "Resit", "Badan"); !errors.Is(err, ErrSuppressed) {
+	if err := s.Send("buyer@example.com", "Resit", "Badan", ""); !errors.Is(err, ErrSuppressed) {
 		t.Fatalf("Send err = %v, want ErrSuppressed", err)
 	}
-	if err := s.SendWithAttachment("buyer@example.com", "Resit", "Badan",
+	if err := s.SendWithAttachment("buyer@example.com", "Resit", "Badan", "",
 		"resit.pdf", []byte("%PDF-1.4")); !errors.Is(err, ErrSuppressed) {
 		t.Fatalf("SendWithAttachment err = %v, want ErrSuppressed", err)
 	}

@@ -17,6 +17,7 @@ import (
 	"github.com/wzul/jomform/api/internal/dbstore"
 	emailpkg "github.com/wzul/jomform/api/internal/email"
 	"github.com/wzul/jomform/api/internal/emailqueue"
+	"github.com/wzul/jomform/api/internal/emailtext"
 )
 
 // ── admin gate ──────────────────────────────────────────────────────────────
@@ -58,50 +59,17 @@ func (h *RESTHandlers) requireWorkspaceAdmin(w http.ResponseWriter, r *http.Requ
 
 // inviteEmailBody returns a localized invite email body (5 locales) with the
 // signup link. The link carries the invite token so registration redeems it.
+//
+// The strings live in the shared transactional dictionary
+// (api/internal/emailtext); the signature is unchanged so every caller and
+// guard that knows this function keeps working.
 func inviteEmailBody(lang, link string) string {
-	switch lang {
-	case "ms":
-		return "Anda telah dijemput untuk menyertai workspace JomForm.\n\n" +
-			"Klik pautan berikut untuk mendaftar akaun dan menyertai workspace:\n\n" +
-			link + "\n\n" +
-			"Jika anda tidak mengharapkan jemputan ini, anda boleh abaikan emel ini.\n"
-	case "zh":
-		return "您已被邀请加入 JomForm 空间。\n\n" +
-			"点击以下链接注册账户并加入空间：\n\n" +
-			link + "\n\n" +
-			"如果您没有预期收到此邀请，可以忽略此邮件。\n"
-	case "ta":
-		return "JomForm இடத்தில் சேர உங்களை அழைத்துள்ளோம்.\n\n" +
-			"கணக்கைப் பதிவுசெய்து இடத்தில் சேர பின்வரும் இணைப்பைக் கிளிக் செய்யவும்:\n\n" +
-			link + "\n\n" +
-			"இந்த அழைப்பை நீங்கள் எதிர்பார்க்கவில்லை என்றால், இந்த மின்னஞ்சலைப் புறக்கணிக்கலாம்.\n"
-	case "ar":
-		return "تمت دعوتك للانضمام إلى مساحة JomForm.\n\n" +
-			"انقر على الرابط التالي لإنشاء حساب والانضمام إلى المساحة:\n\n" +
-			link + "\n\n" +
-			"إذا لم تكن تتوقع هذه الدعوة، يمكنك تجاهل هذا البريد.\n"
-	default: // en
-		return "You've been invited to join a JomForm workspace.\n\n" +
-			"Click the link below to create an account and join the workspace:\n\n" +
-			link + "\n\n" +
-			"If you weren't expecting this invitation, you can ignore this email.\n"
-	}
+	return emailtext.Text(lang, emailtext.WorkspaceInvite, map[string]string{"link": link}).Body
 }
 
 // inviteEmailSubject returns a localized invite email subject.
 func inviteEmailSubject(lang string) string {
-	switch lang {
-	case "ms":
-		return "Jemputan menyertai workspace JomForm"
-	case "zh":
-		return "加入 JomForm 空间的邀请"
-	case "ta":
-		return "JomForm இடத்தில் சேர அழைப்பு"
-	case "ar":
-		return "دعوة للانضمام إلى مساحة JomForm"
-	default:
-		return "Invitation to join a JomForm workspace"
-	}
+	return emailtext.Text(lang, emailtext.WorkspaceInvite, nil).Subject
 }
 
 // createInvite: POST /v1/workspaces/{id}/invites {email, role}
@@ -157,7 +125,11 @@ func (h *RESTHandlers) createInvite(w http.ResponseWriter, r *http.Request, actx
 		respondErr(w, r, err)
 		return
 	}
-	// Localize the invite email to the workspace's default language.
+	// Language consistency: an invite is addressed to a platform user
+	// (the invitee signs up and gets a profile), so it follows the PROFILE
+	// axis. The invitee has no users.lang yet, so the workspace default —
+	// the language the inviting merchant runs his storefront in — is the
+	// only preference available, and it is the one the merchant chose.
 	lang := "en"
 	if st, serr := h.Workspaces.Settings(r.Context(), sID); serr == nil {
 		lang = st.WorkspaceLang()
@@ -188,6 +160,7 @@ func (h *RESTHandlers) createInvite(w http.ResponseWriter, r *http.Request, actx
 		if err := h.EmailQueue.Enqueue(r.Context(), emailqueue.Job{
 			Type: "invite", To: email,
 			Subject: inviteEmailSubject(lang), Body: inviteEmailBody(lang, link),
+			Lang: lang,
 		}); err != nil {
 			// The invite is recorded; a failed enqueue is surfaced but not fatal.
 			writeJSON(w, http.StatusCreated, map[string]string{
@@ -202,7 +175,7 @@ func (h *RESTHandlers) createInvite(w http.ResponseWriter, r *http.Request, actx
 		return
 	}
 	if !mailerUnavailable(h.Mailer) {
-		if merr := h.Mailer.Send(email, inviteEmailSubject(lang), inviteEmailBody(lang, link)); merr != nil {
+		if merr := h.Mailer.Send(email, inviteEmailSubject(lang), inviteEmailBody(lang, link), lang); merr != nil {
 			// The invite is recorded; a failed email is surfaced but not fatal.
 			writeJSON(w, http.StatusCreated, map[string]string{
 				"status": "invited", "id": inv.ID, "email": email, "role": role,

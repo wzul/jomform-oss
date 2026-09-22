@@ -81,17 +81,18 @@ func authUsers(t *testing.T) *dbstore.UserStore {
 
 // recorderMailer captures verification emails (satisfies VerifyMailer).
 type recorderMailer struct {
-	mu     sync.Mutex
-	called bool
-	last   string // body of the most recent send (issue #62: captures reset token)
-	// no-op Send
+	mu       sync.Mutex
+	called   bool
+	last     string // body of the most recent send (issue #62: captures reset token)
+	lastLang string // the lang the most recent send was branded in
 }
 
-func (m *recorderMailer) Send(to, subject, body string) error {
+func (m *recorderMailer) Send(to, subject, body, lang string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.called = true
 	m.last = body
+	m.lastLang = lang
 	return nil
 }
 

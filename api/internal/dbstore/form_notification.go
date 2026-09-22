@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/wzul/jomform/api/internal/emailtext"
 )
 
 // Notification events (mirror the outbound webhook event set).
@@ -162,16 +164,24 @@ func (s *FormNotificationStore) Delete(ctx context.Context, formID, id string) e
 //
 // A PAYMENT form records a sale, so its default rule keys off sale.paid and can
 // use the sale placeholders (ref_code / amount / items / buyer_name).
-const (
-	defaultSaleNotificationName    = "Admin Notification"
-	defaultSaleNotificationSubject = "Jualan baharu — {{ref_code}}"
-	defaultSaleNotificationBody    = `Jualan baharu diterima!
+//
+// The templates come from the shared transactional dictionary rather than being
+// spelled out here. They were duplicated before: the same Malay literal lived in
+// this file AND in that dictionary, and the dictionary's job is to recognise a
+// never-customised rule by comparing the stored value against it. Two copies
+// drift silently — one added space and the comparison stops matching, so a
+// Malay receipt goes on being mailed to an English buyer while every test still
+// passes. One definition, one writer, one recogniser.
+var (
+	defaultSaleNotificationSubject, defaultSaleNotificationBody         = emailtext.LegacyDefault(emailtext.NotificationSale)
+	defaultResponseNotificationSubject, defaultResponseNotificationBody = emailtext.LegacyDefault(emailtext.NotificationResponse)
+)
 
-Rujukan : {{ref_code}}
-Jumlah  : RM {{amount}}
-Item    : {{items}}
-Pembeli : {{buyer_name}}
-Borang  : {{form_url}}`
+// The notification NAME is not email content — it is a label in the dashboard's
+// rule list — so it stays here.
+const (
+	defaultSaleNotificationName     = "Admin Notification"
+	defaultResponseNotificationName = "Admin Notification"
 )
 
 // A RESPONSE form never records a sale — it records a submission — so a
@@ -181,18 +191,9 @@ Borang  : {{form_url}}`
 // ({{amount}} as a misleading "0.00"). The response default therefore uses only
 // placeholders that carry a real value for a submission: the responder's
 // identity, which the public submit path always captures on the fields map
-// (`full_name` / `email`), plus {{date}} and {{form_url}}.
-const (
-	defaultResponseNotificationName    = "Admin Notification"
-	defaultResponseNotificationSubject = "Pendaftaran baharu diterima"
-	defaultResponseNotificationBody    = `Pendaftaran baharu diterima!
-
-Nama   : {{full_name}}
-Emel   : {{email}}
-Borang : {{form_url}}
-Tarikh : {{date}}`
-)
-
+// (`full_name` / `email`), plus {{date}} and {{form_url}}. Its template, like
+// the sale default above, comes from the shared dictionary.
+//
 // defaultNotificationFor returns the name, event, subject and body of the
 // default notification rule for a form in the given mode.
 func defaultNotificationFor(mode string) (name, event, subject, body string) {

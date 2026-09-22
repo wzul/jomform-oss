@@ -322,19 +322,48 @@ func (s *Service) sendReceiptAsync(ctx context.Context, sale *dbstore.Sale) {
 			workspaceID = sid
 		}
 	}
+	// Language consistency: resolve the BUYER-facing language on the form/
+	// workspace axis. The form is already in hand via formPublicURL's lookup, and
+	// the workspace default comes from the same chain the public page uses —
+	// never the merchant's personal users.lang.
+	formLang := s.formLangForSale(ctx, sale)
+	wsLang := ""
+	if s.Workspaces != nil && workspaceID != "" {
+		if st, werr := s.Workspaces.Settings(ctx, workspaceID); werr == nil && st != nil {
+			wsLang = st.WorkspaceLang()
+		}
+	}
 	go s.SendSaleReceipt(ctx, SaleRef{
-		SaleID:       sale.ID,
-		RefCode:      sale.RefCode,
-		BuyerEmail:   sale.Client.Email,
-		BuyerName:    sale.Client.FullName,
-		AmountSen:    sale.TotalSen,
-		ItemsSummary: summary,
-		FormURL:      formURL,
-		WorkspaceID:  workspaceID,
-		FormID:       sale.FormID,
-		TIN:          tin,
-		MSIC:         msic,
+		SaleID:        sale.ID,
+		RefCode:       sale.RefCode,
+		BuyerEmail:    sale.Client.Email,
+		BuyerName:     sale.Client.FullName,
+		AmountSen:     sale.TotalSen,
+		ItemsSummary:  summary,
+		FormURL:       formURL,
+		WorkspaceID:   workspaceID,
+		FormID:        sale.FormID,
+		TIN:           tin,
+		MSIC:          msic,
+		FormLang:      formLang,
+		WorkspaceLang: wsLang,
 	})
+}
+
+// formLangForSale reads the language a sale's form declares in its own
+// `config.lang` (issue #57). "" means the form carries no usable override, so
+// the receipt falls through to the workspace default. Best-effort: an unreadable
+// form contributes nothing rather than blocking the receipt.
+func (s *Service) formLangForSale(ctx context.Context, sale *dbstore.Sale) string {
+	if s.Forms == nil || sale == nil || sale.FormID == "" {
+		return ""
+	}
+	lang, err := s.Forms.FormLang(ctx, sale.FormID)
+	if err != nil {
+		slog.Warn("receipt_form_lang_unresolved", "form", sale.FormID, "err", err)
+		return ""
+	}
+	return lang
 }
 
 // activateSubscription records the token purchase and schedules the next charge.

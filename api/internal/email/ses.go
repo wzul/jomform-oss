@@ -169,8 +169,12 @@ func (s *Sender) client() (*sesv2.Client, error) {
 }
 
 // Send delivers a plain-text email via SESv2 SendEmail.
-func (s *Sender) Send(to, subject, body string) error {
-	_, err := s.SendReceipt(to, subject, body)
+//
+// lang is the language the message was RENDERED IN; it selects the `lang`
+// attribute (and `dir="rtl"` for Arabic) of the branded HTML part. An unset or
+// unknown code resolves to English (emailtext.NormalizeLang).
+func (s *Sender) Send(to, subject, body, lang string) error {
+	_, err := s.SendReceipt(to, subject, body, lang)
 	return err
 }
 
@@ -182,7 +186,8 @@ func (s *Sender) Send(to, subject, body string) error {
 //
 // Issue #339: the email is sent as multipart — a plain-text part (fallback for
 // clients without HTML) plus a branded HTML part (JomForm logo, colors, layout).
-func (s *Sender) SendReceipt(to, subject, body string) (string, error) {
+// lang is declared on that HTML part (language consistency).
+func (s *Sender) SendReceipt(to, subject, body, lang string) (string, error) {
 	// A nil receiver is the unconfigured-SES shape. The wiring must hand the
 	// caller a nil INTERFACE (never a nil *Sender inside one) — see
 	// cmd/jomform-api — so this is a backstop, not the primary guard.
@@ -209,7 +214,7 @@ func (s *Sender) SendReceipt(to, subject, body string) (string, error) {
 				Subject: &types.Content{Data: aws.String(subject)},
 				Body: &types.Body{
 					Text: &types.Content{Data: aws.String(body)},
-					Html: &types.Content{Data: aws.String(BrandedHTML(subject, body))},
+					Html: &types.Content{Data: aws.String(BrandedHTML(lang, subject, body))},
 				},
 			},
 		},
@@ -225,15 +230,16 @@ func (s *Sender) SendReceipt(to, subject, body string) (string, error) {
 
 // SendWithAttachment delivers a multipart/mixed email with a base64 attachment
 // (PDF receipts) via SESv2 SendEmail using a raw MIME message.
-func (s *Sender) SendWithAttachment(to, subject, body string, filename string, data []byte) error {
-	_, err := s.SendReceiptWithAttachment(to, subject, body, filename, data)
+func (s *Sender) SendWithAttachment(to, subject, body, lang, filename string, data []byte) error {
+	_, err := s.SendReceiptWithAttachment(to, subject, body, lang, filename, data)
 	return err
 }
 
 // SendReceiptWithAttachment delivers a multipart/mixed email with a base64
 // attachment (PDF receipts) via SESv2 SendEmail using a raw MIME message, and
 // returns the SES MessageID (issue #106) for open/click correlation.
-func (s *Sender) SendReceiptWithAttachment(to, subject, body string, filename string, data []byte) (string, error) {
+// lang declares the rendered language on the branded HTML part.
+func (s *Sender) SendReceiptWithAttachment(to, subject, body, lang, filename string, data []byte) (string, error) {
 	// Nil-receiver backstop, same as SendReceipt.
 	if s == nil {
 		return "", ErrNotConfigured
@@ -247,7 +253,7 @@ func (s *Sender) SendReceiptWithAttachment(to, subject, body string, filename st
 	if err != nil {
 		return "", err
 	}
-	raw := buildMultipart(s.from, to, subject, body, filename, data)
+	raw := buildMultipart(s.from, to, subject, body, lang, filename, data)
 	out, err := cli.SendEmail(context.Background(), &sesv2.SendEmailInput{
 		FromEmailAddress: aws.String(s.from),
 		Destination: &types.Destination{
@@ -272,7 +278,7 @@ func (s *Sender) SendReceiptWithAttachment(to, subject, body string, filename st
 // attachment, matching the previous SMTP attachment format. The body is a
 // nested multipart/alternative carrying both the plain-text fallback and the
 // branded HTML part (issue #339).
-func buildMultipart(from, to, subject, body, filename string, data []byte) []byte {
+func buildMultipart(from, to, subject, body, lang, filename string, data []byte) []byte {
 	boundary := "jf-boundary-7f3a9c1b"
 	altBoundary := "jf-alt-4d2e8f0a"
 	var b strings.Builder
@@ -292,7 +298,7 @@ func buildMultipart(from, to, subject, body, filename string, data []byte) []byt
 	b.WriteString("--" + altBoundary + "\r\n")
 	b.WriteString("Content-Type: text/html; charset=\"utf-8\"\r\n")
 	b.WriteString("Content-Transfer-Encoding: quoted-printable\r\n\r\n")
-	b.WriteString(quotedPrintable(BrandedHTML(subject, body)) + "\r\n")
+	b.WriteString(quotedPrintable(BrandedHTML(lang, subject, body)) + "\r\n")
 
 	b.WriteString("--" + altBoundary + "--\r\n")
 

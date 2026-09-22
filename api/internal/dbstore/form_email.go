@@ -1,7 +1,12 @@
 // Per-form notification email settings (issue #177, Gravity-Forms-style).
 package dbstore
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+
+	"github.com/wzul/jomform/api/internal/emailtext"
+)
 
 // FormEmailSettings is the per-form receipt/notification email configuration.
 //
@@ -63,6 +68,96 @@ func (s *FormStore) FormEmailSettings(ctx context.Context, formID string) (*Form
 	return st, nil
 }
 
+// FormLang reads the form's buyer-facing language override — `config.lang`, the
+// same key the public renderer resolves at (issue #57 / language placement).
+//
+// It returns "" when the form carries no override OR carries one that is not a
+// supported locale, so the caller falls through to the workspace default. That
+// distinction is why it does NOT return NormalizeLang's answer: NormalizeLang
+// maps "fr" onto "en", which would silently STOP the chain at the form instead
+// of letting the workspace setting apply.
+func (s *FormStore) FormLang(ctx context.Context, formID string) (string, error) {
+	if formID == "" {
+		return "", nil
+	}
+	var raw []byte
+	if err := s.pool.QueryRow(ctx, `SELECT config FROM forms WHERE id=$1`, formID).Scan(&raw); err != nil {
+		return "", err
+	}
+	return formLangFromConfig(raw), nil
+}
+
+// FormLangOf returns a Form's own language override, for a caller that already
+// holds the row (no extra query). Same "" contract as FormLang.
+func FormLangOf(f *Form) string {
+	if f == nil || f.Config == nil {
+		return ""
+	}
+	raw, err := json.Marshal(f.Config)
+	if err != nil {
+		return ""
+	}
+	return formLangFromConfig(raw)
+}
+
+// formLangFromConfig extracts a supported `lang` from a form's config JSON.
+func formLangFromConfig(raw []byte) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var cfg struct {
+		Lang string `json:"lang"`
+	}
+	if json.Unmarshal(raw, &cfg) != nil {
+		return ""
+	}
+	if !emailtext.Supported(cfg.Lang) {
+		return ""
+	}
+	return emailtext.NormalizeLang(cfg.Lang)
+}
+
+// EmailLang resolves the language a form's automated email is written in, on the
+// BUYER axis: form.config.lang ?? workspace_settings.default_lang ?? "en".
+//
+// This is the one place the buyer-facing chain is spelled out for email. It is
+// deliberately NOT the merchant's personal users.lang — a merchant who set his
+// dashboard to English while his public form is Malay gets an English auth email
+// and his buyers get Malay receipts.
+//
+// formLang is the form's own override (FormLang / FormLangOf) and may be empty.
+// wsDefaultLang is the workspace's stored `default_lang`, raw: it is passed
+// unvalidated so this function is the ONE place the fallback lives, exactly as
+// (*WorkspaceSettings).WorkspaceLang does for the rendered page. Both arguments
+// accept an unsupported code and fall through, so "fr" at either step resolves
+// to English rather than stopping the chain.
+func EmailLang(formLang, wsDefaultLang string) string {
+	if emailtext.Supported(formLang) {
+		return emailtext.NormalizeLang(formLang)
+	}
+	if emailtext.Supported(wsDefaultLang) {
+		return emailtext.NormalizeLang(wsDefaultLang)
+	}
+	return emailtext.En
+}
+
+// EmailLangFor is EmailLang with the workspace default resolved from the store.
+// A missing workspace (or an unreadable settings row) contributes nothing, so
+// the form override — or English — still decides. Never returns "".
+func (s *WorkspaceStore) EmailLangFor(ctx context.Context, workspaceID, formLang string) string {
+	if emailtext.Supported(formLang) {
+		return emailtext.NormalizeLang(formLang)
+	}
+	if s == nil || workspaceID == "" {
+		return emailtext.En
+	}
+	st, err := s.Settings(ctx, workspaceID)
+	if err != nil || st == nil {
+		return emailtext.En
+	}
+	return EmailLang("", st.DefaultLang)
+}
+
 // SaveFormEmailSettings upserts the per-form email settings.
 func (s *FormStore) SaveFormEmailSettings(ctx context.Context, st *FormEmailSettings) error {
 	_, err := s.pool.Exec(ctx,
@@ -103,10 +198,21 @@ func (s *FormStore) ClearFormEmailOverrides(ctx context.Context, formID string) 
 // built-in default (issue #453). ws may be nil when the workspace settings are
 // unavailable; in that case the built-in defaults are used for inherited
 // fields.
-func ResolveFormEmailSettings(form *FormEmailSettings, ws *EmailSettings) *FormEmailSettings {
+//
+// lang is the resolved buyer-facing language (EmailLang) and decides the
+// language of the BUILT-IN templates. Those templates live in the database as
+// Malay literals: workspace_email_settings defaults to one (migration 000021)
+// and EnsureDefault stores another per rule (#597), so a workspace nobody
+// customised holds Malay and — before this — mailed Malay to a buyer whose form
+// was English. A stored value that still equals a built-in template is therefore
+// re-rendered in lang; anything a merchant actually wrote is passed through
+// verbatim and never translated.
+func ResolveFormEmailSettings(form *FormEmailSettings, ws *EmailSettings, lang string) *FormEmailSettings {
+	l := emailtext.NormalizeLang(lang)
+	def := emailtext.Text(l, emailtext.Receipt, nil)
 	out := &FormEmailSettings{
-		ReceiptSubject: defaultEmailReceiptSubject,
-		ReceiptBody:    defaultEmailReceiptBody,
+		ReceiptSubject: def.Subject,
+		ReceiptBody:    def.Body,
 		ReceiptEnabled: true,
 	}
 	// 2. Workspace setting.
@@ -140,29 +246,15 @@ func ResolveFormEmailSettings(form *FormEmailSettings, ws *EmailSettings) *FormE
 			out.HTML = *form.HTMLOverride
 		}
 	}
-	// 3. Built-in defaults for any still-empty inherited field.
+	// 3. Built-in defaults for any still-empty inherited field, and the
+	// language-aware re-render of an inherited system template.
 	if out.ReceiptSubject == "" {
-		out.ReceiptSubject = defaultEmailReceiptSubject
+		out.ReceiptSubject = def.Subject
 	}
 	if out.ReceiptBody == "" {
-		out.ReceiptBody = defaultEmailReceiptBody
+		out.ReceiptBody = def.Body
+	} else if emailtext.IsSystemDefault(emailtext.Receipt, out.ReceiptSubject, out.ReceiptBody) {
+		out.ReceiptSubject, out.ReceiptBody = def.Subject, def.Body
 	}
 	return out
 }
-
-// defaultEmailReceiptSubject / defaultEmailReceiptBody mirror the payments
-// package defaults so resolution can be computed without importing payments
-// (which would create an import cycle).
-const (
-	defaultEmailReceiptSubject = "Resit pembayaran — {{ref_code}}"
-	defaultEmailReceiptBody    = `Terima kasih atas pembayaran anda!
-
-Resit pembayaran JomForm
-Rujukan : {{ref_code}}
-Jumlah  : RM {{amount}}
-Item    : {{items}}
-Status  : Pembayaran diterima
-
-Simpan emel ini sebagai resit rasmi anda.
-Borang dibeli: {{form_url}}`
-)

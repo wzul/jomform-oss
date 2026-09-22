@@ -19,6 +19,7 @@ import (
 	"github.com/wzul/jomform/api/internal/dbstore"
 	emailpkg "github.com/wzul/jomform/api/internal/email"
 	"github.com/wzul/jomform/api/internal/emailqueue"
+	"github.com/wzul/jomform/api/internal/emailtext"
 	"github.com/wzul/jomform/api/internal/httpapi/middleware"
 )
 
@@ -93,7 +94,7 @@ func (a *AuthHandlers) handleEmail2FACode(w http.ResponseWriter, r *http.Request
 		a.replyEmail2FACodeOK(w)
 		return
 	}
-	if err := a.sendEmail2FACode(r.Context(), user.Email, code); err != nil {
+	if err := a.sendEmail2FACode(r.Context(), user.Email, code, user.Lang); err != nil {
 		slog.Warn("email2fa_send_failed", "err", err, "user", user.ID)
 		// Code stored but email didn't send; it expires in 10 min. Keep the
 		// stored code so a retry from the login page succeeds when SES recovers.
@@ -115,7 +116,7 @@ func (a *AuthHandlers) replyEmail2FACodeOK(w http.ResponseWriter) {
 // SES sender (suppression-aware + breaker-gated, mirroring #56). Issue #199:
 // when an EmailQueue is wired the email is enqueued and sent by a background
 // worker; otherwise it is sent synchronously.
-func (a *AuthHandlers) sendEmail2FACode(ctx context.Context, email, code string) error {
+func (a *AuthHandlers) sendEmail2FACode(ctx context.Context, email, code, lang string) error {
 	if mailerUnavailable(a.VerifyMailer) {
 		return errors.New("email code mailer not configured")
 	}
@@ -131,21 +132,18 @@ func (a *AuthHandlers) sendEmail2FACode(ctx context.Context, email, code string)
 			return nil // suppressed: never resend, not a hard error
 		}
 	}
-	body := "Kod sandaran sekali-pakai untuk log masuk 2FA JomForm anda:\n\n" +
-		"\t" + code + "\n\n" +
-		"Kod ini sah selama 10 minit dan hanya boleh digunakan sekali. Ia menggantikan kod dari aplikasi pengesah anda.\n\n" +
-		"Jika anda tidak cuba log masuk, anda boleh abaikan emel ini.\n"
+	msg := emailtext.Text(lang, emailtext.Email2FACode, map[string]string{"code": code})
 	// Issue #199: background path — enqueue and return immediately.
 	if a.EmailQueue != nil {
 		if err := a.EmailQueue.Enqueue(ctx, emailqueue.Job{
 			Type: "email2fa", To: email,
-			Subject: "Kod sandaran 2FA JomForm anda", Body: body,
+			Subject: msg.Subject, Body: msg.Body, Lang: msg.Lang,
 		}); err != nil {
 			return err
 		}
 		return nil
 	}
-	if err := a.VerifyMailer.Send(email, "Kod sandaran 2FA JomForm anda", body); err != nil {
+	if err := a.VerifyMailer.Send(email, msg.Subject, msg.Body, msg.Lang); err != nil {
 		return err
 	}
 	recordSESSend("email2fa")
@@ -161,7 +159,7 @@ func (a *AuthHandlers) sendEmail2FACode(ctx context.Context, email, code string)
 // explains the email-code fallback trade-off: a backup code is a convenience
 // recovery path that bypasses the authenticator, so it is more convenient but
 // marginally weaker than TOTP alone. Issue #199: enqueued when a queue is wired.
-func (a *AuthHandlers) send2FAActiveEmail(ctx context.Context, email string) error {
+func (a *AuthHandlers) send2FAActiveEmail(ctx context.Context, email, lang string) error {
 	if mailerUnavailable(a.VerifyMailer) {
 		return errors.New("2fa active mailer not configured")
 	}
@@ -176,23 +174,18 @@ func (a *AuthHandlers) send2FAActiveEmail(ctx context.Context, email string) err
 			return nil
 		}
 	}
-	body := "Pengesahan dua faktor (2FA) kini AKTIF pada akaun JomForm anda. ✓\n\n" +
-		"Pada log masuk seterusnya, anda perlu mengesahkan kod 6-angka daripada aplikasi pengesah anda.\n\n" +
-		"Jika anda kehilangan akses kepada aplikasi pengesah, anda boleh meminta kod sandaran sekali-pakai\n" +
-		"dihantar ke emel ini melalui pautan \"Hantar kod melalui emel\" pada langkah 2FA. Nota: kod emel\n" +
-		"adalah laluan pemulihan yang lebih mudah tetapi lebih lemah sedikit berbanding TOTP sahaja — layan\n" +
-		"peti masuk emel anda dengan selamat.\n"
+	msg := emailtext.Text(lang, emailtext.TwoFAActivated, nil)
 	// Issue #199: background path — enqueue and return immediately.
 	if a.EmailQueue != nil {
 		if err := a.EmailQueue.Enqueue(ctx, emailqueue.Job{
 			Type: "2fa_active", To: email,
-			Subject: "2FA kini aktif pada akaun JomForm anda", Body: body,
+			Subject: msg.Subject, Body: msg.Body, Lang: msg.Lang,
 		}); err != nil {
 			return err
 		}
 		return nil
 	}
-	if err := a.VerifyMailer.Send(email, "2FA kini aktif pada akaun JomForm anda", body); err != nil {
+	if err := a.VerifyMailer.Send(email, msg.Subject, msg.Body, msg.Lang); err != nil {
 		return err
 	}
 	recordSESSend("2fa_active")
@@ -312,17 +305,19 @@ func (a *AuthHandlers) sendMagicLinkEmail(ctx context.Context, email, token stri
 	}
 	link := strings.TrimRight(a.BaseURL, "/") + "/magic-link?token=" + token
 	subject, body := magicLinkEmailText(link, signup, lang)
-	// Issue #199: background path — enqueue and return immediately.
+	// Issue #199: background path — enqueue and return immediately. Lang rides
+	// with the rendered text so the worker brands the HTML part in the same
+	// language (language consistency).
 	if a.EmailQueue != nil {
 		if err := a.EmailQueue.Enqueue(ctx, emailqueue.Job{
 			Type: "magic_link", To: email,
-			Subject: subject, Body: body,
+			Subject: subject, Body: body, Lang: lang,
 		}); err != nil {
 			return err
 		}
 		return nil
 	}
-	if err := a.VerifyMailer.Send(email, subject, body); err != nil {
+	if err := a.VerifyMailer.Send(email, subject, body, lang); err != nil {
 		return err
 	}
 	recordSESSend("magic_link")
@@ -338,64 +333,19 @@ func (a *AuthHandlers) sendMagicLinkEmail(ctx context.Context, email, token stri
 // email. signup=true renders the hybrid sign-up variant (account created on
 // click); otherwise the login variant. lang selects one of the 5 supported
 // locales, defaulting to English (issue #278 i18n).
+//
+// The strings live in the shared transactional dictionary
+// (api/internal/emailtext) — the ONE place that decides what a JomForm email
+// says in each language. They were duplicated here as a `switch lang` until the
+// language-consistency change; the signature is unchanged so every caller and
+// guard that knows this function keeps working.
 func magicLinkEmailText(link string, signup bool, lang string) (subject, body string) {
-	switch lang {
-	case "ms":
-		if signup {
-			return "Pautan pendaftaran JomForm anda",
-				"Log masuk tanpa kata laluan ke JomForm anda:\n\n" + link + "\n\n" +
-					"Pautan ini sah selama 15 minit dan hanya boleh digunakan sekali. Mengkliknya akan mencipta akaun anda dan log masuk.\n\n" +
-					"Jika anda tidak meminta ini, anda boleh abaikan emel ini.\n"
-		}
-		return "Pautan log masuk JomForm anda",
-			"Log masuk tanpa kata laluan ke JomForm anda:\n\n" + link + "\n\n" +
-				"Pautan ini sah selama 15 minit dan hanya boleh digunakan sekali.\n\n" +
-				"Jika anda tidak meminta ini, anda boleh abaikan emel ini — akaun anda selamat.\n"
-	case "zh":
-		if signup {
-			return "您的 JomForm 注册链接",
-				"无需密码登录 JomForm：\n\n" + link + "\n\n" +
-					"此链接有效期为 15 分钟，只能使用一次。点击它将创建您的账户并登录。\n\n" +
-					"如果您没有请求此链接，可以忽略此邮件。\n"
-		}
-		return "您的 JomForm 登录链接",
-			"无需密码登录 JomForm：\n\n" + link + "\n\n" +
-				"此链接有效期为 15 分钟，只能使用一次。\n\n" +
-				"如果您没有请求此链接，可以忽略此邮件 — 您的账户是安全的。\n"
-	case "ta":
-		if signup {
-			return "உங்கள் JomForm பதிவு இணைப்பு",
-				"கடவுச்சொல் இல்லாமல் JomForm இல் உள்நுழைய:\n\n" + link + "\n\n" +
-					"இந்த இணைப்பு 15 நிமிடங்களுக்கு செல்லுபடியாகும், ஒருமுறை மட்டுமே பயன்படுத்தலாம். கிளிக் செய்தால் உங்கள் கணக்கு உருவாக்கப்பட்டு உள்நுழையும்.\n\n" +
-					"நீங்கள் இதைக் கோரவில்லை என்றால், இந்த மின்னஞ்சலைப் புறக்கணிக்கலாம்.\n"
-		}
-		return "உங்கள் JomForm உள்நுழைவு இணைப்பு",
-			"கடவுச்சொல் இல்லாமல் JomForm இல் உள்நுழைய:\n\n" + link + "\n\n" +
-				"இந்த இணைப்பு 15 நிமிடங்களுக்கு செல்லுபடியாகும், ஒருமுறை மட்டுமே பயன்படுத்தலாம்.\n\n" +
-				"நீங்கள் இதைக் கோரவில்லை என்றால், இந்த மின்னஞ்சலைப் புறக்கணிக்கலாம் — உங்கள் கணக்கு பாதுகாப்பானது.\n"
-	case "ar":
-		if signup {
-			return "رابط تسجيل JomForm الخاص بك",
-				"تسجيل الدخول إلى JomForm بدون كلمة مرور:\n\n" + link + "\n\n" +
-					"هذا الرابط صالح لمدة 15 دقيقة ويمكن استخدامه مرة واحدة فقط. سيؤدي النقر عليه إلى إنشاء حسابك وتسجيل الدخول.\n\n" +
-					"إذا لم تطلب هذا، يمكنك تجاهل هذا البريد.\n"
-		}
-		return "رابط تسجيل الدخول إلى JomForm",
-			"تسجيل الدخول إلى JomForm بدون كلمة مرور:\n\n" + link + "\n\n" +
-				"هذا الرابط صالح لمدة 15 دقيقة ويمكن استخدامه مرة واحدة فقط.\n\n" +
-				"إذا لم تطلب هذا، يمكنك تجاهل هذا البريد — حسابك آمن.\n"
-	default: // en
-		if signup {
-			return "Your JomForm sign-up link",
-				"Sign in to JomForm without a password:\n\n" + link + "\n\n" +
-					"This link is valid for 15 minutes and can only be used once. Clicking it will create your account and sign you in.\n\n" +
-					"If you didn't request this, you can ignore this email.\n"
-		}
-		return "Your JomForm sign-in link",
-			"Sign in to JomForm without a password:\n\n" + link + "\n\n" +
-				"This link is valid for 15 minutes and can only be used once.\n\n" +
-				"If you didn't request this, you can ignore this email — your account is safe.\n"
+	kind := emailtext.MagicLinkLogin
+	if signup {
+		kind = emailtext.MagicLinkSignup
 	}
+	msg := emailtext.Text(lang, kind, map[string]string{"link": link})
+	return msg.Subject, msg.Body
 }
 
 // handleMagicLinkVerify: POST /v1/auth/magic-link/verify {token}

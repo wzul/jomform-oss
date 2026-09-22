@@ -1,19 +1,31 @@
 // Branded HTML email template (issue #339).
 //
 // Every transactional email JomForm sends (receipts, merchant notifications,
-// verification, magic link, password reset, 2FA backup, social-connect, invite)
-// is wrapped in this shared corporate layout: the JomForm logo wordmark, brand
-// colors, and a consistent header/footer. The plain-text body is preserved as
-// the multipart fallback so clients without HTML still work.
+// verification, magic link, password reset, 2FA backup, social-connect, invite,
+// feedback) is wrapped in this shared corporate layout: the JomForm logo
+// wordmark, brand colors, and a consistent header/footer. The plain-text body is
+// preserved as the multipart fallback so clients without HTML still work.
 //
 // The template is deliberately email-client-safe: inline CSS only, table-based
 // layout, no external images (the logo is a styled text wordmark), and no
 // JavaScript. It renders fine in Gmail, Outlook, Apple Mail, and mobile clients.
+//
+// # Language (language consistency)
+//
+// BrandedHTML takes the language the message was RENDERED IN and declares it on
+// the document: `<html lang="…">`, plus `dir="rtl"` for Arabic — the same rule
+// the public form renderer already applies (httpapi/menu.go). Before this the
+// wrapper emitted `lang="ms"` unconditionally, so a Chinese or English email
+// still told the client it was Malay. The footer sentences come from the shared
+// transactional dictionary too, so nothing inside the shell contradicts the
+// declared language. An unset/unknown code resolves to English, never Malay.
 package email
 
 import (
 	"html"
 	"strings"
+
+	"github.com/wzul/jomform/api/internal/emailtext"
 )
 
 // Brand colors used across the JomForm app.
@@ -26,13 +38,21 @@ const (
 // HTML layout. The body is HTML-escaped and newlines are converted to <br> so
 // any plain-text content (receipts, notifications, auth links) renders safely
 // and predictably inside the branded shell.
-func BrandedHTML(title, body string) string {
+//
+// lang is the language the message was rendered in (emailtext.NormalizeLang
+// pins it to one of the five supported locales, defaulting to English).
+func BrandedHTML(lang, title, body string) string {
+	l := emailtext.NormalizeLang(lang)
 	escaped := html.EscapeString(body)
 	escaped = strings.ReplaceAll(escaped, "\r\n", "\n")
 	escaped = strings.ReplaceAll(escaped, "\n", "<br/>")
+	dir := ""
+	if emailtext.IsRTL(l) {
+		dir = ` dir="rtl"`
+	}
 
 	return `<!DOCTYPE html>
-<html lang="ms" xmlns="http://www.w3.org/1999/xhtml">
+<html lang="` + l + `"` + dir + ` xmlns="http://www.w3.org/1999/xhtml">
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
@@ -75,8 +95,8 @@ func BrandedHTML(title, body string) string {
           <tr>
             <td align="center" style="padding:24px 0 0 0;font-size:12px;line-height:1.5;color:#6b7280;">
               <div>JomForm — Made in Malaysia.</div>
-              <div style="padding-top:4px;">Jika anda tidak meminta emel ini, anda boleh abaikan sahaja.</div>
-              <div style="padding-top:4px;">&copy; JomForm. Hak cipta terpelihara.</div>
+              <div style="padding-top:4px;">` + html.EscapeString(emailtext.Phrase(l, emailtext.PhraseDisclaimer)) + `</div>
+              <div style="padding-top:4px;">` + html.EscapeString(emailtext.Phrase(l, emailtext.PhraseCopyright)) + `</div>
             </td>
           </tr>
         </table>

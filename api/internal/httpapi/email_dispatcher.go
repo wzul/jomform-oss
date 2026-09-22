@@ -154,9 +154,9 @@ func (d *EmailDispatcher) sendReceipt(ctx context.Context, job emailqueue.Job) e
 	var err error
 	if len(job.PDFData) > 0 {
 		messageID, err = d.Pay.Receipts.Sender.SendReceiptWithAttachment(
-			job.To, job.Subject, job.Body, job.PDFFilename, job.PDFData)
+			job.To, job.Subject, job.Body, job.Lang, job.PDFFilename, job.PDFData)
 	} else {
-		messageID, err = d.Pay.Receipts.Sender.SendReceipt(job.To, job.Subject, job.Body)
+		messageID, err = d.Pay.Receipts.Sender.SendReceipt(job.To, job.Subject, job.Body, job.Lang)
 	}
 	if err != nil {
 		if d.suppressionSkip(job, err) {
@@ -184,7 +184,7 @@ func (d *EmailDispatcher) sendMerchantNotify(ctx context.Context, job emailqueue
 		slog.Warn("emailq_merchant_notify_no_sender", "to", job.To, "ref", job.SaleRef)
 		return nil
 	}
-	if err := d.Pay.Receipts.Sender.Send(job.To, job.Subject, job.Body); err != nil {
+	if err := d.Pay.Receipts.Sender.Send(job.To, job.Subject, job.Body, job.Lang); err != nil {
 		if d.suppressionSkip(job, err) {
 			return nil
 		}
@@ -211,7 +211,7 @@ func (d *EmailDispatcher) sendFormNotification(ctx context.Context, job emailque
 		slog.Warn("emailq_form_notification_no_sender", "to", job.To, "ref", job.SaleRef)
 		return nil
 	}
-	if err := d.Pay.Receipts.Sender.Send(job.To, job.Subject, job.Body); err != nil {
+	if err := d.Pay.Receipts.Sender.Send(job.To, job.Subject, job.Body, job.Lang); err != nil {
 		if d.suppressionSkip(job, err) {
 			return nil
 		}
@@ -236,7 +236,7 @@ func (d *EmailDispatcher) sendFeedbackNotify(ctx context.Context, job emailqueue
 		slog.Warn("emailq_feedback_notify_no_sender", "to", job.To)
 		return nil
 	}
-	if err := d.Pay.Receipts.Sender.Send(job.To, job.Subject, job.Body); err != nil {
+	if err := d.Pay.Receipts.Sender.Send(job.To, job.Subject, job.Body, job.Lang); err != nil {
 		if d.suppressionSkip(job, err) {
 			return nil
 		}
@@ -254,7 +254,7 @@ func (d *EmailDispatcher) sendAuth(ctx context.Context, job emailqueue.Job) erro
 		slog.Warn("emailq_auth_no_mailer", "type", job.Type, "to", job.To)
 		return nil
 	}
-	if err := d.AuthMailer.Send(job.To, job.Subject, job.Body); err != nil {
+	if err := d.AuthMailer.Send(job.To, job.Subject, job.Body, job.Lang); err != nil {
 		if d.suppressionSkip(job, err) {
 			return nil
 		}

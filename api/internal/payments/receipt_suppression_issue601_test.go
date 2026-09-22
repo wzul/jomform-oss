@@ -62,7 +62,7 @@ func TestSendReceiptLogsSuppressedSkip(t *testing.T) {
 	svc.sendReceipt(context.Background(),
 		SaleRef{RefCode: "JF-601-A", BuyerEmail: "buyer@example.com",
 			AmountSen: 1500, ItemsSummary: "1x Tee", FormURL: "https://x.test/f"},
-		"Resit pembayaran", "Badan", false,
+		"Resit pembayaran", "Badan", "en", false,
 		func(id string) { persisted = id })
 
 	logged := logs.String()
@@ -91,7 +91,7 @@ func TestSendReceiptLogsSuppressedSkipAttachmentPath(t *testing.T) {
 	svc.sendReceipt(context.Background(),
 		SaleRef{RefCode: "JF-601-PDF", BuyerEmail: "buyer@example.com",
 			AmountSen: 9900, ItemsSummary: "2x Tee", FormURL: "https://x.test/f"},
-		"Resit", "Badan", false, func(string) {})
+		"Resit", "Badan", "en", false, func(string) {})
 
 	logged := logs.String()
 	if !strings.Contains(logged, "receipt_suppressed_skipped") {
@@ -109,7 +109,7 @@ func TestNotifyMerchantLogsSuppressedSkip(t *testing.T) {
 	svc := &Service{Receipts: &Receipts{Sender: suppressedSender()}}
 
 	svc.notifyMerchant(context.Background(),
-		SaleRef{RefCode: "JF-601-B"}, "Resit pembayaran", "Badan", false,
+		SaleRef{RefCode: "JF-601-B"}, "Resit pembayaran", "Badan", "en", false,
 		"merchant@example.com")
 
 	logged := logs.String()
@@ -152,7 +152,7 @@ func TestSendReceiptNonSuppressionErrorStillLoggedAsFailure(t *testing.T) {
 
 	svc.sendReceipt(context.Background(),
 		SaleRef{RefCode: "JF-601-D", BuyerEmail: "buyer@example.com"},
-		"Resit", "Badan", false, func(string) {})
+		"Resit", "Badan", "en", false, func(string) {})
 
 	logged := logs.String()
 	if !strings.Contains(logged, "receipt_send_failed") {

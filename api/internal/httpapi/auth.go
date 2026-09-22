@@ -649,7 +649,9 @@ func (a *AuthHandlers) handle2FAEnable(w http.ResponseWriter, r *http.Request) {
 	}
 	// Issue #72: confirm 2FA is now active and explain the email-code fallback
 	// trade-off (a backup code is a recovery path that bypasses the authenticator).
-	if err := a.send2FAActiveEmail(r.Context(), user.Email); err != nil {
+	// Language consistency: the recipient is the signed-in platform user, so this
+	// follows the PROFILE axis (his own users.lang).
+	if err := a.send2FAActiveEmail(r.Context(), user.Email, user.Lang); err != nil {
 		slog.Warn("2fa_active_email_failed", "err", err, "user", user.ID)
 	}
 	// Issue #92: audit 2FA enable.

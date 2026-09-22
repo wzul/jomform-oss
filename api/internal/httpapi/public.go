@@ -703,9 +703,15 @@ func (h *PublicHandlers) fireResponseNotifications(ctx context.Context, form *db
 		}
 	}
 	workspaceID := ""
+	wsLang := ""
 	if h.Workspaces != nil {
 		if sid, serr := h.Workspaces.WorkspaceIDByAccount(ctx, form.AccountID); serr == nil {
 			workspaceID = sid
+		}
+		if workspaceID != "" {
+			if st, werr := h.Workspaces.Settings(ctx, workspaceID); werr == nil && st != nil {
+				wsLang = st.WorkspaceLang()
+			}
 		}
 	}
 	formURL := ""
@@ -732,6 +738,12 @@ func (h *PublicHandlers) fireResponseNotifications(ctx context.Context, form *db
 		// carried that block id.
 		BuyerName: responderName(strFields),
 		Fields:    strFields,
+		// Language consistency: the BUYER-facing axis — the form's own
+		// config.lang (which the page the responder just used was rendered in)
+		// then the workspace default. This is the form row itself, so no extra
+		// query is needed.
+		FormLang:      dbstore.FormLangOf(form),
+		WorkspaceLang: wsLang,
 	}, dbstore.NotifyEventResponseSubmitted)
 }
 

@@ -14,6 +14,7 @@ import (
 	"github.com/wzul/jomform/api/internal/auth"
 	emailpkg "github.com/wzul/jomform/api/internal/email"
 	"github.com/wzul/jomform/api/internal/emailqueue"
+	"github.com/wzul/jomform/api/internal/emailtext"
 	"github.com/wzul/jomform/api/internal/httpapi/middleware"
 )
 
@@ -56,25 +57,25 @@ func (a *AuthHandlers) sendVerifyEmail(ctx context.Context, userID, email, lang 
 		return err
 	}
 	link := strings.TrimRight(a.BaseURL, "/") + "/v1/auth/verify?token=" + token
-	if lang != "" {
-		link += "&lang=" + url.QueryEscape(lang)
-	}
-	body := "Sila sahkan alamat emel anda untuk mengaktifkan akaun JomForm anda.\n\n" +
-		"Tap pautan berikut (sah selama 24 jam):\n\n" +
-		link + "\n\n" +
-		"Jika anda tidak mendaftar akaun JomForm, anda boleh abaikan emel ini.\n"
+	// Issue #206: the lang rides on the link as ?lang= so the confirmation page
+	// (writeVerifyPage) renders in the language the EMAIL was written in. It is
+	// the resolved code, not the raw argument, so the page and the message can
+	// never disagree about which language the user was addressed in.
+	l := emailtext.NormalizeLang(lang)
+	link += "&lang=" + url.QueryEscape(l)
+	msg := emailtext.Text(l, emailtext.VerifyEmail, map[string]string{"link": link})
 	// Issue #199: background path — enqueue and return immediately.
 	if a.EmailQueue != nil {
 		if err := a.EmailQueue.Enqueue(ctx, emailqueue.Job{
 			Type: "verify", To: email,
-			Subject: "Sahkan emel JomForm anda", Body: body,
+			Subject: msg.Subject, Body: msg.Body, Lang: msg.Lang,
 			AccountID: userID,
 		}); err != nil {
 			return err
 		}
 		return nil
 	}
-	if err := a.VerifyMailer.Send(email, "Sahkan emel JomForm anda", body); err != nil {
+	if err := a.VerifyMailer.Send(email, msg.Subject, msg.Body, msg.Lang); err != nil {
 		return err
 	}
 	recordSESSend("verify")

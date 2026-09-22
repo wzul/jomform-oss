@@ -137,6 +137,10 @@ type FormGetter interface {
 	// FormEmailSettings reads a form's per-form notification email override
 	// (issue #177). Empty subject/body = fall back to workspace defaults.
 	FormEmailSettings(ctx context.Context, formID string) (*dbstore.FormEmailSettings, error)
+	// FormLang reads a form's buyer-facing language override (`config.lang`,
+	// issue #57). "" = no usable override, fall through to the workspace
+	// default. Used to resolve the language a receipt is written in.
+	FormLang(ctx context.Context, formID string) (string, error)
 }
 
 // FormNotificationLister reads a form's enabled notification rules for one

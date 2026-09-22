@@ -86,7 +86,7 @@ func TestToCHIPProductsPricesInSen(t *testing.T) {
 // RM with two decimals from integer SEN (no float drift).
 func TestReceiptAmountFormatting(t *testing.T) {
 	ref := SaleRef{RefCode: "JF-ABC123", AmountSen: 12345, ItemsSummary: "1× Tee", FormURL: "https://acme.jomform.com/tee"}
-	body := renderReceiptBody(ref)
+	body := renderReceiptBody(ref, "en")
 	if !strings.Contains(body, "RM 123.45") {
 		t.Errorf("body missing formatted amount: %q", body)
 	}
@@ -145,7 +145,7 @@ func TestChipPurchaseRequestTopLevelRedirects(t *testing.T) {
 // hardcoded output.
 func TestRenderReceiptPlaceholders(t *testing.T) {
 	ref := SaleRef{RefCode: "JF-ABC123", BuyerName: "Ali", AmountSen: 12345, ItemsSummary: "1× Tee", FormURL: "https://acme.jomform.com/tee"}
-	subj, body := renderReceipt(ref, "Resit {{ref_code}}", "Hai {{buyer_name}}, bayar {{amount}} untuk {{items}} — {{form_url}} pada {{date}}", false)
+	subj, body := renderReceipt(ref, "Resit {{ref_code}}", "Hai {{buyer_name}}, bayar {{amount}} untuk {{items}} — {{form_url}} pada {{date}}", "en", false)
 	if subj != "Resit JF-ABC123" {
 		t.Errorf("subject = %q, want placeholder substituted", subj)
 	}
@@ -161,7 +161,7 @@ func TestRenderReceiptPlaceholders(t *testing.T) {
 // auto-escaping prevents XSS via a merchant-supplied HTML body.
 func TestRenderReceiptHTMLAutoEscapes(t *testing.T) {
 	ref := SaleRef{RefCode: "JF-X", BuyerName: "<script>alert(1)</script>", AmountSen: 100, ItemsSummary: "x", FormURL: "https://acme.jomform.com/x"}
-	_, body := renderReceipt(ref, "s", "<p>Hi {{buyer_name}}</p>", true)
+	_, body := renderReceipt(ref, "s", "<p>Hi {{buyer_name}}</p>", "en", true)
 	if strings.Contains(body, "<script>alert(1)</script>") {
 		t.Errorf("HTML body not escaped — XSS: %q", body)
 	}
@@ -174,7 +174,7 @@ func TestRenderReceiptHTMLAutoEscapes(t *testing.T) {
 // merchant template never blocks a receipt — it falls back to the raw string.
 func TestRenderReceiptBadTemplateFallsBack(t *testing.T) {
 	ref := SaleRef{RefCode: "JF-X", AmountSen: 100, ItemsSummary: "x", FormURL: "https://acme.jomform.com/x"}
-	_, body := renderReceipt(ref, "s", "{{unclosed", false)
+	_, body := renderReceipt(ref, "s", "{{unclosed", "en", false)
 	if body != "{{unclosed" {
 		t.Errorf("bad template should fall back to raw string, got %q", body)
 	}

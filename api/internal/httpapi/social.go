@@ -31,6 +31,7 @@ import (
 	"github.com/wzul/jomform/api/internal/dbstore"
 	emailpkg "github.com/wzul/jomform/api/internal/email"
 	"github.com/wzul/jomform/api/internal/emailqueue"
+	"github.com/wzul/jomform/api/internal/emailtext"
 	"github.com/wzul/jomform/api/internal/httpapi/middleware"
 )
 
@@ -220,7 +221,7 @@ func (a *AuthHandlers) socialCallback(w http.ResponseWriter, r *http.Request) {
 		// account may not log in").
 		if u, uerr := a.Users.ByID(r.Context(), userID); uerr == nil && u != nil && !u.Verified {
 			slog.Info("social_login_unverified_account", "provider", provider, "email", obfuscateEmail(up.Email))
-			if err := a.sendVerifyEmail(r.Context(), userID, up.Email, ""); err != nil {
+			if err := a.sendVerifyEmail(r.Context(), userID, up.Email, u.Lang); err != nil {
 				slog.Warn("social_login_verify_send_failed", "err", err, "email", obfuscateEmail(up.Email))
 			}
 			http.Redirect(w, r, "/login?verify=1", http.StatusFound)
@@ -272,7 +273,7 @@ func (a *AuthHandlers) socialCallback(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			link := strings.TrimRight(a.BaseURL, "/") + "/connect?token=" + url.QueryEscape(ct)
-			if serr := a.sendConnectEmail(r.Context(), up.Email, link); serr != nil {
+			if serr := a.sendConnectEmail(r.Context(), up.Email, link, existing.Lang); serr != nil {
 				slog.Warn("social_connect_email_send_failed", "err", serr, "email", obfuscateEmail(up.Email))
 			}
 			// Never place the capability token directly in the URL — only the
@@ -308,6 +309,8 @@ func (a *AuthHandlers) socialCallback(w http.ResponseWriter, r *http.Request) {
 	// account may not log in") instead of starting a session.
 	if !up.EmailVerified {
 		slog.Info("social_signup_unverified", "provider", provider, "email", obfuscateEmail(up.Email))
+		// The row was created a moment ago, so users.lang is unset; "" resolves
+		// to English, which is the documented default for a never-set language.
 		if err := a.sendVerifyEmail(r.Context(), newID, up.Email, ""); err != nil {
 			slog.Warn("social_signup_verify_send_failed", "err", err, "email", obfuscateEmail(up.Email))
 		}
@@ -482,8 +485,15 @@ func (a *AuthHandlers) connectResend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	link := strings.TrimRight(a.BaseURL, "/") + "/connect?token=" + url.QueryEscape(ct)
+	// Language consistency: the connect email is addressed to the claimed
+	// address's own account, so it follows the PROFILE axis (users.lang), never
+	// the form/workspace one. A missing row contributes "" → English.
+	lang := ""
+	if u, uerr := a.Users.ByEmail(r.Context(), req.Email); uerr == nil && u != nil {
+		lang = u.Lang
+	}
 	// The capability token only travels by email — never echoed in the response.
-	if err := a.sendConnectEmail(r.Context(), req.Email, link); err != nil {
+	if err := a.sendConnectEmail(r.Context(), req.Email, link, lang); err != nil {
 		slog.Warn("social_connect_resend_email_failed", "err", err, "email", obfuscateEmail(req.Email))
 	}
 }
@@ -491,7 +501,10 @@ func (a *AuthHandlers) connectResend(w http.ResponseWriter, r *http.Request) {
 // sendConnectEmail delivers the "link your account" verification link (issue
 // #302). Issue #199: enqueued when a queue is wired; otherwise sent
 // synchronously via VerifyMailer.
-func (a *AuthHandlers) sendConnectEmail(ctx context.Context, email, link string) error {
+//
+// lang is the claimed address's own platform language (users.lang) — the
+// connect email is addressed to a platform user, so it follows the PROFILE axis.
+func (a *AuthHandlers) sendConnectEmail(ctx context.Context, email, link, lang string) error {
 	if mailerUnavailable(a.VerifyMailer) {
 		return errors.New("connect mailer not configured")
 	}
@@ -510,20 +523,16 @@ func (a *AuthHandlers) sendConnectEmail(ctx context.Context, email, link string)
 			return nil
 		}
 	}
-	subject := "Pautan penghubung akaun JomForm anda"
-	body := "Sila sahkan alamat emel anda untuk menghubungkan akaun log masuk sosial anda ke akaun JomForm anda.\n\n" +
-		"Tap pautan berikut (sah selama 24 jam):\n\n" +
-		link + "\n\n" +
-		"Jika anda tidak meminta ini, anda boleh abaikan emel ini.\n"
+	msg := emailtext.Text(lang, emailtext.SocialConnect, map[string]string{"link": link})
 	if a.EmailQueue != nil {
 		if err := a.EmailQueue.Enqueue(ctx, emailqueue.Job{
-			Type: "connect", To: email, Subject: subject, Body: body,
+			Type: "connect", To: email, Subject: msg.Subject, Body: msg.Body, Lang: msg.Lang,
 		}); err != nil {
 			return err
 		}
 		return nil
 	}
-	if err := a.VerifyMailer.Send(email, subject, body); err != nil {
+	if err := a.VerifyMailer.Send(email, msg.Subject, msg.Body, msg.Lang); err != nil {
 		return err
 	}
 	recordSESSend("connect")

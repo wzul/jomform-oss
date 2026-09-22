@@ -61,7 +61,11 @@ func TestE2EResponseNotificationSendsRealEmail(t *testing.T) {
 		From:     os.Getenv("JOMFORM_E2E_SES_FROM"),
 		Region:   "ap-southeast-1",
 	})
-	msgID, err := sender.SendReceipt(to, subj, rendered)
+	// The notification is a response-mode default, so its language is the
+	// buyer/form axis. This E2E proof sends the ENGLISH rendering — the
+	// documented default — so the operator sees a language they can read.
+	lang := "en"
+	msgID, err := sender.SendReceipt(to, subj, rendered, lang)
 	if err != nil {
 		t.Fatalf("REAL SES SEND FAILED: %v", err)
 	}

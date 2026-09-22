@@ -9,9 +9,11 @@
 package httpapi
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/emailtext"
 )
 
 // formEmailSettingsView is the GET response: the raw override plus the
@@ -46,7 +48,8 @@ func (h *RESTHandlers) getFormEmailSettings(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, formEmailSettingsView{
 		FormEmailSettings: st,
 		Workspace:         ws,
-		Effective:         dbstore.ResolveFormEmailSettings(st, ws),
+		Effective: dbstore.ResolveFormEmailSettings(st, ws,
+			dbstore.EmailLang(dbstore.FormLangOf(form), h.workspaceLang(r.Context(), form))),
 	})
 }
 
@@ -60,11 +63,32 @@ func (h *RESTHandlers) formWorkspaceEmailSettings(r *http.Request, form *dbstore
 	if err != nil || wsID == "" {
 		return nil
 	}
-	st, err := h.Workspaces.EmailSettings(r.Context(), wsID)
-	if err != nil {
+	st, serr := h.Workspaces.EmailSettings(r.Context(), wsID)
+	if serr != nil {
 		return nil
 	}
 	return st
+}
+
+// workspaceLang resolves the workspace's buyer-facing default language for a
+// form, so the effective email settings render an inherited system template in
+// the right language. It reads the workspace settings row (the same row
+// workspaceEmailSettings resolves for the email toggles) and goes through
+// WorkspaceLang so a legacy row that predates the language column still answers
+// "en" instead of "".
+func (h *RESTHandlers) workspaceLang(ctx context.Context, form *dbstore.Form) string {
+	if h.Workspaces == nil || form == nil {
+		return emailtext.En
+	}
+	wsID, err := h.Workspaces.WorkspaceIDByAccount(ctx, form.AccountID)
+	if err != nil || wsID == "" {
+		return emailtext.En
+	}
+	st, serr := h.Workspaces.Settings(ctx, wsID)
+	if serr != nil || st == nil {
+		return emailtext.En
+	}
+	return st.WorkspaceLang()
 }
 
 // saveFormEmailSettings: PUT /v1/rest/forms/{id}/email-settings

@@ -86,7 +86,7 @@ func TestSendEmail2FACodeFailsOpenOnSuppressionStoreError(t *testing.T) {
 		Suppressions: unreachableSuppressionStore(t),
 	}
 
-	if err := h.sendEmail2FACode(context.Background(), "reg@example.com", "123456"); err != nil {
+	if err := h.sendEmail2FACode(context.Background(), "reg@example.com", "123456", "en"); err != nil {
 		t.Fatalf("sendEmail2FACode err = %v, want nil (fail open)", err)
 	}
 	if !mailer.wasCalled() {
@@ -129,7 +129,7 @@ func TestSendPasswordResetFailsOpenOnSuppressionStoreError(t *testing.T) {
 		Suppressions: unreachableSuppressionStore(t),
 	}
 
-	if err := h.sendPasswordResetEmail(context.Background(), "reg@example.com", "tok"); err != nil {
+	if err := h.sendPasswordResetEmail(context.Background(), "reg@example.com", "tok", "en"); err != nil {
 		t.Fatalf("sendPasswordResetEmail err = %v, want nil (fail open)", err)
 	}
 	if !mailer.wasCalled() {
@@ -151,7 +151,7 @@ func TestSendConnectEmailFailsOpenOnSuppressionStoreError(t *testing.T) {
 		Suppressions: unreachableSuppressionStore(t),
 	}
 
-	if err := h.sendConnectEmail(context.Background(), "ok@example.com", "http://x/y"); err != nil {
+	if err := h.sendConnectEmail(context.Background(), "ok@example.com", "http://x/y", "en"); err != nil {
 		t.Fatalf("sendConnectEmail err = %v, want nil (fail open)", err)
 	}
 	if !mailer.wasCalled() {
@@ -181,7 +181,7 @@ func TestSendConnectEmailSuppressedIsNotAnError(t *testing.T) {
 		VerifyMailer: mailer,
 		Suppressions: supps,
 	}
-	if err := h.sendConnectEmail(ctx, addr, "http://x/y"); err != nil {
+	if err := h.sendConnectEmail(ctx, addr, "http://x/y", "en"); err != nil {
 		t.Fatalf("sendConnectEmail err = %v, want nil for a suppressed address", err)
 	}
 	if mailer.wasCalled() {
@@ -215,7 +215,7 @@ func TestSendPasswordResetSuppressedIsASilentSkip(t *testing.T) {
 		VerifyMailer: mailer,
 		Suppressions: supps,
 	}
-	if err := h.sendPasswordResetEmail(ctx, addr, "tok"); err != nil {
+	if err := h.sendPasswordResetEmail(ctx, addr, "tok", "en"); err != nil {
 		t.Fatalf("sendPasswordResetEmail err = %v, want nil for a suppressed address", err)
 	}
 	if mailer.wasCalled() {

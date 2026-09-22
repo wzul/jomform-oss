@@ -30,7 +30,7 @@ type suppressedMailer struct {
 	calls int
 }
 
-func (m *suppressedMailer) Send(to, subject, body string) error {
+func (m *suppressedMailer) Send(to, subject, body, lang string) error {
 	m.calls++
 	return email.ErrSuppressed
 }
@@ -98,7 +98,7 @@ func TestEmailDispatcherNonSuppressionErrorStillRetries(t *testing.T) {
 // failingMailer always fails with a non-suppression error.
 type failingMailer struct{ err error }
 
-func (m failingMailer) Send(to, subject, body string) error { return m.err }
+func (m failingMailer) Send(to, subject, body, lang string) error { return m.err }
 
 // TestEmailDispatcherSuppressedReceiptJobReturnsNil: the receipt path (the one
 // carrying a sale_ref and a PDF) behaves the same way.

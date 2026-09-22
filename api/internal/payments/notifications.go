@@ -31,6 +31,7 @@ import (
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/email"
 	"github.com/wzul/jomform/api/internal/emailqueue"
+	"github.com/wzul/jomform/api/internal/emailtext"
 )
 
 // NotificationRef carries the placeholder context + recipient resolution
@@ -55,6 +56,21 @@ type NotificationRef struct {
 	// (e.g. "8"). Exposed as the {{table_number}} placeholder so the merchant
 	// can show it in the sale.paid notification.
 	TableNumber string
+	// FormLang / WorkspaceLang are the BUYER-facing language inputs (language
+	// consistency) — the form's `config.lang` override and the workspace's
+	// `default_lang` — resolved to the notification's language in that order,
+	// then English. Never the merchant's personal users.lang: a notification is
+	// part of a buyer's submission flow, and the merchant reads it in the
+	// language his customers are served in.
+	FormLang      string
+	WorkspaceLang string
+}
+
+// Lang resolves the language this notification is written in, on the buyer
+// axis. Exported shape kept trivial so a caller cannot accidentally pass the
+// merchant's profile language instead.
+func (r NotificationRef) Lang() string {
+	return dbstore.EmailLang(r.FormLang, r.WorkspaceLang)
 }
 
 // FireFormNotifications evaluates a form's notification rules for one event
@@ -85,10 +101,23 @@ func (s *Service) sendNotification(ctx context.Context, ref NotificationRef, n *
 		slog.Warn("notify_no_recipient", "form", ref.FormID, "event", n.Event, "id", n.ID)
 		return
 	}
-	subj, body := renderNotification(n.Subject, n.Body, ref)
+	lang := ref.Lang()
+	// A rule still carrying the SYSTEM default template is not merchant copy: it
+	// must follow the buyer-facing language, exactly as the receipt does. The
+	// default is stored per row by EnsureDefault (and by the 000062 repair), so
+	// without this a never-edited rule mailed Malay regardless of the form's
+	// language. A merchant-authored subject/body is passed through untouched.
+	subject, body := n.Subject, n.Body
+	if kind, ok := systemDefaultKind(n.Event); ok &&
+		emailtext.IsSystemDefault(kind, subject, body) {
+		def := emailtext.Text(lang, kind, nil)
+		subject, body = def.Subject, def.Body
+	}
+	subj, rendered := renderNotification(subject, body, ref)
 	if s.EmailQueue != nil {
 		if err := s.EmailQueue.Enqueue(ctx, emailqueue.Job{
-			Type: "form_notification", To: to, Subject: subj, Body: body,
+			Type: "form_notification", To: to, Subject: subj, Body: rendered,
+			Lang:      lang,
 			AccountID: ref.AccountID, SaleRef: ref.RefCode,
 		}); err != nil {
 			slog.Warn("notify_enqueue_failed", "form", ref.FormID, "id", n.ID, "err", err)
@@ -97,7 +126,7 @@ func (s *Service) sendNotification(ctx context.Context, ref NotificationRef, n *
 	}
 	// Synchronous path (bare-mode tests / no queue wired).
 	if s.Receipts != nil && s.Receipts.Sender != nil {
-		if err := s.Receipts.Sender.Send(to, subj, body); err != nil {
+		if err := s.Receipts.Sender.Send(to, subj, rendered, lang); err != nil {
 			// A suppression hit is a correct skip, not a failure: the pre-send
 			// guard refused the send before SES, and retrying is pointless.
 			if errors.Is(err, email.ErrSuppressed) {
@@ -107,6 +136,21 @@ func (s *Service) sendNotification(ctx context.Context, ref NotificationRef, n *
 			slog.Warn("notify_send_failed", "form", ref.FormID, "id", n.ID, "err", err)
 		}
 	}
+}
+
+// systemDefaultKind maps a notification event onto the dictionary kind whose
+// BUILT-IN template the system installs for it, so a rule that still holds that
+// template can be re-rendered in the buyer's language. An event with no default
+// (sale.failed, subscription.charged) has no kind: the system never wrote a
+// template for it, so whatever the row holds is the merchant's own.
+func systemDefaultKind(event string) (emailtext.Kind, bool) {
+	switch event {
+	case dbstore.NotifyEventSalePaid:
+		return emailtext.NotificationSale, true
+	case dbstore.NotifyEventResponseSubmitted:
+		return emailtext.NotificationResponse, true
+	}
+	return "", false
 }
 
 // resolveNotificationRecipient resolves a rule's to_email: a literal address,
@@ -188,9 +232,15 @@ func (s *Service) fireSaleNotifications(ctx context.Context, sale *dbstore.Sale,
 		return
 	}
 	workspaceID := ""
+	wsLang := ""
 	if s.Workspaces != nil {
 		if sid, serr := s.Workspaces.WorkspaceIDByAccount(ctx, sale.AccountID); serr == nil {
 			workspaceID = sid
+		}
+		if workspaceID != "" {
+			if st, werr := s.Workspaces.Settings(ctx, workspaceID); werr == nil && st != nil {
+				wsLang = st.WorkspaceLang()
+			}
 		}
 	}
 	formURL := s.formPublicURL(ctx, sale.AccountID, sale.FormID)
@@ -209,6 +259,10 @@ func (s *Service) fireSaleNotifications(ctx context.Context, sale *dbstore.Sale,
 		Fields:       saleFields(sale),
 		// Issue #438: QR ordering flow — the table number the QR stand encoded.
 		TableNumber: sale.TableNumber,
+		// Language consistency: the buyer-facing axis (form override then
+		// workspace default). Never the merchant's personal users.lang.
+		FormLang:      s.formLangForSale(ctx, sale),
+		WorkspaceLang: wsLang,
 	}, event)
 }
 

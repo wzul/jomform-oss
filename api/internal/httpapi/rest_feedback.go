@@ -34,6 +34,7 @@ import (
 
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/emailqueue"
+	"github.com/wzul/jomform/api/internal/emailtext"
 	"github.com/wzul/jomform/api/internal/feedbacksvc"
 )
 
@@ -507,6 +508,12 @@ func (h *RESTHandlers) recordFeedbackEvent(r *http.Request, event, threadID stri
 // NotifyFeedbackAdmins is the exported form: the MCP submit_feedback tool and
 // the in-app chat file through the same feedbacksvc, whose Notify hook is this
 // function, so a thread filed from any surface notifies identically.
+//
+// Language consistency: a notification to the PLATFORM TEAM about a thread is
+// written in the FILER's language — the filer's own words are being quoted back
+// (the status, the subject, the excerpt), so re-labelling them in another
+// language would produce a mixed-language email. The filer's language is
+// resolved from the thread's user (users.lang, the PROFILE axis).
 func (h *RESTHandlers) NotifyFeedbackAdmins(th *dbstore.FeedbackThread, body string) {
 	h.notifyFeedbackAdmins(th, body)
 }
@@ -515,21 +522,26 @@ func (h *RESTHandlers) notifyFeedbackAdmins(th *dbstore.FeedbackThread, body str
 	if th == nil || len(h.SuperAdminEmails) == 0 {
 		return
 	}
-	subj := "Maklum balas baharu diterima"
-	text := "Maklum balas baharu diterima.\n\n" +
-		"Dari   : " + th.UserEmail + "\n" +
-		"Status : " + th.Status + "\n" +
-		"Tajuk  : " + feedbackSubjectOrExcerpt(th) + "\n\n" +
-		feedbackExcerpt(body) + "\n\n" +
-		"Balas di " + strings.TrimRight(h.BaseURL, "/") + "/admin/feedback\n"
+	lang := h.feedbackLang(th.UserID)
+	text := emailtext.Text(lang, emailtext.FeedbackNew, map[string]string{
+		"from":    th.UserEmail,
+		"status":  th.Status,
+		"subject": feedbackSubjectOrExcerpt(th, lang),
+		"excerpt": feedbackExcerpt(body),
+		"link":    strings.TrimRight(h.BaseURL, "/") + "/admin/feedback",
+	})
 	for _, to := range h.SuperAdminEmails {
-		h.sendFeedbackMail(to, subj, text)
+		h.sendFeedbackMail(to, text.Subject, text.Body, text.Lang)
 	}
 }
 
 // notifyFeedbackFiler tells the filer an admin replied. The address is read
 // live from `users` by the user id on the thread, so a filer who changed their
 // address is notified at the new one.
+//
+// Language consistency: the filer is a platform user, so this follows the
+// PROFILE axis (his own users.lang) — same resolution as the new-thread
+// notification above, read in the same lookup.
 func (h *RESTHandlers) notifyFeedbackFiler(th *dbstore.FeedbackThread, body string) {
 	if th == nil || h.Users == nil {
 		return
@@ -538,19 +550,35 @@ func (h *RESTHandlers) notifyFeedbackFiler(th *dbstore.FeedbackThread, body stri
 	if err != nil || u == nil || u.Email == "" {
 		return
 	}
-	subj := "Balasan baharu pada maklum balas anda"
-	text := "Kami telah membalas maklum balas anda.\n\n" +
-		"Tajuk  : " + feedbackSubjectOrExcerpt(th) + "\n\n" +
-		feedbackExcerpt(body) + "\n\n" +
-		"Lihat thread di " + strings.TrimRight(h.BaseURL, "/") + "/feedback\n"
-	h.sendFeedbackMail(u.Email, subj, text)
+	lang := u.Lang
+	text := emailtext.Text(lang, emailtext.FeedbackReply, map[string]string{
+		"subject": feedbackSubjectOrExcerpt(th, lang),
+		"excerpt": feedbackExcerpt(body),
+		"link":    strings.TrimRight(h.BaseURL, "/") + "/feedback",
+	})
+	h.sendFeedbackMail(u.Email, text.Subject, text.Body, text.Lang)
+}
+
+// feedbackLang resolves a feedback filer's platform language from his user row
+// (the PROFILE axis). A missing/unreadable row, or an unset language, resolves
+// to English. Never fails the notification: a language lookup is not worth
+// dropping an email over.
+func (h *RESTHandlers) feedbackLang(userID string) string {
+	if h.Users == nil || userID == "" {
+		return emailtext.En
+	}
+	u, err := h.Users.ByID(context.Background(), userID)
+	if err != nil || u == nil {
+		return emailtext.En
+	}
+	return emailtext.NormalizeLang(u.Lang)
 }
 
 // sendFeedbackMail delivers one feedback email through the existing queue, with
 // the synchronous mailer as the fallback when no queue is wired (bare-mode
 // tests). Both paths are the ones every other notification uses — this adds no
 // second channel.
-func (h *RESTHandlers) sendFeedbackMail(to, subject, body string) {
+func (h *RESTHandlers) sendFeedbackMail(to, subject, body, lang string) {
 	if to == "" {
 		return
 	}
@@ -559,22 +587,24 @@ func (h *RESTHandlers) sendFeedbackMail(to, subject, body string) {
 		// notification); the thread itself is safely stored.
 		_ = h.EmailQueue.Enqueue(context.Background(), emailqueue.Job{
 			Type: feedbackNotifyJobType, To: to, Subject: subject, Body: body,
+			Lang: lang,
 		})
 		return
 	}
 	if !mailerUnavailable(h.Mailer) {
-		_ = h.Mailer.Send(to, subject, body)
+		_ = h.Mailer.Send(to, subject, body, lang)
 	}
 }
 
 // feedbackSubjectOrExcerpt names a thread for an email line: its subject, or the
 // first message's opening characters when the filer left the subject empty (the
-// UI makes it optional, so it is often empty).
-func feedbackSubjectOrExcerpt(th *dbstore.FeedbackThread) string {
+// UI makes it optional, so it is often empty). The placeholder is rendered in
+// lang so it does not put an English "(no subject)" in a Malay email.
+func feedbackSubjectOrExcerpt(th *dbstore.FeedbackThread, lang string) string {
 	if strings.TrimSpace(th.Subject) != "" {
 		return th.Subject
 	}
-	return "(tanpa tajuk)"
+	return emailtext.Phrase(lang, emailtext.PhraseNoSubject)
 }
 
 // feedbackExcerpt bounds the message text quoted in a notification, so a long

@@ -14,6 +14,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/emailtext"
 )
 
 // getFormEmailSettingsIn is the input for get_form_email_settings.
@@ -80,7 +81,11 @@ func (s *Server) getFormEmailSettings(
 		return nil, getFormEmailSettingsOut{}, err
 	}
 	ws := s.workspaceEmailSettings(ctx, form.AccountID)
-	eff := dbstore.ResolveFormEmailSettings(st, ws)
+	// Language consistency: the effective view is what a buyer receives, so it
+	// renders an inherited system template in the buyer's language — the same
+	// chain the sender uses (form.config.lang ?? workspace default ?? en).
+	eff := dbstore.ResolveFormEmailSettings(st, ws,
+		dbstore.EmailLang(dbstore.FormLangOf(form), s.workspaceLang(ctx, form.AccountID)))
 	out := getFormEmailSettingsOut{
 		formEmailSettingsOut: formEmailSettingsOut{
 			FormID: st.FormID, ReceiptSubject: st.ReceiptSubject, ReceiptBody: st.ReceiptBody,
@@ -115,6 +120,26 @@ func (s *Server) workspaceEmailSettings(ctx context.Context, accountID string) *
 		return nil
 	}
 	return st
+}
+
+// workspaceLang resolves the workspace's buyer-facing default language for an
+// account, so an inherited system template is rendered in the language a buyer
+// actually gets. Reads the same settings row workspaceEmailSettings reads and
+// goes through WorkspaceLang, so a legacy row that predates the language column
+// answers "en" rather than "".
+func (s *Server) workspaceLang(ctx context.Context, accountID string) string {
+	if s.deps.Workspaces == nil || accountID == "" {
+		return emailtext.En
+	}
+	wsID, err := s.deps.Workspaces.WorkspaceIDByAccount(ctx, accountID)
+	if err != nil || wsID == "" {
+		return emailtext.En
+	}
+	st, serr := s.deps.Workspaces.Settings(ctx, wsID)
+	if serr != nil || st == nil {
+		return emailtext.En
+	}
+	return st.WorkspaceLang()
 }
 
 // setFormEmailSettingsIn updates a form's email settings. Omitted fields keep

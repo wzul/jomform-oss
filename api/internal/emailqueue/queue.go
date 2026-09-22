@@ -83,6 +83,12 @@ type Job struct {
 	// persist the SES MessageID (issue #106) for open/click correlation.
 	SaleRef string `json:"sale_ref,omitempty"`
 	SaleID  string `json:"sale_id,omitempty"`
+	// Lang is the language Subject/Body were RENDERED IN (language
+	// consistency). The sender declares it on the branded HTML part, so a
+	// queued email declares the same language as its content instead of the
+	// Malay it used to claim unconditionally. Empty means "never resolved" and
+	// the sender falls back to English.
+	Lang string `json:"lang,omitempty"`
 	// PDFFilename / PDFData carry an optional receipt PDF attachment.
 	PDFFilename string `json:"pdf_filename,omitempty"`
 	PDFData     []byte `json:"pdf_data,omitempty"`

@@ -9,6 +9,8 @@ package dbstore
 import (
 	"strings"
 	"testing"
+
+	"github.com/wzul/jomform/api/internal/emailtext"
 )
 
 // TestResolveFormEmailSettingsInheritsWorkspace asserts that a form with no
@@ -20,7 +22,7 @@ func TestResolveFormEmailSettingsInheritsWorkspace(t *testing.T) {
 		MerchantNotifyEmail: "store@shop.my", HTML: true,
 	}
 	form := &FormEmailSettings{FormID: "f1"}
-	got := ResolveFormEmailSettings(form, ws)
+	got := ResolveFormEmailSettings(form, ws, emailtext.En)
 
 	if got.ReceiptSubject != "WS subject" || got.ReceiptBody != "WS body" {
 		t.Errorf("subject/body = %q/%q, want workspace values", got.ReceiptSubject, got.ReceiptBody)
@@ -51,7 +53,7 @@ func TestResolveFormEmailSettingsPerFormWins(t *testing.T) {
 		ReceiptSubject: "Form subject",
 		ReceiptBody:    "Form body",
 	}
-	got := ResolveFormEmailSettings(form, ws)
+	got := ResolveFormEmailSettings(form, ws, emailtext.En)
 
 	if got.ReceiptSubject != "Form subject" || got.ReceiptBody != "Form body" {
 		t.Errorf("subject/body = %q/%q, want per-form values", got.ReceiptSubject, got.ReceiptBody)
@@ -74,7 +76,7 @@ func TestResolveFormEmailSettingsToggleOnlyOverride(t *testing.T) {
 		ReceiptEnabledOverride: boolPtr(false), // turn buyer receipts OFF for this form
 		NotifyMerchantOverride: boolPtr(true),  // but notify the merchant
 	}
-	got := ResolveFormEmailSettings(form, ws)
+	got := ResolveFormEmailSettings(form, ws, emailtext.En)
 
 	if got.ReceiptEnabled != false {
 		t.Errorf("receipt_enabled = %v, want per-form override false", got.ReceiptEnabled)
@@ -91,9 +93,18 @@ func TestResolveFormEmailSettingsToggleOnlyOverride(t *testing.T) {
 // TestResolveFormEmailSettingsDefaults asserts the built-in defaults apply when
 // neither a form override nor a workspace setting is present.
 func TestResolveFormEmailSettingsDefaults(t *testing.T) {
-	got := ResolveFormEmailSettings(nil, nil)
+	got := ResolveFormEmailSettings(nil, nil, emailtext.En)
 	if got.ReceiptSubject == "" || got.ReceiptBody == "" {
 		t.Errorf("expected built-in defaults, got subject=%q body=%q", got.ReceiptSubject, got.ReceiptBody)
+	}
+	// An unset/unknown language never silently resolves to the Malay literals
+	// the database defaults carry: a never-customised workspace must mail a
+	// buyer in English until someone chooses otherwise.
+	if strings.Contains(got.ReceiptBody, "Terima kasih") {
+		t.Errorf("default body is Malay for lang=%q: %q", emailtext.En, got.ReceiptBody)
+	}
+	if !strings.Contains(got.ReceiptBody, "Thank you") {
+		t.Errorf("default body is not the English template: %q", got.ReceiptBody)
 	}
 	if !strings.Contains(got.ReceiptBody, "{{ref_code}}") {
 		t.Errorf("default body should carry placeholders: %q", got.ReceiptBody)
@@ -111,7 +122,7 @@ func TestResolveFormEmailSettingsDefaults(t *testing.T) {
 // default rather than sending an empty email.
 func TestResolveFormEmailSettingsEmptyWorkspaceFallsToDefault(t *testing.T) {
 	ws := &EmailSettings{ReceiptEnabled: true}
-	got := ResolveFormEmailSettings(nil, ws)
+	got := ResolveFormEmailSettings(nil, ws, emailtext.En)
 	if got.ReceiptSubject == "" || got.ReceiptBody == "" {
 		t.Errorf("empty workspace subject/body should fall back to default, got %q/%q", got.ReceiptSubject, got.ReceiptBody)
 	}

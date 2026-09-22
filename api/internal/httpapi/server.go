@@ -84,10 +84,15 @@ type Deps struct {
 }
 
 // VerifyMailer delivers an email-confirmation message. The concrete email.Sender
-// already satisfies this (Send(to, subject, body error)); it exists so tests can
-// inject a recorder without pulling in AWS credentials.
+// already satisfies this (Send(to, subject, body, lang string) error); it exists
+// so tests can inject a recorder without pulling in AWS credentials.
+//
+// lang is the language the message was RENDERED IN (language consistency): the
+// sender declares it on the branded HTML part, so a mailer that ignored the
+// parameter was how every email came to announce Malay. An empty or unknown
+// code resolves to English.
 type VerifyMailer interface {
-	Send(to, subject, body string) error
+	Send(to, subject, body, lang string) error
 }
 
 // Server wires dependencies into HTTP handlers.

@@ -114,18 +114,22 @@ func TestEmailDispatcherConfiguredMailerStillSends(t *testing.T) {
 // could not survive it.
 func TestSenderNilReceiverReturnsErrorInsteadOfPanicking(t *testing.T) {
 	var s *email.Sender
+	// The language the branded HTML part declares. Its value is irrelevant to
+	// this test: the point is that the nil receiver is reported before any of
+	// the arguments is looked at, so no send is attempted at all.
+	const lang = "en"
 
-	if err := s.Send("user@example.test", "S", "B"); err == nil {
+	if err := s.Send("user@example.test", "S", "B", lang); err == nil {
 		t.Fatal("Send on a nil *email.Sender returned nil, want an error — " +
 			"a silent nil would hide an unconfigured deployment")
 	}
-	if _, err := s.SendReceipt("user@example.test", "S", "B"); err == nil {
+	if _, err := s.SendReceipt("user@example.test", "S", "B", lang); err == nil {
 		t.Fatal("SendReceipt on a nil *email.Sender returned nil, want an error")
 	}
-	if err := s.SendWithAttachment("user@example.test", "S", "B", "f.pdf", []byte("x")); err == nil {
+	if err := s.SendWithAttachment("user@example.test", "S", "B", lang, "f.pdf", []byte("x")); err == nil {
 		t.Fatal("SendWithAttachment on a nil *email.Sender returned nil, want an error")
 	}
-	if _, err := s.SendReceiptWithAttachment("user@example.test", "S", "B", "f.pdf", []byte("x")); err == nil {
+	if _, err := s.SendReceiptWithAttachment("user@example.test", "S", "B", lang, "f.pdf", []byte("x")); err == nil {
 		t.Fatal("SendReceiptWithAttachment on a nil *email.Sender returned nil, want an error")
 	}
 }
@@ -153,19 +157,19 @@ func TestAuthHandlersTypedNilMailerReportsNotConfigured(t *testing.T) {
 			"have panicked the process)", verifyErr)
 	}
 
-	if err := a.sendPasswordResetEmail(ctx, "user@example.test", "tok"); err == nil {
+	if err := a.sendPasswordResetEmail(ctx, "user@example.test", "tok", "en"); err == nil {
 		t.Fatal("sendPasswordResetEmail with a typed-nil mailer returned nil, want an error")
 	}
-	if err := a.sendConnectEmail(ctx, "user@example.test", "http://x/y"); err == nil {
+	if err := a.sendConnectEmail(ctx, "user@example.test", "http://x/y", "en"); err == nil {
 		t.Fatal("sendConnectEmail with a typed-nil mailer returned nil, want an error")
 	}
 	if err := a.sendMagicLinkEmail(ctx, "user@example.test", "tok", false, "en"); err == nil {
 		t.Fatal("sendMagicLinkEmail with a typed-nil mailer returned nil, want an error")
 	}
-	if err := a.sendEmail2FACode(ctx, "user@example.test", "123456"); err == nil {
+	if err := a.sendEmail2FACode(ctx, "user@example.test", "123456", "en"); err == nil {
 		t.Fatal("sendEmail2FACode with a typed-nil mailer returned nil, want an error")
 	}
-	if err := a.send2FAActiveEmail(ctx, "user@example.test"); err == nil {
+	if err := a.send2FAActiveEmail(ctx, "user@example.test", "en"); err == nil {
 		t.Fatal("send2FAActiveEmail with a typed-nil mailer returned nil, want an error")
 	}
 }

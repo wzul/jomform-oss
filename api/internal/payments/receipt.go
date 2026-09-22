@@ -16,6 +16,7 @@ import (
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/email"
 	"github.com/wzul/jomform/api/internal/emailqueue"
+	"github.com/wzul/jomform/api/internal/emailtext"
 )
 
 // Receipts bundles email config; nil disables receipts entirely.
@@ -29,22 +30,15 @@ type Receipts struct {
 	Suppression email.Suppressor
 }
 
-// defaultReceiptSubject is the subject used when a workspace has not customised
-// its email settings (issue #107). Matches the previous hardcoded subject.
-const defaultReceiptSubject = "Resit pembayaran — {{ref_code}}"
-
-// defaultReceiptBody is the body used when a workspace has not customised its
-// email settings. Matches the previous hardcoded plain-text receipt exactly.
-const defaultReceiptBody = `Terima kasih atas pembayaran anda!
-
-Resit pembayaran JomForm
-Rujukan : {{ref_code}}
-Jumlah  : RM {{amount}}
-Item    : {{items}}
-Status  : Pembayaran diterima
-
-Simpan emel ini sebagai resit rasmi anda.
-Borang dibeli: {{form_url}}`
+// defaultReceiptSubject / defaultReceiptBody are the language-specific receipt
+// templates. They live in the shared transactional dictionary
+// (api/internal/emailtext) so a receipt, a merchant notification and every auth
+// email cannot drift apart — the same strings used to be duplicated here, in
+// dbstore/form_email.go and in migration 000021.
+func defaultReceipt(lang string) (subject, body string) {
+	m := emailtext.Text(lang, emailtext.Receipt, nil)
+	return m.Subject, m.Body
+}
 
 // SaleRef carries the minimal receipt fields.
 type SaleRef struct {
@@ -62,6 +56,19 @@ type SaleRef struct {
 	FormID       string // resolves per-form email settings override (issue #177)
 	TIN          string // LHDN e-invoicing (optional)
 	MSIC         string
+
+	// FormLang / WorkspaceLang are the BUYER-facing language inputs (language
+	// consistency): the form's own `config.lang` override and the workspace's
+	// `default_lang`. They resolve to the receipt's language in that order,
+	// falling back to English.
+	//
+	// They are carried on the ref rather than looked up here because the caller
+	// already holds the form and the workspace row, and because it makes the
+	// two-axis rule visible at the call site: these fields are the form/workspace
+	// axis, and the merchant's personal users.lang must NEVER be assigned to
+	// them.
+	FormLang      string
+	WorkspaceLang string
 }
 
 // receiptData is the placeholder context rendered into a receipt template.
@@ -77,22 +84,26 @@ type receiptData struct {
 
 // renderReceiptBody builds the plain-text receipt body from a SaleRef. Kept
 // as a pure function so the money/URL formatting is unit-testable (issue #99).
-// When subject/body are empty (defaults), the previous hardcoded output is
-// reproduced exactly.
-func renderReceiptBody(ref SaleRef) string {
-	_, body := renderReceipt(ref, defaultReceiptSubject, defaultReceiptBody, false)
+// It renders the built-in template for lang.
+func renderReceiptBody(ref SaleRef, lang string) string {
+	subject, body := defaultReceipt(lang)
+	_, body = renderReceipt(ref, subject, body, lang, false)
 	return body
 }
 
 // renderReceipt renders a receipt subject+body from a template string using
 // the sale data. html=true uses html/template (auto-escaping, no XSS);
-// otherwise text/template. Empty subject/body fall back to the defaults.
-func renderReceipt(ref SaleRef, subject, body string, html bool) (subj, rendered string) {
-	if strings.TrimSpace(subject) == "" {
-		subject = defaultReceiptSubject
-	}
-	if strings.TrimSpace(body) == "" {
-		body = defaultReceiptBody
+// otherwise text/template. Empty subject/body fall back to the built-in
+// template for lang.
+func renderReceipt(ref SaleRef, subject, body, lang string, html bool) (subj, rendered string) {
+	if strings.TrimSpace(subject) == "" || strings.TrimSpace(body) == "" {
+		defSubject, defBody := defaultReceipt(lang)
+		if strings.TrimSpace(subject) == "" {
+			subject = defSubject
+		}
+		if strings.TrimSpace(body) == "" {
+			body = defBody
+		}
 	}
 	data := receiptData{
 		RefCode:   ref.RefCode,
@@ -171,10 +182,6 @@ func (s *Service) SendSaleReceipt(ctx context.Context, ref SaleRef) {
 	}
 
 	// Per-workspace settings (issue #107). Defaults reproduce the old output.
-	subject, body, html := defaultReceiptSubject, defaultReceiptBody, false
-	receiptEnabled := true
-	notifyMerchant := false
-	merchantEmail := ""
 	var ws *dbstore.EmailSettings
 	if s.Workspaces != nil && ref.WorkspaceID != "" {
 		if st, err := s.Workspaces.EmailSettings(ctx, ref.WorkspaceID); err == nil {
@@ -191,13 +198,20 @@ func (s *Service) SendSaleReceipt(ctx context.Context, ref SaleRef) {
 			formSt = st
 		}
 	}
-	resolved := dbstore.ResolveFormEmailSettings(formSt, ws)
-	subject, body, html = resolved.ReceiptSubject, resolved.ReceiptBody, resolved.HTML
-	receiptEnabled = resolved.ReceiptEnabled
-	notifyMerchant = resolved.NotifyMerchant
-	merchantEmail = resolved.MerchantNotifyEmail
+	// Language consistency: the BUYER-facing language is
+	// form.config.lang ?? workspace_settings.default_lang ?? en — never the
+	// merchant's personal users.lang. A guest buyer has no profile to consult,
+	// which is why this is the only correct axis here. Resolved before the
+	// settings so an inherited (never-customised) system template is rendered in
+	// the buyer's language rather than the Malay literal the DB defaults carry.
+	lang := dbstore.EmailLang(ref.FormLang, ref.WorkspaceLang)
+	resolved := dbstore.ResolveFormEmailSettings(formSt, ws, lang)
+	subject, body, html := resolved.ReceiptSubject, resolved.ReceiptBody, resolved.HTML
+	receiptEnabled := resolved.ReceiptEnabled
+	notifyMerchant := resolved.NotifyMerchant
+	merchantEmail := resolved.MerchantNotifyEmail
 
-	subj, rendered := renderReceipt(ref, subject, body, html)
+	subj, rendered := renderReceipt(ref, subject, body, lang, html)
 
 	// Issue #199: background path — enqueue the fully-rendered jobs and return.
 	if s.EmailQueue != nil {
@@ -210,7 +224,7 @@ func (s *Service) SendSaleReceipt(ctx context.Context, ref SaleRef) {
 			}
 			if err := s.EmailQueue.Enqueue(ctx, emailqueue.Job{
 				Type: "receipt", To: ref.BuyerEmail,
-				Subject: subj, Body: rendered,
+				Subject: subj, Body: rendered, Lang: lang,
 				AccountID: ref.WorkspaceID, SaleRef: ref.RefCode, SaleID: ref.SaleID,
 				PDFFilename: "resit-" + ref.RefCode + ".pdf", PDFData: pdf,
 			}); err != nil {
@@ -223,7 +237,8 @@ func (s *Service) SendSaleReceipt(ctx context.Context, ref SaleRef) {
 				slog.Warn("receipt_merchant_notify_no_recipient", "ref", ref.RefCode)
 			} else if err := s.EmailQueue.Enqueue(ctx, emailqueue.Job{
 				Type: "merchant_notify", To: to,
-				Subject: "Jualan baharu — " + subj, Body: rendered,
+				Subject: emailtext.Phrase(lang, emailtext.PhraseMerchantPrefix) + subj,
+				Body:    rendered, Lang: lang,
 				AccountID: ref.WorkspaceID, SaleRef: ref.RefCode,
 			}); err != nil {
 				slog.Warn("receipt_merchant_notify_enqueue_failed", "ref", ref.RefCode, "err", err)
@@ -244,12 +259,12 @@ func (s *Service) SendSaleReceipt(ctx context.Context, ref SaleRef) {
 
 	// Send the buyer receipt only when enabled.
 	if receiptEnabled {
-		s.sendReceipt(ctx, ref, subj, rendered, html, persistReceiptMessageID)
+		s.sendReceipt(ctx, ref, lang, subj, rendered, html, persistReceiptMessageID)
 	}
 
 	// Also notify the merchant (copy or "new sale" notification).
 	if notifyMerchant {
-		s.notifyMerchant(ctx, ref, subj, rendered, html, merchantEmail)
+		s.notifyMerchant(ctx, ref, lang, subj, rendered, html, merchantEmail)
 	}
 }
 
@@ -277,9 +292,9 @@ func (s *Service) resolveMerchantEmail(ctx context.Context, ref SaleRef, merchan
 // pre-send choke point — so a suppression hit here arrives as
 // email.ErrSuppressed. It is logged and swallowed: the receipt is correctly not
 // sent, no MessageID is persisted, and the payment flow is unaffected.
-func (s *Service) sendReceipt(ctx context.Context, ref SaleRef, subject, body string, html bool, persistReceiptMessageID func(string)) {
+func (s *Service) sendReceipt(ctx context.Context, ref SaleRef, lang, subject, body string, html bool, persistReceiptMessageID func(string)) {
 	if pdf, err := s.ReceiptPDF(ref); err == nil && len(pdf) > 0 {
-		messageID, err := s.Receipts.Sender.SendReceiptWithAttachment(ref.BuyerEmail, subject, body,
+		messageID, err := s.Receipts.Sender.SendReceiptWithAttachment(ref.BuyerEmail, subject, body, lang,
 			"resit-"+ref.RefCode+".pdf", pdf)
 		if err != nil {
 			if errors.Is(err, email.ErrSuppressed) {
@@ -288,7 +303,7 @@ func (s *Service) sendReceipt(ctx context.Context, ref SaleRef, subject, body st
 			}
 			slog.Warn("receipt_send_failed", "ref", ref.RefCode, "err", err)
 		} else {
-			slog.Info("receipt_sent_pdf", "ref", ref.RefCode, "to", ref.BuyerEmail)
+			slog.Info("receipt_sent_pdf", "ref", ref.RefCode, "to", ref.BuyerEmail, "lang", lang)
 			persistReceiptMessageID(messageID)
 		}
 		return
@@ -303,7 +318,7 @@ func (s *Service) sendReceipt(ctx context.Context, ref SaleRef, subject, body st
 	// and it carries the same suppression handling so it cannot become a silent
 	// hole if that ever changes. It is deliberately NOT covered by a test: no
 	// input reaches it, so a test here would assert behaviour nobody can produce.
-	messageID, err := s.Receipts.Sender.SendReceipt(ref.BuyerEmail, subject, body)
+	messageID, err := s.Receipts.Sender.SendReceipt(ref.BuyerEmail, subject, body, lang)
 	if err != nil {
 		if errors.Is(err, email.ErrSuppressed) {
 			slog.Warn("receipt_suppressed_skipped", "ref", ref.RefCode, "to", ref.BuyerEmail)
@@ -311,7 +326,7 @@ func (s *Service) sendReceipt(ctx context.Context, ref SaleRef, subject, body st
 		}
 		slog.Warn("receipt_send_failed", "ref", ref.RefCode, "err", err)
 	} else {
-		slog.Info("receipt_sent", "ref", ref.RefCode, "to", ref.BuyerEmail)
+		slog.Info("receipt_sent", "ref", ref.RefCode, "to", ref.BuyerEmail, "lang", lang)
 		persistReceiptMessageID(messageID)
 	}
 }
@@ -327,7 +342,7 @@ func (s *Service) sendReceipt(ctx context.Context, ref SaleRef, subject, body st
 // damage deliverability for every buyer. A merchant who stops receiving
 // notifications changes the address in workspace email settings, which is the
 // action the notification itself enables.
-func (s *Service) notifyMerchant(ctx context.Context, ref SaleRef, subject, body string, html bool, merchantEmail string) {
+func (s *Service) notifyMerchant(ctx context.Context, ref SaleRef, lang, subject, body string, html bool, merchantEmail string) {
 	to := strings.TrimSpace(merchantEmail)
 	if to == "" {
 		// Resolve the merchant's email from the workspace owner's account.
@@ -346,14 +361,17 @@ func (s *Service) notifyMerchant(ctx context.Context, ref SaleRef, subject, body
 		return
 	}
 	// Prefix the subject so the merchant can tell it apart from the buyer copy.
-	merchantSubject := "Jualan baharu — " + subject
-	if err := s.Receipts.Sender.Send(to, merchantSubject, body); err != nil {
+	// The prefix is in the BUYER-facing language: this is the merchant's copy OF
+	// the buyer's receipt, and it deliberately does not switch to his personal
+	// users.lang half-way through the message.
+	merchantSubject := emailtext.Phrase(lang, emailtext.PhraseMerchantPrefix) + subject
+	if err := s.Receipts.Sender.Send(to, merchantSubject, body, lang); err != nil {
 		if errors.Is(err, email.ErrSuppressed) {
 			slog.Warn("receipt_merchant_suppressed_skipped", "ref", ref.RefCode, "to", to)
 			return
 		}
 		slog.Warn("receipt_merchant_notify_failed", "ref", ref.RefCode, "to", to, "err", err)
 	} else {
-		slog.Info("receipt_merchant_notify_sent", "ref", ref.RefCode, "to", to)
+		slog.Info("receipt_merchant_notify_sent", "ref", ref.RefCode, "to", to, "lang", lang)
 	}
 }

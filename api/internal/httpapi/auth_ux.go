@@ -19,6 +19,7 @@ import (
 	"github.com/wzul/jomform/api/internal/dbstore"
 	emailpkg "github.com/wzul/jomform/api/internal/email"
 	"github.com/wzul/jomform/api/internal/emailqueue"
+	"github.com/wzul/jomform/api/internal/emailtext"
 	"github.com/wzul/jomform/api/internal/httpapi/middleware"
 )
 
@@ -59,7 +60,7 @@ func (a *AuthHandlers) handleForgotPassword(w http.ResponseWriter, r *http.Reque
 		a.replyForgotPasswordOK(w) // respond generically; user can retry
 		return
 	}
-	if err := a.sendPasswordResetEmail(r.Context(), user.Email, token); err != nil {
+	if err := a.sendPasswordResetEmail(r.Context(), user.Email, token, user.Lang); err != nil {
 		slog.Warn("pwreset_email_send_failed", "err", err, "user", user.ID)
 		// Token exists but the email didn't send; it expires in 30 min.
 	}
@@ -75,6 +76,11 @@ func (a *AuthHandlers) replyForgotPasswordOK(w http.ResponseWriter) {
 }
 
 // sendPasswordResetEmail delivers the reset link (BASE_URL/reset-password?token=…).
+//
+// lang is the recipient's own platform language (users.lang) — the reset email
+// is addressed to a platform user, so it follows the PROFILE axis and never the
+// form/workspace one. An unset/unknown code resolves to English.
+//
 // Issue #199: when an EmailQueue is wired the email is enqueued and sent by a
 // background worker; otherwise it is sent synchronously.
 //
@@ -82,7 +88,7 @@ func (a *AuthHandlers) replyForgotPasswordOK(w http.ResponseWriter) {
 // address we will never mail; the load-bearing guard is the pre-send choke point
 // at (*email.Sender).SendReceipt, which also covers the queued path. A store
 // error fails open (the send proceeds) — see (*email.Sender).suppressed.
-func (a *AuthHandlers) sendPasswordResetEmail(ctx context.Context, email, token string) error {
+func (a *AuthHandlers) sendPasswordResetEmail(ctx context.Context, email, token, lang string) error {
 	if mailerUnavailable(a.VerifyMailer) {
 		return errors.New("reset mailer not configured")
 	}
@@ -97,21 +103,18 @@ func (a *AuthHandlers) sendPasswordResetEmail(ctx context.Context, email, token 
 		}
 	}
 	link := strings.TrimRight(a.BaseURL, "/") + "/reset-password?token=" + token
-	body := "Anda telah meminta untuk set semula kata laluan JomForm anda.\n\n" +
-		"Tap pautan berikut untuk menetapkan kata laluan baharu (sah selama 30 minit):\n\n" +
-		link + "\n\n" +
-		"Jika anda tidak meminta ini, anda boleh abaikan emel ini — kata laluan anda tidak berubah.\n"
+	msg := emailtext.Text(lang, emailtext.PasswordReset, map[string]string{"link": link})
 	// Issue #199: background path — enqueue and return immediately.
 	if a.EmailQueue != nil {
 		if err := a.EmailQueue.Enqueue(ctx, emailqueue.Job{
 			Type: "password_reset", To: email,
-			Subject: "Set semula kata laluan JomForm anda", Body: body,
+			Subject: msg.Subject, Body: msg.Body, Lang: msg.Lang,
 		}); err != nil {
 			return err
 		}
 		return nil
 	}
-	if err := a.VerifyMailer.Send(email, "Set semula kata laluan JomForm anda", body); err != nil {
+	if err := a.VerifyMailer.Send(email, msg.Subject, msg.Body, msg.Lang); err != nil {
 		return err
 	}
 	recordSESSend("password_reset")

@@ -334,6 +334,37 @@ export default function CustomizeDocsPage() {
         JomForm does not machine-translate your content.
       </p>
 
+      {/* Email language (AGENTS.md documentation-parity rule): the two-axis
+          rule above is invisible to a merchant until he sees WHICH email came
+          out in which language, so the emails are stated explicitly — including
+          the case he cannot test himself, the guest buyer with no profile. */}
+      <h3 className="mt-5 text-base font-semibold text-slate-900">Which language your emails use</h3>
+      <p className="mt-1 text-sm leading-relaxed text-slate-600">
+        Every email JomForm sends follows the same two-axis rule — the language of the{" "}
+        <strong>recipient</strong>, not of whoever triggered it:
+      </p>
+      <ul className="mt-3 list-disc space-y-1.5 pl-5 text-sm leading-relaxed text-slate-600">
+        <li>
+          <strong>Emails to you and your team</strong> (verify your address, sign-in link, password
+          reset, 2FA codes, connecting a social login, a workspace invitation, a feedback reply) use
+          the recipient&apos;s <strong>dashboard language</strong>. Set it on <strong>Profile</strong> and
+          the same emails arrive in that language.
+        </li>
+        <li>
+          <strong>Emails to your customers</strong> (a payment receipt, the &ldquo;new sale&rdquo; and
+          &ldquo;new response&rdquo; alerts) use the <strong>form language</strong> resolved the same way
+          the form itself is: <strong>form → workspace → English</strong>. A guest who pays without an
+          account still gets the language your form is set to — there is no profile to ask.
+        </li>
+      </ul>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        A never-edited notification rule is translated too — you only get your own wording back once
+        you have actually edited that rule, and JomForm never rewrites text you wrote. An unset or
+        unsupported language always falls back to <strong>English</strong>, never to Malay. Arabic
+        emails are sent right-to-left, and the email declares its own language so a mail client or
+        screen reader reads it correctly.
+      </p>
+
       {/* Issue #501: the https-only scheme rule for image/URL fields is a
           user-visible constraint, so it is documented here (AGENTS.md
           documentation-parity rule). */}
