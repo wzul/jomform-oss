@@ -655,12 +655,18 @@ func main() {
 				// email) older than UnverifiedPurgeDays. Only verified=false
 				// rows are ever deleted; the store also cleans up the
 				// auto-provisioned account/workspace so no orphans remain.
+				//
+				// Each candidate is its own transaction, so one user that
+				// cannot be deleted (an owner account holding sales) no longer
+				// rolls back the whole sweep. `blocked` reports those
+				// candidates, so "nothing to purge" and "every candidate is
+				// blocked" are distinguishable in this log line.
 				if deps.Users != nil {
 					cutoff := time.Now().Add(-time.Duration(cfg.UnverifiedPurgeDays) * 24 * time.Hour)
-					if n, err := deps.Users.DeleteUnverifiedOlderThan(ctx, cutoff); err != nil {
+					if res, err := deps.Users.DeleteUnverifiedOlderThan(ctx, cutoff); err != nil {
 						slog.Warn("unverified_purge_sweep", "err", err)
-					} else if n > 0 {
-						slog.Info("unverified_purge_sweep", "deleted", n)
+					} else if res.Deleted > 0 || res.Blocked > 0 {
+						slog.Info("unverified_purge_sweep", "deleted", res.Deleted, "blocked", res.Blocked)
 					}
 				}
 				// Issue #245: spam retention sweep. Spam-flagged submissions

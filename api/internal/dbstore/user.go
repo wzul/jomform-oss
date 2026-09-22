@@ -388,6 +388,22 @@ func (s *UserStore) CountUnverifiedOlderThan(ctx context.Context, cutoff time.Ti
 	return n, err
 }
 
+// PurgeResult reports what one unverified-account purge sweep did.
+//
+// Both numbers are needed to read the sweep log: Deleted alone cannot tell
+// "there was nothing to purge" from "candidates exist but every one of them is
+// blocked by data the guards must not touch" — the two look identical from the
+// outside, which is how a silently-stopped purge went unnoticed.
+type PurgeResult struct {
+	// Deleted is the number of users actually removed.
+	Deleted int64
+	// Blocked is the number of candidates deliberately left alone because the
+	// user still holds data the sweep refuses to delete (see
+	// DeleteUnverifiedOlderThan). A blocked user is un-purgeable by design, not
+	// a failure: the sweep keeps working for every other candidate.
+	Blocked int64
+}
+
 // DeleteUnverifiedOlderThan deletes users who never confirmed their email and
 // were created before cutoff (issue #190). It also cleans up their
 // auto-provisioned accounts (and any owned workspaces) so no orphan rows remain.
@@ -398,65 +414,132 @@ func (s *UserStore) CountUnverifiedOlderThan(ctx context.Context, cutoff time.Ti
 // subscriptions (RESTRICT FKs) are left untouched, and the user is only
 // deleted once their deletable accounts/workspaces are gone.
 //
-// Returns the number of users actually deleted.
-func (s *UserStore) DeleteUnverifiedOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback(ctx)
+// Transaction scope: the unit of atomicity is ONE USER, not the sweep. Each
+// candidate gets its own transaction, so a candidate that cannot be deleted
+// rolls back its own partial work and nothing else. A single shared transaction
+// turned the per-user safety rule above into a global one: one undeletable user
+// — an owner account with sales, colliding deterministically with
+// accounts.owner_user_id ON DELETE RESTRICT — aborted the batch for every other
+// candidate, and the whole sweep became a silent no-op whose only trace was a
+// WARN. A candidate that still holds protected data is therefore SKIPPED (a
+// `continue` with a Blocked counter), never a `break`: the remaining candidates
+// are independent, and one wedged user must not disable the purge for
+// everybody. A real failure (connection loss, syntax/SQL error) still stops the
+// run and is returned, because the next iteration would fail the same way.
+//
+// Returns how many users were deleted and how many candidates were skipped as
+// blocked.
+func (s *UserStore) DeleteUnverifiedOlderThan(ctx context.Context, cutoff time.Time) (PurgeResult, error) {
+	var res PurgeResult
 
-	rows, err := tx.Query(ctx,
+	ids, err := s.unverifiedIDsOlderThan(ctx, cutoff)
+	if err != nil {
+		return res, err
+	}
+
+	for _, id := range ids {
+		deleted, err := s.purgeUser(ctx, id)
+		if err == nil {
+			if deleted {
+				res.Deleted++
+			}
+			continue
+		}
+		if isBlockedPurgeErr(err) {
+			res.Blocked++
+			continue
+		}
+		// A real failure: stop rather than repeat it for every remaining id.
+		return res, err
+	}
+	return res, nil
+}
+
+// unverifiedIDsOlderThan lists the purge candidates. It runs outside the
+// per-user transactions so no snapshot is held open across the deletions.
+func (s *UserStore) unverifiedIDsOlderThan(ctx context.Context, cutoff time.Time) ([]string, error) {
+	rows, err := s.pool.Query(ctx,
 		`SELECT id FROM users WHERE verified = false AND created_at < $1`, cutoff)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
+	defer rows.Close()
 	var ids []string
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return 0, err
+			return nil, err
 		}
 		ids = append(ids, id)
 	}
-	rows.Close()
 	if err := rows.Err(); err != nil {
-		return 0, err
+		return nil, err
 	}
+	return ids, nil
+}
 
-	var deleted int64
-	for _, id := range ids {
-		// Delete workspaces owned by the user that have no linked accounts, so the
-		// user delete's CASCADE on workspaces can't be blocked by accounts.workspace_id.
-		if _, err := tx.Exec(ctx,
-			`DELETE FROM workspaces
-			 WHERE owner_user_id = $1
-			   AND id NOT IN (SELECT workspace_id FROM accounts WHERE workspace_id IS NOT NULL)`,
-			id); err != nil {
-			return 0, err
-		}
-		// Delete the user's accounts (incl. the auto-provisioned one from
-		// handleRegister) that have no sales/subscriptions (RESTRICT guards).
-		if _, err := tx.Exec(ctx,
-			`DELETE FROM accounts
-			 WHERE owner_user_id = $1
-			   AND id NOT IN (SELECT account_id FROM sales)
-			   AND id NOT IN (SELECT account_id FROM subscriptions)`,
-			id); err != nil {
-			return 0, err
-		}
-		// Delete the user. The verified=false guard is a hard safety net.
-		tag, err := tx.Exec(ctx,
-			`DELETE FROM users WHERE id = $1 AND verified = false`, id)
-		if err != nil {
-			return 0, err
-		}
-		deleted += tag.RowsAffected()
+// purgeUser deletes one unverified user and their owned rows inside its own
+// transaction, reporting whether the user row was actually removed. Every
+// statement is in the RESTRICT-safe order (workspaces → accounts → users): the
+// accounts delete skips accounts with sales/subscriptions, so the final users
+// delete is only reached when nothing protected still references the user. If
+// something does — the guards skipped it for a reason, or another RESTRICT/
+// NO ACTION reference exists — the whole transaction rolls back, leaving that
+// user exactly as it was, and the caller skips it.
+func (s *UserStore) purgeUser(ctx context.Context, id string) (bool, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false, err
 	}
+	defer tx.Rollback(ctx)
 
+	// Delete workspaces owned by the user that have no linked accounts, so the
+	// user delete's CASCADE on workspaces can't be blocked by accounts.workspace_id.
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM workspaces
+		 WHERE owner_user_id = $1
+		   AND id NOT IN (SELECT workspace_id FROM accounts WHERE workspace_id IS NOT NULL)`,
+		id); err != nil {
+		return false, err
+	}
+	// Delete the user's accounts (incl. the auto-provisioned one from
+	// handleRegister) that have no sales/subscriptions (RESTRICT guards).
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM accounts
+		 WHERE owner_user_id = $1
+		   AND id NOT IN (SELECT account_id FROM sales)
+		   AND id NOT IN (SELECT account_id FROM subscriptions)`,
+		id); err != nil {
+		return false, err
+	}
+	// Delete the user. The verified=false guard is a hard safety net.
+	tag, err := tx.Exec(ctx,
+		`DELETE FROM users WHERE id = $1 AND verified = false`, id)
+	if err != nil {
+		return false, err
+	}
 	if err := tx.Commit(ctx); err != nil {
-		return 0, err
+		return false, err
 	}
-	return deleted, nil
+	return tag.RowsAffected() == 1, nil
+}
+
+// isBlockedPurgeErr reports whether err is Postgres refusing to delete a user
+// because a row still references it, rather than the sweep itself failing.
+//
+// The account guards deliberately leave accounts with sales or subscriptions
+// untouched, so the users delete raises a foreign-key violation (SQLSTATE
+// 23503) for such a candidate — e.g. accounts.owner_user_id (ON DELETE
+// RESTRICT), subscriptions.product_id, or a bank_direct_proofs row that names a
+// user as its verifier (NO ACTION). SQLSTATE 23001 ("restrict_violation") is
+// included because a RESTRICT trigger may also report it.
+//
+// Such a candidate is un-purgeable by design — the guards exist to protect
+// merchant data — so the sweep skips it instead of aborting.
+func isBlockedPurgeErr(err error) bool {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return false
+	}
+	return pgErr.Code == "23503" || pgErr.Code == "23001"
 }
