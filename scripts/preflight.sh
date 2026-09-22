@@ -145,6 +145,12 @@ GATE_NAMES=(build vet test govuln web a11y npmaudit gitleaks monitor tmpkey back
 ONLY=""
 SKIP=""
 
+# Preserve the ORIGINAL argv before the parsing loop below consumes it with `shift`.
+# The concurrency lock re-invokes this script via flock, and it must hand the child the
+# same arguments — reading `$@` at the lock site would pass whatever survived the loop
+# (nothing), so `--only <gate>` would silently become "run every gate".
+PREFLIGHT_ARGV=("$@")
+
 die() { echo "PREFLIGHT FAIL: $*" >&2; exit 1; }
 info() { echo "==> $*"; }
 
@@ -196,6 +202,85 @@ done
 # shape this script exists to prevent. Refuse it.
 if [ ${#SKIPPED[@]} -eq ${#GATE_NAMES[@]} ]; then
   die "every gate was skipped (--only/--skip selected nothing to run) — that is an empty run, not a passing one. Omit --only/--skip to run the full gate."
+fi
+
+# ---- CONCURRENCY LOCK: serialise gate runs across worktrees ----------------
+#
+# LANE RULE 4 says "never parallelise gates": two concurrent `preflight.sh` runs
+# share one scratch schema and one scratch valkey index, so they corrupt each
+# other's fixtures and produce FALSE failures (a `go test` red that passes in
+# isolation, or a 10m `-test.timeout` blown by CPU starvation). That rule was
+# advisory — a worker could only obey it by remembering to, and the lanes
+# genuinely cannot see each other. This lock makes it structural.
+#
+# WHY A FILE LOCK AND NOT A GATE CHANGE: the gates are correct as written; the
+# defect is two of them running at once. A lock needs no edit to any gate, and
+# it costs nothing when the host is idle.
+#
+# WHY BLOCK INSTEAD OF FAIL: refusing to run would turn an idle-host problem
+# into a red gate for whoever lost the race — the false-red shape this fixes.
+# Waiting is correct; the gate still runs, on the same tree, with the machine
+# to itself.
+#
+# SCOPE: serialises the GATE BODY only. `--list`, argument validation and the
+# banner stay outside, so a queued run can always be inspected and a typo still
+# fails immediately rather than after a wait.
+#
+# LOCK PATH: `/var/lock` is tmpfs on Linux and is wiped on reboot. That is
+# deliberate — a lock file left behind by a crash must never block future runs,
+# and flock releases automatically when the holder dies, so there is nothing to
+# clean up either way. `PREFLIGHT_LOCK_WAIT=0` turns the wait off explicitly if
+# a caller ever needs to fail fast instead; it is not the default because
+# failing fast is exactly what produces a false red.
+PREFLIGHT_LOCK_FILE="${PREFLIGHT_LOCK_FILE:-/var/lock/jomform-preflight-gate.lock}"
+PREFLIGHT_LOCK_WAIT="${PREFLIGHT_LOCK_WAIT:-1800}"
+
+# ---- CONCURRENCY LOCK (taken first; the banner below prints once, in the child) ----
+#
+# The lock is taken by re-executing this same script under `flock`. Doing it before
+# the banner and before any gate keeps the gates untouched, prints the banner exactly
+# once (only the child gets that far), and reports the wait before it happens rather
+# than leaving it to be discovered as a hang later.
+if [ "${_PREFLIGHT_LOCKED:-}" != "1" ]; then
+  # No `|| true` anywhere below: this repo's own `selftest` gate forbids it in an active
+  # line, because a swallowed failure is how a gate stops being a gate. A missing lock
+  # directory is a real problem (the lock would silently not exist), so it FAILS loudly.
+  if [ ! -d "$(dirname "$PREFLIGHT_LOCK_FILE")" ]; then
+    echo "preflight: lock directory $(dirname "$PREFLIGHT_LOCK_FILE") does not exist." >&2
+    echo "preflight: set PREFLIGHT_LOCK_FILE to a path inside an existing directory (default: /var/lock)." >&2
+    exit 1
+  fi
+  if command -v flock >/dev/null 2>&1; then
+    # `_PREFLIGHT_LOCKED=1` is exported so the re-invoked copy runs the gates
+    # instead of trying to take the lock again.
+    #
+    # NOT `exec`: exec would replace this process, so the timeout diagnostic
+    # below could never run. Running flock as a child keeps the exit code
+    # reachable and still passes the child's status straight through.
+    #
+    # `-E 75` gives a timeout its own code so a wait-out is distinguishable from
+    # a gate failure — a caller must not read "could not serialise" as "the code
+    # is broken".
+    export _PREFLIGHT_LOCKED=1
+    if ! flock -n "$PREFLIGHT_LOCK_FILE" true 2>/dev/null; then
+      echo "  lock:   another gate is running — waiting up to ${PREFLIGHT_LOCK_WAIT}s"
+      echo "          (two concurrent gates share one scratch schema and produce FALSE failures)"
+    fi
+    # Pass the ORIGINAL argv, not "$@" — the parsing loop above has already shifted it
+    # away, and an empty argv silently turns `--only <gate>` into a full-gate run.
+    flock -w "$PREFLIGHT_LOCK_WAIT" -E 75 "$PREFLIGHT_LOCK_FILE" "$0" "${PREFLIGHT_ARGV[@]}"
+    _lock_rc=$?
+    if [ "$_lock_rc" -eq 75 ]; then
+      echo "preflight: could not acquire the gate lock at $PREFLIGHT_LOCK_FILE within ${PREFLIGHT_LOCK_WAIT}s" >&2
+      echo "preflight: refusing to run unlocked — a parallel run shares one scratch schema and one" >&2
+      echo "preflight: scratch valkey index, so it reports FALSE failures. NOTHING was built or tested." >&2
+      echo "preflight: re-run once the other gate finishes, or raise the wait with PREFLIGHT_LOCK_WAIT=<seconds>." >&2
+      echo "preflight: the lock is released automatically when its holder exits, including on a crash." >&2
+      exit 75
+    fi
+    exit "$_lock_rc"
+  fi
+  echo "  lock:   flock not found — running WITHOUT serialisation (concurrent gates may FALSE-fail)"
 fi
 
 echo "=============================================================="
