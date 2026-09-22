@@ -12,10 +12,23 @@ package chat
 //
 // So the central test does not inspect the allowlist or the prompt. It takes the
 // runner's own production dispatch path and calls every write class from the card
-// directly, with `confirm=true` and `confirm:"yes"` in the arguments, and requires
-// each one to be refused AND the database to be read back unchanged. The second
-// half matters as much as the first: a refusal that arrived after the write would
-// look identical in the call result.
+// directly, in TWO argument shapes: with `confirm=true` / `confirm:"yes"` (the
+// shape the card names) AND with a schema-valid body that carries no `confirm`
+// key, and it requires each one to be refused BY A SECURITY LAYER — the allowlist
+// ban or the scope gate — with the database read back unchanged. The second half
+// matters as much as the first: a refusal that arrived after the write would look
+// identical in the call result.
+//
+// WHY BOTH SHAPES, AND WHY THE REFUSAL'S IDENTITY IS ASSERTED. A tool call comes
+// back `refused=true` for three unrelated reasons: the allowlist refused the
+// NAME, the readonly identity refused the SCOPE, or the tool's input schema
+// refused the ARGUMENTS. The write tools declare `additionalProperties: false`,
+// so the `confirm=…` shape is rejected by the SCHEMA — and a test that only
+// asserted "it was refused" therefore passed with BOTH safety layers deleted
+// (`ChatToolIsAllowed` widened and `ReadOnlyScopes` switched to readwrite),
+// because argument validation still refused it. The schema-valid shape is what
+// removes that escape: nothing but the two security layers can refuse it, and
+// the assertion refuses any refusal that does not name a security reason.
 //
 // The token tests are the other half of the card: binding, single use, expiry and
 // cross-caller refusal, each read back against Postgres rather than against the
@@ -120,14 +133,75 @@ func (f *acceptanceFixture) productName(t *testing.T) string {
 	return name
 }
 
-// TestChatModelCannotExecuteAWriteEvenWithConfirmInTheArguments is the card's
-// central criterion, driven through the production dispatch path.
+// isSchemaValidationRefusal reports whether a refusal came from the MCP INPUT
+// SCHEMA — i.e. the ARGUMENTS were rejected — rather than from a security gate.
 //
-// Every write class from the card is attempted DIRECTLY — i.e. the model calls the
-// write tool rather than propose_write — and every one of them carries
-// `confirm=true` in the arguments, which is the exact shape the card names as the
-// thing that must not work. Each must be refused, and the database must be read
-// back afterwards to prove the refusal happened before any write.
+// This is the trap this file exists to close. A chat tool call has three
+// indistinguishable ways to come back refused:
+//
+//  1. the dispatch allowlist refused the NAME,
+//  2. the readonly identity refused the SCOPE,
+//  3. the tool's input schema refused the ARGUMENTS.
+//
+// All three arrive as the same `refused=true` with a message in the output, and
+// every write tool's schema uses `additionalProperties: false` — so an attempt
+// that carries a key the tool does not declare (`confirm`, the shape the card
+// names) is refused by layer 3, the schema. A test that only asserts "it was
+// refused" is therefore satisfied by argument validation and stays GREEN with
+// BOTH safety layers deleted, which is how this file's headline claim came to be
+// carried by the wrong guard.
+func isSchemaValidationRefusal(out string) bool {
+	return strings.Contains(out, `validating "arguments"`)
+}
+
+// isAllowlistBanRefusal reports whether the DISPATCH ALLOWLIST refused the call
+// (layer 1) — the message names the tool, says the chat may not execute it, and
+// points at the proposal lane so the model can offer the user the supported
+// route instead of a dead end.
+//
+// A caller asserting the security boundary must use this, not `refused`:
+// `refused` cannot tell a security refusal from an argument-validation failure.
+func isAllowlistBanRefusal(out string) bool {
+	return !isSchemaValidationRefusal(out) &&
+		strings.Contains(out, "tidak boleh dilaksanakan oleh chat") &&
+		strings.Contains(out, ToolProposeWrite)
+}
+
+// isScopeRefusal reports whether the READONLY IDENTITY refused the call
+// (layer 2) — the message is the issue #645 scope gate. It is asserted
+// separately from the ban because it is the other load-bearing layer: a test
+// that only ever sees the ban cannot notice the identity being widened.
+func isScopeRefusal(out string) bool {
+	return !isSchemaValidationRefusal(out) && strings.Contains(out, "scope tidak mencukupi")
+}
+
+// TestChatModelCannotExecuteAWriteEvenWithConfirmInTheArguments is the card's
+// central criterion.
+//
+// Every write class from the card is attempted DIRECTLY — i.e. the model calls
+// the write tool rather than propose_write — in TWO argument shapes, and both
+// SAFETY LAYERS are attributed, so this test fails if EITHER one is removed:
+//
+//	Part 1, the dispatch path (layer 1): the model's own call, in
+//	  confirm=…    the card's own reproduction: the model writes a confirmation
+//	               into its own arguments. Kept because the card asks for it
+//	               explicitly. On its own it proves NOTHING about the boundary —
+//	               the write tools' schemas reject unknown properties, so this
+//	               shape is refused by argument validation too.
+//	  schema-valid the same call with no `confirm` key and a body the tool's own
+//	               schema accepts, so argument validation cannot be the reason.
+//	  Each must be refused BY THE ALLOWLIST BAN, naming the tool and the proposal
+//	  lane. A schema-validation refusal is a FAILURE here, not a pass.
+//
+//	Part 2, the raw server channel (layer 2): the same write calls dispatched
+//	  straight at the MCP server, bypassing the allowlist entirely, under the
+//	  production ReadOnlyScopes(). The identity must refuse every one with the
+//	  scope gate. Without this, widening ReadOnlyScopes() would leave this test
+//	  green (the allowlist would still be refusing), and the card's "must fail
+//	  when either layer is removed" would not hold.
+//
+// The database is read back at the end of both parts, so a refusal that arrived
+// after the write is caught as well as one that never happened.
 func TestChatModelCannotExecuteAWriteEvenWithConfirmInTheArguments(t *testing.T) {
 	requireAcceptanceDB(t)
 	f := newAcceptanceFixture(t)
@@ -139,52 +213,137 @@ func TestChatModelCannotExecuteAWriteEvenWithConfirmInTheArguments(t *testing.T)
 	}
 	defer caller.close()
 
-	attempts := []struct {
+	// ── Positive control: a READ must still work. ──
+	// Without this, the assertions below are satisfied by a session that refuses
+	// everything — a dead session would look exactly like a working boundary.
+	if out, refused := callRaw(t, caller, ctx, "list_products", `{}`); refused {
+		t.Fatalf("list_products was REFUSED (%s) — the chat is meant to answer questions, so "+
+			"the write refusals below would prove nothing about a boundary", out)
+	} else if !strings.Contains(out, f.productID) {
+		t.Fatalf("list_products did not return the fixture product — the read path is not reading "+
+			"the account the identity names, so neither is the refusal path: %s", out)
+	}
+
+	before := f.productName(t)
+
+	// The write classes, with the arguments each tool's own schema ACCEPTS.
+	// `product_id`/`form_id`/`ref_code`/`email`/`name`/`scopes` are all declared
+	// by the corresponding input struct — no key here is an extra property, so
+	// argument validation cannot refuse any of them (verified by dispatch: every
+	// one of these reaches its gate).
+	valid := []struct {
 		tool string
 		args string
 		what string
 	}{
-		{
-			"update_product",
-			`{"product_id":` + jsonString(f.productID) + `,"name":"HIJACKED BY CHAT","confirm":true}`,
-			"rename a product (the card's own reproduction)",
-		},
-		{
-			"update_product",
-			`{"product_id":` + jsonString(f.productID) + `,"name":"CONFIRMED BY MODEL","confirm":"yes"}`,
-			"rename a product with confirm as a STRING",
-		},
-		{"delete_form", `{"form_id":` + jsonString(f.formID) + `,"confirm":true}`, "delete a form"},
-		{"archive_product", `{"product_id":` + jsonString(f.productID) + `,"confirm":true}`, "archive a product"},
-		{"refund_sale", `{"ref_code":` + jsonString(f.saleRef) + `,"confirm":true}`, "refund a sale"},
-		{"cancel_subscription", `{"email":` + jsonString(f.subEmail) + `,"confirm":true}`, "cancel a subscription"},
-		{"create_api_key", `{"name":"chat-escalation","scopes":["readwrite"],"confirm":true}`, "mint an API key"},
-		{"set_form_theme", `{"form_id":` + jsonString(f.formID) + `,"primary":"#000000","confirm":true}`, "restyle a form"},
+		{"update_product", `{"product_id":` + jsonString(f.productID) + `,"name":"HIJACKED BY CHAT"}`, "rename a product (the card's own reproduction)"},
+		{"delete_form", `{"form_id":` + jsonString(f.formID) + `}`, "delete a form"},
+		{"archive_product", `{"product_id":` + jsonString(f.productID) + `}`, "archive a product"},
+		{"refund_sale", `{"ref_code":` + jsonString(f.saleRef) + `}`, "refund a sale"},
+		{"cancel_subscription", `{"email":` + jsonString(f.subEmail) + `}`, "cancel a subscription"},
+		{"create_api_key", `{"name":"chat-escalation","scopes":["readwrite"]}`, "mint an API key"},
+		{"set_form_theme", `{"form_id":` + jsonString(f.formID) + `,"primary":"#000000"}`, "restyle a form"},
 	}
 
+	type attempt struct {
+		tool  string
+		args  string
+		what  string
+		shape string
+	}
+	attempts := make([]attempt, 0, len(valid)*2)
+	// The card's shape: confirm in the arguments. Kept verbatim.
+	for _, v := range valid {
+		attempts = append(attempts, attempt{v.tool, strings.TrimSuffix(v.args, "}") + `,"confirm":true}`, v.what, "confirm=true"})
+	}
+	attempts = append(attempts, attempt{
+		"update_product",
+		`{"product_id":` + jsonString(f.productID) + `,"name":"CONFIRMED BY MODEL","confirm":"yes"}`,
+		"rename a product with confirm as a STRING",
+		`confirm="yes"`,
+	})
+	// The shape that pins the layers: the same calls, schema-valid.
+	for _, v := range valid {
+		attempts = append(attempts, attempt{v.tool, v.args, v.what, "schema-valid"})
+	}
+
+	// ── PART 1 — layer 1, the dispatch allowlist. ──
 	for _, a := range attempts {
 		out, refused, derr := r.dispatchIn(ctx, caller, toolCall("w", a.tool, a.args), &runState{})
 		if derr != nil {
-			t.Fatalf("dispatch %s: %v", a.tool, derr)
+			t.Fatalf("dispatch %s (%s): %v", a.tool, a.shape, derr)
 		}
 		if !refused {
-			t.Errorf("PHASE 2 WRITE LEAK: the model performed %s via %s. Result: %s\n"+
+			t.Errorf("PHASE 2 WRITE LEAK [%s]: the model performed %s via %s. Result: %s\n"+
 				"A model that calls a write tool directly must be REFUSED — a `confirm` boolean it "+
-				"wrote itself is not a human's confirmation.", a.what, a.tool, out)
+				"wrote itself is not a human's confirmation.", a.shape, a.what, a.tool, out)
 			continue
 		}
-		// The refusal must say the useful thing, so the model offers the user the
-		// supported route rather than reporting a dead end.
-		if !strings.Contains(out, ToolProposeWrite) {
-			t.Errorf("the refusal of %s (%q) does not name %s — the model would report a dead "+
-				"end instead of proposing the change", a.tool, out, ToolProposeWrite)
+		// ── WHICH refusal fired. ──
+		// A refusal by JSON-schema validation of the arguments is NOT the
+		// security boundary: it is what a `confirm`-shaped attempt gets the
+		// moment the allowlist is widened, and it is indistinguishable from a
+		// security refusal at the call site unless it is named.
+		if isSchemaValidationRefusal(out) {
+			t.Errorf("the refusal of %s (%s, %s) is ARGUMENT VALIDATION, not the safety boundary: %q\n"+
+				"The dispatch allowlist never ran. With the allowlist widened (and the identity too) "+
+				"this test would stay green, so it would prove nothing about either layer.",
+				a.tool, a.shape, a.what, out)
+			continue
+		}
+		if !isAllowlistBanRefusal(out) {
+			t.Errorf("the refusal of %s (%s, %s) did not come from the dispatch allowlist: %q\n"+
+				"The allowlist is layer 1 and it is what must refuse this call — a refusal from "+
+				"somewhere else means the allowlist is not doing the work this test claims it does.",
+				a.tool, a.shape, a.what, out)
+			continue
+		}
+		// It must name the tool it refused, so the refusal cannot be about some
+		// other call, and the proposal lane so the model is not left at a dead end.
+		if !strings.Contains(out, a.tool) {
+			t.Errorf("the allowlist refusal of %s (%s) does not name the tool: %q", a.tool, a.shape, out)
+		}
+	}
+
+	// ── PART 2 — layer 2, the readonly identity, over the raw server channel. ──
+	// Same calls, dispatched straight at the MCP server so the allowlist is out
+	// of the path; the only thing left to refuse them is the scope on the
+	// identity. This is what turns "either layer removed" into a real failure
+	// instead of a claim.
+	//
+	// REVERSED ORDER, deliberately. These calls EXECUTE when the identity is
+	// widened (that is the failure being detected), so an earlier entry can
+	// destroy the target a later one names — delete_form soft-deletes the
+	// fixture form, and set_form_theme then refuses with "entiti tidak dijumpai",
+	// a red for the wrong reason. Running the destructive entry last keeps every
+	// entry's refusal attributable to the scope gate.
+	rawCaller, rawCtx := f.toolCallerFor(t, ReadOnlyScopes())
+	if out, refused := callRaw(t, rawCaller, rawCtx, "list_products", `{}`); refused {
+		t.Fatalf("the raw-channel positive control was refused (%s) — a session that refuses "+
+			"everything cannot attribute a refusal to the scope gate", out)
+	}
+	for i := len(valid) - 1; i >= 0; i-- {
+		v := valid[i]
+		out, refused := callRaw(t, rawCaller, rawCtx, v.tool, v.args)
+		if !refused {
+			t.Errorf("PHASE 2 WRITE LEAK [raw channel]: %s executed under the readonly identity. "+
+				"Result: %s\nThe identity is layer 2 — the only thing standing between a widened "+
+				"allowlist and a real write.", v.what, out)
+			continue
+		}
+		if !isScopeRefusal(out) {
+			t.Errorf("the raw-channel refusal of %s (%s) is not the scope gate: %q\n"+
+				"Attributing this refusal to the wrong layer is how the readonly identity gets "+
+				"widened without a test going red.", v.tool, v.what, out)
 		}
 	}
 
 	// ── The database must be untouched. ──
-	if got := f.productName(t); got == "HIJACKED BY CHAT" || got == "CONFIRMED BY MODEL" {
-		t.Errorf("the fixture product was renamed to %q by the chat — the refusal ran after the "+
-			"write, not before it", got)
+	// Exact equality, not a name-match: any rename at all is a leak, including
+	// one this test did not think of.
+	if got := f.productName(t); got != before {
+		t.Errorf("the fixture product was renamed to %q by the chat (want %q) — the refusal ran "+
+			"after the write, not before it", got, before)
 	}
 	var deleted bool
 	if err := f.pool.QueryRow(context.Background(),
