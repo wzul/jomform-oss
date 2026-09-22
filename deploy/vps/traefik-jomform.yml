@@ -25,7 +25,7 @@ http:
       tls: {certResolver: le}
       priority: 25
     jf-wildcard:
-      rule: "HostRegexp(`[a-z0-9-]+.jomform.com`)"
+      rule: "HostRegexp(`[a-z0-9-]+.jomform.com`) && !Host(`www.jomform.com`)"
       entryPoints: [websecure]
       service: jf-api
       tls:
@@ -33,7 +33,7 @@ http:
         domains: ["*.jomform.com", "jomform.com"]
       priority: 20
     jf-wildcard-http:
-      rule: "HostRegexp(`[a-z0-9-]+.jomform.com`)"
+      rule: "HostRegexp(`[a-z0-9-]+.jomform.com`) && !Host(`www.jomform.com`)"
       entryPoints: [web]
       service: jf-api
       priority: 20
