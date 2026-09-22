@@ -201,6 +201,14 @@ export const DICT = {
   "workspace.createFail": { en: "Failed to create workspace.", ms: "Gagal cipta workspace.", zh: "创建工作区失败。", ta: "பணியிடம் உருவாக்க முடியவில்லை.", ar: "فشل إنشاء مساحة العمل." },
   "workspace.slugTaken": { en: "That slug is already taken.", ms: "Slug itu sudah digunakan.", zh: "该 Slug 已被占用。", ta: "அந்த slug ஏற்கனவே பயன்பாட்டில் உள்ளது.", ar: "هذا الـ slug مستخدم بالفعل." },
   "workspace.slugInvalid": { en: "Slug must be 3-40 chars, a-z, 0-9, dash.", ms: "Slug mesti 3-40 aksara, a-z, 0-9, dash.", zh: "Slug 必须为 3-40 个字符，仅限 a-z、0-9、连字符。", ta: "Slug 3-40 எழுத்துகள், a-z, 0-9, dash ஆக இருக்க வேண்டும்.", ar: "يجب أن يكون الـ slug من 3-40 حرفاً، a-z، 0-9، شرطة." },
+  // Reserved subdomains (t_586ff0c3): the API refuses names JomForm owns or must
+  // protect (infrastructure, docs/mcp/templates, support/billing/login-looking)
+  // with a stable `reserved_subdomain` code. The merchant is told the name is
+  // JomForm's — not that their typing was wrong — in their OWN language, because
+  // the API's prose is English and is meant for curl/MCP callers (#694).
+  "workspace.slugReserved": { en: "That name is reserved for JomForm and can't be used as your address. Please choose another.", ms: "Nama itu dikhaskan untuk JomForm dan tidak boleh digunakan sebagai alamat anda. Sila pilih yang lain.", zh: "该名称已保留给 JomForm，不能用作您的地址。请另选一个。", ta: "அந்தப் பெயர் JomForm-க்கு ஒதுக்கப்பட்டுள்ளது, உங்கள் முகவரியாகப் பயன்படுத்த முடியாது. வேறொன்றைத் தேர்ந்தெடுக்கவும்.", ar: "هذا الاسم محجوز لـ JomForm ولا يمكن استخدامه كعنوان لك. يرجى اختيار اسم آخر." },
+  // The inline "?" doc link beside the slug field (AGENTS.md docs-parity rule 4).
+  "workspace.whichNames": { en: "Which names are available?", ms: "Nama mana yang tersedia?", zh: "哪些名称可用？", ta: "எந்தப் பெயர்கள் கிடைக்கின்றன?", ar: "أي الأسماء متاحة؟" },
   // issue #164: multi-workspace login picker + default workspace
   "workspace.pickerTitle": { en: "Choose a workspace", ms: "Pilih workspace", zh: "选择工作区", ta: "பணியிடத்தைத் தேர்ந்தெடுக்கவும்", ar: "اختر مساحة عمل" },
   "workspace.pickerSubtitle": { en: "You have multiple workspaces. Pick which one to enter.", ms: "Anda ada beberapa workspace. Pilih yang mana untuk masuk.", zh: "您有多个工作区。请选择要进入的工作区。", ta: "உங்களுக்கு பல பணியிடங்கள் உள்ளன. எதை உள்ளிட வேண்டும் எனத் தேர்ந்தெடுக்கவும்.", ar: "لديك عدة مساحات عمل. اختر أيها تريد الدخول." },

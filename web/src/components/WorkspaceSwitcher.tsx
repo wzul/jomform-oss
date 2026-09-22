@@ -278,6 +278,20 @@ export function WorkspaceSwitcher({
                   required
                   className="min-h-11 w-full rounded border border-[var(--jf-border)] bg-white px-2 text-sm"
                 />
+                {/* Inline "?" doc link (AGENTS.md docs-parity rule 4): the
+                    reserved-name refusals are the thing a merchant cannot guess
+                    from the field, so the doc is one click from it. */}
+                <a
+                  href="/docs/customize#workspace-address"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-xs text-[var(--jf-primary)] hover:underline"
+                >
+                  <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-slate-200 text-xs font-bold text-slate-600">
+                    ?
+                  </span>
+                  {t("workspace.whichNames")}
+                </a>
                 {error && <p className="text-sm text-red-500">{error}</p>}
                 <div className="flex gap-1.5">
                   <button

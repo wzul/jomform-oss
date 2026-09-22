@@ -56,6 +56,27 @@ func (h *RESTHandlers) createWorkspace(w http.ResponseWriter, r *http.Request, a
 		return
 	}
 	slug := strings.ToLower(strings.TrimSpace(in.Slug))
+	// Reserved subdomains (t_586ff0c3): a slug becomes a live host on the tenant
+	// wildcard, so names JomForm owns or must protect (infra, routed products,
+	// support/billing-looking) cannot be claimed. The list and the refusal live
+	// in ONE place — internal/urlguard, the same package the scheme rule uses —
+	// so this and the MCP validator cannot drift into two copies. The message
+	// says WHY the name is reserved, and the stable `code` lets the dashboard
+	// render its own localised sentence instead of printing this prose (#694).
+	//
+	// This runs FIRST, before the length and charset rules. Order is not
+	// cosmetic: a reserved label can be shorter than the 3-char minimum ("s3"
+	// is 2), and if the length rule won, the merchant would be told their
+	// input was malformed and would try variations of the same sensitive name
+	// instead of learning the name is JomForm's. Policy refusal beats shape
+	// refusal.
+	if urlguard.ReservedSubdomain(slug) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": urlguard.ReservedSubdomainMessage(slug),
+			"code":  urlguard.ReservedSubdomainCode,
+		})
+		return
+	}
 	if len(slug) < 3 || len(slug) > 40 {
 		writeErr(w, http.StatusBadRequest, "slug 3-40 aksara")
 		return

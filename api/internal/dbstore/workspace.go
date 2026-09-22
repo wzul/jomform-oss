@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -25,10 +26,28 @@ func NewWorkspaceStore(pool *pgxpool.Pool) *WorkspaceStore { return &WorkspaceSt
 
 const workspaceSelect = `SELECT id, owner_user_id, name, slug FROM workspaces`
 
+// scanWorkspace scans one workspace row.
+//
+// A MISSING row is reported as (nil, pgx.ErrNoRows) — nil so a caller's pointer
+// test reads a miss as a miss, and the store's not-found sentinel so a caller
+// that checks the error still gets one (the convention every sibling store
+// follows; see notfound.go).
+//
+// Returning the ALLOCATED struct alongside the error instead of nil made
+// create_workspace's uniqueness pre-check (mcpsrv/workspaces.go) — which tests
+// `existing != nil` and discards the error — read a miss as a hit, so it refused
+// every slug and no workspace could be created over MCP at all, while the same
+// create worked over REST (which has no pre-check). That is why it went
+// unnoticed.
 func scanWorkspace(row rowScanner) (*Workspace, error) {
 	s := &Workspace{}
-	err := row.Scan(&s.ID, &s.Owner, &s.Name, &s.Slug)
-	return s, err
+	if err := row.Scan(&s.ID, &s.Owner, &s.Name, &s.Slug); err != nil {
+		if isNoSuchRow(err) {
+			return nil, pgx.ErrNoRows
+		}
+		return nil, err
+	}
+	return s, nil
 }
 
 // ByOwner lists workspaces owned by a user.

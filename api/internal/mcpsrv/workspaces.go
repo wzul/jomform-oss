@@ -136,6 +136,18 @@ type createWorkspaceIn struct {
 
 // validateWorkspaceSlug mirrors the REST handler in httpapi/rest_workspaces.go.
 func validateWorkspaceSlug(slug string) error {
+	// Reserved subdomains (t_586ff0c3) run FIRST, exactly as they do in the REST
+	// handler this mirrors. This mirrors the REST handler in
+	// httpapi/rest_workspaces.go, and BOTH must consume the ONE list in
+	// internal/urlguard — a hand-rolled copy here would let a name be refused on
+	// one surface and claimable through the other.
+	//
+	// Order is not cosmetic: "s3" is a reserved label AND shorter than the
+	// 3-char minimum, so if the length rule ran first the caller would be told
+	// the slug was malformed and would retry a variation of the sensitive name.
+	if urlguard.ReservedSubdomain(slug) {
+		return errors.New(urlguard.ReservedSubdomainMessage(slug))
+	}
 	if len(slug) < 3 || len(slug) > 40 {
 		return errors.New("slug 3-40 aksara")
 	}

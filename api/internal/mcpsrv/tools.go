@@ -324,7 +324,7 @@ func (s *Server) registerTools() {
 	}, s.setAffiliateCommission)
 	addTool(s, &mcp.Tool{
 		Name:        "create_workspace",
-		Description: "Cipta workspace baharu. Slug 3-40 aksara (a-z, 0-9, dash); URL jadi https://<slug>.jomform.com.",
+		Description: "Cipta workspace baharu. Slug 3-40 aksara (a-z, 0-9, dash); URL jadi https://<slug>.jomform.com. Nama yang dikhaskan untuk JomForm (cth: www, api, app, mail, s3, docs, mcp, templates, custom, support, help, status, billing, admin, account, login, payments, checkout, cdn, assets) ditolak.",
 	}, s.createWorkspace)
 	addTool(s, &mcp.Tool{
 		Name:        "get_workspace_settings",

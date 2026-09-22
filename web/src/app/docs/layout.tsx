@@ -28,6 +28,7 @@ const NAV_SECTIONS = [
   { href: "/docs/customize#menu-basket", label: "Menu basket guide" },
   { href: "/docs/customize#language", label: "Language guide" },
   { href: "/docs#workspaces", label: "Workspaces guide" },
+  { href: "/docs/customize#workspace-address", label: "Reserved workspace names" },
 ];
 
 export const metadata: Metadata = {

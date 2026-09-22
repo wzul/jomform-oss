@@ -365,6 +365,46 @@ export default function CustomizeDocsPage() {
         screen reader reads it correctly.
       </p>
 
+      {/* Reserved workspace names (t_586ff0c3): a slug becomes a public host, so
+          the refusal is a user-visible constraint and is documented here
+          (AGENTS.md documentation-parity rule). */}
+      <h2 id="workspace-address" className="mt-8 scroll-mt-6 text-xl font-semibold text-slate-900">Your workspace address, and names that are reserved</h2>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        A workspace slug becomes your public address: a workspace called{" "}
+        <span className="font-mono text-xs">acme</span> is served at{" "}
+        <span className="font-mono text-xs">acme.jomform.com</span>, and your forms live under it. A slug is
+        3–40 characters of <span className="font-mono text-xs">a-z</span>,{" "}
+        <span className="font-mono text-xs">0-9</span> and dashes, it cannot end in{" "}
+        <span className="font-mono text-xs">jomform</span>, and it must not be a name{" "}
+        <strong>reserved for JomForm</strong>.
+      </p>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        Reserved names are the addresses JomForm owns or has to protect. They fall into three groups:
+        infrastructure (<span className="font-mono text-xs">www</span>,{" "}
+        <span className="font-mono text-xs">api</span>, <span className="font-mono text-xs">app</span>,{" "}
+        <span className="font-mono text-xs">mail</span>, <span className="font-mono text-xs">s3</span>);
+        JomForm&apos;s own product and edge addresses that are already routed, such as{" "}
+        <span className="font-mono text-xs">docs</span>, <span className="font-mono text-xs">mcp</span>,{" "}
+        <span className="font-mono text-xs">templates</span> and{" "}
+        <span className="font-mono text-xs">custom</span>; and sensitive names that read as JomForm&apos;s own
+        business or support channel, such as <span className="font-mono text-xs">support</span>,{" "}
+        <span className="font-mono text-xs">help</span>, <span className="font-mono text-xs">status</span>,{" "}
+        <span className="font-mono text-xs">billing</span>, <span className="font-mono text-xs">admin</span>,{" "}
+        <span className="font-mono text-xs">account</span>, <span className="font-mono text-xs">login</span>,{" "}
+        <span className="font-mono text-xs">payments</span> and{" "}
+        <span className="font-mono text-xs">checkout</span>.
+      </p>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        The reason is impersonation: an address like{" "}
+        <span className="font-mono text-xs">billing.jomform.com</span> would let a buyer be asked for card or
+        invoice details under JomForm&apos;s name, so a workspace cannot hold it even while JomForm is not using
+        it. If you try one, JomForm tells you the name is reserved (not that your slug was malformed) and asks
+        you to pick another. The same rule applies whether you create the workspace in the dashboard, over the
+        REST API (<span className="font-mono text-xs">POST /v1/workspaces</span> — the refusal carries the code{" "}
+        <span className="font-mono text-xs">reserved_subdomain</span>) or through an AI agent with the{" "}
+        <span className="font-mono text-xs">create_workspace</span> MCP tool.
+      </p>
+
       {/* Issue #501: the https-only scheme rule for image/URL fields is a
           user-visible constraint, so it is documented here (AGENTS.md
           documentation-parity rule). */}

@@ -1,4 +1,10 @@
+import { isReservedSlugRefusal } from "./workspaceSlug.ts";
+
 // Shared workspace-scope helper (issue #158, renamed from space per #431).
+//
+// The reserved-name token reader lives in lib/workspaceSlug.ts (it also pins the
+// Go constant, so the two spellings of the contract cannot drift). Imported here
+// because createWorkspace below is the ONE create path both surfaces share.
 // The active workspace is persisted in localStorage under "jf_workspace" by
 // the Shell's WorkspaceSwitcher. Every dashboard fetch must append
 // ?workspace=<slug> so the backend resolves the account from the selected
@@ -123,7 +129,14 @@ export type CreateWorkspaceInput = { name: string; slug: string };
 // drift into two different messages for the same status.
 export type CreateWorkspaceOutcome =
   | { ok: true; id: string; slug: string }
-  | { ok: false; errorKey: "workspace.slugTaken" | "workspace.slugInvalid" | "workspace.createFail" };
+  | {
+      ok: false;
+      errorKey:
+        | "workspace.slugTaken"
+        | "workspace.slugInvalid"
+        | "workspace.slugReserved"
+        | "workspace.createFail";
+    };
 
 // createWorkspace POSTs a new workspace. ONE implementation shared by the
 // first-run ask (app/workspace-picker) and the topbar switcher: the status → key
@@ -143,6 +156,18 @@ export async function createWorkspace(input: CreateWorkspaceInput): Promise<Crea
       body: JSON.stringify({ name: input.name.trim(), slug }),
     });
     if (!res.ok) {
+      // The reserved-name refusal is checked BEFORE the status mapping: it is a
+      // 400, so the plain status order would answer `workspace.slugInvalid`
+      // ("Slug must be 3-40 chars, a-z, 0-9, dash.") for a name like `billing`
+      // that is perfectly well-formed. The merchant would be sent off to retype
+      // the same sensitive name, and the sentence would be the API's English
+      // prose rendered nowhere (#694's class of defect).
+      //
+      // The API carries a stable token so this decision never depends on the
+      // server's prose, which is a wire message for API-key, curl and MCP
+      // callers (see lib/workspaceSlug.ts, which also pins the Go constant).
+      const body = res.status === 400 ? await res.json().catch(() => null) : null;
+      if (isReservedSlugRefusal(body)) return { ok: false, errorKey: "workspace.slugReserved" };
       if (res.status === 409) return { ok: false, errorKey: "workspace.slugTaken" };
       if (res.status === 400) return { ok: false, errorKey: "workspace.slugInvalid" };
       return { ok: false, errorKey: "workspace.createFail" };
