@@ -20,6 +20,35 @@ below), so the preflight is not a convenience — it is the only gate. `--skip-t
 bypasses the whole preflight and prints a loud warning; it is for a genuine
 emergency only, and the resulting image carries no gate evidence.
 
+### Per-tree prerequisites (the gate refuses without them)
+
+The preflight is run inside whichever tree you are in, and a fresh worktree has
+no dependencies. Two seeds, once per tree:
+
+```bash
+cd web && npm ci                                        # web build / a11y / unit suite
+source ${JOMFORM_ENV:-$HOME/.config/jomform/test-env.sh}  # JOMFORM_TEST_DATABASE_URL + JOMFORM_TEST_VALKEY_URL
+```
+
+The `web` gate's dependency refusal is worth knowing about, because the failure
+it prevents is **silent**. `npm run test:unit` is `node --test … src/lib/*.test.ts`,
+and `node --test` needs no dependencies to start — so in a tree whose
+`web/node_modules` is missing, empty, or half-installed (an interrupted `npm ci`),
+the command still runs, the test files that `import "react"` die at module load,
+their remaining tests never register, and it prints a *smaller, plausible-looking*
+summary instead of failing. Measured at one head: `254 tests / 253 pass / 1 fail`
+against `260 / 260 / 0` with a real install — one false failure and six silently
+absent tests in the same run. That count is not evidence about the code, and it
+was read as evidence on this host.
+
+`web/scripts/web-deps-check.mjs` asserts every package declared in
+`web/package.json` is present under `web/node_modules/`, `npm run test:unit` runs
+it before `node --test`, and the `web`/`a11y` prerequisites in
+`scripts/preflight.sh` run the same checker — so an uninstalled tree is refused
+by both the suite and the gate, with the `npm ci` command in the message, rather
+than reporting a number. `scripts/preflight_test.sh` pins that refusal (and the
+empty-`node_modules`-with-`.bin/next`-present shape) so it cannot regress.
+
 The api binary logs `version=... commit=...` at startup
 (`api/internal/version`), so after deploy `docker compose logs api` proves
 exactly which commit is running.

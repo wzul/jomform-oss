@@ -58,8 +58,14 @@ bad()  { FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; }
 SB="$(mktemp -d /tmp/preflight_test.XXXXXX)"
 cleanup() { rm -rf "$SB"; }
 trap cleanup EXIT
-mkdir -p "$SB/scripts"
+mkdir -p "$SB/scripts" "$SB/web/scripts"
 cp "$HERE"/*.sh "$SB/scripts/" 2>/dev/null
+# The web gate's dependency check (an .mjs, so `cp *.sh` above misses it) is a
+# prerequisite of the gates this sandbox exercises. Without it in the sandbox the
+# check would fail for "no such file" instead of for the reason under test, and a
+# gate that fails for the wrong reason is not a gate.
+cp "$HERE/../web/scripts/web-deps-check.mjs" "$SB/web/scripts/" 2>/dev/null
+cp "$HERE/../web/package.json" "$SB/web/" 2>/dev/null
 chmod +x "$SB/scripts/preflight.sh"
 cp "$HERE/../AGENTS.md" "$SB/AGENTS.md" 2>/dev/null
 cp "$HERE/../Makefile" "$SB/Makefile" 2>/dev/null
@@ -154,6 +160,34 @@ if [ $rc -ne 0 ] && printf '%s' "$out" | grep -q 'web/node_modules/.bin/next is 
 else
   bad "missing web/node_modules must be refused, got rc=$rc"
 fi
+
+# 5b. A node_modules that EXISTS but is not INSTALLED must also fail the web gate.
+#     This is the shape the primary checkout was found in (an empty directory)
+#     and the shape an interrupted `npm ci` leaves (a partial tree). `.bin/next`
+#     is planted here on purpose, because that is exactly what the check above
+#     cannot see: with the tool present the gate used to proceed, and
+#     `npm run test:unit` then under-reported (254 tests / 253 pass / 1 fail
+#     instead of 260 / 260 / 0 at the same head) rather than failing.
+#     The assertion is on the GATE's own refusal, not just on the message text:
+#     the checker can also be reached from inside `npm run build`, so a check
+#     that only grepped for "IS NOT INSTALLED IN THIS TREE" stayed GREEN with
+#     the prerequisite removed (measured — the sabotage below is what found it).
+#     Requiring the PREFLIGHT FAIL line AND the absence of the `gate [web]`
+#     banner pins that the gate was stopped as a prerequisite, before it ran.
+mkdir -p "$SB/web/node_modules/.bin"
+printf '#!/bin/sh\nexit 1\n' > "$SB/web/node_modules/.bin/next"
+chmod +x "$SB/web/node_modules/.bin/next"
+out=$(./scripts/preflight.sh --only web 2>&1)
+rc=$?
+if [ $rc -ne 0 ] && \
+   printf '%s' "$out" | grep -q 'PREFLIGHT FAIL: the web dependencies for this tree are not installed' && \
+   printf '%s' "$out" | grep -q 'npm ci' && \
+   ! printf '%s' "$out" | grep -q 'gate \[web\]'; then
+  ok "an empty/uninstalled node_modules (with .bin/next present) -> refused by the PREREQUISITE, naming the fix (rc=$rc)"
+else
+  bad "an existing-but-uninstalled web/node_modules must be refused by the dependency PREREQUISITE (not by the gate running and failing), got rc=$rc [$(printf '%s' "$out" | grep -iE 'IS NOT INSTALLED|PREFLIGHT FAIL|gate \[web\]' | tr '\n' ' ')]"
+fi
+rm -rf "$SB/web/node_modules"
 
 # 6. An unknown gate name is rejected rather than quietly ignored (a typo in
 #    --only must not silently disable a real gate).

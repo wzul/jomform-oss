@@ -75,6 +75,19 @@
 #                               then exits 0 with "sh: 1: next: not found" —
 #                               a green-looking gate that built nothing.
 #                               Seed with: cd web && npm ci
+#   web deps (all declared      web/scripts/web-deps-check.mjs asserts every
+#     packages)                 package in web/package.json is installed. The
+#                               `.bin/next` check above is not enough: a
+#                               node_modules DIRECTORY that exists and is EMPTY
+#                               (or an interrupted `npm ci`) still runs
+#                               `npm run test:unit`, whose node --test then
+#                               cannot load the test files that import react —
+#                               measured 254 tests / 253 pass / 1 fail against
+#                               260 / 260 / 0 for the same head with a real
+#                               install. Under-reporting, not failing. The web
+#                               gate refuses on it now (and `test:unit` itself
+#                               refuses), so the count can never be read as
+#                               evidence from an uninstalled tree.
 #   playwright chromium         `cd web && npx playwright install chromium`
 #
 # RUNTIME (measured on the agent host): api build 13s, vet 13s, test 2m35s,
@@ -216,6 +229,16 @@ preflight_env() {
   if [ "$need_web" = 1 ]; then
     [ -x "$REPO_ROOT/web/node_modules/.bin/next" ] || die \
       "web/node_modules/.bin/next is missing — 'npm run build' would exit 0 with 'sh: 1: next: not found' and build NOTHING (exit 0 with no route list is a FAILED gate, not a pass). Seed it with: cd web && npm ci"
+    # `.bin/next` existing is NOT the same as the install being complete: an
+    # empty node_modules directory (or an interrupted `npm ci`) can satisfy it
+    # while `npm run test:unit` still cannot load the test files that import
+    # react — the run then prints a smaller, authoritative-looking count
+    # (measured 254/253/1 vs 260/260/0 at the same head) instead of failing.
+    # The dependency check below is the one that refuses that shape, and it is
+    # the SAME script `test:unit` runs first, so the gate and the suite cannot
+    # disagree about whether this tree is installed.
+    node "$REPO_ROOT/web/scripts/web-deps-check.mjs" "$REPO_ROOT/web" || die \
+      "the web dependencies for this tree are not installed — 'npm run test:unit' would UNDER-REPORT (node --test runs without dependencies, so the files that import react fail to load and their tests never register) instead of failing. Seed it with: cd web && npm ci"
   fi
 
   if [ "$need_a11y" = 1 ]; then

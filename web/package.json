@@ -7,7 +7,7 @@
     "build": "npm run test:unit && next build",
     "start": "next start",
     "lint": "next lint",
-    "test:unit": "node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON src/lib/*.test.ts",
+    "test:unit": "node scripts/web-deps-check.mjs && node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON src/lib/*.test.ts",
     "a11y": "playwright test",
     "a11y:install": "playwright install chromium"
   },
