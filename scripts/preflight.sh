@@ -43,6 +43,16 @@
 #                         PATH it hands the script, no network, no DB, ~45s).
 #                         The suite's bite proof (jomform-backup_bite.sh, ~8 min)
 #                         is deliberately NOT wired in — on-demand only.
+#   refguard   refs       scripts/refguard_test.sh — proves the hand-made
+#                         `refs/remotes/<non-remote>/<N>` mirror guard BITES:
+#                         the documented GitHub idiom
+#                         (`git fetch origin pull/N/head:refs/remotes/pr/N`) is
+#                         REFUSED in the primary checkout AND in a linked
+#                         worktree; deletion stays allowed; a second remote's
+#                         namespace stays allowed; normal git flow is untouched;
+#                         and a hook that is missing, non-executable or stale is
+#                         reported NOT ARMED instead of quietly guarding nothing.
+#                         Offline: local bare remote + clones, no network, ~10s.
 #   selftest   selfcheck  scripts/preflight_test.sh — the gate runner's OWN
 #                         safety properties: an all-skipped run is REFUSED
 #                         rather than reported green, a missing prerequisite
@@ -130,7 +140,7 @@ cd "$REPO_ROOT" || exit 1
 # `--list`, the runnable set from the `run <name>` call sites) and FAILS if they
 # disagree, so a gate named here but never run — the silent-coverage-loss shape —
 # is caught by `--only selftest`. No edit to the self-test is needed for gate #N.
-GATE_NAMES=(build vet test govuln web a11y npmaudit gitleaks monitor tmpkey backup selftest)
+GATE_NAMES=(build vet test govuln web a11y npmaudit gitleaks monitor tmpkey backup refguard selftest)
 
 ONLY=""
 SKIP=""
@@ -466,6 +476,85 @@ backup_run() {
   bash "$REPO_ROOT/deploy/backup/jomform-backup_test.sh"
 }
 run backup "nightly backup failure-path suite (exit 0 is not an upload, empty dump refused, drill cannot mask a failing job)" backup_run
+
+# refguard — the hand-made `refs/remotes/<non-remote>/<N>` mirror guard. Same shape
+# of gate as `monitor`/`tmpkey`/`backup` and for the same reason: what is testable
+# in the repo is the guard's own harness.
+#
+# WHY IT IS A GATE AND NOT JUST A CLEANUP. The defect it closes was "fixed" once
+# by deleting the mirrors and was RE-ARMED WITHIN 20 MINUTES by a lane typing the
+# GitHub-documented `git fetch origin pull/N/head:refs/remotes/pr/N` again — 26
+# refs by the next day, 6 already stale. A cleanup is a point in time. The only
+# mechanism that can stop a ref from being created is git's own
+# `reference-transaction` hook (`git update-ref`, `fetch`, `push` all go through
+# it), which is what `scripts/refguard.sh install` puts IN THE COMMON GIT DIR so
+# it covers the primary checkout and every linked worktree the lanes work in.
+#
+# IT ALSO CHECKS THAT THE GUARD IS ARMED. This repo installs that hook into a
+# checkout, not into the repo tree, so `git clean`/a fresh clone/an edited copy
+# can leave it missing, non-executable or stale — a state in which the guard
+# guards NOTHING while every other gate still reads green. `refguard check` makes
+# that state a red gate (and reports the mirrors still present, without failing a
+# branch that legitimately carries none). Offline and cheap (~10s): local bare
+# remote plus clones, no network, no host state.
+refguard_run() {
+  bash "$REPO_ROOT/scripts/refguard_test.sh" || return 1
+  # `check` is about the LIVE repo, so the gate asserts the hook is ARMED in the
+  # shared git dir every worktree resolves. It deliberately does not fail on
+  # mirrors existing: "the guard is armed" and "the namespace is clean" are two
+  # questions, and failing the build on the second would fail every lane's
+  # preflight for a cleanup that cannot be done from a PR.
+  #
+  # The repo to check is resolved via the COMMON git dir, not via the worktree: a
+  # lane runs this from its own worktree, and `rev-parse --show-toplevel` there
+  # would name the worktree, whose `scripts/` may be anything. The primary
+  # checkout is where the hook has to be armed, because the hook itself is
+  # read from the common git dir by every worktree.
+  local common primary
+  common="$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
+  [ -n "$common" ] || { echo "refguard: cannot resolve the common git dir" >&2; return 1; }
+  primary="$(dirname "$common")"
+  [ -d "$primary" ] || { echo "refguard: no primary checkout at $primary" >&2; return 1; }
+
+  if [ ! -x "$primary/scripts/refguard.sh" ]; then
+    # NOT a failure, and this asymmetry is deliberate. The guard ships as a PR:
+    # before that PR is merged the file simply does not exist in the primary
+    # checkout, so there is nothing to install or compare against. Failing here
+    # would block EVERY lane's preflight on a change only a merge can land —
+    # turning a safety net into a board-wide outage. It is announced loudly
+    # rather than silently skipped, so the missing state is never invisible.
+    echo "refguard: NOTE — $primary/scripts/refguard.sh is not present yet (the guard ships as a PR)."
+    echo "refguard:        The suite above proves the guard works; it cannot be ARMED here until it is merged."
+    return 0
+  fi
+  # `check` first, so a DIVERGENCE is reported (this branch may carry a different
+  # rule from the one installed), then `ensure`, which arms it. Written as an
+  # explicit if/else and NOT as `check ... || true`: the `selftest` gate forbids
+  # `|| true` in any active line precisely so a gate cannot be quietly neutered,
+  # and it caught an earlier draft of this line. Nothing here is swallowed —
+  # every branch prints the check's output, and the final check below is the
+  # assertion that decides the gate.
+  local check_out
+  if check_out="$(bash "$primary/scripts/refguard.sh" check "$primary" 2>&1)"; then
+    printf '%s\n' "$check_out"
+  else
+    printf '%s\n' "$check_out"
+    echo "refguard: the installed hook is missing, not executable, or differs from this" >&2
+    echo "refguard: branch — (re)installing it from this branch's rule now." >&2
+  fi
+  if ! bash "$primary/scripts/refguard.sh" ensure "$primary"; then
+    echo "refguard: could not arm the mirror guard for $primary" >&2
+    return 1
+  fi
+  # Armed is not enough: the hook must actually be in place and current afterwards,
+  # or the "installation" printed nothing useful and the gate would be certifying a
+  # state it never reached.
+  bash "$primary/scripts/refguard.sh" check "$primary" || {
+    echo "refguard: the mirror guard is STILL not armed for $primary after ensure" >&2
+    return 1
+  }
+}
+run refguard "hand-made refs/remotes mirror guard (idiom refused incl. worktrees, normal flow untouched, hook armed)" refguard_run
 
 # selftest — the gate runner's OWN self-test (scripts/preflight_test.sh). Same
 # shape of gate as `monitor`/`tmpkey`, one level up: the only thing testable about
