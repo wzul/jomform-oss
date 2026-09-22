@@ -70,6 +70,44 @@ func (h *RESTHandlers) createWorkspace(w http.ResponseWriter, r *http.Request, a
 		writeErr(w, http.StatusBadRequest, "slug tidak sah")
 		return
 	}
+	// Ask-first onboarding (Wan's decision, 2026-09-20): a signup creates an
+	// account and NO workspace, and a user with zero workspaces is asked to
+	// create one before they can reach any create surface. When this is that
+	// user's FIRST workspace, link the account the signup already made instead of
+	// letting Workspaces.Create insert a second one (issue #158) — otherwise the
+	// user ends up owning two accounts, the signup one left with workspace_id
+	// NULL and reachable by nothing.
+	//
+	// The reuse is deliberately narrow: the account must be the caller's ONLY
+	// account, unlinked, and carry no CONTENT (forms/products/sales). A legacy
+	// workspace-less account that already holds content is a data-migration
+	// decision (its published forms resolve through the account slug —
+	// PublicHostSlugByAccount) and is left alone here.
+	//
+	// An API key is NOT content and does not disqualify the account: it has no
+	// public host slug and no published URL, CreateForAccount carries it into the
+	// new workspace, and every key-holding user must keep the one-account
+	// behaviour. See dbstore.WorkspaceStore.SoleEmptyUnscopedAccount for why.
+	if prior, _ := h.Workspaces.ByMember(r.Context(), userID); len(prior) == 0 {
+		if accID, err := h.Workspaces.SoleEmptyUnscopedAccount(r.Context(), userID); err == nil && accID != "" {
+			sp, err := h.Workspaces.CreateForAccount(r.Context(), userID, strings.TrimSpace(in.Name), slug, accID)
+			if err != nil {
+				var pgErr *pgconn.PgError
+				if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+					writeErr(w, http.StatusConflict, "slug sudah digunakan")
+					return
+				}
+				respondErr(w, r, err)
+				return
+			}
+			writeJSON(w, http.StatusCreated, map[string]string{
+				"id": sp.ID, "name": sp.Name, "slug": sp.Slug,
+				"url": "https://" + sp.Slug + ".jomform.com",
+			})
+			return
+		}
+	}
+
 	sp, err := h.Workspaces.Create(r.Context(), userID, strings.TrimSpace(in.Name), slug)
 	if err != nil {
 		var pgErr *pgconn.PgError

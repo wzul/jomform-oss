@@ -219,6 +219,16 @@ export const DICT = {
   "workspace.loading": { en: "Loading your workspaces…", ms: "Memuatkan workspace anda…", zh: "正在加载您的工作区…", ta: "உங்கள் பணியிடங்களை ஏற்றுகிறது…", ar: "جارٍ تحميل مساحات العمل…" },
   "workspace.loadFail": { en: "We couldn't load your workspaces. Please try again.", ms: "Kami tidak dapat memuatkan workspace anda. Sila cuba lagi.", zh: "无法加载您的工作区。请重试。", ta: "உங்கள் பணியிடங்களை ஏற்ற முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر تحميل مساحات العمل. يرجى المحاولة مرة أخرى." },
   "workspace.empty": { en: "You don't have any workspaces yet.", ms: "Anda belum mempunyai sebarang workspace.", zh: "您还没有任何工作区。", ta: "உங்களிடம் இன்னும் பணியிடங்கள் இல்லை.", ar: "ليس لديك أي مساحات عمل بعد." },
+  // Ask-first onboarding: a user with NO workspace at all is asked to create one
+  // before any create surface is reachable (new signups land here right after
+  // login). These strings are the prompt itself — the one place that turns a
+  // dead end into a working first run.
+  "workspace.askPageTitle": { en: "Create your first workspace", ms: "Cipta workspace pertama anda", zh: "创建您的第一个工作区", ta: "உங்கள் முதல் பணியிடத்தை உருவாக்கவும்", ar: "أنشئ مساحة العمل الأولى" },
+  "workspace.askPageSubtitle": { en: "Your workspace holds your forms, products and sales.", ms: "Workspace anda menyimpan borang, produk dan jualan anda.", zh: "您的工作区保存您的表单、产品和销售。", ta: "உங்கள் பணியிடம் உங்கள் படிவங்கள், தயாரிப்புகள் மற்றும் விற்பனைகளை வைத்திருக்கும்.", ar: "تحتوي مساحة عملك على نماذجك ومنتجاتك ومبيعاتك." },
+  "workspace.askTitle": { en: "Create a workspace to get started", ms: "Cipta workspace untuk mula", zh: "创建一个工作区以开始", ta: "தொடங்க ஒரு பணியிடத்தை உருவாக்கவும்", ar: "أنشئ مساحة عمل للبدء" },
+  "workspace.askBody": { en: "You need a workspace before you can create a form. It takes a moment — pick a name and a URL slug.", ms: "Anda perlukan workspace sebelum boleh cipta borang. Ambil masa sebentar — pilih nama dan slug URL.", zh: "创建表单前需要一个工作区。很快即可完成 — 选择名称和 URL slug。", ta: "படிவத்தை உருவாக்க ஒரு பணியிடம் தேவை. சிறிது நேரமே — ஒரு பெயரையும் URL slug-ஐயும் தேர்ந்தெடுக்கவும்.", ar: "تحتاج إلى مساحة عمل قبل إنشاء نموذج. الأمر سريع — اختر اسماً وslug للرابط." },
+  "workspace.askHost": { en: "Your forms will live at {slug}.jomform.com", ms: "Borang anda akan berada di {slug}.jomform.com", zh: "您的表单将位于 {slug}.jomform.com", ta: "உங்கள் படிவங்கள் {slug}.jomform.com இல் இருக்கும்", ar: "ستكون نماذجك على {slug}.jomform.com" },
+  "workspace.docs": { en: "What is a workspace?", ms: "Apa itu workspace?", zh: "什么是工作区？", ta: "பணியிடம் என்பது என்ன?", ar: "ما هي مساحة العمل؟" },
   // The accessible status text for a page's in-flight load (see
   // components/PageLoading.tsx). Rendered sr-only inside the shell's skeleton:
   // the skeleton bars themselves are decorative, so a screen reader would

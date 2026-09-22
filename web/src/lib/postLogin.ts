@@ -12,6 +12,7 @@
 // The explicit ".ts" extension is required by the Node test runner (which runs
 // this module's regression test directly; see postLogin.test.ts).
 import { fetchJson, runLoad } from "./wsfetch.ts";
+import { clearUnknownWorkspaceScope } from "./workspace.ts";
 
 export async function resolvePostLogin(next: string): Promise<string> {
   if (next) return next;
@@ -43,10 +44,23 @@ export async function resolvePostLogin(next: string): Promise<string> {
   }
   workspaces = ws.data;
 
+  // Reconcile the stored scope against the list the server just returned, so a
+  // slug from a PREVIOUS user on this browser (or a workspace since removed) can
+  // never be sent as ?workspace= by the first page load after login. An empty
+  // list is a real answer and clears the stale slug; a failed fetch never
+  // reaches here (it returned above).
+  clearUnknownWorkspaceScope(workspaces);
+
   const me = await mePromise;
   if (me) defaultWorkspaceId = me.default_workspace_id || "";
 
-  if (workspaces.length === 0) return "/";
+  // A user with NO workspace is ASKED to create one before they can reach any
+  // create surface (Wan's spec, 2026-09-20: "klu utk kes lain (yg baru daftar),
+  // lepas login tu terus kena create workspace"). This used to return "/",
+  // which dropped a workspace-less user on the dashboard with no workspace and
+  // no prompt — the first thing they tried (create a form) then 403'd.
+  // /workspace-picker carries the first-run state: the create form lives there.
+  if (workspaces.length === 0) return "/workspace-picker";
 
   // Default set → go straight to that workspace.
   if (defaultWorkspaceId) {

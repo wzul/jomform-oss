@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -172,10 +173,42 @@ func (s *Server) createWorkspace(
 	if err := validateWorkspaceSlug(slug); err != nil {
 		return nil, nil, err
 	}
-	if existing, _ := sp.BySlug(ctx, slug); existing != nil {
+	// The slug pre-check must read the NOT-FOUND case as "free", not as "taken".
+	// dbstore.scanWorkspace returns a non-nil *Workspace even when the query
+	// matched no row (it returns the struct it was filling, alongside
+	// pgx.ErrNoRows), so testing `existing != nil` was ALWAYS true and
+	// create_workspace answered "slug sudah digunakan" for every slug — the tool
+	// could never create anything. Treat only a real row as taken; any other
+	// error is left to the INSERT below, which has the unique-constraint backstop.
+	if existing, berr := sp.BySlug(ctx, slug); berr == nil && existing != nil {
 		return nil, nil, errors.New("slug sudah digunakan")
+	} else if berr != nil && !errors.Is(berr, pgx.ErrNoRows) {
+		return nil, nil, fmt.Errorf("db: %w", berr)
 	}
-	workspace, err := sp.Create(ctx, owner, strings.TrimSpace(in.Name), slug)
+	// Ask-first onboarding parity with the REST create path (httpapi
+	// rest_workspaces.go): a caller creating their FIRST workspace reuses the
+	// account signup already made instead of minting a second one. Workspaces.Create
+	// always inserts a fresh account (issue #158), so without this the first
+	// workspace created through MCP would leave the user owning two accounts —
+	// one of them workspace-less and unreachable. Bounded exactly like REST: only
+	// when the caller has no workspace yet, and only for an account that carries
+	// no CONTENT (a legacy account holding forms/products/sales is a
+	// data-migration decision, not a side effect of creating a workspace).
+	//
+	// The caller's own API key is NOT such content: an /mcp caller always has
+	// one (auth resolves the Bearer through the api_keys table), so treating it
+	// as a boundary made this branch unreachable on the one transport that needs
+	// it and minted a second account with the credential stranded. See
+	// dbstore.WorkspaceStore.SoleEmptyUnscopedAccount.
+	var workspace *dbstore.Workspace
+	if prior, _ := sp.ByMember(ctx, owner); len(prior) == 0 {
+		if accID, aerr := sp.SoleEmptyUnscopedAccount(ctx, owner); aerr == nil && accID != "" {
+			workspace, err = sp.CreateForAccount(ctx, owner, strings.TrimSpace(in.Name), slug, accID)
+		}
+	}
+	if workspace == nil && err == nil {
+		workspace, err = sp.Create(ctx, owner, strings.TrimSpace(in.Name), slug)
+	}
 	if err != nil {
 		// unique-constraint backstop (race between the pre-check and INSERT)
 		var pgErr *pgconn.PgError

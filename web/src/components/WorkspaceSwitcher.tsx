@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useI18n } from "./i18n";
 import type { WorkspaceRow } from "./session";
+import { createWorkspace } from "../lib/workspace";
 
 // Compact workspace selector for the TOPBAR (issue #380). The old full-width
 // switcher lived in the sidebar user card and pushed the nav menu down so not
@@ -94,32 +95,25 @@ export function WorkspaceSwitcher({
     return t(`role.${role}` as any) || role;
   }
 
-  async function createWorkspace(e: React.FormEvent) {
+  async function createWorkspaceSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (busy) return;
     setBusy(true);
     setError(null);
-    try {
-      const res = await fetch("/api/workspaces", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name.trim(), slug: slug.trim() }),
-      });
-      if (!res.ok) {
-        let msg = t("workspace.createFail");
-        if (res.status === 409) msg = t("workspace.slugTaken");
-        else if (res.status === 400) msg = t("workspace.slugInvalid");
-        setError(msg);
-        setBusy(false);
-        return;
-      }
-      // New workspace created — hard reload so the session bundle re-fetches
-      // the updated workspace list and the switcher shows both workspaces.
-      window.location.reload();
-    } catch {
-      setError(t("workspace.createFail"));
+    // Shared implementation (lib/workspace.createWorkspace): the status →
+    // message mapping (409 slug taken / 400 slug invalid / anything else) lives
+    // in ONE place so the switcher and the first-run ask cannot drift, and the
+    // error key is rendered through the dictionary rather than the server's own
+    // (Malay) text.
+    const r = await createWorkspace({ name, slug });
+    if (!r.ok) {
+      setError(t(r.errorKey));
       setBusy(false);
+      return;
     }
+    // New workspace created — hard reload so the session bundle re-fetches the
+    // updated workspace list and the switcher shows both workspaces.
+    window.location.reload();
   }
 
   const chevron = (
@@ -267,7 +261,7 @@ export function WorkspaceSwitcher({
           {/* New workspace — inline create form inside the dropdown. */}
           <div className="mt-1 border-t border-[var(--jf-border)] pt-1">
             {creating ? (
-              <form onSubmit={createWorkspace} className="space-y-1.5 rounded-md bg-slate-50 p-2">
+              <form onSubmit={createWorkspaceSubmit} className="space-y-1.5 rounded-md bg-slate-50 p-2">
                 <input
                   value={name}
                   onChange={(e) => setName(e.target.value)}

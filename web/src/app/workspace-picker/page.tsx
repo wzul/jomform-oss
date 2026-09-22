@@ -23,6 +23,7 @@ import { useRouter } from "next/navigation";
 import { useI18n } from "../../components/i18n";
 import type { WorkspaceRow } from "../../components/session";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
+import { createWorkspace, enterWorkspace } from "../../lib/workspace";
 
 // The subset of /api/auth/me this page needs.
 type Me = { default_workspace_id?: string };
@@ -37,6 +38,12 @@ export default function WorkspacePickerPage() {
   // Issue #503: a REAL loading flag. Never infer "loading" from an empty list —
   // that is what made empty, failed and loading indistinguishable.
   const [checking, setChecking] = useState(true);
+  // Ask-first onboarding: with zero workspaces this page IS the first-run
+  // prompt, so it carries the create form (name + slug) instead of the bare
+  // "You don't have any workspaces yet." + Retry that used to be a dead end.
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newSlug, setNewSlug] = useState("");
 
   // Issue #163: short role label for the picker rows.
   function roleLabel(role?: string): string {
@@ -90,9 +97,33 @@ export default function WorkspacePickerPage() {
   }, [load]);
 
   function enter(slug: string) {
-    try {
-      localStorage.setItem("jf_workspace", slug);
-    } catch {}
+    enterWorkspace(slug);
+    router.replace("/");
+  }
+
+  // askFirstCreate is the first-run action: create the workspace, enter it, and
+  // land on the dashboard inside it. No reload: the session bundle is
+  // workspace-keyed (session.tsx) and enterWorkspace dispatches the change, so
+  // the dashboard re-fetches for the new workspace. A user who reaches this page
+  // with zero workspaces is expected to take exactly this path before any create
+  // surface is reachable.
+  async function askFirstCreate(e: React.FormEvent) {
+    e.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    const r = await createWorkspace({ name: newName, slug: newSlug });
+    if (!r.ok) {
+      // The create-failed copy is a rendered i18n string from the shared
+      // dictionary — never the server's own text (the API answers in Malay
+      // prose, which is the separate i18n defect).
+      setError(t(r.errorKey));
+      setBusy(false);
+      return;
+    }
+    enterWorkspace(r.slug);
+    setCreating(false);
+    setBusy(false);
     router.replace("/");
   }
 
@@ -132,9 +163,15 @@ export default function WorkspacePickerPage() {
             JF
           </div>
           <h1 className="text-xl font-semibold text-[var(--jf-text)]" style={{ letterSpacing: "-0.02em" }}>
-            {t("workspace.pickerTitle")}
+            {!checking && !error && workspaces.length === 0
+              ? t("workspace.askPageTitle")
+              : t("workspace.pickerTitle")}
           </h1>
-          <p className="mt-1.5 text-sm text-[var(--jf-muted)]">{t("workspace.pickerSubtitle")}</p>
+          <p className="mt-1.5 text-sm text-[var(--jf-muted)]">
+            {!checking && !error && workspaces.length === 0
+              ? t("workspace.askPageSubtitle")
+              : t("workspace.pickerSubtitle")}
+          </p>
         </div>
 
         <div className="rounded-xl border border-[var(--jf-border)] bg-white p-6 shadow-[0_0_0_1px_rgba(0,0,0,0.2),0_8px_24px_rgba(0,0,0,0.4)]">
@@ -158,9 +195,66 @@ export default function WorkspacePickerPage() {
               </button>
             </div>
           ) : workspaces.length === 0 ? (
-            <p className="py-6 text-center text-sm text-[var(--jf-muted)]">
-              {t("workspace.empty")}
-            </p>
+            /* Ask-first onboarding (Wan's decision, 2026-09-20): a user with no
+               workspace at all is ASKED to create one, and this is the prompt.
+               It replaces a dead end that rendered
+               t("workspace.empty") + a Retry button and nothing else — the only
+               create affordance was the hidden "+ New workspace" inside the
+               topbar switcher, which is why nobody found it. The flow finishes
+               by entering the new workspace, so the user can immediately create
+               a form with no error. */
+            <form onSubmit={askFirstCreate} className="space-y-3">
+              <p className="text-sm font-medium text-[var(--jf-text)]">
+                {t("workspace.askTitle")}
+              </p>
+              <p className="text-[13px] leading-relaxed text-[var(--jf-muted)]">
+                {t("workspace.askBody")}
+              </p>
+              <div>
+                <label htmlFor="ask-ws-name" className="mb-1 block text-xs font-medium text-[var(--jf-muted)]">
+                  {t("workspace.name")}
+                </label>
+                <input
+                  id="ask-ws-name"
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  required
+                  autoFocus
+                  disabled={busy}
+                  className="min-h-11 w-full rounded-md border border-[var(--jf-border)] bg-white px-3 text-sm text-[var(--jf-text)] outline-none focus:border-[#7170ff]/60 focus:bg-indigo-50 disabled:opacity-50"
+                />
+              </div>
+              <div>
+                <label htmlFor="ask-ws-slug" className="mb-1 block text-xs font-medium text-[var(--jf-muted)]">
+                  {t("workspace.slug")}
+                </label>
+                <input
+                  id="ask-ws-slug"
+                  value={newSlug}
+                  onChange={(e) => setNewSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))}
+                  required
+                  disabled={busy}
+                  className="min-h-11 w-full rounded-md border border-[var(--jf-border)] bg-white px-3 text-sm text-[var(--jf-text)] outline-none focus:border-[#7170ff]/60 focus:bg-indigo-50 disabled:opacity-50"
+                />
+                {newSlug && (
+                  <p className="mt-1 text-[11px] text-[var(--jf-muted)]">
+                    {t("workspace.askHost", { slug: newSlug })}
+                  </p>
+                )}
+              </div>
+              {error && (
+                <p role="alert" className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-[13px] text-red-700">
+                  {error}
+                </p>
+              )}
+              <button
+                type="submit"
+                disabled={busy}
+                className="min-h-11 w-full rounded-md bg-[#5e6ad2] px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-[#828fff] disabled:opacity-50"
+              >
+                {busy ? "…" : t("workspace.create")}
+              </button>
+            </form>
           ) : (
             <ul className="space-y-2">
               {workspaces.map((s) => {
@@ -214,7 +308,8 @@ export default function WorkspacePickerPage() {
         </div>
 
         {/* Issue #503: a genuinely empty list is still a dead end without an
-            action — offer a re-check. */}
+            action — offer a re-check, plus the inline "?" docs link AGENTS.md
+            documentation parity asks for next to the feature. */}
         {!checking && !error && workspaces.length === 0 && (
           <div className="mt-4 text-center">
             <button
@@ -224,6 +319,12 @@ export default function WorkspacePickerPage() {
             >
               {t("common.retry")}
             </button>
+            <a
+              href="/docs#workspaces"
+              className="ml-3 text-xs text-[var(--jf-muted)] underline decoration-dotted underline-offset-2 hover:text-[var(--jf-primary)]"
+            >
+              {t("workspace.docs")}
+            </a>
           </div>
         )}
       </div>

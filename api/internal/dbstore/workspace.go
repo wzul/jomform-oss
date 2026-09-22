@@ -89,6 +89,119 @@ func (s *WorkspaceStore) Create(ctx context.Context, ownerUserID, name, slug str
 	return sp, nil
 }
 
+// SoleEmptyUnscopedAccount reports the caller's ONE account when (a) the caller
+// owns exactly one account, (b) that account is not linked to any workspace, and
+// (c) it carries no CONTENT (no forms, products or sales).
+//
+// WHY THIS EXISTS (ask-first onboarding)
+//   A signup creates an account and NO workspace (auth.go; Wan's decision
+//   2026-09-20), and a user with zero workspaces is asked to create one before
+//   they can reach any create surface. If that first workspace were created the
+//   ordinary way, Workspaces.Create would insert a SECOND account linked to it
+//   (issue #158) and the signup account would be left behind with
+//   workspace_id NULL — reachable by nothing, while the dashboard reads the
+//   account resolved from the scoped workspace. So the create path reuses this
+//   account instead, and the user ends with exactly one.
+//
+// The CONTENT condition is the boundary of this method and not an optimisation:
+// an account that already holds forms/products/sales is a legacy workspace-less
+// account, and moving it (and the public host slug its published forms resolve
+// through — PublicHostSlugByAccount) is a DATA MIGRATION decision that is
+// enumerated and measured per user, not a side effect of pressing "create
+// workspace". Such an account is reported as "" here so the caller keeps the
+// fresh-account behaviour. Relaxing that guard is the legacy card's call.
+//
+// api_keys is deliberately NOT part of that boundary, although it was until this
+// fix. A key is a CREDENTIAL, not content: it carries no public host slug and no
+// published URL, so there is nothing for a link to move, while CreateForAccount
+// already syncs api_keys.workspace_id with the account. Excluding key holders
+// made this method unreachable on the one transport that always has a key — an
+// /mcp caller authenticates through the key table (mcpsrv/http.go), so every MCP
+// create_workspace call was refused the reuse and fell through to
+// Workspaces.Create, leaving a fresh user owning TWO accounts with the agent's
+// own credential stranded on the unreachable signup one (the dashboard could
+// neither list nor revoke it). It also broke the REST path for any key-holding
+// user. The key travels with its account instead; see
+// TestSoleEmptyUnscopedAccountKeepsTheCallersKey.
+func (s *WorkspaceStore) SoleEmptyUnscopedAccount(ctx context.Context, userID string) (string, error) {
+	var id string
+	err := s.pool.QueryRow(ctx, `
+		SELECT a.id
+		FROM accounts a
+		WHERE a.owner_user_id = $1
+		  AND a.workspace_id IS NULL
+		  AND (SELECT count(*) FROM accounts b WHERE b.owner_user_id = $1) = 1
+		  AND NOT EXISTS (SELECT 1 FROM forms f WHERE f.account_id = a.id)
+		  AND NOT EXISTS (SELECT 1 FROM products p WHERE p.account_id = a.id)
+		  AND NOT EXISTS (SELECT 1 FROM sales s WHERE s.account_id = a.id)
+		LIMIT 1`, userID).Scan(&id)
+	if err != nil {
+		// No such account (including "the caller owns several") is NOT an error
+		// here: it means "use the ordinary fresh-account path".
+		return "", nil
+	}
+	return id, nil
+}
+
+// CreateForAccount makes a new workspace (slug unique) and links an EXISTING
+// account to it instead of inserting a fresh one — the ask-first onboarding path
+// (see SoleEmptyUnscopedAccount). The account must already belong to
+// ownerUserID; the UPDATE is owner-checked so a caller can never link somebody
+// else's account into their new workspace.
+//
+// It also syncs the workspace_id carried by the account's dependent rows. This
+// is required, not optional: trg_forms_sync_workspace_id fires only on INSERT /
+// UPDATE OF account_id on forms (migration 000045), so linking the ACCOUNT does
+// not move the rows that hang off it. The precedent is migration 000012, which
+// synced forms/products/sales/api_keys explicitly. Under the content guard above
+// there is normally nothing to move, but the sync belongs here so the method is
+// correct for any caller rather than correct only because of its current one.
+func (s *WorkspaceStore) CreateForAccount(ctx context.Context, ownerUserID, name, slug, accountID string) (*Workspace, error) {
+	sp := &Workspace{Owner: ownerUserID, Name: name, Slug: slug}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return sp, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if err := tx.QueryRow(ctx,
+		`INSERT INTO workspaces (owner_user_id, name, slug) VALUES ($1,$2,$3)
+		 RETURNING id, owner_user_id, name, slug`,
+		ownerUserID, name, slug).Scan(&sp.ID, &sp.Owner, &sp.Name, &sp.Slug); err != nil {
+		return sp, err
+	}
+	// Owner-checked link: the account must belong to the workspace's owner and
+	// must not already be in another workspace.
+	ct, err := tx.Exec(ctx,
+		`UPDATE accounts SET workspace_id=$1, updated_at=now()
+		 WHERE id=$2 AND owner_user_id=$3 AND workspace_id IS NULL`,
+		sp.ID, accountID, ownerUserID)
+	if err != nil {
+		return sp, err
+	}
+	if ct.RowsAffected() != 1 {
+		return sp, errAccountNotLinkable
+	}
+	for _, stmt := range []string{
+		`UPDATE forms SET workspace_id=$1 WHERE account_id=$2 AND workspace_id IS NULL`,
+		`UPDATE products SET workspace_id=$1 WHERE account_id=$2 AND workspace_id IS NULL`,
+		`UPDATE sales SET workspace_id=$1 WHERE account_id=$2 AND workspace_id IS NULL`,
+		`UPDATE api_keys SET workspace_id=$1 WHERE account_id=$2 AND workspace_id IS NULL`,
+	} {
+		if _, err := tx.Exec(ctx, stmt, sp.ID, accountID); err != nil {
+			return sp, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return sp, err
+	}
+	return sp, nil
+}
+
+// errAccountNotLinkable is returned when an account cannot be linked to a new
+// workspace (not owned by the caller, or already linked elsewhere).
+var errAccountNotLinkable = errors.New("akaun tidak boleh dikaitkan dengan workspace")
+
 // WorkspaceAccess carries the account set + the caller's role for a workspace the
 // user can access (owner or member). Role is one of RoleReadOnly/RoleManage/
 // RoleAdmin (issue #162). Accounts holds every account linked to the workspace.

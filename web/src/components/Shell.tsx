@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useI18n, type Key } from "./i18n";
 import { useSession } from "./session";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
+import { clearPerUserStorage, clearUnknownWorkspaceScope } from "../lib/workspace";
 
 // AppShell: fixed left sidebar + topbar + content area. Light theme.
 // Issue #29: nav links are Next <Link> (client-side transitions + prefetch,
@@ -27,7 +28,7 @@ export function Shell({
   children: React.ReactNode;
   active: "dashboard" | "forms" | "templates" | "products" | "sales" | "spam" | "deliveries" | "subscriptions" | "settings" | "profile" | "media" | "feedback" | "chat" | "admin";
 }) {
-  const { user, workspaces, reload } = useSession();
+  const { user, workspaces, reload, bundle } = useSession();
   const [workspace, setWorkspace] = useState<string>("");
   const [menuOpen, setMenuOpen] = useState(false);
   const { t } = useI18n();
@@ -98,16 +99,35 @@ export function Shell({
   }, [menuOpen]);
 
   useEffect(() => {
-    const ws = Array.isArray(workspaces) ? workspaces : [];
-    if (!ws.length) return;
-    const saved = localStorage.getItem("jf_workspace");
-    if (saved && ws.some((s) => s.slug === saved)) {
-      setWorkspace(saved);
+    // `useSession()` derives `workspaces` from the dashboard bundle, which is
+    // `undefined` until that fetch settles and `null` when it failed — only a
+    // settled payload is an ANSWER. Reconciling against anything else dropped a
+    // VALID stored slug on first paint: the Shell cleared `jf_workspace` before
+    // the SessionProvider (or any page) could read it, `role` then resolved to
+    // "" and the role-gated surfaces (Settings → Members, CHIP) never rendered.
+    // `undefined` is the NO-OP branch of clearUnknownWorkspaceScope
+    // (lib/workspace.ts) — the "no list returned at all" case its own comment
+    // documents — and it was unreachable before.
+    const ws = bundle == null ? undefined : Array.isArray(workspaces) ? workspaces : undefined;
+    // Issue #503 follow-up: reconcile the stored slug against the list the
+    // server actually returned. `if (!ws.length) return;` used to leave a
+    // FOREIGN slug in localStorage when the caller has zero workspaces — the
+    // next scoped write then went out as ?workspace=<other tenant> and the API
+    // answered 403 "workspace tidak dijumpai". clearUnknownWorkspaceScope drops
+    // it (an empty list is a real answer) and is a no-op when there is no list.
+    const surviving = clearUnknownWorkspaceScope(ws);
+    if (ws === undefined) return;
+    if (!ws.length) {
+      setWorkspace("");
+      return;
+    }
+    if (surviving) {
+      setWorkspace(surviving);
     } else {
       setWorkspace(ws[0].slug);
       localStorage.setItem("jf_workspace", ws[0].slug);
     }
-  }, [workspaces]);
+  }, [workspaces, bundle]);
 
   function switchWorkspace(slug: string) {
     setWorkspace(slug);
@@ -142,6 +162,13 @@ export function Shell({
   }
 
   async function signOut() {
+    // Clear the per-user cached scope BEFORE the session is destroyed. jf_workspace
+    // is never cleared anywhere else, so without this the next user on this
+    // browser inherits the previous user's slug and every scoped write 403s
+    // with "workspace tidak dijumpai" — the reported bug. The sweep covers every
+    // per-user key (lib/workspace.PER_USER_STORAGE_KEYS), not just the one that
+    // bit, so a sibling key cannot be inherited the same way.
+    clearPerUserStorage();
     await fetch("/api/auth/logout", { method: "POST" });
     router.replace("/login");
     window.location.href = "/login";

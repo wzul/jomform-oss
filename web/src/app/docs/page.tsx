@@ -26,6 +26,11 @@ const FEATURES: { title: string; body: string; slug?: string }[] = [
     body: "Choose how each product photo appears on your form: size (small 52px, medium 96px, large 160px or hidden) and layout (thumbnail-left, the default, or image-top — a menu-card look with a full-width photo above the name, ideal for a restaurant menu). The renderer serves the matching optimised media variant for the chosen size. Set it in Form Settings → General (with a live preview) or over MCP via set_form_theme (product_image_size / product_image_layout).",
   },
   {
+    title: "Workspaces (your account's tenant)",
+    slug: "workspaces",
+    body: "A workspace holds your forms, products, sales, CHIP credentials, domains and settings. Every workspace owns its own account, so data never crosses between them, and each has its own public host: your forms are served from {slug}.jomform.com (or a custom domain you add). If you have no workspace yet, the dashboard asks you to create one the first time you sign in — name it and pick a URL slug, and you land inside it able to create a form straight away. Create more later from the workspace switcher in the top bar (\"New workspace\"); the switcher also sets which workspace you land on after login. A new workspace starts empty: no CHIP credentials, no products, no sales.",
+  },
+  {
     title: "Sales",
     body: "Track every sale: reference code, status (pending/confirmed/failed/refunded), buyer, amount, payment method and date. Confirm bank-transfer sales, capture or release skip-capture authorisations, refund paid sales (full or partial), and export sales to CSV. A form's mode decides what its entries are called, not whether you can reach them: a payment form (the default) takes payment and offers a Sales action on the Forms list, while a response-only form offers a Submission action. Both point at the same per-form list — an RSVP form is never labelled sales, and it still has a way into its responses. `GET /v1/rest/forms` (list, single and create) reports the mode as `mode` (`payment` or `response`; a form created before response mode existed reports `payment`).",
   },
