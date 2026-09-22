@@ -801,7 +801,7 @@ func (s *Server) registerTools() {
 	}, s.enableTwoFA)
 	addTool(s, &mcp.Tool{
 		Name:        "disable_2fa",
-		Description: "Matikan 2FA (perlu kata laluan akaun untuk pengesahan).",
+		Description: "Matikan 2FA (perlu kata laluan akaun untuk pengesahan). Mematikan 2FA juga membatalkan SEMUA peranti dipercayai akaun — peranti yang melangkau faktor yang kini dibuang tidak boleh kekal dikecualikan (sama seperti REST; guna list_trusted_devices untuk semak).",
 	}, s.disableTwoFA)
 
 	// ── Parity: trusted devices (issue #454) ─────────────────────────────

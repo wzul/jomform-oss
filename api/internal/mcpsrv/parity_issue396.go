@@ -726,7 +726,13 @@ func (s *Server) disableTwoFA(ctx context.Context, _ *mcp.CallToolRequest, in di
 	if err := s.requireWriteScope(ctx); err != nil {
 		return nil, nil, err
 	}
-	if s.deps.Users == nil {
+	// The trust set lives in the Valkey keyspace the session store owns, so a
+	// nil Sessions means the revocation below cannot run. Refuse the whole call
+	// instead of clearing the factor and leaving the live trust exemptions
+	// behind — that is precisely the state this tool must never create, and it
+	// is the same answer the sibling revoke_all_trusted_devices gives on a nil
+	// store.
+	if s.deps.Users == nil || s.deps.Sessions == nil {
 		return nil, nil, errors.New("perkhidmatan tidak tersedia")
 	}
 	userID := s.userIDFor(ctx)
@@ -740,6 +746,20 @@ func (s *Server) disableTwoFA(ctx context.Context, _ *mcp.CallToolRequest, in di
 	ok, err := auth.VerifyPassword(in.Password, u.PasswordHash)
 	if err != nil || !ok {
 		return nil, nil, errors.New("kata laluan tidak sah")
+	}
+	// Issue #63 (REST parity — httpapi handle2FADisable, api/internal/httpapi/
+	// auth.go): a trusted device waives the 2FA code for 30 days, so once the
+	// factor is gone every exemption minted while it was on has to go with it.
+	// MCP is not cookie-based, so there is no trust cookie to clear here: the
+	// Valkey trust SET is the entire effect.
+	//
+	// Order matters. Revoking FIRST means a failure can only ever leave the
+	// harmless partial state (2FA still on, trust emptied — the next login just
+	// asks for a code again); the other order can leave 2FA off with a live
+	// trust exemption, i.e. exactly the hole this card is about. The proof
+	// above has already been checked, so this is not reachable unauthenticated.
+	if err := s.deps.Sessions.TrustedDevices().RevokeAll(ctx, userID); err != nil {
+		return nil, nil, fmt.Errorf("db: %w", err)
 	}
 	if err := s.deps.Users.DisableTOTP(ctx, userID); err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
