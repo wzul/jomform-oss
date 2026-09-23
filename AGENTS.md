@@ -18,27 +18,29 @@ source ${JOMFORM_ENV:-$HOME/.config/jomform/test-env.sh}   # JOMFORM_TEST_DATABA
 ```
 
 `scripts/preflight.sh` is the single entry point — the ported CI gates, in the
-same order as the three CI jobs they replace:
+same order as the three CI jobs they replace.
 
-| Gate | Command | What it catches |
-|---|---|---|
-| api build | `cd api && go build ./...` | compile errors |
-| api vet | `cd api && go vet ./...` | suspicious constructs |
-| api test | `cd api && go test ./... -race -count=1` | regressions **and data races** (the old local trio ran without `-race`) |
-| api govuln | `govulncheck ./...` | known CVEs reachable from the module graph |
-| web build | `cd web && npm run build` | `test:unit` (incl. the cross-language Go-contract guards) then the Next build |
-| web a11y | `cd web && npm run a11y` | axe-core; fails on any **critical/serious** WCAG violation |
-| web audit | `cd web && npm audit --audit-level=high` | high/critical npm advisories |
-| secrets | `gitleaks detect` over the **full git history** | committed secrets (repo may go public) |
-| monitor | `deploy/monitoring/jomform-watch_test.sh` | the uptime watchdog alerts on a failure, stays quiet on a success, and never reports green when it has no way to alert |
-| tmpkey | `deploy/tmp-apikey_test.sh` | the temp-API-key helper cannot carry a psql tag in the key id, deletes by exact name, and treats a surviving row as a failure |
-| selftest | `scripts/preflight_test.sh` | the gate runner's own safety properties: an all-skipped run is refused instead of reported green, a missing prerequisite fails instead of skipping, and the gate inventory cannot drift from the gates that can actually run |
+**The gate table is NOT here any more — it is `GATE-INVENTORY.md` (repo root).**
+This paragraph used to carry a hand-written table that lagged the runner by five
+gates, plus a warning about hand-written rot that had itself rotted. Both are
+gone. The reason is mechanical: `AGENTS.md` is a **write-gated** agent-instruction
+file, so a headless worker that adds a gate in `scripts/preflight.sh` **cannot add
+the matching row** — its write is refused and its card blocks (observed repeatedly;
+last: `t_59df76bb`). Every table update became a human-only edit, which is exactly
+how it drifted.
 
-**This table is documentation, not the inventory — `./scripts/preflight.sh --list` is the
-authority.** Read the count from there rather than from this table: the list above lagged the
-runner by three gates (`monitor`, `tmpkey`, `selftest`) because the table is written by hand
-while the gates are added in code. Every gate can stop the run, so treating a missing row as
-"not a gate" is the failure mode this note exists to prevent.
+The split is deliberate and is the one `MCP-PARITY.md` already uses: **the RULE
+stays here, the DATA moves to a file agents can update.**
+
+1. The table lives in `GATE-INVENTORY.md`.
+2. `./scripts/preflight.sh --list` is the runtime authority for what can run.
+3. The `selftest` gate **parses `GATE-INVENTORY.md`** and fails the run when the
+   table and `--list` disagree in either direction — a gate absent from the table,
+   or a name in the table that cannot run. A missing or unparseable table is a
+   FAILURE, never a skip.
+
+So when you add a gate to `scripts/preflight.sh`, add its row to
+`GATE-INVENTORY.md` in the same change. That is now enforced, not remembered.
 
 `deploy/build-and-ship.sh` calls `scripts/preflight.sh` itself, so a deploy
 cannot skip it — the "check before deploy" instruction is now enforced by the

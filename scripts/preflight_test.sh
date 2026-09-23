@@ -68,6 +68,9 @@ cp "$HERE/../web/scripts/web-deps-check.mjs" "$SB/web/scripts/" 2>/dev/null
 cp "$HERE/../web/package.json" "$SB/web/" 2>/dev/null
 chmod +x "$SB/scripts/preflight.sh"
 cp "$HERE/../AGENTS.md" "$SB/AGENTS.md" 2>/dev/null
+# The gate-inventory table lives here (AGENTS.md is write-gated, so the DATA had
+# to move out); check 12 reads it, so the sandbox needs a copy.
+cp "$HERE/../GATE-INVENTORY.md" "$SB/GATE-INVENTORY.md" 2>/dev/null
 cp "$HERE/../Makefile" "$SB/Makefile" 2>/dev/null
 cp "$HERE/../.gitleaks.toml" "$SB/.gitleaks.toml" 2>/dev/null
 git -C "$SB" init -q .
@@ -390,6 +393,33 @@ elif [ -n "$site_drift" ]; then
   bad "a durable site quotes a different test-env path than the emitted advice ($canon):$site_drift"
 else
   ok "all $site_count durable sites quote the same test-env path ($canon)"
+fi
+
+# 13. The DOCUMENTED gate table (GATE-INVENTORY.md) must match what the runner can
+#     actually do, in BOTH directions. This is the drift that motivated moving the
+#     table out of AGENTS.md: that file is write-gated, so a headless worker that
+#     adds a gate CANNOT add its row (its write is refused and the card blocks),
+#     which is how the table fell five gates behind. The RULE stays in AGENTS.md;
+#     the DATA lives here, where agents can edit it — same split as MCP-PARITY.md.
+#     A missing or unparseable table is a FAILURE, never a skip: a guard that reads
+#     nothing would report the exact green it is meant to prevent.
+INV="$HERE/../GATE-INVENTORY.md"
+if [ ! -f "$INV" ]; then
+  bad "GATE-INVENTORY.md not found at $INV — the documented gate table is missing, so nothing checks it against --list"
+else
+  # The first backticked token at the start of a table row is a gate NAME. Parsing
+  # must ignore the prose above the table and the "See also" line below it, and
+  # must NOT pick up backticked commands in the other columns.
+  documented="$(grep -E '^\|' "$INV" | grep -vE '^\|[[:space:]]*-' \
+    | awk -F'|' '{print $2}' | grep -oE '`[A-Za-z0-9_]+`' | tr -d '`' | sort -u)"
+  if [ -z "$documented" ]; then
+    bad "GATE-INVENTORY.md has a table but no gate names could be parsed from column 1 — a guard that reads nothing proves nothing"
+  elif [ "$documented" = "$(printf '%s\n' $GATES | sort -u)" ]; then
+    ok "GATE-INVENTORY.md documents exactly the $NGATES gates --list advertises (no drift)"
+  else
+    bad "gate-table drift — in the runner but NOT documented: [$(comm -13 <(printf '%s\n' "$documented") <(printf '%s\n' $GATES | sort -u) | tr '\n' ' ')] / documented but NOT runnable: [$(comm -23 <(printf '%s\n' "$documented") <(printf '%s\n' $GATES | sort -u) | tr '\n' ' ')]"
+  fi
+
 fi
 
 echo "---"
