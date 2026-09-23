@@ -28,11 +28,34 @@
 // and phone width, with all three actions still present, inside the viewport
 // and still linking where they used to.
 //
+// WHY IT NOW RENDERS BOTH FORM MODES (the follow-up this file is named after)
+// The first version of this guard stubbed ONE form — `{ id, slug, title,
+// status, url, config, theme }` with no `mode` — so every case it measured was
+// a PAYMENT form and the second action was always the Sales link. A response
+// form renders a different and, in English, longer label: `formEntriesAction`
+// (src/lib/formMode.ts) returns `nav.sales` for a payment form and
+// `nav.submissions` otherwise, and `nav.submissions` in en is "Submission",
+// measured 118px against "Sales"' 75px. The header row is exactly what this
+// guard is about, so the widest second-label case was the one case it never
+// laid out. The stub is now parameterised by mode and every measurement below
+// runs for BOTH modes, per mode asserting the label that mode must carry — so
+// the stub cannot silently drift back to a single variant.
+//
+// The mode→label mapping is asserted as the RENDERED text (`nav.sales` for
+// payment, `nav.submissions` for response), not as the presence of `mode` in
+// the stub: if the stub stops sending `mode`, or the mapping in formMode.ts
+// flips, the response case fails on its label instead of quietly measuring the
+// payment one again. The destination is the same for both modes
+// (`/sales?form=<id>`, which renders a response form's entries in the answers
+// layout, #604), so the href set is shared.
+//
 // WHAT MAKES IT BITE (verified, not assumed)
 // Neutralising the fix (back to `flex items-center gap-2`), rebuilding and
 // re-running this file turns it red at 320px in ta/ms/ar with the measured
 // overflow quoted above, and the failing assertion names the cluster and the
-// action that crosses the viewport edge.
+// action that crosses the viewport edge. Since this file renders both modes,
+// that neutralisation reddens BOTH of them — the response variant is not a
+// case this guard only nominally covers.
 //
 // The API is stubbed at the browser level (no Go server, no session, no DB), so
 // the gate needs nothing but the build it is already serving.
@@ -47,6 +70,23 @@ const LANGS = ["en", "ms", "zh", "ta", "ar"] as const;
 const FORM_ID = "form_header_guard";
 const FORM_URL = "https://jomform.example/f/demo-form";
 
+/**
+ * The two collection modes this page renders a header for, each with the
+ * entries label it MUST carry (`formEntriesAction` in src/lib/formMode.ts).
+ * Every measurement below loops over this list, so a variant the guard renders
+ * is a variant that can regress. `mode` is the TOP-LEVEL field the Go API
+ * serialises (`restForm.Mode`); the legacy no-mode payload (which the API
+ * answers as "payment") is covered by api/internal/httpapi's payload test and
+ * by src/lib/formMode.test.ts, not by this browser gate.
+ */
+const MODES = [
+  { mode: "payment", entriesLabelKey: "nav.sales" },
+  { mode: "response", entriesLabelKey: "nav.submissions" },
+] as const;
+
+type ModeVariant = (typeof MODES)[number];
+type LabelKey = "fs.editFields" | "nav.sales" | "nav.submissions" | "bld.view";
+
 // RTL locales lay out from the right, so "inside the viewport" must be checked
 // against both edges (an RTL overflow runs off the LEFT edge).
 const isRTL = (lang: string) => lang === "ar";
@@ -55,7 +95,10 @@ const isRTL = (lang: string) => lang === "ar";
 // loaded state without a Go API, a session cookie or a database. Registered as
 // a catch-all FIRST and the specific routes after it: Playwright resolves
 // matching routes in reverse registration order, so the later (specific) ones win.
-async function stubAPI(page: Page) {
+//
+// `mode` comes from the caller: it is the whole point of this guard. Dropping
+// it would render the payment variant for every case again.
+async function stubAPI(page: Page, mode: ModeVariant["mode"]) {
   const json = (body: unknown) => ({
     status: 200,
     contentType: "application/json",
@@ -83,6 +126,7 @@ async function stubAPI(page: Page) {
         title: "Demo form",
         status: "published",
         url: FORM_URL,
+        mode,
         config: { blocks: [] },
         theme: {},
       }),
@@ -174,123 +218,158 @@ async function measureHeader(page: Page): Promise<HeaderGeometry> {
 }
 
 for (const lang of LANGS) {
-  test(`the /form-settings header does not scroll the page sideways in ${lang} at 320/360/390/430px`, async ({
-    browser,
-  }) => {
-    // The a11y gate runs this file alongside the axe scans and the chip
-    // measurements on a shared host, so the per-test budget is generous: a slow
-    // first paint under contention must not read as a layout defect.
-    test.setTimeout(180_000);
-    const t = (key: "fs.editFields" | "nav.sales" | "bld.view") => DICT[key][lang];
-    // The form is a payment form (no `mode` on the stub), so its entries action
-    // is the Sales one; the destination is the same for both modes.
-    const expectedLabels = [t("fs.editFields"), t("nav.sales"), t("bld.view")];
-    const expectedHrefs = [`/builder?form=${FORM_ID}`, `/sales?form=${FORM_ID}`, FORM_URL];
-    const measured: string[] = [];
+  for (const variant of MODES) {
+    const { mode, entriesLabelKey } = variant;
+    test(`the /form-settings header does not scroll the page sideways in ${lang}, ${mode} form, at 320/360/390/430px`, async ({
+      browser,
+    }) => {
+      // The a11y gate runs this file alongside the axe scans and the chip
+      // measurements on a shared host, so the per-test budget is generous: a
+      // slow first paint under contention must not read as a layout defect.
+      test.setTimeout(180_000);
+      const t = (key: LabelKey) => DICT[key][lang];
+      // The second action is the mode's entries action: Sales for a payment
+      // form, Submission for a response form. The destination is the same for
+      // both modes.
+      const expectedLabels = [t("fs.editFields"), t(entriesLabelKey), t("bld.view")];
+      const expectedHrefs = [`/builder?form=${FORM_ID}`, `/sales?form=${FORM_ID}`, FORM_URL];
+      const measured: string[] = [];
 
-    for (const width of WIDTHS) {
-      const context = await browser.newContext({
-        viewport: { width, height: 720 },
-        deviceScaleFactor: 1,
-      });
-      // A FRESH context per width/locale: no cookie, no localStorage and no
-      // service worker carried over from an earlier case, so this is the state
-      // a new visitor gets.
-      await context.addInitScript(
-        ([l]) => {
-          localStorage.setItem("jf_workspace", "demo");
-          localStorage.setItem("jf_lang", l as string);
-        },
-        [lang],
-      );
-      const page = await context.newPage();
-      page.setDefaultTimeout(45_000);
-      await stubAPI(page);
-      await page.goto(`/form-settings?form=${FORM_ID}`, { waitUntil: "networkidle" });
+      for (const width of WIDTHS) {
+        const context = await browser.newContext({
+          viewport: { width, height: 720 },
+          deviceScaleFactor: 1,
+        });
+        // A FRESH context per width/locale/mode: no cookie, no localStorage and
+        // no service worker carried over from an earlier case, so this is the
+        // state a new visitor gets.
+        await context.addInitScript(
+          ([l]) => {
+            localStorage.setItem("jf_workspace", "demo");
+            localStorage.setItem("jf_lang", l as string);
+          },
+          [lang],
+        );
+        const page = await context.newPage();
+        page.setDefaultTimeout(45_000);
+        await stubAPI(page, mode);
+        await page.goto(`/form-settings?form=${FORM_ID}`, { waitUntil: "networkidle" });
 
-      // All three actions must be rendered before anything is measured, or a
-      // slow load would read as "the actions are missing".
-      await expect(page.locator("a.jf-btn-ghost")).toHaveCount(3, { timeout: 45_000 });
-      await expect(page.locator(`a:text-is("${expectedLabels[0]}")`).first()).toBeVisible({
-        timeout: 45_000,
-      });
-      // The locale must actually have applied, or the measurement below is of
-      // some other language and proves nothing.
-      expect(await page.evaluate(() => document.documentElement.dir)).toBe(
-        isRTL(lang) ? "rtl" : "ltr",
-      );
-
-      const g = await measureHeader(page);
-      const where = `${lang} @ ${width}px`;
-
-      // Acceptance: the page itself never scrolls sideways.
-      expect(
-        g.scrollWidth,
-        `${where}: the document scrolls sideways by ${g.scrollWidth - g.clientWidth}px ` +
-          `(clientWidth ${g.clientWidth}, scrollWidth ${g.scrollWidth}). The header action ` +
-          `cluster is "${g.cluster.className}" spanning [${g.cluster.left}, ${g.cluster.right}].`,
-      ).toBe(g.clientWidth);
-
-      // The cluster itself stays inside the viewport (both edges — an RTL
-      // overflow runs off the left edge).
-      expect(
-        g.cluster.left,
-        `${where}: the header action cluster starts at ${g.cluster.left}px, left of the viewport`,
-      ).toBeGreaterThanOrEqual(0);
-      expect(
-        g.cluster.right,
-        `${where}: the header action cluster ends at ${g.cluster.right}px, past the ` +
-          `${g.clientWidth}px viewport. It is "${g.cluster.className}" — a non-wrapping row ` +
-          `cannot shrink below its widest button, so it widens the whole document.`,
-      ).toBeLessThanOrEqual(g.clientWidth);
-
-      // No internal overflow either: the buttons must not be clipped.
-      expect(
-        g.cluster.scrollOverflow,
-        `${where}: the header action cluster scrolls internally by ${g.cluster.scrollOverflow}px`,
-      ).toBeLessThanOrEqual(1);
-
-      // The three actions are all still there, in order, still linking where
-      // they did, each on screen and with its label uncut.
-      expect(g.actions.map((a) => a.tag)).toEqual(["A", "A", "A"]);
-      expect(g.actions.map((a) => a.text)).toEqual(expectedLabels);
-      expect(g.actions.map((a) => a.href)).toEqual(expectedHrefs);
-      for (const a of g.actions) {
-        expect(a.visible, `${where}: the "${a.text}" action is not visible`).toBe(true);
+        // All three actions must be rendered before anything is measured, or a
+        // slow load would read as "the actions are missing".
+        //
+        // THREE is correct for THIS fixture and has to stay tied to it: the
+        // View link is guarded by `form?.url &&` in page.tsx, so a draft form,
+        // or a published form stubbed with `url: ""`, renders only TWO actions.
+        // That is correct behaviour (verified separately: 2 actions, page clean
+        // at 320px in en/ta/ar), not a missing action — so do not lift this
+        // count onto a fixture where it is false, and do not drop `url` here.
+        await expect(page.locator("a.jf-btn-ghost")).toHaveCount(3, { timeout: 45_000 });
+        // The labels are asserted on the header's OWN actions (`nth`), never by
+        // page-wide text: the sidebar carries its own "Sales" link
+        // (`/sales` in Shell.tsx), so `a:text-is("Sales")` resolves to that
+        // OFF-SCREEN nav item first at phone widths and would report the header
+        // action as hidden. Scoped this way the assertion is about the header
+        // row, which is what this guard owns.
+        await expect(page.locator("a.jf-btn-ghost").nth(0)).toContainText(expectedLabels[0], {
+          timeout: 45_000,
+        });
+        // The mode's own label must be on screen before the measurement: this
+        // is the assertion that fails if the stub or the mapping drifts back to
+        // a single variant, which is exactly how this guard was blind before.
+        await expect(page.locator("a.jf-btn-ghost").nth(1)).toContainText(expectedLabels[1], {
+          timeout: 45_000,
+        });
+        await expect(page.locator("a.jf-btn-ghost").nth(1)).toBeVisible({ timeout: 45_000 });
+        // The mode must actually have reached the page: a payment form's
+        // entries action is the Sales one, a response form's is Submission.
+        // Asserted as one of the two, on the header action itself, so the two
+        // variants cannot both drift onto the same label unnoticed.
         expect(
-          a.left,
-          `${where}: the "${a.text}" action starts at ${a.left}px, left of the viewport`,
+          await page.locator("a.jf-btn-ghost").nth(1).textContent(),
+          `the ${mode} form's entries action is not labelled ${entriesLabelKey} — the stub or ` +
+            `formEntriesAction has drifted back to a single variant`,
+        ).toBe(expectedLabels[1]);
+        // The locale must actually have applied, or the measurement below is of
+        // some other language and proves nothing.
+        expect(await page.evaluate(() => document.documentElement.dir)).toBe(
+          isRTL(lang) ? "rtl" : "ltr",
+        );
+
+        const g = await measureHeader(page);
+        const where = `${lang} ${mode} @ ${width}px`;
+
+        // Acceptance: the page itself never scrolls sideways.
+        expect(
+          g.scrollWidth,
+          `${where}: the document scrolls sideways by ${g.scrollWidth - g.clientWidth}px ` +
+            `(clientWidth ${g.clientWidth}, scrollWidth ${g.scrollWidth}). The header action ` +
+            `cluster is "${g.cluster.className}" spanning [${g.cluster.left}, ${g.cluster.right}].`,
+        ).toBe(g.clientWidth);
+
+        // The cluster itself stays inside the viewport (both edges — an RTL
+        // overflow runs off the left edge).
+        expect(
+          g.cluster.left,
+          `${where}: the header action cluster starts at ${g.cluster.left}px, left of the viewport`,
         ).toBeGreaterThanOrEqual(0);
         expect(
-          a.right,
-          `${where}: the "${a.text}" action ends at ${a.right}px, past the ${g.clientWidth}px viewport`,
+          g.cluster.right,
+          `${where}: the header action cluster ends at ${g.cluster.right}px, past the ` +
+            `${g.clientWidth}px viewport. It is "${g.cluster.className}" — a non-wrapping row ` +
+            `cannot shrink below its widest button, so it widens the whole document.`,
         ).toBeLessThanOrEqual(g.clientWidth);
+
+        // No internal overflow either: the buttons must not be clipped.
         expect(
-          a.scrollOverflow,
-          `${where}: the "${a.text}" action overflows itself by ${a.scrollOverflow}px`,
+          g.cluster.scrollOverflow,
+          `${where}: the header action cluster scrolls internally by ${g.cluster.scrollOverflow}px`,
         ).toBeLessThanOrEqual(1);
-        expect(a.width, `${where}: the "${a.text}" action has no width`).toBeGreaterThan(40);
+
+        // The three actions are all still there, in order, still linking where
+        // they did — and the second one still carries THIS mode's label — each
+        // on screen and with its label uncut.
+        expect(g.actions.map((a) => a.tag)).toEqual(["A", "A", "A"]);
+        expect(g.actions.map((a) => a.text)).toEqual(expectedLabels);
+        expect(g.actions.map((a) => a.href)).toEqual(expectedHrefs);
+        for (const a of g.actions) {
+          expect(a.visible, `${where}: the "${a.text}" action is not visible`).toBe(true);
+          expect(
+            a.left,
+            `${where}: the "${a.text}" action starts at ${a.left}px, left of the viewport`,
+          ).toBeGreaterThanOrEqual(0);
+          expect(
+            a.right,
+            `${where}: the "${a.text}" action ends at ${a.right}px, past the ${g.clientWidth}px viewport`,
+          ).toBeLessThanOrEqual(g.clientWidth);
+          expect(
+            a.scrollOverflow,
+            `${where}: the "${a.text}" action overflows itself by ${a.scrollOverflow}px`,
+          ).toBeLessThanOrEqual(1);
+          expect(a.width, `${where}: the "${a.text}" action has no width`).toBeGreaterThan(40);
+        }
+
+        // Print the raw numbers: they are the acceptance evidence for this card,
+        // not just pass/fail.
+        measured.push(
+          `${where}: client=${g.clientWidth} scroll=${g.scrollWidth} ` +
+            `cluster="${g.cluster.className}" x=[${g.cluster.left},${g.cluster.right}] ` +
+            g.actions
+              .map((a) => `"${a.text}" x=[${a.left},${a.right}] w=${a.width} top=${a.top}`)
+              .join(" | "),
+        );
+
+        await context.close();
       }
 
-      // Print the raw numbers: they are the acceptance evidence for this card,
-      // not just pass/fail.
-      measured.push(
-        `${where}: client=${g.clientWidth} scroll=${g.scrollWidth} ` +
-          `cluster="${g.cluster.className}" x=[${g.cluster.left},${g.cluster.right}] ` +
-          g.actions
-            .map((a) => `"${a.text}" x=[${a.left},${a.right}] top=${a.top}`)
-            .join(" | "),
-      );
-
-      await context.close();
-    }
-
-    console.log(measured.join("\n"));
-  });
+      console.log(measured.join("\n"));
+    });
+  }
 }
 
 // The desktop header keeps its shape: all three actions on ONE line, inside the
-// header row they share with the title block.
+// header row they share with the title block — for BOTH modes (the response
+// variant's wider second label must not push it onto its own line either).
 //
 // Note on why this does not assert `cluster.right === row.right`: at 1024px the
 // subtitle's `max-w-xl` (576px) makes the title block wide enough that the
@@ -300,35 +379,44 @@ for (const lang of LANGS) {
 // the outer row's pre-existing behaviour, not something this fix introduced, so
 // the assertions here are the ones the fix actually owns: the actions stay on
 // one line together and inside the row.
-test("the desktop header keeps its three actions on one line at 1024px", async ({ browser }) => {
-  const context = await browser.newContext({ viewport: { width: 1024, height: 800 } });
-  await context.addInitScript(() => {
-    localStorage.setItem("jf_workspace", "demo");
-    localStorage.setItem("jf_lang", "en");
-  });
-  const page = await context.newPage();
-  await stubAPI(page);
-  await page.goto(`/form-settings?form=${FORM_ID}`, { waitUntil: "networkidle" });
-  await expect(page.locator("a.jf-btn-ghost")).toHaveCount(3, { timeout: 45_000 });
-  await expect(page.locator('a:text-is("Edit fields")').first()).toBeVisible({ timeout: 45_000 });
+for (const variant of MODES) {
+  const { mode, entriesLabelKey } = variant;
+  test(`the desktop header keeps its three actions on one line at 1024px (${mode} form)`, async ({
+    browser,
+  }) => {
+    const context = await browser.newContext({ viewport: { width: 1024, height: 800 } });
+    await context.addInitScript(() => {
+      localStorage.setItem("jf_workspace", "demo");
+      localStorage.setItem("jf_lang", "en");
+    });
+    const page = await context.newPage();
+    await stubAPI(page, mode);
+    await page.goto(`/form-settings?form=${FORM_ID}`, { waitUntil: "networkidle" });
+    await expect(page.locator("a.jf-btn-ghost")).toHaveCount(3, { timeout: 45_000 });
+    await expect(page.locator('a:text-is("Edit fields")').first()).toBeVisible({ timeout: 45_000 });
+    await expect(page.locator(`a:text-is("${DICT[entriesLabelKey].en}")`).first()).toBeVisible({
+      timeout: 45_000,
+    });
 
-  const g = await measureHeader(page);
-  const tops = new Set(g.actions.map((a) => a.top));
-  expect(
-    tops.size,
-    `the header actions wrapped on desktop (tops: ${g.actions.map((a) => a.top).join(", ")})`,
-  ).toBe(1);
-  expect(
-    g.cluster.right,
-    `the action cluster (right ${g.cluster.right}) escapes the header row (right ${g.row.right})`,
-  ).toBeLessThanOrEqual(g.row.right);
-  expect(
-    g.cluster.left,
-    `the action cluster (left ${g.cluster.left}) escapes the header row (left ${g.row.left})`,
-  ).toBeGreaterThanOrEqual(g.row.left);
-  // And the desktop page does not scroll sideways either.
-  expect(g.scrollWidth, `the desktop page scrolls sideways by ${g.scrollWidth - g.clientWidth}px`).toBe(
-    g.clientWidth,
-  );
-  await context.close();
-});
+    const g = await measureHeader(page);
+    const tops = new Set(g.actions.map((a) => a.top));
+    expect(
+      tops.size,
+      `the header actions wrapped on desktop (tops: ${g.actions.map((a) => a.top).join(", ")})`,
+    ).toBe(1);
+    expect(
+      g.cluster.right,
+      `the action cluster (right ${g.cluster.right}) escapes the header row (right ${g.row.right})`,
+    ).toBeLessThanOrEqual(g.row.right);
+    expect(
+      g.cluster.left,
+      `the action cluster (left ${g.cluster.left}) escapes the header row (left ${g.row.left})`,
+    ).toBeGreaterThanOrEqual(g.row.left);
+    // And the desktop page does not scroll sideways either.
+    expect(
+      g.scrollWidth,
+      `the desktop page scrolls sideways by ${g.scrollWidth - g.clientWidth}px`,
+    ).toBe(g.clientWidth);
+    await context.close();
+  });
+}
