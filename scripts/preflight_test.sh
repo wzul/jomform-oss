@@ -78,6 +78,26 @@ git -C "$SB" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 cd "$SB" || exit 1
 
 # ---------------------------------------------------------------------------
+# PRIVATE LOCK FILE — the self-test must never queue behind a real gate.
+#
+# scripts/preflight.sh takes its concurrency lock BEFORE it validates arguments
+# or checks prerequisites (deliberately: the banner prints once, in the locked
+# child). So EVERY invocation below — including the ones whose whole point is to
+# fail fast on an unset prerequisite — first waits up to PREFLIGHT_LOCK_WAIT
+# (default 1800s) for the production lock. On a busy board that turned a
+# sub-second self-test into a 10+ minute run that itself HELD the lock, delaying
+# every card gate waiting behind it. Both shapes are avoided by pointing the
+# self-test at its own lock file.
+#
+# This does not weaken anything under test: the self-test exercises argument
+# handling, prerequisite failure and inventory drift — no property here is about
+# concurrency — and none of its invocations runs a gate body (each either refuses
+# outright or dies on a missing prerequisite), so it cannot contaminate another
+# run's scratch schema. Check 14 proves the isolation holds.
+# ---------------------------------------------------------------------------
+export PREFLIGHT_LOCK_FILE="$SB/preflight-selftest.lock"
+
+# ---------------------------------------------------------------------------
 # Derive the gate inventories from the script under test. Nothing below names a
 # gate or a gate count literally.
 # ---------------------------------------------------------------------------
@@ -420,6 +440,34 @@ else
     bad "gate-table drift — in the runner but NOT documented: [$(comm -13 <(printf '%s\n' "$documented") <(printf '%s\n' $GATES | sort -u) | tr '\n' ' ')] / documented but NOT runnable: [$(comm -23 <(printf '%s\n' "$documented") <(printf '%s\n' $GATES | sort -u) | tr '\n' ' ')]"
   fi
 
+fi
+
+# 14. The self-test must run on its OWN lock file, never the production one.
+#     Every invocation above goes through scripts/preflight.sh, which takes the
+#     concurrency lock BEFORE it validates arguments or prerequisites — so on a
+#     busy board this whole self-test would otherwise queue behind a card's gate
+#     (up to PREFLIGHT_LOCK_WAIT, 1800s by default) and, once running, hold that
+#     same lock against every card waiting behind IT. Measured: a self-test that
+#     should take seconds sat 10+ minutes holding the production lock with four
+#     cards running. Two properties, checked against the SCRIPT (not this file's
+#     prose, which could be edited independently):
+#       (a) the default is still the production path — a self-test that pointed
+#           at a private lock by DEFAULT would be a real regression, because the
+#           gate body would then be unserialised;
+#       (b) this run's resolved lock is NOT that default — i.e. the override above
+#           actually took effect and is still in the file.
+#     (b) reads the live value, so deleting the export makes this RED.
+default_lock="${PREFLIGHT_LOCK_FILE_DEFAULT:-/var/lock/jomform-preflight-gate.lock}"
+if [ ! -f "$PREFLIGHT" ]; then
+  bad "cannot check self-test lock isolation: $PREFLIGHT missing"
+elif ! grep -qE 'PREFLIGHT_LOCK_FILE="\$\{PREFLIGHT_LOCK_FILE:-' "$PREFLIGHT"; then
+  bad "preflight.sh no longer defaults PREFLIGHT_LOCK_FILE through \${PREFLIGHT_LOCK_FILE:-...} — the override this self-test relies on is gone"
+elif [ -z "${PREFLIGHT_LOCK_FILE:-}" ]; then
+  bad "PREFLIGHT_LOCK_FILE is unset in the self-test — it would queue on the production lock and hold it against live gates"
+elif [ "$PREFLIGHT_LOCK_FILE" = "$default_lock" ]; then
+  bad "the self-test is using the PRODUCTION lock ($default_lock) — it will serialise against (and delay) every card gate on the board"
+else
+  ok "self-test uses a private lock ($PREFLIGHT_LOCK_FILE), not the production path ($default_lock)"
 fi
 
 echo "---"
