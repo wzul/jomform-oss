@@ -155,8 +155,22 @@ inbox over SES and wrote into the production backup folder.
 So the script now **fails closed on a partial override**:
 
 - If any of `JFBACKUP_STAGE_DIR`, `JFBACKUP_STATE_DIR`, `JFBACKUP_LOG_FILE`,
-  `JFBACKUP_LOCK_FILE`, `JFBACKUP_PATH_PREFIX` or `RCLONE_CONFIG` differs from
-  its installed value, the run is a hand-run, not the cron job.
+  `JFBACKUP_LOCK_FILE`, `JFBACKUP_PATH_PREFIX`, `RCLONE_CONFIG`, `JFBACKUP_REMOTE`
+  or `JFBACKUP_REMOTE_ROOT` moves off its installed value, the run is a hand-run,
+  not the cron job.
+- The two **destination** knobs matter for the mirror-image reason the local ones
+  do. The installed job never sets `JFBACKUP_REMOTE`/`JFBACKUP_REMOTE_ROOT`, so a
+  run that sets either is a hand-run, and a run that moves **only** the
+  destination has contained only its drive half: the credential file its alert
+  email is sent through is chosen by `JFBACKUP_ENV_FILE`, which that run never
+  names and which therefore still resolves to `/opt/jomform/.env`. That shape —
+  "let me try it into a scratch folder first" — is why the destination knobs are
+  triggers rather than something the guard ignores.
+- `JFBACKUP_ENV_FILE` is deliberately **not** a trigger: it names the file to
+  *read* credentials from, not where a half of the run goes, so a run that points
+  it at a scratch file has already contained its credential half. The guard exists
+  to refuse a run that reaches production by *omission*, which is the shape that
+  failed on 2026-09-19.
 - On such a run, `JFBACKUP_ENV_FILE`, `JFBACKUP_REMOTE` and
   `JFBACKUP_REMOTE_ROOT` must be **explicitly set** (any value — a scratch name
   is fine). The test is "was it provided", not "does it differ from the default".
@@ -245,7 +259,7 @@ sent; a failing run does not retry in a tight loop because the lock file
 
 ## Tested failure paths
 
-Every one of these is exercised by `jomform-backup_test.sh` (118 assertions,
+Every one of these is exercised by `jomform-backup_test.sh` (133 assertions,
 stubbed `rclone`/`docker`, no network and no database required) and eleven of them
 are additionally proven to *bite* by sabotaging the script and requiring the
 suite to go red:
@@ -301,6 +315,13 @@ bash deploy/backup/jomform-backup_test.sh
   byte-for-byte unchanged), not just on the exit code. The same run with those
   knobs set proceeds normally, and `JFBACKUP_ALLOW_UNSAFE=1` is the deliberate
   escape hatch that logs a WARN naming the credentials and remote it reached.
+- **A destination-only override is a hand-run too** — a run that moves **only**
+  `JFBACKUP_REMOTE`/`JFBACKUP_REMOTE_ROOT`, with no location knob moved at all, is
+  refused for the same reason and with the same ordering: it is the shape an
+  operator gets by editing the installed cron line to try a scratch folder, and
+  its credential half is still `/opt/jomform/.env`. The case is built against a
+  copy of the script whose installed defaults point into the case directory,
+  because every knob the other helpers set is itself a move.
 
 A test that only ever passes proves nothing, so the suite is run against a
 deliberately sabotaged script for each of: removed hash verification, removed
@@ -324,8 +345,9 @@ It covers: the seam never called, the `JFBACKUP_ENV_FILE` leg removed (the
 credential half that actually mailed the real inbox), the
 `JFBACKUP_REMOTE_ROOT` leg removed, the refusal moved below the mkdir+lock (so
 only the ordering assertions can catch it), the refusal also sending the alert
-email, the escape hatch defaulting to ON, and the location knobs no longer being
-watched.
+email, the escape hatch defaulting to ON, the location knobs no longer being
+watched, and the destination knobs no longer being watched (the shape a
+destination-only run produces).
 
 ### Running the suite needs nothing but bash
 

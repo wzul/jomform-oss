@@ -55,7 +55,7 @@ bite() {
   summary="$(printf '%s\n' "$out" | tail -1)"
   # Only a FAIL on an assertion the seam cases own counts as a bite: a red suite
   # for an unrelated reason would otherwise be read as proof.
-  seam_fails="$(printf '%s\n' "$out" | grep -cE '^\s+FAIL .*(refusing|JFBACKUP_ENV_FILE|JFBACKUP_REMOTE|no dump was taken|no media archive|listing changed|no alert email|no ALERT|the drill never started|no lock file|seam does not watch|seam tests that)' || true)"
+  seam_fails="$(printf '%s\n' "$out" | grep -cE '^\s+FAIL .*(refusing|JFBACKUP_ENV_FILE|JFBACKUP_REMOTE|no dump was taken|no media archive|listing changed|no alert email|no ALERT|the drill never started|no lock file|seam does not watch|seam tests that|destination)' || true)"
   if [ $rc -ne 0 ] && [ "${seam_fails:-0}" -gt 0 ]; then
     echo "  RESULT: RED ($seam_fails seam assertion(s) failed) — $summary"
     printf '%s\n' "$out" | grep -E '^\s+FAIL' | head -5 | sed 's/^/    /'
@@ -154,6 +154,20 @@ bite "seam stops watching the location knobs (hand-runs become invisible)" \
   python3 -c 'import os
 p=os.environ["MUTATE_TARGET"]; s=open(p).read()
 for v in ("JFBACKUP_STAGE_DIR","JFBACKUP_STATE_DIR","JFBACKUP_LOG_FILE","JFBACKUP_LOCK_FILE"):
+    old="seam_moved "+v
+    assert old in s, "anchor not found: "+old
+    s=s.replace(old,"true # SABOTAGE "+v,1)
+open(p,"w").write(s)'
+
+# 8. The seam stops watching the DESTINATION knobs. The guard is still called and
+#    still tests all three legs, but a run that moves only JFBACKUP_REMOTE_ROOT is
+#    no longer classified as a hand-run, so it returns at the top of the guard with
+#    the credential default unexamined — the destination-only shape walks straight
+#    through to the real SES credentials and the real inbox.
+bite "seam stops watching the destination knobs (destination-only runs become invisible)" \
+  python3 -c 'import os
+p=os.environ["MUTATE_TARGET"]; s=open(p).read()
+for v in ("JFBACKUP_REMOTE","JFBACKUP_REMOTE_ROOT"):
     old="seam_moved "+v
     assert old in s, "anchor not found: "+old
     s=s.replace(old,"true # SABOTAGE "+v,1)

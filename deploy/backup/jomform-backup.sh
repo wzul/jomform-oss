@@ -215,27 +215,48 @@ cleanup() {
 trap cleanup EXIT
 
 # ------------------------------------------------------------- partial override
-# A backup run that has any of its LOCATION knobs moved off the installed value
-# is not the cron job, it is a hand-run. On 2026-09-19 such a run (three knobs
-# set, two forgotten) read the real SES credentials out of /opt/jomform/.env and
-# mailed the real super-admin inbox while writing into the production Drive
-# folder. Safety there came from the caller remembering; this makes it come from
-# the script.
+# A backup run that has moved ANY knob off its installed value is not the cron
+# job, it is a hand-run. On 2026-09-19 such a run (three knobs set, two
+# forgotten) read the real SES credentials out of /opt/jomform/.env and mailed the
+# real super-admin inbox while writing into the production Drive folder. Safety
+# there came from the caller remembering; this makes it come from the script.
 #
-# `JFBACKUP_STAGE_DIR=...` etc. is the signal. RCLONE_CONFIG and
-# JFBACKUP_PATH_PREFIX are included because neither is ever set by the installed
-# cron job, and a run that moves only RCLONE_CONFIG is still a hand-run — it
-# does NOT contain the run, since alert_email reads $ENV_FILE directly rather
-# than going through rclone at all.
+# `JFBACKUP_STAGE_DIR=...` etc. is the signal, and it has to cover every knob
+# that moves a *half* of the run, not only the local ones:
+#
+#   - RCLONE_CONFIG and JFBACKUP_PATH_PREFIX are included because neither is ever
+#     set by the installed cron job, and moving RCLONE_CONFIG is still a hand-run
+#     — it does NOT contain the run, since alert_email reads $ENV_FILE directly
+#     rather than going through rclone at all.
+#   - JFBACKUP_REMOTE and JFBACKUP_REMOTE_ROOT are included for the same reason
+#     from the other side: neither is ever set by the installed job, and a run
+#     that moves them is a hand-run whose EMAIL half is still production. The
+#     credential file it would alert through is chosen by a knob this run never
+#     names, so watching only the local knobs left that shape classified as the
+#     nightly job: the refusal sat above the "was it provided" checks and returned
+#     before it could read the destination at all. A destination-only override is
+#     the shape an operator reaching for "let me try it into a scratch folder
+#     first" produces, and it must be classified as a hand-run too.
+#
+# The rule both directions share: the installed job sets neither of these, so a
+# value that differs from the installed one is a move — the same comparison the
+# local knobs get.
 UNSAFE_KNOBS=""
 seam_moved() { # VARNAME effective-value installed-default
   [ "$2" = "$3" ] || UNSAFE_KNOBS="${UNSAFE_KNOBS}${UNSAFE_KNOBS:+, }$1"
 }
+# `JFBACKUP_ENV_FILE` is absent deliberately: it IS named here where an operator
+# may reach a run, but it names the file to READ credentials from, not where a
+# half of the run goes. A run that points it at a scratch file is already
+# contained on the credential half — the guard's job is to refuse a run that
+# reaches production by OMISSION, which is the shape that failed on 2026-09-19.
 seam_moved JFBACKUP_STAGE_DIR  "$STAGE_DIR"       "$STAGE_DIR_DEFAULT"
 seam_moved JFBACKUP_STATE_DIR  "$STATE_DIR"       "$STATE_DIR_DEFAULT"
 seam_moved JFBACKUP_LOG_FILE   "$LOG_FILE"        "$LOG_FILE_DEFAULT"
 seam_moved JFBACKUP_LOCK_FILE  "$LOCK_FILE"       "$LOCK_FILE_DEFAULT"
 seam_moved RCLONE_CONFIG       "$RCLONE_CONFIG"   "$RCLONE_CONFIG_DEFAULT"
+seam_moved JFBACKUP_REMOTE      "$REMOTE"          "$REMOTE_DEFAULT"
+seam_moved JFBACKUP_REMOTE_ROOT "$REMOTE_ROOT"     "$REMOTE_ROOT_DEFAULT"
 if [ -n "${JFBACKUP_PATH_PREFIX:-}" ]; then
   UNSAFE_KNOBS="${UNSAFE_KNOBS}${UNSAFE_KNOBS:+, }JFBACKUP_PATH_PREFIX"
 fi

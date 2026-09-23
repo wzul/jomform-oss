@@ -656,6 +656,61 @@ run_backup_unset() {
   echo "exit=$?"
 }
 
+# install_backup_copy <stage> <state> <log> <lock> <env> <rclone-conf>
+# Builds a COPY of the script that behaves like an INSTALLED host, at
+# $CASE_DIR/jomform-backup-installed.sh. Two things are rewritten, and both are
+# needed to express the shape the guard missed:
+#
+#   1. the `_DEFAULT` values point at this case's paths, so an installed host can
+#      be simulated without writing to /var/backups on this machine;
+#   2. the pinned `_SYS_PATH` puts the case's stub directory first, so the harness
+#      gets at its stub `docker`/`rclone`/`logger` WITHOUT setting
+#      JFBACKUP_PATH_PREFIX. That second part is load-bearing: PATH_PREFIX is
+#      itself a trigger, so a fixture that used it would already be a hand-run
+#      before the destination was read, and the case below would pass with the
+#      destination triggers deleted — measuring nothing.
+#
+# run_backup_unset cannot express this shape at all: every knob it sets is a
+# trigger.
+install_backup_copy() {
+  local stage="$1" state="$2" log="$3" lock="$4" envf="$5" conf="$6"
+  local dst="$CASE_DIR/jomform-backup-installed.sh"
+  python3 - "$SCRIPT" "$dst" "$stage" "$state" "$log" "$lock" "$envf" "$conf" "$STUB_BIN" <<'PY'
+import sys
+src, dst, stage, state, log, lock, envf, conf, stub = sys.argv[1:10]
+s = open(src).read()
+subs = {
+    'RCLONE_CONFIG_DEFAULT="/root/.config/rclone/rclone.conf"': 'RCLONE_CONFIG_DEFAULT="%s"' % conf,
+    'ENV_FILE_DEFAULT="/opt/jomform/.env"': 'ENV_FILE_DEFAULT="%s"' % envf,
+    'STAGE_DIR_DEFAULT="/var/backups/jomform"': 'STAGE_DIR_DEFAULT="%s"' % stage,
+    'STATE_DIR_DEFAULT="/var/lib/jomform-backup"': 'STATE_DIR_DEFAULT="%s"' % state,
+    'LOG_FILE_DEFAULT="/var/log/jomform-backup.log"': 'LOG_FILE_DEFAULT="%s"' % log,
+    'LOCK_FILE_DEFAULT="/var/lock/jomform-backup.lock"': 'LOCK_FILE_DEFAULT="%s"' % lock,
+    '_SYS_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"':
+        '_SYS_PATH="%s:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"' % stub,
+}
+for old, new in subs.items():
+    assert old in s, "anchor not found: " + old
+    s = s.replace(old, new, 1)
+open(dst, "w").write(s)
+PY
+  chmod +x "$dst"
+}
+
+# run_installed [env assignments] -- [script args]
+# Runs the installed-shape copy with NO trigger knob set, so the only thing that
+# can move off its installed value is what an operator edits into the cron line.
+run_installed() {
+  local extra=() args=()
+  while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do extra+=("$1"); shift; done
+  [ "$#" -gt 0 ] && shift
+  args=("$@")
+  env ${extra[@]+"${extra[@]}"} \
+      bash "$CASE_DIR/jomform-backup-installed.sh" \
+      ${args[@]+"${args[@]}"} >>"$RUN_LOG" 2>&1
+  echo "exit=$?"
+}
+
 echo "case: partial override (STAGE_DIR set, JFBACKUP_ENV_FILE unset) REFUSES before any work"
 # The remote is deliberately left WORKING and the rclone config readable, so the
 # only reason this run cannot succeed is the seam itself. With the guard removed
@@ -714,6 +769,48 @@ assert_contains "refused" "refusing a partial-override run" "$RUN_LOG"
 assert_not_contains "the drill never started" "restore drill: container" "$RUN_LOG"
 teardown_case
 
+echo "case: destination-only override (no LOCATION knob moved) REFUSES before any work"
+# The shape the guard missed: the run moves ONLY the destination. The installed
+# job sets NEITHER JFBACKUP_REMOTE nor JFBACKUP_REMOTE_ROOT, so watching only the
+# local knobs classified this as the nightly job and the guard returned before its
+# "was it provided" checks — leaving the credential half at the installed
+# JFBACKUP_ENV_FILE (/opt/jomform/.env, real SES keys and SUPER_ADMIN_EMAILS) and
+# mailing the real inbox. Nothing has to be forgotten for this shape either: an
+# operator editing the installed cron line to try a scratch folder produces it.
+#
+# run_backup_unset cannot express it — every knob it sets is itself a trigger, so
+# the run would be a hand-run before the destination was read. The fixture below
+# is the INSTALLED shape (no knob set at all) with one destination knob moved.
+setup_case; touch_rclone_conf
+install_backup_copy "$CASE_DIR/stage" "$CASE_DIR/state" "$RUN_LOG" "$CASE_DIR/lock" "$CASE_DIR/env" "$CASE_DIR/rclone.conf"
+before="$(ls -A "$CASE_DIR/stage" | sort | tr '\n' ' ')"
+rc="$(run_installed JFBACKUP_REMOTE_ROOT=scratch-root)"
+assert_eq "exit code" "exit=1" "$rc"
+assert_contains "log says it refused" "refusing a partial-override run" "$RUN_LOG"
+assert_contains "the destination knob that moved is named" "while JFBACKUP_REMOTE_ROOT" "$RUN_LOG"
+assert_contains "names the credential file it would have read" "$CASE_DIR/env" "$RUN_LOG"
+# ORDERING: this is the half that leaked on a destination-only run, so the refusal
+# has to land before the dump and before the lock, not after them.
+assert_no_file "no dump was taken" "$CASE_DIR/stage/jomform-daily-$(date -u +%Y-%m-%d).dump.gz"
+assert_no_file "no media archive was taken" "$CASE_DIR/stage/jomform-daily-$(date -u +%Y-%m-%d)-media.tar.gz"
+assert_same_listing "$before" "$CASE_DIR/stage"
+assert_no_file "no lock file was taken" "$CASE_DIR/lock"
+assert_not_contains "no alert email was attempted" "[JomForm]" "$RUN_LOG"
+assert_contains "status file records the refusal" '"status": "FAILED"' "$CASE_DIR/state/last-run.json"
+teardown_case
+
+echo "case: the SAME destination-only run with all three legs provided proceeds"
+# The refusal must be about the missing legs, not about moving the destination: a
+# hand-run that names its own credential file, remote and folder is legitimate and
+# has to still work, or the guard is a ban on hand-runs rather than a seam.
+setup_case; touch_rclone_conf
+install_backup_copy "$CASE_DIR/stage" "$CASE_DIR/state" "$RUN_LOG" "$CASE_DIR/lock" "$CASE_DIR/env" "$CASE_DIR/rclone.conf"
+rc="$(run_installed JFBACKUP_ENV_FILE="$CASE_DIR/env" JFBACKUP_REMOTE=googldrive JFBACKUP_REMOTE_ROOT=scratch-root -- --local-only)"
+assert_eq "exit code" "exit=0" "$rc"
+assert_not_contains "the seam did not fire" "refusing a partial-override run" "$RUN_LOG"
+assert_file "dump was taken" "$CASE_DIR/stage/jomform-daily-$(date -u +%Y-%m-%d).dump.gz"
+teardown_case
+
 echo "case: the SAME run with the seam knobs set proceeds normally"
 setup_case; touch_rclone_conf
 rc="$(run_backup STUB_RCLONE_MODE=ok --)"
@@ -751,9 +848,12 @@ elif printf '%s' "$cron_line" | grep -qE 'JFBACKUP_|RCLONE_CONFIG='; then
 else
   ok "the cron entry sets none of the seam knobs (so the nightly job is never refused)"
 fi
-# And the guard must fire on a value that merely DIFFERS for the four location
-# knobs, which is how the installed job is told apart from a hand-run.
-for knob in JFBACKUP_STAGE_DIR JFBACKUP_STATE_DIR JFBACKUP_LOG_FILE JFBACKUP_LOCK_FILE RCLONE_CONFIG; do
+# And the guard must fire on a value that merely DIFFERS for the knobs the
+# installed job sets, which is how the installed job is told apart from a
+# hand-run. The two DESTINATION knobs are in this list too: a run that moves only
+# the destination has contained only its drive half, and the credential half it
+# still reaches is the one the guard exists to protect.
+for knob in JFBACKUP_STAGE_DIR JFBACKUP_STATE_DIR JFBACKUP_LOG_FILE JFBACKUP_LOCK_FILE RCLONE_CONFIG JFBACKUP_REMOTE JFBACKUP_REMOTE_ROOT; do
   if grep -qE "^seam_moved ${knob}[[:space:]]" "$SCRIPT"; then
     ok "seam watches $knob"
   else
