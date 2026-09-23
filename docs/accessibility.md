@@ -40,6 +40,30 @@ npm run a11y          # starts the app's own server, runs axe against the pages
 The scan lives in `web/e2e/a11y.spec.ts` (Playwright + `@axe-core/playwright`).
 Minor/moderate findings are reported for triage but do not fail the gate.
 
+### Confirmation dialogs (also in the automated scan)
+
+The two **typed-slug confirmation dialogs** are scanned by the same gate, in
+`web/e2e/a11y-dialogs.spec.ts` (a second spec in the same `web/e2e/` directory,
+so `npm run a11y` runs it):
+
+- **Delete workspace** — Settings → Workspace → *Delete this workspace*.
+- **Delete a form for good** — Forms → Trash → *Delete for good*.
+
+Both were added with the workspace-delete feature and live behind a session, so
+they are **not** covered by the list of unauthenticated routes above. The spec
+does not need a session cookie: it stubs the `dashboard-bundle` (and the few
+per-page `/api/*` calls) at the browser level, so the real components render in
+a real browser with no Go server, no database and no credential. Each dialog is
+asserted to be **reachable** before it is scanned, and the axe scan is scoped
+with `include('[role="dialog"]')` — axe throws rather than passing when that
+subtree is absent, so the test cannot go green by quietly matching nothing.
+
+Pinned per dialog: `role="dialog"` + `aria-modal="true"` + an `aria-labelledby`
+that resolves to the shipped heading, focus in the confirm field on open, the
+confirm button disabled until the exact slug is typed, Escape closes, and zero
+critical/serious axe violations within the dialog. A regression there now fails
+`npm run a11y` instead of passing unseen.
+
 > **Do not reuse a running server.** `web/playwright.config.ts` sets
 > `reuseExistingServer` to **false** unless `A11Y_REUSE_SERVER=1`. With a
 > leftover `next-server` on the port, playwright would reuse it and axe would
@@ -50,7 +74,10 @@ Minor/moderate findings are reported for triage but do not fail the gate.
 > **Note on authenticated pages.** The dashboard surfaces (`/`, `/forms`,
 > `/builder`, `/settings`, `/profile`, `/products`) require a live session
 > cookie from the Go API, which the scan does not provision. They are exercised by
-> the manual screen-reader and browser-matrix checklists below instead.
+> the manual screen-reader and browser-matrix checklists below instead. The one
+> exception is the pair of confirmation dialogs, which ARE scanned (see
+> "Confirmation dialogs" above) because stubbing the session-dependent fetch
+> puts the dialog itself in the browser without needing a credential.
 
 ## Manual screen-reader checklist
 
