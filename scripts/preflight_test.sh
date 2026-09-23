@@ -271,6 +271,127 @@ else
   bad ".gitleaks.toml has NO [[rules]] and no [extend] useDefault — gitleaks would scan with an EMPTY ruleset and never report a leak (a green gate that cannot fail)"
 fi
 
+# 12. The test-env advice must name a DURABLE path — and the SAME path at every
+#     durable site. Each prerequisite failure tells the operator where to get
+#     the two env vars; until 2026-09-21 NOTHING asserted that string, so
+#     reverting the advice to the old `/tmp/jf-env.sh` shipped the selftest gate
+#     GREEN. Checks 3 and 4 above only assert the exit code and the variable
+#     NAME, and `env -u` satisfies both whatever path the message advertises:
+#     the advice text is printed, never checked. A /tmp advice path is the
+#     original false reading — /tmp is wiped between sessions, so the next
+#     reader sources nothing, the DB-backed tests SKIP, and `go test` prints a
+#     green suite that proves nothing.
+#     The canonical path is DERIVED from the script under test (the
+#     `${JOMFORM_ENV:-<default>}` form), never hardcoded here, so this check
+#     cannot go stale — and it covers every site that must agree: the script's
+#     header comment, both die-messages, and the docs that repeat the advice.
+# 12a — the script-side form: one default, overridable, not in /tmp.
+advised_path() { sed -nE 's/.*Run: source (.*)$/\1/p' <<<"$1" | sed -n '1p'; }
+
+die_db=$(grep -F 'JOMFORM_TEST_DATABASE_URL is unset' "$PREFLIGHT" | sed -n '1p')
+die_vk=$(grep -F 'JOMFORM_TEST_VALKEY_URL is unset' "$PREFLIGHT" | sed -n '1p')
+script_defaults=$(sed -nE 's/.*\$\{JOMFORM_ENV:-([^}]*)\}.*/\1/p' "$PREFLIGHT" | sort -u)
+canon="$(printf '%s\n' "$script_defaults" | sed -n '1p')"
+ndefaults=$(printf '%s\n' "$script_defaults" | grep -c '[^[:space:]]')
+# The offending path, not the whole die-message: the verdict above is only
+# readable if the FAIL line names the path that is wrong.
+tmp_hit=""
+case "/$canon" in /tmp/*) tmp_hit="$canon" ;; esac
+if [ -z "$tmp_hit" ]; then
+  tmp_hit="$(printf '%s\n%s\n' "$die_db" "$die_vk" \
+    | sed -nE 's/.*Run: source (.*)"$/\1/p;s/.*Run: source (.*)$/\1/p' | grep '^/tmp/' | sort -u | tr '\n' ' ')"
+  tmp_hit="${tmp_hit% }"
+  [ -n "$tmp_hit" ] || tmp_hit=""
+fi
+
+if [ -z "$die_db" ] || [ -z "$die_vk" ]; then
+  bad "the JOMFORM_TEST_DATABASE_URL / JOMFORM_TEST_VALKEY_URL die-messages are gone from preflight.sh — the advice an operator relies on is unverifiable"
+elif [ -n "$tmp_hit" ]; then
+  bad "the test-env advice points into /tmp (=[$tmp_hit]) — /tmp is wiped between sessions, so the next reader sources nothing, the DB-backed tests SKIP and the suite prints green. It must be a durable path"
+elif ! printf '%s' "$die_db$die_vk" | grep -qF '${JOMFORM_ENV:-'; then
+  bad "the env-prerequisite advice no longer names the \${JOMFORM_ENV:-...} form (it must stay overridable, not a hardcoded literal): DB=[$die_db] VALKEY=[$die_vk]"
+elif [ "$ndefaults" -ne 1 ] || [ -z "$canon" ]; then
+  bad "preflight.sh quotes $ndefaults different test-env defaults — the emitted advice cannot be one durable path: [$(printf '%s ' $script_defaults)]"
+else
+  ok "test-env advice is one overridable durable default (\${JOMFORM_ENV:-$canon}), named at every site in preflight.sh"
+fi
+
+# 12b — what the operator is ACTUALLY shown. Read it off a real run on both the
+#       sandbox copy and the LIVE script (same shape as check 1: a
+#       copy-versus-live divergence must not be able to hide), because the
+#       emitted text is the surface the regression was invisible on.
+sb_env_out=$(env -u JOMFORM_TEST_DATABASE_URL -u JOMFORM_TEST_VALKEY_URL -u JOMFORM_ENV \
+             ./scripts/preflight.sh --only test 2>&1)
+live_env_out=$(cd "$LIVE_ROOT" && env -u JOMFORM_TEST_DATABASE_URL -u JOMFORM_TEST_VALKEY_URL -u JOMFORM_ENV \
+             ./scripts/preflight.sh --only test 2>&1)
+sb_advice=$(advised_path "$sb_env_out")
+live_advice=$(advised_path "$live_env_out")
+# The die-message echoes the parameter expansion, so what the operator reads is
+# the RESOLVED default — compare against that, not the literal ${...} text.
+# With no default to compare against (already reported by 12a), fall back to the
+# sandbox's own reading so this check still catches sandbox-vs-live drift
+# instead of double-counting the same violation.
+expected_advice="${canon//\$HOME/$HOME}"
+[ -n "$expected_advice" ] || expected_advice="$sb_advice"
+if [ -z "$sb_advice" ] || [ -z "$live_advice" ]; then
+  bad "an unset prerequisite no longer prints a 'Run: source <path>' line — sandbox=[$sb_advice] live=[$live_advice]"
+elif [ "$sb_advice" = "$expected_advice" ] && [ "$live_advice" = "$expected_advice" ]; then
+  ok "the emitted prerequisite advice matches the script default (sandbox and live: $sb_advice)"
+else
+  bad "the path an operator is told to source drifted from the script default: sandbox=[$sb_advice] live=[$live_advice] expected=[$expected_advice]"
+fi
+
+# 12c — the docs must not drift from the same string. The site list is DERIVED
+#       from the repo rather than hand-written here: a hardcoded list is the same
+#       drift class this repo has been bitten by three times — the sites moved and
+#       the list did not. A new doc that repeats the advice is covered the moment
+#       it lands.
+#       DISCOVERY IS BY THE ADVICE'S OWN NAMES, NOT BY THE ${JOMFORM_ENV:-...}
+#       FORM: a site that drifts to a bare path (or loses the override) STOPS
+#       matching the portable form, so discovering on that form silently drops the
+#       drifted site from the sweep and the run goes green on exactly the
+#       regression this check exists to catch. The keys are the UNION of the names
+#       this advice can carry — the durable filename, the override variable, and
+#       the /tmp filename the durable move replaced — so the drifted forms are
+#       still in scope and the drift branch reports what they now say.
+#       BOUNDARY, stated rather than implied: a site that renames its path to
+#       something outside that union is no longer recognisable as a durable site
+#       by any content derivation, so this sweep cannot see it. The emitted advice
+#       itself stays covered in that case by 12a/12b, which read the script.
+#       THIS FILE IS EXCLUDED (derived, not named literally): it names the same
+#       strings in its own patterns, so including it would compare a regex against
+#       itself and report a permanent false drift.
+live_prefix="$LIVE_ROOT/"
+checker_rel="${HERE#"$live_prefix"}/preflight_test.sh"
+tracked_sites=$(git -C "$LIVE_ROOT" grep -lF -e 'test-env.sh' -e 'jf-env' -e 'JOMFORM_ENV' -- . ":(exclude)$checker_rel" 2>/dev/null || true)
+site_count=$(printf '%s\n' "$tracked_sites" | grep -c '[^[:space:]]')
+# A site DRIFTS when it does not quote the canonical path — whether it still
+# quotes a `${JOMFORM_ENV:-...}` form (a different default) or names a bare path
+# with no override at all. Report what the site actually says, so the FAIL line
+# locates the drift instead of leaving an empty bracket.
+site_drift=""
+while IFS= read -r f; do
+  [ -n "$f" ] && [ -f "$LIVE_ROOT/$f" ] || continue
+  if ! grep -qF "\${JOMFORM_ENV:-$canon}" "$LIVE_ROOT/$f"; then
+    quoted=$(sed -nE 's/.*\$\{JOMFORM_ENV:-([^}]*)\}.*/\1/p' "$LIVE_ROOT/$f" | sort -u | tr '\n' ' ')
+    if [ -z "${quoted// /}" ]; then
+      quoted=$(grep -oE 'source [^ )`]+(test-env|jf-env)\.sh' "$LIVE_ROOT/$f" | sort -u | tr '\n' ' ')
+    fi
+    site_drift="$site_drift $f=[${quoted% }]"
+  fi
+done <<<"$tracked_sites"
+if [ -n "$tmp_hit" ] || [ -z "$canon" ]; then
+  : # already reported by 12a; do not double-count the same violation
+elif [ "$site_count" -lt 3 ]; then
+  bad "only $site_count durable site(s) found ([$(printf '%s ' $tracked_sites)]) — the doc side of the advice is no longer covered (the sweep must find at least the script plus two docs)"
+elif ! printf '%s\n' "$tracked_sites" | grep -qxF 'scripts/preflight.sh'; then
+  bad "the derived sweep did not exclude this file correctly — scripts/preflight.sh is a durable site and must be in it, so an exclusion pattern that swallows a whole directory would otherwise pass unnoticed"
+elif [ -n "$site_drift" ]; then
+  bad "a durable site quotes a different test-env path than the emitted advice ($canon):$site_drift"
+else
+  ok "all $site_count durable sites quote the same test-env path ($canon)"
+fi
+
 echo "---"
 echo "preflight self-test: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1
