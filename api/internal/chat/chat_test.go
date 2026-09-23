@@ -647,8 +647,19 @@ func TestSystemPromptStatesTheRenderableMarkdownSubset(t *testing.T) {
 	if !strings.Contains(systemPromptText(), "in Malay, answer") {
 		t.Error("the language-matching rule was removed while adding the formatting rule")
 	}
+	// 4. The underscore rule: intra-word `_` is literal text, not emphasis (the
+	//    renderer enforces it — see web/src/components/Markdown.ts, and the web
+	//    guard renders `jf_2fa_pending` through the real component). The model is
+	//    told, so it neither italicises a name accidentally nor pads one with
+	//    backticks to protect it. Drop this sentence and the prompt stops
+	//    describing what the UI does.
+	if !strings.Contains(systemPromptText(), "underscore") || !strings.Contains(systemPromptText(), "inside a word") {
+		t.Error("the prompt no longer states that an underscore inside a word is literal text — " +
+			"the renderer treats it that way (CommonMark restricts intraword emphasis to asterisks), " +
+			"so the model is otherwise told about a rule the UI does not follow")
+	}
 
-	// 4. And it really reaches the model: run one round-trip with a tool call and
+	// 5. And it really reaches the model: run one round-trip with a tool call and
 	//    read the system turn of BOTH prompts (the initial one and the one that
 	//    carries the fenced tool result).
 	caller := &fakeCaller{answer: "{}"}

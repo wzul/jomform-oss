@@ -74,6 +74,7 @@ const SECTIONS: Section[] = [
     body: [
       "A message body is rendered, not printed. A report filed from the in-app assistant can contain bold text, lists and code, and a reply you write can too — the thread shows those as real formatting, not as the markers that were typed. Before this, an asterisk written for emphasis appeared as an asterisk.",
       "Bold, italic, inline code, fenced code blocks, bulleted and numbered lists, links and paragraph breaks are rendered. Tables, images, headings and raw HTML are not: the body is never inserted into the page as code, so HTML in a message shows as text rather than becoming part of the page. A fenced code block scrolls sideways inside its card instead of stretching the thread.",
+      "An underscore means italic only when it is written around a word, as in _condong_. Inside a word it is an ordinary character, so a report that names a column or a setting — form_answers_value, jf_2fa_pending — reads back with its underscores intact rather than with them consumed as emphasis.",
       "Your threads and the admin triage view render a body the same way, and the stored text is exactly what was written — nothing is stripped on the way in or out.",
     ],
   },

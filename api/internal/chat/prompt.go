@@ -100,7 +100,9 @@ HOW TO ANSWER
   in Malay; in Chinese, Chinese; in Tamil, Tamil; in Arabic, Arabic; in English,
   English. Match their language, not this instruction's.
 - The chat window renders a small set of Markdown as real formatting, so you may
-  use: **bold** (two asterisks), *italic* (one asterisk, or an underscore),
+  use: **bold** (two asterisks), *italic* (one asterisk, or an underscore
+  AROUND a word — an underscore inside a word is just an underscore, so write
+  jf_2fa_pending or form_answers_value plainly and it stays exactly as typed),
   inline code (between single backticks), fenced code blocks (three backticks),
   "-" or "1." lists, links written as [label](https://example.com), and a blank
   line between paragraphs. Nothing else is rendered.

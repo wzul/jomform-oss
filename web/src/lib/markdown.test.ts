@@ -99,6 +99,101 @@ test("bold wins over italic in the ** ordering (the markers do not half-consume)
   assert.match(html, /<em>serong<\/em>/);
 });
 
+// ── 1b. intra-word underscores are TEXT, not emphasis ────────────────────────
+//
+// The defect this file's second round fixes. `_` was read as emphasis whenever
+// \S sat inside it, so an identifier LOST its underscores in the rendered text:
+// `form_answers_value` showed as `formanswersvalue`, `report_final dan
+// nota_akhir` became `report<em>final dan nota</em>akhir`. These strings are the
+// assistant's ordinary vocabulary in this repo (`jf_2fa_pending` is a flag in
+// api/internal/auth/session.go, `feedback_threads`/`form_answers_value` are real
+// table and column names), so the assertion is the strong one — the visible text
+// must EQUAL the source, character for character.
+//
+// CommonMark 0.31.2 §6.2 restricts intraword emphasis to asterisks
+// (https://spec.commonmark.org/0.31.2/#emphasis-and-strong-emphasis): a `_`
+// delimiter run must be left-flanking to open and right-flanking to close, so a
+// run inside a word can do neither. The negative controls below pin that
+// `_condong_` still italicises and that `*` was NOT touched.
+
+test("an intra-word underscore loses nothing: the text is unchanged and no <em> appears", () => {
+  // The exact rows the report names, plus the reported live reproduction. The
+  // expected value is the SOURCE text for the identifier rows — with underscores
+  // emphasis gone, nothing at all may be removed from them. The last row carries
+  // deliberate `**` and a backtick span, so its expected text has those markers
+  // rendered away (that is the bold/code behaviour, asserted elsewhere).
+  const cases: [string, string, string][] = [
+    ["Flag jf_2fa_pending sedang hidup.", "Flag jf_2fa_pending sedang hidup.", "the jf_2fa_pending flag name"],
+    ["Kolum form_answers_value ada.", "Kolum form_answers_value ada.", "a column name with two underscores"],
+    [
+      "Jadual feedback_threads ada 3 baris.",
+      "Jadual feedback_threads ada 3 baris.",
+      "the shape that already survived — must not regress",
+    ],
+    ["Nama fail report_final dan nota_akhir.", "Nama fail report_final dan nota_akhir.", "one intra-word underscore per word"],
+    ["Guna a_b_c sebagai contoh.", "Guna a_b_c sebagai contoh.", "a_b_c"],
+    ["Baca fail ini_setting_2 dan itu.", "Baca fail ini_setting_2 dan itu.", "two identifiers on one line"],
+    // Each half of the flanking rule is the ONLY thing that rejects these two: a
+    // run inside a word cannot OPEN emphasis even when another run later in the
+    // line could close it, and it cannot CLOSE one either.
+    ["a_b c_", "a_b c_", "an intra-word run cannot open, though a later run could close"],
+    ["_a b_c", "_a b_c", "an intra-word run cannot close, though an earlier run could open"],
+    [
+      "Aduan asal: assistant tulis **RM1,250.00** dan `jf_2fa_pending` gitu.\n\nKolum form_answers_value dan jadual feedback_threads memang ada.",
+      "Aduan asal: assistant tulis RM1,250.00 dan jf_2fa_pending gitu.\n\nKolum form_answers_value dan jadual feedback_threads memang ada.",
+      "the reproduction as filed on /feedback",
+    ],
+  ];
+  for (const [src, expected, what] of cases) {
+    const html = render(src);
+    // Paragraph boundaries are structure, not text: restore them before the tag
+    // strip so a two-paragraph body can still be compared character for
+    // character (the block split is asserted separately further down).
+    const text = visible(html.replace(/<\/p>\s*<p[^>]*>/g, "\n\n"));
+    assert.equal(
+      text,
+      expected,
+      `${what}: the rendered text is not the expected text — characters were lost to ` +
+        `underscore emphasis. Got: ${JSON.stringify(text)}`,
+    );
+    assert.doesNotMatch(html, /<em>/, `${what}: an intra-word underscore was rendered as <em>`);
+  }
+});
+
+test("underscore emphasis still works where CommonMark allows it (the negative control)", () => {
+  // `_condong_` works today and its docs promise it; the fix must not remove it.
+  for (const [src, inner] of [
+    ["Ini _condong_ ya.", "condong"],
+    ["kata _condong_ kata", "condong"],
+    ["_condong_", "condong"],
+    ["set semula _2fa_pending_ ya", "2fa_pending"],
+  ] as const) {
+    const html = render(src);
+    assert.match(
+      html,
+      new RegExp(`<em>${inner}</em>`),
+      `${JSON.stringify(src)} no longer renders <em>${inner}</em> — underscore emphasis was dropped ` +
+        `instead of restricted, and /docs/chat still promises it`,
+    );
+  }
+  // `__bold__` and `___`-style runs must keep pairing as strong.
+  const strong = render("__tebal__ di sini");
+  assert.match(strong, /<strong[^>]*>tebal<\/strong>/, "__text__ lost its strong emphasis");
+  // A pair written around an identifier is still emphasis, and the identifier's
+  // own underscores survive inside it.
+  assert.match(render("_a_b_c_"), /<em>a_b_c<\/em>/, "an outer pair no longer emphasises the identifier");
+});
+
+test("asterisk emphasis is unchanged, including the intra-word form CommonMark allows", () => {
+  // The rule is about `_` only. CommonMark's own example: internal emphasis with
+  // `*` IS emphasis (`foo*bar*baz`), while `foo_bar_baz` is not.
+  const star = render("foo*bar*baz");
+  assert.match(star, /foo<em>bar<\/em>baz/, "intra-word * emphasis was lost — the fix over-reached into *");
+  assert.equal(visible(render("foo_bar_baz")), "foo_bar_baz", "foo_bar_baz gained or lost characters");
+  // A lone underscore next to a space is a literal underscore, not a delimiter.
+  assert.equal(visible(render("a_ b _c")), "a_ b _c", "an underscore beside a space was consumed");
+});
+
 // ── 2. the required element set ──────────────────────────────────────────────
 
 test("inline code becomes <code>, fenced code becomes <pre><code>", () => {
