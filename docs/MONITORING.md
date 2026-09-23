@@ -118,10 +118,100 @@ It asserts the properties that make a watchdog worth having —
 - an over-threshold disk alerts, and an unreadable `df` fails loud;
 - **no notifier is exit 2, never `ok`**, and an undeliverable alert is exit 3.
 
+The board's worktree pruner is the other host-only safety script in this
+directory's family; its behaviour and self-test are documented under
+[Kanban worktree pruner](#kanban-worktree-pruner--what-it-may-and-may-not-delete).
+
 Mutations that were run against it to prove it *bites* (each turned the suite
 red): dropping the body-marker check → 3 failures; alerting on every run instead
 of edge-triggered → 5 failures; treating `exit 2` as `exit 0` → 2 failures;
 skipping `/readyz` on failure → 5 failures.
+
+## Kanban worktree pruner — what it may and may not delete
+
+`deploy/worktrees/prune-kanban-worktrees.sh` is the host-side reclaimer for the
+agent board's worktrees. Each card worktree carries its own `web/node_modules`
+(442M) + `.next` (146M), so unfinished reclamation is ~9G/day, and nothing else
+reclaims them (`hermes kanban gc` prunes events and logs, not worktrees). It runs
+from the Hermes cron job `prune-kanban-worktrees` (daily `0 4 * * *`, a
+`no_agent` job, so it is a script run and not an agent turn).
+
+Before removing anything it requires **all** of: not the main checkout; a
+terminal card status; a completion older than `--min-age-hours` (24h); no live
+process referencing the worktree or the card; a clean tree; and — the one this
+section is about — **durable** work.
+
+**"Durable" means reachable from a remote-tracking ref of `origin`**
+(`refs/remotes/origin/*`), or merged into `origin/main`. It deliberately does
+**not** mean "some ref under `refs/remotes/` holds it". Work held only by a
+hand-made `refs/remotes/pr/<N>` mirror is reported `UNSAFE` and **kept**.
+
+Why the distinction matters: a `refs/remotes/pr/<N>` mirror
+(`git fetch origin pull/N/head:refs/remotes/pr/N`, the documented GitHub idiom)
+is in **no refspec**, so `git fetch --prune` never removes it — pruning is a
+function of the remote's refspec — and it keeps pointing at whatever a PR's head
+was when it was made, i.e. the pre-rebase / pre-force-push snapshot. A durability
+test written as `git branch -r --contains <sha>` lists those mirrors too, so a
+detached worktree holding the last copy of a commit read as "pushed to a remote"
+and was removed. That is not hypothetical: it is how the defect this section
+records was reproduced, and it is why the test names `refs/remotes/origin`
+explicitly and prints the non-remote-tracking refs it refused to trust
+(`[ignoring non-remote-tracking ref(…)]` in the log).
+
+Exit codes: `0` nothing to do, `3` work exists only locally (i.e. the run kept
+something on purpose — a cron wrapper can alert on it), `2` bad arguments.
+
+### Operating it
+
+```bash
+deploy/worktrees/prune-kanban-worktrees.sh --dry-run    # what it would remove; changes nothing
+deploy/worktrees/prune-kanban-worktrees.sh --min-age-hours 72
+tail -5 /root/agents/prune-kanban-worktrees.log
+```
+
+`--no-fetch` skips `git fetch --prune origin`, which the durability test depends
+on; using it means judging on whatever the refs happen to be, and the log says so.
+
+Install or update it on a host with the installer — **do not edit a host copy in
+place**:
+
+```bash
+deploy/worktrees/install-prune-kanban-worktrees.sh --dry-run
+deploy/worktrees/install-prune-kanban-worktrees.sh
+```
+
+The cron job resolves its `script:` name under that Hermes home's `scripts/`
+directory, so the copy that *runs* is not necessarily the copy you would edit by
+path (the agent host has two copies, in `/root/.hermes/scripts` and
+`/root/agents`). The installer validates the source with its own self-test,
+installs, then **re-runs the self-test from the installed location**, and reports
+whether the cron job that names that filename exists.
+
+### The offline self-test
+
+`deploy/worktrees/prune-kanban-worktrees_test.sh` runs in the preflight gate
+(`prunewt`) and needs no board, no network and no real worktree: a sandbox repo
+with its own bare `origin`, plus a fake `hermes kanban show` answering from a
+state file. It asserts, as outcomes read off real runs —
+
+- a real `git fetch --prune origin` leaves a `refs/remotes/pr/N` mirror in place
+  (measured, not quoted);
+- the **old** predicate (`git branch -r --contains`) calls mirror-only work
+  `pushed-branch` while the script's predicate does not — the control that keeps
+  the fix honest;
+- a mirror-only worktree **survives**, with the offending ref named in the log;
+- genuinely pushed work and work merged into `origin/main` are still **removed**,
+  so the fix cannot pass by refusing everything;
+- work held only by a local branch, a dirty worktree, a too-recent card, a card
+  still running, an unreadable card, and a worktree with a live worker process are
+  each kept, each with its own reason in the log;
+- the stray-worktree loop (outside `.worktrees`, no card reference) gets the same
+  correction;
+- `--dry-run` removes nothing.
+
+Prove it bites with `JF_PRUNE_SCRIPT=<a copy with the old test restored>`. Doing
+that here turned exactly the six mirror assertions red, including the one that
+says the worktree survives.
 
 ## Prometheus `/metrics`
 

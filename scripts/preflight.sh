@@ -53,6 +53,16 @@
 #                         and a hook that is missing, non-executable or stale is
 #                         reported NOT ARMED instead of quietly guarding nothing.
 #                         Offline: local bare remote + clones, no network, ~10s.
+#   prunewt    helper      deploy/worktrees/prune-kanban-worktrees_test.sh —
+#                         proves the worktree pruner's durability test cannot be
+#                         fooled by a hand-made `refs/remotes/pr/<N>` mirror:
+#                         work held only by one is reported UNSAFE instead of
+#                         being removed (it once was, which is how a detached
+#                         worktree holding the last copy of a commit was lost),
+#                         while genuinely pushed/merged work is still removed and
+#                         a live worker's worktree is still kept.
+#                         Offline: a sandbox repo with its own bare `origin`, a
+#                         fake `hermes kanban show`, no board, no network.
 #   selftest   selfcheck  scripts/preflight_test.sh — the gate runner's OWN
 #                         safety properties: an all-skipped run is REFUSED
 #                         rather than reported green, a missing prerequisite
@@ -140,7 +150,7 @@ cd "$REPO_ROOT" || exit 1
 # `--list`, the runnable set from the `run <name>` call sites) and FAILS if they
 # disagree, so a gate named here but never run — the silent-coverage-loss shape —
 # is caught by `--only selftest`. No edit to the self-test is needed for gate #N.
-GATE_NAMES=(build vet test govuln web a11y npmaudit gitleaks monitor tmpkey backup refguard selftest)
+GATE_NAMES=(build vet test govuln web a11y npmaudit gitleaks monitor tmpkey backup prunewt refguard selftest)
 
 ONLY=""
 SKIP=""
@@ -561,6 +571,26 @@ backup_run() {
   bash "$REPO_ROOT/deploy/backup/jomform-backup_test.sh"
 }
 run backup "nightly backup failure-path suite (exit 0 is not an upload, empty dump refused, drill cannot mask a failing job)" backup_run
+
+# prunewt — the worktree pruner's self-test. Same shape of gate as
+# `monitor`/`tmpkey` and for the same reason: `prune-kanban-worktrees.sh` only
+# ever runs on the agent host (as a cron job with no agent loop), and its one
+# irreversible mistake is removing the last copy of someone's work. What is
+# testable here is its own harness — that the DURABILITY test cannot be fooled by
+# a hand-made `refs/remotes/pr/<N>` mirror, which is in no refspec and therefore
+# never pruned by `git fetch --prune`, so work held only by one reads as "pushed
+# to a remote" and its worktree gets removed. That is not hypothetical: it is how
+# this defect was reproduced. The suite also asserts the guards that must keep
+# working after the fix (a genuinely pushed or merged commit is still removed, a
+# live worker's worktree is still kept), because a pruner that refuses everything
+# would pass a mirror-only test and be useless.
+#
+# Offline by construction: a sandbox repo with its own real bare `origin`, and a
+# fake `hermes kanban show`. No board, no board DB writes, no network.
+prunewt_run() {
+  bash "$REPO_ROOT/deploy/worktrees/prune-kanban-worktrees_test.sh"
+}
+run prunewt "worktree pruner self-test (a stale refs/remotes/pr/N mirror is not durability; real durability still prunes)" prunewt_run
 
 # refguard — the hand-made `refs/remotes/<non-remote>/<N>` mirror guard. Same shape
 # of gate as `monitor`/`tmpkey`/`backup` and for the same reason: what is testable
