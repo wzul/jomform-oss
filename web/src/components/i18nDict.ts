@@ -1917,4 +1917,7 @@ export const DICT = {
   "forms.purgeHasSales": { en: "This form has sales, so it cannot be deleted for good — sales history is never destroyed. It stays in the trash.", ms: "Borang ini mempunyai jualan, jadi ia tidak boleh dipadam kekal — sejarah jualan tidak pernah dimusnahkan. Ia kekal dalam tong sampah.", zh: "此表单已有销售记录，因此无法永久删除——销售记录绝不会被销毁。它将留在回收站中。", ta: "இந்தப் படிவத்தில் விற்பனைகள் உள்ளன, எனவே நிரந்தரமாக நீக்க முடியாது — விற்பனை வரலாறு ஒருபோதும் அழிக்கப்படாது. இது குப்பைத் தொட்டியில் இருக்கும்.", ar: "يحتوي هذا النموذج على مبيعات، لذا لا يمكن حذفه نهائياً — لا يُتلف سجل المبيعات أبداً. سيبقى في سلة المهملات." },
   "forms.canPurgeFalse": { en: "Has sales — cannot be deleted for good", ms: "Ada jualan — tidak boleh dipadam kekal", zh: "有销售记录——无法永久删除", ta: "விற்பனைகள் உள்ளன — நிரந்தரமாக நீக்க முடியாது", ar: "يحتوي على مبيعات — لا يمكن حذفه نهائياً" },
   "forms.loadTrashFail": { en: "We couldn't load the trash. Please try again.", ms: "Kami tidak dapat memuatkan tong sampah. Sila cuba lagi.", zh: "无法加载回收站。请重试。", ta: "குப்பைத் தொட்டியை ஏற்ற முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر تحميل سلة المهملات. يرجى المحاولة مرة أخرى." },
+  // t_bac29e18: the /docs quick link to the REST API reference. Every docs quick
+  // link has a key here, so the label renders in all five languages.
+  "docs.linkAPI": { en: "REST API reference", ms: "Rujukan API REST", zh: "REST API 参考", ta: "REST API குறிப்பு", ar: "مرجع واجهة REST API" },
 } as const;

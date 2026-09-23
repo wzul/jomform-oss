@@ -252,3 +252,86 @@ func scopeTestRESTFormAndProduct(t *testing.T, pool *pgxpool.Pool, accountID str
 	}
 	return f.ID, p.ID
 }
+
+// TestRESTWebhookKeyIsGatedAsAWrite is card t_e9562a9c's behavioural half: the
+// published contract calls GET /v1/rest/settings/webhook-key a `write` (the page
+// renders that as "readwrite key; manage/admin role inside a ?workspace= scope"),
+// and this drives the real mux with a real readonly Bearer key to prove the API
+// answers exactly that — 403 before any keypair exists, because the handler
+// GENERATES and SAVES one.
+//
+// Why it exists next to the parity test: TestOpenAPIAccessMatchesTheHandlerGate
+// reads the handler's SOURCE. A source check cannot tell whether the gate it
+// finds is on the path a caller takes, so this asserts the wire, and it pins the
+// fact the contract's description now states rather than leaving it as prose.
+func TestRESTWebhookKeyIsGatedAsAWrite(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping DB-backed REST scope test in -short mode")
+	}
+	ctx := context.Background()
+	pool := testdb.Open(t)
+	accountID, _ := scopeTestRESTAccount(t, pool, t.Name())
+
+	// PRECONDITION, asserted rather than assumed: a fresh workspace has no
+	// keypair, which is the state the 403 is about.
+	var keyless int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM accounts WHERE id=$1 AND COALESCE(wh_sign_pub,'')='' AND COALESCE(wh_sign_priv,'')=''`,
+		accountID).Scan(&keyless); err != nil {
+		t.Fatalf("precondition query: %v", err)
+	}
+	if keyless != 1 {
+		t.Fatalf("precondition: the fixture account already has a signing key (%d keyless rows, want 1) — "+
+			"this test would then be asserting the wrong state", keyless)
+	}
+
+	h, readonlyKey := scopeRESTFixture(t, pool, accountID, "readonly-webhookkey", []string{dbstore.ScopeReadonly})
+
+	rec := bearerReq(t, h, readonlyKey, http.MethodGet, "/v1/rest/settings/webhook-key", "")
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("a readonly key got %d on GET /v1/rest/settings/webhook-key for an account with no "+
+			"signing key; the contract says this route is gated as a write, so want 403. Body: %s",
+			rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "scope") {
+		t.Errorf("refused with %d but not for the scope reason: %s", rec.Code, rec.Body.String())
+	}
+	// A refused call must not have minted the key anyway — a 403 that still
+	// wrote is not the behaviour the contract describes.
+	var after int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM accounts WHERE id=$1 AND COALESCE(wh_sign_pub,'')='' AND COALESCE(wh_sign_priv,'')=''`,
+		accountID).Scan(&after); err != nil {
+		t.Fatalf("read account back: %v", err)
+	}
+	if after != 1 {
+		t.Error("the refused GET created the account's signing keypair anyway — the gate ran after the write")
+	}
+
+	// The control that keeps this honest: a readwrite key on the SAME account is
+	// served, so the 403 above is a scope refusal and not a broken route.
+	h2, readwriteKey := scopeRESTFixture(t, pool, accountID, "readwrite-webhookkey", []string{dbstore.ScopeReadWrite})
+	rec2 := bearerReq(t, h2, readwriteKey, http.MethodGet, "/v1/rest/settings/webhook-key", "")
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("a readwrite key was refused GET /v1/rest/settings/webhook-key: %d (%s)",
+			rec2.Code, rec2.Body.String())
+	}
+	if !strings.Contains(rec2.Body.String(), `"alg":"ed25519"`) {
+		t.Errorf("the 200 body is not the signing-key payload: %s", rec2.Body.String())
+	}
+
+	// And the state-dependent half, documented in the contract's own description:
+	// once a keypair exists, the SAME readonly key is served.
+	pub, priv, err := dbstore.NewAccountStore(pool).SigningKeys(ctx, accountID)
+	if err != nil {
+		t.Fatalf("read signing keys: %v", err)
+	}
+	if pub == "" || priv == "" {
+		t.Fatalf("the readwrite call above did not persist a keypair (pub=%q) — the second half of "+
+			"this test would assert nothing", pub)
+	}
+	if rec3 := bearerReq(t, h, readonlyKey, http.MethodGet, "/v1/rest/settings/webhook-key", ""); rec3.Code != http.StatusOK {
+		t.Errorf("with a keypair already present the readonly key got %d; the contract's description "+
+			"says it is served in that state (%s)", rec3.Code, rec3.Body.String())
+	}
+}

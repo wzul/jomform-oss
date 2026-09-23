@@ -38,6 +38,10 @@ prices, sales, refunds, analytics — without opening a dashboard.
 
 - [Landing page](https://jomform.com/) — product overview, features, MCP selling point.
 - [MCP setup guide](https://jomform.com/mcp) — how to connect an AI agent over MCP.
+- [REST API reference](https://jomform.com/docs/api) — the /v1/rest contract: authenticate with an
+  API key, create and publish forms, read sales and responses, manage products, subscriptions,
+  webhooks and domains. Every operation is listed; a machine-readable OpenAPI 3.1 document is
+  published at https://github.com/wzul/jomform/blob/main/api/openapi/openapi.json.
 - [Privacy policy](https://jomform.com/legal/privacy)
 - [Terms of service](https://jomform.com/legal/terms)
 - [Brand assets](https://jomform.com/brand)

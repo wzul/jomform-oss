@@ -119,6 +119,10 @@ const FEATURES: { title: string; body: string; slug?: string }[] = [
     body: "Publishing puts your form on the internet at its own URL — the link a buyer opens, or the address you embed. Press Publish in the builder and JomForm confirms it immediately: a panel names the form as live, shows the public URL, and gives you an Open form and a Copy link action, so a first publish never ends in silence. If the URL cannot be resolved yet (for example a workspace whose subdomain is not set up), the panel says so plainly rather than showing a link that goes nowhere. Two rules decide whether a form may go live: a response-mode form always may — collecting answers is its whole job, and having no products is normal for it. A payment form needs something to sell: publishing one with no products is refused once with a clear message, because such a form can never take money, and you can confirm and publish it anyway if you only meant to collect details. Products can come from a product block, the form's product snapshot, a priced option or shipping choice, or an enabled restaurant menu; adding one any time removes the question. The same rule covers every way a form goes live — the Publish button, the status control in Form Settings, publishing several forms at once from the Forms list, and AI agents over MCP (publish_form and bulk_forms, both of which accept acknowledge), so an agent is told the same thing you are. A form that is already live is never asked about again.",
   },
   {
+    title: "REST API",
+    body: "Your own server can drive JomForm: create forms, read sales and responses, manage products, subscriptions, webhooks and domains. Every operation is listed in the reference, generated from the API's OpenAPI 3.1 contract. See the REST API reference.",
+  },
+  {
     title: "MCP (AI agents)",
     body: "Connect JomForm to Claude, Cursor and other AI agents via the Model Context Protocol. Agents can build forms, manage products, sales, subscriptions, media and more. See the MCP tool reference.",
   },
@@ -176,6 +180,12 @@ export default function DocsIndexPage() {
           className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
         >
           MCP tool reference
+        </Link>
+        <Link
+          href="/docs/api"
+          className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+        >
+          REST API reference
         </Link>
       </div>
 

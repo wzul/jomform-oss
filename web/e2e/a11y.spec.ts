@@ -36,6 +36,11 @@ const PAGES = [
   { name: "docs-ses-reputation", path: "/docs/ses-reputation" },
   { name: "docs-placeholders", path: "/docs/placeholders" },
   { name: "docs-mcp", path: "/docs/mcp" },
+  // t_bac29e18: the REST API reference is a public, sitemapped, footer-linked
+  // page — exactly the shape this scan exists for. Its endpoint tables are the
+  // largest block of dense small text on the docs site, so leaving it unscanned
+  // would repeat the gap t_d768342e closed.
+  { name: "docs-api", path: "/docs/api" },
   { name: "docs-feedback", path: "/docs/feedback" },
   { name: "docs-chat", path: "/docs/chat" },
 ];

@@ -18,6 +18,9 @@ const APEX_PAGES = [
   "/docs/embed",
   "/docs/placeholders",
   "/docs/mcp",
+  // t_bac29e18: the public REST API reference. It is a product surface — the
+  // entry point for a developer integrating with JomForm.
+  "/docs/api",
   // The per-workspace AI spam-detection toggle is documented here
   // and the Settings switch deep-links into it.
   "/docs/spam-detection",

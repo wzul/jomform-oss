@@ -300,6 +300,9 @@ export default function Landing() {
           <a href="/legal/privacy" className="hover:underline">Privacy Policy</a>
           <a href="/legal/terms" className="hover:underline">Terms of Service</a>
           <a href="/docs" className="hover:underline">Docs</a>
+          {/* t_bac29e18: the REST API is a product surface, so it is reachable
+              from the public footer as well as the docs nav. */}
+          <a href="/docs/api" className="hover:underline">API</a>
           <a href="/brand" className="hover:underline">Brand</a>
         </div>
         <p>

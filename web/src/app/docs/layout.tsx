@@ -16,6 +16,7 @@ const NAV = [
   { href: "/docs/ses-reputation", label: "Email suppression list" },
   { href: "/docs/placeholders", label: "Placeholders reference" },
   { href: "/docs/mcp", label: "MCP tool reference" },
+  { href: "/docs/api", label: "REST API reference" },
   { href: "/docs/feedback", label: "In-app feedback" },
   { href: "/docs/chat", label: "In-app assistant" },
 ];
