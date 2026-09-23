@@ -87,6 +87,128 @@ func roleAtLeast(role, required string) bool {
 	return rank[role] >= rank[required]
 }
 
+// workspaceScopeResolution reports how a request's ?workspace= scope resolved for
+// a session caller. It exists so the "the scope could not be resolved" answer is
+// one shared value rather than a per-endpoint guess.
+type workspaceScopeResolution int
+
+const (
+	// scopeResolved: the request is scoped and the workspace belongs to the
+	// caller (or the request is unscoped and there is nothing to resolve).
+	scopeResolved workspaceScopeResolution = iota
+	// scopeUnresolved: the request carries ?workspace=<slug> and the slug is
+	// unknown or not the caller's. Answered with the same 403 and the same
+	// "workspace tidak dijumpai" body resolveAccountScope already gives — every
+	// dashboard page already handles that pair — and NOT with a fallback to the
+	// caller's first account, which is what would make a foreign slug read
+	// somebody else's data.
+	scopeUnresolved
+	// scopeAmbiguous: the request is UNSCOPED and the session user can reach more
+	// than one workspace. There is no rule by which "no scope" means one of them,
+	// so a caller that cannot tolerate the guess must refuse rather than take the
+	// first account (see resolveSessionAccount).
+	//
+	// It is refused as a 400, not a 403, and deliberately so: this condition is a
+	// request that is MISSING the parameter the endpoint requires (the same class
+	// as the chat's other malformed-input 400s), not a permission denial. The
+	// distinction is load-bearing on the client: web/src/lib/wsfetch.ts treats
+	// 401/403 as "the session is gone" and redirects to /login, so a 403 here
+	// would bounce a signed-in, multi-workspace user to the login page for a
+	// request they never made by hand. A 400 renders the page's own message and
+	// leaves the session alone.
+	scopeAmbiguous
+)
+
+// workspaceScopeResolutionFor classifies the caller's ?workspace= scope for the
+// endpoints that must not silently fall back to the first owned account. It is
+// deliberately narrow: only a SESSION caller with a real ambiguity to resolve is
+// affected, so no existing correct call is perturbed.
+//
+// It answers, in order:
+//   - a slug was sent and it belongs to the caller → resolved (the same
+//     workspace resolveSessionAccount would have picked),
+//   - a slug was sent and it does not → unresolved (403, never a fallback),
+//   - no slug and the caller has at most one accessible workspace → resolved,
+//     because there is nothing to guess: the unscoped path and the scoped path
+//     name the same account,
+//   - no slug and SEVERAL accessible workspaces → ambiguous: the unscoped fallback
+//     would pick Accounts.ByOwner(...)[0] and that is a guess.
+//
+// The accessible set is ByMember (owner OR member), not ByOwner: a member reaches
+// workspaces they own nothing in, so counting owned accounts would serve the guess
+// to exactly the people the membership feature exists for.
+//
+// A MISSING workspace store (bare-mode tests, an unwired deployment) is treated as
+// "no workspaces", i.e. resolved: with nothing to resolve FROM, refusing would
+// break every session call in a deployment that never had the feature.
+func (h *RESTHandlers) workspaceScopeResolutionFor(r *http.Request, userID string) workspaceScopeResolution {
+	if h == nil || userID == "" {
+		return scopeResolved
+	}
+	slug := r.URL.Query().Get("workspace")
+	if slug != "" {
+		if h.Workspaces == nil {
+			// No way to resolve a slug: treat it as unresolvable rather than
+			// reading the caller's first account under it, which is exactly the
+			// confusion this helper exists to stop.
+			return scopeUnresolved
+		}
+		_, ok, err := h.Workspaces.AccessBySlug(r.Context(), slug, userID)
+		if err != nil || !ok {
+			return scopeUnresolved
+		}
+		return scopeResolved
+	}
+	if h.Workspaces == nil {
+		return scopeResolved
+	}
+	accessible, err := h.Workspaces.ByMember(r.Context(), userID)
+	if err != nil {
+		// A listing failure is NOT proof of ambiguity, and refusing on it would
+		// turn a database blip into a 403 for a single-workspace merchant.
+		return scopeResolved
+	}
+	if len(accessible) > 1 {
+		return scopeAmbiguous
+	}
+	return scopeResolved
+}
+
+// requireResolvedWorkspaceScope is the gate for the endpoints that may not fall
+// back to the first owned account — currently the chat lane (see
+// chatWorkspaceScopeOr403 in rest_chat.go for the argument). It writes the refusal
+// and returns false when the scope cannot be resolved, and is silent (true) when it
+// can.
+//
+// The two refusals are deliberately different, and the difference is the CLIENT's,
+// not the server's taste:
+//
+//   - a slug the caller cannot access is a 403 with the same "workspace tidak
+//     dijumpai" body resolveAccountScope already uses, so a page that handles a
+//     foreign workspace already handles this one;
+//   - a MISSING scope on a session that could have sent one is a 400, because
+//     web/src/lib/wsfetch.ts defines 401/403 as "the session is no longer valid"
+//     and redirects to /login. A 403 there would log a signed-in merchant out of
+//     the page they are reading; a 400 is rendered as the page's own message.
+func (h *RESTHandlers) requireResolvedWorkspaceScope(w http.ResponseWriter, r *http.Request, actx *AccountCtx) bool {
+	// API-key callers have no session and no workspace list; their account comes
+	// from the key. The unscoped fallback is the documented API-key path and is
+	// not a guess about a person's selection.
+	if actx == nil || actx.ViaAPIKey {
+		return true
+	}
+	switch h.workspaceScopeResolutionFor(r, h.sessionOwnerID(r)) {
+	case scopeUnresolved:
+		writeErr(w, http.StatusForbidden, "workspace tidak dijumpai")
+		return false
+	case scopeAmbiguous:
+		writeErr(w, http.StatusBadRequest,
+			"skop workspace diperlukan — pilih workspace dahulu")
+		return false
+	}
+	return true
+}
+
 // requireWriteScope enforces the API-key WRITE SCOPE on a mutating REST
 // endpoint. Scope and workspace role are INDEPENDENT axes and a write must
 // satisfy both:

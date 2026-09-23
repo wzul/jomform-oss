@@ -1852,6 +1852,13 @@ export const DICT = {
   "chat.confirmFail": { en: "The change could not be applied. Please try again.", ms: "Perubahan tidak dapat dilaksanakan. Sila cuba lagi.", zh: "无法应用该更改。请重试。", ta: "மாற்றத்தைப் பயன்படுத்த முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر تطبيق التغيير. يرجى المحاولة مرة أخرى." },
   "chat.cancelFail": { en: "The proposal could not be cancelled. Please try again.", ms: "Cadangan tidak dapat dibatalkan. Sila cuba lagi.", zh: "无法取消该提议。请重试。", ta: "முன்மொழிவை ரத்து செய்ய முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر إلغاء المقترح. يرجى المحاولة مرة أخرى." },
   "chat.confirmRateLimited": { en: "You have reached the confirmation limit (30 an hour). Please try again shortly.", ms: "Anda telah mencapai had pengesahan (30 sejam). Sila cuba sebentar lagi.", zh: "您已达到确认上限（每小时 30 次）。请稍后再试。", ta: "உறுதிப்படுத்தல் வரம்பை அடைந்துவிட்டீர்கள் (மணிக்கு 30). சிறிது நேரத்தில் மீண்டும் முயற்சிக்கவும்.", ar: "بلغت حد التأكيد (30 في الساعة). يرجى المحاولة بعد قليل." },
+  // The chat calls carry the selected workspace (?workspace=). When a
+  // multi-workspace session reaches an endpoint without it, the server refuses
+  // rather than answer about the user's first account — and this is the copy that
+  // tells the user what to do about it. It is NOT the "session expired" path: the
+  // server answers 400 for a missing scope, not 401/403, so the page does not
+  // redirect to /login for a request the user never made by hand.
+  "chat.scopeRequired": { en: "Choose a workspace first — the assistant answers for one workspace at a time.", ms: "Pilih workspace dahulu — pembantu menjawab untuk satu workspace pada satu masa.", zh: "请先选择工作区——助手一次只回答一个工作区的问题。", ta: "முதலில் ஒரு பணியிடத்தைத் தேர்ந்தெடுங்கள் — உதவியாளர் ஒரு நேரத்தில் ஒரு பணியிடத்திற்கே பதிலளிக்கும்.", ar: "اختر مساحة عمل أولاً — المساعد يجيب عن مساحة عمل واحدة في كل مرة." },
 
   // admin feedback triage
   "afb.title": { en: "Feedback triage", ms: "Triaj maklum balas", zh: "反馈分类", ta: "கருத்து வகைப்படுத்தல்", ar: "فرز الملاحظات" },

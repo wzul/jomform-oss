@@ -30,6 +30,15 @@
 //      something and was not allowed, rather than experiencing it as a broken
 //      answer.
 //
+//   5. EVERY call carries the active workspace (the `?workspace=` query the
+//      shared workspaceQuery() helper builds). The chat is one of the dashboard
+//      surfaces that resolve the account from the SELECTED workspace, and it is
+//      the only one that can WRITE through a confirmation — so an unscoped call is
+//      not a read-scope wobble here: the server falls back to the user's FIRST
+//      owned account, the assistant names that account's product on the card, and
+//      confirming the card edits it. A merchant with two workspaces would be shown
+//      a card for the account they are not looking at.
+//
 // The history it sends is the transcript the user can see, capped to the last
 // MAX_HISTORY turns. The server re-caps and drops any client-forged system/tool
 // turn, so the wire shape here is a convenience, not a trust boundary.
@@ -41,6 +50,7 @@ import { Markdown } from "../../components/Markdown";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
+import { workspaceQuery } from "../../lib/workspace";
 
 type Turn = { role: "user" | "assistant"; content: string };
 
@@ -130,7 +140,10 @@ export default function ChatPage() {
   useEffect(() => {
     void (async () => {
       const r = await runLoad(
-        () => fetchJson<{ available?: boolean; limits?: Limits }>("/api/rest/chat"),
+        () =>
+          fetchJson<{ available?: boolean; limits?: Limits }>(
+            `/api/rest/chat${workspaceQuery()}`,
+          ),
         { onUnauth: goToLogin, message: t("chat.unavailable") },
       );
       if (!r.ok) {
@@ -173,7 +186,7 @@ export default function ChatPage() {
     setInput("");
     setSending(true);
     try {
-      const r = await fetch("/api/rest/chat", {
+      const r = await fetch(`/api/rest/chat${workspaceQuery()}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: text, history }),
@@ -184,6 +197,15 @@ export default function ChatPage() {
       }
       if (r.status === 429) {
         setErr(t("chat.rateLimited"));
+        return;
+      }
+      // 400 = the request itself was refused (a missing/unusable workspace scope),
+      // NOT a dead session: wsfetch's 401/403 rule is above and deliberately not
+      // reached here. Showing the generic failure would hide the one thing the
+      // user can act on (choose a workspace), so the server's scope refusal gets
+      // its own copy.
+      if (r.status === 400) {
+        setErr(t("chat.scopeRequired"));
         return;
       }
       if (r.status === 503) {
@@ -240,7 +262,12 @@ export default function ChatPage() {
     // decision.
     const url = action === "confirm" ? "/api/rest/chat/confirm" : "/api/rest/chat/cancel";
     try {
-      const r = await fetch(url, {
+      // The decision carries the active workspace for the same reason the message
+      // does: the server resolves the WRITE account from it, and a confirmation is
+      // the one chat call that changes data. Without it a two-workspace session
+      // falls back to the user's FIRST account — the card names the account they
+      // selected, but the write would land on the other one.
+      const r = await fetch(`${url}${workspaceQuery()}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(
@@ -256,6 +283,15 @@ export default function ChatPage() {
       if (r.status === 429) {
         setState(msgIndex, p.token, "failed");
         setErr(t("chat.confirmRateLimited"));
+        return;
+      }
+      // The server refused the request itself (a missing/unusable workspace
+      // scope). Same reasoning as the message path: 400 is not a dead session, so
+      // it must not be conflated with the 401/403 branch above, and the user needs
+      // the scope copy rather than the generic failure.
+      if (r.status === 400) {
+        setState(msgIndex, p.token, "failed");
+        setErr(t("chat.scopeRequired"));
         return;
       }
       if (r.status === 409) {

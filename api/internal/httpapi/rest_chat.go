@@ -137,9 +137,17 @@ func (h *RESTHandlers) chatAvailable() bool {
 // handleChatStatus: GET /v1/rest/chat — is the assistant available, and what are
 // its limits? The UI asks before showing the box, so a deployment without a
 // usable LLM credential hides the feature instead of offering a box that errors.
-func (h *RESTHandlers) handleChatStatus(w http.ResponseWriter, r *http.Request, _ *AccountCtx) {
+//
+// The workspace scope must be resolvable here too (see chatWorkspaceScopeOr403):
+// the availability answer is per deployment, but the endpoint belongs to the chat
+// lane, and an unscoped call from a multi-workspace session is the same silent
+// guess wherever it is made.
+func (h *RESTHandlers) handleChatStatus(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	if h.sessionOwnerID(r) == "" {
 		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		return
+	}
+	if !h.chatWorkspaceScopeOr403(w, r, actx) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -147,6 +155,32 @@ func (h *RESTHandlers) handleChatStatus(w http.ResponseWriter, r *http.Request, 
 		"limits":    chatLimits(),
 		"read_only": true,
 	})
+}
+
+// chatWorkspaceScopeOr403 refuses a chat call whose account would be GUESSED.
+//
+// WHY THE CHAT NEEDS THIS AND THE REST OF THE DASHBOARD DOES NOT. Every dashboard
+// page resolves its account from ?workspace=; the chat used to send none, and the
+// unscoped fallback in resolveSessionAccount picks Accounts.ByOwner(...)[0] — the
+// user's FIRST owned account, not the one selected in the Shell. Phase 1 that read
+// the wrong account; phase 2 CONFIRMS writes against it, so a merchant with two
+// workspaces is shown a card naming one account's product and, by confirming it,
+// edits that account. `roleAtLeast("")==true` makes it worse rather than better:
+// an unscoped request has no role, so the write gate passes.
+//
+// The chat is SESSION-ONLY (an API key is refused by handleChat), so the documented
+// "legacy unscoped callers / API-key path" exception in resolveSessionAccount does
+// not apply to it — there is no legitimate unscoped chat caller to preserve.
+//
+// A session with exactly one accessible workspace is NOT refused: there the
+// unscoped account and the scoped account are the same row, so refusing would be
+// ceremony (and would break a single-workspace merchant on a stale client).
+//
+// It is applied to ALL FOUR chat routes — GET status, POST message, POST confirm,
+// POST cancel — because they are one lane: a decision endpoint left unscoped would
+// be the same defect with a narrower door.
+func (h *RESTHandlers) chatWorkspaceScopeOr403(w http.ResponseWriter, r *http.Request, actx *AccountCtx) bool {
+	return h.requireResolvedWorkspaceScope(w, r, actx)
 }
 
 // handleChat: POST /v1/rest/chat — answer one message.
@@ -166,6 +200,12 @@ func (h *RESTHandlers) handleChat(w http.ResponseWriter, r *http.Request, actx *
 	}
 	if actx == nil || actx.Account == nil {
 		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		return
+	}
+	// Refuse a GUESSED account before anything else: the message's tools read
+	// under this identity, so an unresolved scope would answer questions about a
+	// workspace the user is not looking at (see chatWorkspaceScopeOr403).
+	if !h.chatWorkspaceScopeOr403(w, r, actx) {
 		return
 	}
 
@@ -257,6 +297,12 @@ func (h *RESTHandlers) handleChatConfirm(w http.ResponseWriter, r *http.Request,
 		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
 		return
 	}
+	// The confirmation writes with THE ACCOUNT THIS REQUEST RESOLVED, so an
+	// unresolved scope here is a write to the wrong workspace — the worst version
+	// of the chat's scope defect. Refused before the token is even read.
+	if !h.chatWorkspaceScopeOr403(w, r, actx) {
+		return
+	}
 	if h.Chat == nil {
 		writeErr(w, http.StatusServiceUnavailable, "pembantu chat tidak tersedia")
 		return
@@ -316,11 +362,18 @@ func (h *RESTHandlers) handleChatConfirm(w http.ResponseWriter, r *http.Request,
 // Idempotent in effect: cancelling a spent proposal answers the same "already
 // used" shape a second confirm would. That is deliberate — the user pressing the
 // button twice must not look like a failure.
-func (h *RESTHandlers) handleChatCancel(w http.ResponseWriter, r *http.Request, _ *AccountCtx) {
+func (h *RESTHandlers) handleChatCancel(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	uid := h.sessionOwnerID(r)
 	if uid == "" {
 		writeErr(w, http.StatusUnauthorized,
 			"membatalkan cadangan memerlukan sesi pengguna — log masuk untuk menggunakannya")
+		return
+	}
+	// The same scope rule as the confirm: a decision on a card belongs to the
+	// workspace it was prepared in, and an unscoped request cannot say which one
+	// that is. Refused for the SAME reason as a confirm so the three routes cannot
+	// drift apart (see chatWorkspaceScopeOr403).
+	if !h.chatWorkspaceScopeOr403(w, r, actx) {
 		return
 	}
 	if h.Chat == nil {

@@ -33,13 +33,16 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { join, relative } from "node:path";
 
 import { DICT, LANGS } from "../components/i18nDict.ts";
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
 const path = (rel: string) => fileURLToPath(new URL(rel, import.meta.url));
+const readAbs = (abs: string) => readFileSync(abs, "utf8");
+const appDir = fileURLToPath(new URL("../app", import.meta.url));
 
 const page = read("../app/chat/page.tsx");
 const shell = read("../components/Shell.tsx");
@@ -351,6 +354,256 @@ test("a refused tool call is shown, not swallowed", () => {
   );
 });
 
+// ── THE WORKSPACE SCOPE (the defect this guard exists for) ───────────────────
+//
+// WHAT BROKE. This page talked to /api/rest/chat, /chat/confirm and /chat/cancel
+// with no ?workspace= at all, so the server resolved `Accounts.ByOwner(...)[0]` —
+// the user's FIRST account, not the workspace selected in the Shell. Phase 1 that
+// answered about the wrong workspace; phase 2 made it WRITABLE, because the
+// confirmation executes the stored proposal under the account the request
+// resolved. A merchant with two workspaces selected the second, read a card naming
+// the first one's product, and confirming it edited the first one.
+//
+// WHY A SOURCE GUARD AND NOT A UI TEST. This repo has no React/DOM runner (see
+// src/lib/i18n.test.ts), so the only place the request URLs exist is the page
+// source. Pinning the three call sites there is what makes the omission
+// impossible: a fourth chat call added without the scope, or a hand-rolled
+// `?workspace=` string, both fail here.
+//
+// The Go half is pinned cross-language in the same test: the server refuses an
+// unscoped chat call from a multi-workspace session (requireResolvedWorkspaceScope
+// in api/internal/httpapi/rest_scope.go), so the two halves cannot drift into
+// "the page sends it" / "the server stopped caring" or the reverse.
+const workspaceHelper = read("./workspace.ts");
+const scopeFile = read("../../../api/internal/httpapi/rest_scope.go");
+const chatTest = read("./chatPage.test.ts");
+
+test("the chat page scopes EVERY call with workspaceQuery() — the shared helper, not a hand-rolled string", () => {
+  // Every chat call site the page builds must go through the helper. Counted
+  // rather than merely "present": one call site left unscoped is the whole defect,
+  // and a substring check for `workspaceQuery` passes with two of three converted.
+  //
+  // The call sites are counted by their FETCH, not by a URL literal, because the
+  // decision route is written literally into `url` and fetched as
+  // `${url}${workspaceQuery()}` — the route-parity rule demands the literal path
+  // (see the phase-2 test above), so the guard has to look at the fetch site.
+  const chatFetches = [...page.matchAll(/fetch(?:Json<[^>]*>)?\(\s*(`[^`]*`|"[^"]*")/g)].map(
+    (m) => m[1],
+  );
+  const chatCalls = chatFetches.filter(
+    (u) => u.includes("/api/rest/chat") || u === "`${url}${workspaceQuery()}`",
+  );
+  assert.ok(
+    chatCalls.length >= 3,
+    `expected the page to build at least three chat calls (status, message, decision), found ` +
+      `${chatCalls.length}: ${JSON.stringify(chatFetches)}`,
+  );
+  for (const u of chatCalls) {
+    assert.ok(
+      u.includes("${workspaceQuery()}"),
+      `the chat call ${u} does not append \${workspaceQuery()} — an unscoped chat call resolves the ` +
+        `user's FIRST account, not the workspace they selected, and the confirmation lane WRITES there`,
+    );
+  }
+  // The decision URL still gets scoped even though its path is literal.
+  assert.ok(
+    page.includes("await fetch(`${url}${workspaceQuery()}`"),
+    "the confirm/cancel decision fetch no longer appends the workspace scope — the confirmation " +
+      "would write to the user's first account",
+  );
+  // The page renders the scope refusal as its own message. Without this the user
+  // sees the generic "could not answer" for a condition they can fix by picking a
+  // workspace, and the server's explicit refusal is wasted.
+  assert.ok(
+    page.includes('t("chat.scopeRequired")'),
+    "the page no longer renders a message for the workspace-scope refusal — the server refuses " +
+      "explicitly precisely so the user can act on it",
+  );
+  // And 400 must not be folded into the 401/403 branch (that branch redirects to
+  // /login, which would be wrong for a signed-in user whose scope was missing).
+  assert.ok(
+    !/status === 400[^\n]*goToLogin/.test(page),
+    "the page treats a 400 as a dead session — a missing workspace scope would redirect a " +
+      "signed-in merchant to /login",
+  );
+  // No hand-rolled query string in CODE: the active-workspace rule lives in one
+  // place (lib/workspace.ts), and a second spelling is how it drifts. Comments are
+  // stripped first — this page documents the `?workspace=` rule in prose, and a
+  // guard that fires on its own documentation is a guard people delete.
+  const pageCode = page
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .split("\n")
+    .filter((l) => !/^\s*(\/\/|\*)/.test(l))
+    .join("\n");
+  assert.ok(
+    !/workspace=\$\{|[?&]workspace=/.test(pageCode),
+    "app/chat/page.tsx builds ?workspace= by hand instead of using workspaceQuery() — the " +
+      "active-workspace rule must stay in ONE place (lib/workspace.ts)",
+  );
+  assert.ok(
+    page.includes('import { workspaceQuery } from "../../lib/workspace"'),
+    "app/chat/page.tsx does not import workspaceQuery from the shared helper",
+  );
+  // And the helper is still the real thing, not a stub the page could satisfy by
+  // importing it and sending nothing.
+  assert.match(
+    workspaceHelper,
+    /export function workspaceQuery\(\): string \{\s*const sp = workspaceScope\(\);\s*return sp \? `\?workspace=\$\{encodeURIComponent\(sp\)\}` : "";/,
+    "lib/workspace.ts workspaceQuery() no longer returns `?workspace=<slug>` — the page would import a " +
+      "helper that scopes nothing",
+  );
+});
+
+test("the SERVER refuses a chat call whose workspace would be guessed", () => {
+  // The gate exists, is wired into the chat lane, and is not merely a 403 the
+  // page could ignore: a single-workspace session must still be served.
+  assert.match(
+    scopeFile,
+    /func \(h \*RESTHandlers\) requireResolvedWorkspaceScope\(/,
+    "rest_scope.go no longer defines the refusal for an unresolvable workspace scope — the chat would " +
+      "fall back to Accounts.ByOwner(...)[0] again",
+  );
+  assert.match(
+    scopeFile,
+    /case scopeUnresolved:[\s\S]{0,200}?http\.StatusForbidden/,
+    "the foreign-slug refusal is no longer a 403",
+  );
+  // The MISSING-scope refusal must NOT be a 401/403. wsfetch.ts is the module
+  // every dashboard fetch goes through, and the chat page repeats the rule by
+  // hand: 401/403 means "the session is gone" and redirects to /login. A
+  // signed-in, two-workspace merchant whose client omitted the scope would be
+  // logged out of the page they are reading — a worse bug than the one this card
+  // fixes. Pinned here because it is a CLIENT contract living in Go code.
+  assert.match(
+    scopeFile,
+    /case scopeAmbiguous:[\s\S]{0,200}?http\.StatusBadRequest/,
+    "the missing-scope refusal must be a 400, not a 401/403 — wsfetch.ts redirects 401/403 to " +
+      "/login, so a 403 here would bounce a signed-in merchant to the login page",
+  );
+  assert.ok(
+    read("./wsfetch.ts").includes("return status === 401 || status === 403;"),
+    "wsfetch.ts no longer treats 401/403 as an invalid session — re-argue the status choice above " +
+      "before changing this guard",
+  );
+  assert.match(
+    goRest,
+    /func \(h \*RESTHandlers\) chatWorkspaceScopeOr403\(/,
+    "rest_chat.go no longer applies the scope gate — the page sending ?workspace= must not be the only " +
+      "thing standing between a two-workspace merchant and a write to the wrong workspace",
+  );
+  // The gate is applied on all FOUR chat routes: a decision endpoint left
+  // unscoped is the same defect with a narrower door.
+  const gateCalls = [...goRest.matchAll(/h\.chatWorkspaceScopeOr403\(w, r, actx\)/g)].length;
+  assert.ok(
+    gateCalls >= 4,
+    `rest_chat.go applies the scope gate at ${gateCalls} call site(s), want 4 (GET status, POST message, ` +
+      `POST confirm, POST cancel) — an unscoped route resolves the first account`,
+  );
+  // Each of the four handlers must be one of the call sites (a call sitting in a
+  // dead helper would satisfy the count above and gate nothing).
+  for (const handler of [
+    "handleChatStatus",
+    "handleChat",
+    "handleChatConfirm",
+    "handleChatCancel",
+  ]) {
+    const body = goRest.slice(goRest.indexOf(`func (h *RESTHandlers) ${handler}(`));
+    const next = body.indexOf("\nfunc ", 1);
+    const fn = next > 0 ? body.slice(0, next) : body;
+    assert.ok(
+      fn.includes("chatWorkspaceScopeOr403"),
+      `${handler} does not refuse an unresolvable workspace scope — that route would resolve the ` +
+        `caller's first account`,
+    );
+  }
+  // The two halves must be tested together, or this file could pass while the Go
+  // guard is deleted: the server-side criteria live in
+  // chat_workspace_scope_test.go.
+  assert.ok(
+    existsSync(path("../../../api/internal/httpapi/chat_workspace_scope_test.go")),
+    "the Go guard for this rule is gone — the source pins above would then be the only thing " +
+      "asserting it, and they would pass with the server refusing nothing",
+  );
+  assert.ok(
+    chatTest.includes("chatWorkspaceScopeOr403"),
+    "this guard no longer reads the gate it claims to pin",
+  );
+});
+
+test("no dashboard page calls an ACCOUNT-scoped REST route without the workspace scope", () => {
+  // THE CLASS, not the instance. The chat's omission was not special: every
+  // dashboard page that resolves its account from ?workspace= must send it, and
+  // the next page written the same way fails here rather than shipping.
+  //
+  // WHAT MAKES A PAGE SUBJECT TO THE RULE. Only pages that reach an
+  // ACCOUNT-scoped route. Two families are legitimately unscoped and must NOT be
+  // flagged, because on those routes the scope is not what identifies the data:
+  //
+  //   * USER-level routes — /api/rest/feedback*, /api/rest/uploads/avatar,
+  //     /api/rest/profile/avatar. The handlers key them on sessionOwnerID (the
+  //     person), not on an account, so there is no workspace to send. Sending one
+  //     would be noise, and requiring it would be a rule that cannot be obeyed.
+  //   * Non-REST and public-URL fetches (a form's own /f/<slug>, docs assets).
+  //
+  // Everything else under /api/rest/ that a Shell page calls IS account-scoped:
+  // the lists, the products, the builder, settings, deliveries, templates.
+  const walk = (dir: string): string[] => {
+    const out: string[] = [];
+    for (const entry of readdirSync(dir)) {
+      const p = join(dir, entry);
+      if (statSync(p).isDirectory()) out.push(...walk(p));
+      else if (entry === "page.tsx") out.push(p);
+    }
+    return out;
+  };
+  const pages = walk(appDir);
+  assert.ok(
+    pages.length >= 13,
+    `expected the dashboard's pages, got ${pages.length} — the walk must be finding the real app tree`,
+  );
+
+  // Routes whose data is the PERSON's, not an account's (see above).
+  const USER_LEVEL = /\/api\/rest\/(feedback|uploads\/avatar|profile\/avatar)/;
+  // Comment-stripped: the pages document the ?workspace= rule in prose.
+  const stripComments = (src: string) =>
+    src
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .split("\n")
+      .filter((l) => !/^\s*(\/\/|\*)/.test(l))
+      .join("\n");
+
+  const offenders: string[] = [];
+  let subjectPages = 0;
+  for (const abs of pages) {
+    const code = stripComments(readAbs(abs));
+    // Every /api/rest/... URL this page builds as a string/template literal.
+    const urls = [...code.matchAll(/[`"](\/api\/rest\/[^`"]*)[`"]/g)].map((m) => m[1]);
+    const accountScoped = urls.filter((u) => !USER_LEVEL.test(u));
+    if (accountScoped.length === 0) continue;
+    subjectPages += 1;
+    const scoped = code.includes("workspaceQuery");
+    if (!scoped) {
+      offenders.push(
+        `${relative(appDir, abs)}: calls ${JSON.stringify([...new Set(accountScoped)])} with no ` +
+          `workspaceQuery() — the server resolves Accounts.ByOwner(...)[0], the user's FIRST ` +
+          `account, not the workspace they selected`,
+      );
+    }
+  }
+  assert.ok(
+    subjectPages >= 10,
+    `only ${subjectPages} page(s) were judged account-scoped — the census is not seeing the real ` +
+      `pages, so this guard would pass vacuously`,
+  );
+  assert.deepEqual(offenders, [], `account-scoped pages missing the workspace scope:\n  ${offenders.join("\n  ")}`);
+  // The chat is the page this guard exists for, so it must be one of the judged
+  // pages — not excluded by the filters above.
+  assert.ok(
+    pages.some((p) => p.endsWith(join("app", "chat", "page.tsx"))),
+    "the walk did not include app/chat/page.tsx — the page whose omission this guard exists for",
+  );
+});
+
 test("the nav entry and the page exist together, and the docs page is reachable", () => {
   assert.ok(
     shell.includes('href: "/chat"'),
@@ -392,6 +645,14 @@ test('the inline "?" doc link points at the docs page that documents the boundar
     /confirm/i.test(docs),
     "the docs page does not explain confirmation — the whole phase-2 design is that a human " +
       "confirms and the server executes",
+  );
+  // The workspace scope is user-VISIBLE: a member of two workspaces can hit the
+  // refusal, so it must be documented where the inline "?" leads, or the user
+  // reads a 403 with no explanation of what to do about it.
+  assert.ok(
+    /selected workspace/i.test(docs),
+    "the docs page does not say a confirmation writes in the SELECTED workspace — a user who hits " +
+      "the scope refusal has nothing telling them why, or that choosing a workspace is the fix",
   );
 });
 
