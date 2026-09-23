@@ -132,10 +132,19 @@ func TestSlugUniquenessPerWorkspace(t *testing.T) {
 	fs := NewFormStore(p)
 
 	// Schema-level: the per-workspace unique index must exist.
+	//
+	// Scoped to this process's own scratch schema. Left unqualified, this query
+	// counts `forms` in EVERY `test_*` scratch schema on the shared test database
+	// — peer gate runs included — and Postgres resolves those rows from the
+	// catalogue by OID. When a peer finishes and drops its schema inside that
+	// window, the read fails with "could not open relation with OID … (SQLSTATE
+	// XX000)", which looked like a regression in whichever card happened to be
+	// gating at the time. Assert the invariant where it is actually owned.
 	var n int
 	if err := p.QueryRow(ctx, `
 		SELECT COUNT(*) FROM pg_indexes
-		WHERE tablename='forms' AND indexdef ILIKE '%workspace_id%' AND indexdef ILIKE '%slug%' AND indexdef ILIKE '%unique%'`).Scan(&n); err != nil {
+		WHERE schemaname = current_schema()
+		  AND tablename='forms' AND indexdef ILIKE '%workspace_id%' AND indexdef ILIKE '%slug%' AND indexdef ILIKE '%unique%'`).Scan(&n); err != nil {
 		t.Fatalf("check per-workspace slug index: %v", err)
 	}
 	if n == 0 {

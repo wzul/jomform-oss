@@ -88,7 +88,8 @@ func TestSuppressionAdminMigrationBackfillsLegacyRows(t *testing.T) {
 	var idxPresent bool
 	if err := pool.QueryRow(ctx, `
 		SELECT EXISTS(SELECT 1 FROM pg_indexes
-		               WHERE tablename = 'suppressed_emails' AND indexname = 'idx_suppressed_emails_created_at')`,
+		               WHERE schemaname = current_schema()
+		                 AND tablename = 'suppressed_emails' AND indexname = 'idx_suppressed_emails_created_at')`,
 	).Scan(&idxPresent); err != nil {
 		t.Fatalf("probe index: %v", err)
 	}
