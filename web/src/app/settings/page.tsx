@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Shell } from "../../components/Shell";
 import { useRouter } from "next/navigation";
 import { useI18n, LANGS_SHOWN, LANG_LABEL } from "../../components/i18n";
@@ -289,6 +289,9 @@ export default function Settings() {
   // the session fetches the bundle once; later pages (dashboard, forms,
   // products, profile) reuse it. Saves call reloadSession() to re-fetch.
   const { bundle, anon, reload: reloadSession, role, user } = useSession();
+  // Phone tab strip: the settings tab strip is one scrolling row, not a wrapped
+  // block (see the tab bar below). This ref points at it.
+  const tabStripRef = useRef<HTMLDivElement | null>(null);
   const reload = useCallback(() => {
     // Saves mutate bundle-backed sections: drop the shared cache first so
     // the next load() re-fetches fresh data (and other pages inherit it).
@@ -991,6 +994,39 @@ export default function Settings() {
     ? []
     : TAB_IDS.filter((id) => (id === "chip" || id === "members") ? isAdmin : true);
 
+  // Keep a tab inside the strip's visible window.
+  //
+  // The strip is one scrolling row (`overflow-x-auto`), so a tab that is
+  // selected but off-screen is a dead end on a phone: measured at 320px the
+  // default tab (Affiliates, the last of the eleven) sat 867px inside a
+  // 272px-wide box.
+  //
+  // `visibleTabs.length` is a dependency, not just `tab`: the tab set GROWS
+  // once the session bundle resolves (`role` arrives with it, which is what
+  // adds CHIP + Members), and the first paint after that change has to reveal
+  // the selection again. A `tab`-only effect runs before those two tabs exist
+  // and leaves the strip scrolled to the start edge.
+  //
+  // `behavior: "instant"` is deliberate, not a missed `"smooth"`: a smooth
+  // reveal animates the strip under the reader's thumb on first paint, and the
+  // reveal only has to be correct in the painted frame.
+  //
+  // `block: "nearest"` (not `"start"`) is what keeps the PAGE still: the tab is
+  // already inside the strip vertically, so the vertical position is untouched.
+  const revealTab = useCallback((el: HTMLElement | null) => {
+    if (!el) return;
+    // A browser without the options object scrolls instantly anyway.
+    try {
+      el.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" });
+    } catch {
+      el.scrollIntoView(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    revealTab(tabStripRef.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? null);
+  }, [revealTab, tab, visibleTabs.length]);
+
   return (
     <Shell active="settings">
       <main className="w-full flex-1 px-6 py-8">
@@ -1006,13 +1042,43 @@ export default function Settings() {
           </p>
         )}
 
-        {/* Tab bar (issue #68) — same styling as Profile. */}
+        {/* Tab bar (issue #68) — same styling as Profile.
+            The strip WRAPPED on a phone. 11 tabs on
+            `flex flex-wrap` measured 4 rows / 161px at 320-360px (20.1% of an
+            800px viewport; Tamil 5 rows / 202px) of tab chrome above the card.
+            It is now ONE row that scrolls sideways (`overflow-x-auto`), which
+            is how the other wide dashboard rows hold at phone widths.
+
+            WHY `overflow-x-auto` SITS ON THE SAME ELEMENT AS `border-b`
+              A scroller only paints its overflow indicator at the edge it is
+              scrolled TO, so giving the border its own wrapper does not keep
+              the border visible while you are at the start edge — measured,
+              the wrapper's border was simply not in view in RTL/Arabic. One
+              element keeps the strip exactly one row tall and leaves the
+              border under the full width of the viewport.
+            RTL (ar)
+              `overflow-x-auto` follows the writing mode: in Arabic the strip
+              scrolls from the right edge and `scrollLeft` reads 0 at the start,
+              which the reveal below already handles (measured, 25/25 cases).
+            THE ACTIVE TAB MUST NOT ARRIVE SCROLLED OUT
+              A plain `overflow-x-auto` hides the selection: at 320px the
+              selected tab (the last one — Affiliates by default) measured
+              867px inside a 272px box. So the strip reveals the selected tab
+              on mount and whenever the selection changes, and `onFocus`
+              reveals a tab the keyboard has moved to (see `revealTab` below —
+              it never SELECTS on focus, which would switch tabs as the user
+              Tab-cycles through the strip).
+              `block: "nearest"` keeps the PAGE from scrolling vertically, so
+              the reveal cannot move the reader's viewport.
+            `-mb-px` stays on the tabs: it merges the active tab's 2px underline
+            with the strip's 1px border, which is the intended tab-bar look. */}
         {visibleTabs.length > 0 && (
-        <div className="mt-4 flex flex-wrap gap-1 border-b border-slate-200">
+        <div ref={tabStripRef} className="jf-tabstrip mt-4 flex gap-1 overflow-x-auto border-b border-slate-200">
           {visibleTabs.map((id) => (
             <button
               key={id}
               onClick={() => setTab(id)}
+              onFocus={(e) => revealTab(e.currentTarget)}
               aria-selected={tab === id}
               role="tab"
               className={`-mb-px whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium sm:px-4 ${

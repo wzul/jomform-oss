@@ -115,3 +115,19 @@ body {
 .jf-btn-ghost:hover {
   background: #f3f4f6;
 }
+
+/* The settings tab strip is a horizontal scroller on a phone
+   (`overflow-x-auto`), and a scroll container CLIPS the painting of its
+   descendants — including the global :focus-visible ring above, which is drawn
+   `outline-offset: 2px`, i.e. 2px OUTSIDE the tab's border box. Measured on the
+   built page at 320/390/1024px: 0 of 11 focused tabs had their full ring inside
+   the strip's clip box (the ring's top and bottom were cut by 4-5px on every
+   tab, and the left edge on the first one). An inset ring is painted inside the
+   tab's own border box, so no scroll container can clip it — re-measured 11/11
+   fully visible, with the strip still one row tall and the 2px active underline
+   untouched. Scoped to the strip rather than changed globally, so every other
+   focus ring in the app keeps the offset that reads correctly on a page that
+   does not clip. */
+.jf-tabstrip [role="tab"]:focus-visible {
+  outline-offset: -2px;
+}
