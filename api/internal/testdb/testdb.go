@@ -120,6 +120,25 @@ func open(ctx context.Context, dsn, schema string) (*pgxpool.Pool, error) {
 		return nil, err
 	}
 	defer admin.Close()
+
+	// Provision the shared extensions into `public` BEFORE anything touches this
+	// scratch schema. Two reasons, both load-bearing:
+	//
+	//   - migration 000001 declares them with `CREATE EXTENSION IF NOT EXISTS`,
+	//     and each package's migrate() sets search_path to its OWN scratch schema
+	//     first. On a fresh database the first package to migrate therefore used
+	//     to install pgcrypto/citext INSIDE its scratch schema, and every other
+	//     package — whose search_path resolved the name to that schema — then
+	//     died on pg_extension_name_index (23505) before it could run a single
+	//     test. Installing them in `public` first makes the migration a NOTICE
+	//     no-op for everyone.
+	//   - the call is serialized on an advisory lock, because concurrent
+	//     `CREATE EXTENSION IF NOT EXISTS` is a race, not a no-op (see
+	//     db.EnsureSharedExtensions).
+	if err := db.EnsureSharedExtensions(ctx, admin, nil); err != nil {
+		return nil, fmt.Errorf("provision shared extensions: %w", err)
+	}
+
 	if err := ensureSchema(ctx, admin, schema); err != nil {
 		return nil, err
 	}
@@ -394,6 +413,11 @@ func schemaPID(schema string) (int, bool) {
 // does not consult schema_migrations: the scratch schema was just re-created,
 // so every migration must run (seed data included), and a single multi-
 // statement Exec keeps the ~64 migrations to one round trip.
+//
+// The shared extensions are provisioned into `public` by open() BEFORE this
+// runs, so the `CREATE EXTENSION IF NOT EXISTS` in 000001 is a NOTICE no-op
+// rather than a create inside this scratch schema. That is what keeps a fresh
+// database usable by all packages in one run — see open().
 func migrate(ctx context.Context, p *pgxpool.Pool, schema string) error {
 	migrations, err := db.MigrationStatements()
 	if err != nil {
@@ -464,6 +488,12 @@ func ResetSchema(t *testing.T) *pgxpool.Pool {
 		t.Fatalf("test database unavailable: %v", cerr)
 	}
 	defer admin.Close()
+	// Re-provision in case an earlier part of this run relocated them, and so
+	// that dropping the scratch schema below cannot leave this package unable
+	// to migrate (the extensions live in public, never in the scratch schema).
+	if cerr := db.EnsureSharedExtensions(context.Background(), admin, nil); cerr != nil {
+		t.Fatalf("provision shared extensions: %v", cerr)
+	}
 	if cerr := ensureSchema(context.Background(), admin, schema); cerr != nil {
 		t.Fatalf("reset scratch schema: %v", cerr)
 	}

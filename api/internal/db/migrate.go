@@ -52,7 +52,18 @@ func MigrationStatements() ([]Migration, error) {
 // Migrate applies any pending *.up.sql migrations in filename order.
 // Each file runs in a transaction; applied files are recorded in
 // schema_migrations so restarts are no-ops.
+//
+// The shared extensions (pgcrypto, citext) are provisioned into `public` first,
+// serialized across processes: migration 000001 declares them with
+// `CREATE EXTENSION IF NOT EXISTS`, which is not race-safe, and under a
+// search_path that does not start with public it would install them into the
+// first schema that ran it — leaving every other schema to fail on
+// pg_extension_name_index. See EnsureSharedExtensions.
 func Migrate(ctx context.Context, pool *pgxpool.Pool, log *slog.Logger) error {
+	if err := EnsureSharedExtensions(ctx, pool, log); err != nil {
+		return err
+	}
+
 	if _, err := pool.Exec(ctx,
 		`CREATE TABLE IF NOT EXISTS schema_migrations (
 			version TEXT PRIMARY KEY,

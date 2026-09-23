@@ -111,7 +111,30 @@ func dsnFor(t *testing.T, dsn, database string) string {
 // createScratchDB creates a uniquely named empty database and registers its
 // removal with t.Cleanup. It connects through the DSN's own database so no
 // separate "postgres" maintenance database needs to exist.
+//
+// It passes no TEMPLATE clause, i.e. it copies the server's default template
+// (template1) — the same database shape the DSN's own database has. Use
+// createScratchDBFromTemplate when the fixture needs a starting state it
+// controls rather than one the server happens to have.
 func createScratchDB(t *testing.T, ctx context.Context, dsn string) string {
+	t.Helper()
+	return createScratchDBFromTemplate(t, ctx, dsn, "")
+}
+
+// createScratchDBFromTemplate is createScratchDB with an explicit template: an
+// empty string means "no TEMPLATE clause" (Postgres' default, template1), any
+// other value is used as `CREATE DATABASE … TEMPLATE <template>`.
+//
+// A fixture that plants a pre-existing state must copy template0. A
+// template1-derived database inherits whatever the server's template1 carries —
+// on a provisioned server that already includes pgcrypto and citext in
+// `public` — which silently changes what the fixture proves: an unqualified
+// `CREATE EXTENSION` resolved through a `search_path` that ends in `public`
+// then finds the inherited extension and dies with SQLSTATE 42710 ("extension
+// … already exists") instead of planting the state the guard is about. Copying
+// template0 makes the starting state deterministic on every server, provisioned
+// or not.
+func createScratchDBFromTemplate(t *testing.T, ctx context.Context, dsn, template string) string {
 	t.Helper()
 	buf := make([]byte, 6)
 	if _, err := rand.Read(buf); err != nil {
@@ -125,7 +148,11 @@ func createScratchDB(t *testing.T, ctx context.Context, dsn string) string {
 	}
 	defer func() { _ = conn.Close(ctx) }()
 
-	if _, err := conn.Exec(ctx, "CREATE DATABASE "+pgx.Identifier{name}.Sanitize()); err != nil {
+	stmt := "CREATE DATABASE " + pgx.Identifier{name}.Sanitize()
+	if template != "" {
+		stmt += " TEMPLATE " + pgx.Identifier{template}.Sanitize()
+	}
+	if _, err := conn.Exec(ctx, stmt); err != nil {
 		t.Fatalf("create scratch database %s (needs CREATEDB): %v", name, err)
 	}
 
