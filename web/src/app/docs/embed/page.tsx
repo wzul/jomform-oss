@@ -13,8 +13,22 @@ export const metadata: Metadata = {
 // on resize and on DOM mutation; the 3-line listener below makes the iframe
 // track the form's height. Without the listener the iframe keeps the fixed
 // 640px height (inner scrollbars for longer forms).
+//
+// THE SNIPPET USES /embed/f/{workspace}/{slug}, NOT THE PLAIN FORM URL.
+// Measured on prod and locally: the plain public form URL answers
+// `X-Frame-Options: SAMEORIGIN`, which a browser refuses to frame cross-origin
+// (read from the CDP frame tree: the frame resolves to chrome-error://chromewebdata/),
+// while /embed/f/ answers `CSP: frame-ancestors *` + `X-Frame-Options: ALLOWALL`
+// and does load. So the plain URL is the one src a merchant must NOT paste, and
+// this page previously handed them exactly that. The plain URL's same-origin-only
+// framing is documented below rather than left as a surprise.
+//
+// The addresses are written out LITERALLY in the snippets rather than built from
+// a shared constant. A merchant copies the rendered text, and a guard that reads
+// this source has to see the same concrete address — an interpolated `${...}`
+// hides the URL from both.
 
-const MERCHANT_SNIPPET = `<iframe src="https://yourworkspace.jomform.com/your-form-slug"
+const MERCHANT_SNIPPET = `<iframe src="https://yourworkspace.jomform.com/embed/f/your-workspace/your-form-slug"
         style="width:100%;height:640px;border:0"
         title="Your form"></iframe>
 
@@ -23,6 +37,10 @@ addEventListener("message", e => {
   if (e.data?.type === "jomform:height") document.querySelector("iframe").style.height = e.data.height + "px";
 });
 </script>`;
+
+const PLAIN_IFRAME = `<iframe src="https://yourworkspace.jomform.com/your-form-slug"
+        style="width:100%;height:640px;border:0"
+        title="Your form"></iframe>`;
 
 const MESSAGE_CONTRACT: { field: string; meaning: string }[] = [
   { field: "type", meaning: 'Always "jomform:height" — filter on this so your other postMessage listeners ignore it.' },
@@ -36,23 +54,37 @@ export default function EmbedDocsPage() {
       <p className="mt-3 text-sm leading-relaxed text-slate-600">
         Drop a JomForm form into any website with an <code className="rounded bg-slate-100 px-1">iframe</code>. The
         embed renders the full form (fields, validation and payment) and submits straight into your form&apos;s
-        submissions and sales. Framing is allowed for embedded forms, and the buyer is taken to the top frame for
-        CHIP checkout and the thank-you page — so payment works inside the embed.
+        submissions and sales. The buyer is taken to the top frame for CHIP checkout and the thank-you page — so
+        payment works inside the embed.
+      </p>
+      <p className="mt-3 text-sm leading-relaxed text-slate-600">
+        Use the <strong>embed URL</strong> below — not the form&apos;s ordinary public URL. The public URL is
+        same-origin only: it answers{" "}
+        <code className="rounded bg-slate-100 px-1">X-Frame-Options: SAMEORIGIN</code>, so a browser refuses to frame
+        it on your site and shows an empty or broken frame. The embed URL is the one that is allowed to be framed
+        from your domain.
       </p>
 
       <h2 className="mt-8 text-xl font-semibold text-slate-900">1. Paste the embed snippet</h2>
       <p className="mt-2 text-sm leading-relaxed text-slate-600">
         Turn on <strong>Allow embedding (iframe)</strong> in the form&apos;s settings, then paste this on your page.
-        Replace the <code className="rounded bg-slate-100 px-1">src</code> with your form&apos;s public URL.
+        Replace <code className="rounded bg-slate-100 px-1">your-workspace</code> and{" "}
+        <code className="rounded bg-slate-100 px-1">your-form-slug</code> with your workspace slug and the form&apos;s
+        slug.
       </p>
       <pre
         tabIndex={0}
         className="mt-3 overflow-x-auto rounded-lg bg-slate-900 p-4 text-xs leading-relaxed text-slate-100"
       >
-{`<iframe src="https://yourworkspace.jomform.com/your-form-slug"
+{`<iframe src="https://yourworkspace.jomform.com/embed/f/your-workspace/your-form-slug"
         style="width:100%;height:640px;border:0"
         title="Your form"></iframe>`}
       </pre>
+      <p className="mt-3 text-sm leading-relaxed text-slate-600">
+        With embedding switched off, that address answers{" "}
+        <code className="rounded bg-slate-100 px-1">403</code> instead of rendering the form — the setting is what
+        makes the iframe work, so turn it on before you paste.
+      </p>
 
       <h2 className="mt-8 text-xl font-semibold text-slate-900">2. Auto-height (recommended)</h2>
       <p className="mt-2 text-sm leading-relaxed text-slate-600">
@@ -124,6 +156,25 @@ export default function EmbedDocsPage() {
           customization guide
         </a>{" "}
         to brand the embedded form with your own colours, CSS and JS.
+      </p>
+
+      <h2 className="mt-8 text-xl font-semibold text-slate-900">Why not the plain form URL?</h2>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        The form&apos;s ordinary public URL is meant to be opened directly, so JomForm sends it the standard{" "}
+        <code className="rounded bg-slate-100 px-1">X-Frame-Options: SAMEORIGIN</code> header — a browser will not
+        render it inside a frame on a different domain, and depending on the browser you get an empty frame or a
+        refusal. That is a deliberate protection against a page wrapping JomForm in an invisible frame to trick a
+        buyer into clicking something, so it is not something to work around by other means:
+      </p>
+      <pre
+        tabIndex={0}
+        className="mt-3 overflow-x-auto rounded-lg bg-slate-900 p-4 text-xs leading-relaxed text-slate-100"
+      >
+{PLAIN_IFRAME}
+      </pre>
+      <p className="mt-3 text-sm leading-relaxed text-slate-600">
+        The embed URL above exists for exactly this case and is the only address that is framable from your site. If
+        you need your form on your own page, always use the embed URL.
       </p>
     </div>
   );

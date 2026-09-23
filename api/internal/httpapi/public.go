@@ -115,6 +115,12 @@ func (h *PublicHandlers) RegisterRoutes(mux *http.ServeMux) {
 	// win over a form slug.
 	mux.HandleFunc("GET /assets/{key...}", h.handleAsset)
 	mux.HandleFunc("GET /embed/f/{accslug}/{slug}", h.embedForm)
+	// The submit the embedded page posts to (location.pathname + "/order").
+	// Registered alongside the GET so an embed can actually be SUBMITTED, and
+	// on the same path scope its GET resolves with — an embed is served on the
+	// merchant's own site, so the request Host never names the workspace.
+	// Rate-limited like the canonical order routes: it creates sales.
+	mux.Handle("POST /embed/f/{accslug}/{slug}/order", middleware.RateLimit(http.HandlerFunc(h.embedSubmit)))
 	// Issue #276: sitemap.xml for custom-domain workspaces (indexed workspaces only).
 	mux.HandleFunc("GET /sitemap.xml", h.handleSitemap)
 	// Issue #276: indexed custom-domain workspace URLs for the web sitemap.
@@ -485,6 +491,21 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "borang tidak dijumpai")
 		return
 	}
+	h.submitResolvedForm(w, r, form)
+}
+
+// submitResolvedForm is everything a form-scoped submit does once the form is
+// resolved: the draft/private/entry-limit gates, then the dispatch to the
+// response collector, the menu checkout or the order core.
+//
+// It exists so the two submit routes cannot drift. handleSubmit resolves the
+// form from the request Host (/{slug}/order); embedSubmit resolves it from the
+// route's own {accslug} path segment (/embed/f/{accslug}/{slug}/order), which
+// is the same scope its GET uses. Those lookups legitimately differ — a Host
+// naming a workspace that holds no such form must 404 while the path-scoped
+// embed URL serves — but the GATES and the DISPATCH must be identical, so they
+// live here rather than in each handler.
+func (h *PublicHandlers) submitResolvedForm(w http.ResponseWriter, r *http.Request, form *dbstore.Form) {
 	// Issue #176: draft forms are never submittable; private forms require a
 	// valid unlock cookie (the buyer must have passed the password gate).
 	if form.Status == dbstore.FormStatusDraft {
