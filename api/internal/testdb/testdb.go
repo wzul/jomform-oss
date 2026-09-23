@@ -39,6 +39,7 @@ package testdb
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -48,6 +49,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wzul/jomform/api/internal/db"
@@ -69,6 +71,14 @@ const extensionLockKey int64 = 0x4A6F6D466F726D // "JomForm"
 // database-global, so they get one canonical home (`public`) that every
 // package's `<scratch>,public` search_path can resolve — see prepareExtensions.
 var publicExtensions = []string{"citext", "pgcrypto"}
+
+// extensionProvisioner is the minimum prepareExtensions needs: something that
+// can begin a transaction. Both *pgxpool.Pool (what open passes) and *pgx.Conn
+// satisfy it, which lets a guard drive the privilege path — prepareExtensions
+// running as a role that does not own the extensions — on a single session.
+type extensionProvisioner interface {
+	Begin(ctx context.Context) (pgx.Tx, error)
+}
 
 var (
 	once sync.Once
@@ -203,8 +213,18 @@ func ensureSchema(ctx context.Context, admin *pgxpool.Pool, schema string) error
 //     already exists elsewhere (`IF NOT EXISTS` turns into a NOTICE and the
 //     schema argument is ignored), so a database already poisoned this way
 //     needs an explicit `ALTER EXTENSION ... SET SCHEMA public`. citext and
-//     pgcrypto are both relocatable, and the ALTER is a no-op when the
-//     extension is already in public.
+//     pgcrypto are both relocatable.
+//   - The ALTER is issued ONLY when the extension is not already in `public`.
+//     It is a semantic no-op in that case but NOT a privilege no-op: ALTER
+//     EXTENSION requires ownership of the extension
+//     (https://www.postgresql.org/docs/current/sql-alterextension.html), so the
+//     unconditional form turns a correctly-shaped database whose extension is
+//     owned by a different role — a template-derived or psql-provisioned
+//     database — into `ERROR: must be owner of extension citext (SQLSTATE
+//     42501)` on every ensureSchema. `CREATE EXTENSION ... IF NOT EXISTS ...
+//     SCHEMA public` carries no such requirement (it degrades to a NOTICE), so
+//     reading the current schema first is what keeps the repair free for a
+//     database that does not need repairing.
 //   - Extension creation is not concurrency-safe on its own: `go test ./...`
 //     runs every package in parallel, and two packages racing the first
 //     `CREATE EXTENSION IF NOT EXISTS` can collide on the database-global
@@ -216,7 +236,7 @@ func ensureSchema(ctx context.Context, admin *pgxpool.Pool, schema string) error
 // Extensions are database-global, not schema-scoped, so this deliberately runs
 // on every ensureSchema: it is cheap, idempotent, and it also repairs a
 // database an earlier run (or an earlier version of this helper) left poisoned.
-func prepareExtensions(ctx context.Context, admin *pgxpool.Pool) error {
+func prepareExtensions(ctx context.Context, admin extensionProvisioner) error {
 	tx, err := admin.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin extension transaction: %w", err)
@@ -227,17 +247,24 @@ func prepareExtensions(ctx context.Context, admin *pgxpool.Pool) error {
 		return fmt.Errorf("acquire extension lock: %w", err)
 	}
 	for _, ext := range publicExtensions {
-		// Relocate an extension an earlier run installed into a scratch schema.
-		// A scratch schema is dropped CASCADE on every run, so a surviving
-		// wrong-schema install is one that lived in a *different* package's
-		// schema (e.g. test_chat) and outlived the package that made it.
-		var installed bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname=$1)`, ext).Scan(&installed); err != nil {
-			return fmt.Errorf("check extension %s: %w", ext, err)
+		// Where is it now? An extension an earlier run installed into a
+		// scratch schema is one that lived in a *different* package's schema
+		// (e.g. test_chat) and outlived the package that made it, because
+		// DROP SCHEMA ... CASCADE only takes an extension that lives inside
+		// the schema being dropped.
+		current, installed, err := installedExtensionSchema(ctx, tx, ext)
+		if err != nil {
+			return err
 		}
 		if installed {
+			if current == publicSchema {
+				// Correctly placed: issuing the ALTER here would demand
+				// ownership of an extension this role may not own, and the
+				// database is already in the shape we require.
+				continue
+			}
 			if _, err := tx.Exec(ctx, `ALTER EXTENSION `+quote(ext)+` SET SCHEMA `+quote(publicSchema)); err != nil {
-				return fmt.Errorf("relocate extension %s to %s: %w", ext, publicSchema, err)
+				return fmt.Errorf("relocate extension %s from %s to %s: %w", ext, current, publicSchema, err)
 			}
 			continue
 		}
@@ -407,6 +434,25 @@ func schemaPID(schema string) (int, bool) {
 		return 0, false
 	}
 	return pid, true
+}
+
+// installedExtensionSchema reports the schema ext is installed in, and whether
+// it is installed at all. A not-installed extension is not an error: the caller
+// creates it.
+func installedExtensionSchema(ctx context.Context, tx pgx.Tx, ext string) (string, bool, error) {
+	var schema string
+	err := tx.QueryRow(ctx, `
+		SELECT n.nspname
+		  FROM pg_extension e
+		  JOIN pg_namespace n ON n.oid = e.extnamespace
+		 WHERE e.extname = $1`, ext).Scan(&schema)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("read installed schema of extension %s: %w", ext, err)
+	}
+	return schema, true, nil
 }
 
 // migrate applies the embedded migrations into schema. Unlike db.Migrate it
