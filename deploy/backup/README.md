@@ -259,14 +259,54 @@ sent; a failing run does not retry in a tight loop because the lock file
 
 ## Tested failure paths
 
-Every one of these is exercised by `jomform-backup_test.sh` (133 assertions,
-stubbed `rclone`/`docker`, no network and no database required) and eleven of them
-are additionally proven to *bite* by sabotaging the script and requiring the
+Every one of these is exercised by `jomform-backup_test.sh` (142 assertions,
+stubbed `rclone`/`docker`, no network and no database required) and every one of
+them is additionally proven to *bite* by sabotaging the script and requiring the
 suite to go red:
 
 ```bash
 bash deploy/backup/jomform-backup_test.sh
 ```
+
+A test that only ever passes proves nothing, so every sabotage named below is
+actually applied — by `deploy/backup/jomform-backup_bite.sh`, which mutates one
+thing at a time in a throwaway copy of this directory and requires the suite to
+go red on an assertion that sabotage owns. A mutation that does not land, or one
+that leaves the script unparseable, is reported as an **abort** rather than
+counted as caught, so the harness cannot inflate its own coverage:
+
+```bash
+bash deploy/backup/jomform-backup_bite.sh
+```
+
+It applies **twenty** sabotages in two groups. Twelve target the script's
+failure handling: removed hash verification, removed post-upload verification,
+the `FAILED` line downgraded to `WARN`, removed empty-archive guard, unescaped
+status JSON, ignored restore failure, upload failure returning exit 0, a backend
+exposing no hash degrading to a size-only check, the `rclone is not installed`
+check removed, disabled remote check, a removed cron `PATH` pin (the bullet for
+it is in the list above), and a restore drill writing the backup job's status.
+Eight more mutate the fail-closed seam: the seam never called, the
+`JFBACKUP_ENV_FILE` leg removed (the credential half that actually mailed the
+real inbox), the `JFBACKUP_REMOTE_ROOT` leg removed, the refusal moved below the
+mkdir+lock (so only the ordering assertions can catch it), the refusal also
+sending the alert email, the escape hatch defaulting to ON, the location knobs no
+longer being watched, and the destination knobs no longer being watched.
+
+The monthly sidecar path is the one failure path proven to bite **inside the
+suite** rather than by this harness: `jomform-backup_test.sh` applies that
+sabotage itself, to a copy of the script in a temp dir, so the twenty above do
+not include it.
+
+Three of those twelve were **not** caught when this harness was first written
+against the suite, and the suite grew the assertions they need rather than the
+claim being trimmed: the `FAILED` line's *level* (the message text survives a
+downgrade to `WARN`, so the suite now asserts `ERROR`), an ignored restore
+failure (every `--restore` case drove a stub that succeeded, so there is now a
+case whose `pg_restore` fails), and the cron `PATH` pin (running under `env -i`
+does not prove the script pins its own `PATH`, because bash supplies a usable
+default when the environment has none — the new case hands the job a `PATH` that
+resolves nothing).
 
 - **`rclone copy` fails** — the provider's own error text is carried into the log
   and the status detail (not just "upload failed"), the run exits non-zero, and
@@ -293,6 +333,12 @@ bash deploy/backup/jomform-backup_test.sh
   quotes is escaped, and the test asserts the file actually parses.
 - **A restore drill must not overwrite the backup job's status** — a drill that
   wrote `last-run.json` would hide a failing nightly backup behind a green drill.
+- **The job must not depend on cron's `PATH`** — cron hands a job a minimal
+  environment; the script pins the system path itself, and the case runs it with
+  a `PATH` that resolves nothing and requires the dump to happen anyway. This is
+  the one case that cannot be written by running under `env -i` alone: bash
+  supplies a usable default `PATH` when the environment carries none, so a script
+  that merely inherited it would pass.
 - **The monthly sidecar must name the monthly object** — the promotion writes the
   sidecar for the monthly name instead of copying the daily file, and the case
   downloads the pair into an empty directory and runs a real `sha256sum -c`. The

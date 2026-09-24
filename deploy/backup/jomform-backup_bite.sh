@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# Bite proof for the fail-closed test seam in jomform-backup.sh.
+# Bite proof for the failure paths in jomform-backup.sh: the fail-closed test
+# seam, and the twelve legacy failure paths the README names as proven to bite.
 #
 # A guard whose test still passes with the guard removed measures nothing. This
 # sabotages ONE part of the seam at a time in a throwaway copy of the directory,
@@ -172,6 +173,230 @@ for v in ("JFBACKUP_REMOTE","JFBACKUP_REMOTE_ROOT"):
     assert old in s, "anchor not found: "+old
     s=s.replace(old,"true # SABOTAGE "+v,1)
 open(p,"w").write(s)'
+
+# =============================================================================
+# Legacy failure-path mutations
+# =============================================================================
+# The seven mutations above all target the fail-closed seam. The README's
+# "Tested failure paths" section also makes the same claim for the twelve legacy
+# failure paths the script protects, so they are sabotaged below too.
+#
+# A claim like that is only true if this file actually applies each sabotage —
+# so each is applied to the throwaway copy and the suite is required to catch
+# it. Three of them did NOT bite against the suite as it stood (the `FAILED`
+# line's level, an ignored restore failure, and the cron `PATH` pin); the suite
+# grew the assertions those three need, and each mutation is what proves those
+# assertions are load-bearing.
+#
+# Every mutation is an exact-substring replacement with an anchor assertion, so
+# a mutation whose anchor disappears ABORTS rather than silently matching
+# nothing — the failure mode that makes a bite harness lie about its coverage.
+
+# bite_py <label> <expected-FAIL-regex> <<'PY' ... PY
+# The mutation program arrives on stdin as a QUOTED heredoc, so it is literal:
+# no shell expansion and no escaping, and the anchors can carry real quotes.
+# (The seam mutations above predate this and keep their inline `python3 -c`
+# form; two of the legacy ones were first written that way and came out wrong,
+# which is exactly what the heredoc avoids.)
+bite_py() {
+  local label="$1" expect="$2"
+  reset_work
+  local pyfile="$WORK/mutate.py"
+  cat >"$pyfile"
+  echo "=============================================================="
+  echo "SABOTAGE: $label"
+  local T="$WORK/jomform-backup.sh"
+  MUTATE_TARGET="$T" python3 "$pyfile"
+  if [ $? -ne 0 ]; then
+    echo "  ABORT: the mutation program failed to run — not a valid sabotage"
+    DID_NOT_BITE=$((DID_NOT_BITE + 1))
+    return
+  fi
+  if cmp -s "$SRC/jomform-backup.sh" "$T"; then
+    echo "  ABORT: the mutation changed nothing — the sabotage did not land"
+    DID_NOT_BITE=$((DID_NOT_BITE + 1))
+    return
+  fi
+  if ! bash -n "$T" 2>/dev/null; then
+    echo "  ABORT: the mutation left the script unparseable (bash -n failed) — not a valid sabotage"
+    bash -n "$T" 2>&1 | head -3 | sed 's/^/    /'
+    DID_NOT_BITE=$((DID_NOT_BITE + 1))
+    return
+  fi
+  local out rc summary owned
+  out="$(bash "$WORK/jomform-backup_test.sh" 2>&1)"
+  rc=$?
+  summary="$(printf '%s\n' "$out" | tail -1)"
+  owned="$(printf '%s\n' "$out" | grep -cE "^\s+FAIL .*($expect)" || true)"
+  if [ $rc -ne 0 ] && [ "${owned:-0}" -gt 0 ]; then
+    echo "  RESULT: RED ($owned assertion(s) on this path failed) — $summary"
+    printf '%s\n' "$out" | grep -E '^\s+FAIL' | head -5 | sed 's/^/    /'
+    CAUGHT=$((CAUGHT + 1))
+  else
+    echo "  RESULT: *** GREEN — THE SABOTAGE WAS NOT CAUGHT *** (rc=$rc, $summary)"
+    echo "    the suite passed with this sabotage in place, so nothing in it"
+    echo "    measures this path. First FAILs seen:"
+    printf '%s\n' "$out" | grep -E '^\s+FAIL' | head -5 | sed 's/^/      /'
+    DID_NOT_BITE=$((DID_NOT_BITE + 1))
+  fi
+  reset_work
+}
+
+echo
+echo "### legacy failure paths — the twelve the README names as proven to bite"
+
+# Hash verification removed: a corrupt or truncated upload passes on size alone.
+bite_py "removed hash verification" \
+  'log names the hash mismatch|the failure is logged at ERROR' <<'PY'
+import os
+p = os.environ["MUTATE_TARGET"]
+s = open(p).read()
+old = '  if [ "$got_hash" != "$want_hash" ]; then'
+assert old in s, "anchor not found"
+open(p, "w").write(s.replace(old, "  if false; then # SABOTAGE: no hash compare", 1))
+PY
+
+# Post-upload verification removed: "exit 0" becomes "uploaded" again.
+bite_py "removed post-upload verification" \
+  'log names the missing object|last-failure.json written' <<'PY'
+import os
+p = os.environ["MUTATE_TARGET"]
+s = open(p).read()
+old = '  if ! VERIFY_ERR="$(verify_remote '
+assert old in s, "anchor not found"
+open(p, "w").write(s.replace(old, '  if ! VERIFY_ERR=""; then # SABOTAGE: no verify', 1))
+PY
+
+# The FAILED line downgraded to WARN: the message text survives, so only an
+# assertion on the LEVEL can catch this.
+bite_py "FAILED line downgraded to WARN" \
+  'the failure is logged at ERROR, not downgraded to WARN' <<'PY'
+import os
+p = os.environ["MUTATE_TARGET"]
+s = open(p).read()
+old = '  log ERROR "jomform-backup FAILED: $DETAIL"'
+assert old in s, "anchor not found"
+open(p, "w").write(s.replace(old, '  log WARN "jomform-backup FAILED: $DETAIL"', 1))
+PY
+
+# Empty-archive guard removed: a mid-restart pg_dump uploads a file with no
+# table data in it.
+bite_py "removed empty-archive guard" \
+  'log rejects the archive' <<'PY'
+import os
+p = os.environ["MUTATE_TARGET"]
+s = open(p).read()
+old = '  if [ "${tables:-0}" -lt 1 ]; then'
+assert old in s, "anchor not found"
+open(p, "w").write(s.replace(old, "  if false; then # SABOTAGE: guard removed", 1))
+PY
+
+# Status JSON unescaped: a real rclone error carries double quotes, which makes
+# last-run.json unparseable for every machine that reads it.
+bite_py "unescaped status JSON" \
+  'status file is parseable|status file OK|status file FAILED|drill file says OK' <<'PY'
+import os
+p = os.environ["MUTATE_TARGET"]
+s = open(p).read()
+old = """  python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1\""""
+assert old in s, "anchor not found"
+new = """  printf '%s' "$1"  # SABOTAGE: unescaped"""
+open(p, "w").write(s.replace(old, new, 1))
+PY
+
+# Ignored restore failure: the drill reports OK on a restore that failed.
+bite_py "ignored restore failure" \
+  'drill exit code|the drill status records FAILED|the drill does not claim success' <<'PY'
+import os
+p = os.environ["MUTATE_TARGET"]
+s = open(p).read()
+old = '''    echo "pg_restore failed for $file: $diag"
+    return 1'''
+assert old in s, "anchor not found"
+new = '''    echo "pg_restore failed for $file: $diag"
+    return 0  # SABOTAGE: restore failure ignored'''
+open(p, "w").write(s.replace(old, new, 1))
+PY
+
+# An upload failure returning exit 0: the run "succeeds" having uploaded
+# nothing, and last-failure.json is never written.
+bite_py "upload failure returning exit 0" \
+  'the failure is logged at ERROR|log marks FAILED|syslog alert raised|local dump still exists' <<'PY'
+import os
+p = os.environ["MUTATE_TARGET"]
+s = open(p).read()
+old = '    uploads_ok=0'
+assert old in s, "anchor not found"
+open(p, "w").write(s.replace(old, "    : # SABOTAGE: upload failure swallowed", 1))
+PY
+
+# The no-hash branch removed: a backend exposing no hash silently degrades to a
+# size-only comparison, which is the check the script exists to refuse.
+bite_py "backend exposing no hash degrades to a size-only check" \
+  'log reports no hash' <<'PY'
+import os
+p = os.environ["MUTATE_TARGET"]
+s = open(p).read()
+old = '  if [ -z "$got_hash" ]; then'
+assert old in s, "anchor not found"
+open(p, "w").write(s.replace(old, "  if false; then # SABOTAGE: size-only check", 1))
+PY
+
+# The "rclone is not installed" check removed: a missing binary is reported as
+# merely an unconfigured remote.
+bite_py "rclone-not-installed check removed" \
+  'log names rclone' <<'PY'
+import os
+p = os.environ["MUTATE_TARGET"]
+s = open(p).read()
+old = '  command -v rclone >/dev/null 2>&1 || { echo "rclone is not installed"; return 1; }'
+assert old in s, "anchor not found"
+open(p, "w").write(s.replace(old, "  : # SABOTAGE: no rclone presence check", 1))
+PY
+
+# The remote check disabled: a missing or expired remote no longer stops the run
+# before it uploads into nowhere.
+bite_py "disabled remote check" \
+  'log names the remote|alert body warns about same-host dump|token fix is named' <<'PY'
+import os
+p = os.environ["MUTATE_TARGET"]
+s = open(p).read()
+# Replace only the membership test, not the whole line: the line ends with a
+# backslash continuation into the `|| { ... }` branch, so a trailing comment
+# here would swallow the continuation and make the script unparseable.
+old = 'grep -qx "${REMOTE}:"'
+assert old in s, "anchor not found"
+open(p, "w").write(s.replace(old, 'grep -q .', 1))
+PY
+
+# The cron PATH pin removed: the job depends on the interactive PATH and dies the
+# first time cron gives it none. The suite hands the job a PATH that resolves
+# nothing, which is what makes this bite.
+bite_py "removed cron PATH pin" \
+  'unusable inherited PATH|the dump still happened|the run completed rather than dying' <<'PY'
+import os
+p = os.environ["MUTATE_TARGET"]
+s = open(p).read()
+old = '_SYS_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"'
+assert old in s, "anchor not found"
+s = s.replace(old, '_SYS_PATH="${PATH:-}" # SABOTAGE: PATH not pinned', 1)
+old2 = 'else\n  PATH="$_SYS_PATH"\nfi'
+assert old2 in s, "second anchor not found"
+open(p, "w").write(s.replace(old2, 'else\n  : # SABOTAGE: no PATH pin\nfi', 1))
+PY
+
+# A restore drill writing the backup job's status: a green drill hides a failing
+# nightly backup from an operator reading last-run.json.
+bite_py "restore drill writing the backup job status" \
+  'backup status is untouched|drill recorded under its own name' <<'PY'
+import os
+p = os.environ["MUTATE_TARGET"]
+s = open(p).read()
+old = '  STATUS_FILE_NAME="last-restore-drill.json"'
+assert old in s, "anchor not found"
+new = '  STATUS_FILE_NAME="last-run.json" # SABOTAGE: drill writes the job status'
+open(p, "w").write(s.replace(old, new, 1))
+PY
 
 rm -rf "$WORK"
 

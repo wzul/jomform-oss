@@ -368,6 +368,7 @@ assert_eq "exit code" "exit=1" "$rc"
 assert_contains "log has ERROR" "rclone copy failed" "$RUN_LOG"
 assert_contains "log carries the provider message" "exceeded their Drive storage quota" "$RUN_LOG"
 assert_contains "log marks FAILED" "jomform-backup FAILED" "$RUN_LOG"
+assert_not_contains "the failure is logged at ERROR, not downgraded to WARN" "[WARN] jomform-backup FAILED" "$RUN_LOG"
 assert_contains "status file FAILED" '"status": "FAILED"' "$CASE_DIR/state/last-run.json"
 assert_json_valid "status file is parseable despite quotes in the error" "$CASE_DIR/state/last-run.json"
 assert_file "last-failure.json written" "$CASE_DIR/state/last-failure.json"
@@ -484,6 +485,66 @@ assert_contains "forms count" "restored forms = 37" "$RUN_LOG"
 assert_contains "sales count" "restored sales = 35" "$RUN_LOG"
 assert_contains "submissions count" "restored submissions = 4" "$RUN_LOG"
 assert_contains "drill completed" "restore drill complete" "$RUN_LOG"
+teardown_case
+
+echo "case: a restore whose pg_restore FAILS is reported as FAILED, not OK"
+# Every other --restore case drives a stub that SUCCEEDS, so a drill that
+# swallowed the pg_restore exit status would still look green. This one makes
+# pg_restore fail and requires the drill to record a FAILED status.
+setup_case; touch_rclone_conf
+cat >"$STUB_BIN/docker" <<EOD
+#!/usr/bin/env bash
+case "\$1" in
+  ps) echo jomform-postgres-1 ;;
+  create) echo fakecid ;;
+  start|stop|rm) exit 0 ;;
+  exec)
+    shift
+    while [ "\$#" -gt 0 ]; do case "\$1" in -i|-T) shift ;; *) break ;; esac; done
+    shift
+    case "\$1" in
+      pg_restore) cat >/dev/null; echo 'ERROR: relation "users" already exists' >&2; exit 1 ;;
+      pg_isready) exit 0 ;;
+      psql) exit 0 ;;
+    esac ;;
+esac
+exit 0
+EOD
+chmod +x "$STUB_BIN/docker"
+rc="$(run_backup -- --restore "$CASE_DIR/stage/payload.dump")"
+assert_eq "drill exit code" "exit=1" "$rc"
+assert_contains "the drill reports the failure" "pg_restore failed" "$RUN_LOG"
+assert_contains "log marks FAILED" "jomform-backup FAILED" "$RUN_LOG"
+assert_contains "the drill status records FAILED" '"status": "FAILED"' "$CASE_DIR/state/last-restore-drill.json"
+assert_not_contains "the drill does not claim success" "restore drill complete" "$RUN_LOG"
+teardown_case
+
+echo "case: the job works even when cron's PATH resolves nothing"
+# `env -i` on its own does NOT prove the script pins its PATH: when the
+# environment carries no PATH, bash supplies a default (/usr/bin:/bin), every
+# command still resolves, and a script that merely inherited PATH would pass.
+# Hand the job an unusable PATH and require it to work anyway — that is what
+# "pinned" means, and it is the cron failure this case exists to prevent.
+setup_case; touch_rclone_conf
+run_log="$CASE_DIR/run.log"
+env -i \
+    PATH=/nonexistent-path \
+    JFBACKUP_PATH_PREFIX="$STUB_BIN" \
+    JFBACKUP_STAGE_DIR="$CASE_DIR/stage" \
+    JFBACKUP_STATE_DIR="$CASE_DIR/state" \
+    JFBACKUP_LOG_FILE="$run_log" \
+    JFBACKUP_LOCK_FILE="$CASE_DIR/lock" \
+    JFBACKUP_ENV_FILE="$CASE_DIR/env" \
+    JFBACKUP_REMOTE=googldrive \
+    JFBACKUP_REMOTE_ROOT=jfbackup-test \
+    RCLONE_CONFIG="$CASE_DIR/rclone.conf" \
+    STUB_RCLONE_MODE=ok \
+    /bin/bash "$SCRIPT" --local-only >"$run_log" 2>&1
+rc=$?
+RUN_LOG="$run_log"
+assert_eq "exit code with an unusable inherited PATH" "0" "$rc"
+assert_contains "the dump still happened" "dump ok" "$run_log"
+assert_contains "the run completed rather than dying on a missing binary" "local-only: skipping upload" "$run_log"
 teardown_case
 
 echo "case: an empty dump (no TABLE DATA) is rejected instead of uploaded"
