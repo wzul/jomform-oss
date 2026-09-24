@@ -78,6 +78,47 @@ critical/serious axe violations within the dialog. A regression there now fails
 > exception is the pair of confirmation dialogs, which ARE scanned (see
 > "Confirmation dialogs" above) because stubbing the session-dependent fetch
 > puts the dialog itself in the browser without needing a credential.
+>
+> **This is a real gap, not a formality.** The builder's edit panel went
+> unscanned long enough to accumulate two **critical** unnamed form controls
+> (the value textarea and the conditional-logic rule picker) plus a set of
+> contrast failures the same axe run catches in a second. Before you change
+> anything under `web/src/app/builder/`, scan it signed in rather than assuming
+> the `a11y` gate above covers it:
+>
+> 1. start the Go API and build the web app against it
+>    (`JOMFORM_API_URL=<api> npm run build && JOMFORM_API_URL=<api> npm run start -- -p <port>`);
+> 2. seed a verified account + workspace + form — the builder needs a session
+>    cookie and a form that belongs to the selected workspace
+>    (`?workspace=<slug>` scopes the API; a form created outside that scope 404s
+>    in the builder);
+> 3. run axe (`@axe-core/playwright`) over the panel with that cookie, from
+>    **fresh storage**, across: canvas / panel open on a text field / panel open
+>    on an image block / panel open on a field with a conditional rule set / the
+>    ⋯ menu open.
+>
+> Clear `localStorage` and cookies first: the app persists `jf_lang` there, so a
+> state left by an earlier run renders the page in a language no new visitor
+> sees — and the panel must be genuinely visible, because axe skips
+> `display:none` content, which is exactly what hides it below `md`.
+>
+> **What the gate DOES reach, and how.** The block settings panel can be driven
+> from `npm run a11y` after all, without a Go server, a session or a database,
+> by stubbing the handful of `/api/*` calls the builder makes at the browser
+> level (`page.route`) — the same trick `web/e2e/form-settings-status-chips.spec.ts`
+> uses. `web/e2e/builder-panel-select-names.spec.ts` does exactly that and reads
+> the live DOM: for every block type whose panel renders a `<select>` (name,
+> date, select, product) it asserts each one reports its name from a `<label
+> htmlFor>` or an aria reference, and refuses a placeholder-only name (which is
+> what axe accepts but a screen reader loses the moment you type). Prefer that
+> shape over a source-text assertion — the source grep cannot tell a sibling
+> `<label>` from an associated one, which is how three unnamed selects passed a
+> 7/7 mutation proof.
+>
+> The rest of the panel — the `input`/`textarea` names, the contrast tokens, the
+> ⋯ menu, the choices editor (`src/app/builder/page.tsx`, guarded separately by
+> its own card) — is still NOT covered by the gate. Keep running the signed-in
+> scan above for those.
 
 ## Manual screen-reader checklist
 
@@ -95,7 +136,7 @@ Use the rotor (`Ctrl+Option+U`) to check headings, links, and form controls.
 | 1 | **Login (two-step 2FA)** | Email + password fields announced with labels; on wrong password the error is announced (`role="alert"`); the 2FA step announces the code input, the "trust this device" checkbox, and the back link; focus moves to the code input on step 2. |
 | 2 | **Login — passkey** | "Log in without password" / passkey button announced; the WebAuthn prompt is reachable and cancellable. |
 | 3 | **Login — magic link** | Email field labeled; success/invalid states announced. |
-| 4 | **Build a form** | Builder palette blocks announced with names; canvas blocks selectable; the block's settings panel (text, image URL, product, required checkbox, conditional logic) labeled; the ↑/↓ move buttons and the ⋯ actions menu announced (`aria-haspopup` + `aria-expanded`), and Escape closes the menu returning focus to its ⋯ button. |
+| 4 | **Build a form** | Builder palette blocks announced with names; canvas blocks selectable; the block's settings panel labeled — text, image URL, required checkbox, conditional logic, **and every `<select>`: name format, date/time format, product, and the conditional rule picker** (each announced from a real `<label>`/aria reference, never from a placeholder); the ↑/↓ move buttons and the ⋯ actions menu announced (`aria-haspopup` + `aria-expanded`), and Escape closes the menu returning focus to its ⋯ button. |
 | 5 | **Buyer pays** | Public form: product checkboxes announced with name + price; name/email/phone fields labeled; total announced; submit button announced. |
 | 6 | **Settings tabs** | Tab bar announced with `role="tab"` + `aria-selected`; each tab's content reachable; form fields labeled. |
 | 7 | **Profile tabs** | Same as settings; 2FA setup modal announced as a dialog with a label; QR image has alt text. |

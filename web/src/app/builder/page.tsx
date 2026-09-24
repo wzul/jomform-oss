@@ -981,10 +981,21 @@ export default function Builder() {
      controls for the selected block. */
   function renderFieldSettings(b: Block) {
     const upd = (patch: Partial<Block>) => updateBlock(b.id, patch);
+    // a11y (card t_524d186d): every control here needs a real accessible name.
+    // The <label> used to be a SIBLING that wrapped nothing and had no htmlFor,
+    // so these inputs were named only by their `placeholder` attribute — and a
+    // placeholder is not a label: axe accepts it as a name, but it disappears
+    // the moment you type, and WCAG 3.3.2 wants the instruction to persist.
+    // The id is scoped by block so it stays unique even if the same key is ever
+    // rendered twice in one panel.
+    const fid = (key: string) => `jf-blk-${b.id}-${key}`;
     const input = (key: keyof Block, label: string, ph?: string) => (
       <div>
-        <label className="text-xs text-[var(--jf-muted)]">{label}</label>
+        <label htmlFor={fid(String(key))} className="text-xs text-[var(--jf-muted)]">
+          {label}
+        </label>
         <input
+          id={fid(String(key))}
           value={(b[key] as string) || ""}
           onChange={(e) => upd({ [key]: e.target.value } as Partial<Block>)}
           placeholder={ph}
@@ -997,8 +1008,13 @@ export default function Builder() {
       <div className="space-y-3">
         {/* Common: label / value */}
         <div>
-          <label className="text-xs text-[var(--jf-muted)]">{t("bld.textLabel")}</label>
+          {/* the same defect the helper had: a bare <label> sibling names
+              nothing — axe `label` (critical). */}
+          <label htmlFor="jf-block-value" className="text-xs text-[var(--jf-muted)]">
+            {t("bld.textLabel")}
+          </label>
           <textarea
+            id="jf-block-value"
             rows={2}
             value={b.value}
             onChange={(e) => upd({ value: e.target.value })}
@@ -1025,7 +1041,7 @@ export default function Builder() {
           </summary>
           <div className="mt-2 space-y-2">
             {input("style", t("bld.inlineStyle"), t("bld.inlineStylePh"))}
-            <p className="text-[11px] leading-relaxed text-[#9ca3af]">{t("bld.inlineStyleHint")}</p>
+            <p className="text-[11px] leading-relaxed text-[var(--jf-muted-on-tint)]">{t("bld.inlineStyleHint")}</p>
           </div>
         </details>
 
@@ -1033,8 +1049,11 @@ export default function Builder() {
         {(b.type === "text" || b.type === "textarea") && (
           <>
             <div>
-              <label className="text-xs text-[var(--jf-muted)]">{t("bld.maxLength")}</label>
+              <label htmlFor={fid("maxLength")} className="text-xs text-[var(--jf-muted)]">
+                {t("bld.maxLength")}
+              </label>
               <input
+                id={fid("maxLength")}
                 type="number"
                 min={0}
                 value={b.maxLength ?? ""}
@@ -1058,8 +1077,11 @@ export default function Builder() {
         {/* Name: format simple/full */}
         {b.type === "name" && (
           <div>
-            <label className="text-xs text-[var(--jf-muted)]">{t("bld.nameFormat")}</label>
+            <label htmlFor={fid("nameFormat")} className="text-xs text-[var(--jf-muted)]">
+              {t("bld.nameFormat")}
+            </label>
             <select
+              id={fid("nameFormat")}
               value={b.format || "full"}
               onChange={(e) => upd({ format: e.target.value })}
               className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-sm outline-none"
@@ -1073,8 +1095,11 @@ export default function Builder() {
         {/* Date/time: format */}
         {(b.type === "date" || b.type === "time") && (
           <div>
-            <label className="text-xs text-[var(--jf-muted)]">{t("bld.dateFormat")}</label>
+            <label htmlFor={fid("dateFormat")} className="text-xs text-[var(--jf-muted)]">
+              {t("bld.dateFormat")}
+            </label>
             <select
+              id={fid("dateFormat")}
               value={b.format || (b.type === "date" ? "date" : "time")}
               onChange={(e) => upd({ format: e.target.value })}
               className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-sm outline-none"
@@ -1123,7 +1148,7 @@ export default function Builder() {
                   <button
                     onClick={() => upd({ choices: (b.choices || []).filter((_, i) => i !== ci) })}
                     title={t("bld.removeChoice")}
-                    className="rounded-md px-1.5 text-xs text-[#9ca3af] hover:text-red-400"
+                    className="rounded-md px-1.5 text-xs text-[var(--jf-muted-on-tint)] hover:text-[var(--jf-danger-text)]"
                   >
                     ✕
                   </button>
@@ -1142,8 +1167,11 @@ export default function Builder() {
         {/* Product: pick a product */}
         {b.type === "product" && (
           <div>
-            <label className="text-xs text-[var(--jf-muted)]">{t("bld.product")}</label>
+            <label htmlFor={fid("productId")} className="text-xs text-[var(--jf-muted)]">
+              {t("bld.product")}
+            </label>
             <select
+              id={fid("productId")}
               value={b.productId || ""}
               onChange={(e) => {
                 // Issue #461: the block label follows the product. Switching to
@@ -1184,8 +1212,11 @@ export default function Builder() {
         {/* Image: URL + upload */}
         {b.type === "image" && (
           <div>
-            <label className="text-xs text-[var(--jf-muted)]">{t("bld.imageUrl")}</label>
+            <label htmlFor={fid("src")} className="text-xs text-[var(--jf-muted)]">
+              {t("bld.imageUrl")}
+            </label>
             <input
+              id={fid("src")}
               value={b.src || ""}
               onChange={(e) => upd({ src: e.target.value })}
               placeholder="https://…"
@@ -1233,10 +1264,16 @@ export default function Builder() {
         {/* conditional logic */}
         {fieldTypes.includes(b.type) && blocks.length > 1 && (
           <div className="rounded-md border border-slate-200 p-2">
-            <p className="text-[11px] font-medium text-slate-500">
+            {/* a11y (card t_524d186d): this group heading names every control in
+                the block. The rule picker had no accessible name at all (axe
+                `select-name`, critical); the operator select and the value input
+                only had one while `placeholder` supplied it. text-slate-500 was
+                4.47 on --jf-bg — just under the 4.5 line; slate-600 is 7.13. */}
+            <p id={`jf-cond-${b.id}`} className="text-[11px] font-medium text-slate-600">
               {t("bld.condLogic")}
             </p>
             <select
+              aria-labelledby={`jf-cond-${b.id}`}
               value={b.condition?.field_id || ""}
               onChange={(e) =>
                 upd({
@@ -1259,6 +1296,7 @@ export default function Builder() {
             {b.condition && (
               <div className="mt-1 flex gap-1">
                 <select
+                  aria-labelledby={`jf-cond-${b.id}`}
                   value={b.condition.op}
                   onChange={(e) =>
                     upd({ condition: { ...b.condition!, op: e.target.value } })
@@ -1273,6 +1311,7 @@ export default function Builder() {
                   <option value="not_empty">not empty</option>
                 </select>
                 <input
+                  aria-labelledby={`jf-cond-${b.id}`}
                   value={b.condition.value}
                   onChange={(e) =>
                     upd({ condition: { ...b.condition!, value: e.target.value } })
@@ -1352,7 +1391,7 @@ export default function Builder() {
             <span className="shrink-0 font-mono text-xs text-[var(--jf-muted)]">{t("tplmg.editLabel")}</span>
           )}
           <span className="shrink-0">
-            {dirty && <span className="text-xs text-[#f59e0b]">• {t("builder.unsaved")}</span>}
+            {dirty && <span className="text-xs text-[var(--jf-warning-text)]">• {t("builder.unsaved")}</span>}
           </span>
           {controls.view && pubUrl && (
             <a
@@ -1536,11 +1575,11 @@ export default function Builder() {
               the canvas, which is exactly what a template is made of. */}
           {controls.aiGenerate && (
           <div className="mb-4 rounded-lg border border-[var(--jf-border)] bg-white p-3">
-            <p className="mb-1 flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wider text-[#9ca3af]">
+            <p className="mb-1 flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wider text-[var(--jf-muted-on-tint)]">
               <span>✨</span>
               {t("bld.aiTitle")}
             </p>
-            <p className="mb-2 text-[11px] leading-snug text-[#9ca3af]">{t("bld.aiHint")}</p>
+            <p className="mb-2 text-[11px] leading-snug text-[var(--jf-muted-on-tint)]">{t("bld.aiHint")}</p>
             <textarea
               value={aiPrompt}
               onChange={(e) => setAiPrompt(e.target.value)}
@@ -1558,7 +1597,7 @@ export default function Builder() {
             {aiMsg && <p className="mt-2 text-[11px] leading-snug text-[#374151]">{aiMsg}</p>}
           </div>
           )}
-          <p className="mb-3 text-xs font-medium uppercase tracking-wider text-[#9ca3af]">
+          <p className="mb-3 text-xs font-medium uppercase tracking-wider text-[var(--jf-muted-on-tint)]">
             {t("bld.dragToAdd")}
           </p>
           {PALETTE_GROUPS.map((group) => {
@@ -1566,7 +1605,7 @@ export default function Builder() {
             if (items.length === 0) return null;
             return (
               <div key={group.key} className="mb-4">
-                <p className="mb-1.5 flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wider text-[#9ca3af]">
+                <p className="mb-1.5 flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wider text-[var(--jf-muted-on-tint)]">
                   <span>{group.icon}</span>
                   {t(`bld.palette.${group.key}` as import("../../components/i18n").Key)}
                 </p>
@@ -1606,8 +1645,8 @@ export default function Builder() {
                 onDrop={(e) => canvasDrop(e, 0)}
                 className={`rounded-xl border-2 border-dashed px-6 py-16 text-center text-sm transition-colors ${
                   dropAt === 0
-                    ? "border-[#7170ff] bg-indigo-50/50 text-[var(--jf-primary)]"
-                    : "border-slate-300 text-[#9ca3af]"
+                    ? "border-[#7170ff] bg-indigo-50/50 text-[var(--jf-primary-on-tint)]"
+                    : "border-slate-300 text-[var(--jf-muted-on-tint)]"
                 }`}
               >
                 {t("bld.dragHere")}
@@ -1642,7 +1681,7 @@ export default function Builder() {
                       : "border-[var(--jf-border)] hover:border-slate-300"
                   }`}
                 >
-                  <div className="mb-1.5 flex items-center justify-between text-[10px] uppercase tracking-wider text-[#9ca3af]">
+                  <div className="mb-1.5 flex items-center justify-between text-[10px] uppercase tracking-wider text-[var(--jf-muted-on-tint)]">
                     <span>{typeLabel(b.type)}</span>
                     {/* #652: four 44px buttons ate ~176px of a ~350px card.
                         Reorder (the most frequent action) keeps its own small
@@ -1657,7 +1696,7 @@ export default function Builder() {
                         }}
                         disabled={!canMove(blocks, i, -1)}
                         title={t("bld.moveUp")}
-                        className="flex h-8 w-8 items-center justify-center rounded-md text-base text-[#9ca3af] hover:text-[#374151] active:bg-slate-100 disabled:opacity-30 disabled:hover:text-[#9ca3af] md:h-auto md:w-auto md:px-1 md:text-[10px]"
+                        className="flex h-8 w-8 items-center justify-center rounded-md text-base text-[var(--jf-muted-on-tint)] hover:text-[#374151] active:bg-slate-100 disabled:opacity-30 disabled:hover:text-[var(--jf-muted-on-tint)] md:h-auto md:w-auto md:px-1 md:text-[10px]"
                       >
                         ↑
                       </button>
@@ -1668,7 +1707,7 @@ export default function Builder() {
                         }}
                         disabled={!canMove(blocks, i, 1)}
                         title={t("bld.moveDown")}
-                        className="flex h-8 w-8 items-center justify-center rounded-md text-base text-[#9ca3af] hover:text-[#374151] active:bg-slate-100 disabled:opacity-30 disabled:hover:text-[#9ca3af] md:h-auto md:w-auto md:px-1 md:text-[10px]"
+                        className="flex h-8 w-8 items-center justify-center rounded-md text-base text-[var(--jf-muted-on-tint)] hover:text-[#374151] active:bg-slate-100 disabled:opacity-30 disabled:hover:text-[var(--jf-muted-on-tint)] md:h-auto md:w-auto md:px-1 md:text-[10px]"
                       >
                         ↓
                       </button>
@@ -1685,7 +1724,7 @@ export default function Builder() {
                           aria-haspopup="true"
                           aria-expanded={menuOpen === b.id}
                           title={t("bld.blockMenu")}
-                          className="flex h-11 w-11 items-center justify-center rounded-md text-base text-[#9ca3af] hover:text-[#374151] active:bg-slate-100 aria-expanded:bg-slate-100 md:h-auto md:w-auto md:px-1 md:text-[10px]"
+                          className="flex h-11 w-11 items-center justify-center rounded-md text-base text-[var(--jf-muted-on-tint)] hover:text-[#374151] active:bg-slate-100 aria-expanded:bg-slate-100 md:h-auto md:w-auto md:px-1 md:text-[10px]"
                         >
                           ⋯
                         </button>
@@ -1709,7 +1748,7 @@ export default function Builder() {
                                 setMenuOpen(null);
                                 removeBlock(b.id);
                               }}
-                              className="flex min-h-11 w-full items-center px-3 text-left text-sm normal-case tracking-normal text-red-500 hover:bg-red-50"
+                              className="flex min-h-11 w-full items-center px-3 text-left text-sm normal-case tracking-normal text-[var(--jf-danger-text)] hover:bg-[var(--jf-danger-bg)]"
                             >
                               {t("bld.removeBlock")}
                             </button>
@@ -1759,12 +1798,12 @@ export default function Builder() {
               >
                 ← {t("bld.canvas")}
               </button>
-              <span className="min-w-0 flex-1 text-xs font-medium uppercase tracking-wider text-[#9ca3af]">
+              <span className="min-w-0 flex-1 text-xs font-medium uppercase tracking-wider text-[var(--jf-muted-on-tint)]">
                 {typeLabel(selectedBlock.type)}
               </span>
             </div>
           )}
-          <p className="mb-3 hidden text-xs font-medium uppercase tracking-wider text-[#9ca3af] md:block">{t("bld.blockSettings")}</p>
+          <p className="mb-3 hidden text-xs font-medium uppercase tracking-wider text-[var(--jf-muted-on-tint)] md:block">{t("bld.blockSettings")}</p>
           {/* AGENTS.md DOCUMENTATION PARITY rule 4: the inline "?" next to the
               feature it documents. It deep-links the builder guide, which is the
               page that carries "editing a block taps into its settings". */}
@@ -1778,13 +1817,13 @@ export default function Builder() {
           >
             ?
           </a>
-          {!selectedBlock && <p className="text-xs text-[#9ca3af]">{t("bld.selectBlock")}</p>}
+          {!selectedBlock && <p className="text-xs text-[var(--jf-muted-on-tint)]">{t("bld.selectBlock")}</p>}
           {selectedBlock && renderFieldSettings(selectedBlock)}
 
 
         {/* ── Form mode (issue #171) ── */}
         <div className="mt-8 rounded-lg border border-[var(--jf-border)] bg-white p-3">
-          <p className="text-xs font-medium uppercase tracking-wider text-[#9ca3af]">
+          <p className="text-xs font-medium uppercase tracking-wider text-[var(--jf-muted-on-tint)]">
             {t("bld.mode")}
           </p>
           <div className="mt-2 grid grid-cols-2 gap-1.5">
@@ -1830,7 +1869,7 @@ export default function Builder() {
             templates), so the link is hidden in template mode. */}
         {controls.formSettings && currentId && (
           <div className="mt-8 rounded-lg border border-[var(--jf-border)] bg-white p-3">
-            <p className="text-xs font-medium uppercase tracking-wider text-[#9ca3af]">
+            <p className="text-xs font-medium uppercase tracking-wider text-[var(--jf-muted-on-tint)]">
               {t("fs.title")}
             </p>
             <p className="mt-1 text-[11px] text-[var(--jf-muted)]">
@@ -1904,7 +1943,7 @@ function BlockPreview({ block, products }: { block: Block; products: Product[] }
         // The URL is set in the block's own settings (the panel on mobile), so
         // the placeholder is now a flat caption naming the setting, not a
         // control-shaped box.
-        <div className="flex h-24 flex-col items-center justify-center gap-1 rounded-md bg-slate-100 text-xs text-[#9ca3af]">
+        <div className="flex h-24 flex-col items-center justify-center gap-1 rounded-md bg-slate-100 text-xs text-[var(--jf-muted-on-tint)]">
           <span aria-hidden className="text-base">🖼</span>
           <span>{t("bld.imageUrl")}</span>
         </div>
@@ -1989,7 +2028,7 @@ function BlockPreview({ block, products }: { block: Block; products: Product[] }
             {block.value || "Field"}
             {block.required && <span className="text-red-400"> *</span>}
           </p>
-          <div className="flex h-8 items-center rounded-md border border-[var(--jf-border)] bg-slate-50 px-2 text-xs text-[#9ca3af]">
+          <div className="flex h-8 items-center rounded-md border border-[var(--jf-border)] bg-slate-50 px-2 text-xs text-[var(--jf-muted-on-tint)]">
             {(block.choices || []).map((c) => c.label).filter(Boolean).join(", ") || "Select…"}
           </div>
         </div>
@@ -2015,7 +2054,7 @@ function BlockPreview({ block, products }: { block: Block; products: Product[] }
       );
     case "hidden":
       return (
-        <p className="text-xs text-[#9ca3af]">
+        <p className="text-xs text-[var(--jf-muted-on-tint)]">
           Hidden · {block.value || "field"} = {block.defaultValue || "…"}
         </p>
       );
@@ -2023,7 +2062,7 @@ function BlockPreview({ block, products }: { block: Block; products: Product[] }
       return (
         <div>
           <p className="mb-1 text-xs text-[var(--jf-muted)]">{block.value || "Captcha"}</p>
-          <div className="flex h-8 items-center rounded-md border border-[var(--jf-border)] bg-slate-50 px-2 text-xs text-[#9ca3af]">
+          <div className="flex h-8 items-center rounded-md border border-[var(--jf-border)] bg-slate-50 px-2 text-xs text-[var(--jf-muted-on-tint)]">
             🛡 Captcha
           </div>
         </div>
