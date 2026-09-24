@@ -21,6 +21,7 @@ package httpapi
 // The live-page check on this card covers what a harness cannot.
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -32,9 +33,18 @@ import (
 // menuPageScript pulls the page's own cart <script> out of served HTML.
 func menuPageScript(t *testing.T, body string) string {
 	t.Helper()
+	return pageScript(t, body, "menuSheet")
+}
+
+// pageScript pulls the first inline <script> out of served HTML whose source
+// carries a marker. The menu page serves its own cart script (menuSheet), and
+// the block-form renderer serves a product script (it wires #of) — a test that
+// puts both surfaces on one document needs each one named, not guessed.
+func pageScript(t *testing.T, body, marker string) string {
+	t.Helper()
 	doc, err := html.Parse(strings.NewReader(body))
 	if err != nil {
-		t.Fatalf("parse served menu HTML: %v", err)
+		t.Fatalf("parse served HTML: %v", err)
 	}
 	var script string
 	var walk func(*html.Node)
@@ -44,7 +54,7 @@ func menuPageScript(t *testing.T, body string) string {
 			for c := n.FirstChild; c != nil; c = c.NextSibling {
 				sb.WriteString(c.Data)
 			}
-			if strings.Contains(sb.String(), "menuSheet") {
+			if strings.Contains(sb.String(), marker) {
 				script = sb.String()
 			}
 		}
@@ -54,7 +64,7 @@ func menuPageScript(t *testing.T, body string) string {
 	}
 	walk(doc)
 	if strings.TrimSpace(script) == "" {
-		t.Fatalf("no menu cart script found in the served page")
+		t.Fatalf("no inline script carrying %q found in the served page", marker)
 	}
 	return script
 }
@@ -90,6 +100,97 @@ func newMenuDOMPage(t *testing.T, data workspaceMenuData) (*menuDOM, string) {
 	d := newMenuDOM(t, body)
 	d.run(menuPageScript(t, body))
 	return d, body
+}
+
+// newMenuDOMPageFrom runs the menu cart script against a document the caller
+// built (rather than one the template just rendered), so a test can reshape
+// the SERVED markup — inserting a wrapper between the selector and its hint —
+// without re-stating either the template or the script.
+func newMenuDOMPageFrom(t *testing.T, body string) (*menuDOM, string) {
+	t.Helper()
+	d := newMenuDOM(t, body)
+	d.run(menuPageScript(t, body))
+	return d, body
+}
+
+// newPageDOM parses a multi-surface document and installs the shared browser
+// shim without running any script yet. The caller runs each surface's script
+// itself, so two scripts can be put on one document and driven together.
+func newPageDOM(t *testing.T, body string) *menuDOM {
+	t.Helper()
+	d := newMenuDOM(t, body)
+	// Re-seed the clock: the menu page and the block form are separate
+	// documents in production, and neither reads the other's Date.now().
+	d.clock = 1700000000000
+	return d
+}
+
+// runPageScript executes one more inline script on this document.
+func (d *menuDOM) runPageScript(body, marker string) {
+	d.t.Helper()
+	d.run(pageScript(d.t, body, marker))
+}
+
+// formTotal reads the ordinary block form's running total out of the served
+// document. The two renderers name that element differently — the product form
+// uses #total, the response-only form uses .total-val — and either is the
+// element the block script writes, so both are accepted. Nothing here assumes
+// which surface a test put on the document.
+func (d *menuDOM) formTotal() string {
+	d.t.Helper()
+	sels := cascadia.QueryAll(d.doc, cascadia.MustCompile(".total-val"))
+	if n := d.byID["total"]; n != nil {
+		sels = append([]*html.Node{n}, sels...)
+	}
+	if len(sels) == 0 {
+		d.t.Fatal("the document has neither a #total nor a .total-val node for the block form's total")
+	}
+	return strings.TrimSpace(nodeText(sels[0]))
+}
+
+// submitBlockForm submits the ordinary block form (#of) the way a buyer does
+// and returns the JSON body its script posted. It fills the form's own name
+// and email inputs first, because the script reads those for client{}.
+func (d *menuDOM) submitBlockForm() string {
+	d.t.Helper()
+	form := d.byID["of"]
+	if form == nil {
+		d.t.Fatal("the document has no block form (#of)")
+	}
+	// The script resolves the buyer fields by input type, so satisfy them the
+	// way the rendered form does.
+	fill := func(typ, val string) {
+		n := d.find(func(n *html.Node) bool { return n.Data == "input" && menuAttr(n, "type") == typ })
+		if n == nil {
+			d.t.Fatalf("the block form has no input[type=%s] for the client fields", typ)
+		}
+		setMenuAttr(n, "value", val)
+	}
+	fill("text", "Ali")
+	fill("email", "ali@example.test")
+	fill("tel", "60123456789")
+
+	d.dispatch("submit", form)
+	d.flushTimers()
+	if body, ok := d.storage["__posted_body"]; ok && body != "" {
+		return body
+	}
+	d.t.Fatalf("the block form posted no body (requests: %v)", d.fetches)
+	return ""
+}
+
+// postedItem decodes a posted order body's single product_id / variation_id.
+func postedItem(body string) (pid, vid string) {
+	var m struct {
+		Items []struct {
+			ProductID   string `json:"product_id"`
+			VariationID string `json:"variation_id"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(body), &m); err != nil || len(m.Items) == 0 {
+		return "", ""
+	}
+	return m.Items[0].ProductID, m.Items[0].VariationID
 }
 
 func newMenuDOM(t *testing.T, body string) *menuDOM {
@@ -323,12 +424,11 @@ func (d *menuDOM) find(match func(*html.Node) bool) *html.Node {
 	return out
 }
 
-// selectorsFor returns every `.varwrap` selector bound to a product id, in
+// selectorsFor returns every menu variant selector bound to a product id, in
 // document order (a dish can legitimately be rendered more than once).
 func (d *menuDOM) selectorsFor(productID string) []*html.Node {
 	var out []*html.Node
-	m := cascadia.MustCompile("select.v")
-	cascadia.QueryAll(d.doc, m)
+	m := cascadia.MustCompile("select.mvar")
 	for _, n := range cascadia.QueryAll(d.doc, m) {
 		if menuAttr(n, "data-id") == productID {
 			out = append(out, n)
@@ -344,6 +444,35 @@ func (d *menuDOM) selectorFor(productID string) *html.Node {
 		return nil
 	}
 	return sels[0]
+}
+
+// hintsFor returns every pick hint in the document, in document order. A hint
+// belongs to the item whose selector is resolved through that item's own
+// container, so counting them is how a test proves the hint did not go
+// missing (or duplicate) when the wrapper shape changed.
+func (d *menuDOM) hintsFor() []*html.Node {
+	if h := d.hintFor(nil); h != nil {
+		d.t.Fatalf("hintsFor: hintFor(nil) returned a node")
+	}
+	return cascadia.QueryAll(d.doc, cascadia.MustCompile(".mvarstock"))
+}
+
+// hintFor returns the pick hint the page would resolve for a selector: the
+// .mvarstock reached through the selector's own container, the same
+// resolution the script performs.
+func (d *menuDOM) hintFor(sel *html.Node) *html.Node {
+	if sel == nil {
+		return nil
+	}
+	for n := sel; n != nil; n = n.Parent {
+		if n.Type == html.ElementNode && menuHasClass(n, "mvarwrap") {
+			return hostIn(n, ".mvarstock")
+		}
+	}
+	if sel.Parent == nil {
+		return nil
+	}
+	return hostIn(sel.Parent, ".mvarstock")
 }
 
 // buttonFor returns the `.card`/`.row` add button carrying a product id.
@@ -530,6 +659,16 @@ func (d *menuDOM) installHost() {
 		return goja.Null()
 	})
 	d.vm.Set("__hasAttr", func(h int, k string) bool { return menuHasAttr(d.node(h), k) })
+	// __attrs exposes every attribute of a node, so the shim can build `.dataset`
+	// the way a browser does (one camelCased property per data-* attribute).
+	d.vm.Set("__attrs", func(h int) []map[string]string {
+		n := d.node(h)
+		out := make([]map[string]string, 0, len(n.Attr))
+		for _, a := range n.Attr {
+			out = append(out, map[string]string{"k": a.Key, "v": a.Val})
+		}
+		return out
+	})
 	d.vm.Set("__setAttr", func(h int, k, v string) { setMenuAttr(d.node(h), k, v) })
 	d.vm.Set("__removeAttr", func(h int, k string) { removeMenuAttr(d.node(h), k) })
 	d.vm.Set("__query", func(h int, sel string) int {
@@ -715,6 +854,28 @@ const menuDOMShim = `
     Object.defineProperty(o, 'value', {
       get: function(){ return String(__attr(h,'value')||''); },
       set: function(v){ __setAttr(h,'value',String(v)); }
+    });
+    // A browser exposes data-* attributes as camelCased .dataset properties
+    // (data-id -> dataset.id). The block-form script reads prices and ids that
+    // way, so the harness models it rather than forcing that script to change.
+    Object.defineProperty(o, 'dataset', {
+      get: function(){
+        var d = {};
+        var all = __attrs(h);
+        for(var i=0;i<all.length;i++){
+          var k = all[i].k;
+          if(k.indexOf('data-') !== 0) continue;
+          var rest = k.slice(5);
+          var parts = rest.split('-');
+          var name = parts[0];
+          for(var j=1;j<parts.length;j++){
+            if(!parts[j]) continue;
+            name += parts[j].charAt(0).toUpperCase() + parts[j].slice(1);
+          }
+          d[name] = all[i].v;
+        }
+        return d;
+      }
     });
     Object.defineProperty(o, 'type', {
       get: function(){ return String(__attr(h,'type')||''); },

@@ -89,6 +89,11 @@ type langStrings struct {
 	MenuSubmitting  string // button label while the order is being submitted
 	MenuSubmitError string // generic submit-failure message
 	MenuRequired    string // name/email mandatory validation message
+	// Issue #665 follow-up: a variant that sold out while the menu was already
+	// open (the page is JS-driven — the disabled attribute was rendered at
+	// page load, so a pick made after a stock change must be re-checked in the
+	// change handler). Shown in the item's own pick hint.
+	MenuSoldOut string // "sold out" — flagged when a sold-out variant is picked
 	// Issue #493: merchant-configured extra checkout fields (from the attached
 	// form). The field labels themselves are merchant-authored and never
 	// translated; only these two system strings are.
@@ -125,6 +130,7 @@ var formLangs = map[string]langStrings{
 		MenuSubmitting:  "Placing order…",
 		MenuSubmitError: "Could not place the order. Please try again.",
 		MenuRequired:    "Please enter your name and email.",
+		MenuSoldOut:     "Sold out",
 		Required:        "(required)",
 		MenuExtraHelp:   "Extra details requested by the merchant — these fields come from the order form attached in this form's menu settings.",
 		MenuExtraEdit:   "Edit this form",
@@ -168,6 +174,7 @@ var formLangs = map[string]langStrings{
 		MenuSubmitting:  "Menghantar pesanan…",
 		MenuSubmitError: "Pesanan tidak berjaya dihantar. Sila cuba lagi.",
 		MenuRequired:    "Sila masukkan nama dan emel anda.",
+		MenuSoldOut:     "Habis stok",
 		Required:        "wajib",
 		MenuExtraHelp:   "Butiran tambahan yang diminta peniaga — medan ini datang dari borang pesanan yang dilampirkan dalam tetapan menu borang ini.",
 		MenuExtraEdit:   "Edit borang ini",
@@ -211,6 +218,7 @@ var formLangs = map[string]langStrings{
 		MenuSubmitting:  "正在提交订单…",
 		MenuSubmitError: "无法提交订单，请重试。",
 		MenuRequired:    "请输入您的姓名和电子邮件。",
+		MenuSoldOut:     "已售罄",
 		Required:        "必填",
 		MenuExtraHelp:   "商家要求的额外信息 — 这些字段来自此表单菜单设置中附加的订单表单。",
 		MenuExtraEdit:   "编辑此表单",
@@ -254,6 +262,7 @@ var formLangs = map[string]langStrings{
 		MenuSubmitting:  "ஆர்டர் அனுப்பப்படுகிறது…",
 		MenuSubmitError: "ஆர்டரை அனுப்ப முடியவில்லை. மீண்டும் முயற்சிக்கவும்.",
 		MenuRequired:    "உங்கள் பெயர் மற்றும் மின்னஞ்சலை உள்ளிடவும்.",
+		MenuSoldOut:     "விற்றுத் தீர்ந்தது",
 		Required:        "கட்டாயம்",
 		MenuExtraHelp:   "வணிகர் கேட்கும் கூடுதல் விவரங்கள் — இந்தப் புலங்கள் இந்தப் படிவத்தின் மெனு அமைப்புகளில் இணைக்கப்பட்ட ஆர்டர் படிவத்திலிருந்து வருகின்றன.",
 		MenuExtraEdit:   "இந்தப் படிவத்தைத் திருத்து",
@@ -297,6 +306,7 @@ var formLangs = map[string]langStrings{
 		MenuSubmitting:  "جارٍ إرسال الطلب…",
 		MenuSubmitError: "تعذّر إرسال الطلب. يرجى المحاولة مرة أخرى.",
 		MenuRequired:    "يرجى إدخال اسمك وبريدك الإلكتروني.",
+		MenuSoldOut:     "نفدت الكمية",
 		Required:        "مطلوب",
 		MenuExtraHelp:   "تفاصيل إضافية يطلبها التاجر — تأتي هذه الحقول من نموذج الطلب المرفق في إعدادات قائمة هذا النموذج.",
 		MenuExtraEdit:   "تعديل هذا النموذج",

@@ -88,14 +88,14 @@ func menuVariationFixtureFor(t *testing.T, ls langStrings) workspaceMenuData {
 func TestMenuVariationMenuCardRendersVariationSelector(t *testing.T) {
 	body := renderMenu492(t, menuVariationFixture(t))
 
-	if !strings.Contains(body, `class="v"`) {
+	if !strings.Contains(body, `class="mvar"`) {
 		t.Errorf("variable menu item has no variation selector\nbody:\n%s", body)
 	}
 	// The selector is bound to the product id, exactly like the form's.
-	if !strings.Contains(body, `<select class="v" data-id="p1"`) {
+	if !strings.Contains(body, `<select class="mvar" data-id="p1"`) {
 		t.Error("card selector is not bound to the product id")
 	}
-	if !strings.Contains(body, `<select class="v" data-id="p2"`) {
+	if !strings.Contains(body, `<select class="mvar" data-id="p2"`) {
 		t.Error("row selector is not bound to the product id")
 	}
 	// Each option carries its own integer-sen price and its name.
@@ -115,7 +115,7 @@ func TestMenuVariationMenuCardRendersVariationSelector(t *testing.T) {
 	// The selector is a sibling of the button, never inside it: a <select>
 	// nested in a <button> is invalid HTML and the browser drops it.
 	cardEnd := strings.Index(body, "</button>")
-	selStart := strings.Index(body, `<select class="v" data-id="p1"`)
+	selStart := strings.Index(body, `<select class="mvar" data-id="p1"`)
 	if cardEnd < 0 || selStart < 0 || selStart < cardEnd {
 		t.Error("the variation selector is not rendered after its button")
 	}
@@ -171,7 +171,7 @@ func TestMenuVariationVariableItemAsksForAVariant(t *testing.T) {
 		t.Error("the script resolves a variation selector by a page-wide data-id query, which returns the first element carrying that id instead of the tapped item's own")
 	}
 	// The missing-choice hint is rendered hidden and has the localised text.
-	if !strings.Contains(body, `class="varstock" data-hint="Please choose a variation for each product" hidden`) {
+	if !strings.Contains(body, `class="mvarstock" data-hint="`+formLangs["en"].SelectVariationAlert+`" hidden`) {
 		t.Error("the missing-choice hint is not rendered (hidden) for a variable item")
 	}
 }
@@ -204,11 +204,11 @@ func TestMenuVariationCheckoutPayloadCarriesVariationID(t *testing.T) {
 // selector, no prompt, and the base price still shipped. This is the
 // TestIssue492RegularFormsUnaffected precedent for the variant change.
 func TestMenuVariationSimpleMenuProductUnchanged(t *testing.T) {
-	// A simple menu product renders NO variation markup. (The `varwrap` CSS
+	// A simple menu product renders NO variation markup. (The `mvarwrap` CSS
 	// rule is always in the stylesheet, so the check is on rendered markup —
 	// a selector, an option, or the prompt attribute — not on the class name.)
 	body := renderMenu492(t, menu492Fixture(t))
-	for _, bad := range []string{`<select class="v"`, "data-pick=", "data-vname=", `class="varstock"`} {
+	for _, bad := range []string{`<select class="mvar"`, "data-pick=", "data-vname=", `class="mvarstock"`} {
 		if strings.Contains(body, bad) {
 			t.Errorf("a simple menu product rendered variation markup (%q)\nbody:\n%s", bad, body)
 		}

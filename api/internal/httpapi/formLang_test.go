@@ -101,6 +101,9 @@ func TestFormLangsCompleteness(t *testing.T) {
 		if ls.Lang != code {
 			t.Errorf("lang %q has Lang=%q mismatch", code, ls.Lang)
 		}
+		if ls.MenuSoldOut == "" {
+			t.Errorf("lang %q has empty MenuSoldOut", code)
+		}
 		for _, f := range fields {
 			switch f {
 			case "EmailLabel":

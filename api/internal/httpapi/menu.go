@@ -88,6 +88,11 @@ type menuProductView struct {
 	SelectLabel  string
 	InStockLabel string
 	PickLabel    string
+	// SoldOutLabel is the localised "sold out" message a pick made on a
+	// disabled (sold-out) option shows instead of adding the line. Resolved
+	// here for the same reason as the labels above: the sub-templates cannot
+	// reach the page-level $.Ls.
+	SoldOutLabel string
 	// Variable reports whether this item has a variant selector, so the cart
 	// script can require a choice instead of adding the base price.
 	Variable bool
@@ -278,7 +283,7 @@ var menuPageTmpl = template.Must(template.New("workspace-menu").Parse(`{{define 
   </div>
   <span class="qtybadge" hidden></span>
 </button>
-{{if .Variations}}<div class="varwrap"><select class="v" data-id="{{.ID}}" aria-label="{{.SelectLabel}}"><option value="" selected disabled>{{.SelectLabel}}</option>{{$it := .}}{{range .Variations}}<option value="{{.ID}}" data-vname="{{.Name}}" data-price="{{.PriceSen}}"{{if .SoldOut}} disabled{{end}}>{{.Name}} — RM {{.Price}}{{if .Stock}} ({{.Stock}} {{$it.InStockLabel}}){{end}}</option>{{end}}</select><div class="varstock" data-hint="{{.PickLabel}}" hidden>{{.PickLabel}}</div></div>{{end}}
+{{if .Variations}}<div class="mvarwrap"><select class="mvar" data-id="{{.ID}}" aria-label="{{.SelectLabel}}"><option value="" selected disabled>{{.SelectLabel}}</option>{{$it := .}}{{range .Variations}}<option value="{{.ID}}" data-vname="{{.Name}}" data-price="{{.PriceSen}}"{{if .SoldOut}} disabled{{end}}>{{.Name}} — RM {{.Price}}{{if .Stock}} ({{.Stock}} {{$it.InStockLabel}}){{end}}</option>{{end}}</select><div class="mvarstock" data-hint="{{.PickLabel}}" hidden>{{.PickLabel}}</div></div>{{end}}
 </div>{{end}}{{define "menuRow"}}
 <div class="item">
 <button class="row" type="button" data-id="{{.ID}}" data-name="{{.Name}}" data-desc="{{.Description}}" data-price="{{.PriceSen}}" data-add="{{.AddLabel}}"{{if .Variable}} data-pick="{{.PickLabel}}"{{end}} aria-label="{{.AddLabel}}: {{.Name}}">
@@ -290,7 +295,7 @@ var menuPageTmpl = template.Must(template.New("workspace-menu").Parse(`{{define 
   {{if .ThumbImage}}<img class="rthumb" src="{{.ThumbImage}}" alt="{{.Name}}" data-base="{{.ImageURL}}" loading="lazy">{{end}}
   <span class="qtybadge" hidden></span>
 </button>
-{{if .Variations}}<div class="varwrap"><select class="v" data-id="{{.ID}}" aria-label="{{.SelectLabel}}"><option value="" selected disabled>{{.SelectLabel}}</option>{{$it := .}}{{range .Variations}}<option value="{{.ID}}" data-vname="{{.Name}}" data-price="{{.PriceSen}}"{{if .SoldOut}} disabled{{end}}>{{.Name}} — RM {{.Price}}{{if .Stock}} ({{.Stock}} {{$it.InStockLabel}}){{end}}</option>{{end}}</select><div class="varstock" data-hint="{{.PickLabel}}" hidden>{{.PickLabel}}</div></div>{{end}}
+{{if .Variations}}<div class="mvarwrap"><select class="mvar" data-id="{{.ID}}" aria-label="{{.SelectLabel}}"><option value="" selected disabled>{{.SelectLabel}}</option>{{$it := .}}{{range .Variations}}<option value="{{.ID}}" data-vname="{{.Name}}" data-price="{{.PriceSen}}"{{if .SoldOut}} disabled{{end}}>{{.Name}} — RM {{.Price}}{{if .Stock}} ({{.Stock}} {{$it.InStockLabel}}){{end}}</option>{{end}}</select><div class="mvarstock" data-hint="{{.PickLabel}}" hidden>{{.PickLabel}}</div></div>{{end}}
 </div>{{end}}{{define "menuField"}}
   {{if eq .Type "select"}}<label>{{.Label}}{{if .Required}} {{.RequiredMark}}{{end}}
     <select name="{{.ID}}"{{if .Required}} required{{end}}>
@@ -433,17 +438,22 @@ var menuPageTmpl = template.Must(template.New("workspace-menu").Parse(`{{define 
   /* Issue #665: variant selector. A variable item's card/row is followed by a
      <select> (a select cannot legally live inside a <button>), so the card
      keeps its own wrapper for the quantity badge and the selector sits under
-     it, full width. */
+     it, full width.
+     The class names are MENU-OWNED (mvar*/mvarstock), never the bare
+     select.v/.varwrap the ordinary form block renderer uses: both scripts
+     match on a class, so a shared name makes each script see the other's
+     selectors when the two surfaces ever share one document (an embed or
+     landing shell). See the menuPageTmpl note on the selector contract. */
   .item { position:relative; display:flex; flex-direction:column; }
   .item .qtybadge { top:8px; }
-  .varwrap { padding:4px 2px 12px; }
-  .varwrap select { width:100%; height:40px; border:1px solid #e6e8ec; border-radius:10px;
-                    background:#fff; padding-inline:10px; font:inherit; font-size:14px;
-                    color:#17181c; }
-  .varwrap select:focus { outline:2px solid {{if .Th.PrimaryColor}}{{.Th.PrimaryColor}}{{else}}#4f46e5{{end}};
-                          outline-offset:1px; }
-  .varwrap select.missing { border-color:#dc2626; }
-  .varstock { margin-top:5px; font-size:12px; color:#dc2626; }
+  .mvarwrap { padding:4px 2px 12px; }
+  .mvarwrap select { width:100%; height:40px; border:1px solid #e6e8ec; border-radius:10px;
+                     background:#fff; padding-inline:10px; font:inherit; font-size:14px;
+                     color:#17181c; }
+  .mvarwrap select:focus { outline:2px solid {{if .Th.PrimaryColor}}{{.Th.PrimaryColor}}{{else}}#4f46e5{{end}};
+                           outline-offset:1px; }
+  .mvarwrap select.missing { border-color:#dc2626; }
+  .mvarstock { margin-top:5px; font-size:12px; color:#dc2626; }
   .rows .item + .item { border-top:1px solid #e9ebef; }
   .rows .item > .row { padding-bottom:4px; }
   .rows .item + .item > .row { border-top:0; }
@@ -637,7 +647,8 @@ var menuPageTmpl = template.Must(template.New("workspace-menu").Parse(`{{define 
        data-lbl-checkout="{{.Ls.MenuCheckout}}"
        data-lbl-submitting="{{.Ls.MenuSubmitting}}"
        data-lbl-error="{{.Ls.MenuSubmitError}}"
-       data-lbl-required="{{.Ls.MenuRequired}}">
+       data-lbl-required="{{.Ls.MenuRequired}}"
+       data-lbl-soldout="{{.Ls.MenuSoldOut}}">
     <div class="sheetback" id="menuSheetBack"></div>
     <div class="sheetpanel" role="dialog" aria-modal="true" aria-label="{{.Ls.MenuBasket}}">
       <div class="sheethead">
@@ -904,25 +915,62 @@ document.querySelectorAll('img[data-base]').forEach(function(im){
   // best-seller card and its category row, or two rows in one category), and a
   // document-wide query always answers with the FIRST one — so the second
   // render's tap used to flag the first item's selector, or none at all.
+  //
+  // The class names this page matches on are MENU-OWNED (mvar/mvarwrap/
+  // mvarstock), deliberately NOT the select.v / .varwrap / .varstock the
+  // ordinary form block renderer uses. Both scripts match by class and both
+  // listen on the document, so a shared name would make each script see the
+  // other's selectors the moment the two surfaces share one document (an
+  // embed/landing shell) — and they would genuinely collide, because the
+  // menu's products ARE the attached form's product blocks, so the same
+  // data-id appears on both. A distinct class keeps the two contracts
+  // disjoint, whoever renders them.
   function varOf(el){
     if(!el) return null;
     var box=el.closest('.item')||el.parentNode;
-    return box?box.querySelector('select.v'):null;
+    return box?box.querySelector('select.mvar'):null;
   }
-  function flagPick(sel){
+  // Is the selector's currently chosen option unbuyable? A variant that has
+  // sold out is rendered disabled by the server, but this page is
+  // JS-driven and stays open: the buyer can pick an option that went sold out
+  // after the page rendered (or have one restored by the browser on reload),
+  // and change fires for it. Adding it would put a line in the basket that
+  // the order endpoint refuses with 409 "stok habis" — so the pick is refused
+  // here and the item's own hint says why.
+  function unbuyable(sel){
+    var o=sel.options[sel.selectedIndex];
+    return !!(o&&o.disabled);
+  }
+  function flagPick(sel,msg){
     if(!sel) return;
     sel.classList.add('missing');
-    var wrap=sel.parentNode;
-    var hint=wrap?wrap.querySelector('.varstock'):null;
-    if(hint) hint.hidden=false;
+    // Resolve the hint through the selector's own CONTAINER, never through
+    // parentNode alone: the template renders .mvarstock as a sibling inside
+    // .mvarwrap today, so parentNode happens to work — but anything inserted
+    // between the two (or a wrapper that loses that shape) makes a parentNode
+    // lookup silently miss the hint, the same "reach out of your own
+    // container" bug the tap and change paths already had.
+    var wrap=sel.closest('.mvarwrap')||sel.parentNode;
+    var hint=wrap?wrap.querySelector('.mvarstock'):null;
+    if(hint){
+      hint.textContent=msg||hint.getAttribute('data-hint')||'';
+      hint.hidden=false;
+    }
     try{ sel.focus(); }catch(e){}
   }
   function clearPick(sel){
     if(!sel) return;
     sel.classList.remove('missing');
-    var wrap=sel.parentNode;
-    var hint=wrap?wrap.querySelector('.varstock'):null;
-    if(hint) hint.hidden=true;
+    var wrap=sel.closest('.mvarwrap')||sel.parentNode;
+    var hint=wrap?wrap.querySelector('.mvarstock'):null;
+    if(hint){
+      hint.hidden=true;
+      // Restore the rendered prompt, so the hint that shows on a LATER
+      // no-choice tap is the "choose a variation" text rather than whatever a
+      // previous refusal left in it. The text is the server's (data-hint), so
+      // it stays localised.
+      hint.textContent=hint.getAttribute('data-hint')||'';
+    }
   }
   document.addEventListener('click',function(e){
     var el=e.target&&e.target.closest?e.target.closest('.card[data-id],.row[data-id]'):null;
@@ -933,6 +981,7 @@ document.querySelectorAll('img[data-base]').forEach(function(im){
       // Variable item: the card tap cannot decide a variant. If the buyer has
       // already picked one, top up that line; otherwise prompt for the choice.
       if(!sel.value){ flagPick(sel); return; }
+      if(unbuyable(sel)){ flagPick(sel,attr('data-lbl-soldout')); return; }
       var o=sel.options[sel.selectedIndex];
       addItem(id,el.getAttribute('data-name'),o.getAttribute('data-price'),sel.value,o.getAttribute('data-vname'));
       return;
@@ -942,16 +991,27 @@ document.querySelectorAll('img[data-base]').forEach(function(im){
   // Picking a variant adds it immediately (matching the tap-to-add feel of a
   // simple item) and clears any pending prompt.
   //
-  // A .varwrap resolves its OWN host. The .item wrapper is what each item is
+  // A .mvarwrap resolves its OWN host. The .item wrapper is what each item is
   // rendered in, and previousElementSibling is that same button for a menu
   // rendered by an older build (or any HTML that lost the wrapper), so neither
   // path can reach out and return a sibling item's product.
+  //
+  // The handler matches the MENU's own selector class (mvar), never the
+  // form renderer's bare v class: the two surfaces can share one document
+  // (embed / landing shell), and matching a shared class would let the form's
+  // selector drive the menu cart and vice versa.
   document.addEventListener('change',function(e){
     var t=e.target;
-    if(!t||!t.classList||!t.classList.contains('v')) return;
+    if(!t||!t.classList||!t.classList.contains('mvar')) return;
     var box=t.closest('.item');
     var host=box?box.querySelector('.card[data-id],.row[data-id]'):t.previousElementSibling;
     if(!t.value){ if(host) flagPick(t); return; }
+    // The disabled attribute is the guard where this page is not scripted,
+    // but the page IS scripted: a restored or scripted selection can fire
+    // change on an option the server already marked sold out, and the line
+    // would only be refused at checkout (409 "stok habis"). Refuse it here
+    // instead, so the basket can never hold a line the buyer cannot buy.
+    if(unbuyable(t)){ flagPick(t,attr('data-lbl-soldout')); return; }
     clearPick(t);
     var o=t.options[t.selectedIndex];
     if(host) addItem(host.getAttribute('data-id'),host.getAttribute('data-name'),o.getAttribute('data-price'),t.value,o.getAttribute('data-vname'));
@@ -1403,6 +1463,7 @@ func (h *PublicHandlers) withVariations(r *http.Request, v menuProductView, ls l
 	v.SelectLabel = ls.SelectVariation
 	v.InStockLabel = ls.InStock
 	v.PickLabel = ls.SelectVariationAlert
+	v.SoldOutLabel = ls.MenuSoldOut
 	if h.ProductVariations == nil || v.ID == "" {
 		return v
 	}

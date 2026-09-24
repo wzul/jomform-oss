@@ -52,6 +52,7 @@ CASES = [
         "      // Variable item: the card tap cannot decide a variant. If the buyer has\n"
         "      // already picked one, top up that line; otherwise prompt for the choice.\n"
         "      if(!sel.value){ flagPick(sel); return; }\n"
+        "      if(unbuyable(sel)){ flagPick(sel,attr('data-lbl-soldout')); return; }\n"
         "      var o=sel.options[sel.selectedIndex];\n"
         "      addItem(id,el.getAttribute('data-name'),o.getAttribute('data-price'),sel.value,o.getAttribute('data-vname'));\n"
         "      return;\n"
@@ -65,7 +66,7 @@ CASES = [
         MENU,
         "    if(!el) return null;\n"
         "    var box=el.closest('.item')||el.parentNode;\n"
-        "    return box?box.querySelector('select.v'):null;",
+        "    return box?box.querySelector('select.mvar'):null;",
         "    return null;",
         # Asserted BEHAVIOURALLY: with the lookup stubbed to null, a no-choice
         # tap on a variable row never reaches the branch that flags its own

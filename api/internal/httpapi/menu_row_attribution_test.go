@@ -256,12 +256,20 @@ func TestMenuRowDuplicateRenderTapFlagsTheTappedRender(t *testing.T) {
 }
 
 // hintOf returns the pick hint the page shows when the tapped item has no
-// variant chosen: the .varstock inside the selector's own .varwrap.
+// variant chosen: the .mvarstock inside the selector's own container.
 func hintOf(sel *html.Node) *html.Node {
-	if sel == nil || sel.Parent == nil {
+	if sel == nil {
 		return nil
 	}
-	return hostIn(sel.Parent, ".varstock")
+	for n := sel; n != nil; n = n.Parent {
+		if n.Type == html.ElementNode && menuHasClass(n, "mvarwrap") {
+			return hostIn(n, ".mvarstock")
+		}
+	}
+	if sel.Parent == nil {
+		return nil
+	}
+	return hostIn(sel.Parent, ".mvarstock")
 }
 
 // A dish rendered twice on one page (a best-seller card AND its category row)

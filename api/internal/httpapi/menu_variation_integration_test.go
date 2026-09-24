@@ -122,7 +122,7 @@ func TestMenuVariationMenuPageResolvesVariationsLive(t *testing.T) {
 	}
 	// A selector bound to the live product, carrying both variants.
 	for _, want := range []string{
-		`<select class="v" data-id="` + prodID + `"`,
+		`<select class="mvar" data-id="` + prodID + `"`,
 		`value="` + limitedID + `" data-vname="Size M" data-price="1200"`,
 		`data-vname="Size L" data-price="1300"`,
 		"Size M — RM 12.00",
