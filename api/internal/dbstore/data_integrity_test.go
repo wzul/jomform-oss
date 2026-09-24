@@ -19,6 +19,50 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// perWorkspaceSlugIndexRead is the schema-level half of TestSlugUniquenessPerWorkspace.
+//
+// It reads the catalogue directly instead of going through the pg_indexes view.
+// Do NOT go back to `SELECT ... FROM pg_indexes WHERE tablename='forms' AND
+// indexdef ILIKE ...`. `pg_indexes.indexdef` is pg_get_indexdef(i.oid) — a
+// per-row relation open — and the view has no schema filter, so that form
+// OID-opens EVERY `forms` index in the whole database, every lane's scratch
+// schema included (25 of them on the shared test database). Two consequences,
+// both measured on Postgres 18.3:
+//
+//  1. The database-wide sweep is the expensive one, and every index it touches
+//     is opened by OID. Any peer connection that invalidates a relation OID
+//     underneath it — a scratch schema's `DROP SCHEMA ... CASCADE` + migration
+//     pass, or a lane's throwaway-database churn — can make that open fail with
+//     `could not open relation with OID <n> (SQLSTATE XX000)`. That is the
+//     failure this test hit in a package the failing diff never touched.
+//  2. It reads other lanes' schemas: the same index exists once per scratch
+//     schema, so the count comes back as the number of live lanes, not the one
+//     this run owns. That figure is time-varying — it is the size of the board
+//     (measured 5 quiet, 25 under load, 11 when last corrected), never a
+//     constant this read should be expected to return.
+//
+// The read below is scoped to current_schema() and touches pg_class/pg_index/
+// pg_attribute only; its plan carries no pg_get_indexdef call, so it opens no
+// relation by OID and a peer's DDL has nothing to invalidate underneath it.
+// TestSlugIndexReadIsSchemaScoped and TestSlugIndexReadDoesNotDeparseIndexDef
+// pin both properties, and TestSlugIndexReadRequiresAUniqueIndex pins the
+// `x.indisunique` requirement — the invariant is that the index ENFORCES
+// uniqueness, so a read matching a non-unique index of the same key columns
+// would report the #77 constraint present when nothing enforces it.
+const perWorkspaceSlugIndexRead = `
+	SELECT count(*) FROM pg_class i
+	  JOIN pg_index x ON x.indexrelid = i.oid
+	  JOIN pg_class t ON t.oid = x.indrelid
+	  JOIN pg_namespace nsp ON nsp.oid = t.relnamespace
+	 WHERE nsp.nspname = current_schema()
+	   AND t.relname = 'forms'
+	   AND i.relkind IN ('i','I')
+	   AND x.indisunique
+	   AND (SELECT array_agg(a.attname ORDER BY a.attname)
+	          FROM unnest(x.indkey) WITH ORDINALITY AS k(attnum, ord)
+	          JOIN pg_attribute a ON a.attrelid = x.indrelid AND a.attnum = k.attnum
+	         WHERE k.attnum <> 0 AND k.ord <= x.indnkeyatts) = ARRAY['slug','workspace_id']::name[]`
+
 // TestMoneyIsIntegerSen asserts every money column is an integer type (BIGINT)
 // and that no float/numeric-with-scale column is used for money. This guards
 // against a migration silently switching money to a float type (float drift).
@@ -131,20 +175,11 @@ func TestSlugUniquenessPerWorkspace(t *testing.T) {
 	p := testPool(t)
 	fs := NewFormStore(p)
 
-	// Schema-level: the per-workspace unique index must exist.
-	//
-	// Scoped to this process's own scratch schema. Left unqualified, this query
-	// counts `forms` in EVERY `test_*` scratch schema on the shared test database
-	// — peer gate runs included — and Postgres resolves those rows from the
-	// catalogue by OID. When a peer finishes and drops its schema inside that
-	// window, the read fails with "could not open relation with OID … (SQLSTATE
-	// XX000)", which looked like a regression in whichever card happened to be
-	// gating at the time. Assert the invariant where it is actually owned.
+	// Schema-level: the per-workspace unique index must exist, read from the
+	// catalogue directly — see perWorkspaceSlugIndexRead for why the whole-DB
+	// `pg_indexes` sweep this replaced was the wrong shape.
 	var n int
-	if err := p.QueryRow(ctx, `
-		SELECT COUNT(*) FROM pg_indexes
-		WHERE schemaname = current_schema()
-		  AND tablename='forms' AND indexdef ILIKE '%workspace_id%' AND indexdef ILIKE '%slug%' AND indexdef ILIKE '%unique%'`).Scan(&n); err != nil {
+	if err := p.QueryRow(ctx, perWorkspaceSlugIndexRead).Scan(&n); err != nil {
 		t.Fatalf("check per-workspace slug index: %v", err)
 	}
 	if n == 0 {
