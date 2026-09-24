@@ -21,10 +21,12 @@
 //  2. TRANSPORT — every email-carrying Job literal must carry a `Lang:`. Without
 //     it the message is branded in the wrong language even when its text is
 //     right, because the branded wrapper takes its <html lang="…"> from there.
-//  3. RENDER — every send through a `…Sender.Send*` must pass a resolved language
-//     as its 4th argument — the calls that hand text to the branded wrapper, and
-//     so the place where "what the recipient reads" and "what the client is told
-//     it is" could disagree.
+//  3. RENDER — every send through a mailer field must pass a resolved language
+//     as its 4th argument — both families: the `…Sender` receipts path and the
+//     `…Mailer` fields (VerifyMailer, AuthMailer, Mailer, …) the auth, invite
+//     and feedback paths deliver through. These are the calls that hand text to
+//     the branded wrapper, and so the place where "what the recipient reads" and
+//     "what the client is told it is" could disagree.
 //
 // The analyzer reports anything it cannot resolve instead of skipping it, and it
 // carries floors on what it found. A guard that silently stops covering its
@@ -78,6 +80,13 @@ const (
 	minJobLiterals   = 8   // the repo builds 11 email-carrying Job literals
 	minScannedFiles  = 100 // the api module has well over 200 non-test .go files
 	minResolvedSites = 10  // email content sites that DO resolve through the dictionary
+	// minSenderSites is the same idea for the render half: the repo sends through
+	// 9 `…Sender` sites and 9 `…Mailer` sites. A matcher that recognised only one
+	// family would still pass the no-empty-language check on the other family by
+	// never looking at it, so the count of sites it DID match is asserted.
+	// 18 is the current truth, kept as a floor: adding an email raises it, and a
+	// matcher that loses a family fails instead of going quiet.
+	minSenderSites = 18
 )
 
 // resolution is how an expression's value was produced.
@@ -141,6 +150,10 @@ type analyzer struct {
 	dictSites              int
 	emailJobCount          int
 	filesScanned           int
+	// senderSites counts the email sends the render matcher recognised. A
+	// matcher that stops recognising a family reports nothing instead of
+	// reporting a problem, so the count is floored in the test.
+	senderSites int
 }
 
 // isDictionaryFile reports whether a file belongs to the dictionary package, the
@@ -305,6 +318,7 @@ func (a *analyzer) walk() {
 				}
 			case *ast.CallExpr:
 				if name, ok := senderSendCall(node); ok {
+					a.senderSites++
 					if !passesLang(node) {
 						a.senderCallsWithoutLang = append(a.senderCallsWithoutLang, site{
 							pos: a.fset.Position(node.Pos()).String(), field: name,
@@ -643,6 +657,16 @@ func calledFunctionName(call *ast.CallExpr) string {
 // senderSendCall recognises an email send through the SES sender — the four
 // methods that hand text to the branded wrapper — and returns a name for the
 // error message.
+//
+// The receiver is recognised by the SHAPE of the field it is reached through,
+// not by the type behind it: a `…Sender` field (`d.Pay.Receipts.Sender`) or any
+// `…Mailer` field (`VerifyMailer`, `AuthMailer`, `Mailer`). The distinction is
+// not incidental — both are the same `email.Sender` handed to the same branded
+// wrapper, reached through two field names, and a matcher that knew only one of
+// them left every site in the other family unchecked while still reporting
+// green. An unrelated type's Send is still not swept in: the receiver must be a
+// field SELECTOR ending in one of those two names, so `w.handler.Send(ctx, job)`
+// and a local variable's Send are not matched.
 func senderSendCall(call *ast.CallExpr) (string, bool) {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
@@ -653,13 +677,17 @@ func senderSendCall(call *ast.CallExpr) (string, bool) {
 	default:
 		return "", false
 	}
-	// The receiver must be a `…Sender` field, so an unrelated type's Send (a
-	// mailer fake, an HTTP client) is not swept in.
 	recv, ok := sel.X.(*ast.SelectorExpr)
-	if !ok || recv.Sel.Name != "Sender" {
+	if !ok || !isSenderFieldName(recv.Sel.Name) {
 		return "", false
 	}
-	return "…Sender." + sel.Sel.Name, true
+	return "…" + recv.Sel.Name + "." + sel.Sel.Name, true
+}
+
+// isSenderFieldName reports whether a receiver field name belongs to the mailer
+// family the guard covers.
+func isSenderFieldName(field string) bool {
+	return field == "Sender" || strings.HasSuffix(field, "Mailer")
 }
 
 // passesLang reports whether a sender call supplies a language. All four senders
@@ -795,14 +823,27 @@ func TestEveryQueuedEmailDeclaresItsLanguage(t *testing.T) {
 // TestEveryEmailSendPassesAResolvedLanguage is the render half: the calls that
 // hand rendered text to the branded wrapper must say which language it is in, or
 // the wrapper defaults and the message declares the wrong language to the client.
+//
+// The floor below is what keeps this honest. An empty-language check is only as
+// wide as its matcher, and the matcher once recognised one field name out of two:
+// every `…Mailer` site was unchecked while the suite stayed green. Counting the
+// sites it DID recognise fails a matcher that goes narrow again, even though a
+// narrow matcher reports no findings at all.
 func TestEveryEmailSendPassesAResolvedLanguage(t *testing.T) {
 	a := newAnalyzer(t)
 	a.walk()
 
+	if a.senderSites < minSenderSites {
+		t.Fatalf("recognised only %d email send site(s) (expected at least %d) — the render "+
+			"matcher has lost part of its subject (the `…Sender` and `…Mailer` families both "+
+			"send through the branded wrapper), so this guard would pass over whatever it no "+
+			"longer matches", a.senderSites, minSenderSites)
+	}
 	if len(a.senderCallsWithoutLang) > 0 {
 		t.Fatalf("%d email send(s) pass no language to the branded wrapper:\n%s",
 			len(a.senderCallsWithoutLang), renderSites(a.senderCallsWithoutLang))
 	}
+	t.Logf("all %d email send site(s) pass a language to the branded wrapper", a.senderSites)
 }
 
 // TestDictionaryOwnsAllNonASCIIEmailContent is a blunt, independent check on the
