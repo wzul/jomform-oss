@@ -364,6 +364,20 @@ export default function CustomizeDocsPage() {
         emails are sent right-to-left, and the email declares its own language so a mail client or
         screen reader reads it correctly.
       </p>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        The <strong>subject</strong> and the <strong>body</strong> are judged separately, so editing
+        one of them does not pin the other. If you rewrite only the body, your words are kept and the
+        untouched subject still follows the language above; if you rewrite only the subject, the
+        untouched body still follows it. Only the half you actually typed is treated as yours.
+      </p>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        Related:{" "}
+        <a href="/docs/placeholders" className="font-medium text-slate-900 underline">
+          the placeholder reference
+        </a>{" "}
+        lists every <span className="font-mono text-xs">{"{{token}}"}</span> you can use in a subject
+        or body.
+      </p>
 
       {/* Reserved workspace names (t_586ff0c3): a slug becomes a public host, so
           the refusal is a user-visible constraint and is documented here

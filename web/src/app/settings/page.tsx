@@ -1854,7 +1854,20 @@ export default function Settings() {
             </p>
             <div className="mt-4 space-y-3">
               <div>
-                <label className="text-xs text-slate-500">{t("set.emelSubject")}</label>
+                <label className="text-xs text-slate-500">
+                  {t("set.emelSubject")}{" "}
+                  {/* The per-field rule is invisible until the merchant is told the
+                      subject and body are judged separately (AGENTS.md
+                      documentation-parity rule: an inline doc link next to the
+                      field the rule applies to). */}
+                  <a
+                    href="/docs/customize#language"
+                    className="text-slate-400 underline hover:text-slate-600"
+                    title={t("set.emelLanguageRule")}
+                  >
+                    ?
+                  </a>
+                </label>
                 <input
                   value={emelSubject}
                   onChange={(e) => setEmelSubject(e.target.value)}
@@ -1864,7 +1877,14 @@ export default function Settings() {
               </div>
               <div>
                 <label className="text-xs text-slate-500">
-                  {t("set.emelBody")} <span className="text-slate-400">{t("set.emelPlaceholders")} <code className="rounded bg-slate-100 px-1">{"{{ref_code}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{amount}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{items}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{form_url}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{buyer_name}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{date}}"}</code></span>
+                  {t("set.emelBody")} <span className="text-slate-400">{t("set.emelPlaceholders")} <code className="rounded bg-slate-100 px-1">{"{{ref_code}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{amount}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{items}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{form_url}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{buyer_name}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{date}}"}</code></span>{" "}
+                  <a
+                    href="/docs/customize#language"
+                    className="text-slate-400 underline hover:text-slate-600"
+                    title={t("set.emelLanguageRule")}
+                  >
+                    ?
+                  </a>
                 </label>
                 <textarea
                   value={emelBody}

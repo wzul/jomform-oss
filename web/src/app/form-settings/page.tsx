@@ -2066,7 +2066,16 @@ function FormSettingsInner() {
                     <div className="mt-4 space-y-4">
                       <div>
                         <label className={labelCls}>
-                          {t("fs.emelSubject")} <span className="text-slate-400">{t("fs.emelInheritHint")}</span>
+                          {t("fs.emelSubject")} <span className="text-slate-400">{t("fs.emelInheritHint")}</span>{" "}
+                          {/* The per-field rule, stated at the field it applies to
+                              (AGENTS.md documentation-parity rule). */}
+                          <a
+                            href="/docs/customize#language"
+                            className="text-slate-400 underline hover:text-slate-600"
+                            title={t("set.emelLanguageRule")}
+                          >
+                            ?
+                          </a>
                         </label>
                         <input
                           value={emelSubject}
@@ -2078,7 +2087,14 @@ function FormSettingsInner() {
                       </div>
                       <div>
                         <label className={labelCls}>
-                          {t("fs.emelBody")} <span className="text-slate-400">{t("fs.emelPlaceholders")}</span>
+                          {t("fs.emelBody")} <span className="text-slate-400">{t("fs.emelPlaceholders")}</span>{" "}
+                          <a
+                            href="/docs/customize#language"
+                            className="text-slate-400 underline hover:text-slate-600"
+                            title={t("set.emelLanguageRule")}
+                          >
+                            ?
+                          </a>
                         </label>
                         <textarea
                           value={emelBody}

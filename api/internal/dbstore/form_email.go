@@ -246,15 +246,25 @@ func ResolveFormEmailSettings(form *FormEmailSettings, ws *EmailSettings, lang s
 			out.HTML = *form.HTMLOverride
 		}
 	}
-	// 3. Built-in defaults for any still-empty inherited field, and the
-	// language-aware re-render of an inherited system template.
-	if out.ReceiptSubject == "" {
+	// 3. Built-in defaults and the language-aware re-render of an inherited
+	// system template.
+	//
+	// Each half is decided ON ITS OWN, because a subject and a body are two
+	// separate merchant decisions even though the settings UI submits them
+	// together: it loads both stored values and posts both back, so a merchant
+	// who edits only the body writes the untouched system subject back verbatim.
+	// A pair-wise test then classifies that row as entirely the merchant's, and
+	// the Malay subject the pre-language release wrote is mailed to a buyer whose
+	// form is English. Per field, an empty half is filled from the default and a
+	// half that is still a BUILT-IN template is re-rendered in the buyer's
+	// language; a half the merchant actually wrote is passed through untouched.
+	// A mixed row therefore renders "merchant subject + localised body" with
+	// neither half overwritten.
+	if out.ReceiptSubject == "" || emailtext.SubjectIsSystemDefault(emailtext.Receipt, out.ReceiptSubject) {
 		out.ReceiptSubject = def.Subject
 	}
-	if out.ReceiptBody == "" {
+	if out.ReceiptBody == "" || emailtext.BodyIsSystemDefault(emailtext.Receipt, out.ReceiptBody) {
 		out.ReceiptBody = def.Body
-	} else if emailtext.IsSystemDefault(emailtext.Receipt, out.ReceiptSubject, out.ReceiptBody) {
-		out.ReceiptSubject, out.ReceiptBody = def.Subject, def.Body
 	}
 	return out
 }

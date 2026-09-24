@@ -709,6 +709,7 @@ export const DICT = {
   "set.emelSubject": { en: "Subject", ms: "Subjek", zh: "主题", ta: "பொருள்", ar: "الموضوع" },
   "set.emelBody": { en: "Body (template)", ms: "Badan (templat)", zh: "正文（模板）", ta: "உடல் (வார்ப்புரு)", ar: "المحتوى (قالب)" },
   "set.emelPlaceholders": { en: "Placeholders:", ms: "Placeholder:", zh: "占位符：", ta: "பிளேஸ்ஹோல்டர்கள்:", ar: "الرموز:" },
+  "set.emelLanguageRule": { en: "Subject and body are judged separately: editing one keeps the other on your form's language.", ms: "Subjek dan badan dinilai berasingan: mengedit salah satu mengekalkan yang lain pada bahasa borang anda.", zh: "主题和正文分开判断：编辑其中一个，另一个仍跟随您表单的语言。", ta: "தலைப்பும் உள்ளடக்கமும் தனித்தனியாக மதிப்பிடப்படும்: ஒன்றைத் திருத்தினால் மற்றது உங்கள் படிவத்தின் மொழியில் இருக்கும்.", ar: "يُقيَّم الموضوع والنص بشكل منفصل: تحرير أحدهما يُبقي الآخر على لغة نموذجك." },
   "set.emelReceiptEnabled": { en: "Send receipt to buyer", ms: "Hantar resit kepada pembeli", zh: "向买家发送收据", ta: "வாங்குபவருக்கு ரசீது அனுப்பு", ar: "إرسال الإيصال إلى المشتري" },
   "set.emelNotifyMerchant": { en: "Also notify me of each new sale", ms: "Juga maklumkan saya setiap jualan baharu", zh: "同时通知我每笔新销售", ta: "ஒவ்வொரு புதிய விற்பனைக்கும் எனக்கும் அறிவி", ar: "أبلغني أيضاً بكل عملية بيع جديدة" },
   "set.emelMerchantEmail": { en: "Notification email (blank = account email)", ms: "Emel notifikasi (kosong = emel akaun)", zh: "通知邮箱（留空 = 账户邮箱）", ta: "அறிவிப்பு மின்னஞ்சல் (காலியாக = கணக்கு மின்னஞ்சல்)", ar: "بريد الإشعار (فارغ = بريد الحساب)" },

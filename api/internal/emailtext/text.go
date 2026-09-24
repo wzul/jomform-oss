@@ -243,9 +243,59 @@ func LegacyDefault(kind Kind) (subject, body string) {
 	return m.Subject, m.Body
 }
 
-// IsSystemDefault reports whether a stored subject+body pair is still a BUILT-IN
+// SubjectIsSystemDefault / BodyIsSystemDefault are the PER-FIELD form of
+// IsSystemDefault, and they are what a partially-edited row needs.
+//
+// A merchant edits a subject and a body in one form, but they are two separate
+// decisions: the settings page loads both stored values and posts both back on
+// save, so editing only the body writes the untouched system subject back into
+// the row verbatim. Judging that row as a PAIR (IsSystemDefault) then answers
+// "neither is the system's text", and the Malay subject the pre-language release
+// wrote ships to a buyer whose form is English.
+//
+// Each field is therefore classified on its own. A merchant's own wording is
+// still never rewritten: only a value that equals a built-in template FOR ITS
+// OWN HALF (one of the five locale renderings, or the pre-language literal) is
+// treated as the system's, and everything else is passed through untouched —
+// which is what makes the mixed row render "merchant subject + localised body"
+// with neither half overwritten.
+//
+// A kind the dictionary does not carry (or a pre-language default it has none
+// for) has no built-in text at all, so neither half can be one.
+func SubjectIsSystemDefault(kind Kind, subject string) bool {
+	if lg, ok := legacyDefaults[kind]; ok && lg.Subject == subject {
+		return true
+	}
+	for _, m := range catalog[kind] {
+		if m.Subject == subject {
+			return true
+		}
+	}
+	return false
+}
+
+// BodyIsSystemDefault is the body half; see SubjectIsSystemDefault.
+func BodyIsSystemDefault(kind Kind, body string) bool {
+	if lg, ok := legacyDefaults[kind]; ok && lg.Body == body {
+		return true
+	}
+	for _, m := range catalog[kind] {
+		if m.Body == body {
+			return true
+		}
+	}
+	return false
+}
+
+// IsSystemDefault reports whether a stored subject+body PAIR is still a BUILT-IN
 // template for kind — either the current default in one of the five locales, or
 // the pre-language literal the database defaults carry (legacyDefaults).
+//
+// It answers the whole-row question, so a row with even one edited half is NOT a
+// system default by this test. A caller that must survive a partially-edited row
+// (a subject untouched beside a body the merchant rewrote, or the reverse) asks
+// SubjectIsSystemDefault / BodyIsSystemDefault instead, field by field — see
+// their comment.
 //
 // A caller uses it to answer one question: "did a merchant write this, or is it
 // the system's own text?" Only the former is sacrosanct — a built-in template

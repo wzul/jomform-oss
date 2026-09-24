@@ -107,11 +107,22 @@ func (s *Service) sendNotification(ctx context.Context, ref NotificationRef, n *
 	// default is stored per row by EnsureDefault (and by the 000062 repair), so
 	// without this a never-edited rule mailed Malay regardless of the form's
 	// language. A merchant-authored subject/body is passed through untouched.
+	//
+	// Each half is re-rendered ON ITS OWN. The rule editor loads both stored
+	// values and posts both back, so a merchant who edits only the body sends the
+	// untouched system subject back verbatim; a pair-wise test then classifies
+	// the whole rule as his own words and the Malay default subject goes out to a
+	// buyer whose form is English. Per field, only a half that is still a
+	// built-in template is replaced — a half he wrote is never translated.
 	subject, body := n.Subject, n.Body
-	if kind, ok := systemDefaultKind(n.Event); ok &&
-		emailtext.IsSystemDefault(kind, subject, body) {
+	if kind, ok := systemDefaultKind(n.Event); ok {
 		def := emailtext.Text(lang, kind, nil)
-		subject, body = def.Subject, def.Body
+		if emailtext.SubjectIsSystemDefault(kind, subject) {
+			subject = def.Subject
+		}
+		if emailtext.BodyIsSystemDefault(kind, body) {
+			body = def.Body
+		}
 	}
 	subj, rendered := renderNotification(subject, body, ref)
 	if s.EmailQueue != nil {

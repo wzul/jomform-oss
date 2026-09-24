@@ -244,6 +244,85 @@ func TestIsSystemDefaultRecognisesTheStoredLiterals(t *testing.T) {
 	if IsSystemDefault(Receipt, "My own subject", "My own body") {
 		t.Error("merchant-authored copy was classified as a system default — it would be overwritten")
 	}
+	// The pair test answers the WHOLE-row question, so one edited half must make
+	// it answer no. The per-field tests are what a partially-edited row needs;
+	// see TestPerFieldSystemDefaultClassifiesEachHalfOnItsOwn.
+	legacySubject, legacyBody := LegacyDefault(Receipt)
+	if IsSystemDefault(Receipt, legacySubject, "a body I wrote") {
+		t.Error("a pair with one edited half was classified as a system default by the pair test")
+	}
+	if IsSystemDefault(Receipt, "a subject I wrote", legacyBody) {
+		t.Error("a pair with one edited subject was classified as a system default by the pair test")
+	}
+}
+
+// TestPerFieldSystemDefaultClassifiesEachHalfOnItsOwn is the load-bearing test
+// for a PARTIALLY-EDITED row. The settings page loads the stored subject and body
+// into one form and posts both back on save, so editing one half stores the
+// other half verbatim — a row the pair test classifies as entirely the
+// merchant's. Judged per half, the untouched half is still the system's own text
+// and must follow the recipient's language, while the half the merchant wrote is
+// never rewritten.
+func TestPerFieldSystemDefaultClassifiesEachHalfOnItsOwn(t *testing.T) {
+	const merchantSubject = "Your order is confirmed"
+	const merchantBody = "Thanks! Keep this note."
+
+	// Every half the system itself wrote — the pre-language literal AND each of
+	// the five current locale renderings, for the three kinds that have built-in
+	// templates — is recognised on its own.
+	for kind, stored := range legacyDefaults {
+		if !SubjectIsSystemDefault(kind, stored.Subject) {
+			t.Errorf("kind %q: the stored pre-language subject is not recognised on its own", kind)
+		}
+		if !BodyIsSystemDefault(kind, stored.Body) {
+			t.Errorf("kind %q: the stored pre-language body is not recognised on its own", kind)
+		}
+	}
+	for _, kind := range Kinds() {
+		for _, lang := range Langs {
+			m := Text(lang, kind, nil)
+			if !SubjectIsSystemDefault(kind, m.Subject) {
+				t.Errorf("kind %q %s subject is not recognised on its own", kind, lang)
+			}
+			if !BodyIsSystemDefault(kind, m.Body) {
+				t.Errorf("kind %q %s body is not recognised on its own", kind, lang)
+			}
+		}
+	}
+
+	// A half the merchant wrote is never the system's.
+	if SubjectIsSystemDefault(Receipt, merchantSubject) {
+		t.Error("a merchant-authored subject was classified as the system's — it would be translated")
+	}
+	if BodyIsSystemDefault(Receipt, merchantBody) {
+		t.Error("a merchant-authored body was classified as the system's — it would be translated")
+	}
+	// An empty half is not a built-in template either; callers fill an empty half
+	// from the default by their own check.
+	if SubjectIsSystemDefault(Receipt, "") || BodyIsSystemDefault(Receipt, "") {
+		t.Error("an empty half was classified as a system default")
+	}
+	// A kind with no built-in text can have no system half, so a caller never
+	// rewrites what it did not write.
+	if SubjectIsSystemDefault(Kind("no_such_kind"), "anything") ||
+		BodyIsSystemDefault(Kind("no_such_kind"), "anything") {
+		t.Error("an unknown kind reported a system default")
+	}
+
+	// The pair test and the per-field tests must AGREE on a whole-row literal and
+	// DISAGREE on a mixed one — that difference is the whole fix.
+	ls, lb := LegacyDefault(Receipt)
+	if !SubjectIsSystemDefault(Receipt, ls) || !BodyIsSystemDefault(Receipt, lb) {
+		t.Fatal("the legacy literal is not recognised per half")
+	}
+	if !IsSystemDefault(Receipt, ls, lb) {
+		t.Fatal("the whole legacy row should still be a pair system default")
+	}
+	if SubjectIsSystemDefault(Receipt, ls) && !IsSystemDefault(Receipt, ls, merchantBody) {
+		// Expected shape; asserted explicitly so a future change to either test
+		// that makes them equivalent is visible.
+		t.Log("mixed row: recognized per half, not as a pair (the intended asymmetry)")
+	}
 }
 
 // TestStoredLiteralsMatchTheDatabaseDefaults is the byte-level link between this
