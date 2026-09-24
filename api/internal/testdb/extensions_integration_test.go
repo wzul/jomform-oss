@@ -46,8 +46,8 @@ var migrationExtensions = []string{"pgcrypto", "citext"}
 
 // scratchDatabaseForThisTest creates a throwaway database and returns its DSN,
 // dropping it on cleanup. An empty template means "no TEMPLATE clause"
-// (Postgres' default, template1); "template0" is used by the guard that plants
-// a pre-existing state, so its starting point cannot depend on the server.
+// (Postgres' default, template1); every guard in this file passes "template0",
+// so no guard's starting state can depend on which server it runs against.
 //
 // The template matters: a template1-derived database inherits whatever the
 // server's template1 carries — on a provisioned server both pgcrypto and citext
@@ -111,9 +111,33 @@ func scratchDatabaseForThisTest(t *testing.T, template string) string {
 // against a brand-new database and asserts the extensions landed in `public`
 // rather than in the scratch schema.
 func TestOpenOnFreshDatabaseLeavesSharedExtensionsInPublic(t *testing.T) {
-	dsn := scratchDatabaseForThisTest(t, "")
+	// template0: this guard is about what open() PROVISIONS, so its starting
+	// state must not depend on whether the server's template1 already carries
+	// the extensions (see the helper). A template1 copy on a provisioned server
+	// is born with both of them already in `public`, and the placement assertion
+	// at the end would then be asserting a state that was true before open() ran.
+	dsn := scratchDatabaseForThisTest(t, "template0")
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
+
+	// Fixture precondition: the database must start with NO shared extension
+	// installed, or the placement assertion below cannot tell what open()
+	// provisioned from what the template handed over — which is the vacuous
+	// pass this guard exists to avoid.
+	preConn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect to scratch database: %v", err)
+	}
+	installed, err := installedMigrationExtensions(ctx, preConn)
+	_ = preConn.Close(ctx)
+	if err != nil {
+		t.Fatalf("read preset extension placement: %v", err)
+	}
+	if len(installed) > 0 {
+		t.Fatalf("fixture precondition failed: the scratch database already has %v "+
+			"installed — it was not created from template0, so the placement assertion "+
+			"below would be checking a state open() never produced", installed)
+	}
 
 	const schema = "test_freshpkg"
 	pool, err := open(ctx, dsn, schema)
