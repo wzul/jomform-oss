@@ -2,7 +2,9 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -252,10 +254,25 @@ func (h *RESTHandlers) deleteWorkspace(w http.ResponseWriter, r *http.Request, a
 		return
 	}
 	// Audit: names the workspace and what went with it. Recorded AFTER the
-	// delete, against the caller's remaining account (the deleted one is gone).
-	h.recordEvent(r, actx, userID, "workspace.deleted", map[string]any{
-		"workspace_id": s.ID, "slug": s.Slug, "name": s.Name, "deleted": deleted,
-	})
+	// delete, and NOT against actx.Account: for an unscoped session request the
+	// resolved account IS the account this call just removed, so attributing the
+	// event to it made Postgres refuse the insert (events_account_id_fkey,
+	// SQLSTATE 23503) — swallowed by recordEvent's best-effort path, so the
+	// delete answered 200 and left no audit trail. The event is attributed to an
+	// account that survives instead.
+	if acct := h.auditAccountAfterDelete(r, userID, actx.Account.ID); acct != "" {
+		h.recordEventFor(r, acct, userID, "workspace.deleted", map[string]any{
+			"workspace_id": s.ID, "slug": s.Slug, "name": s.Name, "deleted": deleted,
+		})
+	} else {
+		// The delete removed the caller's only account (an account-less
+		// workspace beside it) — there is no account left to file the event
+		// under, and writing it blind would be the FK failure again. Say so
+		// rather than dropping it silently.
+		slog.Warn("workspace_deleted_event_skipped",
+			"workspace", s.ID, "slug", s.Slug, "user", userID,
+			"reason", "no surviving account to attribute the event to")
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status": "deleted", "id": s.ID, "slug": s.Slug, "deleted": deleted,
 	})
@@ -290,6 +307,59 @@ func (h *RESTHandlers) workspaceDeletionCheck(w http.ResponseWriter, r *http.Req
 		"blockers":       blockers,
 		"can_delete":     userID != "" && s.Owner == userID && len(blockers) == 0 && !h.isLastWorkspace(r, s.ID, userID),
 	})
+}
+
+// auditAccountAfterDelete picks the account a post-delete event must be
+// attributed to. Events are account-scoped and `events.account_id` is a FK to
+// `accounts(id)`, so an event about a workspace delete cannot be written against
+// an account the delete just destroyed.
+//
+// The resolved account is used when it SURVIVES the call — the scoped request
+// (`?workspace=<other>`) resolves to a different workspace's account and that
+// one is still the caller's, so it is the most faithful attribution. Only when
+// the resolved account is gone (the unscoped shape, which resolves to the
+// account of the workspace being deleted) does this fall back to another account
+// the caller still has.
+//
+// The fallback is restricted to accounts the caller OWNS. It must NOT walk
+// Workspaces.ByMember: that list is "owned OR JOINED", so for a caller who
+// merely members a stranger's workspace the stranger's account is a candidate —
+// and if it sorts first (ByMember orders by workspace created_at), the caller's
+// own workspace.deleted row is written into the stranger's account-scoped audit
+// log. The stranger then reads the caller's delete out of their own audit log
+// while the caller cannot see it. Attribution must never leave the caller's own
+// tenancy.
+//
+// "" means there is none; the caller then skips the event and says so.
+func (h *RESTHandlers) auditAccountAfterDelete(r *http.Request, userID, resolved string) string {
+	ctx := r.Context()
+	if h.accountExists(ctx, resolved) {
+		return resolved
+	}
+	if userID == "" {
+		return ""
+	}
+	if h.Accounts != nil {
+		if accs, err := h.Accounts.ByOwner(ctx, userID); err == nil {
+			for _, a := range accs {
+				if a != nil && a.ID != "" && h.accountExists(ctx, a.ID) {
+					return a.ID
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// accountExists reports whether an account id still names a row. A store error
+// is treated as "does not exist": the caller then picks another account rather
+// than gambling that the row survives and re-arming the FK violation.
+func (h *RESTHandlers) accountExists(ctx context.Context, accountID string) bool {
+	if accountID == "" || h.Accounts == nil {
+		return false
+	}
+	a, err := h.Accounts.ByID(ctx, accountID)
+	return err == nil && a != nil
 }
 
 // isLastWorkspace reports whether deleting workspaceID would leave userID with

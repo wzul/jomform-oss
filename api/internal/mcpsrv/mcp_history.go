@@ -48,6 +48,14 @@ func zero[T any]() T { var z T; return z }
 // recordMCPEvent appends an mcp.tool_call event for the authenticated account
 // (issue #195). The agent name comes from the AuthIdentity (OAuth client_name
 // or API-key name). Best-effort — never breaks the primary tool call.
+//
+// The attribution account must still EXIST when the row lands:
+// events.account_id is `REFERENCES accounts(id) ON DELETE CASCADE`, so an event
+// written for an account the same call destroyed is refused by Postgres
+// (SQLSTATE 23503) — and because recording is best-effort that refusal is
+// swallowed to a log line. delete_workspace is exactly that case (it removes the
+// account its own call scope names), so the account is re-resolved against what
+// survives instead of being trusted blindly.
 func (s *Server) recordMCPEvent(ctx context.Context, tool string, failed bool) {
 	if s.deps.Events == nil {
 		return
@@ -62,6 +70,17 @@ func (s *Server) recordMCPEvent(ctx context.Context, tool string, failed bool) {
 	if cs := callScopeFrom(ctx); cs != nil && len(cs.Accounts) > 0 {
 		accountID = cs.Accounts[0]
 	}
+	// Never attribute an event to the row this call destroyed (or to anything
+	// else gone): fall back to an account the user still has, and skip the
+	// history row entirely when there is none.
+	if !s.accountSurvives(ctx, accountID) {
+		accountID = s.survivingAccountFor(ctx)
+	}
+	if accountID == "" {
+		slog.Warn("mcp_tool_call_event_skipped", "tool", tool,
+			"reason", "no surviving account to attribute the event to")
+		return
+	}
 	props := map[string]any{
 		"tool":       tool,
 		"agent":      id.Agent,
@@ -74,4 +93,52 @@ func (s *Server) recordMCPEvent(ctx context.Context, tool string, failed bool) {
 	if err := s.deps.Events.Record(ctx, accountID, id.UserID, "mcp.tool_call", props, "", ""); err != nil {
 		slog.Error("mcp_tool_call_event", "err", err, "tool", tool, "account", accountID)
 	}
+}
+
+// accountSurvives reports whether accountID still names a row. A store error is
+// treated as "does not survive" so the caller falls back rather than gambling on
+// the FK.
+func (s *Server) accountSurvives(ctx context.Context, accountID string) bool {
+	if accountID == "" || s.deps == nil || s.deps.Accounts == nil {
+		return false
+	}
+	a, err := s.deps.Accounts.ByID(ctx, accountID)
+	return err == nil && a != nil
+}
+
+// survivingAccountFor returns an account the caller still has, preferring any
+// account other than the call's own scope. Returns "" when the user has nothing
+// left — the one case where the call cannot be recorded.
+//
+// Owned accounts ONLY. mcp.tool_call history is account-scoped, and
+// Workspaces.ByMember lists workspaces the caller owns OR IS A MEMBER OF, so
+// walking it would file a caller's own delete_workspace history into a stranger's
+// account-scoped history whenever that stranger's (older) workspace sorted first
+// — the stranger reads the caller's calls, the caller cannot. Membership in
+// someone else's workspace is not a tenancy to record our events in.
+//
+// Every candidate is also re-checked for existence: a ByOwner row is live by
+// construction, but the re-check keeps the FK contract explicit rather than
+// trusted.
+func (s *Server) survivingAccountFor(ctx context.Context) string {
+	cs := callScopeFrom(ctx)
+	var doomed string
+	if cs != nil && len(cs.Accounts) > 0 {
+		doomed = cs.Accounts[0]
+	}
+	userID := s.userIDFor(ctx)
+	if userID == "" || s.deps == nil || s.deps.Accounts == nil {
+		return ""
+	}
+	if accs, err := s.deps.Accounts.ByOwner(ctx, userID); err == nil {
+		for _, a := range accs {
+			if a == nil || a.ID == "" || a.ID == doomed {
+				continue
+			}
+			if s.accountSurvives(ctx, a.ID) {
+				return a.ID
+			}
+		}
+	}
+	return ""
 }

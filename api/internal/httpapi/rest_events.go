@@ -57,12 +57,25 @@ func eventFilterFromRequest(r *http.Request, accounts []string) dbstore.EventFil
 // capturing the caller's IP and user-agent. Best-effort: a nil Events store or
 // a write error is logged, never fatal to the primary action.
 func (h *RESTHandlers) recordEvent(r *http.Request, actx *AccountCtx, userID, eventName string, props map[string]any) {
-	if h.Events == nil {
+	h.recordEventFor(r, actx.Account.ID, userID, eventName, props)
+}
+
+// recordEventFor is recordEvent with an EXPLICIT attribution account, for the
+// one caller whose resolved account is not the right owner of the event: a
+// delete that destroys the resolved account itself.
+//
+// events.account_id is `REFERENCES accounts(id) ON DELETE CASCADE`, so a write
+// attributed to an account this same request deleted is refused by Postgres
+// (SQLSTATE 23503) — and because event recording is best-effort by design, that
+// refusal is swallowed to a log line and the caller's 200 hides it. Attribution
+// must therefore name an account that still exists when the row lands.
+func (h *RESTHandlers) recordEventFor(r *http.Request, accountID, userID, eventName string, props map[string]any) {
+	if h.Events == nil || accountID == "" {
 		return
 	}
-	if err := h.Events.Record(r.Context(), actx.Account.ID, userID, eventName, props,
+	if err := h.Events.Record(r.Context(), accountID, userID, eventName, props,
 		middleware.ClientIP(r), r.UserAgent()); err != nil {
-		slog.Error("event_record", "err", err, "event", eventName, "account", actx.Account.ID)
+		slog.Error("event_record", "err", err, "event", eventName, "account", accountID)
 	}
 }
 
