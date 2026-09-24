@@ -1,7 +1,7 @@
-// Package testdb — guards that prepareExtensions never issues a statement it
+// Package testdb — guards that ensureExtensions never issues a statement it
 // has no privilege to issue.
 //
-// The defect these guard against: prepareExtensions used to issue
+// The defect these guard against: ensureExtensions used to issue
 // `ALTER EXTENSION <ext> SET SCHEMA public` for every installed extension,
 // whether or not it was already in `public`. Moving the extension is a semantic
 // no-op in that case but NOT a privilege no-op — Postgres requires ownership of
@@ -187,7 +187,7 @@ func schemaOfExtension(t *testing.T, ctx context.Context, conn interface {
 // role (`installer`) — legitimate, because citext/pgcrypto are trusted, so any
 // role with CREATE on the database owns what it installs.
 //
-// Pre-fix this fails: prepareExtensions issues `ALTER EXTENSION ... SET SCHEMA
+// Pre-fix this fails: ensureExtensions issues `ALTER EXTENSION ... SET SCHEMA
 // public` for both extensions, and `runner` does not own them.
 //
 // The second half is the control that keeps the first half from being vacuous:
@@ -240,7 +240,7 @@ func TestPrepareExtensionsToleratesAnExtensionItDoesNotOwn(t *testing.T) {
 
 	// The installer — and only the installer — creates the extensions in public.
 	if err := asRole(t, ctx, admin, installer, func() error {
-		for _, ext := range publicExtensions {
+		for _, ext := range sharedExtensions {
 			if _, err := admin.Exec(ctx, `CREATE EXTENSION IF NOT EXISTS `+quote(ext)+` SCHEMA `+quote(publicSchema)); err != nil {
 				return err
 			}
@@ -253,7 +253,7 @@ func TestPrepareExtensionsToleratesAnExtensionItDoesNotOwn(t *testing.T) {
 	// The precondition the guard depends on: present, in public, owned by a
 	// role other than the runner. If any of that is false the test proves
 	// nothing, so it fails rather than proceeding.
-	for _, ext := range publicExtensions {
+	for _, ext := range sharedExtensions {
 		var owner string
 		if err := admin.QueryRow(ctx, `
 			SELECT pg_get_userbyid(e.extowner)
@@ -271,14 +271,14 @@ func TestPrepareExtensionsToleratesAnExtensionItDoesNotOwn(t *testing.T) {
 
 	// The card's acceptance: a correctly-placed extension owned by someone else
 	// must not cost the runner a statement it cannot execute.
-	err = asRole(t, ctx, admin, runner, func() error { return prepareExtensions(ctx, admin) })
+	err = asRole(t, ctx, admin, runner, func() error { return ensureExtensions(ctx, admin) })
 	if err != nil {
-		t.Fatalf("prepareExtensions as the database owner %s, whose extensions are owned by %s: %v\n\n"+
+		t.Fatalf("ensureExtensions as the database owner %s, whose extensions are owned by %s: %v\n\n"+
 			"This is the unconditional-ALTER defect: SET SCHEMA is a semantic no-op when the extension "+
 			"is already in public, but ALTER EXTENSION still requires owning it.",
 			runner, installer, err)
 	}
-	for _, ext := range publicExtensions {
+	for _, ext := range sharedExtensions {
 		if got := schemaOfExtension(t, ctx, admin, ext); got != publicSchema {
 			t.Errorf("extension %s moved to %q, want %q", ext, got, publicSchema)
 		}
@@ -303,9 +303,9 @@ func TestPrepareExtensionsToleratesAnExtensionItDoesNotOwn(t *testing.T) {
 		t.Fatalf("plant citext in %s: %v", misplaced, err)
 	}
 
-	err = asRole(t, ctx, admin, runner, func() error { return prepareExtensions(ctx, admin) })
+	err = asRole(t, ctx, admin, runner, func() error { return ensureExtensions(ctx, admin) })
 	if err == nil {
-		t.Errorf("prepareExtensions succeeded while citext was stranded in %s under another owner; "+
+		t.Errorf("ensureExtensions succeeded while citext was stranded in %s under another owner; "+
 			"a repair that quietly does nothing leaves the database mis-shaped", misplaced)
 	} else {
 		msg := err.Error()
@@ -329,7 +329,7 @@ func TestPrepareExtensionsToleratesAnExtensionItDoesNotOwn(t *testing.T) {
 // TestPrepareExtensionsStillRelocatesWhenItOwnsTheExtension is the other half of
 // the card's acceptance, kept next to the ownership guard so that a change which
 // stops relocating cannot pass both: with the extension in a scratch schema and
-// owned by the connection running prepareExtensions, the move must still happen.
+// owned by the connection running ensureExtensions, the move must still happen.
 func TestPrepareExtensionsStillRelocatesWhenItOwnsTheExtension(t *testing.T) {
 	dsn := integrationDSN(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -354,16 +354,16 @@ func TestPrepareExtensionsStillRelocatesWhenItOwnsTheExtension(t *testing.T) {
 	if _, err := admin.Exec(ctx, stmt); err != nil {
 		t.Fatalf("plant the stranded state: %v", err)
 	}
-	for _, ext := range publicExtensions {
+	for _, ext := range sharedExtensions {
 		if got := schemaOfExtension(t, ctx, admin, ext); got != scratch {
 			t.Fatalf("setup failed: %s is in %q, want %q", ext, got, scratch)
 		}
 	}
 
-	if err := prepareExtensions(ctx, admin); err != nil {
+	if err := ensureExtensions(ctx, admin); err != nil {
 		t.Fatalf("relocate extensions this connection owns: %v", err)
 	}
-	for _, ext := range publicExtensions {
+	for _, ext := range sharedExtensions {
 		if got := schemaOfExtension(t, ctx, admin, ext); got != publicSchema {
 			t.Errorf("extension %s is in %q after preparation, want %q", ext, got, publicSchema)
 		}

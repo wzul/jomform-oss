@@ -67,14 +67,17 @@ const publicSchema = "public"
 // database-global extension) is shared by all of them.
 const extensionLockKey int64 = 0x4A6F6D466F726D // "JomForm"
 
-// publicExtensions are the extensions migration 000001_init declares. They are
-// database-global, so they get one canonical home (`public`) that every
-// package's `<scratch>,public` search_path can resolve — see prepareExtensions.
-var publicExtensions = []string{"citext", "pgcrypto"}
+// sharedExtensions are the extensions the migrations declare, which every
+// package needs reachable from `public` (users.email, accounts.custom_domain,
+// suppressed_emails.email and the forms/feedback_threads columns are CITEXT;
+// gen_random_uuid() comes from pgcrypto). It is db.SharedExtensions, which db
+// derives from the migration set itself — so adding an extension to a migration
+// cannot leave this repair behind, and there is exactly one list to keep right.
+var sharedExtensions = db.SharedExtensions
 
-// extensionProvisioner is the minimum prepareExtensions needs: something that
+// extensionProvisioner is the minimum ensureExtensions needs: something that
 // can begin a transaction. Both *pgxpool.Pool (what open passes) and *pgx.Conn
-// satisfy it, which lets a guard drive the privilege path — prepareExtensions
+// satisfy it, which lets a guard drive the privilege path — ensureExtensions
 // running as a role that does not own the extensions — on a single session.
 type extensionProvisioner interface {
 	Begin(ctx context.Context) (pgx.Tx, error)
@@ -131,24 +134,10 @@ func open(ctx context.Context, dsn, schema string) (*pgxpool.Pool, error) {
 	}
 	defer admin.Close()
 
-	// Provision the shared extensions into `public` BEFORE anything touches this
-	// scratch schema. Two reasons, both load-bearing:
-	//
-	//   - migration 000001 declares them with `CREATE EXTENSION IF NOT EXISTS`,
-	//     and each package's migrate() sets search_path to its OWN scratch schema
-	//     first. On a fresh database the first package to migrate therefore used
-	//     to install pgcrypto/citext INSIDE its scratch schema, and every other
-	//     package — whose search_path resolved the name to that schema — then
-	//     died on pg_extension_name_index (23505) before it could run a single
-	//     test. Installing them in `public` first makes the migration a NOTICE
-	//     no-op for everyone.
-	//   - the call is serialized on an advisory lock, because concurrent
-	//     `CREATE EXTENSION IF NOT EXISTS` is a race, not a no-op (see
-	//     db.EnsureSharedExtensions).
-	if err := db.EnsureSharedExtensions(ctx, admin, nil); err != nil {
-		return nil, fmt.Errorf("provision shared extensions: %w", err)
-	}
-
+	// The shared extensions are provisioned into `public` by ensureSchema
+	// below, BEFORE it drops this package's scratch schema — see
+	// ensureExtensions for why that order is load-bearing. Nothing here touches
+	// the schema first, so there is no second, earlier chance to repair.
 	if err := ensureSchema(ctx, admin, schema); err != nil {
 		return nil, err
 	}
@@ -178,21 +167,40 @@ func open(ctx context.Context, dsn, schema string) (*pgxpool.Pool, error) {
 }
 
 func ensureSchema(ctx context.Context, admin *pgxpool.Pool, schema string) error {
+	// Extensions FIRST, before the DROP below. Three reasons, all load-bearing:
+	//
+	//   - migration 000001 declares them with `CREATE EXTENSION IF NOT EXISTS`,
+	//     and each package's migrate() sets search_path to its OWN scratch
+	//     schema first. On a fresh database the first package to migrate would
+	//     otherwise install pgcrypto/citext INSIDE its scratch schema, and every
+	//     other package — whose search_path resolved the name to that schema —
+	//     then died. Installing them in `public` first makes the migration a
+	//     NOTICE no-op for everyone.
+	//   - DROP SCHEMA ... CASCADE takes an extension living inside the schema
+	//     being dropped with it, and the cascade reaches further than the
+	//     schema: with citext stranded in `s1` and a citext column on a table
+	//     in `s2`, the drop reports `drop cascades to extension citext` AND
+	//     `drop cascades to column email of table s2.t`. Repairing first is
+	//     therefore not cosmetic — it is what keeps the drop from reaching into
+	//     a peer's schema.
+	//   - the repair call is serialized on an advisory lock, because concurrent
+	//     `CREATE EXTENSION IF NOT EXISTS` is a race, not a no-op.
+	if err := ensureExtensions(ctx, admin); err != nil {
+		return fmt.Errorf("ensure shared extensions: %w", err)
+	}
 	if _, err := admin.Exec(ctx, `DROP SCHEMA IF EXISTS `+quote(schema)+` CASCADE`); err != nil {
 		return fmt.Errorf("drop scratch schema: %w", err)
 	}
 	if _, err := admin.Exec(ctx, `CREATE SCHEMA `+quote(schema)); err != nil {
 		return fmt.Errorf("create scratch schema: %w", err)
 	}
-	if err := prepareExtensions(ctx, admin); err != nil {
-		return fmt.Errorf("prepare shared extensions: %w", err)
-	}
 	return nil
 }
 
-// prepareExtensions pins the database-global extensions migration 000001_init
-// declares into `public`, so every package's `<scratch>,public` search_path can
-// resolve them.
+// ensureExtensions puts every shared extension in `public`, creating it there
+// if it is missing — the ONE repair this package performs, called from
+// ensureSchema (and therefore from open() and ResetSchema, always before the
+// scratch schema is dropped).
 //
 // The defect this closes: a *fresh* database (one where `public` has no citext)
 // made 000001's `CREATE EXTENSION IF NOT EXISTS citext` take its schema from
@@ -207,13 +215,13 @@ func ensureSchema(ctx context.Context, admin *pgxpool.Pool, schema string) error
 // schema being dropped — which is exactly why the first package's own re-run
 // healed it and everyone else's stayed broken.
 //
-// Two details make this correct rather than merely tidy:
+// Three details make this correct rather than merely tidy:
 //
 //   - `CREATE EXTENSION ... SCHEMA public` does NOT relocate an extension that
 //     already exists elsewhere (`IF NOT EXISTS` turns into a NOTICE and the
 //     schema argument is ignored), so a database already poisoned this way
-//     needs an explicit `ALTER EXTENSION ... SET SCHEMA public`. citext and
-//     pgcrypto are both relocatable.
+//     needs an explicit `ALTER EXTENSION ... SET SCHEMA public`. Every
+//     extension in sharedExtensions is relocatable.
 //   - The ALTER is issued ONLY when the extension is not already in `public`.
 //     It is a semantic no-op in that case but NOT a privilege no-op: ALTER
 //     EXTENSION requires ownership of the extension
@@ -221,10 +229,10 @@ func ensureSchema(ctx context.Context, admin *pgxpool.Pool, schema string) error
 //     unconditional form turns a correctly-shaped database whose extension is
 //     owned by a different role — a template-derived or psql-provisioned
 //     database — into `ERROR: must be owner of extension citext (SQLSTATE
-//     42501)` on every ensureSchema. `CREATE EXTENSION ... IF NOT EXISTS ...
-//     SCHEMA public` carries no such requirement (it degrades to a NOTICE), so
-//     reading the current schema first is what keeps the repair free for a
-//     database that does not need repairing.
+//     42501)` on every reset. `CREATE EXTENSION ... IF NOT EXISTS ... SCHEMA
+//     public` carries no such requirement (it degrades to a NOTICE), so reading
+//     the current schema first is what keeps the repair free for a database that
+//     does not need repairing.
 //   - Extension creation is not concurrency-safe on its own: `go test ./...`
 //     runs every package in parallel, and two packages racing the first
 //     `CREATE EXTENSION IF NOT EXISTS` can collide on the database-global
@@ -233,10 +241,10 @@ func ensureSchema(ctx context.Context, admin *pgxpool.Pool, schema string) error
 //     across concurrent checkouts, so exactly one installs and the rest wait
 //     and then see it.
 //
-// Extensions are database-global, not schema-scoped, so this deliberately runs
-// on every ensureSchema: it is cheap, idempotent, and it also repairs a
-// database an earlier run (or an earlier version of this helper) left poisoned.
-func prepareExtensions(ctx context.Context, admin extensionProvisioner) error {
+// The extensions come from sharedExtensions (db.SharedExtensions, derived from
+// the migration set), not a hand-written list: adding an extension to a
+// migration cannot leave this repair behind.
+func ensureExtensions(ctx context.Context, admin extensionProvisioner) error {
 	tx, err := admin.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin extension transaction: %w", err)
@@ -246,7 +254,7 @@ func prepareExtensions(ctx context.Context, admin extensionProvisioner) error {
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, extensionLockKey); err != nil {
 		return fmt.Errorf("acquire extension lock: %w", err)
 	}
-	for _, ext := range publicExtensions {
+	for _, ext := range sharedExtensions {
 		// Where is it now? An extension an earlier run installed into a
 		// scratch schema is one that lived in a *different* package's schema
 		// (e.g. test_chat) and outlived the package that made it, because
@@ -256,20 +264,20 @@ func prepareExtensions(ctx context.Context, admin extensionProvisioner) error {
 		if err != nil {
 			return err
 		}
-		if installed {
-			if current == publicSchema {
-				// Correctly placed: issuing the ALTER here would demand
-				// ownership of an extension this role may not own, and the
-				// database is already in the shape we require.
-				continue
-			}
-			if _, err := tx.Exec(ctx, `ALTER EXTENSION `+quote(ext)+` SET SCHEMA `+quote(publicSchema)); err != nil {
-				return fmt.Errorf("relocate extension %s from %s to %s: %w", ext, current, publicSchema, err)
+		if !installed {
+			if _, err := tx.Exec(ctx, `CREATE EXTENSION IF NOT EXISTS `+quote(ext)+` SCHEMA `+quote(publicSchema)); err != nil {
+				return fmt.Errorf("create extension %s in %s: %w", ext, publicSchema, err)
 			}
 			continue
 		}
-		if _, err := tx.Exec(ctx, `CREATE EXTENSION IF NOT EXISTS `+quote(ext)+` SCHEMA `+quote(publicSchema)); err != nil {
-			return fmt.Errorf("create extension %s in %s: %w", ext, publicSchema, err)
+		if current == publicSchema {
+			// Correctly placed: issuing the ALTER here would demand
+			// ownership of an extension this role may not own, and the
+			// database is already in the shape we require.
+			continue
+		}
+		if _, err := tx.Exec(ctx, `ALTER EXTENSION `+quote(ext)+` SET SCHEMA `+quote(publicSchema)); err != nil {
+			return fmt.Errorf("relocate extension %s from %s to %s: %w", ext, current, publicSchema, err)
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -534,12 +542,9 @@ func ResetSchema(t *testing.T) *pgxpool.Pool {
 		t.Fatalf("test database unavailable: %v", cerr)
 	}
 	defer admin.Close()
-	// Re-provision in case an earlier part of this run relocated them, and so
-	// that dropping the scratch schema below cannot leave this package unable
-	// to migrate (the extensions live in public, never in the scratch schema).
-	if cerr := db.EnsureSharedExtensions(context.Background(), admin, nil); cerr != nil {
-		t.Fatalf("provision shared extensions: %v", cerr)
-	}
+	// ensureSchema repairs the extension placement BEFORE dropping the scratch
+	// schema, so a stranded extension cannot be taken by the DROP — and the
+	// extensions live in public, never in this package's schema.
 	if cerr := ensureSchema(context.Background(), admin, schema); cerr != nil {
 		t.Fatalf("reset scratch schema: %v", cerr)
 	}

@@ -23,8 +23,6 @@ import (
 	"context"
 	"log/slog"
 	"os"
-	"regexp"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -32,33 +30,17 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// migrationCreateExtension matches a CREATE EXTENSION statement in a migration
-// file and captures the extension name.
-var migrationCreateExtension = regexp.MustCompile(
-	`(?i)\bCREATE\s+EXTENSION\s+(?:IF\s+NOT\s+EXISTS\s+)?("[A-Za-z0-9_]+"|[A-Za-z0-9_]+)`)
-
-// stripSQLLineComments removes `-- …` comment tails so a commented-out
-// CREATE EXTENSION cannot be mistaken for a real one. It is deliberately
-// string-literal-unaware: the migrations contain no `--` inside a string that
-// matters for this scan, and a false negative here is caught by the integration
-// guards below.
-func stripSQLLineComments(sql string) string {
-	var b strings.Builder
-	for _, line := range strings.Split(sql, "\n") {
-		if i := strings.Index(line, "--"); i >= 0 {
-			line = line[:i]
-		}
-		b.WriteString(line)
-		b.WriteByte('\n')
-	}
-	return b.String()
-}
-
 // TestSharedExtensionsCoverEveryMigrationCreate is the completeness guard for
 // db.SharedExtensions: every extension a migration creates must be provisioned
 // by EnsureSharedExtensions. An extension missing from that list would again be
 // created inside whichever scratch schema ran the migration first, which is the
 // 23505 race this card exists to close.
+//
+// It reads the migrations through db's OWN view of the SQL (createExtensionRE
+// and stripSQLComments) rather than a second regex of its own: two parsers
+// disagreeing about what a migration declares is how a guard and the code it
+// guards drift apart, and the shared one knows about comments, dollar-quoted
+// bodies and string literals.
 func TestSharedExtensionsCoverEveryMigrationCreate(t *testing.T) {
 	migrations, err := MigrationStatements()
 	if err != nil {
@@ -75,9 +57,9 @@ func TestSharedExtensionsCoverEveryMigrationCreate(t *testing.T) {
 
 	seen := make(map[string]bool)
 	for _, m := range migrations {
-		for _, match := range migrationCreateExtension.FindAllStringSubmatch(
-			stripSQLLineComments(m.SQL), -1) {
-			ext := strings.ToLower(strings.Trim(match[1], `"`))
+		for _, match := range createExtensionRE.FindAllStringSubmatch(
+			stripSQLComments(m.SQL), -1) {
+			ext := match[1]
 			seen[ext] = true
 			if !provisioned[ext] {
 				t.Errorf("migration %s creates extension %q, but it is not in "+

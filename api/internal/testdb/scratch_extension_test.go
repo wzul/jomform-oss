@@ -28,8 +28,6 @@ package testdb
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"net/url"
 	"os"
 	"strings"
@@ -46,20 +44,21 @@ import (
 // scratchDBPrefix names the throwaway databases these tests create.
 const scratchDBPrefix = "jomform_testdb_regress_"
 
-// createScratchDB creates an empty throwaway database owned by this test and
-// registers its removal with t.Cleanup.
+// createScratchDB creates a uniquely named database from TEMPLATE template0 and
+// registers its removal with t.Cleanup, returning its name.
 //
 // It uses TEMPLATE template0 on purpose. A database created that way inherits
 // no extensions at all, which is the precondition of the bug: the default
 // template on this host has citext already installed in public, and against
 // such a database the broken code passes and the test would prove nothing.
+//
+// This is the package's ONLY "make me an empty database" helper: the guards in
+// extensions_test.go call it too (via createExtensionFreeDB, which names its
+// databases after its own owner). Two independent implementations would drift,
+// and the template0 detail is exactly what makes these guards non-vacuous.
 func createScratchDB(t *testing.T, ctx context.Context, dsn string) string {
 	t.Helper()
-	buf := make([]byte, 6)
-	if _, err := rand.Read(buf); err != nil {
-		t.Fatalf("generate scratch database name: %v", err)
-	}
-	name := scratchDBPrefix + hex.EncodeToString(buf)
+	name := scratchDBPrefix + randSuffix(t)
 
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
@@ -171,7 +170,7 @@ func TestScratchSchemaExtensionsLiveInPublic(t *testing.T) {
 	}
 	defer admin.Close()
 
-	for _, ext := range publicExtensions {
+	for _, ext := range sharedExtensions {
 		got := extensionSchema(t, ctx, admin, ext)
 		if got == "" {
 			t.Errorf("extension %s is not installed after preparation", ext)
@@ -247,7 +246,7 @@ func TestEnsureSchemaRepairsPoisonedDatabase(t *testing.T) {
 	if err := ensureSchema(ctx, admin, "test_repaired"); err != nil {
 		t.Fatalf("ensureSchema over a poisoned database: %v", err)
 	}
-	for _, ext := range publicExtensions {
+	for _, ext := range sharedExtensions {
 		if got := extensionSchema(t, ctx, admin, ext); got != publicSchema {
 			t.Errorf("extension %s is in %q after repair, want %q", ext, got, publicSchema)
 		}
@@ -294,7 +293,7 @@ func TestPrepareExtensionsConcurrentInstall(t *testing.T) {
 			}
 			defer p.Close()
 			<-start
-			errs[i] = prepareExtensions(ctx, p)
+			errs[i] = ensureExtensions(ctx, p)
 		}(i)
 	}
 	close(start)
@@ -302,7 +301,7 @@ func TestPrepareExtensionsConcurrentInstall(t *testing.T) {
 
 	for i, err := range errs {
 		if err != nil {
-			t.Errorf("concurrent prepareExtensions #%d failed: %v", i, err)
+			t.Errorf("concurrent ensureExtensions #%d failed: %v", i, err)
 		}
 	}
 
@@ -312,7 +311,7 @@ func TestPrepareExtensionsConcurrentInstall(t *testing.T) {
 	}
 	defer admin.Close()
 
-	for _, ext := range publicExtensions {
+	for _, ext := range sharedExtensions {
 		if got := extensionSchema(t, ctx, admin, ext); got != publicSchema {
 			t.Errorf("extension %s is in %q after %d concurrent preparations, want %q", ext, got, racers, publicSchema)
 		}

@@ -1,12 +1,12 @@
 -- JomForm initial schema (Postgres 18)
 -- All money amounts are integer SEN. Timestamps: timestamptz, UTC.
 
--- Extensions are database-global. Pin them to `public` explicitly so the schema
--- does not come from the session search_path: callers apply these migrations with
--- `SET search_path=<their schema>,public` (testdb scratch schemas, per-tenant
--- installs), and an unpinned CREATE EXTENSION would then install citext into
--- whichever schema happened to be first — leaving every other schema unable to
--- resolve the type (SQLSTATE 42704).
+-- Shared extensions live in `public`, named explicitly: an unqualified
+-- CREATE EXTENSION creates it in the FIRST schema of the session's search_path
+-- (and `IF NOT EXISTS` then matches it by name from anywhere), so a caller
+-- running the migrations with `search_path=<other>,public` would strand the
+-- extension there and every other caller would fail with
+-- `type "citext" does not exist` (SQLSTATE 42704).
 CREATE EXTENSION IF NOT EXISTS pgcrypto SCHEMA public;
 CREATE EXTENSION IF NOT EXISTS citext SCHEMA public;
 

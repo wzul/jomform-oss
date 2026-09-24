@@ -108,6 +108,17 @@ func dsnFor(t *testing.T, dsn, database string) string {
 	return u.String()
 }
 
+// randomSuffix returns a short random hex string for a throwaway database name,
+// so two concurrent runs (or two guards in one run) never collide.
+func randomSuffix(t *testing.T) string {
+	t.Helper()
+	buf := make([]byte, 6)
+	if _, err := rand.Read(buf); err != nil {
+		t.Fatalf("generate random database suffix: %v", err)
+	}
+	return hex.EncodeToString(buf)
+}
+
 // createScratchDB creates a uniquely named empty database and registers its
 // removal with t.Cleanup. It connects through the DSN's own database so no
 // separate "postgres" maintenance database needs to exist.

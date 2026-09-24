@@ -26,17 +26,42 @@ const sharedExtensionLockKey = "jomform:shared-extensions"
 // every message and assertion refers to the same place.
 const publicSchema = "public"
 
-// SharedExtensions are the extensions migration 000001 creates and that every
+// SharedExtensions are the extensions the migrations create and that every
 // schema in a JomForm database then uses UNQUALIFIED: CITEXT columns
 // (users.email, accounts.slug, …) and gen_random_uuid() defaults. They are
 // installed into `public` once per database rather than per schema, so that a
-// schema-level DROP can never take them with it and so that every schema
+// schema-level DROP can never take them with them and so that every schema
 // (the scratch test schemas included) resolves them through search_path.
 //
-// TestSharedExtensionsCoverEveryMigrationCreate keeps this list complete: an
-// extension added to a migration but missing here would be created inside the
-// first scratch schema again and reintroduce the 23505 race.
-var SharedExtensions = []string{"pgcrypto", "citext"}
+// The list is DERIVED from the migration set (DeclaredExtensions), not
+// hand-written. A hand-written copy is a second source of truth that drifts:
+// an extension added to a migration but missing from the list would be created
+// inside the first scratch schema again and reintroduce the 23505 race, and
+// nothing in the build would say so. Deriving it makes that structurally
+// impossible, and mustDeriveSharedExtensions fails loudly if the derivation
+// comes back empty (a broken parser or embed directive) instead of silently
+// provisioning nothing.
+var SharedExtensions = mustDeriveSharedExtensions()
+
+// mustDeriveSharedExtensions reads the extensions the embedded migrations
+// declare, and fails loudly rather than returning an empty list: an empty list
+// would make EnsureSharedExtensions a no-op that still reports success, which is
+// the one failure mode that would look green while the suite it protects died
+// with SQLSTATE 42704.
+//
+// Panicking is deliberate — the only error DeclaredExtensions can return is a
+// broken go:embed read, which cannot be recovered from at runtime and must not
+// be allowed to pass as "no extensions to provision".
+func mustDeriveSharedExtensions() []string {
+	names, err := DeclaredExtensions()
+	if err != nil {
+		panic("db: read the extensions declared by the embedded migrations: " + err.Error())
+	}
+	if len(names) == 0 {
+		panic("db: the embedded migrations declare no extensions — the parser in DeclaredExtensions or the go:embed directive is broken, and provisioning would silently do nothing")
+	}
+	return names
+}
 
 // ExtensionProvisioner is the minimum a caller must offer to provision the
 // shared extensions: something that can begin a transaction. Both
