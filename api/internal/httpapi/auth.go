@@ -2,6 +2,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -764,6 +765,56 @@ const (
 	rememberLongTTL  = 14 * 24 * time.Hour
 )
 
+// provisionLegacyWorkspace applies Wan's *has forms, no workspace* rule at login:
+// an EXISTING user who already owns forms but no workspace gets one created for
+// him (name/slug from the first 5 characters of his email), with his account and
+// those forms attached. A user with no forms is left alone — he is ASKED to
+// create one by the first-run UI, which is the ask-first half of the same
+// decision (web/src/app/workspace-picker).
+//
+// WHY HERE, AND WHERE "HERE" IS. The rule must run on EVERY path that turns a
+// request into a logged-in user, because the failure mode of missing it is a
+// user who logs in and still cannot see his own forms. There are TWO such paths,
+// and they do not share a function — so this is deliberately a package-level
+// function taking the store, and both of them call it:
+//
+//   - AuthHandlers.startSession (auth.go) — password, magic link, social,
+//     post-2FA.
+//   - RESTHandlers.startSessionFor (rest.go) — the passkey login, which mints
+//     its session through the REST side because the ceremony is a REST endpoint.
+//
+// Passkey was originally listed as covered here while in fact reaching only
+// startSessionFor, so a form-owning workspace-less user who logged in with a
+// passkey was never provisioned and his forms were stranded with no in-product
+// recovery. TestEverySessionIssuerProvisionsTheLegacyWorkspace enumerates the
+// functions that set the session cookie and fails if any of them does not call
+// this one, so a third issuer added later cannot quietly repeat the mistake.
+//
+// There is no session at this point (TRAP 4 on the card: WorkspaceStore.Create is
+// normally reached behind authed(), which resolves an account from the session
+// cookie). Provisioning therefore resolves everything from userID and takes no
+// request scope at all; it must not depend on a workspace being selected, since
+// the absence of one is the whole problem.
+//
+// Best-effort and non-fatal by design: a failure here must never block a login.
+// The work is idempotent (a second login provisions nothing — the account is
+// already linked and the owner already has a workspace), so a transient failure
+// repairs itself on the next login.
+func provisionLegacyWorkspace(ctx context.Context, ws *dbstore.WorkspaceStore, userID string) {
+	if ws == nil || userID == "" {
+		return
+	}
+	sp, err := ws.ProvisionLegacyWorkspaceForOwner(ctx, userID)
+	if err != nil {
+		slog.Error("legacy_workspace_provision_failed", "err", err, "user", userID)
+		return
+	}
+	if sp != nil {
+		slog.Info("legacy_workspace_provisioned", "user", userID,
+			"workspace", sp.ID, "slug", sp.Slug)
+	}
+}
+
 // startSession creates a session for userID, honoring the remember flag for
 // cookie MaxAge and server TTL, and persists remember so a later session
 // rotation (2FA enable, issue #69) can inherit the persistence choice.
@@ -774,6 +825,11 @@ const (
 // TOTP step-up. Every other login path (password, social, passkey) passes
 // magic=false.
 func (a *AuthHandlers) startSession(w http.ResponseWriter, r *http.Request, userID string, remember, magic bool) error {
+	// Legacy onboarding (see provisionLegacyWorkspace): before this user's first
+	// page load, give an existing form-owning but workspace-less user the
+	// workspace his forms need. Best-effort — it never blocks the login.
+	provisionLegacyWorkspace(r.Context(), a.Workspaces, userID)
+
 	ttl := rememberLongTTL
 	maxAge := int(rememberLongTTL.Seconds())
 	if !remember {

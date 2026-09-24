@@ -6,8 +6,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -220,6 +223,264 @@ func (s *WorkspaceStore) CreateForAccount(ctx context.Context, ownerUserID, name
 // errAccountNotLinkable is returned when an account cannot be linked to a new
 // workspace (not owned by the caller, or already linked elsewhere).
 var errAccountNotLinkable = errors.New("akaun tidak boleh dikaitkan dengan workspace")
+
+// ── Legacy onboarding: an owner who already has content but no workspace ──────
+//
+// WHY THIS EXISTS
+//   Signup has always created an account and NO workspace, so every user who
+//   joined before the ask-first flow (2026-09-20) owns forms that hang off an
+//   account with accounts.workspace_id IS NULL. Those users cannot reach their
+//   own forms in the dashboard: every scoped read resolves its account from the
+//   selected workspace, and there is none to select (measured on prod: 4 users,
+//   18 forms).
+//
+//   Wan's rule (2026-09-20, final revision): *has forms, no workspace* → CREATE
+//   the workspace for him and attach the account + its forms, with the name and
+//   slug derived from the first 5 characters of the email. Nothing is deleted.
+//   *No forms, no workspace* → he is ASKED to create one (that is the ask-first
+//   path in web/src/app/workspace-picker, not this method).
+//
+// This is the deliberate RELAXATION of the content guard that
+// SoleEmptyUnscopedAccount enforces for the ask-first path. That guard refuses a
+// content-carrying account precisely because moving one is a data decision
+// rather than a side effect of pressing "create workspace" — this method is that
+// data decision, so it is a separate, explicitly bounded entry point instead of
+// a widened condition on the interactive one.
+
+// LegacyProvisionedEmails are the system identities that must NEVER be
+// auto-provisioned, however much content their account carries.
+//
+// templates@system.jomform owns the jomform-templates account, which owns 14
+// published is_template rows and no workspace ON PURPOSE: migration 000059
+// moved those rows there specifically so they STOP matching the workspace-scoped
+// published queries (ListPublishedByWorkspace / ListPublishedByAccountSlug).
+// They back FormStore.ListTemplates (form.go, no account filter) → TemplatePicker,
+// the landing gallery and GET /api/templates. Giving that account a workspace
+// would re-expose all 14 templates as a public storefront and empty the picker's
+// gallery — the exact opposite of 000059's intent.
+var LegacyProvisionedEmails = []string{"templates@system.jomform"}
+
+// legacyUnscopedAccountSQL resolves the account a legacy provision would act on:
+// the caller's own, still workspace-less, carrying at least one form, whose owner
+// is a real user who is not one of the excluded system identities. A caller who
+// already owns ANY workspace resolves to nothing, which is what makes the whole
+// operation idempotent (and what stops a workspace the user created himself from
+// being duplicated or having forms stolen into it).
+const legacyUnscopedAccountSQL = `
+	SELECT a.id
+	FROM accounts a
+	JOIN users u ON u.id = a.owner_user_id
+	WHERE a.owner_user_id = $1
+	  AND a.workspace_id IS NULL
+	  AND NOT (u.email = ANY($2::text[]))
+	  AND EXISTS (SELECT 1 FROM forms f WHERE f.account_id = a.id)
+	  AND NOT EXISTS (SELECT 1 FROM workspaces w WHERE w.owner_user_id = $1)
+	ORDER BY a.created_at
+	LIMIT 1`
+
+// LegacyUnscopedAccount reports the account a legacy provision would act on, or
+// "" when the rule does not apply to this owner. Exposed so a caller (the login
+// path, an operator runbook) can tell "nothing to do" from "provisioned".
+//
+// ONLY pgx.ErrNoRows means "not applicable". Every other error is returned, and
+// that distinction is load-bearing: this method's whole contract is "provision X
+// for this user", and an implementation that reported a broken query as "nothing
+// to do" would silently stop provisioning while every caller looked healthy — the
+// same silent-failure class (an operation that does nothing and reports success)
+// that this card exists to remove. Found by a bite proof: when the SQL was
+// broken, the callers reported "not applicable" instead of an error.
+func (s *WorkspaceStore) LegacyUnscopedAccount(ctx context.Context, ownerUserID string) (string, error) {
+	var id string
+	err := s.pool.QueryRow(ctx, legacyUnscopedAccountSQL,
+		ownerUserID, LegacyProvisionedEmails).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// ProvisionLegacyWorkspace applies Wan's *has forms, no workspace* rule: it
+// creates the workspace (slug from wantSlug, with a deterministic suffix when
+// that slug is taken), links the owner's legacy account to it, moves the rows
+// hanging off that account, and records the owner as the workspace's admin
+// member (the 000025 convention: every workspace has an admin member).
+//
+// Returns (nil, nil) when the rule does not apply — the caller has no workspace-less
+// content-carrying account, or already owns a workspace (re-running changes
+// nothing), or is an excluded system identity.
+//
+// TRAPS this method exists to get right:
+//   - trg_forms_sync_workspace_id (000045) fires only on INSERT / UPDATE OF
+//     account_id on forms, so linking the ACCOUNT does not move its rows. Every
+//     carrying table is synced explicitly here, as migration 000012 did.
+//   - affiliates.workspace_id is NOT NULL (000047), so no affiliate row can be
+//     sitting on an unscoped account — there is nothing to move for it.
+//   - workspace_settings / workspace_email_settings are materialised lazily by
+//     their own accessors (Settings / EmailSettings INSERT ... ON CONFLICT DO
+//     NOTHING), and workspace_legal_pages / workspace_invites are per-workspace
+//     content that simply does not exist yet. None need a row at provisioning.
+func (s *WorkspaceStore) ProvisionLegacyWorkspace(ctx context.Context, ownerUserID, name, wantSlug string) (*Workspace, error) {
+	sp := &Workspace{}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var accountID string
+	if err := tx.QueryRow(ctx, legacyUnscopedAccountSQL, ownerUserID, LegacyProvisionedEmails).
+		Scan(&accountID); err != nil {
+		// Only a missing row means "not applicable" (the rule does not apply, or a
+		// previous run already provisioned) — that is a no-op, not a failure. A
+		// real error must propagate: reporting a broken query as "nothing to do"
+		// would stop provisioning while every caller looked healthy. See
+		// LegacyUnscopedAccount.
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	// Slug allocation with a deterministic, terminating ladder. A slug collision
+	// must never surface to a user who never chose a slug, so each attempt that
+	// loses the unique race is retried on the next candidate. Each attempt runs
+	// under its own SAVEPOINT: inside a transaction a failed statement aborts the
+	// whole tx, so without the savepoint the second candidate could never be tried.
+	candidates := legacySlugCandidates(wantSlug, ownerUserID)
+	inserted := false
+	for _, candidate := range candidates {
+		attempt, berr := tx.Begin(ctx)
+		if berr != nil {
+			return nil, berr
+		}
+		err := attempt.QueryRow(ctx,
+			`INSERT INTO workspaces (owner_user_id, name, slug) VALUES ($1,$2,$3)
+			 RETURNING id, owner_user_id, name, slug`,
+			ownerUserID, name, candidate).Scan(&sp.ID, &sp.Owner, &sp.Name, &sp.Slug)
+		if err == nil {
+			if cerr := attempt.Commit(ctx); cerr != nil {
+				return nil, cerr
+			}
+			inserted = true
+			break
+		}
+		_ = attempt.Rollback(ctx)
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "23505" {
+			return nil, err
+		}
+	}
+	if !inserted {
+		return nil, errWorkspaceSlugExhausted
+	}
+
+	// Owner-checked link: the account must belong to the workspace's owner and
+	// must still be unlinked (it was read under this tx, so a concurrent link
+	// loses the race here rather than being overwritten).
+	ct, err := tx.Exec(ctx,
+		`UPDATE accounts SET workspace_id=$1, updated_at=now()
+		 WHERE id=$2 AND owner_user_id=$3 AND workspace_id IS NULL`,
+		sp.ID, accountID, ownerUserID)
+	if err != nil {
+		return nil, err
+	}
+	if ct.RowsAffected() != 1 {
+		return nil, errAccountNotLinkable
+	}
+
+	// Explicit sync of everything the account carries. forms is the load-bearing
+	// one; the rest are synced so this method is correct for any account rather
+	// than only for the shape prod happens to have today (all three are 0 rows
+	// for the affected accounts, and the caller asserts that before/after).
+	for _, stmt := range []string{
+		`UPDATE forms SET workspace_id=$1 WHERE account_id=$2 AND workspace_id IS NULL`,
+		`UPDATE products SET workspace_id=$1 WHERE account_id=$2 AND workspace_id IS NULL`,
+		`UPDATE sales SET workspace_id=$1 WHERE account_id=$2 AND workspace_id IS NULL`,
+		`UPDATE api_keys SET workspace_id=$1 WHERE account_id=$2 AND workspace_id IS NULL`,
+	} {
+		if _, err := tx.Exec(ctx, stmt, sp.ID, accountID); err != nil {
+			return nil, err
+		}
+	}
+
+	// The owner becomes an admin member, matching 000025_space_members' backfill
+	// ("every existing space owner becomes an admin member"). WorkspaceStore.access
+	// already treats an owner as admin, so this is for surface parity with every
+	// other workspace rather than for authorisation.
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO workspace_members (workspace_id, user_id, role) VALUES ($1,$2,'admin')
+		 ON CONFLICT (workspace_id, user_id) DO NOTHING`, sp.ID, ownerUserID); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return sp, nil
+}
+
+// errWorkspaceSlugExhausted is returned when every deterministic slug candidate
+// was already taken. Bounded rather than unbounded so a caller always terminates.
+var errWorkspaceSlugExhausted = errors.New("slug workspace tidak dapat dijana")
+
+// ProvisionLegacyWorkspaceForOwner is the entry point the LOGIN path uses: it
+// resolves the owner's email itself and applies Wan's derivation rule (first 5
+// characters of the email, sanitised), so no call site can forget the rule or
+// invent a slug the API would reject.
+//
+// The slug is validated before it is used. If derivation somehow produced
+// something ValidateWorkspaceSlug refuses this returns an error rather than
+// provisioning a workspace whose own subdomain would 400 — a slug that the
+// wildcard host cannot serve is worse than no workspace, because the user would
+// then have a workspace whose form URLs are dead.
+func (s *WorkspaceStore) ProvisionLegacyWorkspaceForOwner(ctx context.Context, ownerUserID string) (*Workspace, error) {
+	accountID, err := s.LegacyUnscopedAccount(ctx, ownerUserID)
+	if err != nil || accountID == "" {
+		return nil, err
+	}
+	var email string
+	if err := s.pool.QueryRow(ctx, `SELECT COALESCE(email,'') FROM users WHERE id=$1`, ownerUserID).
+		Scan(&email); err != nil {
+		return nil, err
+	}
+	slug := SlugFromEmailLocalPart(email, ownerUserID)
+	if err := ValidateWorkspaceSlug(slug); err != nil {
+		return nil, fmt.Errorf("slug legacy tidak sah (%q): %w", slug, err)
+	}
+	name := email
+	if at := strings.Index(name, "@"); at > 0 {
+		name = name[:at]
+	}
+	if strings.TrimSpace(name) == "" {
+		name = slug
+	}
+	return s.ProvisionLegacyWorkspace(ctx, ownerUserID, name, slug)
+}
+
+// legacySlugCandidates is the deterministic, bounded slug ladder: the wanted slug
+// first, then "…-2" through "…-9", then a suffix derived from the owner's user id.
+// Deterministic because the same starting slug yields the same sequence, so two
+// users whose emails reduce to the same 5 characters get stable, distinct slugs
+// (measured on prod: owner00@example.com and owner00+test@example.com
+// both reduce to "owner"), and terminating because the sequence is finite and its
+// last entry carries 8 characters of a uuid.
+func legacySlugCandidates(wantSlug, ownerUserID string) []string {
+	out := []string{wantSlug}
+	for i := 2; i <= 9; i++ {
+		out = append(out, fmt.Sprintf("%s-%d", wantSlug, i))
+	}
+	suffix := ownerUserID
+	if len(suffix) > 8 {
+		suffix = suffix[:8]
+	}
+	if suffix != "" {
+		out = append(out, wantSlug+"-"+suffix)
+	}
+	return out
+}
 
 // WorkspaceAccess carries the account set + the caller's role for a workspace the
 // user can access (owner or member). Role is one of RoleReadOnly/RoleManage/

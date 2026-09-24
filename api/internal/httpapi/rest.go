@@ -643,7 +643,15 @@ func (h *RESTHandlers) profileUser(r *http.Request) (*dbstore.User, error) {
 // logins issue a 14-day persistent (remember) session, so the persisted
 // remember flag is set to true — a later 2FA-enable rotation (#69) will then
 // inherit the 14d persistence instead of silently downgrading to 24h.
+//
+// It also applies the legacy-onboarding rule before the cookie is written, for
+// the same reason AuthHandlers.startSession does: this is the other function on
+// the code path that turns a request into a logged-in user, and the passkey
+// login reaches the session through here rather than through startSession. See
+// provisionLegacyWorkspace.
 func (h *RESTHandlers) startSessionFor(w http.ResponseWriter, r *http.Request, userID string) error {
+	provisionLegacyWorkspace(r.Context(), h.Workspaces, userID)
+
 	ttl := rememberLongTTL
 	maxAge := int(rememberLongTTL.Seconds())
 	token, err := h.Sessions.CreateRememberedWithTTL(r.Context(), userID, ttl, true)
