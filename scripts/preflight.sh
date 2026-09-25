@@ -341,7 +341,14 @@ preflight_env() {
     # (measured 254/253/1 vs 260/260/0 at the same head) instead of failing.
     # The dependency check below is the one that refuses that shape, and it is
     # the SAME script `test:unit` runs first, so the gate and the suite cannot
-    # disagree about whether this tree is installed.
+    # disagree about whether this tree is installed. It refuses at TWO depths:
+    # whole package directories absent (the shallow interruption) and every
+    # declared directory present but holding no payload (the deep one — an
+    # `npm ci` killed after the directories are created, where `.bin/next` and
+    # `next`'s own payload are already on disk and this `-x` check is blind to
+    # it). Measured on the deep shape: the check used to exit 0 saying "14
+    # declared package(s) installed", and `npm run test:unit` then printed
+    # 326/324/2 against 350/350/0.
     node "$REPO_ROOT/web/scripts/web-deps-check.mjs" "$REPO_ROOT/web" || die \
       "the web dependencies for this tree are not installed — 'npm run test:unit' would UNDER-REPORT (node --test runs without dependencies, so the files that import react fail to load and their tests never register) instead of failing. Seed it with: cd web && npm ci"
   fi

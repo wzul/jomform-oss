@@ -212,6 +212,46 @@ else
 fi
 rm -rf "$SB/web/node_modules"
 
+# 5c. The DEEPER depth of the same shape: a node_modules whose every declared
+#     package DIRECTORY exists and holds only its package.json — an `npm ci`
+#     killed after the directories are created. A presence-only check passed that
+#     tree with "14 declared package(s) installed", and `npm run test:unit` then
+#     printed 326 tests / 324 pass / 2 fail against 350 / 350 / 0 with a real
+#     install, the failures being ERR_MODULE_NOT_FOUND for `react`. `.bin/next` is
+#     planted here for the same reason as in 5b, and `next`'s own directory is one
+#     of the hollow ones — so the executable check is not what refuses this.
+#     The assertion that this is the PAYLOAD half firing is the `no payload:` line
+#     together with the ABSENCE of a `missing:` line: if the declared list were not
+#     fully on disk, presence would be what refused it and this check would be
+#     pinning 5b again instead of the deeper shape.
+mkdir -p "$SB/web/node_modules/.bin"
+node -e '
+  const { mkdirSync, writeFileSync, readFileSync } = require("node:fs");
+  const { join } = require("node:path");
+  const webDir = process.argv[1];
+  const pkg = JSON.parse(readFileSync(join(webDir, "package.json"), "utf8"));
+  const names = [...Object.keys(pkg.dependencies ?? {}), ...Object.keys(pkg.devDependencies ?? {})];
+  for (const name of names) {
+    const dir = join(webDir, "node_modules", name);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name, version: "1.0.0", main: "index.js" }));
+  }
+' "$SB/web"
+printf '#!/bin/sh\nexit 1\n' > "$SB/web/node_modules/.bin/next"
+chmod +x "$SB/web/node_modules/.bin/next"
+out=$(./scripts/preflight.sh --only web 2>&1)
+rc=$?
+if [ $rc -ne 0 ] && \
+   grep -q 'PREFLIGHT FAIL: the web dependencies for this tree are not installed' <<<"$out" && \
+   grep -q 'no payload:' <<<"$out" && \
+   ! grep -q '^  missing:' <<<"$out" && \
+   ! grep -q 'gate \[web\]' <<<"$out"; then
+  ok "a HOLLOW node_modules (every package directory present, no payload) -> refused by the PREREQUISITE (rc=$rc)"
+else
+  bad "a hollow web/node_modules (directories present, no payload) must be refused by the dependency PREREQUISITE, got rc=$rc [$(grep -iE 'IS NOT INSTALLED|no payload:|missing:|PREFLIGHT FAIL|gate \[web\]' <<<"$out" | tr '\n' ' ')]"
+fi
+rm -rf "$SB/web/node_modules"
+
 # 6. An unknown gate name is rejected rather than quietly ignored (a typo in
 #    --only must not silently disable a real gate).
 out=$(./scripts/preflight.sh --only nonsense 2>&1)

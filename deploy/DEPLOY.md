@@ -33,17 +33,23 @@ source ${JOMFORM_ENV:-$HOME/.config/jomform/test-env.sh}  # JOMFORM_TEST_DATABAS
 The `web` gate's dependency refusal is worth knowing about, because the failure
 it prevents is **silent**. `npm run test:unit` is `node --test … src/lib/*.test.ts`,
 and `node --test` needs no dependencies to start — so in a tree whose
-`web/node_modules` is missing, empty, or half-installed (an interrupted `npm ci`),
+`web/node_modules` is missing, empty, or half-installed (an interrupted `npm ci`)
 the command still runs, the test files that `import "react"` die at module load,
 their remaining tests never register, and it prints a *smaller, plausible-looking*
 summary instead of failing. Measured at one head: `254 tests / 253 pass / 1 fail`
 against `260 / 260 / 0` with a real install — one false failure and six silently
 absent tests in the same run. That count is not evidence about the code, and it
-was read as evidence on this host.
+was read as evidence on this host. "Half-installed" covers both depths the
+interruption can stop at: whole package directories absent, and — one step later
+— every declared directory present with only its `package.json` inside, which
+measured `326 / 324 / 2` against `350 / 350 / 0`.
 
 `web/scripts/web-deps-check.mjs` asserts every package declared in
-`web/package.json` is present under `web/node_modules/`, `npm run test:unit` runs
-it before `node --test`, and the `web`/`a11y` prerequisites in
+`web/package.json` is present under `web/node_modules/` **and** that each package
+that declares a runtime entry point has the file it names (`exports["."]` when
+present, else `main`) on disk — the second half is what refuses the deeper
+interruption, where every directory exists and no payload does. `npm run test:unit`
+runs it before `node --test`, and the `web`/`a11y` prerequisites in
 `scripts/preflight.sh` run the same checker — so an uninstalled tree is refused
 by both the suite and the gate, with the `npm ci` command in the message, rather
 than reporting a number. `scripts/preflight_test.sh` pins that refusal (and the
