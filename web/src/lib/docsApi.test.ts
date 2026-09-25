@@ -39,6 +39,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   API_BASE,
+  OPENAPI_PUBLIC_URL,
   accessLevels,
   apiExamples,
   endpointCount,
@@ -404,8 +405,11 @@ test("the page is reachable from the docs nav and the public footer", () => {
 });
 
 test("the page links the machine-readable contract it is generated from", () => {
+  // The page must point at the contract through the exported constant, not with
+  // a URL typed into the JSX: the destination is asserted below, and one
+  // definition is what keeps the page and the guard from disagreeing.
   assert.ok(
-    pageSrc.includes("openapi.json"),
+    pageSrc.includes("OPENAPI_PUBLIC_URL"),
     `${PAGE} no longer points a reader at the published OpenAPI document`,
   );
   assert.ok(
@@ -427,6 +431,90 @@ test("the page links the machine-readable contract it is generated from", () => 
   assert.ok(
     code.includes('from "../../../lib/openapi.ts"'),
     "the page does not import lib/openapi.ts — then where does its endpoint data come from?",
+  );
+});
+
+// ── the contract link must be READABLE by the page's own audience ───────────
+//
+// The defect this section exists for (t_4b37ffa7): the page linked the contract
+// at a github.com blob URL. The repository is PRIVATE, so an anonymous fetch of
+// that URL answers 404 — the page promised a machine-readable contract to an
+// audience that is explicitly partly third-party developers, and the half
+// without repository access could not open it. A guard is needed because the
+// link is one string in one file and nothing else in the repo would notice it
+// pointing somewhere unreachable.
+test("the contract link is a URL the page's audience can actually fetch", () => {
+  // 1. It must not be a repository URL. The repository is private, so any
+  //    github.com link to it resolves to a login prompt or a 404 for the
+  //    anonymous developer this page is written for.
+  assert.ok(
+    !pageRaw.includes("github.com"),
+    `${PAGE} links github.com — the JomForm repository is private, so that link is ` +
+      "unreadable for the page's third-party audience. Serve the contract from a public URL.",
+  );
+  assert.ok(
+    !OPENAPI_PUBLIC_URL.includes("github.com"),
+    `OPENAPI_PUBLIC_URL is a github.com URL (${OPENAPI_PUBLIC_URL}) — the repository is ` +
+      "private and an anonymous reader gets a 404",
+  );
+  // 2. It must be https (this repo is https-only for caller-facing URLs) and on
+  //    the product's own host, not an internal host, an IP or a bucket.
+  assert.ok(
+    OPENAPI_PUBLIC_URL.startsWith("https://"),
+    `OPENAPI_PUBLIC_URL must be https (got ${OPENAPI_PUBLIC_URL})`,
+  );
+  const host = new URL(OPENAPI_PUBLIC_URL).host;
+  assert.equal(
+    host,
+    "jomform.com",
+    `the contract is not served from the product's public host (got ${host}) — a reader ` +
+      "following the page's link would land somewhere they cannot reach",
+  );
+  assert.ok(
+    !/^[\d.]+$|localhost|127\.|10\.|192\.168\./.test(host),
+    `OPENAPI_PUBLIC_URL names an internal host or address (${host}) — it must stay off the ` +
+      "public site",
+  );
+
+  // 3. And the bytes must really be there to fetch. The web app serves
+  //    web/public/openapi.json, so that file is the one the URL resolves to for
+  //    the visitor; if it is missing the link 404s no matter how correct it looks.
+  const served = JSON.parse(read("../../public/openapi.json")) as {
+    openapi?: string;
+    paths?: Record<string, unknown>;
+  };
+  assert.equal(
+    served.openapi,
+    "3.1.0",
+    "web/public/openapi.json is not an OpenAPI 3.1 document — the page's link would serve " +
+      "something that is not the contract",
+  );
+  assert.ok(
+    Object.keys(served.paths ?? {}).length > 40,
+    "web/public/openapi.json has too few paths to be the contract",
+  );
+  // The public copy must be byte-identical to the copy the repository publishes,
+  // or the contract a third-party developer reads diverges from the one the
+  // repository owns. (api/openapi/openapi.json is the generator's own artifact
+  // and is compared against a fresh generation in Go — see
+  // TestGeneratedArtifactsAreInSync.)
+  assert.equal(
+    read("../../public/openapi.json"),
+    read("../../../api/openapi/openapi.json"),
+    "web/public/openapi.json and api/openapi/openapi.json differ — the publicly served " +
+      "contract is not the repository's contract",
+  );
+
+  // 4. The agent-facing index says the same thing (llms-full.txt is the file an
+  //    agent reads instead of the page, and it carried the same private link).
+  const llms = read("../../public/llms-full.txt");
+  assert.ok(
+    llms.includes(OPENAPI_PUBLIC_URL),
+    `llms-full.txt does not publish the contract at ${OPENAPI_PUBLIC_URL}`,
+  );
+  assert.ok(
+    !llms.includes("github.com/wzul/jomform"),
+    "llms-full.txt still points an agent at the private repository for the contract",
   );
 });
 

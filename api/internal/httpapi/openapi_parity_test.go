@@ -539,11 +539,24 @@ func generatedArtifact(t *testing.T, rel string) string {
 // TestGeneratedArtifactsAreInSync re-runs the generator in memory and compares
 // both published files. A stale artifact (the common failure: someone edits the
 // registry and forgets to regenerate) fails here rather than being served.
+//
+// web/public/openapi.json is in the list because it is the copy a visitor can
+// actually fetch. The repository is private, so a link to api/openapi/
+// openapi.json on github.com 404s for the third-party developer the /docs/api
+// page is written for; the same bytes at https://jomform.com/openapi.json are
+// served by the web app and need no account. Both copies come from one
+// OpenAPISpecJSON() call, and each is compared against a fresh generation here,
+// so neither can go stale on its own.
 func TestGeneratedArtifactsAreInSync(t *testing.T) {
 	// Every generated artifact. Missing one here would let that file rot while
 	// this guard still reported green — so the list is asserted against the
 	// generator's own list, not maintained by hand.
-	want := []string{"api/openapi/openapi.json", "web/src/lib/apiExamples.gen.ts", "web/src/lib/openapiSpec.gen.ts"}
+	want := []string{
+		"api/openapi/openapi.json",
+		"web/public/openapi.json",
+		"web/src/lib/apiExamples.gen.ts",
+		"web/src/lib/openapiSpec.gen.ts",
+	}
 	sort.Strings(want)
 	if got := generatedArtifactPaths(); !equalStrings(got, want) {
 		t.Errorf("the generator writes %v but this guard checks %v — an artifact is unguarded",
@@ -561,6 +574,18 @@ func TestGeneratedArtifactsAreInSync(t *testing.T) {
 	}
 	if checked != len(want) {
 		t.Errorf("checked %d of %d artifacts", checked, len(want))
+	}
+	// The two JSON copies exist so that the same document is reachable with and
+	// without repository access, so "they are identical" is the property that
+	// makes the public one a substitute rather than a second source of truth.
+	// Asserted directly as well as through the generator, because a future
+	// refactor could give them separate renderers and each would still pass the
+	// freshness check above while the two readers saw different contracts.
+	if a, b := generatedArtifact(t, "api/openapi/openapi.json"),
+		generatedArtifact(t, "web/public/openapi.json"); a != b {
+		t.Errorf("the repository copy and the publicly served copy of the contract "+
+			"differ (%d vs %d bytes) — a reader would get a different document depending "+
+			"on whether they can open github.com", len(a), len(b))
 	}
 }
 

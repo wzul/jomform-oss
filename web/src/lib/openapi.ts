@@ -17,6 +17,25 @@ import { API_EXAMPLES } from "./apiExamples.gen.ts";
 
 export const API_BASE = "https://api.jomform.com";
 
+/**
+ * The publicly reachable URL of the OpenAPI contract — the one the /docs/api
+ * page links to from two places.
+ *
+ * It is a URL on jomform.com, not a github.com blob, because the repository is
+ * PRIVATE: a link to `api/openapi/openapi.json` on github.com answers 404 for an
+ * anonymous reader, and the page's stated audience is partly third-party
+ * developers with no repository access. The bytes at this URL are the same
+ * document — the web app serves `web/public/openapi.json`, which the generator
+ * writes from the same OpenAPISpecJSON() call as the repository copy, and
+ * TestGeneratedArtifactsAreInSync fails if either copy is stale or if they
+ * differ.
+ *
+ * Kept here (not typed into the page) so the page has ONE definition of where
+ * the contract lives, and so docsApi.test.ts can assert the link resolves to a
+ * host a reader can actually reach.
+ */
+export const OPENAPI_PUBLIC_URL = "https://jomform.com/openapi.json";
+
 /** One operation, as the reference table renders it. */
 export type Endpoint = {
   method: string;

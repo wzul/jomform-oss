@@ -32,11 +32,13 @@
 //
 //	go run ./cmd/openapi-gen
 //
-//   which rewrites api/openapi/openapi.json (the published contract) and
-//   web/src/lib/openapiSpec.gen.ts (the same document, for the /docs/api page to
-//   render). The parity test re-runs the generator in memory and fails if either
-//   file on disk differs, so the two can never disagree with the code or with
-//   each other.
+//   which rewrites api/openapi/openapi.json (the published contract),
+//   web/public/openapi.json (the same bytes, served to any visitor at
+//   https://jomform.com/openapi.json — the repository is private, so the
+//   github.com copy is unreadable for the third-party developer this contract
+//   exists for) and web/src/lib/openapiSpec.gen.ts (the same document, for the
+//   /docs/api page to render). The parity test re-runs the generator in memory
+//   and fails if any of them differs from the code or from the others.
 package httpapi
 
 import (
@@ -877,9 +879,20 @@ func OpenAPISpecJSON() ([]byte, error) {
 // GeneratedArtifactPaths lists every artifact this package publishes, in the
 // order the generator writes them. It is the single source for the generator AND
 // for the freshness guard, so a new artifact cannot be generated-but-unchecked.
+//
+// WHY web/public/openapi.json IS A SEPARATE ARTIFACT FROM api/openapi/openapi.json
+//   They hold byte-identical bytes, and the duplication is deliberate. The
+//   contract's audience is a third-party developer, and this repository is
+//   PRIVATE: a link to api/openapi/openapi.json on github.com answers 404 for
+//   exactly the reader the /docs/api page was written for. web/public/ is served
+//   by the web app at https://jomform.com/openapi.json, so the document is
+//   readable without a repository account. Both copies are generated from
+//   OpenAPISpecJSON() in one run, so they cannot disagree — and
+//   TestGeneratedArtifactsAreInSync fails if either one is stale.
 func GeneratedArtifactPaths() []string {
 	out := []string{
 		"api/openapi/openapi.json",
+		"web/public/openapi.json",
 		"web/src/lib/openapiSpec.gen.ts",
 		"web/src/lib/apiExamples.gen.ts",
 	}
@@ -897,13 +910,18 @@ func GeneratedArtifactPaths() []string {
 // build failure instead of a runtime blank.
 func GeneratedArtifact(rel string) string {
 	switch rel {
-	case "api/openapi/openapi.json":
+	case "api/openapi/openapi.json", "web/public/openapi.json":
 		b, err := OpenAPISpecJSON()
 		if err != nil {
 			// Marshalling a plain map of JSON-safe values cannot fail; treat it
 			// as a programming error rather than emitting a broken artifact.
 			panic("openapi: marshal spec: " + err.Error())
 		}
+		// Two paths, one document. api/openapi/openapi.json is the copy the repo
+		// publishes for a reader with access to the repository;
+		// web/public/openapi.json is the copy a browser can fetch from
+		// https://jomform.com/openapi.json without one. They are emitted from the
+		// same call so they cannot drift from each other.
 		return string(b)
 	case "web/src/lib/openapiSpec.gen.ts":
 		b, err := OpenAPISpecJSON()

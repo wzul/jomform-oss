@@ -41,7 +41,7 @@ prices, sales, refunds, analytics — without opening a dashboard.
 - [REST API reference](https://jomform.com/docs/api) — the /v1/rest contract: authenticate with an
   API key, create and publish forms, read sales and responses, manage products, subscriptions,
   webhooks and domains. Every operation is listed; a machine-readable OpenAPI 3.1 document is
-  published at https://github.com/wzul/jomform/blob/main/api/openapi/openapi.json.
+  published at https://jomform.com/openapi.json.
 - [Privacy policy](https://jomform.com/legal/privacy)
 - [Terms of service](https://jomform.com/legal/terms)
 - [Brand assets](https://jomform.com/brand)

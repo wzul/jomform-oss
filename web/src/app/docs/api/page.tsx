@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 
 import {
   API_BASE,
+  OPENAPI_PUBLIC_URL,
   accessLevels,
   apiExamples,
   endpointCount,
@@ -79,10 +80,10 @@ export default function ApiDocsPage() {
       <p className="mt-3 text-sm leading-relaxed text-slate-600">
         A machine-readable OpenAPI 3.1 contract for the same surface is published at{" "}
         <a
-          href="https://github.com/wzul/jomform/blob/main/api/openapi/openapi.json"
+          href={OPENAPI_PUBLIC_URL}
           className="text-[var(--jf-primary)] underline underline-offset-2"
         >
-          api/openapi/openapi.json
+          {OPENAPI_PUBLIC_URL}
         </a>
         . It is generated from the API&apos;s own route table and checked against it on every test
         run, so it cannot drift from the endpoints you actually have.
@@ -396,7 +397,7 @@ export default function ApiDocsPage() {
         <p className="mt-3 text-sm leading-6 text-slate-600">
           Changes to this contract show up in two places you can watch: the published{" "}
           <a
-            href="https://github.com/wzul/jomform/blob/main/api/openapi/openapi.json"
+            href={OPENAPI_PUBLIC_URL}
             className="text-[var(--jf-primary)] underline underline-offset-2"
           >
             openapi.json
