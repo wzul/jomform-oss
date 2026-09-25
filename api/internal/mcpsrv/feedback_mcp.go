@@ -217,6 +217,17 @@ func (s *Server) getFeedbackThread(ctx context.Context, _ *mcp.CallToolRequest, 
 		"last_activity_at": th.LastActivityAt.UTC().Format(time.RFC3339),
 		"message_count":    th.MessageCount,
 	}
+	// The notification-failure marker travels with the thread on BOTH scopes:
+	// a super-admin triaging needs it, and a filer whose answer never arrived
+	// is the other person the defect hurt. Omitted entirely when there is no
+	// recorded failure, so a healthy thread's payload is unchanged.
+	if th.NotifyFailedAt != nil {
+		thread["notify_failed_at"] = th.NotifyFailedAt.UTC().Format(time.RFC3339)
+		thread["notify_failed_kind"] = th.NotifyFailedKind
+		if sc.All {
+			thread["notify_failed_error"] = th.NotifyFailedError
+		}
+	}
 	if sc.All {
 		thread["user_id"] = th.UserID
 		thread["user_email"] = th.UserEmail
@@ -290,6 +301,68 @@ func (s *Server) replyFeedback(ctx context.Context, _ *mcp.CallToolRequest, in r
 		"author":     authorKind,
 		"created_at": m.CreatedAt.UTC().Format(time.RFC3339),
 	}, nil
+}
+
+// ── retry_feedback_notify ───────────────────────────────────────────────────
+
+type retryFeedbackNotifyIn struct {
+	ThreadID string `json:"thread_id" jsonschema:"ID thread maklum balas (dari list_feedback)"`
+}
+
+type retryFeedbackNotifyOut struct {
+	ThreadID string `json:"thread_id"`
+	// Notification is the outcome of the retry:
+	// queued|sent|failed|none|skipped.
+	// "none" means the thread had no recorded failure, so nothing was re-sent.
+	// "skipped" means the attempt deliberately sent nothing — no super-admin
+	// recipient is configured — so no job was enqueued. It is NOT a delivery and
+	// not a failure: reporting "queued" here would tell the operator mail went
+	// out when nothing left the process. The same values are produced by the
+	// dashboard's retry button (api/internal/httpapi/rest_feedback.go).
+	Notification string `json:"notification" jsonschema:"queued|sent|failed|none|skipped"`
+}
+
+// retryFeedbackNotify re-sends the notification that last failed for a thread —
+// the release path for the failure marker, over MCP for parity with the
+// dashboard's retry button.
+//
+// SUPER-ADMIN ONLY, and that is not an oversight: the marker exists because the
+// platform team needs to notice it, and re-sending mail to a filer is an action
+// on the platform's side of the conversation. A filer re-triggering their own
+// notification would be a mail-amplification loop on top of mail that is already
+// broken.
+func (s *Server) retryFeedbackNotify(ctx context.Context, _ *mcp.CallToolRequest, in retryFeedbackNotifyIn) (*mcp.CallToolResult, retryFeedbackNotifyOut, error) {
+	if err := s.requireSuperAdmin(ctx); err != nil {
+		return nil, retryFeedbackNotifyOut{}, err
+	}
+	// The user-identity gate applies to the admin path too (see
+	// setFeedbackStatus): isSuperAdmin judges an API-key caller by its ACCOUNT
+	// OWNER's email, so without this a key on a super-admin's account would
+	// reach the triage queue.
+	if _, err := s.feedbackScopeFor(ctx); err != nil {
+		return nil, retryFeedbackNotifyOut{}, err
+	}
+	// Issue #645: re-sending is a WRITE — the credential's write scope.
+	if err := s.requireWriteScope(ctx); err != nil {
+		return nil, retryFeedbackNotifyOut{}, err
+	}
+	if s.deps == nil || s.deps.RetryFeedbackNotify == nil {
+		return nil, retryFeedbackNotifyOut{}, errors.New("sistem maklum balas tidak dikonfigurasi")
+	}
+	threadID := strings.TrimSpace(in.ThreadID)
+	if threadID == "" {
+		return nil, retryFeedbackNotifyOut{}, errors.New("thread_id wajib")
+	}
+	outcome, err := s.deps.RetryFeedbackNotify(ctx, threadID)
+	if err != nil {
+		if errors.Is(err, dbstore.ErrFeedbackNotFound) {
+			return nil, retryFeedbackNotifyOut{}, errors.New("thread maklum balas tidak dijumpai")
+		}
+		return nil, retryFeedbackNotifyOut{}, fmt.Errorf("db: %w", err)
+	}
+	s.auditSuperAdminAction(ctx, "admin.feedback.retry_notify",
+		map[string]any{"thread_id": threadID, "notification": outcome})
+	return nil, retryFeedbackNotifyOut{ThreadID: threadID, Notification: outcome}, nil
 }
 
 // ── set_feedback_status ─────────────────────────────────────────────────────

@@ -110,6 +110,12 @@ type Deps struct {
 	// when the same thread is filed on the /feedback page. Nil → no
 	// notification (the thread is still filed and readable).
 	NotifyFeedback func(th *dbstore.FeedbackThread, body string)
+	// RetryFeedbackNotify re-attempts the notification that last failed for a
+	// thread and reports the outcome (queued|sent|failed|none). It is the REST
+	// handler's own release path — wired here so the MCP retry tool calls the
+	// same logic instead of re-implementing what to re-send and to whom.
+	// Nil → the retry_feedback_notify tool errors.
+	RetryFeedbackNotify func(ctx context.Context, threadID string) (string, error)
 }
 
 // Server wraps the MCP *Server with JomForm deps.

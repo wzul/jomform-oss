@@ -54,8 +54,9 @@ const SECTIONS: Section[] = [
     id: "notifications",
     title: "How you hear about a reply",
     body: [
-      "When the team replies you receive an email telling you there is an answer, with the thread's subject and an excerpt of the reply. The full conversation is always in the dashboard on the Feedback page, so the email is a prompt to go and read it rather than the only copy.",
+      "When the team replies you receive an email telling you there is an answer, carrying the thread's subject and the reply itself in full. The full conversation is also always in the dashboard on the Feedback page, so the email is a prompt to go and read it rather than the only copy.",
       "When you file a thread the team is notified in the same way, through the same email system that delivers form notifications. There is no separate channel and no separate inbox to watch.",
+      "If that email cannot be handed to the delivery queue, the failure is not silent: it is written to the log and marked on the thread itself, so the team sees it on the thread they are already looking at and can re-send it. A notification that fails is recorded as a fact about the thread, never dropped — a report that was answered but whose answer never arrived is the one outcome this channel must not hide.",
       "The Feedback page shows every thread you have filed, most recently active first, with its status. Selecting one opens the full exchange.",
     ],
   },
@@ -84,7 +85,8 @@ const SECTIONS: Section[] = [
     body: [
       "The admin page carries a Feedback section listing every thread filed by any user, newest activity first, with a filter per status and a count beside each status chip. Selecting a thread shows the full conversation and a reply box.",
       "Replying as an admin sends the filer an email and moves an open thread to in_progress. Changing the status is a separate, deliberate action — replying does not silently reopen a thread you have already resolved or closed.",
-      "The same queue is available to a connected AI agent through the MCP tools list_feedback, get_feedback_thread, reply_feedback and set_feedback_status. Set_feedback_status is super-admin only; the other three are scoped to the caller, so an agent connected on behalf of a user sees that user's threads and no others.",
+      "The same queue is available to a connected AI agent through the MCP tools list_feedback, get_feedback_thread, reply_feedback, set_feedback_status and retry_feedback_notify. Set_feedback_status and retry_feedback_notify are super-admin only; the other three are scoped to the caller, so an agent connected on behalf of a user sees that user's threads and no others. Retry_feedback_notify is the recovery path for a notification that could not be delivered: the thread carries a notify_failed_at marker naming the party who was not told, and the tool re-sends it through the same channel.",
+      "A retry reports what it actually did in its notification field. queued or sent means a mail left for delivery; failed means the attempt was made and did not get through, so the marker stays and the banner remains. none means the thread had no recorded failure to re-send. skipped means nothing was attempted because no recipient is configured for that notification — ask a platform admin to check the super-admin allowlist; nothing was lost, and no mail is in flight.",
     ],
   },
 ];

@@ -15,6 +15,12 @@ import { useI18n, type Key } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDate, formatDateTime } from "../../lib/formatDate";
 import { growthLegend, growthValue, type GrowthCounts } from "../../lib/adminGrowth";
+import {
+  hasNotifyFailure,
+  notifyFailedWhoKey,
+  replyResult,
+  retryResult,
+} from "../../lib/feedbackNotify";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 import { apiErr, translateApiErr } from "../../lib/apiErr";
 
@@ -85,6 +91,12 @@ type FeedbackThread = {
   created_at: string;
   last_activity_at: string;
   message_count: number;
+  // The notification-failure marker (absent on a healthy thread): when the last
+  // email for this thread could not be handed to the delivery queue. Without
+  // showing it the console looks healthy while the filer has been told nothing.
+  notify_failed_at?: string;
+  notify_failed_kind?: string;
+  notify_failed_error?: string;
 };
 
 type FeedbackMessage = {
@@ -431,7 +443,9 @@ export default function AdminPage() {
     setFbList(r.data);
   }, [t, goToLogin]);
 
-  const openFeedback = useCallback(async (id: string) => {
+  // Reads a thread and returns it, so a caller can act on what the thread LOOKS
+  // like now rather than on what the server said a moment ago.
+  const loadFeedbackThread = useCallback(async (id: string): Promise<FeedbackThread | null> => {
     setFbOpenId(id);
     setFbMsg("");
     setFbActionErr("");
@@ -444,11 +458,16 @@ export default function AdminPage() {
     );
     if (!r.ok) {
       setFbActionErr(r.error);
-      return;
+      return null;
     }
     setFbThread(r.data.thread);
     setFbMessages(Array.isArray(r.data.messages) ? r.data.messages : []);
+    return r.data.thread;
   }, [t, goToLogin]);
+
+  const openFeedback = useCallback(async (id: string) => {
+    await loadFeedbackThread(id);
+  }, [loadFeedbackThread]);
 
   const sendFeedbackReply = useCallback(async () => {
     if (!fbOpenId || fbReply.trim().length < 10) return;
@@ -469,16 +488,93 @@ export default function AdminPage() {
         setFbActionErr(t("afb.replyFail"));
         return;
       }
+      // The reply is stored either way; the response's `notification` field says
+      // whether the filer was actually told. The mapping (and the reason a
+      // missing field must not be read as success) lives in ../../lib/feedbackNotify
+      // so `npm run test:unit` can execute it.
+      let notification = "";
+      try {
+        const payload = (await r.json()) as { notification?: string };
+        notification = payload.notification ?? "";
+      } catch {
+        notification = "";
+      }
       setFbReply("");
-      setFbMsg(t("afb.replied"));
+      const result = replyResult(notification);
+      // The reload comes FIRST, then the message. `openFeedback` resets this
+      // section's message state (it is what makes switching threads safe), so
+      // setting the outcome before the await leaves nothing on screen — the
+      // browser proof caught exactly that: the reply reached the server and the
+      // console showed the admin no outcome at all.
       await openFeedback(fbOpenId);
       await loadFeedback(fbPage, fbFilter);
+      if (result.kind === "error") {
+        setFbActionErr(t(result.messageKey as Key));
+      } else {
+        setFbMsg(t(result.messageKey as Key));
+      }
     } catch {
       setFbActionErr(t("afb.replyFail"));
     } finally {
       setFbBusy("");
     }
   }, [fbOpenId, fbReply, fbPage, fbFilter, goToLogin, loadFeedback, openFeedback, t]);
+
+  // Re-send the notification that last failed for the open thread. This is the
+  // action half of the marker: seeing "the filer was not told" is only useful if
+  // the operator can do something about it without leaving the thread.
+  const retryFeedbackNotify = useCallback(async () => {
+    if (!fbOpenId) return;
+    setFbBusy("notify");
+    setFbActionErr("");
+    setFbMsg("");
+    try {
+      const r = await fetch(`/api/admin/feedback/${encodeURIComponent(fbOpenId)}/notify`, {
+        method: "POST",
+      });
+      if (r.status === 401 || r.status === 403) {
+        goToLogin();
+        return;
+      }
+      if (!r.ok) {
+        setFbActionErr(t("afb.notifyRetryFail"));
+        return;
+      }
+      let notification = "";
+      try {
+        const payload = (await r.json()) as { notification?: string };
+        notification = payload.notification ?? "";
+      } catch {
+        notification = "";
+      }
+      const result = retryResult(notification);
+      // Same ordering rule as the reply path: the reload resets the message
+      // state, so the outcome must be set after it.
+      //
+      // AND THE RELOAD IS READ, not just awaited. A retry reports what the
+      // ATTEMPT did; the marker is what the thread still shows. When those
+      // disagree — the retry queued a mail yet the failure is still recorded on
+      // the thread (a differently-kinded marker, a send that did not clear it) —
+      // the console used to print "Notification sent again." directly above a
+      // banner saying the filer was NOT told, with nothing to say which one was
+      // stale. The confirmation is therefore keyed on the thread that comes back:
+      // a marker still set means the success message must not be shown.
+      const reloaded = await loadFeedbackThread(fbOpenId);
+      await loadFeedback(fbPage, fbFilter);
+      if (result.kind === "error") {
+        setFbActionErr(t(result.messageKey as Key));
+      } else if (reloaded && hasNotifyFailure(reloaded)) {
+        // A delivery that did not clear the marker: say what is still true.
+        setFbMsg(t("afb.notifyRetryStillMarked"));
+      } else {
+        setFbMsg(t(result.messageKey as Key));
+      }
+    } catch {
+      setFbActionErr(t("afb.notifyRetryFail"));
+    } finally {
+      setFbBusy("");
+    }
+  }, [fbOpenId, fbPage, fbFilter, goToLogin, loadFeedback, loadFeedbackThread, t]);
 
   const setFeedbackStatus = useCallback(async (status: string) => {
     if (!fbOpenId) return;
@@ -1088,7 +1184,7 @@ export default function AdminPage() {
                           onClick={() => void openFeedback(th.id)}
                           className={`flex w-full flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left ${
                             fbOpenId === th.id
-                              ? "border-[var(--jf-primary)] bg-indigo-50/40"
+                              ? "border-[var(--jf-primary)] bg-indigo-50/25"
                               : "border-[var(--jf-border)] bg-white hover:bg-slate-50"
                           }`}
                         >
@@ -1104,6 +1200,18 @@ export default function AdminPage() {
                           <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${fbStatusBadge(th.status)}`}>
                             {t(`fb.status.${th.status}` as Key)}
                           </span>
+                          {/* A queued thread whose notification is broken is
+                              marked in the LIST too: an operator scanning the
+                              queue must not have to open every thread to find
+                              the one where nobody was told. */}
+                          {hasNotifyFailure(th) && (
+                            <span
+                              className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900"
+                              title={t("afb.notifyFailedTitle")}
+                            >
+                              {t("afb.notifyFailedBadge")}
+                            </span>
+                          )}
                         </button>
                       </li>
                     ))}
@@ -1136,6 +1244,39 @@ export default function AdminPage() {
                         <p className="mt-1 break-all text-xs text-[var(--jf-muted)]">
                           {t("afb.columnFiler")}: {fbThread.user_email}
                         </p>
+
+                        {/* The notification-failure marker. It is a FACT about
+                            the thread (the last email could not be handed to
+                            the queue), so it sits with the thread rather than
+                            in a transient toast — and it carries the retry, so
+                            seeing it is enough to act on it. */}
+                        {hasNotifyFailure(fbThread) && (
+                          <div
+                            role="alert"
+                            className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900"
+                          >
+                            <p className="font-medium">{t("afb.notifyFailedTitle")}</p>
+                            <p className="mt-1">
+                              {t("afb.notifyFailedWho", {
+                                who: t(notifyFailedWhoKey(fbThread.notify_failed_kind) as Key),
+                              })}
+                            </p>
+                            <p className="mt-1 text-xs">
+                              {formatDateTime(fbThread.notify_failed_at ?? "")}
+                              {fbThread.notify_failed_error
+                                ? ` · ${fbThread.notify_failed_error}`
+                                : ""}
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => void retryFeedbackNotify()}
+                              disabled={fbBusy === "notify"}
+                              className="mt-2 min-h-11 rounded-md border border-amber-400 bg-white px-3 text-sm font-medium text-amber-900 hover:bg-amber-100 disabled:opacity-50"
+                            >
+                              {fbBusy === "notify" ? t("afb.notifyRetrying") : t("afb.notifyRetry")}
+                            </button>
+                          </div>
+                        )}
 
                         <ul className="mt-3 space-y-3">
                           {fbMessages.map((m) => {

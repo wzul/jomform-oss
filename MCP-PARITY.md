@@ -104,14 +104,23 @@ Parity checklist (dashboard → MCP):
 - Trusted devices (#454) → `list_trusted_devices`, `revoke_trusted_device`
 - In-app feedback (#639) → `list_feedback`, `get_feedback_thread`,
   `reply_feedback`, `set_feedback_status`,
-  `submit_feedback`.
+  `retry_feedback_notify`, `submit_feedback`.
   **USER-SCOPED, not account-scoped:** a feedback thread belongs to the person
   who filed it and carries no account id, so naming a workspace cannot widen
   the read. A super-admin sees every thread from the same tools (triage).
   `reply_feedback` writes as an admin message for a super-admin (moving an open
-  thread to in-progress) and as the owner otherwise; `set_feedback_status` is
-  super-admin only and audited. REST: `POST`/`GET /v1/rest/feedback`,
-  `GET /v1/rest/feedback/{id}`, `POST /v1/rest/feedback/{id}/messages`.
+  thread to in-progress) and as the owner otherwise; `set_feedback_status` and
+  `retry_feedback_notify` are super-admin only and audited. A notification that
+  failed to reach the queue is marked on the thread (the notify_failed_at /
+  notify_failed_kind / notify_failed_error columns), never dropped in silence,
+  and `retry_feedback_notify` is the operator's way to re-send it. The retry
+  answers with what the attempt actually DID: queued/sent (a mail left),
+  failed (attempted and did not get through, marker stays), none (no
+  recorded failure to re-send) or skipped (nothing attempted — no recipient
+  configured), so a value meaning delivery always has a job behind it. REST:
+  `POST`/`GET /v1/rest/feedback`, `GET /v1/rest/feedback/{id}`,
+  `POST /v1/rest/feedback/{id}/messages`,
+  `POST /v1/admin/feedback/{id}/notify`.
 - Templates: gallery picker (#174) → `list_templates`, `use_template`
   (slug = system gallery); merchant-managed templates (#457) →
   `list_own_templates`, `create_template`, `update_template`, `delete_template`

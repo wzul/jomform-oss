@@ -461,6 +461,11 @@ func main() {
 			// through the MCP submit_feedback tool notifies exactly like the
 			// page does.
 			NotifyFeedback: rest.NotifyFeedbackAdmins,
+			// The retry path for a notification that failed. Wired to the REST
+			// handler's own function so the MCP retry_feedback_notify tool and
+			// the dashboard's retry button are one implementation: both pick
+			// the message to re-send and both go out through the same channel.
+			RetryFeedbackNotify: rest.RetryFeedbackNotify,
 		}, chip.New(cfg.ChipAPIBaseURL), decryptKey, pay)
 		deps.MCP = mcpSrv
 

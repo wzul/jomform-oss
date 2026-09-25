@@ -365,6 +365,11 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /v1/admin/feedback/{id}", h.authed(h.handleAdminGetFeedback))
 	mux.Handle("POST /v1/admin/feedback/{id}/messages", h.authed(h.handleAdminReplyFeedback))
 	mux.Handle("POST /v1/admin/feedback/{id}/status", h.authed(h.handleAdminSetFeedbackStatus))
+	// The release path for a feedback notification that failed: the marker on
+	// the thread is only useful if an operator can act on it (the #547/#579
+	// visible-state-plus-a-way-to-act pair). Mirrors the retry_feedback_notify
+	// MCP tool.
+	mux.Handle("POST /v1/admin/feedback/{id}/notify", h.authed(h.handleAdminRetryFeedbackNotify))
 	// In-app chat (phase 1): answers questions about the caller's own data and
 	// can file feedback — nothing else. Session-only and per-user rate limited;
 	// its tool calls run under a READONLY identity (rest_chat.go), so no sentence

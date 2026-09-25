@@ -92,6 +92,31 @@ type FeedbackThread struct {
 	// MessageCount is populated by the list reads (it is what the triage list
 	// and the user's list both show); zero on a bare ByID read.
 	MessageCount int64
+	// NotifyFailedAt / NotifyFailedKind / NotifyFailedError record the LAST
+	// notification attempt for this thread that failed (migration 000070).
+	// A nil timestamp is the normal state and means "no known failure" — which
+	// includes every row written before this marker existed. It is cleared
+	// again as soon as a later attempt succeeds.
+	NotifyFailedAt    *time.Time
+	NotifyFailedKind  string
+	NotifyFailedError string
+}
+
+// FeedbackNotifyKindFiler / FeedbackNotifyKindAdmin name WHO was not told when a
+// notification attempt failed (feedback_threads_notify_failed_kind_chk).
+//
+//	filer  the person who filed the thread was not told about an admin reply
+//	admin  the platform team was not told a new thread was filed
+const (
+	FeedbackNotifyKindFiler = "filer"
+	FeedbackNotifyKindAdmin = "admin"
+)
+
+// ValidFeedbackNotifyKind reports whether kind is a value the CHECK constraint
+// accepts. Callers validate with this rather than letting Postgres raise a
+// constraint violation the operator cannot read.
+func ValidFeedbackNotifyKind(kind string) bool {
+	return kind == FeedbackNotifyKindFiler || kind == FeedbackNotifyKindAdmin
 }
 
 // FeedbackMessage is one entry in a thread. AuthorKind is "user" or "admin";
@@ -143,6 +168,11 @@ var ErrFeedbackNotFound = errors.New("feedback thread not found")
 // worse, matching everything.
 var ErrFeedbackInvalidScope = errors.New("feedback: scope must name a user or be the admin scope")
 
+// feedbackNotifyErrorMax bounds the recorded failure text (migration 000070).
+// It is a display value on the triage card, not a log: 500 characters is enough
+// for a queue/SES error and stops a pathological error becoming an unbounded row.
+const feedbackNotifyErrorMax = 500
+
 // FeedbackThreadStore wraps pgx for feedback_threads + feedback_messages.
 type FeedbackThreadStore struct{ pool *pgxpool.Pool }
 
@@ -153,10 +183,30 @@ func NewFeedbackThreadStore(pool *pgxpool.Pool) *FeedbackThreadStore {
 
 // feedbackThreadSelect is the column list every feedback_threads read scans.
 // Kept as one constant so the reads cannot drift apart column-wise.
+//
+// The notify-failure trio (migration 000070) is part of the standard read on
+// purpose: the triage list shows the marker per row and the filer's own thread
+// read reports it too, so a third reader would otherwise have to remember to
+// fetch it — which is exactly how a visible marker stops being visible.
 const feedbackThreadSelect = `SELECT t.id, t.user_id, t.user_email, t.subject, t.status,
 	t.created_at, t.updated_at, t.last_activity_at,
+	t.notify_failed_at, COALESCE(t.notify_failed_kind, ''), COALESCE(t.notify_failed_error, ''),
 	(SELECT COUNT(*) FROM feedback_messages m WHERE m.thread_id = t.id)
 	FROM feedback_threads t`
+
+// scanFeedbackThread scans one row of feedbackThreadSelect, in that order. One
+// function so the two read paths (Thread, ListFilteredPage) cannot disagree
+// about the destination order.
+func scanFeedbackThread(row pgx.Row) (*FeedbackThread, error) {
+	th := &FeedbackThread{}
+	if err := row.Scan(&th.ID, &th.UserID, &th.UserEmail, &th.Subject, &th.Status,
+		&th.CreatedAt, &th.UpdatedAt, &th.LastActivityAt,
+		&th.NotifyFailedAt, &th.NotifyFailedKind, &th.NotifyFailedError,
+		&th.MessageCount); err != nil {
+		return nil, err
+	}
+	return th, nil
+}
 
 // feedbackMessageSelect is the column list every feedback_messages read scans.
 // The author's live email is joined in for display.
@@ -237,9 +287,8 @@ func (s *FeedbackThreadStore) Thread(ctx context.Context, sc FeedbackScope, id s
 	args = append([]any{id}, args...)
 	row := s.pool.QueryRow(ctx,
 		feedbackThreadSelect+` WHERE t.id = $1 AND `+qualifyThreadClause(clause), args...)
-	th := &FeedbackThread{}
-	if err := row.Scan(&th.ID, &th.UserID, &th.UserEmail, &th.Subject, &th.Status,
-		&th.CreatedAt, &th.UpdatedAt, &th.LastActivityAt, &th.MessageCount); err != nil {
+	th, err := scanFeedbackThread(row)
+	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrFeedbackNotFound
 		}
@@ -329,9 +378,8 @@ func (s *FeedbackThreadStore) ListFilteredPage(ctx context.Context, sc FeedbackS
 	defer rows.Close()
 	out := []*FeedbackThread{}
 	for rows.Next() {
-		th := &FeedbackThread{}
-		if err := rows.Scan(&th.ID, &th.UserID, &th.UserEmail, &th.Subject, &th.Status,
-			&th.CreatedAt, &th.UpdatedAt, &th.LastActivityAt, &th.MessageCount); err != nil {
+		th, err := scanFeedbackThread(rows)
+		if err != nil {
 			return nil, 0, err
 		}
 		out = append(out, th)
@@ -473,6 +521,100 @@ func (s *FeedbackThreadStore) CountByStatus(ctx context.Context) (map[string]int
 		out[st] = n
 	}
 	return out, rows.Err()
+}
+
+// RecordNotifyFailure marks a thread as having an undelivered notification: the
+// last attempt to tell `kind` about this thread failed with errText. It is the
+// durable half of the fix for the silent-notification defect — the log line says
+// it once, this row says it on the thread an operator actually opens.
+//
+// It is deliberately best-effort in the same sense the notification is: the
+// caller logs and returns it, and a store failure never turns a stored admin
+// reply into an error response. The marker is STATE ABOUT a notification, not
+// the notification.
+//
+// The error text is truncated so a pathological error cannot become an
+// unbounded row, and an empty kind/error is refused rather than written: a
+// marker that does not say who was not told, or why, is not worth having.
+func (s *FeedbackThreadStore) RecordNotifyFailure(ctx context.Context, sc FeedbackScope, threadID, kind, errText string) error {
+	if threadID == "" {
+		return ErrFeedbackNotFound
+	}
+	if !ValidFeedbackNotifyKind(kind) {
+		return errors.New("feedback: notify failure kind must be filer or admin")
+	}
+	errText = strings.TrimSpace(errText)
+	if errText == "" {
+		errText = "unknown error"
+	}
+	// The cap is applied on a RUNE boundary, never on a byte index: errText is
+	// a Go error string that can carry any UTF-8 (an accented hostname, a curly
+	// quote, an em-dash), and slicing bytes at 500 can land mid-character. The
+	// resulting invalid UTF-8 is refused by Postgres ("invalid byte sequence for
+	// encoding UTF8", SQLSTATE 22021), so the UPDATE fails and NO marker is
+	// written at all — the thread goes on looking healthy, which is the exact
+	// silent-failure shape this marker exists to prevent.
+	if r := []rune(errText); len(r) > feedbackNotifyErrorMax {
+		errText = string(r[:feedbackNotifyErrorMax])
+	}
+	clause, args, _, err := sc.scopeClause(4)
+	if err != nil {
+		return err
+	}
+	// $1 = thread id, $2 = kind, $3 = error, $4.. = scope.
+	full := append([]any{threadID, kind, errText}, args...)
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE feedback_threads t
+		    SET notify_failed_at = now(), notify_failed_kind = $2, notify_failed_error = $3
+		  WHERE t.id = $1 AND `+qualifyThreadClause(clause), full...)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrFeedbackNotFound
+	}
+	return nil
+}
+
+// ClearNotifyFailure drops the marker after a later notification attempt FOR THE
+// SAME KIND succeeded, so a thread that recovers stops advertising a failure that
+// is no longer true. Scoped like every other write here.
+//
+// WHY THE KIND IS A PARAMETER. The two lanes are INDEPENDENT: the admin alert
+// fires when a thread is filed, the filer alert when an admin replies, and either
+// can be broken while the other works. A clear keyed on the thread alone therefore
+// erases a failure the success knows nothing about — a filing the platform team
+// was never told about disappears the moment an unrelated reply notification goes
+// through, and no surface says so again (the marker is the only record). The
+// predicate `notify_failed_kind = $2` is what makes "the marker clears on a later
+// success" mean "of the same kind".
+//
+// RowsAffected is deliberately ignored: clearing an already-clear marker is the
+// desired end state, and reporting "not found" for it would make a
+// correctly-recovered thread look like a missing one. A marker belonging to the
+// OTHER kind also matches no rows, which is the correct outcome, not an error.
+func (s *FeedbackThreadStore) ClearNotifyFailure(ctx context.Context, sc FeedbackScope, threadID, kind string) error {
+	if threadID == "" {
+		return ErrFeedbackNotFound
+	}
+	if !ValidFeedbackNotifyKind(kind) {
+		// Refuse rather than default to "clear everything": an empty or unknown
+		// kind must never widen this into the thread-wide clear it replaces.
+		return errors.New("feedback: notify failure kind must be filer or admin")
+	}
+	clause, args, _, err := sc.scopeClause(3)
+	if err != nil {
+		return err
+	}
+	// $1 = thread id, $2 = kind, $3.. = scope.
+	full := append([]any{threadID, kind}, args...)
+	if _, err := s.pool.Exec(ctx,
+		`UPDATE feedback_threads t
+		    SET notify_failed_at = NULL, notify_failed_kind = NULL, notify_failed_error = NULL
+		  WHERE t.id = $1 AND notify_failed_at IS NOT NULL AND notify_failed_kind = $2 AND `+qualifyThreadClause(clause), full...); err != nil {
+		return err
+	}
+	return nil
 }
 
 // qualifyThreadClause prefixes an unqualified scope fragment with the threads
