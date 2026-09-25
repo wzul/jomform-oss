@@ -340,7 +340,7 @@ export default function McpReferencePage() {
       <p className="mt-3 text-sm leading-relaxed text-slate-600">
         Every tool JomForm exposes to connected AI agents via the Model Context Protocol. Connect any MCP client to <code className="rounded bg-slate-100 px-1">https://mcp.jomform.com/mcp</code> and agents discover these tools automatically. This reference is kept in sync with the tool registry.
       </p>
-      <p className="mt-2 text-sm text-slate-500">
+      <p className="mt-2 text-sm text-[var(--jf-muted)]">
         {TOOL_GROUPS.reduce((n, g) => n + g.tools.length, 0)} tools across {TOOL_GROUPS.length} categories.
       </p>
 

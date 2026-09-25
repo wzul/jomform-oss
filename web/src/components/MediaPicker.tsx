@@ -127,7 +127,7 @@ export default function MediaPicker({
           <h3 className="text-sm font-semibold">{t("mediaPicker.title")}</h3>
           <button
             onClick={onClose}
-            className="text-slate-400 hover:text-slate-600"
+            className="text-[var(--jf-muted)] hover:text-slate-600"
             aria-label={t("mediaPicker.close")}
           >
             ✕
@@ -196,7 +196,7 @@ export default function MediaPicker({
 
           <div className="mt-4 max-h-80 overflow-y-auto">
             {loading ? (
-              <p className="text-center text-sm text-slate-400">…</p>
+              <p className="text-center text-sm text-[var(--jf-muted)]">…</p>
             ) : items.length === 0 ? (
               <p className="text-center text-sm text-[var(--jf-muted)]">{t("media.empty")}</p>
             ) : (

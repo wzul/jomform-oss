@@ -448,7 +448,7 @@ export default function ProfilePage() {
               className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium sm:px-4 ${
                 tab === id
                   ? "border-slate-900 text-slate-900"
-                  : "border-transparent text-slate-500 hover:text-slate-800"
+                  : "border-transparent text-[var(--jf-muted)] hover:text-slate-800"
               }`}
             >
               <span className="sm:hidden">{t(`prof.${id}` as const)}</span>
@@ -584,13 +584,13 @@ export default function ProfilePage() {
                     <option key={l} value={l}>{LANG_LABEL[l]}</option>
                   ))}
                 </select>
-                <p className="mt-2 max-w-xl text-xs text-slate-400">{t("prof.languageHelp")}</p>
+                <p className="mt-2 max-w-xl text-xs text-[var(--jf-muted)]">{t("prof.languageHelp")}</p>
               </div>
             </section>
 
             <section className="jf-card mt-6 p-6">
               <h2 className="text-lg font-semibold">{t("prof.emailAddress")}</h2>
-              <p className="mt-1 text-xs text-slate-400">
+              <p className="mt-1 text-xs text-[var(--jf-muted)]">
                 {t("prof.current")}{" "}
                 {p ? (
                   <strong>{p.email}</strong>
@@ -720,7 +720,7 @@ export default function ProfilePage() {
                 <h2 className="text-lg font-semibold">{t("prof.trustedDevices")}</h2>
                 <p className="mt-1 text-sm text-slate-500">{t("prof.trustedDevicesHelp")}</p>
                 {trustDevices.length === 0 ? (
-                  <p className="mt-3 text-sm text-slate-400">{t("prof.trustedDevicesEmpty")}</p>
+                  <p className="mt-3 text-sm text-[var(--jf-muted)]">{t("prof.trustedDevicesEmpty")}</p>
                 ) : (
                   <>
                     <ul className="mt-3 space-y-2">
@@ -814,7 +814,7 @@ export default function ProfilePage() {
         {tab === "connected" && (
           <section className="jf-card mt-6 p-6">
             <h2 className="text-lg font-semibold">{t("prof.connectedTitle")}</h2>
-            <p className="mt-1 max-w-xl text-sm text-slate-400">
+            <p className="mt-1 max-w-xl text-sm text-[var(--jf-muted)]">
               {t("prof.connectedHelp")}
             </p>
             <ul className="mt-4 space-y-2">
@@ -822,14 +822,14 @@ export default function ProfilePage() {
                 <li key={l.provider} className="flex items-center justify-between rounded-lg border border-[var(--jf-border)] px-4 py-2.5">
                   <div>
                     <p className="text-sm capitalize">{l.provider} — {l.email}</p>
-                    <p className="text-[11px] text-slate-400">{t("prof.linked")} {l.linked_at ? formatDate(l.linked_at, sessionUser?.timezone) : ""}</p>
+                    <p className="text-[11px] text-[var(--jf-muted)]">{t("prof.linked")} {l.linked_at ? formatDate(l.linked_at, sessionUser?.timezone) : ""}</p>
                   </div>
                   <button onClick={async () => { await fetch(`/api/auth/social/${l.provider}`, { method: "DELETE" }); load(); }}
                     className="text-xs text-slate-500 hover:text-red-500">{t("prof.unlink")}</button>
                 </li>
               ))}
               {social.length === 0 && (
-                <li className="text-sm text-slate-400">{t("prof.noLinked")}</li>
+                <li className="text-sm text-[var(--jf-muted)]">{t("prof.noLinked")}</li>
               )}
             </ul>
             <a href="/api/auth/oauth/google" className="jf-btn-ghost mt-3 inline-block">
@@ -903,7 +903,7 @@ export default function ProfilePage() {
                 <li key={a.client_id} className="flex items-center justify-between rounded-lg border border-[var(--jf-border)] px-4 py-2.5">
                   <div>
                     <p className="text-sm">{a.name || a.client_id}</p>
-                    <p className="text-[11px] text-slate-400">{t("set.clientId")} {a.client_id}</p>
+                    <p className="text-[11px] text-[var(--jf-muted)]">{t("set.clientId")} {a.client_id}</p>
                   </div>
                   <button
                     onClick={async () => {
@@ -921,7 +921,7 @@ export default function ProfilePage() {
                 <li className="flex flex-col items-center gap-2 rounded-lg border border-dashed border-[var(--jf-border)] px-4 py-6 text-center">
                   <span className="text-2xl" aria-hidden="true">🤖</span>
                   <p className="text-sm font-medium text-slate-600">{t("prof.mcpEmptyTitle")}</p>
-                  <p className="max-w-sm text-xs text-slate-400">{t("prof.mcpEmptyHelp")}</p>
+                  <p className="max-w-sm text-xs text-[var(--jf-muted)]">{t("prof.mcpEmptyHelp")}</p>
                   <a
                     href="/mcp"
                     target="_blank"
@@ -980,7 +980,7 @@ export default function ProfilePage() {
                   className="mx-auto mt-3 rounded border border-slate-200"
                 />
               ) : (
-                <div className="mx-auto mt-3 flex h-[220px] w-[220px] items-center justify-center rounded border border-slate-200 bg-slate-50 text-xs text-slate-400">…</div>
+                <div className="mx-auto mt-3 flex h-[220px] w-[220px] items-center justify-center rounded border border-slate-200 bg-slate-50 text-xs text-[var(--jf-muted-on-tint)]">…</div>
               )}
               <label className="mt-4 block text-sm">{t("prof.twoFaCodeLabel")}</label>
               <input

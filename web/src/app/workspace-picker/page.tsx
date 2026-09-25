@@ -273,7 +273,7 @@ export default function WorkspacePickerPage() {
                           </span>
                         )}
                         {s.role && (
-                          <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500">
+                          <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-[var(--jf-muted-on-tint)]">
                             {roleLabel(s.role)}
                           </span>
                         )}

@@ -373,7 +373,7 @@ export default function ProductEditor({ productId }: { productId?: string }) {
   if (loading) {
     return (
       <Shell active="products">
-        <main className="flex min-h-screen items-center justify-center text-slate-400">…</main>
+        <main className="flex min-h-screen items-center justify-center text-[var(--jf-muted)]">…</main>
       </Shell>
     );
   }

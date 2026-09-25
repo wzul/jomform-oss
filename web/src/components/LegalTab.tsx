@@ -125,7 +125,7 @@ export function LegalTab({ workspaceId, workspaceSlug }: { workspaceId: string; 
   return (
     <section className="jf-card mt-6 p-6">
       <h2 className="text-lg font-semibold">{t("set.legalTitle")}</h2>
-      <p className="mt-1 max-w-xl text-sm text-slate-400">
+      <p className="mt-1 max-w-xl text-sm text-[var(--jf-muted)]">
         {t("set.legalHelp", { workspace: workspaceSlug || "your-workspace" })}
       </p>
 

@@ -160,7 +160,7 @@ export default function Dashboard() {
   // of hanging on the spinner. `bundle` stays undefined while loading.
   if (anon) return <Landing />;
   if (!ready) {
-    return <main className="flex min-h-screen items-center justify-center text-slate-400">…</main>;
+    return <main className="flex min-h-screen items-center justify-center text-[var(--jf-muted)]">…</main>;
   }
 
   const badge = (s: string) =>

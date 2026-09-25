@@ -115,7 +115,7 @@ export default function ProductPicker({
           <h3 className="text-sm font-semibold">{title}</h3>
           <button
             onClick={onClose}
-            className="text-slate-400 hover:text-slate-600"
+            className="text-[var(--jf-muted)] hover:text-slate-600"
             aria-label={t("set.menuPickerCancel")}
           >
             ✕
@@ -132,7 +132,7 @@ export default function ProductPicker({
 
           <div className="mt-3 max-h-80 overflow-y-auto">
             {loading ? (
-              <p className="py-6 text-center text-sm text-slate-400">{t("set.menuPickerLoading")}</p>
+              <p className="py-6 text-center text-sm text-[var(--jf-muted)]">{t("set.menuPickerLoading")}</p>
             ) : items.length === 0 ? (
               <p className="py-6 text-center text-sm text-[var(--jf-muted)]">
                 {t("set.menuPickerNoProducts")}
@@ -179,7 +179,7 @@ export default function ProductPicker({
                               loading="lazy"
                             />
                           ) : (
-                            <span className="text-[10px] text-slate-400">—</span>
+                            <span className="text-[10px] text-[var(--jf-muted-on-tint)]">—</span>
                           )}
                         </span>
                         <span className="min-w-0 flex-1">

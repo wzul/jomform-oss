@@ -73,12 +73,73 @@ critical/serious axe violations within the dialog. A regression there now fails
 
 > **Note on authenticated pages.** The dashboard surfaces (`/`, `/forms`,
 > `/builder`, `/settings`, `/profile`, `/products`) require a live session
-> cookie from the Go API, which the scan does not provision. They are exercised by
-> the manual screen-reader and browser-matrix checklists below instead. The one
-> exception is the pair of confirmation dialogs, which ARE scanned (see
-> "Confirmation dialogs" above) because stubbing the session-dependent fetch
-> puts the dialog itself in the browser without needing a credential.
->
+> cookie from the Go API. The `web/e2e/a11y.spec.ts` gate covers the public
+> routes only; the dashboard's own colours are measured out-of-band against a
+> standalone build with a real session cookie, and held in place by the source
+> guard documented below rather than by the gate. The one exception is the pair
+> of confirmation dialogs, which ARE scanned (see "Confirmation dialogs" above)
+> because stubbing the session-dependent fetch puts the dialog itself in the
+> browser without needing a credential.
+
+### Muted text and AA (source guard)
+
+The scan above reaches the public surfaces only, so the dashboard's muted-gray
+text was measured out-of-band (a production standalone build, a real session,
+cleared storage, axe `wcag2aa`): 34 serious `color-contrast` nodes across
+`/builder` (11), `/profile` (7) and `/settings` (16), every one a muted line,
+tab label or placeholder at 11-14px. `web/src/lib/mutedText.test.ts` is the part
+that stops it coming back — it walks every `.tsx` under `web/src` and fails on a
+muted token paired with a surface it cannot clear 4.5:1 on, so it is not a
+hand-listed file check.
+
+Two tokens, and the rule for which one to use:
+
+| token | measured | use it |
+|---|---|---|
+| `text-[var(--jf-muted)]` (#6b7280) | 4.54:1 on `--jf-bg` (#f7f8f8), 4.83:1 on white, 4.62:1 on slate-50 | the default muted line |
+| `text-[var(--jf-muted-on-tint)]` (#5b6472) | 5.72:1 on slate-50, 5.46:1 on slate-100, 5.35:1 on indigo-50 | a muted line that sits **on a solid tint** (the token is not indigo-only) |
+
+`text-slate-400` (#90a1b9, 2.63:1 on white) and `text-[#9ca3af]` (2.54:1 on
+white) are below AA on every light surface in the app, and `text-slate-500`
+(#62748e) is 4.76:1 on white but 4.48:1 on the page background — which is why
+the guard compares a token against the surface it is *paired with* rather than
+banning a class outright.
+
+The guard checks four shapes, because this defect took all four:
+
+1. the same class list renders a light surface **and** a token that cannot clear
+   it there;
+2. the token is *inherited* from a surface element above it — including the app's
+   own page background (`html, body { background: var(--jf-bg) }`), which is what
+   made the inactive tab labels a defect at 4.48:1 rather than a pass;
+3. an **inline descendant** (`<code>`, `<span>`, …) paints a surface the inherited
+   token cannot clear on — `<p class="…jf-muted">Brand <code class="bg-slate-100">ID</code></p>`
+   is 4.41:1, and it shipped;
+4. `text-[#9ca3af]`, which has no AA-safe placement in the app at all (2.54:1 at
+   its best, on white).
+
+A token is only reported when the pairing is real, so `--jf-muted` on the page
+background and on white is fine, and an inline child that declares its own colour
+is not reported against its ancestor.
+
+The surface a token is judged against comes from the page's own markup **and**
+from the `layout.tsx` chain that wraps it, nearest first — a per-file scan that
+treated "no surface in this file" as "therefore the page background" reported
+`text-slate-500` at 4.48:1 for text that actually renders on white (4.76:1,
+passing) at `/docs/*`, where `app/docs/layout.tsx` is
+`<main class="min-h-screen bg-white">`. The app page background
+(`html, body { background: var(--jf-bg) }`, #f7f8f8) is only assumed when no
+layout in the chain paints a light surface over its `{children}` — which is the
+case for the dashboard pages, and what keeps the tab-strip defect at 4.48:1
+reported.
+
+The guard's lexer and JSX scanner live in `web/src/lib/jsxSource.ts`, shared with
+the tinted-surface guard. They blank comments before reading class lists, and
+they only honour a comment opener outside JSX **text**: the literal route pattern
+`/v1/rest/*` written in prose at `/docs/api` was read as a `/*` block-comment
+opener, which blanked 41 lines of that page (including a `</code>`) and made the
+guard report a `<code>` 180 lines away as the ancestor of unrelated spans.
+
 > **This is a real gap, not a formality.** The builder's edit panel went
 > unscanned long enough to accumulate two **critical** unnamed form controls
 > (the value textarea and the conditional-logic rule picker) plus a set of

@@ -1574,7 +1574,7 @@ function FormSettingsInner() {
                                             className="h-full w-full object-cover"
                                           />
                                         ) : (
-                                          <span className="text-[10px] text-slate-400">—</span>
+                                          <span className="text-[10px] text-[var(--jf-muted-on-tint)]">—</span>
                                         )}
                                       </span>
                                       <span className="min-w-0 flex-1 truncate text-sm">
@@ -1600,7 +1600,7 @@ function FormSettingsInner() {
                                     </>
                                   ) : (
                                     <>
-                                      <span className="flex-1 truncate text-sm text-slate-400">
+                                      <span className="flex-1 truncate text-sm text-[var(--jf-muted)]">
                                         {menuBestSeller ? t("set.menuUnknownProduct") : t("set.menuBestSellerNone")}
                                       </span>
                                       <button
@@ -1657,7 +1657,7 @@ function FormSettingsInner() {
                                                   /* eslint-disable-next-line @next/next/no-img-element */
                                                   <img src={p.images[0]} alt="" className="h-full w-full object-cover" />
                                                 ) : (
-                                                  <span className="text-[9px] text-slate-400">—</span>
+                                                  <span className="text-[9px] text-[var(--jf-muted-on-tint)]">—</span>
                                                 )}
                                               </span>
                                               <span className="max-w-[12rem] truncate">
@@ -1675,7 +1675,7 @@ function FormSettingsInner() {
                                                     )
                                                   )
                                                 }
-                                                className="text-slate-400 hover:text-red-500"
+                                                className="text-[var(--jf-muted)] hover:text-red-500"
                                               >
                                                 ✕
                                               </button>
@@ -1771,7 +1771,7 @@ function FormSettingsInner() {
                                   {t("set.menuPreviewHelp")}
                                 </p>
                                 {menuPreviewSections().length === 0 && (
-                                  <p className="mt-2 text-sm text-slate-400">{t("set.menuPreviewEmpty")}</p>
+                                  <p className="mt-2 text-sm text-[var(--jf-muted)]">{t("set.menuPreviewEmpty")}</p>
                                 )}
                                 <div className="mt-2 space-y-2">
                                   {menuPreviewSections().map((s, si) => (
@@ -1793,7 +1793,7 @@ function FormSettingsInner() {
                                                   /* eslint-disable-next-line @next/next/no-img-element */
                                                   <img src={p.images[0]} alt="" className="h-full w-full object-cover" />
                                                 ) : (
-                                                  <span className="text-[9px] text-slate-400">—</span>
+                                                  <span className="text-[9px] text-[var(--jf-muted-on-tint)]">—</span>
                                                 )}
                                               </span>
                                               <span className="text-xs">
@@ -1991,7 +1991,7 @@ function FormSettingsInner() {
                   <section className="jf-card p-6">
                     <h2 className="text-base font-semibold">{t("fs.restrictions")}</h2>
                     <div className="mt-4 space-y-3">
-                      <p className="text-[11px] font-medium uppercase tracking-wider text-[#9ca3af]">{t("bld.scheduleTitle")}</p>
+                      <p className="text-[11px] font-medium uppercase tracking-wider text-[var(--jf-muted)]">{t("bld.scheduleTitle")}</p>
                       <div>
                         <label className={labelCls}>{t("bld.startAt")}</label>
                         <input type="datetime-local" value={rsStart} onChange={(e) => setRsStart(e.target.value)} className={inputCls} />
@@ -2008,7 +2008,7 @@ function FormSettingsInner() {
                         <label className={labelCls}>{t("bld.expiredMessage")}</label>
                         <textarea value={rsExpired} onChange={(e) => setRsExpired(e.target.value)} rows={2} className={inputCls} />
                       </div>
-                      <p className="text-[11px] font-medium uppercase tracking-wider text-[#9ca3af]">{t("bld.entryLimitTitle")}</p>
+                      <p className="text-[11px] font-medium uppercase tracking-wider text-[var(--jf-muted)]">{t("bld.entryLimitTitle")}</p>
                       <div>
                         <label className={labelCls}>{t("bld.entryLimit")}</label>
                         <input type="number" min={0} value={rsLimit} onChange={(e) => setRsLimit(e.target.value)} placeholder="100" className={inputCls} />
@@ -2066,12 +2066,12 @@ function FormSettingsInner() {
                     <div className="mt-4 space-y-4">
                       <div>
                         <label className={labelCls}>
-                          {t("fs.emelSubject")} <span className="text-slate-400">{t("fs.emelInheritHint")}</span>{" "}
+                          {t("fs.emelSubject")} <span className="text-[var(--jf-muted)]">{t("fs.emelInheritHint")}</span>{" "}
                           {/* The per-field rule, stated at the field it applies to
                               (AGENTS.md documentation-parity rule). */}
                           <a
                             href="/docs/customize#language"
-                            className="text-slate-400 underline hover:text-slate-600"
+                            className="text-[var(--jf-muted)] underline hover:text-slate-600"
                             title={t("set.emelLanguageRule")}
                           >
                             ?
@@ -2087,10 +2087,10 @@ function FormSettingsInner() {
                       </div>
                       <div>
                         <label className={labelCls}>
-                          {t("fs.emelBody")} <span className="text-slate-400">{t("fs.emelPlaceholders")}</span>{" "}
+                          {t("fs.emelBody")} <span className="text-[var(--jf-muted)]">{t("fs.emelPlaceholders")}</span>{" "}
                           <a
                             href="/docs/customize#language"
-                            className="text-slate-400 underline hover:text-slate-600"
+                            className="text-[var(--jf-muted)] underline hover:text-slate-600"
                             title={t("set.emelLanguageRule")}
                           >
                             ?
@@ -2145,7 +2145,7 @@ function FormSettingsInner() {
 
                       <div>
                         <label className={labelCls}>
-                          {t("fs.emelMerchantEmail")} <span className="text-slate-400">{t("fs.emelInheritHint")}</span>
+                          {t("fs.emelMerchantEmail")} <span className="text-[var(--jf-muted)]">{t("fs.emelInheritHint")}</span>
                         </label>
                         <input
                           value={emelMerchantEmail}
@@ -2199,7 +2199,7 @@ function FormSettingsInner() {
                                 {t(notifEventKey(n.event))}
                               </span>
                               {!n.enabled && (
-                                <span className="text-[10px] text-slate-400">{t("fs.notifEnabled")}: off</span>
+                                <span className="text-[10px] text-[var(--jf-muted)]">{t("fs.notifEnabled")}: off</span>
                               )}
                             </div>
                             <div className="flex items-center gap-2">
@@ -2245,7 +2245,7 @@ function FormSettingsInner() {
                           </div>
                           <div>
                             <label className={labelCls}>
-                              {t("fs.notifTo")} <span className="text-slate-400">{t("fs.notifToHint")}</span>{" "}
+                              {t("fs.notifTo")} <span className="text-[var(--jf-muted)]">{t("fs.notifToHint")}</span>{" "}
                               <a
                                 href="/docs/placeholders"
                                 target="_blank"
@@ -2264,7 +2264,7 @@ function FormSettingsInner() {
                           </div>
                           <div>
                             <label className={labelCls}>
-                              {t("fs.notifBody")} <span className="text-slate-400">{t("fs.notifPlaceholders")}</span>{" "}
+                              {t("fs.notifBody")} <span className="text-[var(--jf-muted)]">{t("fs.notifPlaceholders")}</span>{" "}
                               <a
                                 href="/docs/placeholders"
                                 target="_blank"
@@ -2284,7 +2284,7 @@ function FormSettingsInner() {
                             </label>
                           </div>
                           <div>
-                            <p className="text-[11px] font-medium uppercase tracking-wider text-[#9ca3af]">{t("fs.notifCondition")}</p>
+                            <p className="text-[11px] font-medium uppercase tracking-wider text-[var(--jf-muted)]">{t("fs.notifCondition")}</p>
                             {!edHasCond ? (
                               <button onClick={() => setEdHasCond(true)} className="jf-btn-ghost mt-1 px-2 py-1 text-xs">
                                 + {t("fs.notifCondAdd")}
@@ -2374,7 +2374,7 @@ function FormSettingsInner() {
                         {feeds.map((f, idx) => (
                           <div key={f.id} className="rounded-md border border-[var(--jf-border)] p-3">
                             <div className="flex flex-wrap items-center justify-between gap-2">
-                              <span className="text-[11px] font-medium uppercase tracking-wider text-[#9ca3af]">
+                              <span className="text-[11px] font-medium uppercase tracking-wider text-[var(--jf-muted)]">
                                 {t("fs.chipFeedName")} #{idx + 1}
                               </span>
                               <button
@@ -2407,7 +2407,7 @@ function FormSettingsInner() {
                               <div>
                                 <label className={labelCls}>
                                   {t("set.secretKey")}{" "}
-                                  <span className="text-slate-400">{t("fs.chipSecretKeep")}</span>
+                                  <span className="text-[var(--jf-muted)]">{t("fs.chipSecretKeep")}</span>
                                 </label>
                                 <input
                                   value={f.secret_key}
@@ -2507,7 +2507,7 @@ function FormSettingsInner() {
                               {ev}
                             </label>
                           ))}
-                          <label className="flex items-center gap-1 text-sm text-slate-400">
+                          <label className="flex items-center gap-1 text-sm text-[var(--jf-muted)]">
                             <input type="checkbox" checked={whEvents.includes("*")} onChange={() => toggleWhEvent("*")} />
                             {t("webhook.event.all")}
                           </label>
@@ -2522,7 +2522,7 @@ function FormSettingsInner() {
                           <li key={wh.id} className="flex items-center justify-between gap-3 rounded-lg border border-[var(--jf-border)] px-4 py-2.5">
                             <div className="min-w-0">
                               <p className="truncate font-mono text-xs">{wh.url}</p>
-                              <p className="mt-0.5 text-[11px] text-slate-400">{(wh.events || []).join(", ")}</p>
+                              <p className="mt-0.5 text-[11px] text-[var(--jf-muted)]">{(wh.events || []).join(", ")}</p>
                             </div>
                             <button onClick={() => deleteFormWebhook(wh.id)} disabled={!canWrite}
                               className="shrink-0 text-xs text-slate-500 hover:text-red-500">✕</button>

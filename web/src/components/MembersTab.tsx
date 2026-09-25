@@ -146,7 +146,7 @@ export function MembersTab({ workspaceId }: { workspaceId: string }) {
   return (
     <section className="jf-card mt-6 p-6">
       <h2 className="text-lg font-semibold">{t("mem.title")}</h2>
-      <p className="mt-1 max-w-xl text-sm text-slate-400">{t("mem.adminOnly")}</p>
+      <p className="mt-1 max-w-xl text-sm text-[var(--jf-muted)]">{t("mem.adminOnly")}</p>
 
       {msg && <p className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-600">{msg}</p>}
       {err && <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{err}</p>}
@@ -192,13 +192,13 @@ export function MembersTab({ workspaceId }: { workspaceId: string }) {
             {busy ? "…" : t("mem.invite")}
           </button>
         </div>
-        <p className="mt-1 text-[11px] text-slate-400">{t(`role.hint.${role}` as any)}</p>
+        <p className="mt-1 text-[11px] text-[var(--jf-muted)]">{t(`role.hint.${role}` as any)}</p>
       </form>
 
       {/* Members list */}
       <h3 className="mt-6 text-sm font-semibold text-slate-700">{t("mem.membersList")}</h3>
       {members.length === 0 ? (
-        <p className="mt-2 text-sm text-slate-400">{t("mem.noMembers")}</p>
+        <p className="mt-2 text-sm text-[var(--jf-muted)]">{t("mem.noMembers")}</p>
       ) : (
         <ul className="mt-2 space-y-2">
           {members.map((m) => (
@@ -209,7 +209,7 @@ export function MembersTab({ workspaceId }: { workspaceId: string }) {
               <div className="min-w-0">
                 <p className="truncate text-sm font-medium">
                   {m.name || m.email}
-                  {m.name && <span className="ml-1 text-slate-400">({m.email})</span>}
+                  {m.name && <span className="ml-1 text-[var(--jf-muted)]">({m.email})</span>}
                 </p>
                 <span
                   className={`mt-0.5 inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${
@@ -253,7 +253,7 @@ export function MembersTab({ workspaceId }: { workspaceId: string }) {
       {/* Pending invites */}
       <h3 className="mt-6 text-sm font-semibold text-slate-700">{t("mem.pendingTitle")}</h3>
       {invites.length === 0 ? (
-        <p className="mt-2 text-sm text-slate-400">{t("mem.noPending")}</p>
+        <p className="mt-2 text-sm text-[var(--jf-muted)]">{t("mem.noPending")}</p>
       ) : (
         <ul className="mt-2 space-y-2">
           {invites.map((inv) => (

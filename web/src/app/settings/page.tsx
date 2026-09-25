@@ -1084,7 +1084,7 @@ export default function Settings() {
               className={`-mb-px whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium sm:px-4 ${
                 tab === id
                   ? "border-slate-900 text-slate-900"
-                  : "border-transparent text-slate-500 hover:text-slate-800"
+                  : "border-transparent text-[var(--jf-muted)] hover:text-slate-800"
               }`}
             >
               <span className="sm:hidden">{t(`set.tab.${id}` as const)}</span>
@@ -1118,7 +1118,7 @@ export default function Settings() {
                 </span>
               )}
             </div>
-            <p className="mt-2 max-w-xl text-sm text-slate-400">
+            <p className="mt-2 max-w-xl text-sm text-[var(--jf-muted-on-tint)]">
               {t("set.getYour")} <code className="rounded bg-slate-100 px-1">Brand ID</code> {t("set.and")}{" "}
               <code className="rounded bg-slate-100 px-1">{t("set.secretKey")}</code> {t("set.from")}{" "}
               <a
@@ -1165,7 +1165,7 @@ export default function Settings() {
                   placeholder={verified && secretMasked ? t("set.secretMaskedPlaceholder") : "sk_live_… / sk_test_…"}
                 />
                 {verified && secretMasked && (
-                  <p className="mt-1 text-xs text-slate-400">
+                  <p className="mt-1 text-xs text-[var(--jf-muted)]">
                     {t("set.secretMasked", { masked: secretMasked })}
                   </p>
                 )}
@@ -1175,12 +1175,12 @@ export default function Settings() {
                 <p className="mt-1 text-sm">
                   {t("set.autoDetected", { mode: (secretKey ? detectMode(secretKey) : (status?.mode || "test")) === "live" ? t("set.live") : t("set.test") })}
                 </p>
-                <p className="mt-1 text-xs text-slate-400">{t("set.modeHint")}</p>
+                <p className="mt-1 text-xs text-[var(--jf-muted)]">{t("set.modeHint")}</p>
               </div>
 
               <div>
                 <label className="text-xs text-slate-500">
-                  {t("set.emailFallback")} <span className="text-slate-400">{t("set.emailFallbackHint")}</span>
+                  {t("set.emailFallback")} <span className="text-[var(--jf-muted)]">{t("set.emailFallbackHint")}</span>
                 </label>
                 <input
                   value={emailFallback}
@@ -1193,7 +1193,7 @@ export default function Settings() {
 
               <div>
                 <label className="text-xs text-slate-500">
-                  {t("set.paymentMethods")} <span className="text-slate-400">{t("set.allMethods")}</span>
+                  {t("set.paymentMethods")} <span className="text-[var(--jf-muted)]">{t("set.allMethods")}</span>
                 </label>
                 <div className="mt-1.5 flex flex-wrap gap-1.5">
                   {METHODS.map((m) => (
@@ -1230,7 +1230,7 @@ export default function Settings() {
           <>
             <section className="jf-card mt-6 p-6">
               <h2 className="text-lg font-semibold">{t("set.domainsTitle")}</h2>
-              <p className="mt-2 max-w-xl text-sm text-slate-400">
+              <p className="mt-2 max-w-xl text-sm text-[var(--jf-muted)]">
                 {t("set.domainsHelp")}
               </p>
               {domainMsg && <p className="mt-3 rounded-lg bg-indigo-50 px-3 py-2 text-sm text-indigo-700">{domainMsg}</p>}
@@ -1339,7 +1339,7 @@ export default function Settings() {
                         <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-xs text-slate-700">
                           <span className="rounded bg-white px-1.5 py-0.5 ring-1 ring-slate-200">CNAME</span>
                           <span className="rounded bg-white px-1.5 py-0.5 ring-1 ring-slate-200">{d.domain}</span>
-                          <span className="text-slate-400">→</span>
+                          <span className="text-[var(--jf-muted-on-tint)]">→</span>
                           <span className="rounded bg-white px-1.5 py-0.5 ring-1 ring-slate-200">{CNAME_TARGET}</span>
                           <button
                             type="button"
@@ -1353,7 +1353,7 @@ export default function Settings() {
                           </button>
                         </div>
                         {polling[d.id] && (
-                          <p className="mt-1.5 text-[11px] text-slate-400">{t("set.pollingHint")}</p>
+                          <p className="mt-1.5 text-[11px] text-[var(--jf-muted-on-tint)]">{t("set.pollingHint")}</p>
                         )}
                       </div>
                     )}
@@ -1473,7 +1473,7 @@ export default function Settings() {
                   </span>
                 )}
               </div>
-              <p className="mt-2 text-sm text-slate-400">
+              <p className="mt-2 text-sm text-[var(--jf-muted)]">
                 {t("set.cfHelp")}
               </p>
               {/* `flex-wrap` because a non-wrapping row of two button classes
@@ -1595,7 +1595,7 @@ export default function Settings() {
                 </div>
               )}
               {!cfConfigured && (
-                <p className="mt-2 text-xs text-slate-400">{t("set.cfNotConfigured")}</p>
+                <p className="mt-2 text-xs text-[var(--jf-muted)]">{t("set.cfNotConfigured")}</p>
               )}
             </section>
           </>
@@ -1605,7 +1605,7 @@ export default function Settings() {
         {tab === "tracking" && (
           <section className="jf-card mt-6 p-6">
             <h2 className="text-lg font-semibold">{t("set.trackingTitle")}</h2>
-            <p className="mt-1 max-w-xl text-sm text-slate-400">
+            <p className="mt-1 max-w-xl text-sm text-[var(--jf-muted-on-tint)]">
               {t("set.trackingHelp")} <code className="rounded bg-slate-100 px-1">&lt;script src="https://…"&gt;</code>, <code className="rounded bg-slate-100 px-1">&lt;meta&gt;</code>, comments. Event handlers & cookie writes stripped.
             </p>
             <textarea value={trackingHead} onChange={(e) => setTrackingHead(e.target.value)} rows={4}
@@ -1625,7 +1625,7 @@ export default function Settings() {
         {tab === "einvoice" && (
           <section className="jf-card mt-6 p-6">
             <h2 className="text-lg font-semibold">{t("set.einvoiceTitle")}</h2>
-            <p className="mt-1 max-w-xl text-sm text-slate-400">
+            <p className="mt-1 max-w-xl text-sm text-[var(--jf-muted)]">
               {t("set.einvoiceHelp")}
             </p>
             <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -1652,7 +1652,7 @@ export default function Settings() {
         {tab === "webhooks" && (
           <section className="jf-card mt-6 p-6">
               <h2 className="text-lg font-semibold">{t("set.webhooksTitle")}</h2>
-              <p className="mt-1 max-w-xl text-sm text-slate-400">
+              <p className="mt-1 max-w-xl text-sm text-[var(--jf-muted-on-tint)]">
                 {t("set.eventsLabel")} <code className="rounded bg-slate-100 px-1">sale.paid</code>,{" "}
                 <code className="rounded bg-slate-100 px-1">sale.failed</code>,{" "}
                 <code className="rounded bg-slate-100 px-1">subscription.charged</code>. {t("set.hmacSigned")}
@@ -1686,7 +1686,7 @@ export default function Settings() {
                         {ev}
                       </label>
                     ))}
-                    <label className="flex items-center gap-1 text-sm text-slate-400">
+                    <label className="flex items-center gap-1 text-sm text-[var(--jf-muted)]">
                       <input
                         type="checkbox"
                         checked={whEvents.includes("*")}
@@ -1708,7 +1708,7 @@ export default function Settings() {
                       <div className="flex items-center justify-between gap-3 px-4 py-2.5">
                         <div className="min-w-0">
                           <p className="truncate font-mono text-xs">{wh.url}</p>
-                          <p className="mt-0.5 text-[11px] text-slate-400">{(wh.events || []).join(", ")}</p>
+                          <p className="mt-0.5 text-[11px] text-[var(--jf-muted)]">{(wh.events || []).join(", ")}</p>
                         </div>
                         <div className="flex shrink-0 items-center gap-3">
                           {/* Issue #130: last-delivery status indicator. */}
@@ -1723,7 +1723,7 @@ export default function Settings() {
                               {status === "success" && t("wh.success")}
                               {status === "pending" && t("wh.pending")}
                               {status === "failed" && t("wh.failed")}
-                              <span className="text-slate-400">· {t("wh.attemptCount", { n: last.attempt })}</span>
+                              <span className="text-[var(--jf-muted)]">· {t("wh.attemptCount", { n: last.attempt })}</span>
                             </span>
                           )}
                           <button onClick={() => openEdit(wh)}
@@ -1744,12 +1744,12 @@ export default function Settings() {
                         <div className="border-t border-[var(--jf-border)] px-4 py-3">
                           <h4 className="mb-2 text-xs font-semibold text-slate-700">{t("wh.history")}</h4>
                           {(!deliv || deliv.length === 0) ? (
-                            <p className="text-xs text-slate-400">{t("wh.noDeliveries")}</p>
+                            <p className="text-xs text-[var(--jf-muted)]">{t("wh.noDeliveries")}</p>
                           ) : (
                             <div className="overflow-x-auto">
                               <table className="w-full min-w-96 text-left text-xs">
                                 <thead>
-                                  <tr className="text-slate-400">
+                                  <tr className="text-[var(--jf-muted)]">
                                     <th className="py-1 pr-3 font-medium">{t("wh.colTime")}</th>
                                     <th className="py-1 pr-3 font-medium">{t("wh.colEvent")}</th>
                                     <th className="py-1 pr-3 font-medium">{t("wh.colStatus")}</th>
@@ -1785,7 +1785,7 @@ export default function Settings() {
                               </table>
                             </div>
                           )}
-                          <p className="mt-2 text-[11px] text-slate-400">{t("wh.retryNote")}</p>
+                          <p className="mt-2 text-[11px] text-[var(--jf-muted)]">{t("wh.retryNote")}</p>
                         </div>
                       )}
                     </li>
@@ -1821,7 +1821,7 @@ export default function Settings() {
                           {ev}
                         </label>
                       ))}
-                      <label className="flex items-center gap-1 text-sm text-slate-400">
+                      <label className="flex items-center gap-1 text-sm text-[var(--jf-muted-on-tint)]">
                         <input
                           type="checkbox"
                           checked={editEvents.includes("*")}
@@ -1849,7 +1849,7 @@ export default function Settings() {
         {tab === "emel" && (
           <section className="jf-card mt-6 p-6">
             <h2 className="text-lg font-semibold">{t("set.emelTitle")}</h2>
-            <p className="mt-1 max-w-xl text-sm text-slate-400">
+            <p className="mt-1 max-w-xl text-sm text-[var(--jf-muted)]">
               {t("set.emelHelp")}
             </p>
             <div className="mt-4 space-y-3">
@@ -1862,7 +1862,7 @@ export default function Settings() {
                       field the rule applies to). */}
                   <a
                     href="/docs/customize#language"
-                    className="text-slate-400 underline hover:text-slate-600"
+                    className="text-[var(--jf-muted)] underline hover:text-slate-600"
                     title={t("set.emelLanguageRule")}
                   >
                     ?
@@ -1877,10 +1877,10 @@ export default function Settings() {
               </div>
               <div>
                 <label className="text-xs text-slate-500">
-                  {t("set.emelBody")} <span className="text-slate-400">{t("set.emelPlaceholders")} <code className="rounded bg-slate-100 px-1">{"{{ref_code}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{amount}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{items}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{form_url}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{buyer_name}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{date}}"}</code></span>{" "}
+                  {t("set.emelBody")} <span className="text-[var(--jf-muted-on-tint)]">{t("set.emelPlaceholders")} <code className="rounded bg-slate-100 px-1">{"{{ref_code}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{amount}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{items}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{form_url}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{buyer_name}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{date}}"}</code></span>{" "}
                   <a
                     href="/docs/customize#language"
-                    className="text-slate-400 underline hover:text-slate-600"
+                    className="text-[var(--jf-muted)] underline hover:text-slate-600"
                     title={t("set.emelLanguageRule")}
                   >
                     ?
@@ -1927,7 +1927,7 @@ export default function Settings() {
               </div>
               {emelPreview && (
                 <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
-                  <p className="text-xs text-slate-400">{t("set.emelPreviewHint")}</p>
+                  <p className="text-xs text-[var(--jf-muted-on-tint)]">{t("set.emelPreviewHint")}</p>
                   <p className="mt-2 text-sm font-medium">{renderPreview(emelSubject)}</p>
                   <pre className="mt-2 whitespace-pre-wrap rounded bg-white p-3 text-xs text-slate-700">{renderPreview(emelBody)}</pre>
                 </div>
@@ -1940,7 +1940,7 @@ export default function Settings() {
           <>
           <section className="jf-card mt-6 p-6">
             <h2 className="text-lg font-semibold">{t("set.sfTitle")}</h2>
-            <p className="mt-1 max-w-xl text-sm text-slate-400">
+            <p className="mt-1 max-w-xl text-sm text-[var(--jf-muted)]">
               {t("set.sfHelp")}
             </p>
             <div className="mt-4 space-y-3">
@@ -2129,7 +2129,7 @@ export default function Settings() {
           {/* Issue #360: per-workspace customizable landing page (Storefront tab). */}
           <section className="jf-card mt-6 p-6">
             <h2 className="text-lg font-semibold">{t("set.lpTitle")}</h2>
-            <p className="mt-1 max-w-xl text-sm text-slate-400">
+            <p className="mt-1 max-w-xl text-sm text-[var(--jf-muted)]">
               {t("set.lpHelp")}
             </p>
             <div className="mt-4 space-y-3">
@@ -2363,7 +2363,7 @@ export default function Settings() {
         {tab === "currency" && (
           <section className="jf-card mt-6 p-6">
             <h2 className="text-lg font-semibold">{t("set.currencyTitle")}</h2>
-            <p className="mt-1 max-w-xl text-sm text-slate-400">
+            <p className="mt-1 max-w-xl text-sm text-[var(--jf-muted)]">
               {t("set.currencyHelp")}
             </p>
             <div className="mt-4 max-w-xl space-y-3">
@@ -2387,7 +2387,7 @@ export default function Settings() {
             </div>
             <div className="mt-6">
               <h3 className="text-sm font-semibold text-slate-700">{t("set.currencyRates")}</h3>
-              <p className="mt-1 text-xs text-slate-400">
+              <p className="mt-1 text-xs text-[var(--jf-muted)]">
                 {t("set.currencyRatesHint")} <span className="text-slate-500">({ratesCached ? t("set.currencyCached") : t("set.currencyFresh")})</span>
               </p>
               {rates.length > 0 ? (
@@ -2400,7 +2400,7 @@ export default function Settings() {
                   ))}
                 </div>
               ) : (
-                <p className="mt-2 text-sm text-slate-400">—</p>
+                <p className="mt-2 text-sm text-[var(--jf-muted)]">—</p>
               )}
             </div>
           </section>
@@ -2411,7 +2411,7 @@ export default function Settings() {
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h2 className="text-lg font-semibold">{t("set.affiliatesTitle")}</h2>
-                <p className="mt-1 max-w-xl text-sm text-slate-400">{t("set.affiliatesHelp")}</p>
+                <p className="mt-1 max-w-xl text-sm text-[var(--jf-muted)]">{t("set.affiliatesHelp")}</p>
               </div>
               {/* Issue #513: inline "?" doc link (AGENTS.md documentation-parity
                   rule 4) — the affiliate surface had no docs at all. */}
@@ -2492,7 +2492,7 @@ export default function Settings() {
             <div className="mt-6">
               <h3 className="text-sm font-semibold text-slate-700">{t("set.affiliatesList")}</h3>
               {affiliates.length === 0 ? (
-                <p className="mt-2 text-sm text-slate-400">{t("set.affiliatesEmpty")}</p>
+                <p className="mt-2 text-sm text-[var(--jf-muted)]">{t("set.affiliatesEmpty")}</p>
               ) : (
                 <div className="mt-2 space-y-2">
                   {affiliates.map((a) => (
@@ -2500,7 +2500,7 @@ export default function Settings() {
                       <div>
                         <span className="font-medium text-slate-800">{a.code}</span>
                         {a.name && <span className="ml-2 text-slate-500">{a.name}</span>}
-                        <span className="ml-2 text-xs text-slate-400">{a.commission_pct}%</span>
+                        <span className="ml-2 text-xs text-[var(--jf-muted)]">{a.commission_pct}%</span>
                       </div>
                       <code className="max-w-[50%] truncate text-xs text-[var(--jf-primary)]">{a.referral_url}</code>
                     </div>

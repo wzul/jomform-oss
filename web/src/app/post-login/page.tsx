@@ -32,7 +32,7 @@ export default function PostLoginPage() {
   // Never renders Landing — anonymous visitors reach here only via the social
   // callback which has already started a session.
   return (
-    <main className="flex min-h-screen items-center justify-center text-slate-400">
+    <main className="flex min-h-screen items-center justify-center text-[var(--jf-muted)]">
       …
     </main>
   );

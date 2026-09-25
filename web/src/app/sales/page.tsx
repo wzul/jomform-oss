@@ -740,7 +740,7 @@ function SalesPageInner() {
                 to the field, pointing at the section that documents it. */}
             <a
               href="/docs#realtime-notifications"
-              className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 text-[10px] font-semibold text-slate-500 hover:bg-slate-50"
+              className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 text-[10px] font-semibold text-[var(--jf-muted)] hover:bg-slate-50"
               aria-label={t("sales.soundDocs")}
               title={t("sales.soundDocs")}
             >
