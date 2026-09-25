@@ -14,6 +14,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -24,20 +26,27 @@ import (
 
 var authOnce sync.Once
 
-// authTestValkey returns a Sessions client, after clearing the login-hardening
-// keys this suite writes once per test-binary run, so stale jf:loginfail:*
-// counters from a previous run (15-min TTL, IPs that repeat between runs) cannot
-// skew the lockout and rate-limit assertions.
+// authTestValkey returns a Sessions client for the dedicated test Valkey DB and
+// reclaims the login-breaker counters this process owns.
 //
-// It clears exactly the two key families this suite owns — the login-failure
-// counters and the sessions it minted — by SCAN, and never issues FlushDB. A
-// whole-database flush deletes keys this suite did not write, which means it also
-// wipes a live API's or a concurrent run's state on the same database; that is
-// the same defect the queue fixtures had, and the fix is the same shape: clean up
-// what you own, not the database.
+// Counters keyed by the fixture's test IPs live in a Valkey DB SHARED by every
+// checkout, with a 15-minute TTL, so stale ones must be cleared for a test to be
+// deterministic across -count and across runs. Clearing them the obvious way —
+// SCAN+DEL of the production prefixes `jf:loginfail:*` / `jf:session:*` — is
+// also destructive to a peer: whatever else is on that database, a concurrent
+// `go test` binary holding a live lockout counter or a live API's session tokens,
+// loses its keys to this suite. A whole-database flush is the same defect in a
+// sharper form.
 //
-// Tests must still point JOMFORM_TEST_VALKEY_URL at a throwaway DB, never the
-// dev/prod DB.
+// So the reclaim is scoped instead: uniqueTestIP gives each PROCESS its own /24,
+// and only counters under THIS process's /24 are deleted. Tests must still point
+// JOMFORM_TEST_VALKEY_URL at a throwaway DB (e.g. .../15), never dev/prod.
+//
+// Only the prefixes this fixture can legitimately own are touched. The sweep used
+// to also clear `jf:session:*`, but every session in this package is minted by
+// its own test and dies with it, so nothing here needs a reclaim; a test that
+// asserts on a live session reads the key it just created (auth_ux_test.go) and
+// must not have it swept out from under it.
 func authTestValkey(t *testing.T) *auth.Sessions {
 	t.Helper()
 	valkeyURL := os.Getenv("JOMFORM_TEST_VALKEY_URL")
@@ -48,30 +57,88 @@ func authTestValkey(t *testing.T) *auth.Sessions {
 	if err != nil {
 		t.Fatalf("valkey sessions: %v", err)
 	}
-	authOnce.Do(func() {
-		ctx := context.Background()
-		for _, prefix := range []string{"jf:loginfail:", "jf:session:"} {
-			var cursor uint64
-			for {
-				keys, next, err := sess.Client().Scan(ctx, cursor, prefix+"*", 100).Result()
-				if err != nil {
-					t.Errorf("clear %s keys: %v", prefix, err)
-					break
-				}
-				if len(keys) > 0 {
-					if err := sess.Client().Del(ctx, keys...).Err(); err != nil {
-						t.Errorf("delete %s keys: %v", prefix, err)
-						break
-					}
-				}
-				if next == 0 {
-					break
-				}
-				cursor = next
-			}
-		}
-	})
+	authOnce.Do(func() { reclaimOwnLoginCounters(t, sess) })
 	return sess
+}
+
+// loginCounterKeyPrefixes are the shared-Valkey keys the auth fixture's test IPs
+// reach. The login breaker's per-IP counter is the only one: the coarse per-IP
+// token buckets (RateLimit / RegistrationLimit) are process-local maps in
+// middleware/ratelimit.go, and the per-ACCOUNT counter is keyed by an email the
+// tests mint per run, so neither can go stale.
+var loginCounterKeyPrefixes = []string{"jf:loginfail:ip:"}
+
+// reclaimOwnLoginCounters deletes the login-breaker counters under this
+// process's own test-IP /24 only.
+//
+// Ownership is not assumed: the /24 comes from uniqueTestIP's derivation, so a
+// key is deleted only if exactly one test IP could have produced it. A pattern
+// hit that has no matching address in the family is left alone and reported —
+// deleting a key we cannot prove we own is how a scoped cleanup turns back into
+// the cross-process clobber it replaced.
+func reclaimOwnLoginCounters(t *testing.T, sess *auth.Sessions) {
+	t.Helper()
+	ctx := context.Background()
+	family := testIPFamilyFor(uint32(os.Getpid()))
+
+	for _, prefix := range loginCounterKeyPrefixes {
+		// SCAN, not KEYS: this runs against a shared DB whose keyspace is not
+		// bounded by the fixture.
+		var cursor uint64
+		var owned []string
+		for {
+			keys, next, err := sess.Client().Scan(ctx, cursor, prefix+family+"*", 100).Result()
+			if err != nil {
+				// A cleanup that cannot run must not silently pass; the
+				// assertions it protects would then depend on a previous run's
+				// leftovers.
+				t.Fatalf("list %s counters under %s%s*: %v", prefix, prefix, family, err)
+			}
+			for _, k := range keys {
+				if ownLoginCounterKey(prefix, k, family) {
+					owned = append(owned, k)
+				} else {
+					t.Logf("leaving %q alone: it matches %s%s* but encodes no address this process owns", k, prefix, family)
+				}
+			}
+			if next == 0 {
+				break
+			}
+			cursor = next
+		}
+		if len(owned) == 0 {
+			continue
+		}
+		if err := sess.Client().Del(ctx, owned...).Err(); err != nil {
+			t.Fatalf("clear %d stale %s counter(s) under %s%s*: %v", len(owned), prefix, prefix, family, err)
+		}
+	}
+}
+
+// ownLoginCounterKey reports whether a key found under the process's own /24 is
+// one this process could have written: the key must be exactly the prefix plus a
+// generated address, with nothing appended.
+func ownLoginCounterKey(prefix, key, family string) bool {
+	ip := strings.TrimPrefix(key, prefix)
+	if ip == key || !strings.HasPrefix(ip, family) {
+		return false
+	}
+	return validTestIP(ip, family)
+}
+
+// validTestIP reports whether ip has the exact `<family><n>` shape uniqueTestIP
+// produces: a last octet within the per-process bound and without leading zeros,
+// so "10.1.2.01" is rejected rather than mistaken for "10.1.2.1".
+func validTestIP(ip, family string) bool {
+	octet := strings.TrimPrefix(ip, family)
+	if octet == "" || len(octet) > 3 {
+		return false
+	}
+	n, err := strconv.Atoi(octet)
+	if err != nil || n < 1 || n > maxTestIPsPerProcess {
+		return false
+	}
+	return strconv.Itoa(n) == octet
 }
 
 func authUsers(t *testing.T) *dbstore.UserStore {
