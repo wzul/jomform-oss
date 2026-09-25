@@ -16,6 +16,7 @@ import { useSession } from "../../components/session";
 import { formatDate, formatDateTime } from "../../lib/formatDate";
 import { growthLegend, growthValue, type GrowthCounts } from "../../lib/adminGrowth";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
+import { apiErr, translateApiErr } from "../../lib/apiErr";
 
 type Totals = {
   workspaces: number;
@@ -119,16 +120,17 @@ const SUPP_REASONS = ["hard_bounce", "complaint", "manual"] as const;
 const looksLikeEmail = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
 
 /**
- * Reads the API's `{error: "..."}` body off a failed response, falling back to
- * `fallback` when the body is absent or unparseable. The write endpoints answer
- * with a specific Malay message ("emel tidak sah", an invalid reason code) that
- * is more useful to the operator than a generic line, so it is surfaced
- * verbatim rather than swallowed.
+ * Reads the API's `{error, code}` failure body off a failed response, falling
+ * back to `fallback` when the body is absent or unparseable.
+ *
+ * Issue #6177: the server's `error` string is Malay prose, so it must NEVER be
+ * rendered. The machine `code` is translated instead; an unknown code falls back
+ * to `fallback`, which each caller passes translated.
  */
-async function serverError(r: Response, fallback: string): Promise<string> {
+async function serverError(r: Response, fallback: string, t: (k: Key) => string): Promise<string> {
   try {
-    const body = (await r.json()) as { error?: unknown };
-    if (typeof body?.error === "string" && body.error.trim() !== "") return body.error;
+    const body = await r.json();
+    return apiErr(body, fallback, t);
   } catch {
     // Non-JSON body (a proxy error page, an empty 500): use the fallback.
   }
@@ -238,7 +240,7 @@ export default function AdminPage() {
   const loadDead = useCallback(async () => {
     const r = await runLoad(
       () => fetchJson<DeadLetters>("/api/admin/dead-letters"),
-      { onUnauth: goToLogin, message: t("admin.deadLettersLoadFail") },
+      { onUnauth: goToLogin, message: t("admin.deadLettersLoadFail"), errorKey: (b: unknown) => translateApiErr(b, t) },
     );
     setDeadErr(r.ok ? "" : r.error);
     if (r.ok) setDead(r.data);
@@ -267,7 +269,7 @@ export default function AdminPage() {
     // redirect above fires first), so a 403 here means a stale session.
     const r = await runLoad(
       () => fetchJson<Overview>("/api/admin/overview"),
-      { onUnauth: goToLogin, message: t("admin.loadFail") },
+      { onUnauth: goToLogin, message: t("admin.loadFail"), errorKey: (b: unknown) => translateApiErr(b, t) },
     );
     setErr(r.ok ? "" : r.error);
     if (r.ok) setData(r.data);
@@ -297,7 +299,7 @@ export default function AdminPage() {
     if (q) params.set("q", q);
     const r = await runLoad(
       () => fetchJson<Suppressions>(`/api/admin/suppressions?${params.toString()}`),
-      { onUnauth: goToLogin, message: t("admin.suppLoadFail") },
+      { onUnauth: goToLogin, message: t("admin.suppLoadFail"), errorKey: (b: unknown) => translateApiErr(b, t) },
     );
     setSuppErr(r.ok ? "" : r.error);
     if (r.ok) setSupp(r.data);
@@ -325,9 +327,9 @@ export default function AdminPage() {
       }
       if (!r.ok) {
         // The server knows why better than the page does: a 404 is "not on the
-        // list" and an infrastructure failure says so. Show its message, and
-        // only fall back to the generic line when the body has none.
-        setSuppErr(await serverError(r, t("admin.suppRemoveFail")));
+        // list" and an infrastructure failure says so. Its machine code is
+        // translated; only the generic line is used when there is none.
+        setSuppErr(await serverError(r, t("admin.suppRemoveFail"), t));
         return;
       }
       // Re-read the SAME page the operator was on, so the row disappears in
@@ -372,9 +374,10 @@ export default function AdminPage() {
         return;
       }
       if (!r.ok) {
-        // A rejected write carries the reason ("emel tidak sah", an invalid
-        // reason code); surfacing it verbatim is what makes the form fixable.
-        setAddErr(await serverError(r, t("admin.suppAddFail")));
+        // A rejected write carries a machine code (an invalid email, a bad
+        // reason code); translating it is what makes the form fixable — the
+        // server's own prose is Malay and is never rendered.
+        setAddErr(await serverError(r, t("admin.suppAddFail"), t));
         return;
       }
       const res = (await r.json()) as { email: string; created: boolean };
@@ -419,7 +422,7 @@ export default function AdminPage() {
     setFbErr("");
     const r = await runLoad(
       () => fetchJson<FeedbackList>(`/api/admin/feedback?${params.toString()}`),
-      { onUnauth: goToLogin, message: t("afb.loadFail") },
+      { onUnauth: goToLogin, message: t("afb.loadFail"), errorKey: (b: unknown) => translateApiErr(b, t) },
     );
     if (!r.ok) {
       setFbErr(r.error);
@@ -437,7 +440,7 @@ export default function AdminPage() {
     const r = await runLoad(
       () => fetchJson<{ thread: FeedbackThread; messages: FeedbackMessage[] }>(
         `/api/admin/feedback/${encodeURIComponent(id)}`),
-      { onUnauth: goToLogin, message: t("afb.loadFail") },
+      { onUnauth: goToLogin, message: t("afb.loadFail"), errorKey: (b: unknown) => translateApiErr(b, t) },
     );
     if (!r.ok) {
       setFbActionErr(r.error);

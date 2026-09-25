@@ -23,6 +23,7 @@ import {
   publishOutcome,
 } from "../../lib/publishResult";
 import TemplatePicker from "../../components/TemplatePicker";
+import { apiErr, translateApiErr } from "../../lib/apiErr";
 
 /* ─── types ──────────────────────────────────────────────────────────────── */
 
@@ -347,7 +348,7 @@ export default function Builder() {
         const d = await fetchJson<unknown>(`/api/rest/products${workspaceQuery()}`);
         return Array.isArray(d) ? (d as Product[]) : [];
       },
-      { onUnauth: goToLogin, message: t("bld.prodLoadFail") },
+      { onUnauth: goToLogin, message: t("bld.prodLoadFail"), errorKey: (b: unknown) => translateApiErr(b, t) },
     );
     if (!r.ok) {
       setProducts([]);
@@ -684,7 +685,9 @@ export default function Builder() {
       });
       if (!wr.ok) {
         const d = await wr.json().catch(() => ({}));
-        setLoadErr(d.error || t(editingTemplate ? "tplmg.editFail" : "bld.saveFail"));
+        setLoadErr(
+          apiErr(d, t(editingTemplate ? "tplmg.editFail" : "bld.saveFail"), t),
+        );
         setSaving(false);
         return;
       }
@@ -720,11 +723,17 @@ export default function Builder() {
         // to sell live without an acknowledgement. Surface it as the warning
         // panel (with "Publish anyway"), not as an opaque error line.
         const d = await sr.json().catch(() => ({}));
+        // The `needs_ack` branch is the "Publish anyway" flow (#694) and stays:
+        // the status route is the one the dashboard's status control reaches, and
+        // it refuses to make a payment form with nothing to sell live without an
+        // acknowledgement. The ERROR branch must not print the API's prose, so it
+        // goes through apiErr (issue #6177) — the outcome's own message is a
+        // server string and is deliberately not rendered.
         const outcome = publishOutcome({ ok: false, status: sr.status, body: d }, "");
         setPublishNotice(
           outcome.kind === "needs_ack"
             ? { kind: "needsAck" }
-            : { kind: "error", message: outcomeMessage(outcome) || "Failed to set status" },
+            : { kind: "error", message: apiErr(d, t("bld.statusSaveFail"), t) },
         );
         setSaving(false);
         return;
@@ -879,7 +888,11 @@ export default function Builder() {
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
-        setAiMsg(r.status === 429 ? t("bld.aiRateLimited") : t("bld.aiError", { error: d.error || r.status }));
+        setAiMsg(
+          r.status === 429
+            ? t("bld.aiRateLimited")
+            : t("bld.aiError", { error: apiErr(d, String(r.status), t) }),
+        );
         return;
       }
       // Apply the generated config: title + blocks (fresh ids so they are
@@ -968,7 +981,7 @@ export default function Builder() {
       const r = await fetch("/api/rest/uploads/image", { method: "POST", body: fd });
       const d = await r.json().catch(() => ({}));
       if (!r.ok || !d.url) {
-        setLoadErr(d.error || t("bld.uploadImageFail"));
+        setLoadErr(apiErr(d, t("bld.uploadImageFail"), t));
         return;
       }
       updateBlock(selectedBlock.id, { src: d.url });

@@ -253,6 +253,7 @@ export const DICT = {
   "bld.prodLoadFail": { en: "We couldn't load your products. Please try again.", ms: "Kami tidak dapat memuatkan produk anda. Sila cuba lagi.", zh: "无法加载您的商品。请重试。", ta: "உங்கள் தயாரிப்புகளை ஏற்ற முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر تحميل منتجاتك. يرجى المحاولة مرة أخرى." },
   "bld.formLoadFail": { en: "We couldn't load this form. Please try again.", ms: "Kami tidak dapat memuatkan borang ini. Sila cuba lagi.", zh: "无法加载此表单。请重试。", ta: "இந்தப் படிவத்தை ஏற்ற முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر تحميل هذا النموذج. يرجى المحاولة مرة أخرى." },
   "bld.saveFail": { en: "Failed to save.", ms: "Gagal simpan.", zh: "保存失败。", ta: "சேமிக்க முடியவில்லை.", ar: "فشل الحفظ." },
+  "bld.statusSaveFail": { en: "Failed to set the form status.", ms: "Gagal tetapkan status borang.", zh: "设置表单状态失败。", ta: "படிவ நிலையை அமைக்க முடியவில்லை.", ar: "فشل تعيين حالة النموذج." },
   // issue #163: workspace members management UI + role-gated actions
   "set.tab.members": { en: "Members", ms: "Ahli", zh: "成员", ta: "உறுப்பினர்கள்", ar: "الأعضاء" },
   "mem.title": { en: "Workspace members", ms: "Ahli ruang kerja", zh: "工作区成员", ta: "பணியிட உறுப்பினர்கள்", ar: "أعضاء مساحة العمل" },
@@ -768,6 +769,68 @@ export const DICT = {
     ar: "يجب أن يبدأ رابط الصورة بـ https:// — يتم رفض المخططات الأخرى (data:، http:، javascript:، …) حتى لا تنكسر الصورة في صفحة المشتري.",
   },
   "set.lpLogoUrl": { en: "Logo URL (https://)", ms: "URL logo (https://)", zh: "Logo URL（https://）", ta: "Logo URL (https://)", ar: "رابط الشعار (https://)" },
+  // Issue #6177: the API answers every failure with a stable machine `code`
+  // (api/internal/httpapi/errcode.go) that the dashboard translates here.
+  // These are the codes the SERVER names. A code with no entry below is not
+  // translated on purpose: the calling page renders its own message, so an
+  // unknown code can never fall back to the server's prose.
+  "apiErr.workspaceNotFound": {
+    en: "That workspace was not found, or it is not one you have access to.",
+    ms: "Workspace itu tidak dijumpai, atau ia bukan milik anda.",
+    zh: "未找到该工作区，或您无权访问它。",
+    ta: "அந்த பணியிடம் கிடைக்கவில்லை, அல்லது அது உங்களுக்குச் சொந்தமானது அல்ல.",
+    ar: "لم يتم العثور على مساحة العمل هذه، أو أنها ليست من مساحاتك.",
+  },
+  "apiErr.workspaceSlugTaken": { en: "That slug is already taken.", ms: "Slug itu sudah digunakan.", zh: "该 Slug 已被占用。", ta: "அந்த slug ஏற்கனவே பயன்பாட்டில் உள்ளது.", ar: "هذا الـ slug مستخدم بالفعل." },
+  "apiErr.workspaceSlugInvalid": { en: "Slug must be 3-40 chars, a-z, 0-9, dash.", ms: "Slug mesti 3-40 aksara, a-z, 0-9, dash.", zh: "Slug 必须为 3-40 个字符，仅限 a-z、0-9、连字符。", ta: "Slug 3-40 எழுத்துகள், a-z, 0-9, dash ஆக இருக்க வேண்டும்.", ar: "يجب أن يكون الـ slug من 3-40 حرفاً، a-z، 0-9، شرطة." },
+  "apiErr.manageRequired": { en: "You need the manage or admin role in this workspace for that.", ms: "Anda perlukan peranan manage atau admin dalam workspace ini.", zh: "该操作需要此工作区的 manage 或 admin 角色。", ta: "இதற்கு இந்த பணியிடத்தில் manage அல்லது admin பங்கு தேவை.", ar: "تحتاج إلى دور manage أو admin في مساحة العمل هذه." },
+  "apiErr.adminRequired": { en: "Only a workspace admin can do that.", ms: "Hanya admin workspace boleh melakukannya.", zh: "只有工作区管理员可以执行该操作。", ta: "பணியிட நிர்வாகி மட்டுமே இதைச் செய்ய முடியும்.", ar: "يمكن لمسؤول مساحة العمل فقط القيام بذلك." },
+  "apiErr.scopeReadonly": { en: "This API key can only read — it needs the readwrite scope for that.", ms: "Kunci API ini hanya boleh baca — ia perlukan skop readwrite.", zh: "此 API 密钥仅限读取——该操作需要 readwrite 权限范围。", ta: "இந்த API விசை படிக்க மட்டுமே — இதற்கு readwrite அனுமதி தேவை.", ar: "مفتاح API هذا للقراءة فقط — يحتاج إلى نطاق readwrite." },
+  "apiErr.paymentNotConfigured": { en: "Online payments are not set up for this workspace yet.", ms: "Pembayaran dalam talian belum disediakan untuk workspace ini.", zh: "此工作区尚未设置在线支付。", ta: "இந்த பணியிடத்திற்கு ஆன்லைன் பணம் இன்னும் அமைக்கப்படவில்லை.", ar: "الدفع الإلكتروني غير مُهيَّأ لمساحة العمل هذه بعد." },
+  "apiErr.paymentInactive": { en: "Payments are inactive for this workspace.", ms: "Pembayaran tidak aktif untuk workspace ini.", zh: "此工作区的支付功能未启用。", ta: "இந்த பணியிடத்திற்கு பணம் செயலில் இல்லை.", ar: "الدفع غير مُفعَّل لمساحة العمل هذه." },
+  "apiErr.chipCredentials": { en: "Those payment credentials were rejected. Check the Brand ID and Secret Key.", ms: "Kredensial pembayaran ditolak. Semak Brand ID dan Secret Key.", zh: "支付凭据被拒绝。请检查 Brand ID 和 Secret Key。", ta: "பணம் செலுத்தும் சான்றுகள் நிராகரிக்கப்பட்டன. Brand ID மற்றும் Secret Key சரிபார்க்கவும்.", ar: "تم رفض بيانات اعتماد الدفع. تحقق من Brand ID و Secret Key." },
+  "apiErr.refundNotAllowed": { en: "This sale is not in a refundable state.", ms: "Jualan ini bukan dalam status boleh dipulangkan.", zh: "该笔销售当前不可退款。", ta: "இந்த விற்பனை பணம் திருப்பித் தரக்கூடிய நிலையில் இல்லை.", ar: "عملية البيع هذه ليست في حالة قابلة للاسترداد." },
+  "apiErr.subscriptionCancelled": { en: "That subscription has already been cancelled.", ms: "Langganan itu telah dibatalkan.", zh: "该订阅已取消。", ta: "அந்த சந்தா ஏற்கனவே ரத்து செய்யப்பட்டது.", ar: "تم إلغاء هذا الاشتراك بالفعل." },
+  "apiErr.formStatusInvalid": { en: "Status must be one of: draft, private, published.", ms: "Status mesti salah satu daripada: draft, private, published.", zh: "状态必须为：draft、private、published。", ta: "நிலை இவற்றில் ஒன்றாக இருக்க வேண்டும்: draft, private, published.", ar: "يجب أن تكون الحالة: draft أو private أو published." },
+  "apiErr.formPasswordTooShort": { en: "The form password must be at least 4 characters.", ms: "Kata laluan borang mesti sekurang-kurangnya 4 aksara.", zh: "表单密码至少需要 4 个字符。", ta: "படிவ கடவுச்சொல் குறைந்தது 4 எழுத்துகள் இருக்க வேண்டும்.", ar: "يجب أن تتكون كلمة مرور النموذج من 4 أحرف على الأقل." },
+  "apiErr.productOutOfStock": { en: "That product is out of stock.", ms: "Produk itu telah habis stok.", zh: "该商品已缺货。", ta: "அந்த தயாரிப்பு இருப்பு தீர்ந்துவிட்டது.", ar: "هذا المنتج غير متوفر في المخزون." },
+  "apiErr.templateNeedMetadata": { en: "To publish a template to the gallery it needs a category and one text block (the description).", ms: "Untuk menerbitkan templat ke galeri, ia perlu category dan satu blok text (description).", zh: "将模板发布到画廊需要设置 category 和一个 text 区块（作为说明）。", ta: "ஒரு வார்ப்புருவை காட்சியகத்தில் வெளியிட category மற்றும் ஒரு text தொகுதி (விவரம்) தேவை.", ar: "لنشر قالب في المعرض يلزم فئة (category) وكتلة نصية واحدة (الوصف)." },
+  "apiErr.webhookUrlInvalid": { en: "That webhook URL points at a private or loopback host — use a public address.", ms: "URL webhook itu menunjuk ke host peribadi/loopback — gunakan alamat awam.", zh: "该 Webhook 链接指向私有或回环主机——请使用公网地址。", ta: "அந்த webhook URL தனிப்பட்ட/loopback ஹோஸ்ட்டை குறிக்கிறது — பொது முகவரியைப் பயன்படுத்தவும்.", ar: "يشير رابط خطاف الويب إلى مضيف خاص أو loopback — استخدم عنواناً عاماً." },
+  "apiErr.storageQuota": { en: "This workspace has reached its 1GB storage limit.", ms: "Workspace ini telah mencapai had storan 1GB.", zh: "此工作区已达到 1GB 存储上限。", ta: "இந்த பணியிடம் 1GB சேமிப்பு வரம்பை அடைந்துவிட்டது.", ar: "وصلت مساحة العمل هذه إلى حد التخزين 1GB." },
+  "apiErr.uploadTypeUnsupported": { en: "That file type is not supported.", ms: "Jenis fail itu tidak disokong.", zh: "不支持该文件类型。", ta: "அந்த கோப்பு வகை ஆதரிக்கப்படவில்லை.", ar: "نوع الملف هذا غير مدعوم." },
+  "apiErr.certInvalid": { en: "The certificate or key is invalid — check the PEM format and that the key matches.", ms: "Sijil atau kunci tidak sah — semak format PEM dan padanan kunci.", zh: "证书或密钥无效——请检查 PEM 格式及密钥是否匹配。", ta: "சான்றிதழ் அல்லது விசை தவறானது — PEM வடிவமும் விசைப் பொருத்தமும் சரிபார்க்கவும்.", ar: "الشهادة أو المفتاح غير صالح — تحقق من تنسيق PEM ومن تطابق المفتاح." },
+  "apiErr.rateLimited": { en: "Too many attempts. Please try again shortly.", ms: "Terlalu banyak percubaan. Sila cuba sebentar lagi.", zh: "尝试次数过多。请稍后再试。", ta: "அதிக முயற்சிகள். சிறிது நேரத்தில் மீண்டும் முயற்சிக்கவும்.", ar: "محاولات كثيرة جداً. يرجى المحاولة بعد قليل." },
+  "apiErr.emailTaken": { en: "That email is already registered.", ms: "Emel itu sudah didaftarkan.", zh: "该邮箱已注册。", ta: "அந்த மின்னஞ்சல் ஏற்கனவே பதிவு செய்யப்பட்டுள்ளது.", ar: "هذا البريد مسجَّل بالفعل." },
+  "apiErr.emailInvalid": { en: "That email address is not valid.", ms: "Alamat emel itu tidak sah.", zh: "该邮箱地址无效。", ta: "அந்த மின்னஞ்சல் முகவரி தவறானது.", ar: "عنوان البريد هذا غير صالح." },
+  "apiErr.emailDomainUnreachable": { en: "That email domain does not accept mail.", ms: "Domain emel itu tidak menerima emel.", zh: "该邮箱域名不接收邮件。", ta: "அந்த மின்னஞ்சல் டொமைன் மின்னஞ்சலை ஏற்கவில்லை.", ar: "نطاق البريد هذا لا يستقبل الرسائل." },
+  "apiErr.emailUnverified": { en: "Please verify your email before signing in — check your inbox for the verification link.", ms: "Sila sahkan emel anda sebelum log masuk — semak peti masuk untuk pautan pengesahan.", zh: "请先验证邮箱再登录——请查收邮箱中的验证链接。", ta: "உள்நுழைவதற்கு முன் மின்னஞ்சலைச் சரிபார்க்கவும் — சரிபார்ப்பு இணைப்புக்காக உங்கள் inbox-ஐப் பார்க்கவும்.", ar: "يرجى تأكيد بريدك قبل تسجيل الدخول — تحقق من صندوق الوارد للحصول على رابط التأكيد." },
+  "apiErr.passwordTooShort": { en: "The password must be at least 10 characters.", ms: "Kata laluan mesti sekurang-kurangnya 10 aksara.", zh: "密码至少需要 10 个字符。", ta: "கடவுச்சொல் குறைந்தது 10 எழுத்துகள் இருக்க வேண்டும்.", ar: "يجب أن تتكون كلمة المرور من 10 أحرف على الأقل." },
+  "apiErr.passwordInvalid": { en: "That password is incorrect.", ms: "Kata laluan itu salah.", zh: "密码不正确。", ta: "அந்த கடவுச்சொல் தவறானது.", ar: "كلمة المرور هذه غير صحيحة." },
+  "apiErr.loginInvalid": { en: "Email or password is incorrect.", ms: "Emel atau kata laluan salah.", zh: "邮箱或密码不正确。", ta: "மின்னஞ்சல் அல்லது கடவுச்சொல் தவறானது.", ar: "البريد الإلكتروني أو كلمة المرور غير صحيحة." },
+  "apiErr.stepUpRequired": { en: "Confirm your 2FA code to continue.", ms: "Sahkan kod 2FA anda untuk teruskan.", zh: "请确认您的 2FA 验证码以继续。", ta: "தொடர உங்கள் 2FA குறியீட்டை உறுதிப்படுத்தவும்.", ar: "أكّد رمز التحقق الثنائي للمتابعة." },
+  // The three refusals main grew after this branch's base (#682): each one names
+  // the obstacle that blocks, so the sentence has to carry it.
+  "apiErr.formSlugTaken": {
+    en: "This form can't be restored: another form has taken its slug. Change that form's slug first, then restore this one.",
+    ms: "Borang ini tidak boleh dipulihkan: borang lain telah mengambil slug-nya. Tukar slug borang itu dahulu, kemudian pulihkan borang ini.",
+    zh: "无法恢复此表单：其 Slug 已被其他表单占用。请先修改那个表单的 Slug，然后再恢复此表单。",
+    ta: "இந்தப் படிவத்தை மீட்டமைக்க முடியாது: அதன் slug-ஐ வேறு படிவம் எடுத்துக்கொண்டது. முதலில் அந்தப் படிவத்தின் slug-ஐ மாற்றி, பின்னர் இதை மீட்டமைக்கவும்.",
+    ar: "تعذّرت استعادة هذا النموذج: نموذج آخر أخذ الـ slug الخاص به. غيّر الـ slug لذلك النموذج أولاً، ثم استعد هذا النموذج.",
+  },
+  "apiErr.formHasSales": {
+    en: "This form has sales, so it can't be deleted for good — sales history must not be destroyed with the form. It stays in the trash.",
+    ms: "Borang ini mempunyai jualan, jadi ia tidak boleh dipadam secara kekal — sejarah jualan tidak boleh dimusnahkan bersama borang. Ia kekal dalam tong sampah.",
+    zh: "此表单已有销售记录，无法永久删除——销售历史不能随表单一起销毁。它将保留在回收站中。",
+    ta: "இந்தப் படிவத்தில் விற்பனைகள் உள்ளன, எனவே நிரந்தரமாக நீக்க முடியாது — விற்பனை வரலாறு படிவத்துடன் அழிக்கப்படக்கூடாது. இது குப்பைத் தொட்டியில் இருக்கும்.",
+    ar: "لهذا النموذج مبيعات، لذا لا يمكن حذفه نهائياً — لا يجوز إتلاف سجل المبيعات مع النموذج. سيبقى في سلة المهملات.",
+  },
+  "apiErr.workspaceNotEmpty": {
+    en: "This workspace still has content, so it can't be deleted — empty it first (the list below says what is left).",
+    ms: "Workspace ini masih mempunyai kandungan, jadi ia tidak boleh dipadam — kosongkannya dahulu (senarai di bawah menunjukkan apa yang tinggal).",
+    zh: "此工作区仍有内容，无法删除——请先清空（下方列出剩余内容）。",
+    ta: "இந்தப் பணியிடத்தில் இன்னும் உள்ளடக்கம் உள்ளது, எனவே நீக்க முடியாது — முதலில் காலி செய்யவும் (கீழே எஞ்சியவை பட்டியலிடப்பட்டுள்ளன).",
+    ar: "ما زالت مساحة العمل هذه تحتوي على محتوى، لذا لا يمكن حذفها — أفرغها أولاً (القائمة أدناه توضح ما تبقّى).",
+  },
   "set.lpPrimaryColor": { en: "Accent color", ms: "Warna aksen", zh: "强调色", ta: "முதன்மை வண்ணம்", ar: "اللون المميز" },
   "set.lpBackgroundColor": { en: "Background color", ms: "Warna latar", zh: "背景颜色", ta: "பின்னணி வண்ணம்", ar: "لون الخلفية" },
   "set.lpCtas": { en: "CTA buttons", ms: "Butang CTA", zh: "CTA 按钮", ta: "CTA பொத்தான்கள்", ar: "أزرار CTA" },
@@ -1564,6 +1627,7 @@ export const DICT = {
   "nav.submissions": { en: "Submission", ms: "Submisi", zh: "提交", ta: "சமர்ப்பிப்பு", ar: "الإرسال" },
   "nav.spam": { en: "Spam", ms: "Spam", zh: "垃圾邮件", ta: "ஸ்பேம்", ar: "رسائل مزعجة" },
   "sales.title": { en: "Sales", ms: "Jualan", zh: "销售", ta: "விற்பனைகள்", ar: "المبيعات" },
+  "sales.confirmFail": { en: "Failed to confirm this sale.", ms: "Gagal sahkan jualan ini.", zh: "确认该笔销售失败。", ta: "இந்த விற்பனையை உறுதிப்படுத்த முடியவில்லை.", ar: "فشل تأكيد عملية البيع هذه." },
   "sales.subtitle": { en: "Every sale across your forms — filter, search, export.", ms: "Semua jualan merentas borang anda — tapis, cari, eksport.", zh: "所有表单的每笔销售 — 筛选、搜索、导出。", ta: "உங்கள் படிவங்களின் ஒவ்வொரு விற்பனையும் — வடிகட்டி, தேடு, ஏற்றுமதி.", ar: "كل مبيعاتك عبر النماذج — صفِّ، ابحث، صدّر." },
   // The unfiltered list is the account's whole record set: sales AND the
   // responses its response-mode forms recorded. Naming it plainly is the point —

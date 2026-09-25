@@ -467,6 +467,179 @@ func mkWsUser(t *testing.T, pool *pgxpool.Pool, tag string) string {
 	return id
 }
 
+// TestRESTTrashRefusalsCarryTheirMachineCode pins the SEVER-side half of the
+// dashboard fix for the two refusals main grew after #6177's base (#682):
+// restoring a form whose slug another form took, and purging a form that was
+// ever sold. Both sites are hand-rolled writeJSON bodies rather than writeErr, so
+// nothing else in the package couples their message to a code — without this
+// test the `code` field can be dropped in a refactor and the dashboard silently
+// falls back to its generic sentence, hiding the obstacle the user has to clear.
+//
+// The assertions are on the REAL mux response body after the REAL store refusal,
+// so a test that only checked CodeFormSlugTaken's constant would not bite.
+func TestRESTTrashRefusalsCarryTheirMachineCode(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping DB-backed REST trash test in -short mode")
+	}
+	ctx := context.Background()
+	pool := testdb.Open(t)
+	_, accountID, _ := trashRESTWorkspaceAccount(t, pool, "codes")
+	h := trashRESTFixture(t, pool)
+	key := scopeTestKey(t, pool, accountID, "trash-codes")
+
+	fs := dbstore.NewFormStore(pool)
+
+	// ── form.slugTaken: a restore whose slug was re-claimed while trashed.
+	trashed := &dbstore.Form{AccountID: accountID, Slug: "rest-code-a-" + accountID[:8], Title: "A", Status: dbstore.FormStatusDraft}
+	if err := fs.Create(ctx, trashed); err != nil {
+		t.Fatalf("create form: %v", err)
+	}
+	if err := fs.SoftDelete(ctx, accountID, trashed.ID); err != nil {
+		t.Fatalf("trash form: %v", err)
+	}
+	// A live form takes the slug the trashed one released (the unique index
+	// covers live rows only, so this succeeds and the restore must then fail).
+	taker := &dbstore.Form{AccountID: accountID, Slug: trashed.Slug, Title: "Taker", Status: dbstore.FormStatusDraft}
+	if err := fs.Create(ctx, taker); err != nil {
+		t.Fatalf("create slug-taker: %v", err)
+	}
+	rec := bearerReq(t, h, key, http.MethodPost, "/v1/rest/forms/"+trashed.ID+"/restore", "")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("restore over a re-claimed slug = %d, want 409 (%s)", rec.Code, rec.Body.String())
+	}
+	// The restore body. A fresh map per decode — see the purge decode below for
+	// why reusing one is a trap.
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("restore refusal is not JSON: %v (%s)", err, rec.Body.String())
+	}
+	if got := body["code"]; got != CodeFormSlugTaken {
+		t.Errorf("restore refusal code = %v, want %q — without it the dashboard "+
+			"prints a generic sentence and never says which slug to change", got, CodeFormSlugTaken)
+	}
+	if s, _ := body["error"].(string); s == "" {
+		t.Error("restore refusal lost its wire prose — API-key/curl clients render that string")
+	}
+
+	// ── form.hasSales: a purge of a form that was ever sold.
+	sold := &dbstore.Form{AccountID: accountID, Slug: "rest-code-b-" + accountID[:8], Title: "B", Status: dbstore.FormStatusDraft}
+	if err := fs.Create(ctx, sold); err != nil {
+		t.Fatalf("create sold form: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO sales (account_id, form_id, ref_code, client, items, subtotal_sen, total_sen, sale_type, payment_method, status)
+		 VALUES ($1, $2, $3, '{}'::jsonb, '[]'::jsonb, 100, 100, 'one_time', 'chip', 'paid')`,
+		accountID, sold.ID, "IT-CODES-"+accountID[:8]); err != nil {
+		t.Fatalf("insert sale: %v", err)
+	}
+	if err := fs.SoftDelete(ctx, accountID, sold.ID); err != nil {
+		t.Fatalf("trash sold form: %v", err)
+	}
+	rec = bearerReq(t, h, key, http.MethodDelete, "/v1/rest/forms/"+sold.ID+"/purge",
+		`{"confirm_slug":"`+sold.Slug+`"}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("purge of a sold form = %d, want 409 (%s)", rec.Code, rec.Body.String())
+	}
+	// A SEPARATE map for the second decode. json.Unmarshal MERGES into a non-nil
+	// map, so reusing `body` would carry the restore body's `code` into this
+	// assertion and a MISSING field would read as present — which is exactly
+	// what a first draft of this test did.
+	var purgeBody map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &purgeBody); err != nil {
+		t.Fatalf("purge refusal is not JSON: %v (%s)", err, rec.Body.String())
+	}
+	if got := purgeBody["code"]; got != CodeFormHasSales {
+		t.Errorf("purge refusal code = %v, want %q — without it the dashboard "+
+			"never says the form has sales", got, CodeFormHasSales)
+	}
+	// The count is part of the refusal (the UI reads it); adding `code` must not
+	// have displaced it.
+	if _, ok := purgeBody["sales_count"]; !ok {
+		t.Error("purge refusal lost its sales_count — the code was added next to it, not instead of it")
+	}
+	// And the form must still be there: a refusal that deleted anyway would be
+	// the worst shape of this bug.
+	var n int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM forms WHERE id=$1`, sold.ID).Scan(&n); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 1 {
+		t.Error("the refused purge destroyed the form anyway")
+	}
+}
+
+// TestRESTWorkspaceDeleteRefusalCarriesItsCode is the third converted site: the
+// DELETE /v1/workspaces/{id} 409 for a workspace that still owns content. It is a
+// writeJSON literal map (not writeErr) because it also carries `blockers`, so the
+// `code` had to be added alongside them — and both must survive together, or the
+// UI either loses the reason or loses the list of obstacles.
+func TestRESTWorkspaceDeleteRefusalCarriesItsCode(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping DB-backed REST workspace test in -short mode")
+	}
+	ctx := context.Background()
+	pool := testdb.Open(t)
+	sess := authTestValkey(t)
+	h := trashRESTFixture(t, pool)
+	h.Sessions = sess
+	h.Users = dbstore.NewUserStore(pool)
+
+	userID := mkWsUser(t, pool, "rest-ws-code")
+	sp := dbstore.NewWorkspaceStore(pool)
+	keep, err := sp.Create(ctx, userID, "REST WS Keep", "rest-ws-k-"+userID[:6])
+	if err != nil {
+		t.Fatalf("create keep workspace: %v", err)
+	}
+	target, err := sp.Create(ctx, userID, "REST WS Full", "rest-ws-f-"+userID[:6])
+	if err != nil {
+		t.Fatalf("create target workspace: %v", err)
+	}
+	// A live form in the target is a blocker (`forms` counts trashed ones too).
+	var targetAccount string
+	if err := pool.QueryRow(ctx, `SELECT id FROM accounts WHERE workspace_id=$1`, target.ID).Scan(&targetAccount); err != nil {
+		t.Fatalf("read target account: %v", err)
+	}
+	fs := dbstore.NewFormStore(pool)
+	if err := fs.Create(ctx, &dbstore.Form{
+		AccountID: targetAccount, Slug: "rest-ws-block-" + userID[:6], Title: "Blocker", Status: dbstore.FormStatusDraft,
+	}); err != nil {
+		t.Fatalf("create blocking form: %v", err)
+	}
+	token, err := sess.Create(ctx, userID)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	_ = keep
+
+	rec := sessionReq(t, h, token, http.MethodDelete, "/v1/workspaces/"+target.ID,
+		`{"confirm_slug":"`+target.Slug+`"}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("DELETE a non-empty workspace = %d, want 409 (%s)", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("workspace refusal is not JSON: %v (%s)", err, rec.Body.String())
+	}
+	if got := body["code"]; got != CodeWorkspaceNotEmpty {
+		t.Errorf("workspace refusal code = %v, want %q — without it the dashboard "+
+			"prints \"we couldn't delete this workspace\" and never says why", got, CodeWorkspaceNotEmpty)
+	}
+	// The blockers list is what the page renders beside the sentence; `code` was
+	// added NEXT TO it.
+	blockers, ok := body["blockers"].([]any)
+	if !ok || len(blockers) == 0 {
+		t.Errorf("workspace refusal blockers = %v, want the non-empty obstacle list "+
+			"(the code was added alongside it, not instead of it)", body["blockers"])
+	}
+	var n int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM workspaces WHERE id=$1`, target.ID).Scan(&n); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 1 {
+		t.Error("the refused workspace delete removed the row anyway")
+	}
+}
+
 // scopeTestKey makes a readwrite-scoped Bearer key for accountID.
 func scopeTestKey(t *testing.T, pool *pgxpool.Pool, accountID, name string) string {
 	t.Helper()

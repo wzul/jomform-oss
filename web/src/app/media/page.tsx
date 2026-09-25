@@ -9,6 +9,7 @@ import { useSession } from "../../components/session";
 import { formatDate } from "../../lib/formatDate";
 import { workspaceQuery } from "../../lib/workspace";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
+import { apiErr, translateApiErr } from "../../lib/apiErr";
 
 // Issue #180: WordPress-media-library-style Media page. Grid of the
 // merchant's uploaded images (thumbnail + name + date + size), filterable by
@@ -158,7 +159,7 @@ export default function MediaPage() {
       const r = await fetch("/api/rest/uploads/image", { method: "POST", body: fd });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
-        setUploadMsg(d.error || t("media.uploadFail"));
+        setUploadMsg(apiErr(d, t("media.uploadFail"), t));
         return;
       }
       setUploadMsg(t("media.uploaded"));
@@ -193,7 +194,7 @@ export default function MediaPage() {
       () => fetchJson<{ items?: unknown[]; total?: number; usage?: MediaUsage }>(
         `/api/rest/media?${params.toString()}${workspaceQuery()}`,
       ),
-      { onUnauth: goToLogin, message: t("media.loadFail") },
+      { onUnauth: goToLogin, message: t("media.loadFail"), errorKey: (b: unknown) => translateApiErr(b, t) },
     );
     if (!r.ok) {
       setItems([]);
@@ -224,7 +225,7 @@ export default function MediaPage() {
           const d = await fetchJson<unknown>(`/api/rest/forms${workspaceQuery()}`);
           return Array.isArray(d) ? (d as FormRow[]) : [];
         },
-        { onUnauth: goToLogin, message: t("forms.loadFail") },
+        { onUnauth: goToLogin, message: t("forms.loadFail"), errorKey: (b: unknown) => translateApiErr(b, t) },
       );
       setForms(r.ok ? r.data : []);
     })();

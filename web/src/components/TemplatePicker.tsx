@@ -9,6 +9,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useI18n } from "./i18n";
 import { workspaceQuery } from "../lib/workspace";
+import { apiErr } from "../lib/apiErr";
 import {
   mergePickerTemplates,
   splitPickerTemplates,
@@ -100,7 +101,7 @@ export default function TemplatePicker({
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok || !d.id) {
-        setErr(d.error || t("tpl.useFail"));
+        setErr(apiErr(d, t("tpl.useFail"), t));
         return;
       }
       onClose();
@@ -124,7 +125,7 @@ export default function TemplatePicker({
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok || !d.id) {
-        setErr(d.error || t("tpl.useFail"));
+        setErr(apiErr(d, t("tpl.useFail"), t));
         return;
       }
       onClose();

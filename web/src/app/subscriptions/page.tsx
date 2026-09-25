@@ -13,6 +13,7 @@ import { useSession } from "../../components/session";
 import { formatDate } from "../../lib/formatDate";
 import { workspaceQuery } from "../../lib/workspace";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
+import { apiErr, translateApiErr } from "../../lib/apiErr";
 
 type Subscription = {
   id: string;
@@ -69,7 +70,7 @@ export default function Subscriptions() {
     // helper: 401/403 → /login, anything else → the visible message.
     const r = await runLoad(
       () => fetchJson<ListResp>(`/api/rest/subscriptions?${q.toString()}${sep}${sp.replace("?", "")}`),
-      { onUnauth: goToLogin, message: t("sub.loadFail") },
+      { onUnauth: goToLogin, message: t("sub.loadFail"), errorKey: (b: unknown) => translateApiErr(b, t) },
     );
     if (!r.ok) {
       setRows([]);
@@ -136,7 +137,7 @@ export default function Subscriptions() {
       });
       if (!r.ok) {
         const d = await r.json().catch(() => ({}));
-        setError(d.error || t("sub.cancelErr"));
+        setError(apiErr(d, t("sub.cancelErr"), t));
         return;
       }
       await load(statusFilter, safePage);
@@ -161,7 +162,7 @@ export default function Subscriptions() {
       });
       if (!r.ok) {
         const d = await r.json().catch(() => ({}));
-        setError(d.error || t("sub.updateCardErr"));
+        setError(apiErr(d, t("sub.updateCardErr"), t));
         return;
       }
       const d = await r.json();

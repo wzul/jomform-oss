@@ -22,6 +22,7 @@ import { useI18n, type Key } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDateTime } from "../../lib/formatDate";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
+import { translateApiErr } from "../../lib/apiErr";
 
 type Thread = {
   id: string;
@@ -105,7 +106,7 @@ export default function FeedbackPage() {
     const r = await runLoad(
       () => fetchJson<{ items?: Thread[]; total?: number }>(
         `/api/rest/feedback?page=1&limit=${PAGE_SIZE}`),
-      { onUnauth: goToLogin, message: t("fb.loadFail") },
+      { onUnauth: goToLogin, message: t("fb.loadFail"), errorKey: (b: unknown) => translateApiErr(b, t) },
     );
     if (!r.ok) {
       setThreads([]);
@@ -127,7 +128,7 @@ export default function FeedbackPage() {
     const r = await runLoad(
       () => fetchJson<{ thread: Thread; messages: Message[] }>(
         `/api/rest/feedback/${encodeURIComponent(id)}`),
-      { onUnauth: goToLogin, message: t("fb.loadFail") },
+      { onUnauth: goToLogin, message: t("fb.loadFail"), errorKey: (b: unknown) => translateApiErr(b, t) },
     );
     if (!r.ok) {
       setThreadErr(r.error);

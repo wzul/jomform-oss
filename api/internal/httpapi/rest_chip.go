@@ -81,6 +81,7 @@ func (h *RESTHandlers) setChipCreds(w http.ResponseWriter, r *http.Request, actx
 		if verr := h.ChipProbe.ValidateCredentials(r.Context(), secretKey); verr != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{
 				"error":    "kredensial tidak sah — semak Brand ID / Secret Key",
+				"code":     CodeChipCredentialsBad,
 				"verified": false,
 			})
 			return

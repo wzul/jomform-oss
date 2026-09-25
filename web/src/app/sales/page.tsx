@@ -20,6 +20,7 @@ import { formatDate, formatDateTime } from "../../lib/formatDate";
 import { answersPreview, answerText, isResponseForm, isMixedList, responsesList, rowKey, rowKind } from "../../lib/salesRows";
 import { workspaceQuery, activeWorkspaceId, soundEnabledFromSettings, soundToggleBody } from "../../lib/workspace";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
+import { apiErr, translateApiErr } from "../../lib/apiErr";
 
 type Item = {
   product_id: string;
@@ -242,7 +243,7 @@ function SalesPageInner() {
         const d = await fetchJson<unknown>(`/api/rest/forms${workspaceQuery()}`);
         return Array.isArray(d) ? (d as FormRow[]) : [];
       },
-      { onUnauth: goToLogin, message: t("forms.loadFail") },
+      { onUnauth: goToLogin, message: t("forms.loadFail"), errorKey: (b: unknown) => translateApiErr(b, t) },
     );
     setForms(r.ok ? r.data : []);
   }, [t, goToLogin]);
@@ -280,7 +281,7 @@ function SalesPageInner() {
       // shared helper: 401/403 → /login, anything else → the visible error.
       const r = await runLoad(
         () => fetchJson<SalesPage>(`/api/rest/sales?${qs.toString()}${sep}${sp.replace("?", "")}`),
-        { onUnauth: goToLogin, message: t("bld.loadSalesErr") },
+        { onUnauth: goToLogin, message: t("bld.loadSalesErr"), errorKey: (b: unknown) => translateApiErr(b, t) },
       );
       if (!r.ok) {
         setRows([]);
@@ -437,7 +438,7 @@ function SalesPageInner() {
       });
       if (r.ok) return;
       const d = (await r.json().catch(() => ({}))) as { error?: string };
-      message = d.error || message;
+      message = apiErr(d, message, t);
     } catch {
       // network failure — the same visible outcome as a rejected write
     }
@@ -463,7 +464,7 @@ function SalesPageInner() {
       const r = await fetch(`/api/rest/sales/${encodeURIComponent(ref)}/confirm${workspaceQuery()}`, {
         method: "POST",
       });
-      setMsg(r.ok ? `${ref} ✓` : (await r.json().catch(() => ({}))).error || "Gagal");
+      setMsg(r.ok ? `${ref} ✓` : apiErr(await r.json().catch(() => ({})), t("sales.confirmFail"), t));
       if (r.ok) await loadSales(safePage);
     } finally {
       setBusyRef(null);
@@ -494,7 +495,7 @@ function SalesPageInner() {
         ...(body ? { body } : {}),
       });
       const d = await r.json().catch(() => ({}));
-      setMsg(r.ok ? `${t("bld.capture")} ${ref} ✓` : d.error || `Capture gagal ${ref}.`);
+      setMsg(r.ok ? `${t("bld.capture")} ${ref} ✓` : apiErr(d, `Capture gagal ${ref}.`, t));
       if (r.ok) await loadSales(safePage);
     } finally {
       setBusyRef(null);
@@ -511,7 +512,7 @@ function SalesPageInner() {
         method: "POST",
       });
       const d = await r.json().catch(() => ({}));
-      setMsg(r.ok ? `Authorization ${ref} released. ✓` : d.error || `Release gagal ${ref}.`);
+      setMsg(r.ok ? `Authorization ${ref} released. ✓` : apiErr(d, `Release gagal ${ref}.`, t));
       if (r.ok) await loadSales(safePage);
     } finally {
       setBusyRef(null);
@@ -558,7 +559,7 @@ function SalesPageInner() {
         ...(body ? { body } : {}),
       });
       const d = await r.json().catch(() => ({}));
-      setMsg(r.ok ? `${t("sales.refund")} ${ref} ✓` : d.error || `Refund gagal ${ref}.`);
+      setMsg(r.ok ? `${t("sales.refund")} ${ref} ✓` : apiErr(d, `Refund gagal ${ref}.`, t));
       if (r.ok) await loadSales(safePage);
     } finally {
       setBusyRef(null);
@@ -581,7 +582,7 @@ function SalesPageInner() {
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
-        setMsg(d.error || t("bld.bulkCaptureFail"));
+        setMsg(apiErr(d, t("bld.bulkCaptureFail"), t));
         return;
       }
       setMsg(

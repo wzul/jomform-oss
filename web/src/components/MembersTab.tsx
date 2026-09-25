@@ -9,6 +9,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useI18n } from "./i18n";
 import { fetchJson, runLoad } from "../lib/wsfetch";
+import { apiErr, translateApiErr } from "../lib/apiErr";
 
 type Member = { user_id: string; email: string; name: string; role: string };
 type Invite = { id: string; email: string; role: string; created_at?: string };
@@ -54,7 +55,7 @@ export function MembersTab({ workspaceId }: { workspaceId: string }) {
             invites: Array.isArray(inv) ? (inv as Invite[]) : [],
           };
         },
-        { onUnauth: goToLogin, message: t("mem.loadFail") },
+        { onUnauth: goToLogin, message: t("mem.loadFail"), errorKey: (b: unknown) => translateApiErr(b, t) },
       );
       if (!r.ok) {
         setMembers([]);
@@ -86,7 +87,7 @@ export function MembersTab({ workspaceId }: { workspaceId: string }) {
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
-        setErr(t("mem.inviteFail", { error: d.error || `HTTP ${r.status}` }));
+        setErr(t("mem.inviteFail", { error: apiErr(d, `HTTP ${r.status}`, t) }));
         return;
       }
       setEmail("");
@@ -112,7 +113,7 @@ export function MembersTab({ workspaceId }: { workspaceId: string }) {
       load();
     } else {
       const d = await r.json().catch(() => ({}));
-      setErr(t("mem.roleUpdateFail", { error: d.error || `HTTP ${r.status}` }));
+      setErr(t("mem.roleUpdateFail", { error: apiErr(d, `HTTP ${r.status}`, t) }));
     }
   }
 
@@ -126,7 +127,7 @@ export function MembersTab({ workspaceId }: { workspaceId: string }) {
       load();
     } else {
       const d = await r.json().catch(() => ({}));
-      setErr(t("mem.removeFail", { error: d.error || `HTTP ${r.status}` }));
+      setErr(t("mem.removeFail", { error: apiErr(d, `HTTP ${r.status}`, t) }));
     }
   }
 
@@ -139,7 +140,7 @@ export function MembersTab({ workspaceId }: { workspaceId: string }) {
       load();
     } else {
       const d = await r.json().catch(() => ({}));
-      setErr(t("mem.inviteFail", { error: d.error || `HTTP ${r.status}` }));
+      setErr(t("mem.inviteFail", { error: apiErr(d, `HTTP ${r.status}`, t) }));
     }
   }
 

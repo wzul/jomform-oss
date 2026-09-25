@@ -12,6 +12,7 @@ import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { workspaceQuery } from "../../lib/workspace";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
+import { apiErr, translateApiErr } from "../../lib/apiErr";
 
 export type Variation = {
   id?: string;
@@ -121,7 +122,7 @@ export default function ProductEditor({ productId }: { productId?: string }) {
       // Now 401/403 → /login and a genuine 404 keeps the not-found copy.
       const r = await runLoad(
         () => fetchJson<Record<string, any>>(`/api/rest/products/${productId}${workspaceQuery()}`),
-        { onUnauth: goToLogin, message: t("prod.loadFail") },
+        { onUnauth: goToLogin, message: t("prod.loadFail"), errorKey: (b: unknown) => translateApiErr(b, t) },
       );
       if (cancelled) return;
       if (!r.ok) {
@@ -355,7 +356,7 @@ export default function ProductEditor({ productId }: { productId?: string }) {
       });
       if (!r.ok) {
         const d = await r.json().catch(() => ({}));
-        setError(d.error || t("prod.saveFail"));
+        setError(apiErr(d, t("prod.saveFail"), t));
         return;
       }
       const saved = await r.json().catch(() => ({}));

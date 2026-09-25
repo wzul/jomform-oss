@@ -18,6 +18,7 @@ import { useSession } from "../../components/session";
 import { workspaceQuery } from "../../lib/workspace";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 import { templateEditHref } from "../../lib/templateEdit";
+import { apiErr, translateApiErr } from "../../lib/apiErr";
 
 type Template = {
   id: string;
@@ -70,7 +71,7 @@ export default function TemplatesPage() {
           forms: Array.isArray(frm) ? (frm as FormRow[]) : [],
         };
       },
-      { onUnauth: goToLogin, message: t("tplmg.loadFail") },
+      { onUnauth: goToLogin, message: t("tplmg.loadFail"), errorKey: (b: unknown) => translateApiErr(b, t) },
     );
     if (!r.ok) {
       setTemplates([]);
@@ -106,7 +107,7 @@ export default function TemplatesPage() {
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
-        setErr(d.error || t("tplmg.saveFail"));
+        setErr(apiErr(d, t("tplmg.saveFail"), t));
         return;
       }
       setSaveFormId(null);
@@ -131,7 +132,7 @@ export default function TemplatesPage() {
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
-        setErr(d.error || t("tplmg.saveFail"));
+        setErr(apiErr(d, t("tplmg.saveFail"), t));
         return;
       }
       setMsg(t("tplmg.saved"));
@@ -156,7 +157,7 @@ export default function TemplatesPage() {
       });
       if (!r.ok) {
         const d = await r.json().catch(() => ({}));
-        setErr(d.error || t("tplmg.saveFail"));
+        setErr(apiErr(d, t("tplmg.saveFail"), t));
         return;
       }
       setRenaming(null);
@@ -176,7 +177,7 @@ export default function TemplatesPage() {
       const r = await fetch(`/api/rest/templates/${id}${workspaceQuery()}`, { method: "DELETE" });
       if (!r.ok) {
         const d = await r.json().catch(() => ({}));
-        setErr(d.error || t("tplmg.deleteFail"));
+        setErr(apiErr(d, t("tplmg.deleteFail"), t));
         return;
       }
       await load();
@@ -194,7 +195,7 @@ export default function TemplatesPage() {
       const r = await fetch(`/api/rest/templates/${id}/use${workspaceQuery()}`, { method: "POST" });
       const d = await r.json().catch(() => ({}));
       if (!r.ok || !d.id) {
-        setErr(d.error || t("tplmg.useFail"));
+        setErr(apiErr(d, t("tplmg.useFail"), t));
         return;
       }
       router.push(`/builder?form=${d.id}`);

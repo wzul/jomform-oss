@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useI18n } from "../../components/i18n";
 import { resolvePostLogin } from "../../lib/postLogin";
+import { apiErr } from "../../lib/apiErr";
 
 type Mode = "login" | "register" | "forgot" | "magic";
 type SocialProvider = { id: string; name: string };
@@ -184,7 +185,7 @@ export default function Login() {
         // text, not JSON). Parse JSON when we can, otherwise surface a generic
         // error — never fall back to the success copy (issue #343).
         const errBody = await r.json().catch(() => ({}));
-        setError((errBody as { error?: string }).error || t("login.genericError"));
+        setError(apiErr(errBody, t("login.genericError"), t));
       }
       return;
     }
@@ -243,7 +244,7 @@ export default function Login() {
       setStep(2);
       return;
     }
-    setError(d.error || t("login.genericError"));
+    setError(apiErr(d, t("login.genericError"), t));
   }
 
   async function submitTotp(totpCode: string) {
@@ -274,7 +275,7 @@ export default function Login() {
     const d = await r.json().catch(() => ({}));
     // Wrong code is a genuine error — inline, red, under the code input (#42
     // login-limiter UX stays intact for repeated failures).
-    setError(d.error || t("login.genericError"));
+    setError(apiErr(d, t("login.genericError"), t));
     setCode("");
     codeRef.current?.focus();
   }
@@ -334,7 +335,7 @@ export default function Login() {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
       });
       if (fin.ok) { window.location.href = await resolvePostLogin(next); return; }
-      setError((await fin.json().catch(() => ({}))).error || t("login.passkeyInvalid"));
+      setError(apiErr(await fin.json().catch(() => ({})), t("login.passkeyInvalid"), t));
     } catch {
       setError(t("login.passkeyUnsupported"));
     }

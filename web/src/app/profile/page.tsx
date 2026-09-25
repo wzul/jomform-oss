@@ -9,6 +9,7 @@ import { useI18n, LANGS_SHOWN, LANG_LABEL, type Lang } from "../../components/i1
 import { useSession } from "../../components/session";
 import { formatDate } from "../../lib/formatDate";
 import { isValidStepUpCode, stepUpRequired } from "../../lib/stepUp";
+import { apiErr } from "../../lib/apiErr";
 
 type Profile = {
   id: string;
@@ -219,7 +220,7 @@ export default function ProfilePage() {
     });
     if (r.ok) { setMsg(t("prof.saved")); load(); reloadSession(); return true; }
     const d = await r.json().catch(() => ({}));
-    setErr(d.error || t("prof.failed"));
+    setErr(apiErr(d, t("prof.failed"), t));
     return false;
   }
 
@@ -261,7 +262,7 @@ export default function ProfilePage() {
     if (r.status === 401) {
       const d = await r.json().catch(() => ({}));
       if (d.next_step !== "totp_stepup_required") {
-        setErr(d.error || t("prof.failed"));
+        setErr(apiErr(d, t("prof.failed"), t));
         return false;
       }
       // The backend asked for a step-up we did not pre-empt (e.g. the session
@@ -273,7 +274,7 @@ export default function ProfilePage() {
     }
     if (r.ok) { setMsg(t("prof.saved")); load(); reloadSession(); return true; }
     const d = await r.json().catch(() => ({}));
-    setErr(d.error || t("prof.failed"));
+    setErr(apiErr(d, t("prof.failed"), t));
     return false;
   }
 
@@ -311,7 +312,7 @@ export default function ProfilePage() {
     });
     if (!r.ok) {
       const d = await r.json().catch(() => ({}));
-      setErr(d.error || t("prof.avatarError"));
+      setErr(apiErr(d, t("prof.avatarError"), t));
       return false;
     }
     setAvatarUrl(url);
@@ -349,7 +350,7 @@ export default function ProfilePage() {
         body: JSON.stringify(totpCode ? { totp_code: totpCode } : {}),
       }).then((r) => r.json());
       if (!st || !st.options) {
-        setErr(st?.error || t("prof.passkeyRegFailed"));
+        setErr(apiErr(st, t("prof.passkeyRegFailed"), t));
         return;
       }
       const opts = st.options.publicKey || st.options;
@@ -373,7 +374,7 @@ export default function ProfilePage() {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
       });
       if (fin.ok) { setMsg(t("prof.passkeyRegistered")); load(); }
-      else setErr((await fin.json().catch(() => ({}))).error || t("prof.passkeyRegFailed"));
+      else setErr(apiErr(await fin.json().catch(() => ({})), t("prof.passkeyRegFailed"), t));
     } catch {
       setErr(t("prof.passkeyUnsupported"));
     }
@@ -388,7 +389,7 @@ export default function ProfilePage() {
         method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
       });
       const d = await r.json().catch(() => ({}));
-      if (!r.ok) { setErr(d.error || t("prof.twoFaSetupError")); return; }
+      if (!r.ok) { setErr(apiErr(d, t("prof.twoFaSetupError"), t)); return; }
       setSecretText(d.secret || "");
       const url = d.otpauth_url || "";
       if (url) {
@@ -423,7 +424,7 @@ export default function ProfilePage() {
         reloadSession();
       } else {
         const d = await r.json().catch(() => ({}));
-        setErr(d.error || t("prof.failed"));
+        setErr(apiErr(d, t("prof.failed"), t));
       }
     } catch {
       setErr(t("prof.failed"));

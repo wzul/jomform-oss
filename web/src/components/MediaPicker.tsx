@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "./i18n";
 import { workspaceQuery } from "../lib/workspace";
+import { apiErr } from "../lib/apiErr";
 
 type MediaItem = {
   id: string;
@@ -100,7 +101,7 @@ export default function MediaPicker({
       const r = await fetch("/api/rest/uploads/image", { method: "POST", body: fd });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
-        setUploadMsg(d.error || t("media.uploadFail"));
+        setUploadMsg(apiErr(d, t("media.uploadFail"), t));
         return;
       }
       setUploadMsg(t("media.uploaded"));

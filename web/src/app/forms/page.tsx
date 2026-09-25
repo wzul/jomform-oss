@@ -13,6 +13,7 @@ import { formEntriesAction } from "../../lib/formMode";
 import { formViewAction } from "../../lib/formPublicURL";
 import { acknowledgmentBody, needsProductsIDs, outcomeMessage, publishConfirmText, publishOutcome } from "../../lib/publishResult";
 import TemplatePicker from "../../components/TemplatePicker";
+import { apiErr, translateApiErr } from "../../lib/apiErr";
 
 type FormRow = {
   id: string;
@@ -106,7 +107,7 @@ export default function FormsPage() {
         const d = await fetchJson<unknown>(`/api/rest/forms${workspaceQuery()}`);
         return Array.isArray(d) ? (d as FormRow[]) : [];
       },
-      { onUnauth: goToLogin, message: t("forms.loadFail") },
+      { onUnauth: goToLogin, message: t("forms.loadFail"), errorKey: (b: unknown) => translateApiErr(b, t) },
     );
     if (!r.ok) {
       setForms([]);
@@ -168,11 +169,12 @@ export default function FormsPage() {
       method: "POST",
     });
     if (!res.ok) {
-      // 409 means the slug was re-claimed while the form sat in the trash —
-      // the refusal says which obstacle to clear, so show it verbatim rather
-      // than a generic failure.
+      // 409 means the slug was re-claimed while the form sat in the trash — the
+      // refusal's code (form.slugTaken) says which obstacle to clear, so the
+      // merchant gets that sentence in their OWN language rather than the wire
+      // prose (issue #6177). An unrelated failure falls back to the generic line.
       const d = await res.json().catch(() => null);
-      setErr(d?.error || t("forms.restoreFail"));
+      setErr(apiErr(d, t("forms.restoreFail"), t));
       void loadTrash();
       return;
     }
@@ -193,8 +195,11 @@ export default function FormsPage() {
         body: JSON.stringify({ confirm_slug: purgeTyped.trim() }),
       });
       if (!res.ok) {
+        // A purge of a form that was ever sold is refused with code
+        // form.hasSales; any other failure uses the page's own sentence. Never
+        // the server's prose (issue #6177).
         const d = await res.json().catch(() => null);
-        setErr(d?.error || t("forms.purgeFail"));
+        setErr(apiErr(d, t("forms.purgeFail"), t));
         setConfirmPurge(null);
         setPurgeTyped("");
         void loadTrash();

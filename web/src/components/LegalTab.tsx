@@ -7,6 +7,7 @@
 // ({workspace}.jomform.com/privacy, /terms, /refund).
 import { useCallback, useEffect, useState } from "react";
 import { useI18n, type Key } from "./i18n";
+import { apiErr } from "../lib/apiErr";
 
 type LegalPage = { workspace_id: string; page_type: string; mode: string; content: string };
 type LegalMap = Record<string, LegalPage>;
@@ -90,7 +91,7 @@ export function LegalTab({ workspaceId, workspaceSlug }: { workspaceId: string; 
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
-        setErr(d.error || t("set.legalGenerateFail"));
+        setErr(apiErr(d, t("set.legalGenerateFail"), t));
         return;
       }
       setContent((prev) => ({ ...prev, [pt]: d.content || "" }));
@@ -116,7 +117,7 @@ export function LegalTab({ workspaceId, workspaceSlug }: { workspaceId: string; 
       load();
     } else {
       const d = await r.json().catch(() => ({}));
-      setErr(d.error || t("set.legalSaveFail"));
+      setErr(apiErr(d, t("set.legalSaveFail"), t));
     }
   }
 

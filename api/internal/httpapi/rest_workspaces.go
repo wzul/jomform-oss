@@ -241,6 +241,7 @@ func (h *RESTHandlers) deleteWorkspace(w http.ResponseWriter, r *http.Request, a
 			default:
 				writeJSON(w, http.StatusConflict, map[string]any{
 					"error":    "workspace tidak kosong — kosongkan dahulu sebelum memadam",
+					"code":     CodeWorkspaceNotEmpty,
 					"blockers": de.Blockers,
 				})
 			}

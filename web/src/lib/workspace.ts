@@ -14,6 +14,24 @@ import { isReservedSlugRefusal } from "./workspaceSlug.ts";
 // Issue #450: migrate the legacy "jf_space" key (pre-#431 rename) so a user
 // who logged in before the rename keeps their active workspace instead of
 // falling back to an empty scope (which produced app.jomform.com URLs).
+//
+// Issue #6177: the machine error `code` on a failed create is decoded with the
+// shared helper rather than a second copy of the code→key table: `apiErrorKey`
+// is the same lookup the pages use. It is TYPE-free of React, so this module
+// stays importable from `node --test`.
+//
+// The body is read with `res.json()` + `.catch` rather than
+// `wsfetch.readErrorBody(res)`: readErrorBody consumes a `clone()`, and the
+// #749 reserved-name branch below has to read the body on the same path, so one
+// read serves both. `readErrorBody` was the read while this was the only
+// consumer of the body; keeping it here would mean two reads of one response.
+import { apiErrorKey } from "./apiErr.ts";
+// TYPE-ONLY, so the Node test runner (which cannot load `.tsx`) never has to:
+// TypeScript erases it, exactly as lib/apiErr.ts does for the same reason. `Key`
+// must come from the one definition in components/i18n.tsx rather than being
+// restated here.
+import type { Key } from "../components/i18n";
+
 function migrateLegacyScope() {
   try {
     const legacy = localStorage.getItem("jf_space");
@@ -123,30 +141,47 @@ export function clearUnknownWorkspaceScope(workspaces: WorkspaceRef[] | undefine
 // createWorkspaceInput is the create-workspace body (POST /v1/workspaces).
 export type CreateWorkspaceInput = { name: string; slug: string };
 
+// CreateWorkspaceErrorKey is a dictionary KEY, never a rendered string: this
+// module has no locale, and the call sites (the first-run ask and the switcher)
+// must not drift into two different messages for the same refusal.
+//
+// The type is the SHARED dictionary key union rather than a hand-listed subset,
+// because the API-code path can legitimately answer any code `lib/apiErr.ts`
+// translates: narrowing to a closed literal list here would silently demote a
+// code the table does know (say a role refusal the create endpoint started
+// returning) to "Failed to create workspace." instead of the reason. Callers
+// only ever `t(key)` it, which any dictionary key satisfies.
+//
+// The states this path reaches today, for review:
+//   apiErr.workspaceSlugTaken / apiErr.workspaceSlugInvalid  ← from the machine code
+//   workspace.slugReserved                                  ← from the reserved-name token
+//   workspace.slugTaken / workspace.slugInvalid             ← the status fallback
+//   workspace.createFail                                    ← everything else
+export type CreateWorkspaceErrorKey = Key;
+
 // CreateWorkspaceOutcome is a discriminated result: a failure carries the i18n
-// KEY the caller must render, never a rendered string — the module has no
-// locale, and two call sites (the first-run ask and the switcher) must not
-// drift into two different messages for the same status.
+// KEY the caller must render, never a rendered string.
 export type CreateWorkspaceOutcome =
   | { ok: true; id: string; slug: string }
-  | {
-      ok: false;
-      errorKey:
-        | "workspace.slugTaken"
-        | "workspace.slugInvalid"
-        | "workspace.slugReserved"
-        | "workspace.createFail";
-    };
+  | { ok: false; errorKey: CreateWorkspaceErrorKey };
 
 // createWorkspace POSTs a new workspace. ONE implementation shared by the
-// first-run ask (app/workspace-picker) and the topbar switcher: the status → key
-// mapping is the part that must not be written twice, because 409 (slug taken)
-// and 400 (slug invalid) have distinct, actionable copy.
+// first-run ask (app/workspace-picker) and the topbar switcher: the failure →
+// key mapping is the part that must not be written twice, because 409 (slug
+// taken) and 400 (slug invalid) have distinct, actionable copy.
 //
 // The slug is normalised to the server's rule (lowercase a-z0-9-dash) before it
 // is sent, so a client that types "My Shop" gets the same 400-vs-success
 // outcome the server would return for the normalised value rather than a
 // rejection the user cannot act on.
+//
+// Issue #6177: the server names the refusal with a machine `code` and the code
+// is read FIRST. The status branch is kept as the fallback for a response that
+// carries no code (an older build, a proxy) — not as the primary rule, because
+// a branch on the status silently degrades to "Failed to create workspace." the
+// moment the refusal moves to a different status, while the API still names the
+// exact reason. The server's PROSE is never decoded here: an unknown code is
+// not a fallback to it.
 export async function createWorkspace(input: CreateWorkspaceInput): Promise<CreateWorkspaceOutcome> {
   const slug = input.slug.trim().toLowerCase().replace(/[^a-z0-9-]/g, "");
   try {
@@ -166,8 +201,16 @@ export async function createWorkspace(input: CreateWorkspaceInput): Promise<Crea
       // The API carries a stable token so this decision never depends on the
       // server's prose, which is a wire message for API-key, curl and MCP
       // callers (see lib/workspaceSlug.ts, which also pins the Go constant).
-      const body = res.status === 400 ? await res.json().catch(() => null) : null;
+      //
+      // The READ is `res.json()` with a `.catch`: this is the one body read both
+      // guards' stubs can execute (the #6177 guard stubs `json` only, the
+      // switcher guard stubs `json`+`clone`), and it keeps the #6177 property
+      // that a body which cannot be read never throws out of the submit handler
+      // — it falls through to the status branch as before.
+      const body = await res.json().catch(() => null);
       if (isReservedSlugRefusal(body)) return { ok: false, errorKey: "workspace.slugReserved" };
+      const codeKey = apiErrorKey(body);
+      if (codeKey !== "") return { ok: false, errorKey: codeKey };
       if (res.status === 409) return { ok: false, errorKey: "workspace.slugTaken" };
       if (res.status === 400) return { ok: false, errorKey: "workspace.slugInvalid" };
       return { ok: false, errorKey: "workspace.createFail" };

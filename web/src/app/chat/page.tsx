@@ -50,6 +50,7 @@ import { Markdown } from "../../components/Markdown";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
+import { translateApiErr } from "../../lib/apiErr";
 import { workspaceQuery } from "../../lib/workspace";
 
 type Turn = { role: "user" | "assistant"; content: string };
@@ -144,7 +145,7 @@ export default function ChatPage() {
           fetchJson<{ available?: boolean; limits?: Limits }>(
             `/api/rest/chat${workspaceQuery()}`,
           ),
-        { onUnauth: goToLogin, message: t("chat.unavailable") },
+        { onUnauth: goToLogin, message: t("chat.unavailable"), errorKey: (b: unknown) => translateApiErr(b, t) },
       );
       if (!r.ok) {
         setAvailable(false);

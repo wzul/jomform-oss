@@ -14,6 +14,7 @@ import { useSession } from "../../components/session";
 import { formatDate } from "../../lib/formatDate";
 import { workspaceQuery } from "../../lib/workspace";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
+import { translateApiErr } from "../../lib/apiErr";
 
 type SpamSubmission = {
   id: string;
@@ -79,7 +80,7 @@ function SpamPageInner() {
           sales: Array.isArray(sald.items) ? (sald.items as SpamSale[]) : [],
         };
       },
-      { onUnauth: goToLogin, message: t("bld.loadSalesErr") },
+      { onUnauth: goToLogin, message: t("bld.loadSalesErr"), errorKey: (b: unknown) => translateApiErr(b, t) },
     );
     if (!r.ok) {
       setSubs([]);

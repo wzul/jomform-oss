@@ -9,6 +9,7 @@ import { useSession } from "../../components/session";
 import { formatDate } from "../../lib/formatDate";
 import { workspaceQuery } from "../../lib/workspace";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
+import { apiErr, translateApiErr } from "../../lib/apiErr";
 
 type Product = {
   id: string;
@@ -88,7 +89,7 @@ export default function Products() {
         const d = await fetchJson<unknown>(`/api/rest/products?include_archived=1${workspaceQuery()}`);
         return Array.isArray(d) ? (d as Product[]) : [];
       },
-      { onUnauth: goToLogin, message: t("prod.loadFailList") },
+      { onUnauth: goToLogin, message: t("prod.loadFailList"), errorKey: (b: unknown) => translateApiErr(b, t) },
     );
     if (!r.ok) {
       setProducts([]);
@@ -291,7 +292,7 @@ export default function Products() {
       load();
     } else {
       const d = await r.json().catch(() => ({}));
-      setError(d.error || t("prod.failedAdd"));
+      setError(apiErr(d, t("prod.failedAdd"), t));
     }
   }
 
@@ -469,7 +470,7 @@ export default function Products() {
       });
       if (!r.ok) {
         const d = await r.json().catch(() => ({}));
-        setDrawerError(d.error || t("prod.failedUpdate"));
+        setDrawerError(apiErr(d, t("prod.failedUpdate"), t));
         return;
       }
       setSavedFlash(t("prod.updated"));

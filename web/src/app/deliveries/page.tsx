@@ -14,6 +14,7 @@ import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { workspaceQuery } from "../../lib/workspace";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
+import { translateApiErr } from "../../lib/apiErr";
 
 type Delivery = {
   id: number;
@@ -105,7 +106,7 @@ export default function DeliveriesPage() {
     // page). Route it through the shared helper so 401/403 → /login.
     const r = await runLoad(
       () => fetchJson<DeliveryPage>(`/api/rest/email-deliveries?${params.toString()}${sep}${sp.replace("?", "")}`),
-      { onUnauth: goToLogin, message: t("del.loadErr") },
+      { onUnauth: goToLogin, message: t("del.loadErr"), errorKey: (b: unknown) => translateApiErr(b, t) },
     );
     if (!r.ok) {
       setRows([]);
@@ -131,7 +132,7 @@ export default function DeliveriesPage() {
           const d = await fetchJson<unknown>(`/api/rest/forms${workspaceQuery()}`);
           return Array.isArray(d) ? (d as FormRow[]) : [];
         },
-        { onUnauth: goToLogin, message: t("forms.loadFail") },
+        { onUnauth: goToLogin, message: t("forms.loadFail"), errorKey: (b: unknown) => translateApiErr(b, t) },
       );
       setForms(r.ok ? r.data : []);
     })();

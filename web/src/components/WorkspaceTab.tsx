@@ -28,6 +28,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useI18n } from "./i18n";
+import { apiErr } from "../lib/apiErr";
 import { useSession } from "./session";
 import { fetchJson, runLoad } from "../lib/wsfetch";
 
@@ -114,10 +115,12 @@ export default function WorkspaceTab({ workspaceId }: { workspaceId: string }) {
         body: JSON.stringify({ confirm_slug: typed.trim() }),
       });
       if (!res.ok) {
-        // A refusal lists what blocks, so re-read the check and show it rather
-        // than inventing a message.
+        // A refusal names what blocks (the workspace still holds forms/sales/…),
+        // so it is rendered from the code (workspace.notEmpty) in the user's own
+        // language rather than from the server's prose (issue #6177). Any other
+        // failure keeps the page's own sentence.
         const d = await res.json().catch(() => null);
-        setErr(d?.error || t("ws.deleteFail"));
+        setErr(apiErr(d, t("ws.deleteFail"), t));
         setConfirmOpen(false);
         setTyped("");
         await load();

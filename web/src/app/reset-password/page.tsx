@@ -6,6 +6,7 @@ import Link from "next/link";
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useI18n } from "../../components/i18n";
+import { apiErr } from "../../lib/apiErr";
 
 function ResetForm() {
   const { t } = useI18n();
@@ -39,7 +40,7 @@ function ResetForm() {
         setDone(true);
       } else {
         const d = await r.json().catch(() => ({}));
-        setError(d.error || t("reset.invalid"));
+        setError(apiErr(d, t("reset.invalid"), t));
       }
     } catch {
       setError(t("reset.invalid"));

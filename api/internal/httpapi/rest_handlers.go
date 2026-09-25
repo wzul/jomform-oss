@@ -1045,8 +1045,7 @@ func (h *RESTHandlers) restoreForm(w http.ResponseWriter, r *http.Request, actx 
 	if err := h.Forms.Restore(r.Context(), actx.Account.ID, formID); err != nil {
 		if errors.Is(err, dbstore.ErrFormSlugTaken) {
 			writeErr(w, http.StatusConflict,
-				"tidak boleh dipulihkan: slug borang ini telah diambil borang lain — "+
-					"tukar slug borang itu dahulu, kemudian cuba pulihkan semula")
+				"tidak boleh dipulihkan: slug borang ini telah diambil borang lain — tukar slug borang itu dahulu, kemudian cuba pulihkan semula")
 			return
 		}
 		respondErr(w, r, err)
@@ -1097,8 +1096,8 @@ func (h *RESTHandlers) purgeForm(w http.ResponseWriter, r *http.Request, actx *A
 				n = 0
 			}
 			writeJSON(w, http.StatusConflict, map[string]any{
-				"error": "borang ini mempunyai jualan — sejarah jualan tidak boleh dimusnahkan " +
-					"dengan memadam borang. Ia kekal dalam tong sampah.",
+				"error":       "borang ini mempunyai jualan — sejarah jualan tidak boleh dimusnahkan dengan memadam borang. Ia kekal dalam tong sampah.",
+				"code":        CodeFormHasSales,
 				"sales_count": n,
 			})
 			return

@@ -282,7 +282,7 @@ func recoverer(next http.Handler) http.Handler {
 					"account_id", middleware.GetAccountID(r.Context()),
 					"error_class", "panic",
 				)
-				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+				writeJSON(w, http.StatusInternalServerError, errorBody(http.StatusInternalServerError, "internal error"))
 			}
 		}()
 		next.ServeHTTP(w, r)
@@ -295,8 +295,25 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// writeErr answers one failure with BOTH the human-readable wire message and a
+// stable machine code (see errcode.go):
+//
+//	writeErr(w, 403, "workspace tidak dijumpai")
+//	→ {"error":"workspace tidak dijumpai","code":"workspace.notFound"}
+//
+// The message stays because API-key callers, curl/MCP clients and the public
+// buyer-form JavaScript consume it directly and cannot look up an i18n key. The
+// dashboard reads `code` and renders its own message in the user's language, so
+// it never prints this prose (issue #6177).
 func writeErr(w http.ResponseWriter, code int, msg string) {
-	writeJSON(w, code, map[string]string{"error": msg})
+	writeJSON(w, code, errorBody(code, msg))
+}
+
+// errorBody is the one error envelope shape. Kept separate from writeErr so a
+// handler that must answer a richer body (e.g. CHIP's {error, verified}) can
+// still emit the same `error` + `code` pair.
+func errorBody(status int, msg string) map[string]string {
+	return map[string]string{"error": msg, "code": codeFor(status, msg)}
 }
 
 func statusFor(ok bool) int {

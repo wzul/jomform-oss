@@ -11,6 +11,7 @@ import { fetchJson, runLoad } from "../../lib/wsfetch";
 import { MembersTab } from "../../components/MembersTab";
 import WorkspaceTab from "../../components/WorkspaceTab";
 import { LegalTab } from "../../components/LegalTab";
+import { apiErr, translateApiErr } from "../../lib/apiErr";
 
 // Issue #323: the CNAME target is consistent across all custom-domain copy.
 const CNAME_TARGET = "custom.jomform.com";
@@ -513,7 +514,7 @@ export default function Settings() {
       setMsg(t("set.currencySaved"));
     } else {
       const d = await r.json().catch(() => ({}));
-      setErr(d.error || t("set.failedSave"));
+      setErr(apiErr(d, t("set.failedSave"), t));
     }
   }
 
@@ -541,7 +542,7 @@ export default function Settings() {
         const d = await fetchJson<unknown>(`/api/workspaces/${activeWorkspaceId}/affiliates`);
         return Array.isArray(d) ? (d as AffiliateRow[]) : [];
       },
-      { onUnauth: goToLogin, message: t("set.affiliatesLoadFail") },
+      { onUnauth: goToLogin, message: t("set.affiliatesLoadFail"), errorKey: (b: unknown) => translateApiErr(b, t) },
     );
     if (!r.ok) {
       setAffiliates([]);
@@ -577,7 +578,7 @@ export default function Settings() {
       loadAffiliates();
     } else {
       const d = await r.json().catch(() => ({}));
-      setAffErr(d.error || t("set.failedSave"));
+      setAffErr(apiErr(d, t("set.failedSave"), t));
     }
   }
 
@@ -623,7 +624,7 @@ export default function Settings() {
     } else {
       const d = await r.json().catch(() => ({}));
       setVerified(false);
-      setErr(d.error || t("set.failedSave"));
+      setErr(apiErr(d, t("set.failedSave"), t));
     }
   }
 
@@ -646,7 +647,7 @@ export default function Settings() {
     } else {
       // Issue #128: show the backend's error inline instead of swallowing it.
       const d = await r.json().catch(() => ({}));
-      setErr(t("set.whAddFail", { error: d.error || t("set.failedSave") }));
+      setErr(t("set.whAddFail", { error: apiErr(d, t("set.failedSave"), t) }));
     }
   }
 
@@ -665,7 +666,7 @@ export default function Settings() {
       load();
     } else {
       const d = await r.json().catch(() => ({}));
-      setErr(t("set.whUpdateFail", { error: d.error || t("set.failedSave") }));
+      setErr(t("set.whUpdateFail", { error: apiErr(d, t("set.failedSave"), t) }));
     }
   }
 
@@ -716,7 +717,7 @@ export default function Settings() {
         await fetchDeliveries(webhookID);
       } else {
         const d = await r.json().catch(() => ({}));
-        setErr(d.error || t("wh.retryFail"));
+        setErr(apiErr(d, t("wh.retryFail"), t));
       }
     } catch {
       setErr(t("wh.retryFail"));
@@ -764,7 +765,7 @@ export default function Settings() {
       if (d && d.id) startPolling({ id: d.id, domain: d.domain });
     } else {
       const d = await r.json().catch(() => ({}));
-      setDomainMsg(d.error || t("set.failedAddDomain"));
+      setDomainMsg(apiErr(d, t("set.failedAddDomain"), t));
     }
   }
 
@@ -807,7 +808,7 @@ export default function Settings() {
         setDomainMsg(mode === "auto" ? t("set.tlsModeAuto") : t("set.tlsModeCustom"));
       } else {
         const e = await r.json().catch(() => ({}));
-        setDomainMsg(e.error || t("set.tlsModeFailed"));
+        setDomainMsg(apiErr(e, t("set.tlsModeFailed"), t));
       }
       await refreshDomains();
     } finally {
@@ -830,7 +831,7 @@ export default function Settings() {
         setDomainMsg(t("set.tlsEmailSaved"));
       } else {
         const e = await r.json().catch(() => ({}));
-        setDomainMsg(e.error || t("set.tlsEmailFailed"));
+        setDomainMsg(apiErr(e, t("set.tlsEmailFailed"), t));
       }
       await refreshDomains();
     } finally {
@@ -859,7 +860,7 @@ export default function Settings() {
         setCertInput((prev) => ({ ...prev, [d.id]: { cert: "", key: "" } }));
       } else {
         const e = await r.json().catch(() => ({}));
-        setDomainMsg(e.error || t("set.tlsCertFailed"));
+        setDomainMsg(apiErr(e, t("set.tlsCertFailed"), t));
       }
       await refreshDomains();
     } finally {
@@ -888,7 +889,7 @@ export default function Settings() {
       setMsg(t("set.emelSaved"));
     } else {
       const d = await r.json().catch(() => ({}));
-      setErr(d.error || t("set.failedSave"));
+      setErr(apiErr(d, t("set.failedSave"), t));
     }
   }
 
@@ -925,7 +926,7 @@ export default function Settings() {
       setMsg(t("set.sfSaved"));
     } else {
       const d = await r.json().catch(() => ({}));
-      setErr(d.error || t("set.failedSave"));
+      setErr(apiErr(d, t("set.failedSave"), t));
     }
   }
 
@@ -967,7 +968,7 @@ export default function Settings() {
       setMsg(t("set.lpSaved"));
     } else {
       const d = await r.json().catch(() => ({}));
-      setLpUrlErr(d.error || t("set.failedSave"));
+      setLpUrlErr(apiErr(d, t("set.failedSave"), t));
     }
   }
 
@@ -1578,7 +1579,7 @@ export default function Settings() {
                         );
                         const d = await r.json().catch(() => ({}));
                         if (!r.ok) {
-                          setCfManualErr(d.error || `HTTP ${r.status}`);
+                          setCfManualErr(apiErr(d, `HTTP ${r.status}`, t));
                           return;
                         }
                         setCfLinked(true);

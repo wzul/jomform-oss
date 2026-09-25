@@ -20,6 +20,7 @@ import ProductPicker, { type PickerProduct } from "../../components/ProductPicke
 import { workspaceQuery, workspaceScope } from "../../lib/workspace";
 import { defaultNotificationEvent, formEntriesAction } from "../../lib/formMode";
 import { acknowledgmentBody, outcomeMessage, publishConfirmText, publishOutcome } from "../../lib/publishResult";
+import { apiErr } from "../../lib/apiErr";
 
 type FormDetail = {
   id: string;
@@ -842,7 +843,7 @@ function FormSettingsInner() {
     });
     if (!r.ok) {
       const d = await r.json().catch(() => ({}));
-      setFsLogoErr(d.error || t("prof.failed"));
+      setFsLogoErr(apiErr(d, t("prof.failed"), t));
       return;
     }
     setMsg(t("fs.saved"));
@@ -1101,7 +1102,7 @@ function FormSettingsInner() {
         await load();
       } else {
         const d = await r.json().catch(() => ({}));
-        setErr(d.error || t("fs.emelFail"));
+        setErr(apiErr(d, t("fs.emelFail"), t));
       }
     } finally {
       setEmelSaving(false);
@@ -1124,7 +1125,7 @@ function FormSettingsInner() {
         await load();
       } else {
         const d = await r.json().catch(() => ({}));
-        setErr(d.error || t("fs.emelFail"));
+        setErr(apiErr(d, t("fs.emelFail"), t));
       }
     } finally {
       setEmelSaving(false);

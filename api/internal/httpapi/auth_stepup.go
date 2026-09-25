@@ -103,11 +103,15 @@ func checkMagicStepUp(r *http.Request, sessions *auth.Sessions, users *dbstore.U
 
 // writeStepUpRequired emits the uniform step-up challenge: 401 with a
 // next_step marker so the client can prompt for a TOTP code and retry.
+//
+// The `code` field carries the same machine contract as writeErr (issue #6177):
+// a client branches on `code`, never on the Malay prose.
 func writeStepUpRequired(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusUnauthorized)
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"error":     "pengesahan 2FA diperlukan untuk tindakan ini",
+		"code":      CodeStepUpRequired,
 		"next_step": stepUpNextStep,
 	})
 }

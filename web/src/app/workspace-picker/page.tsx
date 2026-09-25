@@ -24,6 +24,7 @@ import { useI18n } from "../../components/i18n";
 import type { WorkspaceRow } from "../../components/session";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 import { createWorkspace, enterWorkspace } from "../../lib/workspace";
+import { translateApiErr } from "../../lib/apiErr";
 
 // The subset of /api/auth/me this page needs.
 type Me = { default_workspace_id?: string };
@@ -71,7 +72,7 @@ export default function WorkspacePickerPage() {
         const d = await fetchJson<unknown>("/api/workspaces");
         return Array.isArray(d) ? (d as WorkspaceRow[]) : [];
       },
-      { onUnauth: goToLogin, message: t("workspace.loadFail") },
+      { onUnauth: goToLogin, message: t("workspace.loadFail"), errorKey: (b: unknown) => translateApiErr(b, t) },
     );
     if (!ws.ok) {
       // A failure is NEVER silent: the message is rendered, and the list is
@@ -85,7 +86,7 @@ export default function WorkspacePickerPage() {
 
     const me = await runLoad(
       () => fetchJson<Me>("/api/auth/me"),
-      { onUnauth: goToLogin, message: t("workspace.loadFail") },
+      { onUnauth: goToLogin, message: t("workspace.loadFail"), errorKey: (b: unknown) => translateApiErr(b, t) },
     );
     if (me.ok) setDefaultId(me.data.default_workspace_id || "");
 
@@ -136,7 +137,7 @@ export default function WorkspacePickerPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ workspace_id: workspaceId }),
       }),
-      { onUnauth: goToLogin, message: t("workspace.setDefaultFail") },
+      { onUnauth: goToLogin, message: t("workspace.setDefaultFail"), errorKey: (b: unknown) => translateApiErr(b, t) },
     );
     if (!r.ok) {
       setError(r.error);
