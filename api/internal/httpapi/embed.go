@@ -177,6 +177,44 @@ func (h *PublicHandlers) embedSubmit(w http.ResponseWriter, r *http.Request) {
 	h.submitResolvedForm(w, r, f)
 }
 
+// embedUnlock accepts the password an EMBEDDED private form's gate posts.
+// Path pattern is registered as POST /embed/f/{accslug}/{slug}/unlock.
+//
+// WHY THE ROUTE HAS TO EXIST. The gate a private form renders lives inside the
+// embed document, and it posts to its own address plus "/unlock"
+// (location.pathname + "/unlock") — the same rule the submit button follows with
+// "/order". Nothing was registered under /embed/f/, so an embedded private form
+// could be LOOKED AT but never unlocked: the gate posted to the canonical
+// /{slug}/unlock instead, which resolves its form from the request Host — and an
+// embed's Host is the MERCHANT's own domain, so the request never named the
+// workspace (measured: POST /embed/f/{ws}/{slug}/unlock -> "404 page not found",
+// POST /{ws}-{slug}/unlock -> reached the handler). A form a merchant embeds and
+// then makes private is unusable without this.
+//
+// WHY THE SCOPE IS THE PATH, NOT THE HOST. Same reason as embedSubmit and the
+// embed GET: the frame is served on the merchant's site, so r.Host is not the
+// workspace. Resolution goes through embedFormBySlug, the one helper all three
+// /embed/f/ routes share, so the page a merchant frames, the gate that page
+// renders and the endpoints they post to can only ever resolve to one form.
+//
+// WHAT IS SHARED. Everything after resolution: unlockResolvedForm applies the
+// identical private-status gate, password check and unlock cookie. Only the
+// LOOKUP differs, so the two unlock paths cannot drift. The allow_embed rule is
+// repeated here exactly as embedSubmit repeats it — switching embedding off must
+// not leave a live unlock endpoint behind the 403 page.
+func (h *PublicHandlers) embedUnlock(w http.ResponseWriter, r *http.Request) {
+	f := h.embedFormBySlug(r.Context(), r.PathValue("accslug"), r.PathValue("slug"))
+	if f == nil {
+		writeErr(w, http.StatusNotFound, "borang tidak dijumpai")
+		return
+	}
+	if !f.AllowEmbed {
+		writeErr(w, http.StatusForbidden, "embed dinyahaktifkan")
+		return
+	}
+	h.unlockResolvedForm(w, r, f)
+}
+
 // embedFormBySlug resolves the embed route's target, returning nil when no live
 // form matches. BOTH the GET above and the POST call it, so the page a merchant
 // frames and the endpoint its button posts to can only resolve to the same form.

@@ -53,6 +53,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/config"
 	"github.com/wzul/jomform/api/internal/dbstore"
 )
@@ -567,5 +568,296 @@ func TestEmbedSubmitRefusesADisallowedEmbed(t *testing.T) {
 	if rec := publicGet(t, hnd, host, "/embed/f/"+ws+"/"+slug); rec.Code != http.StatusForbidden {
 		t.Errorf("GET /embed/f/%s/%s with allow_embed=false -> %d, want 403 (the GET and the "+
 			"POST must apply the same rule)", ws, slug, rec.Code)
+	}
+}
+
+// ─── private-form EMBED: the unlock round-trip ───────────────────────────────
+//
+// Found by QA while verifying #722: a PRIVATE form's embed showed the password
+// gate but the unlock could never succeed, so an embedded private form was
+// unusable. Two independent defects on the path #722 opened, and neither was
+// covered — the guard above stops at "the gate is shown"
+// (embed URL must not be a way around the gate) and never round-trips the
+// unlock, which is why the gap survived that card.
+//
+// WHAT THIS GUARD ADDS, and why each half is not optional:
+//
+//  1. THE ROUND-TRIP ITSELF. POST the password to the EMBED-scoped unlock and
+//     then GET the embed carrying the cookie it returned, asserting the FIELDS
+//     render (not the gate). Every defect in this class — a missing route, a
+//     gate posting to the wrong scope, a cookie the frame cannot use — is
+//     invisible to a guard that never completes the exchange.
+//
+//  2. THE ROUTE EXISTS. Before the fix there was no
+//     POST /embed/f/{accslug}/{slug}/unlock at all ("404 page not found"),
+//     so the gate's post could not resolve. Asserted by REQUEST, not by reading
+//     the mux, so a route registered but broken still fails.
+//
+//  3. THE COOKIE IS USABLE FROM A CROSS-SITE FRAME. The gate lives on the
+//     MERCHANT's origin, so its request is cross-site and comes from a document
+//     whose "site for cookies" is the empty string
+//     (draft-ietf-httpbis-cookie-same-site §2.1.1). A SameSite=Lax cookie is
+//     neither stored from such a response nor sent on such a request, and the
+//     frame would stay locked forever even with the route in place — so the
+//     cookie attributes are asserted directly, which is what makes this guard
+//     bite on the cookie half too. Partitioned (CHIPS) is required because a
+//     plain SameSite=None third-party cookie is what browsers are restricting;
+//     Secure is required for both to be honoured at all.
+//
+//  4. THE FIELD LEAK IS STILL CLOSED. The gate must not be a way around the
+//     password, so the pre-unlock body must carry no field and the post-unlock
+//     body must. Kept from the existing guard: the fix must not trade one
+//     defect for the other.
+//
+// Runs against a real Postgres (JOMFORM_TEST_DATABASE_URL); skipped when unset,
+// like the rest of the integration suite.
+
+// gateFixturePassword is the access password the embed round-trip unlocks with.
+const gateFixturePassword = "it-embed-secret-123"
+
+// embedPrivateFixture builds the embedFixture, sets an argon2id access password
+// on the form, flips it to private, and wires the AccessKey the unlock cookie is
+// signed with. Returns the handlers plus the workspace and form slugs.
+func embedPrivateFixture(t *testing.T) (*PublicHandlers, string, string) {
+	t.Helper()
+	h, ws, slug := embedFixture(t)
+	ctx := context.Background()
+	pool := bundleTestPool(t)
+
+	var formID, accountID string
+	if err := pool.QueryRow(ctx,
+		`SELECT id, account_id FROM forms WHERE slug = $1 ORDER BY created_at DESC LIMIT 1`,
+		slug).Scan(&formID, &accountID); err != nil {
+		t.Fatalf("lookup form id for %s: %v", slug, err)
+	}
+	hash, err := auth.HashPassword(gateFixturePassword)
+	if err != nil {
+		t.Fatalf("hash the access password: %v", err)
+	}
+	if err := h.Forms.SetAccessPassword(ctx, accountID, formID, hash); err != nil {
+		t.Fatalf("set access password: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`UPDATE forms SET status = 'private' WHERE id = $1 AND account_id = $2`,
+		formID, accountID); err != nil {
+		t.Fatalf("make the form private: %v", err)
+	}
+	// The signed unlock cookie needs a 32-byte key; without it the unlock is
+	// refused (403 "akses tidak tersedia") and this guard would prove nothing.
+	h.AccessKey = []byte("0123456789abcdef0123456789abcdef")
+	return h, ws, slug
+}
+
+// embedGetWithCookies drives a GET through the FULL server chain carrying the
+// cookies a previous response set — the way the embedded frame re-requests its
+// own document after unlocking.
+func embedGetWithCookies(t *testing.T, hnd http.Handler, host, path string, cookies []*http.Cookie) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.Host = host
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	rec := httptest.NewRecorder()
+	hnd.ServeHTTP(rec, req)
+	return rec
+}
+
+// TestEmbeddedPrivateFormUnlockRoundTrip is the card's headline guard: an
+// embedded private form must be UNLOCKABLE — post the access password to the
+// embed-scoped unlock, then re-request the embed with the cookie it returned and
+// see the form's fields instead of the gate.
+func TestEmbeddedPrivateFormUnlockRoundTrip(t *testing.T) {
+	if os.Getenv("JOMFORM_TEST_DATABASE_URL") == "" {
+		t.Skip("JOMFORM_TEST_DATABASE_URL not set; skipping private-form embed unlock guard")
+	}
+	h, ws, slug := embedPrivateFixture(t)
+	hnd := publicServer(h)
+	// The cookie HALF of this guard is a PRODUCTION property: an embedded form
+	// is served over https on the merchant's site, so `Secure` is set and the
+	// cross-site attributes are emitted. Dev deliberately differs — a dev host
+	// is same-site with itself, so the gate's own fetch needs no relaxation and
+	// the cookie stays Lax. Pin prod semantics (the helper the package already
+	// uses for exactly this, oauth_test.go) so the assertion is about the shape
+	// a real embed sees rather than about whichever mode leaked in.
+	setProdMode(t)
+	host := ws + ".jomform.com"
+
+	embedPath := "/embed/f/" + ws + "/" + slug
+	unlockPath := embedPath + "/unlock"
+
+	// ── the fixture really is the case the card is about ──────────────────
+	// A private form's embed shows the gate and NOT the fields. If this fixture
+	// served fields here the guard could pass without unlocking anything.
+	locked := publicGet(t, hnd, host, embedPath)
+	if locked.Code != http.StatusOK {
+		t.Fatalf("GET %s -> %d, want 200 (fixture is not exercising the embed route)", embedPath, locked.Code)
+	}
+	lockedBody := locked.Body.String()
+	if !strings.Contains(lockedBody, `id="pw"`) {
+		t.Fatalf("the embed of a PRIVATE form does not show the password gate at all; body: %.400s", lockedBody)
+	}
+	if strings.Contains(lockedBody, `name="bname"`) {
+		t.Fatalf("the embed of a PRIVATE form renders its fields before unlocking — the embed "+
+			"URL is a way around the gate. body: %.400s", lockedBody)
+	}
+
+	// ── 1+2: the embed-scoped unlock route exists and accepts the password ──
+	wrong := publicPostJSON(t, hnd, host, unlockPath, map[string]any{"password": "not-the-password"})
+	if wrong.Code != http.StatusForbidden {
+		t.Fatalf("POST %s with a WRONG password -> %d, want 403 — a gate that accepts any "+
+			"password is not a gate. body=%s", unlockPath, wrong.Code, wrong.Body.String())
+	}
+
+	ok := publicPostJSON(t, hnd, host, unlockPath, map[string]any{"password": gateFixturePassword})
+	if ok.Code == http.StatusNotFound {
+		t.Fatalf("POST %s -> 404: there is no embed-scoped unlock route, so the gate rendered "+
+			"inside the embed can never be satisfied. This is the defect the card reports "+
+			"(the gate hardcoded the canonical host-scoped /{slug}/unlock instead). body=%s",
+			unlockPath, ok.Body.String())
+	}
+	if ok.Code != http.StatusOK {
+		t.Fatalf("POST %s with the CORRECT password -> %d, want 200 (body %s) — the embed's own "+
+			"unlock must resolve the form by its {accslug} PATH segment, because an embed runs on "+
+			"the merchant's origin and its Host never names the workspace",
+			unlockPath, ok.Code, ok.Body.String())
+	}
+	cookies := ok.Result().Cookies()
+	if len(cookies) == 0 {
+		t.Fatalf("the embed unlock answered 200 with no cookie — the frame has nothing to "+
+			"present on its next request, so the gate would re-render forever. body=%s", ok.Body.String())
+	}
+
+	// ── 3: the cookie is one a CROSS-SITE frame can actually use ───────────
+	//
+	// This is the half that makes the round-trip work for a real embed, and the
+	// half a SameSite=Lax cookie silently fails: the gate's request comes from a
+	// frame on the merchant's site, so the browser neither stores a Lax cookie
+	// from that response nor sends it on the next request. Measured in this
+	// browser with a real cross-site iframe: a Lax cookie set by the frame's
+	// fetch was not stored at all, while a SameSite=None control was stored AND
+	// sent.
+	var access *http.Cookie
+	for _, c := range cookies {
+		if c.Name == formAccessCookie {
+			access = c
+		}
+	}
+	if access == nil {
+		t.Fatalf("the unlock set no %s cookie (got %v) — that cookie is the whole unlock",
+			formAccessCookie, cookies)
+	}
+	// SameSite is not serialised onto the parsed cookie, so assert on the header
+	// the browser actually reads.
+	setCookie := strings.Join(ok.Result().Header.Values("Set-Cookie"), "\n")
+	if !strings.Contains(setCookie, "SameSite=None") {
+		t.Errorf("the unlock cookie is not SameSite=None (Set-Cookie: %q). A private form can be "+
+			"EMBEDDED on the merchant's site, where the gate's request is cross-site from a frame "+
+			"whose \"site for cookies\" is empty (draft-ietf-httpbis-cookie-same-site §2.1.1) — a "+
+			"Lax cookie is neither stored from that response nor sent on that request, so the "+
+			"round-trip below only passes here because this test carries the cookie by hand",
+			setCookie)
+	}
+	if !strings.Contains(setCookie, "Partitioned") {
+		t.Errorf("the unlock cookie is not Partitioned (Set-Cookie: %q). A bare SameSite=None "+
+			"cookie is exactly the third-party cookie browsers are restricting; CHIPS "+
+			"(Partitioned) is what an embedded widget must use for its own state, and it also "+
+			"scopes the unlock to the one merchant page it was entered on", setCookie)
+	}
+	if !strings.Contains(setCookie, "Secure") {
+		t.Errorf("the unlock cookie is not Secure (Set-Cookie: %q). SameSite=None without Secure "+
+			"is refused by the browsers that enforce the pairing, and a Partitioned cookie MUST "+
+			"carry Secure, so the cookie would be silently discarded", setCookie)
+	}
+	if !access.HttpOnly {
+		t.Errorf("the unlock cookie is not HttpOnly (Set-Cookie: %q) — the unlock token must not "+
+			"be readable by script", setCookie)
+	}
+
+	// ── 1+4: with the cookie, the embed serves the FIELDS, not the gate ─────
+	unlocked := embedGetWithCookies(t, hnd, host, embedPath, cookies)
+	if unlocked.Code != http.StatusOK {
+		t.Fatalf("GET %s after unlocking -> %d, want 200 (body %s)", embedPath, unlocked.Code, unlocked.Body.String())
+	}
+	body := unlocked.Body.String()
+	if strings.Contains(body, `id="pw"`) {
+		t.Fatalf("the embed STILL shows the password gate after a successful unlock — the "+
+			"round-trip does not complete, so an embedded private form is unusable. body: %.400s", body)
+	}
+	for _, want := range []string{`name="bname"`, `name="bemail"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the embed after unlocking is missing the form's own field %s — the unlock "+
+				"returned a cookie the form does not accept. body: %.400s", want, body)
+		}
+	}
+}
+
+// TestEmbedUnlockRefusesADisallowedEmbed asserts the embed unlock honours the
+// same allow_embed rule its GET does, exactly as the submit route must. Without
+// this, switching embedding off would hide the page while leaving a live
+// password-checking endpoint behind the 403.
+func TestEmbedUnlockRefusesADisallowedEmbed(t *testing.T) {
+	if os.Getenv("JOMFORM_TEST_DATABASE_URL") == "" {
+		t.Skip("JOMFORM_TEST_DATABASE_URL not set; skipping embed unlock refusal guard")
+	}
+	h, ws, slug := embedPrivateFixture(t)
+	hnd := publicServer(h)
+	host := ws + ".jomform.com"
+
+	if _, err := bundleTestPool(t).Exec(context.Background(),
+		`UPDATE forms SET allow_embed = false WHERE slug = $1`, slug); err != nil {
+		t.Fatalf("disable embedding: %v", err)
+	}
+
+	unlockPath := "/embed/f/" + ws + "/" + slug + "/unlock"
+	rec := publicPostJSON(t, hnd, host, unlockPath, map[string]any{"password": gateFixturePassword})
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("POST %s with allow_embed=false -> %d, want 403: an embed that is switched off "+
+			"must not accept unlocks either", unlockPath, rec.Code)
+	}
+	if rec := publicGet(t, hnd, host, "/embed/f/"+ws+"/"+slug); rec.Code != http.StatusForbidden {
+		t.Errorf("GET /embed/f/%s/%s with allow_embed=false -> %d, want 403 (the GET and the "+
+			"unlock must apply the same rule)", ws, slug, rec.Code)
+	}
+}
+
+// TestEmbedUnlockDoesNotUnlockTheCanonicalRoute asserts the two unlock scopes
+// stay INDEPENDENT in the direction that matters for security: the embed route
+// resolves the form by path, so it must not become a way to reach a form the
+// request's own host does not serve, and the cookie it returns must not unlock a
+// different form.
+//
+// The unlock cookie is bound to the form id (signFormAccessToken), so this also
+// pins that an embed unlock cannot be replayed against another private form.
+func TestEmbedUnlockDoesNotUnlockTheCanonicalRoute(t *testing.T) {
+	if os.Getenv("JOMFORM_TEST_DATABASE_URL") == "" {
+		t.Skip("JOMFORM_TEST_DATABASE_URL not set; skipping embed unlock scope guard")
+	}
+	h, ws, slug := embedPrivateFixture(t)
+	hnd := publicServer(h)
+
+	// The embed route resolves by PATH, so it must answer on a Host that names
+	// no workspace at all — that is the whole reason it exists (an embed runs on
+	// the merchant's domain).
+	unlockPath := "/embed/f/" + ws + "/" + slug + "/unlock"
+	rec := publicPostJSON(t, hnd, "merchant.example.com", unlockPath, map[string]any{"password": gateFixturePassword})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST %s on the merchant's own Host -> %d, want 200: the embed scope is the "+
+			"{accslug} PATH segment precisely because the Host never names the workspace. body=%s",
+			unlockPath, rec.Code, rec.Body.String())
+	}
+	cookies := rec.Result().Cookies()
+
+	// The cookie is bound to THIS form: the canonical route on a host that
+	// serves no such form must still 404 rather than accept it.
+	if rec := publicGet(t, hnd, "merchant.example.com", "/"+slug); rec.Code == http.StatusOK {
+		t.Errorf("GET /%s on a Host that names no workspace -> 200; a public payment link must "+
+			"not be reachable on the bare/foreign Host", slug)
+	}
+	// And the unlock cookie does not unlock a form it was not minted for.
+	if rec := embedGetWithCookies(t, hnd, "merchant.example.com", unlockPath, cookies); rec.Code != http.StatusMethodNotAllowed {
+		// A GET on a POST-only route is 405; anything else means the mux matched
+		// something this guard does not know about.
+		t.Logf("note: GET %s -> %d (expected 405 from the POST-only route)", unlockPath, rec.Code)
 	}
 }

@@ -144,7 +144,21 @@ export default function EmbedDocsPage() {
         No CORS configuration is needed. The form&apos;s JavaScript posts to{" "}
         <code className="rounded bg-slate-100 px-1">location.pathname + &quot;/order&quot;</code> — same-origin
         inside the iframe (the iframe document <em>is</em> JomForm), so the browser never makes a cross-origin
-        request. Rendering and submitting are cookieless.
+        request.
+      </p>
+
+      <h2 className="mt-8 text-xl font-semibold text-slate-900">Private forms and cookies</h2>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        Rendering and submitting a <strong>published</strong> form are cookieless. A{" "}
+        <strong>private</strong> form is the one exception: its buyer enters an access password, and the gate
+        (which also posts to{" "}
+        <code className="rounded bg-slate-100 px-1">location.pathname + &quot;/unlock&quot;</code>, so it works
+        inside the embed just like the button does) sets a signed access cookie so the frame can render the form
+        instead of asking again. That cookie is scoped to the one page it was entered on — it is a{" "}
+        <code className="rounded bg-slate-100 px-1">Partitioned</code> third-party cookie, so unlocking the
+        embedded form on your site does not unlock it on anybody else&apos;s. If a visitor&apos;s browser blocks
+        third-party cookies outright, they will see the password gate again on the next load; opening the form&apos;s
+        own URL directly always works.
       </p>
 
       <p className="mt-8 text-sm leading-relaxed text-slate-600">

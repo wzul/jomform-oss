@@ -58,8 +58,17 @@ func TestIssue537PrivateGateEscapesTitle(t *testing.T) {
 	assertNoLiveScript(t, "renderPrivateGate", rec.Body.String(), round6XSS)
 }
 
-// TestIssue537PrivateGateEscapesSlugInJSContext covers the JS string literal:
-// HTML escaping alone would still let a single quote terminate the literal.
+// TestIssue537PrivateGateEscapesSlugInJSContext covers the JS string literal.
+//
+// The gate's fetch target is its OWN pathname now (the embed fix), so no
+// merchant value is interpolated there any more — the slug cannot reach that
+// literal at all. What still does is the language dictionary, and it carries the
+// same risk: a dictionary entry interpolated into the single-quoted literal would
+// break out exactly the way a hostile slug used to. So this test keeps the
+// property it was written for (nothing interpolated into that literal can
+// terminate it) and pins it on the value that really is interpolated, while
+// asserting the stronger fact the fix bought: the target is location.pathname,
+// not a merchant-controlled path.
 func TestIssue537PrivateGateEscapesSlugInJSContext(t *testing.T) {
 	h := &PublicHandlers{}
 	rec := httptest.NewRecorder()
@@ -71,16 +80,57 @@ func TestIssue537PrivateGateEscapesSlugInJSContext(t *testing.T) {
 
 	body := rec.Body.String()
 	if strings.Contains(body, "');alert(1)") {
-		t.Fatalf("issue #537 JS-CONTEXT INJECTION: the slug terminated the JS string "+
-			"literal in fetch('/…/unlock') — HTML escaping is not enough for a JS "+
+		t.Fatalf("issue #537 JS-CONTEXT INJECTION: a merchant value terminated the JS string "+
+			"literal in the gate's fetch() — HTML escaping is not enough for a JS "+
 			"context.\n  body: %.500s", body)
 	}
 	if strings.Contains(body, "</script>alert") {
-		t.Fatalf("issue #537: the slug broke out of the <script> block\n  body: %.500s", body)
+		t.Fatalf("issue #537: a merchant value broke out of the <script> block\n  body: %.500s", body)
 	}
-	// The escaped form must be present, proving the value is still transmitted.
-	if !strings.Contains(body, `\u0027`) {
-		t.Errorf("expected the quote to be emitted as a \\u0027 escape; body: %.500s", body)
+	// The fetch target is the gate's own address, so there is no second place
+	// for a slug to be interpolated into JS. If a future edit reintroduces a
+	// slug-built path, this line is what catches it.
+	if !strings.Contains(body, "fetch(location.pathname+'/unlock'") {
+		t.Errorf("the gate no longer posts to its own path (location.pathname + '/unlock'); a "+
+			"gate that builds its target from a merchant-slug instead is the drift this pins.\n"+
+			"  body: %.500s", body)
+	}
+}
+
+// TestPrivateGateFetchTargetIsItsOwnPath pins the fix for the embedded private
+// form: the gate must post to the address its OWN document was served at, the
+// same rule the submit button follows with "/order".
+//
+// Measured against the pre-fix code: the gate hardcoded fetch('/<slug>/unlock'),
+// so on the embed route (/embed/f/{ws}/{slug} — the only route a merchant can
+// frame) it posted to the CANONICAL, host-scoped /<slug>/unlock. An embed runs on
+// the merchant's origin, so that request's Host never names the workspace and the
+// unlock could not resolve the form: POST /embed/f/{ws}/{slug}/unlock answered
+// "404 page not found" (no route registered there at all) while the canonical
+// path reached the handler. An embedded private form was therefore permanently
+// locked.
+//
+// The rendered gate has no merchant-scoped host in it to derive the embed scope
+// from, which is exactly why "my own pathname" is the correct target: it is the
+// one expression that is right on every route that can render the gate
+// (/{slug} and /f/{slug} host-scoped, /embed/f/{accslug}/{slug} path-scoped).
+func TestPrivateGateFetchTargetIsItsOwnPath(t *testing.T) {
+	h := &PublicHandlers{}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/embed/f/ws/some-form", nil)
+
+	h.renderPrivateGate(rec, req, hostileForm("Private form", "some-form"))
+	body := rec.Body.String()
+
+	if !strings.Contains(body, "fetch(location.pathname+'/unlock'") {
+		t.Fatalf("the private gate does not post to its own path — it must fetch "+
+			"location.pathname + '/unlock' so the EMBED route posts to the embed scope. "+
+			"body: %.500s", body)
+	}
+	// A hardcoded, host-resolved target is the defect itself.
+	if strings.Contains(body, "fetch('/some-form/unlock'") {
+		t.Fatalf("the gate still hardcodes the canonical /<slug>/unlock path, which is "+
+			"host-scoped and cannot resolve a form served in an embed. body: %.500s", body)
 	}
 }
 

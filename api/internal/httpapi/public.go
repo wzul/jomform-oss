@@ -121,6 +121,14 @@ func (h *PublicHandlers) RegisterRoutes(mux *http.ServeMux) {
 	// merchant's own site, so the request Host never names the workspace.
 	// Rate-limited like the canonical order routes: it creates sales.
 	mux.Handle("POST /embed/f/{accslug}/{slug}/order", middleware.RateLimit(http.HandlerFunc(h.embedSubmit)))
+	// The unlock an EMBEDDED private form's gate posts to. Registered on the
+	// same path scope as the GET and the /order above, because the gate lives
+	// inside the embed document and must post to its OWN address (exactly as
+	// the submit button posts to its own path + "/order"). Without this route
+	// the gate hardcoded the canonical /{slug}/unlock, which is host-scoped —
+	// and an embed's Host is the MERCHANT's domain, so the unlock could never
+	// name the workspace. See embedUnlock.
+	mux.HandleFunc("POST /embed/f/{accslug}/{slug}/unlock", h.embedUnlock)
 	// Issue #276: sitemap.xml for custom-domain workspaces (indexed workspaces only).
 	mux.HandleFunc("GET /sitemap.xml", h.handleSitemap)
 	// Issue #276: indexed custom-domain workspace URLs for the web sitemap.
@@ -155,6 +163,17 @@ func (h *PublicHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /refund", h.handlePublicLegalPage)
 	mux.HandleFunc("GET /{slug}", h.handleWorkspaceRootForm)
 	// Issue #176: unlock a private form with its access password.
+	//
+	// BOTH paths a private form can be REACHED at need this, exactly as both
+	// need a matching /order above: the gate posts to its own address plus
+	// "/unlock" (location.pathname + "/unlock"), so the page served at
+	// /f/{slug} posts to /f/{slug}/unlock and the page served at /{slug}
+	// posts to /{slug}/unlock. Registering only one leaves the other gate
+	// posting at a route that does not exist — the embed bug (#722's class),
+	// which is how /f/{slug} silently became unusable. handleFormUnlock
+	// resolves the form from the request HOST for both, so they share one
+	// handler.
+	mux.HandleFunc("POST /f/{slug}/unlock", h.handleFormUnlock)
 	mux.HandleFunc("POST /{slug}/unlock", h.handleFormUnlock)
 }
 
@@ -1387,9 +1406,10 @@ func (h *PublicHandlers) privateUnlocked(r *http.Request, f *dbstore.Form) bool 
 	return ok && formID == f.ID
 }
 
-// handleFormUnlock verifies the submitted password against the form's stored
-// argon2id hash (constant-time) and, on success, sets a signed cookie that
-// unlocks the form for this browser. Wrong passwords are rejected.
+// handleFormUnlock verifies the submitted password for a form resolved from the
+// request HOST — the canonical (host-scoped) private-form unlock. An embedded
+// form cannot use it (an embed's Host is the merchant's domain), so the embed
+// route resolves by PATH and shares everything after that; see embedUnlock.
 func (h *PublicHandlers) handleFormUnlock(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("slug")
 	var f *dbstore.Form
@@ -1401,7 +1421,22 @@ func (h *PublicHandlers) handleFormUnlock(w http.ResponseWriter, r *http.Request
 	} else {
 		f, err = nil, dbstore.ErrFormNotFound
 	}
-	if err != nil || f == nil || f.Status != dbstore.FormStatusPrivate {
+	if err != nil || f == nil {
+		writeErr(w, http.StatusNotFound, "borang tidak dijumpai")
+		return
+	}
+	h.unlockResolvedForm(w, r, f)
+}
+
+// unlockResolvedForm is everything a private-form unlock does once the form is
+// resolved: the private-status gate, the argon2id password check and the signed
+// unlock cookie. It exists so the canonical unlock (POST /{slug}/unlock, host
+// scope) and the embed unlock (POST /embed/f/{accslug}/{slug}/unlock, path
+// scope) cannot drift — the same reason submitResolvedForm is shared by the two
+// submit routes. Only the LOOKUP differs between them, and it differs because it
+// must.
+func (h *PublicHandlers) unlockResolvedForm(w http.ResponseWriter, r *http.Request, f *dbstore.Form) {
+	if f.Status != dbstore.FormStatusPrivate {
 		writeErr(w, http.StatusNotFound, "borang tidak dijumpai")
 		return
 	}
@@ -1431,7 +1466,45 @@ func (h *PublicHandlers) handleFormUnlock(w http.ResponseWriter, r *http.Request
 		writeErr(w, http.StatusInternalServerError, "gagal buka kunci")
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, newFormAccessCookie(token))
+	respond(w, http.StatusOK, map[string]string{"status": "unlocked"})
+}
+
+// newFormAccessCookie builds the signed cookie that unlocks a private form.
+//
+// SameSite=None + Partitioned (CHIPS), NOT Lax.
+//
+// A private form can be embedded on the MERCHANT's own site, so the gate's
+// fetch is a cross-site subresource request from a frame whose "site for
+// cookies" is the empty string — every ancestor document is cross-site, so the
+// frame is cross-site with its own target (draft-ietf-httpbis-cookie-same-site
+// §2.1.1, and Set-Cookie/SameSite on MDN: Lax is sent only on same-site requests
+// and cross-site TOP-LEVEL navigations). A Lax cookie is therefore neither
+// STORED from such a response nor SENT on such a request, so the gate re-rendered
+// forever. Measured in this browser against a cross-site iframe: a Lax cookie set
+// by the frame's fetch was not stored at all, while a SameSite=None control was
+// stored AND sent on the frame's next request.
+//
+// A plain None cookie would fix that half but is exactly the third-party cookie
+// Chrome is restricting, so the cookie is marked Partitioned to opt into CHIPS —
+// double-keyed by the top-level site, which is the mechanism browsers provide for
+// an embedded widget's own state (MDN: "Cookies Having Independent Partitioned
+// State (CHIPS)"). It also keeps an unlock scoped to the ONE merchant page it was
+// entered on instead of being shared across every site the form is embedded on.
+// A browser that predates CHIPS ignores the unknown attribute and keeps a plain
+// SameSite=None cookie, so this is never worse than None alone.
+//
+// BOTH attributes require Secure, so they are emitted only where Secure is set
+// (i.e. not dev). Browsers that enforce the pairing refuse SameSite=None without
+// Secure, and a partitioned cookie MUST carry Secure, so emitting either on a
+// plain-http dev host would produce a cookie the browser silently discards. Dev
+// keeps Lax, which is correct there: a dev host is same-site with itself, so the
+// gate's own fetch is same-site and needs no relaxation.
+//
+// The value is the signed "<formID>|<expiry>|<hmac>" token
+// (signFormAccessToken), never the password.
+func newFormAccessCookie(token string) *http.Cookie {
+	c := &http.Cookie{
 		Name:     formAccessCookie,
 		Value:    token,
 		Path:     "/",
@@ -1439,11 +1512,26 @@ func (h *PublicHandlers) handleFormUnlock(w http.ResponseWriter, r *http.Request
 		Secure:   !isDev,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   60 * 60 * 24 * 7, // 7 days
-	})
-	respond(w, http.StatusOK, map[string]string{"status": "unlocked"})
+	}
+	if !isDev {
+		c.SameSite = http.SameSiteNoneMode
+		c.Partitioned = true
+	}
+	return c
 }
 
 // renderPrivateGate renders the password gate screen for a private form.
+//
+// The gate posts to its OWN address (location.pathname + "/unlock"), exactly as
+// the submit button posts to its own address + "/order". It used to hardcode
+// fetch('/<slug>/unlock') — the CANONICAL, host-scoped route — which is the same
+// path/route drift #722 fixed for the submit button, and it is what made an
+// embedded private form permanently locked: an embed is served on the MERCHANT's
+// origin, so its gate must post to the embed scope
+// (/embed/f/{accslug}/{slug}/unlock), where the request Host never names the
+// workspace. Every route that can render this gate therefore needs its matching
+// POST .../unlock registered: /{slug} and /f/{slug} (host scope) and
+// /embed/f/{accslug}/{slug} (path scope).
 func (h *PublicHandlers) renderPrivateGate(w http.ResponseWriter, r *http.Request, f *dbstore.Form) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	// Language placement: the gate must speak the same language as the form
@@ -1452,9 +1540,11 @@ func (h *PublicHandlers) renderPrivateGate(w http.ResponseWriter, r *http.Reques
 	ls := h.effectiveLangStrings(r.Context(), f)
 	// Issue #537: raw fmt.Fprintf has no html/template autoescaping, so every
 	// merchant-controlled value must be escaped for the context it lands in.
-	// f.Title is HTML text; f.Slug is interpolated into a JS single-quoted
-	// string literal inside the fetch() below, so it needs JS-context escaping —
-	// HTML escaping alone would still allow a `'` to break out of the string.
+	// f.Title is HTML text; anything interpolated into the fetch() below is a JS
+	// single-quoted string literal, so it needs JS-context escaping — HTML
+	// escaping alone would still allow a `'` to break out of the string. (The
+	// fetch target is the page's own pathname since the embed fix, so no
+	// merchant value reaches that literal at all; the language strings still do.)
 	fmt.Fprintf(w, `<!doctype html><html lang="%s"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>%s · %s</title>
 <style>body{background:#f7f8f8;color:#17181c;font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
@@ -1472,13 +1562,13 @@ button{width:100%%;background:#5e6ad2;color:#fff;border:0;border-radius:8px;padd
 </form><p class="f">%s</p></div>
 <script>
 async function unlock(e){e.preventDefault();var p=document.getElementById('pw').value;
-var r=await fetch('/%s/unlock',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:p})});
+var r=await fetch(location.pathname+'/unlock',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:p})});
 if(r.ok){location.reload();}else{var d=await r.json().catch(function(){return{};});document.getElementById('err').textContent=d.error||'%s';}
 return false;}
 </script></body></html>`,
 		htmlEsc(ls.Lang), htmlEsc(f.Title), htmlEsc(ls.UnlockTitle), htmlEsc(f.Title), htmlEsc(ls.UnlockHelp),
 		htmlEsc(ls.UnlockAction), htmlEsc(ls.UnlockAction), htmlEsc(ls.PoweredBy),
-		jsSingleQuoted(f.Slug), jsSingleQuoted(ls.UnlockError))
+		jsSingleQuoted(ls.UnlockError))
 }
 
 // formAccessCookie names the signed cookie that unlocks a private form.
