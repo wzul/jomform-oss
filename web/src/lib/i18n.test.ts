@@ -30,11 +30,18 @@
 //   6. The renderer still imports this one dictionary (no second, unguarded copy).
 //
 // WHAT IT DOES NOT COVER (stated honestly)
+//   * A key the CODE calls that is MISSING from the dictionary. This file iterates
+//     `Object.keys(DICT)`, so a key that disappears (a merge casualty, a rename,
+//     a typo at the call site) is outside what it can see — and `t()` renders the
+//     key itself, so the user gets "workspace.askTitle". That direction is
+//     src/lib/i18nKeys.test.ts (card t_c2744da3).
 //   * Translation QUALITY. It cannot judge whether the Tamil actually says what
 //     the English says, nor whether the register/terminology matches sibling
 //     keys. A fluent review is the only thing that can.
 //   * It does not see strings hardcoded in components (the dictionary is only
-//     as complete as the code's willingness to use it).
+//     as complete as the code's willingness to use it), nor keys the code builds
+//     at runtime (`t(`fb.status.${s}`)`) — those are counted and disclosed by
+//     src/lib/i18nKeys.test.ts.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
