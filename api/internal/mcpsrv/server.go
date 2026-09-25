@@ -168,13 +168,18 @@ func WithAPIKey(ctx context.Context, key *dbstore.APIKey) context.Context {
 	})
 }
 
-// WithOAuthToken stores an OAuth access token's identity in ctx. OAuth tokens
-// grant read+write (readwrite) scope, mirroring an admin API key. agent is the
-// registered client_name of the connected MCP client (issue #195).
-func WithOAuthToken(ctx context.Context, accountID, agent string) context.Context {
+// WithOAuthToken stores an OAuth access token's identity in ctx, carrying the
+// token's GRANTED scopes — never a hardcoded readwrite.
+//
+// Until this change the helper took no scope and hardcoded ["readwrite"], which
+// mirrored the old single-scope flow. Now that an access token can hold `read`
+// alone, a helper that silently widened the grant would be the exact "shown but
+// not enforced" trap the scope work exists to close. Callers pass t.Scope, the
+// value authenticate() read from the token row.
+func WithOAuthToken(ctx context.Context, accountID, agent string, scopes []string) context.Context {
 	return WithAuthIdentity(ctx, &AuthIdentity{
 		AccountID: accountID,
-		Scopes:    []string{"readwrite"},
+		Scopes:    scopes,
 		Agent:     agent,
 	})
 }

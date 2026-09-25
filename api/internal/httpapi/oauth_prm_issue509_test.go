@@ -25,10 +25,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wzul/jomform/api/internal/config"
+	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/mcpsrv"
 	"github.com/wzul/jomform/api/internal/oauthmeta"
 )
@@ -97,8 +100,8 @@ func TestProtectedResourceDocumentShape(t *testing.T) {
 			if len(doc.AuthorizationServers) != 1 || doc.AuthorizationServers[0] != oauthmeta.Base() {
 				t.Errorf("authorization_servers = %v, want [%s]", doc.AuthorizationServers, oauthmeta.Base())
 			}
-			if len(doc.ScopesSupported) != 1 || doc.ScopesSupported[0] != oauthmeta.ScopeReadWrite {
-				t.Errorf("scopes_supported = %v, want [%s]", doc.ScopesSupported, oauthmeta.ScopeReadWrite)
+			if len(doc.ScopesSupported) != 2 || doc.ScopesSupported[0] != oauthmeta.ScopeRead || doc.ScopesSupported[1] != oauthmeta.ScopeReadWrite {
+				t.Errorf("scopes_supported = %v, want [%s %s]", doc.ScopesSupported, oauthmeta.ScopeRead, oauthmeta.ScopeReadWrite)
 			}
 			if len(doc.BearerMethods) != 1 || doc.BearerMethods[0] != "header" {
 				t.Errorf("bearer_methods_supported = %v, want [header]", doc.BearerMethods)
@@ -150,34 +153,367 @@ func TestProtectedResourceAgreesWithAuthorizationServerMetadata(t *testing.T) {
 }
 
 // TestTokenResponseScopeMatchesDiscovery pins the third leg: the scope the
-// token endpoint returns is the scopes_supported both documents advertise.
+// token endpoint returns is a scope BOTH discovery documents advertise.
+//
+// The card's item 5 wants the divergence class guarded, so this test does not
+// just compare strings — it asserts the three-way relationship that must hold
+// for ANY grant:
+//
+//	token response scope  ⊆  PRM scopes_supported  ==  AS scopes_supported
+//
+// It walks the grant space (no scope, `read`, `readwrite`) so a response built
+// from a literal (the old bug: echoing ScopesSupported() regardless of what was
+// issued) fails on the `read` case: the response would then claim
+// "read readwrite" for a token that cannot write.
 func TestTokenResponseScopeMatchesDiscovery(t *testing.T) {
+	prmScopes := protectedResourceDocument("mcp.jomform.com")["scopes_supported"].([]string)
+	asScopes := authorizationServerDocument("mcp.jomform.com")["scopes_supported"].([]string)
+
+	// The two documents are one source today; assert it here too so a future
+	// split shows up as this test failing rather than as a silent divergence.
+	if strings.Join(prmScopes, " ") != strings.Join(asScopes, " ") {
+		t.Fatalf("PRM scopes_supported %v != AS scopes_supported %v — the two discovery "+
+			"documents must be built from oauthmeta.ScopesSupported()", prmScopes, asScopes)
+	}
+
+	cases := []struct {
+		name      string
+		requested string
+		want      string
+	}{
+		{"no scope parameter -> the readwrite default", "", oauthmeta.ScopeReadWrite},
+		{"read is granted as read", oauthmeta.ScopeRead, oauthmeta.ScopeRead},
+		{"readwrite is granted as readwrite", oauthmeta.ScopeReadWrite, oauthmeta.ScopeReadWrite},
+		{"both are granted in canonical order", oauthmeta.ScopeRead + " " + oauthmeta.ScopeReadWrite,
+			oauthmeta.ScopeRead + " " + oauthmeta.ScopeReadWrite},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			issued := tokenScopeForRequest(t, tc.requested)
+
+			if issued != tc.want {
+				t.Errorf("token response scope = %q, want %q — the response must echo the ISSUED "+
+					"grant, not the advertised list (a `read` client told it holds readwrite is a lie "+
+					"about what the credential can do)", issued, tc.want)
+			}
+			// Every issued scope must be advertised by BOTH documents: that is
+			// the actual divergence guard, and it holds whatever the grant is.
+			for _, s := range strings.Fields(issued) {
+				if !slices.Contains(asScopes, s) {
+					t.Errorf("issued scope %q is not in the AS scopes_supported %v", s, asScopes)
+				}
+				if !slices.Contains(prmScopes, s) {
+					t.Errorf("issued scope %q is not in the PRM scopes_supported %v", s, prmScopes)
+				}
+			}
+			// And when the client asked for EVERY advertised scope, the grant
+			// must be exactly that — i.e. the response is not a subset by
+			// accident of the code always emitting one fixed value.
+			//
+			// The absent-scope default is deliberately NOT asserted here: it is
+			// readwrite alone (item 2 — never `read`, or every existing client
+			// loses write), which is a proper subset of the advertised set, so
+			// requiring equality would contradict the default.
+			if tc.requested == oauthmeta.ScopeRead+" "+oauthmeta.ScopeReadWrite {
+				if issued != strings.Join(asScopes, " ") {
+					t.Errorf("a request for every advertised scope issued %q but discovery advertises %q",
+						issued, strings.Join(asScopes, " "))
+				}
+			}
+		})
+	}
+}
+
+// TestTokenResponseScopeIsNeverTheAdvertisedList is the direct bite proof for
+// item 3: a `read` grant's token response must NOT contain readwrite.
+//
+// This is separate from the table above so the failure message names the exact
+// defect (writeTokenResponse echoing ScopesSupported() instead of its scope
+// argument) rather than a generic mismatch.
+func TestTokenResponseScopeIsNeverTheAdvertisedList(t *testing.T) {
+	issued := tokenScopeForRequest(t, oauthmeta.ScopeRead)
+	if strings.Contains(issued, oauthmeta.ScopeReadWrite) {
+		t.Fatalf("token response for a `read`-scoped authorize said %q — writeTokenResponse is "+
+			"echoing the advertised list instead of the grant it was handed, so the client "+
+			"cannot tell what it actually got (and is told it can write)", issued)
+	}
+}
+
+// tokenScopeForRequest drives authorize (?scope=<requested>) -> token exchange
+// through the real handlers and returns the `scope` the token response carried.
+func tokenScopeForRequest(t *testing.T, requested string) string {
+	t.Helper()
 	o, _, sessions := testOAuthHandlers(t)
 	sessions.userID = "user-1"
 	clientID := registerTestClient(t, o, "https://client.example.com/cb")
-	rec := performAuthorize(t, o, clientID, "https://client.example.com/cb", "v", "s")
-	code := mustQuery(t, rec.Header().Get("Location")).Get("code")
 
-	form := "grant_type=authorization_code&code=" + code +
-		"&redirect_uri=" + "https%3A%2F%2Fclient.example.com%2Fcb" +
-		"&client_id=" + clientID + "&code_verifier=v"
+	challenge := pkcePair("v")
+	u := "/oauth/authorize?client_id=" + url.QueryEscape(clientID) +
+		"&redirect_uri=" + url.QueryEscape("https://client.example.com/cb") +
+		"&response_type=code&code_challenge=" + url.QueryEscape(challenge) +
+		"&code_challenge_method=S256&state=s"
+	if requested != "" {
+		u += "&scope=" + url.QueryEscape(requested)
+	}
+	req := httptest.NewRequest("GET", u, nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: "sess-1"})
+	rec := httptest.NewRecorder()
+	o.authorize(rec, req)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("authorize(scope=%q) = %d body=%s", requested, rec.Code, rec.Body.String())
+	}
+	code := mustQuery(t, rec.Header().Get("Location")).Get("code")
+	if code == "" {
+		t.Fatalf("authorize(scope=%q) redirected with no code: %q", requested, rec.Header().Get("Location"))
+	}
+
+	form := url.Values{}
+	form.Set("grant_type", "authorization_code")
+	form.Set("code", code)
+	form.Set("redirect_uri", "https://client.example.com/cb")
+	form.Set("client_id", clientID)
+	form.Set("code_verifier", "v")
 	trec := httptest.NewRecorder()
-	treq := httptest.NewRequest("POST", "/oauth/token", strings.NewReader(form))
+	treq := httptest.NewRequest("POST", "/oauth/token", strings.NewReader(form.Encode()))
 	treq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	o.token(trec, treq)
 	if trec.Code != http.StatusOK {
-		t.Fatalf("token = %d body=%s", trec.Code, trec.Body.String())
+		t.Fatalf("token(scope=%q) = %d body=%s", requested, trec.Code, trec.Body.String())
 	}
 	var tok struct {
 		Scope string `json:"scope"`
 	}
 	decodeJSONBody(t, trec, &tok)
-	if tok.Scope != oauthmeta.ScopeReadWrite {
-		t.Errorf("token scope = %q, want %q (must equal scopes_supported)", tok.Scope, oauthmeta.ScopeReadWrite)
+	return tok.Scope
+}
+
+// TestTokenRowCarriesTheResolvedGrant closes the chain between the two layers
+// that this feature lives across.
+//
+// The authorize tests assert the CODE records the resolved grant, and the mcpsrv
+// tests assert that a token ROW holding `read` is refused on writes. Neither
+// asserts the link: that exchanging a `read` code actually STORES a token row
+// whose scope is exactly ["read"]. If that link broke, the code would record
+// read, the row would somehow carry readwrite, and every enforcement test would
+// still pass while a merchant's read-only connection could write. So assert the
+// persisted row, not the response — the MCP gate reads the row, not the response.
+func TestTokenRowCarriesTheResolvedGrant(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		requested string
+		want      []string
+	}{
+		{"read stays read on the token row", oauthmeta.ScopeRead, []string{oauthmeta.ScopeRead}},
+		{"readwrite stays readwrite", oauthmeta.ScopeReadWrite, []string{oauthmeta.ScopeReadWrite}},
+		{"absent defaults to readwrite", "", []string{oauthmeta.ScopeReadWrite}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o, store, sessions := testOAuthHandlers(t)
+			sessions.userID = "user-1"
+			clientID := registerTestClient(t, o, "https://client.example.com/cb")
+
+			u := "/oauth/authorize?client_id=" + url.QueryEscape(clientID) +
+				"&redirect_uri=" + url.QueryEscape("https://client.example.com/cb") +
+				"&response_type=code&code_challenge=" + url.QueryEscape(pkcePair("v")) +
+				"&code_challenge_method=S256&state=s"
+			if tc.requested != "" {
+				u += "&scope=" + url.QueryEscape(tc.requested)
+			}
+			areq := httptest.NewRequest("GET", u, nil)
+			areq.AddCookie(&http.Cookie{Name: sessionCookie, Value: "sess-1"})
+			arec := httptest.NewRecorder()
+			o.authorize(arec, areq)
+			if arec.Code != http.StatusFound {
+				t.Fatalf("authorize = %d body=%s", arec.Code, arec.Body.String())
+			}
+			code := mustQuery(t, arec.Header().Get("Location")).Get("code")
+
+			form := url.Values{}
+			form.Set("grant_type", "authorization_code")
+			form.Set("code", code)
+			form.Set("redirect_uri", "https://client.example.com/cb")
+			form.Set("client_id", clientID)
+			form.Set("code_verifier", "v")
+			trec := httptest.NewRecorder()
+			treq := httptest.NewRequest("POST", "/oauth/token", strings.NewReader(form.Encode()))
+			treq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			o.token(trec, treq)
+			if trec.Code != http.StatusOK {
+				t.Fatalf("token = %d body=%s", trec.Code, trec.Body.String())
+			}
+
+			store.mu.Lock()
+			if len(store.tokens) != 1 {
+				store.mu.Unlock()
+				t.Fatalf("expected exactly 1 stored token row, got %d", len(store.tokens))
+			}
+			rowScope := append([]string(nil), store.tokens[0].Scope...)
+			store.mu.Unlock()
+
+			if strings.Join(rowScope, " ") != strings.Join(tc.want, " ") {
+				t.Errorf("stored token row scope = %v, want %v — the row is what the MCP write gate "+
+					"reads, so a row that does not carry the resolved grant means a read-only "+
+					"connection can write", rowScope, tc.want)
+			}
+		})
 	}
-	asScopes := authorizationServerDocument("mcp.jomform.com")["scopes_supported"].([]string)
-	if strings.Join(asScopes, " ") != tok.Scope {
-		t.Errorf("AS scopes_supported %v does not contain the issued scope %q", asScopes, tok.Scope)
+}
+
+// TestRefreshPreservesTheGrantAndNeverWidens pins the refresh half of item 3:
+// rotating a `read` token must return `read`, not the advertised list. A refresh
+// that widened the grant would turn a read-only connection into a write-capable
+// one without the merchant approving anything, which is the whole failure this
+// scope exists to prevent.
+func TestRefreshPreservesTheGrantAndNeverWidens(t *testing.T) {
+	o, store, sessions := testOAuthHandlers(t)
+	sessions.userID = "user-1"
+	clientID := registerTestClient(t, o, "https://client.example.com/cb")
+
+	// Mint a read token straight into the store (the authorize path is covered
+	// above); RefreshGrant copies scope from the row it revokes. The handler
+	// looks the row up by hashToken(refresh_token), so the fixture must store
+	// the SAME derivation — a plain string would never be found.
+	rawRefresh := "refresh-read-fixture"
+	store.mu.Lock()
+	store.tokens = append(store.tokens, &dbstore.OAuthToken{
+		TokenHash: "h-access", RefreshHash: hashToken(rawRefresh),
+		ClientID: clientID, UserID: "user-1", AccountID: "acct-1",
+		Scope:           []string{oauthmeta.ScopeRead},
+		AccessExpiresAt: time.Now().UTC().Add(time.Hour),
+	})
+	store.mu.Unlock()
+
+	form := url.Values{}
+	form.Set("grant_type", "refresh_token")
+	form.Set("refresh_token", rawRefresh)
+	form.Set("client_id", clientID)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/oauth/token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	o.token(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("refresh = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var tok struct {
+		Scope string `json:"scope"`
+	}
+	decodeJSONBody(t, rec, &tok)
+	if tok.Scope != oauthmeta.ScopeRead {
+		t.Errorf("refreshed token response scope = %q, want %q — a read grant must not widen on "+
+			"refresh", tok.Scope, oauthmeta.ScopeRead)
+	}
+	store.mu.Lock()
+	last := store.tokens[len(store.tokens)-1]
+	store.mu.Unlock()
+	if strings.Join(last.Scope, " ") != oauthmeta.ScopeRead {
+		t.Errorf("refreshed token ROW scope = %v, want [%s]", last.Scope, oauthmeta.ScopeRead)
+	}
+}
+
+// ─── the requested scope at authorize (RFC 6749 §3.3 / §4.1.2.1) ─────────────
+
+// TestAuthorizeHonoursRequestedScope is the card's acceptance criterion at the
+// handler level: the grant recorded on the authorization code is EXACTLY what
+// the client asked for.
+func TestAuthorizeHonoursRequestedScope(t *testing.T) {
+	cases := []struct {
+		name      string
+		requested string
+		want      []string
+	}{
+		{"read", "read", []string{oauthmeta.ScopeRead}},
+		{"readwrite", "readwrite", []string{oauthmeta.ScopeReadWrite}},
+		{"both", "read readwrite", []string{oauthmeta.ScopeRead, oauthmeta.ScopeReadWrite}},
+		{"absent -> readwrite default", "", []string{oauthmeta.ScopeReadWrite}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			o, store, sessions := testOAuthHandlers(t)
+			sessions.userID = "user-1"
+			clientID := registerTestClient(t, o, "https://client.example.com/cb")
+
+			u := "/oauth/authorize?client_id=" + url.QueryEscape(clientID) +
+				"&redirect_uri=" + url.QueryEscape("https://client.example.com/cb") +
+				"&response_type=code&code_challenge=" + url.QueryEscape(pkcePair("v")) +
+				"&code_challenge_method=S256&state=s"
+			if tc.requested != "" {
+				u += "&scope=" + url.QueryEscape(tc.requested)
+			}
+			req := httptest.NewRequest("GET", u, nil)
+			req.AddCookie(&http.Cookie{Name: sessionCookie, Value: "sess-1"})
+			rec := httptest.NewRecorder()
+			o.authorize(rec, req)
+			if rec.Code != http.StatusFound {
+				t.Fatalf("authorize(scope=%q) = %d body=%s", tc.requested, rec.Code, rec.Body.String())
+			}
+			code := mustQuery(t, rec.Header().Get("Location")).Get("code")
+			if code == "" {
+				t.Fatalf("no code in redirect: %q", rec.Header().Get("Location"))
+			}
+
+			// The CODE is what carries the grant forward to the token; assert on
+			// the stored row, not on the response, so this catches a mint that
+			// recorded the wrong set even if a later step papered over it.
+			store.mu.Lock()
+			ac, ok := store.codes[hashToken(code)]
+			store.mu.Unlock()
+			if !ok {
+				t.Fatal("authorization code not found in the store by hash")
+			}
+			if strings.Join(ac.Scope, " ") != strings.Join(tc.want, " ") {
+				t.Errorf("code scope = %v, want %v — the authorisation code must record the "+
+					"RESOLVED grant, or the token minted from it cannot carry it", ac.Scope, tc.want)
+			}
+		})
+	}
+}
+
+// TestAuthorizeRefusesUnadvertisedScope pins RFC 6749 §4.1.2.1's invalid_scope:
+// a scope this server does not advertise is refused, never widened to
+// readwrite and never narrowed to read.
+func TestAuthorizeRefusesUnadvertisedScope(t *testing.T) {
+	for _, requested := range []string{"admin", "readonly", "openid", "readreadwrite", "READ"} {
+		t.Run(requested, func(t *testing.T) {
+			o, store, sessions := testOAuthHandlers(t)
+			sessions.userID = "user-1"
+			clientID := registerTestClient(t, o, "https://client.example.com/cb")
+
+			u := "/oauth/authorize?client_id=" + url.QueryEscape(clientID) +
+				"&redirect_uri=" + url.QueryEscape("https://client.example.com/cb") +
+				"&response_type=code&code_challenge=" + url.QueryEscape(pkcePair("v")) +
+				"&code_challenge_method=S256&state=s" +
+				"&scope=" + url.QueryEscape(requested)
+			req := httptest.NewRequest("GET", u, nil)
+			req.AddCookie(&http.Cookie{Name: sessionCookie, Value: "sess-1"})
+			rec := httptest.NewRecorder()
+			o.authorize(rec, req)
+
+			// The redirect_uri is valid here, so the error must come back as a
+			// redirect carrying invalid_scope (RFC 6749 §4.1.2.1) — not a bare
+			// 400, and above all not a code.
+			if rec.Code != http.StatusFound {
+				t.Fatalf("authorize(scope=%q) = %d body=%s, want a redirect with invalid_scope",
+					requested, rec.Code, rec.Body.String())
+			}
+			loc := mustQuery(t, rec.Header().Get("Location"))
+			if loc.Get("error") != "invalid_scope" {
+				t.Errorf("authorize(scope=%q) error = %q, want invalid_scope", requested, loc.Get("error"))
+			}
+			if loc.Get("code") != "" {
+				t.Errorf("authorize(scope=%q) returned a CODE (%q) for an unadvertised scope — "+
+					"the request was silently granted something it did not ask for",
+					requested, loc.Get("code"))
+			}
+			// And nothing may be left in the store: the refusal happens before
+			// the mint, not after.
+			store.mu.Lock()
+			n := len(store.codes)
+			store.mu.Unlock()
+			if n != 0 {
+				t.Errorf("an unadvertised scope left %d authorization code(s) in the store — "+
+					"the refusal ran after the mint", n)
+			}
+		})
 	}
 }
 

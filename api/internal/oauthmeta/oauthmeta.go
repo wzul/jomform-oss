@@ -59,15 +59,80 @@ const MCPDocsPage = "https://jomform.com/docs/mcp"
 // TokenType is the only bearer token type issued (RFC 6750).
 const TokenType = "Bearer"
 
-// ScopeReadWrite is the only scope the OAuth flow issues: an OAuth access
-// token mirrors an admin API key (read + write MCP tools). It is advertised by
-// the AS metadata and by the PRM `scopes_supported`, and it is what
-// writeTokenResponse returns — one value, so the token response can never
-// advertise a scope the discovery documents do not list.
-const ScopeReadWrite = "readwrite"
+// OAuth 2.1 scopes. Two are advertised and issued: read and readwrite.
+//
+// Wan (2026-09-21): "kena ada read sahaja dan readwrite la untuk mcp" — a
+// merchant who only wants their agent to LOOK at the store must be able to
+// grant a credential that cannot change anything.
+//
+// These are the OAuth scope NAMES and they are deliberately distinct from the
+// API-key names (dbstore.ScopeReadonly / ScopeReadWrite): the API-key scope
+// vocabulary predates this and is not renamed here, because renaming a live
+// credential axis is a migration, not a scope addition.
+//
+// ONE SOURCE OF TRUTH: the AS metadata `scopes_supported`, the RFC 9728 PRM
+// `scopes_supported` and the set a grant can draw from are all derived from
+// ScopesSupported() below. A scope the flow can issue but discovery does not
+// advertise (or the reverse) is the divergence issue #509 exists to prevent.
+const (
+	// ScopeRead permits read-only MCP calls. A token holding it is REFUSED on
+	// every write tool (mcpsrv.requireWriteScope / the accountScopes write
+	// boolean both test for ScopeReadWrite, and read does not satisfy it).
+	ScopeRead = "read"
+	// ScopeReadWrite permits read + write.
+	ScopeReadWrite = "readwrite"
+)
 
-// ScopesSupported returns the OAuth scopes this deployment issues.
-func ScopesSupported() []string { return []string{ScopeReadWrite} }
+// ScopesSupported returns the OAuth scopes this deployment advertises AND can
+// issue. Both discovery documents and the grant resolver below read this one
+// function, so they cannot list different sets.
+func ScopesSupported() []string { return []string{ScopeRead, ScopeReadWrite} }
+
+// DefaultScopes is the grant for an authorize request that carries no `scope`
+// parameter (RFC 6749 §3.3 permits a server-chosen default).
+//
+// It is readwrite ON PURPOSE. Every MCP client connecting today — the Hermes
+// gateway included — omits `scope`, and defaulting to read would silently strip
+// write capability from all of them. A client that wants read asks for read.
+func DefaultScopes() []string { return []string{ScopeReadWrite} }
+
+// GrantedScopes resolves a requested `scope` parameter (RFC 6749 §3.3: a
+// space-delimited, case-sensitive list) into the exact set to grant.
+//
+//   - absent or empty/whitespace-only -> DefaultScopes() (readwrite), ok=true.
+//   - every value advertised          -> exactly those, deduped and in the
+//     canonical ScopesSupported() order, ok=true. Asking for "readreadwrite"
+//     style junk, or a value that merely LOOKS like a scope, is not accepted
+//     by prefix matching — membership is exact.
+//   - any value not advertised        -> nil, ok=false. The caller must answer
+//     invalid_scope (RFC 6749 §4.1.2.1): never silently widen the grant to
+//     readwrite and never silently narrow it to read, because either would
+//     hand the client a credential it did not ask for.
+func GrantedScopes(requested string) ([]string, bool) {
+	want := strings.Fields(requested)
+	if len(want) == 0 {
+		return DefaultScopes(), true
+	}
+	requestedSet := make(map[string]bool, len(want))
+	for _, w := range want {
+		requestedSet[w] = true
+	}
+	advertised := ScopesSupported()
+	if len(requestedSet) > len(advertised) {
+		return nil, false // more distinct values than exist: at least one is not advertised
+	}
+	granted := make([]string, 0, len(requestedSet))
+	for _, s := range advertised {
+		if requestedSet[s] {
+			granted = append(granted, s)
+			delete(requestedSet, s)
+		}
+	}
+	if len(requestedSet) != 0 {
+		return nil, false // unadvertised value(s) remain
+	}
+	return granted, true
+}
 
 // BearerMethodsSupported returns how a bearer token is presented (RFC 9728
 // §2). JomForm only accepts the value in the Authorization header — never a

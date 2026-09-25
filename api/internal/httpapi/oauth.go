@@ -302,6 +302,13 @@ func (o *OAuthHandlers) authorize(w http.ResponseWriter, r *http.Request) {
 	codeChallenge := q.Get("code_challenge")
 	challengeMethod := q.Get("code_challenge_method")
 	state := q.Get("state")
+	// The scope requested by the client (RFC 6749 §3.3: space-delimited,
+	// case-sensitive). Resolved here, but the error for a bad value is emitted
+	// further down — once the client and redirect_uri are validated, an invalid
+	// scope must come back as a REDIRECT with error=invalid_scope
+	// (RFC 6749 §4.1.2.1), not a bare 400, because the redirection URI is known
+	// good at that point. Nothing is minted for an unadvertised value either way.
+	scope, scopeOK := oauthmeta.GrantedScopes(q.Get("scope"))
 	// Issue #509: RFC 8707 `resource` (RFC 9728-aware clients send it). JomForm
 	// is a single-resource authorization server — the only resource is the /mcp
 	// endpoint — so an omitted value is fine and any value that does not
@@ -323,6 +330,16 @@ func (o *OAuthHandlers) authorize(w http.ResponseWriter, r *http.Request) {
 	if !redirectURIAllowed(client, redirectURI) {
 		// RFC 6749: when redirect_uri is invalid we must NOT redirect the user.
 		oauthErr(w, http.StatusBadRequest, "invalid_request", "redirect_uri tidak didaftarkan untuk client ini")
+		return
+	}
+	// The requested scope, refused per RFC 6749 §4.1.2.1. Now that the client and
+	// its redirect_uri are known good, the error goes back as a redirect carrying
+	// error=invalid_scope (not a bare 400), which is what a spec-following client
+	// expects. The check refuses rather than narrowing: a request for a scope this
+	// server does not advertise must never be silently granted readwrite.
+	if !scopeOK {
+		o.redirectErr(w, r, client, redirectURI, state, "invalid_scope",
+			"scope tidak disokong (guna 'read' atau 'readwrite')")
 		return
 	}
 	if responseType != "code" {
@@ -373,9 +390,13 @@ func (o *OAuthHandlers) authorize(w http.ResponseWriter, r *http.Request) {
 	ac := &dbstore.OAuthAuthCode{
 		ClientID: clientID, UserID: user.ID, AccountID: accountID,
 		RedirectURI: redirectURI, CodeChallenge: codeChallenge,
-		// One scope source (internal/oauthmeta) so the issued scope always
-		// matches the scopes_supported advertised by discovery (issue #509).
-		Scope: oauthmeta.ScopesSupported(), ExpiresAt: time.Now().UTC().Add(o.CodeTTL),
+		// The scope resolved from the request (oauthmeta.GrantedScopes) — the
+		// same ONE source the discovery documents advertise, so the grant can
+		// never name a scope discovery does not list. Recording the RESOLVED
+		// grant here is what makes the choice enforceable: the token minted
+		// from this code carries exactly this set, and a `read` grant is
+		// refused on every write tool.
+		Scope: scope, ExpiresAt: time.Now().UTC().Add(o.CodeTTL),
 	}
 	if err := o.Store.StoreAuthCode(r.Context(), hashToken(code), ac); err != nil {
 		oauthErr(w, http.StatusInternalServerError, "server_error", "gagal menyimpan authorization code",
@@ -519,7 +540,11 @@ func (o *OAuthHandlers) tokenRefresh(w http.ResponseWriter, r *http.Request) {
 		oauthErr(w, http.StatusBadRequest, "invalid_grant", "client_id tidak padan")
 		return
 	}
-	writeTokenResponse(w, newAccess, newRefresh, o.AccessTokenTTL)
+	// The rotated pair carries the SAME granted scope as the pair it replaces
+	// (dbstore.RefreshGrant copies scope from the row it revokes), so a read
+	// grant stays read for the life of the connection and never widens on
+	// refresh. Echo that grant, not the advertised list.
+	writeTokenResponse(w, newAccess, newRefresh, o.AccessTokenTTL, nt.Scope)
 }
 
 // issueTokenPair mints + stores a fresh access(+refresh) token pair and
@@ -539,7 +564,9 @@ func (o *OAuthHandlers) issueTokenPair(w http.ResponseWriter, r *http.Request, c
 			"err", err, "client_id", clientID, "user_id", userID)
 		return
 	}
-	writeTokenResponse(w, access, refresh, o.AccessTokenTTL)
+	// Echo the scope the token was actually minted with (item 3): the caller
+	// reads back the grant, not the advertised list.
+	writeTokenResponse(w, access, refresh, o.AccessTokenTTL, scope)
 }
 
 // verifyPKCE checks a code_verifier against the stored challenge.
@@ -558,15 +585,25 @@ func sha256Sum(b []byte) []byte {
 }
 
 // writeTokenResponse emits the standard OAuth token JSON.
-func writeTokenResponse(w http.ResponseWriter, access, refresh string, ttl time.Duration) {
+//
+// The `scope` it returns is the ISSUED GRANT, not the advertised list. Those
+// were the same thing while the deployment had exactly one scope; with two they
+// are different, and echoing ScopesSupported() here would tell a client that
+// asked for `read` that it holds `read readwrite` — a lie in the response body
+// about what the credential can do. The client must be able to read back what
+// it actually got (RFC 6749 §5.1 `scope` is "OPTIONAL, if identical to the
+// scope requested by the client; otherwise REQUIRED").
+//
+// The grant is still always a subset of ScopesSupported() — it came from
+// oauthmeta.GrantedScopes — so the response, the AS metadata and the PRM cannot
+// diverge; TestTokenResponseScopeMatchesDiscovery pins that.
+func writeTokenResponse(w http.ResponseWriter, access, refresh string, ttl time.Duration, scope []string) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"access_token":  access,
 		"token_type":    "Bearer",
 		"expires_in":    int(ttl.Seconds()),
 		"refresh_token": refresh,
-		// Single scope source (issue #509): the token response, the AS metadata
-		// scopes_supported and the RFC 9728 scopes_supported cannot diverge.
-		"scope": strings.Join(oauthmeta.ScopesSupported(), " "),
+		"scope":         strings.Join(scope, " "),
 	})
 }
 

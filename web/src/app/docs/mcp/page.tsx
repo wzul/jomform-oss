@@ -364,8 +364,9 @@ export default function McpReferencePage() {
           <li>
             The client fetches <code className="rounded bg-slate-100 px-1">/.well-known/oauth-protected-resource</code>{" "}
             (RFC 9728). It names the protected resource (<code className="rounded bg-slate-100 px-1">https://mcp.jomform.com/mcp</code>),
-            the authorization server (<code className="rounded bg-slate-100 px-1">https://mcp.jomform.com</code>), the scope{" "}
-            (<code className="rounded bg-slate-100 px-1">readwrite</code>) and that the bearer token is presented in the{" "}
+            the authorization server (<code className="rounded bg-slate-100 px-1">https://mcp.jomform.com</code>), the scopes{" "}
+            (<code className="rounded bg-slate-100 px-1">read</code> and{" "}
+            <code className="rounded bg-slate-100 px-1">readwrite</code>) and that the bearer token is presented in the{" "}
             <code className="rounded bg-slate-100 px-1">Authorization</code> header.
           </li>
           <li>
@@ -418,6 +419,41 @@ export default function McpReferencePage() {
           to conflate, and conflating them is exactly what let a readonly key
           write (the API-key scope was silently dropped from the write gate). */}
       <section className="mt-8">
+        <h2 className="text-lg font-semibold text-slate-900">OAuth connector scopes</h2>
+        <p className="mt-2 text-sm leading-relaxed text-slate-600">
+          A connector authenticates with OAuth 2.1, and the grant it receives carries one of two
+          scopes. The MCP client asks for the scope it wants on the authorize request (
+          <code className="rounded bg-slate-100 px-1">?scope=…</code>, space-delimited); JomForm
+          grants exactly what was asked for and records it on the token it issues. Both are
+          advertised in the protected-resource and authorization-server metadata, alongside the
+          other fields a client needs.
+        </p>
+        <ul className="mt-3 list-disc space-y-2 pl-5 text-sm leading-relaxed text-slate-600">
+          <li>
+            <code className="rounded bg-slate-100 px-1">read</code> — read-only. The agent can
+            call every listing and getter; every tool that creates, updates, deletes, archives,
+            cancels, refunds or generates a stored key is refused with a scope error. A read
+            grant also cannot upgrade itself: <code className="rounded bg-slate-100 px-1">create_api_key</code>{" "}
+            is a write, so a read-only connector can never mint a wider credential.
+          </li>
+          <li>
+            <code className="rounded bg-slate-100 px-1">readwrite</code> — read and write. This is
+            the grant for a client that does not ask for a scope: the request omitting{" "}
+            <code className="rounded bg-slate-100 px-1">scope</code> defaults to readwrite, so an
+            already-connected client is never silently downgraded.
+          </li>
+        </ul>
+        <p className="mt-2 text-sm leading-relaxed text-slate-600">
+          The scope is fixed for the life of the connection: refreshing an access token returns the
+          same grant as the token it replaces, so a read grant never widens. A request naming a
+          scope this server does not advertise is refused with{" "}
+          <code className="rounded bg-slate-100 px-1">invalid_scope</code> — it is never silently
+          widened to readwrite or narrowed to read. The token response echoes the issued grant, not
+          the advertised list, so a client can read back what it actually holds.
+        </p>
+      </section>
+
+      <section className="mt-8">
         <h2 className="text-lg font-semibold text-slate-900">API-key scopes</h2>
         <p className="mt-2 text-sm leading-relaxed text-slate-600">
           An API key carries a <em>scope</em>, which says what that credential may do at all. It is
@@ -432,7 +468,8 @@ export default function McpReferencePage() {
           </li>
           <li>
             <code className="rounded bg-slate-100 px-1">readwrite</code> — read and write. This is
-            what OAuth connectors receive.
+            the default grant for an OAuth connector, unless it asks for{" "}
+            <code className="rounded bg-slate-100 px-1">read</code>.
           </li>
           <li>
             <code className="rounded bg-slate-100 px-1">admin</code> — kept for existing keys; it

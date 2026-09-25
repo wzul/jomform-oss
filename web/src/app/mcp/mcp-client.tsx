@@ -159,6 +159,34 @@ export default function McpPage() {
           </div>
         </section>
 
+        {/* Scope choice: which grant the agent gets is asked for by the client
+            at authorize time, and the API enforces it on every write tool.
+            Documented here because a merchant choosing a connection needs to
+            know what "read-only" actually guarantees. */}
+        <section className="jf-card mt-6 p-6">
+          <h2 className="text-lg font-semibold">{t("mcp.scopesTitle")}</h2>
+          <p className="mt-2 text-sm leading-relaxed text-slate-600">{t("mcp.scopesBody")}</p>
+          <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="rounded-xl border border-slate-200 p-4">
+              <p className="text-sm font-semibold text-slate-900">
+                <code className="rounded bg-slate-100 px-1 font-mono text-[12px]">read</code>{" "}
+                {t("mcp.scopeRead")}
+              </p>
+              <p className="mt-1 text-xs leading-relaxed text-slate-500">{t("mcp.scopeReadBody")}</p>
+            </div>
+            <div className="rounded-xl border border-slate-200 p-4">
+              <p className="text-sm font-semibold text-slate-900">
+                <code className="rounded bg-slate-100 px-1 font-mono text-[12px]">readwrite</code>{" "}
+                {t("mcp.scopeReadWrite")}
+              </p>
+              <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                {t("mcp.scopeReadWriteBody")}
+              </p>
+            </div>
+          </div>
+          <p className="mt-3 text-xs leading-relaxed text-slate-500">{t("mcp.scopeReadOnlyNote")}</p>
+        </section>
+
         {/* Example commands */}
         <section className="jf-card mt-6 p-6">
           <h2 className="text-lg font-semibold">{t("mcp.examplesTitle")}</h2>

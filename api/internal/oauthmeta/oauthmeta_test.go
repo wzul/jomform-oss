@@ -6,6 +6,8 @@ package oauthmeta
 
 import (
 	"net/http"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -112,11 +114,87 @@ func TestResourceMatches(t *testing.T) {
 
 // TestScopesAndBearerMethods pins the advertised values that the token
 // endpoint's responses must agree with.
+//
+// Two scopes since the read-scope work: `read` and `readwrite`, in that order.
+// The order is part of the contract — ScopesSupported() is the canonical order
+// oauthmeta.GrantedScopes emits a grant in, and the token response is asserted
+// against it — so a reshuffle here is a behaviour change, not cosmetics.
 func TestScopesAndBearerMethods(t *testing.T) {
-	if got := ScopesSupported(); len(got) != 1 || got[0] != ScopeReadWrite {
-		t.Errorf("ScopesSupported() = %v, want [%s]", got, ScopeReadWrite)
+	got := ScopesSupported()
+	want := []string{ScopeRead, ScopeReadWrite}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("ScopesSupported() = %v, want %v", got, want)
 	}
 	if got := BearerMethodsSupported(); len(got) != 1 || got[0] != "header" {
 		t.Errorf("BearerMethodsSupported() = %v, want [header]", got)
+	}
+}
+
+// TestGrantedScopes is the resolution rule the authorize endpoint relies on:
+// absent -> readwrite (the default that keeps every existing client writing),
+// an advertised subset -> exactly that, anything unadvertised -> refused.
+func TestGrantedScopes(t *testing.T) {
+	cases := []struct {
+		name      string
+		requested string
+		want      []string
+		wantOK    bool
+	}{
+		{"absent", "", []string{ScopeReadWrite}, true},
+		{"whitespace only", "   	 ", []string{ScopeReadWrite}, true},
+		{"read", "read", []string{ScopeRead}, true},
+		{"readwrite", "readwrite", []string{ScopeReadWrite}, true},
+		{"both, canonical order", "readwrite read", []string{ScopeRead, ScopeReadWrite}, true},
+		{"both, requested order is normalised", "read readwrite", []string{ScopeRead, ScopeReadWrite}, true},
+		{"duplicates collapse", "read read read", []string{ScopeRead}, true},
+		{"extra whitespace", "  read   readwrite  ", []string{ScopeRead, ScopeReadWrite}, true},
+		// Unadvertised values. Note each of these is refused rather than
+		// rounded down to something we do support.
+		{"unadvertised admin", "admin", nil, false},
+		{"unadvertised readonly (the API-key spelling)", "readonly", nil, false},
+		{"case is significant", "READ", nil, false},
+		{"prefix is not a match", "readreadwrite", nil, false},
+		{"one good one bad", "read admin", nil, false},
+		{"not a scope at all", "openid email", nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := GrantedScopes(tc.requested)
+			if ok != tc.wantOK {
+				t.Fatalf("GrantedScopes(%q) ok = %v, want %v", tc.requested, ok, tc.wantOK)
+			}
+			if !tc.wantOK {
+				if got != nil {
+					t.Errorf("GrantedScopes(%q) = %v on refusal, want nil (never a narrowed grant)", tc.requested, got)
+				}
+				return
+			}
+			if strings.Join(got, " ") != strings.Join(tc.want, " ") {
+				t.Errorf("GrantedScopes(%q) = %v, want %v", tc.requested, got, tc.want)
+			}
+			// Whatever is granted must be advertised — the invariant the
+			// divergence guard depends on.
+			for _, s := range got {
+				if !slices.Contains(ScopesSupported(), s) {
+					t.Errorf("granted scope %q is not in ScopesSupported() %v", s, ScopesSupported())
+				}
+			}
+		})
+	}
+}
+
+// TestDefaultScopesIsReadWriteTheFullGrant guards the one decision that would
+// silently break every existing client: the absent-scope default must stay
+// readwrite. Defaulting to `read` would strip write access from every MCP
+// client that connects without asking (the Hermes gateway included).
+func TestDefaultScopesIsReadWriteTheFullGrant(t *testing.T) {
+	if got := DefaultScopes(); len(got) != 1 || got[0] != ScopeReadWrite {
+		t.Fatalf("DefaultScopes() = %v, want [%s] — defaulting to read would downgrade every "+
+			"existing client that sends no scope parameter", got, ScopeReadWrite)
+	}
+	// And the default must be exactly what an empty request resolves to.
+	got, ok := GrantedScopes("")
+	if !ok || strings.Join(got, " ") != strings.Join(DefaultScopes(), " ") {
+		t.Errorf("GrantedScopes(\"\") = %v ok=%v, want DefaultScopes() %v", got, ok, DefaultScopes())
 	}
 }
