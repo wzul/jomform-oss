@@ -209,6 +209,11 @@ export function WorkspaceSwitcher({
                         where the name is shown in full — it wraps instead of
                         truncating, and the item is a 44px tap target. */}
                     <span className="block break-words">{s.name}</span>
+                    {/* The active item is painted on the indigo-50 tint, where
+                        --jf-muted measures 4.32:1 — below the AA floor. The
+                        on-tint pair passes on the tint (5.35:1) and on white
+                        (5.98:1, the inactive items' surface), so the token is
+                        safe for both states of this row. */}
                     <span className="block break-all text-xs text-[var(--jf-muted-on-tint)]">
                       {s.slug}.jomform.com{s.role ? ` · ${roleLabel(s.role)}` : ""}
                     </span>
@@ -321,7 +326,7 @@ export function WorkspaceSwitcher({
                   setCreating(true);
                   setError(null);
                 }}
-                className="min-h-11 w-full rounded-md px-2.5 py-1.5 text-left text-sm font-medium text-[var(--jf-primary)] hover:bg-indigo-50 hover:text-[var(--jf-primary-on-tint)]"
+                className="min-h-11 w-full rounded-md px-2.5 py-1.5 text-left text-sm font-medium text-[var(--jf-primary-on-tint)] hover:bg-indigo-50"
               >
                 + {t("workspace.new")}
               </button>

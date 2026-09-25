@@ -303,3 +303,420 @@ test("the docs no longer send a reader looking for a Profile nav row", () => {
     "a docs sentence still names Profile as a sidebar entry",
   );
 });
+
+// ─── the tinted-active-surface contrast rule ────────────────────────────────
+//
+// WHAT WAS WRONG (measured, not a hunch): the tinted "active/selected" surface
+// paints Tailwind's `indigo-50` (#eef2ff), and the two base text tokens do not
+// clear WCAG AA on it — `--jf-primary` (#5e6ad2) measures 4.20:1 and
+// `--jf-muted` (#6b7280) 4.32:1, both under the 4.5:1 floor for the 14px/12px
+// text these surfaces use. Measured on #eef2ff, the on-tint pair clears it:
+// `--jf-primary-on-tint` (#4338ca) 7.07:1 and `--jf-muted-on-tint` (#5b6472)
+// 5.35:1. Both on-tint tokens ALSO pass off the tint, so they are safe on a row
+// whose tint is conditional (that is why the substitution can be unconditional).
+//
+// WHY THIS IS A SOURCE GUARD, not a browser assertion: the repo's own a11y gate
+// (`web/e2e/a11y.spec.ts`) scans PUBLIC routes only — it never sees the
+// authenticated sidebar/drawer/account block/workspace switcher — so a tinted
+// contrast regression in the dashboard chrome is invisible to the gate. That is
+// exactly how the switcher's tinted active item shipped at 4.20:1 while the nav
+// row was fixed. The EXECUTED proof is the axe run in the card (switcher open,
+// 2+ workspaces); this is the part that keeps it from coming back.
+//
+// SCOPE: the dashboard CHROME this guard's card owns — Shell.tsx (the sidebar /
+// drawer / account block) and WorkspaceSwitcher.tsx. It is deliberately not
+// applied repo-wide yet: 16 other sites paint a base token on `bg-indigo-50`
+// (page-level selected chips, badges, a message panel). Those are a wider,
+// separate class, filed as its own card, so this guard cannot go red on files
+// this card does not touch.
+
+/** The chrome files this rule owns, with the surface each tints. */
+const CHROME = [
+  { rel: "../components/Shell.tsx", label: "Shell.tsx" },
+  { rel: "../components/WorkspaceSwitcher.tsx", label: "WorkspaceSwitcher.tsx" },
+];
+
+const TINTED = /(?:^|[\s"'`])bg-indigo-50(?![\w/.-])/;
+const BASE_TOKEN = /text-\[var\(--jf-(primary|muted)\)\]/;
+
+/**
+ * A className expression expands into every class list it can actually render.
+ *
+ * `className` here is usually a template literal whose `${cond ? "a" : "b"}`
+ * branches are COMPLETE class lists of their own. Checking the flattened text of
+ * such an expression is wrong in both directions — a tint in the static prefix
+ * reads as paired with a token that lives in a different branch and never
+ * renders beside it (Shell's nav row), while a branch that only applies under
+ * one condition is invisible. So every `$`-island becomes an ALTERNATIVE (each
+ * string literal inside it, plus "" because a conditional renders nothing on
+ * its else path) and the class lists are the cross product.
+ *
+ * Getting this wrong is how the first version of this guard went green on a tree
+ * with the defect re-planted: it left the branch's quote characters attached to
+ * the class names, so `"bg-indigo-50` never matched the tint pattern.
+ */
+type Variant = string;
+type Seg = { text?: string; alts?: string[] };
+
+/**
+ * Read an expression, appending static text and alternative islands to `segs`.
+ *
+ * Recursive rather than a flat scan because a `${…}` island can itself contain a
+ * template literal with its own islands, and the closing `}` has to be paired
+ * with the `$`-`{` that opened it. Returns the index just past what it consumed.
+ */
+function readExpr(expr: string, i: number, inIsland: boolean, segs: Seg[]): number {
+  let buf = "";
+  const flush = () => {
+    if (buf) segs.push({ text: buf });
+    buf = "";
+  };
+  while (i < expr.length) {
+    const c = expr[i];
+    if (inIsland && c === "}") {
+      flush();
+      return i + 1;
+    }
+    if (c === '"' || c === "'") {
+      // A plain string literal: its body is static text in this context (a
+      // class list, or an operand of the branch condition).
+      let j = i + 1;
+      while (j < expr.length && expr[j] !== c) {
+        if (expr[j] === "\\") j += 1;
+        buf += expr[j] ?? "";
+        j += 1;
+      }
+      i = j + 1;
+      continue;
+    }
+    if (c === "`") {
+      let j = i + 1;
+      while (j < expr.length && expr[j] !== "`") {
+        if (expr[j] === "\\") {
+          j += 1;
+          buf += expr[j] ?? "";
+          j += 1;
+          continue;
+        }
+        if (expr[j] === "$" && expr[j + 1] === "{") {
+          flush();
+          const end = matchBrace(expr, j + 1);
+          segs.push({ alts: branchLiterals(expr.slice(j + 2, end)) });
+          j = end + 1;
+          continue;
+        }
+        buf += expr[j];
+        j += 1;
+      }
+      i = j + 1; // past the closing backtick
+      continue;
+    }
+    buf += c;
+    i += 1;
+  }
+  flush();
+  return i;
+}
+
+/** The index of the `}` closing the `{` at `open`. */
+function matchBrace(expr: string, open: number): number {
+  let depth = 0;
+  let i = open;
+  while (i < expr.length) {
+    const c = expr[i];
+    if (c === '"' || c === "'" || c === "`") {
+      const q = c;
+      i += 1;
+      while (i < expr.length && expr[i] !== q) {
+        if (expr[i] === "\\") i += 1;
+        i += 1;
+      }
+    } else if (c === "{") depth += 1;
+    else if (c === "}") {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+    i += 1;
+  }
+  return expr.length;
+}
+
+/**
+ * The class lists a `${…}` island can render.
+ *
+ * Only the branch RESULTS count. An island is a ternary
+ * (`active === n.key ? "a" : "b"`), and its condition is not a class list — a
+ * condition operand like `"profile"` would otherwise be read as one. Everything
+ * before the first `?` is therefore dropped, and the rest contributes one
+ * alternative per string literal. "" is always an alternative because a
+ * conditional whose else path is `undefined` renders no class at all.
+ */
+function branchLiterals(island: string): string[] {
+  const q = island.indexOf("?");
+  const body = q === -1 ? island : island.slice(q + 1);
+  const alts: string[] = [];
+  const re = /"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(body))) alts.push(m[1] ?? m[2] ?? "");
+  alts.push("");
+  return alts;
+}
+
+
+function classVariants(expr: string): Variant[] {
+  const segs: Seg[] = [];
+  readExpr(expr, 0, false, segs);
+  if (segs.length === 0) return [];
+  let out: Variant[] = [""];
+  for (const s of segs) {
+    const opts = s.text !== undefined ? [s.text] : (s.alts ?? []);
+    const next: Variant[] = [];
+    for (const o of out) {
+      for (const a of opts) {
+        next.push(o && a ? `${o} ${a}` : o + a);
+        if (next.length >= 256) break;
+      }
+      if (next.length >= 256) break;
+    }
+    out = next;
+  }
+  return out;
+}
+
+/**
+ * True when a class list paints the tinted active surface in some state, so a
+ * hover/focus tint (`hover:bg-indigo-50`) counts — the text is painted on the
+ * tint while the state is active, which is the same AA obligation.
+ *
+ * Translucent tints (`bg-indigo-50/40`) are deliberately NOT matched here: they
+ * composite to something lighter, they are a wider class across the page-level
+ * chips, and they are tracked separately rather than folded into this rule.
+ */
+function paintsTint(variants: Variant[]): boolean {
+  return variants.some((v) => v.split(/\s+/).some((cls) => /(^|:)bg-indigo-50$/.test(cls)));
+}
+
+/** Every base (non-on-tint) text token in a class list. */
+function baseTokens(variant: string): string[] {
+  return [...variant.matchAll(/text-\[var\(--jf-(?:primary|muted)\)\]/g)].map((m) => m[0]);
+}
+
+/**
+ * Every JSX tag in the source, in order. Enough of a scanner to answer "is this
+ * token inside an element whose own className carries the tint?" plus the
+ * ancestor chain at any offset — the two shapes this defect takes. Comments are
+ * blanked first (via codeOnly) so a class quoted in a comment can neither raise
+ * nor satisfy an assertion.
+ *
+ * attrStart/attrEnd bound the element's own attribute list, so a `text-[…]`
+ * occurrence can be attributed to the element that owns it rather than being
+ * read as inherited from an ancestor.
+ */
+type Tag = {
+  name: string;
+  variants: Variant[];
+  openIdx: number;
+  attrStart: number;
+  attrEnd: number;
+  closeIdx: number;
+};
+
+/** True when a class list paints the tinted active surface. */
+const tinted = (variants: Variant[]) => paintsTint(variants);
+
+/** Element open/close events, in source order. */
+type Event = { open: boolean; tag: Tag };
+
+/**
+ * Parse the source into tags and, for each, the index just past its closing
+ * `</name>`. Pairing is done with an explicit stack so a token's ancestor chain
+ * is exact: a source-order "everything opened before this offset" heuristic
+ * gets siblings and nested same-name elements wrong, and would either miss the
+ * defect or flag clean markup.
+ */
+function jsxTags(code: string): Event[] {
+  const events: Event[] = [];
+  const stack: Tag[] = [];
+  let i = 0;
+  while (i < code.length) {
+    if (code[i] !== "<") {
+      i += 1;
+      continue;
+    }
+    const next = code[i + 1] ?? "";
+    if (next === "/") {
+      let j = i + 2;
+      let name = "";
+      while (j < code.length && /[\w.:$-]/.test(code[j])) {
+        name += code[j];
+        j += 1;
+      }
+      while (j < code.length && code[j] !== ">") j += 1;
+      const end = j + 1;
+      // Close the nearest matching open tag; anything nested inside it that was
+      // never explicitly closed closes with it.
+      for (let k = stack.length - 1; k >= 0; k--) {
+        if (stack[k].name === name) {
+          for (let n = stack.length - 1; n >= k; n--) {
+            stack[n].closeIdx = end;
+            events.push({ open: false, tag: stack[n] });
+          }
+          stack.length = k;
+          break;
+        }
+      }
+      i = end;
+      continue;
+    }
+    if (!/[A-Za-z_$]/.test(next)) {
+      i += 1;
+      continue;
+    }
+    let j = i + 1;
+    let name = "";
+    while (j < code.length && /[\w.:$-]/.test(code[j])) {
+      name += code[j];
+      j += 1;
+    }
+    // Attributes run to the tag's closing '>' at brace depth 0; skip over
+    // quoted strings so a `>` inside one cannot end the tag early.
+    let depth = 0;
+    let k = j;
+    while (k < code.length) {
+      const ch = code[k];
+      if (ch === "{") depth += 1;
+      else if (ch === "}") depth -= 1;
+      else if (ch === '"' || ch === "'" || ch === "`") {
+        const q = ch;
+        k += 1;
+        while (k < code.length && code[k] !== q) {
+          if (code[k] === "\\") k += 1;
+          k += 1;
+        }
+      } else if (ch === ">" && depth === 0) break;
+      k += 1;
+    }
+    const attrText = code.slice(j, k);
+    const cm = /className\s*=\s*/.exec(attrText);
+    const tag: Tag = {
+      name,
+      variants: cm ? classVariants(attrText.slice(cm.index + cm[0].length)) : [],
+      openIdx: i,
+      attrStart: j,
+      attrEnd: k,
+      closeIdx: k + 1,
+    };
+    if (attrText.trimEnd().endsWith("/")) {
+      // Self-closing: it opens and closes at once and never nests anything.
+      tag.closeIdx = k + 1;
+      events.push({ open: false, tag });
+    } else {
+      stack.push(tag);
+      events.push({ open: true, tag });
+    }
+    i = k + 1;
+  }
+  return events;
+}
+
+/**
+ * The ancestor chain (outermost first, the token's own element last) at a source
+ * offset, built by replaying the events in order.
+ */
+function ancestorsAt(events: Event[], offset: number): Tag[] {
+  const chain: Tag[] = [];
+  for (const e of events) {
+    if (e.tag.openIdx > offset) break;
+    if (e.open) {
+      chain.push(e.tag);
+    } else {
+      // The element closed before (or at) the offset, so it is not an ancestor.
+      if (e.tag.closeIdx > offset) continue;
+      const at = chain.lastIndexOf(e.tag);
+      if (at !== -1) chain.length = at;
+    }
+  }
+  return chain;
+}
+
+test("no base text token is painted on the tinted active surface", () => {
+  for (const { rel, label } of CHROME) {
+    const src = read(rel);
+    const code = codeOnly(src);
+    const events = jsxTags(code);
+    const findings: string[] = [];
+
+    // (a) Same element: a single class list that renders BOTH the tint and a
+    //     base token. This is the shape the switcher's active item had
+    //     (`bg-indigo-50 font-medium text-[var(--jf-primary)]`) and what the
+    //     `+ New workspace` row had on its hover state.
+    for (const e of events) {
+      for (const v of e.tag.variants) {
+        if (!paintsTint([v])) continue;
+        const toks = baseTokens(v);
+        if (toks.length === 0) continue;
+        const line = code.slice(0, e.tag.openIdx).split("\n").length;
+        findings.push(`<${e.tag.name}> at line ${line} paints ${toks[0]} on bg-indigo-50`);
+      }
+    }
+
+    // (b) Inherited: the token sits on a descendant of a tinted element, so it
+    //     is painted on the tint even though its own class list is clean. This
+    //     is how the switcher's sub-line escaped review — the tint was on the
+    //     <button>, the token on the <span> inside it.
+    //
+    //     The token is attributed to the element that OWNS it (the tag whose
+    //     attribute list contains the offset). A token written in the same
+    //     element's className was already reported by (a) — reporting it again
+    //     as "inherited" would double-count one site.
+    const re = /text-\[var\(--jf-(?:primary|muted)\)\]/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(code))) {
+      const owner = events.find(
+        (e) => e.tag.attrStart < m!.index && m!.index < e.tag.attrEnd,
+      )?.tag;
+      if (!owner) continue;
+      const ownIsBad = owner.variants.some((v) => paintsTint([v]) && baseTokens(v).length > 0);
+      if (ownIsBad) continue; // already (a)
+      const chain = ancestorsAt(events, owner.openIdx);
+      const tintedEl = chain.find((t) => t !== owner && tinted(t.variants));
+      if (!tintedEl) continue;
+      const line = code.slice(0, m.index).split("\n").length;
+      findings.push(
+        `${m[0]} at line ${line} is inside <${tintedEl.name}> which paints bg-indigo-50`,
+      );
+    }
+
+    // A finding must be reported once per site, not once per variant.
+    const unique = [...new Set(findings)];
+
+    assert.deepEqual(
+      unique,
+      [],
+      `${label}: text on the tinted active surface must use the on-tint tokens ` +
+        `(--jf-primary-on-tint / --jf-muted-on-tint). --jf-primary measures 4.20:1 and ` +
+        `--jf-muted 4.32:1 on #eef2ff, both under the 4.5:1 AA floor:\n  ${unique.join("\n  ")}`,
+    );
+  }
+});
+
+test("the tinted-surface rule is looking at real, reachable markup", () => {
+  // The guard above passes on an empty file, so pin that it is actually reading
+  // the chrome and that the tinted surface still exists in it. Without this, a
+  // rename/move of either file or a refactor that drops the tint would read as a
+  // clean pass.
+  for (const { rel, label } of CHROME) {
+    const code = codeOnly(read(rel));
+    assert.ok(code.length > 1000, `${label} is too small to be the chrome source`);
+    assert.ok(
+      TINTED.test(code),
+      `${label} no longer paints bg-indigo-50 anywhere — if the tinted active surface moved, ` +
+        `re-anchor this guard rather than deleting it`,
+    );
+    assert.ok(
+      code.includes("--jf-primary-on-tint"),
+      `${label} does not use --jf-primary-on-tint at all — the tinted active surface lost its AA-safe token`,
+    );
+  }
+});
+
