@@ -1,12 +1,27 @@
-// Workspace slug rules — ONE definition, shared by every writer.
+// Workspace slug rules — the definition the LEGACY PROVISION reuses.
 //
-// Before this file the rule existed as three separate copies (the REST create
-// handler's inline loop, mcpsrv.validateWorkspaceSlug, and slugify's sanitising
-// steps), so a new writer had to re-implement it and could disagree with the DB
-// or with the other surface. The auto-provisioning path added here needed the
-// same rule a fourth time, which is where "one more copy" stops being
-// acceptable: both writers now delegate, and the legacy provision reuses the
-// same validator so it cannot mint a slug the API would itself reject.
+// WHAT IS TRUE TODAY (measured on main, not assumed). This file's rule exists so
+// the auto-provisioning path cannot mint a slug the API would itself reject:
+// ValidateWorkspaceSlug has exactly ONE production caller,
+// ProvisionLegacyWorkspaceForOwner (workspace.go), in this package. It is
+// enforced there against the derived slug before the workspace is inserted.
+//
+// WHAT IS NOT TRUE — and used to be claimed here. A previous version of this
+// comment said "the rule existed as three separate copies ... both writers now
+// delegate". Only one of the other two did. `grep -n 'ValidateWorkspaceSlug' api/
+// | grep -v _test` returns the definition, this comment, and that one call site:
+// the REST create handler (httpapi/rest_workspaces.go) and
+// mcpsrv.validateWorkspaceSlug still each carry their own inline copy of the
+// length / charset / "-jomform" rules. The copies agree today, so nothing is
+// broken — but a doc comment asserting a de-duplication that has not happened is
+// the "an invariant nothing verifies" shape this chain keeps having to fix.
+//
+// The remaining copies are known and tracked, not forgotten: PR 691
+// (feat(workspace): rename a workspace's name and public slug) makes both
+// writers delegate here, and the reserved-subdomain rule already lives in ONE
+// place (internal/urlguard) and is consumed by both. Until that lands, correct
+// this comment rather than the code: rewriting the two handlers here would
+// duplicate an in-flight, reviewed change and guarantee a conflict.
 package dbstore
 
 import (
