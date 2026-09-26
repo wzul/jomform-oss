@@ -189,7 +189,7 @@ func (s *Server) registerTools() {
 	}, s.getForm)
 	addTool(s, &mcp.Tool{
 		Name:        "upsert_form",
-		Description: "Cipta/kemaskini borang (form_id kosong = baru). Baca sedia ada dengan get_form dahulu dan hantar config penuh supaya blok sedia ada tidak hilang. Theme (pilihan) = gaya/branding tersuai.",
+		Description: "Cipta/kemaskini borang (form_id kosong = baru). Baca sedia ada dengan get_form dahulu dan hantar config penuh supaya blok sedia ada tidak hilang. Theme (pilihan) = gaya/branding tersuai. slug (pilihan) = laluan URL borang: pada cipta ia digunakan bila diisi; pada kemaskini ia MENAMAKAN SEMULA borang (a-z, 0-9, sengkang; 1-40 aksara) dan URL lama kekal berfungsi melalui ubah hala sementara (301) — kosongkan untuk kekalkan slug sedia ada, dan slug yang sudah dipakai borang lain dalam workspace ini ditolak dengan ralat.",
 	}, s.upsertForm)
 	// Issue #254: MCP-driven form creation — styling freedom + field
 	// registration. JomForm keeps authority over field types, prices and the

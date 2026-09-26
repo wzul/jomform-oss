@@ -19,6 +19,16 @@ import (
 	"github.com/wzul/jomform/api/internal/payments"
 )
 
+// invalidSlugMessage is the wire message for a rejected form slug. It is
+// dbstore.ErrInvalidSlug's own text — the store's sentinel IS the rule (1-40
+// characters of a-z, 0-9, dash), so the API states that rule rather than
+// inventing a second wording. It is spelled out as a literal (not an
+// `.Error()` call) because errcode.go's message→code table requires every key
+// to appear as a string literal in a non-errcode.go file of this package;
+// TestFormSlugInvalidWireMessageMatchesTheStore pins the two equal so the wire
+// wording cannot drift from the store's sentinel.
+const invalidSlugMessage = "form slug must be 1-40 characters of a-z, 0-9 or -"
+
 // errorClass buckets an error into a stable, low-cardinality class used for
 // both the structured log field and the Prometheus error counter.
 func errorClass(err error) string {
@@ -33,6 +43,13 @@ func errorClass(err error) string {
 		return "conflict"
 	case errors.Is(err, dbstore.ErrOutOfStock):
 		return "conflict"
+	case errors.Is(err, dbstore.ErrSlugTaken):
+		// A form's URL slug is unique per workspace: a rename onto a slug
+		// another live form already serves is a conflict the caller can fix
+		// (pick another slug), not an internal fault.
+		return "conflict"
+	case errors.Is(err, dbstore.ErrInvalidSlug):
+		return "validation"
 	case errors.Is(err, dbstore.ErrTemplateGalleryMetadata):
 		// Issue #594: refused for a reason the caller can fix, so it is a
 		// validation error, not an internal one.
@@ -100,6 +117,28 @@ func respondErr(w http.ResponseWriter, r *http.Request, err error) {
 		writeErr(w, http.StatusConflict, "emel sudah didaftarkan")
 	case errors.Is(err, dbstore.ErrOutOfStock):
 		writeErr(w, http.StatusConflict, "produk telah habis (out of stock)")
+	case errors.Is(err, dbstore.ErrSlugTaken):
+		// A form's URL slug is unique per workspace: a rename onto a slug
+		// another live form already serves is refused with the reason, rather
+		// than reporting a success that changed nothing (the carded defect).
+		//
+		// writeErr is the SHARED error path (errcode.go): it attaches the
+		// machine `code` the dashboard translates and keeps the prose for
+		// API-key/curl/MCP callers. There is deliberately no local
+		// writeCodedErr here — one mechanism, so the two surfaces cannot drift.
+		writeErr(w, http.StatusConflict, "slug sudah digunakan oleh borang lain dalam workspace ini")
+	case errors.Is(err, dbstore.ErrInvalidSlug):
+		// The slug is not a usable URL segment. The store's sentinel text IS the
+		// rule (1-40 chars of a-z, 0-9, dash), so it is the honest wire message;
+		// writeErr attaches the code the console translates.
+		//
+		// The message is written as a LITERAL rather than ErrInvalidSlug.Error()
+		// so errcode.go's table can key on it: that table's guard requires every
+		// key to appear as a string literal in a non-errcode.go file of this
+		// package, which an `.Error()` call does not satisfy. The two are pinned
+		// equal by TestFormSlugInvalidWireMessageMatchesTheStore, so the wire
+		// wording cannot drift from the store's rule.
+		writeErr(w, http.StatusBadRequest, invalidSlugMessage)
 	case errors.Is(err, dbstore.ErrTemplateGalleryMetadata):
 		// Issue #594: publishing a template into the gallery needs the two
 		// fields its card renders. Refused, with the reason, rather than

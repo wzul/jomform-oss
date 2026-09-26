@@ -77,6 +77,12 @@ export const API_ERROR_KEYS: Record<string, Key> = {
   // exactly what a generic "we couldn't restore/delete this form" cannot say.
   "form.slugTaken": "apiErr.formSlugTaken",
   "form.hasSales": "apiErr.formHasSales",
+  // The two refusals a form-slug RENAME answers with (the Form Settings slug
+  // field). Deliberately distinct from `form.slugTaken` above: the restore is
+  // unblocked by freeing the OTHER form's slug, a rename by choosing a
+  // different slug for THIS form, and each sentence has to give its own remedy.
+  "form.slugInUse": "apiErr.formSlugInUse",
+  "form.slugInvalid": "apiErr.formSlugInvalid",
   "product.outOfStock": "apiErr.productOutOfStock",
   "template.needMetadata": "apiErr.templateNeedMetadata",
 

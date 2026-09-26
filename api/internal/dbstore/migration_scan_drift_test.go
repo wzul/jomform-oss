@@ -89,6 +89,34 @@ var selectScanFuncs = map[string][]string{
 	"trashedFormSelect": {"FormStore.scanTrashed"},
 }
 
+// bareColumnConsts maps a constant holding a BARE column list — no `SELECT ...
+// FROM`, so selectColumnCount cannot parse it — to the struct it must stay
+// aligned with. These are registered separately because nothing else covers
+// them: an unregistered list drifts silently, and the drift only shows up as a
+// runtime "number of field descriptions must equal number of destinations" the
+// first time the code path that reads it runs.
+//
+// redirectFormColumns is the case that motivated this: it is shared by the two
+// rename-301 lookups (RedirectedFormByAccountSlug / ...WorkspaceSlug), each of
+// which scans it with FormStore.scanOne — the same full-struct scan every other
+// form read uses. It was written before DeletedAt was selectable and fell one
+// column behind Form, so both redirect lookups failed to scan at all.
+var bareColumnConsts = map[string]string{
+	"redirectFormColumns": "Form",
+}
+
+// bareColumnScanFuncs maps a bare-columns constant to the function that scans
+// it, so the same alignment check applies.
+var bareColumnScanFuncs = map[string][]string{
+	"redirectFormColumns": {"FormStore.scanOne"},
+}
+
+// commaListCount counts the top-level items in a bare comma-separated column
+// list (no parens, so a plain comma count is exact).
+func commaListCount(list string) int {
+	return strings.Count(list, ",") + 1
+}
+
 // columnRenames maps historical column names (from older migrations) to their
 // current name after the Space→Workspace rename (issue #431, migration 000045).
 // Older migrations that ADD COLUMN space_id are checked against the renamed
@@ -248,7 +276,13 @@ func collectSelectConsts(t *testing.T, dir string) map[string]string {
 					continue
 				}
 				for i, name := range vs.Names {
-					if _, isSel := selectConsts[name.Name]; !isSel {
+					inSelect := false
+					if _, isSel := selectConsts[name.Name]; isSel {
+						inSelect = true
+					} else if _, isBare := bareColumnConsts[name.Name]; isBare {
+						inSelect = true
+					}
+					if !inSelect {
 						continue
 					}
 					if i >= len(vs.Values) {
@@ -342,8 +376,8 @@ func scanDestinationsInFunc(t *testing.T, dir, qualified string) []int {
 func TestSelectScanColumnAlignment(t *testing.T) {
 	dir := packageDir()
 	consts := collectSelectConsts(t, dir)
-	if len(consts) != len(selectConsts) {
-		t.Fatalf("found %d *Select constants, want %d (a new select constant needs registering in selectConsts)", len(consts), len(selectConsts))
+	if want := len(selectConsts) + len(bareColumnConsts); len(consts) != want {
+		t.Fatalf("found %d column-list constants, want %d (a new select constant needs registering in selectConsts or bareColumnConsts)", len(consts), want)
 	}
 
 	for name, structName := range selectConsts {
@@ -376,6 +410,39 @@ func TestSelectScanColumnAlignment(t *testing.T) {
 			for _, c := range counts {
 				if c != cols {
 					t.Errorf("%s used by %s: Scan has %d destinations but select has %d columns — column-aligned scan regression (update the select AND all scan sites together)", name, fn, c, cols)
+				}
+			}
+		}
+	}
+
+	// Bare column lists (no SELECT ... FROM) get the same treatment. They are
+	// invisible to selectColumnCount, so without this they drift unnoticed until
+	// the read path runs and pgx refuses the scan.
+	for name, structName := range bareColumnConsts {
+		list, ok := consts[name]
+		if !ok {
+			t.Errorf("%s: constant not found in source", name)
+			continue
+		}
+		cols := commaListCount(list)
+		fields := structFieldCount(t, dir, structName)
+		if cols != fields {
+			t.Errorf("%s lists %d columns but %s has %d exported fields — column/struct drift (update the list AND all Scan call sites together)", name, cols, structName, fields)
+		}
+		funcs, ok := bareColumnScanFuncs[name]
+		if !ok || len(funcs) == 0 {
+			t.Errorf("%s: no scan functions registered in bareColumnScanFuncs", name)
+			continue
+		}
+		for _, fn := range funcs {
+			counts := scanDestinationsInFunc(t, dir, fn)
+			if len(counts) == 0 {
+				t.Errorf("%s: scan function %s not found or has no Scan call", name, fn)
+				continue
+			}
+			for _, c := range counts {
+				if c != cols {
+					t.Errorf("%s used by %s: Scan has %d destinations but the list has %d columns — column-aligned scan regression (update the list AND all scan sites together)", name, fn, c, cols)
 				}
 			}
 		}

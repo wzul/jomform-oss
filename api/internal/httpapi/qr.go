@@ -22,8 +22,6 @@ import (
 	"strings"
 
 	qrcode "github.com/skip2/go-qrcode"
-
-	"github.com/wzul/jomform/api/internal/dbstore"
 )
 
 // handleQRImage serves a PNG QR code pointing at a form's public URL.
@@ -32,16 +30,10 @@ import (
 // the scanned QR opens the form with the table number pre-filled.
 func (h *PublicHandlers) handleQRImage(w http.ResponseWriter, r *http.Request) {
 	slug := strings.TrimSuffix(r.PathValue("slug"), ".png")
-	var f *dbstore.Form
-	var err error
-	if sub := accountSubdomain(r.Host); sub != "" {
-		f, err = h.Forms.ByWorkspaceSlug(r.Context(), sub, slug)
-	} else if cd := customDomainOwner(r.Context(), h.Accounts, h.Domains, r.Host); cd != "" {
-		f, err = h.Forms.ByAccountSlug(r.Context(), cd, slug)
-	} else {
-		err = dbstore.ErrFormNotFound
-	}
-	if err != nil || f == nil {
+	// Live-first resolution with the rename fallback: a QR stand printed before
+	// a rename keeps generating a code that resolves (see findPublicForm).
+	f := h.findPublicForm(r.Context(), r, slug)
+	if f == nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
@@ -158,16 +150,11 @@ var qrStandTmpl = template.Must(template.New("qr-stand").Parse(`<!doctype html>
 // prints cleanly on A4.
 func (h *PublicHandlers) handleQRStand(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("slug")
-	var f *dbstore.Form
-	var err error
-	if sub := accountSubdomain(r.Host); sub != "" {
-		f, err = h.Forms.ByWorkspaceSlug(r.Context(), sub, slug)
-	} else if cd := customDomainOwner(r.Context(), h.Accounts, h.Domains, r.Host); cd != "" {
-		f, err = h.Forms.ByAccountSlug(r.Context(), cd, slug)
-	} else {
-		err = dbstore.ErrFormNotFound
-	}
-	if err != nil || f == nil {
+	// Live-first resolution with the rename fallback (see findPublicForm). The
+	// stand is regenerated from the form's LIVE slug, so printing it again after
+	// a rename produces a QR that points at the current URL.
+	f := h.findPublicForm(r.Context(), r, slug)
+	if f == nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}

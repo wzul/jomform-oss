@@ -861,3 +861,59 @@ func TestEmbedUnlockDoesNotUnlockTheCanonicalRoute(t *testing.T) {
 		t.Logf("note: GET %s -> %d (expected 405 from the POST-only route)", unlockPath, rec.Code)
 	}
 }
+
+// TestCanonicalUnlockOnAnUnknownSlugIs404NotA500 pins the join between the two
+// halves this branch had to reconcile: the canonical unlock resolves through
+// findPublicForm (the rename's live-first resolver, which returns nil on a miss)
+// and then hands the result to unlockResolvedForm (the shared impl, which reads
+// f.Status on its first line and does NOT tolerate nil).
+//
+// The failure mode this guards is the shape a merge can produce and a unit test
+// of either half alone cannot see: feed the nil straight in and the dereference
+// panics, the recoverer turns it into a 500, and a bogus unlock — which must be
+// a clean 404 — is reported as a server error. Measured directly: the assertion
+// is on the STATUS and on the recoverer's own log line, so "the guard happens to
+// sit somewhere else on the path" cannot make it pass for the wrong reason.
+func TestCanonicalUnlockOnAnUnknownSlugIs404NotA500(t *testing.T) {
+	if os.Getenv("JOMFORM_TEST_DATABASE_URL") == "" {
+		t.Skip("JOMFORM_TEST_DATABASE_URL not set; skipping unknown-slug unlock guard")
+	}
+	h, ws, _ := embedFixture(t)
+	hnd := publicServer(h)
+	host := ws + ".jomform.com"
+
+	// The recoverer (server.go) logs `panic_recovered`, so an empty capture is a
+	// direct observation that no panic fired on the request.
+	logs := captureSlog(t)
+
+	// A slug no form in this workspace serves, and no rename left a redirect for:
+	// findPublicForm returns nil for it (both the live lookup and the fallback
+	// miss), which is exactly the value the shared impl must not dereference.
+	const missing = "it-no-such-slug-e6c7afd5"
+	unlockPath := "/" + missing + "/unlock"
+	rec := publicPostJSON(t, hnd, host, unlockPath, map[string]any{"password": "anything"})
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("POST %s (unknown slug) -> %d, want 404. A bogus unlock is a bad "+
+			"REQUEST, not a server fault; a 500 here means the nil findPublicForm returned "+
+			"for a miss reached unlockResolvedForm, which dereferences f.Status. body=%s\n"+
+			"recoverer log:\n%s", unlockPath, rec.Code, rec.Body.String(), logs())
+	}
+	if got := logs(); strings.Contains(got, "panic_recovered") {
+		t.Fatalf("the unknown-slug unlock answered %d but the recoverer still fired — the "+
+			"nil guard is missing (or sits after the dereference), so the 404 above is not "+
+			"what this handler actually does on a miss:\n%s", rec.Code, got)
+	}
+
+	// Control, in the same run and on the same host: a slug that DOES resolve
+	// but is not private must also be a 404 from the same shared impl, so the
+	// guard above is pinned to the miss path and not to a route that 404s
+	// unconditionally.
+	if rec := publicPostJSON(t, hnd, host, "/"+missing+"-still-missing/unlock",
+		map[string]any{"password": "anything"}); rec.Code != http.StatusNotFound {
+		t.Fatalf("control POST on a second unknown slug -> %d, want 404", rec.Code)
+	}
+	if got := logs(); strings.Contains(got, "panic_recovered") {
+		t.Fatalf("the recoverer fired on the control request too:\n%s", got)
+	}
+}

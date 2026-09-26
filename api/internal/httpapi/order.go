@@ -448,6 +448,15 @@ func (h *PublicHandlers) handleMenuOrder(w http.ResponseWriter, r *http.Request)
 	}
 	f, ferr := h.Forms.PublishedByAccountSlug(r.Context(), acc.Slug, slug)
 	if ferr != nil || f == nil {
+		// Deprecated shim: a cached menu page (or an old printed QR stand) can
+		// still post the menu form's PRE-RENAME slug. Resolve it through the
+		// rename's temporary 301 so a cached checkout does not lose the order.
+		if redirected, rerr := h.Forms.RedirectedFormByAccountSlug(r.Context(), acc.Slug, slug); rerr == nil &&
+			redirected != nil && redirected.Status == dbstore.FormStatusPublished {
+			f = redirected
+		}
+	}
+	if f == nil {
 		writeErr(w, http.StatusNotFound, "borang tidak dijumpai")
 		return
 	}

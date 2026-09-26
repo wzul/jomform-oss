@@ -32,6 +32,9 @@ Parity checklist (dashboard → MCP):
   silently orphan the sale.
   REST: `GET /v1/rest/forms/trash`, `POST /v1/rest/forms/{id}/restore`,
   `DELETE /v1/rest/forms/{id}/purge`.
+- Form slug rename (the Form Settings slug field → the slug parameter on
+  `upsert_form`; same validation, same per-workspace uniqueness, same temporary
+  301 for the old URL)
 - Sales: list/summary/confirm → `list_sales`, `get_sales_summary`,
   `confirm_sale`
 - Skip-capture flow → `capture_sale`, `release_sale`

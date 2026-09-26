@@ -823,6 +823,24 @@ export const DICT = {
     ta: "இந்தப் படிவத்தை மீட்டமைக்க முடியாது: அதன் slug-ஐ வேறு படிவம் எடுத்துக்கொண்டது. முதலில் அந்தப் படிவத்தின் slug-ஐ மாற்றி, பின்னர் இதை மீட்டமைக்கவும்.",
     ar: "تعذّرت استعادة هذا النموذج: نموذج آخر أخذ الـ slug الخاص به. غيّر الـ slug لذلك النموذج أولاً، ثم استعد هذا النموذج.",
   },
+  // The two refusals a form-slug RENAME answers with (the Form Settings slug
+  // field). Distinct from apiErr.formSlugTaken above on purpose: a restore is
+  // unblocked by freeing the OTHER form's slug, a rename by picking a different
+  // slug for THIS form, and each sentence has to give its own remedy.
+  "apiErr.formSlugInUse": {
+    en: "Another form in this workspace is already served at that URL. Choose a different slug.",
+    ms: "Borang lain dalam workspace ini sudah menggunakan URL itu. Pilih slug yang lain.",
+    zh: "此工作区中的另一个表单已使用该网址。请选择其他 Slug。",
+    ta: "இந்தப் பணியிடத்தில் உள்ள மற்றொரு படிவம் ஏற்கனவே அந்த URL-இல் வழங்கப்படுகிறது. வேறு slug-ஐத் தேர்ந்தெடுக்கவும்.",
+    ar: "نموذج آخر في مساحة العمل هذه يُقدَّم بالفعل على هذا الرابط. اختر slug مختلفاً.",
+  },
+  "apiErr.formSlugInvalid": {
+    en: "A slug must be 1-40 characters of a-z, 0-9 or dashes.",
+    ms: "Slug mesti 1-40 aksara daripada a-z, 0-9 atau sengkang.",
+    zh: "Slug 必须为 1-40 个字符，仅限 a-z、0-9 或连字符。",
+    ta: "slug என்பது a-z, 0-9 அல்லது கோடுகளால் ஆன 1-40 எழுத்துகளாக இருக்க வேண்டும்.",
+    ar: "يجب أن يتكون الـ slug من 1-40 حرفاً من a-z أو 0-9 أو الشرطات.",
+  },
   "apiErr.formHasSales": {
     en: "This form has sales, so it can't be deleted for good — sales history must not be destroyed with the form. It stays in the trash.",
     ms: "Borang ini mempunyai jualan, jadi ia tidak boleh dipadam secara kekal — sejarah jualan tidak boleh dimusnahkan bersama borang. Ia kekal dalam tong sampah.",
@@ -1364,6 +1382,13 @@ export const DICT = {
   "fs.notifications": { en: "Notifications", ms: "Notifikasi", zh: "通知", ta: "அறிவிப்புகள்", ar: "الإشعارات" },
   "fs.chip": { en: "CHIP", ms: "CHIP", zh: "CHIP", ta: "CHIP", ar: "CHIP" },
   "fs.slug": { en: "Slug (URL)", ms: "Slug (URL)", zh: "Slug（链接）", ta: "Slug (URL)", ar: "Slug (الرابط)" },
+  // The slug-rename rejection the merchant reads is `apiErr.formSlugInUse` /
+  // `apiErr.formSlugInvalid` (beside apiErr.formSlugTaken), because the API
+  // reports those refusals through the SHARED machine-error-code path
+  // (api/internal/httpapi/errcode.go) and the console translates them with
+  // lib/apiErr — there is exactly one mechanism and one set of keys.
+  "fs.slugDocTitle": { en: "How form URLs and slug renames work", ms: "Cara URL borang dan penamaan semula slug berfungsi", zh: "表单网址与 slug 重命名说明", ta: "படிவ URL மற்றும் slug மறுபெயரிடல் எப்படி வேலை செய்கிறது", ar: "كيف تعمل روابط النموذج وإعادة تسمية الـ slug" },
+  "fs.slugHint": { en: "The URL path this form is served at (a-z, 0-9, dash; 1-40 characters). Saving a change moves the form to the new URL — the old URL keeps working through a temporary redirect, and the slug must be free in this workspace.", ms: "Laluan URL borang ini (a-z, 0-9, sengkang; 1-40 aksara). Menyimpan perubahan memindahkan borang ke URL baharu — URL lama masih berfungsi melalui ubah hala sementara, dan slug mesti belum digunakan dalam workspace ini.", zh: "此表单的网址路径（a-z、0-9、连字符；1-40 个字符）。保存后会移动到新的网址——旧网址通过临时重定向继续可用，且该 slug 必须在当前工作区中未被占用。", ta: "இந்தப் படிவம் வழங்கப்படும் URL பாதை (a-z, 0-9, கோடு; 1-40 எழுத்துகள்). சேமித்தால் படிவம் புதிய URL-க்கு நகரும் — பழைய URL தற்காலிக திருப்பிவிடல் மூலம் தொடர்ந்து வேலை செய்யும், மேலும் slug இந்த பணியிடத்தில் காலியாக இருக்க வேண்டும்.", ar: "مسار الرابط الذي يُقدَّم عليه هذا النموذج (a-z و0-9 والشرطة؛ 1-40 حرفاً). حفظ التغيير ينقل النموذج إلى الرابط الجديد — ويبقى الرابط القديم يعمل عبر إعادة توجيه مؤقتة، ويجب أن يكون الـ slug متاحاً في مساحة العمل هذه." },
   "fs.save": { en: "Save", ms: "Simpan", zh: "保存", ta: "சேமி", ar: "حفظ" },
   "fs.saved": { en: "Saved ✓", ms: "Disimpan ✓", zh: "已保存 ✓", ta: "சேமிக்கப்பட்டது ✓", ar: "تم الحفظ ✓" },
   "fs.loading": { en: "Loading…", ms: "Memuat…", zh: "加载中…", ta: "ஏற்றுகிறது…", ar: "جارٍ التحميل…" },

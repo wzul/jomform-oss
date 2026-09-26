@@ -609,6 +609,28 @@ func (s *Server) upsertForm(
 	if err := s.deps.Forms.Update(ctx, acc, in.FormID, in.Title, in.Config, in.Theme); err != nil {
 		return nil, nil, err
 	}
+	// A slug supplied on the UPDATE path renames the form, exactly as the
+	// dashboard's slug field does (same FormStore.RenameSlug, so the same
+	// validation, the same per-workspace uniqueness and the same temporary 301
+	// for the old URL). The tool's own description documents `slug` as "Slug URL
+	// unik" and it was honoured only on create: an agent told to "set the slug"
+	// got back {"status":"updated"} and no change, which is the carded defect.
+	//
+	// An OMITTED slug (empty) keeps the stored value, matching config/theme's
+	// contract, and renaming to the slug the form already has is a no-op. A
+	// collision is ErrSlugTaken, surfaced to the agent, never a silent no-op.
+	if in.Slug != "" {
+		if _, err := s.deps.Forms.RenameSlug(ctx, acc, in.FormID, in.Slug); err != nil {
+			return nil, nil, err
+		}
+	}
+	// Report the form's slug as it now STANDS, read back rather than echoed from
+	// the request, so the value the agent is told it owns cannot disagree with
+	// what was actually written.
+	slug := in.Slug
+	if f, gerr := s.deps.Forms.GetByID(ctx, acc, in.FormID); gerr == nil && f != nil {
+		slug = f.Slug
+	}
 	// Apply restrictions on update when provided.
 	if in.StartAt != nil || in.EndAt != nil || in.EntryLimit != nil ||
 		in.PendingMessage != "" || in.ExpiredMessage != "" || in.LimitMessage != "" {
@@ -639,7 +661,7 @@ func (s *Server) upsertForm(
 			return nil, nil, err
 		}
 	}
-	return nil, map[string]string{"status": "updated", "form_id": in.FormID}, nil
+	return nil, map[string]string{"status": "updated", "form_id": in.FormID, "slug": slug}, nil
 }
 
 // applyFormNotifications replaces a form's notification rules wholesale

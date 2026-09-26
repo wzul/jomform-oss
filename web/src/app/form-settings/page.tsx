@@ -735,7 +735,21 @@ function FormSettingsInner() {
       body: JSON.stringify(payload),
     });
     if (!r.ok) {
-      setMsg(t("prof.failed"));
+      // A rejected save must be VISIBLE with its reason, not a generic
+      // "Failed" under a form whose URL quietly did not move. The two
+      // user-actionable cases the slug write can return are a collision with
+      // another form's live URL (409, code=form.slugInUse) and a slug that is
+      // not a usable URL segment (400, code=form.slugInvalid); apiErr resolves
+      // the machine code through the dashboard dictionary, so the merchant
+      // reads the reason in their OWN language. The server's `error` prose is
+      // never printed — it is a Malay literal and the API cannot know the
+      // dashboard's language (issue #6177). An unknown or absent code falls
+      // back to the page's own localized sentence, never to the prose. The
+      // reported defect was the opposite of this: the endpoint returned 200 for
+      // a payload it ignored, so the page showed "Saved ✓" while the form kept
+      // its old slug.
+      const d = await r.json().catch(() => null);
+      setMsg(apiErr(d, t("prof.failed"), t));
       return;
     }
     // Apply status (draft | private | published).
@@ -1234,12 +1248,34 @@ function FormSettingsInner() {
                         <input value={title} onChange={(e) => setTitle(e.target.value)} className={inputCls} />
                       </div>
                       <div>
-                        <label className={labelCls}>{t("fs.slug")}</label>
+                        <label className={`${labelCls} flex items-center gap-1.5`}>
+                          {t("fs.slug")}
+                          {/* Inline "?" doc link (AGENTS.md docs-parity rule 4):
+                              the slug is the one field whose save changes a URL
+                              the merchant already published, so the rule right
+                              where the decision is made must be reachable. */}
+                          <a
+                            href="/docs#form-url-slug"
+                            title={t("fs.slugDocTitle")}
+                            aria-label={t("fs.slugDocTitle")}
+                            className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 text-[10px] font-semibold text-slate-500 hover:bg-slate-50 hover:text-slate-700"
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            ?
+                          </a>
+                        </label>
                         <input
                           value={slug}
                           onChange={(e) => setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-"))}
                           className={`${inputCls} font-mono`}
                         />
+                        {/* The rename is not obvious from a bare "Slug (URL)"
+                            label: a merchant needs to know the save MOVES the
+                            form and that the old URL keeps working, otherwise
+                            the field reads as cosmetic (the reported defect was
+                            exactly that — a field that looked like it worked). */}
+                        <p className="mt-1 text-[11px] text-slate-500">{t("fs.slugHint")}</p>
                       </div>
                       <div>
                         <label className={labelCls}>{t("bld.status")}</label>

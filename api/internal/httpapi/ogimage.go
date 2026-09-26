@@ -412,16 +412,11 @@ func (*ogFontError) Error() string { return "og:image font unavailable" }
 // subdomain or custom domain), renders the branded preview, and caches it.
 func (h *PublicHandlers) handleOGImage(w http.ResponseWriter, r *http.Request) {
 	slug := strings.TrimSuffix(r.PathValue("slug"), ".png")
-	var f *dbstore.Form
-	var err error
-	if sub := accountSubdomain(r.Host); sub != "" {
-		f, err = h.Forms.ByWorkspaceSlug(r.Context(), sub, slug)
-	} else if cd := customDomainOwner(r.Context(), h.Accounts, h.Domains, r.Host); cd != "" {
-		f, err = h.Forms.ByAccountSlug(r.Context(), cd, slug)
-	} else {
-		err = dbstore.ErrFormNotFound
-	}
-	if err != nil || f == nil {
+	// Live-first resolution with the rename fallback (see findPublicForm), so a
+	// crawler holding a renamed form's old URL still gets the preview rather
+	// than a 404.
+	f := h.findPublicForm(r.Context(), r, slug)
+	if f == nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}

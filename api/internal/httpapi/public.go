@@ -497,16 +497,14 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	// jomform.com (no subdomain, no custom domain) a published form is NOT
 	// served — issue #77: a public payment link is reachable only via its
 	// registered workspace subdomain or a custom domain.
-	var form *dbstore.Form
-	var err error
-	if sub := accountSubdomain(r.Host); sub != "" {
-		form, err = h.Forms.ByWorkspaceSlug(r.Context(), sub, slug)
-	} else if cd := customDomainOwner(r.Context(), h.Accounts, h.Domains, r.Host); cd != "" {
-		form, err = h.Forms.ByAccountSlug(r.Context(), cd, slug)
-	} else {
-		form, err = nil, dbstore.ErrFormNotFound
-	}
-	if err != nil || form == nil {
+	//
+	// Renamed slugs: this runs through the same live-first resolver the serving
+	// path uses, so a submission posted to a form's OLD URL (a QR stand printed
+	// before the rename, a page still open in a buyer's tab) reaches the right
+	// form instead of 404ing. Attribution is by the resolved form, so the sale
+	// lands on the form the buyer actually filled in.
+	form := h.findPublicForm(r.Context(), r, slug)
+	if form == nil {
 		writeErr(w, http.StatusNotFound, "borang tidak dijumpai")
 		return
 	}
@@ -1012,6 +1010,34 @@ type tmplProduct struct {
 	PriceSen int64
 }
 
+// redirectToRenamedForm answers a rename's OLD URL with its temporary 301,
+// carrying the request's own query string to the form's live URL.
+//
+// path is the CANONICAL, server-chosen path for the route that was hit
+// ("/<live-slug>", "/f/<live-slug>"); it is always built from the form's stored
+// slug, never from anything the caller sent. Only the query already present on
+// the request is appended, so the destination is same-origin by construction:
+// no caller-supplied host or scheme can reach the Location, and a query value
+// that looks like an absolute URL stays a query value.
+//
+// The query MUST survive. A printed QR stand encodes ?table=N (qr.go) and an
+// affiliate campaign link carries ?aff=CODE. menu.go reads both back off the
+// request and records them on the sale (sales.table_number, from the QR stand
+// the merchant printed for THAT table, and sales.affiliate_code, which is how
+// the promoter is paid). http.Redirect writes the Location it is given verbatim
+// and never re-appends r.URL.RawQuery, so a path-only Location silently drops
+// the table number the stand exists to convey and the promoter's attribution
+// with it — the sale is recorded, but attributed to nobody.
+//
+// RawQuery (not a re-encoded Query()) is carried deliberately: it is what the
+// caller actually sent, so the percent-encoding round-trips unchanged.
+func redirectToRenamedForm(w http.ResponseWriter, r *http.Request, path string) {
+	if q := r.URL.RawQuery; q != "" {
+		path += "?" + q
+	}
+	http.Redirect(w, r, path, http.StatusMovedPermanently)
+}
+
 func (h *PublicHandlers) handleRender(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("slug")
 	// Subdomain routing: wanzulhosting.jomform.com/f/test resolves the form
@@ -1020,10 +1046,26 @@ func (h *PublicHandlers) handleRender(w http.ResponseWriter, r *http.Request) {
 	// payment link is reachable only via its registered workspace subdomain
 	// ({workspace}.jomform.com/{slug}) or a custom domain. The legacy global
 	// /f/{slug} lookup is gone.
+	//
+	// A rename's OLD URL is answered with a temporary 301 to the form's live
+	// slug (same rule as the bare /{slug} route), so every URL already handed
+	// out keeps resolving instead of 404-ing.
 	if sub := accountSubdomain(r.Host); sub != "" {
 		f, ferr := h.Forms.ByWorkspaceSlug(r.Context(), sub, slug)
-		if ferr != nil {
+		if ferr != nil || f == nil {
+			// Fallback: a rename's temporary 301 behind this old slug.
+			f, ferr = h.Forms.RedirectedFormByWorkspaceSlug(r.Context(), sub, slug)
+		}
+		if ferr != nil || f == nil {
 			http.Error(w, "Borang tidak dijumpai untuk domain ini", http.StatusNotFound)
+			return
+		}
+		if f.Slug != slug {
+			// A rename's OLD URL: same-origin 301 to the live slug, with this
+			// request's own query carried across (?table=N from a printed QR
+			// stand, ?aff=CODE from an affiliate link) — see
+			// redirectToRenamedForm.
+			redirectToRenamedForm(w, r, "/f/"+f.Slug)
 			return
 		}
 		h.serveForm(w, r, f)
@@ -1031,8 +1073,15 @@ func (h *PublicHandlers) handleRender(w http.ResponseWriter, r *http.Request) {
 	}
 	if cd := customDomainOwner(r.Context(), h.Accounts, h.Domains, r.Host); cd != "" {
 		f, ferr := h.Forms.ByAccountSlug(r.Context(), cd, slug)
-		if ferr != nil {
+		if ferr != nil || f == nil {
+			f, ferr = h.Forms.RedirectedFormByAccountSlug(r.Context(), cd, slug)
+		}
+		if ferr != nil || f == nil {
 			http.Error(w, "Borang tidak dijumpai", http.StatusNotFound)
+			return
+		}
+		if f.Slug != slug {
+			redirectToRenamedForm(w, r, "/f/"+f.Slug)
 			return
 		}
 		h.serveForm(w, r, f)
@@ -1412,16 +1461,13 @@ func (h *PublicHandlers) privateUnlocked(r *http.Request, f *dbstore.Form) bool 
 // route resolves by PATH and shares everything after that; see embedUnlock.
 func (h *PublicHandlers) handleFormUnlock(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("slug")
-	var f *dbstore.Form
-	var err error
-	if sub := accountSubdomain(r.Host); sub != "" {
-		f, err = h.Forms.ByWorkspaceSlug(r.Context(), sub, slug)
-	} else if cd := customDomainOwner(r.Context(), h.Accounts, h.Domains, r.Host); cd != "" {
-		f, err = h.Forms.ByAccountSlug(r.Context(), cd, slug)
-	} else {
-		f, err = nil, dbstore.ErrFormNotFound
-	}
-	if err != nil || f == nil {
+	// Same live-first resolution as the serving path, so a buyer whose gate page
+	// was loaded before a rename can still unlock (see findPublicForm). The
+	// resolver returns nil on a miss (unknown slug, bare apex, h.Forms == nil),
+	// and unlockResolvedForm reads f.Status, so the miss is answered here — a
+	// bogus unlock must be a 404, not a panic recovered into a 500.
+	f := h.findPublicForm(r.Context(), r, slug)
+	if f == nil {
 		writeErr(w, http.StatusNotFound, "borang tidak dijumpai")
 		return
 	}
@@ -1658,6 +1704,10 @@ func customDomainOwner(ctx context.Context, s *dbstore.AccountStore, d *dbstore.
 // (issue #297). On jomform.com it 404s so dashboard routes are unaffected.
 // Private forms (issue #176) resolve here so their password gate can render;
 // serveForm enforces the status rules.
+//
+// Renamed slugs: the OLD URL of a renamed form is handled deliberately, not
+// 404-with-no-trace. resolutionOrder below is the rule — the live form is asked
+// first, and a rename's temporary 301 is only consulted as a fallback.
 func (h *PublicHandlers) handleWorkspaceRootForm(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("slug")
 
@@ -1666,20 +1716,103 @@ func (h *PublicHandlers) handleWorkspaceRootForm(w http.ResponseWriter, r *http.
 	// (no subdomain, no custom domain) a published form is NOT served —
 	// a public payment link is reachable only via its registered workspace
 	// subdomain or a custom domain (issue #297).
-	var f *dbstore.Form
-	var err error
-	if sub := accountSubdomain(r.Host); sub != "" {
-		f, err = h.Forms.ByWorkspaceSlug(r.Context(), sub, slug)
-	} else if cd := customDomainOwner(r.Context(), h.Accounts, h.Domains, r.Host); cd != "" {
-		f, err = h.Forms.ByAccountSlug(r.Context(), cd, slug)
-	} else {
-		f, err = nil, dbstore.ErrFormNotFound
-	}
-	if err != nil || f == nil {
+	f := h.findPublicForm(r.Context(), r, slug)
+	if f == nil {
 		http.Error(w, "Borang tidak dijumpai", http.StatusNotFound)
 		return
 	}
+	// The request arrived on a slug this form no longer serves: it is a rename's
+	// OLD URL, resolved through the temporary 301 fallback. Answer deliberately
+	// with a redirect to the form's live slug rather than serving the form under
+	// a URL that is not its own — a buyer who bookmarks what he sees must land
+	// on the canonical address. Temporary (301 with an expiring table row, see
+	// FormStore.RenameSlug), not a permanent alias.
+	//
+	// The query travels with it: this is the route a printed QR stand points at
+	// (the stand encodes ?table=N into the form's URL), so dropping the query
+	// here would land the buyer on the right menu with the table number gone.
+	// See redirectToRenamedForm.
+	if f.Slug != slug {
+		redirectToRenamedForm(w, r, "/"+f.Slug)
+		return
+	}
 	h.serveForm(w, r, f)
+}
+
+// findPublicForm resolves a form on the request's host, LIVE FIRST and a
+// rename's temporary 301 second, returning nil when neither matches. It writes
+// nothing — the caller decides what a resolution means (serve it, redirect to
+// its canonical slug, or process a submission).
+//
+// THE ORDER IS THE RULE (Wan, 2026-09-20: "301 sementara. kalau ada form lain yg
+// claim, maka url tu akan ke form yang baru"): every live lookup runs BEFORE the
+// redirect table is consulted, so a form that later claims an old slug wins — it
+// is found first — and a rename's history can never shadow a real, live form.
+// That is also why the redirect table needs no expiry sweep and no reservation:
+// an expired or superseded row is simply never reached, and the old URL 404s
+// like any other unknown slug.
+//
+// Every public path that resolves a form BY SLUG goes through here, so a rename
+// cannot orphan a URL already handed out — a printed QR stand, a shared link, or
+// a menu's order_form_slug reference (#491), which resolves by slug and not by
+// id. A submission arriving on the old URL is therefore attributed to the right
+// form instead of being dropped.
+func (h *PublicHandlers) findPublicForm(ctx context.Context, r *http.Request, slug string) *dbstore.Form {
+	if h.Forms == nil {
+		return nil
+	}
+	var sub, customDomain string
+	if s := accountSubdomain(r.Host); s != "" {
+		sub = s
+	} else if cd := customDomainOwner(ctx, h.Accounts, h.Domains, r.Host); cd != "" {
+		customDomain = cd
+	}
+	if sub == "" && customDomain == "" {
+		// Bare apex: no workspace subdomain, no custom domain. A public
+		// payment link is not served here (issue #77), and neither is a
+		// rename's redirect — there is no workspace to scope it to.
+		return nil
+	}
+
+	// 1. The live form, by the same scoping the serving path has always used.
+	//
+	// The store error MUST be honoured, not discarded. The two stores disagree
+	// on what a miss looks like: ByWorkspaceSlug returns (nil, err), but
+	// ByAccountSlug scans into a pre-allocated struct and returns it non-nil
+	// ALONGSIDE its error. Discarding err therefore hands the custom-domain
+	// branch a non-nil *Form with an EMPTY Slug, which read as "found a form
+	// whose slug is ''" — /{slug} redirected every such request to the bare
+	// workspace root instead of 404-ing, and the rename's 301 to the live slug
+	// was never reached at all. Every sibling caller already checks the error
+	// (order.go, menu.go); only this one did not.
+	var f *dbstore.Form
+	var err error
+	if sub != "" {
+		f, err = h.Forms.ByWorkspaceSlug(ctx, sub, slug)
+	} else {
+		f, err = h.Forms.ByAccountSlug(ctx, customDomain, slug)
+	}
+	if err == nil && f != nil {
+		return f
+	}
+
+	// 2. Fallback: a rename left a temporary 301 behind this slug.
+	//
+	// Same rule as above, for the same reason: scanOne also returns its
+	// pre-allocated struct non-nil when the SCAN fails for any reason other
+	// than "no rows" (a column-alignment slip is the realistic one — see
+	// redirectFormColumns), and a zero-value Form read as a real hit would
+	// redirect to "/". Only a row that actually decoded counts as a hit.
+	var rf *dbstore.Form
+	if sub != "" {
+		rf, err = h.Forms.RedirectedFormByWorkspaceSlug(ctx, sub, slug)
+	} else {
+		rf, err = h.Forms.RedirectedFormByAccountSlug(ctx, customDomain, slug)
+	}
+	if err != nil {
+		return nil
+	}
+	return rf
 }
 
 // handleWorkspaceRoot serves the workspace storefront root: a customized landing page

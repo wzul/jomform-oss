@@ -43,6 +43,13 @@ const FEATURES: { title: string; body: string; slug?: string }[] = [
     body: "A form can collect responses instead of payments (set the form mode to response in the builder — no products, no payment). Its entries are stored as responses, not sales, and they are shown on the Sales page too: open a response form from Forms → Submission (or Form Settings → Submission) and the list shows that form's responses — when each one arrived, the buyer's name/email/phone and the recorded answers — with a detail drawer holding every field value. A payment form's button says Sales instead, because its entries are sales; the destination is the same. The search box matches any recorded answer and the date range applies as usual; the payment-status filter does not appear, because a response has no payment status. Export CSV and the capture/refund actions are payment-only and do not apply. The dashboard's per-form counter counts responses for a response form, so a form that has collected entries never reads as zero. AI agents read the same data with list_form_submissions (and list_sales returns them for a response form id).",
   },
   {
+    title: "Form URLs and slugs (rename a form)",
+    // The slug field in Form Settings carries an inline "?" (AGENTS.md
+    // docs-parity rule 4) that deep-links this section.
+    slug: "form-url-slug",
+    body: "Every form is served at the slug you gave it — your-workspace.jomform.com/your-form-slug (or the same path on a verified custom domain). The slug is editable: change it in Form Settings → General and the form moves to the new URL immediately. A slug is 1–40 characters of a-z, 0-9 and dashes (uppercase and spaces are normalised), and it must be free within your workspace — a rename onto a slug another of your forms already serves is refused with an error rather than silently overwriting either form's URL. Renaming never orphans the URL you already handed out: the old slug keeps working through a temporary redirect (HTTP 301) to the new one, so a printed QR stand, an embedded iframe, a menu's attached order form, and a link already shared in a campaign all keep resolving. The redirect is temporary, not a permanent alias: if another form in the workspace later claims the freed slug, that LIVE form wins and the old URL serves it — a rename's history can never shadow a real form's URL. Slugs cannot be renamed on templates (a template has no public URL) and AI agents do the same thing with the slug parameter on upsert_form, which returns the slug the form now owns.",
+  },
+  {
     title: "Form analytics (the per-form counter)",
     // The dashboard's inline "?" (issue #598, AGENTS.md docs-parity rule 4)
     // deep-links this section.

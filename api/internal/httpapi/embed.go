@@ -215,20 +215,51 @@ func (h *PublicHandlers) embedUnlock(w http.ResponseWriter, r *http.Request) {
 	h.unlockResolvedForm(w, r, f)
 }
 
-// embedFormBySlug resolves the embed route's target, returning nil when no live
-// form matches. BOTH the GET above and the POST call it, so the page a merchant
-// frames and the endpoint its button posts to can only resolve to the same form.
+// embedFormBySlug resolves the embed route's target with the SAME live-first
+// order findPublicForm applies, returning nil when neither a live form nor a
+// rename's temporary 301 matches. BOTH the GET above and the POST call it, so
+// the page a merchant frames and the endpoint its button posts to can only
+// resolve to the same form.
 //
 // The scope is the route's own {accslug} path segment, which this route has
 // always read as "an account slug, or a workspace slug" — the duality
 // ByWorkspaceSlug resolves. It is deliberately NOT findPublicForm: that helper
 // reads the tenant scope off the request HOST, and swapping the scope would 404
-// an embed URL that works today (measured above).
+// an embed URL that works today (measured above). The SCOPE must stay the path
+// segment while the ORDER must not differ, so the ordering is repeated here
+// verbatim.
+//
+// WITHOUT this fallback a renamed form's OLD embed URL 404s, so an <iframe> a
+// merchant already pasted on his own site stops rendering — the same
+// "orphaned URL already handed out" class the rename's 301 exists to prevent,
+// and the reason this route must not keep a single-lookup resolver of its own
+// while every other public slug lookup (render, submit, unlock, QR image, QR
+// stand, OG image, menu order) resolves the old slug.
+//
+// THE ORDER IS THE RULE (Wan, 2026-09-20: "301 sementara. kalau ada form lain
+// yg claim, maka url tu akan ke form yang baru"): the live lookup runs BEFORE
+// the redirect table is consulted, so a form that later claims an old slug
+// wins and a rename's history can never shadow a real, live form.
 func (h *PublicHandlers) embedFormBySlug(ctx context.Context, scopeSlug, slug string) *dbstore.Form {
 	if h.Forms == nil {
 		return nil
 	}
 	if f, err := h.Forms.ByWorkspaceSlug(ctx, scopeSlug, slug); err == nil && f != nil {
+		return f
+	}
+	// Fallback: a rename left a temporary 301 behind this slug. The scope slug
+	// keeps the route's own account-or-workspace duality, so the fallback
+	// mirrors that order rather than inventing a third interpretation.
+	//
+	// The store error is checked in BOTH arms, not just the workspace one:
+	// scanOne returns its pre-allocated struct non-nil when the SCAN fails for
+	// any reason other than "no rows" (a column-alignment slip is the realistic
+	// one — see redirectFormColumns), and a zero-value Form read as a real hit
+	// would serve the wrong form rather than 404.
+	if f, err := h.Forms.RedirectedFormByAccountSlug(ctx, scopeSlug, slug); err == nil && f != nil {
+		return f
+	}
+	if f, err := h.Forms.RedirectedFormByWorkspaceSlug(ctx, scopeSlug, slug); err == nil && f != nil {
 		return f
 	}
 	return nil

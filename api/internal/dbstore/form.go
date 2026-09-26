@@ -3,6 +3,8 @@ package dbstore
 import (
 	"context"
 	"errors"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -60,6 +62,37 @@ type Form struct {
 
 // ErrFormNotFound indicates a missing form.
 var ErrFormNotFound = errors.New("form not found")
+
+// ErrSlugTaken indicates a rename was refused because another live form in the
+// same account already serves the requested slug. Uniqueness is per account
+// (one account maps to one workspace, #77), so this is the store's answer to a
+// collision — never a silent overwrite of either form's URL.
+var ErrSlugTaken = errors.New("form slug already taken")
+
+// ErrInvalidSlug indicates a requested slug is not a usable URL segment.
+var ErrInvalidSlug = errors.New("form slug must be 1-40 characters of a-z, 0-9 or -")
+
+// formSlugMaxLen is the cap the create path's generator already applies
+// (uniqueFormSlug truncates a title-derived base to 40). A rename accepts the
+// same bound so it can never produce a slug the create path would not have.
+const formSlugMaxLen = 40
+
+// validFormSlugChars matches any byte that may not appear in a form slug.
+var validFormSlugChars = regexp.MustCompile(`^[a-z0-9-]+$`)
+
+// ValidFormSlug reports whether s is a usable form slug: 1-40 characters of
+// a-z, 0-9 and '-'. ONE rule, applied by FormStore.RenameSlug, so every write
+// path that can move a form's URL (REST PATCH /forms/{id}, MCP upsert_form)
+// enforces the same shape and a future third caller cannot bypass it by
+// forgetting its own copy.
+//
+// Deliberately NOT applied to the create path's verbatim slug in this change:
+// the scope of this work is that a slug must be editable, unique, and that a
+// rename must not break references to it. Rewiring create is a separate
+// decision.
+func ValidFormSlug(s string) bool {
+	return len(s) > 0 && len(s) <= formSlugMaxLen && validFormSlugChars.MatchString(s)
+}
 
 // ErrTemplateGalleryMetadata indicates a template is being published into the
 // gallery without the two fields every gallery card renders (issue #594): a
@@ -215,6 +248,11 @@ func (s *FormStore) GetByIDInAccounts(ctx context.Context, accountIDs []string, 
 // the stored values, so partial payloads (e.g. PATCH without a theme key,
 // MCP upsert_form without config) can never write NULL into a NOT NULL
 // jsonb column (SQLSTATE 23502). Callers that want to clear a map send {}.
+//
+// A slug is NOT part of this statement on purpose: a rename is its own atomic
+// operation (RenameSlug) because it must also leave the temporary 301 behind
+// for the old URL. Keeping it out means every existing caller of Update keeps
+// its exact contract and no call site needed a new argument.
 func (s *FormStore) Update(ctx context.Context, accountID, id, title string, config, theme map[string]any) error {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE forms SET title=$3, config=COALESCE($4, config), theme=COALESCE($5, theme), updated_at=now()
@@ -231,6 +269,129 @@ func (s *FormStore) Update(ctx context.Context, accountID, id, title string, con
 	}
 	return nil
 }
+
+// formSlugRedirectTTL bounds how long a rename's temporary 301 lives. Wan's
+// contract is "301 sementara": long enough that a printed QR stand or a shared
+// link keeps working, short enough that it is a migration aid rather than a
+// permanent alias. After it expires the old URL 404s like any unknown slug.
+const formSlugRedirectTTL = 90 * 24 * time.Hour
+
+// RenameSlug changes a form's public URL slug and leaves a temporary 301 from
+// the old one. Returns the previous slug ("" when the slug was already the
+// value passed in, i.e. nothing changed).
+//
+// Contract, in the order the checks run:
+//
+//  1. The id must name a live form of the account, else ErrFormNotFound.
+//  2. The new slug must not be claimed by another live form of the same
+//     account — SlugExists is the create path's own rule (#77/#176), so a
+//     rename can never produce a collision the create path would have refused.
+//     A collision is ErrSlugTaken (HTTP 409), never a silent write: the
+//     carded defect was precisely a write that reported success and changed
+//     nothing.
+//  3. The slug write and the redirect row happen in ONE transaction. A rename
+//     that moved the form but left no redirect would orphan every URL already
+//     handed out (a printed QR, an order_form_slug reference), which is the
+//     second half of the card.
+//
+// The redirect row is keyed (account_id, old_slug) and UPSERTed, so a later
+// rename onto the same old slug REPLACES the target instead of adding a second
+// answer. It is only ever consulted as a FALLBACK (see ByAccountSlug), so it
+// can never shadow a live form that later claims the slug — the claimant wins
+// by being found first, which is exactly Wan's rule.
+func (s *FormStore) RenameSlug(ctx context.Context, accountID, id, newSlug string) (string, error) {
+	newSlug = strings.ToLower(strings.TrimSpace(newSlug))
+	if !ValidFormSlug(newSlug) {
+		return "", ErrInvalidSlug
+	}
+	var oldSlug string
+	err := s.pool.QueryRow(ctx,
+		`SELECT slug FROM forms WHERE id=$2 AND account_id=$1 AND deleted_at IS NULL`,
+		accountID, id).Scan(&oldSlug)
+	if isNoSuchRow(err) {
+		return "", ErrFormNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	if oldSlug == newSlug {
+		// Nothing to do: the caller asked for the slug the form already has.
+		// No redirect row is written, because the old URL is still the live
+		// URL and a redirect onto itself would be a loop.
+		return "", nil
+	}
+	// Another live form in the same account already serves this slug.
+	taken, terr := s.SlugExistsNotID(ctx, accountID, newSlug, id)
+	if terr != nil {
+		return "", terr
+	}
+	if taken {
+		return "", ErrSlugTaken
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	tag, err := tx.Exec(ctx,
+		`UPDATE forms SET slug=$3, updated_at=now()
+		  WHERE id=$2 AND account_id=$1 AND deleted_at IS NULL`,
+		accountID, id, newSlug)
+	if err != nil {
+		if isUniqueViolation(err) {
+			// SlugExists is scoped per ACCOUNT, while the unique index is
+			// (workspace_id, slug) — a workspace can hold more than one
+			// account (migration 000024), so a sibling account in the same
+			// workspace can hold the slug and the pre-check above cannot see
+			// it. The index is the authority; report it as the same conflict
+			// rather than a 500.
+			return "", ErrSlugTaken
+		}
+		if isNoSuchRow(err) {
+			return "", ErrFormNotFound
+		}
+		return "", err
+	}
+	if tag.RowsAffected() == 0 {
+		return "", ErrFormNotFound
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO form_slug_redirects (account_id, old_slug, form_id, expires_at)
+		 VALUES ($1, $2, $3, now() + $4::interval)
+		 ON CONFLICT (account_id, old_slug)
+		 DO UPDATE SET form_id = EXCLUDED.form_id, created_at = now(), expires_at = EXCLUDED.expires_at`,
+		accountID, oldSlug, id, formSlugRedirectTTL.String()); err != nil {
+		return "", err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", err
+	}
+	return oldSlug, nil
+}
+
+// SlugExistsNotID reports whether another live form (id <> exceptID) in the
+// account's workspace already claims the slug. SlugExists is the create-time
+// rule; a rename has to ask the same question while excluding the form being
+// renamed, which would otherwise report itself as a collision.
+func (s *FormStore) SlugExistsNotID(ctx context.Context, accountID, slug, exceptID string) (bool, error) {
+	var n int
+	err := s.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM forms
+		 WHERE account_id=$1 AND slug=$2 AND deleted_at IS NULL
+		   AND id <> COALESCE(NULLIF($3,'')::uuid, '00000000-0000-0000-0000-000000000000'::uuid)`,
+		accountID, slug, exceptID).Scan(&n)
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// isUniqueViolation lives in notfound.go, beside isNoSuchRow: main grew it as a
+// shared helper after this branch's base, and the two copies this rebase briefly
+// carried were identical. One definition, so a future change to the 23505
+// handling cannot apply to one call site and not the other.
 
 // galleryMetadataMissingSQL is the predicate that reports a template row as
 // unfit for the gallery: no config.category, or no text block carrying a value
@@ -390,6 +551,62 @@ func (s *FormStore) SlugExists(ctx context.Context, accountID, slug string) (boo
 		return false, err
 	}
 	return n > 0, nil
+}
+
+// redirectFormSelect builds the redirect fallback's read: the live form a
+// rename's temporary 301 points at. Column list and order match formSelect so
+// FormStore.scanOne scans it — the same full-struct scan as every other form
+// read, so a future migration cannot drift this one copy out of alignment.
+//
+// A redirect is only ever a FALLBACK: every public lookup must first ask
+// whether a live form serves the slug, and come here only when none does. That
+// ordering is the whole of Wan's rule — a form that later CLAIMS the old slug
+// wins, because it is found first, and this table can never shadow it. Nothing
+// is reserved and no cleanup job is needed for the supersede case.
+//
+// expires_at > now() bounds the redirect: it is a temporary migration aid, so
+// an expired row is invisible and the old URL 404s like any unknown slug.
+const redirectFormColumns = `f.id, f.account_id, f.slug, f.title, f.config, f.theme, f.status, f.is_main,
+	        f.redirect_success, f.redirect_failure, f.allow_embed, f.logo_url, f.is_template, f.failure_message,
+	        f.start_at, f.end_at, f.entry_limit, f.pending_message, f.expired_message, f.limit_message,
+	        f.created_at, f.updated_at, f.deleted_at`
+
+// RedirectedFormByAccountSlug resolves a rename's temporary 301 on an account
+// slug host (a verified custom domain, or an account with no linked workspace):
+// oldSlug is no longer a live form, but a rename left a live form behind it.
+// Returns ErrFormNotFound when nothing (or nothing live) matches — the same
+// answer an unknown slug gets.
+func (s *FormStore) RedirectedFormByAccountSlug(ctx context.Context, accountSlug, oldSlug string) (*Form, error) {
+	f, err := s.scanOne(s.pool.QueryRow(ctx,
+		`SELECT `+redirectFormColumns+`
+		 FROM form_slug_redirects r
+		 JOIN forms f ON f.id = r.form_id AND f.deleted_at IS NULL
+		 JOIN accounts a ON a.id = r.account_id
+		 WHERE a.slug = $1 AND r.old_slug = $2 AND r.expires_at > now()`,
+		accountSlug, oldSlug))
+	if isNoSuchRow(err) {
+		return nil, ErrFormNotFound
+	}
+	return f, err
+}
+
+// RedirectedFormByWorkspaceSlug resolves a rename's temporary 301 on a WORKSPACE
+// slug host ({workspace}.jomform.com). Same contract as
+// RedirectedFormByAccountSlug; the workspace slug is a different namespace from
+// the account slug, so it joins workspaces rather than accounts.
+func (s *FormStore) RedirectedFormByWorkspaceSlug(ctx context.Context, workspaceSlug, oldSlug string) (*Form, error) {
+	f, err := s.scanOne(s.pool.QueryRow(ctx,
+		`SELECT `+redirectFormColumns+`
+		 FROM form_slug_redirects r
+		 JOIN forms f ON f.id = r.form_id AND f.deleted_at IS NULL
+		 JOIN accounts a ON a.id = r.account_id
+		 JOIN workspaces sp ON sp.id = a.workspace_id
+		 WHERE sp.slug = $1 AND r.old_slug = $2 AND r.expires_at > now()`,
+		workspaceSlug, oldSlug))
+	if isNoSuchRow(err) {
+		return nil, ErrFormNotFound
+	}
+	return f, err
 }
 
 // rowScanner matches pgx.Row for form scanning.

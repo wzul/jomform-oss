@@ -74,6 +74,18 @@ const (
 	CodeFormSlugTaken = "form.slugTaken"
 	CodeFormHasSales  = "form.hasSales"
 
+	// The two refusals a form-slug RENAME can answer with. They are named beside
+	// CodeFormSlugTaken because a rename colliding with a live URL is the same
+	// CONDITION as a restore colliding with one, and it is deliberately a
+	// different CODE: the two refusals are different user ACTIONS with different
+	// remedies, and the dashboard renders one sentence per code. A restore is
+	// unblocked by freeing the slug (change the OTHER form's slug, then restore);
+	// a rename is unblocked by choosing a different slug for THIS form. Sharing
+	// one code would show one of the two the other's instruction — the exact
+	// class of unusable message this file exists to prevent.
+	CodeFormSlugInUse = "form.slugInUse"
+	CodeFormSlugInvalid = "form.slugInvalid"
+
 	// Caller-supplied URL scheme (urlguard) and outbound webhook URLs.
 	CodeURLNotHTTPS       = "url.notHttps"
 	CodeWebhookURLInvalid = "webhook.urlInvalid"
@@ -210,6 +222,16 @@ var errCodeByMessage = map[string]string{
 		"tukar slug borang itu dahulu, kemudian cuba pulihkan semula": CodeFormSlugTaken,
 	"borang ini mempunyai jualan — sejarah jualan tidak boleh dimusnahkan " +
 		"dengan memadam borang. Ia kekal dalam tong sampah.": CodeFormHasSales,
+
+	// Form-slug RENAME refusals (the two a PATCH /forms/{id} slug write can
+	// answer). A collision and a malformed value are both refusals the merchant
+	// can act on, and both are written here by the handler that maps the store's
+	// sentinel error, so the key is the exact wire message.
+	"slug sudah digunakan oleh borang lain dalam workspace ini": CodeFormSlugInUse,
+	// dbstore.ErrInvalidSlug's own text — the store's sentinel IS the rule, so the
+	// wire message states it rather than inventing a second wording. The literal
+	// is pinned equal to the sentinel by TestFormSlugInvalidWireMessageMatchesTheStore.
+	"form slug must be 1-40 characters of a-z, 0-9 or -": CodeFormSlugInvalid,
 
 	// Outbound webhook URL (ssrfguard refusal).
 	"url webhook tidak sah (menunjuk ke host peribadi/loopback)": CodeWebhookURLInvalid,

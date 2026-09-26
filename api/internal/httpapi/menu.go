@@ -1393,6 +1393,15 @@ func (h *PublicHandlers) formMenuTheme(f *dbstore.Form, st *dbstore.WorkspaceSet
 // account). The setting lives on the per-form menu config
 // (MenuPage.OrderFormSlug) — a JSON blob on forms.config, so no migration is
 // needed (issue #497 moved it from the workspace landing page).
+//
+// The reference is a SLUG, not an id, so renaming the attached order form would
+// silently detach it: the menu would stop collecting its extra fields, and the
+// order endpoint — which validates against this same contract — would stop
+// accepting them. That is the "a rename must not break references to it" half of
+// the card. So a miss on the live lookup falls through to the rename's temporary
+// 301 (the same fallback every public slug lookup uses), and the target must
+// still be published — a redirect can never resurrect a form that was since
+// pulled back to draft.
 func (h *PublicHandlers) formOrderExtraForm(r *http.Request, f *dbstore.Form, slug string) *dbstore.Form {
 	if h.Forms == nil || f == nil {
 		return nil
@@ -1406,10 +1415,17 @@ func (h *PublicHandlers) formOrderExtraForm(r *http.Request, f *dbstore.Form, sl
 		return nil
 	}
 	extra, ferr := h.Forms.PublishedByAccountSlug(r.Context(), acc.Slug, slug)
-	if ferr != nil || extra == nil {
+	if ferr == nil && extra != nil {
+		return extra
+	}
+	// The configured slug is not live: the order form may have been renamed.
+	// Resolve it through the temporary 301 and require the target to be
+	// published, which is the rule PublishedByAccountSlug enforces.
+	redirected, rerr := h.Forms.RedirectedFormByAccountSlug(r.Context(), acc.Slug, slug)
+	if rerr != nil || redirected == nil || redirected.Status != dbstore.FormStatusPublished {
 		return nil
 	}
-	return extra
+	return redirected
 }
 
 // filterMenuItems keeps the items whose name or description contains q

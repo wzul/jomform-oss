@@ -760,6 +760,7 @@ func (h *RESTHandlers) updateForm(w http.ResponseWriter, r *http.Request, actx *
 	}
 	var in struct {
 		Title  string         `json:"title"`
+		Slug   string         `json:"slug"`
 		Config map[string]any `json:"config"`
 		Theme  map[string]any `json:"theme"`
 	}
@@ -805,14 +806,59 @@ func (h *RESTHandlers) updateForm(w http.ResponseWriter, r *http.Request, actx *
 	// values, so a PATCH that omits either key keeps what's stored instead
 	// of writing NULL into a NOT NULL jsonb column (SQLSTATE 23502, issue
 	// #16). Callers that want to clear a map send {} explicitly.
-	if err := h.Forms.Update(r.Context(), actx.Account.ID, r.PathValue("id"),
+	formID := r.PathValue("id")
+	if err := h.Forms.Update(r.Context(), actx.Account.ID, formID,
 		in.Title, in.Config, in.Theme); err != nil {
 		respondErr(w, r, err)
 		return
 	}
+	// The slug is a separate write because a rename is one atomic operation
+	// that must also leave the temporary 301 for the old URL behind it (see
+	// FormStore.RenameSlug). An OMITTED slug keeps the stored value — the same
+	// "leave unchanged" contract config/theme have — because the empty string
+	// is skipped here. That is what the console's form-settings save sends for
+	// every other field, and it is what makes the documented PATCH a partial
+	// update rather than a full replace.
+	//
+	// Before this, the field was not read at all: the console POSTed a slug,
+	// the endpoint ignored it, and the save reported {status:"updated"} while
+	// the form's URL had not moved. A merchant concluded the rename worked and
+	// his new URL existed — it 404'd (the carded defect).
+	if in.Slug != "" {
+		oldSlug, err := h.Forms.RenameSlug(r.Context(), actx.Account.ID, formID, in.Slug)
+		if err != nil {
+			// A collision is 409 (respondErr maps ErrSlugTaken) and an
+			// invalid slug 400 — never a 200 that changed nothing.
+			respondErr(w, r, err)
+			return
+		}
+		if oldSlug != "" {
+			h.recordEvent(r, actx, h.sessionOwnerID(r), "form.slug_renamed",
+				map[string]any{"form_id": formID, "from": oldSlug, "to": strings.ToLower(strings.TrimSpace(in.Slug))})
+		}
+	}
 	// Issue #92: audit form update.
-	h.recordEvent(r, actx, h.sessionOwnerID(r), "form.updated", map[string]any{"form_id": r.PathValue("id")})
-	respond(w, http.StatusOK, map[string]string{"status": "updated"})
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "form.updated", map[string]any{"form_id": formID})
+	// The response reports the slug the form actually owns now (read back, not
+	// echoed) so a client can render the moved URL without a second round trip,
+	// and so a caller can never be told about a URL that does not exist.
+	respond(w, http.StatusOK, map[string]string{
+		"status": "updated",
+		"slug":   h.currentFormSlug(r.Context(), actx.Account.ID, formID),
+	})
+}
+
+// currentFormSlug reads a form's stored slug for a response payload. It reports
+// the value the database holds rather than the value the request carried, so a
+// caller is never told about a URL the form does not serve. "" when the form
+// cannot be read (the update above already proved it exists, so this is only a
+// best-effort enrichment and never an error path).
+func (h *RESTHandlers) currentFormSlug(ctx context.Context, accountID, id string) string {
+	f, err := h.Forms.GetByID(ctx, accountID, id)
+	if err != nil || f == nil {
+		return ""
+	}
+	return f.Slug
 }
 
 func (h *RESTHandlers) publishForm(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
