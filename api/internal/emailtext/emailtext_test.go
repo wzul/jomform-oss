@@ -180,7 +180,7 @@ func TestSubjectsDifferBetweenLocales(t *testing.T) {
 // missing locale silently falls back to English inside a Malay email, so the
 // presence check has to exist here too.
 func TestPhraseReturnsEveryLocale(t *testing.T) {
-	keys := []PhraseKey{PhraseDisclaimer, PhraseCopyright, PhraseMerchantPrefix, PhraseNoSubject}
+	keys := []PhraseKey{PhraseDisclaimer, PhraseCopyright, PhraseMerchantPrefix, PhraseNoSubject, PhraseMadeIn}
 	for _, key := range keys {
 		for _, lang := range Langs {
 			if strings.TrimSpace(Phrase(lang, key)) == "" {

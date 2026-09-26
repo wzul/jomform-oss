@@ -19,6 +19,14 @@
 // still told the client it was Malay. The footer sentences come from the shared
 // transactional dictionary too, so nothing inside the shell contradicts the
 // declared language. An unset/unknown code resolves to English, never Malay.
+//
+// The language travels with the MESSAGE, not with the wrapper's caller: the
+// feedback notifications carry the filer's `users.lang` in emailqueue.Job.Lang
+// and hand it to the sender, so a Malay message goes out with `<html lang="ms">`
+// and the Malay footer. An earlier shape had a second, language-agnostic entry
+// point that hard-wired "" into this function, which made the per-language
+// shell unreachable on the shipped send path; there is deliberately one entry
+// point now, and one place for the language to come from.
 package email
 
 import (
@@ -40,7 +48,9 @@ const (
 // and predictably inside the branded shell.
 //
 // lang is the language the message was rendered in (emailtext.NormalizeLang
-// pins it to one of the five supported locales, defaulting to English).
+// pins it to one of the five supported locales, defaulting to English). The
+// footer sentences come from the same dictionary, so the shell never contradicts
+// the language it declares.
 func BrandedHTML(lang, title, body string) string {
 	l := emailtext.NormalizeLang(lang)
 	escaped := html.EscapeString(body)
@@ -94,7 +104,7 @@ func BrandedHTML(lang, title, body string) string {
           <!-- Footer -->
           <tr>
             <td align="center" style="padding:24px 0 0 0;font-size:12px;line-height:1.5;color:#6b7280;">
-              <div>JomForm — Made in Malaysia.</div>
+              <div>` + html.EscapeString(emailtext.Phrase(l, emailtext.PhraseMadeIn)) + `</div>
               <div style="padding-top:4px;">` + html.EscapeString(emailtext.Phrase(l, emailtext.PhraseDisclaimer)) + `</div>
               <div style="padding-top:4px;">` + html.EscapeString(emailtext.Phrase(l, emailtext.PhraseCopyright)) + `</div>
             </td>

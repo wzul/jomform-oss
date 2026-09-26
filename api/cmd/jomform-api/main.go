@@ -115,6 +115,11 @@ func main() {
 			Host: cfg.SESSMTPHost, Port: cfg.SESSMTPPort,
 			Username: cfg.SESSMTPUser, Password: cfg.SESSMTPPass, From: cfg.SESFrom,
 			Region: cfg.SESRegion,
+			// The monitored mailbox a Reply reaches. Carried by the sender, not
+			// by a call site, so every message gets it (a Reply to a message
+			// with no Reply-To goes to noreply@jomform.com, where nothing
+			// reads it).
+			ReplyTo: cfg.SESReplyTo,
 		})
 	}
 
@@ -241,6 +246,9 @@ func main() {
 				Host: cfg.SESSMTPHost, Port: cfg.SESSMTPPort,
 				Username: cfg.SESSMTPUser, Password: cfg.SESSMTPPass, From: cfg.SESFrom,
 				Region: cfg.SESRegion,
+				// Same reply-handling rule as the auth mailer above: every
+				// message this sender emits carries the monitored Reply-To.
+				ReplyTo: cfg.SESReplyTo,
 			})
 			// Issue #56: receipts (buyers) consult suppression but not the
 			// verification breaker. The Sender now enforces that itself, at the

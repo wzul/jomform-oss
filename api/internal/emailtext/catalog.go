@@ -468,6 +468,17 @@ var phrases = map[PhraseKey]map[string]string{
 		Ta: "இந்த மின்னஞ்சலை நீங்கள் கோரவில்லை என்றால், அதைப் புறக்கணிக்கலாம்.",
 		Ar: "إذا لم تطلب هذا البريد، يمكنك تجاهله بأمان.",
 	},
+	// Branded wrapper footer: the origin line. The shell declares the reader's
+	// language, so every sentence inside it follows that declaration — the
+	// dashboard's own landing footer carries the same five
+	// (web/src/components/i18nDict.ts "land.footer").
+	PhraseMadeIn: {
+		En: "JomForm — Made in Malaysia.",
+		Ms: "JomForm — Dibuat di Malaysia.",
+		Zh: "JomForm — 马来西亚制造。",
+		Ta: "JomForm — மலேசியாவில் உருவாக்கப்பட்டது.",
+		Ar: "JomForm — صُنع في ماليزيا.",
+	},
 	// Branded wrapper footer: copyright.
 	PhraseCopyright: {
 		En: "© JomForm. All rights reserved.",

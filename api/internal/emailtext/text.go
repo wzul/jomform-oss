@@ -129,6 +129,11 @@ const (
 	// PhraseNoSubject stands in for a feedback thread whose filer left the
 	// subject empty (the UI makes it optional, so it is often empty).
 	PhraseNoSubject PhraseKey = "no_subject"
+	// PhraseMadeIn is the branded wrapper footer's origin line. It is a phrase
+	// rather than a literal in branded.go because the shell is rendered in the
+	// reader's language: an English sentence under `<html lang="ms">` contradicts
+	// the language the message declares, exactly as a Malay subject would.
+	PhraseMadeIn PhraseKey = "branded_made_in"
 )
 
 // Message is one rendered email: the language it was rendered in, plus its

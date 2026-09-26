@@ -8,7 +8,7 @@ import (
 
 func TestBuildMultipart(t *testing.T) {
 	msg := string(buildMultipart(
-		"noreply@jomform.com", "a@b.c", "Hai", "Badan emel", "",
+		"noreply@jomform.com", "a@b.c", nil, "Hai", "Badan emel", "",
 		"resit.pdf", []byte("PDFDATA"),
 	))
 	for _, want := range []string{

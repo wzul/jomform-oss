@@ -80,6 +80,12 @@ services:
       SES_SMTP_USER: ${SES_SMTP_USER:-}
       SES_SMTP_PASS: ${SES_SMTP_PASS:-}
       SES_FROM: ${SES_FROM:-}
+      # The monitored mailbox a recipient's Reply must reach. Passed through so a
+      # deployment built from this file can actually set it: without it the
+      # variable is read by the app but never reaches the container, and every
+      # message keeps sending replies to SES_FROM (noreply@…) where nothing reads
+      # them. Empty = no Reply-To header.
+      SES_REPLY_TO: ${SES_REPLY_TO:-}
       # Ollama Cloud credential for every AI surface (legal-page draft, AI form
       # builder, spam judge, code-asset scan, and the in-app assistant). The
       # client reads OLLAMA_API_KEY itself, so it must be passed through here —

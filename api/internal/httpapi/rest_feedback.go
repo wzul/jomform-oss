@@ -602,6 +602,12 @@ func (h *RESTHandlers) recordFeedbackEvent(r *http.Request, event, threadID stri
 // allowlist — the same list that gates the triage surface, so there is exactly
 // one place to change who is notified.
 //
+// The message is written in ENGLISH, deliberately: the recipients are identified
+// by SUPER_ADMIN_EMAILS, an allowlist of operator mailboxes, not `users` rows —
+// there is no lang to read, and inventing one (the filer's, say) would send an
+// operator an email in a language they never chose. The filer's language governs
+// the filer's email below.
+//
 // NotifyFeedbackAdmins is the exported form: the MCP submit_feedback tool and
 // the in-app chat file through the same feedbacksvc, whose Notify hook is this
 // function, so a thread filed from any surface notifies identically.
@@ -645,7 +651,9 @@ func (h *RESTHandlers) notifyFeedbackAdmins(th *dbstore.FeedbackThread, body str
 		// which is the answer itself and must arrive whole.
 		"subject": feedbackSubjectOrExcerpt(th, lang),
 		"excerpt": feedbackExcerpt(body),
-		"link":    strings.TrimRight(h.BaseURL, "/") + "/admin/feedback",
+		// The operator's link opens THE THREAD, not the queue (see
+		// feedbackAdminLink).
+		"link": feedbackAdminLink(h.BaseURL, th.ID),
 	})
 	// One outcome for the whole fan-out, and a non-delivery wins: the alert
 	// reached the team only if every configured recipient got it.
@@ -697,8 +705,15 @@ func (h *RESTHandlers) notifyFeedbackFiler(sc dbstore.FeedbackScope, th *dbstore
 	lang := u.Lang
 	text := emailtext.Text(lang, emailtext.FeedbackReply, map[string]string{
 		"subject": feedbackSubjectOrExcerpt(th, lang),
+		// The reply is carried WHOLE (feedbackQuotedText), not as an excerpt:
+		// this mail IS the answer the filer was waiting for, and #753 removed
+		// the 400-rune cut that made a long reply read as though the message
+		// simply ended. Only the ADMIN alert above takes the bounded excerpt.
 		"excerpt": feedbackQuotedText(body),
-		"link":    strings.TrimRight(h.BaseURL, "/") + "/feedback",
+		// The filer's link opens the THREAD, not the feedback landing page:
+		// a notification that says "we replied" and then drops the reader on
+		// a list has not delivered the reply (see feedbackThreadLink).
+		"link": feedbackThreadLink(h.BaseURL, th.ID),
 	})
 	return h.deliverFeedbackMail(sc, threadIDOf(th), dbstore.FeedbackNotifyKindFiler, u.Email,
 		text.Subject, text.Body, text.Lang)
@@ -798,6 +813,21 @@ func threadIDOf(th *dbstore.FeedbackThread) string {
 	return th.ID
 }
 
+// feedbackMailJob is the queued message for one feedback notification: the job
+// shape sendFeedbackMail enqueues, built in one place so the reader's language
+// is set wherever the job is built.
+//
+// Lang is the READER's language and it is the SAME value that rendered the
+// subject and the body — one lookup, passed down. The send side uses it for the
+// branded HTML shell, so a Malay message cannot go out under a shell that
+// declares English.
+func feedbackMailJob(to, subject, body, lang string) emailqueue.Job {
+	return emailqueue.Job{
+		Type: feedbackNotifyJobType, To: to, Subject: subject, Body: body,
+		Lang: lang,
+	}
+}
+
 // sendFeedbackMail delivers one feedback email through the existing queue, with
 // the synchronous mailer as the fallback when no queue is wired (bare-mode
 // tests). Both paths are the ones every other notification uses — this adds no
@@ -809,15 +839,18 @@ func threadIDOf(th *dbstore.FeedbackThread) string {
 //	queued  handed to the #199 queue (the worker sends it)
 //	sent    delivered synchronously by the mailer
 //	failed  neither happened; the error says why
+//
+// lang is the READER's language, and it is the SAME value the caller used to
+// render the subject and the body: one lookup, passed down, so the branded HTML
+// shell cannot end up in a different locale from the message it wraps. It
+// travels on the job through feedbackMailJob (the one job-builder, the shell is
+// rendered at send time by the sender) and to the synchronous fallback.
 func (h *RESTHandlers) sendFeedbackMail(to, subject, body, lang string) (string, error) {
 	if strings.TrimSpace(to) == "" {
 		return feedbackNotifyFailed, errors.New("no recipient address")
 	}
 	if h.EmailQueue != nil {
-		if err := h.EmailQueue.Enqueue(context.Background(), emailqueue.Job{
-			Type: feedbackNotifyJobType, To: to, Subject: subject, Body: body,
-			Lang: lang,
-		}); err != nil {
+		if err := h.EmailQueue.Enqueue(context.Background(), feedbackMailJob(to, subject, body, lang)); err != nil {
 			return feedbackNotifyFailed, fmt.Errorf("enqueue %s: %w", feedbackNotifyJobType, err)
 		}
 		return feedbackNotifyQueued, nil

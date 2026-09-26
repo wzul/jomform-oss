@@ -162,6 +162,7 @@ created**. Results are cached in Valkey (`jf:mx:{sha256(domain)}`): **positive
 | `SES_SMTP_HOST` | (empty = sends disabled) | gateway host; required for email |
 | `SES_SMTP_USER` / `SES_SMTP_PASS` | | IAM access key id / secret key (SESv2 API) |
 | `SES_FROM` | | verified sender, e.g. `noreply@jomform.com` |
+| `SES_REPLY_TO` | (empty = no header) | **monitored** mailbox a recipient's Reply reaches, comma-separated. Set the Reply-To header on every message the SES sender emits (both the Simple and the raw-MIME path), so a reply is not lost at `SES_FROM`, which is `noreply@…` and has no reader. Leave unset only if a reply genuinely has nowhere to go |
 | `SES_REGION` | `ap-southeast-1` | AWS region |
 | `SES_BREAKER_MIN_SENDS` | `20` | min verification sends in the trailing hour before the ratio can trip the breaker |
 | `SES_BREAKER_RATIO` | `0.05` | bounce ratio above which verification mail is paused |

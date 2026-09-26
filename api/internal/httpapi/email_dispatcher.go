@@ -52,6 +52,8 @@ var errUnknownJobType = errors.New("emailq: unknown job type")
 // made that check false, so the call ran on a nil receiver
 // ((*email.Sender).SendReceipt → suppressed → SIGSEGV) on the email queue
 // worker goroutine, which recovers nothing, and the whole API process died.
+// The reflect rule is shared through internal/niliface, so a second hand-rolled
+// copy cannot drift from the media store's gate.
 
 // EmailDispatcher routes queued email jobs to the right sender. It implements
 // emailqueue.Handler.
@@ -231,6 +233,12 @@ func (d *EmailDispatcher) sendFormNotification(ctx context.Context, job emailque
 // non-nil error would push a job that is being dropped correctly onto the retry
 // ladder and into the dead-letter list. There is no SaleID to persist: a
 // feedback thread is not a sale.
+//
+// job.Lang is the READER's language (the filer's users.lang), the same value the
+// handler used to render the subject and the body, and it is forwarded on the
+// normal send path so the branded HTML shell is built in the same locale. It is
+// what makes a Malay filer's message arrive with `<html lang="ms">` and the
+// Malay footer instead of an English shell over Malay copy.
 func (d *EmailDispatcher) sendFeedbackNotify(ctx context.Context, job emailqueue.Job) error {
 	if d.Pay == nil || d.Pay.Receipts == nil || d.Pay.Receipts.Sender == nil {
 		slog.Warn("emailq_feedback_notify_no_sender", "to", job.To)

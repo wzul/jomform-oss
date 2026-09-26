@@ -94,6 +94,20 @@ export default function FeedbackPage() {
   const [reply, setReply] = useState("");
   const [replying, setReplying] = useState(false);
 
+  // ?thread=<id> opens that thread on mount. It is what the reply notification
+  // email links to: the email says an answer arrived, and the reader should land
+  // ON that answer rather than in a list to hunt through. A missing or unusable
+  // id simply leaves the list — the parameter is a convenience, never an access
+  // grant (the API still scopes every read to the session's own user).
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const id = new URLSearchParams(window.location.search).get("thread");
+    if (id) void openThread(id);
+    // Deliberately once, on mount: re-running on openThread's identity would
+    // reopen the thread every time the list reloads and discard a draft reply.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Issue #503: an expired session gets an action, not a dead page.
   const goToLogin = useCallback(() => {
     router.replace("/login");

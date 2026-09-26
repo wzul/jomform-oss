@@ -45,6 +45,14 @@ type Config struct {
 	SESSMTPPass string
 	SESFrom     string
 	SESRegion   string
+	// SESReplyTo (SES_REPLY_TO, comma-separated) is the monitored mailbox a
+	// recipient's Reply button must reach. It exists because every message is
+	// From noreply@jomform.com — an address with no reader, so a reply sent
+	// there is lost silently and the conversation looks abandoned. Written as
+	// the Reply-To header on EVERY message the SES sender emits (both the
+	// Simple and the raw-MIME path), so no individual call site has to
+	// remember it. Empty = no header.
+	SESReplyTo []string
 
 	// SES reputation hardening (issue #56).
 	//   BreakerMinSends: minimum verification sends in the trailing hour
@@ -148,6 +156,13 @@ func Load() (*Config, error) {
 		SESSMTPPass: os.Getenv("SES_SMTP_PASS"),
 		SESFrom:     os.Getenv("SES_FROM"),
 		SESRegion:   getEnv("SES_REGION", "ap-southeast-1"),
+		// The monitored mailbox a recipient's Reply reaches. Deliberately NOT
+		// defaulted to SES_FROM: every message JomForm sends is From
+		// noreply@jomform.com, which nothing reads, so a default here would
+		// re-create the black hole this variable exists to close. Unset = no
+		// Reply-To header (unchanged behaviour) rather than a plausible-looking
+		// address nobody monitors.
+		SESReplyTo: parseEmailList(os.Getenv("SES_REPLY_TO")),
 
 		// SES reputation hardening (issue #56). Breaker ratio/min parse
 		// leniently: unparseable values fall back to the SES-recommended

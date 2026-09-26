@@ -46,6 +46,7 @@ var ErrNotConfigured = errors.New("email sender not configured")
 //   - Host     = unused (kept for config compatibility)
 //   - Port     = unused
 //   - From     = verified sender, e.g. noreply@jomform.com
+//   - ReplyTo  = monitored mailbox a reply should reach (see below)
 type SMTPConfig struct {
 	Host     string
 	Port     string
@@ -53,6 +54,13 @@ type SMTPConfig struct {
 	Password string
 	From     string
 	Region   string // AWS region for SESv2 (default ap-southeast-1)
+	// ReplyTo is the mailbox a recipient's Reply button must reach. It is
+	// carried by the SENDER rather than passed per call site, so every
+	// message this sender emits has it: a message with no Reply-To sends the
+	// reply to `From` — and that is noreply@jomform.com, which nothing reads,
+	// so the answer is silently lost. Empty = no header (a blank Reply-To is
+	// not a valid header, so it is omitted rather than written empty).
+	ReplyTo []string
 }
 
 // Sender delivers transactional email via the SESv2 SendEmail API.
@@ -80,6 +88,24 @@ func New(cfg SMTPConfig) *Sender {
 		cfg.Region = "ap-southeast-1"
 	}
 	return &Sender{cfg: cfg, from: cfg.From}
+}
+
+// replyTo returns the Reply-To addresses for one send. A sender built without
+// one (config absent, or a deployment that has not set it yet) falls back to
+// the From address, which is exactly what a message with no Reply-To header
+// would do — the header is written from one place, but a caller that DID
+// configure a mailbox gets it on every path.
+func (s *Sender) replyTo() []string {
+	if len(s.cfg.ReplyTo) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(s.cfg.ReplyTo))
+	for _, a := range s.cfg.ReplyTo {
+		if a = strings.TrimSpace(a); a != "" {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // NewWithSuppressor builds a sender whose every send is checked against the
@@ -209,6 +235,11 @@ func (s *Sender) SendReceipt(to, subject, body, lang string) (string, error) {
 		Destination: &types.Destination{
 			ToAddresses: []string{to},
 		},
+		// The Reply-To header, on the Simple path. Both send paths carry it
+		// (see buildMultipart for the Raw path) because "which sender did the
+		// message go out through" must never decide whether a reply reaches a
+		// human.
+		ReplyToAddresses: s.replyTo(),
 		Content: &types.EmailContent{
 			Simple: &types.Message{
 				Subject: &types.Content{Data: aws.String(subject)},
@@ -253,7 +284,7 @@ func (s *Sender) SendReceiptWithAttachment(to, subject, body, lang, filename str
 	if err != nil {
 		return "", err
 	}
-	raw := buildMultipart(s.from, to, subject, body, lang, filename, data)
+	raw := buildMultipart(s.from, to, s.replyTo(), subject, body, lang, filename, data)
 	out, err := cli.SendEmail(context.Background(), &sesv2.SendEmailInput{
 		FromEmailAddress: aws.String(s.from),
 		Destination: &types.Destination{
@@ -278,12 +309,29 @@ func (s *Sender) SendReceiptWithAttachment(to, subject, body, lang, filename str
 // attachment, matching the previous SMTP attachment format. The body is a
 // nested multipart/alternative carrying both the plain-text fallback and the
 // branded HTML part (issue #339).
-func buildMultipart(from, to, subject, body, lang, filename string, data []byte) []byte {
+//
+// replyTo is written here rather than at a call site because this function is
+// where the MIME is assembled: the header belongs to the message, and a caller
+// that added it separately would leave the other send path without it (the fix
+// for a missing Reply-To that only covers one path is not a fix). An empty list
+// writes no header at all — `Reply-To: ` with no address is not a header a mail
+// client can act on.
+//
+// lang is the language the message was RENDERED IN, and it is what the branded
+// HTML part is rendered with — the same value behind the subject and the body
+// above it, so the shell cannot declare a language the message is not written
+// in. It is a parameter of the builder rather than something the HTML part looks
+// up for itself because two lookups can drift, which is the defect this
+// signature removes.
+func buildMultipart(from, to string, replyTo []string, subject, body, lang, filename string, data []byte) []byte {
 	boundary := "jf-boundary-7f3a9c1b"
 	altBoundary := "jf-alt-4d2e8f0a"
 	var b strings.Builder
 	b.WriteString("From: " + from + "\r\n")
 	b.WriteString("To: " + to + "\r\n")
+	if len(replyTo) > 0 {
+		b.WriteString("Reply-To: " + strings.Join(replyTo, ", ") + "\r\n")
+	}
 	b.WriteString("Subject: " + subject + "\r\n")
 	b.WriteString("MIME-Version: 1.0\r\n")
 	b.WriteString("Content-Type: multipart/mixed; boundary=\"" + boundary + "\"\r\n\r\n")

@@ -625,6 +625,20 @@ export default function AdminPage() {
     if (isSuperAdmin) void loadFeedback(fbPage, fbFilter);
   }, [isSuperAdmin, loadFeedback, fbPage, fbFilter]);
 
+  // ?thread=<id> opens that thread in the triage section on mount. It is what
+  // the "new feedback received" notification links to: the operator should land
+  // on the thread that was filed, not on the whole queue. Selecting a thread is
+  // component state (there is no per-thread route), so the thread is selected by
+  // parameter; an unknown id leaves the list untouched rather than erroring.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const id = new URLSearchParams(window.location.search).get("thread");
+    if (id) void openFeedback(id);
+    // Once, on mount: re-running on openFeedback's identity would reopen the
+    // thread whenever the list reloads and discard a draft reply.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   if (anon || !isSuperAdmin) {
     return (
       <div className="flex min-h-screen items-center justify-center">
