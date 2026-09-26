@@ -143,6 +143,21 @@ case "\$cmd" in
     # Model a REAL upload: the object lands in the remote dir, so the
     # post-upload verification below has something truthful to compare against.
     src="\${1:-}"; dest="\${2:-}"
+    # STUB_SILENT_NAME names one object whose write silently drops the stream:
+    # the command consumes it, exits 0 and stores NOTHING. That is the trap this
+    # case exists for — an exit status that describes the command, not the
+    # object. Only the named object is affected, so a case can still be driven
+    # through the monthly promotion with healthy daily uploads.
+    if [ -n "\${STUB_SILENT_NAME:-}" ] && [ "\$(basename "\$src")" = "\$STUB_SILENT_NAME" ]; then
+      exit 0
+    fi
+    # STUB_FAIL_NAME is the opposite shape: the command itself reports a failure
+    # for one object, so the script's own upload-error path is exercised while
+    # the daily objects still upload normally.
+    if [ -n "\${STUB_FAIL_NAME:-}" ] && [ "\$(basename "\$src")" = "\$STUB_FAIL_NAME" ]; then
+      echo 'Failed to copy: googleapi: Error 403: rateLimitExceeded' >&2
+      exit 1
+    fi
     mkdir -p "$CASE_DIR/remote"
     cp "\$src" "$CASE_DIR/remote/\$(basename "\$src")"
     : >"\$dest" 2>/dev/null || true
@@ -160,18 +175,24 @@ case "\$cmd" in
       exit 1
     fi
     exit 0 ;;
-  # rcat <remote-path> — read stdin and write it to the modelled remote path, so
-  # the monthly sidecar in this stub holds the REAL BYTES the script produced. A
-  # bare 'exit 0' here would make the monthly content assertions vacuous.
-  rcat)
+  # cat <remote-path> — re-read an object, the shape the script uses to verify a
+  # write it produced itself. Mirrors real rclone: the stored bytes on stdout,
+  # exit 3 "directory not found" when the object is not there.
+  # STUB_CAT_CORRUPT=1 models a stored object whose bytes differ from what was
+  # sent (same shape, wrong digest).
+  cat)
     path="\${1:-}"
-    mkdir -p "$CASE_DIR/remote"
-    if [ "\$MODE" = "rcat-fail" ] || [ "\${STUB_RCAT_FAIL:-0}" = "1" ]; then
-      echo 'Failed to copy: googleapi: Error 403: rateLimitExceeded' >&2
-      exit 1
+    base="\$(basename "\$path")"
+    if [ -f "$CASE_DIR/remote/\$base" ]; then
+      if [ "\${STUB_CAT_CORRUPT:-0}" = "1" ]; then
+        printf 'deadbeefdeadbeefdeadbeefdeadbeef  %s\\n' "\$base"
+      else
+        cat "$CASE_DIR/remote/\$base"
+      fi
+      exit 0
     fi
-    cat >"$CASE_DIR/remote/\$(basename "\$path")"
-    exit 0 ;;
+    echo "directory not found" >&2
+    exit 3 ;;
   # hashsum MD5 <file-path> -> "<md5>  <basename>", from the local COPY of the
   # object. STUB_REMOTE_MISSING=1 models an object that never landed,
   # STUB_REMOTE_CORRUPT=1 a same-size object whose bytes differ.
@@ -203,10 +224,13 @@ case "\$cmd" in
     if [ "\$MODE" = "silent" ] || [ "\${STUB_REMOTE_MISSING:-0}" = "1" ]; then
       echo "[]"; exit 0
     fi
-    # report the real local size, like a working remote would
+    # Report what is on the MODELLED REMOTE, like a real listing would. Reading
+    # the local stage dir here instead is only correct for objects whose source
+    # path happens to be the stage dir; it reports an object as missing when the
+    # upload's source was a temp file (the monthly sidecar).
     base="\$(basename "\$path")"
-    if [ -f "$CASE_DIR/stage/\$base" ]; then
-      printf '[{"Name":"%s","Size":%s}]\n' "\$base" "\$(stat -c %s "$CASE_DIR/stage/\$base")"
+    if [ -f "$CASE_DIR/remote/\$base" ]; then
+      printf '[{"Name":"%s","Size":%s}]\\n' "\$base" "\$(stat -c %s "$CASE_DIR/remote/\$base")"
     else
       echo "[]"
     fi ;;
@@ -231,6 +255,14 @@ EOF
 # operator has to. A case that needs a knob UNSET on purpose passes an explicit
 # override (see the seam cases below), and the sabotaged-COPY case below reaches
 # the same guard through this same helper.
+#
+# Note what the seam does and does NOT give this helper. The seam only decides
+# whether a run is classified as a hand-run; it moves no path. Containment here
+# comes from these assignments alone — in particular JFBACKUP_STATE_DIR, which is
+# where the status file goes and which the refusal path (fail -> write_status)
+# also writes. Dropping any one of them would let the case reach the paths
+# installed on this host, so the last case in this file asserts that this helper
+# (and the README's hand-run recipe) still name every one of them.
 run_backup() { run_backup_script "$SCRIPT" "$@"; }
 
 # run_backup_script <script> [env assignments...] -- [script args...]
@@ -257,6 +289,60 @@ run_backup_script() {
 teardown_case() { rm -rf "$CASE_DIR"; }
 
 touch_rclone_conf() { echo '[googldrive]' >"$CASE_DIR/rclone.conf"; }
+
+# install_system_path_without_rclone <mirror-dir>
+# <mirror-dir> becomes a PATH DIRECTORY carrying the six directories the script
+# pins in _SYS_PATH, with `rclone` left out — so a run whose pinned path IS the
+# mirror is a run on a host where rclone was never installed.
+#
+# Why not a PATH prefix: JFBACKUP_PATH_PREFIX only PREPENDS to _SYS_PATH, so
+# /usr/bin stays on the run's path. A prefix entry that shadows rclone is not
+# possible either — bash skips any PATH candidate that is not an executable
+# regular file, so a directory, a non-executable file or a broken symlink named
+# `rclone` all resolve through to the real binary (measured on a host that has
+# /usr/bin/rclone). The six pinned directories are therefore mirrored here, and
+# rclone is dropped from the mirror.
+#
+# `cp -as` makes SYMLINKS, so nothing is copied and the unlink below can only
+# ever remove the mirror's own entry, never the real binary.
+install_system_path_without_rclone() { # <mirror-dir>
+  local dest="$1" d
+  mkdir -p "$dest"
+  for d in /usr/local/sbin /usr/local/bin /usr/sbin /usr/bin /sbin /bin; do
+    [ -d "$d" ] || continue
+    # -f: a name the six directories share (bin -> usr/bin, sbin -> usr/sbin) is
+    # overwritten rather than reporting an error.
+    cp -asf "$d/." "$dest/" 2>/dev/null || true
+  done
+  unlink "$dest/rclone" 2>/dev/null || true
+}
+
+# assert_path_without_rclone <label> <mirror-dir> [<extra-dir>...]
+# Asserts that a run whose PATH is `<extra-dir>:<mirror-dir>` cannot reach
+# rclone — that IS the premise of the case — and that the same PATH is still a
+# WORKING system path. The canaries are part of the assertion rather than a
+# nicety: a mirror that failed to build would make rclone unresolvable for the
+# wrong reason, and the case would pass having measured nothing. Returns
+# non-zero on failure so the caller can report it loudly instead of running the
+# case against a path that cannot express the premise.
+assert_path_without_rclone() { # label mirror [extra-dir...]
+  local label="$1"; shift
+  local run_path="" d
+  for d in "$@"; do run_path="${run_path:+$run_path:}$d"; done
+  local probe
+  probe="$(env PATH="$run_path" bash -c '
+    command -v rclone >/dev/null 2>&1 && { echo "rclone still resolves, to $(command -v rclone)"; exit 1; }
+    for c in python3 docker gzip; do
+      command -v "$c" >/dev/null 2>&1 || { echo "$c does not resolve - the fixture PATH is not a working system path"; exit 1; }
+    done
+    echo ok' 2>&1)"
+  if [ "$probe" = "ok" ]; then
+    ok "$label"
+    return 0
+  fi
+  bad "$label: $probe"
+  return 1
+}
 
 # ---------------------------------------------------------- monthly helpers
 # Names the script will use for THIS day, spelled exactly as the script does
@@ -412,14 +498,55 @@ teardown_case
 
 echo "case: rclone missing entirely -> the dump still happens and the run FAILS loudly"
 setup_case; touch_rclone_conf
-# A PATH prefix with the other stubs but NO rclone, so only rclone is missing.
-mkdir -p "$CASE_DIR/norclone"
-cp "$STUB_BIN/docker" "$STUB_BIN/logger" "$CASE_DIR/norclone/"
-chmod +x "$CASE_DIR/norclone"/*
-rc="$(run_backup JFBACKUP_PATH_PREFIX="$CASE_DIR/norclone" --)"
-assert_eq "exit code" "exit=1" "$rc"
-assert_contains "log names rclone" "rclone is not installed" "$RUN_LOG"
-assert_file "dump was still written" "$CASE_DIR/stage/jomform-daily-$(date -u +%Y-%m-%d).dump.gz"
+# The premise is "rclone is not installed at all", and a PATH PREFIX cannot
+# express it: JFBACKUP_PATH_PREFIX only PREPENDS to the script's pinned
+# _SYS_PATH, so /usr/bin stays on the path and on a host where /usr/bin/rclone
+# exists the run finds the REAL rclone and this case goes red for a reason that
+# is not about the script. Measured on such a host: a directory, a
+# non-executable file, and a broken symlink named `rclone` in the prefix ALL
+# still resolve through to the real binary — bash skips any PATH entry that is
+# not an executable regular file. So the fixture removes rclone from the pinned
+# path itself: a symlink mirror of the six directories _SYS_PATH names, minus
+# rclone, pinned into a COPY of the script (the tracked file is never touched).
+install_system_path_without_rclone "$CASE_DIR/norclone"
+# Only the stubs the run needs for everything that is NOT rclone. The mirror
+# already carries the real docker/logger; these keep the case off /usr/bin for
+# the two programs it stubs.
+mkdir -p "$CASE_DIR/norclone-stubs"
+cp "$STUB_BIN/docker" "$STUB_BIN/logger" "$CASE_DIR/norclone-stubs/"
+chmod +x "$CASE_DIR/norclone-stubs"/*
+# The mirror is only evidence if the shell agrees rclone is unreachable on it.
+# If the fixture cannot express the premise on this host the case is reported as
+# a FAILURE with the reason — a silent skip would be a green suite proving
+# nothing, which is the shape this repo's gate rules forbid.
+if assert_path_without_rclone "fixture: rclone is NOT reachable on the run's PATH" \
+    "$CASE_DIR/norclone" "$CASE_DIR/norclone-stubs"; then
+  cp "$SCRIPT" "$CASE_DIR/backup-no-rclone.sh"
+  python3 - "$CASE_DIR/backup-no-rclone.sh" "$CASE_DIR/norclone" <<'PY'
+import sys
+path, mirror = sys.argv[1], sys.argv[2]
+src = open(path).read()
+old = '_SYS_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"'
+if src.count(old) != 1:
+    sys.exit("anchor found %d times, expected 1" % src.count(old))
+open(path, "w").write(src.replace(old, '_SYS_PATH="%s"' % mirror, 1))
+PY
+  if [ "$(grep -c '^_SYS_PATH="'"$CASE_DIR"'/norclone"$' "$CASE_DIR/backup-no-rclone.sh")" -eq 1 ]; then
+    ok "the fixture pinned the copy at the rclone-less path"
+  else
+    bad "the fixture did not pin the copy at the rclone-less path — the case would run the host's path"
+  fi
+  if bash -n "$CASE_DIR/backup-no-rclone.sh" 2>/dev/null; then
+    ok "the pinned copy is a valid script"
+  else
+    bad "the pinned copy does not parse"
+  fi
+  rc="$(run_backup_script "$CASE_DIR/backup-no-rclone.sh" \
+    JFBACKUP_PATH_PREFIX="$CASE_DIR/norclone-stubs" --)"
+  assert_eq "exit code" "exit=1" "$rc"
+  assert_contains "log names rclone" "rclone is not installed" "$RUN_LOG"
+  assert_file "dump was still written" "$CASE_DIR/stage/jomform-daily-$(date -u +%Y-%m-%d).dump.gz"
+fi
 teardown_case
 
 echo "case: runs under cron's minimal environment (PATH pinned, no shell profile)"
@@ -576,13 +703,51 @@ setup_case; touch_rclone_conf
 promote_and_verify "monthly promotion"
 teardown_case
 
-echo "case: monthly sidecar write fails -> the run FAILS (uploads_ok=0), not a silent 0"
-# The other half of the rule: a promotion whose sidecar never landed must not be
-# reported as a healthy run with an unverifiable monthly copy.
+echo "case: the monthly sidecar write exits 0 and stores NOTHING -> the run FAILS"
+# The trap this case exists for. `rclone rcat`'s exit status describes the
+# COMMAND, not the object: an rclone that consumes the stream, exits 0 and writes
+# nothing used to leave a healthy-looking run whose monthly sidecar was never in
+# Drive — a monthly dump with no verifiable checksum, which is the artifact the
+# sidecar exists to prevent. The stub drops exactly one named object's stream.
 setup_case; touch_rclone_conf
-rc="$(run_backup JFBACKUP_DAY_OF_MONTH=01 STUB_RCLONE_MODE=ok STUB_RCAT_FAIL=1 --)"
+rc="$(run_backup JFBACKUP_DAY_OF_MONTH=01 STUB_RCLONE_MODE=ok \
+  STUB_SILENT_NAME="jomform-monthly-$(monthly_name).dump.gz.sha256" --)"
 assert_eq "exit code" "exit=1" "$rc"
-assert_contains "log names the sidecar write" "monthly sidecar write failed" "$RUN_LOG"
+assert_contains "log names the sidecar verification" "monthly sidecar verification failed" "$RUN_LOG"
+assert_contains "log says the object is missing remotely" "remote object missing or unreadable after upload" "$RUN_LOG"
+assert_contains "log marks FAILED" "jomform-backup FAILED" "$RUN_LOG"
+assert_contains "status file FAILED" '"status": "FAILED"' "$CASE_DIR/state/last-run.json"
+assert_file "last-failure.json written" "$CASE_DIR/state/last-failure.json"
+# And the whole point: nothing on the remote claims to be a verified sidecar.
+if [ -e "$CASE_DIR/remote/jomform-monthly-$(monthly_name).dump.gz.sha256" ]; then
+  bad "a sidecar object exists although the write dropped the stream"
+else
+  ok "no sidecar object on the remote, and the run said so"
+fi
+teardown_case
+
+echo "case: the sidecar lands but its stored CONTENT differs -> the run FAILS"
+# Size and md5 alone are not the acceptance: STUB_CAT_CORRUPT leaves the stored
+# object's size and hash correct for the modelled backend (so verify_remote
+# passes) and makes the re-read return different bytes, which only the content
+# comparison can catch. A same-length object with the wrong digest would be an
+# unusable sidecar.
+setup_case; touch_rclone_conf
+rc="$(run_backup JFBACKUP_DAY_OF_MONTH=01 STUB_RCLONE_MODE=ok STUB_CAT_CORRUPT=1 --)"
+assert_eq "exit code" "exit=1" "$rc"
+assert_contains "log names the content mismatch" "remote content mismatch" "$RUN_LOG"
+assert_contains "log marks FAILED" "jomform-backup FAILED" "$RUN_LOG"
+teardown_case
+
+echo "case: the sidecar upload command fails -> the run FAILS (uploads_ok=0), not a silent 0"
+# The other half of the rule: a promotion whose sidecar never left the host must
+# not be reported as a healthy run with an unverifiable monthly copy.
+setup_case; touch_rclone_conf
+rc="$(run_backup JFBACKUP_DAY_OF_MONTH=01 STUB_RCLONE_MODE=ok \
+  STUB_FAIL_NAME="jomform-monthly-$(monthly_name).dump.gz.sha256" --)"
+assert_eq "exit code" "exit=1" "$rc"
+assert_contains "log names the failed sidecar upload" "monthly sidecar upload failed" "$RUN_LOG"
+assert_contains "log carries the provider message" "rateLimitExceeded" "$RUN_LOG"
 assert_contains "log marks FAILED" "jomform-backup FAILED" "$RUN_LOG"
 assert_file "last-failure.json written" "$CASE_DIR/state/last-failure.json"
 teardown_case
@@ -641,11 +806,11 @@ import sys
 path, marker = sys.argv[1], sys.argv[2]
 src = open(path).read()
 # The block this fix introduced, as shipped...
-fixed = '''    elif ! printf '%s  %s\\n' "$digest" "$MONTHLY_NAME.dump.gz" \\
-        | rclone --config "$RCLONE_CONFIG" rcat "$MONTHLY_DIR/$MONTHLY_NAME.dump.gz.sha256" 2>/dev/null; then'''
-# ...replaced by the pre-fix behaviour: copy the daily sidecar verbatim.
-broken = '''    elif ! rclone --config "$RCLONE_CONFIG" copyto \\
-        "$DAILY_DIR/$DAILY_NAME.dump.gz.sha256" "$MONTHLY_DIR/$MONTHLY_NAME.dump.gz.sha256" 2>/dev/null; then'''
+fixed = '''      printf '%s  %s\\n' "$digest" "$MONTHLY_NAME.dump.gz" >"$sidecar_tmp"'''
+# ...replaced by the pre-fix behaviour: the DAILY sidecar verbatim, so the
+# monthly object's sidecar names the daily staging path (and its absolute path
+# stops resolving as soon as local retention prunes the daily file).
+broken = '''      cp "$STAGE_DIR/$DAILY_NAME.dump.gz.sha256" "$sidecar_tmp"'''
 if src.count(fixed) != 1:
     open(marker, 'w').write('NOTFOUND count=%d' % src.count(fixed))
     sys.exit(3)
@@ -894,6 +1059,58 @@ assert_contains "syslog carries the unsafe override too" "unsafe override allowe
 assert_file "dump was taken" "$CASE_DIR/stage/jomform-daily-$(date -u +%Y-%m-%d).dump.gz"
 teardown_case
 
+echo "case: a destination-only run with JFBACKUP_ALLOW_UNSAFE=0 is REFUSED (the hatch needs the value 1)"
+# The hatch is opened by the VALUE, not by the variable being SET. A `[ -n ... ]`
+# test read `JFBACKUP_ALLOW_UNSAFE=0` — a caller writing the value that means
+# "no" — exactly like `=1`: the run reached the installed credential file and
+# mailed the installed super-admin inbox, while the audit WARN quoted a `=1`
+# nobody had set. Same fixture and same knob as the destination-only case above,
+# only the value differs, so the pair isolates the value test.
+setup_case; touch_rclone_conf
+install_backup_copy "$CASE_DIR/stage" "$CASE_DIR/state" "$RUN_LOG" "$CASE_DIR/lock" "$CASE_DIR/env" "$CASE_DIR/rclone.conf"
+before="$(ls -A "$CASE_DIR/stage" | sort | tr '\n' ' ')"
+rc="$(run_installed JFBACKUP_REMOTE_ROOT=scratch-root JFBACKUP_ALLOW_UNSAFE=0)"
+assert_eq "exit code" "exit=1" "$rc"
+assert_contains "log says it refused" "refusing a partial-override run" "$RUN_LOG"
+assert_contains "the refusal names the missing JFBACKUP_ENV_FILE" "JFBACKUP_ENV_FILE" "$RUN_LOG"
+assert_not_contains "the hatch was not logged as used" "escape hatch was used" "$RUN_LOG"
+assert_no_file "no dump was taken" "$CASE_DIR/stage/jomform-daily-$(date -u +%Y-%m-%d).dump.gz"
+assert_no_file "no media archive was taken" "$CASE_DIR/stage/jomform-daily-$(date -u +%Y-%m-%d)-media.tar.gz"
+assert_same_listing "$before" "$CASE_DIR/stage"
+assert_no_file "no lock file was taken" "$CASE_DIR/lock"
+assert_not_contains "no alert email was attempted" "[JomForm]" "$RUN_LOG"
+assert_contains "status file records the refusal" '"status": "FAILED"' "$CASE_DIR/state/last-run.json"
+teardown_case
+
+echo "case: no other value opens the hatch either (false / empty / an arbitrary string)"
+# `1` is the documented value; anything else is not a request for a deliberate
+# real run and must leave the seam refusing. The empty value is the one an
+# `export JFBACKUP_ALLOW_UNSAFE=` produces. The labels keep the vocabulary the
+# bite harness classifies on (no dump was taken / no alert email), so restoring
+# the value-agnostic `[ -n ... ]` test reads as a seam failure there too.
+for v in false "" 2; do
+  setup_case; touch_rclone_conf
+  install_backup_copy "$CASE_DIR/stage" "$CASE_DIR/state" "$RUN_LOG" "$CASE_DIR/lock" "$CASE_DIR/env" "$CASE_DIR/rclone.conf"
+  rc="$(run_installed JFBACKUP_REMOTE_ROOT=scratch-root "JFBACKUP_ALLOW_UNSAFE=$v")"
+  assert_eq "exit code with JFBACKUP_ALLOW_UNSAFE='$v'" "exit=1" "$rc"
+  assert_no_file "no dump was taken with JFBACKUP_ALLOW_UNSAFE='$v'" "$CASE_DIR/stage/jomform-daily-$(date -u +%Y-%m-%d).dump.gz"
+  assert_not_contains "no alert email was attempted with JFBACKUP_ALLOW_UNSAFE='$v'" "[JomForm]" "$RUN_LOG"
+  teardown_case
+done
+
+echo "case: the SAME destination-only run with JFBACKUP_ALLOW_UNSAFE=1 still proceeds"
+# The positive direction of the value test, in the same fixture: a caller who
+# sets the documented value is asking for a deliberate real run and must not be
+# refused — otherwise the hatch is a ban rather than an escape hatch.
+setup_case; touch_rclone_conf
+install_backup_copy "$CASE_DIR/stage" "$CASE_DIR/state" "$RUN_LOG" "$CASE_DIR/lock" "$CASE_DIR/env" "$CASE_DIR/rclone.conf"
+rc="$(run_installed JFBACKUP_REMOTE_ROOT=scratch-root JFBACKUP_ALLOW_UNSAFE=1 -- --local-only)"
+assert_eq "exit code" "exit=0" "$rc"
+assert_contains "the hatch is open for the documented value, and names it" "JFBACKUP_ALLOW_UNSAFE=1" "$RUN_LOG"
+assert_file "dump was taken" "$CASE_DIR/stage/jomform-daily-$(date -u +%Y-%m-%d).dump.gz"
+assert_not_contains "the seam did not refuse" "refusing a partial-override run" "$RUN_LOG"
+teardown_case
+
 echo "case: the installed cron shape is NOT refused (no false positive on the nightly job)"
 # The four location knobs at their installed values with ENV_FILE/REMOTE_ROOT
 # unset is exactly what cron runs, and it must stay allowed — a seam that
@@ -901,11 +1118,27 @@ echo "case: the installed cron shape is NOT refused (no false positive on the ni
 # cron entry rather than by running it: executing the installed shape offline
 # would write to /var/backups on this host, and the property under test is the
 # classification, which is determined by what the cron line sets.
-cron_line="$(grep -m1 -F '/usr/local/bin/jomform-backup.sh' "$SCRIPT_DIR/README.md" || true)"
-if [ -z "$cron_line" ]; then
-  bad "no cron entry found in README to check the installed shape against"
-elif printf '%s' "$cron_line" | grep -qE 'JFBACKUP_|RCLONE_CONFIG='; then
-  bad "the documented cron entry overrides a seam knob — the guard would refuse the nightly job: $cron_line"
+#
+# Read the CRON ENTRY, not the first mention of the script: README line 8 is a
+# prose sentence that names the same path, so `grep -F` alone matches it and
+# the check below then reads prose instead of the cron entry and passes
+# vacuously. Take the fenced ```cron block (that IS the documented entry, so a
+# knob on a line-continuation is caught too); fall back to a cron-SHAPED line
+# (five scheduling fields, then the command) if the fence is renamed or absent.
+# Comment lines are ignored so a doc comment inside the fence cannot raise a
+# false positive. Nothing found is a FAIL: with nothing to read, the nightly
+# job's shape is unverified, which is not the same as "not refused".
+cron_field='[0-9*][^[:space:]]*'
+cron_re="^${cron_field}[[:space:]]+${cron_field}[[:space:]]+${cron_field}[[:space:]]+${cron_field}[[:space:]]+${cron_field}[[:space:]]+.*jomform-backup\\.sh([[:space:]]|\$)"
+cron_block="$(awk '/^```cron[[:space:]]*$/{f=1;next} /^```/{f=0} f' "$SCRIPT_DIR/README.md" || true)"
+if ! grep -qF 'jomform-backup.sh' <<<"$cron_block"; then
+  cron_block="$(grep -E "$cron_re" "$SCRIPT_DIR/README.md" | sed -n '1p' || true)"
+fi
+cron_knob_line="$(grep -vE '^[[:space:]]*#' <<<"$cron_block" | grep -E 'JFBACKUP_|RCLONE_CONFIG=' | sed -n '1p' || true)"
+if [ -z "$cron_block" ]; then
+  bad "no cron entry found in README to check the installed shape against (the nightly job's shape is unverified)"
+elif [ -n "$cron_knob_line" ]; then
+  bad "the documented cron entry overrides a seam knob — the guard would refuse the nightly job: $cron_knob_line"
 else
   ok "the cron entry sets none of the seam knobs (so the nightly job is never refused)"
 fi
@@ -925,12 +1158,188 @@ done
 # would let an operator point it at the scratch name and still be refused, and
 # requiring it to merely be non-empty would not distinguish default from set.
 for knob in JFBACKUP_ENV_FILE JFBACKUP_REMOTE JFBACKUP_REMOTE_ROOT; do
-  if grep -qE "^  if \[ -z \"\\\$\{${knob}:-\}\" \]; then" "$SCRIPT"; then
+  if grep -qE "^  if \[ -z \"\\\$\\{${knob}:-\\}\" \]; then" "$SCRIPT"; then
     ok "seam tests that $knob was PROVIDED (not that its value differs)"
   else
     bad "seam does not test provision of $knob"
   fi
 done
+# The escape hatch must open on the VALUE `1`, not on the variable merely being
+# set: `JFBACKUP_ALLOW_UNSAFE=0` is a caller writing the value that means NO, and
+# a `[ -n ... ]` test read it as YES — the run then reached the installed
+# credential file (JFBACKUP_ENV_FILE) and the installed inbox, while the WARN
+# quoted a `=1` nobody had set. Asserted on the source as well as by the cases
+# above, because the source is what a reader audits.
+if grep -qF 'if [ "${JFBACKUP_ALLOW_UNSAFE:-}" = "1" ]; then' "$SCRIPT"; then
+  ok "seam tests the hatch VALUE (only JFBACKUP_ALLOW_UNSAFE=1 opens it)"
+else
+  bad "seam does not test the hatch VALUE: JFBACKUP_ALLOW_UNSAFE=0 is treated as a deliberate real run that reaches JFBACKUP_ENV_FILE"
+fi
+
+echo "case: the SEAM IS NOT CONTAINMENT — an unnamed STATE_DIR lands in the INSTALLED default"
+# This is the case behind the README's corrected wording. The seam answers only
+# "cron job or hand-run"; it moves no path. Where a run's status file lands is
+# decided by the knobs THAT RUN names, and any knob it omits resolves to the
+# value installed on the host. Measured here on a copy of the script whose
+# installed defaults point inside the case dir, so the "installed default" of a
+# control pair is the case's own path and no host path is ever reachable.
+#
+# The pair is the whole point: the SAME run, one knob different. Named -> the
+# record goes to the scratch dir and the installed default stays untouched;
+# omitted -> the record goes to the installed default. A suite that could not
+# tell those two apart would be exactly as misleading as the README sentence
+# this case exists for.
+setup_case; touch_rclone_conf
+install_backup_copy "$CASE_DIR/inst-stage" "$CASE_DIR/state" "$RUN_LOG" "$CASE_DIR/lock" "$CASE_DIR/env" "$CASE_DIR/rclone.conf"
+
+# leg 1 (named): every containment knob named, so the record must NOT appear at
+# the installed default. Note this is also the README-recipe shape.
+rc="$(run_installed \
+  JFBACKUP_STAGE_DIR="$CASE_DIR/scratch-stage" \
+  JFBACKUP_STATE_DIR="$CASE_DIR/scratch-state" \
+  JFBACKUP_LOG_FILE="$RUN_LOG" \
+  JFBACKUP_LOCK_FILE="$CASE_DIR/scratch-lock" \
+  JFBACKUP_ENV_FILE="$CASE_DIR/env" \
+  JFBACKUP_REMOTE=googldrive \
+  JFBACKUP_REMOTE_ROOT=jfbackup-test \
+  -- --local-only)"
+assert_eq "named STATE_DIR: exit code" "exit=0" "$rc"
+assert_file "named STATE_DIR: the record is in the named scratch dir" "$CASE_DIR/scratch-state/last-run.json"
+assert_no_file "named STATE_DIR: the INSTALLED default was left alone" "$CASE_DIR/state/last-run.json"
+assert_no_file "named STATE_DIR: nothing was staged at the installed stage default" \
+  "$CASE_DIR/inst-stage/jomform-daily-$(date -u +%Y-%m-%d).dump.gz"
+
+# leg 2 (omitted): the same run with JFBACKUP_STATE_DIR left out. It still names
+# every other knob and still provides the three legs, so the seam is satisfied
+# and the run proceeds — and the record lands at the INSTALLED default. That is
+# the shape a reader of the bullet list (rather than of the recipe block) runs.
+# Leg 1's scratch state dir is removed first, so the "did not go there" assertion
+# below is about THIS run and not about leg 1's leftovers.
+rm -rf "$CASE_DIR/scratch-state"
+rc="$(run_installed \
+  JFBACKUP_STAGE_DIR="$CASE_DIR/scratch-stage" \
+  JFBACKUP_LOG_FILE="$RUN_LOG" \
+  JFBACKUP_LOCK_FILE="$CASE_DIR/scratch-lock" \
+  JFBACKUP_ENV_FILE="$CASE_DIR/env" \
+  JFBACKUP_REMOTE=googldrive \
+  JFBACKUP_REMOTE_ROOT=jfbtest-scratch \
+  -- --local-only)"
+assert_eq "omitted STATE_DIR: exit code (the seam is satisfied, so it runs)" "exit=0" "$rc"
+assert_not_contains "omitted STATE_DIR: it was not refused" "refusing a partial-override run" "$RUN_LOG"
+assert_file "omitted STATE_DIR: the record landed at the INSTALLED default" "$CASE_DIR/state/last-run.json"
+assert_contains "omitted STATE_DIR: and it is the run's own honest record" '"status": "OK"' "$CASE_DIR/state/last-run.json"
+assert_no_file "omitted STATE_DIR: the scratch dir it did not name stayed empty" "$CASE_DIR/scratch-state/last-run.json"
+teardown_case
+
+echo "case: the documented recipe and the suite helper both name every containment knob"
+# The README tells a reader that safety is the caller's by naming every knob, and
+# this suite's own cases depend on the same discipline through run_backup_script.
+# A helper (or recipe) that quietly stopped naming one of them would leave the
+# suite writing into the very paths it is supposed to stay out of — the defect
+# the README sentence used to assert was impossible. Asserted structurally AND
+# behaviourally above; this is the structural half, so a future edit that drops a
+# knob is caught in the same place the claim is made.
+#
+# The knob list is the knobs a run WRITES to (STAGE/STATE/LOG/LOCK — these are
+# the paths a run leaves behind) plus the three the seam requires to be provided.
+# RCLONE_CONFIG is deliberately absent: it is read-only, a --local-only run never
+# touches it, and the recipe documents omitting it.
+containment_knobs="JFBACKUP_STAGE_DIR JFBACKUP_STATE_DIR JFBACKUP_LOG_FILE JFBACKUP_LOCK_FILE JFBACKUP_ENV_FILE JFBACKUP_REMOTE JFBACKUP_REMOTE_ROOT"
+
+helper_body="$(sed -n '/^run_backup_script() {$/,/^}$/p' "$SCRIPT_DIR/jomform-backup_test.sh")"
+if [ -z "$helper_body" ]; then
+  bad "could not extract run_backup_script from the suite — this check measures nothing"
+else
+  for knob in $containment_knobs; do
+    if grep -qF "${knob}=" <<<"$helper_body"; then
+      ok "the suite helper names $knob"
+    else
+      bad "the suite helper does not name $knob — cases would write to the path installed on this host"
+    fi
+  done
+fi
+
+# The recipe block is extracted from the README rather than grepped loosely, so a
+# mention of a knob in prose does not satisfy it: only an assignment inside the
+# block counts.
+recipe="$(awk '
+  /^A hand-run therefore looks like this:$/ { grab = 1; next }
+  grab && /^```/ { fences++; if (fences == 2) exit; next }
+  grab { print }
+' "$SCRIPT_DIR/README.md")"
+if [ -z "$recipe" ]; then
+  bad "could not extract the hand-run recipe from README.md — this check measures nothing"
+else
+  for knob in $containment_knobs; do
+    if grep -qF "${knob}=" <<<"$recipe"; then
+      ok "the hand-run recipe names $knob"
+    else
+      bad "the hand-run recipe does not name $knob — a reader copying it reaches the installed path"
+    fi
+  done
+fi
+# And the false sentence itself must stay gone. It claimed the suite's safety was
+# a property of the SCRIPT; it is a property of the caller naming every knob, and
+# the wording that says otherwise is what sent two operators into production state.
+assert_not_contains "the README no longer claims safety is a property of the script" \
+  "safety is a property of the" "$SCRIPT_DIR/README.md"
+
+echo "case: the sidecar-verification case BITES — remove the re-read and it goes RED"
+# The assertion introduced for this defect bites: with the post-upload re-read of
+# the sidecar removed, an upload that exits 0 and stores nothing must take the
+# suite red instead of being reported as a healthy monthly copy.
+#
+# Same discipline as the case above: an exact literal swap on a COPY inside the
+# case dir, and a sabotage that fails to apply is reported as NOTFOUND rather
+# than passing silently — a bite case that never applied the mutation is a lie.
+setup_case; touch_rclone_conf
+cp "$SCRIPT" "$CASE_DIR/bite-target.sh"
+python3 - "$CASE_DIR/bite-target.sh" "$CASE_DIR/bite-applied.txt" <<'PY'
+import sys
+path, marker = sys.argv[1], sys.argv[2]
+src = open(path).read()
+# The verification this card added, as shipped...
+fixed = '''      elif ! SIDECAR_ERR="$(verify_remote "$sidecar_tmp" \\
+          "$MONTHLY_DIR/$MONTHLY_NAME.dump.gz.sha256" 2>&1)"; then
+        FAIL_DETAIL="monthly sidecar verification failed: $SIDECAR_ERR"
+        log ERROR "$FAIL_DETAIL"
+        monthly_ok=0
+      elif ! SIDECAR_ERR="$(verify_remote_content "$sidecar_tmp" \\
+          "$MONTHLY_DIR/$MONTHLY_NAME.dump.gz.sha256" 2>&1)"; then
+        FAIL_DETAIL="monthly sidecar verification failed: $SIDECAR_ERR"
+        log ERROR "$FAIL_DETAIL"
+        monthly_ok=0
+      else
+        log INFO "verified $MONTHLY_DIR/$MONTHLY_NAME.dump.gz.sha256"
+      fi'''
+# ...replaced by trusting the upload's exit status alone, which is exactly the
+# shape the card reported: "monthly copy ok" for a sidecar that is not in Drive.
+broken = '''      else
+        log INFO "uploaded $MONTHLY_DIR/$MONTHLY_NAME.dump.gz.sha256"
+      fi'''
+if src.count(fixed) != 1:
+    open(marker, 'w').write('NOTFOUND count=%d' % src.count(fixed))
+    sys.exit(3)
+open(path, 'w').write(src.replace(fixed, broken))
+open(marker, 'w').write('APPLIED')
+PY
+sab_status="$(cat "$CASE_DIR/bite-applied.txt" 2>/dev/null)"
+assert_eq "sabotage applied to the copy (NOTFOUND means this case proves nothing)" "APPLIED" "$sab_status"
+if bash -n "$CASE_DIR/bite-target.sh"; then ok "the sabotaged copy still parses"; else bad "the sabotaged copy does not parse"; fi
+# Same silent-drop remote as the case above: the sidecar's stream is discarded
+# while every other object lands, which is the failure the re-read exists for.
+sab_rc="$(run_backup_script "$CASE_DIR/bite-target.sh" JFBACKUP_DAY_OF_MONTH=01 STUB_RCLONE_MODE=ok \
+  STUB_SILENT_NAME="jomform-monthly-$(monthly_name).dump.gz.sha256" --)"
+# The pre-fix shape reports success and never notices: that is what made it silent.
+assert_eq "RED as required: without the re-read the run reports SUCCESS" "exit=0" "$sab_rc"
+assert_contains "RED as required: and it claimed the sidecar was uploaded" \
+  "uploaded googldrive:jfbackup-test/monthly/" "$RUN_LOG"
+if [ -e "$CASE_DIR/remote/jomform-monthly-$(monthly_name).dump.gz.sha256" ]; then
+  bad "the sabotaged run left a sidecar on the remote — the stub is wrong, not the proof"
+else
+  ok "RED as required: no sidecar on the remote, yet the suite's own case would have called it ok"
+fi
+teardown_case
 
 echo
 printf '%d passed, %d failed\n' "$PASSES" "$FAILURES"

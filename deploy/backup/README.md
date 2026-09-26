@@ -141,7 +141,18 @@ permissions"* and skips it silently — the log would grow unbounded.
 /usr/local/bin/jomform-backup.sh --local-only  # dump + verify locally, do not upload
 ```
 
-### A hand-run must not reach production — this is enforced, not advised
+### A hand-run must not reach production — the guard refuses the shape, it does not contain the run
+
+Read this distinction before the rule, because the rule reads like more than it is:
+
+**The fail-closed guard is a refusal rule, not containment.** It answers exactly one
+question — *is this the cron job, or a hand-run?* — and refuses a hand-run that left out a leg
+it would otherwise have reached production through. It never moves a path for you. Every
+file a run writes goes to the knobs **that run names**, and every knob it does not name keeps
+the value installed on the host. A hand-run is contained by the environment block under
+"A hand-run therefore looks like this" — by naming every path and credential knob — and by
+nothing else. `--local-only` is not containment either: it skips the upload, and the dump,
+the lock and the status file still land wherever the run's knobs point.
 
 The script is installed **outside** the checkout and reads its credentials from
 `/opt/jomform/.env` (real SES keys, real `SUPER_ADMIN_EMAILS`) and its
@@ -176,10 +187,22 @@ So the script now **fails closed on a partial override**:
   is fine). The test is "was it provided", not "does it differ from the default".
 - If one is missing the run prints one line naming it and exits non-zero
   **before any work**: no dump, no archive, no upload, no lock file, and
-  deliberately **no alert email** — the alert is half of what leaked.
+  deliberately **no alert email** — the alert is half of what leaked. It is not
+  "reached nothing" though: `fail()` writes the FAILED status into the run's own
+  `STATE_DIR` before the exit, so a refusal against the installed script still
+  touches production state. That is the `JFBACKUP_STATE_DIR` point below.
 - For a deliberate real run, set `JFBACKUP_ALLOW_UNSAFE=1`; the run logs a WARN
   naming the credential file and the remote it is about to reach, and records it
-  in syslog. It is not the default.
+  in syslog. It is not the default, and **only the value `1` opens it**: the
+  hatch is keyed on the value, not on the variable being set, so
+  `JFBACKUP_ALLOW_UNSAFE=0` — the value a caller writes to mean *no* — is **not**
+  a request for a deliberate real run and leaves the refusal in place. `false`,
+  an empty value (`export JFBACKUP_ALLOW_UNSAFE=`) and any other string behave the
+  same way. A run that sets the variable to a non-empty value other than `1`
+  logs a WARN saying why the hatch stayed shut; an empty value is the one shape
+  refused without that WARN, because the note is itself guarded on the variable
+  being non-empty — for `export JFBACKUP_ALLOW_UNSAFE=` the refusal is the signal
+  rather than a log line saying so.
 
 A hand-run therefore looks like this:
 
@@ -187,15 +210,46 @@ A hand-run therefore looks like this:
 JFBACKUP_STAGE_DIR=/tmp/jfbtest/stage \
 JFBACKUP_STATE_DIR=/tmp/jfbtest/state \
 JFBACKUP_LOG_FILE=/tmp/jfbtest/run.log \
+JFBACKUP_LOCK_FILE=/tmp/jfbtest/lock \
 JFBACKUP_ENV_FILE=/tmp/jfbtest/env \
 JFBACKUP_REMOTE=googldrive \
 JFBACKUP_REMOTE_ROOT=jfbtest-scratch \
   /usr/local/bin/jomform-backup.sh --local-only
 ```
 
-The same rule binds the committed test suite, which is the point: every case in
-`jomform-backup_test.sh` sets all of those knobs, so safety is a property of the
-script rather than of the caller remembering.
+Every line in that block is load-bearing, and it is not the guard that makes it so.
+
+- **`JFBACKUP_STATE_DIR` in particular must be named, or the run rewrites the job's own health
+  record.** The status file is `$STATE_DIR/last-run.json` (`last-failure.json` on failure, plus
+  `last-success.epoch` on success), and *a refused run writes it too*: the refusal path is
+  `fail()` then `write_status()`, which runs before the exit. So both directions reach the state
+  dir: a hand-run that omits only this knob overwrites the nightly job's `OK` record with its
+  own, and a refusal overwrites it with a `FAILED` record, which is the exact reading an
+  operator uses to answer "is the nightly backup healthy?". Two of these runs have already
+  happened on production and each needed hand-remediation. If you are only poking at the
+  script, move `JFBACKUP_STATE_DIR` (and `JFBACKUP_STAGE_DIR`) to a scratch directory even if
+  you expect the run to be refused.
+- `JFBACKUP_STAGE_DIR` is the mirror image for the artifacts: the dump, its `.sha256` sidecar
+  and the media archive are written under it, and a run that leaves it at its installed value
+  stages real dumps into the production staging directory.
+- `JFBACKUP_LOCK_FILE` is listed although it is not in the guard's must-be-provided set: it is
+  a knob whose move is not *required* for containment, but a run that leaves it installed takes
+  the nightly job's own lock (`flock`) and can make a concurrent cron run exit early.
+
+The same rule binds the committed test suite, which is the point, and it is the reason the
+suite is written the way it is: every case in `jomform-backup_test.sh` goes through a helper
+that names **all** of the containment knobs — the same discipline the block above asks of a
+human — so no case can accidentally reach the installed paths. The helper's own comment says
+so at its definition, and a final case asserts that the helper (and the recipe above) still
+name every one of those knobs: a helper that quietly stopped naming one would leave the suite
+writing into the very paths it exists to stay out of.
+
+What the guard *does* enforce is narrower, and it is stated above: a run that moved any of
+those knobs must **explicitly provide** `JFBACKUP_ENV_FILE`, `JFBACKUP_REMOTE` and
+`JFBACKUP_REMOTE_ROOT`, so that a run cannot reach the production credentials or the production
+Drive folder **by omission**. That is a test on what the caller provided, not a check that the
+run is contained, and it is deliberately not a licence to run against the installed script
+without the block above.
 
 ## Restore drill — run this, do not just trust the dump
 
@@ -259,7 +313,7 @@ sent; a failing run does not retry in a tight loop because the lock file
 
 ## Tested failure paths
 
-Every one of these is exercised by `jomform-backup_test.sh` (142 assertions,
+Every one of these is exercised by `jomform-backup_test.sh` (209 assertions,
 stubbed `rclone`/`docker`, no network and no database required) and every one of
 them is additionally proven to *bite* by sabotaging the script and requiring the
 suite to go red:
@@ -279,24 +333,53 @@ counted as caught, so the harness cannot inflate its own coverage:
 bash deploy/backup/jomform-backup_bite.sh
 ```
 
-It applies **twenty** sabotages in two groups. Twelve target the script's
+It applies **twenty-nine** sabotages in four groups. Thirteen target the script's
 failure handling: removed hash verification, removed post-upload verification,
 the `FAILED` line downgraded to `WARN`, removed empty-archive guard, unescaped
 status JSON, ignored restore failure, upload failure returning exit 0, a backend
 exposing no hash degrading to a size-only check, the `rclone is not installed`
 check removed, disabled remote check, a removed cron `PATH` pin (the bullet for
-it is in the list above), and a restore drill writing the backup job's status.
-Eight more mutate the fail-closed seam: the seam never called, the
+it is in the list above), a restore drill writing the backup job's status, and
+the monthly sidecar write failure reported as a healthy run.
+Nine more mutate the fail-closed seam: the seam never called, the
 `JFBACKUP_ENV_FILE` leg removed (the credential half that actually mailed the
 real inbox), the `JFBACKUP_REMOTE_ROOT` leg removed, the refusal moved below the
 mkdir+lock (so only the ordering assertions can catch it), the refusal also
-sending the alert email, the escape hatch defaulting to ON, the location knobs no
+sending the alert email, the escape hatch opening on a value that is not `1` (so
+`=0` behaves like `=1`), the escape hatch defaulting to ON, the location knobs no
 longer being watched, and the destination knobs no longer being watched.
+Two mutate the **documented cron entry** rather than the script: the entry
+altered to set a seam knob (so the documented nightly job is itself refusable),
+and the entry deleted outright (leaving the assertion nothing to read). Both are
+needed because that assertion once grepped README **line 8**, a prose sentence
+naming the same script path, so it read prose instead of the cron entry and
+reported `ok` whatever the entry set.
+The last five mutate **containment** rather than the seam, which is the
+distinction the hand-run section is built on: the README's recipe dropping a knob,
+the suite's own helper dropping one, the false "property of the script" sentence
+being restored, and the script ignoring a named `STATE_DIR` or `STAGE_DIR`.
 
-The monthly sidecar path is the one failure path proven to bite **inside the
-suite** rather than by this harness: `jomform-backup_test.sh` applies that
-sabotage itself, to a copy of the script in a temp dir, so the twenty above do
-not include it.
+**That harness runs inside a private mount namespace** (`unshare -m`, with a
+tmpfs over each installed-default path), and **refuses to run without one**. Two
+of the containment mutations make the mutated script resolve a knob to the value
+installed on the host, so an unsandboxed run of them stages real dumps and writes
+fabricated status files into the paths the production job owns. That failure is
+not hypothetical: the containment group leaked into the agent host's
+`/var/backups/jomform` and `/var/lib/jomform-backup` the first time it was run,
+and had to be hand-remediated. The wrapper is what makes this harness safe to
+keep, and removing it would reintroduce that leak.
+
+The monthly sidecar path has **two** exceptions to that, not one. The verbatim
+daily sidecar copy is sabotaged **inside the suite** — `jomform-backup_test.sh`
+does it itself, to a copy of the script in a temp dir, so the sabotages above do
+not include it. The *write failure* half is mutated by this harness, but only
+since that mutation was anchored on the monthly block itself: it used to anchor on
+the bare `    uploads_ok=0`, which occurs three times in `jomform-backup.sh` (the
+two daily loops and the monthly gate), so `replace(..., 1)` landed on the
+**daily** site and left this path unmutated while the README claimed the harness
+covered it. The case does bite either way — mutate the monthly gate alone and the
+suite goes red on that case's own `exit=1` / `FAILED` / `last-failure.json`
+assertions — so the gap was in what the harness applied, never in the assertion.
 
 Three of those twelve were **not** caught when this harness was first written
 against the suite, and the suite grew the assertions they need rather than the
@@ -326,7 +409,17 @@ resolves nothing).
   `pg_restore --list` and a run that yields no `TABLE DATA` entries fails rather
   than uploading a plausible-looking file.
 - **`rclone` is not installed at all** — the local dump still happens and the run
-  still fails loudly.
+  still fails loudly. The premise is expressed by removing `rclone` from the
+  path the script pins itself: a `JFBACKUP_PATH_PREFIX` cannot do it, because it
+  only *prepends* to `_SYS_PATH` and `/usr/bin` stays on the path — and a prefix
+  entry named `rclone` does not shadow the real one either, since bash skips any
+  PATH candidate that is not an executable regular file (a directory, a
+  non-executable file and a broken symlink were each measured to resolve through
+  on a host that has `/usr/bin/rclone`). The case therefore mirrors the six
+  pinned directories (symlinks, minus `rclone`) into the case dir and pins a
+  copy of the script's `_SYS_PATH` at it. The case asserts the premise holds —
+  `rclone` off that path, `python3`/`docker`/`gzip` still on it — and reports a
+  **failure**, not a skip, when the fixture cannot express it.
 - **The restore fails** — `--restore` exits non-zero and records the failure
   instead of reporting OK.
 - **The JSON status file must stay parseable** — an rclone error containing double
@@ -358,9 +451,15 @@ resolves nothing).
   `JFBACKUP_REMOTE_ROOT` missing, the run exits non-zero naming the missing
   variable and takes **no** dump, **no** media archive, **no** lock file and
   **sends no alert email** — asserted on the ordering (the stage directory is
-  byte-for-byte unchanged), not just on the exit code. The same run with those
-  knobs set proceeds normally, and `JFBACKUP_ALLOW_UNSAFE=1` is the deliberate
-  escape hatch that logs a WARN naming the credentials and remote it reached.
+  byte-for-byte unchanged), not just on the exit code. Note what the ordering
+  assertion covers and what it does not: the case moves `JFBACKUP_STATE_DIR` too,
+  so the refusal's own `write_status()` lands in the case's scratch state dir and
+  the stage dir is provably untouched. A refusal that left `JFBACKUP_STATE_DIR` at
+  its installed value would still write the FAILED record into the production
+  state dir — refusal ordering protects the dump, not the status file. The same
+  run with those knobs set proceeds normally, and `JFBACKUP_ALLOW_UNSAFE=1` is
+  the deliberate escape hatch that logs a WARN naming the credentials and remote
+  it reached.
 - **A destination-only override is a hand-run too** — a run that moves **only**
   `JFBACKUP_REMOTE`/`JFBACKUP_REMOTE_ROOT`, with no location knob moved at all, is
   refused for the same reason and with the same ordering: it is the shape an

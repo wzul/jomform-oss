@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Bite proof for the failure paths in jomform-backup.sh: the fail-closed test
-# seam, and the twelve legacy failure paths the README names as proven to bite.
+# seam, and the thirteen legacy failure paths the README names as proven to bite.
 #
 # A guard whose test still passes with the guard removed measures nothing. This
 # sabotages ONE part of the seam at a time in a throwaway copy of the directory,
@@ -14,6 +14,35 @@
 # Run:  bash deploy/backup/jomform-backup_bite.sh
 # Exit: 0 only if EVERY sabotage was caught.
 set -uo pipefail
+
+# --------------------------------------------------------------- sandbox (do not remove)
+# Two of the mutations below make the mutated script IGNORE an explicitly named
+# knob, so it resolves that knob to the value INSTALLED on the host — the state
+# dir, the staging dir. Run unsandboxed, that means this harness writes fabricated
+# status files and staged dumps into the very production paths the backup job
+# owns. That is not hypothetical: an earlier version of the new containment group
+# did exactly that while being written, and it had to be hand-remediated.
+#
+# So the whole harness re-execs itself inside a private mount namespace with a
+# tmpfs over each installed-default path before ANY mutation runs. A mutated
+# script can then only ever reach the overlay. If `unshare` is unavailable the
+# harness REFUSES to run rather than risk the host — a silent fallback to writing
+# production state is the failure this wrapper exists to prevent.
+if [ "${JFB_BITE_SANDBOXED:-0}" != "1" ]; then
+  if ! command -v unshare >/dev/null 2>&1; then
+    echo "REFUSING TO RUN: no \`unshare\`, and this harness must not run unsandboxed."
+    echo "Two of its mutations redirect the script's state/staging to the installed paths."
+    exit 2
+  fi
+  exec unshare -m --propagation private bash -c '
+    set -e
+    for d in /var/lib/jomform-backup /var/backups/jomform /var/lock /var/log; do
+      mkdir -p "$d"
+      mount -t tmpfs -o mode=0755 tmpfs "$d"
+    done
+    JFB_BITE_SANDBOXED=1 bash "$0"
+  ' "$0"
+fi
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DID_NOT_BITE=0
@@ -29,22 +58,32 @@ reset_work() {
 }
 
 # bite <label> <mutation-command...>
-# The mutation runs with $MUTATE_TARGET = the throwaway script path.
-bite() {
+# The mutation runs with $MUTATE_TARGET = the throwaway SCRIPT path.
+bite() { bite_one jomform-backup.sh "$@"; }
+
+# bite_readme <label> <mutation-command...>
+# Same contract, but $MUTATE_TARGET is the throwaway README.md: the suite reads
+# its cron assertion out of that file, so a README mutation is the only way to
+# show that assertion can fail at all.
+bite_readme() { bite_one README.md "$@"; }
+
+bite_one() { # <file to mutate, relative to the copied dir> <label> [mutation...]
+  local target="$1"; shift
   local label="$1"; shift
   echo "=============================================================="
   echo "SABOTAGE: $label"
   reset_work
-  local T="$WORK/jomform-backup.sh"
+  local T="$WORK/$target"
   MUTATE_TARGET="$T" "$@"
-  if cmp -s "$SRC/jomform-backup.sh" "$T"; then
+  if cmp -s "$SRC/$target" "$T"; then
     echo "  ABORT: the mutation changed nothing — the sabotage did not land"
     DID_NOT_BITE=$((DID_NOT_BITE + 1))
     return
   fi
-  # A mutation that leaves the script unparseable measures nothing either: every
-  # case would fail for the same crash, which is not evidence about the seam.
-  if ! bash -n "$T" 2>/dev/null; then
+  # A mutation that leaves the SCRIPT unparseable measures nothing: every case
+  # would fail for the same crash, which is not evidence about the seam. A
+  # README mutation has no parser to run.
+  if [ "$target" = "jomform-backup.sh" ] && ! bash -n "$T" 2>/dev/null; then
     echo "  ABORT: the mutation left the script unparseable (bash -n failed) — not a valid sabotage"
     bash -n "$T" 2>&1 | head -3 | sed 's/^/    /'
     DID_NOT_BITE=$((DID_NOT_BITE + 1))
@@ -54,9 +93,10 @@ bite() {
   out="$(bash "$WORK/jomform-backup_test.sh" 2>&1)"
   rc=$?
   summary="$(printf '%s\n' "$out" | tail -1)"
-  # Only a FAIL on an assertion the seam cases own counts as a bite: a red suite
-  # for an unrelated reason would otherwise be read as proof.
-  seam_fails="$(printf '%s\n' "$out" | grep -cE '^\s+FAIL .*(refusing|JFBACKUP_ENV_FILE|JFBACKUP_REMOTE|no dump was taken|no media archive|listing changed|no alert email|no ALERT|the drill never started|no lock file|seam does not watch|seam tests that|destination)' || true)"
+  # Only a FAIL on an assertion about the guard or about the documented cron
+  # shape counts as a bite: a red suite for an unrelated reason would otherwise
+  # be read as proof.
+  seam_fails="$(printf '%s\n' "$out" | grep -cE '^\s+FAIL .*(refusing|JFBACKUP_ENV_FILE|JFBACKUP_REMOTE|no dump was taken|no media archive|listing changed|no alert email|no ALERT|the drill never started|no lock file|seam does not watch|seam tests that|destination|cron entry)' || true)"
   if [ $rc -ne 0 ] && [ "${seam_fails:-0}" -gt 0 ]; then
     echo "  RESULT: RED ($seam_fails seam assertion(s) failed) — $summary"
     printf '%s\n' "$out" | grep -E '^\s+FAIL' | head -5 | sed 's/^/    /'
@@ -139,15 +179,27 @@ assert old in s, "anchor not found"
 new=chr(32)*2+"alert_email \"[JomForm] Backup REFUSED\" \"sabotage\""+chr(10)+old
 open(p,"w").write(s.replace(old,new,1))'
 
-# 6. The escape hatch made permissive: JFBACKUP_ALLOW_UNSAFE defaults to set, so
-#    no partial override is ever refused. A default-permissive seam is the same
-#    defect with a friendlier name.
+# 6. The escape hatch made permissive: JFBACKUP_ALLOW_UNSAFE opens the hatch
+#    whatever value it holds, so `JFBACKUP_ALLOW_UNSAFE=0` — a caller writing the
+#    value that means NO — is read as a deliberate real run. The exact
+#    pre-fix `[ -n ... ]` test, restored.
+bite "the escape hatch opens on a non-1 value (JFBACKUP_ALLOW_UNSAFE=0 behaves like =1)" \
+  python3 -c 'import os
+p=os.environ["MUTATE_TARGET"]; s=open(p).read()
+old="  if [ \"${JFBACKUP_ALLOW_UNSAFE:-}\" = \"1\" ]; then"
+assert old in s, "anchor not found"
+open(p,"w").write(s.replace(old,"  if [ -n \"${JFBACKUP_ALLOW_UNSAFE:-}\" ]; then",1))'
+
+# 6b. The escape hatch defaulting to ON: the value test widened to `:-1`, so an
+#     UNSET JFBACKUP_ALLOW_UNSAFE opens the hatch and no partial override is ever
+#     refused. A default-permissive seam is the same defect with a friendlier
+#     name, and only a case that leaves the variable unset can catch it.
 bite "escape hatch defaults to ON (the seam is permissive by default)" \
   python3 -c 'import os
 p=os.environ["MUTATE_TARGET"]; s=open(p).read()
-old="  if [ -n \"${JFBACKUP_ALLOW_UNSAFE:-}\" ]; then"
+old="  if [ \"${JFBACKUP_ALLOW_UNSAFE:-}\" = \"1\" ]; then"
 assert old in s, "anchor not found"
-open(p,"w").write(s.replace(old,"  if [ -n \"${JFBACKUP_ALLOW_UNSAFE:-1}\" ]; then",1))'
+open(p,"w").write(s.replace(old,"  if [ \"${JFBACKUP_ALLOW_UNSAFE:-1}\" = \"1\" ]; then",1))'
 
 # 7. The seam stops watching the four LOCATION knobs, so a hand-run that sets
 #    only STAGE_DIR is no longer recognised as a hand-run at all.
@@ -178,7 +230,7 @@ open(p,"w").write(s)'
 # Legacy failure-path mutations
 # =============================================================================
 # The seven mutations above all target the fail-closed seam. The README's
-# "Tested failure paths" section also makes the same claim for the twelve legacy
+# "Tested failure paths" section also makes the same claim for the thirteen legacy
 # failure paths the script protects, so they are sabotaged below too.
 #
 # A claim like that is only true if this file actually applies each sabotage —
@@ -243,7 +295,7 @@ bite_py() {
 }
 
 echo
-echo "### legacy failure paths — the twelve the README names as proven to bite"
+echo "### legacy failure paths — the thirteen the README names as proven to bite"
 
 # Hash verification removed: a corrupt or truncated upload passes on size alone.
 bite_py "removed hash verification" \
@@ -395,6 +447,176 @@ s = open(p).read()
 old = '  STATUS_FILE_NAME="last-restore-drill.json"'
 assert old in s, "anchor not found"
 new = '  STATUS_FILE_NAME="last-run.json" # SABOTAGE: drill writes the job status'
+open(p, "w").write(s.replace(old, new, 1))
+PY
+
+# 8. The documented cron line is made refusable, i.e. the nightly job would be
+#    refused by the seam — the exact failure the cron assertion exists to
+#    prevent. The script is untouched, so ONLY the assertion that reads the cron
+#    entry can go red. (Before this sabotage existed, that assertion grepped
+#    README line 8 — a prose sentence naming the same script path — so it read
+#    prose instead of the cron entry and stayed green here.)
+bite_readme "the documented cron entry sets a seam knob (the nightly job would be refused)" \
+  python3 -c 'import os
+p=os.environ["MUTATE_TARGET"]; s=open(p).read()
+old="17 2 * * * /usr/local/bin/jomform-backup.sh"
+assert old in s, "anchor not found"
+new="17 2 * * * JFBACKUP_STAGE_DIR=/tmp/x /usr/local/bin/jomform-backup.sh"
+open(p,"w").write(s.replace(old,new,1))'
+
+# 9. The documented cron line deleted. With nothing to read the nightly job's
+#    shape is unverified, so this must FAIL — a "no cron found" branch that
+#    reported ok would be the same vacuous check wearing a different coat.
+bite_readme "the documented cron entry is removed (nothing left to check)" \
+  python3 -c 'import os
+p=os.environ["MUTATE_TARGET"]; s=open(p).read()
+old="17 2 * * * /usr/local/bin/jomform-backup.sh >> /var/log/jomform-backup.log 2>&1"
+assert old in s, "anchor not found"
+new="# SABOTAGE: cron entry deleted"
+open(p,"w").write(s.replace(old,new,1))'
+
+# The monthly sidecar write failure no longer counted: the sidecar never lands on
+# the remote, but the run reports a healthy month with an unverifiable monthly
+# copy (exit 0, no `last-failure.json`).
+#
+# The anchor is the four-line monthly block, NOT the bare `    uploads_ok=0`: that
+# string occurs three times in the script (the two daily loops at :580 and :586,
+# and the monthly gate at :629), so `replace(..., 1)` silently lands on the DAILY
+# site and leaves the monthly one unmutated — which is exactly how this path came
+# to be claimed as covered while nothing anywhere mutated it. This block is the
+# only occurrence, so a future edit that moves or rewrites the monthly gate makes
+# this mutation ABORT rather than quietly mutate the daily path instead.
+bite_py "monthly sidecar write failure returning a healthy run" \
+  'log marks FAILED|last-failure.json written' <<'PY'
+import os
+p = os.environ["MUTATE_TARGET"]
+s = open(p).read()
+old = "  else\n    uploads_ok=0\n  fi\nfi"
+assert old in s, "anchor not found"
+new = "  else\n    : # SABOTAGE: monthly write failure swallowed\n  fi\nfi"
+open(p, "w").write(s.replace(old, new, 1))
+PY
+
+# bite_target <label> <expected-FAIL-regex> <relative-file-in-WORK> <<'PY' ... PY
+# Like bite_py, but mutates whichever file in the throwaway copy the property
+# lives in — the README's hand-run recipe and the suite's own helper are files a
+# case asserts about, so the sabotage has to land there, not in the script.
+# The parse check is applied to the script only; a mutated suite/README is
+# checked by the suite failing, which is the assertion under test.
+bite_target() {
+  local label="$1" expect="$2" rel="$3"
+  reset_work
+  local pyfile="$WORK/mutate.py"
+  cat >"$pyfile"
+  echo "=============================================================="
+  echo "SABOTAGE: $label"
+  local T="$WORK/$rel"
+  if [ ! -f "$T" ]; then
+    echo "  ABORT: $T does not exist in the throwaway copy"
+    DID_NOT_BITE=$((DID_NOT_BITE + 1)); return
+  fi
+  local before; before="$(sha256sum "$T" | cut -d' ' -f1)"
+  MUTATE_TARGET="$T" python3 "$pyfile"
+  if [ $? -ne 0 ]; then
+    echo "  ABORT: the mutation program failed to run — not a valid sabotage"
+    DID_NOT_BITE=$((DID_NOT_BITE + 1)); return
+  fi
+  if [ "$(sha256sum "$T" | cut -d' ' -f1)" = "$before" ]; then
+    echo "  ABORT: the mutation changed nothing — the sabotage did not land"
+    DID_NOT_BITE=$((DID_NOT_BITE + 1)); return
+  fi
+  local out rc summary owned
+  out="$(bash "$WORK/jomform-backup_test.sh" 2>&1)"
+  rc=$?
+  summary="$(printf '%s\n' "$out" | tail -1)"
+  owned="$(printf '%s\n' "$out" | grep -cE "^\s+FAIL .*($expect)" || true)"
+  if [ $rc -ne 0 ] && [ "${owned:-0}" -gt 0 ]; then
+    echo "  RESULT: RED ($owned assertion(s) on this path failed) — $summary"
+    printf '%s\n' "$out" | grep -E '^\s+FAIL' | head -5 | sed 's/^/    /'
+    CAUGHT=$((CAUGHT + 1))
+  else
+    echo "  RESULT: *** GREEN — THE SABOTAGE WAS NOT CAUGHT *** (rc=$rc, $summary)"
+    echo "    the suite passed with this sabotage in place, so nothing in it"
+    echo "    measures this path. First FAILs seen:"
+    printf '%s\n' "$out" | grep -E '^\s+FAIL' | head -5 | sed 's/^/      /'
+    DID_NOT_BITE=$((DID_NOT_BITE + 1))
+  fi
+  reset_work
+}
+
+# =============================================================================
+# Containment mutations — the guard is a refusal rule, not containment
+# =============================================================================
+# The README's hand-run section and the two cases at the end of the suite assert
+# a property the seam does NOT provide: that a run is contained because the knobs
+# naming its paths were provided. These mutations remove that property one way at
+# a time and require the suite to go red.
+#
+# Two of them are the reason this whole file runs inside a mount namespace (see
+# the sandbox block at the top): a script that ignores a named knob writes into
+# the path installed on the host.
+echo
+echo "### containment — the guard refuses, it does not contain"
+
+# The README's recipe drops JFBACKUP_STATE_DIR: a reader copying the block gets a
+# run whose status file lands in the installed state dir.
+bite_target "README recipe drops JFBACKUP_STATE_DIR" \
+  'the hand-run recipe does not name JFBACKUP_STATE_DIR' "README.md" <<'PY'
+import os
+p = os.environ["MUTATE_TARGET"]
+s = open(p).read()
+old = "JFBACKUP_STATE_DIR=/tmp/jfbtest/state \\\n"
+assert old in s, "anchor not found"
+open(p, "w").write(s.replace(old, "", 1))
+PY
+
+# The suite's own helper drops a knob: every case run through it would then reach
+# the path installed on the host.
+bite_target "suite helper drops JFBACKUP_STATE_DIR" \
+  'the suite helper does not name JFBACKUP_STATE_DIR' "jomform-backup_test.sh" <<'PY'
+import os
+p = os.environ["MUTATE_TARGET"]
+s = open(p).read()
+old = '      JFBACKUP_STATE_DIR="$CASE_DIR/state" \\\n'
+assert old in s, "anchor not found"
+open(p, "w").write(s.replace(old, "", 1))
+PY
+
+# The false sentence is put back: "safety is a property of the script".
+bite_target "false 'property of the script' sentence restored" \
+  'no longer claims safety is a property of the script' "README.md" <<'PY'
+import os
+p = os.environ["MUTATE_TARGET"]
+s = open(p).read()
+old = "The same rule binds the committed test suite"
+assert old in s, "anchor not found"
+new = "safety is a property of the script rather than of the caller remembering. " + old
+open(p, "w").write(s.replace(old, new, 1))
+PY
+
+# The script ignores an explicitly named STATE_DIR. The control pair in the suite
+# must flip: the "named" leg writes to the installed state dir.
+bite_py "script ignores a named STATE_DIR" \
+  'named STATE_DIR' <<'PY'
+import os
+p = os.environ["MUTATE_TARGET"]
+s = open(p).read()
+old = 'STATE_DIR="${JFBACKUP_STATE_DIR:-$STATE_DIR_DEFAULT}"'
+assert old in s, "anchor not found"
+new = 'STATE_DIR="$STATE_DIR_DEFAULT"  # SABOTAGE: knob ignored'
+open(p, "w").write(s.replace(old, new, 1))
+PY
+
+# The script ignores an explicitly named STAGE_DIR: the "named" leg stages its
+# dump into the installed staging dir.
+bite_py "script ignores a named STAGE_DIR" \
+  'named STATE_DIR: nothing was staged' <<'PY'
+import os
+p = os.environ["MUTATE_TARGET"]
+s = open(p).read()
+old = 'STAGE_DIR="${JFBACKUP_STAGE_DIR:-$STAGE_DIR_DEFAULT}"'
+assert old in s, "anchor not found"
+new = 'STAGE_DIR="$STAGE_DIR_DEFAULT"  # SABOTAGE: knob ignored'
 open(p, "w").write(s.replace(old, new, 1))
 PY
 

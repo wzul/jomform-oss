@@ -267,10 +267,23 @@ fi
 # that only refused a *changed* value would let the dangerous shape through.
 enforce_test_seam() {
   [ -n "$UNSAFE_KNOBS" ] || return 0   # the installed nightly job: nothing to do
-  if [ -n "${JFBACKUP_ALLOW_UNSAFE:-}" ]; then
-    log WARN "JFBACKUP_ALLOW_UNSAFE=1: ${UNSAFE_KNOBS} overridden and the escape hatch was used deliberately. This run WILL read credentials from $ENV_FILE and write to $REMOTE:$REMOTE_ROOT."
+  # The hatch opens on the VALUE, not on the variable being set. A `[ -n ... ]`
+  # test here read `JFBACKUP_ALLOW_UNSAFE=0` — the value a caller writes to mean
+  # "no" — exactly like `=1`: the run reached the installed credential file and
+  # mailed the installed super-admin inbox without anyone asking for a
+  # deliberate real run, and the WARN below quoted a `=1` that had never been
+  # set, which put a false statement in the audit record such a run relies on.
+  # `1` is the documented value; anything else leaves the seam refusing.
+  if [ "${JFBACKUP_ALLOW_UNSAFE:-}" = "1" ]; then
+    log WARN "JFBACKUP_ALLOW_UNSAFE=${JFBACKUP_ALLOW_UNSAFE}: ${UNSAFE_KNOBS} overridden and the escape hatch was used deliberately. This run WILL read credentials from $ENV_FILE and write to $REMOTE:$REMOTE_ROOT."
     syslog_alert user.warning "jomform-backup: unsafe override allowed (${UNSAFE_KNOBS}); reached $ENV_FILE and $REMOTE:$REMOTE_ROOT"
     return 0
+  fi
+  # A caller who set the variable to anything else may believe they asked for a
+  # deliberate run, so say why the hatch stayed shut rather than leaving them to
+  # re-read the guard. Not a refusal by itself — the refusal below is unchanged.
+  if [ -n "${JFBACKUP_ALLOW_UNSAFE:-}" ]; then
+    log WARN "JFBACKUP_ALLOW_UNSAFE=${JFBACKUP_ALLOW_UNSAFE} did not open the escape hatch: only the value 1 does."
   fi
   # Each of these three falls back to a PRODUCTION value when omitted: the real
   # credential file, the real remote, the real folder inside it. "Provided"
@@ -346,6 +359,41 @@ print(d[0]["Size"] if d else "")' 2>/dev/null)"
     echo "remote hash mismatch for $remote_path: local md5=$want_hash remote md5=$got_hash"
     return 1
   fi
+  return 0
+}
+
+# verify_remote_content <local_file> <remote_path>
+# The sibling of verify_remote, for an object this script GENERATES from a
+# string rather than reading off disk. `rclone rcat` is a write-through: its
+# exit status describes the COMMAND, not the object, so an rclone that consumes
+# stdin, exits 0 and stores nothing leaves neither an object nor an error —
+# exactly the silent failure this script exists to make loud. Read it back and
+# compare it with the bytes that were sent: the script still holds them, so the
+# comparison does not depend on the backend exposing a hash for the object.
+verify_remote_content() {
+  local local_file="$1" remote_path="$2" want_file want_hash got_hash
+  want_file="$(mktemp)"
+  if ! rclone --config "$RCLONE_CONFIG" cat "$remote_path" >"$want_file" 2>/dev/null; then
+    rm -f "$want_file"
+    echo "remote object missing or unreadable after write: $remote_path"
+    return 1
+  fi
+  # sha256sum rather than cmp: it is already a dependency of this script (the
+  # daily sidecar it verifies is produced by it), so the check adds no tool the
+  # installed job does not already need.
+  want_hash="$(sha256sum "$local_file" | cut -d' ' -f1)"
+  got_hash="$(sha256sum "$want_file" | cut -d' ' -f1)"
+  if [ "$want_hash" != "$got_hash" ]; then
+    # Read both back BEFORE deleting: the message is what makes the failure
+    # actionable, and an empty one would be worse than none.
+    local sent got
+    sent="$(tr -d '\n' <"$local_file" | cut -c1-120)"
+    got="$(tr -d '\n' <"$want_file" | cut -c1-120)"
+    rm -f "$want_file"
+    echo "remote content mismatch for $remote_path: sent '$sent', remote '${got:-<absent>}'"
+    return 1
+  fi
+  rm -f "$want_file"
   return 0
 }
 
@@ -609,6 +657,12 @@ if [ "$DAY_OF_MONTH" = "01" ]; then
   # Same digest (the copy is server-side, so the bytes are identical), monthly
   # name, bare basename so it resolves beside the object in any directory the
   # reader downloaded the pair into.
+  #
+  # The upload goes to a LOCAL temp file and is then `copy`d like every other
+  # upload in this script, so it gets the same post-upload re-read. A piped
+  # `rcat` was the one write in this script whose exit status was trusted: an
+  # rclone that consumes stdin, exits 0 and stores nothing reported a healthy
+  # monthly copy whose sidecar was never in Drive.
   if [ "$monthly_ok" = "1" ]; then
     local_sidecar="$STAGE_DIR/$DAILY_NAME.dump.gz.sha256"
     digest="$(cut -d' ' -f1 "$local_sidecar" 2>/dev/null || true)"
@@ -616,11 +670,33 @@ if [ "$DAY_OF_MONTH" = "01" ]; then
       FAIL_DETAIL="monthly sidecar: no digest in $local_sidecar"
       log ERROR "$FAIL_DETAIL"
       monthly_ok=0
-    elif ! printf '%s  %s\n' "$digest" "$MONTHLY_NAME.dump.gz" \
-        | rclone --config "$RCLONE_CONFIG" rcat "$MONTHLY_DIR/$MONTHLY_NAME.dump.gz.sha256" 2>/dev/null; then
-      FAIL_DETAIL="monthly sidecar write failed: $MONTHLY_DIR/$MONTHLY_NAME.dump.gz.sha256"
-      log ERROR "$FAIL_DETAIL"
-      monthly_ok=0
+    else
+      # The temp file must carry the DESTINATION's basename: rclone copy takes
+      # the object's name from the source path, so a bare mktemp name would
+      # upload the right bytes under a garbage name.
+      sidecar_dir="$(mktemp -d)"
+      sidecar_tmp="$sidecar_dir/$MONTHLY_NAME.dump.gz.sha256"
+      # The exact bytes the rcat used to send: the digest from the daily
+      # sidecar, two spaces, the monthly basename.
+      printf '%s  %s\n' "$digest" "$MONTHLY_NAME.dump.gz" >"$sidecar_tmp"
+      if ! upload_file "$sidecar_tmp" "$MONTHLY_DIR"; then
+        FAIL_DETAIL="monthly sidecar upload failed: $MONTHLY_DIR/$MONTHLY_NAME.dump.gz.sha256"
+        log ERROR "$FAIL_DETAIL"
+        monthly_ok=0
+      elif ! SIDECAR_ERR="$(verify_remote "$sidecar_tmp" \
+          "$MONTHLY_DIR/$MONTHLY_NAME.dump.gz.sha256" 2>&1)"; then
+        FAIL_DETAIL="monthly sidecar verification failed: $SIDECAR_ERR"
+        log ERROR "$FAIL_DETAIL"
+        monthly_ok=0
+      elif ! SIDECAR_ERR="$(verify_remote_content "$sidecar_tmp" \
+          "$MONTHLY_DIR/$MONTHLY_NAME.dump.gz.sha256" 2>&1)"; then
+        FAIL_DETAIL="monthly sidecar verification failed: $SIDECAR_ERR"
+        log ERROR "$FAIL_DETAIL"
+        monthly_ok=0
+      else
+        log INFO "verified $MONTHLY_DIR/$MONTHLY_NAME.dump.gz.sha256"
+      fi
+      rm -rf "$sidecar_dir"
     fi
   fi
   if [ "$monthly_ok" = "1" ]; then
