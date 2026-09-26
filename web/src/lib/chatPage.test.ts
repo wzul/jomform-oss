@@ -25,11 +25,23 @@
 //      happen; if the `filed` branch is dropped from the transcript the thread
 //      still appears on /feedback, so nothing else would fail.
 //   6. The i18n keys, in all five locales.
+//   7. THE TRANSLATION HALF OF THE SAME FILE THAT #747'S SCOPE IS GUARDED IN.
+//      The availability fetch passes runLoad an `errorKey` routing the server's
+//      machine `code` through lib/apiErr, so a refused request reads as the
+//      localized reason rather than the page's generic "the assistant is
+//      unavailable". Losing ONLY that half is invisible to the whole suite —
+//      measured, not reasoned about (see the test's comment for the numbers) —
+//      so this file pins it in the direction that was missing. The scope half
+//      and the translation half are pinned by the two adjacent tests.
 //
 // WHAT IT DOES NOT COVER (stated honestly): it cannot execute React, so it does
 // not observe the rendered transcript, the scroll, or the Enter-to-send key
 // handling. The server-side behaviour (read-only refusal, filing, limits) is
-// pinned by the Go tests, which is where that behaviour actually lives.
+// pinned by the Go tests, which is where that behaviour actually lives. The
+// translation half is pinned ONLY once the tree carries the #6177 mechanism —
+// the guard says which state it judged rather than passing quietly, and it
+// cannot make the mechanism's own absence a failure (that is a different card's
+// business, and this file must stay green on the tree that has no lib/apiErr).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -38,11 +50,65 @@ import { fileURLToPath } from "node:url";
 import { join, relative } from "node:path";
 
 import { DICT, LANGS } from "../components/i18nDict.ts";
+// The repo's shared comment/JSX-text-aware blanker (see its header): a class or
+// an option quoted in a comment must neither raise nor satisfy an assertion.
+// Imported rather than re-implemented — the copy this replaces had a defect that
+// only surfaced on a page neither guard had seen yet.
+import { codeOnly } from "./jsxSource.ts";
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
 const path = (rel: string) => fileURLToPath(new URL(rel, import.meta.url));
 const readAbs = (abs: string) => readFileSync(abs, "utf8");
 const appDir = fileURLToPath(new URL("../app", import.meta.url));
+
+/**
+ * Every `page.tsx` under `src/app`, as absolute paths.
+ *
+ * Module scope rather than inside a test: two guards read this census now (the
+ * workspace scope, and the machine-code translation on runLoad call sites), and
+ * a page that one of them judges must be judged by both. Hoisted so the two
+ * cannot drift into looking at different sets of files.
+ */
+function walkAppPages(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir)) {
+    const p = join(dir, entry);
+    if (statSync(p).isDirectory()) out.push(...walkAppPages(p));
+    else if (entry === "page.tsx") out.push(p);
+  }
+  return out;
+}
+const pages = walkAppPages(appDir);
+
+/** The source root (`web/src`), for censuses that are not page-shaped. */
+const srcDir = fileURLToPath(new URL("..", import.meta.url));
+
+/**
+ * Every source file under `src` that MENTIONS `runLoad` — pages, components and
+ * lib alike — as paths relative to `src`.
+ *
+ * Found by content, not by an allowlist of names: the guard's job is to judge
+ * every call site that exists, and a hard-coded list of files is how a new one
+ * ships unjudged. `.test.*` files are excluded (they hold expected strings, not
+ * call sites).
+ */
+function walkRunLoadFiles(dir: string, base: string = dir): string[] {
+  const out: string[] = [];
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const full = `${dir}${e.name}`;
+    if (e.isDirectory()) {
+      if (e.name === "node_modules" || e.name.startsWith(".")) continue;
+      out.push(...walkRunLoadFiles(`${full}/`, base));
+    } else if (
+      (e.name.endsWith(".tsx") || e.name.endsWith(".ts")) &&
+      !/\.test\.tsx?$/.test(e.name) &&
+      readFileSync(full, "utf8").includes("runLoad(")
+    ) {
+      out.push(full.slice(base.length));
+    }
+  }
+  return out.sort();
+}
 
 const page = read("../app/chat/page.tsx");
 const shell = read("../components/Shell.tsx");
@@ -547,16 +613,9 @@ test("no dashboard page calls an ACCOUNT-scoped REST route without the workspace
   //
   // Everything else under /api/rest/ that a Shell page calls IS account-scoped:
   // the lists, the products, the builder, settings, deliveries, templates.
-  const walk = (dir: string): string[] => {
-    const out: string[] = [];
-    for (const entry of readdirSync(dir)) {
-      const p = join(dir, entry);
-      if (statSync(p).isDirectory()) out.push(...walk(p));
-      else if (entry === "page.tsx") out.push(p);
-    }
-    return out;
-  };
-  const pages = walk(appDir);
+  //
+  // `pages` is the module-level census (walkAppPages above) so this guard and the
+  // machine-code guard below judge the same set of files.
   assert.ok(
     pages.length >= 13,
     `expected the dashboard's pages, got ${pages.length} — the walk must be finding the real app tree`,
@@ -564,13 +623,19 @@ test("no dashboard page calls an ACCOUNT-scoped REST route without the workspace
 
   // Routes whose data is the PERSON's, not an account's (see above).
   const USER_LEVEL = /\/api\/rest\/(feedback|uploads\/avatar|profile\/avatar)/;
-  // Comment-stripped: the pages document the ?workspace= rule in prose.
-  const stripComments = (src: string) =>
-    src
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .split("\n")
-      .filter((l) => !/^\s*(\/\/|\*)/.test(l))
-      .join("\n");
+  // Comments stripped by the repo's SHARED, JSX-text-aware blanker — the pages
+  // document the ?workspace= rule in prose, and a class quoted in a comment must
+  // not satisfy this census.
+  //
+  // It used to hand-roll `src.replace(/\/\*[\s\S]*?\*\//g, "")`, and that copy
+  // carried the bug jsxSource.ts exists to remove (measured on this tree, not
+  // reasoned about): JSX text renders literals like `/v1/rest/*`, whose `/`+`*`
+  // opened a phantom block comment that blanked 12,419 characters of
+  // app/forms/page.tsx — including its /api/rest/ URLs. A page with EVERY
+  // workspaceQuery removed then read GREEN, because the census could no longer
+  // see what it was supposed to judge. `codeOnly` keeps every byte offset, so the
+  // census sees the same bytes a compiler would.
+  const stripComments = (src: string) => codeOnly(src);
 
   const offenders: string[] = [];
   let subjectPages = 0;
@@ -601,6 +666,241 @@ test("no dashboard page calls an ACCOUNT-scoped REST route without the workspace
   assert.ok(
     pages.some((p) => p.endsWith(join("app", "chat", "page.tsx"))),
     "the walk did not include app/chat/page.tsx — the page whose omission this guard exists for",
+  );
+});
+
+// ── THE TRANSLATION HALF (the #6177 direction this file was missing) ─────────
+//
+// WHAT BROKE, AND WHY IT WAS INVISIBLE. The scope test above fires the moment
+// #747's `workspaceQuery()` leaves the chat page. The other half of the SAME
+// call site — #6177's `errorKey: (b) => translateApiErr(b, t)`, which turns the
+// server's machine `code` into the user's language — had no guard at all.
+// Measured on a real merge candidate (PR 742 x main, chat/page.tsx resolved as
+// the union of both), neutralising that `errorKey` by value:
+//
+//     node --test src/lib/chatPage.test.ts src/lib/apiErr.test.ts
+//       -> tests 24, pass 24, fail 0        (before this test existed)
+//
+// and the page silently went back to printing only its own generic
+// "the assistant is unavailable" for a refusal the server named precisely.
+// `apiErr.test.ts`'s banned-shape scan looks for `body.error ||` fallbacks —
+// dropping the option entirely is not that shape, so nothing noticed.
+//
+// WHY THE EXTRACTOR IS THE POINT. The obvious guard is `page.includes(...)`,
+// and it is the one that fails: `errorKey` is a property name that also occurs
+// in `lib/workspace.ts`, so a substring check passes on a page that dropped it.
+// The two helpers below read the call site's actual argument object and the
+// actual value of its `errorKey`, and every assertion quotes what it saw — so a
+// wrong read reports a wrong value rather than a confident green.
+
+/**
+ * The source of every `runLoad(...)` call in `src`.
+ *
+ * Balanced-paren slice from the call's `(` to its matching `)`. Deliberately not
+ * a full TypeScript parse: the file under test is the thing being judged, and a
+ * guard that needs the parser stack to hold an opinion about it would be a
+ * heavier dependency than the two properties it checks (the call is a chat call;
+ * its `errorKey` routes through apiErr). Offsets are irrelevant here, only the
+ * slice's text is.
+ */
+function runLoadCalls(src: string): string[] {
+  const out: string[] = [];
+  const re = /\brunLoad\s*\(/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src))) {
+    let i = m.index + m[0].length;
+    let depth = 1;
+    let quote = "";
+    for (; i < src.length && depth > 0; i++) {
+      const c = src[i];
+      if (quote) {
+        if (c === "\\") i++;
+        else if (c === quote) quote = "";
+        continue;
+      }
+      if (c === '"' || c === "'" || c === "`") {
+        quote = c;
+        continue;
+      }
+      if (c === "(" || c === "{" || c === "[") depth++;
+      else if (c === ")" || c === "}" || c === "]") depth--;
+    }
+    out.push(src.slice(m.index, i));
+  }
+  return out;
+}
+
+/**
+ * The literal source text of `key`'s value inside a call slice, or null when the
+ * key is absent. Stops at the depth-0 `,` or closing bracket, so a caller reads
+ * `"\"" ` for `errorKey: ""` and the arrow function itself for the real site.
+ */
+function propValue(slice: string, key: string): string | null {
+  const m = new RegExp(`(?<![\\w$])${key}\\s*:\\s*`).exec(slice);
+  if (!m) return null;
+  let i = m.index + m[0].length;
+  let depth = 0;
+  let quote = "";
+  const start = i;
+  for (; i < slice.length; i++) {
+    const c = slice[i];
+    if (quote) {
+      if (c === "\\") i++;
+      else if (c === quote) quote = "";
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") {
+      quote = c;
+      continue;
+    }
+    if (c === "(" || c === "{" || c === "[") depth++;
+    else if (c === ")" || c === "}" || c === "]") {
+      if (depth === 0) break;
+      depth--;
+    } else if (c === "," && depth === 0) break;
+  }
+  return slice.slice(start, i).trim();
+}
+
+test("the chat page's availability fetch keeps the machine-code translation, not only the scope", () => {
+  // The tree's state, read rather than assumed. On the branch that carries
+  // #6177 the mechanism is lib/apiErr; on a tree without it the option does not
+  // exist anywhere in the app and there is nothing to pin yet. Both states are
+  // stated in the assertion message below, so neither can be mistaken for the
+  // other in a log.
+  const treeHasApiErr = existsSync(path("./apiErr.ts"));
+  const appHasErrorKey = walkRunLoadFiles(srcDir).some((rel) =>
+    /(?<![\w$])errorKey\s*:/.test(readAbs(join(srcDir, rel))),
+  );
+  assert.ok(
+    !appHasErrorKey || treeHasApiErr,
+    "a page passes runLoad an `errorKey` but lib/apiErr.ts does not exist — the option " +
+      "has no meaning on a tree without the #6177 mechanism",
+  );
+
+  // THE call site. Isolated by its URL rather than by a line number, so an edit
+  // above it cannot silently move the guard onto a different call.
+  const pageCode = codeOnly(page);
+  const availability = runLoadCalls(pageCode).filter((s) => /\/api\/rest\/chat\b/.test(s));
+  assert.equal(
+    availability.length,
+    1,
+    `expected exactly one runLoad site on the chat availability route, found ` +
+      `${availability.length}: this guard judges one call site and refuses to guess which`,
+  );
+  const site = availability[0];
+
+  if (!treeHasApiErr) {
+    // The #6177 mechanism is not in this tree, so the option does not exist to
+    // pass. NOT a pass on the behaviour — the state the guard judged, said out
+    // loud. The moment lib/apiErr.ts lands, the branches below are live and the
+    // failure above (a page using `errorKey` without the module) is impossible.
+    assert.equal(
+      propValue(site, "errorKey"),
+      null,
+      "the tree has no lib/apiErr.ts yet the page passes an errorKey — see the assertion " +
+        "above this one",
+    );
+    return;
+  }
+
+  // The union is the thing that must survive: the scope AND the translation on
+  // the one call. The scope's half is asserted by the test above; its presence
+  // is re-checked here in the same slice only so a failure names the whole
+  // call site rather than one half of it.
+  assert.match(
+    site,
+    /\/api\/rest\/chat\$\{workspaceQuery\(\)\}/,
+    `the chat availability fetch lost #747's workspace scope — an unscoped chat call ` +
+      `resolves the user's FIRST account, not the workspace they selected. Site: ${site.trim()}`,
+  );
+
+  const value = propValue(site, "errorKey");
+  assert.notEqual(
+    value,
+    null,
+    `the chat availability fetch has no errorKey — the server's machine code is dropped and ` +
+      `the user reads only the page's generic "the assistant is unavailable" for a refusal ` +
+      `the server named precisely (#6177). Site: ${site.trim()}`,
+  );
+  assert.match(
+    value as string,
+    /\btranslateApiErr\s*\(/,
+    `the chat availability fetch's errorKey (${JSON.stringify(value)}) does not route through ` +
+      `translateApiErr, so the API's machine code is not translated to the user's language (#6177)`,
+  );
+  assert.match(
+    value as string,
+    /\bt\b/,
+    `the errorKey at ${JSON.stringify(value)} does not receive the page's translator, so it ` +
+      `cannot render anything localized`,
+  );
+
+  // And #6177's helper is really in this file: the option is a function of the
+  // imported module, not a local re-implementation the guard would happily read.
+  assert.match(
+    pageCode,
+    /import\s*\{[^}]*\btranslateApiErr\b[^}]*\}\s*from\s*"\.\.\/\.\.\/lib\/apiErr"/,
+    "app/chat/page.tsx's errorKey names translateApiErr without importing it from lib/apiErr",
+  );
+});
+
+test("every runLoad call site that translates an API code routes through lib/apiErr", () => {
+  // THE CLASS, not just the chat instance above. A hand-rolled body read —
+  // `errorKey: (b) => (b as any).code` — re-introduces exactly the defect the
+  // option exists to remove: an untranslated machine key rendered to the user.
+  //
+  // The census is every runLoad CALL SITE under src/, found by reading the files
+  // that mention runLoad — NOT the app/ page walk. Five of the app's sites live
+  // in a component (components/MembersTab.tsx) rather than a page.tsx, and a
+  // census that judged only pages would leave those unread while looking
+  // complete. Measured: with the page-shaped census, neutralising MembersTab's
+  // errorKey left this file fully green (25/25) and the hole was invisible.
+  //
+  // Guarded on the tree's state for the same reason the chat test is: without
+  // lib/apiErr.ts in the tree the option does not exist to judge.
+  if (!existsSync(path("./apiErr.ts"))) return;
+
+  const ROUTES_THROUGH_APIERR = /\b(translateApiErr|apiErrorKey|apiErr)\s*\(/;
+  const callSiteFiles = walkRunLoadFiles(srcDir);
+  assert.ok(
+    callSiteFiles.length >= 15,
+    `expected the app's runLoad call sites across at least 15 files, found ` +
+      `${callSiteFiles.length} — the census is not seeing the real tree`,
+  );
+  const offenders: string[] = [];
+  let errorKeySites = 0;
+  for (const rel of callSiteFiles) {
+    for (const s of runLoadCalls(codeOnly(readAbs(join(srcDir, rel))))) {
+      const v = propValue(s, "errorKey");
+      if (v === null) continue;
+      errorKeySites += 1;
+      if (!ROUTES_THROUGH_APIERR.test(v)) {
+        offenders.push(`${rel}: errorKey: ${v}`);
+      }
+    }
+  }
+  // A census that reads few errorKeys would pass vacuously the moment the
+  // extractor stopped parsing — the count is asserted for the same reason the
+  // page walk's is. The floor is a little below the 26 sites the app has today,
+  // so adding or removing a call site is not itself a failure.
+  assert.ok(
+    errorKeySites >= 20,
+    `only ${errorKeySites} errorKey call site(s) were read across ${callSiteFiles.length} files ` +
+      `— the extractor is not seeing the argument objects it claims to judge`,
+  );
+  assert.deepEqual(
+    offenders,
+    [],
+    `these runLoad sites build their errorKey without the lib/apiErr helpers, so the server's ` +
+      `machine code is not translated the way #6177 requires:\n  ${offenders.join("\n  ")}`,
+  );
+  // The component the page-shaped census missed must really be in the walk,
+  // otherwise this guard can silently shrink back to pages-only.
+  assert.ok(
+    callSiteFiles.some((rel) => rel.endsWith("components/MembersTab.tsx")),
+    "MembersTab.tsx is not in the call-site walk — the census is pages-only again, and a " +
+      "component's errorKey would go unjudged (the measured hole this test exists for)",
   );
 });
 
