@@ -302,7 +302,8 @@ func TestIssue491MenuOrderRateLimitStillApplies(t *testing.T) {
 func TestIssue491RateLimitKeyIsPerForm(t *testing.T) {
 	h := &PublicHandlers{FormLimiter: middleware.NewRateLimiter(0, 1)}
 	req := httptest.NewRequest(http.MethodPost, "/menu/order", nil)
-	req.RemoteAddr = "203.0.113.9:1234"
+	// The test's own address (testIP), never a literal — see testIP.
+	req.RemoteAddr = testIP(t) + ":1234"
 
 	if h.antiSpamCheckRateLimitKey(req, "form-one") {
 		t.Fatalf("first submit for form-one should be allowed")

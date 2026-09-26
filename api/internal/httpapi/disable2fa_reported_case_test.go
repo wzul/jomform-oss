@@ -53,15 +53,16 @@ func twoFAStateFromDB(t *testing.T, userID string) (secret string, enabled bool)
 // TestDisable2FAWithCurrentCodeOnMagicSession is the reported case, end to end
 // through the real mux: magic-link session + 2FA + a current code.
 func TestDisable2FAWithCurrentCodeOnMagicSession(t *testing.T) {
+	ip := testIP(t)
 	h, _, mailer := authTestFixture(t)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
 	email := fmt.Sprintf("disable2fa-magic-%d@example.test", time.Now().UnixNano())
-	registerAndVerify(t, h, email, "password123", "10.40.1.1")
+	registerAndVerify(t, h, email, "password123", ip)
 
 	// Establish a non-magic session and enable 2FA on it.
-	pw := postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": "password123"}, "10.40.1.1")
+	pw := postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": "password123"}, ip)
 	baseSession := sessionTokenValue(pw)
 	if baseSession == "" {
 		t.Fatal("no session cookie on password login")
@@ -80,9 +81,9 @@ func TestDisable2FAWithCurrentCodeOnMagicSession(t *testing.T) {
 	}
 
 	// Magic-link session for the same (2FA) user — the session shape Wan had.
-	_ = postJSON(mux, "/v1/auth/magic-link/request", map[string]any{"email": email}, "10.40.2.1")
+	_ = postJSON(mux, "/v1/auth/magic-link/request", map[string]any{"email": email}, ip)
 	token := magicLinkTokenFromMailer(t, mailer)
-	mv := postJSON(mux, "/v1/auth/magic-link/verify", map[string]any{"token": token}, "10.40.2.1")
+	mv := postJSON(mux, "/v1/auth/magic-link/verify", map[string]any{"token": token}, ip)
 	if mv.Code != http.StatusOK {
 		t.Fatalf("magic verify status = %d body=%s", mv.Code, mv.Body.String())
 	}
@@ -94,7 +95,7 @@ func TestDisable2FAWithCurrentCodeOnMagicSession(t *testing.T) {
 	// The user types the code from their authenticator app and submits it.
 	code := mustTOTP(secret)
 	rec := postJSONCookies(mux, "/v1/auth/2fa/disable",
-		map[string]any{"totp_code": code}, "10.40.3.1", magicSession)
+		map[string]any{"totp_code": code}, ip, magicSession)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("disable 2FA with a current code = %d, want 200 (this is the reported defect); body=%s",
 			rec.Code, rec.Body.String())
@@ -128,25 +129,26 @@ func TestDisable2FAWithCurrentCodeOnMagicSession(t *testing.T) {
 // loosened #458. A magic + 2FA session without a code is challenged, and the
 // account password is NOT a substitute on that session.
 func TestDisable2FAStillNeedsASecondFactorOnMagicSession(t *testing.T) {
+	ip := testIP(t)
 	h, _, mailer := authTestFixture(t)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
 	email := fmt.Sprintf("disable2fa-guard-%d@example.test", time.Now().UnixNano())
-	registerAndVerify(t, h, email, "password123", "10.41.1.1")
+	registerAndVerify(t, h, email, "password123", ip)
 
-	pw := postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": "password123"}, "10.41.1.1")
+	pw := postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": "password123"}, ip)
 	baseSession := sessionTokenValue(pw)
 	_ = enable2FAFor(t, h, mux, baseSession)
 	uid := requireUserIDByEmail(t, h.Users, email)
 
-	_ = postJSON(mux, "/v1/auth/magic-link/request", map[string]any{"email": email}, "10.41.2.1")
+	_ = postJSON(mux, "/v1/auth/magic-link/request", map[string]any{"email": email}, ip)
 	token := magicLinkTokenFromMailer(t, mailer)
-	mv := postJSON(mux, "/v1/auth/magic-link/verify", map[string]any{"token": token}, "10.41.2.1")
+	mv := postJSON(mux, "/v1/auth/magic-link/verify", map[string]any{"token": token}, ip)
 	magicSession := sessionTokenValue(mv)
 
 	// (a) No proof at all → the #458 challenge.
-	none := postJSONCookies(mux, "/v1/auth/2fa/disable", map[string]any{}, "10.41.3.1", magicSession)
+	none := postJSONCookies(mux, "/v1/auth/2fa/disable", map[string]any{}, ip, magicSession)
 	if none.Code != http.StatusUnauthorized {
 		t.Fatalf("disable with no proof = %d, want 401; body=%s", none.Code, none.Body.String())
 	}
@@ -159,7 +161,7 @@ func TestDisable2FAStillNeedsASecondFactorOnMagicSession(t *testing.T) {
 	// (b) The CORRECT account password is still not enough on a magic session:
 	// it proves nothing that the stolen inbox did not already prove.
 	pwd := postJSONCookies(mux, "/v1/auth/2fa/disable",
-		map[string]any{"password": "password123"}, "10.41.4.1", magicSession)
+		map[string]any{"password": "password123"}, ip, magicSession)
 	if pwd.Code != http.StatusUnauthorized {
 		t.Fatalf("disable with the account password on a magic session = %d, want 401; body=%s",
 			pwd.Code, pwd.Body.String())
@@ -170,7 +172,7 @@ func TestDisable2FAStillNeedsASecondFactorOnMagicSession(t *testing.T) {
 
 	// (c) A wrong code is refused too, and changes nothing.
 	bad := postJSONCookies(mux, "/v1/auth/2fa/disable",
-		map[string]any{"totp_code": "000000"}, "10.41.5.1", magicSession)
+		map[string]any{"totp_code": "000000"}, ip, magicSession)
 	if bad.Code != http.StatusUnauthorized {
 		t.Fatalf("disable with a wrong code = %d, want 401; body=%s", bad.Code, bad.Body.String())
 	}
@@ -182,20 +184,21 @@ func TestDisable2FAStillNeedsASecondFactorOnMagicSession(t *testing.T) {
 // TestDisable2FACodeIsSingleUse: #528 must survive this path — the code that
 // disabled 2FA cannot be replayed once 2FA is armed again.
 func TestDisable2FACodeIsSingleUse(t *testing.T) {
+	ip := testIP(t)
 	h, _, _ := authTestFixture(t)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
 	email := fmt.Sprintf("disable2fa-replay-%d@example.test", time.Now().UnixNano())
-	registerAndVerify(t, h, email, "password123", "10.42.1.1")
+	registerAndVerify(t, h, email, "password123", ip)
 
-	pw := postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": "password123"}, "10.42.1.1")
+	pw := postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": "password123"}, ip)
 	session := sessionTokenValue(pw)
 	secret := enable2FAFor(t, h, mux, session)
 	uid := requireUserIDByEmail(t, h.Users, email)
 
 	code := mustTOTP(secret)
-	first := postJSONCookies(mux, "/v1/auth/2fa/disable", map[string]any{"totp_code": code}, "10.42.2.1", session)
+	first := postJSONCookies(mux, "/v1/auth/2fa/disable", map[string]any{"totp_code": code}, ip, session)
 	if first.Code != http.StatusOK {
 		t.Fatalf("first disable = %d, want 200; body=%s", first.Code, first.Body.String())
 	}
@@ -215,7 +218,7 @@ func TestDisable2FACodeIsSingleUse(t *testing.T) {
 	}
 
 	// Replay the SAME code: it must be refused, and 2FA must stay on.
-	replay := postJSONCookies(mux, "/v1/auth/2fa/disable", map[string]any{"totp_code": code}, "10.42.3.1", session)
+	replay := postJSONCookies(mux, "/v1/auth/2fa/disable", map[string]any{"totp_code": code}, ip, session)
 	if replay.Code != http.StatusUnauthorized {
 		t.Fatalf("replaying the consumed code = %d, want 401 (single-use, issue #528); body=%s",
 			replay.Code, replay.Body.String())
@@ -229,14 +232,15 @@ func TestDisable2FACodeIsSingleUse(t *testing.T) {
 // with the account password (the REST/MCP contract), and with neither a code
 // nor a wrong password it is refused.
 func TestDisable2FAPasswordPathUnchanged(t *testing.T) {
+	ip := testIP(t)
 	h, _, _ := authTestFixture(t)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
 	email := fmt.Sprintf("disable2fa-pw-%d@example.test", time.Now().UnixNano())
-	registerAndVerify(t, h, email, "password123", "10.43.1.1")
+	registerAndVerify(t, h, email, "password123", ip)
 
-	pw := postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": "password123"}, "10.43.1.1")
+	pw := postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": "password123"}, ip)
 	session := sessionTokenValue(pw)
 	if session == "" {
 		t.Fatal("no session cookie on password login")
@@ -245,7 +249,7 @@ func TestDisable2FAPasswordPathUnchanged(t *testing.T) {
 	uid := requireUserIDByEmail(t, h.Users, email)
 
 	// Wrong password → 401, nothing changes.
-	bad := postJSONCookies(mux, "/v1/auth/2fa/disable", map[string]any{"password": "WRONG"}, "10.43.2.1", session)
+	bad := postJSONCookies(mux, "/v1/auth/2fa/disable", map[string]any{"password": "WRONG"}, ip, session)
 	if bad.Code != http.StatusUnauthorized {
 		t.Fatalf("disable with a wrong password = %d, want 401; body=%s", bad.Code, bad.Body.String())
 	}
@@ -254,7 +258,7 @@ func TestDisable2FAPasswordPathUnchanged(t *testing.T) {
 	}
 
 	// Correct password → 200.
-	ok := postJSONCookies(mux, "/v1/auth/2fa/disable", map[string]any{"password": "password123"}, "10.43.3.1", session)
+	ok := postJSONCookies(mux, "/v1/auth/2fa/disable", map[string]any{"password": "password123"}, ip, session)
 	if ok.Code != http.StatusOK {
 		t.Fatalf("disable with the account password = %d, want 200 (unchanged non-magic path); body=%s",
 			ok.Code, ok.Body.String())

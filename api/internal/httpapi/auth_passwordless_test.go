@@ -21,6 +21,7 @@ import (
 // string and never plaintext — so the account still has a credential and can
 // later set a real password.
 func TestRegisterBlankPasswordAssignsHashedUUID(t *testing.T) {
+	ip := testIP(t)
 	if os.Getenv("JOMFORM_TEST_DATABASE_URL") == "" {
 		t.Skip("JOMFORM_TEST_DATABASE_URL not set; skipping passwordless signup integration test")
 	}
@@ -31,7 +32,7 @@ func TestRegisterBlankPasswordAssignsHashedUUID(t *testing.T) {
 	email := fmt.Sprintf("pwless-%d@example.test", time.Now().UnixNano())
 	rec := postJSON(mux, "/v1/auth/register", map[string]any{
 		"email": email, "password": "",
-	}, "192.0.2.150")
+	}, ip)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("blank-password register status = %d (body %s)", rec.Code, rec.Body.String())
 	}
@@ -57,6 +58,7 @@ func TestRegisterBlankPasswordAssignsHashedUUID(t *testing.T) {
 // password is still rejected at signup (backward-compatible with #306-era
 // validation).
 func TestRegisterStillRejectsShortPassword(t *testing.T) {
+	ip := testIP(t)
 	if os.Getenv("JOMFORM_TEST_DATABASE_URL") == "" {
 		t.Skip("JOMFORM_TEST_DATABASE_URL not set; skipping passwordless signup integration test")
 	}
@@ -67,7 +69,7 @@ func TestRegisterStillRejectsShortPassword(t *testing.T) {
 	email := fmt.Sprintf("shortpw-%d@example.test", time.Now().UnixNano())
 	rec := postJSON(mux, "/v1/auth/register", map[string]any{
 		"email": email, "password": "short",
-	}, "192.0.2.151")
+	}, ip)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("short-password register status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
 	}

@@ -31,6 +31,11 @@ func requireIntegration(t *testing.T) (*AuthHandlers, *recorderMailer) {
 
 // loginOnce performs a full password login, applying TOTP code / remember /
 // trust cookie as given, and returns the recorder (for reading Set-Cookie).
+//
+// The client address is the test's own (testIP) rather than httptest's default
+// RemoteAddr ("192.0.2.1"): that default is a literal outside every process's
+// reclaimed /24, so a login this helper completes with a WRONG credential would
+// leave a jf:loginfail:ip:192.0.2.1 counter that no run can ever clear.
 func loginOnce(t *testing.T, h *AuthHandlers, email, password, totpCode string, totpRemember bool, trustValue string) *httptest.ResponseRecorder {
 	t.Helper()
 	mux := http.NewServeMux()
@@ -46,6 +51,7 @@ func loginOnce(t *testing.T, h *AuthHandlers, email, password, totpCode string, 
 	}
 	req := httptest.NewRequest(http.MethodPost, "/v1/auth/login", strings.NewReader(string(mustJSON(body))))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Real-IP", testIP(t))
 	if trustValue != "" {
 		req.AddCookie(&http.Cookie{Name: trustCookie, Value: trustValue})
 	}
@@ -82,9 +88,10 @@ func postJSONCookies(mux *http.ServeMux, path string, body map[string]any, ip, s
 // TestAuthRememberMeUncheckedShortSession: default (unchecked) login yields a
 // browser-session cookie and a 24h server TTL, not the 14-day persistent one.
 func TestAuthRememberMeUncheckedShortSession(t *testing.T) {
+	ip := testIP(t)
 	h, _ := requireIntegration(t)
 	email := fmt.Sprintf("rem-no-%d@example.test", time.Now().UnixNano())
-	registerAndVerify(t, h, email, "password123", "10.20.1.1")
+	registerAndVerify(t, h, email, "password123", ip)
 
 	rec := loginOnce(t, h, email, "password123", "", false, "")
 	if rec.Code != http.StatusOK {
@@ -118,12 +125,13 @@ func TestAuthRememberMeUncheckedShortSession(t *testing.T) {
 
 // TestAuthRememberMeCheckedLongSession: checked login yields a 14-day cookie.
 func TestAuthRememberMeCheckedLongSession(t *testing.T) {
+	ip := testIP(t)
 	h, _ := requireIntegration(t)
 	email := fmt.Sprintf("rem-yes-%d@example.test", time.Now().UnixNano())
-	registerAndVerify(t, h, email, "password123", "10.20.2.1")
+	registerAndVerify(t, h, email, "password123", ip)
 
 	body := map[string]any{"email": email, "password": "password123", "remember": true}
-	rec := postJSON(loginMux(h), "/v1/auth/login", body, "10.20.2.1")
+	rec := postJSON(loginMux(h), "/v1/auth/login", body, ip)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("login status = %d body=%s", rec.Code, rec.Body.String())
 	}
@@ -161,15 +169,16 @@ func requireSessionTTL(t *testing.T, h *AuthHandlers, token string) time.Duratio
 // TestAuthForgotResetKillsOldSessions: after reset-password, a session issued
 // before the reset is rejected (pw_reset_at), and the token is single-use.
 func TestAuthForgotResetKillsOldSessions(t *testing.T) {
+	ip := testIP(t)
 	h, mailer := requireIntegration(t)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
 	email := fmt.Sprintf("reset-%d@example.test", time.Now().UnixNano())
-	registerAndVerify(t, h, email, "password123", "10.21.1.1")
+	registerAndVerify(t, h, email, "password123", ip)
 
 	// Establish a pre-reset session.
-	login := postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": "password123"}, "10.21.1.1")
+	login := postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": "password123"}, ip)
 	oldCookie := cookieValueFrom(login, sessionCookie)
 	if oldCookie == "" {
 		t.Fatal("no pre-reset session cookie")
@@ -181,7 +190,7 @@ func TestAuthForgotResetKillsOldSessions(t *testing.T) {
 	}
 
 	// Request a reset link.
-	forgot := postJSON(mux, "/v1/auth/forgot-password", map[string]any{"email": email}, "10.21.1.1")
+	forgot := postJSON(mux, "/v1/auth/forgot-password", map[string]any{"email": email}, ip)
 	if forgot.Code != http.StatusOK {
 		t.Fatalf("forgot-password status = %d body=%s", forgot.Code, forgot.Body.String())
 	}
@@ -196,12 +205,12 @@ func TestAuthForgotResetKillsOldSessions(t *testing.T) {
 	}
 
 	// Consume once → success.
-	resp := postJSON(mux, "/v1/auth/reset-password", map[string]any{"token": token, "new_password": "newpassword123"}, "10.21.1.1")
+	resp := postJSON(mux, "/v1/auth/reset-password", map[string]any{"token": token, "new_password": "newpassword123"}, ip)
 	if resp.Code != http.StatusOK {
 		t.Fatalf("reset-password status = %d body=%s", resp.Code, resp.Body.String())
 	}
 	// Same token again → consumed (single-use).
-	resp2 := postJSON(mux, "/v1/auth/reset-password", map[string]any{"token": token, "new_password": "anotherpass123"}, "10.21.1.1")
+	resp2 := postJSON(mux, "/v1/auth/reset-password", map[string]any{"token": token, "new_password": "anotherpass123"}, ip)
 	if resp2.Code != http.StatusBadRequest {
 		t.Fatalf("reused reset token status = %d, want 400", resp2.Code)
 	}
@@ -211,7 +220,7 @@ func TestAuthForgotResetKillsOldSessions(t *testing.T) {
 		t.Fatalf("old session after reset status = %d, want 401", me.Code)
 	}
 	// New password works.
-	if rec := postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": "newpassword123"}, "10.21.1.1"); rec.Code != http.StatusOK {
+	if rec := postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": "newpassword123"}, ip); rec.Code != http.StatusOK {
 		t.Fatalf("login with new password status = %d body=%s", rec.Code, rec.Body.String())
 	}
 }
@@ -251,27 +260,28 @@ func authMeGet(t *testing.T, h *AuthHandlers, session string) *httptest.Response
 // logs in with just the password (no TOTP challenge); a fresh/cleared device
 // is still challenged. Trust is minted only on a completed 2FA login.
 func TestAuthTrustedDeviceSkipsTOTP(t *testing.T) {
+	ip := testIP(t)
 	h, _ := requireIntegration(t)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
 	email := fmt.Sprintf("trust-%d@example.test", time.Now().UnixNano())
-	registerAndVerify(t, h, email, "password123", "10.22.1.1")
+	registerAndVerify(t, h, email, "password123", ip)
 
 	// Enable 2FA: login (establish session), setup, generate code, enable.
-	sessCookie := cookieValueFrom(postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": "password123"}, "10.22.1.1"), sessionCookie)
+	sessCookie := cookieValueFrom(postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": "password123"}, ip), sessionCookie)
 	if sessCookie == "" {
 		t.Fatal("no session cookie for 2FA setup")
 	}
 	uid := requireUserID(t, h, email)
-	setup := postJSONCookies(mux, "/v1/auth/2fa/setup", map[string]any{}, "10.22.1.1", sessCookie)
+	setup := postJSONCookies(mux, "/v1/auth/2fa/setup", map[string]any{}, ip, sessCookie)
 	var s map[string]string
 	_ = json.Unmarshal(setup.Body.Bytes(), &s)
 	secret := s["secret"]
 	if secret == "" {
 		t.Fatalf("2FA setup no secret (status %d body %s)", setup.Code, setup.Body.String())
 	}
-	if rec := postJSONCookies(mux, "/v1/auth/2fa/enable", map[string]any{"code": mustTOTP(secret)}, "10.22.1.1", sessCookie); rec.Code != http.StatusOK {
+	if rec := postJSONCookies(mux, "/v1/auth/2fa/enable", map[string]any{"code": mustTOTP(secret)}, ip, sessCookie); rec.Code != http.StatusOK {
 		t.Fatalf("enable 2FA status = %d body=%s", rec.Code, rec.Body.String())
 	}
 
@@ -376,15 +386,16 @@ func _resetTrust(t *testing.T, h *AuthHandlers, email, uid string) {
 // must keep a 14-day persistent session post-rotation. Issue #69 hardcoded the
 // fresh post-2FA session to remember=false, silently downgrading persistence.
 func TestAuth2FAEnableInheritsRememberLong(t *testing.T) {
+	ip := testIP(t)
 	h, _ := requireIntegration(t)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
 	email := fmt.Sprintf("2fa-lng-%d@example.test", time.Now().UnixNano())
-	registerAndVerify(t, h, email, "password123", "10.24.1.1")
+	registerAndVerify(t, h, email, "password123", ip)
 
 	// Establish a 14-day (remember) session.
-	login := postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": "password123", "remember": true}, "10.24.1.1")
+	login := postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": "password123", "remember": true}, ip)
 	origCookie := cookieValueFrom(login, sessionCookie)
 	if origCookie == "" {
 		t.Fatal("no session cookie on remembered login")
@@ -395,7 +406,7 @@ func TestAuth2FAEnableInheritsRememberLong(t *testing.T) {
 
 	// Enable 2FA from that session.
 	secret := requirePendingSecret(t, h, mux, email, origCookie)
-	enable := postJSONCookies(mux, "/v1/auth/2fa/enable", map[string]any{"code": mustTOTP(secret)}, "10.24.1.1", origCookie)
+	enable := postJSONCookies(mux, "/v1/auth/2fa/enable", map[string]any{"code": mustTOTP(secret)}, ip, origCookie)
 	if enable.Code != http.StatusOK {
 		t.Fatalf("enable 2FA status = %d body=%s", enable.Code, enable.Body.String())
 	}
@@ -425,21 +436,22 @@ func TestAuth2FAEnableInheritsRememberLong(t *testing.T) {
 // session) enabling 2FA must stay short — the rotation never upgrades
 // persistence, it only preserves it.
 func TestAuth2FAEnableInheritsRememberShort(t *testing.T) {
+	ip := testIP(t)
 	h, _ := requireIntegration(t)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
 	email := fmt.Sprintf("2fa-sht-%d@example.test", time.Now().UnixNano())
-	registerAndVerify(t, h, email, "password123", "10.24.2.1")
+	registerAndVerify(t, h, email, "password123", ip)
 
-	login := postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": "password123"}, "10.24.2.1")
+	login := postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": "password123"}, ip)
 	origCookie := cookieValueFrom(login, sessionCookie)
 	if origCookie == "" || h.Sessions.Remembered(context.Background(), origCookie) {
 		t.Fatal("expected an unchecked session (remember=false)")
 	}
 
 	secret := requirePendingSecret(t, h, mux, email, origCookie)
-	enable := postJSONCookies(mux, "/v1/auth/2fa/enable", map[string]any{"code": mustTOTP(secret)}, "10.24.2.1", origCookie)
+	enable := postJSONCookies(mux, "/v1/auth/2fa/enable", map[string]any{"code": mustTOTP(secret)}, ip, origCookie)
 	if enable.Code != http.StatusOK {
 		t.Fatalf("enable 2FA status = %d body=%s", enable.Code, enable.Body.String())
 	}
@@ -465,8 +477,9 @@ func TestAuth2FAEnableInheritsRememberShort(t *testing.T) {
 // requirePendingSecret drives 2FA setup for a logged-in session and returns the
 // pending secret so the test can generate a valid enable code.
 func requirePendingSecret(t *testing.T, h *AuthHandlers, mux *http.ServeMux, email, session string) string {
+	ip := testIP(t)
 	t.Helper()
-	setup := postJSONCookies(mux, "/v1/auth/2fa/setup", map[string]any{}, "10.24.9.1", session)
+	setup := postJSONCookies(mux, "/v1/auth/2fa/setup", map[string]any{}, ip, session)
 	var s map[string]string
 	_ = json.Unmarshal(setup.Body.Bytes(), &s)
 	if s["secret"] == "" {

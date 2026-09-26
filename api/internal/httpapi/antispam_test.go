@@ -87,7 +87,9 @@ func TestAntiSpamRateLimitBlocksAfterLimit(t *testing.T) {
 	// 15/form/IP/hour: burst 15, then refill 15/hour.
 	h := &PublicHandlers{FormLimiter: middleware.NewRateLimiter(15.0/3600.0, 15)}
 	req := httptest.NewRequest("POST", "/", nil)
-	req.RemoteAddr = "203.0.113.7:1234"
+	// The test's own address (testIP), never a literal: the limiter keys per
+	// IP, and a hand-written address is one no run can reclaim.
+	req.RemoteAddr = testIP(t) + ":1234"
 	form1 := &dbstore.Form{ID: "form-1"}
 	form2 := &dbstore.Form{ID: "form-2"}
 	// First 15 are allowed.

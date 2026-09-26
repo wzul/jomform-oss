@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync"
 	"sync/atomic"
 	"testing"
 )
@@ -38,6 +39,59 @@ var testIPCounter atomic.Uint32
 func uniqueTestIP() string {
 	return testIPFor(uint32(os.Getpid()), testIPCounter.Add(1))
 }
+
+// testIP returns the address the CURRENT test owns for the whole of one run of
+// that test: every call from the same test gets the same address, and a
+// different test (or the same test on a later -count pass) gets a fresh one.
+//
+// It exists because a test-only address must sit inside the /24 the auth
+// fixture reclaims (testIPFamilyFor), and a hand-written literal never does.
+// `jf:loginfail:ip:<addr>` has a 15-minute TTL in a Valkey DB SHARED by every
+// checkout, and the fixture deliberately deletes only counters under THIS
+// process's /24 — so a literal like 10.20.0.2 is a counter the reclaim can
+// never clear. One test drives it to the lockout threshold and the next lane's
+// run inherits it, which is the 429-instead-of-401 flake this whole mechanism
+// exists to remove. Measured on the pre-fix tree: after one full run,
+// `jf:loginfail:ip:10.9.9.9` survived with its TTL re-armed.
+//
+// Two shapes are deliberately avoided:
+//
+//   - It is NOT a fixed address per test. A test that drives its address into
+//     lockout (TestAuthLoginLockoutAfter10) would find the counter already at
+//     the threshold on the next -count pass, and assert 429 where it wants 401.
+//     Returning a fresh address per pass is what keeps -count deterministic.
+//   - It is NOT a fresh address per call, which would spend the 254-address
+//     per-process budget on call sites rather than on tests: the package has
+//     well over a hundred IP-bearing request sites but only ~60 tests that need
+//     one, so per-call allocation would exhaust maxTestIPsPerProcess after a
+//     couple of -count passes and panic inside a test run.
+//
+// Tests still share one address across the requests that must be seen as one
+// client (an arm + its email-code, a lockout sequence, a magic-link request and
+// its verify), which is what the old per-test literal was doing.
+func testIP(t *testing.T) string {
+	t.Helper()
+	name := t.Name()
+
+	testIPMu.Lock()
+	defer testIPMu.Unlock()
+	if name == testIPName {
+		return testIPAddr
+	}
+	testIPName, testIPAddr = name, uniqueTestIP()
+	return testIPAddr
+}
+
+// testIPMu guards the one-entry memo testIP keeps. One address per test rather
+// than one per call, so the memo is just "what did the test I am in already
+// get". Tests in this package are sequential (no t.Parallel anywhere), so the
+// memo is only ever read by the test that wrote it; the mutex is there because
+// testIP is called from helpers too, and a future t.Parallel must not race.
+var (
+	testIPMu   sync.Mutex
+	testIPName string
+	testIPAddr string
+)
 
 // maxTestIPsPerProcess bounds the per-process counter. Octet 4 is the only one
 // left for the call index, so exceeding it must FAIL LOUDLY rather than wrap: a

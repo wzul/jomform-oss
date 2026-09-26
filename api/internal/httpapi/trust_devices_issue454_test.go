@@ -25,6 +25,10 @@ import (
 
 // loginOnceUA performs a full password login with an explicit User-Agent (so
 // the #454 device label can be asserted) plus optional TOTP/remember/trust.
+//
+// The client address is the test's own (testIP), not httptest's default
+// "192.0.2.1" — see loginOnce for why that default is a shared counter no
+// process's scoped reclaim can clear.
 func loginOnceUA(t *testing.T, h *AuthHandlers, email, password, totpCode string, totpRemember bool, trustValue, ua string) *httptest.ResponseRecorder {
 	t.Helper()
 	mux := http.NewServeMux()
@@ -38,6 +42,7 @@ func loginOnceUA(t *testing.T, h *AuthHandlers, email, password, totpCode string
 	}
 	req := httptest.NewRequest(http.MethodPost, "/v1/auth/login", strings.NewReader(string(mustJSON(body))))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Real-IP", testIP(t))
 	if ua != "" {
 		req.Header.Set("User-Agent", ua)
 	}
@@ -117,10 +122,11 @@ func enable2FAAndSession(t *testing.T, h *AuthHandlers, email, ip string) (secre
 // two trusted devices are listed with labels + expiry; revoking one is
 // immediate (its next login is challenged) while the other keeps skipping.
 func TestTrustedDevicesListAndRevokeOne(t *testing.T) {
+	ip := testIP(t)
 	h, _ := requireIntegration(t)
 
 	email := fmt.Sprintf("trustdev-%d@example.test", time.Now().UnixNano())
-	secret, session := enable2FAAndSession(t, h, email, "10.31.1.1")
+	secret, session := enable2FAAndSession(t, h, email, ip)
 
 	const uaA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
 	const uaB = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
@@ -203,9 +209,10 @@ func TestTrustedDevicesListAndRevokeOne(t *testing.T) {
 // TestTrustedDevicesLegacyEntryRevocable: a trust entry minted without #454
 // metadata (the legacy Issue path) still lists and can be revoked.
 func TestTrustedDevicesLegacyEntryRevocable(t *testing.T) {
+	ip := testIP(t)
 	h, _ := requireIntegration(t)
 	email := fmt.Sprintf("trustlegacy-%d@example.test", time.Now().UnixNano())
-	_, session := enable2FAAndSession(t, h, email, "10.32.1.1")
+	_, session := enable2FAAndSession(t, h, email, ip)
 	uid := requireUserID(t, h, email)
 
 	// Mint a legacy-style trust token straight from the store (no metadata).
@@ -238,13 +245,14 @@ func TestTrustedDevicesLegacyEntryRevocable(t *testing.T) {
 // TestTrustedDevicesCannotRevokeOtherUser: a device id belonging to another
 // user is not revocable (RevokeHash only acts on the caller's own trust set).
 func TestTrustedDevicesCannotRevokeOtherUser(t *testing.T) {
+	ip := testIP(t)
 	h, _ := requireIntegration(t)
 	emailA := fmt.Sprintf("trusta-%d@example.test", time.Now().UnixNano())
 	emailB := fmt.Sprintf("trustb-%d@example.test", time.Now().UnixNano())
-	_, sessionB := enable2FAAndSession(t, h, emailB, "10.33.1.1")
+	_, sessionB := enable2FAAndSession(t, h, emailB, ip)
 	uidA := ""
 	{
-		registerAndVerify(t, h, emailA, "password123", "10.33.2.1")
+		registerAndVerify(t, h, emailA, "password123", ip)
 		uidA = requireUserID(t, h, emailA)
 	}
 	victim, err := h.Sessions.TrustedDevices().Issue(context.Background(), uidA)

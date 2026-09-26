@@ -38,8 +38,8 @@ var authOnce sync.Once
 // loses its keys to this suite. A whole-database flush is the same defect in a
 // sharper form.
 //
-// So the reclaim is scoped instead: uniqueTestIP gives each PROCESS its own /24,
-// and only counters under THIS process's /24 are deleted. Tests must still point
+// So the reclaim is scoped instead: testIP gives each PROCESS its own /24, and
+// only counters under THIS process's /24 are deleted. Tests must still point
 // JOMFORM_TEST_VALKEY_URL at a throwaway DB (e.g. .../15), never dev/prod.
 //
 // Only the prefixes this fixture can legitimately own are touched. The sweep used
@@ -65,7 +65,13 @@ func authTestValkey(t *testing.T) *auth.Sessions {
 // reach. The login breaker's per-IP counter is the only one: the coarse per-IP
 // token buckets (RateLimit / RegistrationLimit) are process-local maps in
 // middleware/ratelimit.go, and the per-ACCOUNT counter is keyed by an email the
-// tests mint per run, so neither can go stale.
+// tests mint per run, so that one cannot go stale.
+//
+// The PER-IP counter can go stale, and that is why this reclaim exists: it is
+// keyed by an address, and every test address in this package now comes from
+// testIP, which is inside the /24 this process owns. A hand-written address
+// would sit outside every process's /24 and survive here for its full 15-minute
+// TTL — so TestNoLiteralClientIPInTests refuses one.
 var loginCounterKeyPrefixes = []string{"jf:loginfail:ip:"}
 
 // reclaimOwnLoginCounters deletes the login-breaker counters under this
@@ -346,6 +352,7 @@ func TestAuthUniformErrorsNoEnumeration(t *testing.T) {
 // TestAuthRegisterHoneypotCatchesBot: a filled honeypot field is silently
 // accepted but creates no user.
 func TestAuthRegisterHoneypotCatchesBot(t *testing.T) {
+	ip := testIP(t)
 	h, users, _ := authTestFixture(t)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -353,7 +360,7 @@ func TestAuthRegisterHoneypotCatchesBot(t *testing.T) {
 	email := fmt.Sprintf("bot-%d@example.test", time.Now().UnixNano())
 	rec := postJSON(mux, "/v1/auth/register", map[string]any{
 		"email": email, "password": "password123", "website": "http://spam.example",
-	}, "10.4.4.4")
+	}, ip)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("honeypot register status = %d, want 201 (silent accept)", rec.Code)
 	}
@@ -365,6 +372,7 @@ func TestAuthRegisterHoneypotCatchesBot(t *testing.T) {
 // TestAuthVerifyRequiredBeforeLogin: accounts block login until the signed
 // /verify link flips verified=true.
 func TestAuthVerifyRequiredBeforeLogin(t *testing.T) {
+	ip := testIP(t)
 	h, users, mailer := authTestFixture(t)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -372,7 +380,7 @@ func TestAuthVerifyRequiredBeforeLogin(t *testing.T) {
 	email := fmt.Sprintf("verreq-%d@example.test", time.Now().UnixNano())
 	if rec := postJSON(mux, "/v1/auth/register", map[string]any{
 		"email": email, "password": "password123",
-	}, "10.5.5.5"); rec.Code != http.StatusCreated {
+	}, ip); rec.Code != http.StatusCreated {
 		t.Fatalf("register status = %d (body %s)", rec.Code, rec.Body.String())
 	}
 	if !mailer.wasCalled() {
@@ -382,7 +390,7 @@ func TestAuthVerifyRequiredBeforeLogin(t *testing.T) {
 	// Correct credentials still blocked until verified.
 	if rec := postJSON(mux, "/v1/auth/login", map[string]any{
 		"email": email, "password": "password123",
-	}, "10.5.5.5"); rec.Code != http.StatusForbidden {
+	}, ip); rec.Code != http.StatusForbidden {
 		t.Fatalf("login before verify status = %d, want 403 (body %s)", rec.Code, rec.Body.String())
 	}
 
@@ -401,7 +409,7 @@ func TestAuthVerifyRequiredBeforeLogin(t *testing.T) {
 
 	if rec := postJSON(mux, "/v1/auth/login", map[string]any{
 		"email": email, "password": "password123",
-	}, "10.5.5.5"); rec.Code != http.StatusOK {
+	}, ip); rec.Code != http.StatusOK {
 		t.Fatalf("login after verify status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
 }
@@ -437,13 +445,14 @@ func TestAuthRegisterRateLimit(t *testing.T) {
 // register routes carry the per-IP limiter (proven above by lockout/spam), and
 // that unauthenticated GET /v1/auth/me is not rate-limited (sessionful).
 func TestAuthAllRoutesRateLimited(t *testing.T) {
+	ip := testIP(t)
 	h, _, _ := authTestFixture(t)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
 	// /me with no session returns 401 (not 429) and is not a login surface.
 	req := httptest.NewRequest(http.MethodGet, "/v1/auth/me", nil)
-	req.Header.Set("X-Real-IP", "10.7.7.7")
+	req.Header.Set("X-Real-IP", ip)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {

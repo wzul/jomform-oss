@@ -90,8 +90,12 @@ func TestEmail2FARequiresPendingFlagProvesPassword(t *testing.T) {
 
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
+	// One address for this test (never a literal — see testIP): the login
+	// breaker's per-IP counter is keyed on it in a Valkey DB shared by every
+	// checkout, and only addresses inside this process's own /24 are reclaimed.
+	ip := testIP(t)
 	// Attempt email-code WITHOUT ever doing the login challenge.
-	rec := postJSON(mux, "/v1/auth/2fa/email-code", map[string]any{"email": email}, "10.8.8.8")
+	rec := postJSON(mux, "/v1/auth/2fa/email-code", map[string]any{"email": email}, ip)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("email-code status = %d body=%s (want generic 200)", rec.Code, rec.Body.String())
 	}
@@ -108,6 +112,11 @@ func TestEmail2FARequiresPendingFlagProvesPassword(t *testing.T) {
 // TestEmail2FABackupCodeEndToEndSingleUse: correct-password totp_required arms
 // the pending flag → request email-code sends a 6-digit code → login with the
 // emailed code succeeds → the same code cannot be reused.
+//
+// Both counters this test touches are per-IP (`jf:loginfail:ip:` and
+// `jf:2fa_pending:`), which live in the shared test Valkey; the whole flow runs
+// on one `testIP(t)` address so the arm and the login it enables are seen as the
+// same client and the fixture can reclaim the counters afterwards.
 func TestEmail2FABackupCodeEndToEndSingleUse(t *testing.T) {
 	h, _, mailer := authTestFixture(t)
 	email := registerVerified2FA(t, h)
@@ -115,10 +124,14 @@ func TestEmail2FABackupCodeEndToEndSingleUse(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
+	// One address for this test (see testIP) — never a literal, so the per-IP
+	// counter it writes stays inside this process's own reclaimed /24.
+	ip := testIP(t)
+
 	// Step 1: correct-password-only login → totp_required (arms pending flag).
 	rec := postJSON(mux, "/v1/auth/login", map[string]any{
 		"email": email, "password": "correct-horse-battery-staple",
-	}, "10.9.9.9")
+	}, ip)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("password-only login status = %d, want 401", rec.Code)
 	}
@@ -129,7 +142,7 @@ func TestEmail2FABackupCodeEndToEndSingleUse(t *testing.T) {
 	}
 
 	// Step 2: request the emailed backup code from the SAME IP.
-	rec = postJSON(mux, "/v1/auth/2fa/email-code", map[string]any{"email": email}, "10.9.9.9")
+	rec = postJSON(mux, "/v1/auth/2fa/email-code", map[string]any{"email": email}, ip)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("email-code status = %d body=%s", rec.Code, rec.Body.String())
 	}
@@ -145,7 +158,7 @@ func TestEmail2FABackupCodeEndToEndSingleUse(t *testing.T) {
 	// totp_code field).
 	rec = postJSON(mux, "/v1/auth/login", map[string]any{
 		"email": email, "password": "correct-horse-battery-staple", "totp_code": code,
-	}, "10.9.9.9")
+	}, ip)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("login with emailed code = %d, want 200: %s", rec.Code, rec.Body.String())
 	}
@@ -154,7 +167,7 @@ func TestEmail2FABackupCodeEndToEndSingleUse(t *testing.T) {
 	// barrier the next time 2FA is challenged.
 	rec = postJSON(mux, "/v1/auth/login", map[string]any{
 		"email": email, "password": "correct-horse-battery-staple", "totp_code": code,
-	}, "10.9.9.9")
+	}, ip)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("reused emailed code = %d, want 401 (single-use violated)", rec.Code)
 	}
@@ -165,13 +178,17 @@ func TestEmail2FARateLimit(t *testing.T) {
 	h, _, _ := authTestFixture(t)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
+	// One address for this test: the 3/hour bucket is per-IP and the 4th
+	// request must be the one over the limit. A literal would put the counter
+	// outside this process's reclaimed /24 (see testIP).
+	ip := testIP(t)
 	for i := 0; i < 3; i++ {
-		rec := postJSON(mux, "/v1/auth/2fa/email-code", map[string]any{"email": "x@example.test"}, "10.10.10.10")
+		rec := postJSON(mux, "/v1/auth/2fa/email-code", map[string]any{"email": "x@example.test"}, ip)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("email-code request %d status = %d, want 200 (generic)", i+1, rec.Code)
 		}
 	}
-	rec := postJSON(mux, "/v1/auth/2fa/email-code", map[string]any{"email": "x@example.test"}, "10.10.10.10")
+	rec := postJSON(mux, "/v1/auth/2fa/email-code", map[string]any{"email": "x@example.test"}, ip)
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("4th email-code request status = %d, want 429", rec.Code)
 	}
@@ -180,6 +197,7 @@ func TestEmail2FARateLimit(t *testing.T) {
 // TestMagicLinkEndToEndSingleUse: request → token in email → verify starts a
 // session → re-verify fails (single-use).
 func TestMagicLinkEndToEndSingleUse(t *testing.T) {
+	ip := testIP(t)
 	h, _, mailer := authTestFixture(t)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -200,7 +218,7 @@ func TestMagicLinkEndToEndSingleUse(t *testing.T) {
 	}
 
 	// Request the magic link.
-	rec = postJSON(mux, "/v1/auth/magic-link/request", map[string]any{"email": email}, "10.11.11.11")
+	rec = postJSON(mux, "/v1/auth/magic-link/request", map[string]any{"email": email}, ip)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("magic-link request status = %d body=%s", rec.Code, rec.Body.String())
 	}
@@ -212,7 +230,7 @@ func TestMagicLinkEndToEndSingleUse(t *testing.T) {
 	token := mt[1]
 
 	// Verify → a session cookie must be issued.
-	rec = postJSON(mux, "/v1/auth/magic-link/verify", map[string]any{"token": token}, "10.11.11.11")
+	rec = postJSON(mux, "/v1/auth/magic-link/verify", map[string]any{"token": token}, ip)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("magic-link verify status = %d body=%s", rec.Code, rec.Body.String())
 	}
@@ -227,7 +245,7 @@ func TestMagicLinkEndToEndSingleUse(t *testing.T) {
 	}
 
 	// The token is single-use — a second verify must fail.
-	rec = postJSON(mux, "/v1/auth/magic-link/verify", map[string]any{"token": token}, "10.11.11.11")
+	rec = postJSON(mux, "/v1/auth/magic-link/verify", map[string]any{"token": token}, ip)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("reused magic-link token status = %d, want 400 (single-use violated)", rec.Code)
 	}
@@ -237,6 +255,7 @@ func TestMagicLinkEndToEndSingleUse(t *testing.T) {
 // We assert the store TTL constants (the authoritative expiry source) and that
 // an unknown/expired token is rejected.
 func TestMagicLinkTTL(t *testing.T) {
+	ip := testIP(t)
 	if auth.MagicLinkTTL != 15*time.Minute {
 		t.Fatalf("MagicLinkTTL = %v, want 15m", auth.MagicLinkTTL)
 	}
@@ -250,7 +269,7 @@ func TestMagicLinkTTL(t *testing.T) {
 	h, _, _ := authTestFixture(t)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
-	rec := postJSON(mux, "/v1/auth/magic-link/verify", map[string]any{"token": "0000000000000000000000000000000000000000000000000000000000000000"}, "10.12.12.12")
+	rec := postJSON(mux, "/v1/auth/magic-link/verify", map[string]any{"token": "0000000000000000000000000000000000000000000000000000000000000000"}, ip)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expired/unknown magic token status = %d, want 400", rec.Code)
 	}
@@ -259,6 +278,7 @@ func TestMagicLinkTTL(t *testing.T) {
 // TestMagicLinkHybridSignup: a NEW email gets a signup magic link that, on
 // click, creates the account (verified) + issues a session cookie (issue #278).
 func TestMagicLinkHybridSignup(t *testing.T) {
+	ip := testIP(t)
 	h, users, mailer := authTestFixture(t)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -270,7 +290,7 @@ func TestMagicLinkHybridSignup(t *testing.T) {
 	}
 
 	// Request a magic link for the new email → a link must be emailed.
-	rec := postJSON(mux, "/v1/auth/magic-link/request", map[string]any{"email": email}, "10.13.13.13")
+	rec := postJSON(mux, "/v1/auth/magic-link/request", map[string]any{"email": email}, ip)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("magic-link request status = %d body=%s", rec.Code, rec.Body.String())
 	}
@@ -282,7 +302,7 @@ func TestMagicLinkHybridSignup(t *testing.T) {
 	token := mt[1]
 
 	// Verify → account is created (verified) + a session cookie is issued.
-	rec = postJSON(mux, "/v1/auth/magic-link/verify", map[string]any{"token": token}, "10.13.13.13")
+	rec = postJSON(mux, "/v1/auth/magic-link/verify", map[string]any{"token": token}, ip)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("magic-link verify status = %d body=%s", rec.Code, rec.Body.String())
 	}
@@ -304,7 +324,7 @@ func TestMagicLinkHybridSignup(t *testing.T) {
 	}
 
 	// The token is single-use — a second verify must fail.
-	rec = postJSON(mux, "/v1/auth/magic-link/verify", map[string]any{"token": token}, "10.13.13.13")
+	rec = postJSON(mux, "/v1/auth/magic-link/verify", map[string]any{"token": token}, ip)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("reused signup magic-link token status = %d, want 400 (single-use violated)", rec.Code)
 	}
@@ -314,6 +334,7 @@ func TestMagicLinkHybridSignup(t *testing.T) {
 // field on the magic-link request is silently discarded — no link is emailed
 // and no account is created (issue #278 anti-spam).
 func TestMagicLinkHybridSignupHoneypot(t *testing.T) {
+	ip := testIP(t)
 	h, users, mailer := authTestFixture(t)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -321,7 +342,7 @@ func TestMagicLinkHybridSignupHoneypot(t *testing.T) {
 	email := "honey-" + randSuffix() + "@example.test"
 	rec := postJSON(mux, "/v1/auth/magic-link/request", map[string]any{
 		"email": email, "website": "https://spam.example",
-	}, "10.14.14.14")
+	}, ip)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("magic-link request status = %d body=%s (want generic 200)", rec.Code, rec.Body.String())
 	}

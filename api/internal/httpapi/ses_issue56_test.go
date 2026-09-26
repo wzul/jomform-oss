@@ -61,6 +61,7 @@ func sesTestFixture(t *testing.T) (*AuthHandlers, *dbstore.UserStore, *dbstore.S
 // bounce was recorded), a subsequent registration with that address still
 // creates no verification email — the send is skipped.
 func TestSESSuppressedEmailNotResent(t *testing.T) {
+	ip := testIP(t)
 	h, users, supps, _, mailer := sesTestFixture(t)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -75,7 +76,7 @@ func TestSESSuppressedEmailNotResent(t *testing.T) {
 
 	if rec := postJSON(mux, "/v1/auth/register", map[string]any{
 		"email": emailAddr, "password": "password123",
-	}, "10.20.0.1"); rec.Code != http.StatusCreated {
+	}, ip); rec.Code != http.StatusCreated {
 		t.Fatalf("register status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
 	}
 	if mailer.wasCalled() {
@@ -86,6 +87,7 @@ func TestSESSuppressedEmailNotResent(t *testing.T) {
 // TestSESBreakerGatesRegister: when the verification breaker trips (bounce
 // ratio > 5% with >= 20 sends), registration returns 503 instead of sending.
 func TestSESBreakerGatesRegister(t *testing.T) {
+	ip := testIP(t)
 	h, _, _, breaker, _ := sesTestFixture(t)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -103,7 +105,7 @@ func TestSESBreakerGatesRegister(t *testing.T) {
 
 	if rec := postJSON(mux, "/v1/auth/register", map[string]any{
 		"email": "breaker-" + randSuffix() + "@example.com", "password": "password123",
-	}, "10.20.0.2"); rec.Code != http.StatusServiceUnavailable {
+	}, ip); rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("register under breaker status = %d, want 503 (body %s)", rec.Code, rec.Body.String())
 	}
 }
@@ -114,6 +116,7 @@ func TestSESBreakerGatesRegister(t *testing.T) {
 // when a *single* bounce is within a low-bounce sample — i.e. small samples and
 // low ratios don't trip.
 func TestSESBreakerDoesNotGateLowBounce(t *testing.T) {
+	ip := testIP(t)
 	h, _, _, breaker, _ := sesTestFixture(t)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -126,7 +129,7 @@ func TestSESBreakerDoesNotGateLowBounce(t *testing.T) {
 
 	if rec := postJSON(mux, "/v1/auth/register", map[string]any{
 		"email": "clean-" + randSuffix() + "@example.com", "password": "password123",
-	}, "10.20.0.3"); rec.Code != http.StatusCreated {
+	}, ip); rec.Code != http.StatusCreated {
 		t.Fatalf("register under low-bounce status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
 	}
 }

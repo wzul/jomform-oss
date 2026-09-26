@@ -52,14 +52,15 @@ func sessionTokenValue(rec *httptest.ResponseRecorder) string {
 // enable2FAFor turns 2FA on for an already-logged-in session and returns the
 // TOTP secret so the test can mint fresh codes.
 func enable2FAFor(t *testing.T, h *AuthHandlers, mux *http.ServeMux, session string) string {
+	ip := testIP(t)
 	t.Helper()
-	setup := postJSONCookies(mux, "/v1/auth/2fa/setup", map[string]any{}, "10.30.9.1", session)
+	setup := postJSONCookies(mux, "/v1/auth/2fa/setup", map[string]any{}, ip, session)
 	var s map[string]string
 	_ = json.Unmarshal(setup.Body.Bytes(), &s)
 	if s["secret"] == "" {
 		t.Fatalf("2FA setup no secret (status %d body %s)", setup.Code, setup.Body.String())
 	}
-	en := postJSONCookies(mux, "/v1/auth/2fa/enable", map[string]any{"code": mustTOTP(s["secret"])}, "10.30.9.1", session)
+	en := postJSONCookies(mux, "/v1/auth/2fa/enable", map[string]any{"code": mustTOTP(s["secret"])}, ip, session)
 	if en.Code != http.StatusOK {
 		t.Fatalf("enable 2FA status = %d body=%s", en.Code, en.Body.String())
 	}
@@ -69,15 +70,16 @@ func enable2FAFor(t *testing.T, h *AuthHandlers, mux *http.ServeMux, session str
 // TestMagicSessionFlaggedAndPasswordSessionNot: option A — only the magic-link
 // verify path marks the session magic=true.
 func TestMagicSessionFlaggedAndPasswordSessionNot(t *testing.T) {
+	ip := testIP(t)
 	h, users, mailer := authTestFixture(t)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
 	email := fmt.Sprintf("magic-flag-%d@example.test", time.Now().UnixNano())
-	registerAndVerify(t, h, email, "password123", "10.31.1.1")
+	registerAndVerify(t, h, email, "password123", ip)
 
 	// Password login → not a magic session.
-	pw := postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": "password123"}, "10.31.1.1")
+	pw := postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": "password123"}, ip)
 	if pw.Code != http.StatusOK {
 		t.Fatalf("password login status = %d body=%s", pw.Code, pw.Body.String())
 	}
@@ -96,9 +98,9 @@ func TestMagicSessionFlaggedAndPasswordSessionNot(t *testing.T) {
 	}
 
 	// Magic-link login → magic session.
-	_ = postJSON(mux, "/v1/auth/magic-link/request", map[string]any{"email": email}, "10.31.2.1")
+	_ = postJSON(mux, "/v1/auth/magic-link/request", map[string]any{"email": email}, ip)
 	token := magicLinkTokenFromMailer(t, mailer)
-	mv := postJSON(mux, "/v1/auth/magic-link/verify", map[string]any{"token": token}, "10.31.2.1")
+	mv := postJSON(mux, "/v1/auth/magic-link/verify", map[string]any{"token": token}, ip)
 	if mv.Code != http.StatusOK {
 		t.Fatalf("magic-link verify status = %d body=%s", mv.Code, mv.Body.String())
 	}
@@ -131,13 +133,14 @@ func TestMagicSessionFlaggedAndPasswordSessionNot(t *testing.T) {
 // TestMagicSessionAuditFlagged: the auth.login audit event records magic=true
 // on the magic path and magic=false on the password path.
 func TestMagicSessionAuditFlagged(t *testing.T) {
+	ip := testIP(t)
 	h, users, mailer := authTestFixture(t)
 	h.Events = dbstore.NewEventStore(bundleTestPool(t))
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
 	email := fmt.Sprintf("magic-audit-%d@example.test", time.Now().UnixNano())
-	registerAndVerify(t, h, email, "password123", "10.32.1.1")
+	registerAndVerify(t, h, email, "password123", ip)
 	uid := requireUserIDByEmail(t, users, email)
 
 	// The register/verify flow may have created events; note the starting point.
@@ -146,13 +149,13 @@ func TestMagicSessionAuditFlagged(t *testing.T) {
 	})
 
 	// Password login → auth.login magic=false.
-	if rec := postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": "password123"}, "10.32.1.1"); rec.Code != http.StatusOK {
+	if rec := postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": "password123"}, ip); rec.Code != http.StatusOK {
 		t.Fatalf("password login status = %d", rec.Code)
 	}
 	// Magic-link login → auth.login magic=true.
-	_ = postJSON(mux, "/v1/auth/magic-link/request", map[string]any{"email": email}, "10.32.2.1")
+	_ = postJSON(mux, "/v1/auth/magic-link/request", map[string]any{"email": email}, ip)
 	token := magicLinkTokenFromMailer(t, mailer)
-	if rec := postJSON(mux, "/v1/auth/magic-link/verify", map[string]any{"token": token}, "10.32.2.1"); rec.Code != http.StatusOK {
+	if rec := postJSON(mux, "/v1/auth/magic-link/verify", map[string]any{"token": token}, ip); rec.Code != http.StatusOK {
 		t.Fatalf("magic verify status = %d body=%s", rec.Code, rec.Body.String())
 	}
 
@@ -220,15 +223,16 @@ func waitForAuthLoginCount(t *testing.T, h *AuthHandlers, userID string, want in
 // TestStepUpMagicAnd2FARequiresTOTP: the A+C case — change-password on a magic
 // session for a 2FA user is rejected without a fresh code and accepted with one.
 func TestStepUpMagicAnd2FARequiresTOTP(t *testing.T) {
+	ip := testIP(t)
 	h, _, mailer := authTestFixture(t)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
 	email := fmt.Sprintf("stepup-cp-%d@example.test", time.Now().UnixNano())
-	registerAndVerify(t, h, email, "password123", "10.33.1.1")
+	registerAndVerify(t, h, email, "password123", ip)
 
 	// Establish a normal session and enable 2FA.
-	pw := postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": "password123"}, "10.33.1.1")
+	pw := postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": "password123"}, ip)
 	baseSession := sessionTokenValue(pw)
 	if baseSession == "" {
 		t.Fatal("no session cookie on password login")
@@ -236,9 +240,9 @@ func TestStepUpMagicAnd2FARequiresTOTP(t *testing.T) {
 	secret := enable2FAFor(t, h, mux, baseSession)
 
 	// Now log in via magic link → magic session (2FA user).
-	_ = postJSON(mux, "/v1/auth/magic-link/request", map[string]any{"email": email}, "10.33.2.1")
+	_ = postJSON(mux, "/v1/auth/magic-link/request", map[string]any{"email": email}, ip)
 	token := magicLinkTokenFromMailer(t, mailer)
-	mv := postJSON(mux, "/v1/auth/magic-link/verify", map[string]any{"token": token}, "10.33.2.1")
+	mv := postJSON(mux, "/v1/auth/magic-link/verify", map[string]any{"token": token}, ip)
 	if mv.Code != http.StatusOK {
 		t.Fatalf("magic verify status = %d body=%s", mv.Code, mv.Body.String())
 	}
@@ -250,7 +254,7 @@ func TestStepUpMagicAnd2FARequiresTOTP(t *testing.T) {
 	// Without a TOTP code → step-up challenge (401 + next_step marker).
 	noCode := postJSONCookies(mux, "/v1/auth/change-password", map[string]any{
 		"old_password": "password123", "new_password": "newpassword123",
-	}, "10.33.3.1", magicSession)
+	}, ip, magicSession)
 	if noCode.Code != http.StatusUnauthorized {
 		t.Fatalf("change-password without step-up = %d, want 401; body=%s", noCode.Code, noCode.Body.String())
 	}
@@ -263,7 +267,7 @@ func TestStepUpMagicAnd2FARequiresTOTP(t *testing.T) {
 	// Wrong code → still challenged.
 	bad := postJSONCookies(mux, "/v1/auth/change-password", map[string]any{
 		"old_password": "password123", "new_password": "newpassword123", "totp_code": "000000",
-	}, "10.33.3.1", magicSession)
+	}, ip, magicSession)
 	if bad.Code != http.StatusUnauthorized {
 		t.Fatalf("change-password with wrong TOTP = %d, want 401", bad.Code)
 	}
@@ -271,13 +275,13 @@ func TestStepUpMagicAnd2FARequiresTOTP(t *testing.T) {
 	// Fresh TOTP code → accepted, password actually rotates.
 	ok := postJSONCookies(mux, "/v1/auth/change-password", map[string]any{
 		"old_password": "password123", "new_password": "newpassword123", "totp_code": mustTOTP(secret),
-	}, "10.33.3.1", magicSession)
+	}, ip, magicSession)
 	if ok.Code != http.StatusOK {
 		t.Fatalf("change-password with fresh TOTP = %d, want 200; body=%s", ok.Code, ok.Body.String())
 	}
 
 	// The new password works (proves the rotation happened).
-	if rec := postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": "newpassword123"}, "10.33.4.1"); rec.Code != http.StatusOK && rec.Code != http.StatusUnauthorized {
+	if rec := postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": "newpassword123"}, ip); rec.Code != http.StatusOK && rec.Code != http.StatusUnauthorized {
 		t.Fatalf("unexpected login status after rotation: %d", rec.Code)
 	}
 }
@@ -285,14 +289,15 @@ func TestStepUpMagicAnd2FARequiresTOTP(t *testing.T) {
 // TestStepUpNotRequiredNonMagic2FA: a 2FA user on a NORMAL session is not
 // prompted — the existing password confirm is all that applies.
 func TestStepUpNotRequiredNonMagic2FA(t *testing.T) {
+	ip := testIP(t)
 	h, _, _ := authTestFixture(t)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
 	email := fmt.Sprintf("stepup-nomagic-%d@example.test", time.Now().UnixNano())
-	registerAndVerify(t, h, email, "password123", "10.34.1.1")
+	registerAndVerify(t, h, email, "password123", ip)
 
-	pw := postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": "password123"}, "10.34.1.1")
+	pw := postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": "password123"}, ip)
 	session := sessionTokenValue(pw)
 	if session == "" {
 		t.Fatal("no session cookie on password login")
@@ -305,7 +310,7 @@ func TestStepUpNotRequiredNonMagic2FA(t *testing.T) {
 	// Change-password with NO totp_code succeeds on the password confirm alone.
 	rec := postJSONCookies(mux, "/v1/auth/change-password", map[string]any{
 		"old_password": "password123", "new_password": "newpassword123",
-	}, "10.34.2.1", session)
+	}, ip, session)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("non-magic 2FA change-password = %d, want 200 (no step-up); body=%s", rec.Code, rec.Body.String())
 	}
@@ -314,16 +319,17 @@ func TestStepUpNotRequiredNonMagic2FA(t *testing.T) {
 // TestStepUpNotRequiredMagicWithout2FA: a magic session for a NON-2FA user is
 // unchanged — no new friction (the existing password confirm still applies).
 func TestStepUpNotRequiredMagicWithout2FA(t *testing.T) {
+	ip := testIP(t)
 	h, _, mailer := authTestFixture(t)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
 	email := fmt.Sprintf("stepup-no2fa-%d@example.test", time.Now().UnixNano())
-	registerAndVerify(t, h, email, "password123", "10.35.1.1")
+	registerAndVerify(t, h, email, "password123", ip)
 
-	_ = postJSON(mux, "/v1/auth/magic-link/request", map[string]any{"email": email}, "10.35.2.1")
+	_ = postJSON(mux, "/v1/auth/magic-link/request", map[string]any{"email": email}, ip)
 	token := magicLinkTokenFromMailer(t, mailer)
-	mv := postJSON(mux, "/v1/auth/magic-link/verify", map[string]any{"token": token}, "10.35.2.1")
+	mv := postJSON(mux, "/v1/auth/magic-link/verify", map[string]any{"token": token}, ip)
 	session := sessionTokenValue(mv)
 	if session == "" {
 		t.Fatal("no session cookie on magic verify")
@@ -335,7 +341,7 @@ func TestStepUpNotRequiredMagicWithout2FA(t *testing.T) {
 	// No 2FA → no step-up; the password confirm alone is enough.
 	rec := postJSONCookies(mux, "/v1/auth/change-password", map[string]any{
 		"old_password": "password123", "new_password": "newpassword123",
-	}, "10.35.3.1", session)
+	}, ip, session)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("magic non-2FA change-password = %d, want 200 (no step-up); body=%s", rec.Code, rec.Body.String())
 	}
@@ -344,25 +350,26 @@ func TestStepUpNotRequiredMagicWithout2FA(t *testing.T) {
 // TestStepUpDisable2FA: disable-2FA on a magic session for a 2FA user requires
 // a fresh TOTP code; the non-magic path is unchanged.
 func TestStepUpDisable2FA(t *testing.T) {
+	ip := testIP(t)
 	h, _, mailer := authTestFixture(t)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
 	email := fmt.Sprintf("stepup-disable-%d@example.test", time.Now().UnixNano())
-	registerAndVerify(t, h, email, "password123", "10.36.1.1")
+	registerAndVerify(t, h, email, "password123", ip)
 
-	pw := postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": "password123"}, "10.36.1.1")
+	pw := postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": "password123"}, ip)
 	baseSession := sessionTokenValue(pw)
 	secret := enable2FAFor(t, h, mux, baseSession)
 
 	// Magic session for the 2FA user.
-	_ = postJSON(mux, "/v1/auth/magic-link/request", map[string]any{"email": email}, "10.36.2.1")
+	_ = postJSON(mux, "/v1/auth/magic-link/request", map[string]any{"email": email}, ip)
 	token := magicLinkTokenFromMailer(t, mailer)
-	mv := postJSON(mux, "/v1/auth/magic-link/verify", map[string]any{"token": token}, "10.36.2.1")
+	mv := postJSON(mux, "/v1/auth/magic-link/verify", map[string]any{"token": token}, ip)
 	magicSession := sessionTokenValue(mv)
 
 	// Without a TOTP code → challenged.
-	noCode := postJSONCookies(mux, "/v1/auth/2fa/disable", map[string]any{"password": "password123"}, "10.36.3.1", magicSession)
+	noCode := postJSONCookies(mux, "/v1/auth/2fa/disable", map[string]any{"password": "password123"}, ip, magicSession)
 	if noCode.Code != http.StatusUnauthorized {
 		t.Fatalf("disable-2FA without step-up = %d, want 401; body=%s", noCode.Code, noCode.Body.String())
 	}
@@ -375,7 +382,7 @@ func TestStepUpDisable2FA(t *testing.T) {
 	// With a fresh code → disabled.
 	ok := postJSONCookies(mux, "/v1/auth/2fa/disable", map[string]any{
 		"password": "password123", "totp_code": mustTOTP(secret),
-	}, "10.36.3.1", magicSession)
+	}, ip, magicSession)
 	if ok.Code != http.StatusOK {
 		t.Fatalf("disable-2FA with fresh TOTP = %d, want 200; body=%s", ok.Code, ok.Body.String())
 	}
@@ -385,6 +392,7 @@ func TestStepUpDisable2FA(t *testing.T) {
 // the gate for a magic + 2FA session (401 + marker) and passes for a normal
 // session. It does not need a real authenticator: the gate runs before WebAuthn.
 func TestStepUpPasskeyRegisterGate(t *testing.T) {
+	ip := testIP(t)
 	h, _, mailer := authTestFixture(t)
 	rest := &RESTHandlers{
 		Sessions: h.Sessions,
@@ -398,15 +406,15 @@ func TestStepUpPasskeyRegisterGate(t *testing.T) {
 	h.RegisterRoutes(mux)
 
 	email := fmt.Sprintf("stepup-passkey-%d@example.test", time.Now().UnixNano())
-	registerAndVerify(t, h, email, "password123", "10.37.1.1")
-	pw := postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": "password123"}, "10.37.1.1")
+	registerAndVerify(t, h, email, "password123", ip)
+	pw := postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": "password123"}, ip)
 	baseSession := sessionTokenValue(pw)
 	secret := enable2FAFor(t, h, mux, baseSession)
 
 	// Magic session for the 2FA user.
-	_ = postJSON(mux, "/v1/auth/magic-link/request", map[string]any{"email": email}, "10.37.2.1")
+	_ = postJSON(mux, "/v1/auth/magic-link/request", map[string]any{"email": email}, ip)
 	token := magicLinkTokenFromMailer(t, mailer)
-	mv := postJSON(mux, "/v1/auth/magic-link/verify", map[string]any{"token": token}, "10.37.2.1")
+	mv := postJSON(mux, "/v1/auth/magic-link/verify", map[string]any{"token": token}, ip)
 	magicSession := sessionTokenValue(mv)
 
 	// Without a TOTP code → the gate rejects before any WebAuthn work.
@@ -527,27 +535,28 @@ func TestStepUpGrantIsShortLivedAndScoped(t *testing.T) {
 // magic flag must be inherited so the marker (and its gate) is not silently
 // erased mid-session (issue #458).
 func TestMagicFlagSurvives2FAEnableRotation(t *testing.T) {
+	ip := testIP(t)
 	h, _, mailer := authTestFixture(t)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
 	email := fmt.Sprintf("magic-rotate-%d@example.test", time.Now().UnixNano())
-	registerAndVerify(t, h, email, "password123", "10.38.1.1")
+	registerAndVerify(t, h, email, "password123", ip)
 
 	// Magic session (no 2FA yet).
-	_ = postJSON(mux, "/v1/auth/magic-link/request", map[string]any{"email": email}, "10.38.2.1")
+	_ = postJSON(mux, "/v1/auth/magic-link/request", map[string]any{"email": email}, ip)
 	token := magicLinkTokenFromMailer(t, mailer)
-	mv := postJSON(mux, "/v1/auth/magic-link/verify", map[string]any{"token": token}, "10.38.2.1")
+	mv := postJSON(mux, "/v1/auth/magic-link/verify", map[string]any{"token": token}, ip)
 	magicSession := sessionTokenValue(mv)
 	if !h.Sessions.Magic(context.Background(), magicSession) {
 		t.Fatal("expected a magic session")
 	}
 
 	// Enable 2FA from the magic session → the response rotates the cookie.
-	setup := postJSONCookies(mux, "/v1/auth/2fa/setup", map[string]any{}, "10.38.3.1", magicSession)
+	setup := postJSONCookies(mux, "/v1/auth/2fa/setup", map[string]any{}, ip, magicSession)
 	var s map[string]string
 	_ = json.Unmarshal(setup.Body.Bytes(), &s)
-	en := postJSONCookies(mux, "/v1/auth/2fa/enable", map[string]any{"code": mustTOTP(s["secret"])}, "10.38.3.1", magicSession)
+	en := postJSONCookies(mux, "/v1/auth/2fa/enable", map[string]any{"code": mustTOTP(s["secret"])}, ip, magicSession)
 	if en.Code != http.StatusOK {
 		t.Fatalf("enable 2FA status = %d body=%s", en.Code, en.Body.String())
 	}
