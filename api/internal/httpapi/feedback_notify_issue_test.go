@@ -36,11 +36,8 @@ package httpapi
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
-
-	goredis "github.com/redis/go-redis/v9"
 
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/emailqueue"
@@ -48,34 +45,19 @@ import (
 	"github.com/wzul/jomform/api/internal/testdb"
 )
 
-// The Valkey DB this file's queue assertions use is feedbackNotifyKeyspace,
-// declared in feedback_notify_failure_test.go (#753), where the inventory of
-// taken keyspaces is documented. One declaration, not two: two files in the
-// same package redeclaring the same const is a compile error, and the two
-// files run sequentially (neither opts into t.Parallel), so each test's
-// flush-at-entry still owns the queue for its own duration.
-
-// feedbackNotifyQueue returns a queue on that keyspace, flushed for this test.
+// feedbackNotifyQueue returns a queue on this TEST's own key namespace.
+//
+// It used to build on `feedbackNotifyKeyspace` — the fixed DB number that
+// feedback_notify_failure_test.go declared — and FlushDB it at entry. That
+// fixture is gone (#775): JOMFORM_TEST_VALKEY_URL is also the API's SESSION
+// store, so a fixed index is a shared resource, and a per-test namespace is the
+// ownership rule the whole package now uses. The keys come from testdb.Valkey
+// and the queue is built on its prefix with emailqueue.NewQueueWithPrefix, so
+// this file reads and counts only what it enqueued.
 func feedbackNotifyQueue(t *testing.T) *emailqueue.Queue {
 	t.Helper()
-	valkeyURL := os.Getenv("JOMFORM_TEST_VALKEY_URL")
-	if valkeyURL == "" {
-		t.Skip("JOMFORM_TEST_VALKEY_URL not set; skipping feedback notification test")
-	}
-	u := strings.TrimPrefix(valkeyURL, "valkey://")
-	if i := strings.LastIndex(u, "/"); i >= 0 {
-		u = u[:i]
-	}
-	opts, err := goredis.ParseURL(fmt.Sprintf("redis://%s/%d", u, feedbackNotifyKeyspace))
-	if err != nil {
-		t.Fatalf("parse valkey url: %v", err)
-	}
-	rdb := goredis.NewClient(opts)
-	t.Cleanup(func() { _ = rdb.Close() })
-	if err := rdb.FlushDB(context.Background()).Err(); err != nil {
-		t.Fatalf("flush test keyspace: %v", err)
-	}
-	return emailqueue.NewQueue(rdb)
+	rdb, prefix := testdb.Valkey(t)
+	return emailqueue.NewQueueWithPrefix(rdb, prefix)
 }
 
 // queuedFeedbackMail is one message the notification path enqueued.

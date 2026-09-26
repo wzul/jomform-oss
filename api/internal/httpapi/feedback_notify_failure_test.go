@@ -37,7 +37,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -46,21 +45,8 @@ import (
 
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/emailqueue"
+	"github.com/wzul/jomform/api/internal/testdb"
 )
-
-// feedbackNotifyKeyspace is the Valkey DB this file's queue assertions use, and
-// it is deliberately its own: a per-test FlushDB cannot then wipe a keyspace
-// another file or package owns. Taken keyspaces in this repo: /2 breaker, /3
-// emailqueue, /7 response_form_notification_597, /9 the shared test env, /11
-// payments 606, /12 httpapi 606, /13 digit-block 635. The default Valkey has 16
-// databases (0-15), so /14 is the free one — do not raise this without checking
-// both the enumeration above and the server's `databases` setting (see the
-// jomform-ops skill).
-//
-// One index for the whole file is correct because Go runs the tests in a package
-// SEQUENTIALLY unless they opt into t.Parallel, and none here do; each test
-// flushes at entry and owns the queue for its duration.
-const feedbackNotifyKeyspace = 14
 
 // feedbackNotifyFixture is one wired env: a super-admin allowlist with a token
 // for the admin, a filer token, and a filed thread.
@@ -156,32 +142,88 @@ func deadQueue(t *testing.T) *emailqueue.Queue {
 	return emailqueue.NewQueue(rdb)
 }
 
-// liveQueue returns a queue on this file's keyspace, flushed at entry, plus the
-// client so a test can inspect what was enqueued.
+// liveQueue returns a queue on this TEST's own key namespace, plus the client
+// backing it, so a test can inspect what was enqueued.
 //
-// There is no "is it in use" assertion: a non-empty database is the NORMAL state
-// here (the test just enqueued into it), so the guard would fire on correct code.
-// Ownership is by the index in the comment above.
+// The keys come from testdb.Valkey (issue #21aec38d), and that is what the
+// isolation rests on. This fixture used to bypass the repo's scheme entirely:
+// it hardcoded `feedbackNotifyKeyspace = 14`, discarded the index in
+// JOMFORM_TEST_VALKEY_URL, and called FlushDB on 14 at every test entry.
+//
+// That fixed index WAS a session store. `JOMFORM_TEST_VALKEY_URL` is not only
+// this file's queue URL — api/internal/auth/session.go:31 builds the SESSIONS
+// client from the same variable, so with the env pointed at `…/14` the API's
+// `jf:session:*` keys live in DB 14 and this fixture deleted them. Measured on
+// this file's pre-fix shape (own Postgres + own Valkey, nothing else attached):
+//
+//	env index 3, planted in DB 14: jf:session:peer-probe, jf:emailq:jobs
+//	one guard's run:               both keys gone, DBSIZE 14 = 0
+//
+// and with the env pointed at /14 the file wiped the sessions it had just
+// minted, so 10 of its own 11 queue guards answered `retry = 401, want 200`.
+// A hand-maintained list of "taken" indexes is what produced that: the list in
+// the old comment here was already stale (testdb's own reserved set is
+// {8, 10, 15} and includes /10, which that list called "the shared test env").
+//
+// So there is no index to pick any more, and nothing here deletes a key this
+// run did not write: the namespace is per TEST, and testdb's cleanup SCANs it
+// and deletes only its own keys. The queue is built on that same prefix with
+// emailqueue.NewQueueWithPrefix, so the assertions below count THIS run's jobs
+// rather than whatever shares the database.
+//
+// There is no "is it in use" assertion: a non-empty namespace is the NORMAL
+// state here (the test just enqueued into it), so the guard would fire on
+// correct code. Ownership is by the key NAMES; see api/internal/testdb/valkey.go.
 func liveQueue(t *testing.T) (*emailqueue.Queue, *goredis.Client) {
 	t.Helper()
-	valkeyURL := os.Getenv("JOMFORM_TEST_VALKEY_URL")
-	if valkeyURL == "" {
-		t.Skip("JOMFORM_TEST_VALKEY_URL not set; skipping the feedback-notify queue tests")
+	rdb, prefix := testdb.Valkey(t)
+	q := emailqueue.NewQueueWithPrefix(rdb, prefix)
+	// The assertions below read q.ReadyKey(), so if this queue were ever swapped
+	// back to the production constructor they would silently read the SHARED
+	// production key instead of this run's — the length check would then compare
+	// 0 with 0 and pass while proving nothing. Refuse that shape here rather than
+	// leaving it to a comment.
+	if q.ReadyKey() == emailqueue.DefaultKeyPrefix+"jobs" {
+		t.Fatalf("the fixture's queue is on the PRODUCTION key %q — the assertions below would read "+
+			"and depend on a key this run does not own; build it on testdb.Valkey's prefix",
+			q.ReadyKey())
 	}
-	u := strings.TrimPrefix(valkeyURL, "valkey://")
-	if i := strings.LastIndex(u, "/"); i >= 0 {
-		u = u[:i]
+	if !strings.HasPrefix(q.ReadyKey(), prefix) {
+		t.Fatalf("queue key %q is not under this test's namespace %q", q.ReadyKey(), prefix)
 	}
-	opts, err := goredis.ParseURL(fmt.Sprintf("redis://%s/%d", u, feedbackNotifyKeyspace))
+	return q, rdb
+}
+
+// notifyQueueJobs reads the queue's ready list without claiming it. The key
+// comes from the QUEUE, so it matches the prefix that queue writes under
+// (issue #21aec38d) — a literal `jf:emailq:jobs` here would read the production
+// key name and count a live worker's jobs, which is the shape that made the
+// pre-fix version of this file count and delete other processes' state.
+func notifyQueueJobs(t *testing.T, q *emailqueue.Queue, rdb *goredis.Client) []emailqueue.Job {
+	t.Helper()
+	raw, err := rdb.LRange(context.Background(), q.ReadyKey(), 0, -1).Result()
 	if err != nil {
-		t.Fatalf("parse valkey url: %v", err)
+		t.Fatalf("read the enqueued jobs: %v", err)
 	}
-	rdb := goredis.NewClient(opts)
-	t.Cleanup(func() { _ = rdb.Close() })
-	if err := rdb.FlushDB(context.Background()).Err(); err != nil {
-		t.Fatalf("flush keyspace %d: %v", feedbackNotifyKeyspace, err)
+	out := make([]emailqueue.Job, 0, len(raw))
+	for _, r := range raw {
+		var j emailqueue.Job
+		if err := json.Unmarshal([]byte(r), &j); err != nil {
+			t.Fatalf("decode the enqueued job: %v\nraw: %s", err, r)
+		}
+		out = append(out, j)
 	}
-	return emailqueue.NewQueue(rdb), rdb
+	return out
+}
+
+// notifyQueueJob is notifyQueueJobs for the single job a one-shot retry leaves.
+func notifyQueueJob(t *testing.T, q *emailqueue.Queue, rdb *goredis.Client) emailqueue.Job {
+	t.Helper()
+	jobs := notifyQueueJobs(t, q, rdb)
+	if len(jobs) == 0 {
+		t.Fatalf("no job on the queue under %s — the assertion is about a job that was enqueued", q.ReadyKey())
+	}
+	return jobs[0]
 }
 
 // feedbackNotifyLogs routes the default slog sink into a buffer for one test.
@@ -372,14 +414,7 @@ func TestFeedbackNotifyRetryResendsAndClearsTheMarker(t *testing.T) {
 	}
 
 	// The re-sent job is a real feedback_notify job, addressed to the FILER.
-	raw, err := rdb.LIndex(context.Background(), "jf:emailq:jobs", 0).Result()
-	if err != nil {
-		t.Fatalf("read the enqueued job: %v", err)
-	}
-	var job emailqueue.Job
-	if err := json.Unmarshal([]byte(raw), &job); err != nil {
-		t.Fatalf("decode the enqueued job: %v\nraw: %s", err, raw)
-	}
+	job := notifyQueueJob(t, q, rdb)
 	if job.Type != feedbackNotifyJobType {
 		t.Errorf("enqueued job type = %q, want %q", job.Type, feedbackNotifyJobType)
 	}
@@ -450,14 +485,7 @@ func TestFeedbackNotifyEmailCarriesTheFullReply(t *testing.T) {
 		t.Fatalf("admin reply = %d, want 201 (body %s)", rec.Code, rec.Body.String())
 	}
 
-	raw, err := rdb.LIndex(context.Background(), "jf:emailq:jobs", 0).Result()
-	if err != nil {
-		t.Fatalf("read the enqueued job: %v", err)
-	}
-	var job emailqueue.Job
-	if err := json.Unmarshal([]byte(raw), &job); err != nil {
-		t.Fatalf("decode the enqueued job: %v", err)
-	}
+	job := notifyQueueJob(t, q, rdb)
 
 	t.Logf("rendered filer notification email:\n--- subject ---\n%s\n--- body ---\n%s\n--- end ---",
 		job.Subject, job.Body)
@@ -615,14 +643,7 @@ func TestFeedbackNotifyRetryOfAnAdminAlertGoesToTheTeam(t *testing.T) {
 		t.Fatalf("retry = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
 
-	raw, err := rdb.LIndex(context.Background(), "jf:emailq:jobs", 0).Result()
-	if err != nil {
-		t.Fatalf("read the enqueued job: %v", err)
-	}
-	var job emailqueue.Job
-	if err := json.Unmarshal([]byte(raw), &job); err != nil {
-		t.Fatalf("decode the enqueued job: %v", err)
-	}
+	job := notifyQueueJob(t, q, rdb)
 	if !strings.EqualFold(job.To, f.adminEmail) {
 		t.Errorf("the retried admin alert went to %q, want the platform team %q — a retry must not "+
 			"mail the filer an admin reply they never received", job.To, f.adminEmail)
@@ -784,7 +805,7 @@ func TestFeedbackNotifyAdminRetryWithNoRecipientsIsNotQueued(t *testing.T) {
 	}
 	_, notification := decodeNotifyResponse(t, rec.Body.Bytes())
 
-	enqueued, err := rdb.LLen(context.Background(), "jf:emailq:jobs").Result()
+	enqueued, err := rdb.LLen(context.Background(), q.ReadyKey()).Result()
 	if err != nil {
 		t.Fatalf("read the queue length: %v", err)
 	}
