@@ -124,6 +124,12 @@ export const DICT = {
   "connect.resend": { en: "Send verification email again", ms: "Hantar semula emel pengesahan", zh: "重新发送验证邮件", ta: "ஒப்பளிப்பு மின்னஞ்சலை மீண்டும் அனுப்பு", ar: "إعادة إرسال بريد التحقق" },
   "connect.resendSent": { en: "Verification email sent. Check your inbox and open the link to finish connecting.", ms: "Emel pengesahan dihantar. Periksa peti masuk anda dan buka pautan untuk selesai menghubungkan.", zh: "验证邮件已发送。请查收并打开链接完成关联。", ta: "ஒப்பளிப்பு மின்னஞ்சல் அனுப்பப்பட்டது. உங்கள் இன்பாக்ஸைச் சரிபார்த்து, இணைப்பை முடிக்க இணைப்பைத் திறக்கவும்.", ar: "تم إرسال بريد التحقق. تحقق من بريدك الوارد وافتح الرابط لإنهاء الربط." },
   "connect.stale": { en: "This link is incomplete or has expired. Please sign in again with your social account.", ms: "Pautan ini tidak lengkap atau telah tamat tempoh. Sila log masuk semula dengan akaun sosial anda.", zh: "此链接不完整或已过期。请重新使用社交账户登录。", ta: "இந்த இணைப்பு முழுமையடையவில்லை அல்லது காலாவதியானது. உங்கள் சமூக கணக்கில் மீண்டும் உள்நுழையவும்.", ar: "هذا الرابط غير مكتمل أو منتهي الصلاحية. يرجى تسجيل الدخول مرة أخرى بحسابك الاجتماعي." },
+  // The page's OWN sentences for a failure it cannot explain by code: an
+  // unknown code, or a body that is not JSON at all. Before these existed the
+  // /connect page had two hardcoded English strings here (issue #6177 follow-up),
+  // so this surface stayed English for a user whose dashboard is Malay.
+  "connect.fail": { en: "We couldn't connect this account. Please sign in again with your social account.", ms: "Kami tidak dapat menghubungkan akaun ini. Sila log masuk semula dengan akaun sosial anda.", zh: "无法关联此账户。请重新使用您的社交账户登录。", ta: "இந்தக் கணக்கை இணைக்க முடியவில்லை. உங்கள் சமூக கணக்கில் மீண்டும் உள்நுழையவும்.", ar: "تعذّر ربط هذا الحساب. يرجى تسجيل الدخول مرة أخرى بحسابك الاجتماعي." },
+  "connect.resendFail": { en: "We couldn't send the verification email. Please try again.", ms: "Kami tidak dapat menghantar emel pengesahan. Sila cuba lagi.", zh: "无法发送验证邮件。请重试。", ta: "ஒப்பளிப்பு மின்னஞ்சலை அனுப்ப முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر إرسال بريد التحقق. يرجى المحاولة مرة أخرى." },
   "prof.trusted": { en: "2FA active · device trusted until {date}", ms: "2FA aktif · peranti dipercayai sehingga {date}", zh: "2FA 已启用 · 设备信任至 {date}", ta: "2FA செயலில் · சாதனம் {date} வரை நம்பப்படுகிறது", ar: "2FA نشط · الجهاز موثوق حتى {date}" },
   "prof.forgetDevice": { en: "Forget this device", ms: "Lupa peranti ini", zh: "忘记此设备", ta: "இந்த சாதனத்தை மற", ar: "نسيان هذا الجهاز" },
   // issue #454: trusted devices management list + revoke
@@ -831,6 +837,21 @@ export const DICT = {
     ta: "இந்தப் பணியிடத்தில் இன்னும் உள்ளடக்கம் உள்ளது, எனவே நீக்க முடியாது — முதலில் காலி செய்யவும் (கீழே எஞ்சியவை பட்டியலிடப்பட்டுள்ளன).",
     ar: "ما زالت مساحة العمل هذه تحتوي على محتوى، لذا لا يمكن حذفها — أفرغها أولاً (القائمة أدناه توضح ما تبقّى).",
   },
+  // The social-connect ownership link (issue #302). Rendered by /connect, which
+  // has no page context to fall back on — the emailed link IS the whole request
+  // — so a refusal that is not about the account at all (bad or expired link,
+  // another account already holding the identity) gets its own sentence.
+  "apiErr.connectInvalid": { en: "This connect link is not valid. Open the link from the email we sent you.", ms: "Pautan penghubung ini tidak sah. Buka pautan daripada emel yang kami hantar.", zh: "此关联链接无效。请打开我们发送给您的邮件中的链接。", ta: "இந்த இணைப்பு லிங்க் தவறானது. நாங்கள் அனுப்பிய மின்னஞ்சலில் உள்ள இணைப்பைத் திறக்கவும்.", ar: "رابط الربط هذا غير صالح. افتح الرابط من البريد الذي أرسلناه إليك." },
+  "apiErr.connectExpired": { en: "This connect link has expired. Sign in with your social account again to get a fresh one.", ms: "Pautan penghubung ini telah tamat tempoh. Log masuk semula dengan akaun sosial anda untuk mendapatkan pautan baharu.", zh: "此关联链接已过期。请重新使用您的社交账户登录以获取新链接。", ta: "இந்த இணைப்பு லிங்க் காலாவதியானது. புதியதைப் பெற உங்கள் சமூக கணக்கில் மீண்டும் உள்நுழையவும்.", ar: "انتهت صلاحية رابط الربط هذا. سجّل الدخول بحسابك الاجتماعي مرة أخرى للحصول على رابط جديد." },
+  "apiErr.connectNoAccount": { en: "The JomForm account this link belongs to no longer exists.", ms: "Akaun JomForm yang memiliki pautan ini tidak lagi wujud.", zh: "此链接所属的 JomForm 账户已不存在。", ta: "இந்த இணைப்பு சேர்ந்த JomForm கணக்கு இனி இல்லை.", ar: "حساب JomForm الذي ينتمي إليه هذا الرابط لم يعد موجوداً." },
+  "apiErr.connectIdentityTaken": { en: "This social account is already connected to a different JomForm account.", ms: "Akaun sosial ini sudah dihubungkan dengan akaun JomForm yang lain.", zh: "此社交账户已关联到另一个 JomForm 账户。", ta: "இந்த சமூக கணக்கு ஏற்கனவே வேறு JomForm கணக்குடன் இணைக்கப்பட்டுள்ளது.", ar: "هذا الحساب الاجتماعي مرتبط بالفعل بحساب JomForm آخر." },
+  // "No token in the request", one per surface (issue #6177 follow-up): each
+  // sentence names the link that is missing, because the API used to answer one
+  // shared Malay literal for all four and the page could only say "something
+  // went wrong".
+  "apiErr.verifyTokenMissing": { en: "This confirmation link is missing its token. Open the link from the email we sent you, or ask for a new one.", ms: "Pautan pengesahan ini tiada tokennya. Buka pautan daripada emel yang kami hantar, atau minta pautan baharu.", zh: "此确认链接缺少令牌。请打开我们发送的邮件中的链接，或重新获取一封。", ta: "இந்த உறுதிப்படுத்தல் இணைப்பில் டோக்கன் இல்லை. நாங்கள் அனுப்பிய மின்னஞ்சலில் உள்ள இணைப்பைத் திறக்கவும், அல்லது புதியதைக் கேளுங்கள்.", ar: "رابط التأكيد هذا تفتقد رمزه. افتح الرابط من البريد الذي أرسلناه إليك، أو اطلب رابطاً جديداً." },
+  "apiErr.resetTokenMissing": { en: "This password-reset link is missing its token. Request a new reset link and open it from your email.", ms: "Pautan set semula kata laluan ini tiada tokennya. Minta pautan set semula baharu dan buka daripada emel anda.", zh: "此密码重置链接缺少令牌。请重新申请重置链接，并从邮件中打开。", ta: "இந்த கடவுச்சொல் மீட்டமைப்பு இணைப்பில் டோக்கன் இல்லை. புதிய மீட்டமைப்பு இணைப்பைக் கேட்டு, மின்னஞ்சலில் திறக்கவும்.", ar: "رابط إعادة تعيين كلمة المرور هذا تفتقد رمزه. اطلب رابطاً جديداً وافتحه من بريدك." },
+  "apiErr.magicLinkTokenMissing": { en: "This sign-in link is missing its token. Request a new sign-in link and open it from your email.", ms: "Pautan log masuk ini tiada tokennya. Minta pautan log masuk baharu dan buka daripada emel anda.", zh: "此登录链接缺少令牌。请重新申请登录链接，并从邮件中打开。", ta: "இந்த உள்நுழைவு இணைப்பில் டோக்கன் இல்லை. புதிய உள்நுழைவு இணைப்பைக் கேட்டு, மின்னஞ்சலில் திறக்கவும்.", ar: "رابط تسجيل الدخول هذا تفتقد رمزه. اطلب رابطاً جديداً وافتحه من بريدك." },
   "set.lpPrimaryColor": { en: "Accent color", ms: "Warna aksen", zh: "强调色", ta: "முதன்மை வண்ணம்", ar: "اللون المميز" },
   "set.lpBackgroundColor": { en: "Background color", ms: "Warna latar", zh: "背景颜色", ta: "பின்னணி வண்ணம்", ar: "لون الخلفية" },
   "set.lpCtas": { en: "CTA buttons", ms: "Butang CTA", zh: "CTA 按钮", ta: "CTA பொத்தான்கள்", ar: "أزرار CTA" },

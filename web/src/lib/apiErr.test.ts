@@ -92,6 +92,63 @@ function walk(dir: string, out: string[] = []): string[] {
 
 const sources = walk(SRC);
 
+// ---------------------------------------------------------------------------
+// Shared source-scanning helpers.
+//
+// The comment and string stripping below is what makes the checks DERIVED from
+// the source rather than from a hand-maintained list of variable names: an
+// earlier version of this guard hardcoded `(r|ws|outcome)` as "the things that
+// hold a runLoad outcome", which is true by luck and goes stale silently.
+// ---------------------------------------------------------------------------
+
+/** `code` is the line with string/template CONTENTS blanked, so an identifier
+ *  match cannot come from inside a literal (e.g. a sentence quoting `d.error`). */
+const stripStrings = (l: string): string => l.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`/g, '""');
+const isCommentLine = (l: string): boolean => /^\s*(\/\/|\*|\/\*)/.test(l);
+type ScanLine = { n: number; text: string; code: string };
+const scanLines = (p: string): ScanLine[] =>
+  readFileSync(p, "utf8")
+    .split("\n")
+    .map((text, i) => ({ n: i + 1, text, code: stripStrings(text) }));
+
+// Exceptions, one line each, WITH the reason — so a new occurrence cannot slip
+// in as a silent wildcard. Shared by every check below.
+const ALLOWED = [
+  // The auto-CNAME 200-OK envelope: `{auto_cname:"failed", error:<Cloudflare
+  // API diagnostic, English>}`. Wrapped in an already-localized sentence.
+  't("set.autoCnameFailed", { error: res.error || "" })',
+  // The webhook delivery LOG column: a monospace diagnostic trail
+  // ("webhook url blocked: ...", a Go http client error). Never a message.
+  '{d.error || "—"}',
+];
+
+/**
+ * `const NAME = <expr>` initializers in one file, for the alias hop below
+ * (`const msg = apiErr(d, …)` then `setErr(msg)`).
+ */
+function localInitializers(lines: ScanLine[]): Map<string, string> {
+  const m = new Map<string, string>();
+  for (const l of lines) {
+    if (isCommentLine(l.text)) continue;
+    const g = /^\s*(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(.*)$/.exec(l.code);
+    if (g && !m.has(g[1])) m.set(g[1], g[2]);
+  }
+  return m;
+}
+
+/** True when an expression resolves — through one alias hop — to an apiErr() or
+ *  translateApiErr() call. This is the property the card asks for: every
+ *  failure-body render goes THROUGH the shared helper. */
+function bindsApiErr(expr: string, inits: Map<string, string>, seen = new Set<string>()): boolean {
+  if (/(?<![\w$.])(?:apiErr|translateApiErr)\s*\(/.test(expr)) return true;
+  const id = /^\s*([A-Za-z_$][\w$]*)\s*;?\s*$/.exec(expr);
+  if (!id) return false;
+  const init = inits.get(id[1]);
+  if (init === undefined || seen.has(id[1])) return false;
+  seen.add(id[1]);
+  return bindsApiErr(init, inits, seen);
+}
+
 test("the source walk is non-empty and sees the real app (the guard cannot pass vacuously)", () => {
   assert.ok(
     sources.length > 40,
@@ -121,24 +178,11 @@ test("no call site falls back to the server's error prose", () => {
   // whenever the server sent a message, which is precisely when it matters. So
   // the banned pattern is a `.error` READ feeding a `||`/`??` fallback.
   //
-  // NOT banned (verified, not assumed):
-  //   * `setErr(r.error)` — `r` is a LoadOutcome from runLoad() (lib/wsfetch.ts),
-  //     which is ALREADY localized (it carries `errorKey`). Every such site was
-  //     read and confirmed.
-  //   * a plain `t("...", { error: x.error })` where the surrounding sentence is
-  //     localized and the interpolated field is an English infrastructure
-  //     diagnostic, not a localized API fault message.
-  //
-  // Exceptions are named here, one line each, WITH the reason — so a new
-  // occurrence cannot slip in as a silent wildcard.
-  const ALLOWED = [
-    // The auto-CNAME 200-OK envelope: `{auto_cname:"failed", error:<Cloudflare
-    // API diagnostic, English>}`. Wrapped in an already-localized sentence.
-    't("set.autoCnameFailed", { error: res.error || "" })',
-    // The webhook delivery LOG column: a monospace diagnostic trail
-    // ("webhook url blocked: ...", a Go http client error). Never a message.
-    '{d.error || "—"}',
-  ];
+  // NOT banned: `setErr(r.error)` where `r` is a LoadOutcome from runLoad()
+  // (lib/wsfetch.ts) — that `error` is ALREADY localized. That exemption is
+  // DERIVED below (the variable is assigned from a runLoad call in the same
+  // file), not hardcoded as a name list, and the sibling check further down
+  // covers the case where such a variable is read WITHOUT a fallback.
   const BUG = /(?<![\w$])([A-Za-z_$][\w$]*)\s*\??\.\s*error\s*(\|\||\?\?)/;
   const offenders: string[] = [];
   for (const p of sources) {
@@ -147,13 +191,22 @@ test("no call site falls back to the server's error prose", () => {
     // the body to hand it to apiErr(). Tests reference `error` directly.
     if (rel === "lib/apiErr.ts" || rel === "lib/wsfetch.ts") continue;
     if (rel.endsWith(".test.ts")) continue;
-    const lines = readFileSync(p, "utf8").split("\n");
-    lines.forEach((line, i) => {
-      if (/^\s*(\/\/|\*|\/\*)/.test(line)) return; // a comment quoting the bug
-      if (/(?<![\w$])(r|ws|outcome)\s*\??\.\s*error\s*(\|\||\?\?)/.test(line)) return; // runLoad outcome
-      if (!BUG.test(line)) return;
-      if (ALLOWED.some((a) => line.includes(a))) return;
-      offenders.push(`${rel}:${i + 1}: ${line.trim()}`);
+    const src = readFileSync(p, "utf8");
+    // Variables in THIS file that hold a runLoad outcome: one whose assignment
+    // sits at the start of a statement and mentions runLoad. Derived, so a page
+    // that renames `r` to `load` keeps its exemption and no stale name list can
+    // silently widen it.
+    const loadVars = new Set<string>();
+    for (const m of src.matchAll(/(?:^|[;{}(\s])(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*await\s+runLoad\b/g)) {
+      loadVars.add(m[1]);
+    }
+    scanLines(p).forEach(({ n, text, code: stripped }) => {
+      if (isCommentLine(text)) return; // a comment quoting the bug
+      const read = BUG.exec(stripped);
+      if (!read) return;
+      if (loadVars.has(read[1])) return; // a runLoad outcome — already localized
+      if (ALLOWED.some((a) => text.includes(a))) return;
+      offenders.push(`${rel}:${n}: ${text.trim()}`);
     });
   }
   assert.deepEqual(
@@ -171,6 +224,103 @@ test("no call site falls back to the server's error prose", () => {
     picker,
     /apiErr\(d,\s*t\("tpl\.useFail"\)/,
     "the reported call site no longer translates the API error code",
+  );
+});
+
+test("a failure body is never rendered without going through apiErr/translateApiErr", () => {
+  // THE HOLE THIS CLOSES (found while fixing /connect, issue #6177 follow-up).
+  // The check above only bans a `.error` read that FEEDS a `||`/`??` fallback.
+  // Two identical-prose defects walked straight past it:
+  //
+  //   setError(await r.text())      // the RAW JSON envelope, prose included
+  //   setUploadMsg(d.error)         // prose with NO fallback at all
+  //
+  // Both were proven green against the old guard by mutation. So this check is
+  // a RENDER-REACHABILITY rule instead of a fallback-shape rule: if the value
+  // handed to an error-state setter comes from an HTTP failure body — the whole
+  // body, its `.text()`, or its `.error` — it must resolve to apiErr() /
+  // translateApiErr(). Anything else is a failure body reaching the screen
+  // verbatim, which is the bug, whatever the syntax around it looks like.
+  //
+  // NOT offenders (each verified by running the suite):
+  //   * `setErr(r.error)` / `setLoadErr("")` etc. where the argument is a
+  //     runLoad outcome — `error` there is ALREADY localized (see wsfetch.ts),
+  //     and which names hold one is DERIVED from the file, not hardcoded.
+  //   * a setter whose argument never touches a Response body (a literal, a
+  //     `t(...)` sentence, an `err.message`, a validation string) — and a
+  //     caught error's `.message`, which is not the HTTP prose channel.
+  //
+  // `text`/`json` are deliberately in the pattern: reading the raw body is the
+  // exact defect this card fixes, and a legitimate need for it (a non-JSON
+  // upstream diagnostic) belongs in an ALLOWED entry with its reason.
+  const SETTER = /(?<![\w$])set([A-Za-z_$][\w$]*)\s*\(([^;]*?)\)\s*;/g;
+  /** Does this expression read an HTTP failure body — the whole body, or the
+   *  `error` prose of one that is not a localized runLoad outcome? */
+  const readsRawBody = (arg: string, loadVars: Set<string>): boolean => {
+    if (/\.\s*(?:text|json)\s*\(\s*\)/.test(arg)) return true;
+    for (const m of arg.matchAll(/([A-Za-z_$][\w$]*)\s*\??\.\s*error\b/g)) {
+      if (!loadVars.has(m[1])) return true;
+    }
+    return false;
+  };
+  const offenders: string[] = [];
+  for (const p of sources) {
+    const rel = p.slice(SRC.length);
+    if (rel === "lib/apiErr.ts" || rel === "lib/wsfetch.ts") continue;
+    if (rel.endsWith(".test.ts")) continue;
+    const lines = scanLines(p);
+    const inits = localInitializers(lines);
+    const loadVars = new Set<string>();
+    for (const m of readFileSync(p, "utf8").matchAll(/(?:^|[;{}(\s])(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*await\s+runLoad\b/g)) {
+      loadVars.add(m[1]);
+    }
+    // The state a setter writes must be an ERROR state — a name ending in
+    // "Err"/"Error"/"Msg"/"Fail". That is the convention every call site in
+    // this repo already follows, and it keeps a data setter out of the walk.
+    const isErrorState = (s: string) => /(err|error|msg|fail)$/i.test(s);
+    for (const { n, text, code: stripped } of lines) {
+      if (isCommentLine(text)) continue;
+      for (const m of stripped.matchAll(SETTER)) {
+        if (!isErrorState(m[1])) continue;
+        const arg = m[2].trim();
+        if (arg === "") continue;
+        if (ALLOWED.some((a) => text.includes(a))) continue;
+        if (!readsRawBody(arg, loadVars)) continue;
+        if (bindsApiErr(arg, inits)) continue;
+        offenders.push(`${rel}:${n}: ${text.trim()}`);
+      }
+    }
+  }
+  assert.deepEqual(
+    offenders,
+    [],
+    `these sites render an HTTP failure body without translating it (issue #6177) — ` +
+      `parse the body and pass it to apiErr(body, t("your.fallback"), t):\n  ` +
+      offenders.join("\n  "),
+  );
+
+  // The /connect page is the file this card was filed against: assert the fix
+  // is PRESENT there, not merely that the walk found nothing.
+  const connect = readFileSync(`${SRC}app/connect/page.tsx`, "utf8");
+  assert.match(
+    connect,
+    /setError\(apiErr\(body,\s*t\("connect\.fail"\),\s*t\)\)/,
+    "the reported call site no longer translates the connect error code",
+  );
+  assert.match(
+    connect,
+    /setError\(apiErr\(body,\s*t\("connect\.resendFail"\),\s*t\)\)/,
+    "the resend call site no longer translates the connect error code",
+  );
+  // Code only, not prose: this file's own comment quotes `r.text()` to explain
+  // the defect, and an assertion that trips on the explanation would be wrong.
+  const rawBodyReads = scanLines(`${SRC}app/connect/page.tsx`)
+    .filter((l) => !isCommentLine(l.text) && /\.\s*text\s*\(/.test(l.code))
+    .map((l) => `${l.n}: ${l.text.trim()}`);
+  assert.deepEqual(
+    rawBodyReads,
+    [],
+    `the connect page is reading the raw failure body again:\n  ${rawBodyReads.join("\n  ")}`,
   );
 });
 

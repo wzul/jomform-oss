@@ -425,7 +425,9 @@ func (a *AuthHandlers) socialConnect(w http.ResponseWriter, r *http.Request) {
 		Token string `json:"token"`
 	}
 	if err := decodeJSON(r, &req); err != nil || req.Token == "" {
-		writeErr(w, http.StatusBadRequest, "token diperlukan")
+		// Own wording for THIS surface (issue #6177 follow-up) — see
+		// CodeConnectTokenMissing in errcode.go.
+		writeErr(w, http.StatusBadRequest, "token penghubung diperlukan")
 		return
 	}
 	provider, uid, email, err := auth.VerifyConnectToken(a.VerifyKey, req.Token)
@@ -439,9 +441,14 @@ func (a *AuthHandlers) socialConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	// The email must still belong to an existing account, and the provider+
 	// uid from the token must not already be linked to a different user.
+	//
+	// The "account is gone" message is worded for THIS surface on purpose: the
+	// literal "akaun tidak dijumpai" is shared with the email-verify and
+	// password-recovery handlers, and naming a machine code for it would change
+	// their wire contract too (see errCodeByMessage in errcode.go).
 	existing, eerr := a.Users.ByEmail(r.Context(), email)
 	if eerr != nil || existing == nil {
-		writeErr(w, http.StatusBadRequest, "akaun tidak dijumpai")
+		writeErr(w, http.StatusBadRequest, "akaun untuk alamat ini tidak dijumpai lagi")
 		return
 	}
 	if linkedTo, ferr := a.Users.FindIdentity(r.Context(), provider, uid); ferr == nil && linkedTo != "" && linkedTo != existing.ID {

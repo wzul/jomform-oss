@@ -14,6 +14,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useI18n } from "../../components/i18n";
+import { apiErr } from "../../lib/apiErr";
 
 function ConnectForm() {
   const { t } = useI18n();
@@ -48,10 +49,16 @@ function ConnectForm() {
           if (!cancelled) router.replace("/post-login");
           return;
         }
-        const text = await r.text().catch(() => "");
-        if (!cancelled) setError(text || "Unable to connect this account.");
+        // Issue #6177 + this card: the failure body is JSON
+        // ({"code":"connect.invalid","error":"pautan penghubung tidak sah"}) and
+        // rendering `r.text()` printed that envelope verbatim, in the server's
+        // prose language. Parse it and translate the machine code; an unknown
+        // code — or a non-JSON body, which `.catch` leaves as {} — renders this
+        // page's own localized sentence, never the prose.
+        const body = await r.json().catch(() => ({}));
+        if (!cancelled) setError(apiErr(body, t("connect.fail"), t));
       } catch {
-        if (!cancelled) setError("Unable to connect this account.");
+        if (!cancelled) setError(t("connect.fail"));
       } finally {
         if (!cancelled) setBusy(false);
       }
@@ -59,7 +66,7 @@ function ConnectForm() {
     return () => {
       cancelled = true;
     };
-  }, [token, router]);
+  }, [token, router, t]);
 
   async function resend() {
     setBusy(true);
@@ -74,10 +81,10 @@ function ConnectForm() {
         setSent(true);
         return;
       }
-      const text = await r.text().catch(() => "");
-      setError(text || "Unable to send a verification email.");
+      const body = await r.json().catch(() => ({}));
+      setError(apiErr(body, t("connect.resendFail"), t));
     } catch {
-      setError("Unable to send a verification email.");
+      setError(t("connect.resendFail"));
     } finally {
       setBusy(false);
     }

@@ -97,7 +97,9 @@ func (a *AuthHandlers) sendVerifyEmail(ctx context.Context, userID, email, lang 
 func (a *AuthHandlers) handleVerify(w http.ResponseWriter, r *http.Request) {
 	token := r.URL.Query().Get("token")
 	if token == "" {
-		writeErr(w, http.StatusBadRequest, "token diperlukan")
+		// Own wording for THIS surface (issue #6177 follow-up) — see
+		// CodeVerifyTokenMissing in errcode.go.
+		writeErr(w, http.StatusBadRequest, "token pengesahan diperlukan")
 		return
 	}
 	if len(a.VerifyKey) != 32 {

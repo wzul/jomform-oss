@@ -97,6 +97,27 @@ const (
 	CodePasswordInvalid  = "password.invalid"
 	CodeLoginInvalid     = "login.invalid"
 	CodeStepUpRequired   = "auth.stepUpRequired"
+
+	// Social "connect" ownership link (issue #302). The dashboard /connect page
+	// is the ONLY surface that renders these, and it has no page context to
+	// fall back on — the link IS the whole request — so each refusal needs its
+	// own sentence rather than a shared "unable to connect".
+	CodeConnectInvalid     = "connect.invalid"
+	CodeConnectExpired     = "connect.expired"
+	CodeConnectNoAccount   = "connect.accountMissing"
+	CodeConnectOtherLinked = "connect.identityTaken"
+
+	// "No token in the request" for the four token-consuming endpoints, one code
+	// each (issue #6177 follow-up). These were ONE shared literal
+	// ("token diperlukan", written by social.go, verify.go, auth_ux.go and
+	// auth_recovery.go), which meant one wire message could not say WHICH link
+	// the caller has to reopen. Each handler now answers its own literal, so
+	// each can carry its own code and its own sentence on the dashboard.
+	// See the sibling codes on the same surfaces for the bad-token case.
+	CodeVerifyTokenMissing  = "verify.tokenMissing"
+	CodeResetTokenMissing   = "reset.tokenMissing"
+	CodeMagicTokenMissing   = "magicLink.tokenMissing"
+	CodeConnectTokenMissing = "connect.tokenMissing"
 )
 
 // Class codes: one per HTTP status the error path uses, for every message
@@ -219,6 +240,27 @@ var errCodeByMessage = map[string]string{
 	"kata laluan baharu mesti sekurang-kurangnya 10 aksara":                               CodePasswordTooShort,
 	"kata laluan salah":            CodePasswordInvalid,
 	"maklumat log masuk tidak sah": CodeLoginInvalid,
+
+	// Social connect ownership link (social.go). Note "akaun tidak dijumpai" is
+	// deliberately ABSENT: that literal is shared with the email-verify and
+	// password-recovery handlers (verify.go, auth_ux.go, auth_recovery.go), so
+	// naming a code for it would also change those endpoints' wire contract — a
+	// different surface with its own pages.
+	"pautan penghubung tidak sah":                CodeConnectInvalid,
+	"pautan penghubung telah tamat tempoh":       CodeConnectExpired,
+	"identiti sudah dipautkan ke akaun lain":     CodeConnectOtherLinked,
+	"akaun untuk alamat ini tidak dijumpai lagi": CodeConnectNoAccount,
+
+	// "No token in the request", one entry per surface (issue #6177 follow-up).
+	// These four were ONE shared literal ("token diperlukan") until each handler
+	// got its own wording — the point of the split is that a shared wire message
+	// could not identify the surface, so no single code could give the right
+	// sentence. errcode_test.go's dead-key guard fails if a key here stops
+	// appearing as a literal in a handler, so the split cannot silently revert.
+	"token pengesahan diperlukan": CodeVerifyTokenMissing,
+	"token set semula diperlukan": CodeResetTokenMissing,
+	"token log masuk diperlukan":  CodeMagicTokenMissing,
+	"token penghubung diperlukan": CodeConnectTokenMissing,
 }
 
 // errCodeByPrefix handles messages the handler assembles around a literal, so

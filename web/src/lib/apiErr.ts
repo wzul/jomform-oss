@@ -103,6 +103,27 @@ export const API_ERROR_KEYS: Record<string, Key> = {
   "password.invalid": "apiErr.passwordInvalid",
   "login.invalid": "apiErr.loginInvalid",
   "auth.stepUpRequired": "apiErr.stepUpRequired",
+
+  // The social-connect ownership link (/connect). These answer on a page whose
+  // only context is the emailed link itself, so "we couldn't connect this
+  // account" would hide which of the four things actually went wrong.
+  "connect.invalid": "apiErr.connectInvalid",
+  "connect.expired": "apiErr.connectExpired",
+  "connect.accountMissing": "apiErr.connectNoAccount",
+  "connect.identityTaken": "apiErr.connectIdentityTaken",
+
+  // "No token in the request", one per token-consuming surface (issue #6177
+  // follow-up). Each endpoint used to answer the SAME wire literal
+  // ("token diperlukan"), so no code could say which link to reopen; they now
+  // have their own wording, their own code here, and their own sentence.
+  //
+  // connect.tokenMissing reuses the /connect page's OWN sentence (connect.stale)
+  // rather than adding a fifth near-duplicate: the page already tells the user
+  // exactly what to do when the link it was handed is incomplete.
+  "verify.tokenMissing": "apiErr.verifyTokenMissing",
+  "reset.tokenMissing": "apiErr.resetTokenMissing",
+  "magicLink.tokenMissing": "apiErr.magicLinkTokenMissing",
+  "connect.tokenMissing": "connect.stale",
 };
 
 /** The machine code in an API error body, or "" when there is none. */

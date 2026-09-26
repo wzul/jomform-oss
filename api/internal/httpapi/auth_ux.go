@@ -132,7 +132,11 @@ func (a *AuthHandlers) handleResetPassword(w http.ResponseWriter, r *http.Reques
 		NewPassword string `json:"new_password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Token == "" {
-		writeErr(w, http.StatusBadRequest, "token diperlukan")
+		// Own wording for THIS surface (issue #6177 follow-up): the literal
+		// "token diperlukan" is shared by four handlers, so a machine code keyed
+		// on it could not tell the dashboard WHICH link the user has to reopen.
+		// See CodeResetTokenMissing in errcode.go.
+		writeErr(w, http.StatusBadRequest, "token set semula diperlukan")
 		return
 	}
 	if len(req.NewPassword) < 10 {

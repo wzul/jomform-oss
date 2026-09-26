@@ -358,7 +358,9 @@ func (a *AuthHandlers) handleMagicLinkVerify(w http.ResponseWriter, r *http.Requ
 		Token string `json:"token"`
 	}
 	if err := decodeJSON(r, &req); err != nil || req.Token == "" {
-		writeErr(w, http.StatusBadRequest, "token diperlukan")
+		// Own wording for THIS surface (issue #6177 follow-up) — see
+		// CodeMagicTokenMissing in errcode.go.
+		writeErr(w, http.StatusBadRequest, "token log masuk diperlukan")
 		return
 	}
 	if a.Sessions == nil {
