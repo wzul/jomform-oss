@@ -91,6 +91,16 @@ type menuDOM struct {
 	// test can drive the success path (a checkout_url) as well as the failure
 	// path (an empty object) without a server.
 	orderResponse map[string]any
+
+	// stockResponse is the body the page's live-stock read (GET /menu-stock/…)
+	// is answered with, so a test can hold the page open across a stock change:
+	// the served markup still says "in stock" (that is the stale render-time
+	// attribute) while this payload says the variant is sold out now.
+	stockResponse []map[string]any
+
+	// stockReads counts live-stock reads, so a guard can prove the page ASKED
+	// rather than inferring it from the outcome.
+	stockReads int
 }
 
 // newMenuDOMPage serves a rendered menu and returns a DOM running its script.
@@ -736,8 +746,14 @@ func (d *menuDOM) installHost() {
 	d.vm.Set("__lsRemove", func(k string) { delete(d.storage, k) })
 	d.vm.Set("__now", func() int64 { d.clock += 1000; return d.clock })
 	d.vm.Set("__setTimeout", func(fn goja.Callable) { d.timers = append(d.timers, fn) })
-	d.vm.Set("__fetch", func(url string) { d.fetches = append(d.fetches, url) })
+	d.vm.Set("__fetch", func(url string) {
+		d.fetches = append(d.fetches, url)
+		if strings.Contains(url, "/menu-stock/") {
+			d.stockReads++
+		}
+	})
 	d.vm.Set("__responseBody", func() map[string]any { return d.orderResponse })
+	d.vm.Set("__stockBody", func() []map[string]any { return d.stockResponse })
 	d.vm.Set("__navigate", func(url string) { d.navigate = url })
 	d.vm.Set("__alert", func(msg string) { d.t.Fatalf("the menu script alerted: %s", msg) })
 }
@@ -959,6 +975,18 @@ const menuDOMShim = `
   }
   g.fetch = function(url, opts){
     __fetch(String(url));
+    // The page's live-stock read (GET /menu-stock/<slug>) is answered from its
+    // own payload: it asks a different question from the checkout POST, and a
+    // test that held the page open across a stock change needs the two answers
+    // to differ.
+    if(String(url).indexOf('/menu-stock/') !== -1){
+      var stock = __stockBody();
+      return promiseOf({
+        ok: true,
+        status: 200,
+        json: function(){ return promiseOf({items: stock}); }
+      });
+    }
     if(opts && typeof opts.body === 'string'){ __lsSet('__posted_body', opts.body); }
     var body = __responseBody();
     return promiseOf({

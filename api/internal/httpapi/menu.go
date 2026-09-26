@@ -648,7 +648,8 @@ var menuPageTmpl = template.Must(template.New("workspace-menu").Parse(`{{define 
        data-lbl-submitting="{{.Ls.MenuSubmitting}}"
        data-lbl-error="{{.Ls.MenuSubmitError}}"
        data-lbl-required="{{.Ls.MenuRequired}}"
-       data-lbl-soldout="{{.Ls.MenuSoldOut}}">
+       data-lbl-soldout="{{.Ls.MenuSoldOut}}"
+       data-lbl-stockchanged="{{.Ls.MenuStockChanged}}">
     <div class="sheetback" id="menuSheetBack"></div>
     <div class="sheetpanel" role="dialog" aria-modal="true" aria-label="{{.Ls.MenuBasket}}">
       <div class="sheethead">
@@ -779,6 +780,12 @@ document.querySelectorAll('img[data-base]').forEach(function(im){
   // two menu forms in one workspace keep separate baskets.
   var KEY='jf.menu.cart.v2.'+slug;
   var cart=[];
+  // t_aa6e3596: the LIVE sold-out set, keyed by product+variant. Empty means
+  // "nothing extra known", so the rendered disabled attribute is the guard
+  // until the server answers (see unbuyable/loadLiveStock). It is a cache of
+  // the server's answer, never a second source of truth: the order core still
+  // decides what can actually be bought.
+  var liveStock={};
   try{ var raw=localStorage.getItem(KEY); if(raw) cart=JSON.parse(raw)||[]; }catch(e){ cart=[]; }
   if(!Array.isArray(cart)) cart=[];
   cart=cart.filter(function(it){ return it&&it.id; });
@@ -930,16 +937,116 @@ document.querySelectorAll('img[data-base]').forEach(function(im){
     var box=el.closest('.item')||el.parentNode;
     return box?box.querySelector('select.mvar'):null;
   }
-  // Is the selector's currently chosen option unbuyable? A variant that has
-  // sold out is rendered disabled by the server, but this page is
-  // JS-driven and stays open: the buyer can pick an option that went sold out
-  // after the page rendered (or have one restored by the browser on reload),
-  // and change fires for it. Adding it would put a line in the basket that
-  // the order endpoint refuses with 409 "stok habis" — so the pick is refused
-  // here and the item's own hint says why.
+  // Is the selector's currently chosen option buyable RIGHT NOW?
+  //
+  // The rendered "disabled" attribute is a RENDER-TIME value, and this page
+  // stays open — that is how a buyer uses a menu. A dish can sell out while it
+  // is being read, so the attribute is then simply wrong: the pick was accepted,
+  // the line landed in the basket, and the buyer only found out at checkout
+  // (409 stok habis). So the attribute is not the answer on its own; it is the
+  // answer until the live state is known.
+  //
+  // liveStock is that state: a set keyed by product+variant for every variant
+  // the server has since reported as sold out (see loadLiveStock). It is
+  // refreshed when the page is read again and before each add, and it is
+  // consulted IN ADDITION to the attribute — never instead of it — so a page
+  // whose fetch fails, or a variant the payload does not mention, keeps exactly
+  // the guard this page had before (the rendered attribute).
+  //
+  // This is a guard, not a reservation: the live state can itself be a moment
+  // old, and the order core is still the authority — a line that sells out
+  // between this check and the submit is caught by the unchanged 409, which the
+  // checkout surfaces and which keeps the basket so a retry is possible.
   function unbuyable(sel){
     var o=sel.options[sel.selectedIndex];
-    return !!(o&&o.disabled);
+    if(o&&o.disabled) return true;
+    if(!o) return false;
+    return soldOutLive(sel.getAttribute('data-id'), o.value);
+  }
+  // addIfBuyable is the ONE add path for a variable item, shared by the card tap
+  // and the change handler so the two cannot drift (they already had to agree on
+  // the sold-out refusal once — see the t_aa6e3596 guard).
+  //
+  // It refuses on what is known NOW (the rendered attribute plus the last
+  // payload), then re-reads the live state and refuses again on the fresh
+  // answer before the line is recorded. The re-read is what makes the guard
+  // cover a dish that sold out while this page was open — the case the
+  // render-time attribute cannot see. The read is bounded: done() always runs,
+  // so a slow or failed fetch delays the add but never swallows the tap.
+  function addIfBuyable(sel,host){
+    if(!host||!sel||!sel.value) return;
+    var o=sel.options[sel.selectedIndex];
+    if(unbuyable(sel)){ flagPick(sel,attr('data-lbl-soldout')); return; }
+    loadLiveStock(function(){
+      if(unbuyable(sel)){ flagPick(sel,attr('data-lbl-soldout')); return; }
+      addItem(host.getAttribute('data-id'),host.getAttribute('data-name'),o.getAttribute('data-price'),sel.value,o.getAttribute('data-vname'));
+      clearPick(sel);
+    });
+  }
+  // soldOutLive answers whether the server's latest live-stock payload reports
+  // this product+variant sold out. A missing entry answers false, so this can
+  // only ever ADD a refusal — it can never make something buyable that the
+  // rendered attribute already refuses.
+  function soldOutLive(id,vid){
+    if(!id) return false;
+    return liveStock[keyOf(id,vid||'')]===true;
+  }
+  // loadLiveStock refreshes liveStock from the server. Best effort on purpose: a
+  // failure leaves the previous state in place (empty on a first load), which
+  // means the rendered attribute is still the fallback rather than a menu that
+  // refuses everything because one fetch failed.
+  //
+  // done() runs EXACTLY ONCE, whichever way the request ends, so a caller that
+  // defers an add on this read cannot end up never adding.
+  function loadLiveStock(done){
+    var finished=false;
+    function finish(){ if(finished) return; finished=true; if(done) done(); }
+    try{
+      fetch('/menu-stock/'+encodeURIComponent(slug),{headers:{'Accept':'application/json'}})
+        .then(function(r){ return r.ok?r.json():null; })
+        .then(function(d){ applyLiveStock(d); finish(); })
+        .catch(function(){ finish(); });
+    }catch(e){ finish(); }
+  }
+  // applyLiveStock folds one payload into liveStock. Rows are per product+variant,
+  // so a variant that has been bought back into stock drops its entry and the
+  // rendered attribute (if the page was rendered sold out) is what still
+  // decides — this never un-refuses a rendered-disabled option.
+  //
+  // The payload REPLACES the set rather than merging into it, so a variant that
+  // came back into stock stops being refused on the next read.
+  function applyLiveStock(d){
+    var items=d&&d.items;
+    if(!items||typeof items.length!=='number') return;
+    var next={};
+    for(var i=0;i<items.length;i++){
+      var it=items[i];
+      if(!it||!it.product_id) continue;
+      if(it.sold_out) next[keyOf(it.product_id,it.variation_id||'')]=true;
+    }
+    liveStock=next;
+  }
+  // dropSoldOutLines re-checks the basket the page just restored from
+  // localStorage against the live state. The basket outlives the page, so a line
+  // added while the dish was in stock can be unbuyable by the time the page is
+  // opened again — and the rendered markup for that line is not consulted by
+  // anything, so without this the buyer would check out with it and only meet
+  // the 409. A dropped line is ANNOUNCED rather than silently removed: the
+  // buyer's basket changed without them touching it.
+  function dropSoldOutLines(){
+    var kept=[],dropped=[];
+    for(var i=0;i<cart.length;i++){
+      if(soldOutLive(cart[i].id,cart[i].vid)){ dropped.push(cart[i]); continue; }
+      kept.push(cart[i]);
+    }
+    if(!dropped.length) return;
+    cart=kept; save(); render();
+    // openSheet FIRST: it clears errEl (a fresh sheet starts with no error), so
+    // writing the notice before it would have it wiped. The buyer's basket
+    // changed without them touching it, so the sheet is opened to say so.
+    openSheet();
+    errEl.textContent=attr('data-lbl-stockchanged')+(dropped[0].name?': '+dropped[0].name:'');
+    errEl.hidden=false;
   }
   function flagPick(sel,msg){
     if(!sel) return;
@@ -981,9 +1088,7 @@ document.querySelectorAll('img[data-base]').forEach(function(im){
       // Variable item: the card tap cannot decide a variant. If the buyer has
       // already picked one, top up that line; otherwise prompt for the choice.
       if(!sel.value){ flagPick(sel); return; }
-      if(unbuyable(sel)){ flagPick(sel,attr('data-lbl-soldout')); return; }
-      var o=sel.options[sel.selectedIndex];
-      addItem(id,el.getAttribute('data-name'),o.getAttribute('data-price'),sel.value,o.getAttribute('data-vname'));
+      addIfBuyable(sel,el);
       return;
     }
     addItem(id,el.getAttribute('data-name'),el.getAttribute('data-price'));
@@ -1006,15 +1111,12 @@ document.querySelectorAll('img[data-base]').forEach(function(im){
     var box=t.closest('.item');
     var host=box?box.querySelector('.card[data-id],.row[data-id]'):t.previousElementSibling;
     if(!t.value){ if(host) flagPick(t); return; }
-    // The disabled attribute is the guard where this page is not scripted,
-    // but the page IS scripted: a restored or scripted selection can fire
-    // change on an option the server already marked sold out, and the line
-    // would only be refused at checkout (409 "stok habis"). Refuse it here
-    // instead, so the basket can never hold a line the buyer cannot buy.
-    if(unbuyable(t)){ flagPick(t,attr('data-lbl-soldout')); return; }
-    clearPick(t);
-    var o=t.options[t.selectedIndex];
-    if(host) addItem(host.getAttribute('data-id'),host.getAttribute('data-name'),o.getAttribute('data-price'),t.value,o.getAttribute('data-vname'));
+    // The disabled attribute is the guard where this page is not scripted, but
+    // the page IS scripted and stays open: a variant can sell out after the
+    // page rendered, and the attribute is then stale. The live re-read in
+    // addIfBuyable is what refuses that pick; the previous line was only the
+    // rendered state. Until it answers, the attribute still refuses.
+    addIfBuyable(t,host);
   });
   barBtn.addEventListener('click',openSheet);
   sheetClose.addEventListener('click',closeSheet);
@@ -1065,7 +1167,7 @@ document.querySelectorAll('img[data-base]').forEach(function(im){
     // so a skewed client clock cannot cause a false rejection) and keep the
     // basket on any failure so the buyer can retry.
     var wait=Math.max(0,3500-(Date.now()-loadAt));
-    setTimeout(function(){
+    var send=function(){
       fetch('/'+encodeURIComponent(slug)+'/order',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
         .then(function(r){ return r.json().then(function(d){ return {ok:r.ok,d:d||{}}; }); })
         .then(function(res){
@@ -1078,10 +1180,36 @@ document.querySelectorAll('img[data-base]').forEach(function(im){
           fail(d.error);
         })
         .catch(function(){ fail(''); });
-    },wait);
+    };
+    // t_aa6e3596: the last chance to catch a line that went unbuyable while the
+    // basket sat there — re-read the live state and refuse to POST a line the
+    // server will answer 409 for, naming the dish instead. The re-read cannot
+    // fail the checkout: if it does not answer, the submit goes ahead and the
+    // server's own refusal (surfaced, basket retained) is the guard, exactly as
+    // before.
+    loadLiveStock(function(){
+      var bad=null;
+      for(var i=0;i<cart.length;i++){
+        if(soldOutLive(cart[i].id,cart[i].vid)){ bad=cart[i]; break; }
+      }
+      if(bad){
+        openSheet();
+        fail(attr('data-lbl-stockchanged')+(bad.name?': '+bad.name:''));
+        render();
+        return;
+      }
+      setTimeout(send,wait);
+    });
   });
 
   render();
+
+  // t_aa6e3596: the basket outlives the page, and so does the render-time
+  // stock attribute the page was built with. On open, ask the server what is
+  // buyable NOW; a line the buyer added while the dish was in stock is then
+  // dropped and announced (dropSoldOutLines) instead of being discovered at
+  // checkout as a 409. A failed read leaves the basket exactly as it was.
+  loadLiveStock(dropSoldOutLines);
 })();
 </script>
 </body>
@@ -1323,6 +1451,134 @@ func (h *PublicHandlers) renderFormMenu(w http.ResponseWriter, r *http.Request, 
 	if err := menuPageTmpl.Execute(w, data); err != nil {
 		http.Error(w, "ralat", http.StatusInternalServerError)
 	}
+}
+
+// menuStockItem is one buyability row of the live-stock payload (see
+// handleMenuStock). VariationID is "" for a simple product's own row; a VARIABLE
+// product reports one row per variation and NO product row, because the order
+// core charges and decrements the VARIATION — the product's own stock is not
+// what decides whether that line can be bought (order.go).
+type menuStockItem struct {
+	ProductID   string `json:"product_id"`
+	VariationID string `json:"variation_id"`
+	SoldOut     bool   `json:"sold_out"`
+}
+
+// handleMenuStock answers the LIVE buyability of the products a menu form sells,
+// so the menu page can answer "can the buyer buy this NOW?" instead of trusting
+// an attribute the server wrote when the page was rendered.
+//
+// WHY THIS EXISTS (t_aa6e3596): the served menu markup flags a sold-out
+// variation with the `disabled` attribute, and `disabled` is a RENDER-TIME
+// value. The menu page stays open — that is how a buyer uses it — so a dish can
+// sell out while it is being read; the attribute is then simply wrong, the pick
+// was accepted, the line landed in the basket, and the buyer only found out at
+// checkout (409 "stok habis"). A page that is already open has no way to learn
+// the current state except by asking, which is what this endpoint is for.
+//
+// The order core stays the authority for what is actually charged and for
+// whether the stock can be taken: this read is the buyer's guard, not a
+// reservation, so a variant can still sell out between this read and the submit
+// and the unchanged 409 path is what catches that. Nothing here is cached
+// (no-store), because a cached answer is the stale-attribute problem again.
+//
+// Only the form's OWN product blocks are reported (formMenuItems), resolved the
+// same way the page resolves them (#461: live row, snapshot as the archived
+// fallback), so this payload and the rendered menu cannot describe two
+// different sets of products.
+//
+// Route: GET /menu-stock/{slug} (the menu form's own public URL's slug).
+func (h *PublicHandlers) handleMenuStock(w http.ResponseWriter, r *http.Request) {
+	f := h.resolveMenuStockForm(w, r)
+	if f == nil {
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{"items": h.menuLiveStock(r, f)})
+}
+
+// resolveMenuStockForm resolves the menu form a live-stock read is about, using
+// the SAME lookup the menu page's checkout uses (POST /{slug}/order, see
+// handleSubmit): the request Host names the workspace (its subdomain, or a
+// verified custom domain) and the path names the form. Resolving it any other
+// way would let the read and the checkout describe different forms.
+//
+// It writes the refusal itself and returns nil, so a caller cannot forget to
+// stop. A form with no enabled menu is refused rather than answered with an
+// empty list: this endpoint reports what a MENU sells, and it must not become a
+// way to read the stock of a form that is not a menu.
+func (h *PublicHandlers) resolveMenuStockForm(w http.ResponseWriter, r *http.Request) *dbstore.Form {
+	if h.Forms == nil {
+		writeErr(w, http.StatusNotFound, "borang tidak dijumpai")
+		return nil
+	}
+	slug := r.PathValue("slug")
+	var f *dbstore.Form
+	var err error
+	if sub := accountSubdomain(r.Host); sub != "" {
+		f, err = h.Forms.ByWorkspaceSlug(r.Context(), sub, slug)
+	} else if cd := customDomainOwner(r.Context(), h.Accounts, h.Domains, r.Host); cd != "" {
+		f, err = h.Forms.ByAccountSlug(r.Context(), cd, slug)
+	} else {
+		f, err = nil, dbstore.ErrFormNotFound
+	}
+	if err != nil || f == nil {
+		writeErr(w, http.StatusNotFound, "borang tidak dijumpai")
+		return nil
+	}
+	// A draft form is never publicly served (serveForm), so its stock is not
+	// public either. A private form's stock is refused unless THIS request is
+	// unlocked, so the read can never become a side door around the password
+	// gate the page itself enforces.
+	if f.Status == dbstore.FormStatusDraft {
+		writeErr(w, http.StatusNotFound, "borang tidak dijumpai")
+		return nil
+	}
+	if f.Status == dbstore.FormStatusPrivate && !h.privateUnlocked(r, f) {
+		writeErr(w, http.StatusNotFound, "borang tidak dijumpai")
+		return nil
+	}
+	if menu := dbstore.MenuFromConfig(f.Config); menu == nil || !menu.Enabled {
+		writeErr(w, http.StatusNotFound, "menu tidak dijumpai")
+		return nil
+	}
+	return f
+}
+
+// menuLiveStock reports the current buyability of every product the form's menu
+// references. A product with variations reports one row per variation (the rows
+// the order core would decrement); a product without variations reports its own
+// row. A referenced product with no live row (archived/deleted, which the page
+// renders from its snapshot) reports NOTHING: the page cannot know which stock
+// that snapshot had, and inventing "sold out" would refuse a sale the server
+// would accept — so the page keeps its rendered attribute for it instead.
+//
+// The sold-out rule is the renderer's own (soldOutStock, used by variationViews
+// and the page): a limited stock that has reached zero. An unlimited (NULL)
+// stock is never sold out.
+func (h *PublicHandlers) menuLiveStock(r *http.Request, f *dbstore.Form) []menuStockItem {
+	items := formMenuItems(f.Config)
+	out := make([]menuStockItem, 0, len(items))
+	live := productMapByID(h.liveProductsForForm(r.Context(), f))
+	for _, it := range items {
+		p, isLive := live[it.ProductID]
+		if !isLive {
+			continue
+		}
+		if h.ProductVariations != nil {
+			// A lookup error must not be reported as "sold out": the page then
+			// keeps its rendered attribute, which is the state before this
+			// endpoint existed.
+			if vs, err := h.ProductVariations.ListByProduct(r.Context(), p.ID); err == nil && len(vs) > 0 {
+				for _, v := range variationViews(vs) {
+					out = append(out, menuStockItem{ProductID: p.ID, VariationID: v.ID, SoldOut: v.SoldOut})
+				}
+				continue
+			}
+		}
+		out = append(out, menuStockItem{ProductID: p.ID, SoldOut: soldOutStock(p.Stock)})
+	}
+	return out
 }
 
 // formMenuItem is one product reference from a form's product blocks (issue

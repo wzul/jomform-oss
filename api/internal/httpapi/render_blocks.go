@@ -27,6 +27,13 @@ type variationView struct {
 	Price string
 }
 
+// soldOutStock is the ONE stock-to-buyability rule: a variation or product with
+// a limited stock that has reached zero is sold out. An unlimited (NULL) stock
+// is never sold out. It is used by every renderer AND by the menu page's
+// live-stock read (handleMenuStock), so a page cannot offer a variant the read
+// reports as unbuyable, or the other way round.
+func soldOutStock(stock *int) bool { return stock != nil && *stock <= 0 }
+
 // variationViews maps a product's stored variations to the buyer-facing view
 // shared by the form block renderer and the restaurant menu (issue #665). The
 // caller passes the result of ProductVariations.ListByProduct; a sold-out
@@ -40,7 +47,7 @@ func variationViews(vs []*dbstore.ProductVariation) []variationView {
 	for _, v := range vs {
 		out = append(out, variationView{
 			ID: v.ID, Name: v.Name, PriceSen: v.PriceSen, Stock: v.Stock,
-			SoldOut: v.Stock != nil && *v.Stock <= 0,
+			SoldOut: soldOutStock(v.Stock),
 			Price:   formatPriceSen(v.PriceSen),
 		})
 	}

@@ -152,6 +152,23 @@ func (h *PublicHandlers) RegisterRoutes(mux *http.ServeMux) {
 	// wildcard match, so no form slug can reach it. Resolves the account from
 	// the request host (workspace subdomain or verified custom domain).
 	mux.Handle("POST /menu-order", middleware.RateLimit(http.HandlerFunc(h.handleMenuOrder)))
+	// t_aa6e3596: the LIVE buyability of a menu form's products. The served menu
+	// markup flags a sold-out variation with `disabled`, which is a RENDER-TIME
+	// value — and the page stays open, so a dish can sell out while the buyer is
+	// reading it. The page asks here before it adds a line, so the basket cannot
+	// hold a line the order core will refuse with 409 "stok habis".
+	//
+	// The path is a LITERAL first segment for the reason POST /menu-order above
+	// documents: a form slug and a workspace slug share one URL namespace, and a
+	// literal segment can never be shadowed by a form whose slug is literally
+	// "menu-stock". {slug} is the menu FORM's own public slug, so the read is
+	// scoped to the same form the page was served from — and the lookup inside
+	// (resolveMenuStockForm) is the same Host-scoped one POST /{slug}/order uses.
+	//
+	// Rate-limited like the routes that create sales: it is an unauthenticated
+	// DB-backed read keyed on a guessable path, so it must not be a free way to
+	// hammer the products/variations tables.
+	mux.Handle("GET /menu-stock/{slug}", middleware.RateLimit(http.HandlerFunc(h.handleMenuStock)))
 	mux.HandleFunc("GET /t/{ref}", h.handleThankYou)
 	// Issue #202: lightweight read-only status endpoint the thank-you page
 	// polls while a sale is pending (bounded client-side poll). Returns the
