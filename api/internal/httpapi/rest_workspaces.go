@@ -315,26 +315,35 @@ func (h *RESTHandlers) workspaceDeletionCheck(w http.ResponseWriter, r *http.Req
 // `accounts(id)`, so an event about a workspace delete cannot be written against
 // an account the delete just destroyed.
 //
-// The resolved account is used when it SURVIVES the call — the scoped request
-// (`?workspace=<other>`) resolves to a different workspace's account and that
-// one is still the caller's, so it is the most faithful attribution. Only when
-// the resolved account is gone (the unscoped shape, which resolves to the
-// account of the workspace being deleted) does this fall back to another account
-// the caller still has.
+// The resolved account is used when it is one the caller OWNS and still has —
+// for the scoped request shape (`?workspace=<one of the caller's own
+// workspaces>`) that resolved account is a different, surviving workspace's
+// account of the caller's, so it is the most faithful attribution. Only when the
+// resolved account is gone (the unscoped shape, which resolves to the account of
+// the workspace being deleted) or is not the caller's at all does this fall back
+// to another account the caller still has.
 //
-// The fallback is restricted to accounts the caller OWNS. It must NOT walk
-// Workspaces.ByMember: that list is "owned OR JOINED", so for a caller who
+// OWNERSHIP, not reachability. The scope that produced `resolved` is resolved
+// through Workspaces.AccessBySlug / AccessByID (resolveSessionAccount), and
+// WorkspaceStore.access admits owner OR MEMBER — a member reaches a stranger's
+// workspace and resolves to the STRANGER's account, which survives the call. An
+// existence-only test therefore accepts it, and the caller's own
+// workspace.deleted row is written into the stranger's account-scoped audit log:
+// the stranger reads the caller's delete out of their own audit log while the
+// caller cannot see it. Attribution must never leave the caller's own tenancy,
+// and a stranger's account is not a tenancy to file our events in merely because
+// the request resolved to it.
+//
+// The fallback is likewise restricted to accounts the caller OWNS. It must NOT
+// walk Workspaces.ByMember: that list is "owned OR JOINED", so for a caller who
 // merely members a stranger's workspace the stranger's account is a candidate —
-// and if it sorts first (ByMember orders by workspace created_at), the caller's
-// own workspace.deleted row is written into the stranger's account-scoped audit
-// log. The stranger then reads the caller's delete out of their own audit log
-// while the caller cannot see it. Attribution must never leave the caller's own
-// tenancy.
+// and if it sorts first (ByMember orders by workspace created_at), the same
+// cross-tenant leak follows.
 //
 // "" means there is none; the caller then skips the event and says so.
 func (h *RESTHandlers) auditAccountAfterDelete(r *http.Request, userID, resolved string) string {
 	ctx := r.Context()
-	if h.accountExists(ctx, resolved) {
+	if h.ownsAccount(ctx, userID, resolved) {
 		return resolved
 	}
 	if userID == "" {
@@ -350,6 +359,33 @@ func (h *RESTHandlers) auditAccountAfterDelete(r *http.Request, userID, resolved
 		}
 	}
 	return ""
+}
+
+// ownsAccount reports whether accountID is an account the caller OWNS and that
+// still names a row.
+//
+// Ownership is the test, not mere accessibility: a ?workspace=<slug|id> scope
+// resolves for owners AND members alike, so "this request resolved to that
+// account" is evidence of REACHABILITY and nothing more. Reading ownership off
+// Accounts.ByOwner is also what makes the surviving-row check free — ByOwner
+// lists live rows, so a match cannot name a row the delete just removed.
+//
+// A store error is treated as "not owned": the caller then falls back rather
+// than filing its event in a tenancy it cannot prove.
+func (h *RESTHandlers) ownsAccount(ctx context.Context, userID, accountID string) bool {
+	if accountID == "" || userID == "" || h.Accounts == nil {
+		return false
+	}
+	accs, err := h.Accounts.ByOwner(ctx, userID)
+	if err != nil {
+		return false
+	}
+	for _, a := range accs {
+		if a != nil && a.ID == accountID {
+			return true
+		}
+	}
+	return false
 }
 
 // accountExists reports whether an account id still names a row. A store error

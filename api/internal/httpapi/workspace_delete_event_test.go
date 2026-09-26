@@ -682,10 +682,166 @@ func TestRESTWorkspaceDeleteEventUsesTheCallersOwnSurvivingAccount(t *testing.T)
 	}
 }
 
+// TestRESTWorkspaceDeleteEventScopedToAStrangersWorkspaceStaysOwned is the
+// regression test for the RESOLVED-account half of the cross-tenant
+// mis-attribution.
+//
+// Shape: the caller OWNS the workspace it deletes, is a MEMBER of a stranger's
+// OLDER workspace, and scopes the request to the STRANGER's slug. Only the
+// SCOPE differs from the tests above — the request itself is the UI's own
+// (`DELETE /v1/workspaces/{id}` with `?workspace=<slug>` added).
+//
+// resolveSessionAccount takes the ?workspace=<slug> path →
+// Workspaces.AccessBySlug → WorkspaceStore.access, which admits owner OR member
+// and returns that workspace's account. So the request resolves to the
+// STRANGER's account, which SURVIVES the call — and an existence-only test
+// accepts it as the attribution target. The caller's own workspace.deleted row
+// then lands in the stranger's account-scoped audit log, the stranger reads the
+// caller's delete out of their own audit log, and the caller cannot see it.
+//
+// Tenancy, not existence, is what has to decide: the resolved account may be
+// used only when the caller OWNS it. Otherwise the fallback (the caller's own
+// surviving account) applies, and the stranger's log stays empty.
+func TestRESTWorkspaceDeleteEventScopedToAStrangersWorkspaceStaysOwned(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping DB-backed REST workspace test in -short mode")
+	}
+	logs := wsEventLogs(t)
+	ctx := context.Background()
+	pool := testdb.Open(t)
+	sess := authTestValkey(t)
+	h := trashRESTFixture(t, pool)
+	h.Sessions = sess
+	h.Users = dbstore.NewUserStore(pool)
+	h.Events = dbstore.NewEventStore(pool)
+
+	acctOf := func(wsID string) string {
+		var id string
+		if err := pool.QueryRow(ctx, `SELECT id FROM accounts WHERE workspace_id=$1`, wsID).Scan(&id); err != nil {
+			t.Fatalf("read account for %s: %v", wsID, err)
+		}
+		return id
+	}
+	// The stranger's workspace is created BEFORE the caller's own, so it heads
+	// the list Workspaces.ByMember returns (ORDER BY sp.created_at).
+	strangerWS, strangerUser := wsStrangerWorkspaceOwned(t, pool, "rest-scoped-xtenant")
+	strangerAcc := acctOf(strangerWS.ID)
+	userID := mkWsUser(t, pool, "ws-event-scoped-x")
+	wsJoinAsMember(t, pool, strangerWS.ID, userID)
+	sp := dbstore.NewWorkspaceStore(pool)
+	// Created first among the caller's own workspaces, so an UNSCOPED request
+	// would resolve to ITS account — which is the account the delete destroys,
+	// and therefore not what this fixture exercises.
+	doomed, err := sp.Create(ctx, userID, "Doomed own", "scopedx-doomed-"+userID[:6])
+	if err != nil {
+		t.Fatalf("create doomed workspace: %v", err)
+	}
+	survivor, err := sp.Create(ctx, userID, "Surviving own", "scopedx-keep-"+userID[:6])
+	if err != nil {
+		t.Fatalf("create surviving workspace: %v", err)
+	}
+	survivorAcc := acctOf(survivor.ID)
+
+	// Precondition, asserted rather than assumed: the scoped request really does
+	// resolve to the STRANGER's account, and that account is NOT the caller's.
+	// If either stops being true the test no longer reproduces the defect, so it
+	// fails loudly here instead of passing quietly.
+	acc, ok, err := sp.AccessBySlug(ctx, strangerWS.Slug, userID)
+	if err != nil || !ok {
+		t.Fatalf("AccessBySlug(%s, caller) = ok=%v err=%v — the caller is not a member of the "+
+			"stranger's workspace, so the fixture is not the defect shape", strangerWS.Slug, ok, err)
+	}
+	if len(acc.Accounts) != 1 || acc.Accounts[0] != strangerAcc {
+		t.Fatalf("AccessBySlug resolved %v, want exactly the stranger's account %s", acc.Accounts, strangerAcc)
+	}
+	strangerAccRow, err := dbstore.NewAccountStore(pool).ByID(ctx, strangerAcc)
+	if err != nil || strangerAccRow == nil {
+		t.Fatalf("read stranger account %s: %v", strangerAcc, err)
+	}
+	if strangerAccRow.OwnerUserID == userID {
+		t.Fatalf("the caller OWNS the stranger's account %s; the fixture is not cross-tenant", strangerAcc)
+	}
+	// And the caller genuinely has an account of its own to fall back to.
+	if accs, err := dbstore.NewAccountStore(pool).ByOwner(ctx, userID); err != nil || len(accs) != 2 {
+		t.Fatalf("ByOwner(caller) = %v (err=%v), want the caller's own two accounts", accs, err)
+	}
+	token, err := sess.Create(ctx, userID)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// The caller deletes its OWN workspace, scoped to the STRANGER's workspace.
+	rec := sessionReq(t, h, token, http.MethodDelete,
+		"/v1/workspaces/"+doomed.ID+"?workspace="+strangerWS.Slug,
+		`{"confirm_slug":"`+doomed.Slug+`"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("scoped DELETE /v1/workspaces/{id} = %d (%s)", rec.Code, rec.Body.String())
+	}
+	// The delete must have happened — otherwise this proves nothing.
+	var exists int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM workspaces WHERE id=$1`, doomed.ID).Scan(&exists); err != nil {
+		t.Fatalf("count workspaces: %v", err)
+	}
+	if exists != 0 {
+		t.Fatal("the workspace was not deleted, so this test proves nothing")
+	}
+	// The stranger's audit log must be untouched.
+	if n, props := wsDeleteEvents(t, strangerAcc); n != 0 {
+		t.Errorf("the caller's workspace.deleted event was filed under the STRANGER's account %s "+
+			"(n=%d, properties=%v) — the caller only MEMBERS that workspace, so the request's "+
+			"resolved account is the stranger's and attribution leaked across tenants",
+			strangerAcc, n, props)
+	}
+	// The faithful home is the caller's own surviving account.
+	if n, props := wsDeleteEvents(t, survivorAcc); n != 1 {
+		t.Errorf("workspace.deleted rows on the caller's OWN surviving account %s = %d, want 1 — "+
+			"the caller owns a live account, so that is where its delete belongs (props=%v)",
+			survivorAcc, n, props)
+	}
+	// The stranger must not be able to read the caller's delete out of their own
+	// audit log — the user-visible consequence, driven through the real endpoint.
+	victimToken, err := sess.Create(ctx, strangerUser)
+	if err != nil {
+		t.Fatalf("create stranger session: %v", err)
+	}
+	read := sessionReq(t, h, victimToken, http.MethodGet,
+		"/v1/rest/events?workspace="+strangerWS.Slug+"&event_name=workspace.deleted", "")
+	if read.Code != http.StatusOK {
+		t.Fatalf("the stranger's GET /v1/rest/events = %d (%s)", read.Code, read.Body.String())
+	}
+	var out struct {
+		Total int64 `json:"total"`
+	}
+	if err := json.Unmarshal(read.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode the stranger's events listing %s: %v", read.Body.String(), err)
+	}
+	if out.Total != 0 {
+		t.Errorf("the STRANGER's own audit read reports total=%d workspace.deleted row(s), want 0 — "+
+			"the stranger reads the caller's delete out of their own audit log (%s)",
+			out.Total, read.Body.String())
+	}
+	// Whatever else happens, the write must not have been attempted-and-refused.
+	assertNoFKEventRefusal(t, logs)
+}
+
+// wsStrangerWorkspaceOwned is wsStrangerWorkspace plus the stranger's user id, for
+// the tests that need to read the audit log AS the stranger.
+func wsStrangerWorkspaceOwned(t *testing.T, pool *pgxpool.Pool, tag string) (ws *dbstore.Workspace, strangerUserID string) {
+	t.Helper()
+	ctx := context.Background()
+	strangerUserID = mkWsUser(t, pool, "stranger-"+tag)
+	ws, err := dbstore.NewWorkspaceStore(pool).Create(ctx, strangerUserID, "Stranger "+tag,
+		"stranger-"+tag+"-"+strangerUserID[:6])
+	if err != nil {
+		t.Fatalf("create stranger workspace: %v", err)
+	}
+	return ws, strangerUserID
+}
+
 // TestRESTWorkspaceDeleteEventUsesTheResolvedAccountWhenItSurvives pins the
 // other half of the attribution rule, which the live run also exercised: on a
-// SCOPED request the resolved account belongs to a DIFFERENT (surviving)
-// workspace, so it must be used as-is rather than being swapped for "any other"
+// SCOPED request the resolved account belongs to an owned workspace of the
+// caller, so it must be used as-is rather than being swapped for "any other"
 // account. That keeps the events row faithful to the account the request
 // actually acted under.
 //
