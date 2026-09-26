@@ -36,7 +36,17 @@
 #     * --dry-run removes nothing, and a repo path that does not exist is a no-op.
 #
 #   Entirely offline: a throwaway repo plus its own bare "origin" remote, a fake
-#   `hermes` answering `kanban show` from a state file, no real board, no network.
+#   `hermes kanban show` answering `kanban show` from a state file, no real board,
+#   no network.
+#
+#   The EXIT-CODE contract is asserted here too, because it is the other half of
+#   "unpushed work is never removed": a pruner that keeps work on purpose is a
+#   pruner doing its job, so `0` must be what a caller sees for it, `3` is reserved
+#   for "reclaimed nothing while keeping at-risk work" (the pruner-has-started-
+#   keeping-everything alarm) and `1` for a run that could not do its job — a failed
+#   removal, an unreadable card, a failed fetch. Every one of those is reproduced
+#   here as an OUTCOME (exit status read off a real run), including the pair that
+#   keeps exit 3 honest: the SAME at-risk set with something reclaimed exits 0.
 #
 # Run:  bash deploy/worktrees/prune-kanban-worktrees_test.sh
 # Env:  JF_PRUNE_SCRIPT=<path>   self-test a different copy of the script (this is
@@ -57,7 +67,13 @@ check() { # desc expected actual
   if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 (want '$2', got '$3')"; fi
 }
 contains() { # desc haystack needle
-  if printf '%s' "$2" | grep -qF -- "$3"; then ok "$1"
+  # NOTE: a herestring, NOT `printf '%s' "$2" | grep -q`. Under this file's
+  # `set -uo pipefail`, grep -q exits at the FIRST match, the writer then dies of
+  # SIGPIPE (141), and pipefail reports the whole pipeline as failed — so a MATCH
+  # reads as a miss as soon as the haystack is big enough to fill the pipe buffer.
+  # The pruner's log grew past that with the exit-code work, and this helper started
+  # reporting "missing" for text that was plainly in the log.
+  if grep -qF -- "$3" <<<"$2"; then ok "$1"
   else bad "$1 (missing '$3' in: $(printf '%s' "$2" | tr '\n' '|' | cut -c1-600))"; fi
 }
 
@@ -99,6 +115,10 @@ MERGED_SHA="$(git -C "$REPO" rev-list --max-parents=0 main | sed -n '1p')"   # a
 MIRROR_SHA="$(fresh_commit 'mirror-only work')"
 PUSHED_SHA="$(fresh_commit 'pushed work')"
 LOCAL_SHA="$(fresh_commit 'local-only work')"
+# The at-risk case: a commit on NO ref at all — no remote-tracking ref, no mirror,
+# no local branch. The directory is then the only thing holding it, which is what
+# the exit-3 "reclaimed nothing while keeping at-risk work" alarm is made of.
+ORPHAN_SHA="$(fresh_commit 'orphan work')"
 
 # The hand-made mirror, made exactly the documented way.
 git -C "$REPO" update-ref refs/remotes/pr/999 "$MIRROR_SHA"
@@ -118,9 +138,15 @@ git -C "$REPO" branch -q wt/t_00000004-local "$LOCAL_SHA"
 #   t_00000007 open              pushed, card still running              -> KEEP (status)
 #   t_00000008 busy              pushed, live worker process             -> KEEP (process)
 #   t_00000009 unknowable        pushed, no card to read                 -> KEEP (status)
+#   t_00000010 orphan            commit on NO ref at all, clean, old     -> KEEP (at-risk)
+#   t_00000010 is the readable at-risk case: nothing under refs/ holds its
+#   commit, so this directory may hold the only copy. It is what the exit-3
+#   "reclaimed nothing while keeping at-risk work" alarm is made of, and it
+#   must be a card the script CAN read, or the run is a failure (exit 1) instead.
 for spec in "t_00000001:$MERGED_SHA" "t_00000002:$MIRROR_SHA" "t_00000003:$PUSHED_SHA" \
             "t_00000004:$LOCAL_SHA" "t_00000005:$PUSHED_SHA" "t_00000006:$PUSHED_SHA" \
-            "t_00000007:$PUSHED_SHA" "t_00000008:$PUSHED_SHA" "t_00000009:$PUSHED_SHA"; do
+            "t_00000007:$PUSHED_SHA" "t_00000008:$PUSHED_SHA" "t_00000009:$PUSHED_SHA" \
+            "t_00000010:$ORPHAN_SHA"; do
   id="${spec%%:*}"; sha="${spec#*:}"
   git -C "$REPO" worktree add -q --detach "$REPO/.worktrees/$id" "$sha"
 done
@@ -161,6 +187,10 @@ OLD="2020-01-01 00:00"   # comfortably older than --min-age-hours
 for id in t_00000001 t_00000002 t_00000003 t_00000004 t_00000005; do
   printf 'done\n%s\n' "$OLD" >"$SB/fake-hermes/$id"
 done
+# t_00000010 is the readable at-risk case (its card is terminal and old), so it is
+# what the exit-3 alarm is built from — it must NOT also be unreadable, or the run
+# would be a failure (exit 1) and never reach the exit-3 verdict.
+printf 'done\n%s\n' "$OLD" >"$SB/fake-hermes/t_00000010"
 printf 'done\n%s\n' "$(date -d '-5 minutes' '+%F %T')" >"$SB/fake-hermes/t_00000006"
 printf 'running\n%s\n' "$OLD" >"$SB/fake-hermes/t_00000007"
 # t_00000008 (live worker process) and t_00000009 (a card that cannot be read)
@@ -226,7 +256,10 @@ echo "--- a real run: what it removes, and what it refuses to ---"
 
 : >"$LOG"
 run_prune --min-age-hours 24 >/dev/null 2>&1; RC=$?
-check "the run exits 3 — work exists only locally, for a cron wrapper to alert on" "3" "$RC"
+# Run 1 has TWO cards it cannot read (t_00000008/09 have no state file yet), which
+# under the contract is exit 1 — a worktree that can never be judged is retained
+# forever, i.e. the pruner silently stopped reclaiming it.
+check "an unreadable card is a FAILURE, not a silent keep: the run exits 1" "1" "$RC"
 
 # 3. THE CARD'S DEFECT, as an outcome on disk: the mirror-only worktree survives.
 check "mirror-only worktree SURVIVES (its only ref is a mirror)" "yes" "$(survives t_00000002)"
@@ -256,8 +289,12 @@ check "a card still running SURVIVES" "yes" "$(survives t_00000007)"
 contains "the status refusal names the status" "$(cat "$LOG")" "KEEP  t_00000007 (card status=running)"
 check "a card that cannot be read SURVIVES (never act on a card you cannot read)" \
   "yes" "$(survives t_00000009)"
-contains "...and is reported as unknown, not assumed terminal" \
-  "$(cat "$LOG")" "KEEP  t_00000009 (card status=unknown)"
+contains "...and is named as a FAILURE, not assumed terminal" \
+  "$(cat "$LOG")" "FAIL  t_00000009 (card status unreadable"
+# ...and t_00000009's card is then made terminal. It was deliberately unreadable to
+# prove the never-act-on-an-unreadable-card guard; leaving it unreadable would make
+# every later run exit 1 (correctly) and hide the exit-code assertions built below.
+printf 'done\n%s\n' "$OLD" >"$SB/fake-hermes/t_00000009"
 
 # 6. The live-process guard: a worker holding the card keeps the worktree even
 #    though the work is durable and the card is old. The card is made terminal
@@ -289,12 +326,32 @@ STRAY_PUSHED_SHA="$(fresh_commit 'stray pushed work')"
 git -C "$REPO" push -q origin "$STRAY_PUSHED_SHA:refs/heads/wt/jf-stray-pushed"
 git -C "$REPO" fetch -q origin
 git -C "$REPO" worktree add -q --detach "$SB/strayroot/jf-pushed" "$STRAY_PUSHED_SHA"
-touch -d '2020-01-01' "$SB/strayroot/jf-mirror" "$SB/strayroot/jf-pushed"
-run_prune --min-age-hours 24 >/dev/null 2>&1
+# A stray held by a LOCAL branch (not durable, but not a last copy either) and a
+# stray held by NO ref at all (at-risk). The two must be counted differently: the
+# branch outlives the worktree, the ref-less commit does not.
+STRAY_LOCAL_SHA="$(fresh_commit 'stray local-only work')"
+git -C "$REPO" branch -q wt/jf-stray-local "$STRAY_LOCAL_SHA"
+git -C "$REPO" worktree add -q --detach "$SB/strayroot/jf-local" "$STRAY_LOCAL_SHA"
+STRAY_ORPHAN_SHA="$(fresh_commit 'stray orphan work')"
+git -C "$REPO" worktree add -q --detach "$SB/strayroot/jf-orphan" "$STRAY_ORPHAN_SHA"
+touch -d '2020-01-01' "$SB/strayroot/jf-mirror" "$SB/strayroot/jf-pushed" \
+                     "$SB/strayroot/jf-local" "$SB/strayroot/jf-orphan"
+run_prune --dry-run --min-age-hours 24 >/dev/null 2>&1
 check "a STRAY worktree held only by a mirror SURVIVES" "yes" "$(stray_survives jf-mirror)"
 contains "the stray mirror refusal is logged, with the ref named" \
   "$(cat "$LOG")" "UNSAFE jf-mirror"
 contains "...naming refs/remotes/pr/998" "$(cat "$LOG")" "refs/remotes/pr/998"
+check "a STRAY worktree held by a LOCAL branch SURVIVES" "yes" "$(stray_survives jf-local)"
+contains "...and is reported with its branch named, not as at-risk" \
+  "$(cat "$LOG")" "only on LOCAL branch 'wt/jf-stray-local' — not pruning stray"
+check "a STRAY worktree held by NO ref at all SURVIVES" "yes" "$(stray_survives jf-orphan)"
+# The whole point of the split: the at-risk count is the two ref-less keeps — the card
+# orphan (t_00000010) and the stray orphan (jf-orphan) — and NOT the local-branch stray
+# just above. A board full of unpushed branches must not trip the exit-3 "pruner is
+# keeping everything" alarm.
+contains "...and the at-risk count is the two ref-less keeps only (card orphan + stray orphan)" \
+  "$(cat "$LOG")" "at_risk=2"
+run_prune --min-age-hours 24 >/dev/null 2>&1
 check "a STRAY worktree with a real pushed branch was REMOVED" "no" "$(stray_survives jf-pushed)"
 contains "the stray removal records its verdict" "$(cat "$LOG")" "RM    jf-pushed (stray"
 
@@ -315,7 +372,82 @@ if grep -q "RM    t_00000003" "$LOG"; then
 else
   ok "a dry run performed no removal"
 fi
-check "a dry run still reports work that exists only locally" "3" "$DRY_RC"
+# A dry run is never judged on progress: it reclaims nothing BY DESIGN, so "reclaimed
+# nothing" cannot mean "the pruner is keeping everything" there. Reporting at-risk
+# keeps in an exploratory run's exit status would make every hand-run `--dry-run`
+# look like a failure. It reports them in the log (above) and exits 0; the alarm is
+# asserted on real runs below.
+check "a dry run reporting work that exists only locally is still exit 0 (a dry run cannot judge progress)" "0" "$DRY_RC"
+
+echo "--- the exit-code contract: what a caller can alert on ---"
+# Exit 3 used to mean "any unsafe count", which on a busy board is EVERY run — the
+# signal a human reads could never clear (measured on the real host: the last 7 of 7
+# runs, and 528 of 567 refusals being a local branch whose commit still exists in a
+# ref). It now means one narrow thing: reclaimed nothing while keeping work whose
+# only copy may be this directory. The four cases below pin all four codes.
+
+# 8a. A keep on purpose, with progress: exit 0. This is the case the real board is in
+#     almost every day, and it is the one that must NOT be an error. The dry run above
+#     left the pushed t_00000003 on disk, so this real run reclaims it while keeping the
+#     at-risk work (t_00000010 and the jf-orphan stray — 2 ref-less commits).
+check "the reclaimable worktree is still on disk from the dry run" "yes" "$(survives t_00000003)"
+: >"$LOG"
+run_prune --min-age-hours 24 >/dev/null 2>&1; RC=$?
+check "a run that keeps at-risk work AND reclaims is exit 0 — kept on purpose is not a failure" "0" "$RC"
+contains "...the reclaim is recorded" "$(cat "$LOG")" "RM    t_00000003"
+contains "...and the at-risk keeps are counted separately from the unsafe total" \
+  "$(cat "$LOG")" "at_risk=2"
+contains "...while the unsafe total still counts them" "$(cat "$LOG")" "unsafe="
+contains "...and nothing in that run is called a failure" "$(grep -c 'FAIL ' "$LOG")" "0"
+
+# 8b. The alarm: at-risk work kept and NOTHING reclaimed at all. A pruner that has
+#     started keeping everything looks exactly like this. Everything reclaimable is
+#     already gone, so the only thing left is the at-risk work.
+: >"$LOG"
+run_prune --min-age-hours 24 >/dev/null 2>&1; RC=$?
+check "at-risk work kept with no reclaim at all is exit 3 (the pruner-is-keeping-everything alarm)" "3" "$RC"
+contains "...and the summary names the at-risk keeps" "$(cat "$LOG")" "at_risk=2"
+
+# 8c. A FAILED removal is exit 1, not a silent keep: the worktree is retained because
+#     git refused, which is a different thing from a deliberate refusal. A locked
+#     worktree reproduces it deterministically (git 2.43; `remove --force` cannot
+#     remove a locked tree, only `remove --force --force` can).
+git -C "$REPO" worktree add -q --detach "$REPO/.worktrees/t_00000003" "$PUSHED_SHA"
+git -C "$REPO" worktree lock --reason sandbox "$REPO/.worktrees/t_00000003"
+: >"$LOG"
+run_prune --min-age-hours 24 >/dev/null 2>&1; RC=$?
+check "a removal that git REFUSES is exit 1" "1" "$RC"
+contains "...and the refusal is logged as a FAIL, not as a keep" \
+  "$(cat "$LOG")" "FAIL  t_00000003 (git worktree remove failed)"
+check "...and the locked worktree is still on disk" "yes" "$(survives t_00000003)"
+contains "...and the summary counts it as a failure" "$(cat "$LOG")" "failures=1"
+git -C "$REPO" worktree unlock "$REPO/.worktrees/t_00000003" 2>/dev/null
+check "the lock is what caused it (unlocking makes the same worktree removable)" "no" \
+  "$( git -C "$REPO" worktree remove --force "$REPO/.worktrees/t_00000003" >/dev/null 2>&1; [ -d "$REPO/.worktrees/t_00000003" ] && echo yes || echo no )"
+
+# 8d. A failed FETCH is exit 1 too: the durability verdict was then taken on
+#     possibly-stale refs, which is the state that both keeps pushed work forever and
+#     can call stale refs durable. A repo whose origin cannot be reached reproduces it
+#     deterministically and offline.
+: >"$LOG"
+UNREACHABLE="$SB/unreachable-repo"
+git init -q -b main "$UNREACHABLE"
+git -C "$UNREACHABLE" remote add origin "$SB/no-such-origin.git"
+mkdir -p "$UNREACHABLE/.worktrees"
+env JF_PRUNE_REPO="$UNREACHABLE" JF_PRUNE_BOARD=sandbox JF_PRUNE_LOG="$LOG" \
+    JF_PRUNE_EXTRA_ROOTS="$SB/strayroot" \
+    bash "$SCRIPT" --min-age-hours 24 >/dev/null 2>&1; RC=$?
+check "a FAILED git fetch is exit 1 — the run's verdict cannot be trusted" "1" "$RC"
+contains "...and says so in the log" "$(cat "$LOG")" "FAIL  git fetch failed"
+contains "...and the summary records it" "$(cat "$LOG")" "fetch_failed=1"
+
+# 8e. --no-fetch is NOT a failure: the caller asked for it, and the log says so.
+: >"$LOG"
+env JF_PRUNE_REPO="$UNREACHABLE" JF_PRUNE_BOARD=sandbox JF_PRUNE_LOG="$LOG" \
+    JF_PRUNE_EXTRA_ROOTS="$SB/strayroot" \
+    bash "$SCRIPT" --no-fetch --min-age-hours 24 >/dev/null 2>&1; RC=$?
+check "--no-fetch is a deliberate judgement on the refs as they are: exit 0" "0" "$RC"
+contains "...and the log still states it" "$(cat "$LOG")" "--no-fetch"
 
 echo "--- a repo path it cannot use, and the no-fetch path ---"
 OUT="$(run_prune --repo "$SB/does-not-exist" 2>&1)"; RC=$?

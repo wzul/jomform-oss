@@ -158,8 +158,27 @@ records was reproduced, and it is why the test names `refs/remotes/origin`
 explicitly and prints the non-remote-tracking refs it refused to trust
 (`[ignoring non-remote-tracking ref(…)]` in the log).
 
-Exit codes: `0` nothing to do, `3` work exists only locally (i.e. the run kept
-something on purpose — a cron wrapper can alert on it), `2` bad arguments.
+**A refusal is not a failure.** Keeping work is this script's normal, deliberate
+outcome: an unpushed local branch, a hand-made mirror, a live worker, a card
+younger than `--min-age-hours`, a dirty tree. Every one of those is named in the
+log, and the run still exits `0`, because treating them as errors makes the job
+status an alarm that can never clear. Measured on the agent host before this
+change: **11 of 20** logged runs exited 3, the **last 7 of 7** did, and **528 of
+567** refusals were a local branch whose commit still exists in a ref — i.e. the
+code was the steady state, not a signal. The codes now mean:
+
+| Code | Meaning | Alert? |
+|---|---|---|
+| `0` | the run did its job: every removal it attempted succeeded, and whatever it kept, it kept on purpose | no |
+| `1` | the run could not do its job — a `git worktree remove` FAILED, a card could not be read (so its worktree can never be judged), or `git fetch` failed and the durability verdict came from stale refs | yes |
+| `2` | bad arguments | — |
+| `3` | **no progress**: nothing was reclaimed while work whose only copy may be a kept directory was kept — the pruner-has-started-keeping-everything alarm | yes |
+
+Exit `3` is deliberately narrow. A busy board that keeps a few at-risk
+directories while reclaiming the reclaimable rest is exit `0`; the alarm is the
+shape where the pruner stops reclaiming *anything*. `--no-fetch` is a deliberate
+caller choice (the log says so) and is never exit `1`; a failed fetch is. A
+`--dry-run` reclaims nothing *by design*, so it is never judged on progress.
 
 ### Operating it
 
@@ -203,8 +222,13 @@ state file. It asserts, as outcomes read off real runs —
 - genuinely pushed work and work merged into `origin/main` are still **removed**,
   so the fix cannot pass by refusing everything;
 - work held only by a local branch, a dirty worktree, a too-recent card, a card
-  still running, an unreadable card, and a worktree with a live worker process are
-  each kept, each with its own reason in the log;
+  still running, an unreadable card, a worktree holding a commit on no ref at all,
+  and a worktree with a live worker process are each kept, each with its own reason
+  in the log;
+- the **exit-code contract** is read off real runs: a keep-on-purpose run with a
+  reclaim exits `0`; the same at-risk set with nothing reclaimed exits `3`; a
+  removal git refuses (a locked worktree), an unreadable card, and a failed fetch
+  each exit `1`; `--no-fetch` stays `0`; a `--dry-run` is never judged on progress;
 - the stray-worktree loop (outside `.worktrees`, no card reference) gets the same
   correction;
 - `--dry-run` removes nothing.

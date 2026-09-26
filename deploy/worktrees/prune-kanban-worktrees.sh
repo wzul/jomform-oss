@@ -27,6 +27,29 @@
 #      A LOCAL branch does not count (removing the worktree keeps the branch, so
 #      it is reported as UNSAFE, not removed).
 #
+# EXIT CODES — WHAT A CALLER CAN ALERT ON
+#   0  the run did its job: every removal it ATTEMPTED succeeded, and the work it
+#      kept was kept on purpose. Keeping work is normal here (an unpushed local
+#      branch, a hand-made mirror, a live worker, a too-recent card, a dirty tree)
+#      — the log names each one and the summary line counts them, but a refusal is
+#      not a failure of the run.
+#   1  something went wrong: a `git worktree remove` FAILED, a card could not be
+#      read (so its worktree can never be judged), or `git fetch` failed and the
+#      durability verdict was taken on stale refs. These are the conditions that
+#      mean the pruner could not do its job, and they are the ones to alarm on.
+#   2  bad arguments.
+#   3  no progress: the run reclaimed nothing while work whose ONLY copy is a
+#      directory it refused to remove was kept. This is the "the pruner has
+#      started keeping everything" alarm — deliberately narrow, so a board that
+#      keeps a few at-risk directories while reclaiming the reclaimable rest stays
+#      green. `--dry-run` reclaims nothing by design and is never judged on this.
+#
+# BEFORE THIS CONTRACT: any `unsafe` count exited 3. On a busy board that is every
+# run (measured 2026-09-25: 11 of 20 logged runs, the last 7 of 7, 528 of 567
+# refusals being a local branch whose commit still exists), so the code meant
+# nothing and the status a human reads could never clear. Exit 3 now says a
+# specific thing, and the deliberate refusals moved to 0 where they belong.
+#
 # WHAT "REMOTE-TRACKING" MEANS HERE, AND WHY THE TEST IS WRITTEN THE LONG WAY
 #   `git branch -r --contains <sha>` lists every ref under refs/remotes/ — INCLUDING
 #   hand-made mirrors like refs/remotes/pr/<N> (`git fetch origin pull/N/head:refs/remotes/pr/N`,
@@ -73,7 +96,7 @@ while [ $# -gt 0 ]; do
     --board)          BOARD="$2"; shift 2;;
     --repo)           REPO="$2"; shift 2;;
     --no-fetch)       DO_FETCH=0; shift;;
-    -h|--help)        sed -n '2,50p' "$0"; exit 0;;
+    -h|--help)        sed -n '2,52p' "$0"; sed -n '67,76p' "$0"; exit 0;;
     *) echo "unknown arg: $1" >&2; exit 2;;
   esac
 done
@@ -145,20 +168,38 @@ main() {
   [ -d "$REPO/.worktrees" ] || { log "no worktrees dir at $REPO/.worktrees"; exit 0; }
   cd "$REPO" || exit 1
 
+  removed=0 skipped=0 unsafe=0
+  # Failure counters, kept apart from the "kept on purpose" ones on purpose:
+  # `failures`/`fetch_failed` are what exit 1 is for (see EXIT CODES at the top of
+  # this file). Initialised BEFORE the fetch below, which is what can set the second.
+  failures=0 fetch_failed=0
+  # Directories refused because NOTHING under refs/ — no remote-tracking ref, no
+  # hand-made mirror — carries their commit, so the directory itself may hold the
+  # only copy. Counted for the exit-3 "reclaimed nothing while keeping at-risk
+  # work" check only. A mirror-held commit is NOT counted: the mirror ref survives
+  # the removal, which is why it is merely not trusted as *durability*.
+  at_risk_total=0
+
   # Remote-tracking refs are stale until fetched, and the durability test below
   # depends on them. Without this, freshly pushed work reads as "unpushed" and is
   # held forever (or worse, a stale ref makes old work look durable). A mirror is
   # NOT refreshed by this: it is in no refspec, which is the whole point.
   if [ "$DO_FETCH" = 1 ]; then
-    git fetch --prune origin >/dev/null 2>&1 || log "WARN: git fetch failed; durability judged on possibly-stale refs"
+    if ! git fetch --prune origin >/dev/null 2>&1; then
+      # A failed fetch is a FAILURE, not a warning: the durability verdict below is
+      # taken on possibly-stale remote-tracking refs, which is exactly the state that
+      # makes pushed work read as unpublished (kept forever) or a stale ref read as
+      # durable (removed). Exit 1 so a caller can tell this apart from "kept on
+      # purpose" — see EXIT CODES above.
+      log "FAIL  git fetch failed; durability judged on possibly-stale refs — this run cannot be trusted"
+      fetch_failed=1
+    fi
   else
     log "WARN: --no-fetch; durability judged on the refs as they are"
   fi
 
   NOW=$(date +%s)
   CUTOFF=$(( NOW - MIN_AGE_HOURS * 3600 ))
-
-  removed=0 skipped=0 unsafe=0
 
   log "=== prune start (board=$BOARD repo=$REPO min-age=${MIN_AGE_HOURS}h dry-run=$DRY_RUN) ==="
 
@@ -193,7 +234,16 @@ main() {
     status=$(printf '%s' "$raw" | grep -oE '^  status: +[a-z_]+' | awk '{print $2}')
     case "$status" in
       done|archived) ;;
-      *) log "KEEP  $name (card status=${status:-unknown})"; skipped=$((skipped+1)); continue;;
+      "")
+        # An unreadable card is a FAILURE, not a deliberate keep: with no status we
+        # can never judge this worktree, so it is retained forever and the pruner
+        # silently stops reclaiming it. That is the shape the `--dry-run` runs on the
+        # real host kept hitting (3 of them logged `card status=unknown`). Exit 1 so
+        # a caller can tell it apart from "kept on purpose".
+        log "FAIL  $name (card status unreadable — cannot judge this worktree; leaving it)"
+        failures=$((failures+1)); continue;;
+      *)
+        log "KEEP  $name (card status=${status})"; skipped=$((skipped+1)); continue;;
     esac
 
     completed=$(printf '%s' "$raw" | grep -oE '^  completed: +[0-9-]+ [0-9:]+' | sed 's/^  completed: *//')
@@ -210,8 +260,8 @@ main() {
     # 5. DURABILITY — the whole point. Never delete work that exists nowhere else.
     head=$(git -C "$wt" rev-parse HEAD 2>/dev/null || echo "")
     if [ -z "$head" ]; then
-      log "KEEP  $name (cannot resolve HEAD)"
-      skipped=$((skipped+1)); continue
+      log "FAIL  $name (cannot resolve HEAD — cannot judge this worktree; leaving it)"
+      failures=$((failures+1)); continue
     fi
 
     durable=""
@@ -221,13 +271,20 @@ main() {
       pushed-branch)    durable="pushed-branch" ;;
       local-branch)
         # Not on any remote-tracking ref. Removing the WORKTREE loses nothing as
-        # long as the local branch survives — but "nothing is on a remote" is the
-        # condition this script reports rather than acts on, so it is UNSAFE.
+        # long as the local branch survives — and it does: the branch is not part of
+        # the worktree `git worktree remove` deletes. So this is a keep on purpose,
+        # reported with its branch named, NOT a failure of the run (exit 0).
         log "UNSAFE $name (card=$task head=${head:0:10} only on LOCAL branch '$(local_holder "$REPO" "$head")' — not pushed; leaving it)"
         unsafe=$((unsafe+1)); continue ;;
       *)
+        # Nothing under refs/ names this commit, so this directory may hold the only
+        # copy. Refused, at-risk, and counted for the exit-3 "reclaimed nothing
+        # while keeping at-risk work" check — but only when no mirror holds it
+        # either, since a mirror ref survives the removal.
         log "UNSAFE $name (card=$task head=${head:0:10} on no ref at all — unpushed work, leaving it)$note"
-        unsafe=$((unsafe+1)); continue ;;
+        unsafe=$((unsafe+1))
+        [ -z "$note" ] && at_risk_total=$((at_risk_total+1))
+        continue ;;
     esac
 
     # Also confirm nothing is dirty in a way that would be lost.
@@ -246,7 +303,7 @@ main() {
         removed=$((removed+1))
       else
         log "FAIL  $name (git worktree remove failed)"
-        skipped=$((skipped+1))
+        failures=$((failures+1))
       fi
     fi
   done
@@ -282,15 +339,26 @@ main() {
       fi
 
       head=$(git -C "$wt" rev-parse HEAD 2>/dev/null || echo "")
-      [ -z "$head" ] && { log "KEEP  $name (no HEAD)"; continue; }
+      [ -z "$head" ] && { log "FAIL  $name (no HEAD — cannot judge this stray; leaving it)"; failures=$((failures+1)); continue; }
 
       note="$(mirror_note "$REPO" "$head")"
       case "$(durable_verdict "$REPO" "$head")" in
         merged-into-main) dur="merged-into-main" ;;
         pushed-branch)    dur="pushed-branch" ;;
-        *)
-          log "UNSAFE $name (head=${head:0:10} on no remote-tracking ref — not pruning stray)$note"
+        local-branch)
+          # Same reasoning as the card loop: a local branch is not durable, but it is
+          # not a last copy either — the branch outlives the worktree — so a stray
+          # held by one is a refusal, NOT an at-risk keep.
+          log "UNSAFE $name (head=${head:0:10} only on LOCAL branch '$(local_holder "$REPO" "$head")' — not pruning stray)"
           stray_unsafe=$((stray_unsafe+1)); continue ;;
+        *)
+          # Nothing under refs/ names this commit at all, so this directory may hold
+          # the only copy. This is the at-risk shape (and only when no hand-made
+          # mirror holds it, since a mirror ref survives the removal).
+          log "UNSAFE $name (head=${head:0:10} on no remote-tracking ref — not pruning stray)$note"
+          stray_unsafe=$((stray_unsafe+1))
+          [ -z "$note" ] && at_risk_total=$((at_risk_total+1))
+          continue ;;
       esac
 
       # Ignore build artefacts when judging dirtiness (node_modules, .next, tsbuildinfo).
@@ -310,6 +378,7 @@ main() {
           stray_removed=$((stray_removed+1))
         else
           log "FAIL  $name (could not remove stray worktree)"
+          failures=$((failures+1))
         fi
       fi
     done
@@ -338,12 +407,31 @@ main() {
     done
   fi
 
-  log "=== prune done: removed=$removed skipped=$skipped unsafe=$unsafe stray_removed=$stray_removed stray_unsafe=$stray_unsafe ==="
+  log "=== prune done: removed=$removed skipped=$skipped unsafe=$unsafe stray_removed=$stray_removed stray_unsafe=$stray_unsafe failures=$failures at_risk=$at_risk_total fetch_failed=$fetch_failed ==="
   df -h / | sed -n '2p' | sed 's/^/  /' | tee -a "$LOG"
 
-  # Exit non-zero when work exists only locally, so a cron wrapper can alert.
-  [ "$unsafe" -gt 0 ] && exit 3
-  [ "$stray_unsafe" -gt 0 ] && exit 3
+  # EXIT CODES — see the header. In order of who should look:
+  #
+  # 1  the pruner could not do its job. A removal failed, a card could not be read
+  #    (so that worktree can never be judged), or the fetch failed and the verdict
+  #    was taken on stale refs. Alert on this.
+  [ "$failures" -gt 0 ] && exit 1
+  [ "$fetch_failed" -gt 0 ] && exit 1
+  #
+  # 3  "no progress": nothing was reclaimed even though work whose only copy may be
+  #    this directory was kept. Narrow ON PURPOSE — a board that keeps a few at-risk
+  #    directories while still reclaiming the reclaimable rest is a normal busy board
+  #    (exit 0). A pruner that suddenly keeps EVERYTHING is the different thing worth
+  #    waking someone for, and it is the only thing this code means now. A dry run
+  #    reclaims nothing by design, so it is never judged on this.
+  if [ "$DRY_RUN" != "1" ] && [ "$at_risk_total" -gt 0 ] \
+     && [ "$removed" -eq 0 ] && [ "$stray_removed" -eq 0 ]; then
+    exit 3
+  fi
+  #
+  # 0  the run did its job: every removal it attempted succeeded, and whatever it
+  #    kept it kept on purpose (an unpushed local branch, a hand-made mirror, a live
+  #    worker, a too-recent card, a dirty tree) — each named in the log above.
   exit 0
 }
 
