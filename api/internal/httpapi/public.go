@@ -114,13 +114,13 @@ func (h *PublicHandlers) RegisterRoutes(mux *http.ServeMux) {
 	// them same-origin (/styles/app.css). Registered before /{slug} so assets
 	// win over a form slug.
 	mux.HandleFunc("GET /assets/{key...}", h.handleAsset)
-	mux.HandleFunc("GET /embed/f/{accslug}/{slug}", h.embedForm)
+	mux.HandleFunc("GET /embed/f/{wsslug}/{slug}", h.embedForm)
 	// The submit the embedded page posts to (location.pathname + "/order").
 	// Registered alongside the GET so an embed can actually be SUBMITTED, and
 	// on the same path scope its GET resolves with — an embed is served on the
 	// merchant's own site, so the request Host never names the workspace.
 	// Rate-limited like the canonical order routes: it creates sales.
-	mux.Handle("POST /embed/f/{accslug}/{slug}/order", middleware.RateLimit(http.HandlerFunc(h.embedSubmit)))
+	mux.Handle("POST /embed/f/{wsslug}/{slug}/order", middleware.RateLimit(http.HandlerFunc(h.embedSubmit)))
 	// The unlock an EMBEDDED private form's gate posts to. Registered on the
 	// same path scope as the GET and the /order above, because the gate lives
 	// inside the embed document and must post to its OWN address (exactly as
@@ -128,7 +128,10 @@ func (h *PublicHandlers) RegisterRoutes(mux *http.ServeMux) {
 	// the gate hardcoded the canonical /{slug}/unlock, which is host-scoped —
 	// and an embed's Host is the MERCHANT's domain, so the unlock could never
 	// name the workspace. See embedUnlock.
-	mux.HandleFunc("POST /embed/f/{accslug}/{slug}/unlock", h.embedUnlock)
+	// NOTE: the wildcard is {wsslug} on all three /embed/f/ routes, matching the
+	// handler reads — under a pattern named {accslug} a handler reading
+	// PathValue("wsslug") resolves "", and the scope is lost. See embedForm.
+	mux.HandleFunc("POST /embed/f/{wsslug}/{slug}/unlock", h.embedUnlock)
 	// Issue #276: sitemap.xml for custom-domain workspaces (indexed workspaces only).
 	mux.HandleFunc("GET /sitemap.xml", h.handleSitemap)
 	// Issue #276: indexed custom-domain workspace URLs for the web sitemap.
@@ -517,7 +520,7 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 //
 // It exists so the two submit routes cannot drift. handleSubmit resolves the
 // form from the request Host (/{slug}/order); embedSubmit resolves it from the
-// route's own {accslug} path segment (/embed/f/{accslug}/{slug}/order), which
+// route's own {wsslug} path segment (/embed/f/{wsslug}/{slug}/order), which
 // is the same scope its GET uses. Those lookups legitimately differ — a Host
 // naming a workspace that holds no such form must 404 while the path-scoped
 // embed URL serves — but the GATES and the DISPATCH must be identical, so they
@@ -1477,7 +1480,7 @@ func (h *PublicHandlers) handleFormUnlock(w http.ResponseWriter, r *http.Request
 // unlockResolvedForm is everything a private-form unlock does once the form is
 // resolved: the private-status gate, the argon2id password check and the signed
 // unlock cookie. It exists so the canonical unlock (POST /{slug}/unlock, host
-// scope) and the embed unlock (POST /embed/f/{accslug}/{slug}/unlock, path
+// scope) and the embed unlock (POST /embed/f/{wsslug}/{slug}/unlock, path
 // scope) cannot drift — the same reason submitResolvedForm is shared by the two
 // submit routes. Only the LOOKUP differs between them, and it differs because it
 // must.
@@ -1574,10 +1577,10 @@ func newFormAccessCookie(token string) *http.Cookie {
 // path/route drift #722 fixed for the submit button, and it is what made an
 // embedded private form permanently locked: an embed is served on the MERCHANT's
 // origin, so its gate must post to the embed scope
-// (/embed/f/{accslug}/{slug}/unlock), where the request Host never names the
+// (/embed/f/{wsslug}/{slug}/unlock), where the request Host never names the
 // workspace. Every route that can render this gate therefore needs its matching
 // POST .../unlock registered: /{slug} and /f/{slug} (host scope) and
-// /embed/f/{accslug}/{slug} (path scope).
+// /embed/f/{wsslug}/{slug} (path scope).
 func (h *PublicHandlers) renderPrivateGate(w http.ResponseWriter, r *http.Request, f *dbstore.Form) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	// Language placement: the gate must speak the same language as the form

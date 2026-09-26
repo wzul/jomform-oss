@@ -25,12 +25,17 @@
 //      anchor, and renders a NON-NAVIGATING control for the unavailable case.
 //      Reverting layer 3 fails here.
 //   3. Layer 2 (the real fix) is still in place on the server: the Go URL
-//      builders resolve through WorkspaceStore.PublicHostSlugByAccount — the
-//      workspace slug with an account-slug fallback, i.e. the two hosts the
-//      public request path accepts — and NOT through the workspace-only join.
-//      Read cross-language on purpose (same idiom as homeServerContent.test.ts):
-//      the invariant is one value living in two languages, and a revert on the
-//      Go side is otherwise invisible from the web tree.
+//      builders resolve through WorkspaceStore.PublicHostSlugByAccount, which is
+//      the WORKSPACE-only lookup — the one host the public request path serves.
+//      The account-slug fallback it used to carry is gone (a workspace is served
+//      on its workspace subdomain and nothing else). Note what did NOT change:
+//      a signup still creates an account and NO workspace (#718) — the workspace
+//      comes from the user's own ask-first create. An account in that state has
+//      no host yet, and these builders say so rather than naming a synthetic
+//      address. Read cross-language on purpose (same idiom as
+//      homeServerContent.test.ts): the invariant is one value living in two
+//      languages, and a revert on the Go side is otherwise invisible from the
+//      web tree.
 //
 // WHAT IT DOES NOT COVER (stated honestly)
 //   * It cannot click. The end-to-end click is checked in a browser against a
@@ -186,19 +191,25 @@ test("the unavailable branch is a disabled control, not a navigating one", () =>
 });
 
 test("layer 2 is intact: the Go URL builders resolve the host the public request path serves", () => {
-  // The store resolver: workspace slug first, account slug as the fallback —
-  // never the workspace-only join that answered "" for a NULL workspace_id.
+  // The store resolver is workspace-only — the same rule the serving path
+  // enforces. There is deliberately NO account-slug fallback any more: making
+  // the two agree by letting the serving path accept a second hostname left
+  // every workspace reachable at a synthetic address the dashboard never shows.
+  // The NULL-workspace case that fallback papered over is not "fixed" by minting
+  // a workspace at signup — a signup creates an account and NO workspace (#718),
+  // and the workspace comes from the user's ask-first create (see the
+  // public_host_slug_test.go fixture precondition).
   assert.match(
     goWorkspace,
-    /COALESCE\(sp\.slug, ''\), a\.slug/,
-    "WorkspaceStore.PublicHostSlugByAccount no longer resolves the account slug as a fallback — every " +
-      "signup-created account (workspace_id NULL) would get an empty form URL again",
+    /func \(s \*WorkspaceStore\) PublicHostSlugByAccount\(ctx context\.Context, accountID string\) \(string, error\) \{\n\treturn s\.WorkspaceSlugByAccount\(ctx, accountID\)\n\}/,
+    "WorkspaceStore.PublicHostSlugByAccount no longer resolves through the workspace-only lookup — a " +
+      "form URL could name a host the public server does not serve",
   );
-  assert.match(
+  assert.doesNotMatch(
     goWorkspace,
     /LEFT JOIN workspaces sp ON sp\.id = a\.workspace_id/,
-    "the account-slug fallback must come from a LEFT join, or the query returns no row at all for an " +
-      "account with a NULL workspace_id (pgx.ErrNoRows → \"\")",
+    "WorkspaceStore.go still carries the account-slug fallback query — a workspace must be reachable on " +
+      "its workspace subdomain and nothing else",
   );
   // Every form-URL builder must call it. A revert to the workspace-only resolver
   // in any one of them silently empties that surface's link again.
@@ -210,14 +221,8 @@ test("layer 2 is intact: the Go URL builders resolve the host the public request
     assert.match(
       src,
       /PublicHostSlugByAccount\(/,
-      `${name} does not resolve through PublicHostSlugByAccount — ${why} would return an empty URL for a ` +
-        `signup-created account (accounts.workspace_id is NULL)`,
-    );
-    assert.doesNotMatch(
-      src,
-      /WorkspaceSlugByAccount\(/,
-      `${name} still resolves a FORM url through WorkspaceSlugByAccount (the workspace-only join) — that is ` +
-        `the defect: it answers "" whenever accounts.workspace_id is NULL`,
+      `${name} does not resolve through PublicHostSlugByAccount — ${why} would not agree with the host ` +
+        `the public server actually serves`,
     );
   }
 });

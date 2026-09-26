@@ -600,8 +600,9 @@ func (h *RESTHandlers) formURLForAccount(ctx context.Context, acc *dbstore.Accou
 // publicHostSlugFor resolves the subdomain host an account's forms are publicly
 // served under, for building {host}.jomform.com/{slug} URLs. It delegates to the
 // shared resolver so every URL builder agrees with the public serving path;
-// see WorkspaceStore.PublicHostSlugByAccount for why the workspace-only lookup
-// was wrong ("" for every signup-created account).
+// see WorkspaceStore.PublicHostSlugByAccount for why that resolver is
+// workspace-only (an account-slug fallback made every workspace reachable at a
+// second, invisible host).
 func (h *RESTHandlers) publicHostSlugFor(ctx context.Context, accountID string) string {
 	if h.Workspaces == nil {
 		return ""

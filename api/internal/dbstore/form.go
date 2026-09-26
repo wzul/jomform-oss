@@ -624,8 +624,13 @@ func (s *FormStore) scanOne(row rowScanner) (*Form, error) {
 	return f, err
 }
 
-// PublishedByAccountSlug resolves a published form via account subdomain +
-// form slug (account slug == subdomain). Soft-deleted forms are invisible.
+// PublishedByAccountSlug resolves a published form by the owning ACCOUNT's slug
+// plus the form slug. Soft-deleted forms are invisible.
+//
+// This is the CUSTOM-DOMAIN resolver (issue #236/#297): a verified custom domain
+// belongs to an account, so the public renderer maps the request host to the
+// account slug and looks the form up here. It is NOT a subdomain resolver —
+// a {workspace}.jomform.com host resolves through PublishedByWorkspaceSlug.
 func (s *FormStore) PublishedByAccountSlug(ctx context.Context, accountSlug, formSlug string) (*Form, error) {
 	f := &Form{}
 	err := s.pool.QueryRow(ctx, "SELECT f.id, f.account_id, f.slug, f.title, f.config, f.theme, "+
@@ -857,22 +862,27 @@ func (s *FormStore) SoftDeleteTemplate(ctx context.Context, accountID, id string
 
 // PublishedByWorkspaceSlug resolves a published form via workspace subdomain
 // (e.g. wanzulhosting.jomform.com/form-baru — no /f/ prefix).
+//
+// The host is a WORKSPACE slug and nothing else. This used to try the account
+// slug first and fall back to the workspace join, which made every workspace
+// serve on two hostnames: the one the dashboard shows
+// ({workspace}.jomform.com) and the synthetic account slug
+// (<workspace>-<8 hex of the account id>) that no surface ever displays. Wan's
+// decision: a workspace is served on its workspace subdomain, and nothing else.
+// Both slugs are different namespaces — accounts.slug is still what a VERIFIED
+// CUSTOM DOMAIN resolves through (PublishedByAccountSlug), which is why that
+// helper remains.
 func (s *FormStore) PublishedByWorkspaceSlug(ctx context.Context, workspaceSlug, formSlug string) (*Form, error) {
-	f, err := s.PublishedByAccountSlug(ctx, workspaceSlug, formSlug)
-	if err == nil {
-		return f, nil
-	}
-	// workspace slug may differ from account slug — join workspaces
 	f2 := &Form{}
-	err = s.pool.QueryRow(ctx,
+	err := s.pool.QueryRow(ctx,
 		`SELECT f.id, f.account_id, f.slug, f.title, f.config, f.theme, f.status, f.is_main,
 		        f.redirect_success, f.redirect_failure, f.allow_embed, f.logo_url, f.is_template, f.failure_message,
 		        f.start_at, f.end_at, f.entry_limit, f.pending_message, f.expired_message, f.limit_message,
 		        f.created_at, f.updated_at, f.deleted_at
-		 FROM forms f
-		 JOIN accounts a ON a.id = f.account_id
-		 JOIN workspaces sp ON sp.id = a.workspace_id
-		 WHERE sp.slug = $1 AND f.slug = $2 AND f.status = 'published' AND f.deleted_at IS NULL`,
+	 FROM forms f
+	 JOIN accounts a ON a.id = f.account_id
+	 JOIN workspaces sp ON sp.id = a.workspace_id
+	 WHERE sp.slug = $1 AND f.slug = $2 AND f.status = 'published' AND f.deleted_at IS NULL`,
 		workspaceSlug, formSlug).Scan(
 		&f2.ID, &f2.AccountID, &f2.Slug, &f2.Title, &f2.Config, &f2.Theme,
 		&f2.Status, &f2.IsMain, &f2.RedirectSuccess, &f2.RedirectFailure,
@@ -888,13 +898,15 @@ func (s *FormStore) PublishedByWorkspaceSlug(ctx context.Context, workspaceSlug,
 // ByWorkspaceSlug resolves a live (non-deleted) form by workspace subdomain + slug
 // regardless of status (issue #176). Used by the public renderer so a private
 // form can show its password gate; the caller enforces the status rules.
+//
+// As with PublishedByWorkspaceSlug, the host is the WORKSPACE slug only: a host
+// that names no workspace resolves nothing, and every caller answers 404 (see
+// accountSubdomain, which already returns "" for the apex and for the reserved
+// infrastructure names). An account's own slug is not a host a form is served
+// on — it is the namespace a verified custom domain resolves through.
 func (s *FormStore) ByWorkspaceSlug(ctx context.Context, workspaceSlug, formSlug string) (*Form, error) {
-	f, err := s.ByAccountSlug(ctx, workspaceSlug, formSlug)
-	if err == nil {
-		return f, nil
-	}
 	f2 := &Form{}
-	err = s.pool.QueryRow(ctx,
+	err := s.pool.QueryRow(ctx,
 		`SELECT f.id, f.account_id, f.slug, f.title, f.config, f.theme, f.status, f.is_main,
 		        f.redirect_success, f.redirect_failure, f.allow_embed, f.logo_url, f.is_template, f.failure_message,
 		        f.start_at, f.end_at, f.entry_limit, f.pending_message, f.expired_message, f.limit_message,
@@ -916,7 +928,8 @@ func (s *FormStore) ByWorkspaceSlug(ctx context.Context, workspaceSlug, formSlug
 }
 
 // ByAccountSlug resolves a live (non-deleted) form by account slug + form slug
-// regardless of status (issue #176). See ByWorkspaceSlug.
+// regardless of status (issue #176). See PublishedByAccountSlug — this is the
+// custom-domain resolver, not a subdomain one.
 func (s *FormStore) ByAccountSlug(ctx context.Context, accountSlug, formSlug string) (*Form, error) {
 	f := &Form{}
 	err := s.pool.QueryRow(ctx, "SELECT f.id, f.account_id, f.slug, f.title, f.config, f.theme, "+

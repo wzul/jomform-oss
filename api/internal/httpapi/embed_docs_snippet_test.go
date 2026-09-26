@@ -589,7 +589,7 @@ func TestEmbedSubmitRefusesADisallowedEmbed(t *testing.T) {
 //     invisible to a guard that never completes the exchange.
 //
 //  2. THE ROUTE EXISTS. Before the fix there was no
-//     POST /embed/f/{accslug}/{slug}/unlock at all ("404 page not found"),
+//     POST /embed/f/{wsslug}/{slug}/unlock at all ("404 page not found"),
 //     so the gate's post could not resolve. Asserted by REQUEST, not by reading
 //     the mux, so a route registered but broken still fails.
 //
@@ -718,7 +718,7 @@ func TestEmbeddedPrivateFormUnlockRoundTrip(t *testing.T) {
 	}
 	if ok.Code != http.StatusOK {
 		t.Fatalf("POST %s with the CORRECT password -> %d, want 200 (body %s) — the embed's own "+
-			"unlock must resolve the form by its {accslug} PATH segment, because an embed runs on "+
+			"unlock must resolve the form by its {wsslug} PATH segment, because an embed runs on "+
 			"the merchant's origin and its Host never names the workspace",
 			unlockPath, ok.Code, ok.Body.String())
 	}
@@ -843,7 +843,7 @@ func TestEmbedUnlockDoesNotUnlockTheCanonicalRoute(t *testing.T) {
 	rec := publicPostJSON(t, hnd, "merchant.example.com", unlockPath, map[string]any{"password": gateFixturePassword})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("POST %s on the merchant's own Host -> %d, want 200: the embed scope is the "+
-			"{accslug} PATH segment precisely because the Host never names the workspace. body=%s",
+			"{wsslug} PATH segment precisely because the Host never names the workspace. body=%s",
 			unlockPath, rec.Code, rec.Body.String())
 	}
 	cookies := rec.Result().Cookies()

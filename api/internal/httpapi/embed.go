@@ -11,9 +11,12 @@ import (
 )
 
 // embedForm serves the public form with permissive framing for merchant sites.
-// Path pattern is registered as GET /embed/f/{accslug}/{slug}.
+// Path pattern is registered as GET /embed/f/{wsslug}/{slug}. The first segment
+// is a WORKSPACE slug: the embed resolves a form through the same workspace-only
+// lookup the public host uses (a workspace is served on its workspace subdomain
+// and nothing else), so the segment must name the workspace, not the account.
 func (h *PublicHandlers) embedForm(w http.ResponseWriter, r *http.Request) {
-	f := h.embedFormBySlug(r.Context(), r.PathValue("accslug"), r.PathValue("slug"))
+	f := h.embedFormBySlug(r.Context(), r.PathValue("wsslug"), r.PathValue("slug"))
 	if f == nil {
 		writeErr(w, http.StatusNotFound, "borang tidak dijumpai")
 		return
@@ -133,7 +136,7 @@ func forceEmbedFraming(h http.Header) {
 }
 
 // embedSubmit accepts the submission an EMBEDDED form posts.
-// Path pattern is registered as POST /embed/f/{accslug}/{slug}/order.
+// Path pattern is registered as POST /embed/f/{wsslug}/{slug}/order.
 //
 // WHY THE ROUTE HAS TO EXIST. The rendered embed page posts to
 // location.pathname + "/order" — its own address — so on this route that is
@@ -163,7 +166,7 @@ func forceEmbedFraming(h http.Header) {
 // collector, menu checkout or order core. Only the LOOKUP differs, and it
 // differs because it must — so the two submit paths cannot drift.
 func (h *PublicHandlers) embedSubmit(w http.ResponseWriter, r *http.Request) {
-	f := h.embedFormBySlug(r.Context(), r.PathValue("accslug"), r.PathValue("slug"))
+	f := h.embedFormBySlug(r.Context(), r.PathValue("wsslug"), r.PathValue("slug"))
 	if f == nil {
 		writeErr(w, http.StatusNotFound, "borang tidak dijumpai")
 		return
@@ -178,7 +181,7 @@ func (h *PublicHandlers) embedSubmit(w http.ResponseWriter, r *http.Request) {
 }
 
 // embedUnlock accepts the password an EMBEDDED private form's gate posts.
-// Path pattern is registered as POST /embed/f/{accslug}/{slug}/unlock.
+// Path pattern is registered as POST /embed/f/{wsslug}/{slug}/unlock.
 //
 // WHY THE ROUTE HAS TO EXIST. The gate a private form renders lives inside the
 // embed document, and it posts to its own address plus "/unlock"
@@ -203,7 +206,7 @@ func (h *PublicHandlers) embedSubmit(w http.ResponseWriter, r *http.Request) {
 // repeated here exactly as embedSubmit repeats it — switching embedding off must
 // not leave a live unlock endpoint behind the 403 page.
 func (h *PublicHandlers) embedUnlock(w http.ResponseWriter, r *http.Request) {
-	f := h.embedFormBySlug(r.Context(), r.PathValue("accslug"), r.PathValue("slug"))
+	f := h.embedFormBySlug(r.Context(), r.PathValue("wsslug"), r.PathValue("slug"))
 	if f == nil {
 		writeErr(w, http.StatusNotFound, "borang tidak dijumpai")
 		return
@@ -221,9 +224,10 @@ func (h *PublicHandlers) embedUnlock(w http.ResponseWriter, r *http.Request) {
 // the page a merchant frames and the endpoint its button posts to can only
 // resolve to the same form.
 //
-// The scope is the route's own {accslug} path segment, which this route has
-// always read as "an account slug, or a workspace slug" — the duality
-// ByWorkspaceSlug resolves. It is deliberately NOT findPublicForm: that helper
+// The scope is the route's own {wsslug} path segment: the embed resolves a
+// WORKSPACE slug, through the same workspace-only lookup the public host uses
+// (a workspace is served on its workspace subdomain and nothing else). It is
+// deliberately NOT findPublicForm: that helper
 // reads the tenant scope off the request HOST, and swapping the scope would 404
 // an embed URL that works today (measured above). The SCOPE must stay the path
 // segment while the ORDER must not differ, so the ordering is repeated here

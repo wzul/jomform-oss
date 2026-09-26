@@ -113,7 +113,7 @@ func TestIssue537PrivateGateEscapesSlugInJSContext(t *testing.T) {
 // The rendered gate has no merchant-scoped host in it to derive the embed scope
 // from, which is exactly why "my own pathname" is the correct target: it is the
 // one expression that is right on every route that can render the gate
-// (/{slug} and /f/{slug} host-scoped, /embed/f/{accslug}/{slug} path-scoped).
+// (/{slug} and /f/{slug} host-scoped, /embed/f/{wsslug}/{slug} path-scoped).
 func TestPrivateGateFetchTargetIsItsOwnPath(t *testing.T) {
 	h := &PublicHandlers{}
 	rec := httptest.NewRecorder()

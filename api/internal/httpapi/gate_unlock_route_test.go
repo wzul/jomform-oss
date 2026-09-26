@@ -78,7 +78,7 @@ func TestEveryGateRouteHasItsOwnUnlockRoute(t *testing.T) {
 	}{
 		{"canonical /{slug}", "/" + slug},
 		{"canonical /f/{slug}", "/f/" + slug},
-		{"embed /embed/f/{accslug}/{slug}", "/embed/f/" + ws + "/" + slug},
+		{"embed /embed/f/{wsslug}/{slug}", "/embed/f/" + ws + "/" + slug},
 	}
 
 	for _, tc := range cases {

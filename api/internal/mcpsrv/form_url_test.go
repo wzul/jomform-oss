@@ -1,18 +1,23 @@
 package mcpsrv
 
 // MCP parity for the public form URL — same root cause as the dashboard's dead
-// "View" link.
+// "View" link, and the same rule.
 //
 // `list_forms` returns each form's `url` so an agent can hand the merchant a
 // working link. That URL was built from WorkspaceStore.WorkspaceSlugByAccount, a
 // join on accounts.workspace_id — NULL for every account the SIGNUP path
-// creates (AccountStore.Create does not set it) — so the agent received an empty
+// creates (AccountStore.Create did not set it) — so the agent received an empty
 // url for every merchant account, while the public server was happily serving
-// the form at {account-slug}.jomform.com/{slug} the whole time.
+// the form at the account slug the whole time.
 //
-// This drives the REAL handlers (s.listForms / s.getForm) over a real Postgres
-// and, crucially, checks the host against the form SERVING path's own lookup
-// (FormStore.ByWorkspaceSlug) instead of a copied slug literal.
+// The first fix taught the serving path to accept that second hostname. The fix
+// now is on the SERVING side and it removes the second host outright: a form is
+// served on the workspace subdomain, and nothing else. The workspace comes from
+// the user's ask-first create, NOT from signup — a signup creates an account and
+// no workspace (#718), which is why this fixture links one the way the ask-first
+// flow does. This drives the REAL handlers (s.listForms / s.getForm) over a real
+// Postgres and, crucially, checks the host against the form SERVING path's own
+// lookup (FormStore.ByWorkspaceSlug) instead of a copied slug literal.
 //
 // Skipped without JOMFORM_TEST_DATABASE_URL.
 import (
@@ -33,8 +38,8 @@ func TestMCPFormURLIsServedForASignupCreatedAccount(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.Open(t)
 
-	// A user + account created the way SIGNUP creates them: through
-	// AccountStore.Create, which sets no workspace_id.
+	// A user + account created the way SIGNUP creates them — an account and NO
+	// workspace (#718)...
 	var userID string
 	if err := pool.QueryRow(ctx,
 		`INSERT INTO users (email, password_hash)
@@ -50,19 +55,40 @@ func TestMCPFormURLIsServedForASignupCreatedAccount(t *testing.T) {
 	if err := dbstore.NewAccountStore(pool).Create(ctx, acc); err != nil {
 		t.Fatalf("create account via the signup path: %v", err)
 	}
-	// Fixture preconditions, asserted: the NULL workspace_id shape, and the
-	// pre-fix resolver really answering "". Without these a green run here would
-	// prove nothing about the defect.
+	// Fixture precondition, asserted: the signup insert links NO workspace. That
+	// is #718's ask-first boundary, and it is why the host this tool names comes
+	// from the ask-first create below.
 	var wid *string
 	if err := pool.QueryRow(ctx, `SELECT workspace_id::text FROM accounts WHERE id=$1`, acc.ID).Scan(&wid); err != nil {
 		t.Fatalf("read workspace_id: %v", err)
 	}
 	if wid != nil {
-		t.Fatalf("fixture is not discriminating: signup-created account %s has workspace_id=%s", acc.ID, *wid)
+		t.Fatalf("the signup path linked account %s to workspace %s — a signup creates an account and NO "+
+			"workspace (#718); this fixture must exercise the ask-first flow, not a signup-minted workspace",
+			acc.ID, *wid)
 	}
-	if slug, err := dbstore.NewWorkspaceStore(pool).WorkspaceSlugByAccount(ctx, acc.ID); err == nil || slug != "" {
-		t.Fatalf("the workspace-only resolver answered slug=%q err=%v — the premise of this regression "+
-			"test no longer holds", slug, err)
+	// ...then linked to its first workspace the way the ask-first flow links it
+	// (WorkspaceStore.CreateForAccount — the MCP create_workspace tool and
+	// rest_workspaces.go both go through this).
+	workspaces := dbstore.NewWorkspaceStore(pool)
+	wantSlug := "mcp-url-ws-" + userID[:8]
+	if _, err := workspaces.CreateForAccount(ctx, userID, "mcp-url-ws", wantSlug, acc.ID); err != nil {
+		t.Fatalf("ask-first create: %v", err)
+	}
+	// Rewrite the account slug to the SYNTHETIC form production carries
+	// (`<slug>-<8 hex of the account id>`), so the two names really differ and
+	// the "account slug is not a host" assertion below is meaningful.
+	synth := acc.Slug + "-" + acc.ID[:8]
+	if _, err := pool.Exec(ctx, `UPDATE accounts SET slug=$2 WHERE id=$1`, acc.ID, synth); err != nil {
+		t.Fatalf("rewrite account slug to the synthetic production shape: %v", err)
+	}
+	acc.Slug = synth
+	workspaceSlug, err := workspaces.WorkspaceSlugByAccount(ctx, acc.ID)
+	if err != nil || workspaceSlug != wantSlug {
+		t.Fatalf("WorkspaceSlugByAccount = %q/%v, want the account's workspace slug %q", workspaceSlug, err, wantSlug)
+	}
+	if workspaceSlug == synth {
+		t.Fatalf("fixture is not discriminating: account slug == workspace slug (%q)", synth)
 	}
 
 	forms := dbstore.NewFormStore(pool)
@@ -114,12 +140,17 @@ func TestMCPFormURLIsServedForASignupCreatedAccount(t *testing.T) {
 		t.Fatalf("the published form is missing from list_forms entirely (%s)", raw)
 	}
 	if got == "" {
-		t.Fatalf("list_forms returned an EMPTY url for a published form on a signup-created account "+
-			"(accounts.workspace_id is NULL). An agent handing the merchant this link hands them nothing, "+
-			"and the same empty answer is what rendered href=\"\" on the dashboard. output=%s", raw)
+		t.Fatalf("list_forms returned an EMPTY url for a published form on a signup-created account. "+
+			"An agent handing the merchant this link hands them nothing, and the same empty answer is "+
+			"what rendered href=\"\" on the dashboard. output=%s", raw)
 	}
 	if !strings.HasPrefix(got, "https://") {
 		t.Errorf("MCP form url = %q, want an absolute https:// URL", got)
+	}
+	// The host is the workspace subdomain — the one the dashboard displays.
+	if !strings.Contains(got, "https://"+workspaceSlug+".jomform.com/") {
+		t.Errorf("MCP form url = %q, want the WORKSPACE host https://%s.jomform.com/%s — the host the "+
+			"dashboard shows and the only host the public server serves", got, workspaceSlug, published.Slug)
 	}
 	// A draft form is not publicly reachable, so url stays empty by design —
 	// asserted so a future change cannot quietly start advertising drafts.
@@ -140,6 +171,11 @@ func TestMCPFormURLIsServedForASignupCreatedAccount(t *testing.T) {
 	}
 	if served.AccountID != acc.ID {
 		t.Fatalf("host %q resolved a form owned by another account (%s)", host, served.AccountID)
+	}
+	// The account-slug host this tool used to advertise must be gone.
+	if _, err := forms.ByWorkspaceSlug(ctx, acc.Slug, published.Slug); err == nil {
+		t.Errorf("the ACCOUNT slug host (%s.jomform.com) still serves this form — a workspace must be "+
+			"reachable only on its workspace subdomain (%s.jomform.com)", acc.Slug, workspaceSlug)
 	}
 
 	// ── get_form ────────────────────────────────────────────────────────────

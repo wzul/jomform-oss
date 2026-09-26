@@ -1277,23 +1277,22 @@ func (s *WorkspaceStore) RoleByAccount(ctx context.Context, accountID, userID st
 //
 // It resolves the way the PUBLIC REQUEST PATH resolves, which is the invariant
 // that matters: form serving (FormStore.ByWorkspaceSlug, reached from
-// accountSubdomain + handleWorkspaceRootForm) accepts EITHER the account's own
-// slug (accounts.slug) OR its workspace's slug (workspaces.slug) — it tries the
-// account slug first and falls back to the workspace join. A URL builder that
-// resolved ONLY through the workspace join therefore disagreed with the server
-// that serves the URL, and answered "" whenever accounts.workspace_id was NULL.
+// accountSubdomain + handleWorkspaceRootForm) accepts the WORKSPACE slug, and
+// nothing else. A host that names no workspace resolves nothing, and the
+// caller 404s — the same answer accountSubdomain already gives for the apex and
+// for www/app/api/mail/s3.
 //
-// accounts.workspace_id is NULL for every account created through signup
-// (AccountStore.Create does not set it; only WorkspaceStore.Create does), so
-// that empty answer was the norm, not an edge case: it produced an empty href on
-// the dashboard's "View" action, an empty url on MCP list_forms, and a receipt
-// email/PDF whose form link fell back to the apex thank-you page.
-//
-// So: prefer the workspace slug (a merchant who named their workspace keeps the
-// pretty host), and fall back to the account slug — the host the serving path
-// resolves second — instead of degrading to "". Both branches yield a host the
-// public server actually serves; "" is now returned only when the account row
-// itself cannot be read.
+// This used to fall back to the account slug (accounts.slug) when no workspace
+// was linked, which papered over the real defect: AccountStore.Create set no
+// workspace_id, so every signup-created account had a NULL workspace, was
+// reachable only at its synthetic account slug, and the URL builder answered
+// "". The fix is not a second host — it is that a workspace is served on its
+// workspace subdomain and nothing else, so there is exactly one host per
+// workspace. The workspace comes from the user's ask-first create
+// (SoleEmptyUnscopedAccount + CreateForAccount), NOT from signup: a signup
+// creates an account and no workspace (#718). It returns "" only while that
+// account still has no linked workspace — which is the shape a fresh signup is
+// deliberately in, and which the workspace-picker prompt resolves.
 //
 // NOT for legal-page hosts ({slug}.jomform.com/privacy|terms|refund): those are
 // resolved by workspaces.IDBySlug alone (handlePublicLegalPage), so a legal URL
@@ -1301,24 +1300,17 @@ func (s *WorkspaceStore) RoleByAccount(ctx context.Context, accountID, userID st
 // leaves a stored legal URL untouched when no workspace slug resolves rather
 // than rewriting it to a host that would 404.
 func (s *WorkspaceStore) PublicHostSlugByAccount(ctx context.Context, accountID string) (string, error) {
-	var workspaceSlug, accountSlug string
-	err := s.pool.QueryRow(ctx,
-		`SELECT COALESCE(sp.slug, ''), a.slug
-		   FROM accounts a
-		   LEFT JOIN workspaces sp ON sp.id = a.workspace_id
-		  WHERE a.id=$1`, accountID).Scan(&workspaceSlug, &accountSlug)
-	if err != nil {
-		return "", err
-	}
-	if workspaceSlug != "" {
-		return workspaceSlug, nil
-	}
-	return accountSlug, nil
+	return s.WorkspaceSlugByAccount(ctx, accountID)
 }
 
 // WorkspaceSlugByAccount resolves the workspace slug a form's account belongs to
-// ("" when the account has no linked workspace). Used to build the canonical
-// workspace-scoped public URL {workspace}.jomform.com/{slug} (issue #77).
+// ("", and pgx.ErrNoRows, when the account has no linked workspace). Used to
+// build the canonical workspace-scoped public URL {workspace}.jomform.com/{slug}
+// (issue #77) and, by the legal-page rewriter, the {workspace}.jomform.com host
+// that handlePublicLegalPage resolves through workspaces.IDBySlug.
+//
+// There is deliberately no account-slug fallback: a workspace is served on its
+// workspace subdomain and nothing else (see PublicHostSlugByAccount).
 func (s *WorkspaceStore) WorkspaceSlugByAccount(ctx context.Context, accountID string) (string, error) {
 	var slug string
 	err := s.pool.QueryRow(ctx,

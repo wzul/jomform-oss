@@ -357,9 +357,12 @@ func TestIssue491MenuOrderValidatesAttachedFormFields(t *testing.T) {
 
 	// Attach the extra form to the MENU FORM's config (part 3 setting; JSON
 	// blob on the form, no migration — issue #497).
-	menuForm, err := h.Forms.ByAccountSlug(ctx, workspaceSlug, menuSlug)
+	// Resolved through the WORKSPACE slug: the public serving path looks a host up
+	// as a workspace slug and nothing else (issue #77 follow-up), so passing the
+	// workspace slug to ByAccountSlug — the custom-domain resolver — would never
+	// match and this test would silently depend on the fallback below.
+	menuForm, err := h.Forms.ByWorkspaceSlug(ctx, workspaceSlug, menuSlug)
 	if err != nil || menuForm == nil {
-		// ByAccountSlug resolves by account slug; fall back to a direct read.
 		menuForm = findFormBySlug(t, h, accountID, menuSlug)
 	}
 	menuForm.Config = dbstore.WithMenu(menuForm.Config,

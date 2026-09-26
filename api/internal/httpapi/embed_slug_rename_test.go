@@ -227,20 +227,23 @@ func TestEmbedRouteOldSlugIsSupersededByALaterClaimant(t *testing.T) {
 }
 
 // TestEmbedRouteOldSlugResolvesThroughTheAccountSlugArm pins the OTHER half of
-// the fallback: the route's {accslug} segment may name the ACCOUNT slug, and a
-// rename's redirect row is keyed on exactly that namespace
-// (form_slug_redirects.account_id -> accounts.slug), so the account arm is not
-// dead code — it is the arm a custom-domain-shaped embed URL needs.
+// the fallback: a rename's redirect row is keyed on the ACCOUNT namespace
+// (form_slug_redirects.account_id -> accounts.slug), so the account arm of the
+// rename fallback is not dead code.
+//
+// RE-CUT when the workspace-only serving rule landed (this guard was written
+// before it): the route's path segment is a WORKSPACE slug and nothing else, so
+// a LIVE account-slug lookup on this route now answers 404 — the control below
+// asserts exactly that, instead of the 200 this guard used to require. The
+// account arm is reached through the rename's redirect table only, which is
+// what the assertion after the rename pins.
 //
 // WHY THIS GUARD EXISTS. The workspace-slug arm is reached by every other case
 // in this file (the fixture's host and path both use fx.workspaceSlug), so the
 // account arm had no case of its own. QA measured the consequence on the
 // pre-fix commit (card t_385179b3): deleting ONLY RedirectedFormByAccountSlug
-// left the file 4/4 green. Re-measured here after this case was added, the same
-// mutation now reds exactly this case and leaves the other four green. The
-// behaviour was right and the coverage was hollow, which is the failure mode a
-// guard file exists to prevent: the next refactor could drop the arm and
-// nothing would say so.
+// left the file 4/4 green. That bite is preserved here: the post-rename
+// assertion below still fails if the account arm is dropped.
 func TestEmbedRouteOldSlugResolvesThroughTheAccountSlugArm(t *testing.T) {
 	fx := newRenameFixture(t, "it-embacct-old-"+randHex(4))
 	oldSlug := fx.slug
@@ -257,10 +260,23 @@ func TestEmbedRouteOldSlugResolvesThroughTheAccountSlugArm(t *testing.T) {
 		t.Fatalf("fixture premise broken: account slug == workspace slug (%q), so this guard would "+
 			"not distinguish the two fallback arms", fx.accountSlug)
 	}
-	if rec := publicServe(t, fx.pub, fx.host, embedPath(fx.accountSlug, oldSlug)); rec.Code != http.StatusOK {
-		t.Fatalf("control: GET %s before the rename = %d, want 200 (the route has always resolved the "+
-			"account slug on the live slug — ByWorkspaceSlug tries the account arm first)",
-			embedPath(fx.accountSlug, oldSlug), rec.Code)
+	if rec := publicServe(t, fx.pub, fx.host, embedPath(fx.workspaceSlug, oldSlug)); rec.Code != http.StatusOK {
+		t.Fatalf("control: GET %s before the rename = %d, want 200 (this is the route's own scope, "+
+			"so it proves the route and its allow_embed gate are live independently of the "+
+			"rename fallback asserted below)",
+			embedPath(fx.workspaceSlug, oldSlug), rec.Code)
+	}
+	// The account slug is NOT a serving scope for this route: a workspace is
+	// served on its workspace slug and nothing else, and the route's segment is
+	// a workspace slug. Asserted so a future refactor cannot quietly re-widen
+	// the live lookup and make the account arm below meaningless.
+	if rec := publicServe(t, fx.pub, fx.host, embedPath(fx.accountSlug, oldSlug)); rec.Code != http.StatusNotFound {
+		t.Fatalf("control: GET %s (the account slug as this route's scope, on a form whose LIVE slug "+
+			"is %s) = %d, want 404 — the route's segment names a workspace, and the account slug is "+
+			"the CUSTOM-DOMAIN namespace, not a second serving scope. If this answers 200 the live "+
+			"lookup has re-acquired the account fallback and the rename arm asserted below is no "+
+			"longer the arm under test.",
+			embedPath(fx.accountSlug, oldSlug), oldSlug, rec.Code)
 	}
 
 	if code, raw := fx.patch(t, `{"slug":"`+newSlug+`","title":"Western menu"}`); code != http.StatusOK {

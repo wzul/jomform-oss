@@ -9,12 +9,12 @@
 //
 // Layer 3 of the fix (defence-in-depth, NOT the fix itself): the page must not be
 // able to render an empty href at all. The real fix is on the server, where the
-// URL is now resolved through the same hosts the public request path serves
-// (WorkspaceStore.PublicHostSlugByAccount) — but `href=""` is ALWAYS a bug
-// regardless of what the server answers, and an empty href is invisible until
-// someone clicks it. So the decision is a tagged result rather than a bare
-// string, and the page renders a non-navigating control for the `unavailable`
-// case instead of an anchor.
+// URL is resolved through the same host the public request path serves
+// (WorkspaceStore.PublicHostSlugByAccount → the workspace slug) — but `href=""`
+// is ALWAYS a bug regardless of what the server answers, and an empty href is
+// invisible until someone clicks it. So the decision is a tagged result rather
+// than a bare string, and the page renders a non-navigating control for the
+// `unavailable` case instead of an anchor.
 //
 // Kept as a plain .ts module (no JSX) so the repo's node test runner can execute
 // it and assert the real rendered attribute through react-dom/server — see
