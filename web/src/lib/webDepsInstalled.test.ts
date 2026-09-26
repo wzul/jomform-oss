@@ -30,16 +30,34 @@
 //   "14 declared package(s) installed" on exactly that tree, and `test:unit` then
 //   printed `326 tests / 324 pass / 2 fail` against `350 / 350 / 0` installed —
 //   the failures again being `ERR_MODULE_NOT_FOUND` for `react`. So the checker
-//   also asserts PAYLOAD: for a package that declares a runtime entry point, the
-//   file its own manifest names (`exports["."]` when present, else `main`, else
-//   `module`) must be on disk.
+//   also asserts PAYLOAD: the entry point a package's own manifest declares must
+//   be reachable from its directory.
 //
-// THE FIX
-//   `web/scripts/web-deps-check.mjs` asserts that every package named in
-//   `web/package.json` has `<web>/node_modules/<name>/package.json`, that each
-//   non-`@types/*` package has the file its own entry declaration names, and
-//   `test:unit` runs it BEFORE `node --test`. The preflight's `web`/`a11y`
-//   prerequisites run the same checker, so the gate refuses at the same place.
+// AND THE FALSE RED THAT RULE ITSELF CAUSED (this file's newest section)
+//   The first payload rule tested the declared entry point as a VERBATIM on-disk
+//   path. That disagrees with Node for manifest shapes Node happily loads, so it
+//   refused healthy trees:
+//
+//     * `main: "decimal"` with `decimal.js` present — Node's LOAD_AS_FILE tries
+//       `X`, `X.js`, `X.json`, `X.node`. Live in this repo's install graph:
+//       `decimal.js-light` (transitive via `recharts`) declares exactly that.
+//     * `exports: { ".": ["not:valid", "./present.js"] }` — Node falls through an
+//       element that is not a valid export target. The old `firstLeaf()` returned
+//       the FIRST string, i.e. the invalid one.
+//     * `exports: { ".": { import: "./b.js", default: "./a.js" } }` with only
+//       `b.js` on disk — Node reads condition keys IN ORDER; the old hardcoded
+//       `["default","import","require",…]` list made `default` outrank `import`.
+//     * `exports: { ".": { types: "./index.d.ts" } }` — the header said a types
+//       target must not be demanded, but the fallback loop took it anyway.
+//
+//   The rule now resolves like Node (extension search, directory index, array
+//   fallbacks, manifest key order, per-consumer entry points) and narrows to
+//   presence-only for the shapes where no runtime consumer resolves a target.
+//   Those false-RED shapes are pinned below AS FIXTURES, each asserted to be
+//   genuinely loadable through Node's own resolver inside the fixture —
+//   hand-written expectations cannot catch a resolver disagreement, which is
+//   exactly what this was. One of them (`browser` listed before `require`) was
+//   found the same way, while fixing this card.
 //
 // WHAT THIS FILE PINS
 //   1. The checker is looking at a real tree (its declared list comes from the
@@ -52,8 +70,9 @@
 //   3. The payload rule is about the file the package's OWN manifest names, not
 //      "the directory has something in it", and it follows `exports["."]` rather
 //      than a stale `main`.
-//   4. The false-RED guard: `@types/*` packages have no runtime entry point and a
-//      package that declares none cannot be judged on payload — neither may be
+//   4. The false-RED guards: `@types/*` packages, a package that declares no
+//      entry point, a subpath-only `exports` map, a types-only condition map, an
+//      import-only package, and the resolver-shaped manifests above may not be
 //      refused, because a prerequisite check that fails a good tree is its own
 //      defect.
 //   5. The healthy shape it must NOT refuse: a complete install exits 0.
@@ -102,7 +121,11 @@ function installed(name: string): PkgSpec {
 }
 
 /** Build a throwaway web tree: a package.json declaring `deps`, and an install
- *  containing exactly `pkgs` (null = no node_modules directory at all). */
+ *  containing exactly `pkgs` (null = no node_modules directory at all).
+ *
+ *  It also writes a `probe.mjs` next to the fixture's package.json, so a test can
+ *  ask NODE's own resolvers whether a package is loadable from that tree — the
+ *  resolver is the oracle for every false-RED case below. */
 function fixture(deps: string[], pkgs: PkgSpec[] | null): string {
   const dir = mkdtempSync(join(tmpdir(), "jf-webdeps-"));
   writeFileSync(
@@ -122,12 +145,59 @@ function fixture(deps: string[], pkgs: PkgSpec[] | null): string {
       }
     }
   }
+  writeFileSync(
+    join(dir, "probe.mjs"),
+    `import { createRequire } from "node:module";
+const spec = process.argv[2];
+const out = { require: null, import: null };
+try { out.require = createRequire(import.meta.url).resolve(spec); } catch (e) { out.require = "ERR " + e.code; }
+// A REAL import(), not import.meta.resolve(): the latter resolves the SPECIFIER
+// without checking the file exists (measured — it returns a path for a missing
+// target while the load throws ERR_MODULE_NOT_FOUND), so it cannot be the oracle
+// for "Node can load this".
+try { await import(spec); out.import = "OK"; } catch (e) { out.import = "ERR " + (e.code ?? e.message.split("\\n")[0]); }
+console.log(JSON.stringify(out));
+`,
+  );
   return dir;
 }
 
 function runChecker(webDir: string) {
   const r = spawnSync(process.execPath, [CHECKER, webDir], { encoding: "utf8" });
   return { status: r.status, out: `${r.stdout}${r.stderr}` };
+}
+
+/** Ask NODE whether `spec` is loadable from inside `dir` — the oracle. Returns
+ *  `{"require":…,"import":…}` where a value of `"OK"` means the module actually
+ *  loaded. `require` is a resolution (a `require()` of a real package would
+ *  execute it), `import` is a real dynamic import, which is what makes this a
+ *  reliable oracle: `import.meta.resolve()` alone does NOT check existence. */
+function resolvesUnderNode(dir: string, spec: string): { require: string; import: string } {
+  const r = spawnSync(process.execPath, [join(dir, "probe.mjs"), spec], { encoding: "utf8" });
+  const raw = (r.stdout || "").trim();
+  assert.ok(raw.length > 0, `the resolver probe produced nothing for ${spec}: ${r.stderr}`);
+  return JSON.parse(raw) as { require: string; import: string };
+}
+
+/** Assert Node loads the package by BOTH routes (CJS `require` and ESM `import`),
+ *  which is the shape a fixture in these tests must have to be a valid oracle. */
+function assertNodeLoads(dir: string, spec: string, why: string) {
+  const r = resolvesUnderNode(dir, spec);
+  assert.match(r.require, /^\//, `${why}: Node's require() cannot resolve ${spec} (${r.require}) — the fixture is not a valid false-RED case`);
+  assert.equal(r.import, "OK", `${why}: Node's import cannot load ${spec} (${r.import}) — the fixture is not a valid false-RED case`);
+}
+
+/** Assert Node loads the package by AT LEAST ONE route. Needed for a condition map
+ *  that is asymmetric on purpose: `{ import: "./b.js", default: "./a.js" }` with
+ *  only `b.js` on disk is loadable via ESM and NOT via `require` (CJS takes
+ *  `default` → the absent `./a.js`, and a VALID-but-missing target does not fall
+ *  back). Demanding both routes would reject a real false-RED case. */
+function assertNodeLoadsAnyRoute(dir: string, spec: string, why: string) {
+  const r = resolvesUnderNode(dir, spec);
+  assert.ok(
+    r.require.startsWith("/") || r.import === "OK",
+    `${why}: Node cannot load ${spec} by either route (${JSON.stringify(r)}) — the fixture is not a valid false-RED case`,
+  );
 }
 
 /** The `missing:` line's payload — the list the reader has to act on. */
@@ -145,6 +215,21 @@ function noPayloadNames(out: string): string[] {
     .split(";")
     .map((s) => s.trim().split(" ")[0])
     .filter((s) => s.length > 0);
+}
+
+/** How many declared packages the checker actually judged on payload (as opposed
+ *  to leaving presence-only) — so a "the rule silently stopped checking" change
+ *  cannot pass as a green suite. The success line is the only place this is
+ *  printed, so a REFUSED run has no count: it returns -1, and a test that asserts
+ *  a count on a refusal is pinning the wrong thing. */
+function payloadChecked(out: string): number {
+  const m = out.match(/(\d+) entry point\(s\) checked/);
+  return m ? Number(m[1]) : -1;
+}
+
+function presenceOnly(out: string): number {
+  const m = out.match(/, (\d+) presence-only/);
+  return m ? Number(m[1]) : -1;
 }
 
 test("the checker reads the real web/package.json (it cannot pass vacuously)", () => {
@@ -245,12 +330,41 @@ test("payload means the file the manifest NAMES, not 'the directory has somethin
     assert.notEqual(status, 0, `a package missing its declared entry point must be refused, got exit 0:\n${out}`);
     assert.deepEqual(noPayloadNames(out), ["react"]);
     assert.match(out, /main names index\.js/, "the refusal must name the declaration and the path it pointed at");
+    // The sibling file means the DIRECTORY is not empty — so this refusal can
+    // only be the payload rule, not "the directory is missing".
+    assert.equal(missingLine(out), "", "the package directory exists; it is the payload that is absent");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("exports[\".\"] is what is checked, and a stale main must not fail a good tree", () => {
+test("main naming a DIRECTORY with no index -> refused (an empty lib/ still passes nothing)", () => {
+  // A surviving directory used to satisfy the payload assertion outright, so a
+  // package whose entry point is `./lib` was never checked one layer deeper.
+  // Node's LOAD_INDEX needs lib/index.js|.json|.node; an empty (or index-less)
+  // lib/ is MODULE_NOT_FOUND. Verified against Node in the fixture below.
+  const empty = fixture(["react"], [{ name: "react", manifest: { main: "./lib" }, files: [] }]);
+  const indexed = fixture(["react"], [{ name: "react", manifest: { main: "./lib" }, files: ["lib/index.js"] }]);
+  const stray = fixture(["react"], [{ name: "react", manifest: { main: "./lib" }, files: ["lib/other.js"] }]);
+  try {
+    const emptyRun = runChecker(empty);
+    assert.notEqual(emptyRun.status, 0, `main: "./lib" with an EMPTY lib/ must be refused:\n${emptyRun.out}`);
+    assert.deepEqual(noPayloadNames(emptyRun.out), ["react"]);
+    assert.equal(missingLine(emptyRun.out), "", "the package directory exists; the target inside it is what is absent");
+    const strayRun = runChecker(stray);
+    assert.notEqual(strayRun.status, 0, `main: "./lib" with only lib/other.js must be refused:\n${strayRun.out}`);
+    const okRun = runChecker(indexed);
+    assert.equal(okRun.status, 0, `main: "./lib" with lib/index.js present must pass, got:\n${okRun.out}`);
+    // The oracle: Node itself agrees with all three verdicts.
+    assert.equal(resolvesUnderNode(empty, "react").require, "ERR MODULE_NOT_FOUND");
+    assert.equal(resolvesUnderNode(stray, "react").require, "ERR MODULE_NOT_FOUND");
+    assertNodeLoads(indexed, "react", "a directory main with an index");
+  } finally {
+    for (const dir of [empty, indexed, stray]) rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('exports["."] is what is checked, and a stale main must not fail a good tree', () => {
   // Node ignores `main` entirely when `exports` is present, and real packages here
   // do exactly that (react: exports["."].default = ./index.js, main = index.js).
   // Judging such a package by `main` would be a false RED in a prerequisite.
@@ -263,13 +377,186 @@ test("exports[\".\"] is what is checked, and a stale main must not fail a good t
   try {
     const goodRun = runChecker(good);
     assert.equal(goodRun.status, 0, `a tree whose exports["."] target exists must pass, got:\n${goodRun.out}`);
+    assertNodeLoads(good, "react", 'exports["."].default');
     const badRun = runChecker(bad);
     assert.notEqual(badRun.status, 0, `a tree whose exports["."] target is absent must be refused:\n${badRun.out}`);
     assert.deepEqual(noPayloadNames(badRun.out), ["react"]);
-    assert.match(badRun.out, /exports\["\."\] names \.\/index\.mjs/, "the refusal must name the export that was followed");
+    assert.match(badRun.out, /exports\["\."\]( \[[a-z]+\])? names \.\/index\.mjs/, "the refusal must name the export that was followed");
+    assert.equal(
+      missingLine(badRun.out),
+      "",
+      "main is ignored when exports is present, so the missing index.js must NOT be reported",
+    );
   } finally {
     rmSync(good, { recursive: true, force: true });
     rmSync(bad, { recursive: true, force: true });
+  }
+});
+
+test("the false-RED set: every manifest shape below is LOADABLE by Node and must not be refused", () => {
+  // This is the regression the follow-up card filed. Each case is asserted
+  // LOADABLE through Node's own resolver inside its fixture FIRST, so a case that
+  // stops being a valid oracle fails here loudly instead of passing vacuously.
+  const cases: Array<{ label: string; deps: string[]; pkgs: PkgSpec[]; expectJudged: number; expectPresenceOnly: number }> = [
+    {
+      // A. LOAD_AS_FILE: `main: "decimal"` + decimal.js present. Live in this
+      // repo's install graph as decimal.js-light (transitive via recharts).
+      label: "extension-less main",
+      deps: ["decimal"],
+      pkgs: [{ name: "decimal", manifest: { main: "decimal" }, files: ["decimal.js"] }],
+      expectJudged: 1,
+      expectPresenceOnly: 0,
+    },
+    {
+      // B. Array fallback: the FIRST element is invalid as an export target, so
+      // Node uses the second. The old firstLeaf() returned the invalid one.
+      label: "exports array with an invalid first element",
+      deps: ["fallback"],
+      pkgs: [{ name: "fallback", manifest: { exports: { ".": ["not:valid", "./present.js"] } }, files: ["present.js"] }],
+      expectJudged: 1,
+      expectPresenceOnly: 0,
+    },
+    {
+      // C. `require` and `import` enable different conditions, so a manifest can
+      // legitimately be loadable for one and not the other. Only b.js is present:
+      // an ESM `import` gets it (key order puts `import` first), a CJS `require`
+      // falls through to the absent `default`. Node confirms exactly that below.
+      label: "condition order (import before default)",
+      deps: ["ordered"],
+      pkgs: [{ name: "ordered", manifest: { exports: { ".": { import: "./b.js", default: "./a.js" } } }, files: ["b.js"] }],
+      expectJudged: 1,
+      expectPresenceOnly: 0,
+    },
+    {
+      // D. A types-only map names a declaration file, not a payload. Node refuses
+      // it for both routes (ERR_PACKAGE_PATH_NOT_EXPORTED), so it cannot be
+      // refused for a missing .d.ts — the header always said so.
+      label: "types-only condition map",
+      deps: ["typed"],
+      pkgs: [{ name: "typed", manifest: { exports: { ".": { types: "./index.d.ts" } } }, files: [] }],
+      expectJudged: 0,
+      expectPresenceOnly: 1,
+    },
+    {
+      // E. Subpaths only: the bare name is not importable in this shape at all.
+      label: "subpath-only exports map",
+      deps: ["subs"],
+      pkgs: [{ name: "subs", manifest: { exports: { "./sub": "./sub.js" } }, files: ["sub.js"] }],
+      expectJudged: 0,
+      expectPresenceOnly: 1,
+    },
+    {
+      // F. `browser` is a BUNDLER condition, not one Node enables by default. Here
+      // it names a file that is absent while `require`/`import` name present ones,
+      // so Node loads the package and only a rule that PREFERRED `browser` would
+      // refuse it. `@jridgewell/resolve-uri` and `nanoid` (both installed in this
+      // tree) declare `browser` before `require` — this is not hypothetical.
+      label: "browser condition listed before require, browser file absent",
+      deps: ["browserish"],
+      pkgs: [
+        {
+          name: "browserish",
+          manifest: { exports: { ".": { browser: "./browser.js", require: "./cjs/index.js", import: "./esm/index.mjs" } } },
+          files: ["cjs/index.js", "esm/index.mjs"],
+        },
+      ],
+      expectJudged: 1,
+      expectPresenceOnly: 0,
+    },
+  ];
+
+  const built: string[] = [];
+  try {
+    for (const c of cases) {
+      const dir = fixture(c.deps, c.pkgs);
+      built.push(dir);
+      // Oracle first: for the shapes where Node CAN load the package, prove it.
+      // `typed`/`subs` are loadable by NEITHER route by construction, so their
+      // oracle is "Node agrees there is no runtime target", asserted separately.
+      if (c.label === "types-only condition map" || c.label === "subpath-only exports map") {
+        const oracle = resolvesUnderNode(dir, c.deps[0]);
+        assert.match(
+          `${oracle.require} ${oracle.import}`,
+          /ERR_PACKAGE_PATH_NOT_EXPORTED/,
+          `${c.label}: expected Node to expose no runtime "." target, got ${JSON.stringify(oracle)}`,
+        );
+      } else if (c.label === "condition order (import before default)") {
+        // Asymmetric on purpose: ESM gets ./b.js, CJS takes `default` → ./a.js.
+        assertNodeLoadsAnyRoute(dir, c.deps[0], c.label);
+      } else {
+        assertNodeLoads(dir, c.deps[0], c.label);
+      }
+      const { status, out } = runChecker(dir);
+      assert.equal(status, 0, `${c.label}: a loadable tree must NOT be refused, got exit ${status}:\n${out}`);
+      assert.equal(payloadChecked(out), c.expectJudged, `${c.label}: payload-checked count`);
+      assert.equal(presenceOnly(out), c.expectPresenceOnly, `${c.label}: presence-only count`);
+    }
+  } finally {
+    for (const dir of built) rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("an import-only package (its `require` half names an absent file) is NOT refused", () => {
+  // A VALID-but-missing target does not fall back, so `require` really does get
+  // ./a.js — but `import` gets ./b.js and loads. Node therefore loads the package,
+  // and refusing it would be the same false RED this rule was fixed for. The
+  // oracle below asserts BOTH halves: ESM OK, CJS broken.
+  const dir = fixture(["ordered"], [
+    { name: "ordered", manifest: { exports: { ".": { import: "./b.js", default: "./a.js" } } }, files: ["b.js"] },
+  ]);
+  try {
+    const oracle = resolvesUnderNode(dir, "ordered");
+    assert.equal(oracle.import, "OK", `the fixture must be ESM-loadable (${oracle.import})`);
+    assert.match(oracle.require, /^ERR/, `and NOT CJS-loadable (${oracle.require}) — that asymmetry is the point`);
+    const { status, out } = runChecker(dir);
+    assert.equal(status, 0, `a package at least one consumer can load must NOT be refused:\n${out}`);
+    assert.equal(payloadChecked(out), 1, "it must still be judged, not skipped");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a VALID export target whose file is missing does NOT fall back -> still refused", () => {
+  // The other half of the array-fallback rule: Node only falls through INVALID
+  // elements. A valid element pointing at an absent file is MODULE_NOT_FOUND, so
+  // falling back here (the way the old firstLeaf() did not, but the new rule
+  // must not either) would turn a genuine hole green.
+  const dir = fixture(["fallback"], [
+    { name: "fallback", manifest: { exports: { ".": ["./missing.js", "./present.js"] } }, files: ["present.js"] },
+  ]);
+  try {
+    assert.equal(
+      resolvesUnderNode(dir, "fallback").require,
+      "ERR MODULE_NOT_FOUND",
+      "Node must NOT fall back past a valid-but-absent element — otherwise this test is not pinning what it claims",
+    );
+    const { status, out } = runChecker(dir);
+    assert.notEqual(status, 0, `a valid target whose file is absent must be refused:\n${out}`);
+    assert.deepEqual(noPayloadNames(out), ["fallback"]);
+    assert.match(out, /names \.\/missing\.js/, "the refusal must name the element that was resolved");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a package whose ONLY "." target is invalid -> presence-only, not a crash or a refusal', () => {
+  // Node's answer for this manifest is ERR_INVALID_PACKAGE_TARGET for both routes
+  // (the package is not importable by name), which is not a payload hole this
+  // check can describe. It must not throw and must not invent a target.
+  const dir = fixture(["broken"], [{ name: "broken", manifest: { exports: { ".": ["not:valid"] } } }]);
+  try {
+    const oracle = resolvesUnderNode(dir, "broken");
+    assert.match(
+      `${oracle.require} ${oracle.import}`,
+      /ERR_INVALID_PACKAGE_TARGET/,
+      `expected Node to report an invalid target, got ${JSON.stringify(oracle)}`,
+    );
+    const { status, out } = runChecker(dir);
+    assert.equal(status, 0, `a package with no valid "." target must not be refused:\n${out}`);
+    assert.deepEqual(noPayloadNames(out), []);
+    assert.equal(presenceOnly(out), 1, "it must be reported as presence-only, not silently counted as payload-checked");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 
@@ -286,6 +573,7 @@ test("@types/* packages are presence-only -> a hollow @types package is NOT refu
     const { status, out } = runChecker(dir);
     assert.equal(status, 0, `a hollow @types package must not fail the check, got exit ${status}:\n${out}`);
     assert.deepEqual(noPayloadNames(out), []);
+    assert.equal(presenceOnly(out), 1, "the @types package must be counted presence-only");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -299,8 +587,100 @@ test("a package that declares no entry point cannot be judged on payload -> NOT 
     const { status, out } = runChecker(dir);
     assert.equal(status, 0, `a package with no declared entry point must not fail the check, got exit ${status}:\n${out}`);
     assert.deepEqual(noPayloadNames(out), []);
+    assert.equal(presenceOnly(out), 1);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a bare condition map with a runtime target IS judged (the check did not go vacuous)", () => {
+  // A condition map without subpath keys is the "." target itself. Pinned so the
+  // subpath-only narrowing above cannot swallow these packages too.
+  const good = fixture(["cond"], [{ name: "cond", manifest: { exports: { default: "./index.js" } }, files: ["index.js"] }]);
+  const bad = fixture(["cond"], [{ name: "cond", manifest: { exports: { default: "./index.js" } }, files: [] }]);
+  try {
+    assertNodeLoads(good, "cond", "a bare condition map");
+    const goodRun = runChecker(good);
+    assert.equal(goodRun.status, 0, `a bare condition map whose target exists must pass:\n${goodRun.out}`);
+    assert.equal(payloadChecked(goodRun.out), 1);
+    const badRun = runChecker(bad);
+    assert.notEqual(badRun.status, 0, `a bare condition map whose target is absent must be refused:\n${badRun.out}`);
+    assert.deepEqual(noPayloadNames(badRun.out), ["cond"]);
+  } finally {
+    rmSync(good, { recursive: true, force: true });
+    rmSync(bad, { recursive: true, force: true });
+  }
+});
+
+test('exports: { ".": … } is judged, not mistaken for a condition map (real packages here are shaped that way)', () => {
+  // react/react-dom/tailwindcss declare `exports: { ".": … }`. A subpath-key
+  // detector that only looked for `./` would classify `"."` as a condition name,
+  // silently make the single biggest group of packages presence-only, and leave
+  // this guard green. So this test's real tree assertion below would not catch it —
+  // this fixture does.
+  const bad = fixture(["react"], [
+    { name: "react", manifest: { main: "index.js", exports: { ".": { default: "./index.js" } } }, files: [] },
+  ]);
+  try {
+    const { status, out } = runChecker(bad);
+    assert.notEqual(status, 0, `exports["."] is a subpath key — a missing target must be refused:\n${out}`);
+    assert.deepEqual(noPayloadNames(out), ["react"]);
+    // The refusal path prints its own detail rather than the success line, so the
+    // payload-half proof here is the `no payload:` line naming react — a
+    // presence-only classification would have produced no such line at all.
+    assert.match(out, /exports\["\."\]( \[[a-z]+\])? names \.\/index\.js/, "the refusal must name the export it followed");
+  } finally {
+    rmSync(bad, { recursive: true, force: true });
+  }
+});
+
+test("a dual-consumer package is refused only when NO consumer can reach an entry, and the refusal names each half", () => {
+  // `require` and `import` enable different conditions, so a package can name a
+  // present file for one consumer and an absent file for the other — the shape
+  // `{ ".": { browser, require, import } }` has, which @jridgewell/resolve-uri and
+  // nanoid write. One half surviving is NOT an install hole (Node still loads the
+  // package); neither half surviving is, and then the refusal must name BOTH with
+  // the condition that reaches each, or the reader cannot tell which is gone.
+  const bothPresent = fixture(["dual"], [
+    {
+      name: "dual",
+      manifest: { exports: { ".": { require: "./cjs/index.js", import: "./esm/index.mjs" } } },
+      files: ["cjs/index.js", "esm/index.mjs"],
+    },
+  ]);
+  const cjsOnly = fixture(["dual"], [
+    {
+      name: "dual",
+      manifest: { exports: { ".": { require: "./cjs/index.js", import: "./esm/index.mjs" } } },
+      files: ["cjs/index.js"],
+    },
+  ]);
+  const neither = fixture(["dual"], [
+    { name: "dual", manifest: { exports: { ".": { require: "./cjs/index.js", import: "./esm/index.mjs" } } }, files: [] },
+  ]);
+  try {
+    const okRun = runChecker(bothPresent);
+    assert.equal(okRun.status, 0, `both entry points present must pass:\n${okRun.out}`);
+    assert.equal(payloadChecked(okRun.out), 1);
+
+    // Half-gone: Node's CJS route works, its ESM route does not. The checker must
+    // NOT refuse it — that is the false RED this rule exists to avoid.
+    const oracle = resolvesUnderNode(cjsOnly, "dual");
+    assert.match(oracle.require, /^\//, `Node's require() must still resolve it (${oracle.require})`);
+    assert.match(oracle.import, /^ERR/, `Node's import must NOT load it (${oracle.import})`);
+    const halfRun = runChecker(cjsOnly);
+    assert.equal(halfRun.status, 0, `a package one consumer can still load must NOT be refused:\n${halfRun.out}`);
+
+    // Nothing left: both halves must be named, each with its condition.
+    const deadOracle = resolvesUnderNode(neither, "dual");
+    assert.match(`${deadOracle.require} ${deadOracle.import}`.replaceAll("OK", ""), /ERR/, "no route may load it");
+    const deadRun = runChecker(neither);
+    assert.notEqual(deadRun.status, 0, `a package no consumer can load must be refused:\n${deadRun.out}`);
+    assert.deepEqual(noPayloadNames(deadRun.out), ["dual", "dual"], "both entry points must be named");
+    assert.match(deadRun.out, /exports\["\."\] \[import\] names \.\/esm\/index\.mjs/, "the ESM half must be named");
+    assert.match(deadRun.out, /exports\["\."\] \[require\] names \.\/cjs\/index\.js/, "the CJS half must be named");
+  } finally {
+    for (const dir of [bothPresent, cjsOnly, neither]) rmSync(dir, { recursive: true, force: true });
   }
 });
 
@@ -313,6 +693,7 @@ test("a COMPLETE install -> exit 0 (a prerequisite check must not fail a good tr
     const { status, out } = runChecker(dir);
     assert.equal(status, 0, `a complete install must pass, got exit ${status}:\n${out}`);
     assert.match(out, /toolchain present/, "the success path must say so");
+    assert.equal(payloadChecked(out), 2, "both packages must be judged on payload, not skipped");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -323,6 +704,12 @@ test("the real tree passes its own check (this is the tree the suite runs in)", 
   // does AFTER the checker passed — so this is the healthy-tree control.
   const { status, out } = runChecker(WEB_DIR);
   assert.equal(status, 0, `the real web tree failed its own dependency check:\n${out}`);
+  // ...and it is genuinely checking payloads on it, not just presence.
+  assert.ok(
+    payloadChecked(out) >= 8,
+    `the real tree must have a substantial number of payload-checked packages, got ${payloadChecked(out)}:\n${out}`,
+  );
+  assert.match(out, /presence-only/, "the success line must account for presence-only packages");
 });
 
 test("test:unit runs the dependency check BEFORE node --test (the regression this file exists for)", () => {
