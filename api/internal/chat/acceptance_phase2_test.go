@@ -23,12 +23,13 @@ package chat
 // back `refused=true` for three unrelated reasons: the allowlist refused the
 // NAME, the readonly identity refused the SCOPE, or the tool's input schema
 // refused the ARGUMENTS. The write tools declare `additionalProperties: false`,
-// so the `confirm=…` shape is rejected by the SCHEMA — and a test that only
-// asserted "it was refused" therefore passed with BOTH safety layers deleted
-// (`ChatToolIsAllowed` widened and `ReadOnlyScopes` switched to readwrite),
-// because argument validation still refused it. The schema-valid shape is what
-// removes that escape: nothing but the two security layers can refuse it, and
-// the assertion refuses any refusal that does not name a security reason.
+// so the `confirm=…` shape is refused by the SCHEMA, before any security layer
+// is consulted — and a schema refusal reaches the caller as the same
+// `refused=true` as a security refusal, so a test that only asserted "it was
+// refused" would be satisfied by argument validation and could not say which
+// layer did the work. The schema-valid shape removes that ambiguity: nothing but
+// the two security layers can refuse it, and the assertion refuses any refusal
+// that does not name a security reason.
 //
 // The token tests are the other half of the card: binding, single use, expiry and
 // cross-caller refusal, each read back against Postgres rather than against the
@@ -146,10 +147,11 @@ func (f *acceptanceFixture) productName(t *testing.T) string {
 // All three arrive as the same `refused=true` with a message in the output, and
 // every write tool's schema uses `additionalProperties: false` — so an attempt
 // that carries a key the tool does not declare (`confirm`, the shape the card
-// names) is refused by layer 3, the schema. A test that only asserts "it was
-// refused" is therefore satisfied by argument validation and stays GREEN with
-// BOTH safety layers deleted, which is how this file's headline claim came to be
-// carried by the wrong guard.
+// named) is refused by layer 3, the schema, before any security layer is
+// consulted. A test that only asserts "it was refused" is therefore satisfied by
+// argument validation: it cannot attribute the refusal, which is why this file
+// asserts the refusal's identity — `isAllowlistBanRefusal` for the name and
+// `isScopeRefusal` for the scope — instead of only its existence.
 func isSchemaValidationRefusal(out string) bool {
 	return strings.Contains(out, `validating "arguments"`)
 }
@@ -286,8 +288,10 @@ func TestChatModelCannotExecuteAWriteEvenWithConfirmInTheArguments(t *testing.T)
 		// security refusal at the call site unless it is named.
 		if isSchemaValidationRefusal(out) {
 			t.Errorf("the refusal of %s (%s, %s) is ARGUMENT VALIDATION, not the safety boundary: %q\n"+
-				"The dispatch allowlist never ran. With the allowlist widened (and the identity too) "+
-				"this test would stay green, so it would prove nothing about either layer.",
+				"The dispatch allowlist never ran: the tool's input schema refused the arguments "+
+				"before any security layer was consulted, so this attempt says nothing about either "+
+				"layer. A widened allowlist shows up HERE, as an argument-validation refusal, and "+
+				"not as a silence.",
 				a.tool, a.shape, a.what, out)
 			continue
 		}
