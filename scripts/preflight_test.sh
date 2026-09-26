@@ -40,6 +40,27 @@
 # script's argument handling and exit codes, not about Go packages, and the
 # people who need to run this (a deployer mid-incident) have a shell, not
 # necessarily a working Go toolchain pointed at this repo.
+#
+# NO `printf … | grep -q` ANYWHERE IN THIS FILE (and no `… | head -n1` either).
+# This script runs under `set -uo pipefail`, and that idiom is a NONDETERMINISTIC
+# FAILURE: `grep -q` exits at the FIRST match, so the writer is still writing
+# when the pipe closes, takes SIGPIPE (141), and `pipefail` makes the pipeline
+# report 141 although grep MATCHED. The check then takes its `else`/`bad` branch
+# and prints FAIL on output that plainly contains the pattern — a red `selftest`
+# that does not mean the property was violated. Measured on this host at IDLE
+# load, on the real payloads these checks grep: 1/500 runs at check 8, 11/500 at
+# check 10. Feed grep a here-string (`grep -q PAT <<<"$out"`) — no writer process
+# exists, so there is nothing to signal — or capture first and test the string.
+# A red run must mean the property was violated, nothing else.
+#
+# THE SAME CLASS, READER-EXITS-EARLY: `… | grep -q .` (check 10's old shape) is
+# the dangerous direction, because the failure lands on the `else` branch and
+# reports ok — a green gate that cannot fail. Same remedy: capture, then test.
+# `… | head -n1` is the same defect for an assignment (silently yields nothing).
+#
+# This is one shared rule, not per-site judgement: `deploy/tmp-apikey_test.sh`
+# and `web/scripts/biteproof_next_managed_files.sh` carry the same note after
+# being bitten by it, and this file was the only one still using the idiom.
 
 set -uo pipefail
 
@@ -133,8 +154,8 @@ echo "--- safety properties ---"
 all_skipped="${GATES//$'\n'/,}"
 sb_out=$(./scripts/preflight.sh --skip "$all_skipped" 2>&1); sb_rc=$?
 live_out=$(cd "$LIVE_ROOT" && ./scripts/preflight.sh --skip "$all_skipped" 2>&1); live_rc=$?
-if [ $sb_rc -ne 0 ] && printf '%s' "$sb_out" | grep -q 'every gate was skipped' && \
-   [ $live_rc -ne 0 ] && printf '%s' "$live_out" | grep -q 'every gate was skipped'; then
+if [ $sb_rc -ne 0 ] && grep -q 'every gate was skipped' <<<"$sb_out" && \
+   [ $live_rc -ne 0 ] && grep -q 'every gate was skipped' <<<"$live_out"; then
   ok "all $NGATES gates skipped -> refused: sandbox copy rc=$sb_rc, live script rc=$live_rc"
 else
   bad "all gates skipped must be refused — sandbox copy rc=$sb_rc [$(printf '%s' "$sb_out" | tail -n 1)], live script rc=$live_rc [$(printf '%s' "$live_out" | tail -n 1)]"
@@ -158,7 +179,7 @@ fi
 out=$(env -u JOMFORM_TEST_DATABASE_URL -u JOMFORM_TEST_VALKEY_URL \
       ./scripts/preflight.sh --only test 2>&1)
 rc=$?
-if [ $rc -ne 0 ] && printf '%s' "$out" | grep -q 'JOMFORM_TEST_DATABASE_URL is unset'; then
+if [ $rc -ne 0 ] && grep -q 'JOMFORM_TEST_DATABASE_URL is unset' <<<"$out"; then
   ok "unset test DB -> refused (rc=$rc)"
 else
   bad "unset test DB must be refused, got rc=$rc"
@@ -168,7 +189,7 @@ fi
 out=$(JOMFORM_TEST_DATABASE_URL=postgres://placeholder \
       env -u JOMFORM_TEST_VALKEY_URL ./scripts/preflight.sh --only test 2>&1)
 rc=$?
-if [ $rc -ne 0 ] && printf '%s' "$out" | grep -q 'JOMFORM_TEST_VALKEY_URL is unset'; then
+if [ $rc -ne 0 ] && grep -q 'JOMFORM_TEST_VALKEY_URL is unset' <<<"$out"; then
   ok "unset test Valkey -> refused (rc=$rc)"
 else
   bad "unset test Valkey must be refused, got rc=$rc"
@@ -178,7 +199,7 @@ fi
 #    makes `npm run build` exit 0 having built nothing.
 out=$(./scripts/preflight.sh --only web 2>&1)
 rc=$?
-if [ $rc -ne 0 ] && printf '%s' "$out" | grep -q 'web/node_modules/.bin/next is missing'; then
+if [ $rc -ne 0 ] && grep -q 'web/node_modules/.bin/next is missing' <<<"$out"; then
   ok "missing web/node_modules -> refused (rc=$rc)"
 else
   bad "missing web/node_modules must be refused, got rc=$rc"
@@ -203,9 +224,9 @@ chmod +x "$SB/web/node_modules/.bin/next"
 out=$(./scripts/preflight.sh --only web 2>&1)
 rc=$?
 if [ $rc -ne 0 ] && \
-   printf '%s' "$out" | grep -q 'PREFLIGHT FAIL: the web dependencies for this tree are not installed' && \
-   printf '%s' "$out" | grep -q 'npm ci' && \
-   ! printf '%s' "$out" | grep -q 'gate \[web\]'; then
+   grep -q 'PREFLIGHT FAIL: the web dependencies for this tree are not installed' <<<"$out" && \
+   grep -q 'npm ci' <<<"$out" && \
+   ! grep -q 'gate \[web\]' <<<"$out"; then
   ok "an empty/uninstalled node_modules (with .bin/next present) -> refused by the PREREQUISITE, naming the fix (rc=$rc)"
 else
   bad "an existing-but-uninstalled web/node_modules must be refused by the dependency PREREQUISITE (not by the gate running and failing), got rc=$rc [$(printf '%s' "$out" | grep -iE 'IS NOT INSTALLED|PREFLIGHT FAIL|gate \[web\]' | tr '\n' ' ')]"
@@ -256,7 +277,7 @@ rm -rf "$SB/web/node_modules"
 #    --only must not silently disable a real gate).
 out=$(./scripts/preflight.sh --only nonsense 2>&1)
 rc=$?
-if [ $rc -ne 0 ] && printf '%s' "$out" | grep -q 'unknown gate'; then
+if [ $rc -ne 0 ] && grep -q 'unknown gate' <<<"$out"; then
   ok "unknown gate name -> refused (rc=$rc)"
 else
   bad "unknown gate name must be refused, got rc=$rc"
@@ -265,7 +286,7 @@ fi
 # 7. Same for --skip: a typo there is the more dangerous one, because it reads as
 #    "that gate is off" while the gate actually runs, or vice versa.
 out=$(./scripts/preflight.sh --skip nonsense 2>&1)
-if [ $? -ne 0 ] && printf '%s' "$out" | grep -q 'unknown gate'; then
+if [ $? -ne 0 ] && grep -q 'unknown gate' <<<"$out"; then
   ok "--skip with a typo -> refused"
 else
   bad "--skip with a typo must be refused"
@@ -275,7 +296,7 @@ fi
 #    line directly: with one gate selected, another must read as SKIP and the run
 #    must say it is NOT full coverage. The "another" gate comes from the derived
 #    inventory, so this cannot go stale the way a literal name would.
-other="$(printf '%s\n' "$GATES" | grep -vx build | head -n 1)"
+other="$(printf '%s\n' "$GATES" | grep -vx build | sed -n '1p')"
 if [ -z "$other" ]; then
   bad "cannot pick a gate other than 'build' from the inventory to check the SKIP label"
 else
@@ -284,8 +305,8 @@ else
   # The disclaimer lives in the WARNING block ("A skipped gate is NOT a passing
   # gate"), not in the closing summary line — an aborted run never reaches the
   # summary, and that is precisely the case this check runs.
-  if printf '%s' "$out" | grep -q "NOT RUN:.*$other" && \
-     printf '%s' "$out" | grep -qiE 'not[[:space:]]+full[[:space:]]+coverage|not[[:space:]]+a[[:space:]]+passing[[:space:]]+gate'; then
+  if grep -q "NOT RUN:.*$other" <<<"$out" && \
+     grep -qiE 'not[[:space:]]+full[[:space:]]+coverage|not[[:space:]]+a[[:space:]]+passing[[:space:]]+gate' <<<"$out"; then
     ok "a skipped gate ($other) is labelled, and the run disclaims full coverage"
   else
     bad "a skipped gate must be labelled and disclaimed"
@@ -300,7 +321,7 @@ cp "$PREFLIGHT" "$OUTSIDE/scripts/preflight.sh"
 out=$(cd "$OUTSIDE" && ./scripts/preflight.sh --only build 2>&1)
 rc=$?
 rm -rf "$OUTSIDE"
-if [ $rc -ne 0 ] && printf '%s' "$out" | grep -q 'inside the git repository'; then
+if [ $rc -ne 0 ] && grep -q 'inside the git repository' <<<"$out"; then
   ok "run outside a git repo -> refused (rc=$rc)"
 else
   bad "running outside a git repo must be refused, got rc=$rc"
@@ -311,9 +332,16 @@ fi
 #     Only ACTIVE lines count: the phrases legitimately appear inside comments
 #     (documenting the rule), so strip comments and blank lines first.
 active="$(sed -E 's/[[:space:]]*#.*$//' "$PREFLIGHT" | grep -vE '^[[:space:]]*$')"
-if printf '%s' "$active" | grep -nE '\|\|[[:space:]]*true|continue-on-error' | grep -q .; then
+# CAPTURE, then test — not `grep -nE … | grep -q .`. A `grep -q` reader exits at
+# the first line, so the writer grep can take SIGPIPE (141) and `pipefail` then
+# fails the pipeline although it MATCHED; inside `if`, that lands on the `else`
+# branch and reports ok — a FALSE GREEN on the one property that keeps a gate
+# able to stop the run. (Measured with a multi-match payload; the shipped
+# preflight.sh has a single match, so this window is narrow rather than absent.)
+hits="$(grep -nE '\|\|[[:space:]]*true|continue-on-error' <<<"$active")"
+if [ -n "$hits" ]; then
   bad "preflight.sh contains '|| true' or 'continue-on-error' in an ACTIVE line — a gate can no longer stop the run:"
-  printf '%s' "$active" | grep -nE '\|\|[[:space:]]*true|continue-on-error' | sed 's/^/        /'
+  sed 's/^/        /' <<<"$hits"
 else
   ok "no '|| true' / 'continue-on-error' in any active line of preflight.sh"
 fi
@@ -371,7 +399,7 @@ if [ -z "$die_db" ] || [ -z "$die_vk" ]; then
   bad "the JOMFORM_TEST_DATABASE_URL / JOMFORM_TEST_VALKEY_URL die-messages are gone from preflight.sh — the advice an operator relies on is unverifiable"
 elif [ -n "$tmp_hit" ]; then
   bad "the test-env advice points into /tmp (=[$tmp_hit]) — /tmp is wiped between sessions, so the next reader sources nothing, the DB-backed tests SKIP and the suite prints green. It must be a durable path"
-elif ! printf '%s' "$die_db$die_vk" | grep -qF '${JOMFORM_ENV:-'; then
+elif ! grep -qF '${JOMFORM_ENV:-' <<<"$die_db$die_vk"; then
   bad "the env-prerequisite advice no longer names the \${JOMFORM_ENV:-...} form (it must stay overridable, not a hardcoded literal): DB=[$die_db] VALKEY=[$die_vk]"
 elif [ "$ndefaults" -ne 1 ] || [ -z "$canon" ]; then
   bad "preflight.sh quotes $ndefaults different test-env defaults — the emitted advice cannot be one durable path: [$(printf '%s ' $script_defaults)]"
@@ -447,7 +475,7 @@ if [ -n "$tmp_hit" ] || [ -z "$canon" ]; then
   : # already reported by 12a; do not double-count the same violation
 elif [ "$site_count" -lt 3 ]; then
   bad "only $site_count durable site(s) found ([$(printf '%s ' $tracked_sites)]) — the doc side of the advice is no longer covered (the sweep must find at least the script plus two docs)"
-elif ! printf '%s\n' "$tracked_sites" | grep -qxF 'scripts/preflight.sh'; then
+elif ! grep -qxF 'scripts/preflight.sh' <<<"$tracked_sites"; then
   bad "the derived sweep did not exclude this file correctly — scripts/preflight.sh is a durable site and must be in it, so an exclusion pattern that swallows a whole directory would otherwise pass unnoticed"
 elif [ -n "$site_drift" ]; then
   bad "a durable site quotes a different test-env path than the emitted advice ($canon):$site_drift"
