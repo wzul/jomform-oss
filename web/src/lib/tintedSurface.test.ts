@@ -19,6 +19,18 @@
 //   three rounds, so this guard walks the whole `web/src` tree. Adding a new
 //   page cannot add an unguarded site.
 //
+//   A FOURTH round came at the same defect from a different surface and is NOT
+//   covered by this file (card t_5f315891): the builder canvas price spans use
+//   the base `--jf-primary` on `bg-slate-50` (#f8fafc), where it measures
+//   4.492:1 — 0.008 under the floor, while the same token on white measures
+//   4.700:1. This guard cannot own it for two reasons: the tint it looks for is
+//   indigo-50, and a source scan cannot measure a margin that small (the whole
+//   question is the ratio, not the class list). It is guarded instead by
+//   `web/e2e/builder-canvas-price-contrast.spec.ts`, which measures the ratio in
+//   a real browser. If a fifth round appears on another surface, prefer a
+//   measured guard over a class-name rule: this file is the fallback for
+//   surfaces the browser gate cannot reach.
+//
 // THE FIX IS THE TOKEN, NOT THE CLASS
 //   `--jf-primary-on-tint` (#4338ca) measures 7.07:1 on the tint and
 //   `--jf-muted-on-tint` (#5b6472) 5.35:1; both also pass OFF the tint

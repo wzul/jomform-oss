@@ -64,21 +64,45 @@ confirm button disabled until the exact slug is typed, Escape closes, and zero
 critical/serious axe violations within the dialog. A regression there now fails
 `npm run a11y` instead of passing unseen.
 
+### The builder canvas, and a CONTRAST measurement rather than a class check
+
+The same browser-level stub pattern reaches one more authenticated surface: the
+**builder canvas**. `web/e2e/builder-canvas-price-contrast.spec.ts` drives
+`/builder?form=<id>` with the `/api/*` calls stubbed, so the gate reaches it with
+no session, no Go server and no database. It is a MEASUREMENT, not a class-name
+assertion: it reads each price span's painted colours out of the live DOM,
+resolves them by painting them onto a canvas (Tailwind v4 emits the slate ramp as
+`lab()`/`oklch()`, not `rgb()`), and asserts the WCAG ratio. It exists because the
+margin it guards is 0.008 — `#5e6ad2` on slate-50 `#f8fafc` is 4.492:1 against the
+4.5 floor, while the same colour on white is 4.700:1 — so a guard that rounds, or
+measures on white, or trusts a class name, reports the defect as a pass.
+
+That third shape is the one to reach for on the **surfaces the other two cannot
+cover**: a source rule cannot see a translucent tint's composited colour, and it
+cannot measure a margin this small.
+
+
 > **Do not reuse a running server.** `web/playwright.config.ts` sets
 > `reuseExistingServer` to **false** unless `A11Y_REUSE_SERVER=1`. With a
 > leftover `next-server` on the port, playwright would reuse it and axe would
 > report a clean pass for a build this tree never produced. `preflight.sh`
 > additionally picks a free port (`A11Y_PORT`) so a stale server cannot collide.
 > Override the port with `A11Y_PORT=<n> npm run a11y` if 3100 is busy.
+>
+> Never rebuild `.next` while that server is running: the new chunks land under a
+> server that still holds the previous build's manifests, and every page then
+> fails client-side ("This page couldn't load"), which reads as a spec failure
+> rather than as the build/server mismatch it is.
 
 > **Note on authenticated pages.** The dashboard surfaces (`/`, `/forms`,
 > `/builder`, `/settings`, `/profile`, `/products`) require a live session
 > cookie from the Go API. The `web/e2e/a11y.spec.ts` gate covers the public
 > routes only; the dashboard's own colours are measured out-of-band against a
 > standalone build with a real session cookie, and held in place by the source
-> guard documented below rather than by the gate. The one exception is the pair
-> of confirmation dialogs, which ARE scanned (see "Confirmation dialogs" above)
-> because stubbing the session-dependent fetch puts the dialog itself in the
+> guard documented below rather than by the gate. Two exceptions ARE scanned —
+> the pair of typed-slug confirmation dialogs, and the canvas price spans (see
+> "Confirmation dialogs" and "The builder canvas" above) — because stubbing the
+> session-dependent fetch at the browser level puts the real component in the
 > browser without needing a credential.
 
 ### Muted text and AA (source guard)
@@ -140,6 +164,21 @@ they only honour a comment opener outside JSX **text**: the literal route patter
 opener, which blanked 41 lines of that page (including a `</code>`) and made the
 guard report a `<code>` 180 lines away as the ancestor of unrelated spans.
 
+> The rest of the panel — the `input`/`textarea` names, the contrast tokens, the
+> ⋯ menu, the choices editor (`src/app/builder/page.tsx`, guarded separately by
+> its own card) — is still NOT covered by the gate. Keep running the signed-in
+> scan above for those.
+>
+> **One canvas exception, added with the AA fix.** The canvas price spans (the
+> product block's price and the `total` row) ARE in the gate now, via
+> `web/e2e/builder-canvas-price-contrast.spec.ts` — a browser MEASUREMENT of the
+> contrast ratio rather than a class check, because the failing margin is 0.008
+> (`#5e6ad2` on slate-50 is 4.492:1 where the floor is 4.5, and the same colour
+> on white is 4.700:1). Reach for that shape for a pair the source rules cannot
+> judge — `mutedText.test.ts` and `tintedSurface.test.ts` both pair a token with
+> a *named* surface (`bg-slate-50`, `bg-indigo-50`), so a token on a surface
+> neither guard models needs the measured form. The panel itself is still outside
+> the gate.
 > **This is a real gap, not a formality.** The builder's edit panel went
 > unscanned long enough to accumulate two **critical** unnamed form controls
 > (the value textarea and the conditional-logic rule picker) plus a set of
@@ -180,6 +219,16 @@ guard report a `<code>` 180 lines away as the ancestor of unrelated spans.
 > ⋯ menu, the choices editor (`src/app/builder/page.tsx`, guarded separately by
 > its own card) — is still NOT covered by the gate. Keep running the signed-in
 > scan above for those.
+>
+> **One canvas exception, added with the AA fix.** The canvas price spans (the
+> product block's price and the `total` row) ARE in the gate now, via
+> `web/e2e/builder-canvas-price-contrast.spec.ts` — a browser MEASUREMENT of the
+> contrast ratio rather than a class check, because the failing margin is 0.008
+> (`#5e6ad2` on slate-50 is 4.492:1 where the floor is 4.5, and the same colour
+> on white is 4.700:1). Reach for that shape for a tinted surface the source
+> rules cannot judge: a source rule can see the class list but not the composited
+> colour under a translucent tint, and it cannot measure a margin this small.
+> The panel itself is still outside the gate.
 
 ## Manual screen-reader checklist
 

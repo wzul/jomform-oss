@@ -1962,6 +1962,16 @@ function BlockPreview({ block, products }: { block: Block; products: Product[] }
         </div>
       );
     case "product":
+      // t_5f315891: the canvas price spans must NOT use the base --jf-primary.
+      // This block's card is `bg-slate-50` (#f8fafc), and #5e6ad2 on it measures
+      // 4.492:1 — 0.008 under the 4.5:1 AA floor. The token was only ever
+      // checked against white, where it passes at 4.700:1, which is exactly why
+      // the defect hid: slate-50 is marginally darker than the surface it was
+      // measured on. The on-tint token measures 7.554:1 on slate-50 and 7.903:1
+      // on white, so it is safe unconditionally. Do NOT darken --jf-primary
+      // itself: that shifts every other use of the token (4.700:1 on white)
+      // across the whole app. Guarded, measured in a real browser, by
+      // web/e2e/builder-canvas-price-contrast.spec.ts.
       return (
         <div className="rounded-md border border-[var(--jf-border)] bg-slate-50 px-3 py-2">
           <div className="flex items-center justify-between gap-2">
@@ -1976,7 +1986,7 @@ function BlockPreview({ block, products }: { block: Block; products: Product[] }
               ) : null}
               <span className="truncate text-sm">{block.value || p?.name || "Product"}</span>
             </span>
-            <span className="text-sm font-medium text-[var(--jf-primary)]">{p ? money(p.price_sen) : "—"}</span>
+            <span className="text-sm font-medium text-[var(--jf-primary-on-tint)]">{p ? money(p.price_sen) : "—"}</span>
           </div>
           {/* Issue #249: per-product quantity selector preview. */}
           {block.quantity !== false && (
@@ -2011,10 +2021,13 @@ function BlockPreview({ block, products }: { block: Block; products: Product[] }
         </div>
       );
     case "total":
+      // t_5f315891: same defect and same fix as the product block above — this
+      // row carries `bg-slate-50` itself, so #5e6ad2 measured 4.492:1 here
+      // before the change.
       return (
         <div className="flex items-center justify-between rounded-md border border-[var(--jf-border)] bg-slate-50 px-3 py-2">
           <span className="text-sm">{block.value || "Total"}</span>
-          <span className="text-sm font-medium text-[var(--jf-primary)]">RM0.00</span>
+          <span className="text-sm font-medium text-[var(--jf-primary-on-tint)]">RM0.00</span>
         </div>
       );
     case "divider":
