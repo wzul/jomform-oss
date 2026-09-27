@@ -30,7 +30,43 @@ too. So the table cannot rot into a claim about instruments that were renamed aw
 | `api/scripts/biteproof_verify_fail_page.py` | the GET /v1/auth/verify failure-response guards in `api/internal/httpapi/verify_fail_page_test.go` (card `t_8c67149d`): a GET on a bad/expired link answers a localized HTML page rather than the machine JSON envelope, POST keeps the envelope, the three failure classes read differently, Arabic sets `dir=rtl`, and the page stays over the browser's 512-byte discard floor | 6 | 201s |
 | `web/scripts/biteproof_next_managed_files.sh` | the Next managed-file guard in `web/src/lib/nextManagedFiles.test.ts`: the `agentRules:false` switch, the `/AGENTS.md` + `/CLAUDE.md` ignore rules, the `tsconfig` include, `web/next-env.d.ts` staying untracked and ignored, and the skip's own premise | 6 | 82s |
 | `web/scripts/operator-bite.sh` | the operator-identity guard in `web/src/lib/operatorNotice.test.ts`: the operator block on the legal surfaces, one definition of the registration number, the RTL isolation, the locales, and no platform identity leaking into a merchant's footer | 11 | 14s |
+| `scripts/biteproof_web_image_gate.sh` | the `webimage` preflight gate (a real cache-only `docker build -f web/Dockerfile`), which is the only gate that builds the SHIPPING web artifact. Three cases, each requiring the gate to go RED **and** the host suite (`npm run test:unit`) to stay GREEN — that second direction is what proves the host never saw the class: a healthy tree at HEAD is green (not a tautology), a `.dockerignore` rule that filters a `COPY` source out of the build context (the MCP-PARITY.md defect one layer out), and a runtime-stage `COPY --from=build` naming a path the build stage never produced (outside `buildContext.test.ts`'s reach, which parses the build stage's COPYs only) | 3 | 1st run on this host, load ~30: see the measured line below the table |
+| `web/scripts/biteproof_mcp_tool_inventory.sh` | `web/src/lib/mcpToolInventory.test.ts`, both directions: case 1 runs the guard on the REAL pre-fix page (the revision at the merge-base with `origin/main`) and requires it RED naming all ten tools that page omitted, then six mutations — a registered tool whose row is deleted (forward), a new Go tool with no row (forward), a row that is not registered (reverse), a duplicated row, the em-dash placeholder row, a hand-typed count, and a note-only group counted as a category (each RED for its own named reason). Every file restored byte-identically (sha256 re-checked). **Case 1 is coupled to a merge-base with `origin/main`, so it exits 2 on a tree cut from current main (there the page at the merge-base is byte-identical to this tree's, and the case would prove nothing).** | 7 | see the measured line below the table |
+| `web/scripts/biteproof_settings_tabs.sh` | the settings-tab-strip guards in `web/e2e/settings-tabs.spec.ts` (card `t_dc06`): the strip class, the reveal wait, the inset focus-ring rule, and the tab-count wait — each mutated one at a time, with the page-side cases REBUILDING the app first so the spec measures this tree's build rather than a previous one. Every case must produce a red at a NAMED assertion, not a crash or a failed build | 4 | see the measured line below the table |
 | `deploy/backup/jomform-backup_bite.sh` | the failure paths the nightly backup's suite asserts (`deploy/backup/jomform-backup_test.sh`, the gated `backup` suite): the fail-closed seam and the legacy refusal paths, sabotaged one at a time in a throwaway copy | 29 | 2110s |
+
+Three rows above (`scripts/biteproof_web_image_gate.sh`,
+`web/scripts/biteproof_mcp_tool_inventory.sh`, `web/scripts/biteproof_settings_tabs.sh`)
+were added by the card that found them unregistered: all three files had been on
+main since #758 / #766 / #787 without a row, and none of those three changes
+touched this file — so `TestEveryBiteHarnessIsRegisteredInTheInventory` failed the
+`api test` gate on a pristine main.
+
+What was measured on this host for those three rows, and what was not — stated
+apart, because the two are not the same claim:
+
+- `web/scripts/biteproof_settings_tabs.sh`: **1088s, ALL CASES OK.** All four cases
+  went red at their own NAMED assertion (the strip wrapping to 5 rows at 320px, the
+  selected tab scrolled out of the strip's window, the focus ring clipped at the
+  left edge, and the count wait never reaching the 12 tabs) and the three mutated
+  files came back byte-identical (sha256 re-checked).
+- `web/scripts/biteproof_mcp_tool_inventory.sh`: **exit 2, 1s** — not a pass and not
+  a failure of the guard. Case 1 resolves the pre-fix page from `git merge-base HEAD
+  origin/main`, and this branch is cut from current main, so that revision is
+  byte-identical to the tree's own page; the harness refuses to run a case that
+  would prove nothing rather than reporting green. On a branch with the page
+  changed, or on the primary tree, it runs all seven.
+- `scripts/biteproof_web_image_gate.sh`: **case 0 completed GREEN** (the healthy
+  tree at HEAD passed the real `docker build` gate, so the gate is not a
+  tautology), then cases 1-2 did not complete on this host: each case runs
+  `./scripts/preflight.sh --only webimage`, which takes the same host-wide
+  preflight lock that the merge and QA lanes were queuing on (~25 load average on 6
+  cores), and the run was still waiting on it when this card had to hand off. Its
+  wall time is therefore **unmeasured**, and this cell says so rather than quoting a
+  number nobody produced.
+
+**None of the three carries a wall-time figure that was not actually run on this
+host**, which is the one thing this document exists to prevent.
 
 The table carries one row more than the tree does: `biteproof_ses_replyto.py`
 ships with PR 772, and its row is registered here (and in the guard's

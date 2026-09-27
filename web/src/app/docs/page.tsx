@@ -46,6 +46,25 @@ type Entry = {
 
 type Group = { id: string; labelKey: Key; entries: Entry[]; more?: { href: string; label: string }[] };
 
+// The FAQ block's entries. A question/answer pair is the common shape; a
+// `title`/`slug`/`body` entry is a named section that carries its own anchor —
+// the shape every other section on this page uses, and the one the passkey
+// section needs, because api/internal/httpapi/passkey_seam_test.go requires the
+// passkey text to be rendered here as a slug-anchored section. Note the anchor
+// is not deep-linked from anywhere yet: unlike `two-factor`, `workspaces` and
+// `form-url-slug`, there is no dashboard "?" pointing at the passkeys section —
+// the login page's passkey control does not carry one.
+//
+// Do not write that guard's needle literal in this comment (t_eb1c4dd1): it
+// locates the section with an unanchored string search, so the literal appearing
+// up here first makes it assert against this comment instead of the entry.
+//
+// Both shapes are declared in one list only because both render below the FAQ
+// heading; the render branches on the shape.
+type FaqEntry =
+  | { q: string; a: string; title?: undefined; slug?: undefined; body?: undefined }
+  | { title: string; slug: string; body: string; q?: undefined; a?: undefined };
+
 const GROUPS: Group[] = [
   {
     id: "account",
@@ -293,7 +312,7 @@ const QUICK_LINKS: { href: string; labelKey: Key; primary?: boolean }[] = [
   { href: "/docs/api", labelKey: "docs.linkAPI" },
 ];
 
-const FAQ: { q: string; a: string }[] = [
+const FAQ: FaqEntry[] = [
   {
     q: "How do I connect an AI agent?",
     a: "Point any MCP client at the server URL https://mcp.jomform.com/mcp. It registers itself via OAuth 2.1 — no API keys needed. See the MCP tool reference for what agents can do.",
@@ -306,11 +325,15 @@ const FAQ: { q: string; a: string }[] = [
     a: "Yes. Add your domain in Settings → Domains, point a CNAME to custom.jomform.com, and verify. Your forms then go live on your domain automatically.",
   },
   {
+    // api/internal/httpapi/passkey_seam_test.go (TestPasskeyDocsDescribeTheRecoveryPath)
+    // asserts this section as the passkey feature's documentation, and the
+    // dashboard's login page is where the control it describes lives. Declared
+    // as `title`/`body` with its own `slug` anchor, like every other section on
+    // this page: the FAQ block renders only `q`/`a`, so the earlier shape put
+    // this text in the source and on no page at all.
     title: "Passkeys (sign in without a password)",
-    // The login page's passkey control deep-links this section, and the
-    // passkey seam guards check that it describes the flow (card t_df9233f6).
     slug: "passkeys",
-    body: "A passkey lets you sign in with your face, fingerprint or device PIN instead of typing a password. Add one from Profile → Security → Register passkey: your browser asks your device to create it, and a passkey appears in the list with the date it was added. Once you have one, the login page offers a passkey button — press it, approve the prompt, and you are in; nothing is typed. Because signing in with a passkey starts from a list of your credentials rather than an email address, the button is offered before you enter anything. Each passkey is bound to one device or password manager (iCloud Keychain, Google Password Manager, 1Password, a security key), so add one per device you sign in from, and remove any you no longer use with the delete button on its row — deleting a passkey immediately stops it working, and you can always sign in the ordinary way instead. If a passkey was added before this flow was fixed it may have been stored as a non-discoverable credential, which the login button cannot use: delete that row and register a new passkey, which is made discoverable so the button finds it.",
+    body: "Sign in with your face, fingerprint or device PIN instead of a password. Add a passkey from Profile → Security → Register passkey: your browser asks your device to create it, and the passkey appears in the list with the date it was added. Once you have one, the login page offers a passkey button before you type anything, because signing in with a passkey starts from a list of your credentials rather than an email address. Each passkey is bound to one device or password manager (iCloud Keychain, Google Password Manager, 1Password, a security key), so add one per device you sign in from, and remove any you no longer use with the delete button on its row. An older passkey may have been stored as a non-discoverable credential, which the login page's button cannot use: delete that row and register a new passkey, which is made discoverable so the button finds it.",
   },
 ];
 
@@ -397,13 +420,23 @@ export default function DocsIndexPage() {
       <h2 className="mt-12 text-xl font-semibold text-slate-900">
         <T k="docs.faqTitle" />
       </h2>
+      {/* A section entry carries its own heading and anchor and renders prose
+          (one <p> per sentence, like the section blocks above); a q/a entry
+          renders a question and its answer. Both live under this heading. */}
       <div className="mt-4 space-y-4">
-        {FAQ.map((f) => (
-          <section key={f.q}>
-            <h3 className="text-sm font-semibold text-slate-900">{f.q}</h3>
-            <p className="mt-1 text-sm leading-relaxed text-slate-600">{f.a}</p>
-          </section>
-        ))}
+        {FAQ.map((f) =>
+          f.q !== undefined ? (
+            <section key={f.q}>
+              <h3 className="text-sm font-semibold text-slate-900">{f.q}</h3>
+              <p className="mt-1 text-sm leading-relaxed text-slate-600">{f.a}</p>
+            </section>
+          ) : (
+            <section key={f.title} id={f.slug} className="scroll-mt-24">
+              <h3 className="text-sm font-semibold text-slate-900">{f.title}</h3>
+              <p className="mt-1 text-sm leading-relaxed text-slate-600">{f.body}</p>
+            </section>
+          ),
+        )}
       </div>
     </div>
   );

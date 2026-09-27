@@ -27,14 +27,34 @@
 //      (the reverse direction of 1).
 //
 // HOW THE REGISTRY IS READ, and why it is not a hardcoded list: the tool
-// registry lives in Go (api/internal/mcpsrv/tools.go), so a hardcoded name list
-// here would be a second, silently-drifting copy of it — the same failure mode
-// as the bug. It is derived from the source instead, cross-language, in the
-// idiom of salesRows.test.ts / spamJudgeToggle.test.ts. Both registration shapes
-// in that file are handled: `addTool(s, &mcp.Tool{Name: …}, h)` (the per-call
-// wrapper that resolves and scopes the caller) and the two older
-// `mcp.AddTool(s.mcp, &mcp.Tool{Name: …}` call sites. If a third shape appears,
-// test 1 fails on the count rather than letting this guard pass vacuously.
+// registry lives in Go, so a hardcoded name list here would be a second,
+// silently-drifting copy of it — the same failure mode as the bug. It is derived
+// from the source instead, cross-language, in the idiom of salesRows.test.ts /
+// spamJudgeToggle.test.ts.
+//
+// THE SCOPE IS THE WHOLE `api/internal/mcpsrv` PACKAGE, not `tools.go`. That
+// distinction is this guard's own measured defect: it read `tools.go` alone, the
+// file the registry lived in for years, until a refactor moved one tool's
+// literal out of it (disable_2fa's constructor into parity_issue396.go) and this
+// guard silently extracted 176 names against a 177-tool registry — one tool too
+// few, so the reverse direction accused a row that IS registered and a correct
+// /docs/mcp page went red. Reading the package is what PR 766's sibling
+// mcpToolInventory.test.ts already does; the two guards must agree on the same
+// set or they contradict each other.
+//
+// Three properties keep the set from shrinking quietly again, all over the
+// widened scope:
+//   - EXPECTED_TOOL_COUNT pins the exact size. The `>= 150` floor this guard
+//     shipped with is what let the drift through: 176 parsed against 177 is
+//     still >= 150, so the count said nothing and only test 5 saw the phantom.
+//   - Every `&mcp.Tool{` literal in the package must yield a name, so a
+//     registration shape this extractor does not understand fails HERE instead
+//     of quietly shrinking the set.
+//   - More than one source file must be read, so a future narrowing back to a
+//     single file fails on the scope itself.
+// The registration shapes handled: `addTool(s, &mcp.Tool{Name: …}, h)` (the
+// per-call wrapper that resolves and scopes the caller) and the older
+// `mcp.AddTool(s.mcp, &mcp.Tool{Name: …}` call sites.
 //
 // WHAT IT DOES NOT COVER (stated honestly): it reads source text, so it cannot
 // prove the served HTML — the rendered-page check is `npm run build` plus a
@@ -51,7 +71,7 @@ const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.met
 const dir = (rel: string) => fileURLToPath(new URL(rel, import.meta.url));
 
 const DOCS_DIR = dir("../app/docs");
-const TOOLS_GO = "../../../api/internal/mcpsrv/tools.go";
+const MCP_DIR = dir("../../../api/internal/mcpsrv/");
 const PARITY_MD = "../../../MCP-PARITY.md";
 const TOOL_REFERENCE_PAGE = "../app/docs/mcp/page.tsx";
 const CHAT_DOCS_PAGE = "../app/docs/chat/page.tsx";
@@ -74,10 +94,31 @@ function docsPages(base: string): Map<string, string> {
 const PAGES = docsPages(DOCS_DIR);
 
 // The registered MCP tool set, derived from the Go registry source.
+//
+// The source is the mcpsrv PACKAGE, not one file of it: the registry lived in
+// tools.go for years, so reading tools.go alone looked right — until #732 moved
+// disable_2fa's literal into parity_issue396.go and this extractor silently
+// returned 176 names against a 177-tool registry. Every non-test `.go` file is
+// read, in sorted order so the join (and any failure message) is deterministic.
+// mcpToolInventory.test.ts discovers its source the same way; a fix to one scope
+// without the other would leave the two guards disagreeing.
+const MCP_SOURCES = readdirSync(MCP_DIR)
+  .filter((f) => f.endsWith(".go") && !f.endsWith("_test.go"))
+  .sort()
+  .map((f) => readFileSync(MCP_DIR + f, "utf8"));
+
+// One literal per registered tool, so the registry has exactly this many names.
+// Pinned rather than floored: the `>= 150` floor this guard shipped with could
+// not see 176 vs 177, which is the drift that reddened main. A landing that adds
+// or removes a tool moves this number — that is the point, and the message below
+// says which direction to correct.
+const EXPECTED_TOOL_COUNT = 177;
+
+const REGISTRY_SRC = MCP_SOURCES.join("\n");
+
 function registeredTools(): Set<string> {
-  const src = read(TOOLS_GO);
   const names = new Set<string>();
-  for (const m of src.matchAll(/&mcp\.Tool\{\s*Name:\s*"([a-z0-9_]+)"/g)) names.add(m[1]);
+  for (const m of REGISTRY_SRC.matchAll(/&mcp\.Tool\{\s*Name:\s*"([a-z0-9_]+)"/g)) names.add(m[1]);
   return names;
 }
 
@@ -105,14 +146,49 @@ test("the guard is looking at the real docs tree and the real registry (it canno
     PAGES.has(fileURLToPath(new URL(CHAT_DOCS_PAGE, import.meta.url))),
     "the docs walk did not pick up /docs/chat — the page this guard was written for",
   );
+  // The scope itself is asserted, not assumed: more than one source file is
+  // read. This guard's red on main came from a single-file scope that no test
+  // named, so a future narrowing back to one file has to fail here.
   assert.ok(
-    REGISTERED.size >= 150,
-    `parsed only ${REGISTERED.size} registered tool(s) from ${TOOLS_GO} — the registry ` +
-      "extractor has drifted from the registration shapes in that file",
+    MCP_SOURCES.length > 1,
+    `read ${MCP_SOURCES.length} non-test source file(s) from api/internal/mcpsrv/ — the registry ` +
+      "is a package, and a single-file scope is the defect this guard was reddened by",
+  );
+  // The count is PINNED, not floored. `>= 150` is what let 176-parsed-against-177
+  // pass: the drift was invisible in the count and surfaced only as a phantom on
+  // test 5. A landing that adds or removes a tool moves EXPECTED_TOOL_COUNT — and
+  // the failure says which way to correct it, so the number cannot be nudged
+  // blindly.
+  assert.equal(
+    REGISTERED.size,
+    EXPECTED_TOOL_COUNT,
+    `parsed ${REGISTERED.size} registered tool(s) from the non-test api/internal/mcpsrv ` +
+      `package, but this guard pins ${EXPECTED_TOOL_COUNT}. If tools were added or removed, update ` +
+      "EXPECTED_TOOL_COUNT in the same change. If they were not, the extractor has drifted from " +
+      "the registration shapes in that package — which is how it silently lost disable_2fa.",
+  );
+  // Every `&mcp.Tool{` literal must yield a name. A construct the extractor does
+  // not understand fails HERE, with the registry set quietly incomplete, instead
+  // of shrinking the set (making the two direction tests require less and less).
+  const literals = (REGISTRY_SRC.match(/&mcp\.Tool\{/g) ?? []).length;
+  assert.equal(
+    literals,
+    REGISTERED.size,
+    `${literals} \`&mcp.Tool{\` literal(s) in the non-test api/internal/mcpsrv package but only ` +
+      `${REGISTERED.size} name(s) extracted — a registration shape the extractor does not ` +
+      "understand, so the registered set is incomplete",
   );
   for (const known of ["submit_feedback", "list_products", "set_form_theme", "update_product"]) {
     assert.ok(REGISTERED.has(known), `the registry extractor missed ${known}, a tool registered in Go`);
   }
+  // The tool that exposed the single-file scope: it is registered (its literal now
+  // lives in parity_issue396.go), and it is exactly what a tools.go-only extractor
+  // drops. Naming it here means a narrowing fails loudly and immediately.
+  assert.ok(
+    REGISTERED.has("disable_2fa"),
+    "the registry extractor missed disable_2fa — the tool whose literal moved out of tools.go, " +
+      "and the reason this guard must read the whole mcpsrv package",
+  );
   // The whole point of the guard: these two are the names the docs must be
   // careful about. One is registered, one is deliberately not.
   assert.ok(REGISTERED.has("submit_feedback"), "submit_feedback is no longer a registered MCP tool");
@@ -138,7 +214,8 @@ test("a name the docs call a tool is a tool that is actually registered", () => 
   assert.deepEqual(
     offenders,
     [],
-    `the docs present a name as an MCP tool that api/internal/mcpsrv/tools.go does not register:\n  ` +
+    `the docs present a name as an MCP tool that the non-test api/internal/mcpsrv package does ` +
+      `not register:\n  ` +
       offenders.join("\n  ") +
       "\nEither the tool is not registered (then do NOT describe it as one — see MCP-PARITY.md's " +
       '"In-app assistant — the proposal lane") or it is registered and the claim is true.',
@@ -222,8 +299,8 @@ test("every entry of the MCP tool reference is a registered tool", () => {
   assert.deepEqual(
     phantom,
     [],
-    `/docs/mcp advertises tool(s) that api/internal/mcpsrv/tools.go does not register: ` +
-      `${phantom.join(", ")} — the reference page must only list tools that exist`,
+    `/docs/mcp advertises tool(s) that the non-test api/internal/mcpsrv/ package does not ` +
+      `register: ${phantom.join(", ")} — the reference page must only list tools that exist`,
   );
 });
 

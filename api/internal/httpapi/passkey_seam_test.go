@@ -562,13 +562,22 @@ func TestPasskeyRegistrationOptionsRequireAResidentKey(t *testing.T) {
 // levels up — the same relative shape web/src/lib/*.test.ts uses in reverse.
 func webRootFromAPI(t *testing.T) string {
 	t.Helper()
-	// api/internal/httpapi -> repo root is ../../
-	root, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	// The literal is the SOURCE TREE `../../../web/src`, not the repo root joined
+	// with "web". The preflight's path deriver turns a joined directory literal
+	// into a claim on that whole directory (scripts/preflight.sh, pw_derive_all),
+	// so `web` made the `api test` gate claim EVERY path under web/ — including
+	// ones this guard never opens. Measured: with the joined form,
+	// `./scripts/preflight.sh --classify=web/tsconfig.json` returned
+	// `build vet test govuln web …`, i.e. `test` for a file no Go test reads, and
+	// the `selftest` gate's narrowing check goes red on exactly that. Naming the
+	// subdirectory the guard really reads keeps the claim true; `web/src/app/**`
+	// still selects `test`, which it must, because this guard does read it.
+	webSrc, err := filepath.Abs("../../../web/src")
 	if err != nil {
-		t.Fatalf("resolve repo root: %v", err)
+		t.Fatalf("resolve the web source tree: %v", err)
 	}
-	web := filepath.Join(root, "web")
-	if _, err := os.Stat(filepath.Join(web, "src", "lib", "webauthn.ts")); err != nil {
+	web := filepath.Dir(webSrc)
+	if _, err := os.Stat(filepath.Join(webSrc, "lib", "webauthn.ts")); err != nil {
 		t.Skipf("web tree not present at %s (%v) — the cross-language half needs the full repo", web, err)
 	}
 	return web

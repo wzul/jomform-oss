@@ -40,6 +40,17 @@ const SECTIONS: Section[] = [
       "A normal password login and an account without 2FA are unaffected.",
     ],
   },
+  {
+    id: "passkeys",
+    title: "Passkeys (sign in without a password)",
+    body: [
+      "A passkey lets you sign in with your face, fingerprint or device PIN instead of typing a password. Register one from Profile → Security → Register passkey: your browser asks your device to create it, and the passkey appears in the list with the date it was added.",
+      "Once you have one, the login page offers a passkey button before you type anything, because signing in with a passkey starts from a list of your credentials rather than an email address. Press the button, approve the prompt, and you are in — nothing is typed.",
+      "Each passkey is bound to one device or password manager (iCloud Keychain, Google Password Manager, 1Password, a security key), so add one per device you sign in from, and remove any you no longer use with the delete button on its row. Deleting a passkey stops it working immediately, and you can always sign in the ordinary way instead.",
+      "If a passkey was added before this flow was fixed it may have been stored as a non-discoverable credential, which the login button cannot use. Delete that row and register a new passkey, which is made discoverable so the button finds it — the login page's button is the one that is refused, and re-registering is the only recovery.",
+      "Adding a passkey from a magic-link session asks for a fresh 2FA code, the same as changing your password or disabling 2FA.",
+    ],
+  },
 ];
 
 export default function SecurityDocsPage() {
