@@ -45,6 +45,29 @@
 // its source at load time and compared against TAB_KEYS, and that failure names
 // the tab.
 //
+// THE WAITS ARE NOT "STABLE FOR A BIT" — they wait for the state the assertion
+// is about (load-sensitivity, measured; this file used to false-red on a
+// correctly-rendering page):
+//   * the tab-count wait returns only once the ADMIN tab set this spec stubs is
+//     on screen (all TAB_COUNT tabs, derived from TAB_KEYS). It used to return
+//     as soon as the count was equal for 3 polls of 100ms, and the PRE-bundle
+//     strip (10 tabs: #163 has not resolved `role` yet, so CHIP + Members are
+//     absent) is trivially "stable". Measured under CPU pressure: the old wait
+//     returned 10 after 1299ms while the 12-tab strip did not arrive until
+//     4356ms, so RULE 4 then measured the MEMBER strip against the ADMIN
+//     expectation and reported "the settings strip does not render the tabs
+//     TAB_IDS declares ... (- CHIP, - Members)" — 40 lines away from the real
+//     cause, which is that the session bundle had not resolved.
+//   * RULE 6 waits for the reveal to land (a bounded poll of the painted frame)
+//     instead of reading once. The mount reveal is an effect, so the strip is
+//     committed with the selection still out of view; the gap between that
+//     commit and the reveal was measured at 19ms idle and 508ms under 80x CPU
+//     throttling, and a single read inside it reported "the selected tab is
+//     scrolled out of the strip's visible window" against a correct page.
+// Both waits are BOUNDED and both keep their assertion: a strip with no reveal
+// never lands in view and fails, and a strip that never renders the admin tabs
+// fails at the count wait with the session named.
+//
 // WHAT MAKES IT BITE (not assumed — each source-side half was reverted in turn
 // and this file re-run against the rebuilt page):
 //   * reverting the strip class alone (back to `flex flex-wrap`) -> 25 failed /
@@ -109,10 +132,6 @@ const TAB_KEYS: ReadonlyArray<{ key: keyof typeof DICT; adminOnly?: true }> = [
 // a member). A new tab is a one-line addition above; nothing else in this file
 // compares against a literal count.
 const TAB_COUNT = TAB_KEYS.length;
-
-// What a member sees, since #163 drops the `adminOnly` tabs: the floor the
-// settled count is sanity-checked against before measuring.
-const NON_ADMIN_TAB_COUNT = TAB_KEYS.filter((t) => !t.adminOnly).length;
 
 // The tabs the PAGE declares, read out of its own source (`TAB_IDS` in
 // `settings/page.tsx`). Read as source text rather than imported: the page is a
@@ -296,44 +315,48 @@ for (const lang of LANGS) {
       await page.setViewportSize({ width, height: 800 });
       await page.goto(`${baseURL}/settings?tab=affiliates`, { waitUntil: "domcontentloaded" });
 
-      // Wait for the tab count to SETTLE BEFORE MEASURING. The tab set grows
-      // once the session bundle resolves `role` (#163 hides the admin-only CHIP
-      // and Members tabs from a member), so measuring the first paint reads a
-      // different strip than a user sees.
+      // Wait for the tab set this spec stubs to be ON SCREEN before measuring.
+      // The tab set grows once the session bundle resolves `role` (#163 hides
+      // the admin-only CHIP and Members tabs from a member), so measuring the
+      // first paint reads a different strip than a user sees.
       //
-      // The wait names no count and no expected value: it returns as soon as the
-      // count stops changing, and what it settled at is asserted right below.
-      // That is the whole point of the derivation — the strip is the subject of
-      // this file, the tab list is an input, and a page that gained a tab must
-      // reach the measurements (where a real defect would show) instead of
-      // dying here on a literal.
+      // The wait names no count of its own: `TAB_COUNT` is derived from TAB_KEYS
+      // above, which is the one place the list of tabs lives, so a page that
+      // gained a tab still reaches the measurements (where a real defect shows)
+      // instead of dying here on a literal.
       //
-      // The wait still waits for STABILITY rather than merely a count, which is
-      // what keeps it from measuring a mid-load strip whose reveal has not run
-      // for the tabs the session is about to add.
-      const settled = await page.evaluate(`(async () => {
-        let last = -1, stable = 0;
+      // It waits for THAT state, not for "the count stopped changing". The old
+      // condition (3 equal polls of 100ms) is satisfied by the PRE-bundle strip:
+      // before the session bundle resolves, #163 renders the 10 member tabs, and
+      // a count that is not moving is trivially "settled". Measured under CPU
+      // pressure, the old loop returned 10 after 1299ms while the 12-tab strip
+      // arrived at 4356ms — RULE 4 then measured the member strip against the
+      // admin expectation and blamed TAB_KEYS for the session's race.
+      //
+      // So a bundle that never resolves now fails HERE, naming the session, and
+      // the measurement below only ever runs against the strip this spec stubs.
+      const settle = await page.evaluate(`(async () => {
+        const want = ${TAB_COUNT};
         const deadline = Date.now() + 20000;
+        let last = 0;
         while (Date.now() < deadline) {
-          const n = document.querySelectorAll('[role="tab"]').length;
-          stable = n === last ? stable + 1 : 0;
-          last = n;
-          if (stable >= 3) return n;
-          await new Promise((r) => setTimeout(r, 100));
+          last = document.querySelectorAll('[role="tab"]').length;
+          if (last >= want) return { count: last, timedOut: false };
+          await new Promise((r) => setTimeout(r, 50));
         }
-        return last;
-      })()`) as number;
-      // Sanity only: the strip has to have settled at something meaningful for
-      // the measurements below to say anything. The count is NOT an expectation
-      // of this file — RULE 1 compares it against the derived count — so this
-      // exists so that a page which renders almost nothing reports THAT, instead
-      // of failing an unrelated box measurement.
+        return { count: last, timedOut: true };
+      })()`) as { count: number; timedOut: boolean };
+      // A timeout is not a measurement — say what it means: the admin-only tabs
+      // (#163: chip, members) never appeared, i.e. the session bundle this spec
+      // fulfils did not resolve the `admin` role its workspaces[0] carries.
       expect(
-        settled,
-        `${lang}@${width}: the settings strip settled at ${settled} tabs — fewer than the ` +
-          `${NON_ADMIN_TAB_COUNT} a member sees, so there is no strip to measure ` +
-          `(TAB_KEYS expects ${TAB_COUNT} for the admin session this spec stubs)`,
-      ).toBeGreaterThanOrEqual(NON_ADMIN_TAB_COUNT);
+        settle.timedOut,
+        `${lang}@${width}: the settings strip rendered ${settle.count} of the ${TAB_COUNT} tabs ` +
+          `TAB_KEYS derives, and never reached ${TAB_COUNT} — the session bundle did not resolve the ` +
+          `admin role this spec stubs (workspaces[0].role = "admin"), so the two adminOnly tabs ` +
+          `(#163: ${TAB_KEYS.filter((t) => t.adminOnly).map((t) => t.key as string).join(", ")}) were ` +
+          `never rendered. This is the SESSION, not TAB_KEYS.`,
+      ).toBe(false);
       // The tab set must be settled before measuring, and it must be THIS
       // locale's strings: `role="tab"` + the dictionary label for the active
       // tab. Asserted through the accessible name, so this also fails if the
@@ -409,15 +432,52 @@ for (const lang of LANGS) {
       // RULE 5 — the tab semantics the a11y contract depends on.
       expect(m.selectedCount, `${lang}@${width}: exactly one tab must carry aria-selected`).toBe(1);
 
-      // RULE 6 — the selected tab is inside the strip's visible window. Without
-      // the reveal this is the assertion that fails: on the pre-fix strip there
-      // is no scroller, so a selected tab cannot be out of view — but with a
-      // plain scroller and no reveal, the default tab measured 867px inside a
+      // RULE 6 — the SELECTED tab is inside the strip's visible window on load.
+      // This is the assertion the ABSENT reveal fails: on the pre-fix strip
+      // there is no scroller, so a selected tab cannot be out of view — but with
+      // a plain scroller and no reveal, the default tab measured 867px inside a
       // 272px box at 320px.
+      //
+      // It reads through a bounded WAIT rather than the one-shot
+      // `m.selectedInView`, which is the same predicate taken once at measure
+      // time and would re-introduce the race this wait exists to remove. The
+      // reveal is a React effect: the strip is committed with the selection
+      // still out of view and the scroll lands a frame or more later. Measured,
+      // the gap between the commit and the reveal is 19ms on an idle host and
+      // 508ms under 80x CPU throttling, and the old single read landed inside it
+      // and reported "the selected tab is scrolled out of the strip's visible
+      // window" against a correctly-rendering page.
+      //
+      // Bounded, and still an assertion: a page with no reveal never lands in
+      // view and fails here after the deadline (proven — see the bite harness,
+      // web/scripts/biteproof_settings_tabs.sh case 2).
+      const reveal = await page.evaluate(`(async () => {
+        const deadline = Date.now() + 5000;
+        let saw = null;
+        const read = () => {
+          const tabs = [...document.querySelectorAll('[role="tab"]')];
+          if (!tabs.length || !tabs[0].parentElement) return null;
+          const strip = tabs[0].parentElement;
+          const sr = strip.getBoundingClientRect();
+          const sel = tabs.find((t) => t.getAttribute("aria-selected") === "true");
+          const sb = sel ? sel.getBoundingClientRect() : null;
+          return sb ? (sb.left >= sr.left - 1 && sb.right <= sr.right + 1) : false;
+        };
+        while (Date.now() < deadline) {
+          saw = read();
+          if (saw) return saw;
+          await new Promise((r) => requestAnimationFrame(() => r(null)));
+        }
+        return saw;
+      })()`) as boolean | null;
+      // Re-measure: `m` was taken before this wait, so the numbers in the
+      // failure message are the ones RULE 6 is actually judging.
+      const m6 = await measureStrip(page);
       expect(
-        m.selectedInView,
-        `${lang}@${width}: the selected tab ${JSON.stringify(m.selectedText)} is scrolled out of ` +
-          `the strip's visible window (scrollWidth ${m.scrollWidth} inside clientWidth ${m.clientWidth})`,
+        reveal,
+        `${lang}@${width}: the selected tab ${JSON.stringify(m6.selectedText)} is scrolled out of ` +
+          `the strip's visible window (scrollWidth ${m6.scrollWidth} inside clientWidth ${m6.clientWidth}) ` +
+          `— not even after waiting for the reveal to land`,
       ).toBe(true);
 
       // RULE 7 — keyboard: walking to an off-screen tab reveals it and does NOT
