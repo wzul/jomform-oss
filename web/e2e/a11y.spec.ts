@@ -44,6 +44,8 @@ const PAGES = [
   { name: "docs-variations", path: "/docs/variations" },
   { name: "docs-spam-detection", path: "/docs/spam-detection" },
   { name: "docs-ses-reputation", path: "/docs/ses-reputation" },
+  // Card t_eb09b25a: the activity log / audit trail.
+  { name: "docs-activity", path: "/docs/activity" },
   { name: "docs-placeholders", path: "/docs/placeholders" },
   { name: "docs-mcp", path: "/docs/mcp" },
   // t_bac29e18: the REST API reference is a public, sitemapped, footer-linked

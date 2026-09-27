@@ -32,6 +32,9 @@ const APEX_PAGES = [
   // t_bac29e18: the public REST API reference. It is a product surface — the
   // entry point for a developer integrating with JomForm.
   "/docs/api",
+  // Card t_eb09b25a: the activity log — the audit-trail surface the dashboard
+  // Activity page links to.
+  "/docs/activity",
   // The per-workspace AI spam-detection toggle is documented here
   // and the Settings switch deep-links into it.
   "/docs/spam-detection",

@@ -74,7 +74,7 @@ const GROUPS: Group[] = [
         title: "Workspaces (your account's tenant)",
         slug: "workspaces",
         href: "/docs/workspaces",
-        body: "A workspace holds your forms, products, sales and payment account, and owns its own address ({slug}.jomform.com or your domain). With none, the dashboard asks you to create one at first sign-in.",
+        body: "A workspace holds your forms, products, sales and payment account, and owns its own address ({slug}.jomform.com or your domain). With none, the dashboard asks you to create one at sign-in.",
       },
       {
         // Settings → Workspace's identity card "?" deep-links this section
@@ -92,7 +92,22 @@ const GROUPS: Group[] = [
         title: "Deleting a workspace",
         slug: "delete-workspace",
         href: "/docs/workspaces#delete-workspace",
-        body: "Permanent, and it takes the payment account with it, so it needs a typed slug confirmation and three conditions: you own it, you have another workspace, and this one is empty. Sales are never destroyed.",
+        body: "Permanent, and it takes the payment account with it: a typed slug confirmation, and three conditions — you own it, you have another workspace, and it is empty. Sales are never destroyed.",
+      },
+      {
+        // Card t_eb09b25a (the rebase onto main, t_4c58a09e): the audit-trail
+        // surface. It belongs to this category, not a new one — the whole
+        // reason the Activity page exists is that a workspace deletion (and a
+        // form purge, and a product delete) left no record a merchant could
+        // read, and the row it writes names the workspace. The guide carries
+        // the walk-through, like every other cut entry.
+        //
+        // Fitting it in is why two of the summaries above were tightened: the
+        // guard caps the whole page at 800 words (main's own comment says the
+        // cap is what drove the earlier trims too).
+        title: "Activity log (audit trail)",
+        href: "/docs/activity",
+        body: "Every action in this workspace, newest first, including the destructive ones — a deletion leaves no other trace. Append-only.",
       },
     ],
   },
@@ -135,7 +150,7 @@ const GROUPS: Group[] = [
         title: "Realtime notifications & the order screen beep",
         slug: "realtime-notifications",
         href: "/docs/sales#realtime-notifications",
-        body: "The Sales page follows your workspace's realtime stream; the switch beside the Live pill plays a beep when something arrives. It is per workspace, so it survives a reload.",
+        body: "The Sales page follows your workspace's realtime stream; the switch beside the Live pill plays a beep when something arrives. Per workspace, so it survives a reload.",
       },
     ],
   },
@@ -269,7 +284,7 @@ const GROUPS: Group[] = [
       {
         title: "Trusted devices (2FA)",
         href: "/docs/security#trusted-devices",
-        body: "With 2FA on you can trust a device for 30 days, so it skips the code. Profile → Security, your account block, lists every device with a Revoke button.",
+        body: "Trust a device for 30 days so it skips the code. Profile → Security, your account block, lists every device with a Revoke button.",
       },
     ],
   },

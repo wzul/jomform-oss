@@ -325,6 +325,10 @@ const ORIGINAL_TITLES = [
   "Design → AI agent → MCP customization",
   "Embed on your site",
   "Trusted devices (2FA)",
+  // t_4c58a09e (the rebase onto main): this branch's own entry. It arrived
+  // after the restructure was written, so it is a summary here plus a guide
+  // (/docs/activity) that carries the walk-through, like every other cut entry.
+  "Activity log (audit trail)",
 ];
 
 const words = (s: string) => s.trim().split(/\s+/).filter(Boolean).length;
@@ -632,6 +636,16 @@ const DESTINATION_FACTS: Record<string, string[]> = {
     "refused with an error",
     "temporary redirect (http 301)",
   ],
+  // t_4c58a09e: this branch's own entry, at the count its facts list above
+  // holds. The facts are the three things the Activity page's guide has to
+  // carry for the entry to be a summary and not a deletion: that the trail is
+  // per WORKSPACE (the whole point of the page), that the destructive actions
+  // are what it exists for, and the agent-facing tool that reads the same table.
+  "Activity log (audit trail)": [
+    "The trail is per workspace, not per user",
+    "the only place in the product where you can see afterwards that one happened",
+    "list_events",
+  ],
 };
 
 test("every cut entry's facts are readable at the destination (not just its anchor)", () => {
@@ -714,6 +728,8 @@ test("every cut entry's facts are readable at the destination (not just its anch
     // above holds (the equality check below fails if a fact is dropped without
     // this floor moving with it).
     "Form URLs and slugs (rename a form)": 3,
+    // t_4c58a09e: this branch's own entry, at the count its facts list above holds.
+    "Activity log (audit trail)": 3,
   };
   const thinned = Object.keys(DESTINATION_FACTS)
     .filter((t) => DESTINATION_FACTS[t].length < (PER_ENTRY_FLOOR[t] ?? 0))

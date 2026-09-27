@@ -26,7 +26,7 @@ export function Shell({
   active,
 }: {
   children: React.ReactNode;
-  active: "dashboard" | "forms" | "templates" | "products" | "sales" | "spam" | "deliveries" | "subscriptions" | "settings" | "profile" | "media" | "feedback" | "chat" | "admin";
+  active: "dashboard" | "forms" | "templates" | "products" | "sales" | "spam" | "deliveries" | "activity" | "subscriptions" | "settings" | "profile" | "media" | "feedback" | "chat" | "admin";
 }) {
   const { user, workspaces, reload, bundle } = useSession();
   const [workspace, setWorkspace] = useState<string>("");
@@ -207,6 +207,11 @@ export function Shell({
         { key: "subscriptions", href: "/subscriptions", label: t("sub.title"), icon: "⟳" },
         // Issue #194: email delivery status view.
         { key: "deliveries", href: "/deliveries", label: t("del.title"), icon: "✉" },
+        // Card t_eb09b25a: the workspace-scoped audit trail. It sits in the
+        // "sales" group with the other read surfaces about what the workspace
+        // HAS DONE (sales, spam, subscriptions, deliveries) rather than under
+        // Settings: it is a record of the workspace's actions, not a setting.
+        { key: "activity", href: "/activity", label: t("act.title"), icon: "🕘" },
       ],
     },
     {

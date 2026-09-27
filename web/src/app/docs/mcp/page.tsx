@@ -256,7 +256,7 @@ const TOOL_GROUPS: { group: string; note?: string; tools: { name: string; desc: 
   {
     group: "Event tracking",
     tools: [
-      { name: "list_events", desc: "Log audit/tingkah-laku akaun (terbaru dahulu). Boleh tapis event_name, from/to (RFC3339), dan page/limit. Read-only." },
+      { name: "list_events", desc: "Log audit/tingkah-laku akaun (terbaru dahulu). Boleh tapis event_name, from/to (RFC3339), dan page/limit. Read-only. Pada dashboard, log yang sama dipaparkan pada halaman Activity — dan workspace-scoped di sana melalui ?workspace=<slug>." },
     ],
   },
   {

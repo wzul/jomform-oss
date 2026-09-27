@@ -29,7 +29,14 @@ const NAV_GROUPS: Group[] = [
   },
   {
     label: "Workspaces",
-    sections: [{ href: "/docs/workspaces", label: "Workspaces & deleting one" }],
+    sections: [
+      { href: "/docs/workspaces", label: "Workspaces & deleting one" },
+      // Card t_eb09b25a, rebased onto main (t_4c58a09e): the audit trail sits
+      // with the workspace category, so the sidebar still describes the same
+      // structure as the /docs index — docsIndex.test.ts fails the build when
+      // a page the index links is absent from this list.
+      { href: "/docs/activity", label: "Activity log" },
+    ],
   },
   {
     label: "Sales & payments",

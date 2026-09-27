@@ -64,6 +64,12 @@ Parity checklist (dashboard → MCP):
   `delete_webhook`, `webhook_deliveries`
 - API keys → `list_api_keys`, `create_api_key`, `revoke_api_key`
 - Event tracking / audit log → `list_events` (account-scoped, read-only)
+  The dashboard surface is the **Activity page** (`/activity`, card t_eb09b25a):
+  the workspace-scoped audit trail, per workspace via the `?workspace=<slug>`
+  scope, read from `GET /v1/rest/events` with the event_name / from / to /
+  page / limit query params. It is the page that replaced the Settings → MCP
+  "Request history" table deleted by #311; before it, no shipped page called the
+  events LIST endpoint at all. Docs: `/docs/activity`.
 - Space landing page (customizable storefront, #360/#362) →
   `get_workspace_landing_page`, `set_workspace_landing_page` (incl. embedded `forms[]`)
 - Workspace lifecycle (#162, member/invite tools above) → `list_workspaces`,
