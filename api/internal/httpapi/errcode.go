@@ -257,8 +257,7 @@ var errCodeByMessage = map[string]string{
 	"jenis fail tidak disokong (css/js/html/svg/woff2 sahaja)":                       CodeUploadTypeUnsupported,
 
 	// Throttling.
-	"terlalu banyak cubaan. Cuba lagi kemudian.":                  CodeRateLimited,
-	"had chat dicapai (60 mesej sejam). Sila cuba sebentar lagi.": CodeRateLimited,
+	"terlalu banyak cubaan. Cuba lagi kemudian.": CodeRateLimited,
 
 	// Account / auth (login, register, profile).
 	"email sudah didaftarkan":         CodeEmailTaken,
@@ -305,6 +304,14 @@ var errCodeByPrefix = []struct {
 	{" mesti bermula dengan https://", CodeURLNotHTTPS},
 	// payments.CaptureSale/ReleaseSale/Refund refusals are surfaced verbatim.
 	{"jualan bukan dalam status boleh-refund", CodeRefundNotAllowed},
+	// The chat's 429 bodies are BUILT with fmt.Sprintf around the bucket that
+	// enforces them (rest_chat.go), so no exact key can ever match them: the
+	// wire message is "had chat dicapai (60 mesej sejam). …" and the number in
+	// it follows chatRatePerHour. The prefix keeps the code stable across a
+	// limit change, and the number itself is deliberately NOT written here —
+	// a second copy of it in this table would be one more thing to drift.
+	{"had chat dicapai (", CodeRateLimited},
+	{"had pengesahan dicapai (", CodeRateLimited},
 }
 
 // ErrCodeFor returns the machine code for a wire message, or "" when the

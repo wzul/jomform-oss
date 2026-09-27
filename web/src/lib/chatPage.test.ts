@@ -329,6 +329,184 @@ test("the per-user limit is real, so the docs' 60/hour is not a decorative numbe
   );
 });
 
+/**
+ * The number a Go `const` is declared with, read out of its source.
+ *
+ * NOT a copy of the value: a web test carrying "30" would be a THIRD copy of the
+ * number and a fourth thing to edit — the defect this guard exists for, wearing
+ * a guard's clothes. A name that is missing, or is no longer a simple numeric
+ * literal, FAILS rather than handing the comparisons `undefined` (which is a
+ * substring of nothing, so every check below would pass).
+ */
+function goConstNumber(src: string, name: string): number {
+  const m = src.match(new RegExp(`\\b${name}\\s*=\\s*(\\d+(?:\\.\\d+)?)\\b`));
+  assert.ok(
+    m,
+    `${name} is no longer declared as a numeric literal in the chat's Go source — retarget this ` +
+      `guard at whatever replaced it. The docs and the 429 bodies quote this number, so it has to ` +
+      `stay readable from here`,
+  );
+  return Number(m[1]);
+}
+
+/**
+ * A Go `const X = N * time.Minute` declaration, as whole minutes.
+ *
+ * Minutes rather than seconds on purpose: the sentence this is compared against
+ * is written in minutes ("it expires 5 minutes after it appears"), so converting
+ * the duration here (and not in the sentence) keeps both sides readable.
+ */
+function goDurationMinutes(src: string, name: string): number {
+  const m = src.match(new RegExp(`\\b${name}\\s*=\\s*(\\d+)\\s*\\*\\s*time\\.Minute\\b`));
+  assert.ok(
+    m,
+    `${name} is no longer declared as "<n> * time.Minute" — this guard compares it to a sentence ` +
+      `written in minutes, so retarget the guard rather than letting it compare nothing`,
+  );
+  return Number(m[1]);
+}
+
+test("the phase-2 caps the docs quote are read from the constants, so prose and enforcement move together", () => {
+  // WHY THIS EXISTS, AND WHY IT IS NOT PR 695's TEST AGAIN.
+  //
+  // PR 695 made the WIRE follow the constant: chatLimits() references chat.*
+  // instead of restating the number, and TestChatLimitsSourcesEveryCapFromItsConstant
+  // refuses a numeric literal in that struct. It did not touch the PROSE, and
+  // nothing else watches the prose — measured on this tree before this guard
+  // existed: chatConfirmPerHour 30 -> 45 left `go test ./internal/httpapi/
+  // -run TestChatLimits` GREEN (correct: the wire follows the constant) and the
+  // whole web suite GREEN, while app/docs/chat/page.tsx still told the user "at
+  // 30 per hour". That is the same drift PR 695 removed one layer out, so the
+  // guard reads the constants and demands the prose quote THOSE values.
+  //
+  // The phase-1 pair is in here too: the 60/hour test above pins the constant,
+  // but it never made the docs page, the dictionary, or the 429 body follow it.
+  const docs = read(DOCS_PAGE);
+  const msgPerHour = goConstNumber(goRest, "chatRatePerHour");
+  const burst = goConstNumber(goRest, "chatBurst");
+  const confirmPerHour = goConstNumber(goRest, "chatConfirmPerHour");
+  const confirmBurst = goConstNumber(goRest, "chatConfirmBurst");
+  const maxProposals = goConstNumber(goChatProposal, "MaxProposalsPerRun");
+  const ttlMinutes = goDurationMinutes(goChatProposal, "ProposalTTL");
+
+  // Vacuity, in the neighbours' idiom: prove this is reading the real numbers
+  // and the real docs page before any of the comparisons below are believed.
+  for (const [name, n] of Object.entries({
+    chatRatePerHour: msgPerHour,
+    chatBurst: burst,
+    chatConfirmPerHour: confirmPerHour,
+    chatConfirmBurst: confirmBurst,
+    MaxProposalsPerRun: maxProposals,
+    ProposalTTLMinutes: ttlMinutes,
+  })) {
+    assert.ok(
+      Number.isFinite(n) && n > 0,
+      `${name} read as ${n} — this guard is not reading the constant it thinks it is`,
+    );
+  }
+  assert.ok(
+    docs.includes("Confirming a proposed change") && docs.includes("Limits and cost"),
+    `${DOCS_PAGE} is not the chat docs page this guard means to judge`,
+  );
+
+  // ── 1. the docs page ─────────────────────────────────────────────────────
+  // Each entry is the sentence WITH the number built from the constant, so a
+  // constant change and a docs change have to land together. The phrasing is
+  // pinned as tightly as the 60/hour test pins the Go line; a copyedit that
+  // rewrites the sentence has to update this list, which is the point.
+  const sentences: Array<{ want: string; what: string }> = [
+    {
+      want: `${msgPerHour} messages per hour, in bursts of ${burst}`,
+      what: "the per-user message cap and its burst",
+    },
+    {
+      want: `at ${confirmPerHour} per hour in bursts of ${confirmBurst}`,
+      what: "the confirmation cap and its burst",
+    },
+    {
+      want: `at most ${maxProposals} proposals`,
+      what: "the proposals-per-answer cap",
+    },
+    {
+      want: `expires ${ttlMinutes} minutes after it appears`,
+      what: "the proposal expiry",
+    },
+  ];
+  for (const { want, what } of sentences) {
+    assert.ok(
+      docs.includes(want),
+      `${DOCS_PAGE} no longer says "${want}" (${what}) — the docs quote the cap the server ` +
+        `enforces, so the constant and this sentence cannot move apart`,
+    );
+  }
+
+  // ── 2. the dictionary the page shows on a 429 ────────────────────────────
+  // Digit presence, not the whole phrasing: a translation is free to be reworded
+  // (and is, in four locales), but the NUMBER a user is told on a refusal has to
+  // be the enforced one. The live rate-limit note (chat.limitNote) needs no pin
+  // here — the page fills its {n} from the wire's limits block, which PR 695's
+  // Go guard already ties to the constant.
+  const dictCaps: Array<{ key: string; n: number; what: string }> = [
+    { key: "chat.rateLimited", n: msgPerHour, what: "message cap" },
+    { key: "chat.confirmRateLimited", n: confirmPerHour, what: "confirmation cap" },
+  ];
+  for (const { key, n, what } of dictCaps) {
+    const entry = DICT[key as keyof typeof DICT] as Record<string, string> | undefined;
+    assert.ok(entry, `${key} is gone from the dictionary — the page shows this string on a 429`);
+    for (const lang of LANGS) {
+      assert.ok(
+        String(entry[lang]).includes(String(n)),
+        `${key}.${lang} does not quote the enforced ${what} (${n}): "${entry[lang]}" — the UI ` +
+          `tells the user a number on a 429, so the constant and this string move together`,
+      );
+    }
+  }
+
+  // ── 3. the 429 bodies ────────────────────────────────────────────────────
+  // The third prose copy, and the one that used to be a literal: phase 1's
+  // refusal said "(60 mesej sejam)" as text, so it would have kept telling a user
+  // 60 after the constant moved. Every sentence that quotes a bucket has to be
+  // BUILT from the constant, which is what the two assertions below measure.
+  const chatLines = goRest.split("\n").filter((l) => l.includes("mesej sejam"));
+  assert.equal(
+    chatLines.length,
+    1,
+    "rest_chat.go no longer answers a rate-limited MESSAGE with one 'mesej sejam' sentence — " +
+      "retarget this guard at whatever replaced it",
+  );
+  assert.ok(
+    chatLines[0].includes("chatRatePerHour"),
+    `the message 429 body quotes its own number instead of the enforced one: ` +
+      `${chatLines[0].trim()} — a constant change would leave the refusal stating the old limit`,
+  );
+  assert.doesNotMatch(
+    chatLines[0],
+    /\(\s*\d+\s*mesej sejam/,
+    `the message 429 body restates the number as text (${chatLines[0].trim()}) — build it from ` +
+      `chatRatePerHour instead`,
+  );
+
+  const confirmLines = goRest.split("\n").filter((l) => l.includes("had pengesahan dicapai"));
+  assert.equal(
+    confirmLines.length,
+    2,
+    "the confirmation bucket is enforced in two handlers (confirm and cancel) and their 429 " +
+      "bodies must both be here — a guard that reads one is blind to the other",
+  );
+  for (const l of confirmLines) {
+    assert.ok(
+      l.includes("chatConfirmPerHour"),
+      `a confirmation 429 body quotes its own number instead of the enforced one: ${l.trim()}`,
+    );
+  }
+  assert.doesNotMatch(
+    goRest,
+    /\(\s*\d+\s*sejam/,
+    "a 429 body restates the confirmation number as text — build it from chatConfirmPerHour " +
+      "(fmt.Sprintf) instead",
+  );
+});
+
 test("the page reads availability and stops offering the box when it is false", () => {
   assert.match(
     page,

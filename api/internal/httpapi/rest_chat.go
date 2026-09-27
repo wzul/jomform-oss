@@ -244,7 +244,7 @@ func (h *RESTHandlers) handleChat(w http.ResponseWriter, r *http.Request, actx *
 	// user with several tabs must not multiply theirs.
 	if h.ChatLimiter != nil && !h.ChatLimiter.Allow("chat|"+uid) {
 		writeErr(w, http.StatusTooManyRequests,
-			"had chat dicapai (60 mesej sejam). Sila cuba sebentar lagi.")
+			fmt.Sprintf("had chat dicapai (%.0f mesej sejam). Sila cuba sebentar lagi.", chatRatePerHour))
 		return
 	}
 

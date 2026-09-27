@@ -115,6 +115,37 @@ func TestIssue6177URLGuardPrefixResolvesToItsOwnCode(t *testing.T) {
 	}
 }
 
+func TestIssue6177ChatLimitPrefixResolvesToItsCode(t *testing.T) {
+	// The chat's 429 bodies are ASSEMBLED around the bucket that enforces them
+	// (rest_chat.go: fmt.Sprintf("had chat dicapai (%.0f mesej sejam). …",
+	// chatRatePerHour)), so they are the second shape no exact key can ever
+	// match — same class as the urlguard message above, and they exist for the
+	// same reason: the number in the refusal follows the constant, so the
+	// refusal must not be the thing that goes stale.
+	//
+	// The values below are built from the SAME %0.f form the handler uses, at
+	// the live constant AND at a changed one, because "resolves today" and
+	// "resolves after the limit moves" are the two different claims.
+	cases := []string{
+		fmt.Sprintf("had chat dicapai (%.0f mesej sejam). Sila cuba sebentar lagi.", chatRatePerHour),
+		fmt.Sprintf("had chat dicapai (%.0f mesej sejam). Sila cuba sebentar lagi.", 90.0),
+		fmt.Sprintf("had pengesahan dicapai (%.0f sejam). Sila cuba sebentar lagi.", chatConfirmPerHour),
+		fmt.Sprintf("had pengesahan dicapai (%.0f sejam). Sila cuba sebentar lagi.", 45.0),
+	}
+	for _, m := range cases {
+		if got := ErrCodeFor(m); got != CodeRateLimited {
+			t.Errorf("ErrCodeFor(%q) = %q, want %q — a chat 429 would reach the dashboard with "+
+				"no code and print the server's Malay prose on an English page", m, got, CodeRateLimited)
+		}
+	}
+	// And the message a rate-limited user actually gets from the handler is one
+	// of the shapes above: the constant is formatted with %0.f, so a value with
+	// a fractional part still has to resolve.
+	if got := ErrCodeFor(fmt.Sprintf("had chat dicapai (%.0f mesej sejam). Sila cuba sebentar lagi.", 60.5)); got != CodeRateLimited {
+		t.Errorf("a fractional chat limit does not resolve: got %q", got)
+	}
+}
+
 func TestIssue6177ErrorCodeTableHasNoDeadKeys(t *testing.T) {
 	// A table entry keyed on a message that no longer exists anywhere in the
 	// package is DEAD: the code can never fire, and nothing says so. Read every
