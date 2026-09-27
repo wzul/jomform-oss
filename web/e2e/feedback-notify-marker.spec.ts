@@ -58,6 +58,61 @@ const HEALTHY = {
   message_count: 1,
 };
 
+// ── the case the fix is actually about: text truncated AT the cap ──
+//
+// MARKED above is ~110 characters, so it never reaches feedbackNotifyErrorMax and
+// no multi-byte character in it sits anywhere near byte 500: it proves the
+// renderer does not mangle multi-byte text ANYWHERE, but nothing about the one
+// shape the rune-aware cap exists for. Text that is longer than the cap and
+// multi-byte exactly where the cap falls is what used to make Postgres refuse the
+// whole UPDATE (SQLSTATE 22021) — silently, so the console showed a healthy thread.
+//
+// This constant is the STORED value, not the input, and that distinction is the
+// point. dbstore.RecordNotifyFailure caps at 500 CHARACTERS (`[]rune(errText)`),
+// so for CAP_ERROR_INPUT the store keeps 499 "a"s plus the ONE "中" that fits at
+// index 499 and drops the other two, together with the entire tail. Measured on
+// the shipped store: input runes=534 bytes=540 → stored runes=500 bytes=502, the
+// last 12 characters being "aaaaaaaaaaa中". Feeding the spec the untruncated
+// input would assert about a string the API never serves, and would stay green
+// against a store that had lost the rune boundary. The Go guard
+// (api/internal/dbstore/feedback_notify_marker_test.go,
+// TestRecordNotifyFailureKeepsARuneBoundaryOnAMultiByteError) keeps that stored
+// shape true; this file makes the RENDERED half match it.
+//
+// Built with "a".repeat rather than written out, so the byte offset of the cut is
+// a declared property of the fixture instead of something a reader has to count.
+const CAP = 500;
+// The INPUT the store was given: one "a" short of the cap, then three multi-byte
+// runes and a tail. The cap falls ON the first of those three runes, which is the
+// whole point of the fixture.
+const CAP_INPUT_TAIL = "tail-after-the-cap";
+const CAP_ERROR_INPUT = "a".repeat(CAP - 1) + "中中中" + CAP_INPUT_TAIL;
+// What RecordNotifyFailure STORES for CAP_ERROR_INPUT: the first 500 CHARACTERS,
+// so 499 "a"s and exactly one 中 — the two remaining 中 and the entire tail are
+// discarded. Asserted against the input at the top of the test below, so neither
+// constant can be edited into a pair the store would never produce.
+const CAP_ERROR_STORED = "a".repeat(CAP - 1) + "中";
+// What a byte-slice cap (errText[:500]) produces for the input above: the same
+// text up to byte 500, then a HALF-WRITTEN 中 (one 0xe4, one 0xbf). Deliberately
+// invalid UTF-8 — this is the shape that reached the console as a mangled glyph
+// when the truncation was the bug. It is asserted ABSENT so that a mangled render
+// cannot satisfy the assertions below by accident.
+const CAP_ERROR_TAIL_BYTES_MANGLED = "aaaaaaaaa\ufffd";
+
+const AT_CAP = {
+  id: "33333333-3333-3333-3333-333333333333",
+  subject: "Had hadapan",
+  status: "open",
+  user_id: "u-4",
+  user_email: "cap@example.test",
+  created_at: "2026-09-20T02:00:00Z",
+  last_activity_at: "2026-09-20T03:00:00Z",
+  message_count: 2,
+  notify_failed_at: "2026-09-20T03:00:00Z",
+  notify_failed_kind: "filer",
+  notify_failed_error: CAP_ERROR_STORED,
+};
+
 // The dashboard bundle: identity + the super-admin flag that gates the Feedback
 // section (admin/page.tsx reads bundle.me.is_super_admin).
 function bundle() {
@@ -76,7 +131,7 @@ function bundle() {
 // the page shows "We couldn't load the overview" and no feedback list exists to
 // inspect — which would make every assertion below fail for the wrong reason.
 async function stubAdmin(p: Page) {
-  const list = [MARKED, HEALTHY];
+  const list = [MARKED, HEALTHY, AT_CAP];
   await p.route("**/api/rest/dashboard-bundle*", (r) =>
     r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(bundle()) }),
   );
@@ -123,10 +178,20 @@ async function stubAdmin(p: Page) {
   // The thread detail read returns the thread the URL names, so opening the
   // healthy row cannot silently serve the marked one (which would make the
   // "no banner on a healthy thread" assertion pass for the wrong reason).
+  // An id that is in no list is a 404 rather than a fallback: serving MARKED for
+  // an unknown id would let the at-the-cap test below assert against MARKED's
+  // short error text and pass while rendering nothing it meant to render.
   await p.route("**/api/admin/feedback/*", (r) => {
     const url = new URL(r.request().url());
     const id = url.pathname.split("/").pop();
-    const th = list.find((t) => t.id === id) ?? MARKED;
+    const th = list.find((t) => t.id === id);
+    if (!th) {
+      return r.fulfill({
+        status: 404,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "no such thread in this fixture" }),
+      });
+    }
     const marked = "notify_failed_at" in th;
     return r.fulfill({
       status: 200,
@@ -184,6 +249,81 @@ test.describe("admin feedback: the notification-failure marker", () => {
     await expect(banner).toContainText("中継サーバー");
 
     // …and the banner carries the way to act on it.
+    await expect(banner.getByRole("button", { name: "Send the notification again" })).toBeVisible();
+  });
+
+  // ── the cap itself: text truncated AT 500 characters by a multi-byte rune ──
+  //
+  // This is the shape the rune-aware cap exists for and the shape nothing above
+  // renders: an error text longer than the cap, multi-byte exactly where the cut
+  // falls. It is asserted against the STORE's value (AT_CAP), not an invented
+  // string, because the property under test is that the renderer shows what the
+  // store wrote — the rune that survived at the boundary included — with no
+  // further mangling, and because a value the store cannot produce would keep
+  // this test green against a store that had lost the rune boundary.
+  test("error text the store capped at 500 characters renders to the cap, rune intact", async ({
+    page,
+  }) => {
+    // FRESH STATE, same reasoning as the first test: a leftover jf_lang would
+    // render this page in a language this test never asked for.
+    await page.goto("/login", { waitUntil: "domcontentloaded" });
+    await page.evaluate(() => window.localStorage.clear());
+    await page.context().clearCookies();
+
+    await stubAdmin(page);
+    await page.goto("/admin", { waitUntil: "domcontentloaded" });
+    await expect(page.locator("html")).toHaveAttribute("lang", "en");
+
+    const capRow = page.getByRole("button", { name: /Had hadapan/ });
+    await expect(capRow).toBeVisible();
+    await capRow.click();
+
+    const banner = page.getByRole("alert").filter({ hasText: "Notification not delivered" });
+    await expect(banner).toBeVisible();
+
+    // The fixture is the STORE's value, and this asserts it is: the input is what
+    // the caller handed RecordNotifyFailure, the stored value is its first 500
+    // CHARACTERS. Without this, either constant could drift into a pair the store
+    // never produces and the assertions below would be about a fiction. Measured
+    // on the shipped store: input runes=534 bytes=540 → stored runes=500 bytes=502
+    // (the Go guard keeps the stored runes at the cap;
+    // TestRecordNotifyFailureKeepsARuneBoundaryOnAMultiByteError).
+    expect([...CAP_ERROR_INPUT].length).toBeGreaterThan(CAP);
+    expect([...CAP_ERROR_INPUT].slice(0, CAP).join("")).toBe(CAP_ERROR_STORED);
+
+    // The text is the STORED value, whole: 499 "a"s and the 中 that fits at the
+    // boundary. `toContainText` normalises whitespace only — it does not repair
+    // mojibake — so a banner that rendered this string differently fails here.
+    await expect(banner).toContainText(CAP_ERROR_STORED);
+
+    // Read the one paragraph that carries the error text (the banner's heading,
+    // who-line and retry label are separate nodes), so the assertions below are
+    // about the error text itself and cannot be satisfied by other parts of the
+    // banner. Asserting it is exactly one node also proves the value was not
+    // split across lines on the way out.
+    const errLine = banner.locator("p").filter({ hasText: CAP_ERROR_STORED });
+    await expect(errLine, "exactly one paragraph renders the stored error text").toHaveCount(1);
+    const errText = await errLine.innerText();
+
+    // It ENDS exactly with the stored value: the characters past the cap were
+    // trimmed away, so nothing follows the boundary rune. A renderer that
+    // appended anything, that re-expanded the trimmed tail, or that cut the text
+    // somewhere else would not end here.
+    expect(errText.endsWith(CAP_ERROR_STORED)).toBe(true);
+    // …and it rendered the whole value rather than a fragment of it.
+    expect(errText.length).toBeGreaterThanOrEqual(CAP);
+
+    // A byte-slice cap ends 中 one byte short; a renderer that inherited that
+    // shape (or that mangled the boundary on the way to the DOM) would produce
+    // this instead. Requiring it to be ABSENT is what stops a mangled render from
+    // satisfying the assertions above by accident.
+    expect(errText).not.toContain(CAP_ERROR_TAIL_BYTES_MANGLED);
+
+    // Every character at and after the boundary is intact UTF-8: no U+FFFD in
+    // what an operator reads.
+    expect(errText).not.toContain("\ufffd");
+
+    // Still actionable, which is the other half of the marker's contract.
     await expect(banner.getByRole("button", { name: "Send the notification again" })).toBeVisible();
   });
 
