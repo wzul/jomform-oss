@@ -1,7 +1,7 @@
 // Feedback notification copy: the thread deep links, and the one normalisation
 // the feedback surface needs on top of the shared transactional dictionary.
 //
-// WHY THIS FILE EXISTS
+// # WHY THIS FILE EXISTS
 //
 // Both feedback emails used to hardcode their Malay subject and body at the call
 // site, so an English-speaking filer received "Balasan baharu pada maklum balas

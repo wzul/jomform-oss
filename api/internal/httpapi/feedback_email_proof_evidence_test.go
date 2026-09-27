@@ -360,9 +360,9 @@ func TestReceiptJobWithAttachmentCarriesTheLanguageOnTheRawPath(t *testing.T) {
 	}}
 	if err := d.Send(context.Background(), emailqueue.Job{
 		Type: "receipt", To: proofFiler,
-		Subject: "Balasan baharu pada maklum balas anda",
-		Body:    "Kami telah membalas maklum balas anda.",
-		Lang:    "ms",
+		Subject:     "Balasan baharu pada maklum balas anda",
+		Body:        "Kami telah membalas maklum balas anda.",
+		Lang:        "ms",
 		PDFFilename: "resit.pdf", PDFData: []byte("PDFDATA"),
 	}); err != nil {
 		t.Fatalf("dispatcher refused a receipt job with an attachment: %v", err)
