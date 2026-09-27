@@ -166,6 +166,46 @@ web/Dockerfile --output type=cacheonly .`), so a context or `.dockerignore`
 mistake is caught **before** step 2 rather than by the ship script after the
 preflight has already reported green.
 
+### Troubleshooting: `stat ... /cmd/jormform-api: directory not found`
+
+Seen from a bind-mounted `go build` and from `stat`/`open` by literal path, while
+`ls api/cmd` and globs happily list the entry — which makes it read as a filesystem
+fault with `stat()` denying a name `readdir` just printed. It is not: the path is
+spelled wrong.
+
+The directory is **`api/cmd/jomform-api`** — one `m` after `jo`. The failing
+lookups spell it **`jormform-api`** — two `m`s, 12 characters. That string has never
+existed in this repo or anywhere in its git history, so every literal `stat`,
+`open`, and `go build ./cmd/jormform-api` on it returns `ENOENT`, while `ls`/globs
+keep printing the real entry `jomform-api` because those show the *listing* and the
+failing command uses the *typo*. The two differ by one inserted letter in the
+middle, which is exactly what makes it look like a phantom flake.
+
+Five-second check:
+
+```bash
+ls api/cmd                              # the real entry is jomform-api, never jormform-api
+stat -c '%F' api/cmd/jormform-api       # ENOENT  <-- misspelled
+stat -c '%F' api/cmd/jomform-api        # directory
+cd api && go build -o /tmp/api.bin ./cmd/jormform-api
+```
+
+`./cmd/jomform-api` (one `m`) is the only correct spelling. `Makefile`
+(`go build -o bin/jomform-api ./cmd/jomform-api`) and `api/Dockerfile` already use
+it, so neither the image build nor the gate is affected by the typo.
+
+A second `ENOENT` that is **not** a typo and is also not tree damage: **`api/cmd/openapi-gen`**.
+It is genuinely absent from a `v1.14.x` tree — the OpenAPI contract landed afterwards, so
+the directory first appears in `v1.16.0` and `stat api/cmd/openapi-gen` on a `v1.14.x` tree
+returns `ENOENT` correctly. Confirm which tree you are actually on before reading its absence
+as a filesystem fault — and read the tree from the ref you mean, since a local `main` can be
+dozens of commits behind `origin/main`:
+
+```bash
+git ls-tree -d origin/main api/cmd/    # not `main` — the local ref may be stale
+git rev-parse --short main origin/main # how far apart are they
+```
+
 ## Deploy order (the whole sequence, every time)
 
 1. **Tag + release first.** Merge all PRs, then
