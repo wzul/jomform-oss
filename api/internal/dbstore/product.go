@@ -360,6 +360,36 @@ func (s *ProductStore) Restore(ctx context.Context, accountID, productID string)
 	return nil
 }
 
+// saleItemsArray renders `sales.items` (the column named by `col`) as a JSON
+// array, whatever the column actually holds.
+//
+// Why this exists: `sales.items` is `JSONB NOT NULL` with NO CHECK constraint
+// (000001_init.up.sql), and `jsonb_array_elements` raises SQLSTATE 22023
+// ("cannot extract elements from an object"/"…from a scalar") on anything that
+// is not an array. Every application write path serialises a Go slice, so a
+// non-array value can only come from a direct/external write — but ONE such row
+// is enough to matter, because the product bin calls SalesCountsByProduct ONCE
+// for the WHOLE account and fails the request on its error: the merchant then
+// cannot read the bin for any product they own. ProductAnalytics expands the
+// same column and has the same exposure.
+//
+// Treating a non-array as empty is the tolerant reading: the row keeps its OTHER
+// reference (subscription_product_id, a real column) and every other product in
+// the account stays readable.
+//
+// The test is `jsonb_typeof(col) = 'array'`, NOT `COALESCE(col, '[]'::jsonb)`:
+// COALESCE only replaces NULL, and it is precisely a NON-NULL non-array value
+// (an object, a string, a number) that makes the extraction raise. The guard has
+// to ask what the value IS, not whether it is present. (The column is also
+// NOT NULL, so COALESCE could never fire here anyway.)
+//
+// Keep EVERY expansion of `sales.items` going through this helper — a bare
+// `jsonb_array_elements(<col>)` on that column reintroduces the account-wide
+// failure it exists to prevent.
+func saleItemsArray(col string) string {
+	return "CASE WHEN jsonb_typeof(" + col + ") = 'array' THEN " + col + " ELSE '[]'::jsonb END"
+}
+
 // CountSalesByProduct reports how many sales reference a product (account-scoped).
 // Used by the purge guard so the refusal can state the number.
 //
@@ -372,7 +402,7 @@ func (s *ProductStore) CountSalesByProduct(ctx context.Context, accountID, produ
 		`SELECT COUNT(*) FROM sales
 		  WHERE account_id=$1
 		    AND (subscription_product_id=$2
-		         OR EXISTS (SELECT 1 FROM jsonb_array_elements(items) e
+		         OR EXISTS (SELECT 1 FROM jsonb_array_elements(` + saleItemsArray("items") + `) e
 		                     WHERE e->>'product_id' = $2::text))`,
 		accountID, productID).Scan(&n)
 	return n, err
@@ -443,7 +473,7 @@ func (s *ProductStore) Purge(ctx context.Context, accountID, productID string) e
 		`SELECT COUNT(*) FROM sales
 		  WHERE account_id=$1
 		    AND (subscription_product_id=$2
-		         OR EXISTS (SELECT 1 FROM jsonb_array_elements(items) e
+		         OR EXISTS (SELECT 1 FROM jsonb_array_elements(` + saleItemsArray("items") + `) e
 		                     WHERE e->>'product_id' = $2::text))`,
 		accountID, productID).Scan(&sales); err != nil {
 		return err
@@ -497,7 +527,7 @@ func (s *ProductStore) SalesCountsByProduct(ctx context.Context, accountIDs []st
 		   FROM sales s
 		   LEFT JOIN LATERAL (
 		     SELECT DISTINCT e->>'product_id' AS pid
-		       FROM jsonb_array_elements(s.items) e
+		       FROM jsonb_array_elements(` + saleItemsArray("s.items") + `) e
 		      WHERE e->>'product_id' IS NOT NULL
 		   ) e ON true
 		  WHERE s.account_id = ANY($1)
