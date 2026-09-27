@@ -282,6 +282,15 @@ func TestProductPurgeRemovesAnUnusedProductAndReleasesTheBinRow(t *testing.T) {
 			t.Error("purged product is still listed in the bin")
 		}
 	}
+	// Neither assertion above can tell a delete from an UN-TRASH: GetTrashed is
+	// scoped `deleted_at IS NOT NULL` and ListTrashed filters on the same column,
+	// so a purge that put the product back on the live catalogue would be missing
+	// from both — and that product is permanently gone from nowhere. Read the
+	// table directly, which is the only place the two outcomes differ.
+	if n := countRows(t, ctx, p, `SELECT COUNT(*) FROM products WHERE id=$1`, prod.ID); n != 0 {
+		t.Errorf("the row is still in products after a confirmed purge (count=%d) — a purge that "+
+			"un-trashes instead of deleting leaves the product back on sale", n)
+	}
 }
 
 // TestProductPurgeRefusesALiveProduct is the form bin's other guard: the ONLY way

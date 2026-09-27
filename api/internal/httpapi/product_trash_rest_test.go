@@ -392,6 +392,22 @@ func TestRESTProductPurgeHappyPathAndRestore(t *testing.T) {
 	if findTrashItem(trashItems(t, raw), doomed.ID) != nil {
 		t.Error("a purged product is still listed in the bin")
 	}
+	// THE ONE ASSERTION THE TWO ABOVE CANNOT MAKE. Both of them are satisfied by
+	// a "purge" that RESTORES: GetTrashed is scoped `deleted_at IS NOT NULL` and
+	// the bin listing filters on the same column, so a row put back on the live
+	// catalogue is silently missing from both and a 200 that un-trashes reads
+	// exactly like a 200 that destroyed. A purge is promised irreversible while a
+	// restore is a one-request undo, so the difference has to be read off the
+	// TABLE — deliberately not through any store method, every one of which has
+	// its own idea of which rows count.
+	var purgedRows int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM products WHERE id=$1`, doomed.ID).Scan(&purgedRows); err != nil {
+		t.Fatalf("count products: %v", err)
+	}
+	if purgedRows != 0 {
+		t.Errorf("the row is still in products after a confirmed purge (count=%d) — a purge that "+
+			"un-trashes instead of deleting is a restore wearing the purge's wire contract", purgedRows)
+	}
 
 	// ── restore: the SAME row comes back into the catalogue.
 	code, raw = tplReq(t, h, key, http.MethodPost, "/v1/rest/products/"+restored.ID+"/restore", "")
