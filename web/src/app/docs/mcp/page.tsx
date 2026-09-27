@@ -2,11 +2,12 @@ import type { Metadata } from "next";
 
 export const metadata: Metadata = {
   title: "MCP tool reference — JomForm Docs",
-  description: "Every MCP tool JomForm exposes to AI agents: name, purpose, inputs and outputs. Kept in sync with the tool registry in api/internal/mcpsrv/tools.go.",
+  description: "Every MCP tool JomForm exposes to AI agents: name, purpose, inputs and outputs. Kept in sync with the tool registry in the api/internal/mcpsrv package.",
   alternates: { canonical: "https://jomform.com/docs/mcp" },
 };
 
-// Mirrors api/internal/mcpsrv/tools.go (issue #395). It is NOT auto-generated:
+// Mirrors the tool registry in the api/internal/mcpsrv package (issue #395). It
+// is NOT auto-generated:
 // this list is edited by hand, which is exactly how it fell ten tools behind the
 // registry. Keep it in step when tools are added or changed — and
 // src/lib/mcpToolInventory.test.ts fails the build if you forget.

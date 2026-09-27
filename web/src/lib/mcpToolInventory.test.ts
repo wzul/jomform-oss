@@ -40,6 +40,11 @@
 //   5. The number on the page is DERIVED, not typed: the render must count the
 //      data, and no literal "<n> tools" may appear in the page source. A
 //      hand-typed count reddens the suite the moment the registry moves.
+//   6. No claim on the page names a single FILE as the registry. The page told
+//      a reader — and a search engine, via its <meta name="description"> — that
+//      the registry was api/internal/mcpsrv/tools.go, and #732 falsified that
+//      by moving disable_2fa's literal into parity_issue396.go. Direction 1-3
+//      check the ROW LIST; this checks the CLAIM those rows sit under.
 //
 // HOW THE REGISTRY IS READ: from the Go source, cross-language, in the idiom of
 // salesRows.test.ts / spamJudgeToggle.test.ts. A hardcoded name list here would
@@ -76,11 +81,18 @@ const PAGE = read("../app/docs/mcp/page.tsx");
 // shape that lives anywhere in the package still fails loudly here instead of
 // quietly shrinking REGISTERED.
 const MCP_DIR = fileURLToPath(new URL("../../../api/internal/mcpsrv/", import.meta.url));
-const TOOLS_GO = readdirSync(MCP_DIR)
+const MCP_BY_FILE = readdirSync(MCP_DIR)
   .filter((f) => f.endsWith(".go") && !f.endsWith("_test.go"))
   .sort()
-  .map((f) => readFileSync(MCP_DIR + f, "utf8"))
-  .join("\n");
+  .map((f) => [f, readFileSync(MCP_DIR + f, "utf8")] as const);
+const TOOLS_GO = MCP_BY_FILE.map(([, src]) => src).join("\n");
+
+// Per-file `&mcp.Tool{` literal counts. Test 6 needs these: "this FILE is the
+// registry" is a claim about one file and is only true when that file holds
+// every literal, which a count over the whole joined package cannot see.
+const LITERALS_BY_FILE = new Map(
+  MCP_BY_FILE.map(([f, src]) => [f, (src.match(/&mcp\.Tool\{/g) ?? []).length]),
+);
 
 // The whole TOOL_GROUPS array literal — from the declaration to the line that
 // closes it at column 0. Reading only the array keeps the render code (and the
@@ -224,5 +236,66 @@ test("the tool count on the page is derived from the data, never typed by hand",
     [],
     `/docs/mcp has a hand-typed tool count in its source: ${JSON.stringify(typed)}. The page must ` +
       "count TOOL_GROUPS, not carry a number an editor has to remember to update.",
+  );
+});
+
+// ── The CLAIM, not just the row list ─────────────────────────────────────────
+//
+// The page's own body was corrected to name the api/internal/mcpsrv PACKAGE as
+// the registry; its `<meta name="description">` and its header comment still
+// named a single FILE, and neither this suite nor docsToolClaims.test.ts looked
+// at them. #732 falsified the file claim by moving disable_2fa's `&mcp.Tool{}`
+// literal into parity_issue396.go, so tools.go is no longer the registry (176 of
+// the 177 literals) and the page contradicted itself — the body right, the head
+// wrong, for as long as nobody edited the head.
+//
+// Every path of the form api/internal/mcpsrv/<file>.go on the page is a claim
+// that the registry IS that file, and such a claim is true only while that file
+// holds EVERY `&mcp.Tool{` literal in the package. One literal elsewhere makes
+// the file a subset of the registry and the claim false — which is exactly what
+// happened, and the reason this is checked per FILE rather than against the
+// joined package source the tests above use.
+//
+// Dropping the file name entirely ("the tool registry") is a legitimate state —
+// the card that filed this allows it — so there is deliberately no "must name a
+// path" anchor here, and the positive control is the bite proof's own case:
+// web/scripts/biteproof_mcp_tool_inventory.sh puts the file name back and
+// requires THIS test to go RED.
+test("no claim on /docs/mcp names a single FILE as the registry", () => {
+  // The anchor first: a metadata description is the sentence a search engine and
+  // an agent scraping the page are told what the registry is. If the block is
+  // deleted, this check would pass by absence rather than by agreement.
+  assert.match(
+    PAGE,
+    /\n\s*description:\s*"/,
+    "/docs/mcp has no metadata description — the surface a search engine and an agent scraping " +
+      "the page read is the one this test checks, so its absence must not silence the check",
+  );
+  const claimed = [
+    ...new Set([...PAGE.matchAll(/api\/internal\/mcpsrv\/([A-Za-z0-9_]+\.go)/g)].map((m) => m[1])),
+  ];
+  const wholePackage = [...LITERALS_BY_FILE.values()].reduce((n, c) => n + c, 0);
+  assert.ok(
+    wholePackage > 100,
+    `counted only ${wholePackage} \`&mcp.Tool{\` literal(s) across the non-test mcpsrv package — ` +
+      "the per-file counts cannot judge a file-name claim, so this test would pass vacuously",
+  );
+  const subsets = claimed
+    .map((f) => [f, LITERALS_BY_FILE.get(f) ?? 0] as const)
+    .filter(([, n]) => n !== wholePackage)
+    .map(
+      ([f, n]) =>
+        `${f} holds ${n} of the ${wholePackage} \`&mcp.Tool{\` literal(s) that ` +
+        "api/internal/mcpsrv registers",
+    );
+  assert.deepEqual(
+    subsets,
+    [],
+    `/docs/mcp tells the reader its registry is one file, and that file does not hold the whole ` +
+      `registry:\n  ${subsets.join("\n  ")}\n` +
+      "The registry is the api/internal/mcpsrv PACKAGE — this guard and docsToolClaims.test.ts " +
+      "both read it that way, and the page body already says so. Name the package, or drop the " +
+      'file name and say "the tool registry". A file that holds a subset is not the registry, ' +
+      "and a search engine quoting the page is told it is.",
   );
 });

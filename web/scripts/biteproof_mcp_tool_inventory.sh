@@ -217,53 +217,35 @@ omitted_count() {
   ' "$1" "$2" 2>/dev/null
 }
 
-# ── CASE 1: the DEFECT as it shipped — the real pre-fix page ──────────────────
-BASE=$(git merge-base HEAD origin/main 2>/dev/null || true)
-if [ -z "$BASE" ]; then
-  echo "FAIL  cannot resolve a merge-base with origin/main — case 1 is the point of this file" >&2
-  exit 2
-fi
-DELTA=$(git diff --numstat "$BASE" HEAD -- "$PAGE" | awk '{print $1" insertions, "$2" deletions"}')
-git show "${BASE}:${PAGE_IN_REPO}" > "$PAGE" || { echo "FAIL  cannot read $PAGE at $BASE" >&2; exit 2; }
-BASE_SHA=$(sha256sum "$PAGE" | cut -d' ' -f1)
-if [ "$BASE_SHA" = "$PAGE_SHA" ]; then
-  echo "FAIL  the page at ${BASE:0:8} is byte-identical to this tree's — case 1 would prove nothing" >&2
-  exit 2
-fi
-# Both numbers are measured, and the omission count is the DIFFERENCE between
-# them, so a registry that grows (or a page that gains a row) moves the needle
-# with it instead of invalidating the case.
-REG=$(reg_tools "$TOOLS")
-OMITTED=$(omitted_count "$PAGE" "$TOOLS")
-if ! [[ "$REG" =~ ^[0-9]+$ ]] || ! [[ "$OMITTED" =~ ^[0-9]+$ ]]; then
-  echo "FAIL  cannot count the registry / the omissions for case 1 (registry='$REG' omitted='$OMITTED')" >&2
-  exit 2
-fi
-if [ "$OMITTED" -lt 1 ]; then
-  echo "FAIL  the pre-fix page at ${BASE:0:8} has a row for every one of $REG registered tool(s) — case 1 would prove nothing" >&2
-  exit 2
-fi
-NEEDLE="omits ${OMITTED} registered tool(s)"
-# The ten tools the card is actually about (the pre-#753 set) — the substantive
-# claim, so it is asserted by NAME. `retry_feedback_notify` is NOT one of them:
-# #753 registered it after this page was written, so it is the eleventh omission
-# and the count above already carries it. Only names that are really registered
-# AND really absent from this base page are asserted, so a future rebase cannot
-# leave a stale name in the list.
-TEN_MISSING="submit_feedback list_feedback get_feedback_thread reply_feedback set_feedback_status list_affiliates create_affiliate get_affiliate_sales set_affiliate_commission set_domain_custom_cert"
-NEEDLES=("$NEEDLE")
-for t in $TEN_MISSING; do
-  if grep -qE -- "Name:[[:space:]]*\"$t\"" "$TOOLS" && ! grep -qF -- "name: \"$t\"" "$PAGE"; then
-    NEEDLES+=("$t")
-  else
-    echo "FAIL  case 1 expects $t to be registered but missing from the page at ${BASE:0:8}; it is not — the needle list has gone stale" >&2
-    exit 2
-  fi
-done
-echo "CASE 1 pre-fix page from ${BASE:0:8} (${DELTA:-no delta}) sha ${BASE_SHA:0:12} registry=$REG → omits $OMITTED (derived from the two files)"
-check_needles "guard vs the REAL pre-fix page" RED "${NEEDLES[@]}"
-restore_all
-echo
+# claim_needle <file-basename> -> the guard's own per-file phrase "holds N of the
+# M", DERIVED from the two counts it is talking about (the `&mcp.Tool{` literal
+# count in that file and the count over the whole non-test package). Typed here it
+# would go stale the moment the registry moves — the same hand-maintained-copy
+# defect the page's own count guard exists to stop, one level up.
+claim_needle() {
+  node -e '
+    const fs=require("fs");
+    const dir="../api/internal/mcpsrv/";
+    const files=fs.readdirSync(dir).filter((f)=>f.endsWith(".go")&&!f.endsWith("_test.go"));
+    const n=(f)=>((fs.readFileSync(dir+f,"utf8").match(/&mcp\.Tool\{/g))||[]).length;
+    const total=files.reduce((s,f)=>s+n(f),0);
+    const want=process.argv[1];
+    if(!files.includes(want)){process.stderr.write("not a non-test mcpsrv source file: "+want+"\n");process.exit(1);}
+    process.stdout.write("holds "+n(want)+" of the "+total);
+  ' "$1" 2>/dev/null
+}
+
+# ── The mutation cases run FIRST ──────────────────────────────────────────────
+# CASE 1 (the real pre-fix page from a merge-base with origin/main) is the
+# strongest case and is deliberately placed LAST, because it is the only case
+# that is structurally impossible on some trees: on a tree cut from current main
+# the page at the merge-base is byte-identical to this tree's, and the case is
+# refused rather than reported green. While it sat first, that refusal called
+# `exit 2` and took every case after it — the whole mutation set — down with it.
+# On the branch cut from current main that is exactly what happened: CASE 7 below
+# was unreachable. Deferred to the end, the same tree now runs every mutation case
+# and THEN reports the refusal, honestly and as its own verdict. The case's own
+# rule is unchanged — it still never reports a green it did not measure.
 
 # ── CASE 2: a registered tool whose row is really DELETED (the missing direction)
 must_apply "row DELETED (submit_feedback)" \
@@ -307,6 +289,88 @@ must_apply "note-only group counted as a category" \
                  '{TOOL_GROUPS.length} categories.' \
   && check "note-only group counted as a category -> derived claim" RED "counts every group as a category"
 
+# ── CASE 7: the CLAIM, not just the row list (card t_5f8083eb) ────────────────
+# The card's defect: the page's <meta name="description"> named a single FILE as
+# the registry while the page's body named the package, and nothing looked at the
+# head. Both legs are proven, because the check's whole content is "claimed file
+# == whole registry":
+#   7a  the file name that SHIPPED (tools.go, 176 of the 177 literals) -> RED
+#   7b  the file that exposed the drift (parity_issue396.go, 1 of 177) -> RED
+# A check that only caught the first would be pinned to one filename rather than
+# to the claim, so 7b is what makes it a rule instead of a blocklist. Both
+# needles are DERIVED from the current per-file literal counts (claim_needle), so
+# a registry that grows moves them with it.
+restore_all
+C7A=$(claim_needle tools.go)
+C7B=$(claim_needle parity_issue396.go)
+if [ -z "$C7A" ] || [ -z "$C7B" ]; then
+  echo "FAIL  cannot derive the per-file literal counts for case 7 — the case would prove nothing" >&2
+  exit 2
+fi
+if [ "$C7A" = "$C7B" ]; then
+  echo "FAIL  case 7's two legs derived the same needle ($C7A) — one of them cannot be the subset case" >&2
+  exit 2
+fi
+echo "CASE 7 needles derived: tools.go '$C7A', parity_issue396.go '$C7B'"
+must_apply "file name in the metadata description" \
+  mutate "$PAGE" 'the tool registry in the api/internal/mcpsrv package.' \
+                 'the tool registry in api/internal/mcpsrv/tools.go.' \
+  && check "a single file named as the registry (tools.go) -> claim" RED "$C7A"
+
+restore_all
+must_apply "a subset file named as the registry" \
+  mutate "$PAGE" 'the tool registry in the api/internal/mcpsrv package.' \
+                 'the tool registry in api/internal/mcpsrv/parity_issue396.go.' \
+  && check "a subset file named as the registry (parity_issue396.go) -> claim" RED "$C7B"
+
+restore_all
+
+# ── CASE 1 (LAST — see the note above the mutation cases): the DEFECT as it
+# shipped — the real pre-fix page, the strongest case in this file ────────────
+#
+# `refuse` rather than `exit 2`: on a tree where this case cannot run, the run
+# must still report the cases that DID run, and end with the refusal as its
+# verdict. `exit 2` here would be the same silent loss the note above describes.
+refuse() { echo "$1" >&2; exit 2; }
+BASE=$(git merge-base HEAD origin/main 2>/dev/null || true)
+if [ -z "$BASE" ]; then
+  refuse "FAIL  cannot resolve a merge-base with origin/main — case 1 is the point of this file"
+fi
+DELTA=$(git diff --numstat "$BASE" HEAD -- "$PAGE" | awk '{print $1" insertions, "0+$2" deletions"}')
+git show "${BASE}:${PAGE_IN_REPO}" > "$PAGE" || refuse "FAIL  cannot read $PAGE at $BASE"
+BASE_SHA=$(sha256sum "$PAGE" | cut -d' ' -f1)
+if [ "$BASE_SHA" = "$PAGE_SHA" ]; then
+  refuse "FAIL  the page at ${BASE:0:8} is byte-identical to this tree's — case 1 would prove nothing. Every mutation case above DID run; this one cannot, and is reported rather than reported green."
+fi
+# Both numbers are measured, and the omission count is the DIFFERENCE between
+# them, so a registry that grows (or a page that gains a row) moves the needle
+# with it instead of invalidating the case.
+REG=$(reg_tools "$TOOLS")
+OMITTED=$(omitted_count "$PAGE" "$TOOLS")
+if ! [[ "$REG" =~ ^[0-9]+$ ]] || ! [[ "$OMITTED" =~ ^[0-9]+$ ]]; then
+  refuse "FAIL  cannot count the registry / the omissions for case 1 (registry='$REG' omitted='$OMITTED')"
+fi
+if [ "$OMITTED" -lt 1 ]; then
+  refuse "FAIL  the pre-fix page at ${BASE:0:8} has a row for every one of $REG registered tool(s) — case 1 would prove nothing"
+fi
+NEEDLE="omits ${OMITTED} registered tool(s)"
+# The ten tools the card is actually about (the pre-#753 set) — the substantive
+# claim, so it is asserted by NAME. `retry_feedback_notify` is NOT one of them:
+# #753 registered it after this page was written, so it is the eleventh omission
+# and the count above already carries it. Only names that are really registered
+# AND really absent from this base page are asserted, so a future rebase cannot
+# leave a stale name in the list.
+TEN_MISSING="submit_feedback list_feedback get_feedback_thread reply_feedback set_feedback_status list_affiliates create_affiliate get_affiliate_sales set_affiliate_commission set_domain_custom_cert"
+NEEDLES=("$NEEDLE")
+for t in $TEN_MISSING; do
+  if grep -qE -- "Name:[[:space:]]*\"$t\"" "$TOOLS" && ! grep -qF -- "name: \"$t\"" "$PAGE"; then
+    NEEDLES+=("$t")
+  else
+    refuse "FAIL  case 1 expects $t to be registered but missing from the page at ${BASE:0:8}; it is not — the needle list has gone stale"
+  fi
+done
+echo "CASE 1 pre-fix page from ${BASE:0:8} (${DELTA:-no delta}) sha ${BASE_SHA:0:12} registry=$REG → omits $OMITTED (derived from the two files)"
+check_needles "guard vs the REAL pre-fix page" RED "${NEEDLES[@]}"
 restore_all
 
 echo
