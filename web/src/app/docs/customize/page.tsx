@@ -105,6 +105,158 @@ export default function CustomizeDocsPage() {
         ))}
       </div>
 
+      {/* t_d768342e: the full text of the /docs summaries that point here. Each
+          id below is a link target declared on /docs (docsIndex.test.ts fails the
+          build if the anchor stops existing), so the ids are the contract. */}
+      <h2 id="menu" className="mt-8 scroll-mt-6 text-xl font-semibold text-slate-900">
+        The restaurant menu (QR ordering)
+      </h2>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        Turn a form into a clean restaurant menu. The menu is a <strong>per-form</strong> setting, so
+        you configure it on the form itself (Form Settings → Restaurant menu) and it is served at
+        that form&apos;s own URL. The workspace home page always stays your normal landing page /
+        form listing, so one workspace can run several menus — two outlets, lunch vs dinner, two
+        brands — simply by using a menu form for each. They are fully independent.
+      </p>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        The menu lists <strong>only the products the form references</strong> through its own product
+        blocks, so unrelated account products can never appear. Pick those into named categories with
+        a searchable product picker and a live preview, and highlight a best-seller. Customers scan a
+        QR stand at the table to order and pay online, and the order reaches you with the table
+        number. Configure it over MCP via <span className="font-mono text-xs">set_menu_page</span> /
+        <span className="font-mono text-xs">get_menu_page</span> (both take a{" "}
+        <span className="font-mono text-xs">form_id</span>), or generate the QR stand with{" "}
+        <span className="font-mono text-xs">generate_qr</span>.
+      </p>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        Need more per order — a delivery address, phone number, spice level, notes or pickup time?
+        Attach an optional order form to the menu: the form&apos;s own fields render in the checkout
+        step with their labels and required flags, are validated on the server, and are stored on the
+        sale. There is no second field editor — you create and edit those fields in the normal form
+        builder, and the menu settings link straight to it. With no form attached the checkout
+        collects name + email only and still works.
+      </p>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        The menu checkout always collects the buyer&apos;s name and email (CHIP requires both — they
+        can never be removed), and the server charges each product&apos;s live price. The menu is
+        server-rendered and mobile-first: the header shows the table number, cafe name and location
+        with an info panel; a category filter and search let a diner narrow the menu; best-sellers
+        render as two-column square-image cards, and each category as list rows (text left, thumbnail
+        right) with a separator between rows. Items without a photo render cleanly with no empty image
+        slot. All labels follow the workspace default language.
+      </p>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        A diner never has to order a single item: the menu carries a basket — see{" "}
+        <a href="#menu-basket" className="text-[var(--jf-primary)] underline underline-offset-2">
+          the menu basket
+        </a>{" "}
+        for the full behaviour.
+      </p>
+
+      <h2 id="product-images" className="mt-8 scroll-mt-6 text-xl font-semibold text-slate-900">
+        Product images on forms
+      </h2>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        Choose how each product photo appears on your form: <strong>size</strong> (small 52px, medium
+        96px, large 160px or hidden) and <strong>layout</strong> (thumbnail-left, the default, or
+        image-top — a menu-card look with a full-width photo above the name, ideal for a restaurant
+        menu). The renderer serves the matching optimised media variant for the chosen size. Set it in
+        Form Settings → General (with a live preview) or over MCP via{" "}
+        <span className="font-mono text-xs">set_form_theme</span> (
+        <span className="font-mono text-xs">product_image_size</span> /{" "}
+        <span className="font-mono text-xs">product_image_layout</span>).
+      </p>
+
+      <h2 id="builder" className="mt-8 scroll-mt-6 text-xl font-semibold text-slate-900">
+        Building an order form
+      </h2>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        Build beautiful order forms with a drag-and-drop builder. Add fields (name, email, phone,
+        textarea, number, select, radio, checkbox, date, time, website, address, consent, hidden,
+        list, repeater, image-choice, captcha), attach products, and publish to your own workspace
+        URL or a custom domain. Forms can be <strong>payment forms</strong> or{" "}
+        <strong>response-only</strong> — the mode decides what the form collects and what its entries
+        are called, and it is set in the builder.
+      </p>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        An agent can build the same form:{" "}
+        <span className="font-mono text-xs">upsert_form</span> creates or updates it,{" "}
+        <span className="font-mono text-xs">register_form_fields</span> sets its input fields under a
+        strict contract, and <span className="font-mono text-xs">publish_form</span> takes it live.
+      </p>
+
+      <h2 id="publishing" className="mt-8 scroll-mt-6 text-xl font-semibold text-slate-900">
+        Publishing a form
+      </h2>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        Publishing puts your form on the internet at its own URL — the link a buyer opens, or the
+        address you embed. Press <strong>Publish</strong> in the builder and JomForm confirms it
+        immediately: a panel names the form as live, shows the public URL, and gives you an{" "}
+        <strong>Open form</strong> and a <strong>Copy link</strong> action, so a first publish never
+        ends in silence. If the URL cannot be resolved yet (for example a workspace whose subdomain
+        is not set up), the panel says so plainly rather than showing a link that goes nowhere.
+      </p>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        Two rules decide whether a form may go live. A <strong>response-mode</strong> form always
+        may — collecting answers is its whole job, and having no products is normal for it. A{" "}
+        <strong>payment form</strong> needs something to sell: publishing one with no products is
+        refused once with a clear message, because such a form can never take money, and you can
+        confirm and publish it anyway if you only meant to collect details. Products can come from a
+        product block, the form&apos;s product snapshot, a priced option or shipping choice, or an
+        enabled restaurant menu; adding one any time removes the question.
+      </p>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        The same rule covers every way a form goes live — the <strong>Publish</strong> button, the
+        status control in <strong>Form Settings</strong>, publishing several forms at once from the{" "}
+        <strong>Forms</strong> list, and AI agents over MCP (
+        <span className="font-mono text-xs">publish_form</span> and{" "}
+        <span className="font-mono text-xs">bulk_forms</span>, both of which accept{" "}
+        <span className="font-mono text-xs">acknowledge</span>), so an agent is told the same thing
+        you are. A form that is already live is never asked about again.
+      </p>
+
+      <h2 id="domains" className="mt-8 scroll-mt-6 text-xl font-semibold text-slate-900">
+        Custom domains
+      </h2>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        Put your forms on your own domain (e.g. <span className="font-mono text-xs">shop.yourname.com</span>
+        ). Add the domain, point a CNAME to <span className="font-mono text-xs">custom.jomform.com</span>,
+        and verify. With Cloudflare linked, JomForm can auto-create the CNAME for you. Auto-TLS
+        (Let&apos;s Encrypt) uses your account email as the ACME contact by default — you can change it
+        per domain in Settings → Domains.
+      </p>
+
+      <h2 id="form-url-slug" className="mt-8 scroll-mt-6 text-xl font-semibold text-slate-900">
+        Form URLs and slugs (rename a form)
+      </h2>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        {/* t_e3ebe979 (the rebase onto main): main (#679) documented the slug rename
+            in the /docs entry&apos;s own body. The restructure cuts that entry to a
+            summary, so its walk-through — the character rule, the refusal, and the
+            temporary redirect — lives here, and /docs links this anchor. */}
+        Every form is served at the slug you gave it —{" "}
+        <span className="font-mono text-xs">your-workspace.jomform.com/your-form-slug</span> (or the
+        same path on a verified custom domain). The slug is editable: change it in{" "}
+        <strong>Form Settings → General</strong> and the form moves to the new URL immediately. A
+        slug is 1–40 characters of <span className="font-mono text-xs">a-z</span>,{" "}
+        <span className="font-mono text-xs">0-9</span> and dashes (uppercase and spaces are
+        normalised), and it must be free within your workspace — a rename onto a slug another of
+        your forms already serves is refused with an error rather than silently overwriting either
+        form&apos;s URL.
+      </p>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        Renaming never orphans the URL you already handed out: the old slug keeps working through a{" "}
+        <strong>temporary redirect (HTTP 301)</strong> to the new one, so a printed QR stand, an
+        embedded iframe, a menu&apos;s attached order form, and a link already shared in a campaign
+        all keep resolving. The redirect is temporary, not a permanent alias: if another form in the
+        workspace later claims the freed slug, that LIVE form wins and the old URL serves it — a
+        rename&apos;s history can never shadow a real form&apos;s URL. Slugs cannot be renamed on
+        templates (a template has no public URL) and AI agents do the same thing with the{" "}
+        <span className="font-mono text-xs">slug</span> parameter on{" "}
+        <span className="font-mono text-xs">upsert_form</span>, which returns the slug the form now
+        owns.
+      </p>
+
       <h2 id="menu-basket" className="mt-8 scroll-mt-6 text-xl font-semibold text-slate-900">The menu basket (multi-item ordering)</h2>
       <p className="mt-2 text-sm leading-relaxed text-slate-600">
         A restaurant menu is not a one-item form: the menu page carries a full basket so a diner can
@@ -254,6 +406,11 @@ export default function CustomizeDocsPage() {
           <strong>New template</strong> on the Templates page — an empty template, ready to fill in.
         </li>
       </ul>
+      <p className="mt-3 text-sm leading-relaxed text-slate-600">
+        You do not have to start from a blank form either: the built-in gallery already covers the
+        common shapes — order forms, booking, donation, contact, survey and more — and cloning one
+        copies it into your workspace as a new draft.
+      </p>
 
       <h3 className="mt-5 text-base font-semibold text-slate-900">Edit a template&apos;s fields and design</h3>
       <p className="mt-1 text-sm leading-relaxed text-slate-600">
@@ -286,6 +443,22 @@ export default function CustomizeDocsPage() {
         publish. Publishing a template into the shared gallery is a deliberate, separate act that
         requires a category and a short description line, so a template can never appear in someone
         else&apos;s New-form picker just because you edited it.
+      </p>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        That is because every gallery card is rendered from two fields of the template&apos;s own
+        config: the <strong>category</strong> is{" "}
+        <span className="font-mono text-xs">config.category</span>, and the <strong>description</strong>{" "}
+        is the value of its <strong>first Text block</strong> — which is why a gallery card always
+        reads as more than a title. A template you write yourself gets the same treatment: set a
+        category and put a short intro line in a Text block, or its card has nothing to show.
+      </p>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        Publishing is therefore checked: a template missing either field is{" "}
+        <strong>refused with a clear message</strong> rather than appearing in the gallery as a bare
+        title. Publishing several forms at once behaves differently on purpose — a{" "}
+        <strong>bulk publish skips such a template while still publishing the other forms you
+        selected</strong>, so one unfinished template cannot block a whole batch. The skipped ids are
+        reported back, so the skip is never silent.
       </p>
 
       {/* Language placement (AGENTS.md documentation-parity rule): the split

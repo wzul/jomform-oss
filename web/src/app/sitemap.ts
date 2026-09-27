@@ -12,18 +12,30 @@ const APEX_PAGES = [
   "/brand",
   "/mcp",
   "/docs",
+  // t_d768342e: the guide pages /docs links into. A docs page that is not in the
+  // sitemap is a page a search engine will not find (the nav is the other half).
+  "/docs/sales",
+  "/docs/email",
+  "/docs/security",
+  // t_5425c958: the workspace guide carries the two entries main added after the
+  // /docs restructure was written (what a workspace is, and how deleting one
+  // works), and the Settings → Workspace danger zone's "?" deep-links into it.
+  "/docs/workspaces",
   // Issue #513: the customize page carries the menu-basket and affiliate
   // guides (the docs nav links into both), so it belongs in the sitemap.
   "/docs/customize",
   "/docs/embed",
   "/docs/placeholders",
   "/docs/mcp",
+  "/docs/subscriptions",
+  "/docs/variations",
   // t_bac29e18: the public REST API reference. It is a product surface — the
   // entry point for a developer integrating with JomForm.
   "/docs/api",
   // The per-workspace AI spam-detection toggle is documented here
   // and the Settings switch deep-links into it.
   "/docs/spam-detection",
+  "/docs/ses-reputation",
 ];
 
 export const dynamic = "force-dynamic";

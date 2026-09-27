@@ -246,9 +246,10 @@ export default function Dashboard() {
           <h2 className="text-sm font-semibold">
             {t("dash.formAnalytics")}
             {/* Issue #598 / AGENTS.md docs-parity rule 4: the inline "?" that
-                explains what each per-form counter counts. */}
+                explains what each per-form counter counts. t_d768342e: the
+                section moved to the sales guide, so the link follows it. */}
             <a
-              href="/docs#form-analytics"
+              href="/docs/sales#analytics"
               target="_blank"
               rel="noopener noreferrer"
               title={t("dash.formAnalyticsDocs")}

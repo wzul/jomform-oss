@@ -70,6 +70,7 @@ const goMcp = read("../../../api/internal/mcpsrv/workspaces.go");
 const goRestRoutes = read("../../../api/internal/httpapi/rest.go");
 
 const DOCS_PAGE = "../app/docs/page.tsx";
+const GUIDE_PAGE = "../app/docs/sales/page.tsx";
 const FIELD = "sound_enabled";
 const SETTINGS_PATH = "/api/workspaces/${soundWorkspaceId}/settings";
 
@@ -322,15 +323,17 @@ test("the field name is the same string in the dashboard, the Go struct and both
 
 test("the docs page exists, is linked from the switch, and documents the real behaviour", () => {
   const docs = read(DOCS_PAGE);
-
-  // The inline "?" link next to the switch (AGENTS.md documentation-parity step 4).
+  // t_d768342e: the full section moved to the sales guide (/docs/sales), so the
+  // switch's inline "?" follows it there. The anchor on /docs itself is kept (the
+  // docs index still declares the slug below), so an old bookmark still lands on
+  // the summary; the link a user clicks today goes straight to the full text.
   assert.ok(
-    sales.includes('href="/docs#realtime-notifications"'),
-    'the sound switch has no inline "?" doc link to /docs#realtime-notifications ' +
+    sales.includes('href="/docs/sales#realtime-notifications"'),
+    'the sound switch has no inline "? " doc link to /docs/sales#realtime-notifications ' +
       "(AGENTS.md DOCUMENTATION PARITY step 4)",
   );
-  // The anchor must exist AND must reach the DOM as an id: this page declares its
-  // sections as data and renders `id={f.slug}`, so both halves are asserted.
+  // The anchor must exist AND must reach the DOM as an id: the docs index declares
+  // its sections as data and renders `id={f.slug}`, so both halves are asserted.
   assert.ok(
     docs.includes('slug: "realtime-notifications"'),
     `the docs link points at #realtime-notifications but ${DOCS_PAGE} declares no section with that slug`,
@@ -340,21 +343,28 @@ test("the docs page exists, is linked from the switch, and documents the real be
     `the docs link points at #realtime-notifications but ${DOCS_PAGE} does not render the ` +
       `section ids into the DOM, so the anchor would not scroll`,
   );
+  // The destination page must exist and carry the same anchor.
+  const guide = read(GUIDE_PAGE);
+  assert.ok(
+    guide.includes('id: "realtime-notifications"'),
+    `the switch's docs link points at ${GUIDE_PAGE}#realtime-notifications but that page ` +
+      "declares no section with that id",
+  );
   // The consequences a merchant needs: it is per workspace (not per browser) and
   // it survives a reload — the two facts the bug contradicted.
   assert.match(
-    docs,
+    guide,
     /per-workspace setting[\s\S]{0,400}?reload the page/i,
-    "the docs page does not say the sound setting is per workspace and survives a reload",
+    "the docs guide does not say the sound setting is per workspace and survives a reload",
   );
   assert.match(
-    docs,
+    guide,
     /goes back to its previous position|reverts? /i,
-    "the docs page does not say a rejected save reverts the switch",
+    "the docs guide does not say a rejected save reverts the switch",
   );
   assert.ok(
-    docs.includes(FIELD),
-    `the docs page does not name the ${FIELD} field, so an agent reading the docs cannot find it`,
+    guide.includes(FIELD),
+    `the docs guide does not name the ${FIELD} field, so an agent reading the docs cannot find it`,
   );
 });
 

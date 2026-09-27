@@ -19,15 +19,25 @@ const PAGES = [
   { name: "brand", path: "/brand" },
   { name: "legal-privacy", path: "/legal/privacy" },
   { name: "legal-terms", path: "/legal/terms" },
-  // t_f5a8730d: the knowledge base was outside this scan entirely, so a docs
-  // PR could not be checked by the a11y gate at all (PR 676 edited
+  // t_f5a8730d / t_d768342e: the knowledge base was outside this scan entirely,
+  // so a docs PR could not be checked by the a11y gate at all (PR 676 edited
   // /docs/customize and even a full `npm run a11y` never looked at it). Every
   // page under web/src/app/docs is listed here; /docs and /docs/customize are
   // the minimum, the rest so a regression on any guide turns this red.
   // src/lib/docsA11y.test.ts fails the unit suite when a docs page is missing
   // from this list, so a page added later cannot quietly stay outside the gate.
+  //
+  // t_5425c958 (the rebase onto main): the two sides' lists were UNIONED rather
+  // than one being chosen — main had added /docs/builder, /docs/api and the
+  // guides this branch's own structure links; this branch had added the guide
+  // pages a "?" link or a /docs entry sends a reader to. Either side alone
+  // leaves a public, sitemapped page unscanned.
   { name: "docs-index", path: "/docs" },
   { name: "docs-builder", path: "/docs/builder" },
+  { name: "docs-workspaces", path: "/docs/workspaces" },
+  { name: "docs-sales", path: "/docs/sales" },
+  { name: "docs-email", path: "/docs/email" },
+  { name: "docs-security", path: "/docs/security" },
   { name: "docs-customize", path: "/docs/customize" },
   { name: "docs-embed", path: "/docs/embed" },
   { name: "docs-subscriptions", path: "/docs/subscriptions" },
@@ -41,8 +51,8 @@ const PAGES = [
   // largest block of dense small text on the docs site, so leaving it unscanned
   // would repeat the gap t_d768342e closed.
   { name: "docs-api", path: "/docs/api" },
-  { name: "docs-feedback", path: "/docs/feedback" },
   { name: "docs-chat", path: "/docs/chat" },
+  { name: "docs-feedback", path: "/docs/feedback" },
 ];
 
 for (const page of PAGES) {

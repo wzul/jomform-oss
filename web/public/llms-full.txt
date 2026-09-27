@@ -38,6 +38,24 @@ prices, sales, refunds, analytics — without opening a dashboard.
 
 - [Landing page](https://jomform.com/) — product overview, features, MCP selling point.
 - [MCP setup guide](https://jomform.com/mcp) — how to connect an AI agent over MCP.
+- [Docs index](https://jomform.com/docs) — every feature in one line, grouped by category (the
+  human-readable overview; each entry links to its full guide below).
+- [Workspaces](https://jomform.com/docs/workspaces) — what a workspace owns, its public address,
+  how to create one, and what deleting one requires.
+- [Sales, responses & analytics](https://jomform.com/docs/sales) — the Sales page, the combined
+  sale+response list, the per-form counter, partial refunds, and the realtime notification beep.
+- [Customize](https://jomform.com/docs/customize) — design → AI agent → MCP flow, the restaurant
+  menu and its basket, product images, templates, custom domains, language and affiliate marketing.
+- [Subscriptions](https://jomform.com/docs/subscriptions) — recurring billing, schedule modes,
+  the retry ladder and recovery.
+- [Variation products](https://jomform.com/docs/variations) — per-variation price/stock/image and
+  per-variation subscription cycles.
+- [Email & notifications](https://jomform.com/docs/email) — receipts, per-form notification rules
+  and delivery tracking.
+- [AI spam detection](https://jomform.com/docs/spam-detection) — the judge, what a flag means, and
+  the per-workspace switch.
+- [Email suppression list](https://jomform.com/docs/ses-reputation) — addresses JomForm will not mail.
+- [Placeholders reference](https://jomform.com/docs/placeholders) — every dynamic placeholder.
 - [REST API reference](https://jomform.com/docs/api) — the /v1/rest contract: authenticate with an
   API key, create and publish forms, read sales and responses, manage products, subscriptions,
   webhooks and domains. Every operation is listed; a machine-readable OpenAPI 3.1 document is

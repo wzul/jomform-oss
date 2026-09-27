@@ -738,9 +738,17 @@ function SalesPageInner() {
               />
             </button>
             {/* AGENTS.md documentation-parity step 4: the inline "?" link next
-                to the field, pointing at the section that documents it. */}
+                to the field, pointing at the section that documents it.
+                t_d768342e: that section now lives on the sales guide page.
+                t_e3ebe979 (the rebase): the two sides are a UNION, not a choice
+                — the branch moved the anchor to /docs/sales (where the full
+                text is now) and main carries #738's AA value for the muted
+                glyph. Taking either side wholesale loses the other: the
+                branch's pre-#738 text-slate-500 is 4.48:1 on --jf-bg (axe
+                serious), and main's /docs#realtime-notifications anchor is a
+                summary, not the guide the switch is meant to open. */}
             <a
-              href="/docs#realtime-notifications"
+              href="/docs/sales#realtime-notifications"
               className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 text-[10px] font-semibold text-[var(--jf-muted)] hover:bg-slate-50"
               aria-label={t("sales.soundDocs")}
               title={t("sales.soundDocs")}

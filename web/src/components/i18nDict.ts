@@ -2003,6 +2003,34 @@ export const DICT = {
   "afb.columnActivity": { en: "Last activity", ms: "Aktiviti terakhir", zh: "最近活动", ta: "கடைசி செயல்பாடு", ar: "آخر نشاط" },
   "afb.columnMessages": { en: "Messages", ms: "Mesej", zh: "消息", ta: "செய்திகள்", ar: "الرسائل" },
   "afb.titleColumn": { en: "Subject", ms: "Tajuk", zh: "主题", ta: "தலைப்பு", ar: "الموضوع" },
+
+  // /docs index chrome (t_d768342e): the category labels and the page's own
+  // headings. The docs PROSE stays English (every /docs page is static English,
+  // like the legal pages), but the taxonomy a visitor navigates by is part of the
+  // app chrome, so it follows the reader's language like everything else here.
+  "docs.title": { en: "JomForm Docs", ms: "Dokumentasi JomForm", zh: "JomForm 文档", ta: "JomForm ஆவணங்கள்", ar: "وثائق JomForm" },
+  "docs.intro": { en: "Everything JomForm does, one line per feature, grouped by what you are trying to get done. Where the full walk-through exists, the entry links to it.", ms: "Semua yang JomForm lakukan, satu baris setiap ciri, dikumpulkan mengikut apa yang anda mahu lakukan. Jika panduan penuh wujud, entri itu berpaut kepadanya.", zh: "JomForm 的每一项功能一句话说明，按您想完成的事分组。若存在完整指南，条目会链接过去。", ta: "JomForm செய்யும் அனைத்தும், ஒரு அம்சத்திற்கு ஒரு வரி, நீங்கள் செய்ய விரும்புவதைப் பொறுத்து தொகுக்கப்பட்டது. முழு வழிகாட்டி இருந்தால், அந்த உருப்படி அதற்கு இணைக்கிறது.", ar: "كل ما يفعله JomForm، سطر واحد لكل ميزة، مجمّعة حسب ما تريد إنجازه. وحين يوجد دليل كامل، يرتبط البند به." },
+  "docs.gsTitle": { en: "Start here", ms: "Mula di sini", zh: "从这里开始", ta: "இங்கே தொடங்குங்கள்", ar: "ابدأ من هنا" },
+  "docs.featuresTitle": { en: "Features", ms: "Ciri-ciri", zh: "功能", ta: "அம்சங்கள்", ar: "الميزات" },
+  "docs.faqTitle": { en: "FAQ", ms: "Soalan lazim", zh: "常见问题", ta: "அடிக்கடி கேட்கப்படும் கேள்விகள்", ar: "الأسئلة الشائعة" },
+  "docs.next": { en: "Full guide →", ms: "Panduan penuh →", zh: "完整指南 →", ta: "முழு வழிகாட்டி →", ar: "الدليل الكامل →" },
+  // t_5425c958: the "Workspaces" category on the /docs index. It arrived with the
+  // workspaces guide the rebase added.
+  "docs.catWorkspaces": { en: "Workspaces", ms: "Workspace", zh: "工作区", ta: "பணியிடங்கள்", ar: "مساحات العمل" },
+  "docs.catSales": { en: "Sales & payments", ms: "Jualan & bayaran", zh: "销售与收款", ta: "விற்பனை & பணம்", ar: "المبيعات والمدفوعات" },
+  "docs.catForms": { en: "Forms & fields", ms: "Borang & medan", zh: "表单与字段", ta: "படிவங்கள் & புலங்கள்", ar: "النماذج والحقول" },
+  "docs.catStorefront": { en: "Storefront & pages", ms: "Kedai & halaman", zh: "店铺与页面", ta: "கடை & பக்கங்கள்", ar: "المتجر والصفحات" },
+  "docs.catEmail": { en: "Email", ms: "Emel", zh: "邮件", ta: "மின்னஞ்சல்", ar: "البريد الإلكتروني" },
+  "docs.catGrowth": { en: "Growth", ms: "Pertumbuhan", zh: "增长", ta: "வளர்ச்சி", ar: "النمو" },
+  "docs.catSecurity": { en: "Security", ms: "Keselamatan", zh: "安全", ta: "பாதுகாப்பு", ar: "الأمان" },
+  "docs.catDev": { en: "For developers", ms: "Untuk pembangun", zh: "开发者", ta: "டெவலப்பர்களுக்கு", ar: "للمطوّرين" },
+  "docs.linkDesign": { en: "Design → AI agent → MCP guide", ms: "Panduan reka bentuk → ejen AI → MCP", zh: "设计 → AI 智能体 → MCP 指南", ta: "வடிவமைப்பு → AI முகவர் → MCP வழிகாட்டி", ar: "دليل التصميم → وكيل الذكاء الاصطناعي → MCP" },
+  "docs.linkPlaceholders": { en: "Placeholders reference", ms: "Rujukan placeholder", zh: "占位符参考", ta: "இடமாற்றி குறிப்பு", ar: "مرجع العناصر النائبة" },
+  "docs.linkEmbed": { en: "Embed on your site", ms: "Benamkan di laman anda", zh: "嵌入到您的网站", ta: "உங்கள் தளத்தில் இணைக்கவும்", ar: "التضمين في موقعك" },
+  "docs.linkMCP": { en: "MCP tool reference", ms: "Rujukan alat MCP", zh: "MCP 工具参考", ta: "MCP கருவி குறிப்பு", ar: "مرجع أدوات MCP" },
+  // t_5425c958: the workspace guide is reached from its own two entries on the
+  // index (which render `docs.next`), not from the quick-link row — so it needs
+  // no label key here. Only keys with a real call site are declared.
   "common.cancel": { en: "Cancel", ms: "Batal", zh: "取消", ta: "ரத்துசெய்", ar: "إلغاء" },
   "common.saving": { en: "Working…", ms: "Sedang diproses…", zh: "处理中…", ta: "செயலாக்கப்படுகிறது…", ar: "جارٍ التنفيذ…" },
   // Workspace tab (Settings): workspace identity + the Danger zone.

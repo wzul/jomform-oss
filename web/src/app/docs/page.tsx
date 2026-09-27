@@ -1,245 +1,402 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
+import type { Key } from "../../components/i18n";
+import { T } from "./docsChrome";
+
 export const metadata: Metadata = {
   title: "JomForm Docs — Overview & features",
   description:
-    "Everything JomForm offers: order forms, products, sales, subscriptions, spam protection, email, media, settings, custom domains and landing pages.",
+    "Every JomForm feature in one line, grouped by category: start here, sales & payments, forms & fields, storefront, email, growth, security and developer guides.",
   alternates: { canonical: "https://jomform.com/docs" },
 };
 
-const FEATURES: { title: string; body: string; slug?: string }[] = [
+// The knowledge base is grouped by category (t_d768342e). Each feature entry is
+// a one-sentence summary; the full walk-through lives on the guide page named by
+// `href`, and the entry links to it ("Selanjutnya"). Two things this structure
+// exists to prevent:
+//
+//   * the 2,811-word flat wall this page used to be — `docsIndex.test.ts` fails
+//     the build when any feature body grows past the one-sentence limit;
+//   * a link to a guide section that does not exist — the same guard reads each
+//     `href` and checks the destination file actually declares that `id`.
+//
+// The taxonomy (group labels, the intro, the quick links) is translated through
+// `t()` in all five locales, like the rest of the app's chrome. The prose itself
+// stays English: every /docs page is static English (see the note in
+// customize/page.tsx) and half-translating the knowledge base would be worse
+// than not translating it.
+//
+// t_5425c958 (the rebase onto main): main added four features after this
+// structure was written — Workspaces, Deleting a workspace, Two-factor
+// authentication (2FA) and the REST API reference. Each is a summary here plus a
+// guide that carries the full text, like every other cut entry; the guide pages
+// are /docs/workspaces (new, for the first two), /docs/security#two-factor and
+// /docs/api. Fitting them in is why several existing summaries were tightened:
+// the guard caps the whole page at 800 words, and the trimmed bodies are the
+// entries whose full walk-through already lives on a guide.
+type Entry = {
+  title: string;
+  body: string;
+  // An anchor on THIS page that a dashboard inline "?" links to.
+  slug?: string;
+  // The guide that carries the full text, when the entry is a summary of it.
+  href?: string;
+};
+
+type Group = { id: string; labelKey: Key; entries: Entry[]; more?: { href: string; label: string }[] };
+
+const GROUPS: Group[] = [
   {
-    title: "Order forms",
-    body: "Build beautiful order forms with a drag-and-drop builder. Add fields (name, email, phone, textarea, number, select, radio, checkbox, date, time, website, address, consent, hidden, list, repeater, image-choice, captcha), attach products, and publish to your own workspace URL or a custom domain. Forms can be payment forms or response-only. Editing is a tap on the block itself — on a phone the block's settings open in place of the canvas, with a ← Canvas row to close them (see the form builder guide).",
+    id: "account",
+    labelKey: "docs.catWorkspaces",
+    entries: [
+      {
+        title: "Workspaces (your account's tenant)",
+        slug: "workspaces",
+        href: "/docs/workspaces",
+        body: "A workspace holds your forms, products, sales and payment account, and owns its own address ({slug}.jomform.com or your domain). With none, the dashboard asks you to create one at first sign-in.",
+      },
+      {
+        // The Settings → Workspace danger zone's "?" deep-links this section
+        // (AGENTS.md documentation-parity rule 4).
+        title: "Deleting a workspace",
+        slug: "delete-workspace",
+        href: "/docs/workspaces#delete-workspace",
+        body: "Permanent, and it takes the payment account with it, so it needs a typed slug confirmation and three conditions: you own it, you have another workspace, and this one is empty. Sales are never destroyed.",
+      },
+    ],
   },
   {
-    title: "Products",
-    body: "Sell one-time items and subscriptions. Each product has a name, price (in sen), stock, images, and optional variations (size/colour) with their own price, stock and image. Subscriptions support monthly/yearly billing, trial days, and a fixed or infinite number of charges.",
+    id: "sales-payments",
+    labelKey: "docs.catSales",
+    entries: [
+      {
+        title: "Sales",
+        href: "/docs/sales#sales",
+        body: "Track every sale: reference code, status, buyer, amount, payment method and date. Confirm bank transfers, capture or release authorisations, refund, and export CSV.",
+      },
+      {
+        title: "One list for sales and responses",
+        href: "/docs/sales#combined-list",
+        body: "Without a form filter the Sales page is one merged list: every sale and every response, newest first, with one combined count.",
+      },
+      {
+        title: "Responses (response-only forms)",
+        href: "/docs/sales#responses",
+        body: "A form can collect answers instead of payments. Its entries are stored as responses, shown on the same Sales page, with a drawer holding every recorded value.",
+      },
+      {
+        title: "Form analytics (the per-form counter)",
+        slug: "form-analytics",
+        href: "/docs/sales#analytics",
+        body: "The per-form counter counts the rows that form actually recorded: responses for a response form, sales in every status for a payment form. Never both.",
+      },
+      {
+        title: "Partial refunds",
+        href: "/docs/sales#refunds",
+        body: "Refund a paid sale in full or in part: the sale records how much was returned, shows a partially refunded marker, and keeps the balance refundable until zero.",
+      },
+      {
+        title: "Subscriptions",
+        href: "/docs/subscriptions",
+        body: "Charge customers automatically monthly or yearly, for a fixed number of payments or indefinitely. A late payment follows the schedule mode; a declined card is retried three times.",
+      },
+      {
+        title: "Realtime notifications & the order screen beep",
+        slug: "realtime-notifications",
+        href: "/docs/sales#realtime-notifications",
+        body: "The Sales page follows your workspace's realtime stream; the switch beside the Live pill plays a beep when something arrives. It is per workspace, so it survives a reload.",
+      },
+    ],
   },
   {
-    title: "Variation products",
-    body: "A product with one or more variations is a variable product: each variation carries its own name, price, stock and image, and the buyer picks one at checkout. A variation of a subscription product may also carry its own subscription cycle — period (monthly/yearly), trial days and number of charges — so one product can sell \"Size M monthly\" and \"Size L yearly\" and bill each on its own terms. A field left empty inherits the product's value for that field, so a variation that never set a cycle keeps following the product; a variation with its own value is fixed. Variations are discrete rows (not an attribute grid): you create each combination you actually sell, and each gets its own price, stock and image. Manage them over MCP with list_product_variations, create_product_variation, update_product_variation and delete_product_variation. See the variation products guide.",
+    id: "forms-fields",
+    labelKey: "docs.catForms",
+    entries: [
+      {
+        title: "Order forms",
+        href: "/docs/customize#builder",
+        body: "Build order and response forms with a drag-and-drop builder — fields, products, images, coupons — and publish to your workspace URL or a custom domain.",
+      },
+      {
+        title: "Products",
+        body: "Sell one-time items and subscriptions: each product has a name, price, stock, images and optional variations, and a subscription adds a billing period.",
+      },
+      {
+        title: "Variation products",
+        href: "/docs/variations",
+        body: "A product with variations is variable: each variation carries its own name, price, stock and image, and can carry its own subscription cycle.",
+      },
+      {
+        title: "Product images on forms",
+        href: "/docs/customize#product-images",
+        body: "Choose how each product photo appears on the form: size (small, medium, large or hidden) and layout (thumbnail-left, the default, or image-top for a menu-card look).",
+      },
+      {
+        title: "Templates",
+        href: "/docs/customize#templates",
+        body: "Start from the built-in template gallery (order forms, booking, donation, contact, survey and more), or save any form as a private template you can clone and edit in the builder.",
+      },
+      {
+        // Arrived on main (#657) after this card's structure was written; the
+        // builder's inline "?" (AGENTS.md docs-parity rule 4) deep-links
+        // /docs#publishing, so the slug stays on the index as the summary's
+        // anchor and the full walk-through lives in the customize guide.
+        title: "Publishing a form",
+        slug: "publishing",
+        href: "/docs/customize#publishing",
+        body: "Press Publish and JomForm confirms the form is live with its public URL. A payment form with no products is refused once, unless you publish anyway.",
+      },
+      {
+        // Arrived on main (#679) after this card's structure was written. The
+        // slug stays on the index (Form Settings' inline "?" deep-links
+        // /docs#form-url-slug, and slugRenameErr.test.ts asserts that anchor
+        // exists here) and the full walk-through — the character rule, the
+        // refusal, and the 301 — lives in the customize guide.
+        title: "Form URLs and slugs (rename a form)",
+        slug: "form-url-slug",
+        href: "/docs/customize#form-url-slug",
+        body: "Set the form's slug in Form Settings; rename it any time and the old URL keeps resolving.",
+      },
+    ],
   },
   {
-    title: "Product images on forms",
-    body: "Choose how each product photo appears on your form: size (small 52px, medium 96px, large 160px or hidden) and layout (thumbnail-left, the default, or image-top — a menu-card look with a full-width photo above the name, ideal for a restaurant menu). The renderer serves the matching optimised media variant for the chosen size. Set it in Form Settings → General (with a live preview) or over MCP via set_form_theme (product_image_size / product_image_layout).",
+    id: "storefront",
+    labelKey: "docs.catStorefront",
+    entries: [
+      {
+        title: "Restaurant menu (QR ordering)",
+        href: "/docs/customize#menu",
+        body: "Turn a form into a QR restaurant menu: sort its products into named categories, highlight a best-seller, and diners order and pay from the table.",
+      },
+      {
+        title: "Menu basket (multi-item ordering)",
+        href: "/docs/customize#menu-basket",
+        body: "A menu takes a whole table's order: every item is add-to-cart, with a sticky basket, quantity steppers and a running total that survives a reload.",
+      },
+      {
+        title: "Landing pages",
+        body: "Customise your workspace storefront with a hero, subtitle, body, image, theme colours, logo and call-to-action buttons that link to your forms.",
+      },
+      {
+        title: "Custom domains",
+        href: "/docs/customize#domains",
+        body: "Put your forms on your own domain: add it, point a CNAME to custom.jomform.com and verify. With Cloudflare linked, JomForm can create the CNAME for you.",
+      },
+      {
+        title: "Media library",
+        body: "Upload images, code assets (css/js/html/svg/woff2) and PDFs. Images are optimised and served immediately; code assets are scanned before being served.",
+      },
+      {
+        title: "Settings",
+        body: "Configure CHIP payment credentials, custom domains, tracking scripts, e-Invoice (LHDN), outbound webhooks, currency, and per-workspace email templates.",
+      },
+    ],
   },
   {
-    title: "Workspaces (your account's tenant)",
-    slug: "workspaces",
-    body: "A workspace holds your forms, products, sales, CHIP credentials, domains and settings. Every workspace owns its own account, so data never crosses between them, and each has its own public host: your forms are served from {slug}.jomform.com (or a custom domain you add). If you have no workspace yet, the dashboard asks you to create one the first time you sign in — name it and pick a URL slug, and you land inside it able to create a form straight away. If you joined before workspaces existed and already had forms but no workspace, JomForm creates that workspace for you on your next sign-in, naming it and its URL after the first five characters of your email address, and moves your existing forms into it so they appear in your dashboard straight away — nothing is deleted. Your forms then serve from that workspace's own address ({workspace-slug}.jomform.com): a form has exactly one public host, so if you had shared a link on an older address you will want to send the new one. Create more workspaces later from the workspace switcher in the top bar (\"New workspace\"); the switcher also sets which workspace you land on after login. A new workspace starts empty: no CHIP credentials, no products, no sales.",
+    id: "email",
+    labelKey: "docs.catEmail",
+    entries: [
+      {
+        title: "Email & notifications",
+        href: "/docs/email",
+        body: "Customise the receipt email and the per-form notification rules (subject, body, receipt on/off, merchant notify), with a form override that falls back to the workspace and then the built-in default.",
+      },
+    ],
+    more: [
+      { href: "/docs/ses-reputation", label: "Email suppression list" },
+      { href: "/docs/placeholders", label: "Placeholders reference" },
+    ],  },
+  {
+    id: "growth",
+    labelKey: "docs.catGrowth",
+    entries: [
+      {
+        title: "Affiliate marketing",
+        href: "/docs/customize#affiliate-marketing",
+        body: "Pay promoters for the sales they bring: give each affiliate a short code and a commission, share their ?aff=CODE link, and the sale is attributed to them.",
+      },
+    ],
   },
   {
-    title: "Sales",
-    body: "Track every sale: reference code, status (pending/confirmed/failed/refunded), buyer, amount, payment method and date. Confirm bank-transfer sales, capture or release skip-capture authorisations, refund paid sales (full or partial), and export sales to CSV. A form's mode decides what its entries are called, not whether you can reach them: a payment form (the default) takes payment and offers a Sales action on the Forms list, while a response-only form offers a Submission action. Both point at the same per-form list — an RSVP form is never labelled sales, and it still has a way into its responses. `GET /v1/rest/forms` (list, single and create) reports the mode as `mode` (`payment` or `response`; a form created before response mode existed reports `payment`).",
+    id: "security",
+    labelKey: "docs.catSecurity",
+    entries: [
+      {
+        title: "Spam protection",
+        href: "/docs/spam-detection",
+        body: "AI review of every submission: flagged entries wait in a review queue, a false positive can be un-flagged, and an unreviewed flag is deleted after 30 days.",
+      },
+      {
+        title: "Two-factor authentication (2FA)",
+        // The Profile → Security 2FA controls (AGENTS.md docs-parity rule 4) and
+        // the disable2fa.test.ts guard deep-link this section. The full walk-
+        // through lives on the security guide.
+        slug: "two-factor",
+        href: "/docs/security#two-factor",
+        body: "Add a second factor from Profile → Security: scan the QR into an authenticator app and confirm the 6-digit code. Turning it off asks for that code alone, and a magic-link session must prove itself first.",
+      },
+      {
+        title: "Trusted devices (2FA)",
+        href: "/docs/security#trusted-devices",
+        body: "With 2FA on you can trust a device for 30 days, so it skips the code. Profile → Security, your account block, lists every device with a Revoke button.",
+      },
+    ],
   },
   {
-    title: "One list for sales and responses",
-    body: "Without a form filter the Sales page is the whole record set: every sale AND every response your response-mode forms recorded, merged newest first with one combined record count. That is deliberate — an account whose response entries were invisible on the unfiltered page had two surfaces reporting two different things (the per-form counter counted the responses, the list did not show them). Filtering by a form narrows the page to that form's own entries: a payment form shows its sales, a response-only form shows its responses and the table switches to the answers columns. The status filter is a payment question, so choosing a status hides the responses rather than reporting nothing. Export CSV produces the same rows as the list, with the same filters applied: a combined export carries a `record_type` column (sale or submission) plus the recorded answer columns, and a single-form export uses that form's own columns. Search and the date range apply to both halves. The same decision drives the dashboard's recent list and the MCP tools `list_sales` and `export_sales_csv`, so the page, the CSV and your agent always agree.",
+    id: "developers",
+    labelKey: "docs.catDev",
+    entries: [
+      {
+        title: "MCP (AI agents)",
+        href: "/docs/mcp",
+        body: "Connect JomForm to Claude, Cursor and other AI agents over the Model Context Protocol. Agents can build forms and manage products, sales and more.",
+      },
+      {
+        title: "Design → AI agent → MCP customization",
+        href: "/docs/customize",
+        body: "Design your form in a tool like Canva, then have an AI agent connected to the JomForm MCP apply that design with CSS and JS.",
+      },
+      {
+        title: "Embed on your site",
+        href: "/docs/embed",
+        body: "Drop a form into any website with an iframe. The embedded form posts its height to your page, so it grows with the form.",
+      },
+      {
+        title: "REST API",
+        href: "/docs/api",
+        body: "Drive JomForm from your own server: create forms, read sales and responses, manage products, subscriptions and webhooks.",
+      },
+    ],
+  },
+];
+
+// The five first steps, raised to the top of the page (they used to sit under
+// 2,811 words of feature text, where nobody found them).
+const START_STEPS = [
+  "Create a free account — your first form is ready in about 5 minutes.",
+  "Build a form with the drag-and-drop builder and attach products.",
+  "Add your CHIP payment credentials in Settings → CHIP.",
+  "Publish the form — it goes live at your workspace URL or a custom domain.",
+  "Track sales, subscriptions and email delivery from the dashboard.",
+];
+
+const QUICK_LINKS: { href: string; labelKey: Key; primary?: boolean }[] = [
+  { href: "/docs/customize", labelKey: "docs.linkDesign", primary: true },
+  { href: "/docs/placeholders", labelKey: "docs.linkPlaceholders" },
+  { href: "/docs/embed", labelKey: "docs.linkEmbed" },
+  { href: "/docs/mcp", labelKey: "docs.linkMCP" },
+  // t_5425c958: the REST API reference arrived on main after this structure was
+  // written. Every docs entry point is a quick link here, and
+  // `docsApi.test.ts` requires the index to be able to reach /docs/api.
+  { href: "/docs/api", labelKey: "docs.linkAPI" },
+];
+
+const FAQ: { q: string; a: string }[] = [
+  {
+    q: "How do I connect an AI agent?",
+    a: "Point any MCP client at the server URL https://mcp.jomform.com/mcp. It registers itself via OAuth 2.1 — no API keys needed. See the MCP tool reference for what agents can do.",
   },
   {
-    title: "Responses (response-only forms)",
-    body: "A form can collect responses instead of payments (set the form mode to response in the builder — no products, no payment). Its entries are stored as responses, not sales, and they are shown on the Sales page too: open a response form from Forms → Submission (or Form Settings → Submission) and the list shows that form's responses — when each one arrived, the buyer's name/email/phone and the recorded answers — with a detail drawer holding every field value. A payment form's button says Sales instead, because its entries are sales; the destination is the same. The search box matches any recorded answer and the date range applies as usual; the payment-status filter does not appear, because a response has no payment status. Export CSV and the capture/refund actions are payment-only and do not apply. The dashboard's per-form counter counts responses for a response form, so a form that has collected entries never reads as zero. AI agents read the same data with list_form_submissions (and list_sales returns them for a response form id).",
-  },
+    q: "What are the placeholders in emails?",
+    a: "Placeholders like {{ref_code}} and {{amount}} are replaced with real values when an email is sent. See the placeholders reference for the full list.",  },
   {
-    title: "Form URLs and slugs (rename a form)",
-    // The slug field in Form Settings carries an inline "?" (AGENTS.md
-    // docs-parity rule 4) that deep-links this section.
-    slug: "form-url-slug",
-    body: "Every form is served at the slug you gave it — your-workspace.jomform.com/your-form-slug (or the same path on a verified custom domain). The slug is editable: change it in Form Settings → General and the form moves to the new URL immediately. A slug is 1–40 characters of a-z, 0-9 and dashes (uppercase and spaces are normalised), and it must be free within your workspace — a rename onto a slug another of your forms already serves is refused with an error rather than silently overwriting either form's URL. Renaming never orphans the URL you already handed out: the old slug keeps working through a temporary redirect (HTTP 301) to the new one, so a printed QR stand, an embedded iframe, a menu's attached order form, and a link already shared in a campaign all keep resolving. The redirect is temporary, not a permanent alias: if another form in the workspace later claims the freed slug, that LIVE form wins and the old URL serves it — a rename's history can never shadow a real form's URL. Slugs cannot be renamed on templates (a template has no public URL) and AI agents do the same thing with the slug parameter on upsert_form, which returns the slug the form now owns.",
-  },
-  {
-    title: "Form analytics (the per-form counter)",
-    // The dashboard's inline "?" (issue #598, AGENTS.md docs-parity rule 4)
-    // deep-links this section.
-    slug: "form-analytics",
-    body: "The dashboard lists one card per form with a count of the entries that form has recorded — the rows the form actually produced, read from the table it writes to. Set the form mode to response and the card says Submissions, counting that form's responses; leave it as a payment form (the default) and the card says Entries, counting that form's sales in every status (paid, confirmed, pending, failed, refunded). The two tables are never added together, because a form's mode decides which one it writes: the counter counts exactly one of them, so a form cannot double count. Beside the counter the card shows the money figures as their own separately named values — Paid+Confirmed (how many of the form's sales reached the paid set, each sale counted once), Pending, Failed and revenue in RM net of refunds. AI agents read the same rollup with get_form_analytics, which reports the form's mode as `mode` so the figure can be labelled correctly, and GET /v1/rest/dashboard-bundle carries it as form_analytics.",
-  },
-  {
-    title: "Partial refunds",
-    body: "Refund a paid or confirmed sale in full or in part. JomForm records how much has actually been returned on the sale (refunded_sen), so a partial refund is never mistaken for a full one: the sale keeps its paid/confirmed status with a “Partially refunded” marker and the remaining balance (outstanding_sen) stays refundable until it reaches zero — only then does the sale become refunded. Every read surface reports the same picture: the Sales page (status chip, plus a refunded/balance breakdown in the sale detail), get_sales_summary, analytics (revenue is net of refunds), the CSV export (refunded_rm, outstanding_rm, refund_status) and the MCP tools (list_sales, refund_sale, export_sales_csv). An amount that would push the refunded total past the sale total (refunded_sen + amount_sen > total_sen) or a non-positive amount is rejected before the gateway is ever called, and the guard is applied under a per-sale lock so two refunds racing each other cannot over-refund.",
-  },
-  {
-    title: "Subscriptions",
-    body: "Charge customers automatically on a schedule \u2014 monthly or yearly, for as long as the plan runs or for a fixed number of payments. A product can carry a billing period and, optionally, a fixed number of charges so a three-month plan completes itself once the third payment lands. When a payment is late you choose where the next one lands (from the day it succeeds, keep the original dates and collect the missed period, or keep them and skip it), which is what makes a fixed-term class or course bill correctly. If a charge is declined JomForm retries three times over three days, notifies you on the first failure and again when the subscription falls past due, and the customer can update their card through a secure link; you can also retry a past-due subscription yourself. Cancelling never revokes the customer's card token (it can be re-activated later). Every action is available to an AI agent over MCP.",
-  },
-  {
-    title: "Spam protection",
-    body: "AI-powered spam review. Spam-flagged submissions and sales are held in a queue for review; a false positive can be un-spammed. A spam-flagged sale that receives a successful payment is auto-un-spammed. A flagged entry that is never reviewed is permanently deleted 30 days later, so review the queue. The judge is set per workspace and can be turned off entirely (Settings → Storefront, or set_workspace_settings with spam_judge_enabled: false): with it off nothing is sent to the judge, nothing is flagged, and the Spam page stays empty. See the AI spam detection guide.",
-  },
-  {
-    title: "Realtime notifications & the order screen beep",
-    // The /sales sound toggle's inline "?" (issue #447, AGENTS.md docs-parity
-    // rule 4) deep-links this section.
-    slug: "realtime-notifications",
-    body: "The Sales page updates itself: while it is open it subscribes to your workspace's realtime stream, so a new sale or response appears without a manual refresh, and the Live pill shows whether that stream is connected. Beside the pill is the notification-sound switch, which plays a short beep when a new sale or response arrives — the thing that makes an unattended kitchen or counter screen useful, since nobody is watching the list. The switch is a per-workspace setting, saved the moment you flip it: enable it, reload the page (or open /sales from a different browser, or another device), and it is still on, because the value is stored on the workspace rather than in that browser. If the save is rejected the switch goes back to its previous position and the failure is shown, and if the stored value itself cannot be read the page says so rather than showing the switch as off — the control never displays a value the server does not hold. Every workspace starts muted, and the setting applies only to the dashboard — buyers are never played a sound. The same value is the sound_enabled field on GET/PUT /v1/workspaces/{id}/settings and the set_realtime_sound MCP tool, and it can also be set in Settings → Storefront. Use the MCP tool get_realtime_status to read a workspace's sound_enabled and stream_url.",
-  },
-  {
-    title: "Email & notifications",
-    body: "Customise the receipt email sent to buyers and per-form notification rules. Email settings are configured per workspace, and any form can override them (subject, body, receipt on/off, merchant notify) with a \"use workspace default\" option — resolution order is form → workspace → built-in default. Use dynamic placeholders like {{ref_code}}, {{amount}}, {{items}}, {{buyer_name}}, {{form_url}}, {{date}} and any {{field_id}}. Every new form also starts with a default notification to you: a payment form notifies on sale.paid, a response form on response.submitted (its message uses the responder's name and email, because a response has no sale). Track delivery (sent → delivered → opened → clicked).",
-  },
-  {
-    title: "Media library",
-    body: "Upload images, code assets (css/js/html/svg/woff2) and PDFs. Images are optimised and served immediately; code assets are scanned before being served.",
-  },
-  {
-    title: "Settings",
-    body: "Configure CHIP payment credentials, custom domains, tracking scripts, e-Invoice (LHDN), outbound webhooks, currency, and per-workspace email templates.",
-  },
-  {
-    title: "Custom domains",
-    body: "Put your forms on your own domain (e.g. shop.yourname.com). Add the domain, point a CNAME to custom.jomform.com, and verify. With Cloudflare linked, JomForm can auto-create the CNAME for you. Auto-TLS (Let's Encrypt) uses your account email as the ACME contact by default — you can change it per domain in Settings → Domains.",
-  },
-  {
-    title: "Landing pages",
-    body: "Customise your workspace storefront with a hero, subtitle, body, image, theme colours, logo and call-to-action buttons that link to your forms.",
-  },
-  {
-    title: "Restaurant menu (QR ordering)",
-    body: "Turn a form into a clean restaurant menu: the menu is a per-form setting, so you configure it on the form itself (Form Settings → Restaurant menu) and it is served at that form's own URL. The menu lists only the products the form references through its own product blocks — pick those into named categories with a searchable product picker and a live preview, and highlight a best-seller. Customers scan a QR stand at the table to order and pay online, and the order reaches you with the table number. Configure it over MCP via set_menu_page / get_menu_page (both take a form_id), or generate the QR stand with generate_qr. One workspace can run several menus (two outlets, lunch vs dinner, two brands) simply by using a menu form for each — they are fully independent, and the workspace home page always stays your normal landing page / form listing. The menu checkout always collects the buyer's name and email (CHIP requires both — they can never be removed). Need more per order — a delivery address, phone number, spice level, notes or pickup time? Attach an optional order form to the menu: the form's own fields render in the checkout step with their labels and required flags, are validated on the server, and are stored on the sale. There is no second field editor — you create and edit those fields in the normal form builder, and the menu settings link straight to it. With no form attached the checkout collects name + email only and still works.",
-  },
-  {
-    title: "Menu basket (multi-item ordering)",
-    body: "A restaurant menu takes a whole table's order, not one item. Every menu card and row is an add-to-cart button: tapping it adds the item and shows a quantity badge, tapping again adds another. A sticky basket bar appears at the bottom as soon as the basket is non-empty, showing the live item count and running total, and opens the basket panel — where each line has a − / + quantity stepper, a Remove button, and a Clear basket button, with the Subtotal and the table number shown above the checkout. The basket survives category filtering, searching and a page reload (it is stored in the buyer's browser, keyed to that menu form, so two menus in one workspace keep separate baskets) and is cleared only when an order is placed. Checkout collects the diner's name and email — both mandatory, because CHIP needs them — plus any extra fields from the order form you attached, then redirects to the CHIP checkout. The order lands as a normal sale with one line per item at the live product price, the buyer's details, the table number (for a QR order) and the affiliate code if the diner arrived through an affiliate link. The on-screen total is display-only; the server re-reads every price when the order is placed. See the customization guide for the full walk-through.",
-  },
-  {
-    title: "Affiliate marketing",
-    body: "Pay promoters for the sales they bring. Create an affiliate with a short code and a commission percentage (Settings → Affiliates, or the MCP tool create_affiliate), and JomForm gives you their referral link — your storefront URL with ?aff=CODE. When a buyer arrives through that link and orders, the code is stored on the sale, so the sale is attributed to that affiliate (menu orders included). Change the commission any time with set_affiliate_commission, and read what an affiliate brought in with get_affiliate_sales (list_affiliates gives you the ids). The same surface is on the REST API: GET/POST /v1/workspaces/{id}/affiliates, PUT /v1/workspaces/{id}/affiliates/{affid}/commission and GET /v1/workspaces/{id}/affiliates/{affid}/sales. See the customization guide for a step-by-step.",
-  },
-  {
-    title: "Templates",
-    body: "Start a new form from the built-in template gallery (order forms, booking, donation, contact, survey and more), or build your own: save any form as a reusable template from the builder or the Templates page. Every gallery card shows a category and a one-line description, so a template always reads as more than a title; those two fields live in the form's own config (the category and the first text block), which also means a template you write yourself gets the same treatment — set a category and put a short intro line in a Text block. Your templates are private to your workspace — list, Edit (its fields and design, in the builder), rename, delete, then clone one into a new draft whenever you need it. Editing a template never changes a form that was already created from it: cloning copies the fields and design at that moment, so the two are independent afterwards. A template also has no draft/published state — it stays private to your workspace and never appears in another merchant's gallery. Publishing a template into the gallery requires both fields: a template without them is refused with a clear message rather than appearing as a bare title, and a bulk publish skips such a template while still publishing the other forms you selected. AI agents can manage the same templates over MCP (list_own_templates, create_template, update_template, delete_template). See the customization guide for a step-by-step.",
-  },
-  {
-    title: "Deleting a workspace",
-    // The Settings → Workspace danger zone's "?" deep-links this section
-    // (AGENTS.md documentation-parity rule 4).
-    slug: "delete-workspace",
-    body: "A workspace is deleted with a typed confirmation — you type the workspace's own address (slug) back — because the delete is permanent and takes the workspace's payment account with it. Three rules decide whether it may go. Only the OWNER may delete it: an admin member manages a workspace but does not own its identity, its sales history or its payment account, and leaves through Settings → Members instead. You must have at least one other workspace, because a user always needs one — the last workspace can never be deleted, and the button is disabled with the reason stated rather than failing after you press it. And the workspace must be empty: forms (including anything still in the Trash), products, sales, custom domains, webhooks, live API keys and subscriptions each block it, and the refusal lists every blocking category with its count. Sales especially are never destroyed — a delete takes the account and its trading history with it, so sales block the delete instead of being silently discarded. To empty a workspace, open the Forms page, switch to Trash and delete a form for good; a form that has been sold refuses that permanent delete, because removing it would silently detach the sale. Settings → Workspace shows the identity and the Danger zone; AI agents use delete_workspace, with check_workspace_deletion as the read-only pre-flight that reports the same blockers.",
-  },
-  {
-    title: "Publishing a form",
-    // The builder's "?" beside the publish warning deep-links this section
-    // (AGENTS.md docs-parity rule 4).
-    slug: "publishing",
-    body: "Publishing puts your form on the internet at its own URL — the link a buyer opens, or the address you embed. Press Publish in the builder and JomForm confirms it immediately: a panel names the form as live, shows the public URL, and gives you an Open form and a Copy link action, so a first publish never ends in silence. If the URL cannot be resolved yet (for example a workspace whose subdomain is not set up), the panel says so plainly rather than showing a link that goes nowhere. Two rules decide whether a form may go live: a response-mode form always may — collecting answers is its whole job, and having no products is normal for it. A payment form needs something to sell: publishing one with no products is refused once with a clear message, because such a form can never take money, and you can confirm and publish it anyway if you only meant to collect details. Products can come from a product block, the form's product snapshot, a priced option or shipping choice, or an enabled restaurant menu; adding one any time removes the question. The same rule covers every way a form goes live — the Publish button, the status control in Form Settings, publishing several forms at once from the Forms list, and AI agents over MCP (publish_form and bulk_forms, both of which accept acknowledge), so an agent is told the same thing you are. A form that is already live is never asked about again.",
-  },
-  {
-    title: "REST API",
-    body: "Your own server can drive JomForm: create forms, read sales and responses, manage products, subscriptions, webhooks and domains. Every operation is listed in the reference, generated from the API's OpenAPI 3.1 contract. See the REST API reference.",
-  },
-  {
-    title: "MCP (AI agents)",
-    body: "Connect JomForm to Claude, Cursor and other AI agents via the Model Context Protocol. Agents can build forms, manage products, sales, subscriptions, media and more. See the MCP tool reference.",
-  },
-  {
-    title: "Design → AI agent → MCP customization",
-    body: "Design your form or landing page in a tool like Canva, then use an AI agent (e.g. Claude) connected to the JomForm MCP to apply that design and customize it with CSS and JS. See the customization guide.",
-  },
-  {
-    title: "Embed on your site",
-    body: "Drop a form into any website with an iframe. The embedded form posts its height to your page (postMessage auto-height) so it grows with the form, with a 3-line merchant listener and a fixed-height fallback. See the embed guide.",
-  },
-  {
-    title: "Two-factor authentication (2FA)",
-    // The Profile → Security 2FA controls (AGENTS.md docs-parity rule 4) and the
-    // disable2fa.test.ts guard deep-link this section.
-    slug: "two-factor",
-    body: "Add a second factor to your account from Profile → Security. Set up 2FA by scanning the QR code into an authenticator app (Google Authenticator, 1Password, Authy…) and confirming the 6-digit code it shows — the secret is only activated once you confirm a code, so an abandoned setup never locks you out. From then on, each sign-in asks for the current 6-digit code. You can tick \"don't ask for a code on this device for 30 days\" at login to trust that device (the password is still required every time); Profile → Security lists every trusted device with a Revoke button per device and \"revoke all / log out everywhere\". To turn 2FA off, open Profile → Security and click Disable 2FA: you are asked for the current 6-digit code from your authenticator app, and that is the only thing you need to type — there is no separate password prompt, so it also works on a session you started from an emailed sign-in link. Disabling 2FA also clears every trusted device, because a device that skipped the removed factor must not keep that exemption. A session started from an emailed sign-in link (a magic link) is treated as unproven: when 2FA is on, changing your password, disabling 2FA or adding a passkey asks for a fresh code, so a stolen inbox cannot strip the second factor. Each code is single-use — if a prompt is submitted twice, use the fresh code your app shows next, not the previous one.",
-  },
-  {
-    title: "Trusted devices (2FA)",
-    body: "When 2FA is enabled you can tick \"don't ask for a code on this device for 30 days\" at login — that device is then trusted and skips the 2FA code (the password is still required). Profile → Security (your account block at the bottom of the sidebar, or at the bottom of the menu on a phone) lists every trusted device (label, IP, first trusted, expiry) with a Revoke button per device, plus \"revoke all / log out everywhere\". Revocation is immediate: the next login on a revoked device asks for a 2FA code again. Changing your password or disabling 2FA also clears all trusted devices.",
+    q: "Can I use my own domain?",
+    a: "Yes. Add your domain in Settings → Domains, point a CNAME to custom.jomform.com, and verify. Your forms then go live on your domain automatically.",
   },
 ];
 
 export default function DocsIndexPage() {
   return (
     <div className="max-w-3xl">
-      <h1 className="text-3xl font-bold tracking-tight text-slate-900">JomForm Docs</h1>
+      <h1 className="text-3xl font-bold tracking-tight text-slate-900">
+        <T k="docs.title" />
+      </h1>
       <p className="mt-3 text-sm leading-relaxed text-slate-600">
-        Welcome to the JomForm knowledge base. Here you'll find an overview of every feature, a
-        reference for all dynamic placeholders, and a complete list of MCP tools.
+        <T k="docs.intro" />
       </p>
 
       <div className="mt-6 flex flex-wrap gap-3">
-        <Link
-          href="/docs/customize"
-          className="rounded-lg bg-[var(--jf-primary)] px-4 py-2 text-sm font-medium text-white hover:opacity-90"
-        >
-          Design → AI agent → MCP guide
-        </Link>
-        <Link
-          href="/docs/placeholders"
-          className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-        >
-          Placeholders reference
-        </Link>
-        <Link
-          href="/docs/embed"
-          className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-        >
-          Embed on your site
-        </Link>
-        <Link
-          href="/docs/mcp"
-          className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-        >
-          MCP tool reference
-        </Link>
-        <Link
-          href="/docs/api"
-          className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-        >
-          REST API reference
-        </Link>
-      </div>
-
-      <h2 className="mt-10 text-xl font-semibold text-slate-900">Features</h2>
-      <div className="mt-4 space-y-6">
-        {FEATURES.map((f) => (
-          <section key={f.title} id={f.slug} className="scroll-mt-24">
-            <h3 className="text-base font-semibold text-slate-900">{f.title}</h3>
-            <p className="mt-1 text-sm leading-relaxed text-slate-600">{f.body}</p>
-          </section>
+        {QUICK_LINKS.map((l) => (
+          <Link
+            key={l.href}
+            href={l.href}
+            className={
+              l.primary
+                ? "rounded-lg bg-[var(--jf-primary)] px-4 py-2 text-sm font-medium text-white hover:opacity-90"
+                : "rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            }
+          >
+            <T k={l.labelKey} />
+          </Link>
         ))}
       </div>
 
-      <h2 className="mt-10 text-xl font-semibold text-slate-900">Getting started</h2>
-      <ol className="mt-4 list-decimal space-y-2 pl-5 text-sm leading-relaxed text-slate-600">
-        <li>Create a free account — your first form is ready in about 5 minutes.</li>
-        <li>Build a form with the drag-and-drop builder and attach products.</li>
-        <li>Add your CHIP payment credentials in Settings → CHIP.</li>
-        <li>Publish the form — it goes live at your workspace URL or a custom domain.</li>
-        <li>Track sales, subscriptions and email delivery from the dashboard.</li>
-      </ol>
+      {/* Getting started — FIRST, not last. */}
+      <section id="start" className="mt-10 scroll-mt-24">
+        <h2 className="text-xl font-semibold text-slate-900">
+          <T k="docs.gsTitle" />
+        </h2>
+        <ol className="mt-4 list-decimal space-y-2 pl-5 text-sm leading-relaxed text-slate-600">
+          {START_STEPS.map((s) => (
+            <li key={s}>{s}</li>
+          ))}
+        </ol>
+      </section>
 
-      <h2 className="mt-10 text-xl font-semibold text-slate-900">FAQ</h2>
+      <h2 className="mt-12 text-xl font-semibold text-slate-900">
+        <T k="docs.featuresTitle" />
+      </h2>
+
+      {GROUPS.map((g) => (
+        <section key={g.id} id={g.id} className="mt-8 scroll-mt-24">
+          <h3 className="text-base font-semibold uppercase tracking-wide text-[var(--jf-primary)]">
+            <T k={g.labelKey} />
+          </h3>
+          <div className="mt-3 space-y-4">
+            {g.entries.map((f) => (
+              <div key={f.title} id={f.slug} className="scroll-mt-24">
+                <h4 className="text-sm font-semibold text-slate-900">{f.title}</h4>
+                <p className="mt-1 text-sm leading-relaxed text-slate-600">
+                  {f.body}
+                  {f.href ? (
+                    <>
+                      {" "}
+                      <Link href={f.href} className="text-[var(--jf-primary)] underline underline-offset-2">
+                        <T k="docs.next" />
+                      </Link>
+                    </>
+                  ) : null}
+                </p>
+              </div>
+            ))}
+          </div>
+          {g.more ? (
+            <p className="mt-3 text-sm text-slate-600">
+              {g.more.map((m, i) => (
+                <span key={m.href}>
+                  {i > 0 ? " · " : null}
+                  <Link href={m.href} className="text-[var(--jf-primary)] underline underline-offset-2">
+                    {m.label}
+                  </Link>
+                </span>
+              ))}
+            </p>
+          ) : null}
+        </section>
+      ))}
+
+      <h2 className="mt-12 text-xl font-semibold text-slate-900">
+        <T k="docs.faqTitle" />
+      </h2>
       <div className="mt-4 space-y-4">
-        <section>
-          <h3 className="text-sm font-semibold text-slate-900">How do I connect an AI agent?</h3>
-          <p className="mt-1 text-sm leading-relaxed text-slate-600">
-            Point any MCP client at the server URL <code className="rounded bg-slate-100 px-1">https://mcp.jomform.com/mcp</code>.
-            It registers itself via OAuth 2.1 — no API keys needed. See the MCP tool reference for
-            what agents can do.
-          </p>
-        </section>
-        <section>
-          <h3 className="text-sm font-semibold text-slate-900">What are the placeholders in emails?</h3>
-          <p className="mt-1 text-sm leading-relaxed text-slate-600">
-            Placeholders like <code className="rounded bg-slate-100 px-1">{"{{ref_code}}"}</code> and{" "}
-            <code className="rounded bg-slate-100 px-1">{"{{amount}}"}</code> are replaced with real
-            values when an email is sent. See the placeholders reference for the full list.
-          </p>
-        </section>
-        <section>
-          <h3 className="text-sm font-semibold text-slate-900">Can I use my own domain?</h3>
-          <p className="mt-1 text-sm leading-relaxed text-slate-600">
-            Yes. Add your domain in Settings → Domains, point a CNAME to custom.jomform.com, and
-            verify. Your forms then go live on your domain automatically.
-          </p>
-        </section>
+        {FAQ.map((f) => (
+          <section key={f.q}>
+            <h3 className="text-sm font-semibold text-slate-900">{f.q}</h3>
+            <p className="mt-1 text-sm leading-relaxed text-slate-600">{f.a}</p>
+          </section>
+        ))}
       </div>
     </div>
   );

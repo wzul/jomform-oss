@@ -1515,9 +1515,10 @@ export default function Builder() {
               </span>
               {/* Docs parity (AGENTS.md rule 4): the "?" beside the field that
                   raises the question deep-links the publish section of the
-                  knowledge base. */}
+                  knowledge base. t_d768342e: the publish walk-through now lives
+                  on the customize guide, so the link follows it there. */}
               <a
-                href="/docs#publishing"
+                href="/docs/customize#publishing"
                 className="shrink-0 text-xs font-medium text-[var(--jf-primary)] underline"
               >
                 ?
