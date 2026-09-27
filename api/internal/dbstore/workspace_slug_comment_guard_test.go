@@ -47,6 +47,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -197,40 +198,69 @@ func scanAPITreeFor(t *testing.T, needle string) map[string]bool {
 // than a wish: the caller has to exist, in that file, and the two write paths
 // must not quietly acquire the validator in a way that leaves the comment
 // describing the wrong architecture.
+//
+// The scan WALKS the whole api/ tree rather than reading a fixed list, and the
+// assertion is a SET of paths rather than a count, for the same reason as the
+// shape-rule test above: a caller in a file the list never named is exactly the
+// drift this pins, and a set reports it by path. A fixed four-file list was the
+// original defect here — a fifth file calling the validator left this test green
+// while its failure message claimed a repo-wide measurement.
+//
+// WHAT IT EXPECTS AFTER PR 691 LANDS. 691 collapses the inline copies into this
+// one rule, so a tree carrying 691 has MORE callers rather than a different
+// architecture: workspace_slug.go grows the definition
+// `func ValidateWorkspaceSlug(slug string) (string, error)` (a different arity
+// from today's `func ValidateWorkspaceSlug(slug string) error`) and
+// httpapi/rest_workspaces.go + mcpsrv/workspaces.go start delegating to it. On
+// THAT tree this test is expected to be RED by path against the set below,
+// because workspace_slug.go's comment is rewritten in the same PR — the pin has
+// to be re-cut with it. What must NOT happen is a red for the wrong reason: a
+// `func` signature is subtracted below whatever its arity, so a second
+// definition adds no caller; only a real call does.
 func TestValidateWorkspaceSlugHasExactlyOneProductionCaller(t *testing.T) {
-	// Every production file that names the validator, whether as a definition,
-	// a call, or prose about it. workspace.go is here because it holds the one
-	// call site the comment claims.
-	scanned := []string{
-		"internal/dbstore/workspace_slug.go",
-		"internal/dbstore/workspace.go",
-		"internal/httpapi/rest_workspaces.go",
-		"internal/mcpsrv/workspaces.go",
-	}
+	// The definition's own signature is not a call site, and there can be more
+	// than one of them (PR 691 adds a second arity): a line that both starts
+	// with `func` and names the validator is a definition, whatever its
+	// signature. Everything else in a non-test file under api/ that spells
+	// `ValidateWorkspaceSlug(` is a call site.
+	defRE := regexp.MustCompile(`^func\s+ValidateWorkspaceSlug\b`)
+	callRE := regexp.MustCompile(`\bValidateWorkspaceSlug\s*\(`)
 
-	callRE := regexp.MustCompile(`(?m)^[^\n]*\bValidateWorkspaceSlug\s*\(`)
-	var callers []string
-	for _, rel := range scanned {
-		for _, line := range callRE.FindAllString(readAPIFile(t, rel), -1) {
-			trimmed := strings.TrimSpace(line)
-			// The definition's own signature is not a call site...
-			if strings.Contains(line, "func ValidateWorkspaceSlug") {
+	callers := map[string]bool{}
+	definers := map[string]bool{}
+	for rel := range scanAPITreeFor(t, "ValidateWorkspaceSlug") {
+		for _, line := range strings.Split(readAPIFile(t, rel), "\n") {
+			if !callRE.MatchString(line) {
 				continue
 			}
-			// ...and neither is a doc-comment mention of the function.
-			if strings.HasPrefix(trimmed, "//") {
+			if defRE.MatchString(line) {
+				definers[rel] = true
 				continue
 			}
-			callers = append(callers, rel)
+			// A doc-comment mention of the function is not a call site.
+			if strings.HasPrefix(strings.TrimSpace(line), "//") {
+				continue
+			}
+			callers[rel] = true
 		}
 	}
 
+	// The validator's definition has to be here, or this guard is reading the
+	// wrong tree and would pass vacuously.
+	if !definers["internal/dbstore/workspace_slug.go"] {
+		t.Fatalf("no `func ValidateWorkspaceSlug` signature in internal/dbstore/workspace_slug.go — "+
+			"the guard's anchor moved and it would pass vacuously (definitions found in %v)",
+			sortedKeys(definers))
+	}
+
 	want := []string{"internal/dbstore/workspace.go"}
-	if len(callers) != 1 || callers[0] != want[0] {
+	got := sortedKeys(callers)
+	if !slices.Equal(got, want) {
 		t.Fatalf("ValidateWorkspaceSlug's non-test call sites are %v, want exactly %v "+
-			"(ProvisionLegacyWorkspaceForOwner). workspace_slug.go's comment states that this validator has "+
-			"ONE production caller and that the REST/MCP write paths still carry their own copies — if the "+
-			"architecture changed, the comment must change with it", callers, want)
+			"(ProvisionLegacyWorkspaceForOwner). A path in that list other than workspace.go is a SECOND "+
+			"caller — whether it sits in a file the old fixed list never read or is an extra call inside "+
+			"one of them — and workspace_slug.go's comment states this validator has ONE production "+
+			"caller. If the architecture changed, the comment must change with it", got, want)
 	}
 
 	// The caller must really be the legacy provision's guard, not merely a call
@@ -241,6 +271,17 @@ func TestValidateWorkspaceSlugHasExactlyOneProductionCaller(t *testing.T) {
 			"ValidateWorkspaceSlug — the comment's whole justification (\"the legacy provision reuses the " +
 			"same validator so it cannot mint a slug the API would itself reject\") is then untrue")
 	}
+}
+
+// sortedKeys returns the members of a set as a sorted slice, so an assertion on
+// a set names them (in a stable order) rather than reporting a count.
+func sortedKeys(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // readAPIFile reads a file by its api/-relative path, failing (never skipping)
