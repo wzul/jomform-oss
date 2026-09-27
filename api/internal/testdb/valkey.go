@@ -79,6 +79,17 @@ func PrefixFor(t *testing.T) string {
 // sanitizeKeyPart reduces a test name to characters that are safe and readable
 // in a key: everything outside [A-Za-z0-9_-] becomes '_'.
 func sanitizeKeyPart(s string) string {
+	return SanitizeKeyPart(s)
+}
+
+// SanitizeKeyPart is sanitizeKeyPart, exported so a guard in ANOTHER package can
+// compare a key against the same form PrefixFor built it with.
+//
+// The two sides disagreed once: the key was sanitised and the guard's expected
+// name was the raw t.Name(), so a subtest (whose name carries a '/') red a
+// correct tree — a false red that reads as an isolation bug. Rather than let a
+// second copy of the rule live in the guard, the rule itself is reachable.
+func SanitizeKeyPart(s string) string {
 	var b strings.Builder
 	for _, r := range s {
 		switch {

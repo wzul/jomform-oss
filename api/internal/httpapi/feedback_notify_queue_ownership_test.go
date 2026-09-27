@@ -49,9 +49,16 @@ func feedbackQueueOwnershipProblem(q *emailqueue.Queue, pid int, name string) st
 		return fmt.Sprintf("ready key %q does not carry this process's namespace %q — a name two processes share "+
 			"is what concurrent runs collide on: one run's flush deletes the other's job mid-test", key, namespace)
 	}
-	if !strings.Contains(key, name+":") {
-		return fmt.Sprintf("ready key %q does not carry this TEST's own name %q — without it two tests in one "+
-			"binary share the queue the old flush-at-entry emptied between them", key, name)
+	// Compare against the SAME form the key was built with. testdb.PrefixFor
+	// sanitises the test name (everything outside [A-Za-z0-9_-] becomes '_'),
+	// and a subtest's name contains '/'; comparing against the raw t.Name() can
+	// never match, so a correct tree reds for any subtest and for a -run name
+	// carrying a slash. The rule is testdb's own, not a second copy of it.
+	sanitised := testdb.SanitizeKeyPart(name)
+	if !strings.Contains(key, sanitised+":") {
+		return fmt.Sprintf("ready key %q does not carry this TEST's own name %q (key namespace component %q) — "+
+			"without it two tests in one binary share the queue the old flush-at-entry emptied between them",
+			key, name, sanitised)
 	}
 	return ""
 }
@@ -71,6 +78,30 @@ func TestFeedbackNotifyQueueKeysAreOwnedByThisProcess(t *testing.T) {
 	if why := feedbackQueueOwnershipProblem(own, pid, t.Name()); why != "" {
 		t.Errorf("the queue namespace the fixture builds is not owned by this process: %s", why)
 	}
+
+	// Regression pin: the same construction one level down, where the test name
+	// is a SUBTEST PATH. The key is sanitised by PrefixFor and a subtest's name
+	// carries a '/', so a check that compared against the raw t.Name() red a
+	// correct tree here — the failure read as a namespace bug, not as the
+	// sanitisation mismatch it was, and a wrapped body would have hit it. It is
+	// a subtest on purpose: a top-level name has no '/' and cannot catch this.
+	t.Run("subtest", func(t *testing.T) {
+		sub := emailqueue.NewQueueWithPrefix(nil, testdb.PrefixFor(t))
+		if why := feedbackQueueOwnershipProblem(sub, pid, t.Name()); why != "" {
+			t.Errorf("a subtest name is reported as not owned by this process: %s", why)
+		}
+		// The name leg must still see this SUBTEST as distinct from its parent:
+		// sanitising must not collapse the two names into one.
+		sanitised := testdb.SanitizeKeyPart(t.Name())
+		parent := testdb.SanitizeKeyPart("TestFeedbackNotifyQueueKeysAreOwnedByThisProcess")
+		if sanitised == parent {
+			t.Fatalf("the subtest's sanitised name %q equals its parent's %q — the per-test name is no longer "+
+				"distinguishing the two, which is the isolation the name exists to give", sanitised, parent)
+		}
+		if !strings.Contains(sub.ReadyKey(), sanitised+":") {
+			t.Errorf("ready key %q does not carry this subtest's sanitised name %q", sub.ReadyKey(), sanitised)
+		}
+	})
 
 	// Peer processes: same package, same Valkey, different pids. Our key must
 	// satisfy OUR pid's check and no peer's, which is what stops one run's flush
