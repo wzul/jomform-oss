@@ -1,6 +1,6 @@
 // MCP tool: generate_form (issue #256) — MCP parity for the AI form builder.
 // A merchant's agent can type a natural-language prompt and get a validated
-// JomForm form config (blocks + styling) drafted by deepseek-v4-flash:0731
+// JomForm form config (blocks + styling) drafted by deepseek-v4.1-flash
 // (Ollama Cloud, via the internal llm client). The output is validated
 // server-side against the known block types (formgen) before it is returned;
 // product prices always resolve from the product DB (server authority), never

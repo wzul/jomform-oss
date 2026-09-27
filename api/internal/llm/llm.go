@@ -20,7 +20,15 @@ import (
 
 // DefaultModel is the Ollama Cloud model used for legal-page generation
 // (same model family as the chatwoot-ai decision).
-const DefaultModel = "deepseek-v4-flash:0731"
+//
+// It is the fallback for every AI surface when LLM_MODEL is unset, so it must
+// name a model the provider still SERVES. The id that lived here before was a
+// retired one: the provider stopped serving it on 2026-09-25 and answers HTTP
+// 410 Gone, so with an unset LLM_MODEL the whole feature set (assistant, builder
+// AI draft, legal draft) failed on every call while the UI still offered it.
+// TestDefaultModelIsNotRetired in model_default_guard_test.go fails by name if
+// this constant is ever pointed back at a retired id.
+const DefaultModel = "deepseek-v4.1-flash"
 
 // ErrCredential is returned when the provider REJECTS the API key (HTTP 401 or
 // 403). It exists so a caller can tell "this deployment has no working model

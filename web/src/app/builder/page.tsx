@@ -870,7 +870,7 @@ export default function Builder() {
   }
 
   /* Issue #256: AI form builder — send the prompt to the backend, which calls
-     deepseek-v4-flash:0731 to draft a validated form config, then load the
+     deepseek-v4.1-flash to draft a validated form config, then load the
      generated blocks into the canvas for the user to review/edit before
      saving. The backend validates the output (no bad fields, no price
      tampering) and rate-limits the endpoint. */
@@ -1583,7 +1583,7 @@ export default function Builder() {
              Add tab, desktop: always visible. Tap = add (already exists). */}
         <aside className={`border-r border-[var(--jf-border)] p-4 ${mobileTab === "add" ? "block" : "hidden"} md:block`}>
           {/* Issue #256: AI form builder — prompt input. The backend calls
-              deepseek-v4-flash:0731 to draft a validated form config. Kept in
+              deepseek-v4.1-flash to draft a validated form config. Kept in
               template mode (controls.aiGenerate): it only drafts blocks into
               the canvas, which is exactly what a template is made of. */}
           {controls.aiGenerate && (

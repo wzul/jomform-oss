@@ -93,7 +93,7 @@ services:
       # all, and the in-app assistant reports itself unavailable (GET
       # /v1/rest/chat → available:false) instead of offering a box whose every
       # message fails. LLM_BASE_URL / LLM_MODEL override the endpoint and model
-      # (defaults: https://ollama.com/v1, deepseek-v4-flash:0731).
+      # (defaults: https://ollama.com/v1, deepseek-v4.1-flash).
       OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
       LLM_BASE_URL: ${LLM_BASE_URL:-}
       LLM_MODEL: ${LLM_MODEL:-}

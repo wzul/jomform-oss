@@ -1,5 +1,5 @@
 // Per-workspace hosted legal pages (issue #184): privacy / terms / refund.
-// The merchant can auto-generate a draft via the LLM (deepseek-v4-flash) with
+// The merchant can auto-generate a draft via the LLM (deepseek-v4.1-flash) with
 // a prompt template filled with their business details, preview/edit it, then
 // save. They can also write their own manually. The stored content is rendered
 // on the public pages ({workspace}.jomform.com/privacy, /terms, /refund).

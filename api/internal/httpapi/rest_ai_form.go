@@ -1,5 +1,5 @@
 // AI form builder (issue #256): the merchant types a natural-language prompt
-// in the builder UI; the backend calls deepseek-v4-flash:0731 (Ollama Cloud,
+// in the builder UI; the backend calls deepseek-v4.1-flash (Ollama Cloud,
 // via the internal llm client) to draft a form config (blocks + styling),
 // validates it against the known block types, and returns it for the user to
 // review/edit before saving. The LLM output is treated as untrusted — it is
