@@ -346,6 +346,28 @@ func TestUnconfiguredSESMagicLinkRequestStopsAtTheOuterGuard(t *testing.T) {
 		t.Fatalf("verify the account: %v", err)
 	}
 
+	// THE THIRD FIXTURE HALF, and the only one the two guards above do not
+	// cover: this user must actually be ON the verified branch. Left unverified
+	// the handler takes the signup branch (:267) instead, whose
+	// GenerateForEmail stores the value "email:<addr>" — a value the count below
+	// cannot match, because own() is scoped (deliberately) to the token's stored
+	// value being THIS user's id. The broken tree would then mint a token the
+	// count cannot see, and the test would declare the guard held while it did
+	// not. Asserted, not commented: if an edit drops or reorders SetVerified,
+	// this fails and names the fixture instead of silently disarming the test.
+	reloaded, err := users.ByEmail(ctx, email)
+	if err != nil || reloaded == nil {
+		t.Fatalf("re-read the account after SetVerified: err=%v user=%v", err, reloaded)
+	}
+	if !reloaded.Verified {
+		t.Fatalf("test fixture is wrong: %s is not verified after SetVerified (%v), so the request "+
+			"would take the signup branch at auth_recovery.go:267 and mint a token stored as "+
+			"\"email:<addr>\". That value never matches the count below (which is scoped to the token's "+
+			"stored value being this user's id), so the test would PASS against the broken guard. The "+
+			"account must be on the existing-verified-user branch (:239) for this test to mean anything.",
+			email, reloaded.Verified)
+	}
+
 	// Tokens already stored for THIS user. The test database is shared with
 	// every concurrent run, so the count is scoped by the token's stored VALUE
 	// (this user's id) rather than by the jf:magic: prefix alone — a prefix-wide
