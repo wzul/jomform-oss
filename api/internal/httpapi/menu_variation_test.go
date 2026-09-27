@@ -219,9 +219,19 @@ func TestMenuVariationSimpleMenuProductUnchanged(t *testing.T) {
 			t.Errorf("simple item lost its #492 add contract (%q missing)", want)
 		}
 	}
-	// ...and the plain add call is still present for a non-variable item.
-	if !strings.Contains(body, "addItem(id,el.getAttribute('data-name'),el.getAttribute('data-price'));") {
-		t.Error("the simple-item add call was removed by the variation change")
+	// ...and the simple item still reaches an add path of its own — NOT the
+	// variable one (a simple dish must never be routed through a selector
+	// lookup), and NOT a bare addItem of the served attributes either: the
+	// served markup is render-time, and a sold-out simple dish is served the
+	// same button as an in-stock one, so the tap has to ask the live state first
+	// (t_00b6a9cb). The call is asserted by SHAPE, not by the old literal: the
+	// guard that pins the behaviour is in menu_live_stock_test.go, and a
+	// string-equality check here would only pin spelling.
+	if !strings.Contains(body, "addIfSimpleBuyable(id,el);") {
+		t.Error("a simple item is no longer routed through its own live-stock-guarded add path")
+	}
+	if strings.Contains(body, "addIfBuyable(el,") {
+		t.Error("the tap routes a simple item through the VARIABLE add path, which needs a selector")
 	}
 }
 

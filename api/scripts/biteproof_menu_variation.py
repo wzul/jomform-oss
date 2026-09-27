@@ -48,13 +48,16 @@ CASES = [
         "card tap adds the base price without a chosen variant "
         "(the selector is never consulted)",
         MENU,
+        # The block PR 770 rewrote: the tap's variable branch now delegates to
+        # addIfBuyable, which carries the no-choice refusal. The old literal
+        # (the pre-770 branch) matches nothing any more, so this case could not
+        # run at all. What it means to sabotage is unchanged: the tap stops
+        # consulting the tapped item's own selector and adds the base price.
         "    var sel=varOf(el);\n    if(sel){\n"
         "      // Variable item: the card tap cannot decide a variant. If the buyer has\n"
         "      // already picked one, top up that line; otherwise prompt for the choice.\n"
         "      if(!sel.value){ flagPick(sel); return; }\n"
-        "      if(unbuyable(sel)){ flagPick(sel,attr('data-lbl-soldout')); return; }\n"
-        "      var o=sel.options[sel.selectedIndex];\n"
-        "      addItem(id,el.getAttribute('data-name'),o.getAttribute('data-price'),sel.value,o.getAttribute('data-vname'));\n"
+        "      addIfBuyable(sel,el);\n"
         "      return;\n"
         "    }\n",
         "",

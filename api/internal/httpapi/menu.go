@@ -983,6 +983,45 @@ document.querySelectorAll('img[data-base]').forEach(function(im){
       clearPick(sel);
     });
   }
+  // addIfSimpleBuyable is the ONE add path for a SIMPLE (non-variant) item —
+  // the sibling of addIfBuyable, reached from the card/row tap when the item has
+  // no selector.
+  //
+  // t_00b6a9cb: this shape had no guard at all. The tap added whatever the
+  // served markup carried, and that markup is a RENDER-TIME value — a sold-out
+  // simple dish is served the SAME button as an in-stock one (no disabled, no
+  // marker), so the tap put an unbuyable line in the basket and the buyer only
+  // found out at checkout (409 "stok habis"). The variable shape was guarded by
+  // addIfBuyable; the simple shape was not.
+  //
+  // No server change is needed for it: the live-stock read already reports a
+  // simple product's OWN row with variation_id:"" (menuLiveStock), and
+  // soldOutLive(id,'') keys on exactly that — the same answer the variable path
+  // consumes. So the simple tap asks the live state before it records a line,
+  // exactly the way the variable tap does, and the rendered markup stops being
+  // the only thing consulted.
+  function addIfSimpleBuyable(id,host){
+    if(!id||!host) return;
+    if(soldOutLive(id,'')){ announceSoldOut(host); return; }
+    loadLiveStock(function(){
+      if(soldOutLive(id,'')){ announceSoldOut(host); return; }
+      addItem(id,host.getAttribute('data-name'),host.getAttribute('data-price'));
+    });
+  }
+  // announceSoldOut tells the buyer why a tap did nothing. A variable item can
+  // flag its own selector (flagPick); a SIMPLE item has no selector, so its
+  // refusal uses the page's other announcement surface — the basket sheet's
+  // error line, the same element dropSoldOutLines and the checkout refusal
+  // write to — with the localised sold-out label and the dish's name. The sheet
+  // is opened FIRST, because openSheet clears errEl for a fresh sheet and would
+  // otherwise wipe the message just written (the same order dropSoldOutLines
+  // documents).
+  function announceSoldOut(host){
+    var name=host?host.getAttribute('data-name'):'';
+    openSheet();
+    errEl.textContent=attr('data-lbl-soldout')+(name?': '+name:'');
+    errEl.hidden=false;
+  }
   // soldOutLive answers whether the server's latest live-stock payload reports
   // this product+variant sold out. A missing entry answers false, so this can
   // only ever ADD a refusal — it can never make something buyable that the
@@ -1091,7 +1130,11 @@ document.querySelectorAll('img[data-base]').forEach(function(im){
       addIfBuyable(sel,el);
       return;
     }
-    addItem(id,el.getAttribute('data-name'),el.getAttribute('data-price'));
+    // Simple item: no variant to choose, so the tap adds it — but through the
+    // same live-stock guard the variable path uses (t_00b6a9cb). A sold-out
+    // simple dish is served the SAME button as an in-stock one, so the markup
+    // cannot be the guard here; the tap asks the server instead.
+    addIfSimpleBuyable(id,el);
   });
   // Picking a variant adds it immediately (matching the tap-to-add feel of a
   // simple item) and clears any pending prompt.

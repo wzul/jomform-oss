@@ -60,6 +60,10 @@ const CART: { title: string; body: string }[] = [
     body: "Checkout is part of the same basket panel: the diner's name and email are both mandatory (CHIP needs a name and an email to create a purchase), plus any extra fields you attached through order_form_slug. Submitting posts the basket to the form's own order route and redirects the diner to the CHIP checkout page to pay. If the order cannot be placed, an error is shown and the basket is kept so the diner can retry — nothing is lost.",
   },
   {
+    title: "A sold-out dish cannot be added, and a stale basket line is dropped",
+    body: "Stock is re-read live, not frozen when the page was served. A menu page stays open while a diner reads it, so a dish can sell out in between: tapping it then adds nothing and tells the diner the dish is sold out (naming it) rather than letting them carry it to checkout. That holds for a dish with variations and for a plain one — a sold-out plain dish is served the same button as an in-stock one, so the tap asks the server before it adds. A basket line whose dish sold out while the basket sat there is dropped when the page is opened again, with a notice naming the dish, so nothing is carried to checkout only to be rejected there. If the live check cannot answer, the page keeps the state it was served with, so the menu still works when the connection does not.",
+  },
+  {
     title: "What lands on the sale",
     body: "The order becomes a normal JomForm sale: one line per basket item (product, quantity, live price), the buyer's name and email, the total, and the extra fields you asked for. A QR order also carries its table number, so the merchant sees which table to serve; and if the diner arrived through an affiliate link (?aff=CODE), the affiliate code is stored on the sale for commission.",
   },

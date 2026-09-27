@@ -357,6 +357,96 @@ CASES = [
         ["TestMenuStockRouteRefusesADraftForm"],
         1,
     ),
+    # ---- t_00b6a9cb: the SIMPLE (non-variant) dish tap. The tap had two
+    # ---- branches and only the variable one was guarded, so a sold-out simple
+    # ---- dish — which is served the SAME button as an in-stock one, no
+    # ---- disabled attribute and no marker — went into the basket with no read
+    # ---- at all. Both halves of that guard are sabotaged here: the read it
+    # ---- defers the add on, and the refusal it announces when the read says
+    # ---- sold out.
+    (
+        "the simple dish tap stops asking the live state before it adds (it "
+        "adds whatever the render-time markup carried — the defect)",
+        MENU,
+        "    // Simple item: no variant to choose, so the tap adds it — but through the\n"
+        "    // same live-stock guard the variable path uses (t_00b6a9cb). A sold-out\n"
+        "    // simple dish is served the SAME button as an in-stock one, so the markup\n"
+        "    // cannot be the guard here; the tap asks the server instead.\n"
+        "    addIfSimpleBuyable(id,el);",
+        "    addItem(id,el.getAttribute('data-name'),el.getAttribute('data-price'));",
+        ["TestMenuLiveStockRefusesASoldOutSimpleDishTap",
+         "TestMenuLiveStockInStockSimpleDishTapStillAdds"],
+        1,
+    ),
+    (
+        "the simple dish tap stops deferring the add on the live read (it only "
+        "consults the state the page already had, so a dish that sold out after "
+        "render is still added)",
+        MENU,
+        "    if(soldOutLive(id,'')){ announceSoldOut(host); return; }\n"
+        "    loadLiveStock(function(){\n"
+        "      if(soldOutLive(id,'')){ announceSoldOut(host); return; }\n"
+        "      addItem(id,host.getAttribute('data-name'),host.getAttribute('data-price'));\n"
+        "    });",
+        "    if(soldOutLive(id,'')){ announceSoldOut(host); return; }\n"
+        "    addItem(id,host.getAttribute('data-name'),host.getAttribute('data-price'));",
+        ["TestMenuLiveStockRefusesASoldOutSimpleDishTap"],
+        1,
+    ),
+    (
+        "the simple dish refusal announces nothing (the buyer taps a dish and "
+        "is told nothing about why it could not be added)",
+        MENU,
+        "    openSheet();\n"
+        "    errEl.textContent=attr('data-lbl-soldout')+(name?': '+name:'');\n"
+        "    errEl.hidden=false;",
+        "    if(name){}",
+        ["TestMenuLiveStockRefusesASoldOutSimpleDishTap"],
+        1,
+    ),
+    (
+        "the simple dish refusal drops the dish's name (the buyer is told "
+        "something sold out but not which dish the tap was about)",
+        MENU,
+        "    errEl.textContent=attr('data-lbl-soldout')+(name?': '+name:'');",
+        "    errEl.textContent=attr('data-lbl-soldout');",
+        ["TestMenuLiveStockRefusesASoldOutSimpleDishTap"],
+        1,
+    ),
+    (
+        "the reload basket re-check stops dropping a SIMPLE line (only a "
+        "variant line is re-checked, so a stranded simple line is carried to "
+        "checkout)",
+        MENU,
+        "      if(soldOutLive(cart[i].id,cart[i].vid)){ dropped.push(cart[i]); continue; }",
+        "      if(cart[i].vid&&soldOutLive(cart[i].id,cart[i].vid)){ dropped.push(cart[i]); continue; }",
+        ["TestMenuReloadDropsASimpleBasketLineThatWentSoldOut"],
+        1,
+    ),
+    (
+        "the simple dish refusal fires before the read answers (every simple "
+        "tap is refused on the state the page already had, so the menu stops "
+        "selling and an empty read refuses everything)",
+        MENU,
+        "    if(soldOutLive(id,'')){ announceSoldOut(host); return; }\n"
+        "    loadLiveStock(function(){\n"
+        "      if(soldOutLive(id,'')){ announceSoldOut(host); return; }",
+        "    if(true){ announceSoldOut(host); return; }\n"
+        "    loadLiveStock(function(){\n"
+        "      if(true){ announceSoldOut(host); return; }",
+        ["TestMenuSimpleDishTapStillAddsWhenTheLiveReadIsEmpty",
+         "TestMenuLiveStockInStockSimpleDishTapStillAdds"],
+        1,
+    ),
+    (
+        "the simple tap takes the VARIABLE add path (which needs a selector the "
+        "simple dish does not have, so a simple dish becomes unaddable)",
+        MENU,
+        "    addIfSimpleBuyable(id,el);",
+        "    addIfBuyable(varOf(el),el);",
+        ["TestMenuLiveStockInStockSimpleDishTapStillAdds"],
+        1,
+    ),
 ]
 
 
