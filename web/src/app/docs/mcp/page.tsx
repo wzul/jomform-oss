@@ -6,9 +6,23 @@ export const metadata: Metadata = {
   alternates: { canonical: "https://jomform.com/docs/mcp" },
 };
 
-// Auto-generated from api/internal/mcpsrv/tools.go (issue #395).
-// Keep in sync with the MCP tool registry when tools are added or changed.
-const TOOL_GROUPS: { group: string; tools: { name: string; desc: string }[] }[] = [
+// Mirrors api/internal/mcpsrv/tools.go (issue #395). It is NOT auto-generated:
+// this list is edited by hand, which is exactly how it fell ten tools behind the
+// registry. Keep it in step when tools are added or changed — and
+// src/lib/mcpToolInventory.test.ts fails the build if you forget.
+//
+// Every row here must be a REGISTERED tool, and this page lists the registry in
+// full: both directions are enforced by src/lib/mcpToolInventory.test.ts, which
+// derives both sets and fails on either kind of drift. A group may carry a `note`
+// for prose that is not a tool; a note is NOT a tool row (the old
+// "Keselamatan sesi" group's em-dash row inflated the rendered count and listed
+// nothing).
+//
+// NOTE for anyone editing these comments: src/lib/docsToolClaims.test.ts scans
+// this file for a name presented as a tool, so an identifier in brackets a few
+// words after the word "tool"/"tools" reads as a phantom claim. Keep card ids and
+// issue references out of a bracketed aside right after that word.
+const TOOL_GROUPS: { group: string; note?: string; tools: { name: string; desc: string }[] }[] = [
   {
     group: "Forms",
     tools: [
@@ -142,6 +156,18 @@ const TOOL_GROUPS: { group: string; tools: { name: string; desc: string }[] }[] 
     ],
   },
   {
+    // t_cde2e73a: the affiliate tools (#444) had no row of their own on this
+    // page, so the reference could not be "kept in sync with the tool
+    // registry" while claiming to be.
+    group: "Affiliates",
+    tools: [
+      { name: "create_affiliate", desc: "Cipta affiliate untuk workspace: kod rujukan (?aff=CODE), nama, emel, kadar komisen. Jualan yang dibawa affiliate dikreditkan kepadanya." },
+      { name: "list_affiliates", desc: "Senarai semua affiliate dalam satu workspace \u2014 id, kod, nama, komisen, URL rujukan." },
+      { name: "get_affiliate_sales", desc: "Senarai jualan yang dibawa oleh satu affiliate (read-only, skop workspace)." },
+      { name: "set_affiliate_commission", desc: "Set kadar komisen affiliate (cth: 10 = 10%)." },
+    ],
+  },
+  {
     group: "Workspaces & storefronts",
     tools: [
       { name: "list_workspaces", desc: "Senarai semua workspace (storefront) anda \u2014 id, nama, slug dan URL." },
@@ -192,10 +218,27 @@ const TOOL_GROUPS: { group: string; tools: { name: string; desc: string }[] }[] 
     ],
   },
   {
-    group: "Keselamatan sesi",
+    // t_cde2e73a: the feedback tools (#639) are user-scoped and were documented
+    // only in /docs/feedback. The reference claimed to be the complete registry,
+    // so they belong here too. Kept beside Profile & security: both are USER
+    // scoped, not workspace scoped.
+    group: "Feedback",
     tools: [
-      { name: "—", desc: "Sesi log masuk melalui pautan emel (magic link) ditandakan magic. Jika 2FA aktif, tindakan sensitif (tukar kata laluan, nyahaktif 2FA, tambah passkey) memerlukan kod 2FA baharu. Pengguna tanpa 2FA atau sesi log masuk biasa tidak terjejas." },
+      { name: "list_feedback", desc: "Senarai thread maklum balas anda sendiri (terbaru dahulu), boleh tapis status (open|in_progress|resolved|closed) dan berhalaman (page/limit). Skop ialah PENGGUNA yang disahkan, bukan workspace \u2014 maklum balas bukan data akaun. Super-admin melihat SEMUA thread (triage). Read-only." },
+      { name: "get_feedback_thread", desc: "Baca satu thread maklum balas beserta semua mesejnya (author_kind: user|admin), terawal dahulu. Thread milik pengguna lain menjawab 'tidak dijumpai' \u2014 sama seperti id yang tidak wujud. Super-admin boleh membaca mana-mana thread. Read-only." },
+      { name: "reply_feedback", desc: "Balas dalam thread maklum balas. Penulis ditentukan oleh pemanggil: super-admin membalas sebagai admin (dan thread 'open' bergerak ke in_progress), pengguna lain membalas sebagai pemilik thread. Body minimum 10 aksara. Skop pengguna \u2014 tidak boleh membalas thread orang lain." },
+      { name: "set_feedback_status", desc: "Tukar status thread maklum balas (open|in_progress|resolved|closed). Keputusan triage \u2014 super-admin sahaja; diaudit. Status adalah per-thread, bukan per-mesej." },
+      { name: "retry_feedback_notify", desc: "Hantar semula notifikasi emel yang GAGAL untuk satu thread maklum balas (medan notify_failed_at pada thread). Ini laluan pemulihan untuk kegagalan penghantaran: emel yang tidak sempat masuk baris gilir ditandakan pada thread supaya kelihatan, dan tool ini cuba semula melalui saluran yang sama. Keputusan: queued|sent|failed|none ('none' bermaksud tiada kegagalan direkodkan). Super-admin sahaja; diaudit." },
+      { name: "submit_feedback", desc: "Failkan maklum balas atau permintaan ciri baharu daripada perbualan chat. Sama seperti menghantar di halaman /feedback: disimpan sebagai thread yang boleh anda baca dan balas, dan pasukan JomForm dimaklumkan. Body minimum 10 aksara, maksimum 5000; maksimum 10 penghantaran sehari bagi setiap pengguna. Memerlukan token PENGGUNA (OAuth/sesi) dan skop readwrite \u2014 API key ditolak kerana maklum balas ialah data peribadi pengguna." },
     ],
+  },
+  {
+    // The magic-link / step-up rule is prose, not a tool: this tree registers no
+    // tool for it, so it is a group NOTE. It shipped as a `{ name: "—" }` row,
+    // which the rendered count counted as a tool.
+    group: "Keselamatan sesi",
+    note: "Sesi log masuk melalui pautan emel (magic link) ditandakan magic. Jika 2FA aktif, tindakan sensitif (tukar kata laluan, nyahaktif 2FA, tambah passkey) memerlukan kod 2FA baharu. Pengguna tanpa 2FA atau sesi log masuk biasa tidak terjejas.",
+    tools: [],
   },
   {
     group: "Legal pages",
@@ -268,6 +311,7 @@ const TOOL_GROUPS: { group: string; tools: { name: string; desc: string }[] }[] 
       { name: "get_domain_tls_email", desc: "Baca emel ACME/Let's Encrypt per-domain untuk auto-TLS. Kosong = kembali ke emel akaun, kemudian ACME_EMAIL global. Read-only." },
       { name: "set_domain_tls_email", desc: "Tetapkan emel ACME/Let's Encrypt per-domain untuk auto-TLS. Kosong = kembali ke emel akaun, kemudian ACME_EMAIL global." },
       { name: "set_domain_tls_mode", desc: "Tetapkan mode TLS per-domain: auto (Let's Encrypt, lalai) atau custom (bawa sijil sendiri). Dalam mode custom, muat naik sijil dengan set_domain_custom_cert." },
+      { name: "set_domain_custom_cert", desc: "Muat naik sijil TLS sendiri (bring-your-own-cert) untuk domain: cert + key dalam format PEM. Domain disajikan sijil ini." },
     ],
   },
   {
@@ -318,17 +362,12 @@ const TOOL_GROUPS: { group: string; tools: { name: string; desc: string }[] }[] 
       { name: "admin_list_sales", desc: "Senarai jualan merentas SEMUA workspace, boleh tapis (date_from/date_to, workspace_id, status). Super-admin sahaja; read-only; diaudit." },
       { name: "admin_spam_queue", desc: "Senarai semua item spam (submission + jualan) merentas semua workspace. Super-admin sahaja; read-only; diaudit." },
       { name: "admin_email_deliveries", desc: "Status penghantaran emel merentas SEMUA workspace (delivered/bounce/complaint/open/click), boleh tapis sale_ref/event_type/form_id. Super-admin sahaja; read-only; diaudit." },
-      { name: "admin_dead_letter_events", desc: "Senarai peristiwa callback masuk yang di-park sebagai dead letter (issue #574): dedup_key, event_type, bilangan cubaan, sebab dan masa. Selepas #569 peristiwa yang tak boleh diproses di-park 'dead' dan berhenti dicuba — sebelum ini ia tidak kelihatan langsung. Super-admin sahaja; read-only; diaudit." },
-      { name: "admin_requeue_dead_letter_event", desc: "Hidupkan semula peristiwa dead letter supaya sweep replay mencubanya lagi (issue #574), selepas punca dibetulkan. Kiraan cubaan di-reset supaya ia tidak di-park semula oleh sweep yang sama. Super-admin sahaja; diaudit." },
-      { name: "admin_dead_letter_events", desc: "Versi dashboard: GET /v1/admin/dead-letters (issue #579). Senarai sama seperti tool MCP, dipaparkan di halaman /admin dengan butang requeue setiap baris — supaya operator nampak callback yang gagal tanpa perlu klien MCP." },
-      { name: "admin_requeue_dead_letter_event", desc: "Versi dashboard: POST /v1/admin/dead-letters/requeue (issue #579). Tindakan requeue yang sama dari halaman /admin." },
+      { name: "admin_dead_letter_events", desc: "Senarai peristiwa callback masuk yang di-park sebagai dead letter (issue #574): dedup_key, event_type, bilangan cubaan, sebab dan masa. Selepas #569 peristiwa yang tak boleh diproses di-park 'dead' dan berhenti dicuba — sebelum ini ia tidak kelihatan langsung. Super-admin sahaja; read-only; diaudit. Di halaman /admin senarai yang sama dipaparkan dengan butang requeue setiap baris (GET /v1/admin/dead-letters, issue #579), supaya operator nampak callback yang gagal tanpa perlu klien MCP." },
+      { name: "admin_requeue_dead_letter_event", desc: "Hidupkan semula peristiwa dead letter supaya sweep replay mencubanya lagi (issue #574), selepas punca dibetulkan. Kiraan cubaan di-reset supaya ia tidak di-park semula oleh sweep yang sama. Super-admin sahaja; diaudit. Dari halaman /admin tindakan yang sama boleh dijalankan (POST /v1/admin/dead-letters/requeue, issue #579)." },
       { name: "admin_system_health", desc: "Kesihatan sistem: uptime, bilangan ralat MCP terkini (24j), kedalaman queue emel. Super-admin sahaja; read-only; diaudit." },
-      { name: "admin_list_suppressions", desc: "Senarai alamat yang disekat daripada dihantar emel (issue #601): emel, sebab (hard_bounce|complaint|manual), sumber, nota, siapa tambah dan bila. Boleh cari (q) dan berhalaman (page/limit). Super-admin sahaja; read-only; diaudit." },
-      { name: "admin_add_suppression", desc: "Tambah alamat ke senarai sekatan secara manual supaya tiada emel dihantar kepadanya (issue #601). reason: hard_bounce|complaint|manual (lalai manual), note pilihan. Idempotent. Super-admin sahaja; diaudit." },
-      { name: "admin_remove_suppression", desc: "Buang alamat dari senarai sekatan supaya penghantaran emel bermula semula (issue #601) \u2014 untuk kes positif palsu. Super-admin sahaja; diaudit." },
-      { name: "admin_list_suppressions", desc: "Versi dashboard: GET /v1/admin/suppressions (issue #601) dengan kotak carian dan pager, di halaman /admin." },
-      { name: "admin_add_suppression", desc: "Versi dashboard: POST /v1/admin/suppressions (issue #601) \u2014 borang tambah manual pada halaman /admin." },
-      { name: "admin_remove_suppression", desc: "Versi dashboard: DELETE /v1/admin/suppressions/{email} (issue #601) \u2014 butang buang dengan pengesahan pada halaman /admin." },
+      { name: "admin_list_suppressions", desc: "Senarai alamat yang disekat daripada dihantar emel (issue #601): emel, sebab (hard_bounce|complaint|manual), sumber, nota, siapa tambah dan bila. Boleh cari (q) dan berhalaman (page/limit). Super-admin sahaja; read-only; diaudit. Di halaman /admin senarai yang sama dipaparkan dengan kotak carian dan pager (GET /v1/admin/suppressions, issue #601)." },
+      { name: "admin_add_suppression", desc: "Tambah alamat ke senarai sekatan secara manual supaya tiada emel dihantar kepadanya (issue #601). reason: hard_bounce|complaint|manual (lalai manual), note pilihan. Idempotent. Super-admin sahaja; diaudit. Dari halaman /admin ia ditambah melalui borang manual (POST /v1/admin/suppressions, issue #601)." },
+      { name: "admin_remove_suppression", desc: "Buang alamat dari senarai sekatan supaya penghantaran emel bermula semula (issue #601) \u2014 untuk kes positif palsu. Super-admin sahaja; diaudit. Dari halaman /admin ia dibuang dengan butang + pengesahan (DELETE /v1/admin/suppressions/{email}, issue #601)." },
     ],
   },
 ];
@@ -338,10 +377,10 @@ export default function McpReferencePage() {
     <div className="max-w-3xl">
       <h1 className="text-3xl font-bold tracking-tight text-slate-900">MCP tool reference</h1>
       <p className="mt-3 text-sm leading-relaxed text-slate-600">
-        Every tool JomForm exposes to connected AI agents via the Model Context Protocol. Connect any MCP client to <code className="rounded bg-slate-100 px-1">https://mcp.jomform.com/mcp</code> and agents discover these tools automatically. This reference is kept in sync with the tool registry.
+        Every tool JomForm exposes to connected AI agents via the Model Context Protocol. Connect any MCP client to <code className="rounded bg-slate-100 px-1">https://mcp.jomform.com/mcp</code> and agents discover these tools automatically. This page lists the whole registry — the <code className="rounded bg-slate-100 px-1">api/internal/mcpsrv</code> package at this release — and a guard fails the build if the two drift apart in either direction.
       </p>
       <p className="mt-2 text-sm text-[var(--jf-muted)]">
-        {TOOL_GROUPS.reduce((n, g) => n + g.tools.length, 0)} tools across {TOOL_GROUPS.length} categories.
+        {TOOL_GROUPS.reduce((n, g) => n + g.tools.length, 0)} tools across {TOOL_GROUPS.filter((g) => g.tools.length > 0).length} categories.
       </p>
 
       {/* Issue #509: the OAuth discovery surface. Every MCP client is required
@@ -497,6 +536,9 @@ export default function McpReferencePage() {
       {TOOL_GROUPS.map((g) => (
         <section key={g.group} className="mt-8">
           <h2 className="text-lg font-semibold text-slate-900">{g.group}</h2>
+          {g.note && (
+            <p className="mt-2 text-sm leading-relaxed text-slate-600">{g.note}</p>
+          )}
           <div className="mt-3 space-y-3">
             {g.tools.map((t) => (
               <div key={t.name} className="rounded-lg border border-slate-200 p-4">
