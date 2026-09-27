@@ -332,6 +332,174 @@ func TestDocsEmbedPageDoesNotClaimThePlainURLIsFramable(t *testing.T) {
 	}
 }
 
+// normalizedDocsText collapses the JSX source into the sentences a READER sees:
+// line breaks and the `{" "}` splice markers are folded to single spaces, and
+// the HTML entities used for apostrophes/quotes are decoded. Without this a
+// guard matches one exact source LAYOUT, so a paragraph reflow (or `&apos;`
+// becoming `&#39;`) silently disarms it while the rendered claim is unchanged.
+func normalizedDocsText(s string) string {
+	s = strings.ReplaceAll(s, `{" "}`, " ")
+	s = strings.NewReplacer("&apos;", "'", "&#39;", "'", "&quot;", `"`, "&amp;", "&").Replace(s)
+	return strings.Join(strings.Fields(s), " ")
+}
+
+// TestDocsEmbedPageDoesNotClaimTheGateReappears pins the third-party-cookie
+// sentence, because it stated the INVERSE of what the feature does.
+//
+// THE DEFECT. The sentence before it explains that the unlock cookie is
+// `Partitioned` (CHIPS), which is why an unlock on one merchant's page does not
+// unlock the form anywhere else. The sentence that followed then told the
+// merchant that a visitor whose browser "blocks third-party cookies outright
+// ... will see the password gate again on the next load" — contradicting the
+// text directly above it. CHIPS is precisely the mechanism that keeps a
+// cross-site cookie WORKING when third-party cookies are blocked: Chrome's own
+// documentation says CHIPS, the Storage Access API and Related Website Sets are
+// "the only way to read and write cookies from cross-site contexts, such as
+// iframes, when third-party cookies are blocked"
+// (https://developer.chrome.com/docs/privacy-sandbox/chips/). So the page
+// described the feature as failing in exactly the case it was built for, and
+// QA measured the opposite on the branch this guard ships with (prod cookie
+// observed as `...; SameSite=None; Partitioned`, and the unlock survived a
+// fresh navigation on a third-party-cookie-blocking profile).
+//
+// WHAT IS PINNED. (a) The inverted claim is gone — matched on the CLAIM rather
+// than on one whitespace layout. (b) The true half is STATED, not merely
+// deleted: the paragraph must still say the unlock keeps working when a browser
+// blocks third-party cookies, and must still name `Partitioned` as the reason,
+// or a merchant cannot tell why embedding a private form is safe. What remains
+// as a caveat is a different claim — a browser that does not implement
+// partitioned cookies at all — and rewording it is fine as long as the guard is
+// updated with it; asserting the gate reappears on a cookie-blocking browser is
+// not.
+//
+// The cookie's behaviour is measured elsewhere: TestEmbeddedPrivateFormUnlockRoundTrip
+// asserts the unlock's Set-Cookie carries Partitioned. This guard is what stops
+// the COPY from drifting back into contradicting that behaviour.
+func TestDocsEmbedPageDoesNotClaimTheGateReappears(t *testing.T) {
+	page := normalizedDocsText(readFileString(t, docsEmbedPagePath(t)))
+
+	// (a) The inverted claim, in the shapes it can come back as.
+	for _, claim := range []string{
+		"see the password gate again",
+		"gate again on the next load",
+		"gate reappears",
+	} {
+		if strings.Contains(page, claim) {
+			t.Errorf("the docs still claim that a visitor whose browser blocks third-party "+
+				"cookies will %q (%q) — that is backwards and it contradicts the Partitioned "+
+				"explanation in the sentence before it. A partitioned (CHIPS) cookie is stored "+
+				"per top-level site, which is exactly what keeps the unlock working while "+
+				"third-party cookies are blocked; a browser that blocks them outright still "+
+				"stores this one. If a caveat is wanted, name the browsers that do not "+
+				"implement partitioned cookies at all rather than asserting the gate comes back",
+				claim, claim)
+		}
+	}
+
+	// (b) The true half must be stated. Deleting the sentence is the other way
+	// to lose it, and it leaves a merchant no way to know the embed survives a
+	// cookie-blocking browser.
+	if !strings.Contains(page, "Partitioned") {
+		t.Error("the docs no longer name the Partitioned (CHIPS) cookie — that attribute is why " +
+			"the unlock survives on the embedding page and why it is scoped to it; the paragraph " +
+			"must keep saying so")
+	}
+	if !strings.Contains(page, "keeps that unlock working when a visitor's browser blocks third-party cookies") {
+		t.Error("the docs no longer state that the unlock KEEPS WORKING when a browser blocks " +
+			"third-party cookies — deleting the wrong claim is not the same as correcting it. " +
+			"State what actually happens (the cookie is stored per top-level site) and keep any " +
+			"caveat to browsers that do not support partitioned cookies yet; update this guard " +
+			"if the wording changes")
+	}
+}
+
+// webSrcTextFiles lists the reader-facing sources under web/src that can carry
+// this claim. The walk is over the TREE, not a hand-kept list, so a new page or
+// a copy-paste of the sentence into another docs page is covered by
+// construction — a guard that iterates a hardcoded set of filenames cannot see
+// the file it was written to protect against.
+func webSrcTextFiles(t *testing.T, root string) []string {
+	t.Helper()
+	var out []string
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case "node_modules", ".next", ".turbo":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		switch filepath.Ext(path) {
+		case ".tsx", ".ts", ".md":
+			out = append(out, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", root, err)
+	}
+	return out
+}
+
+// TestNoDocsClaimTheGateReappearsOnACookieBlockingBrowser is the CLASS guard.
+// The wrong sentence is a copy-paste shape: the same reassurance ("the gate
+// comes back, so open the form URL directly") is what a docs author reaches for
+// on every page that explains the private form, and the card that found this
+// instance explicitly asked for every copy to be corrected rather than the one
+// the verify card happened to quote.
+//
+// It walks web/src and asserts the claim appears NOWHERE. Scoped to the files a
+// reader sees, not to the whole repo: an api/*.go comment or a test may quote
+// the wrong phrasing while describing the defect, and flagging those would make
+// the guard cry wolf on its own documentation.
+func TestNoDocsClaimTheGateReappearsOnACookieBlockingBrowser(t *testing.T) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed — cannot locate web/src")
+	}
+	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "..", "web", "src"))
+	if _, err := os.Stat(root); err != nil {
+		t.Fatalf("stat %s: %v", root, err)
+	}
+
+	files := webSrcTextFiles(t, root)
+	if len(files) < 50 {
+		t.Fatalf("only %d files found under %s — the walk is not seeing web/src, so this "+
+			"guard would pass over a tree it never read", len(files), root)
+	}
+	page := filepath.Clean(filepath.Join(root, "app", "docs", "embed", "page.tsx"))
+	seenPage := false
+	for _, f := range files {
+		if filepath.Clean(f) == page {
+			seenPage = true
+		}
+		text := normalizedDocsText(readFileString(t, f))
+		for _, claim := range []string{
+			"see the password gate again",
+			"gate again on the next load",
+			"gate reappears",
+		} {
+			if strings.Contains(text, claim) {
+				rel, _ := filepath.Rel(root, f)
+				t.Errorf("web/src/%s claims %q — a partitioned (CHIPS) unlock cookie keeps "+
+					"working while third-party cookies are blocked, so this is the same wrong "+
+					"sentence as on the embed page. Correct it there too; do not delete the "+
+					"sentence without saying what does happen", rel, claim)
+			}
+		}
+	}
+	// The assertion above is only meaningful if the walk actually reaches the
+	// file the claim was found in — otherwise a typo in the walk root makes this
+	// test vacuous and green.
+	if !seenPage {
+		t.Errorf("the walk over %s never reached app/docs/embed/page.tsx — the class guard is "+
+			"not reading the page it exists for", root)
+	}
+}
+
 // TestEmbeddedFormCanBeSubmitted is the other half of the card's acceptance:
 // the documented snippet must be one a merchant can paste, which means the page
 // it renders must be able to SUBMIT. The embed page posts to its own path plus

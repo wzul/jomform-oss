@@ -156,9 +156,12 @@ export default function EmbedDocsPage() {
         inside the embed just like the button does) sets a signed access cookie so the frame can render the form
         instead of asking again. That cookie is scoped to the one page it was entered on — it is a{" "}
         <code className="rounded bg-slate-100 px-1">Partitioned</code> third-party cookie, so unlocking the
-        embedded form on your site does not unlock it on anybody else&apos;s. If a visitor&apos;s browser blocks
-        third-party cookies outright, they will see the password gate again on the next load; opening the form&apos;s
-        own URL directly always works.
+        embedded form on your site does not unlock it on anybody else&apos;s. Partitioning is also what keeps that
+        unlock working when a visitor&apos;s browser blocks third-party cookies: the cookie is stored per top-level
+        site, so your page keeps it and the buyer is not asked for the password again. A browser that does not
+        support partitioned cookies yet ignores the attribute and treats it as an ordinary third-party cookie,
+        which such a browser may refuse to store — a buyer who is asked again can always open the form&apos;s own
+        URL directly.
       </p>
 
       <p className="mt-8 text-sm leading-relaxed text-slate-600">
