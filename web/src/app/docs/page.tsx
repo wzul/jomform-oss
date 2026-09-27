@@ -305,6 +305,13 @@ const FAQ: { q: string; a: string }[] = [
     q: "Can I use my own domain?",
     a: "Yes. Add your domain in Settings → Domains, point a CNAME to custom.jomform.com, and verify. Your forms then go live on your domain automatically.",
   },
+  {
+    title: "Passkeys (sign in without a password)",
+    // The login page's passkey control deep-links this section, and the
+    // passkey seam guards check that it describes the flow (card t_df9233f6).
+    slug: "passkeys",
+    body: "A passkey lets you sign in with your face, fingerprint or device PIN instead of typing a password. Add one from Profile → Security → Register passkey: your browser asks your device to create it, and a passkey appears in the list with the date it was added. Once you have one, the login page offers a passkey button — press it, approve the prompt, and you are in; nothing is typed. Because signing in with a passkey starts from a list of your credentials rather than an email address, the button is offered before you enter anything. Each passkey is bound to one device or password manager (iCloud Keychain, Google Password Manager, 1Password, a security key), so add one per device you sign in from, and remove any you no longer use with the delete button on its row — deleting a passkey immediately stops it working, and you can always sign in the ordinary way instead. If a passkey was added before this flow was fixed it may have been stored as a non-discoverable credential, which the login button cannot use: delete that row and register a new passkey, which is made discoverable so the button finds it.",
+  },
 ];
 
 export default function DocsIndexPage() {

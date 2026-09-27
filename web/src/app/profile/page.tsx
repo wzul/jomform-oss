@@ -10,6 +10,7 @@ import { useSession } from "../../components/session";
 import { formatDate } from "../../lib/formatDate";
 import { isValidStepUpCode, stepUpRequired } from "../../lib/stepUp";
 import { apiErr } from "../../lib/apiErr";
+import { b64url, fromB64url } from "../../lib/webauthn";
 
 type Profile = {
   id: string;
@@ -354,20 +355,24 @@ export default function ProfilePage() {
         return;
       }
       const opts = st.options.publicKey || st.options;
-      // decode base64url fields
-      opts.challenge = Uint8Array.from(atob(opts.challenge.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
-      if (opts.user?.id) opts.user.id = Uint8Array.from(atob(opts.user.id.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
+      // The server sends challenge and user.id base64url; create() wants bytes.
+      opts.challenge = fromB64url(opts.challenge);
+      if (opts.user?.id) opts.user.id = fromB64url(opts.user.id);
       const cred = await navigator.credentials.create({ publicKey: opts });
       const c = cred as PublicKeyCredential;
       const resp = c.response as AuthenticatorAttestationResponse;
+      // base64url, NOT btoa: go-webauthn decodes these with
+      // base64.RawURLEncoding, so a standard-base64 body carrying `+` or `/`
+      // is rejected as an unparseable "response tidak sah" — which is exactly
+      // how passkey registration failed 8/8 on prod. See lib/webauthn.ts.
       const body = {
         key: st.key,
-        id: btoa(String.fromCharCode(...new Uint8Array(c.rawId))),
-        rawId: btoa(String.fromCharCode(...new Uint8Array(c.rawId))),
+        id: b64url(new Uint8Array(c.rawId)),
+        rawId: b64url(new Uint8Array(c.rawId)),
         type: c.type,
         response: {
-          attestationObject: btoa(String.fromCharCode(...new Uint8Array(resp.attestationObject))),
-          clientDataJSON: btoa(String.fromCharCode(...new Uint8Array(resp.clientDataJSON))),
+          attestationObject: b64url(new Uint8Array(resp.attestationObject)),
+          clientDataJSON: b64url(new Uint8Array(resp.clientDataJSON)),
         },
       };
       const fin = await fetch("/api/auth/passkeys/register/finish", {

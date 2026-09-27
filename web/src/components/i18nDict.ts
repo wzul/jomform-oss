@@ -82,6 +82,10 @@ export const DICT = {
   "login.emailCodeSent": { en: "If eligible, a 6-digit backup code has been emailed to you. Enter it below.", ms: "Jika layak, kod sandaran 6-angka telah dihantar ke emel anda. Masukkan di bawah.", zh: "如果符合条件，6 位备份验证码已发送至您的邮箱。请输入。", ta: "தகுதி பெற்றால், 6-இலக்க காப்பு குறியீடு உங்கள் மின்னஞ்சலுக்கு அனுப்பப்பட்டுள்ளது. கீழே உள்ளிடவும்.", ar: "إذا كنت مؤهلاً، فقد تم إرسال رمز نسخ احتياطي من 6 أرقام إلى بريدك. أدخله أدناه." },
   // issue #73: passwordless magic link
   "login.passwordless": { en: "Log in without password", ms: "Log masuk tanpa kata laluan", zh: "无需密码登录", ta: "கடவுச்சொல் இல்லாமல் உள்நுழை", ar: "تسجيل الدخول بدون كلمة مرور" },
+  // Card t_df9233f6: the passkey sign-in control on the login page. This key
+  // had NO dictionary entry while the button was unreachable; the button and
+  // the string ship together.
+  "login.passkey": { en: "Sign in with a passkey", ms: "Log masuk dengan passkey", zh: "使用通行密钥登录", ta: "கடவுச்சாவி மூலம் உள்நுழை", ar: "سجّل الدخول بمفتاح المرور" },
   "login.passwordlessBack": { en: "Back to sign-in", ms: "Kembali ke log masuk", zh: "返回登录", ta: "உள்நுழைவுக்குத் திரும்பு", ar: "العودة إلى تسجيل الدخول" },
   "login.passwordlessDesc": { en: "Enter your email and we'll email you a sign-in link. New to JomForm? Clicking it creates your account and signs you in.", ms: "Masukkan emel anda dan kami akan hantar pautan log masuk. Baru di JomForm? Mengkliknya akan mencipta akaun anda dan log masuk.", zh: "输入您的邮箱，我们会向您发送登录链接。JomForm 新手？点击它将创建您的账户并登录。", ta: "உங்கள் மின்னஞ்சலை உள்ளிட்டால் உள்நுழைவு இணைப்பு அனுப்புவோம். JomForm இல் புதியவரா? கிளிக் செய்தால் உங்கள் கணக்கு உருவாக்கப்பட்டு உள்நுழையும்.", ar: "أدخل بريدك وسنرسل لك رابط تسجيل الدخول. جديد على JomForm؟ سيؤدي النقر عليه إلى إنشاء حسابك وتسجيل الدخول." },
   "login.passwordlessSubmit": { en: "Email me a sign-in link", ms: "Hantar pautan log masuk ke emel saya", zh: "给我发送登录链接", ta: "எனக்கு உள்நுழைவு இணைப்பு அனுப்பு", ar: "أرسل لي رابط تسجيل الدخول" },

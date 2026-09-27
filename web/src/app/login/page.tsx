@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useI18n } from "../../components/i18n";
 import { resolvePostLogin } from "../../lib/postLogin";
+import { b64url, fromB64url } from "../../lib/webauthn";
 import { apiErr } from "../../lib/apiErr";
 
 type Mode = "login" | "register" | "forgot" | "magic";
@@ -126,6 +127,17 @@ export default function Login() {
   // Issue #313: the default (email-first) view doubles as the signup entry.
   // See the magic-mode hint below.
   const emailRef = useRef<HTMLInputElement>(null);
+  // Card t_df9233f6: WebAuthn support is a property of the BROWSER, so it can
+  // only be known after mount (the page prerenders on the server). null =
+  // not yet known → the control is not rendered, which is also what a browser
+  // without WebAuthn gets, so no user is offered a button that cannot work.
+  const [passkeySupported, setPasskeySupported] = useState(false);
+
+  useEffect(() => {
+    setPasskeySupported(
+      typeof window !== "undefined" && !!window.PublicKeyCredential && !!navigator.credentials?.get
+    );
+  }, []);
 
   useEffect(() => {
     // Issue #140: read ?next once after mount for the OAuth redirect path.
@@ -316,19 +328,25 @@ export default function Login() {
     try {
       const st = await fetch("/api/auth/passkeys/login/start", { method: "POST" }).then((r) => r.json());
       const opts = st.options.publicKey || st.options;
-      opts.challenge = Uint8Array.from(atob(opts.challenge.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
+      // The server's challenge and any credential descriptor id arrive
+      // base64url; navigator.credentials.get() wants the raw bytes.
+      opts.challenge = fromB64url(opts.challenge);
       const cred = await navigator.credentials.get({ publicKey: opts }) as PublicKeyCredential;
+      if (!cred) { setError(t("login.passkeyUnsupported")); setBusy(false); return; }
       const resp = (cred as any).response;
+      // Every binary field below MUST be base64url: go-webauthn decodes them
+      // with base64.RawURLEncoding, so standard base64 (what `btoa` emits) is
+      // rejected as "response tidak sah". See lib/webauthn.ts.
       const body = {
         key: st.key,
-        id: btoa(String.fromCharCode(...new Uint8Array(cred.rawId))),
-        rawId: btoa(String.fromCharCode(...new Uint8Array(cred.rawId))),
+        id: b64url(new Uint8Array(cred.rawId)),
+        rawId: b64url(new Uint8Array(cred.rawId)),
         type: cred.type,
         response: {
-          authenticatorData: btoa(String.fromCharCode(...new Uint8Array(resp.authenticatorData))),
-          clientDataJSON: btoa(String.fromCharCode(...new Uint8Array(resp.clientDataJSON))),
-          signature: btoa(String.fromCharCode(...new Uint8Array(resp.signature))),
-          userHandle: resp.userHandle ? btoa(String.fromCharCode(...new Uint8Array(resp.userHandle))) : null,
+          authenticatorData: b64url(new Uint8Array(resp.authenticatorData)),
+          clientDataJSON: b64url(new Uint8Array(resp.clientDataJSON)),
+          signature: b64url(new Uint8Array(resp.signature)),
+          userHandle: resp.userHandle ? b64url(new Uint8Array(resp.userHandle)) : null,
         },
       };
       const fin = await fetch("/api/auth/passkeys/login/finish", {
@@ -650,6 +668,29 @@ export default function Login() {
             >
               {t("login.passwordless")}
             </button>
+          )}
+
+          {/* Passkey sign-in (card t_df9233f6). passkeyLogin() had existed since
+              6816eff with NO caller in any commit, so the shipped login page
+              rendered no passkey control at all and the whole resident-key
+              ceremony was unreachable. Rendered on every step-1 view that shows
+              credentials (the default magic view too) because a discoverable
+              login needs no email, and hidden entirely on a browser with no
+              WebAuthn support rather than offered as a button that can only
+              fail. */}
+          {step === 1 && mode !== "forgot" && passkeySupported && (
+            <div className="mt-3 border-t border-[var(--jf-border)] pt-3">
+              <button
+                type="button"
+                onClick={passkeyLogin}
+                disabled={busy}
+                data-testid="passkey-login"
+                className="flex w-full items-center justify-center gap-2 rounded-md border border-[var(--jf-border)] bg-white py-2 text-[13px] font-medium text-[var(--jf-text)] transition-colors hover:border-[#7170ff]/60 hover:bg-indigo-50 disabled:opacity-60"
+              >
+                <span aria-hidden="true" className="text-base leading-none">🔑</span>
+                {t("login.passkey")}
+              </button>
+            </div>
           )}
 
           {/* Issue #9: env-gated social login. Rendered only when the backend

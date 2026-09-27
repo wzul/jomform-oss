@@ -12,6 +12,128 @@ import (
 	"github.com/go-webauthn/webauthn/webauthn"
 )
 
+// passkeyRegistrationSelection is the authenticator criteria the registration
+// ceremony asks for, and it is NOT optional: passkeyLoginFinish verifies with
+// ValidateDiscoverableLogin, so the login ceremony only ever reaches a
+// credential that is a client-side discoverable (resident) key. go-webauthn
+// applies no default here (protocol.AuthenticatorSelection.IsZero keeps an
+// empty selection off the wire entirely), so a registration started without one
+// leaves the browser free to mint a NON-resident credential — which it does —
+// and that credential is then invisible to every discoverable get() the login
+// page performs. The user's only symptom is "Passkey cancelled or not supported
+// by this browser", with nothing stored server-side to explain it.
+//
+// UserVerification stays PREFERRED, not required: requiring it would demand a UV
+// flag the assertion path does not ask for, and it would add friction to a
+// ceremony that is already gated by the session + the #458 step-up.
+var passkeyRegistrationSelection = protocol.AuthenticatorSelection{
+	// RequireResidentKey is the deprecated-by-name member browsers still honour;
+	// ResidentKey is the Level 2 spelling. Both are set because the resident-key
+	// requirement is the difference between a passkey that can sign in and one
+	// that cannot, and a client that reads only one of the two must still get it.
+	RequireResidentKey: protocol.ResidentKeyRequired(),
+	ResidentKey:        protocol.ResidentKeyRequirementRequired,
+	UserVerification:   protocol.VerificationPreferred,
+}
+
+// ── base64url normalisation ──────────────────────────────────────────────────
+
+// passkeyBinaryFields are the JSON members of a WebAuthn credential response
+// that carry base64-encoded binary data, per path into the body. The parser
+// decodes each of them with base64.RawURLEncoding (protocol/base64.go), which
+// accepts ONLY the URL alphabet — no `+`, no `/`, no padding.
+var passkeyBinaryFields = map[string][]string{
+	"":         {"id", "rawId"},
+	"response": {"authenticatorData", "clientDataJSON", "signature", "userHandle", "attestationObject", "publicKey"},
+}
+
+// normalizePasskeyBase64 rewrites every binary field of a credential response
+// from STANDARD base64 to base64url, in place.
+//
+// WHY THIS IS ON THE SERVER, not only in the browser. The card's defect is a
+// client one — the shipped pages encoded with `btoa`, which emits `+` and `/`
+// — but the failure mode a merchant meets is a server-side 400, and the client
+// that produces it is already downloaded: a fix that only ships new JavaScript
+// leaves every browser holding the old bundle broken until it re-fetches, and
+// the passkey code shipped with no login control at all, so "wait for the new
+// bundle" was not a recovery path a user had. Normalising here makes the
+// endpoint accept what the deployed clients actually send, and the browser fix
+// (lib/webauthn.ts) makes new clients send the correct alphabet in the first
+// place. Both halves are guarded separately.
+//
+// It is safe to accept both alphabets because they are disjoint in exactly the
+// characters that differ: standard base64 never contains `-`/`_`, so a value
+// that is already base64url is returned unchanged, and the two encodings of a
+// given byte string decode to the same bytes. Verification is over the decoded
+// bytes, so accepting the standard alphabet cannot admit a payload the URL
+// alphabet would have rejected on content — and `id`/`rawId` are rewritten
+// identically, so the parser's "ID does not match rawId" check still holds.
+//
+// A field that is absent, null, or not a string is left exactly as it was, so
+// this cannot invent data for a malformed body: it will still fail the parser,
+// which is the correct outcome.
+func normalizePasskeyBase64(raw []byte) []byte {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil {
+		return raw
+	}
+	for path, fields := range passkeyBinaryFields {
+		if path == "" {
+			rewriteB64Fields(top, fields)
+			continue
+		}
+		sub, ok := top[path]
+		if !ok {
+			continue
+		}
+		var nested map[string]json.RawMessage
+		if err := json.Unmarshal(sub, &nested); err != nil {
+			continue
+		}
+		rewriteB64Fields(nested, fields)
+		if out, err := json.Marshal(nested); err == nil {
+			top[path] = out
+		}
+	}
+	out, err := json.Marshal(top)
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
+// rewriteB64Fields normalises the named string members of a decoded JSON object.
+func rewriteB64Fields(obj map[string]json.RawMessage, fields []string) {
+	for _, name := range fields {
+		v, ok := obj[name]
+		if !ok {
+			continue
+		}
+		// `null` is not a string but json.Unmarshal(null, *string) SUCCEEDS
+		// leaving the zero value, so a bare decode would rewrite a null
+		// userHandle into "". A null member is meaningful here (an assertion
+		// carries no userHandle), so it is left byte-identical.
+		if bytes.Equal(bytes.TrimSpace(v), []byte("null")) {
+			continue
+		}
+		var s string
+		if err := json.Unmarshal(v, &s); err != nil {
+			continue // a number, an object, an array — not ours to rewrite
+		}
+		if out, err := json.Marshal(normalizeB64(s)); err == nil {
+			obj[name] = out
+		}
+	}
+}
+
+// normalizeB64 maps standard base64 onto the URL alphabet and strips padding.
+// Idempotent: a value already in the URL alphabet has no `+`/`/` to map.
+func normalizeB64(s string) string {
+	return strings.TrimRight(strings.NewReplacer("+", "-", "/", "_").Replace(s), "=")
+}
+
+// ── base64url normalisation end ──────────────────────────────────────────────
+
 // webAuthnInstance builds the WebAuthn config for the request's origin.
 func (h *RESTHandlers) webAuthnInstance(r *http.Request) *webauthn.WebAuthn {
 	rpID := "jomform.com"
@@ -63,7 +185,12 @@ func (h *RESTHandlers) passkeyRegisterStart(w http.ResponseWriter, r *http.Reque
 		respondErr(w, r, err)
 		return
 	}
-	opts, session, err := wa.BeginRegistration(wu)
+	// The selection is mandatory here, not cosmetic: the login ceremony is
+	// discoverable-only (see passkeyLoginFinish), so a credential minted without
+	// the resident-key requirement can never be used to sign in. See
+	// passkeyRegistrationSelection.
+	opts, session, err := wa.BeginRegistration(wu,
+		webauthn.WithAuthenticatorSelection(passkeyRegistrationSelection))
 	if err != nil {
 		respondErr(w, r, err)
 		return
@@ -93,11 +220,16 @@ func (h *RESTHandlers) passkeyRegisterFinish(w http.ResponseWriter, r *http.Requ
 	// into memory: decode the session key from the buffer and hand the same
 	// bytes to the parser via a fresh reader. (decodeJSON consumes+closes
 	// r.Body, which would leave the parser an empty body.)
+	//
+	// normalizePasskeyBase64 accepts the standard base64 alphabet as well as
+	// base64url, so a client still running a bundle built before lib/webauthn.ts
+	// can register. See its comment for why that belongs on the server.
 	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "response tidak sah")
 		return
 	}
+	raw = normalizePasskeyBase64(raw)
 	var in struct {
 		Key string `json:"key"`
 		// Issue #458: optional step-up code for a magic + 2FA session.
@@ -178,11 +310,16 @@ func (h *RESTHandlers) passkeyLoginFinish(w http.ResponseWriter, r *http.Request
 	// into memory: decode the session key from the buffer and hand the same
 	// bytes to the parser via a fresh reader. (decodeJSON consumes+closes
 	// r.Body, which would leave the parser an empty body.)
+	//
+	// normalizePasskeyBase64 accepts the standard base64 alphabet as well as
+	// base64url, so a signed-in client running a bundle built before
+	// lib/webauthn.ts is not locked out of passkey sign-in. See its comment.
 	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "response tidak sah")
 		return
 	}
+	raw = normalizePasskeyBase64(raw)
 	var in struct {
 		Key string `json:"key"`
 	}
