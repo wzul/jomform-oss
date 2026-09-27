@@ -253,6 +253,20 @@ test("a failure body is never rendered without going through apiErr/translateApi
   // `text`/`json` are deliberately in the pattern: reading the raw body is the
   // exact defect this card fixes, and a legitimate need for it (a non-JSON
   // upstream diagnostic) belongs in an ALLOWED entry with its reason.
+  //
+  // AND THE NAME RULE IS NOT ALLOWED TO BE THE ONLY NET (issue #6177 follow-up).
+  // The state a setter writes must be an error state — a name ending in
+  // "Err"/"Error"/"Msg"/"Fail". That convention is what keeps a data setter out
+  // of this walk, but it is also a hole: `setNotice(d.error)` renders the very
+  // same prose and is invisible here because of its NAME. Measured: at the time
+  // this was added, 4 setter-shaped calls in src/ read a failure body and 0 of
+  // them sat outside the rule — so there is no live defect, and the hole is a
+  // future one. It is closed below by asserting that the out-of-rule bucket is
+  // EMPTY: a new `setNotice(d.error)` (or `setBanner(await r.text())`) fails the
+  // build and forces a decision — rename the state so the rule covers it, route
+  // the body through apiErr(), or add an explicit ALLOWED entry with the reason.
+  // The `examined` floor keeps that empty-list assertion from passing vacuously
+  // if the walk ever stops finding setter-shaped body reads at all.
   const SETTER = /(?<![\w$])set([A-Za-z_$][\w$]*)\s*\(([^;]*?)\)\s*;/g;
   /** Does this expression read an HTTP failure body — the whole body, or the
    *  `error` prose of one that is not a localized runLoad outcome? */
@@ -264,6 +278,12 @@ test("a failure body is never rendered without going through apiErr/translateApi
     return false;
   };
   const offenders: string[] = [];
+  /** Setter-shaped calls that read a failure body but whose NAME the rule above
+   *  does not cover — the blind spot this follow-up closes. Must stay empty. */
+  const unexamined: string[] = [];
+  /** How many setter-shaped body reads the walk actually examined. A floor, so
+   *  the `unexamined === []` assertion cannot pass by seeing nothing. */
+  let examined = 0;
   for (const p of sources) {
     const rel = p.slice(SRC.length);
     if (rel === "lib/apiErr.ts" || rel === "lib/wsfetch.ts") continue;
@@ -281,16 +301,42 @@ test("a failure body is never rendered without going through apiErr/translateApi
     for (const { n, text, code: stripped } of lines) {
       if (isCommentLine(text)) continue;
       for (const m of stripped.matchAll(SETTER)) {
-        if (!isErrorState(m[1])) continue;
         const arg = m[2].trim();
         if (arg === "") continue;
         if (ALLOWED.some((a) => text.includes(a))) continue;
         if (!readsRawBody(arg, loadVars)) continue;
+        if (!isErrorState(m[1])) {
+          // Not covered by the name rule — an `setNotice(d.error)`-shaped hole.
+          // Reported regardless of apiErr binding: if it binds apiErr the fix is
+          // just to name the state for what it holds (or add an ALLOWED entry);
+          // if it does not, it is also a live render of the raw body.
+          unexamined.push(`${rel}:${n}: ${text.trim()}`);
+          continue;
+        }
+        examined++;
         if (bindsApiErr(arg, inits)) continue;
         offenders.push(`${rel}:${n}: ${text.trim()}`);
       }
     }
   }
+  // The completeness half, asserted BEFORE the primary check so a reader sees
+  // the hole named first: no setter-shaped body read may sit outside the name
+  // rule, because the rule is a NAME convention and a name is not a safety
+  // property. An empty list is only meaningful if something was examined.
+  assert.deepEqual(
+    unexamined,
+    [],
+    `these setters read an HTTP failure body but their NAME (not err/error/msg/fail) ` +
+      `keeps them out of the check above, so the body can reach the screen untranslated ` +
+      `(issue #6177 follow-up). Rename the state so it is covered, or route the body ` +
+      `through apiErr(body, t("your.fallback"), t):\n  ` +
+      unexamined.join("\n  "),
+  );
+  assert.ok(
+    examined > 0,
+    "the name rule examined no setter-shaped body reads at all — the walk is broken, " +
+      "so its empty offender list proves nothing",
+  );
   assert.deepEqual(
     offenders,
     [],
