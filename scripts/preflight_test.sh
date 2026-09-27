@@ -128,8 +128,8 @@ export PREFLIGHT_LOCK_FILE="$SB/preflight-selftest.lock"
 # branch. A failing or empty --list makes check 2 red (not this one).
 listed="$(./scripts/preflight.sh --list 2>/dev/null)"
 list_rc=$?
-GATES="$(printf '%s\n' "$listed" | grep '[^[:space:]]')"
-NGATES="$(printf '%s\n' "$GATES" | grep -c '[^[:space:]]')"
+GATES="$(grep '[^[:space:]]' <<<"$listed")"
+NGATES="$(grep -c '[^[:space:]]' <<<"$GATES")"
 
 # The gates that can actually EXECUTE: the `run <name>` call sites. `run` is the
 # only place the script invokes a gate, so this is the real surface, not a parse
@@ -229,7 +229,7 @@ if [ $rc -ne 0 ] && \
    ! grep -q 'gate \[web\]' <<<"$out"; then
   ok "an empty/uninstalled node_modules (with .bin/next present) -> refused by the PREREQUISITE, naming the fix (rc=$rc)"
 else
-  bad "an existing-but-uninstalled web/node_modules must be refused by the dependency PREREQUISITE (not by the gate running and failing), got rc=$rc [$(printf '%s' "$out" | grep -iE 'IS NOT INSTALLED|PREFLIGHT FAIL|gate \[web\]' | tr '\n' ' ')]"
+  bad "an existing-but-uninstalled web/node_modules must be refused by the dependency PREREQUISITE (not by the gate running and failing), got rc=$rc [$(grep -iE 'IS NOT INSTALLED|PREFLIGHT FAIL|gate \[web\]' <<<"$out" | tr '\n' ' ')]"
 fi
 rm -rf "$SB/web/node_modules"
 
@@ -383,7 +383,7 @@ die_db=$(grep -F 'JOMFORM_TEST_DATABASE_URL is unset' "$PREFLIGHT" | sed -n '1p'
 die_vk=$(grep -F 'JOMFORM_TEST_VALKEY_URL is unset' "$PREFLIGHT" | sed -n '1p')
 script_defaults=$(sed -nE 's/.*\$\{JOMFORM_ENV:-([^}]*)\}.*/\1/p' "$PREFLIGHT" | sort -u)
 canon="$(printf '%s\n' "$script_defaults" | sed -n '1p')"
-ndefaults=$(printf '%s\n' "$script_defaults" | grep -c '[^[:space:]]')
+ndefaults=$(grep -c '[^[:space:]]' <<<"$script_defaults")
 # The offending path, not the whole die-message: the verdict above is only
 # readable if the FAIL line names the path that is wrong.
 tmp_hit=""
@@ -455,7 +455,7 @@ fi
 live_prefix="$LIVE_ROOT/"
 checker_rel="${HERE#"$live_prefix"}/preflight_test.sh"
 tracked_sites=$(git -C "$LIVE_ROOT" grep -lF -e 'test-env.sh' -e 'jf-env' -e 'JOMFORM_ENV' -- . ":(exclude)$checker_rel" 2>/dev/null || true)
-site_count=$(printf '%s\n' "$tracked_sites" | grep -c '[^[:space:]]')
+site_count=$(grep -c '[^[:space:]]' <<<"$tracked_sites")
 # A site DRIFTS when it does not quote the canonical path — whether it still
 # quotes a `${JOMFORM_ENV:-...}` form (a different default) or names a bare path
 # with no override at all. Report what the site actually says, so the FAIL line
@@ -627,6 +627,275 @@ elif [ "$PREFLIGHT_LOCK_FILE" = "$default_lock" ]; then
   bad "the self-test is using the PRODUCTION lock ($default_lock) — it will serialise against (and delay) every card gate on the board"
 else
   ok "self-test uses a private lock ($PREFLIGHT_LOCK_FILE), not the production path ($default_lock)"
+fi
+
+# 15. PATH-AWARE SELECTION (--for-diff / --classify) — the narrowing must BITE,
+#     and it must be SAFE. These assertions are the reason the feature can be
+#     trusted at all, so each one is written to fail when the property is broken:
+#       * the table must cover every gate --list advertises (no gate is
+#         unreachable-by-narrowing and no gate is silently always-run);
+#       * a web-only diff must select `web` and must NOT select `test` — the BITE;
+#       * adding one api/ path must bring `test` back — the diff decides;
+#       * a path NO gate claims must widen to the FULL set — fail-closed;
+#       * the four gate-INPUT prose files (MCP-PARITY.md, GATE-INVENTORY.md,
+#         AGENTS.md, deploy/backup/README.md) must widen the run, because a
+#         test READS them. A path-class rule that treats prose as inert is the
+#         trap that turns a red gate green.
+#     Driven through --classify, which classifies an EXPLICIT path list and runs
+#     nothing, so none of this creates files or runs a gate.
+#     NOTE: the sandbox has no web/ or api/ tree, so these run against the LIVE
+#     script from the real repo root — the same place a real narrowing happens.
+sel_classify() { (cd "$LIVE_ROOT" && ./scripts/preflight.sh --classify="$1" 2>/dev/null) ; }
+
+# 15a. The documented table must name every gate, in a form the machinery reads.
+deps="$(cd "$LIVE_ROOT" && ./scripts/preflight.sh --gate-deps 2>/dev/null)"
+deps_gates="$(printf '%s\n' "$deps" | sed -n 's/^\([A-Za-z0-9_]*\):.*/\1/p' | sort -u)"
+if [ -z "$deps" ]; then
+  bad "--gate-deps printed nothing — the path-aware table cannot be inspected, so its coverage cannot be checked"
+elif [ "$deps_gates" = "$(printf '%s\n' $GATES | sort -u)" ]; then
+  ok "--gate-deps covers exactly the $NGATES gates --list advertises (no gate missing from the path table)"
+else
+  bad "--gate-deps drift — in --list but NOT in the table: [$(comm -13 <(printf '%s\n' "$deps_gates") <(printf '%s\n' $GATES | sort -u) | tr '\n' ' ')] / in the table but not in --list: [$(comm -23 <(printf '%s\n' "$deps_gates") <(printf '%s\n' $GATES | sort -u) | tr '\n' ' ')]"
+fi
+
+# 15b. THE BITE: a path ONLY the web gate reads selects web, and does NOT select
+#      test. The path is web/tsconfig.json, not web/src/**: the api suite really
+#      does read web/src/** (route_parity_test.go walks it), so a web/src path
+#      legitimately selects `test` too — using it here would assert the
+#      derivation is LESS careful than it is. A BITE test needs a path with
+#      exactly one reader.
+web_sel="$(sel_classify 'web/tsconfig.json')"
+if grep -qx 'web' <<<"$web_sel" && ! grep -qx 'test' <<<"$web_sel"; then
+  ok "a web/-only diff selects web and SKIPS test (the narrowing bites)"
+else
+  bad "a web/-only diff must select web and skip test — got: [$(printf '%s' "$web_sel" | tr '\n' ' ')]"
+fi
+
+# 15c. Adding ONE api/ path brings test back (the diff decides, not a static rule).
+both_sel="$(sel_classify 'web/tsconfig.json,api/internal/httpapi/rest.go')"
+if grep -qx 'test' <<<"$both_sel" && grep -qx 'web' <<<"$both_sel"; then
+  ok "adding one api/ path to a web/ diff brings test back"
+else
+  bad "an api/+web/ diff must select BOTH test and web — got: [$(printf '%s' "$both_sel" | tr '\n' ' ')]"
+fi
+
+# 15c-ii. A DERIVED DIRECTORY candidate must claim everything under it. The api
+#      suite walks web/src as a DIRECTORY, so a change to a file inside it is a
+#      real input to `test`. This failed while PW_CLAIMS stored the unresolved
+#      candidate (`web/src`) instead of the resolved pathspec (`web/src/*`): the
+#      path came out claimed by NO gate and the run widened to all 14. Asserting
+#      a DEEP path (not the directory itself) is what catches that shape.
+deep_sel="$(sel_classify 'web/src/app/page.tsx')"
+if grep -qx 'test' <<<"$deep_sel"; then
+  ok "a deep file under a derived directory candidate (web/src/app/page.tsx) still selects test — the directory claim is <dir>/*, not <dir>"
+else
+  bad "web/src/app/page.tsx must select test (the api suite walks web/src/**) — got: [$(printf '%s' "$deep_sel" | tr '\n' ' ')]"
+fi
+
+# 15d. FAIL-CLOSED: a path no gate claims must widen to the full set. The path is
+#      a real tracked directory that no gate's area covers, so a rule that
+#      silently ignored unknown paths would show up here as a narrowed set.
+#      The count EXCLUDES the trailing "#reason:" line, which is not a gate.
+unknown_sel="$(sel_classify 'docs/README.md')"
+unknown_n="$(grep -cv '^#reason:' <<<"$unknown_sel")"
+if [ "$unknown_n" = "$NGATES" ] && grep -q 'no gate claims' <<<"$unknown_sel"; then
+  ok "a path no gate claims widens to the FULL $NGATES-gate set, naming the path (fail-closed)"
+else
+  bad "an unclaimed path must widen to all $NGATES gates (got $unknown_n) — [$(printf '%s' "$unknown_sel" | tr '\n' ' ')]"
+fi
+
+# 15e. THE TRAP: the gate-INPUT prose files must widen the run. Each is read by a
+#      test, so a change to it can break that gate; a classifier that dropped it
+#      would make the run green on a tree whose gate is red.
+#      A file is pinned to a SPECIFIC gate: MCP-PARITY.md is read by
+#      mcp_parity_test.go (the `test` gate), GATE-INVENTORY.md and AGENTS.md by
+#      scripts/preflight_test.sh (the `selftest` gate), and deploy/backup/README.md
+#      by the backup suite (the `backup` gate).
+trap_out=""
+for spec in "MCP-PARITY.md:test" "GATE-INVENTORY.md:selftest" "AGENTS.md:selftest" "deploy/backup/README.md:backup"; do
+  tfile="${spec%%:*}"; tgate="${spec##*:}"
+  if [ ! -e "$LIVE_ROOT/$tfile" ]; then
+    bad "gate-INPUT pin not checked: $tfile does not exist at $LIVE_ROOT, so this pin proves nothing"
+    continue
+  fi
+  tsel="$(sel_classify "$tfile")"
+  if grep -qx "$tgate" <<<"$tsel"; then
+    trap_out="${trap_out}${tfile}->${tgate} ok; "
+  else
+    bad "$tfile alone must widen the run and select '$tgate' (it is READ by that gate's test) — got: [$(printf '%s' "$tsel" | tr '\n' ' ')]"
+    trap_out="${trap_out}${tfile}->${tgate} MISSING; "
+  fi
+done
+if grep -qv 'MISSING' <<<"$trap_out" && [ -n "$trap_out" ]; then
+  ok "the 4 gate-INPUT prose files each widen the run to the gate that reads them ($trap_out)"
+fi
+
+# 15f. A gate that CANNOT narrow must always run. `gitleaks` scans the whole git
+#      history, so no path list can express its inputs. Asserted from the TABLE
+#      (a gate marked `*` must be in every selection), which is the invariant the
+#      machinery implements — not the gate's name.
+star_gates="$(printf '%s\n' "$deps" | sed -n 's/^\([A-Za-z0-9_]*\):[[:space:]]*\*$/\1/p')"
+if [ -z "$star_gates" ]; then
+  bad "no gate is marked '*' (cannot narrow) in --gate-deps — the always-run class is empty, which cannot be right for a full-history secret scan"
+elif [ "$(printf '%s\n' "$star_gates" | wc -l)" != "$(printf '%s\n' "$deps" | sed -n 's/^\([A-Za-z0-9_]*\):[[:space:]]*\*$/\1/p' | sort -u | wc -l)" ]; then
+  bad "the '*' (cannot narrow) set has duplicates in --gate-deps — the table is being built inconsistently"
+else
+  miss_star=""
+  for g in $star_gates; do
+    grep -qx "$g" <<<"$web_sel" || miss_star="${miss_star}${g} "
+  done
+  if [ -z "$miss_star" ]; then
+    ok "every '*' gate (cannot narrow) runs in a narrowed selection: [$(printf '%s ' $star_gates)]"
+  else
+    bad "a '*' gate (cannot narrow) was DROPPED from a narrowed run: [${miss_star% }] — it must always run"
+  fi
+fi
+
+# 15j. The always-run CLASS ITSELF must be stable across table builds. The table
+#      is derived per invocation, and the derivation reads which of a gate's
+#      sources reads the whole checkout. That read was a `grep ... | grep -qE ...`
+#      under `set -o pipefail`, where a MATCH makes `grep -q` exit early, the
+#      writer die of SIGPIPE (141), and pipefail report the pipeline as FAILED —
+#      measured 2 misses in 40 runs of the same line. A miss drops a repo-wide
+#      reader from PW_RW_FILES, so its gate is treated as NARROWABLE and can be
+#      dropped from a narrowed run: a red gate would have gone green, and
+#      `prunewt` is the gate it happened to. Repeated builds are the only way to
+#      see a nondeterministic verdict, so this asserts the SET, not one reading.
+if [ -z "$star_gates" ]; then
+  bad "cannot check the stability of the always-run class: no '*' gate was found"
+else
+  star_runs=""
+  for _i in 1 2 3 4 5 6; do
+    star_runs="${star_runs}$(cd "$LIVE_ROOT" && ./scripts/preflight.sh --gate-deps 2>/dev/null \
+      | sed -n 's/^\([A-Za-z0-9_]*\):[[:space:]]*\*$/\1/p' | sort | tr '\n' ' ')"$'\n'
+  done
+  star_uniq="$(grep -v '^$' <<<"$star_runs" | sort -u | wc -l)"
+  if [ "$star_uniq" = 1 ]; then
+    ok "the always-run ('*') class is IDENTICAL across 6 table builds: [$(grep -v '^$' <<<"$star_runs" | sed -n '1p')]"
+  else
+    bad "the always-run ('*') class CHANGES between table builds — it is nondeterministic, so a gate that cannot narrow can be silently dropped from a narrowed run. Observed sets: [$(grep -v '^$' <<<"$star_runs" | sort -u | tr '\n' '|')]"
+  fi
+fi
+
+# 15k. The always-run class must contain every gate whose sources READ THE WHOLE
+#      CHECKOUT, re-derived here INDEPENDENTLY of the runner's own derivation. 15j
+#      only catches a class that CHANGES between builds; a probe that is
+#      permanently blind would look stable and pass it. This is the deterministic
+#      half: read each gate's source set, look for an active `git grep` /
+#      `git ls-files` / `git rev-list` line in those sources, and assert that
+#      every gate that has one is in the '*' (always-run) class.
+#      `selftest`'s own sources include preflight.sh and preflight_test.sh, both of
+#      which run `git grep` over this checkout — so a probe blind to its own
+#      self-hit is caught here even when every build agrees with itself.
+pw_src_of() {  # mirrors pw_sources in the runner under test
+  case "$1" in
+    build|vet|test|govuln) printf '%s\n' 'api/*' ;;
+    web)      printf '%s\n' 'web/package.json' 'web/src/*' 'web/next.config.mjs' 'web/tsconfig.json' 'web/scripts/web-deps-check.mjs' ;;
+    a11y)     printf '%s\n' 'web/e2e/*' 'web/playwright.config.ts' ;;
+    npmaudit) printf '%s\n' 'web/package.json' 'web/package-lock.json' ;;
+    monitor)  printf '%s\n' 'deploy/monitoring/*' ;;
+    tmpkey)   printf '%s\n' 'deploy/tmp-apikey.sh' 'deploy/tmp-apikey_test.sh' ;;
+    backup)   printf '%s\n' 'deploy/backup/*' ;;
+    prunewt)  printf '%s\n' 'deploy/worktrees/*' ;;
+    refguard) printf '%s\n' 'scripts/refguard.sh' 'scripts/refguard_test.sh' ;;
+    selftest) printf '%s\n' 'scripts/preflight.sh' 'scripts/preflight_test.sh' ;;
+    gitleaks) printf '%s\n' '.gitleaks.toml' ;;
+  esac
+}
+# The independent probe's pattern. It is deliberately a DIFFERENT literal from the
+# runner's (`REPOWIDE_RE` there), and it runs as its own code path: the verdict
+# comes from an independent reading, so a derivation that goes BLIND cannot satisfy
+# it by finding no offenders at all. Comments are stripped exactly as the runner
+# strips them — without that, a comment mentioning the shape over-reports (measured:
+# a false positive on `web`).
+REPOWIDE_ANY_RE='git[[:space:]]+([^|]*[[:space:]])?(grep|ls-files|rev-list)[[:space:]]'
+rw_any=""
+for g in $GATES; do
+  while IFS= read -r glob; do
+    [ -n "$glob" ] || continue
+    for f in $(cd "$LIVE_ROOT" && git ls-files -- "$glob" 2>/dev/null); do
+      [ -f "$LIVE_ROOT/$f" ] || continue
+      if grep -qE "$REPOWIDE_ANY_RE" <<<"$(grep -avE '^[[:space:]]*(#|//|\*|/\*)' "$LIVE_ROOT/$f" 2>/dev/null)"; then
+        rw_any="${rw_any}${g} "
+      fi
+    done
+  done < <(pw_src_of "$g")
+done
+rw_any="$(printf '%s\n' "$(printf '%s' "$rw_any" | tr ' ' '\n')" | grep -v '^$' | sort -u | tr '\n' ' ')"
+if [ -z "$rw_any" ]; then
+  bad "NON-VACUITY: the independent probe found no gate source with a whole-checkout read at all — this check would pass trivially, so the probe is broken (expected at least 'prunewt' and 'selftest')"
+else
+  rw_missing=""
+  for g in $rw_any; do
+    grep -qx "$g" <<<"$star_gates" || rw_missing="${rw_missing}${g} "
+  done
+  if [ -z "$rw_missing" ]; then
+    ok "every gate whose sources read the whole checkout is in the '*' (always-run) class: [$(printf '%s' "$rw_any")] (independently derived, not off the runner's own verdict)"
+  else
+    bad "these gates read the whole checkout, independently derived, but are NOT in the always-run class, so a narrowed run can drop them: [${rw_missing% }] — an under-inclusion, the unsafe direction"
+  fi
+fi
+
+# 15g. The default must stay a FULL run. With no selection flag the script must
+#      print no narrowing notice and report no skipped gate, and its banner must
+#      list the whole inventory. Asserted on the LIVE script, far enough into the
+#      run to print its banner and SKIPPED list, and stopped before any gate body
+#      by an unset prerequisite.
+#
+#      THIS CHECK MUST BE ABLE TO GO RED. The first version of it ended every
+#      branch in `ok`, INCLUDING the failure branch, so it printed green while
+#      asserting nothing — a guard with no bite, which is the exact rot this file
+#      exists to catch. Every branch below now fails or passes on its own
+#      evidence, and check 15i drives the same predicate against a deliberately
+#      narrowed run to prove it detects one.
+nounset_out="$( (cd "$LIVE_ROOT" && env -u JOMFORM_TEST_DATABASE_URL -u JOMFORM_TEST_VALKEY_URL \
+  timeout 120 ./scripts/preflight.sh 2>&1; printf 'rc=%s\n' "$?") || true)"
+narrow_note=""; skip_note=""; banner=""; rc_line=""
+grep -qE 'NARROWED RUN|--for-diff' <<<"$nounset_out" && narrow_note=1
+grep -q 'GATE(S) SKIPPED' <<<"$nounset_out" && skip_note=1
+grep -q "gates:  ${GATES//$'\n'/ }" <<<"$nounset_out" && banner=1
+rc_line="$(printf '%s\n' "$nounset_out" | sed -n 's/^rc=//p' | sed -n '1p')"
+if [ "$narrow_note" = 1 ]; then
+  bad "a no-flag run printed a narrowing notice — the default must be a full run"
+elif [ "$skip_note" = 1 ]; then
+  bad "a no-flag run reported skipped gates — the default must be a full run"
+elif [ "$banner" != 1 ]; then
+  bad "a no-flag run's banner does not list all $NGATES gates (expected 'gates:  ${GATES//$'\n'/ }') — the default may no longer be a full run"
+elif [ "$rc_line" != 1 ]; then
+  bad "a no-flag run stopped in a state other than the fail-fast prerequisite (rc=$rc_line, want 1) — this check must observe the real banner, not a run that never started"
+else
+  ok "the default (no --for-diff) is still a FULL run: all $NGATES gates in the banner, no narrowing notice, no skipped gate"
+fi
+
+# 15h. A bare --for-diff (no ref) must be REFUSED, not silently widened to a full
+#      run: an empty base is indistinguishable from "flag absent" unless the
+#      GIVEN-ness is tracked separately, which is how this was found.
+bare_out="$(cd "$LIVE_ROOT" && ./scripts/preflight.sh --for-diff 2>&1)"; bare_rc=$?
+if [ $bare_rc -ne 0 ] && grep -q -- '--for-diff needs a base ref' <<<"$bare_out"; then
+  ok "--for-diff with no ref is refused (rc=$bare_rc), not silently widened"
+else
+  bad "a bare --for-diff must be refused — got rc=$bare_rc [$(printf '%s' "$bare_out" | tail -n 1)]"
+fi
+
+# 15i. 15g's predicate must BITE. A no-flag run is asserted to print no narrowing
+#      notice; the way that assertion fails is by seeing that notice. Rather than
+#      sabotage the live script (this gate runs on the tree under test), drive the
+#      SAME predicate over a run that IS narrowed — a one-path --classify selection
+#      is not a run, so the notice is simulated with the exact banner text
+#      preflight.sh emits, and the check must report it as a violation.
+narrow_sample='  #  !!  NARROWED RUN: --for-diff origin/main'
+if grep -qE 'NARROWED RUN|--for-diff' <<<"$narrow_sample"; then
+  ok "15g's predicate BITES: the exact NARROWED RUN banner text is detected as a narrowing notice (so a default that narrowed would be RED)"
+else
+  bad "15g's predicate does not recognise preflight.sh's own NARROWED RUN banner — 15g can never go red"
+fi
+# and the counter-case: a full-run banner must NOT trip it. Read from a here-string
+# like every other assertion in this file, so the writer cannot die of SIGPIPE and
+# turn this "must be silent" case into a false red.
+if grep -qE 'NARROWED RUN|--for-diff' <<<'  gates:  build vet test'; then
+  bad "15g's predicate fires on a full-run banner — it would fail every default run"
+else
+  ok "15g's predicate is silent on a full-run banner (no false red)"
 fi
 
 echo "---"

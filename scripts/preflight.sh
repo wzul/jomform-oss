@@ -91,15 +91,25 @@
 #                         unreferenced, so nothing ever ran them).
 #
 # USAGE
-#   scripts/preflight.sh                    # every gate
+#   scripts/preflight.sh                    # every gate (the DEFAULT — unchanged)
 #   scripts/preflight.sh --list             # gate names, then exit
 #   scripts/preflight.sh --only govuln      # just one gate (comma-separated)
 #   scripts/preflight.sh --skip a11y,web    # everything except these
+#   scripts/preflight.sh --for-diff <ref>   # only the gates <ref>..worktree can break
+#   scripts/preflight.sh --explain-diff <ref>  # print that selection, run nothing
+#   scripts/preflight.sh --gate-deps        # the per-gate path dependencies, then exit
 #
 #   --only/--skip exist for proving a single gate BITES (sabotage one thing,
 #   run that gate, expect RED) and for re-running one gate after a fix. They are
 #   NOT a routine bypass: a skip prints a loud WARNING block naming what did not
 #   run. A gate that has never been seen red is not evidence.
+#
+#   --for-diff is the same shape of opt-in: it narrows the run to the gates the
+#   diff can actually break, and it says in its own output what it skipped and
+#   why. <base-ref> is EXPLICIT and required — a guessed default (origin/main) is
+#   wrong on a stacked branch and would silently widen or narrow the run. The
+#   DEFAULT (flag absent) is a full run. See the PATH-AWARE SELECTION section
+#   below for the dependency rules and the fail-closed properties.
 #
 # REQUIREMENTS (the gate FAILS, never silently skips, when these are missing)
 #   JOMFORM_TEST_DATABASE_URL   real Postgres for the integration tests.
@@ -187,6 +197,39 @@ GATE_NAMES=(build vet test govuln web webimage a11y npmaudit gitleaks monitor tm
 
 ONLY=""
 SKIP=""
+FOR_DIFF=""       # --for-diff <base-ref>: narrow to what <base-ref>..worktree can break
+EXPLAIN_DIFF=""   # --explain-diff <base-ref>: print that selection, run nothing
+GATE_DEPS=0       # --gate-deps: print the per-gate path dependencies, then exit
+CLASSIFY=0        # --classify: read changed paths on stdin, print the gate set
+CLASSIFY_PATHS="" # the paths --classify was given (comma-separated), if any
+# WHETHER the flag was GIVEN, kept separately from its value. `--for-diff` with no
+# argument leaves the value empty, which is indistinguishable from "flag absent" —
+# so a bare `--for-diff` used to fall through to a full 7-minute gate run instead
+# of being refused. Measured: that is exactly what happened.
+FOR_DIFF_GIVEN=0
+EXPLAIN_DIFF_GIVEN=0
+# SEL_DIFF is the narrowed gate set, SPACE-PADDED, and it stays EMPTY unless
+# --for-diff/--explain-diff asked for one. selected() reads it, so it has to exist
+# (empty) on every other path — an unset variable under `set -u` aborts the run
+# before the first gate, which is how this was found.
+#
+# ${VAR:-} PRESERVES AN INHERITED VALUE, and that is load-bearing. The concurrency
+# lock re-invokes this script via flock, so this prologue runs a SECOND time in the
+# child while the selection block below skips recomputation (the exported
+# `_PREFLIGHT_SEL` says it was already done). A plain `SEL_DIFF=""` therefore wiped
+# the parent's narrowing and the child ran EVERY gate — a `--for-diff` run that
+# silently stopped being narrowed. Measured, on a change under GATE-INVENTORY.md:
+# the parent selected 7 gates and the child ran all 14.
+SEL_DIFF="${SEL_DIFF:-}"
+# The rest of the selection handoff. Declared the same way, for the same reason —
+# the banner and the summary read them on EVERY path (including the no-flag full
+# run) without tripping `set -u`.
+SEL_DIFF_LINE="${SEL_DIFF_LINE:-}"
+SEL_DIFF_SKIPPED="${SEL_DIFF_SKIPPED:-}"
+SEL_DIFF_FULL="${SEL_DIFF_FULL:-0}"
+SEL_DIFF_REASON="${SEL_DIFF_REASON:-}"
+SEL_COUNT="${SEL_COUNT:-0}"
+SEL_BASE="${SEL_BASE:-}"
 
 # Preserve the ORIGINAL argv before the parsing loop below consumes it with `shift`.
 # The concurrency lock re-invokes this script via flock, and it must hand the child the
@@ -203,18 +246,635 @@ while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help)   usage; exit 0 ;;
     --list)      printf '%s\n' "${GATE_NAMES[@]}"; exit 0 ;;
+    # NOT acted on here: the selection machinery is defined further down, and a
+    # `case` body cannot call a function that does not exist yet (measured — that
+    # printed "command not found" for all three). The flag is recorded and served
+    # after the machinery, before any gate body runs.
+    --gate-deps) GATE_DEPS=1 ;;
+    # Serving this needs the machinery, so it is deferred like --gate-deps. The
+    # path list is given as a comma-separated argument so a caller can classify an
+    # EXPLICIT set of paths without creating them on disk.
+    --classify)   CLASSIFY=1 ;;
+    --classify=*) CLASSIFY=1; CLASSIFY_PATHS="${1#*=}" ;;
     --only)      ONLY="${2:-}"; shift ;;
     --only=*)    ONLY="${1#*=}" ;;
     --skip)      SKIP="${2:-}"; shift ;;
     --skip=*)    SKIP="${1#*=}" ;;
+    --for-diff)      FOR_DIFF="${2:-}"; FOR_DIFF_GIVEN=1; shift ;;
+    --for-diff=*)    FOR_DIFF="${1#*=}"; FOR_DIFF_GIVEN=1 ;;
+    --explain-diff)   EXPLAIN_DIFF="${2:-}"; EXPLAIN_DIFF_GIVEN=1; shift ;;
+    --explain-diff=*) EXPLAIN_DIFF="${1#*=}"; EXPLAIN_DIFF_GIVEN=1 ;;
     *)           die "unknown argument: $1 (see --help)" ;;
   esac
   shift
 done
 
+# The base ref is EXPLICIT and required. There is deliberately no default: the
+# obvious candidate (`origin/main`) is WRONG on a stacked branch — this board
+# carries several — and a wrong base silently widens or narrows the run, which is
+# exactly the failure this whole feature has to avoid. An empty value is refused
+# before the lock is taken, so a bad invocation fails fast instead of queueing.
+if [ "$FOR_DIFF_GIVEN" = 1 ] && [ -z "${FOR_DIFF//[[:space:]]/}" ]; then
+  die "--for-diff needs a base ref, e.g. --for-diff origin/main (there is no default: a guessed base is wrong on a stacked branch)"
+fi
+if [ "$EXPLAIN_DIFF_GIVEN" = 1 ] && [ -z "${EXPLAIN_DIFF//[[:space:]]/}" ]; then
+  die "--explain-diff needs a base ref, e.g. --explain-diff origin/main"
+fi
+if [ "$FOR_DIFF_GIVEN" = 1 ] && [ "$EXPLAIN_DIFF_GIVEN" = 1 ]; then
+  die "--for-diff and --explain-diff are mutually exclusive (--explain-diff runs nothing)"
+fi
+# Narrowing AND hand-picking at once is ambiguous: --only could ask for a gate the
+# diff does not touch, and that gate would silently not run. Refuse the mix.
+if [ "$FOR_DIFF_GIVEN" = 1 ] && { [ -n "$ONLY" ] || [ -n "$SKIP" ]; }; then
+  die "--for-diff cannot be combined with --only/--skip (the diff decides the set; use one or the other)"
+fi
+if [ "$FOR_DIFF_GIVEN" = 1 ] && ! git rev-parse --verify --quiet "$FOR_DIFF^{commit}" >/dev/null 2>&1; then
+  die "--for-diff base ref '$FOR_DIFF' does not resolve to a commit (a guess would silently widen or narrow the run)"
+fi
+if [ "$EXPLAIN_DIFF_GIVEN" = 1 ] && ! git rev-parse --verify --quiet "$EXPLAIN_DIFF^{commit}" >/dev/null 2>&1; then
+  die "--explain-diff base ref '$EXPLAIN_DIFF' does not resolve to a commit"
+fi
+
+# ===========================================================================
+# PATH-AWARE SELECTION — `--for-diff <base-ref>` and its two read-only
+# companions `--explain-diff <base-ref>` and `--gate-deps`.
+#
+# OPT-IN BY CONSTRUCTION. The table below is built only inside the --for-diff
+# branch; with no flag none of this executes and every gate runs exactly as
+# before. A narrowed run never narrows silently: it prints what it skipped and
+# why, in its own output (see the SKIPPED-by-diff block under the banner).
+#
+# WHY THIS IS A UNION OF "DECLARED AREA" AND "DERIVED READS", NOT A HAND TABLE.
+# The area a gate is FOR is a judgement. What a gate actually READS is a property
+# of the code, and this repo crosses areas in BOTH directions — measured, not
+# assumed:
+#
+#   * `api/internal/httpapi/route_parity_test.go` walks `web/src/**`. A web-only
+#     change that calls an unregistered `/api/*` path FAILS the api suite;
+#     reproduced by adding one such file and running the guard, which went red
+#     naming that exact path. A `test -> api/` rule alone would therefore turn a
+#     red gate green.
+#   * 19 web tests read `api/**` Go sources (cross-language contract guards) and
+#     `web/src/lib/langPlacement.test.ts` reads the repo-root `MCP-PARITY.md`.
+#   * the gate-INPUT files the card names (MCP-PARITY.md, GATE-INVENTORY.md,
+#     AGENTS.md, deploy/backup/README.md) are prose that tests PARSE, so a
+#     "docs are inert" rule silently disarms them.
+#
+# The declared table is kept (coarse, safe) and the derived rows are UNIONED in,
+# so a cross-area read cannot be forgotten and the table cannot drift by hand.
+#
+# COST: pure bash plus four `git` calls (three greps and one ls-files), ~2s on a
+# loaded host. No per-path forking: every norm/pathspec call writes through a
+# nameref, because a subshell per candidate cost 3-20s on its own.
+# ===========================================================================
+
+# pw_norm_v <varname> <path> — lexical `..` normalisation, written through a
+# nameref so the caller gets the result without a subshell.
+#   No filesystem access: these strings are read OUT of source files and some are
+#   deliberately not paths at all (an upload test carries "../../../../etc"),
+#   so resolving them would be wrong as well as slow.
+pw_norm_v() {
+  local -n _pw_out="$1"
+  local path="$2" seg
+  local -a parts=() stack=()
+  IFS='/' read -r -a parts <<<"$path"
+  for seg in ${parts+"${parts[@]}"}; do
+    case "$seg" in
+      ""|".") continue ;;
+      "..")
+        if [ ${#stack[@]} -gt 0 ] && [ "${stack[${#stack[@]}-1]}" != ".." ]; then
+          unset 'stack[${#stack[@]}-1]'
+        else
+          stack+=("..")
+        fi ;;
+      *) stack+=("$seg") ;;
+    esac
+  done
+  _pw_out=""
+  if [ ${#stack[@]} -gt 0 ]; then
+    for seg in "${stack[@]}"; do _pw_out="${_pw_out}${_pw_out:+/}$seg"; done
+  fi
+}
+
+# pw_pathspec_v <varname> <repo-rel-path> — the git pathspec for a candidate, or
+# empty. Through a nameref for the same reason as pw_norm_v.
+#   * outside the repo   -> empty: it cannot be an input to a run in this tree.
+#   * a directory        -> "<dir>/*": reading a directory covers all of it.
+#   * an existing file   -> the path.
+#   * anything else      -> empty. git only reports paths that exist in one of
+#     the two trees being compared, so a candidate that does not resolve here
+#     cannot appear in the diff, and dropping it cannot narrow a live path away.
+pw_pathspec_v() {
+  local -n _pw_ps="$1"
+  local p
+  _pw_ps=""
+  pw_norm_v p "$2"
+  [ -n "$p" ] || return 0
+  case "$p" in ..|../*) return 0 ;; esac
+  if [ -d "$p" ]; then _pw_ps="${p%/}/*"
+  elif [ -e "$p" ]; then _pw_ps="$p"
+  fi
+  return 0
+}
+
+# pw_declared <gate> — the AREA the gate is for. The card's dependency table.
+#
+# A gate with NO row here falls through to `*`, which means "cannot narrow —
+# always run": a gate added to GATE_NAMES is then never silently unreachable.
+# That fallback is a seatbelt, not the design — the `selftest` gate compares this
+# table against `--list` (through `--gate-deps`) and fails when a gate is missing
+# or has no pattern at all.
+pw_declared() {
+  case "$1" in
+    build|vet|test|govuln) printf '%s\n' 'api/*' ;;
+    web|a11y)              printf '%s\n' 'web/*' ;;
+    npmaudit)              printf '%s\n' 'web/package.json' 'web/package-lock.json' ;;
+    monitor|tmpkey|backup|prunewt|refguard) printf '%s\n' 'deploy/*' 'scripts/*' ;;
+    selftest)              printf '%s\n' 'scripts/*' 'GATE-INVENTORY.md' ;;
+    gitleaks)              printf '%s\n' '*' ;;
+    *)                     printf '%s\n' '*' ;;
+  esac
+}
+
+# pw_sources <gate> — the files the gate EXECUTES. Only these are scanned for
+# reads. Deliberately limited to what actually runs: a bite-proof or a helper no
+# gate invokes is not a source of any gate, and listing one would widen the gate
+# for a read nothing performs.
+pw_sources() {
+  case "$1" in
+    build|vet|test|govuln) printf '%s\n' 'api/*' ;;
+    web)                   printf '%s\n' 'web/package.json' 'web/src/*' 'web/next.config.mjs' 'web/tsconfig.json' 'web/scripts/web-deps-check.mjs' ;;
+    a11y)                  printf '%s\n' 'web/e2e/*' 'web/playwright.config.ts' ;;
+    npmaudit)              printf '%s\n' 'web/package.json' 'web/package-lock.json' ;;
+    monitor)               printf '%s\n' 'deploy/monitoring/*' ;;
+    tmpkey)                printf '%s\n' 'deploy/tmp-apikey.sh' 'deploy/tmp-apikey_test.sh' ;;
+    backup)                printf '%s\n' 'deploy/backup/*' ;;
+    prunewt)               printf '%s\n' 'deploy/worktrees/*' ;;
+    refguard)              printf '%s\n' 'scripts/refguard.sh' 'scripts/refguard_test.sh' ;;
+    selftest)              printf '%s\n' 'scripts/preflight.sh' 'scripts/preflight_test.sh' ;;
+    gitleaks)              printf '%s\n' '.gitleaks.toml' ;;
+  esac
+}
+
+# The read SHAPES worth deriving. Measured on this repo, not guessed: these are
+# the forms its Go, TypeScript and bash use to name a path outside the file's own
+# directory. Shapes 3 and 4 are the trap class the card names.
+PW_READ_RE='(\.\./){2,}[A-Za-z0-9_@./-]*|filepath\.Join\([^)]*\)|"(api|web|deploy|scripts|docs|loadtest|e2e)/[A-Za-z0-9_@./*-]*"|"(MCP-PARITY|GATE-INVENTORY|AGENTS)\.md"|"(Makefile|\.gitleaks\.toml|\.gitignore)"|\$(HERE|SCRIPT_DIR)/\.\./[A-Za-z0-9_./-]+'
+
+# A repo-wide read (git grep / ls-files / rev-list over THIS checkout) makes a
+# gate depend on every tracked file's CONTENT, so it can never narrow. It is
+# deliberately conservative: a sandbox-only `git -C "$SB" rev-list` is flagged
+# too, which costs a cheap suite an unnecessary run and CANNOT cost a red gate
+# its run. The one live-repo instance is scripts/preflight_test.sh's doc sweep.
+PW_REPOWIDE_RE='git[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?(grep|ls-files|rev-list)[[:space:]]'
+
+PW_SEL=""        # "<gate>\t<pathspec>" rows: the runtime dependency table
+PW_BLOCKED=""    # gates that cannot narrow, one per line
+PW_DEGRADED=0    # 1 -> derivation failed; every gate widens to `*`
+declare -A PW_DERIVED=()  # file -> its candidate reads (newline separated)
+declare -A PW_PS=()       # candidate -> its resolved pathspec ("" = unresolvable)
+declare -A PW_RWSET=()    # file -> 1 when it reads the whole checkout
+declare -A PW_CLAIMS=()   # gate -> paths it CLAIMS are its inputs (declared, no `*`)
+declare -A PW_SRCS=()     # gate -> its source globs, one per line
+PW_RW_FILES=()            # files that read the whole checkout
+
+# pw_cache_sources — resolve every gate's source globs ONCE. Both the ownership
+# test and the repo-wide test call this per file per gate; without the cache that
+# is ~950 subshells and was over 20s of the table build on its own.
+pw_cache_sources() {
+  local gate glob acc
+  for gate in "${GATE_NAMES[@]}"; do
+    [ -n "${PW_SRCS[$gate]+set}" ] && continue
+    acc=""
+    while IFS= read -r glob; do
+      [ -n "$glob" ] || continue
+      acc="${acc}${glob}
+"
+    done < <(pw_sources "$gate")
+    PW_SRCS[$gate]="$acc"
+  done
+  return 0
+}
+
+pw_row() { PW_SEL="${PW_SEL}${1}	${2}
+"; }
+pw_blocked() { PW_BLOCKED="${PW_BLOCKED}${1}
+"; }
+
+# pw_derive_all — ONE awk pass over every line of every gate source that names a
+# path, emitting "<file>\t<candidate>".
+#   Every plausible base is tried for the ambiguous shapes because a wrong guess
+#   NARROWS the run, which is the unsafe direction; pw_pathspec_v drops whatever
+#   does not resolve, so the extra candidates cost nothing but a stat.
+#   Comment lines are stripped: prose that quotes a path is documentation, not a
+#   read — the same stripping the no-`|| true` check uses.
+pw_derive_all() {
+  git grep -nE "$PW_READ_RE" -- 'api/' 'web/' 'scripts/' 'deploy/' 2>/dev/null \
+    | awk '
+    function norm(p,    n,i,parts,st,stn,out) {
+      n = split(p, parts, "/"); stn = 0; delete st
+      for (i = 1; i <= n; i++) {
+        if (parts[i] == "" || parts[i] == ".") continue
+        if (parts[i] == "..") {
+          if (stn > 0 && st[stn] != "..") { delete st[stn]; stn-- }
+          else { stn++; st[stn] = ".." }
+        } else { stn++; st[stn] = parts[i] }
+      }
+      out = ""
+      for (i = 1; i <= stn; i++) out = out (i > 1 ? "/" : "") st[i]
+      return out
+    }
+    function dirname(f,    i) {
+      i = length(f); while (i > 0 && substr(f, i, 1) != "/") i--
+      return (i > 1) ? substr(f, 1, i - 1) : ""
+    }
+    function emit(c) { if (c != "") print file "\t" c }
+    {
+      i = index($0, ":"); file = substr($0, 1, i - 1)
+      rest = substr($0, i + 1); j = index(rest, ":")
+      text = (j > 0) ? substr(rest, j + 1) : rest
+      t = text; sub(/^[ \t]+/, "", t)
+      if (t ~ /^(#|\/\/|\*|\/\*)/) next
+      d = dirname(file)
+
+      # 1. relative literals: ../../../web/src
+      s = text
+      while (match(s, /(\.\.\/){2,}[A-Za-z0-9_@.\/-]*/)) {
+        lit = substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH)
+        emit(norm(d "/" lit))
+      }
+      # 2. filepath.Join(...) against every plausible base
+      s = text
+      while (match(s, /filepath\.Join\([^)]*\)/)) {
+        call = substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH)
+        joined = ""; k = 0
+        while (match(call, /"[^"]*"/)) {
+          seg = substr(call, RSTART + 1, RLENGTH - 2); call = substr(call, RSTART + RLENGTH)
+          joined = joined (k++ > 0 ? "/" : "") seg
+        }
+        if (joined != "") { emit(joined); emit("api/" joined); emit(norm(d "/" joined)) }
+      }
+      # 3. repo-root-relative literals: "api/internal/httpapi/rest.go"
+      s = text
+      while (match(s, /"(api|web|deploy|scripts|docs|loadtest|e2e)\/[A-Za-z0-9_@.\/-]*"/)) {
+        lit = substr(s, RSTART + 1, RLENGTH - 2); s = substr(s, RSTART + RLENGTH)
+        emit(lit); emit(norm(d "/" lit))
+      }
+      # 4. repo-root FILES named literally — the trap: prose that is test INPUT
+      s = text
+      while (match(s, /"(MCP-PARITY|GATE-INVENTORY|AGENTS)\.md"|"(Makefile|\.gitleaks\.toml|\.gitignore)"/)) {
+        lit = substr(s, RSTART + 1, RLENGTH - 2); s = substr(s, RSTART + RLENGTH)
+        emit(lit)
+      }
+      # 5. bash: $HERE/../x and $SCRIPT_DIR/../x resolve from the script dir.
+      #    $HERE IS the dirname of the file being scanned, so it is substituted
+      #    with `d` and the `..` is left for norm() to collapse. Stripping the
+      #    `../` and THEN prepending `d` counted the upward step twice and landed
+      #    on the wrong base: $HERE/../AGENTS.md in scripts/preflight_test.sh came
+      #    out as `scripts/AGENTS.md` (which does not exist) instead of the
+      #    repo-root `AGENTS.md` — an UNDER-inclusion, the unsafe direction.
+      s = text
+      while (match(s, /\$(HERE|SCRIPT_DIR)\/\.\.\/[A-Za-z0-9_.\/-]+/)) {
+        lit = substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH)
+        sub(/^\$[A-Z_]+\//, "", lit)
+        emit(norm(d "/" lit))
+      }
+    }' 2>/dev/null
+  return 0
+}
+
+# pw_build_table — the whole dependency table, built once, before any gate runs.
+pw_build_table() {
+  PW_SEL=""; PW_BLOCKED=""; PW_DEGRADED=0
+  PW_DERIVED=(); PW_PS=(); PW_RWSET=(); PW_CLAIMS=()
+  local gate pat file cand ps g p rows="" derived
+  local -a cands=()
+
+  pw_cache_sources
+  derived="$(pw_derive_all)"
+  local nc nsrc
+  nc="$(printf '%s\n' "$derived" | grep -c '[^[:space:]]')"
+
+  # A deriver that finds NOTHING while there are sources to scan has not proved
+  # "no dependencies" — it has FAILED, and a silent failure here would narrow
+  # every gate. Widen all of them and announce it.
+  nsrc="$(git ls-files -- 'api/' 'web/' 'scripts/' 'deploy/' 2>/dev/null | grep -c '[^[:space:]]')"
+  if [ "$nsrc" -gt 0 ] && [ "$nc" -eq 0 ]; then
+    PW_DEGRADED=1
+    for gate in "${GATE_NAMES[@]}"; do
+      pw_row "$gate" '*'
+      pw_blocked "$gate"
+    done
+    return 0
+  fi
+
+  while IFS=$'	' read -r file cand; do
+    [ -n "${file:-}" ] || continue
+    [ -n "$cand" ] || continue
+    PW_DERIVED[$file]="${PW_DERIVED[$file]:-}${cand}
+"
+  done <<<"$derived"
+
+  # Which files read the whole checkout (comment lines stripped, so a file is
+  # only repo-wide when an ACTIVE line does it).
+  #
+  # WHY THE PATTERN IS COUNTED, NOT PIPED INTO `grep -q`. This was a `grep ... |
+  # grep -qE ...` and it is nondeterministic under `set -o pipefail`: when the
+  # pattern matches, `grep -q` exits at the first match and the writer dies of
+  # SIGPIPE (141), and pipefail then reports the pipeline as FAILED even though
+  # it matched. Measured 2 misses in 40 runs of the same line on the same file.
+  # The failure is a MISSED repo-wide read, i.e. the file is not added to
+  # PW_RW_FILES, so the gate that reads the whole checkout is treated as
+  # NARROWABLE and can be dropped from a narrowed run — the unsafe direction, and
+  # `prunewt` is the gate it hits. Reading the output into a variable makes the
+  # verdict depend on the match count, which cannot race.
+  # (Same defect class as the 13 sites fixed in scripts/preflight_test.sh.)
+  local rw_hits
+  PW_RW_FILES=()
+  for file in $(git grep -lE "$PW_REPOWIDE_RE" -- 'api/' 'web/' 'scripts/' 'deploy/' 2>/dev/null); do
+    rw_hits="$(grep -avE '^[[:space:]]*(#|//|\*|/\*)' "$file" 2>/dev/null | grep -cE "$PW_REPOWIDE_RE")"
+    if [ "${rw_hits:-0}" -gt 0 ]; then
+      PW_RWSET[$file]=1
+      PW_RW_FILES+=("$file")
+    fi
+  done
+
+  # Per gate: the declared area, then the derived reads of ITS OWN sources.
+  # Membership is a `case` match against the gate's source globs — no file list is
+  # enumerated here, because `git ls-files` per glob per gate cost ~0.7s and
+  # building a per-gate file list cost a fork per file.
+  for gate in "${GATE_NAMES[@]}"; do
+    # A DECLARED `*` means "this gate cannot narrow — always run". It has to be
+    # turned into the BLOCKED verdict here, not merely stored as a pattern:
+    # the `*` row is not a claim on every path (that would make the
+    # unclaimed-path check dead code), so a declared-`*` gate that is not ALSO
+    # blocked claims nothing and is dropped from every narrowed run.
+    # Measured: gitleaks — which scans the whole git history and is the last gate
+    # that may be skipped — vanished from a web-only selection that way.
+    local declared_blocked=0
+    while IFS= read -r pat; do
+      [ -n "$pat" ] || continue
+      if [ "$pat" = '*' ]; then declared_blocked=1; continue; fi
+      pw_row "$gate" "$pat"
+    done < <(pw_declared "$gate")
+    if [ "$declared_blocked" = 1 ]; then
+      pw_blocked "$gate"
+      pw_row "$gate" '*'
+      continue
+    fi
+
+    # A gate whose sources read the whole checkout cannot narrow: its inputs are
+    # every tracked file's CONTENT, which no path list can express.
+    local rw_glob blocked=0
+    for rw_glob in ${PW_RW_FILES+"${PW_RW_FILES[@]}"}; do
+      [ -n "$rw_glob" ] || continue
+      pw_matches_gate "$gate" "$rw_glob" && { blocked=1; break; }
+    done
+    if [ "$blocked" = 1 ]; then
+      # The gate's DECLARED area is still recorded as a claim (above), so a path
+      # in it is known; the gate itself just always runs.
+      pw_blocked "$gate"
+      pw_row "$gate" '*'
+      continue
+    fi
+
+    while IFS= read -r file; do
+      [ -n "$file" ] || continue
+      case "$file" in
+        */*) ;;
+        *) continue ;;
+      esac
+      pw_matches_gate "$gate" "$file" || continue
+      [ -n "${PW_DERIVED[$file]:-}" ] || continue
+      while IFS= read -r cand; do
+        [ -n "$cand" ] || continue
+        cands+=("$cand")
+        pw_row "$gate" "RAW${cand}"
+      done <<<"${PW_DERIVED[$file]}"
+    done < <(printf '%s\n' "${!PW_DERIVED[@]}")
+
+  done
+
+  # Resolve every UNIQUE candidate exactly once. Per-row resolution re-statted the
+  # same path up to 14 times (measured 3.3s for one gate's 78 candidates).
+  local u
+  for u in ${cands+"${cands[@]}"}; do
+    [ -n "$u" ] || continue
+    [ -n "${PW_PS[$u]+set}" ] && continue
+    pw_pathspec_v ps "$u"
+    PW_PS[$u]="$ps"
+  done
+
+  while IFS=$'	' read -r g p; do
+    [ -n "${g:-}" ] || continue
+    case "$p" in
+      RAW*)
+        ps="${PW_PS[${p#RAW}]:-}"
+        [ -n "$ps" ] && rows="${rows}${g}	${ps}
+" ;;
+      *) rows="${rows}${g}	${p}
+" ;;
+    esac
+  done <<<"$PW_SEL"
+  PW_SEL="$(printf '%s' "$rows" | grep -v '^$' | sort -u)"
+
+  # PW_CLAIMS is built from the RESOLVED rows, not the raw candidates. A candidate
+  # that names a DIRECTORY resolves to `<dir>/*`, and it is that pathspec which
+  # matches a changed file — storing the bare candidate made `web/src` claim
+  # nothing under it, so a change to web/src/app/page.tsx was reported as claimed
+  # by no gate at all. Measured: that pushed a one-file web change from the web
+  # gates to a 14-gate full run.
+  #
+  # `*` is EXCLUDED. It is the always-run row, not a claim on every path; keeping
+  # it would make every path look claimed and turn the fail-closed branch into
+  # dead code.
+  while IFS=$'	' read -r g p; do
+    [ -n "${g:-}" ] || continue
+    [ -n "$p" ] || continue
+    [ "$p" = '*' ] && continue
+    PW_CLAIMS[$g]="${PW_CLAIMS[$g]:-}${p}
+"
+  done <<<"$PW_SEL"
+  return 0
+}
+
+# pw_matches_gate <gate> <file> — does this gate's source set include this file?
+#   Reads the CACHED glob list: this is called once per derived file per gate.
+pw_matches_gate() {
+  local gate="$1" f="$2" g
+  while IFS= read -r g; do
+    [ -n "$g" ] || continue
+    case "$f" in $g) return 0 ;; esac
+  done <<<"${PW_SRCS[$gate]:-}"
+  return 1
+}
+
+# pw_gate_blocked <gate> — can this gate narrow at all?
+#
+# NOTE the explicit `return 1`: a `case` with NO matching arm exits 0 in bash, so
+# a case-as-predicate without a final return reports "matched" for every input.
+# That error made every gate report `*` the first time this ran.
+#
+# THE TRAILING NEWLINE IN THE PATTERN IS LOAD-BEARING, AND SO IS THE LEADING ONE.
+# `$(...)` strips trailing newlines, so wrapping the list that way turned the LAST
+# entry into a bare name with nothing after it — `*"$1\n"*` could never match it.
+# Measured: `selftest` was recorded as unable to narrow (its own sources run
+# `git grep` over the whole checkout) but answered "no" here, so it was treated as
+# narrowable, its `*` row was skipped by pw_claims, and the gate dropped out of a
+# diff that edits AGENTS.md — which that gate really does read. A red gate would
+# have gone green. The leading newline matters for the same class of error in the
+# other direction: "selftest\n" CONTAINS "test\n", so a mid-list `test` arm
+# matched a list that never named it and `test` was wrongly marked unable to
+# narrow. Both are substring traps; both sides are anchored now.
+pw_gate_blocked() {
+  [ "$PW_DEGRADED" = 1 ] && return 0
+  [ -n "$PW_BLOCKED" ] || return 1
+  # Prepend a newline so the FIRST entry is anchored like every other one.
+  # pw_blocked always appends "<gate>\n", so the list is "\ng1\ng2\n…gn\n" here.
+  local bl=$'\n'"${PW_BLOCKED}"
+  case "$bl" in
+    *$'\n'"$1"$'\n'*) return 0 ;;
+  esac
+  return 1
+}
+
+# pw_claims <gate> <changed-path> — is this changed path an input to this gate?
+#
+# Read from PW_CLAIMS, and the distinction is what keeps the fail-closed check
+# alive. A gate that CANNOT narrow always runs, so its declared area still tells
+# us the path is KNOWN — it is not an unknown path, and it must not trip the
+# "no gate claims this" branch that widens the whole run. Measured: editing
+# GATE-INVENTORY.md (claimed by `selftest`, which reads the whole checkout and so
+# is always-run) was reported as claimed by NO gate and forced all 14 gates, which
+# makes a common edit pay the full run for nothing. PW_CLAIMS carries the
+# non-`*` declared area of EVERY gate plus the derived reads of the ones that can
+# narrow, so a known path is recognised while a genuinely unknown one still
+# widens the run.
+pw_claims() {
+  local gate="$1" c="$2" pat
+  while IFS= read -r pat; do
+    [ -n "$pat" ] || continue
+    case "$c" in $pat) return 0 ;; esac
+  done <<<"${PW_CLAIMS[$gate]:-}"
+  return 1
+}
+
+# pw_changed_paths <base> — every path the diff touches, one per line.
+#   --no-renames reports a rename as its delete PLUS its add: both names are
+#   changes to files a gate may read.
+#   Untracked (not ignored) files are included: a file this tree carries and the
+#   base does not is exactly what a gate must see.
+pw_changed_paths() {
+  git diff --name-only --no-renames "$1" 2>/dev/null
+  git ls-files --others --exclude-standard 2>/dev/null
+  return 0
+}
+
+# pw_classify — stdin: the changed paths. stdout: "<gate>" lines, then a
+# "#reason: <text>" line. This is the whole fail-closed policy and it is split out
+# from pw_selection so the selftest can drive it with an EXPLICIT path list,
+# without mutating a real tree (see --classify).
+#
+# FAIL-CLOSED in one place:
+#   * an empty path list -> FULL (an empty list is not evidence);
+#   * a changed path NO narrowable gate claims -> FULL, naming the path;
+#   * an empty selection -> FULL.
+# Gates that cannot narrow are added to every selection: they always run.
+pw_classify() {
+  local changed c gate claimed="" unclaimed="" hit=0 reason=""
+
+  changed="$(cat)"
+  if [ -z "$(printf '%s' "$changed" | tr -d '[:space:]')" ]; then
+    reason="no changed path was given"
+    printf '%s\n' "${GATE_NAMES[@]}"
+    printf '#reason: %s\n' "$reason"
+    return 0
+  fi
+
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    hit=0
+    for gate in "${GATE_NAMES[@]}"; do
+      pw_claims "$gate" "$c" && hit=1
+    done
+    [ "$hit" = 0 ] && unclaimed="${unclaimed}${c} "
+  done <<<"$changed"
+
+  if [ -n "$unclaimed" ]; then
+    reason="no gate claims ${unclaimed% }"
+    printf '%s\n' "${GATE_NAMES[@]}"
+    printf '#reason: %s\n' "$reason"
+    return 0
+  fi
+
+  for gate in "${GATE_NAMES[@]}"; do
+    if pw_gate_blocked "$gate"; then claimed="${claimed}${gate}
+"; continue; fi
+    while IFS= read -r c; do
+      [ -n "$c" ] || continue
+      if pw_claims "$gate" "$c"; then claimed="${claimed}${gate}
+"; break; fi
+    done <<<"$changed"
+  done
+  if [ -z "$(printf '%s' "$claimed" | tr -d '[:space:]')" ]; then
+    reason="the selection came out empty"
+    printf '%s\n' "${GATE_NAMES[@]}"
+    printf '#reason: %s\n' "$reason"
+    return 0
+  fi
+  reason="narrowed to the gates the diff can break"
+  printf '%s' "$claimed"
+  printf '#reason: %s\n' "$reason"
+  return 0
+}
+
+# pw_selection <base> — the changed paths from git, classified.
+#
+# THE REASON TRAVELS ON STDOUT ON PURPOSE. This is called in a command
+# substitution (the caller needs the gate list to build a space-padded set), and a
+# command substitution runs in a SUBSHELL — a global set inside the function does
+# not reach the caller. Printing it keeps the whole result in one channel, so
+# there is nothing to fall out of sync.
+#
+# An empty diff (unknown ref, no git, shallow clone, nothing changed) reaches the
+# same FULL branch as an empty list here.
+pw_selection() {
+  pw_changed_paths "$1" | pw_classify
+  return 0
+}
+
+# pw_gate_deps — the DOCUMENTED per-gate dependency table, one line per gate:
+# "<gate>: <pattern> <pattern> …", where `*` means "cannot narrow, always runs".
+#
+# THIS IS THE TABLE THE SELFTEST CHECKS, and it is deliberately the DECLARED area
+# plus the CANNOT-NARROW verdict — not the full derived set. The derived rows are
+# a runtime safety net read out of the sources; they move whenever the sources
+# move, so pinning them here would make every read added anywhere a red test. What
+# must be checked is the part a human maintains: every gate has an area, and a gate
+# that cannot narrow says so.
+pw_gate_deps() {
+  local gate pats
+  for gate in "${GATE_NAMES[@]}"; do
+    if pw_gate_blocked "$gate"; then
+      printf '%s: *\n' "$gate"
+      continue
+    fi
+    pats="$(pw_declared "$gate" | tr '\n' ' ')"
+    printf '%s: %s\n' "$gate" "${pats% }"
+  done
+  return 0
+}
+
 # selected() — is this gate in the requested set?
+#
+# With --for-diff, SEL_DIFF holds the gates the diff can break (built once, above)
+# and that set is the selection; ONLY/SKIP are refused in combination with it, so
+# the two cannot disagree here.
 selected() {
   local gate="$1"
+  if [ -n "$SEL_DIFF" ]; then
+    case "$SEL_DIFF" in *" $gate "*) return 0 ;; *) return 1 ;; esac
+  fi
   if [ -n "$ONLY" ]; then
     case ",$ONLY," in *",$gate,"*) ;; *) return 1 ;; esac
   fi
@@ -233,6 +893,89 @@ if [ -n "$SKIP" ]; then
   for g in ${SKIP//,/ }; do
     case " ${GATE_NAMES[*]} " in *" $g "*) ;; *) die "unknown gate for --skip: $g (see --list)" ;; esac
   done
+fi
+
+# ---- PATH-AWARE SELECTION (--for-diff / --explain-diff) --------------------
+#
+# Served here (the machinery is only defined at this point in the file) and before
+# the lock, so it costs nothing and never queues.
+if [ "$GATE_DEPS" = 1 ]; then
+  # The cannot-narrow verdict is part of the table, so the table still has to be
+  # built — but for a gate that can narrow, the DOCUMENTED area is what is printed.
+  pw_build_table
+  pw_gate_deps
+  exit 0
+fi
+
+# --classify <paths> — the classification for an EXPLICIT path list, with nothing
+# run and nothing created. <paths> is comma-separated; with no argument the paths
+# are read from stdin instead. This exists so the safety properties (the trap
+# files, fail-closed, the bite) can be asserted by the `selftest` gate in a sandbox
+# without writing probe files into a real tree.
+if [ "$CLASSIFY" = 1 ]; then
+  pw_build_table
+  if [ -n "$CLASSIFY_PATHS" ]; then
+    printf '%s\n' "$CLASSIFY_PATHS" | tr ',' '\n' | pw_classify
+  else
+    pw_classify
+  fi
+  exit 0
+fi
+
+# Evaluated HERE, before the concurrency lock is taken. Two reasons:
+#   * a bad invocation (a ref that is not a commit) must fail fast rather than
+#     queue behind another gate for up to PREFLIGHT_LOCK_WAIT and then fail;
+#   * --explain-diff runs no gate, so it must never take the lock at all.
+#
+# The computed selection is EXPORTED, and the locked child re-runs this script
+# with the same argv — so the child must not rebuild the table. `_PREFLIGHT_SEL`
+# is that handoff: it is set here and inherited, which makes the build happen
+# exactly once per invocation instead of twice (the table costs ~4s).
+#
+# SEL_DIFF is a space-padded "<gate> <gate> " list. It is EMPTY on every
+# invocation that does not ask for a diff, which is what keeps the DEFAULT a full
+# run: selected() only consults it when it is non-empty.
+if [ -z "${_PREFLIGHT_SEL:-}" ] && { [ "$FOR_DIFF_GIVEN" = 1 ] || [ "$EXPLAIN_DIFF_GIVEN" = 1 ]; }; then
+  SEL_BASE="${FOR_DIFF:-$EXPLAIN_DIFF}"
+  pw_build_table
+  sel_out="$(pw_selection "$SEL_BASE")"
+  SEL_DIFF_REASON="$(printf '%s\n' "$sel_out" | sed -n 's/^#reason: //p' | sed -n '1p')"
+  # LEADING space as well as trailing: selected() matches `*" $gate "*`, so a
+  # first gate with nothing before it would never match. Measured — the first
+  # selected gate came out as skipped and appeared in both lists.
+  SEL_DIFF=" "
+  SEL_COUNT=0
+  while IFS= read -r sg; do
+    [ -n "$sg" ] || continue
+    case "$sg" in '#reason:'*) continue ;; esac
+    SEL_DIFF="${SEL_DIFF}${sg} "
+    SEL_COUNT=$((SEL_COUNT + 1))
+  done <<<"$sel_out"
+  SEL_DIFF_LINE="${SEL_DIFF% }"
+  SEL_DIFF_SKIPPED="$(for gate in "${GATE_NAMES[@]}"; do selected "$gate" || printf '%s ' "$gate"; done)"
+  SEL_DIFF_SKIPPED="${SEL_DIFF_SKIPPED% }"
+  # A selection that came out as the whole inventory was produced by the
+  # fail-closed paths (unknown ref / unclaimed path), not by "the diff touches
+  # everything" — those are different facts and only one of them is a narrowing.
+  if [ "$SEL_COUNT" -eq "${#GATE_NAMES[@]}" ]; then
+    SEL_DIFF_FULL=1
+  else
+    SEL_DIFF_FULL=0
+  fi
+  export SEL_DIFF SEL_DIFF_LINE SEL_DIFF_SKIPPED SEL_DIFF_FULL SEL_COUNT SEL_DIFF_REASON SEL_BASE
+  export _PREFLIGHT_SEL=1
+  if [ -n "$EXPLAIN_DIFF" ]; then
+    echo "preflight --explain-diff $SEL_BASE"
+    echo "  changed paths: $(pw_changed_paths "$SEL_BASE" | grep -c '[^[:space:]]')"
+    echo "  gates selected ($SEL_COUNT of ${#GATE_NAMES[@]}): $SEL_DIFF_LINE"
+    echo "  reason: $SEL_DIFF_REASON"
+    if [ "$SEL_DIFF_FULL" = 1 ]; then
+      echo "  FULL RUN — nothing was narrowed"
+    else
+      echo "  would SKIP (a gate that did not run is not evidence): $SEL_DIFF_SKIPPED"
+    fi
+    exit 0
+  fi
 fi
 
 SKIPPED=()
@@ -332,7 +1075,36 @@ echo "  repo:   $REPO_ROOT"
 echo "  commit: $(git rev-parse --short HEAD) ($(git describe --tags --always 2>/dev/null || echo untagged))"
 echo "  gates:  ${GATE_NAMES[*]}"
 if [ -n "$ONLY" ]; then echo "  --only: $ONLY"; fi
+if [ -n "${SEL_DIFF_LINE:-}" ]; then
+  echo "  --for-diff ${SEL_BASE}: ${SEL_COUNT}/${#GATE_NAMES[@]} gates"
+fi
 echo "=============================================================="
+
+# A narrowed run must NEVER be silent. The board's rule is that a gate which did
+# not run is not evidence, so a run that narrowed has to say so in its own output
+# — including WHY, so the reader can judge the selection rather than trust it.
+if [ -n "${SEL_DIFF_LINE:-}" ]; then
+  cat >&2 <<EOF
+
+  ############################################################
+  #  !!  NARROWED RUN: --for-diff $SEL_BASE
+  ############################################################
+  #  RUN:  $SEL_DIFF_LINE
+  #  NOT RUN (this is NOT evidence): ${SEL_DIFF_SKIPPED:-none}
+  #  WHY:  $SEL_DIFF_REASON
+EOF
+  if [ "${SEL_DIFF_FULL:-0}" = 1 ]; then
+    cat >&2 <<EOF
+  #  That is the FULL ${#GATE_NAMES[@]}-gate set: the diff was unclassifiable (or
+  #  touched a path no gate claims), so nothing was narrowed.
+EOF
+  fi
+  cat >&2 <<EOF
+  #  Read --explain-diff <base-ref> to see the classification without running.
+  ############################################################
+
+EOF
+fi
 
 if [ ${#SKIPPED[@]} -gt 0 ]; then
   cat >&2 <<EOF
