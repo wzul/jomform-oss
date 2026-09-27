@@ -110,6 +110,33 @@ package totpconsume
 // and guessing one there is worse than leaving it. Widening past one hop would
 // need real data-flow analysis.
 //
+// ONE KEY PER WRITE SITE, AND WHY THE KEY IS SHAPED THE WAY IT IS (G)
+//
+// The allowlist above is keyed by "repo-relative file (site)", and two shapes
+// made that key ambiguous. Both were reproduced on the previous cut of this
+// guard (`go build ./...` RC=0, guard green):
+//
+//	G1. a PACKAGE-LEVEL const named exactly like the accessor —
+//	    `const ConsumeTOTPStep = "UPDATE users SET totp_last_step = ..."` — is a
+//	    different Go namespace from the METHOD of that name, so it compiles, and
+//	    it produced a key BYTE-IDENTICAL to the allowlisted entry written for the
+//	    method. A full second implementation of the rule read GREEN. The same
+//	    collapse hid a genuinely STALE entry: with the accessor neutered so it no
+//	    longer writes the column, the const's own write satisfied the staleness
+//	    check on the method's behalf, and neither half of the pair was reported.
+//	G2. a function-LOCAL const gave a FALSE RED. Moving the accessor's own
+//	    statement into `const stepSQL = "..."` inside its body reported the same
+//	    statement twice — once as the function, once as `(stepSQL)`, which is not
+//	    allowlisted — and then failed for there being no production write site at
+//	    all. The emitted advice is to remove the allowlist entry, i.e. to delete
+//	    the only protection there is, for a change that renamed no behaviour.
+//
+// Both are closed in enclosingDecl, by key: a declaration INSIDE a function body
+// is keyed by that function (G2), and a declaration outside any function is
+// keyed `decl <name>` (G1) — a shape no function key can equal, since an
+// identifier cannot contain a space. This is a different axis from E's
+// function-scoped local bindings and does not replace them.
+//
 // SCOPE OF A NAME BOUND BY `:=` (F)
 //
 // E3 resolved a name bound earlier by an assignment, but the map holding those
@@ -182,9 +209,17 @@ var sqlWritesTOTPStep = regexp.MustCompile(`(?is)\bupdate\b.*?\btotp_last_step\s
 // as one in another package, so the allowlist must not cover it by accident.
 //
 // A statement declared at PACKAGE level (a const or var outside any function) is
-// keyed by its declaration name, e.g. `... (totpStepUpdateSQL)`, because there is
-// no function to name. A local const/var inside a function body still belongs to
-// that function, so the function-keyed shape above is unchanged for it.
+// keyed as `... (decl <name>)` — e.g. `... (decl totpStepUpdateSQL)` — because
+// there is no function to name, and a bare name is NOT safe to use here: a
+// package-level const and a method may share a name in Go (different
+// namespaces), so `file (ConsumeTOTPStep)` would key a const and the allowlisted
+// accessor METHOD identically, letting the const's statement inherit the
+// method's permission. A local const/var inside a function body belongs to that
+// function and is keyed by the FUNCTION, not by its own name — a function-local
+// declaration is part of the function's statement, and keying it separately both
+// reported that statement twice and turned a legitimate
+// `const stepSQL = "…"` inside the accessor into an unlisted write site plus a
+// bogus "no production file writes …" failure.
 //
 // The list is checked in BOTH directions: an unlisted write site fails, and a
 // listed one that no longer writes the column fails, so it cannot rot into a
@@ -589,9 +624,9 @@ func TestSharedRuleHasExactlyOneDefinition(t *testing.T) {
 func TestOnlyTheStoreWritesTheTOTPStepColumn(t *testing.T) {
 	root := apiRoot(t)
 
-	// seen maps an allowlisted write site ("file (function)" or
-	// "file (decl)" for a package-level declaration) to itself, so a stale entry
-	// (or one that silently stopped matching) is visible by name.
+	// seen maps an allowlisted write site ("file (function)", or
+	// "file (decl <name>)" for a declaration outside any function) to itself, so
+	// a stale entry (or one that silently stopped matching) is visible by name.
 	seen := map[string]bool{}
 	constsByDir := map[string]map[string]string{}
 	funcsByDir := map[string]map[string]string{}
@@ -1202,35 +1237,71 @@ func formatCall(call *ast.CallExpr) (*ast.BasicLit, bool) {
 }
 
 // enclosingDecl names the write site an expression belongs to: the innermost
-// function containing it, or — for a package-level declaration, which is what
-// this guard previously could not see — the declaration's own name.
+// function containing it, or — for a declaration OUTSIDE any function, which is
+// what this guard previously could not see — that declaration's own name, in a
+// namespace of its own.
+//
+// WHY THE DECLARATION KEY IS PREFIXED (and not just the bare name)
+//
+// A function and a package-level declaration may share a name in Go: a const and
+// a method are different namespaces, so
+//
+//	const ConsumeTOTPStep = `UPDATE users SET totp_last_step = $2 …`
+//	func (s *UserStore) ConsumeTOTPStep(ctx context.Context, …) (bool, error) { … }
+//
+// compiles. Keying the const by its bare name therefore produced the very same
+// string as the allowlist entry written for the METHOD, and the second
+// implementation silently inherited a permission granted to a different
+// declaration — while a stale entry for the method was equally invisible,
+// because the const's write satisfied `seen` on its behalf. `decl <Name>` cannot
+// collide with a function key: an identifier cannot contain a space.
+//
+// WHY A LOCAL DECLARATION IS KEYED BY ITS FUNCTION:
+//
+// A const/var INSIDE a function body is part of that function's statement, so it
+// is named by the function. Keying it by its own name instead reported the SAME
+// statement twice (the function, and the declaration) and — because the function
+// key is what the allowlist covers — turned a legitimate
+// `const stepSQL = "…" INSIDE the accessor` into an unlisted write site plus a
+// bogus "no production file writes …" failure, whose message tells the author to
+// delete the allowlist entry that is the only protection there is.
 func enclosingDecl(f *ast.File, node ast.Node) string {
-	name, span := "", -1
+	fnName, fnSpan := "", -1
+	vsName, vsSpan := "", -1
 	ast.Inspect(f, func(n ast.Node) bool {
-		var cand string
 		var pos, end token.Pos
 		switch d := n.(type) {
 		case *ast.FuncDecl:
-			cand, pos, end = d.Name.Name, d.Pos(), d.End()
+			pos, end = d.Pos(), d.End()
+			if node.Pos() < pos || end < node.End() {
+				return true
+			}
+			if size := int(end - pos); fnSpan == -1 || size < fnSpan {
+				fnName, fnSpan = d.Name.Name, size
+			}
 		case *ast.ValueSpec:
 			if len(d.Names) == 0 {
 				return true
 			}
-			cand, pos, end = d.Names[0].Name, d.Pos(), d.End()
-		default:
-			return true
-		}
-		if node.Pos() < pos || end < node.End() {
-			return true
-		}
-		// Innermost wins, so a local const is attributed to its function and a
-		// package-level one to its own name.
-		if size := int(end - pos); span == -1 || size < span {
-			name, span = cand, size
+			pos, end = d.Pos(), d.End()
+			if node.Pos() < pos || end < node.End() {
+				return true
+			}
+			if size := int(end - pos); vsSpan == -1 || size < vsSpan {
+				vsName, vsSpan = d.Names[0].Name, size
+			}
 		}
 		return true
 	})
-	return name
+	// Innermost function first: whatever a declaration inside a function body is
+	// called, it belongs to that function.
+	if fnName != "" {
+		return fnName
+	}
+	if vsName != "" {
+		return "decl " + vsName
+	}
+	return ""
 }
 
 // resolveSQLText reconstructs the string an expression denotes: literals are
