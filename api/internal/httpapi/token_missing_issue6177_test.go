@@ -5,7 +5,7 @@
 // carried no token":
 //
 //	social.go:425          POST /v1/auth/social/connect
-//	verify.go:99           GET/POST /v1/auth/verify
+//	verify.go:99           POST /v1/auth/verify
 //	auth_ux.go:132         POST /v1/auth/reset-password
 //	auth_recovery.go:411   POST /v1/auth/magic-link/verify
 //
@@ -67,12 +67,17 @@ func tokenMissingCases() []tokenMissingCase {
 			},
 		},
 		{
-			name: "GET /v1/auth/verify",
+			// POST (not GET): the machine envelope is the APP/API surface.
+			// A GET renders the localized failure PAGE for a human who
+			// clicked the emailed link (verify.go writeVerifyFailPage), so
+			// the JSON contract this card pins lives on POST for this
+			// endpoint. Same handler and same literal either way.
+			name: "POST /v1/auth/verify",
 			code: CodeVerifyTokenMissing,
 			call: func(t *testing.T) *httptest.ResponseRecorder {
 				t.Helper()
 				a := &AuthHandlers{VerifyKey: connectTestKey()}
-				req := httptest.NewRequest(http.MethodGet, "/v1/auth/verify", nil)
+				req := httptest.NewRequest(http.MethodPost, "/v1/auth/verify", nil)
 				rec := httptest.NewRecorder()
 				a.handleVerify(rec, req)
 				return rec
@@ -155,7 +160,7 @@ func TestTokenMissingLiteralsArePerSurface(t *testing.T) {
 		msg  string
 	}{
 		{"POST /v1/auth/social/connect", "token penghubung diperlukan"},
-		{"GET /v1/auth/verify", "token pengesahan diperlukan"},
+		{"POST /v1/auth/verify", "token pengesahan diperlukan"},
 		{"POST /v1/auth/reset-password", "token set semula diperlukan"},
 		{"POST /v1/auth/magic-link/verify", "token log masuk diperlukan"},
 	}

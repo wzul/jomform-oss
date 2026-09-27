@@ -94,30 +94,43 @@ func (a *AuthHandlers) sendVerifyEmail(ctx context.Context, userID, email, lang 
 // Issue #206: the confirmation page is language-aware. The locale is resolved
 // from the ?lang= param (carried from the signup form's language choice), then
 // the Accept-Language header, defaulting to English when unknown.
+//
+// The GET/JSON split holds on the FAILURE paths too (see verifyFail): a GET
+// renders a localized page for every link problem, because the caller is a
+// human who clicked an emailed link in a browser, not an API client.
 func (a *AuthHandlers) handleVerify(w http.ResponseWriter, r *http.Request) {
+	// Resolved up front so a GET failure can render in the caller's language
+	// too — the failures below used to answer before the locale was read.
+	lang := detectVerifyLang(r)
 	token := r.URL.Query().Get("token")
 	if token == "" {
 		// Own wording for THIS surface (issue #6177 follow-up) — see
 		// CodeVerifyTokenMissing in errcode.go.
-		writeErr(w, http.StatusBadRequest, "token pengesahan diperlukan")
+		a.verifyFail(w, r, lang, http.StatusBadRequest, verifyFailMissing, "token pengesahan diperlukan")
 		return
 	}
 	if len(a.VerifyKey) != 32 {
+		// Deliberately NOT a page, even on GET (the one failure class that
+		// keeps the JSON envelope for both methods): the deployment cannot
+		// mint a verification link at all, so a page telling the user to
+		// "request a new link" would promise something this server cannot do.
+		// It is a misconfiguration signal, unreachable in a correctly
+		// configured deployment (main.go derives VerifyKey from
+		// ENCRYPTION_KEY), and the JSON envelope is what says so.
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	email, err := auth.VerifyToken(a.VerifyKey, token)
 	if err != nil {
 		slog.Warn("verify_token_invalid", "err", err, "ip", middleware.ClientIP(r))
-		writeErr(w, http.StatusBadRequest, "pautan pengesahan tidak sah atau telah tamat tempoh")
+		a.verifyFail(w, r, lang, http.StatusBadRequest, verifyFailExpired, "pautan pengesahan tidak sah atau telah tamat tempoh")
 		return
 	}
 	user, uerr := a.Users.ByEmail(r.Context(), email)
 	if uerr != nil || user == nil {
-		writeErr(w, http.StatusBadRequest, "pautan pengesahan tidak sah")
+		a.verifyFail(w, r, lang, http.StatusBadRequest, verifyFailUnknown, "pautan pengesahan tidak sah")
 		return
 	}
-	lang := detectVerifyLang(r)
 	if user.Verified {
 		// Idempotent: already verified.
 		if r.Method == http.MethodGet {
@@ -211,6 +224,147 @@ func writeVerifyPage(w http.ResponseWriter, lang, loginURL string) {
 <p style="font-size:18px">%s</p>
 <p style="font-size:14px;color:#9aa3b2">%s<a href="%s" style="color:#5e6ad2">%s</a>%s</p>
 </div></body></html>`, htmlEsc(lang), htmlEsc(text.msg), htmlEsc(text.before), htmlEsc(loginURL), htmlEsc(text.link), htmlEsc(text.after))
+}
+
+// verifyFailClass names WHICH link failure the caller hit, so the GET page can
+// say the same thing the JSON envelope says for that failure. An explicit
+// parameter rather than a lookup keyed on the wire message: a reworded literal
+// would silently fall back to a generic sentence, and the wire prose is
+// deliberately per-surface here (issue #6177).
+type verifyFailClass int
+
+const (
+	// verifyFailExpired — the token did not verify: forged, tampered, or past
+	// its 24h TTL. The common real-world case (a stale link in an inbox).
+	verifyFailExpired verifyFailClass = iota
+	// verifyFailUnknown — the token verified but its account is gone (deleted
+	// between the send and the click).
+	verifyFailUnknown
+	// verifyFailMissing — no ?token= at all (a hand-typed or mangled URL).
+	verifyFailMissing
+)
+
+// verifyFailCopy is the localized failure page's copy: one sentence per
+// failure class, plus the shared "what to do next" hint and the login-link
+// label. The hint is the whole point of the page — a human who clicked a stale
+// link must be told to get a fresh one, which a machine code cannot say.
+type verifyFailCopy struct {
+	expired string
+	unknown string
+	missing string
+	hint    string
+	action  string
+}
+
+// verifyFailText holds that copy for each of the 5 locales the verify surface
+// renders in (issue #206). An unknown locale falls back to English.
+var verifyFailText = map[string]verifyFailCopy{
+	"en": {
+		expired: "This verification link is invalid or has expired.",
+		unknown: "This verification link is no longer valid.",
+		missing: "This confirmation link is missing its token.",
+		hint:    "Open the newest verification email we sent you, or sign in to request a new link.",
+		action:  "Sign in",
+	},
+	"ms": {
+		expired: "Pautan pengesahan ini tidak sah atau telah tamat tempoh.",
+		unknown: "Pautan pengesahan ini tidak lagi sah.",
+		missing: "Pautan pengesahan ini tiada tokennya.",
+		hint:    "Buka emel pengesahan terbaharu yang kami hantar, atau log masuk untuk minta pautan baharu.",
+		action:  "Log masuk",
+	},
+	"zh": {
+		expired: "此验证链接无效或已过期。",
+		unknown: "此验证链接已不再有效。",
+		missing: "此确认链接缺少令牌。",
+		hint:    "请打开我们发送的最新验证邮件，或登录以获取新链接。",
+		action:  "登录",
+	},
+	"ta": {
+		expired: "இந்த சரிபார்ப்பு இணைப்பு தவறானது அல்லது காலாவதியானது.",
+		unknown: "இந்த சரிபார்ப்பு இணைப்பு இனி செல்லுபடியாகாது.",
+		missing: "இந்த உறுதிப்படுத்தல் இணைப்பில் டோக்கன் இல்லை.",
+		hint:    "நாங்கள் அனுப்பிய சமீபத்திய சரிபார்ப்பு மின்னஞ்சலைத் திறக்கவும், அல்லது புதிய இணைப்பைக் கோர உள்நுழையவும்.",
+		action:  "உள்நுழை",
+	},
+	"ar": {
+		expired: "رابط التحقق هذا غير صالح أو منتهي الصلاحية.",
+		unknown: "رابط التحقق هذا لم يعد صالحاً.",
+		missing: "رابط التأكيد هذا تفتقد رمزه.",
+		hint:    "افتح أحدث بريد تحقق أرسلناه إليك، أو سجّل الدخول لتطلب رابطاً جديداً.",
+		action:  "تسجيل الدخول",
+	},
+}
+
+// verifyFailSentence picks the sentence for one failure class.
+func (c verifyFailCopy) sentence(class verifyFailClass) string {
+	switch class {
+	case verifyFailUnknown:
+		return c.unknown
+	case verifyFailMissing:
+		return c.missing
+	default:
+		return c.expired
+	}
+}
+
+// verifyFail answers a verification failure. A GET — a human who clicked the
+// emailed link in a browser — renders a self-contained, localized page that
+// tells them to get a new link; every other method keeps the machine JSON
+// envelope for app/API callers.
+//
+// WHY THIS EXISTS. The success path rendered a page and every failure path
+// answered `application/json`, so an expired link — the ordinary case for an
+// emailed link — showed the raw envelope in the browser, in Malay prose, to a
+// user whose dashboard language could be any of the five. The method split was
+// only ever implemented on the happy path.
+func (a *AuthHandlers) verifyFail(w http.ResponseWriter, r *http.Request, lang string, status int, class verifyFailClass, wireMsg string) {
+	if r.Method != http.MethodGet {
+		writeErr(w, status, wireMsg)
+		return
+	}
+	writeVerifyFailPage(w, lang, a.loginURL(), class)
+}
+
+// verifyFailDir returns the text direction for a locale. Arabic is the only
+// RTL locale in the five the platform ships, and the dashboard sets
+// documentElement.dir = "rtl" for it (web/src/components/i18n.tsx); a page that
+// renders Arabic in an LTR document is the same defect shape as rendering the
+// wrong language.
+func verifyFailDir(lang string) string {
+	if lang == "ar" {
+		return "rtl"
+	}
+	return "ltr"
+}
+
+// writeVerifyFailPage renders the GET failure page: no JS, no assets, the same
+// self-contained shape as writeVerifyPage so a click straight from an email
+// client works anywhere. The status stays the JSON path's status (400) — the
+// page is what makes the 400 legible, not a 200 that would lie about the link.
+//
+// The body is deliberately kept well over 512 bytes: a browser (Chrome and
+// Chromium-derived ones; measured threshold, webhint's no-friendly-error-pages
+// hint: 512 bytes for 400/404/500/…, 256 for 403/405/410) REPLACES a 4xx body
+// that is shorter than that with its own generic error page. A "helpful" page
+// that trips that rule would be discarded, and the user would see the browser's
+// error instead — the very failure this change removes.
+func writeVerifyFailPage(w http.ResponseWriter, lang, loginURL string, class verifyFailClass) {
+	text, ok := verifyFailText[lang]
+	if !ok {
+		text = verifyFailText["en"]
+		lang = "en"
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusBadRequest)
+	fmt.Fprintf(w, `<!doctype html><html lang="%s" dir="%s"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>JomForm</title></head>
+<body style="font-family:system-ui,sans-serif;background:#0b1020;color:#e6e9ef;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0">
+<div style="text-align:center;max-width:480px;padding:32px">
+<h1 style="color:#5e6ad2">JomForm</h1>
+<p style="font-size:18px">%s</p>
+<p style="font-size:14px;color:#9aa3b2">%s</p>
+<p style="font-size:14px;color:#9aa3b2"><a href="%s" style="color:#5e6ad2">%s</a></p>
+</div></body></html>`, htmlEsc(lang), htmlEsc(verifyFailDir(lang)), htmlEsc(text.sentence(class)), htmlEsc(text.hint), htmlEsc(loginURL), htmlEsc(text.action))
 }
 
 // htmlEsc escapes text for injection-safe HTML rendering.
