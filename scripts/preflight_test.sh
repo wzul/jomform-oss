@@ -658,25 +658,76 @@ else
   bad "--gate-deps drift — in --list but NOT in the table: [$(comm -13 <(printf '%s\n' "$deps_gates") <(printf '%s\n' $GATES | sort -u) | tr '\n' ' ')] / in the table but not in --list: [$(comm -23 <(printf '%s\n' "$deps_gates") <(printf '%s\n' $GATES | sort -u) | tr '\n' ' ')]"
 fi
 
-# 15b. THE BITE: a path ONLY the web gate reads selects web, and does NOT select
-#      test. The path is web/tsconfig.json, not web/src/**: the api suite really
-#      does read web/src/** (route_parity_test.go walks it), so a web/src path
-#      legitimately selects `test` too — using it here would assert the
-#      derivation is LESS careful than it is. A BITE test needs a path with
-#      exactly one reader.
-web_sel="$(sel_classify 'web/tsconfig.json')"
-if grep -qx 'web' <<<"$web_sel" && ! grep -qx 'test' <<<"$web_sel"; then
-  ok "a web/-only diff selects web and SKIPS test (the narrowing bites)"
+# The gates that CANNOT narrow: their inputs are the whole checkout / the whole
+# git history, so no path list can express them and they appear in EVERY
+# selection (see pw_gate_blocked). Derived ONCE here, from the same table 15a
+# checks, because three checks below need it: 15b/15c subtract it to read "which
+# NARROWABLE gate reads this path", and 15f asserts each of them survives a
+# narrowed run.
+star_gates="$(printf '%s\n' "$deps" | sed -n 's/^\([A-Za-z0-9_]*\):[[:space:]]*\*$/\1/p')"
+
+# 15b. THE BITE: a diff whose ONLY reader is the `web` gate must select `web` and
+#      must NOT select `test`. A selection that cannot drop a gate is not a
+#      narrowing, and `test` is the expensive one (a full api suite).
+#
+#      THE ANCHOR IS DERIVED, NOT NAMED — and that is the FIX, not a weakening
+#      (2026-09-27). This check used to name `web/tsconfig.json`, picked because
+#      it had exactly one reader. It stopped having one when the api suite gained
+#      a read of `web/`: `api/internal/httpapi/passkey_seam_test.go` builds
+#      `filepath.Join(root, "web")`, and the deriver resolves a bare DIRECTORY
+#      candidate to `<dir>/*` — deliberately, because api sources really do walk
+#      `web/src/**` and read `web/public/openapi.json`, so hand-narrowing that
+#      candidate would UNDER-include (the unsafe direction). The stale part was
+#      the assertion's PREMISE, not the runner: `test` now legitimately claims
+#      every path under `web/`, so naming another `web/...` path would assert the
+#      same false premise again. The path is therefore FOUND here — the tracked
+#      root-level files are scanned for one whose narrowable readers are exactly
+#      `web` (today: root `.gitignore`, `Makefile` and `AGENTS.md`, each read by
+#      `web/src/lib/nextManagedFiles.test.ts`).
+#
+#      IT CANNOT DEGRADE INTO "test may or may not appear": the assertion below is
+#      unchanged, and when no such path exists the check goes RED BY NAME — which
+#      is exactly the reading that was missing while this was green and stale.
+#      The scanned set is the COMPLETE space a web-only claim can live in, not a
+#      guess: a path is claimed by `web` only if a web-gate source reads it, and
+#      those reads land either under `web/**` (every one of them claimed by `test`
+#      through the directory candidate above), under `api/**` (claimed by all four
+#      api gates), or on a repo-root file. So a web-only path must be a root file.
+web_anchor=""; web_sel=""
+for f in $(cd "$LIVE_ROOT" && git ls-files 2>/dev/null | grep -v '/'); do
+  [ -n "$f" ] && [ -e "$LIVE_ROOT/$f" ] || continue
+  cand_sel="$(sel_classify "$f")"
+  cand_readers="$(grep -v '^#reason:' <<<"$cand_sel" | while IFS= read -r g; do
+      [ -n "$g" ] || continue
+      grep -qx "$g" <<<"$star_gates" || printf '%s\n' "$g"
+    done)"
+  if [ "$cand_readers" = "web" ]; then
+    web_anchor="$f"; web_sel="$cand_sel"; break
+  fi
+done
+if [ -z "$web_anchor" ]; then
+  bad "no tracked root-level file is read by EXACTLY ONE narrowable gate (the web gate), so the BITE below has no anchor — a web-only diff would never be able to skip \`test\`. This is the shape that made the old web/tsconfig.json anchor stale: an api source reading web/ widens every web/ path's reader set. A path that is genuinely web-only must exist"
+elif grep -qx 'web' <<<"$web_sel" && ! grep -qx 'test' <<<"$web_sel"; then
+  ok "a diff whose only narrowable reader is \`web\` ($web_anchor) selects web and SKIPS test (the narrowing bites)"
 else
-  bad "a web/-only diff must select web and skip test — got: [$(printf '%s' "$web_sel" | tr '\n' ' ')]"
+  bad "a web-only diff must select web and skip test — anchor [$web_anchor], got: [$(printf '%s' "$web_sel" | tr '\n' ' ')]"
 fi
 
-# 15c. Adding ONE api/ path brings test back (the diff decides, not a static rule).
-both_sel="$(sel_classify 'web/tsconfig.json,api/internal/httpapi/rest.go')"
-if grep -qx 'test' <<<"$both_sel" && grep -qx 'web' <<<"$both_sel"; then
-  ok "adding one api/ path to a web/ diff brings test back"
+# 15c. Adding ONE api/ path must bring test BACK — the diff decides, not a static
+#      rule. Anchored on the SAME derived path as 15b, so the pair reads as one
+#      property: the web-only anchor drops `test` (15b), and one added api/ path
+#      restores it (here). Naming a web/ path directly made this vacuous once the
+#      api suite started reading web/ — `test` was already selected, so it could
+#      not show that the diff, rather than the table, put it there.
+if [ -z "$web_anchor" ]; then
+  bad "cannot check that an api/ path brings test back: 15b found no web-only anchor to add it to"
 else
-  bad "an api/+web/ diff must select BOTH test and web — got: [$(printf '%s' "$both_sel" | tr '\n' ' ')]"
+  both_sel="$(sel_classify "$web_anchor,api/internal/httpapi/rest.go")"
+  if grep -qx 'test' <<<"$both_sel" && grep -qx 'web' <<<"$both_sel"; then
+    ok "adding one api/ path to the web-only diff ($web_anchor) brings test back"
+  else
+    bad "an api/+web/ diff must select BOTH test and web — got: [$(printf '%s' "$both_sel" | tr '\n' ' ')]"
+  fi
 fi
 
 # 15c-ii. A DERIVED DIRECTORY candidate must claim everything under it. The api
@@ -733,8 +784,8 @@ fi
 # 15f. A gate that CANNOT narrow must always run. `gitleaks` scans the whole git
 #      history, so no path list can express its inputs. Asserted from the TABLE
 #      (a gate marked `*` must be in every selection), which is the invariant the
-#      machinery implements — not the gate's name.
-star_gates="$(printf '%s\n' "$deps" | sed -n 's/^\([A-Za-z0-9_]*\):[[:space:]]*\*$/\1/p')"
+#      machinery implements — not the gate's name. `$star_gates` was derived once
+#      above (15b needs it too), so there is a single reading of the class here.
 if [ -z "$star_gates" ]; then
   bad "no gate is marked '*' (cannot narrow) in --gate-deps — the always-run class is empty, which cannot be right for a full-history secret scan"
 elif [ "$(printf '%s\n' "$star_gates" | wc -l)" != "$(printf '%s\n' "$deps" | sed -n 's/^\([A-Za-z0-9_]*\):[[:space:]]*\*$/\1/p' | sort -u | wc -l)" ]; then
