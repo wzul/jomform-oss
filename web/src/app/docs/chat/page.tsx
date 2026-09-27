@@ -6,8 +6,13 @@ import type { Metadata } from "next";
 // It documents the feature by stating the CAPABILITY BOUNDARY first, because
 // that boundary is the whole design. Phase 2 changed that boundary, so the page
 // states the NEW one rather than the old: the assistant can PREPARE a change and
-// cannot apply one. It documents the MCP tool the proposal lane pairs with
-// (propose_write), the reversible set it may prepare, the confirmation step, the
+// cannot apply one. The proposal lane is IN-APP — `propose_write` is registered
+// nowhere and is deliberately absent from the MCP tool reference, because its
+// confirmation step needs a signed-in person's click (see MCP-PARITY.md, "the
+// proposal lane": a registered version would hand an MCP caller a token it could
+// never spend). So this page names `submit_feedback` as the one tool of its own
+// that IS over MCP, and says plainly that `propose_write` is not. It also
+// documents the reversible set it may prepare, the confirmation step, the
 // rate/cost limits and why they exist, and the behaviour that matters when the
 // assistant does not know — the honest answer, not a guess.
 
@@ -52,7 +57,7 @@ const SECTIONS: Section[] = [
       "Only you can confirm your proposals. The token belongs to the person it was issued to, and another account presenting it is refused in exactly the same way as a token that does not exist.",
       "A confirmed change runs with your own permission and the same workspace and ownership checks as a change made from the dashboard. If your role does not allow the edit, the confirmation is refused and the tool says why — the chat never grants an ability your account does not have.",
       "The confirmation writes in THE WORKSPACE THE CALL BELONGED TO — the workspace you have selected, not your first account. This matters if you belong to more than one: a chat call carries the selected workspace with it, and if that workspace cannot be resolved the request is refused outright rather than quietly answered from another one. A refusal is a plain \"workspace not found\" or \"choose a workspace first\" answer, not a silent edit somewhere you were not looking.",
-      "The same capability exists over MCP as the propose_write tool for an agent to describe a change; note that a proposal made over MCP is confirmed on the dashboard, not inside an agent's own client — the confirmation is a signed-in person's click, and it is deliberately not something an API call can supply.",
+      "The proposal lane is in-app, not an MCP tool. There is no propose_write over MCP: a proposal is prepared by the assistant inside the dashboard and confirmed by the signed-in person, so the confirmation is a click and is deliberately not something an API call can supply. An agent that wants a change over MCP calls that change's own tool itself — its own client is the human's confirmation channel.",
     ],
   },
   {
@@ -157,8 +162,9 @@ export default function ChatDocsPage() {
       <p className="mt-10 text-xs text-[var(--jf-muted)]">
         Related: <a className="underline decoration-dotted underline-offset-2" href="/docs/feedback">in-app feedback</a>{" "}
         and <a className="underline decoration-dotted underline-offset-2" href="/docs/mcp">the MCP tool reference</a>{" "}
-        (submit_feedback, the tool that files a report, and propose_write, the tool that prepares a
-        change for confirmation).
+        (submit_feedback, the tool that files a report). The proposal lane
+        (propose_write) is not an MCP tool and is not in that reference — it runs in-app and
+        its confirmation is a signed-in person&apos;s click.
       </p>
     </article>
   );
