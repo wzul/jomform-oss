@@ -11,8 +11,10 @@
 // dashboard language is not the provider's initial "en" — ms, zh, ta, ar — the
 // effect ran a second time and POSTed the emailed connect token to
 // /v1/auth/social/connect TWICE per page load. Measured server-side at a
-// request-counting stub: 1 POST at lang=en, 2 POSTs at lang=ms, both before and
-// after the fix, on the failure AND the success path.
+// request-counting stub on that pre-fix shape: 1 POST at lang=en, 2 POSTs at
+// lang=ms, on the failure AND the success path. The shipped shape — no `t` in
+// the effect's deps, the sentence derived at render — issues exactly 1 POST at
+// every locale, on both paths.
 //
 // It is benign today by luck of two other facts — dbstore.UserStore.LinkIdentity
 // is `INSERT … ON CONFLICT DO UPDATE`, and the token is stateless with a 24h TTL
@@ -23,10 +25,31 @@
 // WHAT THIS GUARD PINS
 //   1. The /connect token effect's dependency array does not contain a
 //      translator/message-function identifier — the shape of the bug.
-//   2. The translator is reached through a ref inside that effect, so the fix is
-//      PRESENT rather than merely absent (the ref pattern is what keeps the
-//      localized sentence correct while the effect itself stays independent of
-//      `t`'s identity).
+//   2. The fix is PRESENT, not merely absent — and it is the RENDER-TIME
+//      derivation, not a ref. The token effect stores the parsed failure body
+//      RAW (setFailure({ body }) in page.tsx) and the sentence is derived at
+//      render: `const error = failure ? apiErr(failure.body, t("connect.fail"), t) : …`.
+//      The sentence is therefore a pure function of (body, lang), and the effect
+//      depends on nothing whose identity changes when the profile language
+//      resolves.
+//
+//      A REF HOLDING THE TRANSLATOR (useRef(t) + a sync effect +
+//      translator.current("connect.fail") inside the token effect) was built,
+//      driven, and REJECTED — do not reintroduce it believing it is the pinned
+//      shape. It fails OPEN, and how often depends on WHEN the sentence is
+//      captured relative to the async profile fetch: the profile language arrives
+//      from /api/auth/profile, so a failure that lands before that response
+//      freezes the provider's initial English. That is a RACE, not a certainty,
+//      and its rate is a property of the timing, not of the shape being safe:
+//      rebuilt and driven on a dev build with 6 fresh samples at lang=ms (always
+//      exactly 1 POST), with the profile answering ~900ms late and the token POST
+//      failing immediately, ALL 6 rendered the English sentence while
+//      htmlLang=ms. (The card that removed the shape from the page measured 1 of
+//      6 on a production build — the same defect at a different timing, which is
+//      the point: do not quote a single rate for it.) The render-time derivation
+//      has no such window: same harness, 0 of 6 samples wrong, 1 POST, because
+//      the body is stored untranslated and the sentence is rebuilt whenever the
+//      language changes.
 //   3. The /connect page still asks for its own sentences (connect.fail /
 //      connect.resendFail) — a "fix" that hardcodes English or drops the
 //      translation is not a fix.
@@ -35,9 +58,9 @@
 // token effect, because THAT effect performs a one-shot server POST of a
 // bearer-like capability. A re-run of a GET-and-render effect is not the same
 // defect, and three other effects in the repo keep `t` in their deps on purpose,
-// so their own re-translation follows a language switch (measured: 90 effects
-// across 61 .tsx files, 3 of them depending on `t`, none performing a write). A
-// page-wide ban would be a behaviour change, not a guard.
+// so their own re-translation follows a language switch (measured on this tree:
+// 95 effects across 66 .tsx files, 3 of them depending on `t`, none performing a
+// write). A page-wide ban would be a behaviour change, not a guard.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, statSync, readdirSync } from "node:fs";
@@ -237,10 +260,11 @@ test("only /connect's one-shot token POST is under this rule (no page-wide ban)"
   assert.ok(files.length > 40, `expected to walk the dashboard, got ${files.length} .tsx files`);
   const depsOnT = (e: { deps: string }) => /(^|,)\s*t\s*(,|$)/.test(e.deps);
   const dependOnT = files.filter((p) => effects(codeLines(p)).some(depsOnT));
-  // Measured on this tree: 3 files (app/builder:366, app/settings:268,
-  // app/products/ProductEditor:116) — all GET-and-render, none performing a write.
-  // The floor is low on purpose: it is here to catch the walk going blind (0
-  // files), not to pin a census that a legitimate refactor may move.
+  // Measured on this tree: 3 files (app/builder:420,
+  // app/products/ProductEditor:177, app/settings:285) — all GET-and-render, none
+  // performing a write. The floor is low on purpose: it is here to catch the walk
+  // going blind (0 files), not to pin a census that a legitimate refactor may
+  // move.
   assert.ok(
     dependOnT.length >= 3,
     `expected the other pages to keep their \`t\` dependency (saw ${dependOnT.length}); ` +
