@@ -969,3 +969,145 @@ test("every chat dictionary key defines all five locales", () => {
   }
   assert.deepEqual(missing, [], `missing translations:\n  ${missing.join("\n  ")}`);
 });
+
+// ── A 400 ON THE CONFIRM PATH IS A SCOPE REFUSAL, NOT A FAILED CHANGE ────────
+//
+// THE DEFECT (t_790b1016, found while verifying PR 747). The new 400 branch on
+// the confirm/cancel path did TWO things at once:
+//
+//     setState(msgIndex, p.token, "failed");   // → card footer: chat.confirmFail
+//     setErr(t("chat.scopeRequired"));         // → role=alert: chat.scopeRequired
+//
+// so one 400 rendered both sentences at once, and the footer's advice was the
+// wrong one: "The change could not be applied. Please try again." tells the user
+// to repeat an action that fails identically without a workspace. Measured in a
+// real browser on the PR 747 merge build (role=alert = the scope copy, card
+// footer = the "try again" copy, same 400).
+//
+// WHY THE STATE IS THE FIX AND NOT THE FOOTER. The server refuses an unscoped
+// call BEFORE it reads the proposal token (requireResolvedWorkspaceScope runs
+// ahead of the token checks in handleChatConfirm), so nothing was attempted and
+// "failed" was never true of this request. Giving the refusal its own state lets
+// the card stop claiming a failure without inventing a second rendering of the
+// scope copy — that duplication is what the pre-fix shape did, and this card says
+// explicitly that the alert is the ONE place the copy belongs.
+//
+// WHAT MAKES IT BITE. The assertions are anchored on the 400 branch's own text
+// taken from the SOURCE (the slice from `if (r.status === 400)` to the `return`),
+// not on a position in the file, so retyping `"failed"` there — or deleting the
+// branch — fails. The card-footer half asserts the footer is keyed on chat.confirmFail
+// ONLY when the state is "failed", and the dictionary half pins that a
+// scopeRequired card cannot borrow the failure string: the two keys must not be
+// the same sentence, or the "does not render confirmFail" property would be a
+// distinction without a difference.
+test("the confirm path's 400 is a scope refusal: it does not render chat.confirmFail", () => {
+  // The 400 branch of decide(), sliced out of the source by its own guard line.
+  const at = page.indexOf("if (r.status === 400) {", page.indexOf("async function decide("));
+  assert.ok(
+    at !== -1,
+    "app/chat/page.tsx has no 400 branch in decide() — the scope refusal would fall through to the " +
+      "generic !r.ok branch and the user would get the 'try again' copy for a condition they fix by " +
+      "choosing a workspace",
+  );
+  const branch = page.slice(at, page.indexOf("return;", at) + "return;".length);
+
+  assert.match(
+    branch,
+    /setState\(msgIndex,\s*p\.token,\s*"scopeRequired"\)/,
+    `the confirm-path 400 no longer marks the proposal "scopeRequired" — it would set a state the ` +
+      `card renders as a failed change while the alert says to choose a workspace (both at once, ` +
+      `which is the defect). Branch was:\n${branch}`,
+  );
+  assert.doesNotMatch(
+    branch,
+    /setState\(msgIndex,\s*p\.token,\s*"failed"\)/,
+    "the confirm-path 400 still marks the proposal \"failed\", so the card renders chat.confirmFail " +
+      "('Please try again.') under an alert telling the user to choose a workspace — retrying without " +
+      "a workspace fails identically, so the footer's advice is wrong",
+  );
+  assert.match(
+    branch,
+    /setErr\(t\("chat\.scopeRequired"\)\)/,
+    "the confirm-path 400 no longer renders the scope copy — the user would see only the card's " +
+      "failure sentence and would not learn that choosing a workspace is the fix",
+  );
+  // The ONE 400 branch. A second one elsewhere (e.g. re-added inside the !r.ok
+  // branch) would reintroduce the defect with the assertion above still green.
+  const fourHundreds = page
+    .slice(page.indexOf("async function decide("))
+    .match(/r\.status === 400/g);
+  assert.equal(
+    fourHundreds?.length,
+    1,
+    `decide() carries ${fourHundreds?.length} 400 branch(es), want exactly 1 — a second one would ` +
+      `map the scope refusal back onto a failure state`,
+  );
+
+  // The card's own footer. "failed" must be the ONLY state that renders
+  // chat.confirmFail, and a scopeRequired card must not.
+  const footerAt = page.indexOf('{state === "failed"');
+  assert.ok(footerAt !== -1, "the card footer no longer renders a 'failed' state at all");
+  const footer = page.slice(footerAt, page.indexOf("\n", page.indexOf("</p>", footerAt)));
+  assert.ok(
+    footer.includes('t("chat.confirmFail")'),
+    "a genuine failure (5xx / network) on the confirm path no longer renders chat.confirmFail",
+  );
+  assert.ok(
+    !new RegExp('state === "scopeRequired"[\\s\\S]{0,200}?chat\\.confirmFail').test(page),
+    'the scope-required card renders chat.confirmFail — the card would tell a user with no workspace ' +
+      'to "try again", which cannot work',
+  );
+  // The card must say what it NEEDS rather than wearing the red "did not go
+  // through" badge over a request the server never ran.
+  assert.match(
+    page,
+    /state === "scopeRequired"[\s\S]{0,120}?t\("chat\.proposalBadgeScopeRequired"\)/,
+    'the scope-required card falls back to chat.proposalBadgeFailed ("Did not go through") — nothing ' +
+      'was attempted, so the badge would claim a failure that did not happen',
+  );
+  assert.match(
+    page,
+    /type ProposalState\s*=[\s\S]{0,400}?"scopeRequired"/,
+    "ProposalState has no scopeRequired member — the setState above would not type-check",
+  );
+
+  // The two strings must be DIFFERENT sentences, or "does not render
+  // chat.confirmFail" would be satisfied by a key that says the same thing.
+  const scopeCopy = DICT["chat.scopeRequired"].en;
+  const failCopy = DICT["chat.confirmFail"].en;
+  assert.notEqual(
+    scopeCopy,
+    failCopy,
+    "the scope refusal and the generic confirm failure carry the SAME English sentence — the point of " +
+      "the split was that they say different things, so one of the two has lost its copy",
+  );
+  assert.doesNotMatch(
+    scopeCopy,
+    /try again/i,
+    `the scope refusal tells the user to "try again" ("${scopeCopy}") — retrying without a workspace ` +
+      `fails identically; the actionable instruction is to choose a workspace`,
+  );
+  for (const lang of LANGS) {
+    const v = (DICT["chat.proposalBadgeScopeRequired"] as Record<string, string>)[lang];
+    assert.ok(
+      typeof v === "string" && v.trim() !== "",
+      `chat.proposalBadgeScopeRequired.${lang} is empty — the badge would render a blank pill`,
+    );
+  }
+
+  // 409 (stale) and 429 (rate-limited) keep their own distinct copy: the two
+  // other non-failure refusals this card names as unchanged.
+  const decide = page.slice(page.indexOf("async function decide("));
+  assert.match(
+    decide,
+    /r\.status === 409[\s\S]{0,200}?setState\(msgIndex,\s*p\.token,\s*"stale"\)/,
+    "the 409 path no longer marks the card stale — a spent proposal would keep offering buttons the " +
+      "server refuses",
+  );
+  assert.match(
+    decide,
+    /r\.status === 429[\s\S]{0,200}?t\("chat\.confirmRateLimited"\)/,
+    "the 429 path no longer renders chat.confirmRateLimited — a rate-limited user would get the " +
+      "generic failure instead of the limit copy",
+  );
+});

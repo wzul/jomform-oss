@@ -1960,6 +1960,11 @@ export const DICT = {
   "chat.proposalBadgeCancelled": { en: "Cancelled — nothing changed", ms: "Dibatalkan — tiada apa-apa diubah", zh: "已取消 — 未作更改", ta: "ரத்து — எதுவும் மாறவில்லை", ar: "أُلغي — لم يتغير شيء" },
   "chat.proposalBadgeStale": { en: "Expired — nothing changed", ms: "Luput — tiada apa-apa diubah", zh: "已过期 — 未作更改", ta: "காலாவதி — எதுவும் மாறவில்லை", ar: "انتهت الصلاحية — لم يتغير شيء" },
   "chat.proposalBadgeFailed": { en: "Did not go through", ms: "Tidak berjaya", zh: "未能完成", ta: "நடைபெறவில்லை", ar: "لم يكتمل" },
+  // t_790b1016: a scope refusal is its OWN state, not a failure. The server
+  // refused before reading the token, so nothing was attempted — the badge says
+  // what the card needs rather than claiming the change failed, and it does not
+  // wear the red "did not go through" pill for a request the server never ran.
+  "chat.proposalBadgeScopeRequired": { en: "Needs a workspace", ms: "Perlu workspace", zh: "需要工作区", ta: "பணியிடம் தேவை", ar: "يحتاج مساحة عمل" },
   "chat.confirm": { en: "Confirm", ms: "Sahkan", zh: "确认", ta: "உறுதிப்படுத்து", ar: "تأكيد" },
   "chat.cancel": { en: "Cancel", ms: "Batal", zh: "取消", ta: "ரத்து", ar: "إلغاء" },
   "chat.confirmHint": { en: "Nothing has changed yet.", ms: "Belum ada apa-apa yang berubah.", zh: "目前尚未发生任何更改。", ta: "இதுவரை எதுவும் மாறவில்லை.", ar: "لم يتغير شيء بعد." },

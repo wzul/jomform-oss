@@ -99,7 +99,23 @@ type ChatReply = {
 // A card's lifecycle in the UI. "pending" is the only state where the buttons
 // exist: a confirmed or cancelled card is spent server-side, so offering the
 // buttons again would produce a 409 the user cannot act on.
-type ProposalState = "pending" | "confirming" | "cancelling" | "done" | "cancelled" | "stale" | "failed";
+//
+// "scopeRequired" is NOT a failure of the change, and it is deliberately not
+// folded into "failed". The server refuses an unscoped call BEFORE it reads the
+// token (rest_scope.go's ambiguous-scope path), so nothing was attempted and the
+// token is still live. A card that said "The change could not be applied. Please
+// try again." would be instructing the user to repeat an action that cannot work
+// without a workspace — and it said that underneath an alert that had already
+// told them to choose one (t_790b1016).
+type ProposalState =
+  | "pending"
+  | "confirming"
+  | "cancelling"
+  | "done"
+  | "cancelled"
+  | "stale"
+  | "scopeRequired"
+  | "failed";
 
 type Msg = {
   role: "user" | "assistant";
@@ -290,8 +306,15 @@ export default function ChatPage() {
       // scope). Same reasoning as the message path: 400 is not a dead session, so
       // it must not be conflated with the 401/403 branch above, and the user needs
       // the scope copy rather than the generic failure.
+      //
+      // The card gets its OWN state, not "failed". This refusal happens before the
+      // server reads the token, so the change was never attempted and the card
+      // must not wear a "Did not go through" pill over a "try again" footer
+      // underneath an alert telling the user to pick a workspace (t_790b1016).
+      // The scope copy is carried ONCE, by the alert: rendering it in the card as
+      // well would duplicate the sentence, which is the pre-fix shape.
       if (r.status === 400) {
-        setState(msgIndex, p.token, "failed");
+        setState(msgIndex, p.token, "scopeRequired");
         setErr(t("chat.scopeRequired"));
         return;
       }
@@ -447,7 +470,9 @@ export default function ChatPage() {
                                   ? t("chat.proposalBadgeCancelled")
                                   : state === "stale"
                                     ? t("chat.proposalBadgeStale")
-                                    : t("chat.proposalBadgeFailed")}
+                                    : state === "scopeRequired"
+                                      ? t("chat.proposalBadgeScopeRequired")
+                                      : t("chat.proposalBadgeFailed")}
                           </span>
                           <span className="font-semibold">{p.title}</span>
                         </div>
@@ -497,6 +522,16 @@ export default function ChatPage() {
                         {state === "stale" && (
                           <p className="mt-2 font-medium text-amber-700">{t("chat.proposalStale")}</p>
                         )}
+                        {/* NO footer for "scopeRequired". The scope refusal is
+                            carried by the page's single role="alert" (setErr above)
+                            — rendering it here as well would put the same sentence
+                            on screen twice, which is the duplication this card's
+                            own history calls out ("duplicated, but not
+                            contradictory"). The card's job in this state is to stop
+                            claiming a failure: the badge says what it needs, the
+                            buttons are gone (nothing was attempted and the refusal
+                            is not retryable unchanged), and NOTHING here tells the
+                            user to try the same action again. */}
                         {state === "failed" && (
                           <p className="mt-2 font-medium text-red-600">{t("chat.confirmFail")}</p>
                         )}
