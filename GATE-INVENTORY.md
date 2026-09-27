@@ -55,5 +55,17 @@ documentation that the `selftest` gate keeps honest. When you add a gate to
 `scripts/preflight.sh`, add its row here **in the same change** — that is now a
 gate, not a convention.
 
-See also: `deploy/BACKUP.md` (the backup suite), `MCP-PARITY.md` (the same
-gated-file workaround for MCP tool parity).
+**What this table is NOT: the list of every proof in the repo.** A gate proves a
+guard *runs*. It does not prove the guard would *fail* if the behaviour it pins
+were removed — that is a **bite proof** (a *biteproof* / *bite harness*), and the
+bite proofs are **deliberately on demand, not gates** (measured: one case costs a
+full `go test`, 2m02s–5m08s per api harness on the agent host, so wiring them
+would roughly double a full run). Read `BITE-HARNESSES.md` for the register of
+which harnesses exist, what each one proves, and who re-runs them when; the `api`
+test gate parses that file in both directions, so a harness on disk with no row
+there fails the build. Do not infer from a green run that a bite proof was
+re-checked.
+
+See also: `BITE-HARNESSES.md` (the bite-harness register),
+`deploy/backup/README.md` (the backup suite and its bite proof), `MCP-PARITY.md`
+(the same gated-file workaround for MCP tool parity).
