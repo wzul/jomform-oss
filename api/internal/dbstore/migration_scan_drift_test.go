@@ -52,6 +52,10 @@ var selectConsts = map[string]string{
 	// the same column/field alignment. Registering it means the trash read
 	// cannot drift away from Form either — the pair moves together.
 	"trashedFormSelect": "Form",
+	// Same reasoning for the product bin: trashedProductSelect is a separate
+	// constant (deleted_at IS NOT NULL) scanning into Product, so registering it
+	// keeps the bin's read aligned with the struct too.
+	"trashedProductSelect": "Product",
 	// account_domains had no registered select, so a migration adding a column
 	// to it could land without the matching struct field or Scan destination —
 	// exactly how the nullable auto_cname/tls_* columns came to be scanned into
@@ -62,14 +66,15 @@ var selectConsts = map[string]string{
 
 // selectTables maps a *Select constant name to the table it selects from.
 var selectTables = map[string]string{
-	"accountSelect":     "accounts",
-	"formSelect":        "forms",
-	"productSelect":     "products",
-	"saleSelect":        "sales",
-	"workspaceSelect":   "workspaces",
-	"subSelect":         "subscriptions",
-	"domainSelect":      "account_domains",
-	"trashedFormSelect": "forms",
+	"accountSelect":        "accounts",
+	"formSelect":           "forms",
+	"productSelect":        "products",
+	"saleSelect":           "sales",
+	"workspaceSelect":      "workspaces",
+	"subSelect":            "subscriptions",
+	"domainSelect":         "account_domains",
+	"trashedFormSelect":    "forms",
+	"trashedProductSelect": "products",
 }
 
 // selectScanFuncs maps a *Select constant to the receiver-qualified
@@ -81,12 +86,16 @@ var selectTables = map[string]string{
 var selectScanFuncs = map[string][]string{
 	"accountSelect":     {"AccountStore.ByID", "AccountStore.ByOwner"},
 	"formSelect":        {"FormStore.scanOne"},
-	"productSelect":     {"ProductStore.ListActiveByAccount", "ProductStore.ListActiveByAccounts", "ProductStore.Get"},
+	"productSelect":     {"ProductStore.scanProductFull"},
 	"saleSelect":        {"scanSale"},
 	"workspaceSelect":   {"scanWorkspace"},
 	"subSelect":         {"scanSub"},
 	"domainSelect":      {"DomainStore.GetDomain", "DomainStore.ListDomains"},
 	"trashedFormSelect": {"FormStore.scanTrashed"},
+	// The product bin selects the SAME column list as productSelect (only the
+	// WHERE differs), so it shares that scan function. Registering it here is
+	// what keeps the two constants from drifting apart on the column list.
+	"trashedProductSelect": {"ProductStore.scanProductFull"},
 }
 
 // bareColumnConsts maps a constant holding a BARE column list — no `SELECT ...

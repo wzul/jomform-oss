@@ -337,17 +337,177 @@ func (h *RESTHandlers) getProduct(w http.ResponseWriter, r *http.Request, actx *
 	respond(w, http.StatusOK, out)
 }
 
+// deleteProduct handles DELETE /v1/rest/products/{id} — moves the product to the
+// BIN (soft delete).
+//
+// THIS IS A CHANGE OF MEANING, and the old meaning was the defect. It used to
+// call Products.Archive, i.e. active=false, so "delete" and "take it off sale"
+// were the same bit and a product the merchant meant to remove still sat in the
+// catalogue labelled "Archived". Taking a product off sale now has its own route
+// (PUT /v1/rest/products/{id} {"active":false}); DELETE moves it to the bin,
+// where it can be restored or purged.
 func (h *RESTHandlers) deleteProduct(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	if _, ok := h.requireWriteRole(w, r, actx); !ok {
 		return
 	}
-	if err := h.Products.Archive(r.Context(), actx.Account.ID, r.PathValue("id")); err != nil {
+	if err := h.Products.SoftDelete(r.Context(), actx.Account.ID, r.PathValue("id")); err != nil {
 		respondErr(w, r, err)
 		return
 	}
-	// Issue #92: audit product archive (delete).
+	// Issue #92: audit product delete.
 	h.recordEvent(r, actx, h.sessionOwnerID(r), "product.deleted", map[string]any{"product_id": r.PathValue("id")})
-	respond(w, http.StatusOK, map[string]string{"status": "archived"})
+	respond(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// restTrashedProduct is a bin row for a product: what the trash view renders,
+// plus the pre-computed answer to "may this be destroyed yet".
+type restTrashedProduct struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	PriceSen int64 `json:"price_sen"`
+	Active   bool `json:"active"`
+	// DeletedAt is when the product entered the bin (RFC3339).
+	DeletedAt string `json:"deleted_at"`
+	// SalesCount is how many sales reference this product. Non-zero means the
+	// purge will refuse (409): sales are history and the sale records the
+	// product it sold.
+	SalesCount int64 `json:"sales_count"`
+	// SubscriptionCount is how many subscriptions still bill this product. The
+	// FK is ON DELETE RESTRICT, so a purge is refused (409) while any remain.
+	SubscriptionCount int64 `json:"subscription_count"`
+	// CanPurge is the pre-computed answer for the UI's permanent-delete button,
+	// so it can be disabled with a stated reason instead of failing after a
+	// click.
+	CanPurge bool `json:"can_purge"`
+}
+
+// listTrashedProducts: GET /v1/rest/products/trash
+//
+// The bin's read side for the workspace(s) the caller selected. It is a
+// DEDICATED store query (ListTrashed), deliberately not a relaxed filter on the
+// live list: loosening productSelect would expose trashed rows to every ordinary
+// read (the issue #98 regression class).
+func (h *RESTHandlers) listTrashedProducts(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	scope, ok := h.scopeOr403(w, r, actx)
+	if !ok {
+		return
+	}
+	products, err := h.Products.ListTrashed(r.Context(), scope.Accounts)
+	if err != nil {
+		respondErr(w, r, err)
+		return
+	}
+	sales, err := h.Products.SalesCountsByProduct(r.Context(), scope.Accounts)
+	if err != nil {
+		respondErr(w, r, err)
+		return
+	}
+	subs, err := h.Products.SubscriptionCountsByProduct(r.Context(), scope.Accounts)
+	if err != nil {
+		respondErr(w, r, err)
+		return
+	}
+	out := make([]restTrashedProduct, 0, len(products))
+	for _, p := range products {
+		sn, su := sales[p.ID], subs[p.ID]
+		row := restTrashedProduct{
+			ID: p.ID, Name: p.Name, PriceSen: p.PriceSen, Active: p.Active,
+			SalesCount: sn, SubscriptionCount: su,
+			CanPurge: sn == 0 && su == 0,
+		}
+		if p.DeletedAt != nil {
+			row.DeletedAt = p.DeletedAt.UTC().Format(time.RFC3339)
+		}
+		out = append(out, row)
+	}
+	respond(w, http.StatusOK, out)
+}
+
+// restoreProduct: POST /v1/rest/products/{id}/restore
+//
+// Brings a trashed product back into the catalogue. No confirmation: it destroys
+// nothing and a second delete undoes it. There is no collision case to refuse —
+// products have no slug and no unique index — so the only failure is the row not
+// being in the bin.
+func (h *RESTHandlers) restoreProduct(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
+	productID := r.PathValue("id")
+	if err := h.Products.Restore(r.Context(), actx.Account.ID, productID); err != nil {
+		respondErr(w, r, err)
+		return
+	}
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "product.restored", map[string]any{"product_id": productID})
+	respond(w, http.StatusOK, map[string]string{"status": "restored", "product_id": productID})
+}
+
+// purgeProduct: DELETE /v1/rest/products/{id}/purge
+//
+// Permanently destroys a TRASHED product (with its variations, by CASCADE).
+// Confirmed by typing the product's name into {"confirm_name":"..."} — the same
+// level as purgeForm's confirm_slug, because this cannot be undone. A product
+// has no slug, so its NAME is the identifier the caller names back.
+//
+// Order of checks matters: the write gate first (so a readonly key cannot probe),
+// then the confirmation, then the store's own guards (bin-only, no sales, no
+// subscriptions). A live product is a 404 — the only way in is the bin.
+func (h *RESTHandlers) purgeProduct(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
+	productID := r.PathValue("id")
+	var in struct {
+		ConfirmName string `json:"confirm_name"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeErr(w, http.StatusBadRequest, "payload tidak sah")
+		return
+	}
+	// Read the trashed product to compare the confirmation. GetTrashed is scoped
+	// to the caller's account AND to trashed rows, so this cannot be used to
+	// probe a live product's existence.
+	p, err := h.Products.GetTrashed(r.Context(), actx.Account.ID, productID)
+	if err != nil {
+		respondErr(w, r, err)
+		return
+	}
+	if strings.TrimSpace(in.ConfirmName) != p.Name {
+		writeErr(w, http.StatusBadRequest,
+			"taip nama produk ("+p.Name+") untuk sahkan pemadaman kekal")
+		return
+	}
+	if err := h.Products.Purge(r.Context(), actx.Account.ID, productID); err != nil {
+		switch {
+		case errors.Is(err, dbstore.ErrProductHasSales):
+			n, cerr := h.Products.CountSalesByProduct(r.Context(), actx.Account.ID, productID)
+			if cerr != nil {
+				n = 0
+			}
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error":       "produk ini mempunyai jualan — sejarah jualan tidak boleh dimusnahkan dengan memadam produk. Ia kekal dalam tong sampah.",
+				"code":        CodeProductHasSales,
+				"sales_count": n,
+			})
+			return
+		case errors.Is(err, dbstore.ErrProductHasSubscriptions):
+			n, cerr := h.Products.CountSubscriptionsByProduct(r.Context(), actx.Account.ID, productID)
+			if cerr != nil {
+				n = 0
+			}
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error":              "produk ini masih ada langganan — batalkan langganan itu dahulu. Ia kekal dalam tong sampah.",
+				"code":               CodeProductHasSubscriptions,
+				"subscription_count": n,
+			})
+			return
+		}
+		respondErr(w, r, err)
+		return
+	}
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "product.purged",
+		map[string]any{"product_id": productID, "name": p.Name})
+	respond(w, http.StatusOK, map[string]string{"status": "purged", "product_id": productID, "name": p.Name})
 }
 
 // bulkProducts applies an action to many products at once:

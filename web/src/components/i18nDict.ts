@@ -334,8 +334,8 @@ export const DICT = {
   "prod.pageOf": { en: "page {page} of {total}", ms: "halaman {page} daripada {total}", zh: "第 {page} 页，共 {total} 页", ta: "பக்கம் {page} / {total}", ar: "صفحة {page} من {total}" },
   "prod.bulkArchive": { en: "Archive selected", ms: "Arkib yang dipilih", zh: "归档所选", ta: "தேர்ந்தெடுத்ததை தொகு", ar: "أرشفة المحدد" },
   "prod.bulkArchiveConfirm": { en: "Archive {n} product(s)? They will be soft-archived (hidden from buyers) and can be reactivated later.", ms: "Arkib {n} produk? Ia akan diarkib lembut (sorok dari pembeli) dan boleh diaktifkan semula.", zh: "归档 {n} 件商品？它们将被软归档（对买家隐藏），之后可重新激活。", ta: "{n} தயாரிப்புகளை தொகுக்கவா? அவை மென்-தொகுக்கப்படும் (வாங்குபவர்களுக்கு மறைக்கப்படும்), பின்னர் மீண்டும் செயல்படுத்தலாம்.", ar: "أرشفة {n} منتج؟ ستنشأ أرشفة ناعمة (مخفية عن المشترين) ويمكن إعادة تنشيطها لاحقاً." },
-  "prod.archiveOneConfirm": { en: "Archive “{name}”? It will be hidden from buyers.", ms: "Arkib “{name}”? Ia akan disorok dari pembeli.", zh: "归档“{name}”？它将不再对买家显示。", ta: "\"{name}\" ஐ தொகுக்கவா? இது வாங்குபவர்களிடமிருந்து மறைக்கப்படும்.", ar: "أرشفة «{name}»؟ سيُخفى عن المشترين." },
-  "prod.archiveOneTitle": { en: "Archive product", ms: "Arkib produk", zh: "归档商品", ta: "தயாரிப்பை தொகு", ar: "أرشفة المنتج" },
+  "prod.archiveOneConfirm": { en: "Move “{name}” to the trash? It leaves the catalogue and can be restored from Trash.", ms: "Pindahkan “{name}” ke tong sampah? Ia keluar dari katalog dan boleh dipulihkan dari Tong Sampah.", zh: "将“{name}”移入回收站？它将离开商品目录，可从回收站恢复。", ta: "\"{name}\" ஐ குப்பைத் தொட்டிக்கு நகர்த்தவா? அது பட்டியலிலிருந்து விலகும், குப்பைத் தொட்டியிலிருந்து மீட்டமைக்கலாம்.", ar: "نقل «{name}» إلى سلة المهملات؟ سيخرج من الكتالوج ويمكن استعادته من سلة المهملات." },
+  "prod.archiveOneTitle": { en: "Move to trash", ms: "Pindah ke tong sampah", zh: "移入回收站", ta: "குப்பைத் தொட்டிக்கு நகர்த்து", ar: "نقل إلى سلة المهملات" },
   "prod.toggleStatusTitle": { en: "Toggle active/archived", ms: "Tukar aktif/arkib", zh: "切换在售/归档", ta: "செயலில்/தொகுப்பு மாற்று", ar: "تبديل نشط/مؤرشف" },
   "prod.editTitle": { en: "Edit product", ms: "Edit produk", zh: "编辑商品", ta: "தயாரிப்பைத் திருத்து", ar: "تحرير المنتج" },
   "prod.billingPeriod": { en: "Billing period", ms: "Tempoh bil", zh: "计费周期", ta: "பில் காலம்", ar: "فترة الفوترة" },
@@ -847,6 +847,24 @@ export const DICT = {
     zh: "此表单已有销售记录，无法永久删除——销售历史不能随表单一起销毁。它将保留在回收站中。",
     ta: "இந்தப் படிவத்தில் விற்பனைகள் உள்ளன, எனவே நிரந்தரமாக நீக்க முடியாது — விற்பனை வரலாறு படிவத்துடன் அழிக்கப்படக்கூடாது. இது குப்பைத் தொட்டியில் இருக்கும்.",
     ar: "لهذا النموذج مبيعات، لذا لا يمكن حذفه نهائياً — لا يجوز إتلاف سجل المبيعات مع النموذج. سيبقى في سلة المهملات.",
+  },
+  // The product bin's two refusals, the same class as the form's above. A
+  // product's permanent delete is blocked by a SALE (history) or by a live
+  // SUBSCRIPTION (a billing commitment the product must keep billing), and each
+  // sentence has to name which one so the merchant knows what to clear.
+  "apiErr.productHasSales": {
+    en: "This product has sales, so it can't be deleted for good — sales history must not be destroyed with the product. It stays in the trash.",
+    ms: "Produk ini mempunyai jualan, jadi ia tidak boleh dipadam secara kekal — sejarah jualan tidak boleh dimusnahkan bersama produk. Ia kekal dalam tong sampah.",
+    zh: "此商品已有销售记录，无法永久删除——销售历史不能随商品一起销毁。它将保留在回收站中。",
+    ta: "இந்தத் தயாரிப்பில் விற்பனைகள் உள்ளன, எனவே நிரந்தரமாக நீக்க முடியாது — விற்பனை வரலாறு தயாரிப்புடன் அழிக்கப்படக்கூடாது. இது குப்பைத் தொட்டியில் இருக்கும்.",
+    ar: "لهذا المنتج مبيعات، لذا لا يمكن حذفه نهائياً — لا يجوز إتلاف سجل المبيعات مع المنتج. سيبقى في سلة المهملات.",
+  },
+  "apiErr.productHasSubscriptions": {
+    en: "This product still has subscriptions, so it can't be deleted for good — cancel them first. It stays in the trash.",
+    ms: "Produk ini masih ada langganan, jadi ia tidak boleh dipadam secara kekal — batalkan langganan itu dahulu. Ia kekal dalam tong sampah.",
+    zh: "此商品仍有订阅，无法永久删除——请先取消这些订阅。它将保留在回收站中。",
+    ta: "இந்தத் தயாரிப்பில் இன்னும் சந்தாக்கள் உள்ளன, எனவே நிரந்தரமாக நீக்க முடியாது — முதலில் அவற்றை ரத்து செய்யவும். இது குப்பைத் தொட்டியில் இருக்கும்.",
+    ar: "لا تزال لهذا المنتج اشتراكات، لذا لا يمكن حذفه نهائياً — ألغِها أولاً. سيبقى في سلة المهملات.",
   },
   "apiErr.workspaceNotEmpty": {
     en: "This workspace still has content, so it can't be deleted — empty it first (the list below says what is left).",
@@ -2077,6 +2095,49 @@ export const DICT = {
   "forms.purgeHasSales": { en: "This form has sales, so it cannot be deleted for good — sales history is never destroyed. It stays in the trash.", ms: "Borang ini mempunyai jualan, jadi ia tidak boleh dipadam kekal — sejarah jualan tidak pernah dimusnahkan. Ia kekal dalam tong sampah.", zh: "此表单已有销售记录，因此无法永久删除——销售记录绝不会被销毁。它将留在回收站中。", ta: "இந்தப் படிவத்தில் விற்பனைகள் உள்ளன, எனவே நிரந்தரமாக நீக்க முடியாது — விற்பனை வரலாறு ஒருபோதும் அழிக்கப்படாது. இது குப்பைத் தொட்டியில் இருக்கும்.", ar: "يحتوي هذا النموذج على مبيعات، لذا لا يمكن حذفه نهائياً — لا يُتلف سجل المبيعات أبداً. سيبقى في سلة المهملات." },
   "forms.canPurgeFalse": { en: "Has sales — cannot be deleted for good", ms: "Ada jualan — tidak boleh dipadam kekal", zh: "有销售记录——无法永久删除", ta: "விற்பனைகள் உள்ளன — நிரந்தரமாக நீக்க முடியாது", ar: "يحتوي على مبيعات — لا يمكن حذفه نهائياً" },
   "forms.loadTrashFail": { en: "We couldn't load the trash. Please try again.", ms: "Kami tidak dapat memuatkan tong sampah. Sila cuba lagi.", zh: "无法加载回收站。请重试。", ta: "குப்பைத் தொட்டியை ஏற்ற முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر تحميل سلة المهملات. يرجى المحاولة مرة أخرى." },
+
+  // ── Products trash (Tong Sampah) ──────────────────────────────────────────
+  // The same three verbs the forms bin uses, on the product bin. The wording is
+  // deliberately parallel so a merchant learns ONE model across the three pages.
+  "prod.trashTab": { en: "Active", ms: "Aktif", zh: "使用中", ta: "செயலில்", ar: "النشطة" },
+  "prod.trashTabDeleted": { en: "Trash", ms: "Tong Sampah", zh: "回收站", ta: "குப்பைத் தொட்டி", ar: "سلة المهملات" },
+  "prod.trashEmpty": { en: "The trash is empty.", ms: "Tong sampah kosong.", zh: "回收站为空。", ta: "குப்பைத் தொட்டி காலியாக உள்ளது.", ar: "سلة المهملات فارغة." },
+  "prod.trashNote": { en: "Deleted products stay here until you delete them for good. A product here is no longer in your catalogue — that is different from an archived product, which is still listed but hidden from buyers.", ms: "Produk yang dipadam kekal di sini sehingga anda padam kekalnya. Produk di sini sudah tiada dalam katalog anda — ia berbeza daripada produk yang diarkib, yang masih tersenarai tetapi disorok dari pembeli.", zh: "已删除的商品会留在这里，直到您永久删除它们。这里的商品已不在您的商品目录中——这与已归档的商品不同，后者仍然列出但对买家隐藏。", ta: "நீக்கப்பட்ட தயாரிப்புகள் நிரந்தரமாக நீக்கும் வரை இங்கே இருக்கும். இங்குள்ள தயாரிப்பு உங்கள் பட்டியலில் இல்லை — இது காப்பகப்படுத்தப்பட்ட தயாரிப்பிலிருந்து வேறுபடும்; அது பட்டியலில் இருக்கும் ஆனால் வாங்குபவர்களுக்கு மறைக்கப்படும்.", ar: "تبقى المنتجات المحذوفة هنا حتى تحذفها نهائياً. المنتج هنا لم يعد ضمن كتالوجك — وهذا يختلف عن المنتج المؤرشف، الذي يبقى مُدرجاً لكنه مخفي عن المشترين." },
+  "prod.restore": { en: "Restore", ms: "Pulihkan", zh: "恢复", ta: "மீட்டமை", ar: "استعادة" },
+  "prod.restored": { en: "Product restored — it is back in your catalogue.", ms: "Produk dipulihkan — ia kembali dalam katalog anda.", zh: "商品已恢复——已回到您的目录中。", ta: "தயாரிப்பு மீட்டமைக்கப்பட்டது — உங்கள் பட்டியலில் திரும்பியது.", ar: "تمت استعادة المنتج — عاد إلى كتالوجك." },
+  "prod.restoreFail": { en: "We couldn't restore this product. Please try again.", ms: "Kami tidak dapat memulihkan produk ini. Sila cuba lagi.", zh: "无法恢复此商品。请重试。", ta: "இந்தத் தயாரிப்பை மீட்டமைக்க முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّرت استعادة هذا المنتج. يرجى المحاولة مرة أخرى." },
+  "prod.purge": { en: "Delete for good", ms: "Padam kekal", zh: "永久删除", ta: "நிரந்தரமாக நீக்கு", ar: "حذف نهائي" },
+  "prod.purgeConfirmTitle": { en: "Delete this product for good?", ms: "Padam produk ini secara kekal?", zh: "永久删除此商品？", ta: "இந்தத் தயாரிப்பை நிரந்தரமாக நீக்கவா?", ar: "حذف هذا المنتج نهائياً؟" },
+  "prod.purgeConfirmBody": { en: "This cannot be undone — the product and all of its variations are removed. Type the product name to confirm.", ms: "Ini tidak boleh dibatalkan — produk dan semua variasinya akan dibuang. Taip nama produk untuk sahkan.", zh: "此操作无法撤销——商品及其所有规格都将被移除。请输入商品名称以确认。", ta: "இதை மீளச் செய்ய முடியாது — தயாரிப்பும் அதன் அனைத்து மாறுபாடுகளும் நீக்கப்படும். உறுதிப்படுத்த தயாரிப்பின் பெயரைத் தட்டச்சு செய்யவும்.", ar: "لا يمكن التراجع عن هذا — سيُزال المنتج وكل تنويعاته. اكتب اسم المنتج للتأكيد." },
+  "prod.purgeConfirmFieldLabel": { en: "Product name", ms: "Nama produk", zh: "商品名称", ta: "தயாரிப்பு பெயர்", ar: "اسم المنتج" },
+  "prod.purged": { en: "Product deleted for good.", ms: "Produk dipadam secara kekal.", zh: "商品已永久删除。", ta: "தயாரிப்பு நிரந்தரமாக நீக்கப்பட்டது.", ar: "تم حذف المنتج نهائياً." },
+  "prod.purgeFail": { en: "We couldn't delete this product. Please try again.", ms: "Kami tidak dapat memadam produk ini. Sila cuba lagi.", zh: "无法删除此商品。请重试。", ta: "இந்தத் தயாரிப்பை நீக்க முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر حذف هذا المنتج. يرجى المحاولة مرة أخرى." },
+  "prod.purgeHasSales": { en: "This product has sales, so it cannot be deleted for good — sales history is never destroyed. It stays in the trash.", ms: "Produk ini mempunyai jualan, jadi ia tidak boleh dipadam kekal — sejarah jualan tidak pernah dimusnahkan. Ia kekal dalam tong sampah.", zh: "此商品已有销售记录，因此无法永久删除——销售记录绝不会被销毁。它将留在回收站中。", ta: "இந்தத் தயாரிப்பில் விற்பனைகள் உள்ளன, எனவே நிரந்தரமாக நீக்க முடியாது — விற்பனை வரலாறு ஒருபோதும் அழிக்கப்படாது. இது குப்பைத் தொட்டியில் இருக்கும்.", ar: "يحتوي هذا المنتج على مبيعات، لذا لا يمكن حذفه نهائياً — لا يُتلف سجل المبيعات أبداً. سيبقى في سلة المهملات." },
+  "prod.purgeHasSubscriptions": { en: "This product still has subscriptions, so it cannot be deleted for good — cancel them first. It stays in the trash.", ms: "Produk ini masih ada langganan, jadi ia tidak boleh dipadam kekal — batalkan langganan itu dahulu. Ia kekal dalam tong sampah.", zh: "此商品仍有订阅，因此无法永久删除——请先取消这些订阅。它将留在回收站中。", ta: "இந்தத் தயாரிப்பில் இன்னும் சந்தாக்கள் உள்ளன, எனவே நிரந்தரமாக நீக்க முடியாது — முதலில் அவற்றை ரத்து செய்யவும். இது குப்பைத் தொட்டியில் இருக்கும்.", ar: "لا تزال لهذا المنتج اشتراكات، لذا لا يمكن حذفه نهائياً — ألغِها أولاً. سيبقى في سلة المهملات." },
+  "prod.canPurgeFalse": { en: "Cannot be deleted for good:", ms: "Tidak boleh dipadam kekal:", zh: "无法永久删除：", ta: "நிரந்தரமாக நீக்க முடியாது:", ar: "لا يمكن حذفه نهائياً:" },
+  "prod.loadTrashFail": { en: "We couldn't load the trash. Please try again.", ms: "Kami tidak dapat memuatkan tong sampah. Sila cuba lagi.", zh: "无法加载回收站。请重试。", ta: "குப்பைத் தொட்டியை ஏற்ற முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر تحميل سلة المهملات. يرجى المحاولة مرة أخرى." },
+  "prod.deletedToTrash": { en: "Product moved to the trash.", ms: "Produk dipindahkan ke tong sampah.", zh: "商品已移入回收站。", ta: "தயாரிப்பு குப்பைத் தொட்டிக்கு நகர்த்தப்பட்டது.", ar: "نُقل المنتج إلى سلة المهملات." },
+  "prod.trashDeletedAt": { en: "Deleted", ms: "Dipadam", zh: "已删除", ta: "நீக்கப்பட்டது", ar: "حُذف" },
+  "prod.salesCount": { en: "sales", ms: "jualan", zh: "笔销售", ta: "விற்பனைகள்", ar: "مبيعات" },
+  "prod.subsCount": { en: "subscriptions", ms: "langganan", zh: "个订阅", ta: "சந்தாக்கள்", ar: "اشتراكات" },
+
+  // ── Media trash (Tong Sampah) ─────────────────────────────────────────────
+  "media.trashTab": { en: "Active", ms: "Aktif", zh: "使用中", ta: "செயலில்", ar: "النشطة" },
+  "media.trashTabDeleted": { en: "Trash", ms: "Tong Sampah", zh: "回收站", ta: "குப்பைத் தொட்டி", ar: "سلة المهملات" },
+  "media.trashEmpty": { en: "The trash is empty.", ms: "Tong sampah kosong.", zh: "回收站为空。", ta: "குப்பைத் தொட்டி காலியாக உள்ளது.", ar: "سلة المهملات فارغة." },
+  "media.trashNote": { en: "Deleted files stay here until you delete them for good. They still count against your storage limit, because the file is still stored — delete for good to free the space.", ms: "Fail yang dipadam kekal di sini sehingga anda padam kekalnya. Ia masih dikira dalam had storan anda kerana fail itu masih disimpan — padam kekal untuk melepaskan ruang.", zh: "已删除的文件会留在这里，直到您永久删除它们。它们仍计入您的存储上限，因为文件仍被保存——永久删除即可释放空间。", ta: "நீக்கப்பட்ட கோப்புகள் நிரந்தரமாக நீக்கும் வரை இங்கே இருக்கும். கோப்பு இன்னும் சேமிக்கப்பட்டிருப்பதால் அவை உங்கள் சேமிப்பு வரம்பில் கணக்கிடப்படும் — இடத்தை விடுவிக்க நிரந்தரமாக நீக்கவும்.", ar: "تبقى الملفات المحذوفة هنا حتى تحذفها نهائياً. لا تزال تُحتسب ضمن حد التخزين لديك لأن الملف ما زال مخزَّناً — احذفه نهائياً لتحرير المساحة." },
+  "media.trashDeletedAt": { en: "Deleted", ms: "Dipadam", zh: "已删除", ta: "நீக்கப்பட்டது", ar: "حُذف" },
+  "media.restore": { en: "Restore", ms: "Pulihkan", zh: "恢复", ta: "மீட்டமை", ar: "استعادة" },
+  "media.restored": { en: "File restored — it is back in your library.", ms: "Fail dipulihkan — ia kembali dalam pustaka anda.", zh: "文件已恢复——已回到您的媒体库中。", ta: "கோப்பு மீட்டமைக்கப்பட்டது — உங்கள் நூலகத்தில் திரும்பியது.", ar: "تمت استعادة الملف — عاد إلى مكتبتك." },
+  "media.restoreFail": { en: "We couldn't restore this file. Please try again.", ms: "Kami tidak dapat memulihkan fail ini. Sila cuba lagi.", zh: "无法恢复此文件。请重试。", ta: "இந்தக் கோப்பை மீட்டமைக்க முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّرت استعادة هذا الملف. يرجى المحاولة مرة أخرى." },
+  "media.restoreObjectGone": { en: "The file itself is no longer in storage, so this item cannot be restored.", ms: "Fail itu sendiri sudah tiada dalam storan, jadi item ini tidak boleh dipulihkan.", zh: "文件本身已不在存储中，因此无法恢复此项。", ta: "கோப்பு இனி சேமிப்பில் இல்லை, எனவே இதை மீட்டமைக்க முடியாது.", ar: "الملف نفسه لم يعد في التخزين، لذا لا يمكن استعادة هذا العنصر." },
+  "media.purge": { en: "Delete for good", ms: "Padam kekal", zh: "永久删除", ta: "நிரந்தரமாக நீக்கு", ar: "حذف نهائي" },
+  "media.purgeConfirmTitle": { en: "Delete this file for good?", ms: "Padam fail ini secara kekal?", zh: "永久删除此文件？", ta: "இந்தக் கோப்பை நிரந்தரமாக நீக்கவா?", ar: "حذف هذا الملف نهائياً؟" },
+  "media.purgeConfirmBody": { en: "This cannot be undone — the file is removed from storage and the space is released.", ms: "Ini tidak boleh dibatalkan — fail dibuang dari storan dan ruang dilepaskan.", zh: "此操作无法撤销——文件将从存储中移除并释放空间。", ta: "இதை மீளச் செய்ய முடியாது — கோப்பு சேமிப்பிலிருந்து நீக்கப்பட்டு இடம் விடுவிக்கப்படும்.", ar: "لا يمكن التراجع عن هذا — سيُزال الملف من التخزين وتُحرَّر المساحة." },
+  "media.purged": { en: "File deleted for good.", ms: "Fail dipadam secara kekal.", zh: "文件已永久删除。", ta: "கோப்பு நிரந்தரமாக நீக்கப்பட்டது.", ar: "تم حذف الملف نهائياً." },
+  "media.purgeFail": { en: "We couldn't delete this file. Please try again.", ms: "Kami tidak dapat memadam fail ini. Sila cuba lagi.", zh: "无法删除此文件。请重试。", ta: "இந்தக் கோப்பை நீக்க முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر حذف هذا الملف. يرجى المحاولة مرة أخرى." },
+  "media.loadTrashFail": { en: "We couldn't load the trash. Please try again.", ms: "Kami tidak dapat memuatkan tong sampah. Sila cuba lagi.", zh: "无法加载回收站。请重试。", ta: "குப்பைத் தொட்டியை ஏற்ற முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر تحميل سلة المهملات. يرجى المحاولة مرة أخرى." },
+  "media.deletedToTrash": { en: "File moved to the trash — restore it from there if you change your mind.", ms: "Fail dipindahkan ke tong sampah — pulihkan dari sana jika anda berubah fikiran.", zh: "文件已移入回收站——如需恢复请到回收站操作。", ta: "கோப்பு குப்பைத் தொட்டிக்கு நகர்த்தப்பட்டது — மனம் மாறினால் அங்கிருந்து மீட்டமைக்கவும்.", ar: "نُقل الملف إلى سلة المهملات — استعده من هناك إن غيّرت رأيك." },
   // t_bac29e18: the /docs quick link to the REST API reference. Every docs quick
   // link has a key here, so the label renders in all five languages.
   "docs.linkAPI": { en: "REST API reference", ms: "Rujukan API REST", zh: "REST API 参考", ta: "REST API குறிப்பு", ar: "مرجع واجهة REST API" },

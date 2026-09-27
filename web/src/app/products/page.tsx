@@ -31,6 +31,20 @@ type Product = {
 type SortKey = "name" | "price_sen" | "created_at";
 type SortDir = "asc" | "desc";
 
+// A row in the Trash view (GET /api/rest/products/trash). `can_purge` is false
+// when the product has a sale or a subscription — those are the two obstacles
+// the server refuses on, so the button is withheld rather than failing on click.
+type TrashedProduct = {
+  id: string;
+  name: string;
+  price_sen: number;
+  active: boolean;
+  deleted_at: string;
+  sales_count: number;
+  subscription_count: number;
+  can_purge: boolean;
+};
+
 const money = (sen: number) =>
   `RM${(sen / 100).toLocaleString("en-MY", { minimumFractionDigits: 2 })}`;
 
@@ -70,6 +84,16 @@ export default function Products() {
   // selection
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
+
+  // Trash view: a second, explicitly-selected view over the SAME page. The
+  // default is the catalogue — a new visitor must never land in the trash.
+  const [view, setView] = useState<"active" | "trash">("active");
+  const [trashed, setTrashed] = useState<TrashedProduct[]>([]);
+  const [trashLoaded, setTrashLoaded] = useState(false);
+  const [notify, setNotify] = useState("");
+  const [confirmPurge, setConfirmPurge] = useState<TrashedProduct | null>(null);
+  const [purgeTyped, setPurgeTyped] = useState("");
+  const [purgeBusy, setPurgeBusy] = useState(false);
 
   // edit drawer
   const [editing, setEditing] = useState<Product | null>(null);
@@ -310,7 +334,91 @@ export default function Products() {
     const ok = window.confirm(t("prod.archiveOneConfirm", { name: p.name }));
     if (!ok) return;
     await fetch(`/api/rest/products/${p.id}${workspaceQuery()}`, { method: "DELETE" });
+    setNotify(t("prod.deletedToTrash"));
     load();
+  }
+
+  // The trash is fetched only when it is opened. It is a SEPARATE listing
+  // (GET /api/rest/products/trash) because the catalogue deliberately excludes
+  // trashed rows — an archived product is still listed, a trashed one is not.
+  const loadTrash = useCallback(async () => {
+    const r = await runLoad(
+      async () => {
+        const d = await fetchJson<unknown>(`/api/rest/products/trash${workspaceQuery()}`);
+        return Array.isArray(d) ? (d as TrashedProduct[]) : [];
+      },
+      { onUnauth: goToLogin, message: t("prod.loadTrashFail") },
+    );
+    if (!r.ok) {
+      setTrashed([]);
+      setError(r.error);
+      return;
+    }
+    setTrashed(r.data);
+    setTrashLoaded(true);
+    setError("");
+  }, [t, goToLogin]);
+
+  useEffect(() => {
+    if (view === "trash") void loadTrash();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, loadTrash, workspace]);
+
+  // Escape closes the purge dialog.
+  useEffect(() => {
+    if (!confirmPurge) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setConfirmPurge(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [confirmPurge]);
+
+  async function restoreProduct(id: string) {
+    setNotify("");
+    const res = await fetch(`/api/rest/products/${id}/restore${workspaceQuery()}`, { method: "POST" });
+    if (!res.ok) {
+      setError(t("prod.restoreFail"));
+      void loadTrash();
+      return;
+    }
+    setNotify(t("prod.restored"));
+    void loadTrash();
+    load();
+  }
+
+  async function purgeProduct() {
+    if (!confirmPurge || purgeBusy) return;
+    if (purgeTyped.trim() !== confirmPurge.name) return;
+    setPurgeBusy(true);
+    setNotify("");
+    try {
+      const res = await fetch(`/api/rest/products/${confirmPurge.id}/purge${workspaceQuery()}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm_name: purgeTyped.trim() }),
+      });
+      if (!res.ok) {
+        // A purge refused for a sale or a subscription names the obstacle in its
+        // `code`, so the merchant gets that sentence in their OWN language
+        // instead of the server's prose (issue #6177). Anything else falls back
+        // to the page's own line.
+        const d = await res.json().catch(() => null);
+        setError(apiErr(d, t("prod.purgeFail"), t));
+        setConfirmPurge(null);
+        setPurgeTyped("");
+        void loadTrash();
+        return;
+      }
+      setNotify(t("prod.purged"));
+      setConfirmPurge(null);
+      setPurgeTyped("");
+      void loadTrash();
+    } catch {
+      setError(t("prod.purgeFail"));
+    } finally {
+      setPurgeBusy(false);
+    }
   }
 
   // ── edit drawer save ─────────────────────────────────────────────────────
@@ -582,7 +690,7 @@ export default function Products() {
             {/* Issue #503: a failed load gets an action, not a dead end. */}
             <button
               type="button"
-              onClick={() => void load()}
+              onClick={() => void (view === "trash" ? loadTrash() : load())}
               className="ml-2 underline decoration-dotted underline-offset-2"
             >
               {t("common.retry")}
@@ -590,6 +698,101 @@ export default function Products() {
           </p>
         )}
 
+        {/* Active / Trash switcher. The catalogue is the DEFAULT: a fresh
+            visitor must never land in the trash. */}
+        <div className="mt-5 flex flex-wrap items-center gap-1 border-b border-[var(--jf-border)]" role="tablist">
+          {(["active", "trash"] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              role="tab"
+              aria-selected={view === v}
+              onClick={() => {
+                setView(v);
+                setError("");
+                setNotify("");
+              }}
+              className={`-mb-px whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium ${
+                view === v
+                  ? "border-slate-900 text-slate-900"
+                  : "border-transparent text-[var(--jf-muted)] hover:text-slate-800"
+              }`}
+            >
+              {v === "active" ? t("prod.trashTab") : t("prod.trashTabDeleted")}
+              {v === "trash" && trashLoaded && trashed.length > 0 ? ` (${trashed.length})` : ""}
+            </button>
+          ))}
+        </div>
+
+        {notify && (
+          <p className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{notify}</p>
+        )}
+
+        {/* Trash view: the bin, with restore and delete-for-good. */}
+        {view === "trash" && (
+          <>
+            <p className="mt-4 max-w-2xl text-sm text-[var(--jf-muted)]">{t("prod.trashNote")}</p>
+            <ul className="mt-4 space-y-2">
+              {trashed.map((p) => (
+                <li
+                  key={p.id}
+                  className="jf-card flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">{p.name}</p>
+                    <p className="text-[11px] text-[var(--jf-muted)]">
+                      {money(p.price_sen)} · {t("prod.trashDeletedAt")}{" "}
+                      {formatDate(p.deleted_at, user?.timezone)}
+                    </p>
+                    {/* Withheld rather than offered-and-refused: the server
+                        refuses on a sale or a live subscription, and the count
+                        says which obstacle to clear. */}
+                    {!p.can_purge && (
+                      <p className="mt-1 text-[11px] text-amber-700">
+                        {t("prod.canPurgeFalse")}{" "}
+                        {p.sales_count > 0
+                          ? `${t("prod.salesCount")}: ${p.sales_count}`
+                          : `${t("prod.subsCount")}: ${p.subscription_count}`}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                    {canWrite && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => void restoreProduct(p.id)}
+                          className="jf-btn-ghost min-h-[44px] sm:min-h-10"
+                        >
+                          {t("prod.restore")}
+                        </button>
+                        {p.can_purge && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setConfirmPurge(p);
+                              setPurgeTyped("");
+                              setError("");
+                            }}
+                            className="jf-btn-ghost min-h-[44px] text-rose-600 hover:bg-rose-50 sm:min-h-10"
+                          >
+                            {t("prod.purge")}
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </li>
+              ))}
+              {trashed.length === 0 && (
+                <li className="rounded-lg text-sm text-[var(--jf-muted)]">{t("prod.trashEmpty")}</li>
+              )}
+            </ul>
+          </>
+        )}
+
+        {view === "active" && (
+        <>
         {/* Bulk action bar */}
         {canWrite && ids.length > 0 && (
           <div className="jf-card mt-4 flex flex-wrap items-center gap-2 px-4 py-3">
@@ -1093,6 +1296,56 @@ export default function Products() {
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+        )}
+        </>
+        )}
+
+        {/* Purge confirmation. A permanent delete cannot be undone and takes the
+            product's variations with it, so it asks the caller to type the name
+            back — the same level as the forms bin, using the product's NAME
+            because a product has no slug. */}
+        {confirmPurge && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+            onClick={() => setConfirmPurge(null)}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label={t("prod.purgeConfirmTitle")}
+              className="w-full max-w-md rounded-xl bg-white p-5 shadow-xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <p className="text-sm font-semibold">{t("prod.purgeConfirmTitle")}</p>
+              <p className="mt-2 text-sm text-[var(--jf-muted)]">{t("prod.purgeConfirmBody")}</p>
+              <label className="mt-3 block text-xs font-medium text-[var(--jf-muted)]">
+                {t("prod.purgeConfirmFieldLabel")}
+              </label>
+              <input
+                value={purgeTyped}
+                onChange={(e) => setPurgeTyped(e.target.value)}
+                className="jf-input mt-1 w-full"
+                aria-label={t("prod.purgeConfirmFieldLabel")}
+              />
+              <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setConfirmPurge(null)}
+                  className="jf-btn-ghost px-3 py-1.5 text-sm"
+                >
+                  {t("prod.cancel")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void purgeProduct()}
+                  disabled={purgeBusy || purgeTyped.trim() !== confirmPurge.name}
+                  className="rounded-lg border border-red-200 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 disabled:opacity-40"
+                >
+                  {t("prod.purge")}
+                </button>
+              </div>
             </div>
           </div>
         )}

@@ -309,6 +309,62 @@ func (s *Server) requireProductWrite(ctx context.Context, productID string) (str
 	return acc, nil
 }
 
+// resolveMediaAccount returns the account owning mediaID within the call's
+// scope, through the LIVE media read (ByIDAccount filters `deleted_at IS NULL`).
+func (s *Server) resolveMediaAccount(ctx context.Context, mediaID string) (string, error) {
+	if s.deps.Media == nil {
+		return "", errors.New("media tidak tersedia")
+	}
+	return s.resolveEntityAccount(ctx, func(acc string) error {
+		_, err := s.deps.Media.ByIDAccount(ctx, acc, mediaID)
+		return err
+	})
+}
+
+// requireMediaWrite is the gate for trashing a LIVE media row: resolve the
+// owning account through the live read, then enforce both write axes.
+func (s *Server) requireMediaWrite(ctx context.Context, mediaID string) (string, error) {
+	acc, err := s.resolveMediaAccount(ctx, mediaID)
+	if err != nil {
+		return "", err
+	}
+	if err := s.requireWriteRoleIn(ctx, acc); err != nil {
+		return "", err
+	}
+	return acc, nil
+}
+
+// requireTrashedMediaWrite is the gate for restore / purge on a TRASHED media
+// row. It mirrors requireTrashedFormWrite / requireTrashedProductWrite: the
+// SCOPE axis runs BEFORE the entity lookup, so a readonly key cannot tell a real
+// media id from a fake one by which error it gets, and the lookup is the
+// bin-scoped GetTrashed (the live read cannot see a trashed row at all).
+func (s *Server) requireTrashedMediaWrite(ctx context.Context, mediaID string) (string, error) {
+	if err := s.requireWriteScope(ctx); err != nil {
+		return "", err
+	}
+	if s.deps.Media == nil {
+		return "", errors.New("media tidak tersedia")
+	}
+	acc, err := s.resolveEntityAccount(ctx, func(acc string) error {
+		row, err := s.deps.Media.GetTrashed(ctx, acc, mediaID)
+		if err != nil {
+			return err
+		}
+		if row == nil {
+			return errNotOwned
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	if err := s.requireWriteRoleIn(ctx, acc); err != nil {
+		return "", err
+	}
+	return acc, nil
+}
+
 // resolveSaleAccount returns the account within the call's scope that owns the
 // given ref_code, or errNotOwned.
 func (s *Server) resolveSaleAccount(ctx context.Context, refCode string) (string, error) {

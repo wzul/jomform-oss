@@ -409,6 +409,223 @@ func (s *Server) mediaOutFrom(ctx context.Context, acc, key, mime string, size i
 	return out
 }
 
+// ── Tong sampah media: delete / list / restore / purge ─────────────────────
+// Parity for the media trash routes (GET /v1/rest/media/trash, POST
+// /v1/rest/media/{id}/restore, DELETE /v1/rest/media/{id}/purge).
+//
+// The quota rule these four tools share: trash is quota-NEUTRAL (the bytes stay
+// in the bucket and keep counting against the 1GB cap), and purge is the ONLY
+// place the bytes leave the bucket and the counter is released. That is the
+// decision this card made, stated on MediaStore.Purge and asserted by the tests.
+
+// trashedMediaOut is one row of the media bin listing.
+type trashedMediaOut struct {
+	ID            string `json:"id"`
+	Key           string `json:"key"`
+	URL           string `json:"url"`
+	Mime          string `json:"mime"`
+	Size          int64  `json:"size"`
+	FormID        string `json:"form_id,omitempty"`
+	DeletedAt     string `json:"deleted_at"`
+	ObjectPresent bool   `json:"object_present"`
+}
+
+// deleteMediaMCP moves a media row to the bin, matching
+// DELETE /v1/rest/media/{id}. The object is deliberately NOT removed: the row
+// and the bytes have independent lives now, so the bin is restorable and the
+// public URL keeps working until a purge.
+func (s *Server) deleteMediaMCP(
+	ctx context.Context, _ *mcp.CallToolRequest,
+	in struct {
+		MediaID string `json:"media_id" jsonschema:"ID media (dari list_media)"`
+	},
+) (*mcp.CallToolResult, map[string]any, error) {
+	if in.MediaID == "" {
+		return nil, nil, errors.New("media_id wajib")
+	}
+	acc, err := s.requireMediaWrite(ctx, in.MediaID)
+	if err != nil {
+		return nil, nil, err
+	}
+	key, size, ok, err := s.deps.Media.SoftDelete(ctx, acc, in.MediaID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !ok {
+		return nil, map[string]any{
+			"status": "not_found",
+			"error":  "media tidak dijumpai dalam senarai aktif (mungkin sudah dalam tong sampah)",
+			"media_id": in.MediaID,
+		}, nil
+	}
+	return nil, map[string]any{
+		"status": "deleted", "media_id": in.MediaID, "key": key, "size": size,
+		"bytes_released": false, "quota_released": false,
+		"note": "objek masih di storan dan masih dikira terhadap had 1GB; " +
+			"guna purge_media untuk memusnahkannya secara kekal",
+	}, nil
+}
+
+// listDeletedMedia is the media bin across the caller's accessible accounts.
+func (s *Server) listDeletedMedia(
+	ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn,
+) (*mcp.CallToolResult, *listOutput[trashedMediaOut], error) {
+	if s.deps.Media == nil {
+		return nil, nil, errors.New("media tidak tersedia")
+	}
+	accs, err := s.accountScopes(ctx, false)
+	if err != nil {
+		return nil, nil, err
+	}
+	items, err := s.deps.Media.ListTrashed(ctx, accs)
+	if err != nil {
+		return nil, nil, err
+	}
+	out := make([]trashedMediaOut, 0, len(items))
+	for _, m := range items {
+		row := trashedMediaOut{
+			ID: m.ID, Key: m.Key, URL: m.URL, Mime: m.Mime, Size: m.Size,
+			FormID: m.FormID, ObjectPresent: true,
+		}
+		if m.DeletedAt != nil {
+			row.DeletedAt = m.DeletedAt.UTC().Format(time.RFC3339)
+		}
+		// Best-effort, exactly like the REST bin: an unreachable store is not
+		// the same as "the object is gone", so a failed probe stays optimistic
+		// and the restore attempt is where it is answered for real.
+		if s.deps.Store != nil {
+			if present, perr := s.deps.Store.ObjectExists(ctx, m.Key); perr == nil {
+				row.ObjectPresent = present
+			}
+		}
+		out = append(out, row)
+	}
+	return nil, newListOut(out), nil
+}
+
+// restoreMediaMCP brings a trashed object back. The SAME URL keeps working —
+// but only if the bytes are still in the store: a row whose object was removed
+// (an operator, a bucket lifecycle rule) is REFUSED rather than restored into a
+// URL that 404s. Quota is untouched; it was never released at trash time.
+func (s *Server) restoreMediaMCP(
+	ctx context.Context, _ *mcp.CallToolRequest,
+	in struct {
+		MediaID string `json:"media_id" jsonschema:"ID media dalam tong sampah (dari list_deleted_media)"`
+	},
+) (*mcp.CallToolResult, map[string]any, error) {
+	if in.MediaID == "" {
+		return nil, nil, errors.New("media_id wajib")
+	}
+	acc, err := s.requireTrashedMediaWrite(ctx, in.MediaID)
+	if err != nil {
+		return nil, nil, err
+	}
+	row, err := s.deps.Media.GetTrashed(ctx, acc, in.MediaID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if row == nil {
+		return nil, map[string]any{
+			"status": "not_found",
+			"error":  "media tidak dijumpai dalam tong sampah",
+			"media_id": in.MediaID,
+		}, nil
+	}
+	if s.deps.Store == nil {
+		return nil, nil, errors.New("media storage tidak dikonfigurasi")
+	}
+	present, perr := s.deps.Store.ObjectExists(ctx, row.Key)
+	if perr != nil {
+		return nil, nil, fmt.Errorf("storan tidak dapat disemak: %w", perr)
+	}
+	if !present {
+		return nil, map[string]any{
+			"status": "refused",
+			"error": "fail media ini sudah tiada dalam storan — ia tidak boleh dipulihkan " +
+				"(memulihkannya hanya akan memberi URL yang 404)",
+			"media_id": in.MediaID, "key": row.Key,
+		}, nil
+	}
+	m, ok, err := s.deps.Media.Restore(ctx, acc, in.MediaID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !ok {
+		return nil, nil, errors.New("media tidak dijumpai dalam tong sampah")
+	}
+	return nil, map[string]any{
+		"status": "restored", "media_id": in.MediaID, "url": m.URL,
+	}, nil
+}
+
+// purgeMediaMCP is the ONLY path that destroys a media object, and the only one
+// that gives its bytes back to the workspace quota.
+//
+// Order, matching the REST handler: the row is deleted first (scoped to the bin
+// and to the caller's account), so a store failure cannot leave a LIVE row whose
+// object vanished — the worst case is a deleted row whose bytes linger, which a
+// bucket sweep can find, and which can never serve a broken URL. The object and
+// every derived variant (sized images, PDF preview) are then removed.
+//
+// The quota release happens inside MediaStore.Purge's transaction; there is NO
+// release call here, because releasing the same bytes twice would eat into the
+// account's OTHER media.
+func (s *Server) purgeMediaMCP(
+	ctx context.Context, _ *mcp.CallToolRequest,
+	in struct {
+		MediaID string `json:"media_id" jsonschema:"ID media dalam tong sampah (dari list_deleted_media)"`
+	},
+) (*mcp.CallToolResult, map[string]any, error) {
+	if in.MediaID == "" {
+		return nil, nil, errors.New("media_id wajib")
+	}
+	acc, err := s.requireTrashedMediaWrite(ctx, in.MediaID)
+	if err != nil {
+		return nil, nil, err
+	}
+	key, size, ok, err := s.deps.Media.Purge(ctx, acc, in.MediaID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !ok {
+		return nil, map[string]any{
+			"status": "not_found",
+			"error":  "media tidak dijumpai dalam tong sampah (hantar ke bin dulu guna delete_media)",
+			"media_id": in.MediaID,
+		}, nil
+	}
+	// Best-effort: the row is already gone, so a storage failure must not fail
+	// the request — it is logged so a sweep can find the orphan.
+	if s.deps.Store != nil {
+		for _, k := range mediaObjectKeysMCP(key) {
+			if derr := s.deps.Store.DeleteObject(ctx, k); derr != nil {
+				slog.Warn("mcp_media_purge_object", "err", derr, "key", k)
+			}
+		}
+	}
+	return nil, map[string]any{
+		"status": "purged", "media_id": in.MediaID, "key": key,
+		"bytes_released": size, "quota_released": true,
+	}, nil
+}
+
+// mediaObjectKeysMCP is httpapi.mediaObjectKeys' counterpart in this package:
+// the base key plus every derived key the upload pipeline may have written
+// (sized image variants, PDF preview). Purging only the base key would leave
+// those bytes in the bucket forever, invisible to the quota.
+func mediaObjectKeysMCP(key string) []string {
+	keys := []string{key}
+	for _, size := range objstore.ImageSizes {
+		if vkey := objstore.BuildVariantKey(key, size); vkey != "" {
+			keys = append(keys, vkey)
+		}
+	}
+	if pkey := objstore.BuildPDFPreviewKey(key); pkey != "" {
+		keys = append(keys, pkey)
+	}
+	return keys
+}
+
 // recordMCPMediaEvent appends an upload audit event (issue #92, best-effort).
 func (s *Server) recordMCPMediaEvent(ctx context.Context, accountID, event string, props map[string]any) {
 	if s.deps.Events == nil {

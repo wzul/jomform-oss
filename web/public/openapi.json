@@ -4603,8 +4603,63 @@
         "x-jomform-access": "read"
       }
     },
+    "/v1/rest/media/trash": {
+      "get": {
+        "description": "object_present reports whether the bytes are still in the store. A row can be in the bin while the object is already gone (removed by an operator or a bucket lifecycle rule), which is why a restore checks rather than assumes.\n\nResponse: The workspace's trashed media, each with deleted_at (RFC3339) and object_present.",
+        "operationId": "listTrashedMedia",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request body or parameters are invalid. Error messages are returned in the API's own words, not a fixed enumeration."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The credential is not allowed to do this: a readonly key on a write, or a ?workspace= scope the caller has no manage/admin role in."
+          }
+        },
+        "summary": "List the media in the trash",
+        "tags": [
+          "Media"
+        ],
+        "x-jomform-access": "read"
+      }
+    },
     "/v1/rest/media/{id}": {
       "delete": {
+        "description": "This marks the row trashed. The object itself is NOT removed from storage and the bytes keep counting against the workspace's 1GB quota: the bin holds real storage, so it is not a free tier. Destroy the object for good with DELETE /v1/rest/media/{id}/purge, which is also where the quota is released.",
         "operationId": "deleteMedia",
         "parameters": [
           {
@@ -4659,7 +4714,137 @@
             "description": "The credential is not allowed to do this: a readonly key on a write, or a ?workspace= scope the caller has no manage/admin role in."
           }
         },
-        "summary": "Delete a media item",
+        "summary": "Move a media item to the trash",
+        "tags": [
+          "Media"
+        ],
+        "x-jomform-access": "write"
+      }
+    },
+    "/v1/rest/media/{id}/purge": {
+      "delete": {
+        "description": "Only a media row already in the trash can be destroyed; a live row is a 404. The object and its derived variants (sized images, PDF preview) are removed from the store and the bytes are released from the 1GB quota — this is the only path that releases them.\n\nResponse: status=purged, the media id and the object key that was removed.",
+        "operationId": "purgeMedia",
+        "parameters": [
+          {
+            "description": "Identifier in the URL path.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request body or parameters are invalid. Error messages are returned in the API's own words, not a fixed enumeration."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The credential is not allowed to do this: a readonly key on a write, or a ?workspace= scope the caller has no manage/admin role in."
+          }
+        },
+        "summary": "Destroy a trashed media item for good",
+        "tags": [
+          "Media"
+        ],
+        "x-jomform-access": "write"
+      }
+    },
+    "/v1/rest/media/{id}/restore": {
+      "post": {
+        "description": "Clears deleted_at, so the same URL works again — the bytes were never removed. If the object is no longer in the store the restore is refused with 409 and nothing is changed, because restoring would put a broken URL back in the library. Quota is untouched: the bytes were never released on soft delete.\n\nResponse: status=restored, the media id and its (unchanged) public URL.",
+        "operationId": "restoreMedia",
+        "parameters": [
+          {
+            "description": "Identifier in the URL path.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request body or parameters are invalid. Error messages are returned in the API's own words, not a fixed enumeration."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The credential is not allowed to do this: a readonly key on a write, or a ?workspace= scope the caller has no manage/admin role in."
+          }
+        },
+        "summary": "Restore a media item from the trash",
         "tags": [
           "Media"
         ],
@@ -4844,8 +5029,63 @@
         "x-jomform-access": "write"
       }
     },
+    "/v1/rest/products/trash": {
+      "get": {
+        "description": "Each row also carries deleted_at (RFC3339). can_purge is false when the product has a sale or a subscription, which is exactly what DELETE .../purge would refuse with 409.\n\nResponse: The workspace's trashed products, each with its sales_count, subscription_count and can_purge, so a caller can tell a restorable product from one that can never be destroyed.",
+        "operationId": "listTrashedProducts",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request body or parameters are invalid. Error messages are returned in the API's own words, not a fixed enumeration."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The credential is not allowed to do this: a readonly key on a write, or a ?workspace= scope the caller has no manage/admin role in."
+          }
+        },
+        "summary": "List the products in the trash",
+        "tags": [
+          "Products"
+        ],
+        "x-jomform-access": "read"
+      }
+    },
     "/v1/rest/products/{id}": {
       "delete": {
+        "description": "This moves the product to the bin — it is not the same as taking it off sale. To take a product off sale and leave it in the catalogue, PUT {\"active\":false} instead; a trashed product is invisible to every other read until it is restored.",
         "operationId": "deleteProduct",
         "parameters": [
           {
@@ -4900,7 +5140,7 @@
             "description": "The credential is not allowed to do this: a readonly key on a write, or a ?workspace= scope the caller has no manage/admin role in."
           }
         },
-        "summary": "Delete a product",
+        "summary": "Move a product to the trash",
         "tags": [
           "Products"
         ],
@@ -5034,6 +5274,147 @@
           }
         },
         "summary": "Update a product",
+        "tags": [
+          "Products"
+        ],
+        "x-jomform-access": "write"
+      }
+    },
+    "/v1/rest/products/{id}/purge": {
+      "delete": {
+        "description": "Only a product already in the trash can be destroyed; a live product is a 404. The body must repeat the product's own name as confirm_name; a mismatch is refused with 400. A product that has ever been sold is refused with 409 and sales_count (sales history is never destroyed), and one a subscription still points at is refused with 409 and subscription_count.\n\nResponse: status=purged, the product id and its name.",
+        "operationId": "purgeProduct",
+        "parameters": [
+          {
+            "description": "Identifier in the URL path.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request body or parameters are invalid. Error messages are returned in the API's own words, not a fixed enumeration."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The credential is not allowed to do this: a readonly key on a write, or a ?workspace= scope the caller has no manage/admin role in."
+          }
+        },
+        "summary": "Destroy a trashed product for good",
+        "tags": [
+          "Products"
+        ],
+        "x-jomform-access": "write"
+      }
+    },
+    "/v1/rest/products/{id}/restore": {
+      "post": {
+        "description": "Restoring touches no CASCADE and destroys nothing. Unlike a form restore there is no slug to collide with — products have no unique name — so this only fails when the product is not in the trash (404).\n\nResponse: status=restored and the product id.",
+        "operationId": "restoreProduct",
+        "parameters": [
+          {
+            "description": "Identifier in the URL path.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request body or parameters are invalid. Error messages are returned in the API's own words, not a fixed enumeration."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The credential is not allowed to do this: a readonly key on a write, or a ?workspace= scope the caller has no manage/admin role in."
+          }
+        },
+        "summary": "Restore a product from the trash",
         "tags": [
           "Products"
         ],

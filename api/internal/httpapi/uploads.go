@@ -48,6 +48,11 @@ type ObjectStoreIface interface {
 	PutObject(ctx context.Context, key, contentType string, body []byte) error
 	PublicURL(key string) string
 	DeleteObject(ctx context.Context, key string) error
+	// ObjectExists is a HEAD: the media restore path asks it before promising
+	// the merchant a URL, because after this card a trashed row and its object
+	// have independent lives (the object can be gone while the row is still in
+	// the bin).
+	ObjectExists(ctx context.Context, key string) (bool, error)
 }
 
 // Compile-time check: the concrete store satisfies the handler interface.

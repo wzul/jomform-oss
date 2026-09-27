@@ -114,9 +114,22 @@ func (h *RESTHandlers) listMedia(w http.ResponseWriter, r *http.Request, actx *A
 	respond(w, http.StatusOK, map[string]any{"items": out, "page": page, "limit": limit, "total": total, "usage": usage})
 }
 
-// deleteMedia handles DELETE /v1/rest/media/{id} — soft-deletes the media row
-// and removes the object from MinIO. Account-scoped; a foreign or already
-// deleted id is a 404.
+// deleteMedia handles DELETE /v1/rest/media/{id} — moves the media row to the
+// bin (soft delete). Account-scoped; a foreign or already-trashed id is a 404.
+//
+// THE BYTES ARE NOT TOUCHED HERE, and that is the card's whole point. This
+// handler used to call Store.DeleteObject right after marking the row, so the
+// "soft delete" destroyed the object: the row said "in the trash" while the
+// bytes were already gone, and a restore could only ever have produced a row
+// pointing at nothing. The object now lives until the PURGE
+// (DELETE /v1/rest/media/{id}/purge), which is where the deletion belongs.
+//
+// The QUOTA is not touched here either, and that is the second half of the same
+// decision: the object still occupies the bucket, so its bytes still count
+// against the 1GB cap. Releasing at soft-delete time would make the bin free
+// storage on the one number that is a billing boundary. Quota is released on
+// purge. The rule is stated in full on MediaStore.Purge; the behaviour is
+// asserted by TestMediaTrashKeepsTheObjectAndTheQuotaBite below.
 func (h *RESTHandlers) deleteMedia(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	if _, ok := h.requireWriteRole(w, r, actx); !ok {
 		return
@@ -125,7 +138,7 @@ func (h *RESTHandlers) deleteMedia(w http.ResponseWriter, r *http.Request, actx 
 		writeErr(w, http.StatusServiceUnavailable, "media tidak dikonfigurasi")
 		return
 	}
-	key, size, ok, err := h.Media.SoftDelete(r.Context(), actx.Account.ID, r.PathValue("id"))
+	key, _, ok, err := h.Media.SoftDelete(r.Context(), actx.Account.ID, r.PathValue("id"))
 	if err != nil {
 		slog.Error("media_delete", "err", err, "account", actx.Account.ID, "id", r.PathValue("id"))
 		writeErr(w, http.StatusInternalServerError, "internal error")
@@ -135,20 +148,225 @@ func (h *RESTHandlers) deleteMedia(w http.ResponseWriter, r *http.Request, actx 
 		writeErr(w, http.StatusNotFound, "media tidak dijumpai")
 		return
 	}
-	// Issue #545: deleting an object releases its bytes back into the workspace
-	// quota, so the counter must come down with it. Without this the account
-	// would keep paying quota for objects it removed.
-	h.releaseMediaQuota(r.Context(), actx.Account.ID, size)
-	// Remove the object from MinIO (best-effort; the row is already
-	// soft-deleted so a storage failure must not fail the request).
-	if !storeUnavailable(h.Store) {
-		if err := h.Store.DeleteObject(r.Context(), key); err != nil {
-			slog.Warn("media_delete_object", "err", err, "key", key)
-		}
-	}
 	// Issue #92: audit media delete.
 	h.recordEvent(r, actx, h.sessionOwnerID(r), "media.deleted", map[string]any{"media_id": r.PathValue("id"), "key": key})
 	respond(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// restTrashedMedia is a bin row: what the trash view renders, plus the
+// pre-computed answer to "may this be destroyed yet".
+type restTrashedMedia struct {
+	ID    string `json:"id"`
+	Key   string `json:"key"`
+	URL   string `json:"url"`
+	Mime  string `json:"mime"`
+	Size  int64  `json:"size"`
+	FormID string `json:"form_id,omitempty"`
+	// DeletedAt is when the object entered the bin (RFC3339).
+	DeletedAt string `json:"deleted_at"`
+	// ObjectPresent reports whether the bytes are STILL IN THE STORE. It is the
+	// honest half of a restore: after this card the row and the object have
+	// independent lives (an operator or a lifecycle rule can remove the bytes),
+	// so the UI can say "the file itself is gone" instead of restoring a URL
+	// that 404s. False + a restore attempt is refused with 409.
+	ObjectPresent bool `json:"object_present"`
+}
+
+// listTrashedMedia: GET /v1/rest/media/trash
+//
+// The bin's read side, for the workspace(s) the caller selected. It is a
+// DEDICATED store query (MediaStore.ListTrashed), deliberately not a relaxed
+// filter on the live list: loosening the live query's `deleted_at IS NULL` would
+// expose trashed rows to every ordinary read (the issue #98 regression class).
+//
+// NOTE the route literal: `/v1/rest/media/trash` is registered before
+// `/v1/rest/media/{id}`, and a literal segment wins in net/http's pattern
+// matching, so a trash read is not shadowed by the per-id route.
+func (h *RESTHandlers) listTrashedMedia(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if h.Media == nil {
+		respond(w, http.StatusOK, []restTrashedMedia{})
+		return
+	}
+	scope, ok := h.scopeOr403(w, r, actx)
+	if !ok {
+		return
+	}
+	items, err := h.Media.ListTrashed(r.Context(), scope.Accounts)
+	if err != nil {
+		slog.Error("media_trash_list", "err", err, "account", actx.Account.ID)
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	out := make([]restTrashedMedia, 0, len(items))
+	for _, m := range items {
+		row := restTrashedMedia{
+			ID: m.ID, Key: m.Key, URL: m.URL, Mime: m.Mime, Size: m.Size,
+			FormID: m.FormID, ObjectPresent: true,
+		}
+		if m.DeletedAt != nil {
+			row.DeletedAt = m.DeletedAt.UTC().Format(time.RFC3339)
+		}
+		// Best-effort: a store that cannot be reached is not the same as "the
+		// object is gone", so a failed probe leaves the flag optimistic and the
+		// restore attempt is the place that has to answer for real.
+		if !storeUnavailable(h.Store) {
+			if present, perr := h.Store.ObjectExists(r.Context(), m.Key); perr == nil {
+				row.ObjectPresent = present
+			}
+		}
+		out = append(out, row)
+	}
+	// A BARE ARRAY, matching GET /v1/rest/forms/trash and
+	// GET /v1/rest/products/trash. The trash family shares one shape so a reader
+	// (and the dashboard) can treat the three bins the same way; only the LIVE
+	// media list is a paginated envelope, because only it is paginated.
+	respond(w, http.StatusOK, out)
+}
+
+// restoreMedia: POST /v1/rest/media/{id}/restore
+//
+// Brings a trashed object back: deleted_at is cleared and the SAME URL keeps
+// working. No confirmation — it destroys nothing and a second delete undoes it.
+//
+// The bytes must still be in the store. After this card a trashed row and its
+// object have INDEPENDENT lives (an operator, a bucket lifecycle rule or an
+// earlier failed deploy can remove the object while the row sits in the bin), so
+// the handler asks ObjectExists before it promises anything. When the object is
+// GONE the restore is refused with 409 and NOTHING is changed: putting the row
+// back would return a broken URL to the library, and the call would look like a
+// success while the file is unfetchable. The merchant is told what is missing
+// (the bytes) instead of being handed a row that 404s.
+//
+// Quota is untouched: the bytes were never released at soft-delete time, so
+// trash → restore is quota-neutral by construction (MediaStore.Restore).
+func (h *RESTHandlers) restoreMedia(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
+	if h.Media == nil {
+		writeErr(w, http.StatusServiceUnavailable, "media tidak dikonfigurasi")
+		return
+	}
+	id := r.PathValue("id")
+	// Read the trashed row FIRST: GetTrashed is scoped to the bin and to the
+	// caller's account, so this cannot be used to probe or restore a live row.
+	row, err := h.Media.GetTrashed(r.Context(), actx.Account.ID, id)
+	if err != nil {
+		slog.Error("media_restore_read", "err", err, "account", actx.Account.ID, "id", id)
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if row == nil {
+		writeErr(w, http.StatusNotFound, "media tidak dijumpai")
+		return
+	}
+	// The bytes must still be there. ObjectExists answers (false, nil) for
+	// "gone" and an error for "could not tell" — both refuse, because promising
+	// a URL we have not seen is the failure this check exists to prevent.
+	if storeUnavailable(h.Store) {
+		writeErr(w, http.StatusServiceUnavailable, "media storage tidak dikonfigurasi")
+		return
+	}
+	present, perr := h.Store.ObjectExists(r.Context(), row.Key)
+	if perr != nil {
+		slog.Error("media_restore_head", "err", perr, "key", row.Key)
+		writeErr(w, http.StatusServiceUnavailable, "storan tidak dapat disemak")
+		return
+	}
+	if !present {
+		writeErr(w, http.StatusConflict,
+			"fail media ini sudah tiada dalam storan — ia tidak boleh dipulihkan")
+		return
+	}
+	m, ok, err := h.Media.Restore(r.Context(), actx.Account.ID, id)
+	if err != nil {
+		slog.Error("media_restore", "err", err, "account", actx.Account.ID, "id", id)
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if !ok {
+		writeErr(w, http.StatusNotFound, "media tidak dijumpai")
+		return
+	}
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "media.restored", map[string]any{"media_id": id, "key": m.Key})
+	respond(w, http.StatusOK, map[string]string{"status": "restored", "media_id": id, "url": m.URL})
+}
+
+// purgeMedia: DELETE /v1/rest/media/{id}/purge
+//
+// Destroys a TRASHED object for good, and THIS is where the bytes go. The order
+// is deliberate:
+//
+//  1. the row is read from the bin (scoped to the caller's account),
+//  2. the row is DELETED first, so a store failure below cannot leave a live row
+//     whose object vanished — the worst case is a deleted row whose bytes linger,
+//     which is recoverable (the bucket is the source of truth for a sweep) and
+//     never serves a broken URL,
+//  3. the object and its derived variants are removed from the store,
+//  4. the bytes are released from the 1GB quota — the release that soft delete
+//     used to do, moved here because this is the moment the storage is actually
+//     given back.
+//
+// A live (non-trashed) row is a 404: the bin is the only way in, so a mistyped
+// call cannot destroy bytes that are still being served.
+func (h *RESTHandlers) purgeMedia(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return
+	}
+	if h.Media == nil {
+		writeErr(w, http.StatusServiceUnavailable, "media tidak dikonfigurasi")
+		return
+	}
+	id := r.PathValue("id")
+	key, _, ok, err := h.Media.Purge(r.Context(), actx.Account.ID, id)
+	if err != nil {
+		slog.Error("media_purge", "err", err, "account", actx.Account.ID, "id", id)
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if !ok {
+		writeErr(w, http.StatusNotFound, "media tidak dijumpai")
+		return
+	}
+	// Remove the object and every derived variant (sized images + PDF preview)
+	// so the purge leaves nothing behind in the bucket. Best-effort: the row is
+	// already gone, so a storage failure must not fail the request — it is
+	// logged so a sweep can find the orphan.
+	if !storeUnavailable(h.Store) {
+		for _, k := range mediaObjectKeys(key) {
+			if err := h.Store.DeleteObject(r.Context(), k); err != nil {
+				slog.Warn("media_purge_object", "err", err, "key", k)
+			}
+		}
+	}
+	// The bytes leave the bucket here.
+	//
+	// There is NO quota call here, on purpose: MediaStore.Purge releases the
+	// counter in the SAME transaction as the row delete, so that the counter and
+	// the rows cannot drift apart across a crash. Releasing again from the handler
+	// would subtract the same bytes twice and eat into the account's OTHER media
+	// (clamped at zero, so it would look like a successful purge and only show up
+	// as a quota that no longer matches the bucket).
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "media.purged", map[string]any{"media_id": id, "key": key})
+	respond(w, http.StatusOK, map[string]string{"status": "purged", "media_id": id, "key": key})
+}
+
+// mediaObjectKeys returns the base object key plus every derived key the upload
+// pipeline may have written for it: the sized image variants (thumbnail /
+// medium / full, issue #382) and the PDF preview (issue #383). Purging only the
+// base key would leave those bytes in the bucket forever — invisible to the
+// quota, which is why the sweep has to know all of them.
+func mediaObjectKeys(key string) []string {
+	keys := []string{key}
+	for _, size := range objstore.ImageSizes {
+		if vkey := buildVariantKey(key, size); vkey != "" {
+			keys = append(keys, vkey)
+		}
+	}
+	if pkey := buildPDFPreviewKey(key); pkey != "" {
+		keys = append(keys, pkey)
+	}
+	return keys
 }
 
 // recordMedia records an uploaded object in the media library (issue #180).

@@ -58,6 +58,10 @@ const TOOL_GROUPS: { group: string; note?: string; tools: { name: string; desc: 
       { name: "delete_product_variation", desc: "Padam SATU variasi dari produk. Variasi terakhir yang dipadam menjadikan produk itu produk simple semula." },
       { name: "update_product", desc: "Kemaskini produk: nama, harga (price_sen), stok, jenis (type), billing_period (langganan), aktif/tidak, images (URL imej mesti https:// — issue #501; omit = tak berubah). Omit medan tak berubah." },
       { name: "bulk_products", desc: "Arkibkan banyak produk sekali gus (active=false). ids[] maks 500." },
+      { name: "delete_product", desc: "Hantar produk ke TONG SAMPAH (deleted_at diisi) \u2014 ia keluar dari senarai produk dan boleh dipulihkan guna restore_product. Ini berbeza daripada archive_product (active=false), yang kekal dalam senarai. Untuk nyahaktifkan sahaja, guna archive_product." },
+      { name: "list_deleted_products", desc: "Senarai produk dalam TONG SAMPAH: id, name, price_sen, deleted_at, sales_count, subscription_count dan can_purge. can_purge=false bermakna produk itu masih dirujuk jualan (sejarah) atau subscription (bil masih berjalan) \u2014 padam kekal akan DITOLAK." },
+      { name: "restore_product", desc: "Pulihkan produk dari tong sampah (deleted_at=NULL). Tiada apa-apa dimusnahkan dan tiada nama yang perlu diselesaikan \u2014 produk tiada slug \u2014 jadi pulihan tidak boleh berlanggar." },
+      { name: "purge_product", desc: "Padam produk secara KEKAL dari tong sampah (variasinya gugur bersama melalui CASCADE). AMARAN: tidak boleh dibatalkan. Wajib confirm_name = nama produk itu. DITOLAK bila produk ada jualan (sejarah jualan tidak dimusnahkan) atau masih ada subscription (FK RESTRICT). Hanya produk dalam tong sampah \u2014 hantar ke bin dulu guna delete_product." },
     ],
   },
   {
@@ -280,6 +284,10 @@ const TOOL_GROUPS: { group: string; note?: string; tools: { name: string; desc: 
     tools: [
       { name: "list_media", desc: "Senarai media yang dimuat naik akaun (perpustakaan media): thumbnail/url, nama, tarikh, saiz. Boleh tapis form_id dan source (merchant|customer). Read-only." },
       { name: "upload_media", desc: "Muat naik media/aset ke workspace anda (issue #363): kind='image' (png/jpeg/webp/gif \u2014 dioptimumkan, strip EXIF, terus boleh guna; png/jpeg/webp dapat saiz thumbnail/medium/full), kind='asset' (css/js/html/svg/woff2 \u2014 disimpan asli, dikaji sebelum dipapar) atau kind='pdf' (disimpan asli, terus boleh guna). hantar content fail sebagai base64 di 'data'. Pulangkan URL untuk diguna sebagai image_url/logo_url landing atau <link>/<script> landing page." },
+      { name: "delete_media", desc: "Hantar media ke TONG SAMPAH (deleted_at diisi). Byte TIDAK dimusnahkan dan kuota TIDAK dilepaskan \u2014 objek masih di storan, jadi ia masih dikira terhadap had 1GB. URL yang sama terus berfungsi selepas restore_media. Guna purge_media untuk memusnahkan byte secara kekal." },
+      { name: "list_deleted_media", desc: "Senarai media dalam TONG SAMPAH: id, key, url, mime, size, form_id, deleted_at dan object_present. object_present=false bermakna byte sudah tiada dalam storan (dipadam operator atau lifecycle rule) \u2014 restore akan DITOLAK." },
+      { name: "restore_media", desc: "Pulihkan media dari tong sampah (deleted_at=NULL). URL yang SAMA terus berfungsi. DITOLAK (409) bila objek sudah tiada dalam storan \u2014 memulihkan baris itu hanya akan memberi URL yang 404." },
+      { name: "purge_media", desc: "Padam media secara KEKAL dari tong sampah. AMARAN: tidak boleh dibatalkan. Inilah satu-satunya tempat byte dipadam dari storan DAN kuota 1GB dilepaskan (varians saiz + pratonton PDF turut dipadam). Hanya media dalam tong sampah \u2014 hantar ke bin dulu guna delete_media." },
     ],
   },
   {

@@ -20,6 +20,22 @@ as a claimed tool name and fails the guard in the opposite direction.
 Parity checklist (dashboard → MCP):
 - Products: list/create/update/archive → `list_products`, `create_product`,
   `update_product`, `archive_product`
+  (`archive_product` is "not on sale", NOT the bin — it stays in the list as
+  Archived).
+- Product trash (soft delete → restore or permanent purge) → `delete_product`,
+  `list_deleted_products`, `restore_product`, `purge_product`.
+  `delete_product` moves a product to the bin (a DIFFERENT state from
+  `archive_product`'s `active=false`); each bin row carries the sale count, the
+  subscription count and the pre-computed can_purge answer; `purge_product` requires the
+  product's NAME typed as confirm_name (a product has no slug), and is REFUSED
+  for a product with any sale (sales history is never destroyed —
+  `sales.subscription_product_id` is ON DELETE SET NULL, so the delete would
+  silently detach it) or with a live subscription
+  (`subscriptions.product_id` is ON DELETE RESTRICT, so the refusal names the
+  obstacle instead of returning a raw 23503).
+  REST: `DELETE /v1/rest/products/{id}`, `GET /v1/rest/products/trash`,
+  `POST /v1/rest/products/{id}/restore`,
+  `DELETE /v1/rest/products/{id}/purge`.
 - Form builder: create/update/publish/unpublish/list/get → `upsert_form`,
   `publish_form`, `unpublish_form`, `list_forms`, `get_form`
 - Form trash (soft delete → restore or permanent purge) → `list_deleted_forms`,
@@ -63,6 +79,17 @@ Parity checklist (dashboard → MCP):
   `GET /v1/workspaces/{id}/deletion-check`.
 - Media library / asset upload (image + code, tenant-scoped, scan-gated,
   #361/#364) → `list_media`, `upload_media`
+- Media trash (soft delete → restore or permanent purge) → `delete_media`,
+  `list_deleted_media`, `restore_media`, `purge_media`.
+  `delete_media` marks the row and leaves the OBJECT in place, so the bin is
+  restorable and the URL keeps working; `restore_media` therefore works only
+  while the bytes are still in the store (a row whose object was removed by an
+  operator or a bucket lifecycle rule is REFUSED, rather than restored into a
+  URL that 404s); `purge_media` is the ONLY place the bytes are deleted from the
+  bucket and released from the 1GB workspace quota — trash is quota-neutral by
+  construction. REST: `DELETE /v1/rest/media/{id}`,
+  `GET /v1/rest/media/trash`, `POST /v1/rest/media/{id}/restore`,
+  `DELETE /v1/rest/media/{id}/purge`.
 - Analytics → `get_form_analytics`, `get_product_analytics`
 - Custom domains → `list_domains`, `add_domain`, `verify_domain`,
   `remove_domain`, `auto_cname_domain`

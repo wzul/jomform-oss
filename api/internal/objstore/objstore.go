@@ -265,9 +265,10 @@ func (o *ObjectStore) GetBytes(ctx context.Context, key string) ([]byte, string,
 	return o.GetObject(ctx, key)
 }
 
-// DeleteObject removes an object from the bucket (issue #180). Used by the
-// media delete endpoint after the row is soft-deleted. A missing object is
-// not an error (idempotent delete).
+// DeleteObject removes an object from the bucket. It is called from the PURGE
+// path only: a media soft delete used to remove the bytes here, which made the
+// media "trash" unrestorable (a row in the bin whose object was already gone).
+// A missing object is not an error (idempotent delete).
 //
 // A nil receiver (an unconfigured store) answers ErrNotConfigured instead of
 // dereferencing o.client — see ErrNotConfigured.
@@ -283,6 +284,40 @@ func (o *ObjectStore) DeleteObject(ctx context.Context, key string) error {
 		return fmt.Errorf("s3 delete %q: %w", key, err)
 	}
 	return nil
+}
+
+// ObjectExists reports whether an object is present in the bucket, without
+// reading its bytes.
+//
+// It exists because a trashed media row and its object have INDEPENDENT lives
+// after this card moves the delete to the purge path: the row can be restored
+// while the bytes were removed by something else in the meantime (an operator, a
+// bucket lifecycle rule, a failed earlier deploy). Restoring such a row would
+// hand the merchant an object URL that 404s, so the restore path asks this first
+// and reports what it found instead of asserting a URL that is not there.
+//
+// A missing object is (false, nil) — "not there" is an answer, not a failure. A
+// store-level problem is returned as an error so the caller can tell "gone" from
+// "could not tell".
+//
+// A nil receiver (an unconfigured store) answers (false, ErrNotConfigured) for
+// the same reason every other method here does.
+func (o *ObjectStore) ObjectExists(ctx context.Context, key string) (bool, error) {
+	if o == nil {
+		return false, ErrNotConfigured
+	}
+	_, err := o.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: &o.bucket,
+		Key:    &key,
+	})
+	if err != nil {
+		var nf *types.NotFound
+		if errors.As(err, &nf) {
+			return false, nil
+		}
+		return false, fmt.Errorf("s3 head %q: %w", key, err)
+	}
+	return true, nil
 }
 
 // MediaKeyFromPath validates and extracts the object key from a public media

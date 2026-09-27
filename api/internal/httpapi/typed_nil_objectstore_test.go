@@ -184,3 +184,10 @@ func (notConfiguredStore) PublicURL(string) string { return "" }
 func (notConfiguredStore) DeleteObject(context.Context, string) error {
 	return objstore.ErrNotConfigured
 }
+
+// ObjectExists is part of the interface, so the "exists but unconfigured" third
+// shape has to answer it too and keep answering ErrNotConfigured — a restore
+// must treat "cannot tell" the same way it treats this store everywhere else.
+func (notConfiguredStore) ObjectExists(context.Context, string) (bool, error) {
+	return false, objstore.ErrNotConfigured
+}

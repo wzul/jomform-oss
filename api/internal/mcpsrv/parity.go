@@ -1044,6 +1044,177 @@ func (s *Server) archiveProductMCP(
 	return nil, map[string]string{"status": "archived", "product_id": in.ProductID}, nil
 }
 
+// deleteProductMCP moves a product to the BIN (soft delete), matching
+// DELETE /v1/rest/products/{id}.
+//
+// It is deliberately NOT archiveProductMCP: archive is active=false and the
+// product stays in the catalogue, while this takes it out of the live list
+// entirely and puts it where it can be restored or purged. Conflating the two
+// was the defect the trash work fixed.
+func (s *Server) deleteProductMCP(
+	ctx context.Context, _ *mcp.CallToolRequest, in archiveProductIn,
+) (*mcp.CallToolResult, map[string]string, error) {
+	acc, err := s.requireProductWrite(ctx, in.ProductID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := s.deps.Products.SoftDelete(ctx, acc, in.ProductID); err != nil {
+		return nil, nil, err
+	}
+	return nil, map[string]string{"status": "deleted", "product_id": in.ProductID}, nil
+}
+
+// trashedProductOut is one row of the product bin listing.
+type trashedProductOut struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	PriceSen int64  `json:"price_sen"`
+	// DeletedAt is when the product entered the bin (RFC3339).
+	DeletedAt string `json:"deleted_at"`
+	// SalesCount / SubscriptionCount are what a purge would have to refuse on.
+	SalesCount        int64 `json:"sales_count"`
+	SubscriptionCount int64 `json:"subscription_count"`
+	// CanPurge is the pre-computed answer, so a caller does not derive it.
+	CanPurge bool `json:"can_purge"`
+}
+
+// listDeletedProducts: the product bin across the caller's accessible accounts.
+func (s *Server) listDeletedProducts(
+	ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn,
+) (*mcp.CallToolResult, *listOutput[trashedProductOut], error) {
+	if s.deps.Products == nil {
+		return nil, nil, errors.New("products tidak tersedia")
+	}
+	accs, err := s.accountScopes(ctx, false)
+	if err != nil {
+		return nil, nil, err
+	}
+	products, err := s.deps.Products.ListTrashed(ctx, accs)
+	if err != nil {
+		return nil, nil, err
+	}
+	sales, err := s.deps.Products.SalesCountsByProduct(ctx, accs)
+	if err != nil {
+		return nil, nil, err
+	}
+	subs, err := s.deps.Products.SubscriptionCountsByProduct(ctx, accs)
+	if err != nil {
+		return nil, nil, err
+	}
+	out := make([]trashedProductOut, 0, len(products))
+	for _, p := range products {
+		sn, su := sales[p.ID], subs[p.ID]
+		row := trashedProductOut{
+			ID: p.ID, Name: p.Name, PriceSen: p.PriceSen,
+			SalesCount: sn, SubscriptionCount: su,
+			CanPurge: sn == 0 && su == 0,
+		}
+		if p.DeletedAt != nil {
+			row.DeletedAt = p.DeletedAt.UTC().Format(time.RFC3339)
+		}
+		out = append(out, row)
+	}
+	return nil, newListOut(out), nil
+}
+
+// requireTrashedProductWrite gates restore / purge / bin reads on a TRASHED
+// product. It mirrors requireTrashedFormWrite: the SCOPE axis is checked before
+// the entity lookup so the wording of the lookup's failure ("tidak dijumpai")
+// cannot be used by a readonly key to tell a real product id from a fake one,
+// and the lookup itself is the TRASH-aware GetTrashed (Products.Get filters
+// `deleted_at IS NULL`, so it cannot see a trashed row at all).
+func (s *Server) requireTrashedProductWrite(ctx context.Context, productID string) (string, error) {
+	if err := s.requireWriteScope(ctx); err != nil {
+		return "", err
+	}
+	if s.deps.Products == nil {
+		return "", errors.New("products tidak tersedia")
+	}
+	acc, err := s.resolveEntityAccount(ctx, func(acc string) error {
+		_, err := s.deps.Products.GetTrashed(ctx, acc, productID)
+		return err
+	})
+	if err != nil {
+		return "", err
+	}
+	if err := s.requireWriteRoleIn(ctx, acc); err != nil {
+		return "", err
+	}
+	return acc, nil
+}
+
+// restoreProductMCP brings one trashed product back. No confirmation: it
+// destroys nothing and trashing it again undoes it. There is no collision case
+// (products have no slug), unlike restoreFormMCP.
+func (s *Server) restoreProductMCP(
+	ctx context.Context, _ *mcp.CallToolRequest, in archiveProductIn,
+) (*mcp.CallToolResult, map[string]string, error) {
+	acc, err := s.requireTrashedProductWrite(ctx, in.ProductID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := s.deps.Products.Restore(ctx, acc, in.ProductID); err != nil {
+		return nil, nil, err
+	}
+	return nil, map[string]string{"status": "restored", "product_id": in.ProductID}, nil
+}
+
+// purgeProductMCP permanently destroys a TRASHED product.
+//
+// Two gates, matching the REST handler and purgeFormMCP:
+//
+//	confirm_name — the caller must type the product's NAME (a product has no
+//	  slug, so the name is the identifier it names back). An irreversible call
+//	  should require the caller to name what it is destroying.
+//	sales/subscriptions — refused, not purged. A sale is history and
+//	  sales.subscription_product_id is ON DELETE SET NULL, so the delete would
+//	  silently detach it; subscriptions.product_id is ON DELETE RESTRICT, so
+//	  without the named refusal the caller would get a raw SQLSTATE 23503.
+func (s *Server) purgeProductMCP(
+	ctx context.Context, _ *mcp.CallToolRequest, in purgeProductIn,
+) (*mcp.CallToolResult, map[string]any, error) {
+	acc, err := s.requireTrashedProductWrite(ctx, in.ProductID)
+	if err != nil {
+		return nil, nil, err
+	}
+	p, err := s.deps.Products.GetTrashed(ctx, acc, in.ProductID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if strings.TrimSpace(in.ConfirmName) != p.Name {
+		return nil, map[string]any{
+			"status": "refused",
+			"error": "taip nama produk untuk sahkan pemadaman kekal (produk: " + p.Name + "). " +
+				"Pemadaman kekal tidak boleh dibatalkan.",
+			"product_id": in.ProductID, "name": p.Name,
+		}, nil
+	}
+	if err := s.deps.Products.Purge(ctx, acc, in.ProductID); err != nil {
+		switch {
+		case errors.Is(err, dbstore.ErrProductHasSales):
+			n, _ := s.deps.Products.CountSalesByProduct(ctx, acc, in.ProductID)
+			return nil, map[string]any{
+				"status": "refused",
+				"error": "produk ini mempunyai jualan — sejarah jualan tidak boleh dimusnahkan " +
+					"dengan memadam produk. Ia kekal dalam tong sampah.",
+				"product_id": in.ProductID, "sales_count": n,
+			}, nil
+		case errors.Is(err, dbstore.ErrProductHasSubscriptions):
+			n, _ := s.deps.Products.CountSubscriptionsByProduct(ctx, acc, in.ProductID)
+			return nil, map[string]any{
+				"status": "refused",
+				"error": "produk ini masih dirujuk subscription — batalkan atau pindahkan " +
+					"langganan itu dahulu. Ia kekal dalam tong sampah.",
+				"product_id": in.ProductID, "subscription_count": n,
+			}, nil
+		}
+		return nil, nil, err
+	}
+	return nil, map[string]any{
+		"status": "purged", "product_id": in.ProductID, "name": p.Name,
+	}, nil
+}
+
 // bulkProductsMCP archives many products in one call (parity with
 // POST /v1/rest/products/bulk). Issue #307: spans the user's workspaces (up to the
 // caller's role per workspace).

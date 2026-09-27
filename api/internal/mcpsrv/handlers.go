@@ -236,6 +236,14 @@ type archiveProductIn struct {
 	ProductID string `json:"product_id" jsonschema:"ID produk"`
 }
 
+// purgeProductIn confirms a PERMANENT delete of a trashed product. The
+// identifier is the product's NAME, not a slug: products have no slug, so the
+// name is what the caller can name back.
+type purgeProductIn struct {
+	ProductID   string `json:"product_id" jsonschema:"ID produk (mesti dalam tong sampah)"`
+	ConfirmName string `json:"confirm_name,omitempty" jsonschema:"Nama produk itu sendiri, untuk sahkan pemadaman kekal. Salah/tiada = ditolak."`
+}
+
 func (s *Server) archiveProduct(ctx context.Context, _ *mcp.CallToolRequest, in archiveProductIn) (*mcp.CallToolResult, map[string]string, error) {
 	// Issue #307: the product may live in any of the user's workspaces; resolve +
 	// RBAC-gate the owning account.

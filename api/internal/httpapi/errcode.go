@@ -83,8 +83,14 @@ const (
 	// a rename is unblocked by choosing a different slug for THIS form. Sharing
 	// one code would show one of the two the other's instruction — the exact
 	// class of unusable message this file exists to prevent.
-	CodeFormSlugInUse = "form.slugInUse"
+	CodeFormSlugInUse   = "form.slugInUse"
 	CodeFormSlugInvalid = "form.slugInvalid"
+
+	// The product bin's two refusals, the same class as the two above: a purge
+	// that would destroy sales history, and one a live subscription still needs
+	// (the FK is ON DELETE RESTRICT). Keyed on the exact wire message.
+	CodeProductHasSales         = "product.hasSales"
+	CodeProductHasSubscriptions = "product.hasSubscriptions"
 
 	// Caller-supplied URL scheme (urlguard) and outbound webhook URLs.
 	CodeURLNotHTTPS       = "url.notHttps"
@@ -232,6 +238,10 @@ var errCodeByMessage = map[string]string{
 	// wire message states it rather than inventing a second wording. The literal
 	// is pinned equal to the sentinel by TestFormSlugInvalidWireMessageMatchesTheStore.
 	"form slug must be 1-40 characters of a-z, 0-9 or -": CodeFormSlugInvalid,
+
+	// The product bin's refusals, same shape as the form's above.
+	"produk ini mempunyai jualan — sejarah jualan tidak boleh dimusnahkan dengan memadam produk. Ia kekal dalam tong sampah.": CodeProductHasSales,
+	"produk ini masih ada langganan — batalkan langganan itu dahulu. Ia kekal dalam tong sampah.":                             CodeProductHasSubscriptions,
 
 	// Outbound webhook URL (ssrfguard refusal).
 	"url webhook tidak sah (menunjuk ke host peribadi/loopback)": CodeWebhookURLInvalid,

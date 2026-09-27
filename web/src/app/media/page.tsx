@@ -40,6 +40,21 @@ type MediaUsage = {
   limit?: number;
 };
 
+// A row in the Trash view (GET /api/rest/media/trash). `object_present` is the
+// honest half of a restore: the row and the object have independent lives, so a
+// file whose bytes were removed while it sat in the bin cannot be restored and
+// the UI must say so rather than offer a button that fails.
+type TrashedMedia = {
+  id: string;
+  key: string;
+  url: string;
+  mime: string;
+  size: number;
+  form_id?: string;
+  deleted_at: string;
+  object_present: boolean;
+};
+
 type FormRow = { id: string; slug: string; title: string; status: string; url: string };
 
 const PER_PAGE = 24;
@@ -114,6 +129,16 @@ export default function MediaPage() {
   const [detail, setDetail] = useState<MediaItem | null>(null);
   const [copied, setCopied] = useState(false);
   const [deleting, setDeleting] = useState(false);
+
+  // Trash view: a second, explicitly-selected view over the SAME page, the same
+  // shape the Forms page uses. The DEFAULT is the live library — a new visitor
+  // must never land in the trash.
+  const [view, setView] = useState<"active" | "trash">("active");
+  const [trashed, setTrashed] = useState<TrashedMedia[]>([]);
+  const [trashLoaded, setTrashLoaded] = useState(false);
+  const [notify, setNotify] = useState("");
+  const [confirmPurge, setConfirmPurge] = useState<TrashedMedia | null>(null);
+  const [purgeBusy, setPurgeBusy] = useState(false);
 
   // Issue #382: WordPress-style "Add New Media" upload (drag-and-drop +
   // file picker). Uploads go through the existing uploadImage endpoint,
@@ -275,9 +300,93 @@ export default function MediaPage() {
         return;
       }
       setDetail(null);
+      setNotify(t("media.deletedToTrash"));
       load();
     } finally {
       setDeleting(false);
+    }
+  }
+
+  // The trash is fetched only when it is opened. It is a SEPARATE listing
+  // (GET /api/rest/media/trash) because the normal list deliberately excludes
+  // trashed rows — and because the live list is paginated while the bin is not.
+  const loadTrash = useCallback(async () => {
+    const r = await runLoad(
+      async () => {
+        const d = await fetchJson<unknown>(`/api/rest/media/trash${workspaceQuery()}`);
+        return Array.isArray(d) ? (d as TrashedMedia[]) : [];
+      },
+      { onUnauth: goToLogin, message: t("media.loadTrashFail") },
+    );
+    if (!r.ok) {
+      setTrashed([]);
+      setError(r.error);
+      return;
+    }
+    setTrashed(r.data);
+    setTrashLoaded(true);
+    setError("");
+  }, [t, goToLogin]);
+
+  useEffect(() => {
+    if (view === "trash") void loadTrash();
+  }, [view, loadTrash, workspace]);
+
+  // Escape closes the purge dialog.
+  useEffect(() => {
+    if (!confirmPurge) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setConfirmPurge(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [confirmPurge]);
+
+  async function restore(id: string) {
+    setNotify("");
+    const res = await fetch(`/api/rest/media/${id}/restore${workspaceQuery()}`, { method: "POST" });
+    if (!res.ok) {
+      // 409 (code upload.objectGone) means the bytes were removed while the row
+      // sat in the bin, so there is nothing to restore. Say WHICH failure it is
+      // rather than the generic line: "we couldn't restore this" sends the
+      // merchant to retry a call that can never succeed.
+      if (res.status === 409) {
+        setError(t("media.restoreObjectGone"));
+      } else {
+        setError(t("media.restoreFail"));
+      }
+      void loadTrash();
+      return;
+    }
+    setNotify(t("media.restored"));
+    void loadTrash();
+    load();
+  }
+
+  async function purge() {
+    if (!confirmPurge || purgeBusy) return;
+    setPurgeBusy(true);
+    setNotify("");
+    try {
+      const res = await fetch(`/api/rest/media/${confirmPurge.id}/purge${workspaceQuery()}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        setError(t("media.purgeFail"));
+        setConfirmPurge(null);
+        void loadTrash();
+        return;
+      }
+      setNotify(t("media.purged"));
+      setConfirmPurge(null);
+      void loadTrash();
+      // The quota bar moves on a purge, so the live list (which carries usage)
+      // has to be re-read too, not just the bin.
+      load();
+    } catch {
+      setError(t("media.purgeFail"));
+    } finally {
+      setPurgeBusy(false);
     }
   }
 
@@ -370,6 +479,106 @@ export default function MediaPage() {
           </div>
         )}
 
+        {/* Active / Trash switcher. The live library is the DEFAULT: a fresh
+            visitor must never land in the trash. Same shape as the Forms page. */}
+        <div className="mt-5 flex flex-wrap items-center gap-1 border-b border-[var(--jf-border)]" role="tablist">
+          {(["active", "trash"] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              role="tab"
+              aria-selected={view === v}
+              onClick={() => {
+                setView(v);
+                setError("");
+                setNotify("");
+              }}
+              className={`-mb-px whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium ${
+                view === v
+                  ? "border-slate-900 text-slate-900"
+                  : "border-transparent text-[var(--jf-muted)] hover:text-slate-800"
+              }`}
+            >
+              {v === "active" ? t("media.trashTab") : t("media.trashTabDeleted")}
+              {v === "trash" && trashLoaded && trashed.length > 0 ? ` (${trashed.length})` : ""}
+            </button>
+          ))}
+        </div>
+
+        {notify && (
+          <p className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{notify}</p>
+        )}
+
+        {error && (
+          <p role="alert" className="mt-3 text-sm text-red-600">
+            {error}
+            {/* Issue #503: a failed load gets an action, not a dead end. */}
+            <button
+              type="button"
+              onClick={() => void (view === "trash" ? loadTrash() : load())}
+              className="ml-2 underline decoration-dotted underline-offset-2"
+            >
+              {t("common.retry")}
+            </button>
+          </p>
+        )}
+
+        {/* Trash view: the bin, with restore and delete-for-good. */}
+        {view === "trash" && (
+          <>
+            <p className="mt-4 max-w-2xl text-sm text-[var(--jf-muted)]">{t("media.trashNote")}</p>
+            <ul className="mt-4 space-y-2">
+              {trashed.map((m) => (
+                <li
+                  key={m.id}
+                  className="jf-card flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">{nameFromKey(m.key)}</p>
+                    <p className="text-[11px] text-[var(--jf-muted)]">
+                      {t("media.trashDeletedAt")} {formatDate(m.deleted_at, user?.timezone)} · {fmtSize(m.size)}
+                    </p>
+                    {/* The bytes are gone, so a restore can never work. Say so
+                        here rather than offering a button that fails. */}
+                    {!m.object_present && (
+                      <p className="mt-1 text-[11px] text-amber-700">{t("media.restoreObjectGone")}</p>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                    {canWrite && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => void restore(m.id)}
+                          disabled={!m.object_present}
+                          className="jf-btn-ghost min-h-[44px] disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-10"
+                        >
+                          {t("media.restore")}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setConfirmPurge(m);
+                            setError("");
+                          }}
+                          className="jf-btn-ghost min-h-[44px] text-rose-600 hover:bg-rose-50 sm:min-h-10"
+                        >
+                          {t("media.purge")}
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </li>
+              ))}
+              {trashed.length === 0 && (
+                <li className="rounded-lg text-sm text-[var(--jf-muted)]">{t("media.trashEmpty")}</li>
+              )}
+            </ul>
+          </>
+        )}
+
+        {view === "active" && (
+        <>
         {/* Filters */}
         <div className="mt-6 flex flex-wrap items-center gap-2">
           <select
@@ -397,20 +606,6 @@ export default function MediaPage() {
           </select>
           <span className="text-xs text-[var(--jf-muted)]">{countLabel}</span>
         </div>
-
-        {error && (
-          <p role="alert" className="mt-3 text-sm text-red-600">
-            {error}
-            {/* Issue #503: a failed load gets an action, not a dead end. */}
-            <button
-              type="button"
-              onClick={() => void load()}
-              className="ml-2 underline decoration-dotted underline-offset-2"
-            >
-              {t("common.retry")}
-            </button>
-          </p>
-        )}
 
         {/* Grid */}
         {items.length === 0 ? (
@@ -585,6 +780,49 @@ export default function MediaPage() {
                     </button>
                   )}
                 </div>
+              </div>
+            </div>
+          </div>
+        )}
+        </>
+        )}
+
+        {/* Purge confirmation. A permanent delete destroys the object and gives
+            the storage back, so it asks for confirmation — the same level as the
+            forms bin, minus the typed slug (media has no slug). */}
+        {confirmPurge && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+            onClick={() => setConfirmPurge(null)}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label={t("media.purgeConfirmTitle")}
+              className="w-full max-w-md rounded-xl bg-white p-5 shadow-xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <p className="text-sm font-semibold">{t("media.purgeConfirmTitle")}</p>
+              <p className="mt-2 text-sm text-[var(--jf-muted)]">{t("media.purgeConfirmBody")}</p>
+              <p className="mt-2 truncate font-mono text-[11px] text-[var(--jf-muted)]">
+                {nameFromKey(confirmPurge.key)}
+              </p>
+              <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setConfirmPurge(null)}
+                  className="jf-btn-ghost px-3 py-1.5 text-sm"
+                >
+                  {t("common.cancel")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void purge()}
+                  disabled={purgeBusy}
+                  className="rounded-lg border border-red-200 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 disabled:opacity-40"
+                >
+                  {t("media.purge")}
+                </button>
               </div>
             </div>
           </div>

@@ -184,9 +184,20 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /v1/rest/products", h.authed(h.listProducts))
 	mux.Handle("POST /v1/rest/products", h.authed(h.createProduct))
 	mux.Handle("POST /v1/rest/products/bulk", h.authed(h.bulkProducts))
+	// Tong sampah (products): the bin's three routes. `trash` is a literal
+	// segment and `{id}` is a wildcard, and net/http picks the MOST SPECIFIC
+	// pattern — a literal matches a strict subset of what the wildcard matches —
+	// so the bin read is not shadowed by GET /{id}. The rule is order-
+	// independent (go.dev/blog/routing-enhancements, "the most specific pattern
+	// wins"), so this registration order is not what decides it; the literal
+	// itself is. TestRESTProductTrashRouteIsNotShadowedByProductID asserts the
+	// outcome in both directions, because nothing in this file can.
+	mux.Handle("GET /v1/rest/products/trash", h.authed(h.listTrashedProducts))
 	mux.Handle("PUT /v1/rest/products/{id}", h.authed(h.updateProduct))
 	mux.Handle("GET /v1/rest/products/{id}", h.authed(h.getProduct))
 	mux.Handle("DELETE /v1/rest/products/{id}", h.authed(h.deleteProduct))
+	mux.Handle("POST /v1/rest/products/{id}/restore", h.authed(h.restoreProduct))
+	mux.Handle("DELETE /v1/rest/products/{id}/purge", h.authed(h.purgeProduct))
 	mux.Handle("PUT /v1/rest/forms/{id}/chip-override", h.authed(h.setFormChipOverride))
 	mux.Handle("DELETE /v1/rest/forms/{id}/chip-override", h.authed(h.clearFormChipOverride))
 	// Issue #208: multiple per-form CHIP feeds with conditional logic.
@@ -425,7 +436,13 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	// (account-scoped, paginated, filterable by form/source) and soft-delete
 	// one (also removes the object from MinIO).
 	mux.Handle("GET /v1/rest/media", h.authed(h.listMedia))
+	// Tong sampah (media): the bin read, then restore/purge. Same shape as the
+	// products and forms bins. The bytes stop being deleted at soft-delete time
+	// (see deleteMedia) and are removed by the purge instead.
+	mux.Handle("GET /v1/rest/media/trash", h.authed(h.listTrashedMedia))
 	mux.Handle("DELETE /v1/rest/media/{id}", h.authed(h.deleteMedia))
+	mux.Handle("POST /v1/rest/media/{id}/restore", h.authed(h.restoreMedia))
+	mux.Handle("DELETE /v1/rest/media/{id}/purge", h.authed(h.purgeMedia))
 }
 
 // Resolve identifies the caller: Bearer API key (preferred) or session

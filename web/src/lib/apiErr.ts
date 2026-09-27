@@ -83,6 +83,9 @@ export const API_ERROR_KEYS: Record<string, Key> = {
   // different slug for THIS form, and each sentence has to give its own remedy.
   "form.slugInUse": "apiErr.formSlugInUse",
   "form.slugInvalid": "apiErr.formSlugInvalid",
+  // The product bin's refusals: a sale (history) or a live subscription.
+  "product.hasSales": "apiErr.productHasSales",
+  "product.hasSubscriptions": "apiErr.productHasSubscriptions",
   "product.outOfStock": "apiErr.productOutOfStock",
   "template.needMetadata": "apiErr.templateNeedMetadata",
 

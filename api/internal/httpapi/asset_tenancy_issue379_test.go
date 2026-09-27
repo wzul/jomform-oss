@@ -52,6 +52,15 @@ func (f *fakeObjectStore) DeleteObject(_ context.Context, key string) error {
 	return nil
 }
 
+// ObjectExists is the HEAD the media restore path asks before promising a URL.
+// Without it here the fake would not satisfy ObjectStoreIface at all, and the
+// typed-nil guard (typed_nil_objectstore_test.go) would stop compiling — which
+// is how the interface addition stays honest.
+func (f *fakeObjectStore) ObjectExists(_ context.Context, key string) (bool, error) {
+	_, ok := f.objects[key]
+	return ok, nil
+}
+
 // assetTenancyFixture seeds a user with TWO workspaces, each owning its own
 // account (issue #158), and returns the handlers plus both workspace slugs and
 // both account ids. The fake store is preloaded with a code asset (CSS) and

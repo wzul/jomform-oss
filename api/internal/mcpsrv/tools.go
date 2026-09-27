@@ -52,8 +52,29 @@ func (s *Server) registerTools() {
 
 	addTool(s, &mcp.Tool{
 		Name:        "archive_product",
-		Description: "Nyahaktifkan produk (dulang tanpa padam data).",
+		Description: "Nyahaktifkan produk (dulang tanpa padam data). Ini BUKAN tong sampah — ia kekal dalam senarai sebagai arkib. Untuk buang dari senarai guna delete_product.",
 	}, s.archiveProduct)
+
+	// Tong sampah produk: sejajar dengan Tong Sampah borang. delete_product
+	// menghantar ke bin (bukan archive); restore_product memulihkan; purge_product
+	// memusnahkan kekal selepas disemak (confirm_name) dan HANYA bila tiada
+	// jualan/subscription.
+	addTool(s, &mcp.Tool{
+		Name:        "delete_product",
+		Description: "Hantar produk ke TONG SAMPAH (deleted_at diisi) — ia keluar dari senarai produk dan boleh dipulihkan guna restore_product. Ini berbeza daripada archive_product (active=false), yang kekal dalam senarai. Untuk nyahaktifkan sahaja, guna archive_product.",
+	}, s.deleteProductMCP)
+	addTool(s, &mcp.Tool{
+		Name:        "list_deleted_products",
+		Description: "Senarai produk dalam TONG SAMPAH: id, name, price_sen, deleted_at, sales_count, subscription_count dan can_purge. can_purge=false bermakna produk itu masih dirujuk jualan (sejarah) atau subscription (bil masih berjalan) — padam kekal akan DITOLAK.",
+	}, s.listDeletedProducts)
+	addTool(s, &mcp.Tool{
+		Name:        "restore_product",
+		Description: "Pulihkan produk dari tong sampah (deleted_at=NULL). Tiada apa-apa dimusnahkan dan tiada nama yang perlu diselesaikan — produk tiada slug — jadi pulihan tidak boleh berlanggar.",
+	}, s.restoreProductMCP)
+	addTool(s, &mcp.Tool{
+		Name:        "purge_product",
+		Description: "Padam produk secara KEKAL dari tong sampah (variasinya gugur bersama melalui CASCADE). AMARAN: tidak boleh dibatalkan. Wajib confirm_name = nama produk itu. DITOLAK bila produk ada jualan (sejarah jualan tidak dimusnahkan) atau masih ada subscription (FK RESTRICT). Hanya produk dalam tong sampah — hantar ke bin dulu guna delete_product.",
+	}, s.purgeProductMCP)
 
 	addTool(s, &mcp.Tool{
 		Name:        "list_product_variations",
@@ -558,6 +579,26 @@ func (s *Server) registerTools() {
 		Name:        "upload_media",
 		Description: "Muat naik media/aset ke workspace anda (issue #363): kind='image' (png/jpeg/webp/gif — dioptimumkan, strip EXIF, terus boleh guna; png/jpeg/webp dapat saiz thumbnail/medium/full), kind='asset' (css/js/html/svg/woff2 — disimpan asli, dikaji sebelum dipapar) atau kind='pdf' (disimpan asli, terus boleh guna). hantar content fail sebagai base64 di 'data'. Pulangkan URL untuk diguna sebagai image_url/logo_url landing atau <link>/<script> landing page.",
 	}, s.uploadMedia)
+
+	// Tong sampah media: padam = hantar ke bin (objek TIDAK dimusnahkan), pulih
+	// selagi byte masih ada, dan buang kekal = satunya tempat byte + kuota
+	// dilepaskan.
+	addTool(s, &mcp.Tool{
+		Name:        "delete_media",
+		Description: "Hantar media ke TONG SAMPAH (deleted_at diisi). Byte TIDAK dimusnahkan dan kuota TIDAK dilepaskan — objek masih di storan, jadi ia masih dikira terhadap had 1GB. URL yang sama terus berfungsi selepas restore_media. Guna purge_media untuk memusnahkan byte secara kekal.",
+	}, s.deleteMediaMCP)
+	addTool(s, &mcp.Tool{
+		Name:        "list_deleted_media",
+		Description: "Senarai media dalam TONG SAMPAH: id, key, url, mime, size, form_id, deleted_at dan object_present. object_present=false bermakna byte sudah tiada dalam storan (dipadam operator atau lifecycle rule) — restore akan DITOLAK.",
+	}, s.listDeletedMedia)
+	addTool(s, &mcp.Tool{
+		Name:        "restore_media",
+		Description: "Pulihkan media dari tong sampah (deleted_at=NULL). URL yang SAMA terus berfungsi. DITOLAK (409) bila objek sudah tiada dalam storan — memulihkan baris itu hanya akan memberi URL yang 404.",
+	}, s.restoreMediaMCP)
+	addTool(s, &mcp.Tool{
+		Name:        "purge_media",
+		Description: "Padam media secara KEKAL dari tong sampah. AMARAN: tidak boleh dibatalkan. Inilah satu-satunya tempat byte dipadam dari storan DAN kuota 1GB dilepaskan (varians saiz + pratonton PDF turut dipadam). Hanya media dalam tong sampah — hantar ke bin dulu guna delete_media.",
+	}, s.purgeMediaMCP)
 
 	// ── Parity: form template gallery (issue #174) ────────────────────────
 	addTool(s, &mcp.Tool{
