@@ -50,6 +50,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 
@@ -125,6 +127,27 @@ func docsEmbedPagePath(t *testing.T) string {
 		t.Fatalf("stat docs embed page: %v", err)
 	}
 	return p
+}
+
+// webRoot locates the web tree relative to this test file
+// (api/internal/httpapi -> ../../../web). It is the ROOT the docs-claim class
+// guard walks: the surfaces a reader can read docs copy from are not confined to
+// web/src — web/public/llms*.txt is one of them and .mdx pages will be another
+// (card t_38a8eaed). It fails rather than skipping when the tree is absent, so a
+// missing checkout cannot turn the guard into a green test that read nothing.
+func webRoot(t *testing.T) string {
+	t.Helper()
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed — cannot locate the web tree")
+	}
+	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "..", "web"))
+	if st, err := os.Stat(root); err != nil {
+		t.Fatalf("stat web tree %s: %v", root, err)
+	} else if !st.IsDir() {
+		t.Fatalf("%s is not a directory", root)
+	}
+	return root
 }
 
 // docsSnippetSrcs returns every iframe src the docs page prints, in source
@@ -413,12 +436,29 @@ func TestDocsEmbedPageDoesNotClaimTheGateReappears(t *testing.T) {
 	}
 }
 
-// webSrcTextFiles lists the reader-facing sources under web/src that can carry
-// this claim. The walk is over the TREE, not a hand-kept list, so a new page or
-// a copy-paste of the sentence into another docs page is covered by
+// docsClaimSurfaces lists the reader-facing files under web/ that can carry this
+// claim. The walk is over the TREE, not a hand-kept list, so a new page or a
+// copy-paste of the sentence into another docs page is covered by
 // construction — a guard that iterates a hardcoded set of filenames cannot see
 // the file it was written to protect against.
-func webSrcTextFiles(t *testing.T, root string) []string {
+//
+// WHY THE ROOT IS web/ AND NOT web/src (card t_38a8eaed). This guard's stated
+// scope is "anywhere a reader can see the sentence", and web/src is not that
+// boundary. Two reader-facing surfaces sit outside it and were silently
+// unjudged: an .mdx docs page (the format the next docs author reaches for —
+// none exists yet, which is exactly why the hole would have been found by a
+// copy-paste rather than by a test) and web/public/llms.txt / llms-full.txt,
+// the agent-facing view of the same knowledge base that
+// web/src/lib/docsIndex.test.ts pins as such. Both are served to a reader, so a
+// sentence copied into either is the same defect, not an internal comment.
+//
+// The skip list is what keeps the widening honest: node_modules is a dependency
+// copy whose vendored prose is not this repo's copy, .next/.turbo are build
+// output, and web/public/openapi.json is generated from the API route table (the
+// api/ tree is deliberately out of scope — this guard must not cry wolf on the
+// source that documents the defect). Every other file under web/ is judged by
+// its extension.
+func docsClaimSurfaces(t *testing.T, root string) []string {
 	t.Helper()
 	var out []string
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
@@ -432,16 +472,38 @@ func webSrcTextFiles(t *testing.T, root string) []string {
 			}
 			return nil
 		}
-		switch filepath.Ext(path) {
-		case ".tsx", ".ts", ".md":
-			out = append(out, path)
+		if !docsClaimSurface(root, path) {
+			return nil
 		}
+		out = append(out, path)
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("walk %s: %v", root, err)
 	}
 	return out
+}
+
+// docsClaimSurface reports whether a file under web/ is one a reader can read
+// this claim from — and, separately, whether it is one this guard must NOT judge
+// (generated output, or something that is not prose a reader sees). It is split
+// out of the walk so the extension rule is assertable on its own: a surface the
+// walk cannot admit is a surface the guard does not actually cover, whatever the
+// comment above it says. That matters for .mdx, which is admitted here and has
+// no file in the tree yet, so no assertion over today's file list can prove it.
+func docsClaimSurface(root, path string) bool {
+	// openapi.json is generated from the API's own route table, not written by a
+	// docs author; judging it would make this guard fail on the API's description
+	// of the defect. api/ is out of scope for the same reason (see the class
+	// guard's comment).
+	if filepath.Clean(path) == filepath.Clean(filepath.Join(root, "public", "openapi.json")) {
+		return false
+	}
+	switch filepath.Ext(path) {
+	case ".tsx", ".ts", ".md", ".mdx", ".txt":
+		return true
+	}
+	return false
 }
 
 // TestNoDocsClaimTheGateReappearsOnACookieBlockingBrowser is the CLASS guard.
@@ -451,26 +513,32 @@ func webSrcTextFiles(t *testing.T, root string) []string {
 // instance explicitly asked for every copy to be corrected rather than the one
 // the verify card happened to quote.
 //
-// It walks web/src and asserts the claim appears NOWHERE. Scoped to the files a
-// reader sees, not to the whole repo: an api/*.go comment or a test may quote
-// the wrong phrasing while describing the defect, and flagging those would make
-// the guard cry wolf on its own documentation.
+// It walks the WEB TREE and asserts the claim appears NOWHERE — not on the embed
+// page, not in any other docs page, not in the .mdx a future docs author may
+// author one in, and not in web/public/llms.txt / llms-full.txt, the agent-facing
+// view of the same knowledge base. The walk root and its skip list are pinned by
+// the comment on docsClaimSurfaces and bite-tested by
+// TestDocsClaimSurfacesCoverTheReaderFacingWebTree below.
+//
+// Scoped to what a reader is SERVED, not to the whole repo. api/ sits outside
+// the root deliberately: an api/*.go comment may quote the wrong phrasing while
+// describing the defect, so judging it would make the guard cry wolf on its own
+// documentation — and node_modules is skipped for the same reason, a dependency's
+// vendored prose being text this repo does not own. Everything else under web/
+// that can carry prose IS judged, including the web unit tests and the e2e specs
+// (the pre-fix walk already covered web/src/*.test.ts through its .ts case). That
+// is deliberate rather than accidental: a web test should only contain this
+// sentence if it is asserting about it, so a match there is worth a look, and
+// nothing in the tree matches today.
 func TestNoDocsClaimTheGateReappearsOnACookieBlockingBrowser(t *testing.T) {
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed — cannot locate web/src")
-	}
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "..", "web", "src"))
-	if _, err := os.Stat(root); err != nil {
-		t.Fatalf("stat %s: %v", root, err)
-	}
+	root := webRoot(t)
 
-	files := webSrcTextFiles(t, root)
-	if len(files) < 50 {
-		t.Fatalf("only %d files found under %s — the walk is not seeing web/src, so this "+
+	files := docsClaimSurfaces(t, root)
+	if len(files) < 100 {
+		t.Fatalf("only %d files found under %s — the walk is not seeing the web tree, so this "+
 			"guard would pass over a tree it never read", len(files), root)
 	}
-	page := filepath.Clean(filepath.Join(root, "app", "docs", "embed", "page.tsx"))
+	page := filepath.Clean(filepath.Join(root, "src", "app", "docs", "embed", "page.tsx"))
 	seenPage := false
 	for _, f := range files {
 		if filepath.Clean(f) == page {
@@ -484,7 +552,7 @@ func TestNoDocsClaimTheGateReappearsOnACookieBlockingBrowser(t *testing.T) {
 		} {
 			if strings.Contains(text, claim) {
 				rel, _ := filepath.Rel(root, f)
-				t.Errorf("web/src/%s claims %q — a partitioned (CHIPS) unlock cookie keeps "+
+				t.Errorf("web/%s claims %q — a partitioned (CHIPS) unlock cookie keeps "+
 					"working while third-party cookies are blocked, so this is the same wrong "+
 					"sentence as on the embed page. Correct it there too; do not delete the "+
 					"sentence without saying what does happen", rel, claim)
@@ -495,8 +563,149 @@ func TestNoDocsClaimTheGateReappearsOnACookieBlockingBrowser(t *testing.T) {
 	// file the claim was found in — otherwise a typo in the walk root makes this
 	// test vacuous and green.
 	if !seenPage {
-		t.Errorf("the walk over %s never reached app/docs/embed/page.tsx — the class guard is "+
+		t.Errorf("the walk over %s never reached src/app/docs/embed/page.tsx — the class guard is "+
 			"not reading the page it exists for", root)
+	}
+}
+
+// docsClaimSurfacesFixtureFiles is the shared body of the fixture. The directory
+// layout is the point: a directory named node_modules/.next/.turbo must be pruned
+// by the WALK (the extension rule alone admits the .md inside them), while
+// authored markdown at src/ and public/ must be found.
+var docsClaimSurfacesFixtureFiles = []string{
+	"src/app/docs/embed/page.tsx",
+	"src/app/docs/embed/page.mdx",
+	"src/content/guides/widget.mdx",
+	"src/content/guides/setup.md",
+	"src/lib/docsIndex.ts",
+	"public/llms.txt",
+	"public/llms-full.txt",
+	"public/openapi.json",
+	"node_modules/some-package/README.md",
+	"node_modules/some-package/dist/bundle.js",
+	".next/server/notes.md",
+	".turbo/notes.md",
+}
+
+// docsClaimSurfacesFixture writes the tree above under a test temp dir and walks
+// it with the PRODUCTION walk. Using the real walk is the whole point: a fixture
+// list checked against a copy of the skip list would prove nothing about the
+// guard, only about the copy.
+func docsClaimSurfacesFixture(t *testing.T) (string, []string) {
+	t.Helper()
+	root := t.TempDir()
+	for _, rel := range docsClaimSurfacesFixtureFiles {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatalf("mkdir for fixture %s: %v", rel, err)
+		}
+		if err := os.WriteFile(p, []byte("fixture body for "+rel+"\n"), 0o644); err != nil {
+			t.Fatalf("write fixture %s: %v", rel, err)
+		}
+	}
+	var got []string
+	for _, f := range docsClaimSurfaces(t, root) {
+		rel, err := filepath.Rel(root, f)
+		if err != nil {
+			t.Fatalf("rel %s: %v", f, err)
+		}
+		got = append(got, filepath.ToSlash(rel))
+	}
+	sort.Strings(got)
+	return root, got
+}
+
+// TestDocsClaimSurfacesCoverTheReaderFacingWebTree pins the SURFACES, separately
+// from the claim: a walk that silently stops seeing a file passes the scan above
+// for the trivial reason that it read less. Both halves of the rule are asserted,
+// because they are enforced by different mechanisms and only one of them is
+// visible in today's tree.
+//
+// (a) The real tree. The walk must reach the surfaces whose ABSENCE from
+// web/src moved the root — public/llms.txt and public/llms-full.txt — plus the
+// embed page and one docs page. Asserted by path, so this fails the moment the
+// root is narrowed back (the pre-fix walk cannot see any web/public file).
+//
+// (b) A throwaway fixture tree, for the boundaries no file in the real tree can
+// exercise: whether the EXTENSION rule admits the formats a docs author may use
+// (.mdx has no file today, so only the rule can be asserted — there is nothing
+// for a walk to find), and whether the dir-skip actually prunes (a dependency's
+// vendored prose and build output must not be judged; judging them makes the
+// guard cry wolf on other people's files). Asserted against the fixture so the
+// answer does not depend on which dependencies happen to be installed, and so
+// every rule here is bite-provable on a tree that is built in the test rather
+// than on the state of the checkout.
+//
+// BITE, all four measured on this file: narrow the root to web/src -> (a) names
+// the four real-tree surfaces as unreached; drop ".mdx" from docsClaimSurface ->
+// (b) names the two .mdx paths as missing; drop "node_modules", or ".next" and
+// ".turbo", from the walk's dir-skip -> (b) names the vendored README or the
+// build output as judged.
+func TestDocsClaimSurfacesCoverTheReaderFacingWebTree(t *testing.T) {
+	root := webRoot(t)
+	files := docsClaimSurfaces(t, root)
+
+	seen := map[string]bool{}
+	for _, f := range files {
+		rel, err := filepath.Rel(root, f)
+		if err != nil {
+			t.Errorf("rel %s: %v", f, err)
+			continue
+		}
+		seen[filepath.ToSlash(rel)] = true
+	}
+
+	// (a) Surfaces that exist in the real tree and must be reached.
+	for _, want := range []string{
+		"src/app/docs/embed/page.tsx",
+		"src/app/docs/customize/page.tsx",
+		"public/llms.txt",
+		"public/llms-full.txt",
+		// The class guard judges the web test/spec files too (its .ts case always
+		// did); asserted so that is a measured boundary rather than a comment.
+		"src/lib/docsIndex.test.ts",
+		"e2e/a11y.spec.ts",
+	} {
+		if !seen[want] {
+			t.Errorf("the docs-claim walk does not reach web/%s — that is a reader-facing surface, "+
+				"so a copy of the false sentence there is unjudged (and if the root moved back "+
+				"under web/src, every web/public file is invisible to it)", want)
+		}
+	}
+
+	// (b) The boundary rules, against a fixture tree. The walk's result is
+	// compared to a LITERAL expected set rather than probed path by path, so both
+	// kinds of mistake fail at once: a reader-facing file the guard skips (the two
+	// .mdx paths — a format no checkout contains today, so nothing else can assert
+	// them) and a file it judges but must skip (the vendored README and the build
+	// output, both .md, which the EXTENSION rule alone would have admitted — it is
+	// the dir-skip that keeps them out, and that is what this pins).
+	fixtureRoot, got := docsClaimSurfacesFixture(t)
+	want := []string{
+		"public/llms-full.txt",
+		"public/llms.txt",
+		"src/app/docs/embed/page.mdx",
+		"src/app/docs/embed/page.tsx",
+		"src/content/guides/setup.md",
+		"src/content/guides/widget.mdx",
+		"src/lib/docsIndex.ts",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("the docs-claim walk over a fixture tree returned\n  %v\nwant\n  %v\n"+
+			"a path in want but not in got is a reader-facing surface the walk silently skips; a "+
+			"path in got but not in want is a dependency's prose or build output the walk judges",
+			got, want)
+	}
+
+	// The generated API description is excluded by the named skip, not merely by
+	// its .json extension, so it is asserted through the rule the walk uses. This
+	// is the belt to the brace above: it keeps a future .json that IS authored
+	// prose from being admitted silently.
+	for _, rel := range []string{"public/openapi.json"} {
+		if docsClaimSurface(fixtureRoot, filepath.Join(fixtureRoot, filepath.FromSlash(rel))) {
+			t.Errorf("the docs-claim walk admits web/%s — it is generated from the API's route "+
+				"table, so judging it makes the guard fail on the API's description of the defect", rel)
+		}
 	}
 }
 
