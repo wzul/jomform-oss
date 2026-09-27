@@ -131,7 +131,16 @@ func (h *PublicHandlers) RegisterRoutes(mux *http.ServeMux) {
 	// NOTE: the wildcard is {wsslug} on all three /embed/f/ routes, matching the
 	// handler reads — under a pattern named {accslug} a handler reading
 	// PathValue("wsslug") resolves "", and the scope is lost. See embedForm.
-	mux.HandleFunc("POST /embed/f/{wsslug}/{slug}/unlock", h.embedUnlock)
+	//
+	// Rate-limited like the /order above. An unlock is a PASSWORD ORACLE: it
+	// takes an attacker-supplied string, runs an argon2id verification against
+	// the form's real access hash and answers 403/200, so an unthrottled route
+	// is an unlimited online guessing surface. PR #789 — the sibling this
+	// route superseded — wrapped its embed unlock in middleware.RateLimit;
+	// that wrapper was lost when the route was re-registered here. See the
+	// note on the two canonical unlock routes below for why the KEY is right
+	// for a request that arrives from a third-party frame.
+	mux.Handle("POST /embed/f/{wsslug}/{slug}/unlock", middleware.RateLimit(http.HandlerFunc(h.embedUnlock)))
 	// Issue #276: sitemap.xml for custom-domain workspaces (indexed workspaces only).
 	mux.HandleFunc("GET /sitemap.xml", h.handleSitemap)
 	// Issue #276: indexed custom-domain workspace URLs for the web sitemap.
@@ -193,8 +202,30 @@ func (h *PublicHandlers) RegisterRoutes(mux *http.ServeMux) {
 	// which is how /f/{slug} silently became unusable. handleFormUnlock
 	// resolves the form from the request HOST for both, so they share one
 	// handler.
-	mux.HandleFunc("POST /f/{slug}/unlock", h.handleFormUnlock)
-	mux.HandleFunc("POST /{slug}/unlock", h.handleFormUnlock)
+	// Rate-limited like every other route in this file that takes
+	// attacker-supplied input. Both are password oracles (argon2id verify,
+	// 403/200), so leaving them open is an unlimited online guessing surface.
+	//
+	// On the KEY, which is middleware.RateLimit's own (do not re-key it here):
+	// it buckets per middleware.ClientIP(r) — CF-Connecting-IP, else
+	// X-Real-IP, else the socket peer — i.e. per BUYER, not per form and not
+	// per embedding page. That is the right key for a route reached from a
+	// third-party frame. An embed is framed by the merchant, but the requests
+	// to this API originate from each buyer's own browser, so every buyer has
+	// their own bucket and one merchant page cannot be throttled by its
+	// neighbours. An attacker cannot rotate the key either: measured on prod,
+	// Cloudflare refuses to forward a caller-supplied CF-Connecting-IP (403,
+	// "error code: 1000") and the bucket through the edge is edge-derived, and
+	// middleware.ClientIP does not read X-Forwarded-For at all.
+	//
+	// Burst 10 / 1 per second matches the /order precedent deliberately. An
+	// unlock is ONE request per buyer and the bucket refills at 1/s, so the
+	// only buyer throttled is the 11th within the same second behind one
+	// egress (an office or CGNAT) — and their retry a second later succeeds.
+	// That is the same trade /order already makes, and widening it would
+	// weaken the guard on the oracle it protects.
+	mux.Handle("POST /f/{slug}/unlock", middleware.RateLimit(http.HandlerFunc(h.handleFormUnlock)))
+	mux.Handle("POST /{slug}/unlock", middleware.RateLimit(http.HandlerFunc(h.handleFormUnlock)))
 }
 
 // genRef produces a short opaque reference code.
