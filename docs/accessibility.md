@@ -287,6 +287,7 @@ Use the rotor (`Ctrl+Option+U`) to check headings, links, and form controls.
 | 7 | **Profile tabs** | Same as settings; 2FA setup modal announced as a dialog with a label; QR image has alt text. |
 | 8 | **Mobile drawer** | Hamburger button announced ("Open menu"); drawer announced as a dialog; focus moves to the close button on open; Escape closes; Tab is trapped inside the drawer. |
 | 9 | **Delete-workspace confirmation** (Settings → Workspace) | Danger-zone button is announced with its disabled state and the reason stated in text ("you need at least one workspace", or the blocker list with counts); the confirmation is announced as a dialog with a label (`role="dialog"` + `aria-modal` + `aria-labelledby`); focus moves to the type-the-slug input on open; Escape closes and clears the field; the inline "?" doc link is announced. |
+| 10 | **Rename a workspace** (Settings → Workspace, identity card) | Name and address fields are labeled and seeded from the server's answer; the address field is `readOnly` (not `disabled`) for a non-owner, so it stays focusable and screen readers reach the explanation linked by `aria-describedby` instead of meeting a control that cannot be focused at all; the Save button's disabled state is accompanied by the reason in text ("nothing changed yet", who may change the address, or the address rule); the new public URL is shown as text below the address field; the old-address-keeps-working note and any refusal are announced (`role="status"` / `role="alert"`). |
 
 ### NVDA — Windows (Firefox/Chrome)
 

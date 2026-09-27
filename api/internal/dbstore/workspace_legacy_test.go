@@ -432,7 +432,7 @@ func TestLegacySlugCandidatesAreDeterministicAndTerminate(t *testing.T) {
 	// retry could hand the user a workspace whose own host 400s.
 	seen := map[string]bool{}
 	for _, c := range a {
-		if err := ValidateWorkspaceSlug(c); err != nil {
+		if _, err := ValidateWorkspaceSlug(c); err != nil {
 			t.Fatalf("candidate %q is not a valid workspace slug: %v", c, err)
 		}
 		if seen[c] {
@@ -480,7 +480,7 @@ func TestProvisionLegacyWorkspaceResolvesASlugCollision(t *testing.T) {
 	if ws.Slug == want {
 		t.Fatalf("slug = %q, which was already taken", ws.Slug)
 	}
-	if err := ValidateWorkspaceSlug(ws.Slug); err != nil {
+	if _, err := ValidateWorkspaceSlug(ws.Slug); err != nil {
 		t.Fatalf("retried slug %q is invalid: %v", ws.Slug, err)
 	}
 	if !strings.HasPrefix(ws.Slug, want) {
@@ -554,7 +554,7 @@ func TestSlugFromEmailLocalPartRule(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("SlugFromEmailLocalPart(%q) = %q, want %q (%s)", tc.email, got, tc.want, tc.why)
 		}
-		if err := ValidateWorkspaceSlug(got); err != nil {
+		if _, err := ValidateWorkspaceSlug(got); err != nil {
 			t.Errorf("SlugFromEmailLocalPart(%q) = %q, which the slug contract rejects: %v", tc.email, got, err)
 		}
 	}

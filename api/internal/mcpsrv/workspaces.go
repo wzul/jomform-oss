@@ -134,32 +134,15 @@ type createWorkspaceIn struct {
 	Slug string `json:"slug" jsonschema:"Slug URL unik — 3-40 aksara, a-z 0-9 dash sahaja"`
 }
 
-// validateWorkspaceSlug mirrors the REST handler in httpapi/rest_workspaces.go.
-func validateWorkspaceSlug(slug string) error {
-	// Reserved subdomains (t_586ff0c3) run FIRST, exactly as they do in the REST
-	// handler this mirrors. This mirrors the REST handler in
-	// httpapi/rest_workspaces.go, and BOTH must consume the ONE list in
-	// internal/urlguard — a hand-rolled copy here would let a name be refused on
-	// one surface and claimable through the other.
-	//
-	// Order is not cosmetic: "s3" is a reserved label AND shorter than the
-	// 3-char minimum, so if the length rule ran first the caller would be told
-	// the slug was malformed and would retry a variation of the sensitive name.
-	if urlguard.ReservedSubdomain(slug) {
-		return errors.New(urlguard.ReservedSubdomainMessage(slug))
-	}
-	if len(slug) < 3 || len(slug) > 40 {
-		return errors.New("slug 3-40 aksara")
-	}
-	for _, c := range slug {
-		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
-			return errors.New("slug: a-z, 0-9, dash sahaja")
-		}
-	}
-	if strings.HasSuffix(slug, "jomform") {
-		return errors.New("slug tidak sah")
-	}
-	return nil
+// validateWorkspaceSlug delegates to the ONE shared rule (dbstore) so the MCP
+// create path, the REST create/rename path and the rename path cannot disagree.
+// It used to be a second copy of the rule pasted here — reserved-subdomain leg
+// and all — which is exactly the drift the repo forbids for a rule shared by
+// more than one write path (see urlguard: "ONE shared rule; never hand-roll
+// another copy"). The reserved list still lives in ONE place (internal/urlguard);
+// it is consumed by dbstore.ValidateWorkspaceSlug, which is now the rule.
+func validateWorkspaceSlug(slug string) (string, error) {
+	return dbstore.ValidateWorkspaceSlug(slug)
 }
 
 func (s *Server) createWorkspace(
@@ -178,12 +161,21 @@ func (s *Server) createWorkspace(
 	if err != nil {
 		return nil, nil, err
 	}
-	if strings.TrimSpace(in.Name) == "" || strings.TrimSpace(in.Slug) == "" {
+	// ONE shared name rule (dbstore.ValidateWorkspaceName), so the MCP create
+	// path gives the SAME verdict as the REST create path and the rename path
+	// for the same name. Checked BEFORE the emptiness test for the same reason
+	// REST does: the rule returns "" alongside its error, so a too-long name
+	// would otherwise be reported as a MISSING one.
+	name, nerr := dbstore.ValidateWorkspaceName(in.Name)
+	if nerr != nil {
+		return nil, nil, nerr
+	}
+	if name == "" || strings.TrimSpace(in.Slug) == "" {
 		return nil, nil, errors.New("name dan slug wajib")
 	}
-	slug := strings.ToLower(strings.TrimSpace(in.Slug))
-	if err := validateWorkspaceSlug(slug); err != nil {
-		return nil, nil, err
+	slug, verr := validateWorkspaceSlug(in.Slug)
+	if verr != nil {
+		return nil, nil, verr
 	}
 	// The slug pre-check must read the NOT-FOUND case as "free", not as "taken".
 	// dbstore.scanWorkspace returns a non-nil *Workspace even when the query
@@ -219,12 +211,15 @@ func (s *Server) createWorkspace(
 		}
 	}
 	if workspace == nil && err == nil {
-		workspace, err = sp.Create(ctx, owner, strings.TrimSpace(in.Name), slug)
+		workspace, err = sp.Create(ctx, owner, name, slug)
 	}
 	if err != nil {
-		// unique-constraint backstop (race between the pre-check and INSERT)
+		// unique-constraint backstop (race between the pre-check and INSERT),
+		// and the ALIAS reservation: a slug a workspace has renamed away from
+		// still belongs to it (its printed links resolve there).
 		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		if errors.Is(err, dbstore.ErrWorkspaceSlugTaken) ||
+			(errors.As(err, &pgErr) && pgErr.Code == "23505") {
 			return nil, nil, errors.New("slug sudah digunakan")
 		}
 		return nil, nil, fmt.Errorf("db: %w", err)
@@ -435,6 +430,131 @@ func (s *Server) checkWorkspaceDeletionMCP(
 		"blockers":   out,
 		"can_delete": isOwner && len(out) == 0 && !last,
 	}, nil
+}
+
+// ── update_workspace ─────────────────────────────────────────────────────────
+//
+// MCP parity for PATCH /v1/workspaces/{id}: rename a workspace's name and/or its
+// public slug.
+//
+// WHY THE SLUG NEEDS confirm=true (the revoke_api_key precedent, Wan's ask). The
+// slug is the tenant's PUBLIC identity — the host on printed QR stands, in
+// iframe snippets, in affiliate links. A rename is not destructive (the old slug
+// is kept as an alias and keeps redirecting), but it moves every address the
+// merchant has already handed out, and an agent should never do that because it
+// inferred it. Renaming the NAME needs no confirmation: it is a label.
+type updateWorkspaceIn struct {
+	WorkspaceID string `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
+	Name        string `json:"name,omitempty" jsonschema:"Nama baru workspace (kosong = kekal). Nama ialah label dalaman/dashboard."`
+	Slug        string `json:"slug,omitempty" jsonschema:"Slug/alamat awam baru (kosong = kekal): 3-40 aksara a-z 0-9 dash, bukan akhiran 'jomform'. Ia menjadi https://<slug>.jomform.com. Hanya PEMILIK workspace boleh menukarnya, dan ia perlukan confirm=true. Slug LAMA disimpan sebagai alias dan terus berfungsi (pindah kekal ke slug baru), jadi pautan/QR yang sudah tersebar tidak mati."`
+	Confirm     bool   `json:"confirm,omitempty" jsonschema:"Set true untuk sahkan pertukaran SLUG. Wajib bila slug diisi."`
+}
+
+func (s *Server) updateWorkspace(
+	ctx context.Context, _ *mcp.CallToolRequest, in updateWorkspaceIn,
+) (*mcp.CallToolResult, map[string]any, error) {
+	// Issue #645 + issue #162: the scope axis and the manage-or-admin role. This
+	// is a named per-workspace write gate, exactly like the settings tools.
+	workspace, err := s.requireWorkspaceWriteRole(ctx, in.WorkspaceID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if strings.TrimSpace(in.Name) == "" && strings.TrimSpace(in.Slug) == "" {
+		return nil, nil, errors.New("name atau slug diperlukan")
+	}
+	owner, err := s.workspaceOwner(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	isOwner := workspace.Owner == owner
+	if strings.TrimSpace(in.Slug) != "" {
+		// Confirmation first (before any validation), because the point of the
+		// gate is that an agent names what it is moving.
+		if !in.Confirm {
+			return nil, map[string]any{
+				"status":       "refused",
+				"error":        "menukar slug memindahkan alamat AWAM workspace (https://" + workspace.Slug + ".jomform.com) — semua pautan, iframe dan QR yang sudah tersebar akan berpindah ke alamat baharu. Set confirm=true untuk sahkan. Alamat lama kekal berfungsi sebagai alias (pindah kekal).",
+				"workspace_id": workspace.ID, "slug": workspace.Slug,
+			}, nil
+		}
+		// Ownership, not mere membership: the same rule REST enforces. Stated
+		// here as its own refusal so an agent is told why, rather than getting a
+		// message about roles it does hold.
+		if !isOwner {
+			return nil, map[string]any{
+				"status":       "refused",
+				"error":        "hanya PEMILIK workspace boleh menukar slug — slug ialah alamat awam workspace (pautan, iframe, QR). Nama sahaja boleh ditukar oleh ahli manage/admin.",
+				"workspace_id": workspace.ID, "slug": workspace.Slug, "is_owner": false,
+			}, nil
+		}
+	}
+
+	sp, err := s.workspacesStore()
+	if err != nil {
+		return nil, nil, err
+	}
+	res, err := sp.Rename(ctx, dbstore.WorkspaceRenameInput{
+		WorkspaceID:   workspace.ID,
+		Name:          in.Name,
+		Slug:          in.Slug,
+		CanChangeSlug: isOwner,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, dbstore.ErrWorkspaceSlugTaken):
+			return nil, nil, errors.New("slug sudah digunakan — slug itu milik workspace lain (hidup atau dikhaskan sebagai alias lama)")
+		case errors.Is(err, dbstore.ErrWorkspaceSlugNotOwned):
+			return nil, nil, errors.New("hanya pemilik workspace boleh menukar slug")
+		case errors.Is(err, dbstore.ErrWorkspaceNameLength):
+			return nil, nil, err
+		case errors.Is(err, dbstore.ErrWorkspaceSlugLength),
+			errors.Is(err, dbstore.ErrWorkspaceSlugChars),
+			errors.Is(err, dbstore.ErrWorkspaceSlugReserved):
+			return nil, nil, err
+		case errors.Is(err, dbstore.ErrWorkspaceSlugReservedSubdomain):
+			// The reserved LIST — a POLICY refusal about a well-formed name JomForm
+			// owns, not the caller's malformed input. Two things follow from that:
+			//
+			//  1. It must NOT fall through to `fmt.Errorf("db: %w", err)` below.
+			//     Before this arm existed the refusal was an anonymous error that
+			//     matched no case, so the agent read `db: "<label>" is reserved for
+			//     JomForm: …` — indistinguishable from a storage fault, for input
+			//     the agent can simply change (t_758bb125).
+			//  2. It answers as DATA, carrying the same machine code REST sends,
+			//     because the remedy is an instruction ("choose a different
+			//     address") and #694's rule is that the caller decides its sentence
+			//     from the code rather than from prose. The shape legs above stay
+			//     transport errors: their remedy is to retype the value, and no
+			//     caller needs a token to act on "slug 3-40 aksara".
+			return nil, map[string]any{
+				"status":       "refused",
+				"error":        err.Error(),
+				"code":         urlguard.ReservedSubdomainCode,
+				"workspace_id": workspace.ID,
+				"slug":         workspace.Slug,
+			}, nil
+		case errors.Is(err, dbstore.ErrWorkspaceNoChange):
+			return nil, nil, errors.New("tiada perubahan — nama dan slug sama seperti sekarang")
+		case errors.Is(err, dbstore.ErrWorkspaceNotFound):
+			return nil, nil, errors.New("workspace tidak dijumpai")
+		}
+		return nil, nil, fmt.Errorf("db: %w", err)
+	}
+
+	out := map[string]any{
+		"status": "updated", "workspace_id": res.Workspace.ID,
+		"name": res.Workspace.Name, "slug": res.Workspace.Slug,
+		"url":          "https://" + res.Workspace.Slug + ".jomform.com",
+		"name_changed": res.NameChanged, "slug_changed": res.SlugChanged,
+		"previous_slug": res.OldSlug,
+	}
+	if res.SlugChanged {
+		// The promise the merchant needs to hear: the addresses already handed
+		// out still work. Stated explicitly so an agent relays it.
+		out["previous_url"] = "https://" + res.OldSlug + ".jomform.com"
+		out["previous_url_redirects"] = true
+	}
+	return nil, out, nil
 }
 
 // ── update_profile_phone (issue #181) ───────────────────────────────────────

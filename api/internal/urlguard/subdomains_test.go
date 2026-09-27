@@ -276,19 +276,43 @@ func TestReservedSubdomainsCoverStaticTraefikHosts(t *testing.T) {
 // --- one rule, one implementation ------------------------------------------
 
 func TestBothSlugValidatorsConsumeThisRule(t *testing.T) {
-	// The card's first requirement, made mechanical: the REST and MCP validators
-	// must both call into this package. A future edit that adds a second,
-	// hand-rolled list in either place fails here.
+	// The card's first requirement, made mechanical: the reserved-name rule must
+	// be consumed through ONE implementation, and a future edit that adds a
+	// second, hand-rolled list anywhere must fail here.
+	//
+	// WHERE THE ONE IMPLEMENTATION IS. dbstore.ValidateWorkspaceSlug is the
+	// shared slug rule (PR 691 made both writers delegate to it), and it is the
+	// thing that consumes this package's list — so the reserved leg lives in ONE
+	// function, and the two transports reuse it rather than each calling in.
+	// That is a STRONGER form of the same requirement: with two callers, the
+	// list could still be bypassed by one of them re-implementing the check, so
+	// the transports are asserted to DELEGATE, not merely to mention urlguard.
 	root := repoRoot(t)
+	rule := filepath.Join("api", "internal", "dbstore", "workspace_slug.go")
+	src := mustReadFile(t, filepath.Join(root, rule))
+	if !strings.Contains(src, "urlguard.ReservedSubdomain(") {
+		t.Errorf("%s does not call urlguard.ReservedSubdomain — the reserved-name "+
+			"rule has drifted into a second (or missing) implementation there", rule)
+	}
 	for _, rel := range []string{
 		filepath.Join("api", "internal", "httpapi", "rest_workspaces.go"),
 		filepath.Join("api", "internal", "mcpsrv", "workspaces.go"),
 	} {
 		src := mustReadFile(t, filepath.Join(root, rel))
-		if !strings.Contains(src, "urlguard.ReservedSubdomain(") {
-			t.Errorf("%s does not call urlguard.ReservedSubdomain — the reserved-name "+
-				"rule has drifted into a second (or missing) implementation there", rel)
+		if !strings.Contains(src, "dbstore.ValidateWorkspaceSlug(") {
+			t.Errorf("%s does not call dbstore.ValidateWorkspaceSlug — it either "+
+				"stopped validating the slug or grew its own copy of the rule, and "+
+				"the reserved-name rule is then no longer one implementation", rel)
 		}
+	}
+	// The private list must stay private: no caller may reach into it, or there
+	// are two things to keep in step again.
+	for _, rel := range []string{
+		rule,
+		filepath.Join("api", "internal", "httpapi", "rest_workspaces.go"),
+		filepath.Join("api", "internal", "mcpsrv", "workspaces.go"),
+	} {
+		src := mustReadFile(t, filepath.Join(root, rel))
 		if strings.Contains(src, "reservedSubdomains") {
 			t.Errorf("%s refers to the package-private list directly — the list must "+
 				"stay inside urlguard so there is exactly one copy", rel)

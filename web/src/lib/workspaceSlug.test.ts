@@ -27,6 +27,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { DICT } from "../components/i18nDict.ts";
+import { apiErrorKey } from "./apiErr.ts";
 import {
   RESERVED_SUBDOMAIN_CODE,
   RESERVED_SUBDOMAIN_KEY,
@@ -40,6 +41,8 @@ const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.met
 const goSubdomains = read("../../../api/internal/urlguard/subdomains.go");
 const goRestWorkspaces = read("../../../api/internal/httpapi/rest_workspaces.go");
 const goMcpWorkspaces = read("../../../api/internal/mcpsrv/workspaces.go");
+// The ONE rule both transports delegate to — where the reserved leg now lives.
+const goDbstoreSlugRule = read("../../../api/internal/dbstore/workspace_slug.go");
 const switcher = read("../components/WorkspaceSwitcher.tsx");
 const picker = read("../app/workspace-picker/page.tsx");
 // lib/workspace.ts is where BOTH create surfaces meet (the topbar switcher and
@@ -70,7 +73,7 @@ test("WEB/GO CONTRACT: RESERVED_SUBDOMAIN_CODE equals the Go constant", () => {
   assert.equal(RESERVED_SUBDOMAIN_CODE, m[1]);
 });
 
-test("both Go surfaces actually send that code", () => {
+test("both Go surfaces reach that code through the ONE rule", () => {
   // The constant is useless if the handler never writes it: the dashboard would
   // see no token and fall back to the generic message.
   assert.match(
@@ -79,20 +82,56 @@ test("both Go surfaces actually send that code", () => {
     "the REST refusal no longer carries a `code` — the dashboard would print the " +
       "API's English prose instead of the localised sentence",
   );
+  // The WHY message for curl/API-key callers now comes from the RULE rather than
+  // from a direct urlguard call in the handler: the reserved leg moved inside
+  // dbstore.ValidateWorkspaceSlug (see "both Go surfaces reach that code through
+  // the ONE rule" above), so the handler forwards what the rule returned. The
+  // property this assertions guards is unchanged — a machine-readable refusal for
+  // non-browser callers, not a bare 400 with no reason.
   assert.match(
     goRestWorkspaces,
-    /urlguard\.ReservedSubdomainMessage\(slug\)/,
-    "the REST refusal no longer carries a WHY message for curl/API-key callers",
+    /"error":\s*verr\.Error\(\)/,
+    "the REST reserved-name refusal no longer carries a WHY message for curl/API-key callers",
   );
-  // Both surfaces must consult the ONE list (a hand-rolled copy is a second rule).
+  // WHERE THE LIST IS CONSULTED, and why this moved.
+  //
+  // t_586ff0c3 enforced the reserved list in EACH transport, and this assertion
+  // used to pin that: a `urlguard.ReservedSubdomain(` call in rest_workspaces.go
+  // and in mcpsrv/workspaces.go. That shape cannot survive the rename path PR 691
+  // adds. The rename path validates through dbstore.ValidateWorkspaceSlug, so a
+  // list consulted only in the two CREATE handlers would let an owner rename a
+  // workspace TO a reserved label — the list is not reachable from that call site
+  // at all, and duplicating it there is the second-implementation defect the
+  // repo's urlguard rule exists to prevent.
+  //
+  // So the leg now lives INSIDE the ONE rule, which is what makes it apply to
+  // every caller (create on both transports, rename on both, and the legacy
+  // provisioning path). This assertion checks the stronger property: the rule
+  // consults the list, and neither transport hand-rolls it.
+  assert.match(
+    goDbstoreSlugRule,
+    /urlguard\.ReservedSubdomain\(/,
+    "dbstore.ValidateWorkspaceSlug does not consult urlguard.ReservedSubdomain — a reserved " +
+      "label would be accepted by every write path that delegates to it, including rename",
+  );
+  assert.match(
+    goDbstoreSlugRule,
+    /urlguard\.ReservedSubdomainMessage\(/,
+    "the rule refuses a reserved label without the shared wording",
+  );
   for (const [name, src] of [
     ["httpapi/rest_workspaces.go", goRestWorkspaces],
     ["mcpsrv/workspaces.go", goMcpWorkspaces],
   ] as const) {
     assert.ok(
-      src.includes("urlguard.ReservedSubdomain("),
-      `${name} does not call urlguard.ReservedSubdomain — the rule has drifted into ` +
-        "a second (or missing) implementation there",
+      src.includes("ValidateWorkspaceSlug("),
+      `${name} no longer delegates to the shared slug rule — either a slug can be written without ` +
+        "being validated, or the rule has drifted back into a second copy there",
+    );
+    assert.ok(
+      !src.includes("urlguard.ReservedSubdomain("),
+      `${name} consults the reserved list directly again — the list must be reached through ` +
+        "ValidateWorkspaceSlug so there is exactly one place to keep the two in step",
     );
   }
 });
@@ -264,6 +303,88 @@ test("every locale defines the reserved-name sentence", () => {
   // And it must reach the merchant through the renderer, not just exist in the
   // dictionary (the key-as-text failure the i18n guard cannot see).
   assert.match(i18nDict, new RegExp(`"${RESERVED_SUBDOMAIN_KEY}":`));
+});
+
+test("the rename card renders that same sentence, from the same token", () => {
+  // t_b7f81f5e. The reserved refusal reaches the dashboard through a SECOND
+  // surface: the Settings → Workspace rename card (WorkspaceTab.tsx doRename),
+  // which routes failures through translateApiErr (lib/apiErr.ts). Before this
+  // the token had NO entry there, so a rename onto a reserved label showed the
+  // card's generic "couldn't rename" sentence — or, before the server fix, a 500
+  // the card could say nothing about at all.
+  //
+  // Asserted as BEHAVIOUR, not as a table row: the mapping has to actually
+  // resolve for the token, and to the same sentence the create path uses.
+  assert.equal(
+    apiErrorKey({ code: RESERVED_SUBDOMAIN_CODE }),
+    RESERVED_SUBDOMAIN_KEY,
+    `translateApiErr cannot resolve "${RESERVED_SUBDOMAIN_CODE}" — the rename card falls back to its ` +
+      "generic sentence for a refusal it could explain exactly",
+  );
+  // A code this build does not know must still fall back — the mapping must not
+  // have become a wildcard.
+  assert.equal(apiErrorKey({ code: "reserved_subdomain_extra" }), "");
+  assert.equal(apiErrorKey({ code: RESERVED_SUBDOMAIN_CODE.toUpperCase() }), "");
+  // And the card really is wired to it: the failure branch must route through
+  // translateApiErr rather than printing the server's prose (#6177).
+  const tab = read("../components/WorkspaceTab.tsx");
+  assert.match(
+    tab,
+    /setRenameErr\(translateApiErr\(d, t\)/,
+    "WorkspaceTab.doRename no longer routes a refused rename through translateApiErr — the reserved " +
+      "refusal would be reported as the card's generic sentence, or as the API's English prose",
+  );
+  assert.doesNotMatch(
+    tab,
+    /setRenameErr\(d\?\.error|setRenameErr\(d\.error/,
+    "WorkspaceTab.doRename renders the API's error prose again (issue #6177)",
+  );
+});
+
+test("both Go transports carry the token for a RENAME, not only for a create", () => {
+  // The dashboard half above is worthless if the server never sends the token on
+  // the rename path — which is exactly what the qa card measured: rename answered
+  // 500 {"code":"internal"} while create answered reserved_subdomain on the same
+  // tree. So the token must appear beside the RENAME handler's refusal too.
+  //
+  // The shape checked is the shared writer (writeWorkspaceSlugReserved), called
+  // from both arms: asserted from source because the alternative — restating the
+  // JSON body here — would pass over a handler that stopped calling it.
+  assert.match(
+    goRestWorkspaces,
+    /func writeWorkspaceSlugReserved\(/,
+    "httpapi no longer has the ONE reserved-refusal writer — create and rename can drift apart again",
+  );
+  assert.match(
+    goRestWorkspaces,
+    /case errors\.Is\(err, dbstore\.ErrWorkspaceSlugReservedSubdomain\):/,
+    "the REST RENAME switch has no arm for the reserved-list sentinel, so a rename onto a reserved " +
+      "label falls through to respondErr and answers 500 {\"code\":\"internal\"} (the defect, t_758bb125)",
+  );
+  assert.match(
+    goRestWorkspaces,
+    /func writeWorkspaceSlugReserved\(w http\.ResponseWriter, verr error\) \{[\s\S]*?"code":\s*urlguard\.ReservedSubdomainCode/,
+    "the shared reserved-refusal writer no longer carries the reserved_subdomain token — the dashboard " +
+      "would fall back to its generic 400 sentence for a refusal it can explain exactly (#694)",
+  );
+  // MCP: the same refusal as DATA carrying the code, never the `db: ` wrap.
+  // Two assertions rather than one windowed regex: the arm must exist, and the
+  // code must be written. A single `[\s\S]{0,N}` window is brittle — it depends
+  // on how long the comment above the arm happens to be, so it would start
+  // failing for a reason unrelated to the property it guards.
+  assert.match(
+    goMcpWorkspaces,
+    /case errors\.Is\(err, dbstore\.ErrWorkspaceSlugReservedSubdomain\):/,
+    "the MCP rename has no arm for the reserved-list sentinel, so the refusal matches no case and " +
+      "falls to `fmt.Errorf(\"db: %w\", err)` — an agent reads `db: …` for input it can simply change " +
+      "(the defect, t_758bb125)",
+  );
+  assert.match(
+    goMcpWorkspaces,
+    /"code":\s*urlguard\.ReservedSubdomainCode/,
+    "the MCP reserved refusal does not carry the machine code, so a caller cannot decide its sentence " +
+      "from the code (#694) and must parse prose",
+  );
 });
 
 test("the docs page documents the reserved-name rule, and the nav reaches it", () => {

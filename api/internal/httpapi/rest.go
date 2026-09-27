@@ -283,6 +283,12 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("DELETE /v1/auth/passkeys/{id}", h.authed(h.passkeyDelete))
 	mux.Handle("GET /v1/workspaces", h.authed(h.listWorkspaces))
 	mux.Handle("POST /v1/workspaces", h.authed(h.createWorkspace))
+	// Rename a workspace's name and/or slug. A name needs manage-or-admin role;
+	// the SLUG additionally needs OWNERSHIP, because the slug is the tenant's
+	// public host — printed on QR stands and shared links. The old slug is kept
+	// as an alias (migration 000068) and keeps resolving to the same workspace,
+	// so the change never breaks a URL already in the wild.
+	mux.Handle("PATCH /v1/workspaces/{id}", h.authed(h.renameWorkspace))
 	// Delete a workspace. Owner-only, and refused when it would leave the owner
 	// with zero workspaces or when the workspace still owns content (the
 	// refusal lists each blocking category with its count). Accounts are

@@ -595,6 +595,14 @@ export default function CustomizeDocsPage() {
         <span className="font-mono text-xs">reserved_subdomain</span>) or through an AI agent with the{" "}
         <span className="font-mono text-xs">create_workspace</span> MCP tool.
       </p>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        Renaming is covered by the same rule, because a rename can move your ADDRESS just as a create can set
+        it. Changing the address of an existing workspace — in Settings → Workspace, over the REST API (
+        <span className="font-mono text-xs">PATCH /v1/workspaces/&#123;id&#125;</span>) or through the{" "}
+        <span className="font-mono text-xs">update_workspace</span> MCP tool — is refused with{" "}
+        <span className="font-mono text-xs">reserved_subdomain</span> if the new slug is a reserved name, and
+        the workspace keeps the address it had.
+      </p>
 
       {/* Issue #501: the https-only scheme rule for image/URL fields is a
           user-visible constraint, so it is documented here (AGENTS.md

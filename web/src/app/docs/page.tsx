@@ -77,6 +77,16 @@ const GROUPS: Group[] = [
         body: "A workspace holds your forms, products, sales and payment account, and owns its own address ({slug}.jomform.com or your domain). With none, the dashboard asks you to create one at first sign-in.",
       },
       {
+        // Settings → Workspace's identity card "?" deep-links this section
+        // (AGENTS.md documentation-parity rule 4). The anchor stays on the index
+        // even though the walk-through lives on the guide: an old bookmark has to
+        // land somewhere, and the summary is what the entry-shape guard allows.
+        title: "Renaming a workspace",
+        slug: "rename-workspace",
+        href: "/docs/workspaces#rename-workspace",
+        body: "Rename a workspace's name or its public address; the old address keeps redirecting.",
+      },
+      {
         // The Settings → Workspace danger zone's "?" deep-links this section
         // (AGENTS.md documentation-parity rule 4).
         title: "Deleting a workspace",
@@ -103,7 +113,7 @@ const GROUPS: Group[] = [
       {
         title: "Responses (response-only forms)",
         href: "/docs/sales#responses",
-        body: "A form can collect answers instead of payments. Its entries are stored as responses, shown on the same Sales page, with a drawer holding every recorded value.",
+        body: "A form can collect answers instead of payments. Its entries are stored as responses, shown on the same Sales page, with a drawer holding every value.",
       },
       {
         title: "Form analytics (the per-form counter)",
@@ -114,7 +124,7 @@ const GROUPS: Group[] = [
       {
         title: "Partial refunds",
         href: "/docs/sales#refunds",
-        body: "Refund a paid sale in full or in part: the sale records how much was returned, shows a partially refunded marker, and keeps the balance refundable until zero.",
+        body: "Refund a paid sale in full or in part: the sale records how much was returned and keeps the balance refundable until zero.",
       },
       {
         title: "Subscriptions",

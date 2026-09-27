@@ -182,18 +182,24 @@ func TestMCPAndRESTShareOneReservedList(t *testing.T) {
 			t.Errorf("urlguard.ReservedSubdomain(%q) = false — MCP and REST would both "+
 				"accept it", label)
 		}
-		got := validateWorkspaceSlug(label)
-		if got == nil {
-			t.Errorf("validateWorkspaceSlug(%q) = nil, want a refusal — the MCP "+
-				"validator is not consuming the shared rule", label)
+		// The shared rule returns the normalised slug on success and "" on a
+		// refusal, and its refusals carry the store's sentinel. A refused slug is
+		// therefore the empty string; the reserved leg's message is checked by
+		// resolving the sentinel below.
+		norm, verr := validateWorkspaceSlug(label)
+		if verr == nil {
+			t.Errorf("validateWorkspaceSlug(%q) = (%q, nil), want a refusal — the MCP "+
+				"validator is not consuming the shared rule", label, norm)
 			continue
 		}
-		if !strings.Contains(got.Error(), urlguard.ReservedSubdomainMessage(label)) {
+		if !strings.Contains(verr.Error(), urlguard.ReservedSubdomainMessage(label)) {
 			t.Errorf("validateWorkspaceSlug(%q) error %q is not the shared "+
-				"urlguard message — a second wording is a second rule", label, got)
+				"urlguard message — a second wording is a second rule", label, verr)
 		}
 	}
-	if err := validateWorkspaceSlug("acme"); err != nil {
+	if norm, err := validateWorkspaceSlug("acme"); err != nil {
 		t.Errorf("validateWorkspaceSlug(acme) = %v, want nil", err)
+	} else if norm != "acme" {
+		t.Errorf("validateWorkspaceSlug(acme) = %q, want the normalised slug back", norm)
 	}
 }

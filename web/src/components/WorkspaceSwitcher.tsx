@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useI18n } from "./i18n";
+import { WORKSPACE_NAME_MAX_CHARS } from "../lib/workspaceIdentity";
 import type { WorkspaceRow } from "./session";
 import { createWorkspace } from "../lib/workspace";
 
@@ -100,11 +101,17 @@ export function WorkspaceSwitcher({
     if (busy) return;
     setBusy(true);
     setError(null);
-    // Shared implementation (lib/workspace.createWorkspace): the status →
-    // message mapping (409 slug taken / 400 slug invalid / anything else) lives
-    // in ONE place so the switcher and the first-run ask cannot drift, and the
-    // error key is rendered through the dictionary rather than the server's own
-    // (Malay) text.
+    // Shared implementation (lib/workspace.createWorkspace): the status → message
+    // mapping (409 slug taken / 400 slug invalid / anything else) lives in ONE
+    // place so the switcher and the first-run ask cannot drift, and the error key
+    // is rendered through the dictionary rather than the server's own prose.
+    //
+    // The shared helper also decodes the SERVER's machine `code`, which is how an
+    // over-long name is answered with its OWN sentence (workspace.nameTooLong)
+    // instead of being reported as a bad ADDRESS (#6177's rule: the code decides,
+    // the status is only the fallback). The old inline version surfaced the
+    // server's raw message; this keeps that property — the merchant is told the
+    // real reason — without putting untranslated API prose in the UI.
     const r = await createWorkspace({ name, slug });
     if (!r.ok) {
       setError(t(r.errorKey));
@@ -272,6 +279,12 @@ export function WorkspaceSwitcher({
                   onChange={(e) => setName(e.target.value)}
                   placeholder={t("workspace.name")}
                   aria-label={t("workspace.name")}
+                  // The server's name cap, in the unit the server counts
+                  // (characters — see dbstore.WorkspaceNameMaxChars). The rename
+                  // field has carried this since the rename landed; without it
+                  // here the create form let a merchant type an unbounded name
+                  // and only found out from a failed request.
+                  maxLength={WORKSPACE_NAME_MAX_CHARS}
                   required
                   className="min-h-11 w-full rounded border border-[var(--jf-border)] bg-white px-2 text-sm"
                 />

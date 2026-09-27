@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -22,6 +23,50 @@ type Workspace struct {
 	Owner string
 }
 
+// ── The ONE workspace-name rule ────────────────────────────────────────────────
+//
+// WorkspaceNameMaxChars is the cap on a workspace's display name. It is counted
+// in CHARACTERS (utf8.RuneCountInString), which is the unit the dashboard's name
+// field counts: `maxLength={120}` on an <input> limits UTF-16 code units, and
+// for every character outside a surrogate pair (i.e. everything a merchant
+// types, including accented Latin, CJK, Tamil and Arabic) one character is one
+// code unit. Counting BYTES here — as this check used to — made the server
+// stricter than the field the user was typing into: 120 accented characters or
+// 45 CJK characters passed the field and were refused by the API.
+const WorkspaceNameMaxChars = 120
+
+// ErrWorkspaceNameLength is the refusal for a name over the cap. A SENTINEL, not
+// a fresh error, because a fresh value reaches no arm of the transports' error
+// switches: it fell through to the default and the merchant got
+// `500 {"error":"internal error"}` for a name that is simply too long. It is
+// returned as a stated 400 by REST and as a readable tool error by MCP.
+var ErrWorkspaceNameLength = errors.New("nama workspace maksimum 120 aksara")
+
+// ValidateWorkspaceName trims a caller-supplied workspace name and reports
+// whether it is within the cap. It returns the NORMALISED (trimmed) name so a
+// caller writes exactly what was validated.
+//
+// It is the ONE name rule: the two create paths (REST and MCP) and the rename
+// path all call it, so create and rename cannot disagree about what a name is —
+// the same shape as ValidateWorkspaceSlug (workspace_slug.go). An empty name is
+// NOT refused here: on rename an omitted/empty name means "keep the current
+// one", and on create the transports state the "name dan slug wajib"
+// requirement themselves.
+func ValidateWorkspaceName(name string) (string, error) {
+	n := strings.TrimSpace(name)
+	if utf8.RuneCountInString(n) > WorkspaceNameMaxChars {
+		return "", ErrWorkspaceNameLength
+	}
+	return n, nil
+}
+
+// ErrWorkspaceSlugTaken is the rename/create refusal when the requested slug is
+// already in use — either LIVE (another workspace serves it) or RESERVED (it is
+// a former slug of another workspace, held in workspace_slug_aliases so the
+// addresses already in the wild keep working). Both are a 409 on the wire, and
+// neither ever overwrites the other side.
+var ErrWorkspaceSlugTaken = errors.New("slug sudah digunakan")
+
 // WorkspaceStore wraps workspaces.
 type WorkspaceStore struct{ pool *pgxpool.Pool }
 
@@ -29,19 +74,31 @@ func NewWorkspaceStore(pool *pgxpool.Pool) *WorkspaceStore { return &WorkspaceSt
 
 const workspaceSelect = `SELECT id, owner_user_id, name, slug FROM workspaces`
 
-// scanWorkspace scans one workspace row.
+// scanWorkspace scans one workspace row. It returns a NIL workspace alongside a
+// non-nil error, never a zero-valued struct.
 //
-// A MISSING row is reported as (nil, pgx.ErrNoRows) — nil so a caller's pointer
-// test reads a miss as a miss, and the store's not-found sentinel so a caller
-// that checks the error still gets one (the convention every sibling store
-// follows; see notfound.go).
+// WHY NIL, and how the two halves of the story fit. Returning the ALLOCATED
+// struct alongside the error made create_workspace's uniqueness pre-check
+// (mcpsrv/workspaces.go) — which tests `existing != nil` and discards the error
+// — read a MISS as a hit, so it refused every slug and no workspace could be
+// created over MCP at all, while the same create worked over REST (which has no
+// pre-check). That is why it went unnoticed.
 //
-// Returning the ALLOCATED struct alongside the error instead of nil made
-// create_workspace's uniqueness pre-check (mcpsrv/workspaces.go) — which tests
-// `existing != nil` and discards the error — read a miss as a hit, so it refused
-// every slug and no workspace could be created over MCP at all, while the same
-// create worked over REST (which has no pre-check). That is why it went
-// unnoticed.
+// The two conventions were both reasonable and silently disagreed: this function
+// said "a missing row is a value plus an error", the callers said "a missing row
+// is nil". The callers are not wrong — every call site in the repo tests the
+// pointer or the error — so the store answers nil, the one shape that makes
+// `existing != nil` mean what it reads as.
+//
+// A miss is ALSO the store's not-found sentinel (pgx.ErrNoRows, via
+// isNoSuchRow), so a caller that checks the error rather than the pointer still
+// gets one — the convention every sibling store follows (see notfound.go).
+//
+// It is a one-function fix because every call site shares it: the same
+// `s, err := ByID(...)` then `if err != nil || s == nil` pairing appears in
+// rest_workspace_members.go, rest_workspaces.go, profile.go, the member tools and
+// the delete path, and all of them treat the two the same way — only BySlug's
+// ignored error made the difference visible.
 func scanWorkspace(row rowScanner) (*Workspace, error) {
 	s := &Workspace{}
 	if err := row.Scan(&s.ID, &s.Owner, &s.Name, &s.Slug); err != nil {
@@ -87,12 +144,26 @@ func (s *WorkspaceStore) ByID(ctx context.Context, id string) (*Workspace, error
 // webhooks. CHIP credentials are never shared across workspaces. The account
 // slug is derived from the workspace slug (unique-verified by the caller) plus a
 // short id suffix to avoid colliding with the workspace's own slug.
+//
+// A slug that another workspace has MOVED OFF (i.e. one held in
+// workspace_slug_aliases, so the addresses already in the wild still resolve) is
+// refused with ErrWorkspaceSlugTaken. The check is part of the INSERT statement
+// rather than a separate read, so a create can never race a rename into two
+// workspaces sharing one host. The UNIQUE index on workspaces.slug remains the
+// backstop for a slug that is live (SQLSTATE 23505), which callers already map.
 func (s *WorkspaceStore) Create(ctx context.Context, ownerUserID, name, slug string) (*Workspace, error) {
 	sp := &Workspace{Owner: ownerUserID, Name: name, Slug: slug}
 	err := s.pool.QueryRow(ctx,
-		`INSERT INTO workspaces (owner_user_id, name, slug) VALUES ($1,$2,$3)
+		`INSERT INTO workspaces (owner_user_id, name, slug)
+		 SELECT $1,$2,$3
+		  WHERE NOT EXISTS (SELECT 1 FROM workspace_slug_aliases WHERE slug = $3)
 		 RETURNING id, owner_user_id, name, slug`,
 		ownerUserID, name, slug).Scan(&sp.ID, &sp.Owner, &sp.Name, &sp.Slug)
+	if isNoSuchRow(err) {
+		// The WHERE NOT EXISTS filtered the row out: the slug is reserved by a
+		// workspace that used to answer on it.
+		return sp, ErrWorkspaceSlugTaken
+	}
 	if err != nil {
 		return sp, err
 	}
@@ -447,7 +518,7 @@ func (s *WorkspaceStore) ProvisionLegacyWorkspaceForOwner(ctx context.Context, o
 		return nil, err
 	}
 	slug := SlugFromEmailLocalPart(email, ownerUserID)
-	if err := ValidateWorkspaceSlug(slug); err != nil {
+	if _, err := ValidateWorkspaceSlug(slug); err != nil {
 		return nil, fmt.Errorf("slug legacy tidak sah (%q): %w", slug, err)
 	}
 	name := email
@@ -480,6 +551,233 @@ func legacySlugCandidates(wantSlug, ownerUserID string) []string {
 		out = append(out, wantSlug+"-"+suffix)
 	}
 	return out
+}
+
+// ── Rename (name and/or slug) ───────────────────────────────────────────────────
+
+// WorkspaceRenameInput is a partial update of a workspace's identity. An empty
+// Name or Slug means KEEP the current value (the same read-modify-write contract
+// the per-workspace settings writer uses), so a caller that only renames the
+// slug can never blank the name by omission.
+type WorkspaceRenameInput struct {
+	WorkspaceID string
+	Name        string
+	Slug        string
+	// CanChangeSlug is the caller's authority to MOVE the tenant's public
+	// identity — the owner, and nobody else. A member with manage/admin role may
+	// rename the workspace (the label their colleagues see) but not its address:
+	// the slug is the host printed on QR stands and shared links, so the person
+	// who carries the consequences makes that call. Enforced HERE rather than
+	// only in the transports, so a future third caller cannot bypass it by
+	// forgetting its own copy.
+	CanChangeSlug bool
+}
+
+// WorkspaceRenameResult reports what a rename actually changed, so the caller can
+// tell the user (and re-point jf_workspace in the browser) without re-reading.
+type WorkspaceRenameResult struct {
+	Workspace   *Workspace
+	OldName     string
+	OldSlug     string
+	SlugChanged bool
+	NameChanged bool
+}
+
+// ErrWorkspaceSlugNotOwned means a slug change was requested by a caller without
+// the authority to move the tenant's public address.
+var ErrWorkspaceSlugNotOwned = errors.New("hanya pemilik workspace boleh menukar slug")
+
+// ErrWorkspaceNoChange means the request asked for the values the workspace
+// already has.
+var ErrWorkspaceNoChange = errors.New("tiada perubahan")
+
+// Rename updates a workspace's name and/or slug in ONE transaction, remembering
+// the old slug so every URL already handed out keeps working.
+//
+// WHY THE ALIAS IS WRITTEN IN THE SAME TRANSACTION. A rename that moved the
+// workspace but left no alias would turn every printed QR stand, embed snippet
+// and affiliate link naming the old host into a 404 the merchant never sees.
+// Either both halves land or neither does.
+//
+// WHAT IS REFUSED, and why each refusal is a refusal rather than a silent
+// overwrite:
+//
+//	ErrWorkspaceSlugTaken   — the requested slug is LIVE on another workspace
+//	                          (its host would answer for two tenants), or it is
+//	                          RESERVED as a former slug of another workspace
+//	                          (taking it would hijack that workspace's printed
+//	                          links). Both leave BOTH sides untouched.
+//	ErrWorkspaceSlugNotOwned — a non-owner asked to move the public address.
+//	ErrWorkspaceNoChange     — name and slug are both the current values.
+//
+// A rename BACK onto a slug this workspace used before is allowed and is not a
+// collision with itself: the alias row for the new slug is removed, because a
+// live slug must not also be an alias.
+func (s *WorkspaceStore) Rename(ctx context.Context, in WorkspaceRenameInput) (*WorkspaceRenameResult, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Lock the row: two concurrent renames of one workspace would otherwise both
+	// pass the availability check and the loser would fail late with a raw
+	// unique-constraint error instead of a 409.
+	cur := &Workspace{}
+	if err := tx.QueryRow(ctx,
+		`SELECT id, owner_user_id, name, slug FROM workspaces WHERE id=$1 FOR UPDATE`,
+		in.WorkspaceID).Scan(&cur.ID, &cur.Owner, &cur.Name, &cur.Slug); isNoSuchRow(err) {
+		return nil, ErrWorkspaceNotFound
+	} else if err != nil {
+		return nil, err
+	}
+
+	newName := strings.TrimSpace(in.Name)
+	if newName == "" {
+		newName = cur.Name
+	} else {
+		// ONLY a name the caller actually supplied is judged by the cap. The
+		// check used to run on the FALLBACK value too, so a workspace whose
+		// stored name is over the cap could not be renamed AT ALL — including a
+		// slug-only PATCH, which is the primary use of this route: the request
+		// carries no name, the fallback put the stored (too long) one in
+		// newName, and the length test refused the whole call. That is how an
+		// unrelated stored value turned a slug move into a 500.
+		var nerr error
+		newName, nerr = ValidateWorkspaceName(in.Name)
+		if nerr != nil {
+			return nil, nerr
+		}
+	}
+
+	wantSlug := strings.TrimSpace(in.Slug)
+	slug, verr := cur.Slug, error(nil)
+	if wantSlug != "" {
+		slug, verr = ValidateWorkspaceSlug(wantSlug)
+		if verr != nil {
+			return nil, verr
+		}
+	}
+
+	slugChanged := slug != cur.Slug
+	nameChanged := newName != cur.Name
+	if !slugChanged && !nameChanged {
+		return nil, ErrWorkspaceNoChange
+	}
+	if slugChanged && !in.CanChangeSlug {
+		return nil, ErrWorkspaceSlugNotOwned
+	}
+
+	if slugChanged {
+		// LIVE collision: another workspace already answers on that host.
+		var otherID string
+		if err := tx.QueryRow(ctx, `SELECT id FROM workspaces WHERE slug=$1`, slug).Scan(&otherID); err == nil && otherID != cur.ID {
+			return nil, ErrWorkspaceSlugTaken
+		} else if err != nil && !isNoSuchRow(err) {
+			return nil, err
+		}
+		// RESERVED collision: another workspace used to answer there, and its
+		// printed links still do. Taking it would hijack them.
+		var aliasOwner string
+		err := tx.QueryRow(ctx, `SELECT workspace_id FROM workspace_slug_aliases WHERE slug=$1`, slug).Scan(&aliasOwner)
+		switch {
+		case err == nil && aliasOwner != cur.ID:
+			return nil, ErrWorkspaceSlugTaken
+		case err == nil:
+			// Our OWN former slug, coming back into service: drop the alias so
+			// the address is live exactly once.
+			if _, derr := tx.Exec(ctx, `DELETE FROM workspace_slug_aliases WHERE slug=$1`, slug); derr != nil {
+				return nil, derr
+			}
+		case isNoSuchRow(err):
+		default:
+			return nil, err
+		}
+	}
+
+	if _, err := tx.Exec(ctx,
+		`UPDATE workspaces SET name=$2, slug=$3 WHERE id=$1`,
+		cur.ID, newName, slug); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return nil, ErrWorkspaceSlugTaken
+		}
+		return nil, err
+	}
+
+	if slugChanged {
+		// The old host is remembered, so the URLs already in the wild keep
+		// resolving to this workspace (see CurrentSlugForHost).
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO workspace_slug_aliases (slug, workspace_id) VALUES ($1,$2)
+			 ON CONFLICT (slug) DO UPDATE SET workspace_id = EXCLUDED.workspace_id`,
+			cur.Slug, cur.ID); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return &WorkspaceRenameResult{
+		Workspace:   &Workspace{ID: cur.ID, Owner: cur.Owner, Name: newName, Slug: slug},
+		OldName:     cur.Name,
+		OldSlug:     cur.Slug,
+		SlugChanged: slugChanged,
+		NameChanged: nameChanged,
+	}, nil
+}
+
+// CurrentSlugForHost resolves the slug of the workspace that should answer on a
+// given host label, following a rename's alias: the LIVE workspace is found
+// first, and only when nothing live matches is the workspace_slug_aliases table
+// consulted. Returns "" when neither matches.
+//
+// This is the ONE host resolution for a former address, and it deliberately
+// looks in that order: a slug that is live again (renamed back, or re-created
+// after its workspace went away) is served directly and its stale alias row —
+// which the rename path removes — can never shadow a live tenant.
+//
+// It answers with the workspace's CURRENT slug, not a workspace id, because the
+// caller's job is to move a request from a former host to the current one
+// (a permanent redirect) rather than to serve the same tenant on two hosts.
+func (s *WorkspaceStore) CurrentSlugForHost(ctx context.Context, slug string) (string, error) {
+	var cur *string
+	err := s.pool.QueryRow(ctx, `
+		SELECT COALESCE(
+		  (SELECT sp.slug FROM workspaces sp WHERE sp.slug = $1),
+		  (SELECT sp.slug FROM workspace_slug_aliases a
+		     JOIN workspaces sp ON sp.id = a.workspace_id
+		    WHERE a.slug = $1)
+		)`, slug).Scan(&cur)
+	if err != nil {
+		return "", err
+	}
+	if cur == nil {
+		return "", nil
+	}
+	return *cur, nil
+}
+
+// AliasesForWorkspace lists the former slugs a workspace still answers on, oldest
+// first. Used by the rename answer and the tests; the redirect path does not need
+// it.
+func (s *WorkspaceStore) AliasesForWorkspace(ctx context.Context, workspaceID string) ([]string, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT slug FROM workspace_slug_aliases WHERE workspace_id=$1 ORDER BY created_at`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var slug string
+		if err := rows.Scan(&slug); err != nil {
+			return nil, err
+		}
+		out = append(out, slug)
+	}
+	return out, rows.Err()
 }
 
 // WorkspaceAccess carries the account set + the caller's role for a workspace the

@@ -345,8 +345,12 @@ func (s *Server) registerTools() {
 	}, s.setAffiliateCommission)
 	addTool(s, &mcp.Tool{
 		Name:        "create_workspace",
-		Description: "Cipta workspace baharu. Slug 3-40 aksara (a-z, 0-9, dash); URL jadi https://<slug>.jomform.com. Nama yang dikhaskan untuk JomForm (cth: www, api, app, mail, s3, docs, mcp, templates, custom, support, help, status, billing, admin, account, login, payments, checkout, cdn, assets) ditolak.",
+		Description: "Cipta workspace baharu. Nama sehingga 120 aksara (dikira sebagai AKSARA, bukan bait). Slug 3-40 aksara (a-z, 0-9, dash); URL jadi https://<slug>.jomform.com. Nama yang dikhaskan untuk JomForm (cth: www, api, app, mail, s3, docs, mcp, templates, custom, support, help, status, billing, admin, account, login, payments, checkout, cdn, assets) ditolak.",
 	}, s.createWorkspace)
+	addTool(s, &mcp.Tool{
+		Name:        "update_workspace",
+		Description: "Tukar NAMA dan/atau SLUG (alamat awam) satu workspace. Medan kosong = kekal. Nama sehingga 120 AKSARA (bukan bait; sama had dengan cipta). Menukar nama perlukan peranan manage/admin; menukar SLUG hanya PEMILIK, dan perlukan confirm=true — slug ialah hos awam tenant (https://<slug>.jomform.com) yang sudah tercetak dalam QR, iframe dan pautan affiliate. Slug LAMA disimpan sebagai alias dan TERUS BERFUNGSI (pindah kekal ke slug baharu), jadi pautan yang sudah tersebar tidak mati. Pulangkan previous_url + previous_url_redirects. Nama yang dikhaskan untuk JomForm (senarai sama seperti create_workspace: www, api, billing, support, docs, mcp, templates, …) DITOLAK sebagai status=refused dengan code reserved_subdomain — nama itu milik JomForm atau melindungi pengguna daripada penipuan, dan slug workspace tidak berubah.",
+	}, s.updateWorkspace)
 	addTool(s, &mcp.Tool{
 		Name:        "get_workspace_settings",
 		Description: "Baca tetapan storefront satu workspace: footer, company_reg, privacy/terms/refund URL, contact, menu.",

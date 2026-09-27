@@ -29,6 +29,23 @@ import (
 // wording cannot drift from the store's sentinel.
 const invalidSlugMessage = "form slug must be 1-40 characters of a-z, 0-9 or -"
 
+// The workspace slug rule's wire messages, declared HERE as literals for the
+// same reason invalidSlugMessage is (above): errcode.go's message→code table
+// requires every key to appear as a string literal in a non-errcode.go file of
+// this package, so a handler that forwards dbstore's sentinel text verbatim
+// would leave the three slug codes unreachable — every shape refusal would ship
+// with a class code and the dashboard would render its generic sentence instead
+// of "Slug must be 3-40 chars, a-z, 0-9, dash.".
+//
+// Each string IS the text of the matching dbstore sentinel (the store's
+// sentinel is the rule's wording), and TestWorkspaceSlugWireMessagesAreTheStores
+// pins the two equal so the wire wording cannot drift from the store's.
+const (
+	workspaceSlugLengthMessage = "slug 3-40 aksara"
+	workspaceSlugCharsMessage  = "slug: a-z, 0-9, dash sahaja"
+	workspaceSlugTailMessage   = "slug tidak sah"
+)
+
 // errorClass buckets an error into a stable, low-cardinality class used for
 // both the structured log field and the Prometheus error counter.
 func errorClass(err error) string {

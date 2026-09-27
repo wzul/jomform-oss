@@ -7,16 +7,20 @@ export const metadata: Metadata = {
   alternates: { canonical: "https://jomform.com/docs/workspaces" },
 };
 
-// The full text behind the two summaries on /docs (t_5425c958): "Workspaces
-// (your account's tenant)" and "Deleting a workspace". Both arrived on main
-// (e45ede2 / #682) after the /docs restructure was written, so the index carried
-// their whole 231- and 251-word bodies; the rebase cuts them to summaries and
-// moves the walk-through here, like every other cut entry.
+// The full text behind the summaries on /docs (t_5425c958): "Workspaces
+// (your account's tenant)", "Renaming a workspace" and "Deleting a workspace".
+// The first two arrived on main (e45ede2 / #682) after the /docs restructure was
+// written, so the index carried their whole 231- and 251-word bodies; the rebase
+// cuts them to summaries and moves the walk-through here, like every other cut
+// entry. "Renaming a workspace" arrives with PR 691 — its 259-word body was a
+// paragraph, which the /docs entry-shape guard (docsIndex.test.ts) refuses, so
+// the walk-through lives here and the index keeps the one-line summary.
 //
 // The anchor names are part of the contract: /docs links to them by `#id`, the
 // Settings → Workspace danger zone's inline "?" points at
-// `/docs#delete-workspace`, and the first-run workspace ask points at
-// `/docs#workspaces`. Both index slugs stay on the index itself.
+// `/docs#delete-workspace`, the identity card's "?" points at
+// `/docs#rename-workspace`, and the first-run workspace ask points at
+// `/docs#workspaces`. The index slugs stay on the index itself.
 type Section = { id: string; title: string; body: string[] };
 
 const SECTIONS: Section[] = [
@@ -32,6 +36,21 @@ const SECTIONS: Section[] = [
       // summary, so the walk-through belongs here or it is lost.
       "If you joined before workspaces existed and already had forms but no workspace, JomForm creates that workspace for you on your next sign-in, naming it and its URL after the first five characters of your email address, and moves your existing forms into it so they appear in your dashboard straight away — nothing is deleted. Your forms then serve from that workspace's own address ({workspace-slug}.jomform.com): a form has exactly one public host, so if you had shared a link on an older address you will want to send the new one.",
       "Create more later from the workspace switcher in the top bar (\"New workspace\"); the switcher also sets which workspace you land on after login. A new workspace starts empty: no CHIP credentials, no products, no sales.",
+    ],
+  },
+  {
+    id: "rename-workspace",
+    title: "Renaming a workspace",
+    body: [
+      // PR 691: this is the walk-through the /docs entry used to carry in full.
+      // The name and the address are two different fields with two different
+      // authorities, and the split is the part a merchant gets wrong.
+      "A workspace's name and its public address can both be changed after it is created, in Settings → Workspace, where the identity card is editable.",
+      "The NAME is only what you and your team see in the dashboard, the switcher and the workspace list, so it is safe to fix a typo or follow a rebrand. Anyone with the manage or admin role on the workspace can change it. It can be up to 120 characters, counted in characters rather than bytes — so a name in Chinese, Tamil, Arabic or with accents is measured the same way the field measures it, and 120 characters is 120 whatever the script. The same limit applies whether you create a workspace or rename one.",
+      "The ADDRESS is different: <slug>.jomform.com is your workspace's public host, the thing printed on a QR stand, pasted into an iframe embed, and handed to an affiliate as a ?aff= link. Only the OWNER can change it — an admin member manages a workspace but does not own its public identity. The address must be 3–40 characters of a-z, 0-9 and dashes, cannot end in \"jomform\" (that is the product's own domain), and must not be in use by another workspace — including a workspace that has renamed away from it, because those former addresses still answer for their own merchant. A reserved name is refused with the reason stated; see the reserved workspace names below.",
+      "Changing the address is safe by design: the old address is kept and keeps working, redirecting permanently (HTTP 301) to the new one, so a QR code already stuck to a table or a link already in an email does not break and nobody has to reprint anything. Unlike a form-slug rename, a former workspace address is never handed to another workspace — it always moves to the workspace that used to own it.",
+      "Changing the address never requires touching the name: a request that changes only the address leaves the name exactly as it was, and an over-long name can never block an address change.",
+      "The rename goes through PATCH /v1/workspaces/{id} — fields are optional, and an omitted one keeps its current value — or the MCP tool update_workspace, which requires confirm=true for an address change because moving a tenant's public identity is not something an agent should do by inference. The name alone needs no confirmation.",
     ],
   },
   {

@@ -294,6 +294,10 @@ const ORIGINAL_TITLES = [
   // while resolving the rebase would break that link the same way.
   "Workspaces (your account's tenant)",
   "Deleting a workspace",
+  // PR 691 (the rename). It is a live destination: the Settings → Workspace
+  // identity card's inline "?" deep-links /docs#rename-workspace, so the entry
+  // (and its slug) has to stay on the index.
+  "Renaming a workspace",
   "REST API",
   "Two-factor authentication (2FA)",
   "Sales",
@@ -597,6 +601,19 @@ const DESTINATION_FACTS: Record<string, string[]> = {
     "delete a form for good",
     "check_workspace_deletion",
   ],
+  // PR 691: the entry whose 259-word body the /docs restructure refuses. It is a
+  // summary pointing at /docs/workspaces#rename-workspace, so its facts are the
+  // things a merchant has to be told before changing an address they already
+  // published: the two different authorities, what a reserved label does, and
+  // that the old address keeps working (a permanent redirect, and — unlike a
+  // form-slug rename — one that no other workspace can ever claim).
+  "Renaming a workspace": [
+    "counted in characters rather than bytes",
+    "Only the OWNER can change it",
+    "redirecting permanently (HTTP 301) to the new one",
+    "never handed to another workspace",
+    "requires confirm=true for an address change",
+  ],
   "Two-factor authentication (2FA)": [
     "6-digit",
     "magic link",
@@ -686,6 +703,11 @@ test("every cut entry's facts are readable at the destination (not just its anch
     // is dropped without this floor moving with it.
     "Workspaces (your account's tenant)": 6,
     "Deleting a workspace": 6,
+    // PR 691: the rename entry's summary, at the count its DESTINATION_FACTS list
+    // above holds. The facts are the two authorities, the character-counted cap,
+    // the permanent redirect and the no-claimant rule — the things the old
+    // paragraph carried that a reader must still be able to find.
+    "Renaming a workspace": 5,
     "Two-factor authentication (2FA)": 4,
     "REST API": 3,
     // t_e3ebe979: main's #679 entry, at the count its DESTINATION_FACTS list

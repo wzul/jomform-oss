@@ -1,54 +1,123 @@
-// Workspace slug rules — the definition the LEGACY PROVISION reuses.
+// Workspace slug rules — the ONE definition every write path reuses.
 //
-// WHAT IS TRUE TODAY (measured on main, not assumed). This file's rule exists so
-// the auto-provisioning path cannot mint a slug the API would itself reject:
-// ValidateWorkspaceSlug has exactly ONE production caller,
-// ProvisionLegacyWorkspaceForOwner (workspace.go), in this package. It is
-// enforced there against the derived slug before the workspace is inserted.
+// WHAT IS TRUE TODAY (measured, not assumed). This file's rule exists so no
+// write path can mint a slug the API would itself reject. It has THREE
+// production callers, all in this repo:
 //
-// WHAT IS NOT TRUE — and used to be claimed here. A previous version of this
-// comment said "the rule existed as three separate copies ... both writers now
-// delegate". Only one of the other two did. `grep -n 'ValidateWorkspaceSlug' api/
-// | grep -v _test` returns the definition, this comment, and that one call site:
-// the REST create handler (httpapi/rest_workspaces.go) and
-// mcpsrv.validateWorkspaceSlug still each carry their own inline copy of the
-// length / charset / "-jomform" rules. The copies agree today, so nothing is
-// broken — but a doc comment asserting a de-duplication that has not happened is
-// the "an invariant nothing verifies" shape this chain keeps having to fix.
+//	ProvisionLegacyWorkspaceForOwner (dbstore/workspace.go) — the derived slug
+//	REST create/rename (httpapi/rest_workspaces.go)
+//	MCP create/rename (mcpsrv/workspaces.go, via validateWorkspaceSlug)
 //
-// The remaining copies are known and tracked, not forgotten: PR 691
-// (feat(workspace): rename a workspace's name and public slug) makes both
-// writers delegate here, and the reserved-subdomain rule already lives in ONE
-// place (internal/urlguard) and is consumed by both. Until that lands, correct
-// this comment rather than the code: rewriting the two handlers here would
-// duplicate an in-flight, reviewed change and guarantee a conflict.
+// The last two DELEGATE here as of PR 691 (feat(workspace): rename a
+// workspace's name and public slug). Before that each carried its own inline
+// copy of the length / charset / "-jomform" rules; the copies agreed, but a
+// shared rule with three definitions drifts silently, which is the repo's
+// standing rule against hand-rolling a second copy (see urlguard).
+//
+// The reserved-subdomain leg is part of THIS function rather than a separate
+// check in each transport: the list lives in internal/urlguard and the rule is
+// enforced here, so REST and MCP cannot drift into two different answers about
+// a name JomForm owns. It runs FIRST, before the length and charset legs — "s3"
+// is a reserved label AND shorter than the 3-character minimum, and if the
+// shape rule won the caller would be told their input was malformed and would
+// retry a variation of the sensitive name. Policy refusal beats shape refusal.
 package dbstore
 
 import (
 	"errors"
 	"regexp"
 	"strings"
+
+	"github.com/wzul/jomform/api/internal/urlguard"
 )
 
 var workspaceSlugUnsafe = regexp.MustCompile(`[^a-z0-9-]+`)
 
-// ValidateWorkspaceSlug enforces the workspace slug contract:
+// Rejections from ValidateWorkspaceSlug. They carry the user-facing wording, so
+// every transport returns the same message for the same bad input instead of
+// restating it (REST returns the text as the 400 body, MCP as the tool error,
+// the dashboard shows it inline).
 //
-//	3-40 characters, a-z 0-9 and dash only, and must not end in "jomform"
-//	(the wildcard subdomain suffix).
-func ValidateWorkspaceSlug(slug string) error {
+// A caller that needs to tell one refusal from another (the MCP rename tool
+// switches on them) matches these by errors.Is rather than by comparing text.
+var (
+	ErrWorkspaceSlugLength   = errors.New("slug 3-40 aksara")
+	ErrWorkspaceSlugChars    = errors.New("slug: a-z, 0-9, dash sahaja")
+	ErrWorkspaceSlugReserved = errors.New("slug tidak sah")
+)
+
+// ErrWorkspaceSlugReservedSubdomain is the reserved-LIST refusal: the label the
+// caller asked for is a host JomForm owns or must protect (see
+// urlguard.ReservedSubdomain — infrastructure, product and support/billing
+// looking names).
+//
+// WHY IT IS A SEPARATE SENTINEL from ErrWorkspaceSlugReserved, and not a reuse
+// of it. The two legs are different rules with different wire answers, and the
+// transport switches match by errors.Is, so one sentinel cannot serve both:
+//
+//	ErrWorkspaceSlugReserved — the "*jomform" TAIL rule. The caller's own input
+//	                           is shaped badly, so the answer is the generic
+//	                           slug wording ("slug tidak sah") and the generic
+//	                           slug code.
+//	ErrWorkspaceSlugReservedSubdomain — a POLICY refusal about a name that is
+//	                           perfectly well formed. Its answer names WHY (the
+//	                           label is JomForm's) and carries the stable
+//	                           `reserved_subdomain` token the dashboard matches
+//	                           on (#694) instead of the generic slug code.
+//
+// Before this existed the reserved leg returned a FRESH errors.New, which
+// satisfied NO sentinel: every transport switch fell through, so REST answered
+// 500 {"code":"internal"} and logged an ERROR/stack trace for plain user input,
+// while MCP answered `db: ...` (t_758bb125). The list was enforced — no workspace
+// could be renamed onto a reserved label — but the refusal could not be reported.
+var ErrWorkspaceSlugReservedSubdomain = errors.New("slug is reserved for JomForm")
+
+// reservedSlugRefusal is the reserved-label refusal. It answers the class
+// sentinel to errors.Is (so a transport classifies it without reading prose)
+// while its message is the SHARED urlguard wording, which names the label and
+// therefore cannot be the sentinel's own fixed text.
+type reservedSlugRefusal struct{ label string }
+
+func (e *reservedSlugRefusal) Error() string { return urlguard.ReservedSubdomainMessage(e.label) }
+
+func (e *reservedSlugRefusal) Unwrap() error { return ErrWorkspaceSlugReservedSubdomain }
+
+// ValidateWorkspaceSlug normalises a caller-supplied slug and reports whether it
+// is usable as a workspace host. It returns the NORMALISED slug (trimmed and
+// lower-cased) so a caller writes exactly what was validated rather than
+// re-deriving it.
+//
+// The rule:
+//   - trimmed, then lower-cased, so "  MyShop  " is accepted as "myshop";
+//   - a reserved label (see urlguard.ReservedSubdomain) is refused — it is a
+//     host JomForm owns or must protect;
+//   - 3-40 characters;
+//   - only a-z, 0-9 and '-';
+//   - must not END in "jomform" (that would produce a host that collides with
+//     the product's own subdomains — e.g. "mcp.jomform" — or an
+//     attacker-shaped "jomform" host).
+func ValidateWorkspaceSlug(slug string) (string, error) {
+	slug = strings.ToLower(strings.TrimSpace(slug))
+	if urlguard.ReservedSubdomain(slug) {
+		// The refusal CLASS is a sentinel the transports match on; its MESSAGE is
+		// the shared urlguard wording, which names the label. Returning the bare
+		// sentinel here would answer "slug is reserved for JomForm" with no label,
+		// and returning a fresh errors.New (what this used to do) satisfies no
+		// sentinel at all — the shape that made REST answer 500 and MCP `db: ...`.
+		return "", &reservedSlugRefusal{label: slug}
+	}
 	if len(slug) < 3 || len(slug) > 40 {
-		return errors.New("slug 3-40 aksara")
+		return "", ErrWorkspaceSlugLength
 	}
 	for _, c := range slug {
 		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
-			return errors.New("slug: a-z, 0-9, dash sahaja")
+			return "", ErrWorkspaceSlugChars
 		}
 	}
 	if strings.HasSuffix(slug, "jomform") {
-		return errors.New("slug tidak sah")
+		return "", ErrWorkspaceSlugReserved
 	}
-	return nil
+	return slug, nil
 }
 
 // SlugFromEmailLocalPart derives a workspace slug from an email address for the

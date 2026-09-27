@@ -96,6 +96,7 @@ const docsLayout = read("../app/docs/layout.tsx");
 // path is ONE endpoint with two implementations, and a rename on either side
 // makes the ask form fail without anything else noticing.
 const goRestWorkspaces = read("../../../api/internal/httpapi/rest_workspaces.go");
+const goRestErrors = read("../../../api/internal/httpapi/errors.go");
 const goRestRoutes = read("../../../api/internal/httpapi/rest.go");
 const goWorkspaceStore = read("../../../api/internal/dbstore/workspace.go");
 
@@ -449,9 +450,26 @@ test("the ask's create path is the endpoint the Go side serves, with the same st
     goRestWorkspaces.includes('writeErr(w, http.StatusConflict, "slug sudah digunakan")'),
     "the handler no longer answers 409 for a taken slug — the client's slugTaken branch is dead",
   );
+  // The handler still answers 400 for a bad slug — written from the package's
+  // own literal (workspaceSlugLengthMessage) rather than inline, because the
+  // message→code table in errcode.go keys on the exact string and an inline
+  // duplicate is how the wire wording and the table drift apart. The client's
+  // slugInvalid branch is live as long as the LITERAL is what reaches the wire,
+  // which is what this checks.
   assert.ok(
-    goRestWorkspaces.includes('writeErr(w, http.StatusBadRequest, "slug 3-40 aksara")'),
-    "the handler no longer answers 400 for a bad slug — the client's slugInvalid branch is dead",
+    goRestWorkspaces.includes('writeErr(w, http.StatusBadRequest, workspaceSlugLengthMessage)'),
+    "the handler no longer answers 400 with the slug-length message — the client's slugInvalid " +
+      "branch is dead",
+  );
+  // The literal itself is declared in errors.go (that file owns the wire
+  // wording), and errcode.go's message→code table keys on its EXACT text. Pin the
+  // declaration, or a re-word would silently drop the code and the dashboard
+  // would fall back to its generic 400 sentence (#6177).
+  assert.ok(
+    goRestErrors.includes('workspaceSlugLengthMessage = "slug 3-40 aksara"'),
+    "the slug-length literal moved or changed — the message→code table in errcode.go keys on this " +
+      "exact string, so a rename silently drops the code and the dashboard falls back to its " +
+      "generic 400 sentence",
   );
   assert.match(
     workspaceLib,

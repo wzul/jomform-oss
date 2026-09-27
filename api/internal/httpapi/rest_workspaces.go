@@ -42,6 +42,29 @@ func (h *RESTHandlers) listWorkspaces(w http.ResponseWriter, r *http.Request, ac
 	writeJSON(w, http.StatusOK, out)
 }
 
+// writeWorkspaceSlugReserved answers the reserved-LIST refusal (t_586ff0c3): the
+// caller asked for a label JomForm owns or must protect. It is a POLICY answer,
+// not a shape one, so it says WHY — urlguard's wording, which names the label —
+// and carries the stable `reserved_subdomain` token the dashboard matches on
+// (#694) instead of the generic slug code.
+//
+// ONE writer for both REST write paths (create and rename). The refusal reaches
+// each of them as a dbstore sentinel, and the two switches used to disagree:
+// create emitted the reserved code from its `default:` arm (an accident of that
+// switch, which is why create answered 400 while rename answered 500 for the
+// same input on the same tree). Both arms now name the code explicitly.
+//
+// The parameter is `verr` because the shared message IS the rule's own text: the
+// wire `error` must be what dbstore returned, not a second sentence written
+// here. lib/workspaceSlug.test.ts pins both literals in this file
+// (`"error": verr.Error()` and `"code": urlguard.ReservedSubdomainCode`).
+func writeWorkspaceSlugReserved(w http.ResponseWriter, verr error) {
+	writeJSON(w, http.StatusBadRequest, map[string]any{
+		"error": verr.Error(),
+		"code":  urlguard.ReservedSubdomainCode,
+	})
+}
+
 // createWorkspace: POST /v1/workspaces
 func (h *RESTHandlers) createWorkspace(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	userID := h.sessionOwnerID(r)
@@ -57,40 +80,66 @@ func (h *RESTHandlers) createWorkspace(w http.ResponseWriter, r *http.Request, a
 		writeErr(w, http.StatusBadRequest, "name dan slug wajib")
 		return
 	}
-	slug := strings.ToLower(strings.TrimSpace(in.Slug))
-	// Reserved subdomains (t_586ff0c3): a slug becomes a live host on the tenant
-	// wildcard, so names JomForm owns or must protect (infra, routed products,
-	// support/billing-looking) cannot be claimed. The list and the refusal live
-	// in ONE place — internal/urlguard, the same package the scheme rule uses —
-	// so this and the MCP validator cannot drift into two copies. The message
-	// says WHY the name is reserved, and the stable `code` lets the dashboard
-	// render its own localised sentence instead of printing this prose (#694).
+	// ONE shared rule (dbstore.ValidateWorkspaceName) — the rename path calls the
+	// same function, so create and rename can never disagree about what a name
+	// is, and neither can be stricter than the field the user typed into.
 	//
-	// This runs FIRST, before the length and charset rules. Order is not
-	// cosmetic: a reserved label can be shorter than the 3-char minimum ("s3"
-	// is 2), and if the length rule won, the merchant would be told their
-	// input was malformed and would try variations of the same sensitive name
-	// instead of learning the name is JomForm's. Policy refusal beats shape
-	// refusal.
-	if urlguard.ReservedSubdomain(slug) {
-		writeJSON(w, http.StatusBadRequest, map[string]any{
-			"error": urlguard.ReservedSubdomainMessage(slug),
-			"code":  urlguard.ReservedSubdomainCode,
-		})
+	// ORDER MATTERS, and the cap is checked FIRST. ValidateWorkspaceName returns
+	// "" alongside its error, so a too-long name would otherwise fall into the
+	// emptiness check below and be reported as "name dan slug wajib" — the wrong
+	// reason, which is exactly what lets a create/rename parity test pass while
+	// the two paths disagree about WHY a name is refused.
+	name, nerr := dbstore.ValidateWorkspaceName(in.Name)
+	if nerr != nil {
+		writeErr(w, http.StatusBadRequest, nerr.Error())
 		return
 	}
-	if len(slug) < 3 || len(slug) > 40 {
-		writeErr(w, http.StatusBadRequest, "slug 3-40 aksara")
+	if name == "" {
+		// A whitespace-only name is still a missing one.
+		writeErr(w, http.StatusBadRequest, "name dan slug wajib")
 		return
 	}
-	for _, c := range slug {
-		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
-			writeErr(w, http.StatusBadRequest, "slug: a-z, 0-9, dash sahaja")
-			return
+	// ONE shared rule (dbstore.ValidateWorkspaceSlug) — the rename path and both
+	// create paths call the same function, so they can never disagree about what
+	// a slug is. It returns the NORMALISED value (trimmed, lower-cased), which is
+	// what gets written, and it carries the reserved-subdomain refusal
+	// (t_586ff0c3) as its FIRST leg.
+	//
+	// The shape refusals are written from THIS package's literals for the three
+	// store sentinels (see workspaceSlugLengthMessage) rather than forwarded as
+	// `verr.Error()`: errcode.go's message→code table keys on the exact string,
+	// so an `.Error()` call would leave workspace.slugInvalid unreachable and the
+	// dashboard would render its generic 400 sentence instead of the slug rule
+	// (issue #6177). The name cap is in the same table as a PREFIX
+	// (workspace.nameTooLong) for the same reason. The reserved refusal is not
+	// shape at all — it is a policy answer that says WHY the name is JomForm's —
+	// so it keeps urlguard's wording and carries the stable `code` the dashboard
+	// matches on (#694).
+	//
+	// This runs BEFORE the ask-first branch below ON PURPOSE. That branch inserts
+	// through CreateForAccount rather than Create, so a rule only stated on the
+	// fall-through path would leave the ask-first path — a real second write
+	// path, and the one every new user takes — validating nothing.
+	slug, verr := dbstore.ValidateWorkspaceSlug(in.Slug)
+	if verr != nil {
+		switch {
+		case errors.Is(verr, dbstore.ErrWorkspaceSlugLength):
+			writeErr(w, http.StatusBadRequest, workspaceSlugLengthMessage)
+		case errors.Is(verr, dbstore.ErrWorkspaceSlugChars):
+			writeErr(w, http.StatusBadRequest, workspaceSlugCharsMessage)
+		case errors.Is(verr, dbstore.ErrWorkspaceSlugReserved):
+			writeErr(w, http.StatusBadRequest, workspaceSlugTailMessage)
+		case errors.Is(verr, dbstore.ErrWorkspaceSlugReservedSubdomain):
+			// The reserved LIST, named explicitly rather than left to the
+			// `default:` arm below. Create used to answer the reserved code by
+			// ACCIDENT — the fresh error it received matched no arm, so it fell
+			// here — which is exactly why create answered 400 while rename (whose
+			// switch has no default) answered 500 for the same input. Both paths
+			// now name the sentinel and share one writer.
+			writeWorkspaceSlugReserved(w, verr)
+		default:
+			writeErr(w, http.StatusBadRequest, verr.Error())
 		}
-	}
-	if strings.HasSuffix(slug, "jomform") {
-		writeErr(w, http.StatusBadRequest, "slug tidak sah")
 		return
 	}
 	// Ask-first onboarding (Wan's decision, 2026-09-20): a signup creates an
@@ -111,9 +160,13 @@ func (h *RESTHandlers) createWorkspace(w http.ResponseWriter, r *http.Request, a
 	// public host slug and no published URL, CreateForAccount carries it into the
 	// new workspace, and every key-holding user must keep the one-account
 	// behaviour. See dbstore.WorkspaceStore.SoleEmptyUnscopedAccount for why.
+	//
+	// `name` and `slug` are the NORMALISED values from the two shared rules
+	// above, so this branch writes exactly what was validated — the same
+	// guarantee the fall-through path gets, instead of re-deriving a name here.
 	if prior, _ := h.Workspaces.ByMember(r.Context(), userID); len(prior) == 0 {
 		if accID, err := h.Workspaces.SoleEmptyUnscopedAccount(r.Context(), userID); err == nil && accID != "" {
-			sp, err := h.Workspaces.CreateForAccount(r.Context(), userID, strings.TrimSpace(in.Name), slug, accID)
+			sp, err := h.Workspaces.CreateForAccount(r.Context(), userID, name, slug, accID)
 			if err != nil {
 				var pgErr *pgconn.PgError
 				if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -131,10 +184,14 @@ func (h *RESTHandlers) createWorkspace(w http.ResponseWriter, r *http.Request, a
 		}
 	}
 
-	sp, err := h.Workspaces.Create(r.Context(), userID, strings.TrimSpace(in.Name), slug)
+	sp, err := h.Workspaces.Create(r.Context(), userID, name, slug)
 	if err != nil {
+		// 23505 = the slug is live on another workspace; ErrWorkspaceSlugTaken =
+		// it is reserved as a former slug of one (workspace_slug_aliases keeps
+		// those addresses working). Same answer, same status.
 		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		if errors.Is(err, dbstore.ErrWorkspaceSlugTaken) ||
+			(errors.As(err, &pgErr) && pgErr.Code == "23505") {
 			writeErr(w, http.StatusConflict, "slug sudah digunakan")
 			return
 		}
@@ -145,6 +202,140 @@ func (h *RESTHandlers) createWorkspace(w http.ResponseWriter, r *http.Request, a
 		"id": sp.ID, "name": sp.Name, "slug": sp.Slug,
 		"url": "https://" + sp.Slug + ".jomform.com",
 	})
+}
+
+// renameWorkspace: PATCH /v1/workspaces/{id} {"name": ..., "slug": ...}
+//
+// Omitted/empty fields keep their current value (the read-modify-write contract
+// saveWorkspaceSettings uses), so a caller can change one half without blanking
+// the other.
+//
+// TWO DIFFERENT AUTHORITIES, deliberately:
+//
+//	NAME  — any member with manage-or-admin role. It is a label the merchant's
+//	        own colleagues read; there is no external consequence.
+//	SLUG  — the OWNER only. The slug is the tenant's public host
+//	        ({slug}.jomform.com), printed on QR stands, embedded in iframe
+//	        snippets and handed to affiliates (?aff=CODE). Changing it moves
+//	        every one of those addresses, so the person who owns the workspace —
+//	        and carries the consequences — makes that call.
+//
+// A slug change is ADDITIVE: the old slug is remembered as an alias and keeps
+// resolving to this workspace (a permanent redirect to the new host), so the
+// links already in the wild never die. That is why this needs no confirmation
+// prompt on the wire, and why the answer says which alias was left behind.
+func (h *RESTHandlers) renameWorkspace(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if !h.requireWriteScope(w, actx) {
+		return
+	}
+	var in struct {
+		Name *string `json:"name"`
+		Slug *string `json:"slug"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeErr(w, http.StatusBadRequest, "payload tidak sah")
+		return
+	}
+	if in.Name == nil && in.Slug == nil {
+		writeErr(w, http.StatusBadRequest, "name atau slug diperlukan")
+		return
+	}
+	s, role, ok := h.workspaceAccessByID(w, r)
+	if !ok {
+		return
+	}
+	if !roleAtLeast(role, dbstore.RoleManage) {
+		writeErr(w, http.StatusForbidden, "perlu peranan manage atau admin")
+		return
+	}
+	userID := h.sessionOwnerID(r)
+	// Ownership, not merely the admin role: workspaceAccessByID reports
+	// RoleAdmin for the owner AND for an admin member, so the owner check is
+	// the row's own owner column.
+	isOwner := userID != "" && s.Owner == userID
+
+	req := dbstore.WorkspaceRenameInput{WorkspaceID: s.ID, CanChangeSlug: isOwner}
+	if in.Name != nil {
+		req.Name = *in.Name
+	}
+	if in.Slug != nil {
+		req.Slug = *in.Slug
+	}
+
+	res, err := h.Workspaces.Rename(r.Context(), req)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		switch {
+		case errors.Is(err, dbstore.ErrWorkspaceSlugNotOwned):
+			writeErr(w, http.StatusForbidden,
+				"hanya pemilik workspace boleh menukar slug — slug ialah alamat awam workspace")
+			return
+		case errors.Is(err, dbstore.ErrWorkspaceSlugTaken),
+			errors.As(err, &pgErr) && pgErr.Code == "23505":
+			writeErr(w, http.StatusConflict, "slug sudah digunakan")
+			return
+		case errors.Is(err, dbstore.ErrWorkspaceNameLength):
+			// The name-cap message IS dbstore.ErrWorkspaceNameLength's text, so
+			// forwarding it keeps the wire wording the merchant is told about
+			// (the MCP path answers the identical sentence). Its code comes from
+			// errcode.go's prefix table (workspace.nameTooLong), because the
+			// dashboard decides the sentence it shows from the CODE, not the
+			// prose — answering slugInvalid here would send the merchant to fix
+			// their ADDRESS for a refusal about their NAME.
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		case errors.Is(err, dbstore.ErrWorkspaceSlugLength):
+			writeErr(w, http.StatusBadRequest, workspaceSlugLengthMessage)
+			return
+		case errors.Is(err, dbstore.ErrWorkspaceSlugChars):
+			writeErr(w, http.StatusBadRequest, workspaceSlugCharsMessage)
+			return
+		case errors.Is(err, dbstore.ErrWorkspaceSlugReserved):
+			writeErr(w, http.StatusBadRequest, workspaceSlugTailMessage)
+			return
+		case errors.Is(err, dbstore.ErrWorkspaceSlugReservedSubdomain):
+			// The FOURTH refusal shape, and the one this switch used not to know
+			// about (t_758bb125): renaming ONTO a reserved label. There is no
+			// `default:` arm in this switch, so it fell to respondErr and answered
+			// 500 {"code":"internal"} — a user-input refusal logged at ERROR with
+			// a stack trace. Same writer as create, so the two paths cannot
+			// answer differently again.
+			writeWorkspaceSlugReserved(w, err)
+			return
+		case errors.Is(err, dbstore.ErrWorkspaceNoChange):
+			writeErr(w, http.StatusBadRequest, "tiada perubahan")
+			return
+		case errors.Is(err, dbstore.ErrWorkspaceNotFound):
+			writeErr(w, http.StatusNotFound, "workspace tidak dijumpai")
+			return
+		}
+		respondErr(w, r, err)
+		return
+	}
+
+	// Audit: recorded AFTER the write, against the workspace the caller still
+	// holds (the id does not change on a rename).
+	h.recordEvent(r, actx, userID, "workspace.renamed", map[string]any{
+		"workspace_id": res.Workspace.ID,
+		"old_name":     res.OldName, "name": res.Workspace.Name,
+		"old_slug": res.OldSlug, "slug": res.Workspace.Slug,
+		"slug_changed": res.SlugChanged, "name_changed": res.NameChanged,
+	})
+	out := map[string]any{
+		"status": "saved", "id": res.Workspace.ID,
+		"name": res.Workspace.Name, "slug": res.Workspace.Slug,
+		"url":           "https://" + res.Workspace.Slug + ".jomform.com",
+		"name_changed":  res.NameChanged,
+		"slug_changed":  res.SlugChanged,
+		"previous_slug": res.OldSlug,
+	}
+	if res.SlugChanged {
+		// The former address stays alive; say so, because that is the promise
+		// the merchant needs to hear (their printed QR stand still works).
+		out["previous_url"] = "https://" + res.OldSlug + ".jomform.com"
+		out["previous_url_redirects"] = true
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // workspaceAccessByID resolves a workspace by id and verifies the caller is the owner

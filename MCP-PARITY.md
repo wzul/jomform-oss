@@ -67,7 +67,27 @@ Parity checklist (dashboard → MCP):
 - Space landing page (customizable storefront, #360/#362) →
   `get_workspace_landing_page`, `set_workspace_landing_page` (incl. embedded `forms[]`)
 - Workspace lifecycle (#162, member/invite tools above) → `list_workspaces`,
-  `create_workspace`, `delete_workspace`, `check_workspace_deletion`.
+  `create_workspace`, `update_workspace`, `delete_workspace`,
+  `check_workspace_deletion`.
+  `update_workspace` renames a workspace's NAME and/or its public SLUG (empty =
+  keep). Both the NAME and the SLUG can be changed at CREATE time too
+  (`create_workspace`), and both limits are ONE rule shared by create and
+  update: a name is at most 120 CHARACTERS (`utf8.RuneCountInString`, not
+  bytes — so 120 CJK or accented characters is accepted, which is what the
+  dashboard's `maxLength` field already allowed), and a slug is the 3-40
+  character shape above. An over-long name is refused with the rule's own
+  stated reason — never a 500 — and a name the caller did not supply is never
+  judged by the limit, so a slug-only update on a workspace whose stored name
+  predates the cap still succeeds. A name needs manage-or-admin role; the slug
+  needs OWNERSHIP and `confirm=true` (the `revoke_api_key` precedent), because
+  the slug is the tenant's public host — printed on QR stands, embedded in
+  iframes and handed to affiliates. The old slug is kept as an alias and keeps
+  resolving to the same workspace via a permanent redirect, so a link already
+  in the wild never dies. A reserved name is refused on BOTH write paths with
+  the same answer: a rename onto one answers `status=refused` with the code
+  "reserved_subdomain" (the same token REST sends, and the same rule
+  `create_workspace` applies), and the workspace keeps the address it had.
+  REST: `PATCH /v1/workspaces/{id}`.
   `delete_workspace` is OWNER-ONLY and needs the workspace slug typed as
   confirm_slug; it is refused when
   the owner would be left with NO workspace (the "at least one workspace" rule)

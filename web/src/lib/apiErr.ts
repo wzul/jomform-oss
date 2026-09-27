@@ -54,6 +54,29 @@ export const API_ERROR_KEYS: Record<string, Key> = {
   "workspace.notFound": "apiErr.workspaceNotFound",
   "workspace.slugTaken": "apiErr.workspaceSlugTaken",
   "workspace.slugInvalid": "apiErr.workspaceSlugInvalid",
+  // The workspace NAME cap. Mapped for the same reason the two slug refusals
+  // are: the name field is capped client-side, but a paste or an assistive-tech
+  // path can still exceed it, and without this the merchant would be told their
+  // ADDRESS was invalid for a refusal that is about the NAME. The code is the
+  // authority on why, so the sentence is the name's own.
+  "workspace.nameTooLong": "apiErr.workspaceNameTooLong",
+  // The reserved-SUBDOMAIN refusal (t_586ff0c3). It is NOT a `Code*` constant in
+  // api/internal/httpapi/errcode.go — the token lives in urlguard
+  // (ReservedSubdomainCode, mirrored by lib/workspaceSlug.ts) and both write
+  // paths carry it verbatim, because it is a POLICY answer rather than a shape
+  // one: the name is well formed and simply belongs to JomForm.
+  //
+  // It is mapped here as well as in workspace.ts's create path because the SAME
+  // refusal reaches the dashboard through a second surface — the Settings →
+  // Workspace rename card (WorkspaceTab.tsx doRename), which routes its failures
+  // through translateApiErr. Without this row that card would answer its own
+  // generic "couldn't rename" sentence for a refusal it can explain exactly.
+  //
+  // Mapping it to the EXISTING sentence rather than a second one: create and
+  // rename refuse the same thing for the same reason, so two near-duplicate
+  // strings would be two things to keep in step (the repo's rule against a
+  // second copy of a rule).
+  reserved_subdomain: "workspace.slugReserved",
   // A refused workspace DELETE. The page's own sentence ("We couldn't delete this
   // workspace.") hides WHY, and the why is actionable: the blockers list.
   "workspace.notEmpty": "apiErr.workspaceNotEmpty",

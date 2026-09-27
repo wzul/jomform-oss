@@ -44,6 +44,12 @@ const (
 	CodeWorkspaceNotFound  = "workspace.notFound"
 	CodeWorkspaceSlugTaken = "workspace.slugTaken"
 	CodeWorkspaceSlugBad   = "workspace.slugInvalid"
+	// A workspace NAME over the character cap. Named separately from the slug
+	// refusals because the remedy is a different field: answering slugInvalid
+	// sends the merchant to fix their ADDRESS for a problem with their NAME
+	// (reachable by paste and by assistive technology even though the field is
+	// capped at 120).
+	CodeWorkspaceNameTooLong = "workspace.nameTooLong"
 	// A workspace DELETE refused because something still lives in it. The refusal
 	// names the obstacles (the body's `blockers` array), which is exactly the
 	// class of message the page's own generic sentence cannot say.
@@ -312,6 +318,12 @@ var errCodeByPrefix = []struct {
 	// a second copy of it in this table would be one more thing to drift.
 	{"had chat dicapai (", CodeRateLimited},
 	{"had pengesahan dicapai (", CodeRateLimited},
+	// The workspace NAME cap, forwarded from dbstore.ErrWorkspaceNameLength. A
+	// prefix rather than an exact key because the store owns the wording and
+	// states the cap in it ("nama workspace maksimum 120 aksara"); matching the
+	// lead-in means a future re-wording that keeps the sentence's shape keeps its
+	// code, and #6177's rule (the code decides, not the status) still holds.
+	{"nama workspace maksimum ", CodeWorkspaceNameTooLong},
 }
 
 // ErrCodeFor returns the machine code for a wire message, or "" when the
