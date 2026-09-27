@@ -1,6 +1,7 @@
 package httpapi
 
 // Card t_fc5cecbd — the CLASS guard for the unlock limiter.
+// Card t_b2888b6c — enumeration is now the ROUTER'S, not the source text's.
 //
 // The behavioural guards in unlock_ratelimit_test.go prove the three CURRENT
 // unlock routes are limited, but they enumerate those routes from a hand-written
@@ -10,91 +11,617 @@ package httpapi
 // TestEveryGateRouteHasItsOwnUnlockRoute): a guard that is only as wide as a
 // human remembering to extend it is not the mechanical guard it claims to be.
 //
-// This file closes it from the other direction. It reads the package's own
-// route registrations and asserts that EVERY `.../unlock` registration goes
-// through middleware.RateLimit — no case list to maintain, so a new unlock route
-// cannot be added unwrapped without failing here.
+// # WHY THE FIRST VERSION OF THIS GUARD WAS STILL THE SAME DEFECT (t_b2888b6c)
 //
-// It is deliberately a SOURCE scan rather than a live-request probe: a probe has
-// to know the route's path, and knowing the path is exactly what a new route
-// would not be in the list of. Reading the registrations makes the guard follow
-// the code instead of a copy of it. The scan is asserted non-vacuous (it must
-// find the existing unlock routes) so a broken regex cannot quietly turn it into
-// a no-op that always passes.
+// This file used to read the package's own route registrations with ONE
+// SINGLE-LINE TEXT REGEX
+//
+//	`mux\.(HandleFunc|Handle)\(\s*"[A-Z]+ +[^"]*/unlock"\s*,.*`
+//
+// and its header claimed a new unlock route "cannot be added unwrapped without
+// failing here". That was false. A route whose pattern is passed through a
+// VARIABLE OR A HELPER rather than written as a literal on a `mux.Handle` line
+// was invisible to the regex, so the guard reported GREEN while an unlimited
+// password oracle was live. MEASURED on the revision this file was reworked from
+// (public.go, compiling — `go build ./...` rc=0):
+//
+//	registerUnlockRoute(mux, "POST /qa-indirect/{slug}/unlock", h.handleFormUnlock)
+//	...
+//	func registerUnlockRoute(mux *http.ServeMux, pattern string, h http.HandlerFunc) {
+//		mux.HandleFunc(pattern, h)
+//	}
+//
+//	--- PASS: TestEveryUnlockRouteIsWrappedAtRegistration (0.06s)
+//	      3 `.../unlock` registration(s) scanned, all RateLimit-wrapped
+//
+// Three literal routes scanned, a FOURTH live and unwrapped, guard green. For
+// contrast the same guard DID bite on a literal injected route, which is exactly
+// why the hole stayed hidden: every sabotage anyone tried used the shape the
+// guard was written against. A text scan is only ever as wide as the SPELLINGS
+// its author imagined, and a spelling is a private detail of the call site —
+// the same failure as t_020146e6's hand-written list, one layer down. That
+// header also said the point is to follow the code instead of a copy of it; a
+// regex over call-site text IS a copy of it.
+//
+// # WHAT ENUMERATION IS NOW, AND WHY IT CANNOT HAVE A BLIND SPOT OF THAT SHAPE
+//
+// The route set comes from the ROUTER, not from reading the source that filled
+// it in. serverMux() below assembles a real mux the way Server.Handler() does,
+// and muxPatterns() (gate_unlock_route_test.go) walks net/http's OWN routing
+// tree, so it returns the patterns net/http actually holds — the same table a
+// live request is dispatched from. A pattern that reaches that table is
+// enumerated, whatever spelling put it there: a literal, a package constant, a
+// `+` concatenation, a helper, another file in the package, a future
+// registration API. There is no "indirect shape" for this walk, because the walk
+// never sees a shape — only the result. That is the property the regex lacked
+// and cannot get.
+//
+// # WHY THE VERDICT IS BEHAVIOURAL
+//
+// Enumerating the router is not enough on its own. A registration can be reached
+// through the mux and still be unlimited — that is the defect class this whole
+// file exists to close — so each enumerated pattern is DRIVEN: a concurrent
+// burst of wrong passwords from ONE address must produce a 429, exactly as the
+// /order route beside it does. A route that reaches its handler twelve times
+// straight is an unthrottled password oracle and fails by name, whether or not
+// `middleware.RateLimit` appears anywhere near its registration.
+//
+// The burst is CONCURRENT for the reason unlock_ratelimit_test.go documents:
+// middleware.RateLimit consumes the token before the handler runs, and an unlock
+// then spends ~134ms in argon2id, which is larger than the 1-token/second
+// refill, so a SEQUENTIAL loop never drains burst 10. Firing them together is
+// also what a brute-force burst actually looks like, so the assertion matches
+// the attack rather than a wall-clock ordinal.
+//
+// # WHAT IT DOES NOT COVER (stated so the guard is not over-claimed)
+//
+//   - A limiter applied by the HANDLER rather than by a wrapper around it passes,
+//     because the burst then reaches the handler and the handler answers 429 —
+//     a correct limiter, and this guard is deliberately indifferent to WHERE the
+//     limit lives. It tests the OUTCOME of the route-level wrapper this repo
+//     uses (the /order precedent), not its spelling.
+//   - A limiter keyed on something other than middleware.ClientIP would still
+//     refuse the tail of a burst, so it passes here while allowing a different
+//     abuse. The per-buyer KEY is asserted separately and behaviourally in
+//     unlock_ratelimit_test.go (TestUnlockRateLimitIsKeyedPerBuyer); it is not
+//     re-asserted here.
+//   - A limiter with a burst BELOW this guard's burst refuses a request early.
+//     That is a legitimate limiter and this guard reports it green; the threshold
+//     on the routes that matter (burst 10) is pinned by
+//     TestUnlockRateLimitSparesTheFirstBuyers.
+//   - It judges `.../unlock` PATTERNS only. An unlock route spelled without that
+//     suffix is not recognised as one — but the gate's rendered script posts to
+//     `location.pathname + '/unlock'` (asserted by
+//     TestGatePostsToItsOwnScopeNotTheCanonicalRoute), so an unlock a buyer can
+//     actually reach does carry the suffix.
+//   - A HOST-QUALIFIED unlock pattern is reported UNDRIVABLE rather than judged:
+//     the probe drives every pattern on one Host, and a pattern pinned to another
+//     literal host cannot be reached that way (net/http has no host wildcard —
+//     pinned by TestServeMuxRejectsAWildcardHost). That is a failure by name, not
+//     a silent skip, and it is the right answer: this repo's unlock routes carry
+//     no host section (the workspace host is resolved inside the handler), so such
+//     a pattern is a new shape someone should look at.
+//   - serverMux() must be kept in step with Server.Handler()'s handler groups by
+//     hand. A group wired into the server and not registered here would hold
+//     routes outside this guard;
+//     TestUnlockRoutesAreLimitedThroughTheServedChain checks the served chain
+//     still answers the three known unlock routes, which is what would go red if
+//     a registration moved out of the groups registered here.
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
-	"regexp"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+
+	"github.com/wzul/jomform/api/internal/config"
+	"github.com/wzul/jomform/api/internal/httpapi/middleware"
 )
 
-// unlockRegistrationRe matches one mux registration whose pattern string ends in
-// "/unlock", capturing the whole statement:
+// unlockRouteSuffix is the pattern tail that identifies a private-form unlock
+// route. It is the suffix the gate's own script appends to the page it was
+// served on (`location.pathname + '/unlock'`), which is what makes an unlock
+// reachable by a buyer at all.
+const unlockRouteSuffix = "/unlock"
+
+// unlockClassProbeBurst is the burst this guard fires at each enumerated route.
+// It matches the attack shape unlock_ratelimit_test.go uses (12) and is ABOVE the
+// limiter's own burst (10), so a correctly wrapped route must answer 429 and an
+// unwrapped one must not.
+const unlockClassProbeBurst = 12
+
+// unlockRouteDiscoveryMin is the floor on the discovered unlock set. Three routes
+// are measured to exist on this tree; a walk that finds fewer has either lost the
+// route table (a Go release reshaped the internals muxPatterns reads — see
+// TestGateRouteWalkerSeesEveryRegisteredPattern) or lost the routes themselves,
+// and must fail rather than report green on a set narrower than the guard claims.
 //
-//	mux.Handle("POST /{slug}/unlock", middleware.RateLimit(http.HandlerFunc(h.handleFormUnlock)))
-//	mux.HandleFunc("POST /embed/f/{wsslug}/{slug}/unlock", h.embedUnlock)
-var unlockRegistrationRe = regexp.MustCompile(
-	`mux\.(HandleFunc|Handle)\(\s*"[A-Z]+ +[^"]*/unlock"\s*,.*`)
+//	POST /{slug}/unlock                    host scope
+//	POST /f/{slug}/unlock                  host scope
+//	POST /embed/f/{wsslug}/{slug}/unlock   path scope
+const unlockRouteDiscoveryMin = 3
 
-// TestEveryUnlockRouteIsWrappedAtRegistration is the mechanical guard: no
-// production registration of a `.../unlock` route may bypass middleware.RateLimit.
-func TestEveryUnlockRouteIsWrappedAtRegistration(t *testing.T) {
-	pkgDir, err := filepath.Abs(".")
-	if err != nil {
-		t.Fatalf("resolve package dir: %v", err)
+// unlockRoutePatternFloor is the floor on the WALK itself: this mux registers
+// 200+ patterns across the four handler groups, so a walk returning a handful
+// means the reflection is not seeing the routing tree, which would make the
+// unlock floor above meaningless in the other direction. Deliberately loose — it
+// exists to catch a blind walk, not to pin the route count.
+const unlockRoutePatternFloor = 50
+
+// unlockProbeHost is the Host the probe sends on every request: the host a
+// workspace at slug "jf-probe-ws" would be served on. Host-scoped patterns are
+// matched against it, so it is part of aiming at a route (see unlockProbeFilling).
+const unlockProbeHost = "jf-probe-ws.jomform.com"
+
+// unlockProbeValues are the identifier values a pattern's wildcards are filled
+// with, POSITIONALLY (never by name — see the t_0da7d67f note in
+// gate_unlock_route_test.go: name-keyed substitution is how a rename dropped a
+// route out of the judged set).
+var unlockProbeValues = []string{"jf-probe-form", "jf-probe-ws"}
+
+// serverMux assembles the route table the API actually serves. It mirrors
+// Server.Handler()'s registrations (server.go) and the same four handler groups
+// route_parity_test.go's buildParityMux assembles.
+//
+// The handlers are BARE (zero-value) on purpose: this guard asks the mux which
+// PATTERNS it holds and then measures the LIMITER, and middleware.RateLimit
+// consumes its token before the wrapped handler ever runs — so the burst's
+// throttle is observable with no database, no Valkey and no session. MEASURED on
+// this tree: all three unlock routes answer 404 x10 + 429 x2 to a 12-burst and
+// 404 x10 (no 429) to a 10-burst against this bare mux, in three successive
+// rounds each. A store a bare handler does not have is nil-guarded throughout
+// this package (it answers 404 for "no such form" rather than dereferencing),
+// which is what keeps the probe's non-429 traffic a real answer rather than a
+// recovered panic.
+func serverMux() *http.ServeMux {
+	mux := http.NewServeMux()
+	(&AuthHandlers{}).RegisterRoutes(mux)
+	(&RESTHandlers{}).RegisterRoutes(mux)
+	(&PublicHandlers{}).RegisterRoutes(mux)
+	(&PaymentsHandlers{}).RegisterRoutes(mux)
+	return mux
+}
+
+// unlockPatternFillings returns the concrete paths to try for a pattern. The
+// caller resolves each one against the mux and keeps the first that reaches the
+// pattern under test, so a filling that lands on a SIBLING route is discarded
+// rather than measured as if it were this route.
+func unlockPatternFillings(pr gateRouteProbe) []string {
+	fills := gateFillings(len(pr.wildcard), unlockProbeValues)
+	out := make([]string, 0, len(fills))
+	for _, fill := range fills {
+		out = append(out, pr.pathFor(fill))
 	}
-	entries, err := os.ReadDir(pkgDir)
-	if err != nil {
-		t.Fatalf("read package dir %s: %v", pkgDir, err)
+	return out
+}
+
+// unlockRouteMatches reports whether a registered pattern is an unlock this guard
+// judges: a pattern reachable by POST (no method token at all counts — net/http
+// matches a method-less pattern for every method) whose path ends in the suffix
+// the gate appends. No pattern spelling is consulted beyond that, which is the
+// whole difference between this guard and the regex it replaces.
+func unlockRouteMatches(pat string) bool {
+	pr := gateRouteProbeFor(pat)
+	if pr.method != "" && !strings.EqualFold(pr.method, http.MethodPost) {
+		return false
+	}
+	return strings.HasSuffix(pr.pathPat, unlockRouteSuffix)
+}
+
+// resolveUnlockProbePath finds a concrete path that the mux itself dispatches to
+// pat under host. It returns "" when no positional filling reaches that pattern —
+// the caller reports that as undrivable rather than skipping it.
+func resolveUnlockProbePath(mux *http.ServeMux, pat, host string) (string, string) {
+	pr := gateRouteProbeFor(pat)
+	for _, pth := range unlockPatternFillings(pr) {
+		req := httptest.NewRequest(http.MethodPost, pth, nil)
+		req.Host = host
+		h, got := mux.Handler(req)
+		if got == pat {
+			return pth, handlerKey(h)
+		}
+	}
+	return "", ""
+}
+
+// unlockBurstCodes fires n concurrent POSTs at probePath from ONE address and
+// returns the status codes observed, in any order. No *testing.T: it runs from
+// goroutines.
+//
+// middleware.ClientIP reads CF-Connecting-IP first (else X-Real-IP, else the
+// socket peer), so setting it is how the probe plays "these requests came from
+// one address".
+func unlockBurstCodes(hnd http.Handler, host, probePath, ip string, n int) []int {
+	codes := make([]int, n)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			req := httptest.NewRequest(http.MethodPost, probePath, strings.NewReader(`{"password":"not-it"}`))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("CF-Connecting-IP", ip)
+			req.Host = host
+			rec := httptest.NewRecorder()
+			<-start // released together: the burst must land inside one refill window
+			hnd.ServeHTTP(rec, req)
+			codes[i] = rec.Code
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	return codes
+}
+
+// countStatus counts one status code in a burst.
+func countStatus(codes []int, want int) int {
+	n := 0
+	for _, c := range codes {
+		if c == want {
+			n++
+		}
+	}
+	return n
+}
+
+// unlockBurstSummary renders a burst's status codes, so a red is readable
+// without re-running the probe.
+func unlockBurstSummary(codes []int) string {
+	seen := map[int]int{}
+	var order []int
+	for _, c := range codes {
+		if _, ok := seen[c]; !ok {
+			order = append(order, c)
+		}
+		seen[c]++
+	}
+	var b strings.Builder
+	for _, c := range order {
+		fmt.Fprintf(&b, "%d x%d  ", c, seen[c])
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// TestEveryUnlockRouteIsLimitedAtTheRouter is the mechanical class guard: every
+// `.../unlock` pattern the ROUTER holds must answer a burst with a 429 — i.e. be
+// limited — no matter how its registration was spelled or which file wrote it.
+//
+// It replaces a single-line text regex over `mux.Handle` call sites, which
+// reported GREEN on a live, unwrapped, indirectly-registered unlock route
+// (measured; see the file header). This guard has no shape to miss: it walks the
+// router's own table and judges the router's own behaviour.
+func TestEveryUnlockRouteIsLimitedAtTheRouter(t *testing.T) {
+	mux := serverMux()
+	patterns := muxPatterns(t, mux)
+	if len(patterns) < unlockRoutePatternFloor {
+		t.Fatalf("walked only %d registered pattern(s) from the server's mux (expected at least "+
+			"%d) — the route-table walk is blind, so this guard would cover only whatever it happens "+
+			"to see instead of every registered route. Patterns: %v",
+			len(patterns), unlockRoutePatternFloor, patterns)
 	}
 
-	var found, unwrapped []string
-	for _, e := range entries {
-		name := e.Name()
-		// Production sources only. A TEST may legitimately register an
-		// UNWRAPPED route as a control (to prove the limiter is what throttles),
-		// so scanning _test.go files would make this guard fire on its own
-		// fixtures rather than on production.
-		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+	type unlockRoute struct {
+		pattern string
+		handler string
+		path    string
+	}
+
+	var found []unlockRoute
+	var undrivable []string
+
+	for _, pat := range patterns {
+		if !unlockRouteMatches(pat) {
 			continue
 		}
-		raw, err := os.ReadFile(filepath.Join(pkgDir, name))
-		if err != nil {
-			t.Fatalf("read %s: %v", name, err)
+		probePath, hKey := resolveUnlockProbePath(mux, pat, unlockProbeHost)
+		if probePath == "" {
+			// A pattern this guard cannot drive is a pattern it cannot judge.
+			// Failing by name here is the point: silently skipping it is how a
+			// route stops being covered without anything going red.
+			undrivable = append(undrivable, pat)
+			continue
 		}
-		for _, line := range strings.Split(string(raw), "\n") {
-			line = strings.TrimSpace(line)
-			if !unlockRegistrationRe.MatchString(line) {
-				continue
-			}
-			entry := fmt.Sprintf("%s: %s", name, line)
-			found = append(found, entry)
-			if !strings.Contains(line, "middleware.RateLimit") {
-				unwrapped = append(unwrapped, entry)
-			}
+		found = append(found, unlockRoute{pattern: pat, handler: hKey, path: probePath})
+	}
+
+	if len(undrivable) > 0 {
+		t.Errorf("%d `...%s` pattern(s) are registered but could not be driven on host %s: %v — a "+
+			"pattern this guard cannot reach is a pattern it cannot judge, so it is reported here by "+
+			"name instead of being dropped from the covered set.",
+			len(undrivable), unlockRouteSuffix, unlockProbeHost, undrivable)
+	}
+
+	// Non-vacuity: the routes this guard is about must be IN the enumeration, or
+	// the walk stopped seeing them and a green here would prove nothing.
+	if len(found) < unlockRouteDiscoveryMin {
+		t.Fatalf("found only %d `...%s` pattern(s) in the router — fewer than the %d this guard is "+
+			"required to cover, so either the walk is blind or the routes are gone, and a green here "+
+			"would be about a set the guard does not cover. Found: %v",
+			len(found), unlockRouteSuffix, unlockRouteDiscoveryMin, found)
+	}
+
+	// ── drive each one: an unlock is a PASSWORD ORACLE and must be limited ──
+	var unlimited []string
+	var lines []string
+	for _, u := range found {
+		ip := uniqueTestIP()
+		codes := unlockBurstCodes(mux, unlockProbeHost, u.path, ip, unlockClassProbeBurst)
+		summary := unlockBurstSummary(codes)
+		lines = append(lines, fmt.Sprintf("%-42s %-44s -> %s", u.pattern, u.path, summary))
+		if countStatus(codes, http.StatusTooManyRequests) == 0 {
+			unlimited = append(unlimited, fmt.Sprintf("%s  (driven at %s, handler %s) -> %s",
+				u.pattern, u.path, u.handler, summary))
 		}
 	}
 
-	// Non-vacuity: the routes this card is about must be in the scan, or the
-	// regex stopped matching and this guard proves nothing.
-	if len(found) < 3 {
-		t.Fatalf("found only %d `.../unlock` registration(s) in the package's production sources — "+
-			"the scan is broken, so this guard would pass vacuously. Found:\n  %s",
-			len(found), strings.Join(found, "\n  "))
-	}
+	t.Logf("%d `...%s` pattern(s) enumerated from the router and driven with a burst of %d from "+
+		"one address:\n  %s", len(found), unlockRouteSuffix, unlockClassProbeBurst, strings.Join(lines, "\n  "))
 
-	if len(unwrapped) > 0 {
-		t.Fatalf("%d `.../unlock` route(s) are registered WITHOUT middleware.RateLimit.\n"+
-			"An unlock is a password oracle — it runs an argon2id check against the form's real\n"+
-			"access hash and answers 403/200 — so an unwrapped one is an unlimited online\n"+
-			"guessing surface. Register it the way /order is:\n"+
+	if len(unlimited) > 0 {
+		t.Fatalf("%d `...%s` route(s) are registered WITHOUT a limiter: a burst of %d wrong "+
+			"passwords from one address produced NO 429, so each is an unlimited online guessing "+
+			"surface. An unlock runs an argon2id check against the form's real access hash and "+
+			"answers 403/200, so it must carry the same limiter as the /order route beside it:\n"+
 			"  mux.Handle(\"POST <pattern>\", middleware.RateLimit(http.HandlerFunc(h.<handler>)))\n"+
-			"Offending registration(s):\n  %s", len(unwrapped), strings.Join(unwrapped, "\n  "))
+			"Offending route(s):\n  %s",
+			len(unlimited), unlockRouteSuffix, unlockClassProbeBurst, strings.Join(unlimited, "\n  "))
+	}
+}
+
+// TestUnlockClassGuardSeesARouteRegisteredIndirectly pins the property this card
+// exists for, at the cause: a route registered through a HELPER — no literal
+// `mux.Handle` with a "/unlock" pattern anywhere — must be enumerated by the walk
+// this guard uses, and must be judged UNLIMITED when it is not wrapped.
+//
+// It builds its OWN mux, so it proves the INSTRUMENT reaches the indirect shape
+// without depending on the shipped routes staying a particular size — including
+// that a future re-narrowing of the guard back to a source scan (which this tree
+// would satisfy: three literal routes, all wrapped) cannot go unnoticed.
+func TestUnlockClassGuardSeesARouteRegisteredIndirectly(t *testing.T) {
+	// The indirection that defeated the text regex: the pattern is a VARIABLE at
+	// the call site, and the actual registration lives in a helper.
+	registerIndirect := func(mux *http.ServeMux, pattern string, h http.HandlerFunc) {
+		mux.HandleFunc(pattern, h)
 	}
 
-	t.Logf("%d `.../unlock` registration(s) scanned, all RateLimit-wrapped:\n  %s",
-		len(found), strings.Join(found, "\n  "))
+	for _, tc := range []struct {
+		name      string
+		wrapped   bool
+		wantLimit bool
+	}{
+		{"unwrapped indirect route is judged UNLIMITED", false, false},
+		{"wrapped indirect route is judged limited", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			noop := func(http.ResponseWriter, *http.Request) {}
+			mux := http.NewServeMux()
+			if tc.wrapped {
+				registerIndirect(mux, "POST /qa-indirect/{slug}/unlock", unlockedHandler(noop))
+			} else {
+				registerIndirect(mux, "POST /qa-indirect/{slug}/unlock", noop)
+			}
+			// A sibling that is NOT an unlock, so the recogniser is exercised too.
+			registerIndirect(mux, "POST /qa-indirect/{slug}/order", noop)
+
+			var seen []string
+			for _, p := range muxPatterns(t, mux) {
+				if unlockRouteMatches(p) {
+					seen = append(seen, p)
+				}
+			}
+			if !contains(seen, "POST /qa-indirect/{slug}/unlock") {
+				t.Fatalf("the walk did not enumerate the INDIRECTLY registered route %q (it saw %v). "+
+					"That is the card's defect: a registration the guard cannot see is a route it "+
+					"cannot judge, and the guard reports green while the route ships unwrapped.",
+					"POST /qa-indirect/{slug}/unlock", seen)
+			}
+			if contains(seen, "POST /qa-indirect/{slug}/order") {
+				t.Fatalf("the recogniser also claimed the sibling %q as an unlock (%v) — the "+
+					"recognition rule is not the `%s` suffix",
+					"POST /qa-indirect/{slug}/order", seen, unlockRouteSuffix)
+			}
+
+			codes := unlockBurstCodes(mux, unlockProbeHost, "/qa-indirect/jf-probe-form/unlock",
+				uniqueTestIP(), unlockClassProbeBurst)
+			throttled := countStatus(codes, http.StatusTooManyRequests)
+			if tc.wantLimit && throttled == 0 {
+				t.Fatalf("a WRAPPED indirect route was not limited by the probe (%s) — the probe is "+
+					"not measuring the limiter, so a green in the class guard would mean nothing",
+					unlockBurstSummary(codes))
+			}
+			if !tc.wantLimit && throttled > 0 {
+				t.Fatalf("an UNWRAPPED indirect route answered 429 (%s) — something other than the "+
+					"limiter produces 429 here, which would make the class guard green on an unlimited "+
+					"route", unlockBurstSummary(codes))
+			}
+		})
+	}
+}
+
+// unlockedHandler wraps a handler in the same wrapper the production unlock
+// routes use, so the sabotage test above can build its own mux without depending
+// on a production registration staying in place.
+func unlockedHandler(h http.HandlerFunc) http.HandlerFunc {
+	limited := middleware.RateLimit(http.HandlerFunc(h))
+	return func(w http.ResponseWriter, r *http.Request) { limited.ServeHTTP(w, r) }
+}
+
+// TestUnlockRoutesAreLimitedThroughTheServedChain is the second direction of the
+// same property: the three unlock routes must be limited through the FULL server
+// chain, not only on the bare mux — and they must be the routes the guard's own
+// enumeration found. It drives Server.Handler() (the real middleware stack:
+// RealIP → Secure → recoverer → Logger → RequestID → mux).
+//
+// It exists because the class guard's enumeration comes from serverMux(), a
+// mirror of Server.Handler()'s registrations written out by hand. This test
+// closes the gap that leaves: if a handler group or one of these registrations
+// moves out of the groups serverMux() assembles, the served chain stops
+// answering these paths, and this fails by name.
+func TestUnlockRoutesAreLimitedThroughTheServedChain(t *testing.T) {
+	srv := NewServer(&config.Config{
+		Port:        "0",
+		DatabaseURL: "postgres://localhost/jomform_test",
+		AppBaseURL:  "http://localhost:8080",
+		Env:         "dev",
+	}, testLogger(), &Deps{Public: &PublicHandlers{}})
+	hnd := srv.Handler()
+
+	known := []struct{ pattern, path string }{
+		{"POST /{slug}/unlock", "/jf-probe-form/unlock"},
+		{"POST /f/{slug}/unlock", "/f/jf-probe-form/unlock"},
+		{"POST /embed/f/{wsslug}/{slug}/unlock", "/embed/f/jf-probe-ws/jf-probe-form/unlock"},
+	}
+
+	// The guard's own enumeration must carry these names, so a rename cannot
+	// shrink the judged set while this test still passes on the old paths.
+	var enumerated []string
+	for _, p := range muxPatterns(t, serverMux()) {
+		if unlockRouteMatches(p) {
+			enumerated = append(enumerated, p)
+		}
+	}
+
+	for _, k := range known {
+		if !contains(enumerated, k.pattern) {
+			t.Errorf("the class guard's enumeration does not carry %q (it has %v) — an unlock route "+
+				"registered outside the groups serverMux() assembles is outside the guard.",
+				k.pattern, enumerated)
+			continue
+		}
+		// A bare PublicHandlers resolves no form, so the route answers 404 — what
+		// this asserts is the LIMITER, which runs before the handler either way.
+		burst := unlockBurstCodes(hnd, unlockProbeHost, k.path, uniqueTestIP(), unlockClassProbeBurst)
+		if countStatus(burst, http.StatusTooManyRequests) == 0 {
+			t.Errorf("POST %s through the served chain (%s): a burst of %d from one address produced "+
+				"NO 429 — the route is unthrottled on the server, whatever the bare mux shows. codes: %s",
+				k.path, k.pattern, unlockClassProbeBurst, unlockBurstSummary(burst))
+		}
+	}
+
+	// And the threshold: exactly the burst must be served, so the limiter is not
+	// tighter on the served chain than the /order precedent (this is the same
+	// property TestUnlockRateLimitSparesTheFirstBuyers pins behaviourally with a
+	// real form; here it pins that the bare-mux numbers above are the same shape).
+	codes := unlockBurstCodes(hnd, unlockProbeHost, "/jf-probe-form/unlock", uniqueTestIP(), 10)
+	if n := countStatus(codes, http.StatusTooManyRequests); n > 0 {
+		t.Errorf("POST /jf-probe-form/unlock through the served chain: %d of the first 10 requests "+
+			"from one address were throttled (%s) — tighter than the burst-10 precedent",
+			n, unlockBurstSummary(codes))
+	}
+	t.Logf("served chain: %d `...%s` route(s) enumerated, all three limited through the full stack",
+		len(enumerated), unlockRouteSuffix)
+}
+
+// TestUnlockPatternIsIdentifiedByItsTailNotItsWholePath pins the recogniser the
+// enumeration rests on: a route is an unlock because its PATTERN ends in
+// "/unlock" and is POST-reachable — not because it matches one remembered
+// spelling. A future unlock at a new prefix (`/qa-new/{slug}/unlock`, or a
+// helper-registered `/anything/{x}/unlock`) is therefore inside the guard's scope
+// the moment it is registered, which is the whole difference between this guard
+// and the regex it replaces.
+func TestUnlockPatternIsIdentifiedByItsTailNotItsWholePath(t *testing.T) {
+	for _, tc := range []struct {
+		pattern string
+		want    bool
+	}{
+		{"POST /{slug}/unlock", true},
+		{"POST /f/{slug}/unlock", true},
+		{"POST /embed/f/{wsslug}/{slug}/unlock", true},
+		{"POST /qa-indirect/{slug}/unlock", true},
+		{"POST /anything/{x}/{y}/unlock", true},
+		// No method token: net/http matches such a pattern for POST too, so it is
+		// an unlock a gate can post to and must be judged.
+		{"/no-method/{slug}/unlock", true},
+		// The bare suffix is a POST route ending in "/unlock": judged too, because
+		// whether it reaches an unlock HANDLER is not this recogniser's question.
+		{"POST /unlock", true},
+		// Not unlocks: the suffix is not at the END of the path.
+		{"POST /{slug}/unlock-harder", false},
+		{"POST /{slug}/unlocked", false},
+		// Not POST-reachable, so no gate fetch can reach it.
+		{"GET /{slug}/unlock", false},
+		{"DELETE /{slug}/unlock", false},
+		// A sibling route, for contrast with the three above.
+		{"POST /{slug}/order", false},
+	} {
+		if got := unlockRouteMatches(tc.pattern); got != tc.want {
+			t.Errorf("pattern %q classified as unlock=%v, want %v — the recognition rule is \"a "+
+				"POST-reachable pattern whose path ends in %q\", and any other rule is a spelling list "+
+				"a new route can fall outside of", tc.pattern, got, tc.want, unlockRouteSuffix)
+		}
+	}
+}
+
+// TestUnlockProbePathsResolveBackToTheirOwnPattern pins the probe's own
+// precondition: the concrete path it fires at must be one the mux dispatches to
+// the pattern under test. A filling that resolved to a SIBLING route would make
+// the burst a measurement of that sibling, so a limited route could look
+// unlimited (or the reverse) purely because the probe aimed at the wrong
+// registration.
+func TestUnlockProbePathsResolveBackToTheirOwnPattern(t *testing.T) {
+	mux := serverMux()
+	for _, pat := range []string{
+		"POST /{slug}/unlock",
+		"POST /f/{slug}/unlock",
+		"POST /embed/f/{wsslug}/{slug}/unlock",
+	} {
+		if pth, h := resolveUnlockProbePath(mux, pat, unlockProbeHost); pth == "" {
+			t.Errorf("no positional filling of %q resolves back to that pattern on %s (tried %v) — "+
+				"the probe cannot aim at this route, so it would be judged by whatever sibling it "+
+				"actually hits", pat, unlockProbeHost, unlockPatternFillings(gateRouteProbeFor(pat)))
+		} else {
+			t.Logf("%-42s -> %-44s handler=%s", pat, pth, h)
+		}
+	}
+}
+
+// TestUnlockClassGuardFailsOnAnUndrivablePattern pins the failure shape: a
+// registered `.../unlock` pattern the guard cannot turn into a request must be
+// REPORTED, never dropped from the covered set. A silent skip is how a route
+// stops being covered while the run stays green.
+//
+// The trap is a HOST-QUALIFIED pattern — the shape this guard genuinely cannot
+// drive, because it sends every request on ONE host and net/http has no host
+// wildcard (pinned by TestServeMuxRejectsAWildcardHost). It is registered the
+// same way a real route would be, so nothing about the trap is synthetic.
+func TestUnlockClassGuardFailsOnAnUndrivablePattern(t *testing.T) {
+	noop := func(http.ResponseWriter, *http.Request) {}
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /{slug}/unlock", noop)                  // a real, drivable sibling
+	mux.HandleFunc("POST other.example.com/{slug}/unlock", noop) // pinned to another literal host
+
+	drivable, undrivable := 0, 0
+	for _, pat := range muxPatterns(t, mux) {
+		if !unlockRouteMatches(pat) {
+			continue
+		}
+		if pth, _ := resolveUnlockProbePath(mux, pat, unlockProbeHost); pth == "" {
+			undrivable++
+		} else {
+			drivable++
+		}
+	}
+	if drivable != 1 {
+		t.Errorf("expected the drivable sibling to be driven exactly once, got %d — the probe's "+
+			"resolution is not measuring what this test thinks it is", drivable)
+	}
+	if undrivable != 1 {
+		t.Fatalf("the host-qualified trap was not reported undrivable (drivable=%d undrivable=%d) — "+
+			"this guard's undrivable branch does not fire, so a pattern it cannot drive would be "+
+			"dropped from the covered set silently", drivable, undrivable)
+	}
+	t.Logf("undrivable report works: drivable=%d, undrivable=%d", drivable, undrivable)
+}
+
+// contains reports whether needle is in hay.
+func contains(hay []string, needle string) bool {
+	for _, s := range hay {
+		if s == needle {
+			return true
+		}
+	}
+	return false
 }
