@@ -26,9 +26,33 @@ function ConnectForm() {
   const uid = search.get("uid") || "";
 
   const [busy, setBusy] = useState(!!token);
-  const [error, setError] = useState("");
+  // The token path's failure body is kept RAW and translated at RENDER time (see
+  // `error` below), for two independent reasons:
+  //
+  //   1. The token effect must run EXACTLY ONCE per token. `t` cannot be one of
+  //      its dependencies: `t` is a useCallback in components/i18n.tsx keyed on
+  //      `lang`, and its identity changes when the PROFILE language resolves
+  //      (that provider fetches /api/auth/profile and calls setLangState), so a
+  //      user whose dashboard language is not the initial "en" would re-run the
+  //      effect and POST the emailed connect token a second time. Measured
+  //      server-side at a request-counting stub: 1 POST at lang=en, 2 at lang=ms,
+  //      on both the failure and the success path.
+  //   2. The sentence must not be frozen mid-flight. React runs child effects
+  //      BEFORE the provider's, so the POST is normally issued while the
+  //      provider still holds "en" — a pre-translated string would show the
+  //      English sentence to a ms/zh/ta/ar user even though the page around it
+  //      renders in their language. Deriving it at render makes the sentence a
+  //      pure function of (body, lang): correct on arrival, and re-translated on
+  //      a live language switch, with no second POST either way.
+  //
+  // Guarded by src/lib/connectTokenEffect.test.ts.
+  const [failure, setFailure] = useState<{ body: unknown } | null>(null);
+  // The resend path is a click, which happens long after the profile language
+  // has settled, so its sentence is translated at the call site as before.
+  const [resendError, setResendError] = useState("");
   const [done, setDone] = useState(false);
   const [sent, setSent] = useState(false);
+  const error = failure ? apiErr(failure.body, t("connect.fail"), t) : resendError;
 
   // Verify the emailed connect token.
   useEffect(() => {
@@ -52,13 +76,14 @@ function ConnectForm() {
         // Issue #6177 + this card: the failure body is JSON
         // ({"code":"connect.invalid","error":"pautan penghubung tidak sah"}) and
         // rendering `r.text()` printed that envelope verbatim, in the server's
-        // prose language. Parse it and translate the machine code; an unknown
-        // code — or a non-JSON body, which `.catch` leaves as {} — renders this
-        // page's own localized sentence, never the prose.
+        // prose language. Keep the parsed body; `error` above turns its machine
+        // code into this page's own localized sentence, and an unknown code — or
+        // a non-JSON body, which `.catch` leaves as {} — renders that sentence
+        // too, never the prose.
         const body = await r.json().catch(() => ({}));
-        if (!cancelled) setError(apiErr(body, t("connect.fail"), t));
+        if (!cancelled) setFailure({ body });
       } catch {
-        if (!cancelled) setError(t("connect.fail"));
+        if (!cancelled) setFailure({ body: null });
       } finally {
         if (!cancelled) setBusy(false);
       }
@@ -66,11 +91,11 @@ function ConnectForm() {
     return () => {
       cancelled = true;
     };
-  }, [token, router, t]);
+  }, [token, router]);
 
   async function resend() {
     setBusy(true);
-    setError("");
+    setResendError("");
     try {
       const r = await fetch("/api/auth/social/connect/resend", {
         method: "POST",
@@ -82,9 +107,9 @@ function ConnectForm() {
         return;
       }
       const body = await r.json().catch(() => ({}));
-      setError(apiErr(body, t("connect.resendFail"), t));
+      setResendError(apiErr(body, t("connect.resendFail"), t));
     } catch {
-      setError(t("connect.resendFail"));
+      setResendError(t("connect.resendFail"));
     } finally {
       setBusy(false);
     }

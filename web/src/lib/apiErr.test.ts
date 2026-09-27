@@ -300,16 +300,22 @@ test("a failure body is never rendered without going through apiErr/translateApi
   );
 
   // The /connect page is the file this card was filed against: assert the fix
-  // is PRESENT there, not merely that the walk found nothing.
+  // is PRESENT there, not merely that the walk found nothing. The token path now
+  // stores the raw body and derives the sentence AT RENDER (`error` below) — see
+  // src/lib/connectTokenEffect.test.ts for why (a pre-translated string freezes
+  // in the provider's initial language, and translating inside the effect makes
+  // it depend on the translator's identity, which re-POSTs the token). The
+  // property asserted is "the failure body goes through apiErr with a runtime
+  // translator", not "the call is spelled setError(t(...))".
   const connect = readFileSync(`${SRC}app/connect/page.tsx`, "utf8");
   assert.match(
     connect,
-    /setError\(apiErr\(body,\s*t\("connect\.fail"\),\s*t\)\)/,
-    "the reported call site no longer translates the connect error code",
+    /apiErr\(\s*[\w.]*body,\s*t\("connect\.fail"\),\s*t\)/,
+    "the token-failure call site no longer translates the connect error code",
   );
   assert.match(
     connect,
-    /setError\(apiErr\(body,\s*t\("connect\.resendFail"\),\s*t\)\)/,
+    /setResendError\(apiErr\(\s*body,\s*t\("connect\.resendFail"\),\s*t\)\)/,
     "the resend call site no longer translates the connect error code",
   );
   // Code only, not prose: this file's own comment quotes `r.text()` to explain
