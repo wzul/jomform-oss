@@ -34,7 +34,7 @@ import { fileURLToPath } from "node:url";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { Markdown, parseInline, parseMarkdown } from "../components/Markdown.ts";
+import { Markdown, parseInline, parseMarkdown, __withScanProbe } from "../components/Markdown.ts";
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
 
@@ -192,6 +192,166 @@ test("asterisk emphasis is unchanged, including the intra-word form CommonMark a
   assert.equal(visible(render("foo_bar_baz")), "foo_bar_baz", "foo_bar_baz gained or lost characters");
   // A lone underscore next to a space is a literal underscore, not a delimiter.
   assert.equal(visible(render("a_ b _c")), "a_ b _c", "an underscore beside a space was consumed");
+});
+
+// ── 1c. RENDERING IS LINEAR IN THE LENGTH OF THE ANSWER ──────────────────────
+//
+// The defect this section guards. Pairing a `_` opener with the next `_` run that
+// can close was originally done by re-walking the string from each opener. When an
+// opener has NO closer ahead (`'_a '`, `'_private _internal'`), that walk runs to
+// the end and returns null, and the parser then advances ONE character and does it
+// again — O(n²) in the length of the answer. Measured through the real component
+// (react-dom/server, production build) at the chat reply cap of 4000 characters
+// (api/internal/chat/chat.go MaxReplyChars): 164 ms, and ~8 s for the 33 bubbles a
+// full history mounts in one synchronous render (chat/page.tsx MAX_HISTORY = 32).
+// The same shape in the fix is ~4 ms, and the 33-bubble case ~66 ms.
+//
+// TWO ASSERTIONS, because one of them is not enough on its own:
+//   * the WORK assertion is exact and load-independent — it counts the characters
+//     the delimiter scan actually walks, and refuses to let that grow faster than
+//     the input. This is the one that cannot flake.
+//   * the TIME assertion is a coarse backstop for a regression that does its
+//     quadratic work somewhere the counter does not see (a `for` loop inside the
+//     render, say). Its ceiling is deliberately generous — see the ratio bound.
+// Restoring the unbounded forward scan makes BOTH fail.
+
+// The adversarial inputs, at and beyond the real caps. Each is a long run of
+// opener-ish `_` with no closer anywhere ahead, which is the worst case.
+const ADVERSARIAL: [string, string][] = [
+  ["'_a ' repeated", "_a ".repeat(1400).slice(0, 4200)],
+  ["'a _' repeated", "a _".repeat(1400).slice(0, 4200)],
+  ["'__a ' repeated", "__a ".repeat(1050).slice(0, 4200)],
+  ["'_private _internal _tmp' repeated", "_private _internal _tmp ".repeat(170).slice(0, 4200)],
+  ["'_' x 4200 (one giant run)", "_".repeat(4200)],
+  ["'__' x 4200", "__".repeat(2100)],
+];
+
+test("the delimiter scan does not walk the answer once per underscore (the O(n²) guard)", () => {
+  // WHAT THIS COUNTS. Every `_` delimiter the renderer examines, via flanking().
+  // A scan that looks at each delimiter once — this one — makes O(n) such calls;
+  // the per-underscore rescan the card reports made O(n²). Measured on this host
+  // at the chat reply cap (4000 chars of '_a ', api/internal/chat/chat.go
+  // MaxReplyChars) and at 8x that:
+  //
+  //     length   this scan   the rescan it replaced
+  //       1000        668          56 279   (56x the length)
+  //       2000      1 334         223 445
+  //       4000      2 668         891 779  (223x the length)
+  //       8000      5 334       3 560 445  (445x the length)
+  //      16000     10 668      14 233 779  (890x the length)
+  //
+  // So 2x the length is a bound the fix passes with 3x to spare at every size, and
+  // the rescan fails by 28x at the SMALLEST input — before any timing can flake on
+  // a loaded host. This is the assertion that cannot lie; the clock below is the
+  // coarse backstop for a quadratic loop the counter cannot see.
+  const callsAt = (len: number) =>
+    __withScanProbe(() => render("_a ".repeat(Math.ceil(len / 3)).slice(0, len))).work;
+
+  for (const len of [1000, 2000, 4000, 8000]) {
+    const work = callsAt(len);
+    // Vacuity: plain prose has no delimiter at all, so a non-zero reading here
+    // proves the hook is wired to the scan and this test is not passing on zero.
+    assert.ok(
+      work > 0,
+      `the scan reported no delimiter work at all for a ${len}-character answer of underscore ` +
+        `runs — the probe is not measuring the scan, so every bound below is vacuous`,
+    );
+    assert.ok(
+      work <= 2 * len,
+      `the scan examined ${work} delimiters to render a ${len}-character answer (${(work / len).toFixed(1)}x ` +
+        `the length; a single pass is under 1x). Rendering is no longer linear in the length of the ` +
+        `answer — this is the O(n²) underscore scan the card reports.`,
+    );
+  }
+  // 8x the input: a single pass costs 8x the calls (measured 668 -> 5334), the
+  // rescan costs ~63x (56 279 -> 3 560 445). The bound sits between them.
+  const w1000 = callsAt(1000);
+  const w8000 = callsAt(8000);
+  assert.ok(
+    w8000 <= 16 * w1000,
+    `8x the input cost ${(w8000 / Math.max(w1000, 1)).toFixed(1)}x the delimiter work ` +
+      `(1000 chars: ${w1000}, 8000 chars: ${w8000}) — growth faster than linear, i.e. the ` +
+      `quadratic shape is back.`,
+  );
+
+  // Every adversarial shape, at and beyond the cap: a single pass is all the work
+  // permitted, so none of these can hide a per-underscore rescan.
+  for (const [what, src] of ADVERSARIAL) {
+    const { work } = __withScanProbe(() => render(src));
+    assert.ok(
+      work <= 2 * src.length,
+      `${what}: rendering ${src.length} characters examined ${work} delimiters (> 2x the length)`,
+    );
+  }
+
+  // The severity case from the card: the whole conversation. Each bubble is one
+  // pass, so 33 of them are 33 passes — measured 88 044 calls for 33 x 4000
+  // characters (0.67x), against 29 428 707 (223x) for the rescan.
+  const bubble = "_a ".repeat(1334).slice(0, 4000);
+  const { work } = __withScanProbe(() => {
+    for (let k = 0; k < 33; k++) render(bubble);
+  });
+  assert.ok(
+    work <= 2 * 33 * bubble.length,
+    `33 bubbles of ${bubble.length} characters examined ${work} delimiters (> 2x the ` +
+      `${33 * bubble.length} characters present) — a full chat history is O(n²) again`,
+  );
+});
+
+test("an adversarial answer at the cap renders in milliseconds, not tenths of a second", () => {
+  // The symptom the merchant sees, so the clock is asserted directly. The inputs
+  // are the card's adversarial shapes: long runs of opener-ish `_` with no closer
+  // ahead, at and beyond the real caps (chat reply 4000,
+  // api/internal/chat/chat.go MaxReplyChars; feedback body 5000,
+  // api/internal/feedbacksvc/feedbacksvc.go BodyMax).
+  //
+  // Every sample is a best-of-N (min), because host load only ever ADDS time, so
+  // the minimum is the stable estimator. Measured through this component on this
+  // host: fix 4000 chars ~1.4-8.5 ms across ten samples, 16000 chars ~5 ms, 33
+  // bubbles ~62-109 ms; the old unbounded scan 164 ms / 3200 ms / 8032 ms. The
+  // ceilings below sit between the two by a wide margin on the side that matters:
+  // ~9x headroom over the worst sample of the fix, and still 2-2.7x BELOW what the
+  // quadratic shape measured, so restoring it fails rather than squeaks by.
+  const CAP = 4000;
+  const small = "_a ".repeat(Math.ceil(CAP / 3)).slice(0, CAP);
+  const huge = "_a ".repeat(Math.ceil((CAP * 4) / 3)).slice(0, CAP * 4);
+  const bestOf = (src: string, reps: number) => {
+    let best = Infinity;
+    for (let r = 0; r < reps; r++) {
+      const t0 = performance.now();
+      render(src);
+      best = Math.min(best, performance.now() - t0);
+    }
+    return best;
+  };
+  const tCap = bestOf(small, 5);
+  const tHuge = bestOf(huge, 3);
+
+  assert.ok(
+    tCap < 75,
+    `a ${CAP}-character adversarial answer took ${tCap.toFixed(1)} ms to render (ceiling 75 ms). ` +
+      `The fix measures ~4 ms here; the O(n²) scan measured 164 ms.`,
+  );
+  // 4x the input. Linear growth is ~4x the time; the quadratic shape was ~19x
+  // (164 ms -> 3200 ms). The bound is 10x, with a constant so a near-zero
+  // denominator cannot decide the test.
+  assert.ok(
+    tHuge <= 10 * tCap + 50,
+    `4x the input took ${tHuge.toFixed(1)} ms against ${tCap.toFixed(1)} ms for ${CAP} characters ` +
+      `— growth faster than linear. The quadratic scan measured 3200 ms / 164 ms here.`,
+  );
+
+  // The severity case from the card: the /chat page mounting a full history
+  // (chat/page.tsx MAX_HISTORY = 32, so up to 33 <Markdown> in one synchronous
+  // render). 8000 ms of frozen tab was the symptom; the fix is ~66 ms.
+  const t0 = performance.now();
+  for (let k = 0; k < 33; k++) render(small);
+  const total = performance.now() - t0;
+  assert.ok(
+    total < 3000,
+    `33 bubbles of ${CAP} adversarial characters took ${total.toFixed(0)} ms (ceiling 3000 ms) — ` +
+      `a full conversation freezes the tab. The quadratic scan measured ~8000 ms, the fix ~66 ms.`,
+  );
 });
 
 // ── 2. the required element set ──────────────────────────────────────────────

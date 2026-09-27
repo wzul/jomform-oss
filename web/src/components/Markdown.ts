@@ -202,18 +202,10 @@ function isPunct(ch: string): boolean {
   return PUNCT.test(ch);
 }
 
-// A delimiter run is the WHOLE sequence of `_` characters, so `underRun(i)` is
-// how long the run starting at `i` is (and 0 when `src[i]` is not an underscore).
-function underRun(src: string, i: number): number {
-  if (src[i] !== "_") return 0;
-  let end = i;
-  while (end < src.length && src[end] === "_") end++;
-  return end - i;
-}
-
 type Flanking = { left: boolean; right: boolean; beforeWsOrPunct: boolean; afterWsOrPunct: boolean };
 
 function flanking(src: string, start: number, len: number): Flanking {
+  if (__mdScanProbe) __mdScanProbe.work++;
   const before = start === 0 ? "\n" : src[start - 1];
   const after = start + len >= src.length ? "\n" : src[start + len];
   const beforeWsOrPunct = SPACE.test(before) || isPunct(before);
@@ -244,6 +236,104 @@ function underCanClose(src: string, start: number, len: number): boolean {
 
 type UnderEmphasis = { inner: string; length: number };
 
+// The delimiters of ONE source string, resolved in a single left-to-right pass.
+//
+// WHY THIS IS A SCAN AND NOT A LOOP PER `_`. The obvious shape — at each `_` that
+// can open, walk forward for a run that can close — is O(n²): a long answer made
+// of opener-ish runs with no closer ahead (`'_a '` repeated) re-walks the whole
+// remainder once per underscore, and a 4000-character answer (the chat reply cap,
+// api/internal/chat/chat.go MaxReplyChars) took ~220 ms instead of ~1.5 ms. With
+// 32 history bubbles mounting in one render (chat/page.tsx MAX_HISTORY) that is
+// seconds of frozen tab. Two passes make it linear:
+//
+//   1. record the run at every position, and with it the next run that can close
+//      a run of that length (`nextSingle` / `nextDouble`) — one backwards sweep;
+//   2. pair an opener with that precomputed closer, instead of searching again.
+//
+// Pairing is still greedy from the left, which is what the previous forward
+// search did, so the rendered result is unchanged; only the search is.
+type Delims = {
+  /**
+   * Length of the `_` run STARTING at each position (0 where src[i] is not an
+   * underscore) — the same number the old `underRun(src, i)` returned, capped at
+   * 3 because only a run of 1 or 2 can ever be a delimiter of interest and every
+   * longer one is rejected identically.
+   */
+  run: Uint8Array;
+  /** Position of the next run of exactly ONE `_` that can close, at or after i, or -1. */
+  nextSingle: Int32Array;
+  /** Same for a run of exactly two. */
+  nextDouble: Int32Array;
+  /** Position of the next newline at or after i (a single `_` may not cross a line), or -1. */
+  nextNewline: Int32Array;
+};
+
+// Cost accounting, for the guard that proves this scan is linear. Zero in the
+// app; a test sets the probe and reads how much work a render actually did.
+//
+// The counted unit is a FLANKING TEST — the one operation that examines a `_`
+// delimiter. Counted there and not once per scan on purpose: a scan that looks at
+// each delimiter once (this one) makes O(n) such calls, while the per-underscore
+// rescan this replaced makes O(n²) of them, so the counter separates the two
+// without a clock and cannot flake on a loaded host.
+export let __mdScanProbe: { work: number } | null = null;
+
+/** Test seam: count the delimiter work done by render/parse calls in `fn`. */
+export function __withScanProbe<T>(fn: () => T): { result: T; work: number } {
+  const prev = __mdScanProbe;
+  const probe = { work: 0 };
+  __mdScanProbe = probe;
+  try {
+    return { result: fn(), work: probe.work };
+  } finally {
+    __mdScanProbe = prev;
+  }
+}
+
+function scanUnderDelims(src: string): Delims {
+  const n = src.length;
+  // Three linear passes, each bounded by the length of THIS string, plus one
+  // flanking test per run start: O(n) in total. A quadratic version cannot do
+  // that — it re-examines the answer's delimiters once per underscore.
+  const run = new Uint8Array(n);
+  const nextSingle = new Int32Array(n).fill(-1);
+  const nextDouble = new Int32Array(n).fill(-1);
+  const nextNewline = new Int32Array(n).fill(-1);
+
+  // Pass 1 (left to right): the run length at every position, once.
+  for (let i = n - 1; i >= 0; i--) {
+    if (src[i] !== "_") continue;
+    const next = i + 1 < n ? run[i + 1] : 0;
+    run[i] = next > 0 ? Math.min(next + 1, 3) : 1;
+  }
+
+  // Pass 2 (right to left): for every position, the closest delimiter to its
+  // right that could CLOSE a run of that length — so an opener is paired by one
+  // array read instead of by re-walking the rest of the answer.
+  //
+  // Only the START of a run is a candidate. A position in the middle of a longer
+  // run is not a delimiter of its own (that is the `underRun(src, i) === len`
+  // test the forward search applied), and offering one would pair an opener with
+  // a suffix of a `__` run — the fuzz caught exactly that, e.g. `b_ ,_2 2__-*)_`).
+  let single = -1;
+  let double = -1;
+  let nl = -1;
+  for (let j = n - 1; j >= 0; j--) {
+    if (src[j] === "\n") nl = j;
+    nextSingle[j] = single;
+    nextDouble[j] = double;
+    nextNewline[j] = nl;
+    if (src[j] !== "_" || (j > 0 && src[j - 1] === "_")) continue; // not a run start
+    if (run[j] === 1) {
+      if (underCanClose(src, j, 1)) single = j;
+    } else if (run[j] === 2) {
+      if (underCanClose(src, j, 2)) double = j;
+    }
+  }
+
+  return { run, nextSingle, nextDouble, nextNewline };
+}
+
 // underEmphasis looks for `_inner_` (len 1) or `__inner__` (len 2) starting
 // exactly at `pos`, pairing a run that can open with the NEXT run of the same
 // length that can close. Returning null leaves the underscore as literal text,
@@ -253,26 +343,17 @@ type UnderEmphasis = { inner: string; length: number };
 // Like the `*` patterns it replaces, the inner text cannot start or end on
 // whitespace (that is how `_` surrounded by spaces stays a literal underscore),
 // and single-underscore emphasis does not span a line break.
-function underEmphasis(pos: number, len: 1 | 2, src: string): UnderEmphasis | null {
-  if (underRun(src, pos) !== len) return null;
+function underEmphasis(pos: number, len: 1 | 2, src: string, d: Delims): UnderEmphasis | null {
+  if (d.run[pos] !== len) return null;
   if (!underCanOpen(src, pos, len)) return null;
   const contentStart = pos + len;
-  for (let j = contentStart; j < src.length; j++) {
-    // Single-underscore emphasis must not run past the end of its line; the
-    // `__` form may (matching the `*` patterns, which differ the same way).
-    if (len === 1 && src[j] === "\n") return null;
-    if (src[j] !== "_") continue;
-    const closeRun = underRun(src, j);
-    if (closeRun !== len) {
-      j += closeRun - 1;
-      continue;
-    }
-    if (underCanClose(src, j, len)) {
-      return { inner: src.slice(contentStart, j), length: j + len - pos };
-    }
-    j += len - 1;
-  }
-  return null;
+  const close = len === 1 ? d.nextSingle[contentStart] : d.nextDouble[contentStart];
+  if (close < 0) return null;
+  // Single-underscore emphasis must not run past the end of its line; the `__`
+  // form may (matching the `*` patterns, which differ the same way). The closer
+  // index decides it in one comparison instead of a walk to the newline.
+  if (len === 1 && d.nextNewline[contentStart] >= 0 && d.nextNewline[contentStart] < close) return null;
+  return { inner: src.slice(contentStart, close), length: close + len - pos };
 }
 
 // Emphasis may not start or end on whitespace (that is how `2 * 3 * 4` stays
@@ -287,13 +368,17 @@ function at(pos: number, re: RegExp, src: string): RegExpExecArray | null {
 }
 
 function emphasis(kind: "strong" | "em", inner: string, depth: number): Inline {
-  // Nested emphasis inside emphasis is parsed, but only a few levels deep: the
-  // recursion is bounded so a crafted answer cannot turn rendering quadratic.
+  // Nested emphasis inside emphasis is parsed, but only a few levels deep. The
+  // recursion is bounded by MAX_DEPTH AND the scan is linear (scanUnderDelims),
+  // so a crafted answer cannot turn rendering quadratic.
   return { t: kind, v: depth < MAX_DEPTH ? parseInline(inner, depth + 1) : [{ t: "text", v: inner }] };
 }
 
 export function parseInline(src: string, depth = 0): Inline[] {
   const out: Inline[] = [];
+  // One delimiter scan for this string, shared by every `_` position below —
+  // this is the half that makes rendering linear (see scanUnderDelims).
+  const delims = scanUnderDelims(src);
   let text = "";
   let i = 0;
 
@@ -341,7 +426,7 @@ export function parseInline(src: string, depth = 0): Inline[] {
     }
 
     // `__strong__` before `_em_`: a `__` run must not be read as two `_` runs.
-    const strongUnder = underEmphasis(i, 2, src);
+    const strongUnder = underEmphasis(i, 2, src, delims);
     if (strongUnder) {
       if (text) out.push({ t: "text", v: text });
       text = "";
@@ -358,7 +443,7 @@ export function parseInline(src: string, depth = 0): Inline[] {
       continue;
     }
 
-    const emUnder = underEmphasis(i, 1, src);
+    const emUnder = underEmphasis(i, 1, src, delims);
     if (emUnder) {
       if (text) out.push({ t: "text", v: text });
       text = "";
