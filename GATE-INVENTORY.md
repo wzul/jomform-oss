@@ -40,6 +40,7 @@ nothing proves nothing.
 | `test` | api | `cd api && go test ./... -race -count=1` | regressions **and data races** |
 | `govuln` | api | `govulncheck ./...` | known CVEs reachable from the module graph |
 | `web` | web | `cd web && npm run build` | `test:unit` (incl. the cross-language Go-contract guards) then the Next build |
+| `webimage` | web | `docker build -f web/Dockerfile .` (cache-only) | the **shipping web artifact** — no other gate built it, so a tree could be green while `docker build -f web/Dockerfile .` died |
 | `a11y` | web | `cd web && npm run a11y` | axe-core; fails on any **critical/serious** WCAG violation |
 | `npmaudit` | web | `cd web && npm audit --audit-level=high` | high/critical npm advisories |
 | `gitleaks` | secrets | `gitleaks detect` over the **full git history** | committed secrets (repo may go public) |

@@ -21,6 +21,22 @@
 #              test       cd api && go test ./... -race -count=1
 #              govuln     govulncheck over the module graph (CVE scan)
 #   web        build      cd web && npm run build   (runs test:unit first)
+#              webimage   docker build -f web/Dockerfile . — the web IMAGE
+#                         build, i.e. the only command that produces the
+#                         shipping web artifact. Until this line existed no gate
+#                         built it: the preflight ran `npm run build` on the
+#                         HOST, and the image build happened later in
+#                         deploy/build-and-ship.sh, so a tree could be green
+#                         through every gate with an image build that dies at
+#                         `npm run build`. That is exactly the MCP-PARITY.md
+#                         defect (absent from the build context -> ENOENT
+#                         /repo/MCP-PARITY.md inside the image, host suite
+#                         green) and the `context=web/` defect. Run with
+#                         `--output type=cacheonly`: BuildKit executes every
+#                         RUN, resolves every COPY and checks the `.dockerignore`
+#                         filtering against the real context, but exports no
+#                         image, so a full preflight does not leave a ~216 MB
+#                         jomform-web tag behind on every card.
 #              a11y       cd web && npm run a11y    (axe-core, critical/serious)
 #              npmaudit   cd web && npm audit --audit-level=high
 #   secrets    gitleaks   full-history secret scan (not just the tip)
@@ -109,10 +125,26 @@
 #                               refuses), so the count can never be read as
 #                               evidence from an uninstalled tree.
 #   playwright chromium         `cd web && npx playwright install chromium`
+#   docker daemon               the webimage gate. If `docker info` cannot
+#                               reach a daemon the gate is REFUSED (loudly),
+#                               it does not skip: a skipped gate is not a
+#                               passing gate, and this is the one gate that
+#                               covers the shipping artifact. To run the rest
+#                               of the preflight on a host with no daemon, say
+#                               so explicitly with `--skip webimage` (which
+#                               prints the NOT-RUN warning block).
 #
 # RUNTIME (measured on the agent host): api build 13s, vet 13s, test 2m35s,
 #   govuln 25s, web build ~2m, a11y 15s, npm audit 1s, gitleaks 30s, backup ~45s.
 #   Budget ~7 minutes for a full run.
+#   webimage: ~2m COLD (npm ci + next build in the image; measured 196s) and
+#   ~3s warm, because the build cache carries it. So the gate is cheap on a
+#   re-run and only pays for itself when something in the context changed —
+#   which is precisely when it has something to say. `--no-cache-filter build`
+#   is NOT used for that reason: it would pay the cold cost on every run to
+#   catch a class the cache cannot hide (a missing or .dockerignore-excluded
+#   COPY source still fails `failed to compute cache key` with a warm cache —
+#   measured).
 #
 # CONCURRENCY: `go test ./...` gives each test PROCESS its own scratch schema,
 #   named `test_<pkg>_p<pid>` — per-package so parallel packages do not collide,
@@ -142,15 +174,16 @@ if [ -z "${REPO_ROOT:-}" ] || [ ! -d "$REPO_ROOT" ]; then
 fi
 cd "$REPO_ROOT" || exit 1
 
-# `build` is the api build; `web` is `npm run build` in web/. Both are named so
-# --only/--skip can address them without ambiguity.
+# `build` is the api build; `web` is `npm run build` in web/. `webimage` is the
+# web IMAGE build (docker). All are named so --only/--skip can address them
+# without ambiguity.
 #
 # ADDING A GATE: append the name here AND add its `run <name> ...` call below.
 # scripts/preflight_test.sh derives both sides from this file (the inventory via
 # `--list`, the runnable set from the `run <name>` call sites) and FAILS if they
 # disagree, so a gate named here but never run — the silent-coverage-loss shape —
 # is caught by `--only selftest`. No edit to the self-test is needed for gate #N.
-GATE_NAMES=(build vet test govuln web a11y npmaudit gitleaks monitor tmpkey backup prunewt refguard selftest)
+GATE_NAMES=(build vet test govuln web webimage a11y npmaudit gitleaks monitor tmpkey backup prunewt refguard selftest)
 
 ONLY=""
 SKIP=""
@@ -322,7 +355,7 @@ fi
 # proves nothing.
 # ---------------------------------------------------------------------------
 preflight_env() {
-  local need_api="$1" need_web="$2" need_a11y="$3"
+  local need_api="$1" need_web="$2" need_a11y="$3" need_docker="$4"
 
   if [ "$need_api" = 1 ]; then
     [ -n "${JOMFORM_TEST_DATABASE_URL:-}" ] || die \
@@ -356,6 +389,20 @@ preflight_env() {
   if [ "$need_a11y" = 1 ]; then
     [ -x "$REPO_ROOT/web/node_modules/.bin/playwright" ] || die \
       "web/node_modules/.bin/playwright is missing — seed web/node_modules first: cd web && npm ci"
+  fi
+
+  # `webimage` — the one gate that covers the SHIPPING artifact, so a host that
+  # cannot build the image is a REFUSED gate, not a skipped one. Silently
+  # skipping here would reproduce the exact shape this gate was added for: a
+  # preflight that reads green while the only command that builds the artifact
+  # was never run. A host with no daemon has to say `--skip webimage` out loud,
+  # which prints the NOT-RUN block.
+  if [ "$need_docker" = 1 ]; then
+    [ -f "$REPO_ROOT/web/Dockerfile" ] || die \
+      "web/Dockerfile is missing — the webimage gate builds the shipping web artifact and cannot run without it"
+    if ! docker info >/dev/null 2>&1; then
+      die "the docker daemon is unreachable (docker info failed) — the webimage gate builds the web IMAGE, the only artifact that ships, so it is refused rather than skipped. Start the daemon, or state the gap explicitly with: ./scripts/preflight.sh --skip webimage"
+    fi
   fi
 }
 
@@ -400,21 +447,23 @@ summary() {
 }
 
 # --- which gates are selected, for the env preflight ------------------------
-g_build=0; g_vet=0; g_test=0; g_govuln=0; g_web=0; g_a11y=0; g_npmaudit=0; g_gitleaks=0
+g_build=0; g_vet=0; g_test=0; g_govuln=0; g_web=0; g_webimage=0; g_a11y=0; g_npmaudit=0; g_gitleaks=0
 selected build    && g_build=1
 selected vet      && g_vet=1
 selected test     && g_test=1
 selected govuln   && g_govuln=1
 selected web      && g_web=1
+selected webimage && g_webimage=1
 selected a11y     && g_a11y=1
 selected npmaudit && g_npmaudit=1
 selected gitleaks && g_gitleaks=1
 
-need_api=0; need_web=0; need_a11y=0
+need_api=0; need_web=0; need_a11y=0; need_docker=0
 if [ $g_build = 1 ] || [ $g_vet = 1 ] || [ $g_test = 1 ] || [ $g_govuln = 1 ]; then need_api=1; fi
 if [ $g_web = 1 ]; then need_web=1; fi
 if [ $g_a11y = 1 ]; then need_a11y=1; need_web=1; fi
-preflight_env "$need_api" "$need_web" "$need_a11y"
+if [ $g_webimage = 1 ]; then need_docker=1; fi
+preflight_env "$need_api" "$need_web" "$need_a11y" "$need_docker"
 
 # ---------------------------------------------------------------------------
 # api/build — the module still compiles.
@@ -454,6 +503,47 @@ run govuln "cd api && govulncheck ./... (module graph CVE scan)" \
 # ---------------------------------------------------------------------------
 run web "cd web && npm run build (runs test:unit, then next build)" \
   bash -c "cd '$REPO_ROOT/web' && npm run build"
+
+# ---------------------------------------------------------------------------
+# web/webimage — the web IMAGE build: the only command that produces the web
+# artifact that actually ships.
+#
+# WHY IT IS A GATE AND NOT JUST THE SHIP STEP. `deploy/build-and-ship.sh`
+# builds the image at its step 6, AFTER it has already run this preflight
+# (step 5), so until this gate existed NOTHING in the gate set ever built the
+# image — a tree could be green across every gate with `npm run build` passing
+# on the HOST while `docker build -f web/Dockerfile .` died. Both recorded
+# occurrences of that class are in web/Dockerfile's own header: MCP-PARITY.md
+# missing from the build context (`ENOENT: /repo/MCP-PARITY.md` at import, one
+# failing test, `next build` never reached) and a context of `web/` instead of
+# the repo root (`/api/internal/dbstore/...` instead of `/repo/api/...`).
+# web/src/lib/buildContext.test.ts covers the COPY SET for literal reads — it is
+# a good guard and it is NOT enough: it cannot see a `.dockerignore` rule that
+# excludes a COPY source, a malformed COPY, a runtime-stage COPY --from pointing
+# at a path the build stage never produced, or any host-versus-image difference
+# that is not a literal read. Only executing the build sees those.
+#
+# `--output type=cacheonly` is what makes it affordable: BuildKit still executes
+# every RUN, resolves every COPY against the real context (including the
+# `.dockerignore` filtering) and fails on the same errors, but it exports no
+# image. Measured on the agent host: 196s the first time (npm ci + next build in
+# the image), ~3s when the cache carries it. Without it a full preflight would
+# leave another ~216 MB jomform-web tag behind every run. Note that a warm cache
+# does NOT hide the class above: a missing or .dockerignore-excluded COPY source
+# fails `failed to compute cache key` even when every other layer is CACHED.
+#
+# Bite proof: scripts/biteproof_web_image_gate.sh (on demand, ~2.5 min) mutates
+# the context and asserts this gate goes RED while the HOST suite stays green —
+# the whole point — then restores each file byte-identically. The cheap half is
+# per-run: `selftest` checks 13/14 assert the gate exists, is a REAL build (not
+# `--check`, which reports "no warnings found" for a COPY source that does not
+# exist) and refuses rather than skips when docker or web/Dockerfile is missing.
+webimage_run() {
+  cd "$REPO_ROOT" || return 1
+  echo "webimage: docker build --file web/Dockerfile --output type=cacheonly . (context = repo root)"
+  docker build --file web/Dockerfile --output type=cacheonly .
+}
+run webimage "docker build -f web/Dockerfile . (the shipping web image, cache-only)" webimage_run
 
 # ---------------------------------------------------------------------------
 # web/a11y — axe-core. Fails on any critical/serious WCAG violation.

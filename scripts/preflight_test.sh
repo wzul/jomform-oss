@@ -482,8 +482,99 @@ elif [ -n "$site_drift" ]; then
 else
   ok "all $site_count durable sites quote the same test-env path ($canon)"
 fi
+# 13. THE WEB IMAGE BUILD MUST BE ONE OF THE GATES, and it must be the REAL
+#     build. Until 2026-09-22 no gate built the shipping web artifact at all:
+#     the preflight ran `npm run build` on the HOST and the image build happened
+#     afterwards inside deploy/build-and-ship.sh, so a tree could be green
+#     through every gate with an image build that dies (the MCP-PARITY.md
+#     absent-from-context defect, and the `context=web/` defect).
+#     Check 2 keeps --list and the `run` call sites in step, but it stays GREEN
+#     if the image gate is deleted outright — both sides move together. So this
+#     asserts the CAPABILITY, name-agnostically: some gate must run a real
+#     `docker build` of web/Dockerfile.
+#     It must NOT be a `--check` / `--call=` run: those validate the Dockerfile
+#     text but do not execute it, and they do not resolve COPY sources against
+#     the context. Measured on a healthy tree: `docker build --check -f
+#     web/Dockerfile .` prints "Check complete, no warnings found" for a COPY
+#     whose source does not exist. Asserting the class here is what stops a
+#     future "it's slow, let's use --check" edit from turning this gate into a
+#     tautology.
+#     ONLY INVOCATIONS COUNT. A plain `grep 'docker build'` over the active
+#     lines also matches the PROSE that necessarily mentions the command: the
+#     gate's own `echo "webimage: docker build --file web/Dockerfile …"` line
+#     and the human-readable description on the `run webimage "…"` line. Both
+#     stay put when the real command is edited, so they satisfied the
+#     `web/Dockerfile` assertion on their own — measured: repointing the real
+#     command at `api/Dockerfile` left this check GREEN (21 passed / 0 failed)
+#     while the gate built the wrong Dockerfile. Hence the matcher below: a real
+#     invocation starts the line or follows a shell separator, which is exactly
+#     what prose in quotes is not.
+image_invocations="$(grep -E '(^[[:space:]]*docker build|[&;|][[:space:]]*docker build)' <<<"$active")"
+if [ -z "$image_invocations" ]; then
+  bad "no gate in preflight.sh runs 'docker build' — the shipping image (web/Dockerfile) is built by NO gate, so a green preflight does not prove the image builds"
+elif ! grep -qE '(--file|-f)[[:space:]]+web/Dockerfile' <<<"$image_invocations"; then
+  bad "a gate runs 'docker build' but not of web/Dockerfile — the web image is the shipping artifact and must be the one built: [$image_invocations]"
+elif grep -qE '(--check|--call)' <<<"$image_invocations"; then
+  bad "the image gate uses --check/--call, which validate the Dockerfile without executing it: that cannot see a COPY source missing from the context or excluded by .dockerignore (measured: --check reports 'no warnings found' for a COPY whose source does not exist). It must be a real build"
+else
+  ok "a gate runs a real 'docker build' of web/Dockerfile (the shipping web image)"
+fi
 
-# 13. The DOCUMENTED gate table (GATE-INVENTORY.md) must match what the runner can
+# 14. The image gate's PREREQUISITES FAIL LOUDLY, they never skip. Same property
+#     as checks 3/4/5, and it matters more here than anywhere else: this gate
+#     covers the one artifact that ships, so a host where it silently turns
+#     itself off is a host whose green preflight proves nothing about the image.
+#     Both halves are deterministic and offline: a fake `docker` on the PATH
+#     decides whether the daemon looks reachable, and the sandbox controls
+#     whether web/Dockerfile exists.
+FAKEBIN="$SB/fakebin"
+mkdir -p "$FAKEBIN"
+# `info` succeeds so the daemon check is satisfied; anything else is a hard
+# error, so a gate that (wrongly) proceeded would be unmistakable in the log.
+cat > "$FAKEBIN/docker" <<'FAKE'
+#!/bin/sh
+if [ "${1:-}" = "info" ]; then exit 0; fi
+echo "FAKE DOCKER WAS CALLED: $*" >&2
+exit 99
+FAKE
+chmod +x "$FAKEBIN/docker"
+
+# 14a. No web/Dockerfile (the sandbox has none): refused, naming the file, and
+#      the gate itself must never have started.
+out=$(PATH="$FAKEBIN:$PATH" ./scripts/preflight.sh --only webimage 2>&1)
+rc=$?
+if [ $rc -ne 0 ] && grep -q 'web/Dockerfile is missing' <<<"$out" && \
+   ! grep -q 'gate \[webimage\]' <<<"$out" && \
+   ! grep -q 'FAKE DOCKER WAS CALLED' <<<"$out"; then
+  ok "missing web/Dockerfile -> image gate refused as a prerequisite, before it ran (rc=$rc)"
+else
+  bad "a missing web/Dockerfile must refuse the image gate as a prerequisite (before it runs), got rc=$rc [$(grep -iE 'PREFLIGHT FAIL|gate \[webimage\]|FAKE DOCKER' <<<"$out" | tr '\n' ' ')]"
+fi
+
+# 14b. An unreachable docker daemon: refused with the daemon named, NOT skipped.
+#      A skipped gate is not a passing gate, and this is the gate that covers
+#      the shipping artifact — the one place a silent skip is least acceptable.
+mkdir -p "$SB/web"
+cp "$HERE/../web/Dockerfile" "$SB/web/Dockerfile" 2>/dev/null
+cat > "$FAKEBIN/docker" <<'FAKE'
+#!/bin/sh
+if [ "${1:-}" = "info" ]; then echo "Cannot connect to the Docker daemon" >&2; exit 1; fi
+echo "FAKE DOCKER WAS CALLED: $*" >&2
+exit 99
+FAKE
+chmod +x "$FAKEBIN/docker"
+out=$(PATH="$FAKEBIN:$PATH" ./scripts/preflight.sh --only webimage 2>&1)
+rc=$?
+if [ $rc -ne 0 ] && \
+   grep -q 'docker daemon is unreachable' <<<"$out" && \
+   ! grep -q 'gate \[webimage\]' <<<"$out"; then
+  ok "unreachable docker daemon -> image gate refused (not skipped) naming the daemon (rc=$rc)"
+else
+  bad "an unreachable docker daemon must refuse the image gate rather than skip it, got rc=$rc [$(grep -iE 'PREFLIGHT FAIL|gate \[webimage\]' <<<"$out" | tr '\n' ' ')]"
+fi
+rm -f "$SB/web/Dockerfile"
+
+# 15. The DOCUMENTED gate table (GATE-INVENTORY.md) must match what the runner can
 #     actually do, in BOTH directions. This is the drift that motivated moving the
 #     table out of AGENTS.md: that file is write-gated, so a headless worker that
 #     adds a gate CANNOT add its row (its write is refused and the card blocks),
@@ -510,7 +601,7 @@ else
 
 fi
 
-# 14. The self-test must run on its OWN lock file, never the production one.
+# 16. The self-test must run on its OWN lock file, never the production one.
 #     Every invocation above goes through scripts/preflight.sh, which takes the
 #     concurrency lock BEFORE it validates arguments or prerequisites — so on a
 #     busy board this whole self-test would otherwise queue behind a card's gate

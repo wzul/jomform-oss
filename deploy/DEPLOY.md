@@ -23,11 +23,23 @@ emergency only, and the resulting image carries no gate evidence.
 ### Per-tree prerequisites (the gate refuses without them)
 
 The preflight is run inside whichever tree you are in, and a fresh worktree has
-no dependencies. Two seeds, once per tree:
+no dependencies. Three seeds, once per tree:
 
 ```bash
 cd web && npm ci                                        # web build / a11y / unit suite
 source ${JOMFORM_ENV:-$HOME/.config/jomform/test-env.sh}  # JOMFORM_TEST_DATABASE_URL + JOMFORM_TEST_VALKEY_URL
+docker info                                             # the `webimage` gate (see below)
+```
+
+The `webimage` gate is the only gate that builds the **shipping web artifact**,
+so its prerequisite is treated exactly like the two above: an unreachable docker
+daemon is a **refusal**, not a skip — `scripts/preflight.sh` exits non-zero with
+the daemon named, because a preflight that turns this gate off is a green run
+that proves nothing about the image. On a host with no daemon you have to say so
+out loud, which prints the NOT-RUN warning block:
+
+```bash
+./scripts/preflight.sh --skip webimage
 ```
 
 The `web` gate's dependency refusal is worth knowing about, because the failure
@@ -82,7 +94,26 @@ mapping only):
 | `npm run a11y` (axe-core) | gate `a11y` |
 | `npm audit --audit-level=high` | gate `npmaudit` |
 | `gitleaks detect` (full history) | gate `gitleaks` |
+| — (never a CI gate; it did not exist) | gate `webimage` — a real `docker build -f web/Dockerfile` of the **shipping web artifact**, run cache-only |
 | `load-gate.yml` (k6, **on demand only**) | run manually — see `loadtest/BASELINE.md` |
+
+The `webimage` gate has no CI ancestor because nothing in CI ever built the image
+either: the preflight ran `npm run build` on the **host** and the image build
+happened later inside `deploy/build-and-ship.sh`, after the preflight had already
+passed. A tree could therefore be green through every gate while
+`docker build -f web/Dockerfile .` died — which has happened twice (both recorded
+in `web/Dockerfile`'s header: `MCP-PARITY.md` missing from the build context, and
+a `web/` context). `web/src/lib/buildContext.test.ts` guards the COPY **set** for
+literal reads and is not enough: it cannot see a `.dockerignore` rule that
+filters a COPY source out of the context, a runtime-stage `COPY --from=build`
+pointing at a path the build stage never produced, or any host-versus-image
+difference that is not a literal read. The gate runs the build with
+`--output type=cacheonly`, so BuildKit executes every `RUN` and resolves every
+`COPY` against the real context (including `.dockerignore`) while exporting no
+image — measured 196s cold and ~3s warm on the agent host, against ~216 MB of
+image per run if it were a normal build. Its bite proof is on demand
+(`scripts/biteproof_web_image_gate.sh`, ~2.5 min) for the same reason the backup
+suite's is.
 
 The k6 load gate was never a per-PR gate (it was `workflow_dispatch`), so it did
 not move into the preflight; it is documented as a manual on-demand run.
@@ -130,6 +161,11 @@ ENOENT that fails `npm run build`, so the image build exits 1.
 The api image is unaffected: `CONTEXT=api` + `api/Dockerfile` (with its own
 `api/.dockerignore`) still build.
 
+The `webimage` gate runs exactly this command (`docker build --file
+web/Dockerfile --output type=cacheonly .`), so a context or `.dockerignore`
+mistake is caught **before** step 2 rather than by the ship script after the
+preflight has already reported green.
+
 ## Deploy order (the whole sequence, every time)
 
 1. **Tag + release first.** Merge all PRs, then
@@ -141,7 +177,7 @@ The api image is unaffected: `CONTEXT=api` + `api/Dockerfile` (with its own
    ```bash
    source ${JOMFORM_ENV:-$HOME/.config/jomform/test-env.sh}   # JOMFORM_TEST_DATABASE_URL + JOMFORM_TEST_VALKEY_URL
    ./scripts/preflight.sh --list   # the gate inventory (authoritative)
-   ./scripts/preflight.sh          # every gate, ~7 min; runs again inside build-and-ship.sh
+   ./scripts/preflight.sh          # every gate, ~7 min + the webimage build (196s cold, ~3s warm); runs again inside build-and-ship.sh
    ```
    Run it standalone first if you want to see a failure before the lock is held.
 3. Ship the tarball (`SSH_HOST=... ./deploy/build-and-ship.sh` or scp manually).
