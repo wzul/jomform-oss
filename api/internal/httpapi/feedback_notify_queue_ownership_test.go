@@ -84,9 +84,24 @@ func TestFeedbackNotifyQueueKeysAreOwnedByThisProcess(t *testing.T) {
 		}
 	}
 
-	// POSITIVE CONTROL: the shape check must REJECT the pre-fix fixture, or every
-	// assertion above would pass for any name whatsoever. NewQueue is exactly what
-	// the old fixture built its queue with.
+	// POSITIVE CONTROL (per-test name): the shape check must also REJECT a key
+	// that carries this process's pid but NOT this test's name, or the name leg
+	// can be deleted without any gate noticing. Prefix() is the pid-only half of
+	// PrefixFor, built through the same constructor the fixture uses.
+	noName := emailqueue.NewQueueWithPrefix(nil, testdb.Prefix())
+	if noName.ReadyKey() == mine {
+		t.Fatalf("the pid-only namespace %q equals this test's own key %q — this control cannot exercise the "+
+			"name leg because PrefixFor no longer adds the test's name to Prefix", noName.ReadyKey(), mine)
+	}
+	if feedbackQueueOwnershipProblem(noName, pid, t.Name()) == "" {
+		t.Fatalf("the ownership check accepts the process-only key %q (testdb.Prefix() with no test name) — "+
+			"a name two tests in one binary share is what the old flush-at-entry emptied between them",
+			noName.ReadyKey())
+	}
+
+	// POSITIVE CONTROL (production prefix): the shape check must REJECT the
+	// pre-fix fixture, or every assertion above would pass for any name
+	// whatsoever. NewQueue is exactly what the old fixture built its queue with.
 	preFix := emailqueue.NewQueue(nil)
 	if feedbackQueueOwnershipProblem(preFix, pid, t.Name()) == "" {
 		t.Fatalf("the ownership check accepts the production key %q (emailqueue.NewQueue) — the pre-fix fixture "+
