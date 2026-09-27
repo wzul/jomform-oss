@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/wzul/jomform/api/internal/auth"
@@ -32,6 +33,7 @@ import (
 	"github.com/wzul/jomform/api/internal/csvguard"
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/ssrfguard"
+	"github.com/wzul/jomform/api/internal/totpconsume"
 )
 
 // sanitizeTrackingMCP regexes (mirror of httpapi/tracking.go).
@@ -717,10 +719,105 @@ func (s *Server) enableTwoFA(ctx context.Context, _ *mcp.CallToolRequest, in ena
 	return nil, map[string]string{"status": "enabled"}, nil
 }
 
+// disable2FAIn is the input of the disable_2fa MCP tool.
+//
+// Issue #666/#665: both fields exist because the two credential kinds a
+// non-browser MCP client can present are different, and `password` alone cannot
+// serve a magic-link signup — its password is a random UUID the person has never
+// seen, so such an account could not turn its own 2FA off through MCP at all.
+//
+// Exactly ONE of the two fields is the proof; see disable2FATool for the schema
+// that enforces it before a handler ever runs.
 type disableTwoFAIn struct {
-	Password string `json:"password" jsonschema:"Kata laluan akaun untuk pengesahan"`
+	// Password is the account password — the baseline confirmation.
+	Password string `json:"password,omitempty" jsonschema:"Kata laluan akaun untuk pengesahan"`
+	// TOTPCode is a CURRENT code from the authenticator app. It is not a second
+	// factor on top of the password: MCP has no session at all and an API key is
+	// a credential, not a second factor, so the code *replaces* the password as
+	// the proof that the caller really holds this account.
+	TOTPCode string `json:"totp_code,omitempty" jsonschema:"Kod 2FA semasa (6 digit) daripada aplikasi authenticator. Menggantikan kata laluan sebagai bukti, bukan menambah faktor kedua — MCP tiada sesi dan kunci API bukan faktor kedua."`
 }
 
+// disable2FATool is the registered definition of `disable_2fa`.
+//
+// The input schema is written BY HAND instead of being inferred from
+// disableTwoFAIn. Inference cannot express the contract in the Description — "one
+// of the two, not both" — because a struct can only mark a field required or
+// omit it entirely: with `password` required, a client sending only `totp_code`
+// is rejected by schema validation before the handler runs (the exact failure
+// that made the reported code path impossible); with both optional, a caller
+// proving NOTHING reaches the handler.
+//
+// `oneOf` states it exactly: exactly one of {password} | {totp_code}. Measured
+// against this SDK, a call with both fields, with neither, or with an unknown
+// field is rejected by validation, and a call with either one alone reaches the
+// handler:
+//
+//	{"password":"…"}               -> allowed
+//	{"totp_code":"123456"}         -> allowed
+//	{"password":"…","totp_code":…} -> refused (oneOf: validated against both)
+//	{}                             -> refused (did not validate against any)
+//	{"nope":"x"}                   -> refused (additionalProperties:false)
+//
+// The fields are still described in `properties` (not only inside oneOf) so an
+// agent — and the chat assistant, which hands the raw schema to the model — sees
+// them and their descriptions in the normal shape.
+func disable2FATool() *mcp.Tool {
+	str := func(desc string) *jsonschema.Schema {
+		return &jsonschema.Schema{Type: "string", Description: desc}
+	}
+	return &mcp.Tool{
+		Name: "disable_2fa",
+		Description: "Matikan 2FA akaun anda. Bukti yang diterima — TEPAT SATU daripada dua, bukan " +
+			"kedua-duanya: kod 2FA semasa dalam totp_code (kod 6 digit dari aplikasi authenticator, " +
+			"disahkan sekali sahaja dan tidak memerlukan kata laluan) ATAU kata laluan akaun dalam " +
+			"password (untuk akaun yang menyertai melalui pautan emel dan tidak mempunyai kata laluan " +
+			"yang boleh digunakan). Menghantar kedua-duanya ditolak oleh skema, dan tanpa kedua-duanya " +
+			"panggilan ditolak. Kunci API sahaja tidak pernah memadai untuk mematikan faktor kedua. " +
+			"(Borang profil dashboard meminta kod 2FA semasa.) " +
+			// Issue #63/#713: this sentence arrived on main from PR 713, which
+			// changed the tool's plain Description. This tool's definition was
+			// written before that landed (the branch was cut from #686's head),
+			// so the union has to carry the clause here too — otherwise the
+			// revocation behaviour is undocumented while it still happens.
+			"Mematikan 2FA juga membatalkan SEMUA peranti dipercayai akaun — peranti yang " +
+			"melangkau faktor yang kini dibuang tidak boleh kekal dikecualikan (sama seperti REST; " +
+			"guna list_trusted_devices untuk semak).",
+		InputSchema: &jsonschema.Schema{
+			Type: "object",
+			Properties: map[string]*jsonschema.Schema{
+				"password":  str("Kata laluan akaun untuk pengesahan"),
+				"totp_code": str("Kod 2FA semasa (6 digit) daripada aplikasi authenticator. Menggantikan kata laluan sebagai bukti, bukan menambah faktor kedua."),
+			},
+			// No unknown fields: the declared set is the whole contract, so a
+			// typo is a refusal rather than a silently ignored argument.
+			AdditionalProperties: &jsonschema.Schema{Not: &jsonschema.Schema{}},
+			// Exactly one of the two proofs.
+			OneOf: []*jsonschema.Schema{
+				{Required: []string{"password"}},
+				{Required: []string{"totp_code"}},
+			},
+		},
+	}
+}
+
+// disableTwoFA turns 2FA off for the calling account.
+//
+// THE PROOF (one rule, and the same rule the dashboard UI follows):
+//
+//   - `totp_code` supplied → it must be a CURRENT code for this account's own
+//     secret, verified through checkAndConsumeTOTP so it cannot be replayed
+//     (#528), and consumed by the same call. No password is required alongside
+//     it. This is the path a caller takes when the account signs in by emailed
+//     link and never chose a usable password.
+//   - no code → the account password confirms the action, verified whenever it
+//     is used. An API key alone never disables a second factor.
+//
+// The MCP surface has no session, so unlike the REST handler there is no
+// magic/non-magic distinction here: "no code" always means the password path.
+//
+// The single-use rule lives in checkAndConsumeTOTP, not in a copy. A second
+// hand-rolled copy of it is how one surface silently loses the check.
 func (s *Server) disableTwoFA(ctx context.Context, _ *mcp.CallToolRequest, in disableTwoFAIn) (*mcp.CallToolResult, map[string]string, error) {
 	// Issue #645: disabling 2FA weakens a credential — API-key write scope gate.
 	if err := s.requireWriteScope(ctx); err != nil {
@@ -743,9 +840,15 @@ func (s *Server) disableTwoFA(ctx context.Context, _ *mcp.CallToolRequest, in di
 	if err != nil || u == nil {
 		return nil, nil, errors.New("pengguna tidak dijumpai")
 	}
-	ok, err := auth.VerifyPassword(in.Password, u.PasswordHash)
-	if err != nil || !ok {
-		return nil, nil, errors.New("kata laluan tidak sah")
+	if code := strings.TrimSpace(in.TOTPCode); code != "" {
+		if !checkAndConsumeTOTP(ctx, s.deps.Users, u, code) {
+			return nil, nil, errors.New("kod 2FA tidak sah")
+		}
+	} else {
+		ok, err := auth.VerifyPassword(in.Password, u.PasswordHash)
+		if err != nil || !ok {
+			return nil, nil, errors.New("kata laluan tidak sah")
+		}
 	}
 	// Issue #63 (REST parity — httpapi handle2FADisable, api/internal/httpapi/
 	// auth.go): a trusted device waives the 2FA code for 30 days, so once the
@@ -765,6 +868,28 @@ func (s *Server) disableTwoFA(ctx context.Context, _ *mcp.CallToolRequest, in di
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
 	return nil, map[string]string{"status": "disabled"}, nil
+}
+
+// checkAndConsumeTOTP verifies a TOTP code against the account's OWN secret and
+// atomically consumes its time-step, returning true only when the code is valid
+// and had not already been used.
+//
+// The rule itself is NOT implemented here. It lives once in
+// internal/totpconsume, shared with the REST surface (httpapi), because it needs
+// both auth (validate the code and learn which step matched) and dbstore
+// (consume that step atomically) and neither of those packages may import the
+// other (#528).
+//
+// This used to be a hand-rolled copy of the httpapi rule, kept in step by a
+// comment. A comment is not a guard: on the 2FA-disable path, drift between two
+// copies means a code seen once can turn a second factor off twice. Both
+// surfaces now CALL the one rule, and only_one_copy_test.go fails the build if a
+// second copy comes back.
+//
+// A false return is a REJECTED code (wrong code, replayed code, or 2FA not
+// enabled). It is never a reason to fall back to the password check.
+func checkAndConsumeTOTP(ctx context.Context, users *dbstore.UserStore, u *dbstore.User, code string) bool {
+	return totpconsume.ConsumeCode(ctx, users, u, code)
 }
 
 // ─── Trusted devices (issue #454) ─────────────────────────────────────────
