@@ -157,6 +157,41 @@ layout in the chain paints a light surface over its `{children}` — which is th
 case for the dashboard pages, and what keeps the tab-strip defect at 4.48:1
 reported.
 
+### `--jf-primary` on a non-white surface (browser guard)
+
+The base brand token `--jf-primary` (#5e6ad2) passes AA on white (4.700:1) and
+**fails on the app page background** (4.417:1 on #f7f8f8) and on slate-50
+(4.492:1). That is why a site has to be judged against the surface it actually
+paints on rather than by the class list: the *same* active-tab class string
+reads as green in the builder (`web/src/app/builder/page.tsx`, whose `<nav>`
+declares `bg-white`) and as an axe `color-contrast` **serious** node in
+`/form-settings` (whose `<nav>` paints nothing, so the page background shows
+through). The AA-safe replacement already exists and needs no new token:
+`--jf-primary-on-tint` (#4338ca) measures 7.428:1 on #f7f8f8, 7.554:1 on
+slate-50 and 7.903:1 on white, so it is safe on every light surface here.
+
+`web/e2e/form-settings-tabstrip-contrast.spec.ts` holds `/form-settings` in
+place. It is a **browser** guard, not a source grep, and it runs in the `a11y`
+gate (`npm run a11y`, the whole `web/e2e/` directory) with the API stubbed at
+the browser level, so it needs no Go server, session or database:
+
+1. it clicks a real tab and reads the painted foreground and the **composited**
+   background out of the live DOM, resolving both by painting them onto a canvas
+   (Tailwind v4 does not emit these colours as `rgb()`), then asserts the exact
+   ratio against 4.5 **and** against the pre-fix 4.417 — so a rounded value
+   cannot be argued into a pass and a `#ffffff` measurement cannot pass
+   vacuously;
+2. it scopes axe to that same strip and asserts `color-contrast` both reports
+   nothing **and** actually ran over the subtree, so a scan that analysed
+   nothing is not read as clean;
+3. it asserts the active tab keeps its `border-[#7170ff]` underline, i.e. the
+   non-colour affordance that marks it active survives the token change.
+
+Verified to bite: with the pre-fix token restored the spec is red for the active
+tab at 4.417:1 and axe names the exact node — "insufficient color contrast of
+4.41 (foreground color: #5e6ad2, background color: #f7f8f8, font size: 10.5pt
+(14px), font weight: normal)" on `.border-b-2`.
+
 The guard's lexer and JSX scanner live in `web/src/lib/jsxSource.ts`, shared with
 the tinted-surface guard. They blank comments before reading class lists, and
 they only honour a comment opener outside JSX **text**: the literal route pattern

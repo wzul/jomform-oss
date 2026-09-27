@@ -1215,7 +1215,23 @@ function FormSettingsInner() {
 
         {formId && (
           <>
-            {/* Tab bar */}
+            {/* Tab bar.
+                The ACTIVE label must clear AA on the surface the strip is
+                actually painted on. This nav paints no background of its own,
+                so its nearest painting ancestor is the PAGE background
+                (`globals.css`: `html, body { background: var(--jf-bg) }` =
+                #f7f8f8). Base `--jf-primary` (#5e6ad2) measures 4.417:1 there
+                — below the 4.5:1 AA floor at this 14px/500 weight — while the
+                same token PASSES on white (4.700:1), which is why the builder's
+                identical strip (`builder/page.tsx`, whose nav declares
+                `bg-white`) is clean and this one is not. Found by axe
+                (`color-contrast`, serious) on a production build; the
+                `--jf-primary-on-tint` token (#4338ca, 7.428:1 here) is the
+                AA-safe pair this app already uses wherever the base token's
+                surface is not white. Guard:
+                `web/e2e/form-settings-tabstrip-contrast.spec.ts` — it measures
+                the painted colours in a real browser, not the class list, and
+                is part of the `a11y` preflight gate. */}
             <nav className="mt-6 flex flex-wrap gap-1 border-b border-[var(--jf-border)]">
               {TABS.map((tb) => (
                 <button
@@ -1223,7 +1239,7 @@ function FormSettingsInner() {
                   onClick={() => setTab(tb.key)}
                   className={`px-3 py-2 text-sm font-medium ${
                     tab === tb.key
-                      ? "border-b-2 border-[#7170ff] text-[var(--jf-primary)]"
+                      ? "border-b-2 border-[#7170ff] text-[var(--jf-primary-on-tint)]"
                       : "text-[var(--jf-muted)] hover:text-[#374151]"
                   }`}
                 >
