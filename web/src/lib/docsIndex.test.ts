@@ -835,14 +835,206 @@ test("the agent-facing llms-full.txt index points at the same pages", () => {
   assert.deepEqual(broken, [], `llms-full.txt links at content that does not exist:\n  ${broken.join("\n  ")}`);
 });
 
+// ── the sidebar and the index describe ONE structure, checked BOTH ways ──────
+//
+// WHY THIS IS NOT JUST "index -> sidebar". The test below has always SAID the
+// contract is two-way — "A page that exists only in the sidebar, or a sidebar
+// that forgets a page, sends the reader to a list that disagrees with the one
+// they are on" — and only ever implemented the second half. The first half had
+// never run, so it could not fail: on main 87040114 `/docs/builder` is a real
+// route listed in the sidebar's "Start here" group with no entry anywhere on the
+// /docs index, and the old body still passed 9/9. Two further holes in that body,
+// both closed here: it matched the sidebar as a substring of the layout's SOURCE
+// (`nav.includes('"/docs/x"')`), which a comment satisfies; and it read only
+// `entries`, so a route reached through a group's `more` link or the quick-link
+// row was never looked at.
+//
+// WHY THE TWO LISTS ARE NOT EQUAL, and what is asserted instead. The sidebar is
+// deliberately a superset of the index — /docs/builder, /docs/chat and
+// /docs/feedback are reached from each feature's own inline "?" and are not
+// indexed. Asserting set equality would fail a correct tree, so the contract is
+// checked as three properties:
+//
+//   (a) every sidebar row is a /docs route, and that route is a page file that
+//       exists and declares the anchor the row points at. A typo'd or deleted
+//       page in the nav is a 404 or a top-of-page landing that nothing else
+//       reads: the sidebar's own deep links are `href:` data, so the app-wide
+//       `href="/docs..."` scan above never sees them.
+//   (b) every sidebar route is REACHABLE from the index — an entry's href, a
+//       group's `more` link, or the quick-link row — unless it is named in
+//       NOT_INDEXED_BY_DESIGN, and each of those must really be linked from the
+//       app's own source outside the docs tree, so the allowlist cannot be used
+//       to park a nav row that nothing links to at all.
+//   (c) every route the index links is in the sidebar — the direction that did
+//       exist, widened from `entries` to all three ways the index links.
+//
+// The allowlist is checked in both directions too (an entry the index can now
+// reach is dead weight; an entry for a route the sidebar does not carry means
+// the list drifted from the nav), because an allowlist that only grows is how a
+// guard quietly stops guarding.
+//
+// What this still cannot see, stated plainly: it reads the SOURCE of the nav and
+// of the index, not the built HTML, so a row rendered by a branch that never
+// runs would be counted (nothing in this file's shape does that today), and a
+// row whose label is wrong is a review question, not a failure here.
+const DOCS_LAYOUT = "../app/docs/layout.tsx";
+
+// The sidebar's rows, read out of the layout's own NAV_GROUPS + NAV_SECTIONS.
+// The `group` is carried for the failure message only — a reader needs to know
+// which heading the offending row sits under.
+function parseSidebar(src: string): { group: string; href: string }[] {
+  const start = src.indexOf("const NAV_GROUPS");
+  assert.ok(start !== -1, `${DOCS_LAYOUT} no longer declares NAV_GROUPS — the guard's anchor moved`);
+  const groupsEnd = src.indexOf("\n];", start);
+  assert.ok(groupsEnd !== -1, `could not find the end of NAV_GROUPS in ${DOCS_LAYOUT}`);
+  // Comments are stripped before parsing: a commented-out row is not a row, and
+  // the layout's prose comments do name routes (`/docs/builder (#671)`).
+  const rows: { group: string; href: string }[] = [];
+  const region = stripUnrendered(src.slice(start, groupsEnd));
+  for (const g of region.matchAll(/label:\s*"([^"]+)",\s*sections:\s*\[([\s\S]*?)\n\s*\],/g)) {
+    for (const h of g[2].matchAll(/href:\s*"([^"]+)"/g)) rows.push({ group: g[1], href: h[1] });
+  }
+  // Issue #513's deep links, rendered under the same sidebar. They are routes
+  // too, so they are held to the same existence and anchor rules.
+  const sStart = src.indexOf("const NAV_SECTIONS", start);
+  assert.ok(sStart !== -1, `${DOCS_LAYOUT} no longer declares NAV_SECTIONS — the guard's anchor moved`);
+  const sEnd = src.indexOf("\n];", sStart);
+  assert.ok(sEnd !== -1, `could not find the end of NAV_SECTIONS in ${DOCS_LAYOUT}`);
+  for (const h of stripUnrendered(src.slice(sStart, sEnd)).matchAll(/href:\s*"([^"]+)"/g)) {
+    rows.push({ group: "Guides", href: h[1] });
+  }
+  return rows;
+}
+
+// The routes the /docs index links, each with the surface it links them from.
+// Three surfaces, because the page reaches a guide three ways and the old check
+// read the first one only.
+function indexLinkedRoutes(src: string): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const e of entries) if (e.href) out.set(e.href.split("#")[0], `the entry ${JSON.stringify(e.title)}`);
+  const gStart = src.indexOf("const GROUPS");
+  assert.ok(gStart !== -1, `${DOCS_PAGE} no longer declares GROUPS — the guard's anchor moved`);
+  const gEnd = src.indexOf("\n];", gStart);
+  assert.ok(gEnd !== -1, `could not find the end of the GROUPS table in ${DOCS_PAGE}`);
+  const more = stripUnrendered(src.slice(gStart, gEnd));
+  for (const m of more.matchAll(/more:\s*\[([\s\S]*?)\]/g)) {
+    for (const h of m[1].matchAll(/href:\s*"([^"]+)"/g)) out.set(h[1].split("#")[0], "a group's more link");
+  }
+  const qStart = src.indexOf("const QUICK_LINKS");
+  assert.ok(qStart !== -1, `${DOCS_PAGE} no longer declares QUICK_LINKS — the guard's anchor moved`);
+  const qEnd = src.indexOf("\n];", qStart);
+  assert.ok(qEnd !== -1, `could not find the end of the QUICK_LINKS row in ${DOCS_PAGE}`);
+  for (const h of stripUnrendered(src.slice(qStart, qEnd)).matchAll(/href:\s*"([^"]+)"/g)) {
+    out.set(h[1].split("#")[0], "a quick link");
+  }
+  return out;
+}
+
+// Sidebar routes the index deliberately does NOT link, and why. Every one of
+// these must be linked from the app's own source outside the docs tree (the
+// per-feature inline "?" of AGENTS.md documentation-parity rule 4), which is
+// what makes "unreachable from the index" a decision rather than an oversight:
+// a reader looking for the form builder arrives from the builder.
+const NOT_INDEXED_BY_DESIGN: Record<string, string> = {
+  "/docs/builder": 'the builder page\'s inline "?" (src/app/builder/page.tsx)',
+  "/docs/chat": 'the chat page\'s inline "?" (src/app/chat/page.tsx)',
+  "/docs/feedback": 'the feedback page\'s inline "?" (src/app/feedback/page.tsx)',
+};
+
 test("the categories in the docs sidebar match the categories on the page", () => {
-  // One structure, described twice (the /docs page and the docs layout's
-  // sidebar). A page that exists only in the sidebar, or a sidebar that forgets a
-  // page, sends the reader to a list that disagrees with the one they are on.
-  const nav = read("../app/docs/layout.tsx");
-  const pages: string[] = [];
-  for (const e of entries) if (e.href) pages.push(e.href.split("#")[0]);
-  const missing = [...new Set(pages)].filter((p) => !nav.includes(`"${p}"`));
+  const nav = read(DOCS_LAYOUT);
+  const rows = parseSidebar(nav);
+  // Vacuity: a parse that silently found nothing would satisfy every check
+  // below without looking at a single row. The sidebar carries 26 today.
+  assert.ok(
+    rows.length >= 20,
+    `parsed only ${rows.length} rows out of ${DOCS_LAYOUT} — the guard is not looking at the nav`,
+  );
+  const routes = [...new Set(rows.map((r) => r.href.split("#")[0]))].sort();
+
+  // (a) Every row is a /docs route that is a page which exists — and, for the
+  // deep links, one that declares the anchor it points at.
+  const broken: string[] = [];
+  for (const { group, href } of rows) {
+    const [pathname, anchor] = href.split("#");
+    if (pathname !== "/docs" && !pathname.startsWith("/docs/")) {
+      broken.push(`${href} (${group}) — the docs sidebar lists a route outside /docs`);
+      continue;
+    }
+    const file = resolve(pathname);
+    if (!file || !existsSync(path(file))) {
+      broken.push(`${href} (${group}) — no page for ${pathname}`);
+      continue;
+    }
+    if (anchor && !declaresId(file, anchor)) {
+      broken.push(`${href} (${group}) — ${pathname} declares no id "${anchor}"`);
+    }
+  }
+  assert.deepEqual(
+    broken,
+    [],
+    `these docs sidebar rows send the reader nowhere (a typo'd, renamed or deleted page, or an ` +
+      `anchor that no longer exists):\n  ${broken.join("\n  ")}`,
+  );
+
+  // (b) The direction that was missing: the index can REACH every sidebar route.
+  const linked = indexLinkedRoutes(docsSrc);
+  assert.ok(
+    linked.size >= 14,
+    `the index parse found ${linked.size} linked routes — the surfaces it reads moved`,
+  );
+  const fromSource = new Set(
+    docsHrefsOutsideDocs(["../app/", "../components/"]).map((f) => f.href.split("#")[0]),
+  );
+  const unreachable = routes.filter(
+    (r) => r !== "/docs" && !linked.has(r) && !(r in NOT_INDEXED_BY_DESIGN),
+  );
+  assert.deepEqual(
+    unreachable,
+    [],
+    `these pages exist only in the docs sidebar — the index never links them, so a reader on ` +
+      `/docs cannot find them, and nothing said that was deliberate:\n  ${unreachable.join("\n  ")}. ` +
+      `Add the route to the index (an entry, a group's \`more\` link or a quick link), or name it in ` +
+      `NOT_INDEXED_BY_DESIGN together with the feature's own inline "?" that reaches it.`,
+  );
+
+  // (b2) …and the allowlist has to be honest in every direction.
+  const allowlisted = Object.keys(NOT_INDEXED_BY_DESIGN);
+  assert.deepEqual(
+    allowlisted.filter((r) => !routes.includes(r)),
+    [],
+    `NOT_INDEXED_BY_DESIGN names routes the sidebar does not carry — the list drifted from the nav`,
+  );
+  // The exception is for a route the INDEX cannot reach, and only for that:
+  // if the index links it after all, the row is not an exception, it is dead
+  // weight in a list whose whole job is to be a short, readable set of "reached
+  // from the feature, not from the index" cases. An allowlist that only grows
+  // is how a guard stops guarding.
+  assert.deepEqual(
+    allowlisted.filter((r) => linked.has(r)),
+    [],
+    `NOT_INDEXED_BY_DESIGN calls these routes unreachable from the index, but the index links ` +
+      `them — the exception is stale, and a list of stale exceptions hides the next real one:\n  ` +
+      `${allowlisted.filter((r) => linked.has(r)).join("\n  ")}. Remove the row, or make the index ` +
+      `stop linking the route if that link was the mistake.`,
+  );
+  // (b3) …and each exception must point at a route its own feature really links,
+  // so the list cannot be used to park a sidebar row that nothing reaches at all.
+  const deadEnds = allowlisted.filter((r) => {
+    const file = resolve(r);
+    if (!file || !existsSync(path(file))) return true;
+    return !fromSource.has(r);
+  });
+  assert.deepEqual(
+    deadEnds,
+    [],
+    `these routes are excused from the index but nothing in the app links them either — the ` +
+      `sidebar row is a dead end for the reader as well, so the feature's inline "?" named beside ` +
+      `it in NOT_INDEXED_BY_DESIGN is not there:\n  ${deadEnds.join("\n  ")}`,
+  );
+
+  // (c) The direction that did exist, now covering all three index surfaces.
+  const missing = [...linked.keys()].filter((p) => !routes.includes(p));
   assert.deepEqual(
     missing,
     [],
