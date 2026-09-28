@@ -37,11 +37,19 @@
 //
 // The table above covers the guard SITES that a send function owns. One site is
 // shaped differently and needed its own test, because no send call can reach it:
-// the OUTER guard on the magic-link request (auth_recovery.go:233,
+// the OUTER guard on the magic-link request (anchorOuterGuard,
 // `a.Sessions == nil || mailerUnavailable(a.VerifyMailer)`) is the only combined
 // one in the package, and the handler it guards is the only entry point that
 // needs a live Sessions store AND a typed-nil mailer at once. See
 // TestUnconfiguredSESMagicLinkRequestStopsAtTheOuterGuard.
+//
+// THE LINE NUMBERS IN THIS FILE'S MESSAGES ARE DERIVED, NOT TYPED. Every site a
+// message quotes is named by the anchor constants below and its line is resolved
+// from the production source when the message is built (see
+// derived_line_anchor_test.go). They used to be literals — 11 of them — and at
+// one #672 merge every one was 6-7 lines low while the package stayed green, so
+// the only diagnostic this file produces was pointing at the wrong code. An
+// anchor that cannot be found now fails BY NAME instead of printing a number.
 //
 // The two tests that follow the guard's happy path (a live mailer must still be
 // called) are what keep it from being "fixed" by making it too broad: a guard
@@ -59,6 +67,81 @@ import (
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/email"
 )
+
+// The sites a failure message in this file quotes, named by their CONTENT so
+// their line numbers can be derived at test time rather than typed in.
+var (
+	// anchorOuterGuard is handleMagicLinkRequest's combined guard: it holds when
+	// EITHER the session store is unwired or the mailer is a typed nil, and it is
+	// the only site in the package that guards a REQUEST HANDLER.
+	//
+	// Any carries two spellings of the same site on purpose. The clause this test
+	// exists to protect is `mailerUnavailable(a.VerifyMailer)`; the second
+	// spelling is what the guard looks like REVERTED to its pre-#672 form, which
+	// is the mutation that makes this test fail. A message reporting that
+	// mutation must still be able to name the line the reader has to look at.
+	anchorOuterGuard = derivedLineAnchor{
+		File:    "auth_recovery.go",
+		Display: "auth_recovery.go",
+		Name:    "the OUTER guard on the magic-link request (`a.Sessions == nil || mailerUnavailable(a.VerifyMailer)`)",
+		Any: []string{
+			"a.Sessions == nil || mailerUnavailable(a.VerifyMailer)",
+			"a.Sessions == nil || a.VerifyMailer == nil",
+		},
+		Within: "func (a *AuthHandlers) handleMagicLinkRequest(",
+	}
+
+	// anchorVerifiedBranch is the existing-verified-user branch: the one that
+	// mints a login token.
+	anchorVerifiedBranch = derivedLineAnchor{
+		File:    "auth_recovery.go",
+		Display: "auth_recovery.go",
+		Name:    "the existing-verified-user branch (`user != nil && user.Verified`)",
+		Any:     []string{"user != nil && user.Verified"},
+		Within:  "func (a *AuthHandlers) handleMagicLinkRequest(",
+	}
+
+	// anchorSignupGenerate is the signup branch's mint call. It is NOT the same
+	// call as the login one: GenerateForEmail binds the token to "email:<addr>"
+	// instead of a user id, which is why the token count in this file cannot see
+	// such a token.
+	anchorSignupGenerate = derivedLineAnchor{
+		File:    "auth_recovery.go",
+		Display: "auth_recovery.go",
+		Name:    "the signup branch's mint (`GenerateForEmail`)",
+		Any:     []string{"GenerateForEmail"},
+		Within:  "func (a *AuthHandlers) handleMagicLinkRequest(",
+	}
+
+	// anchorInnerMagicLinkGuard is the guard inside sendMagicLinkEmail, which
+	// answers the same request when the outer guard is gone — it reports a
+	// failure instead of skipping the send, so it is where
+	// `magiclink_email_send_failed` comes from.
+	//
+	// The scope is not decoration: `mailerUnavailable(a.VerifyMailer)` opens four
+	// guards in this file (sendEmail2FACode, send2FAActiveEmail, this handler and
+	// sendMagicLinkEmail), so the clause alone names no line. The resolver refuses
+	// that ambiguity by name rather than picking the nearest one, which is how the
+	// first cut of this anchor failed — on the file, not on the fixture.
+	anchorInnerMagicLinkGuard = derivedLineAnchor{
+		File:    "auth_recovery.go",
+		Display: "auth_recovery.go",
+		Name:    "the guard inside sendMagicLinkEmail (`mailerUnavailable(a.VerifyMailer)`)",
+		Any:     []string{"mailerUnavailable(a.VerifyMailer)"},
+		Within:  "func (a *AuthHandlers) sendMagicLinkEmail(",
+	}
+)
+
+// pins is every anchor whose line this package's failure messages quote, so that
+// TestDerivedLineAnchorTracksTheSource walks exactly the pins the messages use:
+// each must resolve to one line, and that line must really carry the text the
+// anchor is named by.
+var pins = []derivedLineAnchor{
+	anchorOuterGuard,
+	anchorVerifiedBranch,
+	anchorSignupGenerate,
+	anchorInnerMagicLinkGuard,
+}
 
 // detectorMailer is a VerifyMailer that DEREFERENCES its receiver, so being
 // called through a nil pointer is a panic. Holding a nil *detectorMailer in the
@@ -264,7 +347,8 @@ func TestUnconfiguredSESInviteReportsNoEmailError(t *testing.T) {
 }
 
 // TestUnconfiguredSESMagicLinkRequestStopsAtTheOuterGuard pins the OUTER guard on
-// handleMagicLinkRequest (auth_recovery.go:233), the one combined site:
+// handleMagicLinkRequest (its line is derived — see the anchor at the top of this
+// file), the one combined site:
 //
 //	if a.Sessions == nil || mailerUnavailable(a.VerifyMailer) {
 //		a.replyMagicLinkRequestOK(w) // nothing wired (bare test) — generic ok
@@ -274,21 +358,21 @@ func TestUnconfiguredSESInviteReportsNoEmailError(t *testing.T) {
 // WHY IT NEEDS ITS OWN TEST. Every other mailerUnavailable site sits inside a
 // send function, so a test that calls the sender reaches it. This one guards a
 // REQUEST HANDLER, and the handler is defended twice: the inner guard in
-// sendMagicLinkEmail (auth_recovery.go:292) answers the same request with
-// "magic link mailer not configured". So reverting the outer guard to the
-// pre-#672 `a.VerifyMailer == nil` still compiles AND leaves the whole package
-// green — nothing else in it ever asks this handler for a typed-nil mailer, and
-// the response is a generic 200 on BOTH sides. That is why asserting "the
-// response is 200" would prove nothing here: the status cannot tell the two
-// trees apart.
+// sendMagicLinkEmail (the line anchorInnerMagicLinkGuard resolves) answers the
+// same request with "magic link mailer not configured". So reverting the outer
+// guard to the pre-#672 `a.VerifyMailer == nil` still compiles AND leaves the
+// whole package green — nothing else in it ever asks this handler for a
+// typed-nil mailer, and the response is a generic 200 on BOTH sides. That is why
+// asserting "the response is 200" would prove nothing here: the status cannot
+// tell the two trees apart.
 //
 // WHAT THE HOLE ACTUALLY COSTS, and therefore what this test reads instead:
 //
 //	(a) a magic-link token is minted for a deployment whose SES is
 //	    unconfigured. The guard's stated intent is to stop BEFORE touching the
 //	    session store at all, so with the guard gone the existing-verified-user
-//	    branch (:239) calls a.Sessions.MagicLink().Generate(...) and writes a
-//	    needless token row that expires unused 15 minutes later;
+//	    branch (anchorVerifiedBranch) calls a.Sessions.MagicLink().Generate(...)
+//	    and writes a needless token row that expires unused 15 minutes later;
 //	(b) the send that follows fails, so the handler logs
 //	    magiclink_email_send_failed and still replies 200.
 //
@@ -303,10 +387,19 @@ func TestUnconfiguredSESInviteReportsNoEmailError(t *testing.T) {
 // about the mailer clause this test exists for.
 //
 // The fixture is also the PRODUCTION shape in the other direction: `makeAuthMailer`
-// in cmd/jomform-api/main.go:130 returns a nil INTERFACE when SES is absent, and
+// in cmd/jomform-api/main.go returns a nil INTERFACE when SES is absent, and
 // this test's typed nil is the shape that reached the interfaces before #672 —
 // keeping it here is what makes the guard hold for either wiring.
 func TestUnconfiguredSESMagicLinkRequestStopsAtTheOuterGuard(t *testing.T) {
+	// Resolved ONCE, at the top, so that every number a failure message below
+	// quotes comes from the source as the reader has it — and so that a site the
+	// resolver cannot find fails BY NAME here rather than later, while a message
+	// about a token is being built.
+	outerGuard := anchorOuterGuard.Line(t)
+	verifiedBranch := anchorVerifiedBranch.Line(t)
+	signupGenerate := anchorSignupGenerate.Line(t)
+	innerGuard := anchorInnerMagicLinkGuard.Line(t)
+
 	sess := authTestValkey(t) // live store: the guard's first clause must not be the one that fires
 	users := authUsers(t)
 	ctx := context.Background()
@@ -330,10 +423,10 @@ func TestUnconfiguredSESMagicLinkRequestStopsAtTheOuterGuard(t *testing.T) {
 	}
 
 	// A real VERIFIED user, so the handler takes the existing-verified-user
-	// branch (:239) — the one that mints a token. An unknown email would take
-	// the signup branch (:267) and reveal the same hole by a different call,
-	// but that branch also requires a valid email and is not the case the card
-	// measured.
+	// branch (verifiedBranch) — the one that mints a token. An unknown email
+	// would take the signup branch (signupGenerate) and reveal the same hole by a
+	// different call, but that branch also requires a valid email and is not the
+	// case the card measured.
 	email := "mgouter-" + randSuffix() + "@example.test"
 	if _, err := users.Create(ctx, email, "unused-in-this-test"); err != nil {
 		t.Fatalf("create user: %v", err)
@@ -348,7 +441,7 @@ func TestUnconfiguredSESMagicLinkRequestStopsAtTheOuterGuard(t *testing.T) {
 
 	// THE THIRD FIXTURE HALF, and the only one the two guards above do not
 	// cover: this user must actually be ON the verified branch. Left unverified
-	// the handler takes the signup branch (:267) instead, whose
+	// the handler takes the signup branch (signupGenerate) instead, whose
 	// GenerateForEmail stores the value "email:<addr>" — a value the count below
 	// cannot match, because own() is scoped (deliberately) to the token's stored
 	// value being THIS user's id. The broken tree would then mint a token the
@@ -361,11 +454,11 @@ func TestUnconfiguredSESMagicLinkRequestStopsAtTheOuterGuard(t *testing.T) {
 	}
 	if !reloaded.Verified {
 		t.Fatalf("test fixture is wrong: %s is not verified after SetVerified (%v), so the request "+
-			"would take the signup branch at auth_recovery.go:267 and mint a token stored as "+
+			"would take the signup branch at %s and mint a token stored as "+
 			"\"email:<addr>\". That value never matches the count below (which is scoped to the token's "+
 			"stored value being this user's id), so the test would PASS against the broken guard. The "+
-			"account must be on the existing-verified-user branch (:239) for this test to mean anything.",
-			email, reloaded.Verified)
+			"account must be on the existing-verified-user branch (%s) for this test to mean anything.",
+			email, reloaded.Verified, signupGenerate, verifiedBranch)
 	}
 
 	// Tokens already stored for THIS user. The test database is shared with
@@ -387,7 +480,8 @@ func TestUnconfiguredSESMagicLinkRequestStopsAtTheOuterGuard(t *testing.T) {
 
 	logs := captureSlog(t)
 
-	// Drive the REAL registered route (auth.go:100), not the bare method, so the
+	// Drive the REAL registered route (see the registration of
+	// POST /v1/auth/magic-link/request in auth.go), not the bare method, so the
 	// request path is production-shaped. The route carries a 1/hour per-IP
 	// limiter; a fresh mux has a fresh bucket and a unique IP is used, so this
 	// single request is not throttled (and -count runs stay independent).
@@ -405,17 +499,17 @@ func TestUnconfiguredSESMagicLinkRequestStopsAtTheOuterGuard(t *testing.T) {
 
 	if keys := own(); len(keys) != 0 {
 		t.Fatalf("the magic-link request minted %d token(s) (%v) for a deployment whose SES is "+
-			"unconfigured — the OUTER guard at auth_recovery.go:233 "+
+			"unconfigured — the OUTER guard at %s "+
 			"(`a.Sessions == nil || mailerUnavailable(a.VerifyMailer)`) must return BEFORE the session "+
 			"store is touched. A token was written, which means the guard did not stop at the typed-nil "+
 			"mailer (e.g. it was reverted to the pre-#672 `a.VerifyMailer == nil`, which is false for a "+
-			"nil *email.Sender held in the interface). The inner guard in sendMagicLinkEmail only "+
-			"answers the request AFTER the write.", len(keys), keys)
+			"nil *email.Sender held in the interface). The inner guard in sendMagicLinkEmail (%s) only "+
+			"answers the request AFTER the write.", len(keys), keys, outerGuard, innerGuard)
 	}
 	if out := logs(); strings.Contains(out, "magiclink_email_send_failed") {
 		t.Fatalf("the magic-link request reached the send and logged magiclink_email_send_failed for "+
-			"an unconfigured deployment — the OUTER guard at auth_recovery.go:233 must skip the send "+
-			"entirely (the inner guard's failure is what this line reports). Captured log:\n%s", out)
+			"an unconfigured deployment — the OUTER guard at %s must skip the send "+
+			"entirely (the inner guard's failure is what this line reports). Captured log:\n%s", outerGuard, out)
 	}
 }
 
