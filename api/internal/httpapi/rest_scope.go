@@ -119,6 +119,20 @@ const (
 	scopeAmbiguous
 )
 
+// scopeRequiredMessage is the wire message for the chat lane's ambiguous-scope
+// refusal. It is declared HERE, as a literal, for the same reason
+// invalidSlugMessage and the workspace slug messages are (errors.go): errcode.go's
+// message→code table keys on the exact string, so a wording that only exists at
+// the writeErr call site is a wording that can be reworded without the table
+// noticing — the refusal would keep answering 400 but silently lose its
+// `workspace.scopeRequired` code and the dashboard would fall back to the class
+// code it cannot translate (t_fb393abe).
+//
+// The code is what the chat page branches on, so the two must not drift:
+// TestScopeRequiredRefusalCarriesItsOwnCode drives the refusal through the real
+// handler and reads the code out of the body.
+const scopeRequiredMessage = "skop workspace diperlukan — pilih workspace dahulu"
+
 // workspaceScopeResolutionFor classifies the caller's ?workspace= scope for the
 // endpoints that must not silently fall back to the first owned account. It is
 // deliberately narrow: only a SESSION caller with a real ambiguity to resolve is
@@ -202,8 +216,7 @@ func (h *RESTHandlers) requireResolvedWorkspaceScope(w http.ResponseWriter, r *h
 		writeErr(w, http.StatusForbidden, "workspace tidak dijumpai")
 		return false
 	case scopeAmbiguous:
-		writeErr(w, http.StatusBadRequest,
-			"skop workspace diperlukan — pilih workspace dahulu")
+		writeErr(w, http.StatusBadRequest, scopeRequiredMessage)
 		return false
 	}
 	return true

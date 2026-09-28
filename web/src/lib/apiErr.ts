@@ -90,6 +90,17 @@ export const API_ERROR_KEYS: Record<string, Key> = {
   // A refused permanent PURGE: the workspace was ever sold, and a purge destroys
   // the merchant's record of money received. The count is in the body.
   "workspace.hasSales": "apiErr.workspaceHasSales",
+  // The chat lane's ambiguous-scope refusal (t_fb393abe). Mapped because the
+  // chat page must be able to tell THIS 400 from any other: a 400 from
+  // /chat/confirm is not necessarily a scope refusal — the server maps every
+  // unrecognised confirm failure to 400 too, including a tool it refused after
+  // claiming the token — and only the code can separate them.
+  //
+  // It reuses the chat page's OWN sentence (chat.scopeRequired) rather than
+  // adding a near-duplicate: the page says exactly what to do about this refusal
+  // today, and a second wording would be a second thing to keep in step. Same
+  // precedent as connect.tokenMissing below.
+  "workspace.scopeRequired": "chat.scopeRequired",
 
   // Roles / key scope.
   "role.manageRequired": "apiErr.manageRequired",

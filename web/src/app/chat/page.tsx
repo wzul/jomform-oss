@@ -51,6 +51,7 @@ import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 import { translateApiErr } from "../../lib/apiErr";
+import { confirmDecisionFor } from "../../lib/chatConfirm";
 import { workspaceQuery } from "../../lib/workspace";
 
 type Turn = { role: "user" | "assistant"; content: string };
@@ -320,35 +321,49 @@ export default function ChatPage() {
         goToLogin();
         return;
       }
-      if (r.status === 429) {
-        setState(msgIndex, p.token, "failed");
-        setErr(t("chat.confirmRateLimited"));
-        return;
-      }
-      // The server refused the request itself (a missing/unusable workspace
-      // scope). Same reasoning as the message path: 400 is not a dead session, so
-      // it must not be conflated with the 401/403 branch above, and the user needs
-      // the scope copy rather than the generic failure.
-      //
-      // The card gets its OWN state, not "failed". This refusal happens before the
-      // server reads the token, so the change was never attempted and the card
-      // must not wear a "Did not go through" pill over a "try again" footer
-      // underneath an alert telling the user to pick a workspace (t_790b1016).
-      // The scope copy is carried ONCE, by the alert: rendering it in the card as
-      // well would duplicate the sentence, which is the pre-fix shape.
-      if (r.status === 400) {
+      // EVERY other answer goes through ONE decision that branches on the API's
+      // machine CODE, not on the bare status (lib/chatConfirm.ts). The 400 is the
+      // case that matters: it is NOT necessarily a workspace-scope refusal — the
+      // server maps every unrecognised confirm failure to 400, including a tool it
+      // refused AFTER claiming the token — so a status-only branch told a member
+      // whose write was refused by their ROLE to "choose a workspace first", which
+      // they cannot act on (t_fb393abe). The body is read first; a body that cannot
+      // be read yields no code, which falls to the failure branch and never the
+      // scope copy.
+      const body = await r.json().catch(() => null);
+      const outcome = confirmDecisionFor(r.status, body);
+      if (outcome === "scopeRequired") {
+        // The card gets its OWN state, not "failed": the server refuses this
+        // BEFORE it reads the token (requireResolvedWorkspaceScope runs ahead of
+        // the token checks in handleChatConfirm), so nothing was attempted, the
+        // token is still live, and the card must not wear a "Did not go through"
+        // pill over a "try again" footer — retrying unchanged cannot work
+        // (t_790b1016). The scope copy is carried ONCE, by the alert below:
+        // rendering it in the card as well would duplicate the sentence, which is
+        // the pre-fix shape.
         setState(msgIndex, p.token, "scopeRequired");
         setErr(t("chat.scopeRequired"));
         return;
       }
-      if (r.status === 409) {
+      if (outcome === "rateLimited") {
+        setState(msgIndex, p.token, "failed");
+        setErr(t("chat.confirmRateLimited"));
+        return;
+      }
+      if (outcome === "stale") {
         // Spent or expired — the card cannot be answered any more. The user needs
         // the assistant to prepare it again, which is what the copy says.
         setState(msgIndex, p.token, "stale");
         setErr(action === "confirm" ? t("chat.proposalStale") : t("chat.cancelStale"));
         return;
       }
-      if (!r.ok) {
+      if (outcome === "failed") {
+        // A genuine failure of the change — including a 400 that names a refusal
+        // which is not the scope. The card says so, and here that is accurate: for
+        // the post-claim tool refusal the token really is spent and the change
+        // really did not happen. The sentence is the PAGE's own, never the server's
+        // prose (issue #6177): the wire `error` is Malay and the API does not know
+        // this visitor's language.
         setState(msgIndex, p.token, "failed");
         setErr(action === "confirm" ? t("chat.confirmFail") : t("chat.cancelFail"));
         return;

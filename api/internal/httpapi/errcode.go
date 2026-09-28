@@ -66,6 +66,25 @@ const (
 	// them, so the refusal names the count the same way the form purge does.
 	CodeWorkspaceHasSales = "workspace.hasSales"
 
+	// The chat lane's "your request names no workspace" refusal (t_fb393abe).
+	//
+	// WHY IT EARNS ITS OWN CODE rather than riding the HTTP class. A 400 from
+	// POST /chat/confirm is NOT necessarily this condition: chatConfirmStatusFor
+	// maps everything it does not recognise to 400, and one reachable class is a
+	// tool the server refused AFTER the token was spent (chat/proposal.go's
+	// "server menolak: %s"). The web page branched on the bare status, so a
+	// read_only member whose confirmed write was refused was told to "choose a
+	// workspace first" — advice they cannot act on, because they already had one
+	// selected (the request carried ?workspace=), and the refusal they needed was
+	// the role, not the scope. The code is what lets the page tell the two apart.
+	//
+	// The 400 stays: the scope refusal is a MISSING PARAMETER and not a
+	// permission denial, and wsfetch.ts treats 401/403 as "the session is gone"
+	// and redirects to /login (see the argument on scopeAmbiguous in
+	// rest_scope.go). Only the CODE is new; the status is unchanged, so no client
+	// that branches on 400 is perturbed.
+	CodeWorkspaceScopeRequired = "workspace.scopeRequired"
+
 	// Roles and API-key scope.
 	CodeRoleManageRequired = "role.manageRequired"
 	CodeRoleAdminRequired  = "role.adminRequired"
@@ -226,6 +245,19 @@ var errCodeByMessage = map[string]string{
 	"perlu peranan manage atau admin":         CodeRoleManageRequired,
 	"perlu admin workspace":                   CodeRoleAdminRequired,
 	"scope tidak mencukupi (perlu readwrite)": CodeScopeReadonly,
+
+	// The chat lane's ambiguous-scope refusal (t_fb393abe). Keyed on the exact
+	// literal rest_scope.go writes for scopeAmbiguous. Without this entry the
+	// body carried only the class code `request.badRequest`, which the dashboard
+	// deliberately does not translate — so the page could not tell this refusal
+	// from any other 400 and rendered the scope copy for all of them.
+	//
+	// The literal is declared as a named const in rest_scope.go and referenced
+	// from here by its name's VALUE: errcode_test.go requires every key to appear
+	// as a Go string literal in a non-errcode.go file of this package, which the
+	// const's own declaration site satisfies exactly once — so the wire wording
+	// and this table cannot drift apart silently.
+	"skop workspace diperlukan — pilih workspace dahulu": CodeWorkspaceScopeRequired,
 
 	// Payments / CHIP / subscriptions.
 	"chip belum dikonfigurasi akaun ini":                 CodePaymentNotConfigured,

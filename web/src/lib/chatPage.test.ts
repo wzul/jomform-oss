@@ -1204,9 +1204,9 @@ test("every chat dictionary key defines all five locales", () => {
   assert.deepEqual(missing, [], `missing translations:\n  ${missing.join("\n  ")}`);
 });
 
-// ── A 400 ON THE CONFIRM PATH IS A SCOPE REFUSAL, NOT A FAILED CHANGE ────────
+// ── THE CONFIRM PATH'S 400 IS DECIDED BY CODE, NOT BY STATUS ─────────────────
 //
-// THE DEFECT (t_790b1016, found while verifying PR 747). The new 400 branch on
+// THE FIRST DEFECT (t_790b1016, found while verifying PR 747). The 400 branch on
 // the confirm/cancel path did TWO things at once:
 //
 //     setState(msgIndex, p.token, "failed");   // → card footer: chat.confirmFail
@@ -1226,55 +1226,100 @@ test("every chat dictionary key defines all five locales", () => {
 // scope copy — that duplication is what the pre-fix shape did, and this card says
 // explicitly that the alert is the ONE place the copy belongs.
 //
-// WHAT MAKES IT BITE. The assertions are anchored on the 400 branch's own text
-// taken from the SOURCE (the slice from `if (r.status === 400)` to the `return`),
-// not on a position in the file, so retyping `"failed"` there — or deleting the
-// branch — fails. The card-footer half asserts the footer is keyed on chat.confirmFail
-// ONLY when the state is "failed", and the dictionary half pins that a
-// scopeRequired card cannot borrow the failure string: the two keys must not be
-// the same sentence, or the "does not render confirmFail" property would be a
-// distinction without a difference.
-test("the confirm path's 400 is a scope refusal: it does not render chat.confirmFail", () => {
-  // The 400 branch of decide(), sliced out of the source by its own guard line.
-  const at = page.indexOf("if (r.status === 400) {", page.indexOf("async function decide("));
+// THE SECOND DEFECT (t_fb393abe, found by the QA lane while verifying PR 779 and
+// fixed here). The branch that got its own state was keyed on the BARE STATUS —
+// `if (r.status === 400)` — and it returned before the body was ever parsed. A 400
+// from this route is NOT necessarily a workspace-scope refusal:
+// chatConfirmStatusFor maps everything it does not recognise to 400, and one such
+// class arrives AFTER the token is claimed (rest_chat.go's default arm over
+// chat/proposal.go's "server menolak: %s"). A read_only member confirming a
+// prepared change got "Choose a workspace first" — advice they cannot act on,
+// since the request carried their workspace, and the refusal they needed to read
+// was the role. So the decision now branches on the API's machine CODE
+// (lib/chatConfirm.ts, code `workspace.scopeRequired`), which is the only thing
+// that can tell the two 400s apart.
+//
+// WHAT MAKES IT BITE. Two layers, and neither alone is enough:
+//   * src/lib/chatConfirm.test.ts EXECUTES confirmDecisionFor, so a bare
+//     `status === 400` there turns the non-scope case RED (the case that was
+//     invisible while the decision lived inside the component).
+//   * this file pins the PAGE: the outcome branch keeps the card out of "failed",
+//     no `r.status === 400` survives anywhere in decide(), and the helper really is
+//     the one the branch reads and really is imported.
+// The card-footer half asserts the footer is keyed on chat.confirmFail ONLY when
+// the state is "failed", and the dictionary half pins that a scopeRequired card
+// cannot borrow the failure string: the two keys must not be the same sentence, or
+// the "does not render confirmFail" property would be a distinction without a
+// difference.
+test("the confirm path's scope refusal is its own state, and cannot reach chat.confirmFail", () => {
+  // THE BRANCH MOVED (t_fb393abe). What this guard pinned was the slice from
+  // `if (r.status === 400) {` — i.e. the branch keyed on the BARE STATUS, which was
+  // itself the defect this card fixes: any 400 answered "Choose a workspace first",
+  // including a tool the server refused by ROLE after claiming the token. The
+  // decision now lives in lib/chatConfirm.ts and is keyed on the API's machine
+  // CODE, so the property this guard owns is re-anchored on the outcome branch.
+  // The BEHAVIOUR of the decision (which 400 means what) is executed in
+  // src/lib/chatConfirm.test.ts; what is pinned HERE is that the page keeps the
+  // card out of the failure state for the scope outcome.
+  const at = page.indexOf('if (outcome === "scopeRequired") {', page.indexOf("async function decide("));
   assert.ok(
     at !== -1,
-    "app/chat/page.tsx has no 400 branch in decide() — the scope refusal would fall through to the " +
-      "generic !r.ok branch and the user would get the 'try again' copy for a condition they fix by " +
-      "choosing a workspace",
+    "app/chat/page.tsx has no scopeRequired outcome branch in decide() — the scope refusal would " +
+      "either fall through to the generic failure branch (the user gets 'try again' for a condition " +
+      "they fix by choosing a workspace) or be decided by the bare status again (t_fb393abe)",
   );
   const branch = page.slice(at, page.indexOf("return;", at) + "return;".length);
 
   assert.match(
     branch,
     /setState\(msgIndex,\s*p\.token,\s*"scopeRequired"\)/,
-    `the confirm-path 400 no longer marks the proposal "scopeRequired" — it would set a state the ` +
+    `the scope refusal no longer marks the proposal "scopeRequired" — it would set a state the ` +
       `card renders as a failed change while the alert says to choose a workspace (both at once, ` +
       `which is the defect). Branch was:\n${branch}`,
   );
   assert.doesNotMatch(
     branch,
     /setState\(msgIndex,\s*p\.token,\s*"failed"\)/,
-    "the confirm-path 400 still marks the proposal \"failed\", so the card renders chat.confirmFail " +
+    "the scope refusal still marks the proposal \"failed\", so the card renders chat.confirmFail " +
       "('Please try again.') under an alert telling the user to choose a workspace — retrying without " +
       "a workspace fails identically, so the footer's advice is wrong",
   );
   assert.match(
     branch,
     /setErr\(t\("chat\.scopeRequired"\)\)/,
-    "the confirm-path 400 no longer renders the scope copy — the user would see only the card's " +
+    "the scope refusal no longer renders the scope copy — the user would see only the card's " +
       "failure sentence and would not learn that choosing a workspace is the fix",
   );
-  // The ONE 400 branch. A second one elsewhere (e.g. re-added inside the !r.ok
-  // branch) would reintroduce the defect with the assertion above still green.
+  // The branch must be reached by the DECISION, not by a status test. A
+  // `r.status === 400` left anywhere in decide() is the defect back: it cannot
+  // tell the scope refusal from the post-claim tool refusal, and it renders the
+  // scope copy for both. Counted rather than merely absent, because the point is
+  // that NO status-only 400 branch survives.
   const fourHundreds = page
     .slice(page.indexOf("async function decide("))
     .match(/r\.status === 400/g);
   assert.equal(
-    fourHundreds?.length,
-    1,
-    `decide() carries ${fourHundreds?.length} 400 branch(es), want exactly 1 — a second one would ` +
-      `map the scope refusal back onto a failure state`,
+    fourHundreds,
+    null,
+    `decide() still branches on the bare 400 status (${fourHundreds?.length} site(s)). That branch ` +
+      `cannot distinguish a workspace-scope refusal from any other 400 the route answers — including ` +
+      `the tool refusal that arrives AFTER the token is claimed — so it renders "Choose a workspace ` +
+      `first" to a user who already had a workspace selected (t_fb393abe). The decision belongs to ` +
+      `confirmDecisionFor (lib/chatConfirm.ts), which branches on the machine code.`,
+  );
+  // And the decision really is the one the branch reads: the outcome names must
+  // come from the shared helper, not from a local re-implementation that could
+  // drift from the tested one.
+  assert.match(
+    page.slice(page.indexOf("async function decide(")),
+    /const outcome = confirmDecisionFor\(r\.status,\s*body\)/,
+    "decide() no longer routes its answer through confirmDecisionFor — the branch would be deciding " +
+      "what a response means by itself, which is the shape t_fb393abe is about",
+  );
+  assert.match(
+    page,
+    /import \{ confirmDecisionFor \} from "\.\.\/\.\.\/lib\/chatConfirm"/,
+    "app/chat/page.tsx names confirmDecisionFor without importing it from lib/chatConfirm",
   );
 
   // The card's own footer. "failed" must be the ONLY state that renders
@@ -1330,18 +1375,20 @@ test("the confirm path's 400 is a scope refusal: it does not render chat.confirm
   }
 
   // 409 (stale) and 429 (rate-limited) keep their own distinct copy: the two
-  // other non-failure refusals this card names as unchanged.
+  // other non-failure refusals this card names as unchanged. They are asserted on
+  // the OUTCOME branch now, since the status test lives in lib/chatConfirm.ts
+  // (whose behaviour chatConfirm.test.ts executes).
   const decide = page.slice(page.indexOf("async function decide("));
   assert.match(
     decide,
-    /r\.status === 409[\s\S]{0,200}?setState\(msgIndex,\s*p\.token,\s*"stale"\)/,
-    "the 409 path no longer marks the card stale — a spent proposal would keep offering buttons the " +
-      "server refuses",
+    /outcome === "stale"[\s\S]{0,300}?setState\(msgIndex,\s*p\.token,\s*"stale"\)/,
+    "the stale outcome no longer marks the card stale — a spent proposal would keep offering buttons " +
+      "the server refuses",
   );
   assert.match(
     decide,
-    /r\.status === 429[\s\S]{0,200}?t\("chat\.confirmRateLimited"\)/,
-    "the 429 path no longer renders chat.confirmRateLimited — a rate-limited user would get the " +
-      "generic failure instead of the limit copy",
+    /outcome === "rateLimited"[\s\S]{0,300}?t\("chat\.confirmRateLimited"\)/,
+    "the rate-limited outcome no longer renders chat.confirmRateLimited — a rate-limited user would " +
+      "get the generic failure instead of the limit copy",
   );
 });

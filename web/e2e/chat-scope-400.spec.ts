@@ -1,6 +1,6 @@
-// The chat confirm path's 400: ONE message, and it is not "try again".
+// The chat confirm path's refusals: decided by CODE, and never two messages.
 //
-// THE DEFECT (card t_790b1016, filed by the QA lane while verifying PR 747).
+// THE FIRST DEFECT (card t_790b1016, filed by the QA lane while verifying PR 747).
 // A 400 on the confirm/cancel path is a WORKSPACE-SCOPE REFUSAL, not a failure of
 // the change. The PR gave it its own alert copy (`chat.scopeRequired`) but left
 // the proposal card on `setState(..., "failed")`, and the card's footer renders
@@ -14,12 +14,22 @@
 // Retrying without a workspace fails identically, so the footer instructed the
 // user to repeat an action that cannot work.
 //
-// WHY THIS IS A BROWSER TEST AND NOT ONLY A SOURCE GUARD. `chatPage.test.ts`
-// pins the branch, and that is the guard that bites on a revert — but the page
-// has no React/DOM runner in `npm run test:unit`, so nothing there can observe
-// that the two strings actually appeared TOGETHER on a rendered page. This file
-// measures the rendered DOM of the real production build, which is how the
-// defect was found in the first place.
+// THE SECOND DEFECT (card t_fb393abe, the same lane). The branch that got its own
+// copy was keyed on the BARE STATUS — `if (r.status === 400)` — and returned
+// before the body was read. A 400 on this route is NOT necessarily a scope
+// refusal: the server maps every unrecognised confirm failure to 400, and one such
+// class arrives AFTER the token is claimed (a tool that refuses to execute — the
+// write-role gate for a read_only workspace member). That user's request carried
+// their own ?workspace= and the page still told them to choose one. Both 400
+// cases are driven below on the SAME status and the SAME request shape; only the
+// body's machine `code` separates them, which is why the page now branches on it.
+//
+// WHY THIS IS A BROWSER TEST AND NOT ONLY A SOURCE GUARD. `chatPage.test.ts` pins
+// the page's branch and `chatConfirm.test.ts` executes the decision, and those are
+// the guards that bite on a revert — but the page has no React/DOM runner in
+// `npm run test:unit`, so nothing there can observe that a sentence actually
+// appeared ON a rendered page. This file measures the rendered DOM of the real
+// production build, which is how both defects were found in the first place.
 //
 // HOW THE STATE IS REACHED WITHOUT A SESSION OR A BACKEND. The reachable shape
 // is "propose while a workspace is selected, then lose the scope WITHOUT a
@@ -35,7 +45,12 @@
 // app's own dictionary rather than typing it in, and they count occurrences:
 // "renders the scope copy ONCE" is a count, not a substring. A revert to
 // `setState(..., "failed")` puts `chat.confirmFail` back on the page and fails
-// both the absence assertion and the count — verified by mutation, not assumed.
+// both the absence assertion and the count; a revert to the bare status test makes
+// the non-scope case render the scope copy. The scope code itself is read from
+// src/lib/chatConfirm.ts rather than typed here, so a rename on the server cannot
+// silently make the scope case unreachable (it would then be indistinguishable
+// from the non-scope 400, and the first test would pass for the wrong reason).
+// Verified by mutation, not assumed.
 //
 // Run with:
 //
@@ -43,6 +58,7 @@
 //   npx playwright test e2e/chat-scope-400.spec.ts    # this file alone
 import { test, expect, type Page } from "@playwright/test";
 import { DICT } from "../src/components/i18nDict";
+import { WORKSPACE_SCOPE_REQUIRED_CODE } from "../src/lib/chatConfirm";
 
 const EN = {
   scopeRequired: DICT["chat.scopeRequired"].en,
@@ -88,10 +104,16 @@ const BUNDLE = {
 };
 
 /**
- * Stub every call the page makes. `decisionStatus` is the status the
- * confirm/cancel route answers — the one variable these tests turn.
+ * Stub every call the page makes. `decisionStatus` and `decisionCode` are the
+ * answer the confirm/cancel route gives — the two variables these tests turn.
+ *
+ * `decisionCode` is what the page must BRANCH on (t_fb393abe): the card's outcome
+ * comes from the API's machine `code`, never from the bare status, so a test that
+ * sends a 400 with no code exercises the "unknown refusal" path rather than the
+ * scope refusal. The default (no code) is therefore the shape a proxy/older
+ * deployment answers, not the scope case.
  */
-async function stubAPI(page: Page, decisionStatus: number) {
+async function stubAPI(page: Page, decisionStatus: number, decisionCode = "") {
   const json = (body: unknown) => ({
     status: 200,
     contentType: "application/json",
@@ -116,14 +138,48 @@ async function stubAPI(page: Page, decisionStatus: number) {
     429: "had pengesahan dicapai",
     500: "ralat dalaman",
   };
-  await page.route(/(.*)\/api\/rest\/chat\/(confirm|cancel)(\?.*)?$/, (r) =>
-    r.fulfill({
+  await page.route(/(.*)\/api\/rest\/chat\/(confirm|cancel)(\?.*)?$/, (r) => {
+    // A non-scope 400 carries the TOOL's prose, not the scope sentence: that is
+    // what the server sends for a post-claim refusal, and the page must still not
+    // render the scope copy for it.
+    const text =
+      decisionStatus === 400 && decisionCode === NON_SCOPE_400_CODE
+        ? NON_SCOPE_400_WIRE_TEXT
+        : (statusText[decisionStatus] ?? "ralat");
+    return r.fulfill({
       status: decisionStatus,
       contentType: "application/json",
-      body: JSON.stringify({ error: statusText[decisionStatus] ?? "ralat" }),
-    }),
-  );
+      body: JSON.stringify({
+        error: text,
+        ...(decisionCode ? { code: decisionCode } : {}),
+      }),
+    });
+  });
 }
+
+/**
+ * The scope refusal's code, read out of the WEB constant that mirrors the server's
+ * (src/lib/chatConfirm.ts). Read rather than typed so the two spellings cannot
+ * drift: a rename on the server fails here instead of silently making the scope
+ * case unreachable (it would then be indistinguishable from the non-scope 400 and
+ * this file's whole first test would pass for the wrong reason).
+ */
+const SCOPE_CODE = WORKSPACE_SCOPE_REQUIRED_CODE;
+
+/**
+ * A code that is NOT the scope refusal: the shape the server answers when a tool
+ * it was asked to execute refuses (a read_only member's confirmed write, after the
+ * token was claimed). The wire message is the tool's own; the code is the HTTP class.
+ */
+const NON_SCOPE_400_CODE = "request.badRequest";
+
+/**
+ * The wire prose that comes with NON_SCOPE_400_CODE — QA's measured body for the
+ * post-claim refusal (api/internal/mcpsrv/callscope.go's write-role gate). It is
+ * deliberately NOT the scope sentence: the stub must carry the shape a real server
+ * sends, or the test would prove nothing about the page telling them apart.
+ */
+const NON_SCOPE_400_WIRE_TEXT = "perlu peranan manage atau admin dalam workspace ini";
 
 /**
  * A FRESH browser state (cleared storage — the browser keeps localStorage
@@ -144,11 +200,16 @@ async function freshState(page: Page) {
 }
 
 /**
- * Get a proposal on screen, then LOSE the workspace scope without reloading,
- * and press Confirm. Returns the request URL the decision went out to, so the
- * test can assert the shape it believes it reproduced.
+ * Get a proposal on screen, then (by default) LOSE the workspace scope without
+ * reloading, and press Confirm. Returns the request URL the decision went out
+ * to, so the test can assert the shape it believes it reproduced.
+ *
+ * `dropScope: false` keeps the SELECTED workspace, which is the other shape this
+ * card needs: a request that carries `?workspace=` and is still refused with a
+ * 400 (a post-claim tool refusal). That is the shape QA measured — the user has a
+ * workspace and is told to choose one, which is the defect (t_fb393abe).
  */
-async function confirmWithoutScope(page: Page, baseURL: string | undefined) {
+async function confirmWithoutScope(page: Page, baseURL: string | undefined, dropScope = true) {
   await page.goto(`${baseURL}/chat`, { waitUntil: "domcontentloaded" });
 
   const box = page.locator("#chat-input");
@@ -161,15 +222,23 @@ async function confirmWithoutScope(page: Page, baseURL: string | undefined) {
   const card = page.locator('[class*="border-sky-200"]').filter({ hasText: PROPOSAL.title });
   await expect(card, "the proposal card must render — otherwise this test is vacuous").toHaveCount(1);
 
-  // The scope is dropped with NO navigation: this is a second tab's sign-out or
-  // a storage clear, not a reload. Nothing re-runs the Shell's workspace
-  // reconciliation, so `workspaceQuery()` now returns "" and the decision is
-  // sent unscoped — the request the server refuses with a 400.
-  await page.evaluate(() => localStorage.removeItem("jf_workspace"));
-  expect(
-    await page.evaluate(() => localStorage.getItem("jf_workspace")),
-    "the workspace scope must really be gone before Confirm — otherwise this test proves nothing",
-  ).toBe(null);
+  if (dropScope) {
+    // The scope is dropped with NO navigation: this is a second tab's sign-out or
+    // a storage clear, not a reload. Nothing re-runs the Shell's workspace
+    // reconciliation, so `workspaceQuery()` now returns "" and the decision is
+    // sent unscoped — the request the server refuses with a 400.
+    await page.evaluate(() => localStorage.removeItem("jf_workspace"));
+    expect(
+      await page.evaluate(() => localStorage.getItem("jf_workspace")),
+      "the workspace scope must really be gone before Confirm — otherwise this test proves nothing",
+    ).toBe(null);
+  } else {
+    expect(
+      await page.evaluate(() => localStorage.getItem("jf_workspace")),
+      "the selected workspace must still be stored — this shape is a SCOPED request, which is the " +
+        "case where 'choose a workspace first' is advice the user cannot act on",
+    ).toBe("ws-b");
+  }
 
   const decision: string[] = [];
   page.on("request", (r) => {
@@ -190,7 +259,7 @@ test.describe("chat confirm path: a scope refusal is not a failed change", () =>
     page,
     baseURL,
   }) => {
-    await stubAPI(page, 400);
+    await stubAPI(page, 400, SCOPE_CODE);
     await freshState(page);
     const decision = await confirmWithoutScope(page, baseURL);
 
@@ -226,6 +295,71 @@ test.describe("chat confirm path: a scope refusal is not a failed change", () =>
       card,
       `the card must not wear the "did not go through" badge — nothing was attempted`,
     ).not.toContainText(EN.badgeFailed);
+
+    // Report the OBSERVED values so the evidence is in the run log, not inferred.
+    console.log(
+      `OBSERVED scope=400 code=${JSON.stringify(SCOPE_CODE)} ` +
+        `alert=${JSON.stringify(await page.locator('p[role="alert"]').textContent())} ` +
+        `scopeCopyCount=${await scopeNodes.count()} ` +
+        `confirmFailCount=${await page.getByText(EN.confirmFail, { exact: true }).count()}`,
+    );
+  });
+
+  test("a 400 that is NOT a scope refusal never renders the scope copy", async ({ page, baseURL }) => {
+    // t_fb393abe. The route answers 400 for a second, unrelated condition: a tool
+    // the server refused to execute AFTER it claimed the token (a read_only
+    // member's confirmed write, api/internal/chat/proposal.go's "server menolak").
+    // The page used to branch on the bare status, so that user — whose request
+    // carried their own ?workspace= — was told to "Choose a workspace first".
+    //
+    // THE SHAPE IS THE POINT, and it is QA's measured one: the request KEEPS its
+    // ?workspace= (the user has a workspace selected) and is still refused with a
+    // 400 — the post-claim tool refusal. The same status as the test above, the
+    // opposite scope shape; the CODE in the body is the only thing that can
+    // separate them, which is exactly why the page must branch on it.
+    await stubAPI(page, 400, NON_SCOPE_400_CODE);
+    await freshState(page);
+    const decision = await confirmWithoutScope(page, baseURL, false);
+
+    expect(decision, "the decision must have been sent exactly once").toHaveLength(1);
+    expect(
+      decision[0],
+      `the decision must have gone out SCOPED — that is the shape QA measured and the case where ` +
+        `"choose a workspace first" is advice the user cannot act on. Sent: ${JSON.stringify(decision)}`,
+    ).toContain("workspace=ws-b");
+
+    // THE ASSERTION THAT FAILS PRE-FIX: the scope copy must not appear at all.
+    const scopeNodes = page.getByText(EN.scopeRequired, { exact: true });
+    await expect(
+      scopeNodes,
+      `a 400 whose body does not name the scope code rendered "Choose a workspace first" — that is ` +
+        `exactly the pre-fix defect: any 400 on this route was reported as a missing workspace, ` +
+        `including a refusal that happened AFTER the token was claimed and had nothing to do with scope`,
+    ).toHaveCount(0);
+    await expect(page.locator('p[role="alert"]')).not.toHaveText(EN.scopeRequired);
+
+    // Instead the generic failure copy — the honest answer, and the one the card
+    // footer already carries. On this branch the token really IS spent and nothing
+    // changed, so the "try again" advice is accurate (it asks for a NEW card).
+    const card = page.locator('[class*="border-sky-200"]').filter({ hasText: PROPOSAL.title });
+    await expect(
+      card,
+      "a non-scope 400 must report a failed change on the card",
+    ).toContainText(EN.confirmFail);
+    await expect(card).toContainText(EN.badgeFailed);
+    await expect(
+      card,
+      `the card must not claim it needs a workspace — the user already had one selected`,
+    ).not.toContainText(EN.badgeScopeRequired);
+
+    // Report the OBSERVED values, including the request shape, so the evidence is
+    // in the run log rather than inferred from the assertions.
+    console.log(
+      `OBSERVED nonScope=400 code=${JSON.stringify(NON_SCOPE_400_CODE)} ` +
+        `request=${JSON.stringify(decision[0])} ` +
+        `alert=${JSON.stringify(await page.locator('p[role="alert"]').textContent())} ` +
+        `scopeCopyCount=${await scopeNodes.count()}`,
+    );
   });
 
   test("a genuine failure still renders 'try again' on the card", async ({ page, baseURL }) => {
