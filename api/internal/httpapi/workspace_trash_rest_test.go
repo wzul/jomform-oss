@@ -670,8 +670,12 @@ func TestRESTTrashRefusalsCarryTheirMachineCode(t *testing.T) {
 // it also carries `sales_count`, so the `code` had to be added alongside it and
 // both must survive together.
 //
-// The route is SESSION-only and deliberately has NO MCP tool: Wan's rule is that
-// the assistant may move things to the bin and never destroy them.
+// The route is SESSION-only (an API key has no user, so a key cannot drive it),
+// and the tool in front of the store is never proposable to the in-app chat —
+// but purge_workspace IS a registered MCP tool an owner's write-scoped key can
+// call, the same class as purge_form/purge_product/purge_media. That distinction
+// is what purgeWorkspace's comment states, and
+// mcpsrv/purge_reachability_claim_test.go is the guard that keeps it stated.
 func TestRESTWorkspacePurgeRefusalCarriesItsCode(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping DB-backed REST workspace test in -short mode")

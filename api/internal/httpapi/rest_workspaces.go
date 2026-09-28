@@ -962,12 +962,34 @@ func (h *RESTHandlers) restoreWorkspace(w http.ResponseWriter, r *http.Request, 
 // purgeForm and revoke_api_key, because this is the one call in the whole
 // workspace surface that cannot be undone.
 //
-// HUMAN-ONLY, BY CONSTRUCTION. The route is session-only (sessionOwnerID, an
-// API key has no user) and there is deliberately NO MCP tool in front of it:
-// Wan's rule is that the assistant may move things to the bin and may never
-// destroy them. The guard that pins that is mcpsrv's chat_tools_guard_test.go,
-// which fails if any registered tool whose name carries a purge/permanent verb
-// is ever proposable to the chat.
+// WHAT IS HUMAN-ONLY HERE, PRECISELY (card t_c295f96e). This comment used to
+// claim "there is deliberately NO MCP tool in front of it", which was false:
+// purge_workspace IS registered and an owner's write-scoped API key reaches it.
+// The three true halves, kept apart so the next reader does not have to
+// re-derive them:
+//
+//   - THIS ROUTE is session-only. It reads h.sessionOwnerID, and an API key
+//     carries no user, so a key cannot drive this route. That half held.
+//   - The ASSISTANT may never propose a permanent delete. mcpsrv's
+//     chat_tools_guard_test.go sweeps every registered tool whose name carries a
+//     purge/permanent verb and fails if any is proposable to the in-app chat, so
+//     purge_workspace can never be offered there. That is the guarantee Wan's
+//     rule actually pins — and it is what makes the chat lane safe: everything
+//     else destructive it can reach only moves rows to a restorable bin.
+//   - It is NOT the case that no MCP tool exists. purge_workspace is registered
+//     (mcpsrv/tools.go) and a write-scoped key on the owner's account does reach
+//     it: requireWriteScope + workspaceOwner resolve that caller to the account
+//     owner, and the store then enforces trashed-only + owner + confirm_slug +
+//     never-a-workspace-with-sales. That is deliberate, and it is the same class
+//     purge_form / purge_product / purge_media have always been in: an MCP client
+//     acting for the owner is not the in-app chat.
+//
+// So "only a person can ever purge" is NOT what this repo enforces, and no
+// comment here may say it. Widening the rule to the literal reading would mean
+// taking the tool out of the MCP registry for every purge tool, not just this
+// one — an open decision on the board, not something to slip in beside a comment.
+// The guard that keeps this statement honest is
+// mcpsrv/purge_reachability_claim_test.go.
 //
 // A LIVE workspace is a 404 here: the only way in is trash → purge, enforced in
 // the store.

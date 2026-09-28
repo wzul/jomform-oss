@@ -378,7 +378,7 @@ func (s *Server) deleteWorkspaceMCP(
 		"name": workspace.Name, "deleted": deleted,
 		"note": "workspace masuk TONG SAMPAH — SEMUA data kekal (akaun, borang, produk, jualan, " +
 			"kunci API). Tiada apa-apa dimusnahkan. Pemilik boleh pulihkannya dari Settings → " +
-			"Workspace → Tong Sampah. Pemadaman KEKAL bukan untuk anda: itu tindakan manusia sahaja.",
+			"Workspace → Tong Sampah. Pemadaman KEKAL hanya melalui purge_workspace, dan chat tidak pernah boleh mencadangkannya — ia alat MCP pemilik sahaja.",
 	}, nil
 }
 

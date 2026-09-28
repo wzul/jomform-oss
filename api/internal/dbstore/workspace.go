@@ -1303,12 +1303,26 @@ func (s *WorkspaceStore) Restore(ctx context.Context, workspaceID, ownerUserID s
 //     merchant is told to settle them first. Counted inside the transaction so
 //     a sale landing between the check and the delete cannot slip through.
 //
-// HUMAN-ONLY, ENFORCED ELSEWHERE. `purge` is deliberately NOT reachable from the
-// dashboard UI or from a proposable chat tool — Wan's rule, verbatim: "Manusia
-// sahaja boleh purge kekal — assistant HANYA boleh hantar ke bin, tak pernah
-// padam kekal". The guard lives in mcpsrv (chat_tools.go / chat_tools_guard_test.go),
-// which pins that no purge/permanent-verb tool is ever proposable; this method is
-// the store half of the pair.
+// WHAT IS HUMAN-ONLY, PRECISELY (card t_c295f96e). This block used to open
+// "HUMAN-ONLY, ENFORCED ELSEWHERE", which reads as "only a person can purge".
+// That is not what the repo enforces, and saying it beside a method an owner's
+// API key can reach through MCP is the same over-strong claim the REST route
+// carried. The enforced rule is narrower and worth naming exactly:
+//
+//   - NOT PROPOSABLE TO THE IN-APP CHAT. mcpsrv (chat_tools.go /
+//     chat_tools_guard_test.go) pins that no registered tool whose name carries a
+//     purge/permanent verb is ever proposable, so the chat cannot offer this.
+//   - NOT ON THE DASHBOARD. No web surface calls DELETE /v1/workspaces/{id}/purge
+//     (the Trash view on Settings → Workspace is restore-only), so this step is
+//     reached from the REST API or from MCP — not by clicking.
+//   - REACHABLE BY MCP, deliberately. The registered tool is purge_workspace, and
+//     a write-scoped key on the owner's account reaches it — the same class
+//     purge_form / purge_product / purge_media have always been in. An MCP client
+//     acting for the owner is not the in-app chat, which is the axis the rule
+//     actually turns on.
+//
+// The two conditions a caller must still clear are unchanged: trashed-only, and
+// never a workspace that has sales. This method is the store half of that pair.
 func (s *WorkspaceStore) Purge(ctx context.Context, workspaceID, ownerUserID string) (map[string]int64, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {

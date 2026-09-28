@@ -106,7 +106,13 @@ Parity checklist (dashboard → MCP):
   `restore_workspace` brings one back whole (refused, not silently renamed, when
   its slug was retaken while it sat in the bin), and `purge_workspace` is where
   the hard delete lives — trashed rows only, needs confirm_slug, refuses a
-  workspace that has sales, and is never proposable to chat (humans only).
+  workspace that has sales, and is never proposable to chat. The distinction that
+  keeps this honest: `purge_workspace` IS a registered MCP tool an owner's
+  write-scoped API key can call, exactly like `purge_form`/`purge_product`/
+  `purge_media` — what the chat guard forbids is the in-app chat PROPOSING a
+  purge, not an owner's own MCP client performing one. The REST route behind it
+  is session-only (an API key has no user, so a key cannot drive the route), and
+  no dashboard surface calls it.
   REST: `DELETE /v1/workspaces/{id}`, `GET /v1/workspaces/{id}/deletion-check`,
   `GET /v1/workspaces/trash`, `POST /v1/workspaces/{id}/restore`,
   `DELETE /v1/workspaces/{id}/purge`.

@@ -302,9 +302,11 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	// 409 when the slug was re-claimed while it sat in the bin.
 	mux.Handle("POST /v1/workspaces/{id}/restore", h.authed(h.restoreWorkspace))
 	// Destroy a binned workspace FOR GOOD. Confirmed by typing its slug. This is
-	// the only irreversible call in the workspace surface and it is deliberately
-	// session-only with no MCP tool in front of it: the assistant may bin, never
-	// destroy.
+	// the only irreversible call in the workspace surface. The ROUTE is
+	// session-only (an API key has no user, so a key cannot drive it), and the
+	// tool in front of the store is never proposable to the in-app chat — but it
+	// IS a registered MCP tool an owner's write-scoped key can call, exactly like
+	// purge_form / purge_product / purge_media. See purgeWorkspace.
 	mux.Handle("DELETE /v1/workspaces/{id}/purge", h.authed(h.purgeWorkspace))
 	// Pre-flight for the delete button: the same emptiness definition, as a
 	// read, so the UI can list blockers before the destructive call.

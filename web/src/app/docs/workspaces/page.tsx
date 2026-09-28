@@ -64,7 +64,7 @@ const SECTIONS: Section[] = [
       "You must have at least one other workspace, because a user always needs one — the last workspace can never go to the Trash, and the button is disabled with the reason stated rather than failing after you press it. A workspace that still holds content moves just as freely; there is nothing to empty first.",
       "From Trash you can restore a workspace whole, and its original address comes back with it — unless another workspace has taken that address while it sat in the Trash, in which case the restore is refused and you are told which name to deal with rather than having your workspace silently renamed.",
       "Deleting for good is a separate, second step: it only works on a workspace already in the Trash, it asks you to type the slug again, it refuses a workspace that has sales (sales are never destroyed or silently detached), and it cannot be undone.",
-      "Settings → Workspace shows the identity and the Danger zone; AI agents use delete_workspace with check_workspace_deletion as the read-only pre-flight, list_trashed_workspaces and restore_workspace for the bin, and purge_workspace for the permanent step — which is offered to people only, never proposed by the assistant.",
+      "Settings → Workspace shows the identity and the Danger zone; the permanent step is reached through the REST API or an MCP client acting for the owner, never by clicking a dashboard control. AI agents use delete_workspace with check_workspace_deletion as the read-only pre-flight, list_trashed_workspaces and restore_workspace for the bin, and purge_workspace for the permanent step — which the in-app assistant can never propose.",
     ],
   },
 ];

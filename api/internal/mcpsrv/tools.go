@@ -433,7 +433,7 @@ func (s *Server) registerTools() {
 	}, s.setDefaultWorkspace)
 	addTool(s, &mcp.Tool{
 		Name:        "delete_workspace",
-		Description: "Hantar workspace ke TONG SAMPAH (pemilik sahaja). Tiada apa-apa dimusnahkan: borang, produk, jualan, akaun CHIP dan kunci API semuanya kekal, dan restore_workspace membawanya kembali. DUA syarat: (1) confirm_slug wajib sepadan dengan slug workspace; (2) anda mesti ada sekurang-kurangnya satu workspace LAIN — workspace terakhir tidak boleh dibuang. Workspace yang PENUH boleh masuk tong sampah (guard 'mesti kosong' sudah dibuang); padam KEKAL hanya melalui purge_workspace, dan itu manusia sahaja. Guna check_workspace_deletion dahulu untuk lihat can_delete.",
+		Description: "Hantar workspace ke TONG SAMPAH (pemilik sahaja). Tiada apa-apa dimusnahkan: borang, produk, jualan, akaun CHIP dan kunci API semuanya kekal, dan restore_workspace membawanya kembali. DUA syarat: (1) confirm_slug wajib sepadan dengan slug workspace; (2) anda mesti ada sekurang-kurangnya satu workspace LAIN — workspace terakhir tidak boleh dibuang. Workspace yang PENUH boleh masuk tong sampah (guard 'mesti kosong' sudah dibuang); padam KEKAL hanya melalui purge_workspace, dan chat tidak pernah boleh mencadangkan alat itu — ia alat MCP untuk pemilik, bukan untuk chat. Guna check_workspace_deletion dahulu untuk lihat can_delete.",
 	}, s.deleteWorkspaceMCP)
 	addTool(s, &mcp.Tool{
 		Name:        "check_workspace_deletion",
@@ -449,7 +449,7 @@ func (s *Server) registerTools() {
 	}, s.restoreWorkspaceMCP)
 	addTool(s, &mcp.Tool{
 		Name:        "purge_workspace",
-		Description: "PADAM workspace secara KEKAL dari tong sampah (akaun CHIP, borang, produk, kunci API dan jualannya gugur bersama). AMARAN: tidak boleh dibatalkan. Wajib confirm_slug = slug workspace itu. Hanya workspace DALAM TONG SAMPAH — hantar ke tong sampah dahulu guna delete_workspace. Workspace yang ADA JUALAN ditolak (jualan tidak pernah dimusnahkan atau dijadikan yatim). ALAT MANUSIA: chat tidak pernah boleh mencadangkannya.",
+		Description: "PADAM workspace secara KEKAL dari tong sampah (akaun CHIP, borang, produk, kunci API dan jualannya gugur bersama). AMARAN: tidak boleh dibatalkan. Wajib confirm_slug = slug workspace itu. Hanya workspace DALAM TONG SAMPAH — hantar ke tong sampah dahulu guna delete_workspace. Workspace yang ADA JUALAN ditolak (jualan tidak pernah dimusnahkan atau dijadikan yatim). TIDAK PERNAH DICADANGKAN OLEH CHAT: chat dalam aplikasi tidak boleh mencadangkan alat ini; ia alat MCP untuk pemilik, sama kelas dengan purge_form/purge_product/purge_media.",
 	}, s.purgeWorkspaceMCP)
 	// Issue #181: optional profile phone number parity.
 	addTool(s, &mcp.Tool{
