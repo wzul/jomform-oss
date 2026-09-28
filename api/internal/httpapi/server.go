@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"sync"
 
 	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/config"
@@ -104,6 +105,16 @@ type Server struct {
 	oauth   *OAuthHandlers
 	proxy   *middleware.TrustedProxy
 	metrics *metrics.Metrics
+
+	// routesOnce/routesMux hold the ONE route table this server serves (see
+	// routes()). Handler() wraps exactly the mux routes() returns, and the
+	// table is built once so the served table is a single object: the handler
+	// Handler() returns is a stack of closures around the mux, which nothing
+	// outside this package can see through, and the route-class guards
+	// (unlock_ratelimit_class_test.go) enumerate the table that is actually
+	// served rather than a hand-kept copy of it.
+	routesOnce sync.Once
+	routesMux  *http.ServeMux
 }
 
 // NewServer builds the HTTP API server. deps may be nil (health-only mode).
@@ -153,67 +164,7 @@ func NewServer(cfg *config.Config, log *slog.Logger, deps *Deps) *Server {
 
 // Handler returns the fully-wired root router.
 func (s *Server) Handler() http.Handler {
-	mux := http.NewServeMux()
-
-	mux.HandleFunc("GET /healthz", s.handleHealth)
-	mux.HandleFunc("GET /readyz", s.handleReady)
-	mux.HandleFunc("GET /version", s.handleVersion)
-	// Issue #142: serve the JomForm brand icon as the MCP host favicon so
-	// Claude Desktop shows a real icon for the connector.
-	mux.HandleFunc("GET /favicon.ico", s.handleFaviconICO)
-	mux.HandleFunc("GET /icon.svg", s.handleIconSVG)
-	mux.HandleFunc("GET /icon-192.png", s.handleIconPNG)
-	// Issue #100: Prometheus scrape endpoint. Exposed on the same listener;
-	// ops can restrict it at the edge (Cloudflare/nginx) if needed.
-	mux.Handle("GET /metrics", s.metrics.Handler())
-
-	if s.auth != nil {
-		s.auth.RegisterRoutes(mux)
-	}
-	// Issue #56: SES bounce/complaint feedback endpoint. Registered whenever the
-	// suppression store is wired AND SNS notifications are enabled via env — it
-	// should not be exposed (even as a 401-trap) on deployments that don't
-	// subscribe an SNS topic to it.
-	if s.deps.Suppressions != nil && s.cfg.SNSNotifEnabled {
-		mux.HandleFunc("POST /v1/internal/ses/notifications", s.handleSESNotification)
-	}
-	if s.deps.REST != nil {
-		s.deps.REST.RegisterRoutes(mux)
-	}
-	if s.deps.Public != nil {
-		s.deps.Public.RegisterRoutes(mux)
-	}
-	if s.deps.Payments != nil {
-		s.deps.Payments.RegisterRoutes(mux)
-	}
-	if s.deps.MCP != nil {
-		mux.Handle("POST /mcp", s.deps.MCP.HTTPHandler())
-		// OAuth 2.1 discovery + dynamic client registration (RFC 8414/7591) +
-		// authorization-code/PKCE flow (issue #121).
-		mux.HandleFunc("/.well-known/oauth-authorization-server", wellKnownOAuth)
-		mux.HandleFunc("/.well-known/oauth-authorization-server/mcp", wellKnownOAuth)
-		// Issue #509: OAuth 2.0 Protected Resource Metadata (RFC 9728) is
-		// MANDATORY for MCP servers, and it is how MCP clients discover the
-		// authorization server. Served at the RFC's default location plus the
-		// /mcp path-inserted form, because the protected resource is the /mcp
-		// endpoint. Clients reach it from the /mcp 401 WWW-Authenticate
-		// challenge (resource_metadata) as well.
-		mux.HandleFunc(oauthmeta.ProtectedResourcePath, wellKnownProtectedResource)
-		mux.HandleFunc(oauthmeta.ProtectedResourcePathSuffixed, wellKnownProtectedResource)
-		if s.oauth != nil {
-			// Defaults when a bare config (tests) left rate/burst at 0.
-			rate, burst := s.cfg.OAuthDCRRate, s.cfg.OAuthDCRBurst
-			if rate <= 0 {
-				rate = 1.0 / 3600.0
-			}
-			if burst <= 0 {
-				burst = 5
-			}
-			s.oauth.RegisterRoutes(mux, rate, burst)
-		}
-		mux.Handle("GET /mcp", s.deps.MCP.HTTPHandler())
-		mux.Handle("DELETE /mcp", s.deps.MCP.HTTPHandler())
-	}
+	mux := s.routes()
 
 	var h http.Handler = mux
 	// Former workspace hosts (migration 000068): a request on a slug a workspace
@@ -235,6 +186,94 @@ func (s *Server) Handler() http.Handler {
 	h = middleware.Logger(s.log, s.metrics, h)
 	h = middleware.RequestID(h)
 	return h
+}
+
+// routes returns the ONE route table this server serves: every registration
+// Server.Handler() dispatches from lives here, and Handler() is a stack of
+// middleware wrapped around exactly this object.
+//
+// It is a separate method, and the mux is built once and kept on the receiver,
+// because the handler Handler() returns is a tower of closure-based
+// middlewares — `http.HandlerFunc` values with no exported field naming the
+// handler underneath. A route guard that needs the table itself (the route
+// CLASS guards: `unlock_ratelimit_class_test.go`) therefore cannot unwrap it
+// by reflection without reaching into net/http's internals; before this seam
+// existed such a guard kept its own hand-written copy of these registrations,
+// and a route added to Handler() inline — the natural place for a one-line
+// route addition — was outside the guard while it still reported green.
+//
+// So: registrations belong HERE, never inline in Handler(). A route added to
+// Handler() would be served by Handler()'s copy but absent from the table
+// callers enumerate, which is the divergence this seam exists to prevent;
+// TestServerHandlerServesFromTheTableTheGuardWalks pins that the two are one
+// object.
+func (s *Server) routes() *http.ServeMux {
+	s.routesOnce.Do(func() {
+		mux := http.NewServeMux()
+
+		mux.HandleFunc("GET /healthz", s.handleHealth)
+		mux.HandleFunc("GET /readyz", s.handleReady)
+		mux.HandleFunc("GET /version", s.handleVersion)
+		// Issue #142: serve the JomForm brand icon as the MCP host favicon so
+		// Claude Desktop shows a real icon for the connector.
+		mux.HandleFunc("GET /favicon.ico", s.handleFaviconICO)
+		mux.HandleFunc("GET /icon.svg", s.handleIconSVG)
+		mux.HandleFunc("GET /icon-192.png", s.handleIconPNG)
+		// Issue #100: Prometheus scrape endpoint. Exposed on the same listener;
+		// ops can restrict it at the edge (Cloudflare/nginx) if needed.
+		mux.Handle("GET /metrics", s.metrics.Handler())
+
+		if s.auth != nil {
+			s.auth.RegisterRoutes(mux)
+		}
+		// Issue #56: SES bounce/complaint feedback endpoint. Registered whenever the
+		// suppression store is wired AND SNS notifications are enabled via env — it
+		// should not be exposed (even as a 401-trap) on deployments that don't
+		// subscribe an SNS topic to it.
+		if s.deps.Suppressions != nil && s.cfg.SNSNotifEnabled {
+			mux.HandleFunc("POST /v1/internal/ses/notifications", s.handleSESNotification)
+		}
+		if s.deps.REST != nil {
+			s.deps.REST.RegisterRoutes(mux)
+		}
+		if s.deps.Public != nil {
+			s.deps.Public.RegisterRoutes(mux)
+		}
+		if s.deps.Payments != nil {
+			s.deps.Payments.RegisterRoutes(mux)
+		}
+		if s.deps.MCP != nil {
+			mux.Handle("POST /mcp", s.deps.MCP.HTTPHandler())
+			// OAuth 2.1 discovery + dynamic client registration (RFC 8414/7591) +
+			// authorization-code/PKCE flow (issue #121).
+			mux.HandleFunc("/.well-known/oauth-authorization-server", wellKnownOAuth)
+			mux.HandleFunc("/.well-known/oauth-authorization-server/mcp", wellKnownOAuth)
+			// Issue #509: OAuth 2.0 Protected Resource Metadata (RFC 9728) is
+			// MANDATORY for MCP servers, and it is how MCP clients discover the
+			// authorization server. Served at the RFC's default location plus the
+			// /mcp path-inserted form, because the protected resource is the /mcp
+			// endpoint. Clients reach it from the /mcp 401 WWW-Authenticate
+			// challenge (resource_metadata) as well.
+			mux.HandleFunc(oauthmeta.ProtectedResourcePath, wellKnownProtectedResource)
+			mux.HandleFunc(oauthmeta.ProtectedResourcePathSuffixed, wellKnownProtectedResource)
+			if s.oauth != nil {
+				// Defaults when a bare config (tests) left rate/burst at 0.
+				rate, burst := s.cfg.OAuthDCRRate, s.cfg.OAuthDCRBurst
+				if rate <= 0 {
+					rate = 1.0 / 3600.0
+				}
+				if burst <= 0 {
+					burst = 5
+				}
+				s.oauth.RegisterRoutes(mux, rate, burst)
+			}
+			mux.Handle("GET /mcp", s.deps.MCP.HTTPHandler())
+			mux.Handle("DELETE /mcp", s.deps.MCP.HTTPHandler())
+		}
+
+		s.routesMux = mux
+	})
+	return s.routesMux
 }
 
 // ─── handlers ────────────────────────────────────────────────────────────────

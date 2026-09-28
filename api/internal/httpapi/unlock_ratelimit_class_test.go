@@ -2,6 +2,8 @@ package httpapi
 
 // Card t_fc5cecbd — the CLASS guard for the unlock limiter.
 // Card t_b2888b6c — enumeration is now the ROUTER'S, not the source text's.
+// Card t_5c6413aa — the walk covers the SERVED table, not a hand-re-listed
+// mirror of it.
 //
 // The behavioural guards in unlock_ratelimit_test.go prove the three CURRENT
 // unlock routes are limited, but they enumerate those routes from a hand-written
@@ -45,16 +47,41 @@ package httpapi
 //
 // # WHAT ENUMERATION IS NOW, AND WHY IT CANNOT HAVE A BLIND SPOT OF THAT SHAPE
 //
-// The route set comes from the ROUTER, not from reading the source that filled
-// it in. serverMux() below assembles a real mux the way Server.Handler() does,
-// and muxPatterns() (gate_unlock_route_test.go) walks net/http's OWN routing
-// tree, so it returns the patterns net/http actually holds — the same table a
-// live request is dispatched from. A pattern that reaches that table is
+// The route set comes from the table the SERVER ACTUALLY SERVES — not from a
+// hand-written mirror of its registrations. Server.routes() (server.go) builds
+// the one *http.ServeMux that Server.Handler() wraps, and Handler() is nothing
+// but middleware around that object; the guard calls routes() and walks what it
+// returns. muxPatterns() (gate_unlock_route_test.go) walks net/http's OWN
+// routing tree, so it returns the patterns net/http actually holds — the same
+// table a live request is dispatched from. A pattern that reaches that table is
 // enumerated, whatever spelling put it there: a literal, a package constant, a
 // `+` concatenation, a helper, another file in the package, a future
 // registration API. There is no "indirect shape" for this walk, because the walk
 // never sees a shape — only the result. That is the property the regex lacked
 // and cannot get.
+//
+// # WHY THE TABLE IS REACHED THROUGH A SEAM RATHER THAN UNWRAPPED
+//
+// Server.Handler() returns `RequestID(Logger(recoverer(Secure(RealIP(
+// AliasHostRedirect(mux)))))` — a tower of closure-based middlewares whose inner
+// handler is not reachable by reflection without reading net/http's internals.
+// So the mux is exposed to this package as Server.routes(), and two tests pin
+// that the seam cannot lie:
+//
+//   - TestServerHandlerServesFromTheTableTheGuardWalks adds a route to
+//     routes() AFTER Handler() was built and requires the served chain to
+//     answer it. A Handler() that kept its own copy of the table (the shape
+//     before this seam: every registration written inline in Handler()) fails
+//     that by name.
+//   - TestUnlockClassGuardWiresEveryRouteGroupTheServerRegisters requires every
+//     route group the server can register to be WIRED in the guard's own server
+//     or named in an allowlist with a reason. A group registered on the served
+//     table but absent from the guard's table would put its routes outside the
+//     walk, which is the defect class this file exists to close — one layer
+//     down, so it is closed mechanically too.
+//
+// The seam is a method on *Server that the production server also uses, not a
+// test-only copy: there is exactly one route table, and it is the one served.
 //
 // # WHY THE VERDICT IS BEHAVIOURAL
 //
@@ -101,17 +128,21 @@ package httpapi
 //     a silent skip, and it is the right answer: this repo's unlock routes carry
 //     no host section (the workspace host is resolved inside the handler), so such
 //     a pattern is a new shape someone should look at.
-//   - serverMux() must be kept in step with Server.Handler()'s handler groups by
-//     hand. A group wired into the server and not registered here would hold
-//     routes outside this guard;
-//     TestUnlockRoutesAreLimitedThroughTheServedChain checks the served chain
-//     still answers the three known unlock routes, which is what would go red if
-//     a registration moved out of the groups registered here.
+//   - The guard's server wires the groups that need NO database, NO Valkey and
+//     NO network (REST, Public, Payments). The two groups it cannot wire (auth,
+//     OAuth) are named in unlockClassUnwiredRouteGroups with the reason, and
+//     TestUnlockClassGuardWiresEveryRouteGroupTheServerRegisters fails if the
+//     server gains a group that is neither wired here nor named there — so this
+//     omission is checked rather than trusted.
+
 
 import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -143,11 +174,13 @@ const unlockClassProbeBurst = 12
 //	POST /embed/f/{wsslug}/{slug}/unlock   path scope
 const unlockRouteDiscoveryMin = 3
 
-// unlockRoutePatternFloor is the floor on the WALK itself: this mux registers
-// 200+ patterns across the four handler groups, so a walk returning a handful
-// means the reflection is not seeing the routing tree, which would make the
-// unlock floor above meaningless in the other direction. Deliberately loose — it
-// exists to catch a blind walk, not to pin the route count.
+// unlockRoutePatternFloor is the floor on the WALK itself: the served table
+// registers ~190 patterns across the three handler groups this guard wires (REST,
+// Public, Payments; the auth and OAuth groups are not wired — see
+// unlockClassRouteGroups), so a walk returning a handful means the reflection is
+// not seeing the routing tree, which would make the unlock floor above
+// meaningless in the other direction. Deliberately loose — it exists to catch a
+// blind walk, not to pin the route count.
 const unlockRoutePatternFloor = 50
 
 // unlockProbeHost is the Host the probe sends on every request: the host a
@@ -161,27 +194,68 @@ const unlockProbeHost = "jf-probe-ws.jomform.com"
 // route out of the judged set).
 var unlockProbeValues = []string{"jf-probe-form", "jf-probe-ws"}
 
-// serverMux assembles the route table the API actually serves. It mirrors
-// Server.Handler()'s registrations (server.go) and the same four handler groups
-// route_parity_test.go's buildParityMux assembles.
+// unlockClassRouteGroups names every route GROUP the served table is built
+// from, and says whether this guard WIRES it. The point is that the guard's own
+// server omits two groups (they need a database and a Valkey client to exist at
+// all) and that omission must FAIL when the server gains a group nobody
+// classified — a group on the served table but outside this guard's table would
+// hold routes outside the walk, which is the same defect class one layer down:
+// a route set narrower than the guard claims, reported green.
 //
-// The handlers are BARE (zero-value) on purpose: this guard asks the mux which
-// PATTERNS it holds and then measures the LIMITER, and middleware.RateLimit
-// consumes its token before the wrapped handler ever runs — so the burst's
-// throttle is observable with no database, no Valkey and no session. MEASURED on
-// this tree: all three unlock routes answer 404 x10 + 429 x2 to a 12-burst and
-// 404 x10 (no 429) to a 10-burst against this bare mux, in three successive
-// rounds each. A store a bare handler does not have is nil-guarded throughout
-// this package (it answers 404 for "no such form" rather than dereferencing),
-// which is what keeps the probe's non-429 traffic a real answer rather than a
-// recovered panic.
-func serverMux() *http.ServeMux {
-	mux := http.NewServeMux()
-	(&AuthHandlers{}).RegisterRoutes(mux)
-	(&RESTHandlers{}).RegisterRoutes(mux)
-	(&PublicHandlers{}).RegisterRoutes(mux)
-	(&PaymentsHandlers{}).RegisterRoutes(mux)
-	return mux
+// TestUnlockClassGuardWiresEveryRouteGroupTheServerRegisters reads server.go's
+// routes() and requires every `X.RegisterRoutes(mux)` receiver there to appear
+// here, and every group marked wired to have its handler NON-NIL on the very
+// server this guard walks. Adding a group to the server therefore cannot land
+// without either wiring it here or writing down why not.
+var unlockClassRouteGroups = []struct {
+	receiver string // the receiver as routes() spells it
+	reason   string // non-empty: deliberately NOT wired, and this is why
+	wired    func(*Server) bool
+}{
+	{
+		receiver: "s.auth",
+		reason: "AuthHandlers only exists when deps.Users AND deps.Sessions are wired, " +
+			"and Sessions needs a Valkey client. No `/unlock` route lives in this group " +
+			"(it is /v1/auth/*), so wiring it would add the walk's only external " +
+			"dependency for no unlock coverage.",
+	},
+	{receiver: "s.deps.REST", wired: func(s *Server) bool { return s.deps.REST != nil }},
+	{receiver: "s.deps.Public", wired: func(s *Server) bool { return s.deps.Public != nil }},
+	{receiver: "s.deps.Payments", wired: func(s *Server) bool { return s.deps.Payments != nil }},
+	{
+		receiver: "s.oauth",
+		reason: "OAuthHandlers is built alongside AuthHandlers and shares its dependency " +
+			"surface (sessions + users). Its routes are /oauth/*, none of them an unlock.",
+	},
+}
+
+// servedMux returns the ONE route table the server serves, built by
+// Server.routes() — the same object Server.Handler() wraps. Nothing in this file
+// re-lists registrations: the walk's subject is the served table itself, so a
+// route added to routes() (inline or through a group) is enumerated whatever
+// spelling put it there.
+//
+// The handler groups are BARE (zero-value) on purpose: this guard asks the mux
+// which PATTERNS it holds and then measures the LIMITER, and
+// middleware.RateLimit consumes its token before the wrapped handler ever runs —
+// so the burst's throttle is observable with no database, no Valkey and no
+// session. MEASURED on this tree: all three unlock routes answer 404 x10 + 429 x2
+// to a 12-burst and 404 x10 (no 429) to a 10-burst against this bare table, in
+// three successive rounds each. A store a bare handler does not have is
+// nil-guarded throughout this package (it answers 404 for "no such form" rather
+// than dereferencing), which is what keeps the probe's non-429 traffic a real
+// answer rather than a recovered panic.
+func servedMux() *Server {
+	return NewServer(&config.Config{
+		Port:        "0",
+		DatabaseURL: "postgres://localhost/jomform_test",
+		AppBaseURL:  "http://localhost:8080",
+		Env:         "dev",
+	}, testLogger(), &Deps{
+		REST:     &RESTHandlers{},
+		Public:   &PublicHandlers{},
+		Payments: &PaymentsHandlers{},
+	})
 }
 
 // unlockPatternFillings returns the concrete paths to try for a pattern. The
@@ -286,20 +360,22 @@ func unlockBurstSummary(codes []int) string {
 }
 
 // TestEveryUnlockRouteIsLimitedAtTheRouter is the mechanical class guard: every
-// `.../unlock` pattern the ROUTER holds must answer a burst with a 429 — i.e. be
-// limited — no matter how its registration was spelled or which file wrote it.
+// `.../unlock` pattern the SERVED table holds must answer a burst with a 429 —
+// i.e. be limited — no matter how its registration was spelled or which file
+// wrote it.
 //
 // It replaces a single-line text regex over `mux.Handle` call sites, which
 // reported GREEN on a live, unwrapped, indirectly-registered unlock route
 // (measured; see the file header). This guard has no shape to miss: it walks the
-// router's own table and judges the router's own behaviour.
+// table the server actually serves and judges that table's behaviour.
 func TestEveryUnlockRouteIsLimitedAtTheRouter(t *testing.T) {
-	mux := serverMux()
+	srv := servedMux()
+	mux := srv.routes()
 	patterns := muxPatterns(t, mux)
 	if len(patterns) < unlockRoutePatternFloor {
-		t.Fatalf("walked only %d registered pattern(s) from the server's mux (expected at least "+
-			"%d) — the route-table walk is blind, so this guard would cover only whatever it happens "+
-			"to see instead of every registered route. Patterns: %v",
+		t.Fatalf("walked only %d registered pattern(s) from the server's served table (expected at "+
+			"least %d) — the route-table walk is blind, so this guard would cover only whatever it "+
+			"happens to see instead of every registered route. Patterns: %v",
 			len(patterns), unlockRoutePatternFloor, patterns)
 	}
 
@@ -449,24 +525,61 @@ func unlockedHandler(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) { limited.ServeHTTP(w, r) }
 }
 
-// TestUnlockRoutesAreLimitedThroughTheServedChain is the second direction of the
-// same property: the three unlock routes must be limited through the FULL server
-// chain, not only on the bare mux — and they must be the routes the guard's own
-// enumeration found. It drives Server.Handler() (the real middleware stack:
-// RealIP → Secure → recoverer → Logger → RequestID → mux).
+// TestServerHandlerServesFromTheTableTheGuardWalks pins the SEAM the whole class
+// guard stands on: Server.Handler() must dispatch from the very table
+// Server.routes() returns, not from a private copy of it.
 //
-// It exists because the class guard's enumeration comes from serverMux(), a
-// mirror of Server.Handler()'s registrations written out by hand. This test
-// closes the gap that leaves: if a handler group or one of these registrations
-// moves out of the groups serverMux() assembles, the served chain stops
-// answering these paths, and this fails by name.
+// It is written at the cause, not by reading server.go: it builds the server,
+// takes the served table, then ADDS A ROUTE to that same table and requires the
+// handler Handler() ALREADY returned to answer it. A Handler() that built its own
+// mux (the shape before this seam — every registration inline in Handler()) has a
+// table this route is absent from, and this fails naming the route.
+//
+// This is what lets the class guard walk a mux instead of a hand-written mirror
+// of the registrations: if the seam ever stops being the served table, this goes
+// RED while the class guard would otherwise be judging a table nobody serves.
+func TestServerHandlerServesFromTheTableTheGuardWalks(t *testing.T) {
+	srv := servedMux()
+	hnd := srv.Handler() // built BEFORE the route below exists
+	table := srv.routes()
+
+	const (
+		pattern = "POST /qa-seam/{slug}/unlock"
+		path    = "/qa-seam/jf-probe-form/unlock"
+	)
+	table.HandleFunc(pattern, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	})
+
+	// Sanity: the route is really on the table the guard would walk.
+	if !contains(muxPatterns(t, table), pattern) {
+		t.Fatalf("the route %q added to Server.routes() is not on the table it returned — the walk "+
+			"and the table disagree, so this test cannot say anything about the seam", pattern)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, path, nil)
+	req.Host = unlockProbeHost
+	rec := httptest.NewRecorder()
+	hnd.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("POST %s (on the served table as %q) answered %d through Server.Handler(), want 403 "+
+			"from the handler registered on Server.routes(). Server.Handler() is not dispatching from "+
+			"the table routes() returns — it is serving a PRIVATE copy, so every guard that walks "+
+			"routes() (the unlock class guard among them) is judging a table nobody serves. That is "+
+			"exactly how an inline registration stayed outside the guard while it reported green.",
+			path, pattern, rec.Code)
+	}
+	t.Logf("seam holds: a route added to Server.routes() after Handler() was built is answered by "+
+		"Handler() (POST %s -> %d)", path, rec.Code)
+}
+
+// TestUnlockRoutesAreLimitedThroughTheServedChain is the second direction of the
+// same property: the shipped unlock routes must be limited through the FULL
+// server chain, not only on the bare table — and they must be the routes the
+// guard's own enumeration found. It drives Server.Handler() (the real middleware
+// stack: RealIP → Secure → recoverer → Logger → RequestID → the served table).
 func TestUnlockRoutesAreLimitedThroughTheServedChain(t *testing.T) {
-	srv := NewServer(&config.Config{
-		Port:        "0",
-		DatabaseURL: "postgres://localhost/jomform_test",
-		AppBaseURL:  "http://localhost:8080",
-		Env:         "dev",
-	}, testLogger(), &Deps{Public: &PublicHandlers{}})
+	srv := servedMux()
 	hnd := srv.Handler()
 
 	known := []struct{ pattern, path string }{
@@ -478,7 +591,7 @@ func TestUnlockRoutesAreLimitedThroughTheServedChain(t *testing.T) {
 	// The guard's own enumeration must carry these names, so a rename cannot
 	// shrink the judged set while this test still passes on the old paths.
 	var enumerated []string
-	for _, p := range muxPatterns(t, serverMux()) {
+	for _, p := range muxPatterns(t, srv.routes()) {
 		if unlockRouteMatches(p) {
 			enumerated = append(enumerated, p)
 		}
@@ -487,7 +600,7 @@ func TestUnlockRoutesAreLimitedThroughTheServedChain(t *testing.T) {
 	for _, k := range known {
 		if !contains(enumerated, k.pattern) {
 			t.Errorf("the class guard's enumeration does not carry %q (it has %v) — an unlock route "+
-				"registered outside the groups serverMux() assembles is outside the guard.",
+				"registered outside the served table is outside the guard.",
 				k.pattern, enumerated)
 			continue
 		}
@@ -496,7 +609,7 @@ func TestUnlockRoutesAreLimitedThroughTheServedChain(t *testing.T) {
 		burst := unlockBurstCodes(hnd, unlockProbeHost, k.path, uniqueTestIP(), unlockClassProbeBurst)
 		if countStatus(burst, http.StatusTooManyRequests) == 0 {
 			t.Errorf("POST %s through the served chain (%s): a burst of %d from one address produced "+
-				"NO 429 — the route is unthrottled on the server, whatever the bare mux shows. codes: %s",
+				"NO 429 — the route is unthrottled on the server, whatever the bare table shows. codes: %s",
 				k.path, k.pattern, unlockClassProbeBurst, unlockBurstSummary(burst))
 		}
 	}
@@ -504,7 +617,7 @@ func TestUnlockRoutesAreLimitedThroughTheServedChain(t *testing.T) {
 	// And the threshold: exactly the burst must be served, so the limiter is not
 	// tighter on the served chain than the /order precedent (this is the same
 	// property TestUnlockRateLimitSparesTheFirstBuyers pins behaviourally with a
-	// real form; here it pins that the bare-mux numbers above are the same shape).
+	// real form; here it pins that the bare-table numbers above are the same shape).
 	codes := unlockBurstCodes(hnd, unlockProbeHost, "/jf-probe-form/unlock", uniqueTestIP(), 10)
 	if n := countStatus(codes, http.StatusTooManyRequests); n > 0 {
 		t.Errorf("POST /jf-probe-form/unlock through the served chain: %d of the first 10 requests "+
@@ -513,6 +626,89 @@ func TestUnlockRoutesAreLimitedThroughTheServedChain(t *testing.T) {
 	}
 	t.Logf("served chain: %d `...%s` route(s) enumerated, all three limited through the full stack",
 		len(enumerated), unlockRouteSuffix)
+}
+
+// TestUnlockClassGuardWiresEveryRouteGroupTheServerRegisters pins the guard's own
+// INSTRUMENT against the defect this card is about, one layer down.
+//
+// The guard walks Server.routes() of ITS OWN server — which cannot wire the auth
+// or OAuth groups (both need a Valkey client to exist at all). So the guard's
+// table is narrower than production's by two groups, and that is a mirror by
+// another name: if the server gained a group that registers an unlock route and
+// the guard's server did not wire it, the route would be outside the walk while
+// the guard stayed green.
+//
+// So this test reads server.go's routes() and requires every route group the
+// server registers to be CLASSIFIED in unlockClassRouteGroups — either wired in
+// the guard's own server (and then required to be non-nil there) or named with a
+// reason. A new group cannot land unclassified.
+func TestUnlockClassGuardWiresEveryRouteGroupTheServerRegisters(t *testing.T) {
+	// rootDir is the repo root, resolved by openapi_parity_test.go's own
+	// runtime.Caller helper — the same root every other file-reading guard in
+	// this package uses, so the path below cannot drift from the package's.
+	src, err := os.ReadFile(filepath.Join(rootDir, "api", "internal", "httpapi", "server.go"))
+	if err != nil {
+		t.Fatalf("read server.go: %v — this guard cannot check its own instrument without the "+
+			"route table's source", err)
+	}
+
+	// Every `X.RegisterRoutes(mux)` call in the server's route table, by receiver.
+	regRe := regexp.MustCompile(`(?m)^\s*(\S+)\.RegisterRoutes\(mux\b`)
+	var registered []string
+	for _, m := range regRe.FindAllStringSubmatch(string(src), -1) {
+		registered = append(registered, m[1])
+	}
+	if len(registered) < 4 {
+		t.Fatalf("found only %d route group(s) in server.go's table (%v) — the scan is blind, so a "+
+			"group it failed to see could register an unlock route outside the guard's walk",
+			len(registered), registered)
+	}
+
+	known := map[string]*struct {
+		receiver string
+		reason   string
+		wired    func(*Server) bool
+	}{}
+	for i := range unlockClassRouteGroups {
+		g := &unlockClassRouteGroups[i]
+		known[g.receiver] = g
+	}
+
+	srv := servedMux()
+	var unclassified []string
+	for _, recv := range registered {
+		g, ok := known[recv]
+		if !ok {
+			unclassified = append(unclassified, recv)
+			continue
+		}
+		// A group marked WIRED must really be wired on the server this guard
+		// walks — otherwise its routes are served but outside the walk.
+		if g.wired == nil {
+			continue
+		}
+		if !g.wired(srv) {
+			t.Errorf("route group %q is marked wired in unlockClassRouteGroups but is NIL on the "+
+				"server this guard walks — its routes are on the served table and NOT in the guard's "+
+				"enumeration, so an unlock route added to it would be judged by nothing here", recv)
+		}
+	}
+	if len(unclassified) > 0 {
+		t.Fatalf("server.go registers %d route group(s) that unlockClassRouteGroups does not "+
+			"classify: %v — the guard's own table is then narrower than the served one BY HAND, "+
+			"which is the defect this file exists to close, one layer down. Either wire the group in "+
+			"servedMux() (and mark it wired) or name it with a reason for why its routes need no "+
+			"unlock coverage.", len(unclassified), unclassified)
+	}
+
+	var unwired []string
+	for i := range unlockClassRouteGroups {
+		if g := &unlockClassRouteGroups[i]; g.wired == nil {
+			unwired = append(unwired, g.receiver)
+		}
+	}
+	t.Logf("route groups on the served table: %d, all classified (%d deliberately not wired: %v)",
+		len(registered), len(unwired), unwired)
 }
 
 // TestUnlockPatternIsIdentifiedByItsTailNotItsWholePath pins the recogniser the
@@ -562,7 +758,7 @@ func TestUnlockPatternIsIdentifiedByItsTailNotItsWholePath(t *testing.T) {
 // unlimited (or the reverse) purely because the probe aimed at the wrong
 // registration.
 func TestUnlockProbePathsResolveBackToTheirOwnPattern(t *testing.T) {
-	mux := serverMux()
+	mux := servedMux().routes()
 	for _, pat := range []string{
 		"POST /{slug}/unlock",
 		"POST /f/{slug}/unlock",

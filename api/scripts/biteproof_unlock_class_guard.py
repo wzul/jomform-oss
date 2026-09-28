@@ -25,6 +25,18 @@ Per case the harness checks, and prints, all of:
   (e) every touched file is restored byte-identically, verified by sha256, and a
       file the case created is gone again.
 
+Seven cases. The two shapes that matter most, because each was missed by a
+SUCCESSIVE version of the guard:
+  - A/B (INDIRECT, registered through a helper): missed by the FIRST guard, the
+    single-line text regex over `mux.Handle` call sites.
+  - F/G (INLINE on the SERVED route table, server.go): missed by the SECOND
+    guard, which enumerated a HAND-RE-LISTED mirror of the server's
+    registrations, so a route added to Server.routes() outside the mirrored
+    groups was served — live and unlimited — while the guard reported green.
+    G is its control: the same inline registration WRAPPED must stay green, so
+    F's red is attributable to the missing limiter and not to inline registration
+    being rejected on sight.
+
 Restore is signal-safe: originals are held in memory and restored in a finally
 and by a SIGTERM/SIGINT handler, so a timeout kill cannot leave the worktree
 mutated.
@@ -46,12 +58,15 @@ PUBLIC = os.path.join(API, "internal/httpapi/public.go")
 # walk is proved to see a registration the reworked guard's predecessor could
 # not (it read one file's call sites one line at a time).
 XFILE = os.path.join(API, "internal/httpapi/zz_qa_indirect_route.go")
+# Cases F/G register INLINE on the SERVED route table (server.go, Server.routes
+# ()) — the shape the previous guard's hand-re-listed mirror could not see.
+SERVER = os.path.join(API, "internal/httpapi/server.go")
 
 GUARD_PKG = "./internal/httpapi/"
 GUARD = "TestEveryUnlockRouteIsLimitedAtTheRouter"
 
 # Every existing file the cases mutate, so they can be held and restored as a set.
-MUTABLE = [PUBLIC]
+MUTABLE = [PUBLIC, SERVER]
 
 
 def sha(path):
@@ -158,6 +173,25 @@ XF_CALL = LAST_REG[:-2] + (
     '}\n'
 ) + HELPER
 
+# ─── cases F/G: registered INLINE on the SERVED route table (server.go) ───────
+#
+# The registered-here anchors live in Server.routes() (server.go), not in
+# RegisterRoutes. This is the shape the guard's predecessor missed: the mirror of
+# registrations it enumerated was hand-written, so a route added to the served
+# table outside the mirrored groups was served, live and unlimited, while the
+# guard reported green.
+SERVER_ANCHOR = '\t\tmux.Handle("GET /metrics", s.metrics.Handler())\n'
+INLINE_UNWRAPPED = SERVER_ANCHOR + (
+    '\t\tmux.HandleFunc("POST /qa-inline/{slug}/unlock", func(w http.ResponseWriter, r *http.Request) {\n'
+    '\t\t\tw.WriteHeader(http.StatusForbidden)\n'
+    '\t\t})\n'
+)
+INLINE_WRAPPED = SERVER_ANCHOR + (
+    '\t\tmux.Handle("POST /qa-inline/{slug}/unlock", middleware.RateLimit(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n'
+    '\t\t\tw.WriteHeader(http.StatusForbidden)\n'
+    '\t\t})))\n'
+)
+
 # (label, mutations, want_red, want_named)
 #   mutations: list of ("replace", path, old, new) | ("create", path, content)
 #   want_red:  True  -> the guard MUST fail (the sabotage is a real defect)
@@ -191,6 +225,16 @@ CASES = [
         [("replace", PUBLIC, LAST_REG, XF_CALL), ("create", XFILE, XF_HANDLER)],
         True, ["POST /qa-xfile/{slug}/unlock"],
     ),
+    (
+        "F: an UNWRAPPED unlock route registered INLINE on the SERVED table (server.go)",
+        [("replace", SERVER, SERVER_ANCHOR, INLINE_UNWRAPPED)],
+        True, ["POST /qa-inline/{slug}/unlock"],
+    ),
+    (
+        "G: the same INLINE registration WRAPPED (control: must stay GREEN)",
+        [("replace", SERVER, SERVER_ANCHOR, INLINE_WRAPPED)],
+        False, [],
+    ),
 ]
 
 
@@ -202,9 +246,13 @@ def apply_mutations(mutations):
             src = open(path).read()
             if src.count(old) != 1:
                 return "anchor %r occurs %d times in %s" % (old[:60], src.count(old), path)
-            open(path, "w").write(src.replace(old, new))
-            on_disk = open(path).read()
-            if new not in on_disk or old in on_disk:
+            # Compare the RESULT, not substring membership: an insertion anchor
+            # (old) is legitimately still present in new when the injected text
+            # is written around it, so "old in on_disk" would call a landed
+            # mutation a failure. The exact expected content is the honest check.
+            expected = src.replace(old, new)
+            open(path, "w").write(expected)
+            if open(path).read() != expected:
                 return "replacement did not land in %s" % path
         elif m[0] == "create":
             _, path, content = m
@@ -222,13 +270,14 @@ def main():
     # Prewarm so the per-case builds are incremental, not cold.
     run(["go", "build", "./..."])
 
-    src = open(PUBLIC).read()
     for label, mutations, _, _ in CASES:
         for m in mutations:
             if m[0] == "replace":
-                if src.count(m[2]) != 1:
-                    print("HARNESS BUG: %s: anchor occurs %d times, expected 1: %r"
-                          % (label, src.count(m[2]), m[2][:80]), flush=True)
+                _, path, old, _ = m
+                src = open(path).read()
+                if src.count(old) != 1:
+                    print("HARNESS BUG: %s: anchor occurs %d times in %s, expected 1: %r"
+                          % (label, src.count(old), os.path.basename(path), old[:80]), flush=True)
                     return 2
     if GUARD not in open(os.path.join(API, "internal/httpapi/unlock_ratelimit_class_test.go")).read():
         print("HARNESS BUG: %s is not declared in unlock_ratelimit_class_test.go — this "
