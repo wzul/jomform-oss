@@ -27,6 +27,7 @@ too. So the table cannot rot into a claim about instruments that were renamed aw
 | `api/scripts/biteproof_menu_variation.py` | the menu-variation guards in `api/internal/httpapi/menu_variation_test.go`: the checkout payload carries the variant, live variation resolution, the selector markup, the card-tap path, per-row attribution, sold-out disabling. **STALE ON MAIN, measured 2026-09-26: 3 of its 8 cases run, then it aborts with `HARNESS BUG: 'card tap adds the base price...' occurs 0 times, expected 1, exit 2`. PR 770 took that path through the shared `addIfBuyable` helper, so the anchor it searches for is gone; `biteproof_menu_variant_gaps.py` covers that behaviour (and 22 more) and is green, so the net is intact, but this instrument needs re-anchoring before it proves anything again.** | 3 of 8 run | 110s (aborts) |
 | `api/scripts/biteproof_menu_variant_gaps.py` | every guard declared in `api/internal/httpapi/menu_variant_scope_test.go` (each declared guard must be named by a case, and a case counts only when its named guard is among the failures; `TestMenuInStockVariantPickStillAdds` is the one listed control): the hint and clearPick lookups, the shared add path on both the change handler and the card tap, the live-stock re-checks (render-time attribute vs a live read, the basket on open, the checkout POST, the scoped live-stock route), the form/menu selector contract in both directions, and the sold-out locales | 23 | 486s |
 | `api/scripts/biteproof_ses_replyto.py` | the SES Reply-To wiring guard in `api/internal/config/ses_replyto_wiring_guard_test.go`: both `email.SMTPConfig` senders in `cmd/jomform-api/main.go` carry `ReplyTo: cfg.SESReplyTo`, and an unset `SES_REPLY_TO` writes **no** header instead of falling back to `SES_FROM` | 5 | 122s |
+| `api/scripts/biteproof_model_default_guard.py` | the docs-parity half of `api/internal/llm/model_default_guard_test.go` (card `t_8853fc29`): that guard read the pinned MCP tool descriptions out of ONE file (`api/internal/mcpsrv/tools.go`) while the registry the rest of the repo agrees on is the PACKAGE (#732 moved `disable_2fa` into `parity_issue396.go`). Sabotages a MOVE of `generate_form` / `generate_legal_page` into a sibling file and requires each reader to answer about the registry: the one-file reader falsely blames `tools.go` when the literal merely moved (and passes against a STALE copy left behind), the package reader resolves the move, refuses to pick between two pairs for one name, and refuses a registry file in a subdirectory instead of under-reading it. Each case's pair is LIFTED from `tools.go` with the guard's own pattern rather than hand-typed, every mutation must still compile, and both legs run at a base revision (`BITEPROOF_BASE`, default `origin/main`) against the working tree — the harness exits 2 rather than compare a reader with itself | 7 | see the measured line below the table |
 | `api/scripts/biteproof_verify_fail_page.py` | the GET /v1/auth/verify failure-response guards in `api/internal/httpapi/verify_fail_page_test.go` (card `t_8c67149d`): a GET on a bad/expired link answers a localized HTML page rather than the machine JSON envelope, POST keeps the envelope, the three failure classes read differently, Arabic sets `dir=rtl`, and the page stays over the browser's 512-byte discard floor | 6 | 201s |
 | `api/scripts/biteproof_unlock_class_guard.py` | the unlock class guard in `api/internal/httpapi/unlock_ratelimit_class_test.go` (cards `t_b2888b6c`, `t_5c6413aa`): every `.../unlock` pattern the SERVED route table holds answers a password burst with a 429, however its registration was spelled. Seven sabotages, each a compiling revert with `go build ./...` asserted OK: an INDIRECT unwrapped route (the shape the guard's FIRST, text-regex version could not see), the same route WRAPPED as a control that must stay green, a LITERAL unwrapped route (the shape the old guard did catch, so reworking it regressed nothing), a SHIPPED route losing its wrapper, an INDIRECT route registered from ANOTHER FILE in the package, and — added by `t_5c6413aa` — an UNWRAPPED route registered INLINE on the served table in `server.go` (the shape the SECOND guard's hand-re-listed mirror could not see) plus the same inline route WRAPPED as its control. A red must NAME the offending route, so a failure cannot be attributed to a sibling | 7 | 304s |
 | `web/scripts/biteproof_next_managed_files.sh` | the Next managed-file guard in `web/src/lib/nextManagedFiles.test.ts`: the `agentRules:false` switch, the `/AGENTS.md` + `/CLAUDE.md` ignore rules, the `tsconfig` include, `web/next-env.d.ts` staying untracked and ignored, and the skip's own premise | 6 | 82s |
@@ -43,6 +44,21 @@ were added by the card that found them unregistered: all three files had been on
 main since #758 / #766 / #787 without a row, and none of those three changes
 touched this file — so `TestEveryBiteHarnessIsRegisteredInTheInventory` failed the
 `api test` gate on a pristine main.
+
+`api/scripts/biteproof_model_default_guard.py` is the same shape one card later:
+the guard it covers (`api/internal/llm/model_default_guard_test.go`) had no row
+because no harness had ever backed it, which is why widening its registry scope
+could only be proved by writing the first one. **Measured on this host (card
+`t_8853fc29`, load ~25 on 6 cores): 2m43s, ALL 7 CASES BITES, EXIT=0.** Each case
+printed its two legs at their own named needle and the unmutated tree was green
+under BOTH readers first (the control), so no case's red is this tree being
+broken. The three sabotaged/created files came back byte-identical (`tools.go`
+`fdc1caf043712ce6`, `parity_issue396.go` `27eca0bf9ce259c7`, the guard
+`2a09eec123dacaca`), the throwaway `api/internal/mcpsrv/sub/` directory was
+removed, and `git status` held **3 entries before and 3 after, 0 introduced by the
+run** — the tree was already dirty because this harness runs on the branch that
+changes the guard, which is why it compares status before/after instead of
+demanding a clean tree.
 
 What was measured on this host for those three rows, and what was not — stated
 apart, because the two are not the same claim:
@@ -153,8 +169,9 @@ The author of a change that either (a) touches a guard named in the table above,
 `api/internal/httpapi/menu.go`, `render_blocks.go`, `formLang.go`, `order.go`,
 `verify.go`, `public.go` and `server.go` (the unlock class guard walks the served
 route table `Server.routes()` there, so a route added to it moves that harness's
-subject), `api/cmd/jomform-api/main.go` and
-`api/internal/config/config.go`; for the web ones
+subject), `api/cmd/jomform-api/main.go`, `api/internal/config/config.go`,
+`api/internal/llm/llm.go` and the tool registry `api/internal/mcpsrv/*.go`; for
+the web ones
 `web/next.config.mjs`, `web/.gitignore`, `web/tsconfig.json`,
 `web/next-env.d.ts`; for the backup one the seam and failure paths in
 `deploy/backup/jomform-backup.sh`.

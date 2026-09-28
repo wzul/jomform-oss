@@ -74,16 +74,40 @@ var retiredMentionExempt = map[string]string{
 	"api/internal/db/migrations/000029_space_legal_pages.up.sql": "applied migration — historical record, never edited",
 }
 
-// userFacingModelSites are the files that name the model to a USER or an agent,
-// and each must name it. They are listed because the parity claim is about these
-// three surfaces specifically (the MCP tool description, its docs entry and the
+// userFacingModelSites are the files that must NAME the shipped model to a user
+// or an agent. They are listed because the parity claim is about these three
+// surfaces specifically (the MCP tool description, its docs entry and the
 // builder copy). Removing the mention from one of them is a deliberate decision,
 // not an accident: it must edit this guard, which is the point.
+//
+// WHAT THIS LIST IS NOT — and this is the sentence that was missing. It claims
+// these files MENTION the model. It does NOT claim that
+// api/internal/mcpsrv/tools.go *is* the tool registry. Those are two different
+// statements and only the first one is true: #732 moved a tool literal
+// (`disable_2fa`) out of tools.go into parity_issue396.go, so the registry is
+// the PACKAGE (see mcpRegistryDir) and tools.go is one file inside it. Reading
+// the registry out of this list was this guard's defect; the registry scope now
+// lives in mcpToolFiles, so the entry above stays a mention claim and nothing
+// here has to change when a literal moves.
 var userFacingModelSites = []string{
 	"api/internal/mcpsrv/tools.go",
 	"web/src/app/docs/mcp/page.tsx",
 	"web/src/app/builder/page.tsx",
 }
+
+// mcpRegistryDir is the MCP tool registry, in the scope the rest of the repo
+// already agrees on: the PACKAGE, not one FILE.
+//
+// WHY IT IS A DIRECTORY. A `&mcp.Tool{}` literal can live in any file of this
+// package — #732 moved `disable_2fa` into parity_issue396.go — so a reader that
+// names tools.go answers about a subset of the registry. The two web guards
+// (web/src/lib/mcpToolInventory.test.ts, web/src/lib/docsToolClaims.test.ts) and
+// the docs page body were widened to `api/internal/mcpsrv/*.go` for exactly that
+// reason; this file was not, which is the defect this constant closes. Concretely
+// it made the docs-parity check below able to compare the page against a
+// description left behind in tools.go, and made a description that merely MOVED
+// read as a fatal about tools.go.
+const mcpRegistryDir = "api/internal/mcpsrv"
 
 // TestDefaultModelIsNotRetired pins the constant itself. Two assertions, because
 // they fail differently: the exact id says WHICH model ships, and the family
@@ -214,18 +238,21 @@ func TestUserFacingStringsNameTheSameModelAsTheConstant(t *testing.T) {
 		goDesc, okGo := toolsDesc[name]
 		pageDesc, okPage := docsDesc[name]
 		if !okGo {
-			t.Fatalf("api/internal/mcpsrv/tools.go has no %q tool description — the docs-parity half cannot "+
-				"be checked and would pass vacuously", name)
+			t.Fatalf("%s holds no %q tool description — the docs-parity half cannot be checked and "+
+				"would pass vacuously. If the tool was renamed, rename it on web/src/app/docs/mcp/page.tsx "+
+				"and in this guard together; if the literal moved, this reader already follows it across "+
+				"the package, so the name is gone from the registry rather than from one file.",
+				mcpRegistryDir, name)
 		}
 		if !okPage {
 			t.Fatalf("web/src/app/docs/mcp/page.tsx has no %q entry — the MCP tool description and its docs "+
 				"entry must move together (AGENTS.md docs-parity)", name)
 		}
 		if goDesc != pageDesc {
-			t.Fatalf("the %q description differs between api/internal/mcpsrv/tools.go and "+
-				"web/src/app/docs/mcp/page.tsx:\n  tools.go: %q\n  page.tsx: %q\n"+
+			t.Fatalf("the %q description differs between the registry (%s) and the docs page "+
+				"(web/src/app/docs/mcp/page.tsx):\n  %s: %q\n  page.tsx: %q\n"+
 				"They are the same sentence on two surfaces and must move together.",
-				name, goDesc, pageDesc)
+				name, mcpRegistryDir, mcpRegistryDir, goDesc, pageDesc)
 		}
 	}
 }
@@ -311,13 +338,98 @@ var (
 	pageDescriptionPattern = regexp.MustCompile(`(?s)\{\s*name:\s*"([a-z0-9_]+)",\s*desc:\s*"((?:[^"\\]|\\.)*)"`)
 )
 
+// toolDescriptions returns the tool name→description pairs held by the MCP tool
+// REGISTRY — every non-test .go file in mcpRegistryDir, in sorted order.
+//
+// WHY EVERY FILE, and what it changes. Today this parse finds all 181 pairs
+// across the package regardless of whether it reads one file or all of them
+// (tools.go holds 180, parity_issue396.go holds `disable_2fa`), so the widening
+// is not cosmetic. It is the difference between the two failure modes the card
+// named:
+//
+//   - a literal that MOVES: read narrowly, the reader still sees the copy left
+//     behind in tools.go and compares the docs page against a STALE sentence —
+//     green, and wrong. Read package-wide, the moved copy is what is compared;
+//   - a name that LEAVES tools.go: read narrowly, the missing pair is a fatal
+//     that blames tools.go for a tool that is still registered elsewhere. Read
+//     package-wide, it is a fatal only when the name is gone from the registry,
+//     which is the claim worth making.
+//
+// One pass per file, not one over joined text, and a file holding the same name
+// twice is a failure rather than a last-write-wins: a scan that cannot tell
+// which pair it read cannot say the page matches the shipped sentence.
+//
+// A file with NO pairs is not a failure here, and that is deliberate: the
+// registry is the model-mention list (mcpToolFiles), and a file may legitimately
+// mention the model in a doc comment while holding no literal — legal_mcp.go and
+// form_generate.go do exactly that. Per-file emptiness is only a failure for the
+// single-file readers below, where it means the pattern matched nothing.
 func toolDescriptions(t *testing.T, hits map[string]map[string]bool, root string) map[string]string {
 	t.Helper()
-	const rel = "api/internal/mcpsrv/tools.go"
-	if _, ok := hits[rel]; !ok {
-		t.Fatalf("%s writes no model id — the tool descriptions the docs must match have moved or been rewritten", rel)
+	files := mcpToolFiles(t, hits)
+	if len(files) == 0 {
+		t.Fatalf("%s holds no non-test .go file that writes a model id — the tool descriptions the docs "+
+			"must match have moved or been rewritten, and an empty registry would pass vacuously",
+			mcpRegistryDir)
 	}
-	return readDescriptions(t, filepath.Join(root, rel), goDescriptionPattern, rel)
+	out := map[string]string{}
+	from := map[string]string{}
+	for _, rel := range files {
+		pairs, err := parseDescriptions(filepath.Join(root, rel), goDescriptionPattern)
+		if err != nil {
+			t.Fatalf("read %s: %v — the docs-parity half of this guard cannot run without the registry", rel, err)
+		}
+		for name, desc := range pairs {
+			if _, dup := out[name]; dup {
+				t.Fatalf("%s holds the %q tool description twice (%s and %s) — the docs-parity check reads "+
+					"one pair per name and cannot say which of the two the page matches", mcpRegistryDir,
+					name, from[name], rel)
+			}
+			out[name] = desc
+			from[name] = rel
+		}
+	}
+	if len(out) == 0 {
+		t.Fatalf("no tool name/description pair parsed from any of the %d files in %s — the registry "+
+			"reader matched nothing, so the docs-parity assertion would pass vacuously",
+			len(files), mcpRegistryDir)
+	}
+	return out
+}
+
+// mcpToolFiles is the registry's file list, from the SAME repo walk that already
+// found the model ids: every non-test .go file directly inside mcpRegistryDir,
+// sorted, each of which must write a model id.
+//
+// The walk is reused rather than the directory re-listed on purpose. It makes
+// "this file is in the registry" and "this file names the model" the same read
+// of the tree, so a file that joins the package without naming the model cannot
+// sit in the registry half-unchecked — the two halves cannot drift into
+// disagreeing about what the registry is.
+//
+// The direct-children restriction mirrors the two web guards (`mcpsrv/*.go`): the
+// package is flat, and a file in a SUBdirectory is a different package whose
+// literals this server does not register.
+func mcpToolFiles(t *testing.T, hits map[string]map[string]bool) []string {
+	t.Helper()
+	prefix := mcpRegistryDir + "/"
+	var files []string
+	for rel := range hits {
+		if !strings.HasPrefix(rel, prefix) {
+			continue
+		}
+		if strings.Contains(strings.TrimPrefix(rel, prefix), "/") {
+			t.Fatalf("%s saw %s, which is not a direct child of the registry package — this reader walks "+
+				"one level and would silently ignore the file's literals, so it refuses the tree instead "+
+				"of under-reading it", mcpRegistryDir, rel)
+		}
+		if filepath.Ext(rel) != ".go" {
+			continue
+		}
+		files = append(files, rel)
+	}
+	sort.Strings(files)
+	return files
 }
 
 func docsPageDescriptions(t *testing.T, root string) map[string]string {
@@ -326,21 +438,37 @@ func docsPageDescriptions(t *testing.T, root string) map[string]string {
 	return readDescriptions(t, filepath.Join(root, rel), pageDescriptionPattern, rel)
 }
 
+// readDescriptions is the single-file reader: it parses one file and fails when
+// the pattern matches nothing, because for those callers an empty result is a
+// vacuous check.
 func readDescriptions(t *testing.T, path string, re *regexp.Regexp, rel string) map[string]string {
 	t.Helper()
-	raw, err := os.ReadFile(path)
+	out, err := parseDescriptions(path, re)
 	if err != nil {
 		t.Fatalf("read %s: %v — the docs-parity half of this guard cannot run without it", rel, err)
-	}
-	out := map[string]string{}
-	for _, m := range re.FindAllStringSubmatch(string(raw), -1) {
-		out[m[1]] = unescapeUnicode(m[2])
 	}
 	if len(out) == 0 {
 		t.Fatalf("no tool name/description pairs parsed from %s — the pattern matched nothing, so the "+
 			"docs-parity assertion would pass vacuously", rel)
 	}
 	return out
+}
+
+// parseDescriptions reads one file and returns what the pattern found in it,
+// without judging emptiness — the callers decide whether an empty result is a
+// vacuous check. A file that cannot be READ is an error rather than an empty
+// parse: the previous single-file reader fataled on it and a registry file that
+// vanishes mid-scan must not silently shrink the registry.
+func parseDescriptions(path string, re *regexp.Regexp) (map[string]string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	for _, m := range re.FindAllStringSubmatch(string(raw), -1) {
+		out[m[1]] = unescapeUnicode(m[2])
+	}
+	return out, nil
 }
 
 // unescapeUnicode resolves the `\uXXXX` escapes a TSX string literal may use for
