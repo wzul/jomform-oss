@@ -11,7 +11,7 @@ import { workspaceQuery } from "../../lib/workspace";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 import { formEntriesAction } from "../../lib/formMode";
 import { formViewAction } from "../../lib/formPublicURL";
-import { acknowledgmentBody, needsProductsIDs, outcomeMessage, publishConfirmText, publishOutcome } from "../../lib/publishResult";
+import { acknowledgmentBody, needsProductsIDs, publishConfirmText, publishErrorText, publishOutcome } from "../../lib/publishResult";
 import TemplatePicker from "../../components/TemplatePicker";
 import { apiErr, translateApiErr } from "../../lib/apiErr";
 
@@ -234,7 +234,10 @@ export default function FormsPage() {
     const d = await r.json().catch(() => ({}));
     const outcome = publishOutcome({ ok: false, status: r.status, body: d }, "");
     if (outcome.kind !== "needs_ack") {
-      setErr(outcomeMessage(outcome) || t("forms.loadFail"));
+      // t_10453dd9: the sentence comes from the machine code (apiErr), never from
+      // the outcome — a failed publish used to carry the API's prose in a
+      // `message` field and this line rendered it.
+      setErr(publishErrorText(outcome, t("forms.loadFail"), t));
       return;
     }
     // The refusal's text is localized (the API's own prose for it is Malay and
@@ -248,7 +251,7 @@ export default function FormsPage() {
     if (!retry.ok) {
       const rd = await retry.json().catch(() => ({}));
       const retryOutcome = publishOutcome({ ok: false, status: retry.status, body: rd }, "");
-      setErr(outcomeMessage(retryOutcome) || t("forms.loadFail"));
+      setErr(publishErrorText(retryOutcome, t("forms.loadFail"), t));
       return;
     }
     setErr("");
@@ -296,7 +299,7 @@ export default function FormsPage() {
         const d = await r.json().catch(() => ({}));
         const outcome = publishOutcome({ ok: false, status: r.status, body: d }, "");
         if (outcome.kind !== "needs_ack") {
-          setErr(outcomeMessage(outcome) || t("forms.loadFail"));
+          setErr(publishErrorText(outcome, t("forms.loadFail"), t));
           return;
         }
         const named = needsProductsIDs(d).length;
@@ -312,7 +315,7 @@ export default function FormsPage() {
         if (!retry.ok) {
           const rd = await retry.json().catch(() => ({}));
           const ro = publishOutcome({ ok: false, status: retry.status, body: rd }, "");
-          setErr(outcomeMessage(ro) || t("forms.loadFail"));
+          setErr(publishErrorText(ro, t("forms.loadFail"), t));
           return;
         }
       }

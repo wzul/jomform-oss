@@ -18,7 +18,10 @@
 //                 it silently (409 + code=no_products, mirroring
 //                 dbstore.PublishWarningNoProducts). The merchant is told what is
 //                 wrong and has to confirm before it goes live.
-//   error       — anything else, with the server's own message.
+//   error       — anything else. It carries the response BODY, never a sentence:
+//                 the sentence is derived at render time by `publishErrorText`
+//                 from the machine `code` (lib/apiErr.ts) plus the calling page's
+//                 own localized fallback.
 //
 // THREE RULES THAT ARE LOAD-BEARING:
 //
@@ -44,6 +47,35 @@
 //      curl/MCP clients, which cannot look up an i18n key; the dashboard simply
 //      stops printing it. `publishResult.test.ts` makes the shape unrepresentable
 //      and fails if any call site reads a message off a publish outcome again.
+//
+//      t_10453dd9 completed the rule: the FIRST pass made only the refusal
+//      message-less, and the `error` kind still carried the server's prose in a
+//      `message` field — so the same Malay sentence reached the dashboard through
+//      the other branch (reproduced in a browser on the "Publish anyway" retry,
+//      which answers an uncoded 409). A refusal is not the only publish failure
+//      that can carry prose, so making one branch message-less was a fix to one
+//      path of a class, not to the class. The `error` kind now carries the parsed
+//      BODY (`body`) exactly as `needs_ack` carries nothing, and the only way to
+//      turn either into a sentence is `publishErrorText` / `publishConfirmText`
+//      below. There is no `message` field left for a call site to print.
+
+// `apiErr` is the repo's ONE rule for turning an API failure into what the
+// dashboard prints: the machine `code` plus the caller's localized fallback, and
+// the server's prose never. Re-using it (rather than re-implementing the rule
+// here) is what keeps the publish surfaces on the same rule as every other page
+// — issue #6177.
+//
+// Imported with an explicit `.ts` extension because this module is loaded
+// DIRECTLY by the repo's Node test runner (`node --test src/lib/*.test.ts`),
+// which resolves ESM specifiers literally and cannot guess an extension. The
+// other plain-`.ts` libs here do the same (see lib/workspace.ts importing
+// ./apiErr.ts), and TypeScript's `allowImportingTsExtensions` plus the bundler's
+// resolution make the extension harmless for the Next build.
+import { apiErr } from "./apiErr.ts";
+// A TYPE-ONLY import, so the Node test runner (which cannot load `.tsx`) never
+// has to: TypeScript erases it. `Key` already exists in components/i18n.tsx and
+// there must not be a second, drifting definition of it.
+import type { Key } from "../components/i18n";
 
 /** Mirrors `dbstore.PublishWarningNoProducts` in the Go API. */
 export const PUBLISH_NEEDS_ACK = "no_products";
@@ -60,19 +92,15 @@ export type PublishOutcome =
   // Deliberately message-less: the refusal is rendered from the dictionary by
   // `publishConfirmText`, because the API's own prose for it is Malay (rule 3).
   | { kind: "needs_ack" }
-  | { kind: "error"; message: string };
+  // ALSO message-less, and for the same reason. It carries the parsed response
+  // body so the sentence can be derived from the machine `code` at render time
+  // (`publishErrorText`) — a pre-rendered string here is exactly how the API's
+  // Malay prose reached the dashboard (t_10453dd9, reproduced on the
+  // "Publish anyway" retry's uncoded 409).
+  | { kind: "error"; body: unknown };
 
 /** The subset of a publish response this module reads. */
 export type PublishResponse = { ok: boolean; status: number; body?: unknown };
-
-/** The error string of a JSON body, or "" when the body carries none. */
-function errorMessage(body: unknown): string {
-  if (body && typeof body === "object") {
-    const e = (body as { error?: unknown }).error;
-    if (typeof e === "string") return e;
-  }
-  return "";
-}
 
 /** The stable failure token of a JSON body, or "" when it carries none. */
 function errorCode(body: unknown): string {
@@ -102,7 +130,7 @@ export function publishOutcome(res: PublishResponse, url: string): PublishOutcom
   if (res.status === 409 && errorCode(res.body) === PUBLISH_NEEDS_ACK) {
     return { kind: "needs_ack" };
   }
-  return { kind: "error", message: errorMessage(res.body) };
+  return { kind: "error", body: res.body };
 }
 
 /**
@@ -132,22 +160,37 @@ export function acknowledgmentBody(): { acknowledge: true } {
 }
 
 /**
- * outcomeMessage returns the text of a FAILED outcome that has one, or "" when
- * the outcome is not a failure.
+ * publishErrorText returns the localized sentence for a FAILED publish outcome,
+ * or "" when the outcome is not a failure.
  *
- * A `needs_ack` outcome returns "" — on purpose, and that is the fix this module
- * carries. Its sentence is not on the response (rule 3); a caller that wants to
- * say something about it uses `publishConfirmText`. Callers keep the
- * `outcomeMessage(o) || fallback` shape for the `error` branch, so a caller
- * cannot narrow the union by hand (a `kind !== "needs_ack"` test leaves
- * `published | error`, and reading `.message` off that is a compile error).
+ * This is the ONLY way a failed publish outcome becomes text (rule 3):
+ *
+ *   * a `needs_ack` outcome returns "" — its sentence comes from
+ *     `publishConfirmText` (it is a question, not an error);
+ *   * an `error` outcome goes through `apiErr` on the outcome's BODY, i.e. the
+ *     API's machine `code` plus `fallback`, the calling page's OWN translated
+ *     sentence. An unknown or absent code lands on `fallback`; the server's prose
+ *     is never returned.
+ *
+ * `fallback` is passed in (rather than defaulted here) so the sentence stays the
+ * calling page's own — the page knows what it was doing, and a generic line from
+ * this module would replace "Failed to save." with something vaguer.
+ *
+ * The previous shape, `outcomeMessage(o) || t("…")`, could not uphold that: the
+ * outcome carried a `message` string the module had filled from the response's
+ * `error`, so `||` never fired and the API's Malay prose reached the screen
+ * (t_10453dd9). There is no such field now.
  */
-export function outcomeMessage(o: PublishOutcome): string {
-  return o.kind === "error" ? o.message : "";
+export function publishErrorText(o: PublishOutcome, fallback: string, t: Translate): string {
+  return o.kind === "error" ? apiErr(o.body, fallback, t) : "";
 }
 
-/** Minimal shape of the `t()` this module needs (the i18n dictionary lookup). */
-export type Translate = (key: typeof PUBLISH_NEEDS_ACK_KEY) => string;
+/**
+ * Minimal shape of the `t()` this module needs. It is `apiErr`'s translator: any
+ * i18n key at all, because the sentence now comes from the shared machine-code
+ * dictionary rather than from one hard-coded key.
+ */
+export type Translate = (key: Key) => string;
 
 /**
  * publishConfirmText returns the localized sentence a caller shows (or asks the

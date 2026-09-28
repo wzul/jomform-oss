@@ -19,7 +19,7 @@ import MediaPicker from "../../components/MediaPicker";
 import ProductPicker, { type PickerProduct } from "../../components/ProductPicker";
 import { workspaceQuery, workspaceScope } from "../../lib/workspace";
 import { defaultNotificationEvent, formEntriesAction } from "../../lib/formMode";
-import { acknowledgmentBody, outcomeMessage, publishConfirmText, publishOutcome } from "../../lib/publishResult";
+import { acknowledgmentBody, publishConfirmText, publishErrorText, publishOutcome } from "../../lib/publishResult";
 import { apiErr } from "../../lib/apiErr";
 
 type FormDetail = {
@@ -768,7 +768,7 @@ function FormSettingsInner() {
       const d = await sr.json().catch(() => ({}));
       const outcome = publishOutcome({ ok: false, status: sr.status, body: d }, "");
       if (outcome.kind !== "needs_ack") {
-        setMsg(outcomeMessage(outcome) || t("prof.failed"));
+        setMsg(publishErrorText(outcome, t("prof.failed"), t));
         return;
       }
       // The refusal's text is localized (the API's own prose for it is Malay and
@@ -782,7 +782,7 @@ function FormSettingsInner() {
       if (!retry.ok) {
         const rd = await retry.json().catch(() => ({}));
         const ro = publishOutcome({ ok: false, status: retry.status, body: rd }, "");
-        setMsg(outcomeMessage(ro) || t("prof.failed"));
+        setMsg(publishErrorText(ro, t("prof.failed"), t));
         return;
       }
     }

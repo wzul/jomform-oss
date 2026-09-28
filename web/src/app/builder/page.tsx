@@ -19,7 +19,7 @@ import {
   PUBLISH_NEEDS_ACK_KEY,
   acknowledgmentBody,
   liveLink,
-  outcomeMessage,
+  publishErrorText,
   publishOutcome,
 } from "../../lib/publishResult";
 import TemplatePicker from "../../components/TemplatePicker";
@@ -32,7 +32,9 @@ import { apiErr, translateApiErr } from "../../lib/apiErr";
    `needsAck`— the API refused (409, code=no_products): a payment form with
                nothing to sell may not publish silently. The merchant confirms
                with "Publish anyway", which re-sends the publish acknowledged.
-   `error`   — anything else, with the server's own message. */
+   `error`   — anything else. The notice carries no sentence: it is derived at
+               render from the failure's machine code + the builder's own
+               fallback (lib/publishResult.ts rule 3). */
 type PublishNotice =
   | { kind: "live"; url: string }
   // Message-less on purpose: the sentence is rendered from the dictionary (see
@@ -747,11 +749,13 @@ export default function Builder() {
       if (outcome.kind !== "published") {
         // A `needsAck` notice carries no message: its sentence is rendered from
         // the dictionary (the API's prose for that refusal is Malay) — see
-        // lib/publishResult.ts.
+        // lib/publishResult.ts. The error notice likewise carries none: the
+        // sentence comes from the failure's machine code (t_10453dd9), so the
+        // API's prose cannot reach the panel through either branch.
         setPublishNotice(
           outcome.kind === "needs_ack"
             ? { kind: "needsAck" }
-            : { kind: "error", message: outcomeMessage(outcome) || t("bld.saveFail") },
+            : { kind: "error", message: publishErrorText(outcome, t("bld.saveFail"), t) },
         );
         setSaving(false);
         await load();
@@ -823,9 +827,13 @@ export default function Builder() {
       const pd = await pr.json().catch(() => ({}));
       const outcome = publishOutcome({ ok: pr.ok, status: pr.status, body: pd }, "");
       if (outcome.kind !== "published") {
+        // The reported case (t_10453dd9): this retry answers an UNCODED 409, and
+        // the sentence used to be the outcome's own `message` — i.e. whatever
+        // Malay prose the API sent. It now comes from the machine code + the
+        // builder's fallback, exactly like the publish path above.
         setPublishNotice({
           kind: "error",
-          message: outcomeMessage(outcome) || t("bld.saveFail"),
+          message: publishErrorText(outcome, t("bld.saveFail"), t),
         });
         return;
       }

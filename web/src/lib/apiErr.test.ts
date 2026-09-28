@@ -123,6 +123,26 @@ const ALLOWED = [
 ];
 
 /**
+ * The ONE file allowed to read a `.error` field, with its reason. An explicit
+ * list, not a pattern: every other file that touches `.error` must go through
+ * apiErr(), and the point of the check below is that a module cannot re-export
+ * the prose under a new name (t_10453dd9 — `publishResult.ts` did exactly that
+ * with an `outcomeMessage()` helper, which is why that module is NOT in this
+ * list and `publishErrorText` routes through apiErr instead).
+ *
+ *   * `lib/apiErr.ts` — reading `.error` IS its job; it converts the envelope
+ *     into a dictionary sentence and never returns the prose.
+ *
+ * NOT listed, deliberately: `lib/publishResult.ts` (classifies the response; it
+ * reads the `code` sibling only), `lib/wsfetch.ts` (parks the parsed body on
+ * HttpError for apiErr's callers, never the prose) and the generated spec/example
+ * modules (schemas, no failure rendering). If any of them starts reading
+ * `.error` for a message, this check fails rather than letting the prose travel
+ * one hop further from the wire.
+ */
+const PROSE_READERS_ALLOWED = new Set(["lib/apiErr.ts"]);
+
+/**
  * `const NAME = <expr>` initializers in one file, for the alias hop below
  * (`const msg = apiErr(d, …)` then `setErr(msg)`).
  */
@@ -224,6 +244,93 @@ test("no call site falls back to the server's error prose", () => {
     picker,
     /apiErr\(d,\s*t\("tpl\.useFail"\)/,
     "the reported call site no longer translates the API error code",
+  );
+});
+
+test("no source file reads the failure BODY's prose field", () => {
+  // THE HOLE THIS CLOSES (t_10453dd9, reproduced in a browser). Both checks above
+  // reason about the SYNTAX around a read — a `.error` feeding a `||`, or a
+  // setter's argument resolving to apiErr. Neither can see a module that reads
+  // `.error` somewhere else and hands the string on under a new name, which is
+  // exactly what happened:
+  //
+  //   publishResult.ts   errorMessage(body) → { kind:"error", message }   // prose in
+  //   builder/page.tsx   message: outcomeMessage(outcome) || t("…")       // prose out
+  //
+  // The call site's argument never contained a `.error` read (it was a local
+  // helper call), so the second check cleared it, and there was no `||` on the
+  // read itself, so the first one did too. The Malay sentence reached the screen
+  // through a green suite — measured on the "Publish anyway" retry, which answers
+  // an uncoded 409.
+  //
+  // So this check does not look at the syntax at all: it looks at WHO MAY TOUCH
+  // THE PROSE FIELD. Reading `.error` is apiErr()'s job and nobody else's, and
+  // the ban is derived — any new reader fails the build — so the next module that
+  // wants to "just parse the body into a message field" cannot reintroduce the
+  // class. The exemption list is asserted to be exactly one entry: a growing list
+  // is how a rule like this rots.
+  assert.deepEqual(
+    [...PROSE_READERS_ALLOWED],
+    ["lib/apiErr.ts"],
+    "the exemption list grew — every entry is a file that may put the API's prose in a `message`",
+  );
+  const READ = /\.\s*error\b/;
+  const offenders: string[] = [];
+  let examined = 0;
+  for (const p of sources) {
+    // NOTE: this walk's `rel` carries a leading "/" (SRC resolves to the src
+    // directory itself), so it is normalised here rather than compared raw.
+    const rel = p.slice(SRC.length).replace(/^\/+/, "");
+    if (rel.endsWith(".test.ts")) continue;
+    if (PROSE_READERS_ALLOWED.has(rel)) continue;
+    // A runLoad outcome's `.error` is ALREADY localized (runLoad renders
+    // `message` or the machine code — see lib/wsfetch.ts). Which names hold one
+    // is DERIVED from the file, exactly as in the check above, so a page that
+    // renames `r` keeps its exemption and no stale name list can widen it.
+    const src = readFileSync(p, "utf8");
+    const loadVars = new Set<string>();
+    for (const m of src.matchAll(/(?:^|[;{}(\s])(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*await\s+runLoad\b/g)) {
+      loadVars.add(m[1]);
+    }
+    // String/template CONTENTS are blanked, so a sentence that merely mentions
+    // `d.error` (documentation, a comment, an error-message string) is not a read.
+    scanLines(p).forEach(({ n, text, code: stripped }) => {
+      if (isCommentLine(text)) return;
+      if (!READ.test(stripped)) return;
+      for (const m of stripped.matchAll(/([A-Za-z_$][\w$]*)\s*\??\.\s*error\b/g)) {
+        if (loadVars.has(m[1])) return; // a runLoad outcome — already localized
+      }
+      examined++;
+      if (ALLOWED.some((a) => text.includes(a))) return;
+      offenders.push(`${rel}:${n}: ${text.trim()}`);
+    });
+  }
+  assert.deepEqual(
+    offenders,
+    [],
+    `these files read the failure body's \`error\` prose (t_10453dd9) — the prose may ` +
+      `travel exactly one hop (apiErr) and never become a message a page renders. ` +
+      `Pass the BODY to apiErr(body, t("your.fallback"), t) instead, or read the ` +
+      `machine \`code\`:\n  ` +
+      offenders.join("\n  "),
+  );
+  // A floor, so an empty offender list cannot be the result of the walk breaking
+  // (a rename of `src/`, a broken glob) rather than of the rule holding.
+  assert.ok(examined > 0, "no `.error` read was examined at all — the walk is broken");
+
+  // And the two modules this card is about must stay message-less: the prose had
+  // a `message` field to hide in, and that field (not the helper name) is what
+  // put the sentence on the screen.
+  const publish = readFileSync(`${SRC}lib/publishResult.ts`, "utf8");
+  assert.doesNotMatch(
+    publish,
+    /message\s*:\s*errorMessage|kind:\s*"error",\s*message:/,
+    "publishResult.ts carries a pre-rendered message again — that field is where the prose reached the dashboard",
+  );
+  assert.match(
+    publish,
+    /publishErrorText[\s\S]*?apiErr\(o\.body/,
+    "publishErrorText no longer routes the failure through apiErr",
   );
 });
 

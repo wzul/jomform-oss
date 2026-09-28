@@ -44,8 +44,8 @@ import {
   acknowledgmentBody,
   liveLink,
   needsProductsIDs,
-  outcomeMessage,
   publishConfirmText,
+  publishErrorText,
   publishOutcome,
 } from "./publishResult.ts";
 import { DICT, LANGS } from "../components/i18nDict.ts";
@@ -160,7 +160,10 @@ test("THE DEFECT: the refusal renders in the dashboard's language, never the API
   assert.match(prose, /Borang bayaran ini tiada produk/, "the Go prose is not the reported Malay sentence");
 
   const outcome = publishOutcome({ ok: false, status: 409, body }, "");
-  const tIn = (lang: string) => (k: typeof PUBLISH_NEEDS_ACK_KEY) => dict(lang, k);
+  // `Translate` is now apiErr's translator for ANY i18n key (see the module), so
+  // the fixture takes a key and reads the dictionary — the same shape every page
+  // passes as `t`.
+  const tIn = (lang: string) => (k: string) => dict(lang, k);
 
   const en = publishConfirmText(outcome, tIn("en"));
   assert.match(en, /payment form with no products/i, `lang=en rendered ${JSON.stringify(en)}`);
@@ -234,7 +237,10 @@ test("a 409 with a different code is NOT swallowed as the warning", () => {
   // refused for a different reason.
   const out = publishOutcome({ ok: false, status: 409, body: { error: "nope", code: "something_else" } }, "");
   assert.equal(out.kind, "error");
-  assert.equal(out.kind === "error" && out.message, "nope");
+  // The body is carried for the code lookup, but the PROSE in it is never what
+  // a caller renders: an unknown code lands on the caller's own fallback.
+  assert.equal(out.kind === "error" && (out.body as { error?: string }).error, "nope");
+  assert.equal(publishErrorText(out, "Localized fallback.", () => "T"), "Localized fallback.");
   // And the code alone is not enough — the status must be 409 too.
   const wrongStatus = publishOutcome({ ok: false, status: 400, body: { code: PUBLISH_NEEDS_ACK } }, "");
   assert.equal(wrongStatus.kind, "error");
@@ -243,7 +249,7 @@ test("a 409 with a different code is NOT swallowed as the warning", () => {
 test("an error with no body still yields a usable outcome", () => {
   const out = publishOutcome({ ok: false, status: 500 }, "");
   assert.equal(out.kind, "error");
-  assert.equal(out.kind === "error" && out.message, "");
+  assert.equal(publishErrorText(out, "Localized fallback.", () => "T"), "Localized fallback.");
 });
 
 test("the acknowledgement body carries exactly the one field", () => {
@@ -260,17 +266,35 @@ test("WEB/GO CONTRACT: PUBLISH_NEEDS_ACK equals the Go constant", () => {
   assert.equal(PUBLISH_NEEDS_ACK, m[1]);
 });
 
-test("outcomeMessage yields the failure text, and nothing for a refusal or a success", () => {
-  // Callers use `outcomeMessage(o) || fallback`. A published outcome must return
-  // "" so the fallback applies; a `needs_ack` outcome must ALSO return "" now —
-  // its sentence comes from the dictionary, and a caller that took it from here
-  // is how the Malay prose reached the dashboard.
+test("publishErrorText yields the localized failure sentence, and nothing for a refusal or a success", () => {
+  // Callers use `publishErrorText(o, t("your.fallback"), t)`. A published outcome
+  // must return "" so nothing renders it; a `needs_ack` outcome must ALSO return
+  // "" — its sentence comes from the dictionary, and a caller that took it from
+  // here is how the Malay prose reached the dashboard.
+  //
+  // The error case is the t_10453dd9 defect: the sentence is the machine code's
+  // translation or the caller's OWN fallback, and NEVER the body's prose.
   const live = publishOutcome({ ok: true, status: 200 }, "https://a.jomform.com/x");
-  assert.equal(outcomeMessage(live), "");
+  assert.equal(publishErrorText(live, "F", () => "T"), "");
   const warn = publishOutcome({ ok: false, status: 409, body: { error: "no", code: PUBLISH_NEEDS_ACK } }, "");
-  assert.equal(outcomeMessage(warn), "", "the refusal's text must not be reachable through outcomeMessage");
-  const err = publishOutcome({ ok: false, status: 500, body: { error: "boom" } }, "");
-  assert.equal(outcomeMessage(err), "boom");
+  assert.equal(publishErrorText(warn, "F", () => "T"), "", "the refusal's text must not be reachable through publishErrorText");
+
+  // An UNCODED failure — the reported case. The API's prose is on the body and
+  // the sentence is the caller's fallback.
+  const uncoded = publishOutcome({ ok: false, status: 409, body: { error: "penerbitan gagal atas sebab dalaman pada pelayan" } }, "");
+  assert.equal(uncoded.kind, "error");
+  assert.equal("message" in uncoded, false, `the error outcome carries a message again (${JSON.stringify(uncoded)}) — that field is where the API's prose reached the dashboard`);
+  const rendered = publishErrorText(uncoded, "Failed to set the form status.", () => "T");
+  assert.equal(rendered, "Failed to set the form status.");
+  assert.ok(!rendered.includes("penerbitan gagal"), "the server's Malay prose was rendered");
+
+  // A KNOWN code wins over the fallback, translated.
+  const known = publishOutcome({ ok: false, status: 404, body: { error: "workspace tidak dijumpai", code: "workspace.notFound" } }, "");
+  const viaDict = (lang: string) => (k: string) => dict(lang, k);
+  const en = publishErrorText(known, "Failed to set the form status.", viaDict("en"));
+  assert.notEqual(en, "Failed to set the form status.", "a known code did not translate");
+  assert.ok(!en.includes("workspace tidak dijumpai"), `lang=en rendered the server's Malay prose: ${JSON.stringify(en)}`);
+  assert.match(en, /workspace was not found/i);
 });
 
 test("needsProductsIDs reads the bulk route's withheld ids", () => {
