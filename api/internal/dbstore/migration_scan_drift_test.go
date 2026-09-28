@@ -25,11 +25,13 @@ package dbstore
 // Both are pure static checks — they run in CI with no database required.
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -191,19 +193,50 @@ func packageDir() string {
 	return filepath.Dir(file)
 }
 
+// selectRegionKeywordRe finds the FROM that closes a `SELECT ... FROM` constant,
+// case-insensitively, as a WORD. This is the ONE definition of where the SELECT
+// list ends — selectColumnCount (the column/field alignment check) and
+// migrationColumnsAppearInSelect (the migration check) both go through
+// selectRegion, so the two cannot end up cutting the constant in different
+// places.
+//
+// The word boundary is load-bearing and was MEASURED: an unbounded
+// case-insensitive match finds a `from` INSIDE productSelect's last-but-one
+// column, `COALESCE(schedule_mode, 'from_payment')`, so selectRegion returns a
+// region that stops there — `productSelect` counts 16 columns instead of 17 and
+// the alignment check then fails on a HEALTHY tree ("productSelect selects 16
+// columns but Product has 17 exported fields"). `_` is a word character, so there
+// is no boundary between `from` and `_payment`; that is what makes the bounded
+// form correct.
+var selectRegionKeywordRe = regexp.MustCompile(`(?i)\bfrom\b`)
+
+// selectRegion returns the SELECT list of a `SELECT ... FROM` constant: the text
+// after the word SELECT up to (but not including) the FROM that terminates it,
+// and whether the constant HAS that shape at all. A bare column list (no SELECT,
+// no FROM) returns ok=false rather than an empty region — the distinction the
+// migration guard turns on, because an empty region would fail every column of a
+// bare list for the wrong reason.
+func selectRegion(sel string) (string, bool) {
+	m := regexp.MustCompile(`(?i)\bselect\b`).FindStringIndex(sel)
+	if m == nil {
+		return "", false
+	}
+	rest := sel[m[1]:]
+	f := selectRegionKeywordRe.FindStringIndex(rest)
+	if f == nil {
+		return "", false
+	}
+	return rest[:f[0]], true
+}
+
 // selectColumnCount counts the top-level columns in a `SELECT ... FROM`
 // constant body. It is robust to nested parens (COALESCE(...), casts) and
 // multi-line constants.
 func selectColumnCount(sel string) int {
-	start := strings.Index(sel, "SELECT")
-	if start < 0 {
+	body, ok := selectRegion(sel)
+	if !ok {
 		return -1
 	}
-	from := strings.Index(sel[start:], "FROM")
-	if from < 0 {
-		return -1
-	}
-	body := sel[start+len("SELECT") : start+from]
 	depth := 0
 	count := 1
 	for _, r := range body {
@@ -267,7 +300,7 @@ func structFieldCount(t *testing.T, dir, typeName string) int {
 
 // collectSelectConsts parses the package source and returns the value of each
 // *Select constant (the raw string literal).
-func collectSelectConsts(t *testing.T, dir string) map[string]string {
+func collectSelectConsts(t driftReporter, dir string) map[string]string {
 	t.Helper()
 	out := map[string]string{}
 	entries, err := os.ReadDir(dir)
@@ -467,12 +500,26 @@ func TestSelectScanColumnAlignment(t *testing.T) {
 	}
 }
 
-// TestMigrationColumnsAppearInSelect parses every migration *.up.sql and
-// asserts that any ALTER TABLE ... ADD COLUMN on a table with a *Select
-// constant is reflected in that constant (unless deliberately unselected).
+// TestMigrationColumnsAppearInSelect parses every migration *.up.sql and asserts
+// that any ALTER TABLE ... ADD COLUMN on a table with a *Select constant is
+// reflected in EVERY constant that reads that table (unless deliberately
+// unselected).
+//
+// The body is in migrationColumnsAppearInSelect, parameterised on the source and
+// migration directories, so the bite test below can run this same rule against a
+// throwaway copy with one constant sabotaged. A second, hand-written copy of the
+// check would be free to drift from the guard it claims to prove.
 func TestMigrationColumnsAppearInSelect(t *testing.T) {
 	dir := packageDir()
-	migDir := filepath.Join(dir, "..", "db", "migrations")
+	migrationColumnsAppearInSelect(t, dir, filepath.Join(dir, "..", "db", "migrations"))
+}
+
+// migrationColumnsAppearInSelect is the guard's body: it reads `migDir`'s
+// *.up.sql files and checks each added column against the SELECT LIST of every
+// column-list constant registered for the table it belongs to, parsing those
+// constants out of the Go source in `dir`.
+func migrationColumnsAppearInSelect(t driftReporter, dir, migDir string) {
+	t.Helper()
 	entries, err := os.ReadDir(migDir)
 	if err != nil {
 		t.Fatalf("read migrations dir: %v", err)
@@ -508,8 +555,8 @@ func TestMigrationColumnsAppearInSelect(t *testing.T) {
 				continue
 			}
 			// Only enforce for tables that have a *Select constant.
-			selName := selectConstForTable(table)
-			if selName == "" {
+			selNames, ok := selectConstsForTable(table)
+			if !ok {
 				continue
 			}
 			// Issue #431: the Space→Workspace rename (migration 000045) renamed
@@ -523,26 +570,79 @@ func TestMigrationColumnsAppearInSelect(t *testing.T) {
 			if intentionallyUnselected[table][col] {
 				continue
 			}
-			sel, ok := consts[selName]
-			if !ok {
-				t.Errorf("%s: table %q has select constant %s but it was not parsed", name, table, selName)
-				continue
-			}
-			if !strings.Contains(strings.ToLower(sel), strings.ToLower(col)) {
-				t.Errorf("%s: adds column %q to table %q but %s does not select it — update the select constant AND all Scan call sites in the same PR", name, col, table, selName)
+			// EVERY constant on the table is checked, not one representative.
+			// A table with two constants (a live read and a trash read) is the
+			// case that used to be a coin flip — see selectConstsForTable.
+			for _, selName := range selNames {
+				sel, ok := consts[selName]
+				if !ok {
+					t.Errorf("%s: table %q has select constant %s but it was not parsed", name, table, selName)
+					continue
+				}
+				// The check is scoped to the SELECT LIST, not the whole
+				// constant. Matching the whole constant let a column satisfy
+				// the guard by surviving anywhere in it — both workspace
+				// constants carry `deleted_at` in their WHERE clause, so a
+				// migration-added column removed from the column list was
+				// invisible (measured: PASS 30/30 on the unfixed guard).
+				list, ok := selectRegion(sel)
+				if !ok {
+					t.Errorf("%s: %s is not a `SELECT ... FROM` constant this guard can bound (table %q)", name, selName, table)
+					continue
+				}
+				if !containsColumn(list, col) {
+					t.Errorf("%s: adds column %q to table %q but %s does not select it — update the select constant AND all Scan call sites in the same PR", name, col, table, selName)
+				}
 			}
 		}
 	}
 }
 
-// selectConstForTable maps a table name to its *Select constant.
-func selectConstForTable(table string) string {
+// selectConstsForTable returns EVERY *Select constant that selects from the
+// named table, SORTED, and whether the table has any at all.
+//
+// A table can have more than one column-list constant: `workspaces` has
+// workspaceSelect (live) and trashedWorkspaceSelect (the bin), `forms` has
+// formSelect and trashedFormSelect, `products` has productSelect and
+// trashedProductSelect. Returning ONE of them — which the map-range version of
+// this did — made the guard a coin flip: Go randomises map iteration, so which
+// constant got checked changed per run, and a real drift in the other one was
+// invisible on most runs (measured on the merged tree: the `workspaces` drift
+// failed 20 of 30 runs; the card measured 21 of 60).
+//
+// The caller must check ALL of them: a migration adds the column to the TABLE,
+// so every constant reading that table is obliged to select it. This is also why
+// the result is sorted rather than taken in map order — a failure message that
+// names one constant must not depend on the run.
+func selectConstsForTable(table string) ([]string, bool) {
+	var names []string
 	for name, tbl := range selectTables {
 		if tbl == table {
-			return name
+			names = append(names, name)
 		}
 	}
-	return ""
+	sort.Strings(names)
+	return names, len(names) > 0
+}
+
+// containsColumn reports whether a SELECT list names `col` as a COLUMN, matched
+// case-insensitively on word boundaries.
+//
+// Word boundaries, not `strings.Contains`, because a column name is a WORD: the
+// bare-substring test reported a match for `deleted_at` inside a longer
+// identifier such as `not_deleted_at`, and for `id` inside every `account_id`,
+// `product_id` and `workspace_id` in the list. Those are false GREENs — the
+// guard would pass while the column it exists to pin is absent. The boundary
+// also makes the check independent of how a caller quotes the name: with or
+// without backticks the `_`-surrounded form still matches, so `\b` (which treats
+// `_` as a word character) is the right rule and `\bdeleted_at\b` does NOT match
+// `deleted_at_archive`.
+//
+// The SELECT-REGION scoping happens in the caller (selectRegion), so this only
+// has to be correct about what "names this column" means.
+func containsColumn(list, col string) bool {
+	re := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(col) + `\b`)
+	return re.MatchString(list)
 }
 
 // tableForAlter finds the table name of the ALTER TABLE statement that
@@ -583,4 +683,285 @@ func strconvUnquote(s string) (string, error) {
 		return s[1 : len(s)-1], nil
 	}
 	return strconv.Unquote(s)
+}
+
+// ── The bite proof for TestMigrationColumnsAppearInSelect ─────────────────────
+//
+// A guard nobody has seen fail is indistinguishable from a guard that works, and
+// this one HAD two ways of not failing. Both were reproduced by mutation on the
+// merged tree (main at ca110813, workspace.go restored byte-identically after
+// each probe, `go build ./...` asserted OK so the mutation is a compiling one —
+// that is the whole reason the guard exists):
+//
+//  1. It matched the column name anywhere in the WHOLE constant, not in its
+//     SELECT list. Both workspace constants carry `deleted_at` in their WHERE
+//     clause, so removing it from the column LIST while it survived in the WHERE
+//     still satisfied the check: 30 runs, 30 PASSES, no failure at all.
+//  2. It checked ONE constant per table, chosen by ranging a Go map. `workspaces`
+//     has two (workspaceSelect and trashedWorkspaceSelect), `forms` and
+//     `products` likewise, and Go randomises map iteration, so a drift in the
+//     constant it did not pick was invisible on most runs. Measured: dropping
+//     `deleted_at` from trashedWorkspaceSelect — name gone from the constant
+//     entirely, so defect 1 could not mask it — passed 20 of 30 runs (the card
+//     measured 21 of 60). After the fix the same tree fails 30 of 30.
+//
+// This test pins both properties by running the guard's own body
+// (migrationColumnsAppearInSelect) against a throwaway copy of the package with
+// one constant sabotaged. It never touches the tree under test, and it does not
+// re-implement the rule: if the shipped check is weakened again, these cases go
+// RED. That was verified by reverting each half of the fix in turn — with the
+// check unscoped again BOTH cases passed (proof stopped biting); with the lookup
+// narrowed to one candidate again BOTH cases passed; with the fix in place each
+// case fails on the FIRST run and names the constant that was actually broken.
+
+// workspaceSelectPristine / trashedWorkspaceSelectPristine are the exact SELECT
+// lines the sabotage rewrites, taken from the tree's own source so a rename of
+// the constants fails this proof loudly instead of silently proving nothing.
+const (
+	workspaceSelectPristine        = "const workspaceSelect = `SELECT id, owner_user_id, name, slug, deleted_at FROM workspaces WHERE deleted_at IS NULL`"
+	trashedWorkspaceSelectPristine = "const trashedWorkspaceSelect = `SELECT id, owner_user_id, name, slug, deleted_at\n	FROM workspaces WHERE deleted_at IS NOT NULL`"
+)
+
+// TestMigrationColumnsAppearInSelectBitesEveryConstantOnTheTable is the bite
+// proof. It is deterministic by construction: it asserts the guard's FIRST run
+// on the sabotaged copy fails, and repeats the run so that a map-order-dependent
+// guard cannot pass by luck.
+func TestMigrationColumnsAppearInSelectBitesEveryConstantOnTheTable(t *testing.T) {
+	dir := packageDir()
+	migDir := filepath.Join(dir, "..", "db", "migrations")
+
+	// The control: the UNMUTATED copy must pass, or every red below is
+	// meaningless — a guard that fails on a healthy tree proves nothing about
+	// its mutations.
+	control := copyPackageForBite(t, dir, migDir)
+	runBiteGuard(t, control.dir, control.migDir, false, "")
+
+	// Repeat count: enough repetitions that a guard which still ranged a map
+	// would be caught with overwhelming probability (the unfixed lookup picked
+	// the wrong constant ~50% of the time, so 24 runs leave a ~6e-8 chance of
+	// silent luck).
+	const runs = 24
+
+	cases := []struct {
+		name     string
+		pristine string
+		mutated  string
+		// names is the constant the failure message must name. It is the one
+		// that was BROKEN, not merely one of the table's constants — the old
+		// message named whichever constant the map happened to return.
+		names string
+	}{
+		{
+			// Defect 2: the name survives in the WHERE clause, so only a check
+			// scoped to the SELECT list can see this.
+			name:     "column removed from a constant's SELECT list but still in its WHERE",
+			pristine: workspaceSelectPristine,
+			mutated:  "const workspaceSelect = `SELECT id, owner_user_id, name, slug FROM workspaces WHERE deleted_at IS NULL`",
+			names:    "workspaceSelect",
+		},
+		{
+			// Defect 1: the column is gone from a SECOND constant on a table that
+			// has two, which a single-representative lookup misses about half the
+			// time.
+			name:     "column dropped entirely from the trash constant of a two-constant table",
+			pristine: trashedWorkspaceSelectPristine,
+			mutated:  "const trashedWorkspaceSelect = `SELECT id, owner_user_id, name, slug\n	FROM workspaces WHERE deleted_at IS NOT NULL`",
+			names:    "trashedWorkspaceSelect",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			tree := copyPackageForBite(t, dir, migDir)
+			sabotage(t, tree.dir, tc.pristine, tc.mutated)
+			for i := 0; i < runs; i++ {
+				runBiteGuard(t, tree.dir, tree.migDir, true, tc.names)
+			}
+			t.Logf("%d/%d runs RED, each naming %s", runs, runs, tc.names)
+		})
+	}
+}
+
+// biteTree is a throwaway package copy: the Go sources in dir and the migrations
+// in migDir.
+type biteTree struct {
+	dir    string
+	migDir string
+}
+
+// copyPackageForBite copies the package's non-test Go sources and the migration
+// files into a t.TempDir(). The copy exists so the sabotage is applied to a
+// throwaway tree: the guard under test can then be run in-process without the
+// worktree ever being mutated, which is what makes this proof repeatable and
+// safe to run on every gate.
+func copyPackageForBite(t *testing.T, dir, migDir string) biteTree {
+	t.Helper()
+	root := t.TempDir()
+	goDir := filepath.Join(root, "pkg")
+	sqlDir := filepath.Join(root, "migrations")
+	for _, d := range []string{goDir, sqlDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+
+	copyFiles := func(from, to, suffix string, skipTests bool) int {
+		entries, err := os.ReadDir(from)
+		if err != nil {
+			t.Fatalf("read %s: %v", from, err)
+		}
+		n := 0
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), suffix) {
+				continue
+			}
+			if skipTests && strings.HasSuffix(e.Name(), "_test.go") {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(from, e.Name()))
+			if err != nil {
+				t.Fatalf("read %s: %v", e.Name(), err)
+			}
+			if err := os.WriteFile(filepath.Join(to, e.Name()), data, 0o644); err != nil {
+				t.Fatalf("write %s: %v", e.Name(), err)
+			}
+			n++
+		}
+		return n
+	}
+
+	// A copy that silently came up short would make the guard pass vacuously,
+	// so both counts are asserted rather than assumed.
+	if n := copyFiles(dir, goDir, ".go", true); n < 20 {
+		t.Fatalf("copied only %d non-test Go files out of %s — the copy is incomplete, so this proof would run the guard against a package that is not the tree's", n, dir)
+	}
+	if n := copyFiles(migDir, sqlDir, ".up.sql", false); n < 20 {
+		t.Fatalf("copied only %d *.up.sql files out of %s — an empty migrations dir makes the guard pass while checking nothing", n, migDir)
+	}
+	return biteTree{dir: goDir, migDir: sqlDir}
+}
+
+// sabotage rewrites the single pristine line in the copied tree. A missing or
+// ambiguous anchor is a FAILURE, not a skip: it means the source moved and this
+// proof stopped testing what it claims to. It therefore has no "not found"
+// return — a caller cannot accidentally treat an unanchored proof as a pass.
+func sabotage(t *testing.T, dir, pristine, mutated string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read %s: %v", dir, err)
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		src := string(data)
+		if !strings.Contains(src, pristine) {
+			continue
+		}
+		if strings.Count(src, pristine) != 1 {
+			t.Fatalf("%s: anchor %q matched %d times, want exactly 1", e.Name(), pristine, strings.Count(src, pristine))
+		}
+		if err := os.WriteFile(path, []byte(strings.Replace(src, pristine, mutated, 1)), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+		return
+	}
+	t.Fatalf("could not find the constant to sabotage: no copied file contains\n  %s\n"+
+		"the constant was renamed or reshaped, so this proof is measuring nothing — re-anchor it", pristine)
+}
+
+// driftReporter is the slice of *testing.T that the guard body uses. The bite
+// proof has to read the guard's verdict and its messages WITHOUT failing the
+// test that is running the proof, so the body is written against this interface:
+// a real *testing.T satisfies it in production, and biteReporter satisfies it
+// below. No hand-built *testing.T, and no sub-test whose failure would leak into
+// the parent.
+type driftReporter interface {
+	Helper()
+	Errorf(format string, args ...any)
+	Fatalf(format string, args ...any)
+}
+
+// biteReporter records what the guard body reports instead of failing a test.
+// It is the whole instrumentation of the bite proof: nothing else about the
+// guard is stubbed.
+type biteReporter struct {
+	msgs   []string
+	failed bool
+}
+
+// biteFatal distinguishes the guard body's Fatalf from any other panic so a
+// genuinely unexpected panic is re-raised rather than swallowed as a verdict.
+type biteFatal struct{}
+
+func (b *biteReporter) Helper() {}
+
+func (b *biteReporter) Errorf(format string, args ...any) {
+	b.failed = true
+	b.msgs = append(b.msgs, fmt.Sprintf(format, args...))
+}
+
+func (b *biteReporter) Fatalf(format string, args ...any) {
+	b.failed = true
+	b.msgs = append(b.msgs, fmt.Sprintf(format, args...))
+	panic(biteFatal{})
+}
+
+// run applies the guard body to a copy of the package and returns whether it
+// failed, with every message it reported. The guard body is a pure read of the
+// copy, so this is safe to repeat.
+func (b *biteReporter) run(dir, migDir string) (bool, []string) {
+	defer func() {
+		if r := recover(); r != nil {
+			if _, ok := r.(biteFatal); !ok {
+				panic(r)
+			}
+		}
+	}()
+	migrationColumnsAppearInSelect(b, dir, migDir)
+	return b.failed, b.msgs
+}
+
+// runBiteGuard runs the guard's own body against a copy and asserts the verdict.
+// wantRed distinguishes the control (must pass) from a mutation (must fail, and
+// must name the constant that was broken).
+func runBiteGuard(t *testing.T, dir, migDir string, wantRed bool, names string) {
+	t.Helper()
+	rec := &biteReporter{}
+	failed, msgs := rec.run(dir, migDir)
+	joined := "(no messages)"
+	if len(msgs) > 0 {
+		joined = "  " + strings.Join(msgs, "\n  ")
+	}
+
+	if !wantRed {
+		if failed {
+			t.Fatalf("guard FAILED on an unmutated copy of this package — the control must be green "+
+				"or every red below is meaningless.\nmessages:\n%s", joined)
+		}
+		return
+	}
+
+	if !failed {
+		t.Fatalf("guard PASSED on the sabotaged copy — it does not bite: "+
+			"TestMigrationColumnsAppearInSelect still passes with the column removed from %s", names)
+	}
+	found := false
+	for _, m := range msgs {
+		if strings.Contains(m, names) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("guard failed but its message does not name %s — a red that blames another "+
+			"constant is a red nobody can act on.\nmessages:\n%s", names, joined)
+	}
 }
