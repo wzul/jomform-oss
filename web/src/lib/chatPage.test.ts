@@ -663,7 +663,63 @@ test("the chat page scopes EVERY call with workspaceQuery() — the shared helpe
     "the page no longer renders a message for the workspace-scope refusal — the server refuses " +
       "explicitly precisely so the user can act on it",
   );
-  // And 400 must not be folded into the 401/403 branch (that branch redirects to
+  // The PROBE's 400 must be separated from the generic failure too, not only the
+  // message path's. The availability GET is the page's FIRST chat call and it
+  // fires before the Shell has selected a workspace on a fresh session, so on a
+  // two-workspace session it is the call that actually meets the scope refusal
+  // (t_997bb646). Falling through to `setAvailable(false)` renders
+  // chat.unavailable ("not available right now") — false, and it closes the box
+  // for a condition the user fixes by choosing a workspace.
+  //
+  // MEASURED, not assumed (both mutations applied to this tree, the file's test
+  // run alone, then reverted):
+  //   * the 400 branch deleted            -> RED here (19/20)
+  //   * `setAvailable(false)` replaced by the scope setErr on the generic path
+  //     -> RED here (19/20), because the unavailable branch must survive
+  // The browser-level half of the same defect is e2e/chat-probe-400.spec.ts,
+  // which drives the built page and fails on the pre-fix build with
+  // "locator('p[role=\"alert\"]') element(s) not found".
+  //
+  // The branch is located by its own site, the runLoad outcome's `!r.ok` guard —
+  // not by a line number — and the slice runs to the statement after that block
+  // (`setAvailable(r.data.available …)`), so it covers the WHOLE !r.ok branch
+  // including the generic fall-through the scope branch must not replace.
+  const probeAt = page.indexOf("const r = await runLoad(");
+  assert.ok(
+    probeAt !== -1,
+    "app/chat/page.tsx no longer reads availability through runLoad — this guard cannot judge the " +
+      "probe's status handling and refuses to guess",
+  );
+  const probeFrom = page.indexOf("if (!r.ok) {", probeAt);
+  assert.ok(
+    probeFrom !== -1,
+    "the chat availability probe has no !r.ok branch — the scope refusal would be consumed by " +
+      "runLoad and the page would offer a box whose every message 400s",
+  );
+  const probeEnd = page.indexOf("setAvailable(r.data.available", probeFrom);
+  assert.ok(
+    probeEnd > probeFrom,
+    "could not find the statement after the availability probe's !r.ok branch — this guard refuses " +
+      "to slice a branch it cannot delimit",
+  );
+  const probeBranch = page.slice(probeFrom, probeEnd);
+  assert.match(
+    probeBranch,
+    /if \(r\.status === 400\) \{\s*setErr\(t\("chat\.scopeRequired"\)\);\s*return;/,
+    `the availability probe's !r.ok branch does not answer a 400 with t("chat.scopeRequired") — a ` +
+      `two-workspace session with no workspace selected would read "The assistant is not available ` +
+      `right now." (chat.unavailable) instead of the scope copy, and the composer would be ` +
+      `disabled. Branch was:\n${probeBranch}`,
+  );
+  // And the generic branch survives: a 5xx / network failure is still
+  // "unavailable", so the scope branch cannot have replaced it.
+  assert.match(
+    probeBranch,
+    /setAvailable\(false\)/,
+    "the availability probe no longer closes the box on a genuine failure — the scope branch must " +
+      "be ADDITIONAL to the unavailable branch, not a replacement for it",
+  );
+  // 400 must not be folded into the 401/403 branch (that branch redirects to
   // /login, which would be wrong for a signed-in user whose scope was missing).
   assert.ok(
     !/status === 400[^\n]*goToLogin/.test(page),

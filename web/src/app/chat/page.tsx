@@ -164,6 +164,29 @@ export default function ChatPage() {
         { onUnauth: goToLogin, message: t("chat.unavailable"), errorKey: (b: unknown) => translateApiErr(b, t) },
       );
       if (!r.ok) {
+        // A 400 here is the WORKSPACE-SCOPE refusal (rest_scope.go's
+        // `scopeAmbiguous`: an unscoped call from a session that can reach more
+        // than one workspace), and it is NOT the same answer as
+        // available:false. The assistant is available — this request simply
+        // carried no scope for the server to resolve an account from — so
+        // reporting "The assistant is not available right now." tells the user
+        // something false, and it closes the box for a condition the user fixes
+        // by choosing a workspace. It is the same 400 the message path already
+        // separates out in send(); the probe consumed it as a generic failure
+        // and was the one call site left saying the wrong thing (t_997bb646).
+        //
+        // WHY THERE IS NO INLINE FETCH AND NO NEW runLoad OPTION: the outcome
+        // runLoad already returns carries the `status` (LoadOutcome), so the
+        // branch needs nothing new — and reading it here leaves runLoad's
+        // 401/403 → onUnauth and the API-code translation untouched for every
+        // other page. The GET route has exactly one 400 (the scope gate); a
+        // genuinely unavailable deployment answers 200 with available:false
+        // and a rejected credential answers 503 on the message path, so this
+        // branch cannot swallow either.
+        if (r.status === 400) {
+          setErr(t("chat.scopeRequired"));
+          return;
+        }
         setAvailable(false);
         return;
       }
