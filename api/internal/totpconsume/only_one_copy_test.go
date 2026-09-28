@@ -190,6 +190,49 @@ package totpconsume
 //     dropping the local reading misses one built from a helper
 //     (`col := colFn()`) whenever the package happens to declare a `col`. An
 //     ambiguous name is therefore reported loudly, never resolved silently.
+//
+// THE CONSUMER ALLOWLIST IS KEYED BY SITE, AND WHY THAT IS THE SAME FIX AS G (H)
+//
+// allowedDirectConsumers WAS keyed by FILE, while
+// TestOnlyTheSharedRuleConsumesATOTPStep recorded a call site as {file, fn} and
+// checked the FILE against it. The fn it carried reached only the error text. So
+// the permission written for ONE named function in api/internal/httpapi/auth.go
+// (handle2FAEnable, the pending-secret flow) extended to every other function in
+// that file, and TestSharedRuleHasExactlyOneDefinition then waived the thin
+// shape a second time:
+//
+//	func (z *Other) handle2FAEnable(ctx context.Context, userID string, step int64) (bool, error) {
+//		return z.Users.ConsumeTOTPStep(ctx, userID, step)
+//	}
+//
+// That is a public entry point which takes a STEP rather than a code — it
+// validates nothing — and consumes it. It read GREEN on all four checks on the
+// pre-fix tree (`go build ./...` RC=0), because:
+//
+//   - the consumer check found `allowedDirectConsumers["api/internal/httpapi/auth.go"]`
+//     and continued, the probe being in that file;
+//   - TestSharedRuleHasExactlyOneDefinition skipped it as a thin
+//     delegation — the exemption written for the surface alias
+//     checkAndConsumeTOTP, which is sound for an alias the surface CALLS and not
+//     for "whatever else is in the file".
+//
+// Fixed the same way G fixed the write-side key: the consumer allowlist now keys
+// the SITE — `repo-relative file (Recv.Name)` for a method, `... (Name)` for a
+// function, i.e. the funcSiteKey of G — so a second method of the same name on
+// another receiver (G3) is a different site as well. A thin delegation is now
+// judged by THAT SAME allowlist through unvettedThinConsumerSite, so both
+// consumer checks consult one decision point instead of two keys that can
+// disagree; a thin delegation to the store accessor is waived only where someone
+// vetted the site, while a delegation of the RULE itself
+// (totpconsume.ConsumeCode / the checkAndConsumeTOTP alias) is still not a
+// consumer at all and is left to TestBothSurfacesCallTheSharedRule.
+//
+// A deliberate thin alias on a new receiver stays possible, and costs ONE line —
+// its site, with a reason, in allowedDirectConsumers. That is the review, and it
+// is the point. A body that validates AND consumes is not a delegation at all:
+// TestSharedRuleHasExactlyOneDefinition reports it against its receiver-qualified
+// expected list, which is where the non-thin variant of the same probe already
+// fails.
 
 import (
 	"go/ast"
@@ -300,18 +343,49 @@ var _ = [...]string{
 	"internal/httpapi: handle2FAEnable only (pending-secret flow, asserted by name)",
 }
 
-// allowedDirectConsumers maps a source file (repo-relative, slash-separated from
-// api/) to why it is allowed to CALL ConsumeTOTPStep outside the shared rule.
+// allowedDirectConsumers maps a consume SITE — "repo-relative file (site)",
+// slash-separated from api/, where the site is the funcSiteKey of G: `Recv.Name`
+// for a method, the bare name for a plain function — to why that site is allowed
+// to CALL ConsumeTOTPStep outside the shared rule.
 //
 // dbstore is deliberately absent: internal/dbstore/user.go DEFINES the method,
 // it never calls it, and this guard walks call expressions — so an entry for it
 // would be stale by construction and is rejected by the staleness check below.
+//
+// KEYED BY SITE, NOT BY FILE (H in the header). The entry used to name a FILE,
+// and TestOnlyTheSharedRuleConsumesATOTPStep checked only the file, so the one
+// function this entry was written for extended permission to every function
+// beside it in that file — and TestSharedRuleHasExactlyOneDefinition waived a
+// thin second consumer on top of that. The site key is the same injective key
+// the write-side allowlist uses (TestWriteSiteKeyIsInjectiveAcrossFuncDecls), so
+// a method on another receiver sharing the name is a different site too.
+//
+// A file alone is NOT a key here, by construction: every entry must name a site
+// inside the parentheses. That is what the two consumer checks below rely on,
+// and allowedToConsumeStep is the one place both of them ask.
 var allowedDirectConsumers = map[string]string{
-	"api/internal/totpconsume/consume.go": "the shared rule — the one implementation, " +
+	"api/internal/totpconsume/consume.go (ConsumeCode)": "the shared rule — the one implementation, " +
 		"which both surfaces call",
-	"api/internal/httpapi/auth.go": "handle2FAEnable consumes the step of the PENDING " +
+	"api/internal/httpapi/auth.go (AuthHandlers.handle2FAEnable)": "handle2FAEnable consumes the step of the PENDING " +
 		"secret (not the user's own) and maps a DB error to 500 rather than a 401 " +
 		"rejection — a different flow, deliberately not folded into the shared rule",
+}
+
+// consumeSite names the site a ConsumeTOTPStep call belongs to, in the
+// allowlist's key shape: "api/<repo-relative file> (<funcSiteKey>)".
+func consumeSite(file string, fn *ast.FuncDecl) string {
+	return file + " (" + funcSiteKey(fn) + ")"
+}
+
+// allowedToConsumeStep reports whether SOMEONE VETTED this call site. It is the
+// one place the consumer allowlist is consulted, so the two consumer checks
+// cannot come to different conclusions about the same site — the exact shape
+// that let the thin second consumer of (H) through: the call check read the
+// allowlist by FILE and continued, the definition check waived the same call as
+// a thin delegation, and neither question named the site.
+func allowedToConsumeStep(site string) bool {
+	_, ok := allowedDirectConsumers[site]
+	return ok
 }
 
 // TestOnlyTheSharedRuleConsumesATOTPStep fails when a production file outside the
@@ -319,17 +393,27 @@ var allowedDirectConsumers = map[string]string{
 // prevent: a hand-rolled copy in one surface, invisible to the other surface's
 // tests.
 //
+// The allowlist is keyed by the SITE (file AND function, receiver-qualified — H
+// in the header), not by the file: an entry written for one function does not
+// cover its neighbours. A stale entry is its own drift and is reported too.
+//
 // BITE: add `users.ConsumeTOTPStep(ctx, u.ID, step)` to any handler in
 // internal/httpapi or internal/mcpsrv (the pre-fix state of PR 686's copy) and
-// this test names that file and fails.
+// this test names that file and site and fails.
+//
+// BITE (H): add it inside a NEW function of the already-allowlisted
+// api/internal/httpapi/auth.go — e.g. a thin
+// `func (z *Other) handle2FAEnable(ctx context.Context, id string, step int64)
+// (bool, error) { return z.Users.ConsumeTOTPStep(ctx, id, step) }` — and this
+// test names that site instead of continuing on the file.
 func TestOnlyTheSharedRuleConsumesATOTPStep(t *testing.T) {
 	root := apiRoot(t)
 
-	type site struct {
-		file string // repo-relative from api/
-		fn   string
-	}
-	var found []site
+	// found is the SET of call sites, keyed in the allowlist's own shape
+	// ("api/<file> (<Recv.Name>)"), so the check below and the allowlist are
+	// speaking about the same thing — and so an entry written for one function
+	// cannot cover its neighbour in the same file.
+	found := map[string]bool{}
 
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -374,7 +458,8 @@ func TestOnlyTheSharedRuleConsumesATOTPStep(t *testing.T) {
 				if !ok || sel.Sel == nil || sel.Sel.Name != "ConsumeTOTPStep" {
 					return true
 				}
-				found = append(found, site{file: "api/" + rel, fn: fn.Name.Name})
+				site := consumeSite("api/"+rel, fn)
+				found[site] = true
 				return false
 			})
 			return false
@@ -390,26 +475,26 @@ func TestOnlyTheSharedRuleConsumesATOTPStep(t *testing.T) {
 			"was renamed or removed and this guard is now vacuous; fix the guard, do not delete it")
 	}
 
-	seen := map[string]bool{}
-	for _, s := range found {
-		seen[s.file] = true
-		if _, ok := allowedDirectConsumers[s.file]; ok {
+	for site := range found {
+		if allowedToConsumeStep(site) {
 			continue
 		}
-		t.Errorf("%s (%s) consumes a TOTP time-step directly.\n"+
-			"The single-use rule is implemented ONCE, in internal/totpconsume; this file is a "+
+		t.Errorf("%s consumes a TOTP time-step directly.\n"+
+			"The single-use rule is implemented ONCE, in internal/totpconsume; this site is a "+
 			"SECOND copy of it (the exact drift this guard exists to stop). Call "+
 			"totpconsume.ConsumeCode instead, or — if this really is a different flow — add the "+
-			"file to allowedDirectConsumers with the reason, in this test.", s.file, s.fn)
+			"SITE (%s) to allowedDirectConsumers with the reason, in this test. The entry names "+
+			"one function: a neighbour in an already-allowed FILE is not covered.",
+			site, site)
 	}
 
-	// A stale allowlist is its own drift: an entry for a file that no longer
+	// A stale allowlist is its own drift: an entry for a site that no longer
 	// consumes a step would silently permit a future copy to reappear there.
-	for file, why := range allowedDirectConsumers {
-		if !seen[file] {
-			t.Errorf("allowedDirectConsumers lists %s (%s) but that file no longer calls "+
+	for site, why := range allowedDirectConsumers {
+		if !found[site] {
+			t.Errorf("allowedDirectConsumers lists %s (%s) but that site no longer calls "+
 				"ConsumeTOTPStep — remove the stale entry so the allowlist cannot hide a future copy",
-				file, why)
+				site, why)
 		}
 	}
 }
@@ -541,7 +626,9 @@ func isRuleCall(call *ast.CallExpr) bool {
 func TestSharedRuleHasExactlyOneDefinition(t *testing.T) {
 	root := apiRoot(t)
 
-	var impls []string
+	var impls []string         // a body that consumes a step without delegating
+	var thinConsumers []string // a thin delegation to the STORE ACCESSOR, unvetted
+
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -581,7 +668,32 @@ func TestSharedRuleHasExactlyOneDefinition(t *testing.T) {
 			if !ok || fn.Body == nil {
 				return true
 			}
-			if isThinDelegation(fn) {
+			// A thin body DELEGATES rather than implements, but WHICH delegation
+			// it is decides who judges it (H in the header); waiving every thin
+			// body is what let a second consumer of a TOTP step hide in the
+			// already-allowlisted auth.go.
+			//
+			//   - `return totpconsume.ConsumeCode(…)` (or the surface alias
+			//     checkAndConsumeTOTP) is the alias shape this exemption was
+			//     written for: it contains no rule of its own, and
+			//     TestBothSurfacesCallTheSharedRule requires the surface to
+			//     INVOKE it, so a dead alias is caught there;
+			//   - `return users.ConsumeTOTPStep(…)` is an entry point that
+			//     consumes a step under a name of its own — there is no rule in
+			//     the body, only the consumption — so it is judged by the SAME
+			//     allowlist TestOnlyTheSharedRuleConsumesATOTPStep uses, by site.
+			//     A deliberate alias can be admitted there; a method on a new
+			//     receiver inside an already-allowed file cannot ride in on its
+			//     neighbour's entry.
+			//
+			// A thin delegation of an UNRELATED name is neither: `return
+			// decodeBase64(s)` in a file that also mentions the accessor is not
+			// a consumer, and is skipped as it always was.
+			if site, bad := unvettedThinConsumerSite("api/"+rel, fn, allowedToConsumeStep); bad {
+				thinConsumers = append(thinConsumers, site)
+				return true
+			}
+			if thinDelegationCall(fn) != nil {
 				return true
 			}
 			// A non-delegating function that consumes a step IS an implementation.
@@ -596,9 +708,21 @@ func TestSharedRuleHasExactlyOneDefinition(t *testing.T) {
 		t.Fatalf("walk api tree: %v", err)
 	}
 	sort.Strings(impls)
+	sort.Strings(thinConsumers)
 
 	if len(impls) == 0 {
 		t.Fatal("found no function that consumes a TOTP step — this guard is vacuous, fix it")
+	}
+	// A thin delegation to the store accessor is not a second DEFINITION, but it
+	// is a second CALL SITE, and the exemption is not free: it must be a site
+	// someone vetted, in the same allowlist the consumer check consults.
+	for _, got := range thinConsumers {
+		t.Errorf("unexpected TOTP step consumer %q — a single-return delegation to the store "+
+			"accessor contains no rule, but it IS an entry point that consumes a step under a name "+
+			"of its own, and the allowlist entry beside it names ONE function rather than the file. "+
+			"Route it through totpconsume.ConsumeCode instead, or — if a deliberately thin alias "+
+			"really is wanted — add its site to allowedDirectConsumers with the reason.",
+			got)
 	}
 	// Exactly one implementation is expected. The exception in httpapi/auth.go
 	// (handle2FAEnable, the pending-secret flow) is a KNOWN, allowed second
@@ -1753,18 +1877,63 @@ func fnConsumesStep(fn *ast.FuncDecl) bool {
 	return found
 }
 
-// isThinDelegation reports whether a function's body is a single return of a
-// call — i.e. an alias that delegates the rule rather than implementing it.
-func isThinDelegation(fn *ast.FuncDecl) bool {
+// thinDelegationCall returns the expression a function's body returns when the
+// body is exactly one `return <call>` — i.e. a delegation rather than an
+// implementation — and nil otherwise.
+//
+// It was a bool returning "thin"; the caller has to know WHICH call the
+// delegation makes (the rule, or the store accessor), because those two are
+// judged differently (H in the header). Reporting the call rather than a bool is
+// what makes that distinction impossible to forget at a call site.
+func thinDelegationCall(fn *ast.FuncDecl) *ast.CallExpr {
 	if fn.Body == nil || len(fn.Body.List) != 1 {
-		return false
+		return nil
 	}
 	ret, ok := fn.Body.List[0].(*ast.ReturnStmt)
 	if !ok || len(ret.Results) != 1 {
-		return false
+		return nil
 	}
-	_, ok = ret.Results[0].(*ast.CallExpr)
-	return ok
+	call, _ := ret.Results[0].(*ast.CallExpr)
+	return call
+}
+
+// callsStoreAccessor reports whether a call expression invokes the store
+// accessor ConsumeTOTPStep — the one call that consumes a step.
+func callsStoreAccessor(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	return ok && sel.Sel != nil && sel.Sel.Name == "ConsumeTOTPStep"
+}
+
+// unvettedThinConsumerSite reports whether fn is a thin delegation TO THE STORE
+// ACCESSOR whose SITE no one vetted, and returns the site to name when it is.
+//
+// A thin delegation of the RULE (totpconsume.ConsumeCode, or a surface's
+// checkAndConsumeTOTP alias) is not a consumer at all — it contains no rule and
+// no consumption of its own — so it is left to TestBothSurfacesCallTheSharedRule.
+// Neither is a thin delegation of some UNRELATED name (`return decodeBase64(s)`
+// in the same file): a file is read whenever it mentions the accessor, and only
+// "the returned call IS the accessor" makes a function a consumer. A thin
+// delegation of the ACCESSOR does consume a step under a name of its own, and is
+// admissible only on a site someone wrote down.
+//
+// THE FILE IS NOT CONSULTED, deliberately, and that is the point of the helper:
+// the allowlist entry that admits a function in api/internal/httpapi/auth.go
+// names THAT function. Deciding admission from the file — the shape the pre-fix
+// check had — is what let the thin second consumer in. A site is a site whether
+// or not its file also holds an allowed one;
+// TestThinConsumerIsJudgedBySiteNotFile pins exactly that difference on an
+// in-memory file, so the property does not depend on the api tree happening to
+// contain a colliding pair.
+func unvettedThinConsumerSite(file string, fn *ast.FuncDecl, allowed func(site string) bool) (string, bool) {
+	call := thinDelegationCall(fn)
+	if call == nil || !callsStoreAccessor(call) {
+		return "", false
+	}
+	site := consumeSite(file, fn)
+	if allowed(site) {
+		return "", false
+	}
+	return site, true
 }
 
 // TestWriteSiteKeyIsInjectiveAcrossFuncDecls pins the property every shape in
@@ -1955,6 +2124,101 @@ func (s *UserStore) ConsumeTOTPStep() bool {
 				}
 			}
 		})
+	}
+}
+
+// TestThinConsumerIsJudgedBySiteNotFile pins the rule that closes (H): a thin
+// delegation to the store accessor is admissible only on a SITE somebody vetted,
+// and the file it sits in buys it nothing.
+//
+// WHY THIS EXISTS SEPARATELY, the same reason TestWriteSiteKeyIsInjectiveAcrossFuncDecls
+// exists: the tree-wide check only caught the probe because the api tree happens
+// to contain a colliding pair — an allowlisted function in a file that a second
+// function could hide behind. In-memory sources pinned here stay pinned when the
+// tree no longer cooperates, and a change to the rule is exercised by both.
+//
+// Each assertion below is on the SITE the guard would name, for a file holding
+// an allowed function beside an unvetted one. It runs on in-memory sources, so
+// the property does not depend on the api tree containing a colliding pair.
+//
+// BITE: consult the FILE instead of the site — `if file == allowedFile { return
+// false }` in unvettedThinConsumerSite — and the second case fails: the neighbour
+// inherits the entry written for an allowed function beside it, which is the
+// pre-fix shape exactly.
+//
+// BITE: drop the `callsStoreAccessor` test and the third case fails — an
+// unrelated one-line helper in a file that merely mentions the accessor becomes
+// a false red.
+func TestThinConsumerIsJudgedBySiteNotFile(t *testing.T) {
+	src := `package probe
+
+import "context"
+
+type Other struct{ Users *UserStore }
+
+// The site someone vetted: a thin alias that delegates the accessor.
+func (z *Other) handle2FAEnableAllowed(ctx context.Context, userID string, step int64) (bool, error) {
+	return z.Users.ConsumeTOTPStep(ctx, userID, step)
+}
+
+// A THIN second consumer: same file, a site of its own, vetted by nobody.
+func (z *Other) handle2FAEnable(ctx context.Context, userID string, step int64) (bool, error) {
+	return z.Users.ConsumeTOTPStep(ctx, userID, step)
+}
+
+// Not a consumer at all: the returned call is not the accessor.
+func decodeBase64(s string) string {
+	return base64Std(s)
+}
+
+// Not a consumer either: it delegates the RULE, not the accessor.
+func checkAndConsumeTOTP(ctx context.Context, userID string, code string) bool {
+	return ConsumeCode(ctx, userID, code)
+}
+`
+	const file = "api/internal/httpapi/auth.go"
+	vettedSite := file + " (Other.handle2FAEnableAllowed)"
+	neighbourSite := file + " (Other.handle2FAEnable)"
+
+	allowed := func(site string) bool { return site == vettedSite }
+
+	f, err := parser.ParseFile(token.NewFileSet(), "probe.go", src, 0)
+	if err != nil {
+		t.Fatalf("parse probe source: %v", err)
+	}
+
+	// reported maps a funcSiteKey to the site the guard names for it; a function
+	// the guard clears is simply ABSENT (an entry with an empty value would make
+	// "reported as nothing" indistinguishable from "not reported").
+	reported := map[string]string{}
+	for _, d := range f.Decls {
+		fn, ok := d.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		if site, bad := unvettedThinConsumerSite(file, fn, allowed); bad {
+			reported[funcSiteKey(fn)] = site
+		}
+	}
+
+	// The two consumers, judged apart: the vetted one clears, its neighbour does
+	// not. A file-level decision cannot produce this pair.
+	if got, bad := reported["Other.handle2FAEnableAllowed"]; bad {
+		t.Errorf("the allowlisted site was reported as %q — an entry must admit the site it names", got)
+	}
+	if got := reported["Other.handle2FAEnable"]; got != neighbourSite {
+		t.Errorf("the unvetted thin neighbour was judged %q, want %q — a file-level allowlist lets a "+
+			"second consumer inherit the entry written for the function beside it", got, neighbourSite)
+	}
+
+	// A body whose return is NOT the accessor is not a consumer, whatever file
+	// it lives in: reporting one would be a false red that teaches authors to
+	// widen the allowlist.
+	for _, key := range []string{"decodeBase64", "checkAndConsumeTOTP"} {
+		if got, bad := reported[key]; bad {
+			t.Errorf("%s was reported as a consumer (%q) — only a body whose return IS the store "+
+				"accessor consumes a step", key, got)
+		}
 	}
 }
 
