@@ -917,9 +917,40 @@ test("the agent-facing llms-full.txt index points at the same pages", () => {
 // row whose label is wrong is a review question, not a failure here.
 const DOCS_LAYOUT = "../app/docs/layout.tsx";
 
+// The index of the `]` that closes the `[` at `open`, found by DEPTH rather than
+// by a literal `\n  ],`. String literals are skipped so a `[` or `]` inside an
+// href or a label cannot close the array early.
+function matchArrayEnd(s: string, open: number): number {
+  assert.equal(s[open], "[", `expected a "[" at ${JSON.stringify(s.slice(open - 20, open + 20))}`);
+  let depth = 0;
+  for (let i = open; i < s.length; i++) {
+    const c = s[i];
+    if (c === '"') {
+      [, i] = jsString(s, i);
+      i -= 1; // jsString returns the index JUST PAST the closing quote; the loop adds the 1 back.
+      continue;
+    }
+    if (c === "[") depth += 1;
+    else if (c === "]") {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
 // The sidebar's rows, read out of the layout's own NAV_GROUPS + NAV_SECTIONS.
-// The `group` is carried for the failure message only — a reader needs to know
-// which heading the offending row sits under.
+// The `group` is the heading the row really sits under — it is carried into the
+// failure message, so a wrong one sends the reader to the wrong heading. It is
+// resolved per `sections: [` by BRACKET DEPTH, not by a
+// `label: "…", sections: [ … \n  ],` regex: a group with exactly ONE section is
+// written on ONE line in the layout
+// (`sections: [{ href: "/docs/embed", … }]`, layout.tsx:57), so a regex that
+// wants the closing `\n  ],` never matched that group, the scan resumed past its
+// end, and the NEXT group's rows were attributed to it — the `Email` group's
+// three rows read as "Storefront & pages" (found while verifying t_221f65fd;
+// the guard's SET of rows was always right, only the heading was wrong). The
+// pin test at the bottom of this file drives exactly that case.
 function parseSidebar(src: string): { group: string; href: string }[] {
   const start = src.indexOf("const NAV_GROUPS");
   assert.ok(start !== -1, `${DOCS_LAYOUT} no longer declares NAV_GROUPS — the guard's anchor moved`);
@@ -929,8 +960,17 @@ function parseSidebar(src: string): { group: string; href: string }[] {
   // the layout's prose comments do name routes (`/docs/builder (#671)`).
   const rows: { group: string; href: string }[] = [];
   const region = stripUnrendered(src.slice(start, groupsEnd));
-  for (const g of region.matchAll(/label:\s*"([^"]+)",\s*sections:\s*\[([\s\S]*?)\n\s*\],/g)) {
-    for (const h of g[2].matchAll(/href:\s*"([^"]+)"/g)) rows.push({ group: g[1], href: h[1] });
+  for (const m of region.matchAll(/sections:\s*\[/g)) {
+    const open = (m.index ?? 0) + m[0].length - 1;
+    const close = matchArrayEnd(region, open);
+    assert.ok(close !== -1, `unterminated \`sections\` array in ${DOCS_LAYOUT}`);
+    // A group's heading is the nearest `label: "…"` declared above its sections.
+    const labelAt = region.slice(0, m.index).lastIndexOf('label: "');
+    assert.ok(labelAt !== -1, `a group in ${DOCS_LAYOUT} declares sections but no label`);
+    const [group] = jsString(region, labelAt + 'label: "'.length - 1);
+    for (const h of region.slice(open, close).matchAll(/href:\s*"([^"]+)"/g)) {
+      rows.push({ group, href: h[1] });
+    }
   }
   // Issue #513's deep links, rendered under the same sidebar. They are routes
   // too, so they are held to the same existence and anchor rules.
@@ -942,6 +982,30 @@ function parseSidebar(src: string): { group: string; href: string }[] {
     rows.push({ group: "Guides", href: h[1] });
   }
   return rows;
+}
+
+// The sidebar rows that send the reader nowhere, each with the heading the row
+// really sits under. Extracted from the structural test below so the pin test at
+// the bottom of the file drives the SAME code — a copy of this loop in the pin
+// would let the heading in the message regress while the pin stayed green.
+function brokenSidebarRows(rows: { group: string; href: string }[]): string[] {
+  const broken: string[] = [];
+  for (const { group, href } of rows) {
+    const [pathname, anchor] = href.split("#");
+    if (pathname !== "/docs" && !pathname.startsWith("/docs/")) {
+      broken.push(`${href} (${group}) — the docs sidebar lists a route outside /docs`);
+      continue;
+    }
+    const file = resolve(pathname);
+    if (!file || !existsSync(path(file))) {
+      broken.push(`${href} (${group}) — no page for ${pathname}`);
+      continue;
+    }
+    if (anchor && !declaresId(file, anchor)) {
+      broken.push(`${href} (${group}) — ${pathname} declares no id "${anchor}"`);
+    }
+  }
+  return broken;
 }
 
 // The routes the /docs index links, each with the surface it links them from.
@@ -992,22 +1056,7 @@ test("the categories in the docs sidebar match the categories on the page", () =
 
   // (a) Every row is a /docs route that is a page which exists — and, for the
   // deep links, one that declares the anchor it points at.
-  const broken: string[] = [];
-  for (const { group, href } of rows) {
-    const [pathname, anchor] = href.split("#");
-    if (pathname !== "/docs" && !pathname.startsWith("/docs/")) {
-      broken.push(`${href} (${group}) — the docs sidebar lists a route outside /docs`);
-      continue;
-    }
-    const file = resolve(pathname);
-    if (!file || !existsSync(path(file))) {
-      broken.push(`${href} (${group}) — no page for ${pathname}`);
-      continue;
-    }
-    if (anchor && !declaresId(file, anchor)) {
-      broken.push(`${href} (${group}) — ${pathname} declares no id "${anchor}"`);
-    }
-  }
+  const broken = brokenSidebarRows(rows);
   assert.deepEqual(
     broken,
     [],
@@ -1079,4 +1128,138 @@ test("the categories in the docs sidebar match the categories on the page", () =
     `these guide pages are linked from /docs but absent from the docs sidebar (unreachable in ` +
       `navigation):\n  ${missing.join("\n  ")}`,
   );
+});
+
+// ── the group a failure message names, pinned (t_d722f70c) ───────────────────
+//
+// The structural test above only ever reads the heading parseSidebar carries
+// while the suite is RED — it asserts that NO row is broken, so on a correct nav
+// every green run throws that heading away unread. It was wrong: a group with
+// exactly ONE section is written on ONE line in the layout
+// (`sections: [{ href: "/docs/embed", … }]`, layout.tsx:57), the old regex
+// required the closing `\n  ],` on its own line, and the scan resumed past that
+// group — so the NEXT group's rows were attributed to it. Measured on main
+// 72092730: 7 groups parsed (Email missing) and `/docs/ses-reputation
+// (Storefront & pages)`, while that row is declared in the `Email` group at
+// layout.tsx:60-66. The row SET was always right (18 rows, the same routes);
+// only the heading was wrong, which is why nothing went red.
+//
+// This test drives a missing page on EVERY row, one at a time, and asserts the
+// heading the failure message names is the group that row is really declared
+// under — through the same `brokenSidebarRows` the structural test uses.
+//
+// WHY EVERY ROW AND NOT THREE HAND-PICKED ONES. Every row is the case that
+// actually regressed: a wrong attribution is a property of WHERE a row sits, and
+// the three rows the defect happened to hit were the three after the one-line
+// group. A per-row sweep is also the wider net — it catches the same class at a
+// group boundary this card never measured (a two-row group's second row, a
+// hand-edited one-row group elsewhere) — and it needs no premise about the
+// layout's formatting, which a hand-written "a single-section group is on one
+// line" assertion would have to guard or cry wolf on a harmless reformat.
+//
+// The expectation is derived independently of the text parse: for each group,
+// the rows are exactly its declared `[start, end)` byte range in the source.
+test("a broken sidebar row is reported under the group it is really declared in", () => {
+  const nav = read(DOCS_LAYOUT);
+  const rows = parseSidebar(nav);
+  const hrefs = rows.map((r) => r.href);
+  assert.ok(rows.length >= 20, `parsed only ${rows.length} rows out of ${DOCS_LAYOUT}`);
+  assert.equal(
+    new Set(hrefs).size,
+    hrefs.length,
+    `two sidebar rows share an href, so this pin cannot tell which one it mutated`,
+  );
+  // The nav region whose declared blocks the expectation is derived from — read
+  // off the SOURCE, not off the parse under test.
+  const navRegion = nav.slice(
+    nav.indexOf("const NAV_GROUPS"),
+    nav.indexOf("\n];", nav.indexOf("const NAV_GROUPS")),
+  );
+
+  // One mutation per row: point it at a route with no page, then ask the guard
+  // which group it blames.
+  const reported = new Map<string, string>();
+  for (const href of hrefs) {
+    const slug = href.slice("/docs/".length);
+    const mutated = nav.replace(
+      `href: "${href}"`,
+      `href: "/docs/t-d722f70c-gone-${slug}"`,
+    );
+    assert.notEqual(mutated, nav, `could not mutate the ${href} row in ${DOCS_LAYOUT}`);
+    const mutatedRows = parseSidebar(mutated);
+    assert.equal(
+      mutatedRows.length,
+      rows.length,
+      `mutating ${href} changed the number of rows parsed — the group parse is eating a row boundary`,
+    );
+    const broken = brokenSidebarRows(mutatedRows);
+    assert.equal(
+      broken.length,
+      1,
+      `expected exactly one broken row for ${href}, got:\n  ${broken.join("\n  ")}`,
+    );
+    reported.set(href, broken[0]);
+  }
+
+  // The expected attribution, derived from the source's own GROUP DECLARATIONS —
+  // a `label: "…"` immediately followed by `sections: [` — and the byte range
+  // each one owns, NOT from the parse under test. The one-line
+  // `sections: [{ … }]` form this card is about sits inside its group's block
+  // either way, so this expectation is identical for a one-line group and a
+  // multi-line one: it states where a row is DECLARED, which is the question.
+  //
+  // (`label:` is shared by groups and by sections, so "the last label before the
+  // row" would pick a section's own text; a group's label is the one that
+  // `sections:` follows.)
+  const region = stripUnrendered(navRegion);
+  const decls = [...region.matchAll(/label:[ \t]*"([^"]+)",[ \t]*\n[ \t]*sections:[ \t]*\[/g)];
+  assert.ok(
+    decls.length >= 6,
+    `found only ${decls.length} group declarations in ${DOCS_LAYOUT} — the nav shape moved, so ` +
+      `re-derive this pin's expectation before trusting a verdict`,
+  );
+  const expected: string[] = [];
+  const declaredUnder = new Map<string, string>();
+  decls.forEach((d, i) => {
+    const from = d.index ?? 0;
+    const to = i + 1 < decls.length ? (decls[i + 1].index ?? region.length) : region.length;
+    for (const h of region.slice(from, to).matchAll(/href:\s*"([^"]+)"/g)) {
+      expected.push(h[1]);
+      declaredUnder.set(h[1], d[1]);
+    }
+  });
+  // Issue #513's deep links are declared in NAV_SECTIONS and parsed under the
+  // hard-coded "Guides" heading; they are held to the same message rule, and
+  // their hrefs carry an anchor, so they are a different shape from a group row.
+  const sStart = nav.indexOf("const NAV_SECTIONS");
+  assert.ok(sStart !== -1, `${DOCS_LAYOUT} no longer declares NAV_SECTIONS — the nav shape moved`);
+  const sEnd = nav.indexOf("\n];", sStart);
+  assert.ok(sEnd !== -1, `could not find the end of NAV_SECTIONS in ${DOCS_LAYOUT}`);
+  for (const h of stripUnrendered(nav.slice(sStart, sEnd)).matchAll(/href:\s*"([^"]+)"/g)) {
+    expected.push(h[1]);
+    declaredUnder.set(h[1], "Guides");
+  }
+  assert.deepEqual(
+    expected,
+    hrefs,
+    `${DOCS_LAYOUT}'s declared group order and the parsed row order have drifted — this pin's ` +
+      `expectation is derived from the source's own group blocks, so re-derive it before ` +
+      `trusting a verdict`,
+  );
+
+  const wrong: string[] = [];
+  for (const [href, heading] of declaredUnder) {
+    const message = reported.get(href) ?? "(no row parsed)";
+    if (!message.includes(`(${heading})`)) {
+      wrong.push(`${href} is declared under ${heading} but reported as: ${message}`);
+    }
+  }
+  assert.deepEqual(
+    wrong,
+    [],
+    `the docs sidebar failure message names the wrong group for these rows (a reader is sent to ` +
+      `a heading that does not contain the row):\n  ${wrong.join("\n  ")}`,
+  );
+  // Vacuity: every row really was mutated and every reported heading was read.
+  assert.equal(reported.size, hrefs.length);
 });

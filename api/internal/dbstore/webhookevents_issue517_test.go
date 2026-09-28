@@ -103,11 +103,31 @@ func TestClaimClaimedEventsAreInvisibleToReplay(t *testing.T) {
 			t.Fatal("a live claim must not be replayable")
 		}
 	}
-	n, err := es.ReclaimStale(ctx, time.Minute)
-	if err != nil {
+	// ReclaimStale is deliberately TABLE-wide (it is the sweeper that releases
+	// dead claims across the whole queue), so its return count is about every
+	// 'processing' row in the schema, not about this one. Asserting `n == 0`
+	// therefore made this test's verdict depend on whatever sibling tests in
+	// this package had left behind and on how long the run took: rows they leave
+	// live cross the 1-minute threshold as the run gets slower. Measured on an
+	// unmodified tree — dbstore GREEN at 30s standalone and at 72.8s in a pair
+	// run, RED with exactly this message at 92.6s / 104.5s / 114.3s in the
+	// whole-suite runs, and reproduced deterministically by leaking one live
+	// claim and aging it past the threshold.
+	//
+	// The premise this test exists for is "ReclaimStale must not release THIS
+	// claim", so it is re-read after the sweep from the row itself. The sweep
+	// still runs, so a regression that made a live claim reclaimable is still
+	// caught — by the state check below rather than by an aggregate count that
+	// was never about this claim.
+	if _, err := es.ReclaimStale(ctx, time.Minute); err != nil {
 		t.Fatalf("ReclaimStale: %v", err)
 	}
-	if n != 0 {
-		t.Fatalf("ReclaimStale released %d rows, want 0 (the claim is live)", n)
+	status, processedAt, err := es.EventState(ctx, key)
+	if err != nil {
+		t.Fatalf("EventState: %v", err)
+	}
+	if status != WebhookEventProcessing || processedAt != nil {
+		t.Fatalf("after a sweep over a live claim: state = %q processed_at = %v, want processing/unset "+
+			"(the sweeper released a live claim, so a delivery still working can be replayed)", status, processedAt)
 	}
 }
