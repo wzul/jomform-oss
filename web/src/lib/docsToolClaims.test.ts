@@ -120,7 +120,13 @@ const MCP_SOURCES = readdirSync(MCP_DIR)
 // not see 176 vs 177, which is the drift that reddened main. A landing that adds
 // or removes a tool moves this number — that is the point, and the message below
 // says which direction to correct.
-const EXPECTED_TOOL_COUNT = 177;
+//
+// 178: #691 added `update_workspace` (the workspace rename) and left this pin at
+// 177. Its own branch was gated against a main where 177 was right, so the count
+// moved on the merge and nothing re-gated the merged result — which is exactly
+// the drift this pin exists to make loud. t_8ebcba5a moved it to the measured
+// value: 178 `&mcp.Tool{` literals, 178 distinct names, across 44 non-test files.
+const EXPECTED_TOOL_COUNT = 178;
 
 const REGISTRY_SRC = MCP_SOURCES.join("\n");
 

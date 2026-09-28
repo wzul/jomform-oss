@@ -74,7 +74,7 @@ const GROUPS: Group[] = [
         title: "Workspaces (your account's tenant)",
         slug: "workspaces",
         href: "/docs/workspaces",
-        body: "A workspace holds your forms, products, sales and payment account, and owns its own address ({slug}.jomform.com or your domain). With none, the dashboard asks you to create one at sign-in.",
+        body: "A workspace holds your forms, products, sales and payment account, and owns its own address ({slug}.jomform.com or your domain). With none, the dashboard asks you to create one.",
       },
       {
         // Settings → Workspace's identity card "?" deep-links this section
@@ -92,7 +92,7 @@ const GROUPS: Group[] = [
         title: "Deleting a workspace",
         slug: "delete-workspace",
         href: "/docs/workspaces#delete-workspace",
-        body: "Permanent, and it takes the payment account with it: a typed slug confirmation, and three conditions — you own it, you have another workspace, and it is empty. Sales are never destroyed.",
+        body: "Permanent — the payment account goes with it: a typed slug confirmation, plus three conditions: you own it, you have another workspace, and it is empty. Sales are never destroyed.",
       },
       {
         // Card t_eb09b25a (the rebase onto main, t_4c58a09e): the audit-trail
@@ -104,7 +104,10 @@ const GROUPS: Group[] = [
         //
         // Fitting it in is why two of the summaries above were tightened: the
         // guard caps the whole page at 800 words (main's own comment says the
-        // cap is what drove the earlier trims too).
+        // cap is what drove the earlier trims too). Those two trims plus the
+        // entry still left the page at 806 words — t_8ebcba5a brought it back
+        // to 797 by tightening four more summaries, each re-saying the same
+        // facts in fewer words; nothing was dropped.
         title: "Activity log (audit trail)",
         href: "/docs/activity",
         body: "Every action in this workspace, newest first, including the destructive ones — a deletion leaves no other trace. Append-only.",
@@ -150,7 +153,7 @@ const GROUPS: Group[] = [
         title: "Realtime notifications & the order screen beep",
         slug: "realtime-notifications",
         href: "/docs/sales#realtime-notifications",
-        body: "The Sales page follows your workspace's realtime stream; the switch beside the Live pill plays a beep when something arrives. Per workspace, so it survives a reload.",
+        body: "The Sales page follows your workspace's realtime stream; the switch beside the Live pill beeps when something arrives. Per workspace, so it survives a reload.",
       },
     ],
   },
@@ -245,7 +248,7 @@ const GROUPS: Group[] = [
       {
         title: "Email & notifications",
         href: "/docs/email",
-        body: "Customise the receipt email and the per-form notification rules (subject, body, receipt on/off, merchant notify), with a form override that falls back to the workspace and then the built-in default.",
+        body: "Customise the receipt email and the per-form notification rules (subject, body, receipt on/off, merchant notify); a form override falls back to the workspace and then the built-in default.",
       },
     ],
     more: [
@@ -279,7 +282,7 @@ const GROUPS: Group[] = [
         // through lives on the security guide.
         slug: "two-factor",
         href: "/docs/security#two-factor",
-        body: "Add a second factor from Profile → Security: scan the QR into an authenticator app and confirm the 6-digit code. Turning it off asks for that code alone, and a magic-link session must prove itself first.",
+        body: "Add a second factor from Profile → Security: scan the QR into an authenticator app and confirm the 6-digit code. Turning it off asks for that code, and a magic-link session must prove itself first.",
       },
       {
         title: "Trusted devices (2FA)",
