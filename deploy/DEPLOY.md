@@ -203,7 +203,7 @@ dozens of commits behind `origin/main`:
 
 ```bash
 git ls-tree -d origin/main api/cmd/    # not `main` — the local ref may be stale
-git rev-parse --short main origin/main # how far apart are they
+git rev-list --count main..origin/main    # how far apart are they
 ```
 
 ## Deploy order (the whole sequence, every time)
