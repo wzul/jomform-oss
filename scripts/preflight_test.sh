@@ -94,8 +94,54 @@ cp "$HERE/../AGENTS.md" "$SB/AGENTS.md" 2>/dev/null
 cp "$HERE/../GATE-INVENTORY.md" "$SB/GATE-INVENTORY.md" 2>/dev/null
 cp "$HERE/../Makefile" "$SB/Makefile" 2>/dev/null
 cp "$HERE/../.gitleaks.toml" "$SB/.gitleaks.toml" 2>/dev/null
+# 15e-ii's fixture (the check explains why). Two repo-root registers — one whose
+# NAME carries an ERE-active character (`+`), one plain-named CONTROL — and TWO gate
+# sources, each naming exactly ONE of them through a quoted literal, the way
+# api/internal/biteharness/inventory_test.go:64 reads BITE-HARNESSES.md. It lives in
+# the SANDBOX on purpose: the live tree is never mutated by this self-test.
+#
+# THEY ARE SEPARATE FILES, and that is load-bearing for the bite. A single source
+# naming BOTH names would keep the metachar register's file in the corpus under the
+# UNFIXED runner (the plain name matches it), so the corpus search would never be
+# shown to be the failing half and the check would pass on a broken runner —
+# measured, in the first version of this fixture.
+printf '# QA probe\n\nA repo-root register whose name carries an ERE-active character.\n' > "$SB/QA+PROBE.md"
+printf '# QA probe (control)\n\nThe same register under a name with no metacharacter.\n' > "$SB/QAPLAIN.md"
+mkdir -p "$SB/api/internal/qaprobe"
+cat > "$SB/api/internal/qaprobe/probe_test.go" <<'QAPROBE'
+package qaprobe
+
+import "testing"
+
+// metacharProbe is read out of the repo root, the shape a real guard uses. THE
+// FILE NAMES ONLY THIS ONE NAME: a plain-named sibling in the same file would keep
+// this file in the corpus for the wrong reason on a runner that still treats the
+// name as a pattern.
+const metacharProbe = "QA+PROBE.md"
+
+func TestMetacharProbeIsNamed(t *testing.T) {
+	if metacharProbe == "" {
+		t.Fatal("empty probe name")
+	}
+}
+QAPROBE
+cat > "$SB/api/internal/qaprobe/plain_test.go" <<'QAPLAIN'
+package qaprobe
+
+import "testing"
+
+// plainProbe is the CONTROL: same fixture, same reader shape, no metacharacter.
+const plainProbe = "QAPLAIN.md"
+
+func TestPlainProbeIsNamed(t *testing.T) {
+	if plainProbe == "" {
+		t.Fatal("empty probe name")
+	}
+}
+QAPLAIN
 git -C "$SB" init -q .
-git -C "$SB" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+git -C "$SB" add -A
+git -C "$SB" -c user.email=t@t -c user.name=t commit -q -m init
 cd "$SB" || exit 1
 
 # ---------------------------------------------------------------------------
@@ -755,15 +801,22 @@ else
   bad "an unclaimed path must widen to all $NGATES gates (got $unknown_n) — [$(printf '%s' "$unknown_sel" | tr '\n' ' ')]"
 fi
 
-# 15e. THE TRAP: the gate-INPUT prose files must widen the run. Each is read by a
-#      test, so a change to it can break that gate; a classifier that dropped it
-#      would make the run green on a tree whose gate is red.
-#      A file is pinned to a SPECIFIC gate: MCP-PARITY.md is read by
-#      mcp_parity_test.go (the `test` gate), GATE-INVENTORY.md and AGENTS.md by
+# 15e. THE TRAP: the gate-INPUT prose files must select the gate that reads them.
+#      Each is read by a test, so a change to it can break that gate; a classifier
+#      that dropped it would make the run green on a tree whose gate is red.
+#      A file is pinned to a SPECIFIC gate: MCP-PARITY.md and BITE-HARNESSES.md are
+#      read by the api suite (the `test` gate — mcp_parity_test.go and
+#      biteharness/inventory_test.go), GATE-INVENTORY.md and AGENTS.md by
 #      scripts/preflight_test.sh (the `selftest` gate), and deploy/backup/README.md
 #      by the backup suite (the `backup` gate).
+#      BITE-HARNESSES.md is the newest member and it was missed for a while: it is
+#      named through a `const` in a Go test, like MCP-PARITY.md, and its name was
+#      not in the runner's hand-written list of repo-root files, so a diff touching
+#      it alone widened a one-gate run to all 15. It is pinned here so the next
+#      regression is RED instead of merely expensive.
+trap_specs="MCP-PARITY.md:test GATE-INVENTORY.md:selftest AGENTS.md:selftest deploy/backup/README.md:backup BITE-HARNESSES.md:test"
 trap_out=""
-for spec in "MCP-PARITY.md:test" "GATE-INVENTORY.md:selftest" "AGENTS.md:selftest" "deploy/backup/README.md:backup"; do
+for spec in $trap_specs; do
   tfile="${spec%%:*}"; tgate="${spec##*:}"
   if [ ! -e "$LIVE_ROOT/$tfile" ]; then
     bad "gate-INPUT pin not checked: $tfile does not exist at $LIVE_ROOT, so this pin proves nothing"
@@ -773,12 +826,81 @@ for spec in "MCP-PARITY.md:test" "GATE-INVENTORY.md:selftest" "AGENTS.md:selftes
   if grep -qx "$tgate" <<<"$tsel"; then
     trap_out="${trap_out}${tfile}->${tgate} ok; "
   else
-    bad "$tfile alone must widen the run and select '$tgate' (it is READ by that gate's test) — got: [$(printf '%s' "$tsel" | tr '\n' ' ')]"
+    bad "$tfile alone must select '$tgate' (it is READ by that gate's test) — got: [$(printf '%s' "$tsel" | tr '\n' ' ')]"
     trap_out="${trap_out}${tfile}->${tgate} MISSING; "
   fi
 done
 if grep -qv 'MISSING' <<<"$trap_out" && [ -n "$trap_out" ]; then
-  ok "the 4 gate-INPUT prose files each widen the run to the gate that reads them ($trap_out)"
+  ok "the $(printf '%s\n' $trap_specs | wc -l | tr -d ' ') gate-INPUT prose files each select the gate that reads them ($trap_out)"
+fi
+
+# 15e-i. The pin above is NOT ENOUGH ON ITS OWN, and this is the half that makes it
+#      bite. `test` is IN the full 15-gate set, so `grep -qx test` passes just as
+#      happily on a WIDENED run as on a narrowed one: a regression that dropped the
+#      claim would widen the run, the gate would still be named, and 15e would stay
+#      green while the narrowing it exists to protect was gone. Measured: that is
+#      exactly the state BITE-HARNESSES.md was in on 99c6aa79 — `test` named, and
+#      all 15 gates selected by `--classify=BITE-HARNESSES.md`.
+#      So assert the NARROWED-ness as well. A file whose ONLY reader is a
+#      narrowable gate must not drag in the whole inventory.
+bite_sel="$(sel_classify 'BITE-HARNESSES.md')"
+bite_n="$(grep -cv '^#reason:' <<<"$bite_sel")"
+if [ "$bite_n" = "$NGATES" ] || grep -q 'no gate claims' <<<"$bite_sel"; then
+  bad "BITE-HARNESSES.md alone is read by the api suite only, so its diff must NARROW to the gates that read it — got the FULL $NGATES-gate set: [$(printf '%s' "$bite_sel" | tr '\n' ' ')]"
+else
+  ok "BITE-HARNESSES.md alone narrows to $bite_n gates INCLUDING test, not the full $NGATES — a repo-root file named by a gate source is derived as that gate's input"
+fi
+
+# 15e-ii. THE METACHARACTER HALF of the same trap, and this is the half that escaped.
+#      `pw_root_literals` searches for the root names to find their readers, and the
+#      name set comes from the TREE. Building a PATTERN out of a NAME is only correct
+#      if every metacharacter in that name is neutralised: the old form escaped a fixed
+#      character class `[][\.^$*/]` and left `+ ? ( ) { } |` — all ERE-active — alone,
+#      so a root register named `QA+PROBE.md` became the pattern `QA+PROBE\.md`, which
+#      matches `QAPROBE.md` (a name that does not exist) and NOT the real file. The
+#      corpus came back empty, the awk pass saw no source, and
+#      `--classify='QA+PROBE.md'` widened a one-gate run to the full inventory.
+#      The fix removes the pattern language rather than escaping it further
+#      (`git grep -lF`, one `-e` per name), because the escape's correctness depends on
+#      enumerating grep's whole ERE engine and a missing member is silent.
+#
+#      DRIVEN AGAINST THE SANDBOX COPY. The property needs a tree that CONTAINS the
+#      metachar register and a gate source naming it, and this self-test must never
+#      mutate the live tree. The sandbox's scripts/preflight.sh is a byte copy of the
+#      runner under test (checks 1 and 14 already rely on that), so the reading is
+#      about this runner.
+metachar_sel="$( (cd "$SB" && ./scripts/preflight.sh --classify='QA+PROBE.md' 2>/dev/null) )"
+metachar_n="$(grep -cv '^#reason:' <<<"$metachar_sel")"
+metachar_gates="$(grep -v '^#reason:' <<<"$metachar_sel" | sort | tr '\n' ' ')"
+if [ "$metachar_n" = "$NGATES" ] || grep -q 'no gate claims' <<<"$metachar_sel"; then
+  bad "a repo-root register whose NAME contains an ERE metacharacter ('QA+PROBE.md', read as the quoted literal \"QA+PROBE.md\" by api/internal/qaprobe/probe_test.go) must be DERIVED as its reader's input — got the full $NGATES-gate set / unclaimed: [$(printf '%s' "$metachar_sel" | tr '\n' ' ')]. A NAME used to build a PATTERN must be matched LITERALLY (or its every metacharacter escaped), or the corpus search matches a different filename and this register is never claimed."
+elif ! grep -qx 'test' <<<"$metachar_sel"; then
+  bad "the metacharacter register QA+PROBE.md must select \`test\` (its only reader is the api suite) — got: [$(printf '%s' "$metachar_sel" | tr '\n' ' ')]"
+else
+  ok "a metacharacter-bearing repo-root register is derived too: QA+PROBE.md -> $metachar_n gates INCLUDING test, not the full $NGATES ($metachar_gates)"
+fi
+
+#      The CONTROL: the same fixture under a plain name must read the SAME way. Without
+#      it, \"QA+PROBE.md is claimed\" could hold for a reason unrelated to metacharacters
+#      (a fixture that happens to be claimed by something else), and the assertion would
+#      pass on a runner that is still name-pattern-sensitive.
+plain_sel="$( (cd "$SB" && ./scripts/preflight.sh --classify='QAPLAIN.md' 2>/dev/null) )"
+plain_gates="$(grep -v '^#reason:' <<<"$plain_sel" | sort | tr '\n' ' ')"
+if [ -z "$metachar_gates" ] || [ "$plain_gates" != "$metachar_gates" ]; then
+  bad "the plain-named CONTROL register QAPLAIN.md selects a DIFFERENT gate set from QA+PROBE.md — the two are read by the same source and differ only in their name, so the name is still being treated as a pattern: metachar=[$metachar_gates] plain=[$plain_gates]"
+else
+  ok "the plain-named control QAPLAIN.md selects the SAME $metachar_n gates — the metacharacter reading is a property of the fix, not of the fixture"
+fi
+
+#      NON-VACUITY, and the sharpest half: `QAPROBE.md` is the name the UNESCAPED `+`
+#      actually matched and it does not exist in the tree, so it must stay UNCLAIMED and
+#      widen. A runner that narrowed it would be claiming a file no gate can read — the
+#      fail-closed branch traded for a phantom claim, which is the unsafe direction.
+ghost_sel="$( (cd "$SB" && ./scripts/preflight.sh --classify='QAPROBE.md' 2>/dev/null) )"
+if grep -q 'no gate claims' <<<"$ghost_sel" && [ "$(grep -cv '^#reason:' <<<"$ghost_sel")" = "$NGATES" ]; then
+  ok "QAPROBE.md (does not exist; it is the name the unescaped '\\+' used to match) stays UNCLAIMED and widens to all $NGATES — no phantom claim from the literal match"
+else
+  bad "QAPROBE.md does not exist in the tree, so it must stay unclaimed and widen to all $NGATES gates — got: [$(printf '%s' "$ghost_sel" | tr '\n' ' ')]"
 fi
 
 # 15f. A gate that CANNOT narrow must always run. `gitleaks` scans the whole git

@@ -426,8 +426,11 @@ pw_sources() {
 
 # The read SHAPES worth deriving. Measured on this repo, not guessed: these are
 # the forms its Go, TypeScript and bash use to name a path outside the file's own
-# directory. Shapes 3 and 4 are the trap class the card names.
-PW_READ_RE='(\.\./){2,}[A-Za-z0-9_@./-]*|filepath\.Join\([^)]*\)|"(api|web|deploy|scripts|docs|loadtest|e2e)/[A-Za-z0-9_@./*-]*"|"(MCP-PARITY|GATE-INVENTORY|AGENTS)\.md"|"(Makefile|\.gitleaks\.toml|\.gitignore)"|\$(HERE|SCRIPT_DIR)/\.\./[A-Za-z0-9_./-]+'
+# directory. Shape 3 is the repo-root-relative literal trap the card names. A repo
+# ROOT file named literally is the same trap one level up and is handled by
+# pw_root_literals, which DERIVES the name set from the tree rather than listing
+# the names here — see that function for why the list is not hand-maintained.
+PW_READ_RE='(\.\./){2,}[A-Za-z0-9_@./-]*|filepath\.Join\([^)]*\)|"(api|web|deploy|scripts|docs|loadtest|e2e)/[A-Za-z0-9_@./*-]*"|\$(HERE|SCRIPT_DIR)/\.\./[A-Za-z0-9_./-]+'
 
 # A repo-wide read (git grep / ls-files / rev-list over THIS checkout) makes a
 # gate depend on every tracked file's CONTENT, so it can never narrow. It is
@@ -528,12 +531,9 @@ pw_derive_all() {
         lit = substr(s, RSTART + 1, RLENGTH - 2); s = substr(s, RSTART + RLENGTH)
         emit(lit); emit(norm(d "/" lit))
       }
-      # 4. repo-root FILES named literally — the trap: prose that is test INPUT
-      s = text
-      while (match(s, /"(MCP-PARITY|GATE-INVENTORY|AGENTS)\.md"|"(Makefile|\.gitleaks\.toml|\.gitignore)"/)) {
-        lit = substr(s, RSTART + 1, RLENGTH - 2); s = substr(s, RSTART + RLENGTH)
-        emit(lit)
-      }
+      # 4. (reserved — the repo-ROOT-file literal shape is derived, not grepped
+      #    here: see pw_root_literals. It cannot live in PW_READ_RE without
+      #    widening the corpus to every quoted string in these trees.)
       # 5. bash: $HERE/../x and $SCRIPT_DIR/../x resolve from the script dir.
       #    $HERE IS the dirname of the file being scanned, so it is substituted
       #    with `d` and the `..` is left for norm() to collapse. Stripping the
@@ -548,6 +548,164 @@ pw_derive_all() {
         emit(norm(d "/" lit))
       }
     }' 2>/dev/null
+  pw_root_literals
+  return 0
+}
+
+# pw_root_literals — the repo-ROOT files that a gate source names as a quoted
+# literal, emitted in pw_derive_all's "<file>\t<candidate>" form.
+#
+# WHY THIS IS A DERIVATION AND NOT ONE MORE ALTERNATION ARM. It was an arm:
+# `"(MCP-PARITY|GATE-INVENTORY|AGENTS)\.md"|"(Makefile|\.gitleaks\.toml|\.gitignore)"`.
+# A hand-written list of names has to be extended by hand every time a gate starts
+# reading a new repo-root file, and it was not — `BITE-HARNESSES.md` is read by
+# api/internal/biteharness/inventory_test.go:64 through a `const` and was claimed
+# by NO gate, so a diff touching it widened a one-gate run to all 15 (measured on
+# 99c6aa79). The class is "a repo-root file a gate reads", so the set belongs to
+# the tree, not to a list in this file.
+#
+# WHY IT IS A SEPARATE PASS. The name set is DERIVED first (`git ls-files` root
+# entries) and the resulting names are then matched as WHOLE quoted literals over a
+# narrowed corpus. Putting the shape into PW_READ_RE itself is not possible:
+# an alternation of names is fine but a generic `"[A-Za-z0-9_.-]+"` arm there
+# widens pw_derive_all's corpus from 392 to 38,602 lines (measured), because every
+# string literal in api/, web/, scripts/ and deploy/ matches it — seconds of awk
+# per invocation for lines whose candidates are then dropped as unresolvable. This
+# pass reads only the files that MENTION a root-file name (the `git grep -lF` below)
+# instead of all 38k.
+#
+# The literal is matched WHOLE (a string that merely CONTAINS a root name cannot
+# contribute a candidate), which removes the earlier formulation's need to order
+# the names longest-first: an unanchored alternation matched AGENTS.md inside the
+# text "GATE-INVENTORY.md", and the resulting candidate is a file that exists here
+# — so `selftest` was found claiming it. That variant also parsed `grep -aoHE`
+# output as `file:line:text`, where the text is itself full of `:` (Go, YAML); awk
+# is handed the FILES now, so there is no record to take apart.
+#
+# WHERE A BARE NAME RESOLVES IS THE WHOLE QUESTION, and the answer is already in
+# this file — `pw_pathspec_v` resolves a candidate against the CURRENT directory
+# first, because the tree is the repo root when the table is built. A gate source
+# that names `"README.md"` is read the same way: relative to the SOURCE FILE's
+# directory. So:
+#   * `deploy/backup/jomform-backup_test.sh` naming "README.md" means
+#     deploy/backup/README.md, NOT the root file — even though the root file
+#     happens to exist. Treating it as the root file would CLAIM the root file for
+#     the `backup` gate, and the root README.md is genuinely read by no gate, so a
+#     claim on it would make the fail-closed branch weaker than the truth.
+#   * `web/src/lib/nextManagedFiles.test.ts` naming "Makefile"/"AGENTS.md"/
+#     ".gitignore" IS the root file: no sibling of those names exists under
+#     web/src/lib, and the test says so in prose ("verified present at the worktree
+#     root").
+#   * `api/internal/biteharness/inventory_test.go` naming "BITE-HARNESSES.md" IS
+#     the root file: no such sibling under api/internal/biteharness.
+# The rule is therefore: emit the SAME-DIRECTORY candidate when a tracked file of
+# that name sits beside the source (a genuine relative read, and the fan-out to it
+# is required), AND the root candidate when no same-directory shadow exists. When a
+# shadow does exist the root candidate is withheld: the bare name cannot be
+# attributed to the root file, and widening is the safe direction.
+#
+# NO FAN-OUT TO NON-ROOT PATHS. The root candidate is the only one emitted, so a
+# candidate never reaches `pw_pathspec_v` as some third path that exists merely
+# because a name coincides (a name like `.next` would resolve against web/.next on
+# a built tree and claim `test` for it; measured with the un-narrowed form). The
+# same-directory candidate is NOT a guess of that kind: it is computed from the
+# tree, and it is emitted only for a shadow that actually exists.
+#
+# `git grep -l` only NARROWS the corpus; membership is decided by the awk pass
+# over that corpus, so a file it does not list cannot produce a candidate, and the
+# two cannot disagree: `git grep -l` with no `--fixed-strings` matches a literal
+# anywhere in the line, which is a superset of the whole-literal match.
+pw_root_literals() {
+  # `git ls-files | sort` is the whole input. `taken` is the set of every tracked
+  # path; `shadow` is the set of NON-root tracked paths whose basename is a root
+  # entry's name — a bare literal in that directory's source resolves to it first.
+  local listing
+  listing="$(git ls-files 2>/dev/null | sort)"
+
+  # A root ENTRY, not a path: no `/` means the root (`.`/`..` excluded so a name
+  # can never walk upward). `git ls-files` lists tracked entries only.
+  local -a names=()
+  local name
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    names+=("$name")
+  done < <(printf '%s\n' "$listing" | awk 'index($0, "/") == 0 && $0 != "." && $0 != ".."')
+
+  [ "${#names[@]}" -gt 0 ] || return 0
+
+  # The corpus: every gate source that mentions ANY root-file name at all.
+  #
+  # WHY THE CORPUS IS MATCHED WITH A LITERAL SEARCH (`-lF`, one `-e` per name) AND
+  # NOT AN ERE ALTERNATION. It was one: the names were escaped per character with
+  # `sed 's/[][\.^$*/]/\\&/g'` and pasted into a single `git grep -lE "(A|B|…)"`.
+  # That bracket class covers `] [ \ . ^ $ * /` and NOT the rest of the ERE set —
+  # `+ ? ( ) { } |` are all ERE-active (repetition, grouping, alternation). So a
+  # root file named `QA+PROBE.md` escaped to `QA\+PROBE\.md` if the class were
+  # complete, but under the incomplete one to `QA+PROBE\.md`, where `+` still means
+  # "one or more of the preceding character": the alternation matched
+  # `QAPROBE.md` — a name that does not exist — and NOT the real file.
+  # Measured on the escaped-alternation form: the corpus came back EMPTY for
+  # `QA+PROBE.md` and `--classify='QA+PROBE.md'` widened a one-gate run to all 15.
+  # A per-character escape is also a losing game by construction: the set it must
+  # cover is every metacharacter grep's ERE engine honours, and a missing member is
+  # silent. `-F` removes the question — there is no pattern language left to escape
+  # INTO — and `-e` keeps each name its own literal pattern (ANY-match, exactly the
+  # union the alternation expressed). It is also a superset-free simplification: a
+  # name containing `|` or `/` cannot change the meaning of its neighbours.
+  #
+  # `-lF` can only NARROW the corpus (a file matching none of the patterns is not
+  # listed); membership is still decided by the awk pass below, which tests the
+  # exact literal, so the two verdicts cannot disagree — the corpus is a superset
+  # of the whole-quoted-literal match.
+  local -a grep_args=()
+  for name in "${names[@]}"; do grep_args+=(-e "$name"); done
+
+  local -a files=()
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    files+=("$name")
+  done < <(git grep -lF "${grep_args[@]}" -- 'api/' 'web/' 'scripts/' 'deploy/' 2>/dev/null)
+
+  [ "${#files[@]}" -gt 0 ] || return 0
+
+  printf '%s\n' "$listing" | awk \
+    -v list="$(printf '%s ' "${names[@]}")" \
+    -v flist="$(printf '%s\n' "${files[@]}")" '
+    BEGIN {
+      n = split(list, a, " ")
+      for (i = 1; i <= n; i++) if (a[i] != "") root[a[i]] = 1
+    }
+    # Pass 1: the tracked listing splits into the root names (known from `list`)
+    # and the non-root files that SHADOW one of those names.
+    FILENAME == "-" {
+      p = $0
+      if (p == "") next
+      if (index(p, "/") == 0) next
+      n = split(p, seg, "/")
+      if (seg[n] in root) shadow[p] = 1
+      next
+    }
+    # Pass 2: the gate sources.
+    {
+      line = $0
+      src = FILENAME
+      d = src; sub(/\/[^\/]*$/, "", d); if (d == src) d = ""
+      # A comment line is prose, not a read — the same stripping pw_derive_all and
+      # the no-`|| true` check use.
+      t = line; sub(/^[ \t]+/, "", t)
+      if (t ~ /^(#|\/\/|\*|\/\*)/) next
+      while (match(line, /"[^"]*"/)) {
+        lit = substr(line, RSTART + 1, RLENGTH - 2)
+        line = substr(line, RSTART + RLENGTH)
+        if (!(lit in root)) continue
+        # The sibling first: a bare name in a source that has one of its own
+        # resolves there, and that file is a real read of THIS gate.
+        sib = (d == "") ? lit : (d "/" lit)
+        if (sib in shadow) { print src "\t" sib; continue }
+        # No shadow, so the bare name is the repo-root file.
+        print src "\t" lit
+      }
+    }' - "${files[@]}" 2>/dev/null
   return 0
 }
 
