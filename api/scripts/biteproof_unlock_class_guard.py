@@ -22,7 +22,17 @@ Per case the harness checks, and prints, all of:
       a control (a wrapped route must NOT fail),
   (d) the failure NAMES the offending route — a red that does not say which
       route is unlimited is not evidence about this defect,
-  (e) every touched file is restored byte-identically, verified by sha256, and a
+  (e) the guard really RAN THE ROUTE UNDER TEST, in BOTH directions: the named
+      test's own result marker (`--- PASS:` / `--- FAIL:`, which needs `-v`), and
+      the route printed in the guard's own enumeration block ("N pattern(s)
+      enumerated from the router and driven with a burst ..."). Without (e) a
+      control case could not be told from "the guard never ran" — `go test`
+      exits 0 when `-run` matches nothing, so a rename, a build tag or a changed
+      `-run` would have printed `GREEN (control holds)` about a route nothing
+      judged. Measured shape this closes: `go test -run ^NoSuchTest$` prints
+      "testing: warning: no tests to run" and "ok ... [no tests to run]", rc=0,
+      with no log block at all.
+  (f) every touched file is restored byte-identically, verified by sha256, and a
       file the case created is gone again.
 
 Seven cases. The two shapes that matter most, because each was missed by a
@@ -109,6 +119,92 @@ def run(args):
     return p.returncode, (p.stdout + p.stderr)
 
 
+# ─── "the guard really ran" ──────────────────────────────────────────────────
+# A green `go test` is NOT evidence that anything ran: when -run matches no test,
+# `go test` prints "testing: warning: no tests to run" and exits 0. MEASURED on
+# this host (go1.27.0):
+#
+#     $ go test ./internal/httpapi/ -run '^TestNoSuchNameExistsAtAll$' -count=1 -v
+#     testing: warning: no tests to run
+#     PASS
+#     ok  github.com/wzul/jomform/api/internal/httpapi  0.408s [no tests to run]
+#     rc=0
+#
+# So a control case that asserted only `rc == 0` would print GREEN (control
+# holds) after a rename, a build tag or a changed -run made the guard not run at
+# all — a green that cannot be told from "the guard never ran", which is the
+# failure mode this whole harness exists to prevent. Every case therefore
+# requires the guard's OWN evidence, and it is checked for the controls (B and G)
+# exactly as it is for the red cases:
+#
+#   * `-v` output carries a per-test result marker, `--- PASS: <name>` /
+#     `--- FAIL: <name>`; neither appears when nothing ran.
+#   * the guard's enumeration block (unlock_ratelimit_class_test.go's t.Logf)
+#     names every pattern it enumerated AND prints the burst it fired at it, so
+#     its presence is evidence that the walk ran and the route was DRIVEN.
+#   * the route under test appears in that block, so the evidence is about THIS
+#     case's route and not a sibling.
+# The -v flag is what makes (1) and (2) reachable at all; without it the guard's
+# t.Logf is swallowed on a passing run.
+#
+# The seam is self-checked on every run (selfcheck_bite_control): the same
+# evidence function is fed a REAL vacuous output from a `-run` that matches
+# nothing, and a REAL driven output from the guard, and must reject the first and
+# accept the second. Without that, a future edit could neuter this check (or the
+# guard could stop logging the block) and every case below would still print a
+# verdict — the one failure this fix must not itself be able to acquire.
+GUARD_RESULT_PASS = "--- PASS: %s" % GUARD
+GUARD_RESULT_FAIL = "--- FAIL: %s" % GUARD
+GUARD_ENUM_HEADER = "pattern(s) enumerated from the router and driven with a burst of"
+
+
+def driving_evidence(out, result_marker, want_drove):
+    """(ok, missing) — whether `out` shows the guard ran AND drove want_drove.
+
+    `out` is the combined stdout+stderr of a `go test -v -run ^<guard>$` run.
+    Nothing here reads the guard's behaviour; it reads the guard's own report
+    that it enumerated the router and fired a burst at the named route.
+    """
+    missing = []
+    if result_marker not in out:
+        missing.append("the guard's own result marker %r" % result_marker)
+    # The routes are checked inside the enumeration BLOCK, not merely somewhere in
+    # the output: the block is the guard reporting which patterns it drove, and a
+    # route named only in a failure message would not be that evidence.
+    block = ""
+    at = out.find(GUARD_ENUM_HEADER)
+    if at < 0:
+        missing.append("the guard's enumeration block (%r)" % GUARD_ENUM_HEADER)
+    else:
+        block = out[at:]
+        # The block ends where the test's own result is reported.
+        for stop in ("\n--- ", "\n=== NAME", "\nPASS\n", "\nFAIL\n"):
+            i = block.find(stop)
+            if i >= 0:
+                block = block[:i]
+    for w in want_drove:
+        if block and w not in block:
+            missing.append("the driven route %r inside the enumeration block" % w)
+    if missing:
+        return False, missing
+    return True, []
+
+
+def run_guard():
+    """Run the guard verbosely and return (rc, output).
+
+    `-v` is load-bearing: without it `go test` swallows the guard's t.Logf on a
+    passing run, so the evidence driving_evidence needs is not in the output at
+    all — which is exactly how the control cases used to be unfalsifiable.
+    """
+    return run(["go", "test", GUARD_PKG, "-run", "^%s$" % GUARD, "-count=1", "-v"])
+
+
+def run_guard_name(name):
+    """Run `go test -run ^<name>$ -v` and return (rc, output)."""
+    return run(["go", "test", GUARD_PKG, "-run", "^%s$" % name, "-count=1", "-v"])
+
+
 # ─── the anchors ─────────────────────────────────────────────────────────────
 # The last production registration in RegisterRoutes. Everything is injected
 # after it so the injected route sits inside the same RegisterRoutes body the
@@ -192,50 +288,101 @@ INLINE_WRAPPED = SERVER_ANCHOR + (
     '\t\t})))\n'
 )
 
-# (label, mutations, want_red, want_named)
+# (label, mutations, want_red, want_named, want_drove)
 #   mutations: list of ("replace", path, old, new) | ("create", path, content)
 #   want_red:  True  -> the guard MUST fail (the sabotage is a real defect)
 #              False -> the guard MUST pass (a control; catching it here would
 #                       mean the guard reports a limit that is not there)
 #   want_named: substrings the guard's output must contain when it is red, so a
 #               red is attributable to THIS route and not to a sibling
+#   want_drove: substrings that must appear in the guard's ENUMERATION BLOCK, so
+#               the case is only counted when the guard really enumerated the
+#               router and fired a burst at this route. Required for the control
+#               cases (B and G) too — that is the whole point: a green that
+#               cannot be told from "the guard never ran" is not a control.
+#
+# The shipped routes the unmutated tree must drive, for the CONTROL leg.
+SHIPPED_UNLOCK_ROUTES = [
+    "POST /embed/f/{wsslug}/{slug}/unlock",
+    "POST /f/{slug}/unlock",
+    "POST /{slug}/unlock",
+]
+
 CASES = [
     (
         "A: INDIRECT unwrapped unlock route (the card's defect)",
         [("replace", PUBLIC, LAST_REG, INDIRECT_UNWRAPPED)],
-        True, ["POST /qa-indirect/{slug}/unlock"],
+        True, ["POST /qa-indirect/{slug}/unlock"], ["POST /qa-indirect/{slug}/unlock"],
     ),
     (
         "B: the same INDIRECT route WRAPPED (control: must stay GREEN)",
         [("replace", PUBLIC, LAST_REG, INDIRECT_WRAPPED)],
-        False, [],
+        False, [], ["POST /qa-indirect/{slug}/unlock"],
     ),
     (
         "C: a LITERAL unwrapped unlock route (what the old guard DID catch)",
         [("replace", PUBLIC, LAST_REG, LITERAL_UNWRAPPED)],
-        True, ["POST /qa-literal/{slug}/unlock"],
+        True, ["POST /qa-literal/{slug}/unlock"], ["POST /qa-literal/{slug}/unlock"],
     ),
     (
         "D: a SHIPPED route loses its wrapper (bites on production code)",
         [("replace", PUBLIC, UNWRAP_ONE_SHIPPED, WRAP_ONE_SHIPPED)],
-        True, ["POST /f/{slug}/unlock"],
+        True, ["POST /f/{slug}/unlock"], ["POST /f/{slug}/unlock"],
     ),
     (
         "E: an INDIRECT route registered from ANOTHER FILE in the package",
         [("replace", PUBLIC, LAST_REG, XF_CALL), ("create", XFILE, XF_HANDLER)],
-        True, ["POST /qa-xfile/{slug}/unlock"],
+        True, ["POST /qa-xfile/{slug}/unlock"], ["POST /qa-xfile/{slug}/unlock"],
     ),
     (
         "F: an UNWRAPPED unlock route registered INLINE on the SERVED table (server.go)",
         [("replace", SERVER, SERVER_ANCHOR, INLINE_UNWRAPPED)],
-        True, ["POST /qa-inline/{slug}/unlock"],
+        True, ["POST /qa-inline/{slug}/unlock"], ["POST /qa-inline/{slug}/unlock"],
     ),
     (
         "G: the same INLINE registration WRAPPED (control: must stay GREEN)",
         [("replace", SERVER, SERVER_ANCHOR, INLINE_WRAPPED)],
-        False, [],
+        False, [], ["POST /qa-inline/{slug}/unlock"],
     ),
 ]
+
+
+def selfcheck_bite_control():
+    """(ok, message) — prove driving_evidence() can reject a run that did nothing.
+
+    Runs the guard's -run selector against a name that matches NO test and feeds
+    the result to driving_evidence with a shipped route as the route it must have
+    driven. `go test` exits 0 in that case, so the ONLY thing that can reject it
+    is the evidence check itself. A second leg then feeds the REAL unmutated guard
+    output (already in hand) and requires it to be accepted, so a check that
+    rejected everything would not pass either.
+    """
+    vrc, vout = run_guard_name("TestZZSelfCheckNameThatMatchesNoTest")
+    rejected, why = driving_evidence(vout, GUARD_RESULT_PASS, SHIPPED_UNLOCK_ROUTES)
+    lines = [
+        "  vacuous run:  go test -run ^TestZZSelfCheckNameThatMatchesNoTest$ rc=%d" % vrc,
+        "                evidence check says ran=%s (must be NO)" % ("yes" if rejected else "NO"),
+    ]
+    if vrc != 0:
+        lines.append("  SELF-CHECK UNUSABLE: the vacuous run did not exit 0 (rc=%d), so it is "
+                     "not the benign-vacuous shape this check is for" % vrc)
+        return False, "\n".join(lines)
+    if rejected:
+        lines.append("  SELF-CHECK FAILED: a run that matched no test was accepted as "
+                     "evidence the guard ran. driving_evidence() is not checking what it "
+                     "claims (missing: %s)" % (", ".join(why) or "nothing"))
+        return False, "\n".join(lines)
+
+    drc, dout = run_guard()
+    accepted, why2 = driving_evidence(dout, GUARD_RESULT_PASS, SHIPPED_UNLOCK_ROUTES)
+    lines.append("  driven run:   go test -run ^%s$ rc=%d" % (GUARD, drc))
+    lines.append("                evidence check says ran=%s (must be yes)" % ("yes" if accepted else "NO"))
+    if drc != 0 or not accepted:
+        lines.append("  SELF-CHECK FAILED: the real guard output was NOT accepted as evidence "
+                     "(rc=%d, missing: %s) — the check is too strict to be useful, or the "
+                     "guard stopped logging its enumeration block" % (drc, ", ".join(why2) or "nothing"))
+        return False, "\n".join(lines)
+    return True, "\n".join(lines)
 
 
 def apply_mutations(mutations):
@@ -270,7 +417,7 @@ def main():
     # Prewarm so the per-case builds are incremental, not cold.
     run(["go", "build", "./..."])
 
-    for label, mutations, _, _ in CASES:
+    for label, mutations, _, _, _ in CASES:
         for m in mutations:
             if m[0] == "replace":
                 _, path, old, _ = m
@@ -285,16 +432,35 @@ def main():
         return 2
 
     brc, bout = run(["go", "build", "./..."])
-    trc, tout = run(["go", "test", GUARD_PKG, "-run", "^%s$" % GUARD, "-count=1"])
+    trc, tout = run_guard()
     print("=== CONTROL (unmutated): go build rc=%d, %s rc=%d ===" % (brc, GUARD, trc), flush=True)
-    if brc != 0 or trc != 0:
+
+    # Prove the evidence check itself can fail, BEFORE anything is called green:
+    # the same driving_evidence() is fed a REAL vacuous run (a -run that matches
+    # nothing) and a REAL driven run (the guard above), and must reject the first
+    # and accept the second. A green CONTROL with a broken evidence check would be
+    # the very "green that cannot be told from did not run" this harness exists to
+    # catch, one level up.
+    sc_ok, sc_msg = selfcheck_bite_control()
+    print("=== evidence self-check: %s ===" % ("OK" if sc_ok else "FAILED"), flush=True)
+    print(sc_msg, flush=True)
+    if not sc_ok:
+        print("CONTROL EVIDENCE CHECK DOES NOT WORK - every verdict below would be "
+              "unfalsifiable, refusing to report", flush=True)
+        return 1
+
+    ok, missing = driving_evidence(tout, GUARD_RESULT_PASS, SHIPPED_UNLOCK_ROUTES)
+    if brc != 0 or trc != 0 or not ok:
         print("CONTROL NOT GREEN - fix the guard before proving it bites", flush=True)
+        for m in missing:
+            print("  missing from evidence: %s" % m, flush=True)
         print(tout[-3000:], flush=True)
         return 1
+    print("CONTROL drove the shipped routes: %s" % ", ".join(SHIPPED_UNLOCK_ROUTES), flush=True)
 
     not_biting = []
     try:
-        for label, mutations, want_red, want_named in CASES:
+        for label, mutations, want_red, want_named, want_drove in CASES:
             err = apply_mutations(mutations)
             if err:
                 print("HARNESS BUG: %s: %s" % (label, err), flush=True)
@@ -303,13 +469,18 @@ def main():
                 continue
 
             b, _ = run(["go", "build", "./..."])
-            tr, out = run(["go", "test", GUARD_PKG, "-run", "^%s$" % GUARD, "-count=1"])
+            tr, out = run_guard()
 
             named = [w for w in want_named if w in out]
+            # The guard's own evidence that it RAN and drove this route. Checked
+            # for controls too: `go test` exits 0 when -run matches nothing, so
+            # without this a control's "GREEN (control holds)" is unfalsifiable.
+            marker = GUARD_RESULT_FAIL if want_red else GUARD_RESULT_PASS
+            drove_ok, drove_missing = driving_evidence(out, marker, want_drove)
             if want_red:
-                bites = b == 0 and tr != 0 and len(named) == len(want_named)
+                bites = b == 0 and tr != 0 and len(named) == len(want_named) and drove_ok
             else:
-                bites = b == 0 and tr == 0
+                bites = b == 0 and tr == 0 and drove_ok
             if not bites:
                 not_biting.append(label)
 
@@ -317,10 +488,14 @@ def main():
                 verdict = "RED (bites)" if bites else "GREEN (DOES NOT BITE)"
             else:
                 verdict = "GREEN (control holds)" if bites else "RED (CONTROL FAILED)"
-            print("  %-58s build rc=%d  guard rc=%d  -> %s" % (label, b, tr, verdict), flush=True)
+            print("  %-58s build rc=%d  guard rc=%d  ran=%s  -> %s"
+                  % (label, b, tr, "yes" if drove_ok else "NO", verdict), flush=True)
             if want_red:
                 print("      must name: %s" % ", ".join(want_named), flush=True)
                 print("      named:     %s" % (", ".join(named) or "(none)"), flush=True)
+            print("      must drive: %s" % ", ".join(want_drove), flush=True)
+            for m in drove_missing:
+                print("      NOT EVIDENCED: %s" % m, flush=True)
             if b != 0:
                 print("      NOTE: mutation ALSO broke the build (rc=%d) - a compile error would "
                       "hide the guard, so this case proves nothing" % b, flush=True)
@@ -340,11 +515,15 @@ def main():
               % (os.path.basename(p), after[:16], "OK" if after == BEFORE[p] else "MISMATCH"), flush=True)
     print("created file removed: %s" % ("OK" if not exists(XFILE) else "STILL PRESENT"), flush=True)
 
-    rc, _ = run(["go", "test", GUARD_PKG, "-run", "^%s$" % GUARD, "-count=1"])
+    rc, rout = run_guard()
     rcb, _ = run(["go", "build", "./..."])
-    print("final unmutated: %s rc=%d, go build rc=%d" % (GUARD, rc, rcb), flush=True)
+    fok, fmissing = driving_evidence(rout, GUARD_RESULT_PASS, SHIPPED_UNLOCK_ROUTES)
+    print("final unmutated: %s rc=%d ran=%s, go build rc=%d"
+          % (GUARD, rc, "yes" if fok else "NO", rcb), flush=True)
+    for m in fmissing:
+        print("  NOT EVIDENCED (final): %s" % m, flush=True)
     print("CASES THAT DID NOT BITE: %d %s" % (len(not_biting), not_biting), flush=True)
-    ok = (not not_biting) and rc == 0 and rcb == 0 and not exists(XFILE)
+    ok = (not not_biting) and rc == 0 and rcb == 0 and fok and not exists(XFILE)
     return 0 if ok else 1
 
 

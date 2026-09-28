@@ -121,7 +121,13 @@
 //     A future Go release that renames those fields makes the walk return
 //     nothing, which fails the floors above with an explanation rather than
 //     silently narrowing the guard; TestGateRouteWalkerSeesEveryRegisteredPattern
-//     pins the walk against exactly that.
+//     pins the walk against exactly that. A release that shapes a `pattern`
+//     field as a pointer to something other than a struct would have made the
+//     walk PANIC (taking the whole package down, with no named verdict for any
+//     guard in it) — that field is now skipped and reported by name instead, and
+//     TestGateRouteWalkerReportsAFieldItCannotRead pins both directions: the
+//     report fires for the unreadable shape, and it stays quiet for the shapes
+//     the walk really does read.
 //   - Discovery drives every GET route with a fixture path, so routes that are
 //     unrelated to forms (a sitemap, a legal page, /t/{ref}) are requested too.
 //     Their responses are only read for the gate marker; a 404/500 there is
@@ -190,15 +196,33 @@ const gatePatternFloor = 10
 // the data to argue from.
 const gateRouteProbeBudget = 5 * time.Second
 
-// muxPatterns returns every pattern registered on mux, sorted.
+// patternStrings returns every pattern string held by the value rooted at root
+// (for a *http.ServeMux that is its whole routing tree), plus a note for every
+// `pattern` field it could NOT read.
 //
 // Go exposes no public pattern list on ServeMux — Handler(r) answers a single
 // request, it does not enumerate — so the routing tree is walked by reflection:
 // each leaf holds a *pattern whose String() is the pattern as it was registered
 // ("GET /f/{slug}"). Handlers are not inspected; only the pattern strings are.
-func muxPatterns(t *testing.T, mux *http.ServeMux) []string {
-	t.Helper()
-	var out []string
+//
+// TWO WAYS THIS WALK CAN FAIL TO SEE A PATTERN, and why neither is a panic or a
+// silent nothing:
+//
+//   - The field names it reads are net/http's internals (routingNode.pattern,
+//     pattern.str). A release that renames either returns a SHORT or EMPTY walk,
+//     which the callers' floors refuse with an explanation (see
+//     TestGateRouteWalkerSeesEveryRegisteredPattern and the guards' floors).
+//   - A `pattern` field that is a pointer to something OTHER than a struct used
+//     to make the walk PANIC — measured on go1.27.0 against the pre-fix code:
+//     `pattern *int` gave "reflect: call of reflect.Value.FieldByName on int
+//     Value", which would take the whole httpapi package down instead of failing
+//     the guard by name. The pointee's KIND is now checked before it is read, and
+//     such a field is reported through `unreadable` so the caller fails BY NAME.
+//     (Measured on the same toolchain: this is the reachable panic. Reading an
+//     unexported field is NOT one — FieldByName, Elem, Len, NumField, MapRange,
+//     IsNil and String on a value obtained from an unexported field all work;
+//     only Interface() is refused, and this walk never calls it.)
+func patternStrings(root reflect.Value) (out, unreadable []string) {
 	var walk func(v reflect.Value, depth int)
 	walk = func(v reflect.Value, depth int) {
 		if !v.IsValid() || depth > 32 {
@@ -213,7 +237,10 @@ func muxPatterns(t *testing.T, mux *http.ServeMux) []string {
 		case reflect.Struct:
 			// A leaf node's *pattern; str is the original pattern string.
 			if p := v.FieldByName("pattern"); p.IsValid() && p.Kind() == reflect.Pointer && !p.IsNil() {
-				if s := p.Elem().FieldByName("str"); s.IsValid() && s.Kind() == reflect.String {
+				if e := p.Elem(); e.Kind() != reflect.Struct {
+					unreadable = append(unreadable,
+						fmt.Sprintf("%s.pattern points at a %s, not a struct", v.Type(), e.Kind()))
+				} else if s := e.FieldByName("str"); s.IsValid() && s.Kind() == reflect.String {
 					out = append(out, s.String())
 				}
 			}
@@ -231,7 +258,43 @@ func muxPatterns(t *testing.T, mux *http.ServeMux) []string {
 			}
 		}
 	}
-	walk(reflect.ValueOf(mux), 0)
+	walk(root, 0)
+	return out, unreadable
+}
+
+// walkNotes is the reporting seam muxPatterns uses: *testing.T satisfies it, and
+// so does walkNoteRecorder, which lets the reporting itself be tested (testing.TB
+// cannot be faked from outside the testing package — it carries an unexported
+// method — so the seam is this narrow interface rather than TB).
+type walkNotes interface {
+	Helper()
+	Errorf(format string, args ...any)
+}
+
+// reportWalkNotes fails BY NAME for a walk that could not read part of the route
+// table. It exists because the alternative shapes are worse than a red test: a
+// panic takes the whole package down (no named verdict for any guard in it), and
+// returning the patterns it did read lets the guards report green on a set they
+// only partly cover.
+func reportWalkNotes(t walkNotes, unreadable []string) bool {
+	t.Helper()
+	if len(unreadable) == 0 {
+		return true
+	}
+	t.Errorf("the route-table walk could not read %d `pattern` field(s): %v — a field this walk "+
+		"cannot read is a route it cannot enumerate, so every guard that enumerates from the walk "+
+		"would report on a set it does not cover. This is reported here by name rather than as a "+
+		"panic (which would take the whole package down) or as a short walk (which the floors can "+
+		"only catch when it is short ENOUGH). Re-point the walk at net/http's current shape.",
+		len(unreadable), unreadable)
+	return false
+}
+
+// muxPatterns returns every pattern registered on mux, sorted.
+func muxPatterns(t *testing.T, mux *http.ServeMux) []string {
+	t.Helper()
+	out, unreadable := patternStrings(reflect.ValueOf(mux))
+	reportWalkNotes(t, unreadable)
 	sort.Strings(out)
 	return out
 }
@@ -473,6 +536,156 @@ func TestGateRouteWalkerSeesEveryRegisteredPattern(t *testing.T) {
 		})
 	}
 }
+
+// walkNoteRecorder captures what reportWalkNotes reports, so the walk's OWN
+// failure reporting can be tested in both directions without a failing test.
+// It satisfies walkNotes; *testing.T cannot be faked (testing.TB carries an
+// unexported method), which is why muxPatterns takes that narrow seam.
+type walkNoteRecorder struct {
+	helperCalls int
+	reports     []string
+}
+
+func (r *walkNoteRecorder) Helper() { r.helperCalls++ }
+
+func (r *walkNoteRecorder) Errorf(format string, args ...any) {
+	r.reports = append(r.reports, fmt.Sprintf(format, args...))
+}
+
+// TestGateRouteWalkerReportsAFieldItCannotRead pins the third leg of the walk's
+// contract: a `pattern` field it cannot read is a ROUTE IT CANNOT ENUMERATE, and
+// it must fail by name rather than by panicking or by returning a shorter list.
+//
+// MEASURED, on go1.27.0 against the pre-fix walk: a `pattern` field that is a
+// non-nil pointer to a non-struct makes the read chain PANIC —
+//
+//	reflect: call of reflect.Value.FieldByName on int Value
+//
+// — out of muxPatterns, and therefore out of every guard in this package, since
+// a panic in one test binary ends the whole run with no named verdict for any of
+// them. That is the shape this asserts is now reported instead.
+//
+// The other half of the card's note ("FieldByName panics if the field is read
+// through an interface value") was measured and does NOT reproduce: on the same
+// toolchain FieldByName, Elem, Len, NumField, MapRange, IsNil and String are all
+// legal on a value obtained from an unexported field (only Interface() is
+// refused, and this walk never calls it). So the reachable panic is the pointee
+// KIND, not the field's export status — asserted here, and the interface-typed
+// leg is asserted NOT to panic below so the difference stays measured.
+func TestGateRouteWalkerReportsAFieldItCannotRead(t *testing.T) {
+	// ── the failure direction: an unreadable `pattern` is reported by name ──
+	var (
+		probeInt  int
+		probeStr  = "legacy"
+		unreadBad = reflect.ValueOf(&struct {
+			pattern *int
+			str     string
+		}{pattern: &probeInt, str: probeStr})
+	)
+
+	out, unreadable := patternStrings(unreadBad)
+	if len(unreadable) != 1 {
+		t.Fatalf("patternStrings reported %d unreadable `pattern` field(s) for a *int one, want 1 "+
+			"(read %d pattern(s): %v) — a field the walk cannot read must be reported, because "+
+			"silently returning the patterns it could read lets every guard enumerate a set it "+
+			"does not cover", len(unreadable), len(out), out)
+	}
+	if len(out) != 0 {
+		t.Errorf("patternStrings invented %d pattern(s) from a *int `pattern` field: %v", len(out), out)
+	}
+	if !strings.Contains(unreadable[0], "*int") {
+		t.Errorf("the unreadable note %q does not name what the field actually points at, so a "+
+			"red would not say which shape needs re-pointing", unreadable[0])
+	}
+
+	rec := &walkNoteRecorder{}
+	if reportWalkNotes(rec, unreadable) {
+		t.Errorf("reportWalkNotes returned OK for a walk that could not read %v — the caller's "+
+			"floors can only catch a SHORT walk, so an unreadable field that still leaves enough "+
+			"patterns behind would pass silently", unreadable)
+	}
+	if len(rec.reports) != 1 {
+		t.Fatalf("reportWalkNotes raised %d report(s) for %v, want exactly 1", len(rec.reports), unreadable)
+	}
+
+	// ── the pass direction (the control): the shapes the walk DOES read stay
+	// quiet, and the walk really did read them, so the quiet is not vacuous ──
+	rec = &walkNoteRecorder{}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /f/{slug}", func(http.ResponseWriter, *http.Request) {})
+	mux.HandleFunc("POST /{slug}/unlock", func(http.ResponseWriter, *http.Request) {})
+	mux.HandleFunc("GET /assets/{key...}", func(http.ResponseWriter, *http.Request) {})
+	mux.HandleFunc("GET /{$}", func(http.ResponseWriter, *http.Request) {})
+	mux.HandleFunc("GET example.com/{slug}", func(http.ResponseWriter, *http.Request) {})
+	got, unread := patternStrings(reflect.ValueOf(mux))
+	if len(got) != 5 {
+		t.Fatalf("the walk read %d of the 5 registered patterns (%v) — the control below would "+
+			"then be asserting quiet about a walk that is broken in the other direction", len(got), got)
+	}
+	if len(unread) != 0 {
+		t.Errorf("the walk reported %v on a real mux — it must stay quiet about the shapes it "+
+			"really does read, or every guard in this package reds on a healthy tree", unread)
+	}
+	if !reportWalkNotes(rec, unread) {
+		t.Errorf("reportWalkNotes refused a healthy walk: %v", rec.reports)
+	}
+	if len(rec.reports) != 0 {
+		t.Errorf("reportWalkNotes raised %v on a healthy walk, want none", rec.reports)
+	}
+	if rec.helperCalls == 0 {
+		t.Errorf("reportWalkNotes called Helper() 0 times — a helper that does not mark itself " +
+			"makes every report in a caller point at reportWalkNotes instead of the line that " +
+			"supplied the walk")
+	}
+
+	// A `pattern` field that is a STRING is the net/http 1.21 muxEntry shape: it
+	// must be skipped without a report and without a panic.
+	strShape := reflect.ValueOf(&struct {
+		pattern string
+		h       any
+	}{pattern: probeStr, h: 1})
+	if _, unread := patternStrings(strShape); len(unread) != 0 {
+		t.Errorf("a STRING `pattern` field (net/http's muxEntry shape) was reported as unreadable "+
+			"(%v) — it holds no *pattern, so skipping it is correct and reporting it would red on "+
+			"a shape the walk never claimed to read", unread)
+	}
+
+	// The interface-typed leg of the card's note: reading an unexported field
+	// through an interface value must NOT panic. This is here so the difference
+	// between the two failure modes stays measured rather than assumed.
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("walking a value reached through an INTERFACE field panicked (%v) — the "+
+					"card's note is that an unexported field read through an interface value "+
+					"panics; if that is reachable in this walk it must be handled too", r)
+			}
+		}()
+		// A *pattern-shaped field (pointer to a struct carrying `str`) reached
+		// through an interface value — the shape ServeMux's tree uses for a
+		// method-less child.
+		ifaceShape := reflect.ValueOf(&struct {
+			inner any
+		}{inner: &struct {
+			pattern *walkProbePattern
+			str     string
+		}{pattern: &walkProbePattern{str: probeStr}, str: probeStr}})
+		got, unread := patternStrings(ifaceShape)
+		if len(got) != 1 || got[0] != probeStr {
+			t.Errorf("walking through an interface field read %v, want [%q] — the walk must see a "+
+				"*pattern reached through an interface value, which is the shape ServeMux's own "+
+				"tree uses for a method-less child", got, probeStr)
+		}
+		if len(unread) != 0 {
+			t.Errorf("walking through an interface field reported %v", unread)
+		}
+	}()
+}
+
+// walkProbePattern is the shape the walk reads: a struct carrying `str`, the
+// pattern as it was registered, reached through a `pattern` field that points at
+// it. Named `walkProbe*` so it cannot be confused with production code.
+type walkProbePattern struct{ str string }
 
 // unlockTargetOf renders the page at path and returns the unlock path it would
 // post to, resolved the way a browser resolves it (the page's own path plus the

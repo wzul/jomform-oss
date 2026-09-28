@@ -783,11 +783,29 @@ func TestUnlockProbePathsResolveBackToTheirOwnPattern(t *testing.T) {
 // drive, because it sends every request on ONE host and net/http has no host
 // wildcard (pinned by TestServeMuxRejectsAWildcardHost). It is registered the
 // same way a real route would be, so nothing about the trap is synthetic.
+//
+// The branch is the LAST resort of resolution: the guard reports undrivable when
+// resolveUnlockProbePath gives it no path, whatever the reason. Pinning only the
+// OUTCOME ("undrivable == 1") therefore cannot tell the claim — "the walk cannot
+// reach a host-pinned pattern" — from ANY other reason resolution returns empty
+// (a broken filling, a parser that stops reading the host section), and a red
+// would name the symptom without the cause. So the cause is asserted too, as a
+// MATCHED PAIR: the host-qualified trap reads its host section into hostPat and
+// cannot be resolved on the one host the probe drives, and the SAME pattern with
+// the host section stripped off IS drivable. Only the host section differs
+// between the two, so the difference in outcome is attributable to it and to
+// nothing else (pinned against the parser by
+// TestGateRouteProbeFillsWildcardsByPositionNotName, which asserts hostPat).
 func TestUnlockClassGuardFailsOnAnUndrivablePattern(t *testing.T) {
 	noop := func(http.ResponseWriter, *http.Request) {}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /{slug}/unlock", noop)                  // a real, drivable sibling
 	mux.HandleFunc("POST other.example.com/{slug}/unlock", noop) // pinned to another literal host
+
+	const (
+		trap     = "POST other.example.com/{slug}/unlock" // host-pinned to another literal host
+		stripped = "POST /{slug}/unlock"                  // the SAME pattern, host section removed
+	)
 
 	drivable, undrivable := 0, 0
 	for _, pat := range muxPatterns(t, mux) {
@@ -809,7 +827,38 @@ func TestUnlockClassGuardFailsOnAnUndrivablePattern(t *testing.T) {
 			"this guard's undrivable branch does not fire, so a pattern it cannot drive would be "+
 			"dropped from the covered set silently", drivable, undrivable)
 	}
-	t.Logf("undrivable report works: drivable=%d, undrivable=%d", drivable, undrivable)
+
+	// ── the CAUSE, not just the outcome ──
+	pr := gateRouteProbeFor(trap)
+	if pr.hostPat == "" {
+		t.Fatalf("the parser read NO host section out of %q (hostPat is empty, pathPat=%q) — the "+
+			"trap is only a trap if the host section is READ; with it dropped the pattern would "+
+			"resolve on the probe host and the undrivable count above would be measuring something "+
+			"else", trap, pr.pathPat)
+	}
+	// the trap must NOT resolve on the one host the probe drives: it is pinned to
+	// `other.example.com`, and net/http has no host wildcard, so no request the
+	// probe can send reaches it.
+	if pth, hk := resolveUnlockProbePath(mux, trap, unlockProbeHost); pth != "" {
+		t.Errorf("%q resolved to %q (handler %s) on host %q — it must NOT, because it is pinned "+
+			"to %q. If this ever resolves, the undrivable branch is no longer being exercised by "+
+			"this test and the outcome assertion above is vacuous", trap, pth, hk, unlockProbeHost, pr.hostPat)
+	}
+	// the matched pair: identical in every respect except the host section.
+	spr := gateRouteProbeFor(stripped)
+	if spr.hostPat != "" {
+		t.Fatalf("the stripped pattern %q still carries a host section (%q) — the pair is not "+
+			"matched, so the drivability difference below would not be attributable to the host",
+			stripped, spr.hostPat)
+	}
+	if pth, hk := resolveUnlockProbePath(mux, stripped, unlockProbeHost); pth == "" {
+		t.Errorf("the SAME pattern with its host section stripped (%q) is ALSO undrivable on host "+
+			"%q — so the trap is not the host section, and the undrivable count above is not "+
+			"evidence about host-pinned patterns (fillings tried: %v, handler %s)",
+			stripped, unlockProbeHost, unlockPatternFillings(spr), hk)
+	}
+	t.Logf("undrivable report works: drivable=%d, undrivable=%d; trap %q hostPat=%q is undrivable, "+
+		"the same pattern stripped %q is drivable", drivable, undrivable, trap, pr.hostPat, stripped)
 }
 
 // contains reports whether needle is in hay.
