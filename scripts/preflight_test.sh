@@ -949,6 +949,171 @@ else
   ok "15g's predicate is silent on a full-run banner (no false red)"
 fi
 
+# 17. THE api `test` GATE MUST CARRY AN EXPLICIT PER-PACKAGE BUDGET (a -timeout).
+#
+#     `go test` panics a package after 10 minutes, and that default is PER
+#     PACKAGE, applied to every package (`go help testflag`: "-timeout d ... The
+#     default is 10 minutes (10m)"). `internal/httpapi` is the largest package and
+#     its cost tracks host load, so on a busy host it crosses 600s and the gate
+#     reports `panic: test timed out after 10m0s` for a package that is GREEN —
+#     measured on this host: pristine `origin/main` (ca110813) rc=1 at 601.195s,
+#     the same package rc=0 at 620.593s. A red that looks exactly like a hung test
+#     is a red nobody can act on, so the budget must be explicit in the gate, not
+#     inherited.
+#
+#     WHY THIS IS ASSERTED BY RUNNING THE GATE, NOT BY GREPPING ITS TEXT: a
+#     grep for "-timeout" is satisfied by the prose of this very check and by a
+#     `-timeout` written anywhere in the file, including a comment. What has to
+#     hold is that the command `go test` is ACTUALLY handed carries it. So `go`
+#     itself is stubbed on the PATH and the gate is run for real against the LIVE
+#     script — the stub prints the argv it was given, and that argv is the thing
+#     read here. Cost: the stub never compiles anything, so this is seconds.
+TIMEBIN="$SB/timebin"
+mkdir -p "$TIMEBIN"
+cat > "$TIMEBIN/go" <<'FAKEGO'
+#!/bin/sh
+echo "FAKE-GO ARGV: $*"
+exit 99
+FAKEGO
+chmod +x "$TIMEBIN/go"
+
+# The argv the gate handed `go test`, read off a real run of the LIVE runner.
+# `--only test` keeps every other gate out of the run, and the stub makes the
+# gate fail FAST — so the assertion below is about the COMMAND, never about the
+# suite passing here (this self-test must not cost a full api suite).
+test_gate_argv() {  # $1 = value for API_TEST_TIMEOUT (empty means "let the default apply")
+  (cd "$LIVE_ROOT" && env ${1:+API_TEST_TIMEOUT="$1"} \
+      PATH="$TIMEBIN:$PATH" \
+      JOMFORM_TEST_DATABASE_URL=postgres://placeholder \
+      JOMFORM_TEST_VALKEY_URL=valkey://placeholder \
+      ./scripts/preflight.sh --only test 2>&1 \
+    | sed -n 's/^FAKE-GO ARGV: //p' | sed -n '1p')
+}
+
+# A -timeout VALUE is a bare duration: the flag, then -race, -count=1 in the
+# order the gate writes them. Anchored on `-race -count=1 -timeout ` so this
+# cannot be satisfied by some other flag's argument.
+gate_budget() { sed -nE 's/.*-race -count=1 -timeout ([^ ]*).*/\1/p' <<<"$1" | sed -n '1p'; }
+
+live_argv="$(test_gate_argv '')"
+live_budget="$(gate_budget "$live_argv")"
+if [ -z "$live_argv" ]; then
+  bad "the api \`test\` gate handed no recognizable argv to \`go test\` on the LIVE runner (stubbed go saw nothing) — this check cannot read the budget, so the missing -timeout it exists to catch is now invisible"
+elif [ -z "$live_budget" ]; then
+  bad "the api \`test\` gate runs \`go test\` WITHOUT -timeout, so every package inherits Go's 10m per-package default and a green-but-slow \`internal/httpapi\` is reported as \`panic: test timed out after 10m0s\` (measured: pristine main rc=1 at 601.195s, green at 620.593s with a larger budget). argv was: [$live_argv]"
+else
+  ok "the api \`test\` gate hands \`go test\` an explicit budget by default (-timeout $live_budget), instead of inheriting Go's 10m per-package default"
+fi
+
+# 17b. The budget must come from API_TEST_TIMEOUT, so a host slower than this one
+#      can raise the ceiling without editing the gate. A HARDCODED literal passes
+#      17a and fails here — that is the whole reason this leg exists.
+over_argv="$(test_gate_argv '45m')"
+over_budget="$(gate_budget "$over_argv")"
+if [ "$over_budget" = "45m" ]; then
+  ok "API_TEST_TIMEOUT is honoured: the gate handed \`go test\` -timeout 45m when asked (it is an override, not a hardcoded literal)"
+else
+  bad "API_TEST_TIMEOUT does not reach the gate's \`go test\` argv — got [${over_budget:-none}] for 45m (so raising the ceiling on a slower host is impossible without editing the runner). argv was: [$over_argv]"
+fi
+
+# 17c. THE BITE. 17a reads a budget off a real run; the way that assertion fails
+#      is by reading NO budget. Rather than sabotage the live runner (this gate
+#      runs on the tree under test), the same predicate is driven over a real gate
+#      line with `-timeout` STRIPPED — a compiling copy of the runner in the
+#      sandbox, with an api/ directory so the gate body actually reaches the stub.
+#      Both directions are asserted: the intact copy carries a budget, the
+#      stripped one carries none and is REPORTED as the violation.
+mkdir -p "$SB/api"
+intact_budget="$(gate_budget "$live_argv")"
+sed -i 's/ -timeout \$API_TEST_TIMEOUT//g; s/ -timeout .\$API_TEST_TIMEOUT.//g' "$SB/scripts/preflight.sh"
+stripped_argv="$(cd "$SB" && env JOMFORM_TEST_DATABASE_URL=postgres://placeholder \
+      JOMFORM_TEST_VALKEY_URL=valkey://placeholder PATH="$TIMEBIN:$PATH" \
+      ./scripts/preflight.sh --only test 2>&1 | sed -n 's/^FAKE-GO ARGV: //p' | sed -n '1p')"
+stripped_budget="$(gate_budget "$stripped_argv")"
+if [ -z "$intact_budget" ]; then
+  bad "cannot run 17c's bite: the intact runner yielded no budget to strip, so comparing it against a stripped copy proves nothing (see 17a)"
+elif [ -z "$stripped_argv" ]; then
+  bad "17c could not read the stripped copy's argv (stubbed go saw nothing) — the bite leg never ran, so a missing -timeout would still read green"
+elif [ -n "$stripped_budget" ]; then
+  bad "17c does not bite: with \`-timeout\` removed from the copy the predicate STILL reads a budget ([$stripped_budget]) — the check cannot detect the removal it exists to catch"
+else
+  ok "17c BITES: the same predicate reads no budget once \`-timeout\` is stripped from a copy (intact=[$intact_budget], stripped=[none]) — 17a can go RED"
+fi
+# The sandbox copy is shared with the checks above; put it back as it was.
+cp "$PREFLIGHT" "$SB/scripts/preflight.sh" && chmod +x "$SB/scripts/preflight.sh"
+
+# 17d. The budget must fail CLOSED. `-timeout 0` turns the alarm OFF, so a hung
+#      package would block the gate with no bound — refused rather than accepted.
+#      And a value that is not a Go duration must be refused BEFORE it reaches
+#      `go test`, where it fails every package on the flag alone and reads as a
+#      broken suite.
+#      Driven against the LIVE runner with the placeholder prerequisites the
+#      env-preflight requires (otherwise the runner stops on those FIRST and this
+#      check would be asserting the wrong refusal) and with the STUBBED `go`, so a
+#      value that is accepted can never reach a real `go test`.
+test_rc_and_argv() {  # $1 = API_TEST_TIMEOUT; prints "rc<TAB>argv"
+  (cd "$LIVE_ROOT" && env API_TEST_TIMEOUT="$1" PATH="$TIMEBIN:$PATH" \
+      JOMFORM_TEST_DATABASE_URL=postgres://placeholder \
+      JOMFORM_TEST_VALKEY_URL=valkey://placeholder \
+      ./scripts/preflight.sh --only test 2>&1; printf 'rc=%s\n' "$?") > "$SB/budget.out" 2>&1
+  printf '%s\t%s' \
+    "$(sed -n 's/^rc=//p' "$SB/budget.out" | sed -n '1p')" \
+    "$(sed -n 's/^FAKE-GO ARGV: //p' "$SB/budget.out" | sed -n '1p')"
+}
+out_rc="$(test_rc_and_argv 0)"; rc="${out_rc%%$'\t'*}"
+if [ "$rc" != 0 ] && grep -q 'API_TEST_TIMEOUT=0 disables' "$SB/budget.out" && \
+   ! grep -q 'JOMFORM_TEST_DATABASE_URL is unset' "$SB/budget.out"; then
+  ok "API_TEST_TIMEOUT=0 (no timeout at all) -> refused by the budget check itself (rc=$rc), not handed to \`go test\`"
+else
+  bad "API_TEST_TIMEOUT=0 must be refused by the budget check (rc=$rc) — got: [$(sed -n 's/^FAKE-GO ARGV/UNEXPECTED go test invocation: &/p' "$SB/budget.out" | sed -n '1p')$(grep -E 'PREFLIGHT FAIL' "$SB/budget.out" | sed -n '1p')]"
+fi
+out_rc="$(test_rc_and_argv banana)"; rc="${out_rc%%$'\t'*}"; argv="${out_rc##*$'\t'}"
+if [ "$rc" != 0 ] && grep -q 'is not a Go duration' "$SB/budget.out" && [ -z "$argv" ]; then
+  ok "a non-duration API_TEST_TIMEOUT -> refused (rc=$rc) with no \`go test\` invocation at all, so it cannot fail packages on the flag alone"
+else
+  bad "a non-duration API_TEST_TIMEOUT must be refused before it reaches \`go test\` — rc=$rc argv=[$argv]"
+fi
+# An EMPTY value is "unset", so the default must still apply — otherwise a caller
+# that exports the variable empty (`API_TEST_TIMEOUT= ./preflight.sh`) silently
+# loses the whole budget this card added. Asserted on the argv actually handed to
+# `go test`, same as 17a.
+#
+# The EXPECTED default is DERIVED from the runner (`API_TEST_TIMEOUT:=<value>`),
+# never written here: this file's standing rule is that a hardcoded expectation
+# is what goes stale. A literal `30m` would also go RED on a deliberate change of
+# the gate's default — punishing exactly the edit it should allow — so what is
+# asserted is the PROPERTY (empty falls back to the same budget a bare run gets),
+# not the number. The `-timeout 0` half of this leg is asserted against `-timeout`
+# rather than that derived value, because the runner's own die-message for `0`
+# necessarily names it in prose.
+declared_default="$(sed -nE 's/^: "\$\{API_TEST_TIMEOUT:=([^}]*)\}".*/\1/p' "$PREFLIGHT" | sed -n '1p')"
+empty_rc="$(test_rc_and_argv '')"; argv="${empty_rc##*$'\t'}"
+if [ -z "$declared_default" ]; then
+  bad "cannot read the api \`test\` gate's default budget from $PREFLIGHT (expected a ': \"\\\${API_TEST_TIMEOUT:=<value>}\"' line) — without it the fallback below cannot be compared against anything"
+fi
+if [ -n "$declared_default" ] && [ "$(gate_budget "$argv")" = "$declared_default" ]; then
+  ok "an EMPTY API_TEST_TIMEOUT falls back to the declared default (\`go test\` was handed -timeout $declared_default), it does not disable the budget"
+elif printf '%s' "$argv" | grep -q -- '-timeout 0'; then
+  bad "an empty API_TEST_TIMEOUT handed \`go test\` '-timeout 0' — that DISABLES the timeout alarm, so a hung package would block the gate with no bound at all"
+else
+  bad "an empty API_TEST_TIMEOUT must fall back to the declared default budget ($declared_default) — argv was [$argv]"
+fi
+rm -f "$SB/budget.out"
+
+# 17e. The gate command is the one an OPERATOR COPIES, so the documented row for
+#      it must name the same budget. GATE-INVENTORY.md's table is otherwise kept
+#      honest by check 15 (names, both directions) — which CANNOT see this: a row
+#      that keeps its name and silently drops the budget stays green there, and
+#      the operator then copies a command that reds a healthy tree on a busy host.
+inv_row="$(grep -E '^\|[[:space:]]*`test`[[:space:]]*\|' "$INV" 2>/dev/null | sed -n '1p')"
+if [ -z "$inv_row" ]; then
+  bad "GATE-INVENTORY.md has no row for the \`test\` gate — the command an operator copies is unverifiable"
+elif [ -z "$(gate_budget "$inv_row")" ]; then
+  bad "GATE-INVENTORY.md's \`test\` row quotes the gate command WITHOUT -timeout, so the command an operator copies reds a healthy tree on a busy host: [$inv_row]"
+else
+  ok "GATE-INVENTORY.md's \`test\` row quotes the budget too (an operator copying the command gets the same ceiling)"
+fi
+
 echo "---"
 echo "preflight self-test: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1

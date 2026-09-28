@@ -37,7 +37,7 @@ nothing proves nothing.
 |---|---|---|---|
 | `build` | api | `cd api && go build ./...` | compile errors |
 | `vet` | api | `cd api && go vet ./...` | suspicious constructs `go build` skips (it does not compile `_test.go`) |
-| `test` | api | `cd api && go test ./... -race -count=1` | regressions **and data races** |
+| `test` | api | `cd api && go test ./... -race -count=1 -timeout 30m` | regressions **and data races**. The `-timeout` is an explicit per-package ceiling (30m, overridable with `API_TEST_TIMEOUT`): without it every package inherits Go's 10m default and `internal/httpapi` — the largest package, whose cost tracks host load — is reported as `panic: test timed out after 10m0s` for a package that is green (measured: pristine main rc=1 at 601.195s, green rc=0 at 620.593s on the same host). A `panic: test timed out` red cannot be told from a hung test. The `selftest` gate asserts this budget is present, that `API_TEST_TIMEOUT` reaches the argv, and that a stripped copy goes RED |
 | `govuln` | api | `govulncheck ./...` | known CVEs reachable from the module graph |
 | `web` | web | `cd web && npm run build` | `test:unit` (incl. the cross-language Go-contract guards) then the Next build |
 | `webimage` | web | `docker build -f web/Dockerfile .` (cache-only) | the **shipping web artifact** — no other gate built it, so a tree could be green while `docker build -f web/Dockerfile .` died |
@@ -55,6 +55,14 @@ nothing proves nothing.
 documentation that the `selftest` gate keeps honest. When you add a gate to
 `scripts/preflight.sh`, add its row here **in the same change** — that is now a
 gate, not a convention.
+
+Two DOCUMENTS quote this gate's command and are **not** parsed by any gate, so
+nothing goes red when they drift from the row above: `deploy/DEPLOY.md` (line 91)
+and `e2e/README.md` / `docs/CHIP-SANDBOX-E2E.md` all abbreviate it to
+`go test ./... -race`. They were already abbreviated before the budget existed,
+they are prose rather than runnable commands, and none of them is read by
+`selftest` — so they are recorded here rather than edited from this file. The
+row above is the copy an operator should take.
 
 **What this table is NOT: the list of every proof in the repo.** A gate proves a
 guard *runs*. It does not prove the guard would *fail* if the behaviour it pins

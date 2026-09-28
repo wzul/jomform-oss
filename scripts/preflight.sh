@@ -18,7 +18,15 @@
 # GATES (order mirrors the three CI jobs, so the port is auditable)
 #   api        build      cd api && go build ./...
 #              vet        cd api && go vet ./...
-#              test       cd api && go test ./... -race -count=1
+#              test       cd api && go test ./... -race -count=1 -timeout $API_TEST_TIMEOUT
+#                         ($API_TEST_TIMEOUT defaults to 30m. WITHOUT it every
+#                         package inherits Go's 10m per-package default and a
+#                         green-but-slow package is reported as broken: measured
+#                         on this host, `internal/httpapi` costs 601s on pristine
+#                         main and 620s on the same host minutes later, so Go's
+#                         own 10m budget reds a package that passes. The value is
+#                         a CEILING, not a target — raising it does not hide a
+#                         hang, it stops the hang being confused with host load.)
 #              govuln     govulncheck over the module graph (CVE scan)
 #   web        build      cd web && npm run build   (runs test:unit first)
 #              webimage   docker build -f web/Dockerfile . — the web IMAGE
@@ -1250,11 +1258,54 @@ run vet "cd api && go vet ./..." \
   bash -c "cd '$REPO_ROOT/api' && go vet ./..."
 
 # ---------------------------------------------------------------------------
-# api/test — WITH -race. The old local gate ran plain `go test`, so a data race
-# could only ever be caught in CI.
+# api/test — WITH -race, and with an EXPLICIT per-package budget.
+#
+# WHY -timeout IS HERE AND NOT LEFT TO THE DEFAULT. `go test` panics a package
+# after 10 minutes (Go's own default — `go help testflag`: "-timeout d ... The
+# default is 10 minutes (10m)") and that budget is PER PACKAGE, applied to every
+# package. `internal/httpapi` is the largest package and its cost tracks host
+# load, so on a busy host it crosses 600s and the gate reports
+# `panic: test timed out after 10m0s` for a package that is GREEN. Measured on
+# this host: pristine `origin/main` (ca110813) rc=1 at 601.195s, the same
+# package rc=0 at 620.593s — the same tree and the same host, minutes apart.
+# Independently re-measured for this card on this very tree at load 15-24:
+# `go test ./internal/httpapi/ -race -count=1 -timeout 45m` -> rc=0,
+# `ok ... 608.540s` — i.e. 8.5s over the budget Go would have applied by
+# default, so the default is what made it red, not the package.
+# A 10-minute timeout looks exactly like a hung test, so the reader chases the
+# test the runner happened to name (`TestTrustedDevicesListAndRevokeOne`, which
+# is merely where the clock ran out) instead of the budget.
+#
+# WHY 30m AND NOT "no timeout": `-timeout 0` disables the alarm entirely, which
+# turns a genuinely hung package into an unbounded gate — the merge lane waits on
+# it and nothing says why. The value is a CEILING, not a target: it is chosen to
+# sit well clear of a loaded-host run (~10-12 min) while still being a bound, so
+# a hang is still caught, just not confused with a slow host.
+#
+# IT IS OVERRIDABLE FOR THE SAME REASON THE VALIDATION BELOW EXISTS: a host
+# slower than this one must be able to raise the ceiling without editing the
+# gate, and a value that is not a Go duration (or `0`) must be REFUSED rather
+# than passed to `go test` — a typo would otherwise turn the gate off or kill the
+# run on a bad duration.
+#
+# Bite proof: scripts/biteproof_api_test_gate_timeout.sh (on demand, measured
+# 150s on this host) mutates this gate one way at a time — the flag removed from
+# the line, the alarm disabled with `-timeout 0`, the flag left in the printed
+# label while the EXECUTED command loses it, and the override hardcoded — reads
+# the argv `go` was handed under a stubbed `go`, then runs the REAL selftest gate
+# and requires it RED naming the budget. The cheap half is per-run: `selftest`
+# check 17 asserts the budget is present, that API_TEST_TIMEOUT reaches the argv,
+# and that the check can go RED.
 # ---------------------------------------------------------------------------
-run test "cd api && go test ./... -race -count=1" \
-  bash -c "cd '$REPO_ROOT/api' && go test ./... -race -count=1"
+: "${API_TEST_TIMEOUT:=30m}"
+if [ "$API_TEST_TIMEOUT" = 0 ]; then
+  die "API_TEST_TIMEOUT=0 disables go test's timeout alarm — a genuinely hung package would block the gate with no bound. Use a positive duration (the default is 30m, which is a ceiling well above the ~10-12m a loaded host costs 'internal/httpapi')."
+fi
+case "$API_TEST_TIMEOUT" in
+  *[!0-9hms.]*) die "API_TEST_TIMEOUT=$API_TEST_TIMEOUT is not a Go duration (e.g. 30m, 45m, 90s) — refusing to hand 'go test' a bad -timeout, which fails every package on that flag alone." ;;
+esac
+run test "cd api && go test ./... -race -count=1 -timeout $API_TEST_TIMEOUT" \
+  bash -c "cd '$REPO_ROOT/api' && go test ./... -race -count=1 -timeout '$API_TEST_TIMEOUT'"
 
 # ---------------------------------------------------------------------------
 # api/govuln — CVE scan over the module graph.
