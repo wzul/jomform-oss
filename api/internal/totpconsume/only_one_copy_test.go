@@ -112,9 +112,9 @@ package totpconsume
 //
 // ONE KEY PER WRITE SITE, AND WHY THE KEY IS SHAPED THE WAY IT IS (G)
 //
-// The allowlist above is keyed by "repo-relative file (site)", and two shapes
-// made that key ambiguous. Both were reproduced on the previous cut of this
-// guard (`go build ./...` RC=0, guard green):
+// The allowlist above is keyed by "repo-relative file (site)", and three shapes
+// made that key ambiguous. All three were reproduced with `go build ./...` RC=0
+// and this guard GREEN:
 //
 //	G1. a PACKAGE-LEVEL const named exactly like the accessor —
 //	    `const ConsumeTOTPStep = "UPDATE users SET totp_last_step = ..."` — is a
@@ -130,12 +130,38 @@ package totpconsume
 //	    allowlisted — and then failed for there being no production write site at
 //	    all. The emitted advice is to remove the allowlist entry, i.e. to delete
 //	    the only protection there is, for a change that renamed no behaviour.
+//	G3. a METHOD on ANOTHER RECEIVER sharing the accessor's name. A method name
+//	    is scoped to its receiver TYPE, so `(s *UserStore) ConsumeTOTPStep` and
+//	    `(o *Other) ConsumeTOTPStep` are two different methods that coexist in
+//	    one file. Keyed by the bare name alone both produced the SAME site
+//	    "… (ConsumeTOTPStep)", so a second full implementation inherited the
+//	    allowlist entry written for the accessor and read GREEN. G1's `decl`
+//	    prefix does not close this: it separates a declaration from a function,
+//	    and here BOTH sides are functions of the same name.
 //
-// Both are closed in enclosingDecl, by key: a declaration INSIDE a function body
-// is keyed by that function (G2), and a declaration outside any function is
-// keyed `decl <name>` (G1) — a shape no function key can equal, since an
-// identifier cannot contain a space. This is a different axis from E's
-// function-scoped local bindings and does not replace them.
+// All three are closed in enclosingDecl, and the key it returns is INJECTIVE
+// across every FuncDecl in a file — the property each of the three needed:
+//
+//   - a METHOD is keyed by its RECEIVER TYPE and its name
+//     (`UserStore.ConsumeTOTPStep`, G3), because a bare name does not name a
+//     receiver, and a sibling method on another receiver is a sibling
+//     IMPLEMENTATION, not the same site;
+//   - a plain FUNCTION is keyed by its bare name — there is no receiver to add,
+//     and a package-level function and a method may share a name in Go, so this
+//     keys them apart from each other too;
+//   - a declaration INSIDE a function body is keyed by that function (G2), so a
+//     statement held in a const belongs to the function that holds it, whatever
+//     the const is called;
+//   - a declaration OUTSIDE any function is keyed `decl <name>` (G1) — a shape no
+//     function key can equal, since an identifier cannot contain a space and no
+//     method key can equal, since an identifier cannot contain a dot. The three
+//     key spaces are disjoint by SHAPE, which is what makes the key injective
+//     rather than merely longer.
+//
+// This is a different axis from E's function-scoped local bindings and does not
+// replace them. TestWriteSiteKeyIsInjectiveAcrossFuncDecls pins the injectivity
+// directly, on an in-memory file, so the property does not depend on the api
+// tree happening to contain a colliding shape at any moment.
 //
 // SCOPE OF A NAME BOUND BY `:=` (F)
 //
@@ -168,6 +194,7 @@ package totpconsume
 import (
 	"go/ast"
 	"go/parser"
+	"go/printer"
 	"go/token"
 	"io/fs"
 	"os"
@@ -193,28 +220,37 @@ const sharedRuleImport = "github.com/wzul/jomform/api/internal/totpconsume"
 // `totp_last_step = $2` all match.
 var sqlWritesTOTPStep = regexp.MustCompile(`(?is)\bupdate\b.*?\btotp_last_step\s*=`)
 
-// allowedStepWrites maps a WRITE SITE ("repo-relative file (function)",
+// allowedStepWrites maps a WRITE SITE ("repo-relative file (site)",
 // slash-separated from api/) to why it is allowed to write users.totp_last_step
 // itself.
 //
-// dbstore/user.go (ConsumeTOTPStep) is the accessor that DEFINES the write — the
-// predicate lives inside its UPDATE, which is what makes a code single-use rather
-// than single-use-per-window. The shared rule reaches it by CALLING
-// ConsumeTOTPStep, never by writing the column itself, so it is deliberately NOT
-// listed here: an entry for it would be stale by construction (dbstore never
-// calls the rule) and is rejected by the staleness check below.
+// dbstore/user.go (UserStore.ConsumeTOTPStep) is the accessor that DEFINES the
+// write — the predicate lives inside its UPDATE, which is what makes a code
+// single-use rather than single-use-per-window. The shared rule reaches it by
+// CALLING ConsumeTOTPStep, never by writing the column itself, so it is
+// deliberately NOT listed here: an entry for it would be stale by construction
+// (dbstore never calls the rule) and is rejected by the staleness check below.
 //
-// Keyed by function, not just by file: a SECOND write function added beside the
-// accessor in the same file is a second implementation of the rule just as much
-// as one in another package, so the allowlist must not cover it by accident.
+// KEYED BY SITE, NOT JUST BY FILE — and the site of a METHOD is its RECEIVER
+// TYPE plus its name, never its bare name. A second write function added beside
+// the accessor in the same file is a second implementation of the rule just as
+// much as one in another package, so the allowlist must not cover it by
+// accident; and because a method name is scoped to its receiver type, a bare
+// name would put a SECOND method of the same name on a different receiver under
+// this exact allowlist entry. `UserStore.ConsumeTOTPStep` names the one
+// receiver whose accessor is vetted here. A plain function has no receiver and
+// is keyed by its bare name (no dot), so it cannot collide with a method key
+// either.
 //
 // A statement declared at PACKAGE level (a const or var outside any function) is
 // keyed as `... (decl <name>)` — e.g. `... (decl totpStepUpdateSQL)` — because
 // there is no function to name, and a bare name is NOT safe to use here: a
 // package-level const and a method may share a name in Go (different
-// namespaces), so `file (ConsumeTOTPStep)` would key a const and the allowlisted
-// accessor METHOD identically, letting the const's statement inherit the
-// method's permission. A local const/var inside a function body belongs to that
+// namespaces), so a bare `file (ConsumeTOTPStep)` would key a const and the
+// allowlisted accessor METHOD identically, letting the const's statement inherit
+// the method's permission. The three key shapes — `Recv.Name`, `Name`, and
+// `decl Name` — cannot collide with one another: an identifier contains neither
+// a dot nor a space. A local const/var inside a function body belongs to that
 // function and is keyed by the FUNCTION, not by its own name — a function-local
 // declaration is part of the function's statement, and keying it separately both
 // reported that statement twice and turned a legitimate
@@ -225,7 +261,7 @@ var sqlWritesTOTPStep = regexp.MustCompile(`(?is)\bupdate\b.*?\btotp_last_step\s
 // listed one that no longer writes the column fails, so it cannot rot into a
 // blanket permission for a future copy.
 var allowedStepWrites = map[string]string{
-	"api/internal/dbstore/user.go (ConsumeTOTPStep)": "the store accessor — defines " +
+	"api/internal/dbstore/user.go (UserStore.ConsumeTOTPStep)": "the store accessor — defines " +
 		"the atomic UPDATE whose WHERE clause only ever moves totp_last_step forward",
 }
 
@@ -550,7 +586,7 @@ func TestSharedRuleHasExactlyOneDefinition(t *testing.T) {
 			}
 			// A non-delegating function that consumes a step IS an implementation.
 			if fnConsumesStep(fn) {
-				impls = append(impls, "api/"+rel+" ("+fn.Name.Name+")")
+				impls = append(impls, "api/"+rel+" ("+funcSiteKey(fn)+")")
 			}
 			return true
 		})
@@ -566,9 +602,14 @@ func TestSharedRuleHasExactlyOneDefinition(t *testing.T) {
 	}
 	// Exactly one implementation is expected. The exception in httpapi/auth.go
 	// (handle2FAEnable, the pending-secret flow) is a KNOWN, allowed second
-	// consumer and is asserted by name so it cannot grow.
+	// consumer and is asserted by name so it cannot grow. It is asserted by
+	// RECEIVER-QUALIFIED name, like every other site key in this file: a method
+	// name is scoped to its receiver type, so a bare `handle2FAEnable` would let
+	// a SECOND method of that name on another type in the same file land on the
+	// expected list and read GREEN — a second implementation of the pending-secret
+	// flow, invisible to this check (reproduced with `go build ./...` RC=0).
 	want := []string{
-		"api/internal/httpapi/auth.go (handle2FAEnable)",
+		"api/internal/httpapi/auth.go (AuthHandlers.handle2FAEnable)",
 		"api/internal/totpconsume/consume.go (ConsumeCode)",
 	}
 	for _, got := range impls {
@@ -624,9 +665,10 @@ func TestSharedRuleHasExactlyOneDefinition(t *testing.T) {
 func TestOnlyTheStoreWritesTheTOTPStepColumn(t *testing.T) {
 	root := apiRoot(t)
 
-	// seen maps an allowlisted write site ("file (function)", or
-	// "file (decl <name>)" for a declaration outside any function) to itself, so
-	// a stale entry (or one that silently stopped matching) is visible by name.
+	// seen maps an allowlisted write site ("file (site)", where a site is
+	// `Recv.Name` for a method, a bare name for a plain function, or
+	// `decl <name>` for a declaration outside any function) to itself, so a
+	// stale entry (or one that silently stopped matching) is visible by name.
 	seen := map[string]bool{}
 	constsByDir := map[string]map[string]string{}
 	funcsByDir := map[string]map[string]string{}
@@ -1241,6 +1283,27 @@ func formatCall(call *ast.CallExpr) (*ast.BasicLit, bool) {
 // what this guard previously could not see — that declaration's own name, in a
 // namespace of its own.
 //
+// THE KEY IS INJECTIVE ACROSS EVERY FuncDecl IN THE FILE, and each part of the
+// shape is there for a shape that read GREEN or FALSE-RED without it (all of
+// them reproduced; see section G in the header).
+//
+// A METHOD IS KEYED BY ITS RECEIVER TYPE AND ITS NAME (`UserStore.ConsumeTOTPStep`),
+// because a method name is scoped to its receiver type: a bare name is not
+// unique across a file, and
+//
+//	func (s *UserStore) ConsumeTOTPStep(ctx context.Context, …) (bool, error) { … }
+//	func (s *Other)     ConsumeTOTPStep(ctx context.Context, …) (bool, error) { … }
+//
+// compiles as two different methods. Keyed by the bare name they produced the
+// SAME site string, so the second — a full second implementation of the rule —
+// inherited the allowlist entry written for the accessor and read GREEN. The
+// receiver TYPE (not its variable) is what names the method, so `s`, `o` and an
+// unnamed receiver all key alike.
+//
+// A PLAIN FUNCTION IS KEYED BY ITS BARE NAME. There is no receiver to qualify it
+// with, and a function and a method may share a name in Go — different
+// namespaces — so this keys them apart from each other as well.
+//
 // WHY THE DECLARATION KEY IS PREFIXED (and not just the bare name)
 //
 // A function and a package-level declaration may share a name in Go: a const and
@@ -1254,7 +1317,11 @@ func formatCall(call *ast.CallExpr) (*ast.BasicLit, bool) {
 // implementation silently inherited a permission granted to a different
 // declaration — while a stale entry for the method was equally invisible,
 // because the const's write satisfied `seen` on its behalf. `decl <Name>` cannot
-// collide with a function key: an identifier cannot contain a space.
+// collide with a function key: an identifier cannot contain a space; and it
+// cannot collide with a method key either, since an identifier cannot contain a
+// dot. The three shapes are disjoint by construction, which is the property that
+// makes the key injective rather than merely distinct in the cases we happened
+// to try.
 //
 // WHY A LOCAL DECLARATION IS KEYED BY ITS FUNCTION:
 //
@@ -1266,7 +1333,7 @@ func formatCall(call *ast.CallExpr) (*ast.BasicLit, bool) {
 // bogus "no production file writes …" failure, whose message tells the author to
 // delete the allowlist entry that is the only protection there is.
 func enclosingDecl(f *ast.File, node ast.Node) string {
-	fnName, fnSpan := "", -1
+	fnKey, fnSpan := "", -1
 	vsName, vsSpan := "", -1
 	ast.Inspect(f, func(n ast.Node) bool {
 		var pos, end token.Pos
@@ -1277,7 +1344,7 @@ func enclosingDecl(f *ast.File, node ast.Node) string {
 				return true
 			}
 			if size := int(end - pos); fnSpan == -1 || size < fnSpan {
-				fnName, fnSpan = d.Name.Name, size
+				fnKey, fnSpan = funcSiteKey(d), size
 			}
 		case *ast.ValueSpec:
 			if len(d.Names) == 0 {
@@ -1295,13 +1362,44 @@ func enclosingDecl(f *ast.File, node ast.Node) string {
 	})
 	// Innermost function first: whatever a declaration inside a function body is
 	// called, it belongs to that function.
-	if fnName != "" {
-		return fnName
+	if fnKey != "" {
+		return fnKey
 	}
 	if vsName != "" {
 		return "decl " + vsName
 	}
 	return ""
+}
+
+// funcSiteKey names a FuncDecl uniquely within its file: `Recv.Name` for a
+// method, the bare name for a plain function. A receiver is recorded as its
+// TYPE, so the same method reached through an unnamed receiver, `s` or `o` keys
+// the same, while two methods that share a name on DIFFERENT types stay apart —
+// which is the whole point, since Go scopes a method name to its receiver type.
+//
+// The receiver is rendered through the go/printer, so a pointer, a qualified
+// type (`pkg.T`) and a generic receiver all come out as written; a method whose
+// receiver has no type at all (not reachable from valid Go) falls back to the
+// bare name rather than inventing one.
+func funcSiteKey(fn *ast.FuncDecl) string {
+	if fn.Recv == nil || len(fn.Recv.List) == 0 {
+		return fn.Name.Name
+	}
+	var buf strings.Builder
+	if err := printer.Fprint(&buf, token.NewFileSet(), fn.Recv.List[0].Type); err != nil {
+		return fn.Name.Name
+	}
+	recv := strings.TrimSpace(buf.String())
+	recv = strings.TrimPrefix(recv, "*")
+	if recv == "" {
+		return fn.Name.Name
+	}
+	// `dbstore.T` names one type; strip a package qualifier so the key stays
+	// about the type in THIS package, not the spelling of its import path.
+	if i := strings.LastIndexByte(recv, '.'); i >= 0 {
+		recv = recv[i+1:]
+	}
+	return recv + "." + fn.Name.Name
 }
 
 // resolveSQLText reconstructs the string an expression denotes: literals are
@@ -1667,6 +1765,197 @@ func isThinDelegation(fn *ast.FuncDecl) bool {
 	}
 	_, ok = ret.Results[0].(*ast.CallExpr)
 	return ok
+}
+
+// TestWriteSiteKeyIsInjectiveAcrossFuncDecls pins the property every shape in
+// section G of the header needed: the site key enclosingDecl returns is DIFFERENT
+// for every declaration in a file. It runs on an in-memory file, so the property
+// is asserted regardless of whether the api tree happens to contain a colliding
+// shape today.
+//
+// WHY THIS EXISTS SEPARATELY. The tree-wide check found G1 and G3 only because
+// the api tree happened to contain the right shape at the right time — and G3
+// (a method on another receiver sharing the accessor's name) was read GREEN in
+// this very package until this test existed. A property that is only true while
+// the tree cooperates is not a property; it is a coincidence that expires.
+//
+// Each case gives the keys the FuncDecls in the file must produce, IN SOURCE
+// ORDER, plus the keys its const/var declarations must produce. A case whose
+// keys are not pairwise distinct fails on the injectivity check below, which is
+// the assertion the three G shapes actually need.
+//
+// BITE: revert funcSiteKey to `fn.Name.Name` and the G3 and method-vs-function
+// cases fail (a bare name collapses them onto one key).
+func TestWriteSiteKeyIsInjectiveAcrossFuncDecls(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		// funcKeys are the expected keys of the file's FuncDecls, in the order
+		// they appear. A method's expected key is `Recv.Name`.
+		funcKeys []string
+		// declKeys maps a const/var NAME to the key its declaration must
+		// produce: `decl <name>` outside any function, the enclosing FUNC's key
+		// inside one (G2).
+		declKeys map[string]string
+	}{
+		{
+			// G3, the shape this card is about: the accessor and a second
+			// implementation of the rule, distinguished only by receiver type.
+			name: "G3: two methods share a name on different receivers",
+			src: `package probe
+
+import "context"
+
+type UserStore struct{}
+
+type Other struct{}
+
+func (s *UserStore) ConsumeTOTPStep(ctx context.Context, userID string, step int64) (bool, error) {
+	return true, nil
+}
+
+func (s *Other) ConsumeTOTPStep(ctx context.Context, userID string, step int64) (bool, error) {
+	return true, nil
+}
+`,
+			funcKeys: []string{"UserStore.ConsumeTOTPStep", "Other.ConsumeTOTPStep"},
+		},
+		{
+			// The receiver VARIABLE is not part of a method's identity: `s`, `o`
+			// and an unnamed receiver all name the same method, and a key that
+			// embedded the variable would make the allowlist entry depend on a
+			// name nobody vets (renaming the receiver would silently un-allow
+			// the one legitimate write site).
+			name: "the receiver variable is not part of the key",
+			src: `package probe
+
+type UserStore struct{}
+
+func (s *UserStore) ConsumeTOTPStep() bool { return true }
+
+func (_ *UserStore) Another() bool { return true }
+`,
+			funcKeys: []string{"UserStore.ConsumeTOTPStep", "UserStore.Another"},
+		},
+		{
+			// G1, the axis PR 830 closed: a method and a package-level const may
+			// share a name (different Go namespaces).
+			name: "G1: a method and a package-level const share a name",
+			src: `package probe
+
+type UserStore struct{}
+
+const ConsumeTOTPStep = "UPDATE users SET totp_last_step = $2"
+
+func (s *UserStore) ConsumeTOTPStep() bool { return true }
+`,
+			funcKeys: []string{"UserStore.ConsumeTOTPStep"},
+			declKeys: map[string]string{"ConsumeTOTPStep": "decl ConsumeTOTPStep"},
+		},
+		{
+			name: "a method and a plain function share a name",
+			src: `package probe
+
+type UserStore struct{}
+
+func ConsumeTOTPStep() bool { return true }
+
+func (s *UserStore) ConsumeTOTPStep() bool { return true }
+`,
+			funcKeys: []string{"ConsumeTOTPStep", "UserStore.ConsumeTOTPStep"},
+		},
+		{
+			// G2: a const INSIDE the accessor belongs to the accessor, so it
+			// does not produce a second write site for the same statement — and
+			// its key is the accessor's key, not its own name.
+			name: "G2: a function-local const is keyed by its function",
+			src: `package probe
+
+type UserStore struct{}
+
+func (s *UserStore) ConsumeTOTPStep() bool {
+	const stepSQL = "UPDATE users SET totp_last_step = $2"
+	return stepSQL != ""
+}
+`,
+			funcKeys: []string{"UserStore.ConsumeTOTPStep"},
+			declKeys: map[string]string{"stepSQL": "UserStore.ConsumeTOTPStep"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, err := parser.ParseFile(token.NewFileSet(), "probe.go", tc.src, 0)
+			if err != nil {
+				t.Fatalf("parse probe source: %v", err)
+			}
+
+			var funcs []*ast.FuncDecl
+			for _, d := range f.Decls {
+				fn, ok := d.(*ast.FuncDecl)
+				if !ok || fn.Body == nil {
+					continue
+				}
+				funcs = append(funcs, fn)
+			}
+
+			// Every declaration in the file, keyed the way the guard keys it. A
+			// declaration INSIDE a function body is deliberately folded onto its
+			// function's key (G2: the statement belongs to the function that
+			// holds it, and a separate key both double-reported it and turned a
+			// legitimate local const into an unlisted write site), so only
+			// package-level declarations take part in injectivity.
+			seen := map[string]string{}
+			note := func(key, what string) {
+				if prev, dup := seen[key]; dup {
+					t.Errorf("site key %q is shared by %s and %s — the key must be injective across "+
+						"every declaration in a file, or one inherits the other's allowlist entry",
+						key, prev, what)
+					return
+				}
+				seen[key] = what
+			}
+			for _, fn := range funcs {
+				note(enclosingDecl(f, fn.Name), funcSiteKey(fn))
+			}
+			ast.Inspect(f, func(n ast.Node) bool {
+				vs, ok := n.(*ast.ValueSpec)
+				if !ok || len(vs.Names) == 0 {
+					return true
+				}
+				if enclosingFuncDecl(f, vs.Names[0]) == nil {
+					note(enclosingDecl(f, vs.Names[0]), "decl "+vs.Names[0].Name)
+				}
+				return true
+			})
+
+			var gotFuncs []string
+			for _, fn := range funcs {
+				gotFuncs = append(gotFuncs, enclosingDecl(f, fn.Name))
+			}
+			if strings.Join(gotFuncs, ",") != strings.Join(tc.funcKeys, ",") {
+				t.Errorf("function keys = %v, want %v (source order)", gotFuncs, tc.funcKeys)
+			}
+
+			for name, want := range tc.declKeys {
+				found := false
+				ast.Inspect(f, func(n ast.Node) bool {
+					vs, ok := n.(*ast.ValueSpec)
+					if !ok || len(vs.Names) == 0 || vs.Names[0].Name != name {
+						return true
+					}
+					found = true
+					if got := enclosingDecl(f, vs.Names[0]); got != want {
+						t.Errorf("key for declaration %s = %q, want %q", name, got, want)
+					}
+					return true
+				})
+				if !found {
+					t.Errorf("no const/var named %q in the probe file", name)
+				}
+			}
+		})
+	}
 }
 
 // apiRoot locates the api/ directory from this test file's own location, so the
