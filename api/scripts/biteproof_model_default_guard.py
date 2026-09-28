@@ -11,12 +11,17 @@ for that reason. This harness sabotages a MOVE of one of the two PINNED literals
 and requires the guard to answer about the registry rather than about one file.
 
 THE TWO LEGS, per case. `BASE` is the guard at a base revision (default
-`origin/main`, override with BITEPROOF_BASE) — the single-file reader. `BRANCH` is
-the guard in the working tree. Each case carries its own expectation per leg, so
-it can prove either "the old scope MISSED this" (BASE green, BRANCH red) or "the
-old scope blamed the wrong file" (BASE red for a reason that is not true, BRANCH
+`origin/main`, override with BITEPROOF_BASE) — the reader BEFORE the widening,
+i.e. the single-file reader while that fix is still a branch. `BRANCH` is the
+guard in the working tree. Each case carries its own expectation per leg, so it
+can prove either "the old scope MISSED this" (BASE green, BRANCH red) or "the old
+scope blamed the wrong file" (BASE red for a reason that is not true, BRANCH
 green or red naming the real one). Needles are asserted against the failure
 output, so a red in an unrelated assertion cannot be counted as a bite.
+
+The base is therefore not a fixed commit: it must be a revision whose reader
+still ANSWERS DIFFERENTLY from this tree's, and the harness now checks that
+premise per run instead of trusting the bytes (see REFUSAL below).
 
 THE PAIR IS DERIVED, NOT TYPED. Each mutation lifts the `Name:`/`Description:`
 pair out of tools.go with the guard's own pattern and re-emits it into a sibling
@@ -26,11 +31,20 @@ this harness cannot drift from the source it sabotages. Every mutation must stil
 compile (`go build ./...` rc=0): a mutation that breaks the build would hide the
 guard, and that is asserted per case rather than assumed.
 
-REFUSAL, NOT A FALSE GREEN. If the base revision's guard is byte-identical to the
-working tree's, every BASE leg compares a reader with itself and the "missed this"
-column means nothing — the harness exits 2 without a verdict (the rule
-biteproof_mcp_tool_inventory.sh applies to its merge-base case). This check runs
-FIRST: every case here depends on a BASE leg, so refusing early masks no case.
+REFUSAL, NOT A FALSE GREEN. Two refusals, both exit 2 without a verdict. The
+first is a fast path: the base reader is BYTE-IDENTICAL to this tree's, so the
+comparison would be one reader against itself. The second is the general rule,
+and it is NOT a byte comparison: no case may pass unless the base reader ANSWERED
+DIFFERENTLY from this tree's reader on it. A byte test cannot decide this premise
+— once the guard's own widening merges into `origin/main`, the base file stays a
+few bytes off this tree's (the guard can be rewritten around it) while READING THE
+SAME REGISTRY, so every BASE leg answers like its BRANCH leg and the "missed this"
+column is empty; a byte-equality refusal did not fire and the run printed
+`0/7 BITES` for a premise that had quietly become "compare a reader with itself"
+(card t_9df01abd, measured: base 22241 bytes vs tree 22242). The capability rule
+requires positive evidence — at least one case whose BASE leg and BRANCH leg
+disagree, in their green/red verdict or in the claim the guard made — and refuses
+otherwise, naming BITEPROOF_BASE as the fix.
 
 Restore is signal-safe: originals are held in memory, restored in a finally, and a
 SIGTERM/SIGINT handler restores before exiting. Every restore is verified by
@@ -244,6 +258,48 @@ def failure_lines(out):
     return keep[:14]
 
 
+CLAIM_RE = re.compile(r"^model_default_guard_test\.go:\d+:\s*(.*)$")
+
+# A leg that went red WITHOUT naming a claim of its own (a compile error, a build
+# failure) is not an answer to compare — see answers() below and the capability
+# refusal in main().
+NO_CLAIM = "RED: <no claim line>"
+
+
+def leg_claim(out, rc):
+    """The guard's own ANSWER for one leg, as text that can be compared between two legs.
+
+    Green is "GREEN". Red is the guard's CLAIM — the text of its own t.Fatalf lines,
+    with the `model_default_guard_test.go:<line>:` prefix stripped. The line NUMBER
+    is deliberately dropped: two revisions of the file number the same assertion
+    differently, and a comparison of the answers must not see that as a difference
+    (it is not one — the reader said the same thing). Status lines (`--- FAIL`,
+    `FAIL`, `ok  `) are dropped too: their timings differ run to run, so leaving them
+    in would manufacture a disagreement out of a timing.
+    """
+    if rc == 0:
+        return "GREEN"
+    claims = []
+    for line in failure_lines(out):
+        m = CLAIM_RE.match(line.strip())
+        if m:
+            claims.append(m.group(1).strip())
+    if not claims:
+        return NO_CLAIM
+    return "RED: " + " | ".join(sorted(claims))
+
+
+def answers(claim):
+    """True when a claim is an ANSWER the guard made, not an artifact of the build.
+
+    A red with no t.Fatalf line of its own means the guard never got to say
+    anything (a compile error, a missing symbol at that revision), so it must not
+    be counted as a reader disagreeing with another reader — the capability refusal
+    in main() would otherwise accept a base that does not even build as "different".
+    """
+    return claim == "GREEN" or (claim.startswith("RED: ") and claim != NO_CLAIM)
+
+
 def judge(out, rc, expect):
     """Return (ok, note) for one leg against its expectation."""
     if expect[0]:
@@ -267,6 +323,45 @@ def clear_case(edits, added):
             os.remove(path)
 
 
+def capability_refusal(base_rev, base_guard, seen, cases_run):
+    """The refusal a byte-equality test could not make: print it, name the usable base.
+
+    It says the base CANNOT demonstrate the blind spot — no verdict, no bite count —
+    and it derives the base to use instead rather than guessing one: the newest
+    commit at or before BASE_REF that touched the guard is the one that moved it to
+    this scope (that widening lands as a normal commit), so its PARENT is the
+    revision whose reader still answers differently. A merge-base would be wrong
+    here — on a branch cut from current main it IS the caught-up revision, which is
+    exactly what just failed this check.
+    """
+    _, last_touch, _ = git("log", "-1", "--format=%H", base_rev, "--", GUARD_REL)
+    _, suggest, _ = (git("rev-parse", "%s^" % last_touch) if last_touch else (1, "", ""))
+    print(flush=True)
+    print("REFUSING (exit 2, NO VERDICT): not one of the %d case(s) run so far made the reader at "
+          "%s (%s) answer differently from this tree's. Every BASE leg is the same reader as its "
+          "BRANCH leg, so the 'missed this' column is empty by construction and a bite count would "
+          "be a statement about this instrument, not about the guard."
+          % (cases_run, BASE_REF, base_rev), flush=True)
+    print("That is what a base whose reader has CAUGHT UP to this branch looks like: the "
+          "package-wide registry reader lives there too now (PR 835's shape, once it has merged), "
+          "and the two files differ by bytes while the reader does not differ.", flush=True)
+    if suggest:
+        print("Point BITEPROOF_BASE at the revision BEFORE that reader landed — the parent of the "
+              "newest commit at %s that touched the guard (%s):" % (base_rev, last_touch[:12]),
+              flush=True)
+        print("    BITEPROOF_BASE=%s python3 scripts/biteproof_model_default_guard.py" % suggest,
+              flush=True)
+    else:
+        print("Point BITEPROOF_BASE at a revision where the single-file reader still lived.",
+              flush=True)
+    print("(Measured on this host for card t_9df01abd: at BITEPROOF_BASE=origin/main, base reader "
+          "%d chars vs tree reader %d chars, %d/%d case(s) disagreed -> refused; at %s the same "
+          "tree is 7/7.)"
+          % (len(base_guard), len(ORIG_GUARD), len(seen), len(CASES),
+             suggest[:12] or "the pre-fix revision"), flush=True)
+    return 2
+
+
 def main():
     rc, base_rev, err = git("rev-parse", "--short", BASE_REF)
     if rc != 0:
@@ -285,9 +380,9 @@ def main():
               "single-file reader still lived (origin/main before that fix lands)."
               % (BASE_REF, base_rev, BEFORE[GUARD][:12]), flush=True)
         return 2
-
-    print("base reader: %s (%s), %d bytes; tree reader: %d bytes"
-          % (BASE_REF, base_rev, len(base_guard), len(ORIG_GUARD)), flush=True)
+    print("base reader: %s (%s), %d bytes (%d chars); tree reader: %d bytes (%d chars)"
+          % (BASE_REF, base_rev, len(base_guard.encode()), len(base_guard),
+             len(ORIG_GUARD.encode()), len(ORIG_GUARD)), flush=True)
     print("cases: %d%s" % (len(CASES), "" if not ADDED_PATHS else
                            " (+%d file(s) created and removed)" % len(ADDED_PATHS)), flush=True)
 
@@ -309,7 +404,14 @@ def main():
         return 1
 
     not_biting = []
-    for label, edits, added, base_expect, branch_expect in CASES:
+    # The premise this harness needs, per case, is that the BASE reader ANSWERS
+    # DIFFERENTLY from the tree reader. A verdict where they never differ is one
+    # reader measured against itself, however far apart the two FILES are — so it
+    # is a refusal (exit 2), not a "0 bites" result. Collected here and judged
+    # after every case has run, so the refusal names the whole picture.
+    disagreements = []
+    case_no = 0
+    for case_no, (label, edits, added, base_expect, branch_expect) in enumerate(CASES, 1):
         for rel, content in list(edits.items()) + list(added.items()):
             write(os.path.join(REPO, rel), content)
 
@@ -321,6 +423,11 @@ def main():
         brc2, bout2 = run(["go", "test", TEST_PKG, "-count=1"])
         ok_base, note_base = judge(bout2, brc2, base_expect)
         write(GUARD, ORIG_GUARD)
+
+        base_claim = leg_claim(bout2, brc2)
+        branch_claim = leg_claim(tout, trc)
+        if answers(base_claim) and answers(branch_claim) and base_claim != branch_claim:
+            disagreements.append(label)
 
         ok = ok_branch and ok_base and b == 0
         if not ok:
@@ -359,9 +466,20 @@ def main():
     if leftover:
         print("LEFT BEHIND BY THIS RUN: %r" % leftover, flush=True)
 
+    # CAPABILITY REFUSAL, AFTER the cases have run. The premise every case needs is
+    # that the base reader ANSWERS DIFFERENTLY from this tree's reader. If no case
+    # produced a disagreement, this run compared a reader with itself — whatever the
+    # two files' sizes are — and a "0 bites" verdict would read as a finding about
+    # the tree when it is the instrument's premise that failed. Refuse instead, with
+    # NO verdict and NO bite count.
+    if not disagreements:
+        return capability_refusal(base_rev, base_guard, disagreements, case_no)
+
     rcb, _ = run(["go", "build", "./..."])
     rct, _ = run(["go", "test", TEST_PKG, "-count=1"])
     print("final unmutated: go build ./... rc=%d, tree reader rc=%d" % (rcb, rct), flush=True)
+    print("cases where the two readers DISAGREED (the premise held): %d/%d"
+          % (len(disagreements), len(CASES)), flush=True)
     print("MUTATIONS THAT DID NOT BITE: %d %s" % (len(not_biting), not_biting), flush=True)
     print("BITES: %d/%d cases (each leg at its own named needle)"
           % (len(CASES) - len(not_biting), len(CASES)), flush=True)
