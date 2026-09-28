@@ -47,7 +47,16 @@
 //     and that its link resolves. Prose quality is a review question.
 //   * An anchor is checked as DECLARED on the destination page; that the browser
 //     scrolls to it also needs the id rendered into the DOM, which is asserted
-//     separately for the two anchors a dashboard link reads at runtime.
+//     separately for the two anchors a dashboard link reads at runtime. What is
+//     read now is the COMMENT-STRIPPED source, so a comment can no longer
+//     satisfy this (t_7b24b035) — but an id that is real text the page never
+//     renders still passes: a `<div id="x">` sitting in a template literal, or in
+//     a branch that never runs, is "declared" here and absent from the built
+//     page. Telling those apart needs the built HTML, the same limit stated
+//     above for the fact check. Measured cost of the strip in the other
+//     direction too: it is a text substitution, not a parser, so the one
+//     line-comment form it cannot reach is a `//` that starts on the same line as
+//     code (see stripUnrendered).
 //
 // Run with:
 //
@@ -175,8 +184,27 @@ function resolve(pathname: string): string | undefined {
 // (No guide page uses `slug:` today, so the scope is a guard against that future
 // edit rather than something currently load-bearing — said plainly rather than
 // implied.)
+//
+// t_7b24b035: `src` is the COMMENT-STRIPPED source, not `read(file)`. The four
+// legs that call this all search a page for a fact a reader must be able to see,
+// so text that renders nothing must not satisfy them — and this helper was the
+// one reader in the file still searching the raw text while `stripUnrendered`
+// was already applied to the nav parse and to every fact check. Measured: a
+// sidebar row at `/docs/security#qa-fake-anchor` plus a `//` line containing
+// `id: "qa-fake-anchor"` on that page left this guard, the whole `test:unit`
+// suite (516/0) and `npm run build` GREEN, while the served HTML carried the
+// `href` and no such `id` — the reader landed at the top of the page silently.
+// `web/scripts/biteproof_docs_index_comment_anchor.sh` is that proof.
+//
+// `stripUnrendered` is declared below this function, which is safe rather than
+// sloppy: it is only *called* from inside the tests, by which point the whole
+// module is evaluated, so the order of the two declarations never matters. It was
+// left where it is (next to the doc that explains the comment model) instead of
+// being lifted above this helper, because splitting that explanation from its
+// code is how one reader of the file gets updated and the other does not — which
+// is the defect this card fixed.
 function declaresId(file: string, id: string): boolean {
-  const src = read(file);
+  const src = stripUnrendered(read(file));
   if (src.includes(`id: "${id}"`) || src.includes(`id="${id}"`)) return true;
   return file === DOCS_PAGE && src.includes(`slug: "${id}"`);
 }
@@ -200,6 +228,16 @@ function declaresId(file: string, id: string): boolean {
 //     ordinary JSX comment, but mcp/page.tsx renders `{"items": […]}` through
 //     one, so template literals are prose, not comment.
 // The cost of that conservatism is stated under WHAT IT DOES NOT COVER.
+//
+// Measured limit (t_7b24b035), so the reach of this strip is not over-read: the
+// `//` rule is anchored to the start of a LINE, which is what keeps a URL or a
+// `//` inside a rendered string from being eaten, and the cost is that a comment
+// opening after code on the same line (`<p>x</p> // id: "y"`) survives. No page
+// under src/app/docs carries that form today (measured: `grep -rn '[^:"]//'`
+// over the docs tsx returns nothing), and the block-comment and JSX-container
+// forms — the ones actually used — are covered. A real tokenizer would close it;
+// this is a substitution, and it says which case it cannot see rather than
+// implying it sees them all.
 const stripUnrendered = (src: string): string =>
   src
     // A leading `{/* … */}` container. Matched at the `{` so the expression
