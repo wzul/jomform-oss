@@ -362,15 +362,10 @@ func (s *Server) deleteWorkspaceMCP(
 					"workspace_id": workspace.ID, "last_workspace": true,
 				}, nil
 			}
-			blockers := make([]map[string]any, 0, len(de.Blockers))
-			for _, b := range de.Blockers {
-				blockers = append(blockers, map[string]any{"kind": b.Kind, "count": b.Count, "label": b.Label})
-			}
 			return nil, map[string]any{
 				"status": "refused",
-				"error": "workspace tidak kosong — kosongkan setiap kategori di bawah dahulu " +
-					"(borang: trash dahulu, kemudian purge_form).",
-				"workspace_id": workspace.ID, "empty": false, "blockers": blockers,
+				"error": "hanya pemilik workspace boleh memadamnya",
+				"workspace_id": workspace.ID,
 			}, nil
 		}
 		if errors.Is(err, dbstore.ErrWorkspaceNotFound) {
@@ -379,8 +374,11 @@ func (s *Server) deleteWorkspaceMCP(
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
 	return nil, map[string]any{
-		"status": "deleted", "workspace_id": workspace.ID, "slug": workspace.Slug,
+		"status": "trashed", "workspace_id": workspace.ID, "slug": workspace.Slug,
 		"name": workspace.Name, "deleted": deleted,
+		"note": "workspace masuk TONG SAMPAH — SEMUA data kekal (akaun, borang, produk, jualan, " +
+			"kunci API). Tiada apa-apa dimusnahkan. Pemilik boleh pulihkannya dari Settings → " +
+			"Workspace → Tong Sampah. Pemadaman KEKAL bukan untuk anda: itu tindakan manusia sahaja.",
 	}, nil
 }
 
@@ -423,12 +421,186 @@ func (s *Server) checkWorkspaceDeletionMCP(
 		}
 	}
 	isOwner := workspace.Owner == owner
+	// can_delete is OWNERSHIP + last-workspace ONLY.
+	//
+	// The content gate is gone from the write path (Wan's decision: a full
+	// workspace goes to the bin, so there is nothing to protect), and this read
+	// half must agree with it or the UI would disable a button for a reason the
+	// API no longer enforces. `blockers` and `empty` are still reported: they are
+	// what the dashboard shows BEFORE a purge, where content does matter.
 	return nil, map[string]any{
 		"workspace_id": workspace.ID, "name": workspace.Name, "slug": workspace.Slug,
 		"role": role, "is_owner": isOwner,
 		"last_workspace": last, "empty": len(out) == 0,
 		"blockers":   out,
-		"can_delete": isOwner && len(out) == 0 && !last,
+		"can_delete": isOwner && !last,
+	}, nil
+}
+
+// ── list_trashed_workspaces / restore_workspace / purge_workspace ──────────────
+//
+// Parity for GET /v1/workspaces/trash, POST /v1/workspaces/{id}/restore and
+// DELETE /v1/workspaces/{id}/purge — the bin half of the workspace lifecycle.
+//
+// All three are OWNER ONLY, for the same reason delete_workspace is: an admin
+// member manages a workspace but does not own it, so they must not be able to
+// bring it back or destroy it for good. Each names a refusal the caller can act
+// on rather than surfacing a store error.
+
+// purgeWorkspaceIn confirms a PERMANENT workspace delete.
+//
+// The confirmation is the workspace SLUG, matching delete_workspace and
+// revoke_api_key: a call that cannot be undone should make the caller name what
+// it is destroying.
+type purgeWorkspaceIn struct {
+	WorkspaceID string `json:"workspace_id" jsonschema:"ID workspace dalam tong sampah (dari list_trashed_workspaces)"`
+	ConfirmSlug string `json:"confirm_slug,omitempty" jsonschema:"Slug workspace itu sendiri, untuk sahkan pemadaman kekal. Salah/tiada = ditolak."`
+}
+
+// listTrashedWorkspacesMCP returns the caller's OWN trashed workspaces.
+//
+// Owned only: only the owner may restore or purge, so listing a workspace the
+// caller merely MEMBERS would offer a row they cannot act on.
+func (s *Server) listTrashedWorkspacesMCP(
+	ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn,
+) (*mcp.CallToolResult, map[string]any, error) {
+	sp, err := s.workspacesStore()
+	if err != nil {
+		return nil, nil, err
+	}
+	owner, err := s.workspaceOwner(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	list, err := sp.ListTrashed(ctx, owner)
+	if err != nil {
+		return nil, nil, fmt.Errorf("db: %w", err)
+	}
+	out := make([]map[string]any, 0, len(list))
+	for _, w := range list {
+		row := map[string]any{"workspace_id": w.ID, "name": w.Name, "slug": w.Slug}
+		if w.DeletedAt != nil {
+			row["deleted_at"] = w.DeletedAt.UTC().Format(time.RFC3339)
+		}
+		out = append(out, row)
+	}
+	return nil, map[string]any{"items": out, "total": len(out)}, nil
+}
+
+// restoreWorkspaceMCP brings a trashed workspace back.
+func (s *Server) restoreWorkspaceMCP(
+	ctx context.Context, _ *mcp.CallToolRequest, in workspaceRefIn,
+) (*mcp.CallToolResult, map[string]any, error) {
+	// Issue #645: the scope axis. Checked first so a readonly key cannot probe.
+	if err := s.requireWriteScope(ctx); err != nil {
+		return nil, nil, err
+	}
+	sp, err := s.workspacesStore()
+	if err != nil {
+		return nil, nil, err
+	}
+	owner, err := s.workspaceOwner(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	// Read through the TRASH reader: the live ByID deliberately hides binned
+	// rows, so using it here would report "not found" for exactly the row this
+	// tool exists to bring back.
+	workspace, err := sp.TrashedByID(ctx, in.WorkspaceID)
+	if err != nil || workspace == nil {
+		return nil, nil, errors.New("workspace tidak dijumpai dalam tong sampah")
+	}
+	if workspace.Owner != owner {
+		return nil, map[string]any{
+			"status": "refused", "error": "hanya pemilik workspace boleh memulihkannya",
+			"workspace_id": workspace.ID,
+		}, nil
+	}
+	if err := sp.Restore(ctx, workspace.ID, owner); err != nil {
+		if errors.Is(err, dbstore.ErrWorkspaceSlugTaken) {
+			return nil, map[string]any{
+				"status": "refused",
+				"error": "slug '" + workspace.Slug + "' sudah diambil workspace lain semasa ia dalam " +
+					"tong sampah — tukar slug workspace itu dahulu, kemudian pulihkan semula. " +
+					"Tiada penamaan semula automatik.",
+				"workspace_id": workspace.ID, "slug": workspace.Slug, "slug_taken": true,
+			}, nil
+		}
+		if errors.Is(err, dbstore.ErrWorkspaceNotFound) {
+			return nil, nil, errors.New("workspace tidak dijumpai dalam tong sampah")
+		}
+		return nil, nil, fmt.Errorf("db: %w", err)
+	}
+	return nil, map[string]any{
+		"status": "restored", "workspace_id": workspace.ID, "slug": workspace.Slug,
+		"name": workspace.Name,
+		"note": "workspace dipulihkan — akaun, borang, produk dan jualannya kembali seperti sediakala " +
+			"(tiada baris disentuh semasa dalam tong sampah).",
+	}, nil
+}
+
+// purgeWorkspaceMCP permanently destroys a TRASHED workspace.
+//
+// It refuses a LIVE workspace: permanent destruction is only ever reachable on a
+// row the user has already put in the bin, which is what makes the two-step —
+// move it, look at it, then destroy it — the only path to data loss.
+func (s *Server) purgeWorkspaceMCP(
+	ctx context.Context, _ *mcp.CallToolRequest, in purgeWorkspaceIn,
+) (*mcp.CallToolResult, map[string]any, error) {
+	// Issue #645: the scope axis. Checked first so a readonly key cannot probe.
+	if err := s.requireWriteScope(ctx); err != nil {
+		return nil, nil, err
+	}
+	sp, err := s.workspacesStore()
+	if err != nil {
+		return nil, nil, err
+	}
+	owner, err := s.workspaceOwner(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	workspace, err := sp.TrashedByID(ctx, in.WorkspaceID)
+	if err != nil || workspace == nil {
+		// Deliberately the same refusal for "no such workspace" and "still
+		// live": purging a live row is not a thing, and saying so precisely
+		// would tell a caller whether a workspace they cannot touch exists.
+		return nil, nil, errors.New("workspace tidak dijumpai dalam tong sampah — " +
+			"hantar ke tong sampah dahulu guna delete_workspace")
+	}
+	if workspace.Owner != owner {
+		return nil, map[string]any{
+			"status": "refused", "error": "hanya pemilik workspace boleh memadamkannya secara kekal",
+			"workspace_id": workspace.ID,
+		}, nil
+	}
+	if strings.TrimSpace(in.ConfirmSlug) != workspace.Slug {
+		return nil, map[string]any{
+			"status": "refused",
+			"error": "taip slug workspace untuk sahkan pemadaman kekal: " + workspace.Slug +
+				". Padam kekal tidak boleh dibatalkan.",
+			"workspace_id": workspace.ID, "slug": workspace.Slug,
+		}, nil
+	}
+	deleted, err := sp.Purge(ctx, workspace.ID, owner)
+	if err != nil {
+		if errors.Is(err, dbstore.ErrWorkspaceHasSales) {
+			return nil, map[string]any{
+				"status": "refused",
+				"error": "workspace ini mempunyai jualan, jadi ia tidak boleh dipadam kekal — " +
+					"jualan tidak pernah dimusnahkan atau dijadikan yatim. Biarkan ia dalam tong sampah " +
+					"(pulihkan bila perlu) atau selesaikan jualannya dahulu.",
+				"workspace_id": workspace.ID, "has_sales": true,
+			}, nil
+		}
+		if errors.Is(err, dbstore.ErrWorkspaceNotFound) {
+			return nil, nil, errors.New("workspace tidak dijumpai dalam tong sampah")
+		}
+		return nil, nil, fmt.Errorf("db: %w", err)
+	}
+	return nil, map[string]any{
+		"status": "purged", "workspace_id": workspace.ID, "slug": workspace.Slug,
+		"name": workspace.Name, "deleted": deleted,
+		"note": "workspace dipadam KEKAL. Tidak boleh dibatalkan.",
 	}, nil
 }
 

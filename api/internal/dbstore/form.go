@@ -879,10 +879,10 @@ func (s *FormStore) PublishedByWorkspaceSlug(ctx context.Context, workspaceSlug,
 		        f.redirect_success, f.redirect_failure, f.allow_embed, f.logo_url, f.is_template, f.failure_message,
 		        f.start_at, f.end_at, f.entry_limit, f.pending_message, f.expired_message, f.limit_message,
 		        f.created_at, f.updated_at, f.deleted_at
-	 FROM forms f
-	 JOIN accounts a ON a.id = f.account_id
-	 JOIN workspaces sp ON sp.id = a.workspace_id
-	 WHERE sp.slug = $1 AND f.slug = $2 AND f.status = 'published' AND f.deleted_at IS NULL`,
+ FROM forms f
+		 JOIN accounts a ON a.id = f.account_id
+		 JOIN workspaces sp ON sp.id = a.workspace_id AND sp.deleted_at IS NULL
+		 WHERE sp.slug = $1 AND f.slug = $2 AND f.status = 'published' AND f.deleted_at IS NULL`,
 		workspaceSlug, formSlug).Scan(
 		&f2.ID, &f2.AccountID, &f2.Slug, &f2.Title, &f2.Config, &f2.Theme,
 		&f2.Status, &f2.IsMain, &f2.RedirectSuccess, &f2.RedirectFailure,
@@ -913,7 +913,7 @@ func (s *FormStore) ByWorkspaceSlug(ctx context.Context, workspaceSlug, formSlug
 		        f.created_at, f.updated_at, f.deleted_at
 		 FROM forms f
 		 JOIN accounts a ON a.id = f.account_id
-		 JOIN workspaces sp ON sp.id = a.workspace_id
+		 JOIN workspaces sp ON sp.id = a.workspace_id AND sp.deleted_at IS NULL
 		 WHERE sp.slug = $1 AND f.slug = $2 AND f.deleted_at IS NULL`,
 		workspaceSlug, formSlug).Scan(
 		&f2.ID, &f2.AccountID, &f2.Slug, &f2.Title, &f2.Config, &f2.Theme,
@@ -955,7 +955,7 @@ func (s *FormStore) ListPublishedByWorkspace(ctx context.Context, workspaceSlug 
 		        f.created_at, f.updated_at, f.deleted_at
 		 FROM forms f
 		 JOIN accounts a ON a.id = f.account_id
-		 JOIN workspaces sp ON sp.id = a.workspace_id
+		 JOIN workspaces sp ON sp.id = a.workspace_id AND sp.deleted_at IS NULL
 		 WHERE sp.slug = $1 AND f.status = 'published' AND f.deleted_at IS NULL
 		 ORDER BY f.created_at`, workspaceSlug)
 	if err != nil {

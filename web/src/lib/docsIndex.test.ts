@@ -582,9 +582,13 @@ const DESTINATION_FACTS: Record<string, string[]> = {
   //
   // "Workspaces (your account's tenant)" and "Deleting a workspace" both point at
   // the guide this rebase added (/docs/workspaces), whose two sections carry the
-  // 231- and 251-word bodies main had on the index. The delete facts are the three
-  // conditions and the two things a merchant would otherwise discover by pressing
-  // the button: the typed slug and the refusal to destroy sales.
+  // 231- and 251-word bodies main had on the index. The delete facts are the two
+  // remaining conditions and the two things a merchant would otherwise discover
+  // by pressing the button: the typed slug and the refusal to destroy sales.
+  // PR 804 (the workspace trash) re-cut this entry — the delete is a mark, not a
+  // destroy — so three facts moved with the copy: the workspace no longer has to
+  // be empty, the permanent step is now a second (purge) step, and the last
+  // workspace "can never go to the Trash" rather than "never be deleted".
   "Workspaces (your account's tenant)": [
     "CHIP credentials",
     "{slug}.jomform.com",
@@ -600,9 +604,9 @@ const DESTINATION_FACTS: Record<string, string[]> = {
   "Deleting a workspace": [
     "typed confirmation",
     "leaves through Settings → Members instead",
-    "the last workspace can never be deleted",
-    "sales block the delete",
-    "delete a form for good",
+    "the last workspace can never go to the trash",
+    "refuses a workspace that has sales",
+    "deleting for good is a separate, second step",
     "check_workspace_deletion",
   ],
   // PR 691: the entry whose 259-word body the /docs restructure refuses. It is a

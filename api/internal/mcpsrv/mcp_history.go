@@ -95,15 +95,35 @@ func (s *Server) recordMCPEvent(ctx context.Context, tool string, failed bool) {
 	}
 }
 
-// accountSurvives reports whether accountID still names a row. A store error is
-// treated as "does not survive" so the caller falls back rather than gambling on
-// the FK.
+// accountSurvives reports whether accountID is still usable as an attribution
+// target: the row exists AND it is not parked on a workspace that is in the bin.
+//
+// Existence alone is not enough once a delete is a move to the bin. Every account
+// row survives its workspace's move to the trash, so an existence check would
+// file a delete_workspace history row against an account inside the workspace
+// that was just put away — and `mcp.tool_call` history is read through the
+// account scope, so the caller would never see their own call. That is the same
+// "looks recorded, is not" defect the hard delete produced through the FK
+// (events_account_id_fkey, 23503, swallowed by the best-effort write) wearing
+// the bin's clothes instead.
+//
+// A store error is treated as "does not survive" so the caller falls back rather
+// than gambling on the row.
 func (s *Server) accountSurvives(ctx context.Context, accountID string) bool {
 	if accountID == "" || s.deps == nil || s.deps.Accounts == nil {
 		return false
 	}
 	a, err := s.deps.Accounts.ByID(ctx, accountID)
-	return err == nil && a != nil
+	if err != nil || a == nil {
+		return false
+	}
+	if s.deps.Workspaces == nil {
+		// No workspace store wired: fall back to the existence answer rather than
+		// refusing every attribution.
+		return true
+	}
+	live, err := s.deps.Workspaces.AccountIsLive(ctx, accountID)
+	return err == nil && live
 }
 
 // survivingAccountFor returns an account the caller still has, preferring any

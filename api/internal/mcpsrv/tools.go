@@ -433,12 +433,24 @@ func (s *Server) registerTools() {
 	}, s.setDefaultWorkspace)
 	addTool(s, &mcp.Tool{
 		Name:        "delete_workspace",
-		Description: "PADAM workspace secara kekal (pemilik sahaja). TIGA syarat: (1) confirm_slug wajib sepadan dengan slug workspace; (2) anda mesti ada sekurang-kurangnya satu workspace lain — workspace terakhir tidak boleh dipadam; (3) workspace mesti KOSONG — borang (termasuk dalam tong sampah), produk, jualan, domain, webhook, kunci API aktif dan langganan aktif semuanya menyekat, dan penolakan menyenaraikan setiap kategori dengan kiraannya. Jualan tidak pernah dimusnahkan: jualan mesti diselesaikan dahulu. Akaun CHIP workspace dipadam BERSAMA (kredential tidak pernah dikongsi atau ditinggalkan yatim). Guna check_workspace_deletion dahulu untuk lihat penghalang. Tidak boleh dibatalkan.",
+		Description: "Hantar workspace ke TONG SAMPAH (pemilik sahaja). Tiada apa-apa dimusnahkan: borang, produk, jualan, akaun CHIP dan kunci API semuanya kekal, dan restore_workspace membawanya kembali. DUA syarat: (1) confirm_slug wajib sepadan dengan slug workspace; (2) anda mesti ada sekurang-kurangnya satu workspace LAIN — workspace terakhir tidak boleh dibuang. Workspace yang PENUH boleh masuk tong sampah (guard 'mesti kosong' sudah dibuang); padam KEKAL hanya melalui purge_workspace, dan itu manusia sahaja. Guna check_workspace_deletion dahulu untuk lihat can_delete.",
 	}, s.deleteWorkspaceMCP)
 	addTool(s, &mcp.Tool{
 		Name:        "check_workspace_deletion",
-		Description: "Semak sama ada satu workspace boleh dipadam (baca sahaja, tiada kesan). Pulangkan can_delete, empty, last_workspace, is_owner dan blockers[] (setiap kategori + kiraan) — takrifan 'kosong' yang SAMA yang dikuatkuasa oleh delete_workspace.",
+		Description: "Semak sama ada satu workspace boleh dihantar ke tong sampah (baca sahaja, tiada kesan). Pulangkan can_delete, empty, last_workspace, is_owner dan blockers[] (setiap kategori + kiraan). can_delete = pemilik DAN bukan workspace terakhir — kandungan TIDAK lagi menyekat (blockers[] dilaporkan untuk rujukan sebelum purge).",
 	}, s.checkWorkspaceDeletionMCP)
+	addTool(s, &mcp.Tool{
+		Name:        "list_trashed_workspaces",
+		Description: "Senarai workspace dalam TONG SAMPAH anda (deleted_at IS NOT NULL): id, slug, name, deleted_at. Milik sendiri sahaja — hanya pemilik boleh pulih atau padam kekal.",
+	}, s.listTrashedWorkspacesMCP)
+	addTool(s, &mcp.Tool{
+		Name:        "restore_workspace",
+		Description: "Pulihkan workspace dari tong sampah (deleted_at=NULL). Tiada apa-apa dimusnahkan — workspace kembali dengan akaun, borang dan jualannya. Jika slug asalnya sudah diambil workspace lain semasa ia dalam tong sampah, pulihan DITOLAK (tiada penamaan semula automatik). Pemilik sahaja.",
+	}, s.restoreWorkspaceMCP)
+	addTool(s, &mcp.Tool{
+		Name:        "purge_workspace",
+		Description: "PADAM workspace secara KEKAL dari tong sampah (akaun CHIP, borang, produk, kunci API dan jualannya gugur bersama). AMARAN: tidak boleh dibatalkan. Wajib confirm_slug = slug workspace itu. Hanya workspace DALAM TONG SAMPAH — hantar ke tong sampah dahulu guna delete_workspace. Workspace yang ADA JUALAN ditolak (jualan tidak pernah dimusnahkan atau dijadikan yatim). ALAT MANUSIA: chat tidak pernah boleh mencadangkannya.",
+	}, s.purgeWorkspaceMCP)
 	// Issue #181: optional profile phone number parity.
 	addTool(s, &mcp.Tool{
 		Name:        "update_profile_phone",

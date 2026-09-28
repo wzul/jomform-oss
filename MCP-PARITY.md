@@ -74,7 +74,8 @@ Parity checklist (dashboard → MCP):
   `get_workspace_landing_page`, `set_workspace_landing_page` (incl. embedded `forms[]`)
 - Workspace lifecycle (#162, member/invite tools above) → `list_workspaces`,
   `create_workspace`, `update_workspace`, `delete_workspace`,
-  `check_workspace_deletion`.
+  `check_workspace_deletion`,
+  `list_trashed_workspaces`, `restore_workspace`, `purge_workspace`.
   `update_workspace` renames a workspace's NAME and/or its public SLUG (empty =
   keep). Both the NAME and the SLUG can be changed at CREATE time too
   (`create_workspace`), and both limits are ONE rule shared by create and
@@ -95,14 +96,20 @@ Parity checklist (dashboard → MCP):
   `create_workspace` applies), and the workspace keeps the address it had.
   REST: `PATCH /v1/workspaces/{id}`.
   `delete_workspace` is OWNER-ONLY and needs the workspace slug typed as
-  confirm_slug; it is refused when
-  the owner would be left with NO workspace (the "at least one workspace" rule)
-  or when the workspace is not empty (blockers are listed per category, with
-  counts). Restore is not offered: the delete is permanent, and the CHIP
-  account goes with the workspace. `check_workspace_deletion` is the read half —
-  the SAME emptiness definition, so the UI can state a reason instead of
-  failing after the click. REST: `DELETE /v1/workspaces/{id}`,
-  `GET /v1/workspaces/{id}/deletion-check`.
+  confirm_slug; it MOVES THE WORKSPACE TO THE BIN — it destroys nothing, and is
+  refused only when the owner would be left with NO live workspace (the "at least
+  one workspace" rule). A full workspace bins fine; content no longer blocks.
+  `check_workspace_deletion` is the read half, so the UI can state a reason
+  instead of failing after the click; its can_delete field is ownership +
+  last-workspace.
+  `list_trashed_workspaces` lists the caller's OWN binned workspaces,
+  `restore_workspace` brings one back whole (refused, not silently renamed, when
+  its slug was retaken while it sat in the bin), and `purge_workspace` is where
+  the hard delete lives — trashed rows only, needs confirm_slug, refuses a
+  workspace that has sales, and is never proposable to chat (humans only).
+  REST: `DELETE /v1/workspaces/{id}`, `GET /v1/workspaces/{id}/deletion-check`,
+  `GET /v1/workspaces/trash`, `POST /v1/workspaces/{id}/restore`,
+  `DELETE /v1/workspaces/{id}/purge`.
 - Media library / asset upload (image + code, tenant-scoped, scan-gated,
   #361/#364) → `list_media`, `upload_media`
 - Media trash (soft delete → restore or permanent purge) → `delete_media`,

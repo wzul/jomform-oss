@@ -121,12 +121,18 @@ const MCP_SOURCES = readdirSync(MCP_DIR)
 // or removes a tool moves this number — that is the point, and the message below
 // says which direction to correct.
 //
-// 178: #691 added `update_workspace` (the workspace rename) and left this pin at
-// 177. Its own branch was gated against a main where 177 was right, so the count
-// moved on the merge and nothing re-gated the merged result — which is exactly
-// the drift this pin exists to make loud. t_8ebcba5a moved it to the measured
-// value: 178 `&mcp.Tool{` literals, 178 distinct names, across 44 non-test files.
-const EXPECTED_TOOL_COUNT = 178;
+// 181: re-derived on the INTEGRATED tree, not copied from either side. Main's
+// pin was 178 (#691's `update_workspace`, measured there) and this branch's was
+// 180 (the three workspace-trash tools: `list_trashed_workspaces`,
+// `restore_workspace`, `purge_workspace`). Neither is the answer, because
+// neither tree is the one this pin lands on: the integration keeps BOTH sides'
+// registrations, and the package on the merged tree registers 181 distinct
+// names (181 `&mcp.Tool{` literals, 0 duplicate names, across 44 non-test
+// files). A pin of 178 here would mean main's `update_workspace` was dropped
+// and a pin of 180 would mean this branch's three trash tools were — both are
+// the silently-reverted-main failure this guard exists to make loud, so the
+// number doubles as the check that the merge kept both sides.
+const EXPECTED_TOOL_COUNT = 181;
 
 const REGISTRY_SRC = MCP_SOURCES.join("\n");
 

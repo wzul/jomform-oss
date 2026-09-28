@@ -52,6 +52,11 @@ var selectConsts = map[string]string{
 	// the same column/field alignment. Registering it means the trash read
 	// cannot drift away from Form either — the pair moves together.
 	"trashedFormSelect": "Form",
+	// The workspace trash read is the same shape of pair: a SEPARATE constant
+	// with the opposite filter, scanning into the same Workspace struct, so it
+	// must satisfy the same column/field alignment. Registering it means
+	// Workspace.DeletedAt cannot drift away from the trash query either.
+	"trashedWorkspaceSelect": "Workspace",
 	// Same reasoning for the product bin: trashedProductSelect is a separate
 	// constant (deleted_at IS NOT NULL) scanning into Product, so registering it
 	// keeps the bin's read aligned with the struct too.
@@ -66,15 +71,16 @@ var selectConsts = map[string]string{
 
 // selectTables maps a *Select constant name to the table it selects from.
 var selectTables = map[string]string{
-	"accountSelect":        "accounts",
-	"formSelect":           "forms",
-	"productSelect":        "products",
-	"saleSelect":           "sales",
-	"workspaceSelect":      "workspaces",
-	"subSelect":            "subscriptions",
-	"domainSelect":         "account_domains",
-	"trashedFormSelect":    "forms",
-	"trashedProductSelect": "products",
+	"accountSelect":          "accounts",
+	"formSelect":             "forms",
+	"productSelect":          "products",
+	"saleSelect":             "sales",
+	"workspaceSelect":        "workspaces",
+	"subSelect":              "subscriptions",
+	"domainSelect":           "account_domains",
+	"trashedFormSelect":      "forms",
+	"trashedWorkspaceSelect": "workspaces",
+	"trashedProductSelect":   "products",
 }
 
 // selectScanFuncs maps a *Select constant to the receiver-qualified
@@ -92,6 +98,9 @@ var selectScanFuncs = map[string][]string{
 	"subSelect":         {"scanSub"},
 	"domainSelect":      {"DomainStore.GetDomain", "DomainStore.ListDomains"},
 	"trashedFormSelect": {"FormStore.scanTrashed"},
+	// The workspace trash read is the same shape of pair (a separate constant,
+	// opposite filter, same struct), so it gets its own scan function.
+	"trashedWorkspaceSelect": {"scanTrashedWorkspace"},
 	// The product bin selects the SAME column list as productSelect (only the
 	// WHERE differs), so it shares that scan function. Registering it here is
 	// what keeps the two constants from drifting apart on the column list.

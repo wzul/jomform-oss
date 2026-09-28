@@ -159,27 +159,41 @@ func TestMCPWorkspaceDeleteRefusesLastWorkspaceThenSucceeds(t *testing.T) {
 		t.Errorf("check_workspace_deletion last_workspace = %v, want false", chk["last_workspace"])
 	}
 
-	// Delete the first.
+	// Delete the first: it goes to the BIN. status=trashed, and the row is
+	// still there with deleted_at set — the whole point of this card.
 	done := succeeded(t, mcpCall(t, httpSrv.URL, rawKey, "delete_workspace",
 		map[string]any{"workspace_id": wsIDs[0], "confirm_slug": slug(wsIDs[0])}))
-	if done["status"] != "deleted" {
-		t.Fatalf("delete_workspace returned %v, want status=deleted", done)
+	if done["status"] != "trashed" {
+		t.Fatalf("delete_workspace returned %v, want status=trashed — the tool moves the "+
+			"workspace to the bin, it does not destroy it", done)
 	}
-	var n int
-	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM workspaces WHERE id=$1`, wsIDs[0]).Scan(&n); err != nil {
+	var n, binned int
+	if err := pool.QueryRow(ctx,
+		`SELECT COUNT(*) FILTER (WHERE deleted_at IS NULL), COUNT(*) FILTER (WHERE deleted_at IS NOT NULL)
+		   FROM workspaces WHERE id=$1`, wsIDs[0]).Scan(&n, &binned); err != nil {
 		t.Fatalf("count: %v", err)
 	}
-	if n != 0 {
-		t.Error("delete_workspace reported deleted but the row is still there")
+	if n != 0 || binned != 1 {
+		t.Errorf("delete_workspace reported trashed but live/binned = %d/%d, want 0/1 — every row "+
+			"must be kept", n, binned)
+	}
+	// Its account survives the move: the CHIP credentials are untouched.
+	var accs int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM accounts WHERE workspace_id=$1`, wsIDs[0]).Scan(&accs); err != nil {
+		t.Fatalf("count accounts: %v", err)
+	}
+	if accs != 1 {
+		t.Errorf("accounts on the binned workspace = %d, want 1", accs)
 	}
 
-	// The remaining one is now the LAST — refused, and it says so.
+	// The remaining one is now the LAST LIVE workspace — refused, and it says so.
+	// (A workspace already in the bin is not somewhere the user can still go.)
 	last := succeeded(t, mcpCall(t, httpSrv.URL, rawKey, "delete_workspace",
 		map[string]any{"workspace_id": wsIDs[1], "confirm_slug": slug(wsIDs[1])}))
 	if last["status"] != "refused" || last["last_workspace"] != true {
-		t.Fatalf("deleting the last workspace returned %v, want status=refused + last_workspace=true", last)
+		t.Fatalf("deleting the last live workspace returned %v, want status=refused + last_workspace=true", last)
 	}
-	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM workspaces WHERE id=$1`, wsIDs[1]).Scan(&n); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM workspaces WHERE id=$1 AND deleted_at IS NULL`, wsIDs[1]).Scan(&n); err != nil {
 		t.Fatalf("count: %v", err)
 	}
 	if n != 1 {
@@ -194,10 +208,17 @@ func TestMCPWorkspaceDeleteRefusesLastWorkspaceThenSucceeds(t *testing.T) {
 	}
 }
 
-// TestMCPWorkspaceDeleteListsBlockersPerCategory pins the refusal SHAPE the card
-// asks for: a not-empty workspace is refused with every category and its count,
-// so an agent can state what must be cleared instead of guessing.
-func TestMCPWorkspaceDeleteListsBlockersPerCategory(t *testing.T) {
+// TestMCPWorkspaceDeleteOnAFullWorkspaceBinsIt replaces the old
+// "lists blockers per category" test. Those blockers no longer block anything:
+// Wan's decision was to let a FULL workspace go to the bin ("Buang guard —
+// workspace penuh boleh masuk bin, restore bila perlu (data kekal 100%)"), so a
+// refusal here would be the old behaviour masquerading as the new.
+//
+// What still has to hold is the READ half: check_workspace_deletion must keep
+// reporting the census honestly (categories + counts), because the dashboard
+// renders it beside the move — and the trash listing must keep reporting
+// can_purge, which is the guard that DOES survive (sales).
+func TestMCPWorkspaceDeleteOnAFullWorkspaceBinsIt(t *testing.T) {
 	requireTestDB(t)
 	ctx := context.Background()
 	pool := testdb.Open(t)
@@ -205,7 +226,8 @@ func TestMCPWorkspaceDeleteListsBlockersPerCategory(t *testing.T) {
 	httpSrv := wsMCPFixture(t, pool)
 	sp := dbstore.NewWorkspaceStore(pool)
 
-	// Two forms (one live, one trashed — BOTH count) and one product.
+	// Two forms (one live, one trashed — BOTH count in the census) and one
+	// product.
 	fs := dbstore.NewFormStore(pool)
 	live := &dbstore.Form{AccountID: accID, Slug: "wsmcp-blk-live-" + accID[:8], Title: "live", Status: "draft"}
 	if err := fs.Create(ctx, live); err != nil {
@@ -228,106 +250,66 @@ func TestMCPWorkspaceDeleteListsBlockersPerCategory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ByID: %v", err)
 	}
-	out := succeeded(t, mcpCall(t, httpSrv.URL, rawKey, "delete_workspace",
-		map[string]any{"workspace_id": wsIDs[0], "confirm_slug": w.Slug}))
-	if out["status"] != "refused" {
-		t.Fatalf("delete_workspace on a non-empty workspace returned %v, want refused", out)
-	}
-	raw, err := json.Marshal(out["blockers"])
-	if err != nil {
-		t.Fatalf("marshal blockers: %v", err)
-	}
-	var blockers []struct {
-		Kind  string `json:"kind"`
-		Count int64  `json:"count"`
-		Label string `json:"label"`
-	}
-	if err := json.Unmarshal(raw, &blockers); err != nil {
-		t.Fatalf("decode blockers %s: %v", raw, err)
-	}
-	byKind := map[string]int64{}
-	for _, b := range blockers {
-		byKind[b.Kind] = b.Count
-		if b.Label == "" {
-			t.Errorf("blocker %q has an empty label — the refusal would name no category", b.Kind)
-		}
-	}
-	// The trashed form MUST be counted: it is still a row, and only purge removes it.
-	if byKind["forms"] != 2 {
-		t.Errorf("blockers[forms] = %d, want 2 (a trashed form is still a forms row until it is purged)", byKind["forms"])
-	}
-	if byKind["products"] != 1 {
-		t.Errorf("blockers[products] = %d, want 1", byKind["products"])
-	}
 
-	// The pre-flight read must agree, and must state the same counts.
+	// The READ half still reports the census: the trashed form counts (it is
+	// still a `forms` row until it is purged), and the product shows up.
 	chk := succeeded(t, mcpCall(t, httpSrv.URL, rawKey, "check_workspace_deletion",
 		map[string]any{"workspace_id": wsIDs[0]}))
-	if chk["can_delete"] != false || chk["empty"] != false {
-		t.Errorf("check_workspace_deletion = %v, want can_delete=false + empty=false", chk)
-	}
 	var chkBlockers []struct {
 		Kind  string `json:"kind"`
 		Count int64  `json:"count"`
+		Label string `json:"label"`
 	}
 	b, _ := json.Marshal(chk["blockers"])
 	if err := json.Unmarshal(b, &chkBlockers); err != nil {
 		t.Fatalf("decode pre-flight blockers %s: %v", b, err)
 	}
-	chkByKind := map[string]int64{}
+	byKind := map[string]int64{}
 	for _, x := range chkBlockers {
-		chkByKind[x.Kind] = x.Count
+		byKind[x.Kind] = x.Count
+		if x.Label == "" {
+			t.Errorf("census entry %q has an empty label — the dashboard would name no category", x.Kind)
+		}
 	}
-	if chkByKind["forms"] != byKind["forms"] || chkByKind["products"] != byKind["products"] {
-		t.Errorf("pre-flight blockers %v disagree with the delete refusal %v — the UI would state a "+
-			"different answer than the write enforces", chkByKind, byKind)
+	if byKind["forms"] != 2 {
+		t.Errorf("census[forms] = %d, want 2 (a trashed form is still a forms row until it is purged)", byKind["forms"])
 	}
-
-	// Emptiness is reachable: purge the forms, ARCHIVE the product (a live
-	// product blocks; an archived one does not, because there is no product
-	// DELETE in the store), then the SAME call succeeds. This is the card's "the
-	// path must actually be walkable" requirement, driven over MCP.
-	if err := fs.Purge(ctx, accID, trashed.ID); err != nil {
-		t.Fatalf("purge trashed form: %v", err)
+	if byKind["products"] != 1 {
+		t.Errorf("census[products] = %d, want 1", byKind["products"])
 	}
-	if err := fs.Purge(ctx, accID, live.ID); err != dbstore.ErrFormNotFound {
-		t.Fatalf("Purge on a LIVE form error = %v, want ErrFormNotFound (the caller must trash first)", err)
-	}
-	if err := fs.SoftDelete(ctx, accID, live.ID); err != nil {
-		t.Fatalf("trash live form: %v", err)
-	}
-	if err := fs.Purge(ctx, accID, live.ID); err != nil {
-		t.Fatalf("purge live form after trashing: %v", err)
-	}
-	var prodID string
-	if err := pool.QueryRow(ctx, `SELECT id FROM products WHERE account_id=$1 LIMIT 1`, accID).Scan(&prodID); err != nil {
-		t.Fatalf("read product id: %v", err)
-	}
-	if err := dbstore.NewProductStore(pool).Archive(ctx, accID, prodID); err != nil {
-		t.Fatalf("archive product: %v", err)
-	}
-
-	// An ARCHIVED product must NOT block — otherwise, with no product delete in
-	// the store, the guard would be unsatisfiable and the merchant locked in.
-	chk = succeeded(t, mcpCall(t, httpSrv.URL, rawKey, "check_workspace_deletion",
-		map[string]any{"workspace_id": wsIDs[0]}))
+	// can_delete must now be TRUE: a full workspace is binnable. This is the
+	// assertion that fails if the not_empty guard is still in place somewhere.
 	if chk["can_delete"] != true {
-		t.Fatalf("after emptying the workspace check_workspace_deletion = %v, want can_delete=true — "+
-			"the guard would lock the merchant in forever", chk)
+		t.Fatalf("check_workspace_deletion on a FULL workspace = %v, want can_delete=true — the "+
+			"not_empty guard must be gone: a full workspace goes to the bin", chk)
 	}
-	ok := succeeded(t, mcpCall(t, httpSrv.URL, rawKey, "delete_workspace",
+
+	// And the write half agrees: the delete SUCCEEDS and keeps every row.
+	out := succeeded(t, mcpCall(t, httpSrv.URL, rawKey, "delete_workspace",
 		map[string]any{"workspace_id": wsIDs[0], "confirm_slug": w.Slug}))
-	if ok["status"] != "deleted" {
-		t.Fatalf("delete_workspace after emptying returned %v, want deleted", ok)
+	if out["status"] != "trashed" {
+		t.Fatalf("delete_workspace on a FULL workspace returned %v, want status=trashed", out)
 	}
-	// The archived product went with the workspace (it must not be left behind as
-	// an orphan, and its FK RESTRICTs the account delete).
-	var leftover int
-	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM products WHERE account_id=$1`, accID).Scan(&leftover); err != nil {
+	var binned int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM workspaces WHERE id=$1 AND deleted_at IS NOT NULL`, wsIDs[0]).Scan(&binned); err != nil {
+		t.Fatalf("count workspace: %v", err)
+	}
+	if binned != 1 {
+		t.Error("the full workspace was not binned")
+	}
+	// Every seeded row survived the move.
+	var forms, prods int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM forms WHERE account_id=$1`, accID).Scan(&forms); err != nil {
+		t.Fatalf("count forms: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM products WHERE account_id=$1`, accID).Scan(&prods); err != nil {
 		t.Fatalf("count products: %v", err)
 	}
-	if leftover != 0 {
-		t.Errorf("products left behind = %d, want 0 — an archived product must be removed with its account", leftover)
+	if forms != 2 {
+		t.Errorf("forms after the trash = %d, want 2 — the trash destroys nothing", forms)
+	}
+	if prods != 1 {
+		t.Errorf("products after the trash = %d, want 1 — the trash destroys nothing", prods)
 	}
 }
 
@@ -379,11 +361,12 @@ func TestMCPWorkspaceDeleteRefusesNonOwnerAdminMember(t *testing.T) {
 	}
 
 	// The owner may (two workspaces, empty). The fixture key is already the
-	// owner's and lives on the workspace NOT being deleted, so it survives.
+	// owner's and lives on the workspace NOT being binned, so it survives the
+	// move — the trash keeps every row, including the key's account.
 	done := succeeded(t, mcpCall(t, httpSrv.URL, ownerKey, "delete_workspace",
 		map[string]any{"workspace_id": wsIDs[0], "confirm_slug": w.Slug}))
-	if done["status"] != "deleted" {
-		t.Fatalf("the OWNER's delete returned %v, want deleted", done)
+	if done["status"] != "trashed" {
+		t.Fatalf("the OWNER's delete returned %v, want trashed", done)
 	}
 }
 

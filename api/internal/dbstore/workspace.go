@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
@@ -21,6 +22,12 @@ type Workspace struct {
 	Name  string
 	Slug  string
 	Owner string
+
+	// DeletedAt is set only by the trash reads (ListTrashed / TrashedByID). The
+	// live reads never populate it: a nil value is how a caller tells a live
+	// workspace from a trashed one without a second query. Same convention as
+	// Form.DeletedAt.
+	DeletedAt *time.Time `json:"deleted_at,omitempty"`
 }
 
 // ── The ONE workspace-name rule ────────────────────────────────────────────────
@@ -60,11 +67,28 @@ func ValidateWorkspaceName(name string) (string, error) {
 	return n, nil
 }
 
-// ErrWorkspaceSlugTaken is the rename/create refusal when the requested slug is
-// already in use — either LIVE (another workspace serves it) or RESERVED (it is
-// a former slug of another workspace, held in workspace_slug_aliases so the
-// addresses already in the wild keep working). Both are a 409 on the wire, and
-// neither ever overwrites the other side.
+// ErrWorkspaceSlugTaken is the ONE refusal for "another LIVE workspace already
+// answers on that slug". Both sides of the merge declared it separately for two
+// sightings of that one condition; they are kept as ONE sentinel because they are
+// one rule, and because the transports' switches key on the identity:
+//
+//   - rename/create: the requested slug is already in use — either LIVE (another
+//     workspace serves it) or RESERVED (it is a former slug of another
+//     workspace, held in workspace_slug_aliases so the addresses already in the
+//     wild keep working).
+//   - restore: the slug was re-claimed while this workspace sat in the bin. The
+//     unique index covers LIVE rows only, so binning releases the name and
+//     another workspace may take it; clearing deleted_at would then violate the
+//     index. Nothing is renamed behind the owner's back.
+//
+// Both are a 409 on the wire, and neither ever overwrites the other side.
+//
+// The two are distinct on the MESSAGE because the remedy differs: a rename wants
+// a different slug, a restore wants the holder renamed first. They are separated
+// by the CALLING TRANSPORT (the restore transport knows it called Restore, and
+// the MCP restore tool knows it too) rather than by a second sentinel — a
+// second exported error would have to be added to every switch that answers this
+// one, and the two are the same condition seen from two verbs.
 var ErrWorkspaceSlugTaken = errors.New("slug sudah digunakan")
 
 // WorkspaceStore wraps workspaces.
@@ -72,7 +96,28 @@ type WorkspaceStore struct{ pool *pgxpool.Pool }
 
 func NewWorkspaceStore(pool *pgxpool.Pool) *WorkspaceStore { return &WorkspaceStore{pool: pool} }
 
-const workspaceSelect = `SELECT id, owner_user_id, name, slug FROM workspaces`
+// workspaceSelect builds every non-trash workspace read: trashed workspaces are
+// invisible everywhere except the explicit trash query. deleted_at is part of
+// the column list because every workspace read scans into a Workspace, and the
+// migration/scan-drift guard pins a select's column count to that struct's
+// field count — so Workspace.DeletedAt has to be selectable here. It is always
+// NULL on these reads (the WHERE filters to live rows), which is exactly how a
+// caller tells a live workspace from a trashed one.
+//
+// Same shape as formSelect, on purpose: the two trashable objects in this repo
+// must not have two different ways of hiding a trashed row (issue: workspace trash).
+const workspaceSelect = `SELECT id, owner_user_id, name, slug, deleted_at FROM workspaces WHERE deleted_at IS NULL`
+
+// trashedWorkspaceSelect builds the two trash reads (ListTrashed / TrashedByID).
+//
+// It is a SEPARATE constant from workspaceSelect, and its filter is the OPPOSITE
+// one, on purpose: appending `deleted_at IS NOT NULL` to workspaceSelect would
+// make that query self-contradictory and every trash read would silently return
+// nothing — the exact regression class the form trash documented (issue #98).
+// The columns are workspaceSelect's plus nothing else (both carry deleted_at);
+// the trash read is the only one that populates it.
+const trashedWorkspaceSelect = `SELECT id, owner_user_id, name, slug, deleted_at
+	FROM workspaces WHERE deleted_at IS NOT NULL`
 
 // scanWorkspace scans one workspace row. It returns a NIL workspace alongside a
 // non-nil error, never a zero-valued struct.
@@ -101,7 +146,23 @@ const workspaceSelect = `SELECT id, owner_user_id, name, slug FROM workspaces`
 // ignored error made the difference visible.
 func scanWorkspace(row rowScanner) (*Workspace, error) {
 	s := &Workspace{}
-	if err := row.Scan(&s.ID, &s.Owner, &s.Name, &s.Slug); err != nil {
+	if err := row.Scan(&s.ID, &s.Owner, &s.Name, &s.Slug, &s.DeletedAt); err != nil {
+		if isNoSuchRow(err) {
+			return nil, pgx.ErrNoRows
+		}
+		return nil, err
+	}
+	return s, nil
+}
+
+// scanTrashedWorkspace scans a trashedWorkspaceSelect row into the same struct.
+// It is a SEPARATE function from scanWorkspace because the drift guard pins each
+// select constant to the scan function that reads it — and a trash read that
+// shared the live scan would be one column away from silently reading the wrong
+// value into DeletedAt.
+func scanTrashedWorkspace(row rowScanner) (*Workspace, error) {
+	s := &Workspace{}
+	if err := row.Scan(&s.ID, &s.Owner, &s.Name, &s.Slug, &s.DeletedAt); err != nil {
 		if isNoSuchRow(err) {
 			return nil, pgx.ErrNoRows
 		}
@@ -112,7 +173,7 @@ func scanWorkspace(row rowScanner) (*Workspace, error) {
 
 // ByOwner lists workspaces owned by a user.
 func (s *WorkspaceStore) ByOwner(ctx context.Context, userID string) ([]*Workspace, error) {
-	rows, err := s.pool.Query(ctx, workspaceSelect+" WHERE owner_user_id=$1 ORDER BY created_at", userID)
+	rows, err := s.pool.Query(ctx, workspaceSelect+" AND owner_user_id=$1 ORDER BY created_at", userID)
 	if err != nil {
 		return nil, err
 	}
@@ -130,12 +191,12 @@ func (s *WorkspaceStore) ByOwner(ctx context.Context, userID string) ([]*Workspa
 
 // BySlug resolves a workspace by its URL slug.
 func (s *WorkspaceStore) BySlug(ctx context.Context, slug string) (*Workspace, error) {
-	return scanWorkspace(s.pool.QueryRow(ctx, workspaceSelect+" WHERE slug=$1", slug))
+	return scanWorkspace(s.pool.QueryRow(ctx, workspaceSelect+" AND slug=$1", slug))
 }
 
 // ByID fetches one workspace.
 func (s *WorkspaceStore) ByID(ctx context.Context, id string) (*Workspace, error) {
-	return scanWorkspace(s.pool.QueryRow(ctx, workspaceSelect+" WHERE id=$1", id))
+	return scanWorkspace(s.pool.QueryRow(ctx, workspaceSelect+" AND id=$1", id))
 }
 
 // Create makes a new workspace (slug unique) AND a fresh, empty account linked
@@ -345,7 +406,7 @@ const legacyUnscopedAccountSQL = `
 	  AND a.workspace_id IS NULL
 	  AND NOT (u.email = ANY($2::text[]))
 	  AND EXISTS (SELECT 1 FROM forms f WHERE f.account_id = a.id)
-	  AND NOT EXISTS (SELECT 1 FROM workspaces w WHERE w.owner_user_id = $1)
+	  AND NOT EXISTS (SELECT 1 FROM workspaces w WHERE w.owner_user_id = $1 AND w.deleted_at IS NULL)
 	ORDER BY a.created_at
 	LIMIT 1`
 
@@ -795,13 +856,13 @@ type WorkspaceAccess struct {
 // user is the owner or a member of the workspace. ok=false when the workspace is
 // unknown or the user has no access (issue #162 — members, not just owners).
 func (s *WorkspaceStore) AccessBySlug(ctx context.Context, slug, userID string) (WorkspaceAccess, bool, error) {
-	return s.access(ctx, `WHERE sp.slug = $1`, slug, userID)
+	return s.access(ctx, `AND sp.slug = $1`, slug, userID)
 }
 
 // AccessByID resolves the workspace's account ids + the caller's role when the
 // user is the owner or a member of the workspace.
 func (s *WorkspaceStore) AccessByID(ctx context.Context, workspaceID, userID string) (WorkspaceAccess, bool, error) {
-	return s.access(ctx, `WHERE sp.id = $1`, workspaceID, userID)
+	return s.access(ctx, `AND sp.id = $1`, workspaceID, userID)
 }
 
 // access is the shared owner-or-member workspace resolution. The owner is always
@@ -814,7 +875,7 @@ func (s *WorkspaceStore) access(ctx context.Context, where string, key, userID s
 		FROM workspaces sp
 		LEFT JOIN accounts a ON a.workspace_id = sp.id
 		LEFT JOIN workspace_members m ON m.workspace_id = sp.id AND m.user_id = $2
-		`+where, key, userID)
+		WHERE sp.deleted_at IS NULL `+where, key, userID)
 	if err != nil {
 		return WorkspaceAccess{}, false, err
 	}
@@ -845,50 +906,45 @@ func (s *WorkspaceStore) access(ctx context.Context, where string, key, userID s
 	return out, found, nil
 }
 
-// WorkspaceBlocker is one category of content that prevents a workspace from
-// being deleted, with the count that blocked it. The delete path returns the
-// non-zero categories so the caller can list exactly what must be cleared
-// instead of a bare "not empty".
+// WorkspaceBlocker is one category of content a workspace holds, with its count.
+//
+// IT NO LONGER BLOCKS ANYTHING. It was the refusal shape for the old "not_empty"
+// guard on delete; that guard is GONE (Wan's decision: "Buang guard — workspace
+// penuh boleh masuk bin, restore bila perlu (data kekal 100%)"), because a
+// workspace that keeps every one of its rows has nothing left to protect against.
+// The census survives because it is still the honest answer to "what is in this
+// workspace?", which the Dashboard's Danger zone shows before a delete and the
+// trash view shows after one.
 type WorkspaceBlocker struct {
 	// Kind is the machine-readable category: "forms", "products", "sales",
 	// "domains", "webhooks", "api_keys" or "subscriptions".
 	Kind string `json:"kind"`
 	// Count is how many rows of that kind the workspace still owns.
 	Count int64 `json:"count"`
-	// Label is the human-readable category name shown in the refusal.
+	// Label is the human-readable category name shown in the census.
 	Label string `json:"label"`
 }
 
 // WorkspaceDeleteError is returned by Delete when the workspace cannot be
-// removed. Two shapes, both actionable:
+// trashed. ONE shape:
 //
-//	reason "last_workspace" — the owner would be left with zero workspaces. A
+//	reason "last_workspace" — the owner would be left with no LIVE workspace. A
 //	   user must always have at least one, so this is the guard Wan asked for: it
-//	   protects the workspace they started with without hard-coding which one
-//	   that is.
-//	reason "not_empty"     — the workspace still owns content. Blockers lists
-//	   each category and its count, so the caller can clear them (trash + purge a
-//	   form, archive a product, …) instead of guessing.
+//	   protects whichever workspace is last without hard-coding which one that is.
+//
+// The old "not_empty" reason is deliberately gone with its guard: since the
+// delete only MARKS the workspace (and Purge is the only thing that destroys
+// rows), refusing to bin a workspace because it holds forms would be refusing to
+// do the one thing this path now does safely.
 type WorkspaceDeleteError struct {
-	Reason   string
-	Blockers []WorkspaceBlocker
+	Reason string
 }
 
 func (e *WorkspaceDeleteError) Error() string {
 	if e.Reason == "last_workspace" {
 		return "sekurang-kurangnya satu workspace diperlukan"
 	}
-	return "workspace tidak kosong"
-}
-
-// ErrWorkspaceNotEmpty reports whether err is the "still owns content" refusal,
-// and returns the blocking categories.
-func ErrWorkspaceNotEmpty(err error) ([]WorkspaceBlocker, bool) {
-	var de *WorkspaceDeleteError
-	if errors.As(err, &de) && de.Reason == "not_empty" {
-		return de.Blockers, true
-	}
-	return nil, false
+	return "workspace tidak boleh dipadam"
 }
 
 // IsLastWorkspaceError reports whether err is the "you would be left with no
@@ -1054,68 +1110,75 @@ func (s *WorkspaceStore) accountIDs(ctx context.Context, workspaceID string) ([]
 	return out, rows.Err()
 }
 
-// Delete removes a workspace and everything that belongs to it, refusing when
-// either guard says no.
+// Trash MARKS a workspace deleted. Nothing is destroyed: every row under it
+// (its accounts, forms, products, sales, api_keys, members, settings) stays on
+// disk, untouched, and Restore brings the workspace back whole.
 //
-// exemptKeyID is the id of the API key authenticating the call, or "" for a
-// session caller. See emptyCheckArgs for why exactly one live key may be
-// ignored by the emptiness guard.
+// THIS USED TO BE A HARD DELETE. The old Delete ran real DELETEs deepest-first
+// over the workspace's whole world and the workspace row itself. That ordering
+// analysis was correct and is REUSED verbatim by Purge below — the FKs are NO
+// ACTION (verified on the live schema: accounts/api_keys/forms/products/sales
+// .workspace_id are all NO ACTION, while workspace_settings/workspace_members/
+// workspace_invites/workspace_legal_pages/workspace_email_settings/affiliates
+// cascade), and every workspace MUST own an account (migration 000024), so a
+// bare `DELETE FROM workspaces` works on literally nothing. It is not discarded;
+// it MOVES.
 //
-// WHY THIS IS NOT ONE `DELETE FROM workspaces`. The foreign keys on the live
-// schema make that statement FAIL (SQLSTATE 23503) on any workspace holding an
-// account — accounts.workspace_id, api_keys.workspace_id, forms.workspace_id,
-// products.workspace_id and sales.workspace_id are all NO ACTION (RESTRICT),
-// while only the seven child tables (workspace_settings, workspace_members,
-// workspace_invites, workspace_legal_pages, workspace_email_settings,
-// affiliates) cascade. Every workspace MUST own an account (migration 000024),
-// so the naive delete works on literally nothing.
+// WHY THE `not_empty` GUARD IS GONE (Wan's decision, verbatim: "Buang guard —
+// workspace penuh boleh masuk bin, restore bila perlu (data kekal 100%)").
+// Refusing to bin a workspace because it still held forms made the delete nearly
+// useless — emptying a workspace first was, in practice, impossible, because a
+// trashed form still counted. With every row KEPT by this method, there is
+// nothing left for such a guard to protect against: the operation it was
+// guarding is now reversible, so it protects nothing and costs the feature.
 //
-// The order below is what makes the cascade reach the workspace: the RESTRICT
-// rows are removed deepest-first (sales → their subscription/charge children
-// cascade; then forms, products, api_keys; then the accounts), and only then the
-// workspaces row, whose own children fall away by CASCADE.
+// WHY THE `last_workspace` GUARD STAYS. A user must always retain at least one
+// LIVE workspace (a user with none cannot be represented, and the switcher has
+// nowhere to land them). That rule was never part of what was asked to change
+// and is enforced here as before — now with `deleted_at IS NULL` on the census,
+// so binning your workspace does not count as still having one.
 //
-// The accounts go WITH the workspace: an account holds CHIP credentials, and
-// the repo invariant is that CHIP is never shared between workspaces, so an
-// account orphaned by a workspace delete would be a credential nobody owns.
-//
-// Guards (both checked inside the transaction, so nothing is deleted when
-// either refuses):
-//
-//	last_workspace — the owner would be left with zero workspaces. The rule is
-//	   "a user always has at least one", expressed as a COUNT rather than by
-//	   pinning the workspace they started with, so it protects whichever
-//	   workspace is last without a "is this the original one" flag.
-//	not_empty      — CountEmpty reports blockers; the workspace is untouched.
-//
-// Returns the number of rows removed per table for the audit trail.
-func (s *WorkspaceStore) Delete(ctx context.Context, workspaceID, ownerUserID, exemptKeyID string) (map[string]int64, error) {
+// The mark is refused when the row is already trashed (ErrWorkspaceNotFound,
+// exactly as an unknown id is): trashing twice is not two operations, and a
+// second call must not quietly move deleted_at forward.
+func (s *WorkspaceStore) Trash(ctx context.Context, workspaceID, ownerUserID string) (*Workspace, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// Lock the workspace row: two concurrent deletes of the same workspace
-	// would otherwise both pass the guards and the second would fail late with a
-	// raw FK error.
-	var owner string
-	if err := tx.QueryRow(ctx,
-		`SELECT owner_user_id FROM workspaces WHERE id=$1 FOR UPDATE`,
-		workspaceID).Scan(&owner); isNoSuchRow(err) {
+	// Lock the row: two concurrent trashes would otherwise both pass the guard
+	// and the second would overwrite the first's deleted_at. FOR UPDATE on the
+	// already-trashed row is excluded by the WHERE, so this also serialises
+	// against a concurrent Restore.
+	sp := &Workspace{}
+	err = tx.QueryRow(ctx,
+		`SELECT id, owner_user_id, name, slug, deleted_at FROM workspaces
+		  WHERE id=$1 AND deleted_at IS NULL FOR UPDATE`,
+		workspaceID).Scan(&sp.ID, &sp.Owner, &sp.Name, &sp.Slug, &sp.DeletedAt)
+	if isNoSuchRow(err) {
 		return nil, ErrWorkspaceNotFound
-	} else if err != nil {
+	}
+	if err != nil {
 		return nil, err
 	}
 
-	// Guard 1 — at least one workspace must remain. Counted on the owner's
+	// Guard — at least one LIVE workspace must remain. Counted on the owner's
 	// membership (owned OR member), which is exactly what the switcher lists, so
 	// a user who is a member of someone else's workspace still has one to land
-	// on and may delete their own last one.
+	// on and may bin their own last one.
+	//
+	// `deleted_at IS NULL` on BOTH legs is the whole point: a workspace already
+	// in the bin is not somewhere to land, and a member row pointing at a
+	// trashed workspace must not be counted as one. Without it, binning your
+	// only workspace would be allowed as soon as you were a member of it — the
+	// `last_workspace` rule would silently stop protecting the user.
 	var remaining int64
 	if err := tx.QueryRow(ctx, `
 		SELECT COUNT(*) FROM workspaces sp
 		 WHERE sp.id <> $1
+		   AND sp.deleted_at IS NULL
 		   AND (sp.owner_user_id = $2
 		        OR EXISTS (SELECT 1 FROM workspace_members m
 		                    WHERE m.workspace_id = sp.id AND m.user_id = $2))`,
@@ -1126,8 +1189,150 @@ func (s *WorkspaceStore) Delete(ctx context.Context, workspaceID, ownerUserID, e
 		return nil, &WorkspaceDeleteError{Reason: "last_workspace"}
 	}
 
-	// Guard 2 — the workspace must be empty, using the ONE definition.
-	var accIDs []string
+	if _, err := tx.Exec(ctx,
+		`UPDATE workspaces SET deleted_at=now() WHERE id=$1 AND deleted_at IS NULL`,
+		workspaceID); err != nil {
+		return nil, err
+	}
+
+	// Clear a login default pointing at the binned workspace.
+	//
+	// Under the old HARD delete this happened by itself: users.default_workspace_id
+	// REFERENCES workspaces(id) ON DELETE SET NULL, so removing the row nulled the
+	// default. A MARK fires no FK, so without this line the default survives and
+	// the next login lands the user on a workspace that is in the bin — the exact
+	// "dangling default" the SET NULL was there to prevent, moved from a visible
+	// bug to a silent one (login succeeds, dashboard is empty, nothing explains
+	// why). Restore does not re-point it: the user picks their default again
+	// rather than having a stale choice resurrected behind their back.
+	if _, err := tx.Exec(ctx,
+		`UPDATE users SET default_workspace_id=NULL WHERE default_workspace_id=$1`,
+		workspaceID); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	// A fresh read, so the caller sees the committed mark rather than a
+	// hand-built struct.
+	return s.TrashedByID(ctx, workspaceID)
+}
+
+// Delete is the historical name for Trash, kept as a thin alias so the REST and
+// MCP call sites (and their tests) name the dashboard action they perform. It is
+// NOT a hard delete any more — Purge is.
+func (s *WorkspaceStore) Delete(ctx context.Context, workspaceID, ownerUserID, _ string) (map[string]int64, error) {
+	sp, err := s.Trash(ctx, workspaceID, ownerUserID)
+	if err != nil {
+		return nil, err
+	}
+	// The response shape the audit event and the dashboard already read. The old
+	// DELETE reported per-table row counts because it removed rows; this reports
+	// what the mark covers, so an operator reading an old log line still learns
+	// which tables the workspace holds.
+	counts, err := s.ContentCounts(ctx, workspaceID, "")
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]int64{"workspaces": 1}
+	for k, v := range counts {
+		out[k] = v
+	}
+	_ = sp
+	return out, nil
+}
+
+// Restore clears deleted_at on a trashed workspace, bringing it and everything
+// under it back exactly as it was — no row was ever touched by the trash, so
+// there is nothing to rebuild.
+//
+// A restore whose slug was re-claimed while the workspace sat in the bin is
+// REFUSED with ErrWorkspaceSlugTaken rather than failing as an opaque 500: the
+// unique index covers LIVE rows only, so trashing releases the name and a new
+// workspace may take it (issue: a trashed workspace must not hold a name
+// forever). Clearing deleted_at then violates the index (SQLSTATE 23505).
+// Nothing is renamed behind the user's back — the same rule forms already
+// follows (FormStore.Restore / ErrFormSlugTaken), and the caller is told which
+// obstacle to clear.
+func (s *WorkspaceStore) Restore(ctx context.Context, workspaceID, ownerUserID string) error {
+	// Ownership is checked in the WHERE: only the owner may bring a workspace
+	// back, matching who may bin it.
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE workspaces SET deleted_at=NULL
+		  WHERE id=$1 AND owner_user_id=$2 AND deleted_at IS NOT NULL`,
+		workspaceID, ownerUserID)
+	if isUniqueViolation(err) {
+		return ErrWorkspaceSlugTaken
+	}
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrWorkspaceNotFound
+	}
+	return nil
+}
+
+// Purge destroys a TRASHED workspace and everything that belongs to it, for
+// good. This is where the hard delete lives.
+//
+// The ORDER IS THE OLD Delete's ORDER, unchanged, because that ordering is what
+// makes the cascade reach the workspace at all:
+//
+//	1. trading history first — sales (their subscription/charge children
+//	   cascade), then forms, products, api_keys. These are the rows whose
+//	   workspace_id/account_id FKs are NO ACTION, so the workspace row cannot go
+//	   while they are present.
+//	2. the accounts. They hold the CHIP credentials, and the repo invariant is
+//	   that CHIP is never shared between workspaces, so an account orphaned by a
+//	   purge would be a credential nobody owns.
+//	3. the workspace row itself. workspace_settings / workspace_members /
+//	   workspace_invites / workspace_legal_pages / workspace_email_settings /
+//	   affiliates go with it by CASCADE; users.default_workspace_id is SET NULL.
+//
+// TWO GUARDS, because a purge cannot be undone:
+//
+//  1. Only a TRASHED workspace may be purged (`deleted_at IS NOT NULL`), so the
+//     only way in is trash → purge and a live workspace cannot be destroyed by
+//     a single mistyped call. A live/unknown id is ErrWorkspaceNotFound here,
+//     exactly as an unknown id is.
+//  2. SALES REFUSE IT, with ErrWorkspaceHasSales. A workspace with trading
+//     history is not a scratch workspace: the purge deletes those sales rows
+//     outright, and sales are the merchant's record of money received. The
+//     merchant is told to settle them first. Counted inside the transaction so
+//     a sale landing between the check and the delete cannot slip through.
+//
+// HUMAN-ONLY, ENFORCED ELSEWHERE. `purge` is deliberately NOT reachable from the
+// dashboard UI or from a proposable chat tool — Wan's rule, verbatim: "Manusia
+// sahaja boleh purge kekal — assistant HANYA boleh hantar ke bin, tak pernah
+// padam kekal". The guard lives in mcpsrv (chat_tools.go / chat_tools_guard_test.go),
+// which pins that no purge/permanent-verb tool is ever proposable; this method is
+// the store half of the pair.
+func (s *WorkspaceStore) Purge(ctx context.Context, workspaceID, ownerUserID string) (map[string]int64, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Lock the row so a concurrent Restore cannot flip it live between the
+	// trashed check and the delete.
+	var owner string
+	if err := tx.QueryRow(ctx,
+		`SELECT owner_user_id FROM workspaces
+		  WHERE id=$1 AND deleted_at IS NOT NULL FOR UPDATE`,
+		workspaceID).Scan(&owner); isNoSuchRow(err) {
+		return nil, ErrWorkspaceNotFound
+	} else if err != nil {
+		return nil, err
+	}
+	// Owner-only, the same rule as the trash itself.
+	if ownerUserID == "" || owner != ownerUserID {
+		return nil, &WorkspaceDeleteError{Reason: "not_owner"}
+	}
+
+	accIDs := []string{}
 	{
 		rows, qerr := tx.Query(ctx, `SELECT id FROM accounts WHERE workspace_id=$1`, workspaceID)
 		if qerr != nil {
@@ -1146,24 +1351,23 @@ func (s *WorkspaceStore) Delete(ctx context.Context, workspaceID, ownerUserID, e
 			return nil, err
 		}
 	}
-	if len(accIDs) > 0 {
-		var forms, products, sales, subs, domains, webhooks, keys int64
-		qerr := tx.QueryRow(ctx, emptyCheckSQL, emptyCheckArgs(accIDs, exemptKeyID)...).
-			Scan(&forms, &products, &sales, &subs, &domains, &webhooks, &keys)
-		if qerr != nil {
-			return nil, qerr
-		}
-		if blockers := blockersFrom(forms, products, sales, subs, domains, webhooks, keys); len(blockers) > 0 {
-			return nil, &WorkspaceDeleteError{Reason: "not_empty", Blockers: blockers}
-		}
+
+	// Guard — never destroy trading history. Sales RESTRICT their account, so
+	// without this the purge of a sold workspace would either fail late with a
+	// raw FK error or (worse, if the FK were ever relaxed) silently discard the
+	// merchant's record of money received.
+	var sales int64
+	if err := tx.QueryRow(ctx,
+		`SELECT COUNT(*) FROM sales WHERE account_id = ANY($1)`, accIDs).Scan(&sales); err != nil {
+		return nil, err
+	}
+	if sales > 0 {
+		return nil, ErrWorkspaceHasSales
 	}
 
-	deleted := map[string]int64{}
-	// Step 1: trading history first — sales/subscriptions RESTRICT their
-	// account, and subscription_charges CASCADE off their subscription. Only
-	// counts of zero can reach here (guard 2), but the statement is written as
-	// a delete so a race that inserts a sale between the check and here cannot
-	// leave the account behind.
+	purged := map[string]int64{}
+	// Step 1: the RESTRICT rows, deepest-first. The subscription children
+	// (subscription_charges) cascade off their subscription.
 	for _, step := range []struct {
 		table string
 		sql   string
@@ -1177,7 +1381,7 @@ func (s *WorkspaceStore) Delete(ctx context.Context, workspaceID, ownerUserID, e
 		if derr != nil {
 			return nil, derr
 		}
-		deleted[step.table] = tag.RowsAffected()
+		purged[step.table] = tag.RowsAffected()
 	}
 	// Step 2: the accounts (they hold the CHIP credentials; never orphaned).
 	if len(accIDs) > 0 {
@@ -1185,40 +1389,156 @@ func (s *WorkspaceStore) Delete(ctx context.Context, workspaceID, ownerUserID, e
 		if derr != nil {
 			return nil, derr
 		}
-		deleted["accounts"] = tag.RowsAffected()
+		purged["accounts"] = tag.RowsAffected()
 	}
-	// Step 3: the workspace itself. workspace_settings / workspace_members /
-	// workspace_invites / workspace_legal_pages / workspace_email_settings /
-	// affiliates go with it by CASCADE. users.default_workspace_id is SET NULL
-	// by its FK, so no dangling default is left behind.
-	tag, derr := tx.Exec(ctx, `DELETE FROM workspaces WHERE id=$1`, workspaceID)
+	// Step 3: the workspace itself. Its CASCADE children fall away with it.
+	tag, derr := tx.Exec(ctx,
+		`DELETE FROM workspaces WHERE id=$1 AND deleted_at IS NOT NULL`, workspaceID)
 	if derr != nil {
 		return nil, derr
 	}
-	deleted["workspaces"] = tag.RowsAffected()
-	if deleted["workspaces"] == 0 {
+	purged["workspaces"] = tag.RowsAffected()
+	if purged["workspaces"] == 0 {
 		return nil, ErrWorkspaceNotFound
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
-	return deleted, nil
+	return purged, nil
 }
 
-// ErrWorkspaceNotFound means the workspace id named no row.
+// ErrWorkspaceNotFound means the workspace id named no row (or named a workspace
+// in the state the call does not act on — a live row for a purge, a trashed row
+// for a trash).
 var ErrWorkspaceNotFound = errors.New("workspace not found")
+
+// A restore whose slug was re-claimed by another LIVE workspace while this one
+// sat in the bin is refused with ErrWorkspaceSlugTaken (declared once, at the top
+// of this file, beside the rename/create use of the same rule).
+
+// ErrWorkspaceHasSales refuses a purge of a workspace that has EVER received a
+// sale. Sales are the merchant's record of money received; a purge destroys
+// them, so a workspace holding any is not purgable.
+var ErrWorkspaceHasSales = errors.New("workspace ini mempunyai jualan")
+
+// AccountIsLive reports whether accountID belongs to a workspace that is NOT in
+// the bin.
+//
+// This is the predicate audit attribution must use, and it is deliberately not
+// "does the row exist". Under the trash every account row survives its
+// workspace's move to the bin, so an existence check would happily file an
+// event against a workspace the merchant has just put away — the audit trail for
+// a delete would be stored inside the thing that was deleted, which is exactly
+// the failure mode the hard-delete era produced by a different route (the FK
+// refused the write and it was swallowed).
+//
+// An account with no workspace at all (workspace_id IS NULL) counts as live: it
+// is not parked on a binned workspace, and it is the caller's own.
+//
+// The EXISTS subquery is deliberate, not a stylistic choice: a repo guard
+// (web/src/lib/formPublicURL.test.ts, "layer 2 is intact") pins the account-slug
+// fallback's join shape OUT of this file, because that join is how the removed
+// fallback resolved a host. This predicate asks whether a workspace is live —
+// the opposite question — so it must not be written in that shape, and the
+// banned text must not appear here even in a comment (the guard greps the whole
+// file). Do not "simplify" this back.
+func (s *WorkspaceStore) AccountIsLive(ctx context.Context, accountID string) (bool, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM accounts a
+			WHERE a.id = $1
+			  AND (a.workspace_id IS NULL OR EXISTS (
+			        SELECT 1 FROM workspaces sp
+			         WHERE sp.id = a.workspace_id AND sp.deleted_at IS NULL))
+		)`, accountID)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return false, rows.Err()
+	}
+	var live bool
+	if err := rows.Scan(&live); err != nil {
+		return false, err
+	}
+	return live, rows.Err()
+}
+
+// TrashedByID reads one workspace from the bin. It uses trashedWorkspaceSelect,
+// so it matches rows the live readers deliberately hide.
+func (s *WorkspaceStore) TrashedByID(ctx context.Context, id string) (*Workspace, error) {
+	return scanTrashedWorkspace(s.pool.QueryRow(ctx, trashedWorkspaceSelect+" AND id=$1", id))
+}
+
+// ListTrashed lists the caller's TRASHED workspaces, newest-binned first.
+//
+// It is deliberately scoped by OWNER (not "owned or member"): only the owner may
+// restore or purge, so listing a member's trashed workspace would offer a row
+// they cannot act on. It must NOT reuse workspaceSelect, which filters
+// `deleted_at IS NULL`; appending `deleted_at IS NOT NULL` to that would make the
+// query self-contradictory and the trash list would ALWAYS be empty — the issue
+// #98 regression class, which is why the two constants are separate.
+func (s *WorkspaceStore) ListTrashed(ctx context.Context, ownerUserID string) ([]*Workspace, error) {
+	rows, err := s.pool.Query(ctx,
+		trashedWorkspaceSelect+" AND owner_user_id=$1 ORDER BY deleted_at DESC", ownerUserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Workspace
+	for rows.Next() {
+		sp, serr := scanTrashedWorkspace(rows)
+		if serr != nil {
+			return nil, serr
+		}
+		out = append(out, sp)
+	}
+	return out, rows.Err()
+}
+
+// ContentCounts reports what a workspace holds, by category — the census the
+// dashboard shows beside a trash/delete action, so the effect of the decision is
+// visible before it is made. It uses the SAME one definition of the census the
+// delete path used (emptyCheckSQL), which is why that query survived the guard's
+// removal.
+func (s *WorkspaceStore) ContentCounts(ctx context.Context, workspaceID, exemptKeyID string) (map[string]int64, error) {
+	accs, err := s.accountIDs(ctx, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]int64{"accounts": int64(len(accs))}
+	if len(accs) == 0 {
+		return out, nil
+	}
+	var forms, products, sales, subs, domains, webhooks, keys int64
+	if err := s.pool.QueryRow(ctx, emptyCheckSQL, emptyCheckArgs(accs, exemptKeyID)...).
+		Scan(&forms, &products, &sales, &subs, &domains, &webhooks, &keys); err != nil {
+		return nil, err
+	}
+	for _, b := range blockersFrom(forms, products, sales, subs, domains, webhooks, keys) {
+		out[b.Kind] = b.Count
+	}
+	return out, nil
+}
 
 // ByMember lists workspaces the user owns OR is a member of, with the caller's
 // role in each (issue #162). Used by the workspace switcher so members see the
 // workspaces they belong to, not just the ones they own.
+//
+// A TRASHED workspace is excluded: the switcher is the list of places the user
+// can go, and a binned workspace is not one of them — sending them there would
+// show an empty dashboard with no way to explain why. The trash has its own
+// read (ListTrashed), which is what the dashboard's trash view uses.
 func (s *WorkspaceStore) ByMember(ctx context.Context, userID string) ([]WorkspaceAccess, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT sp.id, sp.name, sp.slug, sp.owner_user_id, COALESCE(m.role, ''), a.id
 		FROM workspaces sp
 		LEFT JOIN workspace_members m ON m.workspace_id = sp.id AND m.user_id = $1
 		LEFT JOIN accounts a ON a.workspace_id = sp.id
-		WHERE sp.owner_user_id = $1 OR m.user_id = $1
+		WHERE sp.deleted_at IS NULL
+		  AND (sp.owner_user_id = $1 OR m.user_id = $1)
 		ORDER BY sp.created_at`, userID)
 	if err != nil {
 		return nil, err
@@ -1529,10 +1849,17 @@ func (s *WorkspaceStore) IndexedWorkspaceURLs(ctx context.Context) ([]string, er
 	return out, rows.Err()
 }
 
-// IDBySlug resolves a workspace id from its slug ("" when unknown).
+// IDBySlug resolves a LIVE workspace id from its slug ("" when unknown).
+//
+// `deleted_at IS NULL` is load-bearing, not defensive: the slug index covers live
+// rows only, so a trashed workspace and a live one can hold the same slug at the
+// same time. Without the filter this query could resolve the TRASHED id, and
+// every caller (the public storefront root, the legal-page host, order routing)
+// would then serve a binned workspace's data.
 func (s *WorkspaceStore) IDBySlug(ctx context.Context, slug string) (string, error) {
 	var id string
-	err := s.pool.QueryRow(ctx, `SELECT id FROM workspaces WHERE slug=$1`, slug).Scan(&id)
+	err := s.pool.QueryRow(ctx,
+		`SELECT id FROM workspaces WHERE slug=$1 AND deleted_at IS NULL`, slug).Scan(&id)
 	if err != nil {
 		return "", err
 	}
@@ -1609,11 +1936,16 @@ func (s *WorkspaceStore) PublicHostSlugByAccount(ctx context.Context, accountID 
 //
 // There is deliberately no account-slug fallback: a workspace is served on its
 // workspace subdomain and nothing else (see PublicHostSlugByAccount).
+//
+// The join excludes a TRASHED workspace: its slug may have been re-claimed by a
+// live workspace, and building a public URL from the binned row would point at a
+// host that no longer serves this account. A trashed workspace resolves to "",
+// which callers already handle (they fall back rather than emitting a dead link).
 func (s *WorkspaceStore) WorkspaceSlugByAccount(ctx context.Context, accountID string) (string, error) {
 	var slug string
 	err := s.pool.QueryRow(ctx,
 		`SELECT sp.slug FROM accounts a JOIN workspaces sp ON sp.id = a.workspace_id
-		  WHERE a.id=$1`, accountID).Scan(&slug)
+		  WHERE a.id=$1 AND sp.deleted_at IS NULL`, accountID).Scan(&slug)
 	if err != nil {
 		return "", err
 	}

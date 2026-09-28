@@ -79,7 +79,17 @@ export const API_ERROR_KEYS: Record<string, Key> = {
   reserved_subdomain: "workspace.slugReserved",
   // A refused workspace DELETE. The page's own sentence ("We couldn't delete this
   // workspace.") hides WHY, and the why is actionable: the blockers list.
-  "workspace.notEmpty": "apiErr.workspaceNotEmpty",
+  //
+  // RETIRED WITH ITS GUARD (workspace trash): the DELETE no longer refuses on
+  // content, so the server never emits this code any more. Kept OUT of the map
+  // deliberately — apiErr.test.ts fails on a mapping for a code errcode.go no
+  // longer declares, which is what stops this entry rotting into a translation
+  // nothing can reach. The dictionary row is reused by the TRASH view's copy.
+  // "workspace.notEmpty": "apiErr.workspaceNotEmpty",
+  //
+  // A refused permanent PURGE: the workspace was ever sold, and a purge destroys
+  // the merchant's record of money received. The count is in the body.
+  "workspace.hasSales": "apiErr.workspaceHasSales",
 
   // Roles / key scope.
   "role.manageRequired": "apiErr.manageRequired",

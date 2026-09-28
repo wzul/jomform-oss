@@ -180,6 +180,7 @@ func (s *WorkspaceStore) ActiveWorkspaces(ctx context.Context, days int) ([]Acti
 		LEFT JOIN users u ON u.id = sp.owner_user_id
 		LEFT JOIN sales sl ON sl.workspace_id = sp.id AND sl.created_at >= $1
 		LEFT JOIN submissions sb ON sb.form_id IN (SELECT id FROM forms WHERE workspace_id = sp.id) AND sb.created_at >= $1
+		WHERE sp.deleted_at IS NULL
 		GROUP BY sp.id, sp.name, sp.slug, u.email
 		HAVING GREATEST(COALESCE(MAX(sl.created_at), 'epoch'::timestamptz),
 		                COALESCE(MAX(sb.created_at), 'epoch'::timestamptz)) > 'epoch'::timestamptz

@@ -130,11 +130,14 @@ func wsDeleteEvents(t *testing.T, accountID string) (int, map[string]any) {
 // TestRESTWorkspaceDeleteRecordsEventUnscoped is the regression test for the
 // defect: the UI's own request shape (no ?workspace= scope) must leave exactly
 // one workspace.deleted row, carrying the workspace identity and the per-table
-// counts, attributed to an account that still exists.
+// counts, attributed to an account the caller can still read the event through.
 //
-// It fails on the pre-fix code by construction: the write is attributed to the
-// deleted account and Postgres refuses it with 23503, so the count is 0 while
-// the DELETE itself still answers 200.
+// It fails on the pre-fix code by construction: the write was attributed to the
+// account the DELETE removed, and Postgres refused it with 23503 while the
+// DELETE itself still answered 200. Under the trash the FK does not fire (the
+// row survives) but the account is parked in the bin, so the same test still
+// bites — attribution must reach a LIVE account, which is what makes the event
+// visible in the merchant's audit view.
 func TestRESTWorkspaceDeleteRecordsEventUnscoped(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping DB-backed REST workspace test in -short mode")
@@ -149,20 +152,23 @@ func TestRESTWorkspaceDeleteRecordsEventUnscoped(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("DELETE /v1/workspaces/{id} = %d (%s)", rec.Code, rec.Body.String())
 	}
-	// The delete must have happened — otherwise the assertion below could pass
-	// on a no-op.
+	// The workspace must be BINNED, and every row kept. The old version of this
+	// assertion checked the row was GONE; under the trash the equivalent
+	// pre-condition is `deleted_at IS NOT NULL`, and the account surviving is
+	// exactly why the audit write can no longer fail the way it used to.
 	var exists int
-	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM workspaces WHERE id=$1`, doomed.ID).Scan(&exists); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM workspaces WHERE id=$1 AND deleted_at IS NOT NULL`, doomed.ID).Scan(&exists); err != nil {
 		t.Fatalf("count workspaces: %v", err)
 	}
-	if exists != 0 {
-		t.Fatalf("the workspace was not deleted, so this test proves nothing")
+	if exists != 1 {
+		t.Fatalf("the workspace was not binned, so this test proves nothing")
 	}
-	// The doomed account is really gone — that is the whole reason the pre-fix
-	// event write failed.
-	if acc, err := dbstore.NewAccountStore(pool).ByID(ctx, doomedAccID); err == nil && acc != nil {
-		t.Errorf("the doomed workspace's account %s still exists; the fixture did not "+
-			"reproduce the defect shape", doomedAccID)
+	// The workspace's account SURVIVES the move to the bin — that is the card's
+	// promise (the CHIP credentials are never orphaned) and it is also why this
+	// event can be filed against a row that still exists.
+	if acc, err := dbstore.NewAccountStore(pool).ByID(ctx, doomedAccID); err != nil || acc == nil {
+		t.Errorf("the binned workspace's account %s is gone (err=%v); the trash must keep every "+
+			"row — its CHIP credentials are not destroyed by a move to the bin", doomedAccID, err)
 	}
 
 	n, props := wsDeleteEvents(t, survivorAccID)
@@ -195,14 +201,18 @@ func TestRESTWorkspaceDeleteRecordsEventUnscoped(t *testing.T) {
 				k, del[k], want, props)
 		}
 	}
-	// The attributed account must be LIVE — that is the FK the pre-fix code violated.
+	// The attributed account must be LIVE, not merely present. Under the trash
+	// every account row survives, so an existence check would pass on exactly the
+	// mis-filing this test exists to catch: the event parked on the workspace that
+	// was just put away.
 	var live bool
 	if err := pool.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM accounts WHERE id=$1)`, survivorAccID).Scan(&live); err != nil {
+		`SELECT EXISTS (SELECT 1 FROM accounts a JOIN workspaces sp ON sp.id = a.workspace_id
+		                 WHERE a.id=$1 AND sp.deleted_at IS NULL)`, survivorAccID).Scan(&live); err != nil {
 		t.Fatalf("check surviving account: %v", err)
 	}
 	if !live {
-		t.Fatalf("the account the event was attributed to (%s) does not exist", survivorAccID)
+		t.Fatalf("the account the event was attributed to (%s) is not on a live workspace", survivorAccID)
 	}
 }
 
@@ -281,18 +291,24 @@ func TestRESTWorkspaceDeleteEventIsRecordedOncePerDelete(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("%s: DELETE = %d (%s)", tag, rec.Code, rec.Body.String())
 		}
-		// The JSON the UI reads must be unchanged by the reorder.
+		// The JSON is unchanged in shape but names the bin: the action is still
+		// "delete" from the merchant's side, and the payload now also says the
+		// workspace can be brought back.
 		var out struct {
-			Status  string           `json:"status"`
-			ID      string           `json:"id"`
-			Slug    string           `json:"slug"`
-			Deleted map[string]int64 `json:"deleted"`
+			Status     string           `json:"status"`
+			ID         string           `json:"id"`
+			Slug       string           `json:"slug"`
+			Restorable bool             `json:"restorable"`
+			Deleted    map[string]int64 `json:"deleted"`
 		}
 		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 			t.Fatalf("%s: decode response %s: %v", tag, rec.Body.String(), err)
 		}
-		if out.Status != "deleted" || out.ID != doomed.ID || out.Slug != doomed.Slug {
-			t.Errorf("%s: response = %+v, want status=deleted id=%s slug=%s", tag, out, doomed.ID, doomed.Slug)
+		if out.Status != "trashed" || out.ID != doomed.ID || out.Slug != doomed.Slug {
+			t.Errorf("%s: response = %+v, want status=trashed id=%s slug=%s", tag, out, doomed.ID, doomed.Slug)
+		}
+		if !out.Restorable {
+			t.Errorf("%s: response restorable = false, want true — the row went to the bin, not away", tag)
 		}
 		if out.Deleted["accounts"] != 1 || out.Deleted["workspaces"] != 1 {
 			t.Errorf("%s: response deleted = %v, want accounts:1 workspaces:1", tag, out.Deleted)
@@ -344,30 +360,23 @@ func TestRESTWorkspaceDeleteEventIsReadableThroughTheAuditLog(t *testing.T) {
 	}
 }
 
-// TestRESTWorkspaceDeleteEventWithNoSurvivingAccountSkipsInsteadOfFailing is the
-// case a live run against the real API surfaced: a caller whose ONLY account
-// belongs to the workspace being deleted, with a second, ACCOUNT-LESS workspace
-// beside it. The "one workspace must remain" guard is satisfied by that empty
-// workspace, so the delete legitimately proceeds — but there is then no account
-// left to file an event under.
+// TestRESTWorkspaceDeleteEventSkipsWhenNoLiveAccountRemains pins the one case
+// where the delete's audit event is deliberately NOT written: the caller has no
+// LIVE account of their own left.
 //
-// That case must not be handled by writing anyway: the insert would be refused
-// with events_account_id_fkey (SQLSTATE 23503) and the refusal swallowed, which
-// is the very shape of the original defect (a delete that looks audited and is
-// not). It must SKIP, and say so.
+// The fixture is the old defect shape — the binned workspace owns the user's
+// ONLY account, beside a second workspace with no account at all. The
+// last-workspace guard is satisfied by that empty workspace, so the bin
+// proceeds; but every account the caller has is now parked in the trash, and
+// events are read through the account scope. Filing the row would store the
+// audit trail inside the thing that was just put away, where the merchant's
+// live audit view cannot reach it.
 //
-// A zero-row count CANNOT tell a deliberate skip from a swallowed FK failure —
-// both write nothing. So the skip is asserted POSITIVELY, three ways:
-//
-//  1. auditAccountAfterDelete itself returns "" (the resolution step names no
-//     account, rather than the write step failing on one),
-//  2. the deliberate-skip log line is present,
-//  3. NO events-FK refusal appears in the audit path's log.
-//
-// Plus a positive control proving (3) is not vacuous: the same fixture's dead
-// account really does refuse an event insert with events_account_id_fkey, so a
-// write-anyway implementation would necessarily leave that marker in the log.
-func TestRESTWorkspaceDeleteEventWithNoSurvivingAccountSkipsInsteadOfFailing(t *testing.T) {
+// So it must SKIP, and say so. A zero-row count CANNOT tell a deliberate skip
+// from a swallowed failure — both write nothing — so the skip is asserted
+// POSITIVELY: the resolution step names no account, and the deliberate-skip log
+// line is present.
+func TestRESTWorkspaceDeleteEventSkipsWhenNoLiveAccountRemains(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping DB-backed REST workspace test in -short mode")
 	}
@@ -382,13 +391,13 @@ func TestRESTWorkspaceDeleteEventWithNoSurvivingAccountSkipsInsteadOfFailing(t *
 
 	userID := mkWsUser(t, pool, "ws-event-noacc")
 	sp := dbstore.NewWorkspaceStore(pool)
-	// The doomed workspace owns the user's ONLY account (created via Create).
+	// The binned workspace owns the user's ONLY account (created via Create).
 	doomed, err := sp.Create(ctx, userID, "Only account", "ws-noacc-one-"+userID[:6])
 	if err != nil {
 		t.Fatalf("create workspace 1: %v", err)
 	}
 	// A second workspace with NO account: it satisfies the last-workspace guard
-	// without giving the caller an account to attribute anything to.
+	// without giving the caller a live account to attribute anything to.
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO workspaces (owner_user_id, name, slug) VALUES ($1,'Accountless','ws-noacc-two-'||substr(md5(random()::text),1,8))`,
 		userID); err != nil {
@@ -404,30 +413,29 @@ func TestRESTWorkspaceDeleteEventWithNoSurvivingAccountSkipsInsteadOfFailing(t *
 		t.Fatalf("create session: %v", err)
 	}
 
-	// Precondition: after this delete the caller really has no account left.
 	rec := sessionReq(t, h, token, http.MethodDelete, "/v1/workspaces/"+doomed.ID,
 		`{"confirm_slug":"`+doomed.Slug+`"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("DELETE /v1/workspaces/{id} = %d (%s) — an empty second workspace "+
 			"should let this through the one-workspace guard", rec.Code, rec.Body.String())
 	}
-	var accountsLeft int
-	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM accounts WHERE owner_user_id=$1`, userID).Scan(&accountsLeft); err != nil {
-		t.Fatalf("count accounts: %v", err)
+	// The account row is still there (the bin destroys nothing) — the point is
+	// that it is not LIVE, which is a different question.
+	if acc, err := dbstore.NewAccountStore(pool).ByID(ctx, doomedAccID); err != nil || acc == nil {
+		t.Fatalf("the binned workspace's account %s is gone (err=%v); the trash must keep every row",
+			doomedAccID, err)
 	}
-	if accountsLeft != 0 {
-		t.Fatalf("accounts left = %d, want 0 — the fixture did not reach the no-survivor case", accountsLeft)
-	}
-	// (1) The resolution step must name NO account. This is the skip asserted at
-	// its source: a fallback that had picked something would return a non-empty
-	// id here and the write would be attempted.
+	// (1) The resolution step must name NO account, because the caller has none
+	// left that is live. A predicate that accepted the binned row would return a
+	// non-empty id here and the mis-filing would happen.
 	auditReq := httptest.NewRequest(http.MethodDelete, "/v1/workspaces/"+doomed.ID, nil)
 	auditReq.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
 	if got := h.auditAccountAfterDelete(auditReq, userID, doomedAccID); got != "" {
-		t.Errorf("auditAccountAfterDelete returned %q, want \"\" — the caller has no surviving "+
-			"account of their own, so there is nothing to attribute the event to", got)
+		t.Errorf("auditAccountAfterDelete returned %q, want \"\" — the caller's only account is now "+
+			"in the bin, so there is no LIVE account to file this event under", got)
 	}
-	// Zero rows, as before.
+	// (2) Zero rows anywhere: the event belongs to no live account of the
+	// caller's, and must never be borrowed onto another tenancy.
 	var n int
 	if err := pool.QueryRow(ctx,
 		`SELECT COUNT(*) FROM events WHERE event_name='workspace.deleted' AND properties->>'workspace_id'=$1`,
@@ -435,29 +443,15 @@ func TestRESTWorkspaceDeleteEventWithNoSurvivingAccountSkipsInsteadOfFailing(t *
 		t.Fatalf("count events: %v", err)
 	}
 	if n != 0 {
-		t.Errorf("workspace.deleted rows = %d for a delete that left no account — a row "+
-			"attributed to no surviving account cannot have landed", n)
+		t.Errorf("workspace.deleted rows = %d for a delete that left no LIVE account — the event "+
+			"must be skipped, not parked in the bin or filed against another tenant", n)
 	}
-	// (2) The skip must be a stated decision.
+	// (3) And the skip must be a stated decision, not a swallowed failure.
 	if !strings.Contains(logs.String(), "workspace_deleted_event_skipped") {
 		t.Errorf("the deliberate skip was not logged, so a swallowed failure would look the "+
 			"same; audit log was:\n%s", logs.String())
 	}
-	// (3) And nothing in the audit path was refused by the FK.
 	assertNoFKEventRefusal(t, logs)
-
-	// Positive control: the dead account really does refuse an event insert, so
-	// (3) above is a real assertion rather than a vacuous one. This is exactly
-	// the SQLSTATE a write-anyway implementation would log.
-	ctlErr := h.Events.Record(ctx, doomedAccID, userID, "workspace.deleted", nil, "", "")
-	if ctlErr == nil {
-		t.Fatal("control failed: an event insert against the deleted account SUCCEEDED, so this " +
-			"fixture is not the FK shape and the no-FK-error assertion above proves nothing")
-	}
-	if !strings.Contains(ctlErr.Error(), "events_account_id_fkey") {
-		t.Errorf("control: the refused insert failed with %v, want events_account_id_fkey — the "+
-			"FK premise of this test is not what it claims", ctlErr)
-	}
 }
 
 // assertNoFKEventRefusal fails when the captured log carries an events-account FK
@@ -573,12 +567,29 @@ func TestRESTWorkspaceDeleteEventNeverLandsOnAStrangerAccount(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("DELETE /v1/workspaces/{id} = %d (%s)", rec.Code, rec.Body.String())
 	}
-	var accountsLeft int
-	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM accounts WHERE owner_user_id=$1`, userID).Scan(&accountsLeft); err != nil {
+	// Precondition, in the trash's terms: the caller has no LIVE account left.
+	// The old form of this check counted rows and expected zero, because the hard
+	// delete removed them. The bin keeps the row, so counting rows would now be
+	// satisfied by the very account we are proving must not be used — the
+	// question is whether any of the caller's accounts is still live.
+	var liveLeft int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM accounts WHERE owner_user_id=$1`,
+		userID).Scan(&liveLeft); err != nil {
 		t.Fatalf("count accounts: %v", err)
 	}
-	if accountsLeft != 0 {
-		t.Fatalf("accounts left = %d, want 0 — the fixture did not reach the no-own-account case", accountsLeft)
+	if liveLeft == 0 {
+		t.Fatalf("the fixture has NO account at all, so it does not exercise the " +
+			"no-live-account case this test is about")
+	}
+	var liveOnLiveWS int
+	if err := pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM accounts a JOIN workspaces sp ON sp.id = a.workspace_id
+		  WHERE a.owner_user_id=$1 AND sp.deleted_at IS NULL`, userID).Scan(&liveOnLiveWS); err != nil {
+		t.Fatalf("count live accounts: %v", err)
+	}
+	if liveOnLiveWS != 0 {
+		t.Fatalf("live accounts left = %d, want 0 — the fixture did not reach the no-live-account case",
+			liveOnLiveWS)
 	}
 	// The stranger's audit log must be untouched.
 	if n, props := wsDeleteEvents(t, strangerAcc); n != 0 {
@@ -777,13 +788,19 @@ func TestRESTWorkspaceDeleteEventScopedToAStrangersWorkspaceStaysOwned(t *testin
 	if rec.Code != http.StatusOK {
 		t.Fatalf("scoped DELETE /v1/workspaces/{id} = %d (%s)", rec.Code, rec.Body.String())
 	}
-	// The delete must have happened — otherwise this proves nothing.
+	// The delete must have happened — otherwise this proves nothing. Under the
+	// trash the equivalent pre-condition is `deleted_at IS NOT NULL`, not
+	// "the row is gone": every row survives a move to the bin, so a COUNT of
+	// rows would read 1 either way and a hard-delete premise here would fail on
+	// the bin rather than on the leak this test is about.
 	var exists int
-	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM workspaces WHERE id=$1`, doomed.ID).Scan(&exists); err != nil {
+	if err := pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM workspaces WHERE id=$1 AND deleted_at IS NOT NULL`,
+		doomed.ID).Scan(&exists); err != nil {
 		t.Fatalf("count workspaces: %v", err)
 	}
-	if exists != 0 {
-		t.Fatal("the workspace was not deleted, so this test proves nothing")
+	if exists != 1 {
+		t.Fatal("the workspace was not binned, so this test proves nothing")
 	}
 	// The stranger's audit log must be untouched.
 	if n, props := wsDeleteEvents(t, strangerAcc); n != 0 {

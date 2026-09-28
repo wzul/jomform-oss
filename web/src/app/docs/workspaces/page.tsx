@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 export const metadata: Metadata = {
   title: "Workspaces — JomForm Docs",
   description:
-    "What a workspace owns, its public address, how you create one, and the three conditions a permanent delete has to meet.",
+    "What a workspace owns, its public address, how you create one, and what moving one to the Trash (and deleting it for good) requires.",
   alternates: { canonical: "https://jomform.com/docs/workspaces" },
 };
 
@@ -57,12 +57,14 @@ const SECTIONS: Section[] = [
     id: "delete-workspace",
     title: "Deleting a workspace",
     body: [
-      "A workspace is deleted with a typed confirmation — you type the workspace's own address (slug) back — because the delete is permanent and takes the workspace's payment account with it.",
-      "Three rules decide whether it may go. Only the OWNER may delete it: an admin member manages a workspace but does not own its identity, its sales history or its payment account, and leaves through Settings → Members instead.",
-      "You must have at least one other workspace, because a user always needs one — the last workspace can never be deleted, and the button is disabled with the reason stated rather than failing after you press it.",
-      "And the workspace must be empty: forms (including anything still in the Trash), products, sales, custom domains, webhooks, live API keys and subscriptions each block it, and the refusal lists every blocking category with its count. Sales especially are never destroyed — a delete takes the account and its trading history with it, so sales block the delete instead of being silently discarded.",
-      "To empty a workspace, open the Forms page, switch to Trash and delete a form for good; a form that has been sold refuses that permanent delete, because removing it would silently detach the sale.",
-      "Settings → Workspace shows the identity and the Danger zone; AI agents use delete_workspace, with check_workspace_deletion as the read-only pre-flight that reports the same blockers.",
+      // PR 804 (the workspace trash): a delete is a MARK, not a destroy. The
+      // hard delete moved into Purge, which is a second, separate step.
+      "A workspace is moved to the Trash with a typed confirmation — you type the workspace's own address (slug) back. Nothing is destroyed by that move: the workspace's forms, products, sales, payment account and API keys all stay exactly as they were, and it simply disappears from your workspace list and from the switcher.",
+      "Two rules decide whether it may go. Only the OWNER may move it: an admin member manages a workspace but does not own its identity, its sales history or its payment account, and leaves through Settings → Members instead.",
+      "You must have at least one other workspace, because a user always needs one — the last workspace can never go to the Trash, and the button is disabled with the reason stated rather than failing after you press it. A workspace that still holds content moves just as freely; there is nothing to empty first.",
+      "From Trash you can restore a workspace whole, and its original address comes back with it — unless another workspace has taken that address while it sat in the Trash, in which case the restore is refused and you are told which name to deal with rather than having your workspace silently renamed.",
+      "Deleting for good is a separate, second step: it only works on a workspace already in the Trash, it asks you to type the slug again, it refuses a workspace that has sales (sales are never destroyed or silently detached), and it cannot be undone.",
+      "Settings → Workspace shows the identity and the Danger zone; AI agents use delete_workspace with check_workspace_deletion as the read-only pre-flight, list_trashed_workspaces and restore_workspace for the bin, and purge_workspace for the permanent step — which is offered to people only, never proposed by the assistant.",
     ],
   },
 ];
@@ -73,7 +75,8 @@ export default function WorkspacesDocsPage() {
       <h1 className="text-3xl font-bold tracking-tight text-slate-900">Workspaces</h1>
       <p className="mt-3 text-sm leading-relaxed text-slate-600">
         A workspace is the tenant everything you build lives in. This page covers what it owns, its
-        public address, how you get one, and exactly what deleting one requires.
+        public address, how you get one, and exactly what moving one to the Trash — or deleting it
+        for good — requires.
       </p>
 
       {SECTIONS.map((s) => (

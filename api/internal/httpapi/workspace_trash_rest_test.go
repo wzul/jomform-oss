@@ -312,6 +312,12 @@ func TestRESTPurgeRefusedForReadonlyKeyAndStillReads(t *testing.T) {
 // — a workspace delete over REST is a dashboard action, while the API-key path
 // is the MCP tools. The cookie comes from the real session store so this drives
 // the same code prod does.
+//
+// THE DELETE BINS, IT DOES NOT DESTROY. Every "the row is still there"
+// assertion below is paired with a deleted_at assertion, because a trash and a
+// delete are indistinguishable from the status code: the only way to tell the
+// card's promise ("Keep every row") from the old behaviour is to read the
+// column.
 func TestRESTWorkspaceDeleteRequiresOwnerAndConfirm(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping DB-backed REST workspace test in -short mode")
@@ -338,7 +344,7 @@ func TestRESTWorkspaceDeleteRequiresOwnerAndConfirm(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 
-	// No confirmation → refused, row intact.
+	// No confirmation → refused, row intact and LIVE.
 	rec := sessionReq(t, h, token, http.MethodDelete, "/v1/workspaces/"+first.ID, "")
 	if rec.Code == http.StatusOK {
 		t.Error("DELETE /v1/workspaces/{id} without confirm_slug returned 200")
@@ -349,15 +355,17 @@ func TestRESTWorkspaceDeleteRequiresOwnerAndConfirm(t *testing.T) {
 	if rec.Code == http.StatusOK {
 		t.Error("DELETE /v1/workspaces/{id} with a mismatched confirm_slug returned 200")
 	}
-	var n int
-	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM workspaces WHERE id=$1`, first.ID).Scan(&n); err != nil {
+	live, binned := 0, 0
+	if err := pool.QueryRow(ctx,
+		`SELECT COUNT(*) FILTER (WHERE deleted_at IS NULL), COUNT(*) FILTER (WHERE deleted_at IS NOT NULL)
+		   FROM workspaces WHERE id=$1`, first.ID).Scan(&live, &binned); err != nil {
 		t.Fatalf("count: %v", err)
 	}
-	if n != 1 {
-		t.Fatal("an unconfirmed workspace delete removed the row")
+	if live != 1 || binned != 0 {
+		t.Fatal("an unconfirmed workspace delete changed the row")
 	}
 
-	// The pre-flight read agrees it is deletable, and names the last-workspace rule.
+	// The pre-flight read agrees it is binnable, and names the last-workspace rule.
 	rec = sessionReq(t, h, token, http.MethodGet, "/v1/workspaces/"+first.ID+"/deletion-check", "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /v1/workspaces/{id}/deletion-check = %d (%s)", rec.Code, rec.Body.String())
@@ -375,24 +383,98 @@ func TestRESTWorkspaceDeleteRequiresOwnerAndConfirm(t *testing.T) {
 		t.Errorf("pre-flight = %+v, want can_delete/empty/is_owner true and last_workspace false", chk)
 	}
 
-	// With two workspaces and the confirmation → deleted.
+	// With two workspaces and the confirmation → BINNED, and the response says so.
 	rec = sessionReq(t, h, token, http.MethodDelete, "/v1/workspaces/"+first.ID,
 		`{"confirm_slug":"`+first.Slug+`"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("confirmed DELETE /v1/workspaces/{id} = %d (%s)", rec.Code, rec.Body.String())
 	}
-	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM workspaces WHERE id=$1`, first.ID).Scan(&n); err != nil {
-		t.Fatalf("count: %v", err)
+	var delBody map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &delBody); err != nil {
+		t.Fatalf("delete response is not JSON: %v (%s)", err, rec.Body.String())
 	}
-	if n != 0 {
-		t.Fatal("confirmed delete returned 200 but the workspace row is still there")
+	if got := delBody["status"]; got != "trashed" {
+		t.Errorf("delete status = %v, want \"trashed\" — the route moves the workspace to the bin, "+
+			"it does not destroy it", got)
+	}
+	if got := delBody["restorable"]; got != true {
+		t.Errorf("delete response restorable = %v, want true — the dashboard renders this", got)
+	}
+	// THE ROW IS STILL THERE, and marked. This is the card's whole point.
+	if err := pool.QueryRow(ctx,
+		`SELECT COUNT(*) FILTER (WHERE deleted_at IS NULL), COUNT(*) FILTER (WHERE deleted_at IS NOT NULL)
+		   FROM workspaces WHERE id=$1`, first.ID).Scan(&live, &binned); err != nil {
+		t.Fatalf("count after delete: %v", err)
+	}
+	if live != 0 || binned != 1 {
+		t.Fatalf("workspaces live/binned = %d/%d after the delete, want 0/1 — the delete must "+
+			"MARK the workspace (keep every row), not remove it", live, binned)
+	}
+	if n := countRowsREST(t, pool, `SELECT COUNT(*) FROM accounts WHERE workspace_id=$1`, first.ID); n != 1 {
+		t.Errorf("accounts left on the binned workspace = %d, want 1 — its CHIP account must survive "+
+			"the move to the bin", n)
 	}
 
-	// The LAST workspace is refused, and the pre-flight says so.
+	// The binned workspace is out of the live list and in the trash listing.
+	rec = sessionReq(t, h, token, http.MethodGet, "/v1/workspaces/trash", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /v1/workspaces/trash = %d (%s) — the literal route did not win", rec.Code, rec.Body.String())
+	}
+	var bin []struct {
+		ID        string `json:"id"`
+		Slug      string `json:"slug"`
+		DeletedAt string `json:"deleted_at"`
+		CanPurge  bool   `json:"can_purge"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &bin); err != nil {
+		t.Fatalf("decode trash listing %s: %v", rec.Body.String(), err)
+	}
+	var found bool
+	for _, it := range bin {
+		if it.ID == first.ID {
+			found = true
+			if it.DeletedAt == "" {
+				t.Error("the binned workspace has no deleted_at in the REST trash listing")
+			}
+			if !it.CanPurge {
+				t.Error("a never-sold binned workspace reported can_purge=false")
+			}
+		}
+		if it.ID == second.ID {
+			t.Error("a LIVE workspace appeared in the workspace trash listing")
+		}
+	}
+	if !found {
+		t.Fatalf("the binned workspace is missing from the REST trash listing: %s", rec.Body.String())
+	}
+
+	// Restore brings it back, live again.
+	rec = sessionReq(t, h, token, http.MethodPost, "/v1/workspaces/"+first.ID+"/restore", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /v1/workspaces/{id}/restore = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if err := pool.QueryRow(ctx,
+		`SELECT COUNT(*) FILTER (WHERE deleted_at IS NULL), COUNT(*) FILTER (WHERE deleted_at IS NOT NULL)
+		   FROM workspaces WHERE id=$1`, first.ID).Scan(&live, &binned); err != nil {
+		t.Fatalf("count after restore: %v", err)
+	}
+	if live != 1 || binned != 0 {
+		t.Errorf("workspaces live/binned = %d/%d after the restore, want 1/0 — restore returned 200 "+
+			"but the workspace is still in the bin", live, binned)
+	}
+
+	// The LAST workspace is refused, and the pre-flight says so. `first` was
+	// restored above, so binning it again first is what makes `second` the last
+	// LIVE workspace — the guard counts live ones.
+	rec = sessionReq(t, h, token, http.MethodDelete, "/v1/workspaces/"+first.ID,
+		`{"confirm_slug":"`+first.Slug+`"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("re-bin first = %d (%s)", rec.Code, rec.Body.String())
+	}
 	rec = sessionReq(t, h, token, http.MethodDelete, "/v1/workspaces/"+second.ID,
 		`{"confirm_slug":"`+second.Slug+`"}`)
 	if rec.Code == http.StatusOK {
-		t.Error("the LAST workspace was deleted — the \"at least one workspace\" rule is not enforced on REST")
+		t.Error("the LAST live workspace was deleted — the \"at least one workspace\" rule is not enforced on REST")
 	}
 	rec = sessionReq(t, h, token, http.MethodGet, "/v1/workspaces/"+second.ID+"/deletion-check", "")
 	if err := json.Unmarshal(rec.Body.Bytes(), &chk); err != nil {
@@ -454,6 +536,18 @@ func TestRESTWorkspaceDeleteRefusedForNonOwner(t *testing.T) {
 	if n != 1 {
 		t.Fatal("the refused delete removed the workspace anyway")
 	}
+}
+
+// countRowsREST counts one row set through the test pool — the assertion
+// primitive for every "this row survived" claim in this file, since a trash and
+// a delete are indistinguishable from a status code.
+func countRowsREST(t *testing.T, pool *pgxpool.Pool, sql string, args ...any) int {
+	t.Helper()
+	var n int
+	if err := pool.QueryRow(context.Background(), sql, args...).Scan(&n); err != nil {
+		t.Fatalf("count (%s): %v", sql, err)
+	}
+	return n
 }
 
 func mkWsUser(t *testing.T, pool *pgxpool.Pool, tag string) string {
@@ -568,12 +662,17 @@ func TestRESTTrashRefusalsCarryTheirMachineCode(t *testing.T) {
 	}
 }
 
-// TestRESTWorkspaceDeleteRefusalCarriesItsCode is the third converted site: the
-// DELETE /v1/workspaces/{id} 409 for a workspace that still owns content. It is a
-// writeJSON literal map (not writeErr) because it also carries `blockers`, so the
-// `code` had to be added alongside them — and both must survive together, or the
-// UI either loses the reason or loses the list of obstacles.
-func TestRESTWorkspaceDeleteRefusalCarriesItsCode(t *testing.T) {
+// TestRESTWorkspacePurgeRefusalCarriesItsCode replaces the old
+// workspace.notEmpty assertion. That code retired with its guard: the DELETE no
+// longer refuses on content at all, so there is no 409 to carry it. The refusal
+// that still needs a machine code on this transport is the permanent PURGE of a
+// workspace that has been SOLD — a writeJSON literal map (not writeErr) because
+// it also carries `sales_count`, so the `code` had to be added alongside it and
+// both must survive together.
+//
+// The route is SESSION-only and deliberately has NO MCP tool: Wan's rule is that
+// the assistant may move things to the bin and never destroy them.
+func TestRESTWorkspacePurgeRefusalCarriesItsCode(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping DB-backed REST workspace test in -short mode")
 	}
@@ -586,57 +685,90 @@ func TestRESTWorkspaceDeleteRefusalCarriesItsCode(t *testing.T) {
 
 	userID := mkWsUser(t, pool, "rest-ws-code")
 	sp := dbstore.NewWorkspaceStore(pool)
-	keep, err := sp.Create(ctx, userID, "REST WS Keep", "rest-ws-k-"+userID[:6])
-	if err != nil {
+	if _, err := sp.Create(ctx, userID, "REST WS Keep", "rest-ws-k-"+userID[:6]); err != nil {
 		t.Fatalf("create keep workspace: %v", err)
 	}
-	target, err := sp.Create(ctx, userID, "REST WS Full", "rest-ws-f-"+userID[:6])
+	target, err := sp.Create(ctx, userID, "REST WS Sold", "rest-ws-f-"+userID[:6])
 	if err != nil {
 		t.Fatalf("create target workspace: %v", err)
 	}
-	// A live form in the target is a blocker (`forms` counts trashed ones too).
 	var targetAccount string
 	if err := pool.QueryRow(ctx, `SELECT id FROM accounts WHERE workspace_id=$1`, target.ID).Scan(&targetAccount); err != nil {
 		t.Fatalf("read target account: %v", err)
 	}
-	fs := dbstore.NewFormStore(pool)
-	if err := fs.Create(ctx, &dbstore.Form{
-		AccountID: targetAccount, Slug: "rest-ws-block-" + userID[:6], Title: "Blocker", Status: dbstore.FormStatusDraft,
-	}); err != nil {
-		t.Fatalf("create blocking form: %v", err)
+	// A SALE in the target: this is what refuses the permanent delete.
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO sales (account_id, ref_code, client, items, subtotal_sen, total_sen, sale_type, payment_method, status)
+		 VALUES ($1, $2, '{}'::jsonb, '[]'::jsonb, 100, 100, 'one_time', 'chip', 'paid')`,
+		targetAccount, "IT-WSPURGE-"+targetAccount[:8]); err != nil {
+		t.Fatalf("seed sale: %v", err)
 	}
 	token, err := sess.Create(ctx, userID)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
-	_ = keep
 
-	rec := sessionReq(t, h, token, http.MethodDelete, "/v1/workspaces/"+target.ID,
+	// A LIVE workspace cannot be purged at all — the only way in is trash.
+	rec := sessionReq(t, h, token, http.MethodDelete, "/v1/workspaces/"+target.ID+"/purge",
+		`{"confirm_slug":"`+target.Slug+`"}`)
+	if rec.Code == http.StatusOK {
+		t.Fatalf("DELETE /v1/workspaces/{id}/purge accepted a LIVE workspace: %d (%s)",
+			rec.Code, rec.Body.String())
+	}
+
+	// Bin it, then try to destroy it. The refusal must carry the machine code and
+	// the count, and must destroy nothing.
+	rec = sessionReq(t, h, token, http.MethodDelete, "/v1/workspaces/"+target.ID,
+		`{"confirm_slug":"`+target.Slug+`"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("bin the workspace = %d (%s)", rec.Code, rec.Body.String())
+	}
+	rec = sessionReq(t, h, token, http.MethodDelete, "/v1/workspaces/"+target.ID+"/purge",
 		`{"confirm_slug":"`+target.Slug+`"}`)
 	if rec.Code != http.StatusConflict {
-		t.Fatalf("DELETE a non-empty workspace = %d, want 409 (%s)", rec.Code, rec.Body.String())
+		t.Fatalf("purge of a sold workspace = %d, want 409 (%s)", rec.Code, rec.Body.String())
 	}
 	var body map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("workspace refusal is not JSON: %v (%s)", err, rec.Body.String())
+		t.Fatalf("workspace purge refusal is not JSON: %v (%s)", err, rec.Body.String())
 	}
-	if got := body["code"]; got != CodeWorkspaceNotEmpty {
-		t.Errorf("workspace refusal code = %v, want %q — without it the dashboard "+
-			"prints \"we couldn't delete this workspace\" and never says why", got, CodeWorkspaceNotEmpty)
+	if got := body["code"]; got != CodeWorkspaceHasSales {
+		t.Errorf("purge refusal code = %v, want %q — without it the dashboard prints "+
+			"\"we couldn't delete this workspace\" and never says the sales are why", got, CodeWorkspaceHasSales)
 	}
-	// The blockers list is what the page renders beside the sentence; `code` was
-	// added NEXT TO it.
-	blockers, ok := body["blockers"].([]any)
-	if !ok || len(blockers) == 0 {
-		t.Errorf("workspace refusal blockers = %v, want the non-empty obstacle list "+
-			"(the code was added alongside it, not instead of it)", body["blockers"])
+	// The count is part of the refusal (the UI reads it); `code` was added NEXT
+	// TO it, not instead of it.
+	if got, ok := body["sales_count"].(float64); !ok || got < 1 {
+		t.Errorf("purge refusal sales_count = %v, want >= 1 (the code was added alongside it)", body["sales_count"])
 	}
-	var n int
-	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM workspaces WHERE id=$1`, target.ID).Scan(&n); err != nil {
-		t.Fatalf("count: %v", err)
+	// An unconfirmed purge is refused too, and for the confirmation — the row
+	// must not be destroyed by a purge that never named it.
+	rec = sessionReq(t, h, token, http.MethodDelete, "/v1/workspaces/"+target.ID+"/purge",
+		`{"confirm_slug":"nope"}`)
+	if rec.Code == http.StatusOK {
+		t.Error("an unconfirmed workspace purge returned 200")
 	}
-	if n != 1 {
-		t.Error("the refused workspace delete removed the row anyway")
+	if n := countRowsREST(t, pool, `SELECT COUNT(*) FROM workspaces WHERE id=$1`, target.ID); n != 1 {
+		t.Error("a refused workspace purge removed the row anyway")
+	}
+	if n := countRowsREST(t, pool, `SELECT COUNT(*) FROM sales WHERE account_id=$1`, targetAccount); n != 1 {
+		t.Error("a refused workspace purge destroyed the sale anyway")
+	}
+	// The trash listing reports it as unpurgable, so the UI never offers the
+	// button in the first place.
+	rec = sessionReq(t, h, token, http.MethodGet, "/v1/workspaces/trash", "")
+	var bin []struct {
+		ID       string `json:"id"`
+		CanPurge bool   `json:"can_purge"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &bin); err != nil {
+		t.Fatalf("decode trash listing: %v (%s)", err, rec.Body.String())
+	}
+	for _, it := range bin {
+		if it.ID == target.ID && it.CanPurge {
+			t.Error("a SOLD binned workspace reported can_purge=true — the UI would offer a " +
+				"permanent delete the server refuses")
+		}
 	}
 }
 

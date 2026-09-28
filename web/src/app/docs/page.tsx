@@ -92,7 +92,19 @@ const GROUPS: Group[] = [
         title: "Deleting a workspace",
         slug: "delete-workspace",
         href: "/docs/workspaces#delete-workspace",
-        body: "Permanent — the payment account goes with it: a typed slug confirmation, plus three conditions: you own it, you have another workspace, and it is empty. Sales are never destroyed.",
+        // PR 804 (the workspace trash): this summary said "Permanent, and it
+        // takes the payment account with it ... this one is empty", which is the
+        // hard delete the trash replaced — and main re-worded that same sentence
+        // ("Permanent — the payment account goes with it") while this branch was
+        // open, so the merge has to take THIS side's meaning and discard main's
+        // wording: main's line asserts the permanence the trash removes. Kept to
+        // one line under the 45-word entry limit; the walk-through moved to the
+        // guide with it, and docsIndex.test.ts's facts (which are asserted at the
+        // guide, not here) moved with the copy. The trim to fit the page's
+        // 800-word cap is where this line earns its keep: the trash needs MORE
+        // sentence than "Permanent — ..." did, so the page came in at 804 words
+        // on the merge and this wording brings it back under.
+        body: "Reversible, not destructive: a typed slug confirmation sends it to the Trash, even a full workspace. Restoring is one click; deleting for good is a second step that refuses one with sales.",
       },
       {
         // Card t_eb09b25a (the rebase onto main, t_4c58a09e): the audit-trail

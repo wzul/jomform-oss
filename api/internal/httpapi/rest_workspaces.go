@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -421,7 +422,7 @@ func (h *RESTHandlers) deleteWorkspace(w http.ResponseWriter, r *http.Request, a
 			"taip slug workspace ("+s.Slug+") untuk sahkan pemadaman")
 		return
 	}
-	deleted, err := h.Workspaces.Delete(r.Context(), s.ID, userID, actx.KeyID)
+	trashed, err := h.Workspaces.Delete(r.Context(), s.ID, userID, actx.KeyID)
 	if err != nil {
 		var de *dbstore.WorkspaceDeleteError
 		if errors.As(err, &de) {
@@ -430,11 +431,7 @@ func (h *RESTHandlers) deleteWorkspace(w http.ResponseWriter, r *http.Request, a
 				writeErr(w, http.StatusBadRequest,
 					"anda perlu sekurang-kurangnya satu workspace — cipta workspace baharu dahulu")
 			default:
-				writeJSON(w, http.StatusConflict, map[string]any{
-					"error":    "workspace tidak kosong — kosongkan dahulu sebelum memadam",
-					"code":     CodeWorkspaceNotEmpty,
-					"blockers": de.Blockers,
-				})
+				writeErr(w, http.StatusForbidden, "hanya pemilik workspace boleh memadamnya")
 			}
 			return
 		}
@@ -445,28 +442,31 @@ func (h *RESTHandlers) deleteWorkspace(w http.ResponseWriter, r *http.Request, a
 		respondErr(w, r, err)
 		return
 	}
-	// Audit: names the workspace and what went with it. Recorded AFTER the
-	// delete, and NOT against actx.Account: for an unscoped session request the
-	// resolved account IS the account this call just removed, so attributing the
-	// event to it made Postgres refuse the insert (events_account_id_fkey,
-	// SQLSTATE 23503) — swallowed by recordEvent's best-effort path, so the
-	// delete answered 200 and left no audit trail. The event is attributed to an
-	// account that survives instead.
+	// Audit: names the workspace and what it held. Recorded AFTER the move, and
+	// NOT against actx.Account when that account is the one being binned — for an
+	// unscoped session request the resolved account IS the workspace's own
+	// account, and the trash leaves every row in place. Filing the audit trail
+	// inside the thing that was just binned would hide it from the live audit
+	// view, so the event is attributed to an account that is still live.
+	//
+	// THE EVENT NAME IS UNCHANGED (`workspace.deleted`). The merchant-visible
+	// action is still "delete this workspace": it disappears from their list and
+	// from the switcher. What changed is only where the row goes, and that is
+	// carried in the properties (`restorable`, `deleted` counts) rather than by
+	// renaming a public audit event that consumers already filter on.
 	if acct := h.auditAccountAfterDelete(r, userID, actx.Account.ID); acct != "" {
 		h.recordEventFor(r, acct, userID, "workspace.deleted", map[string]any{
-			"workspace_id": s.ID, "slug": s.Slug, "name": s.Name, "deleted": deleted,
+			"workspace_id": s.ID, "slug": s.Slug, "name": s.Name, "deleted": trashed,
+			"restorable": true,
 		})
 	} else {
-		// The delete removed the caller's only account (an account-less
-		// workspace beside it) — there is no account left to file the event
-		// under, and writing it blind would be the FK failure again. Say so
-		// rather than dropping it silently.
 		slog.Warn("workspace_deleted_event_skipped",
 			"workspace", s.ID, "slug", s.Slug, "user", userID,
-			"reason", "no surviving account to attribute the event to")
+			"reason", "no other account to attribute the event to")
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status": "deleted", "id": s.ID, "slug": s.Slug, "deleted": deleted,
+		"status": "trashed", "id": s.ID, "slug": s.Slug, "deleted": trashed,
+		"restorable": true,
 	})
 }
 
@@ -490,51 +490,69 @@ func (h *RESTHandlers) workspaceDeletionCheck(w http.ResponseWriter, r *http.Req
 	if blockers == nil {
 		blockers = []dbstore.WorkspaceBlocker{}
 	}
+	// can_delete is OWNERSHIP + last-workspace ONLY.
+	//
+	// The content gate is gone from the write path (Wan's decision: a full
+	// workspace goes to the bin, so there is nothing to protect), and this read
+	// half must agree or the button would be disabled for a reason the API no
+	// longer enforces. `blockers` and `empty` are still reported — the dashboard
+	// shows them before a PURGE, where content is what the refusal is about.
+	last := h.isLastWorkspace(r, s.ID, userID)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id": s.ID, "name": s.Name, "slug": s.Slug,
 		"is_owner":       userID != "" && s.Owner == userID,
 		"role":           role,
-		"last_workspace": h.isLastWorkspace(r, s.ID, userID),
+		"last_workspace": last,
 		"empty":          len(blockers) == 0,
 		"blockers":       blockers,
-		"can_delete":     userID != "" && s.Owner == userID && len(blockers) == 0 && !h.isLastWorkspace(r, s.ID, userID),
+		"can_delete":     userID != "" && s.Owner == userID && !last,
 	})
 }
 
 // auditAccountAfterDelete picks the account a post-delete event must be
 // attributed to. Events are account-scoped and `events.account_id` is a FK to
 // `accounts(id)`, so an event about a workspace delete cannot be written against
-// an account the delete just destroyed.
+// an account that is no longer usable.
 //
-// The resolved account is used when it is one the caller OWNS and still has —
-// for the scoped request shape (`?workspace=<one of the caller's own
-// workspaces>`) that resolved account is a different, surviving workspace's
-// account of the caller's, so it is the most faithful attribution. Only when the
-// resolved account is gone (the unscoped shape, which resolves to the account of
-// the workspace being deleted) or is not the caller's at all does this fall back
-// to another account the caller still has.
+// TWO tests decide it, and BOTH must hold: the resolved account must be one the
+// caller OWNS, and it must still be LIVE.
 //
 // OWNERSHIP, not reachability. The scope that produced `resolved` is resolved
 // through Workspaces.AccessBySlug / AccessByID (resolveSessionAccount), and
 // WorkspaceStore.access admits owner OR MEMBER — a member reaches a stranger's
-// workspace and resolves to the STRANGER's account, which survives the call. An
-// existence-only test therefore accepts it, and the caller's own
-// workspace.deleted row is written into the stranger's account-scoped audit log:
-// the stranger reads the caller's delete out of their own audit log while the
-// caller cannot see it. Attribution must never leave the caller's own tenancy,
-// and a stranger's account is not a tenancy to file our events in merely because
-// the request resolved to it.
+// workspace and resolves to the STRANGER's account. An existence-only test
+// therefore accepts it, and the caller's own workspace.deleted row is written
+// into the stranger's account-scoped audit log: the stranger reads the caller's
+// delete out of their own audit log while the caller cannot see it. Attribution
+// must never leave the caller's own tenancy, and a stranger's account is not a
+// tenancy to file our events in merely because the request resolved to it.
 //
-// The fallback is likewise restricted to accounts the caller OWNS. It must NOT
-// walk Workspaces.ByMember: that list is "owned OR JOINED", so for a caller who
-// merely members a stranger's workspace the stranger's account is a candidate —
-// and if it sorts first (ByMember orders by workspace created_at), the same
-// cross-tenant leak follows.
+// LIVENESS, not existence. A delete is a move to the bin, so every account row
+// survives it — including the account of the workspace being binned, which the
+// UNSCOPED request shape resolves to. `workspace.deleted` is read back through
+// the caller's scope (?workspace=… → AccessBySlug → that workspace's accounts),
+// so an event filed against a BINNED workspace's account is stored inside the
+// thing that was just put away: the merchant's live audit view, scoped to a live
+// workspace, would never show it. That is the same defect the hard delete
+// produced by a different route — there the FK refused events_account_id_fkey
+// (23503) and recordEvent swallowed it, here the row exists but is parked in the
+// bin. Both leave a delete that looks unaudited, so both must be refused.
+//
+// The resolved account is therefore used only when the caller OWNS it AND it is
+// live: for the scoped request shape (`?workspace=<one of the caller's own
+// workspaces>`) that resolved account is a different, live workspace's account
+// of the caller's, so it is the most faithful attribution.
+//
+// The fallback is likewise restricted to accounts the caller OWNS and that are
+// still LIVE. It must NOT walk Workspaces.ByMember: that list is "owned OR
+// JOINED", so for a caller who merely members a stranger's workspace the
+// stranger's account is a candidate — and if it sorts first (ByMember orders by
+// workspace created_at), the same cross-tenant leak follows.
 //
 // "" means there is none; the caller then skips the event and says so.
 func (h *RESTHandlers) auditAccountAfterDelete(r *http.Request, userID, resolved string) string {
 	ctx := r.Context()
-	if h.ownsAccount(ctx, userID, resolved) {
+	if h.ownsAccount(ctx, userID, resolved) && h.accountIsLive(ctx, resolved) {
 		return resolved
 	}
 	if userID == "" {
@@ -543,7 +561,7 @@ func (h *RESTHandlers) auditAccountAfterDelete(r *http.Request, userID, resolved
 	if h.Accounts != nil {
 		if accs, err := h.Accounts.ByOwner(ctx, userID); err == nil {
 			for _, a := range accs {
-				if a != nil && a.ID != "" && h.accountExists(ctx, a.ID) {
+				if a != nil && a.ID != "" && h.accountIsLive(ctx, a.ID) {
 					return a.ID
 				}
 			}
@@ -552,14 +570,18 @@ func (h *RESTHandlers) auditAccountAfterDelete(r *http.Request, userID, resolved
 	return ""
 }
 
-// ownsAccount reports whether accountID is an account the caller OWNS and that
-// still names a row.
+// ownsAccount reports whether accountID is an account the caller OWNS.
 //
 // Ownership is the test, not mere accessibility: a ?workspace=<slug|id> scope
 // resolves for owners AND members alike, so "this request resolved to that
-// account" is evidence of REACHABILITY and nothing more. Reading ownership off
-// Accounts.ByOwner is also what makes the surviving-row check free — ByOwner
-// lists live rows, so a match cannot name a row the delete just removed.
+// account" is evidence of REACHABILITY and nothing more — a member scoping to a
+// stranger's workspace resolves to the stranger's account.
+//
+// This is deliberately a separate question from liveness (accountIsLive): under
+// the trash the stranger's account is still live, so liveness alone would accept
+// it and file the caller's event in the stranger's tenancy. Ownership alone is
+// not enough either — the caller's OWN workspace account is binned by the very
+// delete being audited. Both are asked, and both must hold.
 //
 // A store error is treated as "not owned": the caller then falls back rather
 // than filing its event in a tenancy it cannot prove.
@@ -579,15 +601,22 @@ func (h *RESTHandlers) ownsAccount(ctx context.Context, userID, accountID string
 	return false
 }
 
-// accountExists reports whether an account id still names a row. A store error
-// is treated as "does not exist": the caller then picks another account rather
-// than gambling that the row survives and re-arming the FK violation.
-func (h *RESTHandlers) accountExists(ctx context.Context, accountID string) bool {
-	if accountID == "" || h.Accounts == nil {
+// accountIsLive reports whether an account id names a row on a workspace that is
+// not in the trash. A store error is treated as "not live": the caller then
+// picks another account rather than gambling that the row is usable and re-arming
+// the mis-attribution.
+//
+// AccountIsLive alone is not enough — a nil Workspaces store (or a nil row) must
+// answer false so the skip path is reached instead of a panic.
+func (h *RESTHandlers) accountIsLive(ctx context.Context, accountID string) bool {
+	if accountID == "" || h.Accounts == nil || h.Workspaces == nil {
 		return false
 	}
-	a, err := h.Accounts.ByID(ctx, accountID)
-	return err == nil && a != nil
+	if _, err := h.Accounts.ByID(ctx, accountID); err != nil {
+		return false
+	}
+	live, err := h.Workspaces.AccountIsLive(ctx, accountID)
+	return err == nil && live
 }
 
 // isLastWorkspace reports whether deleting workspaceID would leave userID with
@@ -838,4 +867,177 @@ func (h *RESTHandlers) saveWorkspaceEmailSettings(w http.ResponseWriter, r *http
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
+}
+
+// listTrashedWorkspaces: GET /v1/workspaces/trash
+//
+// The read half of the bin: the workspaces the CALLER OWNS that are binned,
+// newest-binned first, so the dashboard's Trash view can offer Restore and
+// Purge.
+//
+// SESSION-ONLY, like every other workspace route here: the listing is scoped to
+// the session user's own workspaces, and an API key has no user to scope to.
+// The literal `trash` segment is registered BEFORE `/v1/workspaces/{id}` so the
+// mux resolves it here rather than as a workspace id — the same shadowing risk
+// the form trash route carries, and the reason the route table is pinned by
+// TestRESTTrashRouteIsNotShadowedByFormID.
+func (h *RESTHandlers) listTrashedWorkspaces(w http.ResponseWriter, r *http.Request, _ *AccountCtx) {
+	userID := h.sessionOwnerID(r)
+	if userID == "" {
+		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		return
+	}
+	list, err := h.Workspaces.ListTrashed(r.Context(), userID)
+	if err != nil {
+		respondErr(w, r, err)
+		return
+	}
+	// The census is what tells the merchant what a permanent delete would cost;
+	// it is reported PER ROW so the Purge button can say so before the click.
+	type row struct {
+		ID         string `json:"id"`
+		Name       string `json:"name"`
+		Slug       string `json:"slug"`
+		DeletedAt  string `json:"deleted_at"`
+		SalesCount int64  `json:"sales_count"`
+		CanPurge   bool   `json:"can_purge"`
+	}
+	out := make([]row, 0, len(list))
+	for _, s := range list {
+		sales := int64(0)
+		if counts, cerr := h.Workspaces.ContentCounts(r.Context(), s.ID, ""); cerr == nil {
+			sales = counts["sales"]
+		}
+		deleted := ""
+		if s.DeletedAt != nil {
+			deleted = s.DeletedAt.UTC().Format(time.RFC3339)
+		}
+		out = append(out, row{
+			ID: s.ID, Name: s.Name, Slug: s.Slug, DeletedAt: deleted,
+			SalesCount: sales, CanPurge: sales == 0,
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// restoreWorkspace: POST /v1/workspaces/{id}/restore
+//
+// Brings a binned workspace back. No confirmation: it destroys nothing and a
+// second click undoes it — the same bargain restoreForm makes.
+//
+// A 409 when the slug was re-claimed while the workspace sat in the bin: the
+// unique index covers live rows only, so binning releases the name and a new
+// workspace may take it. Nothing is renamed behind the owner's back.
+func (h *RESTHandlers) restoreWorkspace(w http.ResponseWriter, r *http.Request, _ *AccountCtx) {
+	userID := h.sessionOwnerID(r)
+	if userID == "" {
+		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		return
+	}
+	workspaceID := r.PathValue("id")
+	if err := h.Workspaces.Restore(r.Context(), workspaceID, userID); err != nil {
+		if errors.Is(err, dbstore.ErrWorkspaceSlugTaken) {
+			writeErr(w, http.StatusConflict,
+				"tidak boleh dipulihkan: slug workspace ini telah diambil workspace lain — "+
+					"tukar slug workspace itu dahulu, kemudian cuba pulihkan semula")
+			return
+		}
+		if errors.Is(err, dbstore.ErrWorkspaceNotFound) {
+			writeErr(w, http.StatusNotFound, "workspace tidak dijumpai dalam tong sampah")
+			return
+		}
+		respondErr(w, r, err)
+		return
+	}
+	if acct := h.auditAccountAfterDelete(r, userID, ""); acct != "" {
+		h.recordEventFor(r, acct, userID, "workspace.restored", map[string]any{"workspace_id": workspaceID})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "restored", "id": workspaceID})
+}
+
+// purgeWorkspace: DELETE /v1/workspaces/{id}/purge
+//
+// Permanently destroys a BINNED workspace and everything it holds. Confirmed by
+// typing the workspace's slug into {"confirm_slug":"..."} — the same level as
+// purgeForm and revoke_api_key, because this is the one call in the whole
+// workspace surface that cannot be undone.
+//
+// HUMAN-ONLY, BY CONSTRUCTION. The route is session-only (sessionOwnerID, an
+// API key has no user) and there is deliberately NO MCP tool in front of it:
+// Wan's rule is that the assistant may move things to the bin and may never
+// destroy them. The guard that pins that is mcpsrv's chat_tools_guard_test.go,
+// which fails if any registered tool whose name carries a purge/permanent verb
+// is ever proposable to the chat.
+//
+// A LIVE workspace is a 404 here: the only way in is trash → purge, enforced in
+// the store.
+func (h *RESTHandlers) purgeWorkspace(w http.ResponseWriter, r *http.Request, _ *AccountCtx) {
+	userID := h.sessionOwnerID(r)
+	if userID == "" {
+		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		return
+	}
+	workspaceID := r.PathValue("id")
+	var in struct {
+		ConfirmSlug string `json:"confirm_slug"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeErr(w, http.StatusBadRequest, "payload tidak sah")
+		return
+	}
+	// Read the BINNED workspace to compare the confirmation slug. TrashedByID is
+	// the trash read, so this cannot be used to probe a live workspace.
+	s, err := h.Workspaces.TrashedByID(r.Context(), workspaceID)
+	if err != nil {
+		if errors.Is(err, dbstore.ErrWorkspaceNotFound) {
+			writeErr(w, http.StatusNotFound, "workspace tidak dijumpai dalam tong sampah")
+			return
+		}
+		respondErr(w, r, err)
+		return
+	}
+	// Owner-only, matching who may bin and restore it.
+	if s.Owner != userID {
+		writeErr(w, http.StatusForbidden, "hanya pemilik workspace boleh memadamnya")
+		return
+	}
+	if strings.TrimSpace(in.ConfirmSlug) != s.Slug {
+		writeErr(w, http.StatusBadRequest,
+			"taip slug workspace ("+s.Slug+") untuk sahkan pemadaman kekal")
+		return
+	}
+	purged, err := h.Workspaces.Purge(r.Context(), workspaceID, userID)
+	if err != nil {
+		if errors.Is(err, dbstore.ErrWorkspaceHasSales) {
+			sales := int64(0)
+			if counts, cerr := h.Workspaces.ContentCounts(r.Context(), workspaceID, ""); cerr == nil {
+				sales = counts["sales"]
+			}
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error": "workspace ini mempunyai jualan — sejarah jualan tidak boleh dimusnahkan " +
+					"dengan memadam workspace. Ia kekal dalam tong sampah.",
+				"code":        CodeWorkspaceHasSales,
+				"sales_count": sales,
+			})
+			return
+		}
+		if errors.Is(err, dbstore.ErrWorkspaceNotFound) {
+			writeErr(w, http.StatusNotFound, "workspace tidak dijumpai dalam tong sampah")
+			return
+		}
+		respondErr(w, r, err)
+		return
+	}
+	// Audit BEFORE the row is gone would be the only way to keep the identity,
+	// but the purge removes the account the event would be filed under — so the
+	// event names the workspace in its properties and is filed against an
+	// account that survives, exactly as the delete event is.
+	if acct := h.auditAccountAfterDelete(r, userID, ""); acct != "" {
+		h.recordEventFor(r, acct, userID, "workspace.purged", map[string]any{
+			"workspace_id": workspaceID, "slug": s.Slug, "name": s.Name, "purged": purged,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": "purged", "id": workspaceID, "slug": s.Slug, "purged": purged,
+	})
 }

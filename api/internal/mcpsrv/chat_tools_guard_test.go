@@ -302,6 +302,110 @@ func TestChatProposableExcludesTheDestructiveClasses(t *testing.T) {
 	_ = byName
 }
 
+// TestChatNeverProposesAPermanentDelete is Wan's hard rule, enforced by name.
+//
+//	"Manusia sahaja boleh purge kekal — assistant HANYA boleh hantar ke bin,
+//	 tak pernah padam kekal"
+//
+// The workspace bin (and the form bin before it) makes destruction RECOVERABLE,
+// which is exactly why a mistake in the propose/confirm lane can be tolerated at
+// all: the user sends the result to the bin and restores it. That safety net only
+// holds while the lane can never reach a PERMANENT delete — a purge has no
+// inverse through any tool the chat can propose, so one wrong confirm would
+// destroy data no restore can bring back.
+//
+// WHY THIS IS A SECOND TEST ON TOP OF TestChatProposableExcludesTheDestructiveClasses.
+// That test checks the CURRENT proposable set against a list of verb fragments,
+// so it catches a bad name TODAY. This one asserts the rule over EVERY
+// registered tool, so it also fails the moment a purge tool is ADDED to the
+// registry and anything makes it proposable — including a name whose verb the
+// fragment list happens not to carry (e.g. `destroy_workspace`,
+// `erase_workspace`, `permanent_*`). It reads the registry, not a hand-written
+// list, for the same reason the scope guard does: a new tool must be covered
+// automatically rather than being silently skipped.
+//
+// The rule is one-directional on purpose: it is fine (and expected) for the chat
+// to reach a tool that moves something to the BIN, because the bin is reversible
+// and that is the whole point of the lane. It is never fine to reach permanent
+// destruction.
+func TestChatNeverProposesAPermanentDelete(t *testing.T) {
+	pkg := parsePackage(t)
+	if len(pkg.tools) < 100 {
+		t.Fatalf("parsed only %d registered tools — the sweep would be meaningless", len(pkg.tools))
+	}
+
+	// Permanent-destruction verbs. Deliberately NOT including "delete" or
+	// "trash": those move things to the bin in this product, which is the
+	// capability the chat is allowed to reach. The words below are the ones that
+	// mean the data is GONE.
+	permanent := []string{"purge", "destroy", "permanent", "erase", "wipe", "hard_delete"}
+
+	// Every registered tool whose NAME carries a permanent verb: none of them may
+	// be proposable, now or later.
+	var offenders []string
+	var permanentTools []string
+	for _, tool := range pkg.tools {
+		lower := strings.ToLower(tool.Name)
+		isPermanent := false
+		for _, frag := range permanent {
+			if strings.Contains(lower, frag) {
+				isPermanent = true
+				break
+			}
+		}
+		if !isPermanent {
+			continue
+		}
+		permanentTools = append(permanentTools, tool.Name)
+		if ChatToolIsProposable(tool.Name) {
+			offenders = append(offenders, tool.Name)
+		}
+	}
+	// A floor: if the sweep found no permanent tool at all, the registry parse
+	// changed shape and this guard would pass vacuously. purge_unverified_accounts
+	// and purge_form are both registered today, so this is honest.
+	if len(permanentTools) == 0 {
+		t.Fatal("the sweep found no permanent-destruction tool in the registry — the parse is " +
+			"not reading the tool names, so this guard proves nothing")
+	}
+	sort.Strings(offenders)
+	if len(offenders) > 0 {
+		t.Errorf("PERMANENT-destruction tool(s) are proposable to the chat: %v\n"+
+			"Wan's rule: the assistant may send things to the BIN and must NEVER delete permanently. "+
+			"A purge cannot be undone by any tool the chat can propose, so a single wrong confirm "+
+			"would destroy data no restore can recover. Remove it from chatProposableTools.",
+			offenders)
+	}
+
+	// And the same rule stated as a predicate, so the guard is not merely a
+	// property of today's list: every permanent tool must be refused by the
+	// exposure check the proposal path consults TWICE (when proposed, and again
+	// at confirm).
+	for _, name := range permanentTools {
+		if ChatToolIsProposable(name) {
+			t.Errorf("ChatToolIsProposable(%q) = true — permanent destruction must never be "+
+				"proposable, whatever the tool is called", name)
+		}
+	}
+
+	// The bin tools ARE allowed to be proposable in principle (the card that
+	// dissolves the old objection depends on it), so the guard must not be
+	// satisfiable by banning every tool with "delete" in its name. Assert the
+	// rule is about PURGE specifically by naming a bin-shaped tool that exists
+	// today and confirming this test does not object to its existence.
+	binTool := "delete_form"
+	found := false
+	for _, tool := range pkg.tools {
+		if tool.Name == binTool {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("%s is no longer registered — update this guard, which uses it to prove the rule "+
+			"targets PERMANENT destruction and not the bin", binTool)
+	}
+}
+
 // TestChatExposurePredicateAgreesWithTheSets guards the single-predicate rule.
 //
 // ChatToolIsAllowed is what the dispatch path consults, and its answer must be

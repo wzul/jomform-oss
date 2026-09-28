@@ -1,32 +1,45 @@
 package dbstore
 
-// Workspace delete — the guards Wan asked for, and the cascade shape the live
-// FKs force.
+// Workspace trash — the bin, the restore, and the purge that is still a hard
+// delete.
 //
 // WHAT THIS PINS
 //
-//  1. "Satu user wajib ada 1 workspace" — the LAST workspace cannot be deleted.
-//     The rule is expressed as a count of the owner's remaining memberships, so
-//     it protects whichever workspace is last rather than pinning an "original"
-//     one.
-//  2. A workspace must be EMPTY. Every category counts, including forms sitting
-//     in the trash (they are still rows in `forms`), and SALES may never be
-//     destroyed by this call.
-//  3. The delete actually REACHES the workspace. `DELETE FROM workspaces` alone
-//     fails (SQLSTATE 23503) on any workspace holding an account, because
-//     accounts/api_keys/forms/products/sales.workspace_id are all NO ACTION and
-//     every workspace owns an account (migration 000024). The store removes the
-//     RESTRICT rows deepest-first and only then the workspace row, so this test
-//     is what proves the ordering is right rather than merely plausible.
-//  4. users.default_workspace_id pointing at the deleted workspace becomes NULL
-//     (its FK is SET NULL) — no dangling default to land a login on.
+//  1. "Satu user wajib ada 1 workspace" — the LAST LIVE workspace cannot be
+//     binned. The rule is expressed as a count of the owner's remaining live
+//     memberships, so it protects whichever workspace is last rather than
+//     pinning an "original" one — and a workspace ALREADY IN THE BIN does not
+//     count as one the user still has.
+//  2. Delete MARKS the workspace. Every row it holds (accounts, forms,
+//     products, sales, api_keys, settings, members, invites, legal pages,
+//     email settings) is still present afterwards — asserted by count BEFORE
+//     and AFTER, which is the only way to tell a trash from a delete.
+//  3. The binned workspace leaves the live list (ByOwner / ByMember / BySlug /
+//     ByID) and appears in ListTrashed, newest first. Restore brings it back
+//     whole.
+//  4. A binned workspace RELEASES its slug (the unique index is partial over
+//     live rows), so a new workspace may take the name; restoring the original
+//     afterwards is REFUSED with ErrWorkspaceSlugTaken rather than colliding
+//     silently (the form pattern: TestFormRestoreRefusesWhenSlugWasRetaken).
+//  5. Purge is the hard delete, and it keeps the ORDER the old delete had:
+//     sales → forms → products → api_keys → accounts → workspaces, because
+//     those FKs are NO ACTION and a bare `DELETE FROM workspaces` fails
+//     (SQLSTATE 23503) on any workspace holding an account. Purge refuses a
+//     LIVE row (trash is the only way in) and refuses a workspace that has
+//     ever been SOLD.
+//  6. users.default_workspace_id pointing at a binned workspace becomes NULL:
+//     the old FK's ON DELETE SET NULL fired on the hard delete, and a mark
+//     fires no FK at all, so the store has to clear it or the next login lands
+//     on a workspace nobody can see.
 //
 // Integration against a real Postgres; skipped without JOMFORM_TEST_DATABASE_URL.
 
 import (
 	"context"
+	"errors"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -53,8 +66,8 @@ func wsDeleteFixture(t *testing.T, ctx context.Context, p *pgxpool.Pool, n int) 
 // workspace, the delete is refused AND the workspace is still there.
 //
 // MUTATION EVIDENCE: neutralise the `remaining == 0` guard in
-// WorkspaceStore.Delete and this test fails on both assertions (the row is gone
-// and err is nil).
+// WorkspaceStore.Trash and this test fails on both assertions (the row is
+// marked and err is nil).
 func TestWorkspaceDeleteRefusesLastWorkspace(t *testing.T) {
 	ctx := context.Background()
 	p := testPool(t)
@@ -71,7 +84,7 @@ func TestWorkspaceDeleteRefusesLastWorkspace(t *testing.T) {
 		t.Fatalf("Delete error = %v, want the last_workspace refusal", err)
 	}
 
-	// The workspace must still exist, with its account.
+	// The workspace must still exist, live, with its account.
 	var n int
 	if err := p.QueryRow(ctx, `SELECT COUNT(*) FROM workspaces WHERE id=$1`, only).Scan(&n); err != nil {
 		t.Fatalf("count workspace: %v", err)
@@ -79,105 +92,123 @@ func TestWorkspaceDeleteRefusesLastWorkspace(t *testing.T) {
 	if n != 1 {
 		t.Errorf("workspace rows after a refused delete = %d, want 1 (the refusal must not delete)", n)
 	}
-	if err := p.QueryRow(ctx, `SELECT COUNT(*) FROM accounts WHERE workspace_id=$1`, only).Scan(&n); err != nil {
-		t.Fatalf("count account: %v", err)
+	if n := countRows(t, ctx, p, `SELECT COUNT(*) FROM workspaces WHERE id=$1 AND deleted_at IS NULL`, only); n != 1 {
+		t.Error("the refused workspace was marked anyway — a refusal must leave the row LIVE")
 	}
-	if n != 1 {
+	if n := countRows(t, ctx, p, `SELECT COUNT(*) FROM accounts WHERE workspace_id=$1`, only); n != 1 {
 		t.Errorf("account rows after a refused delete = %d, want 1", n)
 	}
 }
 
 // TestWorkspaceDeleteLastWorkspaceAllowsSecondWorkspace is the other half of the
-// rule: with TWO workspaces, one may go. Without this, a guard that refused
-// every delete would pass the test above and lock every merchant in.
+// rule: with TWO workspaces, one may be binned. Without this, a guard that
+// refused every delete would pass the test above and lock every merchant in.
+//
+// The last assertion is the one that makes `deleted_at IS NULL` on the census
+// load-bearing: once the first workspace is IN THE BIN it must not count as
+// somewhere the user can still go, so binning the second one is now refused.
 func TestWorkspaceDeleteLastWorkspaceAllowsSecondWorkspace(t *testing.T) {
 	ctx := context.Background()
 	p := testPool(t)
 	sp := NewWorkspaceStore(p)
 	user, ids := wsDeleteFixture(t, ctx, p, 2)
 
-	deleted, err := sp.Delete(ctx, ids[0], user, "")
+	trashed, err := sp.Delete(ctx, ids[0], user, "")
 	if err != nil {
 		t.Fatalf("Delete with a second workspace remaining: %v", err)
 	}
-	if deleted["workspaces"] != 1 {
-		t.Errorf("deleted[workspaces] = %d, want 1", deleted["workspaces"])
+	if trashed["workspaces"] != 1 {
+		t.Errorf("deleted[workspaces] = %d, want 1", trashed["workspaces"])
 	}
 
-	// The remaining workspace is untouched; the deleted one is fully gone.
-	var n int
-	if err := p.QueryRow(ctx, `SELECT COUNT(*) FROM workspaces WHERE owner_user_id=$1`, user).Scan(&n); err != nil {
-		t.Fatalf("count workspaces: %v", err)
+	// The binned workspace is off the LIVE list and on the trash list.
+	if n := countRows(t, ctx, p, `SELECT COUNT(*) FROM workspaces WHERE owner_user_id=$1 AND deleted_at IS NULL`, user); n != 1 {
+		t.Errorf("live workspaces left = %d, want exactly 1", n)
 	}
-	if n != 1 {
-		t.Errorf("workspaces left = %d, want exactly 1", n)
+	if n := countRows(t, ctx, p, `SELECT COUNT(*) FROM workspaces WHERE id=$1 AND deleted_at IS NOT NULL`, ids[0]); n != 1 {
+		t.Error("the deleted workspace was not marked — deleted_at is still NULL")
 	}
-	if err := p.QueryRow(ctx, `SELECT COUNT(*) FROM workspaces WHERE id=$1`, ids[0]).Scan(&n); err != nil {
-		t.Fatalf("count deleted workspace: %v", err)
+	if live, err := sp.ByOwner(ctx, user); err != nil {
+		t.Fatalf("ByOwner: %v", err)
+	} else if len(live) != 1 || live[0].ID != ids[1] {
+		t.Errorf("ByOwner = %+v, want only the un-binned workspace %s", live, ids[1])
 	}
-	if n != 0 {
-		t.Error("the deleted workspace row is still present")
+	if _, err := sp.ByID(ctx, ids[0]); !errors.Is(err, pgx.ErrNoRows) {
+		t.Errorf("ByID on a binned workspace error = %v, want a miss — a trashed workspace "+
+			"must be invisible to the live reads or the switcher offers it", err)
 	}
-	// Its account went WITH it — a CHIP credential must never be orphaned.
-	if err := p.QueryRow(ctx, `SELECT COUNT(*) FROM accounts WHERE workspace_id=$1`, ids[0]).Scan(&n); err != nil {
-		t.Fatalf("count accounts: %v", err)
+	bin, err := sp.ListTrashed(ctx, user)
+	if err != nil {
+		t.Fatalf("ListTrashed: %v", err)
 	}
-	if n != 0 {
-		t.Errorf("accounts left on the deleted workspace = %d, want 0 (the account holds the CHIP creds)", n)
+	if len(bin) != 1 || bin[0].ID != ids[0] {
+		t.Fatalf("ListTrashed = %+v, want the one binned workspace %s", bin, ids[0])
+	}
+	if bin[0].DeletedAt == nil {
+		t.Error("the trash row has a nil DeletedAt — the trash view cannot show when it was binned")
 	}
 
-	// And the workspace that remains is still deletable in principle — it is
-	// simply the last one now.
+	// The workspace that remains is binnable in principle — but it is the LAST
+	// LIVE one now, and a binned workspace is not somewhere to land.
 	if _, err := sp.Delete(ctx, ids[1], user, ""); !IsLastWorkspaceError(err) {
-		t.Errorf("deleting the now-last workspace error = %v, want last_workspace refusal", err)
+		t.Errorf("deleting the now-last live workspace error = %v, want last_workspace refusal "+
+			"(a workspace already in the bin must not count as one the user still has)", err)
 	}
 }
 
-// TestWorkspaceDeleteCascadesEveryChildRow is the cascade proof (acceptance 2 on
-// the card): every child table the card names must be empty afterwards.
-//
-// WHY IT SEEDS A REVOKED KEY AND NOTHING ELSE ON A RESTRICT TABLE. The
-// emptiness guard means a workspace with a live form/product/api_key/sale can
-// never reach the delete, so those ordered steps would be dead code in practice.
-// A REVOKED api_key is the exception and the interesting case: the guard does
-// NOT count it (it is already dead configuration, not a blocker), but the row
-// still exists with a `workspace_id` whose FK is NO ACTION — so deleting the
-// workspace without clearing it first fails with SQLSTATE 23503. This test is
-// what proves that step is present.
-func TestWorkspaceDeleteCascadesEveryChildRow(t *testing.T) {
+// TestWorkspaceTrashKeepsEveryRow is acceptance 1 and the heart of the card:
+// the delete is a MARK, so every row the old hard delete would have destroyed is
+// still on disk afterwards. Counted BEFORE and AFTER, so a store that quietly
+// deleted one table passes no part of this.
+func TestWorkspaceTrashKeepsEveryRow(t *testing.T) {
 	ctx := context.Background()
 	p := testPool(t)
 	sp := NewWorkspaceStore(p)
 	user, ids := wsDeleteFixture(t, ctx, p, 2)
-	target := ids[0]
+	target, keep := ids[0], ids[1]
 
-	// The account the workspace owns (Create made it).
 	var acc string
 	if err := p.QueryRow(ctx, `SELECT id FROM accounts WHERE workspace_id=$1`, target).Scan(&acc); err != nil {
 		t.Fatalf("read workspace account: %v", err)
 	}
 
-	// A REVOKED key: not a blocker, but a RESTRICT row that must still be
-	// cleared before the workspace can go.
-	if _, err := p.Exec(ctx,
-		`INSERT INTO api_keys (account_id, name, key_hash, scopes, workspace_id, revoked_at)
-		 VALUES ($1,'it','it-revoked-'||$3,'{admin}',$2, now())`,
-		acc, target, acc[:8]); err != nil {
-		t.Fatalf("seed revoked api key: %v", err)
+	// Content in every table the old delete cleared, including the RESTRICT
+	// ones the not_empty guard used to refuse: a workspace FULL of content is
+	// exactly what the card says must now be binnable.
+	fs := NewFormStore(p)
+	form := &Form{AccountID: acc, Slug: "it-wstrash-" + acc[:8], Title: "IT", Status: FormStatusDraft}
+	if err := fs.Create(ctx, form); err != nil {
+		t.Fatalf("seed form: %v", err)
 	}
-	// Workspace-scoped settings + members + invites + legal pages + email
-	// settings (the CASCADE children of the workspace).
+	if err := NewProductStore(p).Create(ctx, &Product{
+		AccountID: acc, Name: "IT", PriceSen: 100, Type: "one_time",
+	}); err != nil {
+		t.Fatalf("seed product: %v", err)
+	}
+	ss := NewSaleStore(p)
+	if err := ss.Create(ctx, &Sale{
+		AccountID: acc, RefCode: "IT-WSTRASH-" + acc[:8],
+		Client: SaleClient{FullName: "A", Email: "a@example.test"},
+		Items:  []SaleItem{}, Status: SalePaid, PaymentMethod: "chip",
+		SaleType: SaleTypeOneTime,
+	}); err != nil {
+		t.Fatalf("seed sale: %v", err)
+	}
+	if _, err := p.Exec(ctx,
+		`INSERT INTO api_keys (account_id, name, key_hash, scopes, workspace_id)
+		 VALUES ($1,'it','it-trash-'||$2,'{admin}',$3)`, acc, acc[:8], target); err != nil {
+		t.Fatalf("seed live api key: %v", err)
+	}
 	if _, err := sp.Settings(ctx, target); err != nil {
 		t.Fatalf("materialise settings: %v", err)
 	}
 	if _, err := p.Exec(ctx,
-		`INSERT INTO workspace_invites (workspace_id, email, role, token) VALUES ($1, $2, 'read_only', 'it-inv-'||$2)`,
-		target, "invite-"+acc[:8]+"@example.test"); err != nil {
+		`INSERT INTO workspace_invites (workspace_id, email, role, token) VALUES ($1,$2,'read_only','it-trash-inv-'||$3)`,
+		target, "invite-"+acc[:8]+"@example.test", acc[:8]); err != nil {
 		t.Fatalf("seed invite: %v", err)
 	}
 	if _, err := p.Exec(ctx,
-		`INSERT INTO workspace_legal_pages (workspace_id, page_type) VALUES ($1, 'privacy')`,
-		target); err != nil {
+		`INSERT INTO workspace_legal_pages (workspace_id, page_type) VALUES ($1,'privacy')`, target); err != nil {
 		t.Fatalf("seed legal page: %v", err)
 	}
 	if _, err := p.Exec(ctx,
@@ -185,15 +216,244 @@ func TestWorkspaceDeleteCascadesEveryChildRow(t *testing.T) {
 		t.Fatalf("seed email settings: %v", err)
 	}
 
-	// The guard must still say EMPTY — a revoked key is not a blocker.
-	if _, blockers, err := sp.CountEmpty(ctx, target, ""); err != nil {
-		t.Fatalf("CountEmpty: %v", err)
-	} else if len(blockers) != 0 {
-		t.Fatalf("CountEmpty blockers = %+v, want none (a revoked key is dead config, not a blocker)", blockers)
+	// The counts the trash must not disturb — measured on a workspace that now
+	// holds something in EVERY category, which the old not_empty guard refused
+	// outright.
+	rows := []struct {
+		name string
+		sql  string
+		args []any
+	}{
+		{"accounts", `SELECT COUNT(*) FROM accounts WHERE workspace_id=$1`, []any{target}},
+		{"forms", `SELECT COUNT(*) FROM forms WHERE account_id=$1`, []any{acc}},
+		{"products", `SELECT COUNT(*) FROM products WHERE account_id=$1`, []any{acc}},
+		{"sales", `SELECT COUNT(*) FROM sales WHERE account_id=$1`, []any{acc}},
+		{"api_keys", `SELECT COUNT(*) FROM api_keys WHERE workspace_id=$1`, []any{target}},
+		{"workspace_settings", `SELECT COUNT(*) FROM workspace_settings WHERE workspace_id=$1`, []any{target}},
+		{"workspace_invites", `SELECT COUNT(*) FROM workspace_invites WHERE workspace_id=$1`, []any{target}},
+		{"workspace_legal_pages", `SELECT COUNT(*) FROM workspace_legal_pages WHERE workspace_id=$1`, []any{target}},
+		{"workspace_email_settings", `SELECT COUNT(*) FROM workspace_email_settings WHERE workspace_id=$1`, []any{target}},
+	}
+	before := map[string]int{}
+	for _, r := range rows {
+		before[r.name] = countRows(t, ctx, p, r.sql, r.args...)
+		if before[r.name] == 0 {
+			t.Fatalf("fixture bug: %s was seeded but counts 0 before the trash", r.name)
+		}
+	}
+
+	deleted, err := sp.Delete(ctx, target, user, "")
+	if err != nil {
+		t.Fatalf("Delete a workspace FULL of content: %v — the not_empty guard must be gone, "+
+			"a full workspace is exactly what has to be binnable", err)
+	}
+	if deleted["workspaces"] != 1 {
+		t.Errorf("deleted[workspaces] = %d, want 1", deleted["workspaces"])
+	}
+
+	for _, r := range rows {
+		if got := countRows(t, ctx, p, r.sql, r.args...); got != before[r.name] {
+			t.Errorf("%s rows after the trash = %d, want %d — the trash DESTROYED a row; "+
+				"it must only mark the workspace", r.name, got, before[r.name])
+		}
+	}
+	// And the mark is really there.
+	if n := countRows(t, ctx, p, `SELECT COUNT(*) FROM workspaces WHERE id=$1 AND deleted_at IS NOT NULL`, target); n != 1 {
+		t.Error("the workspace is not marked after the trash")
+	}
+	_ = keep
+}
+
+// TestWorkspaceRestoreBringsEverythingBack is acceptance 2: restore clears the
+// mark and the workspace returns to every live read with its account, its forms
+// and its sales intact — nothing to rebuild, because nothing was removed.
+//
+// MUTATION EVIDENCE: drop the `deleted_at=NULL` from Restore and this fails on
+// the live-read assertions (the row stays binned).
+func TestWorkspaceRestoreBringsEverythingBack(t *testing.T) {
+	ctx := context.Background()
+	p := testPool(t)
+	sp := NewWorkspaceStore(p)
+	user, ids := wsDeleteFixture(t, ctx, p, 2)
+	target := ids[0]
+
+	var acc string
+	if err := p.QueryRow(ctx, `SELECT id FROM accounts WHERE workspace_id=$1`, target).Scan(&acc); err != nil {
+		t.Fatalf("read workspace account: %v", err)
+	}
+	fs := NewFormStore(p)
+	form := &Form{AccountID: acc, Slug: "it-wsrestore-" + acc[:8], Title: "IT", Status: FormStatusDraft}
+	if err := fs.Create(ctx, form); err != nil {
+		t.Fatalf("seed form: %v", err)
+	}
+	ss := NewSaleStore(p)
+	if err := ss.Create(ctx, &Sale{
+		AccountID: acc, RefCode: "IT-WSRESTORE-" + acc[:8],
+		Client: SaleClient{FullName: "A", Email: "a@example.test"},
+		Items:  []SaleItem{}, Status: SalePaid, PaymentMethod: "chip",
+		SaleType: SaleTypeOneTime,
+	}); err != nil {
+		t.Fatalf("seed sale: %v", err)
 	}
 
 	if _, err := sp.Delete(ctx, target, user, ""); err != nil {
 		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := sp.ByID(ctx, target); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("ByID while binned error = %v, want a miss", err)
+	}
+
+	if err := sp.Restore(ctx, target, user); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	got, err := sp.ByID(ctx, target)
+	if err != nil {
+		t.Fatalf("ByID after restore: %v", err)
+	}
+	if got.DeletedAt != nil {
+		t.Errorf("restored workspace DeletedAt = %v, want nil", got.DeletedAt)
+	}
+	if got.Slug == "" {
+		t.Error("the slug was lost across the restore")
+	}
+	// The content is back with it — because the trash never touched it.
+	if n := countRows(t, ctx, p, `SELECT COUNT(*) FROM forms WHERE id=$1 AND deleted_at IS NULL`, form.ID); n != 1 {
+		t.Error("the form did not come back with the restored workspace")
+	}
+	if n := countRows(t, ctx, p, `SELECT COUNT(*) FROM sales WHERE account_id=$1`, acc); n != 1 {
+		t.Error("the sale did not come back with the restored workspace")
+	}
+	if n := countRows(t, ctx, p, `SELECT COUNT(*) FROM accounts WHERE workspace_id=$1`, target); n != 1 {
+		t.Error("the CHIP account did not come back with the restored workspace")
+	}
+	// And the trash list is empty again.
+	if bin, err := sp.ListTrashed(ctx, user); err != nil {
+		t.Fatalf("ListTrashed: %v", err)
+	} else if len(bin) != 0 {
+		t.Errorf("ListTrashed after restore = %+v, want empty", bin)
+	}
+	// Restoring something that is not in the bin is a miss, not a no-op success.
+	if err := sp.Restore(ctx, target, user); !errors.Is(err, ErrWorkspaceNotFound) {
+		t.Errorf("Restore of a LIVE workspace error = %v, want ErrWorkspaceNotFound", err)
+	}
+	// Neither is restoring a workspace you do not own.
+	other := testOwnerUser(t, ctx, p)
+	if err := sp.Restore(ctx, target, other); !errors.Is(err, ErrWorkspaceNotFound) {
+		t.Errorf("Restore by a non-owner error = %v, want ErrWorkspaceNotFound", err)
+	}
+}
+
+// TestWorkspaceTrashReleasesTheSlugAndRestoreRefusesReuse is acceptance 3 and the
+// exact form pattern (TestFormRestoreRefusesWhenSlugWasRetaken): the partial
+// unique index covers LIVE rows, so binning a workspace frees its name for
+// reuse — and the original cannot then be restored over the taker.
+//
+// MUTATION EVIDENCE: make the index cover the whole table (drop
+// `WHERE deleted_at IS NULL`) and the "taker" Create below fails, so the test
+// reports the truncation of the trash promise rather than passing vacuously.
+// Remove the isUniqueViolation branch in Restore and the final assertion gets a
+// raw 23505 instead of ErrWorkspaceSlugTaken.
+func TestWorkspaceTrashReleasesTheSlugAndRestoreRefusesReuse(t *testing.T) {
+	ctx := context.Background()
+	p := testPool(t)
+	sp := NewWorkspaceStore(p)
+	user, ids := wsDeleteFixture(t, ctx, p, 2)
+	target := ids[0]
+
+	original, err := sp.ByID(ctx, target)
+	if err != nil {
+		t.Fatalf("ByID: %v", err)
+	}
+	if _, err := sp.Delete(ctx, target, user, ""); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	// The binned workspace released its slug: a LIVE workspace may take it.
+	// This is what `workspaces_slug_live_key` (migration 000073) buys, and it is
+	// the whole reason the trash is reversible AND cheap.
+	taker, err := sp.Create(ctx, user, "Taker", original.Slug)
+	if err != nil {
+		t.Fatalf("a new workspace could not take the binned workspace's slug %q: %v — "+
+			"the slug is held forever, so the name can never be reused", original.Slug, err)
+	}
+	if taker.Slug != original.Slug {
+		t.Fatalf("taker slug = %q, want %q", taker.Slug, original.Slug)
+	}
+
+	// Restoring the original must now be REFUSED, with the named error, rather
+	// than colliding with the live taker.
+	if err := sp.Restore(ctx, target, user); !errors.Is(err, ErrWorkspaceSlugTaken) {
+		t.Fatalf("Restore over a re-claimed slug error = %v, want ErrWorkspaceSlugTaken — "+
+			"a restore must never silently collide with the workspace holding the name now", err)
+	}
+	// And the refusal must not have half-restored it.
+	if n := countRows(t, ctx, p, `SELECT COUNT(*) FROM workspaces WHERE id=$1 AND deleted_at IS NOT NULL`, target); n != 1 {
+		t.Error("the refused restore brought the workspace back anyway")
+	}
+	// The taker is untouched and still live.
+	if n := countRows(t, ctx, p, `SELECT COUNT(*) FROM workspaces WHERE id=$1 AND deleted_at IS NULL`, taker.ID); n != 1 {
+		t.Error("the refused restore disturbed the workspace holding the slug")
+	}
+}
+
+// TestWorkspacePurgeIsTheHardDelete is acceptance 5: the purge really removes
+// the rows, in the order the old delete used.
+//
+// The seeded REVOKED key is load-bearing, exactly as in the old cascade test: it
+// is not a blocker (dead configuration), but its `workspace_id` FK is NO ACTION,
+// so a naive `DELETE FROM workspaces` fails and only the ordered purge works.
+func TestWorkspacePurgeIsTheHardDelete(t *testing.T) {
+	ctx := context.Background()
+	p := testPool(t)
+	sp := NewWorkspaceStore(p)
+	user, ids := wsDeleteFixture(t, ctx, p, 2)
+	target := ids[0]
+
+	var acc string
+	if err := p.QueryRow(ctx, `SELECT id FROM accounts WHERE workspace_id=$1`, target).Scan(&acc); err != nil {
+		t.Fatalf("read workspace account: %v", err)
+	}
+	if _, err := p.Exec(ctx,
+		`INSERT INTO api_keys (account_id, name, key_hash, scopes, workspace_id, revoked_at)
+		 VALUES ($1,'it','it-purge-'||$3,'{admin}',$2, now())`, acc, target, acc[:8]); err != nil {
+		t.Fatalf("seed revoked api key: %v", err)
+	}
+	if _, err := sp.Settings(ctx, target); err != nil {
+		t.Fatalf("materialise settings: %v", err)
+	}
+	if _, err := p.Exec(ctx,
+		`INSERT INTO workspace_invites (workspace_id, email, role, token) VALUES ($1,$2,'read_only','it-purge-inv-'||$3)`,
+		target, "purge-"+acc[:8]+"@example.test", acc[:8]); err != nil {
+		t.Fatalf("seed invite: %v", err)
+	}
+	if _, err := p.Exec(ctx,
+		`INSERT INTO workspace_legal_pages (workspace_id, page_type) VALUES ($1,'privacy')`, target); err != nil {
+		t.Fatalf("seed legal page: %v", err)
+	}
+	if _, err := p.Exec(ctx,
+		`INSERT INTO workspace_email_settings (workspace_id) VALUES ($1)`, target); err != nil {
+		t.Fatalf("seed email settings: %v", err)
+	}
+
+	// Purge a LIVE workspace → refused. Trash is the only way in.
+	if _, err := sp.Purge(ctx, target, user); !errors.Is(err, ErrWorkspaceNotFound) {
+		t.Fatalf("Purge of a LIVE workspace error = %v, want ErrWorkspaceNotFound — a purge "+
+			"must only ever act on something already in the bin", err)
+	}
+	if n := countRows(t, ctx, p, `SELECT COUNT(*) FROM workspaces WHERE id=$1`, target); n != 1 {
+		t.Fatal("the refused purge destroyed the live workspace")
+	}
+
+	// Trash it, then purge it.
+	if _, err := sp.Delete(ctx, target, user, ""); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	purged, err := sp.Purge(ctx, target, user)
+	if err != nil {
+		t.Fatalf("Purge: %v", err)
+	}
+	if purged["workspaces"] != 1 {
+		t.Errorf("purged[workspaces] = %d, want 1", purged["workspaces"])
 	}
 
 	for _, q := range []struct {
@@ -207,182 +467,75 @@ func TestWorkspaceDeleteCascadesEveryChildRow(t *testing.T) {
 		{"forms", `SELECT COUNT(*) FROM forms WHERE account_id=$1`, []any{acc}},
 		{"products", `SELECT COUNT(*) FROM products WHERE account_id=$1`, []any{acc}},
 		{"workspace_settings", `SELECT COUNT(*) FROM workspace_settings WHERE workspace_id=$1`, []any{target}},
-		{"workspace_members", `SELECT COUNT(*) FROM workspace_members WHERE workspace_id=$1`, []any{target}},
 		{"workspace_invites", `SELECT COUNT(*) FROM workspace_invites WHERE workspace_id=$1`, []any{target}},
 		{"workspace_legal_pages", `SELECT COUNT(*) FROM workspace_legal_pages WHERE workspace_id=$1`, []any{target}},
 		{"workspace_email_settings", `SELECT COUNT(*) FROM workspace_email_settings WHERE workspace_id=$1`, []any{target}},
 	} {
-		var n int
-		if err := p.QueryRow(ctx, q.sql, q.args...).Scan(&n); err != nil {
-			t.Fatalf("count %s: %v", q.table, err)
-		}
-		if n != 0 {
-			t.Errorf("%s still has %d row(s) after the workspace delete — the cascade did not reach it", q.table, n)
+		if n := countRows(t, ctx, p, q.sql, q.args...); n != 0 {
+			t.Errorf("%s still has %d row(s) after the purge — the ordered delete did not reach it", q.table, n)
 		}
 	}
 }
 
-// TestWorkspaceDeleteWithoutClearingRevokedKeyWouldFail is the mutation evidence
-// for the ordered delete above: it proves the REVOKED key is load-bearing. The
-// raw FK refuses a bare workspace delete, so the store's explicit
-// `DELETE FROM api_keys` step is what makes the feature work rather than an
-// incidental extra.
-func TestWorkspaceDeleteWithoutClearingRevokedKeyWouldFail(t *testing.T) {
+// TestWorkspacePurgeRefusesAWorkspaceThatWasSold is the sales guard: a purge
+// destroys sales rows outright, and sales are the merchant's record of money
+// received. The refusal must leave every row in place.
+func TestWorkspacePurgeRefusesAWorkspaceThatWasSold(t *testing.T) {
 	ctx := context.Background()
 	p := testPool(t)
 	sp := NewWorkspaceStore(p)
 	user, ids := wsDeleteFixture(t, ctx, p, 2)
 	target := ids[0]
+
 	var acc string
 	if err := p.QueryRow(ctx, `SELECT id FROM accounts WHERE workspace_id=$1`, target).Scan(&acc); err != nil {
-		t.Fatalf("read account: %v", err)
+		t.Fatalf("read workspace account: %v", err)
 	}
-	if _, err := p.Exec(ctx,
-		`INSERT INTO api_keys (account_id, name, key_hash, scopes, workspace_id, revoked_at)
-		 VALUES ($1,'it','it-mut-'||$3,'{admin}',$2, now())`,
-		acc, target, acc[:8]); err != nil {
-		t.Fatalf("seed revoked key: %v", err)
+	ss := NewSaleStore(p)
+	if err := ss.Create(ctx, &Sale{
+		AccountID: acc, RefCode: "IT-WSPURGE-" + acc[:8],
+		Client: SaleClient{FullName: "A", Email: "a@example.test"},
+		Items:  []SaleItem{}, Status: SalePaid, PaymentMethod: "chip",
+		SaleType: SaleTypeOneTime,
+	}); err != nil {
+		t.Fatalf("seed sale: %v", err)
 	}
-
-	// The naive delete the store must NOT be doing: it fails, because
-	// api_keys.workspace_id is NO ACTION.
-	if _, err := p.Exec(ctx, `DELETE FROM workspaces WHERE id=$1`, target); err == nil {
-		t.Fatal("DELETE FROM workspaces succeeded with a revoked api_key still referencing it — " +
-			"the FK is not RESTRICT, so the ordered delete in the store is untested")
-	}
-	// ...and the store's version succeeds.
 	if _, err := sp.Delete(ctx, target, user, ""); err != nil {
-		t.Fatalf("store Delete after the raw FK refused: %v", err)
+		t.Fatalf("Delete: %v", err)
+	}
+
+	if _, err := sp.Purge(ctx, target, user); !errors.Is(err, ErrWorkspaceHasSales) {
+		t.Fatalf("Purge of a sold workspace error = %v, want ErrWorkspaceHasSales — a purge "+
+			"destroys sales, and sales are the record of money received", err)
+	}
+	// Nothing may have been destroyed by the refusal.
+	if n := countRows(t, ctx, p, `SELECT COUNT(*) FROM workspaces WHERE id=$1`, target); n != 1 {
+		t.Error("the refused purge destroyed the workspace anyway")
+	}
+	if n := countRows(t, ctx, p, `SELECT COUNT(*) FROM sales WHERE account_id=$1`, acc); n != 1 {
+		t.Error("the refused purge destroyed the sale anyway")
+	}
+	if n := countRows(t, ctx, p, `SELECT COUNT(*) FROM accounts WHERE workspace_id=$1`, target); n != 1 {
+		t.Error("the refused purge destroyed the CHIP account anyway")
+	}
+	// Purge by someone who does not own it is refused too.
+	other := testOwnerUser(t, ctx, p)
+	if _, err := sp.Purge(ctx, target, other); !errors.Is(err, &WorkspaceDeleteError{}) {
+		if err == nil {
+			t.Error("a non-owner purged someone else's workspace")
+		}
 	}
 }
 
-// TestWorkspaceDeleteRefusesWhenNotEmpty pins the emptiness guard per category
-// (acceptance 3). Each subtest seeds exactly ONE category and asserts BOTH the
-// refusal shape and that nothing was deleted — a guard that refused AFTER
-// deleting would otherwise pass.
-func TestWorkspaceDeleteRefusesWhenNotEmpty(t *testing.T) {
-	ctx := context.Background()
-
-	for _, tc := range []struct {
-		name   string
-		kind   string
-		seed   func(t *testing.T, ctx context.Context, p *pgxpool.Pool, acc, workspace string)
-		detail string
-	}{
-		{
-			name: "form in the trash still blocks",
-			kind: "forms",
-			seed: func(t *testing.T, ctx context.Context, p *pgxpool.Pool, acc, _ string) {
-				fs := NewFormStore(p)
-				f := &Form{AccountID: acc, Slug: "it-wsblk-" + acc[:8], Title: "IT", Status: "draft"}
-				if err := fs.Create(ctx, f); err != nil {
-					t.Fatalf("seed form: %v", err)
-				}
-				// Trashed, NOT purged: the row (and so the count) remains. This is
-				// the exact shape the card's comment describes — the merchant must
-				// purge, not merely trash.
-				if err := fs.SoftDelete(ctx, acc, f.ID); err != nil {
-					t.Fatalf("trash form: %v", err)
-				}
-			},
-			detail: "a trashed form is still a `forms` row; it must be purged before the workspace can go",
-		},
-		{
-			name: "product blocks",
-			kind: "products",
-			seed: func(t *testing.T, ctx context.Context, p *pgxpool.Pool, acc, _ string) {
-				if err := NewProductStore(p).Create(ctx, &Product{
-					AccountID: acc, Name: "IT", PriceSen: 100, Type: "one_time",
-				}); err != nil {
-					t.Fatalf("seed product: %v", err)
-				}
-			},
-			detail: "products are rows; they must be removed before the workspace",
-		},
-		{
-			name: "live api key blocks",
-			kind: "api_keys",
-			seed: func(t *testing.T, ctx context.Context, p *pgxpool.Pool, acc, workspace string) {
-				if _, err := p.Exec(ctx,
-					`INSERT INTO api_keys (account_id, name, key_hash, scopes, workspace_id) VALUES ($1,'it','it','{admin}',$2)`,
-					acc, workspace); err != nil {
-					t.Fatalf("seed api key: %v", err)
-				}
-			},
-			detail: "a live key is a credential that must be revoked first",
-		},
-		{
-			name: "sale blocks",
-			kind: "sales",
-			seed: func(t *testing.T, ctx context.Context, p *pgxpool.Pool, acc, _ string) {
-				ss := NewSaleStore(p)
-				if err := ss.Create(ctx, &Sale{
-					AccountID: acc, RefCode: "IT-WSBLK-" + acc[:8],
-					Client: SaleClient{FullName: "A", Email: "a@example.test"},
-					Items:  []SaleItem{}, Status: SalePaid, PaymentMethod: "chip",
-					SaleType: SaleTypeOneTime,
-				}); err != nil {
-					t.Fatalf("seed sale: %v", err)
-				}
-			},
-			detail: "sales are trading history and may NEVER be destroyed by this call",
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			p := testPool(t)
-			sp := NewWorkspaceStore(p)
-			user, ids := wsDeleteFixture(t, ctx, p, 2)
-			target := ids[0]
-			var acc string
-			if err := p.QueryRow(ctx, `SELECT id FROM accounts WHERE workspace_id=$1`, target).Scan(&acc); err != nil {
-				t.Fatalf("read workspace account: %v", err)
-			}
-			tc.seed(t, ctx, p, acc, target)
-
-			_, err := sp.Delete(ctx, target, user, "")
-			blockers, ok := ErrWorkspaceNotEmpty(err)
-			if !ok {
-				t.Fatalf("Delete error = %v, want the not_empty refusal (%s)", err, tc.detail)
-			}
-			var found bool
-			for _, b := range blockers {
-				if b.Kind == tc.kind {
-					found = true
-					if b.Count < 1 {
-						t.Errorf("blocker %s count = %d, want >= 1", tc.kind, b.Count)
-					}
-					if b.Label == "" {
-						t.Errorf("blocker %s has no label — the refusal message would name nothing", tc.kind)
-					}
-				}
-			}
-			if !found {
-				t.Errorf("blockers = %+v, want a %q entry (%s)", blockers, tc.kind, tc.detail)
-			}
-
-			// NOTHING may have been deleted: the guard runs inside the
-			// transaction, so a refused delete must leave every row in place.
-			var n int
-			if err := p.QueryRow(ctx, `SELECT COUNT(*) FROM workspaces WHERE id=$1`, target).Scan(&n); err != nil {
-				t.Fatalf("count workspace: %v", err)
-			}
-			if n != 1 {
-				t.Error("the workspace was deleted despite the not-empty refusal")
-			}
-			if err := p.QueryRow(ctx, `SELECT COUNT(*) FROM accounts WHERE workspace_id=$1`, target).Scan(&n); err != nil {
-				t.Fatalf("count account: %v", err)
-			}
-			if n != 1 {
-				t.Error("the account was deleted despite the not-empty refusal")
-			}
-		})
-	}
-}
-
-// TestWorkspaceDeleteClearsDefaultWorkspace pins the side effect the card calls
-// out (acceptance 5): users.default_workspace_id pointing at the deleted
-// workspace becomes NULL, so the next login cannot land on a ghost workspace.
-func TestWorkspaceDeleteClearsDefaultWorkspace(t *testing.T) {
+// TestWorkspaceTrashClearsDefaultWorkspace pins the side effect the FK used to
+// provide for free (acceptance in the card's cascade note):
+// users.default_workspace_id pointing at the binned workspace becomes NULL, so
+// the next login cannot land on a workspace nobody can see.
+//
+// MUTATION EVIDENCE: delete the `UPDATE users SET default_workspace_id=NULL`
+// statement in Trash and this fails — the default survives, because a MARK fires
+// no ON DELETE SET NULL.
+func TestWorkspaceTrashClearsDefaultWorkspace(t *testing.T) {
 	ctx := context.Background()
 	p := testPool(t)
 	sp := NewWorkspaceStore(p)
@@ -401,8 +554,8 @@ func TestWorkspaceDeleteClearsDefaultWorkspace(t *testing.T) {
 		t.Fatalf("read default_workspace_id: %v", err)
 	}
 	if def != nil {
-		t.Errorf("default_workspace_id = %q after deleting that workspace, want NULL — a dangling "+
-			"default lands the next login on a workspace that does not exist", *def)
+		t.Errorf("default_workspace_id = %q after binning that workspace, want NULL — a dangling "+
+			"default lands the next login on a workspace that is in the bin", *def)
 	}
 }
 
@@ -418,53 +571,76 @@ func TestWorkspaceDeleteUnknownIDIsNotFound(t *testing.T) {
 	if err != ErrWorkspaceNotFound {
 		t.Fatalf("Delete(unknown id) error = %v, want ErrWorkspaceNotFound", err)
 	}
+	// Binning an ALREADY binned workspace is also a miss: trashing twice is not
+	// two operations and must not move deleted_at forward.
+	_, ids := wsDeleteFixture(t, ctx, p, 2)
+	if _, err := sp.Delete(ctx, ids[0], user, ""); err != nil {
+		t.Fatalf("first Delete: %v", err)
+	}
+	// A different owner with two workspaces, so the last_workspace guard cannot
+	// be the thing that answers.
+	other := testOwnerUser(t, ctx, p)
+	_, oids := wsDeleteFixture(t, ctx, p, 2)
+	_ = other
+	if _, err := sp.Delete(ctx, ids[0], user, ""); !errors.Is(err, ErrWorkspaceNotFound) {
+		t.Errorf("second Delete of the same workspace error = %v, want ErrWorkspaceNotFound", err)
+	}
+	_ = oids
 }
 
-// TestWorkspaceCountEmptyMatchesDeleteDefinition is the anti-drift guard: the
-// READ half the UI uses (CountEmpty, exposed as GET
-// /v1/workspaces/{id}/deletion-check) must agree with the WRITE half's verdict.
-// If the two ever disagree, the UI disables a button that would have worked — or
-// enables one that fails after the click.
-func TestWorkspaceCountEmptyMatchesDeleteDefinition(t *testing.T) {
+// TestWorkspaceContentCountsSurvivesTheGuardRemoval is the anti-drift guard on
+// the CENSUS (the survivors of the old emptiness definition): the READ half the
+// UI uses still has to agree with the rows on disk, even though nothing refuses
+// on it any more.
+func TestWorkspaceContentCountsSurvivesTheGuardRemoval(t *testing.T) {
 	ctx := context.Background()
 	p := testPool(t)
 	sp := NewWorkspaceStore(p)
-	user, ids := wsDeleteFixture(t, ctx, p, 2)
+	_, ids := wsDeleteFixture(t, ctx, p, 2)
 	target := ids[0]
 
-	_, blockers, err := sp.CountEmpty(ctx, target, "")
-	if err != nil {
-		t.Fatalf("CountEmpty: %v", err)
-	}
-	if len(blockers) != 0 {
-		t.Fatalf("fresh workspace CountEmpty blockers = %+v, want none", blockers)
-	}
-	if _, err := sp.Delete(ctx, target, user, ""); err != nil {
-		t.Fatalf("CountEmpty said empty but Delete refused: %v — the read and write halves disagree", err)
-	}
-
-	// And with content, CountEmpty must name it BEFORE the delete does.
-	other := ids[1]
 	var acc string
-	if err := p.QueryRow(ctx, `SELECT id FROM accounts WHERE workspace_id=$1`, other).Scan(&acc); err != nil {
+	if err := p.QueryRow(ctx, `SELECT id FROM accounts WHERE workspace_id=$1`, target).Scan(&acc); err != nil {
 		t.Fatalf("read account: %v", err)
 	}
+	counts, err := sp.ContentCounts(ctx, target, "")
+	if err != nil {
+		t.Fatalf("ContentCounts: %v", err)
+	}
+	if counts["accounts"] != 1 {
+		t.Errorf("ContentCounts[accounts] = %d, want 1", counts["accounts"])
+	}
+	if len(counts) != 1 {
+		t.Errorf("ContentCounts = %+v, want only the accounts entry on a fresh workspace", counts)
+	}
+
+	// A product shows up in the census as its own category.
 	if err := NewProductStore(p).Create(ctx, &Product{
 		AccountID: acc, Name: "IT", PriceSen: 100, Type: "one_time",
 	}); err != nil {
 		t.Fatalf("seed product: %v", err)
 	}
-	_, blockers, err = sp.CountEmpty(ctx, other, "")
+	counts, err = sp.ContentCounts(ctx, target, "")
 	if err != nil {
-		t.Fatalf("CountEmpty after seeding: %v", err)
+		t.Fatalf("ContentCounts after seeding: %v", err)
 	}
-	if len(blockers) != 1 || blockers[0].Kind != "products" {
-		t.Fatalf("CountEmpty blockers = %+v, want exactly one products blocker", blockers)
+	if counts["products"] != 1 {
+		t.Errorf("ContentCounts[products] = %d, want 1 (%+v)", counts["products"], counts)
 	}
-	if _, derr := sp.Delete(ctx, other, user, ""); !IsLastWorkspaceError(derr) {
-		// ids[1] is the last workspace now, so the last-workspace guard fires
-		// first. That is correct ordering, not a disagreement: assert the
-		// not-empty guard independently by giving the owner a third workspace.
-		t.Logf("delete on the now-last workspace refused as last_workspace (%v) — expected", derr)
+	// The census must NOT be a refusal any more: a workspace with content bins.
+	// wsDeleteFixture returns the owner it created, so use a fresh fixture pair
+	// rather than re-deriving it.
+	owner, oids := wsDeleteFixture(t, ctx, p, 2)
+	var oacc string
+	if err := p.QueryRow(ctx, `SELECT id FROM accounts WHERE workspace_id=$1`, oids[0]).Scan(&oacc); err != nil {
+		t.Fatalf("read account: %v", err)
+	}
+	if err := NewProductStore(p).Create(ctx, &Product{
+		AccountID: oacc, Name: "IT", PriceSen: 100, Type: "one_time",
+	}); err != nil {
+		t.Fatalf("seed product: %v", err)
+	}
+	if _, err := sp.Delete(ctx, oids[0], owner, ""); err != nil {
+		t.Fatalf("a workspace with content could not be binned: %v", err)
 	}
 }

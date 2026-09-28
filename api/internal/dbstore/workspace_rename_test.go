@@ -338,8 +338,22 @@ func TestWorkspaceRenameValidationIsTheOneSharedRule(t *testing.T) {
 }
 
 // TestWorkspaceDeleteCascadesItsAliases is requirement 6 and the join to the
-// delete-workspace card: deleting a workspace must take its aliases with it, so a
-// freed address does not keep redirecting to a host that no longer exists.
+// delete-workspace card: destroying a workspace must take its aliases with it, so
+// a freed address does not keep redirecting to a host that no longer exists.
+//
+// INTEGRATION NOTE (PR 804 merging main 15337da0). This test was written on main
+// against WorkspaceStore.Delete, which on main DESTROYS the workspace. On this
+// branch the trash landed first and Delete now BINS instead (a reversible mark),
+// while the row — and therefore the FK that cascades these aliases — is only
+// removed by Purge. Asserting the cascade on Delete here would be asserting the
+// hard delete the trash replaced. The REQUIREMENT is unchanged and still
+// asserted; only the verb that reaches it is, because the verb that destroys a
+// workspace is now Trash → Purge.
+//
+// The bin is checked on the way through on purpose: without it, a Purge that did
+// nothing at all would leave this test green for the wrong reason, and the
+// difference between "the trash released the name" and "the destroy removed the
+// aliases" would be invisible.
 func TestWorkspaceDeleteCascadesItsAliases(t *testing.T) {
 	ctx := context.Background()
 	p := testPool(t)
@@ -357,8 +371,20 @@ func TestWorkspaceDeleteCascadesItsAliases(t *testing.T) {
 		t.Fatalf("precondition: the former slug does not resolve (%q → %q)", vacated.OldSlug, got)
 	}
 
-	if _, err := sp.Delete(ctx, ids[0], user, ""); err != nil {
-		t.Fatalf("delete workspace: %v", err)
+	// Bin it. The bin is REVERSIBLE, so the alias stays: the row is still there,
+	// nothing has been destroyed, and a restore must bring the old address back
+	// with it.
+	if _, err := sp.Trash(ctx, ids[0], user); err != nil {
+		t.Fatalf("trash workspace: %v", err)
+	}
+	if n := countRows(t, ctx, p, `SELECT COUNT(*) FROM workspace_slug_aliases WHERE workspace_id=$1`, ids[0]); n == 0 {
+		t.Fatal("the bin dropped the workspace's aliases — a restore would come back without its " +
+			"former addresses, and the destroy below would then prove nothing")
+	}
+
+	// Now destroy it for good: that is the delete of the ROW, and the FK cascades.
+	if _, err := sp.Purge(ctx, ids[0], user); err != nil {
+		t.Fatalf("purge workspace: %v", err)
 	}
 
 	var n int
@@ -366,15 +392,15 @@ func TestWorkspaceDeleteCascadesItsAliases(t *testing.T) {
 		t.Fatalf("count aliases: %v", err)
 	}
 	if n != 0 {
-		t.Errorf("%d alias row(s) survived the workspace delete — ON DELETE CASCADE is not doing its job, "+
+		t.Errorf("%d alias row(s) survived the workspace purge — ON DELETE CASCADE is not doing its job, "+
 			"so a freed address would keep redirecting to a host that no longer exists", n)
 	}
 	// And the old host stops resolving entirely.
 	if got, _ := sp.CurrentSlugForHost(ctx, vacated.OldSlug); got != "" {
-		t.Errorf("the deleted workspace's former slug still resolves to %q", got)
+		t.Errorf("the purged workspace's former slug still resolves to %q", got)
 	}
 	// The other workspace is untouched (the control).
 	if other, _ := sp.ByID(ctx, ids[1]); other == nil {
-		t.Error("deleting one workspace removed another")
+		t.Error("destroying one workspace removed another")
 	}
 }

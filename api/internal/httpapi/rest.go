@@ -289,12 +289,23 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	// as an alias (migration 000068) and keeps resolving to the same workspace,
 	// so the change never breaks a URL already in the wild.
 	mux.Handle("PATCH /v1/workspaces/{id}", h.authed(h.renameWorkspace))
-	// Delete a workspace. Owner-only, and refused when it would leave the owner
-	// with zero workspaces or when the workspace still owns content (the
-	// refusal lists each blocking category with its count). Accounts are
-	// removed WITH the workspace — CHIP credentials are never shared or
-	// orphaned.
+	// The bin, read half. Registered BEFORE the {id} patterns so the literal
+	// `trash` segment wins — a workspace id could never be "trash", but net/http
+	// resolves the literal first anyway, and registering it here makes that
+	// explicit rather than incidental.
+	mux.Handle("GET /v1/workspaces/trash", h.authed(h.listTrashedWorkspaces))
+	// Delete a workspace: it goes to the BIN (deleted_at), it is NOT destroyed.
+	// Owner-only, and refused only when it would leave the owner with no LIVE
+	// workspace. Every row it holds stays on disk until a human purges.
 	mux.Handle("DELETE /v1/workspaces/{id}", h.authed(h.deleteWorkspace))
+	// Bring a binned workspace back. No confirmation — it destroys nothing.
+	// 409 when the slug was re-claimed while it sat in the bin.
+	mux.Handle("POST /v1/workspaces/{id}/restore", h.authed(h.restoreWorkspace))
+	// Destroy a binned workspace FOR GOOD. Confirmed by typing its slug. This is
+	// the only irreversible call in the workspace surface and it is deliberately
+	// session-only with no MCP tool in front of it: the assistant may bin, never
+	// destroy.
+	mux.Handle("DELETE /v1/workspaces/{id}/purge", h.authed(h.purgeWorkspace))
 	// Pre-flight for the delete button: the same emptiness definition, as a
 	// read, so the UI can list blockers before the destructive call.
 	mux.Handle("GET /v1/workspaces/{id}/deletion-check", h.authed(h.workspaceDeletionCheck))

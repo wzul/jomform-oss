@@ -3,14 +3,13 @@
 // Workspace tab (Settings) — workspace identity + a Danger zone.
 //
 // WHAT THIS IS FOR. Before this tab a merchant could CREATE a workspace and
-// never remove one: there was no DELETE route, no store method, no UI. Emptying
-// a workspace before deleting it was also impossible in practice, because a
-// deleted (trashed) form still counted and nothing could remove it for good —
-// so the trash surface and the permanent delete live on /forms, and this tab is
-// where the consequence is explained.
+// never remove one: there was no DELETE route, no store method, no UI. The
+// delete itself is a move to the TRASH: every row stays, and the workspace can
+// be restored whole. Deleting it for good is a second, separate step offered
+// only on a workspace already in the bin.
 //
 // THE TWO RULES, surfaced rather than only enforced:
-//   1. At least one workspace. The last one is never deletable — a user always
+//   1. At least one workspace. The last one is never binnable — a user always
 //      has somewhere to land. The button is DISABLED with the reason stated
 //      instead of failing after it is pressed (the server enforces the same
 //      rule, so this is the read half of one definition, not a second one).
@@ -18,12 +17,23 @@
 //      its public identity, its trading history, or the CHIP account holding
 //      its credentials.
 //
-// The confirmation is the workspace SLUG typed back, not an OK/Cancel: this
-// cannot be undone and it takes the account (and its CHIP credentials) with it.
+// CONTENT NO LONGER BLOCKS. The workspace used to have to be empty to be
+// deleted, and this tab listed the blockers; with the trash there is nothing to
+// protect, so a full workspace bins freely. The counts are still shown, because
+// they are what the PURGE refusal is about — a workspace that has sales cannot
+// be destroyed for good.
 //
-// The blockers come from GET /v1/workspaces/{id}/deletion-check — the SAME
-// query the delete enforces — so the list shown here can never disagree with
-// what the server will refuse.
+// PERMANENT DELETE IS NOT OFFERED HERE. The trash list on this tab is RESTORE
+// only: a purge destroys a merchant's whole workspace and must not be one click
+// from the identity form. The REST route exists (and is session-only), but no
+// purge control is wired on this surface, so the counts above are read from
+// deletion-check for context rather than to gate a button.
+//
+// The confirmation is the workspace SLUG typed back, not an OK/Cancel: it is
+// deliberate friction on a call whose next step is irreversible.
+//
+// The counts come from GET /v1/workspaces/{id}/deletion-check, so what is shown
+// here can never disagree with what the server will refuse.
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -34,6 +44,27 @@ import { WORKSPACE_NAME_MAX_CHARS } from "../lib/workspaceIdentity";
 import { fetchJson, runLoad } from "../lib/wsfetch";
 
 type Blocker = { kind: string; count: number; label: string };
+
+// A row of GET /v1/workspaces/trash (proxied at /api/workspaces/trash).
+//
+// THE WIRE SHAPE IS A BARE ARRAY, and the id field is `id` — NOT an
+// {"items":[...],"total":N} envelope and not `workspace_id`. Both spellings
+// matter: the route writes the slice directly (`writeJSON(w, 200, out)` in
+// rest_workspaces.go) and the sibling REST test pins the bare array with `id`,
+// `slug`, `deleted_at`, `sales_count`, `can_purge`. Reading an envelope here
+// meant `Array.isArray(r.data?.items)` was always false, so the Trash section
+// rendered "The Trash is empty." for a user who had binned a workspace, and the
+// Restore button — the only way back out of the bin from the UI — could never be
+// reached. The row's census fields are carried through so the view can say what a
+// permanent delete would cost before the click.
+type TrashedWorkspace = {
+  id: string;
+  name: string;
+  slug: string;
+  deleted_at?: string;
+  sales_count?: number;
+  can_purge?: boolean;
+};
 
 type DeletionCheck = {
   id: string;
@@ -58,6 +89,9 @@ export default function WorkspaceTab({ workspaceId }: { workspaceId: string }) {
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [trash, setTrash] = useState<TrashedWorkspace[] | null>(null);
+  const [trashErr, setTrashErr] = useState("");
+  const [restoring, setRestoring] = useState("");
 
   // ── Rename state ──
   // Seeded from the server's answer and re-seeded after a save, so the inputs
@@ -99,6 +133,58 @@ export default function WorkspaceTab({ workspaceId }: { workspaceId: string }) {
   useEffect(() => {
     load();
   }, [load]);
+
+  // The Trash list is a second, independent read: a failure to load it must not
+  // blank the identity or the Danger zone, so it keeps its own error state
+  // rather than sharing `err`.
+  const loadTrash = useCallback(async () => {
+    const r = await runLoad(
+      async () => {
+        // BARE ARRAY, not an envelope: the route writes the slice directly. See
+        // TrashedWorkspace above for why this is pinned rather than assumed.
+        const d = await fetchJson<unknown>("/api/workspaces/trash");
+        return Array.isArray(d) ? (d as TrashedWorkspace[]) : [];
+      },
+      { onUnauth: goToLogin, message: t("ws.trashLoadFail") },
+    );
+    if (!r.ok) {
+      setTrash([]);
+      setTrashErr(r.error);
+      return;
+    }
+    setTrash(r.data);
+    setTrashErr("");
+  }, [t, goToLogin]);
+
+  useEffect(() => {
+    void loadTrash();
+  }, [loadTrash]);
+
+  async function doRestore(id: string) {
+    if (restoring) return;
+    setRestoring(id);
+    setTrashErr("");
+    try {
+      const res = await fetch(`/api/workspaces/${id}/restore`, { method: "POST" });
+      if (!res.ok) {
+        // A refusal carries its own code (the slug was retaken, or the caller is
+        // not the owner), so it renders in the user's language rather than as
+        // the page's generic sentence.
+        const d = await res.json().catch(() => null);
+        setTrashErr(apiErr(d, t("ws.trashRestoreFail"), t));
+        setRestoring("");
+        return;
+      }
+      // A restored workspace reappears in the switcher, and the session bundle
+      // this browser holds was derived before the restore — a full reload
+      // re-derives it rather than leaving a stale list on screen.
+      await loadTrash();
+      window.location.reload();
+    } catch {
+      setTrashErr(t("ws.trashRestoreFail"));
+      setRestoring("");
+    }
+  }
 
   // Escape closes the dialog — the modal has no built-in close key otherwise.
   useEffect(() => {
@@ -426,7 +512,6 @@ export default function WorkspaceTab({ workspaceId }: { workspaceId: string }) {
                 <p className="mt-2 text-xs text-amber-800">{t("ws.notEmptyHint")}</p>
               </div>
             )}
-
             <button
               type="button"
               onClick={() => setConfirmOpen(true)}
@@ -445,6 +530,83 @@ export default function WorkspaceTab({ workspaceId }: { workspaceId: string }) {
           <p role="alert" className="mt-3 text-sm text-red-600">
             {err}
           </p>
+        )}
+      </section>
+
+      {/* ── Trash ──
+          Where binned workspaces wait. Restore is the one action here: the
+          permanent delete is deliberately NOT on this tab — it is offered from
+          the Trash view beside the row it would destroy, so a destructive
+          second step is never one click from the identity form. */}
+      <section className="jf-card mt-6 p-6">
+        <div className="flex items-start justify-between gap-2">
+          <h2 className="text-lg font-semibold">{t("ws.trashTitle")}</h2>
+          {/* The inline "?" deep-links the doc section (AGENTS.md docs-parity
+              rule 4) that explains what the Trash does and does not destroy. */}
+          <a
+            href="/docs#delete-workspace"
+            target="_blank"
+            rel="noopener noreferrer"
+            title={t("ws.docs")}
+            aria-label={t("ws.docs")}
+            className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-200 text-[11px] font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+          >
+            ?
+          </a>
+        </div>
+        <p className="mt-1 max-w-xl text-sm text-[var(--jf-muted)]">
+          {t("ws.trashHelp")}
+        </p>
+
+        {trashErr && (
+          <p role="alert" className="mt-3 text-sm text-red-600">
+            {trashErr}
+          </p>
+        )}
+
+        {trash != null && trash.length === 0 && !trashErr && (
+          <p className="mt-3 text-sm text-[var(--jf-muted)]">{t("ws.trashEmpty")}</p>
+        )}
+
+        {trash != null && trash.length > 0 && (
+          <ul className="mt-3 divide-y divide-slate-200 border-t border-slate-200">
+            {trash.map((w) => (
+              <li
+                key={w.id}
+                className="flex flex-wrap items-center justify-between gap-3 py-3"
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium">{w.name}</p>
+                  <p className="truncate font-mono text-xs text-[var(--jf-muted)]">
+                    {w.slug}
+                  </p>
+                  {w.deleted_at && (
+                    <p className="text-xs text-[var(--jf-muted)]">
+                      {t("ws.trashDeletedAt")}:{" "}
+                      {new Date(w.deleted_at).toLocaleDateString()}
+                    </p>
+                  )}
+                  {/* What a permanent delete would cost, read straight off the
+                      row (the route reports the census PER ROW). */}
+                  {w.can_purge === false && (
+                    <p className="text-xs text-[var(--jf-muted)]">
+                      {t("ws.trashHeldBySales", { count: w.sales_count ?? 0 })}
+                    </p>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void doRestore(w.id)}
+                  disabled={restoring !== ""}
+                  className="jf-btn-ghost shrink-0 px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {restoring === w.id
+                    ? t("ws.trashRestoring")
+                    : t("ws.trashRestore")}
+                </button>
+              </li>
+            ))}
+          </ul>
         )}
       </section>
 

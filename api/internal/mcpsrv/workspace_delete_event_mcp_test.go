@@ -149,20 +149,26 @@ func TestMCPDeleteWorkspaceHistoryEventLands(t *testing.T) {
 	if err != nil {
 		t.Fatalf("delete_workspace: %v", err)
 	}
-	if out["status"] != "deleted" {
-		t.Fatalf("delete_workspace returned %v, want status=deleted", out)
+	if out["status"] != "trashed" {
+		t.Fatalf("delete_workspace returned %v, want status=trashed", out)
 	}
-	// The delete really happened (otherwise this test proves nothing).
+	// The workspace really went to the BIN — otherwise this test proves nothing.
+	// Under the trash the equivalent pre-condition is `deleted_at IS NOT NULL`
+	// rather than "the row is gone", and the mcp.tool_call history row must
+	// still land on an account that exists (the bin destroys nothing).
 	var exists int
-	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM workspaces WHERE id=$1`, doomedID).Scan(&exists); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM workspaces WHERE id=$1 AND deleted_at IS NOT NULL`, doomedID).Scan(&exists); err != nil {
 		t.Fatalf("count workspaces: %v", err)
 	}
-	if exists != 0 {
-		t.Fatal("the workspace was not deleted, so this test proves nothing")
+	if exists != 1 {
+		t.Fatal("the workspace was not trashed, so this test proves nothing")
 	}
-	// The account the scope named is gone — the reason the pre-fix write failed.
-	if acc, err := dbstore.NewAccountStore(pool).ByID(ctx, doomedAccID); err == nil && acc != nil {
-		t.Errorf("the doomed account %s still exists; the fixture did not reproduce the defect shape", doomedAccID)
+	// The scope account SURVIVES the move — which is exactly why the history
+	// write can be attributed to it, and why the old FK defect is unreachable
+	// on this route now.
+	if acc, err := dbstore.NewAccountStore(pool).ByID(ctx, doomedAccID); err != nil || acc == nil {
+		t.Fatalf("the binned workspace's account %s is gone (err=%v); the trash must keep every "+
+			"row, and that surviving row is what the history event is attributed to", doomedAccID, err)
 	}
 
 	// addTool records the history row AFTER the handler returns.
@@ -175,10 +181,8 @@ func TestMCPDeleteWorkspaceHistoryEventLands(t *testing.T) {
 		t.Fatalf("count events: %v", err)
 	}
 	if n != 1 {
-		t.Fatalf("mcp.tool_call rows for delete_workspace = %d, want 1 — the history write "+
-			"is attributed to the account the call just destroyed, so "+
-			"events_account_id_fkey rejects it with SQLSTATE 23503 and recordMCPEvent's "+
-			"best-effort path swallows it", n)
+		t.Fatalf("mcp.tool_call rows for delete_workspace = %d, want 1 — the call must be "+
+			"recorded in Settings → MCP history", n)
 	}
 	var accountID string
 	if err := pool.QueryRow(ctx,
@@ -186,11 +190,17 @@ func TestMCPDeleteWorkspaceHistoryEventLands(t *testing.T) {
 		   AND user_id=$1 AND properties->>'tool'='delete_workspace'`, userID).Scan(&accountID); err != nil {
 		t.Fatalf("read event account_id: %v", err)
 	}
+	// The row is attributed to the caller's OTHER live account, not to the binned
+	// one. Both rows still exist under the trash, so "it exists" is not the test:
+	// the history is read through the account scope, and an event parked inside
+	// the workspace that was just put away would be invisible to the caller — the
+	// bin's version of the swallowed-FK defect.
 	if accountID == doomedAccID {
-		t.Errorf("the history row is attributed to the DELETED account %s — that is the FK violation", accountID)
+		t.Errorf("the history row is attributed to the BINNED workspace's account %s — that row "+
+			"exists but is parked in the trash, so the caller's own history would not show the call", accountID)
 	}
 	if accountID != survivorAccID {
-		t.Errorf("the history row is attributed to %s, want the surviving account %s", accountID, survivorAccID)
+		t.Errorf("the history row is attributed to %s, want the caller's live account %s", accountID, survivorAccID)
 	}
 	// And the account it names must be live.
 	var live bool
@@ -252,7 +262,7 @@ func TestMCPDeleteWorkspaceHistoryEventIsRecordedOnce(t *testing.T) {
 		_, out, err := srv.deleteWorkspaceMCP(callCtx, nil, deleteWorkspaceIn{
 			WorkspaceID: doomedID, ConfirmSlug: doomedSlug,
 		})
-		if i == 0 && (err != nil || out["status"] != "deleted") {
+		if i == 0 && (err != nil || out["status"] != "trashed") {
 			t.Fatalf("first delete_workspace: err=%v out=%v", err, out)
 		}
 		if i == 1 && err == nil {
@@ -275,17 +285,21 @@ func TestMCPDeleteWorkspaceHistoryEventIsRecordedOnce(t *testing.T) {
 // TestMCPDeleteWorkspaceHistoryNeverLandsOnAStrangerAccount is the MCP twin of the
 // cross-tenant mis-attribution.
 //
-// The caller owns workspaces AND is a plain MEMBER of a stranger's older one.
-// When the call's own scope account is destroyed by delete_workspace, the
-// surviving-account fallback must not reach into a workspace the caller only
-// belongs to: mcp.tool_call rows are account-scoped, so the stranger would read
-// the caller's delete out of their own history while the caller's history showed
-// nothing.
+// The caller owns workspaces AND is a plain MEMBER of a stranger's older one,
+// created first so its account heads the list ByMember returns — exactly the
+// candidate a fallback would reach for.
 //
-// Two assertions, because they fail differently: the stranger's history must be
-// empty, AND the caller's own surviving account must carry the row. With the
-// rework's owned-only fallback the second holds directly; a fallback that merely
-// skipped would pass the first and fail the second, which is the point.
+// Under the OLD hard delete the scope account was destroyed, so the
+// surviving-account fallback ran on every delete_workspace call, and it must not
+// reach into a workspace the caller only BELONGS to: mcp.tool_call rows are
+// account-scoped, so the stranger would read the caller's delete out of their
+// own history.
+//
+// The bin removes the trigger — the scope account survives, so no fallback runs
+// at all. This test still pins the cross-tenant property (the stranger's history
+// stays empty) AND the stronger fact that the row is attributed to the call's
+// own scope account rather than to some other live account the fallback might
+// have picked.
 func TestMCPDeleteWorkspaceHistoryNeverLandsOnAStrangerAccount(t *testing.T) {
 	requireTestDB(t)
 	ctx := context.Background()
@@ -296,19 +310,21 @@ func TestMCPDeleteWorkspaceHistoryNeverLandsOnAStrangerAccount(t *testing.T) {
 	_, out, err := srv.deleteWorkspaceMCP(callCtx, nil, deleteWorkspaceIn{
 		WorkspaceID: doomedID, ConfirmSlug: doomedSlug,
 	})
-	if err != nil || out["status"] != "deleted" {
+	if err != nil || out["status"] != "trashed" {
 		t.Fatalf("delete_workspace: err=%v out=%v", err, out)
 	}
 	var exists int
-	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM workspaces WHERE id=$1`, doomedID).Scan(&exists); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM workspaces WHERE id=$1 AND deleted_at IS NOT NULL`, doomedID).Scan(&exists); err != nil {
 		t.Fatalf("count workspaces: %v", err)
 	}
-	if exists != 0 {
-		t.Fatal("the workspace was not deleted, so this test proves nothing")
+	if exists != 1 {
+		t.Fatal("the workspace was not trashed, so this test proves nothing")
 	}
-	// The scope account is gone: the fallback is what attribution exercises.
-	if acc, err := dbstore.NewAccountStore(pool).ByID(ctx, doomedAccID); err == nil && acc != nil {
-		t.Errorf("the doomed account %s still exists; the fixture did not reproduce the defect shape", doomedAccID)
+	// The scope account SURVIVES the bin, so attribution does not have to go
+	// looking for a substitute — the stranger is never a candidate.
+	if acc, err := dbstore.NewAccountStore(pool).ByID(ctx, doomedAccID); err != nil || acc == nil {
+		t.Fatalf("the binned workspace's account %s is gone (err=%v); under the trash it must "+
+			"survive, which is what keeps attribution off the stranger's account", doomedAccID, err)
 	}
 	srv.recordMCPEvent(callCtx, "delete_workspace", false)
 
@@ -330,7 +346,8 @@ func TestMCPDeleteWorkspaceHistoryNeverLandsOnAStrangerAccount(t *testing.T) {
 		t.Fatalf("count survivor history: %v", err)
 	}
 	if inSurvivor != 1 {
-		t.Errorf("history rows on the caller's OWN surviving account %s = %d, want 1 — the caller still "+
-			"owns a live account, so the call must be recorded there", survivorAccID, inSurvivor)
+		t.Errorf("history rows on the caller's OWN live account %s = %d, want 1 — the call must be "+
+			"recorded on a live account of the caller's, never on the binned one and never on a "+
+			"stranger's", survivorAccID, inSurvivor)
 	}
 }

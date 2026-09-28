@@ -35,6 +35,7 @@ func (s *WorkspaceStore) ListAllWithCounts(ctx context.Context) ([]WorkspaceWith
 		       (SELECT COUNT(*) FROM products p WHERE p.workspace_id = sp.id)
 		FROM workspaces sp
 		LEFT JOIN users u ON u.id = sp.owner_user_id
+		WHERE sp.deleted_at IS NULL
 		ORDER BY sp.created_at DESC`)
 	if err != nil {
 		return nil, err
@@ -68,6 +69,7 @@ func (s *MediaStore) UsageByWorkspace(ctx context.Context) ([]MediaUsageByWorksp
 		FROM workspaces sp
 		LEFT JOIN accounts a ON a.workspace_id = sp.id
 		LEFT JOIN media m ON m.account_id = a.id AND m.deleted_at IS NULL
+		WHERE sp.deleted_at IS NULL
 		GROUP BY sp.id, sp.name, sp.slug
 		ORDER BY sp.name`)
 	if err != nil {

@@ -53,7 +53,18 @@ const (
 	// A workspace DELETE refused because something still lives in it. The refusal
 	// names the obstacles (the body's `blockers` array), which is exactly the
 	// class of message the page's own generic sentence cannot say.
-	CodeWorkspaceNotEmpty = "workspace.notEmpty"
+	//
+	// RETIRED WITH ITS GUARD (workspace trash). The DELETE no longer refuses on
+	// content at all — it moves the workspace to the bin — so no handler returns
+	// this code and the "every declared code is reachable" guard would (correctly)
+	// report it as dead. Do not re-add it without the guard it names.
+	//
+	// CodeWorkspaceNotEmpty = "workspace.notEmpty"
+	//
+	// A permanent workspace PURGE refused because the workspace was ever sold.
+	// Sales are the merchant's record of money received and a purge destroys
+	// them, so the refusal names the count the same way the form purge does.
+	CodeWorkspaceHasSales = "workspace.hasSales"
 
 	// Roles and API-key scope.
 	CodeRoleManageRequired = "role.manageRequired"
