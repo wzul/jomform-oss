@@ -81,13 +81,41 @@
 # failure twice (once in the run, once under "✖ failing tests:"), so a grep over
 # `✖` reports 2 or 3 for a single failure.
 #
+# A CAUGHT-UP BASE IS REFUSED, NOT REPORTED AS `fail=1` (card `t_858620fc`). The
+# premise check below only refuses a base that does not CARRY the guard at all
+# (`git cat-file -e`). It does not cover the base whose reader has CAUGHT UP to this
+# branch: once the fix MERGES into `origin/main`, the base guard is still there and
+# still GREEN on the unmutated tree, so the premise holds — and then every HOLE case
+# reads `does not reproduce the premise`, seven `***` lines and a silent
+# `BITEPROOF FAIL (fail=1)`, a reading indistinguishable from "the base is genuinely
+# pre-fix and the mutations failed to apply". What identifies a caught-up base is the
+# reader's CAPABILITY (it DECLARES `stripUnrendered(read(DOCS_PAGE))`), never a byte
+# distance — the guard can be rewritten around the same reader. When it is caught up
+# this script REFUSES (exit 2) and prints a `BITEPROOF_BASE=<rev>` resolved from git
+# and offered only when that revision's guard really is pre-fix. The refusal is
+# itself driven end to end on every run (see the self-check), so the instrument
+# cannot silently go back to printing a false FAIL the next time main catches up.
+#
 # Run:  bash web/scripts/biteproof_docs_index_render_sites.sh
 set -uo pipefail
+
+# Absolute path to this script, resolved BEFORE the `cd` below: the caught-up-base
+# self-check invokes it recursively (BITEPROOF_REFUSE_ONLY), and the `cd` would
+# invalidate a relative `$0`.
+SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
 
 cd "$(dirname "$0")/.." || exit 2          # -> web/
 
 PAGE=src/app/docs/page.tsx
 GUARD=src/lib/docsIndex.test.ts
+# THE CAPABILITY TEST for a caught-up base, and why it is not a byte comparison:
+# once the fix MERGES into `origin/main` the base guard stays a few bytes off this
+# tree's while READING THE SAME stripped text, so a byte test would compare a reader
+# with itself (the sibling's byte fast path was itself unsatisfiable — card
+# `t_dba4465c`). What identifies the reader is what it DECLARES: these two lines are
+# the shapes either side of the fix (`7b90dd7c` has the first, `4952045b` the second).
+PRE_READER='const docsSrc = read(DOCS_PAGE)'
+POST_READER='const docsSrc = stripUnrendered(read(DOCS_PAGE))'
 OLD_GUARD=$(mktemp)
 PAGE_BAK=$(mktemp)
 # Per-run temp copies of the guard, beside the real one: the guard resolves its
@@ -132,6 +160,151 @@ guard_sha_before=$(sha256sum "$GUARD" | cut -d' ' -f1)
 
 echo "old guard (${BASE_REF} ${BASE_REV:0:12}): $(wc -l < "$OLD_GUARD") lines"
 echo "new guard (this tree):             $(wc -l < "$GUARD") lines"
+
+# ── CAPABILITY TEST: IS THE BASE READER PRE-FIX, OR HAS IT CAUGHT UP? ─────────
+# Reads the base guard's TEXT, never its byte distance from this tree's file. A
+# byte test cannot decide this: once the fix merges into `origin/main` the guard can
+# be rewritten around the SAME reader, so the two files differ by bytes while the
+# readers do not differ at all — and that is the state this refuses (the sibling's
+# byte fast path was itself unsatisfiable, card `t_dba4465c`).
+base_reader_is_pre() { # <rev> -> 0 when its guard declares the PRE-fix reader
+  local body; body=$(git show "$1:$GUARD_IN_REPO" 2>/dev/null) || return 1
+  grep -qF "$PRE_READER" <<<"$body" && ! grep -qF "$POST_READER" <<<"$body"
+}
+
+# introducing_commit <rev> -> the commit that first DECLARES the post-fix reader in
+# <rev>'s history for the guard, or empty. Walks oldest-first so a later commit that
+# merely touches the file cannot move the answer; returns empty when the transition
+# is older than <rev>'s history (the oldest revision already declares it), rather
+# than naming a revision it has not checked. (Same rule the sibling
+# api/scripts/biteproof_model_default_guard.py uses, card `t_34ab7a00`.)
+introducing_commit() { # <rev> -> sha, or empty
+  local revs oldest r body
+  # `:/<path>` is the repo-root-relative pathspec form: this script has already `cd`ed
+  # into web/, and a bare repo-root path here matches NOTHING (measured: 0 revisions,
+  # so the attribution returned empty and the refusal could not name a base).
+  revs=$(git rev-list --reverse "$1" -- ":/$GUARD_IN_REPO" 2>/dev/null) || return 1
+  [ -z "$revs" ] && return 1
+  oldest=${revs%%$'\n'*}
+  body=$(git show "$oldest:$GUARD_IN_REPO" 2>/dev/null) || return 1
+  grep -qF "$POST_READER" <<<"$body" && return 1   # older than this history
+  while IFS= read -r r; do
+    [ -z "$r" ] && continue
+    body=$(git show "$r:$GUARD_IN_REPO" 2>/dev/null) || continue
+    if grep -qF "$POST_READER" <<<"$body"; then printf '%s' "$r"; return 0; fi
+  done <<<"$revs"
+  return 1
+}
+
+# The refusal itself. It names the cause, prints a BITEPROOF_BASE suggestion RESOLVED
+# from git (never a literal), and only offers that revision when its guard really is
+# pre-fix — a suggestion that refuses too is the loop this whole family of cards is
+# about. No verdict and no bite count is printed for a base this run did not measure.
+refuse_caught_up_base() {
+  local intro='' parent=''
+  echo >&2
+  echo "BITEPROOF REFUSED (VERDICT=REFUSED, exit 2): the base guard (${BASE_REF} ${BASE_REV:0:12})" >&2
+  echo "has CAUGHT UP to this tree's — ${GUARD_IN_REPO} there already declares" >&2
+  echo "  ${POST_READER}" >&2
+  echo "which is this tree's reader. Both legs would be one reader measured against itself," >&2
+  echo "so there is no \"before\" column to prove anything against. This is the silent shape" >&2
+  echo "this refusal exists for: the premise check would PASS (that guard is GREEN on the" >&2
+  echo "unmutated tree) and every HOLE case would read \"does not reproduce the premise\" — a" >&2
+  echo "fail=1 reading indistinguishable from a base that is genuinely pre-fix with mutations" >&2
+  echo "that stopped applying." >&2
+  intro=$(introducing_commit "$BASE_REV") || intro=''
+  if [ -n "$intro" ]; then
+    parent=$(git rev-parse "${intro}^" 2>/dev/null) || parent=''
+    if [ -n "$parent" ] && base_reader_is_pre "$parent"; then
+      echo >&2
+      echo "The post-fix reader was introduced by ${intro:0:12}, whose parent ${parent:0:12} still" >&2
+      echo "reads \`${PRE_READER}\` — re-read from git by this run, not assumed. Point" >&2
+      echo "BITEPROOF_BASE at it:" >&2
+      echo "    BITEPROOF_BASE=${parent:0:12} bash web/scripts/biteproof_docs_index_render_sites.sh" >&2
+    else
+      echo >&2
+      echo "The post-fix reader was introduced by ${intro:0:12}, but its parent (${parent:0:12})" >&2
+      echo "does not read as pre-fix either, so this harness cannot name a usable base from" >&2
+      echo "${BASE_REV:0:12}'s history. Point BITEPROOF_BASE at a revision whose guard reads" >&2
+      echo "\`${PRE_READER}\`." >&2
+    fi
+  else
+    echo >&2
+    echo "No revision in ${BASE_REV:0:12}'s history for ${GUARD_IN_REPO} reaches the transition" >&2
+    echo "into the post-fix reader (the oldest one already declares it), so this run cannot" >&2
+    echo "attribute it to one commit and will not guess. Point BITEPROOF_BASE at a revision" >&2
+    echo "whose guard reads \`${PRE_READER}\`." >&2
+  fi
+  exit 2
+}
+
+# SELF-CHECK OF THE REFUSAL, ON EVERY RUN — the check-the-check pattern
+# BITE-HARNESSES.md records for biteproof_unlock_class_guard.py. The refusal above is
+# only worth having if it fires on a caught-up base AND stays quiet on a pre-fix one;
+# both legs run the REAL script (BITEPROOF_REFUSE_ONLY=1, which resolves the base,
+# applies the capability test and exits 3 without a refusal) so a refusal that
+# refuses everything is caught here instead of looking like a fix.
+selfcheck_caught_up_refusal() {
+  local ref rev intro parent out rc1 rc2
+  for ref in origin/main HEAD; do
+    rev=$(git rev-parse "${ref}^{commit}" 2>/dev/null) || continue
+    intro=$(introducing_commit "$rev") || intro=''
+    [ -z "$intro" ] && continue
+    parent=$(git rev-parse "${intro}^" 2>/dev/null) || parent=''
+    base_reader_is_pre "$parent" && break
+    intro=''
+  done
+  if [ -z "$intro" ]; then
+    echo >&2
+    echo "BITEPROOF REFUSED: the caught-up-base refusal cannot be self-checked — no post-fix" >&2
+    echo "reader could be attributed from origin/main or HEAD, so this run has no way to produce" >&2
+    echo "a caught-up base and no way to show the refusal still bites. A refusal nobody has seen" >&2
+    echo "fire is the defect this instrument exists to remove. Refusing (exit 2)." >&2
+    exit 2
+  fi
+  echo "refusal self-check: post-fix fixture ${intro:0:12}, pre-fix fixture ${parent:0:12}"
+  out=$(BITEPROOF_REFUSE_ONLY=1 BITEPROOF_BASE="$intro" bash "$SELF" 2>&1); rc1=$?
+  if [ "$rc1" != 2 ] || ! grep -qF 'BITEPROOF REFUSED (VERDICT=REFUSED' <<<"$out"; then
+    echo >&2
+    echo "BITEPROOF REFUSED: the caught-up-base refusal DID NOT BITE — a base whose guard is the" >&2
+    echo "post-fix reader (${intro:0:12}) came back exit ${rc1}, not 2 with the refusal. Every verdict" >&2
+    echo "this run could print is worth nothing until that fires. Fix base_reader_is_pre first." >&2
+    echo "$out" | tail -4 >&2
+    exit 2
+  fi
+  grep -qF 'BITEPROOF_BASE=' <<<"$out" || {
+    echo >&2
+    echo "BITEPROOF REFUSED: the refusal fired but printed no BITEPROOF_BASE suggestion, so an" >&2
+    echo "operator has no way past it. Fix refuse_caught_up_base first." >&2
+    exit 2
+  }
+  out=$(BITEPROOF_REFUSE_ONLY=1 BITEPROOF_BASE="$parent" bash "$SELF" 2>&1); rc2=$?
+  if [ "$rc2" != 3 ] || grep -qF 'BITEPROOF REFUSED' <<<"$out"; then
+    echo >&2
+    echo "BITEPROOF REFUSED: the caught-up-base refusal refuses a PRE-fix base too — the pre-fix" >&2
+    echo "fixture ${parent:0:12} came back exit ${rc2}, not 3, so the test is not discriminating and" >&2
+    echo "would block every honest run. Fix base_reader_is_pre first." >&2
+    echo "$out" | tail -4 >&2
+    exit 2
+  fi
+}
+# Skipped in the probe child (BITEPROOF_REFUSE_ONLY=1): the child's job is only to
+# apply the capability test and report its exit code, and letting it run this
+# self-check would recurse without end (measured: the run hung on its first probe).
+[ "${BITEPROOF_REFUSE_ONLY:-0}" = 1 ] || selfcheck_caught_up_refusal
+
+# CAPABILITY TEST OF THIS RUN'S OWN BASE. Runs after the self-check, so the mechanism
+# is proved before it is used. A caught-up base refuses here; a pre-fix one falls
+# through to the premise check below.
+base_reader_is_pre "$BASE_REV" || refuse_caught_up_base
+
+# The probe child's exit: reached only with BITEPROOF_REFUSE_ONLY=1, and only when the
+# capability test above did NOT refuse — so the self-check can tell "refused" (exit 2)
+# from "did not refuse" (exit 3) by exit code alone.
+if [ "${BITEPROOF_REFUSE_ONLY:-0}" = 1 ]; then
+  echo "BITEPROOF CAPABILITY: ${BASE_REF} ${BASE_REV:0:12} is PRE-fix (not refused)"
+  exit 3
+fi
 
 # rule_of <node exit status> — turns a guard run's output into a VERDICT.
 # Reads $VERDICT_OUT (set by run_guard) and sets VERDICT (GREEN|RED|REFUSED) and
