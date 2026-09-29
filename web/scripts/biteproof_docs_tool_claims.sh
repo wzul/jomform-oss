@@ -51,10 +51,147 @@
 # runs it in a subshell and the variable would not come back, which is the only reason the
 # file round-trip existed. Nothing in here writes a fixed path any more.
 #
+# THE SHARED *INPUT* IS SERIALISED PER WORKTREE (card t_ed66094c). The channel fix
+# removed the shared OUTPUT; the cases still mutate the two SHARED pages in place
+# (`src/app/docs/chat/page.tsx` for cases 1-3 and both negative controls,
+# `src/app/docs/embed/page.tsx` for case 4), and `run_guard` walks the WHOLE docs
+# tree — so a second run started while the first is mid-case reads a page the first
+# has already mutated, attributes that mutation to its own case, or reads a page the
+# first has already restored. Reproduced, 3/3 rounds: two runs 2s apart in one
+# worktree printed 33 false `***` verdict lines across 6 runs (`OLD guard wanted
+# GREEN, got RED`, `NEW guard wanted GREEN, got RED`, `NEW guard RED but the failure
+# does not name …`) while the exit code stayed 1. No false PASS is reachable, but a
+# harness whose entire product is a trustworthy verdict cannot print four wrong
+# verdict lines, and no per-run channel can fix it: the shared thing is the INPUT.
+#
+# The lock is taken before the first mutation and before the premise check (that
+# check READS both pages, so it is just as wrong on a peer's mutation) and is held
+# until this process exits. It is keyed on the worktree, so two lanes' cards never
+# queue behind each other, and a contended run WAITS and says so rather than failing
+# — a refusal would turn "someone else is running it" into a red harness.
+#
 # Run:  bash web/scripts/biteproof_docs_tool_claims.sh
 set -uo pipefail
 
-cd "$(dirname "$0")/.." || exit 2          # -> web/
+# The script's OWN absolute path is resolved BEFORE the `cd` below, because the child
+# this file re-execs under the lock needs a path that survives a changed CWD — a
+# relative `$0` resolved after the `cd` names a file that is not there. Measured: that
+# mistake made the child die with `cd: web/scripts: No such file or directory` and
+# `bash: /biteproof_docs_tool_claims.sh: No such file or directory` (exit 127).
+BITE_HOME=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
+[ -n "$BITE_HOME" ] || { echo "cannot resolve the directory this script lives in" >&2; exit 2; }
+SELF="$BITE_HOME/$(basename "$0")"
+cd "$BITE_HOME/.." || exit 2                # -> web/
+
+# ---- PER-WORKTREE LOCK (card t_ed66094c) ----------------------------------
+#
+# The key is `git rev-parse --absolute-git-dir`: one value per worktree, the same
+# value from every subdirectory of it, and DIFFERENT for the primary tree and for
+# each linked worktree (a linked worktree resolves to `<repo>/.git/worktrees/<name>`,
+# the primary tree to `<repo>/.git`). `--show-toplevel` would name the same worktree
+# too, but it is resolved against the CWD, so a run started from `web/` would derive
+# a different key for the same tree and the lock would not be mutual.
+#
+# The lock file sits under a HOST-GLOBAL base, deliberately not $TMPDIR: the run it
+# has to exclude usually belongs to another PROFILE (a QA re-run while the dev lane
+# runs, which is how the defect was found), and a per-profile TMPDIR would put the two
+# runs in different directories and serialise nothing.
+#
+# The PARENT takes the lock on fd 9 and re-execs this script; the child inherits the
+# open descriptor, so the lock is held for exactly as long as the copy that mutates
+# anything lives, and it is released when the parent exits — the `trap ... EXIT` below
+# releases it as surely as it restores the pages, and there is no separate unlock line
+# that can be skipped.
+#
+# The child PROVES the lock is held before it prints a verdict (a lock nobody can
+# observe as held is the same "trust the absence" shape the verdict rule was rewritten
+# to remove). Two legs, both needed: a second take on the same file from a separate
+# process must be REFUSED, and a fresh file in the same directory must lock FINE — or
+# "refused" would mean flock is inert here, not that this run holds the lock.
+LOCK_BASE="${BITEPROOF_LOCK_DIR:-/tmp}"
+LOCK_WAIT="${BITEPROOF_LOCK_WAIT:-1800}"
+
+if [ "${BITEPROOF_LOCKED:-}" != "1" ]; then
+  command -v flock >/dev/null 2>&1 || {
+    echo "BITEPROOF REFUSED: flock is not installed, so this harness cannot serialise two" >&2
+    echo "runs in one worktree — and two runs read each other's mutated pages and print" >&2
+    echo "FALSE verdicts (t_ed66094c, reproduced). Install flock, or change the harness to" >&2
+    echo "stop mutating the shared pages, before trusting any verdict from it." >&2
+    exit 2
+  }
+  case "$LOCK_WAIT" in ''|*[!0-9]*)
+    echo "BITEPROOF REFUSED: BITEPROOF_LOCK_WAIT='$LOCK_WAIT' is not a whole number of seconds." >&2
+    exit 2 ;;
+  esac
+  BITE_GIT_DIR=$(git rev-parse --absolute-git-dir 2>/dev/null) || {
+    echo "BITEPROOF REFUSED: cannot resolve this worktree's git dir (git rev-parse" >&2
+    echo "--absolute-git-dir), so there is no per-worktree key to serialise on, and an" >&2
+    echo "unserialised run prints false verdicts when a peer runs here (t_ed66094c)." >&2
+    exit 2
+  }
+  BITE_KEY=$(printf '%s' "$BITE_GIT_DIR" | sha256sum | cut -c1-16)
+  LOCK_DIR="$LOCK_BASE/jomform-biteproof-docs-tool-claims"
+  mkdir -p "$LOCK_DIR" || {
+    echo "BITEPROOF REFUSED: cannot create the lock directory $LOCK_DIR, so two runs in" >&2
+    echo "one worktree could not be serialised. Set BITEPROOF_LOCK_DIR to a writable dir." >&2
+    exit 2
+  }
+  LOCK_FILE="$LOCK_DIR/$BITE_KEY.lock"
+  export BITEPROOF_LOCKED=1 BITEPROOF_LOCK_FILE="$LOCK_FILE"
+  exec 9>"$LOCK_FILE" || {
+    echo "BITEPROOF REFUSED: cannot open the lock file $LOCK_FILE." >&2
+    exit 2
+  }
+  if ! flock -n "$LOCK_FILE" true 2>/dev/null; then
+    echo "  lock:   another run of this harness holds this worktree's lock — waiting up to ${LOCK_WAIT}s"
+    echo "          (both runs mutate the same two docs pages, so concurrently they print FALSE verdicts)"
+  fi
+  flock -w "$LOCK_WAIT" -E 75 9
+  _lock_rc=$?
+  if [ "$_lock_rc" = 75 ]; then
+    echo "BITEPROOF REFUSED: could not take the per-worktree lock $LOCK_FILE within ${LOCK_WAIT}s," >&2
+    echo "so this run is NOT serialised against a peer that mutates the same two docs pages" >&2
+    echo "and would print false verdicts. Nothing was mutated. Re-run once the other run" >&2
+    echo "finishes, or raise the wait with BITEPROOF_LOCK_WAIT=<seconds>." >&2
+    exit 75
+  fi
+  if [ "$_lock_rc" != 0 ]; then
+    echo "BITEPROOF REFUSED: flock on $LOCK_FILE exited ${_lock_rc}, so the lock was not held" >&2
+    echo "and this run would not be serialised against a peer in the same worktree." >&2
+    exit 2
+  fi
+  bash "$SELF" "$@"
+  exit "$?"
+fi
+
+# The child. Refuse if the lock it is supposed to have inherited cannot be shown to be
+# held: an unverified lock is the same shape as an unverified verdict.
+LOCK_FILE="${BITEPROOF_LOCK_FILE:-}"
+if [ -z "$LOCK_FILE" ]; then
+  echo "BITEPROOF REFUSED: BITEPROOF_LOCKED=1 is set but BITEPROOF_LOCK_FILE is empty, so this" >&2
+  echo "run cannot show it holds the per-worktree lock. Unset both and re-run the harness." >&2
+  exit 2
+fi
+if flock -n "$LOCK_FILE" true 2>/dev/null; then
+  echo "BITEPROOF REFUSED: the per-worktree lock ($LOCK_FILE) was not held here, so this run is" >&2
+  echo "NOT serialised — a peer mutating the same two docs pages would give it false verdicts." >&2
+  echo "Run the harness WITHOUT BITEPROOF_LOCKED set and let it take the lock itself." >&2
+  exit 2
+fi
+LOCK_PROBE=$(mktemp "$(dirname "$LOCK_FILE")/probe.XXXXXX") || {
+  echo "BITEPROOF REFUSED: cannot create a probe file beside $LOCK_FILE, so the check above" >&2
+  echo "cannot be shown to be meaningful." >&2
+  exit 2
+}
+if ! flock -n "$LOCK_PROBE" true 2>/dev/null; then
+  echo "BITEPROOF REFUSED: flock could not lock a FRESH file ($LOCK_PROBE), so \"the lock is held\"" >&2
+  echo "above proves nothing about flock here — it would read REFUSED for any file." >&2
+  rm -f "$LOCK_PROBE"
+  exit 2
+fi
+rm -f "$LOCK_PROBE"
+echo "lock:   held for this worktree (${LOCK_FILE##*/})"
+
 OLD_GUARD=$(mktemp)
 PAGE_BAK=$(mktemp)
 # Per-run, and every mutated file has its backup already taken, because the trap below
