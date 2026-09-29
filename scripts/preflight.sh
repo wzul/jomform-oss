@@ -239,6 +239,19 @@ SEL_DIFF_REASON="${SEL_DIFF_REASON:-}"
 SEL_COUNT="${SEL_COUNT:-0}"
 SEL_BASE="${SEL_BASE:-}"
 
+REUSE_RECORD=0
+PREFLIGHT_LOG="${PREFLIGHT_LOG:-}"
+# Gates this run REUSED from the per-tree record instead of re-running them.
+# Declared here (not next to PASSED) because the reuse block below the lock fills
+# it before the gate sections run; `summary` prints it on its own line so a
+# remembered gate is never read as one this run observed.
+REUSED=()
+# The comma-separated gates this run REUSED, filled by the reuse block below the
+# lock. Declared EMPTY here because the block reads it on paths where it stays
+# empty (an `--only` selection disjoint from the record's vouched set), and an
+# unset variable under `set -u` would abort the summary instead of printing it.
+PREFLIGHT_REUSED=""
+
 # Preserve the ORIGINAL argv before the parsing loop below consumes it with `shift`.
 # The concurrency lock re-invokes this script via flock, and it must hand the child the
 # same arguments — reading `$@` at the lock site would pass whatever survived the loop
@@ -272,6 +285,18 @@ while [ $# -gt 0 ]; do
     --for-diff=*)    FOR_DIFF="${1#*=}"; FOR_DIFF_GIVEN=1 ;;
     --explain-diff)   EXPLAIN_DIFF="${2:-}"; EXPLAIN_DIFF_GIVEN=1; shift ;;
     --explain-diff=*) EXPLAIN_DIFF="${1#*=}"; EXPLAIN_DIFF_GIVEN=1 ;;
+    # --reuse-record: the lane has already read the per-tree result record
+    # (scripts/preflight_reuse.sh) and this run exists to re-run only what that
+    # record could not vouch for. It does NOT widen what may be skipped: every
+    # gate named here must still hold a recorded `pass` for THIS tree under THIS
+    # environment fingerprint, or the run REFUSES rather than reporting a green
+    # it did not earn. See the reuse block below the lock.
+    --reuse-record) REUSE_RECORD=1 ;;
+    # --log <path>: where THIS run's output is being captured. Recorded in the
+    # per-tree record so the next lane reads the evidence, not just the verdict —
+    # and so a merged/hand-made summary can point at the run that observed it.
+    --log)       PREFLIGHT_LOG="${2:-}"; shift ;;
+    --log=*)     PREFLIGHT_LOG="${1#*=}" ;;
     *)           die "unknown argument: $1 (see --help)" ;;
   esac
   shift
@@ -1193,6 +1218,75 @@ PREFLIGHT_LOCK_WAIT="${PREFLIGHT_LOCK_WAIT:-1800}"
 # the banner and before any gate keeps the gates untouched, prints the banner exactly
 # once (only the child gets that far), and reports the wait before it happens rather
 # than leaving it to be discovered as a hang later.
+#
+# THE ONE THING THAT MUST HAPPEN BEFORE THE LOCK IS A WHOLE-INVENTORY REUSE.
+# A full-green record IS the verdict for these bytes, so re-reading it needs no
+# host time at all — and the card's acceptance is explicit that this path must not
+# queue: a lane about to re-gate an already-green tree is the 39.4% being removed,
+# and waiting on the flock is precisely the cost reuse exists to avoid. So the
+# early exit is taken HERE, before `flock`, and it holds only inside a
+# whole-inventory reuse that `gr_reusable` has vouched for (same tree, same
+# fingerprint, in TTL, every gate an observed pass). Everything else — a partial
+# record, a red one, no record at all — falls through to the lock and runs as
+# before. See the reuse block below the lock for the per-gate path.
+if [ "${_PREFLIGHT_LOCKED:-}" != "1" ] && [ "$REUSE_RECORD" = 1 ]; then
+  _pre_lib="${PREFLIGHT_RESULT_LIB:-$REPO_ROOT/scripts/gate_result.sh}"
+  if [ -r "$_pre_lib" ] && [ -r "$REPO_ROOT/scripts/preflight_reuse.sh" ]; then
+    # The consumer is the SINGLE source of truth for the decision, so the
+    # pre-lock path cannot drift from the post-lock one. It is asked here only
+    # when reuse was explicitly requested; otherwise the runner never sources it.
+    #
+    # NO test-env.sh SOURCING HERE, deliberately. The fingerprint contains
+    # JOMFORM_TEST_DATABASE_URL, so sourcing a file that the CALLER did not source
+    # would compute a different key from the one the consumer just computed for the
+    # same tree — the pre-lock path would then refuse a record the consumer had
+    # just vouched for, and the two paths would disagree about what is reusable.
+    # Both read the caller's environment and nothing else.
+    # shellcheck source=scripts/gate_result.sh
+    . "$_pre_lib"
+    if _pre_tree="$(gr_tree_sha "$REPO_ROOT")" && [ -n "$_pre_tree" ]; then
+      _pre_file="$(gr_file "$_pre_tree")"
+      if [ -r "$_pre_file" ]; then
+        PREFLIGHT_REUSE_REPO="$REPO_ROOT"
+        PREFLIGHT_TREE="$_pre_tree"
+        # ASK ABOUT THIS RUN'S ACTUAL SELECTION, NOT THE WHOLE INVENTORY. The
+        # consumer answers exactly the question it is given (PREFLIGHT_ONLY), and
+        # this path may only skip what the caller SELECTED: `--only vet` must not
+        # skip the other thirteen, or the run would report a whole-inventory reuse
+        # for a one-gate request — the consumer and the runner answering different
+        # questions is the drift check 21 exists to prevent. With no `--only` this
+        # is the whole inventory, which is the case the early exit is for.
+        if [ -n "$ONLY" ]; then PREFLIGHT_ONLY="$ONLY"; fi
+        if . "$REPO_ROOT/scripts/preflight_reuse.sh" --source 2>/dev/null; then
+          if preflight_reuse_decision && [ "$PREFLIGHT_DECISION" = "full" ]; then
+            # THE NODE ADVISORY, printed HERE for the pre-lock path. The consumer
+            # captures gr_reusable's output into a variable to build its EVIDENCE
+            # line, so the note is not visible on that route — and this is the route
+            # a whole-inventory reuse takes. A differing node is a note, never a
+            # refusal (see gr_node_advisory), so its status is ignored.
+            gr_node_advisory "$_pre_file" || :
+            echo "=============================================================="
+            echo "  JomForm preflight — per-tree result record"
+            echo "  repo:   $REPO_ROOT"
+            echo "  tree:   $(gr_short_sha "$_pre_tree")"
+            echo "=============================================================="
+            echo "  reuse:  FULL GREEN record for tree $(gr_short_sha "$_pre_tree") — every gate in this run's selection is already green on THESE bytes"
+            echo "          ($_pre_file, finished $(gr_read_field "$_pre_file" finished_at))"
+            echo "          verdict: REUSED (green), remembered ${PREFLIGHT_REMEMBERED_SECONDS}s from $(gr_read_field "$_pre_file" log)"
+            echo "          took NO lock and ran NO gate — nothing was queued behind another run."
+            echo "          the record is NOT re-stamped: it still describes the run that OBSERVED it."
+            echo "--------------------------------------------------------------"
+            echo "preflight summary: 0 passed, 0 failed, 0 skipped in 0s"
+            echo "  REUSE: $(printf '%s' "$PREFLIGHT_SKIP" | tr ',' ' ') (REMEMBERED from a recorded pass on tree $(gr_short_sha "$_pre_tree"), NOT re-run this time)"
+            echo "--------------------------------------------------------------"
+            exit 0
+          fi
+        fi
+      fi
+    fi
+  fi
+fi
+
 if [ "${_PREFLIGHT_LOCKED:-}" != "1" ]; then
   # No `|| true` anywhere below: this repo's own `selftest` gate forbids it in an active
   # line, because a swallowed failure is how a gate stops being a gate. A missing lock
@@ -1233,6 +1327,251 @@ if [ "${_PREFLIGHT_LOCKED:-}" != "1" ]; then
     exit "$_lock_rc"
   fi
   echo "  lock:   flock not found — running WITHOUT serialisation (concurrent gates may FALSE-fail)"
+fi
+
+# ---- PER-TREE RESULT RECORD (scripts/gate_result.sh) ------------------------
+# Everything from here on runs INSIDE the lock and INSIDE the child, so a queued
+# run reaches its own record with the host to itself.
+#
+# WHY IT IS HERE AND NOT AT THE BOTTOM: a gate run dies inside `run()` on the
+# first failure, so an end-of-script write would only ever record GREEN runs and
+# the record would have nothing to say about a red tree — which is precisely the
+# case (148 of 206 repeated runs) the record is needed for. Each gate is recorded
+# the moment it completes instead, and the file is rewritten after every gate.
+#
+# The record is HOST STATE, deliberately: `PREFLIGHT_RESULT_DIR` defaults to
+# /var/lib/jomform/gate, outside the repo (a record is evidence about a machine,
+# not a versioned artefact) and outside /tmp (which is wiped between sessions, so
+# a record there would be useless by the next morning).
+PREFLIGHT_RESULT_LIB="${PREFLIGHT_RESULT_LIB:-$REPO_ROOT/scripts/gate_result.sh}"
+if [ -r "$PREFLIGHT_RESULT_LIB" ]; then
+  # shellcheck source=scripts/gate_result.sh
+  . "$PREFLIGHT_RESULT_LIB"
+  GR_GATE_NAMES=("${GATE_NAMES[@]}")
+  GR_REPO="$REPO_ROOT"
+  GR_COMMIT="$(git rev-parse --short HEAD 2>/dev/null)"
+  GR_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
+  GR_PID="$$"
+  GR_LOG="${PREFLIGHT_LOG:-}"
+  # What this run was ASKED for — recorded so a reader can tell a run that
+  # observed everything from one that observed a slice. Empty means "the whole
+  # inventory", which is `preflight.sh` with no --only.
+  GR_SELECTED="${ONLY:-}"
+  if GR_TREE="$(gr_tree_sha "$REPO_ROOT")"; then
+    GR_TREE_SHORT="$(gr_short_sha "$GR_TREE")"
+  else
+    # Unidentifiable tree: do not guess, do not key a record on a commit sha.
+    # The run continues — a record is advisory, and failing the gate over host
+    # state would turn a green tree red — but nothing is written.
+    echo "preflight: WARNING — could not compute a working-tree sha; NO result record will be written." >&2
+    GR_TREE=""
+  fi
+else
+  echo "preflight: WARNING — $PREFLIGHT_RESULT_LIB not found; NO per-tree result record will be written." >&2
+fi
+
+# gr_record_now — flush the record after a gate completes. Deliberately never
+# fatal: the record is evidence, and a host-state problem must not red a gate run.
+# Written without `|| true` — the `selftest` gate forbids it in any active line
+# precisely so a gate cannot be quietly neutered, and a swallowed failure here is
+# announced instead: the WARNING below is the whole point of catching it.
+gr_record_now() {
+  [ -n "${GR_TREE:-}" ] || return 0
+  local rc=0
+  gr_flush "$(( $(date +%s) - START_ALL ))" || rc=$?
+  [ "$rc" -eq 0 ] || echo "preflight: WARNING — the per-tree result record could not be written (rc=$rc). The gate verdict above still stands; the next lane will simply re-gate." >&2
+  return 0
+}
+
+# ---- REUSE: --reuse-record may only skip a gate this tree is KNOWN to pass ---
+# scripts/preflight_reuse.sh (the consumer a lane runs BEFORE queueing) reads the
+# record and hands back the gates it can vouch for. This is where that claim is
+# CHECKED: the record must name THIS tree and THIS environment fingerprint, be
+# inside the TTL, and hold an observed `pass` for every gate we are about to
+# skip. Anything else is refused loudly, and the gate runs.
+#
+# The whole point of this block is that it can only ever NARROW a run. A record
+# can never turn a red into a green: it can only replace a gate that would have
+# been re-run with an observation of the SAME GATE, on the SAME BYTES, under the
+# SAME FINGERPRINT — and a `fail` anywhere in the record refuses the reuse.
+#
+# THIS BLOCK IS THE PER-GATE PATH ONLY. The whole-inventory reuse was already
+# taken before the lock (there is nothing left to do for a tree that is wholly
+# green, and queueing for it is the cost the card removes). So reaching here with
+# a full-green record means the pre-lock path declined for a reason of its own —
+# which is still a refusal, not a licence to skip work: the pre-lock path is the
+# only place a full-inventory reuse may be granted, and saying so in both places
+# would be two chances to disagree.
+if [ "$REUSE_RECORD" = 1 ]; then
+  if [ -z "${GR_TREE:-}" ]; then
+    die "--reuse-record was requested but this tree cannot be identified (no working-tree sha) — refusing to skip a gate on an unnameable tree"
+  fi
+  if [ ! -r "${PREFLIGHT_RESULT_LIB:-}" ]; then
+    die "--reuse-record was requested but scripts/gate_result.sh is missing — nothing to read a record from"
+  fi
+  _reuse_file="$(gr_file "$GR_TREE")"
+  if [ ! -r "$_reuse_file" ]; then
+    die "--reuse-record was requested but there is no record for tree $GR_TREE_SHORT ($_reuse_file) — refusing to report a green this run did not earn"
+  fi
+  _reuse_reason=""
+  if _reuse_reason="$(gr_reusable "$GR_TREE" "${GATE_NAMES[@]}" 2>&1)"; then
+    # A full green that got this far was only NOT taken pre-lock because the
+    # caller's SELECTION is a subset of the inventory — the pre-lock path asks
+    # about the whole inventory and declines for `--only vet`. That is the normal
+    # `--only <subset> --reuse-record` shape, and it must still reuse the selected
+    # gates (they are recorded passes) rather than refuse the run. Fall through to
+    # the per-gate path below, which honours the selection.
+    :
+  fi
+  # Not a full green: reuse the recorded passes, re-run the rest. Build the reuse
+  # list from the record, then verify each entry individually so a gate is only
+  # ever skipped on an explicit `pass`.
+  #
+  # THE ENVIRONMENT CHECK IS RE-DONE HERE, AND THAT IS NOT REDUNDANT. gr_reusable
+  # above returned non-zero, and the reason it did is exactly what decides whether
+  # a partial record may be used at all: a record whose FINGERPRINT or TREE no
+  # longer matches must contribute NOTHING, while one that is merely not-yet-green
+  # may still vouch for the gates it did observe. Reading the record's passes
+  # without this guard is how a bumped key, a moved toolchain or an edited gate
+  # script would hand a stale pass to a tree it never described.
+  _reuse_ok=(); _reuse_bad=""; _reuse_off=""
+  if ! _reuse_usable="$(gr_record_usable "$GR_TREE" 2>&1)"; then
+    _reuse_ok=()
+  else
+    _reuse_passes="$(gr_gates_with_pass "$_reuse_file" "${GATE_NAMES[@]}")"
+    for _g in $_reuse_passes; do
+      case ",${SKIP}," in
+        *",$_g,"*) _reuse_bad="$_reuse_bad $_g" ;;   # already skipped by the caller: harmless, not a reuse
+        *) _reuse_ok+=("$_g") ;;
+      esac
+    done
+  fi
+  # A gate the CALLER skipped is not a reuse, and calling it one would claim a
+  # saving this run did not make. Say which, so the ledger stays honest.
+  [ -z "$_reuse_bad" ] || echo "preflight: note — already skipped by --only/--skip, so not counted as reused:$_reuse_bad" >&2
+  # ---- "VOUCHES FOR NO GATE" IS A QUESTION ABOUT THE RECORD, NOT THE SELECTION ----
+  # This refusal is decided against the gates the RECORD vouches for, BEFORE the
+  # selection filter below. It used to be decided AFTER it, and that made the
+  # documented red-tree lane unreachable: `docs/PREFLIGHT-REUSE.md` tells a lane
+  # whose run was red to re-run exactly what the record could not vouch for
+  #
+  #     ./scripts/preflight.sh --only <PREFLIGHT_RERUN> --reuse-record
+  #
+  # and on a record whose only `fail` is that gate every recorded `pass` is off
+  # that selection. Filtering first discarded all of them, the vouched set came
+  # out empty, and the run DIED with "vouches for NO gate" — rc=1, no ledger
+  # line, on the very shape (148 of the 206 repeated runs measured on this host)
+  # the record exists for. Measured on the record for tree 53854bd: without
+  # `--only` it ran `vet` once and named the other thirteen; with the documented
+  # `--only vet` it refused.
+  #
+  # The two questions are different and both still have to be asked:
+  #   * does the record vouch for ANYTHING?  -> about the RECORD (this check);
+  #   * may THIS RUN claim a saving for it?  -> about the SELECTION (below).
+  # A record that vouches for nothing is still a hard refusal, because then the
+  # reuse mechanism is contributing nothing and the lane must be told.
+  _reuse_vouched=${#_reuse_ok[@]}
+  PREFLIGHT_REUSED_LABEL="$_reuse_file"
+  if [ "$_reuse_vouched" -eq 0 ]; then
+    die "--reuse-record was requested but the record for tree $GR_TREE_SHORT vouches for NO gate ($_reuse_reason) — refusing to run as if it did"
+  fi
+  # The node advisory, printed here for the PER-GATE path. gr_reusable already
+  # announced it when it returned green, but this path is reached exactly when the
+  # record is NOT a full green (or the selection is narrower), and a lane reading a
+  # verdict must still be able to see that the web-side gates were observed under a
+  # different node. It is a NOTE: gr_node_advisory's non-zero status is ignored.
+  gr_node_advisory "$_reuse_file" || :
+  # ---- the SECOND question: what may this run count as saved? ------------------
+  # A gate this run was never going to execute (`--only vet` while the record
+  # vouches for `monitor`) is not a reuse: counting it would inflate the ledger
+  # with host-seconds nobody was spending. So the ledger and the REUSE line take
+  # only the intersection — but the vouched set above already proved the record
+  # is worth reading, and a NON-EMPTY intersection is not required for the run to
+  # proceed. When the intersection is empty the run executes its own selection and
+  # says plainly that the carried gates are outside it.
+  _reuse_sel=()
+  for _g in "${_reuse_ok[@]}"; do
+    if selected "$_g"; then _reuse_sel+=("$_g"); else _reuse_off="$_reuse_off $_g"; fi
+  done
+  [ -z "$_reuse_off" ] || echo "preflight: note — not in this run's selection, so not counted as reused:$_reuse_off" >&2
+  _reuse_ok=("${_reuse_sel[@]}")
+  if [ "${#_reuse_ok[@]}" -eq 0 ]; then
+    # THE DOCUMENTED RED-TREE SHAPE. The record vouches for $_reuse_vouched gate(s)
+    # and this run selected none of them, so there is nothing to fold into SKIP
+    # and nothing to ledger — it runs exactly what it was asked for. Saying so is
+    # the difference between a record read that is honest about its scope and one
+    # that reads as if the selection had been vouched for.
+    echo "==> REUSE: $_reuse_vouched recorded pass(es) carried over (not in this run's selection, so NOT ledgered):$_reuse_off"
+    echo "    from $_reuse_file (finished $(gr_read_field "$_reuse_file" finished_at)); tree $GR_TREE_SHORT"
+    echo "    this run executes its own selection below; the carried gates were neither run nor reused here."
+  fi
+  # Fold the vouched-for gates into SKIP. They are gates this tree is KNOWN to
+  # pass, so not re-running them is not a coverage loss — and each one is named.
+  # With an empty intersection PREFLIGHT_REUSED stays empty: no gate is skipped
+  # on the record's authority, so the run below is the caller's selection as asked.
+  if [ "${#_reuse_ok[@]}" -gt 0 ]; then
+    PREFLIGHT_REUSED="$(printf '%s,' "${_reuse_ok[@]}")"; PREFLIGHT_REUSED="${PREFLIGHT_REUSED%,}"
+    # FOLD INTO SKIP — THIS IS THE MECHANISM, not a bookkeeping line. `run()` returns
+    # early for a gate that is not `selected()`, and `SKIP` is what `selected()`
+    # consults, so without this line the REUSE line would be printed and every
+    # vouched-for gate would then be re-executed anyway.
+    SKIP="${SKIP:+$SKIP,}$PREFLIGHT_REUSED"
+    REUSED=("${_reuse_ok[@]}")
+    echo "==> REUSED (not re-run, recorded pass on THESE bytes): $PREFLIGHT_REUSED"
+    echo "    from $_reuse_file (finished $(gr_read_field "$_reuse_file" finished_at)); tree $GR_TREE_SHORT"
+    echo "    this run's verdict is a RECORD READ, not a re-run (scripts/preflight_reuse.sh labelled it)."
+    # The saving is LEDGERED here, and ONLY when this run really skipped work on
+    # the record's authority. A lane that drives the runner directly (the
+    # documented way to re-run just the failed gates) makes the same saving, and
+    # acceptance for this card is that the saving is MEASURED from real files
+    # rather than estimated from the design. Only gates that were really skipped
+    # on a recorded pass are counted — and the consumer that ran FIRST wrote this
+    # same event already, so the write below is deduped (see gr_ledger).
+    _reuse_secs="$(gr_gates_reused_seconds "$_reuse_file" "${_reuse_ok[@]}")"
+    _led_rc=0; gr_ledger "$GR_TREE" partial "$_reuse_secs" "$PREFLIGHT_REUSED" || _led_rc=$?
+    [ "$_led_rc" -eq 0 ] || echo "preflight: WARNING — could not append to the reuse ledger (rc=$_led_rc); the measured saving under-counts." >&2
+  fi
+  SKIPPED=()
+  for gate in "${GATE_NAMES[@]}"; do
+    selected "$gate" || SKIPPED+=("$gate")
+  done
+  # A gate that was REUSED is not "still skipped and not reused" — it is a
+  # recorded pass. The reused gates are folded into SKIP (that is the mechanism),
+  # so printing SKIP here without subtracting REUSED contradicts the line above
+  # and reads as "these have no recorded pass" about gates that were just
+  # vouched for. Only the gates that are skipped for a DIFFERENT reason belong on
+  # this line.
+  _reuse_notreused=()
+  for gate in "${SKIPPED[@]}"; do
+    case ",${PREFLIGHT_REUSED}," in
+      *",$gate,"*) ;;
+      *) _reuse_notreused+=("$gate") ;;
+    esac
+  done
+  if [ ${#_reuse_notreused[@]} -gt 0 ]; then
+    echo "    STILL SKIPPED AND NOT REUSED (no recorded pass): ${_reuse_notreused[*]}" >&2
+  fi
+  # REUSE MUST NEVER *CAUSE* A VACUOUS RUN TO READ GREEN. The pre-existing rule
+  # above already refuses a run whose selection was empty to begin with. What this
+  # catches is the NEW shape reuse introduces: a selection that had real gates in
+  # it, every one of which the record vouched for, so nothing executes. That is
+  # legitimate (the verdict exists for these bytes) but it must be ANNOUNCED as a
+  # record read rather than printed as a gate run — a `passed` count that includes
+  # gates nobody executed in this process is exactly the misreading this card is
+  # about.
+  _will_run=0
+  for gate in "${GATE_NAMES[@]}"; do
+    selected "$gate" || continue
+    case ",${PREFLIGHT_REUSED}," in
+      *",$gate,"*) ;;
+      *) _will_run=$((_will_run+1)) ;;
+    esac
+  done
+  if [ "$_will_run" -eq 0 ]; then
+    echo "==> nothing to execute: every gate in this run's selection is a recorded pass on tree $GR_TREE_SHORT"
+    echo "    ${#REUSED[@]} gate(s) verified against $PREFLIGHT_REUSED_LABEL — this run is a RECORD READ, not a gate run."
+    echo "    The summary below counts them as REUSE, never as PASS."
+  fi
 fi
 
 echo "=============================================================="
@@ -1351,6 +1690,15 @@ FAILED=()
 PASSED=()
 START_ALL=$(date +%s)
 
+# run() — execute one gate, record the observation, and stop the run on a failure.
+#
+# THE RECORD IS WRITTEN HERE, PER GATE, AND THAT IS THE WHOLE POINT. A gate run
+# exits on its first failure, so a single write at the end of the script would
+# only ever describe GREEN runs and the record would be useless for the 148 of
+# 206 repeated runs that were re-gating a red tree (the case where reuse is worth
+# the most: 21.3 of the 38.3 host-hours). Recording each gate as it completes
+# also means the record survives a killed run, which is how a lane recovers the
+# passes from an attempt that was interrupted.
 run() {
   local gate="$1" label="$2"; shift 2
   if ! selected "$gate"; then return 0; fi
@@ -1362,11 +1710,24 @@ run() {
   if "$@"; then
     t1=$(date +%s)
     PASSED+=("$gate")
+    # Observation for the per-tree record. Deliberately AFTER the gate, and the
+    # `pass` is recorded with the seconds it took, because that per-gate number
+    # is what a later lane's saving is measured from.
+    if declare -F gr_flush >/dev/null 2>&1 && [ -n "${GR_TREE:-}" ]; then
+      GR_STATUS["$gate"]="pass"; GR_SECONDS["$gate"]="$((t1-t0))"; GR_AT["$gate"]="$(gr_now)"
+      GR_PASSED="${#PASSED[@]}"; GR_FAILED="${#FAILED[@]}"; GR_SKIPPED="${#SKIPPED[@]}"
+      gr_record_now
+    fi
     info "gate [$gate]: PASS ($((t1-t0))s)"
   else
     rc=$?
     t1=$(date +%s)
     FAILED+=("$gate")
+    if declare -F gr_flush >/dev/null 2>&1 && [ -n "${GR_TREE:-}" ]; then
+      GR_STATUS["$gate"]="fail"; GR_SECONDS["$gate"]="$((t1-t0))"; GR_AT["$gate"]="$(gr_now)"
+      GR_PASSED="${#PASSED[@]}"; GR_FAILED="${#FAILED[@]}"; GR_SKIPPED="${#SKIPPED[@]}"
+      gr_record_now
+    fi
     echo "PREFLIGHT FAIL: gate '$gate' ($label) exited $rc after $((t1-t0))s" >&2
     summary
     exit 1
@@ -1379,7 +1740,25 @@ summary() {
   echo "--------------------------------------------------------------"
   echo "preflight summary: ${#PASSED[@]} passed, ${#FAILED[@]} failed, ${#SKIPPED[@]} skipped in ${elapsed}s"
   [ ${#PASSED[@]} -gt 0 ] && echo "  PASS: ${PASSED[*]}"
-  [ ${#SKIPPED[@]} -gt 0 ] && echo "  SKIP: ${SKIPPED[*]} (not evidence)"
+  # A reused gate is NOT one this run observed. It is printed on its own line,
+  # labelled, with the record it came from — so nobody reads the `passed` count
+  # as "N gates ran". This is the "a reused result must be labelled as reused"
+  # requirement, and it is the reason REUSED is a separate array from PASSED.
+  if [ ${#REUSED[@]} -gt 0 ]; then
+    echo "  REUSE: ${REUSED[*]} (REMEMBERED from a recorded pass on tree ${GR_TREE_SHORT:-?}, NOT re-run this time)"
+  fi
+  # The SKIP line means "no evidence at all" — so a REUSED gate must not appear
+  # there. A reused gate IS evidence (an observed pass on these bytes, on another
+  # run); listing it under `(not evidence)` would contradict the REUSE line
+  # directly above it and misrepresent a remembered pass as a gap.
+  _sum_notreused=()
+  for gate in "${SKIPPED[@]}"; do
+    case ",${PREFLIGHT_REUSED:-}," in
+      *",$gate,"*) ;;
+      *) _sum_notreused+=("$gate") ;;
+    esac
+  done
+  [ ${#_sum_notreused[@]} -gt 0 ] && echo "  SKIP: ${_sum_notreused[*]} (not evidence)"
   [ ${#FAILED[@]} -gt 0 ] && echo "  FAIL: ${FAILED[*]}"
   echo "--------------------------------------------------------------"
 }
@@ -1776,3 +2155,4 @@ if [ ${#SKIPPED[@]} -gt 0 ]; then
 else
   info "preflight green: all ${#PASSED[@]} gates passed"
 fi
+

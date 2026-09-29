@@ -40,6 +40,7 @@ too. So the table cannot rot into a claim about instruments that were renamed aw
 | `web/scripts/biteproof_docs_index_comment_anchor.sh` | the comment hole in `web/src/lib/docsIndex.test.ts`'s `declaresId()` (card `t_7b24b035`): the helper searched the RAW source while every other reader in the file strips comments first, so an anchor id that existed ONLY inside a comment satisfied all four legs — and `/docs` shipped a sidebar row pointing at an anchor no page renders while `test:unit` stayed 516/0 and `next build` exited 0. Seven cases, each a phantom anchor made to look declared by text a reader never sees: the card's own measured mutation (a `//` line behind a `NAV_SECTIONS` row), the same phantom in a `{/* … */}` JSX container and in a module-scope block comment, the same phantom behind an INDEX ENTRY's `href` (a different leg of the same helper), the `slug:` exception for `/docs` itself in both directions (a `// slug:` line must no longer satisfy it; a real `slug:` must still satisfy it), the baseline, and the negative control that a REAL `id:` declaration still satisfies the helper after the strip. Each case runs the BASE guard (`origin/main`) and requires it GREEN — the hole — then this tree's guard and requires it RED naming the phantom **and exactly one failing test**, so a red is attributable to the sabotage rather than a sibling. | 7 | see the measured line below the table |
 | `deploy/backup/jomform-backup_bite.sh` | the failure paths the nightly backup's suite asserts (`deploy/backup/jomform-backup_test.sh`, the gated `backup` suite): the fail-closed seam and the legacy refusal paths, sabotaged one at a time in a throwaway copy | 29 | 2110s |
 | `scripts/biteproof_api_test_gate_timeout.sh` | the api `test` gate's explicit per-package budget in `scripts/preflight.sh` (the `-timeout` this card added), and the `selftest` check 17 that guards it. Six cases read the **argv `go test` was handed** under a stubbed `go`, never the file's text — because the sharpest case keeps `-timeout` in the gate's printed LABEL and removes it from the command it EXECUTES, which a grep-based guard calls healthy. Cases: the flag removed from the gate line (byte-for-byte the pre-fix `main` shape that produced `panic: test timed out after 10m0s` for a green `internal/httpapi`), a default of `0` (the alarm disabled — must be REFUSED rather than handed to `go`), the flag in the label but not in the executed command, the flag hardcoded so `API_TEST_TIMEOUT` no longer reaches `go test`, and — end to end — the REAL `selftest` gate against the mutated runner, required to go RED with every failure naming the budget (so the red is attributable to this sabotage and not a sibling check). `scripts/preflight.sh` is restored byte-identically after every case (sha256 re-verified) | 6 | 150s |
+| `scripts/biteproof_preflight_reuse.sh` | the three safety guards of the per-tree gate result record (`scripts/preflight.sh` + `scripts/gate_result.sh`) and the `selftest` checks 31/32/33 that back them: the documented red-tree path (`--only <PREFLIGHT_RERUN> --reuse-record`) must RUN rather than die on "vouches for NO gate" (the refusal has to be judged on the RECORD, before the selection filter); one reuse event must ledger exactly ONE line (the consumer and the runner both observe it, and when both wrote, `--report` — the instrument the saving is read from — reported double: 588s read as 1176s, every lane in the host ledger's window counted twice); and a record observed under a different NODE must stay usable and be announced as an advisory rather than refused (on this host node is a property of the SHELL — an interactive shell resolves v24.19.0 via nvm, a worker lane resolves v26.7.0 from `.hermes/tools` — so hashing it into the fingerprint refused records on identical bytes and left reuse dead for the shape that runs the gates). Case 0 is the control (the unmutated tree must pass the whole selftest, so a red below is the sabotage and not this tree); the three sabotage cases each run the REAL `selftest` gate end to end and require it RED **with every failure naming that case's property**, so an unattributable red cannot be counted as proof. Both mutated sources are restored byte-identically after every case (sha256 re-verified) and `git status` is compared before/after | 4 | see the measured line below the table |
 
 Three rows above (`scripts/biteproof_web_image_gate.sh`,
 `web/scripts/biteproof_mcp_tool_inventory.sh`, `web/scripts/biteproof_settings_tabs.sh`)
@@ -101,6 +102,23 @@ apart, because the two are not the same claim:
   row at line 1, ABOVE the `const NAV_SECTIONS` anchor the guard slices from, so they
   read GREEN for a reason that had nothing to do with the hole. That second one is
   why the cases now resolve their anchor line and refuse if it moved.
+
+- `scripts/biteproof_preflight_reuse.sh`: **ALL 4 CASES BITE, EXIT=0.** The control
+  (case 0) passed the whole real `selftest` — `preflight self-test: 61 passed, 0
+  failed` — so the sabotage cases are not vacuous; cases 1, 2 and 3 each turned the
+  REAL `selftest` gate RED (rc=1) on **exactly one** failure, every one naming that
+  case's property (`vouches for NO gate` for the refusal ordering, `must ledger ONE
+  line per reuse event` for the dedupe, and `the node version is still part of the key
+  MATERIAL` for the node demotion), with no off-topic failure to attribute the red to
+  a sibling check. `scripts/preflight.sh` and `scripts/gate_result.sh` came back
+  byte-identical after every case (sha256 re-verified) and `git status` was unchanged.
+  Wall time is **unmeasured as a whole**: the run was spread over ~40 minutes of
+  wall-clock while the host lock was held by five other lanes, and each case's cost is
+  one full standalone `selftest` (~6-8 min on this host at ~25 load on 6 cores). Run
+  it when you change `scripts/preflight.sh`, `scripts/gate_result.sh` or the checks
+  31/32/33 that back them; it needs only the private lock it sets itself, so it does
+  **not** queue behind the host gate lock.
+
 - `web/scripts/biteproof_settings_tabs.sh`: **1088s, ALL CASES OK.** All four cases
   went red at their own NAMED assertion (the strip wrapping to 5 rows at 320px, the
   selected tab scrolled out of the strip's window, the focus ring clipped at the

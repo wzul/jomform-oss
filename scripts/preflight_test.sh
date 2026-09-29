@@ -73,11 +73,37 @@ PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
 bad()  { FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; }
 
+# THIS SELF-TEST IS ITSELF RUN INSIDE `preflight.sh`, WHICH EXPORTS `_PREFLIGHT_LOCKED=1`.
+# That variable tells a re-invoked copy "you are the locked child, run the gates" —
+# so a nested `./scripts/preflight.sh` here inherits it and SKIPS the pre-lock block
+# (it believes the lock is already held). The checks then measure a path a real lane
+# never takes, and pass or fail for the wrong reason. Measured by the `selftest` gate
+# in a full run: `_PREFLIGHT_LOCKED` leaked in and the pre-lock reuse never executed,
+# so checks 25 and 26 failed there and nowhere else.
+#
+# A lane calls preflight.sh from a CLEAN shell, so every nested invocation below must
+# start as one: unset it (and any lock env a caller exported) and keep it unset for
+# the whole self-test.
+unset _PREFLIGHT_LOCKED
+export -n _PREFLIGHT_LOCKED 2>/dev/null || true
+# The same reasoning for the environment the runner reads: a caller that ran the
+# whole gate with --log or a result dir set must not change what these checks key on.
+unset PREFLIGHT_LOG
+
 # Sandbox: a git repo containing only the script (plus the few repo files the
 # script and this self-test read), so the script's own repo-root resolution works
 # and no real build is ever invoked.
 SB="$(mktemp -d /tmp/preflight_test.XXXXXX)"
-cleanup() { rm -rf "$SB"; }
+# Sandbox state that must live OUTSIDE the sandbox repo: the gate lock file and
+# the per-tree gate records. Both are written by an invocation of the script, and
+# both are untracked, so writing them inside $SB would change the sandbox's
+# WORKING-TREE sha on every run — and the record is keyed on that sha, so each
+# check would look for a record the previous check had displaced (measured: six
+# different tree shas across one self-test). Host state belongs outside the repo
+# in production for the same reason, so this mirrors the real layout rather than
+# working around it.
+SB_STATE="$(mktemp -d /tmp/preflight_test_state.XXXXXX)"
+cleanup() { rm -rf "$SB" "$SB_STATE"; }
 trap cleanup EXIT
 mkdir -p "$SB/scripts" "$SB/web/scripts"
 cp "$HERE"/*.sh "$SB/scripts/" 2>/dev/null
@@ -162,7 +188,7 @@ cd "$SB" || exit 1
 # outright or dies on a missing prerequisite), so it cannot contaminate another
 # run's scratch schema. Check 14 proves the isolation holds.
 # ---------------------------------------------------------------------------
-export PREFLIGHT_LOCK_FILE="$SB/preflight-selftest.lock"
+export PREFLIGHT_LOCK_FILE="$SB_STATE/preflight-selftest.lock"
 
 # ---------------------------------------------------------------------------
 # Derive the gate inventories from the script under test. Nothing below names a
@@ -1234,6 +1260,686 @@ elif [ -z "$(gate_budget "$inv_row")" ]; then
   bad "GATE-INVENTORY.md's \`test\` row quotes the gate command WITHOUT -timeout, so the command an operator copies reds a healthy tree on a busy host: [$inv_row]"
 else
   ok "GATE-INVENTORY.md's \`test\` row quotes the budget too (an operator copying the command gets the same ceiling)"
+fi
+
+# 15-20. THE PER-TREE RESULT RECORD (scripts/gate_result.sh, consumed by
+#        scripts/preflight_reuse.sh and written by scripts/preflight.sh).
+#
+# WHY THESE ARE HERE AND NOT IN A GO TEST: the record is a shell artefact of the
+# gate runner; the properties below are what make it safe to skip work, and every
+# one of them is a property that FAILS LOUDLY rather than degrading quietly. The
+# whole feature is "do not spend host time re-gating a tree whose verdict is
+# known", so its failure mode is a STALE OR WRONG VERDICT BEING BELIEVED — the
+# worst possible failure for a gate. Each check below was written after breaking
+# the corresponding property by hand and watching it go red.
+#
+# Private result dir + TTL, so these checks never read or write the host's real
+# records and never depend on what is already in them.
+RECORD_DIR="$SB_STATE/gate-results"
+export PREFLIGHT_RESULT_DIR="$RECORD_DIR"
+export PREFLIGHT_RESULT_TTL=3600
+export PREFLIGHT_REUSE_REPO="$SB"
+
+# A gate name to vouch for, taken from the derived inventory (never hardcoded).
+probe_gate="$(printf '%s\n' "$GATES" | sed -n '1p')"
+
+# THE CHECKS BELOW CONTROL THEIR OWN FINGERPRINT. Every invocation passes
+# PREFLIGHT_KEY_EXTRA explicitly, but a caller may have exported one already (a
+# lane that runs `PREFLIGHT_KEY_EXTRA=<stamp> make preflight`), and an ambient
+# value would silently change the key the checks compute and make 16b red for a
+# reason that has nothing to do with the code. Pinned here so the checks are a
+# property of the script, not of the caller's shell.
+export PREFLIGHT_KEY_EXTRA=""
+
+# 18. A completed run WRITES a record keyed on the TREE sha, naming the tree it
+#     gated. This is the card's acceptance #1 and the thing every other check
+#     depends on. `--only <one gate>` is used so the check is fast; it must still
+#     finish the run, which is what "completed" means here.
+. "$HERE/gate_result.sh"
+probe_tree="$(gr_tree_sha "$SB")"
+if [ -z "$probe_tree" ]; then
+  bad "cannot compute a sandbox tree sha — the record checks below cannot run"
+else
+  rec="$(gr_file "$probe_tree")"
+  sb_run=$(PREFLIGHT_KEY_EXTRA=probe15 ./scripts/preflight.sh --only "$probe_gate" 2>&1)
+  if [ -r "$rec" ] && [ "$(gr_read_field "$rec" tree)" = "$probe_tree" ]; then
+    ok "a completed run wrote a record keyed on the TREE sha ($(printf '%.7s' "$probe_tree")), naming the tree it gated"
+  else
+    bad "no record keyed on the tree sha after a completed run — expected $rec naming [$probe_tree], got tree=[$(gr_read_field "$rec" tree)]"
+  fi
+fi
+
+# 19. The record is INVALIDATED when the ENVIRONMENT changes, not just the tree.
+#     A tree sha alone would hand a verdict observed under one toolchain, one web
+#     dependency set or one gate script to a tree it never described.
+#
+#     The bump is applied through PREFLIGHT_KEY_EXTRA, the documented toolchain
+#     stamp, rather than by editing preflight.sh: the script is a TRACKED file, so
+#     editing it changes the tree sha as well, and the refusal would then come from
+#     the tree check instead of the fingerprint — the check would go red (it does)
+#     but for the wrong reason, which is not evidence for this property. The stamp
+#     changes the fingerprint and NOTHING else, so a refusal here can only be the
+#     fingerprint.
+#
+#     16b then pins the other half: the gate script's own hash must be one of the
+#     components, so "edit preflight.sh" (the card's example) does change the
+#     fingerprint. Without 16b a reader could not tell from 16 alone whether the
+#     mechanism covers the script or only the stamp.
+if [ -n "$probe_tree" ]; then
+  rec="$(gr_file "$probe_tree")"
+  key="$(gr_read_field "$rec" key)"
+  parts="$(gr_json_escape "$(PREFLIGHT_KEY_EXTRA=probe15 gr_key_parts "$SB")")"
+  printf '{\n  "format": 1,\n  "tree": "%s",\n  "key": "%s",\n  "key_parts": "%s",\n  "gates": {\n    "%s": { "status": "pass", "seconds": 5, "at": "2026-01-01T00:00:00Z", "reused": false }\n  },\n  "runs": 1,\n  "verdict": "green",\n  "finished_at": "%s"\n}\n' \
+    "$probe_tree" "$key" "$parts" "$probe_gate" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$rec"
+  before="$(PREFLIGHT_KEY_EXTRA=probe15 gr_key "$SB")"
+  after="$(PREFLIGHT_KEY_EXTRA=probe16-bumped gr_key "$SB")"
+  sb_reuse=$(PREFLIGHT_KEY_EXTRA=probe16-bumped ./scripts/preflight.sh --only "$probe_gate" --reuse-record 2>&1)
+  sb_reuse_rc=$?
+  if [ "$before" != "$after" ] && [ $sb_reuse_rc -ne 0 ] && \
+     grep -q 'the environment changed since that record' <<<"$sb_reuse"; then
+    ok "a changed environment fingerprint (toolchain stamp) is REFUSED, not reused (rc=$sb_reuse_rc)"
+  else
+    bad "an environment change must invalidate the record — key before=[$before] after=[$after] rc=$sb_reuse_rc [$(printf '%s' "$sb_reuse" | tail -n 1)]"
+  fi
+  # 16b. The fingerprint must actually CONTAIN the components check 19 relies on.
+  #      Without this, dropping a component makes 16 vacuous rather than red: if
+  #      `extra=` leaves the parts line, bumping the stamp changes nothing, and a
+  #      stale pass is handed to an environment it never described. So the key is
+  #      asserted to CHANGE when the stamp changes, and the two gate-script hashes
+  #      are asserted to be the components named in the parts line.
+  parts_now="$(PREFLIGHT_KEY_EXTRA=probe15 gr_key_parts "$SB")"
+  key_with="$(PREFLIGHT_KEY_EXTRA=probe15 gr_key "$SB")"
+  key_bumped="$(PREFLIGHT_KEY_EXTRA=probe15-bumped gr_key "$SB")"
+  key_unset="$(gr_key "$SB")"
+  script_hash="$(gr_sha256_file "$SB/scripts/preflight.sh")"
+  lib_hash="$(gr_sha256_file "$SB/scripts/gate_result.sh")"
+  if [ -n "$key_with" ] && [ "$key_with" != "$key_bumped" ] && [ "$key_unset" != "$key_with" ] && \
+     [ "$script_hash" = "$(printf '%s' "$parts_now" | sed -nE 's/.*gatescript=([0-9a-f]+).*/\1/p')" ] && \
+     [ "$lib_hash" = "$(printf '%s' "$parts_now" | sed -nE 's/.*resultlib=([0-9a-f]+).*/\1/p')" ]; then
+    ok "the fingerprint contains the toolchain stamp and the hashes of scripts/preflight.sh + scripts/gate_result.sh"
+  else
+    bad "the fingerprint must contain the stamp and the gate-script hashes — unset=[$key_unset] stamp=[$key_with] bumped=[$key_bumped] script_hash=$script_hash lib_hash=$lib_hash parts=[$parts_now]"
+  fi
+fi
+
+# 20. REUSE MUST NEVER TURN A RED INTO A GREEN. A record that holds a `fail` for
+#     the very gate being asked about must refuse, even though the record names
+#     this tree under this fingerprint. Written by hand rather than by running a
+#     failing gate, so the check is about the READER's rule and stays fast — and
+#     the hand-written record also pins the on-disk shape a future writer must
+#     keep producing.
+if [ -n "$probe_tree" ]; then
+  rec="$(gr_file "$probe_tree")"
+  PREFLIGHT_KEY_EXTRA=probe15 ./scripts/preflight.sh --only "$probe_gate" >/dev/null 2>&1
+  key="$(gr_read_field "$rec" key)"
+  parts="$(gr_json_escape "$(PREFLIGHT_KEY_EXTRA=probe15 gr_key_parts "$SB")")"
+  printf '{\n  "format": 1,\n  "tree": "%s",\n  "key": "%s",\n  "key_parts": "%s",\n  "gates": {\n    "%s": { "status": "fail", "seconds": 3, "at": "2026-01-01T00:00:00Z", "reused": false }\n  },\n  "runs": 1,\n  "verdict": "red",\n  "finished_at": "%s"\n}\n' \
+    "$probe_tree" "$key" "$parts" "$probe_gate" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$rec"
+  out=$(PREFLIGHT_KEY_EXTRA=probe15 ./scripts/preflight.sh --only "$probe_gate" --reuse-record 2>&1)
+  rc=$?
+  if [ $rc -ne 0 ] && grep -q 'can never turn a red verdict green' <<<"$out"; then
+    ok "a recorded FAIL is refused even on the matching tree+fingerprint (a red is never reused into a green)"
+  else
+    bad "a record holding a fail must be refused, got rc=$rc [$(printf '%s' "$out" | tail -n 1)]"
+  fi
+fi
+
+# 21. A record for ANOTHER tree must not be usable, even when everything else
+#     about it matches. This is the merge-tree vs branch-head case the card names
+#     (2f961d7 vs 4bb8eae): the record has to name what it GATED.
+if [ -n "$probe_tree" ]; then
+  rec="$(gr_file "$probe_tree")"
+  PREFLIGHT_KEY_EXTRA=probe15 ./scripts/preflight.sh --only "$probe_gate" >/dev/null 2>&1
+  other="$(printf '0%.0s' $(seq 1 40))"
+  sed -i "s/^  \"tree\": \"$probe_tree\",$/  \"tree\": \"$other\",/" "$rec"
+  out=$(PREFLIGHT_KEY_EXTRA=probe15 ./scripts/preflight.sh --only "$probe_gate" --reuse-record 2>&1)
+  rc=$?
+  if [ $rc -ne 0 ] && grep -q "names tree \[$other\]" <<<"$out"; then
+    ok "a record naming a DIFFERENT tree is refused ($(printf '%.7s' "$probe_tree") vs $other)"
+  else
+    bad "a record for another tree must be refused, got rc=$rc [$(printf '%s' "$out" | tail -n 1)]"
+  fi
+fi
+
+# 22. A stale record must be refused — "do not let a cached pass outlive its
+#     usefulness". The TTL is read from PREFLIGHT_RESULT_TTL (the same variable
+#     the runner honours), so this measures the real horizon logic and not a
+#     hardcoded window.
+if [ -n "$probe_tree" ]; then
+  rec="$(gr_file "$probe_tree")"
+  PREFLIGHT_KEY_EXTRA=probe15 ./scripts/preflight.sh --only "$probe_gate" >/dev/null 2>&1
+  out=$(PREFLIGHT_KEY_EXTRA=probe15 PREFLIGHT_RESULT_TTL=1 ./scripts/preflight.sh --only "$probe_gate" --reuse-record 2>&1)
+  rc=$?
+  if [ $rc -ne 0 ] && grep -q 'older than the 1s horizon' <<<"$out"; then
+    ok "a record past its TTL is refused (a cached pass does not outlive its usefulness)"
+  else
+    bad "a stale record must be refused, got rc=$rc [$(printf '%s' "$out" | tail -n 1)]"
+  fi
+fi
+
+# 23. THE HAPPY PATH, MEASURED RATHER THAN ASSERTED. With a record that vouches
+#     green for the WHOLE inventory, `--reuse-record` must (a) exit 0 without
+#     executing a single gate — acceptance #2 of the card: a lane about to gate an
+#     already-green tree does not queue behind the flock — (b) report the result as
+#     REUSE and NOT as PASS, and (c) append to the reuse ledger, the same ledger
+#     scripts/preflight_reuse.sh --report sums for the card's "measured saving".
+#     A green that is not distinguished from a re-run, or a saving nobody can
+#     count, is the feature not working.
+#
+#     The record is hand-written rather than produced by running the gates: the
+#     sandbox tree cannot build, and not needing to build is the entire reason the
+#     record exists. It is written for EVERY gate in the derived inventory, which
+#     is what makes this the FULL path rather than the per-gate one.
+if [ -n "$probe_tree" ]; then
+  rec="$(gr_file "$probe_tree")"
+  key="$(gr_read_field "$rec" key)"
+  parts="$(gr_json_escape "$(PREFLIGHT_KEY_EXTRA=probe15 gr_key_parts "$SB")")"
+  {
+    printf '{\n  "format": 1,\n  "tree": "%s",\n  "key": "%s",\n  "key_parts": "%s",\n  "gates": {\n' \
+      "$probe_tree" "$key" "$parts"
+    # One entry per gate in the derived inventory, comma-separated, no trailing
+    # comma — built with sed so no subshell loses the last line.
+    # shellcheck disable=SC2086  # deliberate word splitting on the newline-separated inventory
+    printf '%s\n' $GATES | sed 's/.*/    "&": { "status": "pass", "seconds": 42, "at": "2026-01-01T00:00:00Z", "reused": false },/' \
+      | sed '$ s/,$//'
+    printf '  },\n  "runs": 1,\n  "verdict": "green",\n  "log": "/tmp/probe.log",\n  "finished_at": "%s"\n}\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } > "$rec"
+  # The hand-written gates block is the fixture for the whole check, so assert it
+  # parses as intended BEFORE concluding anything from the run below: a fixture
+  # that silently lost its entries would make this check pass for no reason.
+  fixture_green=0
+  # shellcheck disable=SC2086
+  for g in $GATES; do
+    [ "$(gr_gate_status "$rec" "$g")" = "pass" ] && fixture_green=$((fixture_green+1))
+  done
+  rm -f "$RECORD_DIR/reuse-ledger.jsonl"
+  out=$(PREFLIGHT_KEY_EXTRA=probe15 ./scripts/preflight.sh --reuse-record 2>&1)
+  rc=$?
+  reused_secs=$(( fixture_green * 42 ))
+  # THE STRONGEST ASSERTION AVAILABLE: `gate [` is the banner the runner prints
+  # for every gate it EXECUTES. Its total absence proves acceptance #2 directly —
+  # no gate ran, so nothing queued for, or held, the host-wide flock.
+  #
+  # The reuse arrives by the PRE-LOCK path (every gate of the inventory is vouched
+  # for, so it is taken before `flock`), which is why the ledger line says
+  # `mode: full` and the seconds are the ledgered saving. If a future change moves
+  # the decision back under the lock, check 28 goes red; this check would still pass
+  # on the verdict, so the two are not redundant.
+  if [ "$fixture_green" -eq "$NGATES" ] && [ $rc -eq 0 ] && \
+     ! grep -q 'gate \[' <<<"$out" && \
+     grep -q 'verdict: REUSED (green)' <<<"$out" && \
+     grep -q "remembered ${reused_secs}s" <<<"$out" && \
+     grep -q 'REUSE' <<<"$out" && \
+     [ -r "$RECORD_DIR/reuse-ledger.jsonl" ] && \
+     grep -q "\"tree\":\"$probe_tree\"" "$RECORD_DIR/reuse-ledger.jsonl" && \
+     grep -q "\"mode\":\"full\"" "$RECORD_DIR/reuse-ledger.jsonl" && \
+     grep -q "\"remembered_seconds\":$reused_secs" "$RECORD_DIR/reuse-ledger.jsonl"; then
+    ok "a whole-inventory green record is REUSED without executing a single gate (no 'gate [' banner), labelled as reuse, $reused_secs host-seconds on the ledger"
+  else
+    bad "a green record for the whole inventory must be reused without executing anything and ledgered — fixture_green=$fixture_green/$NGATES rc=$rc gates_run=[$(printf '%s' "$out" | grep -c 'gate \[')] [$(printf '%s' "$out" | grep -E 'reuse:|REUSED|FAIL' | tr '\n' ' ')] ledger=[$(printf '%s' "$(cat "$RECORD_DIR/reuse-ledger.jsonl" 2>/dev/null)" | tr '\n' ' ')]"
+  fi
+
+  # 20b. The ledger is READ by the consumer, so the MEASURED saving can be
+  #      reported from real files. Assert the report sums the seconds just written
+  #      — not that some number is printed.
+  rep=$(./scripts/preflight_reuse.sh --report 24 2>&1)
+  if grep -q "host-seconds NOT spent : ${reused_secs}s" <<<"$rep"; then
+    ok "--report sums the real ledger (${reused_secs}s from the reuse above)"
+  else
+    bad "--report must sum the real ledger, got [$(printf '%s' "$rep" | grep -E 'host-seconds|reuse events' | tr '\n' ' ')] expected ${reused_secs}s"
+  fi
+
+  # 20c. AND the consumer's saving must be on the ledger too. A lane's normal path
+  #      is `preflight_reuse.sh` first and the runner second; if only the runner
+  #      ledgered, the documented path would report a saving of zero. Counted as a
+  #      SEPARATE line so the check measures the consumer's own write.
+  rm -f "$RECORD_DIR/reuse-ledger.jsonl"
+  PREFLIGHT_KEY_EXTRA=probe15 ./scripts/preflight_reuse.sh --tree "$probe_tree" >/dev/null 2>&1
+  if [ -r "$RECORD_DIR/reuse-ledger.jsonl" ] && \
+     grep -q "\"remembered_seconds\":$reused_secs" "$RECORD_DIR/reuse-ledger.jsonl"; then
+    ok "the consumer's decision also ledgers its ${reused_secs}s saving (the lane path is counted, not just the runner's)"
+  else
+    bad "the consumer must ledger the saving it reports, ledger=[$(printf '%s' "$(cat "$RECORD_DIR/reuse-ledger.jsonl" 2>/dev/null)" | tr '\n' ' ')]"
+  fi
+fi
+
+# 24. The consumer must AGREE with the runner ON THE SAME QUESTION, and it must
+#     answer the question it was actually asked. Both are asked about the one gate
+#     (`--only $probe_gate`, the shape a lane uses to re-run what a record could
+#     not vouch for); the consumer is told the same selection through
+#     PREFLIGHT_ONLY. If it ignored that and answered over the whole inventory it
+#     would call a run "partial" that the runner calls green (or hand a lane a
+#     RERUN set for gates nobody asked about) — a consumer and a runner that
+#     disagree about what is reusable is exactly how a stale pass gets believed.
+if [ -n "$probe_tree" ]; then
+  dec=$(PREFLIGHT_KEY_EXTRA=probe15 PREFLIGHT_ONLY="$probe_gate" ./scripts/preflight_reuse.sh --tree "$probe_tree" 2>&1)
+  dec_rc=$?
+  run=$(PREFLIGHT_KEY_EXTRA=probe15 ./scripts/preflight.sh --only "$probe_gate" --reuse-record 2>&1)
+  run_rc=$?
+  # The runner has TWO reuse paths — the whole-inventory one (which takes the early
+  # exit and prints `verdict: REUSED (green)`) and the per-gate one (which prints
+  # `==> REUSED (not re-run, recorded pass on THESE bytes): <gates>`). Which one
+  # fires depends on how much of the inventory the record covers, so the assertion
+  # is what they must AGREE ON: the consumer calls $probe_gate reusable with no
+  # reruns, and the runner reuses rather than gating. Any stronger coupling here
+  # would pin a branch instead of the contract.
+  dec_ok=0
+  [ $dec_rc -eq 0 ] && \
+    grep -qxF "PREFLIGHT_DECISION=full" <<<"$dec" && \
+    grep -qxF "PREFLIGHT_TREE=$probe_tree" <<<"$dec" && \
+    grep -qxF "PREFLIGHT_SKIP=$probe_gate" <<<"$dec" && \
+    grep -qxF "PREFLIGHT_RERUN=" <<<"$dec" && dec_ok=1
+  if [ "$dec_ok" -eq 1 ] && [ $run_rc -eq 0 ] && \
+     grep -q 'REUSED' <<<"$run" && ! grep -q 'gate \[' <<<"$run"; then
+    ok "the consumer answers the question it was asked ($probe_gate: full, no reruns) and the runner reuses rather than gating"
+  else
+    bad "the consumer and the runner must agree on what is reusable — consumer rc=$dec_rc [$(printf '%s' "$dec" | tr '\n' ' ')] runner rc=$run_rc [$(printf '%s' "$run" | grep -E 'REUSED|reuse:|FAIL' | tr '\n' ' ')]"
+  fi
+fi
+
+# 25. A FAILED gate is RECORDED — the record is not a "green runs only" log. This
+#     is the case the record matters most for: 148 of the 206 repeated runs
+#     measured on this host were re-gating a RED tree (21.3 of the 38.3
+#     host-hours), and per-gate reuse is what recovers that time. It only works if
+#     a failure leaves behind the passes from the gates that DID succeed, so the
+#     next attempt re-runs the failures and not the whole tree.
+#
+#     In the sandbox every gate fails fast on a missing prerequisite, so the run
+#     below is a real red run: it must exit non-zero (a red must stay red) AND
+#     still leave a record naming this tree with the failed gate marked `fail`.
+if [ -n "$probe_tree" ]; then
+  rec="$(gr_file "$probe_tree")"
+  rm -f "$rec"
+  out=$(PREFLIGHT_KEY_EXTRA=probe15 ./scripts/preflight.sh --only "$probe_gate" 2>&1)
+  rc=$?
+  recorded="$(gr_gate_status "$rec" "$probe_gate")"
+  if [ $rc -ne 0 ] && [ "$recorded" = "fail" ] && [ "$(gr_read_field "$rec" tree)" = "$probe_tree" ]; then
+    ok "a FAILED gate exits non-zero and is still recorded as fail on the tree (the red-tree case can be reused per-gate)"
+  else
+    bad "a failed gate must be recorded as fail for the tree — rc=$rc recorded=[$recorded] rec=${rec} [$(printf '%s' "$out" | tail -n 1)]"
+  fi
+fi
+
+# 26. `reused: true` MEANS "AN EARLIER RUN OBSERVED THIS", and nothing else. A gate
+#     that no run ever observed must stay `skip` with `reused: false`; otherwise
+#     the record claims a memory it does not have, and a lane reading `reused: true`
+#     on a gate nobody ever ran is exactly the misreading this card exists to
+#     remove. The same run also pins the tally: `skipped` must count the gates the
+#     run did not execute, or the record's own summary contradicts its gate map.
+if [ -n "$probe_tree" ]; then
+  rec="$(gr_file "$probe_tree")"
+  rm -f "$rec"
+  # Two runs over the same single gate. In the sandbox that gate FAILS (missing
+  # prerequisite), which is fine — this check is about the FLAGS, not the verdict,
+  # and a red run is the more interesting case: it must still not mark an
+  # unobserved gate as remembered.
+  PREFLIGHT_KEY_EXTRA=probe15 ./scripts/preflight.sh --only "$probe_gate" >/dev/null 2>&1
+  PREFLIGHT_KEY_EXTRA=probe15 ./scripts/preflight.sh --only "$probe_gate" >/dev/null 2>&1
+  observed="$(gr_gate_status "$rec" "$probe_gate")"
+  observed_reused="$(gr_gate_entry_field "$rec" "$probe_gate" reused)"
+  unseen="$(printf '%s\n' $GATES | grep -vx "$probe_gate" | sed -n 1p)"
+  unseen_status="$(gr_gate_status "$rec" "$unseen")"
+  unseen_reused="$(gr_gate_entry_field "$rec" "$unseen" reused)"
+  tally="$(gr_read_int "$rec" skipped)"
+  expected_skipped=$(( NGATES - 1 ))
+  if [ "$observed_reused" = "false" ] && [ "$unseen_status" = "skip" ] && [ "$unseen_reused" = "false" ] && \
+     [ "$tally" = "$expected_skipped" ]; then
+    ok "an unobserved gate stays skip/reused=false and an observed one reused=false; the tally records $tally skipped of $NGATES"
+  else
+    bad "reused:true must mean 'an earlier run observed this' — observed($probe_gate)=$observed reused=$observed_reused unseen($unseen)=$unseen_status reused=$unseen_reused recorded_skipped=[$tally] expected=$expected_skipped"
+  fi
+fi
+
+# 27. A REUSED GATE MUST NOT BE REPORTED AS A GAP. The output is where a lane
+#     reads the verdict, so the failure mode is a *readable* contradiction: the
+#     run prints `REUSE: tmpkey,prunewt` and, three lines later, lists those same
+#     gates under `STILL SKIPPED AND NOT REUSED (no recorded pass)` — and under
+#     `SKIP: ... (not evidence)` in the summary. Both lines are about gates with
+#     NO evidence, so naming a just-vouched-for gate there inverts the meaning of
+#     the report while every count still looks right.
+#
+#     Measured on the real worktree before this check existed: a 3-gate reuse
+#     printed `REUSE: tmpkey prunewt refguard` and then
+#     `STILL SKIPPED AND NOT REUSED (no recorded pass): build vet test ... refguard selftest`
+#     — the full inventory, reused gates included.
+if [ -n "$probe_tree" ]; then
+  rec="$(gr_file "$probe_tree")"
+  # A PARTIAL fixture: every gate green EXCEPT the first, which is `fail`. A `fail`
+  # makes the record unusable as a whole-inventory vouch (so the early full path is
+  # not taken) while leaving the other gates as recorded passes — which is exactly
+  # the PER-GATE path that prints both the REUSE line and the summary, i.e. the
+  # only shape where the contradiction can appear.
+  key="$(gr_read_field "$rec" key)"
+  parts="$(gr_json_escape "$(PREFLIGHT_KEY_EXTRA=probe15 gr_key_parts "$SB")")"
+  {
+    printf '{\n  "format": 1,\n  "tree": "%s",\n  "key": "%s",\n  "key_parts": "%s",\n  "gates": {\n' \
+        "$probe_tree" "$key" "$parts"
+    # shellcheck disable=SC2086  # deliberate word splitting on the newline-separated inventory
+    printf '%s\n' $GATES | while IFS= read -r g; do
+      if [ "$g" = "$probe_gate" ]; then st=fail; else st=pass; fi
+      printf '    "%s": { "status": "%s", "seconds": 42, "at": "2026-01-01T00:00:00Z", "reused": false },\n' "$g" "$st"
+    done | sed '$ s/,$//'
+    printf '  },\n  "runs": 1,\n  "verdict": "red",\n  "log": "/tmp/probe.log",\n  "finished_at": "%s"\n}\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } > "$rec"
+  # The fixture must really be partial, or this check silently tests the full path.
+  fx_pass=0
+  # shellcheck disable=SC2086
+  for g in $GATES; do [ "$(gr_gate_status "$rec" "$g")" = pass ] && fx_pass=$((fx_pass+1)); done
+  r1=$(PREFLIGHT_KEY_EXTRA=probe15 ./scripts/preflight.sh --reuse-record 2>&1)
+  # Lines that name gates but mean "no evidence", and the line that means "remembered".
+  gap_lines="$(printf '%s\n' "$r1" | grep -E 'STILL SKIPPED AND NOT REUSED|SKIP:.*not evidence' || true)"
+  reuse_line="$(printf '%s\n' "$r1" | grep -E 'REUSE:' || true)"
+  leaked=""
+  # shellcheck disable=SC2086  # deliberate word splitting on the derived inventory
+  for g in $GATES; do
+    case "$reuse_line" in
+      *"$g"*) printf '%s\n' "$gap_lines" | grep -qw "$g" && leaked="$leaked $g" ;;
+    esac
+  done
+  if [ "$fx_pass" -ne $((NGATES-1)) ]; then
+    bad "check 27's fixture is not partial ($fx_pass of $NGATES pass) — it would test the full path, not the per-gate one"
+  elif [ -n "$leaked" ]; then
+    bad "a reused gate was also printed under a 'no evidence' line — reused but listed as a gap:$leaked"
+  elif [ -z "$reuse_line" ]; then
+    bad "a per-gate reuse run printed no REUSE line at all (last output was [$(printf '%s' "$r1" | tail -n 1)])"
+  else
+    ok "on the per-gate path a reused gate is named on the REUSE line ($fx_pass reused) and never under a 'no recorded pass' / 'not evidence' line"
+  fi
+fi
+
+# 28. A WHOLE-INVENTORY REUSE MUST NOT TAKE THE HOST LOCK — the runner's reason for
+#     existing. Check 20 proves no GATE runs, but it runs under the self-test's
+#     PRIVATE lock ($PREFLIGHT_LOCK_FILE points into $SB_STATE), so it can never see
+#     whether the gate body had to WAIT. Measured on this host with a real record:
+#     the reuse sat in `flock` for the full lock wait (151s, killed) because the
+#     reuse decision was taken INSIDE the lock — re-gating nothing, but queueing
+#     behind whatever held it, which is exactly the cost the record removes.
+#
+#     This check holds the lock for real (a background flock on the SAME path the
+#     script would use) and requires the reuse to answer WITHOUT waiting. The lock
+#     is a private path, so the check is hermetic and never touches the host's gate.
+if [ -n "$probe_tree" ]; then
+  rec="$(gr_file "$probe_tree")"
+  key="$(gr_read_field "$rec" key)"
+  parts="$(gr_json_escape "$(PREFLIGHT_KEY_EXTRA=probe15 gr_key_parts "$SB")")"
+  {
+    printf '{\n  "format": 1,\n  "tree": "%s",\n  "key": "%s",\n  "key_parts": "%s",\n  "gates": {\n' \
+        "$probe_tree" "$key" "$parts"
+    # shellcheck disable=SC2086
+    printf '%s\n' $GATES | sed 's/.*/    "&": { "status": "pass", "seconds": 42, "at": "2026-01-01T00:00:00Z", "reused": false },/' \
+      | sed '$ s/,$//'
+    printf '  },\n  "runs": 1,\n  "verdict": "green",\n  "log": "/tmp/probe.log",\n  "finished_at": "%s"\n}\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } > "$rec"
+  held_lock="$SB_STATE/held-gate.lock"
+  : > "$held_lock"
+  # Hold it for the whole check. `-w 5` so an unexpected failure to take it is
+  # visible rather than hanging the self-test.
+  flock -w 5 "$held_lock" sleep 60 &
+  holder=$!
+  sleep 1
+  if flock -n "$held_lock" true 2>/dev/null; then
+    bad "check 28 could not hold its lock ($held_lock) — the no-wait property cannot be measured"
+  else
+    # A wait of 0 makes "did it queue?" binary: if the reuse still reaches the
+    # lock it exits 75 instead of answering, so the check cannot hang.
+    t0=$(date +%s)
+    r2=$(PREFLIGHT_KEY_EXTRA=probe15 PREFLIGHT_LOCK_FILE="$held_lock" PREFLIGHT_LOCK_WAIT=0 \
+         ./scripts/preflight.sh --reuse-record 2>&1)
+    r2_rc=$?
+    t1=$(date +%s)
+    if [ "$r2_rc" -eq 0 ] && grep -q 'took NO lock' <<<"$r2" && ! grep -q 'could not acquire' <<<"$r2"; then
+      ok "a whole-inventory reuse answers WITHOUT taking the gate lock (rc=0 in $((t1-t0))s while the lock was held)"
+    else
+      bad "a whole-inventory reuse must not queue on the gate lock — rc=$r2_rc in $((t1-t0))s, output=[$(printf '%s' "$r2" | grep -E 'lock|could not acquire|REUSED' | tr '\n' ' ')]"
+    fi
+  fi
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+fi
+
+# 29. A SUBSET SELECTION MUST NOT BORROW A WHOLE-INVENTORY REUSE. With a green
+#     record and `--only <one gate>`, the pre-lock path must ask about THE GATE
+#     THE CALLER SELECTED. Asking about the whole inventory instead reports a
+#     14-gate reuse — and ledgers 14 gates' worth of seconds as saved — for a
+#     one-gate request. Measured on the real worktree before this check existed:
+#     `--only vet --reuse-record` printed
+#     `REUSE: build vet test govuln web a11y npmaudit gitleaks monitor tmpkey
+#      backup prunewt refguard selftest (REMEMBERED ...)`
+#     for a run that only ever asked about `vet`.
+if [ -n "$probe_tree" ]; then
+  rec="$(gr_file "$probe_tree")"
+  key="$(gr_read_field "$rec" key)"
+  parts="$(gr_json_escape "$(PREFLIGHT_KEY_EXTRA=probe15 gr_key_parts "$SB")")"
+  {
+    printf '{\n  "format": 1,\n  "tree": "%s",\n  "key": "%s",\n  "key_parts": "%s",\n  "gates": {\n' \
+        "$probe_tree" "$key" "$parts"
+    # shellcheck disable=SC2086
+    printf '%s\n' $GATES | sed 's/.*/    "&": { "status": "pass", "seconds": 77, "at": "2026-01-01T00:00:00Z", "reused": false },/' \
+      | sed '$ s/,$//'
+    printf '  },\n  "runs": 1,\n  "verdict": "green",\n  "log": "/tmp/probe.log",\n  "finished_at": "%s"\n}\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } > "$rec"
+  r3=$(PREFLIGHT_KEY_EXTRA=probe15 PREFLIGHT_LOCK_WAIT=0 ./scripts/preflight.sh --only "$probe_gate" --reuse-record 2>&1)
+  r3_rc=$?
+  r3_reuse="$(printf '%s\n' "$r3" | grep -E 'REUSE:' | tail -n 1)"
+  # The reused set must be exactly $probe_gate: no other gate may be named as
+  # remembered, and the saved seconds must be this gate's alone (77), not the sum.
+  leaked_gates=""
+  # shellcheck disable=SC2086
+  for g in $GATES; do
+    [ "$g" = "$probe_gate" ] && continue
+    case "$r3_reuse" in *"$g"*) leaked_gates="$leaked_gates $g" ;; esac
+  done
+  case "$r3" in
+    *"remembered 77s"*) secs_ok=1 ;;
+    *)                  secs_ok=0 ;;
+  esac
+  if [ "$r3_rc" -eq 0 ] && [ -z "$leaked_gates" ] && [ "$secs_ok" -eq 1 ] && \
+     printf '%s\n' "$r3_reuse" | grep -qw "$probe_gate"; then
+    ok "a --only subset reuses only the selected gate ($probe_gate, 77s) — not the whole inventory"
+  else
+    bad "a subset selection must not borrow a whole-inventory reuse — rc=$r3_rc leaked=[$leaked_gates] secs_ok=$secs_ok line=[$r3_reuse]"
+  fi
+fi
+
+# 30. THE SELF-TEST MUST NOT INHERIT THE RUNNER'S LOCK FLAG — see the guard at the
+#     top of this file. `preflight.sh` exports `_PREFLIGHT_LOCKED=1` to its flock
+#     child, and this self-test runs as that child's own `selftest` gate, so every
+#     nested `./scripts/preflight.sh` here would inherit "you are the locked child"
+#     and skip the pre-lock reuse — measuring a path no lane ever takes. Measured for
+#     real: the full gate's selftest run failed checks 28 and 29 while
+#     `bash scripts/preflight_test.sh` passed them, because only the nested run had
+#     the flag set.
+#
+#     This assertion BITE only in the nested case, which is exactly the case that
+#     broke: run standalone (no parent flag) it passes trivially, but run as the gate
+#     runs it with the guard deleted, the flag is still set here and it goes red.
+if [ -n "${_PREFLIGHT_LOCKED:-}" ]; then
+  bad "_PREFLIGHT_LOCKED is still set when the checks run — this self-test inherited the runner's flag, so checks 28/29 measured a path no lane takes (is the guard at the top of this file still there?)"
+else
+  ok "the self-test clears an inherited _PREFLIGHT_LOCKED before any check (nested preflight.sh calls take the real pre-lock reuse path)"
+fi
+
+# 31. THE DOCUMENTED RED-TREE PATH MUST RUN. `docs/PREFLIGHT-REUSE.md` tells a lane
+#     whose run was red to re-run exactly what the record could not vouch for:
+#
+#         ./scripts/preflight.sh --only <PREFLIGHT_RERUN> --reuse-record
+#
+#     On a record whose only `fail` IS that gate, every recorded `pass` is off the
+#     selection, and the runner used to filter the vouched set through the selection
+#     BEFORE asking "does this record vouch for anything?". The filtered set came
+#     out empty, and the run DIED with "vouches for NO gate": rc=1, zero ledger
+#     lines, on the exact lane shape (148 of the 206 repeated runs measured on this
+#     host) the record exists for. Measured on the real record for tree 53854bd:
+#     without `--only` it ran `vet` once and carried the other thirteen; with the
+#     documented `--only vet` it refused.
+#
+#     THE FIXTURE IS CHECK 27's, reused verbatim: every gate `pass` except
+#     $probe_gate, which is `fail`. That is the shape both failure modes need (the
+#     early whole-inventory path declines, so the per-gate path is taken).
+#
+#     WHY CHECK 24 DOES NOT ALREADY COVER THIS: 24 runs the same `--only <gate>
+#     --reuse-record` argv, but against a record where THAT GATE IS `pass` — so the
+#     selection and the vouched set overlap and the empty-intersection branch is
+#     never reached. This check is the one that would have caught the defect.
+if [ -n "$probe_tree" ]; then
+  rec="$(gr_file "$probe_tree")"
+  key="$(gr_read_field "$rec" key)"
+  parts="$(gr_json_escape "$(PREFLIGHT_KEY_EXTRA=probe15 gr_key_parts "$SB")")"
+  {
+    printf '{\n  "format": 1,\n  "tree": "%s",\n  "key": "%s",\n  "key_parts": "%s",\n  "gates": {\n' \
+        "$probe_tree" "$key" "$parts"
+    # shellcheck disable=SC2086  # deliberate word splitting on the newline-separated inventory
+    printf '%s\n' $GATES | while IFS= read -r g; do
+      if [ "$g" = "$probe_gate" ]; then st=fail; else st=pass; fi
+      printf '    "%s": { "status": "%s", "seconds": 42, "at": "2026-01-01T00:00:00Z", "reused": false },\n' "$g" "$st"
+    done | sed '$ s/,$//'
+    printf '  },\n  "runs": 1,\n  "verdict": "red",\n  "log": "/tmp/probe.log",\n  "finished_at": "%s"\n}\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } > "$rec"
+  # fixture sanity, same rule as check 27: a fixture that lost its entries would
+  # make this check pass for no reason.
+  fx31_pass=0
+  # shellcheck disable=SC2086
+  for g in $GATES; do [ "$(gr_gate_status "$rec" "$g")" = pass ] && fx31_pass=$((fx31_pass+1)); done
+  rm -f "$RECORD_DIR/reuse-ledger.jsonl"
+  # The documented argv, verbatim. PREFLIGHT_LOCK_WAIT=0 so a run that (wrongly)
+  # queued would exit 75 instead of hanging this self-test.
+  r31=$(PREFLIGHT_KEY_EXTRA=probe15 PREFLIGHT_LOCK_WAIT=0 \
+        ./scripts/preflight.sh --only "$probe_gate" --reuse-record 2>&1)
+  r31_rc=$?
+  r31_lines=0
+  [ -r "$RECORD_DIR/reuse-ledger.jsonl" ] && r31_lines=$(grep -c '[^[:space:]]' "$RECORD_DIR/reuse-ledger.jsonl")
+  # THE ASSERTION IS "THE RUN REACHED THE GATE", NOT "THE GATE PASSED". Every gate
+  # fails fast in this sandbox (no api/, no web install), so an rc of 0 is not
+  # available for a shape that EXECUTES a gate — and demanding it would make this
+  # check red on a correct runner. What the defect was about is visible and exact:
+  # the runner must not refuse the reuse, and it must get as far as running the gate
+  # it was asked for. rc=75 would mean it queued instead, which is a third shape.
+  if [ "$fx31_pass" -ne $((NGATES-1)) ]; then
+    bad "check 31's fixture is not the red-tree shape ($fx31_pass of $NGATES pass) — the documented path cannot be measured"
+  elif grep -q 'vouches for NO gate' <<<"$r31"; then
+    bad "the documented red-tree path refused with 'vouches for NO gate' — the vouched set is being filtered through the SELECTION before the refusal is decided. output=[$(printf '%s' "$r31" | tail -n 1)]"
+  elif [ "$r31_rc" -eq 75 ]; then
+    bad "the documented red-tree path queued on the gate lock (rc=75) instead of running — with PREFLIGHT_LOCK_WAIT=0 that is a run that never reached its gate"
+  elif ! grep -q "gate \[$probe_gate\]" <<<"$r31"; then
+    bad "the documented red-tree path must EXECUTE the gate it was asked to re-run ($probe_gate) — it did not run. rc=$r31_rc output=[$(printf '%s' "$r31" | tail -n 1)]"
+  elif [ "$r31_lines" -ne 0 ]; then
+    bad "the carried passes are OUTSIDE this run's selection, so nothing may be ledgered for them — got $r31_lines ledger line(s)"
+  else
+    ok "the documented red-tree path runs: --only $probe_gate --reuse-record reaches and executes $probe_gate, names the $fx31_pass carried pass(es) as outside the selection, and ledgers nothing for them"
+  fi
+fi
+
+# 32. ONE REUSE EVENT, ONE LEDGER LINE. The documented lane path is consumer FIRST
+#     and runner SECOND (`docs/PREFLIGHT-REUSE.md`), and both ends decide from the
+#     same record: preflight_reuse.sh ledgers the saving, then preflight.sh
+#     --reuse-record ledgers it again. Measured, isolated (private result dir and
+#     private lock, all gates `pass` at 42s ⇒ 588s of saving):
+#
+#         consumer only           1 line   588s
+#         runner --reuse-record   1 line   588s
+#         consumer THEN runner    2 lines  1176s      <- the documented path
+#
+#     `--report` is the instrument acceptance is read from, so the number a human
+#     or a merger reads was DOUBLE the saving actually made; the host ledger showed
+#     the same shape on every lane in its window (tree 53854bd at 1405s written by
+#     pids 391575/395208/1985442/2071621). The ledger is documented as "one line per
+#     reuse", so the assertion is the LINE COUNT and the summed seconds, not that
+#     some number was printed.
+if [ -n "$probe_tree" ]; then
+  rec="$(gr_file "$probe_tree")"
+  key="$(gr_read_field "$rec" key)"
+  parts="$(gr_json_escape "$(PREFLIGHT_KEY_EXTRA=probe15 gr_key_parts "$SB")")"
+  {
+    printf '{\n  "format": 1,\n  "tree": "%s",\n  "key": "%s",\n  "key_parts": "%s",\n  "gates": {\n' \
+        "$probe_tree" "$key" "$parts"
+    # shellcheck disable=SC2086
+    printf '%s\n' $GATES | sed 's/.*/    "&": { "status": "pass", "seconds": 42, "at": "2026-01-01T00:00:00Z", "reused": false },/' \
+      | sed '$ s/,$//'
+    printf '  },\n  "runs": 1,\n  "verdict": "green",\n  "log": "/tmp/probe.log",\n  "finished_at": "%s"\n}\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } > "$rec"
+  fx32_green=0
+  # shellcheck disable=SC2086
+  for g in $GATES; do [ "$(gr_gate_status "$rec" "$g")" = pass ] && fx32_green=$((fx32_green+1)); done
+  expected_secs=$(( fx32_green * 42 ))
+  rm -f "$RECORD_DIR/reuse-ledger.jsonl"
+  # THE DOCUMENTED TWO-STEP PATH, in order: consumer, then runner. The consumer's
+  # own decision must ledger; the runner must NOT write the same event again.
+  PREFLIGHT_KEY_EXTRA=probe15 ./scripts/preflight_reuse.sh --tree "$probe_tree" >/dev/null 2>&1
+  PREFLIGHT_KEY_EXTRA=probe15 PREFLIGHT_LOCK_WAIT=0 \
+    ./scripts/preflight.sh --reuse-record >/dev/null 2>&1
+  path_lines=0
+  [ -r "$RECORD_DIR/reuse-ledger.jsonl" ] && path_lines=$(grep -c '[^[:space:]]' "$RECORD_DIR/reuse-ledger.jsonl")
+  rep32=$(./scripts/preflight_reuse.sh --report 24 2>&1)
+  if [ "$fx32_green" -ne "$NGATES" ]; then
+    bad "check 32's fixture is not a whole-inventory green record ($fx32_green of $NGATES pass) — the two-step path cannot be measured"
+  elif [ "$path_lines" -ne 1 ]; then
+    bad "the DOCUMENTED consumer-then-runner path must ledger ONE line per reuse event — got $path_lines: [$(printf '%s' "$(cat "$RECORD_DIR/reuse-ledger.jsonl" 2>/dev/null)" | tr '\n' ' ')]"
+  elif ! grep -q "host-seconds NOT spent : ${expected_secs}s" <<<"$rep32"; then
+    bad "the two-step path must report the saving ONCE (${expected_secs}s), not double it — --report said [$(printf '%s' "$rep32" | grep -E 'host-seconds|reuse events' | tr '\n' ' ')]"
+  else
+    ok "the documented consumer-then-runner path ledgers exactly 1 line and --report sums ${expected_secs}s once (not ${expected_secs}*2)"
+  fi
+fi
+
+# 33. A RECORD OBSERVED UNDER A DIFFERENT NODE IS STILL USABLE, AND SAYS SO. On this
+#     host the node version is a property of the SHELL, not of the tree: an
+#     INTERACTIVE shell resolves `node=v24.19.0` (nvm is appended by /root/.bashrc)
+#     while a Hermes worker lane resolves `node=v26.7.0` from
+#     /root/.hermes/tools/node-26.7.0-linux-x64/bin. Keyed on node, a record written
+#     by one shape is REFUSED by the other with "the environment changed since that
+#     record" on IDENTICAL bytes, database and webdeps — i.e. reuse was dead for the
+#     one shape that runs the gates, which is the whole point of the feature.
+#     `preflight.sh` deliberately does not source test-env.sh (the pre-lock path
+#     explains why), and no host file ships with a PR, so "pin node in test-env.sh"
+#     is not available from this repo. node is therefore RECORDED as evidence and
+#     announced as an ADVISORY, not hashed into the key.
+#
+#     Both directions are asserted, because either one alone can be faked: the KEY
+#     must not move when node moves (else the refusal is still there), and the key
+#     MUST still move when the key material moves (else "drop node" degenerated into
+#     "drop everything"). The second leg is what makes the first leg safe to make.
+if [ -n "$probe_tree" ]; then
+  parts_now="$(PREFLIGHT_KEY_EXTRA=probe15 gr_key_parts "$SB")"
+  key_now="$(PREFLIGHT_KEY_EXTRA=probe15 gr_key "$SB")"
+  # The advisory is driven off a real record whose key_parts names another node.
+  rec="$(gr_file "$probe_tree")"
+  key="$(gr_read_field "$rec" key)"
+  sed_parts="$(printf '%s' "$parts_now" \
+    | sed -E "s/(^|;)node=[^;]*/\\1node=v0.0.0-probe/")"
+  printf '{\n  "format": 1,\n  "tree": "%s",\n  "key": "%s",\n  "key_parts": "%s",\n  "gates": {\n    "%s": { "status": "pass", "seconds": 5, "at": "2026-01-01T00:00:00Z", "reused": false }\n  },\n  "runs": 1,\n  "verdict": "green",\n  "finished_at": "%s"\n}\n' \
+    "$probe_tree" "$key" "$(gr_json_escape "$sed_parts")" "$probe_gate" \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$rec"
+  r33=$(PREFLIGHT_KEY_EXTRA=probe15 PREFLIGHT_LOCK_WAIT=0 \
+        ./scripts/preflight.sh --only "$probe_gate" --reuse-record 2>&1)
+  r33_rc=$?
+  # A node that differs must NOT appear in the key material at all.
+  node_in_material=0
+  case "$(PREFLIGHT_KEY_EXTRA=probe15 gr_key_material "$SB")" in *node=*) node_in_material=1 ;; esac
+  if [ "$node_in_material" -ne 0 ]; then
+    bad "the node version is still part of the key MATERIAL — a worker lane's node would refuse a record written from an interactive shell on identical bytes (see gr_key_material)"
+  elif [ "$r33_rc" -ne 0 ] && grep -q 'the environment changed since that record' <<<"$r33"; then
+    bad "a differing node version refused the record ('the environment changed since that record') — node must be advisory, not key material"
+  elif ! grep -q "OBSERVED under node" <<<"$r33"; then
+    bad "a differing node version was accepted but NOT announced — the reader must be able to see the web-side gates were observed under another toolchain. output=[$(printf '%s' "$r33" | grep -E 'note|FAIL' | tr '\n' ' ')]"
+  else
+    ok "a differing node version does NOT invalidate the record and is announced as an advisory (node=$sed_parts vs $(gr_node_version))"
+  fi
+  # The COUNTER-LEG: the other fingerprint components must still bite, so dropping
+  # node cannot be read as \"the fingerprint was emptied\".
+  if [ "$key_now" = "$(PREFLIGHT_KEY_EXTRA=probe15-bumped gr_key "$SB")" ]; then
+    bad "the fingerprint no longer changes when its key MATERIAL changes (\`extra\` bump was ignored) — the node demotion must not have emptied the key"
+  elif ! grep -q 'gatescript=' <<<"$(PREFLIGHT_KEY_EXTRA=probe15 gr_key_material "$SB")" \
+    || ! grep -q 'webdeps=' <<<"$(PREFLIGHT_KEY_EXTRA=probe15 gr_key_material "$SB")"; then
+    bad "the key material dropped gatescript/webdeps while dropping node — the fingerprint must still hash the gate scripts and the installed web dependency set"
+  else
+    ok "the key still changes on its key material (\`extra\`, gatescript, webdeps) — node was demoted without emptying the fingerprint"
+  fi
 fi
 
 echo "---"
