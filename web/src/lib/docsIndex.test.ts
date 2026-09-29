@@ -57,6 +57,14 @@
 //     direction too: it is a text substitution, not a parser, so the one
 //     line-comment form it cannot reach is a `//` that starts on the same line as
 //     code (see stripUnrendered).
+//   * The VACUITY test reads the same stripped `docsSrc` (t_fc8a9ff2), so it is
+//     exactly as wide as the strip and no wider: its whole job is to catch the
+//     case the paragraph above refuses to claim ("the slug reaches the DOM"), and
+//     a fact in a template literal, in a branch that never renders, or in a `//`
+//     that opens after code on the same line would still satisfy it. What the
+//     strip closes is the case that was actually shipping — a token carried ONLY
+//     by a comment — and that is measured in both directions by
+//     web/scripts/biteproof_docs_index_render_sites.sh rather than asserted here.
 //
 // Run with:
 //
@@ -73,7 +81,22 @@ const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.met
 const path = (rel: string) => fileURLToPath(new URL(rel, import.meta.url));
 
 const DOCS_PAGE = "../app/docs/page.tsx";
-const docsSrc = read(DOCS_PAGE);
+
+// t_fc8a9ff2: the page is read through the comment strip, not raw.
+//
+// Every search below asks whether a reader can SEE a fact on the page, and this
+// file's own rule is that a comment never counts. `docsSrc` was the raw source,
+// so the VACUITY test — the guard's stated answer to "an id that is real text the
+// page never renders still passes" — was satisfied by a `//` line carrying the
+// same token: measured, moving both render sites off `f.slug` and adding one
+// comment line left the whole suite GREEN while /docs rendered no slug id at all
+// (control, no comment: RED). It also made a commented-out `title:`/`body:` inside
+// GROUPS a real feature entry, since `parseGroups` reads this text directly.
+//
+// `stripUnrendered` is a function DECLARATION (see its own note) precisely so this
+// module-scope call is legal: a declaration hoists, a `const` arrow would still be
+// in its temporal dead zone here.
+const docsSrc = stripUnrendered(read(DOCS_PAGE));
 
 // The word budget for one summary line. 45 is deliberately a little above the
 // "~40 words" the page is designed around: it leaves room for a sentence that
@@ -233,22 +256,29 @@ function declaresId(file: string, id: string): boolean {
 // `//` rule is anchored to the start of a LINE, which is what keeps a URL or a
 // `//` inside a rendered string from being eaten, and the cost is that a comment
 // opening after code on the same line (`<p>x</p> // id: "y"`) survives. No page
-// under src/app/docs carries that form today (measured: `grep -rn '[^:"]//'`
-// over the docs tsx returns nothing), and the block-comment and JSX-container
+// under src/app/docs carries that form today (measured: `grep -rn '[^:"[:space:]]//'`
+// over the docs tree returns nothing), and the block-comment and JSX-container
 // forms — the ones actually used — are covered. A real tokenizer would close it;
 // this is a substitution, and it says which case it cannot see rather than
 // implying it sees them all.
-const stripUnrendered = (src: string): string =>
-  src
-    // A leading `{/* … */}` container. Matched at the `{` so the expression
-    // containers above are untouched.
-    .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, " ")
-    // A block comment in the module scope (the only place one can sit outside a
-    // container without being a syntax error).
-    .replace(/^[ \t]*\/\*[\s\S]*?\*\//gm, " ")
-    // A `//` line comment — anchored to the start of a line so a URL, or a `//`
-    // inside a rendered string, is not eaten.
-    .replace(/^[ \t]*\/\/.*$/gm, " ");
+//
+// A DECLARATION, not a `const` arrow (t_fc8a9ff2): the module-level `docsSrc` read
+// above calls this before its own source line is evaluated, and only a hoisted
+// function declaration makes that legal. Do not "tidy" it back to an arrow.
+function stripUnrendered(src: string): string {
+  return (
+    src
+      // A leading `{/* … */}` container. Matched at the `{` so the expression
+      // containers above are untouched.
+      .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, " ")
+      // A block comment in the module scope (the only place one can sit outside a
+      // container without being a syntax error).
+      .replace(/^[ \t]*\/\*[\s\S]*?\*\//gm, " ")
+      // A `//` line comment — anchored to the start of a line so a URL, or a `//`
+      // inside a rendered string, is not eaten.
+      .replace(/^[ \t]*\/\/.*$/gm, " ")
+  );
+}
 
 // The reader-visible text of a page.
 //
