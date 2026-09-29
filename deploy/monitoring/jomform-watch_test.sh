@@ -29,12 +29,46 @@ bad() { FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; }
 check() { # desc actual expected
   if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 (got '$2', want '$3')"; fi
 }
+# grep_has — the ONE matcher both helpers below use. A herestring, NOT
+# `printf '%s' "$1" | grep -qF -- "$2"`: `grep -q` exits at the FIRST match, so
+# the writer is still writing when the pipe closes, takes SIGPIPE (141), and
+# under this file's `set -uo pipefail` the pipeline then reports 141 although
+# grep MATCHED. `contains()` then takes its `bad` branch and prints
+# "missing '<needle>' in: <haystack that plainly contains it>" — the false red
+# this gate was caught printing on the `alert_suppressed` assertion (PR 669's
+# merge tree, PR 801's head), always on the multi-line printed log and never on
+# the single-line payloads. A herestring gives grep a file descriptor, so no
+# writer process exists to be signalled.
+#
+# The window is LINE boundaries, not the 64 KiB pipe buffer (a smaller payload
+# can flip): what matters is whether the writer still has unread bytes when grep
+# exits, i.e. how many writes/lines are still queued. Measured on this host with
+# the needle always present — 456 B single-line 0/3000 false reds; 526 B / 15
+# lines with the needle on line 1 8/3000; 468 894 B / 20000 matching lines
+# 300/300 with no load; the same 20000-line call through a herestring 0/300.
+#
+# grep's status is returned unchanged so a caller can tell "not found" (1) from
+# "could not judge" (>1) — the old wording could not, which is why this took
+# three cards to pin down.
+grep_has() { # haystack needle
+  grep -qF -- "$2" <<<"$1"
+}
+
 contains() { # desc haystack needle
-  if printf '%s' "$2" | grep -qF -- "$3"; then ok "$1"
-  else bad "$1 (missing '$3' in: $(printf '%s' "$2" | tr '\n' ' ' | cut -c1-300))"; fi
+  local rc=0
+  grep_has "$2" "$3" || rc=$?
+  if [ "$rc" = 0 ]; then ok "$1"
+  elif [ "$rc" = 1 ]; then bad "$1 (missing '$3' in: $(printf '%s' "$2" | tr '\n' ' ' | cut -c1-300))"
+  else bad "$1 (the matcher could not judge the haystack: status $rc, needle '$3' — this is NOT 'not found')"
+  fi
 }
 notcontains() {
-  if printf '%s' "$2" | grep -qF -- "$3"; then bad "$1 (found '$3')"; else ok "$1"; fi
+  local rc=0
+  grep_has "$2" "$3" || rc=$?
+  if [ "$rc" = 0 ]; then bad "$1 (found '$3')"
+  elif [ "$rc" = 1 ]; then ok "$1"
+  else bad "$1 (the matcher could not judge the haystack: status $rc, needle '$3')"
+  fi
 }
 
 SB="$(mktemp -d /tmp/jomform_watch_test.XXXXXX)"
@@ -156,6 +190,41 @@ reset() { # fresh state + log + healthy stub + a configured notifier
 }
 alert_count() { [ -f "$NOTIFY" ] && grep -c '^' "$NOTIFY" || echo 0; }
 alerts() { [ -f "$NOTIFY" ] && cat "$NOTIFY" || printf ''; }
+
+# ── the load-independent control for the matcher ─────────────────────────────
+# Every `contains`/`notcontains` below reads a payload the WATCHDOG produced, and
+# the ones that failed in the wild (the `alert_suppressed` assertion) read the
+# multi-line printed log. So the control drives the REAL helpers on exactly that
+# shape — many lines, needle on the FIRST line, which is the shape that leaves
+# whole lines unread when `grep -q` exits at the first match — in BOTH
+# directions: a present needle must be FOUND, an absent needle MISSED. On this
+# shape the old pipe form reports the MATCH as missing with no load at all
+# (measured: 300/300 false reds at 20000 lines; 8/3000 at 526 B / 15 lines), so
+# this is evidence on an idle host rather than a rate that only shows up under
+# contention. Without the second direction a `contains` that matched everything
+# would look just as green; without the status assertion a helper that could not
+# judge at all would look like "not found".
+BIG_HAY="$(seq 1 20000 | sed 's/^/probe-needle line /')"
+PASS_BEFORE=$PASS; FAIL_BEFORE=$FAIL
+contains "probe: present needle" "$BIG_HAY" "probe-needle line 1" >/dev/null 2>&1
+contains "probe: absent needle"  "$BIG_HAY" "probe-needle line 99999" >/dev/null 2>&1
+CONTROL_GOT="$((PASS - PASS_BEFORE))/$((FAIL - FAIL_BEFORE))"
+PASS=$PASS_BEFORE; FAIL=$FAIL_BEFORE
+check "control: contains() is pipe-free — FOUND the present needle and MISSED the absent one on a 20000-line haystack, needle on line 1" \
+  "1/1" "$CONTROL_GOT"
+
+# The matcher must be able to tell "not found" from "could not judge": status 1
+# is a missing needle, anything above is a matcher that never ran (under load
+# grep can fail to start and exits 127 with a message that would otherwise read
+# as a plain miss). Assert both halves of that discriminator directly.
+grep_has "some haystack" "absent-needle" >/dev/null 2>&1; rc=$?
+check "the matcher reports a genuine miss as status 1" "1" "$rc"
+grep -qF -- x "$SB/definitely-not-a-file" >/dev/null 2>&1; rc=$?
+if [ "$rc" -gt 1 ]; then
+  ok "an unjudgeable grep is a status above 1 (could-not-run), which contains() reports as NOT 'not found'"
+else
+  bad "an unjudgeable grep returned status $rc — contains() could not tell it apart from a missing needle"
+fi
 
 echo "jomform-watch self-test (sandbox $SB, stub server :$PORT)"
 echo "--- healthy path ---"

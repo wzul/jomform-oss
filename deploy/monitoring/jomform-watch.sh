@@ -220,11 +220,19 @@ send_message() { # body
   IFS=',' read -ra _chats <<<"$TG_CHATS"
   for chat in "${_chats[@]}"; do
     [ -n "$chat" ] || continue
+    # The API's ok flag is read from a herestring, NOT `printf '%s' "$resp" |
+    # grep -q`: `grep -q` exits at the FIRST match, so the writer is still
+    # writing when the pipe closes, takes SIGPIPE (141), and under this file's
+    # `set -uo pipefail` the pipeline then reports 141 although grep MATCHED —
+    # which would make a DELIVERED alert read as `notify_failed` (worst case: a
+    # false page, plus `exit 3` on a healthy notifier). A herestring gives grep a
+    # file descriptor, so there is no writer process to signal. Same shape at the
+    # probe-body marker below and at the /readyz reads further down.
     if resp=$(curl -sS --max-time "$TIMEOUT" -X POST \
       "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
       --data-urlencode "chat_id=${chat}" \
       --data-urlencode "text=${body}" 2>&1) \
-      && printf '%s' "$resp" | grep -q '"ok":true'; then
+      && grep -q '"ok":true' <<<"$resp"; then
       log info "notify_sent chat=$chat $(printf '%s' "$resp" \
         | sed -n 's/.*"message_id":\([0-9]*\).*/message_id=\1/p')"
     else
@@ -247,7 +255,7 @@ check_http() { # name url marker
   local name="$1" url="$2" marker="$3" i
   for i in $(seq 1 "$ATTEMPTS"); do
     if probe_url "$url"; then
-      if [ -z "$marker" ] || printf '%s' "$PROBE_BODY" | grep -qF -- "$marker"; then
+      if [ -z "$marker" ] || grep -qF -- "$marker" <<<"$PROBE_BODY"; then
         printf '%s code=%s bytes=%s' "$name" "$PROBE_CODE" "${#PROBE_BODY}"
         return 0
       fi
@@ -272,8 +280,8 @@ check_ready() { # prints detail, returns 0/1
   local i out
   for i in $(seq 1 "$ATTEMPTS"); do
     if out="$(remote_ready 2>&1)" \
-      && printf '%s' "$out" | grep -q '"database":"ok"' \
-      && printf '%s' "$out" | grep -q '"valkey":"ok"'; then
+      && grep -q '"database":"ok"' <<<"$out" \
+      && grep -q '"valkey":"ok"' <<<"$out"; then
       printf 'ready database=ok valkey=ok'
       return 0
     fi

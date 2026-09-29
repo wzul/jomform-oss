@@ -111,7 +111,12 @@ else
     "$BIN" 2>&1)
   rc=$?
   rm -rf "$PROOF_STATE"
-  if printf '%s' "$proof" | grep -q 'notify_sent'; then
+  # A herestring rather than `printf '%s' "$proof" | grep -q`: `grep -q` exits at
+  # the first match, so the writer dies of SIGPIPE (141) under this file's
+  # `set -uo pipefail` and the pipeline then reports failure although grep
+  # MATCHED — a delivered alert would read as a dead notifier and refuse to arm
+  # the timer. See deploy/monitoring/jomform-watch_test.sh's matcher note.
+  if grep -q 'notify_sent' <<<"$proof"; then
     echo "delivery proof OK — Telegram accepted the test alert (exit $rc from the injected failure)"
   else
     echo "delivery proof FAILED — the watchdog cannot alert on this host:" >&2

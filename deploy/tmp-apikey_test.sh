@@ -236,6 +236,50 @@ PASS=$PASS_BEFORE; FAIL=$FAIL_BEFORE
 check "control: contains() is pipe-free — FOUND the present needle and MISSED the absent one on a 20000-line haystack" \
   "1/1" "$CONTROL_GOT"
 
+# 1c. The same control, one level down, for the read-back matcher
+#     (`name_exact`, the `field "$out" NAMES | grep -qx "$name"` site). It cannot
+#     be driven through the real mint: the shipped query is EXACT-name, so the
+#     read-back is always one line and the old pipe form never fired there
+#     (measured: 0 false reads in 3000 calls on that value). It stops being safe
+#     the moment a future edit feeds it a multi-line list — `string_agg` already
+#     builds the MINE/IDS values that way — and on that shape the pipe form
+#     reports a PRESENT first-line name as missing, deterministically at size:
+#     measured one-name-per-line with the needle on line 1 -> 1/300 false reads
+#     at 3 lines, 12/300 at 1000 lines, 65/300 at 2000 lines, 300/300 at 5000
+#     lines (148 892 B), and 0/300 for the herestring at every size. The control
+#     uses the 5000-line shape so it is evidence at idle load, and asserts BOTH
+#     directions: present name FOUND, absent name MISSED.
+#     A comma-separated single-line value is NOT a usable control here: `-x`
+#     matches whole lines only, so such a needle is "not found" under both forms
+#     and the assertion would pass on the broken code too.
+LIST_NAMES="$( { printf '%s\n' "deploy-verify-tmp-t_probe1"
+                 for i in $(seq 2 5000); do printf 'deploy-verify-tmp-t_other%s\n' "$i"; done; } )"
+# Asserted as the two STATUSES, not as a summed ok/bad pair: a summed pair whose
+# legs have opposite polarity adds to the same number whether the present needle
+# was FOUND or the absent one was MISSED, which is a control that cannot fail.
+# (The `contains`-based control above avoids that only because both its legs go
+# through the same found=ok mapping.)
+# shellcheck disable=SC1090
+( JF_LIB_ONLY=1 . "$SCRIPT"; name_exact "$LIST_NAMES" "deploy-verify-tmp-t_probe1" ) >/dev/null 2>&1; rc=$?
+check "control: name_exact FOUND a present name on line 1 of a 5000-name read-back (status 0)" "0" "$rc"
+# shellcheck disable=SC1090
+( JF_LIB_ONLY=1 . "$SCRIPT"; name_exact "$LIST_NAMES" "deploy-verify-tmp-t_absent" ) >/dev/null 2>&1; rc=$?
+check "control: name_exact MISSED an absent name on that same read-back (status 1)" "1" "$rc"
+
+# 1d. And it must be able to say WHICH: a name that is absent is status 1, while
+#     a matcher that could not run at all is above 1. The old wording printed
+#     them both as "the row names read back as …", which is why a could-not-run
+#     looked like a wrong name.
+# shellcheck disable=SC1090
+( JF_LIB_ONLY=1 . "$SCRIPT"; name_exact "one line" "absent-name" ) >/dev/null 2>&1; rc=$?
+check "name_exact reports a genuine miss as status 1" "1" "$rc"
+if grep -qx -- x "$SB/definitely-not-a-file" >/dev/null 2>&1; then rc=0; else rc=$?; fi
+if [ "$rc" -gt 1 ]; then
+  ok "an unjudgeable grep is a status above 1 (could-not-run), which is not 'a wrong name'"
+else
+  bad "an unjudgeable grep returned status $rc — a could-not-run is indistinguishable from a wrong name"
+fi
+
 # 2. Name safety: a bare prefix, or anything with a LIKE metacharacter, must be
 #    refused — that is what stops a cleanup taking a sibling card's key. The quote
 #    case is the sharpest one: the name is interpolated into the SQL, so a name

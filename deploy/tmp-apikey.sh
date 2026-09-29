@@ -141,8 +141,27 @@ RUNNER
 }
 
 # field <psql-output> <MARKER> — read a `MARKER|value` line out of psql stdout.
+# The pipeline stays: `tail -1` must read to EOF to know the last line, so the
+# upstream grep is never the reader that exits early, and `cut` writes one short
+# line. Measured on a 20000-marker haystack: 0 wrong values in 300 calls. This is
+# NOT the `grep -q`-with-an-unread-writer shape the rest of this file avoids.
 field() {
   printf '%s' "$1" | grep -F "$2|" | tail -1 | cut -d'|' -f2
+}
+
+# name_exact <names-value> <name> — is a read-back value EXACTLY this card's name?
+# A whole-line match; a prefix match would hide the sweep this script refuses.
+# The value is read from a herestring, NOT piped: the caller's value is a
+# haystack, and `grep -qx` exits at the first match, so a pipe would let the
+# writer die of SIGPIPE (141) under the `set -uo pipefail` above and report a
+# MATCH as a failure. As shipped the query is exact-name so the value is one
+# line and this never fired (measured 0 false reads in 3000 calls on that value).
+# On a multi-line read-back (one name per line, needle on line 1) the pipe form
+# does report the present name as missing — 65/300 at 2000 lines, 300/300 at
+# 5000 — so the herestring is what keeps a future edit to a list-shaped query
+# from turning this into the class of bug the file exists to prevent.
+name_exact() {
+  grep -qx -- "$2" <<<"$1"
 }
 
 # ─── mint ────────────────────────────────────────────────────────────────────
@@ -223,7 +242,7 @@ SQL
   id="$(uuid_from "$minted")" || die "mint: could not extract a uuid from the RETURNING output '[$(printf '%s' "$minted" | tr -d '\n')]' — a uuid regex is required because psql appends its command tag"
   [ "$after" = "1" ] || die "mint: expected exactly 1 row named '$name' after insert, got '$after'"
   [ "$live" = "1" ] || die "mint: the row named '$name' is not live (revoked?)"
-  field "$out" NAMES | grep -qx "$name" || die "mint: the row names read back as '$(field "$out" NAMES)' — expected exactly '$name'"
+  name_exact "$(field "$out" NAMES)" "$name" || die "mint: the row names read back as '$(field "$out" NAMES)' — expected exactly '$name'"
   [ "$(field "$out" MINE)" = "$id" ] || die "mint: the row just read back has id '$(field "$out" MINE)', not the returned '$id' — the RETURNING id and the stored row disagree"
 
   info "minted: name=$name id=$id scope=$scope"
