@@ -4,7 +4,7 @@
 #
 # THE GUARDS UNDER TEST. `scripts/preflight.sh` + `scripts/gate_result.sh` let a
 # lane carry a recorded pass over instead of re-running a gate (the feature of
-# card t_dbd93601; its rework is card t_2bed4f8f). Three properties are what make
+# card t_dbd93601; its rework is card t_2bed4f8f). Four properties are what make
 # that safe, and each has a `selftest` check in scripts/preflight_test.sh:
 #
 #   31. The DOCUMENTED red-tree path (`--only <PREFLIGHT_RERUN> --reuse-record`)
@@ -25,6 +25,17 @@
 #       hashing it into the fingerprint refused records on IDENTICAL bytes and left
 #       reuse dead for the one shape that runs the gates. Guard: node is recorded
 #       and announced, but is not key material.
+#
+#   34. ONE DATABASE, ONE KEY. The test-DB host was hashed as the URL's HOST
+#       STRING, so one Postgres reached as `127.0.0.1` and as `localhost` produced
+#       two keys: the gate ran green on tree f98b5fcf and wrote
+#       testdb=127.0.0.1:..., and the very next reader — same server, same
+#       database, environment unchanged — was refused with "the environment
+#       changed since that record", costing the lane the whole gate (the host-wide
+#       flock whose waiter measures 50-86 minutes) to re-run gates that had
+#       already passed on those bytes. Guard: the host is canonicalised to one
+#       token for the loopback spellings only, and another port or another
+#       database still yields a different key.
 #
 # WHY A SCRIPT AND NOT A PER-RUN GATE: every case mutates scripts/*.sh in place.
 # The live `selftest` gate runs against the tree under test, so it can never
@@ -141,7 +152,7 @@ verdict() {
   fi
 }
 
-echo "bite proof: the per-tree gate result record's three safety guards"
+echo "biteproof: the per-tree gate result record's four safety guards"
 echo "  repo: $(pwd)"
 echo "  head: $(git rev-parse --short HEAD)"
 echo "  srcs: $RUNNER (sha256 ${WANT_RUNNER:0:12}), $RESULT (sha256 ${WANT_RESULT:0:12})"
@@ -155,7 +166,7 @@ echo "== case 0: the healthy tree (control — the whole selftest must be green)
 rc0=0
 selftest_run "$WORK/case0.log" || rc0=$?
 if [ "$rc0" -eq 0 ]; then
-  ok "case 0 — the unmutated tree passes the whole selftest ($(grep -E '^preflight self-test:' "$WORK/case0.log" | tail -n 1)): the checks 31/32/33 assertions are reachable and green, so the cases below are not vacuous"
+  ok "case 0 — the unmutated tree passes the whole selftest ($(grep -E '^preflight self-test:' "$WORK/case0.log" | tail -n 1)): the checks 31/32/33/34 assertions are reachable and green, so the cases below are not vacuous"
 else
   bad "case 0 — the unmutated tree ALREADY fails the selftest (rc=$rc0), so no case below could attribute a red to its sabotage: $(grep -E '^  FAIL ' "$WORK/case0.log" | tr '\n' '|')"
 fi
@@ -255,6 +266,56 @@ else
 fi
 restore_and_verify
 
+# --- case 4: THE TEST-DB HOST SPELLING PUT BACK INTO THE KEY. The reported defect
+# (card t_7add0cfa): the fingerprint hashed the URL's HOST STRING verbatim, so one
+# server written as `127.0.0.1` and as `localhost` produced two keys. Measured on
+# this host: the gate ran green on tree f98b5fcf and wrote testdb=127.0.0.1:...,
+# and the very next reader — same server, same database, environment unchanged —
+# was refused with "the environment changed since that record", costing the lane
+# the whole gate (the host-wide flock's waiter has been measured at 50-86 min) to
+# re-run fifteen gates that had already passed on those bytes.
+#
+# The mutation restores the pre-fix shape one-sidedly, the same way case 3 does:
+# the fixed component function is renamed and a wrapper re-emits the RAW
+# scheme/credentials/query-stripped string, so the two keys diverge again without
+# the reader knowing. The mutation is asserted to have landed BOTH ways — the
+# wrapper is present AND the two spellings then disagree — because a mutation that
+# never landed is a silent green.
+echo "== case 4: the DB host spelling hashed back into the key (the pre-fix shape) =="
+sed -i 's/^gr_testdb_component() {/gr_testdb_component_canon() {/' "$RESULT"
+# A QUOTED heredoc so the sed expression reaches the file unescaped — the first
+# attempt built it from nested printf escapes and produced a sed that no longer
+# stripped the query string. The appended body is the pre-fix shape verbatim.
+cat >> "$RESULT" <<'EOMUT'
+
+# PRE-FIX SHAPE (sabotage): the host STRING is key material again — see gr_testdb_component.
+gr_testdb_component() {
+  local url="${JOMFORM_TEST_DATABASE_URL:-}"
+  if [ -z "$url" ]; then printf 'unset'; return 0; fi
+  printf '%s' "$url" \
+    | sed -E 's#^[A-Za-z0-9+.-]+://##; s#^[^@/]*@##; s#\?.*$##; s#/$##'
+}
+EOMUT
+if ! assert_mutated "$RESULT" 'the host STRING is key material again'; then
+  :
+elif [ "$(grep -cE '^gr_testdb_component\(\) \{' "$RESULT")" != "1" ] || \
+     [ "$(grep -cE '^gr_testdb_component_canon\(\) \{' "$RESULT")" != "1" ]; then
+  bad "case 4 — the mutation is not the shape it claims (canon=$(grep -cE '^gr_testdb_component_canon\(\) \{' "$RESULT"), raw=$(grep -cE '^gr_testdb_component\(\) \{' "$RESULT") definitions): a rename that missed or an append that failed would leave the FIXED function in place and report a false green"
+elif ! bash -n "$RESULT"; then
+  bad "case 4 — the mutation left gate_result.sh syntactically invalid, so any red below would be a parse error rather than the fingerprint under test"
+elif ! ( . "$RESULT"
+        a="$(JOMFORM_TEST_DATABASE_URL='postgres://u:p@127.0.0.1:5432/jomform_test?sslmode=disable' gr_testdb_component)"
+        b="$(JOMFORM_TEST_DATABASE_URL='postgres://u:p@localhost:5432/jomform_test?sslmode=disable' gr_testdb_component)"
+        [ "$a" != "$b" ] ); then
+  bad "case 4 — the mutated component still answers the SAME for both loopback spellings, so the spelling was never put back into the key and this case proves nothing"
+else
+  rc4=0
+  selftest_run "$WORK/case4.log" || rc4=$?
+  verdict "case 4" "$WORK/case4.log" "$rc4" "one server, two keys|still carries the caller's SPELLING|the SAME server and database spelled the other way was NOT reused" \
+    "with the host spelling back in the key, one server yields two keys and the record is refused across them"
+fi
+restore_and_verify
+
 # --- the tree must be as dirty as it was found: a case that leaked a mutation past
 # its restore would poison every lane after it, and the sha checks above cannot see
 # an ADDED file.
@@ -268,7 +329,7 @@ fi
 
 echo "---"
 if [ "$FAIL" -eq 0 ]; then
-  echo "biteproof: $PASS checks passed, 0 failed — the reuse guards BITE: the healthy tree passes, and moving the refusal back after the selection filter, disabling the ledger dedupe, or hashing node into the fingerprint each turns the REAL selftest gate red, naming that property"
+  echo "biteproof: $PASS checks passed, 0 failed — the reuse guards BITE: the healthy tree passes, and moving the refusal back after the selection filter, disabling the ledger dedupe, hashing node into the fingerprint, or hashing the test-DB host's SPELLING into it each turns the REAL selftest gate red, naming that property"
 else
   echo "biteproof: $PASS passed, $FAIL failed — a reuse guard does NOT hold something it claims to"
 fi

@@ -66,14 +66,33 @@ it is not what a merger needs when it decides to squash.
   set (`web/node_modules/.package-lock.json`), `scripts/preflight.sh` and
   `scripts/gate_result.sh` themselves, the test-database host/database, and
   `PREFLIGHT_KEY_EXTRA` for anything else. Credentials are stripped — only
-  `host:port/database` is stored. The **Node version is recorded in `key_parts`
-  but is NOT hashed into `key`**: it is a property of the shell on this host, not
+  `host:port/database` is stored. **The host is a fact about the SERVER, not about
+  its spelling:** `localhost`, `127.0.0.1` and `[::1]` are canonicalised to the
+  single token `loopback`, so one database yields one key however the caller wrote
+  it. Before this rule the URL's host string was hashed verbatim, and a gate that
+  ran green on tree `f98b5fcf` under the test-env file
+  (`` `${JOMFORM_ENV:-$HOME/.config/jomform/test-env.sh}` ``, which exports
+  `127.0.0.1`) was refused by the very next reader that spelled it
+  `localhost` — same server, same database, caller's environment unchanged —
+  because the two spellings hashed to different keys. The refusal says only "the
+  environment changed since that record", so the lane re-queued behind the
+  host-wide flock (waiter measured at 50-86 minutes) to re-run fifteen gates that
+  had already passed on those exact bytes. The canonicalisation is an ANCHORED
+  match on `<host>[:port][/database]` only; every other host is hashed verbatim,
+  and a second server (another port) or a second database (another name) still
+  produces a different key, so a record can never be evidence about another
+  database. The Node version is recorded in `key_parts`
+  but is NOT hashed into `key`: it is a property of the shell on this host, not
   of the tree, and pinning it made reuse dead between the two shapes that actually
   run the gates (an interactive shell with nvm, and a worker lane that resolves
   `/root/.hermes/tools/node-*/bin`), which refused records on byte-identical trees.
   A run under a different Node still accepts the record but says so out loud
   (`OBSERVED under node …; this run resolves node …`), and the installed web
   dependency set — which *is* hashed — is what carries the toolchain signal.
+  **This rule changes the canonical form, so a record written before it carries
+  `testdb=127.0.0.1:…` and is refused once** (the key material moved; that is
+  rule 3 below, not a fault). A record written after it carries
+  `testdb=loopback:…` and is reusable under either spelling.
 * **`gates`** — per-gate verdict with the seconds it took and a `reused` flag.
   `reused: true` means a **later** run carried this entry over rather than
   re-running the gate; the `at` timestamp still names the run that **observed** it.

@@ -1942,6 +1942,107 @@ if [ -n "$probe_tree" ]; then
   fi
 fi
 
+# 34. ONE DATABASE, ONE KEY — THE TEST-DB HOST IS A FACT ABOUT THE SERVER, NOT
+#     ABOUT ITS SPELLING. This is the card's defect, reproduced on this host: the
+#     gate ran green on tree f98b5fcf, wrote `testdb=127.0.0.1:5432/jomform_test`
+#     into the record's key material, and the very next READER — the same server,
+#     the same database, the CALLER'S ENVIRONMENT UNCHANGED — was refused with
+#     "the environment changed since that record" (recorded key 3c1cf0fc vs
+#     current b34aadac) because it spelled the host `localhost`. Both spellings are
+#     normal here: the test-env file a caller is told to source
+#     (${JOMFORM_ENV:-$HOME/.config/jomform/test-env.sh}) exports 127.0.0.1, while
+#     a lane that exports the URL itself spells it localhost. The
+#     refusal is SILENT about its cause and costs the WHOLE gate: the lane re-queues
+#     behind the host-wide flock — a waiter has been measured at 50-86 minutes — to
+#     re-run fifteen gates that had already passed on those exact bytes.
+#
+#     Note the two shapes this check deliberately does NOT key on: `localhost` and
+#     the pre-fix `127.0.0.1` line are NOT compared here. The property is that the
+#     two spellings cannot disagree, and that a genuinely different database still
+#     can — pinning the canonical token would make any future change to it red for
+#     no reason, which is the stale-expectation failure this file warns about.
+#
+#     BOTH DIRECTIONS, on one host, because either one alone can be faked:
+#       * the two loopback spellings must produce ONE component and ONE key — and
+#         the component must not still carry either raw spelling (that is checked
+#         too: a function that returned a constant would satisfy equality alone and
+#         would be blind in the other direction);
+#       * a SECOND SERVER (another port) and a SECOND DATABASE (another name) must
+#         still produce a DIFFERENT key, and `testdb=` must still be in the key
+#         MATERIAL at all — otherwise "canonicalise the host" degenerated into
+#         "drop the database from the fingerprint", which is the property
+#         gr_testdb_component's own comment claims and which this check is what
+#         keeps honest.
+#     The last leg drives the READER, not the function: a whole-inventory green
+#     record written under one spelling must be REUSED under the other (rc=0, gate
+#     not executed) and REFUSED under the other database (rc!=0, naming the
+#     environment) — end to end, which is the shape the defect was reported in.
+if [ -n "$probe_tree" ]; then
+  url_a='postgres://u:p@127.0.0.1:5432/jomform_test?sslmode=disable'
+  url_b='postgres://u:p@localhost:5432/jomform_test?sslmode=disable'
+  url_c='postgres://u:p@localhost:5433/jomform_test'    # another SERVER, same name
+  url_d='postgres://u:p@localhost:5432/other_test'      # same server, another DATABASE
+  comp_a="$(JOMFORM_TEST_DATABASE_URL="$url_a" gr_testdb_component)"
+  comp_b="$(JOMFORM_TEST_DATABASE_URL="$url_b" gr_testdb_component)"
+  comp_c="$(JOMFORM_TEST_DATABASE_URL="$url_c" gr_testdb_component)"
+  comp_d="$(JOMFORM_TEST_DATABASE_URL="$url_d" gr_testdb_component)"
+  # The key is computed in a subshell so neither spelling leaks into the checks
+  # below (or into anything after this one) — this file's standing rule.
+  key_a="$(export JOMFORM_TEST_DATABASE_URL="$url_a"; PREFLIGHT_KEY_EXTRA=probe15 gr_key "$SB")"
+  key_b="$(export JOMFORM_TEST_DATABASE_URL="$url_b"; PREFLIGHT_KEY_EXTRA=probe15 gr_key "$SB")"
+  key_c="$(export JOMFORM_TEST_DATABASE_URL="$url_c"; PREFLIGHT_KEY_EXTRA=probe15 gr_key "$SB")"
+  key_d="$(export JOMFORM_TEST_DATABASE_URL="$url_d"; PREFLIGHT_KEY_EXTRA=probe15 gr_key "$SB")"
+  # Does the canonically-spelled component STILL name the raw spelling? A function
+  # that returned `loopback` unconditionally would pass the equality above.
+  raw_left=0
+  case "$comp_a" in *localhost*|*127.0.0.1*) raw_left=1 ;; esac
+  if [ "$raw_left" -ne 0 ]; then
+    bad "check 34 — the test-db component still carries the caller's SPELLING of a loopback host ([$comp_a]), so the key is still a fact about how the URL was written"
+  elif [ -z "$comp_a" ] || [ "$comp_a" != "$comp_b" ] || [ "$key_a" != "$key_b" ]; then
+    bad "check 34 — one server, two keys: the two loopback spellings must produce ONE component and ONE key, got component [$comp_a] vs [$comp_b] and key [$key_a] vs [$key_b]. A record written under one spelling is then refused under the other with 'the environment changed since that record', which costs the whole gate (the 50-86 min queue) to re-run gates that already passed on those bytes"
+  elif [ "$comp_c" = "$comp_a" ] || [ "$comp_d" = "$comp_a" ] || \
+       [ "$key_c" = "$key_a" ] || [ "$key_d" = "$key_a" ]; then
+    bad "check 34 — the guard went BLIND in the other direction: another SERVER ([$comp_c] key $key_c) or another DATABASE ([$comp_d] key $key_d) produced the key of [${comp_a}] — a record made against one database would be reused as evidence about another"
+  elif ! grep -q 'testdb=' <<<"$(export JOMFORM_TEST_DATABASE_URL="$url_a"; PREFLIGHT_KEY_EXTRA=probe15 gr_key_material "$SB")"; then
+    bad "check 34 — the key material dropped the test database entirely; canonicalising the host must not mean dropping what the record is evidence ABOUT"
+  else
+    ok "one server, one key: [${url_a}] and [${url_b}] both give [${comp_a}] and key ${key_a:0:12}, while another server ([${comp_c}], key ${key_c:0:12}) and another database ([${comp_d}], key ${key_d:0:12}) still differ — and testdb= is still key material"
+  fi
+
+  # End to end on the READER. A whole-inventory green record written under
+  # spelling A, then read under spelling B (must be REUSED without executing a
+  # gate) and under the other database (must be REFUSED, naming the environment).
+  rec="$(gr_file "$probe_tree")"
+  parts_a="$(gr_json_escape "$(export JOMFORM_TEST_DATABASE_URL="$url_a"; PREFLIGHT_KEY_EXTRA=probe15 gr_key_parts "$SB")")"
+  {
+    printf '{\n  "format": 1,\n  "tree": "%s",\n  "key": "%s",\n  "key_parts": "%s",\n  "gates": {\n' \
+      "$probe_tree" "$key_a" "$parts_a"
+    # shellcheck disable=SC2086
+    printf '%s\n' $GATES | sed 's/.*/    "&": { "status": "pass", "seconds": 42, "at": "2026-01-01T00:00:00Z", "reused": false },/' \
+      | sed '$ s/,$//'
+    printf '  },\n  "runs": 1,\n  "verdict": "green",\n  "log": "/tmp/probe.log",\n  "finished_at": "%s"\n}\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } > "$rec"
+  fx34_green=0
+  # shellcheck disable=SC2086
+  for g in $GATES; do [ "$(gr_gate_status "$rec" "$g")" = pass ] && fx34_green=$((fx34_green+1)); done
+  r34_b="$(export JOMFORM_TEST_DATABASE_URL="$url_b"; PREFLIGHT_KEY_EXTRA=probe15 PREFLIGHT_LOCK_WAIT=0 \
+          ./scripts/preflight.sh --reuse-record 2>&1)"
+  rc34_b=$?
+  r34_d="$(export JOMFORM_TEST_DATABASE_URL="$url_d"; PREFLIGHT_KEY_EXTRA=probe15 PREFLIGHT_LOCK_WAIT=0 \
+          ./scripts/preflight.sh --reuse-record 2>&1)"
+  rc34_d=$?
+  if [ "$fx34_green" -ne "$NGATES" ]; then
+    bad "check 34's fixture is not a whole-inventory green record ($fx34_green of $NGATES pass) — the reader leg cannot be measured"
+  elif [ "$rc34_b" -ne 0 ] || ! grep -q 'REUSED' <<<"$r34_b" || grep -q 'gate \[' <<<"$r34_b"; then
+    bad "check 34 — the SAME server and database spelled the other way was NOT reused (rc=$rc34_b): [$(printf '%s' "$r34_b" | tail -n 1)] — this is the reported defect, and it costs the lane the whole gate"
+  elif [ "$rc34_d" -eq 0 ] || ! grep -q 'the environment changed since that record' <<<"$r34_d"; then
+    bad "check 34 — a record made against ANOTHER database must be refused, naming the environment — rc=$rc34_d [$(printf '%s' "$r34_d" | tail -n 1)]"
+  else
+    ok "the READER agrees: a whole-inventory green record written under 127.0.0.1 is reused under localhost (rc=0, no gate executed), and refused for a different database (rc=$rc34_d, 'the environment changed since that record')"
+  fi
+fi
+
 echo "---"
 echo "preflight self-test: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1

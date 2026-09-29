@@ -133,11 +133,52 @@ gr_sha256_file() {
 # gr_testdb_component — host/port/database of the test database URL, with the
 # credentials stripped. A record made against another database is not evidence
 # about this one, and the password must never reach a file on disk.
+#
+# THE HOST IS CANONICALISED, because the key material must be a fact about the
+# DATABASE and not about how it was SPELLED. Measured on this host: the gate ran
+# green on tree f98b5fcf and wrote `testdb=127.0.0.1:5432/jomform_test`, and the
+# very next reader — the SAME server, the SAME database, the caller's environment
+# unchanged — was refused with "the environment changed since that record" because
+# it spelled the host `localhost` (recorded key 3c1cf0fc vs current b34aadac).
+# The rejection is SILENT about the cause and costs the whole gate: the lane
+# re-queues behind the host-wide flock, whose waiter has been measured at 50-86
+# minutes, to re-run fifteen gates that had already passed on those exact bytes.
+# Both spellings reach this process in normal use — the file a caller is told to
+# source (${JOMFORM_ENV:-$HOME/.config/jomform/test-env.sh}) exports 127.0.0.1
+# while an `export JOMFORM_TEST_DATABASE_URL=...localhost...` lane spells it the
+# other way — so which key a record carries depends on which shape invoked which
+# script.
+#
+# `localhost`, `127.0.0.1` and `[::1]` are rewritten to the single token
+# `loopback`, and ONLY when the component is exactly `<host>[:port][/database]`
+# (an anchored match). Everything else is hashed verbatim, which is the safe
+# direction: an unknown host cannot be judged from one string, and a canonical
+# form nobody measured could merge two servers that really are different.
+#
+# `loopback` rather than one of the aliases, deliberately: it is not a name for
+# the server, it is the STATEMENT that this key does not distinguish these
+# spellings. A record whose key_parts still carries `testdb=127.0.0.1:...` was
+# written before this rule and is refused exactly once, which is the documented
+# behaviour of a changed key material (docs/PREFLIGHT-REUSE.md, rule 3).
+#
+# DELIBERATELY NOT RESOLVING THE HOST. The obvious alternative — resolve the name
+# and key the server's address — is broken on the host this runs on, measured:
+# `getent hosts localhost` answers `::1` while `getent hosts 127.0.0.1` answers
+# `127.0.0.1`, so resolving would have produced two keys for the one server again,
+# just different ones. It would also make the key depend on the caller's
+# NSS/DNS/hosts state, which no lane can see from its record, and it costs a
+# resolver round trip inside a library that otherwise reads only local files.
+# Dropping the host entirely (keeping port+database) was rejected too: the
+# property the rest of this comment claims — a record against another database is
+# not evidence about this one — is worth keeping, and port+database cannot see a
+# second server reached over a tunnel or a forwarded port.
 gr_testdb_component() {
-  local url="${JOMFORM_TEST_DATABASE_URL:-}"
+  local url="${JOMFORM_TEST_DATABASE_URL:-}" comp
   if [ -z "$url" ]; then printf 'unset'; return 0; fi
-  printf '%s' "$url" \
-    | sed -E 's#^[A-Za-z0-9+.-]+://##; s#^[^@/]*@##; s#\?.*$##; s#/$##'
+  comp="$(printf '%s' "$url" \
+    | sed -E 's#^[A-Za-z0-9+.-]+://##; s#^[^@/]*@##; s#\?.*$##; s#/$##')"
+  printf '%s' "$comp" \
+    | sed -E 's#^(localhost|127\.0\.0\.1|\[::1\])(:[0-9]+)?(/.*)?$#loopback\2\3#'
 }
 
 # gr_key_material [repo] — the components that INVALIDATE a record, in a fixed
