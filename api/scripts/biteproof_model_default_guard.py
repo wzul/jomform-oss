@@ -31,20 +31,36 @@ this harness cannot drift from the source it sabotages. Every mutation must stil
 compile (`go build ./...` rc=0): a mutation that breaks the build would hide the
 guard, and that is asserted per case rather than assumed.
 
-REFUSAL, NOT A FALSE GREEN. Two refusals, both exit 2 without a verdict. The
-first is a fast path: the base reader is BYTE-IDENTICAL to this tree's, so the
-comparison would be one reader against itself. The second is the general rule,
-and it is NOT a byte comparison: no case may pass unless the base reader ANSWERED
-DIFFERENTLY from this tree's reader on it. A byte test cannot decide this premise
-— once the guard's own widening merges into `origin/main`, the base file stays a
-few bytes off this tree's (the guard can be rewritten around it) while READING THE
-SAME REGISTRY, so every BASE leg answers like its BRANCH leg and the "missed this"
-column is empty; a byte-equality refusal did not fire and the run printed
+REFUSAL, NOT A FALSE GREEN. Two refusals, both exit 2 without a verdict.
+
+The first is a fast path and it fires on the BYTES: the base reader is identical,
+character for character, to this tree's, so the comparison would be one reader
+against itself. It reads the file with git_text() rather than git(), because the
+general git() helper strips stdout and every Go file ends with a newline — with a
+stripped base the test was unsatisfiable at any byte distance and the path was dead
+code (card t_34ab7a00, measured at origin/main 272fda17, where BITEPROOF_BASE
+defaults to the tree itself: 49788 bytes on disk, the stripped copy 49593 chars
+against the tree's 49594, so it could not fire).
+
+The second is the general rule, and it is NOT a byte comparison: no case may pass
+unless the base reader ANSWERED DIFFERENTLY from this tree's reader on it. A byte
+test cannot decide this premise — once the guard's own widening merges into
+`origin/main`, the base file stays a few bytes off this tree's (the guard can be
+rewritten around it) while READING THE SAME REGISTRY, so every BASE leg answers
+like its BRANCH leg and the "missed this" column is empty; the run would print
 `0/7 BITES` for a premise that had quietly become "compare a reader with itself"
 (card t_9df01abd, measured: base 22241 bytes vs tree 22242). The capability rule
 requires positive evidence — at least one case whose BASE leg and BRANCH leg
 disagree, in their green/red verdict or in the claim the guard made — and refuses
 otherwise, naming BITEPROOF_BASE as the fix.
+
+The base it names is DERIVED from what INTRODUCED the divergence, not from the
+newest commit that touched the file: see introducing_commit(). "The parent of the
+newest commit that touched the guard" is off by one the moment any later commit
+touches it, and then the refusal hands the operator a base that refuses too (card
+t_34ab7a00). The revision is read from git by the refusal, and the refusal says in
+so many words that it did not RUN it, so no bite count is ever printed for a
+revision this run did not measure.
 
 Restore is signal-safe: originals are held in memory, restored in a finally, and a
 SIGTERM/SIGINT handler restores before exiting. Every restore is verified by
@@ -103,6 +119,19 @@ def run(cmd):
 def git(*args):
     p = subprocess.run(["git"] + list(args), cwd=REPO, capture_output=True, text=True)
     return p.returncode, p.stdout.strip(), p.stderr.strip()
+
+
+def git_text(*args):
+    """git, WITHOUT stripping stdout — for comparing a file's bytes.
+
+    git() above strips, which is right for a sha or a path and WRONG for a file
+    body: every Go file ends with a newline, so a stripped body can never equal
+    the on-disk text and a byte-equality test built on it is unsatisfiable at any
+    byte distance (card t_34ab7a00). Use this one wherever the value read is the
+    value compared.
+    """
+    p = subprocess.run(["git"] + list(args), cwd=REPO, capture_output=True, text=True)
+    return p.returncode, p.stdout, p.stderr.strip()
 
 
 ORIG_TOOLS = read(TOOLS)
@@ -323,19 +352,84 @@ def clear_case(edits, added):
             os.remove(path)
 
 
-def capability_refusal(base_rev, base_guard, seen, cases_run):
-    """The refusal a byte-equality test could not make: print it, name the usable base.
+# The token that says the guard READS THE REGISTRY AS A PACKAGE rather than out of
+# one file (api/internal/llm/model_default_guard_test.go declares
+# `const mcpRegistryDir = "api/internal/mcpsrv"`). It is the mark of the reader
+# whose landings are the divergence this harness needs a base revision from, so the
+# refusal derives the revision by reading it — the reader's own text — instead of
+# by a file's commit date.
+PACKAGE_READER_MARKER = "mcpRegistryDir"
+
+
+def _file_at(rev, rel):
+    """One file's text at one revision, or None when git cannot read it there."""
+    rc, text, _ = git_text("show", "%s:%s" % (rev, rel))
+    return text if rc == 0 else None
+
+
+def introducing_commit(base_rev):
+    """The commit that INTRODUCED the divergence in the guard, or None.
+
+    The divergence is a property of the READER, not of a date, so it is read out of
+    the guard's own text: the package-wide registry reader is the revision whose
+    guard declares PACKAGE_READER_MARKER. Walk the guard's history at or before
+    base_rev oldest-first and take the first revision carrying it — earlier ones
+    without it, later ones with it, so that transition IS the commit whose parent
+    still holds the single-file reader.
+
+    NOT `git log -1 <base> -- <guard>^`, which is what this used to do: that is the
+    parent of the NEWEST commit that touched the file, so any commit after the
+    widening (a test-only widening, a rewrite) moves the suggestion one commit too
+    far forward and the refusal hands the operator a base that refuses exactly as
+    this run just did — a loop. Measured at origin/main 0c1c6e9c (card t_34ab7a00):
+    it named eda839c1, the parent of 0c1c6e9c (#841, a model-id-scan widening), and
+    eda839c1's guard still declares the marker, so it refuses again. It only ever
+    landed on the right revision while the newest guard-touching commit happened to
+    BE the widening.
+
+    None means the transition is not attributable from base_rev's history — the
+    oldest revision that touched the guard already carries the marker (the
+    divergence is older than this base's history) — so the refusal says that plainly
+    rather than naming a revision it has not checked.
+    """
+    rc, out, _ = git("rev-list", "--reverse", base_rev, "--", GUARD_REL)
+    if rc != 0:
+        return None
+    revs = [h for h in out.splitlines() if h]
+    if not revs:
+        return None
+    oldest_body = _file_at(revs[0], GUARD_REL)
+    if oldest_body is None or PACKAGE_READER_MARKER in oldest_body:
+        return None
+    for rev in revs:
+        body = _file_at(rev, GUARD_REL)
+        if body is not None and PACKAGE_READER_MARKER in body:
+            return rev
+    return None
+
+
+def capability_refusal(base_rev, base_full, base_guard, seen, cases_run):
+    """The refusal a byte-equality test could not make: print it, name a usable base.
 
     It says the base CANNOT demonstrate the blind spot — no verdict, no bite count —
-    and it derives the base to use instead rather than guessing one: the newest
-    commit at or before BASE_REF that touched the guard is the one that moved it to
-    this scope (that widening lands as a normal commit), so its PARENT is the
-    revision whose reader still answers differently. A merge-base would be wrong
-    here — on a branch cut from current main it IS the caught-up revision, which is
-    exactly what just failed this check.
+    and it NAMES the base to use instead by deriving it (introducing_commit) rather
+    than guessing one. The named revision is then re-read from git, and it is only
+    offered when its guard really is the pre-divergence reader: a suggestion that
+    still reads the package is reported as unattributable instead of being handed
+    over — that is the loop this run just fell into (card t_34ab7a00).
+
+    NO COUNT IS PRINTED FOR A REVISION THIS RUN DID NOT RUN. The previous text
+    closed with "at <suggested> the same tree is 7/7", a number copied from another
+    card's run and false for the revision named here; every figure below is either
+    measured by this run or explicitly marked unmeasured.
     """
-    _, last_touch, _ = git("log", "-1", "--format=%H", base_rev, "--", GUARD_REL)
-    _, suggest, _ = (git("rev-parse", "%s^" % last_touch) if last_touch else (1, "", ""))
+    intro = introducing_commit(base_full)
+    intro_short = intro[:12] if intro else ""
+    suggest = None
+    if intro:
+        _, parent, _ = git("rev-parse", "%s^" % intro)
+        if parent:
+            suggest = parent
     print(flush=True)
     print("REFUSING (exit 2, NO VERDICT): not one of the %d case(s) run so far made the reader at "
           "%s (%s) answer differently from this tree's. Every BASE leg is the same reader as its "
@@ -346,19 +440,34 @@ def capability_refusal(base_rev, base_guard, seen, cases_run):
           "package-wide registry reader lives there too now (PR 835's shape, once it has merged), "
           "and the two files differ by bytes while the reader does not differ.", flush=True)
     if suggest:
-        print("Point BITEPROOF_BASE at the revision BEFORE that reader landed — the parent of the "
-              "newest commit at %s that touched the guard (%s):" % (base_rev, last_touch[:12]),
-              flush=True)
-        print("    BITEPROOF_BASE=%s python3 scripts/biteproof_model_default_guard.py" % suggest,
-              flush=True)
+        parent_body = _file_at(suggest, GUARD_REL)
+        if parent_body is not None and PACKAGE_READER_MARKER not in parent_body:
+            print("Point BITEPROOF_BASE at the revision BEFORE that reader landed — the parent of "
+                  "%s, the commit that introduced the package-wide registry reader in %s (the guard "
+                  "there does not declare %s):"
+                  % (intro_short, GUARD_REL, PACKAGE_READER_MARKER), flush=True)
+            print("    BITEPROOF_BASE=%s python3 scripts/biteproof_model_default_guard.py" % suggest,
+                  flush=True)
+        else:
+            print("The commit that introduced the package-wide registry reader is %s, but its "
+                  "parent %s reads the registry as a package too (it still declares %s), so this "
+                  "harness cannot name a pre-divergence revision from %s's history. Point "
+                  "BITEPROOF_BASE at a revision where the single-file reader still lived."
+                  % (intro_short, suggest[:12], PACKAGE_READER_MARKER, base_rev), flush=True)
+            suggest = None
     else:
-        print("Point BITEPROOF_BASE at a revision where the single-file reader still lived.",
-              flush=True)
-    print("(Measured on this host for card t_9df01abd: at BITEPROOF_BASE=origin/main, base reader "
-          "%d chars vs tree reader %d chars, %d/%d case(s) disagreed -> refused; at %s the same "
-          "tree is 7/7.)"
-          % (len(base_guard), len(ORIG_GUARD), len(seen), len(CASES),
-             suggest[:12] or "the pre-fix revision"), flush=True)
+        print("Point BITEPROOF_BASE at a revision where the single-file reader still lived — this "
+              "run could not attribute the change to one commit at %s (no revision in its history "
+              "for %s reaches the transition into the package-wide reader, %s: the oldest revision "
+              "that touched it already declares the marker)."
+              % (base_rev, GUARD_REL, PACKAGE_READER_MARKER), flush=True)
+    print("Measured by THIS run: the base reader at %s is %d chars, this tree's is %d chars, and "
+          "%d/%d case(s) disagreed. No count for any other revision is asserted here — a revision "
+          "this run did not execute was not measured, and a count for it has to come from running "
+          "it." % (base_rev, len(base_guard), len(ORIG_GUARD), len(seen), len(CASES)), flush=True)
+    if not suggest:
+        print("None of the %d case(s) above was a disagreement, so there is no bite count to print "
+              "for this base." % cases_run, flush=True)
     return 2
 
 
@@ -367,12 +476,17 @@ def main():
     if rc != 0:
         print("cannot resolve BITEPROOF_BASE=%s: %s" % (BASE_REF, err), flush=True)
         return 2
-    rc, base_guard, err = git("show", "%s:%s" % (BASE_REF, GUARD_REL))
+    _, base_full, _ = git("rev-parse", BASE_REF)
+    # The UNSTRIPPED text is read for the comparison; `base_guard` (stripped, for the
+    # leg) is kept only for the diagnostics below. Testing a stripped copy against the
+    # on-disk text is what made this fast path unreachable (see git_text).
+    rc, base_guard_raw, err = git_text("show", "%s:%s" % (BASE_REF, GUARD_REL))
     if rc != 0:
         print("BASE READER MISSING: %s:%s could not be read (%s) - without it this harness "
               "cannot show what the one-file scope missed" % (BASE_REF, GUARD_REL, err), flush=True)
         return 2
-    if base_guard == ORIG_GUARD:
+    base_guard = base_guard_raw.strip()
+    if base_guard_raw == ORIG_GUARD:
         print("REFUSING: the guard at %s (%s) is BYTE-IDENTICAL to this tree's (%s). Every case "
               "compares the base reader against the working-tree reader, so here that would be one "
               "reader against itself and the 'missed this' column would prove nothing. Run this on "
@@ -473,7 +587,7 @@ def main():
     # the tree when it is the instrument's premise that failed. Refuse instead, with
     # NO verdict and NO bite count.
     if not disagreements:
-        return capability_refusal(base_rev, base_guard, disagreements, case_no)
+        return capability_refusal(base_rev, base_full, base_guard, disagreements, case_no)
 
     rcb, _ = run(["go", "build", "./..."])
     rct, _ = run(["go", "test", TEST_PKG, "-count=1"])
