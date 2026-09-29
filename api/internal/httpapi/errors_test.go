@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -104,6 +105,12 @@ func TestRespondErrUserActionable(t *testing.T) {
 		{dbstore.ErrFormNotFound, http.StatusNotFound, "tidak dijumpai"},
 		{dbstore.ErrProductNotFound, http.StatusNotFound, "tidak dijumpai"},
 		{dbstore.ErrAPIKeyInvalid, http.StatusNotFound, "tidak dijumpai"},
+		// The workspace sentinel belongs in this family: it is a not-found, and
+		// card t_a71ee62b is about a route that answered 500 because the RAW
+		// driver miss (pgx.ErrNoRows / SQLSTATE 22P02) never became it. Any path
+		// that lets this sentinel reach respondErr — listWorkspaces, the
+		// settings reads on a stale id — must answer 404, not the default 500.
+		{dbstore.ErrWorkspaceNotFound, http.StatusNotFound, "tidak dijumpai"},
 		{payments.ErrNotFound, http.StatusNotFound, "tidak dijumpai"},
 		{dbstore.ErrEmailTaken, http.StatusConflict, "emel sudah didaftarkan"},
 		{dbstore.ErrOutOfStock, http.StatusConflict, "produk telah habis (out of stock)"},
@@ -119,5 +126,35 @@ func TestRespondErrUserActionable(t *testing.T) {
 		if !strings.Contains(rec.Body.String(), c.wantMsg) {
 			t.Errorf("%v: body %q missing %q", c.err, rec.Body.String(), c.wantMsg)
 		}
+	}
+}
+
+// TestWorkspaceNotFoundIsClassedNotFound pins the metric/log bucket, which is
+// the half of card t_a71ee62b's acceptance that a status assertion cannot see.
+// The card requires error_class=not_found, not the internal class the defect
+// produced: errorClass is what both the structured log field and the Prometheus
+// error counter are labelled with, so a sentinel that is not named here keeps
+// counting a caller's stale id as a server fault — and every not-found test
+// would still pass, because they assert the STATUS.
+//
+// The two raw miss shapes of the same defect are asserted alongside it: the
+// class of the error that actually reaches this function must be not_found only
+// once the store has mapped it, which is why the store half is pinned in
+// dbstore/workspace_delete_test.go.
+func TestWorkspaceNotFoundIsClassedNotFound(t *testing.T) {
+	if got := errorClass(dbstore.ErrWorkspaceNotFound); got != "not_found" {
+		t.Errorf("errorClass(ErrWorkspaceNotFound) = %q, want not_found — a workspace that does "+
+			"not exist is a client-side miss, and this label is the error_class log field and "+
+			"the jomform_errors_total bucket", got)
+	}
+	// The sentinel must still be RECOGNISED through wrapping, so a store that
+	// returns fmt.Errorf(\"...: %w\", ErrWorkspaceNotFound) keeps its class.
+	if got := errorClass(fmt.Errorf("lookup workspace: %w", dbstore.ErrWorkspaceNotFound)); got != "not_found" {
+		t.Errorf("errorClass(wrapped ErrWorkspaceNotFound) = %q, want not_found", got)
+	}
+	// And the classification must not have been bought by swallowing everything:
+	// a real internal failure stays internal.
+	if got := errorClass(errors.New("pq: relation \"secrets\" does not exist")); got != "internal" {
+		t.Errorf("errorClass(generic failure) = %q, want internal", got)
 	}
 }

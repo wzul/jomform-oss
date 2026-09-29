@@ -776,6 +776,150 @@ func TestRESTWorkspacePurgeRefusalCarriesItsCode(t *testing.T) {
 	}
 }
 
+// TestRESTWorkspacePurgeNotFoundIDsAnswer404 is the card's regression guard: an
+// id that names NO trashed workspace must answer 404 «workspace tidak dijumpai
+// dalam tong sampah», never 500.
+//
+// THE DEFECT THIS PINS (card t_a71ee62b, measured live on v1.19.1). All three
+// shapes below answered 500 {"code":"internal","error":"internal error"} with
+// error_class=internal, logged with a stack trace, while the SIBLING routes on
+// the same session (`POST .../restore`, `DELETE /v1/workspaces/{id}`) answered
+// 404. Root cause: TrashedByID goes through scanTrashedWorkspace, which maps a
+// missing row AND SQLSTATE 22P02 to pgx.ErrNoRows, and this handler tested only
+// errors.Is(err, dbstore.ErrWorkspaceNotFound) — so the miss fell through to
+// respondErr's default branch.
+//
+// WHY ALL THREE SHAPES, and why the LIVE one is the important one:
+//
+//   - an unknown uuid — the plain miss;
+//   - a NON-uuid — Postgres raises 22P02 before any row is considered, and that
+//     must be a 404 for the caller's bad id, not a server-fault metric;
+//   - a REAL, LIVE workspace id — the case the comment above purgeWorkspace
+//     asserts ("a LIVE workspace is a 404 here") and the one a merchant is
+//     most likely to hit by pasting their own workspace id. It must be a 404
+//     AND leave the row completely untouched, so a fix that turned it into a
+//     200 (or that let the purge act on a live row) fails here.
+//
+// The 404 is asserted on the BODY, not just the status: a 404 produced
+// elsewhere on the route cannot satisfy the message assertion, and the body is
+// the same one the sibling restore route answers, so a client can tell the two
+// apart from the status and the prose together.
+//
+// WHY NOT A BUG-PROOF BY REVERTING THE MAPPING: the store-level fix means a
+// revert would make this an integration-only red (it needs a real Postgres to
+// produce the 22P02/ErrNoRows miss at all), which is exactly what this test is.
+// The dbstore half — TrashedByID returning the SENTINEL rather than the raw
+// driver error — is pinned separately in
+// dbstore/workspace_delete_test.go:TestWorkspaceTrashedByIDNotFoundIsTheStoreSentinel.
+func TestRESTWorkspacePurgeNotFoundIDsAnswer404(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping DB-backed REST workspace test in -short mode")
+	}
+	ctx := context.Background()
+	pool := testdb.Open(t)
+	sess := authTestValkey(t)
+	h := trashRESTFixture(t, pool)
+	h.Sessions = sess
+	h.Users = dbstore.NewUserStore(pool)
+
+	userID := mkWsUser(t, pool, "rest-ws-404")
+	sp := dbstore.NewWorkspaceStore(pool)
+	// A second workspace so the LIVE id below is not the caller's last one:
+	// the last_workspace rule is about DELETE /v1/workspaces/{id}, not about
+	// this route, but a fixture that cannot be binned would hide a regression
+	// in the sibling delete path.
+	if _, err := sp.Create(ctx, userID, "REST WS Keep", "rest-ws-404k-"+userID[:6]); err != nil {
+		t.Fatalf("create keep workspace: %v", err)
+	}
+	live, err := sp.Create(ctx, userID, "REST WS Live", "rest-ws-404l-"+userID[:6])
+	if err != nil {
+		t.Fatalf("create live workspace: %v", err)
+	}
+	token, err := sess.Create(ctx, userID)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	const trashNotFound = "workspace tidak dijumpai dalam tong sampah"
+
+	for _, tc := range []struct{ what, id string }{
+		{"an unknown uuid", "00000000-0000-0000-0000-0000000000ff"},
+		{"a non-uuid", "not-a-uuid"},
+		{"a REAL, LIVE workspace id", live.ID},
+	} {
+		rec := sessionReq(t, h, token, http.MethodDelete,
+			"/v1/workspaces/"+tc.id+"/purge", `{"confirm_slug":"nope"}`)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("purge with %s (%s) = %d, want 404 — body=%s. A not-found id is not a "+
+				"server fault: the raw pgx miss (pgx.ErrNoRows, or SQLSTATE 22P02 for a "+
+				"non-uuid) must be mapped to the store's not-found sentinel before it reaches "+
+				"respondErr, or it lands on the default branch as 500 + error_class=internal.",
+				tc.what, tc.id, rec.Code, rec.Body.String())
+			continue
+		}
+		var body map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Errorf("purge with %s (%s): body is not JSON: %v (%s)", tc.what, tc.id, err, rec.Body.String())
+			continue
+		}
+		if got := body["error"]; got != trashNotFound {
+			t.Errorf("purge with %s (%s): error = %v, want %q — the same body the sibling "+
+				"restore route answers, so a client can distinguish the two", tc.what, tc.id, got, trashNotFound)
+		}
+		if got := body["code"]; got == ClassInternal {
+			t.Errorf("purge with %s (%s): code = %q — a not-found answered the INTERNAL class "+
+				"code, which is the 500 this card is about, wearing a 404", tc.what, tc.id, got)
+		}
+	}
+
+	// The LIVE row must be untouched: never destroyed, never binned.
+	if n := countRowsREST(t, pool,
+		`SELECT COUNT(*) FROM workspaces WHERE id=$1 AND deleted_at IS NULL`, live.ID); n != 1 {
+		t.Error("a purge aimed at a LIVE workspace disturbed the row — the trashed-only " +
+			"guard is what makes trash → purge the only path to data loss")
+	}
+
+	// Control: the sibling bin route on the SAME session answers 404 for the same
+	// ghost id. Without it a guard that 404s everything (including a route that
+	// should act) would pass the loop above.
+	rec := sessionReq(t, h, token, http.MethodDelete,
+		"/v1/workspaces/00000000-0000-0000-0000-0000000000ff", `{"confirm_slug":"nope"}`)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("control: DELETE /v1/workspaces/<ghost> = %d (%s), want 404 — the sibling "+
+			"route was correct at the shipped revision, so this is the reference the purge "+
+			"route must match", rec.Code, rec.Body.String())
+	}
+
+	// The taxonomy below the miss is UNCHANGED by this fix, and that is the point
+	// of asserting it: a stranger's TRASHED workspace is FOUND by the trash read
+	// (it is not owner-scoped), so it lands on the owner check and answers 403 —
+	// not 404, and not the 500 the miss shapes answered. A fix that had swallowed
+	// every error into "not found" would pass the loop above and fail here.
+	strangerID := mkWsUser(t, pool, "rest-ws-stranger")
+	stranger, err := sp.Create(ctx, strangerID, "REST WS Stranger", "rest-ws-str-"+strangerID[:6])
+	if err != nil {
+		t.Fatalf("create stranger workspace: %v", err)
+	}
+	// Two workspaces, so the stranger may bin one (the last_workspace rule).
+	if _, err := sp.Create(ctx, strangerID, "REST WS Stranger 2", "rest-ws-str2-"+strangerID[:6]); err != nil {
+		t.Fatalf("create stranger workspace 2: %v", err)
+	}
+	if _, err := sp.Delete(ctx, stranger.ID, strangerID, ""); err != nil {
+		t.Fatalf("bin the stranger's workspace: %v", err)
+	}
+	rec = sessionReq(t, h, token, http.MethodDelete,
+		"/v1/workspaces/"+stranger.ID+"/purge", `{"confirm_slug":"`+stranger.Slug+`"}`)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("purging a STRANGER's trashed workspace = %d (%s), want 403 — the row is "+
+			"found, so this is the owner refusal, not the not-found the miss shapes answer",
+			rec.Code, rec.Body.String())
+	}
+	if n := countRowsREST(t, pool,
+		`SELECT COUNT(*) FROM workspaces WHERE id=$1 AND deleted_at IS NOT NULL`, stranger.ID); n != 1 {
+		t.Error("a stranger's refused purge destroyed/restored the row — the 403 must write nothing")
+	}
+}
+
 // scopeTestKey makes a readwrite-scoped Bearer key for accountID.
 func scopeTestKey(t *testing.T, pool *pgxpool.Pool, accountID, name string) string {
 	t.Helper()

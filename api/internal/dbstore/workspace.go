@@ -1265,6 +1265,17 @@ func (s *WorkspaceStore) Restore(ctx context.Context, workspaceID, ownerUserID s
 	if isUniqueViolation(err) {
 		return ErrWorkspaceSlugTaken
 	}
+	// A caller-supplied id that cannot be a uuid at all raises SQLSTATE 22P02
+	// BEFORE any row is considered (see notfound.go), so it reaches here as an
+	// Exec error rather than as RowsAffected()==0. It is the same miss the branch
+	// below reports: an untrusted id that names nothing. Without this the route
+	// answered 500 {"code":"internal"} for `POST /v1/workspaces/not-a-uuid/restore`
+	// while the SAME id on the purge route answered 404 — two answers to one
+	// situation, and the 500 is the one that counts a caller's bad id as a
+	// server fault (measured in this worktree before the fix; card t_a71ee62b).
+	if isNoSuchRow(err) {
+		return ErrWorkspaceNotFound
+	}
 	if err != nil {
 		return err
 	}
@@ -1482,8 +1493,33 @@ func (s *WorkspaceStore) AccountIsLive(ctx context.Context, accountID string) (b
 
 // TrashedByID reads one workspace from the bin. It uses trashedWorkspaceSelect,
 // so it matches rows the live readers deliberately hide.
+//
+// A miss is this STORE's not-found sentinel, ErrWorkspaceNotFound — the same
+// convention the other trash reads in this package follow (FormStore.GetTrashed
+// and ProductStore.GetTrashed both map isNoSuchRow to their own sentinel), and
+// the shape its own siblings here answer with (Restore via RowsAffected==0,
+// Trash/Rename/Purge via isNoSuchRow).
+//
+// WHY IT MUST NOT BE THE RAW DRIVER ERROR (card t_a71ee62b, live on v1.19.1).
+// scanTrashedWorkspace maps a missing row and SQLSTATE 22P02 to pgx.ErrNoRows,
+// which is NOT ErrWorkspaceNotFound. rest_workspaces.go's purgeWorkspace tests
+// only errors.Is(err, ErrWorkspaceNotFound), so a raw miss fell through to
+// respondErr's default branch: EVERY not-found purge answered
+// 500 {"code":"internal"} with error_class=internal and a stack trace — an
+// unknown uuid, a non-uuid, and a REAL live workspace id alike — while the
+// sibling restore/bin routes on the same session answered 404. A caller's bad
+// id must not be counted as a server fault, and the sentence beside that
+// handler ("a LIVE workspace is a 404 here") has to be true.
+//
+// Both miss shapes are covered by mapping at the error level, not by parsing the
+// id first: Postgres keeps owning what "a valid uuid" means (braces, hyphens,
+// prefixes and all), exactly as notfound.go's isNoSuchRow documents.
 func (s *WorkspaceStore) TrashedByID(ctx context.Context, id string) (*Workspace, error) {
-	return scanTrashedWorkspace(s.pool.QueryRow(ctx, trashedWorkspaceSelect+" AND id=$1", id))
+	sp, err := scanTrashedWorkspace(s.pool.QueryRow(ctx, trashedWorkspaceSelect+" AND id=$1", id))
+	if isNoSuchRow(err) {
+		return nil, ErrWorkspaceNotFound
+	}
+	return sp, err
 }
 
 // ListTrashed lists the caller's TRASHED workspaces, newest-binned first.

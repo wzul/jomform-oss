@@ -588,6 +588,99 @@ func TestWorkspaceDeleteUnknownIDIsNotFound(t *testing.T) {
 	_ = oids
 }
 
+// TestWorkspaceTrashedByIDNotFoundIsTheStoreSentinel is the store half of card
+// t_a71ee62b. TrashedByID is the read the purge route's confirmation compares
+// against, and its miss must arrive as the STORE's sentinel
+// (ErrWorkspaceNotFound) — not as the raw driver error.
+//
+// WHY THIS IS A DEFECT AND NOT A STYLE CHOICE. scanTrashedWorkspace maps a
+// missing row and SQLSTATE 22P02 to pgx.ErrNoRows, and pgx.ErrNoRows is not
+// ErrWorkspaceNotFound. The REST handler tests only
+// errors.Is(err, ErrWorkspaceNotFound), so the raw shape fell through to
+// respondErr's default branch and every not-found purge — including a REAL,
+// live workspace id — answered 500 {"code":"internal"} with
+// error_class=internal and a stack trace, on live v1.19.1. The sibling
+// accessors in this file already answer the sentinel: Restore refuses with
+// ErrWorkspaceNotFound via RowsAffected==0, Rename/Trash/Purge map isNoSuchRow
+// to it. TrashedByID was the one member of the family that did not.
+//
+// BOTH MISS SHAPES ARE ASSERTED because they are two different code paths out
+// of Postgres — a uuid that names no row (ErrNoRows) and an id that cannot be a
+// uuid at all (22P02, raised before any row is considered). A fix that mapped
+// only the first would leave the non-uuid 500 in place, which is one of the
+// three shapes the card measured.
+//
+// MUTATION EVIDENCE: restore `return nil, pgx.ErrNoRows` in scanTrashedWorkspace
+// and this fails on all four assertions (and the REST guard beside it goes red
+// too).
+func TestWorkspaceTrashedByIDNotFoundIsTheStoreSentinel(t *testing.T) {
+	ctx := context.Background()
+	p := testPool(t)
+	sp := NewWorkspaceStore(p)
+	_, ids := wsDeleteFixture(t, ctx, p, 2)
+
+	// A LIVE workspace is a miss to the trash read — that is what makes
+	// trash → purge the only way in, and it is the shape the card measured on
+	// a real workspace id.
+	live := ids[1]
+	if _, err := sp.TrashedByID(ctx, live); !errors.Is(err, ErrWorkspaceNotFound) {
+		t.Errorf("TrashedByID(live) err = %v, want ErrWorkspaceNotFound — a live id is a "+
+			"not-found here, and the raw pgx.ErrNoRows reaching the handler is exactly the "+
+			"500 this card is about", err)
+	}
+	// An unknown uuid.
+	if _, err := sp.TrashedByID(ctx, "00000000-0000-0000-0000-0000000000ff"); !errors.Is(err, ErrWorkspaceNotFound) {
+		t.Errorf("TrashedByID(unknown uuid) err = %v, want ErrWorkspaceNotFound", err)
+	}
+	// A non-uuid: Postgres raises SQLSTATE 22P02 before any row is considered,
+	// and it must be the same answer to the caller.
+	if _, err := sp.TrashedByID(ctx, "not-a-uuid"); !errors.Is(err, ErrWorkspaceNotFound) {
+		t.Errorf("TrashedByID(non-uuid) err = %v, want ErrWorkspaceNotFound — an id that "+
+			"cannot be a uuid is an untrusted-input miss, not a server fault", err)
+	}
+	// And the sentinel must not have been bought by turning every read into a
+	// miss: a TRASHED workspace still reads back.
+	if _, err := sp.Delete(ctx, ids[0], mustOwnerOf(t, ctx, p, ids[0]), ""); err != nil {
+		t.Fatalf("bin the workspace: %v", err)
+	}
+	got, err := sp.TrashedByID(ctx, ids[0])
+	if err != nil {
+		t.Fatalf("TrashedByID(trashed) err = %v, want the binned row", err)
+	}
+	if got == nil || got.ID != ids[0] {
+		t.Errorf("TrashedByID(trashed) = %+v, want the binned workspace %s", got, ids[0])
+	}
+
+	// Restore shares the same class (the card asked for it explicitly): its
+	// guard is `RowsAffected()==0`, but a non-uuid raises SQLSTATE 22P02 out of
+	// Exec BEFORE that, so Restore(not-a-uuid) returned the raw driver error and
+	// the route answered 500 where the purge route now answers 404. Both misses
+	// must be the one sentinel.
+	for _, id := range []string{"not-a-uuid", "00000000-0000-0000-0000-0000000000ff"} {
+		if err := sp.Restore(ctx, id, mustOwnerOf(t, ctx, p, ids[1])); !errors.Is(err, ErrWorkspaceNotFound) {
+			t.Errorf("Restore(%s) err = %v, want ErrWorkspaceNotFound — a non-uuid is the same "+
+				"untrusted-input miss as an unknown uuid, and the raw driver error reaching "+
+				"respondErr is a 500 on an id-taking route", id, err)
+		}
+	}
+	// The live row must still be live: a refused restore must never have
+	// half-applied (the SQLSTATE fires before any row is considered).
+	if n := countRows(t, ctx, p, `SELECT COUNT(*) FROM workspaces WHERE id=$1 AND deleted_at IS NULL`, ids[1]); n != 1 {
+		t.Error("a refused Restore disturbed the live workspace")
+	}
+}
+
+// mustOwnerOf returns the owner user id of a workspace, so a test can bin it
+// without re-deriving the fixture's user.
+func mustOwnerOf(t *testing.T, ctx context.Context, p *pgxpool.Pool, workspaceID string) string {
+	t.Helper()
+	var owner string
+	if err := p.QueryRow(ctx, `SELECT owner_user_id FROM workspaces WHERE id=$1`, workspaceID).Scan(&owner); err != nil {
+		t.Fatalf("read owner of %s: %v", workspaceID, err)
+	}
+	return owner
+}
+
 // TestWorkspaceContentCountsSurvivesTheGuardRemoval is the anti-drift guard on
 // the CENSUS (the survivors of the old emptiness definition): the READ half the
 // UI uses still has to agree with the rows on disk, even though nothing refuses

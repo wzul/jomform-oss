@@ -54,6 +54,7 @@ func errorClass(err error) string {
 		errors.Is(err, dbstore.ErrProductNotFound),
 		errors.Is(err, dbstore.ErrAPIKeyInvalid),
 		errors.Is(err, dbstore.ErrWebhookNotFound),
+		errors.Is(err, dbstore.ErrWorkspaceNotFound),
 		errors.Is(err, payments.ErrNotFound):
 		return "not_found"
 	case errors.Is(err, dbstore.ErrEmailTaken):
@@ -128,6 +129,7 @@ func respondErr(w http.ResponseWriter, r *http.Request, err error) {
 		errors.Is(err, dbstore.ErrProductNotFound),
 		errors.Is(err, dbstore.ErrAPIKeyInvalid),
 		errors.Is(err, dbstore.ErrWebhookNotFound),
+		errors.Is(err, dbstore.ErrWorkspaceNotFound),
 		errors.Is(err, payments.ErrNotFound):
 		writeErr(w, http.StatusNotFound, "tidak dijumpai")
 	case errors.Is(err, dbstore.ErrEmailTaken):
