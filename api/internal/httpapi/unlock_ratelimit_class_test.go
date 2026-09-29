@@ -135,7 +135,6 @@ package httpapi
 //     server gains a group that is neither wired here nor named there — so this
 //     omission is checked rather than trusted.
 
-
 import (
 	"fmt"
 	"net/http"
@@ -246,7 +245,7 @@ var unlockClassRouteGroups = []struct {
 // than dereferencing), which is what keeps the probe's non-429 traffic a real
 // answer rather than a recovered panic.
 func servedMux() *Server {
-	return NewServer(&config.Config{
+	srv := NewServer(&config.Config{
 		Port:        "0",
 		DatabaseURL: "postgres://localhost/jomform_test",
 		AppBaseURL:  "http://localhost:8080",
@@ -256,6 +255,20 @@ func servedMux() *Server {
 		Public:   &PublicHandlers{},
 		Payments: &PaymentsHandlers{},
 	})
+	// Build the HANDLER before handing the server back, so the table callers
+	// walk is the one the PRODUCTION path produces. The route table is memoised
+	// on the receiver (sync.Once → routesMux, server.go), and Handler() is what
+	// production calls first (api/cmd/jomform-api/main.go) — Handler() takes
+	// routes(), then registers inline on that same object. A walk that called
+	// routes() alone fired the Once WITHOUT running those registrations, so it
+	// cached the pre-handler table and an inline, unwrapped `.../unlock` route
+	// was served, unlimited, and absent from the walk (MEASURED: 193 patterns,
+	// route absent, guard GREEN; with Handler() first: 194 patterns, route
+	// present, 403 x12, i.e. the guard names it RED — card t_48fd3de2).
+	// Calling Handler() here is what keeps the guard's subject the table that is
+	// actually served; TestUnlockClassGuardWalkTakesTheProductionPath pins it.
+	_ = srv.Handler()
+	return srv
 }
 
 // unlockPatternFillings returns the concrete paths to try for a pattern. The
@@ -571,6 +584,173 @@ func TestServerHandlerServesFromTheTableTheGuardWalks(t *testing.T) {
 	}
 	t.Logf("seam holds: a route added to Server.routes() after Handler() was built is answered by "+
 		"Handler() (POST %s -> %d)", path, rec.Code)
+}
+
+// serverHandlerBody returns the source lines of Server.Handler() and the line
+// number its signature sits on, read from server.go. It is the ONE body the guard
+// below inspects — whether a route registration may live in it — and a parse that
+// found nothing FAILS rather than reading an empty body (a scan of "" finds no
+// registration, which is how such a guard reports green on anything).
+func serverHandlerBody(t *testing.T) (body []string, firstLine int) {
+	t.Helper()
+	src, err := os.ReadFile(filepath.Join(rootDir, "api", "internal", "httpapi", "server.go"))
+	if err != nil {
+		t.Fatalf("read server.go: %v — the guard below reads Handler()'s own body, so it can say "+
+			"nothing without this file", err)
+	}
+	lines := strings.Split(string(src), "\n")
+	start := -1
+	for i, l := range lines {
+		if strings.HasPrefix(l, "func (s *Server) Handler() http.Handler {") {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		t.Fatalf("server.go has no `func (s *Server) Handler() http.Handler {` line — the function " +
+			"was renamed or moved, so a scan of its body would read nothing and this guard would " +
+			"pass vacuously. Re-point it before trusting either check here")
+	}
+	// net/http's own body ends at the first line that is exactly `}` at column 0
+	// — gofmt guarantees that for a top-level func. Taking the first such line is
+	// what stops the slice wandering into the next function.
+	for i := start + 1; i < len(lines); i++ {
+		if lines[i] == "}" {
+			return lines[start : i+1], start + 1
+		}
+	}
+	t.Fatalf("Handler() at server.go:%d never closes at column 0 — the body could not be delimited, "+
+		"so this guard cannot say which registrations are inside it", start+1)
+	return nil, 0
+}
+
+// routeRegistrationRe matches the call shapes that REGISTER a route on a
+// *http.ServeMux, so a registration in Handler()'s body is caught whatever
+// spelling put it there — the literal call, a method value, or a group's
+// RegisterRoutes. The pattern is deliberately loose (any `Handle`, `HandleFunc`
+// or `RegisterRoutes` receiver): a false positive on Handler()'s body is a
+// prompt to look, and the body has no reason to call any of them.
+var routeRegistrationRe = regexp.MustCompile(`(?m)\.(HandleFunc|Handle|RegisterRoutes)\s*\(`)
+
+// TestServerHandlerRegistersNoRouteOutsideRoutes enforces the rule
+// Server.routes()'s doc comment states: registrations belong in routes(), never
+// inline in Handler().
+//
+// The rule matters because Handler() registers onto the SAME mux routes()
+// returns, but only when Handler() RUNS. A route registered inline there is
+// therefore invisible to a walker that took routes() without building the
+// handler (the t_48fd3de2 defect: 193 patterns, the route absent, guard GREEN)
+// while it is live and unlimited on the served chain. Two things close that: the
+// walk was moved to production's order
+// (TestUnlockClassGuardWalkTakesTheProductionPath), and this fails BY NAME if
+// the shape ever returns — including through a helper the registration scan
+// cannot see, because it rejects the whole CALL SHAPE rather than a pattern
+// literal.
+func TestServerHandlerRegistersNoRouteOutsideRoutes(t *testing.T) {
+	body, first := serverHandlerBody(t)
+
+	var offenders []string
+	for i, l := range body {
+		code := l
+		if j := strings.Index(code, "//"); j >= 0 {
+			code = code[:j] // a comment naming mux.Handle is not a registration
+		}
+		if routeRegistrationRe.MatchString(code) {
+			offenders = append(offenders, fmt.Sprintf("server.go:%d: %s", first+i, strings.TrimSpace(l)))
+		}
+	}
+	if len(offenders) > 0 {
+		t.Fatalf("Server.Handler() registers %d route(s) on the mux:\n  %s\n"+
+			"Registrations belong in Server.routes(), never inline in Handler(): Handler() runs "+
+			"AFTER routes() returns, so anything registered here is on the served table but absent "+
+			"from a walk that takes routes() without building the handler — live and unlimited "+
+			"while the unlock class guard reports green (card t_48fd3de2). Move the registration "+
+			"into routes().", len(offenders), strings.Join(offenders, "\n  "))
+	}
+	t.Logf("Handler() body: %d line(s) from server.go:%d, no route registration", len(body), first)
+}
+
+// TestUnlockClassGuardWalkTakesTheProductionPath pins that the guard walks the
+// table via PRODUCTION'S ORDER: servedMux() must build Handler() before it hands
+// the server to a walker.
+//
+// Why it is source-read rather than behavioural: the defect it guards is a
+// MISSING call in a test helper, and the only way to exhibit it behaviourally is
+// to put a registration inline in Handler() — which
+// TestServerHandlerRegistersNoRouteOutsideRoutes forbids precisely so that shape
+// cannot ship. With no such registration on the tree, a behavioural probe cannot
+// tell the two call orders apart (both yield the same table), so the honest pin
+// is: the instrument takes the production order, and the behavioural proof of
+// the order's necessity is the harness case F2
+// (api/scripts/biteproof_unlock_class_guard.py), which injects the inline
+// unwrapped route and requires the guard RED naming it.
+//
+// This is the same shape as TestUnlockClassGuardWiresEveryRouteGroupTheServerRegisters,
+// one layer in: that guard reads the SERVER's source to check the guard's table
+// is wide enough, this one reads the GUARD's source to check the table it walks
+// is built the way production builds it.
+func TestUnlockClassGuardWalkTakesTheProductionPath(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join(rootDir, "api", "internal", "httpapi",
+		"unlock_ratelimit_class_test.go"))
+	if err != nil {
+		t.Fatalf("read the class guard's own source: %v — this check is about how that walk builds "+
+			"its table, and it cannot say anything without the file", err)
+	}
+	lines := strings.Split(string(src), "\n")
+	start := -1
+	for i, l := range lines {
+		if strings.HasPrefix(l, "func servedMux() *Server {") {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		t.Fatalf("the class guard has no `func servedMux() *Server {` — the walk's server was renamed " +
+			"or inlined, so this guard would read nothing and pass vacuously. Re-point it at whatever " +
+			"builds the walked table")
+	}
+	end := -1
+	for i := start + 1; i < len(lines); i++ {
+		if lines[i] == "}" {
+			end = i
+			break
+		}
+	}
+	if end < 0 {
+		t.Fatalf("servedMux() at line %d never closes at column 0 — its body could not be delimited, "+
+			"so this guard cannot say whether the handler is built before the table is walked", start+1)
+	}
+	body := lines[start : end+1]
+
+	handlerCall, returnAt := -1, -1
+	for i, l := range body {
+		code := l
+		if j := strings.Index(code, "//"); j >= 0 {
+			code = code[:j]
+		}
+		if strings.Contains(code, ".Handler()") && handlerCall < 0 {
+			handlerCall = i
+		}
+		if strings.HasPrefix(strings.TrimSpace(code), "return ") && returnAt < 0 {
+			returnAt = i
+		}
+	}
+	if handlerCall < 0 {
+		t.Fatalf("servedMux() (line %d) never calls Handler(): its table is built by routes() alone, "+
+			"which fires the memoising sync.Once BEFORE Handler()'s own registrations run — so an "+
+			"unwrapped route registered inline in Handler() is served, unlimited, and ABSENT from this "+
+			"walk while the class guard reports green (MEASURED, card t_48fd3de2: 193 patterns and 3 "+
+			"unlock routes here vs 194 and 4 with Handler() built first). Build the handler first: "+
+			"production does (api/cmd/jomform-api/main.go calls Handler()), so the walk must too.",
+			start+1)
+	}
+	if returnAt >= 0 && handlerCall > returnAt {
+		t.Fatalf("servedMux() calls Handler() AFTER its `return` (Handler at body line %d, return at "+
+			"%d) — the table is handed to the walker before the handler is built, which is the same "+
+			"hole as not calling it at all", handlerCall, returnAt)
+	}
+	t.Logf("servedMux() builds Handler() at body line %d, before returning (body lines %d..%d of "+
+		"the class guard)", handlerCall, start+1, end+1)
 }
 
 // TestUnlockRoutesAreLimitedThroughTheServedChain is the second direction of the

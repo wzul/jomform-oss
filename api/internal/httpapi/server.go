@@ -202,11 +202,27 @@ func (s *Server) Handler() http.Handler {
 // and a route added to Handler() inline — the natural place for a one-line
 // route addition — was outside the guard while it still reported green.
 //
-// So: registrations belong HERE, never inline in Handler(). A route added to
-// Handler() would be served by Handler()'s copy but absent from the table
-// callers enumerate, which is the divergence this seam exists to prevent;
-// TestServerHandlerServesFromTheTableTheGuardWalks pins that the two are one
-// object.
+// So: registrations belong HERE, never inline in Handler() — and that is now
+// enforced rather than documented. Handler() registers onto the very mux this
+// method returns, so an inline registration joins the same object; but it only
+// RUNS when Handler() is called. A caller that took routes() without ever
+// calling Handler() therefore fired the memoising Once BEFORE those inline
+// registrations ran and cached the pre-handler table. MEASURED (card
+// t_48fd3de2): an unwrapped `.../unlock` route registered inline in Handler()
+// was live and unlimited on the served chain (403 x12, no 429) and ABSENT from
+// that walk (193 patterns, 3 unlock routes), while the class guard reported
+// green; building Handler() first enumerated it (194 patterns, 4 unlock
+// routes) and the guard named it RED.
+//
+// Both ends are pinned by tests, so neither can regress silently:
+//   - TestServerHandlerRegistersNoRouteOutsideRoutes fails BY NAME if a
+//     registration appears inline in Handler(), which is the shape above.
+//   - TestUnlockClassGuardWalkTakesTheProductionPath requires the walk's own
+//     server (servedMux) to build Handler() before the table is walked, so the
+//     guard's subject stays the table production serves even if a registration
+//     ever reaches Handler() through a spelling this file's scan cannot see.
+//   - TestServerHandlerServesFromTheTableTheGuardWalks requires Handler() to
+//     dispatch from the table this method returns.
 func (s *Server) routes() *http.ServeMux {
 	s.routesOnce.Do(func() {
 		mux := http.NewServeMux()

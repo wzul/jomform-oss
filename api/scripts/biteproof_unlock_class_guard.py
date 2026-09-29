@@ -35,7 +35,7 @@ Per case the harness checks, and prints, all of:
   (f) every touched file is restored byte-identically, verified by sha256, and a
       file the case created is gone again.
 
-Seven cases. The two shapes that matter most, because each was missed by a
+Nine cases. The shapes that matter most, because each was missed by a
 SUCCESSIVE version of the guard:
   - A/B (INDIRECT, registered through a helper): missed by the FIRST guard, the
     single-line text regex over `mux.Handle` call sites.
@@ -46,6 +46,15 @@ SUCCESSIVE version of the guard:
     G is its control: the same inline registration WRAPPED must stay green, so
     F's red is attributable to the missing limiter and not to inline registration
     being rejected on sight.
+  - F2/G2 (INLINE in Server.Handler(), one level up, card t_48fd3de2): the route
+    is registered on the SAME mux routes() returns, but only AFTER routes()
+    returns — so a walk that took the table without ever building the handler
+    fired the memoising sync.Once first and cached the pre-handler table. The
+    route was live and unlimited on the served chain (403 x12, no 429) and ABSENT
+    from the walk (193 patterns, 3 unlock routes) while the guard reported GREEN;
+    built in production's order it is enumerated (194 patterns, 4 unlocks) and
+    RED by name. The walk now builds Handler() first (servedMux()), so F2 is RED
+    for the limiter and G2 — the same registration WRAPPED — is its control.
 
 Restore is signal-safe: originals are held in memory and restored in a finally
 and by a SIGTERM/SIGINT handler, so a timeout kill cannot leave the worktree
@@ -288,6 +297,35 @@ INLINE_WRAPPED = SERVER_ANCHOR + (
     '\t\t})))\n'
 )
 
+# ─── cases F2/G2: registered INLINE in Handler(), one level up from F/G ────────
+#
+# F/G register on the served TABLE (Server.routes()). F2/G2 register in
+# Server.Handler() — the natural place for a one-line route addition, and the
+# shape routes()'s own doc comment warns about (card t_48fd3de2). Handler()
+# takes routes() and THEN registers on the object it got back, so an inline
+# registration is served — but it only RUNS when Handler() is called. A walk that
+# called routes() without ever building the handler fired the memoising
+# sync.Once first and cached the pre-handler table, so this route was live and
+# unlimited while the guard reported green (MEASURED: 193 patterns, route absent,
+# GREEN; with Handler() built first 194 patterns, route present, 403 x12, RED by
+# name). The walk now takes production's order (servedMux() calls Handler()
+# first), so this case is RED for the right reason; before that fix it was the
+# hole.
+#
+# The anchor is Handler()'s own `mux := s.routes()` line — unique in server.go
+# (the harness asserts every anchor occurs exactly once before it mutates).
+HANDLER_ANCHOR = '\tmux := s.routes()\n'
+HANDLER_INLINE_UNWRAPPED = HANDLER_ANCHOR + (
+    '\tmux.HandleFunc("POST /qa-inline-handler/{slug}/unlock", func(w http.ResponseWriter, r *http.Request) {\n'
+    '\t\tw.WriteHeader(http.StatusForbidden)\n'
+    '\t})\n'
+)
+HANDLER_INLINE_WRAPPED = HANDLER_ANCHOR + (
+    '\tmux.Handle("POST /qa-inline-handler/{slug}/unlock", middleware.RateLimit(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n'
+    '\t\tw.WriteHeader(http.StatusForbidden)\n'
+    '\t})))\n'
+)
+
 # (label, mutations, want_red, want_named, want_drove)
 #   mutations: list of ("replace", path, old, new) | ("create", path, content)
 #   want_red:  True  -> the guard MUST fail (the sabotage is a real defect)
@@ -343,6 +381,16 @@ CASES = [
         "G: the same INLINE registration WRAPPED (control: must stay GREEN)",
         [("replace", SERVER, SERVER_ANCHOR, INLINE_WRAPPED)],
         False, [], ["POST /qa-inline/{slug}/unlock"],
+    ),
+    (
+        "F2: an UNWRAPPED unlock route registered INLINE in Handler() (server.go)",
+        [("replace", SERVER, HANDLER_ANCHOR, HANDLER_INLINE_UNWRAPPED)],
+        True, ["POST /qa-inline-handler/{slug}/unlock"], ["POST /qa-inline-handler/{slug}/unlock"],
+    ),
+    (
+        "G2: the same Handler()-inline registration WRAPPED (control: must stay GREEN)",
+        [("replace", SERVER, HANDLER_ANCHOR, HANDLER_INLINE_WRAPPED)],
+        False, [], ["POST /qa-inline-handler/{slug}/unlock"],
     ),
 ]
 
