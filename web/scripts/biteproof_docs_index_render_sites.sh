@@ -41,6 +41,27 @@
 # what the row used to do while the harness had no such case: measured on this
 # tree, the row named a `GROUPS` case the script did not contain.
 #
+# THE OTHER FOUR LEGS the one stripped `docsSrc` made comment-proof (card
+# `t_3b51370d`): this harness drove `{f.body}` and `id={f.slug}` (CASE 1-6) and
+# the GROUPS parse (CASE 7) while the two legs a reader NOTICES FIRST — the
+# category ANCHORS (`#sales-payments`, `#security`, …) and the TRANSLATED
+# category labels — had no bite proof at all, though they are comment-satisfiable
+# in exactly the same way. CASE 8-11 now drive them, one CONTROL (the render site
+# moved off the page, no comment: RED in both columns) and one HOLE (the same
+# mutation plus a `//` line carrying the token) each.
+#
+# THE MUTATION HELPERS FAIL CLOSED. `render_sites_off` / `comment_out_entry` run
+# python to rewrite the page, and their non-zero status used to only short-circuit
+# the `&&` chain: the case's `check` never ran, so that case measured nothing and
+# the run could still print BITEPROOF PASS with the case's line silently missing
+# from the output. Both now set `fail=1` and say so. Stated honestly: on TODAY's
+# tree the premise check refuses first (a token that is no longer on the page also
+# breaks the base guard, so the run exits 2 before any case is reached — measured),
+# so this is defence in depth rather than a reproduced false PASS: the premise
+# only covers the tokens that make the BASE column red, while a case whose mutation
+# silently stops applying would otherwise be credited by the reader. (Found while
+# adding CASE 8-11, whose whole point is that an undriven leg must not be credited.)
+#
 # THE VERDICT RULE REQUIRES POSITIVE EVIDENCE THAT THE GUARD RAN (card
 # t_420ca40c, reused from web/scripts/biteproof_docs_tool_claims.sh verbatim): a
 # verdict read from the ABSENCE of a `fail` line calls a guard that never started
@@ -276,8 +297,13 @@ anchor_line() {
 # render_sites_off <token> <replacement> — the page-wide swap the card measured.
 # python3, not sed: the replacement carries `/` and `[^…]` and a sed delimiter
 # would have to be escaped twice.
+#
+# FAIL CLOSED: a token that is not on the page any more means the case cannot be
+# applied, and a case that silently does not run must not be reported as a pass
+# (see the header). The caller's `&&` chain skips the `check`, so the failure is
+# recorded here.
 render_sites_off() {
-  python3 - "$PAGE" "$1" "$2" <<'PY'
+  if python3 - "$PAGE" "$1" "$2" <<'PY'
 import sys
 p, token, repl = sys.argv[1], sys.argv[2], sys.argv[3]
 s = open(p).read()
@@ -287,6 +313,12 @@ if n == 0:
 open(p, "w").write(s.replace(token, repl))
 print(f"       mutation on disk: {n} occurrence(s) of {token} -> {repl}")
 PY
+  then
+    return 0
+  fi
+  echo "  *** MUTATION DID NOT APPLY to $PAGE: '$1' is not on the page — re-anchor this case ***" >&2
+  fail=1
+  return 1
 }
 assert_applied() { # assert_applied <token>
   if grep -qF "$1" "$PAGE"; then echo "       present on disk: $1"; else
@@ -300,7 +332,7 @@ assert_applied() { # assert_applied <token>
 # from the RENDERED page while the base guard, which reads the raw source, still
 # counts it as a feature entry.
 comment_out_entry() {
-  python3 - "$PAGE" "$1" <<'PY'
+  if python3 - "$PAGE" "$1" <<'PY'
 import sys
 p, needle = sys.argv[1], sys.argv[2]
 lines = open(p).read().split("\n")
@@ -316,6 +348,12 @@ for i in range(open_, close + 1):
 open(p, "w").write("\n".join(lines))
 print(f"       mutation on disk: entry {needle!r} commented out, lines {open_ + 1}-{close + 1}")
 PY
+  then
+    return 0
+  fi
+  echo "  *** MUTATION DID NOT APPLY to $PAGE: no entry whose title holds '$1' could be bracketed — re-anchor this case ***" >&2
+  fail=1
+  return 1
 }
 restore_page() {
   cp "$PAGE_BAK" "$PAGE"
@@ -328,6 +366,8 @@ restore_page() {
 # case carries the SAME text a real comment would.
 CMT_BODY='each entry renders {f.body} in its paragraph, so the summary is shown'
 CMT_SLUG='each entry renders id={f.slug} on its wrapper, so ? anchors scroll'
+CMT_GID='each category section renders id={g.id}, so #sales-payments and friends scroll'
+CMT_LABEL='the category heading renders <T k={g.labelKey} />, so the label is translated'
 
 echo
 echo "== BASELINE (no mutation) =="
@@ -406,14 +446,54 @@ comment_out_entry "Media library" && {
 restore_page
 
 echo
-echo "== NEGATIVE CONTROL 8: a comment mentioning the token must NOT break a page that really renders it =="
+echo "== CASE 8 (CONTROL): id={g.id} moved off the group sections, NO comment =="
+# Card t_3b51370d. The category ANCHORS ("#sales-payments", "#security", …) are
+# the leg a reader follows from the sidebar, and the one stripped `docsSrc` makes
+# it comment-satisfiable exactly like the slug. `id={g.labelKey}` is a real
+# expression that renders a real id — just not the one the sidebar points at —
+# so the mutation is a plausible edit and not a syntax error.
+render_sites_off 'id={g.id}' 'id={g.labelKey}' && {
+  check "control: id={g.id} not rendered, no comment" RED RED 'every category is a named, translated group'; }
+restore_page
+
+echo
+echo "== CASE 9 (HOLE): the same, plus a // line carrying id={g.id} =="
+render_sites_off 'id={g.id}' 'id={g.labelKey}' && {
+  insert_at_line 0 "// QA: $CMT_GID"
+  assert_applied 'id={g.id}' && {
+    check "id={g.id} carried by a // comment" GREEN RED 'every category is a named, translated group'; }
+}
+restore_page
+
+echo
+echo "== CASE 10 (CONTROL): <T k={g.labelKey} /> moved off the headings, NO comment =="
+# The translation leg: the category headings are the only place a group's labelKey
+# reaches the page. `{g.id}` is again a real, compiling substitution.
+render_sites_off '<T k={g.labelKey} />' '<T k={g.id} />' && {
+  check "control: category labels not translated, no comment" RED RED 'every category is a named, translated group'; }
+restore_page
+
+echo
+echo "== CASE 11 (HOLE): the same, plus a // line carrying <T k={g.labelKey} /> =="
+render_sites_off '<T k={g.labelKey} />' '<T k={g.id} />' && {
+  insert_at_line 0 "// QA: $CMT_LABEL"
+  assert_applied '<T k={g.labelKey} />' && {
+    check "category label carried by a // comment" GREEN RED 'every category is a named, translated group'; }
+}
+restore_page
+
+echo
+echo "== NEGATIVE CONTROL 12: a comment mentioning the token must NOT break a page that really renders it =="
 # The other direction of this fix, and the one a careless strip breaks: the real
 # sites are untouched, a comment names the same tokens, and the vacuity test must
 # stay GREEN under BOTH guards. Without this case a strip that stripped rendered
 # code as well would pass every case above.
 insert_at_line 0 "// QA: this page renders $CMT_BODY and $CMT_SLUG"
+insert_at_line 0 "// QA: this page renders $CMT_GID and $CMT_LABEL"
 assert_applied '{f.body}' && {
-  check "comment beside a real render site" GREEN GREEN; }
+  assert_applied 'id={g.id}' && {
+    check "comment beside a real render site" GREEN GREEN; }
+}
 restore_page
 
 echo
@@ -431,7 +511,7 @@ fi
 
 echo
 if [ "$fail" = "0" ]; then
-  echo "BITEPROOF PASS — every comment form was GREEN under ${BASE_REF}'s guard and RED, naming the vacuity test, under this one (the two no-comment controls RED in both, the GROUPS case RED naming the docs-parity contract)."
+  echo "BITEPROOF PASS — every comment form was GREEN under ${BASE_REF}'s guard and RED, naming the leg it broke, under this one (the four no-comment controls RED in both columns, the GROUPS case RED naming the docs-parity contract)."
 else
   echo "BITEPROOF FAIL (fail=$fail)"
 fi
