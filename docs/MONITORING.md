@@ -7,7 +7,7 @@ server, no Grafana, no agent. The goal is not dashboards; it is not being blind.
 
 ## What the watchdog checks
 
-`deploy/monitoring/jomform-watch.sh` runs every 5 minutes and checks four things.
+`deploy/monitoring/jomform-watch.sh` runs every 5 minutes and checks five things.
 Each one can fail on its own and each is named in the alert.
 
 | Check | What it proves | Why it is here |
@@ -16,8 +16,9 @@ Each one can fail on its own and each is named in the alert.
 | `health` | `GET https://jomform.com/healthz` returns 200 and contains `service` | Cloudflare → Traefik → api container |
 | `ready` | the api container's own `/readyz` reports `database: ok` **and** `valkey: ok`, read over ssh | `/healthz` answers 200 while the database is down; without this, login and payments could be broken and the watchdog silent |
 | `disk` | `df` on the prod host stays under the threshold | prod had no disk alarm at all |
+| `board` | the agent host's Kanban `task_runs` ends `crashed`/`gave_up`/`spawn_failed` **fewer than `JF_WATCH_KANBAN_THRESHOLD` times** in a trailing `JF_WATCH_KANBAN_WINDOW_SECONDS` window | see below — the host fault that produced 110 crashed runs and paged nobody |
 
-Two of those choices are load-bearing and worth stating, because the obvious
+Three of those choices are load-bearing and worth stating, because the obvious
 shorter version of this script does not catch them:
 
 - **The web check uses the page, not `/healthz`.** A dead web container leaves
@@ -27,6 +28,19 @@ shorter version of this script does not catch them:
   unauthenticated dependency readout does not belong on the public edge), and
   `docker compose exec -T` **reads stdin** — without `< /dev/null` the compose
   client swallows the ssh channel and the probe hangs.
+- **`board` reads the DB, not the cards.** A host fault that makes the dispatcher
+  spawn a worker on an interpreter that cannot import its own module kills every
+  card on the board independently: each one is requeued, retried, and eventually
+  blocked, so the board looks like N separately broken cards and nothing about
+  the *host* is being measured. No monitor read `task_runs` at all, so 110 runs
+  could end `crashed` (9 of them in the last 3 h) without a page.
+
+The `board` check is **off** where there is no board (the prod host) and that is
+not silent: the daily digest reports `board: NOT MEASURED here`, because a check
+that quietly does nothing is the same blindness in a new place. Point it at a
+board with `JF_WATCH_KANBAN_DB=/path/to/kanban.db`; `auto` (the default) probes
+the two usual Hermes board paths. Set but unreadable — a deleted or misnamed
+board — is a **failure**, like an unreadable `df`.
 
 A marker check is part of the HTTP checks on purpose: a proxy or hosting
 provider's error/maintenance page answers **200**, so status code alone cannot
@@ -42,9 +56,10 @@ not depend on the agent stack it is watching.
   Without this, an outage that lasts the night is 100 messages, which trains
   everyone to mute the channel.
 - **Daily digest** (`JF_WATCH_MODE=digest`, 09:17) is the watchdog's own
-  heartbeat: checks run, failing runs, alerts sent, prod disk. If the digest
-  stops arriving, the *watcher* is dead — which is otherwise indistinguishable
-  from "everything is fine".
+  heartbeat: checks run, failing runs, alerts sent, prod disk, and the board
+  check's own state (`board: …`, or `board: NOT MEASURED here` where the host has
+  no board). If the digest stops arriving, the *watcher* is dead — which is
+  otherwise indistinguishable from "everything is fine".
 - **Exit codes:** `0` healthy, `1` something failed (alert attempted), `2`
   misconfigured (no notifier), `3` an alert could not be delivered. A watcher
   that cannot alert **refuses to run** instead of reporting `ok`.
@@ -116,6 +131,12 @@ It asserts the properties that make a watchdog worth having —
 - a transient failure that succeeds on retry raises nothing;
 - a degraded or unreachable `/readyz` alerts;
 - an over-threshold disk alerts, and an unreadable `df` fails loud;
+- a **board crash burst pages** (the 110-crashed-runs incident), naming how many
+  distinct cards and lanes it hit and how many carried the spawn-import
+  signature; two crashes do not; card-level outcomes (`timed_out`, `reclaimed`,
+  `blocked`, review states) never do; a configured-but-unreadable board fails
+  loud; a host with no board stays quiet *and says so* in the digest; and reading
+  the board leaves its bytes, its mtime and its `-wal`/`-shm` state untouched;
 - **no notifier is exit 2, never `ok`**, and an undeliverable alert is exit 3.
 
 The board's worktree pruner is the other host-only safety script in this
@@ -125,7 +146,10 @@ directory's family; its behaviour and self-test are documented under
 Mutations that were run against it to prove it *bites* (each turned the suite
 red): dropping the body-marker check → 3 failures; alerting on every run instead
 of edge-triggered → 5 failures; treating `exit 2` as `exit 0` → 2 failures;
-skipping `/readyz` on failure → 5 failures.
+skipping `/readyz` on failure → 5 failures; running the whole suite against the
+**pre-`board` watchdog** (before the check existed) → 25 failures, all of them
+the new board assertions, which is the measurement that says the board cases
+test the fix rather than restating it.
 
 ## Kanban worktree pruner — what it may and may not delete
 

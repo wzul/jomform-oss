@@ -23,6 +23,15 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WATCH="$HERE/jomform-watch.sh"
 [ -f "$WATCH" ] || { echo "FAIL: $WATCH missing" >&2; exit 1; }
 
+# A missing prerequisite is a FAILURE, not a skip: the board check cannot be
+# exercised without sqlite3, and a suite that quietly runs without it would
+# report green on the one property this card exists to add.
+command -v sqlite3 >/dev/null 2>&1 || {
+  echo "FAIL: sqlite3 not found — the board-check fixtures cannot be built" >&2
+  echo "      (a suite that cannot build its fixture must not report ok)" >&2
+  exit 1
+}
+
 PASS=0; FAIL=0
 ok()  { PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
 bad() { FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; }
@@ -155,6 +164,43 @@ DF_OK='printf "%s\n" "Filesystem 1024-blocks Used Available Capacity Mounted on"
 DF_FULL='printf "%s\n" "Filesystem 1024-blocks Used Available Capacity Mounted on" "/dev/sda1 202876160 190000000 3000000 92% /"'
 DF_UNREADABLE='exit 255'
 
+# ── a synthetic Kanban board ────────────────────────────────────────────────
+# The board check reads `task_runs` and nothing else, so the fixture is the
+# columns it uses. `profile` and `metadata` are there because the detail line
+# reports LANE BREADTH and the dispatcher's own `infrastructure` attribution —
+# the two things that separate "one card is broken" from "the host is killing
+# every spawn".
+BOARD="$SB/board.db"
+make_board() {
+  rm -f "$BOARD"
+  sqlite3 "$BOARD" "
+    CREATE TABLE task_runs (
+      id       INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id  TEXT NOT NULL,
+      profile  TEXT,
+      outcome  TEXT,
+      started_at INTEGER NOT NULL,
+      ended_at INTEGER,
+      metadata TEXT,
+      error    TEXT);"
+}
+board_add() { # task_id profile outcome age_seconds error [metadata]
+  local now meta err
+  now=$(date +%s)
+  if [ -n "${6:-}" ]; then meta="'$6'"; else meta="NULL"; fi
+  # Double every single quote: the error strings carry real worker output, which
+  # contains apostrophes ("Worker's last output"), and an unescaped one is a SQL
+  # syntax error that silently inserts NOTHING — leaving the case asserting on an
+  # empty board. Escaped here so a fixture cannot lie about what it loaded.
+  err="${5//\'/\'\'}"
+  sqlite3 "$BOARD" "INSERT INTO task_runs (task_id,profile,outcome,started_at,ended_at,error,metadata)
+    VALUES ('$1','$2','$3',$((now - $4)),$((now - $4 + 1)),'$err',$meta);"
+}
+# A crash carrying the incident's own signature, so the alert can name the FAULT
+# (`import_err=`) instead of only counting symptoms.
+IMPORT_ERR="pid 123 exited with code 1 Worker's last output: \"python3: Error while finding module specification for 'hermes_cli.main' (ModuleNotFoundError: No module named 'hermes_cli')\""
+CRASH_ERR="pid 124 exited with code 1"
+
 STATE="$SB/state"; LOG="$SB/watch.log"
 write_config() { # token ("" = a config file that names no bot)
   {
@@ -177,6 +223,8 @@ run() {
     JF_WATCH_NOTIFY_CMD="$NOTIFY_CMD" \
     JF_WATCH_READY_CMD="$READY_OK" \
     JF_WATCH_DF_CMD="$DF_OK" \
+    JF_WATCH_KANBAN_DB="${KANBAN_DB_RUN:-auto}" \
+    JF_WATCH_KANBAN_DB_CANDIDATES="${KANBAN_CANDIDATES_RUN:-/nonexistent/a.db}" \
     JF_WATCH_ATTEMPT_DELAY=0 JF_WATCH_TIMEOUT=5 \
     "$@" bash "$WATCH"
 }
@@ -187,6 +235,8 @@ reset() { # fresh state + log + healthy stub + a configured notifier
   printf 'healthy' >"$SB/mode"
   rm -f "$SB/seq_web" "$SB/seq_health"
   write_config dummy
+  KANBAN_DB_RUN="auto"                          # board check disabled unless a case says otherwise
+  KANBAN_CANDIDATES_RUN="/nonexistent/a.db /nonexistent/b.db"
 }
 alert_count() { [ -f "$NOTIFY" ] && grep -c '^' "$NOTIFY" || echo 0; }
 alerts() { [ -f "$NOTIFY" ] && cat "$NOTIFY" || printf ''; }
@@ -339,28 +389,168 @@ out=$(run JF_WATCH_DF_CMD="$DF_UNREADABLE"); rc=$?
 check "unreadable df exits 1" "$rc" "1"
 contains "unreadable df alerts" "$(alerts)" "DOWN disk"
 
+echo "--- the Kanban board's host-fault rate (the incident this check exists for) ---"
+
+# 13b. Fixture self-check: an escaped apostrophe in a worker error string once
+#      made every INSERT fail silently, so the assertions below ran against an
+#      EMPTY board and "no alert" read as "the check is fine". Prove the fixture
+#      loaded before trusting anything measured off it.
+make_board
+board_add t_x dev crashed 600 "$IMPORT_ERR"
+loaded="$(sqlite3 "$BOARD" "SELECT count(*) FROM task_runs WHERE task_id='t_x';")"
+check "board fixture actually loads rows (real worker output with apostrophes)" "$loaded" "1"
+
+# 14. THE REGRESSION: three worker crashes inside the window page. This is the
+#     exact shape the card was filed on — 110 crashed runs, 9 in the last 3 h,
+#     and nothing alerted because no monitor read task_runs.
+reset; make_board
+board_add t_a dev crashed 600 "$IMPORT_ERR"
+board_add t_b qa  crashed 900 "$IMPORT_ERR"
+board_add t_c merger crashed 1200 "$CRASH_ERR"
+KANBAN_DB_RUN="$BOARD"
+out=$(run); rc=$?
+check "board crash burst exits 1" "$rc" "1"
+check "board crash burst sends exactly one alert" "$(alert_count)" "1"
+contains "board alert names the check" "$(alerts)" "DOWN board"
+contains "board alert counts the failures" "$(alerts)" "failures=3"
+contains "board alert reports CARD breadth" "$(alerts)" "tasks=3"
+contains "board alert reports LANE breadth" "$(alerts)" "profiles=3"
+# Two of the three crashes carry the spawn-import signature; the third does not.
+# Asserting 2 (not 3, not 0) proves the signature count discriminates rather than
+# just repeating the total.
+contains "board alert names the spawn-import signature" "$(alerts)" "import_err=2"
+
+# 15. Below the threshold -> silent. One crash on one card is that card's
+#     problem, not the host's, and paging on it is the noise that trains an
+#     operator to ignore this alert.
+reset; make_board
+board_add t_a dev crashed 600 "$CRASH_ERR"
+board_add t_b qa  crashed 900 "$CRASH_ERR"
+KANBAN_DB_RUN="$BOARD"
+out=$(run); rc=$?
+check "two crashes stay under the threshold" "$rc" "0"
+check "two crashes send no alert" "$(alert_count)" "0"
+contains "two crashes are still logged and measured" "$(cat "$LOG")" "failures=2"
+
+# 16. A CARD-level failure is not a host fault. `timed_out` (iteration budget),
+#     `reclaimed` (deliberately stopped), `blocked` and the review outcomes are
+#     the board working as designed; counting them would page on ordinary work.
+reset; make_board
+board_add t_a dev  timed_out         600 "Iteration budget exhausted (500/500)"
+board_add t_b qa   reclaimed         700 "manual_reclaim: PR already merged; work is moot"
+board_add t_c dev  blocked           800 ""
+board_add t_d dev  review_requested  900 ""
+board_add t_e qa   changes_requested 1000 ""
+KANBAN_DB_RUN="$BOARD"
+out=$(run); rc=$?
+check "card-level outcomes do not page" "$rc" "0"
+check "card-level outcomes send no alert" "$(alert_count)" "0"
+contains "card-level outcomes are excluded, not merely under the threshold" \
+  "$(cat "$LOG")" "failures=0"
+
+# 17. Runs the dispatcher ITSELF attributed to the host are counted, and the
+#     count is stated. (`infrastructure: true` = the host refused the spawn —
+#     RestartSafeScopeUnavailable, #114720.) Same page, better detail.
+reset; make_board
+board_add t_a dev spawn_failed 600 "no restart-safe scope" '{"failures": 1, "infrastructure": true}'
+board_add t_b qa  spawn_failed 700 "no restart-safe scope" '{"failures": 1, "infrastructure": true}'
+board_add t_c dev crashed      800 "$CRASH_ERR"
+KANBAN_DB_RUN="$BOARD"
+out=$(run); rc=$?
+check "infrastructure refusals page" "$rc" "1"
+contains "infrastructure refusals are attributed" "$(alerts)" "infra=2"
+contains "plain crashes stay in the remaining count" "$(alerts)" "failures=3"
+
+# 18. Recovery: the burst stops -> one RECOVERED message, then silence. Without
+#     this the alert is a one-way trip and the operator cannot tell whether the
+#     host came back.
+reset; make_board
+board_add t_a dev crashed 600 "$CRASH_ERR"
+board_add t_b qa  crashed 700 "$CRASH_ERR"
+board_add t_c dev crashed 800 "$CRASH_ERR"
+KANBAN_DB_RUN="$BOARD"
+out=$(run); rc=$?
+check "burst pages (precondition for recovery)" "$(alert_count)" "1"
+make_board  # the burst ages out / the host is fixed
+out=$(run); rc=$?
+check "board recovery exits 0" "$rc" "0"
+check "board recovery sends one message" "$(alert_count)" "2"
+contains "board recovery says RECOVERED" "$(alerts)" "RECOVERED board"
+out=$(run); rc=$?
+check "no repeated board alert when healthy" "$(alert_count)" "2"
+
+# 19. A configured board DB that cannot be read is a FAILURE, not a silent pass —
+#     the same shape as an unreadable df. This is also what a misnamed path or a
+#     deleted board looks like, and a watcher that cannot measure must not say ok.
+reset
+KANBAN_DB_RUN="$SB/does-not-exist.db"
+out=$(run); rc=$?
+check "configured but missing board exits 1" "$rc" "1"
+contains "configured but missing board alerts" "$(alerts)" "DOWN board"
+contains "the alert says it could not measure" "$(alerts)" "unreadable"
+
+# 20. A board DB that exists but is not a board (an empty file, a directory, an
+#     unrelated sqlite DB) is also a failure: the query returned no parsable
+#     answer, and "no answer" is not "no crashes".
+reset
+: >"$SB/notaboard.db"
+KANBAN_DB_RUN="$SB/notaboard.db"
+out=$(run); rc=$?
+check "non-board DB exits 1" "$rc" "1"
+contains "non-board DB alerts" "$(alerts)" "DOWN board"
+
+# 21. A host with NO board at all (prod) stays quiet AND says so. `auto` must not
+#     turn "this host has no Kanban" into a failure, and it must not turn it into
+#     an invisible no-op either — the digest names it (asserted in 23).
+reset
+KANBAN_DB_RUN="auto"; KANBAN_CANDIDATES_RUN="/nonexistent/a.db /nonexistent/b.db"
+out=$(run); rc=$?
+check "no board on the host exits 0" "$rc" "0"
+check "no board on the host sends no alert" "$(alert_count)" "0"
+contains "no board is reported as disabled, not healthy" "$(cat "$LOG")" "board disabled=1"
+
+# 22. The board check must never WRITE to the board it watches: a monitor that
+#     takes a write lock on the live board DB is a new outage. Assert the file's
+#     mtime and size are unchanged, and that no -wal/-shm pair was left behind.
+reset; make_board
+board_add t_a dev crashed 600 "$IMPORT_ERR"
+board_add t_b qa  crashed 700 "$IMPORT_ERR"
+board_add t_c dev crashed 800 "$IMPORT_ERR"
+KANBAN_DB_RUN="$BOARD"
+before="$(stat -c '%Y %s' "$BOARD")"
+out=$(run); rc=$?
+after="$(stat -c '%Y %s' "$BOARD")"
+check "watching the board does not modify it" "$after" "$before"
+if [ -e "$BOARD-wal" ] || [ -e "$BOARD-shm" ]; then
+  bad "watching the board left a -wal/-shm behind"
+else
+  ok "watching the board leaves no -wal/-shm behind"
+fi
+
 echo "--- refusal to run blind ---"
 
-# 14. No notifier at all -> exit 2, never a green report.
+# 23. No notifier at all -> exit 2, never a green report.
 reset; write_config ""
 out=$(env -i PATH="$PATH" HOME="$HOME" \
   JF_WATCH_ENV_FILE="$SB/env" JF_WATCH_STATE_DIR="$STATE" \
   JF_WATCH_LOG_FILE="$LOG" JF_WATCH_WEB_URL="$BASE/web" \
   JF_WATCH_HEALTH_URL="$BASE/healthz" \
   JF_WATCH_READY_CMD="$READY_OK" JF_WATCH_DF_CMD="$DF_OK" \
+  JF_WATCH_KANBAN_DB=auto \
+  JF_WATCH_KANBAN_DB_CANDIDATES=/nonexistent/a.db \
   JF_WATCH_ATTEMPT_DELAY=0 bash "$WATCH" 2>&1); rc=$?
 check "no notifier exits 2" "$rc" "2"
 contains "no notifier explains itself" "$out" "refusing to run without an alerting path"
 notcontains "no notifier logs no pass" "$(cat "$LOG")" "failed=0"
 
-# 15. A dead alerting backend is exit 3, not a green run: the failure was
+# 24. A dead alerting backend is exit 3, not a green run: the failure was
 #     detected and could not be delivered, which is an incident of its own.
 reset; printf 'web_down' >"$SB/mode"
 out=$(run JF_WATCH_NOTIFY_CMD="exit 1"); rc=$?
 check "undeliverable alert exits 3" "$rc" "3"
 contains "undeliverable alert is logged" "$(cat "$LOG")" "alert_undeliverable"
 
-# 16. The token may come from the environment alone, with no config file.
+# 25. The token may come from the environment alone, with no config file.
 reset
 out=$(env -i PATH="$PATH" HOME="$HOME" \
   JF_WATCH_ENV_FILE="$SB/does-not-exist" \
@@ -369,12 +559,15 @@ out=$(env -i PATH="$PATH" HOME="$HOME" \
   JF_WATCH_TELEGRAM_TOKEN=envtoken JF_WATCH_TELEGRAM_CHAT=12345 \
   JF_WATCH_NOTIFY_CMD="$NOTIFY_CMD" \
   JF_WATCH_READY_CMD="$READY_OK" JF_WATCH_DF_CMD="$DF_OK" \
+  JF_WATCH_KANBAN_DB=auto JF_WATCH_KANBAN_DB_CANDIDATES=/nonexistent/a.db \
   JF_WATCH_ATTEMPT_DELAY=0 bash "$WATCH"); rc=$?
 check "env-only config runs" "$rc" "0"
 
 echo "--- heartbeat digest ---"
 
-# 17. Digest mode sends its own heartbeat, so silence means the watcher died.
+# 26. Digest mode sends its own heartbeat, so silence means the watcher died.
+#     It also declares the BOARD check's state, so a disabled check is visible
+#     daily instead of being an invisible no-op: `board: NOT MEASURED here`.
 reset
 out=$(run); rc=$?
 out=$(run JF_WATCH_MODE=digest); rc=$?
@@ -383,10 +576,23 @@ check "digest sends one message" "$(alert_count)" "1"
 contains "digest is identifiable" "$(alerts)" "JomForm watchdog alive"
 contains "digest counts the passes" "$(alerts)" "checks run: 1"
 contains "digest reports the disk" "$(alerts)" "10% used on /"
+contains "digest reports the board check as disabled, not as fine" \
+  "$(alerts)" "board: NOT MEASURED here"
+
+# 27. The same digest, on a host that HAS a board, reports the measured rate —
+#     the heartbeat carries the number, so the absence of a page is informative.
+reset; make_board
+board_add t_a dev crashed 600 "$CRASH_ERR"
+KANBAN_DB_RUN="$BOARD"
+out=$(run); rc=$?
+out=$(run JF_WATCH_MODE=digest); rc=$?
+check "digest with a board exits 0" "$rc" "0"
+contains "digest reports the measured board rate" "$(alerts)" "board: board db="
+contains "digest reports the failure count it measured" "$(alerts)" "failures=1"
 
 echo "--- log rotation ---"
 
-# 18. A log over the cap is trimmed in place (same inode: a cron-held fd, or
+# 28. A log over the cap is trimmed in place (same inode: a cron-held fd, or
 #     `tail -f`, keeps working).
 reset
 : >"$LOG"

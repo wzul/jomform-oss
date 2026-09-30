@@ -21,6 +21,28 @@
 #              down, which would leave login and payments broken and this script
 #              silent.
 #   4. disk    `df` on the prod host over ssh, alert above JF_WATCH_DISK_MAX.
+#   5. board   the agent host's Kanban board: `task_runs` rows that ended
+#              crashed / gave_up / spawn_failed inside a trailing window. This is
+#              the host-fault heartbeat a real incident lacked: a broken spawn
+#              interpreter produced 110 crashed runs (9 in the 3 h before it was
+#              found) and NOTHING paged, because no monitor read task_runs. The
+#              only signal was a gateway journal WARNING ("dispatcher stuck … 0
+#              workers spawned") that ALSO carried `Last tick held back:
+#              active_pr=NN`, so it reads as "the respawn guard is doing its
+#              job" while the real cause was the host, and no page ever arrived.
+#              The detail states the split — total failures, how many distinct
+#              cards and LANES (`tasks=`/`profiles=`), how many the dispatcher
+#              itself attributed to the host (`infra=`), and how many died on the
+#              spawn-import signature — so a reader is told which of the two they
+#              are looking at instead of having to infer it.
+#
+#              Two shapes of "the board check is off", deliberately different:
+#                * JF_WATCH_KANBAN_DB set but unreadable/unparseable → a FAILURE
+#                  (alert), like an unreadable df: a watcher that cannot measure
+#                  must not say ok.
+#                * never configured and no board DB on this host → disabled, and
+#                  the daily digest SAYS so (`board: NOT MEASURED here`), because
+#                  a silently-disabled check is the original blindness.
 #
 # DELIVERY
 #   Telegram Bot API, called straight from this script. The alert path must not
@@ -84,6 +106,20 @@ LOG_MAX_BYTES="${JF_WATCH_LOG_MAX_BYTES:-1048576}"
 TG_TOKEN="${JF_WATCH_TELEGRAM_TOKEN:-}"
 TG_CHATS="${JF_WATCH_TELEGRAM_CHAT:-}"
 WATCH_HOST="${JF_WATCH_HOST:-$(hostname)}"
+
+# ── the Kanban board check (check 5) ────────────────────────────────────────
+# On an agent host the DEFAULT path is right and the check arms itself; on the
+# prod host no board exists and it stays disabled (and the digest says so).
+#   JF_WATCH_KANBAN_DB=auto          auto-detect the board DB (default)
+#   JF_WATCH_KANBAN_DB=<path>        watch this exact board DB
+#   JF_WATCH_KANBAN_DB=off           disable the board check explicitly
+KANBAN_DB_CFG="${JF_WATCH_KANBAN_DB:-auto}"
+# Tried in order when KANBAN_DB_CFG=auto; the first existing file wins.
+KANBAN_DB_CANDIDATES="${JF_WATCH_KANBAN_DB_CANDIDATES:-/root/.hermes/kanban/boards/jomform/kanban.db /root/.hermes/kanban.db}"
+KANBAN_WINDOW="${JF_WATCH_KANBAN_WINDOW_SECONDS:-3600}"   # trailing window
+KANBAN_THRESHOLD="${JF_WATCH_KANBAN_THRESHOLD:-3}"         # failures in the window
+# sqlite3 argv before the SQL, so the test can substitute it with a stub.
+KANBAN_SQLITE_OVERRIDE="${JF_WATCH_KANBAN_SQLITE_CMD:-}"
 
 # Test seams: full command lines that replace the real transport. Used by
 # jomform-watch_test.sh; unset in production.
@@ -321,6 +357,120 @@ check_disk() { # prints one line per over-threshold path, returns 0/1
   return $rc
 }
 
+# ─── check 5: the Kanban board's host-fault rate ────────────────────────────
+# WHY: 110 runs ended `crashed` on the live board (9 in the 3 h before anyone
+# noticed) and no monitor read `task_runs` at all. The fault was in the HOST —
+# the dispatcher spawned workers on an interpreter that could not import
+# `hermes_cli` — so the board filled with cards that each looked individually
+# broken while nothing about the host was watched.
+#
+# WHAT IS COUNTED: `task_runs.outcome` in ('crashed','gave_up','spawn_failed') —
+# the three host-fault outcomes. Deliberately NOT counted:
+#   * 'timed_out','reclaimed','blocked','review_requested','changes_requested'
+#     — a card that ran out of budget or was deliberately stopped is card-level
+#     work, not a host fault; paging on those is the noise that trains an
+#     operator to ignore the alert.
+#   * `infrastructure: true` runs are not a separate EXCLUSION — the dispatcher
+#     marks a host that REFUSED the spawn with that flag (no restart-safe scope,
+#     `RestartSafeScopeUnavailable`, #114720), and those are real host faults, so
+#     they count here too. They are reported separately in `infra=` because that
+#     flag is the dispatcher's own attribution and is a smaller set than the host
+#     faults this check is really about.
+#
+# The detail also carries BREADTH — `tasks=` (distinct task ids) and `profiles=`
+# (distinct lanes). Breadth is the discriminator the dispatcher's own flag cannot
+# give: `infrastructure: true` only marks a spawn the host REFUSED
+# (`RestartSafeScopeUnavailable`), while the incident's 110 runs were ordinary
+# `nonzero_exit` crashes that look exactly like a card failing. What made them a
+# HOST fault is that they hit MANY cards across MANY lanes at once (dev, qa,
+# merger, deployer) with one signature. Three crashes on one card is that card's
+# problem; three crashes on three different lanes inside one window is the host.
+# So the alert states the split instead of leaving the reader to infer it — the
+# inference is exactly what went wrong during the incident.
+
+# kanban_db_resolve — the board DB to read, or "" to disable the check.
+KANBAN_DB=""
+KANBAN_DB_DISABLED_REASON=""
+resolve_kanban_db() {
+  local cand
+  case "$KANBAN_DB_CFG" in
+    ""|auto) for cand in $KANBAN_DB_CANDIDATES; do
+               [ -f "$cand" ] && { KANBAN_DB="$cand"; return 0; }
+             done
+             KANBAN_DB_DISABLED_REASON="no board DB at: $KANBAN_DB_CANDIDATES"
+             return 0 ;;
+    off|none|disabled)
+             KANBAN_DB_DISABLED_REASON="disabled by JF_WATCH_KANBAN_DB=$KANBAN_DB_CFG"
+             return 0 ;;
+    *)       KANBAN_DB="$KANBAN_DB_CFG"; return 0 ;;
+  esac
+}
+
+kanban_sqlite() { # db_uri sql
+  if [ -n "$KANBAN_SQLITE_OVERRIDE" ]; then
+    # shellcheck disable=SC2086
+    $KANBAN_SQLITE_OVERRIDE "$2"
+    return $?
+  fi
+  sqlite3 -readonly "$1" "$2"
+}
+
+check_kanban() { # prints detail, returns 0 healthy / 1 failing / 2 disabled
+  resolve_kanban_db
+  if [ -z "$KANBAN_DB" ]; then
+    printf 'board disabled=1 reason=%s' "$(printf '%s' "$KANBAN_DB_DISABLED_REASON" | tr ' ' '_')"
+    return 2   # 2 = not applicable (disabled), NOT a failure
+  fi
+  # The DB is gone/misnamed: a watcher that cannot measure must not say ok.
+  [ -f "$KANBAN_DB" ] || {
+    printf 'board unreadable db=%s not_a_file' "$KANBAN_DB"
+    return 1
+  }
+  local uri out rc
+  # `mode=ro` in the URI AND `-readonly`: never take a write lock on the live
+  # board DB, and never leave a `-wal`/`-shm` pair behind.
+  uri="file:$KANBAN_DB?mode=ro"
+  # One round-trip, five scalars. `error LIKE '%ModuleNotFoundError%'` is the
+  # import-failure signature of the incident that produced this card: the
+  # dispatcher spawns on an interpreter that cannot import `hermes_cli`. It is
+  # reported because it names the FAULT (and its fix), not just the symptom —
+  # a bare crash count sends a reader to the cards instead of to the host.
+  out="$(kanban_sqlite "$uri" "
+    SELECT
+      (SELECT count(*) FROM task_runs
+        WHERE outcome IN ('crashed','gave_up','spawn_failed')
+          AND started_at > strftime('%s','now') - $KANBAN_WINDOW),
+      (SELECT count(DISTINCT task_id) FROM task_runs
+        WHERE outcome IN ('crashed','gave_up','spawn_failed')
+          AND started_at > strftime('%s','now') - $KANBAN_WINDOW),
+      (SELECT count(DISTINCT COALESCE(profile,'-')) FROM task_runs
+        WHERE outcome IN ('crashed','gave_up','spawn_failed')
+          AND started_at > strftime('%s','now') - $KANBAN_WINDOW),
+      (SELECT count(*) FROM task_runs
+        WHERE outcome IN ('crashed','gave_up','spawn_failed')
+          AND started_at > strftime('%s','now') - $KANBAN_WINDOW
+          AND json_extract(metadata, '\$.infrastructure') IS NOT NULL),
+      (SELECT count(*) FROM task_runs
+        WHERE outcome = 'crashed'
+          AND started_at > strftime('%s','now') - $KANBAN_WINDOW
+          AND error LIKE '%ModuleNotFoundError%');" 2>&1)"
+  rc=$?
+  # A board that is not a board, a locked/missing DB, or an sqlite3 that is not
+  # installed all land here: refuse to report ok on a measurement that did not
+  # happen, the same shape as an unreadable `df`.
+  if [ $rc -ne 0 ] || ! grep -Eq '^[0-9]+\|[0-9]+\|[0-9]+\|[0-9]+\|[0-9]+$' <<<"$out"; then
+    printf 'board unreadable db=%s err=%s' "$KANBAN_DB" \
+      "$(printf '%s' "$out" | tr '\n' ' ' | cut -c1-160)"
+    return 1
+  fi
+  local total tasks profiles infra importfail
+  IFS='|' read -r total tasks profiles infra importfail <<<"$out"
+  printf 'board db=%s failures=%s tasks=%s profiles=%s infra=%s window=%ss threshold=%s import_err=%s' \
+    "$KANBAN_DB" "$total" "$tasks" "$profiles" "$infra" "$KANBAN_WINDOW" "$KANBAN_THRESHOLD" "$importfail"
+  [ "$total" -lt "$KANBAN_THRESHOLD" ] || return 1
+  return 0
+}
+
 # ─── edge-triggered alerting ────────────────────────────────────────────────
 
 ALERT_LINES=""
@@ -398,6 +548,17 @@ if [ "$MODE" = "digest" ]; then
   status="all ok"
   [ "$(counter_get failures_total)" = 0 ] || status="$(counter_get failures_total) failing run(s) so far"
   disk_line="$(remote_df "$DISK_PATHS" 2>/dev/null | awk 'NR==2{printf "%s used on %s", $5, $6}')"
+  # The board check's own state, reported here on purpose: the digest is the
+  # watchdog's heartbeat, so "the board check is disabled on this host" is
+  # visible daily instead of being an invisible no-op (#110 crashed runs and no
+  # monitor, which is the defect this check closes).
+  kb_rc=0
+  kb_line="$(check_kanban)" || kb_rc=$?
+  case "$kb_rc" in
+    0) kb_line="board: $kb_line" ;;
+    2) kb_line="board: NOT MEASURED here ($kb_line)" ;;
+    *) kb_line="board: UNREADABLE — $kb_line" ;;
+  esac
   body="🩺 JomForm watchdog alive
 $(alert_subject)
 $(TZ=Asia/Kuala_Lumpur date '+%Y-%m-%d %H:%M %Z')
@@ -405,6 +566,7 @@ checks run: $(counter_get checks_total)
 failing runs: $(counter_get failures_total)
 alerts sent: $(counter_get alerts_total)
 prod disk: ${disk_line:-unreadable}
+${kb_line}
 last status: ${status}"
   send_message "$body" || exit 3
   log info "digest_sent checks=$(counter_get checks_total) failures=$(counter_get failures_total)"
@@ -459,6 +621,23 @@ else
   failed=1
   record_failure disk "$dl"
 fi
+
+# Board check. Three outcomes, deliberately distinct:
+#   0 healthy   — counted, recoverable (an alert must be able to say RECOVERED)
+#   1 failing   — the host-fault rate is over the threshold, or the board DB
+#                 could not be read (a watcher that cannot measure must not say ok)
+#   2 disabled  — no board on this host (prod). Reported, never alerted, and the
+#                 digest states it: a silently-disabled check is the blindness
+#                 this check exists to remove.
+kb_rc=0
+kb=$(check_kanban) || kb_rc=$?
+results="${results}${kb} | "
+case "$kb_rc" in
+  0|2) record_recovery board "$kb" ;;   # 2 = disabled here; still a recovery
+                                        # from any prior DOWN (a check that
+                                        # stopped measuring is not "down")
+  *) failed=1; record_failure board "$kb" ;;
+esac
 
 counter_add checks_total 1
 [ "$failed" = 1 ] && counter_add failures_total 1
