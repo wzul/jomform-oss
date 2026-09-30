@@ -81,20 +81,35 @@
 # failure twice (once in the run, once under "✖ failing tests:"), so a grep over
 # `✖` reports 2 or 3 for a single failure.
 #
-# A CAUGHT-UP BASE IS REFUSED, NOT REPORTED AS `fail=1` (card `t_858620fc`). The
-# premise check below only refuses a base that does not CARRY the guard at all
-# (`git cat-file -e`). It does not cover the base whose reader has CAUGHT UP to this
-# branch: once the fix MERGES into `origin/main`, the base guard is still there and
-# still GREEN on the unmutated tree, so the premise holds — and then every HOLE case
-# reads `does not reproduce the premise`, seven `***` lines and a silent
-# `BITEPROOF FAIL (fail=1)`, a reading indistinguishable from "the base is genuinely
-# pre-fix and the mutations failed to apply". What identifies a caught-up base is the
-# reader's CAPABILITY (it DECLARES `stripUnrendered(read(DOCS_PAGE))`), never a byte
-# distance — the guard can be rewritten around the same reader. When it is caught up
-# this script REFUSES (exit 2) and prints a `BITEPROOF_BASE=<rev>` resolved from git
-# and offered only when that revision's guard really is pre-fix. The refusal is
-# itself driven end to end on every run (see the self-check), so the instrument
-# cannot silently go back to printing a false FAIL the next time main catches up.
+# A BASE THIS READ CANNOT USE IS REFUSED, NOT REPORTED AS `fail=1` (card
+# `t_858620fc`, widened by card `t_01df90af`). The premise check below only refuses a
+# base that does not CARRY the guard at all (`git cat-file -e`). It does not cover the
+# base whose reader has CAUGHT UP to this branch: once the fix MERGES into
+# `origin/main`, the base guard is still there and still GREEN on the unmutated tree,
+# so the premise holds — and then every HOLE case reads `does not reproduce the
+# premise`, seven `***` lines and a silent `BITEPROOF FAIL (fail=1)`, a reading
+# indistinguishable from "the base is genuinely pre-fix and the mutations failed to
+# apply".
+#
+# WHAT IS TESTED, exactly (card `t_01df90af` corrected this paragraph's over-claim):
+# the base guard's TEXT is read for a DECLARATION of `docsSrc` — never its byte
+# distance from this tree's file, because the guard can be rewritten around the SAME
+# reader while the readers do not differ at all (the sibling's byte fast path was
+# itself unsatisfiable, card `t_dba4465c`). The read is a line-anchored pattern that
+# tolerates the whitespace and the declaration keyword a reformat may change, and it
+# has THREE outcomes:
+#   PRE      a declaration of the pre-fix reader -> fall through and measure;
+#   POST     a declaration of the post-fix reader -> REFUSE (the base is caught up);
+#   UNKNOWN  NEITHER declaration is present -> REFUSE. A base whose `docsSrc` is a
+#            longer expression (a `read(DOCS_PAGE)` with a `.replace()`, a helper) is
+#            not demonstrably pre-fix, and ASSUMING "pre-fix" for a shape this read
+#            does not recognise is exactly how a caught-up base reads as a green
+#            column: the whole failure above comes back. It fails closed instead.
+# Both refusals exit 2 and print a `BITEPROOF_BASE=<rev>` resolved from git — offered
+# only after that revision's guard is re-read and shown to declare the pre-fix reader.
+# The refusal is itself driven end to end on every run, in ALL THREE directions (see
+# the self-check), so the instrument cannot silently go back to printing a false FAIL
+# the next time main catches up.
 #
 # Run:  bash web/scripts/biteproof_docs_index_render_sites.sh
 set -uo pipefail
@@ -108,12 +123,26 @@ cd "$(dirname "$0")/.." || exit 2          # -> web/
 
 PAGE=src/app/docs/page.tsx
 GUARD=src/lib/docsIndex.test.ts
-# THE CAPABILITY TEST for a caught-up base, and why it is not a byte comparison:
-# once the fix MERGES into `origin/main` the base guard stays a few bytes off this
-# tree's while READING THE SAME stripped text, so a byte test would compare a reader
-# with itself (the sibling's byte fast path was itself unsatisfiable — card
-# `t_dba4465c`). What identifies the reader is what it DECLARES: these two lines are
-# the shapes either side of the fix (`7b90dd7c` has the first, `4952045b` the second).
+# READING THE READER, and why it is not a byte comparison (cards `t_858620fc` and
+# `t_01df90af`): once the fix MERGES into `origin/main` the base guard stays a few
+# bytes off this tree's while READING THE SAME stripped text, so a byte test would
+# compare a reader with itself (the sibling's byte fast path was itself unsatisfiable
+# — card `t_dba4465c`). What is read instead is the base guard's TEXT, for a
+# DECLARATION of the module-level reader. These are the two shapes either side of the
+# fix (`7b90dd7c` declares the first, `4952045b` the second, measured over every
+# revision of this guard).
+#
+# Anchored at the line START, not a bare substring: a match anywhere in the file would
+# be satisfied by the same text quoted in a comment or a string while the real reader
+# is something else (the defect t_7b24b035 fixed one layer down, in the guard itself).
+# The pattern still tolerates what a reformat may change — leading whitespace, an
+# `export`, `const`/`let`/`var` — because the point is the CAPABILITY, not the bytes.
+# A reader spelled as a longer expression matches NEITHER declaration, which is
+# deliberate: `reader_class` then answers UNKNOWN and the run refuses rather than
+# assuming "pre-fix" for a shape it cannot read.
+PRE_READER_RE='^[[:space:]]*(export[[:space:]]+)?(const|let|var)[[:space:]]+docsSrc[[:space:]]*=[[:space:]]*read\(DOCS_PAGE\)'
+POST_READER_RE='^[[:space:]]*(export[[:space:]]+)?(const|let|var)[[:space:]]+docsSrc[[:space:]]*=[[:space:]]*stripUnrendered\(read\(DOCS_PAGE\)\)'
+# The spellings the operator is shown, and the ones the diagnostics name.
 PRE_READER='const docsSrc = read(DOCS_PAGE)'
 POST_READER='const docsSrc = stripUnrendered(read(DOCS_PAGE))'
 OLD_GUARD=$(mktemp)
@@ -139,6 +168,7 @@ cleanup() {
   cp "$PAGE_BAK" "$PAGE" 2>/dev/null
   rm -f "$OLD_GUARD" "$PAGE_BAK"
   rm -f "$OLDTMP" "$SKTMP" "$NOLOADTMP" "$MISSINGTMP"
+  rm -f "$GUARD.selfcheck_unknown.$$.tmp" "$GUARD.selfcheck_unknown.$$.idx"
   exit "$rc"
 }
 trap cleanup EXIT
@@ -161,15 +191,34 @@ guard_sha_before=$(sha256sum "$GUARD" | cut -d' ' -f1)
 echo "old guard (${BASE_REF} ${BASE_REV:0:12}): $(wc -l < "$OLD_GUARD") lines"
 echo "new guard (this tree):             $(wc -l < "$GUARD") lines"
 
-# ── CAPABILITY TEST: IS THE BASE READER PRE-FIX, OR HAS IT CAUGHT UP? ─────────
-# Reads the base guard's TEXT, never its byte distance from this tree's file. A
-# byte test cannot decide this: once the fix merges into `origin/main` the guard can
-# be rewritten around the SAME reader, so the two files differ by bytes while the
-# readers do not differ at all — and that is the state this refuses (the sibling's
-# byte fast path was itself unsatisfiable, card `t_dba4465c`).
-base_reader_is_pre() { # <rev> -> 0 when its guard declares the PRE-fix reader
+# ── WHAT THE BASE'S READER IS: PRE-FIX, POST-FIX, OR UNREADABLE ──────────────
+# Reads the base guard's TEXT for a DECLARATION of the reader, never its byte
+# distance from this tree's file. A byte test cannot decide this: once the fix
+# merges into `origin/main` the guard can be rewritten around the SAME reader, so
+# the two files differ by bytes while the readers do not differ at all — and that
+# is the state this refuses (the sibling's byte fast path was itself unsatisfiable,
+# card `t_dba4465c`).
+#
+# reader_class <rev> -> PRE | POST | UNKNOWN on stdout, 1 when the guard cannot be
+#   read at all. POST means the base declares the post-fix reader (caught up).
+#   UNKNOWN means NEITHER declaration is present: a `docsSrc` spelled as a longer
+#   expression, a helper, a rewrite this read does not recognise. It is NOT
+#   "pre-fix" — nothing here showed the reader is the raw one — and assuming it were
+#   is how a caught-up base gets measured as if it were the "before" column
+#   (card `t_01df90af`: a post-fix reader carrying a stale `const docsSrc =
+#   read(DOCS_PAGE)` in a comment used to come back "pre-fix").
+reader_class() { # <rev> -> PRE | POST | UNKNOWN
   local body; body=$(git show "$1:$GUARD_IN_REPO" 2>/dev/null) || return 1
-  grep -qF "$PRE_READER" <<<"$body" && ! grep -qF "$POST_READER" <<<"$body"
+  grep -qE "$POST_READER_RE" <<<"$body" && { printf 'POST'; return 0; }
+  grep -qE "$PRE_READER_RE"  <<<"$body" && { printf 'PRE';  return 0; }
+  printf 'UNKNOWN'
+}
+# DEMONSTRABLY pre-fix: the base declares the pre-fix reader, and does not declare
+# the post-fix one. Anything else — POST, UNKNOWN, unreadable — is refused by
+# refuse_caught_up_base, which the caller reaches through this predicate.
+# Fails closed on "cannot tell" rather than treating it as pre-fix.
+base_reader_is_pre() { # <rev> -> 0 only when its guard DECLARES the pre-fix reader
+  [ "$(reader_class "$1")" = PRE ]
 }
 
 # introducing_commit <rev> -> the commit that first DECLARES the post-fix reader in
@@ -178,6 +227,11 @@ base_reader_is_pre() { # <rev> -> 0 when its guard declares the PRE-fix reader
 # is older than <rev>'s history (the oldest revision already declares it), rather
 # than naming a revision it has not checked. (Same rule the sibling
 # api/scripts/biteproof_model_default_guard.py uses, card `t_34ab7a00`.)
+#
+# It reads with the SAME declaration pattern `reader_class` uses (card `t_01df90af`):
+# if the two disagreed, the refusal could name a revision it then classifies as
+# UNKNOWN and refuses — the loop the sibling card removed by deriving the named
+# revision from the commit that introduced the reader rather than guessing.
 introducing_commit() { # <rev> -> sha, or empty
   local revs oldest r body
   # `:/<path>` is the repo-root-relative pathspec form: this script has already `cd`ed
@@ -187,31 +241,42 @@ introducing_commit() { # <rev> -> sha, or empty
   [ -z "$revs" ] && return 1
   oldest=${revs%%$'\n'*}
   body=$(git show "$oldest:$GUARD_IN_REPO" 2>/dev/null) || return 1
-  grep -qF "$POST_READER" <<<"$body" && return 1   # older than this history
+  grep -qE "$POST_READER_RE" <<<"$body" && return 1   # older than this history
   while IFS= read -r r; do
     [ -z "$r" ] && continue
     body=$(git show "$r:$GUARD_IN_REPO" 2>/dev/null) || continue
-    if grep -qF "$POST_READER" <<<"$body"; then printf '%s' "$r"; return 0; fi
+    if grep -qE "$POST_READER_RE" <<<"$body"; then printf '%s' "$r"; return 0; fi
   done <<<"$revs"
   return 1
 }
 
-# The refusal itself. It names the cause, prints a BITEPROOF_BASE suggestion RESOLVED
-# from git (never a literal), and only offers that revision when its guard really is
-# pre-fix — a suggestion that refuses too is the loop this whole family of cards is
-# about. No verdict and no bite count is printed for a base this run did not measure.
+# The refusal itself. It names the CAUSE it found — a caught-up reader (POST) or a
+# reader this read cannot place (UNKNOWN) — prints a BITEPROOF_BASE suggestion
+# RESOLVED from git (never a literal), and only offers that revision when its guard is
+# re-read and shown to DECLARE the pre-fix reader — a suggestion that refuses too is
+# the loop this whole family of cards is about. No verdict and no bite count is
+# printed for a base this run did not measure.
 refuse_caught_up_base() {
-  local intro='' parent=''
+  local klass intro='' parent=''
+  klass=$(reader_class "$BASE_REV") || klass=''
   echo >&2
   echo "BITEPROOF REFUSED (VERDICT=REFUSED, exit 2): the base guard (${BASE_REF} ${BASE_REV:0:12})" >&2
-  echo "has CAUGHT UP to this tree's — ${GUARD_IN_REPO} there already declares" >&2
-  echo "  ${POST_READER}" >&2
-  echo "which is this tree's reader. Both legs would be one reader measured against itself," >&2
-  echo "so there is no \"before\" column to prove anything against. This is the silent shape" >&2
-  echo "this refusal exists for: the premise check would PASS (that guard is GREEN on the" >&2
-  echo "unmutated tree) and every HOLE case would read \"does not reproduce the premise\" — a" >&2
-  echo "fail=1 reading indistinguishable from a base that is genuinely pre-fix with mutations" >&2
-  echo "that stopped applying." >&2
+  if [ "$klass" = POST ]; then
+    echo "has CAUGHT UP to this tree's — ${GUARD_IN_REPO} there already declares" >&2
+    echo "  ${POST_READER}" >&2
+    echo "which is this tree's reader: both legs would be one reader measured against itself." >&2
+  else
+    echo "declares NEITHER reader this harness knows, so this run cannot show it is PRE-fix:" >&2
+    echo "  pre-fix:  ${PRE_READER}" >&2
+    echo "  post-fix: ${POST_READER}" >&2
+    echo "A \`docsSrc\` spelled as a longer expression (a \`.replace()\`, a helper) may be either," >&2
+    echo "and ASSUMING pre-fix is exactly how a caught-up base reads as the \"before\" column." >&2
+  fi
+  echo "There is no \"before\" column to prove anything against. This is the silent shape this" >&2
+  echo "refusal exists for: the premise check would PASS (that guard is GREEN on the unmutated" >&2
+  echo "tree) and every HOLE case would read \"does not reproduce the premise\" — a fail=1 reading" >&2
+  echo "indistinguishable from a base that is genuinely pre-fix with mutations that stopped" >&2
+  echo "applying." >&2
   intro=$(introducing_commit "$BASE_REV") || intro=''
   if [ -n "$intro" ]; then
     parent=$(git rev-parse "${intro}^" 2>/dev/null) || parent=''
@@ -240,12 +305,13 @@ refuse_caught_up_base() {
 
 # SELF-CHECK OF THE REFUSAL, ON EVERY RUN — the check-the-check pattern
 # BITE-HARNESSES.md records for biteproof_unlock_class_guard.py. The refusal above is
-# only worth having if it fires on a caught-up base AND stays quiet on a pre-fix one;
-# both legs run the REAL script (BITEPROOF_REFUSE_ONLY=1, which resolves the base,
-# applies the capability test and exits 3 without a refusal) so a refusal that
-# refuses everything is caught here instead of looking like a fix.
+# only worth having if it fires on a caught-up base, fires on a base whose reader this
+# read cannot place, AND stays quiet on a pre-fix one. ALL THREE legs run the REAL
+# script (BITEPROOF_REFUSE_ONLY=1, which resolves the base, applies the capability
+# test and exits 3 without a refusal) so a refusal that refuses everything is caught
+# here instead of looking like a fix.
 selfcheck_caught_up_refusal() {
-  local ref rev intro parent out rc1 rc2
+  local ref rev intro parent out rc1 rc2 rc3 unknowntree
   for ref in origin/main HEAD; do
     rev=$(git rev-parse "${ref}^{commit}" 2>/dev/null) || continue
     intro=$(introducing_commit "$rev") || intro=''
@@ -262,6 +328,44 @@ selfcheck_caught_up_refusal() {
     echo "fire is the defect this instrument exists to remove. Refusing (exit 2)." >&2
     exit 2
   fi
+  # leg 3's fixture: a guard whose reader is spelled so NEITHER declaration matches —
+  # the "cannot tell" shape (card t_01df90af). Built as a real COMMIT in the object DB
+  # (head's tree with the guard blob swapped): `BITEPROOF_BASE` must resolve to a
+  # commit, so a bare blob would make the child die on "cannot resolve" and the leg
+  # would prove nothing. GIT_INDEX_FILE is a temp file, so this worktree's real index
+  # is never touched; the objects are unreferenced and gc prunes them. The text is
+  # transformed in a temp file the fixture removes.
+  #
+  # The index path must be ABSOLUTE: git resolves a relative GIT_INDEX_FILE against
+  # the repo TOPLEVEL, not the cwd (measured: `src/lib/x.idx` from web/ tried
+  # `<worktree>/src/lib/…`, which does not exist — read-tree died 128 and this
+  # self-check exited 2 saying nothing).
+  local rewriter="$PWD/$GUARD.selfcheck_unknown.$$.tmp" idx="$PWD/$GUARD.selfcheck_unknown.$$.idx" tree=''
+  awk -v anchor="$POST_READER" '
+    index($0, anchor) {
+      indent = substr($0, 1, index($0, anchor) - 1)
+      printf "%s// pre-fix spelling: %s\n", indent, anchor
+      printf "%sconst docsSrc = stripUnrendered(read(DOCS_PAGE).replace(/\\s+$/, \"\"));\n", indent
+      seen = 1
+      next
+    }
+    { print }
+    END { if (!seen) exit 1 }
+  ' "$GUARD" > "$rewriter" || { rm -f "$rewriter"; exit 2; }
+  tree="$(git hash-object -w --stdin < "$rewriter")" || { rm -f "$rewriter"; exit 2; }
+  rm -f "$rewriter"
+  rm -f "$idx"
+  GIT_INDEX_FILE="$idx" git read-tree HEAD 2>/dev/null || { rm -f "$idx"; exit 2; }
+  # The path must be the REPO-ROOT-relative one (`$GUARD_IN_REPO`), because the index
+  # is the repo's: `$GUARD` is relative to web/ and git rejects it (measured: "fatal:
+  # path 'web/src/lib/docsIndex.test.ts' exists, but not 'src/lib/docsIndex.test.ts'").
+  GIT_INDEX_FILE="$idx" git update-index --cacheinfo "100644,$tree,$GUARD_IN_REPO" 2>/dev/null \
+    || { rm -f "$idx"; exit 2; }
+  tree=$(GIT_INDEX_FILE="$idx" git write-tree) || { rm -f "$idx"; exit 2; }
+  rm -f "$idx"
+  unknowntree=$(git commit-tree "$tree" -p HEAD -m \
+    "biteproof refusal self-check fixture (a reader this read cannot place)") \
+    || { echo "BITEPROOF REFUSED: could not build the unplaceable-reader fixture" >&2; exit 2; }
   echo "refusal self-check: post-fix fixture ${intro:0:12}, pre-fix fixture ${parent:0:12}"
   out=$(BITEPROOF_REFUSE_ONLY=1 BITEPROOF_BASE="$intro" bash "$SELF" 2>&1); rc1=$?
   if [ "$rc1" != 2 ] || ! grep -qF 'BITEPROOF REFUSED (VERDICT=REFUSED' <<<"$out"; then
@@ -287,20 +391,40 @@ selfcheck_caught_up_refusal() {
     echo "$out" | tail -4 >&2
     exit 2
   fi
+  # leg 3: the "cannot tell" shape must REFUSE (fail closed), not be assumed pre-fix.
+  # Before card t_01df90af this fixture classified as PRE and the run fell through to
+  # measure it — silently, in the exact failure mode the refusal exists to remove.
+  out=$(BITEPROOF_REFUSE_ONLY=1 BITEPROOF_BASE="$unknowntree" bash "$SELF" 2>&1); rc3=$?
+  # The refusal must fire AND name ITS cause — a child that refused a fixture the
+  # capability test never saw (an unresolvable base, a missing guard) exits 2 with a
+  # different message, and reading that as proof would be the same "green for the
+  # wrong reason" this leg exists to catch.
+  if [ "$rc3" != 2 ] || ! grep -qF 'declares NEITHER reader' <<<"$out"; then
+    echo >&2
+    echo "BITEPROOF REFUSED: the refusal does not cover a base whose reader it CANNOT PLACE — a" >&2
+    echo "guard declaring NEITHER reader (fixture ${unknowntree:0:12}) came back exit ${rc3} without" >&2
+    echo "the NEITHER-reader refusal. Assuming \"pre-fix\" for a shape this read does not recognise is" >&2
+    echo "how a caught-up base reads as the \"before\" column — the failure this refusal exists to" >&2
+    echo "remove. Fix reader_class first." >&2
+    echo "$out" | tail -6 >&2
+    exit 2
+  fi
 }
 # Skipped in the probe child (BITEPROOF_REFUSE_ONLY=1): the child's job is only to
 # apply the capability test and report its exit code, and letting it run this
 # self-check would recurse without end (measured: the run hung on its first probe).
 [ "${BITEPROOF_REFUSE_ONLY:-0}" = 1 ] || selfcheck_caught_up_refusal
 
-# CAPABILITY TEST OF THIS RUN'S OWN BASE. Runs after the self-check, so the mechanism
-# is proved before it is used. A caught-up base refuses here; a pre-fix one falls
-# through to the premise check below.
+# CLASSIFY THIS RUN'S OWN BASE AND REFUSE IF IT IS NOT USABLE. Runs after the
+# self-check, so the mechanism is proved before it is used. Anything that is not
+# DEMONSTRABLY pre-fix refuses here (a caught-up reader, or a reader this read cannot
+# place); only a declared pre-fix reader falls through to the premise check below.
 base_reader_is_pre "$BASE_REV" || refuse_caught_up_base
 
 # The probe child's exit: reached only with BITEPROOF_REFUSE_ONLY=1, and only when the
-# capability test above did NOT refuse — so the self-check can tell "refused" (exit 2)
-# from "did not refuse" (exit 3) by exit code alone.
+# classification above did NOT refuse — so the self-check can tell "refused" (exit 2)
+# from "did not refuse" (exit 3) by exit code alone. It is only reached for a base
+# whose reader is DEMONSTRABLY pre-fix.
 if [ "${BITEPROOF_REFUSE_ONLY:-0}" = 1 ]; then
   echo "BITEPROOF CAPABILITY: ${BASE_REF} ${BASE_REV:0:12} is PRE-fix (not refused)"
   exit 3
