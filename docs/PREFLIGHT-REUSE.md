@@ -65,34 +65,55 @@ it is not what a merger needs when it decides to squash.
   *environment*, not just a tree: the Go toolchain, the installed web dependency
   set (`web/node_modules/.package-lock.json`), `scripts/preflight.sh` and
   `scripts/gate_result.sh` themselves, the test-database host/database, and
-  `PREFLIGHT_KEY_EXTRA` for anything else. Credentials are stripped — only
-  `host:port/database` is stored. **The host is a fact about the SERVER, not about
-  its spelling:** `localhost`, `127.0.0.1` and `[::1]` are canonicalised to the
-  single token `loopback`, so one database yields one key however the caller wrote
-  it. Before this rule the URL's host string was hashed verbatim, and a gate that
-  ran green on tree `f98b5fcf` under the test-env file
-  (`` `${JOMFORM_ENV:-$HOME/.config/jomform/test-env.sh}` ``, which exports
-  `127.0.0.1`) was refused by the very next reader that spelled it
+  `PREFLIGHT_KEY_EXTRA` for anything else. Credentials are stripped, and **which
+  shape a value has decides how**. A URL-form value (`scheme://…`) whose authority
+  carries userinfo (`…/u1:pw@host:port/db`) is stripped at the last `@` in the
+  authority — the anchor Go's `net/url` uses — so a password containing `@` or `/`
+  (what a base64 or URL-encoded password routinely carries) does not survive into
+  the record. The query string is dropped before that, and the scheme with it, so
+  `?options=…` never reaches the file either. A value whose **authority carries no
+  userinfo** and whose database name does (`…/hostA:5432/db@x`) is kept whole: the
+  text before the first `/` is the ADDRESS the driver resolves (measured with the
+  pinned pgx v5.10.0), so that `@` is not a credential delimiter, and stripping it
+  would collapse `hostA:5432/db@x`, `hostB:5432/db@x` and `hostA:5432/other@x` onto
+  ONE component and ONE key — a record written against hostA accepted as evidence
+  about hostB. A bracketed IPv6 authority (`[::1]:5432`) is an address too and is
+  kept for the same reason. Where the authority is neither an address nor clean
+  userinfo — `…://u1:pw@host:port/db`, a shape the driver itself REFUSES — the
+  value is stripped at its last `@`: that direction can only refuse a record, and
+  it never leaves a credential on disk. So the component this produces is always
+  `<host>[:port][/database]`; what the strip *removes* is the credential, and what
+  it KEEPS is the host, port and database, because a record made against another
+  database is not evidence about this one.
+
+  **The host is a fact about the SERVER, not about its spelling:** `localhost`,
+  `127.0.0.1` and `[::1]` are canonicalised to the single token `loopback`, so one
+  database yields one key however the caller wrote it. Before this rule the URL's
+  host string was hashed verbatim, and a gate that ran green on tree `f98b5fcf`
+  under the test-env file (`` `${JOMFORM_ENV:-$HOME/.config/jomform/test-env.sh}` ``,
+  which exports `127.0.0.1`) was refused by the very next reader that spelled it
   `localhost` — same server, same database, caller's environment unchanged —
   because the two spellings hashed to different keys. The refusal says only "the
   environment changed since that record", so the lane re-queued behind the
   host-wide flock (waiter measured at 50-86 minutes) to re-run fifteen gates that
   had already passed on those exact bytes. The canonicalisation is an ANCHORED
-  match on `<host>[:port][/database]` only; every other host is hashed verbatim,
-  and a second server (another port) or a second database (another name) still
-  produces a different key, so a record can never be evidence about another
-  database. The Node version is recorded in `key_parts`
-  but is NOT hashed into `key`: it is a property of the shell on this host, not
-  of the tree, and pinning it made reuse dead between the two shapes that actually
-  run the gates (an interactive shell with nvm, and a worker lane that resolves
-  `/root/.hermes/tools/node-*/bin`), which refused records on byte-identical trees.
-  A run under a different Node still accepts the record but says so out loud
-  (`OBSERVED under node …; this run resolves node …`), and the installed web
-  dependency set — which *is* hashed — is what carries the toolchain signal.
-  **This rule changes the canonical form, so a record written before it carries
-  `testdb=127.0.0.1:…` and is refused once** (the key material moved; that is
-  rule 3 below, not a fault). A record written after it carries
-  `testdb=loopback:…` and is reusable under either spelling.
+  match on `<host>[:port][/database]` only — which is exactly the form the strip
+  above guarantees, so `[::1]:5432/db@x` is canonicalised in its host slot while
+  its port and database stay nameable. Every other host is hashed verbatim, and a
+  second server (another port) or a second database (another name) still produces a
+  different key, so a record can never be evidence about another database. The
+  **Node version is recorded in `key_parts` but is NOT hashed into `key`**: it is a
+  property of the shell on this host, not of the tree, and pinning it made reuse
+  dead between the two shapes that actually run the gates (an interactive shell
+  with nvm, and a worker lane that resolves `/root/.hermes/tools/node-*/bin`),
+  which refused records on byte-identical trees. A run under a different Node still
+  accepts the record but says so out loud (`OBSERVED under node …; this run
+  resolves node …`), and the installed web dependency set — which *is* hashed — is
+  what carries the toolchain signal. **The canonicalisation changes the canonical
+  form, so a record written before it carries `testdb=127.0.0.1:…` and is refused
+  once** (the key material moved; that is rule 3 below, not a fault). A record
+  written after it carries `testdb=loopback:…` and is reusable under either
+  spelling.
 * **`gates`** — per-gate verdict with the seconds it took and a `reused` flag.
   `reused: true` means a **later** run carried this entry over rather than
   re-running the gate; the `at` timestamp still names the run that **observed** it.

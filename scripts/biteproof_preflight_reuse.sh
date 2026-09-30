@@ -36,6 +36,32 @@
 #       already passed on those bytes. Guard: the host is canonicalised to one
 #       token for the loopback spellings only, and another port or another
 #       database still yields a different key.
+
+#   35. The credential strip must be TOTAL, and the fingerprint must still bite.
+#       `s#^[^@/]*@##` was ALL-OR-NOTHING: it consumed userinfo only when an `@`
+#       was preceded by neither an `@` nor a `/`, so a password containing either
+#       character was not stripped AT ALL and the credential landed in the record
+#       file AND in its key material. Guard: the userinfo is stripped from its
+#       right anchor (the last `@` in the authority, the same anchor Go's net/url
+#       uses), while another database and another port still produce different
+#       components and different keys.
+#
+#   37. A DSN WITH NO USERINFO WHOSE PATH CARRIES AN `@` MUST KEY ON THE SERVER.
+#       The second step of the strip dropped everything through the LAST `@` in
+#       the WHOLE value, so for `…://hostA:5432/db@x` — no userinfo anywhere, the
+#       `@` belongs to the DATABASE name — the host and port went with it, and
+#       three different servers produced ONE component and ONE key: a record
+#       written against hostA was reused as evidence about hostB. Guard: the
+#       anchor is decided by the authority — where the text before the first `/`
+#       IS `host[:port]` (a bracketed IPv6 address included) the whole value is
+#       kept, because that is the read the driver takes; where it is not, the
+#       strip is kept and can only refuse a record.
+#
+#       NUMBERED 35 AND 37, NOT 34. Checks 34 is the test-db host SPELLING check
+#       (card t_7add0cfa, PR 863) — a change to the SAME function, verified on its
+#       exact bytes. Taking 34 here would force whoever lands second to renumber,
+#       which rewrites bytes another card's verdict was taken on. Cases 5 and 7
+#       below are numbered to match, above PR 863's case 4.
 #
 # WHY A SCRIPT AND NOT A PER-RUN GATE: every case mutates scripts/*.sh in place.
 # The live `selftest` gate runs against the tree under test, so it can never
@@ -162,11 +188,17 @@ echo "---"
 # in the cases below is the sabotage and not this tree being broken. A guard that
 # always fails is as useless as one that never fires, and the card requires both
 # directions.
+#
+# NOTE ON `git status`: this harness compares git status BEFORE and AFTER and this
+# run must not COMMIT or stage anything while it is in flight — a commit landing
+# mid-run changes that comparison and is reported as "something was left behind"
+# (measured: a commit made while case 5 was in its selftest). The leg is about
+# leaked MUTATIONS; do the bookkeeping after the run, not during it.
 echo "== case 0: the healthy tree (control — the whole selftest must be green) =="
 rc0=0
 selftest_run "$WORK/case0.log" || rc0=$?
 if [ "$rc0" -eq 0 ]; then
-  ok "case 0 — the unmutated tree passes the whole selftest ($(grep -E '^preflight self-test:' "$WORK/case0.log" | tail -n 1)): the checks 31/32/33/34 assertions are reachable and green, so the cases below are not vacuous"
+  ok "case 0 — the unmutated tree passes the whole selftest ($(grep -E '^preflight self-test:' "$WORK/case0.log" | tail -n 1)): the checks 31/32/33/34/35/37 assertions are reachable and green, so the cases below are not vacuous"
 else
   bad "case 0 — the unmutated tree ALREADY fails the selftest (rc=$rc0), so no case below could attribute a red to its sabotage: $(grep -E '^  FAIL ' "$WORK/case0.log" | tr '\n' '|')"
 fi
@@ -275,44 +307,191 @@ restore_and_verify
 # the whole gate (the host-wide flock's waiter has been measured at 50-86 min) to
 # re-run fifteen gates that had already passed on those bytes.
 #
-# The mutation restores the pre-fix shape one-sidedly, the same way case 3 does:
-# the fixed component function is renamed and a wrapper re-emits the RAW
-# scheme/credentials/query-stripped string, so the two keys diverge again without
-# the reader knowing. The mutation is asserted to have landed BOTH ways — the
-# wrapper is present AND the two spellings then disagree — because a mutation that
-# never landed is a silent green.
+# SURGICAL, and it has to be: this case shares gr_testdb_component with card
+# `t_43750cc1` (the anchor rule) and card `t_cd6136ca` (the credential strip), so a
+# mutation restoring the WHOLE pre-fix function reds checks 34, 35 AND 37 at once —
+# measured, the raw pre-fix component returns `2@…` for a password containing `@`,
+# which is check 35's own leg — and `verdict` would then report the red as
+# "for reasons OTHER than" this case's property. The mutation therefore removes ONLY
+# the canonicalising sed and keeps the anchored strip, so check 34 is the sole
+# failure. The body is replaced in place with the awk the other cases use.
 echo "== case 4: the DB host spelling hashed back into the key (the pre-fix shape) =="
-sed -i 's/^gr_testdb_component() {/gr_testdb_component_canon() {/' "$RESULT"
-# A QUOTED heredoc so the sed expression reaches the file unescaped — the first
-# attempt built it from nested printf escapes and produced a sed that no longer
-# stripped the query string. The appended body is the pre-fix shape verbatim.
-cat >> "$RESULT" <<'EOMUT'
-
-# PRE-FIX SHAPE (sabotage): the host STRING is key material again — see gr_testdb_component.
-gr_testdb_component() {
-  local url="${JOMFORM_TEST_DATABASE_URL:-}"
-  if [ -z "$url" ]; then printf 'unset'; return 0; fi
-  printf '%s' "$url" \
-    | sed -E 's#^[A-Za-z0-9+.-]+://##; s#^[^@/]*@##; s#\?.*$##; s#/$##'
-}
-EOMUT
-if ! assert_mutated "$RESULT" 'the host STRING is key material again'; then
+printf '%s\n' \
+  '  local url="${JOMFORM_TEST_DATABASE_URL:-}" comp auth tail' \
+  '  if [ -z "$url" ]; then printf '"'"'unset'"'"'; return 0; fi' \
+  '  comp="${url#*://}"                       # the scheme, when there is one' \
+  '  comp="$(printf '"'"'%s'"'"' "$comp" | sed -E '"'"'s#\?.*$##; s#/$##'"'"')"' \
+  '  auth="${comp%%/*}"                       # the authority: up to the first '"'"'/'"'"'' \
+  '  tail="${comp#"$auth"}"                   # whatever follows it (path, or empty)' \
+  '  case "$auth" in' \
+  '    *@*) comp="${auth##*@}$tail" ;;        # step 1 — the LAST @ inside the authority' \
+  '    *)   case "$comp" in' \
+  '           *@*)                            # step 3 — an @ at or after the path' \
+  '             # The authority decides which reading the driver takes: where it is a' \
+  '             # real `host[:port]` the tail is a DATABASE name and the whole value' \
+  '             # is the driver'"'"'s own answer; otherwise the `@` is not shown to be a' \
+  '             # credential delimiter and the strip is kept. See THE RULE above.' \
+  '             gr_is_hostport "$auth" || comp="${comp##*@}" ;;' \
+  '         esac ;;' \
+  '  esac' \
+  '  printf '"'"'%s'"'"' "$comp"' \
+  > "$WORK/case4.body"
+awk -v replfile="$WORK/case4.body" '
+  /^gr_testdb_component\(\) \{$/ { print; while ((getline l < replfile) > 0) print l; close(replfile); inbody=1; next }
+  inbody && /^\}$/ { inbody=0; print; next }
+  inbody { next }
+  { print }
+' "$RESULT" > "$WORK/gate_result.mutated4" && cp "$WORK/gate_result.mutated4" "$RESULT" && chmod "$MODE_RESULT" "$RESULT"
+AT4="$(printf '\100')"
+case4_a="$(JOMFORM_TEST_DATABASE_URL='postgres://u:***@127.0.0.1:5432/jomform_test?sslmode=disable' bash -c ". $RESULT; gr_testdb_component")"
+case4_b="$(JOMFORM_TEST_DATABASE_URL='postgres://u:***@localhost:5432/jomform_test?sslmode=disable' bash -c ". $RESULT; gr_testdb_component")"
+case4_cred="$(JOMFORM_TEST_DATABASE_URL="postgres://u1:pw${AT4}2${AT4}127.0.0.1:5432/jomform_test" bash -c ". $RESULT; gr_testdb_component")"
+if ! assert_mutated "$RESULT" '  printf '\''%s'\'' "$comp"'; then
   :
-elif [ "$(grep -cE '^gr_testdb_component\(\) \{' "$RESULT")" != "1" ] || \
-     [ "$(grep -cE '^gr_testdb_component_canon\(\) \{' "$RESULT")" != "1" ]; then
-  bad "case 4 — the mutation is not the shape it claims (canon=$(grep -cE '^gr_testdb_component_canon\(\) \{' "$RESULT"), raw=$(grep -cE '^gr_testdb_component\(\) \{' "$RESULT") definitions): a rename that missed or an append that failed would leave the FIXED function in place and report a false green"
 elif ! bash -n "$RESULT"; then
   bad "case 4 — the mutation left gate_result.sh syntactically invalid, so any red below would be a parse error rather than the fingerprint under test"
-elif ! ( . "$RESULT"
-        a="$(JOMFORM_TEST_DATABASE_URL='postgres://u:p@127.0.0.1:5432/jomform_test?sslmode=disable' gr_testdb_component)"
-        b="$(JOMFORM_TEST_DATABASE_URL='postgres://u:p@localhost:5432/jomform_test?sslmode=disable' gr_testdb_component)"
-        [ "$a" != "$b" ] ); then
-  bad "case 4 — the mutated component still answers the SAME for both loopback spellings, so the spelling was never put back into the key and this case proves nothing"
+elif grep -q '#loopback' "$RESULT"; then
+  bad "case 4 — the canonicalising sed is STILL in the mutated function, so the spelling was never put back into the key and this case proves nothing"
+elif [ "$case4_a" = "$case4_b" ]; then
+  bad "case 4 — the mutated component still answers the SAME for both loopback spellings ([$case4_a]), so the spelling was never put back into the key and this case proves nothing"
+elif [ "$case4_cred" != "127.0.0.1:5432/jomform_test" ]; then
+  bad "case 4 — the mutation is NOT surgical: the credential strip changed too ([$case4_cred], expected [127.0.0.1:5432/jomform_test]), so check 35 could red as well and this case's red would be unattributable"
 else
   rc4=0
   selftest_run "$WORK/case4.log" || rc4=$?
   verdict "case 4" "$WORK/case4.log" "$rc4" "one server, two keys|still carries the caller's SPELLING|the SAME server and database spelled the other way was NOT reused" \
     "with the host spelling back in the key, one server yields two keys and the record is refused across them"
+fi
+restore_and_verify
+# --- case 5: THE ALL-OR-NOTHING CREDENTIAL STRIP PUT BACK. The pre-fix shape:
+# `s#^[^@/]*@##` consumes userinfo only when the `@` is preceded by neither an `@`
+# nor a `/`, so a password containing either character is not stripped at all and
+# the CREDENTIAL lands in the record file and in its key material — the record dir
+# is world-readable, and rotating such a password moves the key and silently
+# refuses a valid green record.
+#
+# SURGICAL since the branch merged card `t_7add0cfa`: replacing the WHOLE body with
+# the pre-fix function also removes the host canonicalisation, so check 34 reds as
+# well and this case's red would be unattributable. Only the anchor block is
+# swapped here; the loopback sed stays, and the value assertions below prove it.
+#
+# The body is replaced with awk rather than with a sed expression: the body carries
+# `#`, `?`, `$` and `[^@/]`, and an escaping slip there turns the case into a silent
+# no-op that reports a false green.
+echo "== case 5: the DB credential strip made all-or-nothing again (the pre-fix shape) =="
+printf '%s\n' \
+  '  local url="${JOMFORM_TEST_DATABASE_URL:-}" comp auth tail' \
+  '  if [ -z "$url" ]; then printf '"'"'unset'"'"'; return 0; fi' \
+  '  comp="${url#*://}"                       # the scheme, when there is one' \
+  '  comp="$(printf '"'"'%s'"'"' "$comp" | sed -E '"'"'s#\?.*$##; s#/$##'"'"')"' \
+  '  auth="${comp%%/*}"                       # the authority: up to the first '"'"'/'"'"'' \
+  '  tail="${comp#"$auth"}"                   # whatever follows it (path, or empty)' \
+  '  comp="$(printf '"'"'%s'"'"' "$comp" | sed -E '"'"'s#^[^@/]*@##'"'"')"' \
+  '  printf '"'"'%s'"'"' "$comp" \' \
+  '    | sed -E '"'"'s#^(localhost|127\.0\.0\.1|\[::1\])(:[0-9]+)?(/.*)?$#loopback\2\3#'"'"'' \
+  > "$WORK/case5.body"
+awk -v replfile="$WORK/case5.body" '
+  /^gr_testdb_component\(\) \{$/ { print; while ((getline l < replfile) > 0) print l; close(replfile); inbody=1; next }
+  inbody && /^\}$/ { inbody=0; print; next }
+  inbody { next }
+  { print }
+' "$RESULT" > "$WORK/gate_result.mutated5" && cp "$WORK/gate_result.mutated5" "$RESULT" && chmod "$MODE_RESULT" "$RESULT"
+# The mutation is verified against THE CARD'S OWN pre-fix table, not a guess: a
+# mutation that did not reproduce it would make this case vacuous. The two
+# characters are built at runtime so no secret-shaped literal sits in this file.
+AT5="$(printf '\100')"; SL5="$(printf '\057')"
+case5_plain="$(JOMFORM_TEST_DATABASE_URL="postgres://u1:pw1${AT5}127.0.0.1:5432/jomform_test" bash -c ". $RESULT; gr_testdb_component")"
+case5_got_at="$(JOMFORM_TEST_DATABASE_URL="postgres://u1:pw${AT5}2${AT5}127.0.0.1:5432/jomform_test" \
+                bash -c ". $RESULT; gr_testdb_component")"
+case5_got_sl="$(JOMFORM_TEST_DATABASE_URL="postgres://u1:pw${SL5}2${AT5}127.0.0.1:5432/jomform_test" \
+                bash -c ". $RESULT; gr_testdb_component")"
+if ! assert_mutated "$RESULT" 's#^[^@/]*@##'; then
+  :
+elif ! bash -n "$RESULT"; then
+  bad "case 5 — the mutation left gate_result.sh syntactically invalid, so any red below would be a parse error rather than the strip under test"
+elif [ "$case5_got_at" != "2${AT5}127.0.0.1:5432/jomform_test" ] || \
+     [ "$case5_got_sl" != "u1:pw${SL5}2${AT5}127.0.0.1:5432/jomform_test" ]; then
+  bad "case 5 — the mutation did not reproduce the pre-fix strip (at->[$case5_got_at] slash->[$case5_got_sl]), so this case proves nothing"
+elif [ "$case5_plain" != "loopback:5432/jomform_test" ]; then
+  bad "case 5 — the mutation is NOT surgical: the host canonicalisation went with it ([$case5_plain], expected [loopback:5432/jomform_test]), so check 34 would red too and this case would be unattributable"
+else
+  rc5=0
+  selftest_run "$WORK/case5.log" || rc5=$?
+  # The needle must match the check-35 `bad` text CASE-SENSITIVELY-inclusive: the
+  # checks write `CREDENTIAL`, and a lowercase needle reports the case's own red as
+  # "for OTHER reasons". Check 37's (d) leg names the CREDENTIAL hole in the same
+  # words, so this mutation's two attributable failures both satisfy the needle.
+  verdict "case 5" "$WORK/case5.log" "$rc5" "CREDENTIAL|one server|BLIND|MOVED the key|dropped the test database" \
+    "with the all-or-nothing strip back, a password containing @ or / reaches the record's component and key material"
+fi
+restore_and_verify
+
+# --- case 7: THE STEP-2 STRIP PUT BACK, UNCONDITIONALLY. The parent shape: the
+# `@`-after-the-path branch dropped everything through the LAST `@` in the WHOLE
+# value without asking whether the text before the first `/` is an ADDRESS, so for
+# `postgres://hostA:***@x` — no userinfo anywhere, the `@` belongs to the
+# DATABASE name — the host and port went with it. Measured on the parent, three
+# DSNs naming hostA/db, hostB/db and hostA/other all gave the component `x` with
+# ONE key, and the record written against hostA was REUSED by gr_reusable as
+# evidence about hostB: the false-reuse direction, which reuses a verdict about the
+# wrong server instead of re-gating it.
+#
+# This case is SEPARATE from case 5 on purpose, and the two discriminate: case 5
+# reverts the whole strip to the all-or-nothing expression, which leaks the
+# CREDENTIAL (check 35) but happens to keep this host; this case keeps the
+# right-anchor strip for a URL-form value (so check 35 still passes on the
+# `@`-in-password shapes) and removes ONLY the address test, which is the one
+# change that produces the collision check 37 measures. A case whose mutation reds
+# several checks reads as off-topic in both.
+#
+# SURGICAL since the merge: only the anchor block is swapped, so the loopback
+# canonicalisation stays and check 34 cannot red. Asserted by value below.
+echo "== case 7: the step-2 strip put back unconditionally (the parent shape — different servers collapse) =="
+printf '%s\n' \
+  '  local url="${JOMFORM_TEST_DATABASE_URL:-}" comp auth tail' \
+  '  if [ -z "$url" ]; then printf '"'"'unset'"'"'; return 0; fi' \
+  '  comp="${url#*://}"                       # the scheme, when there is one' \
+  '  comp="$(printf '"'"'%s'"'"' "$comp" | sed -E '"'"'s#\?.*$##; s#/$##'"'"')"' \
+  '  auth="${comp%%/*}"                       # the authority: up to the first '"'"'/'"'"'' \
+  '  tail="${comp#"$auth"}"                   # whatever follows it (path, or empty)' \
+  '  case "$auth" in' \
+  '    *@*) comp="${auth##*@}$tail" ;;        # step 1 — the LAST @ inside the authority' \
+  '    *)   case "$comp" in' \
+  '           *@*) comp="${comp##*@}" ;;      # step 2 — the old unconditional strip' \
+  '         esac ;;' \
+  '  esac' \
+  '  printf '"'"'%s'"'"' "$comp" \' \
+  '    | sed -E '"'"'s#^(localhost|127\.0\.0\.1|\[::1\])(:[0-9]+)?(/.*)?$#loopback\2\3#'"'"'' \
+  > "$WORK/case7.body"
+awk -v replfile="$WORK/case7.body" '
+  /^gr_testdb_component\(\) \{$/ { print; while ((getline l < replfile) > 0) print l; close(replfile); inbody=1; next }
+  inbody && /^\}$/ { inbody=0; print; next }
+  inbody { next }
+  { print }
+' "$RESULT" > "$WORK/gate_result.mutated7" && cp "$WORK/gate_result.mutated7" "$RESULT" && chmod "$MODE_RESULT" "$RESULT"
+# The mutation must be verified by VALUE against the card's own before/after table,
+# not by grepping for the text that was supposed to land: a mutation that did not
+# take reports a false green. AT7 is built at runtime so no secret-shaped literal
+# sits in this file.
+AT7="$(printf '\100')"
+case7_A="$(JOMFORM_TEST_DATABASE_URL="postgres://hostA:5432/db${AT7}x" bash -c ". $RESULT; gr_testdb_component")"
+case7_B="$(JOMFORM_TEST_DATABASE_URL="postgres://hostB:5432/db${AT7}x" bash -c ". $RESULT; gr_testdb_component")"
+case7_url="$(JOMFORM_TEST_DATABASE_URL="postgres://u1:pw1${AT7}127.0.0.1:5432/jomform_test" bash -c ". $RESULT; gr_testdb_component")"
+if ! assert_mutated "$RESULT" 'comp="${comp##*@}" ;;'; then
+  :
+elif ! bash -n "$RESULT"; then
+  bad "case 7 — the mutation left gate_result.sh syntactically invalid, so any red below would be a parse error rather than the strip under test"
+elif [ "$case7_A" != "x" ] || [ "$case7_B" != "x" ]; then
+  bad "case 7 — the mutation did not reproduce the parent's collision (hostA->[$case7_A] hostB->[$case7_B], both expected [x]), so this case proves nothing"
+elif [ "$case7_url" != "loopback:5432/jomform_test" ]; then
+  bad "case 7 — the mutation is NOT surgical: the URL form moved too ([$case7_url] != [loopback:5432/jomform_test]), so a red below could be about another card's property and this case would be unattributable"
+else
+  rc7=0
+  selftest_run "$WORK/case7.log" || rc7=$?
+  # Only check 37 can fire: check 35's `@`-in-password shapes still strip under this
+  # mutation (verified above), so a failure naming anything else is unattributable.
+  verdict "case 7" "$WORK/case7.log" "$rc7" "check 37" \
+    "with the step-2 strip back, three different servers collapse onto ONE component and ONE key and a record written against hostA is reused as evidence about hostB"
 fi
 restore_and_verify
 
@@ -329,7 +508,7 @@ fi
 
 echo "---"
 if [ "$FAIL" -eq 0 ]; then
-  echo "biteproof: $PASS checks passed, 0 failed — the reuse guards BITE: the healthy tree passes, and moving the refusal back after the selection filter, disabling the ledger dedupe, hashing node into the fingerprint, or hashing the test-DB host's SPELLING into it each turns the REAL selftest gate red, naming that property"
+  echo "biteproof: $PASS checks passed, 0 failed — the reuse guards BITE: the healthy tree passes, and moving the refusal back after the selection filter, disabling the ledger dedupe, hashing node into the fingerprint, hashing the test-DB host's SPELLING into it, or putting the all-or-nothing credential strip or the unconditional step-2 strip back each turns the REAL selftest gate red, naming that property"
 else
   echo "biteproof: $PASS passed, $FAIL failed — a reuse guard does NOT hold something it claims to"
 fi

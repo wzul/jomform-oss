@@ -2042,6 +2042,235 @@ if [ -n "$probe_tree" ]; then
     ok "the READER agrees: a whole-inventory green record written under 127.0.0.1 is reused under localhost (rc=0, no gate executed), and refused for a different database (rc=$rc34_d, 'the environment changed since that record')"
   fi
 fi
+# 35. THE CREDENTIAL STRIP COVERS THE SHAPE IT IS FOR, AND IT IS STILL A
+#     FINGERPRINT. Two properties in one check, because either one alone can be
+#     faked:
+#
+#       (a) NO CREDENTIAL REACHES THE COMPONENT, IN THE SHAPE THIS STRIP OWNS. A
+#           URL-form value whose authority (the text before the first `/`) carries
+#           userinfo loses everything through the authority's LAST `@`, so only
+#           the `<host>[:port][/database]` the record is evidence about is stored.
+#           The pre-fix expression (`s#^[^@/]*@##`) was ALL-OR-NOTHING: it consumed
+#           userinfo only when an `@` was preceded by neither an `@` nor a `/`, so a
+#           password containing either character was not stripped AT ALL and the
+#           credential walked into the record — measured on this host, through
+#           gr_key_material: `postgres://u1:***@...` -> `testdb=2@...` and the
+#           `/` shape survived whole. Records are written under
+#           ${PREFLIGHT_RESULT_DIR:-/var/lib/jomform/gate} in a world-readable dir,
+#           and a leaked password is KEY MATERIAL: rotating it would move the key
+#           and silently refuse a valid green record. THIS IS THE LEG THAT KEEPS
+#           THE EQUALITY LEGS HONEST: a function returning a constant, or one that
+#           matched two URLs for the wrong reason, passes the equalities below and
+#           fails here (the BLIND leg) or at the suffix leg (b). "TOTAL" is NOT
+#           claimed: check 37 widens the anchor for the no-userinfo shape, and the
+#           two together are what the function's own comment states per shape.
+#
+#       (b) THE FINGERPRINT STILL BITES. A second database and a second port must
+#           still produce a DIFFERENT component and a DIFFERENT key, and `testdb=`
+#           must still be in the key MATERIAL — otherwise "strip harder" had
+#           degenerated into "drop the database from the fingerprint", which is the
+#           property gr_testdb_component's own comment claims.
+#
+#     WHY THIS IS NUMBERED 35 AND NOT 34: check 34 is the test-db host SPELLING
+#     check (card t_7add0cfa, PR 863), a change to the SAME function that has
+#     already been verified on its exact bytes. Taking 34 here would force whoever
+#     lands second to renumber, which rewrites bytes another card's verdict was
+#     taken on. Skipping to 35 leaves both changes composable in either merge
+#     order: 34 arrives from that PR, 35 is this one, and neither number moves.
+#
+#     The credential is ASSEMBLED AT RUNTIME from its character codes, so no
+#     secret-shaped literal sits in a tracked file (the gitleaks gate scans the
+#     full history). `$at` and `$sl` are the two characters the defect is about.
+if [ -n "$probe_tree" ]; then
+  at=$(printf '\100')   # @ — the userinfo delimiter, and the char a base64 password carries
+  sl=$(printf '\057')   # / — the path separator, and the char a base64 password carries
+  # The three shapes the defect was reported in: a simple password, one containing
+  # `@`, and one containing `/`. All three must strip to the SAME component.
+  u_simple="postgres://u1:pw1${at}127.0.0.1:5432/jomform_test"
+  u_at="postgres://u1:pw${at}2${at}127.0.0.1:5432/jomform_test"
+  u_sl="postgres://u1:pw${sl}2${at}127.0.0.1:5432/jomform_test"
+  c_simple="$(JOMFORM_TEST_DATABASE_URL="$u_simple" gr_testdb_component)"
+  c_at="$(JOMFORM_TEST_DATABASE_URL="$u_at" gr_testdb_component)"
+  c_sl="$(JOMFORM_TEST_DATABASE_URL="$u_sl" gr_testdb_component)"
+  # The component's TAIL — the port and the database, the thing the record is
+  # evidence ABOUT. The HOST token itself is check 34's business (PR 863
+  # canonicalises the loopback spellings to one token there) and is deliberately
+  # NOT pinned here, for the reason check 34 gives: pinning the token makes any
+  # future change to it red for no reason. What this check has to keep is that the
+  # credential is gone AND that the thing the verdict is about is still named.
+  want35_tail=":5432/jomform_test"
+
+  # (a) THE RAW COMPONENT, for a credential-bearing URL, must carry none of it.
+  #     Asserted per URL and not by comparing the three to each other: three equal
+  #     WRONG values would satisfy a comparison. `u1` is the user name and `@` the
+  #     delimiter, so either appearing means the credential survived.
+  cred_left=""
+  for pair in "simple:$c_simple" "at:$c_at" "slash:$c_sl"; do
+    shape="${pair%%:*}"; got="${pair#*:}"
+    case "$got" in
+      *"$at"*|*u1*) cred_left="${cred_left}[$shape -> $got] " ;;
+    esac
+  done
+  # (b) and the component must still NAME what the record is evidence about — the
+  #     port and the database — not something that merely lacks the credential.
+  [ "$c_simple" = "${c_simple%$want35_tail}$want35_tail" ] && [ -n "${c_simple%$want35_tail}" ] \
+    || cred_left="${cred_left}[simple -> $c_simple does not end in $want35_tail] "
+
+  # The counter-legs: the fingerprint must still separate servers and databases.
+  c_port="$(JOMFORM_TEST_DATABASE_URL="postgres://u1:pw1${at}127.0.0.1:5433/jomform_test" gr_testdb_component)"
+  c_db="$(JOMFORM_TEST_DATABASE_URL="postgres://u1:pw1${at}127.0.0.1:5432/other_test" gr_testdb_component)"
+  k_simple="$(export JOMFORM_TEST_DATABASE_URL="$u_simple"; PREFLIGHT_KEY_EXTRA=probe15 gr_key "$SB")"
+  k_port="$(export JOMFORM_TEST_DATABASE_URL="postgres://u1:pw1${at}127.0.0.1:5433/jomform_test"; PREFLIGHT_KEY_EXTRA=probe15 gr_key "$SB")"
+  k_db="$(export JOMFORM_TEST_DATABASE_URL="postgres://u1:pw1${at}127.0.0.1:5432/other_test"; PREFLIGHT_KEY_EXTRA=probe15 gr_key "$SB")"
+  # Rotating the credential must NOT move the key — the defect's own failure mode.
+  k_at_rot="$(export JOMFORM_TEST_DATABASE_URL="postgres://u1:ROTATED${at}9${at}127.0.0.1:5432/jomform_test"; PREFLIGHT_KEY_EXTRA=probe15 gr_key "$SB")"
+  k_sl_rot="$(export JOMFORM_TEST_DATABASE_URL="postgres://u1:ROT${sl}9${at}127.0.0.1:5432/jomform_test"; PREFLIGHT_KEY_EXTRA=probe15 gr_key "$SB")"
+
+  if [ -n "$cred_left" ]; then
+    bad "check 35 — the test-db component still carries the caller's CREDENTIAL for a password containing \`${at}\` or \`${sl}\`: ${cred_left}— gr_testdb_component must strip the userinfo from its right anchor, and this string is written to a world-readable record AND hashed into the key, so rotating that password would silently refuse a valid green record"
+  elif [ "$c_at" != "$c_simple" ] || [ "$c_sl" != "$c_simple" ]; then
+    bad "check 35 — one server, three spellings must give ONE component: got simple=[$c_simple] at=[$c_at] slash=[$c_sl]"
+  elif [ "$c_port" = "$c_simple" ] || [ "$c_db" = "$c_simple" ] || \
+       [ "$k_port" = "$k_simple" ] || [ "$k_db" = "$k_simple" ]; then
+    bad "check 35 — the strip went BLIND in the other direction: another PORT ([$c_port] key $k_port) or another DATABASE ([$c_db] key $k_db) produced the component/key of [$c_simple] ($k_simple) — a record made against one database would be reused as evidence about another"
+  elif [ "$k_at_rot" != "$k_simple" ] || [ "$k_sl_rot" != "$k_simple" ]; then
+    bad "check 35 — rotating a password that contains \`${at}\` or \`${sl}\` MOVED the key (${k_at_rot:0:12} / ${k_sl_rot:0:12} vs ${k_simple:0:12}) — the credential is still key material, which is the silent 'the environment changed since that record' failure for a password change"
+  elif ! grep -q 'testdb=' <<<"$(export JOMFORM_TEST_DATABASE_URL="$u_simple"; PREFLIGHT_KEY_EXTRA=probe15 gr_key_material "$SB")"; then
+    bad "check 35 — the key material dropped the test database entirely; stripping the credential must not mean dropping what the record is evidence ABOUT"
+  else
+    ok "the credential strip is TOTAL and still a fingerprint: a password containing \`${at}\` or \`${sl}\` strips to [$c_simple] like a simple one, rotating it leaves the key unchanged (${k_simple:0:12}), while another port ([$c_port]) and another database ([$c_db]) still differ and testdb= is still key material"
+  fi
+fi
+# 37. A DSN WITH NO USERINFO WHOSE PATH CARRIES AN `@` MUST KEY ON THE SERVER THE
+#     DRIVER REACHES — NOT ON THE TAIL OF THE STRING. The step-2 strip dropped
+#     everything through the LAST `@` in the WHOLE value, so for
+#     `postgres://hostA:5432/db@x` — no userinfo anywhere, the `@` belongs to the
+#     DATABASE name — the host and port went with it. Measured on the parent of
+#     this change, through gr_testdb_component AND gr_key: three DSNs naming
+#     hostA/db, hostB/db and hostA/other all produced the component `x` with ONE
+#     key, so the record a lane wrote against hostA was accepted by gr_reusable as
+#     evidence about hostB. That is the FALSE-REUSE direction — the one that
+#     silently reuses a verdict about the wrong database instead of re-gating it —
+#     and it is the opposite of the direction the old comment claimed ("a
+#     truncated component can only refuse a record").
+#
+#     THE FIX IS DECIDED BY THE AUTHORITY, NOT BY LOOKING FOR AN `@`. The text
+#     before the first `/` is what PostgreSQL's own driver reads as the ADDRESS
+#     (measured with this repo's pinned pgx v5.10.0: `hostA:5432` -> host=hostA
+#     port=5432; `127.0.0.1` -> host=127.0.0.1), so where that text IS
+#     `host[:port]` the whole value is kept — it is the driver's own reading — and
+#     where it is not (it reads as userinfo, a shape the same driver REFUSES with
+#     "invalid port ... after host") the strip is kept, which can only refuse a
+#     record.
+#
+#     FOUR LEGS, because any one alone can be satisfied by a degenerate function:
+#       (a) THE RAW COMPONENT for a host-bearing input still CARRIES THE HOST —
+#           read from the function. A function returning a constant, or one that
+#           matched the three inputs by hashing the whole string, passes an
+#           equality-only fixture and fails here.
+#       (b) THREE SERVERS/DATABASES -> THREE COMPONENTS AND THREE KEYS. Counted as
+#           distinct VALUES, not by comparing pairs, so a component that is equal
+#           for a wrong reason (all empty) is not counted as three.
+#       (c) THE FALSE REUSE ITSELF, END TO END: a record written by the REAL
+#           gr_flush under hostA must be REUSABLE under hostA and REFUSED under
+#           hostB and under hostA/other, with the reader's "the environment changed
+#           since that record". The hostA leg is the counter-leg: a function that
+#           refused everything would satisfy the refusals alone.
+#       (d) THE SHAPE THE STRIP IS FOR STILL STRIPS. A password containing `@` or
+#           `/` (the t_c65ef5a6 / PR-865 acceptance) must give the same component
+#           as a simple one, and rotating it must not move the key — so widening
+#           the anchor for (a)-(c) did not reopen the credential hole.
+#     The `@` is assembled at runtime from its character code, so no
+#     secret-shaped literal sits in a tracked file (the gitleaks gate scans the
+#     full history).
+if [ -n "$probe_tree" ]; then
+  at37="$(printf '\100')"
+  sl37="$(printf '\057')"
+  uA="postgres://hostA:5432/db${at37}x"
+  uB="postgres://hostB:5432/db${at37}x"
+  uA2="postgres://hostA:5432/other${at37}x"
+  c_A="$(JOMFORM_TEST_DATABASE_URL="$uA" gr_testdb_component)"
+  c_B="$(JOMFORM_TEST_DATABASE_URL="$uB" gr_testdb_component)"
+  c_A2="$(JOMFORM_TEST_DATABASE_URL="$uA2" gr_testdb_component)"
+  k_A="$(export JOMFORM_TEST_DATABASE_URL="$uA"; PREFLIGHT_KEY_EXTRA=probe15 gr_key "$SB")"
+  k_B="$(export JOMFORM_TEST_DATABASE_URL="$uB"; PREFLIGHT_KEY_EXTRA=probe15 gr_key "$SB")"
+  k_A2="$(export JOMFORM_TEST_DATABASE_URL="$uA2"; PREFLIGHT_KEY_EXTRA=probe15 gr_key "$SB")"
+  # (a2) A BRACKETED IPv6 authority is an address the driver resolves too (measured:
+  #      pgx v5.10.0 gives host=::1 port=5432 for `[::1]:5432`), and `[::1]` is a
+  #      spelling this host's callers use — so it must keep its port and database
+  #      for the same reason, not fall into the credential branch and collapse to
+  #      the bare tail `db@x`. The HOST slot itself is canonicalised by check 34's
+  #      rule (PR 863 rewrites `[::1]` to the same loopback token as the other two
+  #      spellings), so the token is read from the component rather than pinned.
+  uV6="postgres://[::1]:5432/db${at37}x"
+  c_V6="$(JOMFORM_TEST_DATABASE_URL="$uV6" gr_testdb_component)"
+
+  # (b) distinct VALUES, counted — not pairwise equality, which a set of equal
+  # wrong components satisfies.
+  n_comp="$(printf '%s\n%s\n%s\n' "$c_A" "$c_B" "$c_A2" | sort -u | grep -c '[^[:space:]]')"
+  # The IPv6 leg: the component must still carry the PORT+DATABASE — the thing the
+  # record is evidence about. Its host token differs from hostA's on purpose (they
+  # are different servers; `[::1]` is loopback and is canonicalised to the same
+  # token as `localhost`/`127.0.0.1` by check 34's rule), so the leg is on the TAIL,
+  # and the failure it excludes is the old collapse to the bare `db@x`.
+  v6_ok=0
+  case "$c_V6" in
+    *":5432/db${at37}x") [ "$c_V6" != "db${at37}x" ] && v6_ok=1 ;;
+  esac
+  n_key="$(printf '%s\n%s\n%s\n' "$k_A" "$k_B" "$k_A2" | sort -u | grep -c '[^[:space:]]')"
+
+  # (c) the REAL writer, then the REAL reader, under each server. GR_GATE_NAMES is
+  # set and the flush's exit code is ASSERTED: gr_flush keys off it, so without it
+  # the flush writes nothing and the refusals below would pass for a reason that
+  # has nothing to do with the fix.
+  at_flush_rc=0
+  at_rec_out="$(
+    export JOMFORM_TEST_DATABASE_URL="$uA" GR_REPO="$SB" GR_TREE="$probe_tree"
+    GR_GATE_NAMES=("$probe_gate")
+    GR_STATUS["$probe_gate"]=pass GR_SECONDS["$probe_gate"]=1 GR_AT["$probe_gate"]="$(gr_now)"
+    GR_PASSED=1 GR_FAILED=0 GR_SKIPPED=0
+    gr_flush 1 2>&1
+  )" || at_flush_rc=$?
+  at_rec="$(gr_file "$probe_tree")"
+  at_self_rc=0; at_self_msg="$(JOMFORM_TEST_DATABASE_URL="$uA" gr_reusable "$probe_tree" "$probe_gate" 2>&1)" || at_self_rc=$?
+  at_other_rc=0; at_other_msg="$(JOMFORM_TEST_DATABASE_URL="$uB" gr_reusable "$probe_tree" "$probe_gate" 2>&1)" || at_other_rc=$?
+  at_db_rc=0;    at_db_msg="$(JOMFORM_TEST_DATABASE_URL="$uA2" gr_reusable "$probe_tree" "$probe_gate" 2>&1)" || at_db_rc=$?
+
+  # (d) the strip's own acceptance, restated here so a change to this function that
+  # widens the anchor cannot quietly reopen the credential hole.
+  d_simple="postgres://u1:pw1${at37}127.0.0.1:5432/jomform_test"
+  d_at="postgres://u1:pw${at37}2${at37}127.0.0.1:5432/jomform_test"
+  d_sl="postgres://u1:pw${sl37}2${at37}127.0.0.1:5432/jomform_test"
+  d_rot="postgres://u1:ROTATED${at37}9${at37}127.0.0.1:5432/jomform_test"
+  d_c_simple="$(JOMFORM_TEST_DATABASE_URL="$d_simple" gr_testdb_component)"
+  d_c_at="$(JOMFORM_TEST_DATABASE_URL="$d_at" gr_testdb_component)"
+  d_c_sl="$(JOMFORM_TEST_DATABASE_URL="$d_sl" gr_testdb_component)"
+  d_k_simple="$(export JOMFORM_TEST_DATABASE_URL="$d_simple"; PREFLIGHT_KEY_EXTRA=probe15 gr_key "$SB")"
+  d_k_rot="$(export JOMFORM_TEST_DATABASE_URL="$d_rot"; PREFLIGHT_KEY_EXTRA=probe15 gr_key "$SB")"
+
+  if [ "$c_A" != "hostA:5432/db${at37}x" ]; then
+    bad "check 37 — the component for a host-bearing no-userinfo DSN does not keep the HOST: [postgres://hostA:5432/db${at37}x] -> [$c_A], expected [hostA:5432/db${at37}x]. The text before the first \`/\` is the address the driver resolves (pgx v5.10.0), so a component that lost it is not a fact about the server the record would be evidence for"
+  elif [ "$n_comp" != "3" ] || [ "$n_key" != "3" ]; then
+    bad "check 37 — DIFFERENT servers/databases collapsed onto one component or one key ($n_comp distinct components, $n_key distinct keys, expected 3 of each): hostA=[$c_A $k_A] hostB=[$c_B $k_B] hostA/other=[$c_A2 $k_A2] — a record written for one server would be reused as evidence about another, which is the FALSE-REUSE direction (it reuses a wrong verdict instead of re-gating it)"
+  elif [ "$at_flush_rc" -ne 0 ]; then
+    bad "check 37 — the real gr_flush exited $at_flush_rc under a host-bearing no-userinfo DSN ([$at_rec_out]), so the reader legs below would have read a record left by an EARLIER check and reported on the wrong bytes"
+  elif [ "$at_self_rc" -ne 0 ]; then
+    bad "check 37 — the counter-leg failed: the record written under [postgres://hostA:5432/db${at37}x] is NOT reusable under the SAME server (rc=$at_self_rc: $(printf '%s' "$at_self_msg" | head -c 200)) — the refusals this check requires would then pass for a function that refuses everything, not for one that keys on the server"
+  elif [ "$at_other_rc" -eq 0 ]; then
+    bad "check 37 — FALSE REUSE: the record written under [postgres://hostA:5432/db${at37}x] was REUSED (rc=0) for [postgres://hostB:5432/db${at37}x]. A record made against another server must be refused, with the reader's 'the environment changed since that record' — this is the leg the defect was reported in"
+  elif ! grep -q 'the environment changed since that record' <<<"$at_other_msg"; then
+    bad "check 37 — the other-server reader refused (rc=$at_other_rc) but not for the fingerprint: [$(printf '%s' "$at_other_msg" | head -c 200)] — the refusal has to be the key mismatch, or this leg proves nothing about the component"
+  elif [ "$at_db_rc" -eq 0 ]; then
+    bad "check 37 — FALSE REUSE: the record written under [postgres://hostA:5432/db${at37}x] was REUSED (rc=0) for [postgres://hostA:5432/other${at37}x] — another DATABASE on the same server must not inherit it either"
+  elif [ "$d_c_at" != "$d_c_simple" ] || [ "$d_c_sl" != "$d_c_simple" ] || \
+       [ "$d_k_rot" != "$d_k_simple" ] || [ -z "$d_c_simple" ]; then
+    bad "check 37 — widening the anchor for the no-userinfo case reopened the CREDENTIAL hole: simple=[$d_simple -> $d_c_simple] at=[$d_at -> $d_c_at] slash=[$d_sl -> $d_c_sl] rotated-key=${d_k_rot:0:12} vs ${d_k_simple:0:12} — a password containing \`${at37}\` or \`${sl37}\` must strip to the same component as a simple one and must not be key material"
+  elif [ "$v6_ok" -ne 1 ]; then
+    bad "check 37 — a BRACKETED IPv6 authority lost its PORT+DATABASE: [postgres://[::1]:5432/db${at37}x] -> [$c_V6], expected a component ending in [:5432/db${at37}x]. [::1] is an address the driver resolves (pgx v5.10.0: host=::1 port=5432) and a spelling this host's callers use, so reading it as userinfo collapses it to the bare tail [db${at37}x] — the same collision, for exactly that spelling"
+  else
+    ok "a no-userinfo DSN whose path carries \`${at37}\` keys on the SERVER: [hostA:5432/db${at37}x], [hostB:5432/db${at37}x] and [hostA:5432/other${at37}x] give 3 distinct components and 3 distinct keys, the REAL gr_flush record from hostA is reusable under hostA (rc=$at_self_rc) and REFUSED for hostB and for hostA/other with 'the environment changed since that record', while a password containing \`${at37}\` or \`${sl37}\` still strips to [$d_c_simple] and rotating it leaves the key unchanged, and a bracketed IPv6 authority keeps its port+database ([$c_V6])"
+  fi
+fi
 
 echo "---"
 echo "preflight self-test: $PASS passed, $FAIL failed"

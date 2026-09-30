@@ -30,8 +30,15 @@
 #     dependency set, or by a different gate script. Those are hashed into `key`,
 #     and a record whose key no longer matches is REFUSED (never silently reused).
 #     The test-database host rides along too — a record made against another
-#     database is not evidence about this one. Credentials are never stored: only
-#     the host/database part of the URL survives.
+#     database is not evidence about this one. Credentials are never stored, and
+#     which shape a value has decides how: a URL-form value whose authority (the
+#     text before the first `/`) carries userinfo is stripped at that authority's
+#     LAST `@` — the anchor Go's net/url uses — so a password containing `@` or `/`
+#     goes with it; a value whose authority carries NO userinfo is kept whole where
+#     that authority is the address the driver resolves, because dropping through
+#     the `@` there would alias two SERVERS; and where the authority is neither, the
+#     strip is kept and can only refuse a record. See gr_testdb_component for each
+#     shape and what it costs.
 #   * `finished_at`, so a cached pass cannot outlive its usefulness. Records older
 #     than PREFLIGHT_RESULT_TTL (default 86400s) are treated as absent.
 #   * the GATE LIST it gated, with a per-gate status, so a consumer can reuse the
@@ -172,11 +179,122 @@ gr_sha256_file() {
 # property the rest of this comment claims — a record against another database is
 # not evidence about this one — is worth keeping, and port+database cannot see a
 # second server reached over a tunnel or a forwarded port.
+#
+# THE ANCHOR IS THE AUTHORITY, NOT THE FIRST `@`. The pre-fix expression
+# (`s#^[^@/]*@##`) was ALL-OR-NOTHING: it consumed userinfo only when an `@` was
+# preceded by neither an `@` nor a `/`, so a password containing either character
+# was not stripped AT ALL and the credential walked straight into the record's key
+# material (measured: `postgres://u1:***@127.0.0.1:5432/db` ->
+# `2@127.0.0.1:5432/db`, and the `/` shape survived whole). Records are written to
+# ${PREFLIGHT_RESULT_DIR:-/var/lib/jomform/gate}/<tree>.json in a world-readable
+# dir, and a leaked password is also KEY MATERIAL: rotating it would move the key
+# and silently refuse a valid green record — the same silent "the environment
+# changed since that record" failure, for a password change instead of a hostname
+# spelling. (A simple password rotated cleanly, which is what hid this: only the
+# `@`/`/` class leaks.)
+#
+# THE RULE, in three steps, because there are three genuinely different shapes:
+#   1. An `@` INSIDE the authority (the substring before the first `/`) is the
+#      userinfo delimiter — the LAST one, the same anchor Go's net/url uses
+#      (`parseAuthority` takes `strings.LastIndex(authority, "@")`). Everything
+#      through it is dropped, and the path is preserved, so a DATABASE name
+#      containing an `@` (`.../jo@m_test`) is not eaten.
+#   2. NO `@` anywhere: the component is whatever the driver's own reading gives,
+#      `host[:port][/database]`. Nothing in it is a credential, so nothing is
+#      stripped.
+#   3. An `@` AFTER the authority's first `/`. Two readings disagree here, so the
+#      anchor is decided by WHICH READ THE DRIVER TAKES, not by assuming either:
+#
+#        * the authority is NOT `host[:port]` — it reads as userinfo, or as a
+#          `host:` followed by something that is not a port. There is no address to
+#          trust, and the value is still a string a caller can export, so everything
+#          through the LAST `@` in the string is dropped. Measured with this repo's
+#          pinned pgx v5.10.0, that shape is also one the driver REFUSES ("invalid
+#          port ... after host"), so no lane can gate with it: the strip here can
+#          only refuse a record, never reuse another server's verdict.
+#        * the authority IS `host[:port]` — the text the driver resolves as the
+#          ADDRESS (measured with pgx v5.10.0, this repo's pinned version: the
+#          authority is host and port, the remaining tail is the DATABASE name).
+#          The whole value is kept, because dropping through the `@` here aliases
+#          two SERVERS. Measured on the parent of this change: three DSNs naming
+#          hostA/db, hostB/db and hostA/other all collapsed to the single component
+#          `x` with ONE key, and a record written against hostA was accepted by
+#          gr_reusable as evidence about hostB — end to end, the record's
+#          `testdb=x` read back under hostB, REUSED. A component that refuses a
+#          record costs a re-gate; a component that aliases two servers reuses a
+#          verdict about the wrong database, silently. That is why the direction
+#          chosen here is the one that keeps the server.
+#
+#    Both directions are stated: a component produced from a rejected authority is
+#    a bare tail, which cannot equal the component of a real DSN, so it refuses a
+#    record rather than aliasing another server, and the two rejected shapes
+#    measured (`host:abc`, a `/` inside the authority) are refused by the driver
+#    too, so no lane can write a record under them.
+#
+# WHICH SHAPE IS WHICH IS DECIDED BY THE AUTHORITY, NOT BY LOOKING FOR AN `@` — see
+# gr_is_hostport, which recognises `host[:port]` positively. Every choice above has
+# a stated direction: no component that cannot be shown to describe the server the
+# driver reaches is produced, and where that costs a refusal it is a re-gate rather
+# than a wrong reuse.
+#
+# A `:` in the authority with NO `@` anywhere also carries its "password" into the
+# component, and it is NOT carved out, because it is not reachable: pgx and Go's
+# net/url both REFUSE that string (measured with pgx v5.10.0 — its error names the
+# authority as an address with "too many colons in address", and net/url's parser
+# rejects the same string), so no lane can gate with it, and treating every such
+# authority as a credential would destroy the host and port for the DSNs that DO
+# work.
+#
+# The QUERY is cut BEFORE the anchor is located. A query cannot be part of the
+# authority, and a query may legitimately carry `@` (`?options=a@b`), so cutting
+# it first is what stops a query `@` from being read as a credential delimiter.
+# Credentials in the query are dropped with it.
+#
+# gr_is_hostport <text> — 0 when <text> is exactly `host[:port]`: no scheme, no
+# path, no userinfo, non-empty host, and — when a `:` is present — a port of digits
+# only. A BRACKETED IPv6 authority (`[::1]:5432`) is one too: it is an address the
+# driver resolves (measured with pgx v5.10.0: `[::1]:5432` -> host=::1 port=5432),
+# and the comment above names `[::1]` as a spelling this host's callers use, so
+# reading it as userinfo would have kept the collision for exactly that spelling.
+#
+# Recognised POSITIVELY rather than by excluding an `@`, because the decision
+# gr_testdb_component has to make is which reading the driver takes, and only an
+# address proves which. What the positive test buys, stated as a direction: an
+# authority it REJECTS can produce a component that is a bare tail (`x`), and a
+# bare tail cannot equal a component the strip produces from a real DSN — those
+# always carry a `:` or a `/` — so a rejected authority refuses a record rather
+# than aliasing another server. Measured for the two shapes that are not
+# addresses: `host:abc` (pgx: "invalid port \":abc\" after host") and a `/` inside
+# the authority (`host:5432/a/b`, whose resolved database is `a/b@x`) are REFUSED
+# by the driver as well, so no lane can write a record under them in the first
+# place.
+gr_is_hostport() {
+  case "$1" in
+    "")                return 1 ;;
+    \[*)               [[ "$1" =~ ^\[[^]]+\](:[0-9]+)?$ ]] || return 1 ;;
+    *:*)               [[ "$1" =~ ^[^:/[:space:]]+:[0-9]+$ ]] || return 1 ;;
+    *[!A-Za-z0-9._-]*) return 1 ;;
+  esac
+  return 0
+}
 gr_testdb_component() {
-  local url="${JOMFORM_TEST_DATABASE_URL:-}" comp
+  local url="${JOMFORM_TEST_DATABASE_URL:-}" comp auth tail
   if [ -z "$url" ]; then printf 'unset'; return 0; fi
-  comp="$(printf '%s' "$url" \
-    | sed -E 's#^[A-Za-z0-9+.-]+://##; s#^[^@/]*@##; s#\?.*$##; s#/$##')"
+  comp="${url#*://}"                       # the scheme, when there is one
+  comp="$(printf '%s' "$comp" | sed -E 's#\?.*$##; s#/$##')"
+  auth="${comp%%/*}"                       # the authority: up to the first '/'
+  tail="${comp#"$auth"}"                   # whatever follows it (path, or empty)
+  case "$auth" in
+    *@*) comp="${auth##*@}$tail" ;;        # step 1 — the LAST @ inside the authority
+    *)   case "$comp" in
+           *@*)                            # step 3 — an @ at or after the path
+             # The authority decides which reading the driver takes: where it is a
+             # real `host[:port]` the tail is a DATABASE name and the whole value
+             # is the driver's own answer; otherwise the `@` is not shown to be a
+             # credential delimiter and the strip is kept. See THE RULE above.
+             gr_is_hostport "$auth" || comp="${comp##*@}" ;;
+         esac ;;
+  esac
   printf '%s' "$comp" \
     | sed -E 's#^(localhost|127\.0\.0\.1|\[::1\])(:[0-9]+)?(/.*)?$#loopback\2\3#'
 }
