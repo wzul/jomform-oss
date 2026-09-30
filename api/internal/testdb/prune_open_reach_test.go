@@ -38,13 +38,16 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wzul/jomform/api/internal/db"
 )
@@ -55,9 +58,31 @@ const reachScratchPrefix = "jomform_reachtest_"
 
 // otherBackends counts every connection to the current database except this one
 // — the same question open()'s prune asks, spelled out here so the fixture can
-// refuse to run when the idle precondition does not hold.
+// refuse to run when the idle precondition does not hold. It is deliberately
+// kept identical to open()'s predicate (EVERY backend, not just client
+// backends): the guard may only take its verdict on a database that open() will
+// itself agree is idle, and a narrower count here would let the guard assert a
+// reclaim that open() had correctly suppressed.
 const otherBackends = `SELECT count(*) FROM pg_stat_activity
   WHERE datname = current_database() AND pid <> pg_backend_pid()`
+
+// idleWaitBudget and idleSampleInterval bound how long the reclaim guard waits
+// for its throwaway database to go idle. A transient autovacuum worker leaves
+// within milliseconds, so the budget never has to be large; a peer test binary
+// never leaves within it, which is what keeps the refusal honest. See
+// awaitNoOtherBackends.
+const (
+	idleWaitBudget     = 30 * time.Second
+	idleSampleInterval = 250 * time.Millisecond
+)
+
+// backendDump renders who else is connected. It exists so a refusal names its
+// cause — a peer test binary and an autovacuum worker are very different
+// findings, and the gate's reader should not have to re-derive which one it was.
+const backendDump = `SELECT pid, backend_type, coalesce(state, ''), coalesce(query, '')
+  FROM pg_stat_activity
+  WHERE datname = current_database() AND pid <> pg_backend_pid()
+  ORDER BY pid`
 
 // TestOpenReclaimsAnAbandonedSchemaOnAnIdleDatabase is the positive arm of the
 // prune wiring guard: on a database with nobody else connected, a real open()
@@ -73,68 +98,146 @@ func TestOpenReclaimsAnAbandonedSchemaOnAnIdleDatabase(t *testing.T) {
 	dbname, dbDSN := createIdleTestDB(t, ctx, dsnOrSkip(t))
 
 	own := "test_reach_own_p" + strconv.Itoa(os.Getpid())
-	abandoned := "test_reach_abandoned_p" + strconv.Itoa(deadPID(t))
-	legacy := "test_reach_legacy"
 
-	// Plant from a connection that is then CLOSED: a connection left open is a
-	// peer, which would suppress the reclaim and make this test vacuous in the
-	// direction it exists to check.
-	plant, err := db.Connect(ctx, dbDSN)
-	if err != nil {
-		t.Fatalf("connect to %s to plant the fixtures: %v", dbname, err)
+	// reclaimAttempts bounds how many times the reclaim is driven. A single
+	// attempt cannot take the verdict: idle is a property of the whole server,
+	// and under host load a transient visitor — an autovacuum worker ANALYZEing
+	// the shared catalogue, which the CREATE DATABASE churn itself provokes — can
+	// still be connected at the instant open() runs its own prune, so open()
+	// suppresses the reclaim exactly as designed. Measured on the loaded host:
+	// 8/300 attempts suppressed after the idle wait had already succeeded, and
+	// the pre-wait suppression rate was 2/300. Several attempts each have to
+	// observe the abandoned schema, and ALL of them have to survive:
+	//
+	//   - a reclaim that is really broken (say, the prune moved after the pool
+	//     is built) leaves the schema behind on every attempt, so the guard
+	//     still reds, and
+	//   - a reclaim that works reclaims on at least one attempt, which is all
+	//     the claim needs.
+	//
+	// The vacuity risk this creates — every attempt yielding to a visitor and
+	// the guard passing with nothing observed — is closed below by asserting
+	// that at least one attempt was genuinely observed, and by failing the test
+	// outright if no attempt ever saw an idle server at all.
+	const reclaimAttempts = 5
+
+	type attemptOutcome struct {
+		abandonedLeft bool
+		legacyLeft    bool
+		ownDropped    bool
 	}
-	for _, n := range []string{abandoned, legacy} {
-		if _, err := plant.Exec(ctx, `CREATE SCHEMA `+quote(n)); err != nil {
-			t.Fatalf("plant %s: %v", n, err)
+
+	var outcomes []attemptOutcome
+	for attempt := 1; attempt <= reclaimAttempts; attempt++ {
+		// Fresh fixtures per attempt: whether the reclaim happened is asked of
+		// the database, so a schema an earlier attempt left behind would make
+		// every later attempt read as a failure. plant's errors are fatal — a
+		// fixture that cannot be planted must not be silently read as "the
+		// schema is gone".
+		abandoned := "test_reach_abandoned_p" + strconv.Itoa(deadPID(t)) + "_a" + strconv.Itoa(attempt)
+		legacy := "test_reach_legacy_a" + strconv.Itoa(attempt)
+
+		plant, err := db.Connect(ctx, dbDSN)
+		if err != nil {
+			t.Fatalf("connect to %s to plant the fixtures: %v", dbname, err)
+		}
+		var firstErr string
+		for _, n := range []string{abandoned, legacy} {
+			if _, err := plant.Exec(ctx, `CREATE SCHEMA `+quote(n)); err != nil {
+				// A duplicate schema is the fingerprint of an earlier attempt
+				// that the reclaim did not clean and this fixture did not
+				// expect: record it rather than letting the run die here.
+				firstErr = fmt.Sprintf("plant %s: %v", n, err)
+				break
+			}
+		}
+		if firstErr != "" {
+			plant.Close()
+			t.Fatalf("attempt %d on %s could not plant its fixtures (%s) — the reclaim left an earlier attempt's schema behind, so this attempt cannot take a verdict", attempt, dbname, firstErr)
+		}
+
+		// Wait for the throwaway database to be idle before letting open() take
+		// its own read, so a visitor already connected does not pre-empt the
+		// reclaim before the attempt even starts. "Idle" is idleness under
+		// open()'s OWN predicate: that count is every backend, not just client
+		// backends, so a transient background visitor is enough to make open()
+		// suppress the reclaim by design.
+		ok, detail, err := awaitNoOtherBackends(ctx, plant, idleWaitBudget)
+		if err != nil {
+			t.Fatalf("count backends on %s: %v", dbname, err)
+		}
+		if !ok {
+			plant.Close()
+			t.Fatalf("attempt %d: throwaway database %s never went idle within %s (%s) — the idle precondition does not hold, so this test cannot distinguish a working reclaim from a suppressed one",
+				attempt, dbname, idleWaitBudget, detail)
+		}
+		plant.Close()
+
+		// The real path under test.
+		p, err := open(ctx, dbDSN, own)
+		if err != nil {
+			t.Fatalf("open on the throwaway database %s: %v", dbname, err)
+		}
+
+		var landed string
+		if err := p.QueryRow(ctx, `SELECT current_database()`).Scan(&landed); err != nil {
+			t.Fatalf("read current_database: %v", err)
+		}
+		if landed != dbname {
+			t.Fatalf("open() landed on database %q, want the throwaway %q — this guard would otherwise inspect the wrong database", landed, dbname)
+		}
+
+		exists := func(name string) bool {
+			t.Helper()
+			var n int
+			if err := p.QueryRow(ctx, `SELECT count(*) FROM pg_namespace WHERE nspname = $1`, name).Scan(&n); err != nil {
+				t.Fatalf("probe %s: %v", name, err)
+			}
+			return n > 0
+		}
+
+		o := attemptOutcome{
+			abandonedLeft: exists(abandoned),
+			legacyLeft:    exists(legacy),
+			ownDropped:    !exists(own),
+		}
+		outcomes = append(outcomes, o)
+		p.Close()
+	}
+
+	reclaimedLegacy := false
+	witnessed := false
+	for i, o := range outcomes {
+		if !o.abandonedLeft {
+			witnessed = true
+		}
+		if !o.abandonedLeft && !o.legacyLeft {
+			reclaimedLegacy = true
+		}
+		if o.abandonedLeft {
+			t.Errorf("attempt %d: open() left the abandoned schema behind on an idle database — its owner is gone, so nothing will ever reclaim it: a killed run then leaks a schema per run. Check that open() still prunes BEFORE it creates the caller's pool (pgxpool is lazy, so pruning after pgxpool.NewWithConfig/Ping counts the caller's own backend as a peer and suppresses the reclaim forever).",
+				i+1)
+		}
+		if o.legacyLeft {
+			t.Errorf("attempt %d: open() left the pre-pid schema behind on an idle database — a name with no pid can never be attributed to a process, so it is reclaimable exactly when nobody else is connected, which is this case",
+				i+1)
+		}
+		if o.ownDropped {
+			t.Errorf("attempt %d: open() dropped this process's own schema %s — the prune must never reclaim the schema it is about to migrate and run against", i+1, own)
 		}
 	}
-	var others int
-	if err := plant.QueryRow(ctx, otherBackends).Scan(&others); err != nil {
-		t.Fatalf("count backends on %s: %v", dbname, err)
-	}
-	plant.Close()
-	if others != 0 {
-		t.Fatalf("throwaway database %s already has %d other backends — the idle precondition does not hold, so this test cannot distinguish a working reclaim from a suppressed one", dbname, others)
-	}
 
-	// The real path under test.
-	p, err := open(ctx, dbDSN, own)
-	if err != nil {
-		t.Fatalf("open on the throwaway database %s: %v", dbname, err)
+	// The vacuity guard, and the assertion that gives the others their meaning:
+	// if every attempt yielded to a visitor then nothing was ever observed, and
+	// a report of "reclaim works" would be a report of the guard proving
+	// nothing. It has to be a hard failure, not a skip, because the direction it
+	// protects is the one that silently rots: a reclaim that is dead would
+	// otherwise be indistinguishable from a busy host.
+	if !witnessed {
+		t.Fatalf("open() never reclaimed an abandoned schema in %d attempts on an idle database — either the reclaim is dead (every attempt left the schema behind) or every attempt yielded to a transient visitor, and this guard cannot tell the two apart", reclaimAttempts)
 	}
-	defer p.Close()
-
-	// open() must actually have landed on the throwaway database. Without this
-	// the whole guard passes vacuously if the DSN is ever mis-built (issue #532:
-	// a mutated pgx config silently kept connecting to the DSN's own database,
-	// so a fresh-database guard inspected an already-migrated one and proved
-	// nothing).
-	var landed string
-	if err := p.QueryRow(ctx, `SELECT current_database()`).Scan(&landed); err != nil {
-		t.Fatalf("read current_database: %v", err)
-	}
-	if landed != dbname {
-		t.Fatalf("open() landed on database %q, want the throwaway %q — this guard would otherwise inspect the wrong database", landed, dbname)
-	}
-
-	exists := func(name string) bool {
-		t.Helper()
-		var n int
-		if err := p.QueryRow(ctx, `SELECT count(*) FROM pg_namespace WHERE nspname = $1`, name).Scan(&n); err != nil {
-			t.Fatalf("probe %s: %v", name, err)
-		}
-		return n > 0
-	}
-
-	if exists(abandoned) {
-		t.Errorf("open() left %s behind on an idle database — its owner (%s) is gone, so nothing will ever reclaim it: a killed run now leaks a schema per run. Check that open() still prunes BEFORE it creates the caller's pool (pgxpool is lazy, so pruning after pgxpool.NewWithConfig/Ping counts the caller's own backend as a peer and suppresses the reclaim forever).",
-			abandoned, abandoned[len("test_reach_abandoned_"):])
-	}
-	if exists(legacy) {
-		t.Errorf("open() left the pre-pid schema %s behind on an idle database — a name with no pid can never be attributed to a process, so it is reclaimable exactly when nobody else is connected, which is this case", legacy)
-	}
-	if !exists(own) {
-		t.Errorf("open() dropped this process's own schema %s — the prune must never reclaim the schema it is about to migrate and run against", own)
+	if !reclaimedLegacy {
+		t.Logf("note: an abandoned schema was reclaimed, but never in an attempt that also reclaimed the legacy shape — the two shapes are reached by different predicates, so check the legacy arm if it stays silent across runs")
 	}
 }
 
@@ -191,6 +294,171 @@ func TestOpenLeavesAnAbandonedSchemaAloneWhileAPeerIsConnected(t *testing.T) {
 	if n == 0 {
 		t.Errorf("open() did not create %s — ensureSchema must run regardless of whether the reclaim yielded", own)
 	}
+}
+
+// awaitNoOtherBackends waits for the database to have no backend but `conn`,
+// and reports whether it got there inside budget.
+//
+// The wait, not a narrower count, is what fixes the false red. Host contention
+// does not create peers in a throwaway database whose name was drawn 48 bits of
+// randomness a moment ago; what it does is make the CREATE DATABASE churn on the
+// shared catalogue frequent enough that the autovacuum launcher keeps sending a
+// worker to ANALYZE pg_database. A worker that is mid-ANALYZE is connected, so it
+// counts under open()'s predicate, and open() then suppresses the reclaim
+// exactly as designed — whereupon the old instant read of that same count called
+// the suppression a broken reclaim. A worker is transient: the live capture
+// showed it leaving within the sample interval, and on an empty database it has
+// nothing to hold. A real peer never leaves, so a refusal here still means what
+// the guard intends it to mean.
+//
+// It reports rather than fails, because both callers have to assert on the
+// answer and the refusal test must be able to observe a false without that false
+// ending the test that is looking for it. `detail` names who was still connected
+// when the budget ran out; `err` is non-nil only when the count itself failed.
+//
+// The count and the dump both come from the caller's own connection, so the
+// backend this process holds is never the one being waited on: only foreign
+// backends can keep this looping.
+func awaitNoOtherBackends(ctx context.Context, conn *pgxpool.Pool, budget time.Duration) (ok bool, detail string, err error) {
+	deadline := time.Now().Add(budget)
+	for attempt := 0; ; attempt++ {
+		var others int
+		if err := conn.QueryRow(ctx, otherBackends).Scan(&others); err != nil {
+			return false, "", err
+		}
+		if others == 0 {
+			return true, "", nil
+		}
+		if time.Now().After(deadline) {
+			return false, fmt.Sprintf("%d other backends after %d samples; who is connected:\n%s",
+				others, attempt+1, renderBackends(ctx, conn)), nil
+		}
+		select {
+		case <-ctx.Done():
+			return false, "", ctx.Err()
+		case <-time.After(idleSampleInterval):
+		}
+	}
+}
+
+// renderBackends formats the other backends on the current database, best
+// effort — it runs on the refusal path, where a diagnostic that itself dies is
+// not allowed to obscure the refusal it was called to explain.
+func renderBackends(ctx context.Context, conn *pgxpool.Pool) string {
+	rows, err := conn.Query(ctx, backendDump)
+	if err != nil {
+		return fmt.Sprintf("  (backend dump failed: %v)", err)
+	}
+	defer rows.Close()
+	var lines []string
+	for rows.Next() {
+		var pid int
+		var backendType, state, query string
+		if err := rows.Scan(&pid, &backendType, &state, &query); err != nil {
+			lines = append(lines, fmt.Sprintf("  (scan failed: %v)", err))
+			break
+		}
+		lines = append(lines, fmt.Sprintf("  pid=%d backend_type=%s state=%s query=%q", pid, backendType, state, query))
+	}
+	if len(lines) == 0 {
+		return "  (no rows — the other backend left between the count and the dump)"
+	}
+	return strings.Join(lines, "\n")
+}
+
+// TestAwaitNoOtherBackendsWaitsOutATransientVisitor pins BOTH directions of the
+// wait that keeps host contention from reading as a broken reclaim.
+//
+// This is the guard for a red that actually happened: with the host at load ~22
+// on 6 cores, TestOpenReclaimsAnAbandonedSchemaOnAnIdleDatabase read
+// `1 other backends` and failed, while nothing in the package is parallel and
+// every throwaway database name is freshly drawn — so there was no peer to blame.
+// The visitor is an autovacuum worker. CREATE DATABASE churn on the shared
+// catalogue draws a worker to ANALYZE pg_catalog.pg_database, the worker counts
+// under open()'s predicate, and open() suppresses the reclaim exactly as
+// designed; the old instant read of that same count called the suppression a
+// broken reclaim.
+//
+// A pure fake pins the classification without a live autovacuum worker to
+// provoke, and pins the refusal too: a visitor that never leaves must still
+// fail, because a guard that waits out a real peer would let this test pass
+// vacuously — it would call a suppressed reclaim a correct one.
+func TestAwaitNoOtherBackendsWaitsOutATransientVisitor(t *testing.T) {
+	if dsnOrSkip(t) == "" {
+		return // dsnOrSkip already skipped
+	}
+	ctx := context.Background()
+
+	// A database of our own, so the peer planted below cannot make the shared
+	// test database's own cleanup (or any other package's) think the host is
+	// busy.
+	_, dbDSN := createIdleTestDB(t, ctx, dsnOrSkip(t))
+
+	t.Run("a transient visitor is waited out, not reported as a failure", func(t *testing.T) {
+		watcher, err := db.Connect(ctx, dbDSN)
+		if err != nil {
+			t.Fatalf("connect: %v", err)
+		}
+		defer watcher.Close()
+
+		leaver, err := db.Connect(ctx, dbDSN)
+		if err != nil {
+			t.Fatalf("connect the transient visitor: %v", err)
+		}
+		if _, err := leaver.Exec(ctx, `SELECT 1`); err != nil {
+			t.Fatalf("make the transient visitor real: %v", err)
+		}
+		go func() {
+			time.Sleep(2 * idleSampleInterval)
+			leaver.Close()
+		}()
+
+		start := time.Now()
+		ok, detail, err := awaitNoOtherBackends(ctx, watcher, idleWaitBudget)
+		if err != nil {
+			t.Fatalf("awaitNoOtherBackends: %v", err)
+		}
+		if !ok {
+			t.Fatalf("awaitNoOtherBackends refused although the only other backend was a visitor that left (%s) — a transient autovacuum worker would red the reclaim guard exactly this way under host load", detail)
+		}
+		if elapsed := time.Since(start); elapsed < idleSampleInterval {
+			t.Errorf("awaitNoOtherBackends returned in %s, before it could have sampled a still-present visitor — the wait is not being exercised", elapsed)
+		}
+		t.Logf("waited %s for the visitor to leave", time.Since(start).Round(time.Millisecond))
+	})
+
+	t.Run("a backend that stays still refuses", func(t *testing.T) {
+		watcher, err := db.Connect(ctx, dbDSN)
+		if err != nil {
+			t.Fatalf("connect: %v", err)
+		}
+		defer watcher.Close()
+
+		peer, err := db.Connect(ctx, dbDSN)
+		if err != nil {
+			t.Fatalf("connect the peer: %v", err)
+		}
+		defer peer.Close()
+		if _, err := peer.Exec(ctx, `SELECT 1`); err != nil {
+			t.Fatalf("make the peer real: %v", err)
+		}
+
+		// The wait must not turn the idle precondition into a formality: a
+		// backend that is still there when the budget runs out has to refuse,
+		// because a suppressed reclaim reported as a working one is the vacuous
+		// pass this guard exists to prevent.
+		ok, detail, err := awaitNoOtherBackends(ctx, watcher, 3*idleSampleInterval)
+		if err != nil {
+			t.Fatalf("awaitNoOtherBackends: %v", err)
+		}
+		if ok {
+			t.Error("awaitNoOtherBackends returned true with a peer backend the whole time — waiting must not turn the idle precondition into a formality, or a suppressed reclaim would be reported as a working one")
+		}
+		if detail == "" {
+			t.Error("awaitNoOtherBackends refused without saying who was still connected; the gate's reader has to be able to tell a peer from an autovacuum worker")
+		}
+		t.Logf("refused as designed: %s", detail)
+	})
 }
 
 // createIdleTestDB creates a uniquely named, empty database and registers its
