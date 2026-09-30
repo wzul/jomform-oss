@@ -172,7 +172,11 @@ DF_UNREADABLE='exit 255'
 # every spawn".
 BOARD="$SB/board.db"
 make_board() {
-  rm -f "$BOARD"
+  # Remove the sidecars too: the WAL leg of case 22 deliberately leaves a
+  # `-wal`/`-shm` pair behind (that is the measured truth it pins), and a stale
+  # `-wal` next to a freshly recreated `.db` is a corrupt fixture — the kind of
+  # silent lie this file's fixture self-check exists to catch.
+  rm -f "$BOARD" "$BOARD-wal" "$BOARD-shm"
   sqlite3 "$BOARD" "
     CREATE TABLE task_runs (
       id       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -510,21 +514,73 @@ check "no board on the host sends no alert" "$(alert_count)" "0"
 contains "no board is reported as disabled, not healthy" "$(cat "$LOG")" "board disabled=1"
 
 # 22. The board check must never WRITE to the board it watches: a monitor that
-#     takes a write lock on the live board DB is a new outage. Assert the file's
-#     mtime and size are unchanged, and that no -wal/-shm pair was left behind.
+#     takes a write lock on the live board DB is a new outage. Assert the
+#     fingerprint that IS the guarantee — the `.db`'s bytes (sha256) and its
+#     mtime are unchanged by a pass — in BOTH journal modes, because the live
+#     boards are WAL and a rollback-mode fixture cannot see the WAL case at all.
+#
+#     NOT asserted, deliberately: "no -wal/-shm was left behind". That claim was
+#     here before and it was only ever true because the fixture is rollback-mode
+#     (sqlite deletes its journal on close). A read-only open of a WAL database
+#     materialises the `-wal`/`-shm` pair — SQLite's own URI docs name only
+#     `immutable=1` as the way to skip locking and change detection
+#     (https://www.sqlite.org/uri.html) — so on a WAL board the pair may APPEAR.
+#     That is harmless (the open is read-only and takes no write lock) but it is
+#     NOT what the old assertion claimed, so instead of pretending it does not
+#     happen we pin the direction it actually goes: absent before, present after,
+#     and the `.db` byte-identical across it. Asserting it in the direction the
+#     old case could not see is what keeps this test from being a tautology.
+fingerprint() { # prints "<sha256> <mtime>" — the pair that must survive a pass
+  printf '%s %s' "$(sha256sum "$BOARD" | cut -d' ' -f1)" "$(stat -c '%Y' "$BOARD")"
+}
+
 reset; make_board
 board_add t_a dev crashed 600 "$IMPORT_ERR"
 board_add t_b qa  crashed 700 "$IMPORT_ERR"
 board_add t_c dev crashed 800 "$IMPORT_ERR"
+# The fixture is rollback-mode: prove it, so the two legs below are known to be
+# measuring different modes rather than the same one twice.
+check "fixture (rollback leg) is journal_mode=delete" \
+  "$(sqlite3 "$BOARD" 'PRAGMA journal_mode;')" "delete"
+check "fixture (rollback leg) starts with no sidecars" \
+  "$([ -e "$BOARD-wal" ] || [ -e "$BOARD-shm" ] && echo yes || echo no)" "no"
+BOARD_SHA_BEFORE="$(fingerprint)"
 KANBAN_DB_RUN="$BOARD"
-before="$(stat -c '%Y %s' "$BOARD")"
 out=$(run); rc=$?
-after="$(stat -c '%Y %s' "$BOARD")"
-check "watching the board does not modify it" "$after" "$before"
+check "watching a rollback-mode board exits 1 (it did the work)" "$rc" "1"
+check "watching a rollback-mode board does not modify it" \
+  "$(fingerprint)" "$BOARD_SHA_BEFORE"
 if [ -e "$BOARD-wal" ] || [ -e "$BOARD-shm" ]; then
-  bad "watching the board left a -wal/-shm behind"
+  bad "a rollback-mode board gained a -wal/-shm pair"
 else
-  ok "watching the board leaves no -wal/-shm behind"
+  ok "a rollback-mode board gains no -wal/-shm pair"
+fi
+
+# The WAL leg — the mode the live boards actually use. WAL-ifying the fixture and
+# letting each sqlite3 close (a checkpoint on last-close) leaves the file in WAL
+# mode with NO sidecars, so "before" is genuinely absent and a pass is what
+# creates them. (Measured on this host: journal_mode=wal, wal=no shm=no after
+# the fixture is built.)
+reset; make_board
+sqlite3 "$BOARD" "PRAGMA journal_mode=WAL;" >/dev/null
+board_add t_a dev crashed 600 "$IMPORT_ERR"
+board_add t_b qa  crashed 700 "$IMPORT_ERR"
+board_add t_c dev crashed 800 "$IMPORT_ERR"
+check "fixture (WAL leg) is journal_mode=wal" \
+  "$(sqlite3 "$BOARD" 'PRAGMA journal_mode;')" "wal"
+check "fixture (WAL leg) starts with no sidecars" \
+  "$([ -e "$BOARD-wal" ] || [ -e "$BOARD-shm" ] && echo yes || echo no)" "no"
+BOARD_SHA_BEFORE="$(fingerprint)"
+KANBAN_DB_RUN="$BOARD"
+out=$(run); rc=$?
+check "watching a WAL board exits 1 (it did the work)" "$rc" "1"
+check "watching a WAL board does not modify the .db (bytes + mtime)" \
+  "$(fingerprint)" "$BOARD_SHA_BEFORE"
+# The measured truth the old assertion could not see, in the direction it goes.
+if [ -e "$BOARD-wal" ] && [ -e "$BOARD-shm" ]; then
+  ok "a WAL board MATERIALISES the -wal/-shm pair (sqlite read-only WAL behaviour, not a write)"
+else
+  bad "a WAL board did not materialise -wal/-shm — this leg is no longer measuring the WAL case (fixture or sqlite changed)"
 fi
 
 echo "--- refusal to run blind ---"

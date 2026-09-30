@@ -428,7 +428,17 @@ check_kanban() { # prints detail, returns 0 healthy / 1 failing / 2 disabled
   }
   local uri out rc
   # `mode=ro` in the URI AND `-readonly`: never take a write lock on the live
-  # board DB, and never leave a `-wal`/`-shm` pair behind.
+  # board DB, and never modify the `.db` itself — a pass leaves its bytes and
+  # its mtime unchanged (the self-test asserts that fingerprint in BOTH journal
+  # modes).
+  #
+  # Deliberately NOT claimed: that the pass leaves no file behind. A read-only
+  # open of a **WAL** database materialises the `-wal`/`-shm` pair — they are
+  # what read-only WAL readers share to coordinate — and the boards on an agent
+  # host are WAL, so a pass on an idle board creates both files. SQLite's own
+  # URI docs name only `immutable=1` as the way to skip locking and change
+  # detection (https://www.sqlite.org/uri.html), and that must NOT be used here:
+  # it disables change detection while the dispatcher is writing to the board.
   uri="file:$KANBAN_DB?mode=ro"
   # One round-trip, five scalars. `error LIKE '%ModuleNotFoundError%'` is the
   # import-failure signature of the incident that produced this card: the

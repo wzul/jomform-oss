@@ -136,7 +136,15 @@ It asserts the properties that make a watchdog worth having —
   signature; two crashes do not; card-level outcomes (`timed_out`, `reclaimed`,
   `blocked`, review states) never do; a configured-but-unreadable board fails
   loud; a host with no board stays quiet *and says so* in the digest; and reading
-  the board leaves its bytes, its mtime and its `-wal`/`-shm` state untouched;
+  the board **never takes a write lock and never modifies the `.db`** — its bytes
+  (sha256) and its mtime are identical before and after a pass, asserted in
+  **both** journal modes. On a **WAL** board (what the agent host's boards are)
+  the read-only open additionally *materialises* the `-wal`/`-shm` pair when
+  nothing else holds them; that is normal SQLite WAL reader behaviour, not a
+  write, and the test pins it that way rather than claiming it never happens.
+  (`immutable=1` is the only URI mode that skips locking/change detection, and it
+  is deliberately **not** used: it would blind the check to the dispatcher's
+  writes while it runs.)
 - **no notifier is exit 2, never `ok`**, and an undeliverable alert is exit 3.
 
 The board's worktree pruner is the other host-only safety script in this
@@ -150,6 +158,15 @@ skipping `/readyz` on failure → 5 failures; running the whole suite against th
 **pre-`board` watchdog** (before the check existed) → 25 failures, all of them
 the new board assertions, which is the measurement that says the board cases
 test the fix rather than restating it.
+
+Two more, added with the WAL correction to case 22 (measured in a throwaway
+copy, control green at 103/0 first): restoring the **pre-fix case 22** — the old
+"leaves no `-wal`/`-shm` behind" claim, run against a **WAL** board — → 1 failure,
+`watching the board left a -wal/-shm behind`, which is precisely the assertion
+that was a tautology on a rollback-mode fixture; and making the check **write**
+to the board (dropping the `-readonly` guard and adding a real `PRAGMA`) → 3
+failures, every one of them a new fingerprint/sidecar leg — the `.db`
+sha256+mtime is now pinned on both journal modes.
 
 ## Kanban worktree pruner — what it may and may not delete
 
