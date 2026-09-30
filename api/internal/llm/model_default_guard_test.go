@@ -83,11 +83,19 @@
 // exemption table" is never a way to make a retired id green without saying why.
 //
 // THE BITE PROOF. api/scripts/biteproof_model_id_scan.py sabotages one shape at a
-// time and requires the guard in this tree to go RED naming the file, while the
-// guard at `origin/main` (the pre-fix reader) stays GREEN on the same mutation —
-// that second leg is the "the old scan missed this" column. It is registered in
-// BITE-HARNESSES.md, and it refuses to report a verdict when the two readers are
-// byte-identical (a comparison of a guard with itself proves nothing).
+// time and requires the guard in this tree to go RED naming the file, while a BASE
+// revision's reader stays GREEN on the same mutation — that second leg is the "the
+// old scan missed this" column. It is registered in BITE-HARNESSES.md, and it
+// refuses to report a verdict when its two readers are byte-identical (a comparison
+// of a guard with itself proves nothing).
+//
+// THE BASE IS DERIVED, NOT `origin/main`. It used to be `origin/main`, and that was
+// correct only until this guard's own rewrite MERGED there: from that merge on,
+// `origin/main` IS the widened reader, so every legacy BASE leg compared two
+// caught-up readers and read RED while naming no defect (measured: 5 of 10 cases,
+// card t_492976fe). The default is now the parent of the newest commit at
+// `origin/main` that touched this guard, and it is CAPABILITY-CHECKED — a base whose
+// reader already catches the colon shape is refused rather than used.
 package llm
 
 import (
@@ -122,6 +130,12 @@ var retiredModelFamily = "deepseek-v4-" + "flash"
 // does not try to sort live ids from dead ones — it keeps the tree on the one id
 // the constant pins, which is what docs-parity already says.
 //
+// A family is not a fixed shape: it may carry a hyphen (`gpt-oss`, `deepseek`)
+// or none at all (`gemma`, `mistral`), and the id's tail is separated from it by
+// `-`, a leading digit or a `:` (`gpt-oss:120b`). All three are the SAME claim —
+// an id from a family this guard judges — so all three are judged (see
+// modelToken and idHasIdSeparator below).
+//
 // Sorted longest-first so `gpt-oss` is preferred over `gpt` when classifying a
 // token; the match in modelFamilyOf is a prefix test, not a substring search.
 var modelFamilies = []string{
@@ -143,8 +157,11 @@ var modelFamilies = []string{
 //   - the inner `.`/`:` of a real id are kept — a tagged id is a DIFFERENT id
 //     and must not be normalised into the untagged one;
 //   - the family must be followed by an ID SEPARATOR and nothing else will do:
-//     `-` (the shape every hyphenated id uses — `deepseek-v4.1-flash`,
-//     `gpt-oss:120b`) or a leading DIGIT (the `gemma4` shape). Without that the
+//     `-` (the shape every hyphenated id uses — `deepseek-v4.1-flash`), a
+//     leading DIGIT (the `gemma4` shape), or a `:` with an id-shaped tail (the
+//     `id:tag` spelling — `gpt-oss:120b`, `mistral:7b` — which is the only
+//     branch that reaches a family carrying no hyphen, because the other two
+//     require the very hyphen such a family does not have). Without that the
 //     bare family name would become a hit (`phi` and `solar` are English words),
 //     and a guard that reports prose is a guard people silence.
 //
@@ -157,10 +174,20 @@ var modelFamilies = []string{
 // reader matched every `deepseek-…` token and caught `deepseek-coder`, so the
 // digit filter lost a shape this guard already had. The rule is now the separator
 // itself — `<family><separator>` is an id and is judged, digit or not — and the
-// two branches below are exactly the two separator shapes.
+// three branches below are exactly the three separator shapes.
+//
+// WHY THE `:` BRANCH IS NOT JUST `[0-9]`-OR-`-` AGAIN. The two original branches
+// both require something a hyphenless family does not have: the first needs the
+// `-` itself, the second a leading digit. A family written `id:tag` is therefore
+// reached by NEITHER — and one such id is this guard's own measured-live
+// exemplar, `gpt-oss:120b` (header above), which `unknownModelTag` cannot catch
+// either because that net requires a digit before the colon and `gpt-oss` carries
+// none (card t_492976fe). Measured on this tree: a `:` branch fires on zero real
+// files, because the only `family:` tokens on the tree are inside this file's own
+// comments — and the scan skips `*_test.go`.
 var modelToken = regexp.MustCompile(
 	`(?i)\b(?:` + strings.Join(modelFamilies, "|") +
-		`)(?:-[A-Za-z0-9.:_-]*[A-Za-z0-9]|[0-9](?:[A-Za-z0-9.:_-]*[A-Za-z0-9])?)`)
+		`)(?:-[A-Za-z0-9.:_-]*[A-Za-z0-9]|[0-9](?:[A-Za-z0-9.:_-]*[A-Za-z0-9])?|:(?:[A-Za-z0-9][A-Za-z0-9._-]*[A-Za-z0-9]|[A-Za-z0-9]))`)
 
 // unknownModelTag matches `<name with a digit>:<N>[bm]` — the id:size tag a model
 // is written with (`qwen3-coder:480b`, `gpt-oss:120b`, `llama-3:70b`). It is the
@@ -508,6 +535,15 @@ func TestScanSeesTheShapesTheOldWhitelistCouldNot(t *testing.T) {
 		// above is a family the old token rule never reached, this one is a shape
 		// the pre-widening reader CAUGHT and the widened one lost.
 		"nested/other_family_nodigit.go": "// The drafter calls gemini-pro via the internal endpoint\n",
+		// (c) a LISTED family's id in the `id:tag` spelling, whose family carries
+		// NO HYPHEN — so neither old branch could reach it: the hyphen branch
+		// needs the `-` itself and the digit branch a leading digit. This is the
+		// shape card t_492976fe opened on, and `unknownModelTag` cannot cover it
+		// either because that net needs a digit BEFORE the colon. The exemplar
+		// this guard's own header records as measured LIVE (`gpt-oss:120b`, the
+		// hyphenated-family variant of the same gap) is pinned by
+		// api/scripts/biteproof_model_id_scan.py rather than repeated here.
+		"nested/colon_tagged.go": "// The drafter calls mistral:7b via the internal endpoint\n",
 		// (b) an id whose family is not even on modelFamilies' list
 		"nested/unknown_family.md": "runs on ernie-4.5:8b today\n",
 		// the shape that already bit before this card, kept so the widening
@@ -554,6 +590,7 @@ func TestScanSeesTheShapesTheOldWhitelistCouldNot(t *testing.T) {
 		"nested/llms.txt",
 		"nested/other_family.go",
 		"nested/other_family_nodigit.go",
+		"nested/colon_tagged.go",
 		"nested/unknown_family.md",
 	}
 	for _, rel := range want {
@@ -598,6 +635,11 @@ func blindSpotNote(rel string) string {
 	if filepath.Base(rel) == "other_family_nodigit.go" {
 		return "the digit filter dropped a LISTED family's id that carries no digit (`<family>-tail` is " +
 			"an id) — the shape the pre-widening reader caught for the deepseek family (card t_16fa0164)"
+	}
+	if filepath.Base(rel) == "colon_tagged.go" {
+		return "the separator rule accepted only `-` or a leading digit, so a hyphenless family's " +
+			"`<family>:<tag>` id was reached by no branch at all — and unknownModelTag needs a digit " +
+			"before the colon, which such a family does not have (card t_492976fe)"
 	}
 	switch filepath.Ext(rel) {
 	case ".mjs":
@@ -788,16 +830,25 @@ func (e *unreadableFileError) Error() string { return "not text: " + e.path }
 
 // idHasIdSeparator reports whether a family token is followed by an id SEPARATOR:
 // `-` (the shape every hyphenated id uses — `deepseek-coder`, `gemini-pro`,
-// `claude-opus`, `gpt-oss:120b`) or a leading DIGIT (the `gemma4` shape). A bare
-// family word in prose carries neither, which is the only thing this test is here
-// to reject — `phi` and `solar` are English words.
+// `claude-opus`), a leading DIGIT (the `gemma4` shape), or a `:` with an
+// id-shaped tail (the `id:tag` spelling — `gpt-oss:120b`, `mistral:7b`). A bare
+// family word in prose carries none of the three, which is the only thing this
+// test is here to reject — `phi` and `solar` are English words.
+//
+// WHY THE `:` BRANCH IS LOAD-BEARING. The two other branches cannot reach a
+// family that carries no hyphen: the first requires the `-` itself, the second a
+// leading digit. `gpt-oss:120b` — the id this guard's own header records as
+// measured LIVE — is therefore judged by nothing without it, and `unknownModelTag`
+// cannot cover it either because that net needs a digit before the colon (card
+// t_492976fe). The tail after the `:` must be id-shaped (at least one word
+// character), so a family name followed by a colon and a space (`phi: a word`)
+// stays prose.
 //
 // WHY NOT "CONTAINS A DIGIT". That was the previous rule, and it is a different
 // statement: it drops a real id that merely has no digit in it (`deepseek-coder`),
 // which the reader before this widening DID catch — so the filter was a
 // regression, not a narrowing of prose noise (card t_16fa0164). The separator,
-// not the digit, is what distinguishes an id from a family name: `<family>-tail`
-// is the id shape, and `<family><digit>` is the other one.
+// not the digit, is what distinguishes an id from a family name.
 //
 // The digit fallback is unreachable by construction — modelToken only matches a
 // token that starts with one of modelFamilies — and is kept as the conservative
@@ -810,9 +861,27 @@ func idHasIdSeparator(id string) bool {
 			continue
 		}
 		rest := low[len(fam):]
-		return rest != "" && (rest[0] == '-' || (rest[0] >= '0' && rest[0] <= '9'))
+		if rest == "" {
+			return false
+		}
+		switch {
+		case rest[0] == '-' || (rest[0] >= '0' && rest[0] <= '9'):
+			return true
+		case rest[0] == ':':
+			// A colon with something id-shaped after it. `phi: a word` carries a
+			// space there and stays prose.
+			return len(rest) > 1 && isIDWordChar(rest[1])
+		}
+		return false
 	}
 	return strings.ContainsAny(id, "0123456789")
+}
+
+// isIDWordChar reports whether b can be the first character of an id's tail
+// after a `:`. Deliberately narrow: a space, a `)` or a sentence period must not
+// turn a family name in prose into an id.
+func isIDWordChar(b byte) bool {
+	return b >= 'a' && b <= 'z' || b >= '0' && b <= '9' || b == '.' || b == '_' || b == '-'
 }
 
 // modelFamilyOf returns the family modelFamilies carries for an id, or "" when
