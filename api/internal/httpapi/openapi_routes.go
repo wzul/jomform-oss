@@ -141,7 +141,7 @@ var restRouteDocs = []restRouteDoc{
 		Desc: "Every form with its slug, status, public URL and mode. `mode` is payment (default) or response."},
 	{Method: "POST", Path: "/v1/rest/forms", Handler: "createForm", Tag: "Forms",
 		Summary: "Create a form", Access: AccessWrite, Body: true, Req: "FormWrite", Resp: "Form",
-		Desc: "A blank slug is generated from the title and uniquified within the workspace. The form is created as a draft; publish it with POST /v1/rest/forms/{id}/publish."},
+		Desc: "A blank slug is generated from the title and uniquified within the workspace. An explicit slug is used as given, and must be unique among the workspace's live forms: a slug another live form already serves is refused with 409 form.slugInUse (the same code and sentence a slug rename onto it answers). The form is created as a draft; publish it with POST /v1/rest/forms/{id}/publish."},
 	{Method: "POST", Path: "/v1/rest/forms/ai-generate", Handler: "aiGenerateForm", Tag: "Forms",
 		Summary: "Draft a form config from a prompt (AI)", Access: AccessWrite, Body: true, Resp: "Form",
 		RespDesc:  "A draft form config (blocks + theme) to review and then save.",

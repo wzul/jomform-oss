@@ -80,6 +80,33 @@ const LOCK_SUBDIR = "jomform-biteproof-docs-tool-claims";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// THE WEB IMAGE BUILD RUNS THIS SUITE, AND HAS NO REPOSITORY TO ASK.
+//
+// web/Dockerfile runs `npm run build`, which runs these unit tests first, from a
+// build context whose root `.dockerignore` excludes `.git` and whose COPY set
+// lands only web/, api/ and MCP-PARITY.md — so /repo has no repo root and no
+// repository. EVERY leg below asks git for this worktree's absolute git dir, so
+// in the image the guard dies on `fatal: not a git repository (or any of the
+// parent directories)` and reds the webimage gate while the host `web` gate is
+// green — the same host-vs-image divergence class web/src/lib/buildContext.test.ts
+// exists to prevent (the MCP-PARITY.md ENOENT, one layer down).
+//
+// The skip is derived from POSITIVE evidence that this is the image, never from
+// "git did not answer": `nextManagedFiles.test.ts` uses the identical conjunction
+// (no `.git` AND no checkout-only root entry). `.gitignore` is the load-bearing
+// marker — it is NOT in the root `.dockerignore`, so its absence cannot be
+// explained by an ignore rule, only by there being no repo root at all. A broken
+// git in a real checkout keeps `.gitignore` and therefore still FAILS this leg
+// rather than skipping it.
+const CHECKOUT_ONLY_ROOT_ENTRIES = [".gitignore", "Makefile", "AGENTS.md"];
+function imageBuildSkipReason(): string | false {
+  const rootEntries = CHECKOUT_ONLY_ROOT_ENTRIES.filter((e) => existsSync(join(repoRoot, e)));
+  const isImage = !existsSync(join(repoRoot, ".git")) && rootEntries.length === 0;
+  return isImage
+    ? `the web image build has no repository: ${repoRoot} has no .git and no checkout-only root entry`
+    : false;
+}
+
 const git = (args: string[], cwd: string) =>
   execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 
@@ -115,7 +142,12 @@ function runHarness(env: NodeJS.ProcessEnv, cwd = repoRoot, script = HARNESS) {
   return { status: r.status, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
 
-test("the harness serialises on a PER-WORKTREE lock (t_ed66094c)", async () => {
+test("the harness serialises on a PER-WORKTREE lock (t_ed66094c)", async (t) => {
+  const imageReason = imageBuildSkipReason();
+  if (imageReason) {
+    t.skip(imageReason);
+    return;
+  }
   assert.ok(existsSync(HARNESS), `the harness is missing at ${HARNESS}`);
 
   // A private lock base per run: this guard never touches a real lane's lock, and two

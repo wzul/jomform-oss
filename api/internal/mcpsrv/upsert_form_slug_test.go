@@ -28,6 +28,7 @@ package mcpsrv
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -194,6 +195,56 @@ func TestUpsertFormUpdateSlugCollisionIsRefused(t *testing.T) {
 	}
 	if got := st.storedSlug(t, otherForm); got != takenSlug {
 		t.Errorf("the form owning the slug now has %q, want %q untouched", got, takenSlug)
+	}
+}
+
+// TestUpsertFormCreateSlugCollisionIsRefused is the CREATE half of this card's
+// scope (t_c9c7b104): an agent calling upsert_form with an explicit slug that is
+// already taken in the workspace must be told so, not handed a failure that
+// reads like the server broke.
+//
+// The tool's create path (parity.go: `if in.FormID == "" { ... s.deps.Forms.Create(ctx, f) }`)
+// passed an explicit slug straight into FormStore.Create, which returned the raw
+// SQLSTATE 23505 on forms_workspace_slug_key. A REST caller saw that as 500
+// `internal`; an agent saw it as an opaque driver string with no way to tell
+// "that slug is taken" from "the server is broken". The store now maps it to
+// ErrSlugTaken, which is what this asserts — and the error must name the slug.
+//
+// BITE: remove the ErrSlugTaken mapping in FormStore.Create and the error comes
+// back as the raw `duplicate key value violates unique constraint
+// "forms_workspace_slug_key"`, failing the sentinel assertion below.
+func TestUpsertFormCreateSlugCollisionIsRefused(t *testing.T) {
+	st := newUpsertSlugFixture(t)
+	takenSlug := "i-upt-create-" + randHex(4)
+	if st.seedForm(t, takenSlug) == "" {
+		t.Fatal("seeding the form that owns the slug returned no id")
+	}
+
+	_, _, err := st.srv.upsertForm(st.ctx, nil, upsertFormIn{
+		Title: "A second form on the same slug", Slug: takenSlug,
+	})
+	if err == nil {
+		t.Fatalf("upsert_form CREATE with the already-taken slug %q succeeded — two live forms "+
+			"now share one public URL", takenSlug)
+	}
+	if !errors.Is(err, dbstore.ErrSlugTaken) {
+		t.Fatalf("upsert_form CREATE on a taken slug returned %v, want dbstore.ErrSlugTaken.\n"+
+			"The raw driver error is the carded defect: it reaches the agent as an opaque "+
+			"SQLSTATE instead of \"that slug is already taken in this workspace\".", err)
+	}
+	if !strings.Contains(err.Error(), "slug") {
+		t.Errorf("the refusal does not mention the slug: %v", err)
+	}
+
+	// Exactly one live form on the slug: the refused create inserted nothing.
+	var n int
+	if qerr := st.pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM forms WHERE account_id=$1 AND slug=$2 AND deleted_at IS NULL`,
+		st.accountID, takenSlug).Scan(&n); qerr != nil {
+		t.Fatalf("count forms on the slug: %v", qerr)
+	}
+	if n != 1 {
+		t.Errorf("live forms on slug %q after a refused upsert_form create = %d, want 1", takenSlug, n)
 	}
 }
 

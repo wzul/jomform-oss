@@ -63,10 +63,19 @@ type Form struct {
 // ErrFormNotFound indicates a missing form.
 var ErrFormNotFound = errors.New("form not found")
 
-// ErrSlugTaken indicates a rename was refused because another live form in the
-// same account already serves the requested slug. Uniqueness is per account
-// (one account maps to one workspace, #77), so this is the store's answer to a
-// collision — never a silent overwrite of either form's URL.
+// ErrSlugTaken indicates a slug write was refused because another live form in
+// the same workspace already serves the requested slug. Uniqueness is per
+// workspace (one workspace owns its accounts), so this is the store's answer to
+// a collision — never a silent overwrite of either form's URL.
+//
+// TWO writers reach it, and they must answer the same thing: FormStore.Create
+// (an explicit slug that is already taken) and FormStore.RenameSlug (a rename
+// onto a taken slug). The store maps SQLSTATE 23505 on the per-workspace unique
+// index (forms_workspace_slug_key) to this sentinel at both call sites, so the
+// API can answer 409 form.slugInUse for the one user-visible situation however
+// it was reached. Before that mapping existed on the create path, the same
+// collision answered 500 `internal` with no code — the caller could not tell
+// "slug taken" from "the server broke" (t_c9c7b104).
 var ErrSlugTaken = errors.New("form slug already taken")
 
 // ErrInvalidSlug indicates a requested slug is not a usable URL segment.
@@ -146,6 +155,22 @@ const formSelect = `SELECT id, account_id, slug, title, config, theme, status, i
 
 // Create inserts a form. Nil config/theme maps are coerced to {} so a
 // missing key can never violate the NOT NULL constraints (SQLSTATE 23502).
+//
+// A slug another live form of the workspace already serves is ErrSlugTaken,
+// never the raw driver error. The per-workspace unique index
+// (forms_workspace_slug_key, partial on deleted_at IS NULL) is the authority on
+// the collision — a pre-check races any concurrent writer — so the mapping
+// happens at the error level, exactly as Restore and RenameSlug do it.
+//
+// Without it the INSERT's SQLSTATE 23505 escaped the store, respondErr's
+// default branch logged error_class=internal and answered 500 `internal error`,
+// and a REST API-key caller or an MCP upsert_form with an explicit slug could
+// not tell "that slug is taken" from "the server broke". The rename path onto
+// the SAME taken slug already answered 409 form.slugInUse, so one user-visible
+// situation had two answers and the 500 was the one hiding the reason. Mapping
+// here (the one insert path behind FormStore.Create) is inherited by every
+// caller — REST createForm, the two template-use routes, MCP upsert_form's
+// create path and MCP template clone — rather than repeated at each of them.
 func (s *FormStore) Create(ctx context.Context, f *Form) error {
 	if f.Config == nil {
 		f.Config = map[string]any{}
@@ -153,13 +178,21 @@ func (s *FormStore) Create(ctx context.Context, f *Form) error {
 	if f.Theme == nil {
 		f.Theme = map[string]any{}
 	}
-	return s.pool.QueryRow(ctx,
+	err := s.pool.QueryRow(ctx,
 		`INSERT INTO forms (account_id, slug, title, config, theme, status, redirect_success, redirect_failure, allow_embed, logo_url, is_template)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 		 RETURNING id, created_at, updated_at`,
 		f.AccountID, f.Slug, f.Title, f.Config, f.Theme, f.Status,
 		f.RedirectSuccess, f.RedirectFailure, f.AllowEmbed, f.LogoURL, f.IsTemplate,
 	).Scan(&f.ID, &f.CreatedAt, &f.UpdatedAt)
+	if isUniqueViolation(err) {
+		// The only unique index this INSERT can violate is the per-workspace
+		// slug index (forms_workspace_slug_key): forms' global UNIQUE on slug
+		// was dropped by migration 000019, and nothing else on the table is
+		// unique beyond its primary key.
+		return ErrSlugTaken
+	}
+	return err
 }
 
 // ListByAccount lists all non-deleted forms for an account. Templates

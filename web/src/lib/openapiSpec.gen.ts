@@ -2280,7 +2280,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
         "x-jomform-access": "read"
       },
       "post": {
-        "description": "A blank slug is generated from the title and uniquified within the workspace. The form is created as a draft; publish it with POST /v1/rest/forms/{id}/publish.",
+        "description": "A blank slug is generated from the title and uniquified within the workspace. An explicit slug is used as given, and must be unique among the workspace's live forms: a slug another live form already serves is refused with 409 form.slugInUse (the same code and sentence a slug rename onto it answers). The form is created as a draft; publish it with POST /v1/rest/forms/{id}/publish.",
         "operationId": "createForm",
         "requestBody": {
           "content": {
