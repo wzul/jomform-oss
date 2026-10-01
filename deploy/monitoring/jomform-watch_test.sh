@@ -503,6 +503,64 @@ out=$(run); rc=$?
 check "non-board DB exits 1" "$rc" "1"
 contains "non-board DB alerts" "$(alerts)" "DOWN board"
 
+# 20b. THE INPUT THAT ACTUALLY BREAKS THE QUERY: a board that reads fine but
+#      holds ONE `task_runs` row whose `metadata` is NOT valid JSON. The fourth
+#      scalar is `json_extract(metadata, '$.infrastructure')`, and SQLite raises
+#      `malformed JSON` on a non-JSON argument instead of returning NULL — so
+#      before `json_valid(metadata) AND` was added, one such row aborted the WHOLE
+#      single-round-trip SELECT into
+#      `board unreadable db=… err=Error: stepping, malformed JSON`, which is
+#      BOTH directions wrong at once:
+#        * it pages the operator "unreadable" for a board that reads fine, AND
+#        * it stops MEASURING, so a genuine crash burst in the same window pages
+#          nobody, and `import_err=` (the spawn-import signature, the scalar
+#          named after the incident that produced this check) is lost with the
+#          same SELECT.
+#      Cases 19/20 cover a missing board and a non-board; neither is this input —
+#      the one shape a host fault writes, since a worker that died before it
+#      could report carries whatever text its runner left in `metadata`.
+#      Two legs, because "it did not crash" is not the property being claimed:
+#        (a) it MEASURES and its scalars stay exact — with a non-JSON row and an
+#            infrastructure row in the window, `failures=2` (both counted) and
+#            `infra=1` (only the attributable one). A guard that swallowed the
+#            count, or dropped every row that has metadata, fails here.
+#            `metadata IS NULL` is unaffected (SQLite's `AND` short-circuits, so
+#            `json_extract` never sees the bad value) and is pinned by case 14,
+#            whose whole fixture is NULL metadata.
+#        (b) a REAL burst that includes the bad row still PAGES. This is the half
+#            that matters most: a guard that hid the error by blinding the check
+#            would look green in leg (a).
+#      Journal mode is deliberate here: `make_board` is rollback-mode, and the
+#      abort is a property of the SELECT, not of the journal — case 22 is where
+#      journal mode matters.
+reset; make_board
+board_add t_bad dev crashed      600 "pid 125 exited with code 1" 'worker died before it wrote a JSON metadata blob'
+board_add t_inf dev spawn_failed 800 "no restart-safe scope"      '{"failures": 1, "infrastructure": true}'
+KANBAN_DB_RUN="$BOARD"
+out=$(run); rc=$?
+check "a non-JSON metadata value does not abort the measurement" "$rc" "0"
+contains "the board line still reports the MEASURED count" "$(cat "$LOG")" "board db=$BOARD failures=2"
+contains "the infrastructure count stays exact beside a non-JSON row" "$(cat "$LOG")" "infra=1"
+notcontains "a good board is not reported unreadable" "$(cat "$LOG")" "board unreadable"
+notcontains "the malformed-JSON error never reaches the log" "$(cat "$LOG")" "malformed JSON"
+check "and a sub-threshold count is still not paged" "$(alert_count)" "0"
+
+# Same fixture shape, over the threshold: the burst must still page, with every
+# scalar intact. (`import_err=` is the fifth scalar in that one SELECT — proving
+# it survives here is proving the whole round-trip survived, not just the guard.)
+reset; make_board
+board_add t_bad dev crashed      600 "pid 125 exited with code 1" 'worker died before it wrote a JSON metadata blob'
+board_add t_b   qa  crashed      700 "$IMPORT_ERR"
+board_add t_c   dev spawn_failed 800 "no restart-safe scope"      '{"failures": 1, "infrastructure": true}'
+KANBAN_DB_RUN="$BOARD"
+out=$(run); rc=$?
+check "a burst that includes a non-JSON row still pages" "$rc" "1"
+check "and it is exactly one page" "$(alert_count)" "1"
+contains "the burst page counts every failure" "$(alerts)" "failures=3"
+contains "the burst page keeps the infrastructure attribution" "$(alerts)" "infra=1"
+contains "the burst page keeps the spawn-import signature" "$(alerts)" "import_err=1"
+notcontains "the burst page is not an unreadable report" "$(alerts)" "unreadable"
+
 # 21. A host with NO board at all (prod) stays quiet AND says so. `auto` must not
 #     turn "this host has no Kanban" into a failure, and it must not turn it into
 #     an invisible no-op either — the digest names it (asserted in 23).

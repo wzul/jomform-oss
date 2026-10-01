@@ -42,6 +42,15 @@ board with `JF_WATCH_KANBAN_DB=/path/to/kanban.db`; `auto` (the default) probes
 the two usual Hermes board paths. Set but unreadable — a deleted or misnamed
 board — is a **failure**, like an unreadable `df`.
 
+A board that reads fine but holds one row whose `metadata` is **not** JSON is not
+that case, and treating it as one is a trap: the `infrastructure` count reads
+`metadata` through `json_valid(metadata)` first, because SQLite **raises**
+`malformed JSON` on a non-JSON argument instead of returning `NULL`. One such row
+used to abort the whole five-scalar query, which was both directions wrong at
+once — the operator was paged `unreadable` for a board that reads perfectly, and
+the check stopped **measuring**, so a genuine burst in the same window paged
+nobody. `import_err=` is fetched by that same SELECT and went with it.
+
 A marker check is part of the HTTP checks on purpose: a proxy or hosting
 provider's error/maintenance page answers **200**, so status code alone cannot
 tell "our app" from "something else wearing our hostname".
@@ -135,7 +144,11 @@ It asserts the properties that make a watchdog worth having —
   distinct cards and lanes it hit and how many carried the spawn-import
   signature; two crashes do not; card-level outcomes (`timed_out`, `reclaimed`,
   `blocked`, review states) never do; a configured-but-unreadable board fails
-  loud; a host with no board stays quiet *and says so* in the digest; and reading
+  loud; a board holding one **non-JSON `metadata` value** is *not* unreadable —
+  it still measures and still pages, asserted in both directions (the bad row
+  alongside a sub-threshold count stays quiet, an over-threshold burst that
+  includes it still alerts with every scalar intact); a host with no board stays
+  quiet *and says so* in the digest; and reading
   the board **never takes a write lock and never modifies the `.db`** — its bytes
   (sha256) and its mtime are identical before and after a pass, asserted in
   **both** journal modes. On a **WAL** board (what the agent host's boards are)
@@ -167,6 +180,15 @@ that was a tautology on a rollback-mode fixture; and making the check **write**
 to the board (dropping the `-readonly` guard and adding a real `PRAGMA`) → 3
 failures, every one of them a new fingerprint/sidecar leg — the `.db`
 sha256+mtime is now pinned on both journal modes.
+
+The `json_valid(metadata)` guard was proven the same way, on the **shipped**
+bytes (the mutated copy is byte-identical to `git show
+v1.19.12:deploy/monitoring/jomform-watch.sh`, sha256 `a601b71c…`): control
+`115 passed / 0 failed`, then the guard line deleted → **10 failures, 105
+passed**, every one of them the new non-JSON case, each reading
+`board unreadable db=… err=Error: stepping, malformed JSON` — i.e. the exact
+false page and the exact lost measurement the check exists to prevent; guard
+restored → back to `115 passed / 0 failed`.
 
 ## Kanban worktree pruner — what it may and may not delete
 

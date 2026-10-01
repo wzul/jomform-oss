@@ -445,6 +445,16 @@ check_kanban() { # prints detail, returns 0 healthy / 1 failing / 2 disabled
   # dispatcher spawns on an interpreter that cannot import `hermes_cli`. It is
   # reported because it names the FAULT (and its fix), not just the symptom —
   # a bare crash count sends a reader to the cards instead of to the host.
+  #
+  # `json_valid(metadata) AND` guards the `infrastructure` read: SQLite RAISES
+  # `malformed JSON` on a non-JSON argument to `json_extract` instead of
+  # returning NULL, and `task_runs.metadata` is an untyped TEXT column — so ONE
+  # row whose metadata is not JSON used to abort this entire SELECT into the
+  # `unreadable` branch below. That was both directions wrong at once: a false
+  # "board unreadable" page for a board that reads fine, and NO measurement, so
+  # a real burst in the same window (and `import_err=`, fetched just below)
+  # paged nobody. `json_valid` is 0 for non-JSON and for NULL, and the `AND`
+  # short-circuits, so rows with NULL metadata are unaffected.
   out="$(kanban_sqlite "$uri" "
     SELECT
       (SELECT count(*) FROM task_runs
@@ -459,6 +469,7 @@ check_kanban() { # prints detail, returns 0 healthy / 1 failing / 2 disabled
       (SELECT count(*) FROM task_runs
         WHERE outcome IN ('crashed','gave_up','spawn_failed')
           AND started_at > strftime('%s','now') - $KANBAN_WINDOW
+          AND json_valid(metadata)
           AND json_extract(metadata, '\$.infrastructure') IS NOT NULL),
       (SELECT count(*) FROM task_runs
         WHERE outcome = 'crashed'
