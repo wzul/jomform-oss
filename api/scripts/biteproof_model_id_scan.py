@@ -170,6 +170,28 @@ COLON_PROSE = "ph" + "i: a word; sol" + "ar: another."
 # Bare family words with no id separator: prose, not an id. `Claude-` as a company
 # name is the near-miss that must not be swallowed into the id shape.
 BARE_PROSE = "Claude- is a company; phi and solar are words."
+# NEGATIVE (card t_dba05702): an ordinary English hyphenated compound whose first
+# word is a family name. That compound is matched by modelToken AND separates as
+# an id, so on the PRE-FIX reader it is reported as a `command`-family model id and
+# the guard reds about the shipped LLM default -- measured on a full local gate
+# (tree df7cf6a8) where the phrase sat in a shell check label. The fixed reader
+# keeps it as prose.
+#
+# ASSEMBLED FROM PARTS, like every id in this file, and for the same reason: the
+# guard reads THIS .py file, so the compound written whole here would be a stray
+# mention for the pre-fix reader on every BASE leg (that is the trap the harness
+# docstring already records for the earlier cut's two spelled-out ids).
+PROSE_COMPOUND_TOKEN = "com" + "mand-line"
+PROSE_COMPOUND = "shellcheck: the %s half of the check must stay quiet." % PROSE_COMPOUND_TOKEN
+
+# The revision the prose case pins BY NAME: the reader BEFORE the prose-compound
+# exclusion (card t_dba05702), i.e. the shipped reader the fix replaces. Pinned by
+# sha rather than the run-wide base because the run-wide derivation is stale for
+# cases 1-5 (see the note below the CASES table) and would make this case's BASE
+# leg read a reader it did not mean to. Resolved and capability-checked at startup
+# like COLON_CAUGHT_BASE, so a rewritten ref refuses with exit 2 instead of
+# reporting a comparison it did not make.
+PROSE_CAUGHT_BASE = os.environ.get("BITEPROOF_PROSE_CAUGHT_BASE", "3b410e52")
 
 # originals[path] = bytes before this harness touched anything (absent = created).
 originals = {}
@@ -474,6 +496,16 @@ def probe_colon_prose():
           "package qaprobe\n\n// %s\n" % COLON_PROSE)
 
 
+def probe_prose_compound():
+    # The English hyphenated compound whose first word is a family name (card
+    # t_dba05702). A file whose ONLY model-shaped token is this compound: the
+    # PRE-FIX reader reports it as a `command`-family id and reds, the fixed reader
+    # keeps it as prose and stays GREEN. Written into a shipped .go file so the
+    # walk certainly reads it, and the probe text carries no other id.
+    write(os.path.join(REPO, "api/internal/qa_probe_prose_compound.go"),
+          "package qaprobe\n\n// %s\n" % PROSE_COMPOUND)
+
+
 CASES = [
     {
         "name": "case 1: a NEW .mjs file naming the retired id (the old whitelist had no .mjs)",
@@ -562,7 +594,34 @@ CASES = [
         "mutate": probe_colon_prose,
         "branch_red": False,
     },
+    {
+        "name": "case 14: NEGATIVE control -- an English hyphenated compound is prose, not an id",
+        "mutate": probe_prose_compound,
+        # GREEN here: after the fix the compound is not an id at all.
+        "branch_red": False,
+        # RED at the pinned pre-fix reader: this was a FALSE POSITIVE, and that is
+        # the whole point of the case -- the shipped reader reported the phrase as
+        # a `command`-family model id and redd about the LLM default (card
+        # t_dba05702, measured on a full local gate, tree df7cf6a8).
+        "base_ref": PROSE_CAUGHT_BASE,
+        "base_expect": True,
+        "base_needles": ["api/internal/qa_probe_prose_compound.go", PROSE_COMPOUND_TOKEN],
+    },
 ]
+
+# KNOWN STALENESS IN THE RUN-WIDE DERIVATION (NOT this card's change; measured
+# byte-identically red on a pristine checkout of the base tree, so it is a
+# pre-existing defect and not a regression). Cases 1-5 expect `base_expect: False`
+# because they were written against the PRE-WIDENING reader (the `deepseek-`-only
+# token rule with a fixed extension whitelist). The derivation picks the parent of
+# the NEWEST commit at the base ref that touched the guard, and after #861
+# (`3b410e52`, which follows the widening #841) that parent is `c5427aed` — a
+# reader that already reads every file and every family, so it CATCHES those five
+# mutations and the BASE legs read RED. Its capability check only probes the
+# `id:tag` colon shape, which `c5427aed` does not catch, so the too-new reader is
+# accepted rather than refused. Filed separately; the one case this card adds
+# (case 14) therefore pins its base BY SHA (`PROSE_CAUGHT_BASE`) instead of using
+# the run-wide derivation, so its leg does not depend on the broken premise.
 
 
 def main():
@@ -583,26 +642,32 @@ def main():
         print("HARNESS BUG: %s has no %s, so no BASE leg can run" % (BASE_REF, GUARD_REL))
         return 2
 
-    # The pinned per-case ref must resolve and carry a guard file BEFORE any case
-    # runs. A rewrite of PR 841's branch would otherwise turn the exemplar case
-    # into a half-run whose BASE leg reads nothing.
-    code, _ = git("rev-parse", "--verify", "%s^{commit}" % COLON_CAUGHT_BASE)
-    if code != 0:
-        print("REFUSING: BITEPROOF_COLON_CAUGHT_BASE pins %s, which is not a revision in this repo -- the "
-              "exemplar case compares the head the commit under review replaced, and a missing ref would let "
-              "its BASE leg read nothing. Re-derive it from PR 841's branch or override the env var."
-              % COLON_CAUGHT_BASE)
-        return 2
-    body = show(COLON_CAUGHT_BASE, GUARD_REL)
-    if body is None:
-        print("REFUSING: BITEPROOF_COLON_CAUGHT_BASE pins %s, which carries no %s"
-              % (COLON_CAUGHT_BASE, GUARD_REL))
-        return 2
-    BASE_GUARDS[COLON_CAUGHT_BASE] = body
-    if BASE_GUARD.encode() == body.encode():
-        print("REFUSING: the run-wide base %s IS the reader the exemplar case pins, so that case would "
-              "compare one reader with itself" % BASE_REF)
-        return 2
+    # The pinned per-case refs must resolve and carry a guard file BEFORE any case
+    # runs. A rewrite of PR 841's branch (or, for the prose ref, a moved sha) would
+    # otherwise turn a case into a half-run whose BASE leg reads nothing.
+    #
+    #   COLON_CAUGHT_BASE — the head the commit under review replaced (PR 841's
+    #     digit-filtered reader), pinned because it lives on a squashed branch.
+    #   PROSE_CAUGHT_BASE — the shipped reader before the prose-compound exclusion
+    #     (card t_dba05702), pinned so case 14's BASE leg reads the reader the fix
+    #     replaces rather than the run-wide derivation, which is stale for the
+    #     legacy extension cases (recorded below the CASES table).
+    for pinned, why in ((COLON_CAUGHT_BASE, "BITEPROOF_COLON_CAUGHT_BASE"), (PROSE_CAUGHT_BASE, "BITEPROOF_PROSE_CAUGHT_BASE")):
+        code, _ = git("rev-parse", "--verify", "%s^{commit}" % pinned)
+        if code != 0:
+            print("REFUSING: %s pins %s, which is not a revision in this repo -- the case it backs "
+                  "compares a specific reader, and a missing ref would let its BASE leg read nothing. "
+                  "Re-derive it or override the env var." % (why, pinned))
+            return 2
+        body = show(pinned, GUARD_REL)
+        if body is None:
+            print("REFUSING: %s pins %s, which carries no %s" % (why, pinned, GUARD_REL))
+            return 2
+        BASE_GUARDS[pinned] = body
+        if BASE_GUARD.encode() == body.encode():
+            print("REFUSING: %s pins %s, which IS the run-wide base %s, so the case it backs would "
+                  "compare one reader with itself" % (why, pinned, BASE_REF))
+            return 2
 
     if open(GUARD, "rb").read() == BASE_GUARD.encode():
         print("REFUSING: the working guard is byte-identical to %s's, so every BASE leg would compare a "

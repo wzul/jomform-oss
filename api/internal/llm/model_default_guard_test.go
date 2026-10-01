@@ -82,6 +82,23 @@
 // shelter the retired family anywhere but that one migration — so "add it to the
 // exemption table" is never a way to make a retired id green without saying why.
 //
+// AN ENGLISH HYPHENATED COMPOUND IS NOT A MODEL ID (card t_dba05702).
+//
+// Several families in modelFamilies are also ordinary English words — `command`,
+// `solar`, `granite`, `falcon`, `phi` — so the `-` branch of modelToken (the
+// branch that is load-bearing for `deepseek-coder`, `gemini-pro`, `claude-opus`)
+// also matches `command-line`. On the pre-fix reader that was a FALSE POSITIVE:
+// the phrase "the command-line half" in a shell check LABEL parsed as an id in
+// the `command` family and redd TestUserFacingStringsNameTheSameModelAsTheConstant
+// with a message about the shipped LLM default, which is nowhere near the real
+// subject of the text. proseCompounds is the token-scoped fix: a small table of
+// English compounds, each with a reason and each checked for rot, consulted at
+// the ONE place the tokeniser judges a token (readTokenFiles). It is NOT a shape
+// rule, and the reason is in the table's own header: `command-line` and the real
+// Cohere id `command-r` have the SAME shape, so no rule that inspects the shape
+// can separate them — only knowing which token is which can, which is what the
+// table records.
+//
 // THE BITE PROOF. api/scripts/biteproof_model_id_scan.py sabotages one shape at a
 // time and requires the guard in this tree to go RED naming the file, while a BASE
 // revision's reader stays GREEN on the same mutation — that second leg is the "the
@@ -200,6 +217,87 @@ var modelToken = regexp.MustCompile(
 // `a11y:install` and a Go module path's `h1:…` hash all fail it (measured: zero
 // hits on this tree, `api/go.sum` included).
 var unknownModelTag = regexp.MustCompile(`\b[a-z][a-z0-9._-]*[0-9][a-z0-9._-]*:[0-9][a-z0-9]*[bm]\b`)
+
+// proseCompounds are tokens modelToken matches that are NOT model ids at all —
+// ordinary English hyphenated compounds whose FIRST word happens to be a
+// provider family name. A token must never be judged as an id when it is prose:
+// the guard would red on a check label, a doc sentence or a code comment about
+// something else entirely and name a defect that does not exist.
+//
+// WHY THIS TABLE EXISTS, MEASURED. Some families in modelFamilies are also
+// ordinary English words — `command`, `solar`, `granite`, `falcon`, `phi` are
+// the ones that form hyphenated compounds — so the `-` branch of modelToken
+// (`<family>-<tail>`, the branch that is load-bearing for `deepseek-coder`,
+// `gemini-pro`, `claude-opus`) also matches `command-line`. Card t_dba05702
+// measured it on a full local gate (tree df7cf6a8): the phrase "the command-line
+// half" in a shell check LABEL parsed as an id in the `command` family and redd
+// TestUserFacingStringsNameTheSameModelAsTheConstant with a message about the
+// shipped LLM default — nowhere near the real subject of the text. Reproduced
+// here on this tree before the fix: putting `command-line` in one file made the
+// guard report that file and `command-line` as a stray `command`-family id.
+//
+// WHERE THE EXCLUSION SITS, AND WHY NOT SOMEWHERE ELSE. It is TOKEN-scoped, like
+// modelMentionExempt, so it silences no file and no other id: a real id of the
+// SAME family (`command-r7b` — a Cohere id, docs.cohere.com/docs/models) is
+// still judged, which is what TestProseCompoundExclusionsAreProseAndDoNotShelterIDs
+// pins in both directions. A FILE-scoped exemption would have been the easy
+// shape and the wrong one — it would also cover the retired id if somebody wrote
+// it into that file later, which is the exact shape this guard exists to catch.
+//
+// WHY A TABLE AND NOT A SHAPE RULE (the alternative, and why it was refused). A
+// bare "the token must carry a digit" rule would also drop `command-line`, but
+// it drops real ids too: `deepseek-coder`, `gemini-pro` and `claude-opus` carry
+// no digit, and the reader before the widening CAUGHT `deepseek-coder` — so that
+// filter is a REGRESSION, not a narrowing of prose, which is why card t_16fa0164
+// removed it and why api/scripts/biteproof_model_id_scan.py case 9 and
+// TestScanSeesTheShapesTheOldWhitelistCouldNot (fixture
+// `nested/other_family_nodigit.go`) both fail if it comes back. `command-line`
+// and `gemini-pro` have the SAME shape — `<family>-<word>` — so no shape rule
+// can separate them: only knowing that one token is an English compound and the
+// other is a published id can. That is what this table records, one token at a
+// time, with a reason.
+//
+// WHAT IT COSTS, STATED PLAINLY. A NEW English compound whose first word is a
+// family but whose second word is not listed here (say `solar-powered` in a
+// sentence nobody has written yet) still reds the gate the first time it is
+// written. That is deliberate, not an oversight: the guard's header records that
+// its preference is a NOISY red over a SILENT hole ("the one shape where silence
+// would be worse than a noisy red"), and the alternative — treating
+// `<family>-<word>` as prose by default — would silently stop judging every
+// digit-free id of every such family (`command-r`, `command-light`,
+// `solar-pro`, `llama-guard` are all real ids with no digit in them). So the
+// entry is added on purpose, with its reason, exactly like a modelMentionExempt
+// entry. The check below refuses an entry that has no reason, that the tokeniser
+// no longer produces (rot — the exclusion would be guarding a shape that cannot
+// occur), that carries a DIGIT (a digit-free compound is prose; a token with a
+// digit looks like an id and must be judged, not silenced), that carries a model
+// SIZE tag, or that is the shipped/retired id.
+var proseCompounds = map[string]string{
+	// `command` is both a Cohere family and an ordinary English noun, so
+	// `command-<word>` reads as English at least as readily as it reads as an id.
+	"command-line":   "ordinary English compound: a shell's command line (the phrase this card was filed on — 'the command-line half' in a check label)",
+	"command-prompt": "ordinary English compound: the shell prompt a user types at",
+	// `solar` is a family (Upstage) and an English adjective; `solar-<noun>` is
+	// ordinary technical prose about the sun.
+	"solar-powered": "ordinary English compound: running on solar energy",
+	"solar-panel":   "ordinary English compound: a photovoltaic panel",
+	"solar-flare":   "ordinary English compound: a burst of solar radiation",
+	// `granite` and `falcon` are families and English nouns used as compound
+	// modifiers.
+	"granite-faced": "ordinary English compound: faced with granite",
+	"falcon-eyed":   "ordinary English compound: keen-eyed, after the bird",
+	// `phi` is a family and the English name of the Greek letter, whose
+	// compounds are technical prose rather than ids.
+	"phi-coefficient": "ordinary English compound: a coefficient named for the letter phi",
+}
+
+// isProseCompound reports whether a token modelToken matched is a known English
+// compound rather than a model id. Case-insensitive for the same reason
+// modelToken is: prose writes `Command-Line` as readily as `command-line`.
+func isProseCompound(id string) bool {
+	_, ok := proseCompounds[strings.ToLower(id)]
+	return ok
+}
 
 // modelMentionExempt names the mentions that are deliberate, as file -> id ->
 // reason. Nothing else is exempt, and the exemption is TOKEN-scoped rather than
@@ -566,15 +664,23 @@ func TestScanSeesTheShapesTheOldWhitelistCouldNot(t *testing.T) {
 	}
 	// A no-extension file that is not a model id must NOT be reported: the walk
 	// reading everything is not the same as the tokeniser reporting everything.
-	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("test:\n\tgo test ./...\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("test:\n	go test ./...\n"), 0o644); err != nil {
 		t.Fatalf("write Makefile fixture: %v", err)
+	}
+	// The same rule for an English hyphenated compound whose first word is a
+	// family name (`command-line`, card t_dba05702): the tokeniser matches it, so
+	// it is only the prose-compound exclusion that keeps it out of the report.
+	// It is a NEGATIVE fixture, so it must not appear in `hits` below.
+	if err := os.WriteFile(filepath.Join(root, "nested/prose_compound.md"),
+		[]byte("// the command-line half; a solar-powered sensor\n"), 0o644); err != nil {
+		t.Fatalf("write prose-compound fixture: %v", err)
 	}
 
 	hits, read, skipped := readTokenFiles(t, root)
-	if read != len(fixtures)+1 {
-		t.Fatalf("the scan read %d files under the fixture tree, want %d (the fixtures plus the control "+
-			"Makefile) — the walk is reading a different set than the files it is supposed to judge "+
-			"(skipped %d)", read, len(fixtures)+1, skipped)
+	if read != len(fixtures)+2 {
+		t.Fatalf("the scan read %d files under the fixture tree, want %d (the fixtures, the control "+
+			"Makefile and the negative control prose_compound.md) — the walk is reading a different set "+
+			"than the files it is supposed to judge (skipped %d)", read, len(fixtures)+2, skipped)
 	}
 	if skipped != 0 {
 		t.Errorf("the scan skipped %d files, want 0: nothing in the fixture tree is a *_test.go file, and no "+
@@ -625,6 +731,126 @@ func TestScanSeesTheShapesTheOldWhitelistCouldNot(t *testing.T) {
 					"fail by its SIZE tag, not by accident", rel, id, why)
 			}
 		}
+	}
+}
+
+// TestProseCompoundExclusionsAreProseAndDoNotShelterIDs pins the prose-compound
+// exclusion (card t_dba05702) in the directions that matter, on a scratch tree
+// so no fixture ever lands in the repo:
+//
+//  1. the table is honest — every entry has a reason, and the token is still
+//     PRODUCED by the tokeniser (rot: an entry for a shape modelToken cannot
+//     match reads as a decision that excuses nothing);
+//  2. an English compound whose first word is a family name is NOT reported as
+//     an id — this is the `command-line` defect, and the assertion fails on the
+//     pre-fix reader because `command-line` is matched by modelToken AND
+//     separates as an id, so only the table keeps it out;
+//  3. a REAL digit-free id of the SAME family IS still reported. This is the
+//     half that makes the exclusion token-scoped rather than a family-wide hole:
+//     `command-r`, `command-light`, `solar-pro` and `llama-guard` all carry no
+//     digit, so they share `command-line`'s shape and would be lost by any rule
+//     that treated `<family>-<word>` as prose by default (that rule is the
+//     "the tail must carry a digit" filter the guard's header records as the
+//     regression of card t_16fa0164 — see api/scripts/biteproof_model_id_scan.py
+//     case 9 and the `nested/other_family_nodigit.go` fixture).
+func TestProseCompoundExclusionsAreProseAndDoNotShelterIDs(t *testing.T) {
+	if len(proseCompounds) == 0 {
+		t.Fatal("proseCompounds is empty — if `command-line` and its siblings no longer match the " +
+			"tokeniser, delete this table AND this test together; an empty table would read as a " +
+			"decision to tolerate prose it does not tolerate")
+	}
+
+	// (1) The table is honest.
+	for tok, why := range proseCompounds {
+		if why == "" {
+			t.Errorf("proseCompounds[%q] has an empty reason — an exclusion without a reason is "+
+				"indistinguishable from an oversight", tok)
+		}
+		if tok != strings.ToLower(tok) {
+			t.Errorf("proseCompounds[%q] is not lower-case — the lookup lower-cases the token, so a "+
+				"mixed-case key would never be reached", tok)
+		}
+		if !modelToken.MatchString(tok) {
+			t.Errorf("proseCompounds[%q] is a token the tokeniser no longer produces — rot: the entry "+
+				"excludes a shape that cannot occur, so it excuses nothing and must be dropped", tok)
+		}
+		if !idHasIdSeparator(tok) {
+			t.Errorf("proseCompounds[%q] is not id-SEPARATED, so `idHasIdSeparator` already drops it "+
+				"before this table is consulted — the entry is dead weight", tok)
+		}
+		if strings.ContainsAny(tok, "0123456789") {
+			t.Errorf("proseCompounds[%q] carries a DIGIT. A digit-free `<family>-<word>` is the shape "+
+				"that is ambiguous between prose and an id; a token with a digit in it looks like an "+
+				"id (`command-r7b`, `solar-pro2`) and must be JUDGED, not silenced", tok)
+		}
+		if strings.Contains(tok, ":") {
+			t.Errorf("proseCompounds[%q] carries a `:` — the id:tag spelling is judged by its own "+
+				"branch, and prose with a colon there is already refused by isIDWordChar; a `:` entry "+
+				"here would silence a shape the guard deliberately keeps", tok)
+		}
+		if tok == workingModel || strings.HasPrefix(tok, retiredModelFamily) {
+			t.Errorf("proseCompounds[%q] is the shipped or retired id — the prose table must never be "+
+				"able to excuse a real (or dead) model id", tok)
+		}
+	}
+
+	// (2)+(3) Verdicts, on a scratch tree.
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "nested"), 0o755); err != nil {
+		t.Fatalf("prepare fixture tree: %v", err)
+	}
+	// The English compounds: matched by the tokeniser, separated as ids, and NOT
+	// reported. `command-line` is the card's own measured phrase.
+	prose := map[string]string{
+		"nested/prose_command_line.md":   "// the command-line half of the check\n",
+		"nested/prose_solar_powered.md":  "// a solar-powered sensor, and a phi-coefficient\n",
+		"nested/prose_granite_falcon.md": "// a granite-faced wall; a falcon-eyed scout\n",
+	}
+	// The real, digit-free ids of the SAME families: reported.
+	ids := map[string]string{
+		"nested/command_r.go":     "// The drafter calls command-r via the internal endpoint\n",
+		"nested/command_light.go": "// The drafter calls command-light via the internal endpoint\n",
+		"nested/command_r7b.go":   "// The drafter calls command-r7b via the internal endpoint\n",
+		"nested/solar_pro.go":     "// The drafter calls solar-pro via the internal endpoint\n",
+		"nested/llama_guard.go":   "// The drafter calls llama-guard via the internal endpoint\n",
+		"nested/gemini_pro.go":    "// The drafter calls gemini-pro via the internal endpoint\n",
+	}
+	for rel, body := range prose {
+		if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(rel)), []byte(body), 0o644); err != nil {
+			t.Fatalf("write prose fixture %s: %v", rel, err)
+		}
+	}
+	for rel, body := range ids {
+		if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(rel)), []byte(body), 0o644); err != nil {
+			t.Fatalf("write id fixture %s: %v", rel, err)
+		}
+	}
+
+	hits, _, _ := readTokenFiles(t, root)
+
+	for rel := range prose {
+		if _, ok := hits[rel]; ok {
+			t.Errorf("%s writes only English compounds (`command-line` and friends) and the scan "+
+				"reported it as a model id: %v — this is the false positive card t_dba05702 measured "+
+				"on a full local gate, and it must not be able to come back", rel, hits[rel])
+		}
+	}
+	for rel := range ids {
+		if _, ok := hits[rel]; !ok {
+			t.Errorf("%s writes a REAL model id of a family an English word shadows and the scan did "+
+				"not report it — the prose exclusion is silencing the family instead of the one "+
+				"compound token, which is the regression the digit filter was (card t_16fa0164)", rel)
+		}
+	}
+	if len(hits) != len(ids) {
+		var got []string
+		for rel := range hits {
+			got = append(got, rel)
+		}
+		sort.Strings(got)
+		t.Errorf("the scan reported %d files, want exactly the %d that write a real id: %v — a hit "+
+			"the id fixtures did not write means the exclusion is not reaching every compound",
+			len(hits), len(ids), got)
 	}
 }
 
@@ -784,6 +1010,9 @@ func readTokenFiles(t *testing.T, root string) (map[string]map[string]string, in
 		for _, m := range modelToken.FindAllString(text, -1) {
 			if !idHasIdSeparator(m) {
 				continue // a bare family name in prose is not a model id
+			}
+			if isProseCompound(m) {
+				continue // an English hyphenated compound (e.g. `command-line`), not an id
 			}
 			ids[m] = true
 		}

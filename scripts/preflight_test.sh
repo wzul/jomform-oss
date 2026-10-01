@@ -86,6 +86,25 @@ bad()  { FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; }
 # the whole self-test.
 unset _PREFLIGHT_LOCKED
 export -n _PREFLIGHT_LOCKED 2>/dev/null || true
+# THE SAME CLEAN-SHELL RULE FOR THE PATH-AWARE-SELECTION HANDOFF, and this one was
+# measured as a false red rather than reasoned about. `--for-diff <ref>` EXPORTS
+# the narrowed gate set (`SEL_DIFF` and its companions, `_PREFLIGHT_SEL`) for the
+# flock child's handoff — a legitimate mechanism INSIDE one run — and `selected()`
+# consults `SEL_DIFF` BEFORE it looks at `--only`/`--skip`. So a self-test that
+# inherits it cannot address a single gate: `--skip <all>` then runs the OUTER
+# narrowing instead of refusing the empty run, `--only web` runs that same
+# narrowing instead of the web gate (refusing on the first missing prerequisite it
+# happens to select, which is why the failures all read `web/Dockerfile is
+# missing`), and every per-tree-record check writes and reads nothing at all
+# because the sandbox tree never got a run. Measured: the `--for-diff origin/main`
+# run of a real card (tree 0244c928, 15 gates, `selected=` empty in the record)
+# recorded `selftest: fail` with **30 of 69 checks red**, every one of them a
+# nested-invocation check, while the SAME bytes run with no `--for-diff` were
+# 69/69 green — and the 09:16 record on this very tree shape (tree b43789be),
+# which ran unnarrowed, has `selftest: pass`. A lane calls preflight.sh from a
+# CLEAN shell, so every nested invocation below must start as one. Exactly the
+# reasoning of the `_PREFLIGHT_LOCKED` note above, one handoff over.
+unset SEL_DIFF SEL_DIFF_LINE SEL_DIFF_SKIPPED SEL_DIFF_FULL SEL_COUNT SEL_DIFF_REASON SEL_BASE _PREFLIGHT_SEL
 # The same reasoning for the environment the runner reads: a caller that ran the
 # whole gate with --log or a result dir set must not change what these checks key on.
 unset PREFLIGHT_LOG
@@ -1761,6 +1780,26 @@ if [ -n "${_PREFLIGHT_LOCKED:-}" ]; then
   bad "_PREFLIGHT_LOCKED is still set when the checks run — this self-test inherited the runner's flag, so checks 28/29 measured a path no lane takes (is the guard at the top of this file still there?)"
 else
   ok "the self-test clears an inherited _PREFLIGHT_LOCKED before any check (nested preflight.sh calls take the real pre-lock reuse path)"
+fi
+
+# 30b. THE SECOND INHERITED HANDOFF, asserted the same way and for the same reason
+#      as the one above. `--for-diff` exports SEL_DIFF (plus _PREFLIGHT_SEL and its
+#      companions) for its own flock child, and `selected()` reads SEL_DIFF BEFORE
+#      `--only`/`--skip` — so a self-test that inherits it silently runs the OUTER
+#      narrowing instead of the gate each check asks for. Measured: 30 of 69 checks
+#      red on a `--for-diff origin/main` run of the same bytes that were 69/69 green
+#      unnarrowed (tree 0244c928 vs tree b43789be's `selftest: pass`). The nested
+#      assertions here cannot see it (they run `preflight.sh --only …`, and an
+#      inherited SEL_DIFF wins over --only), which is exactly why this one is
+#      explicit rather than inferred from a downstream check.
+#
+#      It BITES in the nested case and only there: run standalone the variable was
+#      never set and it passes trivially; delete the guard at the top of this file
+#      and run it as the gate runs it, and this is red naming the leak.
+if [ -n "${SEL_DIFF:-}" ] || [ -n "${_PREFLIGHT_SEL:-}" ]; then
+  bad "the path-aware-selection handoff is STILL SET when the checks run (SEL_DIFF=[${SEL_DIFF:-}] _PREFLIGHT_SEL=[${_PREFLIGHT_SEL:-}]) — selected() reads SEL_DIFF before --only/--skip, so every nested check would run an OUTER narrowing instead of the gate it asks for, and the per-tree-record checks would write and read nothing. Is the guard at the top of this file still there?"
+else
+  ok "the self-test clears an inherited --for-diff selection handoff (SEL_DIFF / _PREFLIGHT_SEL) before any check"
 fi
 
 # 31. THE DOCUMENTED RED-TREE PATH MUST RUN. `docs/PREFLIGHT-REUSE.md` tells a lane
