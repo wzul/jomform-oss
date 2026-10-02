@@ -1327,14 +1327,63 @@ if [ "${_PREFLIGHT_LOCKED:-}" != "1" ]; then
     # a gate failure — a caller must not read "could not serialise" as "the code
     # is broken".
     export _PREFLIGHT_LOCKED=1
+    # SELF-DEADLOCK DETECTION (card t_0094bf00). `flock` prints nothing that
+    # distinguishes "a peer lane holds the lock" from "an OUTER flock wrapper of
+    # this same invocation holds it" — and the second can never succeed: the
+    # wrapper holds the file for its child's whole lifetime, so the child's flock
+    # waits out PREFLIGHT_LOCK_WAIT (default 1800s) while every PEER queues behind
+    # the wrapper. Measured: a lane's queue grew 3 → 9 runs with no gate executing.
+    #
+    # When the holder is our own ancestor, the serialisation the caller wanted is
+    # ALREADY IN EFFECT — the wrapper holds this exact file — so the right answer is
+    # to run the gates (they are guarded by that holder, and `_PREFLIGHT_LOCKED=1`
+    # above keeps a grandchild from trying to lock again), not to wait out a wait
+    # that cannot end. `fuser` names the holders; a holder that is one of our own
+    # ancestors is the signature. Without `fuser` the old wait behaviour stands.
+    _preflight_lock_held_by_ancestor() {
+      command -v fuser >/dev/null 2>&1 || return 1
+      local holders; holders="$(fuser "$PREFLIGHT_LOCK_FILE" 2>/dev/null)" || return 1
+      [ -n "$holders" ] || return 1
+      local p=$$ anc=" " h
+      while [ -n "$p" ] && [ "$p" -gt 1 ] 2>/dev/null; do
+        anc="$anc$p "
+        p="$(sed -n 's/^[0-9]* ([^)]*) [A-Z] \([0-9]*\) .*/\1/p' "/proc/$p/stat" 2>/dev/null)"
+        [ -n "$p" ] || break
+      done
+      for h in $holders; do
+        case "$anc" in *" $h "*) return 0 ;; esac
+      done
+      return 1
+    }
     if ! flock -n "$PREFLIGHT_LOCK_FILE" true 2>/dev/null; then
-      echo "  lock:   another gate is running — waiting up to ${PREFLIGHT_LOCK_WAIT}s"
-      echo "          (two concurrent gates share one scratch schema and produce FALSE failures)"
+      if _preflight_lock_held_by_ancestor; then
+        # Already serialised by our OWN wrapper: the gates below are guarded by that
+        # holder, so run them now instead of waiting for a lock that can never free
+        # while the holder waits for us. `_PREFLIGHT_LOCKED=1` (set above) stops a
+        # grandchild from trying to lock again.
+        echo "  lock:   this invocation is ALREADY serialised — the lock is held by one of"
+        echo "          our own ancestor processes (an outer \`flock $PREFLIGHT_LOCK_FILE …\`"
+        echo "          wrapper), so the gates run now under that holder. Do NOT wrap this"
+        echo "          script in flock on its own lock file; raise the wait instead:"
+        echo "          PREFLIGHT_LOCK_WAIT=<seconds>."
+        PREFLIGHT_LOCKED_BY_ANCESTOR=1
+      else
+        echo "  lock:   another gate is running — waiting up to ${PREFLIGHT_LOCK_WAIT}s"
+        echo "          (two concurrent gates share one scratch schema and produce FALSE failures)"
+      fi
     fi
     # Pass the ORIGINAL argv, not "$@" — the parsing loop above has already shifted it
     # away, and an empty argv silently turns `--only <gate>` into a full-gate run.
-    flock -w "$PREFLIGHT_LOCK_WAIT" -E 75 "$PREFLIGHT_LOCK_FILE" "$0" "${PREFLIGHT_ARGV[@]}"
-    _lock_rc=$?
+    if [ "${PREFLIGHT_LOCKED_BY_ANCESTOR:-0}" = 1 ]; then
+      # Already serialised by our own wrapper (see above): run the gates in-process.
+      # `_PREFLIGHT_LOCKED=1` is exported, so this script's own re-entry guard holds
+      # and nothing below tries to take the lock a second time.
+      "$0" "${PREFLIGHT_ARGV[@]}"
+      _lock_rc=$?
+    else
+      flock -w "$PREFLIGHT_LOCK_WAIT" -E 75 "$PREFLIGHT_LOCK_FILE" "$0" "${PREFLIGHT_ARGV[@]}"
+      _lock_rc=$?
+    fi
     if [ "$_lock_rc" -eq 75 ]; then
       echo "preflight: could not acquire the gate lock at $PREFLIGHT_LOCK_FILE within ${PREFLIGHT_LOCK_WAIT}s" >&2
       echo "preflight: refusing to run unlocked — a parallel run shares one scratch schema and one" >&2
