@@ -41,7 +41,8 @@ nothing proves nothing.
 | `govuln` | api | `govulncheck ./...` | known CVEs reachable from the module graph |
 | `web` | web | `cd web && npm run build` | `test:unit` (incl. the cross-language Go-contract guards) then the Next build |
 | `webimage` | web | `docker build -f web/Dockerfile .` (cache-only) | the **shipping web artifact** — no other gate built it, so a tree could be green while `docker build -f web/Dockerfile .` died |
-| `a11y` | web | `cd web && npm run a11y` | **the whole `web/e2e/` suite** (playwright `testDir: "./e2e"`, 24 specs): axe-core critical/serious violations, **plus** every other e2e regression — several specs (`affiliate-row`, `activity-page`, `builder-canvas-price-contrast`, …) reach authenticated dashboard surfaces by stubbing the API at the browser level, so an authenticated regression there is INSIDE this gate, not outside it |
+| `a11y` | web | `cd web && npm run a11y` | axe-core critical/serious violations — the axe family only (playwright project `a11y`, `a11y*.spec.ts`, 29 tests) |
+| `e2e` | web | `cd web && npm run e2e` | the feature end-to-end specs under `web/e2e/` (playwright project `feature-e2e`, 134 tests: a binned workspace restores, a refused bulk publish keeps its sentence, a stale workspace slug does not bounce the dashboard, …). These ran inside `a11y` until the split, which is why the split also added this gate — moving them out without a new owner would have been a silent coverage loss |
 | `npmaudit` | web | `cd web && npm audit --audit-level=high` | high/critical npm advisories |
 | `gitleaks` | secrets | `gitleaks detect` over the **full git history** | committed secrets (repo may go public) |
 | `monitor` | watchdog | `deploy/monitoring/jomform-watch_test.sh` | the uptime watchdog alerts on a failure, stays quiet on a success, and never reports green when it has no way to alert |

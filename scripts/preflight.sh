@@ -45,7 +45,8 @@
 #                         filtering against the real context, but exports no
 #                         image, so a full preflight does not leave a ~216 MB
 #                         jomform-web tag behind on every card.
-#              a11y       cd web && npm run a11y    (axe-core, critical/serious)
+#              a11y       cd web && npm run a11y    (axe-core family only)
+#              e2e        cd web && npm run e2e     (the feature specs under web/e2e)
 #              npmaudit   cd web && npm audit --audit-level=high
 #   secrets    gitleaks   full-history secret scan (not just the tip)
 #   monitor    watchdog   deploy/monitoring/jomform-watch_test.sh — proves the
@@ -201,7 +202,7 @@ cd "$REPO_ROOT" || exit 1
 # `--list`, the runnable set from the `run <name>` call sites) and FAILS if they
 # disagree, so a gate named here but never run — the silent-coverage-loss shape —
 # is caught by `--only selftest`. No edit to the self-test is needed for gate #N.
-GATE_NAMES=(build vet test govuln web webimage a11y npmaudit gitleaks monitor tmpkey backup prunewt refguard selftest)
+GATE_NAMES=(build vet test govuln web webimage a11y e2e npmaudit gitleaks monitor tmpkey backup prunewt refguard selftest)
 
 ONLY=""
 SKIP=""
@@ -439,7 +440,7 @@ pw_pathspec_v() {
 pw_declared() {
   case "$1" in
     build|vet|test|govuln) printf '%s\n' 'api/*' ;;
-    web|a11y)              printf '%s\n' 'web/*' ;;
+    web|a11y|e2e)          printf '%s\n' 'web/*' ;;
     npmaudit)              printf '%s\n' 'web/package.json' 'web/package-lock.json' ;;
     monitor|tmpkey|backup|prunewt|refguard) printf '%s\n' 'deploy/*' 'scripts/*' ;;
     selftest)              printf '%s\n' 'scripts/*' 'GATE-INVENTORY.md' ;;
@@ -456,7 +457,8 @@ pw_sources() {
   case "$1" in
     build|vet|test|govuln) printf '%s\n' 'api/*' ;;
     web)                   printf '%s\n' 'web/package.json' 'web/src/*' 'web/next.config.mjs' 'web/tsconfig.json' 'web/scripts/web-deps-check.mjs' ;;
-    a11y)                  printf '%s\n' 'web/e2e/*' 'web/playwright.config.ts' ;;
+    a11y)                  printf '%s\n' 'web/e2e/a11y*.spec.ts' 'web/playwright.config.ts' ;;
+    e2e)                   printf '%s\n' 'web/e2e/*.spec.ts' 'web/playwright.config.ts' ;;
     npmaudit)              printf '%s\n' 'web/package.json' 'web/package-lock.json' ;;
     monitor)               printf '%s\n' 'deploy/monitoring/*' ;;
     tmpkey)                printf '%s\n' 'deploy/tmp-apikey.sh' 'deploy/tmp-apikey_test.sh' ;;
@@ -1982,67 +1984,96 @@ run webimage "docker build -f web/Dockerfile . (the shipping web image, cache-on
 #   discovered here rather than fixed, so a stale server cannot collide either.
 #   Needs web/build to have produced .next, hence the order.
 # ---------------------------------------------------------------------------
-a11y_run() {
-  cd "$REPO_ROOT/web" || return 1
-  # Find a free port (base 3100, stepping up). `ss` is the source of truth for
-  # "in use"; a connect probe would miss a socket that is listening but not
-  # accepting yet.
-  #
-  # THE PICK MUST ALSO RESERVE, OR A CONCURRENT LANE TAKES THE PORT BETWEEN THE
-  # SCAN AND THE BIND (card t_276dd169 / t_11635713). The scan below answers "is
-  # this port free RIGHT NOW"; it does not hold it. On this multi-lane host a peer
-  # preflight — or any other server — can bind the chosen port in the window before
-  # playwright's `webServer` does, and the gate then fails with EADDRINUSE on a
-  # tree that is perfectly good. Measured: `a11y` FAIL after 3s with
-  # `listen EADDRINUSE :::3100` while `ss` showed a peer lane's `next-server` on
-  # 3100, and the SAME gate passed on the next full run with no code change.
-  #
-  # The reservation is `nc -l -p <port>`: it binds and listens, so `ss` sees it,
-  # and an unprivileged competitor is refused with EADDRINUSE — verified on this
-  # host before this change (python3 holder: a second binder is refused; `nc -l`
-  # holder: `ss` reports LISTEN and a second binder is refused). It is released
-  # immediately before the server starts, so nothing is reused: the gate still
-  # starts ITS OWN server, which is the property `reuseExistingServer: false`
-  # exists to protect.
-  #
-  # A retry was the alternative and is deliberately NOT used: a retry hides the
-  # race behind a green instead of removing it, and the gate must still report a
-  # genuine EADDRINUSE (a peer holding every port in the range) rather than
-  # quietly passing on a later attempt.
-  local port="" holder="" candidate
+# ---- shared: RESERVE a port for a playwright web server --------------------
+#
+# BOTH the a11y gate and the e2e gate start the app's own production server, so
+# both need a port that is free AND cannot be taken between the pick and the bind.
+# The reservation is `nc -l -p <port>`: it binds and listens, so `ss` sees it and
+# an unprivileged competitor is refused with EADDRINUSE (verified on this host
+# before it was used). Callers MUST release it immediately before the server
+# starts, so nothing is reused — the gate still starts its OWN server, which is
+# what `reuseExistingServer: false` exists to protect.
+#
+# A retry was the alternative and is deliberately NOT used: it hides the race
+# behind a green instead of removing it, and a genuine EADDRINUSE (a peer holding
+# the whole range) must still be reported.
+A11Y_RESERVED_PORT=""
+A11Y_RESERVE_PID=""
+a11y_port_reserve() {  # sets A11Y_RESERVED_PORT / A11Y_RESERVE_PID
+  A11Y_RESERVED_PORT=""
+  A11Y_RESERVE_PID=""
+  local candidate
   for candidate in $(seq 3100 3140); do
     if ! ss -lntn "sport = :$candidate" 2>/dev/null | grep -q LISTEN; then
-      # Take it, if we can. `nc -l` stays in the foreground, so it is backgrounded
-      # and killed the moment the port is either confirmed ours or found taken.
       if command -v nc >/dev/null 2>&1; then
         nc -l -p "$candidate" >/dev/null 2>&1 &
-        holder=$!
+        A11Y_RESERVE_PID=$!
         sleep 0.3
         if ss -lntn "sport = :$candidate" 2>/dev/null | grep -q LISTEN; then
-          port="$candidate"
-          break
+          A11Y_RESERVED_PORT="$candidate"
+          return 0
         fi
-        kill "$holder" >/dev/null 2>&1 || :
-        wait "$holder" 2>/dev/null || :
-        holder=""
+        kill "$A11Y_RESERVE_PID" >/dev/null 2>&1 || :
+        wait "$A11Y_RESERVE_PID" 2>/dev/null || :
+        A11Y_RESERVE_PID=""
         continue
       fi
-      port="$candidate"
-      break
+      A11Y_RESERVED_PORT="$candidate"
+      return 0
     fi
   done
-  [ -n "$port" ] || { echo "no free port in 3100-3140 for the a11y web server" >&2; return 1; }
-  echo "a11y: starting the app's own server on port $port (never reusing a leftover)"
-  # Release the reservation so the server can take the port. A holder that dies on
-  # its own (the port was stolen from it too) is treated the same: nothing to free.
-  if [ -n "$holder" ]; then
-    kill "$holder" >/dev/null 2>&1 || :
-    wait "$holder" 2>/dev/null || :
-  fi
-  A11Y_PORT="$port" npm run a11y
+  echo "no free port in 3100-3140 for the web server" >&2
+  return 1
 }
 
-run a11y "cd web && npm run a11y (axe-core critical/serious)" a11y_run
+# Release the reservation so the server can take the port. Safe when the holder
+# already died (a peer stole the port from it too): there is simply nothing to free.
+a11y_port_release() {
+  if [ -n "$A11Y_RESERVE_PID" ]; then
+    kill "$A11Y_RESERVE_PID" >/dev/null 2>&1 || :
+    wait "$A11Y_RESERVE_PID" 2>/dev/null || :
+  fi
+  A11Y_RESERVE_PID=""
+}
+
+# ---- web/a11y: the axe family only -----------------------------------------
+#
+# WHAT THIS GATE IS, AND WHAT IT USED TO BE. `npm run a11y` is `playwright test`
+# and playwright's `testDir` is `./e2e`, so this gate used to run the WHOLE
+# directory: 29 axe tests plus 134 feature end-to-end tests — a gate whose name
+# said accessibility and whose body was mostly not. The feature specs were not
+# lost by the split; they are owned by the `e2e` gate below, and the selftest
+# asserts every spec belongs to exactly one family so a new spec cannot fall
+# between the two.
+a11y_run() {
+  cd "$REPO_ROOT/web" || return 1
+  a11y_port_reserve || return 1
+  echo "a11y: starting the app's own server on port $A11Y_RESERVED_PORT (never reusing a leftover)"
+  a11y_port_release
+  A11Y_PORT="$A11Y_RESERVED_PORT" npm run a11y
+}
+
+# ---- web/e2e: the feature end-to-end specs ---------------------------------
+#
+# These are real regressions (a binned workspace restores, a refused bulk publish
+# keeps its sentence, a stale workspace slug does not bounce the dashboard) and
+# they earned their coverage by accident, inside the a11y gate. They are NOT
+# accessibility checks. A split that left them in NO gate would be a silent
+# coverage loss — which is why this gate exists.
+#
+# SERVER ISOLATION IS THE SAME, DELIBERATELY: `reuseExistingServer` stays false,
+# because a leftover `next-server` would serve a build this tree never produced
+# and the specs would then pass against the wrong code.
+e2e_run() {
+  cd "$REPO_ROOT/web" || return 1
+  a11y_port_reserve || return 1
+  echo "e2e:  starting the app's own server on port $A11Y_RESERVED_PORT (never reusing a leftover)"
+  a11y_port_release
+  A11Y_PORT="$A11Y_RESERVED_PORT" npm run e2e
+}
+
+run a11y "cd web && npm run a11y (axe-core family; the feature specs are gate \`e2e\`)" a11y_run
+run e2e "cd web && npm run e2e (the feature specs under web/e2e)" e2e_run
 
 # ---------------------------------------------------------------------------
 # web/npmaudit — fail on high/critical advisories. Never `|| true`.

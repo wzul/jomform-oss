@@ -33,8 +33,24 @@ export default defineConfig({
     baseURL: BASE,
     trace: "retain-on-failure",
   },
+  // TWO NAMED FAMILIES, selected by name so neither gate can drift (t_34fd25cb).
+  //
+  // The `a11y` gate scans axe; every fixture whose name starts with `a11y`
+  // belongs to it, and nothing else does. The feature specs in web/e2e/ are real
+  // end-to-end regressions that happened to live under this config — they are
+  // selected by the `feature-e2e` project and run by the `e2e` script.
+  //
+  // THE SPLIT IS BY FILENAME PREFIX ON PURPOSE: a list of explicit spec paths
+  // here would have to be edited every time a spec is added, and a spec that is
+  // in no project is a silent coverage loss — the exact failure this split must
+  // not introduce. A PREFIX is a rule: a new `a11y-*.spec.ts` is scanned by the
+  // a11y gate automatically, and any other new spec runs under `e2e`.
+  //
+  // `npm run a11y` is therefore NOT the whole directory any more; the gate's own
+  // label and GATE-INVENTORY.md row say what it is.
   projects: [
-    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
+    { name: "a11y", use: { ...devices["Desktop Chrome"] }, testMatch: /a11y.*\.spec\.ts/ },
+    { name: "feature-e2e", use: { ...devices["Desktop Chrome"] }, testMatch: /^(?!.*a11y).*\.spec\.ts$/ },
   ],
   webServer: {
     command: `npm run start -- -p ${PORT}`,

@@ -2552,6 +2552,77 @@ else
   fi
 fi
 
+# 39. EVERY web/e2e SPEC BELONGS TO EXACTLY ONE PLAYWRIGHT PROJECT (t_34fd25cb).
+#
+#     The `a11y` gate was split from the feature specs by giving each family its own
+#     named playwright project. A project rule that silently matches NO spec is a
+#     coverage loss with no signal at all — the specs would simply stop running —
+#     and one that matches TWO runs them twice and makes the split a lie.
+#
+#     THE JUDGEMENT IS DONE IN PYTHON, NOT `grep -E`, and that is not a preference.
+#     Measured while writing this check: the patterns in the config carry JS-level
+#     escaping (`\\.`), and the feature family is expressed as a negative lookahead
+#     — which POSIX ERE has no notion of. `grep -E` warned "? at start of expression"
+#     and matched nothing, so the shell version reported EVERY feature spec as
+#     unowned. Both are properties of the pattern language, not of the split.
+s39_out="$(python3 - "$LIVE_ROOT" <<'PYEOF' 2>&1
+import re, sys, glob, os
+root = sys.argv[1]
+cfg = os.path.join(root, "web", "playwright.config.ts")
+specs = sorted(os.path.basename(p) for p in glob.glob(os.path.join(root, "web", "e2e", "*.spec.ts")))
+if not specs:
+    print("NO_SPECS"); sys.exit(0)
+projs = []
+for line in open(cfg, encoding="utf-8"):
+    if "testMatch" not in line:
+        continue
+    n = re.search(r'name:\s*"([^"]+)"', line)
+    t = re.search(r'testMatch:\s*/(.+)/\s*\}?\s*,?\s*$', line.rstrip())
+    if n and t:
+        # The config is TypeScript source, so its regex literal is JS-escaped: `\\.`
+        # means a literal dot. Undo that one level before using it as a pattern — a
+        # pattern that still says `\\.` matches nothing.
+        projs.append((n.group(1), t.group(1).replace("\\\\", "\\")))
+if not projs:
+    print("NO_PROJECTS"); sys.exit(0)
+unowned, double = [], []
+for sp in specs:
+    who = [name for name, pat in projs if re.match(pat, sp)]
+    if not who:
+        unowned.append(sp)
+    elif len(who) > 1:
+        double.append("%s(%s)" % (sp, ",".join(who)))
+if unowned:
+    print("UNOWNED " + " ".join(unowned))
+elif double:
+    print("DOUBLE " + " ".join(double))
+else:
+    print("OK %d %d" % (len(specs), len(projs)))
+PYEOF
+)"
+case "$s39_out" in
+  OK\ *)
+    # shellcheck disable=SC2086
+    set -- $s39_out
+    ok "check 39 — every one of the $2 web/e2e specs belongs to exactly ONE of the $3 playwright projects (no spec unowned, none double-run), so the a11y/feature split cannot drop coverage"
+    ;;
+  NO_SPECS)
+    bad "check 39 — no *.spec.ts under $LIVE_ROOT/web/e2e, so the project split cannot be judged (a guard that reads nothing proves nothing)"
+    ;;
+  NO_PROJECTS)
+    bad "check 39 — no project in web/playwright.config.ts declares a testMatch, so the split cannot be proven; an unnamed project would run EVERY spec and the a11y gate would silently be the whole directory again"
+    ;;
+  UNOWNED\ *)
+    bad "check 39 — spec(s) match NO playwright project, so no gate runs them:${s39_out#UNOWNED}. A spec outside every project is a silent coverage loss; add it to a family's testMatch"
+    ;;
+  DOUBLE\ *)
+    bad "check 39 — spec(s) match MORE THAN ONE project, so they run twice and the family split is not a split:${s39_out#DOUBLE}"
+    ;;
+  *)
+    bad "check 39 — the project/spec judgement did not run: [$s39_out]"
+    ;;
+esac
+
 echo "---"
 echo "preflight self-test: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1
