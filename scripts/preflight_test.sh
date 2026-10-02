@@ -1149,7 +1149,17 @@ chmod +x "$TIMEBIN/go"
 # gate fail FAST — so the assertion below is about the COMMAND, never about the
 # suite passing here (this self-test must not cost a full api suite).
 test_gate_argv() {  # $1 = value for API_TEST_TIMEOUT (empty means "let the default apply")
+  # PREFLIGHT_RESULT_DIR is pinned to a throwaway dir for THIS invocation (card
+  # t_eb6a7567). The stub makes the gate record `test = fail`, and without the pin
+  # that RED record lands in the HOST store keyed on the LIVE tree sha — a record
+  # carrying the stub's fingerprint (`go=FAKE-GO ARGV`), so it can never be reused
+  # and it poisons the reuse evidence for the real tree. The self-test's own
+  # private RECORD_DIR is exported much further down (its block starts after this
+  # helper), so this nested run inherits the CALLER's store, which is the host
+  # default when the selftest gate is driven by hand — measured, 51 such records.
   (cd "$LIVE_ROOT" && env ${1:+API_TEST_TIMEOUT="$1"} \
+      PREFLIGHT_RESULT_DIR="$SB_STATE/nested-results" \
+      PREFLIGHT_RESULT_TTL=1 \
       PATH="$TIMEBIN:$PATH" \
       JOMFORM_TEST_DATABASE_URL=postgres://placeholder \
       JOMFORM_TEST_VALKEY_URL=valkey://placeholder \
@@ -1195,6 +1205,8 @@ intact_budget="$(gate_budget "$live_argv")"
 sed -i 's/ -timeout \$API_TEST_TIMEOUT//g; s/ -timeout .\$API_TEST_TIMEOUT.//g' "$SB/scripts/preflight.sh"
 stripped_argv="$(cd "$SB" && env JOMFORM_TEST_DATABASE_URL=postgres://placeholder \
       JOMFORM_TEST_VALKEY_URL=valkey://placeholder PATH="$TIMEBIN:$PATH" \
+      PREFLIGHT_RESULT_DIR="$SB_STATE/stripped-results" \
+      PREFLIGHT_RESULT_TTL=1 \
       ./scripts/preflight.sh --only test 2>&1 | sed -n 's/^FAKE-GO ARGV: //p' | sed -n '1p')"
 stripped_budget="$(gate_budget "$stripped_argv")"
 if [ -z "$intact_budget" ]; then
@@ -1219,7 +1231,13 @@ cp "$PREFLIGHT" "$SB/scripts/preflight.sh" && chmod +x "$SB/scripts/preflight.sh
 #      check would be asserting the wrong refusal) and with the STUBBED `go`, so a
 #      value that is accepted can never reach a real `go test`.
 test_rc_and_argv() {  # $1 = API_TEST_TIMEOUT; prints "rc<TAB>argv"
+  # PREFLIGHT_RESULT_DIR is pinned to a throwaway dir for THIS invocation: the stub
+  # `go` makes this run record `test = fail`, and the record must not land in the
+  # store the CALLER pointed the self-test at (card t_eb6a7567 — the same leak as
+  # the check-17 helper, found by driving the gate by hand).
   (cd "$LIVE_ROOT" && env API_TEST_TIMEOUT="$1" PATH="$TIMEBIN:$PATH" \
+      PREFLIGHT_RESULT_DIR="$SB_STATE/budget-results" \
+      PREFLIGHT_RESULT_TTL=1 \
       JOMFORM_TEST_DATABASE_URL=postgres://placeholder \
       JOMFORM_TEST_VALKEY_URL=valkey://placeholder \
       ./scripts/preflight.sh --only test 2>&1; printf 'rc=%s\n' "$?") > "$SB/budget.out" 2>&1
@@ -1292,8 +1310,12 @@ fi
 # worst possible failure for a gate. Each check below was written after breaking
 # the corresponding property by hand and watching it go red.
 #
-# Private result dir + TTL, so these checks never read or write the host's real
-# records and never depend on what is already in them.
+# Private result dir + TTL — SEE THE PIN AT $SB_STATE ABOVE. It is exported before
+# the first nested runner invocation now (card t_eb6a7567), because checks 17/17d
+# drive the LIVE runner under a stubbed `go` and their records carried the stub's
+# fingerprint into whatever store the CALLER had. The same values are restated here
+# as the record-mechanism checks' own statement of what they operate on; they are
+# already in the environment by this point.
 RECORD_DIR="$SB_STATE/gate-results"
 export PREFLIGHT_RESULT_DIR="$RECORD_DIR"
 export PREFLIGHT_RESULT_TTL=3600
@@ -1800,6 +1822,70 @@ if [ -n "${SEL_DIFF:-}" ] || [ -n "${_PREFLIGHT_SEL:-}" ]; then
   bad "the path-aware-selection handoff is STILL SET when the checks run (SEL_DIFF=[${SEL_DIFF:-}] _PREFLIGHT_SEL=[${_PREFLIGHT_SEL:-}]) — selected() reads SEL_DIFF before --only/--skip, so every nested check would run an OUTER narrowing instead of the gate it asks for, and the per-tree-record checks would write and read nothing. Is the guard at the top of this file still there?"
 else
   ok "the self-test clears an inherited --for-diff selection handoff (SEL_DIFF / _PREFLIGHT_SEL) before any check"
+fi
+
+# 30c. AN EXPLICIT --only/--skip BEATS AN INHERITED SELECTION (card t_fef2c0f7).
+#
+#      `selected()` reads SEL_DIFF BEFORE --only/--skip, and a `--for-diff` run
+#      exports it for its own flock child. This self-test clears the handoff for its
+#      OWN checks (the guard at the top of this file, asserted by 30b), but the
+#      runner it drives can still be entered as a DESCENDANT of a --for-diff run by
+#      anyone else — a lane's `selftest` gate, or a hand-run check — and in that
+#      position every nested `./scripts/preflight.sh --only X` ran the OUTER
+#      narrowing instead of X, and `--skip <all 15>` did not reach the all-skipped
+#      refusal at all: it ran the inherited gates, real `test` included. Measured:
+#      the `selftest` leg of a `--for-diff origin/main` run nested a real
+#      `go test ./... -race -timeout 30m` (a full internal/httpapi.test) several
+#      levels down and hung ~45 minutes, while the SAME self-test driven directly
+#      finished in under a minute.
+#
+#      The two directions are asserted against the LIVE runner, in a private lock so
+#      this cannot queue on the host gate:
+#        * `--skip <every gate>` with the handoff inherited must be REFUSED (the
+#          empty run is not a pass) — on the unfixed runner it starts `[build]`;
+#        * `--only <gate>` with the handoff inherited must run EXACTLY that gate.
+if [ -n "${PREFLIGHT_REUSE_REPO:-}" ]; then
+  _s30c_lock="$SB_STATE/s30c.lock"
+  # ISOLATION: these probes must not read the sandbox's record store or write a
+  # reuse line into the ledger the checks below count (measured: sharing them made
+  # the red-tree / ledger / node-version checks red, and sent the --skip probe down
+  # the pre-lock reuse path so it never reached the refusal at all).
+  _s30c_state="$SB_STATE/s30c-state"; rm -rf "$_s30c_state"; mkdir -p "$_s30c_state"
+  # `$GATES` is the inventory this file already read from `--list` (one name per
+  # line); join it with commas for --skip. Using a name that does not exist here
+  # would silently pass an EMPTY filter, which selects everything — the opposite of
+  # what this probe needs.
+  _s30c_all="$(printf '%s,' $GATES)"; _s30c_all="${_s30c_all%,}"
+  _s30c_skip_out="$(timeout 60 env \
+      PREFLIGHT_LOCK_FILE="$_s30c_lock" PREFLIGHT_LOCK_WAIT=0 \
+      PREFLIGHT_RESULT_DIR="$_s30c_state" PREFLIGHT_RESULT_TTL=1 \
+      PREFLIGHT_REUSE_REPO="$SB_STATE/s30c-repo" \
+      _PREFLIGHT_LOCKED=1 _PREFLIGHT_SEL=1 \
+      SEL_DIFF=' build vet test govuln webimage gitleaks prunewt selftest ' \
+      SEL_COUNT=8 SEL_DIFF_FULL=0 SEL_BASE=origin/main \
+      ./scripts/preflight.sh --skip "$_s30c_all" 2>&1)"; _s30c_skip_rc=$?
+  _s30c_only_out="$(timeout 180 env \
+      PREFLIGHT_LOCK_FILE="$_s30c_lock" PREFLIGHT_LOCK_WAIT=0 \
+      PREFLIGHT_RESULT_DIR="$_s30c_state" PREFLIGHT_RESULT_TTL=1 \
+      PREFLIGHT_REUSE_REPO="$SB_STATE/s30c-repo" \
+      _PREFLIGHT_LOCKED=1 _PREFLIGHT_SEL=1 \
+      SEL_DIFF=' build vet test govuln webimage gitleaks prunewt selftest ' \
+      SEL_COUNT=8 SEL_DIFF_FULL=0 SEL_BASE=origin/main \
+      ./scripts/preflight.sh --only build 2>&1)"; _s30c_only_rc=$?
+  _s30c_only_ran="$(printf '%s\n' "$_s30c_only_out" | grep -oE '^==> gate \[[a-z]+\]' | sort -u | tr '\n' ' ')"
+  # The card's property is WHICH GATES RUN, not the selected gate's verdict: the
+  # verdict depends on the surrounding environment (a shell without the test-env
+  # file fails the prerequisite check before any gate body), and asserting on it
+  # would make this check red for a reason that has nothing to do with the
+  # inherited selection. What must hold is that exactly the named gate ran — on the
+  # unfixed runner this leg runs the eight inherited gates, `test` among them.
+  if [ "$_s30c_skip_rc" -ne 1 ] || ! grep -q 'every gate was skipped' <<<"$_s30c_skip_out"; then
+    bad "30c does not bite: with SEL_DIFF inherited, \`--skip <every gate>\` was NOT refused (rc=$_s30c_skip_rc) — it ran the inherited narrowing instead of the empty-run refusal, which is the recursion this check exists to stop. First gate line: [$(printf '%s\n' "$_s30c_skip_out" | grep -m1 '==> gate')]"
+  elif [ "${_s30c_only_ran% }" != "==> gate [build]" ]; then
+    bad "30c does not bite: with SEL_DIFF inherited, \`--only build\` ran [${_s30c_only_ran% }] — an explicit --only must run EXACTLY the gate it names, not the outer narrowing (rc=$_s30c_only_rc)"
+  else
+    ok "30c — an explicit --only/--skip beats an inherited --for-diff selection: with SEL_DIFF inherited, \`--skip <every gate>\` is REFUSED as an empty run and \`--only build\` runs exactly [build]"
+  fi
 fi
 
 # 31. THE DOCUMENTED RED-TREE PATH MUST RUN. `docs/PREFLIGHT-REUSE.md` tells a lane
@@ -2395,6 +2481,65 @@ if [ -n "$probe_tree" ]; then
     bad "check 37 — a BRACKETED IPv6 authority lost its PORT+DATABASE: [postgres://[::1]:5432/db${at37}x] -> [$c_V6], expected a component ending in [:5432/db${at37}x]. [::1] is an address the driver resolves (pgx v5.10.0: host=::1 port=5432) and a spelling this host's callers use, so reading it as userinfo collapses it to the bare tail [db${at37}x] — the same collision, for exactly that spelling"
   else
     ok "a no-userinfo DSN whose path carries \`${at37}\` keys on the SERVER: [hostA:5432/db${at37}x], [hostB:5432/db${at37}x] and [hostA:5432/other${at37}x] give 3 distinct components and 3 distinct keys, the REAL gr_flush record from hostA is reusable under hostA (rc=$at_self_rc) and REFUSED for hostB and for hostA/other with 'the environment changed since that record', while a password containing \`${at37}\` or \`${sl37}\` still strips to [$d_c_simple] and rotating it leaves the key unchanged, and a bracketed IPv6 authority keeps its port+database ([$c_V6])"
+  fi
+fi
+
+# 38. THE SELF-TEST MUST NOT HAND ITS STUB'S RECORD TO THE CALLER'S STORE.
+#
+#     Checks 17a/17c/17d drive the LIVE runner under a stubbed `go`, and the stub
+#     exits 99 — so each of those runs records `test = fail`. The self-test's own
+#     private RECORD_DIR is exported only with the record-mechanism block further
+#     down, so before this fix those nested runs inherited the CALLER's store: the
+#     host default /var/lib/jomform/gate whenever the `selftest` gate is driven by
+#     hand (the recommended no-queue path, since this script takes its own lock).
+#     The record carries the stub's fingerprint (`go=FAKE-GO ARGV`) and is keyed on
+#     a real tree sha, so it can never be reused: on the host store the only thing
+#     it does is refuse the reuse that mechanism exists to provide. Measured on this
+#     host, 2026-10-02: 51 of the 125 records in /var/lib/jomform/gate carried that
+#     fingerprint, ~20 naming a real worktree under .worktrees/.
+#
+#     Asserted on a store this CHECK owns, never on the host store. Both directions,
+#     because either alone can be faked:
+#       * the LEAK must be reachable — the same helper driven with the store pointed
+#         at a dir the check owns, but with the pin defeated (the caller's value
+#         restored), must land a FAKE-GO record there. Without this leg a green
+#         below would only mean the helper wrote nothing at all.
+#       * the HELPER as shipped must leave that same dir free of 'FAKE-GO ARGV' AND
+#         still return the argv it exists to read.
+hoststore_leak=0     # the leak is reachable when the pin is defeated
+hoststore_helper=0   # the shipped helper still leaks into the caller's store
+helper_answered=0    # the helper still produces the argv it exists to read
+if ! git -C "$SB" rev-parse --git-dir >/dev/null 2>&1; then
+  ok "check 38 — the sandbox is not a git repo, so this check does not apply"
+else
+  CALLERSTORE="$SB_STATE/s38-caller-store"
+  live_tree="$(gr_tree_sha "$LIVE_ROOT" 2>/dev/null || true)"
+
+  # --- 38a. Reachability: the same shape WITHOUT the pin leaks.
+  rm -rf "$CALLERSTORE"; mkdir -p "$CALLERSTORE"
+  ( cd "$LIVE_ROOT" && env \
+      PREFLIGHT_RESULT_DIR="$CALLERSTORE" \
+      PREFLIGHT_RESULT_TTL=3600 \
+      PATH="$TIMEBIN:$PATH" \
+      JOMFORM_TEST_DATABASE_URL=postgres://placeholder \
+      JOMFORM_TEST_VALKEY_URL=valkey://placeholder \
+      ./scripts/preflight.sh --only test >/dev/null 2>&1 ) || true
+  grep -rls 'FAKE-GO ARGV' "$CALLERSTORE" >/dev/null 2>&1 && hoststore_leak=1
+
+  # --- 38b. The shipped helper must leave that dir free, and still answer.
+  rm -rf "$CALLERSTORE"; mkdir -p "$CALLERSTORE"
+  _s38_out="$( PREFLIGHT_RESULT_DIR="$CALLERSTORE" test_gate_argv "" 2>/dev/null || true )"
+  [ -n "$_s38_out" ] && helper_answered=1
+  grep -rls 'FAKE-GO ARGV' "$CALLERSTORE" >/dev/null 2>&1 && hoststore_helper=1
+
+  if [ "$hoststore_leak" -ne 1 ]; then
+    bad "check 38 — a stub-driven run with the store pointed at a caller-named dir wrote NO 'FAKE-GO ARGV' record, so the leak this check is about is not reachable here and a green below would be vacuous (looked in [$CALLERSTORE])"
+  elif [ "$helper_answered" -ne 1 ]; then
+    bad "check 38 — the argv helper returned nothing, so this check cannot tell a fixed helper from a broken one"
+  elif [ "$hoststore_helper" -eq 1 ]; then
+    bad "check 38 — the argv helper still writes its STUB's record into the caller's store: 'FAKE-GO ARGV' found under [$CALLERSTORE]${live_tree:+ (live tree ${live_tree:0:7})}. That record can never be reused, so on the host store it only refuses the reuse this mechanism exists to provide"
+  else
+    ok "check 38 — the argv helper cannot reach the caller's store: the unpinned shape DOES leave a stub record in a caller-named dir (so the leak is real), while the shipped helper leaves it free of 'FAKE-GO ARGV' and still returns the argv${live_tree:+ (live tree ${live_tree:0:7})}"
   fi
 fi
 

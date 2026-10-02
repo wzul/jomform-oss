@@ -228,7 +228,26 @@ EXPLAIN_DIFF_GIVEN=0
 # the parent's narrowing and the child ran EVERY gate — a `--for-diff` run that
 # silently stopped being narrowed. Measured, on a change under GATE-INVENTORY.md:
 # the parent selected 7 gates and the child ran all 14.
-SEL_DIFF="${SEL_DIFF:-}"
+SEL_DIFF=""
+# An EXPLICIT --only/--skip is this run's own instruction and beats a selection
+# inherited from an enclosing --for-diff/--explain-diff run, which exists to answer
+# a question about THAT run's diff. Measured (card t_fef2c0f7): a `selftest` gate
+# fired from a --for-diff parent saw SEL_DIFF non-empty in every child it spawns,
+# so `--only build` ran the 8 inherited gates and `--skipped` did not hit the
+# all-skipped refusal. `--only build` runs ONLY build; `--skip <all>` is refused.
+# The `--for-diff` flag itself is the one the gate is told about, and its argv never
+# carries these flags, so no lane is affected. The parent run is untouched: it
+# computes and exports the selection in the branch below, as before.
+if [ -n "$ONLY" ] || [ -n "$SKIP" ] || [ -n "$CLASSIFY_PATHS" ]; then
+  SEL_DIFF=""
+  # Belt and braces: if this process is an explicit --only/--skip run, the handoff
+  # marker must go too. It only ever says "the table was built once by the parent";
+  # when this run is NOT narrowed by a diff, a stale marker has nothing to protect
+  # and only invites a grandchild to re-inherit a selection this run already dropped.
+  unset _PREFLIGHT_SEL
+else
+  SEL_DIFF="${SEL_DIFF:-}"
+fi
 # The rest of the selection handoff. Declared the same way, for the same reason —
 # the banner and the summary read them on EVERY path (including the no-flag full
 # run) without tripping `set -u`.
