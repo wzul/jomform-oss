@@ -81,45 +81,181 @@
 # failure twice (once in the run, once under "✖ failing tests:"), so a grep over
 # `✖` reports 2 or 3 for a single failure.
 #
-# A BASE THIS READ CANNOT USE IS REFUSED, NOT REPORTED AS `fail=1` (card
-# `t_858620fc`, widened by card `t_01df90af`). The premise check below only refuses a
-# base that does not CARRY the guard at all (`git cat-file -e`). It does not cover the
-# base whose reader has CAUGHT UP to this branch: once the fix MERGES into
-# `origin/main`, the base guard is still there and still GREEN on the unmutated tree,
-# so the premise holds — and then every HOLE case reads `does not reproduce the
-# premise`, seven `***` lines and a silent `BITEPROOF FAIL (fail=1)`, a reading
-# indistinguishable from "the base is genuinely pre-fix and the mutations failed to
-# apply".
+# A CAUGHT-UP BASE IS REFUSED, NOT REPORTED AS `fail=1` (card `t_858620fc`). The
+# premise check below only refuses a base that does not CARRY the guard at all
+# (`git cat-file -e`). It does not cover the base whose reader has CAUGHT UP to this
+# branch: once the fix MERGES into `origin/main`, the base guard is still there and
+# still GREEN on the unmutated tree, so the premise holds — and then every HOLE case
+# reads `does not reproduce the premise`, seven `***` lines and a silent
+# `BITEPROOF FAIL (fail=1)`, a reading indistinguishable from "the base is genuinely
+# pre-fix and the mutations failed to apply". What identifies a caught-up base is the
+# reader's CAPABILITY (it DECLARES `stripUnrendered(read(DOCS_PAGE))`), never a byte
+# distance — the guard can be rewritten around the same reader. When it is caught up
+# this script REFUSES (exit 2) and prints a `BITEPROOF_BASE=<rev>` resolved from git
+# and offered only when that revision's guard really is pre-fix. The refusal is
+# itself driven end to end on every run (see the self-check), so the instrument
+# cannot silently go back to printing a false FAIL the next time main catches up.
 #
-# WHAT IS TESTED, exactly (card `t_01df90af` corrected this paragraph's over-claim):
-# the base guard's TEXT is read for a DECLARATION of `docsSrc` — never its byte
-# distance from this tree's file, because the guard can be rewritten around the SAME
-# reader while the readers do not differ at all (the sibling's byte fast path was
-# itself unsatisfiable, card `t_dba4465c`). The read is a line-anchored pattern that
-# tolerates the whitespace and the declaration keyword a reformat may change, and it
-# has THREE outcomes:
-#   PRE      a declaration of the pre-fix reader -> fall through and measure;
-#   POST     a declaration of the post-fix reader -> REFUSE (the base is caught up);
-#   UNKNOWN  NEITHER declaration is present -> REFUSE. A base whose `docsSrc` is a
-#            longer expression (a `read(DOCS_PAGE)` with a `.replace()`, a helper) is
-#            not demonstrably pre-fix, and ASSUMING "pre-fix" for a shape this read
-#            does not recognise is exactly how a caught-up base reads as a green
-#            column: the whole failure above comes back. It fails closed instead.
-# Both refusals exit 2 and print a `BITEPROOF_BASE=<rev>` resolved from git — offered
-# only after that revision's guard is re-read and shown to declare the pre-fix reader.
-# The refusal is itself driven end to end on every run, in ALL THREE directions (see
-# the self-check), so the instrument cannot silently go back to printing a false FAIL
-# the next time main catches up.
+# THE SHARED INPUT IS SERIALISED PER WORKTREE (card `t_03a646e2`). Every case
+# mutates the SHARED page (`src/app/docs/page.tsx`) in place and `run_guard` reads
+# it the whole time, so two overlapping runs in ONE worktree mutate the page under
+# each other and print FALSE verdict lines — reproduced by QA on the tag tree
+# f63fa325: two runs 1s apart printed 7 and 4 `***` lines (a false
+# `baseline: NEW guard wanted GREEN, got RED` included) against 0 for a solo run,
+# with rc=1 for both and no false PASS reachable. No per-run channel can fix that
+# (the harness already uses per-run `.ts` copies): the shared thing is the INPUT.
+# The lock is the sibling's (web/scripts/biteproof_docs_tool_claims.sh, cards
+# t_ed66094c / t_ff3640e7), taken before the premise check, which READS the page.
+# It is keyed on the worktree, so two lanes' cards never queue behind each other,
+# and a contended run WAITS and says so; a wait-out is exit 75, not a red harness.
 #
 # Run:  bash web/scripts/biteproof_docs_index_render_sites.sh
 set -uo pipefail
 
 # Absolute path to this script, resolved BEFORE the `cd` below: the caught-up-base
-# self-check invokes it recursively (BITEPROOF_REFUSE_ONLY), and the `cd` would
-# invalidate a relative `$0`.
-SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
+# self-check invokes it recursively (BITEPROOF_REFUSE_ONLY), and the LOCK BLOCK below
+# re-execs it, so the path has to survive a changed CWD. Fail closed when the
+# directory cannot be resolved — an empty `$(cd … && pwd)` yields `/biteproof_…sh`,
+# and the re-exec then dies with `No such file or directory` instead of taking the
+# lock, which reads as "the lock is not held here" and refuses for the wrong reason.
+BITE_HOME=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
+[ -n "$BITE_HOME" ] || { echo "cannot resolve the directory this script lives in" >&2; exit 2; }
+SELF="$BITE_HOME/$(basename "$0")"
 
-cd "$(dirname "$0")/.." || exit 2          # -> web/
+cd "$BITE_HOME/.." || exit 2                # -> web/
+
+# ---- PER-WORKTREE LOCK (card t_03a646e2) ----------------------------------
+#
+# WHY (the bug this was written for): every case below mutates the SHARED page
+# `src/app/docs/page.tsx` in place (`render_sites_off` / `comment_out_entry` /
+# `insert_at_line` all write $PAGE) and `run_guard` reads the page the whole time,
+# but this harness took NO lock, while its sibling
+# web/scripts/biteproof_docs_tool_claims.sh carried one for exactly this shape
+# (cards t_ed66094c / t_ff3640e7). Reproduced on the tag tree f63fa325 by QA
+# (`t_3b5979be`, logs conc_a/conc_b beside its repro): two runs 1s apart in ONE
+# worktree printed **7 and 4** false `***` verdict lines — including a false
+# `baseline: NEW guard wanted GREEN, got RED` on the BASELINE, i.e. the suite
+# reading as broken — against **0** for a solo run at the same base, and rc=1 for
+# both (9 and 11 BITES instead of 13). No false PASS is reachable, but a harness
+# whose whole product is a trustworthy verdict cannot print wrong verdict lines,
+# and no per-run channel can fix it: the shared thing is the INPUT.
+#
+# The lock is taken before the premise check below, which READS the page, and is
+# held until this process exits. It is keyed on the WORKTREE, so two lanes' cards
+# never queue behind each other, and a contended run WAITS and says so rather than
+# failing — a refusal would turn "someone else is running it" into a red harness.
+#
+# The key is `git rev-parse --absolute-git-dir`: one value per worktree, the same
+# value from every subdirectory of it, and DIFFERENT for the primary tree and for
+# each linked worktree (a linked worktree resolves to `<repo>/.git/worktrees/<name>`,
+# the primary tree to `<repo>/.git`). `--show-toplevel` would name the same worktree
+# too, but it is resolved against the CWD, so a run started from `web/` would derive
+# a different key for the same tree and the lock would not be mutual.
+#
+# The lock file sits under a HOST-GLOBAL base, deliberately not $TMPDIR: the run it
+# has to exclude usually belongs to another PROFILE (a QA re-run while the dev lane
+# runs, which is how this defect was found), and a per-profile TMPDIR would put the
+# two runs in different directories and serialise nothing.
+#
+# The PARENT takes the lock on fd 9 and re-execs this script; the child inherits the
+# open descriptor, so the lock is held for exactly as long as the copy that mutates
+# the page lives, and it is released when the parent exits — the `trap ... EXIT`
+# below releases it as surely as it restores the page, and there is no separate
+# unlock line that can be skipped.
+#
+# The child PROVES the lock is held before it prints a verdict (a lock nobody can
+# observe as held is the same "trust the absence" shape the verdict rule was
+# rewritten to remove). Two legs, both needed: a second take on the same file from a
+# separate process must be REFUSED, and a fresh file in the same directory must lock
+# FINE — or "refused" would mean flock is inert here, not that this run holds the lock.
+#
+# The directory is per HARNESS, as in the sibling (its own
+# `jomform-biteproof-docs-tool-claims`). Two DIFFERENT harnesses of this family can
+# therefore still overlap; what this excludes is two runs of THIS script, which is
+# the shape reproduced above. Stated as a limit rather than left implicit.
+LOCK_BASE="${BITEPROOF_LOCK_DIR:-/tmp}"
+LOCK_WAIT="${BITEPROOF_LOCK_WAIT:-1800}"
+
+if [ "${BITEPROOF_LOCKED:-}" != "1" ]; then
+  command -v flock >/dev/null 2>&1 || {
+    echo "BITEPROOF REFUSED: flock is not installed, so this harness cannot serialise two" >&2
+    echo "runs in one worktree — and two runs mutate the same docs page and print FALSE" >&2
+    echo "verdicts (t_03a646e2, reproduced). Install flock before trusting any verdict" >&2
+    echo "from it." >&2
+    exit 2
+  }
+  case "$LOCK_WAIT" in ''|*[!0-9]*)
+    echo "BITEPROOF REFUSED: BITEPROOF_LOCK_WAIT='$LOCK_WAIT' is not a whole number of seconds." >&2
+    exit 2 ;;
+  esac
+  BITE_GIT_DIR=$(git rev-parse --absolute-git-dir 2>/dev/null) || {
+    echo "BITEPROOF REFUSED: cannot resolve this worktree's git dir (git rev-parse" >&2
+    echo "--absolute-git-dir), so there is no per-worktree key to serialise on, and an" >&2
+    echo "unserialised run prints false verdicts when a peer runs here (t_03a646e2)." >&2
+    exit 2
+  }
+  BITE_KEY=$(printf '%s' "$BITE_GIT_DIR" | sha256sum | cut -c1-16)
+  LOCK_DIR="$LOCK_BASE/jomform-biteproof-docs-index-render-sites"
+  mkdir -p "$LOCK_DIR" || {
+    echo "BITEPROOF REFUSED: cannot create the lock directory $LOCK_DIR, so two runs in" >&2
+    echo "one worktree could not be serialised. Set BITEPROOF_LOCK_DIR to a writable dir." >&2
+    exit 2
+  }
+  LOCK_FILE="$LOCK_DIR/$BITE_KEY.lock"
+  export BITEPROOF_LOCKED=1 BITEPROOF_LOCK_FILE="$LOCK_FILE"
+  exec 9>"$LOCK_FILE" || {
+    echo "BITEPROOF REFUSED: cannot open the lock file $LOCK_FILE." >&2
+    exit 2
+  }
+  if ! flock -n "$LOCK_FILE" true 2>/dev/null; then
+    echo "  lock:   another run of this harness holds this worktree's lock — waiting up to ${LOCK_WAIT}s"
+    echo "          (both runs mutate the same docs page, so concurrently they print FALSE verdicts)"
+  fi
+  flock -w "$LOCK_WAIT" -E 75 9
+  _lock_rc=$?
+  if [ "$_lock_rc" = 75 ]; then
+    echo "BITEPROOF REFUSED: could not take the per-worktree lock $LOCK_FILE within ${LOCK_WAIT}s," >&2
+    echo "so this run is NOT serialised against a peer that mutates the same docs page" >&2
+    echo "and would print false verdicts. Nothing was mutated. Re-run once the other run" >&2
+    echo "finishes, or raise the wait with BITEPROOF_LOCK_WAIT=<seconds>." >&2
+    exit 75
+  fi
+  if [ "$_lock_rc" != 0 ]; then
+    echo "BITEPROOF REFUSED: flock on $LOCK_FILE exited ${_lock_rc}, so the lock was not held" >&2
+    echo "and this run would not be serialised against a peer in the same worktree." >&2
+    exit 2
+  fi
+  bash "$SELF" "$@"
+  exit "$?"
+fi
+
+# The child. Refuse if the lock it is supposed to have inherited cannot be shown to be
+# held: an unverified lock is the same shape as an unverified verdict.
+LOCK_FILE="${BITEPROOF_LOCK_FILE:-}"
+if [ -z "$LOCK_FILE" ]; then
+  echo "BITEPROOF REFUSED: BITEPROOF_LOCKED=1 is set but BITEPROOF_LOCK_FILE is empty, so this" >&2
+  echo "run cannot show it holds the per-worktree lock. Unset both and re-run the harness." >&2
+  exit 2
+fi
+if flock -n "$LOCK_FILE" true 2>/dev/null; then
+  echo "BITEPROOF REFUSED: the per-worktree lock ($LOCK_FILE) was not held here, so this run is" >&2
+  echo "NOT serialised — a peer mutating the same docs page would give it false verdicts." >&2
+  echo "Run the harness WITHOUT BITEPROOF_LOCKED set and let it take the lock itself." >&2
+  exit 2
+fi
+LOCK_PROBE=$(mktemp "$(dirname "$LOCK_FILE")/probe.XXXXXX") || {
+  echo "BITEPROOF REFUSED: cannot create a probe file beside $LOCK_FILE, so the check above" >&2
+  echo "cannot be shown to be meaningful." >&2
+  exit 2
+}
+if ! flock -n "$LOCK_PROBE" true 2>/dev/null; then
+  echo "BITEPROOF REFUSED: flock could not lock a FRESH file ($LOCK_PROBE), so \"the lock is held\"" >&2
+  echo "above proves nothing about flock here — it would read REFUSED for any file." >&2
+  rm -f "$LOCK_PROBE"
+  exit 2
+fi
+rm -f "$LOCK_PROBE"
+echo "lock:   held for this worktree (${LOCK_FILE##*/})"
 
 PAGE=src/app/docs/page.tsx
 GUARD=src/lib/docsIndex.test.ts
