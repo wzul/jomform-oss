@@ -17,7 +17,7 @@ import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import MediaPicker from "../../components/MediaPicker";
 import ProductPicker, { type PickerProduct } from "../../components/ProductPicker";
-import { workspaceQuery, workspaceScope } from "../../lib/workspace";
+import { activeWorkspaceScope, enterWorkspace, workspaceQuery } from "../../lib/workspace";
 import { defaultNotificationEvent, formEntriesAction } from "../../lib/formMode";
 import { acknowledgmentBody, publishConfirmText, publishErrorText, publishOutcome } from "../../lib/publishResult";
 import { apiErr } from "../../lib/apiErr";
@@ -380,8 +380,10 @@ async function resolveFormAcrossWorkspaces(
     return { form: null, status: r.status };
   };
 
-  // Fast path: the active workspace.
-  const active = workspaceScope();
+  // Fast path: the ACTIVE workspace (the session-confirmed one once the server
+  // has answered — lib/workspace.ts, t_da4b2031). Reading the stored value here
+  // would probe a slug the session may already have rejected.
+  const active = activeWorkspaceScope();
   const first = await probe(active);
   if (first.form || first.status === 401) return first;
 
@@ -394,11 +396,12 @@ async function resolveFormAcrossWorkspaces(
         if (s.slug === active) continue;
         const r = await probe(s.slug);
         if (r.form) {
-          // Found in another workspace — auto-switch jf_workspace to the owner.
-          try {
-            localStorage.setItem("jf_workspace", s.slug);
-          } catch {}
-          window.dispatchEvent(new Event("jf:workspace-changed"));
+          // Found in another workspace — auto-switch to the owning workspace.
+          // `enterWorkspace` publishes the new scope AND dispatches
+          // jf:workspace-changed, so the session context re-resolves the active
+          // workspace and its keyed fetches re-run (a bare localStorage write
+          // would not reach the CONFIRMED scope every scoped fetch reads).
+          enterWorkspace(s.slug);
           return r;
         }
         if (r.status === 401) return r;
@@ -623,7 +626,7 @@ function FormSettingsInner() {
         setNotifs(list);
       }
       // Issue #196: load this form's webhooks (form_id filter).
-      const sp = workspaceScope();
+      const sp = activeWorkspaceScope();
       const wr = await fetch(`/api/rest/webhooks?form_id=${encodeURIComponent(formId)}${sp ? `&workspace=${encodeURIComponent(sp)}` : ""}`);
       if (wr.ok) {
         const whs = (await wr.json()) as { id: string; url: string; events: string[] }[];
@@ -1033,7 +1036,7 @@ function FormSettingsInner() {
     e.preventDefault();
     setMsg("");
     if (!formId) return;
-    const sp = workspaceScope();
+    const sp = activeWorkspaceScope();
     const r = await fetch(`/api/rest/webhooks${sp ? `?workspace=${encodeURIComponent(sp)}` : ""}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1052,7 +1055,7 @@ function FormSettingsInner() {
 
   async function deleteFormWebhook(id: string) {
     setMsg("");
-    const sp = workspaceScope();
+    const sp = activeWorkspaceScope();
     const r = await fetch(`/api/rest/webhooks/${id}${sp ? `?workspace=${encodeURIComponent(sp)}` : ""}`, { method: "DELETE" });
     setMsg(r.ok ? t("fs.webhookDeleted") : t("prof.failed"));
     if (r.ok) void load();

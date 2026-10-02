@@ -53,7 +53,7 @@
 // requirement provable: restoring the bare `status === 400` test turns a named
 // case red instead of merely moving a string.
 
-import { apiErrorCode } from "./apiErr.ts";
+import { apiErrorCode, isScopeRefusal } from "./apiErr.ts";
 
 /**
  * Mirrors `CodeWorkspaceScopeRequired` in api/internal/httpapi/errcode.go.
@@ -94,5 +94,15 @@ export function confirmDecisionFor(status: number, body: unknown): ConfirmDecisi
     return apiErrorCode(body) === WORKSPACE_SCOPE_REQUIRED_CODE ? "scopeRequired" : "failed";
   }
   if (status === 409) return "stale";
+  // A 403 carrying the TENANCY refusal (t_da4b2031). The page's 401/403 branch
+  // used to send this to /login: the request's `?workspace=` is a slug the
+  // session cannot resolve (a workspace renamed or deleted while selected), which
+  // is a stale localStorage value and not a dead session. Answered as the scope
+  // outcome so the user is told what to do instead of being signed out.
+  //
+  // An UNCoded 403 stays a failure: `isScopeRefusal` is false for an absent or
+  // unknown code, so a genuine authorization refusal is never softened into
+  // "choose a workspace".
+  if (status === 403) return isScopeRefusal(body) ? "scopeRequired" : "failed";
   return status >= 200 && status < 300 ? "done" : "failed";
 }

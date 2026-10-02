@@ -138,16 +138,35 @@ test.describe("chat availability probe: a scope refusal is not 'unavailable'", (
       "the scope refusal from the availability probe must be rendered as the page's own message",
     ).toHaveText(EN.scopeRequired, { timeout: 15_000 });
 
-    // NOW the probe has definitely fired. The shape is asserted, not assumed: it
-    // must have gone out UNSCOPED, which is the request a 400 answers. A fresh
-    // state has no jf_workspace, and if the Shell ever wins the race this test
-    // stops reproducing the defect and must fail rather than pass on a branch that
-    // is no longer reachable.
-    expect(probes, "the availability probe must have been sent exactly once").toHaveLength(1);
+    // NOW the probe has definitely fired. The shape is asserted, not assumed.
+    //
+    // RE-ANCHORED FOR t_da4b2031. This used to assert the probe was sent exactly
+    // once and UNSCOPED, on the reasoning that "a fresh state has no jf_workspace,
+    // so the Shell has not won yet". Both halves moved with the fix:
+    //
+    //   * `workspaceQuery()` no longer reads localStorage directly, so the
+    //     workspace the bundle CONFIRMS is what the request carries;
+    //   * the probe is keyed on that scope, so when it is published the page
+    //     probes AGAIN — the self-heal that turns "refused on a stale slug" into a
+    //     working page rather than a message the user cannot clear. The stub
+    //     answers every probe with the refusal, so both carry the scope copy here.
+    //
+    // What this file owns is unchanged: the PAGE must render the scope copy, not
+    // "the assistant is not available", and keep the composer. The shape asserted
+    // is the property that matters — no probe may carry a slug the session does
+    // not have, and the final one carries the workspace the session confirmed.
+    expect(probes.length, "the availability probe must have been sent at least once").toBeGreaterThan(0);
+    for (const url of probes) {
+      expect(
+        url,
+        `no probe may carry a workspace the session does not have. Sent: ${JSON.stringify(probes)}`,
+      ).not.toContain("workspace=ws-gone");
+    }
     expect(
-      probes[0],
-      `the probe must have gone out UNSCOPED — that is the request the 400 answers. Sent: ${JSON.stringify(probes)}`,
-    ).not.toContain("workspace=");
+      probes.at(-1),
+      `the last probe must carry the confirmed workspace (the page re-probes once the session has ` +
+        `answered), never no scope at all. Sent: ${JSON.stringify(probes)}`,
+    ).toContain("workspace=ws-a");
 
     // Quoted evidence: the live DOM, not what the test expects to find.
     const alertText = await page.locator('p[role="alert"]').innerText();

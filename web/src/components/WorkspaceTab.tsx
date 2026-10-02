@@ -42,6 +42,7 @@ import { apiErr, translateApiErr } from "../lib/apiErr";
 import { useSession } from "./session";
 import { WORKSPACE_NAME_MAX_CHARS } from "../lib/workspaceIdentity";
 import { fetchJson, runLoad } from "../lib/wsfetch";
+import { enterWorkspace, dropCurrentWorkspaceScope } from "../lib/workspace";
 
 type Blocker = { kind: string; count: number; label: string };
 
@@ -252,14 +253,18 @@ export default function WorkspaceTab({ workspaceId }: { workspaceId: string }) {
       // carry it — the session bundle would resolve to no workspace and the user
       // would see empty data instead of their own. Write the new slug, or drop
       // the key so the bundle picks a fresh default.
-      try {
-        if (typeof d?.slug === "string" && d.slug !== "") {
-          window.localStorage.setItem("jf_workspace", d.slug);
-        } else {
-          window.localStorage.removeItem("jf_workspace");
-        }
-      } catch {
-        /* storage unavailable — the reloaded bundle still re-derives the list */
+      //
+      // `enterWorkspace`, not a raw setItem (t_da4b2031): the slug every scoped
+      // fetch uses comes from the module-level CONFIRMED scope, not from
+      // localStorage (lib/workspace.ts's workspaceQuery), so a bare setItem
+      // would leave the renamed workspace invisible to the page until a reload.
+      // This also dispatches the jf:workspace-changed event the session context
+      // listens for. The reload below is kept for its original reason — it
+      // re-derives the whole bundle (list, chip, switcher labels) from scratch.
+      if (typeof d?.slug === "string" && d.slug !== "") {
+        enterWorkspace(d.slug);
+      } else {
+        dropCurrentWorkspaceScope();
       }
       setRenameOk(t("ws.renameSaved"));
       setRenaming(false);

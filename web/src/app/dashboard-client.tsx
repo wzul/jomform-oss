@@ -5,7 +5,7 @@ import Link from "next/link";
 import { Shell } from "../components/Shell";
 import { useI18n } from "../components/i18n";
 import { useSession } from "../components/session";
-import { workspaceQuery, workspaceScope } from "../lib/workspace";
+import { activeWorkspaceScope, workspaceQuery } from "../lib/workspace";
 import { formEntriesCountLabel, paidConfirmedCount } from "../lib/dashboardStats";
 import { answersPreview, rowKey, rowKind } from "../lib/salesRows";
 import Landing from "./landing/page";
@@ -84,7 +84,7 @@ export default function Dashboard() {
 
   const loadSales = useCallback(
     async (p: number) => {
-      const sp = workspaceScope();
+      const sp = activeWorkspaceScope();
       const q = new URLSearchParams({ page: String(p), limit: String(PAGE_SIZE) });
       if (sp) q.set("workspace", sp);
       const r = await fetch(`/api/rest/sales?${q.toString()}`);
@@ -262,7 +262,7 @@ export default function Dashboard() {
             {formStats.map((f) => (
               <div key={f.slug} className="rounded-lg border border-[var(--jf-border)] p-3">
                 <p className="truncate text-sm font-medium" title={f.title}>{f.title}</p>
-                <p className="font-mono text-[11px] text-[var(--jf-muted)]">{workspaceScope() || "app"}.jomform.com/{f.slug}</p>
+                <p className="font-mono text-[11px] text-[var(--jf-muted)]">{activeWorkspaceScope() || "app"}.jomform.com/{f.slug}</p>
                 <div className="mt-2 grid grid-cols-2 gap-x-2 gap-y-0.5 text-[11px] text-[var(--jf-muted)]">
                   {/* Issue #598: the figure is "entries recorded for this form"
                       — submissions for a response form, sales rows for a

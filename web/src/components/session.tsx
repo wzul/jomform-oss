@@ -29,7 +29,14 @@ import {
   useRef,
   useState,
 } from "react";
-import { workspaceScope } from "../lib/workspace";
+import {
+  activeWorkspaceScope,
+  clearUnknownWorkspaceScope,
+  dropCurrentWorkspaceScope,
+  publishWorkspaceScope,
+} from "../lib/workspace";
+import { isScopeRefusal } from "../lib/apiErr";
+import { readErrorBody } from "../lib/wsfetch";
 
 export type SessionUser = {
   id?: string;
@@ -130,11 +137,33 @@ async function fetchBundle(workspace: string): Promise<BundleData | null> {
   if (bundleCache.has(key)) return bundleCache.get(key) ?? null;
   if (!inflightByWorkspace.has(key)) {
     const q = workspace ? `?workspace=${encodeURIComponent(workspace)}` : "";
-    const p = fetch(`/api/rest/dashboard-bundle${q}`)
-      .then((r) => {
-        if (!r.ok) return null;
-        return r.json();
-      })
+    const p = (async (): Promise<BundleData | null> => {
+      const r = await fetch(`/api/rest/dashboard-bundle${q}`);
+      if (r.ok) return r.json();
+      // THE SCOPE REFUSAL OF THE BUNDLE ITSELF (t_da4b2031). A stale
+      // `jf_workspace` makes THIS request carry a slug the session cannot
+      // resolve, and the server answers 403 `workspace notFound`. Resolving
+      // that to null would be wrong twice over: the merchant would lose the
+      // workspace LIST (the one thing that can repair the selection — the
+      // Shell reconciles off it), and `null` is the session context's
+      // "confirmed anonymous" value, so every page would bounce to /landing.
+      //
+      // So the slug is dropped and the bundle is re-fetched UNSCOPED — the
+      // request that returns the caller's real list — through this same
+      // function, so the retry is cached and registered as the default-key
+      // inflight: the `[workspace]` effect that the jf:workspace-changed event
+      // fires reads it instead of issuing a second identical request. This is
+      // the client-side "an unknown slug means no selection" rule, applied one
+      // layer below the Shell so it covers first paint too.
+      //
+      // The recursion is depth 1: an UNSCOPED request can never be a scope
+      // refusal (resolveAccountScope only rejects a slug that was sent).
+      if (r.status === 403 && isScopeRefusal(await readErrorBody(r))) {
+        dropCurrentWorkspaceScope();
+        return fetchBundle("");
+      }
+      return null;
+    })()
       .then((d) => {
         bundleCache.set(key, d);
         inflightByWorkspace.delete(key);
@@ -155,9 +184,13 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   const [mounted, setMounted] = useState(false);
   const reloadNonce = useRef(0);
 
-  // Resolve the active workspace from localStorage (same key the Shell uses).
+  // Resolve the active workspace from the SESSION-CONFIRMED scope (t_da4b2031),
+  // falling back to localStorage while no answer has arrived. Reading storage
+  // directly left this state pointing at a slug the server had already rejected,
+  // so a page keyed on `useSession().workspace` never re-fetched after the
+  // reconciliation — the page kept showing data for a workspace that was gone.
   useEffect(() => {
-    setWorkspace(workspaceScope());
+    setWorkspace(activeWorkspaceScope());
   }, []);
 
   // Issue #170: keep the active workspace REACTIVE to switches.
@@ -166,13 +199,25 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   // Updating `workspace` here re-runs the workspace-keyed bundle fetch and lets
   // data pages key their load() on it, so switching workspaces re-fetches each
   // page's list for the new workspace.
+  //
+  // The `storage` leg also has to move the CONFIRMED scope (t_da4b2031): it is
+  // the authority every scoped fetch reads, so a sign-out in ANOTHER TAB (which
+  // clears jf_workspace) would otherwise leave this tab sending a slug whose
+  // session is gone and 403ing on every request. A storage event carries the
+  // new value, so the confirmed scope is re-derived from it rather than from
+  // this tab's stale memory.
   useEffect(() => {
-    const sync = () => setWorkspace(workspaceScope());
+    const sync = () => setWorkspace(activeWorkspaceScope());
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== null && e.key !== "jf_workspace" && e.key !== "jf_space") return;
+      if (!e.newValue) publishWorkspaceScope("");
+      sync();
+    };
     window.addEventListener("jf:workspace-changed", sync);
-    window.addEventListener("storage", sync);
+    window.addEventListener("storage", onStorage);
     return () => {
       window.removeEventListener("jf:workspace-changed", sync);
-      window.removeEventListener("storage", sync);
+      window.removeEventListener("storage", onStorage);
     };
   }, []);
 
@@ -183,6 +228,43 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     // and the dashboard falls through to the Landing page instead of hanging
     // on the loading shell. fetchBundle already handles an empty workspace (no
     // ?workspace= query) and keys the cache under "__default__".
+    //
+    // THE CONFIRMED SCOPE (card t_da4b2031). `bundle` is the one place the
+    // dashboard learns WHICH workspaces this session has, so it is the one place
+    // that can turn the stored slug into a slug the server has confirmed. Until
+    // this effect has an answer, every scoped fetch (workspaceQuery, and the
+    // bundle itself) carries the raw stored value — the identical request the
+    // pre-fix build made — so first paint is unchanged. Once an answer lands:
+    //
+    //   * a slug IN the list is published as confirmed, and nothing changes for
+    //     the user;
+    //   * a slug NOT in the list is dropped (clearUnknownWorkspaceScope) and the
+    //     workspace the Shell selects is published instead, so no later request
+    //     can carry the foreign slug. A 403 it produced on the way here was
+    //     already handled by runLoad/wsfetch (drop the slug, keep the session) —
+    //     it can never reach the /login redirect, which is the whole defect;
+    //   * an EMPTY list publishes "" — the caller has no workspace, and a stored
+    //     slug from a workspace they no longer have must not be sent again.
+    if (bundle === undefined) return;
+    const list = Array.isArray(bundle?.workspaces)
+      ? bundle!.workspaces
+      : Array.isArray(bundle?.spaces)
+        ? bundle!.spaces
+        : [];
+    // `clearUnknownWorkspaceScope` is given the settled list: with zero
+    // workspaces it drops the stored slug (the reported shape), and it is a
+    // no-op only when there is no list at all — which cannot happen here,
+    // because `bundle === undefined` returned above.
+    const surviving = clearUnknownWorkspaceScope(list);
+    // PUBLISH, not just remember (t_da4b2031): publishWorkspaceScope writes the
+    // stored key too (matching what the Shell's own reconciler does, so the two
+    // agree) and notifies the session context when the value changes — which is
+    // what re-runs this effect's sibling fetches and every page keyed on
+    // `useSession().workspace` for the workspace the caller actually has.
+    publishWorkspaceScope(surviving || list[0]?.slug || "");
+  }, [bundle]);
+
+  useEffect(() => {
     const key = workspace || "__default__";
     if (bundleCache.has(key)) {
       setBundle(bundleCache.get(key) ?? null);

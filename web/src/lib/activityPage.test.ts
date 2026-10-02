@@ -198,9 +198,19 @@ test("EVERY call is workspace-scoped — a foreign slug is refused, never resolv
   );
   assert.match(
     wsHelper,
-    /export function workspaceQuery\(\): string \{\s*const sp = workspaceScope\(\);\s*return sp \? `\?workspace=\$\{encodeURIComponent\(sp\)\}` : "";/,
+    /export function workspaceQuery\(\): string \{\s*const sp = [^;]+;\s*return sp \? `\?workspace=\$\{encodeURIComponent\(sp\)\}` : "";/,
     "lib/workspace.ts workspaceQuery() no longer returns `?workspace=<slug>` — the page would import a " +
       "helper that scopes nothing",
+  );
+  // The scope SOURCE is the helper's own concern, but it must still consult a
+  // slug at all: the confirmed scope it prefers, falling back to the stored one
+  // while the session has not answered (t_da4b2031). Dropping the localStorage
+  // fallback would leave the very first request of every page unscoped.
+  assert.match(
+    wsHelper,
+    /confirmedScope \?\? workspaceScope\(\)/,
+    "workspaceQuery() no longer falls back to the stored slug — before the session answers, every first " +
+      "request of every page would go out UNSCOPED and the server would resolve the user's FIRST account",
   );
   // And the SERVER is what makes the scope safe: a slug that is not the
   // caller's is refused, and the refusal is a 403 the page already handles

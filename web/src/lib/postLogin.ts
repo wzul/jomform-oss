@@ -12,7 +12,7 @@
 // The explicit ".ts" extension is required by the Node test runner (which runs
 // this module's regression test directly; see postLogin.test.ts).
 import { fetchJson, runLoad } from "./wsfetch.ts";
-import { clearUnknownWorkspaceScope } from "./workspace.ts";
+import { clearUnknownWorkspaceScope, enterWorkspace } from "./workspace.ts";
 
 export async function resolvePostLogin(next: string): Promise<string> {
   if (next) return next;
@@ -66,18 +66,17 @@ export async function resolvePostLogin(next: string): Promise<string> {
   if (defaultWorkspaceId) {
     const def = workspaces.find((s) => s.id === defaultWorkspaceId);
     if (def) {
-      try {
-        localStorage.setItem("jf_workspace", def.slug);
-      } catch {}
+      // `enterWorkspace`, not a raw setItem: this resolver runs BEFORE the first
+      // dashboard page mounts, and it must publish the session-confirmed scope
+      // every scoped fetch reads (t_da4b2031), not just the stored key.
+      enterWorkspace(def.slug);
       return "/";
     }
   }
 
   // Single workspace → sync and go straight in (no prompt).
   if (workspaces.length === 1) {
-    try {
-      localStorage.setItem("jf_workspace", workspaces[0].slug);
-    } catch {}
+    enterWorkspace(workspaces[0].slug);
     return "/";
   }
 

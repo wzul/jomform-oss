@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { useI18n, LANGS_SHOWN, LANG_LABEL } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDateTime } from "../../lib/formatDate";
-import { workspaceQuery, workspaceScope } from "../../lib/workspace";
+import { activeWorkspaceScope, workspaceQuery } from "../../lib/workspace";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 import { MembersTab } from "../../components/MembersTab";
 import WorkspaceTab from "../../components/WorkspaceTab";
@@ -691,7 +691,7 @@ export default function Settings() {
   // on mount to populate the status indicator.
   async function fetchDeliveries(webhookID: string) {
     try {
-      const r = await fetch(`/api/rest/webhooks/${webhookID}/deliveries?limit=10&workspace=${encodeURIComponent(workspaceScope())}`);
+      const r = await fetch(`/api/rest/webhooks/${webhookID}/deliveries?limit=10&workspace=${encodeURIComponent(activeWorkspaceScope())}`);
       if (!r.ok) return;
       const list = (await r.json().catch(() => ([]))) as Delivery[];
       setDeliveries((prev) => ({ ...prev, [webhookID]: Array.isArray(list) ? list : [] }));
@@ -711,7 +711,7 @@ export default function Settings() {
       const path = isDeadLettered
         ? `/api/rest/webhooks/${webhookID}/retries/${row.id}/retry`
         : `/api/rest/webhooks/${webhookID}/deliveries/${row.id}/retry`;
-      const r = await fetch(`${path}?workspace=${encodeURIComponent(workspaceScope())}`, { method: "POST" });
+      const r = await fetch(`${path}?workspace=${encodeURIComponent(activeWorkspaceScope())}`, { method: "POST" });
       if (r.ok) {
         setMsg(t("wh.retryQueued"));
         await fetchDeliveries(webhookID);

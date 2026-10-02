@@ -49,10 +49,10 @@ import { Shell } from "../../components/Shell";
 import { Markdown } from "../../components/Markdown";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
-import { fetchJson, runLoad } from "../../lib/wsfetch";
+import { fetchJson, runLoad, classifyResponseFailure, classifyStatus } from "../../lib/wsfetch";
 import { translateApiErr } from "../../lib/apiErr";
 import { confirmDecisionFor } from "../../lib/chatConfirm";
-import { workspaceQuery } from "../../lib/workspace";
+import { dropCurrentWorkspaceScope, workspaceQuery } from "../../lib/workspace";
 
 type Turn = { role: "user" | "assistant"; content: string };
 
@@ -137,7 +137,7 @@ const MAX_HISTORY = 32;
 
 export default function ChatPage() {
   const { t } = useI18n();
-  const { anon } = useSession();
+  const { anon, workspace } = useSession();
   const router = useRouter();
 
   const [available, setAvailable] = useState<boolean | null>(null);
@@ -165,6 +165,16 @@ export default function ChatPage() {
         { onUnauth: goToLogin, message: t("chat.unavailable"), errorKey: (b: unknown) => translateApiErr(b, t) },
       );
       if (!r.ok) {
+        // A "scope" failure is the TENANCY refusal for a stale `?workspace=`
+        // (t_da4b2031): runLoad has already dropped the slug, so the right move is
+        // to say what happened and let the re-probe below run once the session
+        // publishes the reconciled workspace — NOT to close the box, and above all
+        // NOT to navigate away. It is reported with the same copy the missing-scope
+        // 400 uses, because the user's action is the same.
+        if (r.kind === "scope") {
+          setErr(t("chat.scopeRequired"));
+          return;
+        }
         // A 400 here is the WORKSPACE-SCOPE refusal (rest_scope.go's
         // `scopeAmbiguous`: an unscoped call from a session that can reach more
         // than one workspace), and it is NOT the same answer as
@@ -191,11 +201,20 @@ export default function ChatPage() {
         setAvailable(false);
         return;
       }
+      // The probe succeeded, so any scope message from THIS probe is resolved:
+      // clear it, or the user keeps reading "choose a workspace first" over a page
+      // that is working (the stale-slug path above). It runs only on mount and on
+      // a workspace change, so it cannot wipe an unrelated message mid-read.
+      setErr("");
       setAvailable(r.data.available === true);
       if (r.data.limits) setLimits(r.data.limits);
     })();
+    // `workspace` is a dependency (t_da4b2031): on a stale slug the first probe is
+    // refused, the slug is dropped, the session then publishes a workspace the
+    // caller really has, and THIS is what makes the page probe again for it
+    // instead of sitting on the refusal.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [goToLogin]);
+  }, [goToLogin, workspace]);
 
   useEffect(() => {
     if (anon) router.replace("/landing");
@@ -232,19 +251,33 @@ export default function ChatPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: text, history }),
       });
-      if (r.status === 401 || r.status === 403) {
-        goToLogin();
-        return;
+      // ONE decision for the failure statuses, shared with runLoad: a 401 (or an
+      // uncoded 403) is a dead session; a 403 that NAMES the tenancy code
+      // (workspace.notFound) is a STALE SCOPE, and treating it as a dead session
+      // is exactly the defect this card fixes — the merchant was bounced to
+      // /login for a slug in their own localStorage (t_da4b2031). The scope case
+      // re-reads the reconciled slug instead of navigating away, and says what to
+      // do, so no data is lost and no session is thrown away.
+      if (!r.ok) {
+        const failure = await classifyResponseFailure(r);
+        if (failure === "scope") {
+          setErr(t("chat.scopeRequired"));
+          return;
+        }
+        if (failure === "unauth") {
+          goToLogin();
+          return;
+        }
       }
       if (r.status === 429) {
         setErr(t("chat.rateLimited"));
         return;
       }
       // 400 = the request itself was refused (a missing/unusable workspace scope),
-      // NOT a dead session: wsfetch's 401/403 rule is above and deliberately not
-      // reached here. Showing the generic failure would hide the one thing the
-      // user can act on (choose a workspace), so the server's scope refusal gets
-      // its own copy.
+      // NOT a dead session: the 401/403 rule above deliberately does not reach
+      // here. Showing the generic failure would hide the one thing the user can
+      // act on (choose a workspace), so the server's scope refusal gets its own
+      // copy.
       if (r.status === 400) {
         setErr(t("chat.scopeRequired"));
         return;
@@ -317,7 +350,24 @@ export default function ChatPage() {
             : { token: p.token },
         ),
       });
-      if (r.status === 401 || r.status === 403) {
+      // 401 → a dead session. A 403 is decided by the BODY's machine code, not by
+      // the status: an uncoded 403 is an authorization failure (→ /login), while
+      // one naming the tenancy code (workspace.notFound) is a stale `?workspace=`
+      // slug and must NOT sign the merchant out (t_da4b2031). So the body is read
+      // FIRST and handed to the shared decision below; only an "unauth" outcome
+      // navigates, and the two reads cannot disagree because the same (status,
+      // body) pair drives both. The old `r.status === 401 || r.status === 403`
+      // line sent the scope refusal straight to /login.
+      const body = await r.json().catch(() => null);
+      const failure = classifyStatus(r.status, body);
+      if (failure === "scope") {
+        // The stale slug must stop being sent (t_da4b2031), exactly as runLoad
+        // does for a page load: publishWorkspaceScope("") drops it and notifies,
+        // so the next request is scoped to whatever workspace the session then
+        // publishes rather than repeating a refusal the server already answered.
+        dropCurrentWorkspaceScope();
+      }
+      if (failure === "unauth") {
         goToLogin();
         return;
       }
@@ -327,10 +377,9 @@ export default function ChatPage() {
       // server maps every unrecognised confirm failure to 400, including a tool it
       // refused AFTER claiming the token — so a status-only branch told a member
       // whose write was refused by their ROLE to "choose a workspace first", which
-      // they cannot act on (t_fb393abe). The body is read first; a body that cannot
-      // be read yields no code, which falls to the failure branch and never the
-      // scope copy.
-      const body = await r.json().catch(() => null);
+      // they cannot act on (t_fb393abe). The body was read above; a body that
+      // cannot be read yields no code, which falls to the failure branch and never
+      // the scope copy.
       const outcome = confirmDecisionFor(r.status, body);
       if (outcome === "scopeRequired") {
         // The card gets its OWN state, not "failed": the server refuses this

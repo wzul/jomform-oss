@@ -741,16 +741,28 @@ test("the chat page scopes EVERY call with workspaceQuery() — the shared helpe
       "active-workspace rule must stay in ONE place (lib/workspace.ts)",
   );
   assert.ok(
-    page.includes('import { workspaceQuery } from "../../lib/workspace"'),
+    /import \{[^}]*\bworkspaceQuery\b[^}]*\} from "\.\.\/\.\.\/lib\/workspace"/.test(page),
     "app/chat/page.tsx does not import workspaceQuery from the shared helper",
   );
   // And the helper is still the real thing, not a stub the page could satisfy by
   // importing it and sending nothing.
   assert.match(
     workspaceHelper,
-    /export function workspaceQuery\(\): string \{\s*const sp = workspaceScope\(\);\s*return sp \? `\?workspace=\$\{encodeURIComponent\(sp\)\}` : "";/,
+    /export function workspaceQuery\(\): string \{\s*const sp = [^;]+;\s*return sp \? `\?workspace=\$\{encodeURIComponent\(sp\)\}` : "";/,
     "lib/workspace.ts workspaceQuery() no longer returns `?workspace=<slug>` — the page would import a " +
       "helper that scopes nothing",
+  );
+  //
+  // The scope it reads is the SESSION-CONFIRMED one, falling back to the stored
+  // slug while no answer has arrived (t_da4b2031). Both halves are load-bearing:
+  // without the confirmed scope a stale slug still goes out on first paint, and
+  // without the fallback every first request is unscoped.
+  assert.match(
+    workspaceHelper,
+    /confirmedScope \?\? workspaceScope\(\)/,
+    "workspaceQuery() no longer prefers the confirmed scope — a slug the server has NOT confirmed (a " +
+      "workspace renamed or deleted while selected) would be sent again on the next fetch, which is the " +
+      "stale-scope defect this card exists for",
   );
 });
 
@@ -780,10 +792,22 @@ test("the SERVER refuses a chat call whose workspace would be guessed", () => {
     "the missing-scope refusal must be a 400, not a 401/403 — wsfetch.ts redirects 401/403 to " +
       "/login, so a 403 here would bounce a signed-in merchant to the login page",
   );
+  //
+  // THE OTHER HALF OF THE SAME HAZARD (t_da4b2031): a 403 that IS reachable —
+  // the foreign-slug refusal above — must not be read as a dead session either.
+  // wsfetch splits it by the body's machine code instead of by status, so the
+  // rule this guard protects is now "401, or a 403 the API did NOT name as a
+  // tenancy refusal". Pinned as source because the contract lives in Go
+  // (scopeOr403's 403 + the tenancy code) and is consumed in TS.
+  assert.match(
+    scopeFile,
+    /case scopeUnresolved:[\s\S]{0,200}?http\.StatusForbidden/,
+    "the foreign-slug refusal is no longer a 403 — wsfetch.ts's split (and this guard) key on that pair",
+  );
   assert.ok(
-    read("./wsfetch.ts").includes("return status === 401 || status === 403;"),
-    "wsfetch.ts no longer treats 401/403 as an invalid session — re-argue the status choice above " +
-      "before changing this guard",
+    read("./wsfetch.ts").includes("return !isScopeRefusal(body);"),
+    "wsfetch.ts no longer splits a 403 by the tenancy code — every 403 would be a dead session again, " +
+      "so a stale jf_workspace would sign a merchant out (t_da4b2031)",
   );
   assert.match(
     goRest,

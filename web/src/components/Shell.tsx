@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { useI18n, type Key } from "./i18n";
 import { useSession } from "./session";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
-import { clearPerUserStorage, clearUnknownWorkspaceScope } from "../lib/workspace";
+import { clearPerUserStorage, clearUnknownWorkspaceScope, enterWorkspace, publishWorkspaceScope } from "../lib/workspace";
 
 // AppShell: fixed left sidebar + topbar + content area. Light theme.
 // Issue #29: nav links are Next <Link> (client-side transitions + prefetch,
@@ -115,27 +115,36 @@ export function Shell({
     // next scoped write then went out as ?workspace=<other tenant> and the API
     // answered 403 "workspace tidak dijumpai". clearUnknownWorkspaceScope drops
     // it (an empty list is a real answer) and is a no-op when there is no list.
+    //
+    // Every branch below PUBLISHES the resolved slug through
+    // publishWorkspaceScope (t_da4b2031), which writes localStorage AND the
+    // module-level CONFIRMED scope every scoped fetch reads. A bare setItem
+    // would leave workspaceQuery() serving the old value, so a page's first
+    // fetch after the re-selection would still carry the slug just rejected.
     const surviving = clearUnknownWorkspaceScope(ws);
     if (ws === undefined) return;
     if (!ws.length) {
+      publishWorkspaceScope("");
       setWorkspace("");
       return;
     }
     if (surviving) {
+      publishWorkspaceScope(surviving);
       setWorkspace(surviving);
     } else {
+      publishWorkspaceScope(ws[0].slug);
       setWorkspace(ws[0].slug);
-      localStorage.setItem("jf_workspace", ws[0].slug);
     }
   }, [workspaces, bundle]);
 
   function switchWorkspace(slug: string) {
     setWorkspace(slug);
-    localStorage.setItem("jf_workspace", slug);
-    // Issue #170: notify the session context (and any data page keyed on
-    // useSession().workspace) that the active workspace changed, so page lists
-    // re-fetch for the new workspace without a manual refresh.
-    window.dispatchEvent(new Event("jf:workspace-changed"));
+    // `enterWorkspace` writes jf_workspace, publishes the slug as the CONFIRMED
+    // scope every scoped fetch reads (t_da4b2031) and dispatches
+    // jf:workspace-changed — the event issue #170 added so the session context
+    // (and any data page keyed on useSession().workspace) re-fetches for the new
+    // workspace without a manual refresh.
+    enterWorkspace(slug);
     // Issue #158: the session bundle is now WORKSPACE-KEYED (see session.tsx),
     // so switching workspaces re-fetches the bundle for the newly selected
     // workspace — no hard reload needed. reload() drops the cached bundle for

@@ -56,9 +56,101 @@ export function workspaceScope(): string {
 
 // workspaceQuery returns the "?workspace=<slug>" query string (or "") to
 // append to a dashboard fetch URL.
+//
+// THE CONFIRMED SCOPE WINS (card t_da4b2031). Every scoped fetch in the
+// dashboard builds its URL through this one function, and it used to read
+// localStorage directly — so a slug left behind by a workspace that was since
+// renamed or deleted went out on the FIRST request of every page, before the
+// session bundle had a chance to reconcile it. The server answers that with 403
+// "workspace tidak dijumpai" (a TENANCY refusal), and wsfetch.ts's 401/403 rule
+// read it as a dead session and navigated to /login: measured on prod, a stale
+// jf_workspace signed a merchant out of /chat.
+//
+// `confirmedScope` is set by SessionProvider once the server has answered with
+// the workspace LIST (see setConfirmedWorkspaceScope), so once the session has
+// spoken, ?workspace= can only ever carry a workspace the caller actually has.
+// Before that first answer it falls back to the stored value, which is the same
+// request today's build makes — so first paint is unchanged and the one refusal
+// it can produce is harmless: runLoad drops the stale slug instead of logging
+// the user out, and the page re-fetches when the reconciled scope publishes.
 export function workspaceQuery(): string {
-  const sp = workspaceScope();
+  const sp = confirmedScope ?? workspaceScope();
   return sp ? `?workspace=${encodeURIComponent(sp)}` : "";
+}
+
+// ── The CONFIRMED scope (card t_da4b2031) ────────────────────────────────────
+//
+// `null` means "the session has not answered yet": workspaceQuery falls back to
+// the stored slug, which keeps first paint identical to the pre-fix build.
+let confirmedScope: string | null = null;
+
+// setConfirmedWorkspaceScope publishes the slug the SERVER has confirmed for
+// this session (a member of the list the bundle returned, or "" when the caller
+// has no workspace / the stored one is not in the list). SessionProvider calls
+// it with the bundle's own list, so the value can only ever be a workspace the
+// caller has.
+export function setConfirmedWorkspaceScope(slug: string): void {
+  confirmedScope = slug;
+}
+
+// publishWorkspaceScope is the ONE place the active scope is written: it persists
+// the slug as jf_workspace (or drops the key for "") AND publishes it as the
+// CONFIRMED scope every scoped fetch reads. Writing localStorage alone would
+// leave workspaceQuery() serving the previous slug (t_da4b2031); publishing alone
+// would let a reload resurrect a slug the server has not confirmed.
+//
+// It NOTIFIES the session context, but only when the value actually CHANGES — so
+// a reconciler re-running with the same answer is a no-op and cannot spin. The
+// notification is what makes a page re-fetch for the scope it must now use: on a
+// stale slug the sequence is "refused → drop (publish "") → session answers with
+// a real list → publish that slug", and without the event the page would keep
+// sitting on the refusal with data from the workspace that no longer exists.
+export function publishWorkspaceScope(slug: string): void {
+  const changed = confirmedScope !== slug;
+  try {
+    if (slug) localStorage.setItem("jf_workspace", slug);
+    else localStorage.removeItem("jf_workspace");
+  } catch {
+    // storage unavailable — the in-memory scope still applies for this page
+  }
+  confirmedScope = slug;
+  if (changed && typeof window !== "undefined") {
+    window.dispatchEvent(new Event("jf:workspace-changed"));
+  }
+}
+
+// activeWorkspaceScope is the scope the dashboard is ACTUALLY using: the
+// session-confirmed one once the server has answered, else the stored value. It
+// is what the session context's own `workspace` state must track — reading
+// localStorage directly there would leave `useSession().workspace` pointing at a
+// slug the server has already rejected, so a page keyed on it would never
+// re-fetch after the reconciliation (t_da4b2031).
+export function activeWorkspaceScope(): string {
+  return confirmedScope ?? workspaceScope();
+}
+
+// confirmedWorkspaceScope is the value published by setConfirmedWorkspaceScope
+// (null until the session answers). Exposed for the guard test.
+export function confirmedWorkspaceScope(): string | null {
+  return confirmedScope;
+}
+
+// dropCurrentWorkspaceScope drops the stored slug because the SERVER just told
+// us it is not ours. It is the authoritative form of the reconciliation: it does
+// not need the workspace list, so it also works when the request that failed was
+// the one fetching that list.
+export function dropCurrentWorkspaceScope(): void {
+  publishWorkspaceScope(""); // notifies the session context when it changes
+  try {
+    localStorage.removeItem("jf_space");
+  } catch {
+    // storage unavailable — ignore
+  }
+}
+
+/** Test-only: clear the module-level confirmed scope between cases. */
+export function resetConfirmedWorkspaceScope(): void {
+  confirmedScope = null;
 }
 
 // ── Per-user cached scope: one sweep list, one reconciler ────────────────────
@@ -130,11 +222,10 @@ export function clearUnknownWorkspaceScope(workspaces: WorkspaceRef[] | undefine
   const stored = workspaceScope();
   if (stored === "") return "";
   if (ws.some((w) => w.slug === stored)) return stored;
-  try {
-    localStorage.removeItem("jf_workspace");
-  } catch {
-    // storage unavailable — ignore
-  }
+  // publishWorkspaceScope(""), not a bare removeItem: the CONFIRMED scope every
+  // scoped fetch reads must drop the foreign slug in the same step, or
+  // workspaceQuery() would keep serving it until the next bundle (t_da4b2031).
+  publishWorkspaceScope("");
   return "";
 }
 
@@ -225,15 +316,16 @@ export async function createWorkspace(input: CreateWorkspaceInput): Promise<Crea
 // enterWorkspace makes `slug` the active workspace (the same write Shell and the
 // picker perform) and notifies the session context so the workspace-keyed bundle
 // re-fetches for it.
+//
+// It also PUBLISHES the slug as the CONFIRMED scope, because every caller passes
+// a slug that came from the server's own workspace list (the switcher, the
+// first-run ask, the rename result, the form-settings owner probe). Without
+// that, a switch would leave the module-level confirmed scope pointing at the
+// previous workspace until the next bundle arrived, and the page's
+// `[workspace]`-keyed fetches would go out scoped to the workspace the user just
+// left (t_da4b2031).
 export function enterWorkspace(slug: string): void {
-  try {
-    localStorage.setItem("jf_workspace", slug);
-  } catch {
-    // storage unavailable — the caller still navigates
-  }
-  if (typeof window !== "undefined") {
-    window.dispatchEvent(new Event("jf:workspace-changed"));
-  }
+  publishWorkspaceScope(slug); // notifies the session context when it changes
 }
 
 // WorkspaceRef is the minimal shape needed to resolve the ACTIVE workspace: the

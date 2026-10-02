@@ -231,6 +231,41 @@ export function translateApiErr(body: unknown, t: (k: Key) => string): string {
 }
 
 /**
+ * The codes that mean "the workspace you asked for is not one you have" — a
+ * TENANCY refusal, not an authentication failure.
+ *
+ * WHY THIS LIST EXISTS (card t_da4b2031). The server answers a `?workspace=`
+ * slug the session cannot resolve with **403** and the code below
+ * (api/internal/httpapi/rest_scope.go's scopeOr403 →
+ * "workspace tidak dijumpai"). web/src/lib/wsfetch.ts reads 401/403 as "the
+ * session is no longer valid" and navigates to /login, so a slug sitting in
+ * `localStorage` from a workspace that was since renamed or deleted could log a
+ * perfectly signed-in merchant out. Measured on prod (v1.17.0): `/chat` with
+ * `jf_workspace = ws-gone` ended on `https://jomform.com/login`.
+ *
+ * The server ALREADY distinguishes the two on the wire — a foreign slug carries
+ * `workspace.notFound` while a dead session is a 401 with no tenancy code — so
+ * the client reads the code rather than splitting the status (a 403 → 404 change
+ * would be a public wire-contract change for every API-key, curl and MCP caller,
+ * for a condition the machine code already names).
+ *
+ * The code itself is pinned cross-language by src/lib/wsfetch.test.ts, which
+ * reads `CodeWorkspaceNotFound` out of api/internal/httpapi/errcode.go — so a
+ * rename on the server fails the web suite instead of silently restoring the
+ * sign-out.
+ */
+export const SCOPE_REFUSAL_CODES: ReadonlySet<string> = new Set(["workspace.notFound"]);
+
+/**
+ * True when the body carries a TENANCY refusal (see SCOPE_REFUSAL_CODES) rather
+ * than an authentication failure. `false` for an absent or unknown code, so an
+ * uncoded 403 is still treated as a dead session — the conservative direction.
+ */
+export function isScopeRefusal(body: unknown): boolean {
+  return SCOPE_REFUSAL_CODES.has(apiErrorCode(body));
+}
+
+/**
  * True when the parsed body carries a NON-empty `error` string. Used only by
  * the source guard (src/lib/apiErr.test.ts) and by tests that need to prove a
  * payload really is a server-prose response; the dashboard must not use it to

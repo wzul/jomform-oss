@@ -76,6 +76,11 @@ import {
   clearPerUserStorage,
   clearUnknownWorkspaceScope,
   createWorkspace,
+  dropCurrentWorkspaceScope,
+  enterWorkspace,
+  publishWorkspaceScope,
+  resetConfirmedWorkspaceScope,
+  setConfirmedWorkspaceScope,
   workspaceQuery,
   workspaceScope,
 } from "./workspace.ts";
@@ -104,19 +109,32 @@ const WEB_DIR = fileURLToPath(new URL("..", import.meta.url));
 const DOCS_ANCHOR = "/docs#workspaces";
 
 /** A minimal localStorage stand-in; workspace.ts only touches it inside functions. */
-function withStore<T>(initial: Record<string, string>, fn: () => T): { result: T; store: Map<string, string> } {
+function withStore<T>(
+  initial: Record<string, string>,
+  fn: () => T,
+): { result: T; store: Map<string, string>; events: string[] } {
   const store = new Map<string, string>(Object.entries(initial));
+  const events: string[] = [];
   const g = globalThis as unknown as Record<string, unknown>;
   const prev = { window: g.window, localStorage: g.localStorage };
-  g.window = globalThis;
+  // A stand-in `window`, not `globalThis`: the module guards on
+  // `typeof window !== "undefined"` and then calls dispatchEvent, which Node's
+  // globalThis does not have. The dispatched types are recorded so the tests can
+  // assert the session context is actually notified.
+  g.window = { dispatchEvent: (e: unknown) => void events.push((e as { type: string }).type) };
   g.localStorage = {
     getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
     setItem: (k: string, v: string) => void store.set(k, v),
     removeItem: (k: string) => void store.delete(k),
   };
+  // Every case starts with NO confirmed scope, so workspaceQuery() falls back to
+  // the value this case just stored. It is module-level state, so a value left by
+  // an earlier case would otherwise mask what this one asserts (t_da4b2031).
+  resetConfirmedWorkspaceScope();
   try {
-    return { result: fn(), store };
+    return { result: fn(), store, events };
   } finally {
+    resetConfirmedWorkspaceScope();
     g.window = prev.window;
     g.localStorage = prev.localStorage;
   }
@@ -197,9 +215,181 @@ test("a foreign slug is dropped when the caller has NO workspace, and never sent
   assert.equal(sent.store.get("jf_workspace"), undefined);
 });
 
+// ── The CONFIRMED scope: the same rule, enforced one layer lower (t_da4b2031) ─
+//
+// THE SECOND PATH TO THE SAME 403. The reconciliation above only runs once the
+// session bundle has ANSWERED. `workspaceQuery()` used to read localStorage
+// directly, so every page's FIRST fetch — and the bundle's own request — carried
+// the raw stored slug before that answer existed; a stale slug therefore still
+// reached the server, and a 403 from it was read as a dead session. These
+// EXECUTED cases pin the fix: once the session has confirmed a scope, that scope
+// is what goes on the wire, and a slug the server has rejected can never be sent
+// again.
+
+test("once the session confirms a scope, THAT scope is what every fetch sends", () => {
+  // The reported production shape: storage holds a slug the session cannot
+  // resolve, and the bundle has now answered with the workspace the caller
+  // really has. The next request must carry the REAL one.
+  const { result, store } = withStore({ jf_workspace: "ws-gone" }, () => {
+    setConfirmedWorkspaceScope("ws-real");
+    return workspaceQuery();
+  });
+  assert.equal(
+    result,
+    "?workspace=ws-real",
+    "workspaceQuery() sent the stale slug instead of the session-confirmed one — the request would be " +
+      "refused with 403 again, which is the defect",
+  );
+  // Confirming a scope does NOT silently rewrite storage: the Shell owns that
+  // write, and a reader of jf_workspace must still see what the user's browser
+  // actually holds until the reconciler runs.
+  assert.equal(store.get("jf_workspace"), "ws-gone");
+});
+
+test("publishWorkspaceScope moves BOTH the stored key and the confirmed scope together", () => {
+  // The reconcile paths (Shell's effect, clearUnknownWorkspaceScope) publish,
+  // because writing only localStorage would leave workspaceQuery serving the slug
+  // they just rejected.
+  const { store } = withStore({ jf_workspace: "ws-gone" }, () => publishWorkspaceScope("ws-real"));
+  assert.equal(store.get("jf_workspace"), "ws-real");
+  assert.equal(
+    withStore({ jf_workspace: "ws-gone" }, () => {
+      publishWorkspaceScope("ws-real");
+      return workspaceQuery();
+    }).result,
+    "?workspace=ws-real",
+    "publishWorkspaceScope did not reach workspaceQuery — the two halves of the scope drifted",
+  );
+
+  // Publishing "" drops the STORED key as well as the in-memory scope, so a
+  // reload cannot resurrect a slug the server has not confirmed.
+  const cleared = withStore({ jf_workspace: "ws-gone" }, () => publishWorkspaceScope(""));
+  assert.equal(cleared.store.get("jf_workspace"), undefined);
+  assert.equal(
+    withStore({ jf_workspace: "ws-gone" }, () => {
+      publishWorkspaceScope("");
+      return workspaceQuery();
+    }).result,
+    "",
+    "an empty publish still left a scope on the request",
+  );
+});
+
+test("dropCurrentWorkspaceScope unsends the rejected slug and tells the session", () => {
+  // Called by runLoad when the server refuses a `?workspace=` as not the
+  // caller's. Both effects are load-bearing: the slug must stop being sent, and
+  // the jf:workspace-changed event is what makes the page re-fetch for the
+  // workspace the Shell then selects instead of sitting on the error.
+  const { store, events } = withStore({ jf_workspace: "ws-gone" }, () => {
+    dropCurrentWorkspaceScope();
+  });
+  assert.equal(store.get("jf_workspace"), undefined, "the rejected slug is still stored");
+  assert.equal(
+    withStore({ jf_workspace: "ws-gone" }, () => {
+      dropCurrentWorkspaceScope();
+      return workspaceQuery();
+    }).result,
+    "",
+    "a rejected slug is still sent on the next request — the refusal would repeat forever",
+  );
+  assert.deepEqual(
+    events,
+    ["jf:workspace-changed"],
+    "dropping the scope no longer notifies the session context, so the page would never re-fetch for the " +
+      "workspace the Shell selects next",
+  );
+});
+
+test("enterWorkspace publishes a scope that every fetch then uses, and notifies the session", () => {
+  // A user-initiated switch: the slug came from the server's own list, so it is
+  // confirmed by definition — and it must reach the wire immediately, not only
+  // after the next bundle.
+  const { store, events } = withStore({ jf_workspace: "ws-a" }, () => {
+    enterWorkspace("ws-b");
+  });
+  assert.equal(store.get("jf_workspace"), "ws-b");
+  assert.equal(
+    withStore({ jf_workspace: "ws-a" }, () => {
+      enterWorkspace("ws-b");
+      return workspaceQuery();
+    }).result,
+    "?workspace=ws-b",
+    "after a switch the next fetch still carried the PREVIOUS workspace's slug",
+  );
+  assert.deepEqual(events, ["jf:workspace-changed"]);
+});
+
+test("clearUnknownWorkspaceScope empties the confirmed scope too, not only storage", () => {
+  // The Shell's reconciler calls this with the server's list. Dropping only the
+  // key would leave workspaceQuery() serving the foreign slug from memory, so the
+  // very next fetch would reproduce the 403 the reconciliation exists to prevent.
+  const { result, store } = withStore({ jf_workspace: "gone" }, () => {
+    setConfirmedWorkspaceScope("gone");
+    return clearUnknownWorkspaceScope([{ slug: "acme" }]);
+  });
+  assert.equal(result, "");
+  assert.equal(store.get("jf_workspace"), undefined);
+  assert.equal(
+    withStore({ jf_workspace: "gone" }, () => {
+      setConfirmedWorkspaceScope("gone");
+      clearUnknownWorkspaceScope([{ slug: "acme" }]);
+      return workspaceQuery();
+    }).result,
+    "",
+    "the confirmed scope survived reconciliation — the stale slug would be sent again",
+  );
+});
+
+// ── The class guard: the scope is BUILT in one place (t_da4b2031) ────────────
+//
+// `workspaceQuery()` is the one builder of `?workspace=`, and it reads the
+// session-confirmed scope. A page that hand-builds the same query from
+// `workspaceScope()` reaches localStorage DIRECTLY — so it sends a slug the
+// server may already have rejected and re-creates the refusal this card fixes
+// (`fetchDeliveries`, `retryDelivery` and four form-settings sites did exactly
+// that). This census fails when a source file outside lib/workspace.ts does it
+// again, in either spelling.
+test("only lib/workspace.ts builds ?workspace= from the raw stored slug", () => {
+  const offenders: string[] = [];
+  for (const abs of sourceFiles()) {
+    const rel = relative(WEB_DIR, abs);
+    if (rel === "lib/workspace.ts") continue; // the module that OWNS the rule
+    // String/template contents are blanked so prose in a comment or a sentence is
+    // not read as code; the URLs here are template literals, so the marker is the
+    // `${workspaceScope()` interpolation rather than the literal text.
+    const code = readFileSync(abs, "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .split("\n")
+      .filter((l) => !/^\s*(\/\/|\*)/.test(l))
+      .join("\n");
+    if (/\$\{\s*workspaceScope\(\)/.test(code) || /[?&]workspace=\$\{\s*encodeURIComponent\(\s*workspaceScope\(\)/.test(code)) {
+      offenders.push(rel);
+    }
+  }
+  assert.deepEqual(
+    offenders,
+    [],
+    "these files build a ?workspace= scope from the RAW stored slug instead of the session-confirmed one " +
+      "(workspaceQuery()/activeWorkspaceScope() in lib/workspace.ts). A raw slug can be one the server " +
+      "has already rejected, so the request re-creates the 403 that used to sign the user out " +
+      "(t_da4b2031): " +
+      offenders.join(", "),
+  );
+  // And the census is looking at the real app: it must have seen the module that
+  // owns the rule.
+  assert.ok(
+    sourceFiles().some((f) => f.endsWith(join("lib", "workspace.ts"))),
+    "the walk did not include lib/workspace.ts — this guard would pass vacuously",
+  );
+});
+
 test("a slug that IS in the list survives, and an absent list is a no-op", () => {
   // The valid case must not be collateral damage: this is the setting that makes
   // the dashboard show the right workspace's forms/products/sales.
+  //
+  // The module-level CONFIRMED scope is reset per case: workspaceQuery prefers it
+  // over the stored value once the session has answered (t_da4b2031), so a value
+  // left by an earlier test would mask what these cases are asserting.
   const kept = withStore({ jf_workspace: "acme" }, () => clearUnknownWorkspaceScope([{ slug: "acme" }, { slug: "beta" }]));
   assert.equal(kept.result, "acme", "a valid stored workspace was dropped — the user's selection would reset");
   assert.equal(kept.store.get("jf_workspace"), "acme");
@@ -386,9 +576,21 @@ test("the login resolver ASKS a workspace-less user to create one instead of dro
   );
   // The reconcile must sit AFTER the authoritative list arrived and BEFORE the
   // default-workspace write, so it can never drop the slug it is about to set.
+  //
+  // The write is `enterWorkspace(slug)` now (t_da4b2031): the resolver runs
+  // before the first dashboard page mounts, so it has to publish the CONFIRMED
+  // scope every scoped fetch reads, not only the stored key — a raw setItem left
+  // the page sending the previous slug.
   const reconcileAt = postLogin.indexOf("clearUnknownWorkspaceScope(workspaces)");
+  const writeAt = postLogin.indexOf("enterWorkspace(def.slug)");
   assert.ok(
-    reconcileAt < postLogin.indexOf("localStorage.setItem(\"jf_workspace\", def.slug)"),
+    writeAt !== -1,
+    "the login resolver no longer publishes the default workspace via enterWorkspace — a raw " +
+      "localStorage write leaves the CONFIRMED scope (what every scoped fetch reads) pointing at the " +
+      "previous workspace (t_da4b2031)",
+  );
+  assert.ok(
+    reconcileAt < writeAt,
     "the stored slug is written before it is reconciled — the reconciliation could undo it",
   );
 });

@@ -222,17 +222,18 @@ async function confirmWithoutScope(page: Page, baseURL: string | undefined, drop
   const card = page.locator('[class*="border-sky-200"]').filter({ hasText: PROPOSAL.title });
   await expect(card, "the proposal card must render — otherwise this test is vacuous").toHaveCount(1);
 
-  if (dropScope) {
-    // The scope is dropped with NO navigation: this is a second tab's sign-out or
-    // a storage clear, not a reload. Nothing re-runs the Shell's workspace
-    // reconciliation, so `workspaceQuery()` now returns "" and the decision is
-    // sent unscoped — the request the server refuses with a 400.
-    await page.evaluate(() => localStorage.removeItem("jf_workspace"));
-    expect(
-      await page.evaluate(() => localStorage.getItem("jf_workspace")),
-      "the workspace scope must really be gone before Confirm — otherwise this test proves nothing",
-    ).toBe(null);
-  } else {
+  // The scope drop is no longer performed here (see the re-anchor comment above);
+  // the `dropScope` flag still selects which SHAPE this run asserts.
+  //
+  // RE-ANCHORED FOR t_da4b2031. Clearing `jf_workspace` used to un-scope the
+  // decision, because `workspaceQuery()` read localStorage directly. Under the
+  // confirmed-scope rule (lib/workspace.ts) the workspace the bundle CONFIRMED is
+  // still the active one, so clearing storage mid-session changes nothing about
+  // the request — and asserting a shape the fix deliberately no longer produces is
+  // how a guard starts lying. The refusal is now reached by the stub's ANSWER
+  // (`decisionStatus`/`decisionCode` in stubAPI), which is what this file is
+  // actually about: the PAGE telling the two 400s apart.
+  if (!dropScope) {
     expect(
       await page.evaluate(() => localStorage.getItem("jf_workspace")),
       "the selected workspace must still be stored — this shape is a SCOPED request, which is the " +
@@ -263,14 +264,15 @@ test.describe("chat confirm path: a scope refusal is not a failed change", () =>
     await freshState(page);
     const decision = await confirmWithoutScope(page, baseURL);
 
-    // The shape is asserted, not assumed: if the decision ever starts carrying a
-    // scope again this test is no longer reproducing the defect and must fail
-    // rather than pass on a branch that is no longer reachable.
+    // The shape is asserted in the direction that matters (t_da4b2031): the
+    // decision must never carry a slug the session does not have. Asserting
+    // UNSCOPED is no longer right — the confirmed scope is deliberately retained
+    // — and a guard that demanded it would fail on a correct build.
     expect(decision, "the decision must have been sent exactly once").toHaveLength(1);
     expect(
       decision[0],
-      `the decision must have gone out UNSCOPED — that is the request a 400 answers. Sent: ${JSON.stringify(decision)}`,
-    ).not.toContain("workspace=");
+      `the decision must not carry a workspace the session does not have. Sent: ${JSON.stringify(decision)}`,
+    ).not.toContain("workspace=ws-gone");
 
     // ONE message. Counted, because the defect was two.
     const scopeNodes = page.getByText(EN.scopeRequired, { exact: true });

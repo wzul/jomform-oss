@@ -17,6 +17,8 @@
 //   3. A network failure also surfaces a message (never silence).
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 import {
   HttpError,
@@ -146,6 +148,191 @@ test("status classification: only 401/403 are unauth", () => {
   assert.equal(classifyStatus(401), "unauth");
   assert.equal(classifyStatus(403), "unauth");
   assert.equal(classifyStatus(500), "http");
+});
+
+// ── THE TENANCY SPLIT (t_da4b2031) ───────────────────────────────────────────
+//
+// THE DEFECT. A `jf_workspace` slug the session cannot resolve (a workspace
+// renamed or deleted while selected) makes every scoped fetch carry a foreign
+// `?workspace=`, the server answers 403 "workspace tidak dijumpai", and the
+// 401/403 rule above read that as a dead session and navigated to /login.
+// Measured on prod (v1.17.0): `/chat` with `jf_workspace = ws-gone` landed on
+// https://jomform.com/login for a signed-in merchant.
+//
+// THE FIX IS A CODE SPLIT, NOT A STATUS CHANGE. The server ALREADY names the
+// difference on the wire (`workspace.notFound` for a foreign slug vs a bare 401
+// for a dead session), so moving the refusal to a 404 would change the public
+// contract for every API-key, curl and MCP caller to describe something its
+// `code` already says. These cases are the bite: reverting `isUnauthStatus` to
+// the old `status === 401 || status === 403` makes the FIRST case fail by name,
+// and reverting `runLoad`'s scope branch makes the last two fail — the
+// onUnauth spy records the /login navigation the defect performed.
+//
+// The code is read out of the Go source rather than typed here, so a rename on
+// the server fails this file instead of silently restoring the sign-out.
+
+/** The value of `CodeWorkspaceNotFound = "..."` in errcode.go, or null. */
+function goWorkspaceNotFoundCode(): string | null {
+  const go = readFileSync(
+    fileURLToPath(new URL("../../../api/internal/httpapi/errcode.go", import.meta.url)),
+    "utf8",
+  );
+  const m = go.match(/\bCodeWorkspaceNotFound\s*=\s*"([^"]+)"/);
+  return m ? m[1] : null;
+}
+
+/** The wire body the server sends for a slug the caller cannot resolve. */
+function scopeRefusalBody(): { error: string; code: string } {
+  return { error: "workspace tidak dijumpai", code: goWorkspaceNotFoundCode() ?? "" };
+}
+
+test("the guard reads the real server code (it cannot pass vacuously)", () => {
+  assert.equal(
+    goWorkspaceNotFoundCode(),
+    "workspace.notFound",
+    "api/internal/httpapi/errcode.go no longer declares CodeWorkspaceNotFound — the split below would " +
+      "key on a code the server never sends, and every foreign-slug 403 would become a sign-out again",
+  );
+  // And the refusal really is written by the scope gate (not some other path).
+  assert.match(
+    readFileSync(
+      fileURLToPath(new URL("../../../api/internal/httpapi/rest_scope.go", import.meta.url)),
+      "utf8",
+    ),
+    /writeErr\(w, http\.StatusForbidden, "workspace tidak dijumpai"\)/,
+    "rest_scope.go no longer writes the foreign-slug 403 — this guard's whole premise moved",
+  );
+  assert.ok(
+    readFileSync(fileURLToPath(new URL("./wsfetch.ts", import.meta.url)), "utf8").includes(
+      "isScopeRefusal",
+    ),
+    "wsfetch.ts no longer consults the tenancy code at all",
+  );
+});
+
+test("a foreign-workspace 403 is NOT a dead session (the sign-out this card fixes)", () => {
+  const body = scopeRefusalBody();
+  // The measured production shape: `GET /api/rest/chat?workspace=ws-gone` -> 403
+  // with the tenancy code. Reading it as unauth IS the reported defect.
+  assert.equal(
+    isUnauthStatus(403, body),
+    false,
+    "a 403 carrying workspace.notFound is still classified as a dead session — a stale jf_workspace " +
+      "would redirect a signed-in merchant to /login, which is exactly the reported defect",
+  );
+  assert.equal(
+    classifyStatus(403, body),
+    "scope",
+    "a foreign-workspace 403 is not its own outcome — the page cannot tell it apart from an expired " +
+      "session, so it can only navigate away",
+  );
+  // The OTHER direction must keep working: the tenancy code is what separates
+  // them, so an uncoded 403 (a genuine authorization refusal) is still unauth.
+  assert.equal(
+    isUnauthStatus(403, { error: "perlu admin workspace" }),
+    true,
+    "an uncoded 403 stopped being a session failure — an authorization refusal would be softened into " +
+      "a 'choose a workspace' message the user cannot act on",
+  );
+  assert.equal(isUnauthStatus(403), true, "a 403 with no body read at all must stay conservative (unauth)");
+  assert.equal(classifyStatus(403, { code: "request.forbidden" }), "unauth");
+  assert.equal(classifyStatus(403, { code: "workspace.scopeRequired" }), "unauth");
+  // 401 is untouched: a dead session is still a dead session.
+  assert.equal(isUnauthStatus(401, body), true);
+  assert.equal(classifyStatus(401, body), "unauth");
+});
+
+test("an HttpError carrying the tenancy refusal classifies as scope, not unauth", () => {
+  const body = scopeRefusalBody();
+  assert.deepEqual(classifyLoadError(new HttpError(403, body)), { kind: "scope", status: 403 });
+  assert.deepEqual(classifyLoadError(new HttpError(403)), { kind: "unauth", status: 403 });
+  assert.deepEqual(classifyLoadError(new HttpError(401, body)), { kind: "unauth", status: 401 });
+  // Unchanged: a 5xx is still a plain error and a bare Error is still network.
+  assert.deepEqual(classifyLoadError(new HttpError(502)), { kind: "http", status: 502 });
+  assert.deepEqual(classifyLoadError(new Error("boom")), { kind: "network", status: 0 });
+});
+
+test("runLoad keeps the session on a tenancy refusal and never calls onUnauth", async () => {
+  // The whole point, executed through the shared wrapper every dashboard page
+  // uses: NO /login navigation, and the stale slug is dropped so the next request
+  // cannot send it again. Reverting the scope branch in runLoad makes the last
+  // assertion fail — it would assert onUnauth was NOT called while the pre-fix
+  // code called it.
+  const store = new Map<string, string>([["jf_workspace", "ws-gone"]]);
+  const g = globalThis as unknown as Record<string, unknown>;
+  const prev = { window: g.window, localStorage: g.localStorage };
+  // `dropCurrentWorkspaceScope` dispatches an event, which this stand-in must
+  // provide: the module checks `typeof window !== "undefined"`, so the real Node
+  // `globalThis` would be used and has no dispatchEvent.
+  g.window = { dispatchEvent: () => true };
+  g.localStorage = {
+    getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
+    setItem: (k: string, v: string) => void store.set(k, v),
+    removeItem: (k: string) => void store.delete(k),
+  };
+  const redirected: number[] = [];
+  try {
+    const outcome = await runLoad(
+      () => Promise.reject(new HttpError(403, scopeRefusalBody())),
+      {
+        onUnauth: (status) => redirected.push(status),
+        message: MESSAGE,
+        errorKey: () => "That workspace was not found, or it is not one you have access to.",
+      },
+    );
+    assert.equal(outcome.ok, false);
+    assert.equal(
+      outcome.ok === false && outcome.kind,
+      "scope",
+      "a foreign-workspace 403 is not reported as a scope refusal",
+    );
+    assert.deepEqual(
+      redirected,
+      [],
+      "runLoad navigated to /login for a slug the user's own localStorage held — this IS the reported " +
+        "sign-out (t_da4b2031)",
+    );
+    // The slug is gone, so the retry the page issues is UNSCOPED (the server then
+    // resolves the caller's own account instead of rejecting one they never had).
+    assert.equal(
+      store.get("jf_workspace"),
+      undefined,
+      "the stale slug survived the refusal — the very next request would carry it again",
+    );
+    // The refusal still RENDERS something: the outcome carries the localized
+    // tenancy sentence, so the user is told rather than left on a blank page.
+    assert.equal(
+      outcome.ok === false && outcome.error,
+      "That workspace was not found, or it is not one you have access to.",
+    );
+  } finally {
+    g.window = prev.window;
+    g.localStorage = prev.localStorage;
+  }
+
+  // And the control: a DEAD SESSION still navigates. If the split swallowed
+  // 401s too, an expired session would leave the user staring at an error
+  // instead of being sent to /login.
+  const redirected2: number[] = [];
+  const outcome2 = await runLoad(
+    () => Promise.reject(new HttpError(401)),
+    { onUnauth: (status) => redirected2.push(status), message: MESSAGE },
+  );
+  assert.deepEqual(redirected2, [401], "a 401 stopped redirecting to /login — an expired session now hangs");
+  assert.equal(outcome2.ok === false && outcome2.kind, "unauth");
+
+  // ...and so does an UNCoded 403 (a real authorization refusal).
+  const redirected3: number[] = [];
+  await runLoad(
+    () => Promise.reject(new HttpError(403)),
+    { onUnauth: (status) => redirected3.push(status), message: MESSAGE },
+  );
+  assert.deepEqual(
+    redirected3,
+    [403],
+    "an uncoded 403 stopped redirecting to /login — a genuine authorization refusal would be treated as " +
+      "a stale workspace",
+  );
 });
 
 test("an error carrying a status is classified from that status", () => {

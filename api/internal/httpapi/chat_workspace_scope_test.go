@@ -28,6 +28,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -287,6 +288,62 @@ func TestChatServesASingleWorkspaceSessionWithoutAScope(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Errorf("scoped chat POST from a one-workspace session = %d, want 200 (body %s)",
 			rec.Code, rec.Body.String())
+	}
+}
+
+// TestChatScopeRefusalCarriesTheTenancyCode is the SERVER half of the client
+// contract t_da4b2031 depends on.
+//
+// THE DEFECT. A stale `jf_workspace` slug — a workspace renamed or deleted while
+// it was selected — made every scoped dashboard fetch carry that slug, the server
+// answered 403 "workspace tidak dijumpai", and web/src/lib/wsfetch.ts read 403 as
+// "the session is no longer valid" and navigated to /login. Measured on prod
+// (v1.17.0): `/chat` with `jf_workspace = ws-gone` ended on
+// https://jomform.com/login.
+//
+// WHY THE CODE IS THE CONTRACT. The client now distinguishes the two 403s by the
+// machine code in the body (`workspace.notFound` — a tenancy refusal — vs an
+// uncoded 403 — an authorization failure), NOT by the status: splitting the
+// status would be a public wire change for every API-key, curl and MCP caller, to
+// describe a condition the `code` already names. So this test drives the refusal
+// through the real handler and reads the code out of the BODY — the thing the
+// client branches on. Neutralising the message→code table entry (so the refusal
+// answers the generic `request.forbidden`) turns it RED, and with it the web
+// suite's cross-language pin.
+//
+// The other direction is asserted too: the refusal must NOT carry a code that
+// means "session gone", or the client would still sign the merchant out.
+func TestChatScopeRefusalCarriesTheTenancyCode(t *testing.T) {
+	e := newScopeEnv(t)
+	_, token, slugs := e.userWithWorkspaces(t, 1)
+
+	rec := e.do(t, token, http.MethodPost, "/v1/rest/chat?workspace="+slugs[0]+"-missing",
+		`{"message":"hai"}`)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("unresolvable slug = %d, want 403 (body %s)", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Error string `json:"error"`
+		Code  string `json:"code"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("the refusal body is not the error envelope: %v (body=%s)", err, rec.Body.String())
+	}
+	if body.Code != CodeWorkspaceNotFound {
+		t.Fatalf("the refusal's code = %q, want %q — the dashboard decides whether to sign the user "+
+			"out from this code, so a missing/renamed one re-creates the reported sign-out "+
+			"(t_da4b2031). Body: %s", body.Code, CodeWorkspaceNotFound, rec.Body.String())
+	}
+	// The prose survives for the API-key/curl/MCP callers that cannot read a code.
+	if body.Error == "" {
+		t.Errorf("the refusal lost its wire prose — API-key and MCP callers render it directly")
+	}
+	// The client's "this is a dead session" statuses must not be involved: a
+	// 401 here would redirect a signed-in merchant whose only problem is a slug
+	// their browser kept.
+	if rec.Code == http.StatusUnauthorized {
+		t.Errorf("the foreign-slug refusal answers 401 — the dashboard reads that as an expired " +
+			"session and would navigate to /login for a stale localStorage value")
 	}
 }
 
