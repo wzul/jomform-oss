@@ -422,7 +422,16 @@ fi
 #     check the pen-test checklist points at; assert it here so it cannot rot.
 #     Only ACTIVE lines count: the phrases legitimately appear inside comments
 #     (documenting the rule), so strip comments and blank lines first.
-active="$(sed -E 's/[[:space:]]*#.*$//' "$PREFLIGHT" | grep -vE '^[[:space:]]*$')"
+#
+#     THE STRIP STOPS AT A COMMENT-INTRODUCING `#` ONLY (card t_9c1c1518). The
+#     pattern used to be `s/[[:space:]]*#.*$//` — `[[:space:]]*` is ZERO-or-more, so
+#     it truncated at ANY `#`, including one inside `${...}` or mid-token. A line
+#     like `if [ ${#FAILED[@]} -gt 0 ]; then exit 1; fi || true` was reduced to
+#     `if [ ${` and the `|| true` behind the `#` never reached the pattern below —
+#     measured on a disposable copy: the neutered runner reported this check GREEN.
+#     Requiring a start-of-line or whitespace-preceded `#` keeps `#` inside a token
+#     (parameter expansion, a URL fragment, a colour literal) part of the line.
+active="$(sed -E 's/(^|[[:space:]])#.*$//' "$PREFLIGHT" | grep -vE '^[[:space:]]*$')"
 # CAPTURE, then test — not `grep -nE … | grep -q .`. A `grep -q` reader exits at
 # the first line, so the writer grep can take SIGPIPE (141) and `pipefail` then
 # fails the pipeline although it MATCHED; inside `if`, that lands on the `else`
