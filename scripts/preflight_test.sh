@@ -2101,8 +2101,9 @@ fi
 #           THE EQUALITY LEGS HONEST: a function returning a constant, or one that
 #           matched two URLs for the wrong reason, passes the equalities below and
 #           fails here (the BLIND leg) or at the suffix leg (b). "TOTAL" is NOT
-#           claimed: check 37 widens the anchor for the no-userinfo shape, and the
-#           two together are what the function's own comment states per shape.
+#           claimed: check 36 refuses the scheme-less shape no strip can cover, and
+#           check 37 widens the anchor for the no-userinfo shape; the three
+#           together are what the function's own comment states per shape.
 #
 #       (b) THE FINGERPRINT STILL BITES. A second database and a second port must
 #           still produce a DIFFERENT component and a DIFFERENT key, and `testdb=`
@@ -2177,7 +2178,93 @@ if [ -n "$probe_tree" ]; then
   elif ! grep -q 'testdb=' <<<"$(export JOMFORM_TEST_DATABASE_URL="$u_simple"; PREFLIGHT_KEY_EXTRA=probe15 gr_key_material "$SB")"; then
     bad "check 35 — the key material dropped the test database entirely; stripping the credential must not mean dropping what the record is evidence ABOUT"
   else
-    ok "the credential strip is TOTAL and still a fingerprint: a password containing \`${at}\` or \`${sl}\` strips to [$c_simple] like a simple one, rotating it leaves the key unchanged (${k_simple:0:12}), while another port ([$c_port]) and another database ([$c_db]) still differ and testdb= is still key material"
+    ok "the credential strip covers the shape it owns and is still a fingerprint: a password containing \`${at}\` or \`${sl}\` strips to [$c_simple] like a simple one, rotating it leaves the key unchanged (${k_simple:0:12}), while another port ([$c_port]) and another database ([$c_db]) still differ and testdb= is still key material"
+  fi
+fi
+# 36. A TEST-DB VALUE THAT CANNOT BE STRIPPED IS REFUSED, AND THE RECORD IS READ
+#     BACK TO PROVE THE CREDENTIAL IS NOT IN IT. The credential strip in check 35
+#     applies to a value that carries a `scheme://`: there is a scheme to drop and
+#     an authority to anchor the userinfo on. PostgreSQL's KEYWORD/VALUE DSN
+#     (`host=… password=… user=…`) has neither — every `key=value` pair is
+#     indistinguishable from any other, and `password=` is not even syntactically
+#     special, because the driver takes an arbitrary key as a runtime parameter
+#     (measured with this repo's pinned pgx v5.10.0; so a whitelist of credential
+#     keys could not be shown complete). The API's own driver ACCEPTS that form, so
+#     a lane can gate with it, and before the scheme guard the value was returned
+#     VERBATIM: the password was written into
+#     ${PREFLIGHT_RESULT_DIR:-/var/lib/jomform/gate}/<tree>.json — a world-readable
+#     file — AND hashed into the key, so rotating that password silently refused a
+#     valid green record.
+#
+#     THE FIX IS BY SHAPE: a value with no `scheme://` never reaches the fingerprint
+#     at all. Two legs, because an equality-only fixture would pass for a function
+#     returning a constant:
+#       (a) THE RAW COMPONENT for a credential-bearing keyword/value DSN must not
+#           carry the credential — read from the function, not compared to another
+#           component. AND THE RECORD FILE must not carry it either: the real
+#           `gr_flush` (the writer, not a re-implementation) is driven with the
+#           caller's test-DB value, and the file it writes is read back and searched
+#           for the password. That is the leg the defect was reported in, and the
+#           only one that catches it end to end.
+#       (b) THE FINGERPRINT IS UNTOUCHED FOR THE FORMS THAT DO STRIP: the ordinary
+#           URL form must still produce its host/port/database component and still
+#           carry `testdb=`, so "refuse the odd shape" did not degenerate into
+#           "drop the database" for the DSN every gate on this host actually uses.
+#           The HOST token in that component is NOT pinned here: check 34 owns the
+#           loopback canonicalisation (PR 863) and check 35 owns the credential
+#           strip, so this check reads the TAIL — the port and the database — which
+#           is what the record is evidence about.
+#     The password is ASSEMBLED AT RUNTIME from two pieces, so the whole token never
+#     appears as a literal in a tracked file (the gitleaks gate scans the full
+#     history). A bare `@` needs no such care — it is a delimiter that already
+#     appears throughout this file and in the expressions under test.
+if [ -n "$probe_tree" ]; then
+  at6='@'
+  kv_secret="$(printf '%s%s' 's3cret-' 'probe36')"
+  kv_dsn="host=127.0.0.1 port=5432 dbname=jomform_test password=${kv_secret} user=jf"
+  kv_comp="$(JOMFORM_TEST_DATABASE_URL="$kv_dsn" gr_testdb_component)"
+  # The record the REAL writer leaves behind, for THIS tree, under the private
+  # result dir. Driven in a subshell so the caller's test-DB value cannot leak into
+  # the checks around it, and no GR_* state leaks out of it either.
+  #
+  # GR_GATE_NAMES IS SET, and the flush's exit code is ASSERTED. `gr_flush` keys
+  # off it, so without it the flush writes NOTHING — and the read below would then
+  # find whatever record was left by an earlier check and report on that instead,
+  # which is a vacuous pass measured while this check was being written (the file
+  # it read still said `testdb=localhost:5432/jomform_test`). A missing record is
+  # caught below by the `grep -q 'testdb='` test on the file itself.
+  kv_flush_rc=0
+  kv_rec_out="$(
+    export JOMFORM_TEST_DATABASE_URL="$kv_dsn" GR_REPO="$SB" GR_TREE="$probe_tree"
+    GR_GATE_NAMES=("$probe_gate")
+    GR_STATUS["$probe_gate"]=pass GR_SECONDS["$probe_gate"]=1 GR_AT["$probe_gate"]="$(gr_now)"
+    GR_PASSED=1 GR_FAILED=0 GR_SKIPPED=0
+    gr_flush 1 2>&1
+  )" || kv_flush_rc=$?
+  kv_rec="$(gr_file "$probe_tree")"
+  kv_in_record=0
+  [ -r "$kv_rec" ] && grep -qF "$kv_secret" "$kv_rec" && kv_in_record=1
+  kv_in_comp=0
+  case "$kv_comp" in *"$kv_secret"*) kv_in_comp=1 ;; esac
+  # (b) the URL form is untouched — the shape the strip has always served. The
+  #     HOST token is not pinned (check 34's business); the TAIL is.
+  url_comp="$(JOMFORM_TEST_DATABASE_URL="postgres://u1:pw1${at6}127.0.0.1:5432/jomform_test" gr_testdb_component)"
+  if [ "$kv_in_comp" -ne 0 ]; then
+    bad "check 36 — the test-db component still carries the CREDENTIAL from a keyword/value DSN ([$kv_comp]) — that form is accepted by the API's own driver (pgx v5.10.0), so a lane can gate with it, and the component is written to a world-readable record AND hashed into the key"
+  elif [ "$kv_flush_rc" -ne 0 ]; then
+    bad "check 36 — the real gr_flush exited $kv_flush_rc under a keyword/value DSN ([$kv_rec_out]), so the record leg below would have read a record left by an EARLIER check and reported on the wrong bytes"
+  elif [ "$kv_in_record" -ne 0 ]; then
+    bad "check 36 — the real gr_flush wrote the caller's keyword/value DSN CREDENTIAL into the record file $kv_rec (a world-readable file), as [$(grep -o 'testdb=[^;]*' "$kv_rec" | tail -n 1)] — an un-strippable value must never reach the fingerprint at all"
+  elif [ -z "$kv_comp" ]; then
+    bad "check 36 — a keyword/value DSN produced an EMPTY component, which would key an empty test-db field; it must produce a stable non-credential token"
+  elif ! grep -q 'testdb=refused' "$kv_rec"; then
+    bad "check 36 — the record written under a keyword/value DSN ([$kv_rec]) does not carry the refusal token: got [$(grep -o 'testdb=[^;]*' "$kv_rec" | tail -n 1)], expected [testdb=refused], so the value did not reach the fingerprint the way this check says"
+  elif [ -z "${url_comp%:5432/jomform_test}" ] || [ "${url_comp%:5432/jomform_test}" = "$url_comp" ]; then
+    bad "check 36 — the URL form regressed while carving out the keyword/value form: [postgres://u1:pw1${at6}127.0.0.1:5432/jomform_test] -> [$url_comp], expected a component ending in [:5432/jomform_test]"
+  elif ! grep -q 'testdb=' <<<"$(export JOMFORM_TEST_DATABASE_URL="postgres://u1:pw1${at6}127.0.0.1:5432/jomform_test"; PREFLIGHT_KEY_EXTRA=probe15 gr_key_material "$SB")"; then
+    bad "check 36 — refusing the un-strippable form dropped testdb= from the key material for the URL form too; the fingerprint must still name the database the record is evidence ABOUT"
+  else
+    ok "an un-strippable test-db value is REFUSED and the RECORD proves it end to end: the keyword/value DSN (which pgx v5.10.0 accepts) gives the component [$kv_comp], and the REAL gr_flush driven with it (rc=$kv_flush_rc) wrote [$(grep -o 'testdb=[^;]*' "$kv_rec" | tail -n 1)] with the password absent from the file; the URL form is untouched ([$url_comp]) and testdb= is still key material"
   fi
 fi
 # 37. A DSN WITH NO USERINFO WHOSE PATH CARRIES AN `@` MUST KEY ON THE SERVER THE

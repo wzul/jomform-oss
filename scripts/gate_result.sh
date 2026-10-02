@@ -31,13 +31,16 @@
 #     and a record whose key no longer matches is REFUSED (never silently reused).
 #     The test-database host rides along too — a record made against another
 #     database is not evidence about this one. Credentials are never stored, and
-#     which shape a value has decides how: a URL-form value whose authority (the
-#     text before the first `/`) carries userinfo is stripped at that authority's
-#     LAST `@` — the anchor Go's net/url uses — so a password containing `@` or `/`
-#     goes with it; a value whose authority carries NO userinfo is kept whole where
-#     that authority is the address the driver resolves, because dropping through
-#     the `@` there would alias two SERVERS; and where the authority is neither, the
-#     strip is kept and can only refuse a record. See gr_testdb_component for each
+#     that is enforced by SHAPE rather than promised. A value carrying a
+#     `scheme://` is stripped at its authority's LAST `@` — the anchor Go's net/url
+#     uses — so a password containing `@` or `/` goes with it; where that authority
+#     carries NO userinfo and IS the address the driver resolves, the whole value is
+#     kept, because dropping through the `@` there would alias two SERVERS; and the
+#     loopback spellings (`localhost`, `127.0.0.1`, `[::1]`) are canonicalised to
+#     one token, so the key is a fact about the database and not about how the host
+#     was written. A value with NO scheme at all — PostgreSQL's keyword/value DSN,
+#     a form the API's own driver ACCEPTS — is not stripped, it is REFUSED: its
+#     password never reaches the record at all. See gr_testdb_component for each
 #     shape and what it costs.
 #   * `finished_at`, so a cached pass cannot outlive its usefulness. Records older
 #     than PREFLIGHT_RESULT_TTL (default 86400s) are treated as absent.
@@ -141,6 +144,42 @@ gr_sha256_file() {
 # credentials stripped. A record made against another database is not evidence
 # about this one, and the password must never reach a file on disk.
 #
+# WHICH SHAPES ARE STRIPPED, AND WHICH ARE REFUSED. Stated by shape rather than
+# claimed "total", because there is an input class no strip can cover:
+#
+#   A. `scheme://…` — the URL form. STRIPPED. The userinfo is removed from the
+#      authority's LAST `@` (see THE ANCHOR below), so `host:port/database`
+#      survives and the credential does not. This is what the test-env file
+#      exports (`postgres://…`) and the only form any gate on this host uses.
+#
+#   B. No `scheme://` — REFUSED. PostgreSQL's keyword/value DSN
+#      (`host=… password=… user=…`) is NOT a URL: there is no scheme to strip and
+#      no authority to anchor on, and every `key=value` pair is indistinguishable
+#      from any other, so a strip cannot be shown to have removed the userinfo.
+#      A `password=` is not even syntactically special — the driver takes an
+#      arbitrary `key=value` as a runtime parameter, so a whitelist of credential
+#      keys could not be shown complete. Rather than guess, the value never
+#      reaches the fingerprint: the component is the literal token `refused`, and
+#      every such run shares one key. That is the SAFE direction — two different
+#      databases under an un-strippable DSN can only make records look ALIKE (the
+#      conservative direction), never make a record about one database read as
+#      evidence about another.
+#      Measured before the scheme guard existed (the defect): the value was
+#      returned VERBATIM, so `password=s3cret-token` was written into the
+#      world-readable record at ${PREFLIGHT_RESULT_DIR:-/var/lib/jomform/gate}/<tree>.json
+#      AND hashed into the key, so rotating that password silently refused a valid
+#      green record. The API's own driver accepts the form (measured with this
+#      repo's pinned pgx v5.10.0), so a lane can gate with it.
+#
+# `refused` cannot collide with a real component: a bare host/port/database is
+# not a DSN either (pgx rejects `localhost:5432/db` and `db` as "invalid
+# keyword/value"), so no caller reaches this function with one. It is a bare word
+# with no `:` or `;`, so it cannot disturb the `key_parts` line it is written
+# into (the readers are anchored seds).
+#
+# THE STEPS BELOW APPLY TO SHAPE A — a value that carries a `scheme://`. A value
+# with no scheme is refused above, before any of them runs.
+#
 # THE HOST IS CANONICALISED, because the key material must be a fact about the
 # DATABASE and not about how it was SPELLED. Measured on this host: the gate ran
 # green on tree f98b5fcf and wrote `testdb=127.0.0.1:5432/jomform_test`, and the
@@ -193,7 +232,10 @@ gr_sha256_file() {
 # spelling. (A simple password rotated cleanly, which is what hid this: only the
 # `@`/`/` class leaks.)
 #
-# THE RULE, in three steps, because there are three genuinely different shapes:
+# THE RULE, in three steps, because there are three genuinely different shapes —
+# and all three are STEPS OF SHAPE A, reached only by a value that carries a
+# `scheme://`. A value with no scheme is refused before them (see WHICH SHAPES
+# ARE STRIPPED above), so no shape below has to reason about one:
 #   1. An `@` INSIDE the authority (the substring before the first `/`) is the
 #      userinfo delimiter — the LAST one, the same anchor Go's net/url uses
 #      (`parseAuthority` takes `strings.LastIndex(authority, "@")`). Everything
@@ -243,7 +285,9 @@ gr_sha256_file() {
 # authority as an address with "too many colons in address", and net/url's parser
 # rejects the same string), so no lane can gate with it, and treating every such
 # authority as a credential would destroy the host and port for the DSNs that DO
-# work.
+# work. (An earlier note in this comment claimed the API's driver LOADS that shape;
+# measured, neither pgx nor net/url does. Net: no credential-bearing string reaches
+# the component except through a shape that has already had its userinfo removed.)
 #
 # The QUERY is cut BEFORE the anchor is located. A query cannot be part of the
 # authority, and a query may legitimately carry `@` (`?options=a@b`), so cutting
@@ -280,6 +324,12 @@ gr_is_hostport() {
 gr_testdb_component() {
   local url="${JOMFORM_TEST_DATABASE_URL:-}" comp auth tail
   if [ -z "$url" ]; then printf 'unset'; return 0; fi
+  # Shape B: no scheme. Nothing here can be stripped with confidence, so the
+  # value is refused rather than risked — see WHICH SHAPES ARE STRIPPED above.
+  case "$url" in
+    *://*) : ;;
+    *)     printf 'refused'; return 0 ;;
+  esac
   comp="${url#*://}"                       # the scheme, when there is one
   comp="$(printf '%s' "$comp" | sed -E 's#\?.*$##; s#/$##')"
   auth="${comp%%/*}"                       # the authority: up to the first '/'

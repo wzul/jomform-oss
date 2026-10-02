@@ -66,25 +66,35 @@ it is not what a merger needs when it decides to squash.
   set (`web/node_modules/.package-lock.json`), `scripts/preflight.sh` and
   `scripts/gate_result.sh` themselves, the test-database host/database, and
   `PREFLIGHT_KEY_EXTRA` for anything else. Credentials are stripped, and **which
-  shape a value has decides how**. A URL-form value (`scheme://…`) whose authority
-  carries userinfo (`…/u1:pw@host:port/db`) is stripped at the last `@` in the
-  authority — the anchor Go's `net/url` uses — so a password containing `@` or `/`
-  (what a base64 or URL-encoded password routinely carries) does not survive into
-  the record. The query string is dropped before that, and the scheme with it, so
-  `?options=…` never reaches the file either. A value whose **authority carries no
-  userinfo** and whose database name does (`…/hostA:5432/db@x`) is kept whole: the
-  text before the first `/` is the ADDRESS the driver resolves (measured with the
-  pinned pgx v5.10.0), so that `@` is not a credential delimiter, and stripping it
-  would collapse `hostA:5432/db@x`, `hostB:5432/db@x` and `hostA:5432/other@x` onto
-  ONE component and ONE key — a record written against hostA accepted as evidence
-  about hostB. A bracketed IPv6 authority (`[::1]:5432`) is an address too and is
-  kept for the same reason. Where the authority is neither an address nor clean
-  userinfo — `…://u1:pw@host:port/db`, a shape the driver itself REFUSES — the
-  value is stripped at its last `@`: that direction can only refuse a record, and
-  it never leaves a credential on disk. So the component this produces is always
-  `<host>[:port][/database]`; what the strip *removes* is the credential, and what
-  it KEEPS is the host, port and database, because a record made against another
-  database is not evidence about this one.
+  shape a value has decides how**. A value carrying a **`scheme://`** is stripped
+  at its authority's last `@` — the anchor Go's `net/url` uses — so a password
+  containing `@` or `/` (what a base64 or URL-encoded password routinely carries)
+  does not survive into the record. The query string is dropped before that, and
+  the scheme with it, so `?options=…` never reaches the file either. A value whose
+  **authority carries no userinfo** and whose database name does
+  (`…/hostA:5432/db@x`) is kept whole: the text before the first `/` is the ADDRESS
+  the driver resolves (measured with the pinned pgx v5.10.0), so that `@` is not a
+  credential delimiter, and stripping it would collapse `hostA:5432/db@x`,
+  `hostB:5432/db@x` and `hostA:5432/other@x` onto ONE component and ONE key — a
+  record written against hostA accepted as evidence about hostB. A bracketed IPv6
+  authority (`[::1]:5432`) is an address too and is kept for the same reason. Where
+  the authority is neither an address nor clean userinfo — `…://u1:pw@host:port/db`,
+  a shape the driver itself REFUSES — the value is stripped at its last `@`: that
+  direction can only refuse a record, and it never leaves a credential on disk. A
+  value with **no `scheme://` at all** — PostgreSQL's keyword/value DSN
+  (`host=… password=… user=…`), which the API's own driver accepts — is **not**
+  stripped and is **refused**: the component becomes the literal token `refused`
+  and the value never reaches the fingerprint. That is deliberate: there is no
+  scheme to strip and no authority to anchor on, and every `key=value` pair is
+  indistinguishable from any other (`password=` is not syntactically special — the
+  driver takes an arbitrary key as a runtime parameter), so a strip could not be
+  shown to have removed the userinfo. Refusing is the conservative direction: two
+  different databases under an un-strippable DSN can only make records look
+  *alike*, never make a record about one database read as evidence about another.
+  So the component this produces is always `<host>[:port][/database]`; what the
+  strip *removes* is the credential, and what it KEEPS is the host, port and
+  database, because a record made against another database is not evidence about
+  this one.
 
   **The host is a fact about the SERVER, not about its spelling:** `localhost`,
   `127.0.0.1` and `[::1]` are canonicalised to the single token `loopback`, so one

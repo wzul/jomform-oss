@@ -37,14 +37,23 @@
 #       token for the loopback spellings only, and another port or another
 #       database still yields a different key.
 
-#   35. The credential strip must be TOTAL, and the fingerprint must still bite.
-#       `s#^[^@/]*@##` was ALL-OR-NOTHING: it consumed userinfo only when an `@`
-#       was preceded by neither an `@` nor a `/`, so a password containing either
-#       character was not stripped AT ALL and the credential landed in the record
-#       file AND in its key material. Guard: the userinfo is stripped from its
-#       right anchor (the last `@` in the authority, the same anchor Go's net/url
-#       uses), while another database and another port still produce different
-#       components and different keys.
+#   35. The credential strip must cover every shape it OWNS, and the fingerprint
+#       must still bite. `s#^[^@/]*@##` was ALL-OR-NOTHING: it consumed userinfo
+#       only when an `@` was preceded by neither an `@` nor a `/`, so a password
+#       containing either character was not stripped AT ALL and the credential
+#       landed in the record file AND in its key material. Guard: the userinfo is
+#       stripped from its right anchor (the last `@` in the authority, the same
+#       anchor Go's net/url uses), while another database and another port still
+#       produce different components and different keys.
+#
+#   36. A test-DB value the strip CANNOT cover must be REFUSED. PostgreSQL's
+#       keyword/value DSN (`host=… password=… user=…`) carries no `scheme://` and
+#       no userinfo delimiter at all, so before the scheme guard it was returned
+#       VERBATIM with its password — into the world-readable record file and into
+#       its key material. The API's own driver accepts the form (measured with
+#       this repo's pinned pgx v5.10.0), so a lane can gate with it. Guard: a
+#       value with no `scheme://` never reaches the fingerprint; the component is
+#       the literal token `refused`.
 #
 #   37. A DSN WITH NO USERINFO WHOSE PATH CARRIES AN `@` MUST KEY ON THE SERVER.
 #       The second step of the strip dropped everything through the LAST `@` in
@@ -57,11 +66,25 @@
 #       kept, because that is the read the driver takes; where it is not, the
 #       strip is kept and can only refuse a record.
 #
-#       NUMBERED 35 AND 37, NOT 34. Checks 34 is the test-db host SPELLING check
-#       (card t_7add0cfa, PR 863) — a change to the SAME function, verified on its
-#       exact bytes. Taking 34 here would force whoever lands second to renumber,
-#       which rewrites bytes another card's verdict was taken on. Cases 5 and 7
-#       below are numbered to match, above PR 863's case 4.
+#       NUMBERED 35, 36 AND 37, NOT 34. Check 34 is the test-db host SPELLING
+#       check (card t_7add0cfa, PR 863) — a change to the SAME function, verified
+#       on its exact bytes. Taking 34 here would force whoever lands second to
+#       renumber, which rewrites bytes another card's verdict was taken on. Cases
+#       5, 6 and 7 below are numbered to match, above PR 863's case 4.
+#
+#   38. THIS HARNESS'S OWN CASES MUST NOT MAKE EACH OTHER UNATTRIBUTABLE. All the
+#       guards above live in the one gr_testdb_component, so a case that restores a
+#       whole pre-fix function reds several checks at once and `verdict` then
+#       reports the red as "for reasons OTHER than" its own property (measured: the
+#       raw pre-fix component also returns `2@…` for a password containing `@`,
+#       which is check 35's leg). Every case below therefore mutates only the
+#       INNER BODY that carries its own rule and asserts by VALUE that the other
+#       rules still answer as this tree answers them, including the scheme guard,
+#       which no case removes: case 4 drops only the canonicalising sed (checks
+#       35/36/37 unchanged), case 5 swaps only the anchor block for the
+#       all-or-nothing expression (checks 34/36 unchanged), case 6 removes only the
+#       scheme guard (checks 34/35/37 unchanged), and case 7 swaps only the anchor
+#       block for the unconditional step-2 strip (checks 34/35/36 unchanged).
 #
 # WHY A SCRIPT AND NOT A PER-RUN GATE: every case mutates scripts/*.sh in place.
 # The live `selftest` gate runs against the tree under test, so it can never
@@ -198,7 +221,7 @@ echo "== case 0: the healthy tree (control — the whole selftest must be green)
 rc0=0
 selftest_run "$WORK/case0.log" || rc0=$?
 if [ "$rc0" -eq 0 ]; then
-  ok "case 0 — the unmutated tree passes the whole selftest ($(grep -E '^preflight self-test:' "$WORK/case0.log" | tail -n 1)): the checks 31/32/33/34/35/37 assertions are reachable and green, so the cases below are not vacuous"
+  ok "case 0 — the unmutated tree passes the whole selftest ($(grep -E '^preflight self-test:' "$WORK/case0.log" | tail -n 1)): the checks 31/32/33/34/35/36/37 assertions are reachable and green, so the cases below are not vacuous"
 else
   bad "case 0 — the unmutated tree ALREADY fails the selftest (rc=$rc0), so no case below could attribute a red to its sabotage: $(grep -E '^  FAIL ' "$WORK/case0.log" | tr '\n' '|')"
 fi
@@ -319,6 +342,10 @@ echo "== case 4: the DB host spelling hashed back into the key (the pre-fix shap
 printf '%s\n' \
   '  local url="${JOMFORM_TEST_DATABASE_URL:-}" comp auth tail' \
   '  if [ -z "$url" ]; then printf '"'"'unset'"'"'; return 0; fi' \
+  '  case "$url" in' \
+  '    *://*) : ;;' \
+  '    *)     printf '"'"'refused'"'"'; return 0 ;;' \
+  '  esac' \
   '  comp="${url#*://}"                       # the scheme, when there is one' \
   '  comp="$(printf '"'"'%s'"'"' "$comp" | sed -E '"'"'s#\?.*$##; s#/$##'"'"')"' \
   '  auth="${comp%%/*}"                       # the authority: up to the first '"'"'/'"'"'' \
@@ -382,6 +409,10 @@ echo "== case 5: the DB credential strip made all-or-nothing again (the pre-fix 
 printf '%s\n' \
   '  local url="${JOMFORM_TEST_DATABASE_URL:-}" comp auth tail' \
   '  if [ -z "$url" ]; then printf '"'"'unset'"'"'; return 0; fi' \
+  '  case "$url" in' \
+  '    *://*) : ;;' \
+  '    *)     printf '"'"'refused'"'"'; return 0 ;;' \
+  '  esac' \
   '  comp="${url#*://}"                       # the scheme, when there is one' \
   '  comp="$(printf '"'"'%s'"'"' "$comp" | sed -E '"'"'s#\?.*$##; s#/$##'"'"')"' \
   '  auth="${comp%%/*}"                       # the authority: up to the first '"'"'/'"'"'' \
@@ -426,6 +457,51 @@ else
 fi
 restore_and_verify
 
+# --- case 6: THE SCHEME CHECK REMOVED, SO A KEYWORD/VALUE DSN IS RETURNED AGAIN.
+# The pre-fix behaviour for the no-scheme form: `${url#*://}` is a no-op, so the
+# value — PostgreSQL's keyword/value DSN, which the API's own driver ACCEPTS
+# (measured with this repo's pinned pgx v5.10.0) — is returned VERBATIM with its
+# password, and `gr_flush` writes that password into the world-readable record at
+# ${PREFLIGHT_RESULT_DIR}/<tree>.json AND hashes it into the key.
+#
+# The mutation is SURGICAL and differs from case 5's deliberately: it removes ONLY
+# the scheme guard, leaving the right-anchor strip in place. That is the one shape
+# that discriminates the two checks, because the keyword/value DSN contains no `@`
+# at all — so check 35's shapes are untouched (it still passes) and check 36's leg
+# is the ONLY one that can fire. Case 5's wholesale revert, by contrast, reds check
+# 35 as well, which is why case 5's needle cannot be extended with check 36's text
+# without a red for case 6 being read as off-topic there. Keeping the two mutations
+# disjoint is what makes each case's verdict attributable to its own property.
+echo "== case 6: the scheme check removed (a keyword/value DSN returned verbatim again) =="
+awk '
+  /^  case "\$url" in$/ { skipping=1; next }
+  skipping && /^  esac$/ { skipping=0; next }
+  skipping { next }
+  { print }
+' "$RESULT" > "$WORK/case6.tmp" && cp "$WORK/case6.tmp" "$RESULT" && chmod "$MODE_RESULT" "$RESULT"
+# The mutation is verified by VALUE before it spends a selftest run: the
+# keyword/value DSN must come back VERBATIM, and the ordinary URL form must still
+# strip (so this case measures the scheme guard and not a broken function).
+KV6="host=127.0.0.1 port=5432 dbname=jomform_test password=$(printf '%s%s' 's3cret-' 'probe36') user=jf"
+AT6='@'
+case6_kv="$(JOMFORM_TEST_DATABASE_URL="$KV6" bash -c ". $RESULT; gr_testdb_component")"
+case6_url="$(JOMFORM_TEST_DATABASE_URL="postgres://u1:pw1${AT6}127.0.0.1:5432/jomform_test" bash -c ". $RESULT; gr_testdb_component")"
+if [ "$case6_kv" != "$KV6" ]; then
+  bad "case 6 — the scheme guard is still present (the keyword/value DSN gave [$case6_kv] rather than the verbatim value), so this case proves nothing"
+elif ! bash -n "$RESULT"; then
+  bad "case 6 — the mutation left gate_result.sh syntactically invalid, so any red below would be a parse error rather than the scheme guard under test"
+elif [ "$case6_url" != "loopback:5432/jomform_test" ]; then
+  bad "case 6 — the mutation broke the URL form too ([$case6_url], expected [loopback:5432/jomform_test]), so it is not the surgical one-shape change this case claims"
+else
+  rc6=0
+  selftest_run "$WORK/case6.log" || rc6=$?
+  # Only check 36 can fire on this mutation, and only on its component or its
+  # record leg; both are listed so an unattributable red still cannot be counted.
+  verdict "case 6" "$WORK/case6.log" "$rc6" "check 36|CREDENTIAL" \
+    "with the scheme check removed, a keyword/value DSN is returned verbatim and its password reaches the record"
+fi
+restore_and_verify
+
 # --- case 7: THE STEP-2 STRIP PUT BACK, UNCONDITIONALLY. The parent shape: the
 # `@`-after-the-path branch dropped everything through the LAST `@` in the WHOLE
 # value without asking whether the text before the first `/` is an ADDRESS, so for
@@ -450,6 +526,10 @@ echo "== case 7: the step-2 strip put back unconditionally (the parent shape —
 printf '%s\n' \
   '  local url="${JOMFORM_TEST_DATABASE_URL:-}" comp auth tail' \
   '  if [ -z "$url" ]; then printf '"'"'unset'"'"'; return 0; fi' \
+  '  case "$url" in' \
+  '    *://*) : ;;' \
+  '    *)     printf '"'"'refused'"'"'; return 0 ;;' \
+  '  esac' \
   '  comp="${url#*://}"                       # the scheme, when there is one' \
   '  comp="$(printf '"'"'%s'"'"' "$comp" | sed -E '"'"'s#\?.*$##; s#/$##'"'"')"' \
   '  auth="${comp%%/*}"                       # the authority: up to the first '"'"'/'"'"'' \
@@ -508,7 +588,7 @@ fi
 
 echo "---"
 if [ "$FAIL" -eq 0 ]; then
-  echo "biteproof: $PASS checks passed, 0 failed — the reuse guards BITE: the healthy tree passes, and moving the refusal back after the selection filter, disabling the ledger dedupe, hashing node into the fingerprint, hashing the test-DB host's SPELLING into it, or putting the all-or-nothing credential strip or the unconditional step-2 strip back each turns the REAL selftest gate red, naming that property"
+  echo "biteproof: $PASS checks passed, 0 failed — the reuse guards BITE: the healthy tree passes, and moving the refusal back after the selection filter, disabling the ledger dedupe, hashing node into the fingerprint, hashing the test-DB host's SPELLING into it, putting the all-or-nothing credential strip or the unconditional step-2 strip back, or removing the scheme guard that refuses an un-strippable DSN, each turns the REAL selftest gate red, naming that property"
 else
   echo "biteproof: $PASS passed, $FAIL failed — a reuse guard does NOT hold something it claims to"
 fi
