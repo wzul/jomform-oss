@@ -319,10 +319,22 @@ export default function FormsPage() {
           return;
         }
       }
+      // t_c9e37f49: the reload happens ONLY here, on the path that actually
+      // changed the list. It used to sit in the `finally` above, which runs even
+      // when a failure branch `return`s from inside the `try` — and `load()`
+      // clears `err` on a successful reload (line ~120). So the failure sentence
+      // was replaced by a freshly loaded list ~200ms after it was set, and the
+      // merchant read nothing at all: a failed bulk publish looked like a click
+      // that did nothing. This is the same shape the single-form `publish()`
+      // above has always had (no `finally`), which is why its message persists.
+      // A failure path needs no reload — the batch was refused before it touched
+      // anything.
       setErr("");
-    } finally {
-      setBusy(false);
       load();
+    } finally {
+      // Still cleared on every path: `busy` disables the toolbar buttons, and
+      // leaving them disabled after a refusal would be its own dead end.
+      setBusy(false);
     }
   }
 
