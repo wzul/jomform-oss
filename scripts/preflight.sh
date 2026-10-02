@@ -1987,16 +1987,58 @@ a11y_run() {
   # Find a free port (base 3100, stepping up). `ss` is the source of truth for
   # "in use"; a connect probe would miss a socket that is listening but not
   # accepting yet.
-  local port=""
-  local candidate
+  #
+  # THE PICK MUST ALSO RESERVE, OR A CONCURRENT LANE TAKES THE PORT BETWEEN THE
+  # SCAN AND THE BIND (card t_276dd169 / t_11635713). The scan below answers "is
+  # this port free RIGHT NOW"; it does not hold it. On this multi-lane host a peer
+  # preflight — or any other server — can bind the chosen port in the window before
+  # playwright's `webServer` does, and the gate then fails with EADDRINUSE on a
+  # tree that is perfectly good. Measured: `a11y` FAIL after 3s with
+  # `listen EADDRINUSE :::3100` while `ss` showed a peer lane's `next-server` on
+  # 3100, and the SAME gate passed on the next full run with no code change.
+  #
+  # The reservation is `nc -l -p <port>`: it binds and listens, so `ss` sees it,
+  # and an unprivileged competitor is refused with EADDRINUSE — verified on this
+  # host before this change (python3 holder: a second binder is refused; `nc -l`
+  # holder: `ss` reports LISTEN and a second binder is refused). It is released
+  # immediately before the server starts, so nothing is reused: the gate still
+  # starts ITS OWN server, which is the property `reuseExistingServer: false`
+  # exists to protect.
+  #
+  # A retry was the alternative and is deliberately NOT used: a retry hides the
+  # race behind a green instead of removing it, and the gate must still report a
+  # genuine EADDRINUSE (a peer holding every port in the range) rather than
+  # quietly passing on a later attempt.
+  local port="" holder="" candidate
   for candidate in $(seq 3100 3140); do
     if ! ss -lntn "sport = :$candidate" 2>/dev/null | grep -q LISTEN; then
+      # Take it, if we can. `nc -l` stays in the foreground, so it is backgrounded
+      # and killed the moment the port is either confirmed ours or found taken.
+      if command -v nc >/dev/null 2>&1; then
+        nc -l -p "$candidate" >/dev/null 2>&1 &
+        holder=$!
+        sleep 0.3
+        if ss -lntn "sport = :$candidate" 2>/dev/null | grep -q LISTEN; then
+          port="$candidate"
+          break
+        fi
+        kill "$holder" >/dev/null 2>&1 || :
+        wait "$holder" 2>/dev/null || :
+        holder=""
+        continue
+      fi
       port="$candidate"
       break
     fi
   done
   [ -n "$port" ] || { echo "no free port in 3100-3140 for the a11y web server" >&2; return 1; }
   echo "a11y: starting the app's own server on port $port (never reusing a leftover)"
+  # Release the reservation so the server can take the port. A holder that dies on
+  # its own (the port was stolen from it too) is treated the same: nothing to free.
+  if [ -n "$holder" ]; then
+    kill "$holder" >/dev/null 2>&1 || :
+    wait "$holder" 2>/dev/null || :
+  fi
   A11Y_PORT="$port" npm run a11y
 }
 
