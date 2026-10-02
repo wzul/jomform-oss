@@ -155,6 +155,22 @@ test.describe("chat availability probe: a scope refusal is not 'unavailable'", (
     // "the assistant is not available", and keep the composer. The shape asserted
     // is the property that matters — no probe may carry a slug the session does
     // not have, and the final one carries the workspace the session confirmed.
+    //
+    // THE LAST-PROBE ASSERTION USED TO FLAKE RED (card t_b718398f). The assertion
+    // below was already preceded by a DOM wait for the alert text, on the theory
+    // that "the alert is rendered ⟹ the probe has fired". That implication is NOT
+    // valid, and it is invalid in exactly the direction that matters: the alert
+    // text is reachable from the FIRST probe's own refusal path, so the wait
+    // succeeds while the page's re-probe (the self-heal, which is what makes the
+    // LAST entry scoped) has not fired yet. Measured on this host: 1 red in 4
+    // full-suite runs on byte-identical, correct code, with `Sent:
+    // ["http://127.0.0.1:3100/api/rest/chat"]` — a single UNSCOPED probe.
+    //
+    // The fix is to WAIT FOR THE PROPERTY, not for a proxy of it: the last probe
+    // must come to carry the confirmed workspace, and it is given the same 15s
+    // budget as the other waits in this test. The assertion is unchanged in what
+    // it requires — a page that never re-probes still fails, now after the wait
+    // rather than at a random instant — so the test cannot pass by asserting less.
     expect(probes.length, "the availability probe must have been sent at least once").toBeGreaterThan(0);
     for (const url of probes) {
       expect(
@@ -162,6 +178,18 @@ test.describe("chat availability probe: a scope refusal is not 'unavailable'", (
         `no probe may carry a workspace the session does not have. Sent: ${JSON.stringify(probes)}`,
       ).not.toContain("workspace=ws-gone");
     }
+    const lastProbeScoped = async (): Promise<boolean> => {
+      const last = probes.at(-1);
+      return typeof last === "string" && last.includes("workspace=ws-a");
+    };
+    await expect
+      .poll(lastProbeScoped, {
+        timeout: 15_000,
+        message:
+          "the last probe must come to carry the confirmed workspace (the page re-probes " +
+          "once the session has answered), never no scope at all",
+      })
+      .toBe(true);
     expect(
       probes.at(-1),
       `the last probe must carry the confirmed workspace (the page re-probes once the session has ` +
