@@ -1801,15 +1801,62 @@ START_ALL=$(date +%s)
 # the most: 21.3 of the 38.3 host-hours). Recording each gate as it completes
 # also means the record survives a killed run, which is how a lane recovers the
 # passes from an attempt that was interrupted.
+# ---------------------------------------------------------------------------
+# A FAILED GATE MUST SAY WHAT KIND OF FAILURE IT WAS (card t_abfc22b7).
+#
+# The gate used to print one line for every non-zero exit —
+# `PREFLIGHT FAIL: gate 'test' (…) exited 1 after 697s` — so a TIMEOUT looked
+# exactly like an assertion failure. That is what made the defect expensive: run 1
+# reported FAIL after 697s with **no test failing and no assertion firing**, the
+# only line in the log being `panic: test timed out after 10m0s`, and the reader
+# chased the test the runner happened to name instead of the budget. A gate that
+# reds when nothing is wrong trains the next worker to re-run until green.
+#
+# The budget was fixed separately (API_TEST_TIMEOUT, default 30m); this is the
+# other half — the gate now NAMES the kind of failure, and when it is a timeout it
+# says the run ran out of BUDGET rather than that the code is broken.
+# ---------------------------------------------------------------------------
+_budget_secs() {  # "<num><unit>" -> seconds; 0 when it cannot be read
+  local v="$1" num unit
+  num="${v%%[!0-9]*}"
+  unit="${v#"$num"}"
+  [ -n "$num" ] || { echo 0; return; }
+  case "$unit" in
+    ''|s) echo "$num" ;;
+    m)    echo $((num * 60)) ;;
+    h)    echo $((num * 3600)) ;;
+    *)    echo 0 ;;
+  esac
+}
+
+# gate_failure_kind <log> <elapsed_s> <budget_s> -> timeout | crash | failure
+gate_failure_kind() {
+  local log="$1" secs="$2" budget="$3"
+  # Go's own alarm fired. It names the test it happened to be in, which is NOT
+  # the culprit — the budget is.
+  if grep -qE 'panic: test timed out after' "$log" 2>/dev/null; then echo timeout; return; fi
+  # The run outlived the budget we handed `go test`, so whatever it printed after
+  # that is the tail of a run that was killed, not a verdict.
+  if [ "$budget" -gt 0 ] && [ "$secs" -ge "$budget" ]; then echo timeout; return; fi
+  # A crash is not a failed assertion either: the reader must not go looking for
+  # a test that changed behaviour.
+  if grep -qE '^(panic:|fatal error:|signal: )' "$log" 2>/dev/null; then echo crash; return; fi
+  echo failure
+}
+
 run() {
   local gate="$1" label="$2"; shift 2
   if ! selected "$gate"; then return 0; fi
   info "gate [$gate]: $label"
-  local t0 t1 rc
+  local t0 t1 rc log
   t0=$(date +%s)
+  log="$(mktemp "${TMPDIR:-/tmp}/preflight-gate-$gate.XXXXXX")"
   # NOTE: no `|| true`, no `continue-on-error`. A gate either passes or stops
-  # the run; that is the whole point of moving it off GitHub.
-  if "$@"; then
+  # the run; that is the whole point of moving it off GitHub. The `tee` is only
+  # so a FAILED gate's output can be read back and CLASSIFIED (see
+  # gate_failure_kind) while still streaming live.
+  if "$@" 2>&1 | tee "$log"; then
+    rm -f "$log"
     t1=$(date +%s)
     PASSED+=("$gate")
     # Observation for the per-tree record. Deliberately AFTER the gate, and the
@@ -1830,7 +1877,26 @@ run() {
       GR_PASSED="${#PASSED[@]}"; GR_FAILED="${#FAILED[@]}"; GR_SKIPPED="${#SKIPPED[@]}"
       gr_record_now
     fi
-    echo "PREFLIGHT FAIL: gate '$gate' ($label) exited $rc after $((t1-t0))s" >&2
+    local _secs=$((t1 - t0)) _kind="failure" _budget=0
+    _budget="$(_budget_secs "${API_TEST_TIMEOUT:-}")"
+    _kind="$(gate_failure_kind "$log" "$_secs" "$_budget")"
+    rm -f "$log"
+    case "$_kind" in
+      timeout)
+        echo "PREFLIGHT FAIL: gate '$gate' ($label) ran out of its TIME BUDGET after ${_secs}s" >&2
+        echo "  This is a TIMEOUT, not a failed assertion: the gate was killed, so its output above is the" >&2
+        echo "  tail of an unfinished run and NO test verdict can be read from it. Raise the budget (for the" >&2
+        echo "  api test gate: API_TEST_TIMEOUT, e.g. API_TEST_TIMEOUT=45m ./scripts/preflight.sh) or re-run on" >&2
+        echo "  a quieter host. Do NOT read this as the package being broken." >&2
+        ;;
+      crash)
+        echo "PREFLIGHT FAIL: gate '$gate' ($label) CRASHED after ${_secs}s (panic / fatal error / signal)" >&2
+        echo "  No assertion decided this; the process died. Read the panic above, not the test names." >&2
+        ;;
+      *)
+        echo "PREFLIGHT FAIL: gate '$gate' ($label) exited $rc after ${_secs}s" >&2
+        ;;
+    esac
     summary
     exit 1
   fi

@@ -147,8 +147,18 @@ fi
 # `panic: test timed out after 10m0s` for a green `internal/httpapi`.
 echo "== case 1: -timeout removed from the gate line (the pristine-main shape) =="
 sed -i 's/ -timeout \$API_TEST_TIMEOUT//g; s/ -timeout .\$API_TEST_TIMEOUT.//g' "$RUNNER"
-assert_mutated "$RUNNER" 'go test ./... -race -count=1"' && \
-  case_gate "case 1" "with the flag gone every package inherits Go's 10m per-package default"
+# The gate line now streams through `tee` (the failure classifier, card
+# t_abfc22b7), so the literal `…-count=1"` no longer ends it. What this case is
+# about is the FLAG being gone from the BUDGET the gate hands `go test` — asserted
+# through the harness's own argv instrumentation, NOT through a grep of the file:
+# the file's comments legitimately mention `-timeout`, so a text grep reports a
+# false RED (measured) and that is precisely the class this harness exists to catch.
+mutated_budget="$(budget_of "$(gate_argv)")"
+if [ -n "$mutated_budget" ]; then
+  bad "the gate still hands \`go test\` -timeout $mutated_budget after the mutation — the case would have reported a false green"
+else
+case_gate "case 1" "with the flag gone every package inherits Go's 10m per-package default"
+fi
 restore_and_verify
 
 # --- case 2: THE ALARM DISABLED. `-timeout 0` is legal to `go test` and turns the
@@ -175,9 +185,9 @@ restore_and_verify
 # grep, sees) and removed from the command it actually EXECUTES. A guard that read
 # the file's text, its comments or its label would call this tree healthy.
 echo "== case 3: -timeout kept in the printed label, removed from the command that RUNS =="
-sed -i "s|bash -c \"cd '\$REPO_ROOT/api' && go test ./... -race -count=1 -timeout '\$API_TEST_TIMEOUT'\"|bash -c \"cd '\$REPO_ROOT/api' && go test ./... -race -count=1\"|" "$RUNNER"
+sed -i "s|go test ./... \$RACE -count=1 -timeout '\$API_TEST_TIMEOUT'|go test ./... \$RACE -count=1|g" "$RUNNER"
 label_kept=""
-grep -qF 'run test "cd api && go test ./... -race -count=1 -timeout $API_TEST_TIMEOUT"' "$RUNNER" && label_kept=1
+grep -qF 'go test ./... $RACE -count=1 -timeout $API_TEST_TIMEOUT' "$RUNNER" && label_kept=1
 if [ -z "$label_kept" ]; then
   bad "case 3 — the mutation removed the label's budget too, so this case is not the shape it claims (case 1 already covers that one); nothing is proven about a grep-based guard here"
 else
@@ -190,7 +200,7 @@ restore_and_verify
 # a host slower than the default could then not raise its ceiling without editing
 # the runner, and nothing would notice the knob had gone dead.
 echo "== case 4: -timeout passed as a hardcoded literal (the override no longer reaches go test) =="
-sed -i "s/ -timeout '\$API_TEST_TIMEOUT'/ -timeout '30m'/g" "$RUNNER"
+sed -i "s/-timeout '\$API_TEST_TIMEOUT'/-timeout '30m'/g" "$RUNNER"
 if assert_mutated "$RUNNER" "-timeout '30m'"; then
   argv="$(gate_argv 45m)"; budget="$(budget_of "$argv")"
   if [ -z "$budget" ] || [ "$budget" = "45m" ]; then
@@ -208,8 +218,11 @@ restore_and_verify
 # failure. This is the case that proves the per-run gate is the thing that fires,
 # not just this script's reading of it.
 echo "== case 5: the REAL selftest gate against the mutated runner (end to end) =="
-sed -i 's/ -timeout \$API_TEST_TIMEOUT//g; s/ -timeout .\$API_TEST_TIMEOUT.//g' "$RUNNER"
-if assert_mutated "$RUNNER" 'go test ./... -race -count=1"'; then
+sed -i "s/-timeout '\$API_TEST_TIMEOUT'//g; s/ -timeout \$API_TEST_TIMEOUT//g" "$RUNNER"
+mutated_budget="$(budget_of "$(gate_argv)")"
+if [ -n "$mutated_budget" ]; then
+  bad "the gate still hands \`go test\` -timeout $mutated_budget after the mutation — the case would have reported a false green"
+else
   sel_rc=0
   ./scripts/preflight_test.sh >"$LOG" 2>&1 || sel_rc=$?
   fails="$(grep -E '^  FAIL ' "$LOG")"
