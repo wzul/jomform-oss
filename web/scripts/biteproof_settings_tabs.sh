@@ -28,6 +28,18 @@ restore() {
       cp "/tmp/biteproof-dc06.$(basename "$f").bak" "$f"
     fi
   done
+  # THE BUILD TOO, NOT ONLY THE SOURCES (card t_22b560cb). Three of the four cases mutate
+  # a SOURCE file and then rebuild, so the served bundle matches the mutation. An
+  # interrupt (or a `kill`) between the rebuild and the next case left the SABOTAGED
+  # build on disk: `git status` is clean, every source hash matches, and yet the running
+  # app is the mutated one — the next run measures it, and a lane that only checks the
+  # tree concludes the tree is fine. Restoring the sources without rebuilding is a
+  # half-restore that reads as a full one.
+  #
+  # `rebuild` may not exist yet when the trap fires on an early exit, so this checks.
+  if declare -F rebuild >/dev/null 2>&1; then
+    rebuild >/dev/null 2>&1 || echo "   WARNING: could not rebuild after restore — .next may still be a sabotage build" >&2
+  fi
 }
 trap restore EXIT
 

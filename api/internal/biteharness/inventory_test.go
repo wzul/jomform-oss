@@ -135,6 +135,18 @@ func isHarness(name string) bool {
 	if strings.HasSuffix(name, "_test.go") {
 		return false
 	}
+	// A COMPILED python artefact is not a harness, and counting one is a false red
+	// (card t_65a6f9dd). Running any api/scripts/biteproof_*.py WRITES
+	// `api/scripts/__pycache__/biteproof_x.cpython-3xx.pyc`, whose basename still contains
+	// "bite" — so the next `go test ./internal/biteharness/` reported an unregistered
+	// harness named after a build artefact, and the only way to clear it was to delete a
+	// directory the run had just created. The naming rule is about SOURCE harnesses; a
+	// .pyc is output. (The harnesses themselves now also set sys.dont_write_bytecode, which
+	// is the other half of the same fix — this side makes the walk robust to any tool that
+	// compiles python under the tree.)
+	if strings.HasSuffix(name, ".pyc") || strings.HasSuffix(name, ".pyo") {
+		return false
+	}
 	if strings.EqualFold(name, inventoryFile) {
 		return false
 	}
