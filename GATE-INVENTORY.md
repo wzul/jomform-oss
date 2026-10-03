@@ -11,8 +11,10 @@ approval channel, so its write is **refused** and the card blocks. That is not a
 theoretical failure — `t_59df76bb` (dev) blocked on exactly this, and the same
 class of edit has been attempted repeatedly (`t_7f89fdf4`, `t_14d9456f`,
 `t_fe89f2f6`, `t_a170e5de`, `t_0060e4f0`). Every gate-table update therefore
-became a human-only edit, which is why the table lagged the runner by **five**
-gates at one point and still lagged by two.
+became a human-only edit, which is why the table fell **five** gates behind the
+runner at one point. It is level again (measured 2026-10-03: 17 rows for 17 gates
+from `scripts/preflight.sh --list`), and the `selftest` gate compares the two so it
+cannot drift silently — but the history is why the table lives here.
 
 The RULE stays in `AGENTS.md`. The DATA the guard parses lives here, where agents
 can update it. This is the same split `MCP-PARITY.md` uses, for the same reason.

@@ -108,7 +108,9 @@ Then add the cron entry (this is the only scheduled job for this purpose):
 17 2 * * * /usr/local/bin/jomform-backup.sh >> /var/log/jomform-backup.log 2>&1
 ```
 
-Nightly at 02:17 UTC, off the top of the hour so it is not competing with other
+Nightly at 02:17 **host local time** (the agent host is Europe/Berlin — CEST/UTC+2 —
+so this is 00:17 UTC in summer and 01:17 UTC in winter; the timer is a systemd unit on
+that host and reads its local clock, not UTC). Off the top of the hour so it is not competing with other
 scheduled work on the host.
 
 The job appends to `/var/log/jomform-backup.log` on its own, so the log must

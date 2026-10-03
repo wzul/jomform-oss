@@ -250,20 +250,6 @@ guard report a `<code>` 180 lines away as the ancestor of unrelated spans.
 > `<label>` from an associated one, which is how three unnamed selects passed a
 > 7/7 mutation proof.
 >
-> The rest of the panel — the `input`/`textarea` names, the contrast tokens, the
-> ⋯ menu, the choices editor (`src/app/builder/page.tsx`, guarded separately by
-> its own card) — is still NOT covered by the gate. Keep running the signed-in
-> scan above for those.
->
-> **One canvas exception, added with the AA fix.** The canvas price spans (the
-> product block's price and the `total` row) ARE in the gate now, via
-> `web/e2e/builder-canvas-price-contrast.spec.ts` — a browser MEASUREMENT of the
-> contrast ratio rather than a class check, because the failing margin is 0.008
-> (`#5e6ad2` on slate-50 is 4.492:1 where the floor is 4.5, and the same colour
-> on white is 4.700:1). Reach for that shape for a tinted surface the source
-> rules cannot judge: a source rule can see the class list but not the composited
-> colour under a translucent tint, and it cannot measure a margin this small.
-> The panel itself is still outside the gate.
 
 ## Manual screen-reader checklist
 
