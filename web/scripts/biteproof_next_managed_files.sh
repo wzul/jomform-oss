@@ -81,11 +81,32 @@ present_before="no"
 
 run_case() {
   local name="$1" expect_line="$2"
-  local out
-  out=$(npm run test:unit 2>&1)
-  # Herestring, not `printf | grep -q`: with `set -o pipefail` a reader that
-  # exits at the first match can kill the writer with SIGPIPE (141) and report
-  # a MATCH as a failure — load-dependent, and it would look like "not detected".
+  local out rc
+  out=$(npm run test:unit 2>&1); rc=$?
+  # FIRST: did the suite RUN at all? (card t_05d31dbd)
+  #
+  # `test:unit` starts with web/scripts/web-deps-check.mjs, which REFUSES in a tree
+  # that has no web/node_modules — the normal state of a fresh worktree. When it
+  # refuses there is no test result to read, so "no `✖ failing tests`" is the
+  # ABSENCE of a signal, not a green run. Reporting that as "MUTATION NOT DETECTED"
+  # tells a future worker the guard does not bite, when the truth is that nothing
+  # was proven. The exit stays non-zero either way (it fails closed already), so the
+  # defect is the DIAGNOSIS: it sends the reader to the guard instead of the install.
+  #
+  # The marker is `ℹ tests` (node:test's own summary line), present on every real
+  # run and absent on a refusal; the deps-check's own message is looked for too, so
+  # the REFUSED line can name the missing install rather than guess at it.
+  if ! grep -q "ℹ tests" <<<"$out"; then
+    echo "REFUSED $name  *** the suite could not run, so this case proves NOTHING ***"
+    if grep -qi "node_modules" <<<"$out"; then
+      echo "        the web tree is not installed — run: cd web && npm ci"
+    else
+      echo "        no 'ℹ tests' summary in the output, so no test result exists to judge (rc=$rc)"
+    fi
+    grep -iE "node_modules|missing|refus" <<<"$out" | sed -n '1,4p' | sed 's/^/        /'
+    fail=1
+    return
+  fi
   if grep -q "✖ failing tests" <<<"$out"; then
     if grep -q "$expect_line" <<<"$out"; then
       echo "BITES  $name  (guard failed as required, naming: $expect_line)"
