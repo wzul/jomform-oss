@@ -344,27 +344,72 @@ func requireUserID(t *testing.T, h *AuthHandlers, email string) string {
 // times (enable, then each login) therefore keep working, and a test can no
 // longer accidentally assert "the same code works twice", which is the bug #528
 // fixed.
+//
+// THE STEP ORDER IS FIXED AT ASCENDING, and that is a constraint, not a
+// preference: `ConsumeTOTPStep` advances `users.totp_last_step` with the
+// predicate `totp_last_step < $2` (api/internal/dbstore/user.go:143), so a code
+// whose step is not greater than the last consumed one is REFUSED as a replay.
+// Handing out {base, base+1, base-1} — longest-lived first, which looks strictly
+// better in isolation — makes the second login fail 401 `login.invalid`
+// (`trust_devices_issue454_test.go`), measured.
+//
+// THE FLAKE IS THEREFORE FIXED BY WAITING OUT THE BOUNDARY, NOT BY REORDERING
+// (card t_e74defb7). The first code handed to a fresh secret has always been
+// `base-1`, whose remaining life is 0..1 steps: generate it microseconds before a
+// 30s boundary and validate microseconds after, and the server's step has
+// advanced, `base-1` has left the ±1 window, and the request gets
+// `{"error":"kod tidak sah"}`. That is the measured red — on an unrelated card,
+// 0.55s in:
+//
+//	--- FAIL: TestMagicFlagSurvives2FAEnableRotation (0.55s)
+//	    auth_stepup_issue458_test.go:552: enable 2FA status = 401 body={"error":"kod tidak sah"}
+//
+// and it is why the test passes 12/12 in isolation and reds occasionally inside a
+// package run. Waiting until the clock is at least `totpBoundaryMargin` seconds
+// into the current step before generating the FIRST code makes all three offsets
+// (base-1, base, base+1) live at least that long, so no generation can race the
+// boundary. It costs the wait once per secret — usually nothing, since a step is
+// 30s — and the flake it removes used to cost a whole package run.
 func mustTOTP(secret string) string {
 	totpStepAlloc.Lock()
-	base := time.Now().Unix() / totpTestPeriod
-	// The validator accepts the current step ±1, so three distinct codes are
-	// available per secret per window: base-1, base, base+1. Hand them out in
-	// that order.
-	floor := base - 1
-	step := totpStepAlloc.used[secret]
-	if step < floor {
-		step = floor
-	} else {
-		step++
-	}
-	totpStepAlloc.used[secret] = step
+	first := totpStepAlloc.used[secret] == 0
 	totpStepAlloc.Unlock()
 
-	if step > base+1 {
+	if first {
+		waitOutStepBoundary()
+	}
+
+	totpStepAlloc.Lock()
+	base := time.Now().Unix() / totpTestPeriod
+	// Ascending, and it must stay ascending: see the ConsumeTOTPStep note above.
+	window := [3]int64{base - 1, base, base + 1}
+	idx := totpStepAlloc.used[secret]
+	totpStepAlloc.used[secret] = idx + 1
+	totpStepAlloc.Unlock()
+
+	if int(idx) >= len(window) {
 		panic("mustTOTP: exhausted the ±1 drift window for this secret; " +
 			"a real authenticator cannot supply another valid code yet")
 	}
-	return totpCodeAtStep(secret, step)
+	return totpCodeAtStep(secret, window[idx])
+}
+
+// totpBoundaryMargin is how far into a step the FIRST code of a secret may be
+// generated. It must be comfortably less than the period (30s) — it delays a
+// test only when it happens to start just before a boundary.
+const totpBoundaryMargin = 3
+
+// waitOutStepBoundary blocks until the current TOTP step has at least
+// totpBoundaryMargin seconds left in it, so a code generated now cannot be
+// validated after the step has advanced. It is a no-op in the common case.
+func waitOutStepBoundary() {
+	for {
+		now := time.Now().Unix()
+		if now%totpTestPeriod <= totpTestPeriod-totpBoundaryMargin {
+			return
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
 }
 
 // _resetTrust forces a password reset to invalidate the user's trust cookies.
