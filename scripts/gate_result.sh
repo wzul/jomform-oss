@@ -499,6 +499,62 @@ gr_verdict() {
 # under the CURRENT environment fingerprint, inside the TTL, in a format this
 # reader understands. It says nothing about pass/fail: that is gr_verdict's job.
 # Split out so the partial branch does not have to pattern-match a message.
+#
+# gr_key_diff_hint <record-file> — name the components that DIFFER between a record's
+# key and the current one, and say what to do about it (card t_dbaccdfa).
+#
+# WHY THIS EXISTS. The refusal above was correct but unactionable. Measured on this
+# host: `bash scripts/preflight_reuse.sh` with no environment file sourced prints
+#
+#   no reusable record for tree f600c45 — gating: the environment changed ...
+#   testdb=unset;extra=140b...
+#
+# while the SAME tree, same bytes, with `/root/.config/jomform/test-env.sh` sourced
+# reads REUSED. Nothing is broken: `preflight.sh` deliberately does NOT source the
+# env file (so the runner and this reader compute the same key from the caller's own
+# environment — see its pre-lock comment), the fingerprint includes the test database,
+# and with `JOMFORM_TEST_DATABASE_URL` unset the integration tests really are a
+# different observation. Measured: `go test ./internal/testdb/` RUNs 28 cases with the
+# DSN unset (14 SKIP, "JOMFORM_TEST_DATABASE_URL not set; skipping integration test")
+# and 52 with it set. So the refusal must stay.
+#
+# What was missing is the operator's NEXT MOVE. `testdb=unset` against a record that
+# carries `testdb=loopback:5432/jomform_test` IS the difference, and reading it out of
+# two 70-character fingerprint strings is a scavenger hunt at the end of a gate the
+# caller may have waited an hour to not-run. The hint names the differing components
+# and, when the current one is `unset`, prints the exact command that makes the record
+# reusable. It never reuses anything: a changed fingerprint is still refused, only the
+# refusal is now actionable.
+gr_key_diff_hint() {
+  local file="$1"
+  local rec cur rd cd
+  rec="$(gr_read_field "$file" key_parts)"
+  cur="$(gr_key_parts "${PREFLIGHT_REUSE_REPO:-$PWD}")"
+  [ -n "$rec" ] || return 0
+  declare -A _seen=()
+  local name
+  # key_parts is `name=value` joined by `;`, so split on BOTH `;` and whitespace —
+  # splitting on whitespace alone puts the whole string in one "component" (measured).
+  local IFS='; '
+  local pair
+  for pair in $rec; do [ -n "$pair" ] && _seen["${pair%%=*}"]="${pair#*=}"; done
+  for pair in $cur; do
+    [ -n "$pair" ] || continue
+    name="${pair%%=*}"; cd="${pair#*=}"
+    rd="${_seen[$name]-<absent in the record>}"
+    if [ "$rd" != "$cd" ]; then
+      printf '  component %s DIFFERS: recorded [%s] vs now [%s]\n' "$name" "$rd" "$cd" >&2
+      if [ "$cd" = "unset" ]; then
+        printf '    -> the record was written with a real test database; this shell has none.\n' >&2
+        printf '       Re-run after: source ${JOMFORM_ENV:-$HOME/.config/jomform/test-env.sh}\n' >&2
+      fi
+    fi
+    unset "_seen[$name]"
+  done
+  for name in "${!_seen[@]}"; do
+    printf '  component %s is in the record but NOT in this shell: recorded [%s]\n' "$name" "${_seen[$name]}" >&2
+  done
+}
 gr_record_usable() {
   local tree="$1"
   local file; file="$(gr_file "$tree")"
@@ -510,7 +566,7 @@ gr_record_usable() {
     || { echo "record $file names tree [$rec_tree], not [$tree] — refusing" >&2; return 3; }
   local rec_key cur_key; rec_key="$(gr_read_field "$file" key)"; cur_key="$(gr_key "${PREFLIGHT_REUSE_REPO:-$PWD}")"
   [ -n "$rec_key" ] && [ "$rec_key" = "$cur_key" ] \
-    || { echo "the environment changed since that record (recorded key [${rec_key:-none}] != current [$cur_key]: $(gr_key_parts "${PREFLIGHT_REUSE_REPO:-$PWD}"))" >&2; return 3; }
+    || { echo "the environment changed since that record (recorded key [${rec_key:-none}] != current [$cur_key]: $(gr_key_parts "${PREFLIGHT_REUSE_REPO:-$PWD}"))" >&2; gr_key_diff_hint "$file"; return 3; }
   local fin fin_s now_s ttl
   fin="$(gr_read_field "$file" finished_at)"; ttl="$(gr_ttl)"
   fin_s="$(date -d "$fin" +%s 2>/dev/null)"
