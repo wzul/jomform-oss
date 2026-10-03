@@ -5,7 +5,7 @@
 // form: General (title/slug/status/theme/logo/embed), Confirmation
 // (success/failure redirects), Restrictions (schedule + entry limit),
 // Notifications (per-form receipt email, reusing the #107 pattern) and the
-// per-form CHIP feed (mirroring chip-for-gravity-forms). Sales/analytics
+// per-form CHIP feed. Sales/analytics
 // live on the Sales page (#126), not here and not in the builder.
 
 import { Suspense, useCallback, useEffect, useState } from "react";
