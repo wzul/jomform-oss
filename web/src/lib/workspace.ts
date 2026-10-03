@@ -78,6 +78,39 @@ export function workspaceQuery(): string {
   return sp ? `?workspace=${encodeURIComponent(sp)}` : "";
 }
 
+// workspaceUrl — append the workspace scope to a URL that may ALREADY carry a query
+// string (card t_4010be39).
+//
+// WHY THIS EXISTS. `workspaceQuery()` opens with `?` because most call sites are a bare
+// path (`/api/rest/forms${workspaceQuery()}`). Two sites instead build a query of their
+// own and concatenate the scope after it:
+//
+//     /api/rest/products?include_archived=1${workspaceQuery()}
+//     /api/rest/media?limit=100${workspaceQuery()}
+//
+// which produces TWO `?` in one URL. The Go side reads `r.URL.Query()`, and everything
+// after the second `?` is part of the FIRST parameter's value — measured against a real
+// server:
+//
+//     RequestURI="/v1/rest/products?include_archived=1?workspace=ws-a"
+//         include_archived="1?workspace=ws-a"   workspace=""   <-- scope DROPPED
+//
+// The scope then silently falls back to the caller's FIRST owned account, so the page
+// serves a DIFFERENT workspace than the one the merchant selected, with no error and no
+// wrong-looking data. That is the worst shape a tenancy bug can take.
+//
+// The fix is a helper rather than two `&` edits, because the failure mode is a property
+// of string concatenation and will be reintroduced by the next query a call site adds.
+// `sep` is what the URL actually needs: `&` when it already has a query, `?` when it
+// does not, "" when there is no scope to add. `url` is whatever the caller already had
+// (a path plus optional query), so this reads the same at every call site.
+export function workspaceUrl(url: string): string {
+  const sp = confirmedScope ?? workspaceScope();
+  if (!sp) return url;
+  const sep = url.includes("?") ? "&" : "?";
+  return `${url}${sep}workspace=${encodeURIComponent(sp)}`;
+}
+
 // ── The CONFIRMED scope (card t_da4b2031) ────────────────────────────────────
 //
 // `null` means "the session has not answered yet": workspaceQuery falls back to

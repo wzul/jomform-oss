@@ -7,7 +7,7 @@ import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDate } from "../../lib/formatDate";
-import { workspaceQuery } from "../../lib/workspace";
+import { workspaceQuery, workspaceUrl } from "../../lib/workspace";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 import { apiErr, translateApiErr } from "../../lib/apiErr";
 
@@ -110,7 +110,7 @@ export default function Products() {
     // /login, anything else → a visible message. Never empty-as-error.
     const r = await runLoad(
       async () => {
-        const d = await fetchJson<unknown>(`/api/rest/products?include_archived=1${workspaceQuery()}`);
+        const d = await fetchJson<unknown>(workspaceUrl("/api/rest/products?include_archived=1"));
         return Array.isArray(d) ? (d as Product[]) : [];
       },
       { onUnauth: goToLogin, message: t("prod.loadFailList"), errorKey: (b: unknown) => translateApiErr(b, t) },
