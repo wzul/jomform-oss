@@ -740,7 +740,22 @@ func claimExcused(ex claimExemption, raw string, line, off int, needle string) b
 	if line < 1 || line > len(lines) {
 		return false
 	}
-	text := lines[line-1]
+	// THE OFFSET IS A FOLDED OFFSET, so the quotation test must read a FOLDED line.
+	//
+	// Both passes search a case-folded haystack and hand the folded offset here. Go's
+	// simple case mapping is NOT length-preserving for every rune: `\u0130` folds to a
+	// SHORTER string, so a folded offset points EARLIER than the same position in the
+	// raw line by one byte per such rune. Testing the raw line with it can land a match
+	// INSIDE a quoted span that does not contain it, so a live unquoted claim after a
+	// quotation is EXCUSED. Measured, before this fix: on
+	// `// \u0130\u0130\u0130 "no MCP tool in front of it" only a person can ever purge`,
+	// the live `only a person can ever purge` was not reported at all, though the header
+	// states "a match is excused only when that occurrence sits INSIDE DOUBLE QUOTES on
+	// its line" (card t_89c4d70b). Folding here keeps the offset in the coordinates it
+	// was computed in; doubleQuotedSpan only looks for `"`, whose folded positions are
+	// unchanged, so the rule it applies is the same — and the raw line is still kept for
+	// failure MESSAGES, which need the reader's text rather than the folded form.
+	text := strings.ToLower(lines[line-1])
 	if off < 0 || off >= len(text) {
 		return false
 	}
@@ -1133,4 +1148,52 @@ func readRepoFile(t *testing.T, root, rel string) string {
 		t.Fatalf("read %s: %v — this guard cannot check a file it cannot read", rel, err)
 	}
 	return string(raw)
+}
+
+// TestClaimExcusedUsesFoldedOffsets pins the coordinate system of the quotation rule
+// (card t_89c4d70b).
+//
+// Both scan passes search a case-folded haystack and hand the folded offset to
+// claimExcused. Go's simple case mapping is NOT length-preserving for every rune —
+// `\u0130` folds to a SHORTER string — so a folded offset points EARLIER than the same
+// position in the raw line. With the quotation test reading the RAW line, the live
+// unquoted claim sitting just after a quotation landed INSIDE the quoted span and was
+// excused: the header promises "a match is excused only when that occurrence sits
+// INSIDE DOUBLE QUOTES on its line" and the code did not hold it. Measured before the
+// fix, the three-rune case below reported ZERO hits; after it, the live claim is
+// reported and the quoted one still is not.
+func TestClaimExcusedUsesFoldedOffsets(t *testing.T) {
+	const rel = "api/internal/httpapi/rest_workspaces.go"
+
+	// One folded offset per \u0130, so the shift has to be absorbed for the live claim
+	// to be seen. The quoted, DECLARED wording is excused; the unquoted one is not.
+	text := "// \u0130\u0130\u0130 \"no MCP tool in front of it\" only a person can ever purge\n"
+	hits := scanText(rel, text)
+
+	var quoted, live int
+	for _, h := range hits {
+		switch h.needle {
+		case "no MCP tool in front of it":
+			quoted++
+		case "only a person can ever purge":
+			live++
+		}
+	}
+	if quoted != 0 {
+		t.Errorf("the quoted, declared wording was reported %d time(s) — a quotation is what lets this file print it", quoted)
+	}
+	if live == 0 {
+		t.Errorf("the LIVE unquoted claim was NOT reported: the folded offset shifted onto the quotation and excused it. "+
+			"claimExcused must read the folded line, in the coordinates the offset was computed in. Text: %q", text)
+	}
+
+	// The rule must still hold on a plain line: quoting is what excuses, nothing else.
+	plain := "// only a person can ever purge\n"
+	if len(scanText(rel, plain)) == 0 {
+		t.Errorf("an unquoted claim on a plain line must be reported")
+	}
+	quotedOnly := "// \"only a person can ever purge\" is not what this repo enforces\n"
+	if n := len(scanText(rel, quotedOnly)); n != 0 {
+		t.Errorf("a quoted, declared claim must be excused, got %d hit(s)", n)
+	}
 }
