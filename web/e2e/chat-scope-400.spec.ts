@@ -213,11 +213,32 @@ async function confirmWithoutScope(page: Page, baseURL: string | undefined, drop
   await page.goto(`${baseURL}/chat`, { waitUntil: "domcontentloaded" });
 
   const box = page.locator("#chat-input");
+  // ENABLED, not merely VISIBLE (card t_4221975d). The composer renders disabled
+  // until the availability probe answers (`page.tsx:435`:
+  // `const disabled = sending || available === false;`), and BOTH `fill` and
+  // `click` wait for the element to become editable — so the FIRST interaction
+  // issued before then is retried until the whole 60s test timeout is gone and
+  // reported as `element is not enabled` / `locator.fill: Test timeout of 60000ms
+  // exceeded`, with nothing saying the PROBE is the subject. Measured on the real
+  // spec with the availability stub stubbed away from `available:true`: the
+  // composer's own `fill` burned the full 60s (`locator.fill: Test timeout of
+  // 60000ms exceeded`, 63s wall). Asserting the state first makes that failure say
+  // what it is, and costs one wait instead of a whole test.
   await expect(box, "the composer must be offered when the assistant is available").toBeVisible({
     timeout: 15_000,
   });
+  await expect(
+    box,
+    "the composer must be ENABLED when the assistant is available — it starts disabled until " +
+      "the availability probe lands, so interacting before that waits out the whole test timeout",
+  ).toBeEnabled({ timeout: 20_000 });
   await box.fill("rename my product");
-  await page.getByRole("button", { name: EN.send }).click();
+  const send = page.getByRole("button", { name: EN.send });
+  await expect(
+    send,
+    "the Send button must be ENABLED before it is clicked — it shares the composer's disabled flag",
+  ).toBeEnabled({ timeout: 20_000 });
+  await send.click();
 
   const card = page.locator('[class*="border-sky-200"]').filter({ hasText: PROPOSAL.title });
   await expect(card, "the proposal card must render — otherwise this test is vacuous").toHaveCount(1);
