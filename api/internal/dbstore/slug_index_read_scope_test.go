@@ -17,6 +17,15 @@
 //     Opening relations by OID across the whole database is what made this test
 //     die with `could not open relation with OID <n> (SQLSTATE XX000)` when a
 //     peer connection invalidated one of those OIDs underneath it.
+//
+//     RUNNING THE SUITE CONCURRENTLY IS THE CONDITION IN WHICH THE CONTROL FLAKES
+//     (card t_74cea476): measured once in five full preflights against the shared
+//     gate database with other lanes active, and never in isolation. The control
+//     (the OLD shape, kept on purpose) is therefore retried and, if it still
+//     cannot execute, REPORTED as not-run instead of failing the gate with a red
+//     that says nothing about the behaviour under test. The shipped read's
+//     assertion is unaffected and stays fatal.
+//
 //  2. It reads other lanes' rows, so the assertion is about the shared database
 //     rather than about this package's own schema.
 //
@@ -29,10 +38,12 @@ package dbstore
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // wholeDatabaseSlugIndexProbe is the OLD shape, kept here only as a positive
@@ -128,13 +139,66 @@ func TestSlugIndexReadIsSchemaScoped(t *testing.T) {
 		t.Fatalf("index the decoy: %v", err)
 	}
 
+	// THE CONTROL MAY NOT FAIL MERELY BECAUSE A PEER LANE EXISTED (card t_74cea476).
+	//
+	// `wholeDatabaseSlugIndexProbe` is the OLD shape, kept deliberately so this
+	// guard can prove it still tells the two shapes apart. That shape OID-opens
+	// every `forms` index in the database, so a peer connection doing DDL against
+	// the shared gate database can invalidate one of those OIDs underneath it and
+	// the control (not the assertion the test exists for) dies with
+	// `could not open relation with OID <n> (SQLSTATE XX000)`. Measured once in
+	// five full preflights under load, and never in isolation — so the red said
+	// nothing about the behaviour under test while costing a lane a full run.
+	//
+	// Retry inside a SAVEPOINT, because an error aborts the transaction it happens
+	// in and the decoy lives in that transaction: a plain retry would fail with
+	// "current transaction is aborted" and read as a second, unrelated fault.
+	// If it STILL cannot execute, the control is REPORTED as not-run rather than
+	// treated as evidence either way, and it is not counted as proof that the
+	// probe sweeps. The shipped read's assertion below stays fatal regardless —
+	// that is the half this test exists for.
 	var wholeDB int
-	if err := tx.QueryRow(ctx, wholeDatabaseSlugIndexProbe).Scan(&wholeDB); err != nil {
-		t.Fatalf("control probe: %v", err)
+	controlRan := false
+	var lastErr error
+	for attempt := 0; attempt < 3 && !controlRan; attempt++ {
+		if _, err := tx.Exec(ctx, "SAVEPOINT control_probe"); err != nil {
+			lastErr = err
+			break
+		}
+		err := tx.QueryRow(ctx, wholeDatabaseSlugIndexProbe).Scan(&wholeDB)
+		if err == nil {
+			controlRan = true
+			if _, rerr := tx.Exec(ctx, "RELEASE SAVEPOINT control_probe"); rerr != nil {
+				t.Fatalf("release savepoint: %v", rerr)
+			}
+			break
+		}
+		lastErr = err
+		// A SYNTAX/SCHEMA ERROR IS A BUG IN THE PROBE, NOT AN ENVIRONMENTAL FLAKE,
+		// and must stay fatal: reporting a typo'd probe as "could not execute"
+		// would hide a control that no longer means anything. Class 42 is the
+		// syntax-error / undefined-table / undefined-column family.
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && strings.HasPrefix(pgErr.Code, "42") {
+			t.Fatalf("the control probe is itself broken (SQLSTATE %s: %s) — this is not the "+
+				"concurrent-lane flake; fix the probe", pgErr.Code, pgErr.Message)
+		}
+		// Undo the aborted state so the NEXT attempt (and the shipped read below)
+		// can execute.
+		if _, rerr := tx.Exec(ctx, "ROLLBACK TO SAVEPOINT control_probe"); rerr != nil {
+			t.Fatalf("roll back to savepoint after a control-probe failure (%v): %v", err, rerr)
+		}
 	}
-	if wholeDB < 2 {
+	if !controlRan {
+		t.Logf("control probe could not execute (last error: %v) — a concurrent lane's DDL "+
+			"invalidates the OIDs the whole-database probe OID-opens. This is REPORTED, not "+
+			"treated as a pass or a failure of the code under test: the probe is the OLD shape "+
+			"kept only as a control, and its inability to run is not evidence either way. The "+
+			"shipped read is still asserted below.", lastErr)
+	} else if wholeDB < 2 {
 		t.Fatalf("control: the whole-database probe saw %d matching index(es) with a decoy "+
-			"planted, so it is not sweeping the database and this guard would pass vacuously", wholeDB)
+			"planted, so it is not sweeping the database and this guard would pass vacuously "+
+			"(this is a REAL control failure, not the XX000 flake — it ran)", wholeDB)
 	}
 
 	var got int
