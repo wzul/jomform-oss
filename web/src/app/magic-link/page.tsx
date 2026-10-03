@@ -6,17 +6,21 @@ import Link from "next/link";
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useI18n } from "../../components/i18n";
+import { apiErr } from "../../lib/apiErr";
 import { resolvePostLogin } from "../../lib/postLogin";
 
 function MagicLinkForm() {
   const { t } = useI18n();
   const search = useSearchParams();
   const token = search.get("token") || "";
-  const [state, setState] = useState<"loading" | "invalid">("loading");
+  // The failure MESSAGE, not a flag: the page has to be able to say WHICH failure
+  // it met (card t_9ed9bc2c — a flag answers every code with one generic sentence,
+  // which made `magicLink.tokenMissing` unreachable). `""` means "still working".
+  const [error, setError] = useState("");
 
   useEffect(() => {
     if (!token) {
-      setState("invalid");
+      setError(t("magic.invalid"));
       return;
     }
     let cancelled = false;
@@ -44,15 +48,32 @@ function MagicLinkForm() {
           window.location.href = await resolvePostLogin("");
           return;
         }
-        setState("invalid");
+        // ROUTE THE FAILURE THROUGH THE BODY (card t_9ed9bc2c). The page used to
+        // answer every non-2xx with one generic sentence and never read the
+        // response, so `magicLink.tokenMissing` — and its mapping and dictionary
+        // entry — could not be rendered by any surface at all: the code was
+        // UNREACHABLE. Measured in a browser with the endpoint stubbed to answer
+        // `{"code":"magicLink.tokenMissing",…}`, the page rendered the same sentence
+        // the unknown-code control did, while /reset-password (same protocol) DID
+        // render its own `reset.tokenMissing` sentence. Same shape as
+        // /reset-password: read the body, fall back to this surface's own sentence
+        // for an unknown code, and let the code decide when it is one we know.
+        //
+        // The fallback is `magic.invalid`, so the generic reading is unchanged for
+        // anything the dictionary does not name.
+        const d = await r.json().catch(() => ({}));
+        setError(apiErr(d, t("magic.invalid"), t));
       } catch {
-        if (!cancelled) setState("invalid");
+        if (!cancelled) setError(t("magic.invalid"));
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [token]);
+    // `t` is a stable function from the i18n context, and `token` is the only
+    // input: adding anything unstable here would re-run the POST (the
+    // duplicate-POST lesson on connect/page.tsx:69, card t_160dc5cd).
+  }, [token, t]);
 
   return (
     <div className="relative w-full max-w-sm">
@@ -64,10 +85,10 @@ function MagicLinkForm() {
       </div>
 
       <div className="rounded-xl border border-[var(--jf-border)] bg-white p-6 shadow-[0_0_0_1px_rgba(0,0,0,0.2),0_8px_24px_rgba(0,0,0,0.4)]">
-        {state === "invalid" ? (
+        {error ? (
           <div className="space-y-3">
             <p className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-3 text-[13px] text-red-700">
-              {t("magic.invalid")}
+              {error}
             </p>
             <Link
               href="/login"
