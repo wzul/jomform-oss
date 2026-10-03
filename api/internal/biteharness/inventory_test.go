@@ -38,10 +38,13 @@ package biteharness
 //  4. The table is non-empty and every row is a full row. A guard that reads
 //     nothing proves nothing — an emptied table would otherwise pass vacuously.
 //
-// THE NAMING CONVENTION IS LOAD-BEARING AND IS STATED IN THE DOC: a harness is
-// a file whose BASENAME contains "bite" (case-insensitive), excluding Go test
-// files and the inventory file itself. Directory names never trigger it, which
-// is why this package can be called `biteharness` without matching itself.
+// THE NAMING CONVENTION IS LOAD-BEARING, AND BITE-HARNESSES.md STATES IT under
+// "Adding a harness" — that sentence is the one card t_e6c6d214 added, because this
+// comment used to claim the doc stated it while the doc did not, so the rule the gate
+// enforces was discoverable only by reading THIS file. The rule: a harness is a file
+// whose BASENAME contains "bite" (case-insensitive), excluding Go test files and the
+// inventory file itself. Directory names never trigger it, which is why this package can
+// be called `biteharness` without matching itself.
 //
 // SCOPE LIMITS, stated so this guard is not over-claimed: it proves the
 // inventory is complete and its files exist. It does NOT prove any harness

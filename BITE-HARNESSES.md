@@ -461,8 +461,19 @@ their own: a bite proof that was not re-run is a *gap in evidence*, not a red ga
 
 ## Adding a harness
 
-Add the file, add its row here in the same change, and name the guard it backs —
-the `api test` gate refuses a `*bite*` file with no row (`api/internal/biteharness`),
+**THE NAMING RULE, stated here because the guard enforces it (card t_e6c6d214).** A
+harness is a file whose **basename contains `bite`** (case-insensitive), excluding Go
+`_test.go` files and the inventory file itself. Directory names never trigger it, which is
+why the guard can live in a package called `biteharness` without matching itself.
+
+That rule is load-bearing in the strict direction: **any** tracked file whose basename
+contains `bite` must have a row here, or the `api test` gate fails by name. So a plain
+helper called `bite_util.py` reds the build even though it is not a harness — either give
+it a row and say what it backs, or name it something that does not claim to be one. The
+reverse direction is checked too: a row whose file is gone fails.
+
+Add the file, add its row here in the same change, and name the guard it backs — the
+`api test` gate refuses a `*bite*` file with no row (`api/internal/biteharness`),
 and a row whose file is gone. Do not add a row for anything that is not a runnable
 bite harness, and do not wire one as a gate without also correcting its row here:
 `GATE-INVENTORY.md` is the list of what a green run executed, and this file is the
