@@ -243,6 +243,13 @@ var proposalDocs = map[string]proposalDoc{
 		title:   "Kemas kini gaya borang",
 		summary: "Gaya dan branding borang akan ditukar. Kandungan borang, harga dan tetapan lain tidak berubah.",
 	},
+	// t_804040be (Wan's C): the assistant may CREATE a form. The summary says which
+	// half is happening, because the same tool both creates and updates and a user
+	// confirming "kemas kini" when a NEW form is about to appear has been misled.
+	"upsert_form": {
+		title:   "Cipta atau kemas kini borang",
+		summary: "Borang baharu akan DICIPTA (atau yang sedia ada dikemas kini, jika id diberi). Tiada apa-apa dihapuskan, dan borang yang tersilap boleh dihantar ke tong sampah dan dipulihkan.",
+	},
 }
 
 // ProposalTitle returns the card's title and summary for a tool.
@@ -259,6 +266,50 @@ var describeFns = map[string]func(map[string]any, Labeler) []ProposalField{
 	"update_product":           describeProductUpdate,
 	"update_product_variation": describeVariationUpdate,
 	"set_form_theme":           describeFormTheme,
+	"upsert_form":              describeFormCreation,
+}
+
+// describeFormCreation renders the card for t_804040be's creation.
+//
+// It shows what the form will BE — the title, the address — and says plainly when
+// the id is empty that this CREATES rather than renames something. A card that
+// listed only a title would leave the user unable to tell a creation from a rename
+// of an existing form, which is the difference the confirmation is FOR.
+func describeFormCreation(args map[string]any, label Labeler) []ProposalField {
+	var fields []ProposalField
+	if id := asString(args["form_id"]); id != "" {
+		fields = append(fields, ProposalField{Label: "Borang", Value: named(label, "form", id)})
+	} else {
+		fields = append(fields, ProposalField{Label: "Tindakan", Value: "Cipta borang baharu"})
+	}
+	if title := asString(args["title"]); title != "" {
+		fields = append(fields, ProposalField{Label: "Tajuk", Value: renderValue(title)})
+	}
+	if slug := asString(args["slug"]); slug != "" {
+		fields = append(fields, ProposalField{Label: "Slug (URL)", Value: renderValue(slug)})
+	}
+	// The rest of the arguments are stated by COUNT rather than by value: config and
+	// theme are nested maps whose contents are the form's whole body, and dumping
+	// them would bury the two fields the user actually judges. The count is what
+	// tells them the card is not hiding an empty submission.
+	for _, key := range []string{"config", "theme", "notifications", "chip_feeds"} {
+		v, ok := args[key]
+		if !ok || v == nil {
+			continue
+		}
+		if m, isMap := v.(map[string]any); isMap {
+			fields = append(fields, ProposalField{
+				Label: key, Value: fmt.Sprintf("%d medan", len(m))})
+			continue
+		}
+		if list, isList := v.([]any); isList {
+			fields = append(fields, ProposalField{
+				Label: key, Value: fmt.Sprintf("%d item", len(list))})
+			continue
+		}
+		fields = append(fields, ProposalField{Label: key, Value: renderValue(v)})
+	}
+	return fields
 }
 
 // Describe renders a proposal card's human wording FROM THE TOOL AND ARGUMENTS

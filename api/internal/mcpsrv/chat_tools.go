@@ -91,39 +91,72 @@ var chatReadTools = []string{
 }
 
 // chatProposableTools is the set of WRITE tools the model may PROPOSE. Started
-// deliberately small and reversible (issue: phase 2). Each one is a FIELD
-// EDIT on an object the caller already owns, and each is undoable by proposing
-// the opposite edit — there is no new object to clean up and nothing that
-// cannot be put back by the same tool that changed it.
+// deliberately small and reversible (issue: phase 2).
+//
+// MOST are FIELD EDITS on an object the caller already owns, undoable by proposing
+// the opposite edit — there is no new object to clean up and nothing that cannot be
+// put back by the same tool that changed it:
 //
 //	update_product            name/description/price/stock/active/images/…
 //	update_product_variation  the same for one variation
 //	set_form_theme            styling/branding fields on one form
+//
+// ONE is a CREATION, and it is admissible because the bin gives it an inverse:
+//
+//	upsert_form               creates or updates a form (card t_804040be — Wan's C)
+//
+// A creation is the one shape the field-edit rule does not cover, so it needs its
+// own reason rather than an exception. `delete_form` moves a form to the bin and
+// `restore_form` brings it back with its original slug, so a form created by a
+// mistaken confirm is recoverable by the SAME chat that created it; the permanent
+// step (`purge_form`) is human-only and is refused here by predicate. Before that
+// bin existed this tool was excluded for exactly the reason the others still are.
 //
 // WHAT IS EXCLUDED, AND WHY (the classes, not just the names):
 //
 //   - Destroy / archive / revoke / purge (delete_form, archive_product,
 //     revoke_api_key, remove_*): no inverse through any tool the chat can
 //     propose. A wrong confirm must be recoverable.
+//
 //   - Money movement (refund_sale, confirm_sale, capture_sale, release_sale):
 //     moves real money in CHIP, and is not a field edit.
+//
 //   - Cancel / retry (cancel_subscription, retry_subscription): stops or
 //     re-runs a customer's billing; the consequence lands on a third party.
+//
 //   - Credentials and access (create_api_key, revoke_api_key, set_form_password,
 //     invite_workspace_member, update_workspace_member_role, *_cloudflare*,
 //     webhook secrets): the proposal card cannot show a secret's effect, and a
 //     mistaken confirm on an access change locks someone out.
+//
 //   - Email that leaves the building (set_email_settings, set_form_email_settings,
 //     set_form_notifications, reply_feedback): a confirm would send real mail to
 //     real customers, which no chat preview can undo.
+//
 //   - Publication state (publish_form, unpublish_form, set_form_restrictions,
 //     set_workspace_landing_page, set_menu_page): changes what the public can
 //     reach; the dashboard is where the consequence is visible.
+//
 //   - Bulk anything (bulk_products, bulk_forms, capture_all_pending_sales): the
 //     blast radius is the point of the operation and the card cannot show it.
-//   - Create a new object (create_product, create_webhook, upsert_form,
-//     use_template): the chat has no delete, so a mistaken confirm leaves
-//     litter the user must clean up by hand.
+//
+//   - Create a new object with NO ROUTE TO THE BIN (create_product, create_webhook,
+//     use_template): a mistaken confirm leaves litter the user must clean up by
+//     hand, because nothing the chat can reach puts the object in the bin.
+//
+//     THIS EXCLUSION NO LONGER APPLIES TO FORM CREATION, which is why
+//     `upsert_form` is proposable below. Wan's decision (card t_804040be,
+//     verbatim): "Assistant boleh buat sampai masuk ke bin. tapi bukan
+//     permanently delete dlm bin" and "Manusia sahaja boleh purge kekal". The bin
+//     is exactly what the old objection asked for: delete_form moves a form to the
+//     bin, restore_form brings it back with its original slug, and purge_form —
+//     the only permanent step — is human-only and is NOT proposable (it carries a
+//     permanent verb and TestChatNeverProposesAPermanentDelete refuses it by
+//     predicate). So a form created by a mistaken confirm is recoverable by the
+//     SAME chat that created it, and the litter objection does not hold.
+//
+//     The line is drawn at creation: no delete_*, archive_*, refund_* or any
+//     money/destructive tool is added. C is about creation, and only creation.
 //
 // The guard (chat_tools_guard_test.go) asserts this shape: every proposable
 // name is a REGISTERED tool that reaches a write sink and the write-scope gate,
@@ -132,6 +165,7 @@ var chatProposableTools = []string{
 	"update_product",
 	"update_product_variation",
 	"set_form_theme",
+	"upsert_form",
 }
 
 // ChatReadTools returns the chat's read allowlist. A copy, so a caller cannot

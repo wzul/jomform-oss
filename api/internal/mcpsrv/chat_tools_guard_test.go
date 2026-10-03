@@ -274,8 +274,31 @@ func TestChatProposableExcludesTheDestructiveClasses(t *testing.T) {
 		"bulk", "create_", "upsert", "use_template",
 	}
 
+	// LIFTED EXCLUSIONS — a list, not a loophole, and deliberately per-NAME.
+	//
+	// Card t_804040be is the one case where Wan said the exclusion above should be
+	// lifted, verbatim: "Assistant boleh buat sampai masuk ke bin. tapi bukan
+	// permanently delete dlm bin" / "Manusia sahaja boleh purge kekal". That is the
+	// explicit say-so the failure message below demands, and the reason it is safe is
+	// that the bin gives the creation an INVERSE: delete_form bins a form and
+	// restore_form returns it with its original slug, while purge_form — the only
+	// permanent step — stays human-only and is refused by
+	// TestChatNeverProposesAPermanentDelete's predicate.
+	//
+	// The exemption is keyed on the NAME, so it cannot widen by accident: a fragment
+	// stays in the list above and every OTHER name matching it is still refused. An
+	// entry needs the card that lifted it and the reason it is reversible, or the
+	// next reader cannot tell a decision from drift.
+	lifted := map[string]string{
+		"upsert_form": "t_804040be — Wan's C: the assistant may create a form, and the bin " +
+			"(delete_form → restore_form) makes a mistaken confirm recoverable",
+	}
+
 	var bad []string
 	for _, name := range ChatProposableTools() {
+		if _, ok := lifted[name]; ok {
+			continue
+		}
 		for _, frag := range destructive {
 			if strings.Contains(name, frag) {
 				bad = append(bad, name+" (matches "+frag+")")
@@ -289,6 +312,30 @@ func TestChatProposableExcludesTheDestructiveClasses(t *testing.T) {
 			"The phase-2 set is reversible field edits only. If this exclusion is being "+
 			"deliberately lifted, the card says Wan must say so explicitly — do not lift it "+
 			"here.", strings.Join(bad, "\n  "))
+	}
+
+	// Every lifted exclusion must be REVERSIBLE through the chat, or the reason
+	// recorded beside it is not true. The bin is what makes upsert_form admissible,
+	// and it is a claim about the registry, so it is checked against the registry
+	// rather than trusted: both halves of the round trip must exist as registered
+	// tools, and the permanent half must NOT be proposable.
+	for name, why := range lifted {
+		if _, ok := byName[name]; !ok {
+			t.Errorf("lifted exclusion %q is not a REGISTERED tool — the entry is stale, and the "+
+				"reason beside it (%s) cannot be checked", name, why)
+			continue
+		}
+		_, hasDelete := byName["delete_form"]
+		_, hasRestore := byName["restore_form"]
+		if !hasDelete || !hasRestore {
+			t.Errorf("lifted exclusion %q is justified by the bin, but delete_form/restore_form "+
+				"are not both registered — the creation has no inverse and the exemption is "+
+				"no longer sound", name)
+		}
+		if ChatToolIsProposable("purge_form") {
+			t.Errorf("lifted exclusion %q is only sound while purge_form stays UNPROPOSABLE; it "+
+				"is proposable now, so the chat can reach a permanent delete", name)
+		}
 	}
 
 	// And the shape claim: each proposable name should exist as a registered
