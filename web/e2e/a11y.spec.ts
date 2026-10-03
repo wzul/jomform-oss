@@ -59,7 +59,24 @@ const PAGES = [
 
 for (const page of PAGES) {
   test(`axe: ${page.name} has no critical/serious violations`, async ({ page: p }) => {
-    await p.goto(page.path, { waitUntil: "networkidle" });
+    const response = await p.goto(page.path, { waitUntil: "networkidle" });
+
+    // THE PAGE MUST ACTUALLY BE THERE (t_81b2a928). `goto` follows a redirect and
+    // resolves for a 404 too, so without this the scan below reads a Next.js "not
+    // found" page: no landmarks, no headings, no interactive controls — and axe
+    // finds nothing to complain about, so the case PASSES GREEN for a route that
+    // does not exist. A PAGES entry with a typo, or one left behind by a page that
+    // was renamed or removed, would therefore reduce coverage with no red anywhere.
+    // The scan is only evidence for a 2xx document.
+    const status = response?.status() ?? 0;
+    if (status < 200 || status >= 300) {
+      throw new Error(
+        `a11y scan: ${page.name} (${page.path}) answered HTTP ${status || "no response"} — ` +
+          `nothing was scanned. Fix the PAGES entry in web/e2e/a11y.spec.ts, or remove it ` +
+          `if the page is gone; a 404 cannot be read as "no violations".`,
+      );
+    }
+
     const results = await new AxeBuilder({ page: p }).analyze();
 
     const blockers = results.violations.filter((v) =>
