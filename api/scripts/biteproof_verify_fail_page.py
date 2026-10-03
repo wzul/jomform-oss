@@ -117,8 +117,8 @@ MUTATIONS = [
      ["TestVerifyGetFailureSaysWhichClassItIs"]),
     # 4. Arabic loses its direction, so RTL prose renders in an LTR document.
     ("D: Arabic renders without dir=rtl",
-     'func verifyFailDir(lang string) string {\n\tif lang == "ar" {\n\t\treturn "rtl"\n\t}\n\treturn "ltr"\n}',
-     'func verifyFailDir(lang string) string {\n\t_ = lang\n\treturn "ltr"\n}',
+     'func verifyDir(lang string) string {\n\tif lang == "ar" {\n\t\treturn "rtl"\n\t}\n\treturn "ltr"\n}',
+     'func verifyDir(lang string) string {\n\t_ = lang\n\treturn "ltr"\n}',
      ["TestVerifyGetFailureRendersLocalizedPage"]),
     # 5. The page is stripped down until the body falls under 512 bytes — the
     #    realistic shape of this regression is an author trimming the inline

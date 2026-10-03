@@ -75,6 +75,20 @@ func TestWriteVerifyPageLocalized(t *testing.T) {
 			if !strings.Contains(body, `lang="`+c.lang+`"`) {
 				t.Errorf("verify page for lang %q missing html lang attribute:\n%s", c.lang, body)
 			}
+			// THE DIRECTION, asserted per locale (card t_75ce0ac6). The page is the
+			// one surface a user reaches straight from an email client, so no
+			// dashboard JS has set `document.documentElement.dir` by the time it
+			// renders — the document has to carry it. The FAILURE page already
+			// asserted this and the SUCCESS page did not, so an Arabic confirmation
+			// rendered RTL prose inside an LTR document.
+			want := "ltr"
+			if c.lang == "ar" {
+				want = "rtl"
+			}
+			if !strings.Contains(body, `dir="`+want+`"`) {
+				t.Errorf("verify page for lang %q has no dir=%q — an RTL locale renders in an LTR "+
+					"document. body:\n%s", c.lang, want, body)
+			}
 		})
 	}
 }
@@ -88,6 +102,11 @@ func TestWriteVerifyPageUnknownLangDefaultsToEnglish(t *testing.T) {
 	}
 	if !strings.Contains(body, `lang="en"`) {
 		t.Errorf("unknown lang should set html lang=en:\n%s", body)
+	}
+	// The fallback must carry the direction of the language it FELL BACK TO —
+	// en is ltr — rather than the (absent) direction of the requested one.
+	if !strings.Contains(body, `dir="ltr"`) {
+		t.Errorf("unknown lang should set dir=ltr with its en fallback:\n%s", body)
 	}
 }
 

@@ -200,31 +200,41 @@ func TestVerifyGetNoTokenRendersPage(t *testing.T) {
 	}
 }
 
-// TestWriteVerifyPageArabicIsNotRTL DOCUMENTS A PRE-EXISTING GAP that this card
-// does not change. writeVerifyPage (the SUCCESS page) emits no dir attribute
-// and its existing test does not assert one, so an Arabic confirmation page
-// renders RTL prose in an LTR document. The FAILURE page added here does set
-// dir (TestVerifyGetFailureRendersLocalizedPage), and the two pages must not
-// disagree about direction.
+// TestWriteVerifyPageArabicIsRTL PINS THE FIX (card t_75ce0ac6).
 //
-// This is asserted rather than fixed on purpose: the success page is a
-// different surface with its own contract, and folding its fix into this diff
-// would put two subjects in one review. It is filed as its own card.
-func TestWriteVerifyPageArabicIsNotRTL(t *testing.T) {
-	rec := httptest.NewRecorder()
-	writeVerifyPage(rec, "ar", "https://jomform.com/login")
-	body := rec.Body.String()
-
-	// The success page renders Arabic...
-	if !strings.Contains(body, `lang="ar"`) {
-		t.Fatalf("success page should render the ar locale:\n%s", body)
+// This test used to DOCUMENT A PRE-EXISTING GAP: `writeVerifyPage` emitted no `dir`
+// attribute at all, so an Arabic confirmation rendered RTL prose inside an LTR document.
+// It asserted `lang="ar"` and merely LOGGED that `dir` was absent, so the gap was visible
+// here rather than discovered by an Arabic user. The gap is now closed — the success page
+// carries its own direction, the same as its failure sibling — so the placeholder becomes
+// the assertion, and a regression reds instead of logging.
+func TestWriteVerifyPageArabicIsRTL(t *testing.T) {
+	cases := []struct {
+		lang string
+		want string
+	}{
+		{"ar", "rtl"},
+		{"en", "ltr"},
+		{"ms", "ltr"},
+		{"zh", "ltr"},
+		{"ta", "ltr"},
 	}
-	// ...and it currently emits NO dir attribute. When that is fixed, this
-	// assertion fails and is deleted with the fix — it exists so the gap is
-	// visible here rather than discovered by an Arabic user.
-	if strings.Contains(body, `dir="rtl"`) {
-		t.Logf("writeVerifyPage now sets dir=rtl — delete this gap-pinning assertion " +
-			"and the card filed against it")
+	for _, c := range cases {
+		t.Run(c.lang, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			writeVerifyPage(rec, c.lang, "https://jomform.com/login")
+			body := rec.Body.String()
+			if !strings.Contains(body, `lang="`+c.lang+`"`) {
+				t.Fatalf("success page should render the %s locale:\n%s", c.lang, body)
+			}
+			// The page is the ONE surface reached straight from an email client, so no
+			// dashboard JS (`document.documentElement.dir`) has run: the document must
+			// carry the direction itself.
+			if !strings.Contains(body, `dir="`+c.want+`"`) {
+				t.Fatalf("success page for %s must carry dir=%q — an RTL locale renders in an "+
+					"LTR document otherwise. body:\n%s", c.lang, c.want, body)
+			}
+		})
 	}
 }
 

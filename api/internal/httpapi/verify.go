@@ -218,12 +218,18 @@ func writeVerifyPage(w http.ResponseWriter, lang, loginURL string) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, `<!doctype html><html lang="%s"><body style="font-family:system-ui,sans-serif;background:#0b1020;color:#e6e9ef;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
+	// THE SUCCESS PAGE CARRIES ITS OWN DIRECTION (card t_75ce0ac6). The dashboard
+	// sets `document.documentElement.dir` from the language, but this page is the
+	// ONE surface a user reaches straight from an email client — no dashboard JS
+	// runs here — so an Arabic confirmation rendered RTL prose inside an LTR
+	// document. The FAILURE page already set it, so the two siblings disagreed
+	// about direction; both now use verifyDir.
+	fmt.Fprintf(w, `<!doctype html><html lang="%s" dir="%s"><body style="font-family:system-ui,sans-serif;background:#0b1020;color:#e6e9ef;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
 <div style="text-align:center;max-width:480px;padding:32px">
 <h1 style="color:#5e6ad2">JomForm</h1>
 <p style="font-size:18px">%s</p>
 <p style="font-size:14px;color:#9aa3b2">%s<a href="%s" style="color:#5e6ad2">%s</a>%s</p>
-</div></body></html>`, htmlEsc(lang), htmlEsc(text.msg), htmlEsc(text.before), htmlEsc(loginURL), htmlEsc(text.link), htmlEsc(text.after))
+</div></body></html>`, htmlEsc(lang), htmlEsc(verifyDir(lang)), htmlEsc(text.msg), htmlEsc(text.before), htmlEsc(loginURL), htmlEsc(text.link), htmlEsc(text.after))
 }
 
 // verifyFailClass names WHICH link failure the caller hit, so the GET page can
@@ -326,12 +332,12 @@ func (a *AuthHandlers) verifyFail(w http.ResponseWriter, r *http.Request, lang s
 	writeVerifyFailPage(w, lang, a.loginURL(), class)
 }
 
-// verifyFailDir returns the text direction for a locale. Arabic is the only
+// verifyDir returns the text direction for a locale, for BOTH verify pages. Arabic is the only
 // RTL locale in the five the platform ships, and the dashboard sets
 // documentElement.dir = "rtl" for it (web/src/components/i18n.tsx); a page that
 // renders Arabic in an LTR document is the same defect shape as rendering the
 // wrong language.
-func verifyFailDir(lang string) string {
+func verifyDir(lang string) string {
 	if lang == "ar" {
 		return "rtl"
 	}
@@ -364,7 +370,7 @@ func writeVerifyFailPage(w http.ResponseWriter, lang, loginURL string, class ver
 <p style="font-size:18px">%s</p>
 <p style="font-size:14px;color:#9aa3b2">%s</p>
 <p style="font-size:14px;color:#9aa3b2"><a href="%s" style="color:#5e6ad2">%s</a></p>
-</div></body></html>`, htmlEsc(lang), htmlEsc(verifyFailDir(lang)), htmlEsc(text.sentence(class)), htmlEsc(text.hint), htmlEsc(loginURL), htmlEsc(text.action))
+</div></body></html>`, htmlEsc(lang), htmlEsc(verifyDir(lang)), htmlEsc(text.sentence(class)), htmlEsc(text.hint), htmlEsc(loginURL), htmlEsc(text.action))
 }
 
 // htmlEsc escapes text for injection-safe HTML rendering.
