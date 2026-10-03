@@ -572,8 +572,21 @@ func (s *FormStore) AccessPassword(ctx context.Context, accountID, id string) (s
 }
 
 // SlugExists reports whether a live (non-deleted) form in the account's workspace
-// already claims the given slug. Uniqueness is per-workspace (#77); the account
-// maps to exactly one workspace, so scoping by account is equivalent.
+// already claims the given slug.
+//
+// Uniqueness is per-WORKSPACE (#77), and this query is scoped by ACCOUNT. They are
+// NOT equivalent, and the comment here used to claim they were ("the account maps
+// to exactly one workspace, so scoping by account is equivalent"). They are equal
+// only while every account HAS a workspace: the unique index is
+// `forms (workspace_id, slug) WHERE deleted_at IS NULL` (000019_slug_scoping), and
+// `accounts.workspace_id` is nullable — so a workspace-free account writes forms
+// with `workspace_id IS NULL`, and NULL never equals NULL in an index, which means
+// such an account can create the SAME slug twice. This query still reports the
+// first one (it filters by account_id), so it is the stricter answer, not an
+// equivalent one — a caller relying on "equivalent" would be wrong about which
+// rows the index actually protects. The behaviour is pinned by
+// TestFormCreateSlugIndexIsWorkspaceScoped (form_create_slug_test.go), which is the
+// control that disproves the old claim.
 func (s *FormStore) SlugExists(ctx context.Context, accountID, slug string) (bool, error) {
 	var n int
 	err := s.pool.QueryRow(ctx,
@@ -1066,6 +1079,21 @@ func (s *FormStore) Restore(ctx context.Context, accountID, formID string) error
 		`UPDATE forms SET deleted_at=NULL, updated_at=now()
 		 WHERE id=$2 AND account_id=$1 AND deleted_at IS NOT NULL`,
 		accountID, formID)
+	// A malformed id never reaches RowsAffected: Postgres refuses to CAST it at
+	// all and raises SQLSTATE 22P02 out of Exec. Without this arm the raw
+	// PgError is returned, `respondErr` has no case for it, and the caller gets
+	// a 500 for what is really "there is no such form" — measured on main:
+	//   POST /v1/rest/forms/not-a-uuid/restore -> 500 {"code":"internal"}
+	//   ERROR internal_error err="ERROR: invalid input syntax for type uuid:
+	//     \"not-a-uuid\" (SQLSTATE 22P02)" rest_handlers.go:1258
+	// while the sibling reads answer 404 for the same shape (the workspace trash
+	// reads via PR 859, and this file's own GetTrashed). SoftDelete above carries
+	// the same arm; this function was the one copy left without it.
+	// A non-uuid id is not a client error to explain either — it cannot name a
+	// row, so it is "not found", the same answer an unknown uuid gets.
+	if isNoSuchRow(err) {
+		return ErrFormNotFound
+	}
 	if isUniqueViolation(err) {
 		return ErrFormSlugTaken
 	}

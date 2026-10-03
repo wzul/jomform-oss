@@ -64,13 +64,19 @@ func randSuffix(t *testing.T) string {
 // which is the failure mode this whole card is about.
 func requireSuperuser(t *testing.T, ctx context.Context, conn *pgx.Conn) {
 	t.Helper()
+	// Read the role NAME alongside the flag. The refusal below used to print the
+	// literal string "current_user" as %s — so the message named a keyword instead
+	// of the role that actually failed, which is the one fact an operator needs to
+	// fix it (card t_1cff0a65).
 	var super bool
-	if err := conn.QueryRow(ctx, `SELECT rolsuper FROM pg_roles WHERE rolname = current_user`).Scan(&super); err != nil {
-		t.Fatalf("read current_user's superuser flag: %v", err)
+	var role string
+	if err := conn.QueryRow(ctx,
+		`SELECT rolsuper, rolname FROM pg_roles WHERE rolname = current_user`).Scan(&super, &role); err != nil {
+		t.Fatalf("read the current role's superuser flag: %v", err)
 	}
 	if !super {
 		t.Fatalf("this guard must build an ownership shape out of throwaway roles, which needs a superuser "+
-			"connection (CREATE ROLE + SET SESSION AUTHORIZATION); %s is not one", "current_user")
+			"connection (CREATE ROLE + SET SESSION AUTHORIZATION); %s is not one", role)
 	}
 }
 

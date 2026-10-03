@@ -216,6 +216,37 @@ func TestIDTakingRoutesAnswer404ForUnresolvableIDs(t *testing.T) {
 		t.Errorf("foreign api key %s was revoked by a caller who does not own it", theirsKey.ID)
 	}
 
+	// ── forms: POST /v1/rest/forms/{id}/restore (card t_94707517).
+	//
+	// The one FORM-trash route left out of this sweep. `FormStore.Restore`'s miss
+	// guard was `RowsAffected()==0`, so a non-uuid never reached it: Postgres
+	// refuses the CAST and raises SQLSTATE 22P02 out of Exec, the raw PgError
+	// came back, and respondErr has no case for it — measured on main:
+	//   POST /v1/rest/forms/not-a-uuid/restore -> 500 {"code":"internal"}
+	// while every sibling read answers 404 for the same shape. `GetTrashed` (the
+	// other half of the purge path) and the workspace trash reads via PR 859 were
+	// already fixed; this was the copy left behind.
+	//
+	// The control matters as much as the misses: restoring a REAL trashed form the
+	// caller owns must still answer 200, or "always 404" would satisfy the rest.
+	// Constructed here rather than reusing the `forms` store built further down:
+	// this block runs before it exists.
+	formStore := dbstore.NewFormStore(pool)
+	trashForm := &dbstore.Form{AccountID: accA, Slug: "id-control-trashed", Title: "ID Control", Status: dbstore.FormStatusDraft}
+	if err := formStore.Create(ctx, trashForm); err != nil {
+		t.Fatalf("create own form: %v", err)
+	}
+	if err := formStore.SoftDelete(ctx, accA, trashForm.ID); err != nil {
+		t.Fatalf("trash own form: %v", err)
+	}
+	for _, tc := range idShapes(uuid.NewString(), "") {
+		if tc.id == "" {
+			continue // no foreign-form leg: a form id is not addressable across accounts here
+		}
+		assertIDMiss(t, h, keyA, http.MethodPost, "/v1/rest/forms/"+tc.id+"/restore", "", tc.name)
+	}
+	assertIDOK(t, h, keyA, http.MethodPost, "/v1/rest/forms/"+trashForm.ID+"/restore", "", "own trashed form RESTORE")
+
 	// ── webhooks: DELETE, PUT, and the delivery log.
 	assertIDOK(t, h, keyA, http.MethodGet, "/v1/rest/webhooks/"+mineHook.ID+"/deliveries", "", "own webhook deliveries")
 	assertIDOK(t, h, keyA, http.MethodPut, "/v1/rest/webhooks/"+mineHook.ID,
