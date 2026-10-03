@@ -105,6 +105,7 @@
 #   scripts/preflight.sh --only govuln      # just one gate (comma-separated)
 #   scripts/preflight.sh --skip a11y,web    # everything except these
 #   scripts/preflight.sh --for-diff <ref>   # only the gates <ref>..worktree can break
+#   scripts/preflight.sh --quick            # INNER LOOP: api tests without -race
 #   scripts/preflight.sh --explain-diff <ref>  # print that selection, run nothing
 #   scripts/preflight.sh --gate-deps        # the per-gate path dependencies, then exit
 #
@@ -240,6 +241,13 @@ CLASSIFY_PATHS="" # the paths --classify was given (comma-separated), if any
 # of being refused. Measured: that is exactly what happened.
 FOR_DIFF_GIVEN=0
 EXPLAIN_DIFF_GIVEN=0
+# QUICK is the FAST INNER LOOP. It drops `-race` from the api `test` gate so a change
+# can be iterated in ~10 min instead of ~13. It is NOT a substitute for the full run:
+# `-race` is what makes the test gate a MERGE gate, and a quick run is never evidence
+# that a change may merge or deploy. Measured on this host: the full `test` gate costs
+# 299s and `internal/httpapi` alone accounts for 285s of it (785 tests, one schema per
+# package, so it runs SERIALLY); without `-race` that package takes 173s.
+QUICK=0
 # SEL_DIFF is the narrowed gate set, SPACE-PADDED, and it stays EMPTY unless
 # --for-diff/--explain-diff asked for one. selected() reads it, so it has to exist
 # (empty) on every other path — an unset variable under `set -u` aborts the run
@@ -334,6 +342,7 @@ while [ $# -gt 0 ]; do
     # gate named here must still hold a recorded `pass` for THIS tree under THIS
     # environment fingerprint, or the run REFUSES rather than reporting a green
     # it did not earn. See the reuse block below the lock.
+    --quick)          QUICK=1 ;;
     --reuse-record) REUSE_RECORD=1 ;;
     # --log <path>: where THIS run's output is being captured. Recorded in the
     # per-tree record so the next lane reads the evidence, not just the verdict —
@@ -1958,8 +1967,29 @@ fi
 case "$API_TEST_TIMEOUT" in
   *[!0-9hms.]*) die "API_TEST_TIMEOUT=$API_TEST_TIMEOUT is not a Go duration (e.g. 30m, 45m, 90s) — refusing to hand 'go test' a bad -timeout, which fails every package on that flag alone." ;;
 esac
-run test "cd api && go test ./... -race -count=1 -timeout $API_TEST_TIMEOUT" \
-  bash -c "cd '$REPO_ROOT/api' && go test ./... -race -count=1 -timeout '$API_TEST_TIMEOUT'"
+# THE RACE FLAG IS WHAT MAKES THIS A MERGE GATE. `--quick` drops it for the inner
+# loop and says so loudly; a quick run is evidence for the EDITOR, never for a merge
+# or a deploy. Without `-race` the run is ~40% cheaper on `internal/httpapi`
+# (measured 285s -> 173s), which is the difference between iterating and not running
+# the gate at all.
+RACE="-race"
+if [ "$QUICK" -eq 1 ]; then
+  RACE=""
+  # A QUICK RUN MUST NOT BE REUSABLE AS A FULL ONE. The per-tree gate record is
+  # keyed partly on PREFLIGHT_KEY_EXTRA (gate_result.sh), and a run that recorded
+  # `test: pass` under the same key as a -race run would let a lane reuse it as
+  # evidence for a MERGE — which it is not. Stamping the key makes the two
+  # mutually non-reusable, so a quick pass cannot vouch for a full one.
+  # APPENDED, never overwritten: a caller already using the variable keeps theirs.
+  export PREFLIGHT_KEY_EXTRA="${PREFLIGHT_KEY_EXTRA:+$PREFLIGHT_KEY_EXTRA;}race=none"
+  printf '\n%s\n' "================================================================"
+  printf '%s\n' "PREFLIGHT --quick: the api test gate runs WITHOUT -race."
+  printf '%s\n' "  This is an INNER-LOOP run, not a merge gate. Before merging or"
+  printf '%s\n' "  deploying, run ./scripts/preflight.sh with no flags."
+  printf '%s\n' "================================================================"
+fi
+run test "cd api && go test ./... $RACE -count=1 -timeout $API_TEST_TIMEOUT" \
+  bash -c "cd '$REPO_ROOT/api' && go test ./... $RACE -count=1 -timeout '$API_TEST_TIMEOUT'"
 
 # ---------------------------------------------------------------------------
 # api/govuln — CVE scan over the module graph.
