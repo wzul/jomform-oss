@@ -84,6 +84,70 @@ const backendDump = `SELECT pid, backend_type, coalesce(state, ''), coalesce(que
   WHERE datname = current_database() AND pid <> pg_backend_pid()
   ORDER BY pid`
 
+// abandonedSchemaSurvived reports whether a schema is still present, and — when it
+// is — whether the backend that was there at the moment open() took its decision
+// was a TRANSIENT visitor or a PEER.
+//
+// WHY THE DISTINCTION IS THE WHOLE POINT (card t_741cd8f2)
+//
+// `pruneDeadSchemas` suppresses the reclaim whenever `others > 0`, and that is
+// correct by design: `DROP SCHEMA ... CASCADE` is database-wide DDL and a peer can
+// be mid-catalogue-read. But it means a transient visitor (an autovacuum worker
+// ANALYZEing the catalogue, which the CREATE DATABASE churn of this very test
+// provokes) produces an outcome INDISTINGUISHABLE from a dead reclaim by schema
+// presence alone. The test's own docstring says as much and then asserted on
+// presence anyway:
+//
+//	"a reclaim that works reclaims on at least one attempt, which is all the
+//	 claim needs"
+//
+// …while `t.Errorf` fired per attempt. Measured on this host at load 15-18:
+// 3 red in 20 runs, every red a single suppressed attempt with `witnessed` true —
+// i.e. the reclaim was DEMONSTRABLY working on the other four attempts and the
+// test still red. That is a false-red generator inside the gate it was written to
+// de-flake.
+//
+// So a surviving schema is only evidence against the reclaim when the visitor
+// OUTLIVED the sample that declared the database idle. A visitor that was already
+// gone when open() ran cannot have suppressed anything: we returned 0 ourselves.
+// A visitor that is STILL there afterwards may have been the one open() saw, and
+// that is the case the guard must report.
+//
+// Nothing is excused on a database that is quiet: the sampling interval is 250ms
+// and an autovacuum worker on a catalogue this size is a few milliseconds, so on a
+// genuinely idle host the peer count is 0 and the check below is fully armed.
+func abandonedSchemaSurvived(ctx context.Context, p *pgxpool.Pool, name string) (survived bool, peers int, detail string, err error) {
+	if qerr := p.QueryRow(ctx, `SELECT count(*) FROM pg_namespace WHERE nspname = $1`, name).Scan(&peers); qerr != nil {
+		return false, 0, "", qerr
+	}
+	if peers == 0 {
+		return false, 0, "", nil
+	}
+	var dump string
+	if derr := p.QueryRow(ctx, backendDumpAgg).Scan(&dump); derr != nil {
+		return true, 0, "(backend dump failed: " + derr.Error() + ")", nil
+	}
+	// Recount after the dump, deliberately AFTER: a visitor that left while the
+	// dump ran was transient. This is the same reasoning the reclaim's own
+	// `solo` predicate uses, in the opposite direction.
+	var after int
+	if aerr := p.QueryRow(ctx, otherBackendsCount).Scan(&after); aerr != nil {
+		return true, 0, "", aerr
+	}
+	return true, after, dump, nil
+}
+
+// otherBackendsCount and backendDumpAgg are the post-hoc variants used above.
+// They read the same predicate as open()'s prune (EVERY backend, not just client
+// backends), because that is the count the reclaim acts on.
+const otherBackendsCount = `SELECT count(*) FROM pg_stat_activity
+  WHERE datname = current_database() AND pid <> pg_backend_pid()`
+
+const backendDumpAgg = `SELECT coalesce(string_agg(
+    format('pid=%s type=%s state=%s query=%s', pid, backend_type, coalesce(state,''), left(coalesce(query,''), 80)), E'\n'), '(none)')
+  FROM pg_stat_activity
+  WHERE datname = current_database() AND pid <> pg_backend_pid()`
+
 // TestOpenReclaimsAnAbandonedSchemaOnAnIdleDatabase is the positive arm of the
 // prune wiring guard: on a database with nobody else connected, a real open()
 // must drop a leftover scratch schema whose owner is gone.
@@ -125,6 +189,11 @@ func TestOpenReclaimsAnAbandonedSchemaOnAnIdleDatabase(t *testing.T) {
 		abandonedLeft bool
 		legacyLeft    bool
 		ownDropped    bool
+		// peersAfter is how many OTHER backends were connected when the probe ran.
+		// 0 with a surviving schema is a dead reclaim; >0 means the suppression the
+		// reclaim is designed to make, which this test reports and does not fail.
+		peersAfter int
+		detail     string
 	}
 
 	var outcomes []attemptOutcome
@@ -187,44 +256,70 @@ func TestOpenReclaimsAnAbandonedSchemaOnAnIdleDatabase(t *testing.T) {
 			t.Fatalf("open() landed on database %q, want the throwaway %q — this guard would otherwise inspect the wrong database", landed, dbname)
 		}
 
-		exists := func(name string) bool {
-			t.Helper()
-			var n int
-			if err := p.QueryRow(ctx, `SELECT count(*) FROM pg_namespace WHERE nspname = $1`, name).Scan(&n); err != nil {
-				t.Fatalf("probe %s: %v", name, err)
-			}
-			return n > 0
+		o := attemptOutcome{}
+		survived, peersAfter, dump, err := abandonedSchemaSurvived(ctx, p, abandoned)
+		if err != nil {
+			t.Fatalf("probe %s: %v", abandoned, err)
+		}
+		o.abandonedLeft = survived
+		// A schema that survived while NO backend is connected afterwards is
+		// unambiguous: nothing was there to suppress the reclaim, so the reclaim
+		// did not run (or ran and failed). This is a hard failure regardless of
+		// what any other attempt witnessed — it is the direction that must never
+		// pass.
+		if survived && peersAfter == 0 {
+			t.Errorf("attempt %d: open() left %s behind on a database with NO other backend connected — nothing could have suppressed the reclaim, so this is a dead reclaim, not a transient visitor. Check that open() still prunes BEFORE it creates the caller's pool (pgxpool is lazy, so pruning after pgxpool.NewWithConfig/Ping counts the caller's own backend as a peer and suppresses the reclaim forever). Backends seen just before this probe:\n%s",
+				attempt, abandoned, dump)
+		}
+		o.peersAfter = peersAfter
+		o.detail = dump
+
+		legacySurvived, legacyPeers, legacyDump, lerr := abandonedSchemaSurvived(ctx, p, legacy)
+		if lerr != nil {
+			t.Fatalf("probe %s: %v", legacy, lerr)
+		}
+		o.legacyLeft = legacySurvived
+		if legacySurvived && legacyPeers == 0 {
+			t.Errorf("attempt %d: open() left the pre-pid schema %s behind with NO other backend connected — a name with no pid can never be attributed to a process, so it is reclaimable exactly when nobody else is connected, which is this case. Backends seen before this probe:\n%s",
+				attempt, legacy, legacyDump)
 		}
 
-		o := attemptOutcome{
-			abandonedLeft: exists(abandoned),
-			legacyLeft:    exists(legacy),
-			ownDropped:    !exists(own),
+		var ownCount int
+		if err := p.QueryRow(ctx, `SELECT count(*) FROM pg_namespace WHERE nspname = $1`, own).Scan(&ownCount); err != nil {
+			t.Fatalf("probe %s: %v", own, err)
 		}
+		o.ownDropped = ownCount == 0
 		outcomes = append(outcomes, o)
 		p.Close()
 	}
 
 	reclaimedLegacy := false
 	witnessed := false
+	suppressed := 0
 	for i, o := range outcomes {
-		if !o.abandonedLeft {
+		switch {
+		case !o.abandonedLeft:
 			witnessed = true
+		case o.peersAfter > 0:
+			// Suppressed by a visitor that was still there when we probed. That is
+			// the designed behaviour (`others > 0` => no DDL), and the docstring's
+			// own model says one witnessed attempt is all the claim needs — so this
+			// is reported, not failed. The hard failure for this shape lives in
+			// TestOpenReclaimsAnAbandonedSchemaOnAnIdleDatabaseNeverSuppressedAlone.
+			suppressed++
+			t.Logf("attempt %d: reclaim suppressed while %d backend(s) were connected — by design (DROP SCHEMA is database-wide DDL); waiting for the run's verdict:\n%s",
+				i+1, o.peersAfter, o.detail)
 		}
 		if !o.abandonedLeft && !o.legacyLeft {
 			reclaimedLegacy = true
 		}
-		if o.abandonedLeft {
-			t.Errorf("attempt %d: open() left the abandoned schema behind on an idle database — its owner is gone, so nothing will ever reclaim it: a killed run then leaks a schema per run. Check that open() still prunes BEFORE it creates the caller's pool (pgxpool is lazy, so pruning after pgxpool.NewWithConfig/Ping counts the caller's own backend as a peer and suppresses the reclaim forever).",
-				i+1)
-		}
-		if o.legacyLeft {
-			t.Errorf("attempt %d: open() left the pre-pid schema behind on an idle database — a name with no pid can never be attributed to a process, so it is reclaimable exactly when nobody else is connected, which is this case",
-				i+1)
-		}
 		if o.ownDropped {
 			t.Errorf("attempt %d: open() dropped this process's own schema %s — the prune must never reclaim the schema it is about to migrate and run against", i+1, own)
 		}
+	}
+	if suppressed > 0 {
+		t.Logf("note: %d/%d attempts were suppressed by a concurrent backend; %d attempt(s) witnessed a successful reclaim",
+			suppressed, len(outcomes), len(outcomes)-suppressed)
 	}
 
 	// The vacuity guard, and the assertion that gives the others their meaning:
@@ -239,6 +334,73 @@ func TestOpenReclaimsAnAbandonedSchemaOnAnIdleDatabase(t *testing.T) {
 	if !reclaimedLegacy {
 		t.Logf("note: an abandoned schema was reclaimed, but never in an attempt that also reclaimed the legacy shape — the two shapes are reached by different predicates, so check the legacy arm if it stays silent across runs")
 	}
+}
+
+// TestOpenReclaimsAnAbandonedSchemaOnAnIdleDatabaseNeverSuppressedAlone is the
+// discriminator the guard above cannot be.
+//
+// The positive arm above must tolerate a suppressed attempt — the reclaim's own
+// design (`others > 0` => no DDL) makes suppression correct, and the claim it
+// carries ("a reclaim that works reclaims on at least one attempt") is true. But
+// tolerating it means a reclaim that is DEAD on a genuinely quiet database could
+// hide behind "some visitor must have been there". This test closes that: it drives
+// open() on a database this test has just confirmed quiet, and requires the reclaim
+// to happen — with NO attempt-level tolerance.
+//
+// It is one attempt, deliberately. Repeating it would re-import the very
+// probabilistic reasoning that made the other test red on a working reclaim: at the
+// measured visitor rate a second attempt can legitimately be suppressed. One attempt
+// on a database confirmed quiet BEFORE open() runs is a sharper question — and if
+// the host is genuinely too busy to answer it, the test SKIPS with the backends
+// dumped rather than reporting a verdict it cannot support.
+func TestOpenReclaimsAnAbandonedSchemaOnAnIdleDatabaseNeverSuppressedAlone(t *testing.T) {
+	ctx := context.Background()
+	dbname, dbDSN := createIdleTestDB(t, ctx, dsnOrSkip(t))
+
+	own := "test_reach_own3_p" + strconv.Itoa(os.Getpid())
+	abandoned := "test_reach_never_p" + strconv.Itoa(deadPID(t))
+
+	plant, err := db.Connect(ctx, dbDSN)
+	if err != nil {
+		t.Fatalf("connect to %s to plant the fixture: %v", dbname, err)
+	}
+	if _, err := plant.Exec(ctx, `CREATE SCHEMA `+quote(abandoned)); err != nil {
+		plant.Close()
+		t.Fatalf("plant %s: %v", abandoned, err)
+	}
+	// The plant connection must be GONE before open() takes its decision, or the
+	// fixture is itself the "other backend" it is watching for.
+	ok, detail, err := awaitNoOtherBackends(ctx, plant, idleWaitBudget)
+	plant.Close()
+	if err != nil {
+		t.Fatalf("count backends on %s: %v", dbname, err)
+	}
+	if !ok {
+		t.Skipf("throwaway database %s never went idle within %s (%s) — this test needs a quiet database to ask whether the reclaim runs unbidden; it reports no verdict rather than a weak one",
+			dbname, idleWaitBudget, detail)
+	}
+
+	// No sampling between here and open(): the fixture is closed and the database
+	// answered "quiet" on the immediately preceding query.
+	p, err := open(ctx, dbDSN, own)
+	if err != nil {
+		t.Fatalf("open on the throwaway database %s: %v", dbname, err)
+	}
+	defer p.Close()
+
+	survived, peersAfter, dump, err := abandonedSchemaSurvived(ctx, p, abandoned)
+	if err != nil {
+		t.Fatalf("probe %s: %v", abandoned, err)
+	}
+	if !survived {
+		return // the reclaim ran: exactly what this test requires.
+	}
+	if peersAfter > 0 {
+		t.Skipf("the abandoned schema %s survived, but %d backend(s) were connected when it was probed, so this run cannot say whether the reclaim ran — and a skip is honest here where an Error would send a lane hunting a reclaim that may be fine. Backends:\n%s",
+			abandoned, peersAfter, dump)
+	}
+	t.Errorf("open() left the abandoned schema %s behind on a database with NO other backend connected, and the reclaim is REQUIRED to run in that state — a killed run then leaks a schema per run. Check that open() still prunes BEFORE it creates the caller's pool (pgxpool is lazy, so pruning after pgxpool.NewWithConfig/Ping counts the caller's own backend as a peer and suppresses the reclaim forever)",
+		abandoned)
 }
 
 // TestOpenLeavesAnAbandonedSchemaAloneWhileAPeerIsConnected is the other arm
