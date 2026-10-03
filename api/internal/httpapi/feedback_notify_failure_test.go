@@ -543,7 +543,24 @@ func TestFeedbackNotifyFailureOnMissingAddressIsRecorded(t *testing.T) {
 	logs()
 
 	// Blank the filer's address: the notification now has nowhere to go.
-	if _, err := e.pool.Exec(context.Background(),
+	//
+	// The original address is RESTORED in a cleanup (card t_5299cae1): `users.email`
+	// is UNIQUE, so leaving a second row blank makes the next `-test.count` pass
+	// fail with `duplicate key value violates unique constraint "users_email_key"`
+	// before it can test anything. This is a fixture leak, not part of the case.
+	ctx := context.Background()
+	var filerEmail string
+	if err := e.pool.QueryRow(ctx,
+		`SELECT email FROM users WHERE id = (SELECT user_id FROM feedback_threads WHERE id = $1)`,
+		f.thread).Scan(&filerEmail); err != nil {
+		t.Fatalf("read the filer address: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = e.pool.Exec(context.Background(),
+			`UPDATE users SET email = $1 WHERE id = (SELECT user_id FROM feedback_threads WHERE id = $2)`,
+			filerEmail, f.thread)
+	})
+	if _, err := e.pool.Exec(ctx,
 		`UPDATE users SET email = '' WHERE id = (SELECT user_id FROM feedback_threads WHERE id = $1)`,
 		f.thread); err != nil {
 		t.Fatalf("blank the filer address: %v", err)

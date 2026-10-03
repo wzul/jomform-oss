@@ -51,7 +51,7 @@ func TestRESTDomainListReturnsClaimedRow(t *testing.T) {
 	accountID, _ := bundleFixture(t, ctx, pool)
 
 	ds := dbstore.NewDomainStore(pool)
-	const domain = "rest-claim.example.test"
+	domain := "rest-claim-" + runKey() + ".example.test"
 	if _, err := ds.AddDomain(ctx, accountID, domain, "cname"); err != nil {
 		t.Fatalf("AddDomain: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestDashboardBundleCarriesClaimedDomain(t *testing.T) {
 	pool := bundleTestPool(t)
 	accountID, _ := bundleFixture(t, ctx, pool)
 
-	const domain = "bundle-claim.example.test"
+	domain := "bundle-claim-" + runKey() + ".example.test"
 	if _, err := dbstore.NewDomainStore(pool).AddDomain(ctx, accountID, domain, "cname"); err != nil {
 		t.Fatalf("AddDomain: %v", err)
 	}

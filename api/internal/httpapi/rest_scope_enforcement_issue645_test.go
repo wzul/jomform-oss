@@ -218,14 +218,14 @@ func scopeTestRESTAccount(t *testing.T, pool *pgxpool.Pool, tag string) (account
 	}
 	if err := pool.QueryRow(context.Background(),
 		`INSERT INTO users (email, password_hash) VALUES ($1, 'it') RETURNING id`,
-		"rest-scope-"+slug+"-"+fmt.Sprint(len(tag))+"@example.test",
+		"rest-scope-"+slug+"-"+runKey()+"@example.test",
 	).Scan(&userID); err != nil {
 		t.Fatalf("create user: %v", err)
 	}
 	if err := pool.QueryRow(context.Background(),
 		`INSERT INTO accounts (owner_user_id, name, slug)
 		 VALUES ($1, $2, $3) RETURNING id`,
-		userID, "rest-scope-"+slug, "rest-scope-"+slug,
+		userID, "rest-scope-"+slug, "rest-scope-"+slug+"-"+runKey(),
 	).Scan(&accountID); err != nil {
 		t.Fatalf("create account: %v", err)
 	}

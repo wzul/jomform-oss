@@ -61,7 +61,7 @@ func trashRESTWorkspaceAccount(t *testing.T, pool *pgxpool.Pool, tag string) (wo
 	ctx := context.Background()
 	if err := pool.QueryRow(ctx,
 		`INSERT INTO users (email, password_hash) VALUES ($1,'it') RETURNING id`,
-		"rest-trash-"+tag+"-"+t.Name()[:6]+"@example.test",
+		"rest-trash-"+tag+"-"+t.Name()[:6]+"-"+runKey()+"@example.test",
 	).Scan(&userID); err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -555,7 +555,7 @@ func mkWsUser(t *testing.T, pool *pgxpool.Pool, tag string) string {
 	var id string
 	if err := pool.QueryRow(context.Background(),
 		`INSERT INTO users (email, password_hash) VALUES ($1,'it') RETURNING id`,
-		tag+"-"+t.Name()+"@example.test").Scan(&id); err != nil {
+		tag+"-"+t.Name()+"-"+runKey()+"@example.test").Scan(&id); err != nil {
 		t.Fatalf("create user %s: %v", tag, err)
 	}
 	return id

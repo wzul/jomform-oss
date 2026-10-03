@@ -189,7 +189,7 @@ func TestRESTRenameCreateAndRenameAgreeOnTheNameCap(t *testing.T) {
 
 			// RENAME, on a workspace of its own (unique slug per subtest).
 			probe, err := sp.Create(ctx, ws.Owner, "name parity probe",
-				"namecap-ren-"+strings.ToLower(strings.ReplaceAll(tc.label, " ", "")))
+				"namecap-ren-"+strings.ToLower(strings.ReplaceAll(tc.label, " ", ""))+"-"+runKey())
 			if err != nil {
 				t.Fatalf("create probe workspace: %v", err)
 			}

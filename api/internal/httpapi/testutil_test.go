@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func testLogger() *slog.Logger {
@@ -36,6 +37,28 @@ var testIPCounter atomic.Uint32
 // Generate one value at the top of the test and reuse it for every request in
 // that test — tests that compare responses, or that drive a single IP to a
 // limit, need a stable IP within the test.
+// runKey is the per-PASS entropy these fixtures need to stay unique across
+// `-test.count=N` (card t_5299cae1).
+//
+// The fixtures below used to mint their DB-unique keys from data that does NOT
+// vary between passes — a package-level const domain, or an email derived from
+// `t.Name()` alone. Pass 2 then collided on the DB's real uniques
+// (`users_email_key`, `account_domains_domain_key`) and 14 assertions failed,
+// measured with `go test ./internal/httpapi/ -count=2 -run 'TestRESTReadwrite…'`.
+// Weakening those indexes is not an option, so the KEYS have to vary.
+//
+// `-test.count` re-runs the whole binary in ONE process, so the pid does not
+// change; the process start time does not either. `time.Now().UnixNano()` plus a
+// counter is unique within a run and across runs, on a fresh or reused DB, and it
+// carries no ordering semantics a test could depend on. The counter matters even
+// though the clock does: two passes can land in the same nanosecond on a fast host,
+// and the counter then makes them differ anyway.
+var runKeyCounter atomic.Uint64
+
+func runKey() string {
+	return fmt.Sprintf("%d-%d", time.Now().UnixNano(), runKeyCounter.Add(1))
+}
+
 func uniqueTestIP() string {
 	return testIPFor(uint32(os.Getpid()), testIPCounter.Add(1))
 }

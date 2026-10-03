@@ -202,6 +202,16 @@ func TestNormalizePasskeyBase64IsIdempotentAndLossless(t *testing.T) {
 	}
 }
 
+// seamCredIDForRun appends this run's entropy to a fixed credential-id prefix,
+// so a repeat pass of the same test does not collide on the stored row while the
+// prefix keeps providing the base64 alphabet the arm asserts on.
+func seamCredIDForRun(prefix []byte) []byte {
+	out := make([]byte, 0, len(prefix)+len(runKey()))
+	out = append(out, prefix...)
+	out = append(out, []byte(runKey())...)
+	return out
+}
+
 // seamCredIDStandard / seamCredIDURL are the credential ids the two arms of
 // TestPasskeyRegistrationAcceptsStandardBase64 register.
 //
@@ -414,8 +424,14 @@ func TestPasskeyRegistrationAcceptsStandardBase64(t *testing.T) {
 		enc    *base64.Encoding
 		credID []byte
 	}{
-		{"standard base64 (what the shipped client sent)", base64.StdEncoding, seamCredIDStandard},
-		{"base64url (what the fixed client sends)", base64.RawURLEncoding, seamCredIDURL},
+		// The credential id varies per RUN (card t_5299cae1). The stored rows are
+		// keyed by credential id and `-test.count` re-runs in the same process
+		// against the same database, so a fixed id makes pass 2's insert collide
+		// and the endpoint answer 200 while persisting nothing — which is exactly
+		// what the assertion below this loop reads as "0 row(s)". The fixed
+		// PREFIX is kept because the arm's `+`/`/` check below depends on it.
+		{"standard base64 (what the shipped client sent)", base64.StdEncoding, seamCredIDForRun(seamCredIDStandard)},
+		{"base64url (what the fixed client sends)", base64.RawURLEncoding, seamCredIDForRun(seamCredIDURL)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fx := newPasskeyRegistrationFixture(t, h, ah, pool, user, session, tc.credID)

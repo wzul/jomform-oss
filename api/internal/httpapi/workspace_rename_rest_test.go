@@ -87,7 +87,7 @@ func accountHoldingUser(t *testing.T, h *RESTHandlers, pool *pgxpool.Pool, tag s
 	var userID string
 	if err := pool.QueryRow(ctx,
 		`INSERT INTO users (email, password_hash) VALUES ($1,'it') RETURNING id`,
-		"acct-"+tag+"-"+t.Name()[:6]+"@example.test").Scan(&userID); err != nil {
+		"acct-"+tag+"-"+t.Name()[:6]+"-"+runKey()+"@example.test").Scan(&userID); err != nil {
 		t.Fatalf("create user: %v", err)
 	}
 	if _, err := pool.Exec(ctx,
@@ -375,6 +375,13 @@ func TestRESTRenameInvalidSlugsAreRefusedByTheSharedRule(t *testing.T) {
 				if _, err := pool.Exec(ctx, `DELETE FROM accounts WHERE workspace_id=$1`, createdID); err != nil {
 					t.Fatalf("free the created workspace's account: %v", err)
 				}
+				// The rename leg RESERVES the create's slug as an alias, so pass 2
+				// finds it taken unless the alias goes too (card t_5299cae1).
+				if _, err := pool.Exec(ctx,
+					`DELETE FROM workspace_slug_aliases WHERE workspace_id=$1 OR slug=$2`,
+					createdID, tc.raw); err != nil {
+					t.Fatalf("free the created workspace's slug alias: %v", err)
+				}
 				if _, err := pool.Exec(ctx, `DELETE FROM workspaces WHERE id=$1`, createdID); err != nil {
 					t.Fatalf("free the created workspace: %v", err)
 				}
@@ -384,9 +391,12 @@ func TestRESTRenameInvalidSlugsAreRefusedByTheSharedRule(t *testing.T) {
 			// SUBTEST, not per parent: subtests run sequentially here, but a
 			// repeated probe slug would collide with the previous one and make
 			// this fail for the wrong reason.
-			probeSlug := "rule-probe-" + strings.ReplaceAll(strings.ToLower(tc.name), " ", "-")
+			// The slug varies per RUN as well as per subtest: `t.Name()` and the
+			// case name are identical on every `-test.count` pass, so a
+			// name-derived slug collides on pass 2 (card t_5299cae1).
+			probeSlug := "rule-probe-" + strings.ReplaceAll(strings.ToLower(tc.name), " ", "-") + "-" + runKey()
 			if len(probeSlug) > 40 {
-				probeSlug = probeSlug[:40]
+				probeSlug = "probe-" + runKey()
 			}
 			probe, err := sp.Create(ctx, ws.Owner, "rule probe", probeSlug)
 			if err != nil {
@@ -426,6 +436,21 @@ func TestRESTRenameInvalidSlugsAreRefusedByTheSharedRule(t *testing.T) {
 			// lookup).
 			if tc.ok && tc.raw == "A-B" && storedSlug != "a-b" {
 				t.Errorf("create stored %q for input %q, want the normalised %q", storedSlug, tc.raw, "a-b")
+			}
+			// FREE THE PROBE before the next subtest (card t_5299cae1). The
+			// create/rename legs reserve the slug they took as an ALIAS, and
+			// subtests share a database: leaving the probe behind makes a later
+			// subtest — or pass 2 of this one — see "slugTaken" for a value that
+			// is not the thing under test.
+			if _, err := pool.Exec(ctx,
+				`DELETE FROM workspace_slug_aliases WHERE workspace_id=$1`, probe.ID); err != nil {
+				t.Fatalf("free probe slug alias: %v", err)
+			}
+			if _, err := pool.Exec(ctx, `DELETE FROM accounts WHERE workspace_id=$1`, probe.ID); err != nil {
+				t.Fatalf("free probe account: %v", err)
+			}
+			if _, err := pool.Exec(ctx, `DELETE FROM workspaces WHERE id=$1`, probe.ID); err != nil {
+				t.Fatalf("free probe workspace: %v", err)
 			}
 		})
 	}
@@ -492,8 +517,12 @@ func TestRESTRenameSlugRequiresOwnership(t *testing.T) {
 
 	// The OWNER moves the slug on the same workspace — the control that shows the
 	// 403 above is about ownership and not about a broken endpoint.
+	// The target slug varies per RUN (card t_5299cae1): a fixed literal is stored
+	// by pass 1 and pass 2's workspace then cannot take it, which reads as a 409
+	// about collision rather than the ownership control this leg is testing.
+	ownerTargetSlug := "owner-moved-" + runKey()
 	rec = sessionReq(t, h, ownerToken, http.MethodPatch, "/v1/workspaces/"+ws.ID,
-		`{"slug":"owner-moved-this"}`)
+		`{"slug":"`+ownerTargetSlug+`"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("the OWNER could not move the slug: %d (%s)", rec.Code, rec.Body.String())
 	}
@@ -501,8 +530,8 @@ func TestRESTRenameSlugRequiresOwnership(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ByID: %v", err)
 	}
-	if after.Slug != "owner-moved-this" {
-		t.Fatalf("owner slug rename stored %q, want owner-moved-this", after.Slug)
+	if after.Slug != ownerTargetSlug {
+		t.Fatalf("owner slug rename stored %q, want %q", after.Slug, ownerTargetSlug)
 	}
 }
 
