@@ -73,6 +73,100 @@ git cat-file -e "${BASE_REV}:${GUARD_IN_REPO}" 2>/dev/null || {
 }
 git show "${BASE_REV}:${GUARD_IN_REPO}" > "$OLD_GUARD"
 
+# CAPABILITY REFUSAL (card t_50e46013). Byte-equality between the base guard and this
+# tree's is NOT the property this harness needs: it needs the base's reader to be
+# BLIND to the mutation. Once the branch's own fix lands on the base, the two readers
+# are the same one, every BASE leg reads RED, and the cases report
+#
+#   *** <case>: BASE guard wanted GREEN, got RED — the case does not reproduce the hole
+#
+# which blames the CASE for a premise that the BASE cannot satisfy. That is the wrong
+# finding, and it is exactly the shape the sibling api harness refuses by name
+# (`capability_refusal` in api/scripts/biteproof_model_default_guard.py: "REFUSING
+# (exit 2, NO VERDICT)"). Measured on origin/main: the base tree's reader is
+# byte-identical to this tree's (sha256 06d32d0d2f1dcf05 on both), so the harness
+# printed 2 `***` lines and exit 1 against a sound branch.
+#
+# The reader is judged by its DECLARATION, not by its bytes — the same rule this
+# harness's sibling (`biteproof_docs_index_render_sites.sh`) already applies, with the
+# same two spellings. A base declaring the POST-fix reader cannot demonstrate the
+# blind spot, so the run stops here with the reason and the fix rather than producing a
+# verdict about nothing.
+PRE_READER_RE='^[[:space:]]*(export[[:space:]]+)?(const|let|var)[[:space:]]+docsSrc[[:space:]]*=[[:space:]]*read\(DOCS_PAGE\)'
+POST_READER_RE='^[[:space:]]*(export[[:space:]]+)?(const|let|var)[[:space:]]+docsSrc[[:space:]]*=[[:space:]]*stripUnrendered\(read\(DOCS_PAGE\)\)'
+# RAW_DECLARES_ID_RE: the anchor helper still reading the UNSTRIPPED page, i.e. the base
+# is blind to the comment-carried anchor cases too (t_7b24b035 fixed those separately).
+RAW_DECLARES_ID_RE='const[[:space:]]+src[[:space:]]*=[[:space:]]*read\(file\)'
+if grep -qE "$POST_READER_RE" "$OLD_GUARD"; then
+  echo >&2
+  echo "BITEPROOF REFUSED (exit 2, NO VERDICT): the base guard (${BASE_REF} ${BASE_REV:0:12}) declares the" >&2
+  echo "POST-fix reader — \`docsSrc = stripUnrendered(read(DOCS_PAGE))\` — so it is the SAME reader this" >&2
+  echo "tree uses and it cannot miss the comment-carried hole every case drives. Every BASE leg would" >&2
+  echo "read RED and each case would report 'does not reproduce the hole', which is a statement about the" >&2
+  echo "BASE and not about this branch." >&2
+  echo >&2
+  echo "Point BITEPROOF_BASE at a revision whose guard still reads the RAW page source:" >&2
+  # Derive one rather than guess: the newest commit in the guard's history whose
+  # `docsSrc` declaration is still the raw reader. Two traps, BOTH measured, are why
+  # this loop looks the way it does:
+  #
+  #   * `git show ... | grep -q` silently reports NO MATCH under `set -o pipefail` —
+  #     grep exits at the first hit, the writer takes SIGPIPE (141), and the pipeline
+  #     reports failure. Use a herestring, as the sibling harnesses do.
+  #   * `git log -- <pathspec>` resolves the path against the CWD, and this script has
+  #     already `cd`-ed to `web/`, so the walk found ZERO commits. `git -C "$TOP"`.
+  #
+  # AND ITS LIMIT, MEASURED RATHER THAN ASSUMED. A raw `docsSrc` is necessary but NOT
+  # sufficient: the anchor legs were fixed SEPARATELY (t_7b24b035), so a base between
+  # the two fixes is blind to the `docsSrc` cases and still catches the anchor ones.
+  # Verified on two candidates by reading the guard at each revision, not by trusting
+  # the commit message:
+  #
+  #   eea308fe (raw docsSrc, `declaresId` already reads the COMMENT-STRIPPED source)
+  #     -> blind to the 2 `docsSrc` cases, still catches the 3 anchor cases.
+  #     2089b6fb (raw docsSrc, `declaresId` reads `read(file)`)
+  #     -> blind to both, so it reproduces every case.
+  #
+  # So the search looks for BOTH properties, and the run is only as reproducible as the
+  # base it names — which the message says out loud instead of implying otherwise.
+  suggested=""
+  while read -r rev; do
+    [ -n "$rev" ] || continue
+    _body="$(git show "${rev}:${GUARD_IN_REPO}" 2>/dev/null)"
+    if grep -qE "$PRE_READER_RE" <<<"$_body" && grep -qE "$RAW_DECLARES_ID_RE" <<<"$_body"; then
+      suggested="$rev"; break
+    fi
+  done < <(git -C "$TOP" log --format='%H' -- "$GUARD_IN_REPO" 2>/dev/null)
+  # A raw docsSrc with the anchor helper already stripped is the better answer than
+  # nothing when no fully-blind base exists, so fall back to it and say which it is.
+  partial=0
+  if [ -z "$suggested" ]; then
+    while read -r rev; do
+      [ -n "$rev" ] || continue
+      _body="$(git show "${rev}:${GUARD_IN_REPO}" 2>/dev/null)"
+      if grep -qE "$PRE_READER_RE" <<<"$_body"; then suggested="$rev"; partial=1; break; fi
+    done < <(git -C "$TOP" log --format='%H' -- "$GUARD_IN_REPO" 2>/dev/null)
+  fi
+  if [ -n "$suggested" ]; then
+    echo "    BITEPROOF_BASE=${suggested} bash ${GUARD_IN_REPO}" >&2
+    if [ "$partial" = 1 ]; then
+      echo "    (${suggested:0:12}: raw \`docsSrc\`, so the \`docsSrc\`-carried cases reproduce — but this" >&2
+      echo "     revision's anchor helper ALREADY reads the stripped source (t_7b24b035), so the ANCHOR" >&2
+      echo "     cases still report 'does not reproduce the hole'.)" >&2
+    else
+      echo "    (${suggested:0:12}: raw \`docsSrc\` AND a raw anchor helper. Measured: every case then" >&2
+      echo "     reproduces its hole, and the four ANCHOR cases fail instead on the attribution rule" >&2
+      echo "     ('expected exactly 1 failing test, saw 2') because this branch's fix makes a SECOND test" >&2
+      echo "     red alongside the one each case drives — a real, attributable red rather than a premise" >&2
+      echo "     failure, but the harness still cannot print a clean 8/8 against this tree.)" >&2
+    fi
+  else
+    echo "    (no revision in this branch's history of ${GUARD_IN_REPO} declares the raw reader either," >&2
+    echo "     so no pre-fix revision can be named from here — set BITEPROOF_BASE by hand)" >&2
+  fi
+  exit 2
+fi
+
 for ((i = 0; i < ${#FILES[@]}; i += 2)); do
   label=${FILES[i]}; path=${FILES[i + 1]}
   cp "$path" "$BAK/$label.bak"
