@@ -140,6 +140,48 @@ func TestFeedbackNotifyQueueKeysAreOwnedByThisProcess(t *testing.T) {
 			preFix.ReadyKey())
 	}
 
+	// POSITIVE CONTROL (production prefix), ISOLATING (card t_aae913ea): the
+	// preFix control above is satisfied by the PID leg ALONE — `jf:emailq:jobs`
+	// carries no `jftest:p<pid>:` namespace either — so neutralising or deleting
+	// the prefix leg left every gate green. This control satisfies every OTHER
+	// leg on purpose, so only the prefix rule can reject it:
+	//
+	//   `jf:emailq:` + PrefixFor(t)  ->  starts with the production prefix,
+	//   still carries this process's `jftest:p<pid>:` namespace, and still
+	//   carries this test's sanitised name.
+	//
+	// The assertion names the rule it expects, not merely "some problem": an
+	// assertion for "not empty" would be satisfied by the pid leg again, which is
+	// the exact shape of the hole this control closes.
+	prefixOnly := emailqueue.NewQueueWithPrefix(nil, emailqueue.DefaultKeyPrefix+testdb.PrefixFor(t))
+	if prefixOnly.ReadyKey() == mine {
+		t.Fatalf("the production-prefixed key %q equals this test's own key %q — this control cannot exercise "+
+			"the prefix leg", prefixOnly.ReadyKey(), mine)
+	}
+	if !strings.Contains(prefixOnly.ReadyKey(), testdb.Prefix()) {
+		t.Fatalf("the production-prefixed key %q no longer carries this process's namespace %q, so the pid leg "+
+			"would reject it and the control would prove nothing about the prefix rule",
+			prefixOnly.ReadyKey(), testdb.Prefix())
+	}
+	if !strings.Contains(prefixOnly.ReadyKey(), testdb.SanitizeKeyPart(t.Name())+":") {
+		t.Fatalf("the production-prefixed key %q no longer carries this test's name %q, so the NAME leg would "+
+			"reject it and the control would prove nothing about the prefix rule",
+			prefixOnly.ReadyKey(), testdb.SanitizeKeyPart(t.Name()))
+	}
+	whyPrefix := feedbackQueueOwnershipProblem(prefixOnly, pid, t.Name())
+	if whyPrefix == "" {
+		t.Fatalf("the ownership check ACCEPTS %q — a key under the production prefix %q that satisfies the pid "+
+			"and name legs. Every process on this Valkey writes that prefix, including a peer suite built from "+
+			"the old fixture and a live API worker, so the prefix rule is the only thing standing between a test "+
+			"and the production queue; without this control it can be neutralised or deleted with every gate "+
+			"still green", prefixOnly.ReadyKey(), emailqueue.DefaultKeyPrefix)
+	}
+	if !strings.Contains(whyPrefix, "production prefix") {
+		t.Fatalf("the ownership check rejected %q for the WRONG reason: %q. This key satisfies the pid and name "+
+			"legs by construction, so the verdict must come from the production-prefix rule",
+			prefixOnly.ReadyKey(), whyPrefix)
+	}
+
 	// And the REAL fixture, where the env lets it be built. PrefixFor(t) above and
 	// liveQueue(t) below are the same test object, so the keys must match exactly:
 	// this is what ties the reconstruction to the queue the assertions read.
