@@ -433,25 +433,65 @@ test("a failure body is never rendered without going through apiErr/translateApi
     // "Err"/"Error"/"Msg"/"Fail". That is the convention every call site in
     // this repo already follows, and it keeps a data setter out of the walk.
     const isErrorState = (s: string) => /(err|error|msg|fail)$/i.test(s);
-    for (const { n, text, code: stripped } of lines) {
-      if (isCommentLine(text)) continue;
-      for (const m of stripped.matchAll(SETTER)) {
-        const arg = m[2].trim();
-        if (arg === "") continue;
-        if (ALLOWED.some((a) => text.includes(a))) continue;
-        if (!readsRawBody(arg, loadVars)) continue;
-        if (!isErrorState(m[1])) {
-          // Not covered by the name rule — an `setNotice(d.error)`-shaped hole.
-          // Reported regardless of apiErr binding: if it binds apiErr the fix is
-          // just to name the state for what it holds (or add an ALLOWED entry);
-          // if it does not, it is also a live render of the raw body.
-          unexamined.push(`${rel}:${n}: ${text.trim()}`);
-          continue;
+    // THE WALK IS WHOLE-FILE, NOT PER LINE (card t_b6cd0f72).
+    //
+    // This used to run SETTER against each line's stripped text. That is a hole
+    // exactly one layer under the one this file was written to close: the pattern
+    // is `set…([^;]*?);`, so a call whose ARGUMENT starts on the next line
+    // (`setError(\n  d.error\n)`) matched on no single line and was invisible to
+    // BOTH the name rule and the out-of-rule bucket — even when the setter's name
+    // IS covered by the rule. Measured: that mutation at MediaPicker.tsx:104 left
+    // this guard GREEN 8/8, while the single-line `setUploadMsg(d.error)` at the
+    // same site was RED.
+    //
+    // So the stripped text is joined into one buffer (line boundaries kept, so the
+    // shape of the code is unchanged) and matched as a whole; a match's offset is
+    // mapped back to the line it STARTS on for the report. There is no formatter in
+    // web/ that emits the multi-line shape today, so this is a future hole — which
+    // is why it is closed here rather than by reformatting call sites.
+    const joined = lines.map((l) => l.code).join("\n");
+    const starts: number[] = [];
+    for (let i = 0, off = 0; i < lines.length; i++) {
+      starts.push(off);
+      off += lines[i].code.length + 1;
+    }
+    const lineAt = (idx: number): number => {
+      let lo = 0;
+      let hi = starts.length - 1;
+      let best = 0;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (starts[mid] <= idx) {
+          best = mid;
+          lo = mid + 1;
+        } else {
+          hi = mid - 1;
         }
-        examined++;
-        if (bindsApiErr(arg, inits)) continue;
-        offenders.push(`${rel}:${n}: ${text.trim()}`);
       }
+      return best;
+    };
+    for (const m of joined.matchAll(SETTER)) {
+      const li = lineAt(m.index ?? 0);
+      const firstLine = lines[li];
+      if (isCommentLine(firstLine.text)) continue;
+      const arg = m[2].trim();
+      if (arg === "") continue;
+      // The reported span, whitespace-normalised: a multi-line call reads as one
+      // line in the message, and the line number is where it begins.
+      const span = (m[0] ?? "").replace(/\s+/g, " ").trim() || firstLine.text.trim();
+      if (ALLOWED.some((a) => span.includes(a) || firstLine.text.includes(a))) continue;
+      if (!readsRawBody(arg, loadVars)) continue;
+      if (!isErrorState(m[1])) {
+        // Not covered by the name rule — an `setNotice(d.error)`-shaped hole.
+        // Reported regardless of apiErr binding: if it binds apiErr the fix is
+        // just to name the state for what it holds (or add an ALLOWED entry);
+        // if it does not, it is also a live render of the raw body.
+        unexamined.push(`${rel}:${firstLine.n}: ${span}`);
+        continue;
+      }
+      examined++;
+      if (bindsApiErr(arg, inits)) continue;
+      offenders.push(`${rel}:${firstLine.n}: ${span}`);
     }
   }
   // The completeness half, asserted BEFORE the primary check so a reader sees

@@ -728,7 +728,7 @@ test("test:unit runs the dependency check BEFORE node --test (the regression thi
   // EXECUTABLE pre-`&&` step: a step that starts with `node`, names the checker, and
   // carries no `||` fallback.
   const steps = script.split("&&").map((step) => step.trim());
-  const isExecutedStep = (step, file) =>
+  const isExecutedStep = (step: string, file: string): boolean =>
     step.startsWith("node ") && step.includes(file) && !step.includes("||");
   const checkStep = steps.findIndex((step) => isExecutedStep(step, "web-deps-check.mjs"));
   const testStep = steps.findIndex((step) => step.startsWith("node --test"));
