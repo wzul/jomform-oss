@@ -164,6 +164,38 @@ mirror_note() { # <repo> <head> -> " [ignoring non-remote-tracking ref(s): a,b]"
   return 0
 }
 
+# has_process_matching: is any process's cmdline carrying PATTERN?
+#
+# WHY NOT A BARE `pgrep -f PATTERN` (card t_f454cd2b). `pgrep -f` matches its own
+# pattern string, so it matches the argv of ANY other `pgrep` that is looking for
+# the same thing at the same moment. A concurrent preflight run's prunewt gate
+# execs `pgrep -f work kanban task t_00000003`, and THIS gate's
+# `pgrep -f "work kanban task t_00000003"` therefore sees it as a live worker —
+# measured: `3785067 pgrep -f work kanban task t_00000003`, and the run then logged
+# `KEEP t_00000003 (worker process alive)` for a card whose worker is a fictional
+# stand-in in this suite. Reproduced at 1-in-6 with six concurrent
+# `--only prunewt` runs, and exactly one gate red every time.
+#
+# The failure is not cosmetic: that phantom keep removes three real verdicts
+# (`RM t_00000001`, `RM t_00000003`, and their `durable=…` records), so the gate
+# reds on assertions about removals it never took.
+#
+# A SCANNER IS NEVER THE WORKER, so every process that merely MENTIONS the pattern
+# as an argument to a scanning command is skipped: `pgrep`, `pkill`, `ps`, `grep`,
+# `awk`, `sed`. Both observed matches were of this kind — a peer run's `pgrep -f`
+# and a measurement probe's `awk -v pat=…`. A real worker's argv is
+# `hermes … work kanban task <id>` or `exec -a "work kanban task <id>" …`, i.e.
+# none of these. `$$` is skipped so this script's own call site (which carries the
+# pattern) cannot match itself.
+has_process_matching() { # <pattern>
+  local pat="$1"
+  # The line's FIRST token is the executable, so naming the scanners there removes
+  # a scanner's own argv without touching a worker that merely mentions a path.
+  ps -eo args= 2>/dev/null \
+    | grep -vE '^[[:space:]]*([^[:space:]]*/)?(pgrep|pkill|ps|grep|awk|sed)([[:space:]]|$)' \
+    | grep -Fq -- "$pat"
+}
+
 main() {
   [ -d "$REPO/.worktrees" ] || { log "no worktrees dir at $REPO/.worktrees"; exit 0; }
   cd "$REPO" || exit 1
@@ -219,12 +251,12 @@ main() {
     #    Match the WORKER INVOCATION only. A bare `pgrep -f "$name"` self-matches
     #    any shell whose command line merely mentions the path (including this
     #    script's own caller), which silently kept every old worktree forever.
-    if pgrep -f "work kanban task $task" >/dev/null 2>&1; then
+    if has_process_matching "work kanban task $task"; then
       log "KEEP  $name (worker process alive)"
       skipped=$((skipped+1)); continue
     fi
     # A process holding this specific worktree as its cwd (e.g. a build in it).
-    if pgrep -f "worktrees/$name " >/dev/null 2>&1; then
+    if has_process_matching "worktrees/$name "; then
       log "KEEP  $name (a process references this worktree)"
       skipped=$((skipped+1)); continue
     fi
@@ -326,7 +358,7 @@ main() {
 
       # Never touch the main checkout or a dir the board still points at.
       [ "$wt" = "$REPO" ] && continue
-      if pgrep -f "worktrees/$name |$wt " >/dev/null 2>&1; then
+      if has_process_matching "worktrees/$name |$wt "; then
         log "KEEP  $name (process references it)"
         continue
       fi
@@ -395,7 +427,7 @@ main() {
       [ -d "$wt" ] || continue
       task=$(basename "$wt" | grep -oE 't_[0-9a-f]{8}' | head -1)
       [ -z "$task" ] && continue
-      pgrep -f "work kanban task $task" >/dev/null 2>&1 && continue
+      has_process_matching "work kanban task $task" && continue
       mtime=$(stat -c %Y "$wt" 2>/dev/null || echo "$NOW")
       [ "$mtime" -gt "$CUTOFF" ] && continue
       for sub in "$wt/web/.next" "$wt/web/test-results" "$wt/web/node_modules"; do
