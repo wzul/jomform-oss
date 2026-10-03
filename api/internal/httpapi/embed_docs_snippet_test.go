@@ -47,6 +47,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -437,10 +438,13 @@ func TestDocsEmbedPageDoesNotClaimTheGateReappears(t *testing.T) {
 }
 
 // docsClaimSurfaces lists the reader-facing files under web/ that can carry this
-// claim. The walk is over the TREE, not a hand-kept list, so a new page or a
-// copy-paste of the sentence into another docs page is covered by
-// construction — a guard that iterates a hardcoded set of filenames cannot see
-// the file it was written to protect against.
+// claim. The file set comes from GIT (`ls-files --cached --others
+// --exclude-standard`), not a raw tree walk, so a new page or a copy-paste of
+// the sentence into another docs page is covered by construction — a guard that
+// iterates a hardcoded set of filenames cannot see the file it was written to
+// protect against — while a generated, gitignored artefact the toolchain writes
+// into web/ (Playwright's web/test-results/*/error-context.md, Next's
+// web/next-env.d.ts) can never be judged. See the WHY comment in the body.
 //
 // WHY THE ROOT IS web/ AND NOT web/src (card t_38a8eaed). This guard's stated
 // scope is "anywhere a reader can see the sentence", and web/src is not that
@@ -452,36 +456,118 @@ func TestDocsEmbedPageDoesNotClaimTheGateReappears(t *testing.T) {
 // web/src/lib/docsIndex.test.ts pins as such. Both are served to a reader, so a
 // sentence copied into either is the same defect, not an internal comment.
 //
-// The skip list is what keeps the widening honest: node_modules is a dependency
-// copy whose vendored prose is not this repo's copy, .next/.turbo are build
-// output, and web/public/openapi.json is generated from the API route table (the
-// api/ tree is deliberately out of scope — this guard must not cry wolf on the
-// source that documents the defect). Every other file under web/ is judged by
-// its extension.
+// The extension rule and the by-name directory prune are what keep the set
+// honest: node_modules is a dependency copy whose vendored prose is not this
+// repo's copy, .next/.turbo are build output, and web/public/openapi.json is
+// generated from the API route table (the api/ tree is deliberately out of
+// scope — this guard must not cry wolf on the source that documents the
+// defect). Every other file git can see under web/ is judged by its extension.
 func docsClaimSurfaces(t *testing.T, root string) []string {
 	t.Helper()
-	var out []string
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
+	root, err := filepath.Abs(root)
+	if err != nil {
+		t.Fatalf("abs %s: %v", root, err)
+	}
+	// WHY GIT LISTS THE FILES INSTEAD OF filepath.WalkDir (card t_5293b10c).
+	// A raw walk over web/ judges ARTEFACTS the toolchain writes into the tree:
+	// Playwright's web/test-results/<slug>/error-context.md is the rendered DOM
+	// (an admitted .md) and Next's generated web/next-env.d.ts is an admitted
+	// .ts, and both are gitignored (root .gitignore `test-results/`;
+	// web/.gitignore `/next-env.d.ts`). So the walk could go RED on a path
+	// `git checkout` cannot restore — the fix in web/src gets applied, the
+	// guard stays red, and no `git status` line explains why. `git ls-files
+	// --cached --others --exclude-standard` lists TRACKED files plus
+	// untracked-NOT-ignored ones, i.e. exactly the files a checkout carries, so
+	// a generated artefact cannot enter by construction and a new generator
+	// needs no skip-list edit. An authored .md/.mdx/.ts a docs author adds is
+	// still judged the moment git can see it — which is the surface this guard
+	// exists for.
+	//
+	// -z keeps a filename holding a newline or quote from splitting into two
+	// records; records are NUL-terminated, so a name may hold anything but NUL.
+	//
+	// WHY --literal-pathspecs. Its only effect is to stop git treating a path as
+	// a pathspec; there is no pathspec on this command, so output is unchanged.
+	// What it buys is that an INHERITED GIT_LITERAL_PATHSPECS cannot make the
+	// command behave differently under a caller that exports it.
+	cmd := exec.Command("git", "-C", root, "ls-files", "-z",
+		"--cached", "--others", "--exclude-standard")
+	cmd.Env = cleanGitEnv()
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git ls-files in %s: %v — the docs-claim walk reads git's file "+
+			"list so generated/gitignored artefacts are never judged; without git "+
+			"it cannot tell an authored page from build output", root, err)
+	}
+	var files []string
+	for _, rel := range strings.Split(string(out), "\x00") {
+		if rel == "" {
+			continue
 		}
-		if d.IsDir() {
-			switch d.Name() {
-			case "node_modules", ".next", ".turbo":
-				return filepath.SkipDir
-			}
-			return nil
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		// Belt to `--exclude-standard`'s braces, and load-bearing for one case:
+		// `.turbo` is NOT gitignored in this repo (.gitignore ignores `.next/`
+		// and `out/` but not `.turbo/`), so a stray `.turbo/notes.md` would
+		// otherwise be admitted by the `.md` case. `node_modules`/`.next` are
+		// pruned by name too so a checkout that lost its ignore rules (or a
+		// fixture repo that never had them) is still safe.
+		if docsClaimWalkPrunesDir(root, path) {
+			continue
 		}
 		if !docsClaimSurface(root, path) {
-			return nil
+			continue
 		}
-		out = append(out, path)
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walk %s: %v", root, err)
+		files = append(files, path)
 	}
-	return out
+	sort.Strings(files)
+	return files
+}
+
+// docsClaimWalkPrunesDir reports whether path lies under a generated,
+// non-authored tree the walk must not judge, by DIRECTORY NAME. The walk calls
+// it per file (the git file list has no directory records to SkipDir on), so it
+// checks every segment of the root-relative path. Split out beside
+// docsClaimSurface so the boundary is assertable on its own rather than only
+// through the whole walk.
+func docsClaimWalkPrunesDir(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	for _, seg := range strings.Split(filepath.ToSlash(rel), "/") {
+		switch seg {
+		case "node_modules", ".next", ".turbo":
+			return true
+		}
+	}
+	return false
+}
+
+// cleanGitEnv returns os.Environ() with every GIT_* override that would point a
+// `git -C <dir>` at a DIFFERENT repository removed: GIT_DIR and GIT_WORK_TREE
+// (which beat -C), GIT_INDEX_FILE / GIT_OBJECT_DIRECTORY / GIT_COMMON_DIR, and
+// GIT_LITERAL_PATHSPECS / GIT_GLOB_PATHSPECS / GIT_NOGLOB_PATHSPECS (which
+// change how git reads arguments). The preflight gate machinery exports a
+// private GIT_INDEX_FILE while it computes a tree sha; a fixture that inherited
+// it, or a walk that inherited a stray GIT_DIR, would operate on the real
+// checkout instead of the target tree — so every git call this guard makes runs
+// against a scrubbed environment.
+func cleanGitEnv() []string {
+	env := make([]string, 0, len(os.Environ()))
+	for _, kv := range os.Environ() {
+		name := kv
+		if i := strings.IndexByte(kv, '='); i >= 0 {
+			name = kv[:i]
+		}
+		switch name {
+		case "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE",
+			"GIT_OBJECT_DIRECTORY", "GIT_COMMON_DIR",
+			"GIT_LITERAL_PATHSPECS", "GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS":
+			continue
+		}
+		env = append(env, kv)
+	}
+	return env
 }
 
 // docsClaimSurface reports whether a file under web/ is one a reader can read
@@ -570,8 +656,9 @@ func TestNoDocsClaimTheGateReappearsOnACookieBlockingBrowser(t *testing.T) {
 
 // docsClaimSurfacesFixtureFiles is the shared body of the fixture. The directory
 // layout is the point: a directory named node_modules/.next/.turbo must be pruned
-// by the WALK (the extension rule alone admits the .md inside them), while
-// authored markdown at src/ and public/ must be found.
+// (the extension rule alone admits the .md inside them), a gitignored generated
+// artefact (test-results/<slug>/error-context.md, next-env.d.ts) must never be
+// reached at all, while authored markdown at src/ and public/ must be found.
 var docsClaimSurfacesFixtureFiles = []string{
 	"src/app/docs/embed/page.tsx",
 	"src/app/docs/embed/page.mdx",
@@ -585,22 +672,67 @@ var docsClaimSurfacesFixtureFiles = []string{
 	"node_modules/some-package/dist/bundle.js",
 	".next/server/notes.md",
 	".turbo/notes.md",
+	// Generated artefacts the toolchain writes into web/. The .gitignore written
+	// by fixture writes() below ignores all of these, so a git-derived file list
+	// drops them by construction; a raw tree walk would judge the .md ones and
+	// red the guard on bytes git cannot reset (card t_5293b10c).
+	"test-results/abcd-embed/error-context.md",
+	"playwright-report/index.md",
+	"blob-report/report.md",
+	"next-env.d.ts",
 }
 
-// docsClaimSurfacesFixture writes the tree above under a test temp dir and walks
-// it with the PRODUCTION walk. Using the real walk is the whole point: a fixture
-// list checked against a copy of the skip list would prove nothing about the
-// guard, only about the copy.
+// docsClaimSurfacesFixtureGitignore is the fixture's .gitignore. It ignores the
+// GENERATED-artefact class the card is about — the root .gitignore's Playwright
+// trees (`test-results/`, `playwright-report/`, `blob-report/`) and
+// web/.gitignore's Next-generated `/next-env.d.ts` — so those files prove the
+// git-exclusion half: git never lists them and the walk cannot judge them.
+//
+// It deliberately does NOT ignore node_modules/, .next/ or .turbo/: the real
+// repo gitignores the first two, which makes the by-name prune unreachable
+// through git (a mutation dropping "node_modules" from the prune stayed GREEN
+// when this fixture ignored it). Leaving them un-ignored makes git LIST them, so
+// the prune is the only thing that can keep them out and every prune name is
+// bite-provable — exactly the "ignore rules are gone" case the belt exists for
+// (`.turbo` is un-ignored in the real repo too).
+const docsClaimSurfacesFixtureGitignore = "test-results/\nplaywright-report/\nblob-report/\nnext-env.d.ts\nAGENTS.md\nCLAUDE.md\n"
+
+// docsClaimSurfacesFixture writes the tree above under a test temp dir, makes it
+// a REAL git repo with the ignore rules applied, and walks it with the
+// PRODUCTION walk. A real repo is required now: the walk derives its file set
+// from `git ls-files`, so a fixture that is not under git would prove nothing
+// about which files the guard judges. Using the production walk is still the
+// whole point — a fixture list checked against a copy of the rules proves
+// nothing about the guard, only about the copy.
 func docsClaimSurfacesFixture(t *testing.T) (string, []string) {
 	t.Helper()
 	root := t.TempDir()
-	for _, rel := range docsClaimSurfacesFixtureFiles {
+	write := func(rel, body string) {
 		p := filepath.Join(root, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			t.Fatalf("mkdir for fixture %s: %v", rel, err)
 		}
-		if err := os.WriteFile(p, []byte("fixture body for "+rel+"\n"), 0o644); err != nil {
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
 			t.Fatalf("write fixture %s: %v", rel, err)
+		}
+	}
+	write(".gitignore", docsClaimSurfacesFixtureGitignore)
+	for _, rel := range docsClaimSurfacesFixtureFiles {
+		write(rel, "fixture body for "+rel+"\n")
+	}
+	// git init + `git add -A` (which honours .gitignore) turns every non-ignored
+	// fixture file into a TRACKED one, exactly the shape a real checkout has, so
+	// the walk's --cached half is exercised as well as --others. cleanGitEnv
+	// keeps an inherited GIT_DIR / GIT_INDEX_FILE (the preflight gate machinery
+	// exports a private index) from pointing these at the REAL checkout.
+	for _, args := range [][]string{
+		{"init", "-q"},
+		{"add", "-A"},
+	} {
+		cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
+		cmd.Env = cleanGitEnv()
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v in fixture %s: %v\n%s", args, root, err, out)
 		}
 	}
 	var got []string
@@ -626,21 +758,25 @@ func docsClaimSurfacesFixture(t *testing.T) (string, []string) {
 // embed page and one docs page. Asserted by path, so this fails the moment the
 // root is narrowed back (the pre-fix walk cannot see any web/public file).
 //
-// (b) A throwaway fixture tree, for the boundaries no file in the real tree can
+// (b) A throwaway FIXTURE REPO, for the boundaries no file in the real tree can
 // exercise: whether the EXTENSION rule admits the formats a docs author may use
-// (.mdx has no file today, so only the rule can be asserted — there is nothing
-// for a walk to find), and whether the dir-skip actually prunes (a dependency's
-// vendored prose and build output must not be judged; judging them makes the
-// guard cry wolf on other people's files). Asserted against the fixture so the
-// answer does not depend on which dependencies happen to be installed, and so
-// every rule here is bite-provable on a tree that is built in the test rather
-// than on the state of the checkout.
+// (.mdx has no file today, so only the rule can be asserted), whether the dir
+// prune drops a dependency's vendored prose and build output, and whether the
+// git-derived file set drops GENERATED, gitignored artefacts (the .md Playwright
+// writes into test-results/, the .ts Next writes into next-env.d.ts) — the same
+// artefact class that red the guard on a path git cannot reset (card
+// t_5293b10c). Asserted against the fixture so the answer does not depend on
+// which dependencies happen to be installed, and so every rule here is
+// bite-provable on a tree that is built in the test rather than on the state of
+// the checkout.
 //
-// BITE, all four measured on this file: narrow the root to web/src -> (a) names
-// the four real-tree surfaces as unreached; drop ".mdx" from docsClaimSurface ->
-// (b) names the two .mdx paths as missing; drop "node_modules", or ".next" and
-// ".turbo", from the walk's dir-skip -> (b) names the vendored README or the
-// build output as judged.
+// BITE, all measured on this file: narrow the root to web/src -> (a) names the
+// four real-tree surfaces as unreached; drop ".mdx" from docsClaimSurface -> (b)
+// names the two .mdx paths as missing; drop "node_modules", or ".next" and
+// ".turbo", from docsClaimWalkPrunesDir -> (b) names the vendored README or the
+// build output as judged; STOP passing --exclude-standard (or list generated
+// output another way) -> (b) names test-results/abcd-embed/error-context.md as
+// judged.
 func TestDocsClaimSurfacesCoverTheReaderFacingWebTree(t *testing.T) {
 	root := webRoot(t)
 	files := docsClaimSurfaces(t, root)
@@ -693,8 +829,28 @@ func TestDocsClaimSurfacesCoverTheReaderFacingWebTree(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Errorf("the docs-claim walk over a fixture tree returned\n  %v\nwant\n  %v\n"+
 			"a path in want but not in got is a reader-facing surface the walk silently skips; a "+
-			"path in got but not in want is a dependency's prose or build output the walk judges",
+			"path in got but not in want is a dependency's prose, build output, or a generated "+
+			"artefact the walk judges",
 			got, want)
+	}
+
+	// The generated, gitignored artefacts must be ABSENT by NAME, so a regression
+	// that stops excluding them (e.g. dropping --exclude-standard from the git
+	// invocation) fails naming the file rather than only as an opaque set diff —
+	// and so the card's whole class (a Playwright-written .md, a Next-written
+	// .ts) is pinned rather than only implied by the comparison above.
+	for _, generated := range []string{
+		"test-results/abcd-embed/error-context.md",
+		"playwright-report/index.md",
+		"blob-report/report.md",
+		"next-env.d.ts",
+	} {
+		if slices.Contains(got, generated) {
+			t.Errorf("the docs-claim walk admits the generated, gitignored web/%s — a "+
+				"toolchain writes that file, so judging it reds the guard on a path git cannot "+
+				"reset; the file set must come from git (`ls-files --cached --others "+
+				"--exclude-standard`), never a raw tree walk", generated)
+		}
 	}
 
 	// The generated API description is excluded by the named skip, not merely by
