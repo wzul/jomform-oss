@@ -365,8 +365,46 @@ gr_testdb_component() {
              gr_is_hostport "$auth" || comp="${comp##*@}" ;;
          esac ;;
   esac
-  printf '%s' "$comp" \
-    | sed -E 's#^(localhost|127\.0\.0\.1|\[::1\])(:[0-9]+)?(/.*)?$#loopback\2\3#'
+  # Canonicalise EACH host in a comma-separated authority, then DEDUPE (card
+  # t_54342924).
+  #
+  # A DSN list is how a URL names an HA pair, and "two aliases of one server"
+  # written as a list — `127.0.0.1,127.0.0.1:5432/db` — escaped the anchored
+  # loopback rule entirely (`,` is not in the host pattern), so ONE server still
+  # produced TWO keys. That is the same class as t_7add0cfa: a record refused with
+  # "the environment changed since that record", costing the whole gate and the
+  # host-wide flock wait. The component's whole job is to answer "is this the same
+  # test database?", and it answered wrongly the moment an alias escaped.
+  #
+  # Two steps, because mapping each host is not enough on its own:
+  #   1. normalise each element, filling the DEFAULT PORT for a loopback host that
+  #      omits it (`127.0.0.1` and `127.0.0.1:5432` are one server — that is what
+  #      5432 as a default MEANS);
+  #   2. DROP DUPLICATES, so a list naming the same server twice is the same
+  #      component as naming it once.
+  # Order is preserved, and distinct hosts are untouched — a genuine pair
+  # (`host1:5432,host2:5432`) must stay two elements.
+  #
+  # Measured before this change:
+  #   postgres://u:***@127.0.0.1,127.0.0.1:5432/jomform_test -> 127.0.0.1,127.0.0.1:5432/jomform_test
+  #   postgres://u:***@localhost:5432/jomform_test           -> loopback:5432/jomform_test
+  # After: both give `loopback:5432/jomform_test`.
+  local hostpart rest out="" seg
+  hostpart="${comp%%/*}"
+  if [ "$hostpart" = "$comp" ]; then rest=""; else rest="/${comp#*/}"; fi
+  local IFS=','
+  for seg in $hostpart; do
+    seg="$(printf '%s' "$seg" | sed -E 's#^(localhost|127\.0\.0\.1|\[::1\]):?([0-9]*)$#loopback:\2#')"
+    # A loopback host with no port took the default above -> 5432.
+    case "$seg" in loopback:) seg="loopback:5432" ;; esac
+    # Dedupe, preserving order.
+    case ",$out," in
+      *",$seg,"*) : ;;
+      *) out="${out:+$out,}$seg" ;;
+    esac
+  done
+  comp="$out$rest"
+  printf '%s' "$comp"
 }
 
 # gr_key_material [repo] — the components that INVALIDATE a record, in a fixed

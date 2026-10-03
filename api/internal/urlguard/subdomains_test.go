@@ -335,3 +335,51 @@ func sorted(in []string) []string {
 	sort.Strings(out)
 	return out
 }
+
+// --- the jomform- prefix (card t_40338d5f) ---------------------------------
+
+// TestJomFormPrefixIsReserved is the guard for the hole the label list left open.
+//
+// The list above is a set of LABELS, and JomForm's own names live under more than
+// one of them ("templates" is listed, but the host JomForm actually serves the
+// gallery on is `jomform-templates.jomform.com`, and the `jomform-` prefix spans
+// namespaces). Measured on the shipped tree before the fix: claiming a workspace
+// with the slug `jomform-templates` answered 201 over the real POST /v1/workspaces
+// route and the claimed workspace then served the merchant's storefront at that
+// host — a live JomForm surface shadowed by a tenant. Enumerating names one by one
+// is what missed it, so the reservation is a PREFIX.
+//
+// The negative legs matter as much as the positive ones: a prefix rule that also
+// swallowed `my-jomform` or `jomformx` would take legitimate merchant addresses,
+// and `workspaces.slug LIKE 'jomform-%'` returns ZERO rows, so the positive legs
+// cost no existing merchant anything.
+func TestJomFormPrefixIsReserved(t *testing.T) {
+	reserved := []string{
+		"jomform-templates",   // the measured defect
+		"jomform-templates-2", // the same hole one keystroke away
+		"jomform-anything",    // any future JomForm name
+		"JOMFORM-TEMPLATES",   // the rule normalises before comparing
+		"  jomform-templates", // ... and trims
+	}
+	for _, label := range reserved {
+		if !ReservedSubdomain(label) {
+			t.Errorf("ReservedSubdomain(%q) = false, want true — JomForm's own surfaces "+
+				"are named under the `jomform-` prefix, and a workspace that claims one "+
+				"serves its own storefront on a live JomForm host (t_40338d5f)", label)
+		}
+	}
+	// A prefix rule must not be greedy: these are legitimate merchant addresses.
+	allowed := []string{
+		"my-jomform", // contains the word, does not start with the prefix
+		"jomformx",   // starts with the letters, not the prefix (no hyphen)
+		"templates2", // not the listed label and not under the prefix
+		"jomform",    // the prefix itself without the hyphen is a different name
+	}
+	for _, label := range allowed {
+		if ReservedSubdomain(label) {
+			t.Errorf("ReservedSubdomain(%q) = true, want false — the prefix rule must "+
+				"reserve `jomform-` and NOT every name containing it, or it takes "+
+				"legitimate merchant addresses", label)
+		}
+	}
+}

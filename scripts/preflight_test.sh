@@ -2161,6 +2161,25 @@ if [ -n "$probe_tree" ]; then
     ok "one server, one key: [${url_a}] and [${url_b}] both give [${comp_a}] and key ${key_a:0:12}, while another server ([${comp_c}], key ${key_c:0:12}) and another database ([${comp_d}], key ${key_d:0:12}) still differ — and testdb= is still key material"
   fi
 
+  # The SAME property, for a MULTI-HOST DSN list (card t_54342924). A host list is
+  # how a DSN names an HA pair, and two aliases of ONE server written as a list
+  # (`127.0.0.1,127.0.0.1:5432/db`) escaped the loopback rule entirely, because the
+  # anchored pattern has no `,` in it — so one server still gave TWO keys, which is
+  # the refusal this whole check exists to prevent. Asserted as the RELATION the
+  # defect breaks (the list and either single spelling agree) rather than by pinning
+  # a token, so a future spelling change cannot red it for no reason.
+  url_list='postgres://u:***@127.0.0.1,127.0.0.1:5432/jomform_test'
+  comp_list="$(JOMFORM_TEST_DATABASE_URL="$url_list" gr_testdb_component)"
+  key_list="$(export JOMFORM_TEST_DATABASE_URL="$url_list"; PREFLIGHT_KEY_EXTRA=probe15 gr_key "$SB")"
+  case "$comp_list" in *127.0.0.1*|*localhost*) list_raw=1 ;; *) list_raw=0 ;; esac
+  if [ "$list_raw" -ne 0 ]; then
+    bad "check 34's multi-host leg — the component still carries the caller's SPELLING of a loopback host inside a DSN list ([$comp_list]), so the key is a fact about how the list was written"
+  elif [ "$comp_list" != "$comp_a" ] || [ "$key_list" != "$key_a" ]; then
+    bad "check 34's multi-host leg — TWO ALIASES OF ONE SERVER IN A DSN LIST still yield two keys: [${comp_list}] vs [${comp_a}] and key [${key_list}] vs [${key_a}]. A record written with the single spelling is then refused under the list with 'the environment changed since that record', costing the whole gate — the same class as the single-host defect this check already covers (t_54342924)"
+  else
+    ok "a MULTI-HOST DSN list of two aliases of one server gives the SAME component and key as either single spelling ([${comp_list}], key ${key_list:0:12}) — an HA list cannot cost a lane its record"
+  fi
+
   # End to end on the READER. A whole-inventory green record written under
   # spelling A, then read under spelling B (must be REUSED without executing a
   # gate) and under the other database (must be REFUSED, naming the environment).

@@ -61,6 +61,12 @@ const ReservedSubdomainCode = "reserved_subdomain"
 //     A row is not a policy: delete that workspace and the name is claimable
 //     again, which is the hole this list closes. `templates` is on the list for
 //     exactly that reason even though JomForm's own account will hold it.
+//
+// reservedSubdomainPrefix is reserved as a PREFIX rather than as labels, because
+// JomForm's own names under it live in more than one namespace (see the note above
+// the list). One entry here covers every `jomform-*` name, present and future.
+const reservedSubdomainPrefix = "jomform-"
+
 var reservedSubdomains = map[string]string{
 	// ── Infrastructure ───────────────────────────────────────────────────────
 	// The names JomForm's own deployment and mail live under. Four of them are
@@ -113,8 +119,17 @@ var reservedSubdomains = map[string]string{
 // rule does not depend on a caller having normalised the slug first (the length
 // and charset rules still run in the callers, unchanged).
 func ReservedSubdomain(label string) bool {
-	_, reserved := reservedSubdomains[strings.ToLower(strings.TrimSpace(label))]
-	return reserved
+	norm := strings.ToLower(strings.TrimSpace(label))
+	if _, reserved := reservedSubdomains[norm]; reserved {
+		return true
+	}
+	// The `jomform-` PREFIX, not just the labels written down (card t_40338d5f).
+	// JomForm's own surfaces are named under this prefix in more than one
+	// namespace, and the gallery host `jomform-templates.jomform.com` was
+	// claimable as a workspace slug — which serves the merchant's storefront on a
+	// live JomForm surface. Reserved as a prefix so the next `jomform-*` name does
+	// not need to be remembered, which is how this one was missed.
+	return strings.HasPrefix(norm, reservedSubdomainPrefix)
 }
 
 // ReservedSubdomainMessage is the refusal for a reserved label. It says WHY the
