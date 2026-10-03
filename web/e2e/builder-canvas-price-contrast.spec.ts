@@ -190,7 +190,15 @@ async function measurePrices(page: Page): Promise<Price[]> {
         text,
         fg: hex(fg),
         bg: hex(bg),
-        ratio: Math.round(ratio(fg, bg) * 1000) / 1000,
+        // THE FULL VALUE, NOT A ROUNDED ONE (card t_e0784043). Rounding to 3
+        // decimals here made the guard's effective AA floor 4.4995 instead of 4.5: a
+        // colour measuring in [4.4995, 4.5) rounds UP to exactly 4.5 and passed the
+        // floor assertion below. Enumerating the trap box (949 colours that pass on
+        // white and fail on slate-50), two land in that sliver — #6268d5 (4.50000 on
+        // #f8fafc) and #6269d1 (4.49965) — and both slipped through. The renderer is
+        // still the one doing the colour-space conversion, so the value is exact, not a
+        // hand-rolled approximation.
+        ratio: ratio(fg, bg),
         fontSize: cs.fontSize,
         fontWeight: cs.fontWeight,
       });
@@ -250,8 +258,10 @@ test("the canvas price spans clear AA on the surface they are painted on", async
         `--jf-primary-on-tint (#4338ca, 7.554:1 on this surface) instead of darkening the ` +
         `base token, which passes on white (4.700:1) and is used across the app.`,
     ).toBeGreaterThanOrEqual(AA_FLOOR);
-    // Whitespace the exact comparison: a rounded ratio (4.49 -> 4.5) would let
-    // the pre-fix tree through.
+    // The FLOOR is the one that must not be rounded, which is why the measured value is
+    // no longer rounded at all: `>= 4.5` on a number that is the real ratio cannot be
+    // satisfied by a colour in [4.4995, 4.5). The sliver is named rather than assumed —
+    // these two colours sit in it and MUST fail here (card t_e0784043).
     expect(p.ratio).toBeGreaterThan(PRE_FIX_RATIO);
   }
 });
