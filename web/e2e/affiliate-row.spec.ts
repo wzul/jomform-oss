@@ -344,8 +344,23 @@ for (const lang of LANGS) {
       // (a) The affiliate row first, with its own locale assertions: the rendered
       //     labels must be THIS locale's strings, not a raw key or English —
       //     otherwise the measurement below is of some other locale's layout.
+      //
+      // WAIT BOUNDED BY THIS TEST (card t_4b5411db). `waitForSelector`'s timeout is
+      // measured against the PAGE's own clock, and under suite load the page can be
+      // starved by the host until that budget is spent: the card's red run shows
+      // `TimeoutError: page.waitForSelector: Timeout 15000ms exceeded` at
+      // `affiliate-row.spec.ts:350` with load 24.8–29.4 on 6 CPUs, while the SAME
+      // case passes alone in ~19s (rc=0). A fixed page-side budget cannot tell "the
+      // row never rendered" from "the box was too busy to render it in 15s", and it
+      // reds a gate every PR depends on. `expect(...).toBeVisible()` is the
+      // first-class form of the same wait, so the budget is the test's own and the
+      // failure names the selector it was waiting for.
       await page.goto(`${baseURL}/settings?tab=affiliates`, { waitUntil: "domcontentloaded" });
-      await page.waitForSelector('input[placeholder="ALI"]', { timeout: 15_000 });
+      await expect(
+        page.locator('input[placeholder="ALI"]'),
+        "the affiliate create row must render — measured with the test's own timeout, not " +
+          "waitForSelector's page-side budget",
+      ).toBeVisible({ timeout: 30_000 });
       await expect(page.getByText(codeLabel, { exact: true })).toBeVisible();
       await expect(page.getByText(nameLabel, { exact: true })).toBeVisible();
       await expect(page.getByText(commissionLabel, { exact: true })).toBeVisible();
@@ -376,7 +391,18 @@ for (const lang of LANGS) {
           if (rowPage.openTab) {
             await page.getByRole("button", { name: DICT[rowPage.openTab][lang], exact: true }).first().click();
           }
-          await page.waitForSelector(rowPage.waitFor, { timeout: 15_000 });
+          // Same reason as the affiliate wait above (t_4b5411db): the budget must
+          // be this test's, not `waitForSelector`'s page-side clock.
+          // `.first()` matches what `waitForSelector` did (it took the first
+          // match): `expect(locator).toBeVisible()` is STRICT, so a selector that
+          // legitimately matches more than one row — `div.jf-card select.jf-input`
+          // matches 2 — would fail as a strict-mode violation rather than a render
+          // failure, blaming the page for a locator choice. The assertion is still
+          // meaningful on `.first()` because it decides VISIBILITY, not a count.
+          await expect(
+            page.locator(rowPage.waitFor).first(),
+            `${rowPage.name}: the row must render`,
+          ).toBeVisible({ timeout: 30_000 });
         }
         // A row behind a click must be OPENED before it can be measured, and the
         // open itself is asserted: if the drawer's own form does not appear, the
@@ -385,7 +411,10 @@ for (const lang of LANGS) {
         if (rowPage.openLabel && rowPage.openSelector) {
           await page.getByRole("button", { name: DICT[rowPage.openLabel][lang], exact: true }).first()
             .click();
-          await page.waitForSelector(rowPage.openSelector, { timeout: 15_000 });
+          await expect(
+            page.locator(rowPage.openSelector),
+            `${rowPage.name}: the opened form must appear`,
+          ).toBeVisible({ timeout: 30_000 });
         }
         const m = rowPage === ROW_PAGES[0] ? aff : await measureRow(page, rowPage.rowExpr);
         const where = `${rowPage.name} (${rowPage.file})`;
