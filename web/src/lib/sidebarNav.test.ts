@@ -320,8 +320,11 @@ test("the docs no longer send a reader looking for a Profile nav row", () => {
 // authenticated sidebar/drawer/account block/workspace switcher — so a tinted
 // contrast regression in the dashboard chrome is invisible to the gate. That is
 // exactly how the switcher's tinted active item shipped at 4.20:1 while the nav
-// row was fixed. The EXECUTED proof is the axe run in the card (switcher open,
-// 2+ workspaces); this is the part that keeps it from coming back.
+// row was fixed. The EXECUTED proof is `web/e2e/a11y-switcher.spec.ts`, which the
+// a11y gate runs (it opens the switcher with two workspaces stubbed at the browser
+// level and MEASURES the painted contrast of every row, with a control arm that
+// overrides the on-tint tokens to their pre-fix values). This file is the source
+// guard that keeps the class from coming back in a file the gate does not reach.
 //
 // SCOPE: the dashboard CHROME this guard's card owns — Shell.tsx (the sidebar /
 // drawer / account block) and WorkspaceSwitcher.tsx. It is deliberately not

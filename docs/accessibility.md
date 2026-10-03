@@ -37,7 +37,10 @@ npm run a11y          # starts the app's own server, runs axe against the pages
 ../scripts/preflight.sh --only a11y
 ```
 
-The scan lives in `web/e2e/a11y.spec.ts` (Playwright + `@axe-core/playwright`).
+The scan lives in `web/e2e/a11y.spec.ts` (Playwright + `@axe-core/playwright`); two
+further specs (`a11y-dialogs.spec.ts`, `a11y-switcher.spec.ts`) cover authenticated
+surfaces with the same gate, and every file whose name matches `a11y*.spec.ts` is
+selected by the `a11y` project automatically.
 Minor/moderate findings are reported for triage but do not fail the gate.
 
 ### Confirmation dialogs (also in the automated scan)
@@ -63,6 +66,36 @@ that resolves to the shipped heading, focus in the confirm field on open, the
 confirm button disabled until the exact slug is typed, Escape closes, and zero
 critical/serious axe violations within the dialog. A regression there now fails
 `npm run a11y` instead of passing unseen.
+
+### The workspace switcher's tinted active item
+
+The **workspace switcher's menu** is scanned by the same gate, in
+`web/e2e/a11y-switcher.spec.ts`. It is on the authenticated chrome, so the
+public-route scan cannot reach it, and the sidebar's tinted row was fixed in the
+same redesign while the switcher's was left behind at 4.20:1 — only this
+measurement catches that.
+
+Like the dialogs above it needs no session: the spec stubs
+`/api/rest/dashboard-bundle` at the browser level with **two** workspaces (with
+one, the switcher renders a read-only chip and the tinted active row never
+renders — a green reading over nothing), opens the menu, and:
+
+- asserts the menu is REACHABLE and that exactly one row is painted on the tint,
+  so the scan cannot pass over a menu that rendered no tinted row;
+- **measures** the painted contrast of every row (colours round-tripped through a
+  canvas, as the builder-canvas spec does) against the WCAG floor rather than
+  trusting a class name;
+- runs axe over `[role="menu"]`, failing on critical/serious;
+- and carries the old hand-run probe's **CONTROL** arm: with the two
+  `--jf-*-on-tint` tokens overridden to their PRE-FIX values, the measurement
+  must drop BELOW the floor. Measured: the active row is 7.068:1 normally and
+  **4.203:1** under the override, which is the shipped defect reproduced.
+
+`web/scripts/a11y-switcher.mjs`, `web/scripts/a11y-drawer.mjs` and
+`web/scripts/nav-evidence.mjs` are HAND-RUN probes: they need a `SESSION` token
+and a local build, and **no gate executes them**. The switcher's coverage now
+lives in the spec above; the other two remain hand-run, and nothing here claims
+otherwise.
 
 ### The builder canvas, and a CONTRAST measurement rather than a class check
 
