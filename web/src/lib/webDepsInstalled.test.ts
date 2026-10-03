@@ -715,19 +715,44 @@ test("the real tree passes its own check (this is the tree the suite runs in)", 
 test("test:unit runs the dependency check BEFORE node --test (the regression this file exists for)", () => {
   const script = PKG.scripts["test:unit"];
   assert.ok(script, "web/package.json no longer defines test:unit");
-  const checkAt = script.indexOf("web-deps-check.mjs");
-  const testAt = script.indexOf("node --test");
-  assert.notEqual(checkAt, -1, `test:unit no longer runs the dependency check: ${script}`);
-  assert.notEqual(testAt, -1, `test:unit no longer runs node --test: ${script}`);
+
+  // THE CHECK IS ON THE EXECUTED PATH, NOT ON THE STRING (card t_70c0588b).
+  //
+  // This test used to assert `script.indexOf("web-deps-check.mjs") < script.indexOf("node --test")`.
+  // That is satisfied by a `test:unit` that merely MENTIONS the checker: delete the bare
+  // `node scripts/web-deps-check.mjs && ` prefix, leave the path reachable from a comment,
+  // an `echo`, a later `||` branch, or the suite's own reference to CHECKER, and the old
+  // assertion still passed. Measured: the mutation below kept the old test GREEN.
+  //
+  // The chain is `a && b && c`, so split it and require the checker to be its own
+  // EXECUTABLE pre-`&&` step: a step that starts with `node`, names the checker, and
+  // carries no `||` fallback.
+  const steps = script.split("&&").map((step) => step.trim());
+  const isExecutedStep = (step, file) =>
+    step.startsWith("node ") && step.includes(file) && !step.includes("||");
+  const checkStep = steps.findIndex((step) => isExecutedStep(step, "web-deps-check.mjs"));
+  const testStep = steps.findIndex((step) => step.startsWith("node --test"));
+
+  assert.notEqual(
+    checkStep,
+    -1,
+    `test:unit no longer EXECUTES the dependency check as its own && step — a mention is not a ` +
+      `run (a comment, an echo, a || fallback, or a step that reordered the flags all satisfy a ` +
+      `substring test): ${script}`,
+  );
+  assert.notEqual(testStep, -1, `test:unit no longer runs node --test: ${script}`);
   assert.ok(
-    checkAt < testAt,
+    checkStep < testStep,
     `test:unit must run the dependency check FIRST — a bare 'node --test' in an uninstalled tree ` +
       `under-reports instead of failing: ${script}`,
   );
-  // `build` keeps going through test:unit, so the gate inherits the refusal.
-  assert.match(
-    PKG.scripts["build"] ?? "",
-    /npm run test:unit/,
-    "npm run build no longer runs test:unit, so the web gate lost the dependency check",
+
+  // `build` keeps going through test:unit, so the gate inherits the refusal. Same rule
+  // applies to the hop: it must be an executed step, not a mention.
+  const buildSteps = (PKG.scripts["build"] ?? "").split("&&").map((step) => step.trim());
+  assert.ok(
+    buildSteps.some((step) => step === "npm run test:unit"),
+    "npm run build no longer runs test:unit as an executed step, so the web gate lost the " +
+      "dependency check",
   );
 });
