@@ -402,6 +402,14 @@ func TestRespondAIErrDistinguishesCredentialFromInternal(t *testing.T) {
 		want int
 	}{
 		{"rejected credential", fmt.Errorf("wrapped: %w", llm.ErrCredential), http.StatusServiceUnavailable},
+		// Card t_3a112596: a MISSING (404) or RETIRED (410) model is the same KIND of fault
+		// as a rejected key — a deployment state — so it answers 503 with the surface's own
+		// unavailable copy, under its own log reason (llm_model_unavailable). Before this,
+		// the 410 fell to the generic branch and the caller got a bare 500 while the
+		// assistant was still offered. The provider's "was retired" text is carried in the
+		// error and must NOT reach the body.
+		{"retired model", fmt.Errorf("wrapped: %w (status 410): deepseek-v3.2 was retired at 2026-09-25", llm.ErrModelUnavailable), http.StatusServiceUnavailable},
+		{"missing model", fmt.Errorf("wrapped: %w (status 404): model does not exist", llm.ErrModelUnavailable), http.StatusServiceUnavailable},
 		{"provider down", errChatDown{}, http.StatusInternalServerError},
 		{"provider 500", errors.New("llm: status 500: boom"), http.StatusInternalServerError},
 	}
@@ -416,6 +424,11 @@ func TestRespondAIErrDistinguishesCredentialFromInternal(t *testing.T) {
 			}
 			if strings.Contains(rec.Body.String(), "10.0.0.1") {
 				t.Fatalf("the response leaks the transport detail: %s", rec.Body.String())
+			}
+			// The provider's message names the model and its retirement date; it is for
+			// the LOG, never for the caller.
+			if strings.Contains(rec.Body.String(), "was retired") {
+				t.Fatalf("the response leaks the provider's message: %s", rec.Body.String())
 			}
 		})
 	}

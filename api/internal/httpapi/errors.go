@@ -117,6 +117,16 @@ func respondAIErr(w http.ResponseWriter, r *http.Request, err error, unavailable
 		writeErr(w, http.StatusServiceUnavailable, unavailableMsg)
 		return
 	}
+	if errors.Is(err, llm.ErrModelUnavailable) {
+		// Same ANSWER as a rejected key — the feature is unavailable, not broken — but a
+		// DIFFERENT reason, so the operator is sent to the right half. A 404/410 is a
+		// configuration fault ("the model id is wrong or retired"), never a key problem:
+		// logging llm_credential_rejected here would be false and would have an operator
+		// rotating a key that works.
+		logError(r, "llm_model_unavailable", err)
+		writeErr(w, http.StatusServiceUnavailable, unavailableMsg)
+		return
+	}
 	respondErr(w, r, err)
 }
 

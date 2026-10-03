@@ -42,6 +42,19 @@ const DefaultModel = "deepseek-v4.1-flash"
 // callers need to answer "is the feature usable, and if not, why".
 var ErrCredential = errors.New("llm: kredensial model ditolak oleh pembekal")
 
+// ErrModelUnavailable is returned when the provider says the configured MODEL is
+// not there (HTTP 404) or has been RETIRED (HTTP 410). It is deliberately a
+// SIBLING of ErrCredential, not the same sentinel: the key was not rejected, so
+// reporting `llm_credential_rejected` would be a false log line and would send an
+// operator to rotate a key that is fine.
+//
+// Both sentinels describe a DEPLOYMENT state rather than a bug, so both are
+// reported as UNAVAILABLE (503) by the AI surfaces. Measured on prod before this
+// existed: a retired model answered the provider's 410, fell to the generic
+// branch, and every AI surface returned a bare 500 {"code":"internal"} while the
+// assistant was still offered — for ~13 h.
+var ErrModelUnavailable = errors.New("llm: model yang dikonfigurasi tidak tersedia di pembekal")
+
 // HasCredential reports whether an API key is CONFIGURED. It is a presence
 // check, not a validity check: only the provider can say whether the key still
 // works, and that answer arrives as ErrCredential when a call is made.
@@ -291,6 +304,15 @@ func (c *Client) post(ctx context.Context, body []byte) ([]byte, error) {
 		// rather than masking it as a generic internal error.
 		return nil, fmt.Errorf("%w (status %d): %s",
 			ErrCredential, resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
+		// A model that does not exist (404) or has been RETIRED (410) is the same
+		// KIND of fault — a deployment state — but a different CAUSE from a rejected
+		// key, so it gets its own sentinel and its own log reason. The provider's
+		// own message ("… was retired at …") is carried through, because that text
+		// is what tells the operator which model to change.
+		return nil, fmt.Errorf("%w (status %d): %s",
+			ErrModelUnavailable, resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("llm: status %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
