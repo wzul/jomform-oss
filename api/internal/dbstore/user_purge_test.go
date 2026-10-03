@@ -302,6 +302,87 @@ func TestDeleteUnverifiedOlderThanSkipsBlockedUser(t *testing.T) {
 	}
 }
 
+// TestCountUnverifiedOlderThanClassified pins the fix for card t_b8446b61.
+//
+// `CountUnverifiedOlderThan` counts EVERY older-than-cutoff unverified row,
+// including the ones the sweep can only answer with Blocked — so the tool's
+// `count` and the sweep's outcome disagree with no way for the caller to see
+// why. On the production backlog that was `count: 1` for a user whose account
+// holds 36 sales: it reads as "the sweep will clear this", while the truth is
+// that this candidate is exactly what wedged the sweep.
+//
+// The classified read must therefore (a) reproduce the sweep's own verdict for
+// the SAME fixtures, and (b) commit nothing.
+func TestCountUnverifiedOlderThanClassified(t *testing.T) {
+	p := testPool(t)
+	ctx := context.Background()
+	store := NewUserStore(p)
+
+	// Drain candidates left behind by another test in this package so the counts
+	// below describe this test's own fixtures exactly.
+	if _, err := store.DeleteUnverifiedOlderThan(ctx, time.Now()); err != nil {
+		t.Fatalf("pre-sweep drain: %v", err)
+	}
+
+	blocked := createBlockedUserWithSale(t, ctx, p, "cls-blocked-"+md5Rand()+"@example.test")
+	defer cleanupUsersWithSales(t, ctx, p, blocked.userID)
+
+	deletable := createUnverifiedUser(t, ctx, p, "cls-deletable-"+md5Rand()+"@example.test")
+	if _, err := p.Exec(ctx,
+		`UPDATE users SET created_at = now() - interval '10 days' WHERE id = $1`, deletable); err != nil {
+		t.Fatalf("backdate deletable user: %v", err)
+	}
+	defer cleanupUsers(t, ctx, p, deletable)
+
+	cutoff := time.Now().Add(-7 * 24 * time.Hour)
+	res, err := store.CountUnverifiedOlderThanClassified(ctx, cutoff)
+	if err != nil {
+		t.Fatalf("CountUnverifiedOlderThanClassified: %v", err)
+	}
+
+	// The classification is the sweep's: one purgable, one blocked.
+	if res.Deleted != 1 {
+		t.Errorf("res.Deleted = %d, want 1 — the classified read must say how many candidates the "+
+			"sweep CAN purge; if this is 0 the classification has stopped agreeing with the sweep",
+			res.Deleted)
+	}
+	if res.Blocked != 1 {
+		t.Errorf("res.Blocked = %d, want 1 — the sale-holding candidate is un-purgeable and must be "+
+			"reported as such rather than folded into a bare count", res.Blocked)
+	}
+
+	// AND NOTHING WAS DELETED. This is the property that makes the tool's
+	// read-only contract true: the classification runs the sweep's own delete
+	// inside a transaction that is always rolled back.
+	if n := countRows(t, ctx, p, `SELECT count(*) FROM users WHERE id = $1`, deletable); n != 1 {
+		t.Errorf("the deletable candidate was DELETED by a read (count=%d, want 1) — the classified "+
+			"read must roll back, or the read-only tool becomes a purge", n)
+	}
+	if n := countRows(t, ctx, p, `SELECT count(*) FROM users WHERE id = $1`, blocked.userID); n != 1 {
+		t.Errorf("the blocked candidate was deleted (count=%d, want 1)", n)
+	}
+	if n := countRows(t, ctx, p, `SELECT count(*) FROM sales WHERE account_id = $1`, blocked.salesAccount); n != 1 {
+		t.Errorf("the sale was deleted by a read (count=%d, want 1)", n)
+	}
+	// The blocked user's sale-free account and workspace must still be there too:
+	// its transaction rolled back in full, exactly as the sweep's does.
+	if n := countRows(t, ctx, p, `SELECT count(*) FROM accounts WHERE owner_user_id = $1`, deletable); n != 1 {
+		t.Errorf("the deletable candidate's account was deleted by a read (count=%d, want 1)", n)
+	}
+
+	// The plain count still answers the backlog size, which is what it is for —
+	// and it is LARGER than the purgable number, which is the whole point.
+	plain, err := store.CountUnverifiedOlderThan(ctx, cutoff)
+	if err != nil {
+		t.Fatalf("CountUnverifiedOlderThan: %v", err)
+	}
+	if plain != res.Deleted+res.Blocked {
+		t.Errorf("CountUnverifiedOlderThan = %d but the classified read found %d purgable + %d "+
+			"blocked = %d — the two reads disagree about the same backlog, so one of them is "+
+			"counting a different set", plain, res.Deleted, res.Blocked, res.Deleted+res.Blocked)
+	}
+}
+
 // TestDeleteUnverifiedOlderThanBlockedOnlySweep pins the other half of the
 // report: a sweep whose every candidate is blocked deletes nothing, succeeds,
 // and says so — instead of surfacing an error (or nothing at all) the way the

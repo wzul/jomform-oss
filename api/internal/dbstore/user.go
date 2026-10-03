@@ -455,6 +455,51 @@ func (s *UserStore) DeleteUnverifiedOlderThan(ctx context.Context, cutoff time.T
 	return res, nil
 }
 
+// CountUnverifiedOlderThanClassified reports the purge backlog SPLIT the way the
+// sweep will actually behave (card t_b8446b61).
+//
+// CountUnverifiedOlderThan answers "how many unverified users are past the
+// cutoff", and the sweep's answer to the same backlog can be a DIFFERENT number:
+// a candidate whose account still holds sales or subscriptions is skipped as
+// Blocked, so it can never be purged. On production the one older-than-cutoff
+// unverified row owns an account with 36 sales — the tool reported `count: 1`
+// with nothing said about it being un-purgeable, which reads as "the sweep will
+// clear this" when the truth is "this one is exactly what wedged it".
+//
+// THE CLASSIFICATION IS THE SWEEP'S OWN, not a re-derivation. `purgeUser` is run
+// for each candidate inside a transaction that is ALWAYS rolled back, so a
+// candidate is classified by the very delete that the sweep would attempt — the
+// same function, the same SQL, the same RESTRICT/FK verdict. Duplicating the
+// `NOT IN (SELECT … FROM sales/subscriptions)` logic here would be a second
+// implementation of the rule, free to drift from the one that actually runs.
+//
+// Read-only by construction: nothing is committed, and RowsAffected is measured
+// from a rolled-back transaction. A caller that needs the deleting numbers must
+// still call DeleteUnverifiedOlderThan.
+func (s *UserStore) CountUnverifiedOlderThanClassified(ctx context.Context, cutoff time.Time) (PurgeResult, error) {
+	var res PurgeResult
+	ids, err := s.unverifiedIDsOlderThan(ctx, cutoff)
+	if err != nil {
+		return res, err
+	}
+	for _, id := range ids {
+		deleted, err := s.purgeUserTx(ctx, id, true)
+		switch {
+		case err == nil:
+			if deleted {
+				res.Deleted++
+			}
+		case isBlockedPurgeErr(err):
+			res.Blocked++
+		default:
+			// A real failure (connection loss, syntax error): stop rather than
+			// repeat it for every remaining id, matching the sweep's behaviour.
+			return res, err
+		}
+	}
+	return res, nil
+}
+
 // unverifiedIDsOlderThan lists the purge candidates. It runs outside the
 // per-user transactions so no snapshot is held open across the deletions.
 func (s *UserStore) unverifiedIDsOlderThan(ctx context.Context, cutoff time.Time) ([]string, error) {
@@ -487,6 +532,23 @@ func (s *UserStore) unverifiedIDsOlderThan(ctx context.Context, cutoff time.Time
 // NO ACTION reference exists — the whole transaction rolls back, leaving that
 // user exactly as it was, and the caller skips it.
 func (s *UserStore) purgeUser(ctx context.Context, id string) (bool, error) {
+	return s.purgeUserTx(ctx, id, false)
+}
+
+// purgeUserTx runs the per-user deletes. `dryRun` decides whether the transaction
+// is committed or rolled back, and THAT is the only difference between the two
+// callers (card t_b8446b61):
+//
+//   - the sweep commits — the deletes are the point of it;
+//   - the backlog classification rolls back — it needs the SAME verdict
+//     (deleted vs the FK refusal) without touching a row.
+//
+// Splitting it this way was necessary, not decorative: the first attempt at the
+// classification called purgeUser directly, and the test caught it deleting the
+// "deletable" fixture — i.e. a read-only MCP tool would have been a purge that
+// reports instead of deletes. There is ONE body here, so the classification
+// cannot drift from the delete it is predicting.
+func (s *UserStore) purgeUserTx(ctx context.Context, id string, dryRun bool) (bool, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return false, err
@@ -513,10 +575,20 @@ func (s *UserStore) purgeUser(ctx context.Context, id string) (bool, error) {
 		return false, err
 	}
 	// Delete the user. The verified=false guard is a hard safety net.
+	//
+	// The verdict here (deleted vs the FK refusal below) is also what
+	// CountUnverifiedOlderThanClassified reads, via purgeUserTx(dryRun=true) — see
+	// that function. There is one body, so the backlog breakdown and the sweep
+	// cannot disagree (card t_b8446b61).
 	tag, err := tx.Exec(ctx,
 		`DELETE FROM users WHERE id = $1 AND verified = false`, id)
 	if err != nil {
 		return false, err
+	}
+	if dryRun {
+		// Rolled back by the deferred Rollback; the count is still authoritative
+		// because it comes from the same DELETE the sweep would have committed.
+		return tag.RowsAffected() == 1, nil
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return false, err

@@ -1,13 +1,15 @@
-// MCP parity tool: purge_unverified_accounts — reports the number of
-// unverified accounts (never confirmed their email) older than the purge
-// cutoff (issue #190). The actual deletion runs automatically on the hourly
-// sweep; this tool surfaces the backlog count so an admin agent can observe
-// the purge without a dangerous cross-account delete.
+// MCP parity tool: purge_unverified_accounts — reports the backlog of unverified
+// accounts (never confirmed their email) older than the purge cutoff (issue #190),
+// SPLIT into what the sweep can purge and what it can only leave blocked
+// (card t_b8446b61). The actual deletion runs automatically on the hourly sweep;
+// this tool surfaces the backlog so an admin agent can observe the purge without a
+// dangerous cross-account delete.
 package mcpsrv
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -21,8 +23,10 @@ type purgeUnverifiedIn struct {
 }
 
 // purgeUnverifiedAccounts reports how many unverified accounts are older than
-// the purge cutoff and would be auto-deleted by the next sweep. Read-only and
-// admin-gated: it never deletes anything itself.
+// the purge cutoff, how many of those the next sweep would actually delete, and
+// how many are blocked by protected data. Read-only and admin-gated: it never
+// deletes anything itself — the classification runs the sweep's own delete
+// inside a transaction that is always rolled back.
 func (s *Server) purgeUnverifiedAccounts(
 	ctx context.Context, _ *mcp.CallToolRequest, in purgeUnverifiedIn,
 ) (*mcp.CallToolResult, map[string]any, error) {
@@ -46,9 +50,36 @@ func (s *Server) purgeUnverifiedAccounts(
 	if err != nil {
 		return nil, nil, err
 	}
+	// THE BREAKDOWN, not just the bare count (card t_b8446b61). A candidate whose
+	// account still holds sales or subscriptions is skipped as Blocked and can
+	// NEVER be purged — on production the one older-than-cutoff unverified row
+	// owned an account with 36 sales, and `count: 1` read as "the sweep will clear
+	// this" when the truth was that this row is exactly what wedged the sweep.
+	// The classification is the store's own verdict (the sweep's delete, run in a
+	// transaction that is rolled back), so this read commits nothing.
+	//
+	// If the store cannot classify, the tool still answers — it reports the count
+	// it has and SAYS the breakdown is unavailable, rather than failing a read or,
+	// worse, presenting a classification it did not get. `blocked: null` is that
+	// statement, and the note says so.
+	var blocked any
+	note := "Akaun belum disahkan dipadam automatik oleh sweep; tool ini hanya melaporkan kiraan."
+	if cls, cerr := s.deps.Users.CountUnverifiedOlderThanClassified(ctx, cutoff); cerr == nil {
+		blocked = cls.Blocked
+		purgeable := cls.Deleted
+		note = fmt.Sprintf(
+			"%d boleh dipadam oleh sweep; %d calon TERSEKAT (akaun masih memegang jualan atau "+
+				"langganan) dan TIDAK akan dipadam — ini bacaan sahaja, tiada apa dipadam.",
+			purgeable, cls.Blocked)
+	} else {
+		blocked = nil
+		note = "Akaun belum disahkan dipadam automatik oleh sweep; tool ini hanya melaporkan " +
+			"kiraan. Pecahan TERSEKAT tidak tersedia (pengelasan gagal)."
+	}
 	return nil, map[string]any{
 		"unverified_older_than_days": days,
 		"count":                      n,
-		"note":                       "Akaun belum disahkan dipadam automatik oleh sweep; tool ini hanya melaporkan kiraan.",
+		"blocked":                    blocked,
+		"note":                       note,
 	}, nil
 }

@@ -369,7 +369,7 @@ const TOOL_GROUPS: { group: string; note?: string; tools: { name: string; desc: 
   {
     group: "Admin (super-admin, platform-wide)",
     tools: [
-      { name: "purge_unverified_accounts", desc: "Laporkan bilangan akaun belum disahkan (emel) yang lebih lama daripada ambang dan akan dipadam automatik oleh sweep. Admin sahaja; read-only \u2014 tidak memadam apa-apa." },
+      { name: "purge_unverified_accounts", desc: "Laporkan bilangan akaun belum disahkan (emel) yang lebih lama daripada ambang, DIPECAH kepada berapa yang sweep akan padam dan berapa yang TERSEKAT (akaun masih memegang jualan atau langganan, jadi ia tidak akan dipadam). Admin sahaja; read-only \u2014 tidak memadam apa-apa." },
       { name: "admin_list_workspaces", desc: "Senarai SEMUA workspace (storefront) platform: id, nama, slug, emel pemilik, tarikh cipta, bilangan borang + produk. Super-admin sahaja; read-only; diaudit." },
       { name: "admin_media_usage", desc: "Penggunaan storan media per workspace (bait) berbanding kuota 1GB setiap workspace. Super-admin sahaja; read-only; diaudit." },
       { name: "admin_list_sales", desc: "Senarai jualan merentas SEMUA workspace, boleh tapis (date_from/date_to, workspace_id, status). Super-admin sahaja; read-only; diaudit." },
