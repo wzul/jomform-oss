@@ -446,8 +446,8 @@ def capability_refusal(base_rev, base_full, base_guard, seen, cases_run):
                   "%s, the commit that introduced the package-wide registry reader in %s (the guard "
                   "there does not declare %s):"
                   % (intro_short, GUARD_REL, PACKAGE_READER_MARKER), flush=True)
-            print("    BITEPROOF_BASE=%s python3 scripts/biteproof_model_default_guard.py" % suggest,
-                  flush=True)
+            print("    BITEPROOF_BASE=%s python3 api/scripts/biteproof_model_default_guard.py" % suggest,
+                    flush=True)
         else:
             print("The commit that introduced the package-wide registry reader is %s, but its "
                   "parent %s reads the registry as a package too (it still declares %s), so this "
