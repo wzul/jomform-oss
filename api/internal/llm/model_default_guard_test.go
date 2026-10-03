@@ -117,6 +117,7 @@ package llm
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1285,16 +1286,44 @@ func readDescriptions(t *testing.T, path string, re *regexp.Regexp, rel string) 
 // vacuous check. A file that cannot be READ is an error rather than an empty
 // parse: the previous single-file reader fataled on it and a registry file that
 // vanishes mid-scan must not silently shrink the registry.
+//
+// A NAME HELD TWICE IS AN ERROR, on the page side too (card t_ce63518c). This map
+// is keyed by tool name, so two `{ name, desc }` rows for one tool used to
+// collapse to whichever the regex matched LAST — silently, while the registry
+// reader below refused the same shape. Measured on the page: inserting a stale
+// duplicate `generate_form` row BEFORE the real one left this guard GREEN, and
+// the docs page then served two cards for one tool with two different sentences
+// (`TOOL_GROUPS` is rendered directly). A comparison against the registry is only
+// worth making if the reader can say WHICH row it read, so it now refuses and
+// names both positions.
 func parseDescriptions(path string, re *regexp.Regexp) (map[string]string, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
+	content := string(raw)
 	out := map[string]string{}
-	for _, m := range re.FindAllStringSubmatch(string(raw), -1) {
-		out[m[1]] = unescapeUnicode(m[2])
+	first := map[string]int{}
+	for _, idx := range re.FindAllStringSubmatchIndex(content, -1) {
+		name := content[idx[2]:idx[3]]
+		if prev, ok := first[name]; ok {
+			return nil, fmt.Errorf("%s holds the %q tool description twice (line %d and line %d) — "+
+				"this reader keys by name, so the second row would silently win and the comparison "+
+				"below would judge one of two user-visible cards. Remove one row",
+				path, name, lineOf(content, prev), lineOf(content, idx[0]))
+		}
+		first[name] = idx[0]
+		out[name] = unescapeUnicode(content[idx[4]:idx[5]])
 	}
 	return out, nil
+}
+
+// lineOf reports the 1-based line a byte offset falls on.
+func lineOf(s string, off int) int {
+	if off > len(s) {
+		off = len(s)
+	}
+	return strings.Count(s[:off], "\n") + 1
 }
 
 // unescapeUnicode resolves the `\uXXXX` escapes a TSX string literal may use for

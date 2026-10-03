@@ -81,10 +81,12 @@ GUARD_REL = "api/internal/llm/model_default_guard_test.go"
 TOOLS_REL = "api/internal/mcpsrv/tools.go"
 SIBLING_REL = "api/internal/mcpsrv/parity_issue396.go"
 SUBDIR_REL = "api/internal/mcpsrv/sub/biteproof_tool.go"
+PAGE_REL = "web/src/app/docs/mcp/page.tsx"
 
 GUARD = os.path.join(REPO, GUARD_REL)
 TOOLS = os.path.join(REPO, TOOLS_REL)
 SIBLING = os.path.join(REPO, SIBLING_REL)
+PAGE = os.path.join(REPO, PAGE_REL)
 
 BASE_REF = os.environ.get("BITEPROOF_BASE", "origin/main")
 # BITEPROOF_ONLY filters the case list by substring (diagnostics while the harness
@@ -135,6 +137,7 @@ def git_text(*args):
 
 
 ORIG_TOOLS = read(TOOLS)
+ORIG_PAGE = read(PAGE)
 ORIG_SIBLING = read(SIBLING)
 ORIG_GUARD = read(GUARD)
 BEFORE = {TOOLS: sha(TOOLS), SIBLING: sha(SIBLING), GUARD: sha(GUARD)}
@@ -164,6 +167,19 @@ def lift(tool):
     if len(hits) != 1:
         bail("%s pair found %d times in %s, expected 1" % (tool, len(hits), TOOLS_REL))
     return m.search(ORIG_TOOLS).group(0), hits[0]
+
+
+def lift_page(tool):
+    """The page's own `{ name, desc }` row for one tool, read with the guard's
+    page pattern rather than hand-typed — the page's indentation is spaces, and a
+    hand-typed row silently matched zero times (which is what this harness said
+    the first time it ran)."""
+    pat = re.compile(r'[ \t]*\{\s*name:\s*"%s",\s*desc:\s*"(?:[^"\\]|\\.)*"\s*\},'
+                     % re.escape(tool))
+    hits = pat.findall(ORIG_PAGE)
+    if len(hits) != 1:
+        bail("the page holds the %s row %d times, expected 1" % (tool, len(hits)))
+    return hits[0]
 
 
 def tools_without(tool):
@@ -235,6 +251,25 @@ def cases():
             (False, missing),        # blames a file the tool is no longer in
             (False, differs, "(bite proof)"),   # names the real disagreement
         ))
+
+    # THE PAGE'S OWN DUPLICATE RULE (card t_ce63518c). The page reader keys by tool
+    # name, so before the fix two `{ name, desc }` rows for one tool collapsed to
+    # whichever the regex matched LAST — silently, while the registry reader
+    # refused the same shape. Inserting the stale row FIRST is the ordering that
+    # made the old reader pick the WRONG sentence. The old reader (the base leg)
+    # has no page-dup rule, so it stays green on the same mutation; the branch
+    # must refuse it. The needles are the tool name and both row positions.
+    page_pair = lift_page(PINNED[0])
+    out.append((
+        "a DUPLICATE tool row on the docs page, stale copy FIRST",
+        {PAGE_REL: ORIG_PAGE.replace(
+            page_pair,
+            '{ name: "%s", desc: "STALE DUPLICATE ROW (bite proof)." },\n%s'
+            % (PINNED[0], page_pair), 1)},
+        {},
+        (True,),                                   # the old reader has no page-dup rule
+        (False, "holds the \"%s\" tool description twice" % PINNED[0]),
+    ))
 
     out.append((
         "a tool file in a SUBdirectory of the registry package",
@@ -344,8 +379,12 @@ def judge(out, rc, expect):
 def clear_case(edits, added):
     write(TOOLS, ORIG_TOOLS)
     write(SIBLING, ORIG_SIBLING)
+    # The page is edited by the duplicate-row case; without this the stale row
+    # would leak into every later leg (card t_ce63518c).
+    if os.path.exists(PAGE):
+        write(PAGE, ORIG_PAGE)
     for rel in set(edits) | set(added):
-        if rel in (TOOLS_REL, SIBLING_REL):
+        if rel in (TOOLS_REL, SIBLING_REL, PAGE_REL):
             continue
         path = os.path.join(REPO, rel)
         if os.path.exists(path):
