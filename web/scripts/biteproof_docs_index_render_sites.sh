@@ -276,6 +276,44 @@ GUARD=src/lib/docsIndex.test.ts
 # A reader spelled as a longer expression matches NEITHER declaration, which is
 # deliberate: `reader_class` then answers UNKNOWN and the run refuses rather than
 # assuming "pre-fix" for a shape it cannot read.
+# strip_ts_comments — drop `//` tails and `/* ... */` blocks from TypeScript source
+# before a DECLARATION is matched in it (card t_80a7fb64).
+#
+# THE HOLE THE ANCHORING WAS MEANT TO CLOSE. The pattern is line-anchored because "a
+# match anywhere in the file would be satisfied by the same text quoted in a comment or
+# a string while the real reader is something else". That argument holds for a `//` line
+# comment, whose body carries a `// ` prefix between the line start and `const`. It does
+# NOT hold for a BLOCK comment: a `/* ... */` body line sits at column 0 with no marker,
+# so it is byte-identical in shape to a real declaration. `reader_class` ran on the RAW
+# body, so a post-fix guard carrying the stale reader inside a block comment was
+# classified PRE — the base is then treated as the "before" column although it already
+# declares the fix, and the run reports a silent fail=1 (the D3 residual of card
+# t_01df90af).
+#
+# Over-stripping FAILS CLOSED: a `//` inside a string literal (a URL) removes the rest of
+# that line, which can only make a declaration UNREADABLE, and every caller already
+# refuses on UNKNOWN rather than assuming pre-fix. Under-stripping is the unsafe
+# direction, which is what this removes.
+strip_ts_comments() {
+  awk '
+    BEGIN { inblock = 0 }
+    {
+      line = $0; out = ""; i = 1; n = length(line)
+      while (i <= n) {
+        two = substr(line, i, 2)
+        if (inblock) {
+          if (two == "*/") { inblock = 0; i += 2 } else { i++ }
+        } else if (two == "/*") {
+          inblock = 1; i += 2
+        } else if (two == "//") {
+          break
+        } else {
+          out = out substr(line, i, 1); i++
+        }
+      }
+      print out
+    }'
+}
 PRE_READER_RE='^[[:space:]]*(export[[:space:]]+)?(const|let|var)[[:space:]]+docsSrc[[:space:]]*=[[:space:]]*read\(DOCS_PAGE\)'
 POST_READER_RE='^[[:space:]]*(export[[:space:]]+)?(const|let|var)[[:space:]]+docsSrc[[:space:]]*=[[:space:]]*stripUnrendered\(read\(DOCS_PAGE\)\)'
 # The spellings the operator is shown, and the ones the diagnostics name.
@@ -345,8 +383,8 @@ echo "new guard (this tree):             $(wc -l < "$GUARD") lines"
 #   read(DOCS_PAGE)` in a comment used to come back "pre-fix").
 reader_class() { # <rev> -> PRE | POST | UNKNOWN
   local body; body=$(git show "$1:$GUARD_IN_REPO" 2>/dev/null) || return 1
-  grep -qE "$POST_READER_RE" <<<"$body" && { printf 'POST'; return 0; }
-  grep -qE "$PRE_READER_RE"  <<<"$body" && { printf 'PRE';  return 0; }
+  grep -qE "$POST_READER_RE" <<<"$(strip_ts_comments <<<"$body")" && { printf 'POST'; return 0; }
+  grep -qE "$PRE_READER_RE"  <<<"$(strip_ts_comments <<<"$body")" && { printf 'PRE';  return 0; }
   printf 'UNKNOWN'
 }
 # DEMONSTRABLY pre-fix: the base declares the pre-fix reader, and does not declare
@@ -377,11 +415,11 @@ introducing_commit() { # <rev> -> sha, or empty
   [ -z "$revs" ] && return 1
   oldest=${revs%%$'\n'*}
   body=$(git show "$oldest:$GUARD_IN_REPO" 2>/dev/null) || return 1
-  grep -qE "$POST_READER_RE" <<<"$body" && return 1   # older than this history
+  grep -qE "$POST_READER_RE" <<<"$(strip_ts_comments <<<"$body")" && return 1   # older than this history
   while IFS= read -r r; do
     [ -z "$r" ] && continue
     body=$(git show "$r:$GUARD_IN_REPO" 2>/dev/null) || continue
-    if grep -qE "$POST_READER_RE" <<<"$body"; then printf '%s' "$r"; return 0; fi
+    if grep -qE "$POST_READER_RE" <<<"$(strip_ts_comments <<<"$body")"; then printf '%s' "$r"; return 0; fi
   done <<<"$revs"
   return 1
 }
@@ -549,7 +587,66 @@ selfcheck_caught_up_refusal() {
 # Skipped in the probe child (BITEPROOF_REFUSE_ONLY=1): the child's job is only to
 # apply the capability test and report its exit code, and letting it run this
 # self-check would recurse without end (measured: the run hung on its first probe).
+# selfcheck_block_comment_anchor — the D3 residual (card t_80a7fb64), asserted rather
+# than described.
+#
+# The declaration read is line-anchored to keep a COMMENT from satisfying it. That works
+# for a `//` line comment (its body carries the `// ` prefix, so the anchored pattern
+# never sees a declaration there) but NOT for a block comment: a `/* ... */` body line
+# sits at column 0 with no marker, so it is byte-identical in shape to a real
+# declaration. Reading the RAW body classified a post-fix guard that carries the stale
+# reader inside a block comment as PRE — the base is then measured as the "before" column
+# although it already declares the fix, and the run reports a silent fail=1.
+#
+# This leg builds BOTH shapes in memory and requires the read to place them correctly:
+# the block-comment body must NOT count as a declaration, and a real declaration beside a
+# comment still must. It runs on every invocation, so the strip cannot rot back.
+selfcheck_block_comment_anchor() {
+  local raw_block raw_comment_only raw_real
+  # A post-fix guard whose ONLY pre-fix-looking text is a column-0 block-comment body.
+  raw_block='/*
+const docsSrc = read(DOCS_PAGE)
+*/
+const docsSrc = stripUnrendered(read(DOCS_PAGE))'
+  # A file whose ONLY declaration-looking text is inside the block: after the strip it
+  # must declare NOTHING.
+  raw_comment_only='/*
+const docsSrc = read(DOCS_PAGE)
+*/'
+  # A real pre-fix declaration, beside no comment.
+  raw_real='const docsSrc = read(DOCS_PAGE)'
+
+  if grep -qE "$PRE_READER_RE" <<<"$(strip_ts_comments <<<"$raw_block")"; then
+    echo >&2
+    echo "BITEPROOF REFUSED: the declaration read still sees a PRE-fix reader inside a" >&2
+    echo "column-0 BLOCK COMMENT, so a caught-up base carrying the stale spelling in a" >&2
+    echo "\`/* ... */\` block is classified PRE and measured as the before column (card" >&2
+    echo "t_80a7fb64, the D3 residual). Fix the read in reader_class / strip_ts_comments." >&2
+    exit 2
+  fi
+  if ! grep -qE "$POST_READER_RE" <<<"$(strip_ts_comments <<<"$raw_block")"; then
+    echo >&2
+    echo "BITEPROOF REFUSED: stripping the block comment also removed the REAL post-fix" >&2
+    echo "declaration beside it, so the read would answer UNKNOWN on a caught-up base —" >&2
+    echo "over-stripping is the other end of the same defect. Fix strip_ts_comments." >&2
+    exit 2
+  fi
+  if ! grep -qE "$PRE_READER_RE" <<<"$(strip_ts_comments <<<"$raw_real")"; then
+    echo >&2
+    echo "BITEPROOF REFUSED: a REAL pre-fix declaration is no longer read as one, so every" >&2
+    echo "base fixture this harness builds would be unplaceable. Fix strip_ts_comments." >&2
+    exit 2
+  fi
+  if grep -qE "$PRE_READER_RE|$POST_READER_RE" <<<"$(strip_ts_comments <<<"$raw_comment_only")"; then
+    echo >&2
+    echo "BITEPROOF REFUSED: a file whose only declaration is inside a block comment still" >&2
+    echo "reads as declaring one, so the strip is leaking the block's body through." >&2
+    exit 2
+  fi
+}
+
 [ "${BITEPROOF_REFUSE_ONLY:-0}" = 1 ] || selfcheck_caught_up_refusal
+[ "${BITEPROOF_REFUSE_ONLY:-0}" = 1 ] || selfcheck_block_comment_anchor
 
 # CLASSIFY THIS RUN'S OWN BASE AND REFUSE IF IT IS NOT USABLE. Runs after the
 # self-check, so the mechanism is proved before it is used. Anything that is not

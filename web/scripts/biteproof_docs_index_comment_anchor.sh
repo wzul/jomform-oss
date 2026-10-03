@@ -92,6 +92,44 @@ git show "${BASE_REV}:${GUARD_IN_REPO}" > "$OLD_GUARD"
 # same two spellings. A base declaring the POST-fix reader cannot demonstrate the
 # blind spot, so the run stops here with the reason and the fix rather than producing a
 # verdict about nothing.
+# strip_ts_comments — drop `//` tails and `/* ... */` blocks from TypeScript source
+# before a DECLARATION is matched in it (card t_80a7fb64).
+#
+# THE HOLE THE ANCHORING WAS MEANT TO CLOSE. The pattern is line-anchored because "a
+# match anywhere in the file would be satisfied by the same text quoted in a comment or
+# a string while the real reader is something else". That argument holds for a `//` line
+# comment, whose body carries a `// ` prefix between the line start and `const`. It does
+# NOT hold for a BLOCK comment: a `/* ... */` body line sits at column 0 with no marker,
+# so it is byte-identical in shape to a real declaration. `reader_class` ran on the RAW
+# body, so a post-fix guard carrying the stale reader inside a block comment was
+# classified PRE — the base is then treated as the "before" column although it already
+# declares the fix, and the run reports a silent fail=1 (the D3 residual of card
+# t_01df90af).
+#
+# Over-stripping FAILS CLOSED: a `//` inside a string literal (a URL) removes the rest of
+# that line, which can only make a declaration UNREADABLE, and every caller already
+# refuses on UNKNOWN rather than assuming pre-fix. Under-stripping is the unsafe
+# direction, which is what this removes.
+strip_ts_comments() {
+  awk '
+    BEGIN { inblock = 0 }
+    {
+      line = $0; out = ""; i = 1; n = length(line)
+      while (i <= n) {
+        two = substr(line, i, 2)
+        if (inblock) {
+          if (two == "*/") { inblock = 0; i += 2 } else { i++ }
+        } else if (two == "/*") {
+          inblock = 1; i += 2
+        } else if (two == "//") {
+          break
+        } else {
+          out = out substr(line, i, 1); i++
+        }
+      }
+      print out
+    }'
+}
 PRE_READER_RE='^[[:space:]]*(export[[:space:]]+)?(const|let|var)[[:space:]]+docsSrc[[:space:]]*=[[:space:]]*read\(DOCS_PAGE\)'
 POST_READER_RE='^[[:space:]]*(export[[:space:]]+)?(const|let|var)[[:space:]]+docsSrc[[:space:]]*=[[:space:]]*stripUnrendered\(read\(DOCS_PAGE\)\)'
 # RAW_DECLARES_ID_RE: the anchor helper still reading the UNSTRIPPED page, i.e. the base
@@ -133,7 +171,7 @@ if grep -qE "$POST_READER_RE" "$OLD_GUARD"; then
   while read -r rev; do
     [ -n "$rev" ] || continue
     _body="$(git show "${rev}:${GUARD_IN_REPO}" 2>/dev/null)"
-    if grep -qE "$PRE_READER_RE" <<<"$_body" && grep -qE "$RAW_DECLARES_ID_RE" <<<"$_body"; then
+    if grep -qE "$PRE_READER_RE" <<<"$(strip_ts_comments <<<"$_body")" && grep -qE "$RAW_DECLARES_ID_RE" <<<"$(strip_ts_comments <<<"$_body")"; then
       suggested="$rev"; break
     fi
   done < <(git -C "$TOP" log --format='%H' -- "$GUARD_IN_REPO" 2>/dev/null)
@@ -144,7 +182,7 @@ if grep -qE "$POST_READER_RE" "$OLD_GUARD"; then
     while read -r rev; do
       [ -n "$rev" ] || continue
       _body="$(git show "${rev}:${GUARD_IN_REPO}" 2>/dev/null)"
-      if grep -qE "$PRE_READER_RE" <<<"$_body"; then suggested="$rev"; partial=1; break; fi
+      if grep -qE "$PRE_READER_RE" <<<"$(strip_ts_comments <<<"$_body")"; then suggested="$rev"; partial=1; break; fi
     done < <(git -C "$TOP" log --format='%H' -- "$GUARD_IN_REPO" 2>/dev/null)
   fi
   if [ -n "$suggested" ]; then
