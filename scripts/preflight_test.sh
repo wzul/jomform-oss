@@ -48,8 +48,15 @@
 # report 141 although grep MATCHED. The check then takes its `else`/`bad` branch
 # and prints FAIL on output that plainly contains the pattern — a red `selftest`
 # that does not mean the property was violated. Measured on this host at IDLE
-# load, on the real payloads these checks grep: 1/500 runs at check 8, 11/500 at
-# check 10. Feed grep a here-string (`grep -q PAT <<<"$out"`) — no writer process
+# load, on the real payloads these checks grep: 1/500 runs at check 8. (Check 10's
+# figure is NOT quoted here: the `11/500` that once stood in this line was RETRACTED
+# by the implementer — it was a pattern artefact, the BRE `\|…` passed without `-E`,
+# which matched bare `true`/`false` across an 11 KB payload. On the shipped `-nE`
+# pattern it is 0 flips, and the old shape only fails green on a MULTI-match payload
+# (300 matches -> 119/800, 5000 -> 800/800), which is the direction justification and
+# not a flake. Quoting a retracted number in this file — whose whole subject is not
+# printing a claim the evidence does not support — is the defect card t_5058fb49 fixed.)
+# Feed grep a here-string (`grep -q PAT <<<"$out"`) — no writer process
 # exists, so there is nothing to signal — or capture first and test the string.
 # A red run must mean the property was violated, nothing else.
 #
@@ -59,12 +66,20 @@
 # `… | head -n1` is the same defect for an assignment (silently yields nothing).
 #
 # This is one shared rule, not per-site judgement: `deploy/tmp-apikey_test.sh`
-# and `web/scripts/biteproof_next_managed_files.sh` carry the same note after
-# being bitten by it, and this file was the only one still using the idiom.
+# and `web/scripts/biteproof_next_managed_files.sh` carry the same note after being
+# bitten by it.
+#
+# THIS FILE IS NOT THE ONLY ONE — that claim was false when it was written (card
+# t_5058fb49). At the time, live non-comment sites still existed in files that
+# preflight gates EXECUTE, so "the sweep is complete" was already untrue. What is
+# true of this file is narrower and checkable: it contains no such site, and the
+# selftest asserts that. For the rest of the repo the honest statement is that the
+# idiom keeps reappearing — fix it where you find it rather than believe it is gone.
 
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SELF="$HERE/$(basename "${BASH_SOURCE[0]}")"
 PREFLIGHT="$HERE/preflight.sh"
 LIVE_ROOT="$(cd "$HERE/.." && pwd)"
 [ -x "$PREFLIGHT" ] || { echo "FAIL: $PREFLIGHT missing or not executable" >&2; exit 1; }
@@ -1303,6 +1318,30 @@ if [ -z "$zero_leaks" ]; then
 else
   bad "a zero API_TEST_TIMEOUT in another spelling was NOT refused, so \`go test\` ran with its timeout alarm OFF — the gate would hang instead of failing: $zero_leaks"
 fi
+# THE HEADER'S OWN CLAIM, CHECKED (card t_5058fb49). The block above says "NO
+# `printf … | grep -q` ANYWHERE IN THIS FILE" — a claim in a file whose whole subject
+# is not printing a claim the evidence does not support. Pinned here so the sentence
+# cannot become false while every check still passes.
+#
+# It was FALSE when it was written: three live sites stood in this very file
+# (a `-timeout 0` probe, a gap-line leak check, a reuse probe), each of the class the
+# header forbids. They are fixed; this keeps them fixed.
+#
+# Only THIS file is asserted. The header also used to say this file "was the only one
+# still using the idiom", which was untrue of the repo; what belongs here is what the
+# file can prove about itself.
+#
+# The scan skips comment lines and any line mentioning "header" (this block and its
+# two messages necessarily quote the pattern), so it counts live shell sites only.
+self_sites="$(grep -nE 'printf .*\| *grep +-[a-zA-Z]*q|\|[[:space:]]*head[[:space:]]+-n[[:space:]]*1' "$SELF" 2>/dev/null \
+  | grep -vE '^[0-9]+:[[:space:]]*#' \
+  | grep -v 'grep -nE' \
+  | grep -v '…' || true)"
+if [ -z "$self_sites" ]; then
+  ok "the header's own claim holds: this file contains NO live \`printf … | grep -q\` site (nor \`| head -n1\`), so the sentence is true rather than remembered"
+else
+  bad "the header says this file has no \`printf … | grep -q\` site, but a live one is back — the claim and the file disagree:\n$self_sites"
+fi
 out_rc="$(test_rc_and_argv banana)"; rc="${out_rc%%$'\t'*}"; argv="${out_rc##*$'\t'}"
 if [ "$rc" != 0 ] && grep -q 'is not a Go duration' "$SB/budget.out" && [ -z "$argv" ]; then
   ok "a non-duration API_TEST_TIMEOUT -> refused (rc=$rc) with no \`go test\` invocation at all, so it cannot fail packages on the flag alone"
@@ -1329,7 +1368,7 @@ if [ -z "$declared_default" ]; then
 fi
 if [ -n "$declared_default" ] && [ "$(gate_budget "$argv")" = "$declared_default" ]; then
   ok "an EMPTY API_TEST_TIMEOUT falls back to the declared default (\`go test\` was handed -timeout $declared_default), it does not disable the budget"
-elif printf '%s' "$argv" | grep -q -- '-timeout 0'; then
+elif grep -q -- '-timeout 0' <<<"$argv"; then
   bad "an empty API_TEST_TIMEOUT handed \`go test\` '-timeout 0' — that DISABLES the timeout alarm, so a hung package would block the gate with no bound at all"
 else
   bad "an empty API_TEST_TIMEOUT must fall back to the declared default budget ($declared_default) — argv was [$argv]"
@@ -1721,7 +1760,7 @@ if [ -n "$probe_tree" ]; then
   # shellcheck disable=SC2086  # deliberate word splitting on the derived inventory
   for g in $GATES; do
     case "$reuse_line" in
-      *"$g"*) printf '%s\n' "$gap_lines" | grep -qw "$g" && leaked="$leaked $g" ;;
+      *"$g"*) grep -qw "$g" <<<"$gap_lines" && leaked="$leaked $g" ;;
     esac
   done
   if [ "$fx_pass" -ne $((NGATES-1)) ]; then
@@ -1824,7 +1863,7 @@ if [ -n "$probe_tree" ]; then
     *)                  secs_ok=0 ;;
   esac
   if [ "$r3_rc" -eq 0 ] && [ -z "$leaked_gates" ] && [ "$secs_ok" -eq 1 ] && \
-     printf '%s\n' "$r3_reuse" | grep -qw "$probe_gate"; then
+     grep -qw "$probe_gate" <<<"$r3_reuse"; then
     ok "a --only subset reuses only the selected gate ($probe_gate, 77s) — not the whole inventory"
   else
     bad "a subset selection must not borrow a whole-inventory reuse — rc=$r3_rc leaked=[$leaked_gates] secs_ok=$secs_ok line=[$r3_reuse]"
