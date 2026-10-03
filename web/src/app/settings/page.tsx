@@ -1863,8 +1863,11 @@ export default function Settings() {
                       field the rule applies to). */}
                   <a
                     href="/docs/customize#language"
+                    target="_blank"
+                    rel="noopener noreferrer"
                     className="text-[var(--jf-muted)] underline hover:text-slate-600"
                     title={t("set.emelLanguageRule")}
+                    aria-label={t("set.emelLanguageRule")}
                   >
                     ?
                   </a>
@@ -1881,8 +1884,11 @@ export default function Settings() {
                   {t("set.emelBody")} <span className="text-[var(--jf-muted-on-tint)]">{t("set.emelPlaceholders")} <code className="rounded bg-slate-100 px-1">{"{{ref_code}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{amount}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{items}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{form_url}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{buyer_name}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{date}}"}</code></span>{" "}
                   <a
                     href="/docs/customize#language"
+                    target="_blank"
+                    rel="noopener noreferrer"
                     className="text-[var(--jf-muted)] underline hover:text-slate-600"
                     title={t("set.emelLanguageRule")}
+                    aria-label={t("set.emelLanguageRule")}
                   >
                     ?
                   </a>

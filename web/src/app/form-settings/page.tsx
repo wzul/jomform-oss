@@ -2127,8 +2127,11 @@ function FormSettingsInner() {
                               (AGENTS.md documentation-parity rule). */}
                           <a
                             href="/docs/customize#language"
+                            target="_blank"
+                            rel="noopener noreferrer"
                             className="text-[var(--jf-muted)] underline hover:text-slate-600"
                             title={t("set.emelLanguageRule")}
+                            aria-label={t("set.emelLanguageRule")}
                           >
                             ?
                           </a>
@@ -2146,8 +2149,11 @@ function FormSettingsInner() {
                           {t("fs.emelBody")} <span className="text-[var(--jf-muted)]">{t("fs.emelPlaceholders")}</span>{" "}
                           <a
                             href="/docs/customize#language"
+                            target="_blank"
+                            rel="noopener noreferrer"
                             className="text-[var(--jf-muted)] underline hover:text-slate-600"
                             title={t("set.emelLanguageRule")}
+                            aria-label={t("set.emelLanguageRule")}
                           >
                             ?
                           </a>
