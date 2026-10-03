@@ -54,7 +54,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { LANGS } from "../components/i18nDict.ts";
@@ -75,6 +75,20 @@ const goRenderBlocks = read("../../../api/internal/httpapi/render_blocks.go");
 const goRestWorkspaces = read("../../../api/internal/httpapi/rest_workspaces.go");
 const goUserStore = read("../../../api/internal/dbstore/user.go");
 const goTools = read("../../../api/internal/mcpsrv/tools.go");
+// THE REGISTRY IS THE PACKAGE, NOT ONE FILE (card t_b893be19).
+//
+// The MCP tool literals do not all live in tools.go: #732 moved `disable_2fa`'s
+// `&mcp.Tool{}` into parity_issue396.go, and `mcpToolInventory.test.ts` widened its own
+// reader to the package for exactly that reason. Asserting against tools.go alone made
+// this check FALSE-RED the moment a registration moved to a sibling file, and FALSE-GREEN
+// when a registration was removed from tools.go while a `//` comment still spelled the
+// name there. Reading the package answers the question the message actually asks.
+const MCP_DIR = fileURLToPath(new URL("../../../api/internal/mcpsrv/", import.meta.url));
+const goMcpsrv = readdirSync(MCP_DIR)
+  .filter((f) => f.endsWith(".go") && !f.endsWith("_test.go"))
+  .sort()
+  .map((f) => readFileSync(MCP_DIR + f, "utf8"))
+  .join("\n");
 const goMcpWorkspaces = read("../../../api/internal/mcpsrv/workspaces.go");
 const goParityTest = read("../../../api/internal/mcpsrv/mcp_parity_test.go");
 const goParityDoc = read("../../../MCP-PARITY.md");
@@ -315,9 +329,15 @@ test("the wire names agree across the Go and TypeScript sides", () => {
   }
   // MCP parity: the tool is registered AND named in the checklist, and it must NOT
   // also sit in the "not in the checklist" baseline (the double-listing drift).
-  assert.ok(
-    goTools.includes(`"update_profile_language"`),
-    "the update_profile_language MCP tool is no longer registered",
+  // The message names the CLAIM the check can actually make: a REGISTRATION is a
+  // `&mcp.Tool{... Name: "…"}` literal, so the name must appear as a registration in the
+  // package — not merely as a string somewhere in one file.
+  assert.match(
+    goMcpsrv,
+    /Name:\s*"update_profile_language"/,
+    "the update_profile_language MCP tool is no longer REGISTERED — no `&mcp.Tool{}` in " +
+      "api/internal/mcpsrv names it (a bare string is not a registration: the old check " +
+      "passed on a `//` comment that spelled the name in tools.go)",
   );
   assert.match(
     goParityDoc,
