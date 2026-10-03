@@ -1,5 +1,22 @@
 #!/usr/bin/env bash
 #
+# LOCK ISOLATION (card t_fda5ba74). This script invokes `./scripts/preflight.sh` three
+# times (case 0, then once per case in `case_check`) and used to inherit the host-wide
+# production lock, `/var/lock/jomform-preflight-gate.lock`, with a default wait of
+# `PREFLIGHT_LOCK_WAIT=1800`. Each invocation could therefore sit up to 30 minutes
+# waiting for a queue it does not need, AND occupy that queue while doing so —
+# delaying every card gate behind it. Measured by QA: a run sat ~9 minutes still
+# inside case 0 with no case completed.
+#
+# The gate under test still writes a REAL record (it is the real runner); only the
+# LOCK is private, so two concurrent runs of this harness cannot collide with each
+# other either. The host-wide queue is for cards gating a tree, not for an
+# instrument proving the gate still bites — the same reasoning, and the same two
+# variables, as scripts/biteproof_api_test_gate_timeout.sh and
+# scripts/biteproof_preflight_reuse.sh.
+export PREFLIGHT_LOCK_FILE="${PREFLIGHT_LOCK_FILE:-/tmp/biteproof_web_image_gate.lock}"
+export PREFLIGHT_LOCK_WAIT="${PREFLIGHT_LOCK_WAIT:-0}"
+#
 # scripts/biteproof_web_image_gate.sh — prove the `webimage` preflight gate
 # BITES, and that it is not a tautology.
 #

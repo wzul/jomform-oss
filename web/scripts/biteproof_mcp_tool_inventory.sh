@@ -45,14 +45,41 @@ cp -f "$TOOLS" "$TOOLS_BAK"
 PAGE_SHA=$(sha256sum "$PAGE" | cut -d' ' -f1)
 TOOLS_SHA=$(sha256sum "$TOOLS" | cut -d' ' -f1)
 
-# run_guard -> "GREEN" or "RED"; output kept in /tmp/bite.inv.out
+# run_guard -> "GREEN", "RED" or "REFUSED"; output kept in /tmp/bite.inv.out.
+# REFUSED means the guard did not demonstrably run (no summary, or all-fail) and is
+# a HARD FAILURE at every call site — never a verdict about the mutation.
 # NOTE: the guard EXITS NON-ZERO when it fails, so capture the output first.
 # A `node --test … | grep -q` pipe under `set -o pipefail` reads a real match as
 # a failure — that trap produced a false verdict on this repo once already.
+# THE VERDICT NEEDS POSITIVE EVIDENCE THE GUARD RAN (card t_9ea606ac). This used to be
+# `if grep -qE '^ℹ fail [1-9]' <<<"$out"; then RED; else GREEN; fi` — a decision from the
+# ABSENCE of a failure line. So a guard that never started (a missing file, a file that
+# cannot parse, an all-skipped guard) read GREEN, and on the BASE column GREEN means
+# "the old guard missed this" — a BITES reported for an instrument that was not running.
+# Measured shapes on node 26.7.0: PASS prints `ℹ tests 9 / pass 9` with `✔ ` lines; a
+# mutated page prints `pass 8 / fail 1`; a guard that cannot load prints
+# `tests 1 / pass 0 / fail 1`; an all-skipped guard prints `tests 1 / pass 0 / skipped 1`;
+# a missing file prints one line and NO summary at all.
+#
+# The rule is the sibling `biteproof_docs_tool_claims.sh`'s `rule_of` (card t_420ca40c),
+# applied here for the same reason: GREEN needs rc=0 with `pass [1-9]` AND a `✔ ` line;
+# RED needs `fail [1-9]` AND `pass [1-9]`; anything else REFUSES, which is a hard failure
+# rather than a verdict. WHAT IT CANNOT SEE, measured: node counts a .ts file that
+# declares no tests as `tests 1 / pass 1` plus a `✔ <filename>` line — the same shape as
+# a real run — so a guard emptied of its tests still reads GREEN. That case is the
+# guard's own business (its "cannot pass vacuously" test).
 run_guard() {
-  local out
+  local out rc
   out=$(node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON "$GUARD" 2>&1) || true
-  if grep -qE '^ℹ fail [1-9]' <<<"$out"; then printf 'RED'; else printf 'GREEN'; fi
+  rc=$?
+  if ! grep -qE '^ℹ ' <<<"$out"; then printf 'REFUSED'; printf '%s' "$out" > /tmp/bite.inv.out; return; fi
+  if grep -qE '^ℹ fail [1-9]' <<<"$out"; then
+    if grep -qE '^ℹ pass [1-9]' <<<"$out"; then printf 'RED'; else printf 'REFUSED'; fi
+  elif grep -qE '^ℹ pass [1-9]' <<<"$out" && grep -qE '^✔ ' <<<"$out"; then
+    printf 'GREEN'
+  else
+    printf 'REFUSED'
+  fi
   printf '%s' "$out" > /tmp/bite.inv.out
 }
 
