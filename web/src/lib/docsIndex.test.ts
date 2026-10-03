@@ -428,6 +428,45 @@ test("the guard is looking at the real docs page (it cannot pass vacuously)", ()
     docsSrc.includes("<T k="),
     `${DOCS_PAGE} no longer renders its chrome through <T/> — the category labels would be untranslated`,
   );
+
+  // EVERY ENTRY's TITLE and every guide LINK must still be RENDERED (card t_1f175168).
+  //
+  // ORIGINAL_TITLES and DESTINATION_FACTS are keyed on `e.title`, and every failure
+  // message in this file names a title, so a page that renders no title at all still
+  // satisfied the guard — and the parity and word-count tests read the same `entries`, so
+  // they did not notice either. Measured on origin/main `8b1ea1c2`: replacing BOTH title
+  // render sites with `{"Feature"}` (leaving the key={f.title} attribute alone) kept the
+  // whole suite GREEN 10/0, and so did pointing every `href={f.href}` at "/docs".
+  //
+  // The attribute is NOT the render site: `key={f.title}` appears on those elements too,
+  // so the assertions below need the ELEMENT form, not a bare mention of `f.title`. The
+  // regexes are the JSX text slots — `>{f.title}` / `>{f.href}` — and each must appear on
+  // at least two lines, because the entry heading is rendered twice (the GROUPS branch at
+  // :430 and the FAQ branch at :475). One assert per shape, so a mutation that removes
+  // one of the two sites is still caught by the count.
+  const renderSites = (re: RegExp) => docsSrc.split("\n").filter((l) => re.test(l)).length;
+
+  for (const [re, min, what, tag] of [
+    // The JSX TEXT slot — `>{f.title}`. Two sites, so a mutation that removes one is caught.
+    [/>\{f\.title\}/, 2, "the entry headings (GROUPS :430 and FAQ :475)", "[render-site-entry-title]"],
+    // An ATTRIBUTE slot, not a text slot — the link's destination.
+    [/href=\{f\.href\}/, 1, "the 'Full guide' link (:436)", "[render-site-guide-link]"],
+  ] as const) {
+    const n = renderSites(re);
+    assert.ok(
+      n >= min,
+      `${tag} ${DOCS_PAGE} renders ${re} on ${n} line(s), want at least ${min} — ` +
+        `${what} would stop reaching the reader (the guard's keys are the same titles, so ` +
+        `it would still be green while every heading read the same word)`,
+    );
+  }
+
+  // And the literal it would collapse to must not be there: an entry heading that renders
+  // a constant is the mutation above, and it is cheap to name.
+  assert.ok(
+    !/>\{"Feature"\}/.test(docsSrc),
+    `${DOCS_PAGE} renders a constant heading instead of {f.title}`,
+  );
 });
 
 test("every feature entry is one short line (the wall does not come back)", () => {

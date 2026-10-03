@@ -1027,6 +1027,29 @@ assert_applied '{f.body}' && {
 restore_page
 
 echo
+echo "== CASE 13 (HOLE): {f.title} replaced by a CONSTANT at BOTH heading sites (card t_1f175168) =="
+# The vacuity test asserted only {f.body}/id={f.slug}/id={g.id}/<T k={g.labelKey}/ — never the
+# entry TITLE or the guide LINK, so the whole suite stayed GREEN 10/0 while every feature
+# heading on /docs rendered the literal word "Feature". `key={f.title}` is left alone on
+# purpose: it is an ATTRIBUTE on the same element, and a test looking for a bare `f.title`
+# would still pass while the heading rendered a constant. GREEN under the base guard, RED
+# under this one is exactly the HOLE shape.
+render_sites_off '>{f.title}</h4>' '>{"Feature"}</h4>' && {
+  render_sites_off '>{f.title}</h3>' '>{"Feature"}</h3>' && {
+    check "constant heading at both sites" GREEN RED '[render-site-entry-title]'; }
+}
+restore_page
+
+echo
+echo "== CASE 14 (HOLE): href={f.href} pointed at /docs (card t_1f175168) =="
+# The link destination is an ATTRIBUTE slot, not a JSX text slot, so it needs its own
+# pattern: `href={f.href}`. Removed, every "Full guide" link went to /docs itself and the
+# suite was still green 10/0.
+render_sites_off 'href={f.href}' 'href="/docs"' && {
+  check "guide link pointed at /docs" GREEN RED '[render-site-guide-link]'; }
+restore_page
+
+echo
 echo "== GUARD RESTORED =="
 if [ "$(sha256sum "$GUARD" | cut -d' ' -f1)" = "$guard_sha_before" ]; then
   echo "       $GUARD untouched (sha256 unchanged) — this harness mutates the page, never the guard"
