@@ -1116,6 +1116,10 @@ export const DICT = {
   "prof.twoFaSetupError": { en: "Could not start 2FA setup. Please try again.", ms: "Tidak dapat memulakan penyediaan 2FA. Sila cuba lagi.", zh: "无法开始 2FA 设置。请重试。", ta: "2FA அமைப்பைத் தொடங்க முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذر بدء إعداد التحقق الثنائي. يرجى المحاولة مرة أخرى." },
   "prof.passkeyDesc": { en: "Sign in with your fingerprint / face / device PIN — no password.", ms: "Log masuk dengan cap jari / wajah / PIN peranti — tanpa kata laluan.", zh: "使用指纹 / 面容 / 设备 PIN 码登录 — 无需密码。", ta: "கைரேகை / முகம் / சாதன PIN மூலம் உள்நுழையவும் — கடவுச்சொல் தேவையில்லை.", ar: "سجّل الدخول ببصمة الإصبع / الوجه / رمز PIN للجهاز — بدون كلمة مرور." },
   "prof.registerPasskey": { en: "Register passkey", ms: "Daftar passkey", zh: "注册通行密钥", ta: "கடவுச்சாவியை பதிவுசெய்", ar: "تسجيل مفتاح المرور" },
+  // t_254d8a81: the inline "?" doc link on the Profile → Passkeys control
+  // (AGENTS.md docs-parity rule 4), matching prof.twoFaDocs on the Security tab.
+  // web/src/lib/passkeyDocs.test.ts pins the link this title belongs to.
+  "prof.passkeysDocs": { en: "How passkeys sign you in", ms: "Cara passkey log masuk untuk anda", zh: "通行密钥如何登录", ta: "கடவுச்சாவிகள் உங்களை எவ்வாறு உள்நுழைக்கின்றன", ar: "كيف تسجّل مفاتيح المرور دخولك" },
   "prof.removePasskeyConfirm": { en: "Remove this passkey?", ms: "Buang passkey ini?", zh: "移除此通行密钥？", ta: "இந்த கடவுச்சாவியை நீக்கவா?", ar: "إزالة مفتاح المرور هذا؟" },
   "prof.remove": { en: "Remove", ms: "Buang", zh: "移除", ta: "நீக்கு", ar: "إزالة" },
   "prof.saved": { en: "Saved ✓", ms: "Disimpan ✓", zh: "已保存 ✓", ta: "சேமிக்கப்பட்டது ✓", ar: "تم الحفظ ✓" },

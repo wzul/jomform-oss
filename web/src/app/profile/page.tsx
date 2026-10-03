@@ -785,7 +785,22 @@ export default function ProfilePage() {
         {/* Passkeys tab */}
         {tab === "passkeys" && (
           <section className="jf-card mt-6 p-6">
-            <h2 className="text-lg font-semibold">{t("prof.passkeys")}</h2>
+            <h2 className="text-lg font-semibold">
+              {t("prof.passkeys")}{" "}
+              {/* AGENTS.md docs-parity rule 4 (t_254d8a81): the same inline "?"
+                  doc link the 2FA row on the Security tab already carries, so
+                  the anchor /docs#passkeys is reachable from the surface a user
+                  registers a passkey on. passkeyDocs.test.ts requires it. */}
+              <a
+                href="/docs#passkeys"
+                target="_blank"
+                rel="noopener noreferrer"
+                title={t("prof.passkeysDocs")}
+                className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full bg-slate-200 text-[10px] font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+              >
+                ?
+              </a>
+            </h2>
             <p className="mt-1 text-sm text-slate-500">
               {t("prof.passkeyDesc")}
             </p>

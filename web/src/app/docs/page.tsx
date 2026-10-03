@@ -50,10 +50,13 @@ type Group = { id: string; labelKey: Key; entries: Entry[]; more?: { href: strin
 // `title`/`slug`/`body` entry is a named section that carries its own anchor —
 // the shape every other section on this page uses, and the one the passkey
 // section needs, because api/internal/httpapi/passkey_seam_test.go requires the
-// passkey text to be rendered here as a slug-anchored section. Note the anchor
-// is not deep-linked from anywhere yet: unlike `two-factor`, `workspaces` and
-// `form-url-slug`, there is no dashboard "?" pointing at the passkeys section —
-// the login page's passkey control does not carry one.
+// passkey text to be rendered here as a slug-anchored section. The anchor IS
+// deep-linked, and honestly so: `two-factor`, `workspaces` and `form-url-slug`
+// are linked from Settings, while the passkeys "?" is the one on Profile →
+// Passkeys (web/src/app/profile/page.tsx), the surface a passkey is registered
+// on. web/src/lib/passkeyDocs.test.ts requires that link, so this sentence
+// cannot drift from the code. The login page renders the passkey sign-in
+// control but carries no /docs link, so #passkeys is NOT reached from there.
 //
 // Do not write that guard's needle literal in this comment (t_eb1c4dd1): it
 // locates the section with an unanchored string search, so the literal appearing
@@ -366,11 +369,11 @@ const FAQ: FaqEntry[] = [
   },
   {
     // api/internal/httpapi/passkey_seam_test.go (TestPasskeyDocsDescribeTheRecoveryPath)
-    // asserts this section as the passkey feature's documentation, and the
-    // dashboard's login page is where the control it describes lives. Declared
+    // asserts this section as the passkey feature's documentation. Declared
     // as `title`/`body` with its own `slug` anchor, like every other section on
     // this page: the FAQ block renders only `q`/`a`, so the earlier shape put
-    // this text in the source and on no page at all.
+    // this text in the source and on no page at all. #passkeys is the anchor
+    // the Profile → Passkeys "?" deep-links (web/src/lib/passkeyDocs.test.ts).
     title: "Passkeys (sign in without a password)",
     slug: "passkeys",
     body: "Sign in with your face, fingerprint or device PIN instead of a password. Add a passkey from Profile → Security → Register passkey: your browser asks your device to create it, and the passkey appears in the list with the date it was added. Once you have one, the login page offers a passkey button before you type anything, because signing in with a passkey starts from a list of your credentials rather than an email address. Each passkey is bound to one device or password manager (iCloud Keychain, Google Password Manager, 1Password, a security key), so add one per device you sign in from, and remove any you no longer use with the delete button on its row. An older passkey may have been stored as a non-discoverable credential, which the login page's button cannot use: delete that row and register a new passkey, which is made discoverable so the button finds it.",

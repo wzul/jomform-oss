@@ -48,6 +48,13 @@ package httpapi
 //     page must keep a control that calls passkeyLogin, so dead code cannot
 //     ship as a feature a second time.
 //
+//   - TestPasskeyDocsSectionIsDeepLinked covers t_254d8a81: the /docs#passkeys
+//     anchor must really be reachable from the UI (AGENTS.md docs-parity rule 4),
+//     and the docs page's own comment that claimed the login page deep-linked it
+//     (which it never did) must stay gone. That claim read like documentation and
+//     was checked by nothing — TestPasskeyDocsDescribeTheRecoveryPath asserts the
+//     section TEXT only, so it stayed green while no surface linked the section.
+//
 // Skipped without JOMFORM_TEST_DATABASE_URL / JOMFORM_TEST_VALKEY_URL.
 
 import (
@@ -714,5 +721,78 @@ func TestPasskeyDocsDescribeTheRecoveryPath(t *testing.T) {
 		if !strings.Contains(section, want.needle) {
 			t.Errorf("the docs passkeys section does not mention %q — %s", want.needle, want.why)
 		}
+	}
+}
+
+// TestPasskeyDocsSectionIsDeepLinked is the reachability + honesty guard for the
+// /docs#passkeys anchor (card t_254d8a81, AGENTS.md docs-parity rule 4).
+//
+// WHAT IT EXISTS FOR. The passkeys section shipped with NO inline "?" doc link on
+// any surface (`grep -rn '#passkeys' web/src` returned nothing), so the anchor was
+// unreachable from the dashboard — and the /docs page's own comment claimed
+// otherwise ("The login page's passkey control deep-links this section"), a link
+// the login page has never had (`grep -c docs web/src/app/login/page.tsx` == 0).
+// TestPasskeyDocsDescribeTheRecoveryPath asserts the section TEXT only, so the
+// suite stayed green the whole time the claim was false. This test makes the claim
+// checkable: the link must EXIST, and the false sentence must stay gone.
+//
+// The assertions are on the page SOURCE because this Go package is the
+// cross-language seam that reads web/ (webSource / webRootFromAPI); there is no
+// JSX runner in web/. The web twin, web/src/lib/passkeyDocs.test.ts, pins the same
+// contract locally, in the suite that reads the dictionary too.
+func TestPasskeyDocsSectionIsDeepLinked(t *testing.T) {
+	profile := webSource(t, "src/app/profile/page.tsx")
+	docs := webSource(t, "src/app/docs/page.tsx")
+	login := webSource(t, "src/app/login/page.tsx")
+
+	// 1. The destination is real: the section exists and its slug is rendered as the
+	//    element id, or the link would land at the top of /docs without scrolling.
+	if !strings.Contains(docs, `slug: "passkeys"`) {
+		t.Fatalf("web/src/app/docs/page.tsx has no `slug: \"passkeys\"` section — /docs#passkeys would land at the top of the page")
+	}
+	if !strings.Contains(docs, "id={f.slug}") {
+		t.Fatalf("web/src/app/docs/page.tsx does not render the slug as an id — /docs#passkeys would not scroll")
+	}
+
+	// 2. The anchor is reachable: a Profile → Passkeys inline "?" link, the shape the
+	//    2FA row on the Security tab carries, points at it. The passkeys tab block is
+	//    sliced out so an `href` on another row cannot satisfy this.
+	const tabGuard = `{tab === "passkeys" && (`
+	start := strings.Index(profile, tabGuard)
+	if start < 0 {
+		t.Fatalf("web/src/app/profile/page.tsx no longer renders a passkeys tab (`%s`) — the surface the passkey docs link belongs on moved", tabGuard)
+	}
+	block := profile[start:]
+	if end := strings.Index(block, "{/* Connected accounts tab"); end > 0 {
+		block = block[:end]
+	}
+	if !strings.Contains(block, `href="/docs#passkeys"`) {
+		t.Errorf("the Profile → Passkeys tab renders no `href=\"/docs#passkeys\"` — the passkeys feature has no " +
+			"AGENTS.md docs-parity rule-4 inline \"?\" doc link, so its docs section is unreachable from the UI " +
+			"(this is exactly how it shipped: `grep -rn '#passkeys' web/src` returned nothing)")
+	}
+	// The link is labelled with its own dictionary key, not left as a bare circle.
+	if !strings.Contains(block, `title={t("prof.passkeysDocs")}`) {
+		t.Errorf("the passkeys \"?\" link carries no title={t(\"prof.passkeysDocs\")} — copy the 2FA row's shape " +
+			"(title={t(\"prof.twoFaDocs\")}), or the link has no accessible label")
+	}
+
+	// 3. THE FALSE CLAIM must not come back. It was never true, and a test that only
+	//    asserted the link (above) would not stop the comment re-asserting it as a
+	//    premise a reader would believe instead of checking.
+	//
+	//    The claim is matched against a NORMALISED view of the source — comment
+	//    markers dropped, whitespace collapsed — because the sentence originally
+	//    shipped WRAPPED across two `//` lines, and a raw-source regex silently
+	//    misses that shape (an earlier cut of this guard did, and the bite harness's
+	//    wrapped case is what caught it).
+	normalised := strings.Join(strings.Fields(strings.ReplaceAll(docs, "//", " ")), " ")
+	if passkeyClaim := regexp.MustCompile(`(?i)login page'?s passkey control deep-links`); passkeyClaim.MatchString(normalised) {
+		t.Errorf("web/src/app/docs/page.tsx again claims the login page's passkey control deep-links #passkeys — " +
+			"that is the false comment this card removed; nothing on the login page links /docs")
+	}
+	if strings.Contains(login, "/docs") {
+		t.Errorf("web/src/app/login/page.tsx now links /docs — the docs comment's honest boundary (the login page " +
+			"carries no doc link) has changed, so the comment and this guard must be revisited together")
 	}
 }
