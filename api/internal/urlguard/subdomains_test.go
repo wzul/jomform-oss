@@ -232,8 +232,23 @@ func TestReservedSubdomainsCoverStaticTraefikHosts(t *testing.T) {
 			if strings.Contains(trimmed, "HostRegexp(") {
 				// A regex host is the tenant wildcard, not a static subdomain:
 				// it matches the workspace subdomains on purpose.
+				//
+				// COUNT it, then KEEP GOING (card t_1ab825fc). This used to
+				// `continue`, which skipped the ENTIRE rule line — so a line
+				// mixing the wildcard with a static host hid that host from the
+				// check below. Not hypothetical: the committed config already has
+				//   HostRegexp(`[a-z0-9-]+.jomform.com`) && !Host(`www.jomform.com`)
+				// so `www` was never checked on those lines. A router whose static
+				// host is neither the apex nor reserved is exactly the drift this
+				// guard exists to catch, and it was invisible whenever it shared a
+				// line with the wildcard.
+				//
+				// traefikHostRe matches `Host(`…`)` and NOT `HostRegexp(` (the
+				// characters after `Host` differ), so letting the line through
+				// finds only its static literals. A negated `!Host(...)` counts on
+				// purpose: the label still has to be one JomForm owns or protects,
+				// which is why `www` is reserved at all.
 				hostRegexps++
-				continue
 			}
 			for _, m := range traefikHostRe.FindAllStringSubmatch(trimmed, -1) {
 				host := m[1]

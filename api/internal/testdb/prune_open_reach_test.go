@@ -203,8 +203,7 @@ func TestOpenReclaimsAnAbandonedSchemaOnAnIdleDatabase(t *testing.T) {
 		// every later attempt read as a failure. plant's errors are fatal — a
 		// fixture that cannot be planted must not be silently read as "the
 		// schema is gone".
-		abandoned := "test_reach_abandoned_p" + strconv.Itoa(deadPID(t)) + "_a" + strconv.Itoa(attempt)
-		legacy := "test_reach_legacy_a" + strconv.Itoa(attempt)
+		abandoned, legacy := reclaimFixtureNames(attempt, deadPID(t))
 
 		plant, err := db.Connect(ctx, dbDSN)
 		if err != nil {
@@ -670,4 +669,64 @@ func createIdleTestDB(t *testing.T, ctx context.Context, dsn string) (string, st
 	}
 	u.Path = "/" + name
 	return name, u.String()
+}
+
+// TestTheReclaimFixturesPlantBOTHShapes is the guard for card t_a6a23a03: the
+// pid-qualified/dead-owner shape must still be PLANTED, not merely claimed.
+//
+// The defect was a naming accident with a silent effect. `schemaPID` is
+// `LastIndex(schema, "_p")` and then Atoi of everything after it, so
+// `test_reach_abandoned_p<deadpid>_a<N>` parses the tail `<deadpid>_a<N>` as a pid,
+// FAILS, and the name is read as having no pid — the legacy shape. Both fixtures
+// then planted the SAME shape and the abandoned direction stopped being observed on
+// the live open() path, while every assertion still passed.
+//
+// This pins the two properties that make the fixtures exercise two different
+// reclaim paths: the abandoned name must PARSE as pid-qualified (so the reclaim has
+// an owner to check), and the legacy name must NOT (so it takes the unattributable
+// branch). Asserted through `schemaPID` itself, which is the code that decides.
+// reclaimFixtureNames returns the two schema names planted for ONE reclaim attempt.
+//
+// A function rather than two literals at the plant site, because the guard below
+// has to assert the shape the fixture ACTUALLY uses: reconstructing the name in the
+// guard would make it blind to a rename here, which is exactly the accident this
+// exists to prevent (measured: with the names inlined, mutating the fixture back to
+// the broken spelling left the guard green).
+func reclaimFixtureNames(attempt, dead int) (abandoned, legacy string) {
+	// The per-attempt suffix goes BEFORE the pid, never after it (card t_a6a23a03).
+	// `schemaPID` is `LastIndex(schema, "_p")` then Atoi of EVERYTHING after it
+	// (testdb.go), so `..._p999999_a1` parses the tail `999999_a1` as a pid, fails,
+	// and the name is treated as having NO pid at all — i.e. as the LEGACY shape.
+	// Both fixtures then planted the same shape, so the pid-qualified / dead-owner
+	// direction stopped being observed on the live open() path.
+	//
+	// `test_reach_abandoned_a<N>_p<deadpid>`: the attempt number is part of the
+	// package name, and the pid stays the LAST `_p` segment so it parses.
+	return "test_reach_abandoned_a" + strconv.Itoa(attempt) + "_p" + strconv.Itoa(dead),
+		"test_reach_legacy_a" + strconv.Itoa(attempt)
+}
+
+func TestTheReclaimFixturesPlantBOTHShapes(t *testing.T) {
+	dead := deadPID(t)
+	abandoned, legacy := reclaimFixtureNames(1, dead)
+
+	pid, ok := schemaPID(abandoned)
+	if !ok || pid != dead {
+		t.Errorf("schemaPID(%q) = (%d, %v), want (%d, true) — the abandoned fixture must "+
+			"parse as PID-QUALIFIED, or it takes the legacy branch and the dead-owner "+
+			"direction stops being observed (t_a6a23a03)", abandoned, pid, ok, dead)
+	}
+	if _, ok := schemaPID(legacy); ok {
+		t.Errorf("schemaPID(%q) parsed as pid-qualified, want false — the legacy fixture "+
+			"must take the UNATTRIBUTABLE branch", legacy)
+	}
+	// And the OLD spelling, which is what the defect looked like, must NOT parse
+	// as pid-qualified: if a future edit puts a suffix back after the pid, this
+	// names the mistake instead of silently merging the two shapes.
+	oldShape := "test_reach_abandoned_p" + strconv.Itoa(dead) + "_a1"
+	if _, ok := schemaPID(oldShape); ok {
+		t.Errorf("schemaPID(%q) parsed as pid-qualified, but schemaPID reads everything "+
+			"after the LAST `_p` as the pid — a per-attempt suffix after the pid makes "+
+			"the name read as LEGACY (t_a6a23a03)", oldShape)
+	}
 }
