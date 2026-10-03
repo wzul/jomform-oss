@@ -302,6 +302,95 @@ func TestDeleteUnverifiedOlderThanSkipsBlockedUser(t *testing.T) {
 	}
 }
 
+// TestPurgeUserSkipsUserVerifiedMidSweep pins the fix for card t_6577205b.
+//
+// The candidate list is read OUTSIDE the per-user transaction, and only the last
+// of that transaction's three deletes carried a `verified = false` predicate. A
+// user who confirmed their email after the sweep listed them but before the
+// commit therefore had the two earlier deletes run and COMMIT while the users
+// delete was refused: they kept their row and LOST their workspace and
+// auto-provisioned account, with `(false, nil)` returned — no error, no Blocked
+// count, no log line. Measured on the PR-748 tree: `users=1 accounts=0
+// workspaces=0`.
+//
+// Expected: such a user is left EXACTLY as they were — user row, account(s) and
+// workspace(s). The control below proves an ordinary unverified candidate still
+// loses all three.
+func TestPurgeUserSkipsUserVerifiedMidSweep(t *testing.T) {
+	p := testPool(t)
+	ctx := context.Background()
+	store := NewUserStore(p)
+
+	uid := createUnverifiedUser(t, ctx, p, "qa-race-"+md5Rand()+"@example.test")
+	var wsID string
+	if err := p.QueryRow(ctx,
+		`INSERT INTO workspaces (owner_user_id, name, slug)
+		 VALUES ($1, 'it-race-ws', 'it-' || md5(random()::text)) RETURNING id`, uid).Scan(&wsID); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	defer cleanupUsers(t, ctx, p, uid)
+
+	// The user confirms their email after the sweep listed them.
+	if _, err := p.Exec(ctx, `UPDATE users SET verified = true WHERE id = $1`, uid); err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+
+	deleted, err := store.purgeUser(ctx, uid)
+	if err != nil {
+		t.Fatalf("purgeUser on a verified candidate: %v", err)
+	}
+	if deleted {
+		t.Errorf("purgeUser reported deleted=true for a user who is verified — the sweep must never " +
+			"remove a confirmed account")
+	}
+	if n := countRows(t, ctx, p, `SELECT count(*) FROM users WHERE id = $1`, uid); n != 1 {
+		t.Errorf("the verified user's row was deleted (count=%d, want 1)", n)
+	}
+	if n := countRows(t, ctx, p, `SELECT count(*) FROM accounts WHERE owner_user_id = $1`, uid); n != 1 {
+		t.Errorf("the verified user LOST their account (count=%d, want 1) — the deletes before the "+
+			"users guard must not commit when the user turned out to be verified", n)
+	}
+	if n := countRows(t, ctx, p, `SELECT count(*) FROM workspaces WHERE id = $1`, wsID); n != 1 {
+		t.Errorf("the verified user LOST their workspace (count=%d, want 1) — a user verified at "+
+			"commit time must be left exactly as they were", n)
+	}
+}
+
+// TestPurgeUserRemovesOrdinaryUnverifiedCandidate is the control for the test
+// above: the fix must not have made the sweep timid.
+func TestPurgeUserRemovesOrdinaryUnverifiedCandidate(t *testing.T) {
+	p := testPool(t)
+	ctx := context.Background()
+	store := NewUserStore(p)
+
+	uid := createUnverifiedUser(t, ctx, p, "qa-plain-"+md5Rand()+"@example.test")
+	var wsID string
+	if err := p.QueryRow(ctx,
+		`INSERT INTO workspaces (owner_user_id, name, slug)
+		 VALUES ($1, 'it-plain-ws', 'it-' || md5(random()::text)) RETURNING id`, uid).Scan(&wsID); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	defer cleanupUsers(t, ctx, p, uid)
+
+	deleted, err := store.purgeUser(ctx, uid)
+	if err != nil {
+		t.Fatalf("purgeUser: %v", err)
+	}
+	if !deleted {
+		t.Fatalf("purgeUser reported deleted=false for an ordinary unverified candidate — the " +
+			"in-transaction verified check must not refuse a genuine candidate")
+	}
+	if n := countRows(t, ctx, p, `SELECT count(*) FROM users WHERE id = $1`, uid); n != 0 {
+		t.Errorf("the unverified user's row survived (count=%d, want 0)", n)
+	}
+	if n := countRows(t, ctx, p, `SELECT count(*) FROM accounts WHERE owner_user_id = $1`, uid); n != 0 {
+		t.Errorf("the unverified user's account survived (count=%d, want 0)", n)
+	}
+	if n := countRows(t, ctx, p, `SELECT count(*) FROM workspaces WHERE id = $1`, wsID); n != 0 {
+		t.Errorf("the unverified user's workspace survived (count=%d, want 0)", n)
+	}
+}
+
 // TestCountUnverifiedOlderThanClassified pins the fix for card t_b8446b61.
 //
 // `CountUnverifiedOlderThan` counts EVERY older-than-cutoff unverified row,
@@ -434,5 +523,94 @@ func TestCountUnverifiedOlderThan(t *testing.T) {
 	}
 	if n < 1 {
 		t.Errorf("count = %d, want >= 1 (the backdated unverified user)", n)
+	}
+}
+
+// TestPurgeUserWaitsForAConcurrentVerify proves the FOR UPDATE lock by forcing
+// the exact interleaving the card measured, deterministically:
+//
+//  1. tx1 takes the users row and sets `verified = true` WITHOUT committing, so
+//     the verify exists but is not yet visible;
+//  2. `purgeUser` runs — the sweep's per-user transaction;
+//  3. tx1 commits;
+//  4. the user must be left EXACTLY as they were.
+//
+// With the lock and the in-transaction re-read, purgeUser waits at its
+// `SELECT … FOR UPDATE`, then sees the committed `verified = true` and returns
+// before deleting anything. Without the lock it reads `verified = false` while
+// tx1 is still open, its workspace and account deletes run and commit, and only
+// the users delete is refused by the backstop — the silent data loss of
+// t_6577205b (`users=1 accounts=0 workspaces=0`).
+//
+// This test therefore fails if EITHER half of the fix is removed, which is why
+// it is worth the sequencing.
+func TestPurgeUserWaitsForAConcurrentVerify(t *testing.T) {
+	p := testPool(t)
+	ctx := context.Background()
+	store := NewUserStore(p)
+
+	uid := createUnverifiedUser(t, ctx, p, "qa-lock-"+md5Rand()+"@example.test")
+	var wsID string
+	if err := p.QueryRow(ctx,
+		`INSERT INTO workspaces (owner_user_id, name, slug)
+		 VALUES ($1, 'it-lock-ws', 'it-' || md5(random()::text)) RETURNING id`, uid).Scan(&wsID); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	defer cleanupUsers(t, ctx, p, uid)
+
+	tx1, err := p.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin tx1: %v", err)
+	}
+	defer tx1.Rollback(ctx)
+	var locked bool
+	if err := tx1.QueryRow(ctx,
+		`SELECT verified = false FROM users WHERE id = $1 FOR UPDATE`, uid).Scan(&locked); err != nil {
+		t.Fatalf("lock users row: %v", err)
+	}
+	if _, err := tx1.Exec(ctx, `UPDATE users SET verified = true WHERE id = $1`, uid); err != nil {
+		t.Fatalf("verify inside tx1: %v", err)
+	}
+
+	type result struct {
+		deleted bool
+		err     error
+	}
+	done := make(chan result, 1)
+	go func() {
+		deleted, err := store.purgeUser(context.Background(), uid)
+		done <- result{deleted, err}
+	}()
+
+	// purgeUser must be BLOCKED on the row the sweep's own lock covers, so it
+	// cannot have finished while tx1 is still open.
+	select {
+	case r := <-done:
+		t.Fatalf("purgeUser finished while the verify transaction still held the users row "+
+			"(deleted=%v, err=%v) — it read `verified` from a state the verify had already "+
+			"superseded, which is exactly the window t_6577205b is about", r.deleted, r.err)
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	if err := tx1.Commit(ctx); err != nil {
+		t.Fatalf("commit tx1: %v", err)
+	}
+
+	r := <-done
+	if r.err != nil {
+		t.Fatalf("purgeUser: %v", r.err)
+	}
+	if r.deleted {
+		t.Errorf("purgeUser reported deleted=true for a user verified at commit time")
+	}
+	if n := countRows(t, ctx, p, `SELECT count(*) FROM users WHERE id = $1`, uid); n != 1 {
+		t.Errorf("the now-verified user's row was deleted (count=%d, want 1)", n)
+	}
+	if n := countRows(t, ctx, p, `SELECT count(*) FROM accounts WHERE owner_user_id = $1`, uid); n != 1 {
+		t.Errorf("the now-verified user LOST their account (count=%d, want 1) — the deletes that "+
+			"ran before the users guard must not commit", n)
+	}
+	if n := countRows(t, ctx, p, `SELECT count(*) FROM workspaces WHERE id = $1`, wsID); n != 1 {
+		t.Errorf("the now-verified user LOST their workspace (count=%d, want 1)", n)
 	}
 }

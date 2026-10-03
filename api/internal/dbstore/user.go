@@ -555,6 +555,42 @@ func (s *UserStore) purgeUserTx(ctx context.Context, id string, dryRun bool) (bo
 	}
 	defer tx.Rollback(ctx)
 
+	// LOCK THE CANDIDATE, THEN RE-READ `verified` INSIDE THE TRANSACTION
+	// (card t_6577205b).
+	//
+	// The candidate list is read outside this transaction, and only the LAST
+	// statement below carried a `verified = false` predicate. So a user who
+	// confirmed their email AFTER the sweep listed them but BEFORE the commit had
+	// the two earlier deletes run and COMMIT while the users delete was refused:
+	// they kept their row and lost their workspace and auto-provisioned account,
+	// with `(false, nil)` returned — no error, no Blocked count, no log line.
+	// Measured on the PR-748 tree: `users=1 accounts=0 workspaces=0`.
+	//
+	// `FOR UPDATE` on the users row makes that window impossible: a concurrent
+	// `UPDATE users SET verified = true` either commits before this lock (and the
+	// re-read below sees it) or waits until this transaction ends. Either way the
+	// decision to delete is taken from a value read under the same lock that the
+	// deletes run under, which is the property the missing predicate was standing
+	// in for.
+	var stillUnverified bool
+	if err := tx.QueryRow(ctx,
+		`SELECT verified = false FROM users WHERE id = $1 FOR UPDATE`, id,
+	).Scan(&stillUnverified); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// Already gone (a concurrent sweep, say): nothing to do, and nothing
+			// was deleted here. Not an error — the candidate is simply no longer
+			// a candidate.
+			return false, nil
+		}
+		return false, err
+	}
+	if !stillUnverified {
+		// Verified in the meantime: leave the user EXACTLY as they were — user
+		// row, account(s) and workspace(s). Returning before any delete is what
+		// makes "in its entirety" true.
+		return false, nil
+	}
+
 	// Delete workspaces owned by the user that have no linked accounts, so the
 	// user delete's CASCADE on workspaces can't be blocked by accounts.workspace_id.
 	if _, err := tx.Exec(ctx,
