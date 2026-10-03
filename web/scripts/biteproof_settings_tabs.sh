@@ -48,6 +48,27 @@ rebuild() {
 }
 
 # args: <case name> <expected failure text> <rebuild:yes|no> <mutation shell>
+#
+# THE MATCH IS SCOPED TO THE REPORTER'S Error BLOCK, NOT THE WHOLE OUTPUT
+# (card t_dd211ae1; the sibling of the same gap fixed in
+# biteproof_forms_bulk_failure.sh). Matching `$expect` anywhere in Playwright's
+# output is a false OK generator, for a structural reason: on a failure Playwright
+# ECHOES THE SPEC'S SOURCE as a `>` context line, so every string literal in the
+# assertion message is printed whatever the test actually died of.
+#
+# This harness is more exposed than its sibling, not less: its needles are TEMPLATE
+# LITERALS in the spec (`the tab strip wrapped to ${m.rows} rows`, `the focus ring
+# of ...`) whose constant prefix is ALSO written verbatim in the spec's own comments
+# at lines 74, 79 and 106. A comment is echoed by nothing, but the literal below it
+# is echoed by any failure in that block — including a timeout, which is the exact
+# shape this harness exists to distinguish from a named assertion.
+#
+# Scoping to the reporter's cause lines keeps the claim that is true: a
+# NON-assertion failure prints `Error: locator.innerText: Test timeout of ...`, an
+# Error line that does not carry the needle. See the sibling file for why dropping
+# the echoed block by line RANGE was rejected instead (its start marker is
+# reporter-formatted, and a guard that silently matches nothing is worse than one
+# that matches too much).
 run_case() {
   local name="$1" expect="$2" do_build="$3" mutate="$4"
   echo "== $name"
@@ -65,6 +86,10 @@ run_case() {
   fi
   local out
   out="$($PLAYWRIGHT test "$SPEC" --reporter=list 2>&1)"
+  # error_block is the reporter's own cause lines: `Error: ...` plus the
+  # `expect(...)` chain that follows. Neither carries the spec's echoed source.
+  local error_block
+  error_block="$(grep -E '^ +Error: |^ +expect\(|^ +Received|^ +Expected|^ +Locator:|^ +Timeout:|^ +Call log:|^ +at ' <<<"$out")"
   # Herestring, not `printf | grep -q`: with `set -o pipefail` a reader that
   # exits at the first match can kill the writer with SIGPIPE (141) and report
   # a MATCH as a failure — load-dependent, and it would look like "not detected".
@@ -72,13 +97,13 @@ run_case() {
     echo "   NOT DETECTED — the spec stayed green with this defect present"
     grep -E "passed|failed" <<<"$out" | tail -3
     fail=1
-  elif ! grep -qF "$expect" <<<"$out"; then
+  elif ! grep -qF "$expect" <<<"$error_block"; then
     echo "   DETECTED, but NOT at the expected assertion. Wanted: $expect"
     grep -E "^ +Error: " <<<"$out" | sort -u | head -5
     fail=1
   else
     grep -E "^ +[0-9]+ failed" <<<"$out" | sort -u | head -1
-    grep -F "$expect" <<<"$out" | head -1 | cut -c1-160
+    grep -F "$expect" <<<"$error_block" | head -1 | cut -c1-160
     echo "   OK (red at the named assertion)"
   fi
   restore

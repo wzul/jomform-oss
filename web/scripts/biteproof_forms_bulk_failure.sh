@@ -43,11 +43,48 @@ rebuild() {
 }
 
 # args: <case name> <expect: pass|red> <named assertion (may be an ERE alternation)>
+#
+# THE MATCH IS SCOPED TO THE REPORTER'S Error BLOCK, NOT THE WHOLE OUTPUT
+# (card t_dd211ae1). Matching `$expect` anywhere in Playwright's output is a false
+# OK generator, and the reason is structural rather than a slip: when an assertion
+# fails, Playwright ECHOES THE SPEC'S SOURCE as a `>` context line, so every string
+# literal in the assertion message — the named thing itself — is printed whatever
+# the test actually died of. Measured on this tree: `timeout` on the visible wait
+# prints
+#
+#       Error: the bulk refusal must render a message at all
+#       expect(locator).toBeVisible() failed
+#       Locator: ...
+#       Expected: visible / Timeout: 20000ms / Error: element(s) not found
+#       ...
+#         165 |   await expect(alert, "the bulk refusal must render a message at all")...
+#       > 165 |   await expect(...)...
+#
+# — the label appears BOTH as the failure's own cause (the `Error:` line) and as the
+# echoed source. So a timeout satisfies an unscoped search, and the harness reports
+# "red at the named assertion" for a case that never reached one. That is exactly
+# the property the BITE-HARNESSES.md row claims ("the red must land at a NAMED
+# assertion … not at a crash or a failed build").
+#
+# Scoping it to `^ +Error:` keeps the claim that is true and drops the one that is
+# not: a NON-assertion failure prints `Error: locator.innerText: Test timeout of
+# 120000ms exceeded` — an Error line that does not carry the label — so the check
+# still reds. The alternative considered and REJECTED: dropping the echoed block by
+# line range. Its start marker is reporter-formatted (`- 1) [project] › file ›
+# title`) and would silently match nothing on a reporter change, turning the guard
+# off rather than making it wrong — the worse failure. A `grep` that matches text
+# from the wrong region degrades loudly; one that matches nothing at all degrades
+# silently.
 run_case() {
   local name="$1" want="$2" expect="$3"
   echo "== $name"
   local out
   out="$($PLAYWRIGHT test "$SPEC" --reporter=list 2>&1)"
+  # error_block is the reporter's own cause lines for this run: `Error: ...` under
+  # the `1)` failure header, plus the `expect(...)` chain that follows it. Both
+  # carry the real reason and neither carries the spec's echoed source.
+  local error_block
+  error_block="$(grep -E '^ +Error: |^ +expect\(|^ +Received|^ +Expected|^ +Locator:|^ +Timeout:|^ +Call log:|^ +at ' <<<"$out")"
   if [ "$want" = pass ]; then
     # Herestring, not `printf | grep -q`: with `set -o pipefail` a reader that
     # exits at the first match can kill the writer with SIGPIPE (141) and report
@@ -67,13 +104,13 @@ run_case() {
     echo "   NOT DETECTED — the spec stayed green with the pre-fix shape present"
     grep -E "passed|failed" <<<"$out" | tail -3
     fail=1
-  elif ! grep -qE "$expect" <<<"$out"; then
+  elif ! grep -qE "$expect" <<<"$error_block"; then
     echo "   DETECTED, but NOT at a named assertion. Wanted one of: $expect"
     grep -E "^ +Error: " <<<"$out" | sort -u | head -5
     fail=1
   else
     grep -E "^ +1 failed" <<<"$out" | sort -u | head -1
-    grep -E "$expect" <<<"$out" | head -1 | cut -c1-160
+    grep -E "$expect" <<<"$error_block" | head -1 | cut -c1-160
     echo "   OK (red at the named assertion)"
   fi
 }
