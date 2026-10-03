@@ -304,14 +304,34 @@ gr_sha256_file() {
 # Recognised POSITIVELY rather than by excluding an `@`, because the decision
 # gr_testdb_component has to make is which reading the driver takes, and only an
 # address proves which. What the positive test buys, stated as a direction: an
-# authority it REJECTS can produce a component that is a bare tail (`x`), and a
-# bare tail cannot equal a component the strip produces from a real DSN — those
-# always carry a `:` or a `/` — so a rejected authority refuses a record rather
-# than aliasing another server. Measured for the two shapes that are not
-# addresses: `host:abc` (pgx: "invalid port \":abc\" after host") and a `/` inside
-# the authority (`host:5432/a/b`, whose resolved database is `a/b@x`) are REFUSED
-# by the driver as well, so no lane can write a record under them in the first
-# place.
+# authority it REJECTS can produce a component that is a bare tail (`y`), and a
+# bare tail cannot equal a component the strip produces from a DSN with real
+# userinfo — `postgres://u:p@y` yields `y`, but `postgres://y@z` yields `z`, and a
+# component carrying a port or a path always keeps its `:` or `/` — so a rejected
+# authority refuses a record rather than aliasing another server.
+#
+# THE EXAMPLES BELOW WERE CORRECTED, and the correction is measured rather than
+# read (card t_672654f5, the secondary item; pgx v5.10.0 on this host):
+#
+#   * `host:abc` — REFUSED by the driver ONLY when the `:abc` is a PORT
+#     (`postgres://host:abc` -> "invalid port \":abc\" after host"). The shape
+#     this comment originally cited, `postgres://host:abc@x`, is ACCEPTED: the
+#     driver reads `host:abc` as USERINFO and resolves to host=x, db="". So the
+#     original sentence named a refusal that does not happen for that DSN.
+#   * `host:5432/a/b` — likewise ACCEPTED. pgx splits the authority at the first
+#     `/`, so `postgres://host:5432/a/b@x` resolves to host=host, db="a/b@x"
+#     (verified). It does not reach gr_is_hostport as `host:5432/a/b` at all; the
+#     authority the function is handed is `host:5432`, which it ACCEPTS, and the
+#     value travels the "driver's own answer" branch.
+#   * the shapes that DO reach the reject branch with a driver-accepted DSN are
+#     the ones the positive test rejects while pgx parses them: `host:` (an empty
+#     port — pgx accepts, resolving host=host, db="x@y"; gr_is_hostport rejects
+#     it, giving the component `y`) and `:5432` (no host — pgx accepts, resolving
+#     to the unix socket /var/run/postgresql; gr_is_hostport rejects it).
+#
+# The direction the original comment claimed still holds, and the corrected
+# examples are what demonstrate it: those two inputs really do produce a bare
+# tail, and a bare tail is what cannot alias a userinfo-bearing server.
 gr_is_hostport() {
   case "$1" in
     "")                return 1 ;;
