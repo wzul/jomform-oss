@@ -83,6 +83,29 @@ async function stubAPI(page: Page, profileLang = "en") {
   await page.route(/(.*)\/api\/rest\/forms\/(\?.*)?$/, (route) => route.fulfill(json([])));
 }
 
+// expectLinksBeside waits until the locator holds AT LEAST `want` elements, then
+// returns them.
+//
+// WHY NOT A BARE `.count()`. The reported failure (cards t_8a25af49 / t_e37ce316)
+// is `expect(count).toBeGreaterThanOrEqual(2)` receiving 0 **while the same run's
+// Playwright page snapshot contains both links** — the DOM had them and a
+// one-shot count ran before they were in it. That is a false RED in a gate every
+// PR depends on, and it is load-sensitive: the spec passes standalone and reds
+// inside a full suite on a loaded host.
+//
+// A bare count is a read of one instant; Playwright's web-first assertions
+// retry, so the wait is the fix rather than a longer sleep. `.first()` is NOT
+// used here: as cards t_8a25af49 and t_864adaee both note, a `.first()` locator
+// always resolves to exactly one element, so a count assertion on it can never
+// fail and would read as stronger than it is.
+async function expectLinksBeside(
+  page: Page, selector: string, want: number, why: string,
+): Promise<ReturnType<Page["locator"]>> {
+  const links = page.locator(selector);
+  await expect(links, why).toHaveCount(want, { timeout: 15_000 });
+  return links;
+}
+
 // setLang pins the dashboard locale in the app's own store (localStorage
 // `jf_lang`, see src/components/i18n.tsx STORAGE_KEY) and clears everything else
 // first, so nothing an earlier card left behind decides the language for this
@@ -110,10 +133,13 @@ test.describe("email subject/body per-field rule is stated where it applies", ()
     const doc = page.locator("html");
     expect(await doc.getAttribute("lang")).toBe("en");
 
-    // The subject and body labels must each carry the "?" doc link.
-    const links = page.locator('a[href="/docs/customize#language"]');
+    // The subject and body labels must each carry the "?" doc link. The WAIT is
+    // the fix for the false red: the count is retried, not read once.
+    const links = await expectLinksBeside(
+      page, 'a[href="/docs/customize#language"]', 2,
+      "expected a doc link beside BOTH the subject and the body field",
+    );
     const count = await links.count();
-    expect(count, "expected a doc link beside BOTH the subject and the body field").toBeGreaterThanOrEqual(2);
 
     const titles: string[] = [];
     for (let i = 0; i < count; i++) {
@@ -144,10 +170,11 @@ test.describe("email subject/body per-field rule is stated where it applies", ()
     await page.waitForLoadState("networkidle");
     await page.getByRole("button", { name: "Notifications", exact: true }).click();
 
-    const links = page.locator('a[href="/docs/customize#language"]');
-    await expect(links.first()).toBeVisible();
+    const links = await expectLinksBeside(
+      page, 'a[href="/docs/customize#language"]', 2,
+      "expected the doc link on both per-form email fields",
+    );
     const count = await links.count();
-    expect(count, "expected the doc link on both per-form email fields").toBeGreaterThanOrEqual(2);
 
     const title = await links.first().getAttribute("title");
     expect(title).toContain("judged separately");
@@ -221,8 +248,10 @@ test.describe("email subject/body per-field rule is stated where it applies", ()
     // and the assertion read as stronger than it was (card t_864adaee). The real
     // count on /settings?tab=emel is TWO — both the receipt Subject and Body carry
     // the link — so the honest assertion is 2, not 1.
-    const links = page.locator('a[href="/docs/customize#language"]');
-    await expect(links).toHaveCount(2);
+    const links = await expectLinksBeside(
+      page, 'a[href="/docs/customize#language"]', 2,
+      "the Emel tab must carry the rule link beside both receipt fields",
+    );
     const link = links.first();
     const title = (await link.getAttribute("title")) || "";
     expect(title, `Malay dashboard showed ${JSON.stringify(title)}`).toContain("dinilai berasingan");
