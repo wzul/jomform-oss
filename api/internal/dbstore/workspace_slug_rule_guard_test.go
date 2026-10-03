@@ -152,8 +152,8 @@ func TestTheReservedLegRunsBeforeTheShapeRule(t *testing.T) {
 			"— this guard would otherwise pass on a function that checks neither", reservedAt, shapeAt)
 	}
 	if reservedAt > shapeAt {
-		t.Errorf("ValidateWorkspaceSlug checks the shape rule before the reserved list. A reserved "+
-			"label shorter than the minimum (\"s3\") would then be reported as malformed input, and the "+
+		t.Errorf("ValidateWorkspaceSlug checks the shape rule before the reserved list. A reserved " +
+			"label shorter than the minimum (\"s3\") would then be reported as malformed input, and the " +
 			"merchant would retry a variation of a name JomForm owns")
 	}
 }

@@ -1,32 +1,35 @@
 // The /docs/api examples must actually work. This is the test that says so.
 //
 // WHY THIS EXISTS
-//   The card's rule is blunt: an example that has not been run is an example that
-//   is wrong. Every `curl` line on /docs/api is rendered from a restAPIExample
-//   (openapi_examples.go), and this test EXECUTES each one against the real mux
-//   with a real Postgres row and a real API key — not a mock, not the handler
-//   function directly, but RegisterRoutes through ServeHTTP, which is the path a
-//   reader's curl takes.
+//
+//	The card's rule is blunt: an example that has not been run is an example that
+//	is wrong. Every `curl` line on /docs/api is rendered from a restAPIExample
+//	(openapi_examples.go), and this test EXECUTES each one against the real mux
+//	with a real Postgres row and a real API key — not a mock, not the handler
+//	function directly, but RegisterRoutes through ServeHTTP, which is the path a
+//	reader's curl takes.
 //
 // WHAT EACH EXAMPLE PROVES
-//   * The status is the documented one. A docs page that promises 201 and gets
+//   - The status is the documented one. A docs page that promises 201 and gets
 //     400 is worse than no docs page.
-//   * A documented SUBSTRING of the body is present. A status-only assertion
+//   - A documented SUBSTRING of the body is present. A status-only assertion
 //     would pass on an empty body or an error with the same code, so each
 //     example names something it must contain (`"slug"`, `"items"`, ...).
 //
 // THE VACUOUS-PASS GUARD
-//   Every assertion is on a response this test received, and the test first
-//   proves it got a response at all. The anonymous example (no key) is included
-//   on purpose: it is the one case where the API must NOT answer with data, so an
-//   API that accepted an unauthenticated read fails here.
+//
+//	Every assertion is on a response this test received, and the test first
+//	proves it got a response at all. The anonymous example (no key) is included
+//	on purpose: it is the one case where the API must NOT answer with data, so an
+//	API that accepted an unauthenticated read fails here.
 //
 // LIMITS (stated, not implied)
-//   The test runs the REQUEST the example describes, built from the same
-//   structured fields the page renders into a curl command. It does not invoke a
-//   shell, so a quoting bug in the rendered string would not be caught by
-//   execution — that is covered instead by asserting the rendered string still
-//   names the example's method and path (TestRenderedCurlMatchesTheRequest).
+//
+//	The test runs the REQUEST the example describes, built from the same
+//	structured fields the page renders into a curl command. It does not invoke a
+//	shell, so a quoting bug in the rendered string would not be caught by
+//	execution — that is covered instead by asserting the rendered string still
+//	names the example's method and path (TestRenderedCurlMatchesTheRequest).
 package httpapi
 
 import (

@@ -1,7 +1,7 @@
 // DERIVED LINE PINS — the production line a failure message quotes is resolved
 // from the source at TEST time, never typed into the message.
 //
-// WHY THIS FILE EXISTS
+// # WHY THIS FILE EXISTS
 //
 // A guard that reports "the OUTER guard at auth_recovery.go:233" is telling its
 // reader where to look, and the line number is the one part of that message that

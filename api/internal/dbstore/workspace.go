@@ -248,14 +248,15 @@ func (s *WorkspaceStore) Create(ctx context.Context, ownerUserID, name, slug str
 // (c) it carries no CONTENT (no forms, products or sales).
 //
 // WHY THIS EXISTS (ask-first onboarding)
-//   A signup creates an account and NO workspace (auth.go; Wan's decision
-//   2026-09-20), and a user with zero workspaces is asked to create one before
-//   they can reach any create surface. If that first workspace were created the
-//   ordinary way, Workspaces.Create would insert a SECOND account linked to it
-//   (issue #158) and the signup account would be left behind with
-//   workspace_id NULL — reachable by nothing, while the dashboard reads the
-//   account resolved from the scoped workspace. So the create path reuses this
-//   account instead, and the user ends with exactly one.
+//
+//	A signup creates an account and NO workspace (auth.go; Wan's decision
+//	2026-09-20), and a user with zero workspaces is asked to create one before
+//	they can reach any create surface. If that first workspace were created the
+//	ordinary way, Workspaces.Create would insert a SECOND account linked to it
+//	(issue #158) and the signup account would be left behind with
+//	workspace_id NULL — reachable by nothing, while the dashboard reads the
+//	account resolved from the scoped workspace. So the create path reuses this
+//	account instead, and the user ends with exactly one.
 //
 // The CONTENT condition is the boundary of this method and not an optimisation:
 // an account that already holds forms/products/sales is a legacy workspace-less
@@ -1291,16 +1292,16 @@ func (s *WorkspaceStore) Restore(ctx context.Context, workspaceID, ownerUserID s
 // The ORDER IS THE OLD Delete's ORDER, unchanged, because that ordering is what
 // makes the cascade reach the workspace at all:
 //
-//	1. trading history first — sales (their subscription/charge children
-//	   cascade), then forms, products, api_keys. These are the rows whose
-//	   workspace_id/account_id FKs are NO ACTION, so the workspace row cannot go
-//	   while they are present.
-//	2. the accounts. They hold the CHIP credentials, and the repo invariant is
-//	   that CHIP is never shared between workspaces, so an account orphaned by a
-//	   purge would be a credential nobody owns.
-//	3. the workspace row itself. workspace_settings / workspace_members /
-//	   workspace_invites / workspace_legal_pages / workspace_email_settings /
-//	   affiliates go with it by CASCADE; users.default_workspace_id is SET NULL.
+//  1. trading history first — sales (their subscription/charge children
+//     cascade), then forms, products, api_keys. These are the rows whose
+//     workspace_id/account_id FKs are NO ACTION, so the workspace row cannot go
+//     while they are present.
+//  2. the accounts. They hold the CHIP credentials, and the repo invariant is
+//     that CHIP is never shared between workspaces, so an account orphaned by a
+//     purge would be a credential nobody owns.
+//  3. the workspace row itself. workspace_settings / workspace_members /
+//     workspace_invites / workspace_legal_pages / workspace_email_settings /
+//     affiliates go with it by CASCADE; users.default_workspace_id is SET NULL.
 //
 // TWO GUARDS, because a purge cannot be undone:
 //

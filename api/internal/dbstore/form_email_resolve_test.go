@@ -181,20 +181,20 @@ func TestResolveFormEmailSettingsPartiallyEditedRowFollowsTheLanguage(t *testing
 	}{
 		{
 			// Case A: the whole row is still the pre-language system literal.
-			name: "whole row is the system literal",
+			name:    "whole row is the system literal",
 			subject: legacySubject, body: legacyBody,
 			wantSubject: wantEn.Subject, wantBody: wantEn.Body,
 		},
 		{
 			// Case B: the reachable UI path — the merchant edited only the body.
-			name: "body edited, subject untouched",
+			name:    "body edited, subject untouched",
 			subject: legacySubject, body: merchantBody,
 			wantSubject: wantEn.Subject, wantBody: merchantBody,
 			wantBodyNot: []string{"Terima kasih"},
 		},
 		{
 			// Case C: the mirror — the merchant edited only the subject.
-			name: "subject edited, body untouched",
+			name:    "subject edited, body untouched",
 			subject: merchantSubject, body: legacyBody,
 			wantSubject: merchantSubject, wantBody: wantEn.Body,
 			wantSubjectNot: []string{"Resit pembayaran"},
@@ -202,14 +202,14 @@ func TestResolveFormEmailSettingsPartiallyEditedRowFollowsTheLanguage(t *testing
 		{
 			// Both halves edited: nothing of the system's remains, so nothing is
 			// translated.
-			name: "both halves edited",
+			name:    "both halves edited",
 			subject: merchantSubject, body: merchantBody,
 			wantSubject: merchantSubject, wantBody: merchantBody,
 		},
 		{
 			// A merchant who typed the CURRENT English default back in must not
 			// pin the language: the next buyer's language still governs.
-			name: "subject retyped as the English default",
+			name:    "subject retyped as the English default",
 			subject: wantEn.Subject, body: merchantBody,
 			wantSubject: wantEn.Subject, wantBody: merchantBody,
 		},

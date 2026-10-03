@@ -2,19 +2,20 @@
 // user at a time.
 //
 // WHY A COMMAND AND NOT A MIGRATION
-//   Wan's rule (2026-09-20) provisions a workspace for an existing user who
-//   already owns forms but has none. That is a per-user data decision, not a
-//   schema change: the affected accounts were enumerated and measured one by
-//   one, some accounts are excluded on purpose (the template gallery), and the
-//   others must be ASKED rather than provisioned. A migration would run the same
-//   blanket UPDATE on every environment and could not carry any of those
-//   distinctions — which is exactly the no-WHERE UPDATE the card forbids.
 //
-//   This command takes ONE --user and refuses to run without it, so a blanket
-//   sweep is not expressible. It calls the same
-//   dbstore.WorkspaceStore.ProvisionLegacyWorkspaceForOwner the login path calls,
-//   so the prod run executes the code the tests exercise rather than a
-//   hand-written SQL approximation of it.
+//	Wan's rule (2026-09-20) provisions a workspace for an existing user who
+//	already owns forms but has none. That is a per-user data decision, not a
+//	schema change: the affected accounts were enumerated and measured one by
+//	one, some accounts are excluded on purpose (the template gallery), and the
+//	others must be ASKED rather than provisioned. A migration would run the same
+//	blanket UPDATE on every environment and could not carry any of those
+//	distinctions — which is exactly the no-WHERE UPDATE the card forbids.
+//
+//	This command takes ONE --user and refuses to run without it, so a blanket
+//	sweep is not expressible. It calls the same
+//	dbstore.WorkspaceStore.ProvisionLegacyWorkspaceForOwner the login path calls,
+//	so the prod run executes the code the tests exercise rather than a
+//	hand-written SQL approximation of it.
 //
 // USAGE
 //

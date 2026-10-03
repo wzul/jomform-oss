@@ -2,26 +2,27 @@
 // nothing for a user who typed the 6-digit code their authenticator showed.
 //
 // WHAT WAS BROKEN
-//   The Profile → Security control prompted with the label "Enter a current 2FA
-//   code to disable:" and sent the answer as {"password": "<the code>"}. The
-//   backend had (since #458) required a fresh `totp_code` on a magic-link
-//   session for a 2FA user and otherwise verified `password` against the
-//   account hash — so a magic-link user's code was checked as a password and
-//   rejected with 401, for ever, with 2FA still enabled. Every 401 in the
-//   reported window was that rejection.
+//
+//	The Profile → Security control prompted with the label "Enter a current 2FA
+//	code to disable:" and sent the answer as {"password": "<the code>"}. The
+//	backend had (since #458) required a fresh `totp_code` on a magic-link
+//	session for a 2FA user and otherwise verified `password` against the
+//	account hash — so a magic-link user's code was checked as a password and
+//	rejected with 401, for ever, with 2FA still enabled. Every 401 in the
+//	reported window was that rejection.
 //
 // WHAT THIS PINS
-//   1. A magic-link session + 2FA + a current code in `totp_code` → 200, the
-//      code actually disables 2FA (users.totp_enabled false, secret cleared),
-//      every trusted device is revoked and the trust cookie is cleared.
-//   2. The code is STILL the second factor: without one the same session is
-//      challenged (401 + next_step), and the account password is NOT accepted
-//      as a substitute on a magic session (it never proved a factor, and a
-//      magic-link signup has a random password the user has never seen).
-//   3. #528 is intact — the code is single-use: replaying the same code in a
-//      second disable attempt is refused.
-//   4. The non-magic 2FA path is unchanged: the account password disables (the
-//      REST/MCP shape), and with no proof at all it is refused.
+//  1. A magic-link session + 2FA + a current code in `totp_code` → 200, the
+//     code actually disables 2FA (users.totp_enabled false, secret cleared),
+//     every trusted device is revoked and the trust cookie is cleared.
+//  2. The code is STILL the second factor: without one the same session is
+//     challenged (401 + next_step), and the account password is NOT accepted
+//     as a substitute on a magic session (it never proved a factor, and a
+//     magic-link signup has a random password the user has never seen).
+//  3. #528 is intact — the code is single-use: replaying the same code in a
+//     second disable attempt is refused.
+//  4. The non-magic 2FA path is unchanged: the account password disables (the
+//     REST/MCP shape), and with no proof at all it is refused.
 //
 // Needs a real Postgres (JOMFORM_TEST_DATABASE_URL) + Valkey
 // (JOMFORM_TEST_VALKEY_URL); skipped otherwise.

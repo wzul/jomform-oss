@@ -156,11 +156,11 @@ func (h *RESTHandlers) deleteMedia(w http.ResponseWriter, r *http.Request, actx 
 // restTrashedMedia is a bin row: what the trash view renders, plus the
 // pre-computed answer to "may this be destroyed yet".
 type restTrashedMedia struct {
-	ID    string `json:"id"`
-	Key   string `json:"key"`
-	URL   string `json:"url"`
-	Mime  string `json:"mime"`
-	Size  int64  `json:"size"`
+	ID     string `json:"id"`
+	Key    string `json:"key"`
+	URL    string `json:"url"`
+	Mime   string `json:"mime"`
+	Size   int64  `json:"size"`
 	FormID string `json:"form_id,omitempty"`
 	// DeletedAt is when the object entered the bin (RFC3339).
 	DeletedAt string `json:"deleted_at"`

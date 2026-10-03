@@ -67,9 +67,9 @@ var reservedSubdomains = map[string]string{
 	// already refused for SERVING by accountSubdomain (httpapi/public.go), which
 	// is why they answer 404 today — that is not a claim guard, so they belong
 	// here too.
-	"www": "a static Traefik Host for the apex site (deploy/vps/traefik-jomform.yml, jf-web)",
-	"api": "the API host: refused for serving by accountSubdomain, and the host integration docs point merchants at",
-	"app": "the application host: refused for serving by accountSubdomain, and a legacy dashboard host browsers still have bookmarked",
+	"www":  "a static Traefik Host for the apex site (deploy/vps/traefik-jomform.yml, jf-web)",
+	"api":  "the API host: refused for serving by accountSubdomain, and the host integration docs point merchants at",
+	"app":  "the application host: refused for serving by accountSubdomain, and a legacy dashboard host browsers still have bookmarked",
 	"mail": "the mail host: SPF/DKIM records and bounces must stay under JomForm's control, never a merchant storefront",
 	"s3":   "the object-storage host: refused for serving by accountSubdomain, and an infrastructure name buyers read as trusted",
 

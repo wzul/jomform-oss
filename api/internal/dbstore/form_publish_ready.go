@@ -11,20 +11,20 @@
 //
 // This file is the missing answer to "can this form actually do its job?":
 //
-//   * a RESPONSE form needs nothing — it collects answers, it is a legitimate
+//   - a RESPONSE form needs nothing — it collects answers, it is a legitimate
 //     form with no products, and it must never be blocked (over-blocking here
 //     would be the worse failure: the mode exists precisely for product-free
 //     forms);
-//   * a PAYMENT form with nothing to sell has no way to take money. It is
+//   - a PAYMENT form with nothing to sell has no way to take money. It is
 //     reported as unready, and the merchant has to say they meant it.
 //
 // Two deliberate non-rules, so this stays a rule and not a policy engine:
 //
-//   * `menu` mode is exempt. A form whose per-form restaurant menu is ENABLED
+//   - `menu` mode is exempt. A form whose per-form restaurant menu is ENABLED
 //     (#497) sells through its menu page, and the account's product list can
 //     supply the items — requiring a `products` snapshot on the form config
 //     would refuse a form that demonstrably works.
-//   * the rule never consults the account's products table. The snapshot in the
+//   - the rule never consults the account's products table. The snapshot in the
 //     config is what the builder writes, and it is what the form's own blocks
 //     reference (public.go's renderer and lookupProduct both read the config).
 //     A form with no blocks referencing anything but an account-level product

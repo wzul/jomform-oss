@@ -10,17 +10,18 @@ import (
 // restAPIExamples are the requests the /docs/api page shows, in one place.
 //
 // WHY THEY ARE DATA AND NOT PROSE
-//   A curl example in a docs page is a claim, and nothing in this repo would
-//   notice when it stopped being true — the page is static and no test ran it.
-//   So each example is a structured request that api_examples_test.go EXECUTES
-//   against a live server with a real database and a real API key, and asserts
-//   the documented status and a documented substring of the body. The rendered
-//   `curl` string is generated from those same fields, and the test asserts the
-//   rendering still names the same method and path — so the string a reader
-//   copy-pastes cannot drift from the request that was actually proven.
 //
-//   The page imports the generated copy (web/src/lib/apiExamples.gen.ts), and
-//   TestGeneratedArtifactsAreInSync fails if that copy is stale.
+//	A curl example in a docs page is a claim, and nothing in this repo would
+//	notice when it stopped being true — the page is static and no test ran it.
+//	So each example is a structured request that api_examples_test.go EXECUTES
+//	against a live server with a real database and a real API key, and asserts
+//	the documented status and a documented substring of the body. The rendered
+//	`curl` string is generated from those same fields, and the test asserts the
+//	rendering still names the same method and path — so the string a reader
+//	copy-pastes cannot drift from the request that was actually proven.
+//
+//	The page imports the generated copy (web/src/lib/apiExamples.gen.ts), and
+//	TestGeneratedArtifactsAreInSync fails if that copy is stale.
 type restAPIExample struct {
 	// ID is a stable key, used for anchors on the docs page.
 	ID string
@@ -113,9 +114,9 @@ var restAPIExamples = []restAPIExample{
 			"`{\"acknowledge\":true}` to publish it anyway.",
 	},
 	{
-		ID:             "read-forms",
-		Title:          "5. Read your forms back",
-		Why:            "The list carries everything needed to pick a form id: slug, title, " +
+		ID:    "read-forms",
+		Title: "5. Read your forms back",
+		Why: "The list carries everything needed to pick a form id: slug, title, " +
 			"status, mode and public URL.",
 		Method:         "GET",
 		Path:           "/v1/rest/forms",

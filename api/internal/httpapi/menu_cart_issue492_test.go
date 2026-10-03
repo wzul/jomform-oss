@@ -100,14 +100,14 @@ func TestIssue492BasketBarSheetAndCheckoutPresent(t *testing.T) {
 func TestIssue492CheckoutScriptWiring(t *testing.T) {
 	body := renderMenu492(t, menu492Fixture(t))
 	for _, want := range []string{
-		"localStorage",                        // persists across reload
-		"'jf.menu.cart.v2.'+slug",             // keyed by FORM slug (#497)
-		"fetch('/'+encodeURIComponent(slug)+'/order'", // the form's own order route (#497)
+		"localStorage",                                             // persists across reload
+		"'jf.menu.cart.v2.'+slug",                                  // keyed by FORM slug (#497)
+		"fetch('/'+encodeURIComponent(slug)+'/order'",              // the form's own order route (#497)
 		"product_id:it.id,variation_id:it.vid||'',quantity:it.qty", // items[{product_id,variation_id,quantity}]
-		"client:{full_name:name,email:email}",                    // client{full_name,email}
-		"table_number:table||''",                                 // table carried (#489)
-		"affiliate_code:aff||''",                                 // affiliate carried (#444)
-		"d.checkout_url||d.next",                                 // redirect to CHIP
+		"client:{full_name:name,email:email}",                      // client{full_name,email}
+		"table_number:table||''",                                   // table carried (#489)
+		"affiliate_code:aff||''",                                   // affiliate carried (#444)
+		"d.checkout_url||d.next",                                   // redirect to CHIP
 		"location.href=d.checkout_url||d.next",
 		"new URLSearchParams(location.search)", // ?table=/?aff= read client-side
 		"qs.get('table')",

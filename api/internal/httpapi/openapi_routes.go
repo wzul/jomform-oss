@@ -2,43 +2,44 @@
 // /v1/rest/*.
 //
 // WHY THIS FILE EXISTS
-//   /v1/rest/* had 108 working routes and no description of them anywhere. A
-//   merchant could not start, and a third-party developer had nothing to build
-//   against. Worse, a hand-written endpoint list would be a lie within a week —
-//   this repo already lost a docs card to prose that drifted from the code
-//   (t_d768342e).
 //
-//   So the list below is not documentation: it is the CONTRACT, and it is pinned
-//   to the code by openapi_parity_test.go. That test parses the real
-//   RegisterRoutes table in rest.go and fails when the two disagree in either
-//   direction — a route with no contract entry, or a contract entry for a route
-//   that does not exist. It also validates the generated document with a real
-//   OpenAPI 3.1 validator, so an invalid spec cannot be published.
+//	  /v1/rest/* had 108 working routes and no description of them anywhere. A
+//	  merchant could not start, and a third-party developer had nothing to build
+//	  against. Worse, a hand-written endpoint list would be a lie within a week —
+//	  this repo already lost a docs card to prose that drifted from the code
+//	  (t_d768342e).
 //
-//   Every field here is a claim about the code, so every field is checkable:
+//	  So the list below is not documentation: it is the CONTRACT, and it is pinned
+//	  to the code by openapi_parity_test.go. That test parses the real
+//	  RegisterRoutes table in rest.go and fails when the two disagree in either
+//	  direction — a route with no contract entry, or a contract entry for a route
+//	  that does not exist. It also validates the generated document with a real
+//	  OpenAPI 3.1 validator, so an invalid spec cannot be published.
 //
-//	Method/Path/Handler  parsed out of rest.go (the parity test)
-//	Access               the gate the handler actually calls (requireWriteRole /
-//	                     requireAdminRole / session-only), also asserted from the
-//	                     handler source
-//	Rate                 whether the route is throttled, and by what — asserted
-//	                     against the middleware wrap in rest.go and the limiter
-//	                     call in the handler, BOTH directions. This matters
-//	                     because the honest fact about this API is that almost
-//	                     nothing is throttled, and that fact is exactly the one
-//	                     that rots silently.
+//	  Every field here is a claim about the code, so every field is checkable:
 //
-//   Regenerate the published artifacts with:
+//		Method/Path/Handler  parsed out of rest.go (the parity test)
+//		Access               the gate the handler actually calls (requireWriteRole /
+//		                     requireAdminRole / session-only), also asserted from the
+//		                     handler source
+//		Rate                 whether the route is throttled, and by what — asserted
+//		                     against the middleware wrap in rest.go and the limiter
+//		                     call in the handler, BOTH directions. This matters
+//		                     because the honest fact about this API is that almost
+//		                     nothing is throttled, and that fact is exactly the one
+//		                     that rots silently.
 //
-//	go run ./cmd/openapi-gen
+//	  Regenerate the published artifacts with:
 //
-//   which rewrites api/openapi/openapi.json (the published contract),
-//   web/public/openapi.json (the same bytes, served to any visitor at
-//   https://jomform.com/openapi.json — the repository is private, so the
-//   github.com copy is unreadable for the third-party developer this contract
-//   exists for) and web/src/lib/openapiSpec.gen.ts (the same document, for the
-//   /docs/api page to render). The parity test re-runs the generator in memory
-//   and fails if any of them differs from the code or from the others.
+//		go run ./cmd/openapi-gen
+//
+//	  which rewrites api/openapi/openapi.json (the published contract),
+//	  web/public/openapi.json (the same bytes, served to any visitor at
+//	  https://jomform.com/openapi.json — the repository is private, so the
+//	  github.com copy is unreadable for the third-party developer this contract
+//	  exists for) and web/src/lib/openapiSpec.gen.ts (the same document, for the
+//	  /docs/api page to render). The parity test re-runs the generator in memory
+//	  and fails if any of them differs from the code or from the others.
 package httpapi
 
 import (
@@ -124,16 +125,16 @@ var restRouteDocs = []restRouteDoc{
 		Summary: "Read one product", Access: AccessRead, Resp: "Product"},
 	{Method: "DELETE", Path: "/v1/rest/products/{id}", Handler: "deleteProduct", Tag: "Products",
 		Summary: "Move a product to the trash", Access: AccessWrite, Resp: "Deleted",
-		Desc:    "This moves the product to the bin — it is not the same as taking it off sale. To take a product off sale and leave it in the catalogue, PUT {\"active\":false} instead; a trashed product is invisible to every other read until it is restored."},
+		Desc: "This moves the product to the bin — it is not the same as taking it off sale. To take a product off sale and leave it in the catalogue, PUT {\"active\":false} instead; a trashed product is invisible to every other read until it is restored."},
 	{Method: "GET", Path: "/v1/rest/products/trash", Handler: "listTrashedProducts", Tag: "Products",
 		Summary: "List the products in the trash", Access: AccessRead, RespDesc: "The workspace's trashed products, each with its sales_count, subscription_count and can_purge, so a caller can tell a restorable product from one that can never be destroyed.",
-		Desc:    "Each row also carries deleted_at (RFC3339). can_purge is false when the product has a sale or a subscription, which is exactly what DELETE .../purge would refuse with 409."},
+		Desc: "Each row also carries deleted_at (RFC3339). can_purge is false when the product has a sale or a subscription, which is exactly what DELETE .../purge would refuse with 409."},
 	{Method: "POST", Path: "/v1/rest/products/{id}/restore", Handler: "restoreProduct", Tag: "Products",
 		Summary: "Restore a product from the trash", Access: AccessWrite, RespDesc: "status=restored and the product id.",
-		Desc:    "Restoring touches no CASCADE and destroys nothing. Unlike a form restore there is no slug to collide with — products have no unique name — so this only fails when the product is not in the trash (404)."},
+		Desc: "Restoring touches no CASCADE and destroys nothing. Unlike a form restore there is no slug to collide with — products have no unique name — so this only fails when the product is not in the trash (404)."},
 	{Method: "DELETE", Path: "/v1/rest/products/{id}/purge", Handler: "purgeProduct", Tag: "Products",
 		Summary: "Destroy a trashed product for good", Access: AccessWrite, Body: true, RespDesc: "status=purged, the product id and its name.",
-		Desc:    "Only a product already in the trash can be destroyed; a live product is a 404. The body must repeat the product's own name as confirm_name; a mismatch is refused with 400. A product that has ever been sold is refused with 409 and sales_count (sales history is never destroyed), and one a subscription still points at is refused with 409 and subscription_count."},
+		Desc: "Only a product already in the trash can be destroyed; a live product is a 404. The body must repeat the product's own name as confirm_name; a mismatch is refused with 400. A product that has ever been sold is refused with 409 and sales_count (sales history is never destroyed), and one a subscription still points at is refused with 409 and subscription_count."},
 
 	// ── Forms ────────────────────────────────────────────────────────────────
 	{Method: "GET", Path: "/v1/rest/forms", Handler: "listForms", Tag: "Forms",
@@ -144,10 +145,10 @@ var restRouteDocs = []restRouteDoc{
 		Desc: "A blank slug is generated from the title and uniquified within the workspace. An explicit slug is used as given, and must be unique among the workspace's live forms: a slug another live form already serves is refused with 409 form.slugInUse (the same code and sentence a slug rename onto it answers). The form is created as a draft; publish it with POST /v1/rest/forms/{id}/publish."},
 	{Method: "POST", Path: "/v1/rest/forms/ai-generate", Handler: "aiGenerateForm", Tag: "Forms",
 		Summary: "Draft a form config from a prompt (AI)", Access: AccessWrite, Body: true, Resp: "Form",
-		RespDesc:  "A draft form config (blocks + theme) to review and then save.",
-		Rate:      "5 per hour per IP, burst 3",
+		RespDesc:   "A draft form config (blocks + theme) to review and then save.",
+		Rate:       "5 per hour per IP, burst 3",
 		RateSource: RateMiddleware,
-		Desc:      "This route calls a language model and is charged accordingly, which is why it — and only it among the form routes — is throttled."},
+		Desc:       "This route calls a language model and is charged accordingly, which is why it — and only it among the form routes — is throttled."},
 	{Method: "POST", Path: "/v1/rest/forms/bulk", Handler: "bulkForms", Tag: "Forms",
 		Summary: "Publish, draft or delete many forms at once", Access: AccessWrite, Body: true, Resp: "BulkResult",
 		Desc: "Up to 500 ids. A payment form with no products is skipped on publish and reported in needs_products rather than being published empty."},
@@ -162,10 +163,10 @@ var restRouteDocs = []restRouteDoc{
 		Summary: "List the forms in the trash", Access: AccessRead, RespDesc: "The account's trashed forms, each with the number of sales attached to it, so a caller can tell a restorable form from one that can never be destroyed."},
 	{Method: "POST", Path: "/v1/rest/forms/{id}/restore", Handler: "restoreForm", Tag: "Forms",
 		Summary: "Restore a form from the trash", Access: AccessWrite, RespDesc: "status=restored and the form id.",
-		Desc:     "Restoring touches no CASCADE. If another form has taken the trashed form's slug in the meantime the restore is refused with 409 — change that form's slug first, then restore."},
+		Desc: "Restoring touches no CASCADE. If another form has taken the trashed form's slug in the meantime the restore is refused with 409 — change that form's slug first, then restore."},
 	{Method: "DELETE", Path: "/v1/rest/forms/{id}/purge", Handler: "purgeForm", Tag: "Forms",
 		Summary: "Destroy a trashed form for good", Access: AccessWrite, Body: true, RespDesc: "status=purged and the form id.",
-		Desc:     "Only a form already in the trash can be destroyed. The body must repeat the form's own slug as confirm_slug; a mismatch is refused with 400. A form that has ever been sold is refused with 409 and sales_count, because sales history is never destroyed."},
+		Desc: "Only a form already in the trash can be destroyed. The body must repeat the form's own slug as confirm_slug; a mismatch is refused with 400. A form that has ever been sold is refused with 409 and sales_count, because sales history is never destroyed."},
 	{Method: "POST", Path: "/v1/rest/forms/{id}/publish", Handler: "publishForm", Tag: "Forms",
 		Summary: "Publish a form", Access: AccessWrite, Resp: "FormStatus", Body: true,
 		Desc: "The form goes live at its URL. A payment form with no products is refused with 409 and requires_ack=true, because it could never take money; send {\"acknowledge\":true} or ?acknowledge=1 to publish it anyway."},
@@ -344,7 +345,7 @@ var restRouteDocs = []restRouteDoc{
 	{Method: "GET", Path: "/v1/rest/events/stream", Handler: "handleEventsStream", Tag: "Analytics",
 		Summary: "Stream this workspace's events (SSE)", Access: AccessRead,
 		RespDesc: "A text/event-stream of sale.paid, sale.failed, response.submitted and subscription.charged events for the authenticated account.",
-		Desc: "Server-sent events. The stream is account-scoped by the authenticating credential, so it can never carry another tenant's events."},
+		Desc:     "Server-sent events. The stream is account-scoped by the authenticating credential, so it can never carry another tenant's events."},
 	{Method: "GET", Path: "/v1/rest/spam/submissions", Handler: "listSpamSubmissions", Tag: "Spam review",
 		Summary: "List spam-flagged submissions", Access: AccessRead, Resp: "Paged"},
 	{Method: "POST", Path: "/v1/rest/spam/submissions/{id}/unspam", Handler: "unspamSubmission", Tag: "Spam review",
@@ -373,34 +374,34 @@ var restRouteDocs = []restRouteDoc{
 		Summary: "List uploaded media", Access: AccessRead, Resp: "MediaList"},
 	{Method: "DELETE", Path: "/v1/rest/media/{id}", Handler: "deleteMedia", Tag: "Media",
 		Summary: "Move a media item to the trash", Access: AccessWrite, Resp: "Deleted",
-		Desc:    "This marks the row trashed. The object itself is NOT removed from storage and the bytes keep counting against the workspace's 1GB quota: the bin holds real storage, so it is not a free tier. Destroy the object for good with DELETE /v1/rest/media/{id}/purge, which is also where the quota is released."},
+		Desc: "This marks the row trashed. The object itself is NOT removed from storage and the bytes keep counting against the workspace's 1GB quota: the bin holds real storage, so it is not a free tier. Destroy the object for good with DELETE /v1/rest/media/{id}/purge, which is also where the quota is released."},
 	{Method: "GET", Path: "/v1/rest/media/trash", Handler: "listTrashedMedia", Tag: "Media",
 		Summary: "List the media in the trash", Access: AccessRead,
 		RespDesc: "The workspace's trashed media, each with deleted_at (RFC3339) and object_present.",
 		Desc:     "object_present reports whether the bytes are still in the store. A row can be in the bin while the object is already gone (removed by an operator or a bucket lifecycle rule), which is why a restore checks rather than assumes."},
 	{Method: "POST", Path: "/v1/rest/media/{id}/restore", Handler: "restoreMedia", Tag: "Media",
 		Summary: "Restore a media item from the trash", Access: AccessWrite, RespDesc: "status=restored, the media id and its (unchanged) public URL.",
-		Desc:    "Clears deleted_at, so the same URL works again — the bytes were never removed. If the object is no longer in the store the restore is refused with 409 and nothing is changed, because restoring would put a broken URL back in the library. Quota is untouched: the bytes were never released on soft delete."},
+		Desc: "Clears deleted_at, so the same URL works again — the bytes were never removed. If the object is no longer in the store the restore is refused with 409 and nothing is changed, because restoring would put a broken URL back in the library. Quota is untouched: the bytes were never released on soft delete."},
 	{Method: "DELETE", Path: "/v1/rest/media/{id}/purge", Handler: "purgeMedia", Tag: "Media",
 		Summary: "Destroy a trashed media item for good", Access: AccessWrite, RespDesc: "status=purged, the media id and the object key that was removed.",
-		Desc:    "Only a media row already in the trash can be destroyed; a live row is a 404. The object and its derived variants (sized images, PDF preview) are removed from the store and the bytes are released from the 1GB quota — this is the only path that releases them."},
+		Desc: "Only a media row already in the trash can be destroyed; a live row is a 404. The object and its derived variants (sized images, PDF preview) are removed from the store and the bytes are released from the 1GB quota — this is the only path that releases them."},
 	{Method: "POST", Path: "/v1/rest/uploads/image", Handler: "uploadImage", Tag: "Media",
 		Summary: "Upload an image (multipart)", Access: AccessWrite,
-		RespDesc: "The stored media item with its public https URL.",
-		Rate:      "2 per second per IP, burst 6",
+		RespDesc:   "The stored media item with its public https URL.",
+		Rate:       "2 per second per IP, burst 6",
 		RateSource: RateMiddleware,
-		Desc: "multipart/form-data with the file in `file`. Send the bytes, not JSON."},
+		Desc:       "multipart/form-data with the file in `file`. Send the bytes, not JSON."},
 	{Method: "POST", Path: "/v1/rest/uploads/avatar", Handler: "uploadAvatar", Tag: "Media",
 		Summary: "Upload a profile avatar (multipart)", Access: AccessWrite,
-		RespDesc: "The stored avatar with its public https URL.",
-		Rate:      "2 per second per IP, burst 6",
+		RespDesc:   "The stored avatar with its public https URL.",
+		Rate:       "2 per second per IP, burst 6",
 		RateSource: RateMiddleware},
 	{Method: "POST", Path: "/v1/rest/uploads/asset", Handler: "uploadAsset", Tag: "Media",
 		Summary: "Upload a code asset (multipart: css/js/html/svg/woff2)", Access: AccessWrite,
-		RespDesc: "The stored asset, which stays unserved until its scan passes.",
-		Rate:      "2 per second per IP, burst 6",
+		RespDesc:   "The stored asset, which stays unserved until its scan passes.",
+		Rate:       "2 per second per IP, burst 6",
 		RateSource: RateMiddleware,
-		Desc: "Merchant-only. A code asset is scanned before it is served."},
+		Desc:       "Merchant-only. A code asset is scanned before it is served."},
 	{Method: "PUT", Path: "/v1/rest/profile/avatar", Handler: "updateProfileAvatar", Tag: "Profile",
 		Summary: "Set the signed-in user's avatar URL", Access: AccessSession, Body: true,
 		Desc: "The URL must point at JomForm-hosted media; arbitrary external URLs are refused."},
@@ -418,10 +419,10 @@ var restRouteDocs = []restRouteDoc{
 		Summary: "Report whether the in-app assistant is available", Access: AccessSession},
 	{Method: "POST", Path: "/v1/rest/chat", Handler: "handleChat", Tag: "In-app assistant",
 		Summary: "Ask the in-app assistant one message", Access: AccessSession, Body: true,
-		RespDesc:  "The assistant's reply, the tool steps it took, and whether it filed feedback.",
-		Rate:      "60 messages per hour per user, burst 10",
+		RespDesc:   "The assistant's reply, the tool steps it took, and whether it filed feedback.",
+		Rate:       "60 messages per hour per user, burst 10",
 		RateSource: RateHandler,
-		Desc:      "Session-only, and read-only by construction: the assistant's tool calls run under a readonly identity, so nothing typed into the box can write. The limit is enforced in the handler, keyed on the user rather than the IP."},
+		Desc:       "Session-only, and read-only by construction: the assistant's tool calls run under a readonly identity, so nothing typed into the box can write. The limit is enforced in the handler, keyed on the user rather than the IP."},
 	{Method: "POST", Path: "/v1/rest/chat/confirm", Handler: "handleChatConfirm", Tag: "In-app assistant",
 		Summary: "Execute a write the assistant proposed", Access: AccessSession, Body: true,
 		RespDesc:   "status, the tool that ran, and its result.",
@@ -523,20 +524,20 @@ var restComponentSchemas = map[string]map[string]any{
 	"Product": {
 		"type": "object",
 		"properties": map[string]any{
-			"id":              map[string]any{"type": "string"},
-			"name":            map[string]any{"type": "string"},
-			"description":     map[string]any{"type": "string"},
-			"price_sen":       map[string]any{"type": "integer", "description": "Price in sen (1/100)."},
-			"images":          map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-			"type":            map[string]any{"type": "string", "enum": []any{"one_time", "subscription"}},
-			"billing_period":  map[string]any{"type": "string", "enum": []any{"month", "year", ""}},
-			"trial_days":      map[string]any{"type": "integer"},
-			"schedule_mode":   map[string]any{"type": "string", "enum": []any{"from_payment", "catch_up", "skip_missed"}},
-			"active":          map[string]any{"type": "boolean"},
-			"stock":           map[string]any{"type": []string{"integer", "null"}, "description": "null means unlimited."},
-			"variations":      map[string]any{"type": "array", "items": map[string]any{"$ref": "#/components/schemas/Variation"}},
-			"created_at":      map[string]any{"type": "string"},
-			"updated_at":      map[string]any{"type": "string"},
+			"id":             map[string]any{"type": "string"},
+			"name":           map[string]any{"type": "string"},
+			"description":    map[string]any{"type": "string"},
+			"price_sen":      map[string]any{"type": "integer", "description": "Price in sen (1/100)."},
+			"images":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"type":           map[string]any{"type": "string", "enum": []any{"one_time", "subscription"}},
+			"billing_period": map[string]any{"type": "string", "enum": []any{"month", "year", ""}},
+			"trial_days":     map[string]any{"type": "integer"},
+			"schedule_mode":  map[string]any{"type": "string", "enum": []any{"from_payment", "catch_up", "skip_missed"}},
+			"active":         map[string]any{"type": "boolean"},
+			"stock":          map[string]any{"type": []string{"integer", "null"}, "description": "null means unlimited."},
+			"variations":     map[string]any{"type": "array", "items": map[string]any{"$ref": "#/components/schemas/Variation"}},
+			"created_at":     map[string]any{"type": "string"},
+			"updated_at":     map[string]any{"type": "string"},
 			"subscription_charges": map[string]any{"type": []string{"integer", "null"},
 				"description": "null means charge for as long as the subscription runs."},
 		},
@@ -592,8 +593,8 @@ var restComponentSchemas = map[string]map[string]any{
 	"Key": map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"id":     map[string]any{"type": "string"},
-			"name":   map[string]any{"type": "string"},
+			"id":   map[string]any{"type": "string"},
+			"name": map[string]any{"type": "string"},
 			"scopes": map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": []any{"readonly", "readwrite"}},
 				"description": "readonly may read; readwrite may also write. A legacy admin scope exists on old keys and behaves as a superset; it is not offered to new keys."},
 		},
@@ -610,8 +611,8 @@ var restComponentSchemas = map[string]map[string]any{
 		"required": []string{"id", "key"},
 	},
 	"Summary": map[string]any{
-		"type":        "object",
-		"description": "Workspace totals: sale counts by status, revenue net of refunds, and record counts.",
+		"type":                 "object",
+		"description":          "Workspace totals: sale counts by status, revenue net of refunds, and record counts.",
 		"additionalProperties": true,
 	},
 	"Subscription": map[string]any{
@@ -634,11 +635,11 @@ var restComponentSchemas = map[string]map[string]any{
 	"Webhook": map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"id":        map[string]any{"type": "string"},
-			"url":       map[string]any{"type": "string", "format": "uri"},
-			"events":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-			"active":    map[string]any{"type": "boolean"},
-			"secret":    map[string]any{"type": "string"},
+			"id":         map[string]any{"type": "string"},
+			"url":        map[string]any{"type": "string", "format": "uri"},
+			"events":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"active":     map[string]any{"type": "boolean"},
+			"secret":     map[string]any{"type": "string"},
 			"created_at": map[string]any{"type": "string"},
 		},
 	},
@@ -671,8 +672,8 @@ var restComponentSchemas = map[string]map[string]any{
 	},
 	"EventList": map[string]any{"type": "array", "items": map[string]any{"$ref": "#/components/schemas/Event"}},
 	"FormStats": map[string]any{
-		"type":        "object",
-		"description": "One row per form: the form's own mode, its entry count (responses for a response form, sales for a payment form) and its money figures.",
+		"type":                 "object",
+		"description":          "One row per form: the form's own mode, its entry count (responses for a response form, sales for a payment form) and its money figures.",
 		"additionalProperties": true,
 	},
 	"FormStatsList": map[string]any{"type": "array", "items": map[string]any{"$ref": "#/components/schemas/FormStats"}},
@@ -800,7 +801,7 @@ func responsesFor(d restRouteDoc) map[string]any {
 		}
 	}
 	out := map[string]any{
-		ok:   success,
+		ok: success,
 		"400": errorResponse("The request body or parameters are invalid. " +
 			"Error messages are returned in the API's own words, not a fixed enumeration."),
 		"401": errorResponse("Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."),
@@ -902,14 +903,15 @@ func OpenAPISpecJSON() ([]byte, error) {
 // for the freshness guard, so a new artifact cannot be generated-but-unchecked.
 //
 // WHY web/public/openapi.json IS A SEPARATE ARTIFACT FROM api/openapi/openapi.json
-//   They hold byte-identical bytes, and the duplication is deliberate. The
-//   contract's audience is a third-party developer, and this repository is
-//   PRIVATE: a link to api/openapi/openapi.json on github.com answers 404 for
-//   exactly the reader the /docs/api page was written for. web/public/ is served
-//   by the web app at https://jomform.com/openapi.json, so the document is
-//   readable without a repository account. Both copies are generated from
-//   OpenAPISpecJSON() in one run, so they cannot disagree — and
-//   TestGeneratedArtifactsAreInSync fails if either one is stale.
+//
+//	They hold byte-identical bytes, and the duplication is deliberate. The
+//	contract's audience is a third-party developer, and this repository is
+//	PRIVATE: a link to api/openapi/openapi.json on github.com answers 404 for
+//	exactly the reader the /docs/api page was written for. web/public/ is served
+//	by the web app at https://jomform.com/openapi.json, so the document is
+//	readable without a repository account. Both copies are generated from
+//	OpenAPISpecJSON() in one run, so they cannot disagree — and
+//	TestGeneratedArtifactsAreInSync fails if either one is stale.
 func GeneratedArtifactPaths() []string {
 	out := []string{
 		"api/openapi/openapi.json",

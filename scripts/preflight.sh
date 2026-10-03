@@ -225,7 +225,7 @@ cd "$REPO_ROOT" || exit 1
 # `--list`, the runnable set from the `run <name>` call sites) and FAILS if they
 # disagree, so a gate named here but never run — the silent-coverage-loss shape —
 # is caught by `--only selftest`. No edit to the self-test is needed for gate #N.
-GATE_NAMES=(build vet test govuln web webimage a11y e2e npmaudit gitleaks monitor tmpkey backup prunewt refguard selftest)
+GATE_NAMES=(build vet gofmt test govuln web webimage a11y e2e npmaudit gitleaks monitor tmpkey backup prunewt refguard selftest)
 
 ONLY=""
 SKIP=""
@@ -1886,6 +1886,30 @@ run build "cd api && go build ./..." \
 # ---------------------------------------------------------------------------
 run vet "cd api && go vet ./..." \
   bash -c "cd '$REPO_ROOT/api' && go vet ./..."
+
+
+# ---------------------------------------------------------------------------
+# gofmt — a fail that is not gofmt-clean is a DIFF NOBODY REVIEWED.
+#
+# WHY THIS GATE EXISTS (cards t_40bc6f95, t_d60f987b). `go vet` does not check
+# formatting, so nothing did: measured on origin/main, 26 files under `api/` were not
+# gofmt-clean, and two of them were REAL defects a reviewer would have caught —
+# `consume.go` had a doc paragraph turned into a `#` HEADING (so its explanation read
+# as a title), and `account_slug_host_issue77_test.go` had a whole test body's comment
+# and code left at column 0 inside the function.
+#
+# Every one of the 26 is a comment/whitespace change, which is what makes them
+# invisible: `gofmt -l` names files, and a diff that only moves comments is the diff a
+# reader skims. That is exactly how they accumulated. Verified before formatting: of the
+# 26, ZERO changed a single code token (`strip_comments` + whitespace-normalise, compared
+# to `gofmt` output) — so this gate is safe to add to a tree that is not clean, and its
+# fix is a no-op for behaviour.
+#
+# `gofmt -l` and not `gofmt -d`: the list is what the gate needs, and -d on 26 files is
+# 26 full-file diffs in a passing run's output. It names EVERY offending file rather than
+# stopping at the first, so one run tells a lane the whole job.
+run gofmt "cd api && test -z \"\$(gofmt -l .)\" (every api/ file is gofmt-clean)" \
+  bash -c "cd '$REPO_ROOT/api' && out=\$(gofmt -l .); if [ -n \"\$out\" ]; then echo 'not gofmt-clean:'; echo \"\$out\" | sed 's/^/  /'; echo 'Fix with: cd api && gofmt -w \$(gofmt -l .)'; exit 1; fi"
 
 # ---------------------------------------------------------------------------
 # api/test — WITH -race, and with an EXPLICIT per-package budget.

@@ -362,10 +362,10 @@ func (h *RESTHandlers) deleteProduct(w http.ResponseWriter, r *http.Request, act
 // restTrashedProduct is a bin row for a product: what the trash view renders,
 // plus the pre-computed answer to "may this be destroyed yet".
 type restTrashedProduct struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	PriceSen int64 `json:"price_sen"`
-	Active   bool `json:"active"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	PriceSen int64  `json:"price_sen"`
+	Active   bool   `json:"active"`
 	// DeletedAt is when the product entered the bin (RFC3339).
 	DeletedAt string `json:"deleted_at"`
 	// SalesCount is how many sales reference this product. Non-zero means the

@@ -1,25 +1,26 @@
 // Command openapi-gen writes the published REST API contract artifacts.
 //
 // THE ARTIFACTS, and why there is more than one
-//   api/openapi/openapi.json   — the contract as the repository publishes it.
-//   web/public/openapi.json    — the SAME bytes, served by the web app, so any
-//                                visitor can fetch
-//                                https://jomform.com/openapi.json. This copy
-//                                exists because the repository is private: a
-//                                github.com link answers 404 for exactly the
-//                                third-party developer the /docs/api page is
-//                                written for.
-//   web/src/lib/openapiSpec.gen.ts
-//                              — the same JSON, as a typed module, so the
-//                                /docs/api page renders the endpoint reference
-//                                from the contract instead of restating it in
-//                                prose. A docs page that lists endpoints by hand
-//                                is the defect this whole card is about.
 //
-//   All of them are generated from the single registry in
-//   api/internal/httpapi/openapi_routes.go, and all of them are checked by
-//   openapi_parity_test.go — which regenerates them in memory and fails on any
-//   difference, so a hand-edited or forgotten artifact cannot be served.
+//	api/openapi/openapi.json   — the contract as the repository publishes it.
+//	web/public/openapi.json    — the SAME bytes, served by the web app, so any
+//	                             visitor can fetch
+//	                             https://jomform.com/openapi.json. This copy
+//	                             exists because the repository is private: a
+//	                             github.com link answers 404 for exactly the
+//	                             third-party developer the /docs/api page is
+//	                             written for.
+//	web/src/lib/openapiSpec.gen.ts
+//	                           — the same JSON, as a typed module, so the
+//	                             /docs/api page renders the endpoint reference
+//	                             from the contract instead of restating it in
+//	                             prose. A docs page that lists endpoints by hand
+//	                             is the defect this whole card is about.
+//
+//	All of them are generated from the single registry in
+//	api/internal/httpapi/openapi_routes.go, and all of them are checked by
+//	openapi_parity_test.go — which regenerates them in memory and fails on any
+//	difference, so a hand-edited or forgotten artifact cannot be served.
 //
 // USAGE
 //

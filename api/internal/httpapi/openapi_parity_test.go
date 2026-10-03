@@ -1,54 +1,55 @@
 // Spec ↔ code parity guard for the public REST API contract.
 //
 // WHY THIS EXISTS
-//   The API had 108 working /v1/rest/* routes and no published contract. The
-//   obvious next step — write the endpoints down — is the exact move that
-//   produced this repo's docs-drift card (t_d768342e): a prose document that
-//   describes code it is no longer attached to, and nothing goes red when they
-//   diverge. So the contract lives in openapi_routes.go next to the route table,
-//   and this test pins it to the code in BOTH directions:
 //
-//     1. Every /v1/rest/* registration in rest.go has a contract entry, and
-//        every contract entry is a real registration. Add a route without its
-//        contract → RED. Delete a route and leave the entry → RED.
+//	The API had 108 working /v1/rest/* routes and no published contract. The
+//	obvious next step — write the endpoints down — is the exact move that
+//	produced this repo's docs-drift card (t_d768342e): a prose document that
+//	describes code it is no longer attached to, and nothing goes red when they
+//	diverge. So the contract lives in openapi_routes.go next to the route table,
+//	and this test pins it to the code in BOTH directions:
 //
-//     2. The published OpenAPI document contains exactly the registered path set,
-//        with exactly the registered methods. This is the assertion that keeps
-//        the artifact (which is what a developer actually reads) from drifting
-//        even if the registry stays honest.
+//	  1. Every /v1/rest/* registration in rest.go has a contract entry, and
+//	     every contract entry is a real registration. Add a route without its
+//	     contract → RED. Delete a route and leave the entry → RED.
 //
-//     3. Every access level is asserted against the gate the handler really
-//        calls. "readonly is refused on writes" is a promise the docs make, so
-//        the doc's claim is checked against requireWriteScope/requireWriteRole/
-//        requireAdminRole rather than trusted. A route that becomes admin-only
-//        stops matching its `write` entry → RED. And every gate a contracted
-//        handler calls must itself be classified, because a gate missing from
-//        the classifier does not fail — it reports the route as `read`, which is
-//        how a route that refuses readonly keys was published as a read
-//        (t_e9562a9c).
+//	  2. The published OpenAPI document contains exactly the registered path set,
+//	     with exactly the registered methods. This is the assertion that keeps
+//	     the artifact (which is what a developer actually reads) from drifting
+//	     even if the registry stays honest.
 //
-//     4. Every rate limit is asserted in BOTH directions, because the honest
-//        fact about this API is that almost nothing is throttled and that is the
-//        fact most likely to rot: a route documented as unthrottled that grows a
-//        middleware.RateLimit wrap fails, and a route documented as throttled
-//        whose limiter is removed fails.
+//	  3. Every access level is asserted against the gate the handler really
+//	     calls. "readonly is refused on writes" is a promise the docs make, so
+//	     the doc's claim is checked against requireWriteScope/requireWriteRole/
+//	     requireAdminRole rather than trusted. A route that becomes admin-only
+//	     stops matching its `write` entry → RED. And every gate a contracted
+//	     handler calls must itself be classified, because a gate missing from
+//	     the classifier does not fail — it reports the route as `read`, which is
+//	     how a route that refuses readonly keys was published as a read
+//	     (t_e9562a9c).
 //
-//     5. The document is validated with a real OpenAPI 3.1 validator, so an
-//        invalid spec cannot be published. It is validated from the JSON bytes
-//        that ship, not from the Go map, so the thing under test is the artifact.
+//	  4. Every rate limit is asserted in BOTH directions, because the honest
+//	     fact about this API is that almost nothing is throttled and that is the
+//	     fact most likely to rot: a route documented as unthrottled that grows a
+//	     middleware.RateLimit wrap fails, and a route documented as throttled
+//	     whose limiter is removed fails.
 //
-//     6. The two generated files on disk (api/openapi/openapi.json and
-//        web/src/lib/openapiSpec.gen.ts) must equal a fresh generation of the
-//        same source. A stale artifact fails here instead of being served.
+//	  5. The document is validated with a real OpenAPI 3.1 validator, so an
+//	     invalid spec cannot be published. It is validated from the JSON bytes
+//	     that ship, not from the Go map, so the thing under test is the artifact.
+//
+//	  6. The two generated files on disk (api/openapi/openapi.json and
+//	     web/src/lib/openapiSpec.gen.ts) must equal a fresh generation of the
+//	     same source. A stale artifact fails here instead of being served.
 //
 // WHAT IT DOES NOT COVER (stated so the guard is not over-claimed)
-//   * It is a structural check. It proves the spec NAMES every route, not that
+//   - It is a structural check. It proves the spec NAMES every route, not that
 //     each summary is well written, nor that a response schema matches every
 //     branch a handler can take.
-//   * The request/response schemas are hand-declared components; this test
+//   - The request/response schemas are hand-declared components; this test
 //     proves they are syntactically valid and referenced, not that every field
 //     the handler emits is listed.
-//   * The curl examples on /docs/api are checked to RUN against a local server by
+//   - The curl examples on /docs/api are checked to RUN against a local server by
 //     a separate test (openapi_docs_examples_test.go); a shell example that
 //     happens to be wrong for a reason its assertions do not model would pass.
 package httpapi
@@ -435,7 +436,6 @@ func TestHandlerAccessClassifierKnowsEveryNamedGate(t *testing.T) {
 	t.Logf("checked %d contracted handlers across %d routes; %d classified gates in use",
 		checked, len(sortedRouteDocs()), len(classified))
 }
-
 
 // refusesAPIKey reports whether a handler turns away a request with no session
 // user. These routes are marked AccessSession in the registry, so the claim is

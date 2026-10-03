@@ -402,7 +402,7 @@ func (s *ProductStore) CountSalesByProduct(ctx context.Context, accountID, produ
 		`SELECT COUNT(*) FROM sales
 		  WHERE account_id=$1
 		    AND (subscription_product_id=$2
-		         OR EXISTS (SELECT 1 FROM jsonb_array_elements(` + saleItemsArray("items") + `) e
+		         OR EXISTS (SELECT 1 FROM jsonb_array_elements(`+saleItemsArray("items")+`) e
 		                     WHERE e->>'product_id' = $2::text))`,
 		accountID, productID).Scan(&n)
 	return n, err
@@ -473,7 +473,7 @@ func (s *ProductStore) Purge(ctx context.Context, accountID, productID string) e
 		`SELECT COUNT(*) FROM sales
 		  WHERE account_id=$1
 		    AND (subscription_product_id=$2
-		         OR EXISTS (SELECT 1 FROM jsonb_array_elements(` + saleItemsArray("items") + `) e
+		         OR EXISTS (SELECT 1 FROM jsonb_array_elements(`+saleItemsArray("items")+`) e
 		                     WHERE e->>'product_id' = $2::text))`,
 		accountID, productID).Scan(&sales); err != nil {
 		return err
@@ -527,7 +527,7 @@ func (s *ProductStore) SalesCountsByProduct(ctx context.Context, accountIDs []st
 		   FROM sales s
 		   LEFT JOIN LATERAL (
 		     SELECT DISTINCT e->>'product_id' AS pid
-		       FROM jsonb_array_elements(` + saleItemsArray("s.items") + `) e
+		       FROM jsonb_array_elements(`+saleItemsArray("s.items")+`) e
 		      WHERE e->>'product_id' IS NOT NULL
 		   ) e ON true
 		  WHERE s.account_id = ANY($1)

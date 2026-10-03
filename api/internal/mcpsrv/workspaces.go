@@ -363,8 +363,8 @@ func (s *Server) deleteWorkspaceMCP(
 				}, nil
 			}
 			return nil, map[string]any{
-				"status": "refused",
-				"error": "hanya pemilik workspace boleh memadamnya",
+				"status":       "refused",
+				"error":        "hanya pemilik workspace boleh memadamnya",
 				"workspace_id": workspace.ID,
 			}, nil
 		}

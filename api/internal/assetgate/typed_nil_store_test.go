@@ -1,16 +1,17 @@
 // Regression test for the typed-nil object store in the asset-scan worker.
 //
 // THE SAME DEFECT CLASS AS THE MEDIA HANDLER, ON A WORSE GOROUTINE
-//   cmd/jomform-api assigns `var store *httpapi.ObjectStore` (nil whenever S3
-//   creds are unset) into assetgate.Handler.Store, an ObjectFetcher INTERFACE.
-//   A nil *T in a non-nil interface makes `h.Store != nil` TRUE, so both guards
-//   were skipped and Send called h.Store.GetBytes on a nil receiver.
 //
-//   The media route survived its version of this because the HTTP recoverer
-//   caught the panic (a 500 + a panic_recovered log line). This one runs on the
-//   email queue WORKER goroutine, which recovers nothing — the same shape that
-//   killed the whole jomform-api process for the nil *email.Sender. So the
-//   assertion here is "no panic at all", not "not a 500".
+//	cmd/jomform-api assigns `var store *httpapi.ObjectStore` (nil whenever S3
+//	creds are unset) into assetgate.Handler.Store, an ObjectFetcher INTERFACE.
+//	A nil *T in a non-nil interface makes `h.Store != nil` TRUE, so both guards
+//	were skipped and Send called h.Store.GetBytes on a nil receiver.
+//
+//	The media route survived its version of this because the HTTP recoverer
+//	caught the panic (a 500 + a panic_recovered log line). This one runs on the
+//	email queue WORKER goroutine, which recovers nothing — the same shape that
+//	killed the whole jomform-api process for the nil *email.Sender. So the
+//	assertion here is "no panic at all", not "not a 500".
 package assetgate
 
 import (

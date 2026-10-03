@@ -37,6 +37,7 @@ nothing proves nothing.
 |---|---|---|---|
 | `build` | api | `cd api && go build ./...` | compile errors |
 | `vet` | api | `cd api && go vet ./...` | suspicious constructs `go build` skips (it does not compile `_test.go`) |
+| `gofmt` | api | `cd api && test -z "$(gofmt -l .)"` | files that are not gofmt-clean — a diff nobody reviewed, and the class two REAL defects (a docs paragraph read as a `#` heading, a whole test body left at column 0) hid in until cards `t_40bc6f95` / `t_d60f987b`. `go vet` does not check formatting, so nothing did |
 | `test` | api | `cd api && go test ./... -race -count=1 -timeout 30m` | regressions **and data races**. The `-timeout` is an explicit per-package ceiling (30m, overridable with `API_TEST_TIMEOUT`): without it every package inherits Go's 10m default and `internal/httpapi` — the largest package, whose cost tracks host load — is reported as `panic: test timed out after 10m0s` for a package that is green (measured: pristine main rc=1 at 601.195s, green rc=0 at 620.593s on the same host). A `panic: test timed out` red cannot be told from a hung test. The `selftest` gate asserts this budget is present, that `API_TEST_TIMEOUT` reaches the argv, and that a stripped copy goes RED |
 | `govuln` | api | `govulncheck ./...` | known CVEs reachable from the module graph |
 | `web` | web | `cd web && npm run build` | `test:unit` (incl. the cross-language Go-contract guards) then the Next build |

@@ -35,55 +35,55 @@ func TestAccountSlugHostNoLongerServesAWorkspace(t *testing.T) {
 	ctx := context.Background()
 	pool := bundleTestPool(t)
 
-// A workspace + its linked account. The account is created the way SIGNUP
-// creates it — an account and NO workspace (#718) — and then linked to its
-// first workspace the way the ASK-FIRST flow links it (CreateForAccount). The
-// account slug is rewritten to the SYNTHETIC production shape so the two names
-// really differ (otherwise this test would compare a string to itself).
-var userID string
-if err := pool.QueryRow(ctx,
-	`INSERT INTO users (email, password_hash)
+	// A workspace + its linked account. The account is created the way SIGNUP
+	// creates it — an account and NO workspace (#718) — and then linked to its
+	// first workspace the way the ASK-FIRST flow links it (CreateForAccount). The
+	// account slug is rewritten to the SYNTHETIC production shape so the two names
+	// really differ (otherwise this test would compare a string to itself).
+	var userID string
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO users (email, password_hash)
 	 VALUES ('it-onehost-' || md5(random()::text) || '@example.test', 'it')
 	 RETURNING id`).Scan(&userID); err != nil {
-	t.Fatalf("create user: %v", err)
-}
-acc := &dbstore.Account{
-	OwnerUserID: userID,
-	Name:        "it-onehost-store",
-	Slug:        "it-onehost",
-}
-if err := dbstore.NewAccountStore(pool).Create(ctx, acc); err != nil {
-	t.Fatalf("create account via the signup path: %v", err)
-}
-// Fixture precondition, asserted: the signup insert linked NO workspace — that
-// is #718's ask-first boundary. The host this test serves on comes from the
-// ask-first create below, NOT from signup.
-var wid *string
-if err := pool.QueryRow(ctx, `SELECT workspace_id::text FROM accounts WHERE id=$1`, acc.ID).Scan(&wid); err != nil {
-	t.Fatalf("read workspace_id: %v", err)
-}
-if wid != nil {
-	t.Fatalf("the signup path linked account %s to workspace %s — a signup creates an account and NO "+
-		"workspace (#718); this fixture must exercise the ask-first flow, not a signup-minted workspace",
-		acc.ID, *wid)
-}
-workspaces := dbstore.NewWorkspaceStore(pool)
-wantSlug := "it-onehost-ws-" + userID[:8]
-if _, err := workspaces.CreateForAccount(ctx, userID, "it-onehost-ws", wantSlug, acc.ID); err != nil {
-	t.Fatalf("ask-first create: %v", err)
-}
-synth := acc.Slug + "-" + acc.ID[:8]
-if _, err := pool.Exec(ctx, `UPDATE accounts SET slug=$2 WHERE id=$1`, acc.ID, synth); err != nil {
-	t.Fatalf("rewrite account slug to the synthetic production shape: %v", err)
-}
+		t.Fatalf("create user: %v", err)
+	}
+	acc := &dbstore.Account{
+		OwnerUserID: userID,
+		Name:        "it-onehost-store",
+		Slug:        "it-onehost",
+	}
+	if err := dbstore.NewAccountStore(pool).Create(ctx, acc); err != nil {
+		t.Fatalf("create account via the signup path: %v", err)
+	}
+	// Fixture precondition, asserted: the signup insert linked NO workspace — that
+	// is #718's ask-first boundary. The host this test serves on comes from the
+	// ask-first create below, NOT from signup.
+	var wid *string
+	if err := pool.QueryRow(ctx, `SELECT workspace_id::text FROM accounts WHERE id=$1`, acc.ID).Scan(&wid); err != nil {
+		t.Fatalf("read workspace_id: %v", err)
+	}
+	if wid != nil {
+		t.Fatalf("the signup path linked account %s to workspace %s — a signup creates an account and NO "+
+			"workspace (#718); this fixture must exercise the ask-first flow, not a signup-minted workspace",
+			acc.ID, *wid)
+	}
+	workspaces := dbstore.NewWorkspaceStore(pool)
+	wantSlug := "it-onehost-ws-" + userID[:8]
+	if _, err := workspaces.CreateForAccount(ctx, userID, "it-onehost-ws", wantSlug, acc.ID); err != nil {
+		t.Fatalf("ask-first create: %v", err)
+	}
+	synth := acc.Slug + "-" + acc.ID[:8]
+	if _, err := pool.Exec(ctx, `UPDATE accounts SET slug=$2 WHERE id=$1`, acc.ID, synth); err != nil {
+		t.Fatalf("rewrite account slug to the synthetic production shape: %v", err)
+	}
 
-workspaceSlug, err := workspaces.PublicHostSlugByAccount(ctx, acc.ID)
-if err != nil || workspaceSlug != wantSlug {
-	t.Fatalf("PublicHostSlugByAccount = %q/%v, want the workspace slug %q", workspaceSlug, err, wantSlug)
-}
-if workspaceSlug == synth {
-	t.Fatalf("fixture is not discriminating: account slug == workspace slug (%q)", synth)
-}
+	workspaceSlug, err := workspaces.PublicHostSlugByAccount(ctx, acc.ID)
+	if err != nil || workspaceSlug != wantSlug {
+		t.Fatalf("PublicHostSlugByAccount = %q/%v, want the workspace slug %q", workspaceSlug, err, wantSlug)
+	}
+	if workspaceSlug == synth {
+		t.Fatalf("fixture is not discriminating: account slug == workspace slug (%q)", synth)
+	}
 
 	formSlug := "it-onehost-form-" + acc.ID[:8]
 	form := &dbstore.Form{

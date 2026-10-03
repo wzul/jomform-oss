@@ -453,8 +453,8 @@ func (s *Server) deleteMediaMCP(
 	}
 	if !ok {
 		return nil, map[string]any{
-			"status": "not_found",
-			"error":  "media tidak dijumpai dalam senarai aktif (mungkin sudah dalam tong sampah)",
+			"status":   "not_found",
+			"error":    "media tidak dijumpai dalam senarai aktif (mungkin sudah dalam tong sampah)",
 			"media_id": in.MediaID,
 		}, nil
 	}
@@ -526,8 +526,8 @@ func (s *Server) restoreMediaMCP(
 	}
 	if row == nil {
 		return nil, map[string]any{
-			"status": "not_found",
-			"error":  "media tidak dijumpai dalam tong sampah",
+			"status":   "not_found",
+			"error":    "media tidak dijumpai dalam tong sampah",
 			"media_id": in.MediaID,
 		}, nil
 	}
@@ -589,8 +589,8 @@ func (s *Server) purgeMediaMCP(
 	}
 	if !ok {
 		return nil, map[string]any{
-			"status": "not_found",
-			"error":  "media tidak dijumpai dalam tong sampah (hantar ke bin dulu guna delete_media)",
+			"status":   "not_found",
+			"error":    "media tidak dijumpai dalam tong sampah (hantar ke bin dulu guna delete_media)",
 			"media_id": in.MediaID,
 		}, nil
 	}

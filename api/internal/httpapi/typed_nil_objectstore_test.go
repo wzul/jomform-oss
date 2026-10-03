@@ -1,22 +1,23 @@
 // Regression test for the typed-nil ObjectStoreIface in the media path.
 //
 // WHAT WAS BROKEN
-//   cmd/jomform-api assigned a nil *httpapi.ObjectStore into the
-//   ObjectStoreIface fields RESTHandlers.Store / PublicHandlers.Store whenever
-//   S3_ACCESS_KEY/S3_SECRET_KEY were unset. A nil *T in a non-nil interface
-//   makes `h.Store == nil` FALSE, so the guards at handleMedia (uploads.go),
-//   handleAsset (public.go), the three upload handlers, listMedia and deleteMedia
-//   were all skipped and the call reached (*objstore.ObjectStore).GetObject on a
-//   nil receiver → SIGSEGV.
 //
-//   Reproduced on the built binary at this head, S3 unset, with a key shape that
-//   gets PAST the key validator (a bad key 400s first and hides the bug):
-//     GET /media/u/00000000-0000-0000-0000-000000000000/file.jpg
-//       → 500 {"error":"internal error"}
-//       + ERROR panic_recovered err="runtime error: invalid memory address or nil
-//         pointer dereference" path=/media/u/... error_class=panic
-//   The route's own guard (whose text is "media storage tidak dikonfigurasi")
-//   was written to answer 503 and never ran.
+//	cmd/jomform-api assigned a nil *httpapi.ObjectStore into the
+//	ObjectStoreIface fields RESTHandlers.Store / PublicHandlers.Store whenever
+//	S3_ACCESS_KEY/S3_SECRET_KEY were unset. A nil *T in a non-nil interface
+//	makes `h.Store == nil` FALSE, so the guards at handleMedia (uploads.go),
+//	handleAsset (public.go), the three upload handlers, listMedia and deleteMedia
+//	were all skipped and the call reached (*objstore.ObjectStore).GetObject on a
+//	nil receiver → SIGSEGV.
+//
+//	Reproduced on the built binary at this head, S3 unset, with a key shape that
+//	gets PAST the key validator (a bad key 400s first and hides the bug):
+//	  GET /media/u/00000000-0000-0000-0000-000000000000/file.jpg
+//	    → 500 {"error":"internal error"}
+//	    + ERROR panic_recovered err="runtime error: invalid memory address or nil
+//	      pointer dereference" path=/media/u/... error_class=panic
+//	The route's own guard (whose text is "media storage tidak dikonfigurasi")
+//	was written to answer 503 and never ran.
 //
 // These tests drive the REAL handler through the production recoverer, so a
 // regression answers the same 500 + panic_recovered the deployment did — not

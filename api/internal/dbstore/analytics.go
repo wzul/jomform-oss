@@ -152,7 +152,7 @@ func (s *SaleStore) ProductAnalyticsAccounts(ctx context.Context, accountIDs []s
 		                           THEN (elem->>'price_sen')::bigint * (elem->>'qty')::int * s.refunded_sen / s.total_sen
 		                           ELSE 0 END)
 		                  FILTER (WHERE s.status IN `+paidSet+`), 0)                                       AS paid_gross
-		FROM sales s, jsonb_array_elements(` + saleItemsArray("s.items") + `) AS elem
+		FROM sales s, jsonb_array_elements(`+saleItemsArray("s.items")+`) AS elem
 		WHERE s.account_id = ANY($1)
 		  AND elem->>'product_id' IS NOT NULL
 		GROUP BY pid

@@ -1,21 +1,22 @@
 // Regression test for the nil-receiver trap in the media path.
 //
 // WHAT WAS BROKEN, AND HOW
-//   cmd/jomform-api holds `var store *ObjectStore`, nil whenever S3_ACCESS_KEY/
-//   S3_SECRET_KEY are unset, and assigns it into INTERFACE fields
-//   (httpapi.RESTHandlers.Store, httpapi.PublicHandlers.Store,
-//   assetgate.Handler.Store). A nil *T stored in an interface is NOT a nil
-//   interface: every `if store == nil` guard downstream was false and the call
-//   ran on a nil receiver, dereferencing o.client → SIGSEGV at addr=0x0.
 //
-//   On the live binary (this head, S3 unset) a valid key shape reproduced it:
-//     GET /media/u/00000000-0000-0000-0000-000000000000/file.jpg
-//       → 500 {"error":"internal error"} + one ERROR panic_recovered
-//                ... error_class=panic
-//   The intended answer was the 503 "media storage tidak dikonfigurasi" the
-//   handler's own guard writes. A bad key did NOT reproduce it (400 from the
-//   key validator, before the nil receiver is reached) — which is why a lazy
-//   probe of this bug looks clean.
+//	cmd/jomform-api holds `var store *ObjectStore`, nil whenever S3_ACCESS_KEY/
+//	S3_SECRET_KEY are unset, and assigns it into INTERFACE fields
+//	(httpapi.RESTHandlers.Store, httpapi.PublicHandlers.Store,
+//	assetgate.Handler.Store). A nil *T stored in an interface is NOT a nil
+//	interface: every `if store == nil` guard downstream was false and the call
+//	ran on a nil receiver, dereferencing o.client → SIGSEGV at addr=0x0.
+//
+//	On the live binary (this head, S3 unset) a valid key shape reproduced it:
+//	  GET /media/u/00000000-0000-0000-0000-000000000000/file.jpg
+//	    → 500 {"error":"internal error"} + one ERROR panic_recovered
+//	             ... error_class=panic
+//	The intended answer was the 503 "media storage tidak dikonfigurasi" the
+//	handler's own guard writes. A bad key did NOT reproduce it (400 from the
+//	key validator, before the nil receiver is reached) — which is why a lazy
+//	probe of this bug looks clean.
 //
 // This file is the BOTTOM layer: whatever shape the wiring takes, a method on an
 // unconfigured store must answer a sentinel rather than dereference itself.

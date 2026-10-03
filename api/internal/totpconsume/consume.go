@@ -6,7 +6,7 @@
 // code single-use, and that is the difference between "a code proves a factor"
 // and "a code can be replayed for 90 seconds by whoever saw it".
 //
-// WHY THIS PACKAGE EXISTS
+// # WHY THIS PACKAGE EXISTS
 //
 // The rule needs BOTH halves of the system: auth (to validate a code and learn
 // which time-step it matched) and dbstore (to consume that step atomically).

@@ -2,29 +2,30 @@
 // fields.
 //
 // WHY THIS FILE EXISTS
-//   cmd/jomform-api builds concrete pointers and hands them into interface
-//   fields (VerifyMailer, ObjectStoreIface, assetgate.ObjectFetcher). When the
-//   pointer is nil — SES unconfigured, S3_* unset — the interface field is NOT
-//   nil: it holds a nil *T. Every `if field == nil` guard downstream is then
-//   false and the call runs on a nil receiver, which dereferences its own
-//   fields and panics.
 //
-//   That was not theoretical here. It took the whole API process down once
-//   (nil *email.Sender on the email queue worker goroutine, which recovers
-//   nothing) and it produced a visitor-reachable 500 + recovered panic on
-//   GET /media/u/<id>/<file> a second time (nil *objstore.ObjectStore behind
-//   ObjectStoreIface).
+//	cmd/jomform-api builds concrete pointers and hands them into interface
+//	fields (VerifyMailer, ObjectStoreIface, assetgate.ObjectFetcher). When the
+//	pointer is nil — SES unconfigured, S3_* unset — the interface field is NOT
+//	nil: it holds a nil *T. Every `if field == nil` guard downstream is then
+//	false and the call runs on a nil receiver, which dereferences its own
+//	fields and panics.
 //
-//   The gates below are the EDGE layer of the two-layer shape: cmd/jomform-api
-//   no longer stores a typed nil, and these gates make the guards' intent hold
-//   for either shape, so a future wiring change cannot reintroduce the crash.
-//   The BOTTOM layer is the nil-receiver sentinel in the leaf packages
-//   (email.ErrNotConfigured, objstore.ErrNotConfigured).
+//	That was not theoretical here. It took the whole API process down once
+//	(nil *email.Sender on the email queue worker goroutine, which recovers
+//	nothing) and it produced a visitor-reachable 500 + recovered panic on
+//	GET /media/u/<id>/<file> a second time (nil *objstore.ObjectStore behind
+//	ObjectStoreIface).
 //
-//   The reflect rule itself lives in internal/niliface, one implementation
-//   shared with the asset-scan worker (assetgate.Handler.Store, whose guard was
-//   defeated by the same typed nil) — a second hand-rolled copy is how the two
-//   guards drift apart.
+//	The gates below are the EDGE layer of the two-layer shape: cmd/jomform-api
+//	no longer stores a typed nil, and these gates make the guards' intent hold
+//	for either shape, so a future wiring change cannot reintroduce the crash.
+//	The BOTTOM layer is the nil-receiver sentinel in the leaf packages
+//	(email.ErrNotConfigured, objstore.ErrNotConfigured).
+//
+//	The reflect rule itself lives in internal/niliface, one implementation
+//	shared with the asset-scan worker (assetgate.Handler.Store, whose guard was
+//	defeated by the same typed nil) — a second hand-rolled copy is how the two
+//	guards drift apart.
 package httpapi
 
 import "github.com/wzul/jomform/api/internal/niliface"
