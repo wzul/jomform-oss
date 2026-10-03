@@ -153,9 +153,32 @@
 #                               so explicitly with `--skip webimage` (which
 #                               prints the NOT-RUN warning block).
 #
-# RUNTIME (measured on the agent host): api build 13s, vet 13s, test 2m35s,
-#   govuln 25s, web build ~2m, a11y 15s, npm audit 1s, gitleaks 30s, backup ~45s.
-#   Budget ~7 minutes for a full run.
+# RUNTIME — LAST MEASURED 2026-10-03 on the agent host, one full 16-gate run on a
+#   clean tree at 6 CPUs with no peer gate running, `16 passed, 0 failed,
+#   0 skipped in 753s`: build 7s, vet 1s, test 279s, govuln 6s, web 45s,
+#   webimage 73s, a11y 29s, e2e 123s, npmaudit 1s, gitleaks 9s, monitor 8s,
+#   tmpkey 3s, backup 30s, prunewt 16s, refguard 4s, selftest 111s.
+#
+#   THAT IS ONE SAMPLE, NOT A BUDGET, and the error bar is wide by construction:
+#   wall clock tracks host load and the gate set, not the tree. Across the runs
+#   whose summaries are on this host the spread is minutes, not seconds — the
+#   figures above were taken idle, and a contended host has been measured at
+#   19-23 min for the same work.
+#
+#   TWO THINGS HERE ROT SILENTLY IF THEY ARE WRITTEN AS PROMISES, which is why this
+#   block is dated and says what it was measured on:
+#     * `test` dominates (279s of 753s here) and scales with host contention — it is
+#       the gate that reds on a loaded host, not a slow one;
+#     * `a11y` used to be quoted at 15s when it took 4m08s, because the gate ran the
+#       WHOLE `web/e2e/` directory while its row described axe. It is now 29s
+#       because the feature specs have their own gate (`e2e`, 123s) — so this
+#       breakdown changed shape on 2026-10-03, and any figure copied from before
+#       that date is wrong.
+#
+#   If you change the gate set or a gate's scope, the numbers here are stale: fix
+#   them in the same commit, or delete them. Nothing checks them, deliberately —
+#   unlike `--list`, wall clock is host- and load-dependent, so a guard would only
+#   pin a value that is wrong the moment the machine is busier.
 #   webimage: ~2m COLD (npm ci + next build in the image; measured 196s) and
 #   ~3s warm, because the build cache carries it. So the gate is cheap on a
 #   re-run and only pays for itself when something in the context changed —

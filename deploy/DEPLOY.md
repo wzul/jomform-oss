@@ -217,7 +217,13 @@ git rev-list --count main..origin/main    # how far apart are they
    ```bash
    source ${JOMFORM_ENV:-$HOME/.config/jomform/test-env.sh}   # JOMFORM_TEST_DATABASE_URL + JOMFORM_TEST_VALKEY_URL
    ./scripts/preflight.sh --list   # the gate inventory (authoritative)
-   ./scripts/preflight.sh          # every gate, ~7 min + the webimage build (196s cold, ~3s warm); runs again inside build-and-ship.sh
+   ./scripts/preflight.sh          # every gate. Measured 2026-10-03 on the agent host, one clean
+                                   # 16-gate run, idle: 753s (12m33s), of which `test` is 279s
+                                   # and `e2e` 123s. THAT IS ONE SAMPLE, NOT A BUDGET: wall clock
+                                   # tracks host load, and contended runs of the same work have
+                                   # been measured at 19-23 min. Plan an incident window on the
+                                   # slower number. (`webimage` adds 196s cold, ~3s warm.)
+                                   # Runs again inside build-and-ship.sh.
    ```
    Run it standalone first if you want to see a failure before the lock is held.
 3. Ship the tarball (`SSH_HOST=... ./deploy/build-and-ship.sh` or scp manually).
