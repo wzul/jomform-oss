@@ -971,14 +971,21 @@ export default function Builder() {
   // Issue #61: upload an image for the selected block via the direct S3
   // upload endpoint (presign superseded by the owner's server-side-optimise
   // flow). Returns the public URL, stores it into the block's src.
+  //
+  // The two client-side pre-flight refusals are TRANSLATED, not literals: the
+  // builder is the one dashboard surface where the user's dashboard language is
+  // the only language on screen, and a hardcoded sentence here reached an
+  // English (or Chinese/Tamil/Arabic) merchant verbatim. The server re-checks
+  // both (uploads.go sniffs the real bytes), so these are a round-trip saving —
+  // never the only guard.
   async function handleImageUpload(file: File) {
     if (!selectedBlock || selectedBlock.type !== "image") return;
     if (!["image/png", "image/jpeg", "image/webp", "image/gif"].includes(file.type)) {
-      setLoadErr("Jenis imej tidak disokong (png/jpeg/webp/gif sahaja).");
+      setLoadErr(t("bld.imageTypeUnsupported"));
       return;
     }
     if (file.size > 20 * 1024 * 1024) {
-      setLoadErr("Imej melebihi had 20MB.");
+      setLoadErr(t("media.uploadTooLarge"));
       return;
     }
     setUploading(true);

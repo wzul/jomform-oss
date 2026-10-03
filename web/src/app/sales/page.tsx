@@ -481,7 +481,7 @@ function SalesPageInner() {
     if (rm !== "") {
       const rmNum = Number(rm);
       if (!Number.isFinite(rmNum) || rmNum <= 0) {
-        setMsg("Jumlah capture tidak sah.");
+        setMsg(t("sales.captureInvalid"));
         return;
       }
       body = JSON.stringify({ amount_sen: Math.round(rmNum * 100) });

@@ -1274,6 +1274,12 @@ export const DICT = {
   // issue #61: image upload labels
   "bld.uploadImage": { en: "Upload image", ms: "Muat naik imej", zh: "上传图片", ta: "படத்தைப் பதிவேற்று", ar: "رفع صورة" },
   "bld.uploading": { en: "Uploading…", ms: "Memuat naik…", zh: "上传中…", ta: "பதிவேற்றுகிறது…", ar: "جارٍ الرفع…" },
+  // The image block's client-side pre-flight refusal. It was a hardcoded Malay
+  // sentence, so a merchant on any other dashboard language read Malay for a
+  // file the browser could have told them about before the upload. The list
+  // mirrors the file input's `accept` and objstore.SniffImageType — the server
+  // sniffs the real bytes and is still the authority.
+  "bld.imageTypeUnsupported": { en: "That image type is not supported (PNG/JPEG/WebP/GIF only).", ms: "Jenis imej itu tidak disokong (PNG/JPEG/WebP/GIF sahaja).", zh: "不支持该图片类型（仅限 PNG/JPEG/WebP/GIF）。", ta: "அந்த பட வகை ஆதரிக்கப்படவில்லை (PNG/JPEG/WebP/GIF மட்டும்).", ar: "نوع الصورة هذا غير مدعوم (PNG/JPEG/WebP/GIF فقط)." },
   // palette block labels
   "blk.text": { en: "Text", ms: "Teks", zh: "文本", ta: "உரை", ar: "نص" },
   "blk.textHint": { en: "Paragraph / description", ms: "Perenggan / penerangan", zh: "段落 / 描述", ta: "பத்தி / விளக்கம்", ar: "فقرة / وصف" },
@@ -1688,6 +1694,10 @@ export const DICT = {
   "nav.submissions": { en: "Submission", ms: "Submisi", zh: "提交", ta: "சமர்ப்பிப்பு", ar: "الإرسال" },
   "nav.spam": { en: "Spam", ms: "Spam", zh: "垃圾邮件", ta: "ஸ்பேம்", ar: "رسائل مزعجة" },
   "sales.title": { en: "Sales", ms: "Jualan", zh: "销售", ta: "விற்பனைகள்", ar: "المبيعات" },
+  // The capture-amount pre-check's refusal: the amount the merchant typed into
+  // the prompt is not a positive number. It was a hardcoded Malay sentence while
+  // every other message in that handler was already translated.
+  "sales.captureInvalid": { en: "That capture amount is not valid.", ms: "Jumlah capture itu tidak sah.", zh: "该捕获金额无效。", ta: "அந்தக் கேப்சர் தொகை செல்லாதது.", ar: "مبلغ التحصيل هذا غير صالح." },
   "sales.confirmFail": { en: "Failed to confirm this sale.", ms: "Gagal sahkan jualan ini.", zh: "确认该笔销售失败。", ta: "இந்த விற்பனையை உறுதிப்படுத்த முடியவில்லை.", ar: "فشل تأكيد عملية البيع هذه." },
   "sales.subtitle": { en: "Every sale across your forms — filter, search, export.", ms: "Semua jualan merentas borang anda — tapis, cari, eksport.", zh: "所有表单的每笔销售 — 筛选、搜索、导出。", ta: "உங்கள் படிவங்களின் ஒவ்வொரு விற்பனையும் — வடிகட்டி, தேடு, ஏற்றுமதி.", ar: "كل مبيعاتك عبر النماذج — صفِّ، ابحث، صدّر." },
   // The unfiltered list is the account's whole record set: sales AND the
