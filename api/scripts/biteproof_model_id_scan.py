@@ -62,6 +62,30 @@ import signal
 import subprocess
 import sys
 
+# NEVER WRITE .pyc, AND THIS IS NOT HYGIENE (card t_bfef6b4f).
+#
+# This harness runs `go test` on a tree it has mutated, and the guard under test walks
+# every shipped file and FAILS on one it cannot decode as text. Importing this module
+# normally writes `api/scripts/__pycache__/biteproof_model_id_scan.cpython-3xx.pyc`
+# into the tree, which is then (a) not ignored by git and (b) undecodable, so the guard
+# goes RED for a reason that has nothing to do with the mutation — and
+# `base_catches_probe` reads ANY test failure as "this reader caught the probe".
+#
+# The consequence was measured: EVERY revision answered `caught=True`, including the
+# pre-widening reader the check exists to accept, so `derive_base()` refused every run
+# with "the derived base ... still CAUGHT the capability probe". Reproduced by writing
+# the probe by hand and reading the failure:
+#
+#     --- FAIL: TestUserFacingStringsNameTheSameModelAsTheConstant
+#         the scan could not decode api/scripts/__pycache__/...cpython-314.pyc as text,
+#         so it cannot judge ...
+#
+# Set before anything else can import, and also exported for the child processes this
+# harness spawns (`go test` runs the guard, not this file, but a stray re-import would
+# recreate the directory).
+sys.dont_write_bytecode = True
+os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 API = os.path.dirname(HERE)
 REPO = os.path.dirname(API)
@@ -301,20 +325,53 @@ def verdict(label, expect_red, needles):
     return True
 
 
+def base_is_good(ref):
+    """True when the FULL case set reports zero failures with `ref` as the run-wide base.
+
+    This is the question the operator is actually asking, asked directly. The
+    capability probe above is a cheap SCREEN (it skips a reader that is widened by
+    definition), but it accepts readers that are still too new for the legacy legs —
+    measured: `0c1c6e9c` passes the probe and fails five of fourteen cases.
+
+    Runs in a child process, so the caller's globals and the tree's guard file are not
+    disturbed by the attempt. The child is byte-identical work to a normal run, which is
+    why this is only called for candidates that pass the probe.
+    """
+    env = dict(os.environ)
+    env["BITEPROOF_BASE"] = ref
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    proc = subprocess.run([sys.executable, os.path.abspath(__file__)],
+                          capture_output=True, text=True, env=env, cwd=REPO)
+    return proc.returncode == 0
+
+
 def derive_base():
     """The run-wide base revision, derived rather than typed.
 
-    The parent of the newest commit at BASE_REF that touched the guard. That is
-    the revision BEFORE the reader widened, which is what the cases whose BASE leg
-    expects GREEN mean by "the old scan" (cases 1-5: the extension whitelist and
-    the `deepseek-`-only token) — and it is derived because PR 841 MERGED, so
-    `origin/main` no longer holds the pre-widening reader and the old default
+    The revision the legacy BASE legs were written against: a reader OLDER than this
+    tree's, so "did the old scan miss this?" has an answer. Derived because PR 841
+    MERGED — `origin/main` stopped holding the pre-widening reader, so the old default
     silently stopped meaning what those expectations were written against.
 
-    Returns (ref_or_None, reason). A base whose reader already catches the
-    capability probe is REFUSED rather than used: it is the widened reader, and
-    every legacy BASE leg would read RED for a reason that says nothing about the
-    guard.
+    THE PROBE ALONE IS NOT ENOUGH, AND THAT IS MEASURED (card t_bfef6b4f). Walking the
+    guard's history newest-first and accepting the first revision whose reader does not
+    catch the colon probe picks `0c1c6e9c`, which passes the probe but is STILL too new
+    for five of the fourteen cases — they read `BASE guard ... FAIL -- expected GREEN,
+    guard RED`:
+
+        ba4a7d10  cases: 14, failed: 0     <- the revision these cases were written for
+        e173f747  cases: 14, failed: 0
+        0c1c6e9c  cases: 14, failed: 5    <- probe-passes, still wrong
+
+    So the capability probe is a NECESSARY screen and not the answer: the legacy legs
+    span several widening shapes at once (the extension whitelist, the `deepseek-`
+    prefix, the digit filter), and only a reader old enough for ALL of them gives the
+    "missed this" column its meaning. The walk therefore runs the FULL harness against
+    each candidate and accepts the first that reports zero failures — the same question
+    the operator is asking, asked directly instead of through a proxy.
+
+    Returns (ref_or_None, reason). A candidate whose reader already catches the probe is
+    skipped without a full run, since it is the widened reader by definition.
     """
     _, base_rev = git("rev-parse", "--short", BASE_REF)
     base_rev = base_rev.strip()
@@ -328,13 +385,24 @@ def derive_base():
     parent = parent.strip()
     if not parent:
         return None, "%s (the commit that last touched the guard) has no parent" % last_touch[:12]
-    body = show(parent, GUARD_REL)
-    if body is None:
-        return None, "the derived base %s carries no %s" % (parent, GUARD_REL)
-    if base_catches_probe(parent):
-        return None, ("the derived base %s still CAUGHT the capability probe, so its reader is the "
-                      "widened one and every legacy BASE leg would compare two caught-up readers" % parent)
-    return parent, None
+
+    _, history = git("log", "--format=%H", base_rev, "--", GUARD_REL)
+    candidates = [parent] + [r for r in history.split() if r and r != last_touch and r != parent]
+    probed = 0
+    for cand in candidates:
+        if show(cand, GUARD_REL) is None:
+            continue
+        if base_catches_probe(cand):
+            continue
+        probed += 1
+        if base_is_good(cand):
+            return cand, None
+    if probed == 0:
+        return None, ("every revision in %s's history of %s carries the widened reader, so no legacy "
+                      "BASE leg can be compared" % (BASE_REF, GUARD_REL))
+    return None, ("none of the %d probe-passing revisions in %s's history of %s gives a clean run — "
+                  "the legacy BASE expectations no longer match any reader in this history"
+                  % (probed, BASE_REF, GUARD_REL))
 
 
 def base_catches_probe(ref):
@@ -635,7 +703,8 @@ def main():
                   "BITEPROOF_BASE=<rev> to name one." % why)
             return 2
         BASE_REF, BASE_GUARD = derived, show(derived, GUARD_REL)
-        print("derived run-wide base: %s (parent of the newest commit at origin/main that touched the guard)"
+        print("derived run-wide base: %s (the newest revision in the guard's history whose FULL case "
+              "set reports zero failures — screened by the capability probe first)"
               % BASE_REF)
 
     if BASE_GUARD is None:
