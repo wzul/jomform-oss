@@ -154,6 +154,56 @@ test.describe("email subject/body per-field rule is stated where it applies", ()
     expect(await links.first().innerText()).toBe("?");
   });
 
+  test("the notification-RULE editor states the same rule on its Subject and Body", async ({ page }) => {
+    // The rule editor is behind TWO clicks (the tab, then "+ Add notification"),
+    // because both are component state — no URL reaches it (card t_864adaee). The
+    // per-field language rule applies to exactly the values this panel stores
+    // (api/internal/payments/notifications.go decides the rule's subject and body
+    // half-by-half), so a merchant editing a rule needs the same pointer the
+    // receipt fields above already carry.
+    //
+    // The assertions use the DELTA the panel adds, not absolute counts: the page
+    // already carries the receipt fields' links, and an absolute count would
+    // silently re-point at those if the panel ever moved. Measured before/after
+    // on this tree: language links 2 -> 4, placeholder links 1 -> 3.
+    await setLang(page, "en");
+    await stubAPI(page);
+    await page.goto(`/form-settings?form=${FORM_ID}`);
+    await page.waitForLoadState("networkidle");
+    await page.getByRole("button", { name: "Notifications", exact: true }).click();
+
+    const RULE = 'a[href="/docs/customize#language"]';
+    const before = await page.locator(RULE).count();
+
+    // Open the rule editor. The label is a dictionary string, so match the EN
+    // dictionary's own words rather than a hand-typed one.
+    await page.getByRole("button", { name: /Add notification|Tambah notifikasi/ }).first().click();
+
+    // The panel is open only if ITS Subject label rendered — and that label is the
+    // assertion that the link sits next to the field, not merely on the page.
+    const panelSubject = page.locator("label", { hasText: /^Subject \?/ });
+    await expect(panelSubject).toHaveCount(1, { timeout: 15_000 });
+    await expect(panelSubject.locator(RULE)).toHaveCount(1);
+
+    // BOTH fields in the panel got one, so the delta is exactly two.
+    const after = await page.locator(RULE).count();
+    expect(after - before, `the rule editor added ${after - before} language-rule link(s), want 2 ` +
+      `(one on Subject, one on Body)`).toBe(2);
+
+    // …and they carry the localised explanation, so a missing dictionary entry
+    // cannot pass as a rendered link.
+    const titles = await page.locator(RULE).evaluateAll(
+      (els) => els.slice(-2).map((e) => e.getAttribute("title") ?? ""),
+    );
+    for (const t of titles) {
+      expect(t, `a rule-editor language link has title ${JSON.stringify(t)}`).toContain("judged separately");
+    }
+
+    // The placeholder link is a DIFFERENT affordance and survives beside it.
+    const PH = 'a[href="/docs/placeholders"]';
+    expect(await page.locator(PH).count()).toBeGreaterThanOrEqual(2);
+  });
+
   test("the inline link follows the dashboard language", async ({ page }) => {
     // A Malay dashboard must show the Malay explanation, not the English one:
     // the title is a dictionary string, so a missing locale would silently fall
@@ -166,8 +216,14 @@ test.describe("email subject/body per-field rule is stated where it applies", ()
 
     await expect(page.locator("html")).toHaveAttribute("lang", "ms");
 
-    const link = page.locator('a[href="/docs/customize#language"]').first();
-    await expect(link).toHaveCount(1);
+    // Count the FULL locator, not a `.first()` one: a `.first()` locator always
+    // resolves to exactly one element, so `toHaveCount(1)` on it could never fail
+    // and the assertion read as stronger than it was (card t_864adaee). The real
+    // count on /settings?tab=emel is TWO — both the receipt Subject and Body carry
+    // the link — so the honest assertion is 2, not 1.
+    const links = page.locator('a[href="/docs/customize#language"]');
+    await expect(links).toHaveCount(2);
+    const link = links.first();
     const title = (await link.getAttribute("title")) || "";
     expect(title, `Malay dashboard showed ${JSON.stringify(title)}`).toContain("dinilai berasingan");
     expect(title).not.toContain("judged separately");

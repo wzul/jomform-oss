@@ -2321,12 +2321,44 @@ function FormSettingsInner() {
                             <input value={edTo} onChange={(e) => setEdTo(e.target.value)} className={inputCls} placeholder="{admin_email}" />
                           </div>
                           <div>
-                            <label className={labelCls}>{t("fs.notifSubject")}</label>
+                            <label className={labelCls}>
+                              {t("fs.notifSubject")}{" "}
+                              {/* The per-field language rule, stated at the field it
+                                  applies to — the same affordance the per-form RECEIPT
+                                  fields above carry. The rule the docs sentence describes
+                                  is applied to exactly these stored values
+                                  (api/internal/payments/notifications.go decides the rule's
+                                  subject and body half-by-half), so a merchant editing a
+                                  RULE had no pointer to it (card t_864adaee). */}
+                              <a
+                                href="/docs/customize#language"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-[var(--jf-muted)] underline hover:text-slate-600"
+                                title={t("set.emelLanguageRule")}
+                                aria-label={t("set.emelLanguageRule")}
+                              >
+                                ?
+                              </a>
+                            </label>
                             <input value={edSubject} onChange={(e) => setEdSubject(e.target.value)} className={inputCls} placeholder="Jualan baharu — {{ref_code}}" />
                           </div>
                           <div>
                             <label className={labelCls}>
                               {t("fs.notifBody")} <span className="text-[var(--jf-muted)]">{t("fs.notifPlaceholders")}</span>{" "}
+                              {/* The per-field LANGUAGE rule for this field (card
+                                  t_864adaee). The placeholder link below answers a
+                                  different question, so both are kept. */}
+                              <a
+                                href="/docs/customize#language"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-[var(--jf-muted)] underline hover:text-slate-600"
+                                title={t("set.emelLanguageRule")}
+                                aria-label={t("set.emelLanguageRule")}
+                              >
+                                ?
+                              </a>
                               <a
                                 href="/docs/placeholders"
                                 target="_blank"
