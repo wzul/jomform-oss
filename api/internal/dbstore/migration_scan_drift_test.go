@@ -91,6 +91,17 @@ var selectTables = map[string]string{
 	"trashedFormSelect":      "forms",
 	"trashedWorkspaceSelect": "workspaces",
 	"trashedProductSelect":   "products",
+	// Registered so BOTH registries agree about every column-list constant
+	// (card t_3951b4d1): a constant that is in `selectConsts` but not here is
+	// invisible to the migration guard, and nothing used to notice the missing row.
+	// `suppressed_emails` matters most — migration 000061 adds `note` and
+	// `created_by` to it, so its constants have to be checked.
+	"affiliateSelect":       "affiliates",
+	"variationSelect":       "product_variations",
+	"submissionSelect":      "submissions",
+	"suppressionSelect":     "suppressed_emails",
+	"feedbackThreadSelect":  "feedback_threads",
+	"feedbackMessageSelect": "feedback_messages",
 }
 
 // selectScanFuncs maps a *Select constant to the receiver-qualified
@@ -897,6 +908,108 @@ const (
 // proof. It is deterministic by construction: it asserts the guard's FIRST run
 // on the sabotaged copy fails, and repeats the run so that a map-order-dependent
 // guard cannot pass by luck.
+// TestSelectTablesCoversEveryColumnListConstant pins the guard's OWN registry
+// against the OTHER one (card t_3951b4d1).
+//
+// `selectConsts` must name every column-list constant (the alignment test asserts
+// the count), but nothing asserted that the same constant also has a row in
+// `selectTables` — and `selectTables` is the registry the migration guard
+// consults. So a constant registered in `selectConsts` yet missing from
+// `selectTables` was invisible to the migration guard, and nothing went red for
+// the missing row itself. Measured before this test: dropping `"formSelect":
+// "forms",` left the whole package GREEN, and a same-count wrong name in
+// `formSelect` then shipped green too.
+//
+// Both directions are asserted, so the two registries cannot drift apart.
+func TestSelectTablesCoversEveryColumnListConstant(t *testing.T) {
+	var sc, st []string
+	for name := range selectConsts {
+		sc = append(sc, name)
+	}
+	for name := range selectTables {
+		st = append(st, name)
+	}
+	sort.Strings(sc)
+	sort.Strings(st)
+
+	var missing []string
+	for _, name := range sc {
+		if _, ok := selectTables[name]; !ok {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		t.Errorf("these column-list constants are registered in selectConsts but have NO row in "+
+			"selectTables: %v. The migration/select drift guard consults selectTables, so a "+
+			"constant missing from it is INVISIBLE — a migration that adds a column to its table "+
+			"can no longer be caught, and nothing goes red for the missing row. Add the row (the "+
+			"table the constant selects FROM, read from its own SQL).", missing)
+	}
+	// The reverse direction: a selectTables row must name a constant that is
+	// registered SOMEWHERE — `selectConsts` (full column lists) or
+	// `bareColumnConsts` (the fragment constants). An unregistered name is a stale
+	// row, and a stale row makes the migration guard check a constant nobody uses.
+	var extra []string
+	for _, name := range st {
+		if _, ok := selectConsts[name]; ok {
+			continue
+		}
+		if _, ok := bareColumnConsts[name]; ok {
+			continue
+		}
+		extra = append(extra, name)
+	}
+	if len(extra) > 0 {
+		t.Errorf("these names have a selectTables row but are registered in NEITHER selectConsts "+
+			"nor bareColumnConsts: %v — either the constant was renamed or it was dropped, and a "+
+			"stale row lets the migration guard check a constant nobody uses.", extra)
+	}
+	// The premise, so this cannot pass by the registries both being empty.
+	if len(sc) < 10 {
+		t.Fatalf("only %d constants in selectConsts — the registry has shrunk, so this check "+
+			"is no longer proving what it exists for", len(sc))
+	}
+}
+
+// TestContainsColumnBoundaryIsLoadBearing pins the WORD BOUNDARY in `containsColumn`
+// (card t_3951b4d1).
+//
+// `containsColumn` matches `(?i)\b<col>\b`. That boundary is the whole rule for a
+// column whose name is a proper prefix of another column on the same table — and
+// this tree has a LIVE pair: migration 000004 adds `custom_domain_verified` to
+// `accounts`, and `accountSelect` carries BOTH `custom_domain_verified` and
+// `custom_domain_verified_at`. Weakening the boundary to a bare substring is
+// silent: measured on a same-count mutation of `accountSelect` (the exact column
+// replaced by a second `..._at`, so the alignment test cannot fire), the shipped
+// bounded form FAILS correctly while an unbounded form stays GREEN.
+//
+// The bite harness runs the guard's own body against throwaway copies; this case
+// lives here so the rule is pinned by a test that runs in the `test` gate.
+func TestContainsColumnBoundaryIsLoadBearing(t *testing.T) {
+	list := "SELECT id, custom_domain_verified, custom_domain_verified_at FROM accounts"
+	if !containsColumn(list, "custom_domain_verified") {
+		t.Fatalf("containsColumn no longer finds an exactly-selected column")
+	}
+	// The column is present only as a PREFIX of a longer identifier: that must NOT
+	// count as selecting it.
+	prefixOnly := "SELECT id, custom_domain_verified_at FROM accounts"
+	if containsColumn(prefixOnly, "custom_domain_verified") {
+		t.Errorf("containsColumn matched `custom_domain_verified` inside " +
+			"`custom_domain_verified_at` — the word boundary is gone, so a migration-added " +
+			"column can satisfy the guard while not being selected at all (the live pair on " +
+			"accounts: custom_domain_verified vs custom_domain_verified_at)")
+	}
+	// The inverse: a real, underscore-surrounded match still passes, so the rule is
+	// not merely strict.
+	if !containsColumn("SELECT a.custom_domain_verified FROM accounts a", "custom_domain_verified") {
+		t.Errorf("containsColumn missed a qualified column reference — the boundary is too " +
+			"strict to be useful")
+	}
+	if !containsColumn("SELECT `custom_domain_verified` FROM accounts", "custom_domain_verified") {
+		t.Errorf("containsColumn missed a backticked column name")
+	}
+}
+
 func TestMigrationColumnsAppearInSelectBitesEveryConstantOnTheTable(t *testing.T) {
 	dir := packageDir()
 	migDir := filepath.Join(dir, "..", "db", "migrations")
