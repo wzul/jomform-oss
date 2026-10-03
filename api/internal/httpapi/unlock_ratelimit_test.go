@@ -42,6 +42,18 @@ package httpapi
 // refused. Asserting "429 somewhere in a burst of 12" is the property that both
 // bites on a missing wrapper and matches the real attack; asserting a
 // wall-clock request ordinal would be a flake.
+//
+// DRAINING FIRST (card t_80c62c1c). Concurrency alone was not enough: the bucket
+// is burst 10 at 1 token/sec, so 12 requests only trip it while they land inside
+// ~2s, and on a loaded host they do not — 12 concurrent requests through the full
+// handler can outlive the refill, every one gets served, and a route that IS
+// throttled reads as an unthrottled oracle (`403 x12`, no 429, measured on a host
+// at load ~25 while passing in isolation on the same bytes). Spending the
+// capacity with a synchronous burst first leaves the bucket empty, so the
+// measured burst is over the limit for ~11.5s instead of ~2s and the result no
+// longer depends on how fast the box happens to be. That is a fix to WHICH
+// condition is measured, not to what is asserted: the "no 400" check below is
+// deliberately unchanged.
 
 import (
 	"fmt"
@@ -51,6 +63,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/wzul/jomform/api/internal/httpapi/middleware"
 )
 
 // unlockPost drives one unlock POST through the full server chain from a given
@@ -151,8 +165,37 @@ func TestEveryUnlockRouteIsRateLimited(t *testing.T) {
 			// A fresh address per case: the three unlock routes hold separate
 			// limiters, so this also keeps the cases independent.
 			ip := uniqueTestIP()
+
+			// DRAIN THE BUCKET FIRST (card t_80c62c1c). The limiter is burst 10 with
+			// a 1 token/sec refill, so a burst of 12 only trips it while it lands
+			// inside ~2s. Under suite load that is not guaranteed: 12 concurrent
+			// requests through a loaded handler take longer than the refill, every
+			// one is served, and a route that IS throttled reads as an unthrottled
+			// password oracle — the reported red was `403 x12` with no 429 on a
+			// loaded host, while the same bytes passed in isolation. Spending the
+			// capacity first with a synchronous burst leaves the bucket EMPTY, so a
+			// single further request is over the limit for ~11.5s instead of ~2s and
+			// the measurement stops depending on how fast the box is.
+			//
+			// The drain itself must be exactly the capacity, or the limiter would
+			// answer 429 here and the assertion below could not tell that from the
+			// limiter never having engaged.
+			drain := concurrentUnlockBurst(hnd, tc.host, tc.path, ip, "definitely-not-the-password",
+				middleware.RateLimitBurst)
+			if n := countCode(drain, http.StatusTooManyRequests); n > 0 {
+				t.Fatalf("POST %s : %d of the first %d requests were already throttled — the drain "+
+					"must consume exactly the bucket's capacity and nothing more (codes: %s)",
+					tc.path, n, middleware.RateLimitBurst, summarise(drain))
+			}
+
 			codes := concurrentUnlockBurst(hnd, tc.host, tc.path, ip, "definitely-not-the-password", 12)
 
+			// With the bucket drained this is the ONLY assertion that decides
+			// whether the route is limited, and it must not be loosened to make a
+			// loaded host pass: the 400 check below stays exactly as it was, because
+			// relaxing it is how a guard starts lying about the limiter. If this
+			// ever cannot be measured reliably the fix belongs in the limiter or in
+			// the budget, not in the assertion.
 			if countCode(codes, http.StatusTooManyRequests) == 0 {
 				t.Fatalf("POST %s : a burst of 12 wrong passwords from one address produced NO 429 — "+
 					"this route is an unthrottled password oracle. codes: %s",

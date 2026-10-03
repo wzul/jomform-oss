@@ -85,9 +85,17 @@ func ClientIP(r *http.Request) string {
 	return ip
 }
 
+// RateLimitBurst is the per-IP CAPACITY of RateLimit's bucket. Exported so a test
+// that must DRAIN a bucket before measuring throttle behaviour does not duplicate
+// the number (card t_80c62c1c); see RateLimit for what the pair means.
+const RateLimitBurst = 10
+
+// RateLimitRate is RateLimit's refill, in tokens per second.
+const RateLimitRate = 1
+
 // RateLimit limits per client IP: rate 1/sec, burst 10 (spam guard).
 func RateLimit(next http.Handler) http.Handler {
-	return RateLimitWith(1, 10)(next)
+	return RateLimitWith(RateLimitRate, RateLimitBurst)(next)
 }
 
 // RateLimitWith limits each client IP with the given token-bucket parameters
