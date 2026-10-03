@@ -68,7 +68,15 @@ var selectConsts = map[string]string{
 	// exactly how the nullable auto_cname/tls_* columns came to be scanned into
 	// plain strings and broke every domain read. Registering it puts the table
 	// under the same column-alignment guard as the rest.
-	"domainSelect": "AccountDomain",
+	"domainSelect": "AccountDomain", // Registered by card t_dd606310: these column-list constants were live but
+	// UNREGISTERED, so nothing checked their column list against the struct they
+	// scan into. The count check could never see them (it only kept names already
+	// in this map), so adding one landed GREEN.
+	"affiliateSelect":      "Affiliate",
+	"feedbackThreadSelect": "FeedbackThread",
+	"submissionSelect":     "Submission",
+	"suppressionSelect":    "SuppressedEmail",
+	"variationSelect":      "ProductVariation",
 }
 
 // selectTables maps a *Select constant name to the table it selects from.
@@ -107,6 +115,12 @@ var selectScanFuncs = map[string][]string{
 	// WHERE differs), so it shares that scan function. Registering it here is
 	// what keeps the two constants from drifting apart on the column list.
 	"trashedProductSelect": {"ProductStore.scanProductFull"},
+	// Registered by card t_dd606310 — the scan sites these constants feed.
+	"affiliateSelect":      {"scanAffiliate"},
+	"feedbackThreadSelect": {"scanFeedbackThread"},
+	"submissionSelect":     {"scanSubmission"},
+	"suppressionSelect":    {"scanSuppressedEmail"},
+	"variationSelect":      {"scanVariation"},
 }
 
 // bareColumnConsts maps a constant holding a BARE column list — no `SELECT ...
@@ -122,19 +136,49 @@ var selectScanFuncs = map[string][]string{
 // form read uses. It was written before DeletedAt was selectable and fell one
 // column behind Form, so both redirect lookups failed to scan at all.
 var bareColumnConsts = map[string]string{
-	"redirectFormColumns": "Form",
+	"redirectFormColumns": "Form", // Registered by card t_dd606310. Both are column lists WITHOUT `SELECT ... FROM`
+	// in the constant itself (mediaSelect is the list only; feedbackMessageSelect
+	// begins mid-statement with `m.id`), so selectColumnCount cannot parse them — the
+	// bare path is the one that can. mediaSelect's list is qualified (`m.id`, `m.key`),
+	// which commaListCount counts exactly.
+	"mediaSelect":           "Media",
+	"feedbackMessageSelect": "FeedbackMessage", "chatProposalSelect": "ChatWriteProposal",
 }
 
 // bareColumnScanFuncs maps a bare-columns constant to the function that scans
 // it, so the same alignment check applies.
 var bareColumnScanFuncs = map[string][]string{
-	"redirectFormColumns": {"FormStore.scanOne"},
+	"redirectFormColumns":   {"FormStore.scanOne"},
+	"chatProposalSelect":    {"scanChatProposal"},
+	"mediaSelect":           {"scanMedia"},
+	"feedbackMessageSelect": {"FeedbackThreadStore.Messages"},
 }
 
-// commaListCount counts the top-level items in a bare comma-separated column
-// list (no parens, so a plain comma count is exact).
+// commaListCount counts the TOP-LEVEL items in a comma-separated column list.
+//
+// It used to be a plain comma count, justified by "no parens, so a plain comma count
+// is exact". That assumption is false for a bare list that contains a function call:
+// feedbackMessageSelect carries `COALESCE(m.author_user_id::text, ”)`, whose inner
+// comma made the count 9 for a 7-column list — a FALSE DRIFT report against a list
+// that is correct. Depth-aware counting is exact for both shapes, which is why this
+// now mirrors selectColumnCount's loop instead of trusting the assumption (card
+// t_dd606310: the check that misreads is the same class as the check that cannot see).
 func commaListCount(list string) int {
-	return strings.Count(list, ",") + 1
+	depth := 0
+	count := 1
+	for _, r := range list {
+		switch r {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		case ',':
+			if depth == 0 {
+				count++
+			}
+		}
+	}
+	return count
 }
 
 // columnRenames maps historical column names (from older migrations) to their
@@ -298,6 +342,93 @@ func structFieldCount(t *testing.T, dir, typeName string) int {
 	return -1
 }
 
+// scalarSelectConsts are SELECT statements that scan into a SCALAR, not a struct, so
+// there is no field count to align against. They still look like column-list constants
+// (they begin with SELECT), which is why they are named here rather than left to be
+// rediscovered — and why the leg below fails if one of them stops being a scalar read.
+var scalarSelectConsts = map[string]string{
+	// SELECT a.id only, scanned into `var id string` (WorkspaceStore.LegacyUnscopedAccount).
+	"legacyUnscopedAccountSQL": "WorkspaceStore.LegacyUnscopedAccount scans a single id",
+}
+
+// collectAllConsts parses the package source and returns EVERY string constant by
+// name — registered or not. This is what makes an UNREGISTERED column-list constant
+// visible (card t_dd606310): collectSelectConsts below only keeps a constant whose
+// name is already a key in selectConsts/bareColumnConsts, so a brand-new
+// `const fooSelect = \`SELECT ...\“ never reached the count and landed GREEN with
+// the message at the end of TestSelectScanColumnAlignment promising a failure that
+// could not come.
+func collectAllConsts(t driftReporter, dir string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read package dir: %v", err)
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, filepath.Join(dir, e.Name()), nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", e.Name(), err)
+		}
+		for _, decl := range f.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok || gd.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for i, name := range vs.Names {
+					if i >= len(vs.Values) {
+						continue
+					}
+					lit, ok := vs.Values[i].(*ast.BasicLit)
+					if !ok || lit.Kind != token.STRING {
+						continue
+					}
+					str, err := strconv.Unquote(lit.Value)
+					if err != nil {
+						continue
+					}
+					out[name.Name] = str
+				}
+			}
+		}
+	}
+	return out
+}
+
+// looksLikeColumnList reports whether a constant VALUE is a column list — a SELECT
+// statement, or a bare comma-separated list of names/qualified names. A string that
+// is neither (a status set like `('paid','confirmed')`, a SQL fragment, a message)
+// is not one, so it does not need registering.
+//
+// The bare-list test requires EVERY token to be a name or `alias.name`; a token like
+// `('paid'` fails it, which is what keeps the check from flagging unrelated constants.
+func looksLikeColumnList(v string) bool {
+	trimmed := strings.TrimSpace(v)
+	if strings.HasPrefix(strings.ToUpper(trimmed), "SELECT ") {
+		return true
+	}
+	parts := strings.Split(trimmed, ",")
+	if len(parts) < 2 {
+		return false
+	}
+	nameRe := regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$`)
+	for _, part := range parts {
+		if !nameRe.MatchString(strings.TrimSpace(part)) {
+			return false
+		}
+	}
+	return true
+}
+
 // collectSelectConsts parses the package source and returns the value of each
 // *Select constant (the raw string literal).
 func collectSelectConsts(t driftReporter, dir string) map[string]string {
@@ -428,7 +559,47 @@ func TestSelectScanColumnAlignment(t *testing.T) {
 	dir := packageDir()
 	consts := collectSelectConsts(t, dir)
 	if want := len(selectConsts) + len(bareColumnConsts); len(consts) != want {
-		t.Fatalf("found %d column-list constants, want %d (a new select constant needs registering in selectConsts or bareColumnConsts)", len(consts), want)
+		t.Fatalf("found %d REGISTERED column-list constants, want %d — a name in selectConsts or bareColumnConsts is no longer a parseable string const", len(consts), want)
+	}
+
+	// An UNREGISTERED column-list constant is the case the message above used to
+	// promise and could never deliver: collectSelectConsts only keeps names already
+	// in the registries, so a brand-new `fooSelect` was invisible to the count and
+	// landed GREEN. Read EVERY const and require each column-list one to be
+	// registered — this is what makes "register your new select constant" true.
+	all := collectAllConsts(t, dir)
+	var unregistered []string
+	for name, val := range all {
+		if _, isSel := selectConsts[name]; isSel {
+			continue
+		}
+		if _, isBare := bareColumnConsts[name]; isBare {
+			continue
+		}
+		if _, isScalar := scalarSelectConsts[name]; isScalar {
+			continue
+		}
+		if looksLikeColumnList(val) {
+			unregistered = append(unregistered, name)
+		}
+	}
+	if len(unregistered) > 0 {
+		sort.Strings(unregistered)
+		t.Fatalf("%d column-list constant(s) are NOT registered, so nothing checks their column list against the struct they scan into: %v — add each to selectConsts (with its struct) or bareColumnConsts", len(unregistered), unregistered)
+	}
+
+	// The scalar exemption must not rot: a name listed there that no longer exists, or
+	// that no longer looks like a column list, would silently widen the exemption.
+	var staleScalar []string
+	for name := range scalarSelectConsts {
+		val, ok := all[name]
+		if !ok || !looksLikeColumnList(val) {
+			staleScalar = append(staleScalar, name)
+		}
+	}
+	if len(staleScalar) > 0 {
+		sort.Strings(staleScalar)
+		t.Fatalf("scalarSelectConsts names %v, but they are gone or no longer look like a column list — remove the stale exemption so the constant is registered properly", staleScalar)
 	}
 
 	for name, structName := range selectConsts {
