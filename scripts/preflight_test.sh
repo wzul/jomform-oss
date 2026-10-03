@@ -122,6 +122,30 @@ SB="$(mktemp -d /tmp/preflight_test.XXXXXX)"
 # in production for the same reason, so this mirrors the real layout rather than
 # working around it.
 SB_STATE="$(mktemp -d /tmp/preflight_test_state.XXXXXX)"
+# The per-tree gate RECORD store is pinned to the sandbox HERE, before the first
+# nested runner invocation (card t_a50d854d).
+#
+# This export used to live ~1200 lines further down, beside the record-mechanism
+# checks that read it. Every nested `./scripts/preflight.sh --only X` ABOVE that
+# line therefore wrote its record into whatever store the CALLER had — and in
+# production that is `/var/lib/jomform/gate` (gate_result.sh:108,
+# `${PREFLIGHT_RESULT_DIR:-/var/lib/jomform/gate}`). The checks that plant a FAKE
+# `go` on the PATH and drive `--only test` with it wrote records whose key_parts
+# carry `go=FAKE-GO ARGV: env GOVERSION` and `testdb=placeholder` — a RED
+# `test: fail` record, plus a `skip` entry for every other gate — INTO the
+# production store, each naming the real worktree the run happened in.
+#
+# Measured on this host: 143 records, 55 carrying FAKE-GO (the card measured
+# 47/109, so it was still growing). Those records are inert for reuse (their key
+# carries the FAKE-GO fingerprint, which a real run never produces), but the store
+# is meant to be evidence of what was actually gated, and a third of it was
+# fixtures naming real worktrees.
+#
+# Pinned unconditionally and early, so a check added anywhere in this file is
+# inside the sandbox by default rather than by remembering.
+RECORD_DIR="$SB_STATE/gate-results"
+export PREFLIGHT_RESULT_DIR="$RECORD_DIR"
+export PREFLIGHT_RESULT_TTL=3600
 cleanup() { rm -rf "$SB" "$SB_STATE"; }
 trap cleanup EXIT
 mkdir -p "$SB/scripts" "$SB/web/scripts"
@@ -1319,15 +1343,9 @@ fi
 # worst possible failure for a gate. Each check below was written after breaking
 # the corresponding property by hand and watching it go red.
 #
-# Private result dir + TTL — SEE THE PIN AT $SB_STATE ABOVE. It is exported before
-# the first nested runner invocation now (card t_eb6a7567), because checks 17/17d
-# drive the LIVE runner under a stubbed `go` and their records carried the stub's
-# fingerprint into whatever store the CALLER had. The same values are restated here
-# as the record-mechanism checks' own statement of what they operate on; they are
-# already in the environment by this point.
-RECORD_DIR="$SB_STATE/gate-results"
-export PREFLIGHT_RESULT_DIR="$RECORD_DIR"
-export PREFLIGHT_RESULT_TTL=3600
+# The private result dir + TTL are pinned at $SB_STATE, near the top of this file,
+# so that EVERY nested runner invocation — not only the ones below — is inside the
+# sandbox. See the pin's own comment for the measurements (t_eb6a7567, t_a50d854d).
 export PREFLIGHT_REUSE_REPO="$SB"
 
 # A gate name to vouch for, taken from the derived inventory (never hardcoded).
