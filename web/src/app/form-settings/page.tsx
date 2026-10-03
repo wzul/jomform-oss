@@ -2554,8 +2554,15 @@ function FormSettingsInner() {
                     <p className="mt-1 text-sm text-[var(--jf-muted)]">{t("fs.webhooksHint")}</p>
                     <form onSubmit={addFormWebhook} className="mt-4">
                       <div className="flex flex-wrap gap-2">
+                        {/* The FOURTH instance of the `min-w-56`-on-a-`flex-1`-child defect
+                            (card t_ceb9d7a3). Measured on the fixed build at 320px in all
+                            five locales: the row was scrollWidth 224 > clientWidth 222 and
+                            the URL placeholder — a 244.98px glyph run in 198px of content —
+                            rendered cut, exactly as the domains and settings webhooks rows
+                            did before #709. `basis-56` + `min-w-0` keeps the 224px desktop
+                            preference without the shrink floor. */}
                         <input value={whUrl} onChange={(e) => setWhUrl(e.target.value)} required type="url"
-                          placeholder="https://yourapp.com/jomform-hook" className="jf-input min-w-56 max-w-xl flex-1" />
+                          placeholder="https://yourapp.com/jomform-hook" className="jf-input min-w-0 max-w-xl flex-1 basis-56 sm:basis-auto" />
                         <input value={whSecret} onChange={(e) => setWhSecret(e.target.value)} required type="text"
                           placeholder={t("set.signingSecret")} className="jf-input w-48" />
                         <button className="jf-btn-primary" disabled={!canWrite}>{t("set.add")}</button>

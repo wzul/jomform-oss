@@ -138,6 +138,11 @@ type RowPage = {
   // that must then exist. Both are absent for the rows that render directly.
   openLabel?: keyof typeof DICT;
   openSelector?: string;
+  // A page whose section is component STATE rather than a query parameter (the
+  // form-settings tabs) names the tab to click first — a dictionary KEY, because
+  // the label is localized. Without this the row would never render and the
+  // measurement would silently read an empty element.
+  openTab?: keyof typeof DICT;
   // Dictionary keys for placeholders on this row that are a SENTENCE of help
   // text rather than a token: those may truncate (see RULE 1) and are held to
   // the "reads as empty" floor instead of a full glyph-run render.
@@ -173,6 +178,11 @@ const ROW_PAGES: RowPage[] = [
   { name: "settings webhooks add row", file: "settings/page.tsx:1604", path: "/settings?tab=webhooks",
     waitFor: 'form.mt-3 input[placeholder="https://yourapp.com/jomform-hook"]',
     rowExpr: `document.querySelector('form.mt-3 input[placeholder="https://yourapp.com/jomform-hook"]').closest('div.flex')`,
+    isButtonRow: true },
+  { name: "form-settings webhooks add row", file: "form-settings/page.tsx:2558",
+    path: "/form-settings?form=f1", openTab: "fs.webhooks",
+    waitFor: 'input[placeholder="https://yourapp.com/jomform-hook"]',
+    rowExpr: `document.querySelector('input[placeholder="https://yourapp.com/jomform-hook"]').closest('div.flex')`,
     isButtonRow: true },
   { name: "settings webhooks edit drawer row", file: "settings/page.tsx:1741", path: "/settings?tab=webhooks",
     // The drawer only exists while `editId !== null`, so this row needs an
@@ -232,6 +242,18 @@ async function stubAPI(page: Page) {
     r.fulfill(json({ rates: [], cached: false })),
   );
   await page.route(/(.*)\/api\/rest\/forms(\?.*)?$/, (r) => r.fulfill(json([])));
+  // The form-settings page loads ONE form by id, then its per-form sub-resources.
+  // Without this the row behind the Notifications tab never renders and the
+  // waitFor above reads nothing (card t_ceb9d7a3).
+  await page.route(/(.*)\/api\/rest\/forms\/[^/]+$/, (r) =>
+    r.fulfill(json({ id: "f1", account_id: "acc1", slug: "demo", title: "Demo",
+      notifications: [], webhooks: [], chip_feeds: [], confirmations: [] })),
+  );
+  for (const sub of ["notifications", "webhooks", "chip-feeds", "confirmations", "email-settings",
+                     "settings", "theme", "fields"]) {
+    await page.route(new RegExp(`(.*)/api/rest/forms/[^/]+/${sub}(\\?.*)?$`),
+      (r) => r.fulfill(json([])));
+  }
   await page.route(/(.*)\/api\/rest\/sales(\?.*)?$/, (r) =>
     r.fulfill(json({ items: [], page: 1, limit: 20, total: 0 })),
   );
@@ -347,6 +369,13 @@ for (const lang of LANGS) {
       for (const rowPage of ROW_PAGES) {
         if (rowPage !== ROW_PAGES[0]) {
           await page.goto(`${baseURL}${rowPage.path}`, { waitUntil: "domcontentloaded" });
+          // A section reachable only by clicking a tab (component state, not a
+          // query parameter) has to be OPENED, and the click is asserted by the
+          // `waitFor` below: without it the row would never exist and the
+          // measurement would read an empty element instead of failing.
+          if (rowPage.openTab) {
+            await page.getByRole("button", { name: DICT[rowPage.openTab][lang], exact: true }).first().click();
+          }
           await page.waitForSelector(rowPage.waitFor, { timeout: 15_000 });
         }
         // A row behind a click must be OPENED before it can be measured, and the
