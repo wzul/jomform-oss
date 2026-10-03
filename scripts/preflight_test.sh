@@ -1285,6 +1285,24 @@ if [ "$rc" != 0 ] && grep -q 'API_TEST_TIMEOUT=0 disables' "$SB/budget.out" && \
 else
   bad "API_TEST_TIMEOUT=0 must be refused by the budget check (rc=$rc) — got: [$(sed -n 's/^FAKE-GO ARGV/UNEXPECTED go test invocation: &/p' "$SB/budget.out" | sed -n '1p')$(grep -E 'PREFLIGHT FAIL' "$SB/budget.out" | sed -n '1p')]"
 fi
+# EVERY SPELLING OF ZERO turns the alarm off, not only the bare `0` (card t_fb782d12).
+# The guard compared against the literal string "0", so `0s`, `0m` and `0h` all passed
+# it and `go test` was handed `-timeout 0s` — a genuinely hung package would block the
+# gate with no bound instead of failing. Measured: the running gate's argv really was
+# `go test ./... -count=1 -timeout 0s`.
+zero_leaks=""
+for z in 0s 0m 0h 00; do
+  zrc="$(test_rc_and_argv "$z" | cut -f1)"
+  if [ "$zrc" = 0 ] || ! grep -q "disables go test's timeout alarm" "$SB/budget.out" || \
+     grep -q 'FAKE-GO ARGV' "$SB/budget.out"; then
+    zero_leaks="${zero_leaks}[$z -> rc=$zrc $(sed -n 's/^FAKE-GO ARGV: /argv: /p' "$SB/budget.out" | sed -n '1p')] "
+  fi
+done
+if [ -z "$zero_leaks" ]; then
+  ok "every spelling of a ZERO API_TEST_TIMEOUT (0s, 0m, 0h, 00) is refused by the budget check — none reaches \`go test\` with the alarm disabled"
+else
+  bad "a zero API_TEST_TIMEOUT in another spelling was NOT refused, so \`go test\` ran with its timeout alarm OFF — the gate would hang instead of failing: $zero_leaks"
+fi
 out_rc="$(test_rc_and_argv banana)"; rc="${out_rc%%$'\t'*}"; argv="${out_rc##*$'\t'}"
 if [ "$rc" != 0 ] && grep -q 'is not a Go duration' "$SB/budget.out" && [ -z "$argv" ]; then
   ok "a non-duration API_TEST_TIMEOUT -> refused (rc=$rc) with no \`go test\` invocation at all, so it cannot fail packages on the flag alone"

@@ -1961,8 +1961,19 @@ run gofmt "cd api && test -z \"\$(gofmt -l .)\" (every api/ file is gofmt-clean)
 # and that the check can go RED.
 # ---------------------------------------------------------------------------
 : "${API_TEST_TIMEOUT:=30m}"
-if [ "$API_TEST_TIMEOUT" = 0 ]; then
-  die "API_TEST_TIMEOUT=0 disables go test's timeout alarm — a genuinely hung package would block the gate with no bound. Use a positive duration (the default is 30m, which is a ceiling well above the ~10-12m a loaded host costs 'internal/httpapi')."
+# ANY ZERO DURATION DISABLES THE ALARM, not just the bare `0` (card t_fb782d12).
+# `go test -timeout 0s`, `-timeout 0m` and `-timeout 0h` are all zero — the guard
+# compared against the literal string "0", so every one of them passed it and the
+# gate ran with no bound: a genuinely hung package would block the run forever
+# instead of failing it. Measured: `go test ./... -count=1 -timeout 0s` was handed
+# to `go` by the gate. The units are optional and any suffix is a Go duration, so
+# strip them before comparing.
+_att_digits="${API_TEST_TIMEOUT%%[!0-9]*}"
+if [ -z "$_att_digits" ]; then
+  die "API_TEST_TIMEOUT=$API_TEST_TIMEOUT is not a Go duration (e.g. 30m, 45m, 90s) — there is no leading number to read, so this cannot be a positive budget."
+fi
+if [ "$(printf '%s' "$_att_digits" | tr -d '0')" = "" ]; then
+  die "API_TEST_TIMEOUT=$API_TEST_TIMEOUT disables go test's timeout alarm — every spelling of zero (0, 0s, 0m, 0h) turns the bound OFF, so a genuinely hung package would block the gate with no bound instead of failing. Use a positive duration (the default is 30m, which is a ceiling well above the ~10-12m a loaded host costs 'internal/httpapi')."
 fi
 case "$API_TEST_TIMEOUT" in
   *[!0-9hms.]*) die "API_TEST_TIMEOUT=$API_TEST_TIMEOUT is not a Go duration (e.g. 30m, 45m, 90s) — refusing to hand 'go test' a bad -timeout, which fails every package on that flag alone." ;;
