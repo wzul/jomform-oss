@@ -154,7 +154,29 @@ func (s *Service) chargeSubscription(ctx context.Context, sub *dbstore.Subscript
 		}
 		return s.afterFailedCharge(ctx, sub, attempt)
 	}
-	_ = s.Subs.AddCharge(ctx, sub.ID, p.ID, sub.AmountSen, dbstore.ChargePending, int(attempt))
+	// Issue #534/#458: record the charge row, and never claim it was recorded when
+	// it was not. This line used to be `_ = s.Subs.AddCharge(...)` followed by an
+	// unconditional "sub_charge_created" log — so ANY insert failure (a duplicate
+	// chip_purchase_id, a dropped connection) lost the link between the gateway's
+	// charge and our subscription while the log said the row existed. The money had
+	// already moved by then: the callback that arrives later is attributed by
+	// chip_purchase_id (SubByChargePurchase, ReactivateOnPayment), so a missing row
+	// means a payment that cannot be matched to its subscription. Measured on the
+	// test gate: the second charge of a reused scratch schema died on
+	// `subscription_charges_chip_purchase_id_key`, the row count stayed 0, and the
+	// failure surfaced only as a confusing assertion three steps later.
+	//
+	// One retry first — an insert is a single statement, so a transient failure is
+	// worth one more attempt before the money link is called lost.
+	if err := s.Subs.AddCharge(ctx, sub.ID, p.ID, sub.AmountSen, dbstore.ChargePending, int(attempt)); err != nil {
+		if rerr := s.Subs.AddCharge(ctx, sub.ID, p.ID, sub.AmountSen, dbstore.ChargePending, int(attempt)); rerr != nil {
+			slog.Error("sub_charge_row_not_recorded", "sub", sub.ID, "purchase", p.ID,
+				"amount_sen", sub.AmountSen, "attempt", attempt, "err", rerr,
+				"note", "the gateway accepted this charge but its row was not written — "+
+					"the later callback cannot be matched to this subscription by chip_purchase_id")
+			return fmt.Errorf("record charge %s for sub %s: %w", p.ID, sub.ID, rerr)
+		}
+	}
 	slog.Info("sub_charge_created", "sub", sub.ID, "purchase", p.ID, "attempt", attempt)
 	return nil
 }

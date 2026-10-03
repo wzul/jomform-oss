@@ -32,25 +32,49 @@ import (
 	"github.com/wzul/jomform/api/internal/testdb"
 )
 
-// countingChip builds a CHIP client whose stub counts every /charge/ request.
-func countingChip(t *testing.T, calls *int64) *chip.Client {
+// chargeSeq makes each stub-reported purchase id unique for the LIFE OF THE TEST
+// BINARY, not merely per stub instance. A per-instance counter is not enough and
+// that is measured, not theoretical: with `-count=3` each iteration built a fresh
+// countingChip whose counter restarted at 1, so iteration 2 re-reported
+// "pur_534_1" and its INSERT hit subscription_charges_chip_purchase_id_key —
+// `recurring_double_charge_issue534_test.go:211: record charge pur_534_2 ...:
+// duplicate key value violates unique constraint`. A real gateway mints purchase
+// ids that are unique full stop, so the stub must too.
+var chargeSeq int64
+
+// countingChip builds a CHIP client whose stub counts every /charge/ request and
+// REPORTS the purchase id it answered with, because the id must be unique per
+// charge: `subscription_charges.chip_purchase_id` is UNIQUE, exactly as a real
+// gateway's purchase ids are. A fixture that returns one constant id asserts the
+// opposite of that and breaks the moment the scratch schema is reused, which
+// `-count>1` does (testdb recreates the schema once per BINARY, not per run).
+//
+// That is not hypothetical: with a constant "pur_534", the second charge's INSERT
+// died on `subscription_charges_chip_purchase_id_key` and the test reported
+// `subscription_charges rows = 0, want 1` — which read as a flake and was filed as
+// "host contention". The real cause was the fixture + a production path that
+// DISCARDED the insert error, so the row went missing with a "created" log line.
+func countingChip(t *testing.T, calls *int64, lastPurchase *string) *chip.Client {
 	t.Helper()
 	mux := http.NewServeMux()
+	respond := func(w http.ResponseWriter) {
+		id := fmt.Sprintf("pur_534_%d", atomic.AddInt64(&chargeSeq, 1))
+		*lastPurchase = id
+		w.WriteHeader(http.StatusCreated)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": id, "status": "pending_charge",
+		})
+	}
 	mux.HandleFunc("POST /purchases/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(strings.TrimSuffix(r.URL.Path, "/"), "/charge") {
 			atomic.AddInt64(calls, 1)
 		}
-		w.WriteHeader(http.StatusCreated)
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"id": "pur_534", "status": "pending_charge",
-		})
+		respond(w)
 	})
 	mux.HandleFunc("POST /purchases/pur_534/charge/", func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt64(calls, 1)
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"id": "pur_534", "status": "pending_charge",
-		})
+		respond(w)
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -115,8 +139,9 @@ func TestIssue534EngineChargesOnceWhilePending(t *testing.T) {
 		key[i] = byte(i + 1)
 	}
 	var calls int64
+	var lastPurchase string
 	svc := &Service{
-		Chip:       countingChip(t, &calls),
+		Chip:       countingChip(t, &calls, &lastPurchase),
 		Accounts:   dbstore.NewAccountStore(p),
 		Subs:       subs,
 		Products:   dbstore.NewProductStore(p),
@@ -176,8 +201,9 @@ func TestIssue534EngineProceedsWhenNoChargePending(t *testing.T) {
 		key[i] = byte(i + 1)
 	}
 	var calls int64
+	var lastPurchase string
 	svc := &Service{
-		Chip:       countingChip(t, &calls),
+		Chip:       countingChip(t, &calls, &lastPurchase),
 		Accounts:   dbstore.NewAccountStore(p),
 		Subs:       subs,
 		Products:   dbstore.NewProductStore(p),
@@ -194,8 +220,9 @@ func TestIssue534EngineProceedsWhenNoChargePending(t *testing.T) {
 	}
 
 	// The callback lands: mark the charge paid and advance the schedule a full
-	// period, exactly as processSubscriptionEvent does.
-	if err := subs.MarkChargePaid(ctx, "pur_534"); err != nil {
+	// period, exactly as processSubscriptionEvent does. Uses the id the stub
+	// actually reported — a constant here would mark the PREVIOUS run's row.
+	if err := subs.MarkChargePaid(ctx, lastPurchase); err != nil {
 		t.Fatalf("mark paid: %v", err)
 	}
 	if err := subs.ScheduleNextCharge(ctx, subID, time.Now().Add(-time.Minute)); err != nil {
