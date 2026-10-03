@@ -2291,6 +2291,15 @@ run prunewt "worktree pruner self-test (a stale refs/remotes/pr/N mirror is not 
 # it), which is what `scripts/refguard.sh install` puts IN THE COMMON GIT DIR so
 # it covers the primary checkout and every linked worktree the lanes work in.
 #
+# ITS BITE PROOF IS scripts/refguard_bite.sh, ON DEMAND AND NOT WIRED IN — the same
+# convention as the `backup` gate's. t_dc1200ff closed claiming "100 assertions, proven to
+# bite (6/6 sabotages red, control green)" while the harness that ran the sabotages was
+# never committed, so nothing in the repo could re-run that proof (card t_bac5a2c5). The
+# harness sabotages ONE behaviour of the guard at a time in a throwaway copy, runs THIS
+# suite against it via REFGUARD_UNDER_TEST, requires RED each time, and refuses a sabotage
+# that did not apply rather than letting a byte-identical copy read as a caught mutation.
+# It is minutes long and it mutates, so it is not a gate.
+#
 # IT ALSO CHECKS THAT THE GUARD IS ARMED. This repo installs that hook into a
 # checkout, not into the repo tree, so `git clean`/a fresh clone/an edited copy
 # can leave it missing, non-executable or stale — a state in which the guard
