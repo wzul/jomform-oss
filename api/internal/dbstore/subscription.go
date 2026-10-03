@@ -108,12 +108,50 @@ func (s *SubscriptionStore) ByEmail(ctx context.Context, accountID, email string
 }
 
 // DueActive lists active subscriptions whose next_charge_at has passed.
+// DueActive returns the subscriptions of LIVE workspaces that are due to be
+// charged.
+//
+// WHY THE WORKSPACE GUARD IS HERE AND NOT ON STATUS (card t_3f895712). Binning a
+// workspace marks `workspaces.deleted_at`; it does NOT touch the subscription,
+// which stays `active` with its `next_charge_at` in the past. Nothing on the
+// billing path could see that state, because until this predicate there was no
+// route from a workspace to its subscription — the only edge was
+// `subscriptions.account_id → accounts`, and the account hangs off the workspace.
+// So the scheduler kept charging a customer for a workspace the user had
+// "deleted": a ghost charge.
+//
+// Wan's instruction is "hentikan sahaja" — STOP BILLING, not cancel. That is why
+// the status column is deliberately NOT written here and the paused subscription
+// is left intact: Restore brings the workspace back with `deleted_at = NULL` and
+// this predicate matches again, so billing RESUMES by itself. Marking the
+// subscription cancelled/paused instead would need a compensating write on
+// Restore, and every way of doing that can disagree with the trash state it is
+// meant to mirror. One predicate over the live state cannot drift from it.
+//
+// WHY `NOT EXISTS (… trashed …)` AND NOT `EXISTS (… live …)`. The positive form —
+// "only charge when the account has a LIVE workspace" — is the one that reads
+// naturally and it is WRONG: it also stops billing accounts with **no workspace at
+// all**, which is not a trashed workspace, it is the pre-workspace era. Measured:
+// the positive form turned `payments` red
+// (`TestRound13bFixedCountCollectsExactlyNThenStops`,
+// `TestIssue562FailedChargeRecordsTheGatewayReason`), whose fixture seeds an
+// account with a NULL `workspace_id` — the same shape as the 6 orphan accounts
+// the design note counts on prod. Those accounts still bill today, and a fix for
+// the ghost charge has no business changing that. So the guard names the ONE state
+// it is about: an account whose workspace is in the bin. An account with no
+// workspace has no trash state to be in, and is left exactly as it was.
 func (s *SubscriptionStore) DueActive(ctx context.Context, now time.Time, limit int) ([]*Subscription, error) {
 	if limit <= 0 {
 		limit = 100
 	}
 	rows, err := s.pool.Query(ctx,
-		subSelect+" WHERE status = 'active' AND next_charge_at <= $1 ORDER BY next_charge_at LIMIT $2",
+		subSelect+` WHERE status = 'active' AND next_charge_at <= $1
+		              AND NOT EXISTS (
+		                SELECT 1 FROM accounts a
+		                JOIN workspaces w ON w.id = a.workspace_id
+		                 WHERE a.id = subscriptions.account_id
+		                   AND w.deleted_at IS NOT NULL)
+		            ORDER BY next_charge_at LIMIT $2`,
 		now, limit)
 	if err != nil {
 		return nil, err

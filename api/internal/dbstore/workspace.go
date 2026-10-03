@@ -1399,6 +1399,16 @@ func (s *WorkspaceStore) Purge(ctx context.Context, workspaceID, ownerUserID str
 		sql   string
 	}{
 		{"sales", `DELETE FROM sales WHERE account_id = ANY($1)`},
+		// SUBSCRIPTIONS BEFORE PRODUCTS (card t_3f895712). BOTH ends of a
+		// subscription RESTRICT: `subscriptions.account_id → accounts` and
+		// `subscriptions.product_id → products`, so an account whose purge reached
+		// the products step while a subscription row still existed failed with a raw
+		// FK error — and a sold workspace, which is refused above anyway, was not the
+		// only way to hit it. Deleting the subscription here removes both ends at
+		// once. `subscription_charges` cascades off the parent, so its history goes
+		// with it; that is the same ordering the accounts/workspace deletions below
+		// already assume.
+		{"subscriptions", `DELETE FROM subscriptions WHERE account_id = ANY($1)`},
 		{"forms", `DELETE FROM forms WHERE account_id = ANY($1)`},
 		{"products", `DELETE FROM products WHERE account_id = ANY($1)`},
 		{"api_keys", `DELETE FROM api_keys WHERE account_id = ANY($1)`},
