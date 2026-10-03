@@ -56,6 +56,31 @@ function serverSpecificCodes(): string[] {
 }
 
 /**
+ * `text` with Go comments removed, so a mention of a constant in PROSE does not count as a
+ * use of it (card t_a65dfe2b).
+ *
+ * The reachable check accepted a comment as evidence that a code is returned. Measured: with
+ * the four `errCodeByMessage` entries of `t_74c46aaa` deleted, the only remaining mention of
+ * e.g. `CodeConnectTokenMissing` was `social.go`'s comment naming it — and the guard stayed
+ * GREEN, so a declaration-only revert of that fix passed every web check. The Go-side guard
+ * bites in the same mutation, so the pair was half-covered.
+ *
+ * Both forms are removed: `/* … *​/` blocks (across lines) and `//` tails. Strings are
+ * blanked FIRST, so a `//` inside a literal does not start a comment — measured, that
+ * ordering matters: the `url.notHttps` prefix entry is `{" mesti bermula dengan https://",
+ * CodeURLNotHTTPS}`, and stripping `//` tails without blanking the string first ate the
+ * constant name and reported a LIVE code as dead. (That was this function's own first cut,
+ * caught by running it.)
+ */
+function goCodeOnly(text: string): string {
+  const noBlocks = text.replace(/\/\*[\s\S]*?\*\//g, "");
+  return noBlocks
+    .split("\n")
+    .map((l) => stripStrings(l).replace(/\/\/.*$/, ""))
+    .join("\n");
+}
+
+/**
  * The constant NAMES the package actually uses to build an error body, read from
  * every non-test .go file in api/internal/httpapi — not just errcode.go.
  *
@@ -70,11 +95,14 @@ function usedCodeNames(): Set<string> {
   const names = new Set<string>();
   for (const name of readdirSync(dir)) {
     if (!name.endsWith(".go") || name.endsWith("_test.go") || name === "errcode.go") continue;
-    const src = readFileSync(`${dir}/${name}`, "utf8");
+    const src = goCodeOnly(readFileSync(`${dir}/${name}`, "utf8"));
     for (const m of src.matchAll(/\bCode[A-Z]\w+\b/g)) names.add(m[0]);
   }
-  // errcode.go's lookup tables reference codes by constant name too.
-  const tables = errcodeGo.replace(/^const \([\s\S]*?\n\)/gm, "");
+  // errcode.go's lookup tables reference codes by constant name too — and the TABLE
+  // MENTIONS are what keep a literal-keyed refusal reachable: the handler answers the
+  // literal, the table maps it to the constant, and the runtime lookup is where the code
+  // is returned. So these count, and they are read from CODE, not prose.
+  const tables = goCodeOnly(errcodeGo.replace(/^const \([\s\S]*?\n\)/gm, ""));
   for (const m of tables.matchAll(/\bCode[A-Z]\w+\b/g)) names.add(m[0]);
   return names;
 }
