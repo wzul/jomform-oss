@@ -450,6 +450,52 @@ CASES = [
 ]
 
 
+# A FIXTURE PRECONDITION FAILURE IS NOT A BITE (card t_53747972).
+#
+# `failed` below is "the named guard reported a failure somewhere", not "it failed on its own
+# assertion". A mutation that reds the named guard at a SETUP precondition — the fixture
+# markup it needs is no longer on the served document — therefore still printed `BITES` and
+# exit 0, proving nothing about the behaviour the guard exists for. Measured: renaming the
+# menu's `data-id` attribute kills `TestFormRendererIgnoresAMenuPick` at
+# `t.Fatal("the menu's variant selector is not on the combined document")`, which is 30 lines
+# ABOVE the assertion that matters, and the harness printed BITES + exit 0.
+#
+# The guards now say so themselves: every fixture-presence `t.Fatal` in the guard files
+# begins with this marker, so the verdict rule can tell the two apart instead of guessing
+# from prose. That is deliberately a marker rather than a list of message strings — a list
+# rots the moment a message is reworded, and the thing being distinguished is a KIND of
+# failure, not a sentence.
+PRECONDITION_MARKER = "precondition failed"
+
+# CASES THAT ARE PRECONDITION PROBES, declared rather than left to look like bites.
+#
+# Some cases here do not demonstrate a guard biting — they demonstrate that the FIXTURE
+# still reproduces the state the other guards need ("is the in-stock variant really not
+# rendered disabled?"). Their mutation can only break the fixture, so their named guard
+# can only fail at a precondition, and a verdict of BITES for them was never available
+# (card t_53747972). Declaring them keeps that value without the false claim: they must
+# still go RED, and they are reported as PROBE rather than BITE.
+PRECONDITION_CASES = {
+    "the served markup renders every variation disabled (so the stale-page fixture no "
+    "longer reproduces the state the live-stock guards need, and they would pass "
+    "without the live read)",
+}
+
+
+def precondition_failures(out, tests):
+    """The named guards that failed AT A PRECONDITION rather than on an assertion."""
+    hits = []
+    for t in tests:
+        # The failure block for one test: from its `--- FAIL: <name>` to the next one.
+        marker = "--- FAIL: " + t
+        if marker not in out:
+            continue
+        block = out.split(marker, 1)[1].split("--- FAIL: ", 1)[0]
+        if PRECONDITION_MARKER in block:
+            hits.append(t)
+    return hits
+
+
 def read(path):
     with open(path) as f:
         return f.read()
@@ -557,19 +603,40 @@ def main():
             return 3
         red = code != 0
         failed = [t for t in tests if ("--- FAIL: " + t) in out]
-        results.append((label, tests, code, red, failed))
+        precond = precondition_failures(out, tests)
+        results.append((label, tests, code, red, failed, precond))
         print("\n=== %s ===" % label)
         print("  file:  %s" % os.path.relpath(path, API))
         print("  tests: %s" % ", ".join(tests))
-        print("  exit=%d  verdict=%s  failed=%s" % (code, "RED (good)" if red else "GREEN (BAD)", failed or "none"))
+        kind = "RED (good)"
+        if label in PRECONDITION_CASES:
+            kind = "RED (probe)"
+        print("  exit=%d  verdict=%s  failed=%s%s"
+              % (code, kind if red else "GREEN (BAD)", failed or "none",
+                 "  precondition=%s" % precond if precond else ""))
         if not red:
             print("  ---- output tail ----")
             print("\n".join(out.strip().splitlines()[-15:]))
 
     print("\n================ SUMMARY ================")
     ok = True
-    for label, tests, code, red, failed in results:
-        if red and failed:
+    for label, tests, code, red, failed, precond in results:
+        if label in PRECONDITION_CASES:
+            # Declared as a precondition probe: RED is what it must do, and the failure
+            # at a precondition is the expected shape rather than a vacuous bite.
+            if not red or not precond:
+                status = "PRECONDITION PROBE DID NOT GO RED (want a precondition failure)"
+                ok = False
+            else:
+                status = "PROBE, NOT A BITE (precondition only: %s)" % ", ".join(precond)
+        elif red and precond:
+            # The named guard DID fail, but at a fixture precondition — a line that only
+            # asks "is the markup I need on the page", not the behaviour under test. That
+            # is a vacuous bite: the mutation broke the FIXTURE, so nothing was proven
+            # (card t_53747972).
+            status = "RED AT A PRECONDITION, NOT A BITE (%s)" % ", ".join(precond)
+            ok = False
+        elif red and failed:
             status = "BITES"
         elif red:
             # A non-zero exit whose named guard is not among the failures

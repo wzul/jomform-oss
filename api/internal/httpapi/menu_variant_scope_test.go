@@ -324,7 +324,7 @@ func TestMenuCartDoesNotDriveTheFormRenderersTotal(t *testing.T) {
 		return n.Data == "input" && menuHasClass(n, "p") && menuAttr(n, "data-id") == sharedProductID
 	})
 	if box == nil {
-		t.Fatal("the block form's product checkbox is not on the combined document")
+		t.Fatal("precondition failed: the serving fixture is missing something the assertion below needs — " + "the block form's product checkbox is not on the combined document")
 	}
 	setMenuAttr(box, "checked", "")
 	d.dispatch("change", box)
@@ -336,7 +336,7 @@ func TestMenuCartDoesNotDriveTheFormRenderersTotal(t *testing.T) {
 	// business, and nothing the form's script should react to.
 	sel := d.selectorFor(sharedProductID)
 	if sel == nil {
-		t.Fatal("the menu's variant selector is not on the combined document")
+		t.Fatal("precondition failed: the serving fixture is missing something the assertion below needs — " + "the menu's variant selector is not on the combined document")
 	}
 	d.chooseVariant(sel, sharedMenuVariantID)
 	d.dispatch("change", sel)
@@ -370,7 +370,7 @@ func TestFormSubmitIsNotDrivenByTheMenusSelector(t *testing.T) {
 	// Both surfaces have a variant chosen, so neither legitimately blocks.
 	menuSel := d.selectorFor(sharedProductID)
 	if menuSel == nil {
-		t.Fatal("the menu's variant selector is not on the combined document")
+		t.Fatal("precondition failed: the serving fixture is missing something the assertion below needs — " + "the menu's variant selector is not on the combined document")
 	}
 	d.chooseVariant(menuSel, sharedMenuVariantID)
 	d.dispatch("change", menuSel)
@@ -379,7 +379,7 @@ func TestFormSubmitIsNotDrivenByTheMenusSelector(t *testing.T) {
 		return n.Data == "select" && menuHasClass(n, "v") && menuAttr(n, "data-id") == sharedProductID
 	})
 	if formSel == nil {
-		t.Fatal("the block form's variation selector is not on the combined document")
+		t.Fatal("precondition failed: the serving fixture is missing something the assertion below needs — " + "the block form's variation selector is not on the combined document")
 	}
 	d.chooseVariant(formSel, sharedFormVariantID)
 
@@ -387,7 +387,7 @@ func TestFormSubmitIsNotDrivenByTheMenusSelector(t *testing.T) {
 		return n.Data == "input" && menuHasClass(n, "p") && menuAttr(n, "data-id") == sharedProductID
 	})
 	if box == nil {
-		t.Fatal("the block form's product checkbox is not on the combined document")
+		t.Fatal("precondition failed: the serving fixture is missing something the assertion below needs — " + "the block form's product checkbox is not on the combined document")
 	}
 	setMenuAttr(box, "checked", "")
 
@@ -450,7 +450,7 @@ func TestMenuBasketIgnoresTheFormRenderersSelectors(t *testing.T) {
 		return n.Data == "select" && menuHasClass(n, "v") && menuAttr(n, "data-id") == sharedProductID
 	})
 	if formSel == nil {
-		t.Fatal("the block form's variation selector is not on the combined document")
+		t.Fatal("precondition failed: the serving fixture is missing something the assertion below needs — " + "the block form's variation selector is not on the combined document")
 	}
 	d.chooseVariant(formSel, sharedFormVariantID)
 	d.dispatch("change", formSel)
@@ -486,7 +486,7 @@ func TestFormRendererIgnoresAMenuPick(t *testing.T) {
 		return n.Data == "input" && menuHasClass(n, "p") && menuAttr(n, "data-id") == sharedProductID
 	})
 	if box == nil {
-		t.Fatal("the block form's product checkbox is not on the combined document")
+		t.Fatal("precondition failed: the serving fixture is missing something the assertion below needs — " + "the block form's product checkbox is not on the combined document")
 	}
 	setMenuAttr(box, "checked", "")
 	d.dispatch("change", box)
@@ -496,7 +496,7 @@ func TestFormRendererIgnoresAMenuPick(t *testing.T) {
 
 	sel := d.selectorFor(sharedProductID)
 	if sel == nil {
-		t.Fatal("the menu's variant selector is not on the combined document")
+		t.Fatal("precondition failed: the serving fixture is missing something the assertion below needs — " + "the menu's variant selector is not on the combined document")
 	}
 	d.chooseVariant(sel, sharedMenuVariantID)
 	d.dispatch("change", sel)
