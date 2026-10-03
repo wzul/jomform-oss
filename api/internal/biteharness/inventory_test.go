@@ -381,6 +381,51 @@ func TestNotYetOnMainEntriesAreStillListed(t *testing.T) {
 // Only ACTIVE lines count: the runner's comments legitimately name the backup
 // bite proof to explain why it is NOT a gate, and a strip-comments-first read is
 // the same rule scripts/preflight_test.sh check 10 applies to `|| true`.
+// stripCommentAt drops a trailing comment — but only one a `#` actually INTRODUCES.
+//
+// The old shape was `strings.Index(code, "#")`, which truncates at ANY `#`, including
+// one inside `${...}`. A runner line like `X="${X#y}"; bash api/scripts/biteproof_x.py`
+// was reduced to `X="${X`, so a harness wired behind the parameter expansion was
+// INVISIBLE and the guard read GREEN (card t_6b291041). The shell's own rule: a `#`
+// starts a comment at the start of a word — i.e. at the line start or after
+// whitespace — not mid-token. Same fix, and same reason, as check 10 in
+// scripts/preflight_test.sh (card t_9c1c1518).
+func stripCommentAt(line string) string {
+	for i := 0; i < len(line); i++ {
+		if line[i] != '#' {
+			continue
+		}
+		if i == 0 || line[i-1] == ' ' || line[i-1] == '\t' {
+			return line[:i]
+		}
+	}
+	return line
+}
+
+func TestStripCommentAtKeepsHashesInsideTokens(t *testing.T) {
+	cases := []struct {
+		line, want, why string
+	}{
+		{`X="${X#y}"; bash api/scripts/biteproof_menu_variant_gaps.py`,
+			`X="${X#y}"; bash api/scripts/biteproof_menu_variant_gaps.py`,
+			"a `#` inside ${...} is part of the token; truncating here hid a wired harness"},
+		{`X="${X#y}"; bash api/scripts/biteproof_x.py  # a real comment`,
+			`X="${X#y}"; bash api/scripts/biteproof_x.py  `,
+			"a whitespace-preceded `#` DOES start a comment"},
+		{`# a comment line`, ``, "a line-leading `#` starts a comment"},
+		{`url=https://x/#frag`, `url=https://x/#frag`,
+			"a `#` mid-token (a URL fragment) is not a comment"},
+		{`c=${#FAILED[@]}; run monitor`, `c=${#FAILED[@]}; run monitor`,
+			"`${#arr[@]}` must survive so the `run` call site behind it is still read"},
+		{``, ``, "empty line"},
+	}
+	for _, c := range cases {
+		if got := stripCommentAt(c.line); got != c.want {
+			t.Errorf("stripCommentAt(%q) = %q, want %q — %s", c.line, got, c.want, c.why)
+		}
+	}
+}
+
 func TestNoBiteHarnessIsWiredAsAGate(t *testing.T) {
 	root := repoRoot(t)
 	path := filepath.Join(root, preflightScript)
@@ -396,10 +441,7 @@ func TestNoBiteHarnessIsWiredAsAGate(t *testing.T) {
 
 	var active []string
 	for _, line := range strings.Split(string(raw), "\n") {
-		code := line
-		if i := strings.Index(code, "#"); i >= 0 {
-			code = code[:i]
-		}
+		code := stripCommentAt(line)
 		if strings.TrimSpace(code) == "" {
 			continue
 		}

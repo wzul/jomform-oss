@@ -264,7 +264,23 @@ NGATES="$(grep -c '[^[:space:]]' <<<"$GATES")"
 # The gates that can actually EXECUTE: the `run <name>` call sites. `run` is the
 # only place the script invokes a gate, so this is the real surface, not a parse
 # of its comments.
-runnable="$(sed -E 's/[[:space:]]*#.*$//' "$PREFLIGHT" \
+# THE STRIP STOPS AT A COMMENT-INTRODUCING `#` ONLY (card t_6b291041). This line
+# carried `s/[[:space:]]*#.*$//` — `[[:space:]]*` is ZERO-or-more, so it truncated at
+# ANY `#`, including one inside `${...}`. A runner line like
+# `X="${X#y}"; run monitor` was reduced to `X="${X`, and the `run monitor` call site
+# behind the `#` never reached the pattern below — so a gate the runner EXECUTES was
+# invisible to this read. Measured: the old pattern yields `X="${X`, the new one keeps
+# the whole line.
+#
+# HONEST SCOPE, measured: this reader is anchored `^[[:space:]]*run`, and in this
+# runner every `run` call site begins its line (0 exceptions today), so the escape
+# cannot CURRENTLY lose a call site here — it would take a line with a `#` before a
+# line-leading `run`. It is fixed anyway so the two comment-readers of this runner
+# (here and check 10) apply the same rule, and so the next un-anchored use of the idom
+# cannot hide one. The reachable instance of the class is the Go reader in
+# api/internal/biteharness/inventory_test.go, where the strip runs over BODY lines and
+# a harness behind `${X#y}` was genuinely invisible (card t_6b291041).
+runnable="$(sed -E 's/(^|[[:space:]])#.*$//' "$PREFLIGHT" \
   | grep -oE '^[[:space:]]*run[[:space:]]+[A-Za-z0-9_]+' \
   | awk '{print $2}' | sort -u)"
 
@@ -1057,7 +1073,8 @@ pw_src_of() {  # mirrors pw_sources in the runner under test
   case "$1" in
     build|vet|test|govuln) printf '%s\n' 'api/*' ;;
     web)      printf '%s\n' 'web/package.json' 'web/src/*' 'web/next.config.mjs' 'web/tsconfig.json' 'web/scripts/web-deps-check.mjs' ;;
-    a11y)     printf '%s\n' 'web/e2e/*' 'web/playwright.config.ts' ;;
+    a11y)     printf '%s\n' 'web/e2e/a11y*.spec.ts' 'web/playwright.config.ts' ;;
+    e2e)      printf '%s\n' 'web/e2e/*.spec.ts' 'web/playwright.config.ts' ;;
     npmaudit) printf '%s\n' 'web/package.json' 'web/package-lock.json' ;;
     monitor)  printf '%s\n' 'deploy/monitoring/*' ;;
     tmpkey)   printf '%s\n' 'deploy/tmp-apikey.sh' 'deploy/tmp-apikey_test.sh' ;;
@@ -1068,6 +1085,26 @@ pw_src_of() {  # mirrors pw_sources in the runner under test
     gitleaks) printf '%s\n' '.gitleaks.toml' ;;
   esac
 }
+# GATES THAT LEGITIMATELY HAVE NO SOURCE ARM, declared rather than left silent (card
+# t_31482a39). An empty `pw_src_of` glob list means the probe below scans NOTHING for
+# that gate and passes, so a gate that is merely MISSING an arm is indistinguishable
+# from one that genuinely cannot narrow — and the runner treats the two differently:
+# an arm-less gate is cannot-narrow there, so it runs unconditionally. Declaring it
+# here is what makes "no arm" a decision instead of an omission.
+#
+#   gofmt    — reads EVERY tracked Go file (`gofmt -l .` over api/); it cannot narrow,
+#              so it is in the '*' class.
+#   webimage — the shipping image is a function of the whole tree, so it cannot narrow.
+#
+# Adding a gate to GATE_NAMES without an arm and without a line here now FAILS the
+# check: the mirror and the probe are kept in step by assertion, not by whoever
+# remembers. That is the defect this closes — THE MIRROR HAD ALREADY DRIFTED `e2e`
+# carried a runner arm but no mirror arm, so the probe was BLIND to it, and `a11y` was
+# mirrored as all of `web/e2e/*` where the runner reads only `a11y*.spec.ts`. The
+# mirror is deliberately INDEPENDENT of the runner (that independence is why a runner
+# derivation that goes blind cannot satisfy this check), so it must be COMPLETE here
+# rather than derived.
+PW_SRC_NONE="gofmt webimage"
 # The independent probe's pattern. It is deliberately a DIFFERENT literal from the
 # runner's (`REPOWIDE_RE` there), and it runs as its own code path: the verdict
 # comes from an independent reading, so a derivation that goes BLIND cannot satisfy
@@ -1075,6 +1112,47 @@ pw_src_of() {  # mirrors pw_sources in the runner under test
 # strips them — without that, a comment mentioning the shape over-reports (measured:
 # a false positive on `web`).
 REPOWIDE_ANY_RE='git[[:space:]]+([^|]*[[:space:]])?(grep|ls-files|rev-list)[[:space:]]'
+# FIRST: every gate must be either arm-carrying or explicitly declared as having none.
+# A gate in NEITHER is the silent-coverage hole this addition closes.
+pw_unarmed=""
+for g in $GATES; do
+  if [ -z "$(pw_src_of "$g")" ] && ! grep -qw "$g" <<<"$PW_SRC_NONE"; then
+    pw_unarmed="${pw_unarmed}${g} "
+  fi
+done
+if [ -n "$pw_unarmed" ]; then
+  bad "these gates have NO arm in pw_src_of and are not declared in PW_SRC_NONE: [$(printf '%s' "$pw_unarmed")] — the probe below would scan NOTHING for them and pass, so a gate missing an arm is indistinguishable from one that cannot narrow. Give the gate an arm, or add it to PW_SRC_NONE with the reason it cannot narrow."
+fi
+# And the declaration must not rot: a gate named in PW_SRC_NONE that DOES carry an arm
+# is a stale exemption, which would hide a real arm the probe should be reading.
+for g in $PW_SRC_NONE; do
+  if [ -n "$(pw_src_of "$g")" ]; then
+    bad "PW_SRC_NONE lists \`$g\`, but it now carries a source arm — the exemption is stale and must be removed, or the probe reads the wrong set for it"
+  fi
+done
+# FIRST: every gate must be either arm-carrying or explicitly declared as having none.
+# A gate in NEITHER is the silent-coverage hole this addition closes.
+pw_unarmed=""
+for g in $GATES; do
+  if [ -z "$(pw_src_of "$g")" ] && ! grep -qw "$g" <<<"$PW_SRC_NONE"; then
+    pw_unarmed="${pw_unarmed}${g} "
+  fi
+done
+if [ -n "$pw_unarmed" ]; then
+  bad "these gates have NO arm in pw_src_of and are not declared in PW_SRC_NONE: [$(printf '%s' "$pw_unarmed")] — the probe below would scan NOTHING for them and pass, so a gate missing an arm is indistinguishable from one that cannot narrow. Give the gate an arm, or add it to PW_SRC_NONE with the reason it cannot narrow."
+else
+  ok "every gate is either arm-carrying in pw_src_of or declared in PW_SRC_NONE (which is what makes an arm-less gate a decision, not a silent hole): arm-less = [$(printf '%s' "$PW_SRC_NONE")], and the mirror covers all $NGATES gates"
+fi
+# The declaration must not rot either: a gate named in PW_SRC_NONE that DOES carry an
+# arm is a stale exemption, which would hide a real arm the probe should be reading.
+stale_exempt=""
+for g in $PW_SRC_NONE; do
+  if [ -n "$(pw_src_of "$g")" ]; then
+    stale_exempt="${stale_exempt}${g} "
+    bad "PW_SRC_NONE lists \`$g\`, but it now carries a source arm — the exemption is stale and must be removed, or the probe reads the wrong set for it"
+  fi
+done
+[ -n "$stale_exempt" ] || ok "no stale exemption: every gate named in PW_SRC_NONE still genuinely has no arm in pw_src_of"
 rw_any=""
 for g in $GATES; do
   while IFS= read -r glob; do
