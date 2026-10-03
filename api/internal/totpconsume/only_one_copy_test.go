@@ -829,11 +829,19 @@ func TestOnlyTheStoreWritesTheTOTPStepColumn(t *testing.T) {
 
 		consts := packageConsts(filepath.Dir(path), constsByDir)
 		funcs := packageStringFuncs(filepath.Dir(path), funcsByDir, constsByDir)
+		reported := map[string]bool{}
 		for _, e := range sqlExpressions(f, funcs) {
 			if !statementWritesTOTPStep(f, consts, funcs, e) {
 				continue
 			}
 			site := rel + " (" + e.site + ")"
+			if reported[site] {
+				// The same site is reachable twice now: once through the literal in
+				// the helper's body and once through a call to it. One report, not
+				// two — the reader needs the place, not the multiplicity.
+				continue
+			}
+			reported[site] = true
 			if _, allowed := allowedStepWrites[site]; allowed {
 				seen[site] = true
 			} else {
@@ -890,6 +898,142 @@ func statementWritesTOTPStep(f *ast.File, consts, funcs map[string]string, e sql
 	local := localStringBindings(enclosingFuncDecl(f, e.node), e.node.Pos(), consts, funcs)
 	return sqlWritesTOTPStep.MatchString(resolveSQLText(e.node, consts, funcs, local)) ||
 		sqlWritesTOTPStep.MatchString(resolveSQLText(e.node, consts, funcs, nil))
+}
+
+// TestBuilderAssembledStatementsAreCaught pins the residual t_599d7ff2 left open and
+// t_65e18bd7 closes: a statement assembled ACROSS STATEMENTS inside a helper — the
+// ordinary `strings.Builder` shape — used to read GREEN for a full second implementation
+// of the single-use rule, while the same statement spelled `+`, `fmt.Sprintf` or a `:=`
+// binding was caught.
+//
+// It also pins the BOUNDARY, because widening this walk is how a guard starts accusing
+// legitimate code: a Builder whose parts are literals belonging to another table stays
+// innocent, and a Builder fed an unresolvable part yields nothing rather than a fragment.
+func TestBuilderAssembledStatementsAreCaught(t *testing.T) {
+	cases := []struct {
+		name  string
+		src   string
+		write bool
+	}{
+		{
+			name: "the card's probe: strings.Builder across statements, through a call site",
+			src: `package probe
+import "strings"
+func copyStep() string {
+	var b strings.Builder
+	b.WriteString("UPDATE users SET ")
+	b.WriteString("totp_last_step = $2, updated_at = now() WHERE id = $1 AND totp_last_step < $2")
+	return b.String()
+}
+func use(db interface{}) { db.Exec(copyStep()) }`,
+			write: true,
+		},
+		{
+			name: "bytes.Buffer, a resolvable helper among the parts, through a call site",
+			src: `package probe
+import "bytes"
+func totpStepColumn() string { return "totp_last_step" }
+func copyStep() string {
+	var buf bytes.Buffer
+	buf.WriteString("UPDATE users SET ")
+	buf.WriteString(totpStepColumn())
+	buf.WriteString(" = $2 WHERE id = $1 AND totp_last_step < $2")
+	return buf.String()
+}
+func use(db interface{}) { db.Exec(copyStep()) }`,
+			write: true,
+		},
+		{
+			name: "a fragment-only Builder helper reached through the caller's + is still caught",
+			src: `package probe
+import "strings"
+func tail() string {
+	var b strings.Builder
+	b.WriteString("totp_last_step = $2")
+	b.WriteString(" WHERE id = $1 AND totp_last_step < $2")
+	return b.String()
+}
+func use(db interface{}) { db.Exec("UPDATE users SET " + tail()) }`,
+			write: true,
+		},
+		{
+			name: "a Builder assembling an UNRELATED update stays innocent",
+			src: `package probe
+import "strings"
+func unrelated() string {
+	var b strings.Builder
+	b.WriteString("UPDATE products SET ")
+	b.WriteString("name = $2 WHERE id = $1")
+	return b.String()
+}`,
+			write: false,
+		},
+		{
+			name: "a Builder with an unresolvable part yields nothing, not a fragment",
+			src: `package probe
+import "strings"
+func unknown() string { return dynamic() }
+func copy() string {
+	var b strings.Builder
+	b.WriteString("UPDATE users SET ")
+	b.WriteString(unknown())
+	b.WriteString(" WHERE id = $1")
+	return b.String()
+}`,
+			write: false,
+		},
+		{
+			name: "a for-loop append has no single value and is not folded",
+			src: `package probe
+import "strings"
+func copy(cols []string) string {
+	var b strings.Builder
+	b.WriteString("UPDATE users SET ")
+	for _, c := range cols {
+		b.WriteString(c)
+	}
+	return b.String()
+}`,
+			write: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fset := token.NewFileSet()
+			f, err := parser.ParseFile(fset, "probe.go", tc.src, 0)
+			if err != nil {
+				t.Fatalf("parse probe source: %v", err)
+			}
+			consts := collectStringConsts(f)
+			funcs := map[string]string{}
+			for _, decl := range f.Decls {
+				fn, ok := decl.(*ast.FuncDecl)
+				if !ok || fn.Recv != nil {
+					continue
+				}
+				if ret := singleReturn(fn); ret != nil {
+					if v := resolveSQLText(ret, consts, nil, nil); v != "" {
+						funcs[fn.Name.Name] = v
+					}
+				}
+				if v := builderAssembled(fn, consts, funcs); v != "" {
+					funcs[fn.Name.Name] = v
+				}
+			}
+			got := false
+			for _, e := range sqlExpressions(f, funcs) {
+				if statementWritesTOTPStep(f, consts, funcs, e) {
+					got = true
+				}
+			}
+			if got != tc.write {
+				t.Errorf("statement resolved as a TOTP write = %v, want %v — the Builder "+
+					"spelling is the ordinary way to assemble a statement from more than two "+
+					"pieces, so a guard that cannot read it proves nothing about the "+
+					"single-use rule (card t_65e18bd7). Source:\n%s", got, tc.write, tc.src)
+			}
+		})
+	}
 }
 
 // TestLocalBindingsAreScopedToTheirFunction pins the SCOPE rule the check above
@@ -1037,6 +1181,10 @@ func innocent() string { q := "name"; return "UPDATE products SET " + q + " = $2
 					if s := resolveSQLText(ret, consts, nil, nil); s != "" {
 						funcs[fn.Name.Name] = s
 					}
+				}
+				// A statement assembled across statements in the body (card t_65e18bd7).
+				if s := builderAssembled(fn, consts, funcs); s != "" {
+					funcs[fn.Name.Name] = s
 				}
 			}
 
@@ -1315,6 +1463,28 @@ func sqlExpressions(f *ast.File, funcs map[string]string) []sqlExpr {
 			return true
 		}
 		out = append(out, sqlExpr{node: lit, site: enclosingDecl(f, lit)})
+		return true
+	})
+
+	// Calls to a package-level function whose body resolves to a statement. The
+	// statement TEXT of a helper assembled across its own statements (or simply a
+	// helper an author chose to route through) is not a literal at the call site,
+	// so without this the walk never reaches it: measured on the card's probe,
+	// `db.Exec(builder())` with a `strings.Builder` helper read GREEN while the
+	// same statement written inline was caught (card t_65e18bd7).
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || inside[call] {
+			return true
+		}
+		id, ok := call.Fun.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		if _, ok := funcs[id.Name]; !ok {
+			return true
+		}
+		out = append(out, sqlExpr{node: call, site: enclosingDecl(f, call)})
 		return true
 	})
 
@@ -1833,16 +2003,146 @@ func packageStringFuncs(dir string, memo map[string]map[string]string, constsMem
 				continue
 			}
 			ret := singleReturn(fn)
-			if ret == nil {
-				continue
+			if ret != nil {
+				if s := resolveSQLText(ret, consts, nil, nil); s != "" {
+					funcs[fn.Name.Name] = s
+				}
 			}
-			if s := resolveSQLText(ret, consts, nil, nil); s != "" {
+			if s := builderAssembled(fn, consts, funcs); s != "" {
 				funcs[fn.Name.Name] = s
 			}
 		}
 	}
 	memo[dir] = funcs
 	return funcs
+}
+
+// builderAssembled returns the SQL text a function assembles across STATEMENTS, when
+// its body is the ordinary `var b strings.Builder` / `b.WriteString(…)…` / `return
+// b.String()` shape (card t_65e18bd7).
+//
+// WHY THIS EXISTS. The walk resolved a ONE-EXPRESSION return, a literal concatenation, a
+// resolvable call and a `:=` binding — so a statement assembled with `strings.Builder`,
+// which is the ordinary Go way to build a query from more than two pieces, read GREEN for
+// a full second implementation of the single-use rule. Measured on the card: the same
+// statement spelled `"…" + colFn() + "…"`, `fmt.Sprintf`, or `col := colFn()` was CAUGHT;
+// the Builder spelling was not. `api/internal/dbstore/media_migrate.go` already builds
+// UPDATEs dynamically, so this is not an invented evasion.
+//
+// THE BOUNDARY IS DELIBERATE, and it is the same one the parent card set: ONE function
+// body, in SOURCE ORDER, folding only a literal or an expression `resolveSQLText` can
+// already resolve. No call graph, no imported callees, no reordering, no loops (a `for`
+// that appends is not folded — it has no single value). A name that is not a builder just
+// yields nothing, so a legitimate function that happens to use a Builder is not accused;
+// and a Builder whose parts cannot all be resolved yields nothing rather than a partial
+// string, which is the direction that cannot produce a false alarm from fragments.
+func builderAssembled(fn *ast.FuncDecl, consts, funcs map[string]string) string {
+	if fn == nil || fn.Body == nil {
+		return ""
+	}
+	// Which identifiers are builders? Bound by a declaration or assignment whose value is
+	// a `strings.Builder` / `bytes.Buffer` composite or conversion.
+	builders := map[string]bool{}
+	var out []string
+	for _, stmt := range fn.Body.List {
+		switch st := stmt.(type) {
+		case *ast.DeclStmt:
+			// `var b strings.Builder` — the DECLARATION spelling, which is the one the
+			// card's probe actually used. It is a DeclStmt/GenDecl/ValueSpec, not an
+			// AssignStmt, so missing it left the fold inert for the ordinary shape.
+			gd, ok := st.Decl.(*ast.GenDecl)
+			if !ok || gd.Tok != token.VAR {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for i, name := range vs.Names {
+					if i < len(vs.Values) && isBufferExpr(vs.Values[i]) {
+						builders[name.Name] = true
+						continue
+					}
+					if vs.Type != nil && selNameIsBuffer(vs.Type) {
+						builders[name.Name] = true
+					}
+				}
+			}
+		case *ast.AssignStmt:
+			for i, lhs := range st.Lhs {
+				id, ok := lhs.(*ast.Ident)
+				if !ok || i >= len(st.Rhs) {
+					continue
+				}
+				if isBufferExpr(st.Rhs[i]) {
+					builders[id.Name] = true
+				}
+				// `s += "literal"` on a plain local string is the same assembly shape.
+				if st.Tok == token.ADD_ASSIGN && id.Name != "_" {
+					if rhs, ok := st.Rhs[i].(*ast.BasicLit); ok && rhs.Kind == token.STRING {
+						if v, err := strconv.Unquote(rhs.Value); err == nil {
+							out = append(out, v)
+						}
+					}
+				}
+			}
+		case *ast.ExprStmt:
+			call, ok := st.X.(*ast.CallExpr)
+			if !ok {
+				continue
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "WriteString" {
+				continue
+			}
+			recv, ok := sel.X.(*ast.Ident)
+			if !ok || !builders[recv.Name] {
+				continue
+			}
+			if len(call.Args) != 1 {
+				continue
+			}
+			v := resolveSQLText(call.Args[0], consts, funcs, nil)
+			if v == "" {
+				// An unresolvable part: abandon the whole fold rather than quote a
+				// fragment. A partial string cannot be matched as the defect anyway.
+				return ""
+			}
+			out = append(out, v)
+		}
+	}
+	if len(out) == 0 {
+		return ""
+	}
+	joined := strings.Join(out, "")
+	return joined
+}
+
+// isBufferExpr reports whether an expression constructs one of the buffer types a
+// statement is assembled into.
+func isBufferExpr(e ast.Expr) bool {
+	switch v := e.(type) {
+	case *ast.CompositeLit:
+		return selNameIsBuffer(v.Type)
+	case *ast.CallExpr:
+		return selNameIsBuffer(v.Fun)
+	case *ast.UnaryExpr:
+		return isBufferExpr(v.X)
+	}
+	return false
+}
+
+func selNameIsBuffer(e ast.Expr) bool {
+	sel, ok := e.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	return (pkg.Name == "strings" || pkg.Name == "bytes") && (sel.Sel.Name == "Builder" || sel.Sel.Name == "Buffer")
 }
 
 // singleReturn returns the expression a function's body returns, when the body
