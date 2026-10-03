@@ -47,6 +47,7 @@ import {
   rateLimitedEndpoints,
   specEndpoints,
   writeGatedReads,
+  scopeOnlyWriteRoutes,
 } from "./openapi.ts";
 import { OPENAPI_SPEC } from "./openapiSpec.gen.ts";
 import { API_EXAMPLES } from "./apiExamples.gen.ts";
@@ -429,7 +430,7 @@ test("the page links the machine-readable contract it is generated from", () => 
       "shaping stays in one place",
   );
   assert.ok(
-    code.includes('from "../../../lib/openapi.ts"'),
+    code.includes("lib/openapi.ts"),
     "the page does not import lib/openapi.ts — then where does its endpoint data come from?",
   );
 });
@@ -548,5 +549,48 @@ test("the page never offers the legacy admin scope to a new key", () => {
   assert.ok(
     pageSrc.includes("readonly") && pageSrc.includes("readwrite"),
     "the page does not name the two supported key scopes",
+  );
+});
+
+// ── the `write` LEGEND must not outrun the gate (card t_4abd052a) ─────────────
+test("the write legend's caveat comes from the contract, not from prose", () => {
+  // The legend is a definition of the LEVEL, rendered once and applied to every
+  // write-labelled route. GET /v1/rest/settings/webhook-key is gated by
+  // requireWriteScope ALONE — its handler never calls scopeOr403/requireWriteRole,
+  // so no ?workspace= role is consulted — and the legend nonetheless promised
+  // "manage/admin role inside a ?workspace= scope" for it. Measured on the wire:
+  // a readwrite key got 200 on a foreign workspace there, and 403 on a route whose
+  // gate does apply the axis.
+  //
+  // The caveat is DERIVED, so this asserts both that the page renders it and that
+  // the set it renders is non-empty and accurate.
+  const scoped = scopeOnlyWriteRoutes();
+  assert.ok(
+    scoped.length > 0,
+    "the contract declares no scope-only write route — either the flag was dropped from the " +
+      "registry or the published extension stopped being generated, and the page's caveat " +
+      "would silently disappear",
+  );
+  assert.ok(
+    scoped.every((e) => e.access === "write" && e.scopeOnly),
+    "scopeOnlyWriteRoutes() returned something that is not a write route flagged scope-only",
+  );
+  // The named route must be in the set — the card's claim is about THIS route, so a
+  // set that lost it is wrong even if non-empty.
+  assert.ok(
+    scoped.some((e) => e.path === "/v1/rest/settings/webhook-key"),
+    "GET /v1/rest/settings/webhook-key is not flagged scope-only — the legend over-promises " +
+      "that route again",
+  );
+  // And the PAGE must render it from that set, not from a typed sentence.
+  assert.ok(
+    pageSrc.includes("scopeOnlyWriteRoutes"),
+    `${PAGE} does not derive the write legend's caveat from the contract — the promise can ` +
+      "outrun the gate again the moment a route's gate changes",
+  );
+  assert.ok(
+    pageSrc.includes("e.scopeOnly"),
+    `${PAGE} does not mark the scope-only ROW itself, so a reader who reads only the row ` +
+      "still meets the over-promise",
   );
 });

@@ -44,6 +44,15 @@ export type Endpoint = {
   tag: string;
   /** read | write | admin | session — the gate the API's code enforces. */
   access: string;
+  /**
+   * True when Access=write applies the KEY SCOPE ONLY — the handler calls
+   * requireWriteScope and never consults a ?workspace= role (card t_4abd052a).
+   * The legend in /docs/api is a definition of the LEVEL, rendered once and
+   * applied to every write-labelled route, so without this the legend promised
+   * "manage/admin role inside a ?workspace= scope" for the one route that does
+   * not apply that axis. Published by the contract, not typed into the page.
+   */
+  scopeOnly: boolean;
   /** "" when the route has NO rate limit, which is the majority case. */
   rateLimit: string;
   description: string;
@@ -55,6 +64,7 @@ type SpecOperation = {
   description?: string;
   tags?: string[];
   "x-jomform-access"?: string;
+  "x-jomform-scope-only"?: boolean;
   "x-jomform-rate-limit"?: { scope?: string; policy?: string };
 };
 
@@ -77,6 +87,7 @@ export function specEndpoints(): Endpoint[] {
         summary: op.summary ?? "",
         tag: op.tags?.[0] ?? "Other",
         access: op["x-jomform-access"] ?? "read",
+        scopeOnly: op["x-jomform-scope-only"] === true,
         rateLimit: op["x-jomform-rate-limit"]?.policy ?? "",
         description: op.description ?? "",
       });
@@ -127,6 +138,20 @@ export function endpointCount(): number {
 /** The access levels present in the contract, so the page documents what exists. */
 export function accessLevels(): string[] {
   return [...new Set(specEndpoints().map((e) => e.access))].sort();
+}
+
+/**
+ * The routes whose documented access is `write` but whose gate is the KEY SCOPE
+ * ALONE — the routes the legend's "manage/admin role inside a ?workspace= scope"
+ * does NOT describe (card t_4abd052a).
+ *
+ * Derived from the contract, so the caveat cannot outrun the gate: the registry
+ * marks a route `ScopeOnly`, that reaches the published operation as
+ * `x-jomform-scope-only`, and this reads it. A route that gains or loses the role
+ * axis changes this set by changing that one field.
+ */
+export function scopeOnlyWriteRoutes(): Endpoint[] {
+  return specEndpoints().filter((e) => e.access === "write" && e.scopeOnly);
 }
 
 /** The worked examples, as the page renders them. */

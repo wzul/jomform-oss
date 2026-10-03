@@ -6657,7 +6657,8 @@ export const OPENAPI_SPEC: OpenApiSpec = {
         "tags": [
           "Settings"
         ],
-        "x-jomform-access": "write"
+        "x-jomform-access": "write",
+        "x-jomform-scope-only": true
       }
     },
     "/v1/rest/spam/sales": {

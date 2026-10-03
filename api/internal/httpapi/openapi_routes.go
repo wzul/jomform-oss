@@ -101,6 +101,19 @@ type restRouteDoc struct {
 	// "the raw key is returned exactly once", "409 + requires_ack when a
 	// payment form has no products", "this is an SSE stream".
 	Desc string
+	// ScopeOnly reports that Access=write is applied WITHOUT the ?workspace=
+	// role axis: the handler calls requireWriteScope directly and never
+	// consults scopeOr403/requireWriteRole (card t_4abd052a).
+	//
+	// It exists because the docs page's LEGEND is a definition of the LEVEL,
+	// rendered once and applied to every write-labelled route — so it promised
+	// "manage/admin role inside a ?workspace= scope" for the one route that
+	// does not apply that axis. The route's own Desc said so honestly, but a
+	// reader who met the legend got the wrong contract. A per-route caveat
+	// derived from the contract is the fix; the alternative (adding the role
+	// axis to the handler) changes a shipped route's behaviour and was
+	// explicitly rejected on the parent card.
+	ScopeOnly bool
 }
 
 // restRouteDocs is the contract for every /v1/rest/* route.
@@ -258,7 +271,7 @@ var restRouteDocs = []restRouteDoc{
 	{Method: "GET", Path: "/v1/rest/settings/tracking", Handler: "getTracking", Tag: "Settings",
 		Summary: "Read workspace tracking/analytics", Access: AccessRead},
 	{Method: "GET", Path: "/v1/rest/settings/webhook-key", Handler: "getWebhookKey", Tag: "Settings",
-		Summary: "Read the webhook signing key", Access: AccessWrite,
+		Summary: "Read the webhook signing key", Access: AccessWrite, ScopeOnly: true,
 		Desc: "Refused for a readonly key: the account's Ed25519 keypair is generated on first use, so the FIRST call on a workspace writes and this read is gated as a write. Once a keypair exists the same readonly key is served — the gate is state-dependent, and Access states the strongest one the handler applies. The key scope is the only gate here: the handler does not read a ?workspace= role."},
 	{Method: "GET", Path: "/v1/rest/currency/rates", Handler: "getCurrencyRates", Tag: "Settings",
 		Summary: "Read cached exchange rates (BNM)", Access: AccessRead},
@@ -748,6 +761,13 @@ func operationFor(d restRouteDoc) map[string]any {
 		// and the parity test asserts it matches the gate the handler calls.
 		"x-jomform-access": d.Access,
 		"responses":        responsesFor(d),
+	}
+	if d.ScopeOnly {
+		// The caveat the legend needs, published with the operation rather than
+		// typed into the page (card t_4abd052a). The docs page renders this on the
+		// route's row AND marks its legend entry, so the promise cannot outrun the
+		// gate.
+		op["x-jomform-scope-only"] = true
 	}
 	if desc != "" {
 		op["description"] = desc

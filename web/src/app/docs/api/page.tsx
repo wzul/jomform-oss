@@ -8,6 +8,7 @@ import {
   endpointCount,
   endpointsByTag,
   rateLimitedEndpoints,
+  scopeOnlyWriteRoutes,
   writeGatedReads,
 } from "../../../lib/openapi.ts";
 
@@ -337,7 +338,26 @@ export default function ApiDocsPage() {
           {accessLevels().map((level) => (
             <div key={level} className="flex gap-2">
               <dt className="shrink-0 font-mono font-semibold text-slate-900">{level}</dt>
-              <dd>{ACCESS_LABELS[level] ?? ""}</dd>
+              <dd>
+                {ACCESS_LABELS[level] ?? ""}
+                {/* THE LEGEND IS A DEFINITION OF THE LEVEL, applied to every route
+                    carrying it — so it is only honest while EVERY write-labelled
+                    route applies both axes. The contract says otherwise for some
+                    routes, and this renders that caveat FROM THE CONTRACT rather
+                    than leaving the promise to outrun the gate (card t_4abd052a). */}
+                {level === "write" && scopeOnlyWriteRoutes().length > 0 ? (
+                  <>
+                    {" "}
+                    <strong>Not every write route:</strong>{" "}
+                    {scopeOnlyWriteRoutes()
+                      .map((e) => `${e.method} ${e.path}`)
+                      .join(", ")}{" "}
+                    applies the key scope only and reads no{" "}
+                    <code className="rounded bg-slate-100 px-1">?workspace=</code> role. Its row
+                    says so below.
+                  </>
+                ) : null}
+              </dd>
             </div>
           ))}
         </dl>
@@ -357,6 +377,12 @@ export default function ApiDocsPage() {
                     <code className="break-all font-mono text-xs text-slate-900">{e.path}</code>
                     <span className="text-[11px] uppercase tracking-wide text-slate-500">
                       {e.access}
+                      {e.scopeOnly ? (
+                        <span className="normal-case">
+                          {" "}
+                          (key scope only — no <code className="font-mono">?workspace=</code> role)
+                        </span>
+                      ) : null}
                     </span>
                     {e.rateLimit ? (
                       <span className="text-[11px] text-slate-500">rate limited: {e.rateLimit}</span>
