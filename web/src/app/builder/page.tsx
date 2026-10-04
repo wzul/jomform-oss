@@ -1015,8 +1015,10 @@ export default function Builder() {
     // placeholder is not a label: axe accepts it as a name, but it disappears
     // the moment you type, and WCAG 3.3.2 wants the instruction to persist.
     // The id is scoped by block so it stays unique even if the same key is ever
-    // rendered twice in one panel.
-    const fid = (key: string) => `jf-blk-${b.id}-${key}`;
+    // rendered twice in one panel. Per-choice rows add their 0-based INDEX for the
+    // same reason: the choices editor renders the same key many times, so without
+    // the index every row's id would collide.
+    const fid = (key: string, ns?: number) => `jf-blk-${b.id}-${key}${ns === undefined ? "" : `-${ns}`}`;
     const input = (key: keyof Block, label: string, ph?: string) => (
       <div>
         <label htmlFor={fid(String(key))} className="text-xs text-[var(--jf-muted)]">
@@ -1139,14 +1141,27 @@ export default function Builder() {
           </div>
         )}
 
-        {/* Choices editor: select/radio/image-choice/option/shipping */}
+        {/* Choices editor: select/radio/image-choice/option/shipping.
+            a11y (card t_c4abb920): each row's label input used to be named ONLY
+            by its `placeholder` ("Label") and the price input ONLY by its
+            `title` — a placeholder/title is not a label: axe accepts it as a
+            name, but it disappears the moment you type, and WCAG 3.3.2 wants
+            the instruction to persist. Each input now gets a real name via
+            `aria-label` built from the row's 1-based position, and the id is
+            index-scoped so two rows cannot share one id. The heading below is
+            a `role="group"` labelled by `bld.choices`, so a screen reader gets
+            a named group instead of a list of unnamed text boxes. */}
         {choiceTypes.includes(b.type) && (
-          <div>
-            <label className="text-xs text-[var(--jf-muted)]">{t("bld.choices")}</label>
+          <div role="group" aria-labelledby={fid("choicesHeading")}>
+            <label id={fid("choicesHeading")} className="text-xs text-[var(--jf-muted)]">
+              {t("bld.choices")}
+            </label>
             <div className="mt-1 space-y-1.5">
               {(b.choices || []).map((c, ci) => (
                 <div key={ci} className="flex items-center gap-1.5">
                   <input
+                    id={fid("choiceLabel", ci)}
+                    aria-label={`${t("bld.choiceLabel")} ${ci + 1}`}
                     value={c.label}
                     onChange={(e) => {
                       const ch = [...(b.choices || [])];
@@ -1158,6 +1173,8 @@ export default function Builder() {
                   />
                   {(b.type === "option" || b.type === "shipping") && (
                     <input
+                      id={fid("choicePrice", ci)}
+                      aria-label={`${t("bld.choicePrice")} ${ci + 1}`}
                       type="number"
                       min={0}
                       step="0.01"
@@ -1175,6 +1192,7 @@ export default function Builder() {
                   )}
                   <button
                     onClick={() => upd({ choices: (b.choices || []).filter((_, i) => i !== ci) })}
+                    aria-label={`${t("bld.removeChoice")} ${ci + 1}`}
                     title={t("bld.removeChoice")}
                     className="rounded-md px-1.5 text-xs text-[var(--jf-muted-on-tint)] hover:text-[var(--jf-danger-text)]"
                   >

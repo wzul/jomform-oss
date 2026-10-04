@@ -233,9 +233,19 @@ opener, which blanked 41 lines of that page (including a `</code>`) and made the
 guard report a `<code>` 180 lines away as the ancestor of unrelated spans.
 
 > The rest of the panel — the `input`/`textarea` names, the contrast tokens, the
-> ⋯ menu, the choices editor (`src/app/builder/page.tsx`, guarded separately by
-> its own card) — is still NOT covered by the gate. Keep running the signed-in
-> scan above for those.
+> ⋯ menu — is still NOT covered by the gate. Keep running the signed-in scan
+> above for those.
+>
+> **The panel's form-control NAMES are now in the gate.** Two e2e guards read the
+> name sources off the ACTUAL rendered controls (both `feature-e2e`, part of
+> `scripts/preflight.sh`): `web/e2e/builder-panel-select-names.spec.ts` for every
+> `<select>`, and `web/e2e/builder-panel-choice-names.spec.ts` (card `t_c4abb920`)
+> for EVERY visible `input`/`textarea`/`select` — the latter refuses a control
+> whose only name is its `placeholder`/`title`, which is exactly the class axe
+> cannot see (axe accepts a placeholder as a name, so a clean scan does not prove
+> the choices editor's rows are named). Each spec also carries a mutation case that
+> unnams the controls and requires the SAME invariant to reject them, so a green
+> reading cannot be a vacuum.
 >
 > **One canvas exception, added with the AA fix.** The canvas price spans (the
 > product block's price and the `total` row) ARE in the gate now, via
