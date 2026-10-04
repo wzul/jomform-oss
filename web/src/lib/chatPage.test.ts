@@ -1214,6 +1214,180 @@ test('the inline "?" doc link points at the docs page that documents the boundar
   );
 });
 
+// ── THE CREATION HALF (t_e214d119) ───────────────────────────────────────────
+//
+// WHAT BROKE. #958 (t_804040be, Wan's C) made `upsert_form` proposable — the
+// assistant may CREATE a form, subject to the human Confirm click, because the
+// bin gives a mistaken creation an inverse. The CODE shipped and is live; the
+// /docs/chat page was never updated, and its "What it may propose" section still
+// said the set excluded "creating anything new". A user reading the page was told
+// the opposite of what the product does, which is the one thing a docs page must
+// never do.
+//
+// WHY THIS IS A SOURCE GUARD, cross-language, and not only a copy assertion. The
+// page's claim ("a confirmed card can create a form") is only TRUE while
+// `upsert_form` is in the Go `chatProposableTools`, and the page's OTHER claim
+// ("purge_form is never proposable") is only true while it is NOT. A guard that
+// read the page's prose alone would pass on a tree where the Go set moved out
+// from under it — which is exactly the direction that shipped this defect. So the
+// set is derived from `chat_tools.go` and both halves are asserted against it.
+test("the docs say the assistant may CREATE a form, and that a permanent purge stays human-only", () => {
+  const docs = read(DOCS_PAGE);
+
+  // Vacuity, in the file's idiom: prove this is the page that carries the section,
+  // and the Go file that carries the set, before either claim is believed.
+  assert.ok(
+    docs.includes("What it may propose"),
+    `${DOCS_PAGE} is not the chat docs page this guard means to judge (its "What it may propose" ` +
+      `section is missing)`,
+  );
+  const setMatch = goChatTools.match(/var chatProposableTools\s*=\s*\[\]string\{([\s\S]*?)\}/);
+  assert.ok(
+    setMatch,
+    "chat_tools.go no longer declares `var chatProposableTools = []string{…}` as a parseable " +
+      "literal — this guard reads the set out of it to judge whether the docs' claims are true, " +
+      "and refuses to guess",
+  );
+  const proposable = [...setMatch![1].matchAll(/"([a-z0-9_]+)"/g)].map((m) => m[1]);
+  assert.ok(
+    proposable.length >= 3,
+    `parsed ${proposable.length} name(s) out of chatProposableTools — the extractor has drifted ` +
+      `from the literal's shape, so every claim below would be judged against nothing`,
+  );
+
+  // ── 1. The sentence that shipped the contradiction cannot come back. ──
+  assert.doesNotMatch(
+    docs,
+    /creating anything new/i,
+    "the docs page claims the proposable set excludes \"creating anything new\" again — #958 " +
+      "(t_804040be) makes upsert_form proposable, so that sentence is the shipped defect",
+  );
+  // The surrounding sentence it lived in is gone too: the old copy framed the whole
+  // set as field edits with "no new object created", which is the same false claim
+  // one clause longer.
+  assert.doesNotMatch(
+    docs,
+    /no new object created/i,
+    "the docs page still describes the set as field edits with \"no new object created\" — a " +
+      "confirmed upsert_form card CAN create a new form, so the framing is false",
+  );
+
+  // ── 2. The creation is stated, and it says WHICH HALF. ──
+  // `upsert_form` is BOTH a create and an update, so a page that only said "edits
+  // a form" would misdescribe a card that is about to create one. The Go summary
+  // (proposalDocs["upsert_form"].summary) names both halves for exactly this
+  // reason; the English page has to say the same thing.
+  assert.ok(
+    docs.includes("upsert_form"),
+    "the docs page no longer names upsert_form — the proposable creation would be undocumented, " +
+      "and the page is the inline \"?\" the chat panel points at (AGENTS.md DOCUMENTATION PARITY)",
+  );
+  assert.match(
+    docs,
+    /upsert_form[\s\S]{0,200}(CREATES a new form|creates a new form)[\s\S]{0,120}(UPDATES|updates)/,
+    "the docs page names upsert_form but does not say it CREATES a new form (when it names none) " +
+      "as well as UPDATES one it names — the two halves are the difference the confirmation is FOR, " +
+      "and the Go card summary states both (proposal.go proposalDocs[\"upsert_form\"])",
+  );
+  // The claim is only true while the tool is really proposable — read from Go, not
+  // asserted from the page's own words.
+  assert.ok(
+    proposable.includes("upsert_form"),
+    `the docs page tells the user a confirmed card can create a form, but upsert_form is NOT in ` +
+      `chat_tools.go's chatProposableTools (${proposable.join(", ")}) — the page and the server ` +
+      `disagree, and the page is wrong`,
+  );
+
+  // ── 3. The bin is named — it is the whole reason the creation is admissible. ──
+  // Wan's decision was "the assistant may take it as far as the bin; only a person
+  // purges". A page that allowed the creation but never mentioned the bin would
+  // leave the user without the recovery path the decision rests on.
+  assert.match(
+    docs,
+    /(to the trash|the trash|from the trash)/i,
+    "the docs page allows a created form but never names the trash/bin — the recoverability of a " +
+      "mistaken creation is the entire justification for letting the assistant create one " +
+      "(Wan, t_804040be: \"assistant boleh buat sampai masuk ke bin\")",
+  );
+
+  // ── 4. The permanent step is stated as human-only, and it really is. ──
+  assert.ok(
+    docs.includes("purge_form"),
+    "the docs page never names purge_form — the ONE step with no inverse is the thing a user " +
+      "confirming a created form most needs to be told about",
+  );
+  assert.match(
+    docs,
+    /purge_form[\s\S]{0,200}(never propose|cannot propose|never be proposed|is not proposable)/i,
+    "the docs page names purge_form but does not say the assistant can never propose it — a reader " +
+      "would be left believing a permanent delete is one click away in the chat, which is the " +
+      "opposite of Wan's rule (\"Manusia sahaja boleh purge kekal\")",
+  );
+  // And the page's claim is true: purge_form must NOT be proposable.
+  assert.ok(
+    !proposable.includes("purge_form"),
+    "chat_tools.go's chatProposableTools contains purge_form — the docs page says the assistant " +
+      "can never propose a permanent delete, and it now can. Wan's rule: the assistant takes a " +
+      "form as far as the bin; only a person purges (chat_tools_guard_test.go's " +
+      "TestChatNeverProposesAPermanentDelete pins the same rule from the Go side)",
+  );
+
+  // ── 5. The bin is the PERSON's action, not the assistant's. ──
+  // The creation above is admissible because a form is BINNED, not destroyed — but
+  // the bin itself is not an assistant capability. delete_form/restore_form are not
+  // proposable AND not in the chat's read allowlist, so the chat has no lane to bin
+  // or restore a form at all; only purge_form is called out as human-only, yet it is
+  // not the only step that is. The rework copy shipped the same class of defect it
+  // set out to fix, one claim over: "the assistant can take a form as far as the
+  // trash" credited the model with an action the server gives it no route to take.
+  // The set is read from Go so the copy cannot drift in EITHER direction.
+  const readSetMatch = goChatTools.match(/var chatReadTools\s*=\s*\[\]string\{([\s\S]*?)\}/);
+  assert.ok(
+    readSetMatch,
+    "chat_tools.go no longer declares `var chatReadTools = []string{…}` as a parseable literal — " +
+      "this guard reads the chat's read allowlist out of it to prove the assistant cannot even " +
+      "reach the bin, and refuses to guess",
+  );
+  const readTools = [...readSetMatch![1].matchAll(/"([a-z0-9_]+)"/g)].map((m) => m[1]);
+  for (const binTool of ["delete_form", "restore_form"]) {
+    assert.ok(
+      !proposable.includes(binTool),
+      `chat_tools.go's chatProposableTools contains ${binTool} — the docs page must not let the ` +
+        `user believe the assistant can bin or restore a form (set: ${proposable.join(", ")})`,
+    );
+    assert.ok(
+      !readTools.includes(binTool),
+      `chat_tools.go's chatReadTools contains ${binTool} — the chat can dispatch a bin/restore ` +
+        `while the docs page credits that action to the person, so one of the two is wrong ` +
+        `(read allowlist: ${readTools.join(", ")})`,
+    );
+  }
+  // And the page itself: no sentence may name the assistant as the AGENT that bins,
+  // trashes, restores or deletes a form. The page MAY name the trash — the fix does,
+  // to attribute the action to the person — so the guard keys on the assistant as
+  // the actor, not on the word "trash" appearing anywhere.
+  assert.doesNotMatch(
+    docs,
+    /assistant\s+(?:can|may|will|is able to|could|takes|moves|bins|trashes|restores|deletes)\b[^.]{0,120}\b(?:bin|trash|restore|delete)/i,
+    "the docs page credits the ASSISTANT with binning, trashing, restoring or deleting a form — " +
+      "delete_form/restore_form are not proposable and not in the chat's read allowlist, so the " +
+      "bin is the person's action on the forms page, never the assistant's (the shipped rework " +
+      "copy said \"the assistant can take a form as far as the trash\")",
+  );
+  // Positive control: the page must actually attribute the bin to the person rather
+  // than dropping the recovery path that justifies the creation. A copy that simply
+  // deleted the false sentence would pass a negative-only guard while leaving the
+  // reader with no idea who bins the form.
+  assert.match(
+    docs,
+    /bin belongs to (you|the person|the owner)|not the assistant[\s\S]{0,60}(forms page|trash)|you[\s\S]{0,40}move[s]? it to the trash/i,
+    "the docs page never says the BIN is the person's action — a reader told the assistant may " +
+      "create a form needs to know who can bin it, and the page must not leave that to the " +
+      "assistant (Wan, t_804040be: \"assistant boleh buat sampai masuk ke bin\"; the bin is the " +
+      "person's steps on the forms page)",
+  );
+});
+
 test("every chat dictionary key defines all five locales", () => {
   const keys = Object.keys(DICT).filter((k) => k.startsWith("chat.") || k === "nav.chat");
   assert.ok(keys.length >= 12, `expected the chat dictionary, got ${keys.length} keys`);
