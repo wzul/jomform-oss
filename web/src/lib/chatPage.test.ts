@@ -138,20 +138,45 @@ const goChatTools = read("../../../api/internal/mcpsrv/chat_tools.go");
 // bin a form"), the PASSIVE ("a form can be binned by the assistant") and the
 // BARE VERB with no trailing noun ("the assistant bins a form") — all passed it
 // GREEN. A guard that under-tests the class it exists to police is the worst kind
-// of green, so this one keys on the assistant and the bin VOCABULARY appearing in
-// the same sentence in the four shapes that credit the action, regardless of
-// adjacency:
+// of green — and the widening above STILL shipped with a residue (t_5bdeda83):
+// its first shape demanded a MODAL from a closed set immediately on the
+// assistant, and its other shapes demanded the assistant be ADJACENT to the bin
+// verb (or be the passive's agent). Six natural re-wordings therefore credited
+// the assistant with the bin and all passed it GREEN:
 //
-//   (1) modal/auxiliary BEFORE the bin — "the assistant can/may/will/could/is
-//       able to take|move … (to the) trash|bin|restore|delete". The negative
-//       lookahead keeps the page's own DENIALS ("the assistant can never
-//       delete…", "…cannot restore…") green: a modal followed by not/never is
-//       the boundary the page is allowed to state.
+//   perfect tense       "The assistant has binned a form."
+//   perfect + movement  "The assistant has moved a form to the trash."
+//   periphrastic future "The assistant is going to delete a form."
+//   relative clause     "The assistant is the one who bins a form."
+//   possessive genitive "Binning a form is the assistant's job."
+//   fronted gerund      "Restoring a form is something the assistant does."
+//   appositive          "The assistant, not you, deletes the form."
+//
+// This arm closes them: it keys on the assistant and the bin VOCABULARY
+// appearing in the same sentence in the six shapes that credit the action,
+// regardless of which noun the verb hangs off:
+//
+//   (1) the assistant as SUBJECT of a modal/perfect/future/copula auxiliary,
+//       with a bin word anywhere later in the sentence — "the assistant
+//       can/may/will/has/is (going to|about to|able to) … trash|bin|restore|
+//       delete". The lookahead keeps the page's own DENIALS ("the assistant can
+//       never delete…", "…cannot restore…", "…does not bin…") green: an
+//       auxiliary followed by not/never is the boundary the page is allowed to
+//       state.
 //   (2) the bare finite or participial verb right on the assistant — "the
-//       assistant bins|trashes|restores|deletes|binning a form".
+//       assistant bins|trashes|restores|deletes|binning a form" — and the
+//       APPOSITIVE that only interposes ", not you," before it.
 //   (3) the assistant as the TARGET of an infinitive that lands on the bin —
 //       "ask the assistant to bin a form" / "…to move a form to the trash".
 //   (4) the PASSIVE — "a form binned|trashed|restored|deleted by the assistant".
+//   (5) the POSSESSIVE GENITIVE — "binning a form is the assistant's job".
+//   (6) the FRONTED GERUND — "restoring a form is something the assistant does".
+//
+// Shapes (5) and (6) key on a bin word before "is the assistant's" and on the
+// assistant before "does", so a sentence that DISOWNS the action without a
+// negation ("deleting a form is yours, not the assistant's") stays green: the
+// disowning form puts no bin word before "is the assistant's", nor the assistant
+// before "does".
 //
 // Split out of the assertions so the bite proof below runs the IDENTICAL regex
 // against a mutated page: a proof that exercised a paraphrase of the scan would
@@ -159,12 +184,36 @@ const goChatTools = read("../../../api/internal/mcpsrv/chat_tools.go");
 // scanClaims). The person-attribution sentence the fix ships ("The bin belongs
 // to you, not the assistant — deleting a form … restoring it from the trash")
 // must stay GREEN: it names the assistant only to DISOWN the action.
+const BIN_VOCAB = String.raw`(?:bins?|binned|binning|trash(?:es|ed|ing)?|restores?|restored|restoring|deletes?|deleted|deleting)`;
+// The auxiliaries that make the assistant the SUBJECT of the action — a modal, a
+// perfect (has/have/had), a copula (is/was/… going to|about to|able to) or a
+// light verb (takes|moves). `going to` is listed whole so "is going to" matches,
+// and `does`/`do`/`did` are here (not in the bare-verb shape) so "the assistant
+// does bin" cannot slip past shape (2).
+const ASSISTANT_AUX = String.raw`(?:can|may|will|would|could|should|shall|must|might|has|have|had|is|are|was|were|be|been|being|does|do|did|takes?|moves?|going\s+to|about\s+to|due\s+to|needs?\s+to|wants?\s+to)`;
+// NOT-A-DENIAL: the page is allowed to state the boundary, so an auxiliary the
+// assistant owns must not be followed by not/never (or the bare "cannot"/"never")
+// for the match to count as a claim.
+const NOT_A_DENIAL = String.raw`(?!\s*(?:,\s*)?(?:cannot|never)\b)(?!\s*(?:can|may|could|will|would|shall|should|must|might|does|do|did|is|are|was|were|has|have|had)\s+(?:not|never)\b)`;
+// The appositive "the assistant, not you, <verb>" — the clause only DISOWNS "you",
+// not the assistant, so the sentence still credits the assistant and must be RED.
+const APPOSITIVE = String.raw`(?:\s*,\s*(?:not\s+you|not\s+yourself|never\s+you)\s*,)?`;
 const ASSISTANT_BIN_CLAIM = new RegExp(
   [
-    String.raw`\bassistant\b\s+(?:can|may|will|could|is\s+able\s+to|takes?|moves?)\b(?!'|’|\s+(?:not|never)\b)[^.!?]{0,140}\b(?:bins?|binned|binning|trash(?:es|ed|ing)?|restores?|restored|restoring|deletes?|deleted|deleting)\b`,
-    String.raw`\bassistant\b\s+(?:bins?|trashes?|restores?|deletes?|binning|trashing|restoring|deleting)\b`,
-    String.raw`\bassistant\b\s+to\b[^.!?]{0,80}?\b(?:bins?|binned|binning|trash(?:es|ed|ing)?|restores?|restored|restoring|deletes?|deleted|deleting)\b`,
+    // (1) assistant as SUBJECT of a modal/perfect/future/copula auxiliary, bin word
+    // anywhere later in the sentence (allowing a ", not you," appositive between).
+    String.raw`\bassistant\b` + NOT_A_DENIAL + APPOSITIVE + String.raw`\s+(?:` + ASSISTANT_AUX + String.raw`\b\s+)[^.!?]{0,140}?` + BIN_VOCAB + String.raw`\b`,
+    // (2) the bare finite/participial verb right on the assistant (with the optional
+    // ", not you," appositive).
+    String.raw`\bassistant\b` + NOT_A_DENIAL + APPOSITIVE + String.raw`\s+` + BIN_VOCAB + String.raw`\b`,
+    // (3) the assistant as the TARGET of an infinitive that lands on the bin.
+    String.raw`\bassistant\b\s+to\b[^.!?]{0,80}?` + BIN_VOCAB + String.raw`\b`,
+    // (4) the PASSIVE.
     String.raw`\b(?:binned|trashed|restored|deleted)\s+by\s+(?:the\s+)?assistant\b`,
+    // (5) the POSSESSIVE GENITIVE — "binning a form is the assistant's job".
+    BIN_VOCAB + String.raw`\b[^.!?]{0,60}\b(?:is|was|are|were|remains?)\s+(?:the\s+|a\s+|your\s+)?assistant(?:’|')s\b`,
+    // (6) the FRONTED GERUND — "restoring a form is something the assistant does".
+    BIN_VOCAB + String.raw`\b[^.!?]{0,80}\b(?:the\s+|an?\s+)?assistant\b\s+(?:does|do|did|performs?|handles?)\b`,
   ].join("|"),
   "i",
 );
@@ -1418,11 +1467,16 @@ test("the docs say the assistant may CREATE a form, and that a permanent purge s
   // And the page itself: no sentence may name the assistant as the AGENT that bins,
   // trashes, restores or deletes a form. The page MAY name the trash — the fix does,
   // to attribute the action to the person — so the guard keys on the assistant as
-  // the actor, not on the word "trash" appearing anywhere, and NOT on adjacency:
-  // the infinitive ("ask the assistant to bin"), the passive ("…binned by the
-  // assistant") and the bare verb ("the assistant bins") all credit the model with
-  // the action and all must be RED (the actor-adjacency shape this replaces caught
-  // only the one phrasing the rework happened to remove).
+  // the actor, not on the word "trash" appearing anywhere and NOT on adjacency. All
+  // of the infinitive ("ask the assistant to bin"), the passive ("…binned by the
+  // assistant"), the bare verb ("the assistant bins"), the perfect ("the assistant
+  // has binned"), the periphrastic future ("the assistant is going to delete"), the
+  // relative clause ("the assistant is the one who bins"), the possessive genitive
+  // ("binning a form is the assistant's job"), the fronted gerund ("restoring a form
+  // is something the assistant does") and the appositive ("the assistant, not you,
+  // deletes") credit the model with the action and all must be RED (the
+  // actor-adjacency shape this replaces caught only the one phrasing the rework
+  // happened to remove).
   const credited = assistantBinClaims(docs);
   assert.deepEqual(
     credited,
@@ -1448,7 +1502,7 @@ test("the docs say the assistant may CREATE a form, and that a permanent purge s
   );
 });
 
-// ── THE PROSE ARM'S OWN BITE PROOF (t_48daca7f) ──────────────────────────────
+// ── THE PROSE ARM'S OWN BITE PROOF (t_48daca7f, widened in t_5bdeda83) ────────
 //
 // The rework's prose arm shipped GREEN on the three re-wordings it existed to
 // catch, because nothing in the suite ever proved it could fail on anything but
@@ -1457,10 +1511,11 @@ test("the docs say the assistant may CREATE a form, and that a permanent purge s
 // on the paragraph that had just been "fixed". So the IDENTICAL scan is run here
 // against the SHIPPED page with one phrasal injection at the anchor the QA card
 // names (docs page line 69, right after "A creation is the one shape the field-edit
-// rule does not cover,"), and each of the three shapes the old regex missed plus
-// the sentence it did catch must go RED. Nothing on disk is written: the mutation
-// is in memory, on the real page source read at module load.
-test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the passive and the bare verb", () => {
+// rule does not cover,"), and every shape the previous regex missed — the three
+// from t_48daca7f plus the seven the follow-up t_5bdeda83 found still GREEN — must
+// go RED, as must the shipped defect sentence it did catch. Nothing on disk is
+// written: the mutation is in memory, on the real page source read at module load.
+test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the passive, the bare verb, the perfect, the future, the relative clause, the genitive, the gerund and the appositive", () => {
   const shipped = read(DOCS_PAGE);
   const anchor = "A creation is the one shape the field-edit rule does not cover,";
   // Vacuity: if the anchor is gone the injections below land nowhere and this
@@ -1471,15 +1526,41 @@ test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the
       `proof would inject into a string that does not contain it and assert nothing`,
   );
 
-  // The three shapes the actor-adjacency regex missed (A/B/C in the QA card) plus
-  // the shipped defect sentence, which it caught. Each must be found by the scan
-  // that now runs in the test above.
+  // The three shapes the actor-adjacency regex missed (A/B/C in the t_48daca7f QA
+  // card), the seven the follow-up t_5bdeda83 measured as still GREEN, and the
+  // shipped defect sentence the old regex did catch. Each must be found by the scan
+  // that now runs in the test above. The residual seven carry all four bin verbs
+  // (bin/trash/restore/delete) across their shapes.
   const shapes: Record<string, string> = {
     "infinitive (A)": "You can ask the assistant to bin a form.",
     "passive (B)": "A form can be binned by the assistant.",
     "bare verb (C)": "The assistant bins a form.",
     "shipped defect": "The assistant can take a form as far as the trash.",
     "infinitive + object (D)": "You can ask the assistant to move a form to the trash.",
+    // t_5bdeda83 — the residue the four shapes above still missed.
+    "perfect (E)": "The assistant has binned a form.",
+    "perfect + movement (F)": "The assistant has moved a form to the trash.",
+    "periphrastic future (G)": "The assistant is going to delete a form.",
+    "relative clause (H)": "The assistant is the one who bins a form.",
+    "possessive genitive (I)": "Binning a form is the assistant's job.",
+    "fronted gerund (J)": "Restoring a form is something the assistant does.",
+    "appositive (K)": "The assistant, not you, deletes the form.",
+    "perfect · trash (L)": "The assistant has trashed a form.",
+    "perfect · restore (M)": "The assistant has restored a form.",
+    "perfect · delete (N)": "The assistant has deleted a form.",
+    "future · trash (O)": "The assistant is going to trash a form.",
+    "future · restore (P)": "The assistant is going to restore a form.",
+    "relative · trash (Q)": "The assistant is the one who trashes a form.",
+    "relative · restore (R)": "The assistant is the one who restores a form.",
+    "relative · delete (S)": "The assistant is the one who deletes a form.",
+    "genitive · trash (T)": "Trashing a form is the assistant's job.",
+    "genitive · restore (U)": "Restoring a form is the assistant's job.",
+    "genitive · delete (V)": "Deleting a form is the assistant's job.",
+    "gerund · trash (W)": "Trashing a form is something the assistant does.",
+    "gerund · delete (X)": "Deleting a form is something the assistant does.",
+    "appositive · bin (Y)": "The assistant, not you, bins the form.",
+    "appositive · trash (Z)": "The assistant, not you, trashes the form.",
+    "appositive · restore (AA)": "The assistant, not you, restores the form.",
   };
 
   const missed: string[] = [];
