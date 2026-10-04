@@ -125,6 +125,59 @@ const goRest = read("../../../api/internal/httpapi/rest_chat.go");
 const goRestRoutes = read("../../../api/internal/httpapi/rest.go");
 const goChatTools = read("../../../api/internal/mcpsrv/chat_tools.go");
 
+// ── THE PROSE ARM: who the page credits with the BIN ────────────────────────
+//
+// WHAT IT POLICES. delete_form/restore_form are neither proposable nor in the
+// chat's read allowlist, so the bin is the person's action on the forms page and
+// the /docs/chat copy must never credit it to the assistant. The arm that
+// shipped with the rework (t_3a321078) keyed on `assistant` IMMEDIATELY followed
+// by a modal/bare verb AND a bin/trash noun within 120 chars AFTER that, so it
+// caught exactly ONE phrasing ("the assistant can take a form as far as the
+// trash"). Measured on the shipped page (t_48daca7f): three natural re-wordings
+// that credit the assistant with the bin — the INFINITIVE ("ask the assistant to
+// bin a form"), the PASSIVE ("a form can be binned by the assistant") and the
+// BARE VERB with no trailing noun ("the assistant bins a form") — all passed it
+// GREEN. A guard that under-tests the class it exists to police is the worst kind
+// of green, so this one keys on the assistant and the bin VOCABULARY appearing in
+// the same sentence in the four shapes that credit the action, regardless of
+// adjacency:
+//
+//   (1) modal/auxiliary BEFORE the bin — "the assistant can/may/will/could/is
+//       able to take|move … (to the) trash|bin|restore|delete". The negative
+//       lookahead keeps the page's own DENIALS ("the assistant can never
+//       delete…", "…cannot restore…") green: a modal followed by not/never is
+//       the boundary the page is allowed to state.
+//   (2) the bare finite or participial verb right on the assistant — "the
+//       assistant bins|trashes|restores|deletes|binning a form".
+//   (3) the assistant as the TARGET of an infinitive that lands on the bin —
+//       "ask the assistant to bin a form" / "…to move a form to the trash".
+//   (4) the PASSIVE — "a form binned|trashed|restored|deleted by the assistant".
+//
+// Split out of the assertions so the bite proof below runs the IDENTICAL regex
+// against a mutated page: a proof that exercised a paraphrase of the scan would
+// prove nothing about the scan (the idiom of trashCopyClaims.test.ts's
+// scanClaims). The person-attribution sentence the fix ships ("The bin belongs
+// to you, not the assistant — deleting a form … restoring it from the trash")
+// must stay GREEN: it names the assistant only to DISOWN the action.
+const ASSISTANT_BIN_CLAIM = new RegExp(
+  [
+    String.raw`\bassistant\b\s+(?:can|may|will|could|is\s+able\s+to|takes?|moves?)\b(?!'|’|\s+(?:not|never)\b)[^.!?]{0,140}\b(?:bins?|binned|binning|trash(?:es|ed|ing)?|restores?|restored|restoring|deletes?|deleted|deleting)\b`,
+    String.raw`\bassistant\b\s+(?:bins?|trashes?|restores?|deletes?|binning|trashing|restoring|deleting)\b`,
+    String.raw`\bassistant\b\s+to\b[^.!?]{0,80}?\b(?:bins?|binned|binning|trash(?:es|ed|ing)?|restores?|restored|restoring|deletes?|deleted|deleting)\b`,
+    String.raw`\b(?:binned|trashed|restored|deleted)\s+by\s+(?:the\s+)?assistant\b`,
+  ].join("|"),
+  "i",
+);
+
+/** Every phrasing in `text` that credits the assistant with the bin, in order. */
+function assistantBinClaims(text: string): string[] {
+  const out: string[] = [];
+  const re = new RegExp(ASSISTANT_BIN_CLAIM.source, "gi");
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) out.push(m[0]);
+  return out;
+}
+
 test("the guard is looking at real files (it cannot pass vacuously)", () => {
   assert.ok(page.includes("chat-input"), "app/chat/page.tsx is not the chat page source");
   assert.ok(
@@ -1365,14 +1418,21 @@ test("the docs say the assistant may CREATE a form, and that a permanent purge s
   // And the page itself: no sentence may name the assistant as the AGENT that bins,
   // trashes, restores or deletes a form. The page MAY name the trash — the fix does,
   // to attribute the action to the person — so the guard keys on the assistant as
-  // the actor, not on the word "trash" appearing anywhere.
-  assert.doesNotMatch(
-    docs,
-    /assistant\s+(?:can|may|will|is able to|could|takes|moves|bins|trashes|restores|deletes)\b[^.]{0,120}\b(?:bin|trash|restore|delete)/i,
+  // the actor, not on the word "trash" appearing anywhere, and NOT on adjacency:
+  // the infinitive ("ask the assistant to bin"), the passive ("…binned by the
+  // assistant") and the bare verb ("the assistant bins") all credit the model with
+  // the action and all must be RED (the actor-adjacency shape this replaces caught
+  // only the one phrasing the rework happened to remove).
+  const credited = assistantBinClaims(docs);
+  assert.deepEqual(
+    credited,
+    [],
     "the docs page credits the ASSISTANT with binning, trashing, restoring or deleting a form — " +
       "delete_form/restore_form are not proposable and not in the chat's read allowlist, so the " +
-      "bin is the person's action on the forms page, never the assistant's (the shipped rework " +
-      "copy said \"the assistant can take a form as far as the trash\")",
+      "bin is the person's action on the forms page, never the assistant's. Offending phrasing(s): " +
+      `${JSON.stringify(credited)}. (The shipped rework copy said \"the assistant can take a form as ` +
+      "far as the trash\"; the infinitive, passive and bare-verb re-wordings of that claim are the " +
+      "same defect one phrasing over.)",
   );
   // Positive control: the page must actually attribute the bin to the person rather
   // than dropping the recovery path that justifies the creation. A copy that simply
@@ -1386,6 +1446,86 @@ test("the docs say the assistant may CREATE a form, and that a permanent purge s
       "assistant (Wan, t_804040be: \"assistant boleh buat sampai masuk ke bin\"; the bin is the " +
       "person's steps on the forms page)",
   );
+});
+
+// ── THE PROSE ARM'S OWN BITE PROOF (t_48daca7f) ──────────────────────────────
+//
+// The rework's prose arm shipped GREEN on the three re-wordings it existed to
+// catch, because nothing in the suite ever proved it could fail on anything but
+// the one sentence it was written beside. A guard whose failure mode is never
+// observed rots with every gate green — which is exactly how this defect shipped,
+// on the paragraph that had just been "fixed". So the IDENTICAL scan is run here
+// against the SHIPPED page with one phrasal injection at the anchor the QA card
+// names (docs page line 69, right after "A creation is the one shape the field-edit
+// rule does not cover,"), and each of the three shapes the old regex missed plus
+// the sentence it did catch must go RED. Nothing on disk is written: the mutation
+// is in memory, on the real page source read at module load.
+test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the passive and the bare verb", () => {
+  const shipped = read(DOCS_PAGE);
+  const anchor = "A creation is the one shape the field-edit rule does not cover,";
+  // Vacuity: if the anchor is gone the injections below land nowhere and this
+  // proof would pass while testing nothing.
+  assert.ok(
+    shipped.includes(anchor),
+    `the docs page no longer contains the injection anchor (${JSON.stringify(anchor)}) — this ` +
+      `proof would inject into a string that does not contain it and assert nothing`,
+  );
+
+  // The three shapes the actor-adjacency regex missed (A/B/C in the QA card) plus
+  // the shipped defect sentence, which it caught. Each must be found by the scan
+  // that now runs in the test above.
+  const shapes: Record<string, string> = {
+    "infinitive (A)": "You can ask the assistant to bin a form.",
+    "passive (B)": "A form can be binned by the assistant.",
+    "bare verb (C)": "The assistant bins a form.",
+    "shipped defect": "The assistant can take a form as far as the trash.",
+    "infinitive + object (D)": "You can ask the assistant to move a form to the trash.",
+  };
+
+  const missed: string[] = [];
+  for (const [name, sentence] of Object.entries(shapes)) {
+    // A string pattern replaces only the first occurrence; the anchor is unique.
+    const mutated = shipped.replace(anchor, `"${sentence} ${anchor}`);
+    // Prove the mutation landed, or the shape is judged against the pristine page.
+    assert.ok(
+      mutated.includes(sentence),
+      `the ${name} injection did not land on the page — this case asserts nothing`,
+    );
+    if (assistantBinClaims(mutated).length === 0) missed.push(`${name}: ${JSON.stringify(sentence)}`);
+  }
+  assert.deepEqual(
+    missed,
+    [],
+    `the prose arm did not go RED on these phrasings, so a copy that credits the assistant with ` +
+      `the bin would ship GREEN (the defect this card fixes):\n  ${missed.join("\n  ")}`,
+  );
+
+  // And the POSITIVE CONTROL must not be what carries the detection: the person-
+  // attribution sentence the fix ships (which names the assistant only to disown
+  // the action) stays GREEN under the same scan. A scan that fired on it would be
+  // unusable, and a scan that only fired on it would catch nothing real.
+  const personCopy =
+    "The bin belongs to you, not the assistant — deleting a form from the forms page moves it to " +
+    "the trash, and restoring it from the trash brings it back with its address intact.";
+  assert.deepEqual(
+    assistantBinClaims(personCopy),
+    [],
+    "the scan fires on the page's own sentence that attributes the bin to the PERSON — it names " +
+      "the assistant only to disown the action, so the arm would be red on the correct copy",
+  );
+  // ...and the denial shapes the page is allowed to use stay GREEN too.
+  for (const denial of [
+    "The assistant cannot delete a form.",
+    "The assistant can never delete or archive a form.",
+    "The assistant may not restore a form.",
+  ]) {
+    assert.deepEqual(
+      assistantBinClaims(denial),
+      [],
+      `the scan fires on the page's own DENIAL (${JSON.stringify(denial)}) — the boundary is the ` +
+        `thing the page is allowed to state, so the arm must not red on it`,
+    );
+  }
 });
 
 test("every chat dictionary key defines all five locales", () => {
