@@ -557,7 +557,13 @@ PW_RW_FILES=()            # files that read the whole checkout
 #     removed, so a comment was already not a read and stays that way);
 #   * a GO / TS / JS source ALSO has every quoted span dropped, because in those
 #     languages a quoted string is DATA. That is the false-positive class: a
-#     message that quotes the command. Removing it cannot hide a real read —
+#     message that quotes the command. The set is the INTERPRETED pair `"…"`/`'…'`
+#     AND the Go/TS BACKTICK raw string `` `…` `` — a raw string is exactly as
+#     much DATA as an interpreted one, and leaving it out (card t_7e703b11, the
+#     residual PR 961 left) made the reduction discriminate on QUOTE STYLE
+#     rather than on "is this data": a message-only backtick literal degraded the
+#     table to 9 '*' rows exactly as its `"…"` twin had before PR 961, turning
+#     the `selftest` anchors RED. Removing those spans cannot hide a real read —
 #     a Go read of the checkout in this repo is `exec.Command("git", "-C", root,
 #     "ls-files", …)` (separate ARGS, no `git ls-files` substring at all), so the
 #     pattern never saw it and this filter cannot lose it;
@@ -573,7 +579,7 @@ PW_RW_FILES=()            # files that read the whole checkout
 pw_code_lines() {
   case "$1" in
     *.go|*.ts|*.tsx|*.js|*.mjs|*.cjs)
-      sed -e '/^[[:space:]]*\(#\|\/\/\|\/\*\|\*\)/d' -e 's/"[^"]*"//g' -e "s/'[^']*'//g" "$1" 2>/dev/null ;;
+      sed -e '/^[[:space:]]*\(#\|\/\/\|\/\*\|\*\)/d' -e 's/"[^"]*"//g' -e "s/'[^']*'//g" -e 's/`[^`]*`//g' "$1" 2>/dev/null ;;
     *)
       sed -e '/^[[:space:]]*\(#\|\/\/\|\/\*\|\*\)/d' "$1" 2>/dev/null ;;
   esac

@@ -1119,7 +1119,11 @@ REPOWIDE_ANY_RE='git[[:space:]]+([^|]*[[:space:]])?(grep|ls-files|rev-list)[[:sp
 # here is the runner's, stated in scripts/preflight.sh at pw_code_lines: a
 # repo-wide read is a STATEMENT, so (a) a comment is not a read and (b) in a
 # language where a quoted span is DATA (Go/TS/JS) a message that QUOTES the
-# command is not a read either. A shell source keeps its quoted spans, where
+# command is not a read either — and the DATA set is the interpreted pair
+# `"…"`/`'…'` AND the backtick raw string `` `…` `` (card t_7e703b11: dropping
+# only the interpreted pair made this probe blind to a backtick MESSAGE, exactly
+# as the shared raw-line defect had left the whole check blind before PR 961).
+# A shell source keeps its quoted spans, where
 # `"$(git …)"` holds code whose quote state is re-opened inside the
 # substitution. If this reduction ever drifts toward stripping MORE than the
 # runner strips, the verdict is the SAFE direction — a gate demanded into '*',
@@ -1127,7 +1131,7 @@ REPOWIDE_ANY_RE='git[[:space:]]+([^|]*[[:space:]])?(grep|ls-files|rev-list)[[:sp
 probe_code_lines() {
   case "$1" in
     *.go|*.ts|*.tsx|*.js|*.mjs|*.cjs)
-      sed -e '/^[[:space:]]*\(#\|\/\/\|\/\*\|\*\)/d' -e 's/"[^"]*"//g' -e "s/'[^']*'//g" "$1" 2>/dev/null ;;
+      sed -e '/^[[:space:]]*\(#\|\/\/\|\/\*\|\*\)/d' -e 's/"[^"]*"//g' -e "s/'[^']*'//g" -e 's/`[^`]*`//g' "$1" 2>/dev/null ;;
     *)
       sed -e '/^[[:space:]]*\(#\|\/\/\|\/\*\|\*\)/d' "$1" 2>/dev/null ;;
   esac
