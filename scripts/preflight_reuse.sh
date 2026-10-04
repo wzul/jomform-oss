@@ -3,9 +3,10 @@
 # scripts/preflight_reuse.sh — read the per-tree gate RESULT RECORD.
 #
 # This is the CONSUMER side of scripts/gate_result.sh. It is what a lane runs
-# BEFORE it queues for the gate: the gate is serialised behind one host-wide
-# flock and a waiter has been measured at 50-86 minutes, so a tree whose verdict
-# is already known should not join the queue at all.
+# BEFORE it queues for the gate: the gate runs behind a bounded host-wide POOL of
+# `PREFLIGHT_SLOT_COUNT` slots (default 2, card t_79c0964a) and a waiter for a
+# slot has been measured at 50-86 minutes, so a tree whose verdict is already
+# known should not join the queue at all.
 #
 # It NEVER gates anything and it NEVER takes the gate lock. It only reads host
 # state and prints a decision, so it is safe to call from anywhere and it cannot

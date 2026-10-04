@@ -105,7 +105,7 @@ it is not what a merger needs when it decides to squash.
   `localhost` — same server, same database, caller's environment unchanged —
   because the two spellings hashed to different keys. The refusal says only "the
   environment changed since that record", so the lane re-queued behind the
-  host-wide flock (waiter measured at 50-86 minutes) to re-run fifteen gates that
+  host-wide slot pool (waiter measured at 50-86 minutes) to re-run fifteen gates that
   had already passed on those exact bytes. The canonicalisation is an ANCHORED
   match on `<host>[:port][/database]` only — which is exactly the form the strip
   above guarantees, so `[::1]:5432/db@x` is canonicalised in its host slot while
@@ -252,7 +252,15 @@ from real files rather than estimated:
 
 ## What this does **not** do
 
-* It does not change the gate list, the lock semantics, or the `a11y` split.
+* It does not change the gate list, the `a11y` split, or the reuse rules.
+* **The gate pool is separate from this file** (card `t_79c0964a`). The gate runs
+  used to be serialised behind ONE host-wide `flock`, on the premise that two
+  concurrent runs share a scratch schema and a scratch valkey index. Both are
+  per-PROCESS now (`test_<pkg>_p<pid>`, `jftest:p<pid>:` on a pid-derived DB), so
+  the premise was stale and the lock only serialised lanes; it is now a capped
+  POOL of `PREFLIGHT_SLOT_COUNT` slots (default 2), so two lanes gate in parallel
+  while the host stays bounded. A whole-inventory reuse still takes NO slot, which
+  is why the pre-lock check here is now the pre-POOL check.
 * It does not allow a **partial** run to be read as full coverage: a run with
   skipped gates still prints the loud warning and still says it is not full
   coverage.

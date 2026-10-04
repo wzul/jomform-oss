@@ -2,9 +2,9 @@
 #
 # LOCK ISOLATION (card t_fda5ba74). This script invokes `./scripts/preflight.sh` three
 # times (case 0, then once per case in `case_check`) and used to inherit the host-wide
-# production lock, `/var/lock/jomform-preflight-gate.lock`, with a default wait of
+# production pool, `/var/lock/jomform-preflight-gate.lock`, with a default wait of
 # `PREFLIGHT_LOCK_WAIT=1800`. Each invocation could therefore sit up to 30 minutes
-# waiting for a queue it does not need, AND occupy that queue while doing so —
+# waiting for a slot it does not need, AND occupy that slot while doing so —
 # delaying every card gate behind it. Measured by QA: a run sat ~9 minutes still
 # inside case 0 with no case completed.
 #

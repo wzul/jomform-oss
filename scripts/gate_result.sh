@@ -6,7 +6,7 @@
 #   scripts/preflight.sh gates a TREE, but until now nothing remembered the
 #   verdict. The same tree was gated up to ten times on this host (509 completed
 #   full runs over 6.4 days, 97.1 host-hours), because each attempt sat behind the
-#   shared flock and learned nothing from the one ahead of it: 206 of those runs
+#   shared gate queue and learned nothing from the one ahead of it: 206 of those runs
 #   (38.3 host-hours, 39.4%) re-gated a tree that had already been gated. Worse,
 #   28 of the 125 repeatedly-gated trees (22%) came back with BOTH verdicts on
 #   identical bytes, so the verdict read as a property of the MOMENT instead of
@@ -16,7 +16,7 @@
 #   This library makes the result a property of the tree. The runner writes one
 #   record per tree; anything that would otherwise queue reads it FIRST
 #   (scripts/preflight_reuse.sh), and a lane whose tree is already green never
-#   queues for the flock at all.
+#   joins the gate queue at all.
 #
 # WHAT THE RECORD NAMES (all four are load-bearing; none is decoration)
 #   * the TREE sha, not the commit sha. `2f961d7` (a merge tree) and `4bb8eae`
@@ -187,7 +187,7 @@ gr_sha256_file() {
 # unchanged — was refused with "the environment changed since that record" because
 # it spelled the host `localhost` (recorded key 3c1cf0fc vs current b34aadac).
 # The rejection is SILENT about the cause and costs the whole gate: the lane
-# re-queues behind the host-wide flock, whose waiter has been measured at 50-86
+# re-queues behind the host-wide slot pool, whose waiter has been measured at 50-86
 # minutes, to re-run fifteen gates that had already passed on those exact bytes.
 # Both spellings reach this process in normal use — the file a caller is told to
 # source (${JOMFORM_ENV:-$HOME/.config/jomform/test-env.sh}) exports 127.0.0.1
@@ -373,7 +373,7 @@ gr_testdb_component() {
   # loopback rule entirely (`,` is not in the host pattern), so ONE server still
   # produced TWO keys. That is the same class as t_7add0cfa: a record refused with
   # "the environment changed since that record", costing the whole gate and the
-  # host-wide flock wait. The component's whole job is to answer "is this the same
+  # host-wide slot pool wait. The component's whole job is to answer "is this the same
   # test database?", and it answered wrongly the moment an alias escaped.
   #
   # Two steps, because mapping each host is not enough on its own:

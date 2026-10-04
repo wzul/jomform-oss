@@ -327,7 +327,7 @@ restore_and_verify
 # this host: the gate ran green on tree f98b5fcf and wrote testdb=127.0.0.1:...,
 # and the very next reader — same server, same database, environment unchanged —
 # was refused with "the environment changed since that record", costing the lane
-# the whole gate (the host-wide flock's waiter has been measured at 50-86 min) to
+# the whole gate (the host-wide slot pool's waiter has been measured at 50-86 min) to
 # re-run fifteen gates that had already passed on those bytes.
 #
 # SURGICAL, and it has to be: this case shares gr_testdb_component with card

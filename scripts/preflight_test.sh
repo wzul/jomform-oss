@@ -36,6 +36,18 @@
 # property against the real scripts/preflight.sh from the real repo root — same
 # derived skip-list, no hardcoding there either.
 #
+# THE POOL, NOT A LOCK (card t_79c0964a). scripts/preflight.sh used to serialise
+# every gate run behind ONE host-wide `flock`, on the stated premise that two
+# concurrent runs "share one scratch schema and one scratch valkey index". Both
+# are per-PROCESS now (`test_<pkg>_p<pid>`, `jftest:p<pid>:` on a pid-derived DB),
+# so the premise was stale and the lock only serialised LANES — measured: a card
+# held it 4h45m for 4m42s of real CPU, 99 minutes of that `sleep`. It is now a
+# POOL of PREFLIGHT_SLOT_COUNT slots (default 2), so two lanes gate in parallel
+# while the host stays capped. Checks 16/16b/16c/16d are what keep that honest:
+# the self-test still must not join the production POOL, the cap must really cap,
+# a waiter must still get to run, an inherited slot must not be queued on, and a
+# sabotage case proves the cap check can go RED.
+#
 # WHY A SEPARATE SCRIPT, NOT `go test`: the properties are about a shell
 # script's argument handling and exit codes, not about Go packages, and the
 # people who need to run this (a deployer mid-incident) have a shell, not
@@ -120,6 +132,25 @@ export -n _PREFLIGHT_LOCKED 2>/dev/null || true
 # CLEAN shell, so every nested invocation below must start as one. Exactly the
 # reasoning of the `_PREFLIGHT_LOCKED` note above, one handoff over.
 unset SEL_DIFF SEL_DIFF_LINE SEL_DIFF_SKIPPED SEL_DIFF_FULL SEL_COUNT SEL_DIFF_REASON SEL_BASE _PREFLIGHT_SEL
+#      THE SAME CLEAN-SHELL RULE FOR THE POOL INHERITANCE MARKERS, and this one was
+#      MEASURED as a false reading rather than reasoned about. A run that holds a slot
+#      exports `PREFLIGHT_SLOT_FD` / `_HOLDER` for its nested invocations, and THIS
+#      self-test is such a nested invocation — so the markers leak in, and every nested
+#      `./scripts/preflight.sh` below then reports "ALREADY INSIDE the gate pool" and
+#      runs its gates instead of taking a slot. Checks 16b and 16e measure exactly that
+#      take, so they were defeated: measured inside the gate (checks 16b/16e red with
+#      "ALREADY INSIDE the gate pool" in the output) while `bash scripts/preflight_test.sh`
+#      alone was green — the identical shape the `_PREFLIGHT_LOCKED` and SEL_DIFF notes
+#      above describe, one handoff over. A lane calls preflight.sh from a CLEAN shell, so
+#      every nested invocation below must start as one: the markers (and any pool size a
+#      caller exported) are cleared here — and ALSO named with `env -u` at the two probes
+#      that measure the TAKE, because those run as separate PROCESSES where a clear in
+#      this shell is not enough on its own. Check 16d re-establishes them explicitly,
+#      and deliberately, for the one check that is about inheritance.
+unset PREFLIGHT_SLOT_FD PREFLIGHT_SLOT_HOLDER PREFLIGHT_SLOT_N PREFLIGHT_SLOT_LOCK
+unset PREFLIGHT_SLOT_COUNT PREFLIGHT_LOCK_WAIT
+export -n PREFLIGHT_SLOT_FD PREFLIGHT_SLOT_HOLDER PREFLIGHT_SLOT_N PREFLIGHT_SLOT_LOCK 2>/dev/null || true
+export -n PREFLIGHT_SLOT_COUNT PREFLIGHT_LOCK_WAIT 2>/dev/null || true
 # The same reasoning for the environment the runner reads: a caller that ran the
 # whole gate with --log or a result dir set must not change what these checks key on.
 unset PREFLIGHT_LOG
@@ -245,24 +276,25 @@ git -C "$SB" -c user.email=t@t -c user.name=t commit -q -m init
 cd "$SB" || exit 1
 
 # ---------------------------------------------------------------------------
-# PRIVATE LOCK FILE — the self-test must never queue behind a real gate.
+# PRIVATE LOCK PATH — the self-test must never join the production gate pool.
 #
-# scripts/preflight.sh takes its concurrency lock BEFORE it validates arguments
-# or checks prerequisites (deliberately: the banner prints once, in the locked
-# child). So EVERY invocation below — including the ones whose whole point is to
-# fail fast on an unset prerequisite — first waits up to PREFLIGHT_LOCK_WAIT
-# (default 1800s) for the production lock. On a busy board that turned a
-# sub-second self-test into a 10+ minute run that itself HELD the lock, delaying
-# every card gate waiting behind it. Both shapes are avoided by pointing the
-# self-test at its own lock file.
+# scripts/preflight.sh takes a slot from the host's gate POOL before it runs any
+# gate, and on a busy board every slot can be busy. So every invocation below
+# would otherwise wait up to PREFLIGHT_LOCK_WAIT (default 1800s) for a slot, and
+# while running it would HOLD one, delaying every card gate waiting behind it.
+# Both shapes are avoided by pointing the self-test at its own pool path.
 #
 # This does not weaken anything under test: the self-test exercises argument
-# handling, prerequisite failure and inventory drift — no property here is about
-# concurrency — and none of its invocations runs a gate body (each either refuses
-# outright or dies on a missing prerequisite), so it cannot contaminate another
-# run's scratch schema. Check 14 proves the isolation holds.
+# handling, prerequisite failure and inventory drift, and none of its invocations
+# runs a real gate body (each either refuses outright or dies on a missing
+# prerequisite), so an extra slot here cannot contend for a real gate's CPU.
+# Check 16 proves the isolation holds; checks 16b/16c/16d prove the pool's own
+# properties (the cap caps, a waiter gets to run, and an inherited slot runs
+# rather than queueing behind its own parent).
 # ---------------------------------------------------------------------------
 export PREFLIGHT_LOCK_FILE="$SB_STATE/preflight-selftest.lock"
+# TWO SLOTS, the default, is what these checks measure — and it is the number a
+# real lane gets, so the shape under test is the shipped one.
 
 # ---------------------------------------------------------------------------
 # Derive the gate inventories from the script under test. Nothing below names a
@@ -772,33 +804,286 @@ else
 
 fi
 
-# 16. The self-test must run on its OWN lock file, never the production one.
-#     Every invocation above goes through scripts/preflight.sh, which takes the
-#     concurrency lock BEFORE it validates arguments or prerequisites — so on a
-#     busy board this whole self-test would otherwise queue behind a card's gate
-#     (up to PREFLIGHT_LOCK_WAIT, 1800s by default) and, once running, hold that
-#     same lock against every card waiting behind IT. Measured: a self-test that
-#     should take seconds sat 10+ minutes holding the production lock with four
-#     cards running. Two properties, checked against the SCRIPT (not this file's
-#     prose, which could be edited independently):
-#       (a) the default is still the production path — a self-test that pointed
-#           at a private lock by DEFAULT would be a real regression, because the
-#           gate body would then be unserialised;
-#       (b) this run's resolved lock is NOT that default — i.e. the override above
-#           actually took effect and is still in the file.
+# 16. The self-test must run on its OWN pool path, never the production one.
+#     Every invocation above goes through scripts/preflight.sh, which takes a slot
+#     from the host pool BEFORE it validates arguments or prerequisites — so on a
+#     busy board this whole self-test would otherwise wait for a slot (up to
+#     PREFLIGHT_LOCK_WAIT, 1800s by default) and, once running, hold that same
+#     slot against every card waiting behind IT. Measured (before the pool existed,
+#     on the single lock): a self-test that should take seconds sat 10+ minutes
+#     holding the production lock with four cards running. Two properties, checked
+#     against the SCRIPT (not this file's prose, which could be edited
+#     independently):
+#       (a) the default is still the production path — a self-test that pointed at
+#           a private path by DEFAULT would be a real regression, because the gate
+#           body would then be uncapped;
+#       (b) this run's resolved path is NOT that default — i.e. the override above
+#           actually took effect and is still in the file, so the pool the live
+#           gates use is not the pool this self-test drives.
 #     (b) reads the live value, so deleting the export makes this RED.
 default_lock="${PREFLIGHT_LOCK_FILE_DEFAULT:-/var/lock/jomform-preflight-gate.lock}"
+default_count="${PREFLIGHT_SLOT_COUNT_DEFAULT:-2}"
 if [ ! -f "$PREFLIGHT" ]; then
-  bad "cannot check self-test lock isolation: $PREFLIGHT missing"
+  bad "cannot check self-test pool isolation: $PREFLIGHT missing"
 elif ! grep -qE 'PREFLIGHT_LOCK_FILE="\$\{PREFLIGHT_LOCK_FILE:-' "$PREFLIGHT"; then
   bad "preflight.sh no longer defaults PREFLIGHT_LOCK_FILE through \${PREFLIGHT_LOCK_FILE:-...} — the override this self-test relies on is gone"
+elif ! grep -qE 'PREFLIGHT_SLOT_COUNT="\$\{PREFLIGHT_SLOT_COUNT:-' "$PREFLIGHT"; then
+  bad "preflight.sh no longer derives the pool size through \${PREFLIGHT_SLOT_COUNT:-...} — the cap this self-test measures is gone, and a hardcoded 1 would be the old single lock again"
 elif [ -z "${PREFLIGHT_LOCK_FILE:-}" ]; then
-  bad "PREFLIGHT_LOCK_FILE is unset in the self-test — it would queue on the production lock and hold it against live gates"
+  bad "PREFLIGHT_LOCK_FILE is unset in the self-test — it would join the production pool and hold a slot against live gates"
 elif [ "$PREFLIGHT_LOCK_FILE" = "$default_lock" ]; then
-  bad "the self-test is using the PRODUCTION lock ($default_lock) — it will serialise against (and delay) every card gate on the board"
+  bad "the self-test is using the PRODUCTION pool path ($default_lock) — it will contend with (and hold a slot against) every card gate on the board"
 else
-  ok "self-test uses a private lock ($PREFLIGHT_LOCK_FILE), not the production path ($default_lock)"
+  ok "self-test uses a private pool path ($PREFLIGHT_LOCK_FILE), not the production one ($default_lock)"
 fi
+
+# 16b. THE POOL MUST ACTUALLY CAP, AND A WAITER MUST STILL GET TO RUN.
+#
+#     This is the card's own subject, so it is asserted in both directions rather
+#     than reasoned about:
+#       (a) with every slot held, a run must NOT execute its gate — the cap is
+#           real, and the old single lock's guarantee (never more runs at once
+#           than the cap) is preserved. Asserted on the SUMMARY LINE and on the
+#           gate banner, both of which are printed only after the gate body runs;
+#       (b) once a slot frees, that same run must RUN the gate rather than fail —
+#           a waiter is the correct answer, and this leg is what stops (a) from
+#           being satisfied by a runner that simply refuses under contention.
+#     Held by a real `flock` on the SAME slot paths the runner derives (one file
+#     per slot, `<path>.slot<N>`), in the self-test's own private pool dir, so this
+#     is hermetic and never touches the host's gate.
+#
+#     A HOLDER IS TAKEN ON AN INDEPENDENTLY-OPENED DESCRIPTOR. That is not a
+#     detail: flock is OPEN-FILE-DESCRIPTION scoped, so a holder that inherited a
+#     descriptor would share it and the take would succeed — the check would then
+#     report "capped" about a pool that never capped. The runner's own take is
+#     re-entrant BY DESIGN for exactly that reason (a nested invocation must not
+#     queue behind its own parent), so a holder which is not a descendant is what
+#     makes this leg measure the CAP rather than the re-entrancy.
+pool_dir="$SB_STATE/pool"
+rm -rf "$pool_dir"; mkdir -p "$pool_dir"
+pool_lock="$pool_dir/gate.lock"
+s16_gofmt_label='cd api && test -z "$(gofmt -l .)"'
+# The holder takes every slot the runner would try, in ITS OWN process, and holds
+# them while the subject run takes its turn. `-o` so the lock lives on this
+# descriptor rather than dying with an inner `true`.
+#
+# NO `2>/dev/null` on any redirection-only `exec` here either: it would apply to
+# the SHELL, not to a command (that mistake made 21 checks in this file report an
+# empty output while the exit code still changed).
+pool_hold() {
+  local n fd
+  for n in $(seq 1 "$default_count"); do
+    fd=""
+    exec {fd}>>"$pool_lock.slot$n" || return 1
+    if ! flock -o -n "$fd"; then exec {fd}>&-; return 1; fi
+    # Keep the descriptor open for the lifetime of this subshell.
+    eval "hold_fd_$n=\$fd"
+  done
+  # Prove the premise: the pool this function just filled must refuse a fresh take
+  # on a NEWLY opened descriptor, or the run below would take a slot and this leg
+  # would be measuring nothing.
+  local probe=""
+  exec {probe}>>"$pool_lock.slot1" || return 1
+  if flock -n "$probe" 2>/dev/null; then
+    exec {probe}>&-
+    return 2
+  fi
+  exec {probe}>&-
+  sleep 4
+}
+s16_out=""
+pool_hold &
+s16_holder=$!
+sleep 1
+# WAIT=0 so the assertion cannot hang the self-test: a runner that (wrongly)
+# proceeds answers immediately, and one that waits exits 74 immediately.
+# `env -u` for the inheritance markers: the guard at the top of this file clears
+# them for THIS shell, but an exported one would still reach the child, and this is
+# the check that measures the TAKE.
+s16_out="$( (cd "$LIVE_ROOT" && env -u PREFLIGHT_SLOT_FD -u PREFLIGHT_SLOT_HOLDER -u PREFLIGHT_SLOT_N -u PREFLIGHT_SLOT_LOCK \
+    PREFLIGHT_RESULT_DIR="$SB_STATE/pool-results" PREFLIGHT_RESULT_TTL=1 \
+    PREFLIGHT_LOCK_FILE="$pool_lock" PREFLIGHT_LOCK_WAIT=0 \
+    ./scripts/preflight.sh --only gofmt 2>&1) )"
+s16_rc=$?
+s16_gate_ran=0
+grep -qF "$s16_gofmt_label" <<<"$s16_out" && s16_gate_ran=1
+s16_waited=0
+grep -q "all ${default_count} gate slot(s) busy" <<<"$s16_out" && s16_waited=1
+wait "$s16_holder" 2>/dev/null
+if [ "$s16_rc" -eq 0 ]; then
+  bad "16b does not bite: with all $default_count slot(s) held the run COMPLETED (rc=0) instead of waiting — the pool is not capping, so two lanes would run at once with no bound (output: [$(printf '%s' "$s16_out" | grep -E 'slots:|gate \[gofmt\]|summary' | tr '\n' ' ')]"
+elif [ "$s16_gate_ran" -ne 0 ]; then
+  bad "16b does not bite: the run reported it was waiting for a slot AND executed the gate — the cap is not real (output: [$(printf '%s' "$s16_out" | grep -E 'slots:|gate \[gofmt\]' | tr '\n' ' ')]"
+elif [ "$s16_waited" -ne 1 ]; then
+  bad "16b: with every slot held the run did not report the wait, so this check cannot tell a capped runner from a failing one (rc=$s16_rc, output: [$(printf '%s' "$s16_out" | tail -n 3 | tr '\n' ' ')]"
+elif [ "$s16_rc" -ne 74 ]; then
+  bad "16b: a full pool must be a WAIT, not a failure — expected rc=74 (could not get a slot) with PREFLIGHT_LOCK_WAIT=0, got rc=$s16_rc"
+else
+  ok "16b BITES: with all $default_count slot(s) held the run REPORTS the busy pool and exits 74 without executing a gate — the cap is real, and it is a wait rather than a refusal"
+fi
+
+# 16c. THE OTHER DIRECTION OF 16b: once a slot frees, the waiter must RUN.
+#      Without this leg 16b is satisfied by a runner that always refuses under
+#      contention, which is the false-red shape the pool exists to avoid.
+#
+#      AND IT MUST BE THE SLOT THAT IS NOT SLOT 1 (card t_1c59f9f5). The wait
+#      used to be one blocking `flock` on slot 1, so a run proceeded only when
+#      SLOT 1 freed and exited 74 while another slot was free. The old version of
+#      this check released BOTH slots together after 2s, so slot 1 frees FIRST and
+#      the check could not see the defect at all — it went green on a runner whose
+#      waiter watches one path. It now holds slot 1 for the WHOLE check and frees
+#      only the other slot(s): slot 1 frees LAST, which is exactly the ordering a
+#      slot-1-only wait is blind to, and the run must still proceed. On the
+#      pre-fix runner that is RED (rc=74 with slot 2 free the whole time).
+#
+#      WAIT is deliberately SHORTER than the slot-1 hold, so a waiter that only
+#      watched slot 1 cannot pass by timing out at the deadline: rc=0 here is only
+#      reachable by waking on the freed slot.
+s16c_hold=12
+s16c_wait=8
+(
+  # FIXED DESCRIPTOR NUMBERS, closed by NUMBER — no `eval`, and no descriptor this
+  # shell might already be using. `eval "exec \${var}>&-"` looks like the obvious
+  # close-by-variable, but it is not reliably a redirection: when it degrades to
+  # `exec <num>` bash tries to EXECUTE a command named by the digit, and a failed
+  # `exec` in a non-interactive shell EXITS the subshell — which releases EVERY slot
+  # it holds, including slot 1, and the check then measures an empty pool instead of
+  # a slot-1-only hold. (Measured while writing this: the fd-variable form printed
+  # `exec: 11: not found` and the waiter passed in 3s.) Slot `n` therefore lives on
+  # fd `$((100+n))`, which nothing else here opens.
+  for n in $(seq 1 "$default_count"); do
+    eval "exec $((100+n))>>\"\$pool_lock.slot\$n\"" || exit 1
+    flock -o -n "$((100+n))" || exit 1
+  done
+  echo "16c: all $default_count slot(s) held"
+  sleep 2
+  # Free every slot EXCEPT slot 1, so slot 1 is the last to free — for longer than
+  # the waiter's whole budget. That is the ordering a slot-1-only wait is blind to.
+  for n in $(seq 2 "$default_count"); do
+    eval "exec $((100+n))>&-"
+  done
+  echo "16c: slot(s) 2..$default_count FREED at t=2s; slot1 HELD for ${s16c_hold}s"
+  sleep "$s16c_hold"
+) &
+s16c_filler=$!
+sleep 0.5
+s16c_start=$(date +%s)
+# `env -u` for the inheritance markers, exactly as 16b/16e do: this is the check
+# that measures the TAKE and the WAIT, so an inherited marker must not short-circuit it.
+s16c_out="$( (cd "$LIVE_ROOT" && env -u PREFLIGHT_SLOT_FD -u PREFLIGHT_SLOT_HOLDER -u PREFLIGHT_SLOT_N -u PREFLIGHT_SLOT_LOCK \
+    PREFLIGHT_RESULT_DIR="$SB_STATE/pool-results" PREFLIGHT_RESULT_TTL=1 \
+    PREFLIGHT_LOCK_FILE="$pool_lock" PREFLIGHT_LOCK_WAIT="$s16c_wait" \
+    ./scripts/preflight.sh --only gofmt 2>&1) )"
+s16c_rc=$?
+s16c_elapsed=$(( $(date +%s) - s16c_start ))
+# WAIT IT OUT rather than killing it. `kill` would end the subshell but not the
+# `sleep` child that shares the slot-1 open file description, so the lock would
+# survive the kill and 16d's own full-pool premise (a fresh take on slot1 is
+# refused) would then be measuring a leaked holder. Letting the hold expire closes
+# the descriptors with it; the hold is bounded and short.
+wait "$s16c_filler" 2>/dev/null
+if [ "$s16c_rc" -eq 0 ] && grep -qF "$s16_gofmt_label" <<<"$s16c_out"; then
+  if [ "$s16c_elapsed" -lt "$s16c_hold" ]; then
+    ok "16c BITES: with only slot1 held and slot 2..$default_count freed, the run RUNS its gate in ${s16c_elapsed}s (rc=0, gate executed) — the wait watches EVERY slot, not slot 1 alone (it cannot have waited for slot1, held for ${s16c_hold}s)"
+  else
+    bad "16c: the run proceeded only after ${s16c_elapsed}s, i.e. it waited out the slot-1 hold (${s16c_hold}s) rather than waking on the freed slot — the wait is still not a pool wait"
+  fi
+else
+  bad "16c: a queued run must execute its gate once ANY slot frees (slot1 held, slot 2..$default_count freed at t=2s) — rc=$s16c_rc, elapsed=${s16c_elapsed}s, output: [$(printf '%s' "$s16c_out" | grep -E 'slots:|gate \[gofmt\]|summary|preflight:' | tr '\n' ' ')]"
+fi
+
+# 16d. AN INHERITED SLOT MUST NOT BE QUEUED ON. A nested invocation that inherits
+#      its ancestor's slot is already inside the pool — it must run its gates, not
+#      wait for a slot its own ancestor is holding. That is the self-deadlock shape
+#      card t_0094bf00 was about (a lane's queue grew 3 -> 9 runs with no gate
+#      executing), one level down, and the `selftest` gate IS such a nested
+#      invocation, so this is the path a real full run takes.
+#
+#      DRIVEN WITH THE REAL INHERITANCE, not a simulation: a wrapper takes every
+#      slot, exports the marker its own child would inherit, and runs the subject
+#      preflight.sh from there with the pool full. A runner that ignores the
+#      ancestry would exit 74 on the full pool; the correct one runs its gate.
+#      The wrapper asserts its premise first — a FRESH open of a slot is refused
+#      while it holds them — so a run that proceeds did so because of the
+#      inheritance rather than because the pool was empty.
+#
+#      A LOCK TAKEN BY A DESCENDANT CANNOT STAND IN FOR THE ANCESTOR'S SLOT: flock
+#      refusal is open-file-description scoped (measured), so the descendant's take
+#      on the same file is refused and it has to be the ANCESTOR's slot that is
+#      recognised. That is exactly what the marker's holder pid encodes.
+#
+#      THE WRAPPER IS THE `bash -c` BELOW, so when the ancestor's markers are
+#      already inherited (`selftest` driven by a holding run) it re-uses them and
+#      still asserts the pool is full; when they are not, it takes them itself.
+s16d_out="$( (cd "$LIVE_ROOT" && env PREFLIGHT_RESULT_DIR="$SB_STATE/pool-results" PREFLIGHT_RESULT_TTL=1 \
+  PREFLIGHT_LOCK_FILE="$pool_lock" PREFLIGHT_LOCK_WAIT=0 bash -c '
+    set -uo pipefail
+    export PREFLIGHT_SLOT_COUNT='"$default_count"'
+    # Inherited markers (this self-test running as a nested invocation of a holding
+    # run): the holder is already my ancestor, so the pool is already full for a
+    # plain child and I must NOT take it again — a descendant cannot, by design.
+    if [ -n "${PREFLIGHT_SLOT_HOLDER:-}" ] && [ -n "${PREFLIGHT_SLOT_FD:-}" ]; then
+      echo "16d: using the INHERITED slot (holder=$PREFLIGHT_SLOT_HOLDER fd=$PREFLIGHT_SLOT_FD)"
+      ./scripts/preflight.sh --only gofmt
+      exit $?
+    fi
+    for n in $(seq 1 "$PREFLIGHT_SLOT_COUNT"); do
+      fd=""
+      exec {fd}>>"'"$pool_lock"'".slot$n || exit 1
+      flock -o -n "$fd" || exit 1
+      eval "own_fd_$n=$fd"
+    done
+    # Premise: a fresh take on a NEWLY opened descriptor is refused, so the subject
+    # run below cannot be proceeding because a slot looked free.
+    probe=""
+    exec {probe}>>"'"$pool_lock"'".slot1 || exit 1
+    if flock -n "$probe" 2>/dev/null; then echo PREMISE-FAILED; exit 1; fi
+    exec {probe}>&-
+    # What a nested preflight.sh inherits from the run that took the slot.
+    export PREFLIGHT_SLOT_FD="$own_fd_1" PREFLIGHT_SLOT_N=1
+    export PREFLIGHT_SLOT_HOLDER="$$"
+    export PREFLIGHT_SLOT_LOCK="'"$pool_lock"'.slot1"
+    ./scripts/preflight.sh --only gofmt
+  ' 2>&1) )"
+s16d_rc=$?
+if grep -q PREMISE-FAILED <<<"$s16d_out"; then
+  bad "16d's premise failed: a fresh open of a held slot was NOT refused, so this check cannot attribute a run to inheritance — the pool does not actually exclude (output: [$s16d_out])"
+elif [ "$s16d_rc" -eq 0 ] && grep -qF "$s16_gofmt_label" <<<"$s16d_out" \
+     && grep -q 'ALREADY INSIDE the gate pool' <<<"$s16d_out"; then
+  ok "16d: a nested invocation that INHERITED a slot runs its gates instead of waiting on its own ancestor (rc=0, gate executed, announced as already inside the pool) — no self-deadlock"
+else
+  bad "16d: an inherited slot must run the gates, not queue (rc=$s16d_rc, output: [$(printf '%s' "$s16d_out" | grep -E 'slots:|gate \[gofmt\]|PREFLIGHT FAIL|PREMISE' | tr '\n' ' ')]"
+fi
+
+# 16e. THE BITE FOR 16b/16c: a copy whose pool size is 1 must be DETECTED as a
+#      1-slot pool. A guard that reads the cap but cannot see the cap being wrong
+#      is not a guard, and a 1-slot pool is exactly the shape a future "just make
+#      it a lock again" edit would produce. Driven on a COPY (never the live
+#      runner, which this gate runs on) under the same held-pool condition, and
+#      the count is read off the copy's own printed wait line rather than assumed.
+sed 's/^PREFLIGHT_SLOT_COUNT="\${PREFLIGHT_SLOT_COUNT:-2}"/PREFLIGHT_SLOT_COUNT="${PREFLIGHT_SLOT_COUNT:-1}"/' \
+  "$PREFLIGHT" > "$SB/scripts/preflight_slotmut.sh" 2>/dev/null
+if ! grep -qF 'PREFLIGHT_SLOT_COUNT="${PREFLIGHT_SLOT_COUNT:-1}"' "$SB/scripts/preflight_slotmut.sh"; then
+  bad "16e's mutation did not land (the default slot count is no longer the literal 2 this check rewrites) — the case would have reported a false green"
+else
+  pool_hold &
+  s16e_holder=$!
+  sleep 1
+  s16e_out="$( (cd "$LIVE_ROOT" && env -u PREFLIGHT_SLOT_COUNT \
+      -u PREFLIGHT_SLOT_FD -u PREFLIGHT_SLOT_HOLDER -u PREFLIGHT_SLOT_N -u PREFLIGHT_SLOT_LOCK \
+      PREFLIGHT_RESULT_DIR="$SB_STATE/pool-results" PREFLIGHT_RESULT_TTL=1 \
+      PREFLIGHT_LOCK_FILE="$pool_lock" PREFLIGHT_LOCK_WAIT=0 \
+      bash "$SB/scripts/preflight_slotmut.sh" --only gofmt 2>&1) )"
+  s16e_rc=$?
+  wait "$s16e_holder" 2>/dev/null
+  s16e_slots="$(sed -n 's/.*all \([0-9]*\) gate slot(s) busy.*/\1/p' <<<"$s16e_out" | sed -n '1p')"
+  if [ "$s16e_slots" = "1" ]; then
+    ok "16e BITES: a copy that defaults to a 1-slot pool reports \"all 1 gate slot(s) busy\" (rc=$s16e_rc), so checks 16b/16c read the cap from the script under test and a silent return to the single lock goes RED"
+  else
+    bad "16e does not bite: a copy defaulting to a 1-slot pool did not report a 1-slot pool (read [$s16e_slots], shipped default $default_count) — the cap is not read from the script under test, so a wrong cap would pass"
+  fi
+fi
+rm -f "$SB/scripts/preflight_slotmut.sh"
 
 # 15. PATH-AWARE SELECTION (--for-diff / --classify) — the narrowing must BITE,
 #     and it must be SAFE. These assertions are the reason the feature can be
@@ -1765,7 +2050,7 @@ fi
 # 23. THE HAPPY PATH, MEASURED RATHER THAN ASSERTED. With a record that vouches
 #     green for the WHOLE inventory, `--reuse-record` must (a) exit 0 without
 #     executing a single gate — acceptance #2 of the card: a lane about to gate an
-#     already-green tree does not queue behind the flock — (b) report the result as
+#     already-green tree does not queue for a pool slot — (b) report the result as
 #     REUSE and NOT as PASS, and (c) append to the reuse ledger, the same ledger
 #     scripts/preflight_reuse.sh --report sums for the card's "measured saving".
 #     A green that is not distinguished from a re-run, or a saving nobody can
@@ -1804,7 +2089,7 @@ if [ -n "$probe_tree" ]; then
   reused_secs=$(( fixture_green * 42 ))
   # THE STRONGEST ASSERTION AVAILABLE: `gate [` is the banner the runner prints
   # for every gate it EXECUTES. Its total absence proves acceptance #2 directly —
-  # no gate ran, so nothing queued for, or held, the host-wide flock.
+  # no gate ran, so nothing queued for, or held, a pool slot.
   #
   # The reuse arrives by the PRE-LOCK path (every gate of the inventory is vouched
   # for, so it is taken before `flock`), which is why the ledger line says
@@ -1994,17 +2279,24 @@ if [ -n "$probe_tree" ]; then
   fi
 fi
 
-# 28. A WHOLE-INVENTORY REUSE MUST NOT TAKE THE HOST LOCK — the runner's reason for
+# 28. A WHOLE-INVENTORY REUSE MUST NOT TAKE A GATE SLOT — the runner's reason for
 #     existing. Check 20 proves no GATE runs, but it runs under the self-test's
-#     PRIVATE lock ($PREFLIGHT_LOCK_FILE points into $SB_STATE), so it can never see
-#     whether the gate body had to WAIT. Measured on this host with a real record:
-#     the reuse sat in `flock` for the full lock wait (151s, killed) because the
-#     reuse decision was taken INSIDE the lock — re-gating nothing, but queueing
-#     behind whatever held it, which is exactly the cost the record removes.
+#     PRIVATE pool path ($PREFLIGHT_LOCK_FILE points into $SB_STATE), so it can
+#     never see whether the gate body had to WAIT. Measured on this host with a
+#     real record (under the single lock this replaces): the reuse sat in `flock`
+#     for the full lock wait (151s, killed) because the reuse decision was taken
+#     INSIDE the lock — re-gating nothing, but queueing behind whatever held it,
+#     which is exactly the cost the record removes.
 #
-#     This check holds the lock for real (a background flock on the SAME path the
-#     script would use) and requires the reuse to answer WITHOUT waiting. The lock
-#     is a private path, so the check is hermetic and never touches the host's gate.
+#     This check holds the pool for real (a background flock on the SAME slot path
+#     the script derives) and requires the reuse to answer WITHOUT waiting. The pool
+#     path is private, so the check is hermetic and never touches the host's gate.
+#
+#     THE ASSERTION READS THE RUNNER'S OWN ANNOUNCEMENT, not a wording of this
+#     file's: the pre-pool path prints "took NO slot and ran NO gate". The second
+#     leg — the run did NOT exit 74 (a slot wait-out) — is what makes the first one
+#     meaningful, since a runner that answered without the phrase would otherwise
+#     be read as a pass.
 if [ -n "$probe_tree" ]; then
   rec="$(gr_file "$probe_tree")"
   key="$(gr_read_field "$rec" key)"
@@ -2018,31 +2310,32 @@ if [ -n "$probe_tree" ]; then
     printf '  },\n  "runs": 1,\n  "verdict": "green",\n  "log": "/tmp/probe.log",\n  "finished_at": "%s"\n}\n' \
       "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   } > "$rec"
+  # Hold EVERY slot for the whole check, on descriptors this shell keeps: the pool
+  # is what the reuse must not need. `-w 5` on the first take so an unexpected
+  # failure to hold is visible rather than hanging the self-test.
   held_lock="$SB_STATE/held-gate.lock"
   : > "$held_lock"
-  # Hold it for the whole check. `-w 5` so an unexpected failure to take it is
-  # visible rather than hanging the self-test.
-  flock -w 5 "$held_lock" sleep 60 &
-  holder=$!
-  sleep 1
-  if flock -n "$held_lock" true 2>/dev/null; then
-    bad "check 28 could not hold its lock ($held_lock) — the no-wait property cannot be measured"
+  exec {h1}>>"$held_lock.slot1"
+  exec {h2}>>"$held_lock.slot2"
+  flock -w 5 -o "$h1" && flock -w 5 -o "$h2"
+  if flock -n "$held_lock.slot1" true 2>/dev/null; then
+    bad "check 28 could not hold the pool ($held_lock.slot1) — the no-wait property cannot be measured"
   else
-    # A wait of 0 makes "did it queue?" binary: if the reuse still reaches the
-    # lock it exits 75 instead of answering, so the check cannot hang.
+    # A wait of 0 makes "did it queue?" binary: if the reuse still reaches the pool
+    # it exits 74 instead of answering, so the check cannot hang.
     t0=$(date +%s)
     r2=$(PREFLIGHT_KEY_EXTRA=probe15 PREFLIGHT_LOCK_FILE="$held_lock" PREFLIGHT_LOCK_WAIT=0 \
          ./scripts/preflight.sh --reuse-record 2>&1)
     r2_rc=$?
     t1=$(date +%s)
-    if [ "$r2_rc" -eq 0 ] && grep -q 'took NO lock' <<<"$r2" && ! grep -q 'could not acquire' <<<"$r2"; then
-      ok "a whole-inventory reuse answers WITHOUT taking the gate lock (rc=0 in $((t1-t0))s while the lock was held)"
+    if [ "$r2_rc" -eq 0 ] && grep -q 'took NO slot' <<<"$r2" && ! grep -q 'could not get a gate slot' <<<"$r2"; then
+      ok "a whole-inventory reuse answers WITHOUT taking a gate slot (rc=0 in $((t1-t0))s while every slot was held)"
     else
-      bad "a whole-inventory reuse must not queue on the gate lock — rc=$r2_rc in $((t1-t0))s, output=[$(printf '%s' "$r2" | grep -E 'lock|could not acquire|REUSED' | tr '\n' ' ')]"
+      bad "a whole-inventory reuse must not wait for a gate slot — rc=$r2_rc in $((t1-t0))s, output=[$(printf '%s' "$r2" | grep -E 'slots:|could not get a gate slot|REUSED' | tr '\n' ' ')]"
     fi
   fi
-  kill "$holder" 2>/dev/null || true
-  wait "$holder" 2>/dev/null || true
+  exec {h1}>&-
+  exec {h2}>&-
 fi
 
 # 29. A SUBSET SELECTION MUST NOT BORROW A WHOLE-INVENTORY REUSE. With a green
@@ -2382,7 +2675,7 @@ fi
 #     (${JOMFORM_ENV:-$HOME/.config/jomform/test-env.sh}) exports 127.0.0.1, while
 #     a lane that exports the URL itself spells it localhost. The
 #     refusal is SILENT about its cause and costs the WHOLE gate: the lane re-queues
-#     behind the host-wide flock — a waiter has been measured at 50-86 minutes — to
+#     behind the host-wide slot pool — a waiter has been measured at 50-86 minutes — to
 #     re-run fifteen gates that had already passed on those exact bytes.
 #
 #     Note the two shapes this check deliberately does NOT key on: `localhost` and

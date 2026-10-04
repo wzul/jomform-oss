@@ -189,15 +189,21 @@
 #   COPY source still fails `failed to compute cache key` with a warm cache —
 #   measured).
 #
-# CONCURRENCY: `go test ./...` gives each test PROCESS its own scratch schema,
-#   named `test_<pkg>_p<pid>` — per-package so parallel packages do not collide,
-#   and per-pid so a CONCURRENT full run from another checkout cannot drop this
-#   one's schema mid-suite. Every checkout points at the same test database, so a
-#   per-package-only name let two lanes gating at once destroy each other's data
-#   and fail in code neither had touched (`relation "workspaces" does not exist`,
-#   SQLSTATE 42P01). If a package still fails here but passes alone, the first
-#   thing to suspect is a shared RESOURCE other than the schema: the test Valkey
-#   (login-breaker counters). Re-run the package by itself to tell them apart.
+# CONCURRENCY: a bounded host-wide POOL of gate slots, not a single lock (card
+#   t_79c0964a). `go test ./...` gives each test PROCESS its own scratch schema
+#   (`test_<pkg>_p<pid>`) and its own Valkey key namespace (`jftest:p<pid>:`, on a
+#   pid-derived DB) — both were built so that "several worktrees gate at once"
+#   (the per-package-only schema name pulled tables out from under a peer:
+#   `relation "workspaces" does not exist`, SQLSTATE 42P01). Nothing a gate
+#   touches is shared, so a single host-wide lock no longer protected a resource:
+#   it serialised LANES, and a second worker waited up to PREFLIGHT_LOCK_WAIT for
+#   a gate it could have run in parallel (measured: a card held that lock 4h45m
+#   for 4m42s of real CPU, 99 minutes of it `sleep`). The pool is
+#   PREFLIGHT_SLOT_COUNT slots (default 2 — the board's own per-profile cap), so
+#   two lanes gate in parallel while the host's CPU stays bounded. The one
+#   contention symptom left is load, and the api `test` gate carries an explicit
+#   30m `-timeout` CEILING so a loaded host has a bound it can report instead of a
+#   hang to confuse it with. See the SLOT POOL section below the selection.
 #
 # ESCAPE HATCH: there is none here by design. `deploy/build-and-ship.sh
 #   --skip-tests` bypasses this entire script and says so loudly; that flag is
@@ -253,13 +259,14 @@ QUICK=0
 # (empty) on every other path — an unset variable under `set -u` aborts the run
 # before the first gate, which is how this was found.
 #
-# ${VAR:-} PRESERVES AN INHERITED VALUE, and that is load-bearing. The concurrency
-# lock re-invokes this script via flock, so this prologue runs a SECOND time in the
-# child while the selection block below skips recomputation (the exported
-# `_PREFLIGHT_SEL` says it was already done). A plain `SEL_DIFF=""` therefore wiped
-# the parent's narrowing and the child ran EVERY gate — a `--for-diff` run that
-# silently stopped being narrowed. Measured, on a change under GATE-INVENTORY.md:
-# the parent selected 7 gates and the child ran all 14.
+# ${VAR:-} PRESERVES AN INHERITED VALUE, and that is load-bearing. The selection
+# handoff is carried in the environment to a child (see the `--for-diff` branch
+# below), so this prologue runs a SECOND time in that child while the selection
+# block below skips recomputation (the exported `_PREFLIGHT_SEL` says it was
+# already done). A plain `SEL_DIFF=""` therefore wiped the parent's narrowing and
+# the child ran EVERY gate — a `--for-diff` run that silently stopped being
+# narrowed. Measured, on a change under GATE-INVENTORY.md: the parent selected 7
+# gates and the child ran all 14.
 SEL_DIFF=""
 # An EXPLICIT --only/--skip is this run's own instruction and beats a selection
 # inherited from an enclosing --for-diff/--explain-diff run, which exists to answer
@@ -341,7 +348,7 @@ while [ $# -gt 0 ]; do
     # record could not vouch for. It does NOT widen what may be skipped: every
     # gate named here must still hold a recorded `pass` for THIS tree under THIS
     # environment fingerprint, or the run REFUSES rather than reporting a green
-    # it did not earn. See the reuse block below the lock.
+    # it did not earn. See the reuse block below the slot pool.
     --quick)          QUICK=1 ;;
     --reuse-record) REUSE_RECORD=1 ;;
     # --log <path>: where THIS run's output is being captured. Recorded in the
@@ -1201,7 +1208,7 @@ fi
 # ---- PATH-AWARE SELECTION (--for-diff / --explain-diff) --------------------
 #
 # Served here (the machinery is only defined at this point in the file) and before
-# the lock, so it costs nothing and never queues.
+# the slot pool, so it costs nothing and never queues.
 if [ "$GATE_DEPS" = 1 ]; then
   # The cannot-narrow verdict is part of the table, so the table still has to be
   # built — but for a gate that can narrow, the DOCUMENTED area is what is printed.
@@ -1293,65 +1300,93 @@ if [ ${#SKIPPED[@]} -eq ${#GATE_NAMES[@]} ]; then
   die "every gate was skipped (--only/--skip selected nothing to run) — that is an empty run, not a passing one. Omit --only/--skip to run the full gate."
 fi
 
-# ---- CONCURRENCY LOCK: serialise gate runs across worktrees ----------------
+# ---- SLOT POOL: bound how many gate runs this HOST does at once -------------
 #
-# LANE RULE 4 says "never parallelise gates": two concurrent `preflight.sh` runs
-# share one scratch schema and one scratch valkey index, so they corrupt each
-# other's fixtures and produce FALSE failures (a `go test` red that passes in
-# isolation, or a 10m `-test.timeout` blown by CPU starvation). That rule was
-# advisory — a worker could only obey it by remembering to, and the lanes
-# genuinely cannot see each other. This lock makes it structural.
+# A POOL, NOT A LOCK. The single host-wide lock this replaces said two concurrent
+# `preflight.sh` runs "share one scratch schema and one scratch valkey index, so
+# they corrupt each other's fixtures and produce FALSE failures". THAT PREMISE IS
+# NO LONGER TRUE, and the lock was therefore no longer protecting anything — it
+# was only serialising LANES:
+#
+#   * the scratch schema is `test_<pkg>_p<pid>` (api/internal/testdb/testdb.go,
+#     pkgName) — per process, not per package, and its own package doc says the
+#     pid is there so that "two concurrent full suites — the normal state of this
+#     board, where several worktrees gate at once — both DROP and re-create
+#     `test_<pkg>` … whichever re-creates it second pulls the tables out from
+#     under the other" cannot happen. A schema left by a dead process is pruned
+#     on the next Open, and only when no other connection exists;
+#   * the Valkey namespace is `jftest:p<pid>:` on a pid-derived DB number
+#     (api/internal/testdb/valkey.go, Prefix/Keyspace), with per-test keys under
+#     it — no fixture in the repo FlushDBs anything any more.
+#
+# So what is left is a HOST CAPACITY question, and the answer to a capacity
+# question is a CAPPED POOL, not a mutex: two lanes gate in parallel and the
+# machine still has a bounded number of them. PREFLIGHT_SLOT_COUNT defaults to 2,
+# which is the board's own per-profile dispatch cap — the host is sized for that,
+# and raising it is a capacity decision rather than a correctness one.
+#
+# WHAT WAS MEASURED (card t_79c0964a, 2026-10-04): two jf-dev cards ran
+# concurrently and did NOT overlap, because they contended for one lock.
+# t_bd79c727 ran 4h45m with 4m42s of real CPU (2.8%), 12 commands at >=250s and
+# 99 minutes of `sleep`; t_7b2ddf56's log carried `lock: another gate is running
+# — waiting up to 1800s`. A waiter on that lock has been measured at 50-86
+# minutes.
 #
 # WHY A FILE LOCK AND NOT A GATE CHANGE: the gates are correct as written; the
-# defect is two of them running at once. A lock needs no edit to any gate, and
-# it costs nothing when the host is idle.
+# old defect was two of them running at once WITHOUT A BOUND. A slot pool needs no
+# edit to any gate, and it costs nothing when the host is idle or has a free slot.
 #
-# WHY BLOCK INSTEAD OF FAIL: refusing to run would turn an idle-host problem
-# into a red gate for whoever lost the race — the false-red shape this fixes.
-# Waiting is correct; the gate still runs, on the same tree, with the machine
-# to itself.
+# WHY WAIT INSTEAD OF FAIL: refusing would turn an idle-host problem into a red
+# gate for whoever found all slots busy — the false-red shape this exists to
+# avoid. Waiting is correct: the gate runs, on the same tree, once a slot frees.
 #
-# SCOPE: serialises the GATE BODY only. `--list`, argument validation and the
-# banner stay outside, so a queued run can always be inspected and a typo still
-# fails immediately rather than after a wait.
+# SCOPE: bounds the GATE BODY only. `--list`, argument validation and the banner
+# stay outside, so a queued run can still be inspected and a typo still fails
+# immediately rather than after a wait.
 #
-# LOCK PATH: `/var/lock` is tmpfs on Linux and is wiped on reboot. That is
-# deliberate — a lock file left behind by a crash must never block future runs,
-# and flock releases automatically when the holder dies, so there is nothing to
-# clean up either way. `PREFLIGHT_LOCK_WAIT=0` turns the wait off explicitly if
-# a caller ever needs to fail fast instead; it is not the default because
-# failing fast is exactly what produces a false red.
-PREFLIGHT_LOCK_FILE="${PREFLIGHT_LOCK_FILE:-/var/lock/jomform-preflight-gate.lock}"
-PREFLIGHT_LOCK_WAIT="${PREFLIGHT_LOCK_WAIT:-1800}"
-
-# ---- CONCURRENCY LOCK (taken first; the banner below prints once, in the child) ----
+# SLOT FILES: one file per slot, `<lock path>.slot<N>`. `/var/lock` is tmpfs on
+# Linux and is wiped on reboot. That is deliberate — a slot file left behind by a
+# crash must never block future runs, and flock releases automatically when the
+# holder dies, so there is nothing to clean up either way.
 #
-# The lock is taken by re-executing this same script under `flock`. Doing it before
-# the banner and before any gate keeps the gates untouched, prints the banner exactly
-# once (only the child gets that far), and reports the wait before it happens rather
-# than leaving it to be discovered as a hang later.
+# ONE PROCESS MAY HOLD ONE SLOT. Two shapes could take a second, and both are
+# handled explicitly rather than left to chance:
+#   * `PREFLIGHT_LOCK_FILE` naming a path whose basename is itself a slot file (a
+#     caller who read the slot directory and copied a name out of it) — refused
+#     outright by the basename test below, which names PREFLIGHT_SLOT_COUNT as the
+#     supported knob. Such a run would otherwise WAIT on the one slot it named;
+#   * a nested `./scripts/preflight.sh` under a run that already holds one (the
+#     `selftest` gate does exactly this, with its own private lock path) — the
+#     INHERITED slot descriptor plus the recorded holder pid are the signature, and
+#     the nested run says "already inside the pool" and runs its gates rather than
+#     waiting for a slot its own ancestor is holding. It CANNOT simply re-take the
+#     slot: flock refusal is open-file-description scoped, so an inherited fd is
+#     not a lock and a fresh open by any process is refused (measured).
+# Both are stated here because the previous design had a real self-deadlock
+# (card t_0094bf00: a lane's queue grew 3 -> 9 runs with no gate executing) and
+# the fix must not be re-introduced from the other side.
 #
-# THE ONE THING THAT MUST HAPPEN BEFORE THE LOCK IS A WHOLE-INVENTORY REUSE.
+# THE ONE THING THAT MUST HAPPEN BEFORE THE POOL IS A WHOLE-INVENTORY REUSE.
 # A full-green record IS the verdict for these bytes, so re-reading it needs no
 # host time at all — and the card's acceptance is explicit that this path must not
 # queue: a lane about to re-gate an already-green tree is the 39.4% being removed,
-# and waiting on the flock is precisely the cost reuse exists to avoid. So the
-# early exit is taken HERE, before `flock`, and it holds only inside a
+# and waiting on the gate is precisely the cost reuse exists to avoid. So the
+# early exit is taken HERE, before any slot, and it holds only inside a
 # whole-inventory reuse that `gr_reusable` has vouched for (same tree, same
 # fingerprint, in TTL, every gate an observed pass). Everything else — a partial
-# record, a red one, no record at all — falls through to the lock and runs as
-# before. See the reuse block below the lock for the per-gate path.
+# record, a red one, no record at all — falls through to the pool and runs as
+# before. See the reuse block below the pool for the per-gate path.
 if [ "${_PREFLIGHT_LOCKED:-}" != "1" ] && [ "$REUSE_RECORD" = 1 ]; then
   _pre_lib="${PREFLIGHT_RESULT_LIB:-$REPO_ROOT/scripts/gate_result.sh}"
   if [ -r "$_pre_lib" ] && [ -r "$REPO_ROOT/scripts/preflight_reuse.sh" ]; then
     # The consumer is the SINGLE source of truth for the decision, so the
-    # pre-lock path cannot drift from the post-lock one. It is asked here only
+    # pre-pool path cannot drift from the in-pool one. It is asked here only
     # when reuse was explicitly requested; otherwise the runner never sources it.
     #
     # NO test-env.sh SOURCING HERE, deliberately. The fingerprint contains
     # JOMFORM_TEST_DATABASE_URL, so sourcing a file that the CALLER did not source
     # would compute a different key from the one the consumer just computed for the
-    # same tree — the pre-lock path would then refuse a record the consumer had
+    # same tree — the pre-pool path would then refuse a record the consumer had
     # just vouched for, and the two paths would disagree about what is reusable.
     # Both read the caller's environment and nothing else.
     # shellcheck source=scripts/gate_result.sh
@@ -1371,7 +1406,7 @@ if [ "${_PREFLIGHT_LOCKED:-}" != "1" ] && [ "$REUSE_RECORD" = 1 ]; then
         if [ -n "$ONLY" ]; then PREFLIGHT_ONLY="$ONLY"; fi
         if . "$REPO_ROOT/scripts/preflight_reuse.sh" --source 2>/dev/null; then
           if preflight_reuse_decision && [ "$PREFLIGHT_DECISION" = "full" ]; then
-            # THE NODE ADVISORY, printed HERE for the pre-lock path. The consumer
+            # THE NODE ADVISORY, printed HERE for the pre-pool path. The consumer
             # captures gr_reusable's output into a variable to build its EVIDENCE
             # line, so the note is not visible on that route — and this is the route
             # a whole-inventory reuse takes. A differing node is a note, never a
@@ -1385,7 +1420,7 @@ if [ "${_PREFLIGHT_LOCKED:-}" != "1" ] && [ "$REUSE_RECORD" = 1 ]; then
             echo "  reuse:  FULL GREEN record for tree $(gr_short_sha "$_pre_tree") — every gate in this run's selection is already green on THESE bytes"
             echo "          ($_pre_file, finished $(gr_read_field "$_pre_file" finished_at))"
             echo "          verdict: REUSED (green), remembered ${PREFLIGHT_REMEMBERED_SECONDS}s from $(gr_read_field "$_pre_file" log)"
-            echo "          took NO lock and ran NO gate — nothing was queued behind another run."
+            echo "          took NO slot and ran NO gate — nothing was queued behind another run."
             echo "          the record is NOT re-stamped: it still describes the run that OBSERVED it."
             echo "--------------------------------------------------------------"
             echo "preflight summary: 0 passed, 0 failed, 0 skipped in 0s"
@@ -1399,100 +1434,223 @@ if [ "${_PREFLIGHT_LOCKED:-}" != "1" ] && [ "$REUSE_RECORD" = 1 ]; then
   fi
 fi
 
-if [ "${_PREFLIGHT_LOCKED:-}" != "1" ]; then
+# ---- SLOT POOL: take a slot, then run the gate body ------------------------
+#
+# A POOL OF `<path>.slot1 .. .slotN`, not one lock file. flock is OPEN-FILE-
+# DESCRIPTION scoped, so two processes that open the same slot file are mutually
+# exclusive — and a process may NOT re-take a lock it holds through a NEW open
+# (measured). The nested case is therefore handled by INHERITANCE (the slot
+# descriptor and its holder's pid travel in the environment), not by re-taking,
+# and this gate's own self-test measures both directions rather than assuming
+# either.
+#
+# WAIT is how long to wait for a slot. Not a correctness knob: a run that finds
+# every slot busy waits rather than failing, because failing fast is the false-red
+# shape this exists to avoid.
+PREFLIGHT_LOCK_WAIT="${PREFLIGHT_LOCK_WAIT:-1800}"
+# COUNT is how many gate runs this host does at once. 2 is the board's own
+# per-profile dispatch cap and is what the host is sized for; raising it is a
+# capacity decision, not a correctness one, so it is a knob and not a constant.
+PREFLIGHT_SLOT_COUNT="${PREFLIGHT_SLOT_COUNT:-2}"
+# PREFLIGHT_SLOT_FD is the descriptor this process holds its slot on ("" = none).
+# A NESTED invocation inherits it, and that is how it can tell "already inside the
+# pool" from "must take a slot" — flock is OPEN-FILE-DESCRIPTION scoped, so a
+# second open of the same slot file by ANY process (the holder's own descendant
+# included) is REFUSED; there is no way to "re-take" one's own lock through a
+# fresh open. PREFLIGHT_SLOT_HOLDER names the process that took it, which is what
+# makes the inheritance check precise rather than a bare "some marker is set".
+PREFLIGHT_SLOT_FD="${PREFLIGHT_SLOT_FD:-}"
+PREFLIGHT_SLOT_HOLDER="${PREFLIGHT_SLOT_HOLDER:-}"
+PREFLIGHT_SLOT_LOCK="${PREFLIGHT_SLOT_LOCK:-}"
+PREFLIGHT_LOCK_FILE="${PREFLIGHT_LOCK_FILE:-/var/lock/jomform-preflight-gate.lock}"
+
+# The slot file for slot $1. `N` is appended so the PATH itself changes per slot —
+# the take below relies on a FRESH open of a DIFFERENT file per candidate.
+preflight_slot_path() { printf '%s.slot%s' "$PREFLIGHT_LOCK_FILE" "$1"; }
+
+# PREFLIGHT_LOCK_FILE must NOT name a slot file. `*.slot<N>` is a name this script
+# derives, so a caller who copied one out of the slot directory has misunderstood
+# the knob — and it is not harmless: `flock -w <path> -c true` on a slot file
+# BLOCKS while that slot is held, so such a run could never start until the slot
+# it named was free, and the refusal below is the difference between a clear error
+# and an unexplainable hang. The supported knob is PREFLIGHT_SLOT_COUNT=<n>.
+case "${PREFLIGHT_LOCK_FILE##*/}" in
+  *.slot[0-9]*)
+    echo "preflight: PREFLIGHT_LOCK_FILE names a SLOT file (${PREFLIGHT_LOCK_FILE##*/})." >&2
+    echo "preflight: slots are DERIVED from that path, so this run would wait on one specific slot" >&2
+    echo "preflight: (it can never start while that slot is held). Point PREFLIGHT_LOCK_FILE at the" >&2
+    echo "preflight: base path and raise PREFLIGHT_SLOT_COUNT=<n> if you need more slots." >&2
+    exit 1
+    ;;
+esac
+
+# PREFLIGHT_SLOT_ALREADY_HELD — is this process already inside the pool because it
+# INHERITED a slot from an ancestor? That is the self-deadlock case: the ancestor
+# is waiting for this child, and this child would wait for a slot the ancestor is
+# holding. The signature is the marker AND the named holder being one of OUR OWN
+# ANCESTORS — a marker alone is not enough, because flock is open-file-description
+# scoped: re-opening a slot file this process already holds is REFUSED (measured),
+# so a marker set by any other route would make a run believe it was inside the
+# pool when the gate body was guarding nothing.
+#
+# WHAT THIS IS NOT: the earlier design's `fuser` scan, which could not tell an
+# outer `flock` wrapper from a peer and cost the whole queue when it guessed wrong
+# (card t_0094bf00). A peer never appears in this process's own process chain, so
+# the ancestor walk is exact rather than a heuristic.
+preflight_slot_held_by_ancestor() {
+  [ -n "${PREFLIGHT_SLOT_HOLDER:-}" ] || return 1
+  [ -n "${PREFLIGHT_SLOT_FD:-}" ] || return 1
+  local p=$$ anc=" "
+  while [ -n "$p" ] && [ "$p" -gt 1 ] 2>/dev/null; do
+    anc="$anc$p "
+    p="$(sed -n 's/^[0-9]* ([^)]*) [A-Z] \([0-9]*\) .*/\1/p' "/proc/$p/stat" 2>/dev/null)"
+    [ -n "$p" ] || break
+  done
+  case "$anc" in *" ${PREFLIGHT_SLOT_HOLDER} "*) return 0 ;; esac
+  return 1
+}
+
+if [ "${_PREFLIGHT_LOCKED:-}" != "1" ] && preflight_slot_held_by_ancestor; then
+  # ALREADY INSIDE THE POOL — a nested invocation that inherited an ancestor's
+  # slot. Running the gates here is correct (they are inside the slot that ancestor
+  # holds); taking a second slot would wait for a slot the ancestor's own run is
+  # holding, forever. The `selftest` gate is itself a nested invocation, so this is
+  # the path a real full run takes.
+  echo "  slots:  this invocation is ALREADY INSIDE the gate pool — slot ${PREFLIGHT_SLOT_N:-?} is held"
+  echo "          by ancestor pid ${PREFLIGHT_SLOT_HOLDER} (${PREFLIGHT_SLOT_LOCK:-?}), so the gates run now"
+  echo "          under that slot. Do NOT wrap this script in a lock of its own; raise the cap with"
+  echo "          PREFLIGHT_SLOT_COUNT=<n>."
+elif [ "${_PREFLIGHT_LOCKED:-}" != "1" ]; then
   # No `|| true` anywhere below: this repo's own `selftest` gate forbids it in an active
   # line, because a swallowed failure is how a gate stops being a gate. A missing lock
-  # directory is a real problem (the lock would silently not exist), so it FAILS loudly.
+  # directory is a real problem (no slot could be created), so it FAILS loudly.
   if [ ! -d "$(dirname "$PREFLIGHT_LOCK_FILE")" ]; then
     echo "preflight: lock directory $(dirname "$PREFLIGHT_LOCK_FILE") does not exist." >&2
     echo "preflight: set PREFLIGHT_LOCK_FILE to a path inside an existing directory (default: /var/lock)." >&2
     exit 1
   fi
-  if command -v flock >/dev/null 2>&1; then
-    # `_PREFLIGHT_LOCKED=1` is exported so the re-invoked copy runs the gates
-    # instead of trying to take the lock again.
+  if ! command -v flock >/dev/null 2>&1; then
+    echo "  slots:  flock not found — running WITHOUT a host cap (concurrent gates may FALSE-fail)"
+  else
+    # NO `2>/dev/null` ON A REDIRECTION-ONLY `exec` ANYWHERE BELOW. A redirection-
+    # only `exec` applies its redirections to the SHELL ITSELF, so `exec {fd}>>…
+    # 2>/dev/null` would point this script's stderr at /dev/null for the rest of
+    # the run — every diagnostic from there on, `die` included, would vanish while
+    # the exit code still changed. (Measured while writing this: it made 21 of the
+    # self-test's checks read "rc=1, no output".) An open failure here is a genuine
+    # host problem — the directory was just checked — so bash's own message is the
+    # right thing to surface rather than to swallow.
     #
-    # NOT `exec`: exec would replace this process, so the timeout diagnostic
-    # below could never run. Running flock as a child keeps the exit code
-    # reachable and still passes the child's status straight through.
+    # `-o` on the flock: this process has NO command to run under the lock, and
+    # without it flock would run `true` and release the lock when that exited.
+    # `-o` closes the descriptor before running the (empty) command, so the lock
+    # lives on the fd THIS shell keeps open.
     #
-    # `-E 75` gives a timeout its own code so a wait-out is distinguishable from
-    # a gate failure — a caller must not read "could not serialise" as "the code
-    # is broken".
-    export _PREFLIGHT_LOCKED=1
-    # SELF-DEADLOCK DETECTION (card t_0094bf00). `flock` prints nothing that
-    # distinguishes "a peer lane holds the lock" from "an OUTER flock wrapper of
-    # this same invocation holds it" — and the second can never succeed: the
-    # wrapper holds the file for its child's whole lifetime, so the child's flock
-    # waits out PREFLIGHT_LOCK_WAIT (default 1800s) while every PEER queues behind
-    # the wrapper. Measured: a lane's queue grew 3 → 9 runs with no gate executing.
-    #
-    # When the holder is our own ancestor, the serialisation the caller wanted is
-    # ALREADY IN EFFECT — the wrapper holds this exact file — so the right answer is
-    # to run the gates (they are guarded by that holder, and `_PREFLIGHT_LOCKED=1`
-    # above keeps a grandchild from trying to lock again), not to wait out a wait
-    # that cannot end. `fuser` names the holders; a holder that is one of our own
-    # ancestors is the signature. Without `fuser` the old wait behaviour stands.
-    _preflight_lock_held_by_ancestor() {
-      command -v fuser >/dev/null 2>&1 || return 1
-      local holders; holders="$(fuser "$PREFLIGHT_LOCK_FILE" 2>/dev/null)" || return 1
-      [ -n "$holders" ] || return 1
-      local p=$$ anc=" " h
-      while [ -n "$p" ] && [ "$p" -gt 1 ] 2>/dev/null; do
-        anc="$anc$p "
-        p="$(sed -n 's/^[0-9]* ([^)]*) [A-Z] \([0-9]*\) .*/\1/p' "/proc/$p/stat" 2>/dev/null)"
-        [ -n "$p" ] || break
-      done
-      for h in $holders; do
-        case "$anc" in *" $h "*) return 0 ;; esac
+    # A CANDIDATE IS TRIED ON AN INDEPENDENTLY-OPENED DESCRIPTOR, one per slot.
+    # Two processes that open the same file are mutually exclusive; the price is
+    # that a process may NOT re-take its own lock through a new open, which is why
+    # the nested case above is handled by the inheritance check rather than here.
+    preflight_take_slot() {  # sets PREFLIGHT_SLOT_FD / PREFLIGHT_SLOT_N, 1 if none free
+      local n fd
+      for n in $(seq 1 "$PREFLIGHT_SLOT_COUNT"); do
+        fd=""
+        if exec {fd}>>"$(preflight_slot_path "$n")" && flock -o -n "$fd" 2>/dev/null; then
+          PREFLIGHT_SLOT_FD="$fd"
+          PREFLIGHT_SLOT_N="$n"
+          return 0
+        fi
+        if [ -n "$fd" ]; then exec {fd}>&-; fi
       done
       return 1
     }
-    if ! flock -n "$PREFLIGHT_LOCK_FILE" true 2>/dev/null; then
-      if _preflight_lock_held_by_ancestor; then
-        # Already serialised by our OWN wrapper: the gates below are guarded by that
-        # holder, so run them now instead of waiting for a lock that can never free
-        # while the holder waits for us. `_PREFLIGHT_LOCKED=1` (set above) stops a
-        # grandchild from trying to lock again.
-        echo "  lock:   this invocation is ALREADY serialised — the lock is held by one of"
-        echo "          our own ancestor processes (an outer \`flock $PREFLIGHT_LOCK_FILE …\`"
-        echo "          wrapper), so the gates run now under that holder. Do NOT wrap this"
-        echo "          script in flock on its own lock file; raise the wait instead:"
-        echo "          PREFLIGHT_LOCK_WAIT=<seconds>."
-        PREFLIGHT_LOCKED_BY_ANCESTOR=1
-      else
-        echo "  lock:   another gate is running — waiting up to ${PREFLIGHT_LOCK_WAIT}s"
-        echo "          (two concurrent gates share one scratch schema and produce FALSE failures)"
-      fi
-    fi
-    # Pass the ORIGINAL argv, not "$@" — the parsing loop above has already shifted it
-    # away, and an empty argv silently turns `--only <gate>` into a full-gate run.
-    if [ "${PREFLIGHT_LOCKED_BY_ANCESTOR:-0}" = 1 ]; then
-      # Already serialised by our own wrapper (see above): run the gates in-process.
-      # `_PREFLIGHT_LOCKED=1` is exported, so this script's own re-entry guard holds
-      # and nothing below tries to take the lock a second time.
-      "$0" "${PREFLIGHT_ARGV[@]}"
-      _lock_rc=$?
+    if preflight_take_slot; then
+      # The slot is held for the whole gate body, and `_PREFLIGHT_LOCKED=1` is
+      # exported so this script's own re-entry guard holds — nothing below tries to
+      # take a second slot. HOLDER names this process, which is the marker a nested
+      # invocation checks against its own ancestor chain.
+      PREFLIGHT_SLOT_HOLDER="$$"
+      PREFLIGHT_SLOT_LOCK="$(preflight_slot_path "$PREFLIGHT_SLOT_N")"
+      export PREFLIGHT_SLOT_FD PREFLIGHT_SLOT_N PREFLIGHT_SLOT_HOLDER PREFLIGHT_SLOT_LOCK
+      export _PREFLIGHT_LOCKED=1
     else
-      flock -w "$PREFLIGHT_LOCK_WAIT" -E 75 "$PREFLIGHT_LOCK_FILE" "$0" "${PREFLIGHT_ARGV[@]}"
-      _lock_rc=$?
+      # The pool is full. Say what is full, then wait. `-E 74` gives a wait-out its
+      # own code so "could not get a slot" is distinguishable from "the code is
+      # broken" — a caller must not read one as the other.
+      echo "  slots:  all ${PREFLIGHT_SLOT_COUNT} gate slot(s) busy — waiting up to ${PREFLIGHT_LOCK_WAIT}s"
+      echo "          (bound: this host runs ${PREFLIGHT_SLOT_COUNT} gates at once; the scratch schema and"
+      echo "          the valkey namespace are per-process, so waiting here is a CPU choice, not a"
+      echo "          correctness one)"
+      _slot_deadline=$(( $(date +%s) + PREFLIGHT_LOCK_WAIT ))
+      # THE WAIT MUST WATCH EVERY CANDIDATE, NOT ONE PATH (card t_1c59f9f5).
+      # `flock -w … -c true <one path>` is a wait on THAT PATH; it says nothing
+      # about the rest of the pool. The pool's wait used to be exactly that — one
+      # blocking `flock` on slot 1 — so a run that found every slot busy proceeded
+      # only when SLOT 1 freed, and exited 74 "could not get a gate slot …
+      # NOTHING was built or tested" while another slot had been free the whole
+      # time. Measured on the pre-fix head: hold slot1+slot2, free slot2 after 2s
+      # and keep slot1 held, run with PREFLIGHT_LOCK_WAIT=8 — three runs, rc=74
+      # each, with the host half empty. That is the false-red shape this pool
+      # exists to avoid (see WHY WAIT INSTEAD OF FAIL above), and it widens with
+      # PREFLIGHT_SLOT_COUNT, which the header advertises as a knob.
+      #
+      # The loop below waits the way the TAKE decides: `preflight_take_slot`
+      # re-scans EVERY candidate from slot 1 on each call, so the wait is a
+      # bounded poll of each candidate followed by a take, and it cannot be blind
+      # to a free slot the take would accept. A bounded (not `-n`) wait is still a
+      # real wait — it returns the moment that candidate frees — so this is a
+      # watch on the pool, not a sleep loop; the `-c true` lock dies with its
+      # command, so polling never KEEPS a slot, and the take is the only thing
+      # that holds one.
+      #
+      # 74 IS DECIDED BY THE DEADLINE, NOT BY A CANDIDATE. A single candidate
+      # timing out is the normal tick of the poll; only the deadline running out
+      # means "the host is at cap", which is the one reading the header documents
+      # 74 to carry. So 74 is unreachable while ANY candidate is free, which is
+      # the property the pool claims.
+      _slot_poll=1
+      _slot_waiting=1
+      while [ "$_slot_waiting" = 1 ]; do
+        _slot_left=$(( _slot_deadline - $(date +%s) ))
+        if [ "$_slot_left" -le 0 ]; then
+          # Last chance: a NON-BLOCKING take before declaring the wait-out, so a
+          # slot that freed between the previous tick and the deadline is still
+          # accepted and 74 stays reserved for a host that really is at cap.
+          if preflight_take_slot; then _slot_waiting=0; break; fi
+          echo "preflight: could not get a gate slot within ${PREFLIGHT_LOCK_WAIT}s" >&2
+          echo "preflight: NOTHING was built or tested. Re-run once a gate finishes, raise the wait with" >&2
+          echo "preflight: PREFLIGHT_LOCK_WAIT=<seconds>, or raise the pool with PREFLIGHT_SLOT_COUNT=<n>." >&2
+          echo "preflight: a slot is released automatically when its holder exits, including on a crash." >&2
+          exit 74
+        fi
+        if preflight_take_slot; then _slot_waiting=0; break; fi
+        # Nothing free yet. Block, boundedly, on EACH candidate in turn: whichever
+        # frees first ends its own wait immediately, and the take at the top of the
+        # next pass accepts it. The step is capped by the time left so the deadline
+        # is never overshot by a whole poll interval.
+        _slot_step="$_slot_poll"
+        [ "$_slot_step" -le "$_slot_left" ] || _slot_step="$_slot_left"
+        for _slot_n in $(seq 1 "$PREFLIGHT_SLOT_COUNT"); do
+          # A held candidate ticking out its bound is EXPECTED here — that is the
+          # poll, not a failure — so the status is deliberately not inspected: the
+          # take on the next line is what decides whether a slot was really
+          # obtained. A bare failing command cannot abort this run (there is no
+          # `set -e` here), and writing it as `|| true` would trip this repo's own
+          # `selftest` check 10, which is exactly the shape that hides a gate.
+          flock -w "$_slot_step" -E 74 "$(preflight_slot_path "$_slot_n")" -c true
+          if preflight_take_slot; then _slot_waiting=0; break; fi
+        done
+      done
+      PREFLIGHT_SLOT_HOLDER="$$"
+      PREFLIGHT_SLOT_LOCK="$(preflight_slot_path "$PREFLIGHT_SLOT_N")"
+      export PREFLIGHT_SLOT_FD PREFLIGHT_SLOT_N PREFLIGHT_SLOT_HOLDER PREFLIGHT_SLOT_LOCK
+      export _PREFLIGHT_LOCKED=1
     fi
-    if [ "$_lock_rc" -eq 75 ]; then
-      echo "preflight: could not acquire the gate lock at $PREFLIGHT_LOCK_FILE within ${PREFLIGHT_LOCK_WAIT}s" >&2
-      echo "preflight: refusing to run unlocked — a parallel run shares one scratch schema and one" >&2
-      echo "preflight: scratch valkey index, so it reports FALSE failures. NOTHING was built or tested." >&2
-      echo "preflight: re-run once the other gate finishes, or raise the wait with PREFLIGHT_LOCK_WAIT=<seconds>." >&2
-      echo "preflight: the lock is released automatically when its holder exits, including on a crash." >&2
-      exit 75
-    fi
-    exit "$_lock_rc"
   fi
-  echo "  lock:   flock not found — running WITHOUT serialisation (concurrent gates may FALSE-fail)"
 fi
 
 # ---- PER-TREE RESULT RECORD (scripts/gate_result.sh) ------------------------
-# Everything from here on runs INSIDE the lock and INSIDE the child, so a queued
-# run reaches its own record with the host to itself.
+# Everything from here on runs INSIDE the pool (and inside the child, on the
+# branch below), so a queued run reaches its own record with a slot of its own.
 #
 # WHY IT IS HERE AND NOT AT THE BOTTOM: a gate run dies inside `run()` on the
 # first failure, so an end-of-script write would only ever record GREEN runs and
@@ -1557,12 +1715,12 @@ gr_record_now() {
 # SAME FINGERPRINT — and a `fail` anywhere in the record refuses the reuse.
 #
 # THIS BLOCK IS THE PER-GATE PATH ONLY. The whole-inventory reuse was already
-# taken before the lock (there is nothing left to do for a tree that is wholly
-# green, and queueing for it is the cost the card removes). So reaching here with
-# a full-green record means the pre-lock path declined for a reason of its own —
-# which is still a refusal, not a licence to skip work: the pre-lock path is the
-# only place a full-inventory reuse may be granted, and saying so in both places
-# would be two chances to disagree.
+# taken before the slot pool (there is nothing left to do for a tree that is
+# wholly green, and queueing for it is the cost the card removes). So reaching
+# here with a full-green record means the pre-pool path declined for a reason of
+# its own — which is still a refusal, not a licence to skip work: the pre-pool
+# path is the only place a full-inventory reuse may be granted, and saying so in
+# both places would be two chances to disagree.
 if [ "$REUSE_RECORD" = 1 ]; then
   if [ -z "${GR_TREE:-}" ]; then
     die "--reuse-record was requested but this tree cannot be identified (no working-tree sha) — refusing to skip a gate on an unnameable tree"
@@ -1576,8 +1734,8 @@ if [ "$REUSE_RECORD" = 1 ]; then
   fi
   _reuse_reason=""
   if _reuse_reason="$(gr_reusable "$GR_TREE" "${GATE_NAMES[@]}" 2>&1)"; then
-    # A full green that got this far was only NOT taken pre-lock because the
-    # caller's SELECTION is a subset of the inventory — the pre-lock path asks
+    # A full green that got this far was only NOT taken pre-pool because the
+    # caller's SELECTION is a subset of the inventory — the pre-pool path asks
     # about the whole inventory and declines for `--only vet`. That is the normal
     # `--only <subset> --reuse-record` shape, and it must still reuse the selected
     # gates (they are recorded passes) rather than refuse the run. Fall through to
