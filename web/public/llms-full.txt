@@ -67,6 +67,9 @@ prices, sales, refunds, analytics — without opening a dashboard.
   API key, create and publish forms, read sales and responses, manage products, subscriptions,
   webhooks and domains. Every operation is listed; a machine-readable OpenAPI 3.1 document is
   published at https://jomform.com/openapi.json.
+- [The form builder](https://jomform.com/docs/builder) — the field palette, the canvas, the three areas, and editing a block's settings on desktop and on a phone.
+- [In-app assistant](https://jomform.com/docs/chat) — what the built-in chat assistant can and cannot do: it answers questions about your own forms, sales and products, files feedback, and can prepare a small reversible change for you to confirm — it can never apply one by itself.
+- [In-app feedback](https://jomform.com/docs/feedback) — filing a bug or feature request from the dashboard, following the reply thread, what the statuses mean, and the email that tells you a reply arrived.
 - [Privacy policy](https://jomform.com/legal/privacy)
 - [Terms of service](https://jomform.com/legal/terms)
 - [Brand assets](https://jomform.com/brand)
