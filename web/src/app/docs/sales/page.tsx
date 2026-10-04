@@ -22,7 +22,7 @@ const SECTIONS: Section[] = [
     body: [
       "Track every sale: reference code, status (pending/confirmed/failed/refunded), buyer, amount, payment method and date. Confirm bank-transfer sales, capture or release skip-capture authorisations, refund paid sales (full or partial), and export sales to CSV.",
       "A form's mode decides what its entries are called, not whether you can reach them: a payment form (the default) takes payment and offers a Sales action on the Forms list, while a response-only form offers a Submission action. Both point at the same per-form list — an RSVP form is never labelled sales, and it still has a way into its responses.",
-      "`GET /v1/rest/forms` (list, single and create) reports the mode as `mode` (`payment` or `response`; a form created before response mode existed reports `payment`).",
+      "GET /v1/rest/forms (list, single and create) reports the mode as mode (payment or response; a form created before response mode existed reports payment).",
     ],
   },
   {
@@ -32,8 +32,8 @@ const SECTIONS: Section[] = [
       "Without a form filter the Sales page is the whole record set: every sale AND every response your response-mode forms recorded, merged newest first with one combined record count.",
       "That is deliberate — an account whose response entries were invisible on the unfiltered page had two surfaces reporting two different things (the per-form counter counted the responses, the list did not show them).",
       "Filtering by a form narrows the page to that form's own entries: a payment form shows its sales, a response-only form shows its responses and the table switches to the answers columns. The status filter is a payment question, so choosing a status hides the responses rather than reporting nothing.",
-      "Export CSV produces the same rows as the list, with the same filters applied: a combined export carries a `record_type` column (sale or submission) plus the recorded answer columns, and a single-form export uses that form's own columns. Search and the date range apply to both halves.",
-      "The same decision drives the dashboard's recent list and the MCP tools `list_sales` and `export_sales_csv`, so the page, the CSV and your agent always agree.",
+      "Export CSV produces the same rows as the list, with the same filters applied: a combined export carries a record_type column (sale or submission) plus the recorded answer columns, and a single-form export uses that form's own columns. Search and the date range apply to both halves.",
+      "The same decision drives the dashboard's recent list and the MCP tools list_sales and export_sales_csv, so the page, the CSV and your agent always agree.",
     ],
   },
   {
@@ -42,7 +42,7 @@ const SECTIONS: Section[] = [
     body: [
       "A form can collect responses instead of payments (set the form mode to response in the builder — no products, no payment). Its entries are stored as responses, not sales, and they are shown on the Sales page too: open a response form from Forms → Submission (or Form Settings → Submission) and the list shows that form's responses — when each one arrived, the buyer's name/email/phone and the recorded answers — with a detail drawer holding every field value.",
       "A payment form's button says Sales instead, because its entries are sales; the destination is the same. The search box matches any recorded answer and the date range applies as usual; the payment-status filter does not appear, because a response has no payment status. Export CSV and the capture/refund actions are payment-only and do not apply.",
-      "The dashboard's per-form counter counts responses for a response form, so a form that has collected entries never reads as zero. AI agents read the same data with `list_form_submissions` (and `list_sales` returns them for a response form id).",
+      "The dashboard's per-form counter counts responses for a response form, so a form that has collected entries never reads as zero. AI agents read the same data with list_form_submissions (and list_sales returns them for a response form id).",
     ],
   },
   {
@@ -54,7 +54,7 @@ const SECTIONS: Section[] = [
       "The dashboard lists one card per form with a count of the entries that form has recorded — the rows the form actually produced, read from the table it writes to.",
       "Set the form mode to response and the card says Submissions, counting that form's responses; leave it as a payment form (the default) and the card says Entries, counting that form's sales in every status (paid, confirmed, pending, failed, refunded). The two tables are never added together, because a form's mode decides which one it writes: the counter counts exactly one of them, so a form cannot double count.",
       "Beside the counter the card shows the money figures as their own separately named values — Paid+Confirmed (how many of the form's sales reached the paid set, each sale counted once), Pending, Failed and revenue in RM net of refunds.",
-      "AI agents read the same rollup with `get_form_analytics`, which reports the form's mode as `mode` so the figure can be labelled correctly, and `GET /v1/rest/dashboard-bundle` carries it as `form_analytics`.",
+      "AI agents read the same rollup with get_form_analytics, which reports the form's mode as mode so the figure can be labelled correctly, and GET /v1/rest/dashboard-bundle carries it as form_analytics.",
     ],
   },
   {

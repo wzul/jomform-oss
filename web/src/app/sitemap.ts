@@ -39,6 +39,21 @@ const APEX_PAGES = [
   // and the Settings switch deep-links into it.
   "/docs/spam-detection",
   "/docs/ses-reputation",
+  // t_0447a70c: the three guide pages reached from a feature's own inline "?"
+  // instead of from the /docs index (/docs/builder from the builder,
+  // /docs/chat from the chat panel, /docs/feedback from the feedback page).
+  // They are public routes with their own canonical, and they were absent here —
+  // which made /docs/chat, the target of the chat panel's "?" and the page that
+  // documents the created-form/bin boundary, invisible to a crawler. The docs
+  // index lists them as not-indexed-by-design (they are reached from the
+  // feature), but that is a NAV decision, not a crawler one: the rule this file
+  // already states applies to them too — a docs page that is not in the sitemap
+  // is a page a search engine will not find.
+  // web/src/lib/sitemapCoverage.test.ts now pins this list against the pages on
+  // disk, so a new guide cannot be added without its entry here again.
+  "/docs/builder",
+  "/docs/chat",
+  "/docs/feedback",
 ];
 
 export const dynamic = "force-dynamic";

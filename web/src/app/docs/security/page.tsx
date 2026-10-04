@@ -29,7 +29,7 @@ const SECTIONS: Section[] = [
       "When 2FA is enabled you can tick “don't ask for a code on this device for 30 days” at login — that device is then trusted and skips the 2FA code (the password is still required).",
       "Profile → Security lists every trusted device (label, IP, first trusted, expiry) with a Revoke button per device, plus “revoke all / log out everywhere”.",
       "Revocation is immediate: the next login on a revoked device asks for a 2FA code again. Changing your password or disabling 2FA also clears all trusted devices.",
-      "AI agents see and revoke the same list over MCP with `list_trusted_devices`, `revoke_trusted_device` and `revoke_all_trusted_devices`.",
+      "AI agents see and revoke the same list over MCP with list_trusted_devices, revoke_trusted_device and revoke_all_trusted_devices.",
     ],
   },
   {

@@ -309,7 +309,7 @@ const TOOL_GROUPS: { group: string; note?: string; tools: { name: string; desc: 
   {
     group: "Analytics",
     tools: [
-      { name: "get_form_analytics", desc: "Analitik per-borang: bilangan entri (submissions), paid/confirmed/failed/pending, dan hasil (RM) — NET selepas refund. `submissions` = entri yang direkod untuk borang itu, dibaca dari jadual yang borang tulis: mode=response → jadual `submissions`; borang bayaran → `sales` (semua status). `mode` disertakan supaya label betul. Merentas semua workspace anda. Read-only." },
+      { name: "get_form_analytics", desc: "Analitik per-borang: bilangan entri (submissions), paid/confirmed/failed/pending, dan hasil (RM) — NET selepas refund. submissions = entri yang direkod untuk borang itu, dibaca dari jadual yang borang tulis: mode=response → jadual submissions; borang bayaran → sales (semua status). mode disertakan supaya label betul. Merentas semua workspace anda. Read-only." },
       { name: "get_product_analytics", desc: "Analitik per-produk: unit terjual (paid), hasil (RM). Merentas semua workspace anda. Read-only." },
     ],
   },
