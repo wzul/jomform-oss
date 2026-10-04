@@ -515,6 +515,18 @@ PW_READ_RE='(\.\./){2,}[A-Za-z0-9_@./-]*|filepath\.Join\([^)]*\)|"(api|web|deplo
 # deliberately conservative: a sandbox-only `git -C "$SB" rev-list` is flagged
 # too, which costs a cheap suite an unnecessary run and CANNOT cost a red gate
 # its run. The one live-repo instance is scripts/preflight_test.sh's doc sweep.
+#
+# IT IS APPLIED TO EXECUTABLE TEXT, NOT TO THE RAW LINE (pw_code_lines below).
+# The check used to be `grep -cE "$PW_REPOWIDE_RE" <file>` over the RAW text, so
+# a string literal that merely MENTIONS a git command counted as a read: the
+# `t.Fatalf("git ls-files in %s: %v …")` message in
+# api/internal/httpapi/embed_docs_snippet_test.go made the whole `api/*` area a
+# whole-checkout reader, which marked build/vet/gofmt/test/govuln "cannot
+# narrow" (9 '*' rows instead of 4) and turned the `selftest` classifier anchors
+# RED on pristine origin/main — measured 2026-10-04, reproduced byte-identical on
+# 3431e7cd, on PR 960's head and on the spine HEAD 1f553014. A read is a
+# STATEMENT, not a substring, so the counting pipeline below strips each line to
+# the code it runs before matching.
 PW_REPOWIDE_RE='git[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?(grep|ls-files|rev-list)[[:space:]]'
 
 PW_SEL=""        # "<gate>\t<pathspec>" rows: the runtime dependency table
@@ -526,6 +538,46 @@ declare -A PW_RWSET=()    # file -> 1 when it reads the whole checkout
 declare -A PW_CLAIMS=()   # gate -> paths it CLAIMS are its inputs (declared, no `*`)
 declare -A PW_SRCS=()     # gate -> its source globs, one per line
 PW_RW_FILES=()            # files that read the whole checkout
+
+# pw_code_lines — reduce each line to the code it EXECUTES, so the repo-wide-read
+# test reads a STATEMENT and not a substring.
+#
+# WHY. The repo-wide test used to grep the RAW line, so any mention of the shape
+# counted as a read. The measured false positive (card t_bd79c727) was a
+# `t.Fatalf("git ls-files in %s: %v …")` MESSAGE in
+# api/internal/httpapi/embed_docs_snippet_test.go: it marked the whole `api/*`
+# area a whole-checkout reader, so build/vet/gofmt/test/govuln all became
+# "cannot narrow" (9 '*' rows instead of 4) and the `selftest` classifier anchors
+# went RED on pristine origin/main (reproduced byte-identical on 3431e7cd, on
+# PR 960's head and on the spine HEAD 1f553014). A message is not a read.
+#
+# WHAT IT DOES, and why the split is by LANGUAGE rather than uniform:
+#   * every file: whole-line comments are dropped — `#`, `//`, `//*` and a
+#     Go/TS block-comment continuation `* …` (exactly the set the old filter
+#     removed, so a comment was already not a read and stays that way);
+#   * a GO / TS / JS source ALSO has every quoted span dropped, because in those
+#     languages a quoted string is DATA. That is the false-positive class: a
+#     message that quotes the command. Removing it cannot hide a real read —
+#     a Go read of the checkout in this repo is `exec.Command("git", "-C", root,
+#     "ls-files", …)` (separate ARGS, no `git ls-files` substring at all), so the
+#     pattern never saw it and this filter cannot lose it;
+#   * a SHELL script keeps its quoted spans, because there `"$(git …)"` holds
+#     CODE: the quote state is RE-OPENED inside a command substitution. A
+#     quote-stripper that pairs the spans of
+#     `MERGED_SHA="$(git -C "$REPO" rev-list …)"` (measured,
+#     deploy/worktrees/prune-kanban-worktrees_test.sh:114) wrongly pairs the
+#     inner and outer quotes, deletes the `rev-list`, and DROPS a genuine
+#     repo-wide read — the unsafe direction, which would make `prunewt`
+#     narrowable and let a narrowed run skip it. Shell therefore keeps the
+#     pre-existing, more inclusive reading; only the non-shell shape narrows.
+pw_code_lines() {
+  case "$1" in
+    *.go|*.ts|*.tsx|*.js|*.mjs|*.cjs)
+      sed -e '/^[[:space:]]*\(#\|\/\/\|\/\*\|\*\)/d' -e 's/"[^"]*"//g' -e "s/'[^']*'//g" "$1" 2>/dev/null ;;
+    *)
+      sed -e '/^[[:space:]]*\(#\|\/\/\|\/\*\|\*\)/d' "$1" 2>/dev/null ;;
+  esac
+}
 
 # pw_cache_sources — resolve every gate's source globs ONCE. Both the ownership
 # test and the repo-wide test call this per file per gate; without the cache that
@@ -819,8 +871,9 @@ pw_build_table() {
 "
   done <<<"$derived"
 
-  # Which files read the whole checkout (comment lines stripped, so a file is
-  # only repo-wide when an ACTIVE line does it).
+  # Which files read the whole checkout. The line is reduced to its code first
+  # (pw_code_lines): a MESSAGE or a COMMENT that mentions the command is not a
+  # read, and counting it made every `api/*` gate un-narrowable (card t_bd79c727).
   #
   # WHY THE PATTERN IS COUNTED, NOT PIPED INTO `grep -q`. This was a `grep ... |
   # grep -qE ...` and it is nondeterministic under `set -o pipefail`: when the
@@ -836,7 +889,7 @@ pw_build_table() {
   local rw_hits
   PW_RW_FILES=()
   for file in $(git grep -lE "$PW_REPOWIDE_RE" -- 'api/' 'web/' 'scripts/' 'deploy/' 2>/dev/null); do
-    rw_hits="$(grep -avE '^[[:space:]]*(#|//|\*|/\*)' "$file" 2>/dev/null | grep -cE "$PW_REPOWIDE_RE")"
+    rw_hits="$(pw_code_lines "$file" | grep -cE "$PW_REPOWIDE_RE")"
     if [ "${rw_hits:-0}" -gt 0 ]; then
       PW_RWSET[$file]=1
       PW_RW_FILES+=("$file")

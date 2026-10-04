@@ -1108,10 +1108,30 @@ PW_SRC_NONE="gofmt webimage"
 # The independent probe's pattern. It is deliberately a DIFFERENT literal from the
 # runner's (`REPOWIDE_RE` there), and it runs as its own code path: the verdict
 # comes from an independent reading, so a derivation that goes BLIND cannot satisfy
-# it by finding no offenders at all. Comments are stripped exactly as the runner
-# strips them — without that, a comment mentioning the shape over-reports (measured:
-# a false positive on `web`).
+# it by finding no offenders at all.
 REPOWIDE_ANY_RE='git[[:space:]]+([^|]*[[:space:]])?(grep|ls-files|rev-list)[[:space:]]'
+# THE PROBE'S OWN LINE REDUCTION, and it is the half that must agree with the
+# runner on the RULE while staying independent in the CODE. Before card
+# t_bd79c727 the probe grepped the raw line, exactly as the runner did, so both
+# were wrong the same way — and a mirror that shares the defect CANNOT catch it
+# (measured: this check stayed GREEN on the degraded tree, which is why the
+# regression was invisible to 15k and only 15b/15e-i went red). The rule applied
+# here is the runner's, stated in scripts/preflight.sh at pw_code_lines: a
+# repo-wide read is a STATEMENT, so (a) a comment is not a read and (b) in a
+# language where a quoted span is DATA (Go/TS/JS) a message that QUOTES the
+# command is not a read either. A shell source keeps its quoted spans, where
+# `"$(git …)"` holds code whose quote state is re-opened inside the
+# substitution. If this reduction ever drifts toward stripping MORE than the
+# runner strips, the verdict is the SAFE direction — a gate demanded into '*',
+# never one dropped.
+probe_code_lines() {
+  case "$1" in
+    *.go|*.ts|*.tsx|*.js|*.mjs|*.cjs)
+      sed -e '/^[[:space:]]*\(#\|\/\/\|\/\*\|\*\)/d' -e 's/"[^"]*"//g' -e "s/'[^']*'//g" "$1" 2>/dev/null ;;
+    *)
+      sed -e '/^[[:space:]]*\(#\|\/\/\|\/\*\|\*\)/d' "$1" 2>/dev/null ;;
+  esac
+}
 # FIRST: every gate must be either arm-carrying or explicitly declared as having none.
 # A gate in NEITHER is the silent-coverage hole this addition closes.
 pw_unarmed=""
@@ -1159,7 +1179,7 @@ for g in $GATES; do
     [ -n "$glob" ] || continue
     for f in $(cd "$LIVE_ROOT" && git ls-files -- "$glob" 2>/dev/null); do
       [ -f "$LIVE_ROOT/$f" ] || continue
-      if grep -qE "$REPOWIDE_ANY_RE" <<<"$(grep -avE '^[[:space:]]*(#|//|\*|/\*)' "$LIVE_ROOT/$f" 2>/dev/null)"; then
+      if grep -qE "$REPOWIDE_ANY_RE" <<<"$(probe_code_lines "$LIVE_ROOT/$f")"; then
         rw_any="${rw_any}${g} "
       fi
     done
