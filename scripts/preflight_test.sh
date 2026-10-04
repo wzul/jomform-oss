@@ -223,6 +223,22 @@ func TestPlainProbeIsNamed(t *testing.T) {
 	}
 }
 QAPLAIN
+# 15p's fixture (card t_315a5f91). A Go source whose ONLY repo-wide mention sits
+# inside a BACKTICK raw string — i.e. a MESSAGE, which the reduction that decides a
+# repo-wide read (`pw_code_lines` in the runner, `probe_code_lines` in this file)
+# strips. It is the exact false positive the backtick arm was added for, and it is
+# deliberately inert: no statement of this file runs the command. Without the arm,
+# the raw line matches the pattern, `api/*` looks like a whole-checkout reader, and
+# `test` becomes unable to narrow (measured: 9 '*' rows instead of 4, `selftest`
+# anchors RED). Planted in the SANDBOX, like the metachar registers above.
+cat > "$SB/api/internal/qaprobe/backtick_msg.go" <<'PWBMSG'
+package qaprobe
+
+// backtickMsg is a MESSAGE, not a read: the command it names runs in NO statement
+// of this file. Counting it as a read is the false positive the backtick arm of
+// pw_code_lines/probe_code_lines exists to strip (card t_315a5f91).
+var backtickMsg = `run git ls-files to see it`
+PWBMSG
 git -C "$SB" init -q .
 git -C "$SB" add -A
 git -C "$SB" -c user.email=t@t -c user.name=t commit -q -m init
@@ -1202,6 +1218,108 @@ else
   else
     bad "these gates read the whole checkout, independently derived, but are NOT in the always-run class, so a narrowed run can drop them: [${rw_missing% }] — an under-inclusion, the unsafe direction"
   fi
+fi
+
+# 15p. THE BACKTICK RAW STRING IS DATA, AND BOTH READERS MUST SAY SO (card t_315a5f91).
+#
+#      Both reductions drop a Go/TS/JS BACKTICK span (`` `…` ``) as well as the
+#      interpreted `"…"`/`'…'`, because in those languages a raw string is DATA like
+#      any other quoted span: a MESSAGE that quotes a repo-wide command is not a read
+#      of the checkout. That arm carries the fix of t_7e703b11, and until this check
+#      it was UNGUARDED — measured at tag v1.20.2 (tree 04d2639d): neutering the arm
+#      in the runner kept `bash scripts/preflight_test.sh` at 79 passed / 0 failed,
+#      byte-identical modulo the tree sha check 38 prints. The same held when only the
+#      PROBE's arm was neutered. 15k runs `probe_code_lines` only over the LIVE tree's
+#      real sources, so it exercises the arm's OUTCOME but can never flip on its
+#      removal; nothing planted a fixture whose ONLY repo-wide mention was a backtick
+#      MESSAGE. This does, for BOTH readers, and it is the guard the t_7e703b11 arm
+#      was missing.
+#
+#      WHY THE NEUTRALISATION IS `awk index()` AND NOT `sed`. The clause is `s/`[^`]*`//g`
+#      — itself a sed program, so a sed that edits it has to escape `[`, `]` and `*`
+#      correctly (two rounds of quoting) and silently no-ops when it does not. `awk`'s
+#      `index()` takes the literal and replaces it by hand, so the edit cannot miss.
+#      Measured while writing this check: a `sed` over the `[` bytes left the clause
+#      intact and the copy still stripped the fixture, which would have read as "the
+#      check does not bite".
+pwb_fixture="$SB/api/internal/qaprobe/backtick_msg.go"
+# The literal both readers drop. It is repeated here on purpose: the check is about
+# the READERS' behaviour, so the edit is driven by the pattern the readers carry
+# rather than by importing their sed line and mutating the copy that produced it.
+PWB_CLAUSE='s/`[^`]*`//g'
+PWB_RE='git[[:space:]]+([^|]*[[:space:]])?(grep|ls-files|rev-list)[[:space:]]'
+# The clause in the runner's `pw_code_lines` and in this file's `probe_code_lines`,
+# value-replaced by a literal no fixture can contain. A whole-file `sed` would also
+# reach the backtick spans in the PROSE, so the replacement is confined to the
+# function body — that is where the clause the reduction executes lives.
+pwb_swap_clause() {
+  awk -v from="$PWB_CLAUSE" -v to='s/PWB_QA_NOPE//g' '
+    { line=$0; out=""
+      while ((p=index(line, from)) > 0) { out=out substr(line,1,p-1) to; line=substr(line,p+length(from)) }
+      print out line }'
+}
+# THE BITE, ON THIS FILE'S OWN PROBE. Extract the shipped `probe_code_lines` verbatim,
+# rename the copy so both can be sourced in one shell (`probe_code_lines` is a live
+# function here — redefining it would break 15k, which runs ABOVE this line and would
+# not care, and every use below, which would), and read the fixture with each. The
+# rename is scoped to the function's own line.
+pwb_probe_shipped="$SB_STATE/pwb_probe_shipped.sh"
+pwb_probe_neutral="$SB_STATE/pwb_probe_neutral.sh"
+sed -n '/^probe_code_lines() {/,/^}/p' "$SELF" > "$pwb_probe_shipped"
+pwb_swap_clause < "$pwb_probe_shipped" \
+  | sed 's/probe_code_lines/probe_code_lines_pwb_neutral/' > "$pwb_probe_neutral"
+pwb_shipped_hits=0; pwb_neutral_hits=0
+if [ -f "$pwb_fixture" ] && [ -s "$pwb_probe_shipped" ] && [ -s "$pwb_probe_neutral" ]; then
+  pwb_shipped_hits="$(. "$pwb_probe_shipped" && probe_code_lines "$pwb_fixture" | grep -cE "$PWB_RE")"
+  pwb_neutral_hits="$(. "$pwb_probe_neutral" && probe_code_lines_pwb_neutral "$pwb_fixture" | grep -cE "$PWB_RE")"
+fi
+if [ ! -f "$pwb_fixture" ]; then
+  bad "15p cannot read its fixture [$pwb_fixture] — the backtick-arm check has nothing to bite, so a removal would pass green (the exact gap card t_315a5f91 filed)"
+elif [ ! -s "$pwb_probe_shipped" ] || [ ! -s "$pwb_probe_neutral" ]; then
+  bad "15p could not extract \`probe_code_lines\` from $SELF — the neutered copy is empty, so comparing the two readers proves nothing"
+elif [ "$pwb_shipped_hits" != 0 ]; then
+  bad "15p fixture is not the shape under test: this file's shipped \`probe_code_lines\` counted $pwb_shipped_hits repo-wide match(es) in a file whose ONLY mention is a backtick MESSAGE — expected 0. The fixture, not the reader, is wrong"
+elif [ "$pwb_neutral_hits" = 0 ]; then
+  bad "15p does NOT bite: with the backtick clause removed, \`probe_code_lines\` STILL reads no repo-wide match ($pwb_neutral_hits) in a file whose raw line matches once — so the neutered copy is not actually neutered and this check can never catch the arm's removal"
+else
+  ok "15p BITES: this file's own \`probe_code_lines\` strips the backtick MESSAGE (0 repo-wide matches), while a copy with the backtick clause value-replaced reports $pwb_neutral_hits — the arm the t_7e703b11 fix added is guarded, not merely exercised"
+fi
+# AND THE RUNNER'S ARM, ON THE SAME FIXTURE, THROUGH ITS OWN DERIVATION. The probe
+# leg above reads this file's mirror; the runner has a SEPARATE copy of the clause
+# (scripts/preflight.sh's `pw_code_lines`), and the card's repro neutered exactly
+# that one. It is asserted through the runner's PUBLIC surface — `--gate-deps`, whose
+# `test: api/*` row is only printed when `api/*` is NARROWABLE — against a copy whose
+# clause is value-replaced the same way. Both directions: the shipped copy must still
+# report `test:` with a real area, and the neutered copy must widen it to `*`.
+pwb_runner_shipped="$SB/scripts/preflight_pwb_shipped.sh"
+pwb_runner_neutral="$SB/scripts/preflight_pwb_neutral.sh"
+cp "$PREFLIGHT" "$pwb_runner_shipped"; chmod +x "$pwb_runner_shipped"
+awk -v from="$PWB_CLAUSE" -v to='s/PWB_QA_NOPE//g' '
+  { line=$0; out=""
+    while ((p=index(line, from)) > 0) { out=out substr(line,1,p-1) to; line=substr(line,p+length(from)) }
+    print out line }' "$PREFLIGHT" > "$pwb_runner_neutral"
+chmod +x "$pwb_runner_neutral"
+pwb_live_row="$( (cd "$SB" && PREFLIGHT_RESULT_DIR="$SB_STATE/pwb-live" ./scripts/preflight_pwb_shipped.sh --gate-deps 2>/dev/null) | sed -n 's/^test: //p' | sed -n '1p')"
+pwb_neutral_row="$( (cd "$SB" && PREFLIGHT_RESULT_DIR="$SB_STATE/pwb-neutral" ./scripts/preflight_pwb_neutral.sh --gate-deps 2>/dev/null) | sed -n 's/^test: //p' | sed -n '1p')"
+if grep -qF "$PWB_CLAUSE" "$pwb_runner_neutral"; then
+  bad "15p cannot neuter the runner's backtick clause: the literal [$PWB_CLAUSE] is still present in the copy, so the two readings below (shipped vs neutered) are the same file and the comparison is vacuous"
+elif [ -z "$pwb_live_row" ]; then
+  bad "15p could not read a \`test:\` row from the shipped runner copy's --gate-deps — the sandbox runner did not produce the table this check reads"
+elif [ "$pwb_live_row" = '*' ]; then
+  # The shipped runner already calls `api/*` unable to narrow on a tree whose only
+  # repo-wide match is the backtick MESSAGE. Two causes look identical from the row, so
+  # discriminate them on the runner's own text: the arm is PRESENT (the sandbox carries
+  # another whole-checkout reader and this check is measuring that instead) or it was
+  # REMOVED (the arm's absence, which is the regression this check exists to catch).
+  if grep -qF "$PWB_CLAUSE" "$PREFLIGHT"; then
+    bad "15p's sandbox does not exercise the arm: the SHIPPED runner (clause present) already reports \`test: *\` on a tree whose only repo-wide match is the backtick fixture, so a neutered copy could not show a difference. Some OTHER api/ source in the sandbox reads the whole checkout (a staged/untracked file, or a tree fixture) and this check is measuring that instead of pw_code_lines"
+  else
+    bad "15p bites: the runner reports \`test: *\` on the backtick-MESSAGE fixture and $PREFLIGHT no longer carries the backtick clause [$PWB_CLAUSE] at all — pw_code_lines' backtick arm is REMOVED, so a MESSAGE is counted as a read, \`api/*\` stops being narrowable and removing the arm the t_7e703b11 fix added is RED (this is the gap card t_315a5f91 filed)"
+  fi
+elif [ "$pwb_neutral_row" != '*' ]; then
+  bad "15p does NOT bite the RUNNER: with scripts/preflight.sh's backtick clause value-replaced, \`--gate-deps\` still reports \`test: $pwb_neutral_row\` (a real area) instead of \`*\` — so removing pw_code_lines' backtick arm leaves the always-run verdict unchanged and the selftest green, which is the gap card t_315a5f91 filed"
+else
+  ok "15p BITES the RUNNER: the shipped pw_code_lines keeps \`test: $pwb_live_row\` narrowable on a backtick-MESSAGE fixture, while the value-replaced copy widens it to \`test: *\` — the always-run verdict moves, so the arm's removal is RED"
 fi
 
 # 15g. The default must stay a FULL run. With no selection flag the script must
