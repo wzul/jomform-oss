@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
@@ -167,6 +168,43 @@ func TestHandleAssetRejectsUnknownWorkspace(t *testing.T) {
 	rec := publicAssetServe(t, ph, "no-such-workspace.jomform.com", "u/"+accA+"/aaaa.css")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("asset on unknown workspace = %d, want 404", rec.Code)
+	}
+}
+
+// TestHandleAssetUnconfiguredStoreAnswers503Not500 drives GET /assets/{key} all
+// the way to the store fetch with a store that reports itself unconfigured, and
+// pins the sentinel→503 branch in handleAsset (public.go).
+//
+// WHY THIS EXISTS
+//
+//	The typed-nil test (TestHandleAssetTypedNilStoreAnswers503NotPanic) returns
+//	at the storeUnavailable guard BEFORE GetObject is ever called, so it cannot
+//	reach the errors.Is(err, objstore.ErrNotConfigured) branch. The handleMedia
+//	twin is covered at BOTH layers — the {"sentinel", notConfiguredStore{}} case
+//	in TestHandleMediaUnconfiguredMessageIsTheGuard drives its branch red when it
+//	is removed. handleAsset had no equivalent: the branch was a verified mutation
+//	survivor (status value flipped to 500 left the whole package GREEN).
+//
+//	The tenant-scope check must pass first or the request 404s before the fetch,
+//	so this reuses the #379 fixture: a real workspace subdomain resolving to the
+//	key's own account.
+func TestHandleAssetUnconfiguredStoreAnswers503Not500(t *testing.T) {
+	ph, _, slugA, _, accA, _ := assetTenancyFixture(t)
+
+	h := &PublicHandlers{
+		Accounts:   ph.Accounts,
+		Domains:    ph.Domains,
+		Workspaces: ph.Workspaces,
+		Store:      notConfiguredStore{},
+	}
+
+	rec := publicAssetServe(t, h, slugA+".jomform.com", "u/"+accA+"/aaaa.css")
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("GET /assets/<same-tenant key> with an unconfigured store = %d (%s), want 503 %q",
+			rec.Code, strings.TrimSpace(rec.Body.String()), "media storage tidak dikonfigurasi")
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "media storage tidak dikonfigurasi") {
+		t.Fatalf("503 body = %q, want the guard's own message %q", body, "media storage tidak dikonfigurasi")
 	}
 }
 

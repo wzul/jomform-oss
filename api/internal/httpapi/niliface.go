@@ -30,10 +30,6 @@ package httpapi
 
 import "github.com/wzul/jomform/api/internal/niliface"
 
-// nilInterface reports whether v is a nil interface OR holds a typed nil (a nil
-// *T stored in a non-nil interface).
-func nilInterface(v any) bool { return niliface.IsNil(v) }
-
 // storeUnavailable reports whether an object store cannot serve anything: a nil
 // ObjectStoreIface, or a typed nil (a nil *ObjectStore held in the interface).
 // It is the media equivalent of mailerUnavailable.
