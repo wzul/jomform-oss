@@ -11,9 +11,23 @@
 #   stops at the module scope, a walker pointed at the wrong directory) satisfies
 #   "no string carries a backtick" without looking at a single body. So this proves
 #   the guard GOES RED when a marker is present, in TWO pages, and stays GREEN on
-#   the two shapes that must not be reported — a backtick in a COMMENT (a text
-#   scanner would flag it; the AST does not) and a JSX TEMPLATE LITERAL (the
-#   supported way to show code on these pages).
+#   the shapes that must not be reported — a backtick in a COMMENT (a text scanner
+#   would flag it; the AST does not), a JSX TEMPLATE LITERAL showing code, and a
+#   template literal INSIDE <code>/<pre> even when its text carries a backtick.
+#
+#   CARD t_8580357e WIDENED THE GUARD past `ts.StringLiteral`-only, and this
+#   harness now drives the two shapes that widening added, each of which the
+#   string-literal-only walk let through GREEN:
+#     * CASE 7 — a marker in RAW JSX TEXT (a `ts.JsxText`), e.g. <p>… `m` …</p>.
+#     * CASE 8 — a marker ESCAPED inside a TEMPLATE LITERAL, which reaches the
+#       reader as a backtick because `node.text` decodes `\``.
+#   Both must be RED, and they must be RED *for the widened reason*: each case
+#   asserts node's own count, one failing test (the findings rule) and zero on the
+#   vacuity test, so a guard that only ever widened the FINDINGS walk (and left
+#   the vacuity walk string-only) is caught by CASE 7/8 too. CASE 9 is the
+#   negative control that keeps the widening honest: the SAME escaped-backtick
+#   template literal inside a <code> element stays GREEN, because that is the
+#   supported way to show code on /docs.
 #
 # WHAT IT DOES
 #   It snapshots the two pages it mutates into a scratch dir, applies one mutation,
@@ -147,12 +161,75 @@ else
 fi
 restore "$f"; echo "  restored, sha $(sha256sum "$f" | awk '{print $1}') == $sha"
 
+# The widened cases (card t_8580357e) must be RED *for the widened reason*: node's
+# own count is exactly ONE failing test, and the test that fails is the FINDINGS
+# rule, not the vacuity rule. A guard that widened the findings walk but left the
+# vacuity walk string-literal-only would fail this (the vacuity test would not see
+# the new node and could not be the failing one), which is the point of asserting
+# the name rather than the count alone.
+fails_findings_only() {
+  local o="$1"
+  printf '%s' "$o" | grep -qE '^ℹ fail 1$' &&
+    printf '%s' "$o" | grep -q '^✖ no /docs prose carries a backtick marker' &&
+    ! printf '%s' "$o" | grep -q '^✖ the guard is reading the real docs tree'
+}
+
+# ── the two shapes card t_8580357e widened the guard to see ───────────────────
+echo "== CASE 7: a marker in RAW JSX TEXT (ts.JsxText) must be RED ==="
+f="src/app/docs/security/page.tsx"; snapshot "$f"; sha="$(sha256sum "$f" | awk '{print $1}')"
+# Raw JSX prose: neither a string literal nor a template literal, so the
+# string-literal-only walk let it through GREEN. Inserted at module scope so it
+# parses as TSX without a render site (the AST walk covers the whole file).
+printf 'const QA_RAWTEXT = <p>raw jsx prose with `raw_marker` inside</p>;\n' > "$snap/p7.txt"
+sed -i "/^import type { Metadata } from \"next\";/r $snap/p7.txt" "$f"
+grep -q 'raw jsx prose with `raw_marker` inside' "$f" || { echo "  MUTATION DID NOT APPLY — re-anchor this case"; fail=1; }
+out="$(run_guard)"; v="$(verdict "$out")"; VERDICTS+=("case7=$v")
+if [ "$v" = RED ] && printf '%s' "$out" | grep -q 'docs/security/page.tsx' && printf '%s' "$out" | grep -q '\[raw JSX text\]' && fails_findings_only "$out"; then
+  echo "  BITES: RED naming docs/security/page.tsx [raw JSX text] (the JsxText hole is closed)"
+else
+  echo "  DID NOT BITE: verdict=$v (wanted RED naming docs/security, [raw JSX text], one findings failure)"; printf '%s\n' "$out" | tail -20; fail=1
+fi
+restore "$f"; echo "  restored, sha $(sha256sum "$f" | awk '{print $1}') == $sha"
+
+echo "== CASE 8: a marker ESCAPED inside a TEMPLATE LITERAL must be RED ==="
+f="src/app/docs/security/page.tsx"; snapshot "$f"; sha="$(sha256sum "$f" | awk '{print $1}')"
+# A NoSubstitutionTemplateLiteral whose decoded `node.text` carries a backtick:
+# the escaped form renders the marker exactly like the plain one. Before the
+# widening this node kind was the guard's documented exclusion.
+printf 'const QA_ESCAPED = `prose with \\`escaped_marker\\` inside`;\n' > "$snap/p8.txt"
+sed -i "/^import type { Metadata } from \"next\";/r $snap/p8.txt" "$f"
+grep -q 'prose with \\`escaped_marker\\` inside' "$f" || { echo "  MUTATION DID NOT APPLY — re-anchor this case"; fail=1; }
+out="$(run_guard)"; v="$(verdict "$out")"; VERDICTS+=("case8=$v")
+if [ "$v" = RED ] && printf '%s' "$out" | grep -q 'docs/security/page.tsx' && printf '%s' "$out" | grep -q '\[template literal\]' && fails_findings_only "$out"; then
+  echo "  BITES: RED naming docs/security/page.tsx [template literal] (the escaped-marker hole is closed)"
+else
+  echo "  DID NOT BITE: verdict=$v (wanted RED naming docs/security, [template literal], one findings failure)"; printf '%s\n' "$out" | tail -20; fail=1
+fi
+restore "$f"; echo "  restored, sha $(sha256sum "$f" | awk '{print $1}') == $sha"
+
+echo "== CASE 9 (negative control): the SAME escaped marker inside <code> stays GREEN ==="
+f="src/app/docs/security/page.tsx"; snapshot "$f"; sha="$(sha256sum "$f" | awk '{print $1}')"
+# The supported way to show code on /docs: a template literal inside <code>. A
+# sample that prints a backtick is code the page MEANS to show, so the widening
+# must not report it — this is the control that keeps CASE 8 from being "flag
+# every template literal".
+printf 'const QA_CODEBT = <code>{`a sample that prints a \\`marker\\``}</code>;\n' > "$snap/p9.txt"
+sed -i "/^import type { Metadata } from \"next\";/r $snap/p9.txt" "$f"
+grep -q 'a sample that prints a \\`marker\\`' "$f" || { echo "  MUTATION DID NOT APPLY — re-anchor this case"; fail=1; }
+out="$(run_guard)"; v="$(verdict "$out")"; VERDICTS+=("case9=$v")
+if [ "$v" = GREEN ]; then
+  echo "  CONTROL GREEN: a template literal inside <code> is the supported code-sample shape"
+else
+  echo "  CONTROL FAILED: verdict=$v — the widening flagged a code sample as prose"; printf '%s\n' "$out" | tail -20; fail=1
+fi
+restore "$f"; echo "  restored, sha $(sha256sum "$f" | awk '{print $1}') == $sha"
+
 echo "== FINAL: every mutated file restored, tree GREEN again =="
 out="$(run_guard)"; v="$(verdict "$out")"; VERDICTS+=("final=$v")
 [ "$v" = GREEN ] || { fail=1; printf '%s\n' "$out" | tail -25; }
 
 echo
 echo "verdicts: ${VERDICTS[*]}"
-echo "BITES: $(printf '%s\n' "${VERDICTS[@]}" | grep -cE '^case(1|2|3|6)=RED')/4 HOLE cases RED, $(printf '%s\n' "${VERDICTS[@]}" | grep -cE '^case(4|5)=GREEN')/2 CONTROLS GREEN"
+echo "BITES: $(printf '%s\n' "${VERDICTS[@]}" | grep -cE '^case(1|2|3|6|7|8)=RED')/6 HOLE cases RED, $(printf '%s\n' "${VERDICTS[@]}" | grep -cE '^case(4|5|9)=GREEN')/3 CONTROLS GREEN"
 echo "RESULT: $([ "$fail" = 0 ] && echo 'ALL CASES OK' || echo 'FAILURES PRESENT')"
 exit "$fail"

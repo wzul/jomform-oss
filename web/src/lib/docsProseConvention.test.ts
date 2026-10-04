@@ -41,18 +41,49 @@
 // HOW IT DECIDES (no heuristics, on purpose)
 //   It parses each page with the TypeScript parser (`typescript` is already a
 //   devDependency and src/lib/jsxSource.ts already depends on it for the same
-//   reason) and collects every `ts.StringLiteral` whose text contains a backtick.
-//   A parser is used rather than a text scan because the alternative has a
-//   measured failure in this very tree: a byte-level comment scanner reads the
-//   RENDERED text `/v1/rest/*` in api/page.tsx:175 as a `/*` comment opener and
-//   blanks 41 lines of the file (that defect is documented at the top of
-//   src/lib/jsxSource.ts). With the AST, a comment is not a node at all, so no
-//   comment can raise or hide a finding, and there is no strip to get wrong.
+//   reason) and collects a marker from EVERY node kind whose text reaches the
+//   reader as plain text. A parser is used rather than a text scan because the
+//   alternative has a measured failure in this very tree: a byte-level comment
+//   scanner reads the RENDERED text `/v1/rest/*` in api/page.tsx:175 as a `/*`
+//   comment opener and blanks 41 lines of the file (that defect is documented at
+//   the top of src/lib/jsxSource.ts). With the AST, a comment is not a node at
+//   all, so no comment can raise or hide a finding, and there is no strip to get
+//   wrong.
+//
+//   THREE shapes render an unescaped backtick to the reader, and all three are
+//   collected (card t_8580357e widened the second and third; the first was the
+//   only one the guard saw before):
+//     1. a `ts.StringLiteral` carrying a backtick — the `body: "…"` prose and
+//        the JSX attribute strings like `label: "…"`.
+//     2. a `ts.JsxText` carrying a backtick — RAW JSX prose, e.g.
+//        `<p>see `marker` here</p>`. These bytes are neither a string nor a
+//        template literal, so a walk that collects only string literals never
+//        saw them, and they render exactly like the bodies do.
+//     3. a `ts.NoSubstitutionTemplateLiteral` carrying an UNESCAPED backtick —
+//        a template literal with no `${…}`, e.g. `` `prose with \`marker\` inside` ``
+//        (the escaped form reaches the reader as a backtick; the author could
+//        equally have written it plainly). The guard keys on `node.text`, which
+//        decodes `\``, so an escaped marker and a plain one read alike.
+//
+//   THE ONE DELIBERATE EXCLUSION — a template literal inside `<code>`/`<pre>`
+//   is the SUPPORTED way to show code on /docs (api/page.tsx's curl blocks,
+//   embed/page.tsx's iframe snippet). Such a sample's `node.text` never contains
+//   a backtick (the template's own delimiters are not part of `text`), so the
+//   walk is already quiet on every one of them today — measured 9, all inside
+//   `<code>`/`<pre>`. It is also SKIPPED EXPLICITLY when its text DOES contain a
+//   backtick inside a `<code>`/`<pre>` element, so a future sample that prints a
+//   backtick as part of the code it shows does not raise a false finding. The
+//   distinction the card named is kept: a marker in raw JSX prose is not a code
+//   sample (shape 2), and a marker in a template literal OUTSIDE `<code>`/`<pre>`
+//   is prose (shape 3, e.g. `customize/page.tsx`'s `<span>{`{id}`}</span>` shape
+//   if it ever escaped a marker). It does NOT widen to a template literal merely
+//   because template literals are used to render code here.
 //
 // WHAT IT DOES NOT COVER (stated honestly)
 //   * It reads the source, not the served HTML. It proves the marker is not in
-//     the string a page renders; that the page really prints `{p}` is pinned
-//     elsewhere (docsIndex.test.ts's render-site checks and the fact reader in
+//     the text a page renders — the `body` strings, the raw JSX prose, and the
+//     template literals; that the page really prints `{p}` is pinned elsewhere
+//     (docsIndex.test.ts's render-site checks and the fact reader in
 //     web/scripts/docsFacts.mjs, which reads the BUILT page).
 //   * It is scoped to `src/app/docs`. Backticks in the chat/feedback markdown
 //     surface are CORRECT there — that text goes through Markdown.ts, which
@@ -94,20 +125,64 @@ function docsFiles(): string[] {
   return out.sort();
 }
 
-type Finding = { file: string; line: number; text: string };
+type Finding = { file: string; line: number; kind: string; text: string };
 
-// A string literal that carries a backtick, with `file:line` for the message.
-function backtickStrings(file: string): Finding[] {
+// True when a node sits inside a `<code>`/`<pre>` element — the element that
+// renders a code SAMPLE. A template literal there is the supported way to show
+// code on /docs (api/page.tsx's curl blocks, embed/page.tsx's iframe snippet),
+// so a marker printed by such a sample is code the page MEANS to show, not a
+// markdown marker leaked into prose. Uses `parent` pointers, which the parse
+// below asks for (`setParentNodes = true`).
+function insideCodeSample(node: ts.Node): boolean {
+  for (let p = node.parent; p; p = p.parent) {
+    if (ts.isJsxElement(p)) {
+      const name = p.openingElement.tagName.getText();
+      if (name === "code" || name === "pre") return true;
+    }
+  }
+  return false;
+}
+
+// The marker a node carries, and the node kind, with `file:line` for the
+// message. Three shapes reach the reader as plain text (header, "HOW IT
+// DECIDES"); everything else returns null.
+function markerIn(node: ts.Node): { kind: string; text: string } | null {
+  // 1. A quoted string literal (`"…"` / `'…'`): the `body: "…"` prose and the
+  //    attribute strings (`label: "…"`). `node.text` is already decoded, so a
+  //    backtick in it is an unescaped marker.
+  if (ts.isStringLiteral(node)) {
+    return node.text.includes("`") ? { kind: "string literal", text: node.text } : null;
+  }
+  // 2. Raw JSX text — an element's literal children, e.g. `<p>see `marker`</p>`.
+  //    Neither a string nor a template literal, so a walk that collected only
+  //    `ts.StringLiteral` never saw it (card t_8580357e).
+  if (ts.isJsxText(node)) {
+    return node.text.includes("`") ? { kind: "raw JSX text", text: node.text } : null;
+  }
+  // 3. A template literal with no `${…}`. `node.text` DECODES `\``, so an
+  //    ESCAPED marker reads as a backtick here — the escaped form renders the
+  //    marker exactly like the plain one (card t_8580357e). The one exception
+  //    is a code SAMPLE: a template literal inside <code>/<pre> is how this
+  //    tree shows code, and a sample that prints a backtick is code the page
+  //    means to show.
+  if (ts.isNoSubstitutionTemplateLiteral(node)) {
+    if (!node.text.includes("`")) return null;
+    if (insideCodeSample(node)) return null;
+    return { kind: "template literal", text: node.text };
+  }
+  return null;
+}
+
+// Every marker in one page, in source order.
+function backtickMarkers(file: string): Finding[] {
   const src = readFileSync(file, "utf8");
   const sf = ts.createSourceFile(file, src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const found: Finding[] = [];
   const visit = (node: ts.Node) => {
-    // ts.StringLiteral covers "…" and '…' but NOT a template literal (`…`),
-    // which is a different node kind (NoSubstitutionTemplateLiteral) — the
-    // exclusion is the point, see the header.
-    if (ts.isStringLiteral(node) && node.text.includes("`")) {
+    const m = markerIn(node);
+    if (m) {
       const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
-      found.push({ file, line: line + 1, text: node.text });
+      found.push({ file, line: line + 1, kind: m.kind, text: m.text });
     }
     ts.forEachChild(node, visit);
   };
@@ -116,7 +191,7 @@ function backtickStrings(file: string): Finding[] {
 }
 
 const FILES = docsFiles();
-const FINDINGS: Finding[] = FILES.flatMap(backtickStrings);
+const FINDINGS: Finding[] = FILES.flatMap(backtickMarkers);
 
 test("the guard is reading the real docs tree (it cannot pass vacuously)", () => {
   // The walk must find the pages AND their prose: a parse that collected nothing
@@ -135,10 +210,17 @@ test("the guard is reading the real docs tree (it cannot pass vacuously)", () =>
   // Prove the AST walk really visits prose strings rather than stopping at the
   // module scope: assert a known prose body is among the visited literals.
   const bodies: string[] = [];
+  // The two node kinds the walk was widened to (card t_8580357e) are counted
+  // too, so an emptied JsxText/NoSubstitutionTemplate branch cannot pass this
+  // test vacuously while the string-literal count stays green.
+  const jsxTexts: string[] = [];
+  const codeSamples: string[] = [];
   const collect = (file: string) => {
     const sf = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
     const visit = (n: ts.Node) => {
       if (ts.isStringLiteral(n)) bodies.push(n.text);
+      if (ts.isJsxText(n)) jsxTexts.push(n.text);
+      if (ts.isNoSubstitutionTemplateLiteral(n) && insideCodeSample(n)) codeSamples.push(n.text);
       ts.forEachChild(n, visit);
     };
     visit(sf);
@@ -153,21 +235,47 @@ test("the guard is reading the real docs tree (it cannot pass vacuously)", () =>
     bodies.some((b) => b.startsWith("The assistant is a chat panel inside the dashboard")),
     "the docs/chat prose body is not among the visited literals — the walk is not reaching the section bodies",
   );
+  // Raw JSX text is the FIRST hole this guard missed (card t_8580357e): if the
+  // walk stops collecting `ts.JsxText`, shape 2 goes invisible again.
+  assert.ok(
+    jsxTexts.length >= 500,
+    `collected only ${jsxTexts.length} raw JSX text nodes from the docs tree — a marker written into raw JSX prose ` +
+      `would be invisible to this guard (the hole card t_8580357e filed)`,
+  );
+  assert.ok(
+    jsxTexts.some((t) => t.replace(/\s+/g, " ").trim().startsWith("A machine-readable OpenAPI 3.1 contract")),
+    "a known raw JSX text node (docs/api) is not among the visited nodes — the walk is not reaching JSX prose",
+  );
+  // A code sample shown through a template literal is the SUPPORTED shape, and
+  // the guard must be able to tell it apart from prose: if this collection
+  // empties, `insideCodeSample` is broken and every sample would be reported.
+  assert.ok(
+    codeSamples.length >= 3,
+    `collected only ${codeSamples.length} code-sample template literals from the docs tree — the ` +
+      `code/pre element exclusion is what keeps the supported way of showing code from being reported`,
+  );
 });
 
 test("no /docs prose carries a backtick marker (these pages render plain text)", () => {
   const lines = FINDINGS.map(
-    (f) => `${f.file.replace(DOCS_DIR, "src/app/docs")}:${f.line}  ${JSON.stringify(f.text.slice(0, 120))}`,
+    (f) =>
+      `${f.file.replace(DOCS_DIR, "src/app/docs")}:${f.line}  [${f.kind}]  ${JSON.stringify(f.text.slice(0, 120))}`,
   );
   assert.deepEqual(
     FINDINGS,
     [],
-    `these /docs strings carry a backtick span. Every /docs guide renders its prose as a plain text node ` +
-      `(the bodies are "…" strings printed with {p}), so the markers reach the reader literally — measured on ` +
-      `jomform.com 2026-10-04: /docs/chat showed "The fourth creates: \\\`upsert_form\\\` is proposable…" with ` +
-      `document.querySelectorAll("code").length === 0. Write the name as plain words, which is what the rest of ` +
-      `the tree already does (sound_enabled, set_workspace_settings, PATCH /v1/workspaces/{id} are all bare). ` +
-      `To SHOW code on a docs page, use a JSX template literal — {\\\`…\\\`} — which prints the text verbatim ` +
-      `(api/page.tsx's curl blocks do this). Findings:\n  ${lines.join("\n  ")}`,
+    // The message must not itself carry a literal backtick: this file is parsed
+    // by the widened walk, so a marker written into THIS message would be
+    // reported — and would be exactly the defect the guard forbids. The word is
+    // "backtick"; the rendered example is described, not reproduced.
+    `these /docs nodes carry a backtick marker. Every /docs guide renders its prose as a plain text node ` +
+      `(the bodies are quoted strings printed with {p}, raw JSX text is printed as-is, and a template literal with ` +
+      `no ${"${…}"} is printed verbatim), so the markers reach the reader literally — measured on ` +
+      `jomform.com 2026-10-04: /docs/chat showed "The fourth creates: upsert_form is proposable…" with the tool ` +
+      `name wrapped in backticks and document.querySelectorAll("code").length === 0. Write the name as plain ` +
+      `words, which is what the rest of the tree already does (sound_enabled, set_workspace_settings, ` +
+      `PATCH /v1/workspaces/{id} are all bare). To SHOW code on a docs page, use a template literal INSIDE ` +
+      `<code>/<pre> — the supported shape (api/page.tsx's curl blocks) — which prints the text verbatim. ` +
+      `Findings:\n  ${lines.join("\n  ")}`,
   );
 });
