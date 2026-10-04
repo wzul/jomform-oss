@@ -55,8 +55,8 @@ type fakeScratch struct {
 }
 
 func (f *fakeScratch) schemas(context.Context) ([]string, error) { return f.names, nil }
-func (f *fakeScratch) otherConnections(context.Context) (int, error) {
-	return f.others, nil
+func (f *fakeScratch) connections(context.Context) (connSnapshot, error) {
+	return connSnapshot{others: f.others}, nil
 }
 func (f *fakeScratch) dropSchema(_ context.Context, name string) error {
 	f.dropped = append(f.dropped, name)

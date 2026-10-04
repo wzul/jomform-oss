@@ -45,6 +45,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 
@@ -249,6 +250,66 @@ func pruneDeadSchemas(ctx context.Context, admin *pgxpool.Pool, keep string) {
 	_, _ = pruneScratch(ctx, keep, pgScratch{admin})
 }
 
+// connSnapshot is the prune's whole view of "who else is on this database":
+// the count the reclaim decision turns on, and who those backends were.
+//
+// It is captured in ONE query so that the reclaim decision and any later
+// judgement of that decision can be taken on the same instant. See
+// connectionSnapshot for why that is the whole point.
+type connSnapshot struct {
+	others int
+	dump   string
+}
+
+// otherConnectionsDump is open()'s idle predicate — EVERY backend, not just
+// client backends — read together with who those backends are, in one round
+// trip. The count and the dump come from the same snapshot of pg_stat_activity,
+// so a reader can never see a count that disagrees with the names beside it.
+const otherConnectionsDump = `SELECT count(*), coalesce(string_agg(
+    format('pid=%s type=%s state=%s query=%s', pid, backend_type, coalesce(state,''), left(coalesce(query,''), 120)), E'\n'), '(none)')
+  FROM pg_stat_activity
+  WHERE datname = current_database() AND pid <> pg_backend_pid()`
+
+// lastPruneSnapshot holds the connection reading the most recent LIVE prune (see
+// pgScratch.connections) took its decision on. connectionSnapshot hands it to
+// the guard so the guard judges open() against open()'s own reading instead of
+// re-querying an instant later.
+var lastPruneSnapshot atomic.Pointer[connSnapshot]
+
+// connectionSnapshot returns the connection reading the most recent prune took
+// its decision on, and whether any prune has run in this process.
+//
+// WHY THIS EXISTS (card t_53b9b15f)
+//
+// pruneScratch reclaims a leftover scratch schema only when it is ALONE on the
+// database (`others == 0`); with any other backend connected it issues no DDL at
+// all. The reclaim guard exists to tell that decision apart from a reclaim that
+// is simply dead. It used to do so by re-querying the same count AFTER open()
+// returned — and under host load a transient visitor (an autovacuum worker, or
+// the short-lived backend of a neighbouring create/drop-database churn) could
+// arrive for the prune and be gone by that second query. open() then read 1 and
+// suppressed by design, the guard read 0 and called it "a dead reclaim with NO
+// other backend connected", and the `test` gate — the only gate — red for a
+// reclaim that was working. Measured on this host at load ~10: reproduced
+// exactly that, with the prune's own reading captured as others=1.
+//
+// The fix is to make the verdict depend on the reading the decision was taken
+// on, not a fresh one that a transient backend can invalidate. A reading that
+// says `others > 0` can NEVER be evidence of a dead reclaim, however quiet the
+// database looks a moment later: nothing was suppressed, so the guard may not
+// report one. The direction that must never pass — a reclaim that left the
+// schema behind while the prune itself saw nobody — stays a hard failure.
+//
+// It reads a process-global, which is sound because each test binary is its own
+// process and the guard reads it immediately after the open() that set it.
+func connectionSnapshot() (connSnapshot, bool) {
+	s := lastPruneSnapshot.Load()
+	if s == nil {
+		return connSnapshot{}, false
+	}
+	return *s, true
+}
+
 // scratchQuerier is the slice of the connection prune needs. It exists so the
 // prune logic can be driven against a fake that reports planted schemas and a
 // controlled "other connections" count — the live-database test can only ever
@@ -256,7 +317,7 @@ func pruneDeadSchemas(ctx context.Context, admin *pgxpool.Pool, keep string) {
 // abandoned, never drop what a peer owns) need a driver that can set them.
 type scratchQuerier interface {
 	schemas(ctx context.Context) ([]string, error)
-	otherConnections(ctx context.Context) (int, error)
+	connections(ctx context.Context) (connSnapshot, error)
 	dropSchema(ctx context.Context, name string) error
 }
 
@@ -280,12 +341,18 @@ func (q pgScratch) schemas(ctx context.Context) ([]string, error) {
 	return names, rows.Err()
 }
 
-func (q pgScratch) otherConnections(ctx context.Context) (int, error) {
-	var others int
-	err := q.admin.QueryRow(ctx,
-		`SELECT count(*) FROM pg_stat_activity
-		  WHERE datname = current_database() AND pid <> pg_backend_pid()`).Scan(&others)
-	return others, err
+// connections is the live "who else is connected" read. It records its answer
+// for the reclaim guard (connectionSnapshot) — this is the read the prune's
+// decision is taken on, so it is exactly the reading a guard must judge that
+// decision against. Recording here rather than in pruneScratch keeps the record
+// to the LIVE path: the fake driver the unit test uses never sets it.
+func (q pgScratch) connections(ctx context.Context) (connSnapshot, error) {
+	var s connSnapshot
+	err := q.admin.QueryRow(ctx, otherConnectionsDump).Scan(&s.others, &s.dump)
+	if err == nil {
+		lastPruneSnapshot.Store(&s)
+	}
+	return s, err
 }
 
 func (q pgScratch) dropSchema(ctx context.Context, name string) error {
@@ -307,7 +374,7 @@ func pruneScratch(ctx context.Context, keep string, q scratchQuerier) ([]string,
 	// Unattributable (legacy) schemas may be reclaimed only when this is the
 	// sole connection to the database.
 	solo := true
-	if others, err := q.otherConnections(ctx); err == nil && others > 0 {
+	if snap, err := q.connections(ctx); err == nil && snap.others > 0 {
 		solo = false
 	}
 
