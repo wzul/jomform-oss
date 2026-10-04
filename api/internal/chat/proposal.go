@@ -67,6 +67,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/jsonschema-go/jsonschema"
+
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/mcpsrv"
 )
@@ -108,6 +110,24 @@ var (
 	ErrProposalArgsChanged    = errors.New("argumen cadangan berubah — sahkan semula cadangan asal")
 	errProposalRunLimit       = errors.New("terlalu banyak cadangan dalam satu jawapan")
 	errProposalUnrenderable   = errors.New("cadangan tanpa penerangan kad tidak dibenarkan")
+	// ErrProposalArgsInvalid is the CONFIRM-side refusal for a stored proposal
+	// whose arguments the target tool would never accept. Such a card can never
+	// be carried out, so it is refused BEFORE the token is claimed: the token is
+	// not spent, and the user is told to have the assistant prepare a fresh card
+	// rather than to "try again" on one that cannot work. Exported because the
+	// REST layer maps it.
+	ErrProposalArgsInvalid = errors.New("cadangan itu tidak boleh dilaksanakan kerana hujahnya " +
+		"tidak diterima oleh alat itu — minta pembantu menyediakan kad baharu")
+	// errProposalArgsRejected is the PROPOSE-side form of the same verdict. It is
+	// returned with the SPECIFIC detail attached (which required key is absent,
+	// which key is not recognised) because the model is the one who can correct
+	// the call, and it is classified separately in the audit log.
+	errProposalArgsRejected = errors.New("hujah cadangan tidak diterima oleh alat itu")
+	// errNoToolSchemaSource means the tool's own input schema could not be read:
+	// the caller is not a live MCP session, so there is no contract to check the
+	// arguments against. Refusing is deliberate — recording a proposal whose
+	// arguments nothing verified is the defect this check exists to close.
+	errNoToolSchemaSource = errors.New("sesi alat tiada — kontrak alat tidak dapat dibaca")
 )
 
 // ProposeRefusalKind classifies a proposal-lane error as a short STABLE token for
@@ -132,6 +152,12 @@ func ProposeRefusalKind(err error) string {
 		return "token_required"
 	case errors.Is(err, errProposalUnrenderable):
 		return "unrenderable"
+	case errors.Is(err, ErrProposalArgsInvalid):
+		return "args_unacceptable"
+	case errors.Is(err, errProposalArgsRejected):
+		return "args_rejected"
+	case errors.Is(err, errNoToolSchemaSource):
+		return "no_tool_contract"
 	case errors.Is(err, errProposalRunLimit):
 		return "run_limit"
 	}
@@ -258,15 +284,39 @@ func ProposalTitle(tool string) (title, summary string, ok bool) {
 	return d.title, d.summary, ok
 }
 
-// describeFn renders one tool's card fields. Each proposable tool has one, and
+// cardRenderer renders one tool's card fields, plus the arguments that MUST name
+// the object the card is about.
+//
+// WHY THE KEYS ARE DECLARED BESIDE THE RENDERER (card t_623676d1). The card's
+// summary asserts that the object is listed ("Medan produk yang disenaraikan di
+// bawah akan ditukar"), and the object row was rendered from ONE hardcoded key
+// with a plain `if id != ""`. So a proposal whose arguments keyed — or blanked —
+// the object as anything else rendered a card that said a product was listed with
+// no product on it, and whose Confirm could then only fail. Declaring the key as
+// part of the SAME map entry as the renderer means the two cannot drift: Describe
+// refuses a tool whose declared object key is absent or blank, so "a card is never
+// wrong about WHICH object" (the property its own doc comment claims) is enforced
+// rather than asserted.
+type cardRenderer struct {
+	// objectKeys are the argument keys whose values identify the object(s) the
+	// card acts on. Each must be present and non-blank for the card to be
+	// renderable. Empty for a tool that acts on NO EXISTING OBJECT — a creation,
+	// where "which object" is not a question the user can get wrong.
+	objectKeys []string
+	fn         func(map[string]any, Labeler) []ProposalField
+}
+
+// describeFns renders one tool's card fields. Each proposable tool has one, and
 // Describe refuses a tool with none — so adding a tool to the proposable set
 // without teaching the card about it fails the guard rather than shipping an
 // unexplained confirmation.
-var describeFns = map[string]func(map[string]any, Labeler) []ProposalField{
-	"update_product":           describeProductUpdate,
-	"update_product_variation": describeVariationUpdate,
-	"set_form_theme":           describeFormTheme,
-	"upsert_form":              describeFormCreation,
+var describeFns = map[string]cardRenderer{
+	"update_product":           {objectKeys: []string{"product_id"}, fn: describeProductUpdate},
+	"update_product_variation": {objectKeys: []string{"product_id", "variation_id"}, fn: describeVariationUpdate},
+	"set_form_theme":           {objectKeys: []string{"form_id"}, fn: describeFormTheme},
+	// upsert_form creates OR updates: with form_id blank it is a CREATION (no
+	// object to name, and the card says so explicitly), so it declares none.
+	"upsert_form": {fn: describeFormCreation},
 }
 
 // describeFormCreation renders the card for t_804040be's creation.
@@ -316,22 +366,30 @@ func describeFormCreation(args map[string]any, label Labeler) []ProposalField {
 // ONLY. The model's prose is not an input: it cannot make the card promise
 // something the arguments do not do.
 //
-// ok=false means this tool has no card: either it is not proposable at all, or it
-// was added to the proposable set without a renderer. Both must refuse — a card
-// the server cannot explain is a card the user cannot judge.
+// ok=false means this tool has no card, or its arguments do not name the object
+// the card would claim: either it is not proposable at all, it was added to the
+// proposable set without a renderer, or its declared object key is absent/blank.
+// All of them must refuse — a card the server cannot explain, or one that asserts
+// a listed object it cannot name, is a card the user cannot judge (t_623676d1).
 func Describe(tool string, args map[string]any, label Labeler) (title, summary string, fields []ProposalField, ok bool) {
 	title, summary, ok = ProposalTitle(tool)
 	if !ok {
 		return "", "", nil, false
 	}
-	fn, ok := describeFns[tool]
+	renderer, ok := describeFns[tool]
 	if !ok {
 		return "", "", nil, false
+	}
+	// The object must be NAMEABLE before a card that claims to name it is built.
+	for _, key := range renderer.objectKeys {
+		if strings.TrimSpace(asString(args[key])) == "" {
+			return "", "", nil, false
+		}
 	}
 	if label == nil {
 		label = func(string, string) string { return "" }
 	}
-	return title, summary, fn(args, label), true
+	return title, summary, renderer.fn(args, label), true
 }
 
 // named renders "Name (id)" when a name resolved, else just the id — so a card is
@@ -619,6 +677,120 @@ type proposalStore interface {
 	Claim(ctx context.Context, userID, tokenHash string) (*dbstore.ChatWriteProposal, error)
 }
 
+// toolSchemaSource is the optional capability a tool channel has when it can
+// report a registered tool's DECLARED input schema (see mcpCaller.toolInputSchema,
+// which reads it over tools/list from the live registry).
+//
+// WHY IT IS A CAPABILITY AND NOT PART OF toolCaller (card t_623676d1). The
+// proposal lane must check the model's arguments against the target tool's REAL
+// contract, and the only honest source of that contract is the registry the tool
+// itself validates with. A caller that cannot produce one (a test fake) has no
+// contract to check against, and the lane refuses rather than recording a
+// proposal whose arguments nothing verified — which is precisely the defect.
+type toolSchemaSource interface {
+	toolInputSchema(ctx context.Context, name string) (schema any, found bool, err error)
+}
+
+// validateProposalArgs checks a proposal's arguments against the TARGET TOOL's
+// own input schema.
+//
+// THE DEFECT THIS CLOSES (card t_623676d1). The card's object row was rendered
+// from ONE hardcoded key (`args["product_id"]`), and nothing checked the
+// arguments against the tool at all — so a model that keyed the object as `id`
+// (which is what the chat's own READ tools return: mcpsrv.handlers.go's
+// productOut is `json:"id"`) produced a card whose summary said "the product
+// fields listed below will be changed" with no product row, and whose Confirm
+// then failed with a bare 400 after spending the token. The model was being asked
+// to rename a key between two tool schemas and nothing told it, and the user was
+// shown a decision that could never be carried out.
+//
+// WHY THE SCHEMA AND NOT A LIST OF KNOWN KEY NAMES. The target tool's MCP input
+// schema IS its accept/reject predicate — the SDK validates every dispatch
+// against it before the handler runs — so checking the same schema makes the
+// proposal lane agree with the tool BY CONSTRUCTION: it can be neither stricter
+// (it would refuse something the tool accepts) nor looser (it would card
+// something the tool refuses). A hand-written alias table would be a second
+// declaration of the same rule, and the whole class of defect here is two
+// declarations drifting apart.
+func (r *Runner) validateProposalArgs(ctx context.Context, caller toolCaller, tool string, args map[string]any) error {
+	src, ok := caller.(toolSchemaSource)
+	if !ok {
+		return errNoToolSchemaSource
+	}
+	raw, found, err := src.toolInputSchema(ctx, tool)
+	if err != nil {
+		return fmt.Errorf("baca skema alat %s: %w", tool, err)
+	}
+	if !found {
+		return fmt.Errorf("alat %q tiada dalam pendaftaran — kontraknya tidak dapat disahkan", tool)
+	}
+	// The TOOL NAME is put in front of the schema's own message so the refusal is
+	// self-contained for the model: propose_write's arguments carry the tool, but a
+	// refusal the model can act on should name the contract it violated rather than
+	// require it to remember which call it just made.
+	if verr := validateAgainstToolSchema(tool, raw, args); verr != nil {
+		return fmt.Errorf("alat %s: %w", tool, verr)
+	}
+	return nil
+}
+
+// validateAgainstToolSchema is the schema check itself, split out so both lanes
+// (propose and confirm) share ONE rule and a test can drive it without a session.
+//
+// The arguments are validated on a COPY: Validate may apply the schema's own
+// defaults in place, and the stored arguments must remain exactly the ones the
+// card described (the card is rendered from them, and the args_hash binds the
+// confirmation to them). Our schemas declare no defaults, so in practice the copy
+// is belt and braces — but a future default must not silently rewrite what the
+// user was shown.
+func validateAgainstToolSchema(tool string, rawSchema any, args map[string]any) error {
+	b, err := json.Marshal(rawSchema)
+	if err != nil {
+		return fmt.Errorf("%w: skema alat %s tidak boleh dibaca (%v)", errProposalArgsRejected, tool, err)
+	}
+	var sch jsonschema.Schema
+	if err := json.Unmarshal(b, &sch); err != nil {
+		return fmt.Errorf("%w: skema alat %s tidak boleh dibaca (%v)", errProposalArgsRejected, tool, err)
+	}
+	resolved, err := sch.Resolve(&jsonschema.ResolveOptions{})
+	if err != nil || resolved == nil {
+		return fmt.Errorf("%w: skema alat %s tidak boleh diselesaikan (%v)", errProposalArgsRejected, tool, err)
+	}
+	// MISSING REQUIRED KEYS FIRST, and reported as their own sentence.
+	//
+	// WHY THIS IS SEPARATE FROM THE VALIDATION BELOW (t_623676d1). A validator
+	// reports the FIRST rule it trips, and for the shape this card is about the two
+	// rules overlap: a model that keys the object `id` trips BOTH
+	// `additionalProperties:false` (the undeclared `id`) and `required` (no
+	// `product_id`). Only the second tells the model WHAT TO SEND — "unexpected
+	// additional properties [\"id\"]" says what was wrong without saying what the
+	// tool wants, so the model can only guess or repeat itself. Naming the missing
+	// required keys explicitly is the correction cue that turns a dead card into one
+	// corrected turn, and it comes from the SAME schema, so it cannot disagree with
+	// the tool.
+	var missing []string
+	for _, req := range sch.Required {
+		if _, present := args[req]; !present {
+			missing = append(missing, req)
+		}
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return fmt.Errorf("%w: medan wajib tiada: %s", errProposalArgsRejected, strings.Join(missing, ", "))
+	}
+	cp := make(map[string]any, len(args))
+	for k, v := range args {
+		cp[k] = v
+	}
+	if err := resolved.Validate(cp); err != nil {
+		// The schema's own message is the model's correction cue for the rules the
+		// required check above cannot cover (an undeclared key, a wrong type), so it
+		// is carried verbatim.
+		return fmt.Errorf("%w: %v", errProposalArgsRejected, err)
+	}
+	return nil
+}
+
 // newProposalToken mints the raw opaque token. crypto/rand, never math/rand: the
 // token is the one value that distinguishes "the user confirmed" from "somebody
 // guessed".
@@ -669,6 +841,27 @@ func (r *Runner) proposeFromArgs(ctx context.Context, caller toolCaller, argsJSO
 	}
 	if in.Arguments == nil {
 		in.Arguments = map[string]any{}
+	}
+	// THE ARGUMENTS MUST BE ONE THE TOOL WILL ACTUALLY ACCEPT, and that is checked
+	// HERE — at propose time, against the tool's own registered schema — because a
+	// card that cannot be carried out is worse than a refusal: it asks the user to
+	// make a decision, spends their attention, and (before this check) spent the
+	// token too, on a Confirm that could only answer a bare 400.
+	//
+	// It runs BEFORE the renderability check below, and before the token is minted,
+	// so:
+	//   - a rejected proposal leaves no row and no token behind, and
+	//   - where the two refuse the same argument set (a mis-keyed object is both
+	//     "unrenderable" and "not accepted"), the model receives the ACTIONABLE
+	//     refusal — the schema names the key it wants — rather than the opaque one.
+	//
+	// The refusal is deliberately MODEL-facing: it names the tool and the schema's
+	// own objection, so the model can correct a mis-keyed object and propose again
+	// (the read tools return rows keyed `id`, while the write tools want
+	// `product_id` — the exact rename the shipped data model invites, t_623676d1).
+	// That turns a dead card the user cannot act on into one corrected turn.
+	if err := r.validateProposalArgs(ctx, caller, in.Tool, in.Arguments); err != nil {
+		return nil, err
 	}
 	if _, _, _, ok := Describe(in.Tool, in.Arguments, nil); !ok {
 		return nil, errProposalUnrenderable
@@ -804,6 +997,27 @@ func (r *Runner) Confirm(ctx context.Context, writeCtx context.Context, userID, 
 		// The proposable set is a product decision that can shrink; a row written
 		// under an older set must not execute under a newer one.
 		return nil, fmt.Errorf("alat %q tidak lagi boleh dilaksanakan melalui chat", p.Tool)
+	}
+	// THE STORED ARGUMENTS MUST BE ONE THE TOOL ACCEPTS, and this is checked
+	// BEFORE the claim for the same reason the args-hash check is (t_623676d1): a
+	// row that slipped into the store under an older, unchecked contract would
+	// otherwise spend the user's token on a Confirm that can only fail. Refusing
+	// here leaves the token unspent, so the recovery the user is offered —
+	// "ask the assistant to prepare it again" — is TRUE, instead of the old
+	// "please try again" hint for a card that could never succeed.
+	//
+	// It is checked BEFORE the renderability test below so that a card which is
+	// both unrenderable AND unacceptable (the mis-keyed object is both) answers the
+	// refusal that explains WHY — "the tool does not accept these arguments" — and
+	// not the one that only says no card could be drawn.
+	schemaCaller, err := r.newSession(ctx)
+	if err != nil {
+		return nil, err
+	}
+	verr := r.validateProposalArgs(ctx, schemaCaller, p.Tool, p.Args)
+	_ = schemaCaller.close()
+	if verr != nil {
+		return nil, fmt.Errorf("%w", ErrProposalArgsInvalid)
 	}
 	if _, _, _, ok := Describe(p.Tool, p.Args, nil); !ok {
 		return nil, errProposalUnrenderable

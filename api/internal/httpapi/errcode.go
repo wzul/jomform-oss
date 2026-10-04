@@ -85,6 +85,22 @@ const (
 	// that branches on 400 is perturbed.
 	CodeWorkspaceScopeRequired = "workspace.scopeRequired"
 
+	// The chat lane's "this card cannot be carried out at all" refusal
+	// (t_623676d1).
+	//
+	// A proposal whose arguments the target tool would never accept — the model
+	// keyed the object `id` while the write tool requires `product_id`, which is
+	// the rename the shipped read/write schemas invite — is refused BEFORE the
+	// token is claimed, so the token is still live and the SAME card can never
+	// succeed. Riding 409's class code would let the page print its spent/expired
+	// sentence ("expired or was already used") for a proposal that neither
+	// expired nor was used; the remedy is the same (ask for a fresh card) but the
+	// reason is not, and the reason is what tells the user whether their click was
+	// even attempted. The status is 409 like its siblings — the request was well
+	// formed and it is the PROPOSAL that is unfit — so no client branching on
+	// status is perturbed; only the CODE is new.
+	CodeProposalArgsInvalid = "chat.proposalArgsInvalid"
+
 	// Roles and API-key scope.
 	CodeRoleManageRequired = "role.manageRequired"
 	CodeRoleAdminRequired  = "role.adminRequired"
@@ -258,6 +274,14 @@ var errCodeByMessage = map[string]string{
 	// const's own declaration site satisfies exactly once — so the wire wording
 	// and this table cannot drift apart silently.
 	"skop workspace diperlukan — pilih workspace dahulu": CodeWorkspaceScopeRequired,
+
+	// The chat's "this card cannot be carried out" refusal (t_623676d1). Keyed on
+	// the exact literal rest_chat.go's chatConfirmMessageFor writes (see
+	// CodeProposalArgsInvalid for why it is not the 409 class code). Without this
+	// row the page would see `request.conflict` and print "expired or was already
+	// used" for a proposal that was neither — and, worse, would not learn that the
+	// token is still live.
+	"cadangan itu tidak boleh dilaksanakan — minta pembantu menyediakan kad baharu": CodeProposalArgsInvalid,
 
 	// Payments / CHIP / subscriptions.
 	"chip belum dikonfigurasi akaun ini":                 CodePaymentNotConfigured,

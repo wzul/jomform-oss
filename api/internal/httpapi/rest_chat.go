@@ -419,6 +419,13 @@ func chatConfirmStatusFor(err error) int {
 		errors.Is(err, dbstore.ErrChatProposalExpired),
 		errors.Is(err, chat.ErrProposalArgsChanged):
 		return http.StatusConflict
+	case errors.Is(err, chat.ErrProposalArgsInvalid):
+		// The stored arguments are not one the tool accepts, refused BEFORE the
+		// claim (chat.Runner.Confirm). It is a CONFLICT and not a 400: the
+		// request the user sent is well formed — what has changed is the
+		// proposal's own fitness, which the user resolves by having the
+		// assistant prepare a fresh card, exactly like a spent or expired token.
+		return http.StatusConflict
 	case errors.Is(err, dbstore.ErrChatProposalNotFound):
 		return http.StatusNotFound
 	default:
@@ -436,6 +443,10 @@ func chatConfirmMessageFor(err error) string {
 		return "cadangan itu telah luput — minta pembantu menyediakan semula"
 	case errors.Is(err, chat.ErrProposalArgsChanged):
 		return "cadangan berubah sejak dipaparkan — sahkan semula dari kad asal"
+	case errors.Is(err, chat.ErrProposalArgsInvalid):
+		// NOT "try again": the token is UNSPENT, and the same card can never
+		// succeed. The remedy is a fresh proposal, and the copy says so.
+		return "cadangan itu tidak boleh dilaksanakan — minta pembantu menyediakan kad baharu"
 	case errors.Is(err, dbstore.ErrChatProposalNotFound):
 		return "cadangan tidak dijumpai"
 	default:

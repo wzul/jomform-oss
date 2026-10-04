@@ -115,6 +115,7 @@ type ProposalState =
   | "done"
   | "cancelled"
   | "stale"
+  | "unexecutable"
   | "scopeRequired"
   | "failed";
 
@@ -406,6 +407,25 @@ export default function ChatPage() {
         setErr(action === "confirm" ? t("chat.proposalStale") : t("chat.cancelStale"));
         return;
       }
+      if (outcome === "unexecutable") {
+        // A card whose arguments the tool would never accept (t_623676d1). The
+        // server refuses it BEFORE the claim, so the token is UNSPENT — the card
+        // must not wear "expired", which is false of it, and must not tell the
+        // user to try again on an action that can never work. Its own state and
+        // its own sentence say what is actually true: nothing was attempted, and
+        // a freshly prepared card is the fix.
+        //
+        // Cancel is the exception: cancelling such a card is a real, successful
+        // action (the token IS spent, the proposal IS settled), so it is reported
+        // as a done/cancelled card rather than as this refusal.
+        if (action === "cancel") {
+          setState(msgIndex, p.token, "cancelled");
+          return;
+        }
+        setState(msgIndex, p.token, "unexecutable");
+        setErr(t("chat.proposalUnexecutable"));
+        return;
+      }
       if (outcome === "failed") {
         // A genuine failure of the change — including a 400 that names a refusal
         // which is not the scope. The card says so, and here that is accurate: for
@@ -557,9 +577,11 @@ export default function ChatPage() {
                                   ? t("chat.proposalBadgeCancelled")
                                   : state === "stale"
                                     ? t("chat.proposalBadgeStale")
-                                    : state === "scopeRequired"
-                                      ? t("chat.proposalBadgeScopeRequired")
-                                      : t("chat.proposalBadgeFailed")}
+                                    : state === "unexecutable"
+                                      ? t("chat.proposalBadgeUnexecutable")
+                                      : state === "scopeRequired"
+                                        ? t("chat.proposalBadgeScopeRequired")
+                                        : t("chat.proposalBadgeFailed")}
                           </span>
                           <span className="font-semibold">{p.title}</span>
                         </div>
@@ -609,6 +631,13 @@ export default function ChatPage() {
                         {state === "stale" && (
                           <p className="mt-2 font-medium text-amber-700">{t("chat.proposalStale")}</p>
                         )}
+                        {/* NO footer for "unexecutable" either, and for the same
+                            reason as "scopeRequired": the sentence is carried once,
+                            by the page's single role="alert" (t_623676d1). The card's
+                            job in this state is to stop claiming a failure — the
+                            token is unspent, nothing was attempted — so it wears its
+                            own badge and offers no "try again" footer for an action
+                            that can never succeed as shown. */}
                         {/* NO footer for "scopeRequired". The scope refusal is
                             carried by the page's single role="alert" (setErr above)
                             — rendering it here as well would put the same sentence

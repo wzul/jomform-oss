@@ -2014,6 +2014,10 @@ export const DICT = {
   // what the card needs rather than claiming the change failed, and it does not
   // wear the red "did not go through" pill for a request the server never ran.
   "chat.proposalBadgeScopeRequired": { en: "Needs a workspace", ms: "Perlu workspace", zh: "需要工作区", ta: "பணியிடம் தேவை", ar: "يحتاج مساحة عمل" },
+  // The card's arguments are ones the tool would never accept (t_623676d1). Its
+  // token is UNSPENT, so the badge must not claim expiry and must not claim a
+  // failure: nothing was attempted and nothing was consumed.
+  "chat.proposalBadgeUnexecutable": { en: "Cannot be applied — nothing changed", ms: "Tidak boleh dilaksanakan — tiada apa-apa diubah", zh: "无法执行——未作更改", ta: "செயல்படுத்த முடியாது — எதுவும் மாறவில்லை", ar: "لا يمكن تنفيذه — لم يتغير شيء" },
   "chat.confirm": { en: "Confirm", ms: "Sahkan", zh: "确认", ta: "உறுதிப்படுத்து", ar: "تأكيد" },
   "chat.cancel": { en: "Cancel", ms: "Batal", zh: "取消", ta: "ரத்து", ar: "إلغاء" },
   "chat.confirmHint": { en: "Nothing has changed yet.", ms: "Belum ada apa-apa yang berubah.", zh: "目前尚未发生任何更改。", ta: "இதுவரை எதுவும் மாறவில்லை.", ar: "لم يتغير شيء بعد." },
@@ -2022,6 +2026,12 @@ export const DICT = {
   "chat.confirmed": { en: "Done — the change has been applied.", ms: "Selesai — perubahan telah dilaksanakan.", zh: "完成——更改已生效。", ta: "முடிந்தது — மாற்றம் பயன்படுத்தப்பட்டது.", ar: "تم — طُبِّق التغيير." },
   "chat.cancelled": { en: "Cancelled — nothing was changed.", ms: "Dibatalkan — tiada apa-apa yang diubah.", zh: "已取消——未做任何更改。", ta: "ரத்து செய்யப்பட்டது — எதுவும் மாற்றப்படவில்லை.", ar: "أُلغي — لم يتغير شيء." },
   "chat.proposalStale": { en: "This proposal has expired or was already used. Ask the assistant to prepare it again.", ms: "Cadangan ini telah luput atau sudah digunakan. Minta pembantu menyediakannya semula.", zh: "该提议已过期或已被使用。请让助手重新准备。", ta: "இந்த முன்மொழிவு காலாவதியானது அல்லது ஏற்கனவே பயன்படுத்தப்பட்டது. உதவியாளரை மீண்டும் தயார் செய்யச் சொல்லுங்கள்.", ar: "انتهت صلاحية هذا المقترح أو استُخدم سابقًا. اطلب من المساعد تحضيره من جديد." },
+  // A card whose arguments the tool would never accept (t_623676d1). Distinct from
+  // chat.proposalStale on purpose: this card did NOT expire and was NOT used (the
+  // server refuses it before claiming the token), so telling the user it "expired
+  // or was already used" is false and hides the useful fact that a fresh card is
+  // all they need — the sentence says that instead.
+  "chat.proposalUnexecutable": { en: "This proposal cannot be carried out as prepared. Ask the assistant to prepare it again — nothing was changed and nothing was used up.", ms: "Cadangan ini tidak boleh dilaksanakan seperti yang disediakan. Minta pembantu menyediakannya semula — tiada apa-apa diubah dan tiada apa-apa digunakan.", zh: "该提议按当前内容无法执行。请让助手重新准备——未做任何更改，也未消耗任何东西。", ta: "தயார் செய்யப்பட்டபடி இந்த முன்மொழிவை நிறைவேற்ற முடியாது. உதவியாளரை மீண்டும் தயார் செய்யச் சொல்லுங்கள் — எதுவும் மாறவில்லை, எதுவும் செலவாகவில்லை.", ar: "لا يمكن تنفيذ هذا المقترح بصيغته المُعدّة. اطلب من المساعد تحضيره من جديد — لم يتغير شيء ولم يُستهلك شيء." },
   "chat.cancelStale": { en: "That proposal is already settled — nothing to cancel.", ms: "Cadangan itu sudah selesai — tiada apa untuk dibatalkan.", zh: "该提议已结案——无可取消。", ta: "அந்த முன்மொழிவு ஏற்கனவே முடிந்தது — ரத்து செய்ய ஒன்றுமில்லை.", ar: "هذا المقترح محسوم بالفعل — لا شيء لإلغائه." },
   "chat.confirmFail": { en: "The change could not be applied. Please try again.", ms: "Perubahan tidak dapat dilaksanakan. Sila cuba lagi.", zh: "无法应用该更改。请重试。", ta: "மாற்றத்தைப் பயன்படுத்த முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر تطبيق التغيير. يرجى المحاولة مرة أخرى." },
   "chat.cancelFail": { en: "The proposal could not be cancelled. Please try again.", ms: "Cadangan tidak dapat dibatalkan. Sila cuba lagi.", zh: "无法取消该提议。请重试。", ta: "முன்மொழிவை ரத்து செய்ய முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر إلغاء المقترح. يرجى المحاولة مرة أخرى." },

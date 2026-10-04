@@ -58,15 +58,17 @@
 //   npx playwright test e2e/chat-scope-400.spec.ts    # this file alone
 import { test, expect, type Page } from "@playwright/test";
 import { DICT } from "../src/components/i18nDict";
-import { WORKSPACE_SCOPE_REQUIRED_CODE } from "../src/lib/chatConfirm";
+import { WORKSPACE_SCOPE_REQUIRED_CODE, PROPOSAL_ARGS_INVALID_CODE } from "../src/lib/chatConfirm";
 
 const EN = {
   scopeRequired: DICT["chat.scopeRequired"].en,
   confirmFail: DICT["chat.confirmFail"].en,
   proposalStale: DICT["chat.proposalStale"].en,
+  proposalUnexecutable: DICT["chat.proposalUnexecutable"].en,
   confirmRateLimited: DICT["chat.confirmRateLimited"].en,
   badgeFailed: DICT["chat.proposalBadgeFailed"].en,
   badgeScopeRequired: DICT["chat.proposalBadgeScopeRequired"].en,
+  badgeUnexecutable: DICT["chat.proposalBadgeUnexecutable"].en,
   confirm: DICT["chat.confirm"].en,
   send: DICT["chat.send"].en,
   placeholder: DICT["chat.placeholder"].en,
@@ -142,8 +144,13 @@ async function stubAPI(page: Page, decisionStatus: number, decisionCode = "") {
     // A non-scope 400 carries the TOOL's prose, not the scope sentence: that is
     // what the server sends for a post-claim refusal, and the page must still not
     // render the scope copy for it.
-    const text =
-      decisionStatus === 400 && decisionCode === NON_SCOPE_400_CODE
+    // A 409 carrying the unexecutable code carries its own message (the server's
+    // real one), so the stub reproduces the shape a real server sends — the page
+    // must branch on the CODE, not on this prose.
+    const unexecutable = decisionStatus === 409 && decisionCode === UNEXECUTABLE_CODE;
+    const text = unexecutable
+      ? UNEXECUTABLE_WIRE_TEXT
+      : decisionStatus === 400 && decisionCode === NON_SCOPE_400_CODE
         ? NON_SCOPE_400_WIRE_TEXT
         : (statusText[decisionStatus] ?? "ralat");
     return r.fulfill({
@@ -156,6 +163,22 @@ async function stubAPI(page: Page, decisionStatus: number, decisionCode = "") {
     });
   });
 }
+
+/**
+ * The unexecutable refusal's code, read out of the web constant that mirrors the
+ * server's (src/lib/chatConfirm.ts, itself read from api/internal/httpapi/errcode.go
+ * by chatConfirm.test.ts). Read rather than typed so the two spellings cannot
+ * drift — a rename on the server would silently make this case unreachable.
+ */
+const UNEXECUTABLE_CODE = PROPOSAL_ARGS_INVALID_CODE;
+
+/**
+ * The server's own wire prose for the unexecutable refusal (rest_chat.go's
+ * chatConfirmMessageFor). Deliberately NOT the spent/expired sentence: the stub
+ * must carry the shape a real server sends, so this test proves the page tells
+ * the live token from the dead one.
+ */
+const UNEXECUTABLE_WIRE_TEXT = "cadangan itu tidak boleh dilaksanakan — minta pembantu menyediakan kad baharu";
 
 /**
  * The scope refusal's code, read out of the WEB constant that mirrors the server's
@@ -443,5 +466,57 @@ test.describe("chat confirm path: a scope refusal is not a failed change", () =>
       page.getByText(EN.scopeRequired, { exact: true }),
       "a rate limit is not a scope refusal — the scope copy must not appear",
     ).toHaveCount(0);
+  });
+
+  test("a 409 for an unexecutable card is not reported as expired or as a failure", async ({
+    page,
+    baseURL,
+  }) => {
+    // t_623676d1. A proposal whose arguments the target tool would never accept —
+    // the model keyed the object `id` while update_product requires `product_id` —
+    // used to answer a bare 400 AFTER spending the token, and the page told the
+    // user "The change could not be applied. Please try again." for a card that
+    // can never work. It now answers 409 with its OWN code, and the token is UNSPENT
+    // (the refusal runs before the claim), so the page must say what is actually
+    // true: nothing was attempted, nothing was used up, ask for a fresh card.
+    await stubAPI(page, 409, UNEXECUTABLE_CODE);
+    await freshState(page);
+    await confirmWithoutScope(page, baseURL);
+
+    // THE ASSERTION THAT FAILS PRE-FIX: the page must NOT claim the card expired.
+    // That sentence ("expired or was already used") is false of this card — the
+    // token is still live — and it would hide the one thing the user needs to know.
+    await expect(
+      page.getByText(EN.proposalStale, { exact: true }),
+      `the unexecutable 409 rendered the spent/expired copy ("${EN.proposalStale}") — the token is ` +
+        `UNSPENT, the card neither expired nor was used, and the user is misled about which state they are in`,
+    ).toHaveCount(0);
+    // And not a failed change either: nothing was attempted.
+    await expect(
+      page.getByText(EN.confirmFail, { exact: true }),
+      `the unexecutable card rendered "try again" ("${EN.confirmFail}") — retrying the SAME card can ` +
+        `never succeed as shown, so the advice is unusable`,
+    ).toHaveCount(0);
+
+    // Instead its own sentence, ONCE (the alert), and its own badge on the card.
+    await expect(page.locator('p[role="alert"]')).toHaveText(EN.proposalUnexecutable);
+    const copyNodes = page.getByText(EN.proposalUnexecutable, { exact: true });
+    await expect(
+      copyNodes,
+      "the unexecutable refusal must be rendered exactly once — the card footer and the alert must not both carry it",
+    ).toHaveCount(1);
+    const card = page.locator('[class*="border-sky-200"]').filter({ hasText: PROPOSAL.title });
+    await expect(card).toContainText(EN.badgeUnexecutable);
+    await expect(
+      card,
+      'the card must not wear the "did not go through" badge — nothing was attempted and nothing was used up',
+    ).not.toContainText(EN.badgeFailed);
+
+    console.log(
+      `OBSERVED unexecutable=409 code=${JSON.stringify(UNEXECUTABLE_CODE)} ` +
+        `alert=${JSON.stringify(await page.locator('p[role="alert"]').textContent())} ` +
+        `staleCount=${await page.getByText(EN.proposalStale, { exact: true }).count()} ` +
+        `confirmFailCount=${await page.getByText(EN.confirmFail, { exact: true }).count()}`,
+    );
   });
 });

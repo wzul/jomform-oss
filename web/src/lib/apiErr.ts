@@ -101,6 +101,14 @@ export const API_ERROR_KEYS: Record<string, Key> = {
   // today, and a second wording would be a second thing to keep in step. Same
   // precedent as connect.tokenMissing below.
   "workspace.scopeRequired": "chat.scopeRequired",
+  // The chat lane's "this card cannot be carried out" refusal (t_623676d1). A
+  // proposal whose arguments the target tool would never accept is refused
+  // BEFORE the token is claimed — so the token is UNSPENT and the same card can
+  // never succeed. It gets its own sentence rather than the spent/expired one:
+  // "expired or was already used" is false of it (the card was neither) and would
+  // hide the one thing the user needs to know, which is that their token is still
+  // good and a fresh card is the fix.
+  "chat.proposalArgsInvalid": "chat.proposalUnexecutable",
 
   // Roles / key scope.
   "role.manageRequired": "apiErr.manageRequired",

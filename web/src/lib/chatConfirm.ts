@@ -65,12 +65,31 @@ import { apiErrorCode, isScopeRefusal } from "./apiErr.ts";
  */
 export const WORKSPACE_SCOPE_REQUIRED_CODE = "workspace.scopeRequired";
 
+/**
+ * Mirrors `CodeProposalArgsInvalid` in api/internal/httpapi/errcode.go (t_623676d1).
+ *
+ * A proposal whose arguments the target tool would never accept is refused BEFORE
+ * the token is claimed, so the token is still live and the card can never succeed
+ * as shown. It gets its own outcome rather than riding "stale": the remedy is the
+ * same (ask for a fresh card) but the REASON is different — the card neither
+ * expired nor was used, and its click was never even attempted. Told "expired or
+ * already used", a user has no way to know their token is still good, and told
+ * "try again" they would retry an action that is guaranteed to fail.
+ *
+ * Read by src/lib/chatConfirm.test.ts out of the Go source, so a rename on the
+ * server fails the web suite (the same cross-language pin as the scope code).
+ */
+export const PROPOSAL_ARGS_INVALID_CODE = "chat.proposalArgsInvalid";
+
 /** The card outcome for one decision response. */
 export type ConfirmDecision =
   // A missing/unusable workspace scope. The card says what it NEEDS.
   | "scopeRequired"
   // The token was already spent or has expired — ask for a fresh card.
   | "stale"
+  // The card's own arguments are not ones the tool accepts: refused unspent, and
+  // the same card can never work. Ask for a fresh card.
+  | "unexecutable"
   // The per-user confirmation bucket refused it.
   | "rateLimited"
   // The change itself did not go through.
@@ -93,7 +112,13 @@ export function confirmDecisionFor(status: number, body: unknown): ConfirmDecisi
     // one.
     return apiErrorCode(body) === WORKSPACE_SCOPE_REQUIRED_CODE ? "scopeRequired" : "failed";
   }
-  if (status === 409) return "stale";
+  if (status === 409) {
+    // TWO 409s, and the code separates them. The default is the spent/expired
+    // token (unchanged behaviour); a card the tool would never accept carries its
+    // own code and gets its own outcome, because its token is UNSPENT and its
+    // remedy is a fresh card rather than "it expired" (t_623676d1).
+    return apiErrorCode(body) === PROPOSAL_ARGS_INVALID_CODE ? "unexecutable" : "stale";
+  }
   // A 403 carrying the TENANCY refusal (t_da4b2031). The page's 401/403 branch
   // used to send this to /login: the request's `?workspace=` is a slug the
   // session cannot resolve (a workspace renamed or deleted while selected), which

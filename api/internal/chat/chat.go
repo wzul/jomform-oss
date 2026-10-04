@@ -297,7 +297,7 @@ func (c *mcpCaller) close() error {
 
 // call dispatches one tool. The second return value is the server's "the tool
 // refused" flag (a tool-level error result), distinct from a transport failure.
-func (c *mcpCaller) call(ctx context.Context, name string, argsJSON string) (string, bool, error) {
+func (c *mcpCaller) call(ctx context.Context, name, argsJSON string) (string, bool, error) {
 	var args map[string]any
 	if strings.TrimSpace(argsJSON) != "" {
 		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
@@ -309,6 +309,30 @@ func (c *mcpCaller) call(ctx context.Context, name string, argsJSON string) (str
 		return "", true, err
 	}
 	return flattenToolResult(res), res.IsError, nil
+}
+
+// toolInputSchema returns one tool's DECLARED input schema from the live
+// registry over tools/list, and whether the registry has that tool at all.
+//
+// It is the chat's only source for a tool's real contract, and it is deliberately
+// the LIVE registry rather than a copy: the proposal lane's whole job is to
+// predict what the tool's own gate will accept, and a second declaration of the
+// schema (however carefully written) would be a second thing to keep in step —
+// the drift `chat.go:toolDefs` already avoids by reading tools/list for the
+// model-facing tool list.
+//
+// The client-side Tools iterator walks every page and is the same call the SDK
+// uses for ListTools, so a registry larger than one page is still covered.
+func (c *mcpCaller) toolInputSchema(ctx context.Context, name string) (any, bool, error) {
+	for t, err := range c.cs.Tools(ctx, nil) {
+		if err != nil {
+			return nil, false, fmt.Errorf("tools/list: %w", err)
+		}
+		if t.Name == name {
+			return t.InputSchema, true, nil
+		}
+	}
+	return nil, false, nil
 }
 
 // flattenToolResult renders a tool result for the prompt: the structured content

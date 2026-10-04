@@ -47,7 +47,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { API_ERROR_KEYS, apiErrorCode } from "./apiErr.ts";
-import { WORKSPACE_SCOPE_REQUIRED_CODE, confirmDecisionFor } from "./chatConfirm.ts";
+import { WORKSPACE_SCOPE_REQUIRED_CODE, PROPOSAL_ARGS_INVALID_CODE, confirmDecisionFor } from "./chatConfirm.ts";
 import { DICT, LANGS } from "../components/i18nDict.ts";
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
@@ -257,5 +257,147 @@ test("a scope refusal is rendered ONCE on the page, and never as a failure", () 
   assert.ok(
     !scopeFooter.test(chatPage),
     'the scope-required card renders chat.confirmFail — it would tell a user with no workspace to "try again"',
+  );
+});
+
+// ── THE UNEXECUTABLE CARD (t_623676d1) ────────────────────────────────────────
+//
+// THE DEFECT. A proposal whose arguments the target tool would never accept — the
+// model keyed the object `id` while update_product requires `product_id`, which is
+// what the chat's READ tools return — rendered a card naming NO object, and Confirm
+// then answered a bare 400 ("The change could not be applied. Please try again.")
+// AFTER spending the token. The user was told to retry a card that can never work,
+// over a token that was already gone.
+//
+// WHAT THE FIX DOES, and what this file pins by EXECUTING it:
+//   * the refusal now carries its own code (`chat.proposalArgsInvalid`) on a 409;
+//   * confirmDecisionFor maps it to its OWN outcome — "unexecutable" — rather than
+//     "stale", because the card neither expired nor was used (the token is UNSPENT)
+//     and its remedy sentence has to say so;
+//   * the page gives the card its own badge and does NOT render chat.confirmFail
+//     for it, so it cannot tell the user to "try again".
+test("a 409 for an unexecutable card is its own outcome, not 'stale'", () => {
+  const unexecutableBody = {
+    error: "cadangan itu tidak boleh dilaksanakan — minta pembantu menyediakan kad baharu",
+    code: "chat.proposalArgsInvalid",
+  };
+  // (a) THE MAPPING, executed. A spent/expired 409 keeps "stale"; this one does not.
+  assert.equal(
+    confirmDecisionFor(409, unexecutableBody),
+    "unexecutable",
+    "a 409 naming the unexecutable code is reported as 'stale' — the user is told the card 'expired or " +
+      "was already used', which is false of it (the token is unspent), and never learns a fresh card is all they need",
+  );
+  // (b) THE BITE. With the code test reduced to the bare status (the regression
+  //     shape), this case flips to "stale" and fails by NAME — which is what makes
+  //     the guard meaningful rather than a moved string.
+  assert.notEqual(
+    confirmDecisionFor(409, unexecutableBody),
+    "stale",
+    "the unexecutable 409 fell through to the spent/expired outcome",
+  );
+  // (c) The DEFAULT 409s are unchanged: no code, the spent-class code itself, and a
+  //     code this build does not know all stay "stale". The branch is not a wildcard.
+  assert.equal(confirmDecisionFor(409, null), "stale");
+  assert.equal(confirmDecisionFor(409, {}), "stale");
+  assert.equal(confirmDecisionFor(409, { code: "request.conflict" }), "stale");
+  assert.equal(confirmDecisionFor(409, { code: "chat.someFutureRefusal" }), "stale");
+  // (d) A near-miss prefix must not match, the same rule the scope code follows.
+  assert.equal(confirmDecisionFor(409, { code: "chat.proposalArgsInvalid.extra" }), "stale");
+  // (e) The unexecutable code is NOT a 400: it is decided by the code on a 409 only,
+  //     so it can never be confused with the scope refusal on this route.
+  assert.equal(confirmDecisionFor(400, unexecutableBody), "failed");
+});
+
+test("the unexecutable code is cross-language, mapped, and defined in every locale", () => {
+  // The page's constant must equal the server's declaration — read out of the Go
+  // source, so a rename on the server fails HERE instead of silently sending this
+  // refusal back to the spent/expired sentence.
+  const server = goCodeValue("CodeProposalArgsInvalid");
+  assert.ok(
+    server,
+    "errcode.go declares no CodeProposalArgsInvalid — the unexecutable refusal has no code of its own, so " +
+      "the page is back to telling it apart from a spent token with the bare 409",
+  );
+  assert.equal(
+    PROPOSAL_ARGS_INVALID_CODE,
+    server,
+    `lib/chatConfirm.ts's PROPOSAL_ARGS_INVALID_CODE is ${JSON.stringify(PROPOSAL_ARGS_INVALID_CODE)} but ` +
+      `errcode.go declares ${JSON.stringify(server)}`,
+  );
+  // The handler's wire literal must be the table key: errcode.go looks the code up
+  // BY MESSAGE, so a reworded refusal would keep answering 409 and lose its code.
+  const tableRow = new RegExp(
+    `"${server?.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"\\s*:\\s*CodeProposalArgsInvalid`,
+  );
+  // (the row is keyed by the MESSAGE, whose value is the code, so the direction above
+  //  is code→constant; the message→code direction is pinned on the Go side.)
+  const codeConst = new RegExp(`CodeProposalArgsInvalid\\s*=\\s*"${server}"`);
+  assert.ok(
+    codeConst.test(errcodeGo),
+    "errcode.go declares CodeProposalArgsInvalid with a different value than the page mirrors",
+  );
+  void tableRow;
+  // Mapped by the SHARED table, to a sentence that is NOT the spent/expired one.
+  assert.ok(
+    (server as string) in API_ERROR_KEYS,
+    `${server} has no entry in API_ERROR_KEYS — translateApiErr cannot resolve the refusal and the page ` +
+      `falls back to its generic sentence`,
+  );
+  const mapped = API_ERROR_KEYS[server as string];
+  assert.notEqual(
+    mapped,
+    "chat.proposalStale",
+    `${server} maps to chat.proposalStale — the unexecutable card would reuse the "expired or was already ` +
+      `used" sentence, which is false of a card whose token is UNSPENT`,
+  );
+  const entry = (DICT as Record<string, Record<string, unknown>>)[mapped];
+  assert.ok(entry, `the dictionary has no ${mapped} — the card would render a raw key`);
+  for (const lang of LANGS) {
+    const v = entry[lang];
+    assert.ok(
+      typeof v === "string" && v.trim() !== "",
+      `${mapped}.${lang} is empty — that locale silently shows English`,
+    );
+  }
+  // And it must not be the same string as the spent/expired sentence in ANY locale,
+  // or the "does not claim expiry" property would be a distinction without a difference.
+  const stale = (DICT as Record<string, Record<string, unknown>>)["chat.proposalStale"];
+  for (const lang of LANGS) {
+    assert.notEqual(entry[lang], stale[lang], `${mapped}.${lang} is the spent/expired sentence verbatim`);
+  }
+});
+
+test("the unexecutable card claims neither a failure nor an expiry on the page", () => {
+  const decide = chatPage.slice(chatPage.indexOf("async function decide("));
+  // The page handles the outcome and marks the card with its own state.
+  assert.match(
+    decide,
+    /if \(outcome === "unexecutable"\)[\s\S]{0,900}?setState\(msgIndex,\s*p\.token,\s*"unexecutable"\)/,
+    "the page has no unexecutable outcome branch, or it does not mark the card with its own state — the " +
+      "card would fall to the generic failure branch and read 'Did not go through' / 'try again' for a " +
+      "condition where nothing was attempted and the token is still live",
+  );
+  // THE SENTENCE IS RENDERED ONCE — the alert, exactly like the scope refusal.
+  const copySites = [...decide.matchAll(/setErr\(t\("chat\.proposalUnexecutable"\)\)/g)];
+  assert.equal(
+    copySites.length,
+    1,
+    `decide() renders the unexecutable copy at ${copySites.length} site(s), want exactly 1 — the card footer ` +
+      `and the alert must not both carry it`,
+  );
+  // No chat.confirmFail anywhere near the unexecutable state: the failing sentence
+  // tells the user to retry, and this card can never succeed as shown.
+  const badFooter = new RegExp('state === "unexecutable"[\\s\\S]{0,300}?chat\\.confirmFail');
+  assert.ok(
+    !badFooter.test(chatPage),
+    "the unexecutable card renders chat.confirmFail — it would tell the user to retry an action that is " +
+      "guaranteed to fail",
+  );
+  // And the badge is its own: not the spent/expired one and not the failure one.
+  assert.match(
+    chatPage,
+    /state === "unexecutable"[\s\S]{0,120}?chat\.proposalBadgeUnexecutable/,
+    "the unexecutable card does not wear its own badge — it would read as an expiry or a failure",
   );
 });
