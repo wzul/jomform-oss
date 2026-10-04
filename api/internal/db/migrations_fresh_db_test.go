@@ -34,6 +34,8 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -309,6 +311,133 @@ func TestEveryMigrationHasDownFile(t *testing.T) {
 	for version, reason := range migrationsWithoutDown {
 		if have[version+".down.sql"] {
 			t.Errorf("%s now has a .down.sql (%s) — remove it from migrationsWithoutDown", version, reason)
+		}
+	}
+}
+
+// migrationFileRE is the naming convention every migration must follow: a
+// six-digit zero-padded number, an underscore, a slug, and one direction
+// suffix. A file that does not match carries no number at all, so the
+// uniqueness guard below cannot see it — which is why a non-conforming name is
+// a failure in its own right rather than a skipped entry.
+var migrationFileRE = regexp.MustCompile(`^[0-9]{6}_[a-z0-9_]+\.(up|down)\.sql$`)
+
+// duplicatedMigrationNumbers pins the number collisions that ALREADY exist on
+// main. They are pinned, not endorsed: 27 files across 10 numbers share a
+// prefix, every one of them is applied on every live database, and
+// schema_migrations keys on the FULL FILENAME (migrate.go:58, :89) so a
+// renamed file is RE-APPLIED — renumbering an applied migration is therefore a
+// live-data operation, not a tidy-up. Keyed by number, value is every version
+// sharing it (sorted), so the allowlist cannot grow silently: a file added to a
+// pinned group, or one renumbered away from it, both fail.
+//
+// Why pin instead of enforce-from-zero: a NEW collision is what the guard is
+// for (three parallel PRs picked 000067 at once, measured). The 10 pre-existing
+// groups break only the convention, not the runner, so they are recorded here
+// with the same "cannot grow, cannot rot" discipline migrationsWithoutDown uses
+// for the two missing down-files.
+//
+// Every group here is independent DDL (different tables/columns); none of them
+// depends on another member's object. A collision where one migration DEPENDS on
+// another's column would apply in slug-alphabetical order, not authoring order —
+// a latent ordering bug this guard prevents from starting, not one it can detect
+// after the fact.
+var duplicatedMigrationNumbers = map[string][]string{
+	"000010": {"000010_signkey", "000010_system_settings"},
+	"000018": {"000018_pw_reset_at", "000018_space_default_lang", "000018_suppressed_emails"},
+	"000021": {"000021_sale_ref_delivery_events", "000021_space_email_settings"},
+	"000023": {"000023_product_variations", "000023_subscription_charges", "000023_subscription_update_card"},
+	"000025": {"000025_space_members", "000025_user_default_space"},
+	"000028": {"000028_form_private_status", "000028_media", "000028_user_phone"},
+	"000029": {"000029_space_currency", "000029_space_footer", "000029_space_legal_pages", "000029_user_timezone"},
+	"000032": {"000032_form_confirmations", "000032_form_notifications", "000032_form_webhooks"},
+	"000042": {"000042_form_failure_message", "000042_form_unlisted_status"},
+	"000062": {"000062_response_form_default_notification", "000062_variation_subscription_cycle", "000062_workspace_spam_judge_enabled"},
+}
+
+// duplicateNumbers groups versions by their six-digit number prefix and returns
+// only the numbers shared by more than one version.
+func duplicateNumbers(versions []string) map[string][]string {
+	byNumber := make(map[string][]string)
+	for _, v := range versions {
+		num := v[:strings.IndexByte(v, '_')]
+		byNumber[num] = append(byNumber[num], v)
+	}
+	dups := make(map[string][]string)
+	for num, members := range byNumber {
+		if len(members) > 1 {
+			sort.Strings(members)
+			dups[num] = members
+		}
+	}
+	return dups
+}
+
+// TestMigrationNumbersAreUnique enforces one number per migration. This is the
+// guard the two migrations_fresh_db guards cannot provide: a same-numbered pair
+// is INVISIBLE to them. schema_migrations.version is the full filename, so two
+// files sharing a number are two keys and both apply (filename order) — the
+// fresh-DB guard's `len(applied) == len(ups)` assertion therefore stays green
+// with a collision planted. Measured on main: three parallel PRs picked 000067
+// at once, and 10 numbers / 27 files are already duplicated, with every gate
+// green — which is exactly why the collision class went unnoticed, not proof
+// that it is harmless.
+//
+// Both directions are checked: a duplicate number is a collision whether it is
+// two *.up.sql or two *.down.sql files.
+func TestMigrationNumbersAreUnique(t *testing.T) {
+	entries, err := os.ReadDir("migrations")
+	if err != nil {
+		t.Fatalf("read migrations directory: %v", err)
+	}
+
+	var ups, downs []string
+	for _, e := range entries {
+		name := e.Name()
+		if !migrationFileRE.MatchString(name) {
+			t.Errorf("migration %s does not follow NNNNNN_slug.(up|down).sql — every migration must carry a "+
+				"six-digit number so the uniqueness guard can see it (see AGENTS.md 'Adding a migration safely')", name)
+			continue
+		}
+		switch {
+		case strings.HasSuffix(name, ".up.sql"):
+			ups = append(ups, strings.TrimSuffix(name, ".up.sql"))
+		case strings.HasSuffix(name, ".down.sql"):
+			downs = append(downs, strings.TrimSuffix(name, ".down.sql"))
+		}
+	}
+	if len(ups) == 0 {
+		t.Fatal("no embedded *.up.sql migrations found — the go:embed directive is broken")
+	}
+	sort.Strings(ups)
+	sort.Strings(downs)
+
+	for _, dir := range []struct {
+		name     string
+		versions []string
+	}{{"up", ups}, {"down", downs}} {
+		dups := duplicateNumbers(dir.versions)
+		for num, members := range dups {
+			pinned, ok := duplicatedMigrationNumbers[num]
+			if !ok {
+				t.Errorf("migration number %s is shared by %d %s files (%s) — give the new one its own number "+
+					"(one number per migration; see AGENTS.md). A duplicate number applies in filename order, not "+
+					"authoring order, so a pair where one depends on the other's column breaks silently.",
+					num, len(members), dir.name, strings.Join(members, ", "))
+				continue
+			}
+			if !slices.Equal(members, slices.Sorted(slices.Values(pinned))) {
+				t.Errorf("migration number %s is pinned in duplicatedMigrationNumbers as (%s) but the %s files are "+
+					"now (%s) — a pinned collision must not change membership; give the new/changed file its own number.",
+					num, strings.Join(pinned, ", "), dir.name, strings.Join(members, ", "))
+			}
+		}
+		// Fail loudly if a pinned collision is fixed, so the allowlist cannot rot.
+		for num, pinned := range duplicatedMigrationNumbers {
+			if _, still := dups[num]; !still {
+				t.Errorf("duplicatedMigrationNumbers pins %s (%s) but no two %s files share that number any more — "+
+					"remove the pin", num, strings.Join(pinned, ", "), dir.name)
+			}
 		}
 	}
 }
