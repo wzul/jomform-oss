@@ -20,15 +20,30 @@
 // second, drifting copy (a name added on one side only would still be
 // claimable through the other).
 //
-// This is NOT the serving-side exclusion in httpapi/public.go (accountSubdomain):
-// that list decides which hosts JomForm will not RESOLVE to an account, it is
-// only consulted while serving a request, and it does not carry the sensitive
-// names at all. It could therefore never stop a claim — a workspace could still
-// own `api` while every request to it fell through. Both rules are needed and
-// they answer different questions:
+// This is NOT the full serving-side list. accountSubdomain (httpapi/public.go)
+// decides which hosts JomForm will not RESOLVE to an account, it is only
+// consulted while serving a request, and it deliberately does NOT carry the
+// sensitive/impersonation names — so it could never stop a claim: a workspace
+// could still own `api` while every request to it fell through. Both rules are
+// needed and they answer different questions:
 //
 //	accountSubdomain   — what may this Host header resolve to?  (serving)
 //	reservedSubdomains — what may a workspace CLAIM?            (claim, here)
+//
+// BUT the two are not independent copies (card t_d49dae9f). The serving set used
+// to be a bare literal chain inside accountSubdomain — `sub == "www" || sub ==
+// "app" || ...` — a third declaration of the same names, in a package that could
+// not see this file and that no test tied back to it. `www app api mail s3` was
+// therefore written down in three places that could not see each other: this
+// file, httpapi/public.go, and the `!Host(...)` exclusions in the Traefik
+// wildcard routers. It is now declared ONCE, here, as
+// ServingReservedSubdomains:
+//
+//	urlguard.ServingReservedSubdomains — the ONE declaration
+//	  ├── accountSubdomain (httpapi/public.go) consumes it, so Go has one copy
+//	  └── subdomains_test.go asserts the Traefik wildcard exclusions are drawn
+//	      from it — a name excluded from the tenant wildcard that is NOT on this
+//	      list would take a live merchant host away, so it is RED.
 //
 // There is no rename path for workspaces.slug (the only SQL that writes it is
 // the INSERT in dbstore.WorkspaceStore.Create, and no REST/MCP route updates
@@ -66,6 +81,38 @@ const ReservedSubdomainCode = "reserved_subdomain"
 // JomForm's own names under it live in more than one namespace (see the note above
 // the list). One entry here covers every `jomform-*` name, present and future.
 const reservedSubdomainPrefix = "jomform-"
+
+// ServingReservedSubdomains is the ONE declaration of the host labels JomForm
+// will not RESOLVE to a workspace (card t_d49dae9f). It is the serving-side
+// counterpart to reservedSubdomains below: that list answers "what may a
+// workspace CLAIM", this one answers "what may a Host header resolve to".
+//
+// IT IS DELIBERATELY SMALLER THAN reservedSubdomains. The claim list carries
+// sensitive/impersonation names (`billing`, `login`, …) that must be unclaimable
+// before JomForm ever routes them; the serving list carries only the names that
+// JomForm's own deployment actually answers on today (or once did, so a
+// bookmarked host still resolves). Adding a name here means "a request on this
+// host must not be treated as a tenant storefront"; it does NOT mean the name is
+// for sale to a merchant — that is reservedSubdomains' job.
+//
+// WHY IT EXISTS AT ALL. This set used to be a bare literal chain inside
+// accountSubdomain (httpapi/public.go: `sub == "www" || sub == "app" || …`), and
+// it was ALSO written down as `!Host(...)` exclusions in the Traefik wildcard
+// routers. Three declarations of one fact, in three files that could not see each
+// other, and no test tied them together — which is exactly the drift class this
+// card exists to close. It is now declared once here and consumed by both sides:
+//
+//	accountSubdomain (httpapi/public.go)   — reads this slice, so Go has one copy
+//	subdomains_test.go                     — asserts the Traefik wildcard
+//	                                         `!Host(...)` exclusions are drawn
+//	                                         from it, so a name excluded from the
+//	                                         tenant wildcard without being on this
+//	                                         list is RED (it would take a real
+//	                                         merchant host off the air).
+//
+// The names are bare lower-case labels with no dot: the `<label>` of
+// `<label>.jomform.com`.
+var ServingReservedSubdomains = []string{"www", "app", "api", "mail", "s3"}
 
 var reservedSubdomains = map[string]string{
 	// ── Infrastructure ───────────────────────────────────────────────────────
@@ -130,6 +177,28 @@ func ReservedSubdomain(label string) bool {
 	// live JomForm surface. Reserved as a prefix so the next `jomform-*` name does
 	// not need to be remembered, which is how this one was missed.
 	return strings.HasPrefix(norm, reservedSubdomainPrefix)
+}
+
+// IsServingReserved reports whether label is one of the host labels JomForm's
+// own deployment answers on, i.e. a Host header that must NOT be resolved to a
+// workspace storefront (see ServingReservedSubdomains in subdomains.go). The
+// comparison normalises the way ReservedSubdomain does — trimmed and
+// lower-cased — so a caller does not have to remember to.
+//
+// This is the ONE predicate both consumers use: accountSubdomain (httpapi)
+// calls it for the serving decision, and the reserved-name guard
+// (subdomains_test.go) calls it when it asserts the Traefik wildcard
+// `!Host(...)` exclusions are drawn from the same set. Keeping the predicate
+// here rather than in each consumer is the point of card t_d49dae9f: a second
+// hand-rolled membership test is the drift this card closes.
+func IsServingReserved(label string) bool {
+	norm := strings.ToLower(strings.TrimSpace(label))
+	for _, l := range ServingReservedSubdomains {
+		if l == norm {
+			return true
+		}
+	}
+	return false
 }
 
 // ReservedSubdomainMessage is the refusal for a reserved label. It says WHY the

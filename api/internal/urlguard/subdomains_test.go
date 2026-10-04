@@ -198,8 +198,33 @@ func TestReservedSubdomainListHasNotCollapsed(t *testing.T) {
 
 // --- bound to reality: what Traefik actually routes -------------------------
 
-// traefikHostRe matches the Host(`x`) forms inside a Traefik rule string.
-var traefikHostRe = regexp.MustCompile("Host\\(`([^`]+)`\\)")
+// traefikHostRe matches a Host(`x`) literal inside a Traefik rule string, and
+// captures a leading `!` when it is negated (`!Host(`x`)`). Both shapes matter:
+// a plain `Host(`x`)` is a static route for x, a `!Host(`x`)` is an EXCLUSION
+// that takes x away from the router it sits on. `HostRegexp(` does NOT match —
+// the character after `Host` is `R`, not `(` — so a regex host is never mistaken
+// for a static one.
+var traefikHostRe = regexp.MustCompile("(!?)Host\\(`([^`]+)`\\)")
+
+// traefikHostRegexpRe captures the pattern of a HostRegexp(`...`) matcher. The
+// two committed files write the tenant wildcard with different escaping
+// (deploy/vps/traefik-jomform.yml uses an unescaped dot, deploy/traefik-wildcard.yml
+// escapes it), so callers test the CAPTURED TEXT for "jomform" rather than
+// matching an escaped literal that would only fit one of the two spellings.
+var traefikHostRegexpRe = regexp.MustCompile("HostRegexp\\(`([^`]+)`\\)")
+
+// jomformLabel returns the subdomain label of a jomform.com host literal
+// ("www" for "www.jomform.com"), and false for anything else — the apex, a
+// foreign domain, or a malformed host. Only a <label>.jomform.com host is a
+// workspace-addressable name this guard reasons about.
+func jomformLabel(host string) (string, bool) {
+	h := strings.ToLower(strings.TrimSpace(host))
+	label, ok := strings.CutSuffix(h, ".jomform.com")
+	if !ok || label == "" || strings.Contains(label, ".") {
+		return "", false
+	}
+	return label, true
+}
 
 // tenantOrApexHost reports whether a Traefik Host(...) literal is NOT a label a
 // workspace could claim: the apex itself. Everything else at
@@ -251,7 +276,7 @@ func TestReservedSubdomainsCoverStaticTraefikHosts(t *testing.T) {
 				hostRegexps++
 			}
 			for _, m := range traefikHostRe.FindAllStringSubmatch(trimmed, -1) {
-				host := m[1]
+				host := m[2]
 				checked++
 				if tenantOrApexHost(host) {
 					continue
@@ -286,6 +311,168 @@ func TestReservedSubdomainsCoverStaticTraefikHosts(t *testing.T) {
 			"thing that makes a claimed slug a live host, and this guard assumes it", paths)
 	}
 	t.Logf("checked %d static Host(...) literal(s) and %d HostRegexp rule(s)", checked, hostRegexps)
+}
+
+// TestTraefikWildcardExcludesStaticallyRoutedHosts is the guard PR 740 needed
+// and did not have (card t_d49dae9f). Its whole point is that the two-line
+// `&& !Host(`www.jomform.com`)` clause on the tenant wildcard cannot be deleted
+// again in silence.
+//
+// THE DEFECT IT PINS (measured on prod, t_ba241aeb): a router that matches
+// `HostRegexp(`[a-z0-9-]+.jomform.com`)` matches www.jomform.com — the regex is
+// UNANCHORED, so `[a-z0-9-]+` stops at `ww` and the unescaped `.` matches the
+// literal `w`; there is no need for the pattern to spell `www.`. The wildcard
+// carries priority 20 and the www static router carries priority 10, so the
+// wildcard WINS and www.jomform.com was served by the API (Go's `404 page not
+// found`) instead of the web app. The `!Host(...)` exclusion is the only thing
+// that stops it. Delete the clause — as main did before #740 — and www goes
+// back to 404 while every gate stayed green.
+//
+// TWO INVARIANTS, both derived from the files themselves (no host, no network):
+//
+//  1. EXCLUSION IS DRAWN FROM THE ONE SOURCE. Every `!Host(`<label>.jomform.com`)`
+//     exclusion must name a urlguard.ServingReservedSubdomain. An exclusion of a
+//     name that is NOT on that list would take a real merchant's host off the
+//     wildcard — a workspace would stop serving — so it is RED. The list is now
+//     the ONE declaration shared with the Go serving check (accountSubdomain
+//     consumes it too), which is what makes "the next reserved name cannot be
+//     added to one side only" mechanical rather than aspirational.
+//
+//  2. EXCLUSION COVERS EVERY STATICALLY ROUTED HOST. For every label the file
+//     ALSO gives its own static `Host(`<label>.jomform.com`)` router, the file's
+//     wildcard routers must exclude that label. `www` has four such routers
+//     (jf-web, jf-healthz, jf-web-api, jf-web-fallback), so www must be excluded
+//     from both jf-wildcard (:443) and jf-wildcard-http (:80) — exactly the pair
+//     #740 fixed. A NEW static router for a new label whose wildcard exclusion is
+//     forgotten fails here, which is the "cannot quietly rot" half.
+//
+// SCOPE, stated so this guard is not over-claimed: it reads the committed files
+// only. It cannot see prod, and it does not re-derive prod's 17 routers. It also
+// does NOT require an exclusion on deploy/traefik-wildcard.yml (the
+// docker-provider file), which carries no static Host(...) routers of its own —
+// its two rules are PathPrefix routers. Their unanchored regex does match www, so
+// IF that file were ever activated it would shadow www as well; that is a
+// property of a file this card was told not to change (Wan, 2026-10-04: "JANGAN
+// ubah/regenerate fail traefik mengikut routing"), so it is recorded in the
+// completion note rather than enforced here. A test that demanded the exclusion
+// on a file nobody may edit would be red on a green tree.
+func TestTraefikWildcardExcludesStaticallyRoutedHosts(t *testing.T) {
+	root := repoRoot(t)
+	paths := []string{
+		filepath.Join(root, "deploy", "vps", "traefik-jomform.yml"),
+		filepath.Join(root, "deploy", "traefik-wildcard.yml"),
+	}
+
+	exclusions, wildcards, staticRoutes := 0, 0, 0
+	for _, path := range paths {
+		src := mustReadFile(t, path)
+
+		type ruleLine struct {
+			no   int
+			text string
+		}
+		var wildcardRules []ruleLine
+		staticLabels := map[string]int{} // label -> the line that routes it statically
+
+		for i, line := range strings.Split(src, "\n") {
+			trimmed := strings.TrimSpace(line)
+			if !strings.HasPrefix(trimmed, "rule:") {
+				continue
+			}
+			lineNo := i + 1
+
+			// (1) Any `!Host(...)` on ANY rule must name a name JomForm owns.
+			//     Applied to every rule, not only wildcards: an exclusion
+			//     anywhere in these files takes a jomform label out of a
+			//     router, and that label must be one JomForm serves.
+			for _, m := range traefikHostRe.FindAllStringSubmatch(trimmed, -1) {
+				if m[1] != "!" {
+					continue
+				}
+				exclusions++
+				label, ok := jomformLabel(m[2])
+				if !ok {
+					t.Errorf("%s:%d excludes Host(`%s`), which is not a "+
+						"<label>.jomform.com host — this guard only understands "+
+						"JomForm subdomains. Extend the guard.", path, lineNo, m[2])
+					continue
+				}
+				if !IsServingReserved(label) {
+					t.Errorf("%s:%d excludes Host(`%s`) from its router, but %q is "+
+						"NOT in urlguard.ServingReservedSubdomains — excluding a "+
+						"label JomForm does not serve would take a real merchant's "+
+						"host off this router. If %q really is a JomForm host, add "+
+						"it to ServingReservedSubdomains in subdomains.go (the ONE "+
+						"list); otherwise remove the exclusion.", path, lineNo, m[2], label, label)
+				}
+			}
+
+			// (2) Static (non-negated) routes for a jomform label.
+			for _, m := range traefikHostRe.FindAllStringSubmatch(trimmed, -1) {
+				if m[1] == "!" {
+					continue
+				}
+				if label, ok := jomformLabel(m[2]); ok {
+					staticLabels[label] = lineNo
+					staticRoutes++
+				}
+			}
+
+			// Is this rule a tenant wildcard? A HostRegexp whose pattern is a
+			// jomform host, in either file's escaping.
+			for _, m := range traefikHostRegexpRe.FindAllStringSubmatch(trimmed, -1) {
+				if strings.Contains(strings.ToLower(m[1]), "jomform") {
+					wildcardRules = append(wildcardRules, ruleLine{no: lineNo, text: trimmed})
+					wildcards++
+				}
+			}
+		}
+
+		// (2, continued) Every statically routed label must be excluded from
+		// every wildcard rule in the SAME file.
+		for _, wr := range wildcardRules {
+			excluded := map[string]bool{}
+			for _, m := range traefikHostRe.FindAllStringSubmatch(wr.text, -1) {
+				if m[1] != "!" {
+					continue
+				}
+				if label, ok := jomformLabel(m[2]); ok {
+					excluded[label] = true
+				}
+			}
+			for label, atLine := range staticLabels {
+				if excluded[label] {
+					continue
+				}
+				t.Errorf("%s:%d is a tenant wildcard (HostRegexp on jomform.com) "+
+					"that does NOT exclude `%s`, but the same file routes "+
+					"Host(`%s.jomform.com`) statically at line %d. The wildcard's "+
+					"priority beats the static router, so %s.jomform.com would be "+
+					"served by the wildcard's service instead — this is the exact "+
+					"shadowing PR 740 fixed for www. Add `&& !Host(`%s.jomform.com`)` "+
+					"to this rule.", path, wr.no, label, label, atLine, label, label)
+			}
+		}
+	}
+
+	// A guard that checked nothing proves nothing. Each of these three counts
+	// being zero means the parse missed the file's shape, not that the file is
+	// correct — so say so rather than passing vacuously.
+	if exclusions == 0 {
+		t.Fatalf("no !Host(...) exclusion found in %v — the www wildcard "+
+			"exclusion PR 740 added is gone (or its shape changed); this guard "+
+			"is now checking nothing", paths)
+	}
+	if wildcards == 0 {
+		t.Fatalf("no tenant wildcard (HostRegexp on jomform.com) found in %v — "+
+			"the parse missed it, so this guard checked nothing", paths)
+	}
+	if staticRoutes == 0 {
+		t.Fatalf("no static Host(`<label>.jomform.com`) route found in %v — the "+
+			"parse missed it, so the exclusion-coverage check is vacuous", paths)
+	}
+	t.Logf("checked %d exclusion(s), %d wildcard rule(s), %d static route(s)",
+		exclusions, wildcards, staticRoutes)
 }
 
 // --- one rule, one implementation ------------------------------------------
@@ -395,6 +582,80 @@ func TestJomFormPrefixIsReserved(t *testing.T) {
 			t.Errorf("ReservedSubdomain(%q) = true, want false — the prefix rule must "+
 				"reserve `jomform-` and NOT every name containing it, or it takes "+
 				"legitimate merchant addresses", label)
+		}
+	}
+}
+
+// --- the ONE serving list (card t_d49dae9f) --------------------------------
+
+// TestServingReservedSubdomainsIsTheOneDeclaration pins the source of the
+// serving-side decision. Before this card `www app api mail s3` was written down
+// three times — here, in httpapi/public.go as a literal `sub == "www" || …`
+// chain, and as `!Host(...)` exclusions in the Traefik wildcards — and nothing
+// tied the three together. Now Go has exactly one copy, and this test fails if a
+// consumer grows its own.
+//
+// Two things are asserted, and both are the card's requirement made mechanical:
+//
+//  1. accountSubdomain (httpapi/public.go) CONSUMES this package's predicate. A
+//     re-inlined literal chain would pass every behavioural test and still be the
+//     drifted copy, so the assertion is on the SOURCE, not on behaviour.
+//  2. The serving list is a non-empty set of bare labels and is a SUBset of the
+//     claim list. A serving-reserved name is by definition one JomForm owns, so
+//     it must also be unclaimable; a name served-but-claimable would let a
+//     merchant take a host JomForm answers on. (The reverse does NOT hold — the
+//     claim list is deliberately larger, carrying the impersonation names.)
+func TestServingReservedSubdomainsIsTheOneDeclaration(t *testing.T) {
+	if len(ServingReservedSubdomains) == 0 {
+		t.Fatal("ServingReservedSubdomains is empty — a serving guard that names " +
+			"nothing proves nothing")
+	}
+	valid := regexp.MustCompile(`^[a-z0-9-]+$`)
+	for _, label := range ServingReservedSubdomains {
+		if !valid.MatchString(label) {
+			t.Errorf("ServingReservedSubdomains entry %q is not a bare lower-case "+
+				"label (a-z, 0-9, dash) — it can never match a Host label", label)
+		}
+		if !ReservedSubdomain(label) {
+			t.Errorf("ServingReservedSubdomains carries %q but ReservedSubdomain(%q) "+
+				"is false — a host JomForm serves must also be unclaimable, or a "+
+				"merchant could take it and shadow JomForm's own deployment", label, label)
+		}
+	}
+
+	// (1) The consumer reads the ONE predicate. Assert on the source so a
+	//     re-inlined copy cannot hide behind green behaviour.
+	root := repoRoot(t)
+	public := filepath.Join("api", "internal", "httpapi", "public.go")
+	src := mustReadFile(t, filepath.Join(root, public))
+	if !strings.Contains(src, "urlguard.IsServingReserved(") {
+		t.Errorf("%s does not call urlguard.IsServingReserved — accountSubdomain has "+
+			"grown its own copy of the serving list again, which is the drift this "+
+			"card exists to close", public)
+	}
+	// The old literal chain must be GONE from public.go. If it survives next to
+	// the call, the two can disagree.
+	if strings.Contains(src, `sub == "www"`) {
+		t.Errorf(`%s still carries the literal chain (sub == "www" ...) — the serving `+
+			`list must live ONLY in urlguard.ServingReservedSubdomains`, public)
+	}
+}
+
+// TestIsServingReservedIsTheOnePredicate checks the predicate itself, including
+// the normalisation a caller must not have to remember.
+func TestIsServingReservedIsTheOnePredicate(t *testing.T) {
+	for _, label := range []string{"www", "app", "api", "mail", "s3", " WWW ", "Api"} {
+		if !IsServingReserved(label) {
+			t.Errorf("IsServingReserved(%q) = false, want true", label)
+		}
+	}
+	// A merchant host — and, importantly, the impersonation labels that are
+	// CLAIM-reserved but NOT serving-reserved: JomForm does not answer on them,
+	// so they must resolve as tenants once legitimately claimed.
+	for _, label := range []string{"wan", "acme", "billing", "login", "docs", "mcp", ""} {
+		if IsServingReserved(label) {
+			t.Errorf("IsServingReserved(%q) = true, want false — the serving list must "+
+				"stay the deployment's own hosts, not the wider claim list", label)
 		}
 	}
 }

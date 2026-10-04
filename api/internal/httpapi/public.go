@@ -31,6 +31,7 @@ import (
 	"github.com/wzul/jomform/api/internal/objstore"
 	"github.com/wzul/jomform/api/internal/payments"
 	"github.com/wzul/jomform/api/internal/spamjudge"
+	"github.com/wzul/jomform/api/internal/urlguard"
 )
 
 // PublicHandlers serves buyer-facing order forms.
@@ -1326,6 +1327,13 @@ var _ = time.Now
 // (e.g. wanzulhosting from wanzulhosting.jomform.com). Empty for apex
 // (jomform.com) and custom domains (custom domains resolve the account via
 // the accounts.custom_domain column).
+//
+// A serving-reserved label (www/app/api/mail/s3) also yields "" — those hosts
+// belong to JomForm's own deployment, never to a tenant storefront. That set is
+// NOT a literal here any more: it is urlguard.ServingReservedSubdomains, the ONE
+// declaration (card t_d49dae9f), so this decision and the Traefik wildcard
+// exclusions cannot drift into two different answers. The predicate normalises
+// (trim + lower-case) the way the rest of the host handling does.
 func accountSubdomain(host string) string {
 	h := host
 	if i := strings.Index(h, ":"); i >= 0 {
@@ -1336,7 +1344,7 @@ func accountSubdomain(host string) string {
 		return ""
 	}
 	sub := strings.TrimSuffix(h, base)
-	if sub == "" || sub == "www" || sub == "app" || sub == "api" || sub == "mail" || sub == "s3" {
+	if sub == "" || urlguard.IsServingReserved(sub) {
 		return ""
 	}
 	return strings.ToLower(sub)

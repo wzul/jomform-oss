@@ -40,10 +40,32 @@ Reasons:
 
 - Traefik v3 `HostRegexp` does NOT accept Go named-group syntax like
   `{sub:[a-z0-9-]+}`; use plain regex `[a-z0-9-]+.jomform.com`.
+- **The wildcard regex is UNANCHORED, so it also matches the reserved hosts.**
+  `[a-z0-9-]+.jomform.com` matches `www.jomform.com` (the unescaped `.` takes the
+  literal `w`), and the tenant wildcard's priority (20) beats the static www
+  routers (priority 10). Any static host that shares a suffix with the wildcard
+  MUST be excluded with `&& !Host(`<label>.jomform.com`)` on **every** wildcard
+  entry point (`jf-wildcard` :443 and `jf-wildcard-http` :80). This is what PR 740
+  fixed for `www`.
+- **The reserved serving list is ONE thing now** (card t_d49dae9f):
+  `urlguard.ServingReservedSubdomains` in `api/internal/urlguard/subdomains.go`.
+  `accountSubdomain` (httpapi/public.go) consumes `urlguard.IsServingReserved`,
+  and `subdomains_test.go::TestTraefikWildcardExcludesStaticallyRoutedHosts`
+  asserts every `!Host(...)` exclusion is drawn from that same list. So adding a
+  reserved name to one side only, or deleting a wildcard `!Host(...)` clause,
+  turns `go test ./internal/urlguard/` RED (wired into the `test` gate).
 - `ssh`-based python heredocs into `/opt/traefik/dynamic/*.yml` are fragile —
   edit via local python + scp, then `docker compose restart`.
 - File provider is independent of the Docker provider; the Docker provider
   currently errors on API version and can be ignored.
+- `deploy/vps/traefik-jomform.yml` is a hand-maintained copy that is NOT
+  installed by any deploy step (`deploy/build-and-ship.sh` only ships the image
+  tarball), and prod's live `/opt/traefik/dynamic/jomform.yml` carries routers
+  this file does not. Treat routing changes as prod edits, not repo edits.
+- `deploy/traefik-wildcard.yml` is a Docker-provider snippet (`PathPrefix` +
+  `HostRegexp`, no `!Host`) not shipped by anything; its unanchored regex would
+  also shadow `www` **if it were ever activated**. It is intentionally left
+  unchanged (Wan, 2026-10-04) — do not regenerate it from the file provider.
 ## Cloudflare WAF note (CF login button)
 
 Observed 2026-09-01: `GET /api/cf/start` WITH a `jf_session` cookie returns
