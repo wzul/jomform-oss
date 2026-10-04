@@ -563,10 +563,20 @@ export default function ChatPage() {
                           {/* The badge must not keep saying "needs your confirmation"
                               once the user has settled it — a done card headed
                               "NEEDS CONFIRMATION" reads as an unfinished task and
-                              invites a second click the server would refuse. */}
+                              invites a second click the server would refuse.
+                              The OPEN pill is sky-700, not sky-600: white on
+                              #0084d1 measures 4.02:1 at this 10px size (axe
+                              color-contrast, serious) and on #0369a1 it measures
+                              5.93:1, while still reading as the sky family the
+                              card is built from — the tint, the border and the
+                              status lines all stay sky. The FAILED pill is
+                              red-600 for the same reason: white on #ef4444 is
+                              3.76:1 and on #dc2626 it is 4.83:1. (t_f5f269a8;
+                              the "done"/cancelled pill is bg-slate-500, which
+                              already clears the floor at 4.76:1.) */}
                           <span
                             className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white ${
-                              open ? "bg-sky-600" : state === "failed" ? "bg-red-500" : "bg-slate-500"
+                              open ? "bg-sky-700" : state === "failed" ? "bg-red-600" : "bg-slate-500"
                             }`}
                           >
                             {open
@@ -589,7 +599,13 @@ export default function ChatPage() {
                         <dl className="mt-2 space-y-0.5">
                           {p.fields?.map((f) => (
                             <div key={f.label} className="flex gap-2">
-                              <dt className="min-w-[7rem] shrink-0 opacity-70">{f.label}</dt>
+                              {/* opacity-80, not 70: the label keeps its lighter-
+                                  than-the-value hierarchy, but 80% of the card's
+                                  text token composites to 5.32:1 on the sky-50
+                                  tint where 70% composites to 4.11:1 — under the
+                                  4.5:1 floor at this 12px size (t_f5f269a8). The
+                                  card's own summary line above already uses 80. */}
+                              <dt className="min-w-[7rem] shrink-0 opacity-80">{f.label}</dt>
                               <dd className="break-words font-medium">{f.value}</dd>
                             </div>
                           ))}
@@ -599,7 +615,13 @@ export default function ChatPage() {
                             {p.note}
                           </p>
                         )}
-                        <p className="mt-2 font-mono text-[10px] opacity-60">{p.tool}</p>
+                        {/* The tool name is the SMALLEST text on the card (10px)
+                            and it carries information the user is asked to judge
+                            ("update_product" is part of what they confirm), so it
+                            gets the card's strongest muted weight: opacity-80 =
+                            5.32:1 on the tint. At opacity-60 it measured 3.24:1,
+                            the worst node of the five axe reported (t_f5f269a8). */}
+                        <p className="mt-2 font-mono text-[10px] opacity-80">{p.tool}</p>
 
                         {open && (
                           <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -617,7 +639,11 @@ export default function ChatPage() {
                             >
                               {t("chat.cancel")}
                             </button>
-                            <span className="opacity-70">{t("chat.confirmHint")}</span>
+                            {/* opacity-80, not 70: the hint keeps its lighter-
+                                than-the-buttons hierarchy, but 70% composites to
+                                4.11:1 on the sky-50 tint, under the 4.5:1 floor at
+                                this 12px size (t_f5f269a8). */}
+                            <span className="opacity-80">{t("chat.confirmHint")}</span>
                           </div>
                         )}
                         {state === "confirming" && <p className="mt-2 font-medium">{t("chat.confirming")}</p>}
