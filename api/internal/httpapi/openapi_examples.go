@@ -96,8 +96,8 @@ var restAPIExamples = []restAPIExample{
 		ExpectStatus:   201,
 		ExpectContains: "\"slug\"",
 		NeedsKey:       true,
-		Note: "Leave `slug` out and it is generated from the title and made unique in the " +
-			"workspace. The response carries `mode` (payment by default) and the draft's `url`.",
+		Note: "Leave slug out and it is generated from the title and made unique in the " +
+			"workspace. The response carries mode (payment by default) and the draft's url.",
 	},
 	{
 		ID:             "publish-form",
@@ -110,8 +110,8 @@ var restAPIExamples = []restAPIExample{
 		NeedsKey:       true,
 		NeedsFixture:   true,
 		Note: "A payment form with no products is refused here with 409 and " +
-			"`requires_ack: true`, because it could never take money; send " +
-			"`{\"acknowledge\":true}` to publish it anyway.",
+			"requires_ack: true, because it could never take money; send " +
+			"{\"acknowledge\":true} to publish it anyway.",
 	},
 	{
 		ID:    "read-forms",
@@ -124,7 +124,7 @@ var restAPIExamples = []restAPIExample{
 		ExpectContains: "\"mode\"",
 		NeedsKey:       true,
 		NeedsFixture:   true,
-		Note:           "`mode` is payment or response, so a response form is never mistaken for an order form.",
+		Note:           "mode is payment or response, so a response form is never mistaken for an order form.",
 	},
 	{
 		ID:             "list-sales",
@@ -136,7 +136,7 @@ var restAPIExamples = []restAPIExample{
 		ExpectContains: "\"items\"",
 		NeedsKey:       true,
 		NeedsFixture:   true,
-		Note: "Without `page` this route answers with a plain array instead — the same rows, " +
+		Note: "Without page this route answers with a plain array instead — the same rows, " +
 			"the older shape the dashboard reads.",
 	},
 }

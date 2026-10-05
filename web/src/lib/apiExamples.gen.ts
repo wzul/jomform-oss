@@ -59,7 +59,7 @@ export const API_EXAMPLES: { examples: ApiExample[] } = {
       "method": "POST",
       "needsFixture": false,
       "needsKey": true,
-      "note": "Leave `slug` out and it is generated from the title and made unique in the workspace. The response carries `mode` (payment by default) and the draft's `url`.",
+      "note": "Leave slug out and it is generated from the title and made unique in the workspace. The response carries mode (payment by default) and the draft's url.",
       "path": "/v1/rest/forms",
       "title": "3. Create a form",
       "why": "A new form is created as a draft. Nothing is live until you publish it."
@@ -72,7 +72,7 @@ export const API_EXAMPLES: { examples: ApiExample[] } = {
       "method": "POST",
       "needsFixture": true,
       "needsKey": true,
-      "note": "A payment form with no products is refused here with 409 and `requires_ack: true`, because it could never take money; send `{\"acknowledge\":true}` to publish it anyway.",
+      "note": "A payment form with no products is refused here with 409 and requires_ack: true, because it could never take money; send {\"acknowledge\":true} to publish it anyway.",
       "path": "/v1/rest/forms/{{form_id}}/publish",
       "title": "4. Publish it",
       "why": "Publishing is what makes the form live at its URL."
@@ -85,7 +85,7 @@ export const API_EXAMPLES: { examples: ApiExample[] } = {
       "method": "GET",
       "needsFixture": true,
       "needsKey": true,
-      "note": "`mode` is payment or response, so a response form is never mistaken for an order form.",
+      "note": "mode is payment or response, so a response form is never mistaken for an order form.",
       "path": "/v1/rest/forms",
       "title": "5. Read your forms back",
       "why": "The list carries everything needed to pick a form id: slug, title, status, mode and public URL."
@@ -98,7 +98,7 @@ export const API_EXAMPLES: { examples: ApiExample[] } = {
       "method": "GET",
       "needsFixture": true,
       "needsKey": true,
-      "note": "Without `page` this route answers with a plain array instead — the same rows, the older shape the dashboard reads.",
+      "note": "Without page this route answers with a plain array instead — the same rows, the older shape the dashboard reads.",
       "path": "/v1/rest/sales?page=1\u0026limit=15",
       "title": "6. Read the sales this form produced",
       "why": "The last step of the end-to-end flow: what the form actually recorded."

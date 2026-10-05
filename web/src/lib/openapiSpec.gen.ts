@@ -2229,7 +2229,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
     },
     "/v1/rest/forms": {
       "get": {
-        "description": "Every form with its slug, status, public URL and mode. `mode` is payment (default) or response.",
+        "description": "Every form with its slug, status, public URL and mode. mode is payment (default) or response.",
         "operationId": "listForms",
         "responses": {
           "200": {
@@ -5252,7 +5252,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
         "x-jomform-access": "read"
       },
       "put": {
-        "description": "Partial update: omitted fields keep their current value. `variations` is replaced wholesale — send the full set, or [] to turn a variable product back into a simple one.",
+        "description": "Partial update: omitted fields keep their current value. variations is replaced wholesale — send the full set, or [] to turn a variable product back into a simple one.",
         "operationId": "updateProduct",
         "parameters": [
           {
@@ -7715,7 +7715,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
     },
     "/v1/rest/uploads/image": {
       "post": {
-        "description": "multipart/form-data with the file in `file`. Send the bytes, not JSON.\n\nResponse: The stored media item with its public https URL.\n\nRate limit: 2 per second per IP, burst 6.",
+        "description": "multipart/form-data with the file in file. Send the bytes, not JSON.\n\nResponse: The stored media item with its public https URL.\n\nRate limit: 2 per second per IP, burst 6.",
         "operationId": "uploadImage",
         "responses": {
           "200": {

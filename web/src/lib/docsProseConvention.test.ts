@@ -107,11 +107,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import ts from "typescript";
 
 // The recursive `app/docs` walk, shared with llmsFullCoverage.test.ts and
 // sitemapCoverage.test.ts — see that file for why ONE walk (card t_3a5aa9b5).
 import { filesUnder } from "./docsRoutes.ts";
+import { apiExamples, specEndpoints } from "./openapi.ts";
 
 const DOCS_DIR = fileURLToPath(new URL("../app/docs", import.meta.url));
 
@@ -274,6 +276,100 @@ test("no /docs prose carries a backtick marker (these pages render plain text)",
       `words, which is what the rest of the tree already does (sound_enabled, set_workspace_settings, ` +
       `PATCH /v1/workspaces/{id} are all bare). To SHOW code on a docs page, use a template literal INSIDE ` +
       `<code>/<pre> — the supported shape (api/page.tsx's curl blocks) — which prints the text verbatim. ` +
+      `Findings:\n  ${lines.join("\n  ")}`,
+  );
+});
+
+// ── the IMPORTED-prose surface (card t_763c28c2) ─────────────────────────────
+//
+// The walk above is scoped to src/app/docs, so it can only see prose a page
+// DECLARES itself — a `body: "…"` string, raw JSX text, or a template literal.
+// /docs/api is not that shape: its worked examples and its endpoint reference are
+// imported (src/lib/openapi.ts → the generated apiExamples.gen.ts and
+// openapiSpec.gen.ts) and printed with a JSX expression, `{e.note}` /
+// `{e.description}`. A marker in one of those strings is not in any .tsx the walk
+// reads, so the walk reported GREEN while the live page rendered 20 literal
+// backticks (measured on jomform.com 2026-10-05, fresh browser state).
+//
+// This second surface is keyed on the RENDER SITE, not on the bare string: the
+// fields below are the ones the page PRINTS as plain text. `e.curl` is
+// deliberately NOT among them — it is rendered inside `<code>`, the supported way
+// to show code, so a backtick in a curl string (or in a `<code>` template
+// literal) is code the page means to show, exactly as the DOCS_DIR walk treats
+// it. Adding a field here that the page does not render would assert blindly;
+// the vacuity test below pins each render site against the page source.
+type ImportedProse = { module: string; surface: string; field: string; text: string };
+
+function importedProseValues(): ImportedProse[] {
+  const out: ImportedProse[] = [];
+  const EXAMPLES_MOD = "src/lib/apiExamples.gen.ts";
+  const SPEC_MOD = "src/lib/openapiSpec.gen.ts";
+  for (const e of apiExamples) {
+    out.push({ module: EXAMPLES_MOD, surface: `docs/api example "${e.id}"`, field: "{e.why}", text: e.why });
+    out.push({ module: EXAMPLES_MOD, surface: `docs/api example "${e.id}"`, field: "{e.note}", text: e.note });
+  }
+  for (const e of specEndpoints()) {
+    const where = `docs/api endpoint ${e.method} ${e.path}`;
+    out.push({ module: SPEC_MOD, surface: where, field: "{e.summary}", text: e.summary });
+    out.push({ module: SPEC_MOD, surface: where, field: "{e.description}", text: e.description });
+  }
+  return out;
+}
+
+const IMPORTED_PROSE = importedProseValues();
+const IMPORTED_FINDINGS = IMPORTED_PROSE.filter((p) => p.text.includes("`"));
+
+test("the imported-prose check is reading the real rendered data (it cannot pass vacuously)", () => {
+  // The set must really hold the imported strings the page renders — an emptied
+  // list (a renamed export, a shaping layer that dropped a field) would make the
+  // rule below pass while looking at nothing.
+  assert.ok(
+    IMPORTED_PROSE.length >= 100,
+    `collected only ${IMPORTED_PROSE.length} imported prose values — the endpoint reference ` +
+      `(>50 operations) and the worked examples are not being read`,
+  );
+  for (const e of apiExamples) {
+    assert.ok(
+      IMPORTED_PROSE.some((p) => p.text === e.note && p.surface.includes(e.id)),
+      `example "${e.id}"'s note is not among the checked values — a marker there would be invisible`,
+    );
+  }
+  // Every field this file claims to cover must have a RENDER SITE in the page, or
+  // the check is asserting a string nobody prints. Comments are stripped so a
+  // field merely NAMED in a comment cannot satisfy this.
+  const apiPage = readFileSync(join(DOCS_DIR, "api", "page.tsx"), "utf8")
+    .split("\n")
+    .filter((l) => !l.trim().startsWith("//") && !l.trim().startsWith("*") && !l.trim().startsWith("/*"))
+    .join("\n");
+  for (const field of [...new Set(IMPORTED_PROSE.map((p) => p.field))]) {
+    const token = field.slice(1, -1); // strip the braces: e.note -> e.note
+    assert.ok(
+      apiPage.includes(`{${token}}`),
+      `the page has no render site for ${field} — this check would assert a string the reader never sees`,
+    );
+  }
+  // And the code-sample field must be excluded, or every curl command would be
+  // reported: the page renders it inside <code>, the supported shape.
+  assert.ok(
+    IMPORTED_PROSE.every((p) => !p.field.includes("curl")),
+    "e.curl is in the imported-prose set; it is a code sample (rendered in <code>) and must not be judged as prose",
+  );
+});
+
+test("no /docs imported prose carries a backtick marker (the api page prints it plain text)", () => {
+  const lines = IMPORTED_FINDINGS.map(
+    (f) => `${f.module}  ${f.surface}  [${f.field}]  ${JSON.stringify(f.text.slice(0, 120))}`,
+  );
+  assert.deepEqual(
+    IMPORTED_FINDINGS,
+    [],
+    `these /docs/api values carry a backtick marker but are printed as plain JSX text (measured on ` +
+      `jomform.com 2026-10-05, fresh browser state: /docs/api rendered 20 literal backticks). The ` +
+      `values come from web/src/lib/apiExamples.gen.ts and openapiSpec.gen.ts, which are GENERATED — ` +
+      `edit the source (api/internal/httpapi/openapi_examples.go for a worked-example note, ` +
+      `openapi_routes.go for an endpoint description) and regenerate with ` +
+      `"cd api && go run ./cmd/openapi-gen". Write the name as plain words, as the rest of the tree ` +
+      `does; to show code, use a template literal INSIDE <code> (the curl blocks). ` +
       `Findings:\n  ${lines.join("\n  ")}`,
   );
 });

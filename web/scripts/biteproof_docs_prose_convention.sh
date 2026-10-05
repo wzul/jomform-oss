@@ -29,8 +29,17 @@
 #   template literal inside a <code> element stays GREEN, because that is the
 #   supported way to show code on /docs.
 #
+#   CARD t_763c28c2 ADDED THE SECOND SURFACE — prose IMPORTED from a generated
+#   module and printed with a JSX expression, which the DOCS_DIR walk cannot reach:
+#     * CASE 10 — a marker in web/src/lib/apiExamples.gen.ts (the /docs/api worked
+#       examples' notes, generated from api/internal/httpapi/openapi_examples.go),
+#       which must be RED naming that file.
+#     * CASE 11 — the negative control: a backtick inside `curl`, which the page
+#       renders inside <code>, must stay GREEN, so the new surface does not flag
+#       every code sample.
+#
 # WHAT IT DOES
-#   It snapshots the two pages it mutates into a scratch dir, applies one mutation,
+#   It snapshots each file it mutates into a scratch dir, applies one mutation,
 #   runs the REAL guard, requires the verdict this case predicts, and restores the
 #   file from its snapshot (a cmp check, not a guess — and deliberately NOT
 #   `git checkout`, which would revert the other files in this branch's own diff).
@@ -174,6 +183,17 @@ fails_findings_only() {
     ! printf '%s' "$o" | grep -q '^✖ the guard is reading the real docs tree'
 }
 
+# The IMPORTED-prose surface (card t_763c28c2) fails in its OWN test, not the
+# DOCS_DIR one: a marker in a generated module the /docs/api page prints is
+# reported by `no /docs imported prose carries a backtick marker`, so the
+# attribution rule is the same shape with that test's name.
+fails_imported_findings_only() {
+  local o="$1"
+  printf '%s' "$o" | grep -qE '^ℹ fail 1$' &&
+    printf '%s' "$o" | grep -q '^✖ no /docs imported prose carries a backtick marker' &&
+    ! printf '%s' "$o" | grep -q '^✖ the imported-prose check is reading the real rendered data'
+}
+
 # ── the two shapes card t_8580357e widened the guard to see ───────────────────
 echo "== CASE 7: a marker in RAW JSX TEXT (ts.JsxText) must be RED ==="
 f="src/app/docs/security/page.tsx"; snapshot "$f"; sha="$(sha256sum "$f" | awk '{print $1}')"
@@ -224,12 +244,48 @@ else
 fi
 restore "$f"; echo "  restored, sha $(sha256sum "$f" | awk '{print $1}') == $sha"
 
-echo "== FINAL: every mutated file restored, tree GREEN again =="
+# ── the IMPORTED-prose surface (card t_763c28c2) ──────────────────────────────
+# /docs/api's prose is not in the page .tsx: it is imported from the generated
+# modules (web/src/lib/apiExamples.gen.ts, openapiSpec.gen.ts) and printed with a
+# JSX expression, so the DOCS_DIR walk above — the whole guard before this card —
+# reported GREEN while the live page rendered 20 literal backticks (measured on
+# jomform.com 2026-10-05, fresh browser state). CASE 10 drives that hole: a marker
+# in the generated DATA module must turn the guard RED naming that file. CASE 11 is
+# the negative control that keeps it from flagging code: a backtick inside `curl`,
+# which the page renders inside <code>, must stay GREEN.
+echo "== CASE 10: a marker in the IMPORTED data module (apiExamples.gen.ts) must be RED ==="
+f="src/lib/apiExamples.gen.ts"; snapshot "$f"; sha="$(sha256sum "$f" | awk '{print $1}')"
+perl -0pi -e 's/Leave slug out and it is generated/Leave `slug` out and it is generated/' "$f"
+grep -q 'Leave `slug` out' "$f" || { echo "  MUTATION DID NOT APPLY — re-anchor this case"; fail=1; }
+out="$(run_guard)"; v="$(verdict "$out")"; VERDICTS+=("case10=$v")
+if [ "$v" = RED ] && printf '%s' "$out" | grep -q 'src/lib/apiExamples.gen.ts' && fails_imported_findings_only "$out"; then
+  echo "  BITES: RED naming src/lib/apiExamples.gen.ts (the imported prose the DOCS_DIR walk cannot see)"
+else
+  echo "  DID NOT BITE: verdict=$v (wanted RED naming src/lib/apiExamples.gen.ts, one imported-findings failure)"; printf '%s\n' "$out" | tail -20; fail=1
+fi
+restore "$f"; echo "  restored, sha $(sha256sum "$f" | awk '{print $1}') == $sha"
+
+echo "== CASE 11 (negative control): a backtick inside the curl CODE SAMPLE stays GREEN ==="
+f="src/lib/apiExamples.gen.ts"; snapshot "$f"; sha="$(sha256sum "$f" | awk '{print $1}')"
+# `curl` is rendered inside <code> — the supported way to show code — so a backtick
+# in it is code the page MEANS to show, not a markdown marker leaked into prose.
+# Without this the imported check would flag every code sample.
+perl -0pi -e 's/curl -sS/curl -sS `/' "$f"
+grep -q 'curl -sS `' "$f" || { echo "  MUTATION DID NOT APPLY — re-anchor this case"; fail=1; }
+out="$(run_guard)"; v="$(verdict "$out")"; VERDICTS+=("case11=$v")
+if [ "$v" = GREEN ]; then
+  echo "  CONTROL GREEN: a backtick in a curl code sample is not judged as prose"
+else
+  echo "  CONTROL FAILED: verdict=$v — the imported check flagged a code sample"; printf '%s\n' "$out" | tail -20; fail=1
+fi
+restore "$f"; echo "  restored, sha $(sha256sum "$f" | awk '{print $1}') == $sha"
+
+echo "== FINAL: every mutated file restored, tree GREEN again ==="
 out="$(run_guard)"; v="$(verdict "$out")"; VERDICTS+=("final=$v")
 [ "$v" = GREEN ] || { fail=1; printf '%s\n' "$out" | tail -25; }
 
 echo
 echo "verdicts: ${VERDICTS[*]}"
-echo "BITES: $(printf '%s\n' "${VERDICTS[@]}" | grep -cE '^case(1|2|3|6|7|8)=RED')/6 HOLE cases RED, $(printf '%s\n' "${VERDICTS[@]}" | grep -cE '^case(4|5|9)=GREEN')/3 CONTROLS GREEN"
+echo "BITES: $(printf '%s\n' "${VERDICTS[@]}" | grep -cE '^case(1|2|3|6|7|8|10)=RED')/7 HOLE cases RED, $(printf '%s\n' "${VERDICTS[@]}" | grep -cE '^case(4|5|9|11)=GREEN')/4 CONTROLS GREEN"
 echo "RESULT: $([ "$fail" = 0 ] && echo 'ALL CASES OK' || echo 'FAILURES PRESENT')"
 exit "$fail"
